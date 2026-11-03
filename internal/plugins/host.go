@@ -400,12 +400,22 @@ func (h *host) CollectionsUpsert(ctx context.Context, doc json.RawMessage) error
 // UndoAll replays a plugin's live journal inverses, newest first, and
 // returns how many entries were undone.
 func (m *Manager) UndoAll(ctx context.Context, pluginID string) (int, error) {
+	return m.UndoSince(ctx, pluginID, 0)
+}
+
+// UndoSince reverses the plugin's changes back to and including entry
+// since (0 means all of them), newest first, so an older change is never
+// reversed underneath a later one.
+func (m *Manager) UndoSince(ctx context.Context, pluginID string, since int64) (int, error) {
 	entries, err := m.store.journalList(ctx, pluginID, 10000, true)
 	if err != nil {
 		return 0, err
 	}
 	undone := 0
 	for _, e := range entries { // journalList is newest first
+		if e.ID < since {
+			break
+		}
 		if err := m.applyInverse(ctx, e); err != nil {
 			return undone, err
 		}

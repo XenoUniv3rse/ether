@@ -569,6 +569,15 @@ func (m *Manager) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 	if len(schema) == 0 {
 		schema = json.RawMessage("{}")
 	}
+	// Field labels and hints use the plugin's own "$t:" strings.
+	if walk := m.textResolver(r.Context(), r.PathValue("id"), r.URL.Query().Get("locale")); walk != nil {
+		var node any
+		if json.Unmarshal(schema, &node) == nil {
+			if out, err := json.Marshal(walk(node)); err == nil {
+				schema = out
+			}
+		}
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"settings": settings, "schema": schema})
 }
 
@@ -713,7 +722,9 @@ func (m *Manager) handleJournal(w http.ResponseWriter, r *http.Request) {
 }
 
 func (m *Manager) handleUndo(w http.ResponseWriter, r *http.Request) {
-	n, err := m.UndoAll(r.Context(), r.PathValue("id"))
+	// ?since=<entry id> undoes back to that change; no value undoes all.
+	since, _ := strconv.ParseInt(r.URL.Query().Get("since"), 10, 64)
+	n, err := m.UndoSince(r.Context(), r.PathValue("id"), since)
 	if err != nil {
 		m.fail(w, err)
 		return
@@ -862,17 +873,13 @@ func (m *Manager) handleView(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(resp.Body)
 }
 
-// localizeView resolves "$t:key" references in a view's spec and title from
-// the plugin's shipped strings, the way Studio's preview does. View data is
-// plugin-supplied values and is left as sent.
-func (m *Manager) localizeView(ctx context.Context, id, locale string, body []byte) []byte {
+// textResolver returns a walker that replaces "$t:key" strings with the
+// plugin's shipped text for locale (then its language, then English), or
+// nil when the plugin ships no strings.
+func (m *Manager) textResolver(ctx context.Context, id, locale string) func(any) any {
 	row, err := m.store.settings(ctx, id)
 	if err != nil || len(row.Strings) == 0 {
-		return body
-	}
-	var doc map[string]json.RawMessage
-	if json.Unmarshal(body, &doc) != nil {
-		return body
+		return nil
 	}
 	resolve := func(key string) (string, bool) {
 		for _, loc := range []string{locale, strings.SplitN(locale, "-", 2)[0], "en"} {
@@ -901,6 +908,21 @@ func (m *Manager) localizeView(ctx context.Context, id, locale string, body []by
 			}
 		}
 		return v
+	}
+	return walk
+}
+
+// localizeView resolves "$t:key" references in a view's spec and title from
+// the plugin's shipped strings, the way Studio's preview does. View data is
+// plugin-supplied values and is left as sent.
+func (m *Manager) localizeView(ctx context.Context, id, locale string, body []byte) []byte {
+	walk := m.textResolver(ctx, id, locale)
+	if walk == nil {
+		return body
+	}
+	var doc map[string]json.RawMessage
+	if json.Unmarshal(body, &doc) != nil {
+		return body
 	}
 	for _, field := range []string{"spec", "title"} {
 		raw, ok := doc[field]

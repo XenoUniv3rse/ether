@@ -59,6 +59,7 @@ func (h *Handler) collectionRoutes(mux *http.ServeMux, api func(string, http.Han
 	api("GET /api/catalog/search", h.handleCatalogSearch)
 	api("GET /api/catalog/facets", h.handleCatalogFacets)
 	api("GET /api/catalog/lookup", h.handleCatalogLookup)
+	api("GET /api/catalog/external", h.handleCatalogExternal)
 	api("GET /api/catalog/title/{key}", h.handleCatalogTitle)
 	api("GET /api/catalog/title/{key}/schedule", h.handleCatalogTitleSchedule)
 	api("GET /api/catalog/title/{key}/season/{season}", h.handleCatalogTitleSeason)

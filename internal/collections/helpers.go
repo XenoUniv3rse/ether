@@ -208,3 +208,19 @@ func (s *Service) TitleDetail(ctx context.Context, key core.RatingKey) (*core.Ti
 	}
 	return t, nil
 }
+
+// TitlesByIMDB resolves up to 24 IMDb ids to catalogue titles, in order,
+// skipping ids the catalogue does not know. The owner console uses it to
+// name the titles a plugin was asked about.
+func (s *Service) TitlesByIMDB(ctx context.Context, ids []string) []core.Title {
+	if len(ids) > 24 {
+		ids = ids[:24]
+	}
+	out := make([]core.Title, 0, len(ids))
+	for _, id := range ids {
+		if t, err := s.cat.ByExternalID(ctx, "imdb", id); err == nil && t != nil && !t.Adult {
+			out = append(out, *t)
+		}
+	}
+	return out
+}

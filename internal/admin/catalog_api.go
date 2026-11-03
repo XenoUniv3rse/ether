@@ -29,6 +29,38 @@ type CatalogHelper interface {
 	TitleDetail(ctx context.Context, key core.RatingKey) (*core.Title, error)
 }
 
+// CatalogExternal names titles by their IMDb ids.
+type CatalogExternal interface {
+	TitlesByIMDB(ctx context.Context, ids []string) []core.Title
+}
+
+// handleCatalogExternal resolves ?imdb=tt1,tt2 (at most 24) to title cards.
+func (h *Handler) handleCatalogExternal(w http.ResponseWriter, r *http.Request) {
+	ext, ok := h.deps.CatalogHelper.(CatalogExternal)
+	if !ok {
+		writeError(w, http.StatusServiceUnavailable, "unavailable", "Catalog lookup is unavailable")
+		return
+	}
+	var ids []string
+	for _, id := range strings.Split(r.URL.Query().Get("imdb"), ",") {
+		if id = strings.TrimSpace(id); strings.HasPrefix(id, "tt") && len(id) <= 16 {
+			ids = append(ids, id)
+		}
+		if len(ids) == 24 {
+			break
+		}
+	}
+	type card struct {
+		TitleCard
+		IMDBID string `json:"imdbId"`
+	}
+	items := []card{}
+	for _, t := range ext.TitlesByIMDB(r.Context(), ids) {
+		items = append(items, card{CardFor(t), t.IDs.IMDB})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
 // CatalogBrowser exposes paginated local browsing without a remote TMDB search.
 type CatalogBrowser interface {
 	BrowseTitles(context.Context, core.BrowseQuery) (core.Page, error)

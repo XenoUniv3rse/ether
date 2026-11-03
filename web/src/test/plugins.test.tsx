@@ -102,28 +102,43 @@ describe("Server › Plugins (WS10a)", () => {
     expect(screen.getByRole("link", { name: /Build a plugin/i })).toBeTruthy();
   });
 
-  it("opens the plugin drawer and covers Overview, Settings (with validation & Test), Permissions, Health, Activity, Logs, Updates, and Remove", async () => {
+  it("opens the plugin drawer with Overview, what it adds, Setup and Activity, and keeps updates, undo and removal in the header", async () => {
     renderPlugins("/plugins");
 
-    const plutoRow = await screen.findByText("Pluto TV");
-    fireEvent.click(plutoRow);
+    fireEvent.click(await screen.findByText("Pluto TV"));
 
-    // 1. Overview tab
-    expect(await screen.findByText("Where it appears")).toBeTruthy();
-    expect((await screen.findAllByText("Live TV")).length).toBeGreaterThanOrEqual(1);
-    expect(screen.getByText("Source repository")).toBeTruthy();
+    // Header and tabs: three tabs plus one named for what the plugin adds.
+    const tabs = await screen.findByRole("tablist", { name: "Plugin sections" });
+    expect(
+      within(tabs)
+        .getAllByRole("tab")
+        .map((t) => t.textContent),
+    ).toEqual(["Overview", "Channels", "Setup", "Activity"]);
 
-    // 2. Settings tab: stored secret ("Saved"), validation error mapping, save, and Test button
-    fireEvent.click(screen.getByRole("tab", { name: "Settings" }));
+    // Overview: health tiles instead of a Health tab.
+    expect(await screen.findByText("Responding")).toBeTruthy();
+    expect(screen.getByText("180 ms")).toBeTruthy();
+    expect(screen.getByText("Slowest 720 ms")).toBeTruthy();
+
+    // Update banner: new access is approved in the confirm step.
+    expect(
+      screen.getByText("Version 1.3.0 is available and asks for new access."),
+    ).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Update" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Allow and update" }));
+    await waitFor(() =>
+      expect(screen.queryByText("Version 1.3.0 is available and asks for new access.")).toBeNull(),
+    );
+
+    // Setup: settings with validation and Test.
+    fireEvent.click(screen.getByRole("tab", { name: "Setup" }));
     expect(await screen.findByText("Region")).toBeTruthy();
     expect(
       screen.getByText("Saved. Leave as is to keep it, or type a new value to replace it."),
     ).toBeTruthy();
-
     fireEvent.click(screen.getByRole("button", { name: /Test/i }));
     expect(await screen.findByText(/OK · \d+ ms/)).toBeTruthy();
 
-    // Trigger field validation error (/region = "invalid")
     customIntercept = (url, init) => {
       if (
         url.pathname === "/ether/api/plugins/community.plutotv.ether/settings" &&
@@ -136,83 +151,49 @@ describe("Server › Plugins (WS10a)", () => {
       }
       return null;
     };
-
     fireEvent.click(screen.getByRole("button", { name: /Save settings/i }));
     expect(
       (await screen.findAllByText(/This value is not supported\./)).length,
     ).toBeGreaterThanOrEqual(1);
-
-    // Restore transport and save valid settings
     customIntercept = null;
     fireEvent.click(screen.getByRole("button", { name: /Save settings/i }));
     await waitFor(() => {
       expect(screen.queryAllByText(/This value is not supported\./)).toHaveLength(0);
     });
 
-    // 3. Permissions tab: plain-language grants and revoking a grant
-    fireEvent.click(screen.getByRole("tab", { name: "Permissions" }));
-    expect(await screen.findByText("Granted access")).toBeTruthy();
-    expect(screen.getByText("Connects to api.pluto.tv, *.pluto.tv")).toBeTruthy();
-
-    const revokeBtn = screen.getByRole("button", {
-      name: "Revoke Connects to api.pluto.tv, *.pluto.tv",
-    });
-    fireEvent.click(revokeBtn);
-    expect(
-      await screen.findByRole("button", { name: "Restore Connects to api.pluto.tv, *.pluto.tv" }),
-    ).toBeTruthy();
-
-    // 4. Health tab: status, privacy label, and impact metrics
-    fireEvent.click(screen.getByRole("tab", { name: "Health" }));
-    expect(await screen.findByText("Privacy label")).toBeTruthy();
-    expect(screen.getAllByText("api.pluto.tv").length).toBeGreaterThanOrEqual(1);
-    expect(screen.getByText("42 calls")).toBeTruthy();
-    expect(screen.getByText("180 ms / 720 ms")).toBeTruthy();
-
-    // 5. Logs tab
-    fireEvent.click(screen.getByRole("tab", { name: "Logs" }));
-    expect(await screen.findByText(/refreshed 214 channels/i)).toBeTruthy();
-
-    // 6. Updates tab: permission diff and approve update, plus rollback
-    fireEvent.click(screen.getByRole("tab", { name: "Updates" }));
-    expect(await screen.findByText("Connects to ads.pluto.tv")).toBeTruthy();
-
+    // More options: auto-update and network access, out of the way.
+    fireEvent.click(screen.getByRole("button", { name: "More options" }));
     const autoUpdate = screen.getByRole("switch", { name: "Auto-update" }) as HTMLInputElement;
-    const previousAutoUpdate = autoUpdate.checked;
+    const before = autoUpdate.checked;
     fireEvent.click(autoUpdate);
-    await waitFor(() => expect(autoUpdate.checked).toBe(!previousAutoUpdate));
+    await waitFor(() => expect(autoUpdate.checked).toBe(!before));
+    const network = screen.getByRole("switch", {
+      name: "Allow: Connects to api.pluto.tv, *.pluto.tv",
+    }) as HTMLInputElement;
+    expect(network.checked).toBe(true);
+    fireEvent.click(network);
+    await waitFor(() => expect(network.checked).toBe(false));
 
-    fireEvent.click(screen.getByRole("button", { name: /Approve permissions and update/i }));
-    expect(await screen.findByText("Up to date")).toBeTruthy();
+    // The ⋯ menu offers roll back.
+    fireEvent.click(screen.getByRole("button", { name: "More actions" }));
+    expect(await screen.findByRole("menuitem", { name: /Roll back to v/ })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "More actions" }));
 
-    // Roll back
-    fireEvent.click(screen.getByRole("button", { name: /^Roll back$/i }));
-    expect(await screen.findByText("No earlier version is stored on this server.")).toBeTruthy();
-
-    // 7. Activity tab on Ether Wrapped (which has shadow report & reversible journal entries)
+    // Activity on Ether Wrapped: changes undo back to a point.
     fireEvent.click(screen.getByText("Ether Wrapped"));
     fireEvent.click(await screen.findByRole("tab", { name: "Activity" }));
-    expect(await screen.findByText("Shadow report")).toBeTruthy();
-    expect(screen.getByText("Activity journal")).toBeTruthy();
-    expect(screen.getAllByText("Your year in viewing").length).toBeGreaterThanOrEqual(1);
+    expect(await screen.findByText("Changes it made")).toBeTruthy();
+    expect(screen.getAllByText(/Your year in viewing/).length).toBeGreaterThanOrEqual(1);
+    fireEvent.click(screen.getAllByRole("button", { name: /Undo back to here/ })[0]!);
+    fireEvent.click(await screen.findByRole("button", { name: "Undo" }));
+    expect((await screen.findAllByText("Undone")).length).toBeGreaterThanOrEqual(1);
 
-    fireEvent.click(screen.getByRole("button", { name: /Undo everything this plugin did/i }));
-    expect(await screen.findByText("Undo everything this plugin did?")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Undo changes" }));
-    expect(await screen.findByText("Undone")).toBeTruthy();
-
-    // 8. Remove tab
-    fireEvent.click(screen.getByRole("tab", { name: "Remove" }));
-    expect(await screen.findByText("Undo its changes first")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Remove plugin" }));
-
+    // Removal lives in the ⋯ menu behind a confirm dialog.
+    fireEvent.click(screen.getByRole("button", { name: "More actions" }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: /Remove/ }));
     expect(await screen.findByText("Remove Ether Wrapped?")).toBeTruthy();
-    const removeButtons = screen.getAllByRole("button", { name: "Remove plugin" });
-    fireEvent.click(removeButtons[removeButtons.length - 1]!);
-
-    await waitFor(() => {
-      expect(screen.queryByText("Where it appears")).toBeNull();
-    });
+    fireEvent.click(screen.getByRole("button", { name: /^Remove$/ }));
+    await waitFor(() => expect(screen.queryByText("Changes it made")).toBeNull());
   });
 
   it("installs a plugin from a link after previewing its permission sheet and opens the installed drawer", async () => {
@@ -236,7 +217,7 @@ describe("Server › Plugins (WS10a)", () => {
     fireEvent.click(screen.getByRole("button", { name: /^Install$/i }));
 
     // Installing closes InstallDrawer, adds Preview plugin to the list, and opens its drawer
-    expect(await screen.findByText("Where it appears")).toBeTruthy();
+    expect(await screen.findByRole("tablist", { name: "Plugin sections" })).toBeTruthy();
     expect(screen.getAllByText("Preview plugin").length).toBeGreaterThanOrEqual(1);
   });
 
@@ -260,7 +241,7 @@ describe("Server › Plugins (WS10a)", () => {
     fireEvent.click(screen.getByRole("button", { name: /^Install$/i }));
 
     // Navigates to Installed tab and opens the new plugin's drawer
-    expect(await screen.findByText("Where it appears")).toBeTruthy();
+    expect(await screen.findByRole("tablist", { name: "Plugin sections" })).toBeTruthy();
   });
 
   it("pairs and revokes a remote sidecar", async () => {
