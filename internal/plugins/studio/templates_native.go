@@ -383,18 +383,29 @@ function bestFile(id: string): File | null {
 }
 // One search per lookup keeps each call well inside the plugin's time
 // budget; the playable file is picked only when the owner presses play.
+function resolutionOf(doc: Doc): string {
+  const text = (doc.identifier + " " + (doc.title || "")).toLowerCase();
+  if (/2160p|\b4k\b|uhd/.test(text)) return "2160p";
+  const m = /(1080|720|576|480)p/.exec(text);
+  return m ? m[1] + "p" : "SD";
+}
 function streamsFor(title: string, year: number) {
   return candidates(title, year)
+    .filter((doc) => !/trailer|teaser|clip/i.test(doc.identifier + " " + (doc.title || "")))
     .slice(0, 3)
-    .map((doc) => ({
-      name: "Internet Archive",
-      title: (doc.title || title) + "\nPublic domain · MP4",
-      ether: {
-        id: doc.identifier,
-        lazy: true,
-        releaseName: title.replace(/[^A-Za-z0-9]+/g, ".") + (year ? "." + year : "") + ".WEB.MP4",
-      },
-    }));
+    .map((doc) => {
+      const res = resolutionOf(doc);
+      return {
+        name: "Internet Archive",
+        title: (doc.title || title) + "\n" + res + " · Public domain",
+        ether: {
+          id: doc.identifier,
+          lazy: true,
+          releaseName:
+            title.replace(/[^A-Za-z0-9]+/g, ".") + (year ? "." + year : "") + "." + (res === "SD" ? "480p" : res) + ".WEB.MP4",
+        },
+      };
+    });
 }
 
 export function handle(req: Request) {
