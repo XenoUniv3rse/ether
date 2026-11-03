@@ -118,7 +118,7 @@ function channels(req: Request, withGuide = false): PlutoChannel[] {
   // channel's upcoming programmes, so the guide fills without a call per channel.
   const window = withGuide
     ? "&start=" + encodeURIComponent(new Date().toISOString()) +
-      "&stop=" + encodeURIComponent(new Date(Date.now() + 4 * 3600000).toISOString())
+      "&stop=" + encodeURIComponent(new Date(Date.now() + 2 * 3600000).toISOString())
     : "";
   const data = getJSON(API + "/v2/channels.json?marketingRegion=" + encodeURIComponent(region(req)) + window);
   if (!Array.isArray(data)) return [];

@@ -9,6 +9,7 @@ import (
 	"path"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/braedonsaunders/ether/internal/plugins/wasm"
 )
@@ -408,12 +409,7 @@ func (b hostBridge) CallHost(ctx context.Context, name string, raw json.RawMessa
 		if err != nil {
 			return nil, mapHostError(err)
 		}
-		// body is the response as text (for JSON and HTML); bodyBase64 is
-		// the exact bytes, for binary responses such as archives.
-		return result(map[string]any{
-			"status": resp.Status, "headers": resp.Headers,
-			"body": string(resp.Body), "bodyBase64": base64.StdEncoding.EncodeToString(resp.Body),
-		}, nil)
+		return result(FetchResult(resp), nil)
 	case "catalog.search":
 		v, err := b.h.CatalogSearch(ctx, str(0), int(num(1)), int(num(2)))
 		return result(v, err)
@@ -470,4 +466,19 @@ func mapHostError(err error) error {
 	default:
 		return &wasm.Fault{Code: "host_error", Message: err.Error()}
 	}
+}
+
+// FetchResult is the guest-facing http.fetch answer. body is the response
+// as text (JSON, HTML, playlists); bodyBase64 carries the exact bytes only
+// for responses that are not valid UTF-8 (archives, images), so a large
+// text response is not sent twice into the 4 MiB host-result cap.
+func FetchResult(resp FetchResponse) map[string]any {
+	out := map[string]any{"status": resp.Status, "headers": resp.Headers}
+	if utf8.Valid(resp.Body) {
+		out["body"] = string(resp.Body)
+	} else {
+		out["body"] = ""
+		out["bodyBase64"] = base64.StdEncoding.EncodeToString(resp.Body)
+	}
+	return out
 }

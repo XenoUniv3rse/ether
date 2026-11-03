@@ -1254,10 +1254,7 @@ func (h *devHost) CallHost(ctx context.Context, name string, raw json.RawMessage
 		if err != nil {
 			return nil, wasm.Forbidden(err.Error())
 		}
-		return json.Marshal(map[string]any{
-			"status": resp.Status, "headers": resp.Headers,
-			"body": string(resp.Body), "bodyBase64": base64.StdEncoding.EncodeToString(resp.Body),
-		})
+		return json.Marshal(plugins.FetchResult(resp))
 
 	case "catalog.search":
 		h.s.mu.Unlock()
