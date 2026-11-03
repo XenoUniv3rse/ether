@@ -13,12 +13,11 @@ import {
   Tv,
   type LucideIcon,
 } from "lucide-react";
-import { Suspense, lazy, useEffect, useState, type ReactNode } from "react";
+import { Suspense, lazy, useEffect, useState } from "react";
 import { t } from "../../i18n";
 import { apiFetch, errorMessage } from "../../lib/api";
 import { Reference } from "./CodeStudio";
-import { DraftPicker } from "./DraftPicker";
-import type { StudioProject, StudioProjectSummary } from "./develop/types";
+import type { StudioProject } from "./develop/types";
 
 const CodeMirrorPane = lazy(() => import("./code/CodeMirrorPane"));
 
@@ -86,17 +85,8 @@ const ENTRY = "src/plugin.ts";
  * Code view with no draft open: the editor straight away. Pick a starter,
  * read and change its code, and the first save turns it into a draft.
  */
-export function CodeHome({
-  modeSwitch,
-  onOpenProject,
-  onOpenPlugin,
-}: {
-  modeSwitch: ReactNode;
-  onOpenProject: (id: string) => void;
-  onOpenPlugin: (pluginId: string) => void;
-}) {
+export function CodeHome({ onOpenProject }: { onOpenProject: (id: string) => void }) {
   const [templates, setTemplates] = useState<Template[]>([]);
-  const [projects, setProjects] = useState<StudioProjectSummary[]>([]);
   const [starter, setStarter] = useState(STARTERS[0]!.id);
   const [file, setFile] = useState(ENTRY);
   const [edits, setEdits] = useState<Record<string, string>>({});
@@ -107,9 +97,6 @@ export function CodeHome({
     apiFetch<{ templates: Template[] }>("/plugins/studio/templates")
       .then((r) => setTemplates(r.templates))
       .catch((e) => setError(errorMessage(e)));
-    apiFetch<{ projects: StudioProjectSummary[] }>("/plugins/studio/projects")
-      .then((r) => setProjects(r.projects ?? []))
-      .catch(() => undefined);
   }, []);
 
   const tpl = templates.find((x) => x.id === starter);
@@ -163,14 +150,6 @@ export function CodeHome({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-border px-4 py-2">
-        <DraftPicker
-          projects={projects}
-          onPickProject={onOpenProject}
-          onPickPlugin={onOpenPlugin}
-        />
-        <div className="ml-auto">{modeSwitch}</div>
-      </div>
       <div className="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-[15rem_minmax(0,1fr)_minmax(320px,26rem)]">
         <aside
           aria-label={t("Start from")}

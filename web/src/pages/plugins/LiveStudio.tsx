@@ -16,7 +16,6 @@ import { PluginView } from "../../viewspec/PluginView";
 import { formatDateTime } from "../../lib/format";
 import { invalidateRegistry } from "../../lib/extend";
 import { PermissionSheet } from "./PermissionSheet";
-import { DraftPicker } from "./DraftPicker";
 import { StudioActions } from "./StudioActions";
 import { CodeStudio } from "./CodeStudio";
 import { CodeHome } from "./CodeHome";
@@ -143,19 +142,12 @@ export default function LiveStudio() {
   };
   if (mode === "code" && phase === "home")
     return (
-      <Workspace leading={<BackToPlugins />} title={t("Studio")}>
-        <CodeHome
-          modeSwitch={<ModeSwitch mode={mode} onMode={(m) => setMode(m)} />}
-          onOpenProject={openDraft}
-          onOpenPlugin={(pluginId) =>
-            void apiFetch<{ project: StudioProject }>("/plugins/studio/import", {
-              method: "POST",
-              body: JSON.stringify({ pluginId }),
-            })
-              .then((r) => openDraft(r.project.id))
-              .catch((e) => toast.error(errorMessage(e)))
-          }
-        />
+      <Workspace
+        leading={<BackToPlugins />}
+        title={t("Studio")}
+        actions={<ModeSwitch mode={mode} onMode={(m) => setMode(m)} />}
+      >
+        <CodeHome onOpenProject={openDraft} />
       </Workspace>
     );
   return (
@@ -220,6 +212,9 @@ const NATIVE_PREVIEW = new Set(["channels", "video_source", "addon"]);
 function ModeSwitch({ mode, onMode }: { mode: StudioMode; onMode: (m: StudioMode) => void }) {
   return (
     <Segmented
+      size="sm"
+      // h-7 options + 1px padding + 1px border: 32px, a small Button's height.
+      className="p-px"
       ariaLabel={t("Studio view")}
       value={mode}
       onChange={(v) => onMode(v as StudioMode)}
@@ -326,7 +321,6 @@ function LiveWorkspace({
   const thread = useRef<string | undefined>(
     sessionStorage.getItem("ether-studio-thread") || undefined,
   );
-  const [projects, setProjects] = useState<StudioProjectSummary[]>([]);
   const [project, setProject] = useState<StudioProject | null>(null);
   const [file, setFile] = useState("src/plugin.ts");
   const [source, setSource] = useState("");
@@ -354,26 +348,12 @@ function LiveWorkspace({
     }
     setEpoch((e) => e + 1);
   }, []);
-  const openPlugin = async (pluginId: string) => {
-    try {
-      const r = await apiFetch<{ project: StudioProject }>("/plugins/studio/import", {
-        method: "POST",
-        body: JSON.stringify({ pluginId }),
-      });
-      const list = await apiFetch<{ projects: StudioProjectSummary[] }>("/plugins/studio/projects");
-      setProjects(list.projects);
-      await loadProject(r.project.id);
-    } catch (e) {
-      setError(errorMessage(e));
-    }
-  };
   const refresh = useCallback(async () => {
     if (thread.current) {
       const r = await fetchAgentMessages(thread.current);
       setMessages(r.messages);
     }
     const r = await apiFetch<{ projects: StudioProjectSummary[] }>("/plugins/studio/projects");
-    setProjects(r.projects);
     // Follow the draft the agent just created or changed; otherwise keep the
     // owner's pick. First load opens the most recently edited draft.
     const latest = [...r.projects].sort(
@@ -507,13 +487,6 @@ function LiveWorkspace({
       title={t("Studio")}
       actions={
         <>
-          <DraftPicker
-            projects={projects}
-            currentId={project?.id}
-            disabled={dirty}
-            onPickProject={(id) => void loadProject(id).catch((e) => setError(errorMessage(e)))}
-            onPickPlugin={(pluginId) => void openPlugin(pluginId)}
-          />
           <ModeSwitch mode={mode} onMode={onMode} />
           {project ? (
             <StudioActions
