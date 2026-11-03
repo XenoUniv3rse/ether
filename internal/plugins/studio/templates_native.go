@@ -173,7 +173,14 @@ export function handle(req: Request) {
     }
   }
   if (req.path === "/ether/channels.json") {
-    const list = channels(req, true).map((c) => ({
+    let lineup: PlutoChannel[];
+    try {
+      lineup = channels(req, true);
+    } catch (e) {
+      // A guide window too large for one response still leaves the lineup.
+      lineup = channels(req, false);
+    }
+    const list = lineup.map((c) => ({
       id: c._id,
       name: c.name,
       number: c.number ? String(c.number) : undefined,
