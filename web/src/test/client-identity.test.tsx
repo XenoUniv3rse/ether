@@ -185,10 +185,7 @@ describe("Sources › Indexers client identity", () => {
     renderApp("/sources/indexers");
     await screen.findByRole("heading", { name: "Client identity" }, WAIT);
     fireEvent.click(screen.getByRole("button", { name: "More options: Client identity" }));
-    expect(screen.getByLabelText("Custom user agent")).toHaveAttribute(
-      "placeholder",
-      "Ether/1.0",
-    );
+    expect(screen.getByLabelText("Custom user agent")).toHaveAttribute("placeholder", "Ether/1.0");
     fireEvent.click(screen.getByRole("button", { name: "Add header" }));
     expect(screen.getByLabelText("Header name")).toBeInTheDocument();
     expect(screen.getByLabelText("Value")).toBeInTheDocument();
