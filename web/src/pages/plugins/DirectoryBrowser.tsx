@@ -3,6 +3,7 @@ import { Search } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Drawer } from "../../components/Drawer";
 import { t } from "../../i18n";
+import { useLocale } from "../../i18n/react";
 import { apiFetch, errorMessage } from "../../lib/api";
 import { textOf, useRegistry } from "../../lib/extend";
 
@@ -29,6 +30,7 @@ export function DirectoryBrowser({
 }) {
   const registry = useRegistry<{ key: string }>("pluginDirectory");
   const lists = registry.descriptors;
+  const { locale } = useLocale();
   const [source, setSource] = useState("");
   const [entries, setEntries] = useState<Entry[] | null>(null);
   const [error, setError] = useState("");
@@ -68,7 +70,7 @@ export function DirectoryBrowser({
       out.set(key, [...(out.get(key) ?? []), { id: d.id, label: rest || full }]);
     }
     return [...out.entries()];
-  }, [lists]);
+  }, [lists, locale]);
 
   const shown = (entries ?? []).filter((e) =>
     `${e.name} ${e.description ?? ""}`.toLowerCase().includes(filter.trim().toLowerCase()),
