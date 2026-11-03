@@ -281,7 +281,12 @@ function editSubtitles(type: string, id: string, subtitles: any[]): any[] {
 function addon(route: string): any {
   const res = ether.addon.get(route);
   if (res.status !== 200) throw new Error("The add-on answered HTTP " + res.status);
-  return JSON.parse(res.body);
+  // Some add-ons answer an unknown title with an empty or non-JSON body.
+  try {
+    return res.body ? JSON.parse(res.body) : {};
+  } catch {
+    return {};
+  }
 }
 
 const ROUTE = /^\/(catalog|meta|stream|subtitles|addon_catalog)\/([^/]+)\/([^/]+?)(?:\/[^/]*)?\.json$/;

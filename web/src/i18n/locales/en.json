@@ -2898,6 +2898,7 @@
   "m_0e13cf7a119bea": "TV broadcast",
   "m_0e1447385ee920": "Required rules {a} and {b} cannot match the same release: {field} would have to equal both {left} and {right}.",
   "m_0e1475eb3e0ac0": "Created plugin project.",
+  "m_0e1506bca487ac": "{name} is slow to answer or not answering",
   "m_0e15341785667b": "Warnings+",
   "m_0e16155084b47f": "Must be text.",
   "m_0e17c9dccf36cc": "Manage TMDB",

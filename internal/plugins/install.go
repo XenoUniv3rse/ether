@@ -437,6 +437,18 @@ func (m *Manager) PreviewInstall(ctx context.Context, src Source) (*Preview, err
 	if err != nil {
 		return nil, err
 	}
+	if man.IsStremioOnly() && src.URL != "" {
+		// One record per configured add-on: the same add-on installed with
+		// two configurations (two debrid accounts) is two records, and the
+		// same link pasted on another page is the same record. The record id
+		// comes from the link, so an add-on's own id may be anything Stremio
+		// accepts ("tmdb-addon", "stremio.addons.mediafusion|elfhosted").
+		id, base, err := StremioInstallID(src.URL)
+		if err != nil {
+			return nil, err
+		}
+		man.ID, src.URL = id, base
+	}
 	if err := man.Validate(); err != nil {
 		return nil, err
 	}
@@ -456,22 +468,14 @@ func (m *Manager) PreviewInstall(ctx context.Context, src Source) (*Preview, err
 	if src.Version != "" && man.Version != src.Version {
 		return nil, fmt.Errorf("plugins: manifest version %q does not match catalogue version %q", man.Version, src.Version)
 	}
-	if man.IsStremioOnly() && src.URL != "" {
-		// One record per configured add-on: the same add-on installed with
-		// two configurations (two debrid accounts) is two records, and the
-		// same link pasted on another page is the same record.
-		id, base, err := StremioInstallID(src.URL)
-		if err != nil {
-			return nil, err
-		}
-		man.ID, src.URL = id, base
-	}
 	p := &Preview{Manifest: man, source: src, files: files, manifestRaw: raw, Verified: src.Verified, StremioOnly: man.IsStremioOnly()}
 	p.PermissionLines, p.NeedsViewers, p.NeedsFolders = PermissionSheet(man)
 	if err := p.resolve(); err != nil {
 		return nil, err
 	}
-	if m.deps.CheckPackage != nil {
+	// The conformance kit checks packages Ether runs; a plain Stremio add-on
+	// is a remote service whose manifest was validated above.
+	if m.deps.CheckPackage != nil && !man.IsStremioOnly() {
 		if err := m.deps.CheckPackage(ctx, raw, files); err != nil {
 			return nil, err
 		}

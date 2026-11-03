@@ -20,6 +20,7 @@ import { Link } from "react-router-dom";
 import { Artwork } from "../../../components/Artwork";
 import { LEVEL_LABEL } from "../../../components/status";
 import { t, tn } from "../../../i18n";
+import { useLocale } from "../../../i18n/react";
 import { apiFetch, errorMessage } from "../../../lib/api";
 import { invalidateRegistry, textOf, useRegistry } from "../../../lib/extend";
 import { formatBytes, formatNumber, relativeTime } from "../../../lib/format";
@@ -64,6 +65,14 @@ export function PluginOverview({
 function ProblemCard({ detail, onRetry }: { detail: PluginDetail; onRetry: () => Promise<void> }) {
   const [busy, setBusy] = useState(false);
   const h = detail.healthDetail;
+  // Plain words first; the technical error once, underneath, if it adds
+  // anything.
+  const technical = (h.lastError || h.reason || "").trim();
+  const slow = /deadline|timeout|timed out|took too long|request failed/i.test(technical);
+  const title = slow
+    ? t("{name} is slow to answer or not answering", { name: detail.name })
+    : t("{name} is having trouble", { name: detail.name });
+  const lastOk = h.lastOk && Date.parse(h.lastOk) > Date.UTC(2000, 0, 1) ? h.lastOk : "";
   return (
     <div
       role="alert"
@@ -71,15 +80,13 @@ function ProblemCard({ detail, onRetry }: { detail: PluginDetail; onRetry: () =>
     >
       <AlertTriangle size={18} className="mt-0.5 shrink-0 text-warning" aria-hidden />
       <div className="min-w-0 flex-1">
-        <p className="text-sm font-medium text-fg">
-          {h.reason || t("{name} is having trouble", { name: detail.name })}
-        </p>
-        {h.lastError ? (
-          <p className="mt-1 break-words font-mono text-xs text-fg-muted">{h.lastError}</p>
+        <p className="text-sm font-medium text-fg">{title}</p>
+        {technical ? (
+          <p className="mt-1 break-words font-mono text-xs text-fg-muted">{technical}</p>
         ) : null}
-        {h.lastOk ? (
+        {lastOk ? (
           <p className="mt-1 text-xs text-fg-subtle">
-            {t("Last worked {when}", { when: relativeTime(h.lastOk) })}
+            {t("Last worked {when}", { when: relativeTime(lastOk) })}
           </p>
         ) : null}
       </div>
@@ -309,11 +316,18 @@ interface PreviewItem {
 }
 
 function CatalogueNow({ detail, onClose }: { detail: PluginDetail; onClose: () => void }) {
-  const { descriptors } = useRegistry<{ key?: string }>("collectionSource");
-  const lists = useMemo(
-    () => descriptors.filter((d) => d.owner === detail.id),
-    [descriptors, detail.id],
-  );
+  const { descriptors } = useRegistry<{ params?: { required?: boolean }[] }>("collectionSource");
+  const { locale } = useLocale();
+  // Lists that show something without a value to fill in, the add-on's
+  // headline lists (Popular, Top, Trending) first.
+  const lists = useMemo(() => {
+    const headline = /popular|top|trending|featured/i;
+    return descriptors
+      .filter((d) => d.owner === detail.id && !(d.meta?.params ?? []).some((p) => p.required))
+      .sort(
+        (a, b) => Number(headline.test(textOf(b.label))) - Number(headline.test(textOf(a.label))),
+      );
+  }, [descriptors, detail.id, locale]);
   const [pick, setPick] = useState<string>("");
   const current = lists.find((d) => d.id === pick) ?? lists[0];
   const [items, setItems] = useState<PreviewItem[] | null>(null);

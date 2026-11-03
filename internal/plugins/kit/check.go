@@ -133,6 +133,11 @@ func checkStringsAndCopy(rep *Report, man plugins.Manifest, files map[string][]b
 			usages[key] = append(usages[key], stringUsage{field: field, maxChars: max, isHint: isHint})
 			return
 		}
+		// Plain text a Stremio add-on brings (catalogue names) is the
+		// add-on's own; only the plugin's summary is held to Ether's rules.
+		if e.Stremio && field != "ether.summary" {
+			return
+		}
 		if strings.TrimSpace(val) != "" {
 			if msg := plugins.LintCopy(val, max); msg != "" {
 				rep.addErr("copy", field, msg)

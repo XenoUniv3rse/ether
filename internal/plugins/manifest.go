@@ -180,7 +180,9 @@ func (m Manifest) Validate() error {
 		case seenCap[c]:
 			add(field, "is listed twice")
 		default:
-			if allowed := capabilityKinds[c]; allowed != nil && !allowed[e.Kind] {
+			// An add-on-backed plugin's roles come from its Stremio
+			// resources, which may combine (a catalogue that also streams).
+			if allowed := capabilityKinds[c]; allowed != nil && !allowed[e.Kind] && !e.Stremio {
 				add(field, string(c)+" is not allowed for kind "+string(e.Kind))
 			}
 		}
@@ -413,7 +415,9 @@ func validateContributes(m Manifest, add func(string, string)) {
 		}
 		if strings.TrimSpace(s) == "" {
 			add(field, "is required")
-		} else if msg := LintCopy(s, max); msg != "" {
+		} else if msg := LintCopy(s, max); msg != "" && !e.Stremio {
+			// Labels an add-on brings (its catalogue names) are its own
+			// words; Ether shows them as the add-on wrote them.
 			add(field, msg)
 		}
 	}
