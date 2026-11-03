@@ -65,23 +65,26 @@ func (m *Manager) handleCatalogue(w http.ResponseWriter, r *http.Request) {
 
 // Summary is one row of the installed list.
 type Summary struct {
-	ID            string   `json:"id"`
-	Name          string   `json:"name"`
-	Version       string   `json:"version"`
-	Kind          string   `json:"kind,omitempty"`
-	Summary       string   `json:"summary,omitempty"`
-	Icon          string   `json:"icon,omitempty"`
-	Enabled       bool     `json:"enabled"`
-	Verified      bool     `json:"verified"`
-	Shadow        bool     `json:"shadow"`
-	AutoUpdate    bool     `json:"autoUpdate"`
-	UpdateVersion string   `json:"updateVersion,omitempty"`
-	PrevVersion   string   `json:"prevVersion,omitempty"`
-	Health        string   `json:"health"`
-	Capabilities  []string `json:"capabilities,omitempty"`
-	SourceKind    string   `json:"sourceKind,omitempty"`
-	StremioOnly   bool     `json:"stremioOnly,omitempty"`
-	InstalledAt   int64    `json:"installedAt"`
+	ID            string `json:"id"`
+	Name          string `json:"name"`
+	Version       string `json:"version"`
+	Kind          string `json:"kind,omitempty"`
+	Summary       string `json:"summary,omitempty"`
+	Icon          string `json:"icon,omitempty"`
+	Enabled       bool   `json:"enabled"`
+	Verified      bool   `json:"verified"`
+	Shadow        bool   `json:"shadow"`
+	AutoUpdate    bool   `json:"autoUpdate"`
+	UpdateVersion string `json:"updateVersion,omitempty"`
+	PrevVersion   string `json:"prevVersion,omitempty"`
+	Health        string `json:"health"`
+	// HealthReason is the plain-language reason behind a non-ok health,
+	// such as "Recent calls were slow."
+	HealthReason string   `json:"healthReason,omitempty"`
+	Capabilities []string `json:"capabilities,omitempty"`
+	SourceKind   string   `json:"sourceKind,omitempty"`
+	StremioOnly  bool     `json:"stremioOnly,omitempty"`
+	InstalledAt  int64    `json:"installedAt"`
 	// Roles and Host describe a Stremio add-on: what it can do, which of
 	// that is switched on, and the host it is reached at (never the link,
 	// which carries the owner's configuration).
@@ -89,10 +92,10 @@ type Summary struct {
 	Host  string      `json:"host,omitempty"`
 }
 
-func (m *Manager) summary(r Record, health string) Summary {
+func (m *Manager) summary(r Record, h Health) Summary {
 	s := Summary{ID: r.ID, Name: r.Name, Version: r.Version, Kind: r.Kind, Enabled: r.Enabled,
 		Verified: r.Verified, Shadow: r.Shadow, AutoUpdate: r.AutoUpdate, UpdateVersion: r.UpdateVersion,
-		PrevVersion: r.PrevVersion, Health: health, SourceKind: r.SourceKind,
+		PrevVersion: r.PrevVersion, Health: h.Status, HealthReason: h.Reason, SourceKind: r.SourceKind,
 		StremioOnly: r.Manifest.IsStremioOnly(), InstalledAt: r.InstalledAt.Unix()}
 	if r.Manifest.SpeaksStremio() {
 		// Roles and the add-on's host belong to every plugin that answers
@@ -216,7 +219,7 @@ func (m *Manager) handleList(w http.ResponseWriter, r *http.Request) {
 	out := make([]Summary, 0, len(recs))
 	for _, rec := range recs {
 		h, _ := m.store.health(r.Context(), rec.ID)
-		out = append(out, m.summary(rec, h.Status))
+		out = append(out, m.summary(rec, h))
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"plugins": out})
 }
@@ -230,7 +233,7 @@ func (m *Manager) handleGet(w http.ResponseWriter, r *http.Request) {
 	}
 	h, _ := m.store.health(r.Context(), id)
 	g, _ := m.store.grants(r.Context(), id)
-	d := Detail{Summary: m.summary(rec, h.Status), Manifest: rec.Manifest, HealthDetail: h}
+	d := Detail{Summary: m.summary(rec, h), Manifest: rec.Manifest, HealthDetail: h}
 	d.Permissions.Lines, d.Permissions.NeedsViewers, d.Permissions.NeedsFolders = PermissionSheet(rec.Manifest)
 	if rec.Manifest.Ether != nil {
 		d.Permissions.Declared = rec.Manifest.Ether.Permissions
@@ -376,7 +379,7 @@ func (m *Manager) handleInstall(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h, _ := m.store.health(r.Context(), rec.ID)
-	writeJSON(w, http.StatusCreated, m.summary(rec, h.Status))
+	writeJSON(w, http.StatusCreated, m.summary(rec, h))
 }
 
 func (m *Manager) handleGetAutoUpdate(w http.ResponseWriter, r *http.Request) {
@@ -527,7 +530,7 @@ func (m *Manager) handleAddonInstall(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h, _ := m.store.health(r.Context(), rec.ID)
-	writeJSON(w, http.StatusOK, m.summary(rec, h.Status))
+	writeJSON(w, http.StatusOK, m.summary(rec, h))
 }
 
 // failAddon reports an add-on link that could not be read in the owner's
@@ -789,7 +792,7 @@ func (m *Manager) handleUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h, _ := m.store.health(r.Context(), rec.ID)
-	writeJSON(w, http.StatusOK, m.summary(rec, h.Status))
+	writeJSON(w, http.StatusOK, m.summary(rec, h))
 }
 
 func (m *Manager) handleRollback(w http.ResponseWriter, r *http.Request) {
@@ -799,7 +802,7 @@ func (m *Manager) handleRollback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h, _ := m.store.health(r.Context(), rec.ID)
-	writeJSON(w, http.StatusOK, m.summary(rec, h.Status))
+	writeJSON(w, http.StatusOK, m.summary(rec, h))
 }
 
 func (m *Manager) handleRemove(w http.ResponseWriter, r *http.Request) {

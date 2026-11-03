@@ -19,10 +19,41 @@ export interface HealthSummary {
   card?: { title: string; line: string; retry: boolean };
 }
 
+/**
+ * The level and the word for a plugin's health, from its status and the
+ * server's plain reason only, so a card in the Installed list and the
+ * plugin's drawer always say the same thing.
+ */
+export function healthHeadline(p: { health: string; healthReason?: string; enabled: boolean }): {
+  level: HealthLevel;
+  word: string;
+  slow: boolean;
+} {
+  const level = pluginHealthLevel(p.health, p.enabled);
+  const slow = level === "warn" && /slow/i.test(p.healthReason ?? "");
+  const word =
+    level === "off"
+      ? t("Off")
+      : level === "unknown"
+        ? t("Unknown")
+        : level === "ok"
+          ? t("Healthy")
+          : slow
+            ? t("Slow")
+            : level === "warn"
+              ? t("Needs attention")
+              : t("Not answering");
+  return { level, word, slow };
+}
+
 export function healthSummary(detail: PluginDetail): HealthSummary {
   const h = detail.healthDetail;
   const im = detail.impact;
-  const level = pluginHealthLevel(h.status, detail.enabled);
+  const { level, word, slow } = healthHeadline({
+    health: h.status,
+    healthReason: h.reason,
+    enabled: detail.enabled,
+  });
   const calls = im.calls;
   const seconds = Math.round(im.p50Ms / 1000);
   const failures = t("{errors} of {calls} recent calls failed", {
@@ -30,20 +61,19 @@ export function healthSummary(detail: PluginDetail): HealthSummary {
     calls: formatNumber(calls, 0),
   });
   if (level === "off") {
-    return { level, word: t("Off"), tile: t("Turned off") };
+    return { level, word, tile: t("Turned off") };
   }
   if (level === "ok" || level === "unknown") {
     return {
       level,
-      word: t("Healthy"),
+      word,
       tile: calls ? tn(calls, "{count} recent call", "{count} recent calls") : t("Not used yet"),
     };
   }
-  const slow = /slow/i.test(h.reason ?? "") || (im.slow > 0 && im.errors === 0);
-  if (level === "warn" && slow) {
+  if (slow) {
     return {
       level,
-      word: t("Slow"),
+      word,
       tile:
         seconds >= 1 ? t("About {seconds} s per answer", { seconds }) : t("Some answers are slow"),
       card: {
@@ -59,7 +89,7 @@ export function healthSummary(detail: PluginDetail): HealthSummary {
   if (level === "warn") {
     return {
       level,
-      word: t("Needs attention"),
+      word,
       tile: im.errors ? failures : t("Needs attention"),
       card: {
         title: t("{name} needs attention", { name: detail.name }),
@@ -71,8 +101,8 @@ export function healthSummary(detail: PluginDetail): HealthSummary {
   const lastOk = h.lastOk && Date.parse(h.lastOk) > Date.UTC(2000, 0, 1) ? h.lastOk : "";
   return {
     level,
-    word: t("Not answering"),
-    tile: im.errors ? failures : t("Not answering"),
+    word,
+    tile: im.errors ? failures : word,
     card: {
       title: t("{name} isn't answering", { name: detail.name }),
       line: lastOk

@@ -21,6 +21,8 @@ export interface PluginSummary {
   updateVersion?: string;
   prevVersion?: string;
   health: string;
+  /** The plain-language reason behind a non-ok health. */
+  healthReason?: string;
   capabilities?: string[];
   sourceKind?: string;
   stremioOnly?: boolean;

@@ -33,7 +33,8 @@ import { DirectoryBrowser } from "./DirectoryBrowser";
 import { openInStudio } from "./openInStudio";
 import { InstallDrawer } from "./InstallDrawer";
 import { InstalledPluginDrawer } from "./InstalledPluginDrawer";
-import { kindIcon, isAddon, kindLabel, pluginHealthLevel, type PluginSummary } from "./types";
+import { healthHeadline } from "./drawer/health";
+import { kindIcon, isAddon, kindLabel, type PluginSummary } from "./types";
 
 type TabKey = "installed" | "marketplace";
 
@@ -325,7 +326,7 @@ function PluginCard({
   onOpen: () => void;
   onToggle: (on: boolean) => void;
 }) {
-  const level = pluginHealthLevel(plugin.health, plugin.enabled);
+  const health = healthHeadline(plugin);
   const navigate = useNavigate();
   return (
     // The whole card opens the drawer; its own controls (the title button
@@ -369,7 +370,7 @@ function PluginCard({
                 <Eye size={12} aria-hidden /> {t("Trying out")}
               </Badge>
             ) : (
-              <LevelBadge level={level} />
+              <LevelBadge level={health.level} label={health.word} />
             )}
             <Badge variant="secondary">{kindLabel(plugin.kind, isAddon(plugin))}</Badge>
             {plugin.updateVersion ? (
