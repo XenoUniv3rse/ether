@@ -427,10 +427,14 @@ func (m *Manager) CallStream(ctx context.Context, pluginID string, req Request) 
 func (m *Manager) closeRuntime(id string) {
 	m.mu.Lock()
 	rt := m.runtimes[id]
+	addon := m.runtimes[id+addonRuntimeSuffix]
 	delete(m.runtimes, id)
+	delete(m.runtimes, id+addonRuntimeSuffix)
 	m.mu.Unlock()
-	if rt != nil {
-		_ = rt.Close()
+	for _, r := range []Runtime{rt, addon} {
+		if r != nil {
+			_ = r.Close()
+		}
 	}
 }
 
@@ -495,7 +499,7 @@ func (m *Manager) Call(ctx context.Context, pluginID string, req Request) (Respo
 	req.PluginID = pluginID
 	start := m.now()
 	deadline := DeadlineFor(req.Path)
-	if r.Manifest.IsStremioOnly() {
+	if r.Manifest.SpeaksStremio() {
 		deadline = stremioDeadline(req.Path)
 	}
 	cctx, cancel := context.WithTimeout(ctx, deadline)

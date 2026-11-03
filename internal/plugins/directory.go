@@ -50,7 +50,7 @@ func (m *Manager) BrowseDirectory(ctx context.Context, plugin, key string) (Dire
 		return result, ErrNotFound
 	}
 	var resp Response
-	if rec.Manifest.Ether == nil {
+	if rec.Manifest.SpeaksStremio() {
 		var cat *StremioCat
 		for _, c := range rec.Manifest.AddonCatalogs {
 			if "directory-"+strings.TrimPrefix(StremioCatalogKey(c), "catalog-") == key {

@@ -43,6 +43,13 @@ export type Moment =
   | { kind: "repair"; text: string }
   | { kind: "guide"; tool: string; title: string; channels: GuideChannel[] }
   | { kind: "posters"; tool: string; title: string }
+  | {
+      kind: "catalog";
+      tool: string;
+      title: string;
+      items: { key: string; title: string; poster?: string }[];
+      total: number;
+    }
   | { kind: "checks"; title: string; items: string[] }
   | { kind: "done"; text: string };
 
@@ -360,6 +367,12 @@ export function MomentView({ moment }: { moment: Moment }) {
       );
     case "posters":
       return <PosterFlow title={moment.title} tool={moment.tool} />;
+    case "catalog":
+      return (
+        <Panel title={moment.title} tool={moment.tool}>
+          <PosterGrid items={moment.items} total={moment.total} />
+        </Panel>
+      );
     case "checks":
       return (
         <Panel title={moment.title}>
@@ -620,6 +633,34 @@ export function GuideStrip({ channels, animate }: { channels: GuideChannel[]; an
   );
 }
 
+function PosterGrid({
+  items,
+  total,
+}: {
+  items: { key: string; title: string; poster?: string }[];
+  total: number;
+}) {
+  return (
+    <>
+      <div className="grid grid-cols-6 gap-2.5 sm:grid-cols-9">
+        {items.slice(0, 18).map((it, i) => (
+          <div key={it.key} className="stage-flow" style={{ animationDelay: `${i * 140}ms` }}>
+            <Artwork
+              src={it.poster}
+              alt={it.title}
+              title={it.title}
+              className="aspect-[2/3] w-full overflow-hidden rounded-md shadow-sm ring-1 ring-border-subtle"
+            />
+          </div>
+        ))}
+      </div>
+      <div className="mt-3 flex justify-end">
+        <Badge variant="secondary">{t("{count} titles", { count: total })}</Badge>
+      </div>
+    </>
+  );
+}
+
 function PosterFlow({ title, tool }: { title: string; tool: string }) {
   const { locale } = useLocale();
   const spec = useMemo(() => studioSpec(false), [locale]);
@@ -627,23 +668,7 @@ function PosterFlow({ title, tool }: { title: string; tool: string }) {
   return (
     <Panel title={title} tool={tool}>
       {result ? (
-        <>
-          <div className="grid grid-cols-6 gap-2.5 sm:grid-cols-9">
-            {result.items.slice(0, 18).map((it, i) => (
-              <div key={it.key} className="stage-flow" style={{ animationDelay: `${i * 140}ms` }}>
-                <Artwork
-                  src={it.poster}
-                  alt={it.title}
-                  title={it.title}
-                  className="aspect-[2/3] w-full overflow-hidden rounded-md shadow-sm ring-1 ring-border-subtle"
-                />
-              </div>
-            ))}
-          </div>
-          <div className="mt-3 flex justify-end">
-            <Badge variant="secondary">{t("{count} titles", { count: result.total })}</Badge>
-          </div>
-        </>
+        <PosterGrid items={result.items} total={result.total} />
       ) : (
         <div className="grid grid-cols-9 gap-2.5">
           {Array.from({ length: 9 }, (_, i) => (

@@ -499,6 +499,18 @@ func (h *recordingHost) CallHost(ctx context.Context, name string, raw json.RawM
 		return nil, wasm.Forbidden("undeclared secret " + sec)
 	case "settings.get":
 		return json.RawMessage(`{}`), nil
+	case "addon.get":
+		// An add-on-backed plugin's checks run offline: the add-on answers
+		// with an empty, well-formed Stremio response.
+		if !h.man.Ether.Stremio {
+			return nil, wasm.Forbidden("addon.get is only for plugins made from an add-on")
+		}
+		body := `{"metas":[],"streams":[],"subtitles":[],"addons":[],"meta":{"id":"tt0000001","type":"movie","name":"Fixture"}}`
+		if strings.HasSuffix(str(0), "/manifest.json") {
+			body = `{"id":"fixture","version":"1.0.0","name":"Fixture","resources":[],"types":[]}`
+		}
+		b, _ := json.Marshal(map[string]any{"status": 200, "body": body})
+		return b, nil
 	case "http.fetch":
 		var req struct {
 			Method  string            `json:"method"`
@@ -793,6 +805,10 @@ func checkRoutes(ctx context.Context, rep *Report, man plugins.Manifest, plug *w
 	// List sources.
 	for _, ls := range man.Ether.Contributes.ListSources {
 		catPath := "/catalog/movie/" + ls.Catalog + ".json"
+		if man.Ether.Stremio && strings.Contains(ls.Catalog, "/") {
+			// Add-on catalogues are named type/id, as their routes are.
+			catPath = "/catalog/" + ls.Catalog + ".json"
+		}
 		fixtures = append(fixtures, routeFixture{
 			method: "GET",
 			path:   catPath,
@@ -848,8 +864,12 @@ func checkRoutes(ctx context.Context, rep *Report, man plugins.Manifest, plug *w
 	// Listing is public to the host; download requires a viewer pick.
 	if man.HasCapability(plugins.CapSubtitles) {
 		subPath := "/subtitles/movie/tt0012349/videoHash=0123456789abcdef.json"
-		// Download must refuse a missing pick token.
-		callNoPick(ctx, rep, plug, "/ether/subtitles/download")
+		// Download must refuse a missing pick token. A plugin that answers
+		// as a Stremio add-on hands out subtitle links instead and has no
+		// download route.
+		if !man.SpeaksStremio() {
+			callNoPick(ctx, rep, plug, "/ether/subtitles/download")
+		}
 		// Listing succeeds without a pick and returns a subtitles array.
 		fixtures = append(fixtures, routeFixture{
 			method: "GET",

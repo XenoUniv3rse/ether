@@ -112,7 +112,7 @@ func (b *Bridge) Sync(_ context.Context, r plugins.Record) {
 			meta:       *c.Channels,
 			mode:       modeNative,
 		}
-		if r.Manifest.IsStremioOnly() {
+		if r.Manifest.SpeaksStremio() {
 			chKind.mode = modeAddon
 		}
 		if b.tv != nil {

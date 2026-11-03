@@ -1,5 +1,5 @@
 import { AgentPanel, type AgentMessage } from "@braedonsaunders/appkit-ai/react";
-import { Badge, Button, Dialog, SearchSelect, toast } from "@braedonsaunders/appkit-ui";
+import { Badge, Button, Dialog, toast } from "@braedonsaunders/appkit-ui";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Film, LayoutTemplate, Sparkles, Tv } from "lucide-react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
@@ -16,13 +16,14 @@ import { PluginView } from "../../viewspec/PluginView";
 import { formatDateTime } from "../../lib/format";
 import { invalidateRegistry } from "../../lib/extend";
 import { PermissionSheet } from "./PermissionSheet";
+import { DraftPicker } from "./DraftPicker";
 import { CodeStudio } from "./CodeStudio";
+import { CodeHome } from "./CodeHome";
 import { Composer } from "./Composer";
 import { LiveStageView, NativePreview, momentsForTool, readAgentStream } from "./LiveStage";
 import type { Moment } from "./Stage";
 import type { InstallPreview } from "./types";
 import { t } from "../../i18n";
-import { searchSelectLabels } from "../../i18n/appkit-labels";
 import type { StudioProject, StudioProjectSummary, StudioCompileResult } from "./develop/types";
 
 /**
@@ -34,7 +35,7 @@ export default function LiveStudio() {
   const mode: StudioMode = params.get("view") === "code" ? "code" : "ai";
   const opened = params.get("project") ?? undefined;
   const [phase, setPhase] = useState<"home" | "stage" | "editor">(() =>
-    opened || sessionStorage.getItem("ether-studio-thread") ? "editor" : "home",
+    opened || (mode === "ai" && sessionStorage.getItem("ether-studio-thread")) ? "editor" : "home",
   );
   const [creating, setCreating] = useState(false);
   const setMode = (next: StudioMode, project?: string) => {
@@ -134,6 +135,28 @@ export default function LiveStudio() {
         }}
       />
     );
+  const openDraft = (id: string) => {
+    sessionStorage.removeItem("ether-studio-thread");
+    setMode("code", id);
+    setPhase("editor");
+  };
+  if (mode === "code" && phase === "home")
+    return (
+      <Workspace title={t("Studio")} actions={<Link to="/plugins">{t("Plugins")}</Link>}>
+        <CodeHome
+          modeSwitch={<ModeSwitch mode={mode} onMode={(m) => setMode(m)} />}
+          onOpenProject={openDraft}
+          onOpenPlugin={(pluginId) =>
+            void apiFetch<{ project: StudioProject }>("/plugins/studio/import", {
+              method: "POST",
+              body: JSON.stringify({ pluginId }),
+            })
+              .then((r) => openDraft(r.project.id))
+              .catch((e) => toast.error(errorMessage(e)))
+          }
+        />
+      </Workspace>
+    );
   return (
     <Workspace title={t("Studio")} actions={<Link to="/plugins">{t("Plugins")}</Link>}>
       <div className="flex min-h-0 flex-1 flex-col">
@@ -188,6 +211,9 @@ export default function LiveStudio() {
 }
 
 type StudioMode = "ai" | "code";
+
+/** Templates whose data shows in Ether's own surfaces while drafting. */
+const NATIVE_PREVIEW = new Set(["channels", "video_source", "addon"]);
 
 /** Chat and Code are two views of the same Studio and the same draft. */
 function ModeSwitch({ mode, onMode }: { mode: StudioMode; onMode: (m: StudioMode) => void }) {
@@ -327,6 +353,19 @@ function LiveWorkspace({
     }
     setEpoch((e) => e + 1);
   }, []);
+  const openPlugin = async (pluginId: string) => {
+    try {
+      const r = await apiFetch<{ project: StudioProject }>("/plugins/studio/import", {
+        method: "POST",
+        body: JSON.stringify({ pluginId }),
+      });
+      const list = await apiFetch<{ projects: StudioProjectSummary[] }>("/plugins/studio/projects");
+      setProjects(list.projects);
+      await loadProject(r.project.id);
+    } catch (e) {
+      setError(errorMessage(e));
+    }
+  };
   const refresh = useCallback(async () => {
     if (thread.current) {
       const r = await fetchAgentMessages(thread.current);
@@ -416,7 +455,7 @@ function LiveWorkspace({
       setError(errorMessage(e));
     }
   };
-  const install = async () => {
+  const install = async (asCopy = false) => {
     if (!project || !installing) return;
     setInstallBusy(true);
     setInstallError("");
@@ -428,6 +467,7 @@ function LiveWorkspace({
           body: JSON.stringify({
             grants: { viewers: grantViewers, folders: grantFolders },
             acceptAddedPermissions: true,
+            asCopy,
           }),
         },
       );
@@ -467,15 +507,12 @@ function LiveWorkspace({
         <>
           {mode === "code" && project ? (
             <>
-              <SearchSelect
-                value={project.id}
-                onChange={(id) => {
-                  if (!dirty) void loadProject(id).catch((e) => setError(errorMessage(e)));
-                }}
-                options={projects.map((p) => ({ value: p.id, label: p.name }))}
-                ariaLabel={t("Saved project")}
+              <DraftPicker
+                projects={projects}
+                currentId={project?.id}
                 disabled={dirty}
-                {...searchSelectLabels()}
+                onPickProject={(id) => void loadProject(id).catch((e) => setError(errorMessage(e)))}
+                onPickPlugin={(pluginId) => void openPlugin(pluginId)}
               />
               <Button
                 size="sm"
@@ -507,7 +544,12 @@ function LiveWorkspace({
             preview={
               project ? (
                 <div key={`${project.id}:${epoch}`} className="space-y-4">
-                  <NativePreview projectId={project.id} template={project.template} />
+                  <NativePreview
+                    projectId={project.id}
+                    template={project.template}
+                    manifest={project.files["manifest.json"]}
+                    epoch={project.updatedAt ? Date.parse(project.updatedAt) : 0}
+                  />
                   {project.defaultPage ? (
                     <div className="rounded-xl border border-border p-4">
                       <PluginView plugin={`studio:${project.id}`} page={project.defaultPage} />
@@ -583,15 +625,12 @@ function LiveWorkspace({
               </p>
             ) : null}
             <div className="mb-4 flex flex-wrap items-center gap-2">
-              <SearchSelect
-                value={project?.id || ""}
-                onChange={(id) => {
-                  if (!dirty) void loadProject(id).catch((e) => setError(errorMessage(e)));
-                }}
-                options={projects.map((p) => ({ value: p.id, label: p.name }))}
-                ariaLabel={t("Saved project")}
+              <DraftPicker
+                projects={projects}
+                currentId={project?.id}
                 disabled={dirty}
-                {...searchSelectLabels()}
+                onPickProject={(id) => void loadProject(id).catch((e) => setError(errorMessage(e)))}
+                onPickPlugin={(pluginId) => void openPlugin(pluginId)}
               />
               {project ? (
                 <Button
@@ -615,16 +654,23 @@ function LiveWorkspace({
                     {d.file}:{d.line} {d.text}
                   </p>
                 ))}
-                {project.defaultPage ? (
-                  <div key={`${project.id}:${epoch}`} className="space-y-4">
-                    <NativePreview projectId={project.id} template={project.template} />
+                <div key={`${project.id}:${epoch}`} className="space-y-4">
+                  <NativePreview
+                    projectId={project.id}
+                    template={project.template}
+                    manifest={project.files["manifest.json"]}
+                    epoch={project.updatedAt ? Date.parse(project.updatedAt) : 0}
+                  />
+                  {project.defaultPage ? (
                     <div className="rounded-xl border border-border p-4">
                       <PluginView plugin={`studio:${project.id}`} page={project.defaultPage} />
                     </div>
-                  </div>
-                ) : (
-                  <p>{t("This draft has no page preview. Switch to Code to see how it works.")}</p>
-                )}
+                  ) : NATIVE_PREVIEW.has(project.template) ? null : (
+                    <p>
+                      {t("This draft has no page preview. Switch to Code to see how it works.")}
+                    </p>
+                  )}
+                </div>
                 <p className="mt-4 text-xs text-fg-muted">
                   {t(
                     "Preview runs the saved draft in the Studio sandbox. It does not install the plugin.",
@@ -654,11 +700,16 @@ function LiveWorkspace({
               <Button variant="ghost" onClick={() => setInstalling(null)}>
                 {t("Cancel")}
               </Button>
+              {installing.alreadyInstalled ? (
+                <Button variant="outline" disabled={installBusy} onClick={() => void install(true)}>
+                  {t("Save as copy")}
+                </Button>
+              ) : null}
               <Button disabled={installBusy} onClick={() => void install()}>
                 {installBusy
                   ? t("Installing…")
                   : installing.alreadyInstalled
-                    ? t("Update")
+                    ? t("Update {name}", { name: installing.manifest.name })
                     : t("Install")}
               </Button>
             </>
@@ -667,9 +718,10 @@ function LiveWorkspace({
           <div className="space-y-4">
             <p className="text-sm text-fg-muted">
               {installing.alreadyInstalled
-                ? t("This replaces version {version} with the saved draft.", {
-                    version: installing.installedVersion ?? "",
-                  })
+                ? t(
+                    "Update replaces version {version} in place, so everything that uses it keeps working. Save as copy installs this version beside it under a new name.",
+                    { version: installing.installedVersion ?? "" },
+                  )
                 : t("The saved draft becomes a real plugin on this server.")}
             </p>
             <PermissionSheet

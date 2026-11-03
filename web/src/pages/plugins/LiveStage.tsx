@@ -107,15 +107,71 @@ export async function draftSources(id: string): Promise<{ title: string; tiles: 
   };
 }
 
+type CatalogPreview = {
+  title: string;
+  items: { key: string; title: string; poster?: string }[];
+  total: number;
+};
+
+/** The first catalogue an add-on draft answers, as the posters Ether shows. */
+export async function draftCatalog(
+  id: string,
+  manifestText: string | undefined,
+): Promise<CatalogPreview | null> {
+  let man: {
+    catalogs?: { type: string; id: string; name?: string; extra?: { isRequired?: boolean }[] }[];
+  } = {};
+  if (manifestText === undefined) {
+    const p = await apiFetch<{ project: { files: Record<string, string> } }>(
+      `/plugins/studio/projects/${encodeURIComponent(id)}`,
+    );
+    manifestText = p.project.files["manifest.json"];
+  }
+  try {
+    man = JSON.parse(manifestText ?? "{}");
+  } catch {
+    return null;
+  }
+  for (const c of man.catalogs ?? []) {
+    if ((c.extra ?? []).some((e) => e.isRequired)) continue;
+    const r = await runDraft(id, `/catalog/${c.type}/${c.id}.json`);
+    const metas =
+      (r.body?.metas as { id?: string; name?: string; poster?: string }[] | undefined) ?? [];
+    if (!metas.length) continue;
+    return {
+      title: t("{name} in Ether", { name: c.name || c.id }),
+      items: metas.map((m, i) => ({ key: `${m.id ?? i}`, title: m.name ?? "", poster: m.poster })),
+      total: metas.length,
+    };
+  }
+  return null;
+}
+
 /** The draft's own data in the surface it will extend, for the editor. */
-export function NativePreview({ projectId, template }: { projectId: string; template: string }) {
+export function NativePreview({
+  projectId,
+  template,
+  manifest,
+  epoch,
+}: {
+  projectId: string;
+  template: string;
+  manifest?: string;
+  epoch?: number;
+}) {
   const [guide, setGuide] = useState<GuideChannel[] | null>(null);
+  const [catalog, setCatalog] = useState<CatalogPreview | null>(null);
   const [sources, setSources] = useState<{ title: string; tiles: StreamTile[] } | null>(null);
   useEffect(() => {
     let live = true;
     setGuide(null);
     setSources(null);
-    if (template === "channels") {
+    setCatalog(null);
+    if (template === "addon") {
+      void draftCatalog(projectId, manifest)
+        .then((c) => live && setCatalog(c))
+        .catch(() => undefined);
+    } else if (template === "channels") {
       void draftGuide(projectId)
         .then((g) => live && setGuide(g))
         .catch(() => live && setGuide([]));
@@ -127,7 +183,21 @@ export function NativePreview({ projectId, template }: { projectId: string; temp
     return () => {
       live = false;
     };
-  }, [projectId, template]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- reruns on save, not per keystroke
+  }, [projectId, template, epoch]);
+  if (catalog?.items.length) {
+    return (
+      <MomentView
+        moment={{
+          kind: "catalog",
+          tool: "catalog",
+          title: catalog.title,
+          items: catalog.items,
+          total: catalog.total,
+        }}
+      />
+    );
+  }
   if (template === "channels" && guide?.length) {
     return (
       <MomentView
@@ -242,6 +312,10 @@ export async function momentsForTool(
         const channels = await draftGuide(project.id).catch(() => []);
         if (channels.length)
           out.push({ kind: "guide", tool: name, title: t("On now in Live TV"), channels });
+      } else if (project?.id && project.template === "addon") {
+        const c = await draftCatalog(project.id, undefined).catch(() => null);
+        if (c)
+          out.push({ kind: "catalog", tool: name, title: c.title, items: c.items, total: c.total });
       } else if (project?.id && project.template === "video_source") {
         const s = await draftSources(project.id).catch(() => null);
         if (s?.tiles.length)

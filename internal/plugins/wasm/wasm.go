@@ -94,7 +94,7 @@ func (f HostFunc) CallHost(ctx context.Context, name string, args json.RawMessag
 // host functions. Wall time adds 1 unit per WallUnitInterval.
 var DefaultCosts = map[string]int64{
 	"log": 1, "kv.get": 5, "kv.put": 10, "kv.delete": 5, "kv.list": 10,
-	"secret.get": 5, "http.fetch": 100, "catalog.search": 50, "catalog.get": 20,
+	"secret.get": 5, "http.fetch": 100, "addon.get": 100, "catalog.search": 50, "catalog.get": 20,
 	"viewers.history": 50, "viewers.setWatchState": 50, "collections.upsert": 50,
 	"folders.list": 20, "folders.stat": 20, "notify.owner": 20, "settings.get": 5,
 }

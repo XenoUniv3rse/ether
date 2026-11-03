@@ -23,6 +23,22 @@ func ParseManifest(raw []byte) (Manifest, error) {
 	return m, nil
 }
 
+// UnmarshalJSON completes a Stremio-backed plugin's roles from its
+// catalogs and resources wherever a manifest is read: packages, stored
+// records and drafts alike.
+func (m *Manifest) UnmarshalJSON(b []byte) error {
+	type plain Manifest
+	var p plain
+	if err := json.Unmarshal(b, &p); err != nil {
+		return err
+	}
+	*m = Manifest(p)
+	if m.Ether != nil && m.Ether.Stremio {
+		m.Ether = m.withStremioRoles()
+	}
+	return nil
+}
+
 var (
 	idRe       = regexp.MustCompile(`^[a-z0-9]+(\.[a-z0-9][a-z0-9-]*)+$`)
 	keyRe      = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$`)
@@ -95,6 +111,11 @@ var knownKinds = map[Kind]bool{
 
 // IsStremioOnly reports whether m is a plain Stremio add-on (no ether block).
 func (m Manifest) IsStremioOnly() bool { return m.Ether == nil }
+
+// SpeaksStremio reports whether Ether reads this plugin's catalogues,
+// metadata, subtitles, channels and directories over Stremio routes: a
+// plain add-on, or a native plugin built from one in Studio.
+func (m Manifest) SpeaksStremio() bool { return m.Ether == nil || m.Ether.Stremio }
 
 // HasCapability reports whether the manifest declares c.
 func (m Manifest) HasCapability(c Capability) bool {

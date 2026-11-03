@@ -807,3 +807,22 @@ func (s *storage) purge(ctx context.Context, plugin string) error {
 	}
 	return nil
 }
+
+// files lists a version's artifact files (manifest, code, strings).
+func (s *storage) files(ctx context.Context, plugin, version string) (map[string][]byte, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT path,content FROM plugins_artifacts WHERE plugin=? AND version=?`, plugin, version)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close() //nolint:errcheck
+	out := map[string][]byte{}
+	for rows.Next() {
+		var path string
+		var b []byte
+		if err := rows.Scan(&path, &b); err != nil {
+			return nil, err
+		}
+		out[path] = b
+	}
+	return out, rows.Err()
+}

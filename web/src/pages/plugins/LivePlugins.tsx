@@ -30,6 +30,7 @@ import { invalidateRegistry } from "../../lib/extend";
 import { useStreamEvent } from "../../lib/stream";
 import { CatalogueTab } from "./CatalogueTab";
 import { DirectoryBrowser } from "./DirectoryBrowser";
+import { openInStudio } from "./openInStudio";
 import { InstallDrawer } from "./InstallDrawer";
 import { InstalledPluginDrawer } from "./InstalledPluginDrawer";
 import { kindIcon, kindLabel, pluginHealthLevel, type PluginSummary } from "./types";
@@ -325,6 +326,7 @@ function PluginCard({
   onToggle: (on: boolean) => void;
 }) {
   const level = pluginHealthLevel(plugin.health, plugin.enabled);
+  const navigate = useNavigate();
   return (
     <article
       aria-label={plugin.name}
@@ -377,6 +379,18 @@ function PluginCard({
       <p className="mt-3 line-clamp-2 min-h-10 text-sm text-fg-muted">{plugin.summary}</p>
       <div className="mt-auto flex items-center justify-between gap-3 pt-4">
         <span className="font-mono text-xs text-fg-subtle">v{plugin.version}</span>
+        <Button
+          variant="ghost"
+          size="sm"
+          className="ml-auto"
+          onClick={() =>
+            void openInStudio(plugin.id)
+              .then((to) => navigate(to))
+              .catch(() => onOpen())
+          }
+        >
+          <Code2 size={14} /> {t("Open in Studio")}
+        </Button>
         <Switch
           aria-label={t("Enable {name}", { name: plugin.name })}
           checked={plugin.enabled}

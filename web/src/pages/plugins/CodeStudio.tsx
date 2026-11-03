@@ -39,10 +39,56 @@ interface CallRecord {
 }
 
 /** Requests that exercise each kind of plugin the way Ether will call it. */
-function presets(
-  template: string,
-): { label: string; path: string; query?: Record<string, string> }[] {
-  switch (template) {
+type Preset = { label: string; path: string; query?: Record<string, string> };
+
+/** Requests an add-on draft answers, read from its own manifest. */
+function addonPresets(manifestText: string | undefined): Preset[] {
+  let man: {
+    catalogs?: {
+      type: string;
+      id: string;
+      name?: string;
+      extra?: { name: string; isRequired?: boolean }[];
+    }[];
+    resources?: (string | { name: string })[];
+    types?: string[];
+  } = {};
+  try {
+    man = JSON.parse(manifestText ?? "{}");
+  } catch {
+    // A manifest mid-edit still gets the generic requests.
+  }
+  const out: Preset[] = [];
+  for (const c of man.catalogs ?? []) {
+    if ((c.extra ?? []).some((e) => e.isRequired && e.name !== "search")) continue;
+    const search = (c.extra ?? []).some((e) => e.isRequired && e.name === "search");
+    out.push({
+      label: t("Catalogue: {name}", { name: c.name || `${c.type}/${c.id}` }),
+      path: search
+        ? `/catalog/${c.type}/${c.id}/search=night.json`
+        : `/catalog/${c.type}/${c.id}.json`,
+    });
+    if (out.length >= 4) break;
+  }
+  const names = new Set((man.resources ?? []).map((r) => (typeof r === "string" ? r : r.name)));
+  const type = man.types?.includes("movie") ? "movie" : (man.types?.[0] ?? "movie");
+  const sample = type === "series" ? "tt0903747:1:1" : "tt0063350";
+  if (names.has("meta"))
+    out.push({
+      label: t("Details for a title"),
+      path: `/meta/${type}/${sample.split(":")[0]}.json`,
+    });
+  if (names.has("stream"))
+    out.push({ label: t("Sources for a title"), path: `/stream/${type}/${sample}.json` });
+  if (names.has("subtitles"))
+    out.push({ label: t("Subtitles for a title"), path: `/subtitles/${type}/${sample}.json` });
+  out.push({ label: t("Connection test"), path: "/ether/test" });
+  return out;
+}
+
+function presets(project: StudioProject): Preset[] {
+  if (project.template === "addon") return addonPresets(project.files["manifest.json"]);
+  switch (project.template) {
     case "channels":
       return [
         { label: t("Channel lineup"), path: "/ether/channels.json" },
@@ -293,7 +339,7 @@ export function CodeStudio({
 }
 
 function TryIt({ project, epoch }: { project: StudioProject; epoch: number }) {
-  const options = presets(project.template);
+  const options = presets(project);
   const [path, setPath] = useState(options[0]!.path);
   const [query, setQuery] = useState(
     Object.entries(options[0]!.query ?? {})
@@ -365,12 +411,14 @@ function TryIt({ project, epoch }: { project: StudioProject; epoch: number }) {
           onChange={(e) => setQuery(e.currentTarget.value)}
           className="font-mono text-xs"
         />
-        <p className="text-[11px] text-fg-muted">
-          {t("Replace {channel} or {source} with an id from an earlier response.", {
-            channel: "{channel}",
-            source: "{source}",
-          })}
-        </p>
+        {/\{(channel|source)\}/.test(path) ? (
+          <p className="text-[11px] text-fg-muted">
+            {t("Replace {channel} or {source} with an id from an earlier response.", {
+              channel: "{channel}",
+              source: "{source}",
+            })}
+          </p>
+        ) : null}
         <Button size="sm" disabled={busy} onClick={() => void run()}>
           <Play size={13} /> {busy ? t("Running…") : t("Send")}
         </Button>
@@ -383,7 +431,9 @@ function TryIt({ project, epoch }: { project: StudioProject; epoch: number }) {
       {result ? (
         <div className="space-y-2">
           <div className="flex flex-wrap items-center gap-2 text-xs">
-            <Badge variant={result.status < 400 ? "success" : "destructive"}>HTTP {result.status}</Badge>
+            <Badge variant={result.status < 400 ? "success" : "destructive"}>
+              HTTP {result.status}
+            </Badge>
             <span className="text-fg-muted">{result.ms} ms</span>
             <span className="text-fg-muted">
               {t("{units} budget units", { units: result.units })}
@@ -432,7 +482,10 @@ function Activity({ project, epoch }: { project: StudioProject; epoch: number })
     <ul className="divide-y divide-border rounded-lg border border-border">
       {calls.slice(0, 50).map((c) => (
         <li key={c.id} className="flex items-center gap-2 px-3 py-2 text-xs">
-          <Badge variant={c.status < 400 && !c.error ? "success" : "destructive"} className="shrink-0">
+          <Badge
+            variant={c.status < 400 && !c.error ? "success" : "destructive"}
+            className="shrink-0"
+          >
             {c.status || "ERR"}
           </Badge>
           <span className="min-w-0 flex-1 truncate font-mono">
@@ -456,6 +509,25 @@ const ROUTES: Record<string, [string, string][]> = {
     ["GET /stream/tv/{id}.json", "{ streams: [{ name, url }] } with a playable HLS url"],
     ["POST /ether/test", "{ ok, message } for the owner's connection test"],
   ],
+  addon: [
+    [
+      "GET /catalog/{type}/{id}.json",
+      "{ metas: [{ id, type, name, poster, year }] }, filtered by editCatalog",
+    ],
+    [
+      "GET /meta/{type}/{id}.json",
+      "{ meta: { id, name, description, videos? } }, changed by editMeta",
+    ],
+    [
+      "GET /stream/{type}/{id}.json",
+      "{ streams: [{ name, title, url | infoHash }] }, changed by editStreams",
+    ],
+    [
+      "GET /subtitles/{type}/{id}.json",
+      "{ subtitles: [{ id, lang, url }] }, changed by editSubtitles",
+    ],
+    ["POST /ether/test", "{ ok, message }: checks the add-on still answers"],
+  ],
   video_source: [
     [
       "GET /stream/movie/{imdbId}.json?title&year",
@@ -466,7 +538,7 @@ const ROUTES: Record<string, [string, string][]> = {
   ],
 };
 
-function Reference({ template }: { template: string }) {
+export function Reference({ template }: { template: string }) {
   return (
     <div className="space-y-5 text-xs">
       {ROUTES[template] ? (
@@ -493,6 +565,12 @@ function Reference({ template }: { template: string }) {
             {"{ titles: [{ id, title, type, year, tmdbId, imdbId }] }"}
           </li>
           <li>ether.catalog.get(id)</li>
+          <li>
+            ether.addon.get(route) → {"{ status, body }"}{" "}
+            <span className="font-sans">
+              {t("(add-on drafts: asks the add-on it was made from, with its link kept sealed)")}
+            </span>
+          </li>
           <li>ether.kv.get / put / delete / list</li>
           <li>ether.secret.get(name)</li>
           <li>ether.log(...)</li>

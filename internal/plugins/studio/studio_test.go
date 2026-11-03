@@ -167,7 +167,7 @@ func TestInspectorValidationHintsAndRedaction(t *testing.T) {
 	if len(hints) == 0 {
 		t.Fatalf("expected validation hint for missing stream url/infoHash")
 	}
-	if !strings.Contains(hints[0].Message, "missing both url and infoHash") {
+	if !strings.Contains(hints[0].Message, "missing a url, an infoHash or a lazy id") {
 		t.Fatalf("unexpected hint message: %+v", hints[0])
 	}
 }

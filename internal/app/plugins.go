@@ -305,6 +305,8 @@ func (a *App) buildPlugins(ctx context.Context, cfg config.Config) (*pluginRunti
 	if err := studioSvc.OpenStorage(ctx, a.db); err != nil {
 		return nil, err
 	}
+	// Removing a plugin removes the drafts it was installed from.
+	mgr.OnRemove(func(ctx context.Context, id string) { studioSvc.ForgetPlugin(ctx, id) })
 
 	// Event sources (SPEC §5.7): playback, watch state and notifications.
 	publish := func(ev plugins.Event) {

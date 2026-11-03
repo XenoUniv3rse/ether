@@ -259,6 +259,9 @@ func PermissionSheet(man Manifest) (lines []string, needsViewers, needsFolders b
 	if man.Ether == nil {
 		return []string{"Connects to the add-on address you gave"}, false, false
 	}
+	if man.Ether.Stremio {
+		lines = append(lines, "Connects to the add-on it was made from")
+	}
 	p := man.Ether.Permissions
 	for _, h := range p.Network {
 		lines = append(lines, "Connects to "+h)

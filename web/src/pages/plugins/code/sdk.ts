@@ -160,6 +160,8 @@ declare const ether: {
   secret: { get(name: string): string };
   /** Reaches only hosts listed in the manifest's network permissions. */
   http: { fetch(req: EtherFetchRequest): EtherFetchResponse };
+  /** Add-on drafts only: asks the add-on this plugin was made from. */
+  addon: { get(route: string): { status: number; body: string } };
   catalog: {
     search(query: string): { titles: EtherCatalogTitle[] };
     get(id: string): EtherCatalogTitle | null;

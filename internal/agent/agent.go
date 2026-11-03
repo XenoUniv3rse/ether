@@ -277,7 +277,7 @@ func (s *Service) RunTurn(ctx context.Context, p tools.Principal, threadID, prom
 	if s.model == nil || s.store == nil || s.catalogue == nil {
 		return "", "", fmt.Errorf("agent is not configured")
 	}
-	ctx, cancel := context.WithTimeout(ctx, s.timeout)
+	ctx, cancel := context.WithTimeout(ctx, s.turnTimeout(tc))
 	defer cancel()
 
 	if threadID == "" {
@@ -304,6 +304,15 @@ func (s *Service) RunTurn(ctx context.Context, p tools.Principal, threadID, prom
 	return threadID, turnID, err
 }
 
+// turnTimeout is how long one turn may run. Studio turns read, write and
+// re-check plugin source, which takes a slower model well past a chat turn.
+func (s *Service) turnTimeout(tc TurnContext) time.Duration {
+	if tc.Route == "/plugins/studio" {
+		return max(s.timeout, 15*time.Minute)
+	}
+	return s.timeout
+}
+
 // ErrThreadBusy reports a second concurrent turn in one conversation.
 var ErrThreadBusy = errors.New("a turn is already running in this conversation")
 
@@ -318,7 +327,7 @@ func (s *Service) ContinueAfterApproval(ctx context.Context, p tools.Principal, 
 		return false, nil
 	}
 	defer s.releaseThread(appr.ThreadID)
-	ctx, cancel := context.WithTimeout(ctx, s.timeout)
+	ctx, cancel := context.WithTimeout(ctx, s.turnTimeout(tc))
 	defer cancel()
 	verb := "approved"
 	if appr.Status == "rejected" {

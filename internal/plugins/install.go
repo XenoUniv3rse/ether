@@ -613,7 +613,8 @@ func (m *Manager) CheckUpdate(ctx context.Context, id string) (*Preview, bool, e
 	if err != nil {
 		return nil, false, err
 	}
-	if r.SourceURL == "" && r.SourceKind != "catalogue" {
+	if (r.SourceURL == "" && r.SourceKind != "catalogue") || r.SourceKind == "studio" {
+		// A Studio build's link (an edited add-on's) is not an update source.
 		return nil, false, fmt.Errorf("plugins: %s has no update source", id)
 	}
 	g, _ := m.store.grants(ctx, id)

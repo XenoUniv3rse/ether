@@ -94,12 +94,16 @@ func (m *Manager) summary(r Record, health string) Summary {
 		Verified: r.Verified, Shadow: r.Shadow, AutoUpdate: r.AutoUpdate, UpdateVersion: r.UpdateVersion,
 		PrevVersion: r.PrevVersion, Health: health, SourceKind: r.SourceKind,
 		StremioOnly: r.Manifest.IsStremioOnly(), InstalledAt: r.InstalledAt.Unix()}
-	if r.Manifest.IsStremioOnly() {
-		s.Summary, s.Icon = r.Manifest.Description, r.Manifest.Logo
+	if r.Manifest.SpeaksStremio() {
+		// Roles and the add-on's host belong to every plugin that answers
+		// as an add-on, whether it came from a link or was edited in Studio.
 		s.Roles = roleState(r)["roles"].([]RoleState)
 		if u, err := url.Parse(r.SourceURL); err == nil {
 			s.Host = u.Hostname()
 		}
+	}
+	if r.Manifest.IsStremioOnly() {
+		s.Summary, s.Icon = r.Manifest.Description, r.Manifest.Logo
 		for _, c := range r.Manifest.EffectiveEther().Capabilities {
 			s.Capabilities = append(s.Capabilities, string(c))
 		}

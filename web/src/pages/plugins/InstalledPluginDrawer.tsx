@@ -4,7 +4,6 @@ import {
   AlertTitle,
   Badge,
   Button,
-  buttonVariants,
   SettingsSection,
   SubtabNav,
   Switch,
@@ -26,7 +25,8 @@ import {
   Undo2,
 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
+import { openInStudio } from "./openInStudio";
 import { Artwork } from "../../components/Artwork";
 import { Drawer } from "../../components/Drawer";
 import { ErrorPanel, LoadingRows, MutationError } from "../../components/feedback";
@@ -124,26 +124,10 @@ export function InstalledPluginDrawer({
 
   const { descriptors } = useRegistry();
 
-  // A plugin built in Studio reopens there, in the code or chat view.
-  const [studioProject, setStudioProject] = useState<string | null>(null);
-  useEffect(() => {
-    setStudioProject(null);
-    if (!pluginId) return;
-    let live = true;
-    apiFetch<{ projects: { id: string; pluginId: string; updatedAt: string }[] }>(
-      "/plugins/studio/projects",
-    )
-      .then((r) => {
-        const mine = r.projects
-          .filter((p) => p.pluginId === pluginId)
-          .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
-        if (live) setStudioProject(mine[0]?.id ?? null);
-      })
-      .catch(() => undefined);
-    return () => {
-      live = false;
-    };
-  }, [pluginId]);
+  // Every installed plugin opens in Studio, add-ons included.
+  const navigate = useNavigate();
+  const [opening, setOpening] = useState(false);
+  useEffect(() => setOpening(false), [pluginId]);
   const { viewers } = useViewers();
 
   useEffect(() => {
@@ -505,7 +489,7 @@ export function InstalledPluginDrawer({
 
   const tabs: { key: DrawerTab; label: string }[] = [
     { key: "overview", label: t("Overview") },
-    ...(detail?.stremioOnly ? [{ key: "resources" as const, label: t("Resources") }] : []),
+    ...(detail?.roles?.length ? [{ key: "resources" as const, label: t("Resources") }] : []),
     { key: "settings", label: t("Settings") },
     { key: "permissions", label: t("Permissions") },
     { key: "health", label: t("Health") },
@@ -587,14 +571,23 @@ export function InstalledPluginDrawer({
               </div>
             </div>
             <div className="flex items-center gap-2">
-              {studioProject ? (
-                <Link
-                  to={`/plugins/studio?project=${encodeURIComponent(studioProject)}&view=code`}
-                  className={buttonVariants({ variant: "outline", size: "sm" })}
-                >
-                  <Code2 size={14} /> {t("Open in Studio")}
-                </Link>
-              ) : null}
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={opening}
+                onClick={() => {
+                  if (!detail) return;
+                  setOpening(true);
+                  void openInStudio(detail.id)
+                    .then((to) => navigate(to))
+                    .catch((e) => {
+                      setMutationError(e);
+                      setOpening(false);
+                    });
+                }}
+              >
+                <Code2 size={14} /> {opening ? t("Opening…") : t("Open in Studio")}
+              </Button>
               <label htmlFor="drawer-plugin-enabled" className="text-xs font-medium text-fg-muted">
                 {detail.enabled ? t("Enabled") : t("Disabled")}
               </label>

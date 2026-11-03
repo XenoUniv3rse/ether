@@ -416,6 +416,15 @@ func (b hostBridge) CallHost(ctx context.Context, name string, raw json.RawMessa
 	case "catalog.get":
 		v, err := b.h.CatalogGet(ctx, str(0))
 		return result(v, err)
+	case "addon.get":
+		ah, ok := b.h.(interface {
+			AddonGet(ctx context.Context, route string) (json.RawMessage, error)
+		})
+		if !ok {
+			return nil, &wasm.Fault{Code: "unavailable", Message: "this plugin is not bound to an add-on"}
+		}
+		v, err := ah.AddonGet(ctx, str(0))
+		return result(v, err)
 	case "viewers.granted":
 		v, err := b.h.ViewerGranted(ctx)
 		return result(v, err)

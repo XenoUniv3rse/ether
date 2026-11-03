@@ -111,7 +111,11 @@ type StremioExtra = stremio.Extra
 
 // EtherBlock is the `ether` object of a manifest.
 type EtherBlock struct {
-	Protocol     int          `json:"protocol"`
+	Protocol int `json:"protocol"`
+	// Stremio marks a native plugin that answers Stremio add-on routes,
+	// such as an add-on opened and edited in Studio: Ether talks to it
+	// exactly as to the add-on it came from.
+	Stremio      bool         `json:"stremio,omitempty"`
 	Kind         Kind         `json:"kind"`
 	Capabilities []Capability `json:"capabilities,omitempty"`
 	// Summary is plain text or a "$t:key" reference into Strings.
