@@ -1,8 +1,9 @@
 import { AgentPanel, type AgentMessage } from "@braedonsaunders/appkit-ai/react";
-import { Badge, Button, Dialog, SearchSelect, Textarea, toast } from "@braedonsaunders/appkit-ui";
-import { useCallback, useEffect, useRef, useState } from "react";
-import { Film, LayoutTemplate, Sparkles, Tv } from "lucide-react";
-import { Link, useNavigate } from "react-router-dom";
+import { Badge, Button, Dialog, SearchSelect, cn, toast } from "@braedonsaunders/appkit-ui";
+import { Suspense, lazy, useCallback, useEffect, useRef, useState } from "react";
+import { FileCode2, FileJson, Film, LayoutTemplate, Sparkles, Tv } from "lucide-react";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import { Segmented } from "../../components/fields";
 import { Workspace } from "../../components/workspace";
 import {
   decideAgentApproval,
@@ -28,9 +29,37 @@ import type { StudioProject, StudioProjectSummary, StudioCompileResult } from ".
  * agent step with real results, then the editor for refinements and install.
  */
 export default function LiveStudio() {
+  const [params, setParams] = useSearchParams();
+  const mode: StudioMode = params.get("view") === "code" ? "code" : "ai";
+  const opened = params.get("project") ?? undefined;
   const [phase, setPhase] = useState<"home" | "stage" | "editor">(() =>
-    sessionStorage.getItem("ether-studio-thread") ? "editor" : "home",
+    opened || sessionStorage.getItem("ether-studio-thread") ? "editor" : "home",
   );
+  const [creating, setCreating] = useState(false);
+  const setMode = (next: StudioMode, project?: string) => {
+    const q = new URLSearchParams(params);
+    if (next === "code") q.set("view", "code");
+    else q.delete("view");
+    if (project) q.set("project", project);
+    setParams(q, { replace: true });
+  };
+  /** Code-first: start a draft straight from a starter template, no agent. */
+  const startFromTemplate = async (template: string, name: string) => {
+    setCreating(true);
+    try {
+      const r = await apiFetch<{ project: StudioProject }>("/plugins/studio/projects", {
+        method: "POST",
+        body: JSON.stringify({ template, name }),
+      });
+      sessionStorage.removeItem("ether-studio-thread");
+      setMode("code", r.project.id);
+      setPhase("editor");
+    } catch (e) {
+      setStageError(errorMessage(e));
+    } finally {
+      setCreating(false);
+    }
+  };
   const [prompt, setPrompt] = useState("");
   const [moments, setMoments] = useState<Moment[]>([]);
   const [narration, setNarration] = useState("");
@@ -90,9 +119,16 @@ export default function LiveStudio() {
   if (phase === "editor")
     return (
       <LiveWorkspace
+        key={opened ?? "agent"}
+        mode={mode}
+        onMode={(m) => setMode(m)}
+        initialProject={opened}
         onNew={() => {
           sessionStorage.removeItem("ether-studio-thread");
           setMoments([]);
+          const q = new URLSearchParams(params);
+          q.delete("project");
+          setParams(q, { replace: true });
           setPhase("home");
         }}
       />
@@ -111,43 +147,79 @@ export default function LiveStudio() {
               ) : null}
             </>
           ) : (
-            <LiveHome onPick={(text) => void build(text)} />
+            <LiveHome
+              mode={mode}
+              busy={creating}
+              onMode={(m) => setMode(m)}
+              onPick={(starter) =>
+                mode === "code"
+                  ? void startFromTemplate(starter.template, starter.title())
+                  : void build(starter.prompt())
+              }
+            />
           )}
+          {phase === "home" && stageError ? (
+            <p role="alert" className="mx-auto max-w-3xl px-4 text-sm text-danger">
+              {stageError}
+            </p>
+          ) : null}
         </div>
-        <Composer
-          value={prompt}
-          onChange={setPrompt}
-          onSend={(text) => void build(text)}
-          working={phase === "stage"}
-          onStop={() => {
-            abort.current?.abort();
-            setPhase("editor");
-          }}
-          placeholder={
-            phase === "stage"
-              ? t("Building. You can add to it as it goes")
-              : t("Describe the plugin you want")
-          }
-        />
+        {mode === "code" && phase === "home" ? null : (
+          <Composer
+            value={prompt}
+            onChange={setPrompt}
+            onSend={(text) => void build(text)}
+            working={phase === "stage"}
+            onStop={() => {
+              abort.current?.abort();
+              setPhase("editor");
+            }}
+            placeholder={
+              phase === "stage"
+                ? t("Building. You can add to it as it goes")
+                : t("Describe the plugin you want")
+            }
+          />
+        )}
       </div>
     </Workspace>
   );
 }
 
+type StudioMode = "ai" | "code";
+
+/** Chat and Code are two views of the same Studio and the same draft. */
+function ModeSwitch({ mode, onMode }: { mode: StudioMode; onMode: (m: StudioMode) => void }) {
+  return (
+    <Segmented
+      ariaLabel={t("Studio view")}
+      value={mode}
+      onChange={(v) => onMode(v as StudioMode)}
+      options={[
+        { value: "ai", label: t("Describe") },
+        { value: "code", label: t("Code") },
+      ]}
+    />
+  );
+}
+
 const STARTERS = [
   {
+    template: "channels",
     icon: Tv,
     title: () => t("Live TV channels"),
     description: () => t("Free channels with a programme guide, straight into Live TV."),
     prompt: () => t("Add free live channels to Live TV, with a programme guide"),
   },
   {
+    template: "video_source",
     icon: Film,
     title: () => t("Video sources"),
     description: () => t("Playable copies of titles in your catalogue, found when you press play."),
     prompt: () => t("Find free, legal copies of classic films for movies in my catalogue"),
   },
   {
+    template: "list",
     icon: LayoutTemplate,
     title: () => t("Home rows"),
     description: () => t("A row or collection on Home built from an outside list."),
@@ -156,7 +228,17 @@ const STARTERS = [
 ];
 
 /** The approved Studio home: one question, ideas, and the native starters. */
-function LiveHome({ onPick }: { onPick: (text: string) => void }) {
+function LiveHome({
+  mode,
+  busy,
+  onMode,
+  onPick,
+}: {
+  mode: StudioMode;
+  busy: boolean;
+  onMode: (m: StudioMode) => void;
+  onPick: (starter: (typeof STARTERS)[number]) => void;
+}) {
   return (
     <div className="mx-auto max-w-3xl space-y-9 px-4 pb-10 pt-[min(10vh,5rem)]">
       <div className="space-y-4 text-center">
@@ -167,15 +249,23 @@ function LiveHome({ onPick }: { onPick: (text: string) => void }) {
           {t("What should Ether do?")}
         </h2>
         <p className="text-sm text-fg-muted">
-          {t("It builds here, tested on your server. Nothing changes until you install.")}
+          {mode === "code"
+            ? t(
+                "Pick a starting point. You get the code, live data and a preview; nothing changes until you install.",
+              )
+            : t("It builds here, tested on your server. Nothing changes until you install.")}
         </p>
+        <div className="flex justify-center">
+          <ModeSwitch mode={mode} onMode={onMode} />
+        </div>
       </div>
       <section aria-label={t("Start from")} className="grid gap-3 sm:grid-cols-3">
         {STARTERS.map((c) => (
           <button
-            key={c.prompt()}
+            key={c.template}
             type="button"
-            onClick={() => onPick(c.prompt())}
+            disabled={busy}
+            onClick={() => onPick(c)}
             className="group flex flex-col items-start gap-3 rounded-xl border border-border bg-surface p-4 text-left transition hover:border-primary/40 hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
           >
             <span className="flex size-10 items-center justify-center rounded-lg bg-primary/10 text-primary transition group-hover:scale-105">
@@ -193,7 +283,17 @@ function LiveHome({ onPick }: { onPick: (text: string) => void }) {
 }
 
 /** The editor: conversation for refinements, the draft's native preview, code and install. */
-function LiveWorkspace({ onNew }: { onNew: () => void }) {
+function LiveWorkspace({
+  onNew,
+  mode,
+  onMode,
+  initialProject,
+}: {
+  onNew: () => void;
+  mode: StudioMode;
+  onMode: (m: StudioMode) => void;
+  initialProject?: string;
+}) {
   const [messages, setMessages] = useState<AgentMessage[]>([]);
   const thread = useRef<string | undefined>(
     sessionStorage.getItem("ether-studio-thread") || undefined,
@@ -202,14 +302,14 @@ function LiveWorkspace({ onNew }: { onNew: () => void }) {
   const [project, setProject] = useState<StudioProject | null>(null);
   const [file, setFile] = useState("src/plugin.ts");
   const [source, setSource] = useState("");
+  const [edits, setEdits] = useState<Record<string, string>>({});
   const [dirty, setDirty] = useState(false);
   const [enabled, setEnabled] = useState(false);
   const [model, setModel] = useState("");
   const [error, setError] = useState("");
-  const [view, setView] = useState<"preview" | "code">("preview");
   const [epoch, setEpoch] = useState(0);
   const [saving, setSaving] = useState(false);
-  const chosen = useRef<string | undefined>(undefined);
+  const chosen = useRef<string | undefined>(initialProject);
   const stamps = useRef<Record<string, string>>({});
   const dirtyRef = useRef(false);
   dirtyRef.current = dirty;
@@ -222,6 +322,7 @@ function LiveWorkspace({ onNew }: { onNew: () => void }) {
     if (!dirtyRef.current) {
       setFile("src/plugin.ts");
       setSource(r.project.files["src/plugin.ts"] ?? "");
+      setEdits({});
     }
     setEpoch((e) => e + 1);
   }, []);
@@ -240,7 +341,7 @@ function LiveWorkspace({ onNew }: { onNew: () => void }) {
     const changed = latest.find((p) => stamps.current[p.id] !== p.updatedAt);
     const first = Object.keys(stamps.current).length === 0;
     stamps.current = Object.fromEntries(r.projects.map((p) => [p.id, p.updatedAt]));
-    const follow = !dirtyRef.current && (first ? latest[0]?.id : changed?.id);
+    const follow = !dirtyRef.current && (first ? (initialProject ?? latest[0]?.id) : changed?.id);
     const id = follow || chosen.current || latest[0]?.id;
     if (id) await loadProject(id);
   }, [loadProject]);
@@ -346,9 +447,10 @@ function LiveWorkspace({ onNew }: { onNew: () => void }) {
     try {
       const r = await apiFetch<{ project: StudioProject; compile: StudioCompileResult }>(
         `/plugins/studio/projects/${encodeURIComponent(project.id)}/files`,
-        { method: "PUT", body: JSON.stringify({ files: { [file]: source } }) },
+        { method: "PUT", body: JSON.stringify({ files: { ...edits, [file]: source } }) },
       );
       setProject(r.project);
+      setEdits({});
       setDirty(false);
       setEpoch((e) => e + 1);
     } catch (e) {
@@ -362,6 +464,7 @@ function LiveWorkspace({ onNew }: { onNew: () => void }) {
       title={t("Studio")}
       actions={
         <>
+          <ModeSwitch mode={mode} onMode={onMode} />
           <Button variant="outline" size="sm" onClick={onNew}>
             <Sparkles size={14} /> {t("New plugin")}
           </Button>
@@ -369,42 +472,72 @@ function LiveWorkspace({ onNew }: { onNew: () => void }) {
         </>
       }
     >
-      <div className="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-[minmax(320px,0.85fr)_minmax(0,1.15fr)]">
-        <section
-          className="order-2 flex min-h-[500px] flex-col border-t border-border lg:order-1 lg:border-r lg:border-t-0"
-          aria-label={t("Studio conversation")}
-        >
-          <div className="flex items-center gap-2 border-b border-border p-3">
-            <Badge>{t("Live model")}</Badge>
-            <span className="text-xs text-fg-muted">{model || t("Model unavailable")}</span>
-          </div>
-          <AgentPanel
-            enabled={enabled}
-            initialMessages={messages}
-            send={send}
-            suggestions={[
-              t("Add free live channels to Live TV, with a programme guide"),
-              t("Find free, legal copies of classic films for movies in my catalogue"),
-              t("Make a Home row from an external list of films"),
-            ]}
-            labels={{
-              title: t("Build with Ether"),
-              welcomeTitle: t("Describe your plugin"),
-              welcomeDescription: t(
-                "Real model responses and saved drafts. Review source changes before applying them.",
-              ),
-              disabledTitle: t("Connect a model"),
+      <div
+        className={
+          mode === "code"
+            ? "grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-[minmax(0,1.3fr)_minmax(320px,0.7fr)]"
+            : "grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-[minmax(320px,0.85fr)_minmax(0,1.15fr)]"
+        }
+      >
+        {mode === "code" ? (
+          <CodePane
+            project={project}
+            file={file}
+            source={source}
+            edits={edits}
+            dirty={dirty}
+            saving={saving}
+            onFile={(f) => {
+              if (!project) return;
+              const next = { ...edits };
+              if (dirty) next[file] = source;
+              setEdits(next);
+              setFile(f);
+              setSource(next[f] ?? project.files[f] ?? "");
             }}
-            approvalRequestLabels={approvalRequestLabels()}
-            onDecideApprovalRequest={async (id, decision, note) => {
-              await decideAgentApproval(id, decision, note, {
-                route: "/plugins/studio",
-                record: project ? { id: project.id, type: "studio_project" } : undefined,
-              });
-              await refresh();
+            onChange={(v) => {
+              setSource(v);
+              setDirty(true);
             }}
+            onSave={() => void save()}
           />
-        </section>
+        ) : (
+          <section
+            className="order-2 flex min-h-[500px] flex-col border-t border-border lg:order-1 lg:border-r lg:border-t-0"
+            aria-label={t("Studio conversation")}
+          >
+            <div className="flex items-center gap-2 border-b border-border p-3">
+              <Badge>{t("Live model")}</Badge>
+              <span className="text-xs text-fg-muted">{model || t("Model unavailable")}</span>
+            </div>
+            <AgentPanel
+              enabled={enabled}
+              initialMessages={messages}
+              send={send}
+              suggestions={[
+                t("Add free live channels to Live TV, with a programme guide"),
+                t("Find free, legal copies of classic films for movies in my catalogue"),
+                t("Make a Home row from an external list of films"),
+              ]}
+              labels={{
+                title: t("Build with Ether"),
+                welcomeTitle: t("Describe your plugin"),
+                welcomeDescription: t(
+                  "Real model responses and saved drafts. Review source changes before applying them.",
+                ),
+                disabledTitle: t("Connect a model"),
+              }}
+              approvalRequestLabels={approvalRequestLabels()}
+              onDecideApprovalRequest={async (id, decision, note) => {
+                await decideAgentApproval(id, decision, note, {
+                  route: "/plugins/studio",
+                  record: project ? { id: project.id, type: "studio_project" } : undefined,
+                });
+                await refresh();
+              }}
+            />
+          </section>
+        )}
         <section
           className="order-1 min-h-[420px] overflow-auto p-5 lg:order-2"
           aria-label={t("Draft workspace")}
@@ -425,18 +558,6 @@ function LiveWorkspace({ onNew }: { onNew: () => void }) {
               disabled={dirty}
               {...searchSelectLabels()}
             />
-            <Button
-              variant={view === "preview" ? "default" : "outline"}
-              onClick={() => setView("preview")}
-            >
-              {t("Preview")}
-            </Button>
-            <Button
-              variant={view === "code" ? "default" : "outline"}
-              onClick={() => setView("code")}
-            >
-              {t("Code")}
-            </Button>
             {project ? (
               <Button
                 className="ml-auto"
@@ -459,33 +580,7 @@ function LiveWorkspace({ onNew }: { onNew: () => void }) {
                   {d.file}:{d.line} {d.text}
                 </p>
               ))}
-              {view === "code" ? (
-                <div className="space-y-3">
-                  <SearchSelect
-                    value={file}
-                    onChange={(f) => {
-                      setFile(f);
-                      setSource(project.files[f] || "");
-                    }}
-                    disabled={dirty}
-                    options={Object.keys(project.files).map((f) => ({ value: f, label: f }))}
-                    ariaLabel={t("Source file")}
-                    {...searchSelectLabels()}
-                  />
-                  <Textarea
-                    aria-label={t("Plugin source")}
-                    className="min-h-[480px] font-mono text-xs"
-                    value={source}
-                    onChange={(e) => {
-                      setSource(e.currentTarget.value);
-                      setDirty(true);
-                    }}
-                  />
-                  <Button disabled={!dirty || saving} onClick={() => void save()}>
-                    {t("Save and compile")}
-                  </Button>
-                </div>
-              ) : project.defaultPage ? (
+              {project.defaultPage ? (
                 <div key={`${project.id}:${epoch}`} className="space-y-4">
                   <NativePreview projectId={project.id} template={project.template} />
                   <div className="rounded-xl border border-border p-4">
@@ -493,11 +588,7 @@ function LiveWorkspace({ onNew }: { onNew: () => void }) {
                   </div>
                 </div>
               ) : (
-                <p>
-                  {t(
-                    "This draft has no page preview. Open Code to inspect its capability implementation.",
-                  )}
-                </p>
+                <p>{t("This draft has no page preview. Switch to Code to see how it works.")}</p>
               )}
               <p className="mt-4 text-xs text-fg-muted">
                 {t(
@@ -566,5 +657,117 @@ function LiveWorkspace({ onNew }: { onNew: () => void }) {
         </Dialog>
       ) : null}
     </Workspace>
+  );
+}
+
+const CodeMirrorPane = lazy(() => import("./code/CodeMirrorPane"));
+
+/** The code view: every draft file, a real editor with plugin types, and save that compiles and checks. */
+function CodePane({
+  project,
+  file,
+  source,
+  edits,
+  dirty,
+  saving,
+  onFile,
+  onChange,
+  onSave,
+}: {
+  project: StudioProject | null;
+  file: string;
+  source: string;
+  edits: Record<string, string>;
+  dirty: boolean;
+  saving: boolean;
+  onFile: (f: string) => void;
+  onChange: (v: string) => void;
+  onSave: () => void;
+}) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === "s") {
+        e.preventDefault();
+        if (dirty || Object.keys(edits).length) onSave();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [dirty, edits, onSave]);
+  if (!project) {
+    return (
+      <section className="flex items-center justify-center border-r border-border p-8 text-sm text-fg-muted">
+        {t("Loading the draft…")}
+      </section>
+    );
+  }
+  const files = Object.keys(project.files).sort((a, b) =>
+    a === "src/plugin.ts" ? -1 : b === "src/plugin.ts" ? 1 : a.localeCompare(b),
+  );
+  const changed = (f: string) => (f === file ? dirty : f in edits);
+  const diags = project.diagnostics || [];
+  return (
+    <section
+      aria-label={t("Code")}
+      className="flex min-h-[32rem] flex-col border-b border-border bg-surface lg:min-h-0 lg:border-b-0 lg:border-r"
+    >
+      <div className="flex shrink-0 flex-wrap items-center gap-1 border-b border-border bg-bg-subtle px-2">
+        {files.map((f) => (
+          <button
+            key={f}
+            type="button"
+            onClick={() => onFile(f)}
+            aria-current={file === f ? "page" : undefined}
+            className={cn(
+              "-mb-px inline-flex h-10 shrink-0 items-center gap-1.5 border-b-2 px-3 font-mono text-xs transition",
+              file === f
+                ? "border-primary bg-surface text-fg"
+                : "border-transparent text-fg-muted hover:text-fg",
+            )}
+          >
+            {f.endsWith(".ts") ? <FileCode2 size={14} /> : <FileJson size={14} />}
+            {f}
+            {changed(f) ? (
+              <span className="size-1.5 rounded-full bg-primary" aria-label={t("Not saved")} />
+            ) : null}
+          </button>
+        ))}
+        <Button
+          size="sm"
+          className="ml-auto"
+          disabled={saving || !(dirty || Object.keys(edits).length)}
+          onClick={onSave}
+        >
+          {saving ? t("Saving…") : t("Save and run")}
+        </Button>
+      </div>
+      <div className="min-h-0 flex-1">
+        <Suspense fallback={<p className="p-4 text-xs text-fg-muted">{t("Loading editor…")}</p>}>
+          <CodeMirrorPane
+            key={file}
+            file={file === "src/plugin.ts" ? "plugin.ts" : file}
+            value={source}
+            onChange={onChange}
+          />
+        </Suspense>
+      </div>
+      <div className="shrink-0 border-t border-border bg-bg-subtle px-3 py-1.5 text-xs">
+        {diags.length ? (
+          <ul className="space-y-0.5 text-danger">
+            {diags.map((d, i) => (
+              <li key={i} className="font-mono">
+                {d.file}:{d.line} {d.text}
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <span className="text-fg-muted">
+            {dirty || Object.keys(edits).length
+              ? t("Unsaved changes · Save and run to compile, check and refresh the preview")
+              : t("Saved · compiles cleanly · preview is live")}
+          </span>
+        )}
+      </div>
+    </section>
   );
 }

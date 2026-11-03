@@ -13,7 +13,7 @@ import es2015Iterable from "typescript/lib/lib.es2015.iterable.d.ts?raw";
 import es2015Promise from "typescript/lib/lib.es2015.promise.d.ts?raw";
 import es2015Symbol from "typescript/lib/lib.es2015.symbol.d.ts?raw";
 import es2015Wellknown from "typescript/lib/lib.es2015.symbol.wellknown.d.ts?raw";
-import { SDK_DTS } from "./sdk";
+import { HOST_DTS, SDK_DTS } from "./sdk";
 
 export const PLUGIN_PATH = "/plugin.ts";
 
@@ -30,6 +30,7 @@ export function pluginEnv(source: string) {
     "/lib.es2015.symbol.d.ts": es2015Symbol,
     "/lib.es2015.symbol.wellknown.d.ts": es2015Wellknown,
     "/ether.d.ts": SDK_DTS,
+    "/ether-host.d.ts": HOST_DTS,
     [PLUGIN_PATH]: source,
   };
   const fsMap = new Map(Object.entries(files));

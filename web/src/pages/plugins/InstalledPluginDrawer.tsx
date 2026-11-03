@@ -4,6 +4,7 @@ import {
   AlertTitle,
   Badge,
   Button,
+  buttonVariants,
   SettingsSection,
   SubtabNav,
   Switch,
@@ -12,6 +13,7 @@ import {
 } from "@braedonsaunders/appkit-ui";
 import {
   AlertTriangle,
+  Code2,
   ArrowUpRight,
   Check,
   Copy,
@@ -121,6 +123,27 @@ export function InstalledPluginDrawer({
   const [removing, setRemoving] = useState(false);
 
   const { descriptors } = useRegistry();
+
+  // A plugin built in Studio reopens there, in the code or chat view.
+  const [studioProject, setStudioProject] = useState<string | null>(null);
+  useEffect(() => {
+    setStudioProject(null);
+    if (!pluginId) return;
+    let live = true;
+    apiFetch<{ projects: { id: string; pluginId: string; updatedAt: string }[] }>(
+      "/plugins/studio/projects",
+    )
+      .then((r) => {
+        const mine = r.projects
+          .filter((p) => p.pluginId === pluginId)
+          .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
+        if (live) setStudioProject(mine[0]?.id ?? null);
+      })
+      .catch(() => undefined);
+    return () => {
+      live = false;
+    };
+  }, [pluginId]);
   const { viewers } = useViewers();
 
   useEffect(() => {
@@ -564,6 +587,14 @@ export function InstalledPluginDrawer({
               </div>
             </div>
             <div className="flex items-center gap-2">
+              {studioProject ? (
+                <Link
+                  to={`/plugins/studio?project=${encodeURIComponent(studioProject)}&view=code`}
+                  className={buttonVariants({ variant: "outline", size: "sm" })}
+                >
+                  <Code2 size={14} /> {t("Open in Studio")}
+                </Link>
+              ) : null}
               <label htmlFor="drawer-plugin-enabled" className="text-xs font-medium text-fg-muted">
                 {detail.enabled ? t("Enabled") : t("Disabled")}
               </label>

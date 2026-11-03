@@ -1,5 +1,21 @@
-import { Badge, Button, EmptyState, Switch, buttonVariants } from "@braedonsaunders/appkit-ui";
-import { ArrowUpCircle, Eye, FolderSearch, Link2, Puzzle, Sparkles } from "lucide-react";
+import {
+  Badge,
+  Button,
+  EmptyState,
+  Popover,
+  Switch,
+  buttonVariants,
+} from "@braedonsaunders/appkit-ui";
+import {
+  ArrowUpCircle,
+  Code2,
+  Eye,
+  FolderSearch,
+  Link2,
+  Plus,
+  Puzzle,
+  Sparkles,
+} from "lucide-react";
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { Artwork } from "../../components/Artwork";
@@ -99,13 +115,6 @@ export default function LivePlugins() {
     setOpen(id);
   };
 
-  const on = plugins.filter((p) => p.enabled).length;
-  const trying = plugins.filter((p) => p.enabled && p.shadow).length;
-  const attention = plugins.filter((p) => {
-    const level = pluginHealthLevel(p.health, p.enabled);
-    return level === "warn" || level === "error";
-  }).length;
-
   return (
     <DomainPage
       title={t("Plugins")}
@@ -113,38 +122,16 @@ export default function LivePlugins() {
       tabs={tabs}
       active={active}
       actions={
-        <>
-          <Button variant="outline" onClick={() => setBrowsing(true)}>
-            <FolderSearch size={15} /> {t("Browse directories")}
-          </Button>
-          <Button variant="outline" onClick={() => setInstallUrl("")}>
-            <Link2 size={15} /> {t("Install from a link")}
-          </Button>
-          <Link to="/plugins/studio" className={buttonVariants()}>
-            <Sparkles size={15} /> {t("Build a plugin")}
-          </Link>
-        </>
+        <AddPluginMenu
+          onBrowse={() => setBrowsing(true)}
+          onLink={() => setInstallUrl("")}
+          onCode={() => navigate("/plugins/studio?view=code")}
+          onAI={() => navigate("/plugins/studio")}
+        />
       }
     >
       {active === "installed" ? (
         <>
-          <div className="grid grid-cols-3 gap-2 sm:gap-3">
-            <Tile label={t("Plugins on")} value={String(on)} />
-            <Tile label={t("Trying out")} value={String(trying)} />
-            <Tile
-              label={t("Health")}
-              value={
-                attention ? (
-                  <LevelBadge
-                    level="warn"
-                    label={t("{count} need attention", { count: attention })}
-                  />
-                ) : (
-                  <LevelBadge level="ok" label={t("All working")} />
-                )
-              }
-            />
-          </div>
           {loadError ? <ErrorPanel error={loadError} onRetry={() => void load()} /> : null}
           {loading ? (
             <p className="text-xs text-fg-muted">{t("Loading plugins…")}</p>
@@ -230,12 +217,80 @@ export default function LivePlugins() {
   );
 }
 
-function Tile({ label, value }: { label: string; value: ReactNode }) {
+/** One way in for every kind of plugin, like Live TV's Add menu. */
+function AddPluginMenu({
+  onBrowse,
+  onLink,
+  onCode,
+  onAI,
+}: {
+  onBrowse: () => void;
+  onLink: () => void;
+  onCode: () => void;
+  onAI: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const item = (icon: ReactNode, title: string, hint: string, fn: () => void) => (
+    <button
+      type="button"
+      role="menuitem"
+      onClick={() => {
+        setOpen(false);
+        fn();
+      }}
+      className="flex w-full items-start gap-3 rounded-md px-2.5 py-2 text-left hover:bg-surface-hover"
+    >
+      <span className="mt-0.5 text-primary">{icon}</span>
+      <span>
+        <span className="block text-sm font-medium text-fg">{title}</span>
+        <span className="block text-xs text-fg-muted">{hint}</span>
+      </span>
+    </button>
+  );
   return (
-    <div className="rounded-xl border border-border bg-surface px-3 py-2.5 sm:px-4 sm:py-3.5">
-      <p className="text-xs text-fg-muted">{label}</p>
-      <div className="mt-1 text-sm font-semibold tabular-nums text-fg sm:text-2xl">{value}</div>
-    </div>
+    <Popover
+      open={open}
+      onOpenChange={setOpen}
+      align="end"
+      className="w-80 p-1"
+      trigger={
+        <Button
+          size="sm"
+          onClick={() => setOpen((o) => !o)}
+          aria-haspopup="menu"
+          aria-expanded={open}
+        >
+          <Plus size={14} /> {t("Add")}
+        </Button>
+      }
+    >
+      <div role="menu" aria-label={t("Add a plugin")}>
+        {item(
+          <Sparkles size={16} />,
+          t("Describe it"),
+          t("Say what you want; Ether builds and tests it"),
+          onAI,
+        )}
+        {item(
+          <Code2 size={16} />,
+          t("Write the code"),
+          t("Studio's editor with a live preview"),
+          onCode,
+        )}
+        {item(
+          <FolderSearch size={16} />,
+          t("Browse directories"),
+          t("Plugins and add-ons other people publish"),
+          onBrowse,
+        )}
+        {item(
+          <Link2 size={16} />,
+          t("From a link"),
+          t("A plugin or Stremio add-on address"),
+          onLink,
+        )}
+      </div>
+    </Popover>
   );
 }
 

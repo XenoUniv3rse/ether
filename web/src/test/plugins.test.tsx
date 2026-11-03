@@ -95,10 +95,8 @@ describe("Server › Plugins (WS10a)", () => {
     ).toBeTruthy();
 
     expect(screen.getByRole("button", { name: "Open the marketplace" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: /Install from a link/i })).toBeTruthy();
-    expect(screen.getAllByRole("link", { name: /Build a plugin/i }).length).toBeGreaterThanOrEqual(
-      2,
-    );
+    expect(screen.getByRole("button", { name: "Add" })).toBeTruthy();
+    expect(screen.getByRole("link", { name: /Build a plugin/i })).toBeTruthy();
   });
 
   it("opens the plugin drawer and covers Overview, Settings (with validation & Test), Permissions, Health, Activity, Logs, Updates, and Remove", async () => {
@@ -218,7 +216,8 @@ describe("Server › Plugins (WS10a)", () => {
     renderPlugins("/plugins");
     await screen.findByText("Pluto TV");
 
-    fireEvent.click(screen.getByRole("button", { name: /Install from a link/i }));
+    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: /From a link/i }));
     const urlInput = await screen.findByLabelText("Plugin address");
     fireEvent.change(urlInput, {
       target: { value: "https://plugins.example.test/iptv/manifest.json" },

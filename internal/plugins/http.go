@@ -95,6 +95,13 @@ func (m *Manager) summary(r Record, health string) Summary {
 			s.Capabilities = append(s.Capabilities, string(c))
 		}
 	}
+	// Plugin copy is often a "$t:" key; owners see the plugin's own text.
+	if key, ok := strings.CutPrefix(s.Summary, "$t:"); ok {
+		s.Summary = r.Manifest.Description
+		if text, found := m.ResolveText(context.Background(), r.ID, key, "en"); found {
+			s.Summary = text
+		}
+	}
 	return s
 }
 
