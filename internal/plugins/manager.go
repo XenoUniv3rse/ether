@@ -678,9 +678,10 @@ func (m *Manager) recordFailure(ctx context.Context, pluginID, reason string, re
 	m.failing[pluginID] = true
 	_ = m.store.putHealth(ctx, pluginID, h)
 	if len(kept) >= 5 {
-		// A Stremio add-on is one of the owner's sources: an outage backs
-		// it off and shows on its health, but never removes it.
-		if r, err := m.store.record(ctx, pluginID); err == nil && r.Enabled && !r.Manifest.IsStremioOnly() {
+		// A Stremio add-on is one of the owner's sources, edited in Studio
+		// or not: an outage backs it off and shows on its health, but never
+		// switches it off.
+		if r, err := m.store.record(ctx, pluginID); err == nil && r.Enabled && !r.Manifest.SpeaksStremio() {
 			r.Enabled = false
 			_ = m.store.upsert(ctx, r)
 			h.Status = "disabled"

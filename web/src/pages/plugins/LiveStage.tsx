@@ -119,6 +119,7 @@ export async function draftCatalog(
   manifestText: string | undefined,
 ): Promise<CatalogPreview | null> {
   let man: {
+    name?: string;
     catalogs?: { type: string; id: string; name?: string; extra?: { isRequired?: boolean }[] }[];
   } = {};
   if (manifestText === undefined) {
@@ -139,7 +140,9 @@ export async function draftCatalog(
       (r.body?.metas as { id?: string; name?: string; poster?: string }[] | undefined) ?? [];
     if (!metas.length) continue;
     return {
-      title: t("{name} in Ether", { name: c.name || c.id }),
+      // The plugin's own catalogue, named as the plugin names it, so it
+      // can never read as one of Ether's lists.
+      title: t("{plugin} · {catalog}", { plugin: man.name || id, catalog: c.name || c.id }),
       items: metas.map((m, i) => ({ key: `${m.id ?? i}`, title: m.name ?? "", poster: m.poster })),
       total: metas.length,
     };

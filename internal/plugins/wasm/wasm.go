@@ -521,6 +521,10 @@ func (p *Plugin) CallDetailed(ctx context.Context, req Request) (Response, Outco
 		}
 		return Response{}, out, err
 	}
+	// Waiting for a free instance is the host's queue, not the plugin's
+	// work: concurrent calls (a metadata sweep) must not spend the budget
+	// of the call at the back of the line.
+	cs.last = time.Now()
 	respJSON, callErr := in.handle(callCtx, cs, reqJSON)
 	out.Units = cs.finishUnits()
 	healthy := callErr == nil || !callErr.Trap
