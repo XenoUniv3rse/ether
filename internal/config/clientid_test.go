@@ -151,3 +151,28 @@ func TestValidIndexerIdentity(t *testing.T) {
 		}
 	}
 }
+
+func TestIdentityPresets(t *testing.T) {
+	presets := IdentityPresets()
+	want := []string{IdentityEther, IdentitySonarr, IdentityRadarr, IdentityProwlarr, IdentityNZBHydra2, IdentitySABnzbd, IdentityNZBGet}
+	if len(presets) != len(want) {
+		t.Fatalf("presets = %d, want %d", len(presets), len(want))
+	}
+	for i, key := range want {
+		if presets[i].Key != key {
+			t.Fatalf("preset %d = %q, want %q", i, presets[i].Key, key)
+		}
+		if got, want := presets[i].UserAgent, identityPresets[key].UserAgent; got != want {
+			t.Fatalf("%s user agent = %q, want %q", key, got, want)
+		}
+	}
+	// Display must not be able to change the wire table.
+	for _, p := range presets {
+		for name := range p.Headers {
+			p.Headers[name] = "mutated"
+		}
+	}
+	if got := identityPresets[IdentitySonarr].Headers["Accept"]; got != servarrAccept {
+		t.Fatalf("preset headers were mutated: %q", got)
+	}
+}

@@ -98,6 +98,42 @@ var identityPresets = map[string]Identity{
 	IdentityNZBGet:  {Preset: IdentityNZBGet, UserAgent: "nzbget/26.3", Headers: map[string]string{"Accept": "*/*"}},
 }
 
+// IdentityPreset is one selectable preset as owner-facing APIs report it.
+type IdentityPreset struct {
+	Key       string            `json:"key"`
+	UserAgent string            `json:"userAgent"`
+	Headers   map[string]string `json:"headers,omitempty"`
+}
+
+// identityPresetOrder is the order the owner's selectors show.
+var identityPresetOrder = []string{
+	IdentityEther,
+	IdentitySonarr,
+	IdentityRadarr,
+	IdentityProwlarr,
+	IdentityNZBHydra2,
+	IdentitySABnzbd,
+	IdentityNZBGet,
+}
+
+// IdentityPresets returns every preset in display order. Header maps are
+// copies, so a caller cannot change what goes on the wire.
+func IdentityPresets() []IdentityPreset {
+	out := make([]IdentityPreset, 0, len(identityPresetOrder))
+	for _, key := range identityPresetOrder {
+		id := identityPresets[key]
+		var headers map[string]string
+		if len(id.Headers) > 0 {
+			headers = make(map[string]string, len(id.Headers))
+			for name, value := range id.Headers {
+				headers[name] = value
+			}
+		}
+		out = append(out, IdentityPreset{Key: key, UserAgent: id.UserAgent, Headers: headers})
+	}
+	return out
+}
+
 // ValidIndexerIdentity reports whether name can stand in for one indexer.
 // "custom" is policy-only: its user agent and headers belong to the policy.
 func ValidIndexerIdentity(name string) bool {

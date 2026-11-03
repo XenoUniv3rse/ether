@@ -40,7 +40,7 @@ export function MoreOptions({
         aria-label={label}
         onClick={() => setOpen((v) => !v)}
       >
-        {text ?? t("More options")}
+        {open && !text ? t("Less options") : (text ?? t("More options"))}
       </button>
       {open ? children : null}
     </div>
