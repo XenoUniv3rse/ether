@@ -18,7 +18,7 @@ import {
   Upload,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { Artwork } from "../../components/Artwork";
 import { ErrorPanel } from "../../components/feedback";
 import { DomainPage, useRouteTab, type PageTab } from "../../components/layout";
@@ -46,7 +46,18 @@ export default function LivePlugins() {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<unknown>(null);
   const [toggling, setToggling] = useState<string | null>(null);
-  const [open, setOpen] = useState<string | null>(null);
+  // ?plugin=<id> opens that plugin's drawer (Studio links here after an
+  // install, and from its Actions menu).
+  const [params, setParams] = useSearchParams();
+  const [open, setOpenState] = useState<string | null>(() => params.get("plugin"));
+  const setOpen = (id: string | null) => {
+    setOpenState(id);
+    if (!id && params.has("plugin")) {
+      const next = new URLSearchParams(params);
+      next.delete("plugin");
+      setParams(next, { replace: true });
+    }
+  };
   const [installUrl, setInstallUrl] = useState<string | null>(null);
   const [installMode, setInstallMode] = useState<"link" | "file">("link");
   const [browsing, setBrowsing] = useState(false);

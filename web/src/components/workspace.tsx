@@ -7,6 +7,7 @@ import type { ReactNode } from "react";
  * each scrolling on its own. Below `lg` the two stack and scroll together.
  */
 export function Workspace({
+  leading,
   title,
   subtitle,
   actions,
@@ -18,6 +19,8 @@ export function Workspace({
   mainClassName,
   children,
 }: {
+  /** Before the title, such as a small back link. */
+  leading?: ReactNode;
   title: string;
   subtitle?: ReactNode;
   actions?: ReactNode;
@@ -34,6 +37,7 @@ export function Workspace({
     <div className="flex min-h-0 flex-1 flex-col">
       <header className="flex min-h-14 shrink-0 flex-wrap items-center gap-x-4 gap-y-2 border-b border-border bg-surface px-3 py-2.5 sm:px-5">
         <div className="flex min-w-0 flex-1 basis-full items-baseline gap-3 sm:basis-auto">
+          {leading ? <div className="shrink-0 self-center">{leading}</div> : null}
           <h1 className="shrink-0 text-lg font-semibold tracking-tight text-fg">{title}</h1>
           {subtitle ? (
             <p className="hidden min-w-0 truncate text-sm text-fg-muted md:block">{subtitle}</p>

@@ -1,7 +1,7 @@
 import { AgentPanel, type AgentMessage } from "@braedonsaunders/appkit-ai/react";
 import { Badge, Button, Dialog, toast } from "@braedonsaunders/appkit-ui";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Film, LayoutTemplate, Sparkles, Tv } from "lucide-react";
+import { ArrowLeft, Film, LayoutTemplate, Sparkles, Tv } from "lucide-react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { Segmented } from "../../components/fields";
 import { Workspace } from "../../components/workspace";
@@ -17,6 +17,7 @@ import { formatDateTime } from "../../lib/format";
 import { invalidateRegistry } from "../../lib/extend";
 import { PermissionSheet } from "./PermissionSheet";
 import { DraftPicker } from "./DraftPicker";
+import { StudioActions } from "./StudioActions";
 import { CodeStudio } from "./CodeStudio";
 import { CodeHome } from "./CodeHome";
 import { Composer } from "./Composer";
@@ -142,7 +143,7 @@ export default function LiveStudio() {
   };
   if (mode === "code" && phase === "home")
     return (
-      <Workspace title={t("Studio")} actions={<Link to="/plugins">{t("Plugins")}</Link>}>
+      <Workspace leading={<BackToPlugins />} title={t("Studio")}>
         <CodeHome
           modeSwitch={<ModeSwitch mode={mode} onMode={(m) => setMode(m)} />}
           onOpenProject={openDraft}
@@ -158,7 +159,7 @@ export default function LiveStudio() {
       </Workspace>
     );
   return (
-    <Workspace title={t("Studio")} actions={<Link to="/plugins">{t("Plugins")}</Link>}>
+    <Workspace leading={<BackToPlugins />} title={t("Studio")}>
       <div className="flex min-h-0 flex-1 flex-col">
         <div className="app-scroll min-h-0 flex-1 overflow-y-auto">
           {phase === "stage" ? (
@@ -474,7 +475,7 @@ function LiveWorkspace({
       setInstalling(null);
       invalidateRegistry();
       toast.success(t("{name} is installed", { name: r.plugin.name }));
-      navigate("/plugins/installed");
+      navigate(`/plugins/installed?plugin=${encodeURIComponent(r.plugin.id)}`);
     } catch (e) {
       setInstallError(errorMessage(e));
     } finally {
@@ -502,32 +503,26 @@ function LiveWorkspace({
   };
   return (
     <Workspace
+      leading={<BackToPlugins />}
       title={t("Studio")}
       actions={
         <>
-          {mode === "code" && project ? (
-            <>
-              <DraftPicker
-                projects={projects}
-                currentId={project?.id}
-                disabled={dirty}
-                onPickProject={(id) => void loadProject(id).catch((e) => setError(errorMessage(e)))}
-                onPickPlugin={(pluginId) => void openPlugin(pluginId)}
-              />
-              <Button
-                size="sm"
-                disabled={dirty || (project.diagnostics || []).length > 0}
-                onClick={() => void openInstall()}
-              >
-                {t("Install")}
-              </Button>
-            </>
-          ) : null}
+          <DraftPicker
+            projects={projects}
+            currentId={project?.id}
+            disabled={dirty}
+            onPickProject={(id) => void loadProject(id).catch((e) => setError(errorMessage(e)))}
+            onPickPlugin={(pluginId) => void openPlugin(pluginId)}
+          />
           <ModeSwitch mode={mode} onMode={onMode} />
-          <Button variant="outline" size="sm" onClick={onNew}>
-            <Sparkles size={14} /> {t("New plugin")}
-          </Button>
-          <Link to="/plugins">{t("Plugins")}</Link>
+          {project ? (
+            <StudioActions
+              project={project}
+              dirty={dirty}
+              onInstall={() => void openInstall()}
+              onGone={onNew}
+            />
+          ) : null}
         </>
       }
     >
@@ -624,24 +619,6 @@ function LiveWorkspace({
                 {error}
               </p>
             ) : null}
-            <div className="mb-4 flex flex-wrap items-center gap-2">
-              <DraftPicker
-                projects={projects}
-                currentId={project?.id}
-                disabled={dirty}
-                onPickProject={(id) => void loadProject(id).catch((e) => setError(errorMessage(e)))}
-                onPickPlugin={(pluginId) => void openPlugin(pluginId)}
-              />
-              {project ? (
-                <Button
-                  className="ml-auto"
-                  disabled={dirty || (project.diagnostics || []).length > 0}
-                  onClick={() => void openInstall()}
-                >
-                  {t("Install")}
-                </Button>
-              ) : null}
-            </div>
             {project ? (
               <>
                 <h2 className="text-lg font-semibold">{project.name}</h2>
@@ -745,5 +722,17 @@ function LiveWorkspace({
         </Dialog>
       ) : null}
     </Workspace>
+  );
+}
+
+/** Studio's way back: small, on the left, an arrow and "Back". */
+function BackToPlugins() {
+  return (
+    <Link
+      to="/plugins"
+      className="inline-flex items-center gap-1 rounded-md px-1.5 py-1 text-xs font-medium text-fg-muted transition-colors hover:bg-surface-hover hover:text-fg"
+    >
+      <ArrowLeft size={14} aria-hidden /> {t("Back")}
+    </Link>
   );
 }

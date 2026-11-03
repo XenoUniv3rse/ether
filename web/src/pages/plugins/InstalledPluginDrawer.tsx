@@ -5,7 +5,6 @@ import {
   SubtabNav,
   Switch,
   Tooltip,
-  cn,
   confirmDialog,
   toast,
 } from "@braedonsaunders/appkit-ui";
@@ -37,6 +36,7 @@ import { contributionTab, primaryContribution } from "./drawer/kinds";
 import { PluginContributions } from "./drawer/PluginContributions";
 import { PluginOverview } from "./drawer/PluginOverview";
 import { PluginSetup } from "./drawer/PluginSetup";
+import { MenuItem } from "./MenuItem";
 import { openInStudio } from "./openInStudio";
 import {
   isAddon,
@@ -603,40 +603,5 @@ function Banner({ icon, text, action }: { icon: ReactNode; text: string; action:
       <p className="min-w-0 flex-1 text-sm text-fg">{text}</p>
       {action}
     </div>
-  );
-}
-
-function MenuItem({
-  icon,
-  label,
-  hint,
-  onClick,
-  disabled,
-  danger,
-}: {
-  icon: ReactNode;
-  label: string;
-  hint?: string;
-  onClick: () => void;
-  disabled?: boolean;
-  danger?: boolean;
-}) {
-  return (
-    <button
-      type="button"
-      role="menuitem"
-      disabled={disabled}
-      onClick={onClick}
-      className={cn(
-        "flex w-full items-start gap-2.5 rounded-md px-2.5 py-2 text-left text-sm transition-colors disabled:cursor-not-allowed disabled:opacity-50",
-        danger ? "text-danger hover:bg-danger/10" : "text-fg hover:bg-surface-hover",
-      )}
-    >
-      <span className="mt-0.5 shrink-0">{icon}</span>
-      <span>
-        {label}
-        {hint ? <span className="block text-xs text-fg-subtle">{hint}</span> : null}
-      </span>
-    </button>
   );
 }
