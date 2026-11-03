@@ -449,7 +449,13 @@ export function InstalledPluginDrawer({
           <MutationError error={mutationError} />
 
           {active === "overview" ? (
-            <PluginOverview detail={detail} calls={calls} onClose={onClose} onRetry={retry} />
+            <PluginOverview
+              detail={detail}
+              calls={calls}
+              onClose={onClose}
+              onRetry={retry}
+              onFresh={() => void loadDetail(detail.id, true)}
+            />
           ) : active === "adds" ? (
             <PluginContributions
               detail={detail}

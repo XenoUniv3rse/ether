@@ -40,11 +40,14 @@ export function PluginOverview({
   calls,
   onClose,
   onRetry,
+  onFresh,
 }: {
   detail: PluginDetail;
   calls: PluginCall[] | null;
   onClose: () => void;
   onRetry: () => Promise<void>;
+  /** Reload the plugin quietly after a live call, so its health is current. */
+  onFresh?: () => void;
 }) {
   const level = pluginHealthLevel(detail.healthDetail.status, detail.enabled);
   return (
@@ -55,7 +58,7 @@ export function PluginOverview({
       {(level === "warn" || level === "error") && detail.enabled ? (
         <ProblemCard detail={detail} onRetry={onRetry} />
       ) : null}
-      <LiveNow detail={detail} calls={calls} onClose={onClose} />
+      <LiveNow detail={detail} calls={calls} onClose={onClose} onFresh={onFresh} />
       <Placements detail={detail} onClose={onClose} />
       <HealthTiles detail={detail} />
     </div>
@@ -111,16 +114,18 @@ function LiveNow({
   detail,
   calls,
   onClose,
+  onFresh,
 }: {
   detail: PluginDetail;
   calls: PluginCall[] | null;
   onClose: () => void;
+  onFresh?: () => void;
 }) {
   switch (primaryContribution(detail)) {
     case "livetv_channels":
       return <LiveTVNow detail={detail} onClose={onClose} />;
     case "list_source":
-      return <CatalogueNow detail={detail} onClose={onClose} />;
+      return <CatalogueNow detail={detail} onClose={onClose} onFresh={onFresh} />;
     case "stream_source":
       return (
         <LookupsNow
@@ -315,8 +320,21 @@ interface PreviewItem {
   poster?: string;
 }
 
-function CatalogueNow({ detail, onClose }: { detail: PluginDetail; onClose: () => void }) {
-  const { descriptors } = useRegistry<{ params?: { required?: boolean }[] }>("collectionSource");
+/** How long the drawer waits for a slow add-on's catalogue. */
+const PREVIEW_WAIT_S = 30;
+
+function CatalogueNow({
+  detail,
+  onClose,
+  onFresh,
+}: {
+  detail: PluginDetail;
+  onClose: () => void;
+  onFresh?: () => void;
+}) {
+  const { descriptors } = useRegistry<{ params?: { required?: boolean }[]; catalog?: string }>(
+    "collectionSource",
+  );
   const { locale } = useLocale();
   // Lists that show something without a value to fill in, the add-on's
   // headline lists (Popular, Top, Trending) first.
@@ -333,31 +351,99 @@ function CatalogueNow({ detail, onClose }: { detail: PluginDetail; onClose: () =
   const [items, setItems] = useState<PreviewItem[] | null>(null);
   const [total, setTotal] = useState(0);
   const [error, setError] = useState("");
+  const [waited, setWaited] = useState(0);
+  const [attempt, setAttempt] = useState(0);
+  const source = detail.host || detail.name;
+  // Stable across quiet reloads of the plugin, so a refresh never refetches.
+  const ownCatalogs = Boolean(detail.manifest.catalogs?.length);
 
+  // The drawer opens at once; the catalogue arrives when the add-on answers.
+  // Public add-on servers can take many seconds, so the panel says it is
+  // still loading and gives up, in plain words, after PREVIEW_WAIT_S.
   useEffect(() => {
     if (!current) return;
+    const ctl = new AbortController();
+    const started = Date.now();
     let live = true;
     setItems(null);
     setError("");
+    setWaited(0);
+    const tick = window.setInterval(
+      () => setWaited(Math.floor((Date.now() - started) / 1000)),
+      1000,
+    );
+    const giveUp = window.setTimeout(() => ctl.abort(), PREVIEW_WAIT_S * 1000);
+    const finish = () => {
+      window.clearInterval(tick);
+      window.clearTimeout(giveUp);
+    };
     const label = textOf(current.label);
-    apiFetch<{ items: PreviewItem[]; total: number }>("/collections/preview?n=12", {
-      method: "POST",
-      body: JSON.stringify({
-        name: label,
-        mediaType: /series|show|tv/i.test(label) ? "show" : "movie",
-        sources: [{ kind: current.id }],
-      }),
-    })
+    const ref = typeof current.meta?.catalog === "string" ? current.meta.catalog : "";
+    const slash = ref.indexOf("/");
+    const load: Promise<{ items: PreviewItem[]; total: number }> =
+      slash > 0 && ownCatalogs
+        ? // The add-on's own catalogue page, exactly as it answers it.
+          apiFetch<{
+            metas?: {
+              id: string;
+              name?: string;
+              poster?: string;
+              releaseInfo?: string;
+              year?: number;
+            }[];
+          }>(
+            `/plugins/${encodeURIComponent(detail.id)}/resources/catalog?type=${encodeURIComponent(ref.slice(0, slash))}&contentId=${encodeURIComponent(ref.slice(slash + 1))}`,
+            { signal: ctl.signal },
+          ).then((r) => {
+            const metas = r.metas ?? [];
+            return {
+              total: metas.length,
+              items: metas.slice(0, 12).map((m) => ({
+                key: m.id,
+                title: m.name ?? m.id,
+                poster: m.poster,
+                year: m.year ?? (Number.parseInt(String(m.releaseInfo ?? ""), 10) || undefined),
+              })),
+            };
+          })
+        : apiFetch<{ items: PreviewItem[]; total: number }>("/collections/preview?n=12", {
+            method: "POST",
+            signal: ctl.signal,
+            body: JSON.stringify({
+              name: label,
+              mediaType: /series|show|tv/i.test(label) ? "show" : "movie",
+              sources: [{ kind: current.id }],
+            }),
+          });
+    load
       .then((r) => {
         if (!live) return;
         setItems(r.items ?? []);
         setTotal(r.total ?? 0);
+        // A slow add-on that has now answered is healthy again.
+        if (Date.now() - started > 3000) onFresh?.();
       })
-      .catch((e) => live && setError(errorMessage(e)));
+      .catch((e) => {
+        if (!live) return;
+        setError(
+          ctl.signal.aborted
+            ? t(
+                "{source} didn't send this catalogue within {seconds} seconds. Its server may be busy; try again in a minute.",
+                {
+                  source,
+                  seconds: PREVIEW_WAIT_S,
+                },
+              )
+            : errorMessage(e),
+        );
+      })
+      .finally(finish);
     return () => {
       live = false;
+      finish();
+      ctl.abort();
     };
-  }, [current]);
+  }, [current, attempt, detail.id, ownCatalogs, source]);
 
   if (!lists.length) {
     return (
@@ -399,16 +485,30 @@ function CatalogueNow({ detail, onClose }: { detail: PluginDetail; onClose: () =
           ))}
         </div>
       ) : null}
-      <PosterRow
-        items={items?.map((i) => ({
-          key: i.key,
-          title: i.title,
-          poster: i.poster,
-          caption: i.year ? String(i.year) : "",
-        }))}
-        error={error}
-        empty={t("This catalogue is empty right now.")}
-      />
+      {items === null && !error && waited >= 3 ? (
+        <p className="mb-3 flex items-center gap-2 text-xs text-fg-muted" role="status">
+          <RefreshCw size={12} className="animate-spin" aria-hidden />
+          {t("Still loading from {source}… {seconds}s", { source, seconds: waited })}
+        </p>
+      ) : null}
+      {error ? (
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <p className="text-sm text-fg-muted">{error}</p>
+          <Button size="sm" variant="outline" onClick={() => setAttempt((a) => a + 1)}>
+            <RefreshCw size={13} /> {t("Try again")}
+          </Button>
+        </div>
+      ) : (
+        <PosterRow
+          items={items?.map((i) => ({
+            key: i.key,
+            title: i.title,
+            poster: i.poster,
+            caption: i.year ? String(i.year) : "",
+          }))}
+          empty={t("This catalogue is empty right now.")}
+        />
+      )}
       {items?.length ? (
         <div className="mt-3 flex justify-end">
           <Badge variant="secondary">{tn(total, "{count} title", "{count} titles")}</Badge>
