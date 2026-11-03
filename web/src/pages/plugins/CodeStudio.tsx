@@ -7,6 +7,8 @@ import {
   FileCode2,
   FileJson,
   History,
+  PanelLeftClose,
+  PanelLeftOpen,
   Play,
   TerminalSquare,
 } from "lucide-react";
@@ -14,6 +16,7 @@ import { Suspense, lazy, useCallback, useEffect, useState, type ReactNode } from
 import { t } from "../../i18n";
 import { apiFetch, errorMessage } from "../../lib/api";
 import type { StudioProject } from "./develop/types";
+import { PaneResizer, useStudioPanes } from "./code/panes";
 
 const CodeMirrorPane = lazy(() => import("./code/CodeMirrorPane"));
 
@@ -142,6 +145,7 @@ export function CodeStudio({
   onSave: () => void;
 }) {
   const [panel, setPanel] = useState<Panel>("preview");
+  const panes = useStudioPanes();
   const unsaved = dirty || Object.keys(edits).length > 0;
   const [install, setInstall] = useState<{ ok: boolean; message: string } | null>(null);
 
@@ -192,41 +196,101 @@ export function CodeStudio({
         : { tone: "text-success", text: t("Compiles and ready to install") };
 
   return (
-    <div className="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-[13rem_minmax(0,1fr)_minmax(340px,28rem)]">
+    <div ref={panes.grid} className={panes.className} style={panes.style}>
       <aside
         aria-label={t("Files")}
-        className="hidden min-h-0 flex-col border-r border-border bg-bg-subtle lg:flex"
+        className="relative hidden min-h-0 flex-col border-r border-border bg-bg-subtle lg:flex"
       >
-        <p className="px-3 pb-1 pt-3 text-[11px] font-semibold uppercase tracking-wider text-fg-subtle">
-          {t("Files")}
-        </p>
-        <ul className="space-y-0.5 px-1.5">
-          {files.map((f) => (
-            <li key={f}>
+        {panes.collapsed ? (
+          // Folded: a rail with the way back out and one icon per file.
+          <div className="flex flex-col items-center gap-1 py-2">
+            <button
+              type="button"
+              onClick={() => panes.setCollapsed(false)}
+              aria-label={t("Show files")}
+              title={t("Show files")}
+              className="mb-1 rounded-md p-1.5 text-fg-muted hover:bg-surface-hover hover:text-fg"
+            >
+              <PanelLeftOpen size={16} />
+            </button>
+            {files.map((f) => (
               <button
+                key={f}
                 type="button"
                 onClick={() => onFile(f)}
+                aria-label={f}
+                title={f}
                 aria-current={file === f ? "page" : undefined}
                 className={cn(
-                  "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left font-mono text-xs transition",
+                  "relative rounded-md p-1.5 transition",
                   file === f
                     ? "bg-primary/10 text-fg"
                     : "text-fg-muted hover:bg-surface-hover hover:text-fg",
                 )}
               >
-                {f.endsWith(".ts") ? <FileCode2 size={14} /> : <FileJson size={14} />}
-                <span className="min-w-0 flex-1 truncate">{f}</span>
+                {f.endsWith(".ts") ? <FileCode2 size={15} /> : <FileJson size={15} />}
                 {(f === file ? dirty : f in edits) ? (
-                  <span className="size-1.5 rounded-full bg-primary" aria-label={t("Not saved")} />
+                  <span className="absolute right-1 top-1 size-1.5 rounded-full bg-primary" />
                 ) : null}
               </button>
-            </li>
-          ))}
-        </ul>
-        <div className="mt-auto space-y-2 border-t border-border p-3 text-xs text-fg-muted">
-          <p className="font-medium text-fg">{project.name}</p>
-          <p className="break-all font-mono text-[11px]">{project.pluginId}</p>
-        </div>
+            ))}
+          </div>
+        ) : (
+          <>
+            <div className="flex items-center justify-between px-3 pb-1 pt-2">
+              <p className="text-[11px] font-semibold uppercase tracking-wider text-fg-subtle">
+                {t("Files")}
+              </p>
+              <button
+                type="button"
+                onClick={() => panes.setCollapsed(true)}
+                aria-label={t("Hide files")}
+                title={t("Hide files")}
+                className="rounded-md p-1 text-fg-subtle hover:bg-surface-hover hover:text-fg"
+              >
+                <PanelLeftClose size={15} />
+              </button>
+            </div>
+            <ul className="space-y-0.5 px-1.5">
+              {files.map((f) => (
+                <li key={f}>
+                  <button
+                    type="button"
+                    onClick={() => onFile(f)}
+                    aria-current={file === f ? "page" : undefined}
+                    className={cn(
+                      "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left font-mono text-xs transition",
+                      file === f
+                        ? "bg-primary/10 text-fg"
+                        : "text-fg-muted hover:bg-surface-hover hover:text-fg",
+                    )}
+                  >
+                    {f.endsWith(".ts") ? <FileCode2 size={14} /> : <FileJson size={14} />}
+                    <span className="min-w-0 flex-1 truncate">{f}</span>
+                    {(f === file ? dirty : f in edits) ? (
+                      <span
+                        className="size-1.5 rounded-full bg-primary"
+                        aria-label={t("Not saved")}
+                      />
+                    ) : null}
+                  </button>
+                </li>
+              ))}
+            </ul>
+            <div className="mt-auto space-y-2 border-t border-border p-3 text-xs text-fg-muted">
+              <p className="font-medium text-fg">{project.name}</p>
+              <p className="break-all font-mono text-[11px]">{project.pluginId}</p>
+            </div>
+            <PaneResizer
+              side="right"
+              width={panes.left}
+              bounds={panes.leftBounds}
+              onWidth={panes.setLeft}
+              onReset={panes.resetLeft}
+              label={t("Resize files")}
+            />
+          </>
+        )}
       </aside>
 
       <section aria-label={t("Code")} className="flex min-h-[32rem] flex-col bg-surface lg:min-h-0">
@@ -255,8 +319,16 @@ export function CodeStudio({
 
       <section
         aria-label={t("Tools")}
-        className="flex min-h-[28rem] flex-col border-t border-border lg:min-h-0 lg:border-l lg:border-t-0"
+        className="relative flex min-h-[28rem] flex-col border-t border-border lg:min-h-0 lg:border-l lg:border-t-0"
       >
+        <PaneResizer
+          side="left"
+          width={panes.right}
+          bounds={panes.rightBounds}
+          onWidth={panes.setRight}
+          onReset={panes.resetRight}
+          label={t("Resize tools")}
+        />
         <div
           role="tablist"
           className="flex shrink-0 items-center gap-0.5 border-b border-border bg-bg-subtle px-1.5"

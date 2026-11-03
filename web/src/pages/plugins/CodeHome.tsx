@@ -8,6 +8,8 @@ import {
   FolderOpen,
   LayoutTemplate,
   ListOrdered,
+  PanelLeftClose,
+  PanelLeftOpen,
   PanelsTopLeft,
   Play,
   Tv,
@@ -17,6 +19,7 @@ import { Suspense, lazy, useEffect, useState } from "react";
 import { t } from "../../i18n";
 import { apiFetch, errorMessage } from "../../lib/api";
 import { Reference } from "./CodeStudio";
+import { PaneResizer, useStudioPanes } from "./code/panes";
 import type { StudioProject } from "./develop/types";
 
 const CodeMirrorPane = lazy(() => import("./code/CodeMirrorPane"));
@@ -91,6 +94,7 @@ export function CodeHome({ onOpenProject }: { onOpenProject: (id: string) => voi
   const [file, setFile] = useState(ENTRY);
   const [edits, setEdits] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false);
+  const panes = useStudioPanes();
   const [error, setError] = useState("");
 
   useEffect(() => {
@@ -150,67 +154,122 @@ export function CodeHome({ onOpenProject }: { onOpenProject: (id: string) => voi
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-[15rem_minmax(0,1fr)_minmax(320px,26rem)]">
+      <div ref={panes.grid} className={panes.className} style={panes.style}>
         <aside
           aria-label={t("Start from")}
-          className="min-h-0 overflow-y-auto border-r border-border bg-bg-subtle"
+          className="relative flex min-h-0 flex-col border-r border-border bg-bg-subtle"
         >
-          <p className="px-3 pb-1 pt-3 text-[11px] font-semibold uppercase tracking-wider text-fg-subtle">
-            {t("Start from")}
-          </p>
-          <ul className="space-y-0.5 px-1.5 pb-2">
-            {STARTERS.map((s) => (
-              <li key={s.id}>
+          {panes.collapsed ? (
+            <div className="flex flex-col items-center gap-1 py-2">
+              <button
+                type="button"
+                onClick={() => panes.setCollapsed(false)}
+                aria-label={t("Show files")}
+                title={t("Show files")}
+                className="mb-1 rounded-md p-1.5 text-fg-muted hover:bg-surface-hover hover:text-fg"
+              >
+                <PanelLeftOpen size={16} />
+              </button>
+              {STARTERS.map((st) => (
                 <button
+                  key={st.id}
                   type="button"
-                  onClick={() => pick(s.id)}
-                  aria-current={starter === s.id ? "true" : undefined}
+                  onClick={() => pick(st.id)}
+                  aria-label={st.title()}
+                  title={st.title()}
+                  aria-current={starter === st.id ? "true" : undefined}
                   className={cn(
-                    "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm transition",
-                    starter === s.id
+                    "rounded-md p-1.5 transition",
+                    starter === st.id
                       ? "bg-primary/10 text-fg"
                       : "text-fg-muted hover:bg-surface-hover hover:text-fg",
                   )}
                 >
-                  <s.icon size={15} className="shrink-0" aria-hidden />
-                  <span className="truncate">{s.title()}</span>
+                  <st.icon size={15} aria-hidden />
                 </button>
-              </li>
-            ))}
-          </ul>
-          {files.length ? (
+              ))}
+            </div>
+          ) : (
             <>
-              <p className="border-t border-border px-3 pb-1 pt-3 text-[11px] font-semibold uppercase tracking-wider text-fg-subtle">
-                {t("Files")}
-              </p>
-              <ul className="space-y-0.5 px-1.5 pb-3">
-                {files.map((f) => (
-                  <li key={f}>
-                    <button
-                      type="button"
-                      onClick={() => setFile(f)}
-                      aria-current={file === f ? "page" : undefined}
-                      className={cn(
-                        "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left font-mono text-xs transition",
-                        file === f
-                          ? "bg-primary/10 text-fg"
-                          : "text-fg-muted hover:bg-surface-hover hover:text-fg",
-                      )}
-                    >
-                      {f.endsWith(".ts") ? <FileCode2 size={14} /> : <FileJson size={14} />}
-                      <span className="min-w-0 flex-1 truncate">{f}</span>
-                      {f in edits ? (
-                        <span
-                          className="size-1.5 rounded-full bg-primary"
-                          aria-label={t("Not saved")}
-                        />
-                      ) : null}
-                    </button>
-                  </li>
-                ))}
-              </ul>
+              <div className="min-h-0 flex-1 overflow-y-auto">
+                <div className="flex items-center justify-between px-3 pb-1 pt-2">
+                  <p className="text-[11px] font-semibold uppercase tracking-wider text-fg-subtle">
+                    {t("Start from")}
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => panes.setCollapsed(true)}
+                    aria-label={t("Hide files")}
+                    title={t("Hide files")}
+                    className="rounded-md p-1 text-fg-subtle hover:bg-surface-hover hover:text-fg"
+                  >
+                    <PanelLeftClose size={15} />
+                  </button>
+                </div>
+                <ul className="space-y-0.5 px-1.5 pb-2">
+                  {STARTERS.map((s) => (
+                    <li key={s.id}>
+                      <button
+                        type="button"
+                        onClick={() => pick(s.id)}
+                        aria-current={starter === s.id ? "true" : undefined}
+                        className={cn(
+                          "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm transition",
+                          starter === s.id
+                            ? "bg-primary/10 text-fg"
+                            : "text-fg-muted hover:bg-surface-hover hover:text-fg",
+                        )}
+                      >
+                        <s.icon size={15} className="shrink-0" aria-hidden />
+                        <span className="truncate">{s.title()}</span>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+                {files.length ? (
+                  <>
+                    <p className="border-t border-border px-3 pb-1 pt-3 text-[11px] font-semibold uppercase tracking-wider text-fg-subtle">
+                      {t("Files")}
+                    </p>
+                    <ul className="space-y-0.5 px-1.5 pb-3">
+                      {files.map((f) => (
+                        <li key={f}>
+                          <button
+                            type="button"
+                            onClick={() => setFile(f)}
+                            aria-current={file === f ? "page" : undefined}
+                            className={cn(
+                              "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left font-mono text-xs transition",
+                              file === f
+                                ? "bg-primary/10 text-fg"
+                                : "text-fg-muted hover:bg-surface-hover hover:text-fg",
+                            )}
+                          >
+                            {f.endsWith(".ts") ? <FileCode2 size={14} /> : <FileJson size={14} />}
+                            <span className="min-w-0 flex-1 truncate">{f}</span>
+                            {f in edits ? (
+                              <span
+                                className="size-1.5 rounded-full bg-primary"
+                                aria-label={t("Not saved")}
+                              />
+                            ) : null}
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  </>
+                ) : null}
+              </div>
+              <PaneResizer
+                side="right"
+                width={panes.left}
+                bounds={panes.leftBounds}
+                onWidth={panes.setLeft}
+                onReset={panes.resetLeft}
+                label={t("Resize files")}
+              />
             </>
-          ) : null}
+          )}
         </aside>
 
         <section
@@ -255,18 +314,28 @@ export function CodeHome({ onOpenProject }: { onOpenProject: (id: string) => voi
 
         <section
           aria-label={t("Tools")}
-          className="min-h-0 overflow-y-auto border-t border-border p-4 lg:border-l lg:border-t-0"
+          className="relative flex min-h-0 flex-col border-t border-border lg:border-l lg:border-t-0"
         >
-          <div className="mb-5 flex items-start gap-3">
-            <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
-              <meta.icon size={18} aria-hidden />
-            </span>
-            <div>
-              <h2 className="text-sm font-semibold text-fg">{meta.title()}</h2>
-              <p className="text-sm text-fg-muted">{meta.about()}</p>
+          <PaneResizer
+            side="left"
+            width={panes.right}
+            bounds={panes.rightBounds}
+            onWidth={panes.setRight}
+            onReset={panes.resetRight}
+            label={t("Resize tools")}
+          />
+          <div className="min-h-0 flex-1 overflow-y-auto p-4">
+            <div className="mb-5 flex items-start gap-3">
+              <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                <meta.icon size={18} aria-hidden />
+              </span>
+              <div>
+                <h2 className="text-sm font-semibold text-fg">{meta.title()}</h2>
+                <p className="text-sm text-fg-muted">{meta.about()}</p>
+              </div>
             </div>
+            <Reference template={starter} />
           </div>
-          <Reference template={starter} />
         </section>
       </div>
     </div>
