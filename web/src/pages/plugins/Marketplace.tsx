@@ -267,7 +267,7 @@ function ListingCard({
             <h4 className="truncate font-semibold text-fg">{listing.name}</h4>
             <div className="flex flex-wrap gap-1">
               <VerifiedBadge verified={listing.verified} source={listing.source} />
-              {listing.stremio ? <Badge variant="secondary">{t("Stremio add-on")}</Badge> : null}
+              {listing.stremio ? <Badge variant="secondary">{t("Add-on")}</Badge> : null}
             </div>
           </div>
         </div>
@@ -306,7 +306,7 @@ function Detail({
             <div className="flex flex-wrap items-center gap-2">
               <h3 className="text-xl font-semibold tracking-tight text-fg">{listing.name}</h3>
               <VerifiedBadge verified={listing.verified} source={listing.source} />
-              {listing.stremio ? <Badge variant="secondary">{t("Stremio add-on")}</Badge> : null}
+              {listing.stremio ? <Badge variant="secondary">{t("Add-on")}</Badge> : null}
             </div>
             <p className="text-sm text-fg-muted">{listing.summary}</p>
             <div className="flex flex-wrap items-center gap-3 text-xs text-fg-muted">

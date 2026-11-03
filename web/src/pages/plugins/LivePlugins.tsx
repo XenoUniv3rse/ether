@@ -33,7 +33,7 @@ import { DirectoryBrowser } from "./DirectoryBrowser";
 import { openInStudio } from "./openInStudio";
 import { InstallDrawer } from "./InstallDrawer";
 import { InstalledPluginDrawer } from "./InstalledPluginDrawer";
-import { kindIcon, kindLabel, pluginHealthLevel, type PluginSummary } from "./types";
+import { kindIcon, isAddon, kindLabel, pluginHealthLevel, type PluginSummary } from "./types";
 
 type TabKey = "installed" | "marketplace";
 
@@ -371,7 +371,7 @@ function PluginCard({
             ) : (
               <LevelBadge level={level} />
             )}
-            <Badge variant="secondary">{kindLabel(plugin.kind, plugin.stremioOnly)}</Badge>
+            <Badge variant="secondary">{kindLabel(plugin.kind, isAddon(plugin))}</Badge>
             {plugin.updateVersion ? (
               <Badge variant="info">
                 <ArrowUpCircle size={11} aria-hidden />{" "}

@@ -642,7 +642,7 @@ function HealthTiles({ detail }: { detail: PluginDetail }) {
           undeclared.length
             ? tn(undeclared.length, "{count} site blocked", "{count} sites blocked")
             : detail.host
-              ? t("Its add-on only")
+              ? t("Add-on only")
               : t("As declared")
         }
         detail={

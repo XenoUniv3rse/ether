@@ -38,6 +38,7 @@ import { PluginOverview } from "./drawer/PluginOverview";
 import { PluginSetup } from "./drawer/PluginSetup";
 import { openInStudio } from "./openInStudio";
 import {
+  isAddon,
   kindLabel,
   pluginHealthLevel,
   type JournalEntry,
@@ -540,14 +541,18 @@ function HeaderLine({
 }) {
   const ether = detail.manifest.ether;
   const author = ether?.author?.name;
+  const edited = detail.sourceKind === "studio";
+  // Who it comes from: an add-on names its server, never the owner as its
+  // author; a Studio copy of an add-on says it was edited here.
+  const origin = detail.host
+    ? [edited ? t("Edited by you") : "", t("from {host}", { host: detail.host })]
+    : edited
+      ? [t("Made by you")]
+      : [author ? t("by {author}", { author }) : ""];
   return (
     <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
       <span>
-        {[
-          kindLabel(detail.kind, detail.stremioOnly),
-          `v${detail.version}`,
-          author ? t("by {author}", { author }) : "",
-        ]
+        {[kindLabel(detail.kind, isAddon(detail)), `v${detail.version}`, ...origin]
           .filter(Boolean)
           .join(" · ")}
       </span>
