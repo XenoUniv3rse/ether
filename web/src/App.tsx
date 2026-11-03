@@ -595,24 +595,26 @@ function ViewerById() {
   return <ViewerProfile />;
 }
 
-function Gate({ onReady }: { onReady: () => void }) {
+function Gate({ onReady }: { onReady: (animation?: boolean) => void }) {
   const [boot, setBoot] = useState<Bootstrap | null>(null);
   const [error, setError] = useState<unknown>(null);
   const [unlocked, setUnlocked] = useState(false);
 
   const loadBoot = useCallback(async () => {
     try {
-      setBoot(await api.bootstrap());
+      const next = await api.bootstrap();
+      setBoot(next);
+      onReady(next.startupAnimation !== false);
       setError(null);
     } catch (e) {
       setError(e);
     }
-  }, []);
+  }, [onReady]);
   useEffect(() => {
     void loadBoot();
   }, [loadBoot]);
   useEffect(() => {
-    if (boot || error) onReady();
+    if (error) onReady();
   }, [boot, error, onReady]);
 
   if (!boot && isStarting(error)) return <Startup onReady={() => void loadBoot()} />;
@@ -679,7 +681,27 @@ const Me = lazy(() => import("./pages/me/Me"));
 export default function App() {
   const location = useLocation();
   const [ready, setReady] = useState(false);
-  const onReady = useCallback(() => setReady(true), []);
+  // Decided at page open from the last known server value, so the splash's
+  // minimum time runs from load (not from bootstrap) and never flashes on a
+  // server that turned it off. The server's answer can only hide it.
+  const [animation, setAnimation] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem("ether.startupAnimation") !== "false";
+    } catch {
+      return true;
+    }
+  });
+  const onReady = useCallback((enabled?: boolean) => {
+    if (enabled !== undefined) {
+      try {
+        localStorage.setItem("ether.startupAnimation", String(enabled));
+      } catch {
+        /* Storage is optional. */
+      }
+      if (!enabled) setAnimation(false);
+    }
+    setReady(true);
+  }, []);
   return (
     <I18nProvider>
       {() => (
@@ -694,7 +716,7 @@ export default function App() {
                 <Gate onReady={onReady} />
               )}
             </Chrome>
-            {location.pathname !== "/me" ? <BrandSplash ready={ready} /> : null}
+            {location.pathname !== "/me" && animation ? <BrandSplash ready={ready} /> : null}
             <UpdateReady />
             <Toaster richColors closeButton position="bottom-right" />
           </UiLinkProvider>
