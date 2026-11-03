@@ -1,6 +1,7 @@
 import { AgentPanel, type AgentMessage } from "@braedonsaunders/appkit-ai/react";
 import { Badge, Button, Dialog, SearchSelect, Textarea, toast } from "@braedonsaunders/appkit-ui";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { Film, LayoutTemplate, Sparkles, Tv } from "lucide-react";
 import { Link, useNavigate } from "react-router-dom";
 import { Workspace } from "../../components/workspace";
 import {
@@ -14,13 +15,185 @@ import { PluginView } from "../../viewspec/PluginView";
 import { formatDateTime } from "../../lib/format";
 import { invalidateRegistry } from "../../lib/extend";
 import { PermissionSheet } from "./PermissionSheet";
+import { Composer } from "./Composer";
+import { LiveStageView, NativePreview, momentsForTool, readAgentStream } from "./LiveStage";
+import type { Moment } from "./Stage";
 import type { InstallPreview } from "./types";
 import { t } from "../../i18n";
 import { searchSelectLabels } from "../../i18n/appkit-labels";
 import type { StudioProject, StudioProjectSummary, StudioCompileResult } from "./develop/types";
 
-/** Real runtime checkpoint. The mock design remains available in mock mode. */
+/**
+ * Studio on the real agent: the approved home, a live stage that draws each
+ * agent step with real results, then the editor for refinements and install.
+ */
 export default function LiveStudio() {
+  const [phase, setPhase] = useState<"home" | "stage" | "editor">(() =>
+    sessionStorage.getItem("ether-studio-thread") ? "editor" : "home",
+  );
+  const [prompt, setPrompt] = useState("");
+  const [moments, setMoments] = useState<Moment[]>([]);
+  const [narration, setNarration] = useState("");
+  const [stageError, setStageError] = useState("");
+  const abort = useRef<AbortController | null>(null);
+
+  const build = async (text: string) => {
+    const ask = text.trim();
+    if (!ask) return;
+    setPrompt("");
+    setStageError("");
+    setNarration("");
+    setMoments([{ kind: "intent", text: ask, tool: "studio" }]);
+    setPhase("stage");
+    sessionStorage.removeItem("ether-studio-thread");
+    const ctl = new AbortController();
+    abort.current = ctl;
+    const calls = new Map<string, { name: string; input: Record<string, unknown> }>();
+    let said = "";
+    try {
+      const res = await apiStream("/agent/turn", {
+        method: "POST",
+        signal: ctl.signal,
+        body: JSON.stringify({ prompt: ask, context: { route: "/plugins/studio" } }),
+      });
+      const id = res.headers.get("X-Ether-Thread-Id");
+      if (id) sessionStorage.setItem("ether-studio-thread", id);
+      const pending: Promise<void>[] = [];
+      await readAgentStream(res, (c) => {
+        if (c.type === "text-delta" && c.delta) {
+          said += c.delta;
+          setNarration(said.split(/(?<=[.!?])\s/)[0] ?? said);
+        } else if (c.type === "tool-input-available" && c.toolCallId && c.toolName) {
+          calls.set(c.toolCallId, { name: c.toolName, input: c.input ?? {} });
+        } else if (c.type === "tool-output-available" && c.toolCallId) {
+          const call = calls.get(c.toolCallId);
+          if (call)
+            pending.push(
+              momentsForTool(call.name, call.input, c.output).then((m) =>
+                setMoments((all) => [...all, ...m]),
+              ),
+            );
+        } else if (c.type === "error" && c.errorText) {
+          setStageError(c.errorText);
+        }
+      });
+      await Promise.all(pending);
+      const summary = said.trim().split(/(?<=[.!?])\s/)[0];
+      setMoments((all) => [...all, { kind: "done", text: summary || t("Your draft is ready") }]);
+      window.setTimeout(() => setPhase("editor"), 1800);
+    } catch (e) {
+      if (!ctl.signal.aborted) setStageError(errorMessage(e));
+      setPhase("editor");
+    }
+  };
+
+  if (phase === "editor")
+    return (
+      <LiveWorkspace
+        onNew={() => {
+          sessionStorage.removeItem("ether-studio-thread");
+          setMoments([]);
+          setPhase("home");
+        }}
+      />
+    );
+  return (
+    <Workspace title={t("Studio")} actions={<Link to="/plugins">{t("Plugins")}</Link>}>
+      <div className="flex min-h-0 flex-1 flex-col">
+        <div className="app-scroll min-h-0 flex-1 overflow-y-auto">
+          {phase === "stage" ? (
+            <>
+              <LiveStageView moments={moments} narration={narration} />
+              {stageError ? (
+                <p role="alert" className="mx-auto max-w-4xl px-6 text-sm text-danger">
+                  {stageError}
+                </p>
+              ) : null}
+            </>
+          ) : (
+            <LiveHome onPick={(text) => void build(text)} />
+          )}
+        </div>
+        <Composer
+          value={prompt}
+          onChange={setPrompt}
+          onSend={(text) => void build(text)}
+          working={phase === "stage"}
+          onStop={() => {
+            abort.current?.abort();
+            setPhase("editor");
+          }}
+          placeholder={
+            phase === "stage"
+              ? t("Building. You can add to it as it goes")
+              : t("Describe the plugin you want")
+          }
+        />
+      </div>
+    </Workspace>
+  );
+}
+
+const STARTERS = [
+  {
+    icon: Tv,
+    title: () => t("Live TV channels"),
+    description: () => t("Free channels with a programme guide, straight into Live TV."),
+    prompt: () => t("Add free live channels to Live TV, with a programme guide"),
+  },
+  {
+    icon: Film,
+    title: () => t("Video sources"),
+    description: () => t("Playable copies of titles in your catalogue, found when you press play."),
+    prompt: () => t("Find free, legal copies of classic films for movies in my catalogue"),
+  },
+  {
+    icon: LayoutTemplate,
+    title: () => t("Home rows"),
+    description: () => t("A row or collection on Home built from an outside list."),
+    prompt: () => t("Make a Home row from an external list of films"),
+  },
+];
+
+/** The approved Studio home: one question, ideas, and the native starters. */
+function LiveHome({ onPick }: { onPick: (text: string) => void }) {
+  return (
+    <div className="mx-auto max-w-3xl space-y-9 px-4 pb-10 pt-[min(10vh,5rem)]">
+      <div className="space-y-4 text-center">
+        <span className="mx-auto flex size-12 items-center justify-center rounded-2xl bg-primary/10 text-primary">
+          <Sparkles size={24} aria-hidden />
+        </span>
+        <h2 className="text-2xl font-semibold tracking-tight text-fg">
+          {t("What should Ether do?")}
+        </h2>
+        <p className="text-sm text-fg-muted">
+          {t("It builds here, tested on your server. Nothing changes until you install.")}
+        </p>
+      </div>
+      <section aria-label={t("Start from")} className="grid gap-3 sm:grid-cols-3">
+        {STARTERS.map((c) => (
+          <button
+            key={c.prompt()}
+            type="button"
+            onClick={() => onPick(c.prompt())}
+            className="group flex flex-col items-start gap-3 rounded-xl border border-border bg-surface p-4 text-left transition hover:border-primary/40 hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+          >
+            <span className="flex size-10 items-center justify-center rounded-lg bg-primary/10 text-primary transition group-hover:scale-105">
+              <c.icon size={20} aria-hidden />
+            </span>
+            <span>
+              <span className="block text-sm font-semibold text-fg">{c.title()}</span>
+              <span className="mt-0.5 block text-sm text-fg-muted">{c.description()}</span>
+            </span>
+          </button>
+        ))}
+      </section>
+    </div>
+  );
+}
+
+/** The editor: conversation for refinements, the draft's native preview, code and install. */
+function LiveWorkspace({ onNew }: { onNew: () => void }) {
   const [messages, setMessages] = useState<AgentMessage[]>([]);
   const thread = useRef<string | undefined>(
     sessionStorage.getItem("ether-studio-thread") || undefined,
@@ -185,7 +358,17 @@ export default function LiveStudio() {
     }
   };
   return (
-    <Workspace title={t("Studio")} actions={<Link to="/plugins">{t("Plugins")}</Link>}>
+    <Workspace
+      title={t("Studio")}
+      actions={
+        <>
+          <Button variant="outline" size="sm" onClick={onNew}>
+            <Sparkles size={14} /> {t("New plugin")}
+          </Button>
+          <Link to="/plugins">{t("Plugins")}</Link>
+        </>
+      }
+    >
       <div className="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-[minmax(320px,0.85fr)_minmax(0,1.15fr)]">
         <section
           className="order-2 flex min-h-[500px] flex-col border-t border-border lg:order-1 lg:border-r lg:border-t-0"
@@ -303,8 +486,11 @@ export default function LiveStudio() {
                   </Button>
                 </div>
               ) : project.defaultPage ? (
-                <div key={`${project.id}:${epoch}`} className="rounded-xl border border-border p-4">
-                  <PluginView plugin={`studio:${project.id}`} page={project.defaultPage} />
+                <div key={`${project.id}:${epoch}`} className="space-y-4">
+                  <NativePreview projectId={project.id} template={project.template} />
+                  <div className="rounded-xl border border-border p-4">
+                    <PluginView plugin={`studio:${project.id}`} page={project.defaultPage} />
+                  </div>
                 </div>
               ) : (
                 <p>

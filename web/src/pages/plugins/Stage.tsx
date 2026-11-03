@@ -303,7 +303,7 @@ export function StageRunner({ script, onDone }: { script: Script; onDone: () => 
   );
 }
 
-function MomentView({ moment }: { moment: Moment }) {
+export function MomentView({ moment }: { moment: Moment }) {
   switch (moment.kind) {
     case "intent":
       return (
