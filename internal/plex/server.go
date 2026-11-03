@@ -120,7 +120,10 @@ type Deps struct {
 	Markers          MarkerProvider
 	Subtitles        SubtitleSource
 	Extras           ExtrasProvider
-	Trickplay        core.TrickplayProvider
+	// Prerolls are owner pre-rolls (#298); nil leaves play queues and
+	// extras exactly as without the feature.
+	Prerolls  core.Prerolls
+	Trickplay core.TrickplayProvider
 
 	// ApplyClientRules adjusts caps for the owner's quality rules. Nil leaves
 	// the request caps unchanged. The app wires resolver.ApplyClientRules so
@@ -193,7 +196,7 @@ type Server struct {
 	channelLogos      *artwork.Images
 	boundStreams      sessions.PlexStreamAPI
 	variantIDs        *variantIDRegistry
-	renderedVariants  *renderedVariants
+	playIDs           *playIdentities
 	variantWatch      variantWatches
 	downloads         *downloadStore
 	queues            *playQueueStore
@@ -219,6 +222,9 @@ type Server struct {
 	// janitor drops those whose client never reports again.
 	termMu sync.Mutex
 	terms  map[string]termination
+
+	// Stalled-start watches and Dolby Vision base-layer fallbacks.
+	starts startGuard
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -263,7 +269,7 @@ func NewServer(d Deps) *Server {
 		images:            artworkservice.NewRemoteCache(d.ImageCacheBytes, d.HTTPClient),
 		channelLogos:      artwork.NewImages(artwork.ImagesOptions{HTTPClient: d.HTTPClient}),
 		variantIDs:        newVariantIDRegistry(d.DB),
-		renderedVariants:  newRenderedVariants(),
+		playIDs:           newPlayIdentities(),
 		downloads:         newDownloadStore(),
 		queues:            newPlayQueueStore(),
 		sessions:          newSessionActivities(),
@@ -523,11 +529,12 @@ func (s *Server) janitor() {
 			s.expireTrickplayHolders()
 			s.expireDownloads(now)
 			s.queues.expire(now, 6*time.Hour)
-			s.renderedVariants.expire(now, renderedVariantsTTL)
+			s.playIDs.expire(now, s.playIdentityAlive)
 			s.expireTranscodes(now, 2*time.Hour)
 			s.playbackOwners.Expire(now, 2*time.Hour)
 			s.extraPlay.expire(now, 2*time.Hour)
 			s.expireTerminations(now, terminationTTL)
+			s.starts.expire(now)
 			expired := s.sessions.expire(now, 2*time.Minute)
 			for _, e := range expired {
 				s.notifyPlaying(e, "stopped")

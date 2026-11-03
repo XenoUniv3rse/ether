@@ -345,6 +345,21 @@ changing a Home row does not delete a library or remove a title from the
 catalogue. Plex's own Watchlist and other Plex-provided navigation remain
 client features.
 
+In **Library › Catalog**, use **Add to Watchlist** on a title card or in its
+details drawer. The watchlist viewer picker starts with your owner profile;
+select up to ten household viewers to update them together. A card shows the
+number of selected watchlists containing the title. When only some contain it,
+the add action adds it for all selected viewers; when all contain it, the
+remove action removes it for all. These titles use Ether's watchlist monitoring,
+including the Watchlist and Now available rows and availability alerts when
+those features are enabled in Catalog settings.
+
+Ether also sends the change to an enabled, linked Trakt account. If that write
+fails, the console reports it and the change remains in Ether; update Trakt
+separately. Plex watchlist changes stay in Ether: Ether does not write to
+plex.tv, and a subsequent Plex watchlist sync can restore an item removed in
+Ether. Remove it in Plex as well if you do not want it restored.
+
 ## Organise your Home
 
 Movies, TV and Home put populated **Continue Watching** first, followed by
@@ -365,6 +380,12 @@ A collection can mix movies and TV shows in one Home row. In its editor, choose
 or place it in Home Designer. Each item opens its own movie or show page.
 Viewer access and age limits still apply; Movies and TV library pages keep their
 respective types.
+
+To follow a public TMDB user list, add the **TMDB user list** source and paste
+its list URL or numeric ID. Choose **Source** sort to keep the list order. Ether
+refreshes it on the collection’s chosen schedule and keeps up to 5,000 items.
+Private or missing lists cannot be read. Normal release-date and visibility
+rules still apply to titles in the list.
 
 Movies appear from their theatrical release date. Shows, seasons and episodes
 appear from their air dates. Items with no known release date stay hidden.
@@ -486,6 +507,54 @@ file under these names:
 
 Preview thumbnails appear while a title plays and fill in as playback
 progresses.
+
+## Pre-rolls
+
+A pre-roll is a short video of your own, such as a cinema sting or a seasonal
+greeting, that plays before a movie or an episode. Add them in the owner
+console's **Pre-rolls** page: upload a video, or give the full path of a video
+file on the server (Ether only reads it). Ether converts each clip in the
+background to an MP4 that every app can play directly (H.264 and stereo AAC, at
+most 1080p) and makes a thumbnail. Clips longer than 3 minutes are refused.
+One file can be up to 500 MB, and converted pre-rolls share a 5 GB folder,
+`prerolls` in the data folder.
+
+At most one pre-roll plays before a title, and never when a viewer resumes
+part-way through. Each pre-roll has rules, and all of them must match:
+
+- **Movies and episodes**: which kinds it plays before.
+- **First episode only**: no pre-roll when the next episode plays by itself.
+  Its **Binge gap** also skips the pre-roll when the same viewer finished or
+  stopped something less than that many minutes ago. With **First episode
+  only** off, the pre-roll plays before every episode.
+- **Genres**, **Excluded genres** and **Collections**: checked against the
+  title (an episode uses its show).
+- **Highest rating**: plays only before titles rated at or below it.
+- **Dates**: a yearly window such as 10-01 to 10-31; 12-15 to 01-05 spans the
+  new year.
+- **Viewers**: everyone, only some viewers, or everyone except some.
+- **At home or away** and **Devices** (TV, mobile, desktop, web).
+- **How often**: every time, once a day, once every few hours, or once per
+  title for each viewer.
+
+When several pre-rolls match, the highest **Priority** wins (a tie is chosen at
+random), or choose **Shuffle** to pick at random among all matches. With Plex
+Cinema Trailers on, **Order** puts the pre-roll before or after the trailers.
+The **Test** panel shows, for a viewer, a title and a device, which pre-roll
+would play and why each other one would not. Each pre-roll lists its recent
+plays; a play counts when the video actually starts.
+
+To bring pre-rolls over from Plex Media Server, paste its
+`CinemaTrailersPrerollID` value (Settings › Extras › Cinema Trailers pre-roll
+video) into **Import from Plex**. Paths separated by commas share a priority,
+so one of them plays at random, as in Plex. Paths separated by semicolons play
+in order in Plex; Ether plays one pre-roll per title, so the first group gets
+the highest priority.
+
+Pre-rolls play in every Plex app, in Jellyfin Web and Jellyfin for Android TV,
+and in the Emby apps. Infuse, Swiftfin, Silo, Stremio and DLNA players do not
+ask the server for intros, so they start the title without a pre-roll. In a
+cluster, a pre-roll plays only on the node that converted it.
 
 ## Subtitles from OpenSubtitles
 
@@ -742,6 +811,28 @@ device-approval flow.
 Plex viewers access shared libraries through their own Plex accounts. Refreshing
 Plex sharing removes revoked viewers' access. Stream links stop working when
 the viewer is inactive or the session ends.
+
+## Plex account watch state
+
+In **Viewers**, open a viewer's **Limits & preferences** and connect that
+viewer's Plex account under **Plex account watch state**. Approve the sign-in
+with that same account and enable **Sync My Watch State and Ratings** in Plex.
+Choose **Off**, **Ether → Plex**, **Plex → Ether**, or **Both**. Existing
+connections that already sent changes keep **Ether → Plex** after upgrade;
+connections that were off stay off.
+
+Inbound sync checks for changes every 10 minutes by default; choose 5, 10, 30,
+or 60 minutes. **Import now** uses the same incremental cursor and retry limits.
+Ether backs off when Plex asks it to wait or reports a temporary error. Newer
+watch and rating changes win independently, and imported changes are not sent
+back as new changes. Uploading existing Ether state remains a separate explicit
+**Export current state** action; enabling outbound sync sends future changes.
+
+The section shows the last successful import and send, the next scheduled import,
+any current problem, and unmatched Plex title identifiers for review. Plex account
+sync covers watched or unwatched state and ratings, not resume positions. If the
+account cannot read watch state, the connected credential may lack permission;
+reconnecting or changing consent is not guaranteed to grant that permission.
 
 ## Source interruptions
 

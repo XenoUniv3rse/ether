@@ -10,7 +10,7 @@ import (
 // TestDeliveredMainMigrationBoundary records bounded handle adoption on b69.
 // That candidate includes experience_receipts v5, frontend_tickets v2,
 // frontend_image_grants v6, and capability_headers v3. Account sync is
-// plexwatch v4, state_plexwatch v4, and watchsend v1. rules and watchsync stay
+// plexwatch v5, state_plexwatch v5, and watchsend v1. rules and watchsync stay
 // unregistered. auth_sessions still applies after auth.
 func TestDeliveredMainMigrationBoundary(t *testing.T) {
 	known := store.KnownMigrations()
@@ -25,13 +25,13 @@ func TestDeliveredMainMigrationBoundary(t *testing.T) {
 		"capability_headers":     3,
 		"playback":               4,
 		"capability_tickets":     1,
-		"sessions_source_offers": 1,
+		"sessions_source_offers": 2,
 		"handle_reservations":    2,
 		"viewer_alerts":          2,
 		"viewer_push":            2,
 		"watchlist_episodes":     1,
 		"notify_once":            1,
-		"plexwatch":              4,
+		"plexwatch":              5,
 		"state_plexwatch":        4,
 		"watchsend":              1,
 	}
