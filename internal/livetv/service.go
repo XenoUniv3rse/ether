@@ -30,24 +30,27 @@ CREATE TABLE livetv_policies(user_id INTEGER PRIMARY KEY, data TEXT NOT NULL);`)
 }
 
 type Service struct {
-	authCache        authCache  // provider credentials for the stream path (auth.go)
-	inputRelay       inputRelay // loopback ffmpeg input relay (input_relay.go)
-	probeMu          sync.Mutex
-	probeCache       map[string]liveProbeEntry
-	probeWait        map[string]*liveProbeFlight
-	healthMu         sync.RWMutex
-	channelHealth    map[string]sweepResult
-	sourceMu         sync.Mutex
-	sourceHealth     map[string]streamSourceHealth
-	transMu          sync.RWMutex
-	transcodes       map[string]core.HLSSession
-	o                Options
-	kinds            *KindRegistry
-	policyReads      atomic.Uint64
-	mu               sync.Mutex
-	lineupUnix       int64
-	onChange         func()
-	sessions         map[string]*session
+	authCache     authCache  // provider credentials for the stream path (auth.go)
+	inputRelay    inputRelay // loopback ffmpeg input relay (input_relay.go)
+	probeMu       sync.Mutex
+	probeCache    map[string]liveProbeEntry
+	probeWait     map[string]*liveProbeFlight
+	healthMu      sync.RWMutex
+	channelHealth map[string]sweepResult
+	sourceMu      sync.Mutex
+	sourceHealth  map[string]streamSourceHealth
+	transMu       sync.RWMutex
+	transcodes    map[string]core.HLSSession
+	o             Options
+	kinds         *KindRegistry
+	policyReads   atomic.Uint64
+	mu            sync.Mutex
+	lineupUnix    int64
+	onChange      func()
+	sessions      map[string]*session
+	// watched is when each channel was last tuned or playing (guarded by
+	// mu): only channels watched lately are pre-warmed.
+	watched          map[string]time.Time
 	nextSubscription int64 // guarded by mu
 	ctx              context.Context
 	cancel           context.CancelFunc
@@ -152,8 +155,11 @@ func (s *Service) maintain() {
 				if err != nil {
 					continue
 				}
+				recent := s.recentlyWatched()
 				for _, c := range cs {
-					if !c.Enabled || c.Kind != "virtual" {
+					// A channel nobody has watched lately is not pre-warmed:
+					// warming resolves every scheduled item, around the clock.
+					if !c.Enabled || c.Kind != "virtual" || !recent[c.ID] {
 						continue
 					}
 					ps := Schedule(c, s.o.Now(), s.o.Now().Add(3*time.Minute))
@@ -1099,6 +1105,9 @@ func (s *Service) ImportSource(ctx context.Context, src Source) (Source, error) 
 	if strings.TrimSpace(src.Name) == "" {
 		return src, fmt.Errorf("source needs a name")
 	}
+	if src.Kind == legacyStremioKind {
+		return src, errLegacyStremio
+	}
 	if err := s.keepStoredUploads(ctx, &src); err != nil {
 		return src, err
 	}
@@ -1106,6 +1115,9 @@ func (s *Service) ImportSource(ctx context.Context, src Source) (Source, error) 
 		return src, err
 	}
 	kind, ok := s.kindRegistry().Classify(src)
+	if !ok && strings.HasPrefix(src.Kind, "plugin:") {
+		return src, fmt.Errorf("the plugin behind this source is off or removed; switch it on in Plugins")
+	}
 	if !ok {
 		return src, fmt.Errorf("source needs a playlist or an XMLTV guide")
 	}
@@ -1160,8 +1172,8 @@ func (s *Service) ImportSource(ctx context.Context, src Source) (Source, error) 
 			c.GuideID = previous.GuideID
 			c.GuideSourceID = previous.GuideSourceID
 			c.Transcode = previous.Transcode
-			if src.Kind == "stremio" {
-				c.StreamSources = mergeStremioStreams(c.StreamSources, previous.StreamSources)
+			if fetched.AddonInputs {
+				c.StreamSources = mergeAddonStreams(c.StreamSources, previous.StreamSources)
 			} else {
 				c.StreamSources = mergeImportedStreams(c, previous)
 			}
@@ -1200,7 +1212,7 @@ func (s *Service) ImportSource(ctx context.Context, src Source) (Source, error) 
 	err = tx.Commit()
 	if err == nil {
 		s.bumpLineup()
-		if src.Kind == "stremio" {
+		if fetched.AddonInputs {
 			var newChannels []string
 			for _, c := range stored {
 				if _, existed := oldByID[c.ID]; !existed {

@@ -391,7 +391,7 @@ export interface EtherConfig {
   };
   liveTV?: { logoIndexUrl?: string; healthSweepMinutes?: number };
   subtitles?: {
-    providers?: { id: string; kind: string; name?: string; url?: string; enabled: boolean }[];
+    providers?: { id: string; kind: string; name?: string; enabled: boolean }[];
   };
   openSubtitles: {
     enabled: boolean;
@@ -865,6 +865,7 @@ export interface QualityClient {
 export interface QualityQuestion {
   userId: number;
   clientId?: string;
+  titleKey?: string;
   client?: { product: string; platform?: string; device?: string };
   remote: boolean;
 }

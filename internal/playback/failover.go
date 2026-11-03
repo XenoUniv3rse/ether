@@ -186,6 +186,7 @@ func releasesFailed(n int, lastErr error, allUncached bool) error {
 // nextResolution returns the next release to try: an untried alternate when
 // NZBs can be fetched directly, else a fresh Resolve excluding tried ones.
 func (m *Manager) nextResolution(ctx context.Context, s *session, tried []string, alternates []core.Release) (*core.Resolution, error) {
+	ctx = core.WithIndexerPurpose(ctx, core.IndexerPurposePlayback)
 	if m.deps.FetchNZB != nil {
 		for i, alt := range alternates {
 			if alt.ID == "" || slices.Contains(tried, alt.ID) || !releaseMatchesTitle(alt, s.title) {
@@ -258,7 +259,9 @@ func (m *Manager) openGeneration(ctx context.Context, s *session, res *core.Reso
 	if !releaseMatchesTitle(res.Release, s.title) || !payloadMatchesTitle(res.NZB, s.title) {
 		return nil, fmt.Errorf("%w: release does not match requested episode", core.ErrNotAvailable)
 	}
+	openStarted := time.Now()
 	src, finish, err := m.openSource(ctx, s.sources, res)
+	m.log.Debug("playback candidate open", "session", s.id, "release", res.Release.ID, "duration", time.Since(openStarted), "ok", err == nil)
 	if err != nil {
 		if permanentSourceFailure(err) {
 			m.markBad(res.Release.ID, "invalid source on open")
@@ -657,6 +660,7 @@ func (m *Manager) FailoverInput(ctx context.Context, sessionID, inputURL string,
 // speed-driven down-failover (down: pick a lower-bitrate candidate, never
 // mark the slow release bad).
 type failoverOpts struct {
+	encoder        bool        // encoder shortage: only accept a video-copy candidate
 	stillNeeded    func() bool // speculative recovery rechecks before publishing a swap
 	quietFailure   bool
 	preserveBuffer bool
@@ -682,6 +686,7 @@ func (m *Manager) failoverWith(ctx context.Context, s *session, observed *genera
 		return nil, err
 	}
 	defer unlock(s.failSem)
+	started := time.Now()
 
 	s.mu.Lock()
 	cur, closed, failovers, pinned := s.cur, s.closed, s.failovers, s.sourcePins > 0
@@ -712,13 +717,18 @@ func (m *Manager) failoverWith(ctx context.Context, s *session, observed *genera
 	log := m.log.With("session", s.id, "key", s.ident.key, "at", at)
 	log.Warn("failing over", "release", cur.res.Release.Name, "reason", fo.reason, "down", fo.down)
 	// A provider outage is not evidence that the release itself is invalid.
-	if failure := cur.sourceFailure(); permanentSourceFailure(failure) {
+	if failure := cur.sourceFailure(); !fo.encoder && permanentSourceFailure(failure) {
 		m.markBad(cur.releaseID(), fo.reason)
 	}
 
 	s.mu.Lock()
-	s.tried = append(s.tried, cur.releaseID())
 	tried := slices.Clone(s.tried)
+	if !slices.Contains(tried, cur.releaseID()) {
+		tried = append(tried, cur.releaseID())
+	}
+	if !fo.encoder {
+		s.tried = slices.Clone(tried)
+	}
 	alternates := s.alternates
 	s.mu.Unlock()
 
@@ -751,7 +761,26 @@ func (m *Manager) failoverWith(ctx context.Context, s *session, observed *genera
 			g = nil
 		}
 	}
-	prepared := cur.takeDamageResolution(tried)
+	var prepared *core.Resolution
+	if !fo.encoder {
+		prepared = cur.takeDamageResolution(tried)
+	}
+	copyCandidate := func(next *generation) bool {
+		hls, ok := m.deps.HLSLookup(s.id)
+		if !ok || hls == nil {
+			return false
+		}
+		p, ok := hls.(interface{ SwapWouldCopyVideo(core.MediaInfo) bool })
+		return ok && p.SwapWouldCopyVideo(next.infoSnapshot())
+	}
+	var preferCopy func(*generation) bool
+	if !direct && !fo.encoder {
+		if hls, ok := m.deps.HLSLookup(s.id); ok && hls != nil {
+			if p, ok := hls.(interface{ SwapWouldCopyVideo(core.MediaInfo) bool }); ok {
+				preferCopy = func(next *generation) bool { return p.SwapWouldCopyVideo(next.infoSnapshot()) }
+			}
+		}
+	}
 	if g == nil && !direct && prepared == nil {
 		// Any healthy alternate continues an encoder session, so open
 		// several at once instead of stalling through each broken one.
@@ -768,29 +797,46 @@ func (m *Manager) failoverWith(ctx context.Context, s *session, observed *genera
 				return nil
 			}
 		}
-		g, failed, lastErr = m.raceAlternates(ctx, s, tried, alternates, fallback, width, accept)
+		if fo.encoder {
+			accept = func(next *generation) error {
+				if !copyCandidate(next) {
+					return fmt.Errorf("replacement needs video encoding: %w", core.ErrNotAvailable)
+				}
+				return nil
+			}
+		}
+		g, failed, lastErr = m.raceAlternates(ctx, s, tried, alternates, fallback, width, accept, preferCopy)
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
 		tried = append(tried, failed...)
 	}
+	var copySearchCtx context.Context
 	for attempt := 0; g == nil && attempt < m.opts.MaxAttempts; attempt++ {
+		attemptCtx := ctx
+		if copySearchCtx != nil {
+			attemptCtx = copySearchCtx
+		}
 		res := prepared
 		prepared = nil
 		var err error
 		if res == nil {
-			res, err = m.nextResolution(ctx, s, tried, alternates)
+			res, err = m.nextResolution(attemptCtx, s, tried, alternates)
 		}
 		if err != nil {
 			lastErr = err
 			break
 		}
-		g, err = m.openGeneration(ctx, s, res, fallback)
+		g, err = m.openGeneration(attemptCtx, s, res, fallback)
 		if err == nil {
-			if perr := m.preflightSwap(ctx, s, g); perr != nil {
+			if perr := m.preflightSwap(attemptCtx, s, g); perr != nil {
 				m.dropGeneration(g)
 				g, err = nil, perr
 			}
+		}
+		if err == nil && fo.encoder && !copyCandidate(g) {
+			m.dropGeneration(g)
+			g, err = nil, fmt.Errorf("replacement needs video encoding: %w", core.ErrNotAvailable)
 		}
 		// Byte-range clients retain the original container headers and
 		// offsets. Only an exact-size repost may replace a non-spliceable
@@ -826,6 +872,22 @@ func (m *Manager) failoverWith(ctx context.Context, s *session, observed *genera
 				err = fmt.Errorf("down-failover candidate is not lower bitrate: %w", core.ErrNotAvailable)
 			}
 		}
+		if err == nil && preferCopy != nil && !preferCopy(g) {
+			if fallbackGen == nil {
+				fallbackGen = g
+				var cancel context.CancelFunc
+				copySearchCtx, cancel = context.WithTimeout(ctx, 500*time.Millisecond)
+				defer cancel()
+			} else {
+				m.dropGeneration(g)
+			}
+			g = nil
+			tried = append(tried, res.Release.ID)
+			if len(res.Alternates) > 0 {
+				alternates = res.Alternates
+			}
+			continue
+		}
 		if err == nil {
 			break
 		}
@@ -857,8 +919,11 @@ func (m *Manager) failoverWith(ctx context.Context, s *session, observed *genera
 	if g == nil && fallbackGen != nil {
 		// No exact-size repost: do not splice. Swap anyway and restart
 		// the client as a zero-encode remux at the mapped time.
-		g, fallbackGen, remuxSwitch = fallbackGen, nil, true
-		log.Warn("no exact-size direct-play replacement; switching to remux", "release", g.res.Release.Name)
+		g, fallbackGen = fallbackGen, nil
+		if direct {
+			remuxSwitch = true
+			log.Warn("no exact-size direct-play replacement; switching to remux", "release", g.res.Release.Name)
+		}
 	}
 	if fallbackGen != nil {
 		m.dropGeneration(fallbackGen)
@@ -891,9 +956,101 @@ func (m *Manager) failoverWith(ctx context.Context, s *session, observed *genera
 		remuxSwitch = false
 	}
 
+	// Take the replacement pin before it is handed to the encoder. Stop can
+	// race the handoff; until publication this function owns the extra pin.
+	m.pinLive(g.releaseID())
+	newInfo := g.infoSnapshot()
+	if hasHLS {
+		var seekAt time.Time
+		if source, ok := hls.(core.RecoveryBufferSource); ok {
+			seekAt = source.RecoveryBuffer().SeekAt
+		}
+		if position, ok := hls.(core.PlaybackPosition); ok && fo.followPlayer {
+			// Read only now: the player may have sought while candidates
+			// were being opened.
+			requested := position.RequestedPosition()
+			log.Info("failover follows player", "requested", requested)
+			at = requested
+		}
+		target := m.alignForFailover(ctx, s, cur, g, at)
+		swap := hls.SwapInput
+		if buffered, ok := hls.(core.BufferedInputSwapper); ok && fo.preserveBuffer && target == at {
+			if source, ok := hls.(core.RecoveryBufferSource); ok {
+				boundary := source.RecoveryBuffer().ReadyUntil
+				// Check the handoff itself, not only a zero playhead where PAL
+				// speed corrections and different edits can happen to agree.
+				if boundary > at && boundary < newInfo.Duration && m.alignForFailover(ctx, s, cur, g, boundary) == boundary {
+					swap = buffered.SwapInputBuffered
+				}
+			}
+		}
+		swapCtx, cancelSwap := context.WithCancel(ctx)
+		stopCancel := context.AfterFunc(s.stopCtx, cancelSwap)
+		err := swap(swapCtx, m.urlFor(g), newInfo, target)
+		if err == nil {
+			if ready, ok := hls.(core.ReplacementOutputWaiter); ok {
+				readyCtx, cancelReady := context.WithTimeout(swapCtx, 30*time.Second)
+				err = ready.WaitForReplacementOutput(readyCtx, m.urlFor(g))
+				if err == nil {
+					elapsed := time.Since(started)
+					m.swapLatency.observe(elapsed)
+					log.Info("replacement output contiguous", "release", g.releaseID(), "elapsed", elapsed, "sourceReserveTarget", m.swapLatency.target())
+					// One old source stays available briefly after the first
+					// contiguous replacement output, without a second encoder.
+					timer := time.NewTimer(time.Second)
+					select {
+					case <-timer.C:
+					case <-readyCtx.Done():
+						err = readyCtx.Err()
+					}
+					timer.Stop()
+					if err == nil {
+						err = ready.WaitForReplacementOutput(readyCtx, m.urlFor(g))
+					}
+				}
+				cancelReady()
+			}
+		}
+		stopCancel()
+		cancelSwap()
+		if errors.Is(err, core.ErrReplacementSuperseded) {
+			// A seek abandons the old boundary. Do not roll it back.
+			if state, ok := hls.(core.InputSwapState); ok {
+				switch state.CurrentSwapInput() {
+				case m.urlFor(g):
+					err = nil
+				case m.urlFor(cur):
+					m.dropGeneration(g)
+					m.unpinLive(g.releaseID())
+					return cur, nil
+				}
+			}
+		}
+		if err != nil {
+			changed := false
+			if state, ok := hls.(core.InputSwapState); ok {
+				changed = state.CurrentSwapInput() == m.urlFor(g)
+			}
+			rolledBack := changed && m.rollbackHLS(s, hls, cur, g, at, seekAt)
+			m.dropGeneration(g)
+			m.unpinLive(g.releaseID())
+			if rolledBack {
+				s.resetSpeed(m.now(), m.opts.SpeedGrace)
+				if fo.down {
+					m.noteFailedDownFailover(s, tried)
+				}
+				return cur, nil
+			}
+			if changed {
+				m.Stop(s.id) // never leave an encoder pointed at a revoked input
+			}
+			log.Error("hls input swap failed", "err", err)
+			return cur, fmt.Errorf("playback: swap hls input: %w", err)
+		}
+	}
+
 	// Pin before publishing g: a Stop right after the swap unpins s.cur,
 	// and must find this pin rather than leave one taken later behind.
-	m.pinLive(g.releaseID())
 	s.mu.Lock()
 	if s.closed {
 		s.mu.Unlock()
@@ -910,6 +1067,9 @@ func (m *Manager) failoverWith(ctx context.Context, s *session, observed *genera
 		s.downFailovers++
 	}
 	// Racers that failed after the winner may already have been recorded.
+	if fo.encoder {
+		tried = []string{cur.releaseID()}
+	}
 	for _, id := range tried {
 		if !slices.Contains(s.tried, id) {
 			s.tried = append(s.tried, id)
@@ -930,32 +1090,6 @@ func (m *Manager) failoverWith(ctx context.Context, s *session, observed *genera
 	m.saveResume(ctx, s, g)
 	s.resetSpeed(m.now(), m.opts.SpeedGrace)
 
-	newInfo := g.infoSnapshot()
-	if hasHLS {
-		if position, ok := hls.(core.PlaybackPosition); ok && fo.followPlayer {
-			// Read only now: the player may have sought while candidates
-			// were being opened.
-			requested := position.RequestedPosition()
-			log.Info("failover follows player", "requested", requested)
-			at = requested
-		}
-		target := m.alignForFailover(ctx, s, cur, g, at)
-		swap := hls.SwapInput
-		if buffered, ok := hls.(core.BufferedInputSwapper); ok && fo.preserveBuffer && target == at {
-			if source, ok := hls.(core.RecoveryBufferSource); ok {
-				boundary := source.RecoveryBuffer().ReadyUntil
-				// Check the handoff itself, not only a zero playhead where PAL
-				// speed corrections and different edits can happen to agree.
-				if boundary > at && boundary < newInfo.Duration && m.alignForFailover(ctx, s, cur, g, boundary) == boundary {
-					swap = buffered.SwapInputBuffered
-				}
-			}
-		}
-		if err := swap(ctx, m.urlFor(g), newInfo, target); err != nil {
-			log.Error("hls input swap failed", "err", err)
-			return g, fmt.Errorf("playback: swap hls input: %w", err)
-		}
-	}
 	if fo.down {
 		m.emitEvent("downfailover", s, nil)
 	} else {
@@ -966,6 +1100,52 @@ func (m *Manager) failoverWith(ctx context.Context, s *session, observed *genera
 		return g, errRequireRemux
 	}
 	return g, nil
+}
+
+// rollbackHLS only returns to a source that is still open, compatible and
+// responds at the current playback window. It never revives a failed source
+// or a timeline abandoned by a seek.
+func (m *Manager) rollbackHLS(s *session, hls core.HLSSession, old, replacement *generation, at time.Duration, seekAt time.Time) bool {
+	if s.isClosed() || s.current() != old || old.sourceFailure() != nil || old.articleMissing.Load() || !old.acquire() {
+		return false
+	}
+	defer old.release()
+	ctx, cancel := context.WithTimeout(s.stopCtx, 3*time.Second)
+	defer cancel()
+	if m.preflightSwap(ctx, s, old) != nil {
+		return false
+	}
+	if buffer, ok := hls.(core.RecoveryBufferSource); ok {
+		b := buffer.RecoveryBuffer()
+		if b.SeekAt != seekAt || m.alignForFailover(ctx, s, replacement, old, b.Position) != b.Position || m.alignForFailover(ctx, s, replacement, old, b.ReadyUntil) != b.ReadyUntil {
+			return false
+		}
+		at = b.Position
+	}
+	tm := old.timeMapSnapshot()
+	off := tm.KeyframeOffsetAt(at)
+	if off < 0 || off >= old.src.Size() {
+		return false
+	}
+	p := make([]byte, min(int64(32<<10), old.src.Size()-off))
+	var n int
+	var err error
+	if reader, ok := old.src.(core.PrefetchReaderAt); ok {
+		n, err = reader.ReadAtPrefetchContext(ctx, p, off)
+	} else if reader, ok := old.src.(core.ContextReaderAt); ok {
+		n, err = reader.ReadAtContext(ctx, p, off)
+	} else {
+		return false
+	}
+	if err != nil || n != len(p) || ctx.Err() != nil || s.isClosed() || s.current() != old {
+		return false
+	}
+	if buffered, ok := hls.(core.BufferedInputSwapper); ok {
+		err = buffered.SwapInputBuffered(ctx, m.urlFor(old), old.infoSnapshot(), at)
+	} else {
+		err = hls.SwapInput(ctx, m.urlFor(old), old.infoSnapshot(), at)
+	}
+	return err == nil
 }
 
 // alignForFailover maps a failover timestamp between releases: through

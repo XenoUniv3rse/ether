@@ -12,6 +12,7 @@ import (
 
 	"github.com/braedonsaunders/ether/internal/core"
 	"github.com/braedonsaunders/ether/internal/recommend"
+	"github.com/braedonsaunders/ether/internal/reqmemo"
 	"github.com/braedonsaunders/ether/internal/schedule"
 )
 
@@ -399,11 +400,20 @@ func (e *Engine) runGenerator(g generator, b *builder) (rows []*candRow) {
 
 // buildTaste builds only the taste model (owner views, PersonalScorer).
 func (e *Engine) buildTaste(ctx context.Context, user core.User) (*Taste, map[core.RatingKey]int, error) {
-	in, _, err := e.gatherTaste(ctx, user)
-	if err != nil {
-		return nil, nil, err
+	type result struct {
+		taste *Taste
+		shown map[core.RatingKey]int
 	}
-	return buildTaste(in), in.shownDays, nil
+	// The same detail request scores several related hubs. Reuse its evidence
+	// only within that request and viewer, never across requests or engines.
+	r, err := reqmemo.Do(ctx, fmt.Sprintf("personalize:taste:%p:%#v", e, user), func() (result, error) {
+		in, _, err := e.gatherTaste(ctx, user)
+		if err != nil {
+			return result{}, err
+		}
+		return result{taste: buildTaste(in), shown: in.shownDays}, nil
+	})
+	return r.taste, r.shown, err
 }
 
 // gatherTaste collects a viewer's evidence: history, statuses, plays,
@@ -923,6 +933,7 @@ func collectionRowID(row string) string {
 
 // ownerCandidate adapts an owner collection row for this screen.
 func (e *Engine) ownerCandidate(cr core.CollectionRow, section core.MediaType, user *core.User) *candRow {
+	const collectionMinItems = 3
 	if section == "" && !cr.HomeRow || section != "" && !cr.SectionRow {
 		return nil
 	}
@@ -930,6 +941,17 @@ func (e *Engine) ownerCandidate(cr core.CollectionRow, section core.MediaType, u
 		return nil
 	}
 	hub := cr.Hub
+	if section != "" {
+		hub.Items = make([]core.Title, 0, len(cr.Hub.Items))
+		for _, item := range cr.Hub.Items {
+			if item.Type == section {
+				hub.Items = append(hub.Items, item)
+			}
+		}
+		if len(hub.Items) < collectionMinItems {
+			return nil
+		}
+	}
 	if hub.ID == "" {
 		hub.ID = "collection." + cr.CollectionID
 	}
@@ -950,6 +972,6 @@ func (e *Engine) ownerCandidate(cr core.CollectionRow, section core.MediaType, u
 	desc := hub.Title
 	c := &candRow{kind: KindCollectionPrefix + cr.CollectionID, id: hub.ID, title: hub.Title,
 		reason: "Owner collection “" + desc + "”, targeted at this viewer.", context: "collection",
-		source: core.RowSourceOwner, items: items, minItems: 3, keepOrder: true, scale: 1, hub: &hub}
+		source: core.RowSourceOwner, items: items, minItems: collectionMinItems, keepOrder: true, scale: 1, hub: &hub}
 	return c
 }

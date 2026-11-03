@@ -33,11 +33,14 @@ func (s *Session) swapInput(ctx context.Context, inputURL string, info core.Medi
 	}
 	// Decode a tiny bounded sample outside the session lock. Only proven
 	// embedded side bars matching the existing picture are removed.
+	s.mu.Lock()
+	before := s.recoveryBufferLocked()
+	previousInput := s.input
+	s.mu.Unlock()
 	sampleAt := at
 	if preserve {
-		b := s.RecoveryBuffer()
-		if b.ReadyUntil > sampleAt && b.ReadyUntil < info.Duration {
-			sampleAt = b.ReadyUntil
+		if before.ReadyUntil > sampleAt && before.ReadyUntil < info.Duration {
+			sampleAt = before.ReadyUntil
 		}
 	}
 	crop, err := s.swapPictureCrop(ctx, inputURL, info, sampleAt)
@@ -51,6 +54,9 @@ func (s *Session) swapInput(ctx context.Context, inputURL string, info core.Medi
 	defer s.mu.Unlock()
 	if s.closed {
 		return errors.New("transcode: session closed")
+	}
+	if s.recoverySeekAt != before.SeekAt || s.input != previousInput {
+		return core.ErrReplacementSuperseded
 	}
 	// The caller verifies identity alignment, including the buffered boundary.
 	// Different trailing credits or container rounding need not discard media.
@@ -122,6 +128,8 @@ func (s *Session) swapInput(ctx context.Context, inputURL string, info core.Medi
 	s.input = inputURL
 	s.info = info
 	s.decision = next
+	s.swapBoundary = seg
+	s.swapSeekAt = s.recoverySeekAt
 	s.endSeg = -1
 	s.failures = 0
 	s.failErr = nil
@@ -142,6 +150,18 @@ func (s *Session) CheckSwap(info core.MediaInfo) error {
 		return nil
 	}
 	return s.contract.check(info, s.m.feat)
+}
+
+// SwapWouldCopyVideo is a preference only; CheckSwap remains the admission
+// check. It evaluates the probed stream against the delivered contract.
+func (s *Session) SwapWouldCopyVideo(info core.MediaInfo) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if info.Estimated || info.Video() == nil || s.closed {
+		return false
+	}
+	d := adaptToContract(s.audioMatchBaseDecision(), s.info, info, s.container, s.contract)
+	return d.VideoCopy && !d.BurnSubtitles
 }
 
 // adaptDecision keeps a failover's output compatible with what the client

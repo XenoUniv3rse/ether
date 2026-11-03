@@ -41,6 +41,7 @@ export interface TitleDetail extends TitleCard {
   /** YYYY-MM-DD: first air date or theatrical release. */
   releaseDate?: string;
   homeReleaseDate?: string;
+  homeReleaseAgeAdmitted?: boolean;
   lastAirDate?: string;
   seasonCount?: number;
   episodeCount?: number;
@@ -125,13 +126,6 @@ export type Source =
   | { kind: "letterboxdList"; url: string }
   | { kind: "mdblist"; url: string }
   | { kind: "anilistList"; url: string }
-  | {
-      kind: "stremioCatalog";
-      url: string;
-      list: string;
-      mediaType: "movie" | "show";
-      maxItems?: number;
-    }
   | { kind: "stevenlu"; list: StevenLuList }
   | { kind: "titles"; keys: string[] };
 

@@ -6,6 +6,7 @@ import (
 	"github.com/braedonsaunders/ether/internal/core"
 	"log/slog"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -65,27 +66,36 @@ type sessionInput struct {
 	inputLease         core.EncoderInputLease
 	inputHeaders       map[string]string
 	input              string
-	info               core.MediaInfo
-	decision           core.Decision
-	forceCPU           bool // hardware encoder failed; stay on CPU
-	noPause            bool // platform cannot suspend ffmpeg
-	inputFailed        bool // exhausted this input; HTTP retries cannot restart it
+	// clockInput is the input whose run wrote the retained fMP4 clock. Only a
+	// run reading that same input may be forced onto it (a short-video tail
+	// restart); a swapped-in source must match the clock on its own or be refused.
+	clockInput  string
+	info        core.MediaInfo
+	decision    core.Decision
+	forceCPU    bool // hardware encoder failed; stay on CPU
+	noPause     bool // platform cannot suspend ffmpeg
+	inputFailed bool // exhausted this input; HTTP retries cannot restart it
 	// contract is the delivered video a static-header session keeps
 	// across failovers; nil for every other session (contract.go).
 	contract       *videoContract
 	inputCrop      *pictureCrop
 	pictureSamples map[string]*pictureCrop
 	audioMatch     audioMatchState
+	swapBoundary   int
+	swapSeekAt     time.Time
 }
 
 // sessionEncoding owns one aspect of the session. Fields are guarded by Session.mu.
 type sessionEncoding struct {
-	starting <-chan struct{}
-	reaping  <-chan struct{} // previous encoder exit barrier; waited without mu
-	resumeAt int             // segment to restart at after a throttle stop; -1 none
-	cur      *run
-	runSeq   int
-	endSeg   int // last segment of the input once a run hit EOF; -1 unknown
+	starting       <-chan struct{}
+	pendingStart   bool
+	pendingSegment int
+	pendingTrack   int
+	reaping        <-chan struct{} // previous encoder exit barrier; waited without mu
+	resumeAt       int             // segment to restart at after a throttle stop; -1 none
+	cur            *run
+	runSeq         int
+	endSeg         int // last segment of the input once a run hit EOF; -1 unknown
 	// lastReal is the last segment a run actually produced (not a GOP
 	// alias). emptyAt is the startSeg of the last run that published
 	// nothing. emptyRuns counts those in a row so a seek that lands on
@@ -171,6 +181,7 @@ type run struct {
 	rtxConfirmed atomic.Bool
 
 	seq        int
+	reason     string
 	startSeg   int
 	spec       runSpec
 	proc       Process
@@ -275,6 +286,46 @@ func (s *Session) Progress() Progress {
 	r.progressMu.Lock()
 	defer r.progressMu.Unlock()
 	return r.progress
+}
+
+// EncoderStatus snapshots the active run, including adaptive copy-to-encode
+// transitions that do not change the initially negotiated decision.
+func (s *Session) EncoderStatus() *core.EncoderStatus {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	r := s.cur
+	if r == nil {
+		return nil
+	}
+	r.progressMu.Lock()
+	p := r.progress
+	r.progressMu.Unlock()
+	phase := "starting"
+	switch {
+	case r.finished || r.stopped:
+		phase = "finished"
+	case r.paused:
+		phase = "paused"
+	case r.produced > 0 || !p.Updated.IsZero():
+		phase = "running"
+	}
+	processor, filters := "none", "none"
+	if !r.spec.Decision.VideoCopy {
+		processor, filters = "cpu", "cpu"
+		if r.hw {
+			processor = "gpu"
+		}
+		v := r.spec.Info.Video()
+		graph := planVideo(r.spec, v).graph
+		for _, f := range []string{"tonemap_cuda", "scale_cuda", "scale_vt", "tonemap_vaapi", "scale_vaapi", "vpp_qsv"} {
+			if strings.Contains(graph, f+"=") {
+				filters = "gpu"
+				break
+			}
+		}
+	}
+	b := s.recoveryBufferLocked()
+	return &core.EncoderStatus{Decision: r.spec.Decision, Processor: processor, Filters: filters, Phase: phase, Reason: r.reason, StartedAt: r.started, UpdatedAt: p.Updated, Speed: p.Speed, OutputTime: p.OutTime, ReadyUntil: b.ReadyUntil}
 }
 
 // HWAccelerated reports whether the current run encodes on hardware.

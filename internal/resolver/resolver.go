@@ -345,7 +345,8 @@ func (s *Service) qualityCfg() config.Quality {
 	return s.quality
 }
 
-// profileAllowsCam reports whether any quality profile plays cinema recordings.
+// profileAllowsCam reports whether any quality profile plays pre-release
+// copies (cinema recordings, screeners).
 func (s *Service) profileAllowsCam() bool {
 	for _, p := range s.qualityCfg().Profiles {
 		if p.AllowCam {
@@ -504,9 +505,9 @@ func searchRequestFor(t *core.Title) core.SearchRequest {
 			title = t.Title
 		}
 		return core.SearchRequest{Type: core.TypeEpisode, IDs: ids, Title: title, OriginalTitle: t.ShowOriginalTitle, Year: t.ShowYear, Season: season, Episode: episode, EpisodeTitle: t.Title,
-			AbsoluteEpisode: t.AbsoluteEpisode, Anime: isAnime(t), AlternativeTitles: t.ShowAlternativeTitles}
+			AbsoluteEpisode: t.AbsoluteEpisode, Anime: isAnime(t), AlternativeTitles: t.ShowAlternativeTitles, Released: t.Released}
 	}
-	return core.SearchRequest{Type: core.TypeMovie, IDs: t.IDs, Title: t.Title, OriginalTitle: t.OriginalTitle, Year: t.Year, Anime: isAnime(t), AlternativeTitles: t.AlternativeTitles}
+	return core.SearchRequest{Type: core.TypeMovie, IDs: t.IDs, Title: t.Title, OriginalTitle: t.OriginalTitle, Year: t.Year, Anime: isAnime(t), AlternativeTitles: t.AlternativeTitles, Released: t.Released}
 }
 
 // isAnime reports a title whose releases follow anime conventions
@@ -603,6 +604,9 @@ func (s *Service) Resolve(ctx context.Context, req core.ResolveRequest) (*core.R
 
 func (s *Service) resolve(ctx context.Context, req core.ResolveRequest, profile core.QualityProfile) (*core.Resolution, error) {
 	started := time.Now()
+	// An indexer that was paused or did not answer leaves the search
+	// incomplete; nothing found then does not prove the title unavailable.
+	ctx, coverage := core.WithSearchCoverage(ctx)
 	t := req.Title
 	trace := Trace{TitleKey: t.Key, TitleName: consoleTitleName(t), Profile: profile.Name, At: s.now(), Failover: len(req.Exclude) > 0}
 	trace.Limits = &TraceLimits{ProfileMinHeight: profile.MinHeight, ProfileMaxHeight: profile.MaxHeight, ProfileConfiguredMaxHeight: traceConfiguredMaxHeight(profile), ClientMaxHeight: req.Client.MaxHeight, ClientMaxBitrateKbps: req.Client.MaxBitrateKbps, AllowHDR: profile.AllowHDR, AllowDolbyVision: profile.AllowDolbyVision}
@@ -639,6 +643,8 @@ func (s *Service) resolve(ctx context.Context, req core.ResolveRequest, profile 
 			trace.Discovery = append(trace.Discovery, DiscoveryTrace{Path: "feed", Count: len(discovered)})
 		}
 		early.arrived(discovered)
+		early.startFeed()
+
 		// A locally verified feed answer can avoid a search. A slow feed
 		// gets only 100ms head start, then keeps checking alongside search.
 		if len(discovered) > 0 && !early.disabled {
@@ -654,6 +660,12 @@ func (s *Service) resolve(ctx context.Context, req core.ResolveRequest, profile 
 						if checkErr == nil && idx >= 0 {
 							deadline.Stop()
 							tick.Stop()
+							// A feed hit bypasses the ordinary search. For an admitted
+							// warm-up, use the same bounded cache refill as a reused
+							// remembered source so the detail picker can find versions.
+							if core.IndexerPurpose(ctx) == core.IndexerPurposeWarmup {
+								s.RefillSearchCache(t)
+							}
 							trace.Winner = candidates[idx].rel.ID
 							s.setAvailability(ctx, int64(t.Key), true, s.searchTTL())
 							return s.resolution(t.Key, candidates, idx, payload, &trace), nil
@@ -796,7 +808,7 @@ func (s *Service) resolve(ctx context.Context, req core.ResolveRequest, profile 
 		}
 		// Client/profile restrictions and temporary source skips do not prove
 		// that the title is unavailable for everyone.
-		if !clientRejected && len(req.Exclude) == 0 && searchErr == nil {
+		if !clientRejected && len(req.Exclude) == 0 && searchErr == nil && !coverage.Incomplete() {
 			s.setAvailability(ctx, int64(t.Key), false, s.cooloffFor(t))
 		}
 		if isFreshRelease(t, s.now()) {
@@ -943,7 +955,7 @@ func (s *Service) resolve(ctx context.Context, req core.ResolveRequest, profile 
 		return nil, failed(nil)
 	}
 	// A capped warm-up did not check every candidate, so it proves nothing.
-	if !clientRejected && len(req.Exclude) == 0 && len(cands) <= maxHealthAttempts && !(core.IsSpeculative(ctx) && len(cands) > speculativeHealthAttempts) {
+	if !clientRejected && len(req.Exclude) == 0 && len(cands) <= maxHealthAttempts && !(core.IsSpeculative(ctx) && len(cands) > speculativeHealthAttempts) && !coverage.Incomplete() {
 		s.setAvailability(ctx, int64(t.Key), false, min(s.cooloff(), failedHealthTTL))
 	}
 	trace.Err = "no healthy candidates"
@@ -1000,7 +1012,13 @@ func (s *Service) searchRescue(ctx context.Context, req core.SearchRequest) ([]c
 	if ok && s.now().Before(e.expires) {
 		return append([]core.Release(nil), e.results...), "cache"
 	}
-	results, err := rs.SearchRescue(ctx, req)
+	rctx, coverage := core.WithSearchCoverage(ctx)
+	results, err := rs.SearchRescue(rctx, req)
+	if coverage.Incomplete() {
+		// An indexer was paused or did not answer: whatever came back
+		// neither proves absence nor stands as the fleet's answer.
+		core.NoteSearchIncomplete(ctx)
+	}
 	if err != nil {
 		return nil, ""
 	}
@@ -1009,6 +1027,9 @@ func (s *Service) searchRescue(ctx context.Context, req core.SearchRequest) ([]c
 			results[i].Info = releaseparse.Parse(results[i].Name)
 		}
 		results[i] = withTarget(results[i], req)
+	}
+	if coverage.Incomplete() {
+		return results, "live-complete"
 	}
 	s.mu.Lock()
 	now := s.now()
@@ -1062,6 +1083,10 @@ func (s *Service) searchCached(ctx context.Context, req core.SearchRequest, fres
 	if ok && !fresh && s.now().Before(e.expires) {
 		return append([]core.Release(nil), e.results...), true, nil
 	}
+	coverage := core.SearchCoverageFrom(ctx)
+	if coverage == nil {
+		ctx, coverage = core.WithSearchCoverage(ctx)
+	}
 	partial := false
 	if early, ok := ctx.Value(searchPreparationKey{}).(*searchPreparation); ok {
 		if streaming, ok := s.indexer.(core.StreamingIndexer); ok {
@@ -1076,9 +1101,11 @@ func (s *Service) searchCached(ctx context.Context, req core.SearchRequest, fres
 		return nil, false, err
 	}
 	s.normalizeSearchResults(req, results)
-	if partial {
+	if partial || coverage.Incomplete() {
+		// Never cache an incomplete fleet answer: an early Play start,
+		// or an indexer that was paused or did not answer.
 		return results, false, nil
-	} // Never cache an incomplete fleet answer.
+	}
 	s.storeSearchCache(req, results)
 	return results, false, nil
 }
@@ -1199,8 +1226,8 @@ func (s *Service) rankCandidates(ctx context.Context, req core.ResolveRequest, s
 				// download or mobile profile still plays for others.
 				"size too small for runtime", "size too large for runtime":
 				clientRejected = true
-			case "cam not allowed":
-				// Another profile may allow cinema recordings. When none
+			case "cam not allowed", "screener not allowed":
+				// Another profile may allow pre-release copies. When none
 				// do, the title is unavailable for everyone.
 				if s.profileAllowsCam() {
 					clientRejected = true
@@ -1434,7 +1461,9 @@ func rejectIdentity(rel core.Release, t *core.Title, sreq core.SearchRequest, ca
 		releaseparse.TitleMatches(rel.Info, wantTitle) ||
 		(!isEpisode && t.OriginalTitle != "" && releaseparse.TitleMatches(rel.Info, t.OriginalTitle)) ||
 		(isEpisode && t.ShowOriginalTitle != "" && releaseparse.TitleMatches(rel.Info, t.ShowOriginalTitle)) ||
-		matchesAlternativeTitle(rel.Info, sreq.AlternativeTitles)
+		matchesAlternativeTitle(rel.Info, sreq.AlternativeTitles) ||
+		(!isEpisode && matchesAlternativeTitle(rel.Info, t.AlternativeTitles)) ||
+		(isEpisode && matchesAlternativeTitle(rel.Info, t.ShowAlternativeTitles))
 	if titleOK && !idMatch && regionTagConflicts(rel.Info.Title, wantTitle, t.Countries) {
 		titleOK = false
 	}
@@ -1793,7 +1822,7 @@ func (s *Service) score(rel core.Release, profile core.QualityProfile, t *core.T
 	// Source / codec / audio preference order.
 	if v := indexScore(profile.PreferredSources, info.Source, 10); v > 0 {
 		sc += v
-	} else if info.Source != core.SourceUnknown && info.Source != core.SourceCam {
+	} else if info.Source != core.SourceUnknown && info.Source != core.SourceCam && info.Source != core.SourceScreener {
 		sc += 3
 	}
 	sc += indexScore(profile.PreferredCodecs, info.VideoCodec, 6)

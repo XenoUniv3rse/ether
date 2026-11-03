@@ -21,6 +21,7 @@ import (
 	"os"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/braedonsaunders/ether/internal/clusterbus"
@@ -227,8 +228,10 @@ type Manager struct {
 	resumeSaveCond      *sync.Cond
 	reg                 *registry // nil on a standalone server
 	// titleInval broadcasts title invalidations (nil standalone).
-	titleInval *clusterbus.Invalidator
-	bufs       sync.Pool
+	titleInval           *clusterbus.Invalidator
+	bufs                 sync.Pool
+	swapLatency          swapLatencyWindow
+	reserveConfigVersion atomic.Uint64
 
 	cfgMu sync.RWMutex
 	cfg   config.Config
@@ -584,11 +587,24 @@ var errDraining = fmt.Errorf("%w: this server is restarting for an update; try a
 // SetConfig applies a new config snapshot (stream limits).
 func (m *Manager) SetConfig(cfg config.Config) {
 	m.cfgMu.Lock()
+	previousReadAhead := m.cfg.Cache.PlaybackReadAhead()
+	previousDebridReadAhead := m.cfg.Debrid.ReadAheadChunks
+	previousDebridChunk := m.cfg.Debrid.ChunkBytes
 	m.cfg = cfg
+	m.reserveConfigVersion.Add(1)
 	m.cfgMu.Unlock()
 	m.mu.Lock()
 	m.warm = map[identity]*warmEntry{}
+	var sessions []*session
+	if cfg.Cache.Mode == "off" || cfg.Cache.PlaybackReadAhead() < previousReadAhead || cfg.Debrid.ReadAheadChunks != previousDebridReadAhead || cfg.Debrid.ChunkBytes != previousDebridChunk {
+		for _, s := range m.sessions {
+			sessions = append(sessions, s)
+		}
+	}
 	m.mu.Unlock()
+	for _, s := range sessions {
+		s.reserve.stop()
+	}
 }
 
 func (m *Manager) config() config.Config {
@@ -769,7 +785,7 @@ func (m *Manager) prepareOwnedWithin(ctx context.Context, wait time.Duration, us
 		}
 		m.lastCaps[user.ID] = caps
 		if s := m.byIdent[id]; s != nil {
-			if s.exact == exact && (prefer == "" || s.current().releaseID() == prefer) {
+			if s.exact == exact && (prefer == "" || s.current().releaseID() == prefer || (!exact && s.prefer == prefer)) {
 				now := m.now()
 				if !m.sessionCountsForLimit(s, now) {
 					cfg := m.config()
@@ -942,7 +958,7 @@ func (m *Manager) prepare(ctx context.Context, id identity, user *core.User, cap
 		// Concurrent flights with different exactness must never let an exact
 		// caller inherit a fallback-enabled session, even for the same release.
 		current := existing.current()
-		if existing.exact != exact || (exact && (current == nil || current.releaseID() != prefer)) {
+		if existing.exact != exact || (prefer != "" && (current == nil || (current.releaseID() != prefer && (exact || existing.prefer != prefer)))) {
 			return nil, core.ErrNotAvailable
 		}
 		return existing, nil
@@ -1051,7 +1067,33 @@ func (m *Manager) Session(id string) (*core.PlaySession, bool) {
 	if s == nil {
 		return nil, false
 	}
-	return s.snapshot(m.now()), true
+	return m.snapshotWithEncoder(s, m.now()), true
+}
+
+func (m *Manager) snapshotWithEncoder(s *session, now time.Time) *core.PlaySession {
+	ps := s.snapshot(now)
+	if m.deps.HLSLookup == nil {
+		return ps
+	}
+	hls, ok := m.deps.HLSLookup(s.id)
+	if !ok || hls == nil {
+		return ps
+	}
+	if source, ok := hls.(interface{ EncoderStatus() *core.EncoderStatus }); ok {
+		ps.Encoder = source.EncoderStatus()
+		if e := ps.Encoder; e != nil {
+			s.mu.Lock()
+			if !s.viewerAt.IsZero() {
+				p := s.viewerPosition
+				e.PlayerPosition = &p
+			}
+			e.RecoveryReason, e.Runway = s.encoderRecoveryReason, s.encoderRunway
+			s.mu.Unlock()
+			ps.Decision, ps.DecisionVideoCopy, ps.DecisionAudioCopy = e.Decision.Kind, e.Decision.VideoCopy, e.Decision.AudioCopy
+			ps.DecisionReason = e.Decision.Reason
+		}
+	}
+	return ps
 }
 
 // SessionFor finds the live session of a client for a title.
@@ -1158,7 +1200,7 @@ func (m *Manager) Sessions() []*core.PlaySession {
 	now := m.now()
 	out := make([]*core.PlaySession, 0, len(list))
 	for _, s := range list {
-		out = append(out, s.snapshot(now))
+		out = append(out, m.snapshotWithEncoder(s, now))
 	}
 	sort.Slice(out, func(i, j int) bool {
 		if !out[i].StartedAt.Equal(out[j].StartedAt) {

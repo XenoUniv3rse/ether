@@ -137,5 +137,18 @@ func (s *Service) Lookup(ctx context.Context, guid string) (core.RatingKey, erro
 	if found == 0 {
 		return 0, core.ErrNotFound
 	}
+	var year int
+	_ = s.db.QueryRowContext(ctx, `SELECT year FROM catalog_titles WHERE key=?`, int64(found)).Scan(&year)
+	if year > 0 {
+		matched := false
+		for _, item := range items {
+			if item.GUID == guid && item.Type == kind && item.Year == year {
+				matched = true
+			}
+		}
+		if !matched {
+			return 0, core.ErrNotFound
+		}
+	}
 	return found, s.storeMapping(ctx, found, guid, time.Now().Unix())
 }

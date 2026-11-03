@@ -41,6 +41,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/url"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -50,6 +51,7 @@ import (
 	"github.com/braedonsaunders/ether/internal/clusterbus"
 	"github.com/braedonsaunders/ether/internal/contentrating"
 	"github.com/braedonsaunders/ether/internal/core"
+	"github.com/braedonsaunders/ether/internal/homefilter"
 	"github.com/braedonsaunders/ether/internal/recommend"
 	"github.com/braedonsaunders/ether/internal/state"
 )
@@ -331,6 +333,8 @@ func New(opts Options) (*Engine, error) {
 	go func() { defer e.wg.Done(); e.rec.run(e.ctx) }()
 	e.wg.Add(1)
 	go e.eventLoop(e.ctx)
+	e.wg.Add(1)
+	go e.expireMemos(e.ctx)
 	for i := 0; i < opts.Workers; i++ {
 		e.wg.Add(1)
 		go e.worker(e.ctx)
@@ -670,8 +674,8 @@ func (e *Engine) homeWithPolicy(ctx context.Context, user *core.User, hc core.Hu
 			}
 		}
 		if e.opts.FilterAvailable != nil {
-			for _, t := range e.opts.FilterAvailable(ctx, pool) {
-				delete(hidden, t.Key)
+			for k := range homefilter.Allowed(ctx, pool, e.opts.FilterAvailable) {
+				delete(hidden, k)
 			}
 		}
 		if allow != nil {
@@ -767,17 +771,57 @@ type memoEntry struct {
 	rows    []core.HomeRow
 	deduped int
 	at      time.Time
+	bytes   int64
 }
 
 // memoTTL bounds how long an assembled screen is reused; clients poll
 // /hubs often and the rows only change when an input does.
 const memoTTL = 2 * time.Minute
+// memoMaxEntries is a count backstop; memoMaxBytes is the real bound. Keys
+// include client and session, so a busy server needs room for many screens.
+const memoMaxEntries = 1024
+const memoMaxBytes = 32 << 20
+
+func (e *Engine) pruneMemos(now time.Time) {
+	e.memoMu.Lock()
+	for k, ent := range e.memo {
+		if now.Sub(ent.at) >= memoTTL {
+			delete(e.memo, k)
+		}
+	}
+	e.memoMu.Unlock()
+	e.presentationMu.Lock()
+	for k, p := range e.presentations {
+		if now.Sub(p.at) >= presentationTTL {
+			delete(e.presentations, k)
+		}
+	}
+	e.presentationMu.Unlock()
+}
+
+func (e *Engine) expireMemos(ctx context.Context) {
+	defer e.wg.Done()
+	ticker := time.NewTicker(memoTTL / 2)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			e.pruneMemos(e.now())
+		}
+	}
+}
 
 func (e *Engine) memoGet(k memoKey) (memoEntry, bool) {
 	e.memoMu.Lock()
 	defer e.memoMu.Unlock()
 	ent, ok := e.memo[k]
-	if !ok || e.now().Sub(ent.at) > memoTTL {
+	if !ok {
+		return memoEntry{}, false
+	}
+	if e.now().Sub(ent.at) >= memoTTL {
+		delete(e.memo, k)
 		return memoEntry{}, false
 	}
 	// Callers may append to or reorder the slice; the rows themselves are
@@ -786,21 +830,35 @@ func (e *Engine) memoGet(k memoKey) (memoEntry, bool) {
 }
 
 func (e *Engine) memoPut(k memoKey, ent memoEntry) {
-	rows := ent.rows
+	rows := append([]core.HomeRow(nil), ent.rows...)
+	size := int64(512) + memoSize(reflect.ValueOf(k)) + memoSize(reflect.ValueOf(rows))
 	e.memoMu.Lock()
 	defer e.memoMu.Unlock()
 	now := e.now()
-	if len(e.memo) >= 4096 {
-		for mk, ent := range e.memo {
-			if now.Sub(ent.at) > memoTTL {
-				delete(e.memo, mk)
-			}
-		}
-		if len(e.memo) >= 4096 {
-			e.memo = map[memoKey]*memoEntry{}
+	delete(e.memo, k)
+	if size > memoMaxBytes {
+		return
+	}
+	var used int64
+	for mk, ent := range e.memo {
+		if now.Sub(ent.at) >= memoTTL {
+			delete(e.memo, mk)
+		} else {
+			used += ent.bytes
 		}
 	}
-	e.memo[k] = &memoEntry{rows: append([]core.HomeRow(nil), rows...), deduped: ent.deduped, at: now}
+	for len(e.memo) >= memoMaxEntries || used+size > memoMaxBytes {
+		var oldest memoKey
+		var oldestAt time.Time
+		for mk, ent := range e.memo {
+			if oldestAt.IsZero() || ent.at.Before(oldestAt) {
+				oldest, oldestAt = mk, ent.at
+			}
+		}
+		used -= e.memo[oldest].bytes
+		delete(e.memo, oldest)
+	}
+	e.memo[k] = &memoEntry{rows: rows, deduped: ent.deduped, at: now, bytes: size}
 }
 
 // progressSig summarises Continue Watching for the memo key.

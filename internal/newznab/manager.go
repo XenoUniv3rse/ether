@@ -171,6 +171,7 @@ func (m *Manager) SearchRescue(ctx context.Context, req core.SearchRequest) ([]c
 
 // SearchRescueWith is SearchRescue with per-indexer early arrival callbacks.
 func (m *Manager) SearchRescueWith(ctx context.Context, req core.SearchRequest, arrived func([]core.Release)) ([]core.Release, error) {
+	ctx = core.WithIndexerPurpose(ctx, core.IndexerPurposeRescue)
 	clients := m.Clients()
 	type slot struct {
 		results []core.Release
@@ -208,6 +209,9 @@ func (m *Manager) SearchRescueWith(ctx context.Context, req core.SearchRequest, 
 	seen := map[string]bool{}
 	var merged []core.Release
 	for _, s := range slots {
+		if missingAnswer(s.err) {
+			core.NoteSearchIncomplete(ctx)
+		}
 		for _, r := range s.results {
 			key := strings.ToLower(strings.TrimSpace(r.Name)) + "|" + fmt.Sprint(r.Size)
 			if r.Size == 0 {
@@ -284,7 +288,11 @@ func (m *Manager) SearchWith(ctx context.Context, req core.SearchRequest, arrive
 		if dated > 0 {
 			age /= time.Duration(dated)
 		}
-		if (!s.skipped || errors.Is(s.err, core.ErrBudgetExhausted)) && !errors.Is(s.err, context.Canceled) {
+		if missingAnswer(s.err) {
+			core.NoteSearchIncomplete(ctx)
+		}
+		// A search the breaker skipped made no request: nothing to report.
+		if (!s.skipped || errors.Is(s.err, core.ErrBudgetExhausted)) && !errors.Is(s.err, context.Canceled) && !errors.Is(s.err, ErrIndexerPaused) {
 			m.emitEvent(Event{Indexer: clients[i].Name(), Kind: "search", Success: s.err == nil, BudgetExhausted: errors.Is(s.err, core.ErrBudgetExhausted), Results: len(s.results), Duration: s.duration, AverageAge: age, At: now})
 		}
 		if !s.skipped {
@@ -404,4 +412,10 @@ func (m *Manager) FetchNZB(ctx context.Context, r core.Release) ([]byte, error) 
 		return nil, firstErr
 	}
 	return nil, fmt.Errorf("newznab: no indexer available to fetch %q", r.Name)
+}
+
+// missingAnswer reports an indexer whose answer a fleet search lacks because
+// it was paused or did not answer, rather than because it found nothing.
+func missingAnswer(err error) bool {
+	return errors.Is(err, ErrIndexerPaused) || transientFailure(err)
 }

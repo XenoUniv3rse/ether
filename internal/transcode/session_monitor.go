@@ -136,12 +136,18 @@ func (s *Session) noteInitLocked(r *run, t int) error {
 	if err := s.holdInitEditsLocked(r, t); err != nil {
 		return err
 	}
+	if r.edits != nil && len(r.edits.absent) > 0 {
+		return nil // the empty video track cannot replace the retained init
+	}
 	for len(s.initFiles) <= t {
 		s.initFiles = append(s.initFiles, "")
 	}
 	s.initFiles[t] = rel
 	if t == 0 {
 		s.initFile = rel
+		if s.clockInput == "" {
+			s.clockInput = r.spec.Input
+		}
 	}
 	return nil
 }

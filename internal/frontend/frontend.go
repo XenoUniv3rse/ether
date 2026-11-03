@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/braedonsaunders/ether/internal/core"
+	"github.com/braedonsaunders/ether/internal/diagnostics"
 	"github.com/braedonsaunders/ether/internal/frontend/kit/ids"
 )
 
@@ -52,19 +53,21 @@ type ListenerSpec struct {
 	Shared bool `json:"shared,omitempty"`
 }
 type Status struct {
-	Mounted          bool     `json:"mounted"`
-	Addresses        []string `json:"addresses"`
-	ConnectURLs      []string `json:"connectUrls,omitempty"`
-	LAN              string   `json:"lan"`
-	WAN              string   `json:"wan"`
-	Clients24h       int      `json:"clients24h"`
-	Clients24hKnown  bool     `json:"clients24hKnown"`
-	LiveStreams      int      `json:"liveStreams"`
-	LiveStreamsKnown bool     `json:"liveStreamsKnown"`
-	TargetVersion    string   `json:"targetVersion"`
-	Conformance      string   `json:"conformance"`
-	Error            string   `json:"error,omitempty"`
-	Warnings         []string `json:"warnings,omitempty"`
+	Mounted          bool      `json:"mounted"`
+	Addresses        []string  `json:"addresses"`
+	ConnectURLs      []string  `json:"connectUrls,omitempty"`
+	LAN              string    `json:"lan"`
+	LANReason        string    `json:"lanReason,omitempty"`
+	LANCheckedAt     time.Time `json:"lanCheckedAt,omitzero"`
+	WAN              string    `json:"wan"`
+	Clients24h       int       `json:"clients24h"`
+	Clients24hKnown  bool      `json:"clients24hKnown"`
+	LiveStreams      int       `json:"liveStreams"`
+	LiveStreamsKnown bool      `json:"liveStreamsKnown"`
+	TargetVersion    string    `json:"targetVersion"`
+	Conformance      string    `json:"conformance"`
+	Error            string    `json:"error,omitempty"`
+	Warnings         []string  `json:"warnings,omitempty"`
 }
 type Announcer interface {
 	Start(context.Context) error
@@ -238,6 +241,8 @@ type Images interface {
 	ServeHTTP(http.ResponseWriter, *http.Request)
 }
 type Host struct {
+	// Support is an owner-initiated, bounded capture; nil disables recording.
+	Support            *diagnostics.Recorder
 	Experience         Experience
 	ViewerCapabilities ViewerCapabilitiesFunc
 	ViewerPolicy       ViewerPolicy

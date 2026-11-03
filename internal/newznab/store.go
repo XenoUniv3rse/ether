@@ -138,6 +138,7 @@ func (c *Client) reserve(ctx context.Context, kind string) error {
 		} else {
 			c.mem.grabs++
 		}
+		c.recordUsage(ctx, kind)
 		return nil
 	}
 	col := "hits"
@@ -168,6 +169,7 @@ func (c *Client) reserve(ctx context.Context, kind string) error {
 	if n == 0 {
 		return fmt.Errorf("indexer %q %s budget: %w", c.Name(), kind, core.ErrBudgetExhausted)
 	}
+	c.recordUsage(ctx, kind)
 	return nil
 }
 
@@ -245,12 +247,10 @@ func (c *Client) cacheGet(ctx context.Context, key string) ([]core.Release, bool
 const emptySearchCacheTTL = 3 * time.Minute
 
 func (c *Client) cachePut(ctx context.Context, key string, results []core.Release) {
-	ttl := c.ttl()
+	// The owner's "Remember searches for" is a hard cap: age may only shorten it.
+	ttl := min(searchCacheTTL(c.ttl(), cacheAge(ctx), c.now(), len(results) == 0), c.ttl())
 	if ttl <= 0 {
 		return
-	}
-	if len(results) == 0 && ttl > emptySearchCacheTTL {
-		ttl = emptySearchCacheTTL
 	}
 	exp := c.now().Add(ttl)
 	if c.db == nil {

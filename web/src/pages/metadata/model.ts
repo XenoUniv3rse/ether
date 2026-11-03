@@ -2,6 +2,7 @@ import { localized, t } from "../../i18n";
 
 export type Overlays = {
   enabled: boolean;
+  episodeBadges: boolean;
   status: boolean;
   quality: boolean;
   ratings: boolean;
@@ -11,7 +12,9 @@ export type Overlays = {
   style: "glass" | "solid" | "minimal";
   position: "bottom" | "top";
   accent: string;
-  size: "small" | "medium" | "large";
+  size: "small" | "medium" | "large" | "extra-large";
+  hideDenominator: boolean;
+  hideDot: boolean;
 };
 export const normalizeOverlays = (s: Partial<Overlays>): Overlays => ({
   enabled: false,
@@ -21,7 +24,10 @@ export const normalizeOverlays = (s: Partial<Overlays>): Overlays => ({
   details: false,
   personalize: false,
   localize: false,
+  hideDenominator: false,
+  hideDot: false,
   ...s,
+  episodeBadges: s.episodeBadges ?? true,
   style: s.style || "glass",
   position: s.position || "bottom",
   accent: s.accent || "#d4a574",
