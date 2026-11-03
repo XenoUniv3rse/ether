@@ -15,6 +15,7 @@ import {
   Plus,
   Puzzle,
   Sparkles,
+  Upload,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { Link, useNavigate } from "react-router-dom";
@@ -45,6 +46,7 @@ export default function LivePlugins() {
   const [toggling, setToggling] = useState<string | null>(null);
   const [open, setOpen] = useState<string | null>(null);
   const [installUrl, setInstallUrl] = useState<string | null>(null);
+  const [installMode, setInstallMode] = useState<"link" | "file">("link");
   const [browsing, setBrowsing] = useState(false);
   const [logRevision, setLogRevision] = useState(0);
   const [liveLogs, setLiveLogs] = useState<Record<string, string[]>>({});
@@ -124,7 +126,14 @@ export default function LivePlugins() {
       actions={
         <AddPluginMenu
           onBrowse={() => setBrowsing(true)}
-          onLink={() => setInstallUrl("")}
+          onLink={() => {
+            setInstallMode("link");
+            setInstallUrl("");
+          }}
+          onUpload={() => {
+            setInstallMode("file");
+            setInstallUrl("");
+          }}
           onCode={() => navigate("/plugins/studio?view=code")}
           onAI={() => navigate("/plugins/studio")}
         />
@@ -201,6 +210,7 @@ export default function LivePlugins() {
       <InstallDrawer
         open={installUrl !== null}
         initialUrl={installUrl ?? ""}
+        mode={installMode}
         onClose={() => setInstallUrl(null)}
         onInstalled={(id) => void installed(id)}
       />
@@ -209,6 +219,7 @@ export default function LivePlugins() {
           onClose={() => setBrowsing(false)}
           onImport={(address) => {
             setBrowsing(false);
+            setInstallMode("link");
             setInstallUrl(address);
           }}
         />
@@ -221,11 +232,13 @@ export default function LivePlugins() {
 function AddPluginMenu({
   onBrowse,
   onLink,
+  onUpload,
   onCode,
   onAI,
 }: {
   onBrowse: () => void;
   onLink: () => void;
+  onUpload: () => void;
   onCode: () => void;
   onAI: () => void;
 }) {
@@ -278,16 +291,22 @@ function AddPluginMenu({
           onCode,
         )}
         {item(
-          <FolderSearch size={16} />,
-          t("Browse directories"),
-          t("Plugins and add-ons other people publish"),
-          onBrowse,
+          <Upload size={16} />,
+          t("Upload a file"),
+          t("A .etherpkg or .zip plugin package from your computer"),
+          onUpload,
         )}
         {item(
           <Link2 size={16} />,
           t("From a link"),
-          t("A plugin or Stremio add-on address"),
+          t("A plugin, GitHub repository or Stremio add-on address"),
           onLink,
+        )}
+        {item(
+          <FolderSearch size={16} />,
+          t("Browse add-on directories"),
+          t("Lists of add-ons published by add-ons you installed"),
+          onBrowse,
         )}
       </div>
     </Popover>

@@ -1,7 +1,7 @@
 import { AgentPanel, type AgentMessage } from "@braedonsaunders/appkit-ai/react";
-import { Badge, Button, Dialog, SearchSelect, cn, toast } from "@braedonsaunders/appkit-ui";
-import { Suspense, lazy, useCallback, useEffect, useRef, useState } from "react";
-import { FileCode2, FileJson, Film, LayoutTemplate, Sparkles, Tv } from "lucide-react";
+import { Badge, Button, Dialog, SearchSelect, toast } from "@braedonsaunders/appkit-ui";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { Film, LayoutTemplate, Sparkles, Tv } from "lucide-react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { Segmented } from "../../components/fields";
 import { Workspace } from "../../components/workspace";
@@ -16,6 +16,7 @@ import { PluginView } from "../../viewspec/PluginView";
 import { formatDateTime } from "../../lib/format";
 import { invalidateRegistry } from "../../lib/extend";
 import { PermissionSheet } from "./PermissionSheet";
+import { CodeStudio } from "./CodeStudio";
 import { Composer } from "./Composer";
 import { LiveStageView, NativePreview, momentsForTool, readAgentStream } from "./LiveStage";
 import type { Moment } from "./Stage";
@@ -464,6 +465,27 @@ function LiveWorkspace({
       title={t("Studio")}
       actions={
         <>
+          {mode === "code" && project ? (
+            <>
+              <SearchSelect
+                value={project.id}
+                onChange={(id) => {
+                  if (!dirty) void loadProject(id).catch((e) => setError(errorMessage(e)));
+                }}
+                options={projects.map((p) => ({ value: p.id, label: p.name }))}
+                ariaLabel={t("Saved project")}
+                disabled={dirty}
+                {...searchSelectLabels()}
+              />
+              <Button
+                size="sm"
+                disabled={dirty || (project.diagnostics || []).length > 0}
+                onClick={() => void openInstall()}
+              >
+                {t("Install")}
+              </Button>
+            </>
+          ) : null}
           <ModeSwitch mode={mode} onMode={onMode} />
           <Button variant="outline" size="sm" onClick={onNew}>
             <Sparkles size={14} /> {t("New plugin")}
@@ -472,16 +494,28 @@ function LiveWorkspace({
         </>
       }
     >
-      <div
-        className={
-          mode === "code"
-            ? "grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-[minmax(0,1.3fr)_minmax(320px,0.7fr)]"
-            : "grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-[minmax(320px,0.85fr)_minmax(0,1.15fr)]"
-        }
-      >
-        {mode === "code" ? (
-          <CodePane
+      {mode === "code" ? (
+        <>
+          {error ? (
+            <p role="alert" className="border-b border-border px-4 py-2 text-sm text-danger">
+              {error}
+            </p>
+          ) : null}
+          <CodeStudio
             project={project}
+            epoch={epoch}
+            preview={
+              project ? (
+                <div key={`${project.id}:${epoch}`} className="space-y-4">
+                  <NativePreview projectId={project.id} template={project.template} />
+                  {project.defaultPage ? (
+                    <div className="rounded-xl border border-border p-4">
+                      <PluginView plugin={`studio:${project.id}`} page={project.defaultPage} />
+                    </div>
+                  ) : null}
+                </div>
+              ) : null
+            }
             file={file}
             source={source}
             edits={edits}
@@ -501,7 +535,9 @@ function LiveWorkspace({
             }}
             onSave={() => void save()}
           />
-        ) : (
+        </>
+      ) : (
+        <div className="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-[minmax(320px,0.85fr)_minmax(0,1.15fr)]">
           <section
             className="order-2 flex min-h-[500px] flex-col border-t border-border lg:order-1 lg:border-r lg:border-t-0"
             aria-label={t("Studio conversation")}
@@ -537,77 +573,77 @@ function LiveWorkspace({
               }}
             />
           </section>
-        )}
-        <section
-          className="order-1 min-h-[420px] overflow-auto p-5 lg:order-2"
-          aria-label={t("Draft workspace")}
-        >
-          {error ? (
-            <p role="alert" className="mb-4 text-danger">
-              {error}
-            </p>
-          ) : null}
-          <div className="mb-4 flex flex-wrap items-center gap-2">
-            <SearchSelect
-              value={project?.id || ""}
-              onChange={(id) => {
-                if (!dirty) void loadProject(id).catch((e) => setError(errorMessage(e)));
-              }}
-              options={projects.map((p) => ({ value: p.id, label: p.name }))}
-              ariaLabel={t("Saved project")}
-              disabled={dirty}
-              {...searchSelectLabels()}
-            />
-            {project ? (
-              <Button
-                className="ml-auto"
-                disabled={dirty || (project.diagnostics || []).length > 0}
-                onClick={() => void openInstall()}
-              >
-                {t("Install")}
-              </Button>
+          <section
+            className="order-1 min-h-[420px] overflow-auto p-5 lg:order-2"
+            aria-label={t("Draft workspace")}
+          >
+            {error ? (
+              <p role="alert" className="mb-4 text-danger">
+                {error}
+              </p>
             ) : null}
-          </div>
-          {project ? (
-            <>
-              <h2 className="text-lg font-semibold">{project.name}</h2>
-              <p className="mb-4 text-xs text-fg-muted">
-                {dirty ? t("Unsaved draft") : t("Saved on server")} ·{" "}
-                {formatDateTime(project.updatedAt)}
-              </p>
-              {(project.diagnostics || []).map((d, i) => (
-                <p key={i} className="mb-2 text-sm text-danger">
-                  {d.file}:{d.line} {d.text}
-                </p>
-              ))}
-              {project.defaultPage ? (
-                <div key={`${project.id}:${epoch}`} className="space-y-4">
-                  <NativePreview projectId={project.id} template={project.template} />
-                  <div className="rounded-xl border border-border p-4">
-                    <PluginView plugin={`studio:${project.id}`} page={project.defaultPage} />
-                  </div>
-                </div>
-              ) : (
-                <p>{t("This draft has no page preview. Switch to Code to see how it works.")}</p>
-              )}
-              <p className="mt-4 text-xs text-fg-muted">
-                {t(
-                  "Preview runs the saved draft in the Studio sandbox. It does not install the plugin.",
-                )}
-              </p>
-            </>
-          ) : (
-            <div className="rounded-xl border border-dashed border-border p-8">
-              <h2 className="font-medium">{t("Your plugin will appear here")}</h2>
-              <p className="mt-2 text-sm text-fg-muted">
-                {t(
-                  "Start with a description. Approved draft changes are saved and compiled by Ether.",
-                )}
-              </p>
+            <div className="mb-4 flex flex-wrap items-center gap-2">
+              <SearchSelect
+                value={project?.id || ""}
+                onChange={(id) => {
+                  if (!dirty) void loadProject(id).catch((e) => setError(errorMessage(e)));
+                }}
+                options={projects.map((p) => ({ value: p.id, label: p.name }))}
+                ariaLabel={t("Saved project")}
+                disabled={dirty}
+                {...searchSelectLabels()}
+              />
+              {project ? (
+                <Button
+                  className="ml-auto"
+                  disabled={dirty || (project.diagnostics || []).length > 0}
+                  onClick={() => void openInstall()}
+                >
+                  {t("Install")}
+                </Button>
+              ) : null}
             </div>
-          )}
-        </section>
-      </div>
+            {project ? (
+              <>
+                <h2 className="text-lg font-semibold">{project.name}</h2>
+                <p className="mb-4 text-xs text-fg-muted">
+                  {dirty ? t("Unsaved draft") : t("Saved on server")} ·{" "}
+                  {formatDateTime(project.updatedAt)}
+                </p>
+                {(project.diagnostics || []).map((d, i) => (
+                  <p key={i} className="mb-2 text-sm text-danger">
+                    {d.file}:{d.line} {d.text}
+                  </p>
+                ))}
+                {project.defaultPage ? (
+                  <div key={`${project.id}:${epoch}`} className="space-y-4">
+                    <NativePreview projectId={project.id} template={project.template} />
+                    <div className="rounded-xl border border-border p-4">
+                      <PluginView plugin={`studio:${project.id}`} page={project.defaultPage} />
+                    </div>
+                  </div>
+                ) : (
+                  <p>{t("This draft has no page preview. Switch to Code to see how it works.")}</p>
+                )}
+                <p className="mt-4 text-xs text-fg-muted">
+                  {t(
+                    "Preview runs the saved draft in the Studio sandbox. It does not install the plugin.",
+                  )}
+                </p>
+              </>
+            ) : (
+              <div className="rounded-xl border border-dashed border-border p-8">
+                <h2 className="font-medium">{t("Your plugin will appear here")}</h2>
+                <p className="mt-2 text-sm text-fg-muted">
+                  {t(
+                    "Start with a description. Approved draft changes are saved and compiled by Ether.",
+                  )}
+                </p>
+              </div>
+            )}
+          </section>
+        </div>
+      )}
       {installing ? (
         <Dialog
           open
@@ -657,117 +693,5 @@ function LiveWorkspace({
         </Dialog>
       ) : null}
     </Workspace>
-  );
-}
-
-const CodeMirrorPane = lazy(() => import("./code/CodeMirrorPane"));
-
-/** The code view: every draft file, a real editor with plugin types, and save that compiles and checks. */
-function CodePane({
-  project,
-  file,
-  source,
-  edits,
-  dirty,
-  saving,
-  onFile,
-  onChange,
-  onSave,
-}: {
-  project: StudioProject | null;
-  file: string;
-  source: string;
-  edits: Record<string, string>;
-  dirty: boolean;
-  saving: boolean;
-  onFile: (f: string) => void;
-  onChange: (v: string) => void;
-  onSave: () => void;
-}) {
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key === "s") {
-        e.preventDefault();
-        if (dirty || Object.keys(edits).length) onSave();
-      }
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [dirty, edits, onSave]);
-  if (!project) {
-    return (
-      <section className="flex items-center justify-center border-r border-border p-8 text-sm text-fg-muted">
-        {t("Loading the draft…")}
-      </section>
-    );
-  }
-  const files = Object.keys(project.files).sort((a, b) =>
-    a === "src/plugin.ts" ? -1 : b === "src/plugin.ts" ? 1 : a.localeCompare(b),
-  );
-  const changed = (f: string) => (f === file ? dirty : f in edits);
-  const diags = project.diagnostics || [];
-  return (
-    <section
-      aria-label={t("Code")}
-      className="flex min-h-[32rem] flex-col border-b border-border bg-surface lg:min-h-0 lg:border-b-0 lg:border-r"
-    >
-      <div className="flex shrink-0 flex-wrap items-center gap-1 border-b border-border bg-bg-subtle px-2">
-        {files.map((f) => (
-          <button
-            key={f}
-            type="button"
-            onClick={() => onFile(f)}
-            aria-current={file === f ? "page" : undefined}
-            className={cn(
-              "-mb-px inline-flex h-10 shrink-0 items-center gap-1.5 border-b-2 px-3 font-mono text-xs transition",
-              file === f
-                ? "border-primary bg-surface text-fg"
-                : "border-transparent text-fg-muted hover:text-fg",
-            )}
-          >
-            {f.endsWith(".ts") ? <FileCode2 size={14} /> : <FileJson size={14} />}
-            {f}
-            {changed(f) ? (
-              <span className="size-1.5 rounded-full bg-primary" aria-label={t("Not saved")} />
-            ) : null}
-          </button>
-        ))}
-        <Button
-          size="sm"
-          className="ml-auto"
-          disabled={saving || !(dirty || Object.keys(edits).length)}
-          onClick={onSave}
-        >
-          {saving ? t("Saving…") : t("Save and run")}
-        </Button>
-      </div>
-      <div className="min-h-0 flex-1">
-        <Suspense fallback={<p className="p-4 text-xs text-fg-muted">{t("Loading editor…")}</p>}>
-          <CodeMirrorPane
-            key={file}
-            file={file === "src/plugin.ts" ? "plugin.ts" : file}
-            value={source}
-            onChange={onChange}
-          />
-        </Suspense>
-      </div>
-      <div className="shrink-0 border-t border-border bg-bg-subtle px-3 py-1.5 text-xs">
-        {diags.length ? (
-          <ul className="space-y-0.5 text-danger">
-            {diags.map((d, i) => (
-              <li key={i} className="font-mono">
-                {d.file}:{d.line} {d.text}
-              </li>
-            ))}
-          </ul>
-        ) : (
-          <span className="text-fg-muted">
-            {dirty || Object.keys(edits).length
-              ? t("Unsaved changes · Save and run to compile, check and refresh the preview")
-              : t("Saved · compiles cleanly · preview is live")}
-          </span>
-        )}
-      </div>
-    </section>
   );
 }

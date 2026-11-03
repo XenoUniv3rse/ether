@@ -289,6 +289,11 @@ func (cs *callState) dispatch(name string, args json.RawMessage) (json.RawMessag
 		return nil, Forbidden("no host services are configured for this plugin")
 	}
 	out, err := cs.host.CallHost(cs.ctx, name, args)
+	// Time spent waiting on the host (a network fetch, a catalogue query) is
+	// paid by the call's own unit price, not as guest wall time; otherwise
+	// one slow upstream response spent the whole budget. The call deadline
+	// still bounds the total.
+	cs.last = time.Now()
 	if err != nil {
 		if f, ok := err.(*Fault); ok {
 			return nil, f

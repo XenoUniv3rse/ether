@@ -4,7 +4,7 @@ import { Drawer } from "../../components/Drawer";
 import { t } from "../../i18n";
 import { searchSelectLabels } from "../../i18n/appkit-labels";
 import { apiFetch, errorMessage } from "../../lib/api";
-import { useRegistry } from "../../lib/extend";
+import { textOf, useRegistry } from "../../lib/extend";
 
 type Entry = {
   id: string;
@@ -29,6 +29,10 @@ export function DirectoryBrowser({
   const [busy, setBusy] = useState(false);
   const generation = useRef(0);
   const selected = registry.descriptors.find((d) => d.id === source);
+  // One directory needs no picking: open it straight away.
+  useEffect(() => {
+    if (!source && registry.descriptors.length === 1) setSource(registry.descriptors[0]!.id);
+  }, [source, registry.descriptors]);
   useEffect(() => {
     generation.current++;
     setEntries(null);
@@ -56,11 +60,11 @@ export function DirectoryBrowser({
     }
   };
   return (
-    <Drawer open onClose={onClose} title={t("Browse plugins")} size="lg">
+    <Drawer open onClose={onClose} title={t("Browse add-on directories")} size="lg">
       <div className="space-y-4">
         <p className="text-sm text-fg-muted">
           {t(
-            "Choose a directory, then review a plugin’s fetched manifest before installing it. Directory listings are recommendations from their provider.",
+            "Some installed add-ons publish a list of other add-ons, such as Cinemeta's community catalogue. Pick a list to see what is in it, then review any add-on before installing.",
           )}
         </p>
         <SearchSelect
@@ -68,7 +72,7 @@ export function DirectoryBrowser({
           onChange={setSource}
           options={registry.descriptors.map((d) => ({
             value: d.id,
-            label: `${d.group || d.owner} · ${d.label}`,
+            label: `${d.group || d.owner} · ${textOf(d.label)}`,
           }))}
           ariaLabel={t("Plugin directory")}
           searchable

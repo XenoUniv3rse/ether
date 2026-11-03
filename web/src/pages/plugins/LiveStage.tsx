@@ -139,10 +139,10 @@ export function NativePreview({ projectId, template }: { projectId: string; temp
     return (
       <MomentView
         moment={{
-          kind: "streams",
+          kind: "found",
           tool: "sources",
           title: t("Sources for {title}", { title: sources.title }),
-          tiles: sources.tiles,
+          cards: sources.tiles.map((s) => ({ name: s.name, url: s.score ?? "", via: "source" })),
         }}
       />
     );
@@ -246,10 +246,10 @@ export async function momentsForTool(
         const s = await draftSources(project.id).catch(() => null);
         if (s?.tiles.length)
           out.push({
-            kind: "streams",
+            kind: "found",
             tool: name,
             title: t("Sources for {title}", { title: s.title }),
-            tiles: s.tiles,
+            cards: s.tiles.map((x) => ({ name: x.name, url: x.score ?? "", via: "source" })),
           });
       }
       if (!out.length) out.push({ kind: "repair", text: t("Saved the draft") });
