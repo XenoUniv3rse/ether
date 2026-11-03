@@ -328,9 +328,15 @@ function PluginCard({
   const level = pluginHealthLevel(plugin.health, plugin.enabled);
   const navigate = useNavigate();
   return (
+    // The whole card opens the drawer; its own controls (the title button
+    // for keyboards, Open in Studio, the switch) keep their own actions.
     <article
       aria-label={plugin.name}
-      className="flex h-full flex-col rounded-xl border border-border bg-surface p-5"
+      onClick={(e) => {
+        if ((e.target as HTMLElement).closest("button, a, input, label, [role=switch]")) return;
+        onOpen();
+      }}
+      className="flex h-full cursor-pointer flex-col rounded-xl border border-border bg-surface p-5 transition hover:border-primary/40 hover:shadow-md"
     >
       <button
         type="button"
