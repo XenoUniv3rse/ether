@@ -18,7 +18,6 @@ import {
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { Artwork } from "../../../components/Artwork";
-import { LEVEL_LABEL } from "../../../components/status";
 import { t, tn } from "../../../i18n";
 import { useLocale } from "../../../i18n/react";
 import { apiFetch, errorMessage } from "../../../lib/api";
@@ -26,8 +25,9 @@ import { invalidateRegistry, textOf, useRegistry } from "../../../lib/extend";
 import { formatBytes, formatNumber, relativeTime } from "../../../lib/format";
 import { GuideStrip, type GuideChannel } from "../Stage";
 import { SidecarPairing } from "../SidecarPairing";
-import { buildPlacements, pluginHealthLevel, type PluginDetail } from "../types";
+import { buildPlacements, type PluginDetail } from "../types";
 import { callImdb, resolveTitles, resultCount, type PluginCall, type TitleCardLite } from "./calls";
+import { healthSummary, type HealthSummary } from "./health";
 import { liveTVKind, primaryContribution } from "./kinds";
 
 /**
@@ -41,6 +41,7 @@ export function PluginOverview({
   onClose,
   onRetry,
   onFresh,
+  onActivity,
 }: {
   detail: PluginDetail;
   calls: PluginCall[] | null;
@@ -48,62 +49,74 @@ export function PluginOverview({
   onRetry: () => Promise<void>;
   /** Reload the plugin quietly after a live call, so its health is current. */
   onFresh?: () => void;
+  /** Open the Activity tab, where the technical detail lives. */
+  onActivity?: () => void;
 }) {
-  const level = pluginHealthLevel(detail.healthDetail.status, detail.enabled);
+  const health = healthSummary(detail);
   return (
     <div className="space-y-5">
       {detail.manifest.ether?.runtime?.kind === "remote" ? (
         <SidecarPairing key={detail.id} id={detail.id} />
       ) : null}
-      {(level === "warn" || level === "error") && detail.enabled ? (
-        <ProblemCard detail={detail} onRetry={onRetry} />
+      {health.card ? (
+        <ProblemCard health={health} onRetry={onRetry} onActivity={onActivity} />
       ) : null}
       <LiveNow detail={detail} calls={calls} onClose={onClose} onFresh={onFresh} />
       <Placements detail={detail} onClose={onClose} />
-      <HealthTiles detail={detail} />
+      <HealthTiles detail={detail} health={health} />
     </div>
   );
 }
 
-function ProblemCard({ detail, onRetry }: { detail: PluginDetail; onRetry: () => Promise<void> }) {
+function ProblemCard({
+  health,
+  onRetry,
+  onActivity,
+}: {
+  health: HealthSummary;
+  onRetry: () => Promise<void>;
+  onActivity?: () => void;
+}) {
   const [busy, setBusy] = useState(false);
-  const h = detail.healthDetail;
-  // Plain words first; the technical error once, underneath, if it adds
-  // anything.
-  const technical = (h.lastError || h.reason || "").trim();
-  const slow = /deadline|timeout|timed out|took too long|request failed/i.test(technical);
-  const title = slow
-    ? t("{name} is slow to answer or not answering", { name: detail.name })
-    : t("{name} is having trouble", { name: detail.name });
-  const lastOk = h.lastOk && Date.parse(h.lastOk) > Date.UTC(2000, 0, 1) ? h.lastOk : "";
+  const card = health.card!;
+  const severe = health.level === "error";
   return (
     <div
-      role="alert"
-      className="flex items-start gap-3 rounded-xl border border-warning/40 bg-warning/5 p-4"
+      role="status"
+      className={cn(
+        "flex flex-wrap items-center gap-3 rounded-xl border p-4",
+        severe ? "border-danger/40 bg-danger/5" : "border-warning/40 bg-warning/5",
+      )}
     >
-      <AlertTriangle size={18} className="mt-0.5 shrink-0 text-warning" aria-hidden />
+      <AlertTriangle
+        size={18}
+        className={cn("shrink-0", severe ? "text-danger" : "text-warning")}
+        aria-hidden
+      />
       <div className="min-w-0 flex-1">
-        <p className="text-sm font-medium text-fg">{title}</p>
-        {technical ? (
-          <p className="mt-1 break-words font-mono text-xs text-fg-muted">{technical}</p>
+        <p className="text-sm font-medium text-fg">{card.title}</p>
+        <p className="mt-0.5 text-xs text-fg-muted">{card.line}</p>
+      </div>
+      <div className="flex shrink-0 items-center gap-2">
+        {onActivity ? (
+          <Button size="sm" variant="ghost" onClick={onActivity}>
+            {t("See activity")}
+          </Button>
         ) : null}
-        {lastOk ? (
-          <p className="mt-1 text-xs text-fg-subtle">
-            {t("Last worked {when}", { when: relativeTime(lastOk) })}
-          </p>
+        {card.retry ? (
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={busy}
+            onClick={() => {
+              setBusy(true);
+              void onRetry().finally(() => setBusy(false));
+            }}
+          >
+            <RefreshCw size={13} className={cn(busy && "animate-spin")} /> {t("Try again")}
+          </Button>
         ) : null}
       </div>
-      <Button
-        size="sm"
-        variant="outline"
-        disabled={busy}
-        onClick={() => {
-          setBusy(true);
-          void onRetry().finally(() => setBusy(false));
-        }}
-      >
-        <RefreshCw size={13} className={cn(busy && "animate-spin")} /> {t("Try again")}
-      </Button>
     </div>
   );
 }
@@ -420,8 +433,9 @@ function CatalogueNow({
         if (!live) return;
         setItems(r.items ?? []);
         setTotal(r.total ?? 0);
-        // A slow add-on that has now answered is healthy again.
-        if (Date.now() - started > 3000) onFresh?.();
+        // The add-on just answered: re-read its health so the header,
+        // tiles and card describe this answer.
+        onFresh?.();
       })
       .catch((e) => {
         if (!live) return;
@@ -437,7 +451,11 @@ function CatalogueNow({
             : errorMessage(e),
         );
       })
-      .finally(finish);
+      .finally(() => {
+        finish();
+        // A failure or give-up is news for the health readout too.
+        if (live && ctl.signal.aborted) onFresh?.();
+      });
     return () => {
       live = false;
       finish();
@@ -701,35 +719,31 @@ function Placements({ detail, onClose }: { detail: PluginDetail; onClose: () => 
 
 /* --------------------------------------------------------------- health tiles */
 
-function HealthTiles({ detail }: { detail: PluginDetail }) {
-  const level = pluginHealthLevel(detail.healthDetail.status, detail.enabled);
+function HealthTiles({ detail, health }: { detail: PluginDetail; health: HealthSummary }) {
+  const level = health.level;
   const im = detail.impact;
   const undeclared = detail.privacy.undeclared ?? [];
   const hosts = Object.keys(detail.privacy.observedHosts ?? {});
   const declared = detail.privacy.declaredHosts ?? [];
   const slow = im.p95Ms > 2000;
+  // Latency only counts answers; failed calls never set it.
+  const answered = im.calls > im.errors;
   const tone =
     level === "ok" ? "success" : level === "off" ? "info" : level === "warn" ? "warning" : "danger";
   return (
     <div className="grid gap-3 sm:grid-cols-3">
       <DashboardMetricCard
         label={t("Responding")}
-        value={LEVEL_LABEL[level]}
-        detail={
-          im.errors
-            ? t("{calls} recent calls · {errors} failed", {
-                calls: formatNumber(im.calls, 0),
-                errors: formatNumber(im.errors, 0),
-              })
-            : tn(im.calls, "{count} recent call", "{count} recent calls")
-        }
+        value={health.word}
+        detail={health.tile}
         icon={level === "ok" ? <CheckCircle2 size={16} /> : <ActivityIcon size={16} />}
         tone={tone}
         trend={
           <More
             lines={[
+              tn(im.calls, "{count} recent call", "{count} recent calls"),
+              t("Failed: {count}", { count: formatNumber(im.errors, 0) }),
               t("Restarts: {count}", { count: formatNumber(im.restarts, 0) }),
-              t("Slow calls: {count}", { count: formatNumber(im.slow, 0) }),
               t("Storage: {size}", { size: formatBytes(im.kvBytes) }),
             ]}
           />
@@ -737,15 +751,13 @@ function HealthTiles({ detail }: { detail: PluginDetail }) {
       />
       <DashboardMetricCard
         label={t("Speed")}
-        value={
-          im.calls
-            ? im.p50Ms < 1
-              ? t("Under 1 ms")
-              : t("{ms} ms", { ms: formatNumber(im.p50Ms, 0) })
-            : "—"
-        }
+        value={answered ? duration(im.p50Ms) : "—"}
         detail={
-          im.calls ? t("Slowest {ms} ms", { ms: formatNumber(im.p95Ms, 0) }) : t("Not used yet")
+          answered
+            ? t("Slowest {time}", { time: duration(im.p95Ms) })
+            : im.calls
+              ? t("No answers yet")
+              : t("Not used yet")
         }
         icon={<Gauge size={16} />}
         tone={slow ? "warning" : "primary"}
@@ -804,4 +816,11 @@ function More({ lines }: { lines: string[] }) {
       </button>
     </Tooltip>
   );
+}
+
+/** A response time the way a person reads it: 180 ms, 17 s. */
+function duration(ms: number): string {
+  if (ms < 1) return t("Under 1 ms");
+  if (ms < 1000) return t("{ms} ms", { ms: formatNumber(ms, 0) });
+  return t("{seconds} s", { seconds: formatNumber(ms / 1000, ms < 10000 ? 1 : 0) });
 }

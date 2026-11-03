@@ -26,12 +26,13 @@ import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
 import { Drawer } from "../../components/Drawer";
 import { ErrorPanel, LoadingRows, MutationError } from "../../components/feedback";
-import { LEVEL_LABEL, StatusDot } from "../../components/status";
+import { StatusDot } from "../../components/status";
 import { t, tn } from "../../i18n";
 import { ApiError, apiFetch } from "../../lib/api";
 import { invalidateRegistry } from "../../lib/extend";
 import { PluginActivity } from "./drawer/PluginActivity";
 import { usePluginCalls } from "./drawer/calls";
+import { healthSummary } from "./drawer/health";
 import { contributionTab, primaryContribution } from "./drawer/kinds";
 import { PluginContributions } from "./drawer/PluginContributions";
 import { PluginOverview } from "./drawer/PluginOverview";
@@ -40,7 +41,6 @@ import { openInStudio } from "./openInStudio";
 import {
   isAddon,
   kindLabel,
-  pluginHealthLevel,
   type JournalEntry,
   type PluginDetail,
   type PluginSummary,
@@ -268,7 +268,6 @@ export function InstalledPluginDrawer({
     { key: "activity", label: t("Activity") },
   ];
   const active = tabs.some((x) => x.key === tab) ? tab : "overview";
-  const level = detail ? pluginHealthLevel(detail.healthDetail.status, detail.enabled) : "unknown";
 
   return (
     <Drawer
@@ -276,7 +275,7 @@ export function InstalledPluginDrawer({
       onClose={onClose}
       size="xl"
       title={detail?.name ?? t("Plugin")}
-      description={detail ? <HeaderLine detail={detail} level={level} /> : undefined}
+      description={detail ? <HeaderLine detail={detail} /> : undefined}
       headerActions={
         detail ? (
           <div className="flex items-center gap-2">
@@ -455,6 +454,7 @@ export function InstalledPluginDrawer({
               onClose={onClose}
               onRetry={retry}
               onFresh={() => void loadDetail(detail.id, true)}
+              onActivity={() => setTab("activity")}
             />
           ) : active === "adds" ? (
             <PluginContributions
@@ -538,13 +538,8 @@ export function InstalledPluginDrawer({
 }
 
 /** Type, version and author, then health in one word, then About behind ⓘ. */
-function HeaderLine({
-  detail,
-  level,
-}: {
-  detail: PluginDetail;
-  level: ReturnType<typeof pluginHealthLevel>;
-}) {
+function HeaderLine({ detail }: { detail: PluginDetail }) {
+  const health = healthSummary(detail);
   const ether = detail.manifest.ether;
   const author = ether?.author?.name;
   const edited = detail.sourceKind === "studio";
@@ -563,8 +558,8 @@ function HeaderLine({
           .join(" · ")}
       </span>
       <span className="inline-flex items-center gap-1.5 text-fg">
-        <StatusDot level={level} pulse />
-        {LEVEL_LABEL[level]}
+        <StatusDot level={health.level} pulse />
+        {health.word}
       </span>
       <Tooltip
         content={
