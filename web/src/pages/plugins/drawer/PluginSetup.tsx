@@ -10,6 +10,7 @@ import { useLocale } from "../../../i18n/react";
 import { ApiError, apiFetch, errorMessage } from "../../../lib/api";
 import { SchemaGroups } from "../../settings/SchemaForm";
 import { FolderGrantsPicker, ViewerGrantsPicker } from "../PermissionSheet";
+import { AddonSettings } from "./AddonSettings";
 import {
   buildGrantItems,
   mapApiFieldErrors,
@@ -162,7 +163,16 @@ export function PluginSetup({
 
   return (
     <div className="space-y-5">
-      {!loaded ? null : hasSettings ? (
+      {detail.host ? (
+        <AddonSettings
+          detail={detail}
+          onSaved={() => {
+            void onDetail();
+            onChanged();
+          }}
+        />
+      ) : null}
+      {!loaded || (detail.host && !hasSettings) ? null : hasSettings ? (
         <SchemaGroups
           groups={groups}
           value={draft}

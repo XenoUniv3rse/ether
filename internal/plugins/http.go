@@ -37,6 +37,11 @@ func (m *Manager) Handler() http.Handler {
 	mux.HandleFunc("PUT /{id}/auto-update", m.handlePutAutoUpdate)
 	mux.HandleFunc("PUT /{id}/roles", m.handlePutRoles)
 	mux.HandleFunc("POST /addons/preview", m.handleAddonPreview)
+	mux.HandleFunc("POST /addons/configure-page", m.handleAddonLinkConfigPage)
+	mux.HandleFunc("GET /{id}/addon-config", m.handleGetAddonConfig)
+	mux.HandleFunc("POST /{id}/addon-config/test", m.handleTestAddonConfig)
+	mux.HandleFunc("PUT /{id}/addon-config", m.handleSaveAddonConfig)
+	mux.HandleFunc("POST /{id}/addon-config/page", m.handleAddonConfigPage)
 	mux.HandleFunc("POST /addons", m.handleAddonInstall)
 	mux.HandleFunc("POST /{id}/shadow", m.handleShadow)
 	mux.HandleFunc("GET /{id}/shadow", m.handleShadowReport)
@@ -102,7 +107,7 @@ func (m *Manager) summary(r Record, h Health) Summary {
 		// as an add-on, whether it came from a link or was edited in Studio.
 		s.Roles = roleState(r)["roles"].([]RoleState)
 		if u, err := url.Parse(r.SourceURL); err == nil {
-			s.Host = u.Hostname()
+			s.Host = displayHost(u.Hostname())
 		}
 	}
 	if r.Manifest.IsStremioOnly() {
@@ -483,7 +488,7 @@ func (m *Manager) handleAddonPreview(w http.ResponseWriter, r *http.Request) {
 	}
 	out := AddonPreview{ID: id}
 	if u, err := url.Parse(base); err == nil {
-		out.Host = u.Hostname()
+		out.Host = displayHost(u.Hostname())
 	}
 	if rec, err := m.Get(r.Context(), id); err == nil {
 		out.AlreadyInstalled = true

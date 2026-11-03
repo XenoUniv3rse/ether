@@ -66,6 +66,9 @@ type Deps struct {
 
 // Manager is the plugin host. It is safe for concurrent use.
 type Manager struct {
+	// relay holds the add-on settings pages open in the console.
+	relay       *addonRelay
+	relayOnce   sync.Once
 	store       *storage
 	deps        Deps
 	log         *slog.Logger

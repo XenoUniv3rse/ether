@@ -128,8 +128,11 @@ type Deps struct {
 	LinkPlex         func(context.Context, int64, string) error
 
 	// Extensions are owner-authenticated API subtrees keyed by relative path.
-	Extensions    map[string]http.Handler
-	ValidateExtra func(config.Config) []FieldError
+	Extensions map[string]http.Handler
+	// PublicExtensions are API subtrees that authorise each request
+	// themselves (the add-on settings relay takes a short-lived token).
+	PublicExtensions map[string]http.Handler
+	ValidateExtra    func(config.Config) []FieldError
 	// Config is the owner settings store. Required.
 	Config *config.Store
 	// Logger defaults to slog.Default().
@@ -442,6 +445,10 @@ func (h *Handler) routes() *http.ServeMux {
 			next.URL = &u
 			serve(w, next)
 		}))
+	}
+	for path, handler := range h.deps.PublicExtensions {
+		prefix := "/api/" + path
+		mux.Handle(prefix+"/", http.StripPrefix(prefix, handler))
 	}
 	h.personalizationRoutes(api)
 	h.collectionRoutes(mux, api)

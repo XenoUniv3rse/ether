@@ -415,6 +415,15 @@ func (a *App) pluginHandlers(m map[string]http.Handler) {
 	}
 }
 
+// publicExtensionHandlers are console API subtrees that authorise each
+// request themselves: the add-on settings relay checks its own token.
+func (a *App) publicExtensionHandlers() map[string]http.Handler {
+	if a.pluginsRT == nil || a.pluginsRT.mgr == nil {
+		return nil
+	}
+	return map[string]http.Handler{"addon-relay": a.pluginsRT.mgr.RelayHandler()}
+}
+
 // mountPlugins mounts the plugin tunnel and plugin host API (WS8b).
 func (a *App) mountPlugins(mux *http.ServeMux) {
 	if a.pluginsRT == nil {

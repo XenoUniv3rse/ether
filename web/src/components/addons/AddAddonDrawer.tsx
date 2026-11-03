@@ -8,6 +8,7 @@ import { Field } from "../fields";
 import { t } from "../../i18n";
 import { apiFetch } from "../../lib/api";
 import { invalidateRegistry } from "../../lib/extend";
+import { AddonSettingsPage } from "../../pages/plugins/drawer/AddonSettings";
 import {
   ADDON_ROLE_LABEL,
   addonUrlHasDebridKey,
@@ -42,6 +43,7 @@ export function AddAddonDrawer({
   const [on, setOn] = useState<Record<string, boolean>>({});
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
+  const [settingUp, setSettingUp] = useState(false);
 
   useEffect(() => {
     if (!open) {
@@ -52,13 +54,22 @@ export function AddAddonDrawer({
     }
   }, [open]);
 
-  const read = async () => {
+  const [pendingRead, setPendingRead] = useState("");
+  useEffect(() => {
+    if (!pendingRead) return;
+    setPendingRead("");
+    void read(pendingRead);
+    // read is recreated each render; this runs once per configured link.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingRead]);
+
+  const read = async (link = url) => {
     setBusy(true);
     setError(null);
     try {
       const p = await apiFetch<AddonPreview>("/plugins/addons/preview", {
         method: "POST",
-        body: JSON.stringify({ url: url.trim() }),
+        body: JSON.stringify({ url: link.trim() }),
       });
       setPreview(p);
       const next: Record<string, boolean> = {};
@@ -112,6 +123,29 @@ export function AddAddonDrawer({
 
   const roleMissing = !!role && !!preview && !(preview.roles ?? []).some((r) => r.role === role);
   const nothingOn = !!preview && !Object.values(on).some(Boolean);
+
+  const settingsPage = preview ? (
+    <AddonSettingsPage
+      open={settingUp}
+      name={preview.name}
+      host={preview.host}
+      useLabel={t("Continue")}
+      openPage={() =>
+        apiFetch<{ page: string }>("/plugins/addons/configure-page", {
+          method: "POST",
+          body: JSON.stringify({ url: url.trim() }),
+        }).then((r) => r.page)
+      }
+      onUse={async (link) => {
+        // The configured link is the add-on to add; read it again.
+        setSettingUp(false);
+        setUrl(link);
+        setPreview(null);
+        setPendingRead(link);
+      }}
+      onClose={() => setSettingUp(false)}
+    />
+  ) : null;
 
   return (
     <Drawer
@@ -202,12 +236,15 @@ export function AddAddonDrawer({
             <p className="text-sm text-fg-muted">{preview.description}</p>
           ) : null}
           {preview.configureFirst ? (
-            <p className="flex items-start gap-2 rounded-lg bg-warning-subtle p-3 text-sm">
-              <AlertTriangle size={15} className="mt-0.5 shrink-0 text-warning" aria-hidden />
-              {t(
-                "This add-on needs configuring first. Open its configure page, set it up, and paste the link it gives you.",
-              )}
-            </p>
+            <div className="space-y-3 rounded-lg bg-warning-subtle p-3 text-sm">
+              <p className="flex items-start gap-2">
+                <AlertTriangle size={15} className="mt-0.5 shrink-0 text-warning" aria-hidden />
+                {t("{name} needs setting up before Ether can use it.", { name: preview.name })}
+              </p>
+              <Button size="sm" onClick={() => setSettingUp(true)}>
+                {t("Set it up here")}
+              </Button>
+            </div>
           ) : (
             <section className="space-y-1">
               <h3 className="text-sm font-semibold">{t("What it does in Ether")}</h3>
@@ -244,6 +281,7 @@ export function AddAddonDrawer({
           {error ? <MutationError error={error} /> : null}
         </div>
       )}
+      {settingsPage}
     </Drawer>
   );
 }
