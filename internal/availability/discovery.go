@@ -270,7 +270,7 @@ func (s *Service) refreshHidden(kind string) {
 	s.visibilityMu.Unlock()
 	run := func() {
 		for {
-			ctx, cancel := context.WithTimeout(s.bgCtx, 5*time.Minute)
+			ctx, cancel := context.WithTimeout(offRequest(s.bgCtx), 5*time.Minute)
 			s.computeHidden(ctx, kind)
 			cancel()
 			s.visibilityMu.Lock()

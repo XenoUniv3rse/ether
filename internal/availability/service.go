@@ -60,7 +60,8 @@ type Deps struct {
 	Async bool
 }
 type Service struct {
-	behind             chan struct{} // writeBehind slots
+	verdictMu          sync.Mutex
+	verdictQueue       verdictQueue // guarded by verdictMu
 	visibilityMu       sync.Mutex
 	visibilityRevision uint64
 	visibilityCache    map[string]visibilityEntry
@@ -102,7 +103,7 @@ func New(d Deps) (*Service, error) {
 	if d.Logger == nil {
 		d.Logger = slog.Default()
 	}
-	s := &Service{db: d.DB, cfg: d.Config, d: d, now: d.Now, log: d.Logger, hiddenSets: map[string]*hiddenSet{}, behind: make(chan struct{}, writeBehindSlots)}
+	s := &Service{db: d.DB, cfg: d.Config, d: d, now: d.Now, log: d.Logger, hiddenSets: map[string]*hiddenSet{}, verdictQueue: verdictQueue{behind: true}}
 	s.bgCtx, s.bgStop = context.WithCancel(context.Background())
 	return s, nil
 }

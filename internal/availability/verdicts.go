@@ -106,12 +106,9 @@ func (s *Service) judge(ctx context.Context, pairs []feedPair, anyPerTitle bool)
 		}
 		g.indexes = append(g.indexes, i)
 	}
-	type fresh struct {
-		key             core.RatingKey
-		id, digest, why string
-	}
-	var durable []fresh
+	var durable []verdictRow
 	written := map[string]bool{}
+	now := s.now().Unix()
 	for _, k := range order {
 		g := pending[k]
 		// The whole title in one call, or release by release until one is
@@ -137,56 +134,132 @@ func (s *Service) judge(ctx context.Context, pairs []feedPair, anyPerTitle bool)
 				vk := verdictKey(k, pairs[i].r.ID, digests[i])
 				if !v.Volatile && !written[vk] {
 					written[vk] = true
-					durable = append(durable, fresh{key: k, id: pairs[i].r.ID, digest: digests[i], why: v.Reason})
+					durable = append(durable, verdictRow{policy: policy, key: k, id: pairs[i].r.ID, digest: digests[i], why: v.Reason, at: now})
 				}
 			}
 		}
 	}
-	if len(durable) == 0 {
-		return ok
-	}
-	// The read has its answer; remembering it is behind the read, so a
-	// browse request that judges new releases does not write.
-	now := s.now().Unix()
-	s.writeBehind(ctx, func(ctx context.Context) {
-		tx, err := s.db.BeginTx(ctx, nil)
-		if err != nil {
-			return
-		}
-		defer tx.Rollback()
-		for _, f := range durable {
-			if _, err := tx.ExecContext(ctx, `INSERT INTO availability_verdicts(policy,rating_key,release_id,digest,reason,evaluated_at) VALUES(?,?,?,?,?,?) ON CONFLICT(policy,rating_key,release_id,digest) DO UPDATE SET reason=excluded.reason,evaluated_at=excluded.evaluated_at`, policy, int64(f.key), f.id, f.digest, f.why, now); err != nil {
-				return
-			}
-		}
-		_ = tx.Commit()
-	})
+	s.rememberVerdicts(ctx, durable)
 	return ok
 }
 
-// writeBehindSlots bounds verdict writes running behind reads.
-const writeBehindSlots = 2
+// verdictRow is one durable verdict awaiting or being written.
+type verdictRow struct {
+	policy          string
+	key             core.RatingKey
+	id, digest, why string
+	at              int64
+}
 
-// writeBehind runs fn after the read that computed what it records, without
-// the read's query stats. At most writeBehindSlots run at once; a write that
-// finds them busy is dropped, and the next read that needs it judges again.
-// A Service built without New (tests) writes in line.
-func (s *Service) writeBehind(ctx context.Context, fn func(context.Context)) {
-	if s.behind == nil {
-		fn(ctx)
+func (v verdictRow) queueKey() string { return v.policy + "\x00" + verdictKey(v.key, v.id, v.digest) }
+
+// verdictQueue holds verdicts judged on a request until one writer stores
+// them. Reads consult it as they consult the table, so a verdict counts as
+// stored from the moment it is judged: the next section load judges nothing
+// even while the write is still behind (#303).
+type verdictQueue struct {
+	behind   bool                  // set by New; a bare Service writes in line
+	pending  map[string]verdictRow // judged, not yet taken by the writer
+	inflight map[string]verdictRow // taken by the writer, not yet committed
+	writing  bool
+}
+
+// maxQueuedVerdicts bounds the verdicts held in memory behind requests. A
+// burst beyond it is not remembered; the next read that needs one judges it.
+const maxQueuedVerdicts = 4096
+
+type offRequestKey struct{}
+
+// offRequest marks a context as service-owned background work: it stores
+// its verdicts before it returns instead of behind it.
+func offRequest(ctx context.Context) context.Context {
+	return context.WithValue(ctx, offRequestKey{}, true)
+}
+
+// rememberVerdicts stores rows. Background passes (the hidden-set refresh)
+// write in line, so their verdicts are durable before the set they computed
+// is published. A browse request has its answer already; it queues the rows
+// for the single writer and does not write itself.
+func (s *Service) rememberVerdicts(ctx context.Context, rows []verdictRow) {
+	if len(rows) == 0 {
 		return
 	}
-	select {
-	case s.behind <- struct{}{}:
-	default:
+	s.verdictMu.Lock()
+	q := &s.verdictQueue
+	if !q.behind || ctx.Value(offRequestKey{}) != nil {
+		s.verdictMu.Unlock()
+		s.writeVerdicts(ctx, rows)
 		return
 	}
-	bg, cancel := context.WithTimeout(store.DetachQueryStats(context.WithoutCancel(ctx)), 30*time.Second)
+	if q.pending == nil {
+		q.pending = map[string]verdictRow{}
+	}
+	for _, r := range rows {
+		if len(q.pending)+len(q.inflight) >= maxQueuedVerdicts {
+			break
+		}
+		q.pending[r.queueKey()] = r
+	}
+	start := !q.writing
+	q.writing = true
+	s.verdictMu.Unlock()
+	if !start {
+		return
+	}
+	s.visibilityMu.Lock()
+	closed := s.closed
+	if !closed {
+		s.bg.Add(1)
+	}
+	s.visibilityMu.Unlock()
+	bg := store.DetachQueryStats(context.WithoutCancel(ctx))
+	if closed {
+		s.drainVerdicts(bg)
+		return
+	}
 	go func() {
-		defer cancel()
-		defer func() { <-s.behind }()
-		fn(bg)
+		defer s.bg.Done()
+		s.drainVerdicts(bg)
 	}()
+}
+
+// drainVerdicts writes queued verdicts until none are left. Close waits for
+// it, so a restart finds every verdict judged before it.
+func (s *Service) drainVerdicts(ctx context.Context) {
+	for {
+		s.verdictMu.Lock()
+		q := &s.verdictQueue
+		if len(q.pending) == 0 {
+			q.inflight, q.writing = nil, false
+			s.verdictMu.Unlock()
+			return
+		}
+		q.inflight, q.pending = q.pending, nil
+		rows := make([]verdictRow, 0, len(q.inflight))
+		for _, r := range q.inflight {
+			rows = append(rows, r)
+		}
+		s.verdictMu.Unlock()
+		wctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		s.writeVerdicts(wctx, rows)
+		cancel()
+	}
+}
+
+// writeVerdicts upserts rows in one transaction. A failed write leaves them
+// unstored; the next read that needs one judges it again.
+func (s *Service) writeVerdicts(ctx context.Context, rows []verdictRow) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return
+	}
+	defer tx.Rollback()
+	for _, f := range rows {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO availability_verdicts(policy,rating_key,release_id,digest,reason,evaluated_at) VALUES(?,?,?,?,?,?) ON CONFLICT(policy,rating_key,release_id,digest) DO UPDATE SET reason=excluded.reason,evaluated_at=excluded.evaluated_at`, f.policy, int64(f.key), f.id, f.digest, f.why, f.at); err != nil {
+			return
+		}
+	}
+	_ = tx.Commit()
 }
 
 func verdictKey(key core.RatingKey, id, digest string) string {
@@ -216,6 +289,15 @@ func (s *Service) storedVerdicts(ctx context.Context, policy string, titles map[
 		}
 		rows.Close()
 	}
+	s.verdictMu.Lock()
+	for _, m := range []map[string]verdictRow{s.verdictQueue.inflight, s.verdictQueue.pending} {
+		for _, r := range m {
+			if _, ok := titles[r.key]; ok && r.policy == policy {
+				out[verdictKey(r.key, r.id, r.digest)] = r.why
+			}
+		}
+	}
+	s.verdictMu.Unlock()
 	return out
 }
 
