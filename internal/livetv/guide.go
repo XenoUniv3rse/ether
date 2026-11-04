@@ -57,6 +57,7 @@ const (
 type GuideChannel struct {
 	SourceID   string     `json:"sourceId"`
 	SourceName string     `json:"sourceName"`
+	SourceKind string     `json:"sourceKind,omitempty"`
 	GuideID    string     `json:"guideId"`
 	Name       string     `json:"name"`
 	Logo       string     `json:"logo"`
@@ -343,8 +344,28 @@ func (s *Service) GuideChannels(ctx context.Context, q, source string, limit int
 	if err != nil {
 		return nil, err
 	}
-	now := s.o.Now().UnixMilli()
+	kinds := map[string]string{}
 	d := store.DialectOf(s.o.DB)
+	sourceRows, err := s.o.DB.QueryContext(ctx, `SELECT id, `+store.JSONText(d, "data", "kind")+` FROM livetv_sources`)
+	if err != nil {
+		return nil, err
+	}
+	for sourceRows.Next() {
+		var id string
+		var kind sql.NullString
+		if err = sourceRows.Scan(&id, &kind); err != nil {
+			break
+		}
+		kinds[id] = kind.String
+	}
+	if err == nil {
+		err = sourceRows.Err()
+	}
+	sourceRows.Close()
+	if err != nil {
+		return nil, err
+	}
+	now := s.o.Now().UnixMilli()
 	args := []any{now, source, q, limit}
 	words := strings.Fields(q)
 	if len(words) > maxGuideSearchWords {
@@ -377,6 +398,7 @@ func (s *Service) GuideChannels(ctx context.Context, q, source string, limit int
 			return nil, err
 		}
 		g.SourceName = names[g.SourceID]
+		g.SourceKind = kinds[g.SourceID]
 		if until.Valid {
 			g.Until = msTime(until.Int64)
 		}

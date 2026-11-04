@@ -161,7 +161,15 @@ export type SourceDraft = {
   auth?: SourceAuth;
 };
 export type Programme = { id: string; channelId: string; start: string; end: string; item: Item };
+export function plexLineupName(title: string): string {
+  return title.replace(/\s*\([\d,]+\s+channels?\)$/i, "").trim();
+}
+export function plexLineupCount(title: string): number | null {
+  const match = title.match(/\(([\d,]+)\s+channels?\)$/i);
+  return match ? Number(match[1]!.replaceAll(",", "")) : null;
+}
 export type GuideChannel = {
+  sourceKind?: string;
   sourceId: string;
   sourceName: string;
   guideId: string;
