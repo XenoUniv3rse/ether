@@ -15,7 +15,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -419,11 +418,11 @@ func (s *StreamSources) prepareDirectURL(ctx context.Context, r core.Release, ra
 
 func (s *StreamSources) prepareLocalFile(ctx context.Context, r core.Release, pluginID, pluginName, rawPath string) ([]byte, error) {
 	if s.isRemote(ctx, pluginID) {
-		full, _, err := s.validateRemoteFile(ctx, pluginID, rawPath)
+		f, err := s.validateRemoteFile(ctx, pluginID, rawPath)
 		if err != nil {
 			return nil, err
 		}
-		size, err := s.remoteFileSize(ctx, pluginID, full)
+		size, err := s.remoteFileSize(ctx, pluginID, f.full)
 		if err != nil {
 			return nil, err
 		}
@@ -431,7 +430,7 @@ func (s *StreamSources) prepareLocalFile(ctx context.Context, r core.Release, pl
 		if origin == "" {
 			origin = pluginID
 		}
-		return (LocalPayload{PluginID: pluginID, ReleaseID: r.ID, FilePath: full, Name: path.Base(full), Size: size, Origin: origin, Remote: true}).Encode(), nil
+		return (LocalPayload{PluginID: pluginID, ReleaseID: r.ID, FilePath: f.full, Name: f.name, Size: size, Origin: origin, Remote: true}).Encode(), nil
 	}
 	resolved, info, err := s.validateLocalFile(ctx, pluginID, rawPath)
 	if err != nil {
@@ -470,66 +469,41 @@ func (s *StreamSources) isRemote(ctx context.Context, id string) bool {
 	return err == nil && rec.Manifest.Ether != nil && rec.Manifest.Ether.Runtime.Kind == "remote"
 }
 
-// validateRemoteFile checks the sidecar's POSIX path lexically against an
-// owner-granted root. The sidecar must also enforce containment when opening
-// the file, including symlinks; Ether cannot inspect its filesystem.
-func (s *StreamSources) validateRemoteFile(ctx context.Context, id, raw string) (string, string, error) {
+// validateRemoteFile checks a sidecar path lexically against the plugin's
+// owner-granted roots (see remotePath). The sidecar must also enforce
+// containment when opening the file, including symlinks; Ether cannot
+// inspect its filesystem.
+func (s *StreamSources) validateRemoteFile(ctx context.Context, id, raw string) (remoteFile, error) {
 	s.mu.RLock()
 	mgr := s.mgr
 	s.mu.RUnlock()
 	if mgr == nil {
-		return "", "", plugins.ErrUnavailable
+		return remoteFile{}, plugins.ErrUnavailable
 	}
 	rec, err := mgr.Get(ctx, id)
 	if err != nil {
-		return "", "", err
+		return remoteFile{}, err
 	}
 	if !rec.Enabled {
-		return "", "", plugins.ErrDisabled
+		return remoteFile{}, plugins.ErrDisabled
 	}
 	if rec.Manifest.Ether == nil || rec.Manifest.Ether.Runtime.Kind != "remote" || rec.Manifest.Ether.Permissions.Folders != "read" {
-		return "", "", plugins.ErrPermissionDenied
+		return remoteFile{}, plugins.ErrPermissionDenied
 	}
 	g, err := mgr.GrantsOf(ctx, id)
 	if err != nil {
-		return "", "", err
+		return remoteFile{}, err
 	}
 	for _, revoked := range g.Revoked {
 		if revoked == "folders" {
-			return "", "", plugins.ErrPermissionDenied
+			return remoteFile{}, plugins.ErrPermissionDenied
 		}
 	}
-	if raw == "" || strings.ContainsAny(raw, "\\%\x00") {
-		return "", "", plugins.ErrPermissionDenied
+	f, ok := resolveRemoteFile(g.Folders, raw)
+	if !ok {
+		return remoteFile{}, plugins.ErrPermissionDenied
 	}
-	for _, seg := range strings.Split(raw, "/") {
-		if seg == ".." || seg == "." || seg == "" && raw != "/" && !strings.HasPrefix(raw, "/") {
-			return "", "", plugins.ErrPermissionDenied
-		}
-	}
-	var full, rel string
-	matches := 0
-	for _, root := range g.Folders {
-		if !path.IsAbs(root) || strings.Contains(root, "\\") {
-			continue
-		}
-		root = path.Clean(root)
-		candidate := raw
-		if !path.IsAbs(candidate) {
-			candidate = path.Join(root, candidate)
-		}
-		candidate = path.Clean(candidate)
-		prefix := strings.TrimSuffix(root, "/") + "/"
-		if strings.HasPrefix(candidate, prefix) {
-			full = candidate
-			rel = strings.TrimPrefix(candidate, prefix)
-			matches++
-		}
-	}
-	if matches != 1 || rel == "" {
-		return "", "", plugins.ErrPermissionDenied
-	}
-	return full, rel, nil
+	return f, nil
 }
 
 func headerValue(h map[string]string, name string) string {
@@ -542,18 +516,14 @@ func headerValue(h map[string]string, name string) string {
 }
 
 func (s *StreamSources) remoteRange(ctx context.Context, id, file string, start, end int64) (plugins.Response, io.ReadCloser, error) {
-	full, rel, err := s.validateRemoteFile(ctx, id, file)
+	f, err := s.validateRemoteFile(ctx, id, file)
 	if err != nil {
 		return plugins.Response{}, nil, err
 	}
 	s.mu.RLock()
 	mgr := s.mgr
 	s.mu.RUnlock()
-	root := strings.TrimSuffix(full, rel)
-	if root != "/" {
-		root = strings.TrimSuffix(root, "/")
-	}
-	return mgr.CallStream(ctx, id, plugins.Request{Method: http.MethodGet, Path: "/ether/file/" + rel, Headers: map[string]string{"Range": fmt.Sprintf("bytes=%d-%d", start, end), "X-Ether-File-Root": root}})
+	return mgr.CallStream(ctx, id, plugins.Request{Method: http.MethodGet, Path: "/ether/file/" + f.rel, Headers: map[string]string{"Range": fmt.Sprintf("bytes=%d-%d", start, end), "X-Ether-File-Root": f.root}})
 }
 
 func parseRemoteRange(h string) (start, end, total int64, err error) {

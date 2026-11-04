@@ -83,7 +83,9 @@ func TestVerifiedWorkingSourceIsTriedFirstAfterRestart(t *testing.T) {
 		checks:  map[string]int{},
 		failure: map[string]error{"source00": core.ErrArticleMissing},
 	}
-	idx := &fakeIndexer{releases: continuationReleases(2)}
+	releases := continuationReleases(2)
+	releases[0].Grabs = 1000 // source00 is the higher-scored release
+	idx := &fakeIndexer{releases: releases}
 	req := core.ResolveRequest{Title: matrixTitle(), Client: webCaps()}
 	s := New(idx, h, db, testCfg(), Options{})
 	if res, err := s.Resolve(ctx, req); err != nil || res.Release.ID != "source01" {

@@ -353,7 +353,9 @@ func (s *StreamSources) directRelease(ctx context.Context, rec plugins.Record, r
 		var resolved string
 		var err error
 		if rec.Manifest.RuntimeKind() == "remote" {
-			resolved, _, err = s.validateRemoteFile(ctx, rec.ID, file)
+			var f remoteFile
+			f, err = s.validateRemoteFile(ctx, rec.ID, file)
+			resolved = f.full
 		} else {
 			resolved, _, err = s.validateLocalFile(ctx, rec.ID, file)
 		}
