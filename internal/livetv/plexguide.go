@@ -309,3 +309,48 @@ func (plexGuideKind) Fetch(ctx context.Context, s *Service, src *Source) (Fetche
 	}
 	return Fetched{Guide: g}, nil
 }
+
+type plexPreviewEntry struct {
+	at         time.Time
+	programmes []Programme
+}
+
+func (s *Service) previewProgrammes(ctx context.Context, c Channel, from, until time.Time) ([]Programme, error) {
+	src, err := s.storedSourceByID(ctx, guideSource(c))
+	if err != nil {
+		return s.programmes(ctx, c, from, until)
+	}
+	if src.Kind != "plex" || c.GuideID == "" {
+		return s.programmes(ctx, c, from, until)
+	}
+	var exists int
+	err = s.o.DB.QueryRowContext(ctx, `SELECT 1 FROM livetv_guide_channels WHERE source_id=? AND guide_id=?`, src.ID, c.GuideID).Scan(&exists)
+	if err != nil {
+		return nil, fmt.Errorf("unknown Plex guide channel")
+	}
+	key := src.ID + "/" + c.GuideID + "/" + s.o.Now().Format("2006-01-02")
+	s.plexPreviewMu.Lock()
+	defer s.plexPreviewMu.Unlock()
+	entry, ok := s.plexPreview[key]
+	if !ok || time.Since(entry.at) > 10*time.Minute {
+		budget := 1
+		ps, e := s.plexGrid(ctx, c.GuideID, s.o.Now(), &budget)
+		if e != nil {
+			return nil, e
+		}
+		if s.plexPreview == nil || len(s.plexPreview) >= 1000 {
+			s.plexPreview = map[string]plexPreviewEntry{}
+		}
+		entry = plexPreviewEntry{at: time.Now(), programmes: ps}
+		s.plexPreview[key] = entry
+	}
+	out := []Programme{}
+	for _, p := range entry.programmes {
+		if p.End.After(from) && p.Start.Before(until) {
+			p.ChannelID = c.ID
+			p.ID = fmt.Sprintf("%s-%d", c.ID, p.Start.UnixMilli())
+			out = append(out, p)
+		}
+	}
+	return out, nil
+}

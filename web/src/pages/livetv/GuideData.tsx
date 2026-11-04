@@ -794,7 +794,7 @@ export function AutoMatchPanel({
       .then((r) => {
         const changes = r.changes ?? [];
         setProposals(changes);
-        setAccepted(new Set(changes.map((c) => c.channelId)));
+        setAccepted(new Set(changes.filter((c) => c.method !== "alias").map((c) => c.channelId)));
       })
       .catch((e) => setError(errorMessage(e)));
   }, []);
@@ -879,7 +879,7 @@ export function AutoMatchPanel({
                   </span>
                 </span>
               </span>
-              {p.method === "name" ? <Badge variant="secondary">{t("by name")}</Badge> : null}
+              {p.method === "name" ? <Badge variant="secondary">{t("by name")}</Badge> : p.method === "alias" ? <Badge variant="secondary">{t("Review call sign")}</Badge> : null}
             </label>
           </li>
         );

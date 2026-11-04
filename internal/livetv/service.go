@@ -31,6 +31,8 @@ CREATE TABLE livetv_policies(user_id INTEGER PRIMARY KEY, data TEXT NOT NULL);`)
 
 type Service struct {
 	plexGate      plexGuideGate
+	plexPreviewMu sync.Mutex
+	plexPreview   map[string]plexPreviewEntry
 	authCache     authCache  // provider credentials for the stream path (auth.go)
 	inputRelay    inputRelay // loopback ffmpeg input relay (input_relay.go)
 	probeMu       sync.Mutex

@@ -502,6 +502,30 @@ func (s *Service) MatchGuides(ctx context.Context, req GuideMatchRequest) (Guide
 	byID := map[string][]*guideCandidate{}
 	byFold := map[string][]*guideCandidate{}
 	byName := map[string][]*guideCandidate{}
+	byAlias := map[string][]*guideCandidate{}
+	plexSources := map[string]bool{}
+	sourceRows, err := s.o.DB.QueryContext(ctx, `SELECT id, data FROM livetv_sources`)
+	if err != nil {
+		return res, err
+	}
+	for sourceRows.Next() {
+		var id string
+		var data []byte
+		var source Source
+		if err = sourceRows.Scan(&id, &data); err != nil {
+			break
+		}
+		if json.Unmarshal(data, &source) == nil && source.Kind == "plex" {
+			plexSources[id] = true
+		}
+	}
+	if err == nil {
+		err = sourceRows.Err()
+	}
+	sourceRows.Close()
+	if err != nil {
+		return res, err
+	}
 	rows, err := s.o.DB.QueryContext(ctx, guideChannelsCTE+`SELECT source_id, guide_id, name, names FROM gc`)
 	if err != nil {
 		return res, err
@@ -513,8 +537,8 @@ func (s *Service) MatchGuides(ctx context.Context, req GuideMatchRequest) (Guide
 			return res, err
 		}
 		st, ok := stats[guideKey{src, id}]
-		if !ok {
-			continue // no upcoming programmes; mapping to it would not help
+		if !ok && !plexSources[src] {
+			continue
 		}
 		cand := &guideCandidate{source: src, guide: id, name: name, window: st.window, until: st.until}
 		byID[id] = append(byID[id], cand)
@@ -524,6 +548,12 @@ func (s *Service) MatchGuides(ctx context.Context, req GuideMatchRequest) (Guide
 		json.Unmarshal([]byte(raw), &all)
 		seen := map[string]bool{}
 		for _, n := range append(all, name) {
+			if plexSources[src] {
+				if k := normalizeGuideName(n); k != "" {
+					byAlias[k] = append(byAlias[k], cand)
+				}
+				continue
+			}
 			if k := normalizeGuideName(n); k != "" && !seen[k] {
 				seen[k] = true
 				byName[k] = append(byName[k], cand)
@@ -561,6 +591,21 @@ func (s *Service) MatchGuides(ctx context.Context, req GuideMatchRequest) (Guide
 			method = "name"
 			if k := normalizeGuideName(c.Name); k != "" {
 				pick = bestCandidate(c, byName[k])
+			}
+		}
+		if pick == nil && (req.DryRun || len(req.ChannelIDs) > 0) {
+			method = "alias"
+			normalized := normalizeGuideName(c.Name)
+			pick = bestCandidate(c, byAlias[normalized])
+			if pick == nil {
+				for _, word := range strings.FieldsFunc(strings.ToLower(c.Name), func(r rune) bool { return !unicode.IsLetter(r) && !unicode.IsDigit(r) }) {
+					if len(word) >= 3 {
+						if candidate := bestCandidate(c, byAlias[word]); candidate != nil {
+							pick = candidate
+							break
+						}
+					}
+				}
 			}
 		}
 		if pick == nil {

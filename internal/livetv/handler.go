@@ -187,8 +187,8 @@ func (s *Service) Handler() http.Handler {
 			until = from.Add(8 * 24 * time.Hour)
 		}
 		if c.Kind == "iptv" {
-			// An unsaved guide mapping previews the stored listings it would use.
-			ps, e := s.programmes(r.Context(), c, from, until)
+			// An unsaved mapping may preview a Plex channel before it is imported.
+			ps, e := s.previewProgrammes(r.Context(), c, from, until)
 			ownerResult(w, ps, e)
 			return
 		}
