@@ -5,6 +5,10 @@
 @import "@braedonsaunders/appkit-dashboard/primitives.css";
 
 @source "./";
+/* AppKit's agent panel (Ask Ether, Studio, Describe a collection) styles with
+ * Tailwind classes the console must generate; without them its composer's
+ * focus ring falls back to a solid currentColor ring. */
+@source "../node_modules/@braedonsaunders/appkit-ai/react.js";
 
 :root {
   /* Drawers cover the full height (AppShell header included). */

@@ -238,7 +238,19 @@ export function NativePreview({
  * The live stage: every tool call the agent makes becomes a moment, drawn
  * with the approved stage widgets and filled with the call's real result.
  */
-export function LiveStageView({ moments, narration }: { moments: Moment[]; narration: string }) {
+export function LiveStageView({
+  moments,
+  narration,
+  showCompleted = true,
+  onOpenTitle,
+}: {
+  moments: Moment[];
+  narration: string;
+  /** Lists earlier moments under the stage; off where the chat shows the steps. */
+  showCompleted?: boolean;
+  /** Makes catalogue posters open their title. */
+  onOpenTitle?: (key: string) => void;
+}) {
   const current = moments[moments.length - 1];
   const result = [...moments]
     .reverse()
@@ -257,11 +269,13 @@ export function LiveStageView({ moments, narration }: { moments: Moment[]; narra
       ) : null}
       {current ? (
         <div className="stage-rise" key={moments.length}>
-          <MomentView moment={current} />
+          <MomentView moment={current} onOpenTitle={onOpenTitle} />
         </div>
       ) : null}
-      {result && result !== current ? <MomentView moment={result} /> : null}
-      {done.length ? (
+      {result && result !== current ? (
+        <MomentView moment={result} onOpenTitle={onOpenTitle} />
+      ) : null}
+      {showCompleted && done.length ? (
         <details className="rounded-xl border border-border bg-surface p-4">
           <summary className="cursor-pointer text-sm text-fg-muted">
             {t("Completed steps ({count})", { count: done.length })}

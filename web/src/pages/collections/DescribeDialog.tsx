@@ -25,6 +25,7 @@ import {
   readAgentStream,
 } from "../plugins/LiveStage";
 import type { Moment } from "../plugins/Stage";
+import { TitleInspector } from "../catalog/TitleInspector";
 
 /** The agent route whose turns build one collection and outlive a reload. */
 const ROUTE = "/collections/describe";
@@ -280,6 +281,16 @@ export function DescribeDialog({
   };
 
   const busy = streaming || rejoined;
+  const [openTitle, setOpenTitle] = useState<string | null>(null);
+  // The top shows the request and the draft's posters; each step is a tool
+  // call in the chat below.
+  const stage = useMemo(() => {
+    const shown = moments.filter((m) => m.kind === "intent" || m.kind === "catalog");
+    if (busy || !spec) return shown;
+    const name = spec.name || t("Untitled collection");
+    return [...shown, { kind: "done", text: t("“{name}” is ready", { name }) } as Moment];
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- copy follows the language
+  }, [moments, busy, spec, locale]);
   const lastAssistant = [...messages].reverse().find((m) => m.role === "assistant");
 
   /** Ends the conversation: the collection (or nothing) is the outcome. */
@@ -411,29 +422,14 @@ export function DescribeDialog({
           </AlertDescription>
         </Alert>
       ) : null}
-      {moments.length ? (
-        <div
-          className="app-scroll min-h-0 flex-[3] overflow-y-auto border-b border-border"
-          aria-label={t("Live build")}
-          role="region"
-        >
+      {stage.length ? (
+        // Sized to its content so every poster shows; the chat below scrolls.
+        <div className="shrink-0 border-b border-border" aria-label={t("Live build")} role="region">
           <LiveStageView
-            moments={
-              busy
-                ? moments
-                : spec
-                  ? [
-                      ...moments,
-                      {
-                        kind: "done",
-                        text: t("“{name}” is ready", {
-                          name: spec.name || t("Untitled collection"),
-                        }),
-                      },
-                    ]
-                  : moments
-            }
+            moments={stage}
             narration=""
+            showCompleted={false}
+            onOpenTitle={setOpenTitle}
           />
         </div>
       ) : null}
@@ -442,7 +438,7 @@ export function DescribeDialog({
           {error}
         </p>
       ) : null}
-      <div className="flex min-h-[320px] flex-[2] flex-col">
+      <div className="flex min-h-[220px] flex-1 flex-col">
         <AgentPanel
           enabled={enabled !== false}
           initialMessages={messages}
@@ -452,20 +448,26 @@ export function DescribeDialog({
           working={rejoined && !streaming}
           send={send}
           composerActions={
-            <Segmented
-              ariaLabel={t("Media type")}
-              size="sm"
-              value={media}
-              onChange={setMedia}
-              options={[
-                { value: "movie", label: t("Movies") },
-                { value: "show", label: t("TV") },
-                { value: "mixed", label: t("Both") },
-              ]}
-            />
+            // The composer row aligns to its bottom; centre the switch on the input line.
+            <div className="flex h-10 shrink-0 items-center">
+              <Segmented
+                ariaLabel={t("Media type")}
+                size="sm"
+                value={media}
+                onChange={setMedia}
+                options={[
+                  { value: "movie", label: t("Movies") },
+                  { value: "show", label: t("TV") },
+                  { value: "mixed", label: t("Both") },
+                ]}
+              />
+            </div>
           }
         />
       </div>
+      {openTitle ? (
+        <TitleInspector key={openTitle} titleKey={openTitle} onClose={() => setOpenTitle(null)} />
+      ) : null}
     </Drawer>
   );
 }
