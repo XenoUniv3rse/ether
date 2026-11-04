@@ -176,15 +176,24 @@ func (a *App) pluginCollectionTitle(ctx context.Context, id string) (string, err
 	}
 	id = strings.TrimSpace(id)
 	if strings.HasPrefix(id, "tt") || strings.HasPrefix(id, "imdb:") {
-		var key core.RatingKey
-		err := a.db.QueryRowContext(ctx, `SELECT key FROM catalog_titles WHERE imdb=? AND type IN ('movie','show') ORDER BY key LIMIT 1`, strings.TrimPrefix(id, "imdb:")).Scan(&key)
-		if errors.Is(err, sql.ErrNoRows) {
+		// The catalogue owns catalog_titles: resolve through its lookup, a
+		// movie first and then a show, as the stored order did.
+		imdb := strings.TrimPrefix(id, "imdb:")
+		var found *core.Title
+		for _, typ := range []core.MediaType{core.TypeMovie, core.TypeShow} {
+			t, err := a.catalog.ByExternalIDForType(ctx, "imdb", imdb, typ)
+			if err == nil && t != nil {
+				found = t
+				break
+			}
+			if cerr := ctx.Err(); cerr != nil {
+				return "", cerr
+			}
+		}
+		if found == nil {
 			return "", core.ErrNotFound
 		}
-		if err != nil {
-			return "", err
-		}
-		title, err := a.catalog.CachedGet(ctx, key)
+		title, err := a.catalog.CachedGet(ctx, found.Key)
 		if err != nil {
 			return "", err
 		}
