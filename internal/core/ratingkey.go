@@ -19,6 +19,8 @@ import (
 //	KindEpisode     payload = show*10^7 + season*10^4 + ep  (show < 10^8, season < 1000, ep < 10^4)
 //	KindCollection  payload = tmdb collection id (franchise)
 //	KindSmart       payload = local smart-collection / generated hub id;
+//	                payloads 701*10^12 through 703*10^12 are reserved
+//	                for section-specific persisted collections;
 //	                payloads in [EphemeralSmartBase, EphemeralSmartEnd)
 //	                are reserved for ephemeral (in-memory, per-viewer)
 //	                generated collections, and payloads from
@@ -52,6 +54,48 @@ func SmartKey(id int64) RatingKey      { return RatingKey(int64(KindSmart)*keyBa
 func PlaylistKey(id int64) RatingKey   { return RatingKey(int64(KindPlaylist)*keyBase + id) }
 func ExtraKey(id int64) RatingKey      { return RatingKey(int64(KindExtra)*keyBase + id) }
 func LocalKey(id int64) RatingKey      { return RatingKey(int64(KindLocal)*keyBase + id) }
+
+// SectionCollectionKey gives a persisted smart collection a distinct Plex
+// identity per library. The reserved range is below ephemeral smart keys.
+const sectionCollectionBase int64 = 700_000_000_000_000
+const sectionCollectionStride int64 = 1_000_000_000_000
+
+func SectionCollectionKey(k RatingKey, t MediaType) RatingKey {
+	if k.Kind() != KindSmart || k.payload() <= 0 || k.payload() >= sectionCollectionStride {
+		return k
+	}
+	var n int64
+	switch t {
+	case TypeMovie:
+		n = 1
+	case TypeShow:
+		n = 2
+	default:
+		return k
+	}
+	return SmartKey(sectionCollectionBase + n*sectionCollectionStride + k.payload())
+}
+
+func (k RatingKey) CollectionSection() (RatingKey, MediaType) {
+	if k.Kind() != KindSmart {
+		return k, ""
+	}
+	p := k.payload() - sectionCollectionBase
+	if p <= sectionCollectionStride || p >= 3*sectionCollectionStride {
+		return k, ""
+	}
+	id := p % sectionCollectionStride
+	if id == 0 {
+		return k, ""
+	}
+	switch p / sectionCollectionStride {
+	case 1:
+		return SmartKey(id), TypeMovie
+	case 2:
+		return SmartKey(id), TypeShow
+	}
+	return k, ""
+}
 
 // EphemeralSmartBase and EphemeralSmartEnd bound the KindSmart payloads
 // reserved for ephemeral generated collections. The range stops where
