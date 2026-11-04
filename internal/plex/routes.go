@@ -160,6 +160,10 @@ func (s *Server) routes() chi.Router {
 	get("/library/parts/{part}/indexes/{index}/{offset}", s.handleIndexFrame)
 	get("/library/parts/{part}/indexes/{index}", s.handleIndexBIF)
 	get("/library/parts/{part}/{changestamp}/{file}", s.handlePart)
+	// PM4K (Plex for Kodi) drops the "file.<ext>" name before handing the URL
+	// to Kodi, so Kodi doesn't scan the "directory" for subtitles. PMS serves
+	// the part at the bare changestamp path, so Ether does too.
+	get("/library/parts/{part}/{changestamp}/", s.handlePart)
 	get("/library/parts/{part}/{file}", s.handlePart)
 	r.Put("/library/parts/{part}", s.handlePartSelect)
 	get("/library/streams/{stream}", s.handleStream)
