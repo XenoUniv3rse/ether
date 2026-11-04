@@ -1,7 +1,8 @@
 # Public corpus tier: evidence and limits
 
 The complete matrix is retained in `corpus-tier2-before.json` and
-`corpus-tier2-after.json`. These are measured runs, not a claim of exhaustive
+`corpus-tier2-run.json`; `corpus-tier2-after.json` incorporates the separately
+recorded focused classification/retry results and graph checks. These are measured runs, not a claim of exhaustive
 player compatibility. Media and raw diagnostics stay outside the repository.
 
 ## Root fixes
