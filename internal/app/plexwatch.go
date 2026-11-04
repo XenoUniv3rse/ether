@@ -6,23 +6,31 @@ import (
 	"errors"
 
 	"github.com/braedonsaunders/ether/internal/admin"
+	"github.com/braedonsaunders/ether/internal/plexguid"
 	"github.com/braedonsaunders/ether/internal/plexwatch"
 )
 
 // buildPlexWatch attaches the optional per-viewer account sync. GUID lookup
-// still uses the server metadata token inside plexguid. The watch client
-// receives only the viewer's own sealed PIN token.
+// uses a viewer PIN token for identity/consent and server-issued service JWTs
+// for the watch-state transport.
 func (a *App) buildPlexWatch() error {
 	if a.plexWatch != nil || a.db == nil || a.state == nil || a.plexGUID == nil || a.cfg == nil {
 		return nil
 	}
 	svc, err := plexwatch.New(plexwatch.Options{
+		ServerIdentity: func() (string, string) {
+			c := a.cfg.Get()
+			if !c.Plex.Claimed || (c.Frontends != nil && !c.Frontends["plex"].Enabled) {
+				return "", ""
+			}
+			return c.Plex.Token, plexguid.ClientIdentifier(c.Plex.ClientIdentifier, c.Server.MachineIdentifier)
+		},
 		DB:       a.db,
 		State:    a.state,
 		Sealer:   a.cfg,
 		GUID:     a.plexGUID,
 		NodeID:   a.clusterNodeID(),
-		ClientID: a.cfg.Get().Plex.ClientIdentifier,
+		ClientID: plexguid.ClientIdentifier(a.cfg.Get().Plex.ClientIdentifier, a.cfg.Get().Server.MachineIdentifier),
 		Logger:   a.log.With("component", "plexwatch"),
 	})
 	if err != nil {

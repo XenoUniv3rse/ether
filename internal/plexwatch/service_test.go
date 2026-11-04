@@ -122,6 +122,9 @@ func (f *fakeUpstream) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	tok := r.Header.Get("X-Plex-Token")
+	if bearer := r.Header.Get("Authorization"); strings.HasPrefix(bearer, "Bearer ") {
+		tok = strings.TrimPrefix(bearer, "Bearer ")
+	}
 	f.mu.Lock()
 	if tok != "" {
 		f.tokens = append(f.tokens, tok)

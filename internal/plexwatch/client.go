@@ -64,12 +64,14 @@ func (e *StatusError) Is(target error) bool {
 
 // Client is the allowlisted Plex HTTP API used by this package.
 type Client struct {
-	plex     *url.URL
-	servers  *url.URL
-	scrobble *url.URL
-	clientID string
-	http     *http.Client
-	now      func() time.Time
+	serverIdentity func() (string, string)
+	credentials    serviceCredentials
+	plex           *url.URL
+	servers        *url.URL
+	scrobble       *url.URL
+	clientID       string
+	http           *http.Client
+	now            func() time.Time
 }
 
 func newClient(base, clientID string, hc *http.Client, now func() time.Time) (*Client, error) {
@@ -224,7 +226,7 @@ func (c *Client) postState(ctx context.Context, token string, plexID int64, item
 	if err != nil {
 		return err
 	}
-	_, err = c.call(ctx, http.MethodPost, c.scrobble, "/state", token, body, nil, http.StatusCreated, http.StatusOK)
+	_, err = c.stateCall(ctx, http.MethodPost, "/state", token, plexID, body, nil, http.StatusCreated, http.StatusOK)
 	return err
 }
 
@@ -265,7 +267,7 @@ func (c *Client) fetchState(ctx context.Context, token string, plexID int64, cur
 		} `json:"pageInfo"`
 	}
 	path := "/state/" + strconv.FormatInt(plexID, 10) + "?" + q.Encode()
-	if _, err := c.call(ctx, http.MethodGet, c.scrobble, path, token, nil, &out, http.StatusOK); err != nil {
+	if _, err := c.stateCall(ctx, http.MethodGet, path, token, plexID, nil, &out, http.StatusOK); err != nil {
 		return remotePage{}, err
 	}
 	return remotePage{Items: out.Items, EndCursor: out.PageInfo.EndCursor, HasNextPage: out.PageInfo.EndCursor != "" && out.PageInfo.HasNextPage}, nil
@@ -285,7 +287,7 @@ func (c *Client) call(ctx context.Context, method string, base *url.URL, pathAnd
 	if !c.allowed(u) {
 		return 0, errors.New("plexwatch: host is not allowlisted")
 	}
-	if strings.Contains(u.Path, "/services") || strings.Contains(u.Path, "/api/home/") {
+	if (strings.Contains(u.Path, "/services") && (u.Path != "/api/v2/server/users/services" || method != http.MethodGet || base != c.plex || c.serverIdentity == nil)) || strings.Contains(u.Path, "/api/home/") {
 		return 0, errors.New("plexwatch: that credential route is not used")
 	}
 	if strings.HasSuffix(u.Path, "/view_state_sync") && method != http.MethodGet {
@@ -301,9 +303,17 @@ func (c *Client) call(ctx context.Context, method string, base *url.URL, pathAnd
 	}
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("X-Plex-Product", "Ether")
+	// Plex selects server service credentials by product as well as claim.
+	if u.Path == "/api/v2/server/users/services" {
+		req.Header.Set("X-Plex-Product", "Plex Media Server")
+	}
 	req.Header.Set("X-Plex-Client-Identifier", c.clientID)
 	if token != "" {
-		req.Header.Set("X-Plex-Token", token)
+		if u.Path == "/state" || strings.HasPrefix(u.Path, "/state/") {
+			req.Header.Set("Authorization", "Bearer "+token)
+		} else {
+			req.Header.Set("X-Plex-Token", token)
+		}
 	}
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")

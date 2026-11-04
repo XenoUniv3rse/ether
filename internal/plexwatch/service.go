@@ -125,16 +125,18 @@ type GUIDMap interface {
 // Options configure a Service. BaseURL is the test origin for every Plex
 // host. Leave it empty in production.
 type Options struct {
-	DB       *sql.DB
-	State    *state.State
-	Sealer   config.FieldSealer
-	GUID     GUIDMap
-	NodeID   string
-	ClientID string
-	BaseURL  string
-	HTTP     *http.Client
-	Logger   *slog.Logger
-	Now      func() time.Time
+	// ServerIdentity returns the current claimed server token and client identifier.
+	ServerIdentity func() (string, string)
+	DB             *sql.DB
+	State          *state.State
+	Sealer         config.FieldSealer
+	GUID           GUIDMap
+	NodeID         string
+	ClientID       string
+	BaseURL        string
+	HTTP           *http.Client
+	Logger         *slog.Logger
+	Now            func() time.Time
 }
 
 // Service is one server's Plex account watch-state integration.
@@ -194,6 +196,7 @@ func New(opts Options) (*Service, error) {
 	if err != nil {
 		return nil, err
 	}
+	c.serverIdentity = opts.ServerIdentity
 	return &Service{
 		db: opts.DB, state: opts.State, sealer: opts.Sealer, guid: opts.GUID,
 		client: c, node: node, log: log, now: now, claimFor: 2 * time.Minute,

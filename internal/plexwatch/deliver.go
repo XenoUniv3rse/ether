@@ -203,6 +203,18 @@ func (s *Service) lookupGUID(ctx context.Context, key core.RatingKey) (string, e
 }
 
 func (s *Service) failDelivery(ctx context.Context, row state.SyncRow, attempt, permitID string, generation int64, err error) error {
+	var lookup *credentialLookupError
+	if errors.As(err, &lookup) {
+		if cerr := s.clearAttempt(ctx, permitID, row.Seq, true); cerr != nil {
+			return cerr
+		}
+		delay := time.Minute
+		var status *StatusError
+		if errors.As(lookup, &status) && status.RetryAfter > delay {
+			delay = status.RetryAfter
+		}
+		return s.state.DeferSync(ctx, row.Seq, attempt, s.now().Add(delay), "credential_unavailable")
+	}
 	var st *StatusError
 	if errors.As(err, &st) {
 		switch {
