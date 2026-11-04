@@ -38,6 +38,9 @@ type runSpec struct {
 	Features features
 	// BigProbe raises probesize/analyzeduration (retry after a failed start).
 	BigProbe bool
+	// Repeat encoder parameter sets on recovery so a decoder holding the
+	// initial fMP4 header can decode the replacement encoder's keyframes.
+	InBandHeaders bool
 	// Protocol is core.ProtocolHLS or core.ProtocolDASH. For DASH, Dir is
 	// the run's own directory and Playlist ffmpeg's manifest in it.
 	Protocol string
@@ -330,7 +333,7 @@ func buildCodecArgs(s runSpec) []string {
 		} else {
 			args = append(args, vp.encodeArgs...)
 			args = append(args, videotoolboxCaptionArgs(v, vp.encodeArgs)...)
-			if d.Container == ContainerMatroska {
+			if d.Container == ContainerMatroska || s.InBandHeaders {
 				// Encoders emit Annex B with the global header as extradata;
 				// matroskaenc converts both to length-prefixed form.
 				args = append(args, "-bsf:v", "dump_extra=freq=keyframe")
