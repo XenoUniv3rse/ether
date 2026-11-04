@@ -513,7 +513,11 @@ func hlsMuxArgs(s runSpec) []string {
 		// keyframe (HEVC CRA) presents after its leading pictures and
 		// was moved before them. HLS does not use sidx, and the chunked
 		// path already drops it from multi-chunk segments.
-		options := "movflags=+frag_discont+skip_sidx"
+		// A source can contain pre-zero decode timestamps. frag_discont
+		// otherwise writes them as wrapped uint64 tfdt values. Normalize
+		// priming in the nested muxer; its edit list retains presentation
+		// timing and the existing edit reconciliation handles restarts.
+		options := "movflags=+frag_discont+skip_sidx:avoid_negative_ts=make_non_negative"
 		if s.VideoTimescale != 0 {
 			options += ":video_track_timescale=" + strconv.FormatUint(uint64(s.VideoTimescale), 10)
 		}
