@@ -7,6 +7,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/braedonsaunders/ether/internal/core"
 )
 
 var missingFilterRE = regexp.MustCompile(`(?i)(?:no such filter:\s*['"]?([a-z0-9_]+)|filter ['"]([a-z0-9_]+)['"] not found)`)
@@ -430,6 +432,9 @@ func (s *Session) finish(r *run) {
 		}
 		return
 	}
+	if s.recoverCopyLocked(r, stderr) {
+		return
+	}
 	if r.produced == 0 && !r.stalled {
 		s.failures++
 		s.failErr = fmt.Errorf("ffmpeg: %w: %s", err, tail(stderr, 300))
@@ -454,6 +459,39 @@ func (s *Session) finish(r *run) {
 		ferr := s.failErr
 		go h(s.id, at, ferr)
 	}
+}
+
+// recoverCopyLocked handles a fatal packet conversion in the MP4-to-Annex-B
+// copy path. A decoder can conceal a damaged NAL that the copy bitstream
+// filter rejects. TS carries replacement parameter sets in-band; static
+// headers and HDR/DV contracts cannot safely make this transition here.
+func (s *Session) recoverCopyLocked(r *run, stderr string) bool {
+	v := s.info.Video()
+	if s.copyFallback || s.inputFailed || s.liveInput || s.isDASH() ||
+		s.container != ContainerMPEGTS || !r.spec.Decision.VideoCopy ||
+		v == nil || v.Codec != "h264" || encodedRange(v) != rangeSDR ||
+		!strings.Contains(strings.ToLower(stderr), "error applying bitstream filters") {
+		return false
+	}
+	next := r.next()
+	s.copyFallback = true
+	d := s.decision
+	d.Kind, d.VideoCopy, d.VideoCodec = core.DecisionTranscode, false, "h264"
+	if d.BitrateKbps <= 0 {
+		d.BitrateKbps = s.info.BitrateKbps
+	}
+	d.Reason += "; copied video packet conversion failed; encoding video"
+	s.decision = d
+	if len(s.rungs) > 0 {
+		s.rungs[0].decision = d
+	}
+	s.copyDiscontinuities = map[int]bool{next: true}
+	s.playlist = nil
+	s.log.Warn("copy packet conversion failed; encoding video", "segment", next)
+	if err := s.startRunForLocked(next, r.spec.BigProbe, "copy packet recovery"); err != nil {
+		s.failErr = err
+	}
+	return true
 }
 
 // restartBudget bounds attempts in a sliding window even if every attempt

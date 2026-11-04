@@ -521,7 +521,7 @@ func (s *Session) chunkedLocked(d core.Decision) bool {
 	if s.liveInput || s.isDASH() || s.plan == nil || s.info.Video() == nil {
 		return false
 	}
-	return s.plan.Keyframed() || d.VideoCopy || s.container == ContainerMatroska
+	return s.plan.Keyframed() || d.VideoCopy || s.copyFallback || s.container == ContainerMatroska
 }
 
 // stopRunLocked detaches the current run immediately. Process reaping happens

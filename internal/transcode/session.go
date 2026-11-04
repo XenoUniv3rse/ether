@@ -73,6 +73,8 @@ type sessionInput struct {
 	info                core.MediaInfo
 	decision            core.Decision
 	forceCPU            bool // hardware encoder failed; stay on CPU
+	copyFallback        bool // copied video failed its packet conversion; encode this session
+	copyDiscontinuities map[int]bool
 	noPause             bool // platform cannot suspend ffmpeg
 	inputFailed         bool // exhausted this input; HTTP retries cannot restart it
 	stallRestarts       []time.Time

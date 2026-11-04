@@ -194,6 +194,17 @@ func TestTranscodeChaosMatrix(t *testing.T) {
 							media := get(fmt.Sprintf("/video/:/transcode/universal/session/%s/base/%05d.%s", id, n, ext))
 							check(t, append(append([]byte(nil), init...), media...), outputExt, strings.HasPrefix(name, "input-corrupt-"))
 						}
+						if name == "input-corrupt-mp4" {
+							session, ok := m.Session(id)
+							if !ok || session.(*transcode.Session).Decision().VideoCopy {
+								t.Fatal("fatal copy conversion did not switch to video encoding")
+							}
+							w := httptest.NewRecorder()
+							session.ServePlaylist(w, httptest.NewRequest(http.MethodGet, "/playlist", nil))
+							if !strings.Contains(w.Body.String(), "#EXT-X-DISCONTINUITY\n") {
+								t.Fatal("copy recovery did not advertise the parameter change")
+							}
+						}
 						if name == "input-multi-audio" {
 							seekID := id + "-seek"
 							seekQuery := strings.Replace(query, "session="+id, "session="+seekID, 1)

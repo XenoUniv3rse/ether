@@ -107,7 +107,7 @@ func (s *Session) rampTranscodesLocked() bool {
 // tracks (t > 0) are steady transcodes of one shape, so only the primary
 // track can have discontinuities.
 func (s *Session) discontBeforeLocked(t, n int) bool {
-	if s.rtxDiscontinuities[n] || s.liveDiscontinuities[n] {
+	if s.rtxDiscontinuities[n] || s.liveDiscontinuities[n] || (t == 0 && s.copyDiscontinuities[n]) {
 		return true
 	}
 	if s.plan == nil || t != 0 || n <= 0 {
@@ -138,6 +138,12 @@ type runPlan struct {
 // length for ffmpeg's muxer and the segment where the mode changes.
 func (s *Session) runPlanLocked(seg int) runPlan {
 	rp := runPlan{decision: s.trackDecisionLocked(s.wantTrack), hlsDur: s.segDur, planEnd: -1, rate: s.vbvRateLocked(s.wantTrack)}
+	if s.copyFallback {
+		// Keep the published geometry, but never return to the failed copy
+		// mode on a seek, a governor boundary, or a rendition switch.
+		rp.mode = ModeTranscode
+		return rp
+	}
 	if s.isDASH() || s.plan == nil || s.wantTrack != 0 {
 		return rp
 	}
