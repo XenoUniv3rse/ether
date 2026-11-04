@@ -35,9 +35,10 @@ func main() {
 	ff := flag.String("ffmpeg", "ffmpeg", "ffmpeg executable")
 	fp := flag.String("ffprobe", "ffprobe", "ffprobe executable")
 	only := flag.String("only", "", "run scenarios whose name contains this text")
+	corpus := flag.String("corpus", "", "optional directory for generated input fixtures")
 	report := flag.String("report", "transcodechaos-report.json", "output JSON report")
 	flag.Parse()
-	if err := run(*ff, *fp, *report, *only); err != nil {
+	if err := run(*ff, *fp, *report, *only, *corpus); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
@@ -49,7 +50,7 @@ func command(ctx context.Context, exe string, args ...string) error {
 	}
 	return nil
 }
-func run(ff, fp, report, only string) error {
+func run(ff, fp, report, only, corpus string) error {
 	root, err := os.MkdirTemp("", "ether-chaos-")
 	if err != nil {
 		return err
@@ -69,6 +70,11 @@ func run(ff, fp, report, only string) error {
 	for _, name := range []string{"input-backward-dts", "input-timestamp-jump", "input-corrupt-mkv", "input-corrupt-mp4", "input-text-subtitle", "input-ass-subtitle", "input-broken-text", "input-broken-ass", "input-pgs", "input-dolby-vision", "input-missing-keyframe", "input-open-gop", "input-long-gop", "input-pts-wrap", "input-resolution-change", "input-samplerate-change", "input-audio-late", "input-audio-early-end", "input-vfr", "input-interlaced", "input-hevc10-hdr", "input-multi-audio"} {
 		cases = append(cases, scenario{name, "mpegts", "none", "", false})
 	}
+	if corpus != "" {
+		if err := os.MkdirAll(corpus, 0700); err != nil {
+			return err
+		}
+	}
 	results := make([]result, 0, len(cases))
 	failures := 0
 	for _, sc := range cases {
@@ -83,6 +89,18 @@ func run(ff, fp, report, only string) error {
 			status = "SKIP"
 			detail = "fixture unavailable: " + fixtureErr.Error()
 		} else {
+			if corpus != "" && strings.HasPrefix(sc.Name, "input-") {
+				altered, e := mutateFixture(fixture, sc)
+				if e != nil {
+					return e
+				}
+				if e = os.WriteFile(filepath.Join(corpus, sc.Name+".good"), fixture, 0600); e != nil {
+					return e
+				}
+				if e = os.WriteFile(filepath.Join(corpus, sc.Name+".media"), altered, 0600); e != nil {
+					return e
+				}
+			}
 			detail = exercise(ctx, ff, fp, root, fixture, sc)
 		}
 		if detail != "" && status != "SKIP" {
@@ -105,15 +123,12 @@ func run(ff, fp, report, only string) error {
 	}
 	return nil
 }
-func exercise(parent context.Context, ff, fp, root string, good []byte, sc scenario) (detail string) {
-	baseline := takeBaseline()
-	ctx, cancel := context.WithTimeout(parent, 40*time.Second)
-	defer cancel()
+func mutateFixture(good []byte, sc scenario) ([]byte, error) {
 	data := bytes.Clone(good)
 	if sc.Name == "input-broken-text" || sc.Name == "input-broken-ass" {
 		at := bytes.Index(data, []byte("First subtitle"))
 		if at < 0 {
-			return "subtitle packet payload not found"
+			return nil, fmt.Errorf("subtitle packet payload not found")
 		}
 		for i := at; i < at+8; i++ {
 			data[i] = 0xff
@@ -140,6 +155,16 @@ func exercise(parent context.Context, ff, fp, root string, good []byte, sc scena
 	}
 	if sc.Fault == "truncate" {
 		data = data[:len(data)/2]
+	}
+	return data, nil
+}
+func exercise(parent context.Context, ff, fp, root string, good []byte, sc scenario) (detail string) {
+	baseline := takeBaseline()
+	ctx, cancel := context.WithTimeout(parent, 40*time.Second)
+	defer cancel()
+	data, err := mutateFixture(good, sc)
+	if err != nil {
+		return err.Error()
 	}
 	source := &faultSource{good: good, altered: data, fault: sc.Fault}
 	srv := httptest.NewServer(source)
