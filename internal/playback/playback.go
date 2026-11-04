@@ -264,7 +264,8 @@ type Manager struct {
 	lastCaps       map[int64]core.ClientCaps
 	warm           map[identity]*warmEntry
 	warmRequests   map[warmBudgetKey][]time.Time
-	warmMisses     map[identity]time.Time // warm-ups that ended without a source (warmMissTTL)
+	warmMisses     map[identity]time.Time       // warm-ups that ended without a source (warmMissTTL)
+	stalePrefers   map[stalePreferKey]time.Time // picked releases that fell back (stalePreferTTL)
 
 	pinMu        sync.Mutex
 	livePins     map[string]int
@@ -845,11 +846,20 @@ func (m *Manager) prepareOwnedWithin(ctx context.Context, wait time.Duration, us
 	if deferSupersession {
 		id.variant, id.exact = prefer, exact
 	}
+	picked := prefer
 	for {
 		m.mu.Lock()
 		if m.closed {
 			m.mu.Unlock()
 			return nil, nil, errors.New("playback: shutting down")
+		}
+		if prefer != "" && !exact && m.preferenceStaleLocked(key, prefer, m.now()) {
+			// The picked version fell back moments ago: this open is the
+			// automatic choice (stale_prefer.go).
+			prefer = ""
+			if deferSupersession {
+				id.variant = ""
+			}
 		}
 		m.lastCaps[user.ID] = caps
 		if s := m.byIdent[id]; s != nil {
@@ -891,6 +901,18 @@ func (m *Manager) prepareOwnedWithin(ctx context.Context, wait time.Duration, us
 		// resolving and opening a second one in parallel.
 		alt := fk
 		alt.deferSupersession = true
+		if f = m.flights[alt]; f != nil {
+			fk = alt
+		}
+	}
+	if f == nil && picked != prefer {
+		// The open that found the pick stale is still preparing the
+		// automatic choice under the pick's flight: join it.
+		alt := fk
+		alt.prefer = picked
+		if deferSupersession {
+			alt.id.variant = picked
+		}
 		if f = m.flights[alt]; f != nil {
 			fk = alt
 		}

@@ -24,7 +24,7 @@ func TestHistoryTimelineAggregation(t *testing.T) {
 	defer db.Close()
 	now := time.Date(2026, 10, 19, 12, 0, 0, 0, time.UTC)
 	svc := New(db, Options{Now: func() time.Time { return now }})
-	p := &core.PlaySession{ID: "one", UserID: 7, Key: 99, Username: "Sam", TitleName: "<Movie>", StartedAt: now, BytesServed: 100, Client: core.ClientCaps{Platform: "iOS", DeviceName: "Phone"}}
+	p := &core.PlaySession{ID: "one", UserID: 7, Key: 99, Username: "Sam", TitleName: "<Movie>", StartedAt: now, BytesServed: 100 << 20, Client: core.ClientCaps{Platform: "iOS", DeviceName: "Phone"}}
 	if err := svc.Record(ctx, p, false, ""); err != nil {
 		t.Fatal(err)
 	}
@@ -32,7 +32,7 @@ func TestHistoryTimelineAggregation(t *testing.T) {
 	now = now.Add(30 * time.Second)
 	svc.ObserveState(state.Event{Kind: state.EventProgress, UserID: 7, Key: 99, At: now, State: "playing"})
 	svc.ObserveState(state.Event{Kind: state.EventCompleted, UserID: 7, Key: 99, At: now, Completed: true})
-	p.BytesServed = 200
+	p.BytesServed = 200 << 20
 	now = now.Add(time.Second)
 	if err := svc.Record(ctx, p, true, ""); err != nil {
 		t.Fatal(err)
@@ -41,7 +41,7 @@ func TestHistoryTimelineAggregation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if sum.Plays != 1 || sum.Bytes != 200 || sum.WatchedMS != 30000 || sum.Completed != 1 || len(sum.Platforms) != 1 {
+	if sum.Plays != 1 || sum.Bytes != 200<<20 || sum.WatchedMS != 30000 || sum.Completed != 1 || len(sum.Platforms) != 1 {
 		t.Fatalf("summary: %+v", sum)
 	}
 	h, err := svc.History(ctx, now.Add(-time.Hour), now.Add(time.Hour), 7, 10)
@@ -65,13 +65,13 @@ func TestAmbiguousTimelineNotAttributed(t *testing.T) {
 	now := time.Now()
 	s := New(db, Options{Now: func() time.Time { return now }})
 	for _, id := range []string{"one", "two"} {
-		if err := s.Record(ctx, &core.PlaySession{ID: id, UserID: 1, Key: 1, StartedAt: now}, false, ""); err != nil {
+		if err := s.Record(ctx, &core.PlaySession{ID: id, UserID: 1, ClientID: id, Key: 1, StartedAt: now, BytesServed: 8 << 20}, false, ""); err != nil {
 			t.Fatal(err)
 		}
 	}
 	s.ObserveState(state.Event{Kind: state.EventCompleted, UserID: 1, Key: 1, Completed: true, At: now})
 	v, err := s.Summary(ctx, now.Add(-time.Minute), now.Add(time.Minute), 1)
-	if err != nil || v.Completed != 0 {
+	if err != nil || v.Plays != 2 || v.Completed != 0 {
 		t.Fatalf("ambiguous completion attributed: %+v %v", v, err)
 	}
 }
@@ -215,7 +215,7 @@ func TestHistoricalImportDoesNotChangeActivePlaybackStats(t *testing.T) {
 	now := time.Date(2026, 10, 19, 12, 0, 0, 0, time.UTC)
 	svc := New(db, Options{Now: func() time.Time { return now }})
 	key := core.MovieKey(99)
-	if err := svc.Record(ctx, &core.PlaySession{ID: "active", UserID: 7, Key: key, StartedAt: now}, false, ""); err != nil {
+	if err := svc.Record(ctx, &core.PlaySession{ID: "active", UserID: 7, Key: key, StartedAt: now, BytesServed: 8 << 20}, false, ""); err != nil {
 		t.Fatal(err)
 	}
 	svc.ObserveState(state.Event{Kind: state.EventProgress, UserID: 7, Key: key, At: now, State: "playing", Duration: time.Hour})

@@ -1560,6 +1560,10 @@ func (s *Server) handlePart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ps, ok := s.d.Playback.SessionFor(pr.User.ID, pr.ClientID, key)
+	live := ""
+	if ok && ps != nil {
+		live = ps.ID
+	}
 	// A live session on a different release does not satisfy a variant part.
 	if ok && ps != nil && releaseID != "" && (ps.Resolution == nil || ps.Resolution.Release.ID != releaseID) {
 		ok = false
@@ -1580,7 +1584,12 @@ func (s *Server) handlePart(w http.ResponseWriter, r *http.Request) {
 			s.writeStartErr(w, r, pr, err)
 			return
 		}
-		s.observePlaybackDecision(ctx, pr, &playRequest{key: key, caps: caps, partReleaseID: releaseID, requestedPart: id}, ps)
+		// The picked version fell back: the playback kept the session that
+		// already plays the automatic choice, so this read continues it.
+		ok = live != "" && ps.ID == live
+		if !ok {
+			s.observePlaybackDecision(ctx, pr, &playRequest{key: key, caps: caps, partReleaseID: releaseID, requestedPart: id}, ps)
+		}
 	}
 	if r.Method != http.MethodHead && r.URL.Query().Get("download") != "1" {
 		// A part read is the playing Media for clients that skip the

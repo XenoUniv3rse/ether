@@ -26,23 +26,19 @@ var errSourceBroken = fmt.Errorf("playback: source broken: %w", core.ErrArticleM
 // response: the response must end and the next decision/start is a remux.
 var errRequireRemux = errors.New("playback: failover requires remux")
 
-// openInitial finds and opens the first release of a session: the stored
-// resume release when it was resolved for the same profile, else the
-// resolver's answer, moving to the next candidate when a release fails.
-func (m *Manager) openInitial(ctx context.Context, s *session, profile core.QualityProfile) (*generation, error) {
+// preparedResolution is the source a session can open without resolving:
+// the warm entry, else the stored resume release when it was resolved for
+// the same profile. A picked version (prefer) accepts only that release.
+func (m *Manager) preparedResolution(ctx context.Context, s *session, profile core.QualityProfile, original, prefer string) (*core.Resolution, *probeCache, bool) {
 	var res *core.Resolution
 	var cached *probeCache
 	fromResume := false
-	original := ""
-	if s.title != nil {
-		original = s.title.Language
-	}
-	if warm := m.takeWarmResolution(ctx, s.ident, profile, s.caps, s.prefer, original); warm != nil {
+	if warm := m.takeWarmResolution(ctx, s.ident, profile, s.caps, prefer, original); warm != nil {
 		res, cached = warm.res, warm.probe
 	}
 	if res == nil {
 		res = m.resumeResolution(ctx, s.ident.userID, s.ident.key, profile, s.caps, original)
-		if res != nil && s.prefer != "" && res.Release.ID != s.prefer {
+		if res != nil && prefer != "" && res.Release.ID != prefer {
 			res = nil // a picked version wins over the remembered release
 		}
 		if res != nil {
@@ -63,8 +59,20 @@ func (m *Manager) openInitial(ctx context.Context, s *session, profile core.Qual
 		if s.prefer == res.Release.ID {
 			s.prefer, s.exact = "", false
 		}
-		res, cached, fromResume = nil, nil, false
+		return nil, nil, false
 	}
+	return res, cached, fromResume
+}
+
+// openInitial finds and opens the first release of a session: the stored
+// resume release when it was resolved for the same profile, else the
+// resolver's answer, moving to the next candidate when a release fails.
+func (m *Manager) openInitial(ctx context.Context, s *session, profile core.QualityProfile) (*generation, error) {
+	original := ""
+	if s.title != nil {
+		original = s.title.Language
+	}
+	res, cached, fromResume := m.preparedResolution(ctx, s, profile, original, s.prefer)
 	var (
 		tried       []string
 		alternates  []core.Release
@@ -89,6 +97,16 @@ func (m *Manager) openInitial(ctx context.Context, s *session, profile core.Qual
 			fromResume = false
 			var err error
 			res, err = m.nextResolution(ctx, s, tried, alternates)
+			if err == nil && len(tried) == 0 && s.prefer != "" && !s.exact && res.Release.ID != s.prefer {
+				// The picked version fell back to normal ranking. Play the
+				// automatic choice the warm-up (or resume) already holds, so
+				// the opening prefetch is not wasted on another release, and
+				// stop asking for the pick on every open.
+				m.notePreferenceStale(s.ident.key, s.prefer, res.Release.ID)
+				if auto, autoCached, autoResume := m.preparedResolution(ctx, s, profile, original, ""); auto != nil {
+					res, cached, fromResume = auto, autoCached, autoResume
+				}
+			}
 			if err != nil {
 				if fallbackGen != nil {
 					g := fallbackGen
