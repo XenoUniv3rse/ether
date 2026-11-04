@@ -84,26 +84,28 @@ func TestRunBudgetsFollowsMembership(t *testing.T) {
 	done := make(chan struct{})
 	go func() { a.runBudgets(ctx); close(done) }()
 	defer func() { cancel(); <-done }()
-	waitUntil(t, "half the connections", func() bool { return a.fetcher.MaxConnections() == 5 })
-	if st := a.debrid.Stats()[0]; st.Slots != st.AccountSlots/2 {
-		t.Fatalf("debrid slots with two nodes: %d of %d", st.Slots, st.AccountSlots)
+	// applyBudgets updates the fetcher, debrid and TMDB one after another,
+	// so a membership change is only fully applied once the last of them
+	// (TMDB) shows it; reading the others after the fetcher alone races.
+	twoNodes := func() bool {
+		st := a.debrid.Stats()[0]
+		rate, _ := a.tmdb.RateLimit()
+		return a.fetcher.MaxConnections() == 5 && st.Slots == st.AccountSlots/2 && rate == 20
 	}
-	if rate, _ := a.tmdb.RateLimit(); rate != 20 {
-		t.Fatalf("TMDB rate with two nodes: %v/s", rate)
-	}
+	waitUntil(t, "two-node budgets: half the connections and debrid slots, TMDB 20/s", twoNodes)
 
 	// A third node joins (announced on the members topic).
 	fm.set(self, b, cluster.Node{ID: "c", Live: true, Caps: cluster.Caps{Weight: 3}})
 	_ = fm.Publish(ctx, cluster.TopicMembers, []byte("c"))
-	waitUntil(t, "a fifth after c joins", func() bool { return a.fetcher.MaxConnections() == 2 })
-	if rate, _ := a.tmdb.RateLimit(); rate < 13.3 || rate > 13.4 {
-		t.Fatalf("TMDB rate with three nodes: %v/s", rate)
-	}
+	waitUntil(t, "three-node budgets: a fifth of the connections, TMDB 13.3/s", func() bool {
+		rate, _ := a.tmdb.RateLimit()
+		return a.fetcher.MaxConnections() == 2 && rate >= 13.3 && rate <= 13.4
+	})
 
 	// c leaves: its share comes back.
 	fm.set(self, b)
 	_ = fm.Publish(ctx, cluster.TopicMembers, []byte("c"))
-	waitUntil(t, "half again after c leaves", func() bool { return a.fetcher.MaxConnections() == 5 })
+	waitUntil(t, "two-node budgets again after c leaves", twoNodes)
 }
 
 func testDebrid() *debrid.Service {
