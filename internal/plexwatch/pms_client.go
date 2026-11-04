@@ -42,8 +42,8 @@ import (
 //   - GET /library/sections → Directory[].key, type. Recorded.
 //   - GET /library/sections/{id}/all?type=&guid=plex://…&includeGuids=1 → the
 //     one item with that primary GUID; an unknown GUID gives size 0 and no
-//     Metadata. Probed for a movie (type=1). The episode form (type=4) is
-//     inferred from python-plexapi's LibrarySection.getGuid.
+//     Metadata. Probed for a movie (type=1) and an episode (type=4); the
+//     episode carries grandparentRatingKey, index and parentIndex.
 //   - GET /:/scrobble, /:/unscrobble, /:/progress with key=<ratingKey>,
 //     identifier=com.plexapp.plugins.library (and time= in milliseconds).
 //     Writes, deliberately not probed; documented routes as python-plexapi
