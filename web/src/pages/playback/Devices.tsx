@@ -55,6 +55,8 @@ type CapabilityOverride = {
   id?: string;
   product?: string;
   productExact?: boolean;
+  productMatch?: string;
+  copiedFrom?: string;
   platform?: string;
   device?: string;
   dolbyVisionProfiles?: number[];
@@ -171,7 +173,13 @@ function deviceKey(row: CompatDevice) {
 }
 
 function isAppOverride(item: CapabilityOverride) {
-  return !item.id && !item.device && !item.platform && Boolean(item.product);
+  return (
+    !item.id &&
+    !item.device &&
+    !item.platform &&
+    item.productMatch !== "contains" &&
+    Boolean(item.product)
+  );
 }
 
 function isDeviceMatch(item: CapabilityOverride) {
@@ -303,7 +311,16 @@ function applyCapabilityDiff(
 
 function capabilityChanged(override: CapabilityOverride) {
   return Object.keys(override).some(
-    (key) => !["id", "product", "productExact", "device", "platform"].includes(key),
+    (key) =>
+      ![
+        "id",
+        "product",
+        "productExact",
+        "productMatch",
+        "copiedFrom",
+        "device",
+        "platform",
+      ].includes(key),
   );
 }
 
@@ -374,7 +391,7 @@ export function DeviceCapabilities() {
   const overrides = matrix.data?.overrides ?? [];
 
   const appOverride = (name: string) =>
-    overrides.find((item) => isAppOverride(item) && sameText(item.product, name));
+    [...overrides].reverse().find((item) => isAppOverride(item) && sameText(item.product, name));
   const deviceOverride = (row: CompatDevice) =>
     row.id
       ? overrides.find((item) => item.id === row.id)
@@ -728,8 +745,10 @@ export function DeviceCapabilities() {
                             {name}
                           </button>
                           {row.saved ? (
-                            <Badge variant="warning" className="ml-2">
-                              {t("Changed")}
+                            <Badge variant="warning" className="ml-2" title={row.saved.copiedFrom}>
+                              {row.saved.copiedFrom
+                                ? t("Copied from a shared setting")
+                                : t("Changed")}
                             </Badge>
                           ) : null}
                           {seen.length > 0 ? (

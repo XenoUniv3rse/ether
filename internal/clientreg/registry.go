@@ -350,7 +350,7 @@ func OverrideApplies(o core.ClientCapabilityOverride, recordIDs []string, id Ide
 		return false
 	}
 	if o.Product != "" {
-		if o.ID == "" && o.Device == "" && o.Platform == "" {
+		if o.ID == "" && o.Device == "" && o.Platform == "" && o.ProductMatch != "contains" {
 			if !strings.EqualFold(strings.TrimSpace(id.Product), strings.TrimSpace(o.Product)) {
 				return false
 			}
@@ -377,7 +377,19 @@ func applyOverrides(base Result, playbackID, policyID string, id Identity, overr
 	if policyID != "" && policyID != playbackID {
 		ids = append(ids, policyID)
 	}
+	// A product-specific edit replaces the entire legacy app edit, including
+	// fields the owner cleared. Device and record overrides remain independent.
+	hasExactApp := false
 	for _, o := range overrides {
+		if o.Product != "" && o.ID == "" && o.Device == "" && o.Platform == "" && o.ProductMatch != "contains" && OverrideApplies(o, ids, id) {
+			hasExactApp = true
+			break
+		}
+	}
+	for _, o := range overrides {
+		if hasExactApp && o.ProductMatch == "contains" && o.ID == "" && o.Device == "" && o.Platform == "" {
+			continue
+		}
 		if !OverrideApplies(o, ids, id) {
 			continue
 		}

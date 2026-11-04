@@ -85,6 +85,7 @@ const MOCK_EQUIVALENTS: Record<string, string[]> = {
 const NOW = () => new Date();
 
 export interface FakeOptions {
+  capabilityOverrides?: Array<Record<string, unknown>>;
   bootstrap?: Partial<Bootstrap>;
   /** Artificial latency for realism in the browser; 0 in tests. */
   latencyMs?: number;
@@ -2842,6 +2843,7 @@ export function createFakeServer(opts: FakeOptions = {}) {
         return json({ ok: true, durationMs: 40 + (hash(route) % 200) });
       case "GET /playback/policy":
         return json({
+          overrides: opts.capabilityOverrides ?? [],
           apps: [
             {
               protocol: "plex",

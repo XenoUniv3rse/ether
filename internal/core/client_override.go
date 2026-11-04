@@ -8,9 +8,13 @@ type ClientCapabilityOverride struct {
 	Product string `json:"product,omitempty"`
 	// ProductExact marks a product-only override already scoped by the app editor
 	// or migrated from the old substring matcher.
-	ProductExact bool   `json:"productExact,omitempty"`
-	Platform     string `json:"platform,omitempty"`
-	Device       string `json:"device,omitempty"`
+	ProductExact bool `json:"productExact,omitempty"`
+	// ProductMatch preserves legacy substring selectors. New app edits are exact.
+	ProductMatch string `json:"productMatch,omitempty"`
+	// CopiedFrom identifies a migrated shared selector for the console badge.
+	CopiedFrom string `json:"copiedFrom,omitempty"`
+	Platform   string `json:"platform,omitempty"`
+	Device     string `json:"device,omitempty"`
 	// Version is the minimum client version (dotted numbers) this override requires.
 	Version             string   `json:"version,omitempty"`
 	VideoCodecs         []string `json:"videoCodecs,omitempty"`

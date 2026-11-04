@@ -26,27 +26,26 @@ func splitAppOverrides(in []core.ClientCapabilityOverride) ([]core.ClientCapabil
 	out := make([]core.ClientCapabilityOverride, 0, len(in))
 	changed := 0
 	for _, o := range in {
-		if o.ProductExact || o.ID != "" || o.Device != "" || o.Platform != "" || strings.TrimSpace(o.Product) == "" {
+		if o.ProductExact || o.ProductMatch == "contains" || o.ID != "" || o.Device != "" || o.Platform != "" || o.Product == "" {
 			out = append(out, o)
 			continue
 		}
-		needle := strings.ToLower(strings.TrimSpace(o.Product))
+		needle := strings.ToLower(o.Product)
 		var matches []string
 		for _, product := range products {
 			if strings.Contains(strings.ToLower(product), needle) {
 				matches = append(matches, product)
 			}
 		}
-		if len(matches) == 0 || (len(matches) == 1 && strings.EqualFold(strings.TrimSpace(o.Product), matches[0])) {
-			out = append(out, o)
-			continue
-		}
 		changed++
-		// The old selector also matched a client sending the generic product
-		// itself (for example older Plex for Android builds). Keep that exact
-		// identity alongside the distinct known products.
+		// Preserve the old selector for products outside the catalogue.
+		legacy := o
+		legacy.ProductMatch = "contains"
+		out = append(out, legacy)
+		// The original name can also be a real product, such as older Android.
 		original := o
 		original.ProductExact = true
+		original.CopiedFrom = o.Product
 		out = append(out, original)
 		for _, product := range matches {
 			if strings.EqualFold(strings.TrimSpace(o.Product), product) {
@@ -55,6 +54,7 @@ func splitAppOverrides(in []core.ClientCapabilityOverride) ([]core.ClientCapabil
 			copy := o
 			copy.Product = product
 			copy.ProductExact = true
+			copy.CopiedFrom = o.Product
 			out = append(out, copy)
 		}
 	}

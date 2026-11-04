@@ -107,6 +107,41 @@ describe("Sources", () => {
 });
 
 describe("Playback devices", () => {
+  it("identifies copied app edits and saves only the edited app", async () => {
+    const shared = { product: "Plex for Android", productMatch: "contains", maxHeight: 1080 };
+    const phone = {
+      product: "Plex for Android (Mobile)",
+      productExact: true,
+      copiedFrom: shared.product,
+      maxHeight: 1080,
+    };
+    const tv = {
+      product: "Plex for Android (TV)",
+      productExact: true,
+      copiedFrom: shared.product,
+      maxHeight: 1080,
+    };
+    const { fake } = renderApp("/playback/devices", { capabilityOverrides: [shared, phone, tv] });
+    const phoneButton = await screen.findByRole(
+      "button",
+      { name: "Edit Plex for Android phones" },
+      WAIT,
+    );
+    const row = phoneButton.closest("tr")!;
+    expect(within(row).getByText("Copied from a shared setting")).toHaveAttribute(
+      "title",
+      "Plex for Android",
+    );
+    fireEvent.click(phoneButton);
+    const drawer = await screen.findByRole("dialog", { name: "Edit Plex for Android phones" });
+    fireEvent.click(within(drawer).getByRole("button", { name: "Highest resolution it can show" }));
+    fireEvent.click(await screen.findByRole("option", { name: "4K" }));
+    fireEvent.click(within(drawer).getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(calls(fake, "PUT", "/config/clients")).toHaveLength(1));
+    expect(calls(fake, "PUT", "/config/clients")[0]!.body).toEqual({
+      overrides: [shared, tv, { ...phone, maxHeight: 2160 }],
+    });
+  });
   it("saves the exact product of the edited app", async () => {
     const { fake } = renderApp("/playback/devices");
     fireEvent.click(
