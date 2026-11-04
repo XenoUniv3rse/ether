@@ -69,7 +69,7 @@ func (s *Server) handleStartDASH(w http.ResponseWriter, r *http.Request) {
 	}
 	if err, failed := s.transcodes.takeFailure(p.sessionID, pr.User.ID, p.key, s.now()); failed {
 		s.log.Info("start DASH playback failed", "key", p.key, "reason", playbackMessage(err), "err", err, "decision", "remembered")
-		s.writeErr(w, r, err)
+		s.writeStartErr(w, r, pr, err)
 		return
 	}
 	entry, ok := s.transcodes.get(p.sessionID)
@@ -83,7 +83,7 @@ func (s *Server) handleStartDASH(w http.ResponseWriter, r *http.Request) {
 				return // the player dropped this request; its preparation carries on
 			}
 			s.log.Info("start DASH playback failed", "key", p.key, "reason", playbackMessage(err), "err", err)
-			s.writeErr(w, r, err)
+			s.writeStartErr(w, r, pr, err)
 			return
 		}
 		entry, _ = s.transcodes.get(p.sessionID)
