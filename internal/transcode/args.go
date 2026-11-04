@@ -249,7 +249,7 @@ func buildCodecArgs(s runSpec) []string {
 	if s.Start > 0 {
 		args = append(args, "-ss", secs(s.Start))
 	}
-	if s.Protocol == core.ProtocolHTTP && !s.LiveInput && (s.Start > 0 || s.CopyTimestamps) {
+	if s.httpCopyTimestamps() {
 		args = append(args, "-copyts")
 	}
 	args = append(args, "-i", s.Input)
@@ -280,10 +280,12 @@ func buildCodecArgs(s runSpec) []string {
 	switch {
 	case textSub != nil && textSub.External && textSub.ExternalURL != "":
 		args = append(args, "-map", "1:0", "-c:s", matroskaSubtitleCodec(textSub.Codec))
+		args = append(args, matroskaSubtitleTrackArgs(textSub)...)
 	case textSub != nil:
 		// The primary -ss applies to this stream too, so its cues share
 		// the run clock that output_ts_offset then places on the title.
 		args = append(args, "-map", fmt.Sprintf("0:%d", textSub.Index), "-c:s", matroskaSubtitleCodec(textSub.Codec))
+		args = append(args, matroskaSubtitleTrackArgs(textSub)...)
 	default:
 		args = append(args, "-sn")
 	}
@@ -613,6 +615,33 @@ func matroskaTextSubtitle(s runSpec) *core.StreamInfo {
 		return nil
 	}
 	return sub
+}
+
+// matroskaSubtitleTrackArgs describes the one text track the segments
+// carry. It is the track the viewer picked, so it is flagged default:
+// ExoPlayer (Plex for Android and Android TV) picks a text track by its
+// default flag or its language, and the source's flags are the release's,
+// not the viewer's (an English track a release leaves non-default stayed
+// off, #191). -map_metadata -1 drops the source's language, which the
+// track gets back, as PMS sets each mapped stream's language.
+func matroskaSubtitleTrackArgs(sub *core.StreamInfo) []string {
+	args := []string{"-disposition:s:0", "default"}
+	if sub.Language != "" {
+		args = append(args, "-metadata:s:s:0", "language="+sub.Language)
+	}
+	return args
+}
+
+// httpCopyTimestamps: Plex Desktop's HTTP Matroska stream keeps the
+// source's timestamps from a seek or when asked.
+func (s runSpec) httpCopyTimestamps() bool {
+	return s.Protocol == core.ProtocolHTTP && !s.LiveInput && (s.Start > 0 || s.CopyTimestamps)
+}
+
+// titleClock reports whether this run's decoded frames carry the title's
+// timestamps (-copyts) rather than starting at zero at its -ss point.
+func (s runSpec) titleClock() bool {
+	return len(inputTimestampArgs(s)) > 0 || s.httpCopyTimestamps()
 }
 
 // matroskaSubtitleCodec copies a codec Matroska already stores as text and
@@ -1029,12 +1058,14 @@ func planVideo(s runSpec, v *core.StreamInfo) videoPlan {
 		if subW > 0 && subH > 0 {
 			subScale = fmt.Sprintf("scale=%d:%d", subW, subH)
 		}
-		// -ss puts this run's frames at PTS 0 while a bitmap subtitle packet
-		// can keep its title timestamp. Reset both before overlay so the
-		// filter does not hold the picture waiting for a clock that never
-		// meets, and so the segment muxer's output_ts_offset is what places
-		// the run on the title timeline.
-		if s.Start > 0 {
+		// Without -copyts, -ss puts this run's frames at PTS 0 while a
+		// bitmap subtitle packet can keep its title timestamp. Reset both
+		// before overlay so the filter does not hold the picture waiting
+		// for a clock that never meets, and so the segment muxer's
+		// output_ts_offset is what places the run on the title timeline.
+		// A -copyts run already has both on the title clock, which its
+		// audio keeps too.
+		if s.Start > 0 && !s.titleClock() {
 			pre += ",setpts=PTS-STARTPTS"
 			if subScale == "null" {
 				subScale = "setpts=PTS-STARTPTS"
@@ -1052,17 +1083,21 @@ func planVideo(s runSpec, v *core.StreamInfo) videoPlan {
 		} else {
 			opt = fmt.Sprintf(":si=%d", subtitleOrdinal(s.Info, sub.Index))
 		}
-		// The subtitles filter looks up cues by frame PTS. Input -ss resets
-		// that to 0, so a seeked run would burn the opening cues (or stall
-		// if the filter then emits the file's own timeline). Shift onto the
-		// title clock for the lookup, then back to the run-relative clock
-		// the muxer offsets. The filter's own offset option saturates at
-		// ten minutes, which is shorter than a resume.
-		if s.Start > 0 {
+		// The subtitles filter looks up cues by frame PTS. Without -copyts,
+		// input -ss resets that to 0, so a seeked run would burn the opening
+		// cues (or stall if the filter then emits the file's own timeline).
+		// Shift onto the title clock for the lookup, then back to the
+		// run-relative clock the muxer offsets. The filter's own offset
+		// option saturates at ten minutes, which is shorter than a resume.
+		// A -copyts run's frames are on the title clock already: shifting
+		// them burned the cues one offset later and moved the picture off
+		// its audio (#191).
+		shift := s.Start > 0 && !s.titleClock()
+		if shift {
 			chain = append(chain, "setpts=PTS+"+secs(s.Start)+"/TB")
 		}
 		chain = append(chain, fmt.Sprintf("subtitles=filename=%s%s", escapeFilterValue(src), opt))
-		if s.Start > 0 {
+		if shift {
 			chain = append(chain, "setpts=PTS-STARTPTS")
 		}
 		chain = finish(chain)
