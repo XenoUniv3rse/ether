@@ -53,6 +53,8 @@ ALTER TABLE stats_plays ADD COLUMN origin TEXT NOT NULL DEFAULT '';
 ALTER TABLE stats_plays ADD COLUMN release_name TEXT NOT NULL DEFAULT '';
 ALTER TABLE stats_plays ADD COLUMN reason_kind TEXT NOT NULL DEFAULT '';
 ALTER TABLE stats_plays ADD COLUMN reason_detail TEXT NOT NULL DEFAULT '';`)
+	store.Register("stats", 9, `ALTER TABLE stats_plays ADD COLUMN client_ip TEXT;
+ALTER TABLE stats_plays ADD COLUMN audio_copy INTEGER;`)
 }
 
 type Options struct {
@@ -215,8 +217,8 @@ func (s *Service) record(ctx context.Context, r playRecord) error {
 		problem = q.startFailure
 	}
 	_, err := s.db.ExecContext(ctx, `INSERT INTO stats_plays(id,user_id,rating_key,username,title,platform,device,decision,started,updated,ended,bytes,duration_ms,failovers,error,node_id,`+
-		`measured,played,pictured,ttff_ms,start_failed,buffer_events,buffer_ms,down_failovers,source_kbps,uhd,hdr,remote,origin,release_name,reason_kind,reason_detail) `+
-		`VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET username=excluded.username,title=excluded.title,platform=excluded.platform,device=excluded.device,decision=excluded.decision,updated=excluded.updated,`+
+		`measured,played,pictured,ttff_ms,start_failed,buffer_events,buffer_ms,down_failovers,source_kbps,uhd,hdr,remote,origin,release_name,reason_kind,reason_detail,client_ip,audio_copy) `+
+		`VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET username=excluded.username,title=excluded.title,platform=excluded.platform,device=excluded.device,decision=excluded.decision,updated=excluded.updated,`+
 		`ended=excluded.ended,`+
 		`bytes=CASE WHEN excluded.bytes>stats_plays.bytes THEN excluded.bytes ELSE stats_plays.bytes END,`+
 		`duration_ms=CASE WHEN excluded.duration_ms>stats_plays.duration_ms THEN excluded.duration_ms ELSE stats_plays.duration_ms END,`+
@@ -228,13 +230,13 @@ func (s *Service) record(ctx context.Context, r playRecord) error {
 		`source_kbps=CASE WHEN excluded.source_kbps>0 THEN excluded.source_kbps ELSE stats_plays.source_kbps END,`+
 		`uhd=CASE WHEN excluded.source_kbps>0 THEN excluded.uhd ELSE stats_plays.uhd END,`+
 		`hdr=CASE WHEN excluded.source_kbps>0 THEN excluded.hdr ELSE stats_plays.hdr END,`+
-		`remote=excluded.remote,`+
+		`remote=excluded.remote,client_ip=COALESCE(excluded.client_ip,stats_plays.client_ip),audio_copy=COALESCE(excluded.audio_copy,stats_plays.audio_copy),`+
 		`origin=CASE WHEN excluded.origin='' THEN stats_plays.origin ELSE excluded.origin END,`+
 		`release_name=CASE WHEN excluded.release_name='' THEN stats_plays.release_name ELSE excluded.release_name END,`+
 		`reason_kind=CASE WHEN excluded.decision='' THEN stats_plays.reason_kind ELSE excluded.reason_kind END,`+
 		`reason_detail=CASE WHEN excluded.decision='' THEN stats_plays.reason_detail ELSE excluded.reason_detail END`,
 		p.ID, p.UserID, int64(p.Key), p.Username, p.TitleName, p.Client.Platform, device, string(p.Decision), start.Unix(), now.Unix(), end, p.BytesServed, p.Info.Duration.Milliseconds(), p.Failovers, problem, s.opts.NodeID,
-		q.played, q.pictured, q.ttffMS, q.startFailed, q.bufferEvents, q.bufferMS, p.DownFailovers, q.sourceKbps, q.uhd, q.hdr, q.remote, p.Origin, q.release, q.reasonKind, q.reasonDetail)
+		q.played, q.pictured, q.ttffMS, q.startFailed, q.bufferEvents, q.bufferMS, p.DownFailovers, q.sourceKbps, q.uhd, q.hdr, q.remote, p.Origin, q.release, q.reasonKind, q.reasonDetail, nullIP(p.Client.ClientIP), audioCopy(p))
 	return err
 }
 
@@ -360,31 +362,49 @@ func (s *Service) SnapshotProviders(ctx context.Context, ps []usenet.ProviderSta
 	return s.snapshot(ctx, "providers", ps)
 }
 
+func nullIP(ip string) any {
+	if ip == "" {
+		return nil
+	}
+	return ip
+}
+
+func audioCopy(p *core.PlaySession) any {
+	if p.Decision != core.DecisionRemux {
+		return nil
+	}
+	if p.DecisionAudioCopy {
+		return 1
+	}
+	return 0
+}
+
 type Play struct {
-	ID         string `json:"id"`
-	UserID     int64  `json:"userId"`
-	Key        int64  `json:"ratingKey"`
-	Username   string `json:"username"`
-	Title      string `json:"title"`
-	Platform   string `json:"platform"`
-	Device     string `json:"device"`
-	Decision   string `json:"decision"`
-	Started    int64  `json:"started"`
-	Updated    int64  `json:"updated"`
-	Ended      int64  `json:"ended"`
-	Bytes      int64  `json:"bytes"`
-	WatchedMS  int64  `json:"watchedMs"`
-	DurationMS int64  `json:"durationMs"`
-	Completed  bool   `json:"completed"`
-	Failovers  int    `json:"failovers"`
-	Error      string `json:"error"`
+	IP         *string `json:"ip"`
+	ID         string  `json:"id"`
+	UserID     int64   `json:"userId"`
+	Key        int64   `json:"ratingKey"`
+	Username   string  `json:"username"`
+	Title      string  `json:"title"`
+	Platform   string  `json:"platform"`
+	Device     string  `json:"device"`
+	Decision   string  `json:"decision"`
+	Started    int64   `json:"started"`
+	Updated    int64   `json:"updated"`
+	Ended      int64   `json:"ended"`
+	Bytes      int64   `json:"bytes"`
+	WatchedMS  int64   `json:"watchedMs"`
+	DurationMS int64   `json:"durationMs"`
+	Completed  bool    `json:"completed"`
+	Failovers  int     `json:"failovers"`
+	Error      string  `json:"error"`
 }
 
 func (s *Service) History(ctx context.Context, since, until time.Time, user int64, limit int) ([]Play, error) {
 	if limit <= 0 || limit > 500 {
 		limit = 100
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT id,user_id,rating_key,username,title,platform,device,decision,started,updated,ended,bytes,watched_ms,duration_ms,completed,failovers,error FROM stats_plays WHERE started>=? AND started<? AND (?=0 OR user_id=?) ORDER BY started DESC LIMIT ?`, since.Unix(), until.Unix(), user, user, limit)
+	rows, err := s.db.QueryContext(ctx, `SELECT id,user_id,rating_key,username,title,platform,device,decision,started,updated,ended,bytes,watched_ms,duration_ms,completed,failovers,error,client_ip FROM stats_plays WHERE started>=? AND started<? AND (?=0 OR user_id=?) ORDER BY started DESC LIMIT ?`, since.Unix(), until.Unix(), user, user, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -392,7 +412,7 @@ func (s *Service) History(ctx context.Context, since, until time.Time, user int6
 	out := []Play{}
 	for rows.Next() {
 		var p Play
-		if err := rows.Scan(&p.ID, &p.UserID, &p.Key, &p.Username, &p.Title, &p.Platform, &p.Device, &p.Decision, &p.Started, &p.Updated, &p.Ended, &p.Bytes, &p.WatchedMS, &p.DurationMS, &p.Completed, &p.Failovers, &p.Error); err != nil {
+		if err := rows.Scan(&p.ID, &p.UserID, &p.Key, &p.Username, &p.Title, &p.Platform, &p.Device, &p.Decision, &p.Started, &p.Updated, &p.Ended, &p.Bytes, &p.WatchedMS, &p.DurationMS, &p.Completed, &p.Failovers, &p.Error, &p.IP); err != nil {
 			return nil, err
 		}
 		out = append(out, p)
@@ -407,20 +427,29 @@ type Bucket struct {
 	Bytes     int64  `json:"bytes"`
 }
 type Summary struct {
-	Plays     int64     `json:"plays"`
-	WatchedMS int64     `json:"watchedMs"`
-	Bytes     int64     `json:"bytes"`
-	Completed int64     `json:"completed"`
-	Daily     []Bucket  `json:"daily"`
-	Hourly    []Bucket  `json:"hourly"`
-	Platforms []Bucket  `json:"platforms"`
-	Titles    []Bucket  `json:"titles"`
-	Users     []Bucket  `json:"users"`
-	Since     time.Time `json:"since"`
-	Until     time.Time `json:"until"`
+	Heatmap        []HeatCell      `json:"heatmap"`
+	DailyDelivery  []DailyDelivery `json:"dailyDelivery"`
+	PeakStreams    int             `json:"peakStreams"`
+	AvgBitrateKbps float64         `json:"avgBitrateKbps"`
+	Decisions      []Bucket        `json:"decisions"`
+	Origins        []Bucket        `json:"origins"`
+	Qualities      []Bucket        `json:"qualities"`
+	Places         []Bucket        `json:"places"`
+	Kinds          []Bucket        `json:"kinds"`
+	Plays          int64           `json:"plays"`
+	WatchedMS      int64           `json:"watchedMs"`
+	Bytes          int64           `json:"bytes"`
+	Completed      int64           `json:"completed"`
+	Daily          []Bucket        `json:"daily"`
+	Hourly         []Bucket        `json:"hourly"`
+	Platforms      []Bucket        `json:"platforms"`
+	Titles         []Bucket        `json:"titles"`
+	Users          []Bucket        `json:"users"`
+	Since          time.Time       `json:"since"`
+	Until          time.Time       `json:"until"`
 }
 
-func (s *Service) Summary(ctx context.Context, since, until time.Time, user int64) (Summary, error) {
+func (s *Service) Summary(ctx context.Context, since, until time.Time, user int64, tzMinutes ...int) (Summary, error) {
 	out := Summary{Since: since, Until: until}
 	// A play delivered media. A failed attempt stays in History, marked
 	// with its error, but is not a play, and neither is a zero-byte row an
@@ -431,6 +460,18 @@ func (s *Service) Summary(ctx context.Context, since, until time.Time, user int6
 	if err != nil {
 		return out, err
 	}
+	var bitrateBytes, bitrateTime int64
+	err = s.db.QueryRowContext(ctx, `SELECT CAST(COALESCE(SUM(CASE WHEN watched_ms>0 THEN bytes ELSE 0 END),0) AS BIGINT),CAST(COALESCE(SUM(CASE WHEN watched_ms>0 THEN watched_ms ELSE 0 END),0) AS BIGINT)`+where, args...).Scan(&bitrateBytes, &bitrateTime)
+	if err != nil {
+		return out, err
+	}
+	if bitrateTime > 0 {
+		out.AvgBitrateKbps = float64(bitrateBytes) * 8 / float64(bitrateTime)
+	}
+	shift := 0
+	if len(tzMinutes) > 0 && tzMinutes[0] >= -1440 && tzMinutes[0] <= 1440 {
+		shift = tzMinutes[0] * 60
+	}
 	// Day and hour buckets group on integer arithmetic (portable across
 	// SQLite and PostgreSQL) and are labelled here, in UTC.
 	day := func(n int64) string { return time.Unix(n*86400, 0).UTC().Format("2006-01-02") }
@@ -440,7 +481,7 @@ func (s *Service) Summary(ctx context.Context, since, until time.Time, user int6
 		dst   *[]Bucket
 		order string
 		label func(int64) string // set when expr is numeric
-	}{{`started/86400`, &out.Daily, "1", day}, {`(started/3600)%24`, &out.Hourly, "1", hour}, {`platform`, &out.Platforms, "2 DESC", nil}, {`title`, &out.Titles, "2 DESC", nil}, {`username || ' (' || user_id || ')'`, &out.Users, "2 DESC", nil}}
+	}{{fmt.Sprintf(`(started+%d)/86400`, shift), &out.Daily, "1", day}, {fmt.Sprintf(`((started+%d)/3600)%%24`, shift), &out.Hourly, "1", hour}, {`CASE WHEN decision='directplay' THEN 'direct-play' WHEN decision='copy' AND audio_copy=1 THEN 'direct-stream' WHEN decision='copy' AND audio_copy=0 THEN 'audio-transcode' WHEN decision='transcode' THEN 'transcode' ELSE 'unknown' END`, &out.Decisions, "2 DESC", nil}, {`CASE WHEN origin='' THEN 'Other' ELSE origin END`, &out.Origins, "2 DESC", nil}, {`CASE WHEN uhd<>0 AND hdr<>0 THEN '4K HDR' WHEN uhd<>0 THEN '4K' WHEN hdr<>0 THEN 'HDR' ELSE 'HD/SD' END`, &out.Qualities, "2 DESC", nil}, {`CASE WHEN remote<>0 THEN 'away' ELSE 'home' END`, &out.Places, "2 DESC", nil}, {`CASE WHEN rating_key/1000000000000000=1 THEN 'movie' WHEN rating_key/1000000000000000=4 THEN 'episode' ELSE 'unknown' END`, &out.Kinds, "2 DESC", nil}, {`platform`, &out.Platforms, "2 DESC", nil}, {`title`, &out.Titles, "2 DESC", nil}, {`username || ' (' || user_id || ')'`, &out.Users, "2 DESC", nil}}
 	for _, g := range groups {
 		*g.dst = []Bucket{}
 		rows, err := s.db.QueryContext(ctx, `SELECT `+g.expr+`,COUNT(*),CAST(COALESCE(SUM(watched_ms),0) AS BIGINT),CAST(COALESCE(SUM(bytes),0) AS BIGINT)`+where+` GROUP BY 1 ORDER BY `+g.order+` LIMIT 366`, args...)
@@ -461,6 +502,9 @@ func (s *Service) Summary(ctx context.Context, since, until time.Time, user int6
 			if g.label != nil {
 				b.Label = g.label(n)
 			}
+			if (g.dst == &out.Decisions || g.dst == &out.Kinds) && b.Label == "unknown" {
+				continue
+			}
 			*g.dst = append(*g.dst, b)
 		}
 		err = rows.Err()
@@ -468,6 +512,9 @@ func (s *Service) Summary(ctx context.Context, since, until time.Time, user int6
 		if err != nil {
 			return out, err
 		}
+	}
+	if err := s.activitySummary(ctx, &out, where, args, shift); err != nil {
+		return out, err
 	}
 	return out, nil
 }

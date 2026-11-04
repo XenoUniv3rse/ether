@@ -57,6 +57,9 @@ func (pr *Request) ClientCapsWith(remoteMaxKbps int, overrides []core.ClientCapa
 		Containers:      slices.Clone(b.containers),
 		Remote:          pr.Remote,
 	}
+	if pr.RemoteIP.IsValid() {
+		c.ClientIP = pr.RemoteIP.String()
+	}
 	if b.heightLocked {
 		c.ExplicitMaxHeight = true
 	}

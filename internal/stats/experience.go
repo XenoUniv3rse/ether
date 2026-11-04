@@ -620,8 +620,8 @@ func (s *Service) PlayByID(ctx context.Context, id string) (map[string]any, erro
 		return nil, err
 	}
 	var p Play
-	err = s.db.QueryRowContext(ctx, `SELECT id,user_id,rating_key,username,title,platform,device,decision,started,updated,ended,bytes,watched_ms,duration_ms,completed,failovers,error FROM stats_plays WHERE id=?`, id).
-		Scan(&p.ID, &p.UserID, &p.Key, &p.Username, &p.Title, &p.Platform, &p.Device, &p.Decision, &p.Started, &p.Updated, &p.Ended, &p.Bytes, &p.WatchedMS, &p.DurationMS, &p.Completed, &p.Failovers, &p.Error)
+	err = s.db.QueryRowContext(ctx, `SELECT id,user_id,rating_key,username,title,platform,device,decision,started,updated,ended,bytes,watched_ms,duration_ms,completed,failovers,error,client_ip FROM stats_plays WHERE id=?`, id).
+		Scan(&p.ID, &p.UserID, &p.Key, &p.Username, &p.Title, &p.Platform, &p.Device, &p.Decision, &p.Started, &p.Updated, &p.Ended, &p.Bytes, &p.WatchedMS, &p.DurationMS, &p.Completed, &p.Failovers, &p.Error, &p.IP)
 	if err != nil {
 		return nil, err
 	}
@@ -634,6 +634,18 @@ func (s *Service) PlayByID(ctx context.Context, id string) (map[string]any, erro
 		if err := json.Unmarshal(b, &out); err != nil {
 			return nil, err
 		}
+	}
+	var sourceKbps, uhd, hdr int
+	var release string
+	err = s.db.QueryRowContext(ctx, `SELECT source_kbps,uhd,hdr,release_name FROM stats_plays WHERE id=?`, id).Scan(&sourceKbps, &uhd, &hdr, &release)
+	if err != nil {
+		return nil, err
+	}
+	out["sourceKbps"], out["uhd"], out["hdr"], out["releaseName"] = sourceKbps, uhd != 0, hdr != 0, release
+	out["ttffMs"] = exp[0].StartMS
+	out["avgBitrateKbps"] = float64(0)
+	if p.WatchedMS > 0 {
+		out["avgBitrateKbps"] = float64(p.Bytes) * 8 / float64(p.WatchedMS)
 	}
 	return out, nil
 }
