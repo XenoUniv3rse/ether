@@ -30,6 +30,7 @@ CREATE TABLE livetv_policies(user_id INTEGER PRIMARY KEY, data TEXT NOT NULL);`)
 }
 
 type Service struct {
+	plexGate      plexGuideGate
 	authCache     authCache  // provider credentials for the stream path (auth.go)
 	inputRelay    inputRelay // loopback ffmpeg input relay (input_relay.go)
 	probeMu       sync.Mutex
@@ -1196,7 +1197,7 @@ func (s *Service) Sources(ctx context.Context) ([]Source, error) {
 			return nil, err
 		}
 		v.HasPlaylist = v.Playlist != "" || v.PlaylistURL != ""
-		v.HasGuide = v.Guide != "" || v.GuideURL != ""
+		v.HasGuide = v.Kind == "plex" || v.Guide != "" || v.GuideURL != ""
 		v.Playlist = ""
 		v.Guide = ""
 		redactSourceAuth(&v)
@@ -1347,7 +1348,7 @@ func (s *Service) ImportSource(ctx context.Context, src Source) (Source, error) 
 	s.forgetSourceAuth(src.ID)
 	src = storedSource(src)
 	src.HasPlaylist = src.Playlist != "" || src.PlaylistURL != ""
-	src.HasGuide = src.Guide != "" || src.GuideURL != ""
+	src.HasGuide = src.Kind == "plex" || src.Guide != "" || src.GuideURL != ""
 	src.Playlist = ""
 	src.Guide = ""
 	redactSourceAuth(&src)

@@ -15,12 +15,21 @@ import (
 const Provider = "tv.plex.providers.epg.xmltv:1"
 
 type Item struct {
-	Key        core.RatingKey `json:"key"`
-	Title      string         `json:"title"`
-	DurationMS int64          `json:"durationMs"`
-	Summary    string         `json:"summary,omitempty"`
-	Rating     string         `json:"rating,omitempty"`
-	Thumb      string         `json:"thumb,omitempty"`
+	EpisodeTitle string         `json:"episodeTitle,omitempty"`
+	ShowTitle    string         `json:"showTitle,omitempty"`
+	Art          string         `json:"art,omitempty"`
+	Genres       []string       `json:"genres,omitempty"`
+	GUID         string         `json:"guid,omitempty"`
+	ShowGUID     string         `json:"showGuid,omitempty"`
+	MediaType    string         `json:"mediaType,omitempty"`
+	Premiere     bool           `json:"premiere,omitempty"`
+	Live         bool           `json:"live,omitempty"`
+	Key          core.RatingKey `json:"key"`
+	Title        string         `json:"title"`
+	DurationMS   int64          `json:"durationMs"`
+	Summary      string         `json:"summary,omitempty"`
+	Rating       string         `json:"rating,omitempty"`
+	Thumb        string         `json:"thumb,omitempty"`
 	// Show metadata keeps episodes in season order inside a shuffle,
 	// marathon or newest-first playout. Zero values are movies and items
 	// saved before weekly scheduling, which stay in their stored order.
@@ -118,6 +127,10 @@ type Channel struct {
 	GuideSourceID string `json:"guideSourceId,omitempty"`
 }
 type Source struct {
+	LineupID    string `json:"lineupId,omitempty"`
+	Country     string `json:"country,omitempty"`
+	PostalCode  string `json:"postalCode,omitempty"`
+	PlexCursor  int    `json:"plexCursor,omitempty"`
 	ID          string `json:"id"`
 	Name        string `json:"name"`
 	Kind        string `json:"kind,omitempty"` // a source kind id, e.g. plugin:<id>/channels
@@ -186,6 +199,9 @@ type Policy struct {
 	channelSet map[string]struct{} // Channels as a set for long lists; see indexChannels
 }
 type Options struct {
+	PlexGuideToken func() string
+	PlexGuideURL   string // test endpoint
+
 	CanPlay            func(*core.User, bool, time.Time) bool
 	StreamLimit        func(*core.User) int
 	DB                 *sql.DB

@@ -71,7 +71,7 @@ func (s *Service) Handler() http.Handler {
 		if id := chi.URLParam(r, "id"); id != "" {
 			src.ID = id
 		}
-		pending := r.URL.Query().Get("pending") == "1" && src.Playlist == "" && src.PlaylistURL == "" && src.Guide == "" && src.GuideURL == ""
+		pending := src.Kind != "plex" && r.URL.Query().Get("pending") == "1" && src.Playlist == "" && src.PlaylistURL == "" && src.Guide == "" && src.GuideURL == ""
 		var v Source
 		var e error
 		if pending {
@@ -120,6 +120,10 @@ func (s *Service) Handler() http.Handler {
 			return
 		}
 		v, e := s.Guide(r.Context(), owner, from, until)
+		ownerResult(w, v, e)
+	})
+	r.Get("/plex-guide/lineups", func(w http.ResponseWriter, r *http.Request) {
+		v, e := s.PlexLineups(r.Context(), r.URL.Query().Get("country"), r.URL.Query().Get("postalCode"))
 		ownerResult(w, v, e)
 	})
 	s.guideRoutes(r)

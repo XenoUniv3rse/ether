@@ -1,0 +1,311 @@
+package livetv
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"net/url"
+	"sort"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/braedonsaunders/ether/internal/extend"
+)
+
+const plexGuideURL = "https://epg.provider.plex.tv"
+const plexGuideBudget = 80
+
+// plexGuideGate serializes and spaces all requests, including previews and
+// setup. A Retry-After applies to all callers using this service.
+type plexGuideGate struct {
+	mu       sync.Mutex
+	next     time.Time
+	failures int
+}
+
+type PlexLineup struct {
+	ID    string `json:"id"`
+	Title string `json:"title"`
+	Type  string `json:"type"`
+}
+type plexGuideChannel struct {
+	GridKey   string `json:"gridKey"`
+	Title     string `json:"title"`
+	Thumb     string `json:"thumb"`
+	CallSign  string `json:"callSign"`
+	Affiliate string `json:"affiliateCallSign"`
+	Short     string `json:"shortTitle"`
+	VCN       string `json:"vcn"`
+}
+type plexGuideMetadata struct {
+	Type      string `json:"type"`
+	Title     string `json:"title"`
+	Show      string `json:"grandparentTitle"`
+	Summary   string `json:"summary"`
+	Thumb     string `json:"thumb"`
+	ShowThumb string `json:"grandparentThumb"`
+	Art       string `json:"art"`
+	ShowArt   string `json:"grandparentArt"`
+	GUID      string `json:"guid"`
+	ShowGUID  string `json:"grandparentGuid"`
+	Season    int    `json:"parentIndex"`
+	Episode   int    `json:"index"`
+	Date      string `json:"originallyAvailableAt"`
+	Duration  int64  `json:"duration"`
+	Genres    []struct {
+		Tag string `json:"tag"`
+	} `json:"Genre"`
+	Media []struct {
+		Begins   int64 `json:"beginsAt"`
+		Ends     int64 `json:"endsAt"`
+		Premiere bool  `json:"premiere"`
+		Live     bool  `json:"live"`
+	} `json:"Media"`
+}
+type plexGuideResponse struct {
+	Container struct {
+		Lineups  []PlexLineup        `json:"Lineup"`
+		Channels []plexGuideChannel  `json:"Channel"`
+		Metadata []plexGuideMetadata `json:"Metadata"`
+	} `json:"MediaContainer"`
+}
+
+func (s *Service) plexGuideRequest(ctx context.Context, path string, q url.Values, budget *int) (plexGuideResponse, error) {
+	var result plexGuideResponse
+	s.plexGate.mu.Lock()
+	defer s.plexGate.mu.Unlock()
+	if budget != nil {
+		if *budget <= 0 {
+			return result, fmt.Errorf("Plex guide request budget exhausted")
+		}
+		*budget--
+	}
+	if delay := time.Until(s.plexGate.next); delay > 0 {
+		t := time.NewTimer(delay)
+		defer t.Stop()
+		select {
+		case <-ctx.Done():
+			return result, ctx.Err()
+		case <-t.C:
+		}
+	}
+	base := plexGuideURL
+	if s.o.PlexGuideURL != "" {
+		base = strings.TrimRight(s.o.PlexGuideURL, "/")
+	}
+	u := base + path
+	if len(q) > 0 {
+		u += "?" + q.Encode()
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return result, fmt.Errorf("invalid Plex guide request")
+	}
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("X-Plex-Product", "Ether")
+	req.Header.Set("X-Plex-Client-Identifier", "ether-guide")
+	if s.o.PlexGuideToken != nil {
+		if token := s.o.PlexGuideToken(); token != "" {
+			req.Header.Set("X-Plex-Token", token)
+		}
+	}
+	// Never forward a server token through redirects.
+	client := *s.o.HTTPClient
+	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	resp, err := client.Do(req)
+	s.plexGate.next = time.Now().Add(time.Second)
+	if err != nil {
+		s.plexGate.failures++
+		s.plexGate.next = time.Now().Add(plexBackoff(s.plexGate.failures))
+		return result, fmt.Errorf("Plex guide is unavailable")
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		s.plexGate.failures++
+		wait := plexBackoff(s.plexGate.failures)
+		if raw := resp.Header.Get("Retry-After"); raw != "" {
+			if n, e := strconv.Atoi(raw); e == nil && n >= 0 {
+				wait = time.Duration(n) * time.Second
+			} else if t, e := http.ParseTime(raw); e == nil && time.Until(t) > 0 {
+				wait = time.Until(t)
+			}
+		}
+		if wait > 24*time.Hour {
+			wait = 24 * time.Hour
+		}
+		s.plexGate.next = time.Now().Add(wait)
+		switch resp.StatusCode {
+		case 401:
+			return result, fmt.Errorf("Plex guide sign-in expired")
+		case 403:
+			return result, fmt.Errorf("Plex guide access refused; Plex Pass may be required")
+		case 429:
+			return result, fmt.Errorf("Plex guide rate-limited; retry later")
+		default:
+			return result, fmt.Errorf("Plex guide request failed (HTTP %d)", resp.StatusCode)
+		}
+	}
+	s.plexGate.failures = 0
+	if err = json.NewDecoder(io.LimitReader(resp.Body, 16<<20)).Decode(&result); err != nil {
+		return result, fmt.Errorf("invalid Plex guide response")
+	}
+	return result, nil
+}
+func plexBackoff(n int) time.Duration {
+	if n > 8 {
+		n = 8
+	}
+	return time.Duration(1<<uint(n-1)) * time.Second
+}
+func (s *Service) PlexLineups(ctx context.Context, country, postal string) ([]PlexLineup, error) {
+	country = strings.TrimSpace(country)
+	postal = strings.TrimSpace(postal)
+	if len(country) != 2 || country[0] < 'A' || country[0] > 'Z' || country[1] < 'A' || country[1] > 'Z' || postal == "" || len(postal) > 32 {
+		return nil, fmt.Errorf("enter an uppercase two-letter country and postal code")
+	}
+	v, e := s.plexGuideRequest(ctx, "/lineups", url.Values{"country": {country}, "postalCode": {postal}}, nil)
+	return v.Container.Lineups, e
+}
+func validPlexID(id string) bool {
+	if len(id) == 0 || len(id) > 128 {
+		return false
+	}
+	for _, r := range id {
+		if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '-' || r == '_') {
+			return false
+		}
+	}
+	return true
+}
+func (s *Service) plexGrid(ctx context.Context, key string, date time.Time, budget *int) ([]Programme, error) {
+	if !validPlexID(key) {
+		return nil, fmt.Errorf("invalid Plex guide channel")
+	}
+	v, e := s.plexGuideRequest(ctx, "/grid", url.Values{"channelGridKey": {key}, "type": {"1,4"}, "date": {date.Format("2006-01-02")}}, budget)
+	if e != nil {
+		return nil, e
+	}
+	var out []Programme
+	for _, m := range v.Container.Metadata {
+		for _, air := range m.Media {
+			if air.Begins <= 0 || air.Ends <= air.Begins {
+				continue
+			}
+			title := m.Title
+			episode := ""
+			if m.Show != "" {
+				title = m.Show
+				episode = m.Title
+			}
+			thumb := m.Thumb
+			if thumb == "" {
+				thumb = m.ShowThumb
+			}
+			art := m.Art
+			if art == "" {
+				art = m.ShowArt
+			}
+			var genres []string
+			for _, g := range m.Genres {
+				if g.Tag != "" {
+					genres = append(genres, g.Tag)
+				}
+			}
+			released := int64(0)
+			if t, e := time.Parse(time.RFC3339, m.Date); e == nil {
+				released = t.UnixMilli()
+			} else if t, e := time.Parse("2006-01-02", m.Date); e == nil {
+				released = t.UnixMilli()
+			}
+			out = append(out, Programme{ChannelID: key, Start: time.Unix(air.Begins, 0).UTC(), End: time.Unix(air.Ends, 0).UTC(), Item: Item{Title: title, EpisodeTitle: episode, ShowTitle: m.Show, Summary: m.Summary, Thumb: thumb, Art: art, Genres: genres, Season: m.Season, Episode: m.Episode, ReleasedMS: released, DurationMS: m.Duration, GUID: m.GUID, ShowGUID: m.ShowGUID, MediaType: m.Type, Premiere: air.Premiere, Live: air.Live}})
+		}
+	}
+	return out, nil
+}
+
+type plexGuideKind struct{}
+
+func (plexGuideKind) ID() string              { return "plex" }
+func (plexGuideKind) Matches(src Source) bool { return src.Kind == "plex" }
+func (plexGuideKind) Describe() SourceDescribe {
+	return SourceDescribe{Label: extend.T("Plex guide"), Icon: "calendar-range", Editor: "guide", YieldsGuide: true, Order: 31}
+}
+func (plexGuideKind) Fetch(ctx context.Context, s *Service, src *Source) (Fetched, error) {
+	if !validPlexID(src.LineupID) {
+		return Fetched{}, fmt.Errorf("invalid Plex lineup")
+	}
+	budget := plexGuideBudget
+	v, err := s.plexGuideRequest(ctx, "/lineups/"+url.PathEscape(src.LineupID)+"/channels", nil, &budget)
+	if err != nil {
+		return Fetched{}, err
+	}
+	g := XMLGuide{Channels: map[string]Channel{}, Names: map[string][]string{}}
+	for _, c := range v.Container.Channels {
+		if !validPlexID(c.GridKey) {
+			continue
+		}
+		g.Channels[c.GridKey] = Channel{Name: c.Title, Logo: c.Thumb}
+		g.Names[c.GridKey] = []string{c.CallSign, c.Affiliate, c.Short, c.VCN}
+	}
+	cs, err := s.Channels(ctx)
+	if err != nil {
+		return Fetched{}, err
+	}
+	used := map[string]bool{}
+	for _, c := range cs {
+		if c.Kind == "iptv" && guideSource(c) == src.ID && c.GuideID != "" {
+			if _, ok := g.Channels[c.GuideID]; ok {
+				used[c.GuideID] = true
+			}
+		}
+	}
+	keys := make([]string, 0, len(used))
+	for k := range used {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	// Retain existing listings while rotating through bounded batches; a large
+	// lineup must not be starved by the budget or erased on each refresh.
+	rows, err := s.o.DB.QueryContext(ctx, `SELECT data FROM livetv_programmes WHERE source_id=? AND end_ms>?`, src.ID, s.o.Now().UnixMilli())
+	if err != nil {
+		return Fetched{}, err
+	}
+	for rows.Next() {
+		var b []byte
+		var p Programme
+		if err = rows.Scan(&b); err != nil {
+			break
+		}
+		if json.Unmarshal(b, &p) == nil && used[p.ChannelID] {
+			g.Programmes = append(g.Programmes, p)
+		}
+	}
+	if err == nil {
+		err = rows.Err()
+	}
+	rows.Close()
+	if err != nil {
+		return Fetched{}, err
+	}
+	if len(keys) > 0 {
+		start := src.PlexCursor % len(keys)
+		n := min(len(keys), budget/2)
+		now := s.o.Now()
+		for i := 0; i < n; i++ {
+			k := keys[(start+i)%len(keys)]
+			for day := 0; day < 2; day++ {
+				ps, e := s.plexGrid(ctx, k, now.AddDate(0, 0, day), &budget)
+				if e != nil {
+					return Fetched{}, e
+				}
+				g.Programmes = append(g.Programmes, ps...)
+			}
+		}
+		src.PlexCursor = (start + n) % len(keys)
+	}
+	return Fetched{Guide: g}, nil
+}
