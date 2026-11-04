@@ -26,11 +26,11 @@ func TestStartupClosesOnlyThisNodesPlays(t *testing.T) {
 	now := time.Date(2026, 10, 19, 12, 0, 0, 0, time.UTC)
 	clock := func() time.Time { return now }
 	a := New(dbA, Options{Now: clock, NodeID: "node-a"})
-	if err := a.Record(ctx, &core.PlaySession{ID: "live-on-a", UserID: 1, Key: 5, StartedAt: now}, false, ""); err != nil {
+	if err := a.Record(ctx, &core.PlaySession{ID: "live-on-a", UserID: 1, Key: 5, StartedAt: now, BytesServed: 8 << 20}, false, ""); err != nil {
 		t.Fatal(err)
 	}
 	b := New(dbB, Options{Now: clock, NodeID: "node-b"})
-	if err := b.Record(ctx, &core.PlaySession{ID: "live-on-b", UserID: 2, Key: 6, StartedAt: now}, false, ""); err != nil {
+	if err := b.Record(ctx, &core.PlaySession{ID: "live-on-b", UserID: 2, Key: 6, StartedAt: now, BytesServed: 8 << 20}, false, ""); err != nil {
 		t.Fatal(err)
 	}
 	// Node B restarts: its own interrupted play closes, node A's stays live.
@@ -57,7 +57,7 @@ func TestSummaryDayAndHourLabels(t *testing.T) {
 	start := time.Date(2026, 10, 19, 7, 30, 0, 0, time.UTC)
 	svc := New(db, Options{Now: func() time.Time { return start }})
 	for i, at := range []time.Time{start, start.Add(17 * time.Hour)} {
-		p := &core.PlaySession{ID: string(rune('a' + i)), UserID: 1, Key: 5, StartedAt: at}
+		p := &core.PlaySession{ID: string(rune('a' + i)), UserID: 1, Key: 5, StartedAt: at, BytesServed: 8 << 20}
 		if err := svc.Record(ctx, p, true, ""); err != nil {
 			t.Fatal(err)
 		}
