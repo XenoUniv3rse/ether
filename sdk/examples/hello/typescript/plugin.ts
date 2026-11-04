@@ -149,7 +149,7 @@ export const helloPlugin = plugin<HelloSettings>({
           body: [
             {
               kind: "panel",
-              title: "Greeting",
+              title: { $: "panelTitle" },
               blocks: [
                 {
                   kind: "text",
@@ -162,6 +162,7 @@ export const helloPlugin = plugin<HelloSettings>({
         data: {
           title: "Hello plugin",
           subtitle: "Greeting view",
+          panelTitle: "Greeting",
           greetingText: `${greeting} from Ether`,
         },
       };

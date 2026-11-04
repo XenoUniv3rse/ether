@@ -131,7 +131,7 @@ def _view(_req: Dict[str, Any], ctx: PluginContext) -> Dict[str, Any]:
             "body": [
                 {
                     "kind": "panel",
-                    "title": "Greeting",
+                    "title": {"$": "panelTitle"},
                     "blocks": [{"kind": "text", "content": {"$": "greetingText"}}],
                 }
             ],
@@ -139,6 +139,7 @@ def _view(_req: Dict[str, Any], ctx: PluginContext) -> Dict[str, Any]:
         "data": {
             "title": "Hello plugin",
             "subtitle": "Greeting view",
+            "panelTitle": "Greeting",
             "greetingText": f"{greeting} from Ether",
         },
     }

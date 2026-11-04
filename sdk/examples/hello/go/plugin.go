@@ -132,7 +132,7 @@ func NewHelloPlugin() *etherplugin.Plugin {
 						}},
 						Body: []map[string]any{{
 							"kind":  "panel",
-							"title": "Greeting",
+							"title": map[string]any{"$": "panelTitle"},
 							"blocks": []map[string]any{{
 								"kind":    "text",
 								"content": map[string]any{"$": "greetingText"},
@@ -142,6 +142,7 @@ func NewHelloPlugin() *etherplugin.Plugin {
 					Data: map[string]any{
 						"title":        "Hello plugin",
 						"subtitle":     "Greeting view",
+						"panelTitle":   "Greeting",
 						"greetingText": greeting + " from Ether",
 					},
 				}, nil
