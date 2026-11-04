@@ -53,6 +53,7 @@ type RouteTiming struct {
 	DurationMS float64       `json:"durationMs"`
 	DeadlineMS int64         `json:"deadlineMs"`
 	OK         bool          `json:"ok"`
+	Skipped    bool          `json:"skipped,omitempty"`
 	Error      string        `json:"error,omitempty"`
 	Duration   time.Duration `json:"-"`
 }
@@ -128,6 +129,9 @@ func (r Report) Text() string {
 			mark := "ok"
 			if !rt.OK {
 				mark = "fail"
+			}
+			if rt.Skipped {
+				mark = "live test needed"
 			}
 			fmt.Fprintf(&b, "    %s %s %s -> %d (%.2fms / %dms)\n", mark, rt.Method, rt.Route, rt.Status, rt.DurationMS, rt.DeadlineMS)
 		}

@@ -436,6 +436,7 @@ type recordingHost struct {
 	kv       map[string]string
 	observed map[string]int
 	undecl   map[string]bool
+	deferred int
 }
 
 func newRecordingHost(man plugins.Manifest) *recordingHost {
@@ -536,13 +537,10 @@ func (h *recordingHost) CallHost(ctx context.Context, name string, raw json.RawM
 			h.undecl[host] = true
 			return nil, wasm.Forbidden("undeclared network host " + host)
 		}
-		resp := map[string]any{
-			"status":  200,
-			"headers": map[string]string{"content-type": "application/json"},
-			"body":    `{"ok":true,"status":true,"subtitles":[]}`,
-		}
-		b, _ := json.Marshal(resp)
-		return b, nil
+		// The offline checker cannot invent the upstream API's response shape.
+		// Stop at this boundary and leave an explicit live-test warning.
+		h.deferred++
+		return nil, &wasm.Fault{Code: "check_dependency", Message: "declared network request needs a live test"}
 	case "catalog.search":
 		if h.man.Ether.Permissions.Catalog != "read" {
 			return nil, wasm.Forbidden("catalog permission not declared")
@@ -639,7 +637,7 @@ func checkHostedRuntime(ctx context.Context, rep *Report, man plugins.Manifest, 
 	rep.Exports = map[string]bool{"handle": plug.HasHandle(), "rank_key": plug.HasRankKey(), "cond_match": plug.HasCondMatch()}
 
 	// Exercise declared routes and capabilities.
-	checkRoutes(ctx, rep, man, plug, stringsByLocale)
+	checkRoutes(ctx, rep, man, plug, stringsByLocale, host)
 
 	// Record observed and undeclared network hosts.
 	host.mu.Lock()
@@ -696,7 +694,7 @@ type routeFixture struct {
 	validate func(resp wasm.Response) string
 }
 
-func checkRoutes(ctx context.Context, rep *Report, man plugins.Manifest, plug *wasm.Plugin, stringsByLocale map[string]map[string]string) {
+func checkRoutes(ctx context.Context, rep *Report, man plugins.Manifest, plug *wasm.Plugin, stringsByLocale map[string]map[string]string, host *recordingHost) {
 	needsHandle := len(man.Ether.Contributes.Pages) > 0 ||
 		len(man.Ether.Contributes.Slots) > 0 ||
 		len(man.Ether.Contributes.Commands) > 0 ||
@@ -810,8 +808,8 @@ func checkRoutes(ctx context.Context, rep *Report, man plugins.Manifest, plug *w
 	// List sources.
 	for _, ls := range man.Ether.Contributes.ListSources {
 		catPath := "/catalog/movie/" + ls.Catalog + ".json"
-		if man.Ether.Stremio && strings.Contains(ls.Catalog, "/") {
-			// Add-on catalogues are named type/id, as their routes are.
+		if strings.Contains(ls.Catalog, "/") {
+			// Native and adapted catalogues may both declare type/id.
 			catPath = "/catalog/" + ls.Catalog + ".json"
 		}
 		fixtures = append(fixtures, routeFixture{
@@ -1024,7 +1022,7 @@ func checkRoutes(ctx context.Context, rep *Report, man plugins.Manifest, plug *w
 	}
 
 	for _, fx := range fixtures {
-		runRouteFixture(ctx, rep, plug, fx)
+		runRouteFixture(ctx, rep, plug, fx, host)
 	}
 }
 
@@ -1077,7 +1075,10 @@ func callNoPick(ctx context.Context, rep *Report, plug *wasm.Plugin, subPath str
 	rep.Routes = append(rep.Routes, rt)
 }
 
-func runRouteFixture(ctx context.Context, rep *Report, plug *wasm.Plugin, fx routeFixture) {
+func runRouteFixture(ctx context.Context, rep *Report, plug *wasm.Plugin, fx routeFixture, host *recordingHost) {
+	host.mu.Lock()
+	before := host.deferred
+	host.mu.Unlock()
 	deadline := plugins.DeadlineFor(fx.path)
 	cctx, cancel := context.WithTimeout(ctx, deadline)
 	defer cancel()
@@ -1106,6 +1107,17 @@ func runRouteFixture(ctx context.Context, rep *Report, plug *wasm.Plugin, fx rou
 		DurationMS: float64(dur.Microseconds()) / 1000.0,
 		DeadlineMS: deadline.Milliseconds(),
 		OK:         true,
+	}
+	host.mu.Lock()
+	deferred := host.deferred > before
+	host.mu.Unlock()
+	if deferred {
+		rt.OK = false
+		rt.Skipped = true
+		rt.Error = "Needs a live test: this route uses a declared network service."
+		rep.Routes = append(rep.Routes, rt)
+		rep.addWarn("live_test", fx.path, rt.Error)
+		return
 	}
 	if err != nil {
 		rt.OK = false
