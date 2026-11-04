@@ -79,8 +79,13 @@ func (s *Service) uncachedOutcome(ctx context.Context, ranked []candidate, resul
 	out := &core.UncachedError{Err: errors.Join(errs...), CachedOnly: s.cachedOnly(), Usenet: usenet}
 
 	q, canQueue := s.indexer.(downloadQueuer)
-	if out.CachedOnly || !canQueue || core.IsBackgroundCheck(ctx) || core.IsSpeculative(ctx) || core.IndexerPurpose(ctx) == core.IndexerPurposeWarmup {
+	if out.CachedOnly || core.IsBackgroundCheck(ctx) || core.IsSpeculative(ctx) || core.IndexerPurpose(ctx) == core.IndexerPurposeWarmup {
 		tr.Err = uncachedSummary(out, nil)
+		return -1, nil, out, true
+	}
+	if !canQueue {
+		out.Err = fmt.Errorf("%w: download queuing is unavailable", core.ErrDownloadRefused)
+		tr.Err = uncachedSummary(out, out.Err)
 		return -1, nil, out, true
 	}
 	var refused []error

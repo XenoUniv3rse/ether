@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"path"
+	"strconv"
 	"strings"
 	"time"
 
@@ -78,6 +79,9 @@ func (p *allDebrid) do(ctx context.Context, r apiRequest) (json.RawMessage, erro
 		req.Header.Set("Authorization", "Bearer "+p.key)
 	})
 	if err != nil {
+		if status != 0 {
+			logProviderHTTPError(ctx, p.key, status, body)
+		}
 		return nil, err
 	}
 	var env adEnvelope
@@ -88,6 +92,7 @@ func (p *allDebrid) do(ctx context.Context, r apiRequest) (json.RawMessage, erro
 	if derr != nil && status >= 200 && status < 300 {
 		return nil, derr
 	}
+	logProviderResponse(ctx, p.key, status, env.Error.Code, env.Error.Message)
 	return nil, adError(status, env.Error.Code, env.Error.Message)
 }
 
@@ -229,6 +234,7 @@ func (p *allDebrid) Acquire(ctx context.Context, req AcquireRequest) (*Acquired,
 			return nil, errors.New("alldebrid: upload returned no magnet")
 		}
 		if ms[0].Error != nil {
+			logProviderResponse(ctx, p.key, http.StatusOK, ms[0].Error.Code, ms[0].Error.Message)
 			return nil, adError(http.StatusOK, ms[0].Error.Code, ms[0].Error.Message)
 		}
 		id, added, ready = ms[0].ID.String(), true, ms[0].Ready
@@ -253,6 +259,7 @@ func (p *allDebrid) Acquire(ctx context.Context, req AcquireRequest) (*Acquired,
 			break
 		}
 		if st.StatusCode > adStatusReady { // 5+ are errors
+			logProviderResponse(ctx, p.key, http.StatusOK, strconv.Itoa(st.StatusCode), "magnet failed")
 			cleanup()
 			return nil, fmt.Errorf("alldebrid: magnet failed (status %d): %w", st.StatusCode, core.ErrNotCached)
 		}

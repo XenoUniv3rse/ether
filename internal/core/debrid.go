@@ -50,6 +50,10 @@ var ErrDownloadQueued = fmt.Errorf("sent to the debrid service to download: %w",
 // (a blocked file, a refused add) or the add failed. Nothing is downloading.
 var ErrDownloadRefused = fmt.Errorf("the debrid service did not take it to download: %w", ErrNotCached)
 
+// ErrDownloadPaused means Ether temporarily stopped adding torrents after
+// repeated provider refusals; no download was submitted during the pause.
+var ErrDownloadPaused = fmt.Errorf("torrent adds are temporarily paused after provider refusals: %w", ErrDownloadRefused)
+
 // ErrDownloadLimit is ErrDownloadRefused because the debrid account is at
 // its active-download limit (Real-Debrid too_many_active_downloads, TorBox
 // ACTIVE_LIMIT): no release of any title can start downloading for now.

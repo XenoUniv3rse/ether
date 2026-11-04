@@ -68,6 +68,9 @@ func (p *realDebrid) do(ctx context.Context, r apiRequest, out any) error {
 		req.Header.Set("Authorization", "Bearer "+p.key)
 	})
 	if err != nil {
+		if status != 0 {
+			logProviderHTTPError(ctx, p.key, status, body)
+		}
 		return err
 	}
 	if status >= 200 && status < 300 {
@@ -78,6 +81,11 @@ func (p *realDebrid) do(ctx context.Context, r apiRequest, out any) error {
 	}
 	var e rdError
 	_ = decodeJSON("real-debrid", body, &e)
+	code := ""
+	if e.ErrorCode != 0 {
+		code = strconv.Itoa(e.ErrorCode)
+	}
+	logProviderResponse(ctx, p.key, status, code, e.Error)
 	return p.classify(status, e)
 }
 
@@ -267,6 +275,7 @@ func (p *realDebrid) Acquire(ctx context.Context, req AcquireRequest) (_ *Acquir
 	switch info.Status {
 	case "downloaded":
 	case "magnet_error", "error", "virus", "dead":
+		logProviderResponse(ctx, p.key, http.StatusOK, info.Status, "torrent ended in "+info.Status)
 		cleanup()
 		return nil, fmt.Errorf("real-debrid: torrent %s: %w", info.Status, core.ErrNotCached)
 	default: // queued, downloading, compressing, uploading: not cached

@@ -977,6 +977,12 @@ func (s *Service) resolve(ctx context.Context, req core.ResolveRequest, profile 
 		s.setAvailability(ctx, int64(t.Key), false, min(s.cooloff(), failedHealthTTL))
 	}
 	trace.Err = "no healthy candidates"
+	for _, c := range all {
+		ct := &trace.Candidates[c.trace]
+		if ct.Attempted && ct.Rejected {
+			return nil, fmt.Errorf("%q: %w: %w", t.Title, core.ErrNotAvailable, core.ErrSourceUnavailable)
+		}
+	}
 	return nil, fmt.Errorf("%q: %w", t.Title, core.ErrNotAvailable)
 }
 
