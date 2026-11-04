@@ -6,6 +6,7 @@ import { Drawer } from "../../components/Drawer";
 import { ErrorPanel, LoadingRows } from "../../components/feedback";
 import { getLocale, t, tn } from "../../i18n";
 import { apiFetch } from "../../lib/api";
+import { qualityFallback } from "../../lib/quality-fallback";
 import { relativeTime } from "../../lib/format";
 import { useAsync } from "../../lib/hooks";
 import {
@@ -330,6 +331,9 @@ function PlayRow({ p }: { p: ExperiencePlay }) {
           {t("In History")} <ArrowUpRight size={12} />
         </Link>
       </div>
+      {p.qualityFallback ? (
+        <p className="text-xs text-fg-muted">{qualityFallback(p.qualityFallback)}</p>
+      ) : null}
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-fg-muted">
         {p.failed ? (
           <span className="inline-flex items-center gap-1 text-danger">

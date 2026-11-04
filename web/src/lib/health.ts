@@ -791,6 +791,7 @@ export interface NowPlaying {
   product: string;
   decision: string;
   decisionReason: string;
+  qualityFallback?: string;
   /** Whether the current decision copies each stream; a remux with audioCopy false is transcoding only the audio. */
   videoCopy: boolean;
   audioCopy: boolean;
@@ -853,6 +854,7 @@ export function normalizeSessions(v: unknown): NowPlaying[] {
       product: str(pick(client, "product")),
       decision: str(pick(s, "Decision", "decision")),
       decisionReason: str(pick(s, "decisionReason", "DecisionReason")),
+      qualityFallback: str(pick(s, "qualityFallback", "QualityFallback")),
       videoCopy: pick(s, "decisionVideoCopy", "DecisionVideoCopy") === true,
       audioCopy: pick(s, "decisionAudioCopy", "DecisionAudioCopy") === true,
       remote: pick(client, "remote") === true,

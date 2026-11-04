@@ -67,7 +67,7 @@ func (e *feedEvaluation) Key() string {
 	if r := e.s.extendRegistry(); r != nil {
 		registry = r.Version()
 	}
-	b, _ := json.Marshal([]any{"feed-verdict-v1", e.profile.SelectionKey, e.profile, e.env.rcfg, e.env.lang, e.s.profileAllowsCam(), registry})
+	b, _ := json.Marshal([]any{"feed-verdict-v2", e.profile.SelectionKey, e.profile, e.env.rcfg, e.env.lang, e.s.profileAllowsCam(), registry})
 	sum := sha256.Sum256(b)
 	e.key = hex.EncodeToString(sum[:])
 	return e.key

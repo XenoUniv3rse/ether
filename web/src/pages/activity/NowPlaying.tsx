@@ -10,6 +10,7 @@ import { t, tn } from "../../i18n";
 import { formatPercent, formatRate, relativeTime } from "../../lib/format";
 import { decisionLabel, type NowPlaying as Stream } from "../../lib/health";
 import type { AsyncState } from "../../lib/hooks";
+import { qualityFallback } from "../../lib/quality-fallback";
 import { useTitle } from "../../lib/titles";
 
 function StreamRow({ s, stopping, onStop }: { s: Stream; stopping: boolean; onStop: () => void }) {
@@ -69,6 +70,9 @@ function StreamRow({ s, stopping, onStop }: { s: Stream; stopping: boolean; onSt
             <p className="text-xs text-fg-muted">{t("Waiting for playback position")}</p>
           )}
         </div>
+        {s.qualityFallback ? (
+          <p className="text-xs text-fg-muted">{qualityFallback(s.qualityFallback)}</p>
+        ) : null}
         {s.release ? (
           <p className="truncate font-mono text-[11px] text-fg-subtle" title={s.release}>
             {s.release}

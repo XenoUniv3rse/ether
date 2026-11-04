@@ -222,11 +222,12 @@ type Release struct {
 // Resolution is the resolver's answer for a title and client: the winning
 // release, already health-checked, plus fallbacks for mid-stream failover.
 type Resolution struct {
-	Title      RatingKey `json:"title"`
-	Release    Release   `json:"release"`
-	NZB        []byte    `json:"-"`
-	Alternates []Release `json:"alternates"` // next candidates, best first
-	ResolvedAt time.Time `json:"resolvedAt"`
+	QualityFallback string    `json:"qualityFallback,omitempty"`
+	Title           RatingKey `json:"title"`
+	Release         Release   `json:"release"`
+	NZB             []byte    `json:"-"`
+	Alternates      []Release `json:"alternates"` // next candidates, best first
+	ResolvedAt      time.Time `json:"resolvedAt"`
 }
 
 // QualityProfile is an owner-editable rule set ranking releases for a class
@@ -247,6 +248,7 @@ type QualityProfile struct {
 	// case MaxHeight itself is the configured value. Runtime-only,
 	// never persisted with the profile.
 	ConfiguredMaxHeight    int      `json:"-"`
+	FallbackBelowMin       bool     `json:"fallbackBelowMin,omitempty"`
 	MinHeight              int      `json:"minHeight"` // floor, e.g. 720
 	AllowHDR               bool     `json:"allowHdr"`  // only applied when the client also supports it
 	AllowDolbyVision       bool     `json:"allowDolbyVision"`

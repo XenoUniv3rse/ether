@@ -460,6 +460,7 @@ export interface QualityProfile {
   name: string;
   maxHeight: number;
   minHeight: number;
+  fallbackBelowMin?: boolean;
   allowHdr: boolean;
   allowDolbyVision: boolean;
   preferredSources: string[] | null;
@@ -652,6 +653,7 @@ export interface CandidateTrace {
   route?: string;
 }
 export interface ResolverTrace {
+  downgrade?: string;
   discovery?: { path: string; count: number; rescue?: boolean }[];
   limits?: {
     profileMinHeight: number;

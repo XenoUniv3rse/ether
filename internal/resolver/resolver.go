@@ -657,7 +657,7 @@ func (s *Service) resolve(ctx context.Context, req core.ResolveRequest, profile 
 			for {
 				if ready := early.readyResultsAfter(0); len(ready) > 0 {
 					candidates, _, rankErr := s.rankCandidates(ctx, req, sreq, profile, ready, &trace, "")
-					if rankErr == nil && len(candidates) > 0 {
+					if rankErr == nil && len(candidates) > 0 && !candidates[0].fallback {
 						early.attach(candidates)
 						idx, payload, checkErr := s.validateCandidates(ctx, candidates, &trace, 0)
 						if checkErr == nil && idx >= 0 {
@@ -1218,6 +1218,24 @@ func (env *rankEnv) audio(profile core.QualityProfile, req core.ResolveRequest) 
 
 // rankWith is rankCandidates with its environment already prepared.
 func (s *Service) rankWith(ctx context.Context, env rankEnv, req core.ResolveRequest, sreq core.SearchRequest, profile core.QualityProfile, results []core.Release, trace *Trace, pinID string) ([]candidate, bool, error) {
+	start := 0
+	if trace != nil {
+		start = len(trace.Candidates)
+	}
+	cands, rejected, err := s.rankPass(ctx, env, req, sreq, profile, results, trace, pinID, false)
+	if err != nil || len(cands) > 0 || !profile.FallbackBelowMin || profile.MinHeight <= 0 {
+		return cands, rejected, err
+	}
+	if trace != nil {
+		trace.Candidates = trace.Candidates[:start]
+	}
+	// Re-evaluate the same search results, relaxing only the quality floor
+	// and imported allowlist. All other gates are evaluated again unchanged.
+	fallback, fallbackRejected, err := s.rankPass(ctx, env, req, sreq, profile, results, trace, pinID, true)
+	return fallback, rejected || fallbackRejected, err
+}
+
+func (s *Service) rankPass(ctx context.Context, env rankEnv, req core.ResolveRequest, sreq core.SearchRequest, profile core.QualityProfile, results []core.Release, trace *Trace, pinID string, fallback bool) ([]candidate, bool, error) {
 	t := req.Title
 	policy, hot, exclude, rcfg, wanted, accepted := env.policy, env.hot, env.exclude, env.rcfg, env.wanted, env.accepted
 	upscales := presumedUpscales(results, isAnime(t))
@@ -1236,7 +1254,18 @@ func (s *Service) rankWith(ctx context.Context, env rankEnv, req core.ResolveReq
 	for ri, rel := range results {
 		rel = withTarget(rel, sreq)
 		ct := CandidateTrace{ReleaseID: rel.ID, Name: rel.Name, Indexer: rel.Indexer, Size: rel.Size, Height: rel.Info.Height}
-		pinned := pinID != "" && rel.ID == pinID
+		if fallback {
+			h := fallbackHeight(rel.Info)
+			if h == 0 || h >= profile.MinHeight {
+				ct.Rejected = true
+				ct.Reason = "not below profile minimum"
+				if trace != nil {
+					trace.Candidates = append(trace.Candidates, ct)
+				}
+				continue
+			}
+		}
+		pinned := !fallback && pinID != "" && rel.ID == pinID
 		ct.Pinned = pinned
 		// Catalogue language is applied here, after the search cache.
 		// The cache stores indexer results only; it does not freeze a
@@ -1251,20 +1280,27 @@ func (s *Service) rankWith(ctx context.Context, env rankEnv, req core.ResolveReq
 		if len(profile.ReleaseRules) > 0 {
 			ct.Preferences = &policyResult
 		}
-		preferred := pinned || (req.Prefer != "" && rel.ID == req.Prefer)
+		preferred := !fallback && (pinned || (req.Prefer != "" && rel.ID == req.Prefer))
 		var reason string
 		if pinned {
 			reason = s.pinRejectReason(rel, sreq, req.Client, exclude)
 		} else if !preferred && policyResult.Rejected {
 			reason = preferenceReason(policyResult)
 		} else {
-			reason = s.rejectReason(rel, t, sreq, profile, rcfg, req.Client, exclude, preferred)
-			if reason == "video codec unsupported by client" && req.ExactHEVCTranscode && !req.Client.Download && req.Prefer != "" && rel.ID == req.Prefer && strings.EqualFold(rel.Info.VideoCodec, "hevc") {
+			gateProfile := profile
+			if fallback {
+				gateProfile.MinHeight = 0
+				gateProfile.AllowedQualities = nil
+				gateProfile.AllowCam = false
+				preferred = false
+			}
+			reason = s.rejectReason(rel, t, sreq, gateProfile, rcfg, req.Client, exclude, preferred)
+			if !fallback && reason == "video codec unsupported by client" && req.ExactHEVCTranscode && !req.Client.Download && req.Prefer != "" && rel.ID == req.Prefer && strings.EqualFold(rel.Info.VideoCodec, "hevc") {
 				// Only relax the codec gate for the explicitly selected source;
 				// every other policy and the final probed output decision still apply.
 				caps := req.Client
 				caps.VideoCodecs = append(slices.Clone(caps.VideoCodecs), rel.Info.VideoCodec)
-				reason = s.rejectReason(rel, t, sreq, profile, rcfg, caps, exclude, preferred)
+				reason = s.rejectReason(rel, t, sreq, gateProfile, rcfg, caps, exclude, preferred)
 			}
 		}
 		if reason != "" {
@@ -1351,7 +1387,7 @@ func (s *Service) rankWith(ctx context.Context, env rankEnv, req core.ResolveReq
 		if !langOK && trace != nil {
 			trace.Candidates[tr].CompatibilityReason = strings.TrimPrefix(trace.Candidates[tr].CompatibilityReason+"; ranked after releases in an accepted audio language", "; ")
 		}
-		cands = append(cands, candidate{policy: policyResult, rel: rel, trace: tr, verified: verified, langOK: langOK, langWanted: langWanted, starved: starved, quality: rankQuality(rel, profile, starved), bandwidth: bandwidth})
+		cands = append(cands, candidate{fallback: fallback, policy: policyResult, rel: rel, trace: tr, verified: verified, langOK: langOK, langWanted: langWanted, starved: starved, quality: rankQuality(rel, profile, starved), bandwidth: bandwidth})
 	}
 	if hot != nil && len(cands) > 0 {
 		releases := make([]core.Release, len(cands))
@@ -1374,6 +1410,24 @@ func (s *Service) rankWith(ctx context.Context, env rankEnv, req core.ResolveReq
 				cands[i].pluginKeys[step] = key
 			}
 		}
+	}
+	if fallback {
+		sort.SliceStable(cands, func(i, j int) bool {
+			a, b := fallbackHeight(cands[i].rel.Info), fallbackHeight(cands[j].rel.Info)
+			if a != b {
+				return a > b
+			}
+			if len(profile.AllowedQualities) > 0 {
+				a, b := cands[i].rel.Info.Source, cands[j].rel.Info.Source
+				if a != b {
+					if order := compareFallbackSource(a, b, profile); order != 0 {
+						return order > 0
+					}
+				}
+			}
+			return compareCandidates(cands[i], cands[j], profile)
+		})
+		return cands, clientRejected, nil
 	}
 	return s.orderCandidates(cands, profile, req.Title, trace), clientRejected, nil
 }
@@ -1950,4 +2004,48 @@ func (s *Service) score(rel core.Release, profile core.QualityProfile, t *core.T
 	s.mu.RUnlock()
 	sc += rep.score()
 	return sc
+}
+
+// compareFallbackSource preserves an imported profile's order for sources it
+// names, and uses the usual source hierarchy for the remaining source types.
+func compareFallbackSource(a, b core.Source, p core.QualityProfile) int {
+	level := func(s core.Source) int {
+		switch s {
+		case core.SourceRemux:
+			return 6
+		case core.SourceBluRay:
+			return 5
+		case core.SourceWEBDL, core.SourceWEBRip:
+			return 4
+		case core.SourceHDTV:
+			return 3
+		case core.SourceDVD:
+			return 2
+		default:
+			return 1
+		}
+	}
+	rank := func(s core.Source) int {
+		best := -10000
+		for i, allowed := range p.PreferredSources {
+			d := level(s) - level(allowed)
+			if d < 0 {
+				d = -d
+			}
+			score := 1000 - i*100 - d*10
+			if s == allowed {
+				score++
+			}
+			best = max(best, score)
+		}
+		return best*10 + level(s)
+	}
+	return rank(a) - rank(b)
+}
+
+func fallbackHeight(info core.ReleaseInfo) int {
+	if info.Height == 0 && info.Source == core.SourceDVD {
+		return 480
+	}
+	return floorHeight(info)
 }
