@@ -983,7 +983,6 @@
   "m_044dcdd47f7b10": "Trygge valg",
   "m_044df02fcf2891": "Mediebudsjett",
   "m_044e15fab6cd45": "oppdatert {when}",
-  "m_0450a6525256a3": "Tilkoblinger til leverandøren",
   "m_0451f3862182eb": "velg en fil",
   "m_04537915491226": "Bare disse sjangrene",
   "m_0454f235b874f8": "Denne profilen poengsetter ingen egendefinerte formater.",
@@ -1845,7 +1844,6 @@
   "m_08149d0bff7074": "Legg til egendefinert mønster",
   "m_0814a9ab809ff7": "Åpne i redigering",
   "m_08165705b3fbe7": "Reservebytter",
-  "m_0816860213d106": "Starter snart",
   "m_0818f4c2acab2c": "Trailer forhåndsvarmet",
   "m_0819e89888f70b": "Godkjenn koden i seerportalen.",
   "m_081b0f677f34f9": "Legg til en side som viser ",
@@ -2126,7 +2124,6 @@
   "m_0961e06f1f5d5a": "Seeren kan endre denne innstillingen i profilen sin.",
   "m_0965a11950b182": "Avspillinger · 30 dager",
   "m_096669c9a903d0": "Begrenser radene sine på Hjem og i biblioteket. Hjem-designeren redigerer denne samme tidsplanen.",
-  "m_096683f9017281": "{channel}: {title}, til {time}",
   "m_0967e8ba273c54": "forlatt tidlig = innen 2 minutter",
   "m_0969b78036fe32": "Når som helst, på alle enheter",
   "m_096a1daccbeddc": "Redigert",
@@ -2581,7 +2578,6 @@
   "m_0b408c766d9f0c": "Velg en samling",
   "m_0b4092043d339b": "Utformede plakater fra BetterPosters.",
   "m_0b41b4284dc188": "Test tilkobling",
-  "m_0b466de5e18254": "Største grupper",
   "m_0b46dbaeba1f0b": "{date}: måned",
   "m_0b47cf3dcec330": "Kilder og Plex bruker samme adresse. En delt tunnel skal vise to ulike adresser.",
   "m_0b4bb06005a237": "Kontoer som kan logge inn som deg.",
@@ -2746,7 +2742,6 @@
   "m_0c1243087058b7": "03 / Tenk framover",
   "m_0c127ea55f4056": "Det eldste øyeblikksbildet fjernes når et nytt ville overskredet dette.",
   "m_0c12eb1f690424": "Brukes også av Stremio, DLNA, Filer og M3U",
-  "m_0c1691385d012a": "{covered} av {total} IPTV-kanaler",
   "m_0c1a11e42dad06": {
     "one": "{count} kanal på lufta · {missing} trenger en guide · Plex Pass kreves i Plex",
     "other": "{count} kanaler på lufta · {missing} trenger en guide · Plex Pass kreves i Plex"
@@ -3493,7 +3488,6 @@
   "m_0f566741aad248": "Legg til Real-Debrid, TorBox, AllDebrid, Premiumize, Debrid-Link eller Offcloud for å strømme torrent-utgivelser.",
   "m_0f56b8c4f732b8": "Sidelengde for {device}",
   "m_0f5731564779e1": "Utkastarbeidsområde",
-  "m_0f5aa05fda28f8": "Ingen programmer i dette tidsrommet.",
   "m_0f5ad47fda1cc0": "Essensiell",
   "m_0f5aed0f239f38": "Hvor kandidattitlene kommer fra. Flere kilder kombineres.",
   "m_0f5b3c330d8225": "Spilles av først",
@@ -6125,10 +6119,6 @@
   "m_1ac88f71ce2797": "Koble til en språkmodell for å spørre Ether.",
   "m_1ac92994b09ea0": "Kanaltilbud",
   "m_1ac96195e626ad": "Ether-design",
-  "m_1ac9a71921da7a": {
-    "one": "I {count} gruppe",
-    "other": "I {count} grupper"
-  },
   "m_1acae0294a1669": "Dra regel {n}",
   "m_1acca9e3e215d8": "Plakater fra en XRDB-tjener.",
   "m_1accac7df48579": "Opprett deretter et bli-med-token for å legge til neste maskin.",
@@ -6540,10 +6530,6 @@
   "m_1cc65dce53ce8e": "Kildetyper kunne ikke lastes inn.",
   "m_1cc7e317af42df": "Begrenset kinopremiere",
   "m_1cc84b515d9b2e": "Gjør {title} kvalifisert",
-  "m_1ccacd774f3a09": {
-    "one": "{count} seer",
-    "other": "{count} seere"
-  },
   "m_1ccb6e48ac1881": "Ingen torrent-indekserer for debrid",
   "m_1ccb795647cb5e": "Ukeplan",
   "m_1cd0901d5dfe1a": "Årsak",
@@ -6734,10 +6720,6 @@
   "m_1d819cd903aaa1": "Opptil {max}. Kvoten begrenser fortsatt hvor mange som får plass.",
   "m_1d82ea69ab8f1e": "Feil",
   "m_1d833dc6fd1f7a": "Ingen avspillinger ennå",
-  "m_1d8432ec09a8d7": {
-    "one": "{count} ny strøm denne timen",
-    "other": "{count} nye strømmer denne timen"
-  },
   "m_1d84bf6ab7a26c": "Installer som den er",
   "m_1d84cf9cdec7b1": "Stremio TV-plugins på denne serveren",
   "m_1d84e5e6137f31": "A–Å",
@@ -6988,7 +6970,6 @@
   "m_1e9ed1c3f78e31": "ikke ennå",
   "m_1e9f000ba76d1a": "{name} har sett denne",
   "m_1e9f2b9b058a5c": "La dette være av på et nettverk du ikke stoler på.",
-  "m_1e9f5f2fb27329": "Kontrollerer programoversikten…",
   "m_1ea093101f2a05": "Kantbibliotek",
   "m_1ea18f95f34910": "Sorter titler",
   "m_1ea1e133924a5d": "La feltet stå tomt for å bruke alle indekserere.",

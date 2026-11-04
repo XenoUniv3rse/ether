@@ -49,7 +49,6 @@ import {
 } from "./ChannelStudio";
 import { GuideMatchPanel, GuideSourceList, GuideWorkbench } from "./GuideData";
 import { GuideGrid } from "./GuideGrid";
-import { LiveOverview } from "./Overview";
 import { SourcesDashboard } from "./SourcesDashboard";
 import { SourceList, type Selection } from "./Lineup";
 import { SourceEditor, type SourceKind } from "./SourceEditor";
@@ -120,9 +119,7 @@ export default function LiveTV() {
       ? "guide"
       : tab === "sources" || selection.kind === "source"
         ? "sources"
-        : tab === "channels" || selection.kind === "channel"
-          ? "channels"
-          : "overview",
+        : "channels",
   );
 
   useEffect(() => {
@@ -616,11 +613,10 @@ export default function LiveTV() {
       </div>
       <SubtabNav
         ariaLabel={t("Lineup")}
-        className="grid grid-cols-4 gap-0 overflow-visible [&>button]:min-w-0 [&>button]:justify-center [&>button]:px-0.5 [&>button]:text-xs @min-[280px]:[&>button]:text-sm [&>button>span]:block [&>button>span]:min-w-0 [&>button>span]:break-words"
+        className="grid grid-cols-3 gap-0 overflow-visible [&>button]:min-w-0 [&>button]:justify-center [&>button]:px-0.5 [&>button]:text-xs @min-[280px]:[&>button]:text-sm [&>button>span]:block [&>button>span]:min-w-0 [&>button>span]:break-words"
         active={leftTab}
         onSelect={setLeftTab}
         tabs={[
-          { key: "overview", label: t("Overview") },
           { key: "channels", label: t("Channels") },
           {
             key: "sources",
@@ -755,26 +751,6 @@ export default function LiveTV() {
     </div>
   );
 
-  // Keep navigation in the same left third; the two dashboard rows fill the workspace below.
-  const overviewView = (
-    <div className="flex min-h-0 flex-1 flex-col">
-      <div className="app-scroll shrink-0 overflow-hidden border-b border-border bg-surface lg:grid lg:grid-cols-3">
-        <div className="border-r border-border bg-bg-subtle">{panelHead}</div>
-      </div>
-      <div className="app-scroll min-h-0 flex-1 overflow-y-auto bg-bg p-4 lg:overflow-hidden">
-        <LiveOverview
-          channels={filtered}
-          lineup={sorted}
-          guide={guide}
-          coverage={coverage}
-          usage={usage}
-          now={now}
-          onSelectChannel={selectChannel}
-        />
-      </div>
-    </div>
-  );
-
   const channelTitle =
     selection.kind === "new"
       ? t("New virtual channel")
@@ -823,12 +799,7 @@ export default function LiveTV() {
         aside={aside}
         main={main}
       >
-        {state ??
-          (leftTab === "channels"
-            ? lineupGuide
-            : leftTab === "overview"
-              ? overviewView
-              : undefined)}
+        {state ?? (leftTab === "channels" ? lineupGuide : undefined)}
       </Workspace>
       <Drawer
         open={guideOpen}

@@ -983,7 +983,6 @@
   "m_044dcdd47f7b10": "Safe bets",
   "m_044df02fcf2891": "Media budget",
   "m_044e15fab6cd45": "refreshed {when}",
-  "m_0450a6525256a3": "Provider connections",
   "m_0451f3862182eb": "choose a file",
   "m_04537915491226": "Only these genres",
   "m_0454f235b874f8": "This profile scores no custom formats.",
@@ -1848,7 +1847,6 @@
   "m_08149d0bff7074": "Add custom pattern",
   "m_0814a9ab809ff7": "Open in editor",
   "m_08165705b3fbe7": "Failovers",
-  "m_0816860213d106": "Starting soon",
   "m_0818f4c2acab2c": "Trailer warm",
   "m_0819e89888f70b": "Approve the code in the viewer portal.",
   "m_081b0f677f34f9": "Add a page that shows ",
@@ -2129,7 +2127,6 @@
   "m_0961e06f1f5d5a": "The viewer can change this setting in their profile.",
   "m_0965a11950b182": "Plays · 30 days",
   "m_096669c9a903d0": "Limits its Home and library rows. The Home designer edits this same schedule.",
-  "m_096683f9017281": "{channel}: {title}, until {time}",
   "m_0967e8ba273c54": "left early = within 2 minutes",
   "m_0969b78036fe32": "Any day, any time, every device",
   "m_096a1daccbeddc": "Edited",
@@ -2587,7 +2584,6 @@
   "m_0b408c766d9f0c": "Choose a collection",
   "m_0b4092043d339b": "Styled posters from BetterPosters.",
   "m_0b41b4284dc188": "Test connection",
-  "m_0b466de5e18254": "Biggest groups",
   "m_0b46dbaeba1f0b": "{date}: month",
   "m_0b47cf3dcec330": "Sources and Plex are using the same address. A split tunnel should show two different addresses.",
   "m_0b4bb06005a237": "Accounts that can sign in as you.",
@@ -2752,7 +2748,6 @@
   "m_0c1243087058b7": "03 / Think ahead",
   "m_0c127ea55f4056": "The oldest snapshot is removed when a new one would exceed this.",
   "m_0c12eb1f690424": "Also used by Stremio, DLNA, Files and M3U",
-  "m_0c1691385d012a": "{covered} of {total} IPTV channels",
   "m_0c1a11e42dad06": {
     "one": "{count} channel on air · {missing} need a guide · Plex Pass required in Plex",
     "other": "{count} channels on air · {missing} need a guide · Plex Pass required in Plex"
@@ -3502,7 +3497,6 @@
   "m_0f566741aad248": "Add Real-Debrid, TorBox, AllDebrid, Premiumize, Debrid-Link or Offcloud to stream torrent releases.",
   "m_0f56b8c4f732b8": "{device} page length",
   "m_0f5731564779e1": "Draft workspace",
-  "m_0f5aa05fda28f8": "No programmes in this window.",
   "m_0f5ad47fda1cc0": "Essential",
   "m_0f5aed0f239f38": "Where candidate titles come from. Several sources are combined.",
   "m_0f5b3c330d8225": "Plays first",
@@ -6140,10 +6134,6 @@
   "m_1ac88f71ce2797": "Connect a language model to use Ask Ether.",
   "m_1ac92994b09ea0": "Lineup",
   "m_1ac96195e626ad": "Ether design",
-  "m_1ac9a71921da7a": {
-    "one": "In {count} group",
-    "other": "In {count} groups"
-  },
   "m_1acae0294a1669": "Drag rule {n}",
   "m_1acca9e3e215d8": "Posters from an XRDB server.",
   "m_1accac7df48579": "Then create a join token to add your next machine.",
@@ -6555,10 +6545,6 @@
   "m_1cc65dce53ce8e": "Source kinds could not be loaded.",
   "m_1cc7e317af42df": "Limited theatrical",
   "m_1cc84b515d9b2e": "Make {title} eligible",
-  "m_1ccacd774f3a09": {
-    "one": "{count} watching",
-    "other": "{count} watching"
-  },
   "m_1ccb6e48ac1881": "No torrent indexer for debrid",
   "m_1ccb795647cb5e": "Weekly schedule",
   "m_1cd0901d5dfe1a": "Reason",
@@ -6752,10 +6738,6 @@
   "m_1d819cd903aaa1": "Up to {max}. The allocation still limits how many fit.",
   "m_1d82ea69ab8f1e": "Errors",
   "m_1d833dc6fd1f7a": "No plays yet",
-  "m_1d8432ec09a8d7": {
-    "one": "{count} new stream this hour",
-    "other": "{count} new streams this hour"
-  },
   "m_1d84bf6ab7a26c": "Install as-is",
   "m_1d84cf9cdec7b1": "Stremio TV plugins on this server",
   "m_1d84e5e6137f31": "A–Z",
@@ -7006,7 +6988,6 @@
   "m_1e9ed1c3f78e31": "not yet",
   "m_1e9f000ba76d1a": "{name} has watched this",
   "m_1e9f2b9b058a5c": "Leave this off on a network you do not trust.",
-  "m_1e9f5f2fb27329": "Checking listings…",
   "m_1ea093101f2a05": "Edge library",
   "m_1ea18f95f34910": "Sort titles",
   "m_1ea1e133924a5d": "Leave empty to use every indexer.",

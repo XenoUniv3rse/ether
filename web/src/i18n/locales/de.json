@@ -983,7 +983,6 @@
   "m_044dcdd47f7b10": "Sichere Sachen",
   "m_044df02fcf2891": "Medienbudget",
   "m_044e15fab6cd45": "aktualisiert {when}",
-  "m_0450a6525256a3": "Verbindungen zum Anbieter",
   "m_0451f3862182eb": "wähl eine Datei aus",
   "m_04537915491226": "Nur diese Genres",
   "m_0454f235b874f8": "Dieses Profil bewertet keine eigenen Formate.",
@@ -1845,7 +1844,6 @@
   "m_08149d0bff7074": "Eigenes Muster hinzufügen",
   "m_0814a9ab809ff7": "Im Editor öffnen",
   "m_08165705b3fbe7": "Ausweichwechsel",
-  "m_0816860213d106": "Beginnt gleich",
   "m_0818f4c2acab2c": "Trailer vorgewärmt",
   "m_0819e89888f70b": "Bestätige den Code im Zuschauerportal.",
   "m_081b0f677f34f9": "Eine Seite hinzufügen, die zeigt ",
@@ -2126,7 +2124,6 @@
   "m_0961e06f1f5d5a": "Die Person kann diese Einstellung in ihrem Profil ändern.",
   "m_0965a11950b182": "Wiedergaben · 30 Tage",
   "m_096669c9a903d0": "Begrenzt die Reihen auf Startseite und in der Bibliothek. Der Home-Designer bearbeitet denselben Zeitplan.",
-  "m_096683f9017281": "{channel}: {title}, bis {time}",
   "m_0967e8ba273c54": "früh verlassen = in den ersten 2 Minuten",
   "m_0969b78036fe32": "Jeder Tag, jede Uhrzeit, jedes Gerät",
   "m_096a1daccbeddc": "Bearbeitet",
@@ -2581,7 +2578,6 @@
   "m_0b408c766d9f0c": "Sammlung auswählen",
   "m_0b4092043d339b": "Gestaltete Poster von BetterPosters.",
   "m_0b41b4284dc188": "Verbindung testen",
-  "m_0b466de5e18254": "Größte Gruppen",
   "m_0b46dbaeba1f0b": "{date}: Monat",
   "m_0b47cf3dcec330": "Quellen und Plex verwenden dieselbe Adresse. Ein geteilter Tunnel sollte zwei verschiedene Adressen zeigen.",
   "m_0b4bb06005a237": "Konten, mit denen du dich anmelden kannst.",
@@ -2746,7 +2742,6 @@
   "m_0c1243087058b7": "3 / Vorausdenken",
   "m_0c127ea55f4056": "Der älteste Snapshot wird entfernt, wenn ein neuer diese Zahl überschreiten würde.",
   "m_0c12eb1f690424": "Wird auch von Stremio, DLNA, Dateien und M3U verwendet",
-  "m_0c1691385d012a": "{covered} von {total} IPTV-Sendern",
   "m_0c1a11e42dad06": {
     "one": "{count} Kanal auf Sendung · {missing} brauchen Programmdaten · In Plex ist Plex Pass erforderlich",
     "other": "{count} Kanäle auf Sendung · {missing} brauchen Programmdaten · In Plex ist Plex Pass erforderlich"
@@ -3493,7 +3488,6 @@
   "m_0f566741aad248": "Füge Real-Debrid, TorBox, AllDebrid, Premiumize, Debrid-Link oder Offcloud hinzu, um Torrent-Veröffentlichungen zu streamen.",
   "m_0f56b8c4f732b8": "Seitenlänge auf {device}",
   "m_0f5731564779e1": "Entwurfsarbeitsbereich",
-  "m_0f5aa05fda28f8": "Keine Sendungen in diesem Zeitraum.",
   "m_0f5ad47fda1cc0": "Wesentlich",
   "m_0f5aed0f239f38": "Woher die infrage kommenden Titel stammen. Mehrere Quellen werden kombiniert.",
   "m_0f5b3c330d8225": "Wird zuerst abgespielt",
@@ -6125,10 +6119,6 @@
   "m_1ac88f71ce2797": "Verbinde ein Sprachmodell, um Ether Fragen zu stellen.",
   "m_1ac92994b09ea0": "Senderliste",
   "m_1ac96195e626ad": "Ether-Design",
-  "m_1ac9a71921da7a": {
-    "one": "In {count} Gruppe",
-    "other": "In {count} Gruppen"
-  },
   "m_1acae0294a1669": "Regel {n} ziehen",
   "m_1acca9e3e215d8": "Poster von einem XRDB-Server.",
   "m_1accac7df48579": "Erstelle danach ein Beitritts-Token, um deinen nächsten Rechner hinzuzufügen.",
@@ -6540,10 +6530,6 @@
   "m_1cc65dce53ce8e": "Quelltypen konnten nicht geladen werden.",
   "m_1cc7e317af42df": "Begrenzter Kinostart",
   "m_1cc84b515d9b2e": "{title} infrage kommen lassen",
-  "m_1ccacd774f3a09": {
-    "one": "{count} Zuschauer",
-    "other": "{count} Zuschauer"
-  },
   "m_1ccb6e48ac1881": "Kein Torrent-Indexer für Debrid",
   "m_1ccb795647cb5e": "Wochenplan",
   "m_1cd0901d5dfe1a": "Grund",
@@ -6734,10 +6720,6 @@
   "m_1d819cd903aaa1": "Bis zu {max}. Die Zuteilung begrenzt weiterhin, wie viele hineinpassen.",
   "m_1d82ea69ab8f1e": "Fehler",
   "m_1d833dc6fd1f7a": "Noch keine Wiedergaben",
-  "m_1d8432ec09a8d7": {
-    "one": "{count} neuer Stream in dieser Stunde",
-    "other": "{count} neue Streams in dieser Stunde"
-  },
   "m_1d84bf6ab7a26c": "Unverändert installieren",
   "m_1d84cf9cdec7b1": "Stremio-TV-Plugins auf diesem Server",
   "m_1d84e5e6137f31": "A–Z",
@@ -6988,7 +6970,6 @@
   "m_1e9ed1c3f78e31": "noch nicht",
   "m_1e9f000ba76d1a": "{name} hat das gesehen",
   "m_1e9f2b9b058a5c": "Lass das in einem Netzwerk aus, dem du nicht vertraust.",
-  "m_1e9f5f2fb27329": "Programmdaten werden geprüft…",
   "m_1ea093101f2a05": "Edge-Mediathek",
   "m_1ea18f95f34910": "Titel sortieren",
   "m_1ea1e133924a5d": "Leer lassen, um jeden Indexer zu verwenden.",

@@ -983,7 +983,6 @@
   "m_044dcdd47f7b10": "Sikre valg",
   "m_044df02fcf2891": "Mediebudget",
   "m_044e15fab6cd45": "opdateret {when}",
-  "m_0450a6525256a3": "Forbindelser til udbyderen",
   "m_0451f3862182eb": "vælg en fil",
   "m_04537915491226": "Kun disse genrer",
   "m_0454f235b874f8": "Denne profil scorer ingen brugerdefinerede formater.",
@@ -1845,7 +1844,6 @@
   "m_08149d0bff7074": "Tilføj brugerdefineret mønster",
   "m_0814a9ab809ff7": "Åbn i editoren",
   "m_08165705b3fbe7": "Omskiftninger",
-  "m_0816860213d106": "Starter snart",
   "m_0818f4c2acab2c": "Trailer-varm",
   "m_0819e89888f70b": "Godkend koden i seerportalen.",
   "m_081b0f677f34f9": "Tilføj en side, der viser ",
@@ -2126,7 +2124,6 @@
   "m_0961e06f1f5d5a": "Seeren kan ændre denne indstilling i sin profil.",
   "m_0965a11950b182": "Afspilninger · 30 dage",
   "m_096669c9a903d0": "Begrænser dens rækker på Hjem og i biblioteket. Home-designeren redigerer den samme tidsplan.",
-  "m_096683f9017281": "{channel}: {title}, indtil {time}",
   "m_0967e8ba273c54": "forladt tidligt = inden for 2 minutter",
   "m_0969b78036fe32": "Alle dage, når som helst, på alle enheder",
   "m_096a1daccbeddc": "Redigeret",
@@ -2581,7 +2578,6 @@
   "m_0b408c766d9f0c": "Vælg en samling",
   "m_0b4092043d339b": "Stylede plakater fra BetterPosters.",
   "m_0b41b4284dc188": "Test forbindelse",
-  "m_0b466de5e18254": "Største grupper",
   "m_0b46dbaeba1f0b": "{date}: måned",
   "m_0b47cf3dcec330": "Kilder og Plex bruger den samme adresse. En delt tunnel skal vise to forskellige adresser.",
   "m_0b4bb06005a237": "Konti der kan logge ind som dig.",
@@ -2746,7 +2742,6 @@
   "m_0c1243087058b7": "3 / Tænk fremad",
   "m_0c127ea55f4056": "Det ældste snapshot fjernes, når et nyt ville overskride dette antal.",
   "m_0c12eb1f690424": "Bruges også af Stremio, DLNA, Filer og M3U",
-  "m_0c1691385d012a": "{covered} af {total} IPTV-kanaler",
   "m_0c1a11e42dad06": {
     "one": "{count} kanal i luften · {missing} mangler en guide · Plex Pass kræves i Plex",
     "other": "{count} kanaler i luften · {missing} mangler en guide · Plex Pass kræves i Plex"
@@ -3493,7 +3488,6 @@
   "m_0f566741aad248": "Tilføj Real-Debrid, TorBox, AllDebrid, Premiumize, Debrid-Link eller Offcloud for at streame torrentudgivelser.",
   "m_0f56b8c4f732b8": "Sidelængde på {device}",
   "m_0f5731564779e1": "Kladdearbejdsområde",
-  "m_0f5aa05fda28f8": "Ingen programmer i dette tidsrum.",
   "m_0f5ad47fda1cc0": "Essentiel",
   "m_0f5aed0f239f38": "Hvor kandidattitlerne kommer fra. Flere kilder kombineres.",
   "m_0f5b3c330d8225": "Afspilles først",
@@ -6125,10 +6119,6 @@
   "m_1ac88f71ce2797": "Tilslut en sprogmodel for at spørge Ether.",
   "m_1ac92994b09ea0": "Kanaludvalg",
   "m_1ac96195e626ad": "Ether-design",
-  "m_1ac9a71921da7a": {
-    "one": "I {count} gruppe",
-    "other": "I {count} grupper"
-  },
   "m_1acae0294a1669": "Træk regel {n}",
   "m_1acca9e3e215d8": "Plakater fra en XRDB-server.",
   "m_1accac7df48579": "Opret derefter et join-token for at tilføje din næste maskine.",
@@ -6540,10 +6530,6 @@
   "m_1cc65dce53ce8e": "Kildetyper kunne ikke indlæses.",
   "m_1cc7e317af42df": "Begrænset biografpremiere",
   "m_1cc84b515d9b2e": "Gør {title} kvalificeret",
-  "m_1ccacd774f3a09": {
-    "one": "{count} seer",
-    "other": "{count} seere"
-  },
   "m_1ccb6e48ac1881": "Ingen torrent-indexer til debrid",
   "m_1ccb795647cb5e": "Ugeplan",
   "m_1cd0901d5dfe1a": "Årsag",
@@ -6734,10 +6720,6 @@
   "m_1d819cd903aaa1": "Op til {max}. Allokeringen begrænser stadig, hvor mange der kan være.",
   "m_1d82ea69ab8f1e": "Fejl",
   "m_1d833dc6fd1f7a": "Ingen afspilninger endnu",
-  "m_1d8432ec09a8d7": {
-    "one": "{count} ny stream i denne time",
-    "other": "{count} nye streams i denne time"
-  },
   "m_1d84bf6ab7a26c": "Installer som det er",
   "m_1d84cf9cdec7b1": "Stremio TV-plugins på denne server",
   "m_1d84e5e6137f31": "A–Å",
@@ -6988,7 +6970,6 @@
   "m_1e9ed1c3f78e31": "endnu ikke",
   "m_1e9f000ba76d1a": "{name} har set denne",
   "m_1e9f2b9b058a5c": "Lad det være slået fra på et netværk, du ikke stoler på.",
-  "m_1e9f5f2fb27329": "Kontrollerer programoversigten…",
   "m_1ea093101f2a05": "Edge-bibliotek",
   "m_1ea18f95f34910": "Sortér titler",
   "m_1ea1e133924a5d": "Lad feltet stå tomt for at bruge alle indexere.",

@@ -983,7 +983,6 @@
   "m_044dcdd47f7b10": "Veilige keuzes",
   "m_044df02fcf2891": "Mediabudget",
   "m_044e15fab6cd45": "vernieuwd {when}",
-  "m_0450a6525256a3": "Verbindingen met aanbieder",
   "m_0451f3862182eb": "kies een bestand",
   "m_04537915491226": "Alleen deze genres",
   "m_0454f235b874f8": "Dit profiel scoort geen eigen formaten.",
@@ -1845,7 +1844,6 @@
   "m_08149d0bff7074": "Eigen patroon toevoegen",
   "m_0814a9ab809ff7": "Openen in editor",
   "m_08165705b3fbe7": "Failovers",
-  "m_0816860213d106": "Begint binnenkort",
   "m_0818f4c2acab2c": "Trailer voorverwarmd",
   "m_0819e89888f70b": "Keur de code goed in het kijkersportaal.",
   "m_081b0f677f34f9": "Voeg een pagina toe die toont ",
@@ -2126,7 +2124,6 @@
   "m_0961e06f1f5d5a": "De kijker kan deze instelling in het eigen profiel wijzigen.",
   "m_0965a11950b182": "Afspeelacties · 30 dagen",
   "m_096669c9a903d0": "Beperkt de rijen op Home en in de bibliotheek. De Home-ontwerper bewerkt ditzelfde schema.",
-  "m_096683f9017281": "{channel}: {title}, tot {time}",
   "m_0967e8ba273c54": "vroeg gestopt = binnen 2 minuten",
   "m_0969b78036fe32": "Elke dag, op elk moment, op elk apparaat",
   "m_096a1daccbeddc": "Bewerkt",
@@ -2581,7 +2578,6 @@
   "m_0b408c766d9f0c": "Kies een collectie",
   "m_0b4092043d339b": "Vormgegeven posters van BetterPosters.",
   "m_0b41b4284dc188": "Verbinding testen",
-  "m_0b466de5e18254": "Grootste groepen",
   "m_0b46dbaeba1f0b": "{date}: maand",
   "m_0b47cf3dcec330": "Bronnen en Plex gebruiken hetzelfde adres. Een gesplitste tunnel hoort twee verschillende adressen te tonen.",
   "m_0b4bb06005a237": "Accounts waarmee je kunt aanmelden.",
@@ -2746,7 +2742,6 @@
   "m_0c1243087058b7": "3 / Vooruitdenken",
   "m_0c127ea55f4056": "De oudste snapshot wordt verwijderd wanneer een nieuwe dit aantal zou overschrijden.",
   "m_0c12eb1f690424": "Wordt ook gebruikt door Stremio, DLNA, Files en M3U",
-  "m_0c1691385d012a": "{covered} van {total} IPTV-kanalen",
   "m_0c1a11e42dad06": {
     "one": "{count} kanaal in de lucht · {missing} hebben een gids nodig · Plex Pass vereist in Plex",
     "other": "{count} kanalen in de lucht · {missing} hebben een gids nodig · Plex Pass vereist in Plex"
@@ -3493,7 +3488,6 @@
   "m_0f566741aad248": "Voeg Real-Debrid, TorBox, AllDebrid, Premiumize, Debrid-Link of Offcloud toe om torrentreleases te streamen.",
   "m_0f56b8c4f732b8": "Paginalengte voor {device}",
   "m_0f5731564779e1": "Conceptwerkruimte",
-  "m_0f5aa05fda28f8": "Geen programma’s in dit tijdvak.",
   "m_0f5ad47fda1cc0": "Essentieel",
   "m_0f5aed0f239f38": "Waar kandidaat-titels vandaan komen. Meerdere bronnen worden gecombineerd.",
   "m_0f5b3c330d8225": "Wordt als eerste afgespeeld",
@@ -6125,10 +6119,6 @@
   "m_1ac88f71ce2797": "Verbind een taalmodel om Vraag Ether te gebruiken.",
   "m_1ac92994b09ea0": "Zenderaanbod",
   "m_1ac96195e626ad": "Ether-ontwerp",
-  "m_1ac9a71921da7a": {
-    "one": "In {count} groep",
-    "other": "In {count} groepen"
-  },
   "m_1acae0294a1669": "Regel {n} slepen",
   "m_1acca9e3e215d8": "Posters van een XRDB-server.",
   "m_1accac7df48579": "Maak daarna een join-token om je volgende machine toe te voegen.",
@@ -6540,10 +6530,6 @@
   "m_1cc65dce53ce8e": "Brontypen konden niet worden geladen.",
   "m_1cc7e317af42df": "Beperkte bioscooprelease",
   "m_1cc84b515d9b2e": "{title} in aanmerking laten komen",
-  "m_1ccacd774f3a09": {
-    "one": "{count} kijker",
-    "other": "{count} kijkers"
-  },
   "m_1ccb6e48ac1881": "Geen torrent-indexer voor debrid",
   "m_1ccb795647cb5e": "Weekschema",
   "m_1cd0901d5dfe1a": "Reden",
@@ -6734,10 +6720,6 @@
   "m_1d819cd903aaa1": "Maximaal {max}. De toewijzing bepaalt nog steeds hoeveel er passen.",
   "m_1d82ea69ab8f1e": "Fouten",
   "m_1d833dc6fd1f7a": "Nog geen afspeelacties",
-  "m_1d8432ec09a8d7": {
-    "one": "{count} nieuwe stream dit uur",
-    "other": "{count} nieuwe streams dit uur"
-  },
   "m_1d84bf6ab7a26c": "Ongewijzigd installeren",
   "m_1d84cf9cdec7b1": "Stremio-tv-plugins op deze server",
   "m_1d84e5e6137f31": "A–Z",
@@ -6988,7 +6970,6 @@
   "m_1e9ed1c3f78e31": "nog niet",
   "m_1e9f000ba76d1a": "{name} heeft dit gekeken",
   "m_1e9f2b9b058a5c": "Laat dit uit op een netwerk dat je niet vertrouwt.",
-  "m_1e9f5f2fb27329": "Programmagegevens controleren…",
   "m_1ea093101f2a05": "Edge-bibliotheek",
   "m_1ea18f95f34910": "Titels sorteren",
   "m_1ea1e133924a5d": "Laat leeg om elke indexer te gebruiken.",
