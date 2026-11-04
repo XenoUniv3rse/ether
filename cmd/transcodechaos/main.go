@@ -36,9 +36,10 @@ type result struct {
 func main() {
 	ff := flag.String("ffmpeg", "ffmpeg", "ffmpeg executable")
 	fp := flag.String("ffprobe", "ffprobe", "ffprobe executable")
+	only := flag.String("only", "", "run scenarios whose name contains this text")
 	report := flag.String("report", "transcodechaos-report.json", "output JSON report")
 	flag.Parse()
-	if err := run(*ff, *fp, *report); err != nil {
+	if err := run(*ff, *fp, *report, *only); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
@@ -50,7 +51,7 @@ func command(ctx context.Context, exe string, args ...string) error {
 	}
 	return nil
 }
-func run(ff, fp, report string) error {
+func run(ff, fp, report, only string) error {
 	root, err := os.MkdirTemp("", "ether-chaos-")
 	if err != nil {
 		return err
@@ -66,10 +67,13 @@ func run(ff, fp, report string) error {
 	if err != nil {
 		return err
 	}
-	cases := []scenario{{"healthy", "mpegts", "none", "", true}, {"healthy", "mpegts", "none", "", false}, {"healthy", "fmp4", "none", "", false}, {"seek", "mpegts", "none", "", false}, {"corrupt-ts", "mpegts", "none", "corrupt", false}, {"truncated", "mpegts", "none", "truncate", false}, {"source-503", "mpegts", "none", "503", false}, {"live-corrupt", "mpegts", "none", "corrupt", false}, {"healthy", "mpegts", "videotoolbox", "", false}}
+	cases := []scenario{{"healthy", "mpegts", "none", "", true}, {"healthy", "mpegts", "none", "", false}, {"healthy", "fmp4", "none", "", false}, {"seek", "mpegts", "none", "", false}, {"corrupt-ts", "mpegts", "none", "corrupt", false}, {"truncated", "mpegts", "none", "truncate", false}, {"source-503", "mpegts", "none", "503", false}, {"live-corrupt", "mpegts", "none", "corrupt", false}, {"hardware-failure", "mpegts", "videotoolbox", "hwfail", false}, {"healthy", "mpegts", "videotoolbox", "", false}}
 	results := make([]result, 0, len(cases))
 	failures := 0
 	for _, sc := range cases {
+		if only != "" && !strings.Contains(sc.Name, only) {
+			continue
+		}
 		start := time.Now()
 		detail := exercise(ctx, ff, fp, root, data, sc)
 		status := "PASS"
@@ -125,7 +129,13 @@ func exercise(parent context.Context, ff, fp, root string, good []byte, sc scena
 		return err.Error()
 	}
 	defer os.RemoveAll(dir)
-	m, err := transcode.New(config.Transcode{FFmpegPath: ff, FFprobePath: fp, HWAccel: sc.HW, TempDir: dir}, slog.New(slog.NewTextHandler(io.Discard, nil)), transcode.WithSegmentTimeout(8*time.Second))
+	var injector *hardwareFaultRunner
+	opts := []transcode.Option{transcode.WithSegmentTimeout(12 * time.Second)}
+	if sc.Fault == "hwfail" {
+		injector = &hardwareFaultRunner{}
+		opts = append(opts, transcode.WithRunner(injector))
+	}
+	m, err := transcode.New(config.Transcode{FFmpegPath: ff, FFprobePath: fp, HWAccel: sc.HW, TempDir: dir}, slog.New(slog.NewTextHandler(io.Discard, nil)), opts...)
 	if err != nil {
 		return err.Error()
 	}
@@ -192,6 +202,14 @@ func exercise(parent context.Context, ff, fp, root string, good []byte, sc scena
 		if err := command(ctx, ff, "-v", "error", "-xerror", "-i", p, "-f", "null", "-"); err != nil {
 			return fmt.Sprintf("segment %d decode: %v", n, err)
 		}
+		if n == 0 && injector != nil {
+			if err := injector.fail(); err != nil {
+				return err.Error()
+			}
+		}
+	}
+	if injector != nil && !injector.software() {
+		return "software fallback did not start"
 	}
 	m.Stop("chaos")
 	if _, ok := m.Session("chaos"); ok {
