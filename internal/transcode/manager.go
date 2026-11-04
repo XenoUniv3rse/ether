@@ -826,7 +826,7 @@ func (m *Manager) startHLS(ctx context.Context, req core.HLSRequest, life *encod
 		container:               d.Container,
 		proto:                   proto,
 		requireIndependentProof: req.RequireIndependentProof,
-		log:                     m.log.With("session", id),
+		log:                     m.log.With("session", id, "initialRelease", req.ReleaseID),
 		created:                 time.Now(),
 		sessionInput: sessionInput{
 			rtxTimeline:  enhancementSelected(d),

@@ -347,6 +347,9 @@ func (m *Manager) probeGeneration(ctx context.Context, s *session, res *core.Res
 		m.log.Warn("probe failed; using estimated media info", "release", res.Release.Name, "err", perr)
 		mi = core.CloneMediaInfo(fallback(src.Size()))
 		mi.Estimated = true
+		// An estimated catalogue runtime is not a container duration. A
+		// guessed end can make part of a longer release unseekable.
+		mi.Duration = 0
 	default:
 		mi = core.CloneMediaInfo(*info)
 	}

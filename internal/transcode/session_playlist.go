@@ -45,6 +45,9 @@ func (s *Session) span() time.Duration {
 // an EVENT playlist fresh each time so reloads see re-planned segments.
 func (s *Session) renderPlaylistLocked(t int) []byte {
 	independent := !s.requireIndependentProof || s.segmentsIndependent
+	if s.total == 0 {
+		s.log.Warn("using growing HLS playlist", "reason", "source duration unavailable")
+	}
 	if s.plan == nil {
 		if s.total > 0 {
 			return mediaPlaylistWithIndependence(s.span(), s.segDur, s.container, s.segName, independent)
