@@ -327,11 +327,18 @@ func TestRawForbiddenImportRefused(t *testing.T) {
 
 func TestRawTimeoutAbortAndMemoryCap(t *testing.T) {
 	e := testEngine(t)
-	p := loadRaw(t, e, "rawplugin.wasm", newFakeHost(), Limits{Deadline: 300 * time.Millisecond, MemoryBytes: 32 << 20})
-	_, err := p.Call(context.Background(), Request{Method: "GET", Path: "/loop"})
+	// Only /loop measures the deadline, so only it runs under a short one:
+	// the abort and memory-cap calls are not about time and must not fail
+	// because a loaded host paused for a few hundred milliseconds.
+	looping := loadRaw(t, e, "rawplugin.wasm", newFakeHost(), Limits{Deadline: 300 * time.Millisecond, MemoryBytes: 32 << 20})
+	_, err := looping.Call(context.Background(), Request{Method: "GET", Path: "/loop"})
 	if errStatus(t, err) != StatusTimeout {
 		t.Fatalf("loop err = %v", err)
 	}
+	if got := looping.Stats(); got.Timeouts != 1 || got.Traps < 1 {
+		t.Fatalf("loop stats = %+v", got)
+	}
+	p := loadRaw(t, e, "rawplugin.wasm", newFakeHost(), Limits{MemoryBytes: 32 << 20})
 	_, err = p.Call(context.Background(), Request{Method: "GET", Path: "/abort"})
 	if errStatus(t, err) != StatusAborted {
 		t.Fatalf("abort err = %v", err)
@@ -347,7 +354,7 @@ func TestRawTimeoutAbortAndMemoryCap(t *testing.T) {
 	if pages > 512 { // 32 MiB cap
 		t.Fatalf("guest grew to %d pages past the 32 MiB cap", pages)
 	}
-	if got := p.Stats(); got.Timeouts != 1 || got.Aborted != 1 || got.Traps < 2 {
+	if got := p.Stats(); got.Timeouts != 0 || got.Aborted != 1 || got.Traps < 1 {
 		t.Fatalf("stats = %+v", got)
 	}
 }
@@ -407,7 +414,8 @@ func TestHotDeterminism1000Runs(t *testing.T) {
 
 func TestHotMemoization(t *testing.T) {
 	e := testEngine(t)
-	p, err := e.LoadJS("test.memo", "1.0.0", hotJS, nil, Limits{})
+	// One instance, so the guest's call counter shows every real execution.
+	p, err := e.LoadJS("test.memo", "1.0.0", hotJS, nil, Limits{PoolSize: 1})
 	if err != nil {
 		t.Fatal(err)
 	}

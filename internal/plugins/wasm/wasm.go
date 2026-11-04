@@ -351,17 +351,37 @@ func statusForFaultCode(code string) Status {
 	}
 }
 
-// pool lends instances, building on demand up to size, discarding poisoned
-// ones so crash policy (backoff, disable) can count fresh failures.
+// pool lends instances up to size, discarding poisoned ones so crash
+// policy (backoff, disable) can count fresh failures.
+//
+// A service pool builds on demand under the caller's context: a handle
+// call has a seconds-long deadline, and a cold build fits in it.
+//
+// A warm pool (the hot path) never builds on the caller's path. Building
+// an instance costs milliseconds (a QuickJS runtime is several), more than
+// the 2ms per-candidate and 50ms per-batch budgets, so building inline
+// would make the first concurrent call, and every call after a discarded
+// instance, time out; on a slow host the hot path then never recovers.
+// Instead the pool is filled at load, a discarded instance is replaced in
+// the background under the service deadline, and a caller only ever waits
+// for an idle instance within its own budget.
 type pool struct {
 	makeFn func(context.Context) (instance, error)
 	idle   chan instance
-	slots  chan struct{}
+	slots  chan struct{} // one token per live instance: idle, lent or building
+	warm   bool
+	mu     sync.Mutex // orders returning an instance against close
 	done   atomic.Bool
 }
 
 func newPool(size int, makeFn func(context.Context) (instance, error)) *pool {
 	return &pool{makeFn: makeFn, idle: make(chan instance, size), slots: make(chan struct{}, size)}
+}
+
+func newWarmPool(size int, makeFn func(context.Context) (instance, error)) *pool {
+	p := newPool(size, makeFn)
+	p.warm = true
+	return p
 }
 
 func (p *pool) get(ctx context.Context) (instance, error) {
@@ -372,6 +392,16 @@ func (p *pool) get(ctx context.Context) (instance, error) {
 	case in := <-p.idle:
 		return in, nil
 	default:
+	}
+	if p.warm {
+		// A free slot means an earlier build failed; retry it off-path.
+		p.refill()
+		select {
+		case in := <-p.idle:
+			return in, nil
+		case <-ctx.Done():
+			return nil, &Error{Status: StatusTimeout, Message: "timed out waiting for a plugin instance"}
+		}
 	}
 	select {
 	case in := <-p.idle:
@@ -389,20 +419,75 @@ func (p *pool) get(ctx context.Context) (instance, error) {
 }
 
 func (p *pool) put(in instance, healthy bool) {
-	if !healthy || p.done.Load() {
+	if !healthy {
 		in.closeInstance()
 		<-p.slots
+		if p.warm {
+			p.refill()
+		}
 		return
 	}
-	select {
-	case p.idle <- in:
-	default:
-		in.closeInstance()
-		<-p.slots
+	p.adopt(in)
+}
+
+// adopt returns a usable instance to the idle set, or closes it when the
+// pool is closed or already full.
+func (p *pool) adopt(in instance) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if !p.done.Load() {
+		select {
+		case p.idle <- in:
+			return
+		default:
+		}
+	}
+	in.closeInstance()
+	<-p.slots
+}
+
+// fill builds instances synchronously until the pool is full or a build
+// fails. Plugins call it at load, off any request path.
+func (p *pool) fill() {
+	for !p.done.Load() {
+		select {
+		case p.slots <- struct{}{}:
+		default:
+			return
+		}
+		in, err := p.makeFn(context.Background())
+		if err != nil {
+			<-p.slots
+			return
+		}
+		p.adopt(in)
 	}
 }
 
+// refill builds one replacement in the background if a slot is free. The
+// slot is held while building, so builds never exceed the pool size.
+func (p *pool) refill() {
+	if p.done.Load() {
+		return
+	}
+	select {
+	case p.slots <- struct{}{}:
+	default:
+		return
+	}
+	go func() {
+		in, err := p.makeFn(context.Background())
+		if err != nil {
+			<-p.slots
+			return
+		}
+		p.adopt(in)
+	}()
+}
+
 func (p *pool) close() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	p.done.Store(true)
 	for {
 		select {
