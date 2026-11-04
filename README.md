@@ -309,6 +309,8 @@ Ether never emulates, unlocks, or bypasses Plex Pass, Emby Premiere, or any paid
 - **Stremio, WebDAV, DLNA, and M3U/XMLTV:** Stremio apps, WebDAV players (Infuse, VLC, Kodi), LAN DLNA TVs, and IPTV clients (Channels DVR, TiviMate).
 
 **Unsupported web-wrapper apps:** Ether does not bundle third-party web clients (`jellyfin-web` or Emby Web). Client apps that are wrappers around a server-hosted web bundle, specifically **Jellyfin for Android phones**, **Jellyfin Desktop**, and **Emby for TV 2.x on Apple TV**, are unsupported. On Android phones use **Findroid** or **Streamyfin**; on Apple TV use **Infuse**, **Swiftfin**, **Silo**, or **Plex**.
+
+**Emby for Windows:** Compatibility is unverified. The current native Windows app bundles its own UI, but Ether does not serve Emby's `/web` assets; connections that require those assets will not work. Older hash-only Emby sign-in clients are also unsupported: Ether requires the plaintext `Pw` field to verify its stored password hash.
 </details>
 
 <details>
