@@ -1416,6 +1416,7 @@
     "other": "{count} wolnego"
   },
   "m_05f14964aa89e6": "Gdy ten węzeł uruchamia się ponownie, pozostałe węzły nadal obsługują Twoich widzów.",
+  "m_05f1837d318942": "Wydania są szeregowane bez wtyczki {name}",
   "m_05f250064a7948": "Dodaj regułę",
   "m_05f255d84e369c": "Kolaż plakatów",
   "m_05f2766626d94e": "Wypróbuj",
@@ -2382,6 +2383,7 @@
   "m_0a407d3a19f457": "Plik reguł jest za duży.",
   "m_0a42c629d62c75": "Strumienie na widza",
   "m_0a457c53630ece": "Godziny w ciągu 30 dni",
+  "m_0a47ea6e97c47e": "Jej krok rankingu przekroczył limit czasu, więc został pominięty. Znowu będzie liczony, gdy tylko zmieści się w czasie.",
   "m_0a4957394b2dc4": "Położenie",
   "m_0a49eaf45fe818": "Odrzuć",
   "m_0a4a1b399fca4e": "Adres serwera jest niedostępny. Poproś właściciela serwera, aby ustawił osiągalny adres serwera, i spróbuj ponownie.",
@@ -4939,6 +4941,12 @@
   "m_151665e44b96df": "Tylko odcinki seriali",
   "m_1516960a2d1d0d": "Ether nie mógł wczytać ostatnich odtworzeń.",
   "m_151769a9fde954": "Ustawienia",
+  "m_1518afa3e7832e": {
+    "one": "Ranking pominięty raz",
+    "few": "Ranking pominięty {count} razy",
+    "many": "Ranking pominięty {count} razy",
+    "other": "Ranking pominięty {count} razy"
+  },
   "m_1519dfb51db68c": "Kanały telewizji na żywo",
   "m_151b0ad5ec431b": "kosmos, napad",
   "m_151b4308c92e75": "Domyślnie TMDB; zapisane w pamięci podręcznej oceny dostawców, jeśli skonfigurowano.",

@@ -1340,6 +1340,7 @@
     "other": "{count} trege"
   },
   "m_05f14964aa89e6": "Andre noder fortsetter å betjene seerne dine mens denne noden starter på nytt.",
+  "m_05f1837d318942": "Utgivelser rangeres uten {name}",
   "m_05f250064a7948": "Legg til regel",
   "m_05f255d84e369c": "Plakatkollasj",
   "m_05f2766626d94e": "Prøv det",
@@ -2264,6 +2265,7 @@
   "m_0a407d3a19f457": "Regelfilen er for stor.",
   "m_0a42c629d62c75": "Strømmer per seer",
   "m_0a457c53630ece": "Timer siste 30 dager",
+  "m_0a47ea6e97c47e": "Rangeringstrinnet gikk over tidsgrensen og ble derfor utelatt. Det teller igjen så snart det blir ferdig i tide.",
   "m_0a4957394b2dc4": "Plassering",
   "m_0a49eaf45fe818": "Avslå",
   "m_0a4a1b399fca4e": "Serveradressen er utilgjengelig. Be servereieren angi en tilgjengelig serveradresse, og prøv igjen.",
@@ -4687,6 +4689,10 @@
   "m_151665e44b96df": "Kun TV-episoder",
   "m_1516960a2d1d0d": "Ether kunne ikke laste inn de siste avspillingene.",
   "m_151769a9fde954": "Innstillinger",
+  "m_1518afa3e7832e": {
+    "one": "Rangering utelatt én gang",
+    "other": "Rangering utelatt {count} ganger"
+  },
   "m_1519dfb51db68c": "Direkte-TV-kanaler",
   "m_151b0ad5ec431b": "rommet, ran",
   "m_151b4308c92e75": "TMDB som standard; hurtigbufrede leverandørvurderinger når det er konfigurert.",

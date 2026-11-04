@@ -1416,6 +1416,7 @@
     "other": "{count} pomalých"
   },
   "m_05f14964aa89e6": "Zatímco se tento uzel restartuje, ostatní uzly dál obsluhují vaše diváky.",
+  "m_05f1837d318942": "Vydání se řadí bez pluginu {name}",
   "m_05f250064a7948": "Přidat pravidlo",
   "m_05f255d84e369c": "Koláž plakátů",
   "m_05f2766626d94e": "Vyzkoušet",
@@ -2382,6 +2383,7 @@
   "m_0a407d3a19f457": "Soubor pravidel je příliš velký.",
   "m_0a42c629d62c75": "Streamů na diváka",
   "m_0a457c53630ece": "Hodin za 30 dní",
+  "m_0a47ea6e97c47e": "Jeho krok řazení překročil časový limit, a proto byl vynechán. Znovu se započítá, jakmile doběhne včas.",
   "m_0a4957394b2dc4": "Umístění",
   "m_0a49eaf45fe818": "Odmítnout",
   "m_0a4a1b399fca4e": "Adresa serveru není k dispozici. Požádejte vlastníka serveru, aby nastavil dosažitelnou adresu serveru, a zkuste to znovu.",
@@ -4939,6 +4941,12 @@
   "m_151665e44b96df": "Pouze epizody seriálů",
   "m_1516960a2d1d0d": "Ether nedokázal načíst nedávná přehrání.",
   "m_151769a9fde954": "Nastavení",
+  "m_1518afa3e7832e": {
+    "one": "Hodnocení vynecháno jednou",
+    "few": "Hodnocení vynecháno {count}krát",
+    "many": "Hodnocení vynecháno {count}krát",
+    "other": "Hodnocení vynecháno {count}krát"
+  },
   "m_1519dfb51db68c": "Kanály živého vysílání",
   "m_151b0ad5ec431b": "vesmír, loupež",
   "m_151b4308c92e75": "Ve výchozím nastavení TMDB; po nastavení skóre poskytovatelů z mezipaměti.",

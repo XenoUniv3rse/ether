@@ -43,6 +43,9 @@ export interface PluginHealth {
   nextRetry?: string;
   observed?: Record<string, number>;
   egressBytes: number;
+  /** Resolves since its last complete ranking that left its ranking step out for running out of time. */
+  rankingSkipped?: number;
+  rankingSkippedAt?: string;
 }
 
 export interface PluginGrants {

@@ -1340,6 +1340,7 @@
     "other": "{count} långsamma"
   },
   "m_05f14964aa89e6": "Andra noder fortsätter att betjäna dina tittare medan den här noden startar om.",
+  "m_05f1837d318942": "Utgåvor rankas utan {name}",
   "m_05f250064a7948": "Lägg till regel",
   "m_05f255d84e369c": "Affischcollage",
   "m_05f2766626d94e": "Prova",
@@ -2264,6 +2265,7 @@
   "m_0a407d3a19f457": "Regelfilen är för stor.",
   "m_0a42c629d62c75": "Strömmar per tittare",
   "m_0a457c53630ece": "Timmar på 30 dagar",
+  "m_0a47ea6e97c47e": "Dess rankningssteg överskred tidsgränsen och utelämnades därför. Det räknas igen så snart det blir klart i tid.",
   "m_0a4957394b2dc4": "Placering",
   "m_0a49eaf45fe818": "Avböj",
   "m_0a4a1b399fca4e": "Serveradressen är otillgänglig. Be serverägaren ange en nåbar serveradress och försök igen.",
@@ -4687,6 +4689,10 @@
   "m_151665e44b96df": "Endast TV-avsnitt",
   "m_1516960a2d1d0d": "Ether kunde inte läsa in de senaste uppspelningarna.",
   "m_151769a9fde954": "Inställningar",
+  "m_1518afa3e7832e": {
+    "one": "Rankning utelämnad en gång",
+    "other": "Rankning utelämnad {count} gånger"
+  },
   "m_1519dfb51db68c": "Live-tv-kanaler",
   "m_151b0ad5ec431b": "rymd, rån",
   "m_151b4308c92e75": "TMDB som standard; cachade leverantörsbetyg när det är konfigurerat.",

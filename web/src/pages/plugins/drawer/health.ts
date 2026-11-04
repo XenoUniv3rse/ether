@@ -70,6 +70,21 @@ export function healthSummary(detail: PluginDetail): HealthSummary {
       tile: calls ? tn(calls, "{count} recent call", "{count} recent calls") : t("Not used yet"),
     };
   }
+  const skipped = h.rankingSkipped ?? 0;
+  if (level === "warn" && skipped > 0) {
+    return {
+      level,
+      word,
+      tile: tn(skipped, "Ranking left out once", "Ranking left out {count} times"),
+      card: {
+        title: t("Releases are being ranked without {name}", { name: detail.name }),
+        line: t(
+          "Its ranking step ran past its time limit, so it was left out. It counts again as soon as it finishes in time.",
+        ),
+        retry: false,
+      },
+    };
+  }
   if (slow) {
     return {
       level,

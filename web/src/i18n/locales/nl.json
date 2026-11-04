@@ -1340,6 +1340,7 @@
     "other": "{count} traag"
   },
   "m_05f14964aa89e6": "Andere nodes blijven je kijkers bedienen terwijl deze node herstart.",
+  "m_05f1837d318942": "Releases worden gerangschikt zonder {name}",
   "m_05f250064a7948": "Regel toevoegen",
   "m_05f255d84e369c": "Postercollage",
   "m_05f2766626d94e": "Uitproberen",
@@ -2264,6 +2265,7 @@
   "m_0a407d3a19f457": "Het regelbestand is te groot.",
   "m_0a42c629d62c75": "Streams per kijker",
   "m_0a457c53630ece": "Uren in 30 dagen",
+  "m_0a47ea6e97c47e": "De rangschikkingsstap overschreed de tijdslimiet en is daarom weggelaten. Hij telt weer mee zodra hij op tijd klaar is.",
   "m_0a4957394b2dc4": "Plaatsing",
   "m_0a49eaf45fe818": "Afwijzen",
   "m_0a4a1b399fca4e": "Serveradres niet beschikbaar. Vraag de servereigenaar om een bereikbaar serveradres in te stellen en probeer het opnieuw.",
@@ -4687,6 +4689,10 @@
   "m_151665e44b96df": "Alleen tv-afleveringen",
   "m_1516960a2d1d0d": "Ether kon de recente weergaven niet laden.",
   "m_151769a9fde954": "Instellingen",
+  "m_1518afa3e7832e": {
+    "one": "Rangschikking één keer overgeslagen",
+    "other": "Rangschikking {count} keer overgeslagen"
+  },
   "m_1519dfb51db68c": "Live-tv-zenders",
   "m_151b0ad5ec431b": "ruimte, overval",
   "m_151b4308c92e75": "Standaard TMDB; gecachete providerscores indien geconfigureerd.",

@@ -1343,6 +1343,7 @@
     "other": "{count} slow"
   },
   "m_05f14964aa89e6": "Other nodes keep serving your viewers while this node restarts.",
+  "m_05f1837d318942": "Releases are being ranked without {name}",
   "m_05f250064a7948": "Add rule",
   "m_05f255d84e369c": "Poster collage",
   "m_05f2766626d94e": "Try it",
@@ -2267,6 +2268,7 @@
   "m_0a407d3a19f457": "Rules file is too large.",
   "m_0a42c629d62c75": "Streams per viewer",
   "m_0a457c53630ece": "Hours in 30 days",
+  "m_0a47ea6e97c47e": "Its ranking step ran past its time limit, so it was left out. It counts again as soon as it finishes in time.",
   "m_0a4957394b2dc4": "Placement",
   "m_0a49eaf45fe818": "Decline",
   "m_0a4a1b399fca4e": "Server address unavailable. Ask the server owner to set a reachable server address, then try again.",
@@ -4696,6 +4698,10 @@
   "m_151665e44b96df": "TV episodes only",
   "m_1516960a2d1d0d": "Ether couldn't load recent plays.",
   "m_151769a9fde954": "Settings",
+  "m_1518afa3e7832e": {
+    "one": "Ranking left out once",
+    "other": "Ranking left out {count} times"
+  },
   "m_1519dfb51db68c": "Live TV channels",
   "m_151b0ad5ec431b": "space, heist",
   "m_151b4308c92e75": "TMDB by default; cached provider scores when configured.",

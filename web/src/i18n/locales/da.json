@@ -1340,6 +1340,7 @@
     "other": "{count} langsomme"
   },
   "m_05f14964aa89e6": "Andre noder fortsætter med at betjene dine seere, mens denne node genstarter.",
+  "m_05f1837d318942": "Udgivelser rangeres uden {name}",
   "m_05f250064a7948": "Tilføj regel",
   "m_05f255d84e369c": "Plakatcollage",
   "m_05f2766626d94e": "Prøv det",
@@ -2264,6 +2265,7 @@
   "m_0a407d3a19f457": "Regelfilen er for stor.",
   "m_0a42c629d62c75": "Streams pr. seer",
   "m_0a457c53630ece": "Timer de seneste 30 dage",
+  "m_0a47ea6e97c47e": "Dets rangeringstrin overskred tidsgrænsen og blev derfor udeladt. Det tæller igen, så snart det bliver færdigt i tide.",
   "m_0a4957394b2dc4": "Placering",
   "m_0a49eaf45fe818": "Afvis",
   "m_0a4a1b399fca4e": "Serveradressen er utilgængelig. Bed serverejeren angive en tilgængelig serveradresse, og prøv igen.",
@@ -4687,6 +4689,10 @@
   "m_151665e44b96df": "Kun tv-episoder",
   "m_1516960a2d1d0d": "Ether kunne ikke indlæse de seneste afspilninger.",
   "m_151769a9fde954": "Indstillinger",
+  "m_1518afa3e7832e": {
+    "one": "Rangering udeladt én gang",
+    "other": "Rangering udeladt {count} gange"
+  },
   "m_1519dfb51db68c": "Live-tv-kanaler",
   "m_151b0ad5ec431b": "rummet, røveri",
   "m_151b4308c92e75": "TMDB som standard; cachede udbyderscorer, når det er konfigureret.",

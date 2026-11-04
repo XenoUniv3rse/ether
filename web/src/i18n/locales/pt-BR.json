@@ -1378,6 +1378,7 @@
     "other": "{count} lentas"
   },
   "m_05f14964aa89e6": "Os outros nós continuam atendendo seus espectadores enquanto este nó reinicia.",
+  "m_05f1837d318942": "Os lançamentos estão sendo classificados sem {name}",
   "m_05f250064a7948": "Adicionar regra",
   "m_05f255d84e369c": "Colagem de pôsteres",
   "m_05f2766626d94e": "Testar",
@@ -2323,6 +2324,7 @@
   "m_0a407d3a19f457": "O arquivo de regras é grande demais.",
   "m_0a42c629d62c75": "Streams por espectador",
   "m_0a457c53630ece": "Horas em 30 dias",
+  "m_0a47ea6e97c47e": "A etapa de classificação passou do limite de tempo e por isso foi deixada de fora. Ela volta a contar assim que terminar a tempo.",
   "m_0a4957394b2dc4": "Posição",
   "m_0a49eaf45fe818": "Recusar",
   "m_0a4a1b399fca4e": "Endereço do servidor indisponível. Peça ao proprietário do servidor para definir um endereço de servidor acessível e tente novamente.",
@@ -4813,6 +4815,11 @@
   "m_151665e44b96df": "Somente episódios de séries",
   "m_1516960a2d1d0d": "O Ether não conseguiu carregar as exibições recentes.",
   "m_151769a9fde954": "Configurações",
+  "m_1518afa3e7832e": {
+    "one": "Classificação ignorada uma vez",
+    "many": "Classificação ignorada {count} vezes",
+    "other": "Classificação ignorada {count} vezes"
+  },
   "m_1519dfb51db68c": "Canais de TV ao vivo",
   "m_151b0ad5ec431b": "espaço, assalto",
   "m_151b4308c92e75": "TMDB por padrão; notas de provedores em cache quando configurados.",

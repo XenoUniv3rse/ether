@@ -1340,6 +1340,7 @@
     "other": "{count} langsam"
   },
   "m_05f14964aa89e6": "Die anderen Knoten versorgen deine Zuschauer weiter, während dieser Knoten neu startet.",
+  "m_05f1837d318942": "Releases werden ohne {name} eingestuft",
   "m_05f250064a7948": "Regel hinzufügen",
   "m_05f255d84e369c": "Postercollage",
   "m_05f2766626d94e": "Ausprobieren",
@@ -2264,6 +2265,7 @@
   "m_0a407d3a19f457": "Die Regeldatei ist zu groß.",
   "m_0a42c629d62c75": "Streams pro Zuschauer",
   "m_0a457c53630ece": "Stunden in 30 Tagen",
+  "m_0a47ea6e97c47e": "Sein Ranking-Schritt hat sein Zeitlimit überschritten und wurde deshalb ausgelassen. Er zählt wieder, sobald er rechtzeitig fertig wird.",
   "m_0a4957394b2dc4": "Platzierung",
   "m_0a49eaf45fe818": "Ablehnen",
   "m_0a4a1b399fca4e": "Serveradresse nicht verfügbar. Bitten Sie den Serverbesitzer, eine erreichbare Serveradresse einzustellen, und versuchen Sie es dann erneut.",
@@ -4687,6 +4689,10 @@
   "m_151665e44b96df": "Nur Serienepisoden",
   "m_1516960a2d1d0d": "Ether konnte die letzten Wiedergaben nicht laden.",
   "m_151769a9fde954": "Einstellungen",
+  "m_1518afa3e7832e": {
+    "one": "Ranking einmal ausgelassen",
+    "other": "Ranking {count}-mal ausgelassen"
+  },
   "m_1519dfb51db68c": "Live-TV-Kanäle",
   "m_151b0ad5ec431b": "weltraum, raub",
   "m_151b4308c92e75": "Standardmäßig TMDB; zwischengespeicherte Anbieterwerte, wenn konfiguriert.",

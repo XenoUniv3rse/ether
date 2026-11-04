@@ -1378,6 +1378,7 @@
     "other": "{count} lente"
   },
   "m_05f14964aa89e6": "Gli altri nodi continuano a servire i tuoi spettatori mentre questo nodo si riavvia.",
+  "m_05f1837d318942": "Le release vengono classificate senza {name}",
   "m_05f250064a7948": "Aggiungi regola",
   "m_05f255d84e369c": "Collage di locandine",
   "m_05f2766626d94e": "Prova",
@@ -2323,6 +2324,7 @@
   "m_0a407d3a19f457": "Il file delle regole è troppo grande.",
   "m_0a42c629d62c75": "Stream per spettatore",
   "m_0a457c53630ece": "Ore in 30 giorni",
+  "m_0a47ea6e97c47e": "Il suo passaggio di classificazione ha superato il limite di tempo, quindi è stato escluso. Torna a contare appena termina in tempo.",
   "m_0a4957394b2dc4": "Posizione",
   "m_0a49eaf45fe818": "Rifiuta",
   "m_0a4a1b399fca4e": "Indirizzo del server non disponibile. Chieda al proprietario del server di impostare un indirizzo del server raggiungibile, poi riprovi.",
@@ -4813,6 +4815,11 @@
   "m_151665e44b96df": "Solo episodi TV",
   "m_1516960a2d1d0d": "Ether non è riuscito a caricare le riproduzioni recenti.",
   "m_151769a9fde954": "Impostazioni",
+  "m_1518afa3e7832e": {
+    "one": "Classificazione saltata una volta",
+    "many": "Classificazione saltata {count} volte",
+    "other": "Classificazione saltata {count} volte"
+  },
   "m_1519dfb51db68c": "Canali TV in diretta",
   "m_151b0ad5ec431b": "spazio, rapina",
   "m_151b4308c92e75": "TMDB per impostazione predefinita; punteggi dei provider in cache, se configurati.",

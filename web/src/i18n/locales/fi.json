@@ -1340,6 +1340,7 @@
     "other": "{count} hidasta"
   },
   "m_05f14964aa89e6": "Muut solmut palvelevat katselijoitasi sillä aikaa, kun tämä solmu käynnistyy uudelleen.",
+  "m_05f1837d318942": "Julkaisut järjestetään ilman laajennusta {name}",
   "m_05f250064a7948": "Lisää sääntö",
   "m_05f255d84e369c": "Julistekollaasi",
   "m_05f2766626d94e": "Kokeile",
@@ -2264,6 +2265,7 @@
   "m_0a407d3a19f457": "Sääntötiedosto on liian suuri.",
   "m_0a42c629d62c75": "Toistoja katselijaa kohti",
   "m_0a457c53630ece": "Tunteja 30 päivässä",
+  "m_0a47ea6e97c47e": "Sen järjestysvaihe ylitti aikarajansa, joten se jätettiin pois. Se lasketaan taas mukaan heti, kun se valmistuu ajoissa.",
   "m_0a4957394b2dc4": "Sijoitus",
   "m_0a49eaf45fe818": "Hylkää",
   "m_0a4a1b399fca4e": "Palvelimen osoite ei ole käytettävissä. Pyydä palvelimen omistajaa asettamaan tavoitettavissa oleva palvelimen osoite ja yritä uudelleen.",
@@ -4687,6 +4689,10 @@
   "m_151665e44b96df": "Vain TV-jaksot",
   "m_1516960a2d1d0d": "Ether ei voinut ladata viimeisimpiä toistoja.",
   "m_151769a9fde954": "Asetukset",
+  "m_1518afa3e7832e": {
+    "one": "Järjestys ohitettu kerran",
+    "other": "Järjestys ohitettu {count} kertaa"
+  },
   "m_1519dfb51db68c": "Suorat TV-kanavat",
   "m_151b0ad5ec431b": "avaruus, ryöstö",
   "m_151b4308c92e75": "Oletuksena TMDB; välimuistissa olevat palveluntarjoajien pisteet, kun määritetty.",

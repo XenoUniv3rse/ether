@@ -1340,6 +1340,7 @@
     "other": "{count} yavaş"
   },
   "m_05f14964aa89e6": "Bu düğüm yeniden başlarken diğer düğümler izleyicilerinize hizmet vermeye devam eder.",
+  "m_05f1837d318942": "Sürümler {name} olmadan sıralanıyor",
   "m_05f250064a7948": "Kural ekle",
   "m_05f255d84e369c": "Poster kolajı",
   "m_05f2766626d94e": "Dene",
@@ -2264,6 +2265,7 @@
   "m_0a407d3a19f457": "Kural dosyası çok büyük.",
   "m_0a42c629d62c75": "İzleyici başına akış",
   "m_0a457c53630ece": "30 günde saat",
+  "m_0a47ea6e97c47e": "Sıralama adımı süre sınırını aştığı için dışarıda bırakıldı. Zamanında bittiği anda yeniden hesaba katılır.",
   "m_0a4957394b2dc4": "Yerleşim",
   "m_0a49eaf45fe818": "Reddet",
   "m_0a4a1b399fca4e": "Sunucu adresi kullanılamıyor. Sunucu sahibinden ulaşılabilir bir sunucu adresi ayarlamasını isteyin ve yeniden deneyin.",
@@ -4687,6 +4689,10 @@
   "m_151665e44b96df": "Yalnızca dizi bölümleri",
   "m_1516960a2d1d0d": "Ether son oynatmaları yükleyemedi.",
   "m_151769a9fde954": "Ayarlar",
+  "m_1518afa3e7832e": {
+    "one": "Sıralama bir kez atlandı",
+    "other": "Sıralama {count} kez atlandı"
+  },
   "m_1519dfb51db68c": "Canlı TV kanalları",
   "m_151b0ad5ec431b": "uzay, soygun",
   "m_151b4308c92e75": "Varsayılan olarak TMDB; yapılandırıldığında önbellekteki sağlayıcı puanları.",

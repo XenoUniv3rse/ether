@@ -1378,6 +1378,7 @@
     "other": "{count} lents"
   },
   "m_05f14964aa89e6": "Les autres nœuds continuent de servir vos spectateurs pendant le redémarrage de ce nœud.",
+  "m_05f1837d318942": "Les versions sont classées sans {name}",
   "m_05f250064a7948": "Ajouter une règle",
   "m_05f255d84e369c": "Collage d’affiches",
   "m_05f2766626d94e": "Essayer",
@@ -2323,6 +2324,7 @@
   "m_0a407d3a19f457": "Le fichier de règles est trop volumineux.",
   "m_0a42c629d62c75": "Flux par spectateur",
   "m_0a457c53630ece": "Heures sur 30 jours",
+  "m_0a47ea6e97c47e": "Son étape de classement a dépassé son délai, elle a donc été ignorée. Elle compte de nouveau dès qu'elle termine à temps.",
   "m_0a4957394b2dc4": "Emplacement",
   "m_0a49eaf45fe818": "Refuser",
   "m_0a4a1b399fca4e": "Adresse du serveur indisponible. Demandez au propriétaire du serveur de définir une adresse de serveur joignable, puis réessayez.",
@@ -4813,6 +4815,11 @@
   "m_151665e44b96df": "Épisodes de séries uniquement",
   "m_1516960a2d1d0d": "Ether n’a pas pu charger les diffusions récentes.",
   "m_151769a9fde954": "Paramètres",
+  "m_1518afa3e7832e": {
+    "one": "Classement ignoré une fois",
+    "many": "Classement ignoré {count} fois",
+    "other": "Classement ignoré {count} fois"
+  },
   "m_1519dfb51db68c": "Chaînes TV en direct",
   "m_151b0ad5ec431b": "espace, braquage",
   "m_151b4308c92e75": "TMDB par défaut ; scores de fournisseurs en cache lorsqu’ils sont configurés.",
