@@ -5,8 +5,8 @@ import { api, apiFetch } from "../../lib/api";
 import { normalizeSessions } from "../../lib/health";
 import { useAsync, useInterval } from "../../lib/hooks";
 import { PlayHistory, ViewingFilters } from "./History";
-import { Experience } from "./Experience";
-import { NowPlaying } from "./NowPlaying";
+import { Experience, ExperiencePeriod } from "./Experience";
+import { NowPlaying, ProtocolFilter } from "./NowPlaying";
 import { ViewingStats } from "./Stats";
 import { viewingQuery, type Play, type Summary, type ViewingFilter } from "./types";
 
@@ -42,6 +42,7 @@ export default function Activity() {
   const tab = useRouteTab(TABS);
   useInstallableDashboard();
   const [filter, setFilter] = useState<ViewingFilter>({ days: "30", user: "", year: "" });
+  const [protocol, setProtocol] = useState("");
   const query = viewingQuery(filter);
   const viewingTab = tab === "history" || tab === "stats";
 
@@ -78,6 +79,16 @@ export default function Activity() {
       base="/activity"
       tabs={TABS.map((tab) => (tab.key === "now" && live ? { ...tab, count: live } : tab))}
       active={tab}
+      // Every tab keeps its filters here, so its four KPIs open the page at the same place.
+      tabActions={
+        tab === "now" ? (
+          <ProtocolFilter streams={sessions.data ?? []} value={protocol} onChange={setProtocol} />
+        ) : tab === "experience" ? (
+          <ExperiencePeriod />
+        ) : (
+          <ViewingFilters value={filter} onChange={setFilter} viewers={viewers.data ?? []} />
+        )
+      }
     >
       {tab === "now" ? (
         <>
@@ -86,16 +97,16 @@ export default function Activity() {
               {transcoder.data.playbackError || transcoder.data.notice}
             </p>
           ) : null}
-          <NowPlaying state={sessions} />
+          <NowPlaying state={sessions} protocol={protocol} />
         </>
       ) : tab === "experience" ? (
         <Experience />
       ) : (
         <>
-          <ViewingFilters value={filter} onChange={setFilter} viewers={viewers.data ?? []} />
           {tab === "history" ? (
             <PlayHistory
               history={viewing.data?.history}
+              summary={viewing.data?.summary}
               error={viewing.error}
               onRetry={() => void viewing.reload()}
             />

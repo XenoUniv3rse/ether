@@ -63,6 +63,7 @@
   "m_0040e631ea1713": "Må køre under afspilning",
   "m_0042d36e3a4d31": "Den første kilde med et matchende interval leverer knappen til at springe over.",
   "m_00446ecc28fada": "MDBList",
+  "m_0045187b61cac9": "Video eller lyd konverteret",
   "m_004580cc476c5f": "Valideringstips",
   "m_004804edf569b6": "Tilslut din Plex-konto igen",
   "m_004835dbe00869": {
@@ -137,6 +138,7 @@
   "m_00a084a302868d": "disk budget lager opbevaring forhåndshentning opvarmning næste episode",
   "m_00a16c19a34f07": "Vis kald",
   "m_00a19f8711afed": "Fortsæt med at se",
+  "m_00a214bd41c61b": "Direkte",
   "m_00a230047b55c8": "Leveret fra diskcachen",
   "m_00a28c2d495833": "Databasen afviste forbindelsen",
   "m_00a35ff984d8bc": "Forvarmer nu",
@@ -354,6 +356,7 @@
   "m_01b5a99921e30a": "Download {name}",
   "m_01b674ba6b7373": "Pre-rolls afspilles ikke, når en titel genoptages.",
   "m_01b6a81e56578f": "Vis lokale seernavne på loginskærmen",
+  "m_01b75b2d99913d": "Streamer nu",
   "m_01b765f613779a": "Gem regel",
   "m_01b9317c523af8": "Regel gemt",
   "m_01bb844ab97232": "Blokerede udgivelsesgrupper",
@@ -999,7 +1002,6 @@
     "one": "{count} API-forespørgsel om dagen",
     "other": "{count} API-forespørgsler om dagen"
   },
-  "m_04736cfe01f746": "Streams opdateres hvert par sekunder. Hvis du stopper en stream, afsluttes den på seerens enhed.",
   "m_0474b5fa45d5ae": "Fjern regel",
   "m_0474e00de25f80": "Vælg en serie",
   "m_0476bbd0877c4e": "Åbn installeret plugin",
@@ -2136,6 +2138,7 @@
   "m_09a87f5bfb453b": "Sidst importeret {when} · {span} programmer",
   "m_09a9b9012738ea": "Udgivelse fastgjort",
   "m_09ac1b92a7f43f": "Afbryd forbindelsen",
+  "m_09ac79107a1271": "Afspillet eller streamet uændret",
   "m_09ac7c244189c5": {
     "one": "{count} definition installeret, bruges af dine indexere ovenfor.",
     "other": "{count} definitioner installeret, alle bruges af dine indexere ovenfor."
@@ -2659,6 +2662,7 @@
   "m_0c04b691b6c72d": "Samling slettet",
   "m_0c04cc873f0352": "4K (2160p)",
   "m_0c072fb8baf115": "Offentliggør",
+  "m_0c085fe994cbc4": "Gennemstrømning",
   "m_0c098f051ed4a8": "Aktivitet vises, når den første titel er set.",
   "m_0c0cb66d5e7298": {
     "one": "Plads til cirka {count} kilde i filmstørrelse på 8 GiB. Episodestørrelser varierer; begge deler denne allokering.",
@@ -4313,6 +4317,7 @@
   "m_1340e827526923": "Ny IPTV-kilde",
   "m_13411c6d3331c3": "Hvad skal denne samling være?",
   "m_1341b9c449f87d": "Live-tv-apps bruger en afspilningsliste fra din kontoside.",
+  "m_1342a7d73a5c61": "Gennemførelsesrate",
   "m_1345f25f1c9ace": "Senest sendte episode",
   "m_1346eb034adf81": "Sådan når Ether internettet",
   "m_1349091f213e5d": "Åbn navigation",
@@ -5356,6 +5361,7 @@
   "m_181f4784e63061": "Tilføj en IntroDB-nøgle i {link}.",
   "m_182164a23292fd": "Opret en gratis API-nøgle i dine kontoindstillinger på {link}, og indsæt den nedenfor.",
   "m_18216573f3bae8": "Vist af regler",
+  "m_18222e8154a6d8": "Gennemsnitlig session",
   "m_1823ad77517060": "Deres Hjem er opdateret.",
   "m_182477bf730e82": "Tilføj en webhook-, Discord-, Slack-, Telegram-, e-mail-, ntfy- eller Gotify-kanal for at få advarsler.",
   "m_1826e3926a178f": "Testnotifikation",
@@ -5845,7 +5851,6 @@
   "m_1a3532ab03c3f1": "HDR tilladt",
   "m_1a3561c5e9b1fe": "Alle rækker på {section}.",
   "m_1a361f49e13082": "Telefon eller tablet",
-  "m_1a3658141add24": "De seneste 500 afspilninger i perioden, i din enheds tidszone.",
   "m_1a37632c11d41d": "Det, der afspilles, før en film eller et afsnit starter: dine pre-rolls og biograftrailere.",
   "m_1a3a3f14648f50": "Endpoint-URL",
   "m_1a3c710193f62d": "{name} (kopi)",

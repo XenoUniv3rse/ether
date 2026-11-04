@@ -1,13 +1,12 @@
 import { Badge, EmptyState, Input, PagedTable, Select } from "@braedonsaunders/appkit-ui";
-import { History as HistoryIcon } from "lucide-react";
-import { useId } from "react";
+import { CheckCircle2, Clock, History as HistoryIcon, PlayCircle, Users } from "lucide-react";
 import { Link, useSearchParams } from "react-router-dom";
 import { Drawer } from "../../components/Drawer";
 import { ErrorPanel, LoadingRows } from "../../components/feedback";
-import { Field } from "../../components/fields";
+import { Kpi, KpiRow } from "../../components/Kpi";
 import { Section } from "../../components/layout";
 import { apiFetch } from "../../lib/api";
-import { fixed, formatDateTime } from "../../lib/format";
+import { fixed, formatDateTime, formatNumber, formatPercent } from "../../lib/format";
 import { useAsync } from "../../lib/hooks";
 import { ToneValue } from "./ExperienceDrawer";
 import {
@@ -21,9 +20,9 @@ import {
 import { getLocale, t, tn } from "../../i18n";
 import { pagedTableLabels } from "../../i18n/appkit-labels";
 import type { EtherUser } from "../../lib/types";
-import { viewerLabel, type Play, type PlayDetail, type ViewingFilter } from "./types";
+import { viewerLabel, type Play, type PlayDetail, type Summary, type ViewingFilter } from "./types";
 
-/** Period, viewer and year-in-review filters above History and Stats. */
+/** Period, viewer and year-in-review filters on History's and Stats' tab row. */
 export function ViewingFilters({
   value,
   onChange,
@@ -33,49 +32,43 @@ export function ViewingFilters({
   onChange: (next: ViewingFilter) => void;
   viewers: EtherUser[];
 }) {
-  const id = useId();
   return (
-    <div className="flex flex-wrap items-end gap-3" role="group" aria-label={t("Filters")}>
-      <Field label={t("Period")} htmlFor={`${id}-days`} className="w-44">
-        <Select
-          id={`${id}-days`}
-          aria-label={t("Period")}
-          value={value.days}
-          onChange={(e) => onChange({ ...value, days: e.target.value, year: "" })}
-        >
-          {[7, 30, 90, 365].map((n) => (
-            <option key={n} value={String(n)}>
-              {tn(n, "Last {count} day", "Last {count} days")}
-            </option>
-          ))}
-        </Select>
-      </Field>
-      <Field label={t("Viewer")} htmlFor={`${id}-user`} className="w-52">
-        <Select
-          id={`${id}-user`}
-          aria-label={t("Viewer")}
-          value={value.user}
-          onChange={(e) => onChange({ ...value, user: e.target.value })}
-        >
-          <option value="">{t("Everyone")}</option>
-          {viewers.map((v) => (
-            <option key={v.id} value={String(v.id)}>
-              {viewerLabel(v)}
-            </option>
-          ))}
-        </Select>
-      </Field>
-      <Field label={t("Year in review")} htmlFor={`${id}-year`} className="w-32">
-        <Input
-          id={`${id}-year`}
-          type="number"
-          min={2000}
-          max={new Date().getFullYear()}
-          placeholder={t("Year")}
-          value={value.year}
-          onChange={(e) => onChange({ ...value, year: e.target.value })}
-        />
-      </Field>
+    <div className="flex flex-wrap items-center gap-2" role="group" aria-label={t("Filters")}>
+      <Select
+        aria-label={t("Period")}
+        className="h-8 w-40 text-sm"
+        value={value.days}
+        onChange={(e) => onChange({ ...value, days: e.target.value, year: "" })}
+      >
+        {[7, 30, 90, 365].map((n) => (
+          <option key={n} value={String(n)}>
+            {tn(n, "Last {count} day", "Last {count} days")}
+          </option>
+        ))}
+      </Select>
+      <Select
+        aria-label={t("Viewer")}
+        className="h-8 w-44 text-sm"
+        value={value.user}
+        onChange={(e) => onChange({ ...value, user: e.target.value })}
+      >
+        <option value="">{t("Everyone")}</option>
+        {viewers.map((v) => (
+          <option key={v.id} value={String(v.id)}>
+            {viewerLabel(v)}
+          </option>
+        ))}
+      </Select>
+      <Input
+        aria-label={t("Year in review")}
+        className="h-8 w-28 text-sm"
+        type="number"
+        min={2000}
+        max={new Date().getFullYear()}
+        placeholder={t("Year in review")}
+        value={value.year}
+        onChange={(e) => onChange({ ...value, year: e.target.value })}
+      />
     </div>
   );
 }
@@ -101,10 +94,12 @@ function statusCell(p: Play) {
 /** Recorded plays for the selected period and viewer. */
 export function PlayHistory({
   history,
+  summary,
   error,
   onRetry,
 }: {
   history: Play[] | undefined;
+  summary: Summary | undefined;
   error: unknown;
   onRetry: () => void;
 }) {
@@ -130,10 +125,36 @@ export function PlayHistory({
     );
   return (
     <>
-      <Section
-        title={t("Play history")}
-        description={t("The latest 500 plays in this period, in your device's time zone.")}
-      >
+      <KpiRow>
+        <Kpi
+          label={t("Plays")}
+          value={summary ? formatNumber(summary.plays, 0) : DASH}
+          icon={<PlayCircle size={18} />}
+        />
+        <Kpi
+          label={t("Viewers")}
+          value={summary ? formatNumber(summary.users.length, 0) : DASH}
+          icon={<Users size={18} />}
+          tone="info"
+        />
+        <Kpi
+          label={t("Average session")}
+          value={
+            summary && summary.plays
+              ? t("{minutes} min", { minutes: fixed(summary.watchedMs / summary.plays / 60000, 0) })
+              : DASH
+          }
+          icon={<Clock size={18} />}
+          tone="info"
+        />
+        <Kpi
+          label={t("Completion rate")}
+          value={summary && summary.plays ? formatPercent(summary.completed / summary.plays) : DASH}
+          icon={<CheckCircle2 size={18} />}
+          tone="success"
+        />
+      </KpiRow>
+      <Section>
         {!history ? (
           <LoadingRows rows={4} />
         ) : history.length ? (

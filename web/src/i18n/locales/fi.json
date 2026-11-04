@@ -63,6 +63,7 @@
   "m_0040e631ea1713": "Voi toimia toiston aikana",
   "m_0042d36e3a4d31": "Ensimmäinen lähde, jolla on vastaava jakso, antaa ohituspainikkeen.",
   "m_00446ecc28fada": "MDBList",
+  "m_0045187b61cac9": "Video tai ääni muunnettu",
   "m_004580cc476c5f": "Tarkistusvinkit",
   "m_004804edf569b6": "Yhdistä Plex-tilisi uudelleen",
   "m_004835dbe00869": {
@@ -137,6 +138,7 @@
   "m_00a084a302868d": "levybudjetti tallennustila säilytys esilataus lämmitys seuraava jakso",
   "m_00a16c19a34f07": "Näytä kutsut",
   "m_00a19f8711afed": "Jatka katselua",
+  "m_00a214bd41c61b": "Suoraan",
   "m_00a230047b55c8": "Toimitettu levyvälimuistista",
   "m_00a28c2d495833": "Tietokanta hylkäsi yhteyden",
   "m_00a35ff984d8bc": "Esilämmitetään nyt",
@@ -354,6 +356,7 @@
   "m_01b5a99921e30a": "Lataa: {name}",
   "m_01b674ba6b7373": "Pre-rolleja ei toisteta, kun nimikkeen katselua jatketaan.",
   "m_01b6a81e56578f": "Näytä paikallisten katsojien nimet kirjautumisnäytössä",
+  "m_01b75b2d99913d": "Suoratoistetaan nyt",
   "m_01b765f613779a": "Tallenna sääntö",
   "m_01b9317c523af8": "Sääntö tallennettu",
   "m_01bb844ab97232": "Estetyt julkaisuryhmät",
@@ -999,7 +1002,6 @@
     "one": "{count} API-pyyntö päivässä",
     "other": "{count} API-pyyntöä päivässä"
   },
-  "m_04736cfe01f746": "Toistot päivittyvät muutaman sekunnin välein. Toiston pysäyttäminen päättää sen katselijan laitteella.",
   "m_0474b5fa45d5ae": "Poista sääntö",
   "m_0474e00de25f80": "Valitse sarja",
   "m_0476bbd0877c4e": "Avaa asennettu liitännäinen",
@@ -2136,6 +2138,7 @@
   "m_09a87f5bfb453b": "Viimeksi tuotu {when} · {span} ohjelmatietoja",
   "m_09a9b9012738ea": "Julkaisu kiinnitetty",
   "m_09ac1b92a7f43f": "Katkaise yhteys",
+  "m_09ac79107a1271": "Toistettu tai suoratoistettu sellaisenaan",
   "m_09ac7c244189c5": {
     "one": "{count} määritys asennettu, ja se on yllä olevien indeksoijiesi käytössä.",
     "other": "{count} määritystä asennettu, kaikki yllä olevien indeksoijiesi käytössä."
@@ -2659,6 +2662,7 @@
   "m_0c04b691b6c72d": "Kokoelma poistettu",
   "m_0c04cc873f0352": "4K (2160p)",
   "m_0c072fb8baf115": "Julkaise",
+  "m_0c085fe994cbc4": "Siirtonopeus",
   "m_0c098f051ed4a8": "Toiminta näkyy, kun ensimmäinen nimike on katsottu.",
   "m_0c0cb66d5e7298": {
     "one": "Tilaa noin {count} elokuvan kokoiselle lähteelle, 8 GiB kukin. Jaksojen koot vaihtelevat; molemmat jakavat tämän varauksen.",
@@ -4313,6 +4317,7 @@
   "m_1340e827526923": "Uusi IPTV-lähde",
   "m_13411c6d3331c3": "Millainen tämän kokoelman pitäisi olla?",
   "m_1341b9c449f87d": "Live-tv-sovellukset käyttävät soittolistaa tilisi sivulta.",
+  "m_1342a7d73a5c61": "Valmistumisaste",
   "m_1345f25f1c9ace": "Viimeisin esitetty jakso",
   "m_1346eb034adf81": "Miten Ether tavoittaa internetin",
   "m_1349091f213e5d": "Avaa navigointi",
@@ -5356,6 +5361,7 @@
   "m_181f4784e63061": "Lisää IntroDB-avain kohdassa {link}.",
   "m_182164a23292fd": "Luo ilmainen API-avain {link}-tilisi asetuksissa ja liitä se alle.",
   "m_18216573f3bae8": "Sääntöjen näyttämät",
+  "m_18222e8154a6d8": "Istunnon keskipituus",
   "m_1823ad77517060": "Etusivu on ajan tasalla.",
   "m_182477bf730e82": "Lisää webhook-, Discord-, Slack-, Telegram-, sähköposti-, ntfy- tai Gotify-kanava saadaksesi hälytyksiä.",
   "m_1826e3926a178f": "Testi-ilmoitus",
@@ -5845,7 +5851,6 @@
   "m_1a3532ab03c3f1": "HDR sallittu",
   "m_1a3561c5e9b1fe": "Kaikki rivit kohdassa {section}.",
   "m_1a361f49e13082": "Puhelin tai tabletti",
-  "m_1a3658141add24": "Jakson 500 viimeisintä toistoa laitteesi aikavyöhykkeellä.",
   "m_1a37632c11d41d": "Mitä toistetaan ennen elokuvan tai jakson alkua: omat pre-rollisi ja elokuvatrailerit.",
   "m_1a3a3f14648f50": "Päätepisteen URL-osoite",
   "m_1a3c710193f62d": "{name} (kopio)",
