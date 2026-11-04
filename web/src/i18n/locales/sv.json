@@ -4752,7 +4752,6 @@
   "m_14c7a1feb33b17": "Tidszon",
   "m_14c996f579d9e2": "Förbättrar en mjuk bild innan den skickas. Tittarens gränser för upplösning och bithastighet gäller fortfarande. Video som inte stöds spelas upp som vanligt.",
   "m_14ca6a3a9e87d7": "Valde den spanska dubbningen av Velvet Comet åt Lucía",
-  "m_14cc123793203d": "Till {time} · {left} kvar",
   "m_14ceb1918df932": "Direkt",
   "m_14d100d6150e75": {
     "one": "{count} uppspelning visade aldrig någon bild. Vanligaste orsaken: {reason}",

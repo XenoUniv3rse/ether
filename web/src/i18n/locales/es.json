@@ -4884,7 +4884,6 @@
   "m_14c7a1feb33b17": "Zona horaria",
   "m_14c996f579d9e2": "Mejora una imagen suave antes de enviarla. Siguen aplicando los límites de resolución y de bitrate del espectador. Los vídeos no compatibles se reproducen con normalidad.",
   "m_14ca6a3a9e87d7": "Eligió el doblaje en español de Velvet Comet para Lucía",
-  "m_14cc123793203d": "Hasta las {time} · quedan {left}",
   "m_14ceb1918df932": "De inmediato",
   "m_14d100d6150e75": {
     "one": "{count} reproducción nunca mostró imagen. El motivo más común: {reason}",

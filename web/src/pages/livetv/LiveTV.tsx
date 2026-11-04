@@ -577,7 +577,7 @@ export default function LiveTV() {
   ) : null;
 
   const panelHead = (
-    <PanelHead>
+    <PanelHead className="@container pt-3! pb-0! border-b!">
       <div className="flex items-center gap-1.5">
         <div className="relative min-w-0 flex-1">
           <Search
@@ -616,17 +616,17 @@ export default function LiveTV() {
       </div>
       <SubtabNav
         ariaLabel={t("Lineup")}
+        className="grid grid-cols-4 gap-0 overflow-visible [&>button]:min-w-0 [&>button]:justify-center [&>button]:px-0.5 [&>button]:text-xs @min-[280px]:[&>button]:text-sm [&>button>span]:block [&>button>span]:min-w-0 [&>button>span]:break-words"
         active={leftTab}
         onSelect={setLeftTab}
         tabs={[
           { key: "overview", label: t("Overview") },
-          { key: "channels", label: t("Channels"), count: filtered.length },
+          { key: "channels", label: t("Channels") },
           {
             key: "sources",
             label: t("Sources"),
-            count: sources.filter(isChannelSource).length || undefined,
           },
-          { key: "guide", label: t("Guide"), count: missingCount || undefined },
+          { key: "guide", label: t("Guide") },
         ]}
       />
     </PanelHead>
@@ -650,25 +650,27 @@ export default function LiveTV() {
   const aside = (
     <>
       {panelHead}
-      {leftTab === "channels" ? null : leftTab === "sources" ? (
-        <SourceList
-          sources={sources}
-          selected={selection}
-          onSelect={(s) => void go(s)}
-          query={query}
-        />
-      ) : (
-        <GuideSourceList
-          query={query}
-          lineup={sorted}
-          sources={sources}
-          selected={guideSourceId}
-          onSelect={(id) =>
-            setParams(id ? new URLSearchParams({ gsrc: id }) : new URLSearchParams())
-          }
-          now={now}
-        />
-      )}
+      <div className="app-scroll min-h-0 flex-1 lg:overflow-y-auto">
+        {leftTab === "channels" ? null : leftTab === "sources" ? (
+          <SourceList
+            sources={sources}
+            selected={selection}
+            onSelect={(s) => void go(s)}
+            query={query}
+          />
+        ) : (
+          <GuideSourceList
+            query={query}
+            lineup={sorted}
+            sources={sources}
+            selected={guideSourceId}
+            onSelect={(id) =>
+              setParams(id ? new URLSearchParams({ gsrc: id }) : new URLSearchParams())
+            }
+            now={now}
+          />
+        )}
+      </div>
     </>
   );
 
@@ -812,7 +814,10 @@ export default function LiveTV() {
         }
         actions={actions}
         asideLabel={t("Lineup")}
-        asideClassName={channelOpen ? "lg:relative lg:z-[60]" : undefined}
+        asideClassName={cn(
+          "[scrollbar-gutter:auto] lg:overflow-hidden",
+          channelOpen && "lg:relative lg:z-[60]",
+        )}
         mainLabel={t("Live TV workspace")}
         mainClassName={mainClassName}
         aside={aside}

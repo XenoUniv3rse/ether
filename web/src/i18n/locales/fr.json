@@ -4884,7 +4884,6 @@
   "m_14c7a1feb33b17": "Fuseau horaire",
   "m_14c996f579d9e2": "Améliore une image floue avant l’envoi. Les limites de résolution et de débit du spectateur s’appliquent toujours. Les vidéos non prises en charge sont lues normalement.",
   "m_14ca6a3a9e87d7": "A choisi le doublage espagnol de Velvet Comet pour Lucía",
-  "m_14cc123793203d": "Jusqu’à {time} · {left} restantes",
   "m_14ceb1918df932": "Tout de suite",
   "m_14d100d6150e75": {
     "one": "{count} lecture n’a jamais affiché d’image. Raison la plus fréquente : {reason}",

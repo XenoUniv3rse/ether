@@ -4752,7 +4752,6 @@
   "m_14c7a1feb33b17": "Zeitzone",
   "m_14c996f579d9e2": "Bessert ein weiches Bild auf, bevor es gesendet wird. Auflösungs- und Bitratgrenzen der Zuschauenden gelten weiter. Nicht unterstützte Videos werden normal wiedergegeben.",
   "m_14ca6a3a9e87d7": "Die spanische Synchronfassung von Velvet Comet für Lucía gewählt",
-  "m_14cc123793203d": "Bis {time} · noch {left}",
   "m_14ceb1918df932": "Sofort",
   "m_14d100d6150e75": {
     "one": "{count} Wiedergabe hat nie ein Bild gezeigt. Häufigster Grund: {reason}",

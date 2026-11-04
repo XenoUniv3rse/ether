@@ -4761,7 +4761,6 @@
   "m_14c7a1feb33b17": "Timezone",
   "m_14c996f579d9e2": "Cleans up a soft picture before it is sent. The viewer's resolution and bitrate limits still apply. Unsupported videos play normally.",
   "m_14ca6a3a9e87d7": "Picked the Spanish dub of Velvet Comet for Lucía",
-  "m_14cc123793203d": "Until {time} · {left} left",
   "m_14ceb1918df932": "Right away",
   "m_14d100d6150e75": {
     "one": "{count} play never reached a picture. The most common reason: {reason}",

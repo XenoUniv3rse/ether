@@ -8,11 +8,9 @@ import { Kpi, KpiRow } from "../../components/Kpi";
 import { t, tn } from "../../i18n";
 import { useLocale } from "../../i18n/react";
 import { formatNumber, formatPercent, relativeTime, unit } from "../../lib/format";
-import { ChannelLogo } from "./ChannelLogo";
 import {
   MINUTE,
   clock,
-  hueOf,
   isChannelSource,
   onNow,
   progress,
@@ -99,7 +97,7 @@ export function LiveOverview({
         seen.add(title);
         return true;
       })
-      .slice(0, 8);
+      .slice(0, 4);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [airing, watching]);
 
@@ -124,7 +122,7 @@ export function LiveOverview({
         seen.add(k);
         return true;
       })
-      .slice(0, 8);
+      .slice(0, 4);
   }, [channels, guide, now]);
 
   const groups = useMemo(() => {
@@ -192,28 +190,28 @@ export function LiveOverview({
         />
       </KpiRow>
 
-      <DashboardPanel title={t("On now")} icon={<Radio size={16} />}>
-        {featured.length ? (
-          <ul className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-            {featured.map((a) => (
-              <li key={a.channel.id}>
-                <OnAirCard
-                  airing={a}
-                  viewers={watching.get(a.channel.id) ?? 0}
-                  now={now}
-                  onSelect={onSelectChannel}
-                />
-              </li>
-            ))}
-          </ul>
-        ) : (
-          <p className="py-6 text-center text-sm text-fg-muted">
-            {t("No programmes in this window.")}
-          </p>
-        )}
-      </DashboardPanel>
+      <div className="grid items-start gap-6 lg:grid-cols-2 xl:grid-cols-3">
+        <DashboardPanel title={t("On now")} icon={<Radio size={16} />}>
+          {featured.length ? (
+            <ul className="divide-y divide-border">
+              {featured.map((a) => (
+                <li key={a.channel.id}>
+                  <OnAirCard
+                    airing={a}
+                    viewers={watching.get(a.channel.id) ?? 0}
+                    now={now}
+                    onSelect={onSelectChannel}
+                  />
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="py-6 text-center text-sm text-fg-muted">
+              {t("No programmes in this window.")}
+            </p>
+          )}
+        </DashboardPanel>
 
-      <div className="grid gap-6 lg:grid-cols-3">
         <DashboardPanel title={t("Starting soon")} icon={<CalendarClock size={16} />}>
           {soon.length ? (
             <ol className="divide-y divide-border">
@@ -280,7 +278,7 @@ export function LiveOverview({
   );
 }
 
-/** A big picture card for something on air now. */
+/** A compact programme row alongside the other dashboard panels. */
 function OnAirCard({
   airing: { channel: c, programme: p },
   viewers,
@@ -292,7 +290,6 @@ function OnAirCard({
   now: number;
   onSelect: (id: string) => void;
 }) {
-  const hue = hueOf(c.id);
   const left = Math.max(1, Math.round((Date.parse(p.end) - now) / MINUTE));
   return (
     <button
@@ -303,55 +300,37 @@ function OnAirCard({
         title: p.item.title,
         time: clock(p.end),
       })}
-      className="group block w-full overflow-hidden rounded-xl border border-border bg-surface text-left shadow-xs transition-all hover:-translate-y-0.5 hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+      className="flex w-full items-center gap-3 rounded-md py-2 text-left hover:bg-surface-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
     >
-      <div
-        className="relative aspect-video overflow-hidden"
-        style={{
-          background: `radial-gradient(120% 90% at 30% 20%, hsl(${hue} 55% 30%), hsl(${(hue + 40) % 360} 55% 10%))`,
-        }}
-      >
-        {p.item.thumb ? (
-          <Artwork
-            src={p.item.thumb}
-            alt=""
-            title=""
-            className="absolute inset-0 size-full object-cover transition-transform duration-500 group-hover:scale-105"
-          />
-        ) : (
-          <div className="absolute inset-0 grid place-items-center transition-transform duration-500 group-hover:scale-105">
-            <ChannelLogo name={c.name} logo={c.logo} seed={c.id} size={84} />
-          </div>
-        )}
-        <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-transparent" />
-        <span className="absolute left-2.5 top-2.5 flex items-center gap-1.5 rounded-md bg-black/55 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider text-white backdrop-blur">
-          <span className="size-1.5 rounded-full bg-danger" aria-hidden />
-          {t("Live")}
+      <Artwork
+        src={p.item.thumb || c.logo}
+        alt=""
+        title=""
+        icon={<Tv size={18} className="text-fg-subtle" />}
+        className="size-10 shrink-0 rounded-md"
+        imgClassName={p.item.thumb ? "object-cover" : "object-contain p-1"}
+      />
+      <span className="min-w-0 flex-1">
+        <span className="block truncate text-sm font-medium text-fg">
+          {p.item.title || t("Untitled")}
         </span>
-        {viewers ? (
-          <span className="absolute right-2.5 top-2.5 rounded-md bg-primary px-1.5 py-0.5 text-[10px] font-semibold text-white">
-            {tn(viewers, "{count} watching", "{count} watching")}
-          </span>
-        ) : null}
-        <span className="absolute bottom-2 left-2.5 rounded bg-black/55 px-1.5 py-0.5 font-mono text-[11px] tabular-nums text-white">
-          {c.number}
+        <span className="block truncate text-xs text-fg-muted">
+          {c.number} · {c.name}
         </span>
-        <span className="absolute inset-x-0 bottom-0 h-1 bg-black/40" aria-hidden>
+        <span className="mt-1 block h-0.5 overflow-hidden rounded-full bg-bg-subtle" aria-hidden>
           <span
-            className="block h-full bg-primary"
+            className="block h-full bg-fg-subtle/40"
             style={{ width: `${progress(p, now) * 100}%` }}
           />
         </span>
-      </div>
-      <div className="space-y-0.5 p-3">
-        <p className="truncate text-xs text-fg-muted">{c.name}</p>
-        <p className="line-clamp-2 min-h-10 text-sm font-semibold text-fg">
-          {p.item.title || t("Untitled")}
-        </p>
-        <p className="text-xs tabular-nums text-fg-subtle">
-          {t("Until {time} · {left} left", { time: clock(p.end), left: unit(left, "minute") })}
-        </p>
-      </div>
+      </span>
+      <span className="shrink-0 text-right text-xs tabular-nums text-fg-muted">
+        <span className="block">{clock(p.end)}</span>
+        <span className="block text-[11px] text-fg-subtle">{unit(left, "minute")}</span>
+        {viewers ? (
+          <span className="block">{tn(viewers, "{count} watching", "{count} watching")}</span>
+        ) : null}
+      </span>
     </button>
   );
 }
