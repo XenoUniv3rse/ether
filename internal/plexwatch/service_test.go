@@ -295,7 +295,7 @@ func newHarnessDB(t *testing.T, account int64, db *sql.DB) *harness {
 	srv := httptest.NewServer(fake)
 	t.Cleanup(srv.Close)
 	var logs bytes.Buffer
-	svc, err := New(Options{
+	svc, err := newSupported(Options{
 		DB: db, State: st, GUID: guid, BaseURL: srv.URL, NodeID: "node-a",
 		Logger: slog.New(slog.NewTextHandler(&logs, nil)), Now: clock.Now,
 	})
@@ -472,7 +472,7 @@ func TestRestartDeliversOnce(t *testing.T) {
 		t.Fatal(err)
 	}
 	_ = h.svc.Close()
-	svc, err := New(Options{
+	svc, err := newSupported(Options{
 		DB: h.svc.db, State: h.st, GUID: h.guid, BaseURL: h.svc.client.plex.String(), NodeID: "node-b",
 		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), Now: h.now.Now,
 	})
@@ -698,7 +698,7 @@ func TestOverlappingWorkersSendOnce(t *testing.T) {
 	if err := h.st.Scrobble(context.Background(), 2, key); err != nil {
 		t.Fatal(err)
 	}
-	other, err := New(Options{
+	other, err := newSupported(Options{
 		DB: h.svc.db, State: h.st, GUID: h.guid, BaseURL: h.svc.client.plex.String(), NodeID: "node-b",
 		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), Now: h.now.Now,
 	})
@@ -1071,7 +1071,7 @@ func TestClusterFenceExpiresAndStaysShared(t *testing.T) {
 	if _, err := h.svc.SetDirection(ctx, 2, 42, 1, 10); err != nil {
 		t.Fatal(err)
 	}
-	other, err := New(Options{
+	other, err := newSupported(Options{
 		DB: h.svc.db, State: h.st, GUID: h.guid, BaseURL: h.svc.client.plex.String(), NodeID: "node-b",
 		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), Now: h.now.Now,
 	})

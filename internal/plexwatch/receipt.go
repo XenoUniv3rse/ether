@@ -95,6 +95,9 @@ type heldAttempt struct {
 // ReconcileOnce runs one pass of scheduled hold reconciliation across viewers
 // whose unreceipted attempts are due and have no live in-flight permit.
 func (s *Service) ReconcileOnce(ctx context.Context) (bool, error) {
+	if !s.supported {
+		return false, nil
+	}
 	now := s.now().UnixNano()
 	rows, err := s.db.QueryContext(ctx, `SELECT DISTINCT a.user_id FROM plexwatch_attempt a
 		WHERE a.receipt_at=0 AND a.next_reconcile<=?
@@ -160,6 +163,9 @@ func (s *Service) loadHeldAttempts(ctx context.Context, userID int64) ([]heldAtt
 // does not have it and no permit for that attempt is still in flight, the hold
 // is released and the current intent is allowed one fresh admission.
 func (s *Service) reconcileUser(ctx context.Context, userID int64, manual bool) error {
+	if !s.supported {
+		return nil
+	}
 	held, err := s.loadHeldAttempts(ctx, userID)
 	if err != nil || len(held) == 0 {
 		return err

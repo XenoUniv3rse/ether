@@ -93,7 +93,7 @@ func TestUncertainSendNoSecondPOST(t *testing.T) {
 				t.Fatal(err)
 			}
 			h.now.Add(3 * time.Minute)
-			restarted, err := New(Options{DB: h.svc.db, State: h.st, GUID: h.guid, BaseURL: server.URL, NodeID: "node-b", Now: h.now.Now})
+			restarted, err := newSupported(Options{DB: h.svc.db, State: h.st, GUID: h.guid, BaseURL: server.URL, NodeID: "node-b", Now: h.now.Now})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -184,7 +184,7 @@ func TestUncertainSendCrashAndCommitBoundaries(t *testing.T) {
 				t.Fatalf("fault not reached: %v", err)
 			}
 			h.now.Add(3 * time.Minute)
-			restarted, err := New(Options{DB: h.svc.db, State: h.st, GUID: h.guid, BaseURL: h.svc.client.plex.String(), NodeID: "node-b", Now: h.now.Now})
+			restarted, err := newSupported(Options{DB: h.svc.db, State: h.st, GUID: h.guid, BaseURL: h.svc.client.plex.String(), NodeID: "node-b", Now: h.now.Now})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -351,7 +351,7 @@ func TestUncertainSendTwoNodesAndUnaffectedWork(t *testing.T) {
 	go func() { _, err := h.svc.DeliverOnce(ctx); done <- err }()
 	<-h.fake.entered
 	h.now.Add(3 * time.Minute)
-	second, err := New(Options{DB: h.svc.db, State: h.st, GUID: h.guid, BaseURL: h.svc.client.plex.String(), NodeID: "node-b", Now: h.now.Now})
+	second, err := newSupported(Options{DB: h.svc.db, State: h.st, GUID: h.guid, BaseURL: h.svc.client.plex.String(), NodeID: "node-b", Now: h.now.Now})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -421,7 +421,7 @@ func TestUncertainSendProcessCrash(t *testing.T) {
 		}
 		st := state.New(db, state.Options{})
 		guid := &memGUID{forward: map[core.RatingKey]string{core.MovieKey(550): "plex://movie/5d7768265af944001f1f6976"}}
-		svc, err := New(Options{DB: db, State: st, GUID: guid, BaseURL: os.Getenv("ETHER_UNCERTAIN_CRASH_ORIGIN"), Now: func() time.Time { return time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC) }})
+		svc, err := newSupported(Options{DB: db, State: st, GUID: guid, BaseURL: os.Getenv("ETHER_UNCERTAIN_CRASH_ORIGIN"), Now: func() time.Time { return time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC) }})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -507,7 +507,7 @@ func TestUncertainSendProcessCrash(t *testing.T) {
 			defer db.Close()
 			st := state.New(db, state.Options{Now: h.now.Now})
 			h.now.Add(3 * time.Minute)
-			svc, err := New(Options{DB: db, State: st, GUID: h.guid, BaseURL: h.svc.client.plex.String(), Now: h.now.Now})
+			svc, err := newSupported(Options{DB: db, State: st, GUID: h.guid, BaseURL: h.svc.client.plex.String(), Now: h.now.Now})
 			if err != nil {
 				t.Fatal(err)
 			}

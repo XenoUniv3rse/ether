@@ -115,6 +115,27 @@ INSERT INTO plexwatch_attempt(attempt_id,seq,user_id,rating_key,plex_id,generati
 UPDATE state_sync_journal SET dead=1, last_error='uncertain_legacy', claimed_by='', claimed_at=0 WHERE delivered_at=0 AND never_sent=0;`)
 }
 
+// AccountSyncSupported gates every watch-state request to scrobbles.plex.tv:
+// sends, scheduled and manual imports, exports and hold reconciliation.
+//
+// Plex has no working path for a server other than its own. PMS reads
+// GET plex.tv/api/v2/server/users/services with its server token and
+// receives, per user, a scrobbling entry carrying an opaque 620-character
+// token (464 bytes of binary once decoded). Presented to
+// scrobbles.plex.tv/state/{id} as Authorization: Bearer or as X-Plex-Token
+// it answers 401 Invalid Token, including for users whose consent is on;
+// PMS derives the real credential from it, and Ether does not reverse
+// engineer that. A viewer PIN token is refused too.
+//
+// While false, nothing is sent or imported, queued intents and held attempts
+// stay parked untouched, and Status reports eligibility and problem
+// "unsupported". Direction, interval, fence and journal plumbing stay intact,
+// so turning a future working credential path on is this constant.
+const AccountSyncSupported = false
+
+// ErrUnsupported means Plex does not accept watch-state sync from Ether.
+var ErrUnsupported = errors.New("plexwatch: Plex accepts watch-state sync only from its own servers")
+
 // GUIDMap resolves a local title to a verified plex:// GUID and the reverse
 // for a GUID already stored for exactly one title.
 type GUIDMap interface {
@@ -151,6 +172,8 @@ type Service struct {
 	mu          sync.Mutex
 	closed      chan struct{}
 	lastCompact time.Time
+	// supported is AccountSyncSupported; tests of the dormant plumbing set it.
+	supported bool
 	// beforeEnable, when set by a test, runs after eligibility is reread and
 	// before the enable write.
 	beforeEnable func()
@@ -197,9 +220,12 @@ func New(opts Options) (*Service, error) {
 	return &Service{
 		db: opts.DB, state: opts.State, sealer: opts.Sealer, guid: opts.GUID,
 		client: c, node: node, log: log, now: now, claimFor: 2 * time.Minute,
-		closed: make(chan struct{}),
+		closed: make(chan struct{}), supported: AccountSyncSupported,
 	}, nil
 }
+
+// Supported reports whether watch state can reach a Plex account at all.
+func (s *Service) Supported() bool { return s.supported }
 
 // Close stops Run.
 func (s *Service) Close() error {
@@ -288,6 +314,9 @@ func (s *Service) Status(ctx context.Context, userID, plexID int64) (Status, err
 			st.Direction = 0
 		}
 	}
+	if !s.supported {
+		st.Eligibility, st.Problem, st.ProblemCode = "unsupported", "unsupported", 0
+	}
 	pending, dead, err := s.state.PendingSyncCount(ctx, userID)
 	if err != nil {
 		return Status{}, err
@@ -324,6 +353,9 @@ func (s *Service) BeginPIN(ctx context.Context, userID, plexID int64) (Status, e
 	if err := viewerIDs(userID, plexID); err != nil {
 		return Status{}, err
 	}
+	if !s.supported {
+		return Status{}, ErrUnsupported
+	}
 	pin, err := s.client.createPIN(ctx)
 	if err != nil {
 		return Status{}, err
@@ -345,6 +377,9 @@ func (s *Service) BeginPIN(ctx context.Context, userID, plexID int64) (Status, e
 func (s *Service) FinishPIN(ctx context.Context, userID, plexID int64) (Status, error) {
 	if err := viewerIDs(userID, plexID); err != nil {
 		return Status{}, err
+	}
+	if !s.supported {
+		return Status{}, ErrUnsupported
 	}
 	pin, ok, err := s.loadPIN(ctx, userID)
 	if err != nil {
@@ -418,6 +453,9 @@ func (s *Service) FinishPIN(ctx context.Context, userID, plexID int64) (Status, 
 func (s *Service) SetDirection(ctx context.Context, userID, plexID int64, direction, interval int) (Status, error) {
 	if direction < 0 || direction > 3 || (interval != 5 && interval != 10 && interval != 30 && interval != 60) {
 		return Status{}, errors.New("plexwatch: invalid sync settings")
+	}
+	if direction != 0 && !s.supported {
+		return Status{}, ErrUnsupported
 	}
 	row, err := s.requireMatch(ctx, userID, plexID)
 	if err != nil {
@@ -533,6 +571,9 @@ func (s *Service) Disconnect(ctx context.Context, userID, plexID int64) (Status,
 
 // Retry rechecks eligibility, revives retryable rows, and reconciles holds.
 func (s *Service) Retry(ctx context.Context, userID, plexID int64) (Status, error) {
+	if !s.supported {
+		return Status{}, ErrUnsupported
+	}
 	row, err := s.requireMatch(ctx, userID, plexID)
 	if err != nil {
 		return Status{}, err
@@ -560,6 +601,9 @@ func (s *Service) Retry(ctx context.Context, userID, plexID int64) (Status, erro
 // Resolve reads Plex's current watch state and reconciles held sends for this
 // viewer without blindly re-POSTing.
 func (s *Service) Resolve(ctx context.Context, userID, plexID int64) (Status, error) {
+	if !s.supported {
+		return Status{}, ErrUnsupported
+	}
 	row, err := s.requireMatch(ctx, userID, plexID)
 	if err != nil {
 		return Status{}, err

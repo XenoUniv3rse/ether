@@ -38,9 +38,10 @@ type PlexWatchStatus struct {
 // Sentinels returned by the app adapter so this package does not import
 // the watch client.
 var (
-	ErrPlexAccountMismatch = errors.New("plex account does not belong to this viewer")
-	ErrPlexNotEligible     = errors.New("account has not allowed watch-state sync")
-	ErrPlexWatchRevoked    = errors.New("plex rejected this viewer's token")
+	ErrPlexAccountMismatch  = errors.New("plex account does not belong to this viewer")
+	ErrPlexNotEligible      = errors.New("account has not allowed watch-state sync")
+	ErrPlexWatchRevoked     = errors.New("plex rejected this viewer's token")
+	ErrPlexWatchUnsupported = errors.New("plex accepts watch-state sync only from its own servers")
 )
 
 // PlexWatch is the per-viewer account watch-state integration. Handlers
@@ -86,6 +87,8 @@ func (h *Handler) writePlexWatch(w http.ResponseWriter, st PlexWatchStatus, err 
 		writeError(w, http.StatusForbidden, "not_eligible", "Plex has not allowed watch-state sync for this account")
 	case errors.Is(err, ErrPlexWatchRevoked):
 		writeError(w, http.StatusUnauthorized, "revoked", "Plex rejected this viewer's token")
+	case errors.Is(err, ErrPlexWatchUnsupported):
+		writeError(w, http.StatusConflict, "unsupported", "Plex accepts watch-state sync only from its own servers")
 	default:
 		writeError(w, http.StatusBadRequest, "plex_watch", "plex watch state could not be updated")
 	}

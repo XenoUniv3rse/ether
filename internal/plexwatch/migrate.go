@@ -23,6 +23,9 @@ var errUnmappedStored = errors.New("plexwatch: unmatched title was kept")
 // ratings. It does not run unless the viewer asks, and it does not upload
 // in-progress offsets. Delivery still waits until sync is enabled.
 func (s *Service) ExportCurrent(ctx context.Context, userID, plexID int64) (Status, error) {
+	if !s.supported {
+		return Status{}, ErrUnsupported
+	}
 	if _, err := s.requireMatch(ctx, userID, plexID); err != nil {
 		return Status{}, err
 	}
