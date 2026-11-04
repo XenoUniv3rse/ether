@@ -816,6 +816,9 @@ func planFilterChain(s runSpec, v *core.StreamInfo, pic picturePlan, accel strin
 		// tonemapx on profile 5. Keep decode/encode hardware where possible,
 		// but do the RPU reshape and tone map with the validated CPU graph.
 		gpuOK = false
+		// The legacy VAAPI branch below is separate from gpuPipeline.
+		// It must not bypass the RPU-aware CPU graph either.
+		gpuOff = true
 	}
 	switch {
 	case gpuOK && !gpuOff:
