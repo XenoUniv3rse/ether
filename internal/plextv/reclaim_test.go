@@ -123,3 +123,28 @@ func TestReclaimReportsATokenPlexRejects(t *testing.T) {
 		t.Fatalf("after unclaim: %+v token=%q", st, store.Get().Plex.Token)
 	}
 }
+
+// Restart and an unrelated settings edit must not release a persisted claim.
+func TestClaimSurvivesRestartAndSettingsUpdate(t *testing.T) {
+	f := newFakePlexTV(t, testMachineID)
+	f.addUser("server-token-42", owner())
+	f.deviceOwner = 42
+	cfg := testConfig()
+	cfg.Plex.Token, cfg.Plex.Claimed = "server-token-42", true
+	store := &subConfig{memConfig: &memConfig{cfg: cfg}}
+	r := newReclaimRegistrar(t, f, store)
+	if err := store.Update(func(c *config.Config) error { c.Server.FriendlyName = "Updated"; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.PublishNow(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	// A new registrar models startup against the persisted configuration.
+	r2 := newReclaimRegistrar(t, f, store)
+	if err := r2.PublishNow(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if f.deviceDeletes != 0 || f.deviceOwner != 42 || !store.Get().Plex.Claimed || store.Get().Plex.Token != "server-token-42" {
+		t.Fatal("claim changed during settings update or restart")
+	}
+}
