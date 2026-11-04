@@ -223,6 +223,13 @@ func (s *httpSession) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			w.finish()
 		}
 	}()
+	// A blocked pipe read does not notice an HTTP request's cancellation.
+	// Close the pipe and retire this process promptly when the client leaves.
+	stopCancel := context.AfterFunc(r.Context(), func() {
+		_ = pr.CloseWithError(r.Context().Err())
+		proc.Stop()
+	})
+	defer stopCancel()
 
 	s.writeHTTPHeaders(w)
 	_, _ = io.Copy(flushWriter{ResponseWriter: w, s: s}, pr)

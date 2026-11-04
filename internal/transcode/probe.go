@@ -44,7 +44,7 @@ func httpInputArgs(input string, reconnect bool) []string {
 	}
 	args := []string{"-rw_timeout", "30000000", "-user_agent", "Ether"}
 	if reconnect {
-		args = append(args, "-reconnect", "1", "-reconnect_on_network_error", "1", "-reconnect_delay_max", "4")
+		args = append(args, "-reconnect", "1", "-reconnect_on_network_error", "1", "-reconnect_on_http_error", "416,5xx", "-reconnect_max_retries", "2", "-reconnect_delay_max", "4")
 	}
 	return args
 }
