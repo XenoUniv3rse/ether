@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	_ "github.com/braedonsaunders/ether/internal/catalog" // summary joins the catalogue
 	"github.com/braedonsaunders/ether/internal/core"
 	"github.com/braedonsaunders/ether/internal/newznab"
 	"github.com/braedonsaunders/ether/internal/playback"
@@ -435,6 +436,8 @@ type Summary struct {
 	Origins        []Bucket        `json:"origins"`
 	Qualities      []Bucket        `json:"qualities"`
 	Places         []Bucket        `json:"places"`
+	Shows          []Bucket        `json:"shows"`
+	Genres         []Bucket        `json:"genres"`
 	Kinds          []Bucket        `json:"kinds"`
 	Plays          int64           `json:"plays"`
 	WatchedMS      int64           `json:"watchedMs"`
@@ -481,7 +484,7 @@ func (s *Service) Summary(ctx context.Context, since, until time.Time, user int6
 		dst   *[]Bucket
 		order string
 		label func(int64) string // set when expr is numeric
-	}{{fmt.Sprintf(`(started+%d)/86400`, shift), &out.Daily, "1", day}, {fmt.Sprintf(`((started+%d)/3600)%%24`, shift), &out.Hourly, "1", hour}, {`CASE WHEN decision='directplay' THEN 'direct-play' WHEN decision='copy' AND audio_copy=1 THEN 'direct-stream' WHEN decision='copy' AND audio_copy=0 THEN 'audio-transcode' WHEN decision='transcode' THEN 'transcode' ELSE 'unknown' END`, &out.Decisions, "2 DESC", nil}, {`CASE WHEN origin='' THEN 'Other' ELSE origin END`, &out.Origins, "2 DESC", nil}, {`CASE WHEN uhd<>0 AND hdr<>0 THEN '4K HDR' WHEN uhd<>0 THEN '4K' WHEN hdr<>0 THEN 'HDR' ELSE 'HD/SD' END`, &out.Qualities, "2 DESC", nil}, {`CASE WHEN remote<>0 THEN 'away' ELSE 'home' END`, &out.Places, "2 DESC", nil}, {`CASE WHEN rating_key/1000000000000000=1 THEN 'movie' WHEN rating_key/1000000000000000=4 THEN 'episode' ELSE 'unknown' END`, &out.Kinds, "2 DESC", nil}, {`platform`, &out.Platforms, "2 DESC", nil}, {`title`, &out.Titles, "2 DESC", nil}, {`username || ' (' || user_id || ')'`, &out.Users, "2 DESC", nil}}
+	}{{fmt.Sprintf(`(started+%d)/86400`, shift), &out.Daily, "1", day}, {fmt.Sprintf(`((started+%d)/3600)%%24`, shift), &out.Hourly, "1", hour}, {`CASE WHEN decision='directplay' THEN 'direct-play' WHEN decision='copy' AND (audio_copy=1 OR audio_copy IS NULL) THEN 'direct-stream' WHEN decision='copy' AND audio_copy=0 THEN 'audio-transcode' WHEN decision='transcode' THEN 'transcode' ELSE 'unknown' END`, &out.Decisions, "2 DESC", nil}, {`CASE WHEN origin='' THEN 'Other' ELSE origin END`, &out.Origins, "2 DESC", nil}, {`CASE WHEN uhd<>0 AND hdr<>0 THEN '4K HDR' WHEN uhd<>0 THEN '4K' WHEN hdr<>0 THEN 'HDR' ELSE 'HD/SD' END`, &out.Qualities, "2 DESC", nil}, {`CASE WHEN remote<>0 THEN 'away' ELSE 'home' END`, &out.Places, "2 DESC", nil}, {`CASE WHEN rating_key/1000000000000000=1 THEN 'movie' WHEN rating_key/1000000000000000=4 THEN 'episode' ELSE 'unknown' END`, &out.Kinds, "2 DESC", nil}, {`platform`, &out.Platforms, "2 DESC", nil}, {`title`, &out.Titles, "2 DESC", nil}, {`username || ' (' || user_id || ')'`, &out.Users, "2 DESC", nil}}
 	for _, g := range groups {
 		*g.dst = []Bucket{}
 		rows, err := s.db.QueryContext(ctx, `SELECT `+g.expr+`,COUNT(*),CAST(COALESCE(SUM(watched_ms),0) AS BIGINT),CAST(COALESCE(SUM(bytes),0) AS BIGINT)`+where+` GROUP BY 1 ORDER BY `+g.order+` LIMIT 366`, args...)
@@ -512,6 +515,9 @@ func (s *Service) Summary(ctx context.Context, since, until time.Time, user int6
 		if err != nil {
 			return out, err
 		}
+	}
+	if err := s.catalogSummary(ctx, &out, args); err != nil {
+		return out, err
 	}
 	if err := s.activitySummary(ctx, &out, where, args, shift); err != nil {
 		return out, err

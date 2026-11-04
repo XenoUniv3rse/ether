@@ -241,15 +241,16 @@ type session struct {
 	// downMisses counts speed-driven down-failovers that found no
 	// lower-bitrate release. They count toward MaxDownFailovers so a
 	// source that stays too slow cannot retry forever.
-	downMisses     int
-	requiresRemux  bool
-	prefer         string // release ID the viewer picked (PrepareVariant); read-only after creation
-	exact          bool   // exact selection must never switch releases
-	lastActive     time.Time
-	lastRead       time.Time
-	stopAt         time.Time // set by a "stopped" timeline; expiry after a grace
-	decision       core.DecisionKind
-	decisionReason string
+	downMisses       int
+	requiresRemux    bool
+	prefer           string // release ID the viewer picked (PrepareVariant); read-only after creation
+	exact            bool   // exact selection must never switch releases
+	lastActive       time.Time
+	lastRead         time.Time
+	stopAt           time.Time // set by a "stopped" timeline; expiry after a grace
+	decision         core.DecisionKind
+	decisionReason   string
+	deliveryDecision *core.Decision
 	// Whether the current decision copies each stream; a remux with
 	// decisionAudioCopy false is transcoding only the audio.
 	decisionVideoCopy bool
@@ -411,6 +412,7 @@ func (s *session) snapshot(now time.Time) *core.PlaySession {
 		Username:          s.user.Username,
 		Client:            s.caps,
 		Decision:          s.decision,
+		DeliveryDecision:  s.deliveryDecision,
 		DecisionReason:    s.decisionReason,
 		DecisionVideoCopy: s.decisionVideoCopy,
 		DecisionAudioCopy: s.decisionAudioCopy,

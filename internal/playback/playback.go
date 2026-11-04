@@ -1266,6 +1266,8 @@ func (m *Manager) snapshotWithEncoder(s *session, now time.Time) *core.PlaySessi
 			s.mu.Unlock()
 			ps.Decision, ps.DecisionVideoCopy, ps.DecisionAudioCopy = e.Decision.Kind, e.Decision.VideoCopy, e.Decision.AudioCopy
 			ps.DecisionReason = e.Decision.Reason
+			decision := e.Decision
+			ps.DeliveryDecision = &decision
 		}
 	}
 	return ps
@@ -1573,6 +1575,7 @@ func (m *Manager) SetDecision(id string, d core.Decision) {
 	if s := m.lookup(id); s != nil {
 		s.mu.Lock()
 		s.decision, s.explicit = d.Kind, true
+		s.deliveryDecision = &d
 		s.decisionReason = d.Reason
 		s.decisionVideoCopy, s.decisionAudioCopy = d.VideoCopy, d.AudioCopy
 		if d.Kind == core.DecisionDirectPlay {

@@ -152,11 +152,12 @@ type PlaySession struct {
 
 	// Status for the admin dashboard and /status/sessions, filled on the
 	// snapshots Playback returns.
-	TitleName      string       // "Movie (2024)" or "Show - S01E02 - Episode"
-	Username       string       // user display name
-	Client         ClientCaps   // the client's product, device and limits
-	DecisionReason string       `json:"decisionReason,omitempty"`
-	Decision       DecisionKind // directplay once bytes go straight to the client; "" until known
+	TitleName        string       // "Movie (2024)" or "Show - S01E02 - Episode"
+	Username         string       // user display name
+	Client           ClientCaps   // the client's product, device and limits
+	DecisionReason   string       `json:"decisionReason,omitempty"`
+	DeliveryDecision *Decision    `json:"deliveryDecision,omitempty"` // negotiated output and track selection
+	Decision         DecisionKind // directplay once bytes go straight to the client; "" until known
 	// DecisionVideoCopy and DecisionAudioCopy say whether the current
 	// decision copies each stream (additive): a remux with
 	// DecisionAudioCopy false is transcoding only the audio.

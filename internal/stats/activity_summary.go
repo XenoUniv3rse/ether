@@ -52,13 +52,20 @@ func (s *Service) activitySummary(ctx context.Context, out *Summary, where strin
 		}
 		d := daily[label]
 		d.Bytes += bytes
-		if decision == "directplay" || (decision == "copy" && copyAudio != nil && *copyAudio == 1) {
+		if decision == "directplay" || (decision == "copy" && (copyAudio == nil || *copyAudio == 1)) {
 			d.Direct++
 		} else if decision == "transcode" || (decision == "copy" && copyAudio != nil && *copyAudio == 0) {
 			d.Transcode++
 		}
 		if end == 0 {
-			end = updated
+			now := time.Now()
+			if s.opts.Now != nil {
+				now = s.opts.Now()
+			}
+			end = now.Unix()
+		}
+		if end > out.Until.Unix() {
+			end = out.Until.Unix()
 		}
 		if end > start {
 			events = append(events, activityEvent{start, 1}, activityEvent{end, -1})
@@ -91,6 +98,41 @@ func (s *Service) activitySummary(ctx context.Context, out *Summary, where strin
 		active += e.delta
 		if active > out.PeakStreams {
 			out.PeakStreams = active
+		}
+	}
+	return nil
+}
+
+// catalogSummary starts with the indexed period of plays and joins catalogue
+// primary keys; old copy rows have no audio flag and count as direct stream.
+func (s *Service) catalogSummary(ctx context.Context, out *Summary, args []any) error {
+	const period = ` FROM stats_plays p JOIN catalog_titles t ON t.key=p.rating_key `
+	const filter = ` WHERE p.started>=? AND p.started<? AND (?=0 OR p.user_id=?) AND (p.bytes>0 OR p.watched_ms>0) `
+	queries := []struct {
+		query string
+		dst   *[]Bucket
+	}{
+		{`SELECT COALESCE(NULLIF(MAX(show.title),''),MAX(t.show_title)),COUNT(*),CAST(COALESCE(SUM(p.watched_ms),0) AS BIGINT),CAST(COALESCE(SUM(p.bytes),0) AS BIGINT)` + period + ` LEFT JOIN catalog_titles show ON show.key=t.show_key ` + filter + ` AND t.type='episode' AND t.show_key<>0 GROUP BY t.show_key HAVING COALESCE(NULLIF(MAX(show.title),''),MAX(t.show_title))<>'' ORDER BY 3 DESC,1 LIMIT 10`, &out.Shows},
+		{`SELECT g.genre,COUNT(*),CAST(COALESCE(SUM(p.watched_ms),0) AS BIGINT),CAST(COALESCE(SUM(p.bytes),0) AS BIGINT)` + period + ` JOIN catalog_genres g ON g.key=CASE WHEN t.type='episode' THEN t.show_key ELSE t.key END ` + filter + ` GROUP BY g.genre ORDER BY 3 DESC,1 LIMIT 10`, &out.Genres},
+	}
+	for _, q := range queries {
+		*q.dst = []Bucket{}
+		rows, err := s.db.QueryContext(ctx, q.query, args...)
+		if err != nil {
+			return err
+		}
+		for rows.Next() {
+			var b Bucket
+			if err = rows.Scan(&b.Label, &b.Plays, &b.WatchedMS, &b.Bytes); err != nil {
+				rows.Close()
+				return err
+			}
+			*q.dst = append(*q.dst, b)
+		}
+		err = rows.Err()
+		rows.Close()
+		if err != nil {
+			return err
 		}
 	}
 	return nil
