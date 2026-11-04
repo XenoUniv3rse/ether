@@ -5,11 +5,14 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
+	"slices"
 	"sort"
 	"time"
 
 	"github.com/braedonsaunders/ether/internal/core"
+	"github.com/braedonsaunders/ether/internal/reqmemo"
 )
 
 type FeedStatus struct {
@@ -220,7 +223,16 @@ func (s *Service) verifiedKeys(ctx context.Context) []core.RatingKey {
 	return s.verifiedKeysSnapshot(ctx, s.now(), s.policy())
 }
 
+// verifiedKeysSnapshot is read once per request: Home prioritizes every
+// row with it, and each read groups the recent verified releases.
 func (s *Service) verifiedKeysSnapshot(ctx context.Context, now time.Time, policy string) []core.RatingKey {
+	keys, _ := reqmemo.Do(ctx, fmt.Sprintf("availability:verified:%p:%s", s, policy), func() ([]core.RatingKey, error) {
+		return s.loadVerifiedKeys(ctx, now, policy), nil
+	})
+	return slices.Clone(keys)
+}
+
+func (s *Service) loadVerifiedKeys(ctx context.Context, now time.Time, policy string) []core.RatingKey {
 	rows, err := s.db.QueryContext(ctx, `SELECT rating_key,MAX(first_verified) AS first_at FROM availability_releases WHERE verified_at>=? AND policy=? AND state='verified' GROUP BY rating_key ORDER BY first_at DESC LIMIT 1000`, now.Add(-6*time.Hour).Unix(), policy)
 	if err != nil {
 		return nil
