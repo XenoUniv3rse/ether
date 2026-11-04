@@ -186,70 +186,80 @@ export function GuideGrid({
       )}
     >
       <div className={cn("flex shrink-0", lineup && "border-b border-border")}>
-      {lineup ? (
-        <div className="shrink-0 border-r border-border bg-bg-subtle" style={{ width: chCol }}>
-          {head}
-        </div>
-      ) : null}
-      <div
-        className={cn(
-          "flex min-w-0 flex-1 flex-wrap items-center gap-2 bg-surface px-3 py-2 sm:px-4",
-          lineup ? "self-stretch" : "border-b border-border",
-          lineupOnly && "hidden",
-        )}
-      >
-        <div className="mr-auto flex items-baseline gap-2">
-          <h2 className="text-sm font-semibold text-fg">{t("Guide")}</h2>
-          <span className="text-xs text-fg-muted">
-            {tn(channels.length, "{day} · {count} channel", "{day} · {count} channels", {
-              day: dayLabel,
-            })}
-          </span>
-          {loading ? <span className="text-xs text-fg-subtle">{t("Updating…")}</span> : null}
-        </div>
-        <div className="flex items-center gap-1">
-          <Button variant="ghost" size="sm" aria-label={t("Earlier")} onClick={() => onShift(-3)}>
-            <ChevronLeft size={15} />
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => {
-              jumpNow();
-              scrollToNow(true);
-            }}
+        {lineup ? (
+          <div className="shrink-0 border-r border-border bg-bg-subtle" style={{ width: chCol }}>
+            {head}
+          </div>
+        ) : null}
+        <div className={cn("min-w-0 flex-1", lineupOnly && "hidden")}>
+          {lineup && !lineupOnly ? (
+            <OnNowStrip channels={channels} guide={guide} now={now} onSelect={onSelect} />
+          ) : null}
+          <div
+            className={cn(
+              "flex min-w-0 flex-1 flex-wrap items-center gap-2 bg-surface px-3 py-2 sm:px-4",
+              lineup ? "self-stretch" : "border-b border-border",
+              lineupOnly && "hidden",
+            )}
           >
-            <span className="relative mr-1 flex size-2">
-              <span className="absolute inline-flex size-full animate-ping rounded-full bg-danger/60" />
-              <span className="relative inline-flex size-2 rounded-full bg-danger" />
-            </span>
-            {t("Now")}
-          </Button>
-          <Button variant="ghost" size="sm" aria-label={t("Later")} onClick={() => onShift(3)}>
-            <ChevronRight size={15} />
-          </Button>
+            <div className="mr-auto flex items-baseline gap-2">
+              <h2 className="text-sm font-semibold text-fg">{t("Guide")}</h2>
+              <span className="text-xs text-fg-muted">
+                {tn(channels.length, "{day} · {count} channel", "{day} · {count} channels", {
+                  day: dayLabel,
+                })}
+              </span>
+              {loading ? <span className="text-xs text-fg-subtle">{t("Updating…")}</span> : null}
+            </div>
+            <div className="flex items-center gap-1">
+              <Button
+                variant="ghost"
+                size="sm"
+                aria-label={t("Earlier")}
+                onClick={() => onShift(-3)}
+              >
+                <ChevronLeft size={15} />
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  jumpNow();
+                  scrollToNow(true);
+                }}
+              >
+                <span className="relative mr-1 flex size-2">
+                  <span className="absolute inline-flex size-full animate-ping rounded-full bg-danger/60" />
+                  <span className="relative inline-flex size-2 rounded-full bg-danger" />
+                </span>
+                {t("Now")}
+              </Button>
+              <Button variant="ghost" size="sm" aria-label={t("Later")} onClick={() => onShift(3)}>
+                <ChevronRight size={15} />
+              </Button>
+            </div>
+            <Segmented
+              ariaLabel={t("Zoom")}
+              size="sm"
+              value={zoom}
+              onChange={setZoom}
+              options={[
+                { value: "tight", label: unit(6, "hour") },
+                { value: "normal", label: unit(4, "hour") },
+                { value: "wide", label: unit(3, "hour") },
+              ]}
+            />
+            <Button
+              variant="ghost"
+              size="sm"
+              aria-label={full ? t("Exit full screen") : t("Full screen guide")}
+              aria-pressed={full}
+              onClick={() => void toggleFull()}
+            >
+              {full ? <Minimize2 size={15} /> : <Maximize2 size={15} />}
+            </Button>
+          </div>
         </div>
-        <Segmented
-          ariaLabel={t("Zoom")}
-          size="sm"
-          value={zoom}
-          onChange={setZoom}
-          options={[
-            { value: "tight", label: unit(6, "hour") },
-            { value: "normal", label: unit(4, "hour") },
-            { value: "wide", label: unit(3, "hour") },
-          ]}
-        />
-        <Button
-          variant="ghost"
-          size="sm"
-          aria-label={full ? t("Exit full screen") : t("Full screen guide")}
-          aria-pressed={full}
-          onClick={() => void toggleFull()}
-        >
-          {full ? <Minimize2 size={15} /> : <Maximize2 size={15} />}
-        </Button>
-      </div>
       </div>
 
       <div
@@ -356,40 +366,40 @@ export function GuideGrid({
                     onToggleFavorite={onToggleFavorite}
                   />
                 ) : (
-                <button
-                  type="button"
-                  role="rowheader"
-                  onClick={() => onSelect(c.id)}
-                  className={cn(
-                    "sticky left-0 z-20 flex shrink-0 items-center gap-2.5 border-r border-border px-3 text-left transition-colors hover:bg-surface-hover",
-                    on ? "bg-primary-subtle" : "bg-surface",
-                  )}
-                  style={{ width: chCol }}
-                  aria-label={t("Channel {number} {name}", { number: c.number, name: c.name })}
-                >
-                  <span className="w-7 shrink-0 text-right font-mono text-[11px] tabular-nums text-fg-subtle">
-                    {c.number}
-                  </span>
-                  <ChannelLogo name={c.name} logo={c.logo} seed={c.id} size={32} />
-                  <span className="min-w-0 flex-1">
-                    <span className="flex items-center gap-1">
-                      <span className="truncate text-[13px] font-medium text-fg">{c.name}</span>
-                      {c.favorite ? (
-                        <Star size={10} className="shrink-0 fill-warning text-warning" />
-                      ) : null}
+                  <button
+                    type="button"
+                    role="rowheader"
+                    onClick={() => onSelect(c.id)}
+                    className={cn(
+                      "sticky left-0 z-20 flex shrink-0 items-center gap-2.5 border-r border-border px-3 text-left transition-colors hover:bg-surface-hover",
+                      on ? "bg-primary-subtle" : "bg-surface",
+                    )}
+                    style={{ width: chCol }}
+                    aria-label={t("Channel {number} {name}", { number: c.number, name: c.name })}
+                  >
+                    <span className="w-7 shrink-0 text-right font-mono text-[11px] tabular-nums text-fg-subtle">
+                      {c.number}
                     </span>
-                    <span className="block truncate text-[11px] text-fg-subtle">
-                      {live
-                        ? t("{time} left", {
-                            time: unit(
-                              Math.max(1, Math.round((Date.parse(live.end) - now) / MINUTE)),
-                              "minute",
-                            ),
-                          })
-                        : c.group || (c.kind === "virtual" ? t("Virtual") : t("Live"))}
+                    <ChannelLogo name={c.name} logo={c.logo} seed={c.id} size={32} />
+                    <span className="min-w-0 flex-1">
+                      <span className="flex items-center gap-1">
+                        <span className="truncate text-[13px] font-medium text-fg">{c.name}</span>
+                        {c.favorite ? (
+                          <Star size={10} className="shrink-0 fill-warning text-warning" />
+                        ) : null}
+                      </span>
+                      <span className="block truncate text-[11px] text-fg-subtle">
+                        {live
+                          ? t("{time} left", {
+                              time: unit(
+                                Math.max(1, Math.round((Date.parse(live.end) - now) / MINUTE)),
+                                "minute",
+                              ),
+                            })
+                          : c.group || (c.kind === "virtual" ? t("Virtual") : t("Live"))}
+                      </span>
                     </span>
-                  </span>
-                </button>
+                  </button>
                 )}
                 <div className="relative" style={{ width }}>
                   {ps.length === 0 ? (
@@ -602,7 +612,11 @@ function LineupCell({
           )}
         </span>
         {hasGuide === false && c.enabled ? (
-          <AlertTriangle size={13} className="shrink-0 text-warning" aria-label={t("No guide data")} />
+          <AlertTriangle
+            size={13}
+            className="shrink-0 text-warning"
+            aria-label={t("No guide data")}
+          />
         ) : null}
       </button>
       {onToggleFavorite ? (
@@ -646,7 +660,15 @@ export function OnNowStrip({
         Number(b.c.favorite) - Number(a.c.favorite) ||
         Number(Boolean(b.p.item.thumb)) - Number(Boolean(a.p.item.thumb)),
     );
-    return live.slice(0, 10);
+    const seen = new Set<string>();
+    return live
+      .filter(({ p }) => {
+        const title = p.item.title.trim().toLowerCase();
+        if (seen.has(title)) return false;
+        seen.add(title);
+        return true;
+      })
+      .slice(0, 10);
   }, [channels, guide, now]);
   if (!picks.length) return null;
   return (
@@ -677,9 +699,9 @@ export function OnNowStrip({
                 background: `linear-gradient(120deg, hsl(${hue} 60% 22%), hsl(${(hue + 50) % 360} 55% 12%))`,
               }}
             >
-              {p.item.thumb ? (
+              {p.item.thumb || c.logo ? (
                 <Artwork
-                  src={p.item.thumb}
+                  src={p.item.thumb || c.logo}
                   alt=""
                   title=""
                   className="absolute inset-y-0 right-0 w-24 opacity-90 [mask-image:linear-gradient(to_left,black_40%,transparent)]"
