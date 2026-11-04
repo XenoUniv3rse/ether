@@ -543,6 +543,10 @@ func cause(m ExperienceMetrics, plays []ExperiencePlay) ExperienceCause {
 	if m.Switches >= 2 && m.Switches*10 >= m.Plays*3 {
 		return ExperienceCause{Kind: "source_switches", Switches: m.Switches, Plays: m.Plays}
 	}
+	if m.MeasuredPlays == 0 {
+		// Older plays carry no start time or buffering: nothing to judge.
+		return ExperienceCause{Kind: "not_enough_data"}
+	}
 	transcodes := func() *ExperienceCause {
 		if m.Decisions.Transcode*2 < m.Plays {
 			return nil

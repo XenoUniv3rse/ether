@@ -239,8 +239,16 @@ export function MetricFacts({ m, wide = false }: { m: ExperienceMetrics; wide?: 
           tone={bufferTone(m.bufferEventsPerHour)}
         />
       </Fact>
-      <Fact label={t("Failed starts")} hint={tn(m.plays, "of {count} play", "of {count} plays")}>
-        <ToneValue value={String(m.failedStarts)} tone={failedTone(m.failedStarts, m.plays)} />
+      <Fact
+        label={t("Failed starts")}
+        hint={
+          m.measuredPlays ? tn(m.measuredPlays, "of {count} play", "of {count} plays") : undefined
+        }
+      >
+        <ToneValue
+          value={m.measuredPlays ? String(m.failedStarts) : DASH}
+          tone={failedTone(m.failedStarts, m.measuredPlays)}
+        />
       </Fact>
       <Fact
         label={t("Direct play")}
@@ -257,7 +265,9 @@ export function MetricFacts({ m, wide = false }: { m: ExperienceMetrics; wide?: 
       </Fact>
       <Fact
         label={t("Bitrate delivered")}
-        hint={t("source {rate}", { rate: formatMbps(m.sourceKbps) })}
+        hint={
+          m.sourceKbps != null ? t("source {rate}", { rate: formatMbps(m.sourceKbps) }) : undefined
+        }
       >
         {formatMbps(m.deliveredKbps)}
       </Fact>

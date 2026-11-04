@@ -130,14 +130,18 @@ export function Experience() {
               label={t("Failed starts")}
               value={
                 <ToneValue
-                  value={String(h.failedStarts)}
+                  value={h.measuredPlays ? String(h.failedStarts) : "—"}
                   dot={false}
-                  tone={failedTone(h.failedStarts, h.plays)}
+                  tone={failedTone(h.failedStarts, h.measuredPlays)}
                 />
               }
-              detail={tn(h.plays, "of {count} play", "of {count} plays")}
+              detail={
+                h.measuredPlays
+                  ? tn(h.measuredPlays, "of {count} play", "of {count} plays")
+                  : undefined
+              }
               icon={<AlertTriangle size={18} />}
-              tone={failedTone(h.failedStarts, h.plays) ?? "primary"}
+              tone={failedTone(h.failedStarts, h.measuredPlays) ?? "primary"}
             />
             <DashboardMetricCard
               label={t("Direct play")}
@@ -211,11 +215,11 @@ export function Experience() {
                 key: "failed",
                 header: t("Failed starts"),
                 align: "right",
-                sortValue: (r) => r.metrics.failedStarts,
+                sortValue: (r) => (r.metrics.measuredPlays ? r.metrics.failedStarts : -1),
                 cell: (r) => (
                   <ToneValue
-                    value={String(r.metrics.failedStarts)}
-                    tone={failedTone(r.metrics.failedStarts, r.metrics.plays)}
+                    value={r.metrics.measuredPlays ? String(r.metrics.failedStarts) : "—"}
+                    tone={failedTone(r.metrics.failedStarts, r.metrics.measuredPlays)}
                   />
                 ),
               },

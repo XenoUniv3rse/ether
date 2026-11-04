@@ -89,7 +89,7 @@ export function directShare(m: ExperienceMetrics): number | null {
  */
 export function badness(m: ExperienceMetrics): number {
   if (!m.plays) return -1;
-  let score = (m.failedStarts / m.plays) * 10;
+  let score = m.measuredPlays ? (m.failedStarts / m.measuredPlays) * 10 : 0;
   if (m.startMedianMs != null) score += m.startMedianMs / START_GOOD_MS;
   if (m.bufferEventsPerHour != null) score += m.bufferEventsPerHour / BUFFER_GOOD_PER_HOUR;
   return score;
