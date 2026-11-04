@@ -65,6 +65,25 @@ func (c Continue) appendNext(ctx context.Context, viewer *core.User, titles []co
 			return titles
 		}
 	}
+	// Each show's first next episode and its watch state are read up front
+	// in one batch; the walk below reads further only past a watched one.
+	firstNext := map[core.RatingKey]*core.Title{}
+	var nextKeys []core.RatingKey
+	for _, h := range recent {
+		if ctx.Err() != nil || statuses[h.Key].ViewCount == 0 || grouped[core.ShowKey(h.Key.TMDB())] {
+			continue
+		}
+		if next, err := c.NextEpisode(ctx, h.Key); err == nil && next != nil {
+			firstNext[h.Key] = next
+			nextKeys = append(nextKeys, next.Key)
+		}
+	}
+	nextStates := map[core.RatingKey]core.WatchStatus{}
+	if len(nextKeys) > 0 {
+		if got, err := c.State.GetMany(ctx, viewer.ID, nextKeys); err == nil {
+			nextStates = got
+		}
+	}
 	for _, h := range recent {
 		if ctx.Err() != nil {
 			break
@@ -94,7 +113,11 @@ func (c Continue) appendNext(ctx context.Context, viewer *core.User, titles []co
 				}
 				next = &ordered[n]
 			} else {
-				next, err = c.NextEpisode(ctx, current)
+				if n == 0 && firstNext[current] != nil {
+					next = firstNext[current]
+				} else {
+					next, err = c.NextEpisode(ctx, current)
+				}
 				if err != nil || next == nil || next.Key == current {
 					break
 				}
@@ -109,9 +132,12 @@ func (c Continue) appendNext(ctx context.Context, viewer *core.User, titles []co
 			if !c.Visible(ctx, viewer, next) || c.SameDayUnavailable(ctx, next) {
 				break
 			}
-			st, e := c.State.Get(ctx, viewer.ID, next.Key)
-			if e != nil {
-				break
+			st, ok := nextStates[next.Key]
+			if !ok || n > 0 {
+				var e error
+				if st, e = c.State.Get(ctx, viewer.ID, next.Key); e != nil {
+					break
+				}
 			}
 			if st.ViewCount > 0 && st.ViewOffset <= 0 {
 				continue
