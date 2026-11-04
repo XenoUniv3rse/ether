@@ -4,6 +4,7 @@ package plex
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -13,6 +14,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -22,45 +24,100 @@ import (
 	"github.com/braedonsaunders/ether/internal/transcode"
 )
 
+type liveChaosWriter struct {
+	mu  sync.Mutex
+	dst io.Writer
+}
+
+func (w *liveChaosWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.dst == nil {
+		return len(p), nil
+	}
+	return w.dst.Write(p)
+}
+
+type liveChaosProcess struct {
+	transcode.Process
+	injected atomic.Bool
+	stderr   *liveChaosWriter
+}
+
+func (p *liveChaosProcess) Err() error {
+	if p.injected.Load() {
+		return errors.New("injected hardware encoder failure")
+	}
+	return p.Process.Err()
+}
+
 type liveChaosRunner struct {
-	mu sync.Mutex
-	p  transcode.Process
+	mu       sync.Mutex
+	p        *liveChaosProcess
+	hardware bool
+	software bool
 }
 
 func (r *liveChaosRunner) Run(ctx context.Context, c transcode.Command) error {
 	return (transcode.ExecRunner{}).Run(ctx, c)
 }
 func (r *liveChaosRunner) Start(c transcode.Command) (transcode.Process, error) {
+	hw, sw := false, false
+	for _, a := range c.Args {
+		if strings.Contains(a, "h264_videotoolbox") {
+			hw = true
+		}
+		if a == "libx264" {
+			sw = true
+		}
+	}
 	for i, a := range c.Args {
 		if a == "-i" {
 			c.Args = append(c.Args[:i], append([]string{"-re"}, c.Args[i:]...)...)
 			break
 		}
 	}
+	w := &liveChaosWriter{dst: c.Stderr}
+	c.Stderr = w
 	p, e := (transcode.ExecRunner{}).Start(c)
-	if e == nil {
-		r.mu.Lock()
-		r.p = p
-		r.mu.Unlock()
+	if e != nil {
+		return nil, e
 	}
-	return p, e
+	wrapped := &liveChaosProcess{Process: p, stderr: w}
+	r.mu.Lock()
+	r.p = wrapped
+	r.hardware = r.hardware || hw
+	r.software = r.software || sw
+	r.mu.Unlock()
+	return wrapped, nil
 }
-func (r *liveChaosRunner) interrupt() error {
+func (r *liveChaosRunner) interrupt(injectHardware bool) error {
 	r.mu.Lock()
 	p := r.p
+	hw := r.hardware
 	r.mu.Unlock()
 	if p == nil {
 		return fmt.Errorf("no live encoder")
+	}
+	if injectHardware && !hw {
+		return fmt.Errorf("hardware encoder was not started")
 	}
 	select {
 	case <-p.Done():
 		return fmt.Errorf("encoder ended before injection")
 	default:
 	}
-	p.Stop()
+	if injectHardware {
+		p.injected.Store(true)
+		fmt.Fprintln(p.stderr, "videotoolbox encoder injected failure")
+	}
+	p.Process.Stop()
 	return nil
 }
-func TestTranscodeChaosLiveRelay(t *testing.T) {
+func (r *liveChaosRunner) softwareStarted() bool  { r.mu.Lock(); defer r.mu.Unlock(); return r.software }
+func TestTranscodeChaosLiveRelay(t *testing.T)    { runLiveChaos(t, false) }
+func TestTranscodeChaosLiveHardware(t *testing.T) { runLiveChaos(t, true) }
+func runLiveChaos(t *testing.T, hardware bool) {
 	ff, fp := os.Getenv("CHAOS_FFMPEG"), os.Getenv("CHAOS_FFPROBE")
 	if ff == "" || fp == "" {
 		t.Fatal("set CHAOS_FFMPEG and CHAOS_FFPROBE")
@@ -83,11 +140,18 @@ func TestTranscodeChaosLiveRelay(t *testing.T) {
 	upstream := httptest.NewServer(http.FileServer(http.Dir(dir)))
 	defer upstream.Close()
 	runner := &liveChaosRunner{}
-	m, err := transcode.New(config.Transcode{FFmpegPath: ff, FFprobePath: fp, HWAccel: "none", TempDir: filepath.Join(dir, "work")}, slog.New(slog.NewTextHandler(io.Discard, nil)), transcode.WithRunner(runner), transcode.WithSegmentTimeout(8*time.Second))
+	hw := "none"
+	if hardware {
+		hw = "videotoolbox"
+	}
+	m, err := transcode.New(config.Transcode{FFmpegPath: ff, FFprobePath: fp, HWAccel: hw, TempDir: filepath.Join(dir, "work")}, slog.New(slog.NewTextHandler(io.Discard, nil)), transcode.WithRunner(runner), transcode.WithSegmentTimeout(8*time.Second))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer m.Close()
+	if hardware && m.HWAccel().Name != "videotoolbox" {
+		t.Skip("VideoToolbox unavailable")
+	}
 	db, err := store.OpenMemory(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -145,7 +209,7 @@ func TestTranscodeChaosLiveRelay(t *testing.T) {
 	}
 	chaosCmd(t, fp, "-v", "error", "-show_streams", path)
 	chaosCmd(t, ff, "-v", "error", "-xerror", "-i", path, "-f", "null", "-")
-	if err = runner.interrupt(); err != nil {
+	if err = runner.interrupt(hardware); err != nil {
 		t.Fatal(err)
 	}
 	// A watcher requests the next segment after the interruption. Its URI uses
@@ -161,6 +225,9 @@ func TestTranscodeChaosLiveRelay(t *testing.T) {
 	}
 	chaosCmd(t, fp, "-v", "error", "-show_streams", path)
 	chaosCmd(t, ff, "-v", "error", "-xerror", "-i", path, "-f", "null", "-")
+	if hardware && !runner.softwareStarted() {
+		t.Fatal("live recovery restarted hardware instead of falling back to software")
+	}
 	updated := f.get(t, session+"/0/index.m3u8")
 	if updated.Code != 200 || !strings.Contains(updated.Body.String(), "/relay/1.ts") || !strings.Contains(updated.Body.String(), "#EXT-X-DISCONTINUITY") {
 		t.Fatal("live playlist did not advance with a discontinuity")
