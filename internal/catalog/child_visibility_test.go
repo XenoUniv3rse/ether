@@ -32,22 +32,22 @@ func TestEpisodePolicyCountAndPages(t *testing.T) {
 	}
 	policy := &core.Filter{MaxContentRating: "PG", ExcludeKeywords: []string{"blocked"}}
 	q := core.BrowseQuery{Filter: core.Filter{Type: core.TypeEpisode, ChildVisibility: policy}, Limit: 1}
-	check := func() {
+	check := func(keys []core.RatingKey) {
 		t.Helper()
-		for i, key := range []core.RatingKey{core.EpisodeKey(101, 1, 1), core.EpisodeKey(101, 1, 3)} {
+		for i, key := range keys {
 			q.Offset = i
 			p, err := c.Browse(ctx, q)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if p.Total != 2 || len(p.Items) != 1 || p.Items[0].Key != key {
+			if p.Total != len(keys) || len(p.Items) != 1 || p.Items[0].Key != key {
 				t.Fatalf("offset %d: total %d items %v", i, p.Total, p.Items)
 			}
 		}
 	}
-	check()
-	// The same episode can also be hidden by a mixed catalogue rule.
+	check([]core.RatingKey{core.EpisodeKey(101, 1, 1), core.EpisodeKey(101, 1, 3)})
+	// A mixed catalogue rule applies to the show, not its episodes.
 	policy.ExcludeKeywords = nil
 	c.UpdateConfig(config.Catalog{Exclusions: []core.LibraryExclusion{{MediaType: "mixed", Match: "all", Rules: []core.CollectionRule{{Field: "keyword", Op: "in", Value: json.RawMessage(`["blocked"]`)}}}}})
-	check()
+	check([]core.RatingKey{core.EpisodeKey(101, 1, 1), core.EpisodeKey(101, 1, 3), core.EpisodeKey(101, 1, 4)})
 }

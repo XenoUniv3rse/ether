@@ -17,15 +17,8 @@ func (c *Catalog) childVisibilityConds(p *core.Filter) ([]string, []any) {
 	var args []any
 	rank := "(CASE WHEN e.content_rating='' THEN t.content_rating_rank ELSE e.content_rating_rank END)"
 	rating := "LOWER(TRIM(CASE WHEN e.content_rating='' THEN t.content_rating ELSE e.content_rating END))"
-	// Catalogue safety also runs on the hydrated child. Its policy compiler
-	// targets t, so bind it to e and reproduce the two inherited facts.
-	if hidden, vals := c.visibilityFilter().SQLHiddenForType(core.TypeEpisode); hidden != "0=1" {
-		hidden = strings.ReplaceAll(hidden, "t.", "e.")
-		hidden = strings.ReplaceAll(hidden, "e.content_rating_rank", rank)
-		hidden = strings.ReplaceAll(hidden, "FROM catalog_keywords lf WHERE lf.key=e.key", "FROM catalog_keywords lf WHERE lf.key=(CASE WHEN EXISTS (SELECT 1 FROM catalog_keywords own WHERE own.key=e.key) THEN e.key ELSE t.key END)")
-		conds = append(conds, "NOT ("+hidden+")")
-		args = append(args, vals...)
-	}
+	// Catalogue rules apply to the parent show, not to episodes. Viewer
+	// restrictions below still apply to the hydrated episode's own facts.
 	if p.MaxContentRating != "" {
 		level := contentrating.LevelOf(p.MaxContentRating)
 		if level == contentrating.Unrated {
