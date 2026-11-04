@@ -150,3 +150,45 @@ func TestPlexGuideRateLimitSharedBetweenServices(t *testing.T) {
 		t.Fatalf("made %d requests during shared cooldown", requests.Load())
 	}
 }
+
+func TestPlexGuideOverlappingDatesAndAirings(t *testing.T) {
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		switch r.URL.Query().Get("date") {
+		case "2026-11-04":
+			fmt.Fprint(w, `{"MediaContainer":{"Metadata":[{"type":"episode","title":"Daily","parentIndex":2026,"originallyAvailableAt":"2026-11-04","Media":[{"beginsAt":1793815200,"endsAt":1793818800},{"beginsAt":1793808000,"endsAt":1793811600}]},{"title":"Other","Media":[{"beginsAt":1793811600,"endsAt":1793815200}]}]}}`)
+		case "2026-11-05":
+			fmt.Fprint(w, `{"MediaContainer":{"Metadata":[{"type":"episode","title":"Daily","parentIndex":2026,"originallyAvailableAt":"2026-11-04","Media":[{"beginsAt":1793815200,"endsAt":1793818800},{"beginsAt":1793808000,"endsAt":1793811600}]}]}}`)
+		default:
+			t.Error("unexpected date")
+			w.WriteHeader(400)
+		}
+	}))
+	defer server.Close()
+	s := &Service{o: Options{HTTPClient: server.Client(), PlexGuideURL: server.URL}}
+	now := time.Date(2026, 11, 4, 20, 0, 0, 0, time.UTC)
+	dates := plexGridDates(now, now, now.Add(12*time.Hour))
+	budget := len(dates)
+	got, err := s.plexGrids(context.Background(), "one", dates, &budget)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if calls.Load() != 2 || len(got) != 3 {
+		t.Fatalf("calls=%d programmes=%d", calls.Load(), len(got))
+	}
+	for i := 1; i < len(got); i++ {
+		if !got[i-1].Start.Before(got[i].Start) {
+			t.Fatal("airings not sorted or deduplicated")
+		}
+	}
+	if got[0].Item.Title != "Daily" || got[0].Item.Season != 0 || got[0].Item.Episode != 0 || got[0].Item.ReleasedMS == 0 || got[2].Item.Title != "Daily" {
+		t.Fatalf("incorrect daily airings: %+v", got)
+	}
+	local := time.FixedZone("western", -8*60*60)
+	boundary := time.Date(2026, 11, 5, 1, 0, 0, 0, time.UTC).In(local)
+	dates = plexGridDates(boundary, boundary, boundary.Add(12*time.Hour))
+	if len(dates) != 3 || dates[0].Format("2006-01-02") != "2026-11-04" || dates[2].Format("2006-01-02") != "2026-11-06" {
+		t.Fatalf("local boundary dates: %v", dates)
+	}
+}
