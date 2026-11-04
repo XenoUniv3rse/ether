@@ -1,6 +1,7 @@
 package transcode
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -30,6 +31,7 @@ type httpSession struct {
 	pipe       *io.PipeReader
 	requestSeq uint64
 	closed     bool
+	forceCPU   bool
 	lastAccess time.Time
 }
 
@@ -174,6 +176,13 @@ func (s *httpSession) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.lastAccess = time.Now()
+	// A byte range cannot resume an encoder's Matroska output: a new encoder
+	// writes a different header and its offsets do not describe the old stream.
+	if s.forceCPU && r.Header.Get("Range") != "" {
+		s.mu.Unlock()
+		http.Error(w, "progressive transcode does not support byte ranges", http.StatusRequestedRangeNotSatisfiable)
+		return
+	}
 	if r.Method == http.MethodHead {
 		s.mu.Unlock()
 		s.writeHTTPHeaders(w)
@@ -196,9 +205,14 @@ func (s *httpSession) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			s.mu.Unlock()
 			return
 		}
-		spec := runSpec{LiveInput: s.req.LiveInput, CopyTimestamps: s.req.CopyTimestamps, InputHeaders: s.req.InputHeaders, Input: s.req.InputURL, Info: s.req.Info, Decision: s.req.Decision, Start: s.req.StartOffset, Accel: s.m.hw, Features: s.m.feat, Protocol: core.ProtocolHTTP, InputTimeout: s.m.opts.stallTimeout}
+		accel := s.m.hw
+		if s.forceCPU || time.Now().UnixNano() < s.m.httpHWFailedUntil.Load() {
+			accel = core.HWAccel{Name: AccelNone}
+		}
+		spec := runSpec{LiveInput: s.req.LiveInput, CopyTimestamps: s.req.CopyTimestamps, InputHeaders: s.req.InputHeaders, Input: s.req.InputURL, Info: s.req.Info, Decision: s.req.Decision, Start: s.req.StartOffset, Accel: accel, Features: s.m.feat, Protocol: core.ProtocolHTTP, InputTimeout: s.m.opts.stallTimeout}
 		pr, pw := io.Pipe()
-		cmd := Command{Path: s.m.ffmpeg, Args: buildArgs(spec), Stdout: pw}
+		stderr := newTailBuffer(40)
+		cmd := Command{Path: s.m.ffmpeg, Args: buildArgs(spec), Stdout: pw, Stderr: &lineWriter{fn: stderr.add}}
 		encoding := !s.req.Decision.VideoCopy
 		work, err := s.life.runWork(encoding)
 		if err != nil {
@@ -252,21 +266,35 @@ func (s *httpSession) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			timer.Stop()
 		}
 		var copyErr error
+		clientWriteFailed := false
 		if n > 0 {
 			s.writeHTTPHeaders(w)
-			fw := flushWriter{ResponseWriter: w, s: s}
-			_, copyErr = fw.Write(buf[:n])
-			if copyErr == nil && readErr == nil {
-				_, copyErr = io.Copy(fw, pr)
+			fw := &httpWriteTracker{writer: flushWriter{ResponseWriter: w, s: s}}
+			if spec.usesHW() {
+				copyErr = copyHTTPMatroska(fw, io.MultiReader(bytes.NewReader(buf[:n]), pr))
+			} else {
+				_, copyErr = fw.Write(buf[:n])
+				if copyErr == nil && readErr == nil {
+					_, copyErr = io.Copy(fw, pr)
+				}
 			}
+			clientWriteFailed = fw.failed
 		}
 		_ = pr.Close()
 		stopCancel()
 		if r.Context().Err() != nil || copyErr != nil || n == 0 {
 			proc.Stop()
 		}
+		<-proc.Done()
+		procErr := proc.Err()
 		s.mu.Lock()
 		current := !s.closed && s.requestSeq == seq
+		hardwareFailed := current && r.Context().Err() == nil && !clientWriteFailed && spec.usesHW() && procErr != nil && looksLikeEncoderFailure(stderr.String(), spec)
+		if hardwareFailed {
+			s.forceCPU = true
+			s.m.httpHWFailedUntil.Store(time.Now().Add(5 * time.Minute).UnixNano())
+			s.log.Warn("progressive hardware encoder failed; next request will use CPU", "hwaccel", spec.Accel.Name)
+		}
 		s.lastAccess = time.Now()
 		if s.proc == proc {
 			s.proc = nil
@@ -276,6 +304,12 @@ func (s *httpSession) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		s.mu.Unlock()
 		if n > 0 {
+			if hardwareFailed {
+				// net/http closes the HTTP/1 connection (or resets an HTTP/2
+				// stream) without a final chunk. A clean EOF looks like a
+				// completed movie to clients and can advance the play queue.
+				panic(http.ErrAbortHandler)
+			}
 			return
 		}
 		if r.Context().Err() != nil || !current {
@@ -288,6 +322,14 @@ func (s *httpSession) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "transcode failed", http.StatusBadGateway)
 		return
 	}
+}
+
+// ProgressiveFailed reports a hardware failure to the timeline owner so a
+// late terminal update cannot replace the last reported playhead with EOF.
+func (s *httpSession) ProgressiveFailed() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.forceCPU
 }
 
 func (s *httpSession) Close() error {
@@ -323,6 +365,19 @@ func (s *httpSession) Close() error {
 type flushWriter struct {
 	http.ResponseWriter
 	s *httpSession
+}
+
+type httpWriteTracker struct {
+	writer io.Writer
+	failed bool
+}
+
+func (w *httpWriteTracker) Write(p []byte) (int, error) {
+	n, err := w.writer.Write(p)
+	if err != nil || n != len(p) {
+		w.failed = true
+	}
+	return n, err
 }
 
 func (w flushWriter) Write(p []byte) (int, error) {

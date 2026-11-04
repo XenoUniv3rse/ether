@@ -207,8 +207,11 @@ type Manager struct {
 	ffprobe string
 	version string
 	hw      core.HWAccel
-	feat    features
-	tempDir string
+	// Avoid immediately reusing a failed progressive hardware encoder on a
+	// client retry, including a retry that creates a new session.
+	httpHWFailedUntil atomic.Int64
+	feat              features
+	tempDir           string
 	// graphErr is the latest owner-visible reason a graph could not be built.
 	graphErr string
 

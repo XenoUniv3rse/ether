@@ -4,6 +4,7 @@ package plex
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -18,6 +19,8 @@ import (
 	"time"
 
 	"github.com/braedonsaunders/ether/internal/config"
+	"github.com/braedonsaunders/ether/internal/state"
+	"github.com/braedonsaunders/ether/internal/store"
 	"github.com/braedonsaunders/ether/internal/transcode"
 )
 
@@ -70,30 +73,50 @@ func TestTranscodeChaosHTTPHardware(t *testing.T) {
 	f.playback.info = *info
 	f.srv.d.Playback = &chaosPlayback{f.playback, source.URL + "/input.mp4"}
 	f.srv.d.Transcoder = m
+	watch := state.New(store.OpenTest(t), state.Options{})
+	f.srv.d.State = watch
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	req := httptest.NewRequest("GET", "/video/:/transcode/universal/start.mkv?path=%2Flibrary%2Fmetadata%2F"+fightClub.Key.String()+"&session=http-hardware&protocol=http&directPlay=0&directStream=0", nil).WithContext(ctx)
+	// Keep the client's last actual playhead, rather than the encoder head.
+	f.get(t, "/:/timeline?ratingKey="+fightClub.Key.String()+"&state=playing&time=1000&duration=12000", "X-Plex-Client-Identifier", "client-1")
+	injected := make(chan error, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("session") == "http-hardware" && r.Header.Get("Range") == "" {
+			f.srv.ServeHTTP(&interruptingWriter{ResponseWriter: w, runner: runner, err: injected}, r)
+			return
+		}
+		f.srv.ServeHTTP(w, r)
+	}))
+	defer server.Close()
+	path := "/video/:/transcode/universal/start.mkv?path=%2Flibrary%2Fmetadata%2F" + fightClub.Key.String() + "&session=http-hardware&protocol=http&directPlay=0&directStream=0"
+	req, e := http.NewRequestWithContext(ctx, "GET", server.URL+path, nil)
+	if e != nil {
+		t.Fatal(e)
+	}
 	req.Header.Set("X-Plex-Token", ownerToken)
 	req.Header.Set("X-Plex-Client-Identifier", "client-1")
-	rec := httptest.NewRecorder()
-	w := &interruptingWriter{ResponseWriter: rec, runner: runner, err: make(chan error, 1)}
-	f.srv.ServeHTTP(w, req)
+	resp, e := server.Client().Do(req)
+	if e != nil {
+		t.Fatal(e)
+	}
+	data, readErr := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if !errors.Is(readErr, io.ErrUnexpectedEOF) {
+		t.Fatalf("expected incomplete HTTP transfer, got %v", readErr)
+	}
 	select {
-	case err := <-w.err:
+	case err := <-injected:
 		if err != nil {
 			t.Fatal(err)
 		}
 	case <-time.After(2 * time.Second):
-		t.Fatalf("hardware failure was not injected (status=%d, bytes=%d)", rec.Code, rec.Body.Len())
+		t.Fatalf("hardware failure was not injected (status=%d, bytes=%d)", resp.StatusCode, len(data))
 	}
-	if rec.Code != 200 {
-		t.Fatalf("HTTP %d", rec.Code)
-	}
-	if !runner.softwareStarted() {
-		t.Fatal("progressive stream did not fall back to software")
+	if resp.StatusCode != 200 {
+		t.Fatalf("HTTP %d", resp.StatusCode)
 	}
 	output := filepath.Join(dir, "result.mkv")
-	if e := os.WriteFile(output, rec.Body.Bytes(), 0600); e != nil {
+	if e := os.WriteFile(output, data, 0600); e != nil {
 		t.Fatal(e)
 	}
 	chaosCmd(t, ff, "-v", "error", "-xerror", "-i", output, "-f", "null", "-")
@@ -107,7 +130,43 @@ func TestTranscodeChaosHTTPHardware(t *testing.T) {
 			last = v
 		}
 	}
-	if last < 10 {
-		t.Fatalf("progressive stream stopped early at %.2fs", last)
+	if last <= 0 || last >= 11 {
+		t.Fatalf("failure did not end the first response early at %.2fs", last)
 	}
+	rangeReq, e := http.NewRequestWithContext(ctx, "GET", server.URL+path, nil)
+	if e != nil {
+		t.Fatal(e)
+	}
+	rangeReq.Header.Set("X-Plex-Token", ownerToken)
+	rangeReq.Header.Set("X-Plex-Client-Identifier", "client-1")
+	rangeReq.Header.Set("Range", "bytes=32768-")
+	rangeResp, e := server.Client().Do(rangeReq)
+	if e != nil {
+		t.Fatal(e)
+	}
+	io.Copy(io.Discard, rangeResp.Body)
+	rangeResp.Body.Close()
+	if rangeResp.StatusCode != http.StatusRequestedRangeNotSatisfiable {
+		t.Fatalf("range reconnect HTTP %d", rangeResp.StatusCode)
+	}
+	// An exaggerated terminal timeline must not turn the abort into watched.
+	f.get(t, "/:/timeline?ratingKey="+fightClub.Key.String()+"&state=stopped&time=12000&duration=12000", "X-Plex-Client-Identifier", "client-1")
+	watchStatus, e := watch.Get(context.Background(), ownerUser.ID, fightClub.Key)
+	if e != nil || watchStatus.ViewCount != 0 || watchStatus.ViewOffset != time.Second {
+		t.Fatalf("abort changed watched state or resume point: %+v, %v", watchStatus, e)
+	}
+	// Simulate a client explicitly reopening at its last delivered position.
+	// A new response can carry a fresh software codec-private header.
+	retry := httptest.NewRequest("GET", "/video/:/transcode/universal/start.mkv?path=%2Flibrary%2Fmetadata%2F"+fightClub.Key.String()+"&session=http-hardware-retry&protocol=http&directPlay=0&directStream=0&offset="+strconv.FormatFloat(last, 'f', 3, 64), nil).WithContext(ctx)
+	retry.Header.Set("X-Plex-Token", ownerToken)
+	retry.Header.Set("X-Plex-Client-Identifier", "client-1")
+	recovered := httptest.NewRecorder()
+	f.srv.ServeHTTP(recovered, retry)
+	if recovered.Code != 200 || !runner.softwareStarted() {
+		t.Fatalf("retry did not use software (HTTP %d)", recovered.Code)
+	}
+	if e := os.WriteFile(output, recovered.Body.Bytes(), 0600); e != nil {
+		t.Fatal(e)
+	}
+	chaosCmd(t, ff, "-v", "error", "-xerror", "-i", output, "-f", "null", "-")
 }
