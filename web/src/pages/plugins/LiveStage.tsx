@@ -3,7 +3,14 @@ import { useEffect, useState } from "react";
 import { t } from "../../i18n";
 import { api, apiFetch } from "../../lib/api";
 import type { CollectionSpec } from "../../lib/contract";
-import { SORTS, describeRule, describeSource, normalizeSpec } from "../../lib/rules";
+import { registryDescriptors } from "../../lib/extend";
+import {
+  SORTS,
+  describeRule,
+  describeSource,
+  normalizeSpec,
+  type SourceDescriptor,
+} from "../../lib/rules";
 import { GuideStrip, MomentView, type GuideChannel, type Moment, type StreamTile } from "./Stage";
 
 /** One SSE chunk of Ether's agent stream (AI SDK UI message stream). */
@@ -352,8 +359,13 @@ export async function momentsForTool(
       const spec = output?.spec as Partial<CollectionSpec> | undefined;
       if (!spec) return [];
       const draft = normalizeSpec(spec);
-      const preview = await api.previewCollection(draft).catch(() => null);
-      const out: Moment[] = [collectionSteps(draft)];
+      const [preview, kinds] = await Promise.all([
+        api.previewCollection(draft).catch(() => null),
+        registryDescriptors<SourceDescriptor["meta"]>("collectionSource").catch(() => []),
+      ]);
+      // Posters first, so the stage shows the steps ticking off above the
+      // draft's posters (the latest result stays in view below the current step).
+      const out: Moment[] = [];
       if (preview)
         out.push({
           kind: "catalog",
@@ -362,6 +374,7 @@ export async function momentsForTool(
           items: preview.items.map((it) => ({ key: it.key, title: it.title, poster: it.poster })),
           total: preview.total,
         });
+      out.push(collectionSteps(draft, kinds as SourceDescriptor[]));
       return out;
     }
     default:
@@ -373,13 +386,16 @@ export async function momentsForTool(
  * One collection draft as the steps it takes: where titles come from, each
  * filter, the ranking and the cut, ticked off in order on the stage.
  */
-export function collectionSteps(spec: CollectionSpec): Moment {
+export function collectionSteps(
+  spec: CollectionSpec,
+  sourceKinds: readonly SourceDescriptor[] = [],
+): Moment {
   const sort = SORTS.find((s) => s.value === spec.sort)?.label ?? spec.sort;
   return {
     kind: "checks",
     title: t("Drafted “{name}”", { name: spec.name || t("Untitled collection") }),
     items: [
-      ...spec.sources.map((s) => describeSource(s)),
+      ...spec.sources.map((s) => describeSource(s, sourceKinds)),
       ...spec.rules.map((r) => describeRule(r)),
       ...spec.exclude.map((r) => t("Not: {rule}", { rule: describeRule(r) })),
       t("Ranked by {sort}", { sort }),

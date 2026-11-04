@@ -16,7 +16,8 @@ import { localized, t, tx } from "../../i18n";
 import { useLocale } from "../../i18n/react";
 import { api, ApiError, apiStream, errorMessage } from "../../lib/api";
 import type { CollectionSpec } from "../../lib/contract";
-import { normalizeSpec } from "../../lib/rules";
+import { registryDescriptors } from "../../lib/extend";
+import { normalizeSpec, type SourceDescriptor } from "../../lib/rules";
 import {
   LiveStageView,
   collectionSteps,
@@ -92,6 +93,9 @@ async function replay(
   entries.forEach((e, i) => {
     if ("tool" in e && draftOf(e.tool)) last = i;
   });
+  const kinds = (await registryDescriptors("collectionSource").catch(
+    () => [],
+  )) as SourceDescriptor[];
   const moments: Moment[] = [];
   let spec: CollectionSpec | null = null;
   for (const [i, e] of entries.entries()) {
@@ -101,7 +105,7 @@ async function replay(
     }
     const draft = draftOf(e.tool);
     if (draft) spec = draft;
-    if (draft && i !== last) moments.push(collectionSteps(draft));
+    if (draft && i !== last) moments.push(collectionSteps(draft, kinds));
     else moments.push(...(await momentsForTool(e.tool.name, e.tool.input, e.tool.output)));
   }
   return { moments, spec };
