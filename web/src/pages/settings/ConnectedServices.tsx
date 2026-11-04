@@ -29,6 +29,7 @@ import type { EtherConfig } from "../../lib/types";
 import { PosterAccounts } from "./PosterAccounts";
 import { RatingSources, type RatingSettings } from "../metadata/Ratings";
 import { SimklSettings } from "./SimklIntegration";
+import { PlexServers, PlexServersCard } from "./PlexServers";
 import { LanguageFeatures } from "./LanguageFeatures";
 import { LanguageModelSettings } from "./LanguageModel";
 import { asObj, GenericFields, SchemaField, type FieldGroup } from "./SchemaForm";
@@ -46,6 +47,7 @@ export type ServiceTab =
   | "tmdb"
   | "trakt"
   | "simkl"
+  | "plexservers"
   | "llm"
   | "opensubtitles"
   | "ratings"
@@ -61,6 +63,7 @@ const TAB_ORDER: ServiceTab[] = [
   "tmdb",
   "trakt",
   "simkl",
+  "plexservers",
   "llm",
   "opensubtitles",
   "ratings",
@@ -81,13 +84,19 @@ export function integrationTabs(
     tmdb: "TMDB",
     trakt: "Trakt",
     simkl: "Simkl",
+    plexservers: t("Plex Media Servers"),
     llm: t("Language model"),
     opensubtitles: "OpenSubtitles",
     ratings: t("Ratings"),
     introdb: "TheIntroDB",
   };
   return TAB_ORDER.filter(
-    (key) => key === "overview" || key === "tmdb" || key === "introdb" || enabled[key],
+    (key) =>
+      key === "overview" ||
+      key === "tmdb" ||
+      key === "introdb" ||
+      key === "plexservers" ||
+      enabled[key],
   ).map((key) => ({
     key,
     label: labels[key],
@@ -442,6 +451,7 @@ export function ConnectedServices({
     flags.ratings = true;
     flags.tmdb = true;
     flags.introdb = true;
+    flags.plexservers = true;
     return flags;
   }, [stored, posterFlags]);
 
@@ -946,6 +956,11 @@ export function ConnectedServices({
           </div>
         );
       })}
+      {tab === "plexservers" || visited.has("plexservers") ? (
+        <div hidden={tab !== "plexservers"}>
+          <PlexServers />
+        </div>
+      ) : null}
       {tab === "ratings" || visited.has("ratings") ? (
         <div hidden={tab !== "ratings"}>
           <IntegrationTab
@@ -1124,6 +1139,7 @@ function ServiceOverview({
           configureHref="/services/simkl"
           configureLabel={on("simkl") ? t("Manage Simkl") : t("Set up Simkl")}
         />
+        <PlexServersCard />
       </IntegrationGroup>
       <>
         <IntegrationGroup title={t("Artwork and ratings")}>
