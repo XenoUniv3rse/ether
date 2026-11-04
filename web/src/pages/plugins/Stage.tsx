@@ -311,14 +311,7 @@ export function StageRunner({ script, onDone }: { script: Script; onDone: () => 
   );
 }
 
-export function MomentView({
-  moment,
-  onOpenTitle,
-}: {
-  moment: Moment;
-  /** Makes catalogue posters open their title. */
-  onOpenTitle?: (key: string) => void;
-}) {
+export function MomentView({ moment }: { moment: Moment }) {
   switch (moment.kind) {
     case "intent":
       return (
@@ -378,7 +371,7 @@ export function MomentView({
     case "catalog":
       return (
         <Panel title={moment.title} tool={moment.tool}>
-          <PosterGrid items={moment.items} total={moment.total} onOpen={onOpenTitle} />
+          <PosterGrid items={moment.items} total={moment.total} />
         </Panel>
       );
     case "checks":
@@ -667,41 +660,23 @@ export function GuideStrip({ channels, animate }: { channels: GuideChannel[]; an
 function PosterGrid({
   items,
   total,
-  onOpen,
 }: {
   items: { key: string; title: string; poster?: string }[];
   total: number;
-  onOpen?: (key: string) => void;
 }) {
   return (
     <>
       <div className="grid grid-cols-6 gap-2.5 sm:grid-cols-9">
-        {items.slice(0, 18).map((it, i) => {
-          const art = (
+        {items.slice(0, 18).map((it, i) => (
+          <div key={it.key} className="stage-flow" style={{ animationDelay: `${i * 140}ms` }}>
             <Artwork
               src={it.poster}
               alt={it.title}
               title={it.title}
               className="aspect-[2/3] w-full overflow-hidden rounded-md shadow-sm ring-1 ring-border-subtle"
             />
-          );
-          return (
-            <div key={it.key} className="stage-flow" style={{ animationDelay: `${i * 140}ms` }}>
-              {onOpen ? (
-                <button
-                  type="button"
-                  aria-label={it.title}
-                  onClick={() => onOpen(it.key)}
-                  className="block w-full rounded-md transition-transform hover:scale-[1.03] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
-                >
-                  {art}
-                </button>
-              ) : (
-                art
-              )}
-            </div>
-          );
-        })}
+          </div>
+        ))}
       </div>
       <div className="mt-3 flex justify-end">
         <Badge variant="secondary">{t("{count} titles", { count: total })}</Badge>

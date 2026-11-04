@@ -6,7 +6,7 @@
  */
 import { useEffect, useMemo, useState } from "react";
 import { apiFetch } from "./api";
-import { getLocale, t } from "../i18n";
+import { t } from "../i18n";
 import { useLocale } from "../i18n/react";
 
 export type DescriptorKind =
@@ -165,13 +165,6 @@ export function useRegistry<M = unknown>(...kinds: DescriptorKind[]): RegistrySt
     }),
     [entry, error, key],
   );
-}
-
-/** Descriptors of the given kinds outside React, from the same cache. */
-export async function registryDescriptors<M = unknown>(
-  ...kinds: DescriptorKind[]
-): Promise<Descriptor<M>[]> {
-  return (await load(kinds, getLocale())).descriptors as Descriptor<M>[];
 }
 
 /** Test helper: forget every cached registry response. */
