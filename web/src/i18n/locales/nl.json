@@ -65,6 +65,7 @@
   "m_0040e631ea1713": "Mag tijdens afspelen draaien",
   "m_0042d36e3a4d31": "De eerste bron met een overeenkomend bereik levert de overslaanknop.",
   "m_00446ecc28fada": "MDBList",
+  "m_0045187b61cac9": "Video of audio omgezet",
   "m_004580cc476c5f": "Validatiehints",
   "m_004804edf569b6": "Maak opnieuw verbinding met uw Plex-account",
   "m_004835dbe00869": {
@@ -141,6 +142,7 @@
   "m_00a084a302868d": "schijf budget opslag bewaartermijn prefetch opwarmen volgende aflevering",
   "m_00a16c19a34f07": "Aanroepen tonen",
   "m_00a19f8711afed": "Verder kijken",
+  "m_00a214bd41c61b": "Direct",
   "m_00a230047b55c8": "Geleverd vanuit de schijfcache",
   "m_00a28c2d495833": "De database heeft de verbinding geweigerd",
   "m_00a35ff984d8bc": "Wordt nu opgewarmd",
@@ -358,6 +360,7 @@
   "m_01b5a99921e30a": "{name} downloaden",
   "m_01b674ba6b7373": "Pre-rolls spelen niet als een titel wordt hervat.",
   "m_01b6a81e56578f": "Toon lokale kijkernamen op het inlogscherm",
+  "m_01b75b2d99913d": "Nu aan het streamen",
   "m_01b765f613779a": "Regel opslaan",
   "m_01b9317c523af8": "Regel opgeslagen",
   "m_01bb844ab97232": "Geblokkeerde releasegroepen",
@@ -1011,7 +1014,6 @@
     "one": "{count} API-verzoek per dag",
     "other": "{count} API-verzoeken per dag"
   },
-  "m_04736cfe01f746": "Streams worden om de paar seconden bijgewerkt. Als je een stream stopt, wordt die op het apparaat van de kijker beëindigd.",
   "m_0474b5fa45d5ae": "Regel verwijderen",
   "m_0474e00de25f80": "Selecteer een serie",
   "m_0476bbd0877c4e": "Geïnstalleerde plugin openen",
@@ -2184,6 +2186,7 @@
   "m_09a87f5bfb453b": "Laatst geïmporteerd {when} · {span} aan programma's",
   "m_09a9b9012738ea": "Release vastgepind",
   "m_09ac1b92a7f43f": "Loskoppelen",
+  "m_09ac79107a1271": "Ongewijzigd afgespeeld of gestreamd",
   "m_09ac7c244189c5": {
     "one": "{count} definitie geïnstalleerd, gebruikt door je indexers hierboven.",
     "other": "{count} definities geïnstalleerd, allemaal gebruikt door je indexers hierboven."
@@ -2712,6 +2715,7 @@
   "m_0c04b691b6c72d": "Collectie verwijderd",
   "m_0c04cc873f0352": "4K (2160p)",
   "m_0c072fb8baf115": "Publiceren",
+  "m_0c085fe994cbc4": "Doorvoer",
   "m_0c098f051ed4a8": "Activiteit verschijnt nadat de eerste titel is bekeken.",
   "m_0c0cb66d5e7298": {
     "one": "Ruimte voor ongeveer {count} bron ter grootte van een film van elk 8 GiB. Afleveringsgroottes variëren; beide delen deze toewijzing.",
@@ -4382,6 +4386,7 @@
   "m_1340e827526923": "Nieuwe IPTV-bron",
   "m_13411c6d3331c3": "Wat moet deze collectie worden?",
   "m_1341b9c449f87d": "Live-tv-apps gebruiken een afspeellijst van je accountpagina.",
+  "m_1342a7d73a5c61": "Voltooiingspercentage",
   "m_1345f25f1c9ace": "Laatst uitgezonden aflevering",
   "m_1346eb034adf81": "Hoe Ether het internet bereikt",
   "m_1349091f213e5d": "Navigatie openen",
@@ -5444,6 +5449,7 @@
   "m_181f4784e63061": "Voeg een IntroDB-sleutel toe in {link}.",
   "m_182164a23292fd": "Maak een gratis API-sleutel aan in je accountinstellingen op {link} en plak deze hieronder.",
   "m_18216573f3bae8": "Getoond door regels",
+  "m_18222e8154a6d8": "Gemiddelde sessie",
   "m_1823ad77517060": "Hun Home is bijgewerkt.",
   "m_182477bf730e82": "Voeg een webhook-, Discord-, Slack-, Telegram-, e-mail-, ntfy- of Gotify-kanaal toe om meldingen te ontvangen.",
   "m_1826e3926a178f": "Testmelding",
@@ -5938,7 +5944,6 @@
   "m_1a3532ab03c3f1": "HDR toegestaan",
   "m_1a3561c5e9b1fe": "Alle rijen op {section}.",
   "m_1a361f49e13082": "Telefoon of tablet",
-  "m_1a3658141add24": "De laatste 500 keer afspelen in deze periode, in de tijdzone van je apparaat.",
   "m_1a37632c11d41d": "Wat er speelt voordat een film of aflevering begint: je pre-rolls en bioscooptrailers.",
   "m_1a398cdd93409b": "Kanaalnummers",
   "m_1a3a3f14648f50": "Endpoint-URL",

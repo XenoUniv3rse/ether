@@ -65,6 +65,7 @@
   "m_0040e631ea1713": "May run during playback",
   "m_0042d36e3a4d31": "The first source with a matching range supplies the skip button.",
   "m_00446ecc28fada": "MDBList",
+  "m_0045187b61cac9": "Video or audio converted",
   "m_004580cc476c5f": "Validation hints",
   "m_004804edf569b6": "Reconnect your Plex account",
   "m_004835dbe00869": {
@@ -141,6 +142,7 @@
   "m_00a084a302868d": "disk budget storage retention prefetch warming next episode",
   "m_00a16c19a34f07": "Show calls",
   "m_00a19f8711afed": "Continue watching",
+  "m_00a214bd41c61b": "Direct",
   "m_00a230047b55c8": "Delivered from the disk cache",
   "m_00a28c2d495833": "The database refused the connection",
   "m_00a35ff984d8bc": "Warming now",
@@ -358,6 +360,7 @@
   "m_01b5a99921e30a": "Download {name}",
   "m_01b674ba6b7373": "Pre-rolls don't play when a title is resumed.",
   "m_01b6a81e56578f": "Show local viewer names on the sign-in screen",
+  "m_01b75b2d99913d": "Streaming now",
   "m_01b765f613779a": "Save rule",
   "m_01b9317c523af8": "Rule saved",
   "m_01bb844ab97232": "Blocked release groups",
@@ -1011,7 +1014,6 @@
     "one": "{count} API request a day",
     "other": "{count} API requests a day"
   },
-  "m_04736cfe01f746": "Streams update every few seconds. Stopping a stream ends it on the viewer's device.",
   "m_0474b5fa45d5ae": "Remove rule",
   "m_0474e00de25f80": "Select a show",
   "m_0476bbd0877c4e": "Open installed plugin",
@@ -2187,6 +2189,7 @@
   "m_09a87f5bfb453b": "Last imported {when} · {span} of listings",
   "m_09a9b9012738ea": "Release pinned",
   "m_09ac1b92a7f43f": "Disconnect",
+  "m_09ac79107a1271": "Played or streamed as-is",
   "m_09ac7c244189c5": {
     "one": "{count} definition installed, all used by your indexers above.",
     "other": "{count} definitions installed, all used by your indexers above."
@@ -2718,6 +2721,7 @@
   "m_0c04b691b6c72d": "Collection deleted",
   "m_0c04cc873f0352": "4K (2160p)",
   "m_0c072fb8baf115": "Publish",
+  "m_0c085fe994cbc4": "Throughput",
   "m_0c098f051ed4a8": "Activity appears after the first title is watched.",
   "m_0c0cb66d5e7298": {
     "one": "Room for roughly {count} movie-sized source at 8 GiB each. Episode sizes vary; both share this allocation.",
@@ -4391,6 +4395,7 @@
   "m_1340e827526923": "New IPTV source",
   "m_13411c6d3331c3": "What should this collection be?",
   "m_1341b9c449f87d": "Live TV apps use a playlist from your account page.",
+  "m_1342a7d73a5c61": "Completion rate",
   "m_1345f25f1c9ace": "Latest aired episode",
   "m_1346eb034adf81": "How Ether reaches the internet",
   "m_1349091f213e5d": "Open navigation",
@@ -5453,6 +5458,7 @@
   "m_181f4784e63061": "Add an IntroDB key in {link}.",
   "m_182164a23292fd": "Create a free API key in your {link} account settings, then paste it below.",
   "m_18216573f3bae8": "Shown by rules",
+  "m_18222e8154a6d8": "Average session",
   "m_1823ad77517060": "Their Home is up to date.",
   "m_182477bf730e82": "Add a webhook, Discord, Slack, Telegram, email, ntfy or Gotify channel to get alerts.",
   "m_1826e3926a178f": "Test notification",
@@ -5953,7 +5959,6 @@
   "m_1a3532ab03c3f1": "HDR allowed",
   "m_1a3561c5e9b1fe": "All rows on {section}.",
   "m_1a361f49e13082": "Phone or tablet",
-  "m_1a3658141add24": "The latest 500 plays in this period, in your device's time zone.",
   "m_1a37632c11d41d": "What plays before a movie or episode starts: your pre-rolls and cinema trailers.",
   "m_1a398cdd93409b": "Channel numbers",
   "m_1a3a3f14648f50": "Endpoint URL",

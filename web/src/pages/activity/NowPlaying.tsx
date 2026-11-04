@@ -1,94 +1,231 @@
-import { Badge, Button, EmptyState, toast } from "@braedonsaunders/appkit-ui";
-import { Radio, Square } from "lucide-react";
+import { Badge, Button, EmptyState, Select, toast } from "@braedonsaunders/appkit-ui";
+import { ArrowRight, Cpu, Gauge, Globe, Home, PlayCircle, Radio, Square } from "lucide-react";
 import { useState } from "react";
 import { Artwork } from "../../components/Artwork";
 import { Meter } from "../../components/charts";
 import { ErrorPanel, LoadingRows } from "../../components/feedback";
-import { Section } from "../../components/layout";
+import { Kpi, KpiRow } from "../../components/Kpi";
 import { apiFetch, errorMessage } from "../../lib/api";
 import { t, tn } from "../../i18n";
-import { formatPercent, formatRate, relativeTime } from "../../lib/format";
+import { formatNumber, formatPercent } from "../../lib/format";
 import { decisionLabel, type NowPlaying as Stream } from "../../lib/health";
 import type { AsyncState } from "../../lib/hooks";
 import { useTitle } from "../../lib/titles";
 
-function StreamRow({ s, stopping, onStop }: { s: Stream; stopping: boolean; onStop: () => void }) {
-  const title = useTitle(s.key || undefined);
+const clockOf = (ms: number) => {
+  const total = Math.max(0, Math.round(ms / 1000));
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const sec = String(total % 60).padStart(2, "0");
+  return h ? `${h}:${String(m).padStart(2, "0")}:${sec}` : `${m}:${sec}`;
+};
+
+/** Mbps, the unit Activity uses everywhere. */
+export const mbpsOf = (bitsPerSecond: number) =>
+  bitsPerSecond > 0
+    ? t("{rate} Mbps", { rate: (bitsPerSecond / 1e6).toFixed(bitsPerSecond >= 1e7 ? 0 : 1) })
+    : "—";
+
+const isTranscoding = (s: Stream) =>
+  s.decision === "transcode" || (s.decision === "copy" && !s.audioCopy);
+
+/** One labelled fact on a stream card; hidden when there's nothing to say. */
+function Fact({ label, children }: { label: string; children: React.ReactNode }) {
+  if (children === null || children === undefined || children === "") return null;
   return (
-    <li className="flex flex-wrap items-center gap-4 py-4 first:pt-0 last:pb-0">
-      <Artwork
-        src={title?.poster}
-        alt={s.title}
-        title=""
-        className="aspect-[2/3] w-12 shrink-0 rounded-md"
-      />
-      <div className="min-w-0 flex-1 space-y-2">
-        <div className="min-w-0">
-          <p className="truncate font-medium text-fg">{s.title}</p>
-          <p className="truncate text-sm text-fg-muted">
-            {s.user} · {s.device}
-            {s.product && s.product !== s.device ? ` (${s.product})` : ""}
-          </p>
-        </div>
-        <div className="flex flex-wrap gap-1.5">
-          <Badge variant="secondary">{s.protocol}</Badge>
-          <Badge
-            variant={
-              s.decision === "transcode" || (s.videoCopy && !s.audioCopy && s.decision === "copy")
-                ? "warning"
-                : "success"
-            }
-          >
-            {decisionLabel(s)}
-          </Badge>
-          {s.origin ? <Badge variant="secondary">{s.origin}</Badge> : null}
-          {s.remote ? <Badge variant="info">{t("Remote")}</Badge> : null}
-          {s.failovers ? (
-            <Badge variant="warning">
-              {tn(s.failovers, "{count} failover", "{count} failovers")}
-            </Badge>
-          ) : null}
-          <Badge variant="secondary">{formatRate(s.speedBps)}</Badge>
-        </div>
-        <div className="max-w-sm">
-          {s.progress !== null ? (
-            <Meter
-              value={s.progress}
-              buffered={s.buffered}
-              label={t("Started {when}", { when: relativeTime(s.startedAt) })}
-              valueLabel={
-                s.buffered > s.progress
-                  ? t("{watched} watched · {buffered} buffered", {
-                      watched: formatPercent(s.progress),
-                      buffered: formatPercent(s.buffered),
-                    })
-                  : t("{percent}% watched", { percent: Math.round(s.progress * 100) })
-              }
-            />
-          ) : (
-            <p className="text-xs text-fg-muted">{t("Waiting for playback position")}</p>
-          )}
-        </div>
-        {s.release ? (
-          <p className="truncate font-mono text-[11px] text-fg-subtle" title={s.release}>
-            {s.release}
-          </p>
-        ) : null}
-      </div>
-      <Button variant="outline" size="sm" disabled={stopping} onClick={onStop}>
-        <Square size={14} /> {t("Stop stream")}
-      </Button>
-    </li>
+    <div className="min-w-0">
+      <dt className="text-[11px] font-medium uppercase tracking-wider text-fg-subtle">{label}</dt>
+      <dd className="mt-0.5 line-clamp-2 break-words text-sm text-fg">{children}</dd>
+    </div>
   );
 }
 
-/** Live sessions with a stop control for each. */
-export function NowPlaying({ state }: { state: AsyncState<Stream[]> }) {
+/** Source → output, or just the source when it's passed through unchanged. */
+function Flow({ from, to }: { from: string; to: string }) {
+  if (!from && !to) return null;
+  if (!to || to === from) return <>{from}</>;
+  return (
+    <span>
+      <span className="text-fg-muted">{from || "—"}</span>
+      <ArrowRight size={12} className="mx-1 inline text-fg-subtle" aria-label={t("becomes")} />
+      <span>{to}</span>
+    </span>
+  );
+}
+
+function StreamCard({ s, stopping, onStop }: { s: Stream; stopping: boolean; onStop: () => void }) {
+  const title = useTitle(s.ratingKey ? String(s.ratingKey) : s.key || undefined);
+  const converting = isTranscoding(s);
+  const elapsed = s.progress !== null && s.durationMs ? s.progress * s.durationMs : null;
+  const subtitle =
+    title?.type === "episode" && title.showTitle
+      ? `${title.showTitle} · ${t("S{season} E{episode}", { season: title.season ?? 0, episode: title.episode ?? 0 })}`
+      : title?.year
+        ? String(title.year)
+        : "";
+  const rate = mbpsOf(s.bitrateKbps ? s.bitrateKbps * 1000 : s.speedBps * 8);
+  return (
+    <article className="overflow-hidden rounded-2xl border border-border bg-surface shadow-xs">
+      <div className="relative isolate h-44 overflow-hidden">
+        <Artwork
+          src={title?.backdrop || title?.poster}
+          alt=""
+          title=""
+          className="absolute inset-0 -z-10 size-full scale-105"
+          imgClassName="size-full object-cover"
+        />
+        <div className="absolute inset-0 -z-10 bg-gradient-to-t from-black/90 via-black/55 to-black/20" />
+        <div className="flex h-full items-end gap-4 p-4">
+          <Artwork
+            src={title?.poster}
+            alt={s.title}
+            title=""
+            className="aspect-[2/3] w-20 shrink-0 rounded-lg shadow-lg ring-1 ring-white/15"
+          />
+          <div className="min-w-0 flex-1 space-y-2 pb-0.5">
+            <div className="flex flex-wrap items-center gap-1.5">
+              <Badge variant={converting ? "warning" : "success"}>{decisionLabel(s)}</Badge>
+              {s.failovers ? (
+                <Badge variant="warning">
+                  {tn(s.failovers, "{count} failover", "{count} failovers")}
+                </Badge>
+              ) : null}
+            </div>
+            <div className="min-w-0">
+              <h3 className="truncate text-lg font-semibold text-on-scrim">
+                {title?.title || s.title}
+              </h3>
+              {subtitle ? <p className="truncate text-sm text-on-scrim/75">{subtitle}</p> : null}
+            </div>
+            {s.progress !== null ? (
+              <Meter
+                onScrim
+                value={s.progress}
+                buffered={s.buffered}
+                label={
+                  elapsed !== null
+                    ? t("{elapsed} of {total}", {
+                        elapsed: clockOf(elapsed),
+                        total: clockOf(s.durationMs),
+                      })
+                    : undefined
+                }
+                valueLabel={formatPercent(s.progress)}
+              />
+            ) : (
+              <p className="text-xs text-on-scrim/75">{t("Waiting for playback position")}</p>
+            )}
+          </div>
+          <Button
+            variant="outline"
+            size="sm"
+            className="shrink-0 self-start border-white/25 bg-black/30 text-on-scrim hover:bg-black/50"
+            disabled={stopping}
+            onClick={onStop}
+            aria-label={t("Stop stream for {viewer}", { viewer: s.user })}
+          >
+            <Square size={13} /> {t("Stop")}
+          </Button>
+        </div>
+      </div>
+      <dl className="grid grid-cols-2 gap-x-4 gap-y-3 p-4 sm:grid-cols-3">
+        <Fact label={t("Viewer")}>
+          <span className="inline-flex min-w-0 items-center gap-2">
+            <span className="grid size-5 shrink-0 place-items-center rounded-full bg-primary-subtle text-[10px] font-semibold uppercase text-primary">
+              {s.user.slice(0, 1)}
+            </span>
+            <span className="truncate">{s.user}</span>
+          </span>
+        </Fact>
+        <Fact label={t("Device")}>
+          {s.device}
+          {s.product && s.product !== s.device ? (
+            <span className="text-fg-muted"> · {s.product}</span>
+          ) : null}
+        </Fact>
+        <Fact label={t("Network")}>
+          <span className="inline-flex min-w-0 items-center gap-1.5">
+            {s.remote ? (
+              <Globe size={13} className="shrink-0 text-info" />
+            ) : (
+              <Home size={13} className="shrink-0 text-success" />
+            )}
+            <span className="truncate">
+              {s.remote ? t("Away") : t("Home")}
+              {s.ip ? <span className="font-mono text-xs text-fg-muted"> · {s.ip}</span> : null}
+            </span>
+          </span>
+        </Fact>
+        <Fact label={t("Video")}>
+          <Flow from={s.sourceVideo} to={s.outputVideo} />
+        </Fact>
+        <Fact label={t("Audio")}>
+          <Flow from={s.sourceAudio} to={s.outputAudio} />
+        </Fact>
+        <Fact label={t("Bitrate")}>
+          <span className="tabular-nums">{rate}</span>
+        </Fact>
+        <Fact label={t("Subtitles")}>{s.subtitle || null}</Fact>
+        <Fact label={t("Source")}>{s.origin || null}</Fact>
+        <Fact label={t("App")}>{s.protocol}</Fact>
+      </dl>
+      {converting && s.decisionReason ? (
+        <p className="border-t border-border px-4 py-2.5 text-xs text-fg-muted">
+          <Cpu size={12} className="mr-1.5 inline text-warning" aria-hidden />
+          {s.decisionReason}
+        </p>
+      ) : null}
+      {s.release ? (
+        <p
+          className="truncate border-t border-border px-4 py-2 font-mono text-[11px] text-fg-subtle"
+          title={s.release}
+        >
+          {s.release}
+        </p>
+      ) : null}
+    </article>
+  );
+}
+
+/** The protocols of the live streams, for the tab row's filter. */
+export const streamProtocols = (streams: Stream[]) =>
+  [...new Set(streams.map((stream) => stream.protocol))].sort();
+
+/** A protocol filter for Now Playing's tab row, shown once streams differ. */
+export function ProtocolFilter({
+  streams,
+  value,
+  onChange,
+}: {
+  streams: Stream[];
+  value: string;
+  onChange: (v: string) => void;
+}) {
+  const protocols = streamProtocols(streams);
+  if (protocols.length < 2 && !value) return null;
+  return (
+    <Select
+      aria-label={t("Protocol")}
+      className="h-8 w-40 text-sm"
+      value={value}
+      onChange={(event) => onChange(event.target.value)}
+    >
+      <option value="">{t("All protocols")}</option>
+      {protocols.map((p) => (
+        <option key={p} value={p}>
+          {p}
+        </option>
+      ))}
+    </Select>
+  );
+}
+
+export function NowPlaying({ state, protocol }: { state: AsyncState<Stream[]>; protocol: string }) {
   const [stopping, setStopping] = useState<string | null>(null);
-  const [protocol, setProtocol] = useState("");
   const streams = state.data ?? [];
   const filtered = protocol ? streams.filter((stream) => stream.protocol === protocol) : streams;
-  const protocols = [...new Set(streams.map((stream) => stream.protocol))].sort();
+  const converting = filtered.filter(isTranscoding).length;
+  const throughput = filtered.reduce((sum, s) => sum + (s.speedBps || 0), 0);
 
   const stop = async (id: string) => {
     setStopping(id);
@@ -108,46 +245,49 @@ export function NowPlaying({ state }: { state: AsyncState<Stream[]> }) {
 
   if (state.error && !state.data)
     return <ErrorPanel error={state.error} onRetry={() => void state.reload()} />;
+  const ready = Boolean(state.data);
   return (
-    <Section
-      title={t("Now playing")}
-      description={t(
-        "Streams update every few seconds. Stopping a stream ends it on the viewer's device.",
-      )}
-      actions={
-        state.data ? (
-          <Badge variant="secondary">
-            {tn(streams.length, "{count} stream", "{count} streams")}
-          </Badge>
-        ) : null
-      }
-    >
-      {state.data && streams.length > 0 && (
-        <label className="flex items-center gap-2 text-sm">
-          {t("Protocol")}
-          <select value={protocol} onChange={(event) => setProtocol(event.currentTarget.value)}>
-            <option value="">{t("All protocols")}</option>
-            {protocols.map((value) => (
-              <option key={value} value={value}>
-                {value}
-              </option>
-            ))}
-          </select>
-        </label>
-      )}
+    <>
+      <KpiRow>
+        <Kpi
+          label={t("Streaming now")}
+          value={ready ? formatNumber(filtered.length, 0) : "—"}
+          icon={<Radio size={18} />}
+        />
+        <Kpi
+          label={t("Direct")}
+          value={ready ? formatNumber(filtered.length - converting, 0) : "—"}
+          detail={t("Played or streamed as-is")}
+          icon={<PlayCircle size={18} />}
+          tone="success"
+        />
+        <Kpi
+          label={t("Transcoding")}
+          value={ready ? formatNumber(converting, 0) : "—"}
+          detail={t("Video or audio converted")}
+          icon={<Cpu size={18} />}
+          tone="warning"
+        />
+        <Kpi
+          label={t("Throughput")}
+          value={ready ? mbpsOf(throughput * 8) : "—"}
+          icon={<Gauge size={18} />}
+          tone="info"
+        />
+      </KpiRow>
       {!state.data ? (
         <LoadingRows rows={2} />
       ) : filtered.length ? (
-        <ul className="divide-y divide-border">
+        <div className="grid gap-4 xl:grid-cols-2">
           {filtered.map((s) => (
-            <StreamRow
+            <StreamCard
               key={s.id || s.key}
               s={s}
               stopping={stopping === s.id}
               onStop={() => void stop(s.id)}
             />
           ))}
-        </ul>
+        </div>
       ) : streams.length ? (
         <p>{t("No streams match this protocol.")}</p>
       ) : (
@@ -157,6 +297,6 @@ export function NowPlaying({ state }: { state: AsyncState<Stream[]> }) {
           description={t("Streams appear here as soon as a viewer presses play.")}
         />
       )}
-    </Section>
+    </>
   );
 }

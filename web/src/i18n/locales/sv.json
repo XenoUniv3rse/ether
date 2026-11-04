@@ -65,6 +65,7 @@
   "m_0040e631ea1713": "Kan köras under uppspelning",
   "m_0042d36e3a4d31": "Den första källan med ett matchande intervall ger hoppa över-knappen.",
   "m_00446ecc28fada": "MDBList",
+  "m_0045187b61cac9": "Video eller ljud konverterat",
   "m_004580cc476c5f": "Valideringstips",
   "m_004804edf569b6": "Återanslut ditt Plex-konto",
   "m_004835dbe00869": {
@@ -141,6 +142,7 @@
   "m_00a084a302868d": "diskbudget lagring bevarande förhämtning uppvärmning nästa avsnitt",
   "m_00a16c19a34f07": "Visa anrop",
   "m_00a19f8711afed": "Fortsätt titta",
+  "m_00a214bd41c61b": "Direkt",
   "m_00a230047b55c8": "Levererat från diskcachen",
   "m_00a28c2d495833": "Databasen nekade anslutningen",
   "m_00a35ff984d8bc": "Förvärms nu",
@@ -358,6 +360,7 @@
   "m_01b5a99921e30a": "Ladda ned {name}",
   "m_01b674ba6b7373": "Pre-rolls spelas inte när en titel återupptas.",
   "m_01b6a81e56578f": "Visa lokala tittarnamn på inloggningsskärmen",
+  "m_01b75b2d99913d": "Strömmar nu",
   "m_01b765f613779a": "Spara regel",
   "m_01b9317c523af8": "Regeln sparades",
   "m_01bb844ab97232": "Blockerade releasegrupper",
@@ -1011,7 +1014,6 @@
     "one": "{count} API-förfrågan per dag",
     "other": "{count} API-förfrågningar per dag"
   },
-  "m_04736cfe01f746": "Strömmar uppdateras med några sekunders mellanrum. När du stoppar en ström avslutas den på tittarens enhet.",
   "m_0474b5fa45d5ae": "Ta bort regel",
   "m_0474e00de25f80": "Välj en serie",
   "m_0476bbd0877c4e": "Öppna installerat plugin",
@@ -2184,6 +2186,7 @@
   "m_09a87f5bfb453b": "Senast importerad {when} · {span} programinformation",
   "m_09a9b9012738ea": "Releasen fästes",
   "m_09ac1b92a7f43f": "Koppla från",
+  "m_09ac79107a1271": "Spelas upp eller strömmas oförändrat",
   "m_09ac7c244189c5": {
     "one": "{count} definition installerad, används av dina indexerare ovan.",
     "other": "{count} definitioner installerade, alla används av dina indexerare ovan."
@@ -2712,6 +2715,7 @@
   "m_0c04b691b6c72d": "Samlingen togs bort",
   "m_0c04cc873f0352": "4K (2160p)",
   "m_0c072fb8baf115": "Publicera",
+  "m_0c085fe994cbc4": "Genomströmning",
   "m_0c098f051ed4a8": "Aktivitet visas när den första titeln har setts.",
   "m_0c0cb66d5e7298": {
     "one": "Plats för ungefär {count} filmstor källa på 8 GiB vardera. Avsnittens storlek varierar; båda delar det här utrymmet.",
@@ -4382,6 +4386,7 @@
   "m_1340e827526923": "Ny IPTV-källa",
   "m_13411c6d3331c3": "Vad ska den här samlingen vara?",
   "m_1341b9c449f87d": "Live-tv-appar använder en spellista från din kontosida.",
+  "m_1342a7d73a5c61": "Slutförandegrad",
   "m_1345f25f1c9ace": "Senast sända avsnitt",
   "m_1346eb034adf81": "Hur Ether når internet",
   "m_1349091f213e5d": "Öppna navigering",
@@ -5444,6 +5449,7 @@
   "m_181f4784e63061": "Lägg till en IntroDB-nyckel i {link}.",
   "m_182164a23292fd": "Skapa en kostnadsfri API-nyckel i dina kontoinställningar på {link} och klistra in den nedan.",
   "m_18216573f3bae8": "Visas av regler",
+  "m_18222e8154a6d8": "Genomsnittlig session",
   "m_1823ad77517060": "Deras Hem är uppdaterat.",
   "m_182477bf730e82": "Lägg till en webhook-, Discord-, Slack-, Telegram-, e-post-, ntfy- eller Gotify-kanal för att få varningar.",
   "m_1826e3926a178f": "Testnotis",
@@ -5938,7 +5944,6 @@
   "m_1a3532ab03c3f1": "HDR tillåtet",
   "m_1a3561c5e9b1fe": "Alla rader på {section}.",
   "m_1a361f49e13082": "Mobil eller surfplatta",
-  "m_1a3658141add24": "De senaste 500 uppspelningarna i perioden, i enhetens tidszon.",
   "m_1a37632c11d41d": "Det som spelas innan en film eller ett avsnitt börjar: dina pre-rolls och biotrailers.",
   "m_1a398cdd93409b": "Kanalnummer",
   "m_1a3a3f14648f50": "Slutpunkts-URL",

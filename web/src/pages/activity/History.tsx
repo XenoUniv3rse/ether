@@ -1,14 +1,14 @@
 import { Badge, EmptyState, Input, PagedTable, Select } from "@braedonsaunders/appkit-ui";
-import { History as HistoryIcon } from "lucide-react";
-import { useId } from "react";
+import { CheckCircle2, Clock, History as HistoryIcon, PlayCircle, Users } from "lucide-react";
 import { Link, useSearchParams } from "react-router-dom";
+import { Artwork } from "../../components/Artwork";
 import { Drawer } from "../../components/Drawer";
 import { ErrorPanel, LoadingRows } from "../../components/feedback";
-import { Field } from "../../components/fields";
-import { Section } from "../../components/layout";
+import { Kpi, KpiRow } from "../../components/Kpi";
 import { apiFetch } from "../../lib/api";
-import { fixed, formatDateTime } from "../../lib/format";
+import { fixed, formatBytes, formatDateTime, formatNumber, formatPercent } from "../../lib/format";
 import { useAsync } from "../../lib/hooks";
+import { useTitle } from "../../lib/titles";
 import { ToneValue } from "./ExperienceDrawer";
 import {
   DASH,
@@ -21,9 +21,9 @@ import {
 import { getLocale, t, tn } from "../../i18n";
 import { pagedTableLabels } from "../../i18n/appkit-labels";
 import type { EtherUser } from "../../lib/types";
-import { viewerLabel, type Play, type PlayDetail, type ViewingFilter } from "./types";
+import { viewerLabel, type Play, type PlayDetail, type Summary, type ViewingFilter } from "./types";
 
-/** Period, viewer and year-in-review filters above History and Stats. */
+/** Period, viewer and year-in-review filters on History's and Stats' tab row. */
 export function ViewingFilters({
   value,
   onChange,
@@ -33,49 +33,43 @@ export function ViewingFilters({
   onChange: (next: ViewingFilter) => void;
   viewers: EtherUser[];
 }) {
-  const id = useId();
   return (
-    <div className="flex flex-wrap items-end gap-3" role="group" aria-label={t("Filters")}>
-      <Field label={t("Period")} htmlFor={`${id}-days`} className="w-44">
-        <Select
-          id={`${id}-days`}
-          aria-label={t("Period")}
-          value={value.days}
-          onChange={(e) => onChange({ ...value, days: e.target.value, year: "" })}
-        >
-          {[7, 30, 90, 365].map((n) => (
-            <option key={n} value={String(n)}>
-              {tn(n, "Last {count} day", "Last {count} days")}
-            </option>
-          ))}
-        </Select>
-      </Field>
-      <Field label={t("Viewer")} htmlFor={`${id}-user`} className="w-52">
-        <Select
-          id={`${id}-user`}
-          aria-label={t("Viewer")}
-          value={value.user}
-          onChange={(e) => onChange({ ...value, user: e.target.value })}
-        >
-          <option value="">{t("Everyone")}</option>
-          {viewers.map((v) => (
-            <option key={v.id} value={String(v.id)}>
-              {viewerLabel(v)}
-            </option>
-          ))}
-        </Select>
-      </Field>
-      <Field label={t("Year in review")} htmlFor={`${id}-year`} className="w-32">
-        <Input
-          id={`${id}-year`}
-          type="number"
-          min={2000}
-          max={new Date().getFullYear()}
-          placeholder={t("Year")}
-          value={value.year}
-          onChange={(e) => onChange({ ...value, year: e.target.value })}
-        />
-      </Field>
+    <div className="flex flex-wrap items-center gap-2" role="group" aria-label={t("Filters")}>
+      <Select
+        aria-label={t("Period")}
+        className="h-8 w-40 text-sm"
+        value={value.days}
+        onChange={(e) => onChange({ ...value, days: e.target.value, year: "" })}
+      >
+        {[7, 30, 90, 365].map((n) => (
+          <option key={n} value={String(n)}>
+            {tn(n, "Last {count} day", "Last {count} days")}
+          </option>
+        ))}
+      </Select>
+      <Select
+        aria-label={t("Viewer")}
+        className="h-8 w-44 text-sm"
+        value={value.user}
+        onChange={(e) => onChange({ ...value, user: e.target.value })}
+      >
+        <option value="">{t("Everyone")}</option>
+        {viewers.map((v) => (
+          <option key={v.id} value={String(v.id)}>
+            {viewerLabel(v)}
+          </option>
+        ))}
+      </Select>
+      <Input
+        aria-label={t("Year in review")}
+        className="h-8 w-28 text-sm"
+        type="number"
+        min={2000}
+        max={new Date().getFullYear()}
+        placeholder={t("Year")}
+        value={value.year}
+        onChange={(e) => onChange({ ...value, year: e.target.value })}
+      />
     </div>
   );
 }
@@ -101,10 +95,12 @@ function statusCell(p: Play) {
 /** Recorded plays for the selected period and viewer. */
 export function PlayHistory({
   history,
+  summary,
   error,
   onRetry,
 }: {
   history: Play[] | undefined;
+  summary: Summary | undefined;
   error: unknown;
   onRetry: () => void;
 }) {
@@ -130,74 +126,98 @@ export function PlayHistory({
     );
   return (
     <>
-      <Section
-        title={t("Play history")}
-        description={t("The latest 500 plays in this period, in your device's time zone.")}
-      >
-        {!history ? (
-          <LoadingRows rows={4} />
-        ) : history.length ? (
-          <PagedTable
-            rows={history}
-            rowKey={(p) => p.id}
-            pageSize={20}
-            onRowClick={(p) => openPlay(p.id)}
-            empty={t("No recorded plays in this period.")}
-            defaultSort={{ key: "started", dir: "desc" }}
-            labels={pagedTableLabels({
-              searchLabel: t("Search play history"),
-              searchPlaceholder: t("Find a title, viewer or device…"),
-            })}
-            columns={[
-              {
-                key: "title",
-                header: t("Title / viewer"),
-                search: (p) => p.title + " " + p.username,
-                sortValue: (p) => p.title,
-                cell: (p) => (
-                  <>
-                    <p className="font-medium text-fg">{p.title}</p>
-                    <p className="text-xs text-fg-muted">{p.username || t("Unknown viewer")}</p>
-                  </>
-                ),
-              },
-              {
-                key: "started",
-                header: t("Started"),
-                sortValue: (p) => p.started,
-                cell: (p) => new Date(p.started * 1000).toLocaleString(getLocale()),
-              },
-              {
-                key: "device",
-                header: t("Device"),
-                search: (p) => (p.device || p.platform) + " " + p.decision,
-                cell: (p) => (
-                  <>
-                    {p.device || p.platform || t("Unknown")}
-                    <span className="block text-xs text-fg-muted">{p.decision}</span>
-                  </>
-                ),
-              },
-              {
-                key: "duration",
-                header: t("Viewing time"),
-                align: "right",
-                sortValue: (p) => p.watchedMs,
-                cell: (p) => t("{minutes} min", { minutes: fixed(p.watchedMs / 60000, 0) }),
-              },
-              { key: "status", header: t("Status"), cell: statusCell },
-            ]}
-          />
-        ) : (
-          <EmptyState
-            icon={<HistoryIcon />}
-            title={t("No plays yet")}
-            description={t(
-              "History starts when Ether observes playback. There are no recorded plays in this period.",
-            )}
-          />
-        )}
-      </Section>
+      <KpiRow>
+        <Kpi
+          label={t("Plays")}
+          value={summary ? formatNumber(summary.plays, 0) : DASH}
+          icon={<PlayCircle size={18} />}
+        />
+        <Kpi
+          label={t("Viewers")}
+          value={summary ? formatNumber(summary.users.length, 0) : DASH}
+          icon={<Users size={18} />}
+          tone="info"
+        />
+        <Kpi
+          label={t("Average session")}
+          value={
+            summary && summary.plays
+              ? t("{minutes} min", { minutes: fixed(summary.watchedMs / summary.plays / 60000, 0) })
+              : DASH
+          }
+          icon={<Clock size={18} />}
+          tone="info"
+        />
+        <Kpi
+          label={t("Completion rate")}
+          value={summary && summary.plays ? formatPercent(summary.completed / summary.plays) : DASH}
+          icon={<CheckCircle2 size={18} />}
+          tone="success"
+        />
+      </KpiRow>
+      {!history ? (
+        <LoadingRows rows={4} />
+      ) : history.length ? (
+        <PagedTable
+          rows={history}
+          rowKey={(p) => p.id}
+          pageSize={20}
+          onRowClick={(p) => openPlay(p.id)}
+          empty={t("No recorded plays in this period.")}
+          defaultSort={{ key: "started", dir: "desc" }}
+          labels={pagedTableLabels({
+            searchLabel: t("Search play history"),
+            searchPlaceholder: t("Find a title, viewer or device…"),
+          })}
+          columns={[
+            {
+              key: "title",
+              header: t("Title / viewer"),
+              search: (p) => p.title + " " + p.username,
+              sortValue: (p) => p.title,
+              cell: (p) => (
+                <>
+                  <p className="font-medium text-fg">{p.title}</p>
+                  <p className="text-xs text-fg-muted">{p.username || t("Unknown viewer")}</p>
+                </>
+              ),
+            },
+            {
+              key: "started",
+              header: t("Started"),
+              sortValue: (p) => p.started,
+              cell: (p) => new Date(p.started * 1000).toLocaleString(getLocale()),
+            },
+            {
+              key: "device",
+              header: t("Device"),
+              search: (p) => (p.device || p.platform) + " " + p.decision,
+              cell: (p) => (
+                <>
+                  {p.device || p.platform || t("Unknown")}
+                  <span className="block text-xs text-fg-muted">{p.decision}</span>
+                </>
+              ),
+            },
+            {
+              key: "duration",
+              header: t("Viewing time"),
+              align: "right",
+              sortValue: (p) => p.watchedMs,
+              cell: (p) => t("{minutes} min", { minutes: fixed(p.watchedMs / 60000, 0) }),
+            },
+            { key: "status", header: t("Status"), cell: statusCell },
+          ]}
+        />
+      ) : (
+        <EmptyState
+          icon={<HistoryIcon />}
+          title={t("No plays yet")}
+          description={t(
+            "History starts when Ether observes playback. There are no recorded plays in this period.",
+          )}
+        />
+      )}
       {drawer}
     </>
   );
@@ -209,6 +229,19 @@ function Detail({ label, children }: { label: string; children: React.ReactNode 
       <dt className="text-fg-muted">{label}</dt>
       <dd className="min-w-0 break-words text-fg">{children}</dd>
     </div>
+  );
+}
+
+/** The play's poster, when the catalogue knows the title. */
+function PlayPoster({ ratingKey, title }: { ratingKey?: number; title: string }) {
+  const detail = useTitle(ratingKey ? String(ratingKey) : undefined);
+  return (
+    <Artwork
+      src={detail?.poster}
+      alt={title}
+      title={title}
+      className="aspect-[2/3] w-14 shrink-0 rounded-md"
+    />
   );
 }
 
@@ -237,74 +270,149 @@ function PlayDrawer({ id, onClose }: { id: string | null; onClose: () => void })
       ) : !p ? (
         <LoadingRows rows={4} />
       ) : (
-        <div className="space-y-4">
-          <div className="flex flex-wrap gap-1">
-            <Badge variant={p.completed ? "success" : "secondary"}>
-              {p.completed ? t("Completed") : p.ended ? t("Ended") : t("Last observed")}
-            </Badge>
-            {p.failed ? <Badge variant="destructive">{t("Never started")}</Badge> : null}
-            {decision ? <Badge variant="secondary">{decision}</Badge> : null}
-            {p.remote ? <Badge variant="secondary">{t("Away")}</Badge> : null}
+        <div className="space-y-5">
+          <div className="flex items-center gap-3">
+            <PlayPoster ratingKey={p.ratingKey} title={p.title} />
+            <div className="min-w-0 flex-1 space-y-1.5">
+              <div className="flex flex-wrap gap-1">
+                <Badge variant={p.completed ? "success" : "secondary"}>
+                  {p.completed ? t("Completed") : p.ended ? t("Ended") : t("Last observed")}
+                </Badge>
+                {p.failed ? <Badge variant="destructive">{t("Never started")}</Badge> : null}
+                {decision ? <Badge variant="secondary">{decision}</Badge> : null}
+                {p.uhd ? <Badge variant="secondary">4K</Badge> : null}
+                {p.hdr ? <Badge variant="secondary">HDR</Badge> : null}
+              </div>
+              <p className="text-sm text-fg-muted">
+                {p.username || t("Unknown viewer")} · {p.device || p.platform || t("Unknown")}
+              </p>
+            </div>
           </div>
-          <dl className="divide-y divide-border">
-            <Detail label={t("Viewer")}>
-              {p.userId ? (
-                <Link
-                  to={`/activity/experience?viewer=${p.userId}`}
-                  className="text-primary hover:underline"
-                >
-                  {p.username || t("Unknown viewer")}
-                </Link>
-              ) : (
-                p.username || t("Unknown viewer")
-              )}
-            </Detail>
-            <Detail label={t("Device")}>{p.device || p.platform || t("Unknown")}</Detail>
-            <Detail label={t("Start time")}>
-              {p.failed ? (
-                <span className="text-danger">{failedReason(p.error)}</span>
-              ) : p.measured ? (
-                <ToneValue value={formatSeconds(p.startMs)} tone={startTone(p.startMs)} />
-              ) : (
-                DASH
-              )}
-            </Detail>
-            <Detail label={t("Buffering")}>
-              {p.measured && p.bufferEvents != null
-                ? p.bufferEvents
-                  ? tn(p.bufferEvents, "{count} time, {time}", "{count} times, {time}", {
-                      time: formatSeconds(p.bufferMs),
+
+          <div className="grid grid-cols-2 gap-3">
+            <Kpi
+              label={t("Watched")}
+              value={t("{minutes} min", { minutes: fixed(p.watchedMs / 60000, 0) })}
+              detail={
+                p.durationMs
+                  ? t("{percent} of {length}", {
+                      percent: formatPercent(Math.min(1, p.watchedMs / p.durationMs)),
+                      length: t("{minutes} min", { minutes: fixed(p.durationMs / 60000, 0) }),
                     })
-                  : t("none")
-                : DASH}
-            </Detail>
-            <Detail label={t("Playback")}>
-              {decision || DASH}
-              {why ? (
-                <span className="block text-xs text-fg-muted">
-                  {t("Converted because of {reason}", { reason: why })}
-                </span>
-              ) : null}
-            </Detail>
-            <Detail label={t("Source")}>
-              {p.origin || DASH}
-              {p.release ? (
-                <span className="block break-all font-mono text-xs text-fg-muted">{p.release}</span>
-              ) : null}
-            </Detail>
-            <Detail label={t("Source switches")}>{String(p.switches ?? p.failovers ?? 0)}</Detail>
-            <Detail label={t("Viewing time")}>
-              {t("{minutes} min", { minutes: fixed(p.watchedMs / 60000, 0) })}
-            </Detail>
-            {p.ended ? (
-              <Detail label={t("Ended")}>{formatDateTime(new Date(p.ended * 1000))}</Detail>
-            ) : null}
-            {p.error && !p.failed ? (
-              <Detail label={t("Error")}>
-                <span className="text-danger">{p.error}</span>
+                  : undefined
+              }
+            />
+            <Kpi label={t("Transferred")} value={p.bytes ? formatBytes(p.bytes) : DASH} />
+            <Kpi
+              label={t("Average bitrate")}
+              value={
+                p.avgBitrateKbps
+                  ? t("{rate} Mbps", { rate: fixed(p.avgBitrateKbps / 1000, 1) })
+                  : DASH
+              }
+              detail={
+                p.sourceKbps
+                  ? t("Source {rate} Mbps", { rate: fixed(p.sourceKbps / 1000, 1) })
+                  : undefined
+              }
+            />
+            <Kpi
+              label={t("Start time")}
+              value={
+                p.failed ? (
+                  <span className="text-danger">{t("Failed")}</span>
+                ) : p.measured ? (
+                  <ToneValue value={formatSeconds(p.startMs)} tone={startTone(p.startMs)} />
+                ) : (
+                  DASH
+                )
+              }
+              detail={p.failed ? failedReason(p.error) : undefined}
+            />
+          </div>
+
+          <section aria-label={t("Viewer and network")}>
+            <h3 className="mb-1 text-xs font-semibold uppercase tracking-wider text-fg-subtle">
+              {t("Viewer and network")}
+            </h3>
+            <dl className="divide-y divide-border">
+              <Detail label={t("Viewer")}>
+                {p.userId ? (
+                  <Link
+                    to={`/activity/experience?viewer=${p.userId}`}
+                    className="text-primary hover:underline"
+                  >
+                    {p.username || t("Unknown viewer")}
+                  </Link>
+                ) : (
+                  p.username || t("Unknown viewer")
+                )}
               </Detail>
-            ) : null}
-          </dl>
+              <Detail label={t("Device")}>
+                {p.device || t("Unknown")}
+                {p.platform && p.platform !== p.device ? (
+                  <span className="block text-xs text-fg-muted">{p.platform}</span>
+                ) : null}
+              </Detail>
+              <Detail label={t("Network")}>
+                {p.remote ? t("Away from home") : t("At home")}
+                {p.ip ? (
+                  <span className="block font-mono text-xs text-fg-muted">{p.ip}</span>
+                ) : null}
+              </Detail>
+            </dl>
+          </section>
+
+          <section aria-label={t("Playback")}>
+            <h3 className="mb-1 text-xs font-semibold uppercase tracking-wider text-fg-subtle">
+              {t("Playback")}
+            </h3>
+            <dl className="divide-y divide-border">
+              <Detail label={t("Delivered as")}>
+                {decision || DASH}
+                {why ? (
+                  <span className="block text-xs text-fg-muted">
+                    {t("Converted because of {reason}", { reason: why })}
+                  </span>
+                ) : null}
+              </Detail>
+              <Detail label={t("Buffering")}>
+                {p.measured && p.bufferEvents != null
+                  ? p.bufferEvents
+                    ? tn(p.bufferEvents, "{count} time, {time}", "{count} times, {time}", {
+                        time: formatSeconds(p.bufferMs),
+                      })
+                    : t("none")
+                  : DASH}
+              </Detail>
+              <Detail label={t("Source switches")}>{String(p.switches ?? p.failovers ?? 0)}</Detail>
+              <Detail label={t("Source")}>
+                {p.origin || DASH}
+                {p.release ? (
+                  <span className="block break-all font-mono text-xs text-fg-muted">
+                    {p.release}
+                  </span>
+                ) : null}
+              </Detail>
+            </dl>
+          </section>
+
+          <section aria-label={t("Timing")}>
+            <h3 className="mb-1 text-xs font-semibold uppercase tracking-wider text-fg-subtle">
+              {t("Timing")}
+            </h3>
+            <dl className="divide-y divide-border">
+              <Detail label={t("Started")}>{formatDateTime(new Date(p.started * 1000))}</Detail>
+              {p.ended ? (
+                <Detail label={t("Ended")}>{formatDateTime(new Date(p.ended * 1000))}</Detail>
+              ) : null}
+              {p.error && !p.failed ? (
+                <Detail label={t("Error")}>
+                  <span className="text-danger">{p.error}</span>
+                </Detail>
+              ) : null}
+            </dl>
+          </section>
           {!p.measured ? (
             <p className="text-xs text-fg-muted">
               {t("This play was recorded before start time and buffering were measured.")}
