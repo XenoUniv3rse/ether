@@ -7,6 +7,7 @@ import "errors"
 // header syntax is parsed; no slice data is ever decoded.
 
 var errBits = errors.New("transcode: truncated bitstream")
+var errHEVCExtension = errors.New("transcode: unsupported HEVC SPS extension")
 
 type bitReader struct {
 	b   []byte
@@ -177,7 +178,7 @@ func avcSPS(nal []byte) (spsFacts, error) {
 		return spsFacts{}, r.err
 	}
 	if r.flag() {
-		vuiFacts(r, &f)
+		vuiFacts(r, &f, false)
 	}
 	if r.err != nil {
 		return spsFacts{}, r.err
@@ -203,7 +204,7 @@ var vuiSAR = [...][2]int{{1, 1}, {12, 11}, {10, 11}, {16, 11}, {40, 33}, {24, 11
 
 // vuiFacts reads the start of vui_parameters, which H.264 and H.265 share,
 // through the colour description.
-func vuiFacts(r *bitReader, f *spsFacts) {
+func vuiFacts(r *bitReader, f *spsFacts, strict bool) {
 	if r.flag() { // aspect_ratio_info_present_flag
 		idc := int(r.u(8))
 		switch {
@@ -219,7 +220,10 @@ func vuiFacts(r *bitReader, f *spsFacts) {
 	if !r.flag() { // video_signal_type_present_flag
 		return
 	}
-	r.skip(3) // video_format
+	format := r.u(3) // video_format
+	if strict && format > 5 {
+		r.err = errBits
+	}
 	f.fullRange = int(r.u(1))
 	if !r.flag() {
 		return
@@ -270,12 +274,46 @@ func matrixName(code int) string {
 // included), following ITU-T H.265 7.3.2.2 through the VUI colour
 // description.
 func hevcSPS(nal []byte) (spsFacts, error) {
+	return parseHEVCSPS(nal, false)
+}
+
+// parseHEVCSPS can additionally validate the complete VUI and SPS tail.
+// Unsupported extension syntax is distinguished from a malformed header.
+func parseHEVCSPS(nal []byte, strict bool) (spsFacts, error) {
 	if len(nal) < 3 || (nal[0]>>1)&0x3f != 33 {
 		return spsFacts{}, errBits
+	}
+	if strict && (nal[0]&0x80 != 0 || nal[1]&7 == 0) {
+		return spsFacts{}, errBits
+	}
+	if strict && (nal[0]&1 != 0 || nal[1]>>3 != 0) && (nal[2]>>1)&7 == 7 {
+		return spsFacts{}, errHEVCExtension // multilayer SPS needs its VPS
+	}
+	if strict {
+		zeros := 0
+		for i, b := range nal[2:] {
+			if zeros >= 2 {
+				if b <= 2 || (b == 3 && (i+1 == len(nal)-2 || nal[i+3] > 3)) {
+					return spsFacts{}, errBits
+				}
+				if b == 3 {
+					zeros = 0
+					continue
+				}
+			}
+			if b == 0 {
+				zeros++
+			} else {
+				zeros = 0
+			}
+		}
 	}
 	r := &bitReader{b: rbsp(nal[2:])}
 	r.skip(4) // sps_video_parameter_set_id
 	maxSub := int(r.u(3))
+	if strict && maxSub > 6 {
+		return spsFacts{}, errBits
+	}
 	r.skip(1) // sps_temporal_id_nesting_flag
 	// profile_tier_level(1, maxSub)
 	r.skip(96)
@@ -298,22 +336,44 @@ func hevcSPS(nal []byte) (spsFacts, error) {
 			r.skip(8)
 		}
 	}
-	r.ue() // sps_seq_parameter_set_id
+	id := r.ue() // sps_seq_parameter_set_id
 	chroma := int(r.ue())
-	if chroma == 3 {
-		r.skip(1) // separate_colour_plane_flag
+	if strict && (id > 15 || chroma > 3) {
+		return spsFacts{}, errBits
 	}
-	r.ue() // pic_width_in_luma_samples
-	r.ue() // pic_height_in_luma_samples
+	separateColour := false
+	if chroma == 3 {
+		separateColour = r.flag()
+	}
+	width := r.ue()  // pic_width_in_luma_samples
+	height := r.ue() // pic_height_in_luma_samples
+	if strict && (width == 0 || height == 0) {
+		return spsFacts{}, errBits
+	}
+	var crop [4]uint64
 	if r.flag() {
-		r.ue()
-		r.ue()
-		r.ue()
-		r.ue()
+		left, right, top, bottom := r.ue(), r.ue(), r.ue(), r.ue()
+		crop = [4]uint64{left, right, top, bottom}
+		if strict && (left > width || right > width || top > height || bottom > height) {
+			return spsFacts{}, errBits
+		}
+	}
+	subWidth, subHeight := uint64(1), uint64(1)
+	if !separateColour && (chroma == 1 || chroma == 2) {
+		subWidth = 2
+	}
+	if !separateColour && chroma == 1 {
+		subHeight = 2
+	}
+	if strict && ((crop[0]+crop[1])*subWidth >= width || (crop[2]+crop[3])*subHeight >= height) {
+		return spsFacts{}, errBits
 	}
 	f := spsFacts{bitDepth: int(r.ue()) + 8, fullRange: -1, chroma: chroma}
-	r.ue() // bit_depth_chroma_minus8
+	chromaDepth := int(r.ue()) + 8 // bit_depth_chroma_minus8
 	pocBits := int(r.ue()) + 4
+	if strict && (f.bitDepth > 16 || chromaDepth > 16 || pocBits > 16) {
+		return spsFacts{}, errBits
+	}
 	ordering := r.flag()
 	first := maxSub
 	if ordering {
@@ -323,14 +383,20 @@ func hevcSPS(nal []byte) (spsFacts, error) {
 		// Highest layer wins: ffprobe's refs is that layer's DPB size.
 		f.refs = int(r.ue()) + 1
 		f.hasRefs = r.err == nil
-		r.ue()
+		reorder := r.ue()
+		if strict && (f.refs > 16 || reorder >= uint64(f.refs)) {
+			return spsFacts{}, errBits
+		}
 		r.ue()
 	}
-	for i := 0; i < 6; i++ {
-		r.ue() // coding/transform block sizes and hierarchy depths
+	minCB, diffCB := r.ue(), r.ue()
+	minTB, diffTB := r.ue(), r.ue()
+	interDepth, intraDepth := r.ue(), r.ue()
+	if strict && (minCB > 3 || diffCB > 3 || minTB > minCB || minTB+diffTB > min(5, minCB+diffCB+3)-2 || interDepth > minCB+diffCB+1-minTB || intraDepth > minCB+diffCB+1-minTB) {
+		return spsFacts{}, errBits
 	}
 	if r.flag() && r.flag() { // scaling_list_enabled_flag, sps_scaling_list_data_present_flag
-		hevcScalingListData(r)
+		hevcScalingListData(r, strict)
 	}
 	r.skip(2)     // amp_enabled_flag, sample_adaptive_offset_enabled_flag
 	if r.flag() { // pcm_enabled_flag
@@ -367,11 +433,14 @@ func hevcSPS(nal []byte) (spsFacts, error) {
 			continue
 		}
 		neg, pos := r.ue(), r.ue()
-		if neg > 16 || pos > 16 {
+		if neg > 16 || pos > 16 || (strict && neg+pos > 15) {
 			return spsFacts{}, errBits
 		}
 		for j := uint64(0); j < neg+pos && r.err == nil; j++ {
-			r.ue()
+			delta := r.ue()
+			if strict && delta > 32767 {
+				return spsFacts{}, errBits
+			}
 			r.skip(1)
 		}
 		deltas[i] = int(neg + pos)
@@ -390,7 +459,13 @@ func hevcSPS(nal []byte) (spsFacts, error) {
 		return spsFacts{}, r.err
 	}
 	if r.flag() {
-		vuiFacts(r, &f)
+		vuiFacts(r, &f, strict)
+		if strict {
+			hevcVUITail(r, maxSub, width, height, subWidth, subHeight, crop)
+		}
+	}
+	if strict && r.err == nil {
+		hevcSPSTail(r, chroma, f.bitDepth, chromaDepth, minCB, diffCB)
 	}
 	if r.err != nil {
 		return spsFacts{}, r.err
@@ -398,7 +473,7 @@ func hevcSPS(nal []byte) (spsFacts, error) {
 	return f, nil
 }
 
-func hevcScalingListData(r *bitReader) {
+func hevcScalingListData(r *bitReader, strict bool) {
 	for size := 0; size < 4; size++ {
 		step := 1
 		if size == 3 {
@@ -406,15 +481,28 @@ func hevcScalingListData(r *bitReader) {
 		}
 		for matrix := 0; matrix < 6; matrix += step {
 			if !r.flag() { // scaling_list_pred_mode_flag
-				r.ue()
+				delta := r.ue()
+				limit := matrix
+				if size == 3 {
+					limit /= 3
+				}
+				if strict && delta > uint64(limit) {
+					r.err = errBits
+				}
 				continue
 			}
 			coefs := min(64, 1<<(4+(size<<1)))
 			if size > 1 {
-				r.se()
+				dc := r.se()
+				if strict && (dc < -7 || dc > 247) {
+					r.err = errBits
+				}
 			}
 			for i := 0; i < coefs && r.err == nil; i++ {
-				r.se()
+				coeff := r.se()
+				if strict && (coeff < -128 || coeff > 127) {
+					r.err = errBits
+				}
 			}
 		}
 	}

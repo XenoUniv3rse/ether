@@ -382,6 +382,13 @@ type issueContext struct {
 func collectIssues(info core.MediaInfo, v, a, sub *core.StreamInfo, ctx issueContext) (videoIssues, audioIssues, otherIssues []string) {
 	caps := ctx.caps
 	if v != nil {
+		identity := strings.ToLower(caps.Platform + " " + caps.Product + " " + caps.Device)
+		product := strings.ToLower(caps.Product)
+		browser := strings.Contains(product, "web") || strings.Contains(product, "chrome") || strings.Contains(product, "firefox") || strings.Contains(product, "safari") || strings.Contains(product, "edge")
+		android := strings.Contains(identity, "android") || strings.Contains(identity, "google tv") || strings.Contains(identity, "shield") || strings.Contains(identity, "fire tv") || strings.Contains(identity, "firetv") || strings.Contains(identity, "fire os")
+		if v.Codec == "hevc" && v.MalformedHEVC && android && !browser {
+			videoIssues = append(videoIssues, "the video header is malformed for hardware decoders")
+		}
 		if len(caps.VideoCodecs) > 0 && !caps.SupportsVideo(v.Codec) {
 			videoIssues = append(videoIssues, fmt.Sprintf("video codec %s not supported", v.Codec))
 		}

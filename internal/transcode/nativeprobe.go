@@ -1298,6 +1298,7 @@ func videoConfig(si *core.StreamInfo, codec string, p []byte, transfer int, dovi
 		if err != nil {
 			return incomplete("hevc SPS: %v", err)
 		}
+		si.MalformedHEVC = malformedHEVCConfig(p)
 		si.BitDepth = f.bitDepth
 		si.PixelFormat = yuvPixFmt(f.chroma, f.bitDepth)
 		applyReferenceFrames(si, f)
