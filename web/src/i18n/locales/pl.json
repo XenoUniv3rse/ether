@@ -2584,7 +2584,6 @@
   "m_0ab43b11668fe5": "Wywołania sieciowe docierają tylko do hostów wymienionych w uprawnieniach manifest.json. Wywołania są synchroniczne; oczekiwanie na hosta nie wlicza się do budżetu wtyczki.",
   "m_0ab4c16b94e623": "Pokaż kod",
   "m_0ab8e3541573d6": "Nieużywane przygotowane kopie zapasowe są usuwane automatycznie po jednym dniu.",
-  "m_0aba01169ffeb7": "Ostatnie odświeżenie nie powiodło się: {reason}",
   "m_0abadbedf6894f": "Akcje dla: {release}",
   "m_0abc686f94c34e": "Odrzucone przez Twoje reguły: {count}",
   "m_0abce084240d5f": "własna",
@@ -5841,12 +5840,6 @@
   "m_184b9db09246ea": "do {time}",
   "m_184bb4829dd593": "Przebieg wyboru zakończony",
   "m_184bfbc6488c7a": "Zaktualizowano panel podsumowania na stronie głównej",
-  "m_184e5504924676": {
-    "one": "W użyciu {open} z {count} połączeń",
-    "few": "W użyciu {open} z {count} połączeń",
-    "many": "W użyciu {open} z {count} połączeń",
-    "other": "W użyciu {open} z {count} połączeń"
-  },
   "m_184e92a994dd30": "Źródło przewodnika",
   "m_184f0295dd28ed": "Eksportuj lub importuj dziennik, oceny albo listę obserwowanych jako CSV. Dopasowania Letterboxd wymagają tego samego tytułu i roku.",
   "m_184fa8e85128b7": "Telefony, telewizory i przeglądarki, które pozostają zalogowane.",
@@ -6329,7 +6322,6 @@
   },
   "m_1a2ca860075e3b": "Własne limity ustawisz w sekcji Więcej opcji.",
   "m_1a2da71299ca67": "Otwórz udostępnianie w Plex",
-  "m_1a2f0781e83fff": "Nie ma jeszcze źródeł kanałów. Użyj Dodaj, aby zaimportować kanały IPTV.",
   "m_1a2f5ca545dec7": "Kierunek sortowania",
   "m_1a3086ace83e5e": "Utwórz link z zaproszeniem",
   "m_1a34373e9c2cb4": "Najnowsze wydania",

@@ -755,21 +755,21 @@ export default function LiveTV() {
     </div>
   );
 
-  // Overview uses the full workspace for both navigation and dashboard.
+  // Keep navigation in the same left third; the two dashboard rows fill the workspace below.
   const overviewView = (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="shrink-0 border-b border-border bg-bg-subtle">{panelHead}</div>
-      <div className="app-scroll min-h-0 flex-1 overflow-y-auto bg-bg p-4 sm:p-6">
+      <div className="app-scroll shrink-0 overflow-hidden border-b border-border bg-surface lg:grid lg:grid-cols-3">
+        <div className="border-r border-border bg-bg-subtle">{panelHead}</div>
+      </div>
+      <div className="app-scroll min-h-0 flex-1 overflow-y-auto bg-bg p-4 lg:overflow-hidden">
         <LiveOverview
           channels={filtered}
           lineup={sorted}
-          sources={sources}
           guide={guide}
           coverage={coverage}
           usage={usage}
           now={now}
           onSelectChannel={selectChannel}
-          onSelectSource={(id) => void go({ kind: "source", id })}
         />
       </div>
     </div>

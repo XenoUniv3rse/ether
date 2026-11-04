@@ -2450,7 +2450,6 @@
   "m_0ab43b11668fe5": "Verkkokutsut tavoittavat vain manifest.json-tiedoston käyttöoikeuksissa luetellut isännät. Kutsut ovat synkronisia; isännän odottaminen ei kuluta pluginin budjettia.",
   "m_0ab4c16b94e623": "Näytä koodi",
   "m_0ab8e3541573d6": "Käyttämättömät valmistellut varmuuskopiot poistetaan automaattisesti vuorokauden kuluttua.",
-  "m_0aba01169ffeb7": "Viimeisin päivitys epäonnistui: {reason}",
   "m_0abadbedf6894f": "Toiminnot: {release}",
   "m_0abc686f94c34e": "{count} suljettu pois sääntöjesi perusteella",
   "m_0abce084240d5f": "oma",
@@ -5537,10 +5536,6 @@
   "m_184b9db09246ea": "{time} asti",
   "m_184bb4829dd593": "Valintakierros valmis",
   "m_184bfbc6488c7a": "Päivitti katsauspaneelin Etusivulla",
-  "m_184e5504924676": {
-    "one": "{open}/{count} yhteys käytössä",
-    "other": "{open}/{count} yhteyttä käytössä"
-  },
   "m_184e92a994dd30": "Oppaan lähde",
   "m_184f0295dd28ed": "Vie tai tuo päiväkirja, arvosanat tai seurantalista CSV-muodossa. Letterboxd-täsmäykset vaativat saman nimen ja vuoden.",
   "m_184fa8e85128b7": "Puhelimet, televisiot ja selaimet, jotka pysyvät kirjautuneina.",
@@ -5991,7 +5986,6 @@
   },
   "m_1a2ca860075e3b": "Omat rajat asetetaan kohdassa Lisäasetukset.",
   "m_1a2da71299ca67": "Avaa Plex-jakaminen",
-  "m_1a2f0781e83fff": "Ei vielä kanavalähteitä. Tuo IPTV-kanavia Lisää-painikkeella.",
   "m_1a2f5ca545dec7": "Lajittelusuunta",
   "m_1a3086ace83e5e": "Luo kutsulinkki",
   "m_1a34373e9c2cb4": "Uusimmat julkaisut",

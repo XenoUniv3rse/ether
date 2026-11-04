@@ -2517,7 +2517,6 @@
   "m_0ab43b11668fe5": "Les appels réseau n’atteignent que les hôtes listés dans les permissions de manifest.json. Les appels sont synchrones ; l’attente d’un hôte ne compte pas dans le budget du plugin.",
   "m_0ab4c16b94e623": "Afficher le code",
   "m_0ab8e3541573d6": "Les sauvegardes préparées non utilisées sont supprimées automatiquement au bout d’un jour.",
-  "m_0aba01169ffeb7": "Échec de la dernière actualisation : {reason}",
   "m_0abadbedf6894f": "Actions pour {release}",
   "m_0abc686f94c34e": "{count} écartées par vos règles",
   "m_0abce084240d5f": "personnalisée",
@@ -5689,11 +5688,6 @@
   "m_184b9db09246ea": "jusqu’à {time}",
   "m_184bb4829dd593": "Passe de sélection terminée",
   "m_184bfbc6488c7a": "Panneau de bilan mis à jour sur l’accueil",
-  "m_184e5504924676": {
-    "one": "{open} connexion utilisée sur {count}",
-    "many": "{open} connexions utilisées sur {count}",
-    "other": "{open} connexions utilisées sur {count}"
-  },
   "m_184e92a994dd30": "Source de guide",
   "m_184f0295dd28ed": "Exportez ou importez un journal, des notes ou une liste de suivi au format CSV. Les correspondances Letterboxd nécessitent le même titre et la même année.",
   "m_184fa8e85128b7": "Téléphones, téléviseurs et navigateurs qui restent connectés.",
@@ -6160,7 +6154,6 @@
   },
   "m_1a2ca860075e3b": "Les limites personnalisées se règlent dans Plus d’options.",
   "m_1a2da71299ca67": "Ouvrir le partage Plex",
-  "m_1a2f0781e83fff": "Aucune source de chaînes. Utilisez Ajouter pour importer des chaînes IPTV.",
   "m_1a2f5ca545dec7": "Sens du tri",
   "m_1a3086ace83e5e": "Créer un lien d'invitation",
   "m_1a34373e9c2cb4": "Sorties les plus récentes",

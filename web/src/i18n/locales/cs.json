@@ -2584,7 +2584,6 @@
   "m_0ab43b11668fe5": "Síťová volání se dostanou jen na hostitele uvedené v oprávněních manifest.json. Volání jsou synchronní; čekání na hostitele se do rozpočtu pluginu nepočítá.",
   "m_0ab4c16b94e623": "Zobrazit kód",
   "m_0ab8e3541573d6": "Nepoužité připravené zálohy se automaticky odstraní po jednom dni.",
-  "m_0aba01169ffeb7": "Poslední obnovení selhalo: {reason}",
   "m_0abadbedf6894f": "Akce pro {release}",
   "m_0abc686f94c34e": "Vyřazeno vašimi pravidly: {count}",
   "m_0abce084240d5f": "vlastní",
@@ -5841,12 +5840,6 @@
   "m_184b9db09246ea": "do {time}",
   "m_184bb4829dd593": "Výběr dokončen",
   "m_184bfbc6488c7a": "Aktualizován panel přehledu na Domovské stránce",
-  "m_184e5504924676": {
-    "one": "Používá se {open} z {count} připojení",
-    "few": "Používá se {open} z {count} připojení",
-    "many": "Používá se {open} z {count} připojení",
-    "other": "Používá se {open} z {count} připojení"
-  },
   "m_184e92a994dd30": "Zdroj průvodce",
   "m_184f0295dd28ed": "Exportujte nebo importujte deník, hodnocení či seznam k zhlédnutí jako CSV. Shody z Letterboxd vyžadují stejný název a rok.",
   "m_184fa8e85128b7": "Telefony, televize a prohlížeče, které zůstávají přihlášené.",
@@ -6329,7 +6322,6 @@
   },
   "m_1a2ca860075e3b": "Vlastní limity se nastavují v části Další možnosti.",
   "m_1a2da71299ca67": "Otevřít sdílení Plexu",
-  "m_1a2f0781e83fff": "Zatím žádné zdroje kanálů. Pomocí Přidat importujte IPTV kanály.",
   "m_1a2f5ca545dec7": "Směr řazení",
   "m_1a3086ace83e5e": "Vytvořit odkaz na pozvánku",
   "m_1a34373e9c2cb4": "Nejnovější vydání",

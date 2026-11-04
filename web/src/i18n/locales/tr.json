@@ -2450,7 +2450,6 @@
   "m_0ab43b11668fe5": "Ağ çağrıları yalnızca manifest.json izinlerinde listelenen ana bilgisayarlara ulaşır. Çağrılar eşzamanlıdır; bir ana bilgisayarı beklemek eklentinin bütçesinden sayılmaz.",
   "m_0ab4c16b94e623": "Kodu görüntüle",
   "m_0ab8e3541573d6": "Kullanılmayan hazırlanmış yedekler bir gün sonra otomatik olarak kaldırılır.",
-  "m_0aba01169ffeb7": "Son yenileme başarısız: {reason}",
   "m_0abadbedf6894f": "{release} için eylemler",
   "m_0abc686f94c34e": "{count} sürüm kurallarınla elendi",
   "m_0abce084240d5f": "özel",
@@ -5537,10 +5536,6 @@
   "m_184b9db09246ea": "{time} saatine kadar",
   "m_184bb4829dd593": "Seçim turu tamamlandı",
   "m_184bfbc6488c7a": "Ana Sayfa'daki özet paneli güncellendi",
-  "m_184e5504924676": {
-    "one": "{count} bağlantıdan {open} tanesi kullanımda",
-    "other": "{count} bağlantıdan {open} tanesi kullanımda"
-  },
   "m_184e92a994dd30": "Rehber kaynağı",
   "m_184f0295dd28ed": "Bir günlüğü, puanları veya izleme listesini CSV olarak dışa veya içe aktarın. Letterboxd eşleşmeleri için aynı başlık ve yıl gerekir.",
   "m_184fa8e85128b7": "Oturumu açık kalan telefonlar, TV'ler ve tarayıcılar.",
@@ -5991,7 +5986,6 @@
   },
   "m_1a2ca860075e3b": "Özel sınırlar Diğer seçenekler altında ayarlanır.",
   "m_1a2da71299ca67": "Plex paylaşımını aç",
-  "m_1a2f0781e83fff": "Henüz kanal kaynağı yok. IPTV kanallarını içe aktarmak için Ekle’yi kullanın.",
   "m_1a2f5ca545dec7": "Sıralama yönü",
   "m_1a3086ace83e5e": "Davet bağlantısı oluştur",
   "m_1a34373e9c2cb4": "En yeni sürümler",

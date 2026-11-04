@@ -2517,7 +2517,6 @@
   "m_0ab43b11668fe5": "Las llamadas de red solo llegan a los hosts indicados en los permisos de manifest.json. Las llamadas son síncronas; esperar a un host no cuenta en el presupuesto del plugin.",
   "m_0ab4c16b94e623": "Ver código",
   "m_0ab8e3541573d6": "Las copias de seguridad preparadas que no se usan se eliminan automáticamente al cabo de un día.",
-  "m_0aba01169ffeb7": "Falló la última actualización: {reason}",
   "m_0abadbedf6894f": "Acciones para {release}",
   "m_0abc686f94c34e": "{count} descartadas por tus reglas",
   "m_0abce084240d5f": "personalizada",
@@ -5689,11 +5688,6 @@
   "m_184b9db09246ea": "hasta {time}",
   "m_184bb4829dd593": "Ronda de selección completada",
   "m_184bfbc6488c7a": "Panel de resumen actualizado en Inicio",
-  "m_184e5504924676": {
-    "one": "{open} de {count} conexión en uso",
-    "many": "{open} de {count} conexiones en uso",
-    "other": "{open} de {count} conexiones en uso"
-  },
   "m_184e92a994dd30": "Fuente de guía",
   "m_184f0295dd28ed": "Exporta o importa un diario, valoraciones o una lista de seguimiento en CSV. Las coincidencias de Letterboxd requieren el mismo título y año.",
   "m_184fa8e85128b7": "Teléfonos, televisores y navegadores que siguen con la sesión iniciada.",
@@ -6160,7 +6154,6 @@
   },
   "m_1a2ca860075e3b": "Los límites personalizados se configuran en Más opciones.",
   "m_1a2da71299ca67": "Abrir el uso compartido de Plex",
-  "m_1a2f0781e83fff": "Aún no hay fuentes de canales. Usa Añadir para importar canales IPTV.",
   "m_1a2f5ca545dec7": "Dirección de ordenación",
   "m_1a3086ace83e5e": "Crear enlace de invitación",
   "m_1a34373e9c2cb4": "Últimos estrenos",

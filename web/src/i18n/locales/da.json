@@ -2450,7 +2450,6 @@
   "m_0ab43b11668fe5": "Netværkskald når kun de værter, der er angivet i tilladelserne i manifest.json. Kald er synkrone; ventetid på en vært tæller ikke med i pluginets budget.",
   "m_0ab4c16b94e623": "Vis kode",
   "m_0ab8e3541573d6": "Ubrugte forberedte backups fjernes automatisk efter et døgn.",
-  "m_0aba01169ffeb7": "Seneste opdatering mislykkedes: {reason}",
   "m_0abadbedf6894f": "Handlinger for {release}",
   "m_0abc686f94c34e": "{count} udelukket af dine regler",
   "m_0abce084240d5f": "brugerdefineret",
@@ -5537,10 +5536,6 @@
   "m_184b9db09246ea": "til og med {time}",
   "m_184bb4829dd593": "Udvælgelsesrunde afsluttet",
   "m_184bfbc6488c7a": "Opdaterede oversigtspanelet på Hjem",
-  "m_184e5504924676": {
-    "one": "{open} af {count} forbindelse i brug",
-    "other": "{open} af {count} forbindelser i brug"
-  },
   "m_184e92a994dd30": "Guidekilde",
   "m_184f0295dd28ed": "Eksportér eller importér en dagbog, vurderinger eller overvågningsliste som CSV. Letterboxd-match kræver samme titel og år.",
   "m_184fa8e85128b7": "Telefoner, tv og browsere der forbliver logget ind.",
@@ -5991,7 +5986,6 @@
   },
   "m_1a2ca860075e3b": "Brugerdefinerede grænser indstilles under Flere valg.",
   "m_1a2da71299ca67": "Åbn Plex-deling",
-  "m_1a2f0781e83fff": "Ingen kanalkilder endnu. Brug Tilføj til at importere IPTV-kanaler.",
   "m_1a2f5ca545dec7": "Sorteringsretning",
   "m_1a3086ace83e5e": "Opret invitationslink",
   "m_1a34373e9c2cb4": "Nyeste udgivelser",

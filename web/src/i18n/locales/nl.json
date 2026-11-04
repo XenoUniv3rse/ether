@@ -2450,7 +2450,6 @@
   "m_0ab43b11668fe5": "Netwerkaanroepen bereiken alleen de hosts in de machtigingen van manifest.json. Aanroepen zijn synchroon; wachten op een host telt niet mee voor het budget van de plugin.",
   "m_0ab4c16b94e623": "Code bekijken",
   "m_0ab8e3541573d6": "Ongebruikte voorbereide back-ups worden na een dag automatisch verwijderd.",
-  "m_0aba01169ffeb7": "Laatste vernieuwing mislukt: {reason}",
   "m_0abadbedf6894f": "Acties voor {release}",
   "m_0abc686f94c34e": "{count} uitgesloten door je regels",
   "m_0abce084240d5f": "aangepast",
@@ -5537,10 +5536,6 @@
   "m_184b9db09246ea": "t/m {time}",
   "m_184bb4829dd593": "Selectieronde voltooid",
   "m_184bfbc6488c7a": "Overzichtspaneel op Home bijgewerkt",
-  "m_184e5504924676": {
-    "one": "{open} van {count} verbinding in gebruik",
-    "other": "{open} van {count} verbindingen in gebruik"
-  },
   "m_184e92a994dd30": "Gidsbron",
   "m_184f0295dd28ed": "Exporteer of importeer een dagboek, beoordelingen of watchlist als CSV. Letterboxd-overeenkomsten vereisen dezelfde titel en hetzelfde jaar.",
   "m_184fa8e85128b7": "Telefoons, tv's en browsers die aangemeld blijven.",
@@ -5991,7 +5986,6 @@
   },
   "m_1a2ca860075e3b": "Aangepaste limieten stel je in onder Meer opties.",
   "m_1a2da71299ca67": "Plex-delen openen",
-  "m_1a2f0781e83fff": "Nog geen kanaalbronnen. Gebruik Toevoegen om IPTV-kanalen te importeren.",
   "m_1a2f5ca545dec7": "Sorteerrichting",
   "m_1a3086ace83e5e": "Maak een uitnodigingslink",
   "m_1a34373e9c2cb4": "Nieuwste releases",

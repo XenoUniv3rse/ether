@@ -2450,7 +2450,6 @@
   "m_0ab43b11668fe5": "Netzwerkaufrufe erreichen nur die Hosts, die in den Berechtigungen von manifest.json stehen. Aufrufe sind synchron; das Warten auf einen Host zählt nicht zum Budget des Plugins.",
   "m_0ab4c16b94e623": "Code anzeigen",
   "m_0ab8e3541573d6": "Nicht verwendete vorbereitete Backups werden nach einem Tag automatisch entfernt.",
-  "m_0aba01169ffeb7": "Letzte Aktualisierung fehlgeschlagen: {reason}",
   "m_0abadbedf6894f": "Aktionen für {release}",
   "m_0abc686f94c34e": "{count} durch deine Regeln ausgeschlossen",
   "m_0abce084240d5f": "benutzerdefiniert",
@@ -5537,10 +5536,6 @@
   "m_184b9db09246ea": "bis {time}",
   "m_184bb4829dd593": "Auswahldurchlauf abgeschlossen",
   "m_184bfbc6488c7a": "Rückblick-Panel auf der Startseite aktualisiert",
-  "m_184e5504924676": {
-    "one": "{open} von {count} Verbindung belegt",
-    "other": "{open} von {count} Verbindungen belegt"
-  },
   "m_184e92a994dd30": "Programmquelle",
   "m_184f0295dd28ed": "Exportiere oder importiere ein Tagebuch, Bewertungen oder eine Merkliste als CSV. Letterboxd-Treffer erfordern denselben Titel und dasselbe Jahr.",
   "m_184fa8e85128b7": "Telefone, Fernseher und Browser, die angemeldet bleiben.",
@@ -5991,7 +5986,6 @@
   },
   "m_1a2ca860075e3b": "Eigene Limits legst du unter Weitere Optionen fest.",
   "m_1a2da71299ca67": "Plex-Freigabe öffnen",
-  "m_1a2f0781e83fff": "Noch keine Senderquellen. Importiere IPTV-Sender über Hinzufügen.",
   "m_1a2f5ca545dec7": "Sortierrichtung",
   "m_1a3086ace83e5e": "Einladungslink erstellen",
   "m_1a34373e9c2cb4": "Neueste Veröffentlichungen",

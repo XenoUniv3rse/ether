@@ -1,28 +1,24 @@
 import { DashboardPanel } from "@braedonsaunders/appkit-dashboard/primitives";
-import { Badge, cn } from "@braedonsaunders/appkit-ui";
 import { CalendarClock, CalendarRange, Layers, Plug, Radio, Tv, Users2 } from "lucide-react";
-import { useMemo } from "react";
+import { useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Artwork } from "../../components/Artwork";
 import { RankedBars } from "../../components/charts";
 import { Kpi, KpiRow } from "../../components/Kpi";
 import { t, tn } from "../../i18n";
 import { useLocale } from "../../i18n/react";
-import { formatNumber, formatPercent, relativeTime, unit } from "../../lib/format";
+import { formatNumber, formatPercent, unit } from "../../lib/format";
 import {
   MINUTE,
   clock,
-  isChannelSource,
   onNow,
   progress,
   type Channel,
   type Coverage,
   type LiveUsage,
   type Programme,
-  type Source,
 } from "./model";
 
 const HOUR = 60 * MINUTE;
-const DAY = 24 * HOUR;
 
 type Airing = { channel: Channel; programme: Programme };
 
@@ -34,27 +30,43 @@ type Airing = { channel: Channel; programme: Programme };
 export function LiveOverview({
   channels,
   lineup,
-  sources,
   guide,
   coverage,
   usage,
   now,
   onSelectChannel,
-  onSelectSource,
 }: {
   /** The lineup after the search and filter. */
   channels: Channel[];
   /** The whole lineup, for totals. */
   lineup: Channel[];
-  sources: Source[];
   guide: Map<string, Programme[]>;
   coverage: Map<string, Coverage> | null;
   usage: LiveUsage | null;
   now: number;
   onSelectChannel: (id: string) => void;
-  onSelectSource: (id: string) => void;
 }) {
   const { locale } = useLocale();
+  const content = useRef<HTMLDivElement>(null);
+  const [visibleRows, setVisibleRows] = useState(4);
+  useLayoutEffect(() => {
+    const el = content.current;
+    if (!el) return;
+    const measure = () =>
+      setVisibleRows(
+        window.matchMedia("(min-width: 1024px)").matches
+          ? Math.max(1, Math.min(8, Math.floor(el.clientHeight / 60)))
+          : 4,
+      );
+    const observer = new ResizeObserver(measure);
+    observer.observe(el);
+    window.addEventListener("resize", measure);
+    measure();
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", measure);
+    };
+  }, []);
   const onAir = useMemo(() => lineup.filter((c) => c.enabled), [lineup]);
   const iptvOnAir = useMemo(() => onAir.filter((c) => c.kind === "iptv"), [onAir]);
   const listed = useMemo(
@@ -97,7 +109,7 @@ export function LiveOverview({
         seen.add(title);
         return true;
       })
-      .slice(0, 4);
+      .slice(0, 8);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [airing, watching]);
 
@@ -122,7 +134,7 @@ export function LiveOverview({
         seen.add(k);
         return true;
       })
-      .slice(0, 4);
+      .slice(0, 8);
   }, [channels, guide, now]);
 
   const groups = useMemo(() => {
@@ -134,7 +146,6 @@ export function LiveOverview({
       .map(([g, n]) => ({ key: g || "-", label: g || t("No group"), value: n }));
   }, [onAir, locale]);
 
-  const channelSources = sources.filter(isChannelSource);
   const capped = (usage?.sources ?? []).filter((s) => s.limit > 0);
   const open = capped.reduce((n, s) => n + s.open, 0);
   const limit = capped.reduce((n, s) => n + s.limit, 0);
@@ -142,8 +153,8 @@ export function LiveOverview({
   const pct = listed === null || !iptvOnAir.length ? null : listed / iptvOnAir.length;
 
   return (
-    <div className="space-y-6">
-      <KpiRow>
+    <div className="flex min-h-0 flex-col gap-4 lg:h-full">
+      <KpiRow className="shrink-0">
         <Kpi
           label={t("On air")}
           value={formatNumber(onAir.length)}
@@ -190,32 +201,34 @@ export function LiveOverview({
         />
       </KpiRow>
 
-      <div className="grid items-start gap-6 lg:grid-cols-2 xl:grid-cols-3">
-        <DashboardPanel title={t("On now")} icon={<Radio size={16} />}>
-          {featured.length ? (
-            <ul className="divide-y divide-border">
-              {featured.map((a) => (
-                <li key={a.channel.id}>
-                  <OnAirCard
-                    airing={a}
-                    viewers={watching.get(a.channel.id) ?? 0}
-                    now={now}
-                    onSelect={onSelectChannel}
-                  />
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <p className="py-6 text-center text-sm text-fg-muted">
-              {t("No programmes in this window.")}
-            </p>
-          )}
+      <div className="grid gap-4 lg:min-h-0 lg:flex-1 lg:grid-cols-3">
+        <DashboardPanel fill title={t("On now")} icon={<Radio size={16} />}>
+          <div ref={content} className="h-full">
+            {featured.length ? (
+              <ul className="divide-y divide-border">
+                {featured.slice(0, visibleRows).map((a) => (
+                  <li key={a.channel.id}>
+                    <OnAirCard
+                      airing={a}
+                      viewers={watching.get(a.channel.id) ?? 0}
+                      now={now}
+                      onSelect={onSelectChannel}
+                    />
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="py-6 text-center text-sm text-fg-muted">
+                {t("No programmes in this window.")}
+              </p>
+            )}
+          </div>
         </DashboardPanel>
 
-        <DashboardPanel title={t("Starting soon")} icon={<CalendarClock size={16} />}>
+        <DashboardPanel fill title={t("Starting soon")} icon={<CalendarClock size={16} />}>
           {soon.length ? (
             <ol className="divide-y divide-border">
-              {soon.map((a) => (
+              {soon.slice(0, visibleRows).map((a) => (
                 <li key={`${a.channel.id}-${a.programme.id}`}>
                   <button
                     type="button"
@@ -244,34 +257,13 @@ export function LiveOverview({
           )}
         </DashboardPanel>
 
-        <DashboardPanel title={t("Biggest groups")} icon={<Layers size={16} />}>
+        <DashboardPanel fill title={t("Biggest groups")} icon={<Layers size={16} />}>
           <RankedBars
             ariaLabel={t("Biggest groups")}
-            data={groups}
+            data={groups.slice(0, visibleRows)}
             valueFormat={(v) => formatNumber(v)}
             empty={<p className="py-6 text-center text-sm text-fg-muted">{t("No channels yet")}</p>}
           />
-        </DashboardPanel>
-
-        <DashboardPanel title={t("Sources")} icon={<Plug size={16} />}>
-          {channelSources.length ? (
-            <ul className="divide-y divide-border">
-              {channelSources.map((s) => (
-                <li key={s.id}>
-                  <SourceHealthRow
-                    source={s}
-                    usage={usage?.sources.find((u) => u.sourceId === s.id)}
-                    now={now}
-                    onSelect={onSelectSource}
-                  />
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <p className="py-6 text-center text-sm text-fg-muted">
-              {t("No channel sources yet. Use Add to bring in IPTV channels.")}
-            </p>
-          )}
         </DashboardPanel>
       </div>
     </div>
@@ -329,61 +321,6 @@ function OnAirCard({
         <span className="block text-[11px] text-fg-subtle">{unit(left, "minute")}</span>
         {viewers ? (
           <span className="block">{tn(viewers, "{count} watching", "{count} watching")}</span>
-        ) : null}
-      </span>
-    </button>
-  );
-}
-
-/** One source's health at a glance: account, connections, refresh. */
-export function SourceHealthRow({
-  source: s,
-  usage,
-  now,
-  onSelect,
-}: {
-  source: Source;
-  usage?: LiveUsage["sources"][number];
-  now: number;
-  onSelect: (id: string) => void;
-}) {
-  const expires = s.account?.expiresAt ? Date.parse(s.account.expiresAt) : NaN;
-  const soon = Number.isFinite(expires) && expires - now < DAY;
-  const failed = Boolean(s.lastError);
-  return (
-    <button
-      type="button"
-      onClick={() => onSelect(s.id)}
-      className="flex w-full items-start gap-3 py-2.5 text-left hover:bg-surface-hover"
-    >
-      <span
-        className={cn(
-          "mt-1.5 size-2 shrink-0 rounded-full",
-          failed ? "bg-danger" : soon ? "bg-warning" : "bg-success",
-        )}
-        aria-hidden
-      />
-      <span className="min-w-0 flex-1 space-y-0.5">
-        <span className="flex items-center gap-2">
-          <span className="truncate text-sm font-medium text-fg">{s.name}</span>
-          {s.account?.trial ? <Badge variant="info">{t("Trial")}</Badge> : null}
-        </span>
-        <span className="block truncate text-xs text-fg-muted">
-          {failed
-            ? t("Last refresh failed: {reason}", { reason: s.lastError ?? "" })
-            : Number.isFinite(expires)
-              ? t("Expires {when}", { when: relativeTime(new Date(expires)) })
-              : tn(s.channelCount ?? 0, "{count} channel", "{count} channels")}
-        </span>
-        {usage && usage.limit > 0 ? (
-          <span className="block text-xs tabular-nums text-fg-subtle">
-            {tn(
-              usage.limit,
-              "{open} of {count} connection in use",
-              "{open} of {count} connections in use",
-              { open: formatNumber(usage.open) },
-            )}
-          </span>
         ) : null}
       </span>
     </button>

@@ -2450,7 +2450,6 @@
   "m_0ab43b11668fe5": "Nätverksanrop når bara de värdar som anges i behörigheterna i manifest.json. Anrop är synkrona; väntan på en värd räknas inte mot pluginets budget.",
   "m_0ab4c16b94e623": "Visa kod",
   "m_0ab8e3541573d6": "Oanvända förberedda säkerhetskopior tas bort automatiskt efter ett dygn.",
-  "m_0aba01169ffeb7": "Senaste uppdateringen misslyckades: {reason}",
   "m_0abadbedf6894f": "Åtgärder för {release}",
   "m_0abc686f94c34e": "{count} utesluts av dina regler",
   "m_0abce084240d5f": "egen",
@@ -5537,10 +5536,6 @@
   "m_184b9db09246ea": "till {time}",
   "m_184bb4829dd593": "Urvalsomgången är klar",
   "m_184bfbc6488c7a": "Uppdaterade sammanfattningspanelen på Hem",
-  "m_184e5504924676": {
-    "one": "{open} av {count} anslutning används",
-    "other": "{open} av {count} anslutningar används"
-  },
   "m_184e92a994dd30": "Guidekälla",
   "m_184f0295dd28ed": "Exportera eller importera en dagbok, betyg eller bevakningslista som CSV. Letterboxd-träffar kräver samma titel och år.",
   "m_184fa8e85128b7": "Telefoner, tv-apparater och webbläsare som förblir inloggade.",
@@ -5991,7 +5986,6 @@
   },
   "m_1a2ca860075e3b": "Egna gränser anges under Fler alternativ.",
   "m_1a2da71299ca67": "Öppna Plex-delning",
-  "m_1a2f0781e83fff": "Inga kanalkällor ännu. Använd Lägg till för att importera IPTV-kanaler.",
   "m_1a2f5ca545dec7": "Sorteringsriktning",
   "m_1a3086ace83e5e": "Skapa inbjudningslänk",
   "m_1a34373e9c2cb4": "Nyaste releaser",

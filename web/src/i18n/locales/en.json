@@ -2453,7 +2453,6 @@
   "m_0ab43b11668fe5": "Network calls reach only the hosts listed in manifest.json permissions. Calls are synchronous; waiting on a host does not count against the plugin's budget.",
   "m_0ab4c16b94e623": "View code",
   "m_0ab8e3541573d6": "Unused prepared backups are removed automatically after a day.",
-  "m_0aba01169ffeb7": "Last refresh failed: {reason}",
   "m_0abadbedf6894f": "Actions for {release}",
   "m_0abc686f94c34e": {
     "one": "{count} ruled out by your rules",
@@ -5546,10 +5545,6 @@
   "m_184b9db09246ea": "through {time}",
   "m_184bb4829dd593": "Selection pass complete",
   "m_184bfbc6488c7a": "Updated the recap panel on Home",
-  "m_184e5504924676": {
-    "one": "{open} of {count} connection in use",
-    "other": "{open} of {count} connections in use"
-  },
   "m_184e92a994dd30": "Guide source",
   "m_184f0295dd28ed": "Export or import a diary, ratings or watchlist as CSV. Letterboxd matches need the same title and year.",
   "m_184fa8e85128b7": "Phones, TVs and browsers that stay signed in.",
@@ -6006,7 +6001,6 @@
   },
   "m_1a2ca860075e3b": "Custom limits are set under More options.",
   "m_1a2da71299ca67": "Open Plex sharing",
-  "m_1a2f0781e83fff": "No channel sources yet. Use Add to bring in IPTV channels.",
   "m_1a2f5ca545dec7": "Sort direction",
   "m_1a3086ace83e5e": "Create invite link",
   "m_1a34373e9c2cb4": "Newest releases",
