@@ -150,6 +150,7 @@ export class ApiError extends Error {
   status: number;
   code: string;
   fields?: FieldError[];
+  phase?: string;
   constructor(status: number, code: string, message: string, fields?: FieldError[]) {
     super(message);
     this.name = "ApiError";
@@ -217,14 +218,18 @@ export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise
   }
   if (!res.ok) {
     const err = (
-      data as { error?: { code?: string; message?: string; fields?: FieldError[] } } | null
+      data as {
+        error?: { code?: string; message?: string; fields?: FieldError[]; phase?: string };
+      } | null
     )?.error;
-    throw new ApiError(
+    const error = new ApiError(
       res.status,
       err?.code ?? "http",
       err?.message ?? t("Request failed ({status})", { status: res.status }),
       err?.fields,
     );
+    error.phase = err?.phase;
+    throw error;
   }
   return data as T;
 }
@@ -401,6 +406,7 @@ export const api = {
     apiBlob(`${API_BASE}/support/captures/${encodeURIComponent(id)}/archive`),
 
   // ---- Updates -----------------------------------------------------------------
+  checkUpdates: () => post<UpdateStatus>("/updates/check", {}),
   updateStatus: () => apiFetch<UpdateStatus>("/updates/"),
   updateNow: (force = false) => post<UpdateStatus>("/updates/apply", { force }),
 

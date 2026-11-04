@@ -755,3 +755,19 @@ func TestOnAvailableUntilAcceptedOutsideLock(t *testing.T) {
 		t.Fatalf("heard %v", heard)
 	}
 }
+
+func TestCheckNowCoalescesRequests(t *testing.T) {
+	m := NewManager(ManagerOptions{NewClient: func(config.Updates) (Checker, error) { return &fakeChecker{}, nil }})
+	if err := m.CheckNow(); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.CheckNow(); err != nil {
+		t.Fatal(err)
+	}
+	if !m.Status().Checking {
+		t.Fatal("check should be pending")
+	}
+	if len(m.kick) != 1 {
+		t.Fatal("duplicate check should not queue another wake")
+	}
+}

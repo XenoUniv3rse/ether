@@ -558,6 +558,7 @@ export interface EtherUser {
 
 /** GET /api/updates/ — the server's self-update manager. */
 export interface UpdateStatus {
+  checking?: boolean;
   enabled: boolean;
   disabledReason?: string;
   current: string;

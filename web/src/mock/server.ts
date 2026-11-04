@@ -3056,6 +3056,8 @@ export function createFakeServer(opts: FakeOptions = {}) {
         });
       case "GET /updates":
         return json(updateStatus());
+      case "POST /updates/check":
+        return json(updateStatus(), 202);
       case "POST /updates/apply":
         updateRequested = true;
         updateForced = Boolean((body as { force?: boolean } | null)?.force);
