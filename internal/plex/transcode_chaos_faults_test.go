@@ -176,7 +176,7 @@ func TestTranscodeChaosPlexFaults(t *testing.T) {
 							t.Fatal(e)
 						}
 						chaosCmd(t, fp, "-v", "error", "-show_streams", p)
-						chaosCmd(t, ff, "-v", "error", "-xerror", "-i", p, "-f", "null", "-")
+						chaosDecodeMedia(t, ff, fp, p, fault == "changing")
 						if path == "start-mkv" || path == "download" {
 							ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 							defer cancel()

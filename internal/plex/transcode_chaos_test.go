@@ -136,3 +136,21 @@ func chaosCmd(t *testing.T, exe string, args ...string) {
 		t.Fatal(fmt.Errorf("%s: %w: %s", filepath.Base(exe), err, b))
 	}
 }
+
+// A damaged source may have concealed errors after a playable start. In that
+// case do not equate -xerror with a player failure: require an independently
+// decoded opening frame, then decode the whole output with ordinary tolerance.
+func chaosDecodeMedia(t *testing.T, ff, fp, path string, damaged bool) {
+	t.Helper()
+	if !damaged {
+		chaosCmd(t, ff, "-v", "error", "-xerror", "-i", path, "-f", "null", "-")
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, fp, "-v", "quiet", "-select_streams", "v:0", "-read_intervals", "%+#16", "-show_frames", "-show_entries", "frame=key_frame", "-of", "csv=p=0", path).Output()
+	if err != nil || !strings.Contains(string(out), "1") {
+		t.Fatal("no decodable opening keyframe")
+	}
+	chaosCmd(t, ff, "-v", "error", "-i", path, "-f", "null", "-")
+}

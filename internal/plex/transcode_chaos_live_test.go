@@ -115,21 +115,37 @@ func (r *liveChaosRunner) interrupt(injectHardware bool) error {
 	return nil
 }
 func (r *liveChaosRunner) softwareStarted() bool  { r.mu.Lock(); defer r.mu.Unlock(); return r.software }
-func TestTranscodeChaosLiveRelay(t *testing.T)    { runLiveChaos(t, false) }
-func TestTranscodeChaosLiveHardware(t *testing.T) { runLiveChaos(t, true) }
-func runLiveChaos(t *testing.T, hardware bool) {
+func TestTranscodeChaosLiveRelay(t *testing.T)    { runLiveChaos(t, false, false) }
+func TestTranscodeChaosLiveHardware(t *testing.T) { runLiveChaos(t, true, false) }
+func TestTranscodeChaosAppleRelay(t *testing.T)   { runLiveChaos(t, false, true) }
+func runLiveChaos(t *testing.T, hardware, apple bool) {
 	ff, fp := os.Getenv("CHAOS_FFMPEG"), os.Getenv("CHAOS_FFPROBE")
 	if ff == "" || fp == "" {
 		t.Fatal("set CHAOS_FFMPEG and CHAOS_FFPROBE")
 	}
 	dir := t.TempDir()
 	file := filepath.Join(dir, "live.ts")
-	chaosCmd(t, ff, "-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "testsrc2=size=320x180:rate=24", "-f", "lavfi", "-i", "sine=sample_rate=48000", "-t", "15", "-c:v", "libx264", "-preset", "ultrafast", "-threads", "2", "-g", "48", "-c:a", "aac", "-f", "mpegts", file)
+	if apple {
+		sample := filepath.Join(os.Getenv("CHAOS_CORPUS"), "corpus-apple-bipbop.ts.media")
+		data, err := os.ReadFile(sample)
+		if err != nil {
+			t.Skip("Apple public sample not available in corpus")
+		}
+		if err := os.WriteFile(file, data, 0600); err != nil {
+			t.Fatal(err)
+		}
+		playlist := "#EXTM3U\n#EXT-X-VERSION:4\n#EXT-X-TARGETDURATION:11\n#EXT-X-MEDIA-SEQUENCE:0\n#EXTINF:9.9766,\n#EXT-X-BYTERANGE:326744@0\nlive.ts\n#EXTINF:9.9766,\n#EXT-X-BYTERANGE:326368@326744\nlive.ts\n#EXTINF:10.01,\n#EXT-X-BYTERANGE:327120@653112\nlive.ts\n#EXT-X-ENDLIST\n"
+		if err := os.WriteFile(filepath.Join(dir, "live.m3u8"), []byte(playlist), 0600); err != nil {
+			t.Fatal(err)
+		}
+	} else {
+		chaosCmd(t, ff, "-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "testsrc2=size=320x180:rate=24", "-f", "lavfi", "-i", "sine=sample_rate=48000", "-t", "15", "-c:v", "libx264", "-preset", "ultrafast", "-threads", "2", "-g", "48", "-c:a", "aac", "-f", "mpegts", file)
+	}
 	data, err := os.ReadFile(file)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for i := len(data) / 2 / 188 * 188; i < len(data)/2/188*188+30*188 && i < len(data); i++ {
+	for i := len(data) / 2 / 188 * 188; !apple && i < len(data)/2/188*188+30*188 && i < len(data); i++ {
 		if i%188 != 0 {
 			data[i] = 0xff
 		}
@@ -162,7 +178,11 @@ func runLiveChaos(t *testing.T, hardware bool) {
 		t.Fatal(err)
 	}
 	defer service.Close()
-	_, err = service.ImportSource(context.Background(), livetv.Source{Name: "Fixture", Playlist: fmt.Sprintf("#EXTM3U\n#EXTINF:-1 tvg-id=\"fixture\" tvg-chno=\"7\",Fixture\n%s/live.ts\n", upstream.URL)})
+	input := "/live.ts"
+	if apple {
+		input = "/live.m3u8"
+	}
+	_, err = service.ImportSource(context.Background(), livetv.Source{Name: "Fixture", Playlist: fmt.Sprintf("#EXTM3U\n#EXTINF:-1 tvg-id=\"fixture\" tvg-chno=\"7\",Fixture\n%s%s\n", upstream.URL, input)})
 	if err != nil {
 		t.Fatal(err)
 	}

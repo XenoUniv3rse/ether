@@ -40,7 +40,7 @@ func TestTranscodeChaosMatrix(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer m.Close()
-	check := func(t *testing.T, b []byte, ext string) {
+	check := func(t *testing.T, b []byte, ext string, damaged bool) {
 		t.Helper()
 		if len(b) == 0 {
 			t.Fatal("empty output")
@@ -49,13 +49,8 @@ func TestTranscodeChaosMatrix(t *testing.T) {
 		if e := os.WriteFile(p, b, 0600); e != nil {
 			t.Fatal(e)
 		}
-		if saved := os.Getenv("CHAOS_SAVE_MEDIA"); saved != "" {
-			if e := os.WriteFile(saved, b, 0600); e != nil {
-				t.Fatal(e)
-			}
-		}
 		chaosCmd(t, fp, "-v", "error", "-show_streams", p)
-		chaosCmd(t, ff, "-v", "error", "-xerror", "-i", p, "-f", "null", "-")
+		chaosDecodeMedia(t, ff, fp, p, damaged)
 	}
 	for _, entry := range entries {
 		name := strings.TrimSuffix(filepath.Base(entry), ".good")
@@ -119,7 +114,7 @@ func TestTranscodeChaosMatrix(t *testing.T) {
 						if r.Code != 200 {
 							t.Fatalf("media HTTP %d", r.Code)
 						}
-						check(t, r.Body.Bytes(), "mp4")
+						check(t, r.Body.Bytes(), "mp4", strings.HasPrefix(name, "input-corrupt-"))
 						f.do(t, http.MethodDelete, "/downloadQueue/"+itoa(q)+"/items/"+itoa(id), ownerToken, nil)
 						return
 					}
@@ -158,7 +153,7 @@ func TestTranscodeChaosMatrix(t *testing.T) {
 							t.Fatal("PCE AAC was incorrectly advertised as copied")
 						}
 						for n := 0; n < 3 && (info.Duration <= 0 || time.Duration(n)*4*time.Second < info.Duration); n++ {
-							check(t, get(fmt.Sprintf("/video/:/transcode/universal/session/%s/base/%05d.ts", id, n)), "ts")
+							check(t, get(fmt.Sprintf("/video/:/transcode/universal/session/%s/base/%05d.ts", id, n)), "ts", strings.HasPrefix(name, "input-corrupt-"))
 						}
 					case "dash":
 						get("/video/:/transcode/universal/start.mpd?" + query + "&protocol=dash")
@@ -166,10 +161,10 @@ func TestTranscodeChaosMatrix(t *testing.T) {
 						init := get(base + "header")
 						for n := 0; n < 2 && (info.Duration <= 0 || time.Duration(n)*5*time.Second < info.Duration); n++ {
 							media := get(fmt.Sprintf("%s%d.m4s", base, n))
-							check(t, append(append([]byte(nil), init...), media...), "mp4")
+							check(t, append(append([]byte(nil), init...), media...), "mp4", strings.HasPrefix(name, "input-corrupt-"))
 						}
 					case "start-mkv":
-						check(t, get("/video/:/transcode/universal/start.mkv?"+query+"&protocol=http"), "mkv")
+						check(t, get("/video/:/transcode/universal/start.mkv?"+query+"&protocol=http"), "mkv", strings.HasPrefix(name, "input-corrupt-"))
 					}
 				})
 			}
