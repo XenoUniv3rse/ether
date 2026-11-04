@@ -194,11 +194,15 @@ export function ChannelStudio({
   const [tab, setTab] = useState(virtual ? "programming" : "stream");
   const [watching, setWatching] = useState(false);
   const [horizon, setHorizon] = useState<1 | 7>(1);
-  useEffect(() => setWatching(false), [c.id]);
-  useEffect(() => {
+  // Another channel (or a new one becoming saved) starts on its first tab with
+  // the player stopped. Adjusted during render, not in an effect: an effect
+  // also runs after mount and could undo a tab picked before it flushed.
+  const [shown, setShown] = useState({ id: c.id, isNew });
+  if (shown.id !== c.id || shown.isNew !== isNew) {
+    setShown({ id: c.id, isNew });
     setTab(virtual ? "programming" : "stream");
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [c.id, isNew]);
+    if (shown.id !== c.id) setWatching(false);
+  }
 
   const { locale } = useLocale();
   // Virtual channels preview their draft schedule live; saved IPTV channels
