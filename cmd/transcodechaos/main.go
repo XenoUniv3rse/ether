@@ -35,10 +35,16 @@ func main() {
 	ff := flag.String("ffmpeg", "ffmpeg", "ffmpeg executable")
 	fp := flag.String("ffprobe", "ffprobe", "ffprobe executable")
 	only := flag.String("only", "", "run scenarios whose name contains this text")
-	corpus := flag.String("corpus", "", "optional directory for generated input fixtures")
+	fixtures := flag.String("fixture-dir", "", "optional directory for generated fixtures (default: temporary)")
+	corpus := flag.Bool("corpus", false, "download a curated public corpus into the local cache")
+	cacheDefault, _ := os.UserCacheDir()
+	cache := flag.String("cache-dir", filepath.Join(cacheDefault, "ether", "transcodechaos"), "public corpus cache, outside the repository (10 GB maximum)")
+	mode := flag.String("mode", "short", "short or full scenario matrix")
+	serverURL := flag.String("server-url", "", "explicit Ether lab server URL")
+	mediaKey := flag.String("media-key", "", "rating key of a staged test title on the lab server")
 	report := flag.String("report", "transcodechaos-report.json", "output JSON report")
 	flag.Parse()
-	if err := run(*ff, *fp, *report, *only, *corpus); err != nil {
+	if err := run(*ff, *fp, *report, *only, *fixtures, *cache, *mode, *corpus, *serverURL, *mediaKey); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
@@ -50,14 +56,25 @@ func command(ctx context.Context, exe string, args ...string) error {
 	}
 	return nil
 }
-func run(ff, fp, report, only, corpus string) error {
+func run(ff, fp, report, only, fixtures, cache, mode string, useCorpus bool, serverURL, mediaKey string) error {
+	if mode != "short" && mode != "full" {
+		return fmt.Errorf("-mode must be short or full")
+	}
 	root, err := os.MkdirTemp("", "ether-chaos-")
 	if err != nil {
 		return err
 	}
 	defer os.RemoveAll(root)
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
 	defer cancel()
+	if fixtures == "" {
+		fixtures = filepath.Join(root, "fixtures")
+	}
+	if useCorpus {
+		if err := outsideRepo(fixtures); err != nil {
+			return err
+		}
+	}
 	fixture := filepath.Join(root, "input.ts")
 	if err = command(ctx, ff, "-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "testsrc2=size=320x180:rate=24", "-f", "lavfi", "-i", "sine=sample_rate=48000", "-t", "12", "-c:v", "libx264", "-preset", "ultrafast", "-threads", "2", "-g", "48", "-c:a", "aac", "-f", "mpegts", fixture); err != nil {
 		return err
@@ -70,8 +87,8 @@ func run(ff, fp, report, only, corpus string) error {
 	for _, name := range []string{"input-backward-dts", "input-timestamp-jump", "input-corrupt-mkv", "input-corrupt-mp4", "input-text-subtitle", "input-ass-subtitle", "input-broken-text", "input-broken-ass", "input-pgs", "input-dolby-vision", "input-missing-keyframe", "input-open-gop", "input-long-gop", "input-pts-wrap", "input-resolution-change", "input-samplerate-change", "input-audio-late", "input-audio-early-end", "input-vfr", "input-interlaced", "input-hevc10-hdr", "input-multi-audio"} {
 		cases = append(cases, scenario{name, "mpegts", "none", "", false})
 	}
-	if corpus != "" {
-		if err := os.MkdirAll(corpus, 0700); err != nil {
+	if fixtures != "" {
+		if err := os.MkdirAll(fixtures, 0700); err != nil {
 			return err
 		}
 	}
@@ -79,6 +96,9 @@ func run(ff, fp, report, only, corpus string) error {
 	failures := 0
 	for _, sc := range cases {
 		if only != "" && !strings.Contains(sc.Name, only) {
+			continue
+		}
+		if only == "" && mode == "short" && sc.Name != "healthy" && sc.Name != "seek" && sc.Name != "corrupt-ts" && sc.Name != "input-multi-audio" {
 			continue
 		}
 		start := time.Now()
@@ -89,15 +109,15 @@ func run(ff, fp, report, only, corpus string) error {
 			status = "SKIP"
 			detail = "fixture unavailable: " + fixtureErr.Error()
 		} else {
-			if corpus != "" && strings.HasPrefix(sc.Name, "input-") {
+			if fixtures != "" && strings.HasPrefix(sc.Name, "input-") {
 				altered, e := mutateFixture(fixture, sc)
 				if e != nil {
 					return e
 				}
-				if e = os.WriteFile(filepath.Join(corpus, sc.Name+".good"), fixture, 0600); e != nil {
+				if e = os.WriteFile(filepath.Join(fixtures, sc.Name+".good"), fixture, 0600); e != nil {
 					return e
 				}
-				if e = os.WriteFile(filepath.Join(corpus, sc.Name+".media"), altered, 0600); e != nil {
+				if e = os.WriteFile(filepath.Join(fixtures, sc.Name+".media"), altered, 0600); e != nil {
 					return e
 				}
 			}
@@ -111,6 +131,103 @@ func run(ff, fp, report, only, corpus string) error {
 		results = append(results, r)
 		fmt.Printf("%-14s %-20s %-4s %6dms %s\n", r.Scenario, r.Path, r.Status, r.Milliseconds, r.Detail)
 	}
+	if useCorpus {
+		files, downloads, err := downloadCorpus(ctx, cache, mode, ff)
+		if err != nil {
+			return err
+		}
+		results = append(results, downloads...)
+		for _, item := range downloads {
+			if item.Status == "FAIL" {
+				failures++
+			}
+		}
+		for _, asset := range publicAssets {
+			path, ok := files[asset.name]
+			if !ok {
+				continue
+			}
+			start := time.Now()
+			raw, err := os.ReadFile(path)
+			detail := ""
+			status := "PASS"
+			if err != nil {
+				status = "FAIL"
+				detail = "cache read failed"
+			} else if err = command(ctx, ff, "-v", "error", "-threads", "2", "-i", path, "-t", "12", "-f", "null", "-"); err != nil {
+				reason, listErr := expectedCorpusFailure(asset)
+				if listErr != nil {
+					return fmt.Errorf("invalid expected-failures list: %w", listErr)
+				}
+				if reason != "" {
+					status = "XFAIL"
+					detail = reason
+				} else {
+					status = "FAIL"
+					detail = "stock ffmpeg failed; needs triage"
+				}
+			} else {
+				reason, listErr := expectedCorpusFailure(asset)
+				if listErr != nil {
+					return fmt.Errorf("invalid expected-failures list: %w", listErr)
+				}
+				if reason != "" {
+					status = "FAIL"
+					detail = "stock ffmpeg now decodes an expected failure; review the list"
+				} else {
+					detail = exercise(ctx, ff, fp, root, raw, scenario{"corpus-" + asset.name, "mpegts", "none", "", false})
+					if detail != "" {
+						status = "FAIL"
+					}
+				}
+			}
+			// Exercise the real endpoints even when this manager scenario
+			// fails, provided stock FFmpeg could open the source.
+			if fixtures != "" && err == nil && status != "XFAIL" {
+				name := "corpus-" + asset.name
+				if err := os.WriteFile(filepath.Join(fixtures, name+".good"), raw, 0600); err != nil {
+					return err
+				}
+				if err := os.WriteFile(filepath.Join(fixtures, name+".media"), raw, 0600); err != nil {
+					return err
+				}
+			}
+			if status == "FAIL" {
+				failures++
+			}
+			item := result{asset.name, "corpus/hls-ts", status, detail, time.Since(start).Milliseconds()}
+			results = append(results, item)
+			fmt.Printf("%-32s %-20s %-4s %6dms %s\n", item.Scenario, item.Path, item.Status, item.Milliseconds, item.Detail)
+		}
+	}
+	if only == "" {
+		var plexResults []result
+		var err error
+		if serverURL != "" {
+			plexResults, err = runLabServer(ctx, serverURL, mediaKey, os.Getenv("ETHER_CHAOS_TOKEN"), ff, fp, root, mode)
+		} else {
+			plexResults, err = runPlex(ctx, ff, fp, fixtures, mode)
+		}
+		if err != nil {
+			return err
+		}
+		for _, item := range plexResults {
+			if item.Status == "FAIL" {
+				failures++
+			}
+		}
+		results = append(results, plexResults...)
+	}
+	passes, skips := 0, 0
+	for _, item := range results {
+		if item.Status == "PASS" {
+			passes++
+		}
+		if item.Status == "SKIP" {
+			skips++
+		}
+	}
+	fmt.Printf("score: %d passed, %d failed, %d skipped\n", passes, failures, skips)
 	b, err := json.MarshalIndent(results, "", "  ")
 	if err != nil {
 		return err
@@ -243,6 +360,23 @@ func exercise(parent context.Context, ff, fp, root string, good []byte, sc scena
 	defer s.Close()
 	playlist := httptest.NewRecorder()
 	s.ServePlaylist(playlist, httptest.NewRequestWithContext(ctx, "GET", "/index.m3u8", nil))
+	// An unknown-duration VOD uses an EVENT playlist. It is initially empty
+	// while the first segment is encoded, so poll as an HLS client would.
+	if !live && protocol == core.ProtocolHLS && info.Duration <= 0 {
+		deadline := time.NewTimer(12 * time.Second)
+		defer deadline.Stop()
+		for playlist.Code == 200 && !strings.Contains(playlist.Body.String(), "#EXTINF") {
+			select {
+			case <-ctx.Done():
+				return "playlist wait canceled"
+			case <-deadline.C:
+				return "unknown-duration playlist did not advance"
+			case <-time.After(100 * time.Millisecond):
+			}
+			playlist = httptest.NewRecorder()
+			s.ServePlaylist(playlist, httptest.NewRequestWithContext(ctx, "GET", "/index.m3u8", nil))
+		}
+	}
 	if playlist.Code != 200 || (sc.Container == "dash" && !strings.Contains(playlist.Body.String(), "<MPD")) || (sc.Container != "dash" && !live && !strings.Contains(playlist.Body.String(), "#EXTINF")) {
 		return fmt.Sprintf("playlist HTTP %d", playlist.Code)
 	}
@@ -268,6 +402,12 @@ func exercise(parent context.Context, ff, fp, root string, good []byte, sc scena
 		}
 	}
 	order := []int{0, 1, 2}
+	if strings.HasPrefix(sc.Name, "corpus-") && info.Duration > 0 {
+		order = nil
+		for n := 0; n < 3 && time.Duration(n)*4*time.Second < info.Duration; n++ {
+			order = append(order, n)
+		}
+	}
 	if sc.Name == "seek" {
 		order = []int{0, 2, 1, 2, 0}
 	}

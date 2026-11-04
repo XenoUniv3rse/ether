@@ -1,39 +1,48 @@
-# Transcode chaos (experimental)
+Transcode chaos (on demand; not part of default CI)
 
-Run on demand, outside CI, with ffmpeg and ffprobe that support libx264,
-AAC, and the desired hardware encoder:
+Run from the repository root with a local Go toolchain and the pinned ffmpeg:
 
-```sh
-go run ./cmd/transcodechaos -ffmpeg /path/to/ffmpeg -ffprobe /path/to/ffprobe -report chaos.json
-```
+  go run ./cmd/transcodechaos -mode short -corpus \
+    -ffmpeg /path/to/ffmpeg -ffprobe /path/to/ffprobe -report chaos.json
 
-The driver generates a 12-second TS clip, uses a loopback-only range source,
-and calls the real transcode manager directly. It probes and decodes each
-fetched segment (fMP4 media with its init), bounds each scenario, prints a
-scoreboard, and writes JSON. A failure exits nonzero. It runs sequentially to
-limit load. No service or real media server is contacted.
+Use -mode full for the larger generated-input, source-fault, lifecycle,
+VideoToolbox, Live TV and public-media matrices. The command prints a
+scenario/path scoreboard and saves JSON. A failing check exits nonzero.
+Set -cache-dir to select a local cache outside the repository; its hard limit
+is 10 GB. The curated public samples are downloaded only when -corpus is set,
+verified against pinned hashes, and remain in the cache. Refer to the upstream
+licence links in corpus.go; no public media is redistributed here. Netflix
+samples are cut to 30 seconds locally. -fixture-dir can preserve generated
+fixtures outside the repository for investigation. Runs are serial to limit
+load on a shared machine.
 
-The saved before/after results are one local run, not a conformance claim.
-The 503 case intentionally keeps the only source down, so a 502 is expected
-but continuity still fails. The truncated case intentionally lies about the
-original duration; after the fix it fails with 502 rather than an empty 200.
-The live case exercises `LiveInput` on the transcode manager with finite input;
-it does not exercise the Live TV relay or verify recovery from an encoder death.
+The local mode exercises the real transcode manager and the existing Plex
+handler fixtures, using loopback-only media sources. It runs ffprobe and
+FFmpeg decode checks and exercises generated damaged inputs, client requests,
+source faults, segmented output, direct-stream remux, download conversion,
+and the live relay. The corpus includes representative Matroska, GStreamer,
+Chromium, Netflix and Apple samples. Apple HLS is replayed via a local
+byte-range playlist, not fetched by the relay from the internet. See the JSON
+for actual cases, skips, and failures; a passing run is not a proof of
+compatibility with every codec or player.
 
-This is a starting harness, not a complete chaos matrix. It does not yet drive
-protocol endpoints, playback source failover, DASH, progressive MKV, downloads,
-concurrent clients, timed sessions, mid-stream hardware failure, stalls,
-short reads, subtitle tracks, timestamp and format changes, resource leak
-checks, timeline monotonicity or A/V drift. VideoToolbox is exercised only for
-healthy encoding. VAAPI and NVENC need suitable hardware. A PASS means only
-that this specific short scenario met the checks described above.
+To exercise a separate Ether lab server, explicitly pass -server-url URL and
+-media-key RATING_KEY and set ETHER_CHAOS_TOKEN in the environment. Stage a
+short test title on that server first. The driver verifies the Ether health
+endpoint, refuses cross-origin media URLs and redirects, and stops the sessions
+it starts. The lab mode currently covers HLS, DASH, and progressive MKV;
+it does not upload corpus files, drive downloads, or run the complete local
+fault and lifecycle matrix against the remote server. Never use a production
+server or a real Plex server as the target.
 
-The Plex endpoint group uses the existing handler fixtures and a real
-transcode manager (the build tag keeps it out of default CI):
+expected-failures.json contains only pinned public inputs confirmed to be
+undecodable by stock FFmpeg, with a reason. An unlisted stock decode failure
+is reported for triage; it is not automatically accepted. The currently
+curated list is empty.
 
-  CHAOS_FFMPEG=/path/to/ffmpeg CHAOS_FFPROBE=/path/to/ffprobe \
-    go test -tags transcodechaos ./internal/plex -run '^TestTranscodeChaosPlex$' -count=1 -v
-
-It exercises one healthy HLS direct-stream, DASH video, start.mkv and download
-conversion, including ffprobe and ffmpeg null-decode of returned media. It does
-not yet apply the adversarial matrix or exercise the real source resolver.
+Known coverage gaps: public HEVC/AVC conformance bitstreams, DASH-IF relay
+vectors, Netflix HDR/Dolby Vision/Atmos cuts, full gst-validate scenarios on
+every file and path, external-server corpus staging, and VAAPI/NVENC hardware
+require further work. PGS and Dolby Vision synthetic fixtures may be skipped
+when unavailable. A failed progressive hardware stream is aborted at a complete cluster and a
+new request uses software; automatic resume by the client is not guaranteed.

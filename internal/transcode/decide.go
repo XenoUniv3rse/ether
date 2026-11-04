@@ -469,15 +469,17 @@ func planAudio(a *core.StreamInfo, caps core.ClientCaps, audioIssues []string, b
 	return audioCopy, audioCodec, audioKbps, audioNote
 }
 
-// pceAudioPlan avoids advertising independently decodable TS segments with
-// AAC that relies on an in-band configuration emitted only at source start.
-func pceAudioPlan(a *core.StreamInfo, caps core.ClientCaps, opts core.DecideOptions, video string, copy bool, codec string, kbps int, note string) (bool, string, int, string) {
-	if a == nil || !a.AACProgramConfig || !copy || caps.Download || opts.Protocol == core.ProtocolDASH || opts.Protocol == core.ProtocolHTTP || outputContainer(caps, opts, video, codec) != ContainerMPEGTS {
+// pceAudioPlan avoids copying AAC that relies on an in-band configuration
+// emitted only at source start into formats which cannot retain that state.
+func pceAudioPlan(a *core.StreamInfo, caps core.ClientCaps, opts core.DecideOptions, sourceContainer, video string, copy bool, codec string, kbps int, note string) (bool, string, int, string) {
+	out := outputContainer(caps, opts, video, codec)
+	needsConversion := out == ContainerMPEGTS || (out == ContainerFMP4 && sourceContainer == "mpegts")
+	if a == nil || !a.AACProgramConfig || !copy || caps.Download || opts.Protocol == core.ProtocolDASH || opts.Protocol == core.ProtocolHTTP || !needsConversion {
 		return copy, codec, kbps, note
 	}
 	codec = audioTarget(caps, a)
 	ch := outputChannels(codec, a)
-	return false, codec, audioBitrateKbps(codec, ch), fmt.Sprintf("audio %s converted to %s %dch for independent TS segments", a.Codec, codec, ch)
+	return false, codec, audioBitrateKbps(codec, ch), fmt.Sprintf("audio %s converted to %s %dch for segmented playback", a.Codec, codec, ch)
 }
 
 func applyAudioLimits(d *core.Decision, a *core.StreamInfo, caps core.ClientCaps, audioCopy bool, audioCodec string) {
@@ -623,7 +625,7 @@ func Decide(info core.MediaInfo, caps core.ClientCaps, opts core.DecideOptions, 
 	if v != nil {
 		copyVideo = v.Codec
 	}
-	remuxCopy, remuxCodec, remuxKbps, remuxNote := pceAudioPlan(a, caps, opts, copyVideo, audioCopy, audioCodec, audioKbps, audioNote)
+	remuxCopy, remuxCodec, remuxKbps, remuxNote := pceAudioPlan(a, caps, opts, info.Container, copyVideo, audioCopy, audioCodec, audioKbps, audioNote)
 	if opts.DirectStream && videoCopyable && !burn && (bitrateCap == 0 || info.BitrateKbps <= bitrateCap ||
 		// only the audio pushes it over: transcoding audio may fix that
 		(!remuxCopy && info.BitrateKbps-copiedAudioKbps(a)+remuxKbps <= bitrateCap)) {
@@ -707,7 +709,7 @@ func Decide(info core.MediaInfo, caps core.ClientCaps, opts core.DecideOptions, 
 		codec = "hevc"
 	}
 
-	audioCopy, audioCodec, audioKbps, audioNote = pceAudioPlan(a, caps, opts, codec, audioCopy, audioCodec, audioKbps, audioNote)
+	audioCopy, audioCodec, audioKbps, audioNote = pceAudioPlan(a, caps, opts, info.Container, codec, audioCopy, audioCodec, audioKbps, audioNote)
 	d.AudioCopy, d.AudioCodec = audioCopy, audioCodec
 	applyAudioLimits(&d, a, caps, audioCopy, audioCodec)
 

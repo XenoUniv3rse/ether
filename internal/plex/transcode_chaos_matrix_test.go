@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -35,7 +36,11 @@ func TestTranscodeChaosMatrix(t *testing.T) {
 	}
 	source := httptest.NewServer(http.FileServer(http.Dir(corpus)))
 	defer source.Close()
-	m, err := transcode.New(config.Transcode{FFmpegPath: ff, FFprobePath: fp, HWAccel: "none", TempDir: filepath.Join(t.TempDir(), "work")}, slog.New(slog.NewTextHandler(io.Discard, nil)), transcode.WithSegmentTimeout(10*time.Second))
+	var logs io.Writer = io.Discard
+	if os.Getenv("CHAOS_DEBUG") != "" {
+		logs = os.Stderr
+	}
+	m, err := transcode.New(config.Transcode{FFmpegPath: ff, FFprobePath: fp, HWAccel: "none", TempDir: filepath.Join(t.TempDir(), "work")}, slog.New(slog.NewTextHandler(logs, nil)), transcode.WithSegmentTimeout(10*time.Second))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -71,7 +76,7 @@ func TestTranscodeChaosMatrix(t *testing.T) {
 					t.Fatal("probe did not identify the AAC program configuration")
 				}
 			}
-			for _, path := range []string{"hls", "dash", "start-mkv", "download"} {
+			for _, path := range []string{"hls", "hls-fmp4", "dash", "start-mkv", "download"} {
 				t.Run(path, func(t *testing.T) {
 					if path == "download" && name == "input-hevc10-hdr" {
 						t.Skip("HDR source is not an eligible copy-only download")
@@ -137,7 +142,11 @@ func TestTranscodeChaosMatrix(t *testing.T) {
 					}
 					get := func(p string) []byte {
 						t.Helper()
-						r := f.get(t, p, "X-Plex-Product", "Plex Web", "X-Plex-Platform", "Chrome")
+						headers := []string{"X-Plex-Product", "Plex Web", "X-Plex-Platform", "Chrome"}
+						if path == "hls-fmp4" {
+							headers = append(headers, "X-Plex-Client-Profile-Extra", "add-transcode-target(type=videoProfile&context=streaming&protocol=hls&container=mp4&videoCodec=h264,hevc&audioCodec=aac)")
+						}
+						r := f.get(t, p, headers...)
 						if r.Code != 200 {
 							t.Fatalf("HTTP %d for %s", r.Code, p)
 						}
@@ -154,6 +163,36 @@ func TestTranscodeChaosMatrix(t *testing.T) {
 						}
 						for n := 0; n < 3 && (info.Duration <= 0 || time.Duration(n)*4*time.Second < info.Duration); n++ {
 							check(t, get(fmt.Sprintf("/video/:/transcode/universal/session/%s/base/%05d.ts", id, n)), "ts", strings.HasPrefix(name, "input-corrupt-"))
+						}
+					case "hls-fmp4":
+						get("/video/:/transcode/universal/start.m3u8?" + query + "&protocol=hls")
+						if len(recorder.requests) == 0 || recorder.requests[len(recorder.requests)-1].Decision.Container != "fmp4" {
+							t.Fatal("client did not negotiate fMP4 HLS")
+						}
+						base := "/video/:/transcode/universal/session/" + id + "/base/"
+						init := get(base + "init.mp4")
+						for n := 0; n < 3 && (info.Duration <= 0 || time.Duration(n)*4*time.Second < info.Duration); n++ {
+							media := get(fmt.Sprintf("%s%05d.m4s", base, n))
+							check(t, append(append([]byte(nil), init...), media...), "mp4", strings.HasPrefix(name, "input-corrupt-"))
+						}
+						if name == "input-multi-audio" {
+							seekID := id + "-seek"
+							seekQuery := strings.Replace(query, "session="+id, "session="+seekID, 1)
+							get("/video/:/transcode/universal/start.m3u8?" + seekQuery + "&protocol=hls&offset=6")
+							seekBase := "/video/:/transcode/universal/session/" + seekID + "/base/"
+							seekInit := get(seekBase + "init.mp4")
+							media := get(seekBase + "00000.m4s")
+							joined := append(seekInit, media...)
+							check(t, joined, "mp4", false)
+							seekFile := filepath.Join(t.TempDir(), "seek.mp4")
+							if err := os.WriteFile(seekFile, joined, 0600); err != nil {
+								t.Fatal(err)
+							}
+							audio, err := exec.Command(fp, "-v", "error", "-select_streams", "a:0", "-show_entries", "packet=pts_time", "-of", "csv=p=0", seekFile).Output()
+							if err != nil || len(strings.TrimSpace(string(audio))) == 0 {
+								t.Fatal("seeked fMP4 has no audio packets")
+							}
+							get("/video/:/transcode/universal/stop?session=" + seekID)
 						}
 					case "dash":
 						get("/video/:/transcode/universal/start.mpd?" + query + "&protocol=dash")

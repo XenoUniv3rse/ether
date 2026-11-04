@@ -216,6 +216,11 @@ func buildCodecArgs(s runSpec) []string {
 	d := s.Decision
 	v := s.Info.Video()
 	a := findStream(s.Info, d.AudioStream, "audio")
+	// An ADTS PCE may appear only in the source's first audio packet. Seeking
+	// the input past it leaves the AAC decoder without its channel layout.
+	// Decode from the beginning and discard to the requested output position
+	// for this precise source class; ordinary sources retain fast input seeks.
+	pceOutputSeek := s.Start > 0 && s.Info.Container == "mpegts" && a != nil && a.AACProgramConfig && !d.AudioCopy
 	segDur := s.SegDur
 	if segDur <= 0 {
 		segDur = DefaultSegmentDuration
@@ -263,7 +268,7 @@ func buildCodecArgs(s runSpec) []string {
 	vp := planVideo(s, v)
 	args = append(args, vp.inputArgs...)
 	args = append(args, inputTimestampArgs(s)...)
-	if s.Start > 0 {
+	if s.Start > 0 && !pceOutputSeek {
 		args = append(args, "-ss", secs(s.Start))
 	}
 	if s.httpCopyTimestamps() {
@@ -280,6 +285,9 @@ func buildCodecArgs(s runSpec) []string {
 			args = append(args, "-ss", secs(s.Start))
 		}
 		args = append(args, "-i", textSub.ExternalURL)
+	}
+	if pceOutputSeek {
+		args = append(args, "-ss", secs(s.Start))
 	}
 
 	// ---- mapping
@@ -760,7 +768,13 @@ func planFilterChain(s runSpec, v *core.StreamInfo, pic picturePlan, accel strin
 	// tone-mapped contract. Tone mappers produce limited-range BT.709.
 	p010CUDA := accel == AccelNVENC && s.Features.cudaP010ToneMap && !pictureOf(v).full && (s.Target == nil || (s.Target.pic.prim == "bt709" && s.Target.pic.matrix == "bt709" && !s.Target.pic.full))
 	gpuOff := s.PictureCrop != nil || pic.pad || pic.convert != "" || (pic.tonemap && pic.tenBit && !p010CUDA)
+	dv5 := pic.tonemap && v.DolbyVision && v.DolbyVisionProfile == 5
 	gpuInput, gpuFilters, gpuOK := gpuPipeline(s, accel, pic.w, pic.h, pic.tonemap, pic.tenBit, burn)
+	if dv5 && accel != AccelVideoToolbox {
+		// Other accelerators' tone mappers have not been validated for the
+		// profile-5 Dolby Vision reshape; use the DV-aware CPU path.
+		gpuOK = false
+	}
 	switch {
 	case gpuOK && !gpuOff:
 		inputArgs = append(inputArgs, gpuInput...)
@@ -769,7 +783,7 @@ func planFilterChain(s runSpec, v *core.StreamInfo, pic picturePlan, accel strin
 			chain = append(chain, pic.setSAR)
 		}
 		hwFrames = true
-	case accel == AccelVideoToolbox && pic.tonemap && !gpuOff && !burn && s.Features.hasFilter("scale_vt"):
+	case accel == AccelVideoToolbox && pic.tonemap && !dv5 && !gpuOff && !burn && s.Features.hasFilter("scale_vt"):
 		// Decode, tone-map and scale on the GPU.
 		inputArgs = append(inputArgs, "-hwaccel", "videotoolbox", "-hwaccel_output_format", "videotoolbox_vld")
 		chain = append(chain, fmt.Sprintf("scale_vt=w=%d:h=%d:color_matrix=bt709:color_primaries=bt709:color_transfer=bt709", pic.w, pic.h))
@@ -819,8 +833,14 @@ func planFilterChain(s runSpec, v *core.StreamInfo, pic picturePlan, accel strin
 		case pic.convert != "":
 			chain = append(chain, pic.convert)
 		case pic.tonemap:
-			if filt, ok := cpuToneMap(s.Features); ok {
-				chain = append(chain, filt)
+			if dv5 && s.Features.hasFilter("tonemapx") {
+				// Jellyfin's DV-aware mapper consumes 10-bit 4:2:0 and uses
+				// the decoder's RPU side data for IPT reshaping.
+				chain = append(chain, "format=yuv420p10le", "tonemapx=tonemap=hable:desat=0:t=bt709:m=bt709:p=bt709:format=yuv420p:apply_dovi=1")
+			} else if !dv5 {
+				if filt, ok := cpuToneMap(s.Features); ok {
+					chain = append(chain, filt)
+				}
 			}
 		}
 		if !burn {

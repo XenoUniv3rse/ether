@@ -462,7 +462,7 @@ func (m *Manager) limitation() string {
 }
 
 func featureLine(f features) string {
-	names := []string{"zscale", "colorspace", "scale", "libplacebo", "tonemap", "tonemap_opencl", "tonemap_vaapi", "tonemap_videotoolbox", "scale_vt", "tonemap_cuda"}
+	names := []string{"zscale", "colorspace", "scale", "libplacebo", "tonemap", "tonemapx", "tonemap_opencl", "tonemap_vaapi", "tonemap_videotoolbox", "scale_vt", "tonemap_cuda"}
 	parts := make([]string, len(names))
 	for i, name := range names {
 		bit := "0"

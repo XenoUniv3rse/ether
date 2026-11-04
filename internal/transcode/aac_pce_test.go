@@ -34,28 +34,29 @@ func TestAACProgramConfigParsing(t *testing.T) {
 	}
 }
 
-// The configuration fact must only change segmented TS: all other transport
-// contracts and ordinary AAC keep their existing copy decision.
+// The configuration fact changes TS segments and fMP4 from TS sources;
+// other transport contracts and ordinary AAC keep their copy decision.
 func TestAACProgramConfigTransportBoundary(t *testing.T) {
 	a := core.StreamInfo{Type: "audio", Codec: "aac", Channels: 6, AACProgramConfig: true}
 	caps := core.ClientCaps{}
 	for _, tc := range []struct {
-		name, video, protocol      string
-		download, marked, wantCopy bool
+		name, source, video, protocol string
+		download, marked, wantCopy    bool
 	}{
-		{"ts", "h264", core.ProtocolHLS, false, true, false},
-		{"ordinary", "h264", core.ProtocolHLS, false, false, true},
-		{"dash", "h264", core.ProtocolDASH, false, true, true},
-		{"http", "h264", core.ProtocolHTTP, false, true, true},
-		{"fmp4", "hevc", core.ProtocolHLS, false, true, true},
-		{"download", "h264", core.ProtocolHLS, true, true, true},
+		{"ts", "mpegts", "h264", core.ProtocolHLS, false, true, false},
+		{"ordinary", "mpegts", "h264", core.ProtocolHLS, false, false, true},
+		{"dash", "mpegts", "h264", core.ProtocolDASH, false, true, true},
+		{"http", "mpegts", "h264", core.ProtocolHTTP, false, true, true},
+		{"fmp4-from-ts", "mpegts", "hevc", core.ProtocolHLS, false, true, false},
+		{"fmp4-from-mp4", "mp4", "hevc", core.ProtocolHLS, false, true, true},
+		{"download", "mpegts", "h264", core.ProtocolHLS, true, true, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s := a
 			s.AACProgramConfig = tc.marked
 			c := caps
 			c.Download = tc.download
-			copy, _, _, _ := pceAudioPlan(&s, c, core.DecideOptions{Protocol: tc.protocol}, tc.video, true, "aac", 384, "")
+			copy, _, _, _ := pceAudioPlan(&s, c, core.DecideOptions{Protocol: tc.protocol}, tc.source, tc.video, true, "aac", 384, "")
 			if copy != tc.wantCopy {
 				t.Fatalf("copy=%v want %v", copy, tc.wantCopy)
 			}
