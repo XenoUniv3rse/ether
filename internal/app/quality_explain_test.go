@@ -93,6 +93,25 @@ func TestQualityExplainHandler(t *testing.T) {
 	if code != 200 || got.MaxHeight != 1080 {
 		t.Fatalf("%d %+v", code, got)
 	}
+	if err := a.cfg.Update(func(c *config.Config) error {
+		c.Clients.Overrides = append(c.Clients.Overrides, core.ClientCapabilityOverride{Product: "Plex for Android (Mobile)", MaxHeight: 2160})
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	code, got = postQualityExplain(t, a, `{"userId":`+strconv.FormatInt(viewer, 10)+`,"clientId":"plex-android"}`)
+	if code != 200 || got.MaxHeight != 2160 {
+		t.Fatalf("phone: %d %+v", code, got)
+	}
+	code, got = postQualityExplain(t, a, `{"userId":`+strconv.FormatInt(viewer, 10)+`,"clientId":"plex-android-tv"}`)
+	if code != 200 || got.MaxHeight != 2160 {
+		t.Fatalf("tv: %d %+v", code, got)
+	}
+	for _, l := range got.Layers {
+		if l.Kind == resolver.LayerDevice && l.Edited {
+			t.Fatalf("TV inherited phone edit: %+v", l)
+		}
+	}
 
 	for _, bad := range []string{`{"userId":` + strconv.FormatInt(viewer, 10) + `}`, `{"userId":` + strconv.FormatInt(viewer, 10) + `,"clientId":"nope"}`, `nope`} {
 		if code, _ := postQualityExplain(t, a, bad); code != 400 {

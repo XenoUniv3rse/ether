@@ -2845,6 +2845,28 @@ export function createFakeServer(opts: FakeOptions = {}) {
           apps: [
             {
               protocol: "plex",
+              name: "Plex for Android phones",
+              product: "Plex for Android (Mobile)",
+              devices: ["Android"],
+              videoCodecs: [],
+              subtitles: [],
+              directPlay: "reported",
+              note: "",
+              certification: "builtin",
+            },
+            {
+              protocol: "plex",
+              name: "Plex for Android TV",
+              product: "Plex for Android (TV)",
+              devices: ["Android TV"],
+              videoCodecs: [],
+              subtitles: [],
+              directPlay: "reported",
+              note: "",
+              certification: "builtin",
+            },
+            {
+              protocol: "plex",
               name: "Plex Web",
               devices: ["Browser"],
               videoCodecs: [],

@@ -349,9 +349,17 @@ func OverrideApplies(o core.ClientCapabilityOverride, recordIDs []string, id Ide
 	if o.ID == "" && o.Product == "" && o.Platform == "" && o.Device == "" && o.Version == "" {
 		return false
 	}
-	if o.Product != "" && !strings.Contains(strings.ToLower(id.Product), strings.ToLower(o.Product)) {
-		return false
+	if o.Product != "" {
+		if o.ID == "" && o.Device == "" && o.Platform == "" {
+			if !strings.EqualFold(strings.TrimSpace(id.Product), strings.TrimSpace(o.Product)) {
+				return false
+			}
+		} else if !strings.Contains(strings.ToLower(id.Product), strings.ToLower(o.Product)) {
+			return false
+		}
 	}
+	// Device and platform selectors intentionally support partial names: the
+	// device editor accepts model fragments and an optional app-name filter.
 	if o.Platform != "" && !strings.Contains(strings.ToLower(id.Platform), strings.ToLower(o.Platform)) {
 		return false
 	}

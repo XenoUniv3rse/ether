@@ -107,6 +107,20 @@ describe("Sources", () => {
 });
 
 describe("Playback devices", () => {
+  it("saves the exact product of the edited app", async () => {
+    const { fake } = renderApp("/playback/devices");
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Edit Plex for Android phones" }, WAIT),
+    );
+    const drawer = await screen.findByRole("dialog", { name: "Edit Plex for Android phones" });
+    fireEvent.click(within(drawer).getByRole("button", { name: "Highest resolution it can show" }));
+    fireEvent.click(await screen.findByRole("option", { name: "4K" }));
+    fireEvent.click(within(drawer).getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(calls(fake, "PUT", "/config/clients")).toHaveLength(1));
+    expect(calls(fake, "PUT", "/config/clients")[0]!.body).toEqual({
+      overrides: [{ product: "Plex for Android (Mobile)", productExact: true, maxHeight: 2160 }],
+    });
+  });
   it("filters app compatibility by protocol and device", async () => {
     renderApp("/playback/devices");
     expect(await screen.findByText("Plex Web", {}, WAIT)).toBeInTheDocument();
@@ -159,7 +173,7 @@ describe("Playback devices", () => {
     fireEvent.click(within(drawer).getByRole("button", { name: "Save" }));
     await waitFor(() => expect(calls(fake, "PUT", "/config/clients")).toHaveLength(1));
     expect(calls(fake, "PUT", "/config/clients")[0]!.body).toMatchObject({
-      overrides: [{ product: "Infuse", videoCodecs: ["hevc"] }],
+      overrides: [{ product: "Infuse", productExact: true, videoCodecs: ["hevc"] }],
     });
   });
 });

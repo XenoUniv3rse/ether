@@ -4,10 +4,13 @@ package core
 // Nil slices and zero numbers leave the registry value in place.
 // A client that declares the same fact at runtime still wins.
 type ClientCapabilityOverride struct {
-	ID       string `json:"id,omitempty"`
-	Product  string `json:"product,omitempty"`
-	Platform string `json:"platform,omitempty"`
-	Device   string `json:"device,omitempty"`
+	ID      string `json:"id,omitempty"`
+	Product string `json:"product,omitempty"`
+	// ProductExact marks a product-only override already scoped by the app editor
+	// or migrated from the old substring matcher.
+	ProductExact bool   `json:"productExact,omitempty"`
+	Platform     string `json:"platform,omitempty"`
+	Device       string `json:"device,omitempty"`
 	// Version is the minimum client version (dotted numbers) this override requires.
 	Version             string   `json:"version,omitempty"`
 	VideoCodecs         []string `json:"videoCodecs,omitempty"`
