@@ -182,9 +182,33 @@ func (c *Catalog) searchTitles(ctx context.Context, query string, types []core.M
 }
 
 func (c *Catalog) searchTitlesOpts(ctx context.Context, query string, types []core.MediaType, limit, year int, unfiltered bool) ([]core.Title, error) {
+	// Local candidates already carry the facets loaded by queryTitles. Only
+	// remote summaries need FilterVisibility's database enrichment pass.
+	localKeys := make(map[core.RatingKey]bool)
 	finish := func(items []core.Title) []core.Title {
 		if !unfiltered {
-			items = c.FilterVisibility(ctx, items)
+			var remote []core.Title
+			for _, item := range items {
+				if !localKeys[item.Key] {
+					remote = append(remote, item)
+				}
+			}
+			remoteVisible := make(map[core.RatingKey]core.Title)
+			for _, item := range c.FilterVisibility(ctx, remote) {
+				remoteVisible[item.Key] = item
+			}
+			filtered := items[:0]
+			f := c.visibilityFor(ctx)
+			for _, item := range items {
+				if localKeys[item.Key] {
+					if c.visibleWith(f, &item) {
+						filtered = append(filtered, item)
+					}
+				} else if visible, ok := remoteVisible[item.Key]; ok {
+					filtered = append(filtered, visible)
+				}
+			}
+			items = filtered
 		}
 		if year != 0 {
 			var matching []core.Title
@@ -256,6 +280,11 @@ func (c *Catalog) searchTitlesOpts(ctx context.Context, query string, types []co
 			local[i].SearchScore = scores[local[i].Key]
 		}
 		add(wanted(local))
+		for _, item := range local {
+			if seen[item.Key] {
+				localKeys[item.Key] = true
+			}
+		}
 	}
 	if ix == nil || wantSeason || wantEpisode {
 		types := []string{}
@@ -274,6 +303,11 @@ func (c *Catalog) searchTitlesOpts(ctx context.Context, query string, types []co
 				localErr = err
 			}
 			add(wanted(local))
+			for _, item := range local {
+				if seen[item.Key] {
+					localKeys[item.Key] = true
+				}
+			}
 		}
 	}
 	// A missing or failing metadata service must not fail the request.
