@@ -131,7 +131,9 @@ func (s *Session) serveSegment(w http.ResponseWriter, r *http.Request, t, n int)
 			return
 		}
 		if !waitTail && s.mayMoveEncoderLocked(t, n, tracked) && s.needsRestartLocked(n) {
-			if s.emptyRuns >= emptyRestartCap && (s.lastReal < 0 || n > s.lastReal) && !s.segmentPublishedLocked(t, n) {
+			// The cap covers the empty position and what follows it, never
+			// a segment before it: a seek back there still has media.
+			if s.emptyRuns >= emptyRestartCap && n >= s.emptyAt && (s.lastReal < 0 || n > s.lastReal) && !s.segmentPublishedLocked(t, n) {
 				s.mu.Unlock()
 				s.log.Warn("segment unavailable after empty restarts", "segment", n, "lastReal", s.lastReal, "emptyAt", s.emptyAt)
 				http.Error(w, "segment unavailable", http.StatusBadGateway)

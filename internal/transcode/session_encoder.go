@@ -201,7 +201,11 @@ func (s *Session) startRunLocked(seg int, bigProbe bool) error {
 			s.starting = nil
 		}
 	}
-	if s.emptyRuns > 0 && s.emptyAt >= 0 && seg <= s.emptyAt {
+	// Only a restart at the very start that just published nothing is
+	// moved past it. An earlier start (a seek back, another rung) has
+	// media ahead of it; moving it to the hole would replay the empty
+	// run and trip the cap for a segment that exists.
+	if s.emptyRuns > 0 && s.emptyAt >= 0 && seg == s.emptyAt {
 		s.log.Info("skipping restart at empty segment", "segment", seg, "advance", s.emptyAt+1, "emptyRestarts", s.emptyRuns)
 		seg = s.emptyAt + 1
 	}
