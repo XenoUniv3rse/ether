@@ -60,15 +60,13 @@ func hashKey(parts ...string) string {
 	return hex.EncodeToString(h.Sum(nil)[:16])
 }
 
-// warmHot builds one hot instance at load so the first batch does not
-// spend its 50ms budget on instance creation.
+// warmHot fills the hot pool at load: no hot-path call ever spends its
+// budget building an instance (see pool).
 func (p *Plugin) warmHot() {
 	if !p.caps.RankKey && !p.caps.CondMatch {
 		return
 	}
-	if in, err := p.hot.get(context.Background()); err == nil {
-		p.hot.put(in, true)
-	}
+	p.hot.fill()
 }
 
 func (p *Plugin) hotCallState(ctx context.Context, start time.Time) *callState {

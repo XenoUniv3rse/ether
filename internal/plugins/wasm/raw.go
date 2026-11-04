@@ -166,7 +166,7 @@ func (e *Engine) LoadWASM(id, version string, module []byte, host Host, lim Limi
 	makeSvc := func(ctx context.Context) (instance, error) { return newRawInstance(ctx, rr, cm, false, lim.Deadline) }
 	makeHot := func(ctx context.Context) (instance, error) { return newRawInstance(ctx, rr, cm, true, lim.Deadline) }
 	p.svc = newPool(lim.PoolSize, makeSvc)
-	p.hot = newPool(lim.PoolSize, makeHot)
+	p.hot = newWarmPool(lim.PoolSize, makeHot)
 	probe, err := p.svc.get(context.Background())
 	if err != nil {
 		p.Close()
