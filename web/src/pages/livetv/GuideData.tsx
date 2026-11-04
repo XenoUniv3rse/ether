@@ -21,6 +21,7 @@ import {
   clock,
   dayClock,
   progress,
+  plexLineupName,
   tv,
   type Channel,
   type Coverage,
@@ -97,7 +98,9 @@ export function GuideChannelSearch({
               <span className="shrink-0 text-right text-[11px] text-fg-subtle">
                 {g.programmes
                   ? tn(g.programmes, "{count} listing", "{count} listings")
-                  : t("No listings")}
+                  : g.sourceKind === "plex"
+                    ? t("Plex guide · listings load when used")
+                    : t("No listings")}
                 {g.until ? (
                   <span className="block">{t("to {time}", { time: dayClock(g.until) })}</span>
                 ) : null}
@@ -336,7 +339,14 @@ export function GuideList({
 
   const iptv = channels.filter((c) => c.kind === "iptv");
   const needs = iptv.filter((c) => !has(c));
-  const sourceName = (id?: string) => sources.find((s) => s.id === id)?.name ?? t("Unknown source");
+  const sourceName = (id?: string) => {
+    const source = sources.find((s) => s.id === id);
+    return source
+      ? source.kind === "plex"
+        ? plexLineupName(source.name)
+        : source.name
+      : t("Unknown source");
+  };
   const matched = new Map<string, Channel[]>();
   for (const c of iptv) {
     if (!has(c)) continue;
@@ -451,8 +461,30 @@ export function GuideList({
           <ul className="px-2 py-1">
             {guideSources.map((s) => {
               const until = s.guideUntil ? Date.parse(s.guideUntil) : 0;
-              const used = lineup.filter((c) => c.kind === "iptv" && c.guideId && (c.guideSourceId || c.sourceId) === s.id).length;
+              const used = lineup.filter(
+                (c) => c.kind === "iptv" && c.guideId && (c.guideSourceId || c.sourceId) === s.id,
+              ).length;
               const stale = Boolean(s.lastError) || (until > 0 && until - now < STALE_MS);
+              const total = s.guideChannelCount ?? 0;
+              const plexStatus = !used
+                ? tn(
+                    total,
+                    "{count} channel · none in use yet",
+                    "{count} channels · none in use yet",
+                  )
+                : until > now
+                  ? tn(
+                      total,
+                      "{count} channel · {used} in use · to {time}",
+                      "{count} channels · {used} in use · to {time}",
+                      { used: formatNumber(used), time: dayClock(new Date(until)) },
+                    )
+                  : tn(
+                      total,
+                      "{count} channel · {used} in use",
+                      "{count} channels · {used} in use",
+                      { used: formatNumber(used) },
+                    );
               return (
                 <li key={s.id}>
                   <button
@@ -464,7 +496,9 @@ export function GuideList({
                       <CalendarRange size={15} />
                     </span>
                     <span className="min-w-0 flex-1">
-                      <span className="block truncate text-sm font-medium text-fg">{s.name}</span>
+                      <span className="block truncate text-sm font-medium text-fg">
+                        {s.kind === "plex" ? plexLineupName(s.name) : s.name}
+                      </span>
                       <span
                         className={cn(
                           "block truncate text-xs",
@@ -473,14 +507,18 @@ export function GuideList({
                       >
                         {s.lastError
                           ? s.lastError
-                          : until
-                            ? until <= now
-                              ? t("Listings have run out")
-                              : t("{count} channels · to {time}", {
-                                  count: formatNumber(s.kind === "plex" ? used : (s.guideChannelCount ?? 0)),
-                                  time: dayClock(new Date(until)),
-                                })
-                            : s.kind === "plex" ? tn(used, "{count} channel in use", "{count} channels in use") : tn(s.guideChannelCount ?? 0, "{count} channel", "{count} channels")}
+                          : s.kind === "plex"
+                            ? plexStatus
+                            : until
+                              ? until <= now
+                                ? t("Listings have run out")
+                                : t("{count} channels · to {time}", {
+                                    count: formatNumber(
+                                      s.kind === "plex" ? used : (s.guideChannelCount ?? 0),
+                                    ),
+                                    time: dayClock(new Date(until)),
+                                  })
+                              : tn(s.guideChannelCount ?? 0, "{count} channel", "{count} channels")}
                       </span>
                     </span>
                     {stale ? (
@@ -744,14 +782,16 @@ export function GuideMatchPanel({
                     <span
                       className={cn(
                         "shrink-0 text-right text-[11px]",
-                        g.programmes ? "text-fg-muted" : "text-warning",
+                        g.programmes || g.sourceKind === "plex" ? "text-fg-muted" : "text-warning",
                       )}
                     >
                       {g.programmes
                         ? g.until
                           ? t("to {time}", { time: dayClock(g.until) })
                           : tn(g.programmes, "{count} listing", "{count} listings")
-                        : t("No listings")}
+                        : g.sourceKind === "plex"
+                          ? t("Plex guide · listings load when used")
+                          : t("No listings")}
                     </span>
                   </button>
                 </li>
@@ -880,7 +920,11 @@ export function AutoMatchPanel({
                   </span>
                 </span>
               </span>
-              {p.method === "name" ? <Badge variant="secondary">{t("by name")}</Badge> : p.method === "alias" ? <Badge variant="secondary">{t("Review call sign")}</Badge> : null}
+              {p.method === "name" ? (
+                <Badge variant="secondary">{t("by name")}</Badge>
+              ) : p.method === "alias" ? (
+                <Badge variant="secondary">{t("Review call sign")}</Badge>
+              ) : null}
             </label>
           </li>
         );

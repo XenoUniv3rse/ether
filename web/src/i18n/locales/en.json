@@ -1116,6 +1116,7 @@
   "m_04f1eb5382d540": "Warm up new arrivals",
   "m_04f2aea17a57fb": "Turn off {title}",
   "m_04f32ff6a95d63": "Sign in to finish connecting",
+  "m_04f35f7b5a0760": "Plex guide · listings load when used",
   "m_04f36b838e60ce": "Hide automatic franchise collections",
   "m_04f58301eef4cf": "Plugins on",
   "m_04f617d5eb1d49": "No catalogue artwork yet",
@@ -1542,6 +1543,10 @@
   "m_06df187c7ca965": {
     "one": "{count} day a week",
     "other": "{count} days a week"
+  },
+  "m_06df4abeb859c2": {
+    "one": "{count} channel · none in use yet",
+    "other": "{count} channels · none in use yet"
   },
   "m_06e1df016b6fba": "No indexers enabled",
   "m_06e1f27362a9e8": "Tuning {channel}…",
@@ -2091,6 +2096,10 @@
   "m_097c8b0cdd616d": "Because you watched",
   "m_097dbfe9bfcf91": "Showing {from}–{to} of {total}",
   "m_097f91cbba640b": "Resize tools",
+  "m_098066a6376293": {
+    "one": "{type} · {count} channel",
+    "other": "{type} · {count} channels"
+  },
   "m_098102a5f1b917": "What drives plays",
   "m_098133784b4ead": "Generated on first run; never changes.",
   "m_098274f982fb0c": "Now playing",
@@ -3073,7 +3082,6 @@
   "m_0dd63f1065a6ff": "web",
   "m_0dd72fc99d2ec6": "Search failed",
   "m_0dd823f235ffc3": "{field} in the last {value}",
-  "m_0ddafab4eba7e6": "Country code",
   "m_0ddbd68d097288": "Choose another status or search to see more people.",
   "m_0dddc51acef3ff": "Fills in details for titles its catalogues add that Ether doesn't know yet.",
   "m_0dddca6ce666f0": "The viewer saw it too recently.",
@@ -3589,6 +3597,7 @@
     "one": "{count} API hit today · no daily limit set",
     "other": "{count} API hits today · no daily limit set"
   },
+  "m_10358e0e10f695": "Plex's TV listings for your provider, by postal code.",
   "m_10373aedb87b63": "No guide channels match. Add an XMLTV guide source to bring in more listings.",
   "m_1038027565d391": "Not in Live TV yet",
   "m_103869618d5b61": "missing HDR or Dolby Vision support",
@@ -3923,6 +3932,7 @@
   "m_118b2480a44736": "Find a template…",
   "m_118b99ff9bda87": "Share with their Plex account",
   "m_118c30212e40bb": "Movie and TV catalogue",
+  "m_118ef55b43c4df": "Cable",
   "m_119071f17f2bd2": "Rebuilt overnight",
   "m_1190caa483362d": "Choose a backup downloaded from Ether (an .etherbackup file). Older unencrypted bundles can only be restored from the running console.",
   "m_1191529f3122f5": "Open explorer",
@@ -5200,6 +5210,10 @@
   },
   "m_1758ced2d6cd4b": "{genres} episodes",
   "m_1759a72d011ede": "Favorites",
+  "m_1759edb28bb975": {
+    "one": "{count} channel · {used} in use · to {time}",
+    "other": "{count} channels · {used} in use · to {time}"
+  },
   "m_175a707795b382": "Plex {section} as",
   "m_175c0a3a005ab3": "Zoom",
   "m_17634e3822f1f8": "Send an invite link",
@@ -5418,10 +5432,6 @@
   "m_185b38fa1c08ff": "Browser codec declarations govern playback; text subtitles remain sidecars.",
   "m_185bd5fe2e302d": "Speech-to-text endpoint",
   "m_185c2724bd9975": "finds releases; needs debrid to play",
-  "m_185d4019b1f1cc": {
-    "one": "{count} channel in use",
-    "other": "{count} channels in use"
-  },
   "m_185fa8c2375b54": "Exact addresses allowed to frame the owner page. Empty means nowhere.",
   "m_18605dbe098b3f": "Busiest day",
   "m_186091336ae522": "Titles shown",
@@ -5770,6 +5780,10 @@
   "m_19cbbebbbd651f": "The cluster's data was imported.",
   "m_19cbf2460ca87e": "Preload allocation (GiB)",
   "m_19cc5a86b1e1e1": "These choices replace the defaults for this viewer.",
+  "m_19cd2917b70be6": {
+    "one": "{count} channel · {used} in use",
+    "other": "{count} channels · {used} in use"
+  },
   "m_19cd47447f65cd": "Start the top release before its health check completes",
   "m_19cd640e1b87b7": "Language codes in preference order, e.g. en, ja.",
   "m_19cdd503ae7161": "Browsing only",
@@ -6031,6 +6045,7 @@
   "m_1affd778df5984": "Server event",
   "m_1b0035163b0836": "{min} to {max}, highest first",
   "m_1b0073432893f9": "Hide",
+  "m_1b0451f2606997": "Antenna (over the air)",
   "m_1b0534cd307607": "See what plays",
   "m_1b0595d5e7ddc0": "Your plugin will appear here",
   "m_1b05bf9d93f94d": "Posters and artwork stay in the configuration folder. Using your /cache folder.",
@@ -7036,6 +7051,7 @@
   "m_1fab2e6e9c7dbb": "Ether hasn't come back yet. If it runs without a service manager or container restart policy, start it again yourself; this page picks it up as soon as it answers.",
   "m_1faba88e7fc859": "Open {name} preview",
   "m_1fabe56d8a2476": "Choose crash alert destinations",
+  "m_1faeb11ebc91a6": "Satellite",
   "m_1fb01ec8cfe42d": "Channel deleted",
   "m_1fb0202809c713": "Definition file",
   "m_1fb1cc813c7d57": "Ready to look at",

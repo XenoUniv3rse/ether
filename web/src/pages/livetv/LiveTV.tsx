@@ -93,11 +93,14 @@ export default function LiveTV() {
   const [params, setParams] = useSearchParams();
   const selection = selectionFrom(params);
   const [leftTab, setLeftTab] = useState(
-    tab === "guide-data" ? "guide" : tab === "sources" ? "sources" : "channels",
+    tab === "guide-data"
+      ? "guide"
+      : tab === "sources" || selection.kind === "source"
+        ? "sources"
+        : "channels",
   );
 
   useEffect(() => {
-    if (selection.kind === "source") setLeftTab("sources");
     if (selection.kind === "map") setLeftTab("guide");
   }, [selection.kind]);
 
@@ -118,6 +121,9 @@ export default function LiveTV() {
   const [baseline, setBaseline] = useState("");
   const [saving, setSaving] = useState(false);
   const [newKind, setNewKind] = useState<SourceKind>("playlist");
+  const [editorKind, setEditorKind] = useState<SourceKind>("playlist");
+  const [guideOnlyFlow, setGuideOnlyFlow] = useState(false);
+  const [guideMode, setGuideMode] = useState<"xmltv" | "plex">("xmltv");
   const [addingAddon, setAddingAddon] = useState(false);
   const [autoMatching, setAutoMatching] = useState(false);
   const [guideFooter, setGuideFooter] = useState<React.ReactNode>(null);
@@ -434,6 +440,9 @@ export default function LiveTV() {
       onChannel={() => void go({ kind: "new" })}
       onSource={(k) => {
         setNewKind(k);
+        setEditorKind(k);
+        setGuideOnlyFlow(false);
+        setGuideMode("xmltv");
         setLeftTab("sources");
         void go({ kind: "source", id: "new" });
       }}
@@ -550,6 +559,9 @@ export default function LiveTV() {
           onAutoMatch={() => setAutoMatching(true)}
           onAddGuideSource={() => {
             setNewKind("guide");
+            setEditorKind("guide");
+            setGuideOnlyFlow(true);
+            setGuideMode("xmltv");
             void go({ kind: "source", id: "new" });
           }}
           now={now}
@@ -608,7 +620,8 @@ export default function LiveTV() {
         ? t("Edit channel")
         : t("Virtual channel");
   const sourceTitle =
-    newKind === "guide" || (sourceRecord && sourceRecord.hasPlaylist === false)
+    (!sourceRecord && editorKind === "guide") ||
+    (sourceRecord && sourceRecord.hasPlaylist === false)
       ? sourceRecord
         ? t("Edit guide source")
         : t("Guide source")
@@ -787,9 +800,12 @@ export default function LiveTV() {
         description={
           sourceRecord?.kind?.startsWith("plugin:")
             ? undefined
-            : newKind === "guide"
-              ? t("XMLTV listings for any channel.")
-              : t("An M3U playlist, optionally with a guide.")
+            : sourceRecord?.kind === "plex" ||
+                (!sourceRecord && editorKind === "guide" && guideMode === "plex")
+              ? t("Plex's TV listings for your provider, by postal code.")
+              : (!sourceRecord && editorKind === "guide") || sourceRecord?.hasPlaylist === false
+                ? t("XMLTV listings for any channel.")
+                : t("An M3U playlist, optionally with a guide.")
         }
         size="lg"
       >
@@ -799,6 +815,9 @@ export default function LiveTV() {
           <SourceEditor
             source={selection.kind === "source" && selection.id !== "new" ? sourceRecord : null}
             kind={newKind}
+            guideOnly={guideOnlyFlow}
+            onGuideKindChange={setGuideMode}
+            onKindChange={setEditorKind}
             onSaved={async (s) => {
               await reloadAll();
               if (selection.kind === "source" && selection.id === "new" && s?.id)

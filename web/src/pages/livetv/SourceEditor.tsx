@@ -1,4 +1,11 @@
-import { Badge, Button, Input, confirmDialog, toast } from "@braedonsaunders/appkit-ui";
+import {
+  Badge,
+  Button,
+  Input,
+  SearchSelect,
+  confirmDialog,
+  toast,
+} from "@braedonsaunders/appkit-ui";
 import {
   AlertTriangle,
   CalendarRange,
@@ -11,10 +18,14 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { Field, SecretInput, Segmented } from "../../components/fields";
-import { localized, t } from "../../i18n";
+import { localized, t, tn } from "../../i18n";
+import { useLocale } from "../../i18n/react";
+import { searchSelectLabels } from "../../i18n/appkit-labels";
+import { REGION_CODES } from "../catalog/CatalogPickers";
+import { browserLanguageList, regionFromLocales, regionFromTimeZone } from "../setup/language";
 import { api, errorMessage } from "../../lib/api";
 import { isPluginDescriptor, textOf, useRegistry, type Descriptor } from "../../lib/extend";
 import type { ParamField } from "../../lib/rules";
@@ -23,6 +34,8 @@ import {
   dayClock,
   duration,
   emptySource,
+  plexLineupCount,
+  plexLineupName,
   tv,
   type AuthType,
   type Source,
@@ -71,11 +84,17 @@ function uploadError(file: File, key: "playlist" | "guide"): string {
 export function SourceEditor({
   source,
   kind: initialKind,
+  guideOnly = false,
+  onGuideKindChange,
+  onKindChange,
   onSaved,
   onDeleted,
 }: {
   source: Source | null;
   kind: SourceKind;
+  guideOnly?: boolean;
+  onGuideKindChange?: (kind: "xmltv" | "plex") => void;
+  onKindChange?: (kind: SourceKind) => void;
   onSaved: (s: Source) => Promise<void> | void;
   onDeleted: () => Promise<void> | void;
 }) {
@@ -86,8 +105,33 @@ export function SourceEditor({
   const [guideKind, setGuideKind] = useState<"xmltv" | "plex">("xmltv");
   const [lineups, setLineups] = useState<PlexLineup[] | null>(null);
   const [looking, setLooking] = useState(false);
-  const [region, setRegion] = useState("");
-  useEffect(() => { void api.getConfig().then((cfg) => setRegion(cfg.catalog.region?.toUpperCase() ?? "")).catch(() => {}); }, []);
+  const { locale } = useLocale();
+  const browserRegion = useMemo(() => {
+    const languageRegion = regionFromLocales(browserLanguageList(), "");
+    const zoneRegion = regionFromTimeZone(Intl.DateTimeFormat().resolvedOptions().timeZone);
+    return languageRegion && languageRegion !== "US"
+      ? languageRegion
+      : zoneRegion || languageRegion;
+  }, []);
+  const [serverRegion, setServerRegion] = useState("");
+  // The catalogue's US/en-US defaults do not establish the server's country.
+  useEffect(() => {
+    void api
+      .getConfig()
+      .then((cfg) => {
+        const code = cfg.catalog.region?.toUpperCase() ?? "";
+        const isDefault = code === "US" && cfg.catalog.language === "en-US";
+        setServerRegion(REGION_CODES.includes(code) && !isDefault ? code : "");
+      })
+      .catch(() => {});
+  }, []);
+  const region = serverRegion || browserRegion;
+  const countries = useMemo(() => {
+    const names = new Intl.DisplayNames([locale], { type: "region" });
+    return REGION_CODES.map((code) => ({ value: code, label: names.of(code) ?? code })).sort(
+      (a, b) => a.label.localeCompare(b.label, locale),
+    );
+  }, [locale]);
   const [files, setFiles] = useState<{ playlist: File | null; guide: File | null }>({
     playlist: null,
     guide: null,
@@ -123,8 +167,10 @@ export function SourceEditor({
             ...emptySource(),
             id: source.id,
             kind: source.kind,
-            name: source.name,
-            lineupId: source.lineupId, country: source.country, postalCode: source.postalCode,
+            name: source.kind === "plex" ? plexLineupName(source.name) : source.name,
+            lineupId: source.lineupId,
+            country: source.country,
+            postalCode: source.postalCode,
             playlistUrl: source.playlistUrl ?? "",
             guideUrl: source.guideUrl ?? "",
             refreshHours: source.refreshHours,
@@ -172,7 +218,9 @@ export function SourceEditor({
       ? Boolean(auth.server?.trim() && auth.username?.trim() && auth.password)
       : kind === "playlist"
         ? Boolean(files.playlist || draft.playlist || draft.playlistUrl)
-        : plex ? Boolean(draft.lineupId && (draft.country || region) && draft.postalCode) : Boolean(files.guide || draft.guide || draft.guideUrl));
+        : plex
+          ? Boolean(draft.lineupId && (draft.country || region) && draft.postalCode)
+          : Boolean(files.guide || draft.guide || draft.guideUrl));
 
   const save = async () => {
     setBusy("save");
@@ -265,13 +313,23 @@ export function SourceEditor({
         </span>
         <div className="min-w-0 flex-1">
           <h2 className="truncate text-xl font-semibold tracking-tight text-fg">
-            {source ? source.name : kind === "guide" ? t("New guide source") : t("New IPTV source")}
+            {source
+              ? source.kind === "plex"
+                ? plexLineupName(source.name)
+                : source.name
+              : kind === "guide"
+                ? t("New guide source")
+                : t("New IPTV source")}
           </h2>
           <p className="text-sm text-fg-muted">
-            {textOf((selectedPlugin ?? byEditor(kind === "guide" ? "guide" : "playlist"))?.hint) ||
-              (kind === "guide"
-                ? t("An XMLTV guide on its own. Map any channel to it for listings.")
-                : t("An M3U playlist of live streams, with an optional XMLTV guide."))}
+            {plex
+              ? t("Plex's TV listings for your provider, by postal code.")
+              : textOf(
+                  (selectedPlugin ?? byEditor(kind === "guide" ? "guide" : "playlist"))?.hint,
+                ) ||
+                (kind === "guide"
+                  ? t("An XMLTV guide on its own. Map any channel to it for listings.")
+                  : t("An M3U playlist of live streams, with an optional XMLTV guide."))}
           </p>
         </div>
         {source ? (
@@ -345,13 +403,14 @@ export function SourceEditor({
       ) : null}
 
       <section className="space-y-4 rounded-2xl border border-border bg-surface p-5">
-        {!source ? (
+        {!source && !guideOnly ? (
           <div className="space-y-2">
             <Segmented
               ariaLabel={t("Source type")}
               value={kind}
               onChange={(next) => {
                 setKind(next);
+                onKindChange?.(next);
                 if (selectedPlugin) setDraft((d) => ({ ...d, playlistUrl: "" }));
               }}
               options={typeDescriptors.map((d) => ({
@@ -378,6 +437,7 @@ export function SourceEditor({
                     type="button"
                     onClick={() => {
                       setKind("playlist");
+                      onKindChange?.("playlist");
                       setDraft((s) => ({
                         ...s,
                         playlistUrl: d.id,
@@ -396,15 +456,119 @@ export function SourceEditor({
             ) : null}
           </div>
         ) : null}
-        {kind === "guide" && !source ? <Segmented ariaLabel={t("Guide type")} value={guideKind} onChange={(v) => { setGuideKind(v); setDraft((d) => ({ ...d, lineupId: "" })); setLineups(null); }} options={[{ value: "xmltv", label: t("XMLTV guide") }, { value: "plex", label: t("Plex guide") }]} /> : null}
-        {plex ? <div className="space-y-3">
-          <div className="grid grid-cols-2 gap-3">
-            <Field label={t("Country code")} htmlFor="plex-country"><Input id="plex-country" maxLength={2} value={draft.country ?? region} onChange={(e) => setDraft({ ...draft, country: e.currentTarget.value.toUpperCase(), lineupId: "" })} /></Field>
-            <Field label={t("Postal code")} htmlFor="plex-postal"><Input id="plex-postal" value={draft.postalCode ?? ""} onChange={(e) => setDraft({ ...draft, postalCode: e.currentTarget.value, lineupId: "" })} /></Field>
+        {kind === "guide" && !source ? (
+          <Segmented
+            ariaLabel={t("Guide type")}
+            value={guideKind}
+            onChange={(v) => {
+              setGuideKind(v);
+              onGuideKindChange?.(v);
+              setDraft((d) => ({ ...d, lineupId: "" }));
+              setLineups(null);
+            }}
+            options={[
+              { value: "xmltv", label: t("XMLTV guide") },
+              { value: "plex", label: t("Plex guide") },
+            ]}
+          />
+        ) : null}
+        {plex ? (
+          <div className="space-y-3">
+            <div className="grid grid-cols-2 gap-3">
+              <Field label={t("Country")}>
+                <SearchSelect
+                  value={draft.country ?? region}
+                  onChange={(country) => {
+                    setDraft({ ...draft, country, lineupId: "" });
+                    setLineups(null);
+                  }}
+                  options={countries}
+                  ariaLabel={t("Country")}
+                  searchable
+                  {...searchSelectLabels()}
+                />
+              </Field>
+              <Field label={t("Postal code")} htmlFor="plex-postal">
+                <Input
+                  id="plex-postal"
+                  value={draft.postalCode ?? ""}
+                  onChange={(e) => {
+                    setDraft({ ...draft, postalCode: e.currentTarget.value, lineupId: "" });
+                    setLineups(null);
+                  }}
+                />
+              </Field>
+            </div>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={looking || !(draft.country || region) || !draft.postalCode}
+              onClick={() => {
+                setLooking(true);
+                setError("");
+                void tv
+                  .plexLineups(draft.country || region, draft.postalCode || "")
+                  .then(setLineups)
+                  .catch((e) => setError(errorMessage(e)))
+                  .finally(() => setLooking(false));
+              }}
+            >
+              {looking ? t("Finding lineups…") : t("Find lineups")}
+            </Button>
+            {lineups ? (
+              <div className="space-y-1">
+                <p className="text-xs font-semibold text-fg-muted">{t("Choose a lineup")}</p>
+                {lineups.length ? (
+                  [...lineups]
+                    .sort((a, b) => Number(b.type === "ota") - Number(a.type === "ota"))
+                    .map((l) => {
+                      const count = plexLineupCount(l.title);
+                      const type =
+                        l.type === "ota"
+                          ? t("Antenna (over the air)")
+                          : l.type === "cable"
+                            ? t("Cable")
+                            : l.type === "satellite"
+                              ? t("Satellite")
+                              : l.type;
+                      return (
+                        <label
+                          key={l.id}
+                          className="flex cursor-pointer items-center gap-2 rounded-lg border border-border p-2 text-sm"
+                        >
+                          <input
+                            type="radio"
+                            name="plex-lineup"
+                            checked={draft.lineupId === l.id}
+                            onChange={() =>
+                              setDraft({ ...draft, lineupId: l.id, name: plexLineupName(l.title) })
+                            }
+                          />
+                          <span>
+                            <span className="block">{plexLineupName(l.title)}</span>
+                            <span className="text-xs text-fg-muted">
+                              {count === null
+                                ? type
+                                : tn(
+                                    count,
+                                    "{type} · {count} channel",
+                                    "{type} · {count} channels",
+                                    { type },
+                                  )}
+                            </span>
+                          </span>
+                        </label>
+                      );
+                    })
+                ) : (
+                  <p className="text-sm text-fg-muted">
+                    {t("No lineups found for this postal code.")}
+                  </p>
+                )}
+              </div>
+            ) : null}
           </div>
-          <Button variant="outline" size="sm" disabled={looking || !(draft.country || region) || !draft.postalCode} onClick={() => { setLooking(true); setError(""); void tv.plexLineups(draft.country || region, draft.postalCode || "").then(setLineups).catch((e) => setError(errorMessage(e))).finally(() => setLooking(false)); }}>{looking ? t("Finding lineups…") : t("Find lineups")}</Button>
-          {lineups ? <div className="space-y-1"><p className="text-xs font-semibold text-fg-muted">{t("Choose a lineup")}</p>{lineups.length ? lineups.map((l) => <label key={l.id} className="flex cursor-pointer items-center gap-2 rounded-lg border border-border p-2 text-sm"><input type="radio" name="plex-lineup" checked={draft.lineupId === l.id} onChange={() => setDraft({ ...draft, lineupId: l.id, name: l.title })} /><span>{l.title} · {l.type}</span></label>) : <p className="text-sm text-fg-muted">{t("No lineups found for this postal code.")}</p>}</div> : null}
-        </div> : null}
+        ) : null}
         <Field label={t("Source name")} htmlFor="src-name">
           <Input
             id="src-name"

@@ -233,7 +233,10 @@ export function policyPermits(
 }
 
 export const tv = {
-  plexLineups: (country: string, postalCode: string) => apiFetch<PlexLineup[]>(`/livetv/plex-guide/lineups?country=${enc(country)}&postalCode=${enc(postalCode)}`),
+  plexLineups: (country: string, postalCode: string) =>
+    apiFetch<PlexLineup[]>(
+      `/livetv/plex-guide/lineups?country=${enc(country)}&postalCode=${enc(postalCode)}`,
+    ),
   channels: (signal?: AbortSignal) => apiFetch<Channel[]>("/livetv/channels", { signal }),
   sources: (signal?: AbortSignal) => apiFetch<Source[]>("/livetv/sources", { signal }),
   guide: (from: Date, until: Date, signal?: AbortSignal) =>
