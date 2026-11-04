@@ -148,3 +148,37 @@ func TestClaimSurvivesRestartAndSettingsUpdate(t *testing.T) {
 		t.Fatal("claim changed during settings update or restart")
 	}
 }
+
+func TestQueuedReleaseDoesNotDeleteNewClaim(t *testing.T) {
+	f := newFakePlexTV(t, testMachineID)
+	f.addUser("server-token-42", owner())
+	f.deviceOwner = 42
+	cfg := testConfig()
+	cfg.Plex.Token, cfg.Plex.Claimed = "server-token-42", true
+	store := &subConfig{memConfig: &memConfig{cfg: cfg}}
+	r := newReclaimRegistrar(t, f, store)
+	// Hold the claim lock to force the asynchronous release to wait until the
+	// configuration has been reclaimed.
+	r.claimMu.Lock()
+	if err := store.Update(func(c *config.Config) error { c.Plex.Claimed = false; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Update(func(c *config.Config) error { c.Plex.Claimed = true; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	r.claimMu.Unlock()
+	// Acquire the lock after the queued worker has run, using a bounded wait.
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+		r.claimMu.Lock()
+		deleted := f.deviceDeletes
+		r.claimMu.Unlock()
+		if deleted != 0 {
+			t.Fatal("queued release removed a reclaimed device")
+		}
+	}
+	if !store.Get().Plex.Claimed || f.deviceOwner != 42 {
+		t.Fatal("reclaimed device changed")
+	}
+}
