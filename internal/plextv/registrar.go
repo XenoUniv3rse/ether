@@ -139,9 +139,10 @@ type RegistrarOptions struct {
 // Registrar runs Ether's plex.tv presence: claim, connection publishing,
 // friend sync, certificate renewal, port mapping and reachability.
 type Registrar struct {
-	o      RegistrarOptions
-	client *Client
-	log    *slog.Logger
+	claimMu sync.Mutex // serializes claim and device release
+	o       RegistrarOptions
+	client  *Client
+	log     *slog.Logger
 
 	wake               chan struct{}
 	mapWake            chan struct{} // RunPortMapping
@@ -1196,6 +1197,8 @@ func (r *Registrar) scheduleCertCheck() {
 // sign-in), persists the server token and owner, informs UserSync and
 // triggers publishing.
 func (r *Registrar) Claim(ctx context.Context, userToken string) (*ClaimResult, error) {
+	r.claimMu.Lock()
+	defer r.claimMu.Unlock()
 	// Persist before the remote operation so a crash after claim cannot lose
 	// the need to bind a managed certificate to the new device record.
 	if r.o.Certs != nil {
@@ -1258,6 +1261,8 @@ func (r *Registrar) Claim(ctx context.Context, userToken string) (*ClaimResult, 
 // from the owner's account (best effort), so another account can claim it,
 // and the server token is forgotten.
 func (r *Registrar) Unclaim(ctx context.Context) error {
+	r.claimMu.Lock()
+	defer r.claimMu.Unlock()
 	if r.o.Certs != nil {
 		if err := r.o.Certs.RequireReissue(ctx); err != nil {
 			return fmt.Errorf("plextv: prepare certificate for unclaim: %w", err)
@@ -1314,6 +1319,12 @@ func (r *Registrar) onConfig(c config.Config) {
 	r.mu.Unlock()
 	if prev != "" {
 		go func() {
+			r.claimMu.Lock()
+			defer r.claimMu.Unlock()
+			// A newer claim supersedes this queued release.
+			if r.o.Config.Get().Plex.Claimed {
+				return
+			}
 			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 			defer cancel()
 			if r.o.Certs != nil {
