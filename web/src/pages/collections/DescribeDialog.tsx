@@ -438,7 +438,7 @@ export function DescribeDialog({
           {error}
         </p>
       ) : null}
-      <div className="flex min-h-[220px] flex-1 flex-col">
+      <div className="describe-chat flex min-h-[220px] flex-1 flex-col">
         <AgentPanel
           enabled={enabled !== false}
           initialMessages={messages}
