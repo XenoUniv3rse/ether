@@ -42,6 +42,11 @@
           "Username": "${username}",
           "Pw": "${password}"
         }
+      },
+      {
+        "name": "current user",
+        "method": "GET",
+        "path": "/Users/Me"
       }
     ],
     "home": [
@@ -159,6 +164,37 @@
           "PlaySessionId": "${play_session_id}",
           "CanSeek": true
         }
+      }
+    ],
+    "quick_connect": [
+      {
+        "name": "enabled",
+        "method": "GET",
+        "path": "/QuickConnect/Enabled"
+      },
+      {
+        "name": "initiate",
+        "method": "POST",
+        "path": "/QuickConnect/Initiate",
+        "fixture_only": true
+      },
+      {
+        "name": "state",
+        "method": "GET",
+        "path": "/QuickConnect/Connect?secret=${quick_connect_secret}",
+        "fixture_only": true
+      },
+      {
+        "name": "authenticate",
+        "method": "POST",
+        "path": "/Users/AuthenticateWithQuickConnect",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "Secret": "${quick_connect_secret}"
+        },
+        "fixture_only": true
       }
     ]
   },

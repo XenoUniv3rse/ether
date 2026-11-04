@@ -435,13 +435,12 @@ func TestSignInSkipsCatalogueWork(t *testing.T) {
 	if w.Code != 200 || !strings.Contains(w.Body.String(), `"AccessToken":"same-token"`) || ident.device.ID != "apple-tv" || ident.device.Client != "Swiftfin" {
 		t.Fatal(w.Code, w.Body.String(), ident.device)
 	}
-	if strings.Contains(w.Body.String(), "LastLoginDate") {
-		t.Fatal(w.Body.String())
-	}
+	// The sign-in stamps its own LastLoginDate; stored viewer times are
+	// never read here (TestUserTimesUseIssuedAndRequestCredentials).
 	w = httptest.NewRecorder()
 	req = httptest.NewRequest("POST", "/Users/AuthenticateByName", strings.NewReader(`{"Username":"ada","Pw":"secret"}`))
 	inst.Handler().ServeHTTP(w, req)
-	if w.Code != 200 || strings.Contains(w.Body.String(), "LastLoginDate") {
+	if w.Code != 200 {
 		t.Fatal(w.Code, w.Body.String())
 	}
 }
