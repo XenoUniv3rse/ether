@@ -330,9 +330,7 @@ func Open(ctx context.Context, dataDir string) (*sql.DB, error) {
 // TestPostgresEnv is set.
 func OpenPath(ctx context.Context, path string) (*sql.DB, error) {
 	if path == ":memory:" {
-		if u := os.Getenv(TestPostgresEnv); u != "" {
-			return OpenTestPostgres(ctx, u)
-		}
+		return OpenMemory(ctx)
 	}
 	return openSQLite(ctx, path, nil, nil)
 }
@@ -346,7 +344,7 @@ func openSQLite(ctx context.Context, path string, files []SnapshotFile, progress
 	dsn := "file:" + path + "?_txlock=immediate&_pragma=busy_timeout(10000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(1)&_pragma=synchronous(NORMAL)&_pragma=wal_autocheckpoint(0)&_pragma=cache_size(-65536)&_pragma=temp_store(MEMORY)&_pragma=mmap_size(268435456)" +
 		fmt.Sprintf("&_pragma=journal_size_limit(%d)", journalSizeLimit)
 	if path == ":memory:" {
-		dsn = "file::memory:?_pragma=foreign_keys(1)"
+		dsn = memoryDSN
 	} else if err := checkSQLiteFilesystem(path); err != nil {
 		return nil, err
 	} else if err := protectDBFiles(path); err != nil {
