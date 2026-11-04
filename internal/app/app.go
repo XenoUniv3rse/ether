@@ -211,6 +211,7 @@ type App struct {
 	plextv              *plextv.Client
 	plexGUID            *plexguid.Service
 	plexWatch           *plexwatch.Service
+	plexServers         *plexwatch.Servers
 	users               *auth.Service
 	sessionEvents       *sessions.EventBus
 	sessionCoordination *sessions.Coordination
@@ -635,6 +636,9 @@ func (a *App) Run(ctx context.Context) error {
 	if a.plexWatch != nil {
 		background.start(func() { a.plexWatch.Run(ctx) })
 		background.start(func() { a.cluster.RunAsLeader(ctx, "plex watch imports", a.plexWatch.RunImports) })
+	}
+	if a.plexServers != nil {
+		background.start(func() { a.cluster.RunAsLeader(ctx, "plex media server sync", a.plexServers.Run) })
 	}
 	background.start(func() {
 		a.cluster.RunAsLeader(ctx, "simkl delivery", func(ctx context.Context) {

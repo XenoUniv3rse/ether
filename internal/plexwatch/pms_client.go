@@ -52,6 +52,9 @@ var ErrPMSToken = errors.New("plexwatch: the Plex Media Server refused this toke
 // ErrPMSNotOwner means the token is valid but is not the server owner's.
 var ErrPMSNotOwner = errors.New("plexwatch: this token is not the server owner's")
 
+// ErrPMSAddress means the server address is not an http(s) origin.
+var ErrPMSAddress = errors.New("plexwatch: enter the server address, like http://192.168.1.10:32400")
+
 // ErrPMSUnreachable means the server could not be reached or did not answer as a PMS.
 var ErrPMSUnreachable = errors.New("plexwatch: the Plex Media Server could not be reached")
 
@@ -75,7 +78,7 @@ func newPMSClient(base string, hc *http.Client, clientID string, now func() time
 func parsePMSURL(raw string) (*url.URL, error) {
 	u, err := url.Parse(strings.TrimSpace(raw))
 	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
-		return nil, errors.New("plexwatch: enter the server address, like http://192.168.1.10:32400")
+		return nil, ErrPMSAddress
 	}
 	u.Path = strings.TrimRight(u.Path, "/")
 	u.RawPath = ""
