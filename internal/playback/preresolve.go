@@ -653,6 +653,7 @@ func (m *Manager) InvalidateTitle(key core.RatingKey) int {
 		return 0
 	}
 	m.mu.Lock()
+	m.forgetStalePrefersLocked(key)
 	n := 0
 	for id, e := range m.warm {
 		if titleIncludes(key, id.key) {
