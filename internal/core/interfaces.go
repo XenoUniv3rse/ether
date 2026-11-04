@@ -525,6 +525,8 @@ type SegmentCache interface {
 // Transcoder (internal/transcode)
 
 type StreamInfo struct {
+	// MalformedHEVC marks an invalid SPS header found in the probe data.
+	MalformedHEVC bool `json:"malformedHEVC,omitempty"`
 	// Probe hints for enhancement backends that require progressive, steady-rate input.
 	Interlaced        bool `json:"interlaced,omitempty"`
 	VariableFrameRate bool `json:"variableFrameRate,omitempty"`
@@ -612,7 +614,7 @@ type Chapter struct {
 // ProbeFactsVersion is the generation of facts a probe is expected to carry,
 // including H.264/HEVC reference frames and descriptive audio handler titles.
 // Persisted probes from an older generation are cache misses.
-const ProbeFactsVersion = 2
+const ProbeFactsVersion = 3
 
 type MediaInfo struct {
 	Chapters    []Chapter     `json:"chapters,omitempty"`
