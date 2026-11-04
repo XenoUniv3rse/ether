@@ -784,16 +784,13 @@ func planFilterChain(s runSpec, v *core.StreamInfo, pic picturePlan, accel strin
 		if dev == "" {
 			dev = DefaultVAAPIDevice
 		}
-		inputArgs = append(inputArgs, "-vaapi_device", dev)
-		if burn && !(v.Codec == "h264" && v.BitDepth > 8) {
-			// A burn-in overlays in software, but the picture is still
-			// decoded on the GPU (on the -vaapi_device device) and handed
-			// to the filters in system memory, as the CUDA and
-			// VideoToolbox paths do: software-decoding 4K HEVC 10-bit
-			// was most of the CPU a burn cost (#313). A codec the GPU
-			// cannot decode falls back to software decoding. H.264 High
-			// 10 has no VAAPI decoder.
-			inputArgs = append(inputArgs, "-hwaccel", "vaapi")
+		if burn {
+			inputArgs = append(inputArgs, "-init_hw_device", "vaapi=va:"+dev, "-filter_hw_device", "va")
+			if !(v.Codec == "h264" && v.BitDepth > 8) {
+				inputArgs = append(inputArgs, "-hwaccel", "vaapi", "-hwaccel_device", "va")
+			}
+		} else {
+			inputArgs = append(inputArgs, "-vaapi_device", dev)
 		}
 	}
 
@@ -1054,6 +1051,15 @@ func planVideo(s runSpec, v *core.StreamInfo) videoPlan {
 
 	in := fmt.Sprintf("[0:%d]", v.Index)
 	chainInput, chain, hwFrames := planFilterChain(s, v, pic, accel, burn, finish)
+	// For bitmap burns, scale on VAAPI before downloading for the software
+	// overlay. Upload the result back to the same device for encoding.
+	vaapiBitmap := burn && IsImageSubtitle(sub.Codec) && !sub.External && accel == AccelVAAPI &&
+		!(v.Codec == "h264" && v.BitDepth > 8) && !s.Accel.NoGPUScale &&
+		s.PictureCrop == nil && !pic.pad && pic.convert == "" && !pic.tonemap && !pic.tenBit && pic.setSAR == ""
+	if vaapiBitmap {
+		chainInput = append(chainInput, "-hwaccel_output_format", "vaapi")
+		chain = []string{fmt.Sprintf("scale_vaapi=w=%d:h=%d:format=nv12", pic.w, pic.h), "hwdownload", "format=nv12"}
+	}
 	if pic.tonemap && !toneMapped(chain, hwFrames) {
 		p.err = &GraphError{Message: toneMapUnavailableMessage()}
 		return p
@@ -1065,7 +1071,10 @@ func planVideo(s runSpec, v *core.StreamInfo) videoPlan {
 	case burn && IsImageSubtitle(sub.Codec) && !sub.External:
 		post := finish(nil)
 		subW, subH := v.Width, v.Height
-		if pic.scaling && s.PictureCrop == nil {
+		if vaapiBitmap {
+			post = format(nil)
+			subW, subH = pic.w, pic.h
+		} else if pic.scaling && s.PictureCrop == nil {
 			// Overlay at the output size: scale the picture first and
 			// draw the subtitle onto the smaller frame, instead of
 			// overlaying every source-size frame and scaling after
@@ -1142,7 +1151,10 @@ func planVideo(s runSpec, v *core.StreamInfo) videoPlan {
 	}
 	p.graph = graph
 
-	p.encodeArgs = planEncodeArgs(s, pic, enc, codec, hwFrames)
+	// VAAPI's software-filter paths end in hwupload too. Output colour
+	// options after that upload cause FFmpeg to insert an impossible software
+	// conversion between VAAPI surfaces and the encoder.
+	p.encodeArgs = planEncodeArgs(s, pic, enc, codec, hwFrames || accel == AccelVAAPI)
 	return p
 }
 
