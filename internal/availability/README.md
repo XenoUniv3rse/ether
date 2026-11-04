@@ -94,7 +94,10 @@ arrives. Each refresh asks the resolver only about (title, release) pairs
 without a durable verdict under the current policy key (profile, resolver
 settings, catalogue language, rule fields): verdicts live in
 `availability_verdicts`, bound to the release descriptor and the title facts
-matching reads, pruned with feed items and capped at 60,000 rows. Short-lived
+matching reads, pruned with feed items and capped at 60,000 rows. A refresh
+stores its verdicts before it publishes its set. A browse request that judges
+queues its verdicts for one writer instead of writing, and reads count the
+queue as stored, so no section load judges a release twice. Short-lived
 gates (blocklist marks, a brief health-failure skip) are reapplied on every
 read; hosted ranking sessions make every verdict short-lived.
 
