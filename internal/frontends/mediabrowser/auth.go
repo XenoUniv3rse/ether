@@ -8,8 +8,10 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"mime"
 	"net/http"
 	"net/netip"
+	"strings"
 	"time"
 
 	"github.com/braedonsaunders/ether/internal/contentrating"
@@ -574,7 +576,37 @@ func (i *instance) routes() error {
 		{"GET", "/socket", i.socket},
 		{"POST", "/Users/AuthenticateByName", func(w http.ResponseWriter, r *http.Request) {
 			var body struct{ Username, Pw string }
-			if decode(r, &body) != nil {
+			mediaType, _, _ := mime.ParseMediaType(r.Header.Get("Content-Type"))
+			if i.protocol == "emby" && mediaType == "application/x-www-form-urlencoded" {
+				r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+				if err := r.ParseForm(); err != nil {
+					http.Error(w, "Bad Request", 400)
+					return
+				}
+				// Only Pw is plaintext. Password and PasswordMd5 in legacy
+				// clients are hashes and cannot verify Ether's password hashes.
+				var usernameSeen, pwSeen bool
+				for key, values := range r.PostForm {
+					switch {
+					case strings.EqualFold(key, "username"):
+						if usernameSeen || len(values) != 1 {
+							http.Error(w, "Bad Request", 400)
+							return
+						}
+						usernameSeen, body.Username = true, values[0]
+					case strings.EqualFold(key, "pw"):
+						if pwSeen || len(values) != 1 {
+							http.Error(w, "Bad Request", 400)
+							return
+						}
+						pwSeen, body.Pw = true, values[0]
+					}
+				}
+				if !pwSeen {
+					http.Error(w, "Unauthorized", 401)
+					return
+				}
+			} else if decode(r, &body) != nil {
 				http.Error(w, "Bad Request", 400)
 				return
 			}
