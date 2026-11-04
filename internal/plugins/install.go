@@ -837,17 +837,15 @@ func firstString(m map[string]any, keys ...string) (string, bool) {
 
 // GetSettings returns settings with secrets replaced by "Saved".
 func (m *Manager) GetSettings(ctx context.Context, id string) (map[string]any, json.RawMessage, error) {
-	if _, err := m.store.record(ctx, id); err != nil {
+	rec, err := m.store.record(ctx, id)
+	if err != nil {
 		return nil, nil, err
 	}
 	row, err := m.store.settings(ctx, id)
 	if err != nil {
 		return nil, nil, err
 	}
-	out := map[string]any{}
-	for k, v := range row.Settings {
-		out[k] = v
-	}
+	out := NonSecretSettings(row.Settings, row.Schema, settingsSecrets(rec))
 	for name := range row.Secrets {
 		if row.Secrets[name] != "" {
 			out[name] = savedSecret
@@ -859,14 +857,15 @@ func (m *Manager) GetSettings(ctx context.Context, id string) (map[string]any, j
 // mergedSettings returns the full settings document (secrets opened) for
 // delivery to the plugin through /ether/configure. Never logged.
 func (m *Manager) mergedSettings(ctx context.Context, id string) (map[string]any, error) {
+	rec, err := m.store.record(ctx, id)
+	if err != nil {
+		return nil, err
+	}
 	row, err := m.store.settings(ctx, id)
 	if err != nil {
 		return nil, err
 	}
-	out := map[string]any{}
-	for k, v := range row.Settings {
-		out[k] = v
-	}
+	out := NonSecretSettings(row.Settings, row.Schema, settingsSecrets(rec))
 	for name, stored := range row.Secrets {
 		plain, err := m.store.openSecret(id, name, stored)
 		if err != nil {
@@ -892,6 +891,11 @@ func (m *Manager) Configure(ctx context.Context, id string, incoming map[string]
 	if err != nil {
 		return nil, err
 	}
+	withDefaults := NonSecretSettings(nil, row.Schema, settingsSecrets(r))
+	for key, value := range incoming {
+		withDefaults[key] = value
+	}
+	incoming = withDefaults
 	if err := validateSettingsValues(row.Schema, incoming); err != nil {
 		return nil, err
 	}

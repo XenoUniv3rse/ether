@@ -105,18 +105,15 @@ func (h *host) KVList(ctx context.Context, prefix string) ([]string, error) {
 
 // Settings returns the plugin's stored non-secret settings.
 func (h *host) Settings(ctx context.Context) (map[string]any, error) {
-	if _, _, err := h.record(ctx); err != nil {
+	r, _, err := h.record(ctx)
+	if err != nil {
 		return nil, err
 	}
 	row, err := h.m.store.settings(ctx, h.plugin)
 	if err != nil {
 		return nil, err
 	}
-	out := make(map[string]any, len(row.Settings))
-	for k, v := range row.Settings {
-		out[k] = v
-	}
-	return out, nil
+	return NonSecretSettings(row.Settings, row.Schema, settingsSecrets(r)), nil
 }
 
 func (h *host) SecretGet(ctx context.Context, name string) (string, error) {
