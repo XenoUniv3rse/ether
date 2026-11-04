@@ -1,5 +1,4 @@
 {
-  "Settings need a referenced schema and code that reads them. Secrets use ether.secret.get(name); never copy them into ordinary settings or logs.": "设置需要引用的结构定义和读取设置的代码。机密信息使用 ether.secret.get(name)；切勿将其复制到普通设置或日志中。",
   "m_00014734347949": "种子 (Torznab)",
   "m_00017bdb2a0915": "显示密码",
   "m_0001e5e9211466": "任意应用",

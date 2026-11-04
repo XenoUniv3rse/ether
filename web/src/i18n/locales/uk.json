@@ -1,5 +1,4 @@
 {
-  "Settings need a referenced schema and code that reads them. Secrets use ether.secret.get(name); never copy them into ordinary settings or logs.": "Налаштування потребують схеми, на яку є посилання, і коду для їх читання. Секрети читаються через ether.secret.get(name); ніколи не копіюйте їх у звичайні налаштування або журнали.",
   "m_00014734347949": "Торент (Torznab)",
   "m_00017bdb2a0915": "Показати пароль",
   "m_0001e5e9211466": "Будь-який застосунок",

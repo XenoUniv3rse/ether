@@ -1,5 +1,4 @@
 {
-  "Settings need a referenced schema and code that reads them. Secrets use ether.secret.get(name); never copy them into ordinary settings or logs.": "Settings need a referenced schema and code that reads them. Secrets use ether.secret.get(name); never copy them into ordinary settings or logs.",
   "m_00014734347949": "Torrent (Torznab)",
   "m_00017bdb2a0915": "Show password",
   "m_0001e5e9211466": "Any app",
@@ -450,6 +449,7 @@
   "m_0213959961d04a": "Newznab (Usenet)",
   "m_0214deced1fbad": "Calendar totals use UTC. Watched time leaves out gaps longer than 60 seconds and simultaneous sessions that can't be matched to a device.",
   "m_0215a022388178": "Smart filter",
+  "m_0215f97ef3c160": "Settings need a referenced schema and code that reads them. Secrets use ether.secret.get(name); never copy them into ordinary settings or logs.",
   "m_021615348c9ddd": "Make this server the first node. Ether backs up your data and moves your settings, viewers and history to PostgreSQL.",
   "m_0216a4d9349a81": "Device approved",
   "m_0217c8644a014d": "DVD",

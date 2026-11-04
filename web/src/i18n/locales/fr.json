@@ -1,5 +1,4 @@
 {
-  "Settings need a referenced schema and code that reads them. Secrets use ether.secret.get(name); never copy them into ordinary settings or logs.": "Les paramètres nécessitent un schéma référencé et du code qui les lit. Les secrets utilisent ether.secret.get(name) ; ne les copiez jamais dans les paramètres ordinaires ni les journaux.",
   "m_00014734347949": "Torrent (Torznab)",
   "m_00017bdb2a0915": "Afficher le mot de passe",
   "m_0001e5e9211466": "Toute application",

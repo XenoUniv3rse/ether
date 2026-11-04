@@ -1,5 +1,4 @@
 {
-  "Settings need a referenced schema and code that reads them. Secrets use ether.secret.get(name); never copy them into ordinary settings or logs.": "Nastavení vyžadují odkazované schéma a kód, který je čte. Tajné údaje používají ether.secret.get(name); nikdy je nekopírujte do běžných nastavení ani protokolů.",
   "m_00014734347949": "Torrent (Torznab)",
   "m_00017bdb2a0915": "Zobrazit heslo",
   "m_0001e5e9211466": "Libovolná aplikace",

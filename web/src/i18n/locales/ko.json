@@ -1,5 +1,4 @@
 {
-  "Settings need a referenced schema and code that reads them. Secrets use ether.secret.get(name); never copy them into ordinary settings or logs.": "설정에는 참조된 스키마와 이를 읽는 코드가 필요합니다. 비밀 값은 ether.secret.get(name)을 사용하며 일반 설정이나 로그에 복사하면 안 됩니다.",
   "m_00014734347949": "토렌트 (Torznab)",
   "m_00017bdb2a0915": "비밀번호 표시",
   "m_0001e5e9211466": "모든 앱",

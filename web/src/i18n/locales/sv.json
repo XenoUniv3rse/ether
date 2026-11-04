@@ -1,5 +1,4 @@
 {
-  "Settings need a referenced schema and code that reads them. Secrets use ether.secret.get(name); never copy them into ordinary settings or logs.": "Inställningar behöver ett refererat schema och kod som läser dem. Hemligheter använder ether.secret.get(name); kopiera dem aldrig till vanliga inställningar eller loggar.",
   "m_00014734347949": "Torrent (Torznab)",
   "m_00017bdb2a0915": "Visa lösenord",
   "m_0001e5e9211466": "Valfri app",

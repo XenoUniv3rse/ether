@@ -1,5 +1,4 @@
 {
-  "Settings need a referenced schema and code that reads them. Secrets use ether.secret.get(name); never copy them into ordinary settings or logs.": "Asetukset tarvitsevat viitatun skeeman ja niitä lukevan koodin. Salaisuudet luetaan kutsulla ether.secret.get(name); älä koskaan kopioi niitä tavallisiin asetuksiin tai lokeihin.",
   "m_00014734347949": "Torrent (Torznab)",
   "m_00017bdb2a0915": "Näytä salasana",
   "m_0001e5e9211466": "Mikä tahansa sovellus",

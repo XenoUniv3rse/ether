@@ -1,5 +1,4 @@
 {
-  "Settings need a referenced schema and code that reads them. Secrets use ether.secret.get(name); never copy them into ordinary settings or logs.": "設定には参照先のスキーマと設定を読み取るコードが必要です。シークレットには ether.secret.get(name) を使用し、通常の設定やログには絶対にコピーしないでください。",
   "m_00014734347949": "トレント(Torznab)",
   "m_00017bdb2a0915": "パスワードを表示",
   "m_0001e5e9211466": "任意のアプリ",
