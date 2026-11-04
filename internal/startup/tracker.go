@@ -163,8 +163,17 @@ func (t *Tracker) SetDatabase(db Database) {
 // Waiting records a wait (for the database, or for other nodes) with the
 // attempt that failed and when the next one is due.
 func (t *Tracker) Waiting(phase Phase, attempt int, retry time.Duration, err error) {
-	t.Set(phase)
+	// One update: a reader must never see the waiting phase without the
+	// attempt and the next retry that explain it.
 	t.update(func(s *Status) {
+		if s.Phase != phase {
+			s.Since = t.now().UTC()
+		}
+		s.Phase, s.Message, s.Ready = phase, messages[phase], false
+		s.Step, s.Steps, s.Failure = 0, 0, nil
+		if phase != PhaseRestoring {
+			s.Restoring = ""
+		}
 		at := t.now().UTC().Add(retry)
 		s.Attempt, s.RetryAt = attempt, &at
 		if err != nil && phase == PhaseWaitingDatabase {
