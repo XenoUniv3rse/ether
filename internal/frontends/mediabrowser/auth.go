@@ -373,15 +373,25 @@ func (i *instance) result(w http.ResponseWriter, r *http.Request, token string) 
 }
 
 // fastResult answers a sign-in with the token and a small user. Home rows,
-// viewer timestamps, session capability lookups and path warming wait until
-// the bytes are written. Swiftfin cancels Quick Connect at about half a second.
-func (i *instance) fastResult(w http.ResponseWriter, r *http.Request, token string) {
+// stored viewer timestamps, session capability lookups and path warming wait
+// until the bytes are written. Swiftfin cancels Quick Connect at about half a
+// second. Jellyfin stamps the sign-in itself as the last login and activity,
+// and its Quick Connect session carries no remote endpoint.
+func (i *instance) fastResult(w http.ResponseWriter, r *http.Request, token string, quickConnect bool) {
 	v, err := i.host.Identity.Resolve(frontend.WithQuietIdentity(r.Context()), token)
 	if err != nil || v == nil {
 		http.Error(w, "Unauthorized", 401)
 		return
 	}
-	jsonReply(w, map[string]any{"AccessToken": token, "ServerId": i.info.ID, "User": i.authUserDTO(v), "SessionInfo": i.authSessionDTO(r, v)})
+	user, session := i.authUserDTO(v), i.authSessionDTO(r, v)
+	if i.protocol == "jellyfin" {
+		now := wireTime(time.Now())
+		user["LastLoginDate"], user["LastActivityDate"] = now, now
+		if quickConnect {
+			delete(session, "RemoteEndPoint")
+		}
+	}
+	jsonReply(w, map[string]any{"AccessToken": token, "ServerId": i.info.ID, "User": user, "SessionInfo": session})
 	if flusher, ok := w.(http.Flusher); ok {
 		flusher.Flush()
 	}
@@ -468,6 +478,7 @@ func (i *instance) baseUserDTO(v *frontend.Viewer) (user, policy, configuration 
 		policy["BlockUnratedItems"] = []any{}
 		policy["BlockedChannels"] = []any{}
 		policy["BlockedMediaFolders"] = []any{}
+		policy["EnabledFolders"] = []string{}
 	}
 	return user, policy, configuration
 }
@@ -572,7 +583,7 @@ func (i *instance) routes() error {
 				identityError(w, err)
 				return
 			}
-			i.fastResult(w, r, token)
+			i.fastResult(w, r, token, false)
 		}},
 		{"POST", "/Users/{userId}/Configuration", i.saveUserConfiguration},
 		{"GET", "/Users/Me", func(w http.ResponseWriter, r *http.Request) {
@@ -684,7 +695,7 @@ func (i *instance) routes() error {
 				identityError(w, err)
 				return
 			}
-			i.fastResult(w, r, token)
+			i.fastResult(w, r, token, true)
 		}},
 	}
 	for _, r := range routes {
