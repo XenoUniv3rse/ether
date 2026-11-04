@@ -462,6 +462,12 @@ what you want to change:
 | Set up poster providers | **Integrations** |
 | Pick the poster source | **Metadata › Artwork** |
 
+Activity history has one row per viewing. Opens of the same title by the
+same viewer and device within five minutes of each other (probes, a decision
+and start, a reopen after a seek or a stop and replay) continue one row. A row
+appears once media is delivered; an attempt that fails first is listed with
+its error and does not count as a play.
+
 A playback attempt can fail before Activity history begins. Quality history
 records source-selection results, including failures; open its details for
 candidate rejection reasons and effective playback limits. Neither a
