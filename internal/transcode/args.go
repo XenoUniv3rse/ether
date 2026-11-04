@@ -38,6 +38,9 @@ type runSpec struct {
 	Features features
 	// BigProbe raises probesize/analyzeduration (retry after a failed start).
 	BigProbe bool
+	// InputTimeout bounds HTTP reads for the progressive stream; a temporary
+	// source stall can then reconnect without splicing another Matroska stream.
+	InputTimeout time.Duration
 	// Repeat encoder parameter sets on recovery so a decoder holding the
 	// initial fMP4 header can decode the replacement encoder's keyframes.
 	InBandHeaders bool
@@ -236,7 +239,12 @@ func buildCodecArgs(s runSpec) []string {
 
 	// ---- input
 	args = append(args, inputSafetyArgs(s.Input, s.LiveInput)...)
-	args = append(args, httpInputArgs(s.Input, true)...)
+	httpArgs := httpInputArgs(s.Input, true)
+	if s.Protocol == core.ProtocolHTTP && s.InputTimeout > 0 && len(httpArgs) > 0 {
+		httpArgs[1] = strconv.FormatInt(s.InputTimeout.Microseconds(), 10)
+		httpArgs = append(httpArgs, "-reconnect_streamed", "1")
+	}
+	args = append(args, httpArgs...)
 	if s.LiveInput {
 		if isNetworkURL(s.Input) {
 			args = append(args, "-reconnect_streamed", "1", "-reconnect_max_retries", "3")

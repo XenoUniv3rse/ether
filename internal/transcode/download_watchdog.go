@@ -85,8 +85,15 @@ func (d *DownloadRemuxer) runDownloadWatched(ctx context.Context, cmd Command) e
 			return ctx.Err()
 		case now := <-ticker.C:
 			if watch.idle(now) >= timeout {
+				select {
+				case err := <-done:
+					return err
+				default:
+				}
 				cancel()
-				<-done
+				if err := <-done; err == nil {
+					return nil
+				}
 				return errDownloadStalled
 			}
 		}

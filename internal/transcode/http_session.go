@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/braedonsaunders/ether/internal/core"
@@ -26,6 +27,8 @@ type httpSession struct {
 
 	mu         sync.Mutex
 	proc       Process
+	pipe       *io.PipeReader
+	requestSeq uint64
 	closed     bool
 	lastAccess time.Time
 }
@@ -114,6 +117,11 @@ func (s *httpSession) SwapInput(ctx context.Context, inputURL string, info core.
 	if s.closed {
 		return errors.New("transcode: session closed")
 	}
+	s.requestSeq++
+	if s.pipe != nil {
+		_ = s.pipe.CloseWithError(errors.New("transcode: input changed"))
+		s.pipe = nil
+	}
 	s.req.InputURL = inputURL
 	s.req.Info = info
 	s.req.StartOffset = at
@@ -171,78 +179,115 @@ func (s *httpSession) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.writeHTTPHeaders(w)
 		return
 	}
+	s.requestSeq++
+	seq := s.requestSeq
+	if s.pipe != nil {
+		_ = s.pipe.CloseWithError(errors.New("transcode: superseded request"))
+		s.pipe = nil
+	}
 	if s.proc != nil {
 		s.proc.Stop()
 		s.proc = nil
 	}
-	spec := runSpec{
-		LiveInput:      s.req.LiveInput,
-		CopyTimestamps: s.req.CopyTimestamps,
-		InputHeaders:   s.req.InputHeaders,
-		Input:          s.req.InputURL,
-		Info:           s.req.Info,
-		Decision:       s.req.Decision,
-		Start:          s.req.StartOffset,
-		Accel:          s.m.hw,
-		Features:       s.m.feat,
-		Protocol:       core.ProtocolHTTP,
-	}
-	args := buildArgs(spec)
-	pr, pw := io.Pipe()
-	cmd := Command{Path: s.m.ffmpeg, Args: args, Stdout: pw}
-	encoding := !s.req.Decision.VideoCopy
-	work, err := s.life.runWork(encoding)
-	if err != nil {
+	s.mu.Unlock()
+	for attempt := 0; attempt < 2; attempt++ {
+		s.mu.Lock()
+		if s.closed || s.requestSeq != seq || r.Context().Err() != nil {
+			s.mu.Unlock()
+			return
+		}
+		spec := runSpec{LiveInput: s.req.LiveInput, CopyTimestamps: s.req.CopyTimestamps, InputHeaders: s.req.InputHeaders, Input: s.req.InputURL, Info: s.req.Info, Decision: s.req.Decision, Start: s.req.StartOffset, Accel: s.m.hw, Features: s.m.feat, Protocol: core.ProtocolHTTP, InputTimeout: s.m.opts.stallTimeout}
+		pr, pw := io.Pipe()
+		cmd := Command{Path: s.m.ffmpeg, Args: buildArgs(spec), Stdout: pw}
+		encoding := !s.req.Decision.VideoCopy
+		work, err := s.life.runWork(encoding)
+		if err != nil {
+			s.mu.Unlock()
+			_ = pw.Close()
+			_ = pr.Close()
+			http.Error(w, "transcode failed", http.StatusServiceUnavailable)
+			return
+		}
+		proc, err := s.m.runner.Start(cmd)
+		if err != nil {
+			s.mu.Unlock()
+			for _, workItem := range work {
+				workItem.finish()
+			}
+			_ = pw.Close()
+			_ = pr.Close()
+			s.log.Warn("http ffmpeg start", "err", err)
+			http.Error(w, "transcode failed", http.StatusInternalServerError)
+			return
+		}
+		s.proc = proc
+		s.pipe = pr
+		s.life.markStarted()
+		s.life.encoding.Store(encoding)
 		s.mu.Unlock()
-		_ = pw.Close()
+		go func() {
+			<-proc.Done()
+			_ = pw.Close()
+			for _, workItem := range work {
+				workItem.finish()
+			}
+		}()
+		stopCancel := context.AfterFunc(r.Context(), func() { _ = pr.CloseWithError(r.Context().Err()); proc.Stop() })
+		var started atomic.Bool
+		var timer *time.Timer
+		if timeout := s.m.opts.stallTimeout; timeout > 0 {
+			timer = time.AfterFunc(timeout, func() {
+				if !started.Load() {
+					_ = pr.CloseWithError(errors.New("transcode: HTTP startup stalled"))
+					proc.Stop()
+				}
+			})
+		}
+		buf := make([]byte, 32*1024)
+		n, readErr := pr.Read(buf)
+		if n > 0 {
+			started.Store(true)
+		}
+		if timer != nil {
+			timer.Stop()
+		}
+		var copyErr error
+		if n > 0 {
+			s.writeHTTPHeaders(w)
+			fw := flushWriter{ResponseWriter: w, s: s}
+			_, copyErr = fw.Write(buf[:n])
+			if copyErr == nil && readErr == nil {
+				_, copyErr = io.Copy(fw, pr)
+			}
+		}
 		_ = pr.Close()
-		http.Error(w, "transcode failed", http.StatusServiceUnavailable)
+		stopCancel()
+		if r.Context().Err() != nil || copyErr != nil || n == 0 {
+			proc.Stop()
+		}
+		s.mu.Lock()
+		current := !s.closed && s.requestSeq == seq
+		s.lastAccess = time.Now()
+		if s.proc == proc {
+			s.proc = nil
+		}
+		if s.pipe == pr {
+			s.pipe = nil
+		}
+		s.mu.Unlock()
+		if n > 0 {
+			return
+		}
+		if r.Context().Err() != nil || !current {
+			return
+		}
+		if attempt == 0 {
+			s.log.Warn("http transcode produced no output; retrying")
+			continue
+		}
+		http.Error(w, "transcode failed", http.StatusBadGateway)
 		return
 	}
-	proc, err := s.m.runner.Start(cmd)
-	if err != nil {
-		s.mu.Unlock()
-		for _, w := range work {
-			w.finish()
-		}
-		_ = pw.Close()
-		_ = pr.Close()
-		s.log.Warn("http ffmpeg start", "err", err)
-		http.Error(w, "transcode failed", http.StatusInternalServerError)
-		return
-	}
-	s.proc = proc
-	s.life.markStarted()
-	s.life.encoding.Store(encoding)
-	s.mu.Unlock()
-
-	go func() {
-		<-proc.Done()
-		_ = pw.Close()
-		for _, w := range work {
-			w.finish()
-		}
-	}()
-	// A blocked pipe read does not notice an HTTP request's cancellation.
-	// Close the pipe and retire this process promptly when the client leaves.
-	stopCancel := context.AfterFunc(r.Context(), func() {
-		_ = pr.CloseWithError(r.Context().Err())
-		proc.Stop()
-	})
-	defer stopCancel()
-
-	s.writeHTTPHeaders(w)
-	_, _ = io.Copy(flushWriter{ResponseWriter: w, s: s}, pr)
-	_ = pr.Close()
-	if r.Context().Err() != nil {
-		proc.Stop()
-	}
-	s.mu.Lock()
-	s.lastAccess = time.Now()
-	if s.proc == proc {
-		s.proc = nil
-	}
-	s.mu.Unlock()
 }
 
 func (s *httpSession) Close() error {
@@ -253,8 +298,13 @@ func (s *httpSession) Close() error {
 	}
 	s.closed = true
 	proc := s.proc
+	pipe := s.pipe
+	s.pipe = nil
 	s.proc = nil
 	s.mu.Unlock()
+	if pipe != nil {
+		_ = pipe.CloseWithError(errors.New("transcode: session closed"))
+	}
 	if proc != nil {
 		proc.Stop()
 		<-proc.Done()
