@@ -285,6 +285,9 @@ type Catalog struct {
 
 	personMu       sync.Mutex
 	personHydrated map[int64]time.Time
+	// listMirrored is when each related list's summaries were last saved
+	// (mirror_lists.go), guarded by personMu.
+	listMirrored map[string]time.Time
 
 	saferRating SaferRatingSQL
 
@@ -407,7 +410,7 @@ func New(db *sql.DB, client TMDB, cfg config.Catalog, log *slog.Logger, opts ...
 		genres: map[string]map[int]string{}, listCache: map[string]listEntry{},
 		titleCache: map[core.RatingKey]cachedStoredTitle{}, countCache: map[string]cachedCount{},
 		browseCache: map[string]cachedBrowse{}, grandCache: map[core.RatingKey]cachedBrowse{}, facetCache: map[string]cachedFacet{},
-		personHydrated: map[int64]time.Time{}}
+		personHydrated: map[int64]time.Time{}, listMirrored: map[string]time.Time{}}
 	c.setNow(time.Now)
 	c.SetTMDB(client)
 	for _, fn := range opts {
