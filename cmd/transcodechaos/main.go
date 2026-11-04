@@ -10,13 +10,11 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"net/http"
 	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"sync/atomic"
 	"time"
 
 	"github.com/braedonsaunders/ether/internal/config"
@@ -67,7 +65,7 @@ func run(ff, fp, report, only string) error {
 	if err != nil {
 		return err
 	}
-	cases := []scenario{{"healthy", "mpegts", "none", "", true}, {"healthy", "mpegts", "none", "", false}, {"healthy", "fmp4", "none", "", false}, {"seek", "mpegts", "none", "", false}, {"corrupt-ts", "mpegts", "none", "corrupt", false}, {"truncated", "mpegts", "none", "truncate", false}, {"source-503", "mpegts", "none", "503", false}, {"live-corrupt", "mpegts", "none", "corrupt", false}, {"hardware-failure", "mpegts", "videotoolbox", "hwfail", false}, {"healthy", "mpegts", "videotoolbox", "", false}}
+	cases := []scenario{{"healthy", "mpegts", "none", "", true}, {"healthy", "mpegts", "none", "", false}, {"healthy", "fmp4", "none", "", false}, {"seek", "mpegts", "none", "", false}, {"corrupt-ts", "mpegts", "none", "corrupt", false}, {"truncated", "mpegts", "none", "truncate", false}, {"source-503", "mpegts", "none", "503", false}, {"transient-503", "mpegts", "none", "once-503", false}, {"transient-416", "mpegts", "none", "once-416", false}, {"slow-first-byte", "mpegts", "none", "slow-first", false}, {"midrange-stall", "mpegts", "none", "stall", false}, {"connection-drop", "mpegts", "none", "drop", false}, {"short-reads", "mpegts", "none", "short-writes", false}, {"changing-source", "mpegts", "none", "changing", false}, {"live-corrupt", "mpegts", "none", "corrupt", false}, {"hardware-failure", "mpegts", "videotoolbox", "hwfail", false}, {"healthy", "mpegts", "videotoolbox", "", false}}
 	results := make([]result, 0, len(cases))
 	failures := 0
 	for _, sc := range cases {
@@ -108,21 +106,18 @@ func exercise(parent context.Context, ff, fp, root string, good []byte, sc scena
 			}
 		}
 	}
+	if sc.Fault == "changing" {
+		for i := len(data) / 2 / 188 * 188; i < len(data)/2/188*188+30*188 && i < len(data); i++ {
+			if i%188 != 0 {
+				data[i] = 0xff
+			}
+		}
+	}
 	if sc.Fault == "truncate" {
 		data = data[:len(data)/2]
 	}
-	var armed atomic.Bool
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if sc.Fault == "503" && armed.Load() {
-			http.Error(w, "injected failure", 503)
-			return
-		}
-		content := good
-		if armed.Load() {
-			content = data
-		}
-		http.ServeContent(w, r, "fixture.ts", time.Time{}, bytes.NewReader(content))
-	}))
+	source := &faultSource{good: good, altered: data, fault: sc.Fault}
+	srv := httptest.NewServer(source)
 	defer srv.Close()
 	dir, err := os.MkdirTemp(root, "session-")
 	if err != nil {
@@ -153,7 +148,7 @@ func exercise(parent context.Context, ff, fp, root string, good []byte, sc scena
 		d.VideoCopy = true
 		d.AudioCopy = true
 	}
-	armed.Store(true)
+	source.armed.Store(true)
 	live := sc.Name == "live-corrupt"
 	if live {
 		info.Duration = 0
@@ -207,6 +202,14 @@ func exercise(parent context.Context, ff, fp, root string, good []byte, sc scena
 				return err.Error()
 			}
 		}
+		if n == 0 && sc.Fault == "changing" {
+			if err := s.SwapInput(ctx, srv.URL+"/fixture.ts", *info, 4*time.Second); err != nil {
+				return "restart on changed source: " + err.Error()
+			}
+		}
+	}
+	if sc.Fault == "changing" && source.requests.Load() < 2 {
+		return "content change was not exercised: fewer than two source requests"
 	}
 	if injector != nil && !injector.software() {
 		return "software fallback did not start"
