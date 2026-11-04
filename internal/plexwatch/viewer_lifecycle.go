@@ -13,3 +13,12 @@ func init() {
 	store.RegisterViewerTable("plexwatch", "plexwatch_attempt", "user_id", store.ViewerMergeDrop)
 	store.RegisterViewerTable("plexwatch", "plexwatch_permit", "user_id", store.ViewerMergeDrop)
 }
+
+// Server-to-server sync. A merged viewer keeps a mapping only where the
+// target had none on that server; echo and unmatched rows are rebuilt by
+// the next pass (read-before-write keeps that from double-sending).
+func init() {
+	store.RegisterViewerTable("plexwatch_pms", "plexwatch_pms_viewer", "user_id", store.ViewerMergeMove, "server_id")
+	store.RegisterViewerTable("plexwatch_pms", "plexwatch_pms_sent", "user_id", store.ViewerMergeDrop)
+	store.RegisterViewerTable("plexwatch_pms", "plexwatch_pms_unmatched", "user_id", store.ViewerMergeDrop)
+}
