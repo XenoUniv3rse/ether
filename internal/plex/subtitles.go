@@ -148,6 +148,39 @@ func resolveSelection(sel selection, info core.MediaInfo) selection {
 	return sel
 }
 
+// burnOnlyShownSubtitle keeps a subtitle this request did not name out of
+// the picture unless the client was shown it selected (#313). Stored and
+// preferred selections resolve on the session's probed tracks, while the
+// stream list the client holds can be the pre-playback estimate (which has
+// no subtitle tracks) or another release's: the app shows None, and burning
+// the track turned a remux into a full transcode the viewer could not turn
+// off. Such a selection plays as None, which is what the client shows. A
+// track the viewer picks, or one the client was shown selected, is burned
+// as before.
+func (s *Server) burnOnlyShownSubtitle(pr *Request, p *playRequest, info core.MediaInfo) {
+	if p.subNamed || !p.subSet || p.opts.SubtitleStream < 0 || p.subSel < 0 || p.subSel >= len(info.Streams) {
+		return
+	}
+	st := info.Streams[p.subSel]
+	if st.Type != "subtitle" || st.External || st.Index != p.opts.SubtitleStream || !transcode.BurnsSubtitle(st, p.caps, p.opts) {
+		return
+	}
+	ik := s.playIdentityFor(pr, p.key)
+	if !ik.valid() {
+		return
+	}
+	shown, _ := s.playIDs.shownSubtitles(ik, s.now())
+	for i := range shown {
+		want := shown[i]
+		if want.External == st.External && transcode.IsImageSubtitle(want.Codec) == transcode.IsImageSubtitle(st.Codec) && resolveSubtitle(&want, -1, info) == p.subSel {
+			return
+		}
+	}
+	s.log.Info("subtitle not burned: the client was not shown it selected", "key", p.key, "client", pr.ClientID, "codec", st.Codec, "language", st.Language)
+	p.subSel, p.subSet, p.subStream = -1, true, nil
+	p.opts.SubtitleStream = -1
+}
+
 // resolvePlaySelection is resolveSelection for a play request.
 func resolvePlaySelection(p *playRequest, info core.MediaInfo) {
 	out, err := experience.TranslatePlexTrackIdentity(experience.PlexIssuedIdentity{

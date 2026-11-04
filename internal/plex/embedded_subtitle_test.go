@@ -157,6 +157,9 @@ func TestDirectPlayEmbeddedTextFollowsPMS(t *testing.T) {
 
 	f.trans.decision = core.Decision{Kind: core.DecisionTranscode, VideoCodec: "h264", AudioCodec: "aac", Container: "mpegts", BurnSubtitles: true}
 	putSubtitle(t, f, key.String(), pgsID)
+	// The PGS was picked on the Apple TV; Plex Web is shown it selected
+	// before it plays, so the track is burned (#313).
+	f.get(t, "/library/metadata/"+key.String(), web...)
 	rec := f.get(t, fmt.Sprintf("/video/:/transcode/universal/decision?path=/library/metadata/%s&protocol=dash&directPlay=0&directStream=1&session=web-pgs", key), web...)
 	selected := selectedTag(subtitleTags(rec.Body.String()))
 	if !strings.Contains(selected, `decision="burn"`) || !strings.Contains(selected, `location="segments-video"`) {

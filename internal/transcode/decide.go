@@ -469,6 +469,17 @@ func planAudio(a *core.StreamInfo, caps core.ClientCaps, audioIssues []string, b
 	return audioCopy, audioCodec, audioKbps, audioNote
 }
 
+// BurnsSubtitle reports whether Decide burns sub into the video. Text
+// subtitles remain sidecars, including legacy burn requests, unless the
+// client cannot draw a soft text track here (BurnTextSubtitles); an image
+// subtitle is burned when asked or when the client cannot draw it.
+func BurnsSubtitle(sub core.StreamInfo, caps core.ClientCaps, opts core.DecideOptions) bool {
+	if IsImageSubtitle(sub.Codec) {
+		return opts.BurnSubtitles || !supportsSubtitle(caps, sub.Codec)
+	}
+	return opts.BurnSubtitles && opts.BurnTextSubtitles && IsTextSubtitle(sub.Codec)
+}
+
 // Decide chooses direct play, remux into HLS, or full transcode, in that
 // order of preference, and explains why in Decision.Reason.
 func outputContainer(caps core.ClientCaps, opts core.DecideOptions, videoCodec, audioCodec string) string {
@@ -497,10 +508,7 @@ func Decide(info core.MediaInfo, caps core.ClientCaps, opts core.DecideOptions, 
 	}
 	bitrateCap := minPositive(opts.MaxBitrateKbps, caps.MaxBitrateKbps, remoteCap)
 	heightCap := minPositive(caps.MaxHeight, opts.MaxHeight)
-	// Text subtitles remain sidecars, including legacy burn requests, unless
-	// the client cannot draw a soft text track here (BurnTextSubtitles).
-	burn := sub != nil && (IsImageSubtitle(sub.Codec) && (opts.BurnSubtitles || !supportsSubtitle(caps, sub.Codec)) ||
-		opts.BurnSubtitles && opts.BurnTextSubtitles && IsTextSubtitle(sub.Codec))
+	burn := sub != nil && BurnsSubtitle(*sub, caps, opts)
 	if a != nil && len(opts.AudioFilters) > 0 {
 		d.AudioFilters = append([]string(nil), opts.AudioFilters...)
 	}

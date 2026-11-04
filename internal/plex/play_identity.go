@@ -84,6 +84,11 @@ type issuedMedia struct {
 	streams []issuedStream        // issue order
 	alias   map[int64]int64       // a track's own id -> the id issued for it
 	remap   map[int64]remapTarget // issued id -> the track it now names
+	// rendered: a stream list was issued for this Media; subtitle is the
+	// track its latest list marked selected (nil = None). A subtitle the
+	// client was never shown selected is not burned (#313).
+	rendered bool
+	subtitle *core.StreamInfo
 }
 
 type issuedStream struct {
@@ -459,7 +464,65 @@ func (p *playIdentities) issueStreams(k playIdentityKey, mediaID int64, out []mo
 		}
 		im.streams = trimmed
 	}
+	im.rendered, im.subtitle = true, nil
+	for i := range out {
+		if out[i].StreamType == 3 && streamSelected(out[i]) && src[i] >= 0 && src[i] < len(info.Streams) {
+			st := info.Streams[src[i]]
+			im.subtitle = &st
+			break
+		}
+	}
 	e.at = now
+}
+
+// pickSubtitle records that this client set the title's subtitle itself
+// (PUT /library/parts): it shows that track (nil = None) selected on every
+// Media it holds.
+func (p *playIdentities) pickSubtitle(k playIdentityKey, st *core.StreamInfo, now time.Time) {
+	if p == nil || !k.valid() {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	e := p.entryLocked(k, now)
+	if e == nil {
+		return
+	}
+	var picked *core.StreamInfo
+	if st != nil {
+		cp := *st
+		picked = &cp
+	}
+	e.mediaLocked(int64(k.key))
+	for _, im := range e.media {
+		im.rendered, im.subtitle = true, picked
+	}
+	e.at = now
+}
+
+// shownSubtitles returns the subtitle each Media's latest stream list for k
+// marked selected. rendered is false when this client holds no current
+// stream list for the title.
+func (p *playIdentities) shownSubtitles(k playIdentityKey, now time.Time) (subs []core.StreamInfo, rendered bool) {
+	if p == nil || !k.valid() {
+		return nil, false
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	e := p.m[k]
+	if e == nil || (!e.frozen && e.admitting == 0 && now.Sub(e.at) > playIdentityTTL) {
+		return nil, false
+	}
+	for _, im := range e.media {
+		if !im.rendered {
+			continue
+		}
+		rendered = true
+		if im.subtitle != nil {
+			subs = append(subs, *im.subtitle)
+		}
+	}
+	return subs, rendered
 }
 
 // resolve returns the track an issued id now names for this client, when

@@ -176,6 +176,11 @@ type playRequest struct {
 	audioStream    *core.StreamInfo // selected identity, remapped after probing
 	subSel         int              // stream position, -1 = none/default
 	subSet         bool
+	// subNamed: this request's subtitleStreamID named the subtitle (or
+	// None). Otherwise the selection is the stored or preferred one, which
+	// is burned only when the client was shown it selected (#313).
+	// Response shaping, zeroed by sameSettings.
+	subNamed bool
 	// subStream is the subtitle picked by id (request or stored), to be
 	// found again in the session's MediaInfo (resolvePlaySelection).
 	subStream *core.StreamInfo
@@ -267,6 +272,7 @@ func (p playRequest) sameSettings(other playRequest) bool {
 	p.variantRelease, other.variantRelease = "", ""
 	p.mediaID, other.mediaID = 0, 0
 	p.softText, other.softText = false, false
+	p.subNamed, other.subNamed = false, false
 	// Only subtitles=none changes what the encoder delivers; the other
 	// modes shape the response.
 	if (p.subtitles == "none") == (other.subtitles == "none") {
@@ -378,7 +384,7 @@ func (s *Server) parsePlayRequest(r *http.Request) (playRequest, error) {
 	if v := q.Get("subtitleStreamID"); v != "" {
 		if id, err := strconv.ParseInt(v, 10, 64); err == nil {
 			if id == 0 {
-				p.subSel, p.subSet, p.subStream = -1, true, nil
+				p.subSel, p.subSet, p.subStream, p.subNamed = -1, true, nil, true
 			} else {
 				binding, rerr := s.resolveIssuedStream(sessions.WithPlexServe(r.Context(), pr.Remote, ""), pr.User, pr.ClientID, id)
 				if rerr != nil && !streamMiss(rerr) {
@@ -386,7 +392,7 @@ func (s *Server) parsePlayRequest(r *http.Request) (playRequest, error) {
 				}
 				if rerr == nil && binding.Key == key && binding.Info.Type == "subtitle" {
 					info := binding.Info
-					p.subSel, p.subSet, p.subStream = binding.Index, true, &info
+					p.subSel, p.subSet, p.subStream, p.subNamed = binding.Index, true, &info, true
 				}
 			}
 		}
@@ -533,6 +539,7 @@ func (s *Server) prepare(ctx context.Context, pr *Request, p *playRequest) (*cor
 			// one it shows nothing.
 			p.opts.BurnTextSubtitles = true
 		}
+		s.burnOnlyShownSubtitle(pr, p, ps.Info)
 		p.caps.TranscodeAudioCodecs = streamingAudioTarget(pr.ProfileExtra, p.protocol)
 		if len(p.caps.AudioCodecs) > 0 && len(p.caps.TranscodeAudioCodecs) > 0 {
 			var kept []string
@@ -1764,6 +1771,14 @@ func (s *Server) handlePartSelect(w http.ResponseWriter, r *http.Request) {
 			sel.subtitle, sel.subtitleSet, sel.subtitleStream = sub.Index, true, &info
 		}
 	})
+	if clearSub || sub != nil {
+		// This client now shows the track it picked (burnOnlyShownSubtitle).
+		var picked *core.StreamInfo
+		if sub != nil {
+			picked = &sub.Info
+		}
+		s.playIDs.pickSubtitle(s.playIdentityFor(pr, core.RatingKey(id)), picked, s.now())
+	}
 	s.rememberStreamRequest(r, pr.User, core.RatingKey(id))
 	w.WriteHeader(http.StatusOK)
 }
