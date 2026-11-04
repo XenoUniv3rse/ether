@@ -50,6 +50,10 @@ type Deps struct {
 	Now              func() time.Time
 	Logger           *slog.Logger
 	ConfigGeneration func() uint64
+	// Pace is the least time between two background requests to one
+	// indexer (zero: no spacing), so feeds, gap pages and title searches
+	// never burst at an indexer.
+	Pace time.Duration
 	// Async runs evidence refreshes on the service's own goroutines, off
 	// the request path; Close stops them. False runs each refresh inline,
 	// before the request that found its answer stale.
@@ -74,6 +78,8 @@ type Service struct {
 	cacheSeeded        bool
 	snapMu             sync.RWMutex
 	snap               discoverySnap
+	paceMu             sync.Mutex
+	paced              map[string]time.Time // indexer -> next free slot (wall clock)
 }
 
 // discoverySnap is the policy hash and availability settings for one config
@@ -259,26 +265,31 @@ func (s *Service) Cycle(ctx context.Context) error {
 		live := s.budgets()
 		feeds := s.d.Feeds.FeedSources()
 		type due struct {
-			f  core.ReleaseFeed
-			at int64
+			f         core.ReleaseFeed
+			at        int64
+			scheduled bool
 		}
 		var work []due
 		for _, f := range feeds {
 			if !f.Supported || !selected(cfg.IndexerIDs, f.ID) {
 				continue
 			}
-			_, at, gap, err := s.feedState(ctx, f)
+			st, err := s.feedState(ctx, f)
 			if err != nil {
 				return err
 			}
-			interval := time.Duration(max(5, live.PollMinutes)) * time.Minute
-			// An open catch-up continues every minute. Head polls stay on the
-			// normal interval once the recent window has been walked.
-			if cfg.CatchUp && gap {
-				interval = time.Minute
+			// Head polls run on the feed's interval. An open gap (or
+			// catch-up) continues every minute in between, within the
+			// allowance left after today's head polls.
+			scheduled := st.polled == 0 || schedule.Due(s.now(), time.Unix(st.polled, 0), pollInterval(f, live))
+			resume := !scheduled && st.gap && !f.SinglePage && schedule.Due(s.now(), time.Unix(st.checked, 0), time.Minute)
+			if resume {
+				if resume, err = s.pageRoom(ctx, f, live); err != nil {
+					return err
+				}
 			}
-			if at == 0 || schedule.Due(s.now(), time.Unix(at, 0), interval) {
-				work = append(work, due{f, at})
+			if scheduled || resume {
+				work = append(work, due{f, st.checked, scheduled})
 			}
 		}
 		sort.SliceStable(work, func(i, j int) bool { return work[i].at < work[j].at })
@@ -289,7 +300,13 @@ func (s *Service) Cycle(ctx context.Context) error {
 			if !s.cfg().Availability.Monitor {
 				break
 			}
-			if err := s.syncFeed(ctx, w.f); err != nil {
+			err := s.syncFeed(ctx, w.f, w.scheduled)
+			if w.scheduled {
+				if e := s.markPolled(ctx, w.f); e != nil {
+					return e
+				}
+			}
+			if err != nil {
 				if benign(err) {
 					continue // A paused indexer must not starve other feeds.
 				}
@@ -417,7 +434,7 @@ func (s *Service) verify(parent context.Context) error {
 		return core.ErrBudgetExhausted
 	}
 	if len(hashes) > 0 && s.d.CacheCheck != nil {
-		bctx, cancel := context.WithTimeout(s.budgetContext(parent, false), 15*time.Second)
+		bctx, cancel := context.WithTimeout(s.budgetContext(parent, verifyCheck), 15*time.Second)
 		cached, definitive := s.d.CacheCheck(bctx, hashes)
 		cancel()
 		kept := work[:0]
@@ -475,7 +492,7 @@ func (s *Service) verify(parent context.Context) error {
 			if e = s.spend(parent, "checks", 1, int64(c.Checks)); e != nil {
 				return e
 			}
-			ctx, stop := context.WithTimeout(s.budgetContext(parent, false), 20*time.Second)
+			ctx, stop := context.WithTimeout(s.budgetContext(parent, verifyCheck), 20*time.Second)
 			e = s.d.Validator.VerifyFeedCandidate(ctx, t, r)
 			stop()
 			if parent.Err() != nil {

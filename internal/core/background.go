@@ -42,6 +42,9 @@ type ReleaseFeed struct {
 	DailyLimit int `json:"dailyLimit,omitempty"`
 	// PageMax is the page size reported by caps. Zero means unknown.
 	PageMax int `json:"pageMax,omitempty"`
+	// SinglePage marks a feed that lists only its latest page (a built-in
+	// site's latest releases); it cannot page back to close a gap.
+	SinglePage bool `json:"singlePage,omitempty"`
 }
 type foregroundReserveKey struct{}
 

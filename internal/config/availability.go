@@ -119,9 +119,38 @@ func (a Availability) CustomBudgets() bool {
 	}
 }
 
+// AssumedDailyLimit is the daily API (and grab) limit assumed for an indexer
+// that reports none: the entry tier of the strictest private indexers.
+const AssumedDailyLimit = 1000
+
+// BackgroundShare is the percentage of an indexer's daily limit that work
+// nobody is waiting on may spend, by effort. The owner's ReservePercent can
+// only lower it further.
+func (a Availability) BackgroundShare() int {
+	share := 10
+	switch a.Effort {
+	case "gentle":
+		share = 5
+	case "unlimited":
+		share = 100
+	}
+	return max(0, min(share, 100-min(99, max(0, a.ReservePercent))))
+}
+
+// IndexerAllowance is one indexer's daily background request allowance:
+// BackgroundShare of its own daily API limit, assuming AssumedDailyLimit
+// when it reports none (100 requests a day by default). It is a ceiling,
+// never a target: feeds and searches spend only what they need.
+func (a Availability) IndexerAllowance(dailyLimit int) int {
+	if dailyLimit <= 0 {
+		dailyLimit = AssumedDailyLimit
+	}
+	return max(1, dailyLimit*a.BackgroundShare()/100)
+}
+
 // Resolved applies Gentle / Normal / Unlimited. Custom and non-default
-// saved numbers are kept. Unlimited indexers get a generous share; a
-// configured daily cap contributes only the background portion.
+// saved numbers are kept. The total feed-and-search allowance is the sum
+// of each indexer's own allowance (IndexerAllowance).
 func (a Availability) Resolved(indexers []IndexerCap) Availability {
 	if a.CustomBudgets() {
 		if a.Effort == "" {
@@ -133,33 +162,22 @@ func (a Availability) Resolved(indexers []IndexerCap) Availability {
 	if effort == "" {
 		effort = "normal"
 	}
-	poll, pages, generous := 15, 8, 2000
+	poll, pages := 30, 8
 	switch effort {
 	case "gentle":
-		poll, pages, generous = 60, 3, 150
+		poll, pages = 60, 3
 	case "unlimited":
-		poll, pages, generous = 10, 20, 8000
+		poll, pages = 15, 20
 	}
 	a.Effort = effort
 	a.PollMinutes = poll
 	a.MaxPages = pages
-	reserve := min(99, max(0, a.ReservePercent))
 	sum := 0
-	n := 0
 	for _, ix := range indexers {
-		n++
-		if ix.DailyLimit > 0 {
-			usable := ix.DailyLimit * (100 - reserve) / 100
-			if usable < 1 {
-				usable = 1
-			}
-			sum += usable
-			continue
-		}
-		sum += generous
+		sum += a.IndexerAllowance(ix.DailyLimit)
 	}
-	if n == 0 {
-		sum = generous
+	if len(indexers) == 0 {
+		sum = a.IndexerAllowance(0)
 	}
 	a.FeedRequests = sum
 	return a

@@ -128,8 +128,8 @@ func TestFeedCatchupReservesFreshPollsAndResumesNextDay(t *testing.T) {
 	x.c.Availability.Verify = false
 	x.c.Availability.MaxPages = 5
 	x.now = time.Date(2026, 10, 20, 0, 0, 0, 0, time.UTC)
-	x.c.Availability.FeedRequests = 96 // One source, exactly one head every 15m.
-	x.f.sources[0].DailyLimit = 480    // A real cap: head polls stay reserved. Unlimited indexers do not.
+	x.c.Availability.FeedRequests = 48 // One source, exactly one head every 30m.
+	x.f.sources[0].DailyLimit = 960    // Background share 96: head polls every 30m take half.
 	f := &movingFeed{sources: x.f.sources, items: feedItems(0, 500)}
 	x.s.d.Feeds = f
 	if err := x.s.Cycle(t.Context()); err != nil {
@@ -143,7 +143,7 @@ func TestFeedCatchupReservesFreshPollsAndResumesNextDay(t *testing.T) {
 		t.Fatalf("lost denied continuation %+v", c)
 	}
 	for i := 0; i < 3; i++ {
-		x.now = x.now.Add(15 * time.Minute)
+		x.now = x.now.Add(30 * time.Minute)
 		if err := x.s.Cycle(t.Context()); err != nil {
 			t.Fatal(err)
 		}

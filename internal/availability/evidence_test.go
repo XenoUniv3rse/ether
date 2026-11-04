@@ -66,12 +66,12 @@ func TestLegacyDefaultsScaleAndCapsStayProtected(t *testing.T) {
 		t.Fatal("shipped defaults should scale")
 	}
 	four := base.Resolved([]config.IndexerCap{{}, {}, {}, {}})
-	if four.Effort != "normal" || four.FeedRequests != 8000 || four.PollMinutes != 15 || four.MaxPages != 8 {
+	if four.Effort != "normal" || four.FeedRequests != 400 || four.PollMinutes != 30 || four.MaxPages != 8 {
 		t.Fatalf("four unlimited: %+v", four)
 	}
 	capped := base.Resolved([]config.IndexerCap{{DailyLimit: 100}})
-	if capped.FeedRequests != 20 {
-		t.Fatalf("capped usable = %d, want 20", capped.FeedRequests)
+	if capped.FeedRequests != 10 {
+		t.Fatalf("capped usable = %d, want 10", capped.FeedRequests)
 	}
 	custom := base
 	custom.FeedRequests = 50
@@ -80,7 +80,7 @@ func TestLegacyDefaultsScaleAndCapsStayProtected(t *testing.T) {
 	}
 	gentle := base
 	gentle.Effort = "gentle"
-	if got := gentle.Resolved(fourIndexers()); got.FeedRequests != 600 || got.PollMinutes != 60 {
+	if got := gentle.Resolved(fourIndexers()); got.FeedRequests != 200 || got.PollMinutes != 60 {
 		t.Fatalf("gentle: %+v", got)
 	}
 }
@@ -190,11 +190,10 @@ func TestProbeUnlocksPlayableReleaseAndKeepsGate(t *testing.T) {
 	}
 	found = "web"
 	x.now = x.now.Add(7 * time.Hour)
-	// The feed lost continuity meanwhile (more uploads than a page), so it
-	// no longer vouches for the indexer and the probe searches again.
-	if _, err := x.s.db.Exec(`UPDATE availability_feeds SET covered_since=0`); err != nil {
-		t.Fatal(err)
-	}
+	// The digital release date arrives, when releases land: the title is
+	// searched once more.
+	cat.homes = map[core.RatingKey]time.Time{title.Key: x.now.Add(-time.Minute)}
+	x.s.d.Catalog = cat
 	if err := x.s.Cycle(t.Context()); err != nil {
 		t.Fatal(err)
 	}

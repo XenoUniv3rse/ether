@@ -18,6 +18,7 @@ type feedCheckpoint struct {
 	head, target, tail string
 	offset             int
 	oldest, started    int64
+	synced             int64 // last complete sync (read only)
 }
 
 const bootstrapTarget = "__ether_recent_history__"
@@ -25,14 +26,20 @@ const bootstrapTarget = "__ether_recent_history__"
 func (s *Service) checkpoint(ctx context.Context, f core.ReleaseFeed) (feedCheckpoint, error) {
 	var c feedCheckpoint
 	var gap int
-	err := s.db.QueryRowContext(ctx, `SELECT anchor,catchup_target,catchup_tail,catchup_offset,gap,catchup_oldest,catchup_started FROM availability_feeds WHERE source_id=? AND generation=?`, f.ID, f.Generation).Scan(&c.head, &c.target, &c.tail, &c.offset, &gap, &c.oldest, &c.started)
+	err := s.db.QueryRowContext(ctx, `SELECT anchor,catchup_target,catchup_tail,catchup_offset,gap,catchup_oldest,catchup_started,synced_at FROM availability_feeds WHERE source_id=? AND generation=?`, f.ID, f.Generation).Scan(&c.head, &c.target, &c.tail, &c.offset, &gap, &c.oldest, &c.started, &c.synced)
 	if errors.Is(err, sql.ErrNoRows) {
 		return c, nil
 	}
-	// Old versions advanced past gaps. Recover the recent feed history instead
-	// of presenting the lost boundary as proof of complete coverage.
-	if gap != 0 && c.target == "" {
+	// Old versions advanced past gaps. With catch-up on, recover the recent
+	// feed history instead of presenting the lost boundary as proof of
+	// complete coverage.
+	if gap != 0 && c.target == "" && s.cfg().Availability.CatchUp {
 		c.target = bootstrapTarget
+	}
+	// History walks are catch-up's alone: without it a feed reads only
+	// what was posted since its previous sync.
+	if c.target == bootstrapTarget && !s.cfg().Availability.CatchUp {
+		c.target, c.tail, c.offset = "", "", 0
 	}
 	return c, err
 }
@@ -50,47 +57,6 @@ func (s *Service) saveCheckpoint(ctx context.Context, f core.ReleaseFeed, c feed
 	return err
 }
 
-// Reserve all remaining scheduled head polls today before spending on deeper
-// pages. This is enforced by the same atomic global counter, not a preflight
-// estimate that concurrent consumers can overspend. Each indexer still applies
-// its own foreground reserve and upstream rate-limit backoff.
-func (s *Service) catchupContext(ctx context.Context, current core.ReleaseFeed) context.Context {
-	cfg := s.budgets()
-	ctx = core.WithForegroundReserve(ctx, cfg.ReservePercent)
-	return core.WithBackgroundBudget(ctx, func(ctx context.Context, kind, source string, n int64) error {
-		cfg := s.budgets()
-		if !cfg.Monitor {
-			return context.Canceled
-		}
-		interval := time.Duration(max(5, cfg.PollMinutes)) * time.Minute
-		now := s.now().UTC()
-		midnight := time.Date(now.Year(), now.Month(), now.Day()+1, 0, 0, 0, 0, time.UTC)
-		// Head polls are reserved only for indexers that actually have a cap.
-		// Unlimited indexers keep the rest of the allowance for catch-up.
-		reserve := int64(0)
-		for _, f := range s.d.Feeds.FeedSources() {
-			if !f.Supported || !selected(cfg.IndexerIDs, f.ID) || f.DailyLimit <= 0 {
-				continue
-			}
-			_, at, _, err := s.feedState(ctx, f)
-			if err != nil {
-				return err
-			}
-			next := time.Unix(at, 0).Add(interval)
-			if f.ID == current.ID {
-				next = now.Add(interval)
-			}
-			if next.Before(now) {
-				next = now
-			}
-			if next.Before(midnight) {
-				reserve += int64((midnight.Sub(next)-1)/interval) + 1
-			}
-		}
-		return s.spend(ctx, "feedRequests", n, max(0, int64(cfg.FeedRequests)-reserve))
-	})
-}
-
 func pageSize(f core.ReleaseFeed) int {
 	if f.PageMax >= 1 && f.PageMax <= 100 {
 		return f.PageMax
@@ -98,72 +64,13 @@ func pageSize(f core.ReleaseFeed) int {
 	return 100
 }
 
-// pollHead checks fresh arrivals only. Historical catch-up is optional and
-// a missing walk is not a coverage failure.
-func (s *Service) pollHead(parent context.Context, f core.ReleaseFeed) error {
-	ctx, cancel := context.WithTimeout(parent, 90*time.Second)
-	defer cancel()
-	previous, _, _, err := s.feedState(parent, f)
-	if err != nil {
-		return err
-	}
-	releases, err := s.d.Feeds.Recent(s.budgetContext(ctx, true), f.ID, 0, pageSize(f))
-	if err != nil {
-		if parent.Err() == nil {
-			_ = s.saveCheckpoint(parent, f, feedCheckpoint{}, safeReason(err), 0, false)
-		}
-		return err
-	}
-	count, err := s.ingestPage(ctx, f, releases)
-	if err != nil {
-		return err
-	}
-	head := ""
-	if len(releases) > 0 {
-		head = releases[0].ID
-	}
-	if err := s.saveCheckpoint(parent, f, feedCheckpoint{head: head}, "Feed is current within the recent-release window", count, true); err != nil {
-		return err
-	}
-	// The page reaching back to the previous head means nothing posted
-	// between the polls was missed.
-	continuous := previous != "" && pageHolds(releases, previous)
-	return s.markCoverage(parent, f, continuous)
-}
-
-func (s *Service) ingestPage(ctx context.Context, f core.ReleaseFeed, releases []core.Release) (int, error) {
-	for i := range releases {
-		releases[i].Info = releaseparse.Parse(releases[i].Name)
-	}
-	eligible := feedCategories(f, releases)
-	if err := s.retainFeed(ctx, f, eligible); err != nil {
-		return 0, err
-	}
-	var matched map[string][]core.Title
-	var err error
-	if len(eligible) > 0 {
-		matched, err = s.d.Catalog.ReleaseMatches(ctx, eligible)
-		if err != nil {
-			return 0, err
-		}
-	}
-	policy := s.policy()
-	count := 0
-	for _, r := range eligible {
-		for _, t := range matched[r.ID] {
-			if err = s.remember(ctx, f, t, r, policy); err != nil {
-				return count, err
-			}
-			count++
-		}
-	}
-	return count, nil
-}
-
-func (s *Service) syncFeed(parent context.Context, f core.ReleaseFeed) error {
-	if !s.cfg().Availability.CatchUp {
-		return s.pollHead(parent, f)
-	}
+// syncFeed reads a feed from its head back to the previous sync's head:
+// one page when fewer releases than a page arrived in between (the usual
+// case), otherwise only the pages the gap needs, at most MaxPages per sync.
+// An unfinished gap resumes on the next cycle within the allowance left
+// after today's scheduled head polls. Catch-up additionally walks the
+// recent history once.
+func (s *Service) syncFeed(parent context.Context, f core.ReleaseFeed, scheduled bool) error {
 	old, err := s.checkpoint(parent, f)
 	if err != nil {
 		return err
@@ -171,10 +78,13 @@ func (s *Service) syncFeed(parent context.Context, f core.ReleaseFeed) error {
 	ctx, cancel := context.WithTimeout(parent, 90*time.Second)
 	defer cancel()
 	c := old
-	if c.head == "" && c.target == "" {
+	if c.head == "" && c.target == "" && s.cfg().Availability.CatchUp {
 		c.target = bootstrapTarget
 	}
 	limit := min(20, max(1, s.budgets().MaxPages))
+	if f.SinglePage {
+		limit = 1
+	}
 	size := pageSize(f)
 	head := ""
 	offset := 0
@@ -188,17 +98,13 @@ func (s *Service) syncFeed(parent context.Context, f core.ReleaseFeed) error {
 	canCheckpoint := old.target == ""
 	policy := s.policy()
 	finish := func() error {
-		if err := s.saveCheckpoint(parent, f, feedCheckpoint{head: head}, "Feed is current within the recent-release window", count, true); err != nil {
-			return err
-		}
-		// Reaching the previous head with no older gap pending means every
-		// release since the last sync was read.
-		return s.markCoverage(parent, f, old.head != "" && old.target == "" && foundHead)
+		return s.saveCheckpoint(parent, f, feedCheckpoint{head: head}, "Feed is current within the recent-release window", count, true)
 	}
 	for page := 0; page < limit; page++ {
-		requestCtx := s.budgetContext(ctx, true)
-		if page > 0 {
-			requestCtx = s.catchupContext(ctx, f)
+		// Only a scheduled poll's first page spends the head-poll reserve.
+		requestCtx := s.budgetContext(ctx, feedPage)
+		if page == 0 && scheduled {
+			requestCtx = s.budgetContext(ctx, headPoll)
 		}
 		releases, e := s.d.Feeds.Recent(requestCtx, f.ID, offset, size)
 		if e != nil {
@@ -252,6 +158,9 @@ func (s *Service) syncFeed(parent context.Context, f core.ReleaseFeed) error {
 		headIndex := -1
 		reachedTarget := false
 		oldPage := true
+		// A gap is closed once a page holds only releases from a day before
+		// the previous sync, even if its head release was since deleted.
+		pastGap := target != bootstrapTarget && old.synced > 0
 		for i := range releases {
 			releases[i].Info = releaseparse.Parse(releases[i].Name)
 			if releases[i].ID == old.head {
@@ -265,6 +174,9 @@ func (s *Service) syncFeed(parent context.Context, f core.ReleaseFeed) error {
 			}
 			if releases[i].PubDate.IsZero() || releases[i].PubDate.After(s.now().Add(-time.Duration(max(60, s.cfg().Availability.EffectiveMovieEvidenceDays())+1)*24*time.Hour)) {
 				oldPage = false
+			}
+			if releases[i].PubDate.IsZero() || releases[i].PubDate.After(time.Unix(old.synced, 0).Add(-24*time.Hour)) {
+				pastGap = false
 			}
 		}
 		eligible := feedCategories(f, releases)
@@ -286,7 +198,10 @@ func (s *Service) syncFeed(parent context.Context, f core.ReleaseFeed) error {
 				count++
 			}
 		}
-		if reachedTarget || len(releases) < size || oldPage {
+		// A first sync without catch-up starts at the head: history is not
+		// needed, a title is searched once when it enters the window. A
+		// single-page feed cannot page back.
+		if reachedTarget || len(releases) < size || oldPage || (page > 0 && pastGap) || (old.head == "" && target == "") || f.SinglePage {
 			return finish()
 		}
 		if headIndex >= 0 {
