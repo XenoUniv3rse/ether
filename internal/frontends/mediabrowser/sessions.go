@@ -62,8 +62,13 @@ func (i *instance) brokerSessionDTO(viewer *frontend.Viewer, session frontend.Se
 		item["HasCustomDeviceName"] = false
 	}
 	if session.Capabilities != nil {
-		caps := sessionCapabilitiesDTO(*session.Capabilities)
+		caps := i.sessionCapabilitiesDTO(*session.Capabilities)
 		if i.protocol == "jellyfin" {
+			if session.Protocol != "jellyfin" {
+				// Another surface's device profile is not a Jellyfin
+				// DeviceProfile; a Kotlin client fails the list on it.
+				delete(caps, "DeviceProfile")
+			}
 			item["Capabilities"] = caps
 		}
 		for _, key := range []string{"PlayableMediaTypes", "SupportedCommands", "SupportsRemoteControl", "SupportsMediaControl"} {

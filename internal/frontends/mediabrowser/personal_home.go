@@ -13,6 +13,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -967,9 +968,16 @@ func (i *instance) storedUserConfig(r *http.Request, v *frontend.Viewer) (map[st
 func (i *instance) applyOrderedViews(r *http.Request, v *frontend.Viewer, configuration map[string]any) {
 	if stored, ok := i.storedUserConfig(r, v); ok {
 		for _, key := range []string{"OrderedViews", "LatestItemsExcludes", "MyMediaExcludes", "HidePlayedInLatest"} {
-			if value, exists := stored[key]; exists {
-				configuration[key] = value
+			value, exists := stored[key]
+			if !exists {
+				continue
 			}
+			if list, ok := value.([]any); ok && i.protocol == "jellyfin" {
+				// jellyfin-sdk-kotlin reads these as UUID lists; one id it
+				// cannot parse fails the whole user response.
+				value = uuidStrings(list)
+			}
+			configuration[key] = value
 		}
 		return
 	}
@@ -1239,4 +1247,24 @@ func (i *instance) creditPlay(r *http.Request, v *frontend.Viewer, itemID string
 	if err != nil && i.host.Log != nil {
 		i.host.Log.Warn("row play failed", "error", err)
 	}
+}
+
+// uuidStrings keeps the entries a Jellyfin client can read as UUIDs: 32 hex
+// digits, optionally in the dashed 8-4-4-4-12 form.
+func uuidStrings(list []any) []string {
+	out := make([]string, 0, len(list))
+	for _, item := range list {
+		text, _ := item.(string)
+		plain := text
+		if len(text) == 36 && text[8] == '-' && text[13] == '-' && text[18] == '-' && text[23] == '-' {
+			plain = text[:8] + text[9:13] + text[14:18] + text[19:23] + text[24:]
+		}
+		if len(plain) != 32 {
+			continue
+		}
+		if _, err := hex.DecodeString(plain); err == nil {
+			out = append(out, text)
+		}
+	}
+	return out
 }
