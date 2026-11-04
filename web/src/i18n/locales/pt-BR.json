@@ -1443,6 +1443,7 @@
   "m_063bb7c87cb8ff": "Nenhum endereço de conexão informado ainda",
   "m_063bd391e42d81": "Limites",
   "m_063ce704e76b48": "Espectador removido",
+  "m_063d340e6fb04f": "O Plex não permite que outros servidores sincronizem o status de exibição. O Plex só aceita isso dos próprios servidores, então o Ether não pode enviar nem importar o status de assistido por meio de uma conta Plex. O status de exibição continua sincronizado entre os apps Ether deste espectador.",
   "m_063f68e2d72f6a": "Ele não alterou nada",
   "m_06422a9896d898": "Fontes de descoberta",
   "m_0643a12e17aa72": "Não informado por este hardware",

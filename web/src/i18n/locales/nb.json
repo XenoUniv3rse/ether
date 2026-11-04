@@ -1403,6 +1403,7 @@
   "m_063bb7c87cb8ff": "Ingen tilkoblingsadresse er rapportert ennå",
   "m_063bd391e42d81": "Grenser",
   "m_063ce704e76b48": "Seer fjernet",
+  "m_063d340e6fb04f": "Plex lar ikke andre servere synkronisere visningsstatus. Plex godtar dette bare fra sine egne servere, så Ether kan ikke sende eller importere visningsstatus gjennom en Plex-konto. Visningsstatus synkroniseres fortsatt mellom denne seerens Ether-apper.",
   "m_063f68e2d72f6a": "Det har ikke endret noe",
   "m_06422a9896d898": "Oppdagelseskilder",
   "m_0643a12e17aa72": "Rapporteres ikke av denne maskinvaren",

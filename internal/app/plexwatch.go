@@ -79,6 +79,8 @@ func mapPlexWatchErr(err error) error {
 		return admin.ErrPlexNotEligible
 	case errors.Is(err, plexwatch.ErrRevoked):
 		return admin.ErrPlexWatchRevoked
+	case errors.Is(err, plexwatch.ErrUnsupported):
+		return admin.ErrPlexWatchUnsupported
 	default:
 		return err
 	}

@@ -1483,6 +1483,7 @@
   "m_063bb7c87cb8ff": "Zatím nebyla nahlášena žádná adresa pro připojení",
   "m_063bd391e42d81": "Limity",
   "m_063ce704e76b48": "Divák odebrán",
+  "m_063d340e6fb04f": "Plex nedovoluje jiným serverům synchronizovat stav sledování. Plex to přijímá pouze od svých vlastních serverů, takže Ether nemůže odesílat ani importovat stav sledování přes účet Plex. Stav sledování se dál synchronizuje mezi aplikacemi Ether tohoto diváka.",
   "m_063f68e2d72f6a": "Nic nezměnil",
   "m_06422a9896d898": "Zdroje objevování",
   "m_0643a12e17aa72": "Tento hardware to nehlásí",

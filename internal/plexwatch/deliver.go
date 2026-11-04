@@ -40,6 +40,10 @@ func (s *Service) deliverAvailable(ctx context.Context) {
 			s.log.Warn("plex watch echo compact", "err", err.Error())
 		}
 	}
+	if !s.supported {
+		// Queued intents and held attempts stay parked, unread and unlogged.
+		return
+	}
 	if _, err := s.ReconcileOnce(ctx); err != nil && ctx.Err() == nil {
 		s.log.Warn("plex watch hold reconcile", "err", err.Error())
 	}
@@ -57,6 +61,9 @@ func (s *Service) deliverAvailable(ctx context.Context) {
 // DeliverOnce sends at most one live intent. more is true when a row was
 // claimed, including rows skipped because a newer intent replaced them.
 func (s *Service) DeliverOnce(ctx context.Context) (bool, error) {
+	if !s.supported {
+		return false, nil
+	}
 	now := s.now()
 	attempt := s.node + ":" + newID()
 	row, ok, err := s.state.ClaimSync(ctx, attempt, now, s.claimFor)

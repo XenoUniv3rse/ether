@@ -1,6 +1,10 @@
 // Package plexwatch delivers one viewer's watched state, and whole-star
 // ratings, to that viewer's own Plex account.
 //
+// In this release the integration is dormant: AccountSyncSupported is false
+// because scrobbles.plex.tv accepts no credential a non-Plex server can hold.
+// Nothing below runs against Plex until that constant is turned on.
+//
 // Local watch rows stay authoritative. A watch mark and a rating each have
 // their own timestamp, so one cannot make the other look newer. Intents are
 // rows in state_sync_journal, written in the same transaction as the watch

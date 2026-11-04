@@ -1403,6 +1403,7 @@
   "m_063bb7c87cb8ff": "Henüz bağlantı adresi bildirilmedi",
   "m_063bd391e42d81": "Sınırlar",
   "m_063ce704e76b48": "İzleyici kaldırıldı",
+  "m_063d340e6fb04f": "Plex, diğer sunucuların izleme durumunu eşitlemesine izin vermiyor. Plex bunu yalnızca kendi sunucularından kabul ettiği için Ether, izlenme durumunu bir Plex hesabı üzerinden gönderemez veya içe aktaramaz. İzleme durumu bu izleyicinin Ether uygulamaları arasında eşitlenmeye devam eder.",
   "m_063f68e2d72f6a": "Hiçbir şeyi değiştirmedi",
   "m_06422a9896d898": "Keşif kaynakları",
   "m_0643a12e17aa72": "Bu donanım tarafından bildirilmiyor",

@@ -26,6 +26,9 @@ func (s *Service) RunImports(ctx context.Context) {
 }
 
 func (s *Service) importDue(ctx context.Context) {
+	if !s.supported {
+		return
+	}
 	now := s.now().UnixNano()
 	rows, err := s.db.QueryContext(ctx, `SELECT user_id,plex_id FROM plexwatch_account WHERE (direction & 2)<>0 AND revoked=0 AND token<>'' AND next_import<=? AND next_allowed<=? AND import_lease<=? ORDER BY next_import,user_id LIMIT 8`, now, now, now)
 	if err != nil {
@@ -50,6 +53,9 @@ func (s *Service) importDue(ctx context.Context) {
 
 // ImportCurrent uses the same cursor and persisted status for manual and scheduled imports.
 func (s *Service) ImportCurrent(ctx context.Context, userID, plexID int64) (Status, error) {
+	if !s.supported {
+		return Status{}, ErrUnsupported
+	}
 	acct, err := s.requireMatch(ctx, userID, plexID)
 	if err != nil {
 		return Status{}, err

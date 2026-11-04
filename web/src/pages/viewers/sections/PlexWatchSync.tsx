@@ -1,4 +1,5 @@
 import {
+  Badge,
   Button,
   SettingsSection,
   Spinner,
@@ -95,6 +96,37 @@ export function PlexWatchSync({ viewerId, plexId }: { viewerId: number; plexId: 
   }
 
   const st = status.data;
+  // Plex accepts account watch sync only from its own servers. The section
+  // stays visible and honest, and a stored account can still be removed.
+  if (st.problem === "unsupported") {
+    const account = st.connected || (st.accountMatch && !!st.username);
+    return (
+      <SettingsSection>
+        <h2 className="flex items-center gap-2 px-5 py-4 text-sm font-semibold">
+          {t("Plex account watch state")}
+          <Badge variant="secondary">{t("Unavailable")}</Badge>
+        </h2>
+        <p className="px-5 pb-4 text-sm text-fg-muted">
+          {t(
+            "Plex doesn't let other servers sync watch state. Plex accepts this only from its own servers, so Ether can't send or import watched state through a Plex account. Watch state still syncs between this viewer's Ether apps.",
+          )}
+        </p>
+        {account ? (
+          <SettingsRow
+            title={t("Connection")}
+            control={
+              <div className="flex items-center gap-2">
+                {st.username ? <span>{st.username}</span> : null}
+                <Button disabled={busy} onClick={() => void run("/disconnect", "POST")}>
+                  {t("Disconnect")}
+                </Button>
+              </div>
+            }
+          />
+        ) : null}
+      </SettingsSection>
+    );
+  }
   const date = (seconds: number) =>
     seconds ? new Date(seconds * 1000).toLocaleString() : t("Never");
   const problem =

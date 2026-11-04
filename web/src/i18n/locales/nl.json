@@ -1403,6 +1403,7 @@
   "m_063bb7c87cb8ff": "Nog geen verbindingsadres gerapporteerd",
   "m_063bd391e42d81": "Limieten",
   "m_063ce704e76b48": "Kijker verwijderd",
+  "m_063d340e6fb04f": "Plex staat niet toe dat andere servers de kijkstatus synchroniseren. Plex accepteert dit alleen van zijn eigen servers, dus Ether kan de kijkstatus niet via een Plex-account verzenden of importeren. De kijkstatus wordt nog steeds gesynchroniseerd tussen de Ether-apps van deze kijker.",
   "m_063f68e2d72f6a": "Het heeft niets gewijzigd",
   "m_06422a9896d898": "Ontdekbronnen",
   "m_0643a12e17aa72": "Niet gerapporteerd door deze hardware",
