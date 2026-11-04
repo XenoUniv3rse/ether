@@ -33,6 +33,9 @@ export default defineConfig(({ mode }) => ({
   },
   server: {
     port: 5173,
+    // Ether answers its own CORS (the add-on settings relay is reached from
+    // a sandboxed frame); the dev server must pass preflights through.
+    cors: false,
     // Mock mode serves the API in the browser; never touch a real server then.
     proxy:
       mode === "mock"

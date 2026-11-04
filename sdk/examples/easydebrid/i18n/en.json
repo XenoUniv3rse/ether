@@ -1,0 +1,12 @@
+{
+  "summary": "Adds native cache checks and cached playback from an EasyDebrid account.",
+  "key": "API token",
+  "key_hint": "Your EasyDebrid bearer token, saved in Ether\u2019s secret vault.",
+  "page": "EasyDebrid account",
+  "state": "Account setup",
+  "connection": "Connection test",
+  "test": "Check account",
+  "capabilities": "What this source provides",
+  "help": "Checks cached files and refreshes playback links. No downloads are queued.",
+  "docs": "API documentation: https://easydebrid.com/apidoc/index.html"
+}

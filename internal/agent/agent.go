@@ -44,6 +44,9 @@ type Options struct {
 	TurnTimeout time.Duration
 	// TokenBudget bounds summed provider tokens per turn; default 200k.
 	TokenBudget int
+	// Heartbeat is how often a quiet turn stream sends a keep-alive
+	// comment; default 15 seconds.
+	Heartbeat time.Duration
 }
 
 // Service runs Ask Ether turns.
@@ -55,11 +58,14 @@ type Service struct {
 	maxSteps  int
 	timeout   time.Duration
 	budget    int
+	heartbeat time.Duration
 
-	mu      sync.Mutex
-	turns   map[string]context.CancelFunc
-	busy    map[string]bool // threads with a turn in flight
-	secrets map[string]func(ctx context.Context, value string) error
+	mu    sync.Mutex
+	turns map[string]context.CancelFunc
+	busy  map[string]bool // threads with a turn in flight
+	// detached counts turns running past their request (detachedRoutes).
+	detached int
+	secrets  map[string]func(ctx context.Context, value string) error
 }
 
 // New builds a Service.
@@ -82,21 +88,28 @@ func New(opts Options) *Service {
 	if budget <= 0 {
 		budget = 200_000
 	}
+	heartbeat := opts.Heartbeat
+	if heartbeat <= 0 {
+		heartbeat = 15 * time.Second
+	}
 	log := opts.Logger
 	if log == nil {
 		log = slog.Default()
 	}
 	return &Service{
 		model: opts.Model, catalogue: opts.Catalogue, store: opts.Store, log: log,
-		maxSteps: steps, timeout: timeout, budget: budget,
+		maxSteps: steps, timeout: timeout, budget: budget, heartbeat: heartbeat,
 		turns: map[string]context.CancelFunc{}, busy: map[string]bool{}, secrets: map[string]func(ctx context.Context, value string) error{},
 	}
 }
 
 // TurnContext is where the owner is in the console.
 type TurnContext struct {
-	Route  string `json:"route"`
-	Record *struct {
+	Route string `json:"route"`
+	// MediaType is the kind of titles the owner picked on pages that ask
+	// (movie, show or mixed); empty elsewhere.
+	MediaType string `json:"mediaType,omitempty"`
+	Record    *struct {
 		Type string `json:"type"`
 		ID   string `json:"id"`
 	} `json:"record,omitempty"`
@@ -277,7 +290,7 @@ func (s *Service) RunTurn(ctx context.Context, p tools.Principal, threadID, prom
 	if s.model == nil || s.store == nil || s.catalogue == nil {
 		return "", "", fmt.Errorf("agent is not configured")
 	}
-	ctx, cancel := context.WithTimeout(ctx, s.timeout)
+	ctx, cancel := context.WithTimeout(ctx, s.turnTimeout(tc))
 	defer cancel()
 
 	if threadID == "" {
@@ -304,6 +317,15 @@ func (s *Service) RunTurn(ctx context.Context, p tools.Principal, threadID, prom
 	return threadID, turnID, err
 }
 
+// turnTimeout is how long one turn may run. Studio turns read, write and
+// re-check plugin source, which takes a slower model well past a chat turn.
+func (s *Service) turnTimeout(tc TurnContext) time.Duration {
+	if tc.Route == "/plugins/studio" {
+		return max(s.timeout, 15*time.Minute)
+	}
+	return s.timeout
+}
+
 // ErrThreadBusy reports a second concurrent turn in one conversation.
 var ErrThreadBusy = errors.New("a turn is already running in this conversation")
 
@@ -318,7 +340,7 @@ func (s *Service) ContinueAfterApproval(ctx context.Context, p tools.Principal, 
 		return false, nil
 	}
 	defer s.releaseThread(appr.ThreadID)
-	ctx, cancel := context.WithTimeout(ctx, s.timeout)
+	ctx, cancel := context.WithTimeout(ctx, s.turnTimeout(tc))
 	defer cancel()
 	verb := "approved"
 	if appr.Status == "rejected" {
@@ -365,6 +387,11 @@ func (s *Service) runAssistant(ctx context.Context, p tools.Principal, threadID 
 		return turnID, err
 	}
 	finishReason, runErr := s.loop(ctx, p, threadID, turnID, tc, extra, emit)
+	if errors.Is(runErr, errTurnDeadline) {
+		// The loop has already told the owner, in the transcript.
+		_ = emit(chunkFinish(finishReason))
+		return turnID, nil
+	}
 	if runErr != nil {
 		if errors.Is(runErr, context.Canceled) || errors.Is(runErr, context.DeadlineExceeded) {
 			_ = emit(chunkError("The turn was stopped."))
@@ -374,6 +401,8 @@ func (s *Service) runAssistant(ctx context.Context, p tools.Principal, threadID 
 		msg := "The turn failed. Details are in the server log."
 		if errors.Is(runErr, llm.ErrToolsUnsupported) {
 			msg = "This model can't use tools. Choose another model in Language model settings."
+		} else if errors.Is(runErr, llm.ErrStreamIdle) {
+			msg = "The language model stopped answering for 2 minutes, so Ether ended this turn. Send your message again to retry."
 		}
 		s.log.Warn("agent turn failed", "thread", threadID, "err", runErr)
 		_ = emit(chunkError(msg))

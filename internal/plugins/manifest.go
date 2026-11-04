@@ -23,6 +23,22 @@ func ParseManifest(raw []byte) (Manifest, error) {
 	return m, nil
 }
 
+// UnmarshalJSON completes a Stremio-backed plugin's roles from its
+// catalogs and resources wherever a manifest is read: packages, stored
+// records and drafts alike.
+func (m *Manifest) UnmarshalJSON(b []byte) error {
+	type plain Manifest
+	var p plain
+	if err := json.Unmarshal(b, &p); err != nil {
+		return err
+	}
+	*m = Manifest(p)
+	if m.Ether != nil && m.Ether.Stremio {
+		m.Ether = m.withStremioRoles()
+	}
+	return nil
+}
+
 var (
 	idRe       = regexp.MustCompile(`^[a-z0-9]+(\.[a-z0-9][a-z0-9-]*)+$`)
 	keyRe      = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$`)
@@ -76,6 +92,7 @@ func LintCopy(s string, max int) string {
 // capabilityKinds is the SPEC §5.1.3 table. A nil set means any kind.
 var capabilityKinds = map[Capability]map[Kind]bool{
 	CapStreamSource:    {KindSource: true},
+	CapDebridProvider:  {KindSource: true},
 	CapListSource:      {KindIntegration: true, KindExtension: true},
 	CapPluginDirectory: {KindIntegration: true, KindExtension: true, KindSource: true},
 	CapMetadata:        {KindIntegration: true, KindExtension: true, KindSource: true},
@@ -95,6 +112,11 @@ var knownKinds = map[Kind]bool{
 
 // IsStremioOnly reports whether m is a plain Stremio add-on (no ether block).
 func (m Manifest) IsStremioOnly() bool { return m.Ether == nil }
+
+// SpeaksStremio reports whether Ether reads this plugin's catalogues,
+// metadata, subtitles, channels and directories over Stremio routes: a
+// plain add-on, or a native plugin built from one in Studio.
+func (m Manifest) SpeaksStremio() bool { return m.Ether == nil || m.Ether.Stremio }
 
 // HasCapability reports whether the manifest declares c.
 func (m Manifest) HasCapability(c Capability) bool {
@@ -159,7 +181,9 @@ func (m Manifest) Validate() error {
 		case seenCap[c]:
 			add(field, "is listed twice")
 		default:
-			if allowed := capabilityKinds[c]; allowed != nil && !allowed[e.Kind] {
+			// An add-on-backed plugin's roles come from its Stremio
+			// resources, which may combine (a catalogue that also streams).
+			if allowed := capabilityKinds[c]; allowed != nil && !allowed[e.Kind] && !e.Stremio {
 				add(field, string(c)+" is not allowed for kind "+string(e.Kind))
 			}
 		}
@@ -392,7 +416,9 @@ func validateContributes(m Manifest, add func(string, string)) {
 		}
 		if strings.TrimSpace(s) == "" {
 			add(field, "is required")
-		} else if msg := LintCopy(s, max); msg != "" {
+		} else if msg := LintCopy(s, max); msg != "" && !e.Stremio {
+			// Labels an add-on brings (its catalogue names) are its own
+			// words; Ether shows them as the add-on wrote them.
 			add(field, msg)
 		}
 	}
@@ -402,6 +428,9 @@ func validateContributes(m Manifest, add func(string, string)) {
 		} else if !map[string]bool{"debrid": true, "usenet": true, "indexer": true, "direct": true}[c.Source.Class] {
 			add("ether.contributes.source.class", "must be debrid, usenet, indexer or direct")
 		}
+	}
+	if m.HasCapability(CapDebridProvider) && (c.Source == nil || c.Source.Class != "debrid") {
+		add("ether.contributes.source.class", "must be debrid for debrid_provider")
 	}
 	if m.HasCapability(CapLiveTV) {
 		if c.Channels == nil || !c.Channels.Test {

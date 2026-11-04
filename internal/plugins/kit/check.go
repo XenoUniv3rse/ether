@@ -133,6 +133,11 @@ func checkStringsAndCopy(rep *Report, man plugins.Manifest, files map[string][]b
 			usages[key] = append(usages[key], stringUsage{field: field, maxChars: max, isHint: isHint})
 			return
 		}
+		// Plain text a Stremio add-on brings (catalogue names) is the
+		// add-on's own; only the plugin's summary is held to Ether's rules.
+		if e.Stremio && field != "ether.summary" {
+			return
+		}
 		if strings.TrimSpace(val) != "" {
 			if msg := plugins.LintCopy(val, max); msg != "" {
 				rep.addErr("copy", field, msg)
@@ -431,6 +436,7 @@ type recordingHost struct {
 	kv       map[string]string
 	observed map[string]int
 	undecl   map[string]bool
+	deferred int
 }
 
 func newRecordingHost(man plugins.Manifest) *recordingHost {
@@ -499,6 +505,18 @@ func (h *recordingHost) CallHost(ctx context.Context, name string, raw json.RawM
 		return nil, wasm.Forbidden("undeclared secret " + sec)
 	case "settings.get":
 		return json.RawMessage(`{}`), nil
+	case "addon.get":
+		// An add-on-backed plugin's checks run offline: the add-on answers
+		// with an empty, well-formed Stremio response.
+		if !h.man.Ether.Stremio {
+			return nil, wasm.Forbidden("addon.get is only for plugins made from an add-on")
+		}
+		body := `{"metas":[],"streams":[],"subtitles":[],"addons":[],"meta":{"id":"tt0000001","type":"movie","name":"Fixture"}}`
+		if strings.HasSuffix(str(0), "/manifest.json") {
+			body = `{"id":"fixture","version":"1.0.0","name":"Fixture","resources":[],"types":[]}`
+		}
+		b, _ := json.Marshal(map[string]any{"status": 200, "body": body})
+		return b, nil
 	case "http.fetch":
 		var req struct {
 			Method  string            `json:"method"`
@@ -519,13 +537,10 @@ func (h *recordingHost) CallHost(ctx context.Context, name string, raw json.RawM
 			h.undecl[host] = true
 			return nil, wasm.Forbidden("undeclared network host " + host)
 		}
-		resp := map[string]any{
-			"status":  200,
-			"headers": map[string]string{"content-type": "application/json"},
-			"body":    `{"ok":true,"status":true,"subtitles":[]}`,
-		}
-		b, _ := json.Marshal(resp)
-		return b, nil
+		// The offline checker cannot invent the upstream API's response shape.
+		// Stop at this boundary and leave an explicit live-test warning.
+		h.deferred++
+		return nil, &wasm.Fault{Code: "check_dependency", Message: "declared network request needs a live test"}
 	case "catalog.search":
 		if h.man.Ether.Permissions.Catalog != "read" {
 			return nil, wasm.Forbidden("catalog permission not declared")
@@ -622,7 +637,7 @@ func checkHostedRuntime(ctx context.Context, rep *Report, man plugins.Manifest, 
 	rep.Exports = map[string]bool{"handle": plug.HasHandle(), "rank_key": plug.HasRankKey(), "cond_match": plug.HasCondMatch()}
 
 	// Exercise declared routes and capabilities.
-	checkRoutes(ctx, rep, man, plug, stringsByLocale)
+	checkRoutes(ctx, rep, man, plug, stringsByLocale, host)
 
 	// Record observed and undeclared network hosts.
 	host.mu.Lock()
@@ -679,7 +694,7 @@ type routeFixture struct {
 	validate func(resp wasm.Response) string
 }
 
-func checkRoutes(ctx context.Context, rep *Report, man plugins.Manifest, plug *wasm.Plugin, stringsByLocale map[string]map[string]string) {
+func checkRoutes(ctx context.Context, rep *Report, man plugins.Manifest, plug *wasm.Plugin, stringsByLocale map[string]map[string]string, host *recordingHost) {
 	needsHandle := len(man.Ether.Contributes.Pages) > 0 ||
 		len(man.Ether.Contributes.Slots) > 0 ||
 		len(man.Ether.Contributes.Commands) > 0 ||
@@ -687,6 +702,7 @@ func checkRoutes(ctx context.Context, rep *Report, man plugins.Manifest, plug *w
 		len(man.Ether.Contributes.ListSources) > 0 ||
 		len(man.Ether.Schedule) > 0 ||
 		man.HasCapability(plugins.CapStreamSource) ||
+		man.HasCapability(plugins.CapDebridProvider) ||
 		man.HasCapability(plugins.CapLiveTV) ||
 		man.HasCapability(plugins.CapSubtitles) ||
 		man.HasCapability(plugins.CapMarkers) ||
@@ -738,7 +754,7 @@ func checkRoutes(ctx context.Context, rep *Report, man plugins.Manifest, plug *w
 	if (man.Ether.Contributes.Channels != nil && man.Ether.Contributes.Channels.Test) ||
 		(man.Ether.Contributes.Notification != nil && man.Ether.Contributes.Notification.SendTest) ||
 		(man.Ether.Contributes.Integration != nil && man.Ether.Contributes.Integration.Test) ||
-		man.HasCapability(plugins.CapStreamSource) {
+		(man.HasCapability(plugins.CapStreamSource) || man.HasCapability(plugins.CapDebridProvider)) {
 		fixtures = append(fixtures, routeFixture{
 			method: "POST",
 			path:   "/ether/test",
@@ -793,6 +809,10 @@ func checkRoutes(ctx context.Context, rep *Report, man plugins.Manifest, plug *w
 	// List sources.
 	for _, ls := range man.Ether.Contributes.ListSources {
 		catPath := "/catalog/movie/" + ls.Catalog + ".json"
+		if strings.Contains(ls.Catalog, "/") {
+			// Native and adapted catalogues may both declare type/id.
+			catPath = "/catalog/" + ls.Catalog + ".json"
+		}
 		fixtures = append(fixtures, routeFixture{
 			method: "GET",
 			path:   catPath,
@@ -848,8 +868,12 @@ func checkRoutes(ctx context.Context, rep *Report, man plugins.Manifest, plug *w
 	// Listing is public to the host; download requires a viewer pick.
 	if man.HasCapability(plugins.CapSubtitles) {
 		subPath := "/subtitles/movie/tt0012349/videoHash=0123456789abcdef.json"
-		// Download must refuse a missing pick token.
-		callNoPick(ctx, rep, plug, "/ether/subtitles/download")
+		// Download must refuse a missing pick token. A plugin that answers
+		// as a Stremio add-on hands out subtitle links instead and has no
+		// download route.
+		if !man.SpeaksStremio() {
+			callNoPick(ctx, rep, plug, "/ether/subtitles/download")
+		}
 		// Listing succeeds without a pick and returns a subtitles array.
 		fixtures = append(fixtures, routeFixture{
 			method: "GET",
@@ -999,7 +1023,7 @@ func checkRoutes(ctx context.Context, rep *Report, man plugins.Manifest, plug *w
 	}
 
 	for _, fx := range fixtures {
-		runRouteFixture(ctx, rep, plug, fx)
+		runRouteFixture(ctx, rep, plug, fx, host)
 	}
 }
 
@@ -1052,7 +1076,10 @@ func callNoPick(ctx context.Context, rep *Report, plug *wasm.Plugin, subPath str
 	rep.Routes = append(rep.Routes, rt)
 }
 
-func runRouteFixture(ctx context.Context, rep *Report, plug *wasm.Plugin, fx routeFixture) {
+func runRouteFixture(ctx context.Context, rep *Report, plug *wasm.Plugin, fx routeFixture, host *recordingHost) {
+	host.mu.Lock()
+	before := host.deferred
+	host.mu.Unlock()
 	deadline := plugins.DeadlineFor(fx.path)
 	cctx, cancel := context.WithTimeout(ctx, deadline)
 	defer cancel()
@@ -1081,6 +1108,17 @@ func runRouteFixture(ctx context.Context, rep *Report, plug *wasm.Plugin, fx rou
 		DurationMS: float64(dur.Microseconds()) / 1000.0,
 		DeadlineMS: deadline.Milliseconds(),
 		OK:         true,
+	}
+	host.mu.Lock()
+	deferred := host.deferred > before
+	host.mu.Unlock()
+	if deferred {
+		rt.OK = false
+		rt.Skipped = true
+		rt.Error = "Needs a live test: this route uses a declared network service."
+		rep.Routes = append(rep.Routes, rt)
+		rep.addWarn("live_test", fx.path, rt.Error)
+		return
 	}
 	if err != nil {
 		rt.OK = false

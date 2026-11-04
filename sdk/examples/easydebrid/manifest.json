@@ -1,0 +1,60 @@
+{
+  "id": "community.easydebrid.native",
+  "name": "EasyDebrid",
+  "version": "1.0.0",
+  "description": "EasyDebrid cache checks and cached-file playback through Ether\u2019s native debrid pipeline.",
+  "ether": {
+    "protocol": 1,
+    "kind": "source",
+    "capabilities": [
+      "debrid_provider",
+      "ui"
+    ],
+    "summary": "$t:summary",
+    "runtime": {
+      "kind": "hosted",
+      "entry": "src/plugin.ts"
+    },
+    "author": {
+      "name": "Server owner"
+    },
+    "license": "MIT",
+    "permissions": {
+      "network": [
+        "easydebrid.com"
+      ],
+      "secrets": [
+        "apiKey"
+      ]
+    },
+    "settings": {
+      "fields": [
+        {
+          "key": "apiKey",
+          "kind": "secret",
+          "label": "$t:key",
+          "hint": "$t:key_hint"
+        }
+      ]
+    },
+    "strings": {
+      "en": "i18n/en.json"
+    },
+    "contributes": {
+      "source": {
+        "class": "debrid",
+        "abilities": [
+          "cache-check",
+          "cached-playback"
+        ]
+      },
+      "pages": [
+        {
+          "key": "account",
+          "label": "$t:page",
+          "route": "/ether/view/account"
+        }
+      ]
+    }
+  }
+}

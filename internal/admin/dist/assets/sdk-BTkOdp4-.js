@@ -63,4 +63,59 @@ const e=`declare module "ether" {
   /** A translatable string from the plugin's strings file. */
   export function t(text: string): string;
 }
-`;export{e as S};
+`,t=`interface EtherFetchRequest {
+  url: string;
+  method?: string;
+  headers?: Record<string, string>;
+  body?: string;
+  bodyBase64?: string;
+}
+interface EtherFetchResponse {
+  status: number;
+  headers: Record<string, string>;
+  /** The response text (JSON, HTML, playlists). */
+  body: string;
+  /** Exact bytes, only for responses that are not text. */
+  bodyBase64?: string;
+}
+interface EtherCatalogTitle {
+  id: number;
+  title: string;
+  type: "movie" | "show";
+  year?: number;
+  tmdbId?: number;
+  imdbId?: string;
+}
+declare const ether: {
+  log(...args: unknown[]): void;
+  abort(message?: string): never;
+  kv: {
+    get(key: string): string | null;
+    put(key: string, value: string): void;
+    delete(key: string): void;
+    list(prefix?: string): string[];
+  };
+  /** Saved non-secret settings. Apply code defaults for unset values. */
+  settings: { get(): Record<string, unknown> };
+  secret: { get(name: string): string };
+  /** Reaches only hosts listed in the manifest's network permissions. */
+  http: { fetch(req: EtherFetchRequest): EtherFetchResponse };
+  /** Add-on drafts only: asks the add-on this plugin was made from. */
+  addon: { get(route: string): { status: number; body: string } };
+  catalog: {
+    search(query: string): { titles: EtherCatalogTitle[] };
+    get(id: string): EtherCatalogTitle | null;
+  };
+  viewers: {
+    granted(): { id: number; name: string }[];
+    history(viewerId: number, page?: number): unknown[];
+    setWatchState(v: { viewerId: number; titleId: string; watched: boolean }): void;
+  };
+  collections: { upsert(collection: Record<string, unknown>): void };
+  folders: {
+    list(root: string, path?: string): { name: string; path: string; dir: boolean; size?: number }[];
+    stat(root: string, path: string): { name: string; path: string; dir: boolean; size?: number };
+  };
+  notify: { owner(text: string): void };
+};
+`;export{t as H,e as S};

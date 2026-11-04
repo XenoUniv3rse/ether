@@ -21,10 +21,13 @@ import {
 export function InstallDrawer({
   open,
   initialUrl = "",
+  mode = "link",
   onClose,
   onInstalled,
 }: {
   open: boolean;
+  /** "file" installs a plugin package from this computer; "link" from an address. */
+  mode?: "link" | "file";
   /** Prefills the address, for entries picked in a plugin directory. */
   initialUrl?: string;
   onClose: () => void;
@@ -151,7 +154,7 @@ export function InstallDrawer({
     <Drawer
       open={open}
       onClose={handleClose}
-      title={t("Install from a link")}
+      title={mode === "file" ? t("Upload a plugin") : t("Install from a link")}
       description={t("Paste a manifest link, a GitHub repository, or upload a package file.")}
       size="lg"
       footer={
@@ -198,91 +201,97 @@ export function InstallDrawer({
 
         {!preview ? (
           <div className="space-y-5">
-            <Field
-              label={t("Plugin address")}
-              hint={t(
-                "Paste a manifest.json URL, a Stremio add-on link, or a GitHub repository URL.",
-              )}
-              htmlFor="plugin-install-url"
-            >
-              <div className="relative">
-                <Link2
-                  size={15}
-                  className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-fg-subtle"
-                  aria-hidden
-                />
-                <Input
-                  id="plugin-install-url"
-                  aria-label={t("Plugin address")}
-                  value={url}
-                  onChange={(e) => {
-                    setUrl(e.currentTarget.value);
-                    if (e.currentTarget.value.trim()) setPkgFile(null);
-                  }}
-                  placeholder={t("https://github.com/example/plugin or https://…/manifest.json")}
-                  className="pl-9 font-mono text-xs"
-                  spellCheck={false}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" && canPreview && !busy) {
-                      e.preventDefault();
-                      void runPreview();
-                    }
-                  }}
-                />
-              </div>
-            </Field>
-
-            {privateAddr ? (
-              <div className="rounded-lg border border-border bg-bg-subtle px-4 py-3">
-                <SettingsRow
-                  title={
-                    <label htmlFor="plugin-install-lan">{t("Allow local network address")}</label>
-                  }
-                  description={t(
-                    "Confirm that this plugin runs on a device you trust on your LAN.",
-                  )}
-                  control={
-                    <Switch
-                      id="plugin-install-lan"
-                      checked={lan}
-                      onChange={(e) => setLan(e.currentTarget.checked)}
-                      aria-label={t("Allow local network address")}
+            {mode === "link" ? (
+              <>
+                <Field
+                  label={t("Plugin address")}
+                  hint={t("Paste a manifest.json URL, a Stremio link, or a GitHub repository URL.")}
+                  htmlFor="plugin-install-url"
+                >
+                  <div className="relative">
+                    <Link2
+                      size={15}
+                      className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-fg-subtle"
+                      aria-hidden
                     />
-                  }
-                />
-              </div>
-            ) : null}
+                    <Input
+                      id="plugin-install-url"
+                      aria-label={t("Plugin address")}
+                      value={url}
+                      onChange={(e) => {
+                        setUrl(e.currentTarget.value);
+                        if (e.currentTarget.value.trim()) setPkgFile(null);
+                      }}
+                      placeholder={t(
+                        "https://github.com/example/plugin or https://…/manifest.json",
+                      )}
+                      className="pl-9 font-mono text-xs"
+                      spellCheck={false}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" && canPreview && !busy) {
+                          e.preventDefault();
+                          void runPreview();
+                        }
+                      }}
+                    />
+                  </div>
+                </Field>
 
-            <div className="rounded-xl border border-dashed border-border bg-bg-subtle p-4">
-              <div className="flex flex-wrap items-center justify-between gap-3">
-                <div className="min-w-0">
-                  <p className="text-sm font-medium text-fg">{t("Package file (.etherpkg)")}</p>
-                  <p className="text-xs text-fg-muted">
-                    {pkgFile
-                      ? t("Selected {name}", { name: pkgFile.name })
-                      : t("Or upload a packaged plugin archive from your computer.")}
-                  </p>
+                {privateAddr ? (
+                  <div className="rounded-lg border border-border bg-bg-subtle px-4 py-3">
+                    <SettingsRow
+                      title={
+                        <label htmlFor="plugin-install-lan">
+                          {t("Allow local network address")}
+                        </label>
+                      }
+                      description={t(
+                        "Confirm that this plugin runs on a device you trust on your LAN.",
+                      )}
+                      control={
+                        <Switch
+                          id="plugin-install-lan"
+                          checked={lan}
+                          onChange={(e) => setLan(e.currentTarget.checked)}
+                          aria-label={t("Allow local network address")}
+                        />
+                      }
+                    />
+                  </div>
+                ) : null}
+              </>
+            ) : (
+              <div className="rounded-xl border border-dashed border-border bg-bg-subtle p-4">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="text-sm font-medium text-fg">{t("Plugin package")}</p>
+                    <p className="text-xs text-fg-muted">
+                      {pkgFile
+                        ? t("Selected {name}", { name: pkgFile.name })
+                        : t("A .etherpkg or .zip plugin package from your computer.")}
+                    </p>
+                  </div>
+                  <label className="inline-flex cursor-pointer items-center gap-1.5 rounded-md border border-border bg-surface px-3 py-1.5 text-xs font-medium text-fg shadow-xs hover:bg-surface-hover">
+                    <Upload size={14} aria-hidden />
+                    <span>{pkgFile ? t("Change file") : t("Choose a file")}</span>
+                    <input
+                      type="file"
+                      accept=".etherpkg,.zip,application/octet-stream,application/zip"
+                      aria-label={t("Upload .etherpkg")}
+                      className="sr-only"
+                      onChange={(e) => {
+                        const file = e.currentTarget.files?.[0];
+                        if (!file) return;
+                        void file.arrayBuffer().then((bytes) => {
+                          setPkgFile({ name: file.name, bytes });
+                          setUrl("");
+                        });
+                      }}
+                    />
+                  </label>
                 </div>
-                <label className="inline-flex cursor-pointer items-center gap-1.5 rounded-md border border-border bg-surface px-3 py-1.5 text-xs font-medium text-fg shadow-xs hover:bg-surface-hover">
-                  <Upload size={14} aria-hidden />
-                  <span>{pkgFile ? t("Change file") : t("Upload .etherpkg")}</span>
-                  <input
-                    type="file"
-                    accept=".etherpkg,.zip,application/octet-stream,application/zip"
-                    aria-label={t("Upload .etherpkg")}
-                    className="sr-only"
-                    onChange={(e) => {
-                      const file = e.currentTarget.files?.[0];
-                      if (!file) return;
-                      void file.arrayBuffer().then((bytes) => {
-                        setPkgFile({ name: file.name, bytes });
-                        setUrl("");
-                      });
-                    }}
-                  />
-                </label>
               </div>
-            </div>
+            )}
           </div>
         ) : (
           <div className="space-y-5">

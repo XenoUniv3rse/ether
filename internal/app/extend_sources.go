@@ -93,7 +93,7 @@ func (a *App) registerSourceDescriptors(r *extend.Registry) error {
 			ID:    "indexer",
 			Owner: extend.Builtin,
 			Label: extend.T("Release indexer"),
-			Hint:  extend.T("Searches Newznab, Torznab, built-in sites and Stremio add-ons for releases."),
+			Hint:  extend.T("Searches Newznab, Torznab, built-in sites and Stremio plugins for releases."),
 			Order: 30,
 		},
 		{

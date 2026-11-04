@@ -321,7 +321,7 @@ func writeTools(d Deps) []tools.Tool {
 			},
 		}),
 		tool(tools.Tool{
-			Name: "source_add_stremio", Title: "Add a Stremio add-on", OpenWorld: true,
+			Name: "source_add_stremio", Title: "Add a plugin from Stremio", OpenWorld: true,
 			Description: "Ask the owner for a Stremio add-on URL and add it as a source. The URL is collected through a secret card because add-on URLs can carry account keys; never ask for it in chat. Over MCP this waits for approval and a secret card in the console.",
 			InputSchema: schema(map[string]any{}),
 			Execute: func(_ context.Context, _ tools.Principal, _ map[string]any) (tools.Result, error) {

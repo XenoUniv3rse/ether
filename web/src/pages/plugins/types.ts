@@ -21,6 +21,8 @@ export interface PluginSummary {
   updateVersion?: string;
   prevVersion?: string;
   health: string;
+  /** The plain-language reason behind a non-ok health. */
+  healthReason?: string;
   capabilities?: string[];
   sourceKind?: string;
   stremioOnly?: boolean;
@@ -165,8 +167,13 @@ export interface CatalogueEntry {
   manifest?: PluginManifest;
 }
 
-export function kindLabel(kind?: string, stremioOnly?: boolean): string {
-  if (stremioOnly) return t("Stremio add-on");
+/** A plugin that answers as a Stremio add-on, edited in Studio or not. */
+export function isAddon(p: { stremioOnly?: boolean; host?: string }): boolean {
+  return Boolean(p.stremioOnly || p.host);
+}
+
+export function kindLabel(kind?: string, addon?: boolean): string {
+  if (addon) return t("Stremio");
   switch (kind) {
     case "source":
       return t("Source");

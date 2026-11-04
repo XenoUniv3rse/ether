@@ -60,7 +60,7 @@ func (p *metadataProvider) ResolveMetadata(ctx context.Context, req core.Metadat
 	if !accepts {
 		return nil, core.ErrNotAvailable
 	}
-	if rec.Manifest.Ether == nil {
+	if rec.Manifest.SpeaksStremio() {
 		typ := string(req.Type)
 		if req.Type == core.TypeShow {
 			typ = "series"

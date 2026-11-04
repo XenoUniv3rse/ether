@@ -1,4 +1,8 @@
+<<<<<<<< HEAD:internal/admin/dist/assets/integration-brands-C3-Q3EQ2.js
 import{K as n,j as e}from"./index-wWjgdr9N.js";import{L as o}from"./list-video-ih-YK5np.js";import{F as i}from"./folder-open-BgO2Jlnt.js";/**
+========
+import{K as n,j as e}from"./index-g6r80W4k.js";import{L as o}from"./list-video-BM7lI7TR.js";import{F as i}from"./folder-open-DEkO3K7w.js";/**
+>>>>>>>> 53584f2c0:internal/admin/dist/assets/integration-brands-C04LBm1X.js
  * @license lucide-react v1.59.0 - ISC
  *
  * This source code is licensed under the ISC license.

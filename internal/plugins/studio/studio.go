@@ -41,12 +41,19 @@ type Deps struct {
 
 // Project is one in-progress plugin project in Studio.
 type Project struct {
-	ID          string            `json:"id"`
-	Template    string            `json:"template"`
-	Name        string            `json:"name"`
-	PluginID    string            `json:"pluginId"`
-	Slot        string            `json:"slot,omitempty"`
-	Files       map[string]string `json:"files"`
+	ID       string            `json:"id"`
+	Template string            `json:"template"`
+	Name     string            `json:"name"`
+	PluginID string            `json:"pluginId"`
+	Slot     string            `json:"slot,omitempty"`
+	Files    map[string]string `json:"files"`
+	// AddonOf is the installed add-on this draft was opened from; its code
+	// reaches that add-on through ether.addon.get. The add-on link itself
+	// stays sealed in the plugin record and never enters the draft.
+	AddonOf string `json:"addonOf,omitempty"`
+	// Installed is set once the draft has been installed, so removing the
+	// plugin also clears its draft.
+	Installed   bool              `json:"installed,omitempty"`
 	Shadow      bool              `json:"shadow"`
 	Settings    map[string]any    `json:"settings,omitempty"`
 	Diagnostics []wasm.Diagnostic `json:"diagnostics"`
@@ -74,6 +81,8 @@ type ProjectSummary struct {
 	Shadow    bool      `json:"shadow"`
 	Errors    int       `json:"errors"`
 	UpdatedAt time.Time `json:"updatedAt"`
+	AddonOf   string    `json:"addonOf,omitempty"`
+	Installed bool      `json:"installed,omitempty"`
 }
 
 // CompileResult holds the output and diagnostics from compiling a project.
@@ -310,6 +319,8 @@ func (s *Studio) ListProjects(_ context.Context) []ProjectSummary {
 			Shadow:    p.Shadow,
 			Errors:    errs,
 			UpdatedAt: p.UpdatedAt,
+			AddonOf:   p.AddonOf,
+			Installed: p.Installed,
 		})
 	}
 	sort.Slice(out, func(i, j int) bool {
@@ -919,9 +930,61 @@ func (s *Studio) InstallProject(ctx context.Context, id string, opts plugins.Ins
 	}
 	rec, err := s.mgr.Install(ctx, preview, opts)
 	if err == nil {
+		s.markInstalled(ctx, id)
 		s.NotifyInstalled(ctx, rec)
 	}
 	return rec, err
+}
+
+// InstallProjectCopy installs the draft as a new plugin beside the one it
+// came from ("Save as copy"): a fresh id, the same code and add-on link.
+func (s *Studio) InstallProjectCopy(ctx context.Context, id string, opts plugins.InstallOptions) (plugins.Record, error) {
+	p, err := s.GetProject(ctx, id)
+	if err != nil {
+		return plugins.Record{}, err
+	}
+	copyID := s.freshPluginID(ctx, p.Name+" copy", Template{DefaultPluginID: p.PluginID})
+	var doc map[string]any
+	if err := json.Unmarshal([]byte(p.Files["manifest.json"]), &doc); err != nil {
+		return plugins.Record{}, err
+	}
+	doc["id"] = copyID
+	if name, _ := doc["name"].(string); name != "" {
+		doc["name"] = name + " (copy)"
+	}
+	files := map[string]string{"manifest.json": prettyJSON(doc)}
+	created, err := s.createFromFiles(ctx, p.Name+" (copy)", copyID, p.Template, p.AddonOf, p.Files, files, false)
+	if err != nil {
+		return plugins.Record{}, err
+	}
+	return s.InstallProject(ctx, created.ID, opts)
+}
+
+func (s *Studio) markInstalled(ctx context.Context, id string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if p, ok := s.lookupLocked(id); ok && !p.Installed {
+		p.Installed = true
+		_ = s.persistLocked(ctx, p)
+	}
+}
+
+// ForgetPlugin drops the drafts of a plugin that was removed, so stale
+// drafts never linger in Studio's list.
+func (s *Studio) ForgetPlugin(ctx context.Context, pluginID string) {
+	s.mu.Lock()
+	var ids []string
+	for id, p := range s.projects {
+		// Draft plugin ids are unique, so every draft with this id is the
+		// removed plugin's own source; none is left behind as stale.
+		if p.PluginID == pluginID {
+			ids = append(ids, id)
+		}
+	}
+	s.mu.Unlock()
+	for _, id := range ids {
+		_ = s.DeleteProject(ctx, id)
+	}
 }
 
 // NotifyInstalled tells the app a plugin was installed from Studio.
@@ -976,11 +1039,21 @@ func (s *Studio) buildInstallSource(ctx context.Context, id string) (plugins.Sou
 		}
 		byteFiles["manifest.json"] = manifest
 	}
-	return plugins.Source{
+	src := plugins.Source{
 		Kind:     "studio",
 		Manifest: manifest,
 		Files:    byteFiles,
-	}, nil
+	}
+	if p.AddonOf != "" && s.mgr != nil {
+		// The edited add-on keeps answering through the same add-on link,
+		// carried sealed from record to record.
+		link, err := s.mgr.AddonLink(ctx, p.AddonOf)
+		if err != nil {
+			return plugins.Source{}, fmt.Errorf("studio: the add-on this draft came from is not installed: %w", err)
+		}
+		src.URL = link
+	}
+	return src, nil
 }
 
 // SetShadow toggles shadow mode on a Studio project's dev instance.
@@ -1105,6 +1178,33 @@ func (h *devHost) CallHost(ctx context.Context, name string, raw json.RawMessage
 		return nil, wasm.Forbidden("studio project not found")
 	}
 
+	// Real catalogue reads must obey the same declaration as installed plugins.
+	// Preview is an owner surface, but silently granting access hides defects.
+	if name == "catalog.search" || name == "catalog.get" || name == "secret.get" {
+		man, err := plugins.ParseManifest([]byte(p.Files["manifest.json"]))
+		if err != nil || man.Ether == nil {
+			h.s.mu.Unlock()
+			return nil, wasm.Forbidden("a valid permission declaration is required")
+		}
+		if name == "secret.get" {
+			declared := false
+			for _, key := range man.Ether.Permissions.Secrets {
+				if key == str(0) {
+					declared = true
+				}
+			}
+			h.s.mu.Unlock()
+			if !declared {
+				return nil, wasm.Forbidden("secret access is not declared")
+			}
+			return nil, &wasm.Fault{Code: "unavailable", Message: "secrets are not available in Studio preview"}
+		}
+		if man.Ether.Permissions.Catalog != "read" {
+			h.s.mu.Unlock()
+			return nil, wasm.Forbidden("catalogue read access is not declared")
+		}
+	}
+
 	recordJournal := func(op, detail string, inverse any) {
 		p.nextJournID++
 		invBytes, _ := json.Marshal(inverse)
@@ -1136,6 +1236,20 @@ func (h *devHost) CallHost(ctx context.Context, name string, raw json.RawMessage
 		}
 		h.s.mu.Unlock()
 		return json.RawMessage("null"), nil
+
+	case "settings.get":
+		man, err := plugins.ParseManifest([]byte(p.Files["manifest.json"]))
+		if err != nil || man.Ether == nil {
+			h.s.mu.Unlock()
+			return nil, wasm.Forbidden("a valid settings declaration is required")
+		}
+		schema := man.Ether.Settings
+		if ref := settingsRefOf(schema); ref != "" {
+			schema = json.RawMessage(p.Files[ref])
+		}
+		settings := plugins.NonSecretSettings(p.Settings, schema, man.Ether.Permissions.Secrets)
+		h.s.mu.Unlock()
+		return json.Marshal(settings)
 
 	case "kv.get":
 		v, exists := p.kv[str(0)]
@@ -1254,10 +1368,19 @@ func (h *devHost) CallHost(ctx context.Context, name string, raw json.RawMessage
 		if err != nil {
 			return nil, wasm.Forbidden(err.Error())
 		}
-		return json.Marshal(map[string]any{
-			"status": resp.Status, "headers": resp.Headers,
-			"body": string(resp.Body), "bodyBase64": base64.StdEncoding.EncodeToString(resp.Body),
-		})
+		return json.Marshal(plugins.FetchResult(resp))
+
+	case "addon.get":
+		addonOf := p.AddonOf
+		h.s.mu.Unlock()
+		if h.s.mgr == nil || addonOf == "" {
+			return nil, wasm.Forbidden("this draft is not bound to an add-on")
+		}
+		resp, err := h.s.mgr.AddonFetch(ctx, addonOf, str(0))
+		if err != nil {
+			return nil, &wasm.Fault{Code: "upstream", Message: err.Error()}
+		}
+		return plugins.AddonResult(resp)
 
 	case "catalog.search":
 		h.s.mu.Unlock()

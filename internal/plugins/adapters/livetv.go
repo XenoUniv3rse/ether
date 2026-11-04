@@ -49,7 +49,7 @@ func (k *channelSourceKind) stremioAddon(ctx context.Context) bool {
 	if k.mode == modeUnknown && k.mgr != nil {
 		if rec, err := k.mgr.Get(ctx, k.pluginID); err == nil {
 			k.mode = modeNative
-			if rec.Manifest.IsStremioOnly() {
+			if rec.Manifest.SpeaksStremio() {
 				k.mode = modeAddon
 			}
 		}

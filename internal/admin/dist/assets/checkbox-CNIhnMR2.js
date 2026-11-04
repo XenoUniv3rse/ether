@@ -1,1 +1,5 @@
+<<<<<<<< HEAD:internal/admin/dist/assets/checkbox-CNIhnMR2.js
 import{k as o,j as r,z as c}from"./index-wWjgdr9N.js";const a=o.forwardRef(({className:s,...e},i)=>r.jsx("input",{ref:i,type:"checkbox",className:c("size-4 shrink-0 rounded border-border accent-primary","focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:ring-offset-2 focus-visible:ring-offset-bg","disabled:cursor-not-allowed disabled:opacity-50",s),...e}));a.displayName="Checkbox";export{a as C};
+========
+import{k as o,j as r,z as c}from"./index-g6r80W4k.js";const a=o.forwardRef(({className:s,...e},i)=>r.jsx("input",{ref:i,type:"checkbox",className:c("size-4 shrink-0 rounded border-border accent-primary","focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:ring-offset-2 focus-visible:ring-offset-bg","disabled:cursor-not-allowed disabled:opacity-50",s),...e}));a.displayName="Checkbox";export{a as C};
+>>>>>>>> 53584f2c0:internal/admin/dist/assets/checkbox-DpPVlZ1Z.js

@@ -76,7 +76,8 @@ type Service struct {
 
 	mu      sync.RWMutex
 	cfg     config.Debrid
-	entries []*entry // configured providers in priority order
+	entries []*entry          // configured providers in priority order
+	plugins map[string]*entry // native plugin providers, not serialized into config
 
 	knownMu sync.Mutex
 	known   map[string]knownState // providerID|hash
@@ -281,6 +282,14 @@ func (s *Service) UpdateConfig(cfg config.Debrid) {
 		e := &entry{cfg: pc, sem: newLimiter(s.slotsFor(providerParallel))}
 		e.p, e.err = s.opts.NewProvider(pc, s.opts.ProviderOptions)
 		next = append(next, e)
+	}
+	pluginIDs := make([]string, 0, len(s.plugins))
+	for id := range s.plugins {
+		pluginIDs = append(pluginIDs, id)
+	}
+	sort.Strings(pluginIDs)
+	for _, id := range pluginIDs {
+		next = append(next, s.plugins[id])
 	}
 	sort.SliceStable(next, func(i, j int) bool { return next[i].cfg.Priority < next[j].cfg.Priority })
 	s.cfg = cfg

@@ -1,0 +1,47 @@
+{
+  "id": "community.canada.live",
+  "name": "Canada Live",
+  "version": "1.0.1",
+  "description": "Official Canadian public affairs and national/regional news streams.",
+  "ether": {
+    "protocol": 1,
+    "kind": "livetv_source",
+    "capabilities": [
+      "livetv_channels",
+      "ui"
+    ],
+    "summary": "$t:summary",
+    "author": {
+      "name": "Server owner"
+    },
+    "license": "MIT",
+    "runtime": {
+      "kind": "hosted",
+      "entry": "src/plugin.ts"
+    },
+    "permissions": {
+      "network": [
+        "cpac-ca-live.cdn.vustreams.com",
+        "content.news.corusappservices.com",
+        "*.vustreams.com",
+        "live.corusdigitaldev.com"
+      ]
+    },
+    "strings": {
+      "en": "i18n/en.json"
+    },
+    "contributes": {
+      "channels": {
+        "refresh": "1h",
+        "test": true
+      },
+      "pages": [
+        {
+          "key": "lineup",
+          "label": "$t:lineup",
+          "route": "/ether/view/lineup"
+        }
+      ]
+    }
+  }
+}

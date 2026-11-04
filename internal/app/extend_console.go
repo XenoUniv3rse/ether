@@ -239,7 +239,7 @@ func consoleCommands() []extend.Descriptor {
 			AgentSuggestion: true, RoutePatterns: []string{"/quality", "/quality/*"}}},
 		{id: "ask.livetv.failing", label: T("Which channels are failing?"), order: 120, meta: extend.CommandMeta{
 			AgentSuggestion: true, RoutePatterns: []string{"/livetv", "/livetv/*"}}},
-		{id: "ask.sources.add-stremio", label: T("Add a Stremio add-on"), order: 130, meta: extend.CommandMeta{
+		{id: "ask.sources.add-stremio", label: T("Add a plugin from Stremio"), order: 130, meta: extend.CommandMeta{
 			AgentSuggestion: true, RoutePatterns: []string{"/sources", "/sources/*"}}},
 		{id: "ask.activity.buffering", label: T("Why did playback buffer?"), order: 140, meta: extend.CommandMeta{
 			AgentSuggestion: true, RoutePatterns: []string{"/activity", "/activity/*"}}},

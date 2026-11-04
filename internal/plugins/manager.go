@@ -66,6 +66,9 @@ type Deps struct {
 
 // Manager is the plugin host. It is safe for concurrent use.
 type Manager struct {
+	// relay holds the add-on settings pages open in the console.
+	relay       *addonRelay
+	relayOnce   sync.Once
 	store       *storage
 	deps        Deps
 	log         *slog.Logger
@@ -427,10 +430,14 @@ func (m *Manager) CallStream(ctx context.Context, pluginID string, req Request) 
 func (m *Manager) closeRuntime(id string) {
 	m.mu.Lock()
 	rt := m.runtimes[id]
+	addon := m.runtimes[id+addonRuntimeSuffix]
 	delete(m.runtimes, id)
+	delete(m.runtimes, id+addonRuntimeSuffix)
 	m.mu.Unlock()
-	if rt != nil {
-		_ = rt.Close()
+	for _, r := range []Runtime{rt, addon} {
+		if r != nil {
+			_ = r.Close()
+		}
 	}
 }
 
@@ -495,7 +502,7 @@ func (m *Manager) Call(ctx context.Context, pluginID string, req Request) (Respo
 	req.PluginID = pluginID
 	start := m.now()
 	deadline := DeadlineFor(req.Path)
-	if r.Manifest.IsStremioOnly() {
+	if r.Manifest.SpeaksStremio() {
 		deadline = stremioDeadline(req.Path)
 	}
 	cctx, cancel := context.WithTimeout(ctx, deadline)
@@ -674,9 +681,10 @@ func (m *Manager) recordFailure(ctx context.Context, pluginID, reason string, re
 	m.failing[pluginID] = true
 	_ = m.store.putHealth(ctx, pluginID, h)
 	if len(kept) >= 5 {
-		// A Stremio add-on is one of the owner's sources: an outage backs
-		// it off and shows on its health, but never removes it.
-		if r, err := m.store.record(ctx, pluginID); err == nil && r.Enabled && !r.Manifest.IsStremioOnly() {
+		// A Stremio add-on is one of the owner's sources, edited in Studio
+		// or not: an outage backs it off and shows on its health, but never
+		// switches it off.
+		if r, err := m.store.record(ctx, pluginID); err == nil && r.Enabled && !r.Manifest.SpeaksStremio() {
 			r.Enabled = false
 			_ = m.store.upsert(ctx, r)
 			h.Status = "disabled"

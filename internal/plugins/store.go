@@ -621,22 +621,27 @@ func (s *storage) calls(ctx context.Context, plugin string, limit int) ([]CallRe
 }
 
 func (s *storage) callStats(ctx context.Context, plugin string) (count, errors int, p50, p95 int64, err error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT ms,error FROM plugins_calls WHERE plugin=? ORDER BY id DESC LIMIT ?`, plugin, CallsCap)
+	rows, err := s.db.QueryContext(ctx, `SELECT ms,error,status FROM plugins_calls WHERE plugin=? ORDER BY id DESC LIMIT ?`, plugin, CallsCap)
 	if err != nil {
 		return 0, 0, 0, 0, err
 	}
 	defer rows.Close()
+	// Latency is how long answers took. A call that failed or ran out of
+	// time is counted as a failure, never as a measurement of its deadline.
 	var ms []int64
 	for rows.Next() {
 		var v int64
 		var e string
-		if err := rows.Scan(&v, &e); err != nil {
+		var status int
+		if err := rows.Scan(&v, &e, &status); err != nil {
 			return 0, 0, 0, 0, err
 		}
-		ms = append(ms, v)
-		if e != "" {
+		count++
+		if e != "" || status == 0 || status >= 500 {
 			errors++
+			continue
 		}
+		ms = append(ms, v)
 	}
 	if err := rows.Err(); err != nil {
 		return 0, 0, 0, 0, err
@@ -649,7 +654,7 @@ func (s *storage) callStats(ctx context.Context, plugin string) (count, errors i
 		i := int(p * float64(len(ms)-1))
 		return ms[i]
 	}
-	return len(ms), errors, pct(0.5), pct(0.95), nil
+	return count, errors, pct(0.5), pct(0.95), nil
 }
 
 // redactKnown removes saved plugin credentials even when a plugin includes one
@@ -804,4 +809,23 @@ func (s *storage) purge(ctx context.Context, plugin string) error {
 		}
 	}
 	return nil
+}
+
+// files lists a version's artifact files (manifest, code, strings).
+func (s *storage) files(ctx context.Context, plugin, version string) (map[string][]byte, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT path,content FROM plugins_artifacts WHERE plugin=? AND version=?`, plugin, version)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close() //nolint:errcheck
+	out := map[string][]byte{}
+	for rows.Next() {
+		var path string
+		var b []byte
+		if err := rows.Scan(&path, &b); err != nil {
+			return nil, err
+		}
+		out[path] = b
+	}
+	return out, rows.Err()
 }

@@ -1,4 +1,8 @@
+<<<<<<<< HEAD:internal/admin/dist/assets/square-BBBTixdo.js
 import{K as t}from"./index-wWjgdr9N.js";/**
+========
+import{K as t}from"./index-g6r80W4k.js";/**
+>>>>>>>> 53584f2c0:internal/admin/dist/assets/square-B6o-OK82.js
  * @license lucide-react v1.59.0 - ISC
  *
  * This source code is licensed under the ISC license.

@@ -105,18 +105,15 @@ func (h *host) KVList(ctx context.Context, prefix string) ([]string, error) {
 
 // Settings returns the plugin's stored non-secret settings.
 func (h *host) Settings(ctx context.Context) (map[string]any, error) {
-	if _, _, err := h.record(ctx); err != nil {
+	r, _, err := h.record(ctx)
+	if err != nil {
 		return nil, err
 	}
 	row, err := h.m.store.settings(ctx, h.plugin)
 	if err != nil {
 		return nil, err
 	}
-	out := make(map[string]any, len(row.Settings))
-	for k, v := range row.Settings {
-		out[k] = v
-	}
-	return out, nil
+	return NonSecretSettings(row.Settings, row.Schema, settingsSecrets(r)), nil
 }
 
 func (h *host) SecretGet(ctx context.Context, name string) (string, error) {
@@ -390,7 +387,7 @@ func (h *host) CollectionsUpsert(ctx context.Context, doc json.RawMessage) error
 	if h.m.deps.Backends.CollectionsUpsert == nil {
 		return ErrUnavailable
 	}
-	prev, err := h.m.deps.Backends.CollectionsUpsert(ctx, doc)
+	prev, err := h.m.deps.Backends.CollectionsUpsert(collectionContext(ctx, h.plugin), doc)
 	if err != nil {
 		return err
 	}
@@ -400,12 +397,22 @@ func (h *host) CollectionsUpsert(ctx context.Context, doc json.RawMessage) error
 // UndoAll replays a plugin's live journal inverses, newest first, and
 // returns how many entries were undone.
 func (m *Manager) UndoAll(ctx context.Context, pluginID string) (int, error) {
+	return m.UndoSince(ctx, pluginID, 0)
+}
+
+// UndoSince reverses the plugin's changes back to and including entry
+// since (0 means all of them), newest first, so an older change is never
+// reversed underneath a later one.
+func (m *Manager) UndoSince(ctx context.Context, pluginID string, since int64) (int, error) {
 	entries, err := m.store.journalList(ctx, pluginID, 10000, true)
 	if err != nil {
 		return 0, err
 	}
 	undone := 0
 	for _, e := range entries { // journalList is newest first
+		if e.ID < since {
+			break
+		}
 		if err := m.applyInverse(ctx, e); err != nil {
 			return undone, err
 		}
@@ -438,13 +445,13 @@ func (m *Manager) applyInverse(ctx context.Context, e JournalEntry) error {
 			if m.deps.Backends.CollectionsUpsert == nil {
 				return ErrUnavailable
 			}
-			_, err := m.deps.Backends.CollectionsUpsert(ctx, inv.Previous)
+			_, err := m.deps.Backends.CollectionsUpsert(collectionContext(ctx, e.Plugin), inv.Previous)
 			return err
 		}
 		if m.deps.Backends.CollectionsDelete == nil {
 			return ErrUnavailable
 		}
-		return m.deps.Backends.CollectionsDelete(ctx, inv.Doc)
+		return m.deps.Backends.CollectionsDelete(collectionContext(ctx, e.Plugin), inv.Doc)
 	default:
 		return fmt.Errorf("plugins: no inverse for journal op %q", e.Op)
 	}

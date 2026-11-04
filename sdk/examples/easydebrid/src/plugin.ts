@@ -1,0 +1,23 @@
+function ok(body:any){return {status:200,body};}
+function token(){try{return String(ether.secret.get('apiKey')||'').trim();}catch{return '';}}
+function fail(status:number,message:string):never{throw {status,message};}
+function api(path:string,body?:any){const key=token();if(!key)fail(401,'Add an EasyDebrid API token in Setup.');const r=ether.http.fetch({url:'https://easydebrid.com/api/v1'+path,method:body?'POST':'GET',headers:{Authorization:'Bearer '+key,'Content-Type':'application/json'},...(body?{body:JSON.stringify(body)}:{})});if(r.status<200||r.status>=300)fail(r.status===401||r.status===403?401:r.status===429?429:502,'EasyDebrid request failed (HTTP '+r.status+').');try{return typeof r.body==='string'?JSON.parse(r.body):r.body;}catch{fail(502,'EasyDebrid returned invalid JSON.');}}
+function magnet(h:string){if(!/^[a-fA-F0-9]{40}$/.test(h))fail(400,'A valid torrent info hash is required.');return 'magnet:?xt=urn:btih:'+h.toLowerCase();}
+function files(hash:string){const result=api('/link/generate',{url:magnet(hash)});if(!Array.isArray(result.files))fail(502,'EasyDebrid returned no file list.');return result.files.map((f:any)=>{const path=[...(Array.isArray(f.directory)?f.directory:[]),f.filename].filter(Boolean).join('/');return {id:path,path,size:Number(f.size)||0,link:String(f.url||'')};}).filter((f:any)=>f.path&&f.size>0);}
+function account(){const a=api('/user/details');const day=String(a.paid_until||'');const end=/^\d{4}-\d{2}-\d{2}$/.test(day)?day+'T23:59:59Z':day;const ms=Date.parse(end);return {user:String(a.id||''),premium:Number.isFinite(ms)&&ms>Date.now(),...(Number.isFinite(ms)?{expires:new Date(ms).toISOString()}:{})};}
+export function handle(req:any){try{
+ if(req.path==='/ether/configure')return ok({errors:{}});
+ if(req.path==='/ether/health')return ok({status:token()?'ok':'attention',reason:token()?'':'Add an EasyDebrid API token in Setup.'});
+ if(req.path==='/ether/test'||req.path==='/ether/action/test'){const a=account();const message=a.premium?'EasyDebrid account connected; premium access is active.':'Account connected, but premium access is expired or unavailable.';return ok(req.path==='/ether/test'?{ok:a.premium,message}:{toast:message,refresh:true});}
+ if(req.path==='/ether/view/account')return ok({title:'EasyDebrid',spec:{specVersion:1,layout:'detail',header:[{kind:'page-header',title:{$:'title'},description:{$:'subtitle'}}],body:[{kind:'stat-tile',iconKey:'key',accent:'primary',label:'$t:state',value:{$:'state'}},{kind:'panel',title:'$t:connection',blocks:[{kind:'widget',widget:'ether.actionButton',props:{label:'$t:test',action:'test'}}]},{kind:'panel',title:'$t:capabilities',blocks:[{kind:'text',content:'$t:help'},{kind:'text',content:'$t:docs'}]}]},data:{title:'EasyDebrid',subtitle:'A native plugin source in Sources → Debrid. Configure your account in Plugins → EasyDebrid → Setup, then run the connection test.',state:token()?'Token saved; test account':'Setup required'}});
+ if(req.path==='/ether/debrid/account')return ok(account());
+ if(req.path==='/ether/debrid/find'||req.path==='/ether/debrid/remove')return {status:501,body:{error:{code:'unsupported',message:'Cached-only provider; no account torrent queue.'}}};
+ if(req.path==='/ether/debrid/check'){
+  const hashes=Array.isArray(req.body?.hashes)?req.body.hashes:[];if(hashes.length>10000)fail(400,'Too many hashes.');const cached:any={};
+  for(let n=0;n<hashes.length;n+=100){const batch=hashes.slice(n,n+100);const r=api('/link/lookup',{urls:batch.map(magnet)});if(!Array.isArray(r.cached)||r.cached.length!==batch.length)fail(502,'EasyDebrid returned an invalid cache check.');batch.forEach((h:string,i:number)=>cached[h]=r.cached[i]===true);}return ok({cached});
+ }
+ if(req.path==='/ether/debrid/acquire'){const h=String(req.body?.infoHash||'');const r=api('/link/lookup',{urls:[magnet(h)]});if(r.cached?.[0]!==true)return {status:409,body:{error:{code:'not_cached',message:'This torrent is not cached.'}}};return ok({torrentId:h,ready:true,added:false,files:files(h)});}
+ if(req.path==='/ether/debrid/link'){const h=String(req.body?.infoHash||req.body?.torrentId||'');const f=files(h).find((f:any)=>f.path===req.body?.path);if(!f)fail(404,'The selected file is no longer available.');return ok({url:f.link,size:f.size});}
+ return {status:404,body:{error:{code:'not_found',message:'Route not found.'}}};
+ }catch(e){const status=Number(e.status)||502,message=e.status?e.message:'EasyDebrid could not be reached.';if(req.path==='/ether/test')return ok({ok:false,message});return {status,body:{error:{code:'provider_error',message}}};}}
+(globalThis as any).handle=handle;

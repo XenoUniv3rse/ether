@@ -14,6 +14,7 @@ export type PluginKind =
 
 export type Capability =
   | "stream_source"
+  | "debrid_provider"
   | "list_source"
   | "livetv_channels"
   | "subtitles"

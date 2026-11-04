@@ -215,7 +215,7 @@ export function Develop() {
         setInstallOpen(true);
         return;
       } catch (e) {
-        toast.error(e instanceof Error ? e.message : t("Could not preview Stremio add-on."));
+        toast.error(e instanceof Error ? e.message : t("Could not preview Stremio plugin."));
         return;
       }
     }

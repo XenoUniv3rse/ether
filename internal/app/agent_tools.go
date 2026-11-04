@@ -108,7 +108,7 @@ func builtinToolLabel(name, fallback string) extend.Text {
 	case "rule_add":
 		return extend.T("Add a release rule")
 	case "source_add_stremio":
-		return extend.T("Add a Stremio add-on")
+		return extend.T("Add a plugin from Stremio")
 	case "source_add_m3u":
 		return extend.T("Add a playlist source")
 	case "frontend_enable":

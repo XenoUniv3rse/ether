@@ -1,5 +1,5 @@
 import { Badge, Button, Input, Switch, toast } from "@braedonsaunders/appkit-ui";
-import { AlertTriangle, ArrowLeft, Link2, Puzzle } from "lucide-react";
+import { AlertTriangle, ArrowLeft, Link2, Loader2, Puzzle } from "lucide-react";
 import { useEffect, useId, useState } from "react";
 import { Artwork } from "../Artwork";
 import { Drawer } from "../Drawer";
@@ -8,6 +8,8 @@ import { Field } from "../fields";
 import { t } from "../../i18n";
 import { apiFetch } from "../../lib/api";
 import { invalidateRegistry } from "../../lib/extend";
+import { AddonSettingsPage } from "../../pages/plugins/drawer/AddonSettings";
+import { LiveFields, useLiveForm } from "../../pages/plugins/drawer/liveForm";
 import {
   ADDON_ROLE_LABEL,
   addonUrlHasDebridKey,
@@ -42,6 +44,7 @@ export function AddAddonDrawer({
   const [on, setOn] = useState<Record<string, boolean>>({});
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
+  const [settingUp, setSettingUp] = useState(false);
 
   useEffect(() => {
     if (!open) {
@@ -52,13 +55,22 @@ export function AddAddonDrawer({
     }
   }, [open]);
 
-  const read = async () => {
+  const [pendingRead, setPendingRead] = useState("");
+  useEffect(() => {
+    if (!pendingRead) return;
+    setPendingRead("");
+    void read(pendingRead);
+    // read is recreated each render; this runs once per configured link.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingRead]);
+
+  const read = async (link = url) => {
     setBusy(true);
     setError(null);
     try {
       const p = await apiFetch<AddonPreview>("/plugins/addons/preview", {
         method: "POST",
-        body: JSON.stringify({ url: url.trim() }),
+        body: JSON.stringify({ url: link.trim() }),
       });
       setPreview(p);
       const next: Record<string, boolean> = {};
@@ -113,11 +125,57 @@ export function AddAddonDrawer({
   const roleMissing = !!role && !!preview && !(preview.roles ?? []).some((r) => r.role === role);
   const nothingOn = !!preview && !Object.values(on).some(Boolean);
 
+  const openConfigure = () =>
+    apiFetch<{ page: string }>("/plugins/addons/configure-page", {
+      method: "POST",
+      body: JSON.stringify({ url: url.trim() }),
+    }).then((r) => r.page);
+  // A plugin that needs setting up first: its own settings page, read and
+  // shown here as Ether fields.
+  const live = useLiveForm(openConfigure, open && preview?.configureFirst ? 1 : 0);
+  const [touched, setTouched] = useState<Record<string, unknown>>({});
+  const useLink = (link: string) => {
+    // The configured link is the plugin to add; read it again.
+    setSettingUp(false);
+    setTouched({});
+    setUrl(link);
+    setPreview(null);
+    setPendingRead(link);
+  };
+  const continueSetup = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const link = await live.commit();
+      if (link) useLink(link);
+      else
+        setError(
+          new Error(
+            t("{host} didn't give a link for these settings yet.", { host: preview?.host ?? "" }),
+          ),
+        );
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const settingsPage = preview ? (
+    <AddonSettingsPage
+      open={settingUp}
+      name={preview.name}
+      host={preview.host}
+      useLabel={t("Continue")}
+      openPage={openConfigure}
+      onUse={async (link) => useLink(link)}
+      onClose={() => setSettingUp(false)}
+    />
+  ) : null;
+
   return (
     <Drawer
       open={open}
       onClose={onClose}
-      title={title ?? t("Add a Stremio add-on")}
+      title={title ?? t("Add a plugin from Stremio")}
       size="md"
       footer={
         preview ? (
@@ -126,12 +184,18 @@ export function AddAddonDrawer({
               <ArrowLeft size={14} aria-hidden />
               {t("Back")}
             </Button>
-            <Button
-              onClick={() => void add()}
-              disabled={busy || preview.configureFirst || nothingOn || roleMissing}
-            >
-              {preview.alreadyInstalled ? t("Save") : t("Add add-on")}
-            </Button>
+            {preview.configureFirst ? (
+              <Button
+                onClick={() => void continueSetup()}
+                disabled={busy || live.status !== "ready"}
+              >
+                {t("Continue")}
+              </Button>
+            ) : (
+              <Button onClick={() => void add()} disabled={busy || nothingOn || roleMissing}>
+                {preview.alreadyInstalled ? t("Save") : t("Add plugin")}
+              </Button>
+            )}
           </div>
         ) : (
           <div className="flex w-full justify-end">
@@ -146,7 +210,7 @@ export function AddAddonDrawer({
         <div className="space-y-4">
           <p className="text-sm text-fg-muted">
             {t(
-              "Paste the install link from the add-on's configure page. Ether keeps it private: it may contain your debrid key.",
+              "Paste the plugin's install link from its Stremio settings page. Ether keeps it private: it may contain your debrid key.",
             )}
           </p>
           <Field label={t("Install link")} htmlFor={linkId}>
@@ -164,14 +228,14 @@ export function AddAddonDrawer({
           {addonUrlHasDebridKey(url) ? (
             <p role="status" className="rounded-lg bg-warning-subtle p-3 text-sm">
               {t(
-                "This link includes a debrid API key. Ether checks your debrid accounts itself, so the add-on doesn't need it: a key only adds cached hints, and it is then also stored in this link on this server.",
+                "This link includes a debrid API key. Ether checks your debrid accounts itself, so the plugin doesn't need it: a key only adds cached hints, and it is then also stored in this link on this server.",
               )}
             </p>
           ) : null}
           <p className="flex items-start gap-2 text-xs text-fg-subtle">
             <Link2 size={13} className="mt-0.5 shrink-0" aria-hidden />
             {t(
-              "stremio:// links work too. One add-on can give streams, catalogs, Live TV channels and subtitles; you choose which.",
+              "stremio:// links work too. One plugin can give streams, catalogs, Live TV channels and subtitles; you choose which.",
             )}
           </p>
           {error ? <MutationError error={error} /> : null}
@@ -202,18 +266,49 @@ export function AddAddonDrawer({
             <p className="text-sm text-fg-muted">{preview.description}</p>
           ) : null}
           {preview.configureFirst ? (
-            <p className="flex items-start gap-2 rounded-lg bg-warning-subtle p-3 text-sm">
-              <AlertTriangle size={15} className="mt-0.5 shrink-0 text-warning" aria-hidden />
-              {t(
-                "This add-on needs configuring first. Open its configure page, set it up, and paste the link it gives you.",
-              )}
-            </p>
+            <div className="space-y-3">
+              <p className="flex items-start gap-2 rounded-lg bg-warning-subtle p-3 text-sm">
+                <AlertTriangle size={15} className="mt-0.5 shrink-0 text-warning" aria-hidden />
+                {t("{name} needs setting up before Ether can use it.", { name: preview.name })}
+              </p>
+              {live.status === "ready" ? (
+                <LiveFields
+                  form={live}
+                  title={t("Plugin settings")}
+                  description={
+                    live.partial
+                      ? t(
+                          "Read from {host}'s own settings page. A few of its settings are only on that page.",
+                          { host: preview.host },
+                        )
+                      : t("Read from {host}'s own settings page.", { host: preview.host })
+                  }
+                  touched={touched}
+                  onTouched={setTouched}
+                />
+              ) : live.status === "loading" ? (
+                <p className="flex items-center gap-2 text-sm text-fg-muted" role="status">
+                  <Loader2 size={14} className="animate-spin" aria-hidden />
+                  {t("Reading {host}'s settings…", { host: preview.host })}
+                </p>
+              ) : null}
+              <Button
+                size="sm"
+                variant={live.status === "ready" ? "ghost" : "default"}
+                onClick={() => setSettingUp(true)}
+              >
+                {live.status === "ready"
+                  ? t("Open {host}'s own page", { host: preview.host })
+                  : t("Set it up here")}
+              </Button>
+              {live.frame}
+            </div>
           ) : (
             <section className="space-y-1">
               <h3 className="text-sm font-semibold">{t("What it does in Ether")}</h3>
               {(preview.roles ?? []).length === 0 ? (
                 <p className="text-sm text-fg-muted">
-                  {t("This add-on offers nothing Ether can use yet.")}
+                  {t("This plugin offers nothing Ether can use yet.")}
                 </p>
               ) : (
                 (preview.roles ?? []).map((r) => (
@@ -234,7 +329,7 @@ export function AddAddonDrawer({
               )}
               {roleMissing ? (
                 <p className="text-sm text-danger">
-                  {t("This add-on does not offer {role}.", {
+                  {t("This plugin does not offer {role}.", {
                     role: ADDON_ROLE_LABEL[role!].toLowerCase(),
                   })}
                 </p>
@@ -244,6 +339,7 @@ export function AddAddonDrawer({
           {error ? <MutationError error={error} /> : null}
         </div>
       )}
+      {settingsPage}
     </Drawer>
   );
 }

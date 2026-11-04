@@ -25,6 +25,7 @@ const KNOWN_TOOLS = [
   "title_details",
   "collection_list",
   "collection_preview",
+  "collection_draft",
   "livetv_channels",
   "sources_list",
   "plugins_list",
@@ -47,7 +48,7 @@ const KNOWN_TOOLS = [
 function defaultSuggestion(route: string): string {
   if (route.startsWith("/releases")) return t("Why did this title pick this release?");
   if (route.startsWith("/livetv")) return t("Which channels are failing?");
-  if (route.startsWith("/sources")) return t("Add a Stremio add-on");
+  if (route.startsWith("/sources")) return t("Add a plugin from Stremio");
   return t("What needs my attention?");
 }
 

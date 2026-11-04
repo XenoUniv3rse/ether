@@ -167,6 +167,25 @@ func (s *Studio) serveStudio(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusCreated, map[string]any{"project": proj})
 		return
 
+	case r.Method == http.MethodPost && path == "import":
+		var body struct {
+			PluginID string `json:"pluginId"`
+		}
+		if !decodeJSONBody(w, r, &body) {
+			return
+		}
+		proj, err := s.ImportPlugin(r.Context(), strings.TrimSpace(body.PluginID))
+		if errors.Is(err, ErrNotEditable) {
+			writeError(w, http.StatusUnprocessableEntity, "not_editable", "This plugin runs on another device, so its code is not on this server.")
+			return
+		}
+		if err != nil {
+			writeStudioError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"project": proj})
+		return
+
 	case r.Method == http.MethodPost && path == "compile":
 		var body struct {
 			Files map[string]string `json:"files"`
@@ -369,9 +388,15 @@ func (s *Studio) serveProject(w http.ResponseWriter, r *http.Request, id, action
 			AutoUpdate             bool           `json:"autoUpdate"`
 			Shadow                 bool           `json:"shadow"`
 			AcceptAddedPermissions bool           `json:"acceptAddedPermissions"`
+			// AsCopy installs beside the plugin the draft came from.
+			AsCopy bool `json:"asCopy"`
 		}
 		_ = json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&body)
-		rec, err := s.InstallProject(ctx, id, plugins.InstallOptions{
+		install := s.InstallProject
+		if body.AsCopy {
+			install = s.InstallProjectCopy
+		}
+		rec, err := install(ctx, id, plugins.InstallOptions{
 			Grants:                 body.Grants,
 			Settings:               body.Settings,
 			AutoUpdate:             body.AutoUpdate,

@@ -1,4 +1,8 @@
+<<<<<<<< HEAD:internal/admin/dist/assets/settings-2-CRx5b0E4.js
 import{K as c}from"./index-wWjgdr9N.js";/**
+========
+import{K as c}from"./index-g6r80W4k.js";/**
+>>>>>>>> 53584f2c0:internal/admin/dist/assets/settings-2-1h7xjk-z.js
  * @license lucide-react v1.59.0 - ISC
  *
  * This source code is licensed under the ISC license.

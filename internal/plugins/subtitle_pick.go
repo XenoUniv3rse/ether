@@ -76,14 +76,14 @@ func (m *Manager) FetchPickedSubtitle(ctx context.Context, plugin, title, subtit
 	if err != nil {
 		return nil, err
 	}
-	if g.revoked("network") || (r.Manifest.Ether == nil && (!r.Manifest.HasCapability(CapSubtitles) || pick.url == "" || pick.url != rawURL)) {
+	if g.revoked("network") || (r.Manifest.SpeaksStremio() && (!r.Manifest.HasCapability(CapSubtitles) || pick.url == "" || pick.url != rawURL)) {
 		return nil, ErrPermissionDenied
 	}
 	allowed := func(u *url.URL) bool {
 		if (u.Scheme != "http" && u.Scheme != "https") || u.User != nil {
 			return false
 		}
-		if r.Manifest.Ether == nil {
+		if r.Manifest.SpeaksStremio() {
 			return true
 		} // safefetch still rejects private destinations on every redirect
 		return hostAllowed(r.Manifest.Ether.Permissions.Network, u.Hostname())

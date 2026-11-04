@@ -96,7 +96,7 @@ export function BuildPanel({
     { key: "addon-catalog-sep", separator: true },
     {
       key: "addon-catalog",
-      label: t("Stremio add-on catalog…"),
+      label: t("Stremio plugin catalog…"),
       onSelect: () => setAddonCatalogs(true),
     },
   ];

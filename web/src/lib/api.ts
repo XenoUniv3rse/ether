@@ -436,8 +436,8 @@ export const api = {
     put<CollectionSpec>(`/collections/${encodeURIComponent(id)}`, spec),
   deleteCollection: (id: string) =>
     apiFetch<null>(`/collections/${encodeURIComponent(id)}`, { method: "DELETE" }),
-  previewCollection: (spec: CollectionSpec, signal?: AbortSignal) =>
-    post<CollectionPreview>("/collections/preview", spec, signal),
+  previewCollection: (spec: CollectionSpec, signal?: AbortSignal, n?: number) =>
+    post<CollectionPreview>(`/collections/preview${qs({ n })}`, spec, signal),
   rebuildCollection: (id: string) =>
     post<{ itemCount: number; lastBuiltAt: string }>(
       `/collections/${encodeURIComponent(id)}/rebuild`,
@@ -445,11 +445,6 @@ export const api = {
   templates: async () =>
     (await apiFetch<{ templates: CollectionTemplate[] | null }>("/collections/templates"))
       .templates ?? [],
-  generateCollection: (prompt: string, mediaType?: string) =>
-    post<{ spec: CollectionSpec; explanation: string }>("/collections/generate", {
-      prompt,
-      mediaType,
-    }),
   artworkUrl: (id: string, w: number, version?: string) =>
     `${API_BASE}/collections/${encodeURIComponent(id)}/artwork${qs({ w, v: version })}`,
 

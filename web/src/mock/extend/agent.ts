@@ -8,6 +8,9 @@
  * served by GET /agent/threads/{id}/messages, never in the live stream,
  * which is the contract AgentPanel is built around.
  */
+import type { CollectionSpec, Rule } from "../../lib/contract";
+import { normalizeSpec } from "../../lib/rules";
+import { GENRES } from "../data";
 import type { ExtendHandler } from "./index";
 
 export interface MockAgentMessage {
@@ -46,6 +49,12 @@ interface McpClient {
 }
 
 let mockAgentEnabled = true;
+let mockAgentPaceMs = 0;
+
+/** Demo control: milliseconds between streamed words, so a build can be watched. 0 in tests. */
+export function setMockAgentPace(ms: number): void {
+  mockAgentPaceMs = ms;
+}
 
 /** Test and demo control: pretend no language model is configured. */
 export function setMockAgentEnabled(enabled: boolean): void {
@@ -188,7 +197,7 @@ function planTurn(prompt: string): PlannedTurn {
 
   if (lower.includes("stremio")) {
     return {
-      text: "A Stremio add-on is added from Sources with its manifest URL. Ether reads the manifest, shows what the add-on offers, and treats the install URL as a secret.",
+      text: "A Stremio plugin is added from Sources with its manifest URL. Ether reads the manifest, shows what the plugin offers, and treats the install URL as a secret.",
       tools: [
         tool(
           "sources_list",
@@ -260,11 +269,153 @@ function streamChunks(messageId: string, plan: PlannedTurn): string[] {
   return chunks.map((chunk) => `data: ${JSON.stringify(chunk)}\n\n`);
 }
 
-function sseResponse(lines: string[], threadId: string): Response {
+/** "Describe a collection": the drafts a model would try for these asks. */
+function describeSpec(prompts: string[], mediaType: string): CollectionSpec {
+  const ask = prompts.join(" ").toLowerCase();
+  const genres = GENRES.filter(
+    (g) => ask.includes(g.toLowerCase()) || (g === "Science Fiction" && /sci-?fi/.test(ask)),
+  );
+  const rules: Rule[] = genres.length ? [{ field: "genre", op: "in", value: genres }] : [];
+  const years = /(\d{4})\s*(?:to|-|–|and|through)\s*(\d{4})/.exec(ask);
+  const decade = /(19|20)(\d)0s/.exec(ask) ?? /\b(\d)0s\b/.exec(ask);
+  if (years)
+    rules.push({ field: "year", op: "between", value: [Number(years[1]), Number(years[2])] });
+  else if (decade)
+    rules.push({
+      field: "decade",
+      op: "in",
+      value: [decade[0].length === 5 ? decade[0].slice(0, 4) : `19${decade[1]}0`],
+    });
+  if (/short|quick|under/.test(ask)) rules.push({ field: "runtime", op: "lte", value: 95 });
+  const ranked = /acclaimed|best|great|top/.test(ask);
+  if (/acclaimed|great reviews/.test(ask)) rules.push({ field: "rating", op: "gte", value: 7.5 });
+  if (ranked) rules.push({ field: "votes", op: "gte", value: 500 });
+  const top = /top (\d+)/.exec(ask);
+  const first = prompts[0] ?? "";
+  return normalizeSpec({
+    name: first.replace(/^./, (c) => c.toUpperCase()).slice(0, 48),
+    description: `Built from “${first}”.`,
+    mediaType:
+      mediaType === "show" || mediaType === "mixed"
+        ? mediaType
+        : /tv|show|series/.test(ask)
+          ? "show"
+          : "movie",
+    rules,
+    sort: ranked ? "rating" : "popularity",
+    sortDesc: true,
+    limit: top ? Number(top[1]) : 50,
+    enabled: true,
+  });
+}
+
+interface DescribeStep {
+  text: string;
+  draft?: PlannedTool;
+}
+
+function planDescribe(prompts: string[], mediaType: string): DescribeStep[] {
+  const spec = describeSpec(prompts, mediaType);
+  const draft = (s: CollectionSpec): PlannedTool => ({
+    toolCallId: nextId("call"),
+    toolName: "collection_draft",
+    input: { spec: s, mediaType: s.mediaType },
+    output: { spec: s, total: s.limit, titles: [] },
+  });
+  const steps: DescribeStep[] = [];
+  if (spec.sort === "rating" && prompts.length === 1) {
+    const loose = { ...spec, rules: spec.rules.filter((r) => r.field !== "votes") };
+    steps.push({
+      text: "I'll start from your whole catalogue and keep only what matches. ",
+      draft: draft(loose),
+    });
+    steps.push({
+      text: "A few little-known titles crowd the top, so I'll only count ones with plenty of votes. ",
+      draft: draft(spec),
+    });
+  } else {
+    steps.push({ text: "Updating the draft with that change. ", draft: draft(spec) });
+  }
+  steps.push({
+    text: `“${spec.name}” holds ${spec.limit} titles that match, ranked by ${spec.sort === "rating" ? "rating" : "popularity"}. You could ask for only one genre, or a shorter runtime.`,
+  });
+  return steps;
+}
+
+/** Chunks and the pause before each, for a describe turn. */
+function describeChunks(
+  messageId: string,
+  steps: DescribeStep[],
+): { lines: string[]; delays: number[] } {
+  const lines: string[] = [];
+  const delays: number[] = [];
+  const push = (chunk: unknown, delay = 0) => {
+    lines.push(`data: ${JSON.stringify(chunk)}\n\n`);
+    delays.push(delay);
+  };
+  push({ type: "start", messageId });
+  for (const step of steps) {
+    push({ type: "start-step" });
+    const textId = nextId("text");
+    push({ type: "text-start", id: textId });
+    for (const word of step.text.split(/(?<=\s)/))
+      if (word) push({ type: "text-delta", id: textId, delta: word }, mockAgentPaceMs);
+    push({ type: "text-end", id: textId });
+    if (step.draft) {
+      const d = step.draft;
+      push({
+        type: "tool-input-start",
+        toolCallId: d.toolCallId,
+        toolName: d.toolName,
+        dynamic: true,
+      });
+      push({
+        type: "tool-input-available",
+        toolCallId: d.toolCallId,
+        toolName: d.toolName,
+        input: d.input,
+        dynamic: true,
+      });
+      push(
+        {
+          type: "tool-output-available",
+          toolCallId: d.toolCallId,
+          output: d.output,
+          dynamic: true,
+        },
+        mockAgentPaceMs * 15,
+      );
+    }
+    push({ type: "finish-step" });
+  }
+  push({ type: "finish", finishReason: "stop" });
+  return { lines, delays };
+}
+
+function describeParts(steps: DescribeStep[]): unknown[] {
+  const parts: unknown[] = [];
+  for (const step of steps) {
+    parts.push({ type: "text", text: step.text, state: "done" });
+    if (step.draft)
+      parts.push({
+        type: "dynamic-tool",
+        toolName: step.draft.toolName,
+        toolCallId: step.draft.toolCallId,
+        state: "output-available",
+        input: step.draft.input,
+        output: step.draft.output,
+      });
+  }
+  return parts;
+}
+
+function sseResponse(lines: string[], threadId: string, delays: number[] = []): Response {
   const encoder = new TextEncoder();
   let index = 0;
   const body = new ReadableStream<Uint8Array>({
     async pull(controller) {
+      const wait = delays[index] ?? 0;
+      if (wait > 0) await new Promise((resolve) => setTimeout(resolve, wait));
       if (index < lines.length) {
         controller.enqueue(encoder.encode(lines[index]!));
         index += 1;
@@ -403,6 +554,23 @@ export function createAgentMock(): { handle: ExtendHandler } {
         parts: [{ type: "text", text: prompt }],
         createdAt: now(),
       });
+      const context = asRecord(input.context);
+      if (context.route === "/collections/describe") {
+        const prompts = thread.messages.flatMap((m) =>
+          m.role === "user" ? m.parts.map((p) => String((p as { text?: string }).text ?? "")) : [],
+        );
+        const steps = planDescribe(prompts, String(context.mediaType ?? ""));
+        const id = nextId("msg");
+        thread.messages.push({
+          id,
+          role: "assistant",
+          parts: describeParts(steps),
+          createdAt: now(),
+        });
+        thread.updatedAt = now();
+        const { lines, delays } = describeChunks(id, steps);
+        return sseResponse(lines, thread.id, delays);
+      }
       const plan = planTurn(prompt);
       const assistant: MockAgentMessage = {
         id: nextId("msg"),
@@ -429,7 +597,12 @@ export function createAgentMock(): { handle: ExtendHandler } {
       return sseResponse(streamChunks(assistant.id, plan), thread.id);
     }
 
-    if (method === "POST" && seg[1] === "turn" && seg[2] && seg[3] === "cancel") {
+    if (
+      method === "POST" &&
+      (seg[1] === "turn" || seg[1] === "turns") &&
+      seg[2] &&
+      seg[3] === "cancel"
+    ) {
       return json({ ok: true });
     }
 

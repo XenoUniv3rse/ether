@@ -1,0 +1,81 @@
+{
+  "id": "community.movienight.picker",
+  "name": "Movie Night",
+  "version": "1.0.0",
+  "description": "Rotate through real movie matches and keep a shortlist for tonight.",
+  "ether": {
+    "protocol": 1,
+    "kind": "extension",
+    "capabilities": [
+      "tools",
+      "ui"
+    ],
+    "summary": "$t:summary",
+    "runtime": {
+      "kind": "hosted",
+      "entry": "src/plugin.ts"
+    },
+    "author": {
+      "name": "Server owner"
+    },
+    "license": "MIT",
+    "permissions": {
+      "catalog": "read"
+    },
+    "settings": {
+      "fields": [
+        {
+          "key": "query",
+          "kind": "text",
+          "label": "$t:query",
+          "default": "star"
+        },
+        {
+          "key": "count",
+          "kind": "number",
+          "label": "$t:count",
+          "default": 3,
+          "min": 1,
+          "max": 5
+        }
+      ]
+    },
+    "strings": {
+      "en": "i18n/en.json"
+    },
+    "contributes": {
+      "pages": [
+        {
+          "key": "tonight",
+          "label": "$t:page",
+          "route": "/ether/view/tonight"
+        }
+      ],
+      "tools": [
+        {
+          "name": "pick_movie_night",
+          "title": "$t:tool",
+          "description": "Find up to five actual movies by a title search. Returns catalogue identities and summaries; does not claim streaming availability or change the saved shortlist.",
+          "readOnly": true,
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "query": {
+                "type": "string",
+                "description": "Words in a movie title, such as star or ocean"
+              },
+              "count": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 5
+              }
+            },
+            "required": [
+              "query"
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

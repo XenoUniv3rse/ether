@@ -217,7 +217,7 @@ export function listings(): Listing[] {
         { label: t("Three catalogues"), where: t("Collections") },
         { label: t("Episode details for anime"), where: t("Catalog") },
       ],
-      permissions: [{ icon: "network", label: t("Reads catalogues from the add-on") }],
+      permissions: [{ icon: "network", label: t("Reads catalogues from the plugin") }],
       changelog: [{ version: "3.1.0", note: t("Adds the autumn season") }],
       limits: [t("Refreshes catalogues once a day")],
     },

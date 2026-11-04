@@ -1,9 +1,9 @@
 import LiveStudio from "./LiveStudio";
+import { Composer } from "./Composer";
 import { useLocale } from "../../i18n/react";
-import { Badge, Button, Dialog, Skeleton, Textarea, cn } from "@braedonsaunders/appkit-ui";
+import { Badge, Button, Dialog, Skeleton, cn } from "@braedonsaunders/appkit-ui";
 import {
   ArrowLeft,
-  ArrowUp,
   Bell,
   Captions,
   Check,
@@ -11,11 +11,10 @@ import {
   ListOrdered,
   PanelsTopLeft,
   Sparkles,
-  Square,
   Tv,
   type LucideIcon,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { Segmented } from "../../components/fields";
 import { settingHref } from "../../components/SettingFocus";
@@ -200,86 +199,6 @@ function StageHome({ remixName, onPick }: { remixName: string; onPick: (text: st
 }
 
 /** The conversation, docked at the bottom of the stage. */
-function Composer({
-  value,
-  onChange,
-  onSend,
-  working,
-  onStop,
-  placeholder,
-  compact,
-}: {
-  value: string;
-  onChange: (v: string) => void;
-  onSend: (text: string) => void;
-  working?: boolean;
-  onStop?: () => void;
-  placeholder: string;
-  compact?: boolean;
-}) {
-  const ref = useRef<HTMLTextAreaElement>(null);
-  useEffect(() => {
-    if (!compact) ref.current?.focus();
-  }, [compact, value]);
-  return (
-    <form
-      onSubmit={(e) => {
-        e.preventDefault();
-        onSend(value);
-      }}
-      className={cn(
-        "shrink-0 border-t border-border bg-bg-subtle/95 backdrop-blur",
-        compact ? "p-3" : "px-4 py-4",
-      )}
-    >
-      <div
-        className={cn(
-          "mx-auto flex w-full items-end gap-2 rounded-2xl border border-border bg-surface p-2 shadow-sm transition focus-within:border-primary/50 focus-within:shadow-md",
-          !compact && "max-w-3xl",
-        )}
-      >
-        <Textarea
-          ref={ref}
-          value={value}
-          onChange={(e) => onChange(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" && !e.shiftKey) {
-              e.preventDefault();
-              onSend(value);
-            }
-          }}
-          rows={1}
-          aria-label={placeholder}
-          placeholder={placeholder}
-          className="min-h-10 w-full min-w-0 flex-1 resize-none border-0 bg-transparent text-base shadow-none focus-visible:ring-0"
-        />
-        {working ? (
-          <Button
-            type="button"
-            size="icon"
-            variant="outline"
-            onClick={onStop}
-            aria-label={t("Stop")}
-            className="shrink-0 rounded-full"
-          >
-            <Square size={14} />
-          </Button>
-        ) : (
-          <Button
-            type="submit"
-            size="icon"
-            disabled={!value.trim()}
-            aria-label={t("Build")}
-            className="shrink-0 rounded-full"
-          >
-            <ArrowUp size={16} />
-          </Button>
-        )}
-      </div>
-    </form>
-  );
-}
-
 function Editor({
   asked,
   script,

@@ -14,12 +14,13 @@ import (
 type Status string
 
 const (
-	StatusOK         Status = "ok"
-	StatusError      Status = "error"
-	StatusTimeout    Status = "timeout"
-	StatusForbidden  Status = "forbidden"
-	StatusAborted    Status = "aborted"
-	StatusGovernance Status = "governance"
+	StatusOK           Status = "ok"
+	StatusInvalidInput Status = "invalid_input"
+	StatusError        Status = "error"
+	StatusTimeout      Status = "timeout"
+	StatusForbidden    Status = "forbidden"
+	StatusAborted      Status = "aborted"
+	StatusGovernance   Status = "governance"
 )
 
 // Fault is a classified, non-ambient failure. A Host returns a *Fault to make
@@ -94,7 +95,7 @@ func (f HostFunc) CallHost(ctx context.Context, name string, args json.RawMessag
 // host functions. Wall time adds 1 unit per WallUnitInterval.
 var DefaultCosts = map[string]int64{
 	"log": 1, "kv.get": 5, "kv.put": 10, "kv.delete": 5, "kv.list": 10,
-	"secret.get": 5, "http.fetch": 100, "catalog.search": 50, "catalog.get": 20,
+	"secret.get": 5, "http.fetch": 100, "addon.get": 100, "catalog.search": 50, "catalog.get": 20,
 	"viewers.history": 50, "viewers.setWatchState": 50, "collections.upsert": 50,
 	"folders.list": 20, "folders.stat": 20, "notify.owner": 20, "settings.get": 5,
 }
@@ -289,6 +290,11 @@ func (cs *callState) dispatch(name string, args json.RawMessage) (json.RawMessag
 		return nil, Forbidden("no host services are configured for this plugin")
 	}
 	out, err := cs.host.CallHost(cs.ctx, name, args)
+	// Time spent waiting on the host (a network fetch, a catalogue query) is
+	// paid by the call's own unit price, not as guest wall time; otherwise
+	// one slow upstream response spent the whole budget. The call deadline
+	// still bounds the total.
+	cs.last = time.Now()
 	if err != nil {
 		if f, ok := err.(*Fault); ok {
 			return nil, f
@@ -330,6 +336,8 @@ type batchRanker interface {
 
 func statusForFaultCode(code string) Status {
 	switch code {
+	case string(StatusInvalidInput):
+		return StatusInvalidInput
 	case string(StatusForbidden):
 		return StatusForbidden
 	case string(StatusAborted):
@@ -516,6 +524,10 @@ func (p *Plugin) CallDetailed(ctx context.Context, req Request) (Response, Outco
 		}
 		return Response{}, out, err
 	}
+	// Waiting for a free instance is the host's queue, not the plugin's
+	// work: concurrent calls (a metadata sweep) must not spend the budget
+	// of the call at the back of the line.
+	cs.last = time.Now()
 	respJSON, callErr := in.handle(callCtx, cs, reqJSON)
 	out.Units = cs.finishUnits()
 	healthy := callErr == nil || !callErr.Trap

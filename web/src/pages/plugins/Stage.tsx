@@ -8,6 +8,7 @@ import { useLocale } from "../../i18n/react";
 import { Badge, Skeleton, cn } from "@braedonsaunders/appkit-ui";
 import {
   Check,
+  TriangleAlert,
   Globe,
   Library,
   ListChecks,
@@ -43,7 +44,14 @@ export type Moment =
   | { kind: "repair"; text: string }
   | { kind: "guide"; tool: string; title: string; channels: GuideChannel[] }
   | { kind: "posters"; tool: string; title: string }
-  | { kind: "checks"; title: string; items: string[] }
+  | {
+      kind: "catalog";
+      tool: string;
+      title: string;
+      items: { key: string; title: string; poster?: string }[];
+      total: number;
+    }
+  | { kind: "checks"; title: string; items: string[]; failed?: boolean[]; issues?: string[] }
   | { kind: "done"; text: string };
 
 export interface StreamTile {
@@ -119,7 +127,7 @@ function channelsScript(): Script {
           sources: [
             { name: t("Free channel directories"), found: t("2 found"), icon: Globe },
             { name: t("Public IPTV lists"), found: t("3 found"), icon: Radio },
-            { name: t("Stremio TV add-ons on this server"), found: t("1 found"), icon: Tv },
+            { name: t("Stremio TV plugins on this server"), found: t("1 found"), icon: Tv },
             { name: t("Broadcaster websites"), found: t("1 found"), icon: Globe },
           ],
         },
@@ -303,7 +311,7 @@ export function StageRunner({ script, onDone }: { script: Script; onDone: () => 
   );
 }
 
-function MomentView({ moment }: { moment: Moment }) {
+export function MomentView({ moment }: { moment: Moment }) {
   switch (moment.kind) {
     case "intent":
       return (
@@ -360,6 +368,12 @@ function MomentView({ moment }: { moment: Moment }) {
       );
     case "posters":
       return <PosterFlow title={moment.title} tool={moment.tool} />;
+    case "catalog":
+      return (
+        <Panel title={moment.title} tool={moment.tool}>
+          <PosterGrid items={moment.items} total={moment.total} />
+        </Panel>
+      );
     case "checks":
       return (
         <Panel title={moment.title}>
@@ -370,13 +384,36 @@ function MomentView({ moment }: { moment: Moment }) {
                 className="stage-snap flex items-center gap-2.5 text-sm text-fg"
                 style={{ animationDelay: `${i * 260}ms` }}
               >
-                <span className="flex size-5 items-center justify-center rounded-full bg-success/15 text-success">
-                  <Check size={12} strokeWidth={3} aria-hidden />
+                <span
+                  className={cn(
+                    "flex size-5 shrink-0 items-center justify-center rounded-full",
+                    moment.failed?.[i]
+                      ? "bg-warning/15 text-warning"
+                      : "bg-success/15 text-success",
+                  )}
+                >
+                  {moment.failed?.[i] ? (
+                    <TriangleAlert size={12} aria-hidden />
+                  ) : (
+                    <Check size={12} strokeWidth={3} aria-hidden />
+                  )}
                 </span>
                 {it}
               </li>
             ))}
           </ul>
+          {moment.issues?.length ? (
+            <div
+              role="status"
+              className="mt-3 space-y-1 border-t border-border pt-3 text-sm text-warning"
+            >
+              {moment.issues.map((issue, i) => (
+                <p key={i} className="whitespace-pre-wrap break-words">
+                  {issue}
+                </p>
+              ))}
+            </div>
+          ) : null}
         </Panel>
       );
     case "done":
@@ -620,6 +657,34 @@ export function GuideStrip({ channels, animate }: { channels: GuideChannel[]; an
   );
 }
 
+function PosterGrid({
+  items,
+  total,
+}: {
+  items: { key: string; title: string; poster?: string }[];
+  total: number;
+}) {
+  return (
+    <>
+      <div className="grid grid-cols-6 gap-2.5 sm:grid-cols-9">
+        {items.slice(0, 18).map((it, i) => (
+          <div key={it.key} className="stage-flow" style={{ animationDelay: `${i * 140}ms` }}>
+            <Artwork
+              src={it.poster}
+              alt={it.title}
+              title={it.title}
+              className="aspect-[2/3] w-full overflow-hidden rounded-md shadow-sm ring-1 ring-border-subtle"
+            />
+          </div>
+        ))}
+      </div>
+      <div className="mt-3 flex justify-end">
+        <Badge variant="secondary">{t("{count} titles", { count: total })}</Badge>
+      </div>
+    </>
+  );
+}
+
 function PosterFlow({ title, tool }: { title: string; tool: string }) {
   const { locale } = useLocale();
   const spec = useMemo(() => studioSpec(false), [locale]);
@@ -627,23 +692,7 @@ function PosterFlow({ title, tool }: { title: string; tool: string }) {
   return (
     <Panel title={title} tool={tool}>
       {result ? (
-        <>
-          <div className="grid grid-cols-6 gap-2.5 sm:grid-cols-9">
-            {result.items.slice(0, 18).map((it, i) => (
-              <div key={it.key} className="stage-flow" style={{ animationDelay: `${i * 140}ms` }}>
-                <Artwork
-                  src={it.poster}
-                  alt={it.title}
-                  title={it.title}
-                  className="aspect-[2/3] w-full overflow-hidden rounded-md shadow-sm ring-1 ring-border-subtle"
-                />
-              </div>
-            ))}
-          </div>
-          <div className="mt-3 flex justify-end">
-            <Badge variant="secondary">{t("{count} titles", { count: result.total })}</Badge>
-          </div>
-        </>
+        <PosterGrid items={result.items} total={result.total} />
       ) : (
         <div className="grid grid-cols-9 gap-2.5">
           {Array.from({ length: 9 }, (_, i) => (

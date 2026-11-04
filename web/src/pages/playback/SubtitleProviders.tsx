@@ -112,7 +112,7 @@ export function SubtitleProviders() {
       )}
       <div className="flex flex-wrap items-center gap-3">
         <Button type="button" variant="outline" size="sm" onClick={() => setAdding(true)}>
-          <Plus size={14} aria-hidden /> {t("Add a Stremio add-on")}
+          <Plus size={14} aria-hidden /> {t("Add a plugin from Stremio")}
         </Button>
         <Link className="text-sm text-primary underline" to="/plugins">
           {t("Add a subtitle provider in Plugins")}

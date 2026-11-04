@@ -437,6 +437,18 @@ func (m *Manager) PreviewInstall(ctx context.Context, src Source) (*Preview, err
 	if err != nil {
 		return nil, err
 	}
+	if man.IsStremioOnly() && src.URL != "" {
+		// One record per configured add-on: the same add-on installed with
+		// two configurations (two debrid accounts) is two records, and the
+		// same link pasted on another page is the same record. The record id
+		// comes from the link, so an add-on's own id may be anything Stremio
+		// accepts ("tmdb-addon", "stremio.addons.mediafusion|elfhosted").
+		id, base, err := StremioInstallID(src.URL)
+		if err != nil {
+			return nil, err
+		}
+		man.ID, src.URL = id, base
+	}
 	if err := man.Validate(); err != nil {
 		return nil, err
 	}
@@ -456,22 +468,14 @@ func (m *Manager) PreviewInstall(ctx context.Context, src Source) (*Preview, err
 	if src.Version != "" && man.Version != src.Version {
 		return nil, fmt.Errorf("plugins: manifest version %q does not match catalogue version %q", man.Version, src.Version)
 	}
-	if man.IsStremioOnly() && src.URL != "" {
-		// One record per configured add-on: the same add-on installed with
-		// two configurations (two debrid accounts) is two records, and the
-		// same link pasted on another page is the same record.
-		id, base, err := StremioInstallID(src.URL)
-		if err != nil {
-			return nil, err
-		}
-		man.ID, src.URL = id, base
-	}
 	p := &Preview{Manifest: man, source: src, files: files, manifestRaw: raw, Verified: src.Verified, StremioOnly: man.IsStremioOnly()}
 	p.PermissionLines, p.NeedsViewers, p.NeedsFolders = PermissionSheet(man)
 	if err := p.resolve(); err != nil {
 		return nil, err
 	}
-	if m.deps.CheckPackage != nil {
+	// The conformance kit checks packages Ether runs; a plain Stremio add-on
+	// is a remote service whose manifest was validated above.
+	if m.deps.CheckPackage != nil && !man.IsStremioOnly() {
 		if err := m.deps.CheckPackage(ctx, raw, files); err != nil {
 			return nil, err
 		}
@@ -613,7 +617,8 @@ func (m *Manager) CheckUpdate(ctx context.Context, id string) (*Preview, bool, e
 	if err != nil {
 		return nil, false, err
 	}
-	if r.SourceURL == "" && r.SourceKind != "catalogue" {
+	if (r.SourceURL == "" && r.SourceKind != "catalogue") || r.SourceKind == "studio" {
+		// A Studio build's link (an edited add-on's) is not an update source.
 		return nil, false, fmt.Errorf("plugins: %s has no update source", id)
 	}
 	g, _ := m.store.grants(ctx, id)
@@ -832,17 +837,15 @@ func firstString(m map[string]any, keys ...string) (string, bool) {
 
 // GetSettings returns settings with secrets replaced by "Saved".
 func (m *Manager) GetSettings(ctx context.Context, id string) (map[string]any, json.RawMessage, error) {
-	if _, err := m.store.record(ctx, id); err != nil {
+	rec, err := m.store.record(ctx, id)
+	if err != nil {
 		return nil, nil, err
 	}
 	row, err := m.store.settings(ctx, id)
 	if err != nil {
 		return nil, nil, err
 	}
-	out := map[string]any{}
-	for k, v := range row.Settings {
-		out[k] = v
-	}
+	out := NonSecretSettings(row.Settings, row.Schema, settingsSecrets(rec))
 	for name := range row.Secrets {
 		if row.Secrets[name] != "" {
 			out[name] = savedSecret
@@ -854,14 +857,15 @@ func (m *Manager) GetSettings(ctx context.Context, id string) (map[string]any, j
 // mergedSettings returns the full settings document (secrets opened) for
 // delivery to the plugin through /ether/configure. Never logged.
 func (m *Manager) mergedSettings(ctx context.Context, id string) (map[string]any, error) {
+	rec, err := m.store.record(ctx, id)
+	if err != nil {
+		return nil, err
+	}
 	row, err := m.store.settings(ctx, id)
 	if err != nil {
 		return nil, err
 	}
-	out := map[string]any{}
-	for k, v := range row.Settings {
-		out[k] = v
-	}
+	out := NonSecretSettings(row.Settings, row.Schema, settingsSecrets(rec))
 	for name, stored := range row.Secrets {
 		plain, err := m.store.openSecret(id, name, stored)
 		if err != nil {
@@ -887,6 +891,11 @@ func (m *Manager) Configure(ctx context.Context, id string, incoming map[string]
 	if err != nil {
 		return nil, err
 	}
+	withDefaults := NonSecretSettings(nil, row.Schema, settingsSecrets(r))
+	for key, value := range incoming {
+		withDefaults[key] = value
+	}
+	incoming = withDefaults
 	if err := validateSettingsValues(row.Schema, incoming); err != nil {
 		return nil, err
 	}
@@ -952,6 +961,9 @@ func (m *Manager) Configure(ctx context.Context, id string, incoming map[string]
 			}
 		}
 		resolved[k] = v
+	}
+	if len(resolved) == 0 && r.Manifest.HasCapability(CapDebridProvider) {
+		m.syncDescriptors(ctx, r)
 	}
 	return resolved, nil
 }

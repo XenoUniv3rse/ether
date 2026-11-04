@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/braedonsaunders/ether/internal/plugins/wasm"
 	"github.com/braedonsaunders/ether/internal/viewspec"
 )
 
@@ -37,6 +38,11 @@ func (m *Manager) Handler() http.Handler {
 	mux.HandleFunc("PUT /{id}/auto-update", m.handlePutAutoUpdate)
 	mux.HandleFunc("PUT /{id}/roles", m.handlePutRoles)
 	mux.HandleFunc("POST /addons/preview", m.handleAddonPreview)
+	mux.HandleFunc("POST /addons/configure-page", m.handleAddonLinkConfigPage)
+	mux.HandleFunc("GET /{id}/addon-config", m.handleGetAddonConfig)
+	mux.HandleFunc("POST /{id}/addon-config/test", m.handleTestAddonConfig)
+	mux.HandleFunc("PUT /{id}/addon-config", m.handleSaveAddonConfig)
+	mux.HandleFunc("POST /{id}/addon-config/page", m.handleAddonConfigPage)
 	mux.HandleFunc("POST /addons", m.handleAddonInstall)
 	mux.HandleFunc("POST /{id}/shadow", m.handleShadow)
 	mux.HandleFunc("GET /{id}/shadow", m.handleShadowReport)
@@ -65,23 +71,26 @@ func (m *Manager) handleCatalogue(w http.ResponseWriter, r *http.Request) {
 
 // Summary is one row of the installed list.
 type Summary struct {
-	ID            string   `json:"id"`
-	Name          string   `json:"name"`
-	Version       string   `json:"version"`
-	Kind          string   `json:"kind,omitempty"`
-	Summary       string   `json:"summary,omitempty"`
-	Icon          string   `json:"icon,omitempty"`
-	Enabled       bool     `json:"enabled"`
-	Verified      bool     `json:"verified"`
-	Shadow        bool     `json:"shadow"`
-	AutoUpdate    bool     `json:"autoUpdate"`
-	UpdateVersion string   `json:"updateVersion,omitempty"`
-	PrevVersion   string   `json:"prevVersion,omitempty"`
-	Health        string   `json:"health"`
-	Capabilities  []string `json:"capabilities,omitempty"`
-	SourceKind    string   `json:"sourceKind,omitempty"`
-	StremioOnly   bool     `json:"stremioOnly,omitempty"`
-	InstalledAt   int64    `json:"installedAt"`
+	ID            string `json:"id"`
+	Name          string `json:"name"`
+	Version       string `json:"version"`
+	Kind          string `json:"kind,omitempty"`
+	Summary       string `json:"summary,omitempty"`
+	Icon          string `json:"icon,omitempty"`
+	Enabled       bool   `json:"enabled"`
+	Verified      bool   `json:"verified"`
+	Shadow        bool   `json:"shadow"`
+	AutoUpdate    bool   `json:"autoUpdate"`
+	UpdateVersion string `json:"updateVersion,omitempty"`
+	PrevVersion   string `json:"prevVersion,omitempty"`
+	Health        string `json:"health"`
+	// HealthReason is the plain-language reason behind a non-ok health,
+	// such as "Recent calls were slow."
+	HealthReason string   `json:"healthReason,omitempty"`
+	Capabilities []string `json:"capabilities,omitempty"`
+	SourceKind   string   `json:"sourceKind,omitempty"`
+	StremioOnly  bool     `json:"stremioOnly,omitempty"`
+	InstalledAt  int64    `json:"installedAt"`
 	// Roles and Host describe a Stremio add-on: what it can do, which of
 	// that is switched on, and the host it is reached at (never the link,
 	// which carries the owner's configuration).
@@ -89,17 +98,21 @@ type Summary struct {
 	Host  string      `json:"host,omitempty"`
 }
 
-func (m *Manager) summary(r Record, health string) Summary {
+func (m *Manager) summary(r Record, h Health) Summary {
 	s := Summary{ID: r.ID, Name: r.Name, Version: r.Version, Kind: r.Kind, Enabled: r.Enabled,
 		Verified: r.Verified, Shadow: r.Shadow, AutoUpdate: r.AutoUpdate, UpdateVersion: r.UpdateVersion,
-		PrevVersion: r.PrevVersion, Health: health, SourceKind: r.SourceKind,
+		PrevVersion: r.PrevVersion, Health: h.Status, HealthReason: h.Reason, SourceKind: r.SourceKind,
 		StremioOnly: r.Manifest.IsStremioOnly(), InstalledAt: r.InstalledAt.Unix()}
-	if r.Manifest.IsStremioOnly() {
-		s.Summary, s.Icon = r.Manifest.Description, r.Manifest.Logo
+	if r.Manifest.SpeaksStremio() {
+		// Roles and the add-on's host belong to every plugin that answers
+		// as an add-on, whether it came from a link or was edited in Studio.
 		s.Roles = roleState(r)["roles"].([]RoleState)
 		if u, err := url.Parse(r.SourceURL); err == nil {
-			s.Host = u.Hostname()
+			s.Host = displayHost(u.Hostname())
 		}
+	}
+	if r.Manifest.IsStremioOnly() {
+		s.Summary, s.Icon = r.Manifest.Description, r.Manifest.Logo
 		for _, c := range r.Manifest.EffectiveEther().Capabilities {
 			s.Capabilities = append(s.Capabilities, string(c))
 		}
@@ -109,6 +122,13 @@ func (m *Manager) summary(r Record, health string) Summary {
 		s.Icon = r.Manifest.Ether.Icon
 		for _, c := range r.Manifest.Ether.Capabilities {
 			s.Capabilities = append(s.Capabilities, string(c))
+		}
+	}
+	// Plugin copy is often a "$t:" key; owners see the plugin's own text.
+	if key, ok := strings.CutPrefix(s.Summary, "$t:"); ok {
+		s.Summary = r.Manifest.Description
+		if text, found := m.ResolveText(context.Background(), r.ID, key, "en"); found {
+			s.Summary = text
 		}
 	}
 	return s
@@ -164,7 +184,13 @@ func writeErr(w http.ResponseWriter, status int, code, msg string, fields []Fiel
 func (m *Manager) fail(w http.ResponseWriter, err error) {
 	var ve *ValidationError
 	var pie *PermissionIncreaseError
+	var runtimeError *wasm.Error
+	var input *CollectionInputError
 	switch {
+	case errors.As(err, &input):
+		writeErr(w, http.StatusBadRequest, "validation", input.Message, nil)
+	case errors.As(err, &runtimeError) && runtimeError.Status == wasm.StatusInvalidInput:
+		writeErr(w, http.StatusBadRequest, "validation", runtimeError.Message, nil)
 	case errors.Is(err, ErrNotFound):
 		writeErr(w, http.StatusNotFound, "not_found", "That plugin is not installed.", nil)
 	case errors.As(err, &ve):
@@ -205,7 +231,7 @@ func (m *Manager) handleList(w http.ResponseWriter, r *http.Request) {
 	out := make([]Summary, 0, len(recs))
 	for _, rec := range recs {
 		h, _ := m.store.health(r.Context(), rec.ID)
-		out = append(out, m.summary(rec, h.Status))
+		out = append(out, m.summary(rec, h))
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"plugins": out})
 }
@@ -219,7 +245,7 @@ func (m *Manager) handleGet(w http.ResponseWriter, r *http.Request) {
 	}
 	h, _ := m.store.health(r.Context(), id)
 	g, _ := m.store.grants(r.Context(), id)
-	d := Detail{Summary: m.summary(rec, h.Status), Manifest: rec.Manifest, HealthDetail: h}
+	d := Detail{Summary: m.summary(rec, h), Manifest: rec.Manifest, HealthDetail: h}
 	d.Permissions.Lines, d.Permissions.NeedsViewers, d.Permissions.NeedsFolders = PermissionSheet(rec.Manifest)
 	if rec.Manifest.Ether != nil {
 		d.Permissions.Declared = rec.Manifest.Ether.Permissions
@@ -365,7 +391,7 @@ func (m *Manager) handleInstall(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h, _ := m.store.health(r.Context(), rec.ID)
-	writeJSON(w, http.StatusCreated, m.summary(rec, h.Status))
+	writeJSON(w, http.StatusCreated, m.summary(rec, h))
 }
 
 func (m *Manager) handleGetAutoUpdate(w http.ResponseWriter, r *http.Request) {
@@ -459,17 +485,17 @@ func (m *Manager) handleAddonPreview(w http.ResponseWriter, r *http.Request) {
 		URL string `json:"url"`
 	}
 	if err := decode(r, &body); err != nil || strings.TrimSpace(body.URL) == "" {
-		writeErr(w, http.StatusBadRequest, "invalid", "Paste the add-on's install link.", nil)
+		writeErr(w, http.StatusBadRequest, "invalid", "Paste the plugin's install link.", nil)
 		return
 	}
 	id, base, err := StremioInstallID(body.URL)
 	if err != nil {
-		writeErr(w, http.StatusBadRequest, "invalid", "That is not an add-on install link. Paste the link the add-on's configure page gives you.", nil)
+		writeErr(w, http.StatusBadRequest, "invalid", "That is not a plugin install link. Paste the link its Stremio settings page gives you.", nil)
 		return
 	}
 	out := AddonPreview{ID: id}
 	if u, err := url.Parse(base); err == nil {
-		out.Host = u.Hostname()
+		out.Host = displayHost(u.Hostname())
 	}
 	if rec, err := m.Get(r.Context(), id); err == nil {
 		out.AlreadyInstalled = true
@@ -485,7 +511,7 @@ func (m *Manager) handleAddonPreview(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !p.Manifest.IsStremioOnly() {
-		writeErr(w, http.StatusBadRequest, "invalid", "This link is an Ether plugin, not a Stremio add-on. Install it from Plugins.", nil)
+		writeErr(w, http.StatusBadRequest, "invalid", "This link is an Ether plugin, not a Stremio one. Install it from Plugins.", nil)
 		return
 	}
 	man := p.Manifest
@@ -507,7 +533,7 @@ func (m *Manager) handleAddonInstall(w http.ResponseWriter, r *http.Request) {
 		Roles []Capability `json:"roles"`
 	}
 	if err := decode(r, &body); err != nil || strings.TrimSpace(body.URL) == "" {
-		writeErr(w, http.StatusBadRequest, "invalid", "Paste the add-on's install link.", nil)
+		writeErr(w, http.StatusBadRequest, "invalid", "Paste the plugin's install link.", nil)
 		return
 	}
 	rec, err := m.InstallAddon(r.Context(), AddonInstall{Link: body.URL, Roles: body.Roles, Exclusive: len(body.Roles) > 0})
@@ -516,7 +542,7 @@ func (m *Manager) handleAddonInstall(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h, _ := m.store.health(r.Context(), rec.ID)
-	writeJSON(w, http.StatusOK, m.summary(rec, h.Status))
+	writeJSON(w, http.StatusOK, m.summary(rec, h))
 }
 
 // failAddon reports an add-on link that could not be read in the owner's
@@ -528,7 +554,7 @@ func (m *Manager) failAddon(w http.ResponseWriter, err error) {
 		return
 	}
 	m.log.Info("add-on link not read", "err", err)
-	writeErr(w, http.StatusBadGateway, "unreachable", "Ether couldn't read an add-on at that link. Check the link, and that the add-on is online and allows servers.", nil)
+	writeErr(w, http.StatusBadGateway, "unreachable", "Ether couldn't read a plugin at that link. Check the link, and that the plugin is online and allows servers.", nil)
 }
 
 // RoleState is one role of an add-on for the console.
@@ -557,6 +583,15 @@ func (m *Manager) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(schema) == 0 {
 		schema = json.RawMessage("{}")
+	}
+	// Field labels and hints use the plugin's own "$t:" strings.
+	if walk := m.textResolver(r.Context(), r.PathValue("id"), r.URL.Query().Get("locale")); walk != nil {
+		var node any
+		if json.Unmarshal(schema, &node) == nil {
+			if out, err := json.Marshal(walk(node)); err == nil {
+				schema = out
+			}
+		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"settings": settings, "schema": schema})
 }
@@ -702,7 +737,9 @@ func (m *Manager) handleJournal(w http.ResponseWriter, r *http.Request) {
 }
 
 func (m *Manager) handleUndo(w http.ResponseWriter, r *http.Request) {
-	n, err := m.UndoAll(r.Context(), r.PathValue("id"))
+	// ?since=<entry id> undoes back to that change; no value undoes all.
+	since, _ := strconv.ParseInt(r.URL.Query().Get("since"), 10, 64)
+	n, err := m.UndoSince(r.Context(), r.PathValue("id"), since)
 	if err != nil {
 		m.fail(w, err)
 		return
@@ -767,7 +804,7 @@ func (m *Manager) handleUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h, _ := m.store.health(r.Context(), rec.ID)
-	writeJSON(w, http.StatusOK, m.summary(rec, h.Status))
+	writeJSON(w, http.StatusOK, m.summary(rec, h))
 }
 
 func (m *Manager) handleRollback(w http.ResponseWriter, r *http.Request) {
@@ -777,7 +814,7 @@ func (m *Manager) handleRollback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h, _ := m.store.health(r.Context(), rec.ID)
-	writeJSON(w, http.StatusOK, m.summary(rec, h.Status))
+	writeJSON(w, http.StatusOK, m.summary(rec, h))
 }
 
 func (m *Manager) handleRemove(w http.ResponseWriter, r *http.Request) {
@@ -851,17 +888,13 @@ func (m *Manager) handleView(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(resp.Body)
 }
 
-// localizeView resolves "$t:key" references in a view's spec and title from
-// the plugin's shipped strings, the way Studio's preview does. View data is
-// plugin-supplied values and is left as sent.
-func (m *Manager) localizeView(ctx context.Context, id, locale string, body []byte) []byte {
+// textResolver returns a walker that replaces "$t:key" strings with the
+// plugin's shipped text for locale (then its language, then English), or
+// nil when the plugin ships no strings.
+func (m *Manager) textResolver(ctx context.Context, id, locale string) func(any) any {
 	row, err := m.store.settings(ctx, id)
 	if err != nil || len(row.Strings) == 0 {
-		return body
-	}
-	var doc map[string]json.RawMessage
-	if json.Unmarshal(body, &doc) != nil {
-		return body
+		return nil
 	}
 	resolve := func(key string) (string, bool) {
 		for _, loc := range []string{locale, strings.SplitN(locale, "-", 2)[0], "en"} {
@@ -890,6 +923,21 @@ func (m *Manager) localizeView(ctx context.Context, id, locale string, body []by
 			}
 		}
 		return v
+	}
+	return walk
+}
+
+// localizeView resolves "$t:key" references in a view's spec and title from
+// the plugin's shipped strings, the way Studio's preview does. View data is
+// plugin-supplied values and is left as sent.
+func (m *Manager) localizeView(ctx context.Context, id, locale string, body []byte) []byte {
+	walk := m.textResolver(ctx, id, locale)
+	if walk == nil {
+		return body
+	}
+	var doc map[string]json.RawMessage
+	if json.Unmarshal(body, &doc) != nil {
+		return body
 	}
 	for _, field := range []string{"spec", "title"} {
 		raw, ok := doc[field]

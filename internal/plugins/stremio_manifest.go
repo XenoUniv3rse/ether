@@ -42,6 +42,40 @@ func (m Manifest) EffectiveEther() *EtherBlock {
 	return withoutRoles(e, m.rolesOff)
 }
 
+// withStremioRoles completes the Ether block of a native plugin that
+// answers Stremio routes: its roles come from its own catalogs and
+// resources, exactly as for the add-on it speaks for, so editing the
+// Stremio manifest is the one place to change what it contributes.
+// Anything the Ether block states itself wins.
+func (m Manifest) withStremioRoles() *EtherBlock {
+	plain := m
+	plain.Ether = nil
+	d := plain.derivedEther()
+	e := *m.Ether
+	if e.Kind == "" {
+		e.Kind = d.Kind
+	}
+	if e.Icon == "" {
+		e.Icon = d.Icon
+	}
+	have := map[Capability]bool{}
+	for _, c := range e.Capabilities {
+		have[c] = true
+	}
+	for _, c := range d.Capabilities {
+		if !have[c] {
+			e.Capabilities = append(e.Capabilities, c)
+			have[c] = true
+		}
+	}
+	merged := d.Contributes
+	if raw, err := json.Marshal(e.Contributes); err == nil {
+		_ = json.Unmarshal(raw, &merged)
+	}
+	e.Contributes = merged
+	return &e
+}
+
 // withoutRoles copies e without the switched-off capabilities and their
 // contributions.
 func withoutRoles(e *EtherBlock, off []Capability) *EtherBlock {

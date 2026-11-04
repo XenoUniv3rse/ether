@@ -89,7 +89,7 @@ func (p *subtitleProvider) Search(ctx context.Context, t *core.Title, lang, hash
 	if err != nil {
 		return nil, err
 	}
-	plain := record.Manifest.IsStremioOnly()
+	plain := record.Manifest.SpeaksStremio()
 	addon := p.mgr.Addon(record)
 	typ, id, ok := subtitleLookup(addon.Manifest, plain, t)
 	if !ok {

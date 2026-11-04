@@ -1,7 +1,24 @@
-import { Badge, Button, EmptyState, Switch, buttonVariants } from "@braedonsaunders/appkit-ui";
-import { ArrowUpCircle, Eye, FolderSearch, Link2, Puzzle, Sparkles } from "lucide-react";
+import {
+  Badge,
+  Button,
+  EmptyState,
+  Popover,
+  Switch,
+  buttonVariants,
+} from "@braedonsaunders/appkit-ui";
+import {
+  ArrowUpCircle,
+  Code2,
+  Eye,
+  FolderSearch,
+  Link2,
+  Plus,
+  Puzzle,
+  Sparkles,
+  Upload,
+} from "lucide-react";
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { Artwork } from "../../components/Artwork";
 import { ErrorPanel } from "../../components/feedback";
 import { DomainPage, useRouteTab, type PageTab } from "../../components/layout";
@@ -13,9 +30,11 @@ import { invalidateRegistry } from "../../lib/extend";
 import { useStreamEvent } from "../../lib/stream";
 import { CatalogueTab } from "./CatalogueTab";
 import { DirectoryBrowser } from "./DirectoryBrowser";
+import { openInStudio } from "./openInStudio";
 import { InstallDrawer } from "./InstallDrawer";
 import { InstalledPluginDrawer } from "./InstalledPluginDrawer";
-import { kindIcon, kindLabel, pluginHealthLevel, type PluginSummary } from "./types";
+import { healthHeadline } from "./drawer/health";
+import { kindIcon, isAddon, kindLabel, type PluginSummary } from "./types";
 
 type TabKey = "installed" | "marketplace";
 
@@ -27,8 +46,20 @@ export default function LivePlugins() {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<unknown>(null);
   const [toggling, setToggling] = useState<string | null>(null);
-  const [open, setOpen] = useState<string | null>(null);
+  // ?plugin=<id> opens that plugin's drawer (Studio links here after an
+  // install, and from its Actions menu).
+  const [params, setParams] = useSearchParams();
+  const [open, setOpenState] = useState<string | null>(() => params.get("plugin"));
+  const setOpen = (id: string | null) => {
+    setOpenState(id);
+    if (!id && params.has("plugin")) {
+      const next = new URLSearchParams(params);
+      next.delete("plugin");
+      setParams(next, { replace: true });
+    }
+  };
   const [installUrl, setInstallUrl] = useState<string | null>(null);
+  const [installMode, setInstallMode] = useState<"link" | "file">("link");
   const [browsing, setBrowsing] = useState(false);
   const [logRevision, setLogRevision] = useState(0);
   const [liveLogs, setLiveLogs] = useState<Record<string, string[]>>({});
@@ -99,13 +130,6 @@ export default function LivePlugins() {
     setOpen(id);
   };
 
-  const on = plugins.filter((p) => p.enabled).length;
-  const trying = plugins.filter((p) => p.enabled && p.shadow).length;
-  const attention = plugins.filter((p) => {
-    const level = pluginHealthLevel(p.health, p.enabled);
-    return level === "warn" || level === "error";
-  }).length;
-
   return (
     <DomainPage
       title={t("Plugins")}
@@ -113,38 +137,23 @@ export default function LivePlugins() {
       tabs={tabs}
       active={active}
       actions={
-        <>
-          <Button variant="outline" onClick={() => setBrowsing(true)}>
-            <FolderSearch size={15} /> {t("Browse directories")}
-          </Button>
-          <Button variant="outline" onClick={() => setInstallUrl("")}>
-            <Link2 size={15} /> {t("Install from a link")}
-          </Button>
-          <Link to="/plugins/studio" className={buttonVariants()}>
-            <Sparkles size={15} /> {t("Build a plugin")}
-          </Link>
-        </>
+        <AddPluginMenu
+          onBrowse={() => setBrowsing(true)}
+          onLink={() => {
+            setInstallMode("link");
+            setInstallUrl("");
+          }}
+          onUpload={() => {
+            setInstallMode("file");
+            setInstallUrl("");
+          }}
+          onCode={() => navigate("/plugins/studio?view=code")}
+          onAI={() => navigate("/plugins/studio")}
+        />
       }
     >
       {active === "installed" ? (
         <>
-          <div className="grid grid-cols-3 gap-2 sm:gap-3">
-            <Tile label={t("Plugins on")} value={String(on)} />
-            <Tile label={t("Trying out")} value={String(trying)} />
-            <Tile
-              label={t("Health")}
-              value={
-                attention ? (
-                  <LevelBadge
-                    level="warn"
-                    label={t("{count} need attention", { count: attention })}
-                  />
-                ) : (
-                  <LevelBadge level="ok" label={t("All working")} />
-                )
-              }
-            />
-          </div>
           {loadError ? <ErrorPanel error={loadError} onRetry={() => void load()} /> : null}
           {loading ? (
             <p className="text-xs text-fg-muted">{t("Loading plugins…")}</p>
@@ -197,6 +206,7 @@ export default function LivePlugins() {
             setOpen(id);
           }}
           onOpenInstall={() => setInstallUrl("")}
+          onBrowseDirectories={() => setBrowsing(true)}
         />
       )}
 
@@ -214,6 +224,7 @@ export default function LivePlugins() {
       <InstallDrawer
         open={installUrl !== null}
         initialUrl={installUrl ?? ""}
+        mode={installMode}
         onClose={() => setInstallUrl(null)}
         onInstalled={(id) => void installed(id)}
       />
@@ -222,6 +233,7 @@ export default function LivePlugins() {
           onClose={() => setBrowsing(false)}
           onImport={(address) => {
             setBrowsing(false);
+            setInstallMode("link");
             setInstallUrl(address);
           }}
         />
@@ -230,12 +242,88 @@ export default function LivePlugins() {
   );
 }
 
-function Tile({ label, value }: { label: string; value: ReactNode }) {
+/** One way in for every kind of plugin, like Live TV's Add menu. */
+function AddPluginMenu({
+  onBrowse,
+  onLink,
+  onUpload,
+  onCode,
+  onAI,
+}: {
+  onBrowse: () => void;
+  onLink: () => void;
+  onUpload: () => void;
+  onCode: () => void;
+  onAI: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const item = (icon: ReactNode, title: string, hint: string, fn: () => void) => (
+    <button
+      type="button"
+      role="menuitem"
+      onClick={() => {
+        setOpen(false);
+        fn();
+      }}
+      className="flex w-full items-start gap-3 rounded-md px-2.5 py-2 text-left hover:bg-surface-hover"
+    >
+      <span className="mt-0.5 text-primary">{icon}</span>
+      <span>
+        <span className="block text-sm font-medium text-fg">{title}</span>
+        <span className="block text-xs text-fg-muted">{hint}</span>
+      </span>
+    </button>
+  );
   return (
-    <div className="rounded-xl border border-border bg-surface px-3 py-2.5 sm:px-4 sm:py-3.5">
-      <p className="text-xs text-fg-muted">{label}</p>
-      <div className="mt-1 text-sm font-semibold tabular-nums text-fg sm:text-2xl">{value}</div>
-    </div>
+    <Popover
+      open={open}
+      onOpenChange={setOpen}
+      align="end"
+      className="w-80 p-1"
+      trigger={
+        <Button
+          size="sm"
+          onClick={() => setOpen((o) => !o)}
+          aria-haspopup="menu"
+          aria-expanded={open}
+        >
+          <Plus size={14} /> {t("Add")}
+        </Button>
+      }
+    >
+      <div role="menu" aria-label={t("Add a plugin")}>
+        {item(
+          <Sparkles size={16} />,
+          t("Describe it"),
+          t("Say what you want; Ether builds and tests it"),
+          onAI,
+        )}
+        {item(
+          <Code2 size={16} />,
+          t("Write the code"),
+          t("Studio's editor with a live preview"),
+          onCode,
+        )}
+        {item(
+          <Upload size={16} />,
+          t("Upload a file"),
+          t("A .etherpkg or .zip plugin package from your computer"),
+          onUpload,
+        )}
+        {item(
+          <Link2 size={16} />,
+          t("From a link"),
+          t("A plugin, GitHub repository or Stremio plugin address"),
+          onLink,
+        )}
+        {item(
+          <FolderSearch size={16} />,
+          t("Browse plugin directories"),
+          t("Lists of plugins published by plugins you installed"),
+          onBrowse,
+        )}
+      </div>
+    </Popover>
   );
 }
 
@@ -250,11 +338,18 @@ function PluginCard({
   onOpen: () => void;
   onToggle: (on: boolean) => void;
 }) {
-  const level = pluginHealthLevel(plugin.health, plugin.enabled);
+  const health = healthHeadline(plugin);
+  const navigate = useNavigate();
   return (
+    // The whole card opens the drawer; its own controls (the title button
+    // for keyboards, Open in Studio, the switch) keep their own actions.
     <article
       aria-label={plugin.name}
-      className="flex h-full flex-col rounded-xl border border-border bg-surface p-5"
+      onClick={(e) => {
+        if ((e.target as HTMLElement).closest("button, a, input, label, [role=switch]")) return;
+        onOpen();
+      }}
+      className="flex h-full cursor-pointer flex-col rounded-xl border border-border bg-surface p-5 transition hover:border-primary/40 hover:shadow-md"
     >
       <button
         type="button"
@@ -287,9 +382,9 @@ function PluginCard({
                 <Eye size={12} aria-hidden /> {t("Trying out")}
               </Badge>
             ) : (
-              <LevelBadge level={level} />
+              <LevelBadge level={health.level} label={health.word} />
             )}
-            <Badge variant="secondary">{kindLabel(plugin.kind, plugin.stremioOnly)}</Badge>
+            <Badge variant="secondary">{kindLabel(plugin.kind, isAddon(plugin))}</Badge>
             {plugin.updateVersion ? (
               <Badge variant="info">
                 <ArrowUpCircle size={11} aria-hidden />{" "}
@@ -303,6 +398,18 @@ function PluginCard({
       <p className="mt-3 line-clamp-2 min-h-10 text-sm text-fg-muted">{plugin.summary}</p>
       <div className="mt-auto flex items-center justify-between gap-3 pt-4">
         <span className="font-mono text-xs text-fg-subtle">v{plugin.version}</span>
+        <Button
+          variant="ghost"
+          size="sm"
+          className="ml-auto"
+          onClick={() =>
+            void openInStudio(plugin.id)
+              .then((to) => navigate(to))
+              .catch(() => onOpen())
+          }
+        >
+          <Code2 size={14} /> {t("Open in Studio")}
+        </Button>
         <Switch
           aria-label={t("Enable {name}", { name: plugin.name })}
           checked={plugin.enabled}

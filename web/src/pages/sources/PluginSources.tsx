@@ -30,10 +30,8 @@ type PluginRecord = {
   name?: string;
   enabled?: boolean;
   state?: string;
-  health?: {
-    state?: string;
-    lastError?: string;
-  };
+  health?: string;
+  healthReason?: string;
   lastError?: string;
 };
 
@@ -65,6 +63,10 @@ function classBadgeLabel(cls: SourceClass): string {
 
 function abilityLabel(ability: string): string {
   switch (ability) {
+    case "cache-check":
+      return t("Cache checks");
+    case "cached-playback":
+      return t("Cached playback");
     case "search":
       return t("Title search");
     case "movie-search":
@@ -94,11 +96,12 @@ function limitsSummary(limits: SourceKindMeta["limits"] | undefined): string[] {
 }
 
 function PluginStateBadge({ plugin }: { plugin?: PluginRecord }) {
-  const state = plugin?.health?.state ?? plugin?.state;
+  const state = plugin?.health ?? plugin?.state;
   if (plugin && plugin.enabled === false) {
     return <Badge variant="secondary">{t("Off")}</Badge>;
   }
   switch (state) {
+    case "attention":
     case "faulted":
     case "error":
     case "Quarantined":
@@ -243,8 +246,9 @@ export function PluginSourceCards({
             const cls = normalizeClass(d.meta?.class);
             const abilities = (d.meta?.abilities ?? []).map(abilityLabel);
             const limits = limitsSummary(d.meta?.limits);
+            const nativeDebrid = cls === "debrid" && d.id.endsWith("/debrid");
             const plugin = pluginsById.get(d.owner);
-            const lastError = plugin?.health?.lastError ?? plugin?.lastError;
+            const lastError = plugin?.healthReason || plugin?.lastError;
             const testState = tests[d.owner];
             const tested =
               testState?.status === "ok"
@@ -254,7 +258,7 @@ export function PluginSourceCards({
                   : undefined;
 
             const details = [
-              i === 0 ? t("Tried first") : t("Priority {number}", { number: i + 1 }),
+              nativeDebrid ? t("Uses native cache checks and playback") : i === 0 ? t("Tried first") : t("Priority {number}", { number: i + 1 }),
               hint,
               ...abilities,
               ...limits,
@@ -280,15 +284,15 @@ export function PluginSourceCards({
                     ) : null}
                   </>
                 }
-                order={
+                order={nativeDebrid ? undefined : (
                   <OrderButtons
                     label={label}
                     i={i}
                     n={ordered.length}
                     onMove={(dir) => move(i, dir)}
                   />
-                }
-                handle={handle}
+                )}
+                handle={nativeDebrid ? undefined : handle}
                 editLabel={t("Edit {name}", { name: label })}
                 onEdit={() => setActiveId(d.id)}
               />
@@ -314,7 +318,7 @@ export function PluginSourceCards({
                   {t("Close")}
                 </Button>
                 <Button asChild size="sm">
-                  <Link to="/plugins">{t("Manage in Plugins")}</Link>
+                  <Link to={`/plugins/installed?plugin=${encodeURIComponent(active.owner)}`}>{t("Manage in Plugins")}</Link>
                 </Button>
               </div>
             </div>

@@ -175,12 +175,16 @@ func InspectCall(call plugins.CallRecord) []ValidationHint {
 			}
 			urlStr, _ := st["url"].(string)
 			infoHash, _ := st["infoHash"].(string)
-			if strings.TrimSpace(urlStr) == "" && strings.TrimSpace(infoHash) == "" {
+			// A lazy stream names an id and resolves through /ether/open/{id} at play time.
+			lazyBlock, _ := st["ether"].(map[string]any)
+			lazyID, _ := lazyBlock["id"].(string)
+			lazy, _ := lazyBlock["lazy"].(bool)
+			if strings.TrimSpace(urlStr) == "" && strings.TrimSpace(infoHash) == "" && !(lazy && lazyID != "") {
 				add(
 					"error",
 					fmt.Sprintf("streams[%d].url", i),
-					fmt.Sprintf("Stream %d is missing both url and infoHash.", i+1),
-					"Provide a direct HTTPS stream url or an infoHash so Ether can play this stream.",
+					fmt.Sprintf("Stream %d is missing a url, an infoHash or a lazy id.", i+1),
+					"Provide a direct HTTPS url, an infoHash, or ether: { id, lazy: true } with an /ether/open/{id} route.",
 				)
 			}
 			title, _ := st["title"].(string)

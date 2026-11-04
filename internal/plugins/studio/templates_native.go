@@ -118,7 +118,7 @@ function channels(req: Request, withGuide = false): PlutoChannel[] {
   // channel's upcoming programmes, so the guide fills without a call per channel.
   const window = withGuide
     ? "&start=" + encodeURIComponent(new Date().toISOString()) +
-      "&stop=" + encodeURIComponent(new Date(Date.now() + 4 * 3600000).toISOString())
+      "&stop=" + encodeURIComponent(new Date(Date.now() + 2 * 3600000).toISOString())
     : "";
   const data = getJSON(API + "/v2/channels.json?marketingRegion=" + encodeURIComponent(region(req)) + window);
   if (!Array.isArray(data)) return [];
@@ -173,7 +173,14 @@ export function handle(req: Request) {
     }
   }
   if (req.path === "/ether/channels.json") {
-    const list = channels(req, true).map((c) => ({
+    let lineup: PlutoChannel[];
+    try {
+      lineup = channels(req, true);
+    } catch (e) {
+      // A guide window too large for one response still leaves the lineup.
+      lineup = channels(req, false);
+    }
+    const list = lineup.map((c) => ({
       id: c._id,
       name: c.name,
       number: c.number ? String(c.number) : undefined,
@@ -374,26 +381,31 @@ function bestFile(id: string): File | null {
   files.sort((a, b) => Number(b.height || 0) - Number(a.height || 0) || Number(b.size || 0) - Number(a.size || 0));
   return files[0] || null;
 }
+// One search per lookup keeps each call well inside the plugin's time
+// budget; the playable file is picked only when the owner presses play.
+function resolutionOf(doc: Doc): string {
+  const text = (doc.identifier + " " + (doc.title || "")).toLowerCase();
+  if (/2160p|\b4k\b|uhd/.test(text)) return "2160p";
+  const m = /(1080|720|576|480)p/.exec(text);
+  return m ? m[1] + "p" : "SD";
+}
 function streamsFor(title: string, year: number) {
-  const out: any[] = [];
-  for (const doc of candidates(title, year).slice(0, 3)) {
-    const f = bestFile(doc.identifier);
-    if (!f) continue;
-    const height = Number(f.height || 0);
-    const res = height >= 1000 ? "1080p" : height >= 700 ? "720p" : height >= 400 ? "480p" : "SD";
-    out.push({
-      name: "Internet Archive",
-      title: (doc.title || title) + "\n" + res + " MP4",
-      url: "https://archive.org/download/" + encodeURIComponent(doc.identifier) + "/" + encodeURIComponent(f.name),
-      behaviorHints: { filename: f.name, videoSize: Number(f.size || 0) || undefined },
-      ether: {
-        id: doc.identifier + "/" + f.name,
-        releaseName: title.replace(/[^A-Za-z0-9]+/g, ".") + (year ? "." + year : "") + "." + res + ".WEB.MP4",
-        size: Number(f.size || 0) || undefined,
-      },
+  return candidates(title, year)
+    .filter((doc) => !/trailer|teaser|clip/i.test(doc.identifier + " " + (doc.title || "")))
+    .slice(0, 3)
+    .map((doc) => {
+      const res = resolutionOf(doc);
+      return {
+        name: "Internet Archive",
+        title: (doc.title || title) + "\n" + res + " · Public domain",
+        ether: {
+          id: doc.identifier,
+          lazy: true,
+          releaseName:
+            title.replace(/[^A-Za-z0-9]+/g, ".") + (year ? "." + year : "") + "." + (res === "SD" ? "480p" : res) + ".WEB.MP4",
+        },
+      };
     });
-  }
-  return out;
 }
 
 export function handle(req: Request) {
@@ -407,6 +419,12 @@ export function handle(req: Request) {
     } catch (e) {
       return { status: 200, body: { ok: false, message: String(e) } };
     }
+  }
+  if (req.path.startsWith("/ether/open/")) {
+    const id = decodeURIComponent(req.path.slice("/ether/open/".length));
+    const f = bestFile(id);
+    if (!f) return { status: 404, body: { error: { code: "not_found", message: "No playable file." } } };
+    return { status: 200, body: { url: "https://archive.org/download/" + encodeURIComponent(id) + "/" + encodeURIComponent(f.name) } };
   }
   if (req.path.startsWith("/stream/movie/") && req.path.endsWith(".json")) {
     const title = q(req, "title");
@@ -447,7 +465,7 @@ export function handle(req: Request) {
         data: {
           count: String(found.length),
           sampleTitle: sample.title + " (" + sample.year + ")",
-          streams: found.map((s) => ({ id: s.ether.id, label: s.title.replace("\n", " · ") })),
+          streams: found.map((s) => ({ id: s.ether.id, label: s.title.replace("\n", " · ") + " · archive.org/details/" + s.ether.id })),
         },
       },
     };

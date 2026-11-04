@@ -48,6 +48,8 @@ func (a *App) buildPlugins(ctx context.Context, cfg config.Config) (*pluginRunti
 		IsLeader: func() bool { return a.cluster == nil || a.cluster.IsLeader() },
 		Bus:      clusterbus.FromCluster(a.cluster),
 		Backends: plugins.Backends{
+			CollectionsUpsert: a.pluginCollectionUpsert,
+			CollectionsDelete: a.pluginCollectionDelete,
 			ViewerNames: func(ctx context.Context, ids []int64) (json.RawMessage, error) {
 				out := make([]map[string]any, 0, len(ids))
 				for _, id := range ids {
@@ -260,6 +262,7 @@ func (a *App) buildPlugins(ctx context.Context, cfg config.Config) (*pluginRunti
 	adapters.Attach(mgr, a.collections, a.personalize, a.livetv)
 	adapters.AttachSubtitles(mgr, a.subtitles)
 	adapters.AttachMetadata(mgr, a.catalog)
+	adapters.AttachDebrid(mgr, a.debrid)
 	subtitleProbe := adapters.NewSubtitleProbe(mgr, a.catalog)
 	a.closers = append(a.closers, subtitleProbe.Close)
 	markerCtx, cancelMarkers := context.WithCancel(context.Background())
@@ -305,6 +308,8 @@ func (a *App) buildPlugins(ctx context.Context, cfg config.Config) (*pluginRunti
 	if err := studioSvc.OpenStorage(ctx, a.db); err != nil {
 		return nil, err
 	}
+	// Removing a plugin removes the drafts it was installed from.
+	mgr.OnRemove(func(ctx context.Context, id string) { studioSvc.ForgetPlugin(ctx, id) })
 
 	// Event sources (SPEC §5.7): playback, watch state and notifications.
 	publish := func(ev plugins.Event) {
@@ -411,6 +416,15 @@ func (a *App) pluginHandlers(m map[string]http.Handler) {
 			})
 		}
 	}
+}
+
+// publicExtensionHandlers are console API subtrees that authorise each
+// request themselves: the add-on settings relay checks its own token.
+func (a *App) publicExtensionHandlers() map[string]http.Handler {
+	if a.pluginsRT == nil || a.pluginsRT.mgr == nil {
+		return nil
+	}
+	return map[string]http.Handler{"addon-relay": a.pluginsRT.mgr.RelayHandler()}
 }
 
 // mountPlugins mounts the plugin tunnel and plugin host API (WS8b).

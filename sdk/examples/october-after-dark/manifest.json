@@ -1,0 +1,61 @@
+{
+  "id": "community.october.halloween",
+  "name": "October After Dark",
+  "version": "1.0.1",
+  "description": "A Halloween collection and Home shelf that returns every October.",
+  "types": [
+    "movie"
+  ],
+  "resources": [
+    "catalog"
+  ],
+  "catalogs": [
+    {
+      "type": "movie",
+      "id": "halloween",
+      "name": "October After Dark"
+    }
+  ],
+  "ether": {
+    "protocol": 1,
+    "kind": "extension",
+    "capabilities": [
+      "list_source",
+      "ui"
+    ],
+    "summary": "$t:summary",
+    "author": {
+      "name": "Server owner"
+    },
+    "license": "MIT",
+    "runtime": {
+      "kind": "hosted",
+      "entry": "src/plugin.ts"
+    },
+    "permissions": {
+      "collections": "write"
+    },
+    "strings": {
+      "en": "i18n/en.json"
+    },
+    "contributes": {
+      "listSources": [
+        {
+          "key": "halloween",
+          "label": "$t:name",
+          "hint": "$t:summary",
+          "catalog": "movie/halloween",
+          "maxItems": 100,
+          "refresh": "24h"
+        }
+      ],
+      "pages": [
+        {
+          "key": "shelf",
+          "label": "$t:name",
+          "route": "/ether/view/shelf"
+        }
+      ]
+    }
+  }
+}

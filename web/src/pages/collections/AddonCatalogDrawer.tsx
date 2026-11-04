@@ -71,12 +71,12 @@ export function AddonCatalogDrawer({
       <Drawer
         open={open && !adding}
         onClose={onClose}
-        title={t("Choose a Stremio add-on catalog")}
+        title={t("Choose a Stremio plugin catalog")}
         size="md"
         footer={
           <div className="flex w-full justify-end">
             <Button variant="outline" onClick={() => setAdding(true)}>
-              <Plus size={14} aria-hidden /> {t("Add a Stremio add-on")}
+              <Plus size={14} aria-hidden /> {t("Add a plugin from Stremio")}
             </Button>
           </div>
         }
@@ -93,7 +93,7 @@ export function AddonCatalogDrawer({
             <LoadingRows rows={2} />
           ) : groups.size === 0 ? (
             <p className="rounded-lg border border-dashed border-border px-3 py-2.5 text-sm text-fg-muted">
-              {t("No installed add-on offers a movie or series catalog yet.")}
+              {t("No installed plugin offers a movie or series catalog yet.")}
             </p>
           ) : (
             [...groups].map(([addon, list]) => (
