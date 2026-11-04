@@ -66,7 +66,7 @@ func run(ff, fp, report, only, corpus string) error {
 	if err != nil {
 		return err
 	}
-	cases := []scenario{{"healthy", "mpegts", "none", "", true}, {"healthy", "mpegts", "none", "", false}, {"healthy", "fmp4", "none", "", false}, {"seek", "mpegts", "none", "", false}, {"corrupt-ts", "mpegts", "none", "corrupt", false}, {"truncated", "mpegts", "none", "truncate", false}, {"source-503", "mpegts", "none", "503", false}, {"transient-503", "mpegts", "none", "once-503", false}, {"transient-416", "mpegts", "none", "once-416", false}, {"slow-first-byte", "mpegts", "none", "slow-first", false}, {"midrange-stall", "mpegts", "none", "stall", false}, {"persistent-stall-then-recover", "mpegts", "none", "long-stall", false}, {"connection-drop", "mpegts", "none", "drop", false}, {"short-reads", "mpegts", "none", "short-writes", false}, {"changing-source", "mpegts", "none", "changing", false}, {"live-corrupt", "mpegts", "none", "corrupt", false}, {"hardware-failure", "mpegts", "videotoolbox", "hwfail", false}, {"hardware-failure-fmp4", "fmp4", "videotoolbox", "hwfail", false}, {"healthy", "mpegts", "videotoolbox", "", false}}
+	cases := []scenario{{"healthy", "mpegts", "none", "", true}, {"healthy", "mpegts", "none", "", false}, {"healthy", "fmp4", "none", "", false}, {"seek", "mpegts", "none", "", false}, {"corrupt-ts", "mpegts", "none", "corrupt", false}, {"truncated", "mpegts", "none", "truncate", false}, {"source-503", "mpegts", "none", "503", false}, {"transient-503", "mpegts", "none", "once-503", false}, {"transient-416", "mpegts", "none", "once-416", false}, {"slow-first-byte", "mpegts", "none", "slow-first", false}, {"midrange-stall", "mpegts", "none", "stall", false}, {"persistent-stall-then-recover", "mpegts", "none", "long-stall", false}, {"connection-drop", "mpegts", "none", "drop", false}, {"short-reads", "mpegts", "none", "short-writes", false}, {"changing-source", "mpegts", "none", "changing", false}, {"live-corrupt", "mpegts", "none", "corrupt", false}, {"hardware-failure", "mpegts", "videotoolbox", "hwfail", false}, {"hardware-failure-fmp4", "fmp4", "videotoolbox", "hwfail", false}, {"hardware-failure-dash", "dash", "videotoolbox", "hwfail", false}, {"healthy", "mpegts", "videotoolbox", "", false}}
 	for _, name := range []string{"input-backward-dts", "input-timestamp-jump", "input-corrupt-mkv", "input-corrupt-mp4", "input-text-subtitle", "input-ass-subtitle", "input-broken-text", "input-broken-ass", "input-pgs", "input-dolby-vision", "input-missing-keyframe", "input-open-gop", "input-long-gop", "input-pts-wrap", "input-resolution-change", "input-samplerate-change", "input-audio-late", "input-audio-early-end", "input-vfr", "input-interlaced", "input-hevc10-hdr", "input-multi-audio"} {
 		cases = append(cases, scenario{name, "mpegts", "none", "", false})
 	}
@@ -231,20 +231,29 @@ func exercise(parent context.Context, ff, fp, root string, good []byte, sc scena
 	if live {
 		info.Duration = 0
 	}
-	s, err := m.StartHLS(ctx, core.HLSRequest{SessionID: "chaos", LiveInput: live, InputURL: srv.URL + "/fixture.ts", Info: *info, Decision: d, SegmentDuration: 4 * time.Second})
+	protocol := core.ProtocolHLS
+	if sc.Container == "dash" {
+		protocol = core.ProtocolDASH
+		d.Container = "fmp4"
+	}
+	s, err := m.StartHLS(ctx, core.HLSRequest{SessionID: "chaos", LiveInput: live, InputURL: srv.URL + "/fixture.ts", Info: *info, Decision: d, SegmentDuration: 4 * time.Second, Protocol: protocol})
 	if err != nil {
 		return "start: " + err.Error()
 	}
 	defer s.Close()
 	playlist := httptest.NewRecorder()
 	s.ServePlaylist(playlist, httptest.NewRequestWithContext(ctx, "GET", "/index.m3u8", nil))
-	if playlist.Code != 200 || (!live && !strings.Contains(playlist.Body.String(), "#EXTINF")) {
+	if playlist.Code != 200 || (sc.Container == "dash" && !strings.Contains(playlist.Body.String(), "<MPD")) || (sc.Container != "dash" && !live && !strings.Contains(playlist.Body.String(), "#EXTINF")) {
 		return fmt.Sprintf("playlist HTTP %d", playlist.Code)
 	}
 	var init []byte
-	if sc.Container == "fmp4" {
+	if sc.Container == "fmp4" || sc.Container == "dash" {
 		w := httptest.NewRecorder()
-		s.ServeSegment(w, httptest.NewRequestWithContext(ctx, "GET", "/init", nil), transcode.InitSegment)
+		if sc.Container == "dash" {
+			s.(core.DASHSession).ServeInit(w, httptest.NewRequestWithContext(ctx, "GET", "/init", nil), 0)
+		} else {
+			s.ServeSegment(w, httptest.NewRequestWithContext(ctx, "GET", "/init", nil), transcode.InitSegment)
+		}
 		if w.Code != 200 {
 			return fmt.Sprintf("init HTTP %d", w.Code)
 		}
@@ -258,7 +267,11 @@ func exercise(parent context.Context, ff, fp, root string, good []byte, sc scena
 	for _, n := range order {
 		w := httptest.NewRecorder()
 		start := time.Now()
-		s.ServeSegment(w, httptest.NewRequestWithContext(ctx, "GET", "/segment", nil), n)
+		if sc.Container == "dash" {
+			s.(core.DASHSession).ServeMedia(w, httptest.NewRequestWithContext(ctx, "GET", "/segment", nil), 0, n)
+		} else {
+			s.ServeSegment(w, httptest.NewRequestWithContext(ctx, "GET", "/segment", nil), n)
+		}
 		if w.Code != 200 {
 			return fmt.Sprintf("segment %d HTTP %d after %s", n, w.Code, time.Since(start).Round(time.Millisecond))
 		}

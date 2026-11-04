@@ -11,8 +11,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -49,19 +51,33 @@ func (s *plexChaosSource) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			case <-r.Context().Done():
 				return
 			}
-		case "stall":
-			w.Header().Set("Content-Length", strconv.Itoa(len(s.data)))
-			w.WriteHeader(200)
-			_, _ = w.Write(s.data[:len(s.data)/4])
-			if f, ok := w.(http.Flusher); ok {
-				f.Flush()
+		case "stall", "drop", "mismatched-size", "changing":
+			// Preserve real range status and headers, then interrupt the body.
+			staged := httptest.NewRecorder()
+			http.ServeContent(staged, r, "media.mp4", time.Time{}, bytes.NewReader(s.data))
+			body := staged.Body.Bytes()
+			cut := len(body) / 4
+			if s.mode == "mismatched-size" {
+				cut = len(body)
+				staged.Header().Set("Content-Length", strconv.Itoa(len(body)+4096))
 			}
-			select {
-			case <-time.After(15 * time.Second):
-			case <-r.Context().Done():
+			if s.mode == "stall" {
+				for k, values := range staged.Header() {
+					for _, v := range values {
+						w.Header().Add(k, v)
+					}
+				}
+				w.WriteHeader(staged.Code)
+				_, _ = w.Write(body[:cut])
+				if f, ok := w.(http.Flusher); ok {
+					f.Flush()
+				}
+				select {
+				case <-time.After(15 * time.Second):
+				case <-r.Context().Done():
+				}
+				return
 			}
-			return
-		case "drop", "mismatched-size", "changing":
 			h, ok := w.(http.Hijacker)
 			if !ok {
 				http.Error(w, "hijack unsupported", 500)
@@ -72,15 +88,17 @@ func (s *plexChaosSource) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			defer c.Close()
-			size, cut := len(s.data), len(s.data)/4
-			if s.mode == "mismatched-size" {
-				size += 4096
-				cut = len(s.data)
+			fmt.Fprintf(b, "HTTP/1.1 %d %s\r\n", staged.Code, http.StatusText(staged.Code))
+			for k, values := range staged.Header() {
+				for _, v := range values {
+					fmt.Fprintf(b, "%s: %s\r\n", k, v)
+				}
 			}
-			fmt.Fprintf(b, "HTTP/1.1 200 OK\r\nContent-Length: %d\r\nConnection: close\r\n\r\n", size)
-			_, _ = b.Write(s.data[:cut])
+			fmt.Fprint(b, "Connection: close\r\n\r\n")
+			_, _ = b.Write(body[:cut])
 			_ = b.Flush()
 			return
+
 		}
 	}
 	content := s.data
@@ -133,6 +151,24 @@ func TestTranscodeChaosPlexFaults(t *testing.T) {
 						}
 						chaosCmd(t, fp, "-v", "error", "-show_streams", p)
 						chaosCmd(t, ff, "-v", "error", "-xerror", "-i", p, "-f", "null", "-")
+						if path == "start-mkv" || path == "download" {
+							ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+							defer cancel()
+							out, err := exec.CommandContext(ctx, fp, "-v", "error", "-select_streams", "v:0", "-show_entries", "packet=pts_time", "-of", "csv=p=0", p).Output()
+							if err != nil {
+								t.Fatal("cannot inspect output timeline")
+							}
+							maxTime := 0.0
+							for _, line := range strings.Split(string(out), "\n") {
+								v, e := strconv.ParseFloat(strings.TrimSpace(strings.Split(line, ",")[0]), 64)
+								if e == nil && v > maxTime {
+									maxTime = v
+								}
+							}
+							if maxTime < 10 {
+								t.Fatalf("output ended early at %.2fs", maxTime)
+							}
+						}
 					}
 					if path == "download" {
 						f := newDownloadFixture(t, true)
@@ -191,6 +227,9 @@ func TestTranscodeChaosPlexFaults(t *testing.T) {
 						req.Header.Set("X-Plex-Client-Identifier", "client-1")
 						rec := httptest.NewRecorder()
 						f.srv.ServeHTTP(rec, req)
+						if ctx.Err() != nil {
+							t.Fatal("client request exceeded its deadline")
+						}
 						if rec.Code != 200 {
 							t.Fatalf("HTTP %d", rec.Code)
 						}
