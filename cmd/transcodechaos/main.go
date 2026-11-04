@@ -186,6 +186,7 @@ func exercise(parent context.Context, ff, fp, root string, good []byte, sc scena
 	if sc.Name == "seek" {
 		order = []int{0, 2, 1, 2, 0}
 	}
+	timeline := timelineCheck{discontinuities: discontinuities(playlist.Body.String())}
 	for _, n := range order {
 		w := httptest.NewRecorder()
 		start := time.Now()
@@ -206,6 +207,9 @@ func exercise(parent context.Context, ff, fp, root string, good []byte, sc scena
 		}
 		if err := command(ctx, ff, "-v", "error", "-xerror", "-i", p, "-f", "null", "-"); err != nil {
 			return fmt.Sprintf("segment %d decode: %v", n, err)
+		}
+		if err := timeline.check(ctx, fp, p, n); err != nil {
+			return err.Error()
 		}
 		if n == 0 && injector != nil {
 			if err := injector.fail(); err != nil {
