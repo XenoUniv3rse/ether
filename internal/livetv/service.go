@@ -3,7 +3,6 @@ package livetv
 import (
 	"context"
 	"crypto/rand"
-	"crypto/tls"
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
@@ -67,7 +66,7 @@ func New(o Options) (*Service, error) {
 	if o.HTTPClient == nil {
 		o.HTTPClient = egress.Client(egress.CapDirect, 20*time.Second)
 	}
-	o.HTTPClient = withoutHTTP2(o.HTTPClient)
+	o.HTTPClient = sourceHTTPClient(o.HTTPClient)
 	ctx, cancel := context.WithCancel(context.Background())
 	s := &Service{o: o, sessions: map[string]*session{}, transcodes: map[string]core.HLSSession{}, ctx: ctx, cancel: cancel, lineupUnix: o.Now().Unix()}
 	s.wg.Add(2)
@@ -76,29 +75,33 @@ func New(o Options) (*Service, error) {
 	return s, nil
 }
 
-// withoutHTTP2 returns a client whose transport speaks HTTP/1.1 only. IPTV
-// panels commonly advertise HTTP/2 through their proxy and then reset the
-// first request with PROTOCOL_ERROR; every IPTV player speaks HTTP/1.1, and
-// one connection per document or stream is enough.
-func withoutHTTP2(c *http.Client) *http.Client {
-	var tr *http.Transport
-	switch t := c.Transport.(type) {
-	case nil:
-		tr, _ = http.DefaultTransport.(*http.Transport)
-	case *http.Transport:
-		tr = t
-	default:
-		return c
+// sourceUserAgent is the player identity most IPTV providers' CDNs accept.
+// Several reset the connection for Go's default client (h2 PROTOCOL_ERROR or
+// a malformed HTTP/1.x response), so a source without its own identity
+// presents this one.
+const sourceUserAgent = "VLC/3.0.20 LibVLC/3.0.20"
+
+// sourceHTTPClient returns the client for every upstream Live TV request. It
+// copies the caller's client so the default identity never mutates it.
+func sourceHTTPClient(base *http.Client) *http.Client {
+	c := *base
+	if c.Transport == nil {
+		c.Transport = http.DefaultTransport
 	}
-	if tr == nil {
-		return c
+	c.Transport = sourceUserAgentTransport{base: c.Transport}
+	return &c
+}
+
+// sourceUserAgentTransport adds the default player identity when a source has
+// not set its own. An owner's user agent is already on the request and wins.
+type sourceUserAgentTransport struct{ base http.RoundTripper }
+
+func (t sourceUserAgentTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	if r.Header.Get("User-Agent") == "" {
+		r = r.Clone(r.Context())
+		r.Header.Set("User-Agent", sourceUserAgent)
 	}
-	clone := *c
-	t := tr.Clone()
-	t.ForceAttemptHTTP2 = false
-	t.TLSNextProto = map[string]func(string, *tls.Conn) http.RoundTripper{}
-	clone.Transport = t
-	return &clone
+	return t.base.RoundTrip(r)
 }
 
 // sourceOrigin names where a source's credentials are sent without its query

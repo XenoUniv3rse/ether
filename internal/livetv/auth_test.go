@@ -173,15 +173,29 @@ func TestXtreamPanelHasTimeToComposeItsDocuments(t *testing.T) {
 	}
 }
 
-func TestSourceClientSpeaksHTTP11Only(t *testing.T) {
-	s := testService(t, Options{HTTPClient: &http.Client{Timeout: time.Second}})
-	tr, ok := s.o.HTTPClient.Transport.(*http.Transport)
-	if !ok {
-		t.Fatalf("transport type %T", s.o.HTTPClient.Transport)
+func TestSourceRequestsUseAnIPTVUserAgent(t *testing.T) {
+	var got []string
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = append(got, r.UserAgent())
+	}))
+	defer up.Close()
+	s := testService(t, Options{HTTPClient: up.Client()})
+	for _, ua := range []string{"", "Custom/1.0"} {
+		req, err := http.NewRequest(http.MethodGet, up.URL, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if ua != "" {
+			req.Header.Set("User-Agent", ua)
+		}
+		res, err := s.o.HTTPClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		res.Body.Close()
 	}
-	// A non-nil empty TLSNextProto is what stops net/http from re-enabling h2.
-	if tr.ForceAttemptHTTP2 || tr.TLSNextProto == nil || len(tr.TLSNextProto) != 0 {
-		t.Fatalf("HTTP/2 still enabled: force=%v nextProto=%d", tr.ForceAttemptHTTP2, len(tr.TLSNextProto))
+	if len(got) != 2 || got[0] != sourceUserAgent || got[1] != "Custom/1.0" {
+		t.Fatalf("user agents: %v", got)
 	}
 }
 
