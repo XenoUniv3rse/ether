@@ -40,6 +40,12 @@ func (s *Session) watch(r *run) {
 		case <-r.proc.Done():
 			collect(true)
 			s.finish(r)
+			s.mu.Lock()
+			obsolete := s.cur != r
+			s.mu.Unlock()
+			if obsolete && r.spec.SoftSubtitlePath != "" {
+				s.removals.remove(r.spec.SoftSubtitlePath)
+			}
 			if r.dash != nil {
 				_ = os.RemoveAll(r.dash.dir)
 			}

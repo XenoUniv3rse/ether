@@ -15,8 +15,10 @@ import (
 
 // runSpec is everything needed to build one ffmpeg HLS run.
 type runSpec struct {
-	LiveInput      bool
-	CopyTimestamps bool
+	SoftSubtitlePath  string
+	SoftSubtitleIndex int
+	LiveInput         bool
+	CopyTimestamps    bool
 	// RTXTimeline preserves the native session's clock and rendition-local
 	// initialization paths when ordinary FFmpeg takes over.
 	RTXTimeline       bool
@@ -143,7 +145,7 @@ func buildArgs(s runSpec) []string {
 		return append(args, "-flush_packets", "1", "-f", "matroska", "pipe:1")
 	}
 	if s.Protocol == core.ProtocolDASH {
-		return append(args, dashMuxArgs(s)...)
+		return appendSoftSubtitleOutput(append(args, dashMuxArgs(s)...), s)
 	}
 	if s.Decision.Container == ContainerMPEGTS {
 		var segmentOptions []string
@@ -180,7 +182,14 @@ func buildArgs(s runSpec) []string {
 			}
 		}
 	}
-	return append(args, hlsMuxArgs(s)...)
+	return appendSoftSubtitleOutput(append(args, hlsMuxArgs(s)...), s)
+}
+
+func appendSoftSubtitleOutput(args []string, s runSpec) []string {
+	if s.SoftSubtitlePath == "" {
+		return args
+	}
+	return append(args, "-map", fmt.Sprintf("0:%d", s.SoftSubtitleIndex), "-c:s", "ass", "-f", "ass", "-ignore_readorder", "1", "-flush_packets", "1", s.SoftSubtitlePath)
 }
 
 // Segmented Matroska carries parameter sets only in the header's

@@ -11,6 +11,9 @@ import (
 // Transcoder (internal/transcode)
 
 type HLSRequest struct {
+	// SoftSubtitleStream, when set, asks the encoder to expose this embedded
+	// text stream as ASS alongside its ordinary media output.
+	SoftSubtitleStream *int
 	// RequireIndependentProof emits HLS independence tags only when the
 	// session can guarantee every advertised segment is independently decodable.
 	// Zero preserves the legacy playlist contract for existing callers.

@@ -59,13 +59,15 @@ func (s *Session) IndependentSegments() bool { return s.segmentsIndependent }
 
 // sessionInput owns one aspect of the session. Fields are guarded by Session.mu.
 type sessionInput struct {
-	rtxConfig          config.RTXVideo
-	rtxTimeline        bool
-	rtxDiscontinuities map[int]bool
-	liveInput          bool
-	inputLease         core.EncoderInputLease
-	inputHeaders       map[string]string
-	input              string
+	softSubtitleStream     *int
+	softSubtitleInputIndex int
+	rtxConfig              config.RTXVideo
+	rtxTimeline            bool
+	rtxDiscontinuities     map[int]bool
+	liveInput              bool
+	inputLease             core.EncoderInputLease
+	inputHeaders           map[string]string
+	input                  string
 	// clockInput is the input whose run wrote the retained fMP4 clock. Only a
 	// run reading that same input may be forced onto it (a short-video tail
 	// restart); a swapped-in source must match the clock on its own or be refused.

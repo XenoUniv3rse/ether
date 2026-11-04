@@ -225,6 +225,12 @@ func (s *Session) startRunLocked(seg int, bigProbe bool) error {
 	}
 	rp := s.runPlanLocked(seg)
 	s.prepareRTXRunLocked(&rp, seg)
+	if s.softSubtitleStream != nil && enhancementSelected(rp.decision) {
+		// The native enhancement process cannot expose a second output from
+		// its input. Use the regular encoder for this session's selected track.
+		s.fallbackRTXLocked("selected soft subtitle requires a shared encoder output", seg)
+		rp.decision = s.trackDecisionLocked(s.wantTrack)
+	}
 	s.seekRampSeg = -1
 	spec := runSpec{
 		RTXTimeline:  s.rtxTimeline,
@@ -246,6 +252,14 @@ func (s *Session) startRunLocked(seg int, bigProbe bool) error {
 		Protocol:     s.proto,
 		FastStart:    rp.fastStart,
 		Rate:         rp.rate,
+	}
+	if s.softSubtitleStream != nil && s.softSubtitleInputIndex >= 0 {
+		spec.SoftSubtitleIndex = s.softSubtitleInputIndex
+		var pathErr error
+		spec.SoftSubtitlePath, pathErr = filepath.Abs(filepath.Join(s.dir, fmt.Sprintf("subtitle-%d.ass", s.runSeq)))
+		if pathErr != nil {
+			return pathErr
+		}
 	}
 	if s.container == ContainerFMP4 && !s.isDASH() {
 		_, retained := s.clockLocked(&run{startSeg: seg}, s.wantTrack)
@@ -518,6 +532,9 @@ func (s *Session) stopRunLocked() {
 	r := s.cur
 	if r == nil {
 		return
+	}
+	if r.finished && r.spec.SoftSubtitlePath != "" {
+		s.removals.remove(r.spec.SoftSubtitlePath)
 	}
 	if s.traceOn() && !r.finished {
 		if reason == "" {
