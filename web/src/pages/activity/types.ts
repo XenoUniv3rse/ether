@@ -86,6 +86,10 @@ export type ExperienceMetrics = {
   finished: number;
   abandoned: number;
   remotePct: number | null;
+  /** Total viewing time in the window. */
+  watchedMs: number;
+  /** The device with the most plays, as recorded. */
+  topDevice: { name: string; plays: number } | null;
 };
 
 export type ExperienceOverview = {

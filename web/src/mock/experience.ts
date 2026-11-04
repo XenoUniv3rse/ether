@@ -263,7 +263,19 @@ function metrics(plays: MockPlay[]): ExperienceMetrics {
     abandoned: plays.filter((p) => p.ended && !p.completed && !p.failed && p.watchedMs < 120_000)
       .length,
     remotePct: share((p) => p.remote),
+    watchedMs: plays.reduce((n, p) => n + p.watchedMs, 0),
+    topDevice: topDevice(plays),
   };
+}
+
+function topDevice(plays: MockPlay[]): ExperienceMetrics["topDevice"] {
+  const counts = new Map<string, number>();
+  for (const p of plays) {
+    const name = p.device || p.platform;
+    if (name) counts.set(name, (counts.get(name) ?? 0) + 1);
+  }
+  const [name, n] = [...counts].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))[0] ?? [];
+  return name ? { name, plays: n! } : null;
 }
 
 function cause(plays: MockPlay[], m: ExperienceMetrics): ExperienceCause {

@@ -1,6 +1,7 @@
 package stats
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"net/http"
@@ -154,6 +155,13 @@ type ExperienceMetrics struct {
 	Finished            int              `json:"finished"`
 	Abandoned           int              `json:"abandoned"`
 	RemotePct           *float64         `json:"remotePct"`
+	WatchedMS           int64            `json:"watchedMs"`
+	// TopDevice is the device with the most plays, as recorded.
+	TopDevice *DeviceCount `json:"topDevice"`
+}
+type DeviceCount struct {
+	Name  string `json:"name"`
+	Plays int    `json:"plays"`
 }
 type ReasonCount struct {
 	Reason string `json:"reason"`
@@ -249,7 +257,7 @@ type ExperienceViewer struct {
 	Cause         ExperienceCause   `json:"cause"`
 }
 
-const experienceColumns = `id,user_id,username,title,platform,device,decision,started,ended,watched_ms,duration_ms,completed,failovers,error,measured,pictured,ttff_ms,start_failed,buffer_events,buffer_ms,down_failovers,source_kbps,delivered_kbps,uhd,hdr,remote,origin,release_name,reason_kind,reason_detail`
+const experienceColumns = `id,user_id,username,title,platform,device,decision,started,ended,bytes,watched_ms,duration_ms,completed,failovers,error,measured,pictured,ttff_ms,start_failed,buffer_events,buffer_ms,down_failovers,source_kbps,delivered_kbps,uhd,hdr,remote,origin,release_name,reason_kind,reason_detail`
 
 // realPlay leaves out sources prepared for a detail page that no client
 // played; older rows predate that distinction and count.
@@ -265,12 +273,18 @@ func (s *Service) experienceRows(ctx context.Context, where string, limit int, a
 	for rows.Next() {
 		var p ExperiencePlay
 		var measured, pictured, startFailed, events, uhd, hdr, remote int
-		var ttff, bufferMS int64
-		if err := rows.Scan(&p.ID, &p.UserID, &p.Username, &p.Title, &p.Platform, &p.Device, &p.Decision, &p.Started, &p.Ended, &p.WatchedMS, &p.DurationMS, &p.Completed, &p.Switches, &p.Error,
+		var ttff, bufferMS, bytes int64
+		if err := rows.Scan(&p.ID, &p.UserID, &p.Username, &p.Title, &p.Platform, &p.Device, &p.Decision, &p.Started, &p.Ended, &bytes, &p.WatchedMS, &p.DurationMS, &p.Completed, &p.Switches, &p.Error,
 			&measured, &pictured, &ttff, &startFailed, &events, &bufferMS, &p.downSwitches, &p.sourceKbps, &p.deliveredKbps, &uhd, &hdr, &remote, &p.Origin, &p.Release, &p.ReasonKind, &p.ReasonDetail); err != nil {
 			return nil, err
 		}
 		p.Measured, p.uhd, p.hdr, p.Remote = measured == 1, uhd == 1, hdr == 1, remote == 1
+		if p.deliveredKbps == 0 && bytes > 0 && p.WatchedMS >= abandonWindow.Milliseconds() {
+			// Plays without a recorded delivery rate (older rows) fall back
+			// to bytes served over time watched; short plays are left out
+			// because read-ahead dominates them.
+			p.deliveredKbps = int(bytes * 8 / p.WatchedMS)
+		}
 		p.pictured = !p.Measured || (pictured == 1 && startFailed == 0)
 		if p.Measured {
 			p.BufferEvents, p.BufferMS = &events, &bufferMS
@@ -322,7 +336,11 @@ func metrics(plays []ExperiencePlay) ExperienceMetrics {
 	var watched, sourceW, sourceSum, deliveredW, deliveredSum, uhdW, hdrW, mediaW, remoteW, measuredW int64
 	failed := map[string]int{}
 	reasons := map[[2]string]int{}
+	devices := map[string]int{}
 	for _, p := range plays {
+		if device := cmp.Or(p.Device, p.Platform); device != "" {
+			devices[device]++
+		}
 		switch core.DecisionKind(p.Decision) {
 		case core.DecisionDirectPlay:
 			m.Decisions.DirectPlay++
@@ -391,6 +409,12 @@ func metrics(plays []ExperiencePlay) ExperienceMetrics {
 	}
 	m.UHDPct, m.HDRPct = pct(uhdW, mediaW), pct(hdrW, mediaW)
 	m.RemotePct = pct(remoteW, measuredW)
+	m.WatchedMS = watched
+	for name, n := range devices {
+		if top := m.TopDevice; top == nil || n > top.Plays || (n == top.Plays && name < top.Name) {
+			m.TopDevice = &DeviceCount{Name: name, Plays: n}
+		}
+	}
 	for reason, n := range failed {
 		m.FailedReasons = append(m.FailedReasons, ReasonCount{reason, n})
 	}
@@ -518,6 +542,10 @@ func cause(m ExperienceMetrics, plays []ExperiencePlay) ExperienceCause {
 	}
 	if m.Switches >= 2 && m.Switches*10 >= m.Plays*3 {
 		return ExperienceCause{Kind: "source_switches", Switches: m.Switches, Plays: m.Plays}
+	}
+	if m.MeasuredPlays == 0 {
+		// Older plays carry no start time or buffering: nothing to judge.
+		return ExperienceCause{Kind: "not_enough_data"}
 	}
 	transcodes := func() *ExperienceCause {
 		if m.Decisions.Transcode*2 < m.Plays {

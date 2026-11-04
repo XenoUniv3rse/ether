@@ -70,7 +70,7 @@ func TestExperienceWindowMetricsAndCause(t *testing.T) {
 		t.Fatalf("sam %+v", sam)
 	}
 	ana := o.Viewers[1].Metrics
-	if top := ana.TopTranscodeReason; top == nil || top.Kind != "audio_codec" || top.Detail != "dts" || top.Count != 2 || *ana.DeliveredKbps != 8000 || *ana.SourceKbps != 12000 {
+	if top := ana.TopTranscodeReason; top == nil || top.Kind != "audio_codec" || top.Detail != "dts" || top.Count != 2 || *ana.DeliveredKbps != 8000 || *ana.SourceKbps != 12000 || ana.TopDevice == nil || ana.TopDevice.Name != "Living Room" || ana.TopDevice.Plays != 2 || ana.WatchedMS != 3600000 {
 		t.Fatalf("ana %+v", ana)
 	}
 

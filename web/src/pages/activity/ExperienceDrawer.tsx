@@ -20,10 +20,10 @@ import {
   directShare,
   failedReason,
   failedTone,
+  formatHours,
   formatMbps,
   formatPerHour,
   formatSeconds,
-  measuredNote,
   pct,
   reasonPhrase,
   startTone,
@@ -239,8 +239,16 @@ export function MetricFacts({ m, wide = false }: { m: ExperienceMetrics; wide?: 
           tone={bufferTone(m.bufferEventsPerHour)}
         />
       </Fact>
-      <Fact label={t("Failed starts")} hint={tn(m.plays, "of {count} play", "of {count} plays")}>
-        <ToneValue value={String(m.failedStarts)} tone={failedTone(m.failedStarts, m.plays)} />
+      <Fact
+        label={t("Failed starts")}
+        hint={
+          m.measuredPlays ? tn(m.measuredPlays, "of {count} play", "of {count} plays") : undefined
+        }
+      >
+        <ToneValue
+          value={m.measuredPlays ? String(m.failedStarts) : DASH}
+          tone={failedTone(m.failedStarts, m.measuredPlays)}
+        />
       </Fact>
       <Fact
         label={t("Direct play")}
@@ -257,7 +265,9 @@ export function MetricFacts({ m, wide = false }: { m: ExperienceMetrics; wide?: 
       </Fact>
       <Fact
         label={t("Bitrate delivered")}
-        hint={t("source {rate}", { rate: formatMbps(m.sourceKbps) })}
+        hint={
+          m.sourceKbps != null ? t("source {rate}", { rate: formatMbps(m.sourceKbps) }) : undefined
+        }
       >
         {formatMbps(m.deliveredKbps)}
       </Fact>
@@ -276,6 +286,13 @@ export function MetricFacts({ m, wide = false }: { m: ExperienceMetrics; wide?: 
         {t("{finished} / {abandoned}", { finished: m.finished, abandoned: m.abandoned })}
       </Fact>
       <Fact label={t("Away from home")}>{pct(m.remotePct)}</Fact>
+      <Fact
+        label={t("Most-used device")}
+        hint={m.topDevice ? tn(m.topDevice.plays, "{count} play", "{count} plays") : undefined}
+      >
+        <span className="block truncate">{m.topDevice?.name || DASH}</span>
+      </Fact>
+      <Fact label={t("Hours watched")}>{formatHours(m.watchedMs)}</Fact>
       <Fact label={t("Top transcode reason")}>
         {m.topTranscodeReason ? (
           <span className="block first-letter:uppercase">
@@ -384,7 +401,6 @@ export function ExperienceDrawer({
     [viewerId, days],
   );
   const d = detail.data && detail.data.userId === viewerId ? detail.data : null;
-  const unmeasured = d?.plays.some((p) => !p.measured) ?? false;
   return (
     <Drawer
       open={viewerId != null}
@@ -461,9 +477,6 @@ export function ExperienceDrawer({
             ) : (
               <p className="py-4 text-sm text-fg-muted">{t("No recorded plays yet.")}</p>
             )}
-            {unmeasured || !d.measuredSince ? (
-              <p className="mt-2 text-xs text-fg-muted">{measuredNote(d.measuredSince)}</p>
-            ) : null}
           </section>
         </div>
       )}

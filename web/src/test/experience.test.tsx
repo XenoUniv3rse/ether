@@ -79,12 +79,9 @@ describe("Activity › Experience", () => {
     ).toBeInTheDocument();
   });
 
-  it("shows — and the measured-from note for plays recorded before measurement", async () => {
+  it("shows — for plays recorded before measurement", async () => {
     backend();
     renderAt("/activity/experience?days=30&viewer=1");
-    expect(
-      (await screen.findAllByText(/Start time and buffering are measured from/, {}, WAIT)).length,
-    ).toBeGreaterThan(0);
     const dialog = await screen.findByRole("dialog", {}, WAIT);
     await within(dialog).findByText("Last 20 plays", {}, WAIT);
     // Alex plays ~2 a day, so the last 20 reach back before measurement began.
