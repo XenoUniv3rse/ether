@@ -70,7 +70,8 @@ func runReal(ctx context.Context, args []string) (int, error) {
 	stepNames := f.String("steps", "", "comma-separated substrings of step names to replay (default all)")
 	casesFile := f.String("plex-cases", "", "JSON file of named local Plex metadata/postplay paths to replay")
 	strict := f.Bool("strict", false, "exit 1 when any gated endpoint misses its budget or errors")
-	bodies := f.Bool("bodies", false, "save the first warm response of each viewer, client and step under OUT/bodies")
+	pgURL := f.String("pg", "", "run the copy on this empty PostgreSQL database (copied in as `ether cluster init` does); implies -background=false")
+	bodies := f.Bool("bodies", false, "save the last warm response of each viewer, client and step under OUT/bodies")
 	_ = f.Parse(args)
 	if *source == "" {
 		return 2, fmt.Errorf("-source is required")
@@ -106,9 +107,27 @@ func runReal(ctx context.Context, args []string) (int, error) {
 	if err := sanitizeConfig(filepath.Join(data, "config.json"), *port); err != nil {
 		return 2, fmt.Errorf("sanitize settings: %w", err)
 	}
+	// The measured build migrates its own copy: this tool's migrations may
+	// be newer than a baseline build's, and must not reach its schema.
+	log("migrating the copy with the measured build")
+	migrated, err := migrateCopy(ctx, server, data, *port, dir)
+	if err != nil {
+		return 2, fmt.Errorf("migrate: %w", err)
+	}
 	viewers, err := mintCopy(ctx, data, *viewerCount)
 	if err != nil {
 		return 2, fmt.Errorf("credentials: %w", err)
+	}
+	var pgCopied time.Duration
+	if *pgURL != "" {
+		*background = false
+		log("copying the database to PostgreSQL with the measured build")
+		start := time.Now()
+		if err := clusterInit(ctx, server, data, *pgURL, filepath.Join(dir, "cluster-init.log")); err != nil {
+			return 2, fmt.Errorf("postgres: %w", err)
+		}
+		pgCopied = time.Since(start)
+		log("copied in %s", pgCopied.Round(time.Millisecond))
 	}
 	var names []string
 	if *only != "" {
@@ -175,6 +194,7 @@ func runReal(ctx context.Context, args []string) (int, error) {
 	}
 	meta := []string{
 		fmt.Sprintf("source: %s (copied to %s)", *source, data),
+		fmt.Sprintf("database: %s; the build migrated its copy in %s", databaseLabel(*pgURL, pgCopied), migrated.Round(time.Millisecond)),
 		fmt.Sprintf("server ready %s after exec (cold start)", srv.ready.Round(time.Millisecond)),
 		fmt.Sprintf("viewers: %s", viewerNames(viewers)),
 	}
@@ -225,8 +245,14 @@ func runReal(ctx context.Context, args []string) (int, error) {
 	if err != nil {
 		return 2, err
 	}
-	if err := perfharness.Audit(ctx, filepath.Join(data, "ether.db"), byTag, auditFile); err != nil {
-		log("audit: %v", err)
+	var auditErr error
+	if *pgURL != "" {
+		auditErr = perfharness.AuditPostgres(ctx, *pgURL, byTag, auditFile)
+	} else {
+		auditErr = perfharness.Audit(ctx, filepath.Join(data, "ether.db"), byTag, auditFile)
+	}
+	if auditErr != nil {
+		log("audit: %v", auditErr)
 	}
 	auditFile.Close()
 	log("report: %s", filepath.Join(dir, "report.md"))
@@ -252,6 +278,13 @@ func runAudit(ctx context.Context, args []string) error {
 		return perfharness.AuditPostgres(ctx, *pg, byTag, os.Stdout)
 	}
 	return perfharness.Audit(ctx, *db, byTag, os.Stdout)
+}
+
+func databaseLabel(pg string, copied time.Duration) string {
+	if pg == "" {
+		return "SQLite"
+	}
+	return fmt.Sprintf("PostgreSQL (copied in %s)", copied.Round(time.Millisecond))
 }
 
 func viewerNames(vs []perfharness.Viewer) string {

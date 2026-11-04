@@ -8,12 +8,13 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"time"
 
 	sqlite "modernc.org/sqlite"
 
 	"github.com/braedonsaunders/ether/internal/perfharness"
-	"github.com/braedonsaunders/ether/internal/store"
 )
 
 // copyDataDir copies what a server needs from src into dst: a consistent
@@ -170,13 +171,39 @@ func sanitizeConfig(path string, port int) error {
 
 // mintCopy opens the copied database (applying this tree's migrations, as
 // the server would) and mints viewer credentials into it.
+// mintCopy mints credentials into the copy, which the measured build has
+// already migrated; it is opened without this tool's migrations.
 func mintCopy(ctx context.Context, dataDir string, max int) ([]perfharness.Viewer, error) {
-	db, err := store.Open(ctx, dataDir)
+	db, err := sql.Open("sqlite", "file:"+filepath.Join(dataDir, "ether.db")+"?_pragma=busy_timeout(10000)")
 	if err != nil {
 		return nil, err
 	}
 	defer db.Close()
 	return perfharness.MintCredentials(ctx, db, max)
+}
+
+// migrateCopy starts the measured build on the copy once, so it applies its
+// own migrations, and stops it.
+func migrateCopy(ctx context.Context, bin, dataDir string, port int, dir string) (time.Duration, error) {
+	start := time.Now()
+	srv, err := startServer(ctx, bin, dataDir, port, filepath.Join(dir, "migrate-trace.jsonl"), filepath.Join(dir, "migrate.log"))
+	if err != nil {
+		return 0, err
+	}
+	srv.stop()
+	_ = os.Remove(filepath.Join(dir, "migrate-trace.jsonl"))
+	return time.Since(start), nil
+}
+
+// clusterInit copies the SQLite copy into the empty PostgreSQL database with
+// the measured build's own `ether cluster init`.
+func clusterInit(ctx context.Context, bin, dataDir, url, logPath string) error {
+	out, err := exec.CommandContext(ctx, bin, "cluster", "init", "--data-dir", dataDir, "--database-url", url).CombinedOutput()
+	_ = os.WriteFile(logPath, out, 0o600)
+	if err != nil {
+		return fmt.Errorf("%w (see %s)", err, logPath)
+	}
+	return nil
 }
 
 func fileExists(p string) bool {

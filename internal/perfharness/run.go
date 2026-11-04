@@ -52,18 +52,18 @@ type Runner struct {
 	results  []Result
 	sessions map[string]*session // viewer/client
 	seq      atomic.Int64
-	// bodies, when set, receives the first warm response body of each
+	// bodies, when set, receives the last warm response body of each
 	// viewer, client and step (SaveBodies).
 	bodies string
-	saved  map[string]bool
 }
 
-// SaveBodies writes the first warm response of each viewer, client and step
-// to dir, so two builds' answers can be compared.
+// SaveBodies writes the last warm response of each viewer, client and step
+// to dir, so two builds' answers can be compared once personalization has
+// settled.
 func (r *Runner) SaveBodies(dir string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.bodies, r.saved = dir, map[string]bool{}
+	r.bodies = dir
 }
 
 func (r *Runner) saveBody(res Result, body []byte) {
@@ -73,12 +73,10 @@ func (r *Runner) saveBody(res Result, body []byte) {
 	name := res.Viewer + "__" + res.Client + "__" + res.Step
 	r.mu.Lock()
 	dir := r.bodies
-	if dir == "" || r.saved[name] {
-		r.mu.Unlock()
+	r.mu.Unlock()
+	if dir == "" {
 		return
 	}
-	r.saved[name] = true
-	r.mu.Unlock()
 	safe := strings.Map(func(c rune) rune {
 		if c == '/' || c == ' ' || c == ':' || c == '?' || c == '&' || c == '=' {
 			return '_'
