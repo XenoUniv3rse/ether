@@ -285,10 +285,77 @@ func (s *Service) plexGrid(ctx context.Context, key string, date time.Time, budg
 			} else if t, e := time.Parse("2006-01-02", m.Date); e == nil {
 				released = t.UnixMilli()
 			}
-			out = append(out, Programme{ChannelID: key, Start: time.Unix(air.Begins, 0).UTC(), End: time.Unix(air.Ends, 0).UTC(), Item: Item{Title: title, EpisodeTitle: episode, ShowTitle: m.Show, Summary: m.Summary, Thumb: thumb, Art: art, Genres: genres, Season: m.Season, Episode: m.Episode, ReleasedMS: released, DurationMS: m.Duration, GUID: m.GUID, ShowGUID: m.ShowGUID, MediaType: m.Type, Premiere: air.Premiere, Live: air.Live}})
+			season := m.Season
+			if m.Episode == 0 && season >= 1900 && season <= 2100 {
+				season = 0
+			}
+			out = append(out, Programme{ChannelID: key, Start: time.Unix(air.Begins, 0).UTC(), End: time.Unix(air.Ends, 0).UTC(), Item: Item{Title: title, EpisodeTitle: episode, ShowTitle: m.Show, Summary: m.Summary, Thumb: thumb, Art: art, Genres: genres, Season: season, Episode: m.Episode, ReleasedMS: released, DurationMS: m.Duration, GUID: m.GUID, ShowGUID: m.ShowGUID, MediaType: m.Type, Premiere: air.Premiere, Live: air.Live}})
 		}
 	}
 	return out, nil
+}
+
+// plexGridDates covers the requested UTC window, tomorrow's UTC grid, and
+// the server-local date when it differs. Plex grids overlap across dates.
+func plexGridDates(now, from, until time.Time) []time.Time {
+	dates := map[string]time.Time{}
+	add := func(t time.Time) {
+		date := t.Format("2006-01-02")
+		if _, ok := dates[date]; !ok {
+			dates[date], _ = time.Parse("2006-01-02", date)
+		}
+	}
+	utc := now.UTC()
+	add(utc)
+	add(utc.AddDate(0, 0, 1))
+	add(now)
+	first := from.UTC()
+	first = time.Date(first.Year(), first.Month(), first.Day(), 0, 0, 0, 0, time.UTC)
+	for d := first; d.Before(until.UTC()); d = d.AddDate(0, 0, 1) {
+		add(d)
+	}
+	out := make([]time.Time, 0, len(dates))
+	for _, d := range dates {
+		out = append(out, d)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Before(out[j]) })
+	return out
+}
+
+// Later entries replace earlier ones for the same channel and start. Sort
+// before presentation as upstream groups airings by metadata, not by time.
+func uniquePlexProgrammes(ps []Programme) []Programme {
+	type key struct {
+		channel string
+		start   int64
+	}
+	seen := make(map[key]Programme, len(ps))
+	for _, p := range ps {
+		seen[key{p.ChannelID, p.Start.UnixMilli()}] = p
+	}
+	out := make([]Programme, 0, len(seen))
+	for _, p := range seen {
+		out = append(out, p)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Start.Equal(out[j].Start) {
+			return out[i].ChannelID < out[j].ChannelID
+		}
+		return out[i].Start.Before(out[j].Start)
+	})
+	return out
+}
+
+func (s *Service) plexGrids(ctx context.Context, key string, dates []time.Time, budget *int) ([]Programme, error) {
+	var programmes []Programme
+	for _, date := range dates {
+		ps, err := s.plexGrid(ctx, key, date, budget)
+		if err != nil {
+			return nil, err
+		}
+		programmes = append(programmes, ps...)
+	}
+	return uniquePlexProgrammes(programmes), nil
 }
 
 type plexGuideKind struct{}
@@ -357,20 +424,20 @@ func (plexGuideKind) Fetch(ctx context.Context, s *Service, src *Source) (Fetche
 	}
 	if len(keys) > 0 {
 		start := src.PlexCursor % len(keys)
-		n := min(len(keys), budget/2)
 		now := s.o.Now()
+		dates := plexGridDates(now, now, now.UTC().AddDate(0, 0, 1))
+		n := min(len(keys), budget/len(dates))
 		for i := 0; i < n; i++ {
 			k := keys[(start+i)%len(keys)]
-			for day := 0; day < 2; day++ {
-				ps, e := s.plexGrid(ctx, k, now.AddDate(0, 0, day), &budget)
-				if e != nil {
-					return Fetched{}, e
-				}
-				g.Programmes = append(g.Programmes, ps...)
+			ps, e := s.plexGrids(ctx, k, dates, &budget)
+			if e != nil {
+				return Fetched{}, e
 			}
+			g.Programmes = append(g.Programmes, ps...)
 		}
 		src.PlexCursor = (start + n) % len(keys)
 	}
+	g.Programmes = uniquePlexProgrammes(g.Programmes)
 	return Fetched{Guide: g}, nil
 }
 
@@ -392,13 +459,18 @@ func (s *Service) previewProgrammes(ctx context.Context, c Channel, from, until 
 	if err != nil {
 		return nil, fmt.Errorf("unknown Plex guide channel")
 	}
-	key := src.ID + "/" + c.GuideID + "/" + s.o.Now().Format("2006-01-02")
+	dates := plexGridDates(s.o.Now(), from, until)
+	dateKey := make([]string, 0, len(dates))
+	for _, date := range dates {
+		dateKey = append(dateKey, date.Format("2006-01-02"))
+	}
+	key := src.ID + "/" + c.GuideID + "/" + strings.Join(dateKey, ",")
 	s.plexPreviewMu.Lock()
 	defer s.plexPreviewMu.Unlock()
 	entry, ok := s.plexPreview[key]
 	if !ok || time.Since(entry.at) > 10*time.Minute {
-		budget := 1
-		ps, e := s.plexGrid(ctx, c.GuideID, s.o.Now(), &budget)
+		budget := len(dates)
+		ps, e := s.plexGrids(ctx, c.GuideID, dates, &budget)
 		if e != nil {
 			return nil, e
 		}
