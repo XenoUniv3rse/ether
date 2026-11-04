@@ -30,6 +30,7 @@ CREATE TABLE livetv_policies(user_id INTEGER PRIMARY KEY, data TEXT NOT NULL);`)
 }
 
 type Service struct {
+	chanSnap      channelSnapshot // decoded lineup shared by request paths (channel_cache.go)
 	plexGate      plexGuideGate
 	plexPreviewMu sync.Mutex
 	plexPreview   map[string]plexPreviewEntry
@@ -214,7 +215,7 @@ func (s *Service) expireSessions() {
 	}
 }
 func (s *Service) Channels(ctx context.Context) ([]Channel, error) {
-	cs, err := channels(ctx, s.o.DB)
+	cs, err := s.allChannels(ctx)
 	for i := range cs {
 		cs[i].Health = s.sweepState(cs[i])
 	}
@@ -225,31 +226,19 @@ type queryer interface {
 	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
 }
 
+// channels reads every channel in number order straight from db (a
+// transaction sees its own writes). Request paths use allChannels.
 func channels(ctx context.Context, db queryer) ([]Channel, error) {
 	rows, err := db.QueryContext(ctx, `SELECT data FROM livetv_channels ORDER BY id`)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	out := []Channel{}
-	for rows.Next() {
-		var b []byte
-		var c Channel
-		if err = rows.Scan(&b); err != nil {
-			return nil, err
-		}
-		if err = json.Unmarshal(b, &c); err != nil {
-			return nil, err
-		}
-		out = append(out, c)
+	out, err := decodeChannelRows(rows)
+	if err != nil {
+		return nil, err
 	}
-	sort.SliceStable(out, func(i, j int) bool { return naturalNumber(out[i].Number) < naturalNumber(out[j].Number) })
-	return out, rows.Err()
-}
-func naturalNumber(n string) string {
-	var a, b int
-	fmt.Sscanf(n, "%d.%d", &a, &b)
-	return fmt.Sprintf("%09d.%09d/%s", a, b, n)
+	sortChannels(out)
+	return out, nil
 }
 func (s *Service) Channel(ctx context.Context, id string) (Channel, error) {
 	var b []byte
@@ -769,7 +758,7 @@ func (s *Service) AllowedChannelCached(ctx context.Context, u *core.User, id str
 	return nil
 }
 func (s *Service) AllowedChannels(ctx context.Context, u *core.User) ([]Channel, error) {
-	ctx, _, err := s.withPolicy(ctx, u)
+	ctx, pol, err := s.withPolicy(ctx, u)
 	if err != nil {
 		return nil, err
 	}
@@ -777,9 +766,27 @@ func (s *Service) AllowedChannels(ctx context.Context, u *core.User) ([]Channel,
 	if err != nil {
 		return nil, err
 	}
-	airing, err := s.programmesAt(ctx, cs, s.o.Now())
+	// An IPTV programme only matters through its rating. Without a rating
+	// cap the airing read is skipped for those channels, which on a large
+	// lineup is most of the cost of every Plex lineup request.
+	rated := u != nil && (strings.TrimSpace(u.MaxContentRating) != "" || strings.TrimSpace(pol.MaxRating) != "")
+	need := make([]int, 0, len(cs))
+	for i, c := range cs {
+		if c.Enabled && (c.Kind == "virtual" || rated) {
+			need = append(need, i)
+		}
+	}
+	subset := make([]Channel, len(need))
+	for j, i := range need {
+		subset[j] = cs[i]
+	}
+	found, err := s.programmesAt(ctx, subset, s.o.Now())
 	if err != nil {
 		return nil, err
+	}
+	airing := make(map[int]Programme, len(found))
+	for j, p := range found {
+		airing[need[j]] = p
 	}
 	out := []Channel{}
 	for i, c := range cs {
@@ -1239,6 +1246,9 @@ func (s *Service) ImportSource(ctx context.Context, src Source) (Source, error) 
 	if !ok {
 		return src, fmt.Errorf("source needs a playlist or an XMLTV guide")
 	}
+	// Account and groups are what this fetch reports; a source body from the
+	// owner API carries stale read-only copies.
+	src.Account, src.Groups = nil, nil
 	fetched, err := kind.Fetch(ctx, s, &src)
 	if err != nil {
 		return src, err
@@ -1271,7 +1281,13 @@ func (s *Service) ImportSource(ctx context.Context, src Source) (Source, error) 
 			oldByID[c.ID] = c
 		}
 	}
-	if err := assignImportedNumbers(ctx, tx, src.ID, cs, oldByID, old, s.o.Now()); err != nil {
+	keepNumber := map[string]Channel{}
+	for _, c := range cs {
+		if previous, ok := oldByID[c.ID]; ok && (c.numberMissing || c.ProviderNumber == "" || numberPinned(previous, fetched.ProviderNumbers)) {
+			keepNumber[c.ID] = previous
+		}
+	}
+	if err := assignImportedNumbers(ctx, tx, src.ID, cs, keepNumber, old, s.o.Now()); err != nil {
 		return src, err
 	}
 	if _, err = tx.ExecContext(ctx, `DELETE FROM livetv_programmes WHERE source_id=?`, src.ID); err != nil {
@@ -1283,7 +1299,9 @@ func (s *Service) ImportSource(ctx context.Context, src Source) (Source, error) 
 	stored := make([]Channel, 0, len(cs))
 	for _, c := range cs {
 		if previous, ok := oldByID[c.ID]; ok {
-			c.Number = previous.Number
+			if _, keep := keepNumber[c.ID]; keep {
+				c.Number = previous.Number
+			}
 			c.Enabled = previous.Enabled
 			c.Favorite = previous.Favorite
 			c.Rating = previous.Rating
@@ -1363,11 +1381,22 @@ func (s *Service) ImportSource(ctx context.Context, src Source) (Source, error) 
 	return src, err
 }
 
+// numberPinned reports whether a stored channel's number is the owner's
+// rather than the provider's. Channels stored before provider numbers were
+// recorded keep theirs, unless the new lineup is wholly provider-numbered
+// (an Xtream panel, whose older M3U import generated numbers per group).
+func numberPinned(previous Channel, providerNumbered bool) bool {
+	if previous.ProviderNumber == "" {
+		return !providerNumbered
+	}
+	return previous.Number != previous.ProviderNumber
+}
+
 // guideAllow is the set of XMLTV channel ids a playlist source keeps.
 // Nil means every channel (a guide-only source). Stored guide ids are
 // included so an owner mapping survives the next refresh.
-func (s *Service) guideAllow(ctx context.Context, src Source, playlist []Channel) (map[string]struct{}, error) {
-	if strings.TrimSpace(src.Playlist) == "" && src.PlaylistURL == "" {
+func (s *Service) guideAllow(ctx context.Context, src Source, playlist []Channel, hasChannels bool) (map[string]struct{}, error) {
+	if !hasChannels {
 		return nil, nil
 	}
 	ids := map[string]struct{}{}
@@ -1380,7 +1409,7 @@ func (s *Service) guideAllow(ctx context.Context, src Source, playlist []Channel
 	for _, c := range playlist {
 		add(c.GuideID)
 	}
-	stored, err := channels(ctx, s.o.DB)
+	stored, err := s.allChannels(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -1476,7 +1505,7 @@ func (s *Service) ImportUpload(ctx context.Context, id, part string, body io.Rea
 			return src, err
 		}
 	}
-	allow, err := s.guideAllow(ctx, src, cs)
+	allow, err := s.guideAllow(ctx, src, cs, strings.TrimSpace(src.Playlist) != "" || src.PlaylistURL != "")
 	if err != nil {
 		return src, err
 	}

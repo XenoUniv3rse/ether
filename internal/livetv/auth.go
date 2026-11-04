@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/braedonsaunders/ether/internal/core"
+	"github.com/braedonsaunders/ether/internal/updater"
 )
 
 // redactedSecret is what the owner API shows in place of a stored secret.
@@ -128,17 +129,17 @@ func (a *SourceAuth) header() http.Header {
 	return h
 }
 
-// xtreamURLs derives an Xtream Codes panel's M3U and XMLTV URLs.
-func (a *SourceAuth) xtreamURLs() (playlist, guide string) {
+// xtreamURLs derives an Xtream Codes panel's lineup (its JSON API, see
+// xtream.go) and XMLTV URLs.
+func (a *SourceAuth) xtreamURLs() (lineup, guide string) {
 	base := strings.TrimRight(strings.TrimSpace(a.Server), "/")
 	q := url.Values{"username": {a.Username}, "password": {a.Password}}
-	output := a.Output
-	if output == "" {
-		output = "ts"
-	}
-	pq := url.Values{"username": {a.Username}, "password": {a.Password}, "type": {"m3u_plus"}, "output": {output}}
-	return base + "/get.php?" + pq.Encode(), base + "/xmltv.php?" + q.Encode()
+	return base + "/player_api.php?" + q.Encode(), base + "/xmltv.php?" + q.Encode()
 }
+
+// defaultUserAgent names Ether to providers when the owner sets no user
+// agent. Panels commonly refuse Go's generic client name outright.
+func defaultUserAgent() string { return "Ether/" + updater.Version }
 
 // redacted returns a copy safe for the owner API.
 func (a *SourceAuth) redacted() *SourceAuth {
@@ -275,6 +276,9 @@ func (s *Service) openURL(ctx context.Context, raw string, h http.Header) (io.Re
 	}
 	for k, v := range h {
 		req.Header[k] = v
+	}
+	if req.Header.Get("User-Agent") == "" {
+		req.Header.Set("User-Agent", defaultUserAgent())
 	}
 	res, err := s.o.HTTPClient.Do(req)
 	if err != nil {

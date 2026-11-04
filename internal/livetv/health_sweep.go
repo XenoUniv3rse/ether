@@ -71,7 +71,7 @@ func (s *Service) healthSweepLoop() {
 // sweepChannels performs all network work away from viewer requests. A cancelled
 // sweep leaves the previous complete snapshot in place.
 func (s *Service) sweepChannels(ctx context.Context) {
-	cs, err := channels(ctx, s.o.DB)
+	cs, err := s.allChannels(ctx)
 	if err != nil {
 		return
 	}

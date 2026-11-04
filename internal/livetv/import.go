@@ -107,6 +107,8 @@ func ParseM3U(r io.Reader, sourceID string) ([]Channel, error) {
 		if pending.Number == "" {
 			pending.numberMissing = true
 			pending.Number = fmt.Sprint(len(out) + 1)
+		} else {
+			pending.ProviderNumber = pending.Number
 		}
 		out = append(out, *pending)
 		pending = nil

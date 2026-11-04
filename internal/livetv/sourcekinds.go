@@ -21,6 +21,10 @@ type Fetched struct {
 	// AddonInputs marks channels whose inputs an add-on owns (ids carry
 	// AddonInputPrefix); see addon_streams.go.
 	AddonInputs bool
+	// ProviderNumbers marks a lineup whose every number comes from the
+	// provider. Channels imported before provider numbers were recorded
+	// then take the provider's number instead of keeping a generated one.
+	ProviderNumbers bool
 }
 
 // SourceKind is one Live TV source kind: how the console describes it, how
@@ -257,7 +261,7 @@ type xtreamKind struct{}
 func (xtreamKind) ID() string { return "xtream" }
 func (xtreamKind) Describe() SourceDescribe {
 	return SourceDescribe{
-		Label: extend.T("Xtream Codes login"), Hint: extend.T("An M3U playlist of live streams, with an optional XMLTV guide."),
+		Label: extend.T("Xtream Codes login"), Hint: extend.T("Sign in to an IPTV provider's Xtream Codes panel. Ether imports the live channels and the panel's guide."),
 		Icon: "key-round", Order: 10, Editor: "xtream", YieldsChannels: true, YieldsGuide: true,
 		Params: append(authParams(),
 			extend.ParamField{Name: "server", Kind: "url", Label: extend.T("Server"), Required: true},
@@ -272,8 +276,8 @@ func (xtreamKind) Describe() SourceDescribe {
 }
 func (xtreamKind) Matches(src Source) bool { return src.Auth != nil && src.Auth.Type == "xtream" }
 func (xtreamKind) Fetch(ctx context.Context, s *Service, src *Source) (Fetched, error) {
-	// prepareSourceAuth has already derived the playlist and guide URLs.
-	return fetchPlaylistGuide(ctx, s, src, true)
+	// prepareSourceAuth has already derived the lineup and guide URLs.
+	return fetchXtream(ctx, s, src)
 }
 
 // virtualKind describes virtual channels programmed from the catalogue.
@@ -314,31 +318,42 @@ func fetchPlaylistGuide(ctx context.Context, s *Service, src *Source, withChanne
 		if err != nil {
 			return Fetched{}, err
 		}
+		cs = s.applyGroupRules(ctx, src, cs)
 	}
-	allow, err := s.guideAllow(ctx, *src, cs)
+	g, err := fetchSourceGuide(ctx, s, src, cs, withChannels && strings.TrimSpace(src.Playlist) != "")
 	if err != nil {
 		return Fetched{}, err
+	}
+	return Fetched{Channels: cs, Guide: g}, nil
+}
+
+// fetchSourceGuide reads a source's guide, keeping only the channels it
+// lists (all of them for a guide-only source).
+func fetchSourceGuide(ctx context.Context, s *Service, src *Source, cs []Channel, hasChannels bool) (XMLGuide, error) {
+	allow, err := s.guideAllow(ctx, *src, cs, hasChannels)
+	if err != nil {
+		return XMLGuide{}, err
 	}
 	filter := guideFilter{From: s.o.Now().Add(-guideLookback), Until: s.o.Now().Add(guideLookahead), IDs: allow}
 	g := XMLGuide{}
 	if src.GuideURL != "" {
 		g, err = s.readGuide(ctx, src.GuideURL, src.Auth.header(), filter)
 		if err != nil {
-			return Fetched{}, err
+			return XMLGuide{}, err
 		}
 	} else if src.Guide != "" {
 		var dropped bool
 		g, dropped, err = parseXMLTV(strings.NewReader(src.Guide), filter)
 		if err != nil {
-			return Fetched{}, err
+			return XMLGuide{}, err
 		}
 		if dropped {
 			trimmed, err := formatXMLTV(g)
 			if err != nil {
-				return Fetched{}, err
+				return XMLGuide{}, err
 			}
 			src.Guide = trimmed
 		}
 	}
-	return Fetched{Channels: cs, Guide: g}, nil
+	return g, nil
 }

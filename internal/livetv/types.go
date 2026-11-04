@@ -125,6 +125,15 @@ type Channel struct {
 	// GuideSourceID names the source whose XMLTV supplies GuideID's
 	// programmes. Empty means SourceID. Virtual channels ignore it.
 	GuideSourceID string `json:"guideSourceId,omitempty"`
+
+	// ProviderNumber is the number the source gave this channel at the last
+	// import (Xtream num, M3U tvg-chno, or the position in the owner's group
+	// order). While Number still equals it the channel follows the
+	// provider's renumbering; an owner edit makes Number differ and sticks.
+	ProviderNumber string `json:"providerNumber,omitempty"`
+
+	// adult is the provider's own adult flag (Xtream is_adult); import only.
+	adult bool
 }
 type Source struct {
 	LineupID    string `json:"lineupId,omitempty"`
@@ -162,6 +171,44 @@ type Source struct {
 	GuideFrom         *time.Time `json:"guideFrom,omitempty"`
 	GuideUntil        *time.Time `json:"guideUntil,omitempty"`
 	NextRefresh       *time.Time `json:"nextRefresh,omitempty"`
+
+	// Account is the provider's report on this login (Xtream panels),
+	// refreshed with the lineup. Read-only.
+	Account *ProviderAccount `json:"account,omitempty"`
+	// Groups are the provider's channel groups from the last refresh, in
+	// provider order, including the ones the owner excludes. Read-only.
+	Groups []SourceGroup `json:"groups,omitempty"`
+	// ExcludeGroups are group names the owner leaves out; their channels
+	// are not imported at all. NewGroups "exclude" adds each group that
+	// first appears on a refresh to ExcludeGroups; "" includes it.
+	// HideAdult leaves out every group the provider flags as adult.
+	ExcludeGroups []string `json:"excludeGroups,omitempty"`
+	NewGroups     string   `json:"newGroups,omitempty"`
+	HideAdult     bool     `json:"hideAdult,omitempty"`
+	// GroupOrder is the owner's group order. Empty keeps the provider's
+	// order and numbers; otherwise channels are numbered 1… down the
+	// listed groups (unlisted groups follow in provider order).
+	GroupOrder []string `json:"groupOrder,omitempty"`
+}
+
+// ProviderAccount is what an IPTV panel reports about the owner's login.
+type ProviderAccount struct {
+	Status            string     `json:"status,omitempty"`
+	Trial             bool       `json:"trial,omitempty"`
+	ExpiresAt         *time.Time `json:"expiresAt,omitempty"`
+	MaxConnections    int        `json:"maxConnections,omitempty"`
+	ActiveConnections int        `json:"activeConnections"`
+	Formats           []string   `json:"formats,omitempty"`
+	CheckedAt         time.Time  `json:"checkedAt"`
+}
+
+// SourceGroup is one provider channel group.
+type SourceGroup struct {
+	Name     string `json:"name"`
+	Channels int    `json:"channels"`
+	Adult    bool   `json:"adult,omitempty"`
+	// Excluded reports whether the owner's rules leave this group out.
+	Excluded bool `json:"excluded,omitempty"`
 }
 type Programme struct {
 	ID        string    `json:"id"`
