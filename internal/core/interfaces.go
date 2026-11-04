@@ -306,8 +306,14 @@ type Playlist struct {
 	UserID    int64       `json:"userId"`
 	Title     string      `json:"title"`
 	Smart     bool        `json:"smart"`
+	SmartURI  string      `json:"-"`
 	Items     []RatingKey `json:"items"`
 	UpdatedAt time.Time   `json:"updatedAt"`
+}
+
+// SmartPlaylists persists a section query for evaluation at read time.
+type SmartPlaylists interface {
+	CreateSmartPlaylist(ctx context.Context, userID int64, title, uri string) (*Playlist, error)
 }
 
 type Playlists interface {

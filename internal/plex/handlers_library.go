@@ -550,7 +550,7 @@ func applyTimeFilter(op string, ts int64, dateOnly bool, after, before *int64) {
 func (s *Server) parseBrowse(ctx context.Context, sec Section, t core.MediaType, u *core.User, q url.Values, raw ...string) browseRequest {
 	br := browseRequest{}
 	var group *core.FilterGroup
-	if len(raw) > 0 && (q.Has("push") || q.Has("or") || q.Has("pop")) {
+	if len(raw) > 0 && (q.Has("push") || q.Has("or") || q.Has("pop") || q.Has("and")) {
 		tree := parseQueryTree(raw[0], typeNumber(t), nil)
 		var convert func(*queryRule) *core.FilterGroup
 		convert = func(rule *queryRule) *core.FilterGroup {
