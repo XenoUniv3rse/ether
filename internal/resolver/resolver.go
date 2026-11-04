@@ -901,9 +901,11 @@ func (s *Service) resolve(ctx context.Context, req core.ResolveRequest, profile 
 			if res := s.lastResort(ctx, inconclusive, t.Key, concat(lead, primary, downgrades), &trace); res != nil {
 				return res, nil
 			}
-			if i, payload, uerr, ok := s.uncachedOutcome(ctx, primary, results, &trace); ok {
+			// The viewer's own pick (lead) is the one sent to download.
+			tried := concat(lead, primary)
+			if i, payload, uerr, ok := s.uncachedOutcome(ctx, tried, results, &trace); ok {
 				if i >= 0 {
-					return s.acceptResolution(ctx, t.Key, primary, i, payload, &trace), nil
+					return s.acceptResolution(ctx, t.Key, tried, i, payload, &trace), nil
 				}
 				return nil, uerr
 			}
