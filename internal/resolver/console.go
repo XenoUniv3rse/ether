@@ -411,13 +411,14 @@ func (s *Service) SearchReleases(ctx context.Context, t *core.Title, opts Search
 	}
 	out.Routing = trace.Routing
 	// rankCandidates writes one trace row per result, in result order.
+	now := s.now()
 	for i, ct := range trace.Candidates {
 		rel := results[i]
 		cr := ConsoleRelease{Preferences: ct.Preferences, Release: browserRelease(rel), Score: ct.Score, CustomFormats: ct.CustomFormats,
 			Compatibility: ct.CompatibilityReason, Rejected: ct.Rejected, Reason: ct.Reason,
 			Rank: rank[rel.ID], Winner: rel.ID == out.Winner && !ct.Rejected, Pinned: ct.Pinned, Route: ct.Route}
 		// Rejected releases are scored too, so the owner can compare.
-		if sc, err := s.scoreRelease(rel, profile, caps, t); err == nil {
+		if sc, err := s.scoreRelease(rel, profile, caps, t, now); err == nil {
 			cr.FormatScore = sc.format
 			if ct.Rejected {
 				cr.Score, cr.CustomFormats = sc.total, sc.matches

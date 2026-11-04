@@ -1226,6 +1226,11 @@ func (s *Service) rankWith(ctx context.Context, env rankEnv, req core.ResolveReq
 		ids[i] = r.ID
 	}
 	verifiedIDs := s.verifiedAmong(ctx, ids)
+	// One instant ages every candidate. Reading the clock per release made
+	// identical releases differ by the nanoseconds between their scores, so
+	// ties broke on scoring order and clock resolution (a single tick on
+	// Windows) instead of on the ranking ladder.
+	now := s.now()
 	var cands []candidate
 	clientRejected := false
 	for ri, rel := range results {
@@ -1286,7 +1291,7 @@ func (s *Service) rankWith(ctx context.Context, env rankEnv, req core.ResolveReq
 			}
 			continue
 		}
-		sc, err := s.scoreRelease(rel, profile, req.Client, t)
+		sc, err := s.scoreRelease(rel, profile, req.Client, t, now)
 		if errors.Is(err, errFormatTimeout) {
 			// One (possibly hostile) release name must not fail the whole
 			// resolution; it only loses its own place in the ranking.
@@ -1390,7 +1395,7 @@ type releaseScore struct {
 
 // scoreRelease computes the ranking score of a release for a profile and
 // client: the profile score plus custom formats plus client compatibility.
-func (s *Service) scoreRelease(rel core.Release, profile core.QualityProfile, caps core.ClientCaps, t *core.Title) (releaseScore, error) {
+func (s *Service) scoreRelease(rel core.Release, profile core.QualityProfile, caps core.ClientCaps, t *core.Title, now time.Time) (releaseScore, error) {
 	s.cfgMu.RLock()
 	scorer, scorerErr := s.scorer, s.scorerErr
 	s.cfgMu.RUnlock()
@@ -1411,7 +1416,7 @@ func (s *Service) scoreRelease(rel core.Release, profile core.QualityProfile, ca
 	}
 	compatibility, note := compatibilityScore(sizedForEpisode(rel), caps, t)
 	return releaseScore{
-		total:   s.score(sizedForEpisode(rel), profile, t) + float64(formatScore) + compatibility,
+		total:   s.score(sizedForEpisode(rel), profile, t, now) + float64(formatScore) + compatibility,
 		format:  formatScore,
 		matches: matches,
 		compat:  note,
@@ -1848,7 +1853,7 @@ func indexScore[T comparable](list []T, v T, per float64) float64 {
 }
 
 // score ranks an accepted release against a profile. Higher is better.
-func (s *Service) score(rel core.Release, profile core.QualityProfile, t *core.Title) float64 {
+func (s *Service) score(rel core.Release, profile core.QualityProfile, t *core.Title, now time.Time) float64 {
 	info := rel.Info
 	var sc float64
 	// Resolution fit, 0-50 points. An uncapped profile scales against 4K
@@ -1923,7 +1928,7 @@ func (s *Service) score(rel core.Release, profile core.QualityProfile, t *core.T
 	sc += bitrateScore(rel, t)
 	// Age penalty.
 	if !rel.PubDate.IsZero() {
-		ageDays := s.now().Sub(rel.PubDate).Hours() / 24
+		ageDays := now.Sub(rel.PubDate).Hours() / 24
 		if ageDays > 0 {
 			sc -= math.Min(ageDays/365*2, 15)
 			if s.retentionDays > 0 && ageDays > float64(s.retentionDays) {
