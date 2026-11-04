@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -242,32 +243,63 @@ func TestStreamHandlerResume(t *testing.T) {
 	}
 }
 
+// syncFlushWriter is a ResponseWriter the serve loop can write to while the
+// test reads: writes are serialized with reads, and every Flush signals the
+// reader instead of the reader polling a shared buffer.
+type syncFlushWriter struct {
+	header  http.Header
+	mu      sync.Mutex
+	body    strings.Builder
+	flushed chan struct{}
+}
+
+func newSyncFlushWriter() *syncFlushWriter {
+	return &syncFlushWriter{header: http.Header{}, flushed: make(chan struct{}, 1)}
+}
+
+func (w *syncFlushWriter) Header() http.Header { return w.header }
+func (w *syncFlushWriter) WriteHeader(int)     {}
+func (w *syncFlushWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.body.Write(p)
+}
+func (w *syncFlushWriter) Flush() {
+	select {
+	case w.flushed <- struct{}{}:
+	default:
+	}
+}
+func (w *syncFlushWriter) String() string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.body.String()
+}
+
 func TestStreamHandlerHeartbeat(t *testing.T) {
 	hub := NewStreamHub()
-	rec := httptest.NewRecorder()
+	w := newSyncFlushWriter()
 	ctx, cancel := context.WithCancel(context.Background())
 	req := httptest.NewRequest(http.MethodGet, "/api/stream/", nil).WithContext(ctx)
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		serveStreamEvents(rec, req, hub, 0, 15*time.Millisecond, rec)
+		serveStreamEvents(w, req, hub, 0, 15*time.Millisecond, w)
 	}()
-	deadline := time.Now().Add(3 * time.Second)
-	for {
-		if strings.Contains(rec.Body.String(), ": heartbeat") {
-			break
-		}
-		if time.Now().After(deadline) {
+	timeout := time.After(10 * time.Second)
+	for !strings.Contains(w.String(), ": heartbeat") {
+		select {
+		case <-w.flushed:
+		case <-timeout:
 			cancel()
 			<-done
-			t.Fatalf("no heartbeat in body %q", rec.Body.String())
+			t.Fatalf("no heartbeat in body %q", w.String())
 		}
-		time.Sleep(5 * time.Millisecond)
 	}
 	cancel()
 	select {
 	case <-done:
-	case <-time.After(3 * time.Second):
+	case <-time.After(10 * time.Second):
 		t.Fatal("serve loop did not stop after cancel")
 	}
 }
