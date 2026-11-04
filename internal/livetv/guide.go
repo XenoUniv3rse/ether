@@ -744,6 +744,7 @@ func (s *Service) planRefresh(ctx context.Context, srcs []Source) error {
 		updated[src.ID] = src.UpdatedAt.UnixMilli()
 	}
 	horizons := map[string]int64{}
+	covered := map[guideKey]bool{}
 	if len(used) > 0 {
 		rows, err := s.o.DB.QueryContext(ctx, `SELECT source_id, channel_id, MAX(end_ms) FROM livetv_programmes GROUP BY source_id, channel_id`)
 		if err != nil {
@@ -755,6 +756,9 @@ func (s *Service) planRefresh(ctx context.Context, srcs []Source) error {
 			if err = rows.Scan(&k.source, &k.guide, &end); err != nil {
 				rows.Close()
 				return err
+			}
+			if end > s.o.Now().UnixMilli() {
+				covered[k] = true
 			}
 			at, ok := updated[k.source]
 			if !ok || !used[k] || end <= at {
@@ -776,6 +780,16 @@ func (s *Service) planRefresh(ctx context.Context, srcs []Source) error {
 		}
 		srcs[i].NextRefresh = nil
 		if next, ok := nextRefresh(srcs[i], horizon); ok {
+			if srcs[i].Kind == "plex" && (srcs[i].LastErrorAt == nil || !srcs[i].LastErrorAt.After(srcs[i].UpdatedAt)) {
+				for key := range used {
+					if key.source == srcs[i].ID && !covered[key] {
+						if earlier := srcs[i].UpdatedAt.Add(minRefreshInterval); earlier.Before(next) {
+							next = earlier
+						}
+						break
+					}
+				}
+			}
 			srcs[i].NextRefresh = &next
 		}
 	}
