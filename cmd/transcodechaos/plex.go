@@ -17,7 +17,7 @@ import (
 func runPlex(ctx context.Context, ff, fp, fixtures, mode string) ([]result, error) {
 	pattern := "^TestTranscodeChaos(Plex|Clients|Matrix)$"
 	if mode == "full" {
-		pattern = "^TestTranscodeChaos(Plex|Clients|Matrix|PlexFaults|LiveRelay|LiveHardware|AppleRelay|HTTPHardware)$"
+		pattern = "^TestTranscodeChaos(Plex|Clients|Matrix|PlexFaults|LiveRelay|LiveHardware|AppleRelay|HTTPHardware|PCERejectsUnbounded)$"
 	}
 	cmd := exec.CommandContext(ctx, "go", "test", "-tags", "transcodechaos", "./internal/plex", "-run", pattern, "-count=1", "-timeout=4m", "-json")
 	cmd.Env = append(os.Environ(), "CHAOS_FFMPEG="+ff, "CHAOS_FFPROBE="+fp, "CHAOS_CORPUS="+fixtures, "GOMAXPROCS=2")
@@ -49,7 +49,7 @@ func runPlex(ctx context.Context, ff, fp, fixtures, mode string) ([]result, erro
 		if len(parts) == 0 || parts[0] == "" {
 			continue
 		}
-		if len(parts) == 1 && (parts[0] != "TestTranscodeChaosLiveRelay" && parts[0] != "TestTranscodeChaosLiveHardware" && parts[0] != "TestTranscodeChaosAppleRelay" && parts[0] != "TestTranscodeChaosHTTPHardware") {
+		if len(parts) == 1 && (parts[0] != "TestTranscodeChaosLiveRelay" && parts[0] != "TestTranscodeChaosLiveHardware" && parts[0] != "TestTranscodeChaosAppleRelay" && parts[0] != "TestTranscodeChaosHTTPHardware" && parts[0] != "TestTranscodeChaosPCERejectsUnbounded") {
 			continue
 		}
 		if len(parts) > 1 && e.Test == parts[0] {
