@@ -439,3 +439,10 @@
   box-shadow: 0 0 0 2px var(--color-primary, currentColor);
   transition: box-shadow 0.3s ease;
 }
+
+/* Describe a collection: messages scrolled under the chat header fade out
+ * over the transcript's own top padding instead of showing a clipped edge. */
+.describe-chat .app-scroll {
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 1.5rem);
+  mask-image: linear-gradient(to bottom, transparent 0, #000 1.5rem);
+}
