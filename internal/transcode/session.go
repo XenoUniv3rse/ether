@@ -71,12 +71,17 @@ type sessionInput struct {
 	// clockInput is the input whose run wrote the retained fMP4 clock. Only a
 	// run reading that same input may be forced onto it (a short-video tail
 	// restart); a swapped-in source must match the clock on its own or be refused.
-	clockInput  string
-	info        core.MediaInfo
-	decision    core.Decision
-	forceCPU    bool // hardware encoder failed; stay on CPU
-	noPause     bool // platform cannot suspend ffmpeg
-	inputFailed bool // exhausted this input; HTTP retries cannot restart it
+	clockInput          string
+	info                core.MediaInfo
+	decision            core.Decision
+	forceCPU            bool // hardware encoder failed; stay on CPU
+	copyFallback        bool // copied video failed its packet conversion; encode this session
+	copyDiscontinuities map[int]bool
+	noPause             bool // platform cannot suspend ffmpeg
+	inputFailed         bool // exhausted this input; HTTP retries cannot restart it
+	stallRestarts       []time.Time
+	liveRestarts        restartBudget
+	liveDiscontinuities map[int]bool
 	// contract is the delivered video a static-header session keeps
 	// across failovers; nil for every other session (contract.go).
 	contract       *videoContract
@@ -194,6 +199,7 @@ type run struct {
 	produced   int // segments finished (DASH: on the slowest track)
 	finished   bool
 	stopped    bool // stopped deliberately, not a failure
+	stalled    bool // watchdog interrupted a run with no progress
 	paused     bool
 	pausedDone int // maxDone when Pause was applied; later growth means it did not hold
 	err        error

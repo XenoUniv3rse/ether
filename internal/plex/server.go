@@ -209,6 +209,7 @@ type Server struct {
 	playbackOwners    *sessions.PlaybackOwners
 	playbackLifecycle *sessions.Lifecycle
 	transcodes        *transcodeTable
+	progressiveStops  progressiveStopGuard
 	readCaps          *readCapabilityStore
 	extraPlay         *extraPlayStore
 	selections        *selectionStore

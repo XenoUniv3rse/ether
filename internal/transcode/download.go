@@ -205,6 +205,7 @@ func downloadArgs(input string, video, audio *core.StreamInfo, out string) []str
 	args := []string{"-hide_banner", "-nostdin", "-loglevel", "warning", "-nostats",
 		"-progress", "pipe:1", "-y"}
 	args = append(args, inputSafetyArgs(input, false)...)
+	args = append(args, httpInputArgs(input, true)...)
 	args = append(args, "-i", input, "-map", fmt.Sprintf("0:%d", video.Index))
 	if audio != nil {
 		args = append(args, "-map", fmt.Sprintf("0:%d", audio.Index))
@@ -467,14 +468,22 @@ func (d *DownloadRemuxer) runDownload(ctx context.Context, req core.DownloadRemu
 		cmd.Stdout = &progressWriter{dur: req.Info.Duration, fn: progress}
 	}
 	d.m.log.Info("download "+kind+" starting", "input", req.InputURL, "estimateBytes", est)
-	if err := d.m.runner.Run(ctx, cmd); err != nil {
+	for attempt := 0; ; attempt++ {
+		err := d.runDownloadWatched(ctx, cmd)
+		if err == nil {
+			break
+		}
 		_ = os.Remove(part)
+		if errors.Is(err, errDownloadStalled) && attempt == 0 && ctx.Err() == nil {
+			d.m.log.Warn("stalled download; retrying from start", "kind", kind)
+			stderr.Reset()
+			continue
+		}
 		releaseEstimate()
 		if ctx.Err() != nil {
 			return "", 0, ctx.Err()
 		}
-		return "", 0, fmt.Errorf("transcode: download %s: %w: %s",
-			kind, err, strings.TrimSpace(stderr.String()))
+		return "", 0, fmt.Errorf("transcode: download %s: %w: %s", kind, err, strings.TrimSpace(stderr.String()))
 	}
 	st, err := os.Stat(part)
 	if err != nil {

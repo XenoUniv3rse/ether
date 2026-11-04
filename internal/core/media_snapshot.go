@@ -23,6 +23,12 @@ func CloneMediaInfo(info MediaInfo) MediaInfo {
 				*field = &value
 			}
 		}
+		for _, field := range []**int64{&s.AACConfigPTS, &s.AACSourceStart} {
+			if *field != nil {
+				value := **field
+				*field = &value
+			}
+		}
 		for _, field := range []**float64{&s.AverageFrameRate, &s.ReferenceFrameRate} {
 			if *field != nil {
 				value := **field

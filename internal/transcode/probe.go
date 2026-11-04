@@ -44,7 +44,7 @@ func httpInputArgs(input string, reconnect bool) []string {
 	}
 	args := []string{"-rw_timeout", "30000000", "-user_agent", "Ether"}
 	if reconnect {
-		args = append(args, "-reconnect", "1", "-reconnect_on_network_error", "1", "-reconnect_delay_max", "4")
+		args = append(args, "-reconnect", "1", "-reconnect_on_network_error", "1", "-reconnect_on_http_error", "416,5xx", "-reconnect_max_retries", "2", "-reconnect_delay_max", "4")
 	}
 	return args
 }
@@ -88,6 +88,7 @@ func probeMode(ctx context.Context, r Runner, ffprobe, input string, live bool) 
 		}
 		best = info
 		if probeCompleteMode(info, live) {
+			markADTSProgramConfigs(ctx, r, ffprobe, input, info)
 			return info, nil
 		}
 		if i < len(probeAttempts)-1 {
@@ -95,6 +96,7 @@ func probeMode(ctx context.Context, r Runner, ffprobe, input string, live bool) 
 		}
 	}
 	if best != nil {
+		markADTSProgramConfigs(ctx, r, ffprobe, input, best)
 		return best, nil
 	}
 	return nil, lastErr
@@ -432,6 +434,9 @@ func mapStream(s ffprobeStream) (core.StreamInfo, bool) {
 	case "audio":
 		si.Channels = s.Channels
 		si.ChannelLayout = s.ChannelLayout
+		if si.Codec == "aac" {
+			si.AACProgramConfig = aacASCProgramConfig(probeExtradata(s.Extradata), si.Channels)
+		}
 		si.SampleRate = int(atoi64(s.SampleRate))
 	}
 	return si, true

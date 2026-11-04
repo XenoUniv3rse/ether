@@ -40,7 +40,11 @@ func gpuPipeline(s runSpec, accel string, w, h int, toneMap, tenBit, burn bool) 
 		}
 		input = []string{"-hwaccel", "videotoolbox", "-hwaccel_output_format", "videotoolbox_vld"}
 		if toneMap {
-			filters = append(filters, "tonemap_videotoolbox=tonemap=hable:format=nv12:t=bt709:m=bt709:p=bt709")
+			filter := "tonemap_videotoolbox=tonemap=hable:format=nv12:t=bt709:m=bt709:p=bt709"
+			if v := s.Info.Video(); v != nil && v.DolbyVision && v.DolbyVisionProfile == 5 {
+				filter += ":apply_dovi=1"
+			}
+			filters = append(filters, filter)
 		}
 		scale := fmt.Sprintf("scale_vt=w=%d:h=%d", w, h)
 		if s.Features.scaleVTFormat {

@@ -41,6 +41,7 @@ type options struct {
 	detectHW       bool
 	idleTimeout    time.Duration
 	segmentTimeout time.Duration
+	stallTimeout   time.Duration
 	restartAhead   time.Duration
 	maxAhead       time.Duration
 	keepBehind     time.Duration
@@ -67,6 +68,7 @@ func defaultOptions() options {
 		detectHW:       true,
 		idleTimeout:    2 * time.Minute,
 		segmentTimeout: 45 * time.Second,
+		stallTimeout:   30 * time.Second,
 		restartAhead:   24 * time.Second,
 		maxAhead:       2 * time.Minute,
 		keepBehind:     3 * time.Minute,
@@ -104,6 +106,10 @@ func WithIdleTimeout(d time.Duration) Option { return func(o *options) { o.idleT
 // WithSegmentTimeout bounds how long ServeSegment waits for ffmpeg
 // (default 45s).
 func WithSegmentTimeout(d time.Duration) Option { return func(o *options) { o.segmentTimeout = d } }
+
+// WithStallTimeout sets the no-progress timeout for an actively requested
+// on-demand segment. Zero disables the watchdog.
+func WithStallTimeout(d time.Duration) Option { return func(o *options) { o.stallTimeout = d } }
 
 // withRungDwell sets how long one rung's run keeps the shared encoder
 // before a request on another rung may restart it (default 8s; 0 = switch
@@ -201,8 +207,11 @@ type Manager struct {
 	ffprobe string
 	version string
 	hw      core.HWAccel
-	feat    features
-	tempDir string
+	// Avoid immediately reusing a failed progressive hardware encoder on a
+	// client retry, including a retry that creates a new session.
+	httpHWFailedUntil atomic.Int64
+	feat              features
+	tempDir           string
 	// graphErr is the latest owner-visible reason a graph could not be built.
 	graphErr string
 
@@ -453,7 +462,7 @@ func (m *Manager) limitation() string {
 }
 
 func featureLine(f features) string {
-	names := []string{"zscale", "colorspace", "scale", "libplacebo", "tonemap", "tonemap_opencl", "tonemap_vaapi", "tonemap_videotoolbox", "scale_vt", "tonemap_cuda"}
+	names := []string{"zscale", "colorspace", "scale", "libplacebo", "tonemap", "tonemapx", "tonemap_opencl", "tonemap_vaapi", "tonemap_videotoolbox", "scale_vt", "tonemap_cuda"}
 	parts := make([]string, len(names))
 	for i, name := range names {
 		bit := "0"
@@ -770,7 +779,7 @@ func (m *Manager) startHLS(ctx context.Context, req core.HLSRequest, life *encod
 				segDur = short
 			}
 		}
-		fastStart := adapt.FastStart && v != nil && (!d.VideoCopy || d.Container == ContainerMPEGTS)
+		fastStart := !req.LiveInput && adapt.FastStart && v != nil && (!d.VideoCopy || d.Container == ContainerMPEGTS)
 		plan = buildTimeline(span, segDur, timelineOptions{
 			steadyMode: steadyMode,
 			fastStart:  fastStart,

@@ -79,11 +79,41 @@ func (s *Server) handleTimeline(w http.ResponseWriter, r *http.Request) {
 			ps = p
 		}
 	}
+	tids := s.transcodes.forClient(user.ID, pr.ClientID, key)
+	tid := trackID(user.ID, pr.ClientID, pr.SessionID)
+	// A broken progressive response must not turn a client's terminal EOF
+	// estimate into a completion. Keep the last client-reported playhead;
+	// encoder output can be buffered ahead of what the viewer actually saw.
+	failedProgressive := false
+	for _, id := range tids {
+		if s.d.Transcoder != nil {
+			if session, ok := s.d.Transcoder.Session(id); ok {
+				if failed, ok := session.(interface{ ProgressiveFailed() bool }); ok && failed.ProgressiveFailed() {
+					failedProgressive = true
+				}
+			}
+		}
+	}
+	if failedProgressive {
+		found := false
+		for _, activity := range s.sessions.list() {
+			if activity.id == tid && activity.key == key {
+				offset, duration, found = activity.offset, activity.duration, true
+				break
+			}
+		}
+		if !found && s.d.State != nil {
+			if previous, err := s.d.State.Get(ctx, user.ID, key); err == nil {
+				offset, duration = previous.ViewOffset, previous.Duration
+			}
+		}
+	}
+	if saved, ok := s.progressiveStops.get(user.ID, pr.ClientID, pr.SessionID, key, s.now()); ok {
+		offset, duration = saved.offset, saved.duration
+	}
 	if !s.reportBrokerTimeline(ctx, pr, key, offset, duration, state, sanitizeSessionID(q.Get("session"))) {
 		s.log.Warn("timeline report", "key", key, "state", state)
 	}
-	tids := s.transcodes.forClient(user.ID, pr.ClientID, key)
-	tid := trackID(user.ID, pr.ClientID, pr.SessionID)
 	if reason := s.checkStartStall(pr, key, state, offset, tids); reason != "" {
 		// The player took the media and never started. End this attempt
 		// with the reason; the stop below closes its encoder and source.

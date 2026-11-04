@@ -7,6 +7,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/braedonsaunders/ether/internal/core"
 )
 
 var missingFilterRE = regexp.MustCompile(`(?i)(?:no such filter:\s*['"]?([a-z0-9_]+)|filter ['"]([a-z0-9_]+)['"] not found)`)
@@ -25,6 +27,7 @@ func (s *Session) watch(r *run) {
 	t := time.NewTicker(s.m.opts.pollInterval)
 	defer t.Stop()
 	playlist := filepath.Join(r.spec.Dir, r.spec.Playlist)
+	var watchdog runWatchdog
 	collect := func(exited bool) {
 		switch {
 		case r.dash != nil:
@@ -55,6 +58,7 @@ func (s *Session) watch(r *run) {
 			return
 		case <-t.C:
 			collect(false)
+			watchdog.check(s, r)
 			s.removals.retry()
 		}
 	}
@@ -93,6 +97,15 @@ func (s *Session) poll(r *run, playlist string, exited bool) {
 			// it: drop the segment, the next run redoes it in its mode.
 			_ = os.Remove(s.trackSegPath(t, n))
 			continue
+		}
+		// ffmpeg can advertise a zero-byte HLS segment after seeking beyond
+		// a truncated input, yet exit successfully. Never publish it as media:
+		// treat the run as failed so playback can retry or select another source.
+		path := s.trackSegPath(t, n)
+		if st, err := os.Stat(path); err == nil && st.Size() == 0 {
+			_ = os.Remove(path)
+			s.failRunOutputLocked(r, fmt.Errorf("transcode: segment %d is empty", n))
+			break
 		}
 		if s.heldToClock(r) {
 			path := s.trackSegPath(t, n)
@@ -310,6 +323,14 @@ func (s *Session) finish(r *run) {
 		s.log.Info("ffmpeg run", "event", "stop", "reason", why, "run", r.seq, "segment", r.startSeg, "maxDone", r.maxDone, "planEnd", r.planEnd, "playhead", s.lastReq, "err", err)
 	}
 	log := s.log.With("run", r.seq)
+	if s.liveInput && s.cur == r {
+		if err != nil && r.hw && !s.forceCPU && looksLikeEncoderFailure(r.stderr.String(), r.spec) {
+			s.forceCPU = true
+			log.Warn("live hardware encoder failed; falling back to CPU", "hwaccel", r.spec.Accel.Name, "segment", r.next())
+		}
+		s.recoverLiveLocked(r, err)
+		return
+	}
 	if err == nil {
 		if r.rtx && s.cur == r {
 			s.decision.Enhancement.State = "stopped"
@@ -377,6 +398,13 @@ func (s *Session) finish(r *run) {
 	if s.cur != r {
 		return
 	}
+	if r.stalled && !s.inputFailed && s.takeStallRetry(time.Now()) {
+		if startErr := s.startRunForLocked(r.next(), false, "stalled encoder recovery"); startErr == nil {
+			return
+		} else {
+			err = startErr
+		}
+	}
 	if r.rtx && r.produced == 0 && !s.inputFailed {
 		s.fallbackRTXLocked("native VSR run failed before producing segments", r.startSeg)
 		if err := s.startRunForLocked(r.startSeg, r.spec.BigProbe, "rtx fallback"); err != nil {
@@ -401,7 +429,7 @@ func (s *Session) finish(r *run) {
 			return
 		}
 	}
-	if r.hw && !s.forceCPU && looksLikeEncoderFailure(stderr, r.spec) {
+	if !r.stalled && r.hw && !s.forceCPU && looksLikeEncoderFailure(stderr, r.spec) {
 		s.forceCPU = true
 		next := r.next()
 		log.Warn("hardware encoder failed; falling back to CPU", "hwaccel", r.spec.Accel.Name, "segment", next)
@@ -410,7 +438,10 @@ func (s *Session) finish(r *run) {
 		}
 		return
 	}
-	if r.produced == 0 {
+	if s.recoverCopyLocked(r, stderr) {
+		return
+	}
+	if r.produced == 0 && !r.stalled {
 		s.failures++
 		s.failErr = fmt.Errorf("ffmpeg: %w: %s", err, tail(stderr, 300))
 		if s.failures == 1 {
@@ -433,6 +464,106 @@ func (s *Session) finish(r *run) {
 		at := s.segStart(r.next())
 		ferr := s.failErr
 		go h(s.id, at, ferr)
+	}
+}
+
+// recoverCopyLocked handles a fatal packet conversion in the MP4-to-Annex-B
+// copy path. A decoder can conceal a damaged NAL that the copy bitstream
+// filter rejects. TS carries replacement parameter sets in-band; static
+// headers and HDR/DV contracts cannot safely make this transition here.
+func (s *Session) recoverCopyLocked(r *run, stderr string) bool {
+	v := s.info.Video()
+	if s.copyFallback || s.inputFailed || s.liveInput || s.isDASH() ||
+		s.container != ContainerMPEGTS || !r.spec.Decision.VideoCopy ||
+		v == nil || v.Codec != "h264" || encodedRange(v) != rangeSDR ||
+		!strings.Contains(strings.ToLower(stderr), "error applying bitstream filters") {
+		return false
+	}
+	next := r.next()
+	s.copyFallback = true
+	d := s.decision
+	d.Kind, d.VideoCopy, d.VideoCodec = core.DecisionTranscode, false, "h264"
+	if d.BitrateKbps <= 0 {
+		d.BitrateKbps = s.info.BitrateKbps
+	}
+	d.Reason += "; copied video packet conversion failed; encoding video"
+	s.decision = d
+	if len(s.rungs) > 0 {
+		s.rungs[0].decision = d
+	}
+	s.copyDiscontinuities = map[int]bool{next: true}
+	s.playlist = nil
+	s.log.Warn("copy packet conversion failed; encoding video", "segment", next)
+	if err := s.startRunForLocked(next, r.spec.BigProbe, "copy packet recovery"); err != nil {
+		s.failErr = err
+	}
+	return true
+}
+
+// restartBudget bounds attempts in a sliding window even if every attempt
+// produces some output. It can also be used for other encoder continuations.
+type restartBudget []time.Time
+
+func (b *restartBudget) take(now time.Time, limit int, window time.Duration) bool {
+	kept := (*b)[:0]
+	for _, at := range *b {
+		if now.Sub(at) < window {
+			kept = append(kept, at)
+		}
+	}
+	*b = kept
+	if len(kept) >= limit {
+		return false
+	}
+	*b = append(kept, now)
+	return true
+}
+
+// continueAfterExitLocked resumes at the first segment the run did not
+// publish. Callers own the timeline and decide whether a discontinuity is
+// required before invoking this shared encoder transition.
+func (s *Session) continueAfterExitLocked(r *run, reason string) error {
+	return s.startRunForLocked(r.next(), false, reason)
+}
+
+// recoverLiveLocked reconnects an active live HLS session at the next
+// unpublished segment. A sliding cap also bounds failures that emit a small
+// amount of media before exiting, rather than only empty runs.
+func (s *Session) recoverLiveLocked(r *run, err error) {
+	now := time.Now()
+	next := r.next()
+	reason := "EOF"
+	if err != nil {
+		reason = "encoder exit: " + err.Error()
+	}
+	stderr := strings.ToLower(r.stderr.String())
+	if strings.Contains(stderr, "corrupt") || strings.Contains(stderr, "pes packet size mismatch") {
+		reason += " (corrupt input observed)"
+	}
+	idle := s.m.opts.idleTimeout > 0 && now.Sub(s.LastAccess()) >= s.m.opts.idleTimeout
+	if idle || !s.liveRestarts.take(now, 3, 2*time.Minute) {
+		endReason := "restart limit reached"
+		if idle {
+			endReason = "session idle"
+		}
+		s.endSeg = next - 1
+		s.inputFailed = true
+		s.failErr = fmt.Errorf("live source ended: %s: %s", endReason, reason)
+		s.log.Warn("live encoder recovery ended", "reason", endReason, "exit", reason, "restarts", len(s.liveRestarts), "lastSegment", s.endSeg)
+		return
+	}
+	if next > 0 {
+		if s.liveDiscontinuities == nil {
+			s.liveDiscontinuities = make(map[int]bool)
+		}
+		s.liveDiscontinuities[next] = true
+	}
+	s.log.Warn("restarting live encoder", "reason", reason, "segment", next, "restart", len(s.liveRestarts))
+	if startErr := s.continueAfterExitLocked(r, "live input recovery"); startErr != nil {
+		s.endSeg = next - 1
+		s.inputFailed = true
+		s.failErr = startErr
+		s.log.Warn("live encoder recovery failed", "err", startErr)
 	}
 }
 
