@@ -753,41 +753,93 @@ func (c *Catalog) loadSeasons(ctx context.Context, showID int64, seasons []core.
 // rows, and model builds use it so one stale show cannot stall the request.
 // A special still jumps to the first regular episode, matching NextEpisode.
 func (c *Catalog) NextStoredEpisode(ctx context.Context, episode core.RatingKey) (*core.Title, error) {
-	if c == nil || c.db == nil || episode.Kind() != core.KindEpisode {
-		return nil, core.ErrNotFound
-	}
-	showKey := int64(core.ShowKey(episode.TMDB()))
-	var query string
-	var args []any
-	if episode.Season() <= 0 {
-		query = `SELECT ` + titleCols + ` FROM catalog_titles WHERE type='episode' AND show_key=? AND season>0 ORDER BY season ASC, episode ASC LIMIT 8`
-		args = []any{showKey}
-	} else {
-		query = `SELECT ` + titleCols + ` FROM catalog_titles WHERE type='episode' AND show_key=? AND season>0 AND (season>? OR (season=? AND episode>?)) ORDER BY season ASC, episode ASC LIMIT 8`
-		args = []any{showKey, episode.Season(), episode.Season(), episode.Episode()}
-	}
-	// The window lets an undated or future episode give way to the next
-	// aired one. Only the episode returned is hydrated: Continue Watching
-	// asks this for each of up to fifty shows, and hydrating the whole
-	// window read eight episodes' facts and their show's seasons per show.
-	candidates, err := c.scanTitleKeys(ctx, query, args...)
+	next, err := c.NextStoredEpisodes(ctx, []core.RatingKey{episode})
 	if err != nil {
 		return nil, err
 	}
+	if t := next[episode]; t != nil {
+		return t, nil
+	}
+	return nil, core.ErrNotFound
+}
+
+// NextStoredEpisodes is NextStoredEpisode for several episodes; episodes with
+// no stored next episode are absent from the result. Each show's window is
+// read on its own; the episodes returned are hydrated together. Continue
+// Watching asks this for each of up to fifty shows, and hydrating per show
+// (or, before, every episode of each window) read titles' facts and their
+// shows' seasons fifty times per Home request.
+func (c *Catalog) NextStoredEpisodes(ctx context.Context, episodes []core.RatingKey) (map[core.RatingKey]*core.Title, error) {
+	out := map[core.RatingKey]*core.Title{}
+	if c == nil || c.db == nil {
+		return out, nil
+	}
+	type window struct {
+		from  core.RatingKey
+		cands []core.Title
+	}
 	now := c.now()
-	for _, cand := range candidates {
-		if cand.Adult || !cand.IsReleased(now) {
+	var open []*window
+	for _, episode := range episodes {
+		if episode.Kind() != core.KindEpisode {
 			continue
 		}
-		rows, err := c.queryTitles(ctx, `SELECT `+titleCols+` FROM catalog_titles WHERE key=?`, int64(cand.Key))
+		showKey := int64(core.ShowKey(episode.TMDB()))
+		// The window lets an undated or future episode give way to the
+		// next aired one.
+		query := `SELECT ` + titleCols + ` FROM catalog_titles WHERE type='episode' AND show_key=? AND season>0 AND (season>? OR (season=? AND episode>?)) ORDER BY season ASC, episode ASC LIMIT 8`
+		args := []any{showKey, episode.Season(), episode.Season(), episode.Episode()}
+		if episode.Season() <= 0 {
+			query = `SELECT ` + titleCols + ` FROM catalog_titles WHERE type='episode' AND show_key=? AND season>0 ORDER BY season ASC, episode ASC LIMIT 8`
+			args = []any{showKey}
+		}
+		rows, err := c.scanTitleKeys(ctx, query, args...)
 		if err != nil {
 			return nil, err
 		}
-		if len(rows) > 0 {
-			return &rows[0], nil
+		w := &window{from: episode}
+		for _, t := range rows {
+			if !t.Adult && t.IsReleased(now) {
+				w.cands = append(w.cands, t)
+			}
+		}
+		if len(w.cands) > 0 {
+			open = append(open, w)
 		}
 	}
-	return nil, core.ErrNotFound
+	// Hydrate each window's first candidate together; a window whose
+	// candidate the hydrated filter drops tries its next one.
+	for len(open) > 0 {
+		keys := make([]any, 0, len(open))
+		for _, w := range open {
+			keys = append(keys, int64(w.cands[0].Key))
+		}
+		got := map[core.RatingKey]core.Title{}
+		const batch = 200
+		for start := 0; start < len(keys); start += batch {
+			part := keys[start:min(start+batch, len(keys))]
+			rows, err := c.queryTitles(ctx, `SELECT `+titleCols+` FROM catalog_titles WHERE key IN (`+placeholders(len(part))+`)`, part...)
+			if err != nil {
+				return nil, err
+			}
+			for _, t := range rows {
+				got[t.Key] = t
+			}
+		}
+		var retry []*window
+		for _, w := range open {
+			if t, ok := got[w.cands[0].Key]; ok {
+				t := t
+				out[w.from] = &t
+				continue
+			}
+			if w.cands = w.cands[1:]; len(w.cands) > 0 {
+				retry = append(retry, w)
+			}
+		}
+		open = retry
+	}
+	return out, nil
 }
 
 // scanTitleKeys reads title rows without hydrating them.
