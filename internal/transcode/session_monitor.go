@@ -25,6 +25,7 @@ func (s *Session) watch(r *run) {
 	t := time.NewTicker(s.m.opts.pollInterval)
 	defer t.Stop()
 	playlist := filepath.Join(r.spec.Dir, r.spec.Playlist)
+	var watchdog runWatchdog
 	collect := func(exited bool) {
 		switch {
 		case r.dash != nil:
@@ -49,6 +50,7 @@ func (s *Session) watch(r *run) {
 			return
 		case <-t.C:
 			collect(false)
+			watchdog.check(s, r)
 			s.removals.retry()
 		}
 	}
@@ -380,6 +382,13 @@ func (s *Session) finish(r *run) {
 	if s.cur != r {
 		return
 	}
+	if r.stalled && !s.inputFailed && s.takeStallRetry(time.Now()) {
+		if startErr := s.startRunForLocked(r.next(), false, "stalled encoder recovery"); startErr == nil {
+			return
+		} else {
+			err = startErr
+		}
+	}
 	if r.rtx && r.produced == 0 && !s.inputFailed {
 		s.fallbackRTXLocked("native VSR run failed before producing segments", r.startSeg)
 		if err := s.startRunForLocked(r.startSeg, r.spec.BigProbe, "rtx fallback"); err != nil {
@@ -404,7 +413,7 @@ func (s *Session) finish(r *run) {
 			return
 		}
 	}
-	if r.hw && !s.forceCPU && looksLikeEncoderFailure(stderr, r.spec) {
+	if !r.stalled && r.hw && !s.forceCPU && looksLikeEncoderFailure(stderr, r.spec) {
 		s.forceCPU = true
 		next := r.next()
 		log.Warn("hardware encoder failed; falling back to CPU", "hwaccel", r.spec.Accel.Name, "segment", next)
@@ -413,7 +422,7 @@ func (s *Session) finish(r *run) {
 		}
 		return
 	}
-	if r.produced == 0 {
+	if r.produced == 0 && !r.stalled {
 		s.failures++
 		s.failErr = fmt.Errorf("ffmpeg: %w: %s", err, tail(stderr, 300))
 		if s.failures == 1 {

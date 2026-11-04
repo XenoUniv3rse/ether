@@ -41,6 +41,7 @@ type options struct {
 	detectHW       bool
 	idleTimeout    time.Duration
 	segmentTimeout time.Duration
+	stallTimeout   time.Duration
 	restartAhead   time.Duration
 	maxAhead       time.Duration
 	keepBehind     time.Duration
@@ -67,6 +68,7 @@ func defaultOptions() options {
 		detectHW:       true,
 		idleTimeout:    2 * time.Minute,
 		segmentTimeout: 45 * time.Second,
+		stallTimeout:   30 * time.Second,
 		restartAhead:   24 * time.Second,
 		maxAhead:       2 * time.Minute,
 		keepBehind:     3 * time.Minute,
@@ -104,6 +106,10 @@ func WithIdleTimeout(d time.Duration) Option { return func(o *options) { o.idleT
 // WithSegmentTimeout bounds how long ServeSegment waits for ffmpeg
 // (default 45s).
 func WithSegmentTimeout(d time.Duration) Option { return func(o *options) { o.segmentTimeout = d } }
+
+// WithStallTimeout sets the no-progress timeout for an actively requested
+// on-demand segment. Zero disables the watchdog.
+func WithStallTimeout(d time.Duration) Option { return func(o *options) { o.stallTimeout = d } }
 
 // withRungDwell sets how long one rung's run keeps the shared encoder
 // before a request on another rung may restart it (default 8s; 0 = switch
