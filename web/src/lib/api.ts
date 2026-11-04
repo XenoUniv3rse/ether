@@ -442,11 +442,6 @@ export const api = {
   templates: async () =>
     (await apiFetch<{ templates: CollectionTemplate[] | null }>("/collections/templates"))
       .templates ?? [],
-  generateCollection: (prompt: string, mediaType?: string) =>
-    post<{ spec: CollectionSpec; explanation: string }>("/collections/generate", {
-      prompt,
-      mediaType,
-    }),
   artworkUrl: (id: string, w: number, version?: string) =>
     `${API_BASE}/collections/${encodeURIComponent(id)}/artwork${qs({ w, v: version })}`,
 

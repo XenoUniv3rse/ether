@@ -121,6 +121,10 @@ type CollectionService interface {
 	SnapshotItems(ctx context.Context, key core.RatingKey, offset, limit int) (core.Page, error)
 	Generate(ctx context.Context, prompt, mediaType string) (*core.CollectionSpec, string, error)
 	CreateSpec(ctx context.Context, sp core.CollectionSpec) (*core.CollectionSpec, error)
+	// Draft cleans and validates a model-written spec without saving it.
+	Draft(ctx context.Context, raw, mediaType string) (*core.CollectionSpec, []string, error)
+	// Preview runs an unsaved spec against the catalogue.
+	Preview(ctx context.Context, sp core.CollectionSpec, n int) (*core.CollectionPreview, error)
 }
 
 type LiveTVService interface {

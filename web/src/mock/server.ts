@@ -85,8 +85,6 @@ const NOW = () => new Date();
 
 export interface FakeOptions {
   bootstrap?: Partial<Bootstrap>;
-  /** Simulate an LLM being configured (collections/generate). */
-  llm?: boolean;
   /** Artificial latency for realism in the browser; 0 in tests. */
   latencyMs?: number;
   /** Serve as a node of a three-node PostgreSQL cluster instead of a standalone server. */
@@ -646,7 +644,6 @@ export function createFakeServer(opts: FakeOptions = {}) {
     logs: [] as LogEntry[],
     calls: [] as { method: string; path: string; body: unknown }[],
     plexDefaults: {} as Record<number, Record<string, unknown>>,
-    llm: opts.llm ?? true,
     clustered: opts.cluster ?? false,
     joinTokens: [] as JoinTokenInfo[],
     backupSettings: { intervalHours: 24, retain: 7, lastRun: 0, sharedDir: "" },
@@ -3102,43 +3099,6 @@ export function createFakeServer(opts: FakeOptions = {}) {
         return json(evaluate(normalizeSpec(body as CollectionSpec)));
       case "GET /collections/templates":
         return json({ templates: TEMPLATES });
-      case "POST /collections/generate": {
-        if (!state.llm) return err(501, "not_implemented", "The LLM is not configured");
-        const prompt = String((body as { prompt?: string }).prompt ?? "").toLowerCase();
-        const genres = GENRES.filter(
-          (g) =>
-            prompt.includes(g.toLowerCase()) || (g === "Science Fiction" && /sci-?fi/.test(prompt)),
-        );
-        const rules: Rule[] = genres.length ? [{ field: "genre", op: "in", value: genres }] : [];
-        const dm = /(19|20)(\d)0s/.exec(prompt) ?? /\b(\d)0s\b/.exec(prompt);
-        if (dm)
-          rules.push({
-            field: "decade",
-            op: "in",
-            value: [dm[0].length === 5 ? dm[0].slice(0, 4) : `19${dm[1]}0`],
-          });
-        if (/short|quick|under/.test(prompt))
-          rules.push({ field: "runtime", op: "lte", value: 95 });
-        if (/acclaimed|best|great|top/.test(prompt))
-          rules.push({ field: "rating", op: "gte", value: 7.5 });
-        const name = String((body as { prompt?: string }).prompt ?? "")
-          .replace(/^(a |an )?(collection|row|list) (of|with)\s+/i, "")
-          .replace(/^./, (c) => c.toUpperCase())
-          .slice(0, 48);
-        const spec = normalizeSpec({
-          name,
-          description: `Generated from “${(body as { prompt: string }).prompt}”.`,
-          mediaType: /tv|show|series/.test(prompt) ? "show" : "movie",
-          rules,
-          sort: rules.some((r) => r.field === "rating") ? "rating" : "popularity",
-        });
-        return json({
-          spec,
-          explanation: rules.length
-            ? `Matched ${rules.length} condition${rules.length === 1 ? "" : "s"} from your description: ${rules.map((r) => r.field).join(", ")}.`
-            : "I couldn't find specific conditions, so this starts from the whole catalogue sorted by popularity.",
-        });
-      }
       case "POST /catalog/visibility/preview": {
         const groups =
           (body as { exclusions: { mediaType: string; match: string; rules: Rule[] }[] })

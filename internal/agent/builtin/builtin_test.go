@@ -261,6 +261,18 @@ func (f *fakeEnv) Generate(ctx context.Context, prompt, mediaType string) (*core
 	}, "Generated from prompt", nil
 }
 
+func (f *fakeEnv) Draft(ctx context.Context, raw, mediaType string) (*core.CollectionSpec, []string, error) {
+	var sp core.CollectionSpec
+	if err := json.Unmarshal([]byte(raw), &sp); err != nil {
+		return nil, nil, err
+	}
+	return &sp, nil, nil
+}
+
+func (f *fakeEnv) Preview(ctx context.Context, sp core.CollectionSpec, n int) (*core.CollectionPreview, error) {
+	return &core.CollectionPreview{Total: 1, Items: []core.Title{{Key: core.MovieKey(550), Type: core.TypeMovie, Title: "Heat", Year: 1995}}}, nil
+}
+
 func (f *fakeEnv) CreateSpec(ctx context.Context, sp core.CollectionSpec) (*core.CollectionSpec, error) {
 	f.writes++
 	f.createdSpecs = append(f.createdSpecs, sp)
@@ -397,14 +409,14 @@ func callTool(t *testing.T, cat *tools.Catalogue, ctx context.Context, p tools.P
 func TestBuiltinCatalogueAndSchemaInvariants(t *testing.T) {
 	_, d := buildDeps()
 	all := builtin.All(d)
-	if len(all) != 28 {
-		t.Fatalf("expected 28 built-in tools, got %d", len(all))
+	if len(all) != 29 {
+		t.Fatalf("expected 29 built-in tools, got %d", len(all))
 	}
 
 	wantRead := []string{
 		"server_status", "health_details", "playback_history", "resolve_trace",
 		"release_health", "logs_tail", "catalog_search", "title_details",
-		"collection_list", "collection_preview", "livetv_channels", "sources_list",
+		"collection_list", "collection_preview", "collection_draft", "livetv_channels", "sources_list",
 		"plugins_list", "plugin_health", "approval_status", "navigate",
 		"web_search", "web_fetch",
 	}

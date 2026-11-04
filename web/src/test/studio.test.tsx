@@ -1,5 +1,7 @@
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
+import { setMockAgentEnabled } from "../mock/extend/agent";
 import type { CollectionSpec, Rule } from "../lib/contract";
 import { calls, renderApp } from "./harness";
 import { renderAppWith } from "./routes";
@@ -365,37 +367,57 @@ describe("Collection Studio gallery", () => {
     ).toBeInTheDocument();
   });
 
-  it("drafts a collection from a plain-English description", async () => {
+  it("builds a collection live from a description and saves it in one click", async () => {
+    const user = userEvent.setup();
     const { fake } = renderApp("/collections");
     await screen.findByRole("heading", { name: "Edge of your seat" }, WAIT);
     fireEvent.click(screen.getByRole("button", { name: /Describe it/ }));
     const dialog = await screen.findByRole("dialog");
-    fireEvent.change(within(dialog).getByLabelText("Describe the collection"), {
-      target: { value: "Acclaimed horror from the 80s" },
-    });
-    fireEvent.click(within(dialog).getByRole("button", { name: /Draft it/ }));
-    expect(await within(dialog).findByText(/Genre is any of Horror/, {}, WAIT)).toBeInTheDocument();
-    expect(calls(fake, "POST", "/collections/generate")[0]?.body).toEqual({
-      prompt: "Acclaimed horror from the 80s",
-      mediaType: "movie",
-    });
-    fireEvent.click(within(dialog).getByRole("button", { name: "Open as draft" }));
-    expect(await screen.findByLabelText("Collection name", {}, WAIT)).toHaveValue(
-      "Acclaimed horror from the 80s",
+    const composer = await within(dialog).findByPlaceholderText(
+      /Feel-good 80s adventure/,
+      {},
+      WAIT,
     );
+    await user.type(composer, "Top 10 movies of 2010 to 2020");
+    await user.click(within(dialog).getByRole("button", { name: "Send" }));
+
+    // Each draft is a stage step; the finished build keeps its posters in view.
+    expect(await within(dialog).findByText(/is ready$/, {}, WAIT)).toBeInTheDocument();
+    expect(
+      within(dialog).getByRole("region", { name: "Top 10 movies of 2010 to 2020" }),
+    ).toBeInTheDocument();
+    expect(within(dialog).getAllByText(/^Drafted “Top 10 movies/).length).toBe(2);
+    const turn = calls(fake, "POST", "/agent/turn")[0]?.body as {
+      context: { route: string; mediaType: string };
+    };
+    expect(turn.context).toEqual({ route: "/collections/describe", mediaType: "movie" });
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "Save collection" }));
+    const creates = () =>
+      calls(fake, "POST", "/collections").filter((c) => c.path === "/collections");
+    await waitFor(() => expect(creates()).toHaveLength(1), WAIT);
+    const saved = creates()[0]!.body as CollectionSpec;
+    expect(saved).toMatchObject({
+      name: "Top 10 movies of 2010 to 2020",
+      sort: "rating",
+      limit: 10,
+    });
+    expect(saved.rules).toContainEqual({ field: "votes", op: "gte", value: 500 });
+    await waitFor(() => expect(calls(fake, "DELETE", "/agent/threads/")).toHaveLength(1), WAIT);
   });
 
   it("explains how to enable Describe it when no language model is set up", async () => {
-    renderApp("/collections", { llm: false });
-    await screen.findByRole("heading", { name: "Edge of your seat" }, WAIT);
-    fireEvent.click(screen.getByRole("button", { name: /Describe it/ }));
-    const dialog = await screen.findByRole("dialog");
-    fireEvent.change(within(dialog).getByLabelText("Describe the collection"), {
-      target: { value: "Cosy mysteries" },
-    });
-    fireEvent.click(within(dialog).getByRole("button", { name: /Draft it/ }));
-    expect(
-      await within(dialog).findByText("Describe it needs a language model", {}, WAIT),
-    ).toBeInTheDocument();
+    setMockAgentEnabled(false);
+    try {
+      renderApp("/collections");
+      await screen.findByRole("heading", { name: "Edge of your seat" }, WAIT);
+      fireEvent.click(screen.getByRole("button", { name: /Describe it/ }));
+      const dialog = await screen.findByRole("dialog");
+      expect(
+        await within(dialog).findByText("Describe it needs a language model", {}, WAIT),
+      ).toBeInTheDocument();
+    } finally {
+      setMockAgentEnabled(true);
+    }
   });
 });

@@ -83,6 +83,12 @@ func (s *stubServices) SnapshotItems(ctx context.Context, key core.RatingKey, of
 func (s *stubServices) Generate(ctx context.Context, prompt, mediaType string) (*core.CollectionSpec, string, error) {
 	return &core.CollectionSpec{Name: "Draft", MediaType: "movie"}, "", nil
 }
+func (s *stubServices) Draft(ctx context.Context, raw, mediaType string) (*core.CollectionSpec, []string, error) {
+	return &core.CollectionSpec{Name: "Draft", MediaType: "movie"}, nil, nil
+}
+func (s *stubServices) Preview(ctx context.Context, sp core.CollectionSpec, n int) (*core.CollectionPreview, error) {
+	return &core.CollectionPreview{}, nil
+}
 func (s *stubServices) CreateSpec(ctx context.Context, sp core.CollectionSpec) (*core.CollectionSpec, error) {
 	return &sp, nil
 }
@@ -288,11 +294,11 @@ func TestMCPBoundaryAuthResourcesAndScopes(t *testing.T) {
 		t.Fatalf("expected valid embedded plugin-manifest.v1.json schema, got err=%v text=%q", err, schemaText)
 	}
 
-	// 4. Scope isolation: read token sees 16 tools and cannot call write tools.
+	// 4. Scope isolation: read token sees 17 tools and cannot call write tools.
 	_, listReadBody := postRPC(t, h, "tok-read", "tools/list", nil)
 	readTools := listReadBody["result"].(map[string]any)["tools"].([]any)
-	if len(readTools) != 16 {
-		t.Fatalf("expected 16 visible tools for read scope, got %d", len(readTools))
+	if len(readTools) != 17 {
+		t.Fatalf("expected 17 visible tools for read scope, got %d", len(readTools))
 	}
 	_, deniedCall := postRPC(t, h, "tok-read", "tools/call", map[string]any{
 		"name":      "release_blocklist",
@@ -302,11 +308,11 @@ func TestMCPBoundaryAuthResourcesAndScopes(t *testing.T) {
 		t.Fatalf("expected error calling write tool with read scope, got %v", deniedCall)
 	}
 
-	// 5. Full scope sees all 26 tools; calling a write tool creates a pending approval without mutating state.
+	// 5. Full scope sees all 27 tools; calling a write tool creates a pending approval without mutating state.
 	_, listFullBody := postRPC(t, h, "tok-full", "tools/list", nil)
 	fullTools := listFullBody["result"].(map[string]any)["tools"].([]any)
-	if len(fullTools) != 26 {
-		t.Fatalf("expected 26 visible tools for full scope, got %d", len(fullTools))
+	if len(fullTools) != 27 {
+		t.Fatalf("expected 27 visible tools for full scope, got %d", len(fullTools))
 	}
 
 	_, propBody := postRPC(t, h, "tok-full", "tools/call", map[string]any{

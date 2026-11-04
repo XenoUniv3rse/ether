@@ -2,6 +2,7 @@ package builtin
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -13,6 +14,9 @@ import (
 	"github.com/braedonsaunders/ether/internal/logredact"
 	"github.com/braedonsaunders/ether/internal/resolver"
 )
+
+// draftPreviewTitles is how many titles a collection draft shows the model.
+const draftPreviewTitles = 12
 
 const pluginsUnavailable = "Plugins are not available yet. They arrive with the plugin host."
 
@@ -423,6 +427,53 @@ func readTools(d Deps) []tools.Tool {
 				return tools.Result{Data: map[string]any{
 					"collectionKey": fmt.Sprint(int64(key)), "total": page.Total, "titles": out,
 				}}, nil
+			},
+		}),
+		tool(tools.Tool{
+			Name: "collection_draft", Title: "Draft the collection", ReadOnly: true, OpenWorld: true,
+			Description: "Try a smart collection against the catalogue without saving anything. Returns the cleaned spec, how many titles match, the first titles in order and notes on anything changed or dropped. Call it again with a changed spec until the titles fit the request. Spec fields:\n" + collections.SpecGuide,
+			InputSchema: schema(map[string]any{
+				"spec": map[string]any{
+					"type": "object", "additionalProperties": true,
+					"description": "The collection spec, as described above",
+				},
+				"mediaType": pEnum("What kind of titles", "movie", "show", "mixed"),
+			}, "spec"),
+			Execute: func(ctx context.Context, _ tools.Principal, in map[string]any) (tools.Result, error) {
+				raw, err := json.Marshal(in["spec"])
+				if err != nil || len(raw) > 32<<10 {
+					return tools.Result{}, tools.Userf("the spec must be a JSON object under 32 KB")
+				}
+				mediaType, err := optStr(in, "mediaType", 16)
+				if err != nil {
+					return tools.Result{}, err
+				}
+				spec, notes, err := d.Collections.Draft(ctx, string(raw), mediaType)
+				if err != nil {
+					// Every draft failure is a problem with what the model wrote.
+					return tools.Result{}, tools.Userf("that spec could not be used: %v", err)
+				}
+				preview, err := d.Collections.Preview(ctx, *spec, draftPreviewTitles)
+				if err != nil {
+					return tools.Result{}, err
+				}
+				specJSON, err := json.Marshal(spec)
+				if err != nil {
+					return tools.Result{}, err
+				}
+				var specMap map[string]any
+				if err := json.Unmarshal(specJSON, &specMap); err != nil {
+					return tools.Result{}, err
+				}
+				titles := make([]any, 0, len(preview.Items))
+				for _, t := range preview.Items {
+					titles = append(titles, titleSummary(t))
+				}
+				data := map[string]any{"spec": specMap, "total": preview.Total, "titles": titles}
+				if notes = append(notes, preview.Warnings...); len(notes) > 0 {
+					data["notes"] = notes
+				}
+				return tools.Result{Data: data}, nil
 			},
 		}),
 		tool(tools.Tool{

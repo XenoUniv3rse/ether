@@ -31,7 +31,6 @@ func (e flagErr) Upstream() bool      { return e.upstr }
 // fakeStudio is an in-memory CollectionStudio.
 type fakeStudio struct {
 	specs    map[string]core.CollectionSpec
-	genErr   error
 	lastPrev core.CollectionSpec
 }
 
@@ -98,13 +97,6 @@ func (f *fakeStudio) Rebuild(ctx context.Context, id string) (*core.CollectionSp
 
 func (f *fakeStudio) Templates() []core.CollectionTemplate {
 	return []core.CollectionTemplate{{ID: "t1", Name: "T", Category: "Moods", Spec: core.CollectionSpec{Name: "T"}}}
-}
-
-func (f *fakeStudio) Generate(ctx context.Context, prompt, media string) (*core.CollectionSpec, string, error) {
-	if f.genErr != nil {
-		return nil, "", f.genErr
-	}
-	return &core.CollectionSpec{Name: "Generated " + prompt, MediaType: media}, "because", nil
 }
 
 func (f *fakeStudio) Artwork(ctx context.Context, id string, w int) ([]byte, string, time.Time, error) {
@@ -243,23 +235,6 @@ func TestCollectionsAPI(t *testing.T) {
 	rec = serve(h, authed(req(http.MethodGet, "/ether/api/collections/templates", "")))
 	if rec.Code != 200 || !strings.Contains(rec.Body.String(), `"templates":[{"id":"t1"`) {
 		t.Fatalf("templates: %d %s", rec.Code, rec.Body)
-	}
-
-	// Generate: prompt required; LLM off is 501; model failure 502.
-	if rec := serve(h, authed(req(http.MethodPost, "/ether/api/collections/generate", `{"prompt":" "}`))); rec.Code != 400 {
-		t.Fatalf("empty prompt: %d", rec.Code)
-	}
-	rec = serve(h, authed(req(http.MethodPost, "/ether/api/collections/generate", `{"prompt":"cosy","mediaType":"movie"}`)))
-	if rec.Code != 200 || !strings.Contains(rec.Body.String(), `"explanation":"because"`) || !strings.Contains(rec.Body.String(), "Generated cosy") {
-		t.Fatalf("generate: %d %s", rec.Code, rec.Body)
-	}
-	st.genErr = flagErr{msg: "LLM off", notConfigured: true}
-	if rec := serve(h, authed(req(http.MethodPost, "/ether/api/collections/generate", `{"prompt":"x"}`))); rec.Code != 501 {
-		t.Fatalf("llm off: %d", rec.Code)
-	}
-	st.genErr = flagErr{msg: "garbage", upstr: true}
-	if rec := serve(h, authed(req(http.MethodPost, "/ether/api/collections/generate", `{"prompt":"x"}`))); rec.Code != 502 {
-		t.Fatalf("llm garbage: %d", rec.Code)
 	}
 
 	// Mutations need the CSRF header.
