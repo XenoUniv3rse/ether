@@ -3,12 +3,15 @@ package livetv
 import (
 	"context"
 	"crypto/rand"
+	"crypto/tls"
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
+	"net/http"
 	"sort"
 	"strings"
 	"sync"
@@ -58,15 +61,58 @@ func New(o Options) (*Service, error) {
 	if o.Now == nil {
 		o.Now = time.Now
 	}
+	if o.Logger == nil {
+		o.Logger = slog.Default()
+	}
 	if o.HTTPClient == nil {
 		o.HTTPClient = egress.Client(egress.CapDirect, 20*time.Second)
 	}
+	o.HTTPClient = withoutHTTP2(o.HTTPClient)
 	ctx, cancel := context.WithCancel(context.Background())
 	s := &Service{o: o, sessions: map[string]*session{}, transcodes: map[string]core.HLSSession{}, ctx: ctx, cancel: cancel, lineupUnix: o.Now().Unix()}
 	s.wg.Add(2)
 	go s.maintain()
 	go s.refreshLoop()
 	return s, nil
+}
+
+// withoutHTTP2 returns a client whose transport speaks HTTP/1.1 only. IPTV
+// panels commonly advertise HTTP/2 through their proxy and then reset the
+// first request with PROTOCOL_ERROR; every IPTV player speaks HTTP/1.1, and
+// one connection per document or stream is enough.
+func withoutHTTP2(c *http.Client) *http.Client {
+	var tr *http.Transport
+	switch t := c.Transport.(type) {
+	case nil:
+		tr, _ = http.DefaultTransport.(*http.Transport)
+	case *http.Transport:
+		tr = t
+	default:
+		return c
+	}
+	if tr == nil {
+		return c
+	}
+	clone := *c
+	t := tr.Clone()
+	t.ForceAttemptHTTP2 = false
+	t.TLSNextProto = map[string]func(string, *tls.Conn) http.RoundTripper{}
+	clone.Transport = t
+	return &clone
+}
+
+// sourceOrigin names where a source's credentials are sent without its query
+// string: playlist and guide URLs, and Xtream's derived ones, embed them.
+func sourceOrigin(src Source) string {
+	if src.Auth != nil {
+		if origin := urlOrigin(src.Auth.Server); origin != "" {
+			return origin
+		}
+	}
+	if origin := urlOrigin(src.PlaylistURL); origin != "" {
+		return origin
+	}
+	return urlOrigin(src.GuideURL)
 }
 func (s *Service) Close() error {
 	s.cancel()
@@ -1069,9 +1115,24 @@ func (s *Service) readURL(ctx context.Context, raw string, max int64) (string, e
 	return s.readURLWith(ctx, raw, max, nil, "source")
 }
 
-// ImportSource atomically replaces source programming. Owner changes to mapping,
-// enabled state, channel numbering, favourites and restrictions survive refresh.
+// ImportSource atomically replaces source programming and logs the outcome.
+// Owner changes to mapping, enabled state, channel numbering, favourites and
+// restrictions survive refresh.
 func (s *Service) ImportSource(ctx context.Context, src Source) (Source, error) {
+	v, err := s.importSource(ctx, src)
+	if err != nil {
+		s.o.Logger.Warn("Live TV source import failed",
+			"sourceId", v.ID, "source", v.Name, "url", sourceOrigin(v), "error", err)
+		return v, err
+	}
+	s.o.Logger.Info("Live TV source imported",
+		"sourceId", v.ID, "source", v.Name, "url", sourceOrigin(v),
+		"channels", v.ChannelCount, "guideChannels", v.GuideChannelCount)
+	return v, nil
+}
+
+// importSource is ImportSource without the outcome log.
+func (s *Service) importSource(ctx context.Context, src Source) (Source, error) {
 	if src.ID == "" {
 		src.ID = randomID()
 	}
@@ -1088,7 +1149,7 @@ func (s *Service) ImportSource(ctx context.Context, src Source) (Source, error) 
 	if src.PlaylistURL != "" {
 		src.Playlist, err = s.readURLWith(ctx, src.PlaylistURL, maxPlaylistBytes, src.Auth.header(), "playlist")
 		if err != nil {
-			return src, err
+			return src, fmt.Errorf("playlist: %w", err)
 		}
 	}
 	if strings.TrimSpace(src.Playlist) == "" && strings.TrimSpace(src.Guide) == "" && src.GuideURL == "" {
@@ -1098,7 +1159,7 @@ func (s *Service) ImportSource(ctx context.Context, src Source) (Source, error) 
 	if strings.TrimSpace(src.Playlist) != "" { // guide-only (EPG) sources add no channels
 		cs, err = ParseM3U(strings.NewReader(src.Playlist), src.ID)
 		if err != nil {
-			return src, err
+			return src, fmt.Errorf("playlist: %w", err)
 		}
 	}
 	allow, err := s.guideAllow(ctx, src, cs)
@@ -1110,13 +1171,13 @@ func (s *Service) ImportSource(ctx context.Context, src Source) (Source, error) 
 	if src.GuideURL != "" {
 		g, err = s.readGuide(ctx, src.GuideURL, src.Auth.header(), filter)
 		if err != nil {
-			return src, err
+			return src, fmt.Errorf("guide: %w", err)
 		}
 	} else if src.Guide != "" {
 		var dropped bool
 		g, dropped, err = parseXMLTV(strings.NewReader(src.Guide), filter)
 		if err != nil {
-			return src, err
+			return src, fmt.Errorf("guide: %w", err)
 		}
 		if dropped {
 			trimmed, err := formatXMLTV(g)

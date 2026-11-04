@@ -1,9 +1,11 @@
 package livetv
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -168,6 +170,44 @@ func TestXtreamPanelHasTimeToComposeItsDocuments(t *testing.T) {
 	}
 	if s.o.HTTPClient.Timeout != 20*time.Millisecond {
 		t.Fatalf("service client changed: %s", s.o.HTTPClient.Timeout)
+	}
+}
+
+func TestSourceClientSpeaksHTTP11Only(t *testing.T) {
+	s := testService(t, Options{HTTPClient: &http.Client{Timeout: time.Second}})
+	tr, ok := s.o.HTTPClient.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("transport type %T", s.o.HTTPClient.Transport)
+	}
+	// A non-nil empty TLSNextProto is what stops net/http from re-enabling h2.
+	if tr.ForceAttemptHTTP2 || tr.TLSNextProto == nil || len(tr.TLSNextProto) != 0 {
+		t.Fatalf("HTTP/2 still enabled: force=%v nextProto=%d", tr.ForceAttemptHTTP2, len(tr.TLSNextProto))
+	}
+}
+
+func TestImportFailureIsLoggedWithoutCredentials(t *testing.T) {
+	var logs bytes.Buffer
+	s := testService(t, Options{
+		Logger: slog.New(slog.NewTextHandler(&logs, nil)),
+		HTTPClient: &http.Client{Transport: lifecycleTransport(func(*http.Request) (*http.Response, error) {
+			return nil, errors.New("dial tcp 203.0.113.5:8080: connect: connection refused")
+		})},
+	})
+	_, err := s.ImportSource(context.Background(), Source{ID: "x", Name: "Panel", Auth: &SourceAuth{Type: "xtream", Server: "http://panel.example:8080", Username: "panel-user", Password: "panel-pass"}})
+	if err == nil {
+		t.Fatal("import succeeded")
+	}
+	if !strings.Contains(err.Error(), "playlist:") || !strings.Contains(err.Error(), "connection refused") {
+		t.Fatalf("error lacks the step or cause: %v", err)
+	}
+	got := logs.String()
+	for _, want := range []string{"Live TV source import failed", "sourceId=x", "source=Panel", "panel.example", "playlist:", "connection refused"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("log missing %q: %s", want, got)
+		}
+	}
+	if strings.Contains(got, "panel-user") || strings.Contains(got, "panel-pass") {
+		t.Fatalf("log leaks credentials: %s", got)
 	}
 }
 

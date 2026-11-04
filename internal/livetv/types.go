@@ -5,6 +5,7 @@ package livetv
 import (
 	"context"
 	"database/sql"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -191,6 +192,9 @@ type Options struct {
 	Transcoder  core.Transcoder
 	HTTPClient  *http.Client
 	Now         func() time.Time
+	// Logger receives source import and refresh outcomes, including the
+	// cause of a failed fetch. It defaults to slog.Default.
+	Logger *slog.Logger
 	// Allowed applies additional owner title/genre policies to every surface.
 	Allowed func(*core.User, *core.Title) bool
 	// Warm resolves/primes a title without opening a viewer stream.
