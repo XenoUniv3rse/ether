@@ -3,7 +3,7 @@ package core
 import "context"
 
 // SearchCacheRefiller requests best-effort, non-blocking candidate recovery for
-// an admitted detail warm-up reusing a remembered source. It searches only;
+// an open detail page or an admitted warm-up reusing a remembered source. It searches only;
 // it must not resolve or replace a playback source. The resolver owns the
 // work independently of request/warm-up cancellation and joins it on Close.
 // A nil signal means skipped; otherwise the signal closes when the existing

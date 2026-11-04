@@ -768,6 +768,9 @@ func (s *Server) watchVariants(pr *Request, t *core.Title) {
 	s.variantWatch.mu.Unlock()
 	caps := s.clientCaps(pr)
 	user, title := *pr.User, *t
+	// If the two refill slots were occupied, retry admission while this
+	// page is being watched. Once admitted, never retry a failed search.
+	retryAdmission := pr.detailRefillRequested && pr.detailRefill == nil
 	s.wg.Add(1)
 	go func() {
 		defer s.wg.Done()
@@ -783,6 +786,11 @@ func (s *Server) watchVariants(pr *Request, t *core.Title) {
 				timer.Stop()
 				return
 			case <-timer.C:
+			}
+			if retryAdmission {
+				if refiller, ok := s.d.Variants.(core.SearchCacheRefiller); ok {
+					retryAdmission = refiller.RefillSearchCache(&title) == nil
+				}
 			}
 			vctx, cancel := context.WithTimeout(s.ctx, variantRenderBudget)
 			vs, err := s.d.Variants.Variants(vctx, core.ResolveRequest{Title: &title, Client: caps, User: &user}, core.MaxVariants)

@@ -165,8 +165,12 @@ func TestRefillSearchCacheLifetimeAndFailures(t *testing.T) {
 				if _, ok := s.peekSearchCache(searchCacheKey(searchRequestFor(title))); ok {
 					t.Fatal("failed search cached as successful")
 				}
+				if s.RefillSearchCache(title) != nil {
+					t.Fatal("failed search was immediately retried")
+				}
+				clock.add(refillRetryDelay)
 			}
-			// Expiry/errors allow a new explicit admission, never an internal retry.
+			// Expiry or a cooled-down failure allows a new explicit admission.
 			waitRefill(t, s.RefillSearchCache(title))
 			if idx.searches.Load() != 2 || idx.fetches.Load() != 0 {
 				t.Fatal("refill count/source work")

@@ -10,12 +10,15 @@ import (
 const (
 	maxSearchRefills   = 2
 	searchRefillBudget = 45 * time.Second
+	refillRetryDelay   = 15 * time.Second
 )
 
 var _ core.SearchCacheRefiller = (*Service)(nil)
 
-// RefillSearchCache recovers candidates when a detail warm-up reuses a
-// remembered resolution instead of searching. It never waits for capacity or
+type refillSearchContextKey struct{}
+
+// RefillSearchCache recovers candidates for a detail page or when a detail
+// warm-up reuses a remembered resolution. It never waits for capacity or
 // performs resolution, descriptor fetching, health checks or provider work.
 // The existing search path retains indexer limits and cache lifetimes, including
 // the short empty-result lifetime. Errors are best-effort: no retries or queue.
@@ -33,6 +36,9 @@ func (s *Service) RefillSearchCache(title *core.Title) <-chan struct{} {
 	if done := s.refills[key]; done != nil {
 		return done
 	}
+	if until := s.refillRetryAfter[key]; s.now().Before(until) {
+		return nil
+	}
 	if _, ok := s.peekSearchCache(key); ok || len(s.refills) >= maxSearchRefills {
 		return nil
 	}
@@ -42,13 +48,24 @@ func (s *Service) RefillSearchCache(title *core.Title) <-chan struct{} {
 	done := make(chan struct{})
 	s.refills[key] = done
 	// Use the service lifetime, not the metadata request or source warm-up.
-	ctx, cancel := context.WithTimeout(core.WithIndexerPurpose(s.bgCtx, core.IndexerPurposeWarmup), searchRefillBudget)
+	// A viewer is waiting for the version picker. This is attended work:
+	// it uses the ordinary indexer budget, not the speculative warm-up share.
+	ctx, cancel := context.WithTimeout(core.WithIndexerPurpose(context.WithValue(s.bgCtx, refillSearchContextKey{}, true), core.IndexerPurposeDetail), searchRefillBudget)
 	s.bgWG.Add(1)
 	go func() {
 		defer s.bgWG.Done()
 		defer func() {
 			cancel()
 			s.bgMu.Lock()
+			if _, ok := s.peekSearchCache(key); !ok {
+				if s.refillRetryAfter == nil {
+					s.refillRetryAfter = make(map[string]time.Time)
+				}
+				boundMap(s.refillRetryAfter, maxSearchCache, func(until time.Time) bool { return !s.now().Before(until) })
+				s.refillRetryAfter[key] = s.now().Add(refillRetryDelay)
+			} else {
+				delete(s.refillRetryAfter, key)
+			}
 			delete(s.refills, key)
 			close(done)
 			s.bgMu.Unlock()

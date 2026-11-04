@@ -219,12 +219,13 @@ type Service struct {
 	traces    []Trace
 	maxTraces int
 
-	bgCtx    context.Context
-	bgCancel context.CancelFunc
-	bgMu     sync.Mutex
-	bgClosed bool
-	bgWG     sync.WaitGroup
-	refills  map[string]chan struct{} // episode search key -> completion; guarded by bgMu
+	bgCtx            context.Context
+	bgCancel         context.CancelFunc
+	bgMu             sync.Mutex
+	bgClosed         bool
+	bgWG             sync.WaitGroup
+	refills          map[string]chan struct{} // episode search key -> completion; guarded by bgMu
+	refillRetryAfter map[string]time.Time     // failed attempts; guarded by bgMu
 
 	flightMu sync.Mutex
 	flights  map[string]*inflight
@@ -663,12 +664,6 @@ func (s *Service) resolve(ctx context.Context, req core.ResolveRequest, profile 
 						if checkErr == nil && idx >= 0 {
 							deadline.Stop()
 							tick.Stop()
-							// A feed hit bypasses the ordinary search. For an admitted
-							// warm-up, use the same bounded cache refill as a reused
-							// remembered source so the detail picker can find versions.
-							if core.IndexerPurpose(ctx) == core.IndexerPurposeWarmup {
-								s.RefillSearchCache(t)
-							}
 							trace.Winner = candidates[idx].rel.ID
 							s.setAvailability(ctx, int64(t.Key), true, s.searchTTL())
 							return s.resolution(t.Key, candidates, idx, payload, &trace), nil
@@ -1100,6 +1095,31 @@ func novelReleases(existing, incoming []core.Release) []core.Release {
 // reports whether the answer came from the cache.
 func (s *Service) searchCached(ctx context.Context, req core.SearchRequest, fresh bool) (results []core.Release, cached bool, err error) {
 	key := searchCacheKey(req)
+	// A detail search starts before playback preparation. Join it rather
+	// than spending a second set of indexer requests for the same title.
+	if !fresh && ctx.Value(refillSearchContextKey{}) == nil {
+		s.bgMu.Lock()
+		done := s.refills[key]
+		cooldown := s.refillRetryAfter[key]
+		s.bgMu.Unlock()
+		if done != nil {
+			select {
+			case <-done:
+				if results, ok := s.peekSearchCache(key); ok {
+					return results, true, nil
+				}
+				// A failed attended search is not a reason for speculative
+				// playback preparation to immediately spend the quota again.
+				if core.IsSpeculative(ctx) {
+					return nil, false, core.ErrBudgetExhausted
+				}
+			case <-ctx.Done():
+				return nil, false, ctx.Err()
+			}
+		} else if core.IsSpeculative(ctx) && s.now().Before(cooldown) {
+			return nil, false, core.ErrBudgetExhausted
+		}
+	}
 	s.mu.RLock()
 	e, ok := s.searchCache[key]
 	s.mu.RUnlock()
