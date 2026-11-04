@@ -257,7 +257,7 @@ type ExperienceViewer struct {
 	Cause         ExperienceCause   `json:"cause"`
 }
 
-const experienceColumns = `id,user_id,username,title,platform,device,decision,started,ended,watched_ms,duration_ms,completed,failovers,error,measured,pictured,ttff_ms,start_failed,buffer_events,buffer_ms,down_failovers,source_kbps,delivered_kbps,uhd,hdr,remote,origin,release_name,reason_kind,reason_detail`
+const experienceColumns = `id,user_id,username,title,platform,device,decision,started,ended,bytes,watched_ms,duration_ms,completed,failovers,error,measured,pictured,ttff_ms,start_failed,buffer_events,buffer_ms,down_failovers,source_kbps,delivered_kbps,uhd,hdr,remote,origin,release_name,reason_kind,reason_detail`
 
 // realPlay leaves out sources prepared for a detail page that no client
 // played; older rows predate that distinction and count.
@@ -273,12 +273,18 @@ func (s *Service) experienceRows(ctx context.Context, where string, limit int, a
 	for rows.Next() {
 		var p ExperiencePlay
 		var measured, pictured, startFailed, events, uhd, hdr, remote int
-		var ttff, bufferMS int64
-		if err := rows.Scan(&p.ID, &p.UserID, &p.Username, &p.Title, &p.Platform, &p.Device, &p.Decision, &p.Started, &p.Ended, &p.WatchedMS, &p.DurationMS, &p.Completed, &p.Switches, &p.Error,
+		var ttff, bufferMS, bytes int64
+		if err := rows.Scan(&p.ID, &p.UserID, &p.Username, &p.Title, &p.Platform, &p.Device, &p.Decision, &p.Started, &p.Ended, &bytes, &p.WatchedMS, &p.DurationMS, &p.Completed, &p.Switches, &p.Error,
 			&measured, &pictured, &ttff, &startFailed, &events, &bufferMS, &p.downSwitches, &p.sourceKbps, &p.deliveredKbps, &uhd, &hdr, &remote, &p.Origin, &p.Release, &p.ReasonKind, &p.ReasonDetail); err != nil {
 			return nil, err
 		}
 		p.Measured, p.uhd, p.hdr, p.Remote = measured == 1, uhd == 1, hdr == 1, remote == 1
+		if p.deliveredKbps == 0 && bytes > 0 && p.WatchedMS >= abandonWindow.Milliseconds() {
+			// Plays without a recorded delivery rate (older rows) fall back
+			// to bytes served over time watched; short plays are left out
+			// because read-ahead dominates them.
+			p.deliveredKbps = int(bytes * 8 / p.WatchedMS)
+		}
 		p.pictured = !p.Measured || (pictured == 1 && startFailed == 0)
 		if p.Measured {
 			p.BufferEvents, p.BufferMS = &events, &bufferMS
