@@ -10,6 +10,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"reflect"
 	"strconv"
 	"strings"
@@ -67,6 +68,29 @@ func OpenMemory(ctx context.Context) (*sql.DB, error) {
 		return nil, fmt.Errorf("store: load migrated test database: %w", err)
 	}
 	return db, nil
+}
+
+// SeedTestDataDir writes the migrated test database to dataDir/ether.db, for
+// a test whose server has already been set up: opening it (Open, app.New)
+// takes the ordinary startup path for an up-to-date database instead of
+// migrating a fresh file. It never replaces an existing database.
+func SeedTestDataDir(t TB, dataDir string) {
+	t.Helper()
+	image, err := migratedMemoryImage(context.Background())
+	if err != nil {
+		t.Fatalf("store: seed test data directory: %v", err)
+	}
+	f, err := os.OpenFile(filepath.Join(dataDir, "ether.db"), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		t.Fatalf("store: seed test data directory: %v", err)
+	}
+	_, err = f.Write(image)
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		t.Fatalf("store: seed test data directory: %v", err)
+	}
 }
 
 // sqliteImage is the part of the modernc.org/sqlite connection that copies
