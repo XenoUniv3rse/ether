@@ -81,6 +81,11 @@ func probeMode(ctx context.Context, r Runner, ffprobe, input string, live bool) 
 			lastErr = err
 			continue
 		}
+		// Both passes inspect the same source. A larger probe can recover
+		// streams while omitting a duration found by the first pass.
+		if info.Duration <= 0 && best != nil && best.Duration > 0 {
+			info.Duration = best.Duration
+		}
 		best = info
 		if probeCompleteMode(info, live) {
 			return info, nil
