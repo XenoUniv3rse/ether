@@ -34,7 +34,6 @@ type CollectionStudio interface {
 	Preview(ctx context.Context, spec core.CollectionSpec, n int) (*core.CollectionPreview, error)
 	Rebuild(ctx context.Context, id string) (*core.CollectionSpec, error)
 	Templates() []core.CollectionTemplate
-	Generate(ctx context.Context, prompt, mediaType string) (*core.CollectionSpec, string, error)
 	// Artwork returns the collection's poster at width w.
 	Artwork(ctx context.Context, id string, w int) ([]byte, string, time.Time, error)
 }
@@ -47,7 +46,6 @@ func (h *Handler) collectionRoutes(mux *http.ServeMux, api func(string, http.Han
 	api("POST /api/collections", h.handleCreateCollection)
 	api("POST /api/collections/preview", h.handlePreviewCollection)
 	api("GET /api/collections/templates", h.handleCollectionTemplates)
-	api("POST /api/collections/generate", h.handleGenerateCollection)
 	api("GET /api/collections/{id}", h.handleGetCollection)
 	api("PUT /api/collections/{id}", h.handleUpdateCollection)
 	api("DELETE /api/collections/{id}", h.handleDeleteCollection)
@@ -275,29 +273,6 @@ func (h *Handler) handleCollectionTemplates(w http.ResponseWriter, r *http.Reque
 		ts = []core.CollectionTemplate{}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"templates": ts})
-}
-
-func (h *Handler) handleGenerateCollection(w http.ResponseWriter, r *http.Request) {
-	var body struct {
-		Prompt    string `json:"prompt"`
-		MediaType string `json:"mediaType"`
-	}
-	if err := decodeJSON(r, &body); err != nil {
-		writeError(w, http.StatusBadRequest, "bad_json", err.Error())
-		return
-	}
-	if strings.TrimSpace(body.Prompt) == "" {
-		writeValidationError(w, []FieldError{{Field: "prompt", Message: "describe the collection you want"}})
-		return
-	}
-	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Minute)
-	defer cancel()
-	spec, explanation, err := h.deps.Collections.Generate(ctx, body.Prompt, body.MediaType)
-	if err != nil {
-		h.writeServiceError(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"spec": spec, "explanation": explanation})
 }
 
 func (h *Handler) handleCollectionArtwork(w http.ResponseWriter, r *http.Request) {

@@ -88,17 +88,75 @@ func (s *Service) handleTurn(w http.ResponseWriter, r *http.Request) {
 	streamHeaders(w)
 	w.Header().Set("X-Ether-Thread-Id", threadID)
 	w.WriteHeader(http.StatusOK)
-	emit := func(c Chunk) error { return writeSSE(w, c) }
-	if _, _, err := s.RunTurn(ctx, OwnerPrincipal(), threadID, req.Prompt, req.Context, emit); err != nil {
-		msg := "The turn failed. Details are in the server log."
-		if errors.Is(err, ErrThreadBusy) {
-			msg = "Ether is still working in this conversation. Send again when it finishes."
+	out := newSSEStream(w)
+	// A model thinking for minutes must never look like a dead connection
+	// to the browser or a proxy in between.
+	stopBeat := out.heartbeat(s.heartbeat)
+	defer stopBeat()
+	run := func(ctx context.Context) {
+		if _, _, err := s.RunTurn(ctx, OwnerPrincipal(), threadID, req.Prompt, req.Context, out.emit); err != nil {
+			msg := "The turn failed. Details are in the server log."
+			if errors.Is(err, ErrThreadBusy) {
+				msg = "Ether is still working in this conversation. Send again when it finishes."
+			}
+			_ = out.emit(chunkError(msg))
+			_ = out.emit(chunkFinish("error"))
+			s.log.Warn("agent turn http failed", "thread", threadID, "err", err)
 		}
-		_ = writeSSE(w, chunkError(msg))
-		_ = writeSSE(w, chunkFinish("error"))
-		s.log.Warn("agent turn http failed", "thread", threadID, "err", err)
 	}
-	writeSSEDone(w)
+	if !detachedRoutes[req.Context.Route] || !s.claimDetached() {
+		run(ctx)
+		out.done()
+		return
+	}
+	// A detached turn outlives its request: a reload, a proxy that drops
+	// the stream or a closed tab never stops the build. It still ends at
+	// the turn deadline, and the console rejoins it from the stored
+	// transcript while GET /threads/{id}/messages reports running.
+	out.detach()
+	finished := make(chan struct{})
+	go func() {
+		defer close(finished)
+		defer s.releaseDetached()
+		run(context.WithoutCancel(ctx))
+	}()
+	select {
+	case <-finished:
+		out.done()
+	case <-r.Context().Done():
+	}
+	out.close()
+}
+
+// detachedRoutes are console pages whose turns keep running when the
+// connection that started them goes away.
+var detachedRoutes = map[string]bool{DescribeCollectionRoute: true}
+
+// maxDetachedTurns bounds detached turns running at once; past it a turn
+// is tied to its request like any other.
+const maxDetachedTurns = 4
+
+func (s *Service) claimDetached() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.detached >= maxDetachedTurns {
+		return false
+	}
+	s.detached++
+	return true
+}
+
+func (s *Service) releaseDetached() {
+	s.mu.Lock()
+	s.detached--
+	s.mu.Unlock()
+}
+
+// Running reports whether a turn is in flight in a conversation.
+func (s *Service) Running(threadID string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.busy[threadID]
 }
 
 func (s *Service) handleThreads(w http.ResponseWriter, r *http.Request) {
@@ -124,7 +182,7 @@ func (s *Service) handleMessages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"threadId": id, "messages": msgs, "hasOlder": hasOlder,
+		"threadId": id, "messages": msgs, "hasOlder": hasOlder, "running": s.Running(id),
 	})
 }
 

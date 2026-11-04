@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/braedonsaunders/ether/internal/config"
 )
@@ -172,29 +173,78 @@ func sendEvent(ctx context.Context, out chan<- Event, ev Event) bool {
 	}
 }
 
-// openStream POSTs and returns the SSE body, mapping tool refusals.
+// StreamIdleTimeout bounds silence on a model stream. A stream that keeps
+// sending runs until the caller's own deadline; the client's whole-request
+// timeout would cut a long answer off mid-sentence.
+const StreamIdleTimeout = 2 * time.Minute
+
+// ErrStreamIdle reports a model stream that sent nothing for
+// StreamIdleTimeout.
+var ErrStreamIdle = errors.New("the language model sent nothing for 2 minutes")
+
+// openStream POSTs and returns the SSE body, mapping tool refusals. The
+// response is bounded by silence (StreamIdleTimeout) and ctx, not by the
+// client's whole-request timeout.
 func (c *Client) openStream(ctx context.Context, url string, h http.Header, body any) (io.ReadCloser, error) {
 	b, err := json.Marshal(body)
 	if err != nil {
 		return nil, err
 	}
+	ctx, cancel := context.WithCancelCause(ctx)
+	idle := time.AfterFunc(StreamIdleTimeout, func() { cancel(ErrStreamIdle) })
+	stop := func() {
+		idle.Stop()
+		cancel(nil)
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(b))
 	if err != nil {
+		stop()
 		return nil, err
 	}
 	req.Header = h.Clone()
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "text/event-stream")
-	resp, err := c.http.Do(req)
+	streaming := *c.http
+	streaming.Timeout = 0
+	resp, err := streaming.Do(req)
 	if err != nil {
+		stop()
+		if errors.Is(context.Cause(ctx), ErrStreamIdle) {
+			return nil, ErrStreamIdle
+		}
 		return nil, err
 	}
 	if resp.StatusCode != http.StatusOK {
+		defer stop()
 		defer resp.Body.Close()
 		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
 		return nil, toolsRefusal(resp.StatusCode, raw)
 	}
-	return resp.Body, nil
+	return &idleBody{ReadCloser: resp.Body, ctx: ctx, idle: idle, stop: stop}, nil
+}
+
+// idleBody re-arms the silence timer on every byte the model sends.
+type idleBody struct {
+	io.ReadCloser
+	ctx  context.Context
+	idle *time.Timer
+	stop func()
+}
+
+func (b *idleBody) Read(p []byte) (int, error) {
+	n, err := b.ReadCloser.Read(p)
+	if n > 0 {
+		b.idle.Reset(StreamIdleTimeout)
+	}
+	if err != nil && errors.Is(context.Cause(b.ctx), ErrStreamIdle) {
+		err = ErrStreamIdle
+	}
+	return n, err
+}
+
+func (b *idleBody) Close() error {
+	b.stop()
+	return b.ReadCloser.Close()
 }
 
 // scanSSE calls fn for each data: payload ([DONE] skipped).

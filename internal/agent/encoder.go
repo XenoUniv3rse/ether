@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sync"
+	"time"
 )
 
 // UI message stream encoder. Chunk fields match ai@6 uiMessageChunkSchema
@@ -74,4 +76,79 @@ func streamHeaders(w http.ResponseWriter) {
 	h.Set("Connection", "keep-alive")
 	h.Set("x-vercel-ai-ui-message-stream", "v1")
 	h.Set("X-Accel-Buffering", "no")
+}
+
+// sseStream serialises one turn's writes: chunks from the turn, heartbeat
+// comments, and the final [DONE]. Once closed it drops every write, so a
+// detached turn never touches a finished response.
+type sseStream struct {
+	mu       sync.Mutex
+	w        http.ResponseWriter
+	closed   bool
+	detached bool
+}
+
+func newSSEStream(w http.ResponseWriter) *sseStream { return &sseStream{w: w} }
+
+// detach makes write errors silent: the client may be gone, the turn is not.
+func (s *sseStream) detach() {
+	s.mu.Lock()
+	s.detached = true
+	s.mu.Unlock()
+}
+
+func (s *sseStream) emit(c Chunk) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return nil
+	}
+	err := writeSSE(s.w, c)
+	if s.detached {
+		return nil
+	}
+	return err
+}
+
+// heartbeat writes a comment every interval until the returned stop runs.
+func (s *sseStream) heartbeat(every time.Duration) (stop func()) {
+	quit := make(chan struct{})
+	var once sync.Once
+	go func() {
+		t := time.NewTicker(every)
+		defer t.Stop()
+		for {
+			select {
+			case <-quit:
+				return
+			case <-t.C:
+				s.mu.Lock()
+				if !s.closed {
+					_, _ = fmt.Fprint(s.w, ": keep-alive\n\n")
+					if f, ok := s.w.(http.Flusher); ok {
+						f.Flush()
+					}
+				}
+				s.mu.Unlock()
+			}
+		}
+	}()
+	return func() { once.Do(func() { close(quit) }) }
+}
+
+// done writes the stream terminator and closes the stream.
+func (s *sseStream) done() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.closed {
+		writeSSEDone(s.w)
+	}
+	s.closed = true
+}
+
+// close stops all further writes; the handler is about to return.
+func (s *sseStream) close() {
+	s.mu.Lock()
+	s.closed = true
+	s.mu.Unlock()
 }
