@@ -88,6 +88,15 @@ func (s *Session) poll(r *run, playlist string, exited bool) {
 			_ = os.Remove(s.trackSegPath(t, n))
 			continue
 		}
+		// ffmpeg can advertise a zero-byte HLS segment after seeking beyond
+		// a truncated input, yet exit successfully. Never publish it as media:
+		// treat the run as failed so playback can retry or select another source.
+		path := s.trackSegPath(t, n)
+		if st, err := os.Stat(path); err == nil && st.Size() == 0 {
+			_ = os.Remove(path)
+			s.failRunOutputLocked(r, fmt.Errorf("transcode: segment %d is empty", n))
+			break
+		}
 		if s.heldToClock(r) {
 			path := s.trackSegPath(t, n)
 			err := s.moveOntoRetainedLocked(r, t, path)
