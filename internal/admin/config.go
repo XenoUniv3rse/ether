@@ -3,8 +3,10 @@ package admin
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
+	"strings"
 
 	"github.com/braedonsaunders/ether/internal/config"
 )
@@ -87,12 +89,34 @@ func (h *Handler) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 	// claim field. Only an explicit false is an instruction to unclaim.
 	var fields map[string]json.RawMessage
 	_ = json.Unmarshal(body, &fields)
-	if envelope, ok := fields["config"]; ok {
-		_ = json.Unmarshal(envelope, &fields)
+	for key, envelope := range fields {
+		if strings.EqualFold(key, "config") {
+			fields = nil
+			_ = json.Unmarshal(envelope, &fields)
+			break
+		}
 	}
-	var plexFields map[string]json.RawMessage
-	_ = json.Unmarshal(fields["plex"], &plexFields)
-	if _, present := plexFields["claimed"]; !present {
+	var plexRaw json.RawMessage
+	hasPlex := false
+	for key, value := range fields {
+		if strings.EqualFold(key, "plex") {
+			if hasPlex {
+				writeError(w, http.StatusBadRequest, "bad_json", "duplicate plex field")
+				return
+			}
+			plexRaw, hasPlex = value, true
+		}
+	}
+	present := false
+	if hasPlex {
+		var err error
+		present, err = validatePlexClaimInput(plexRaw)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "bad_json", err.Error())
+			return
+		}
+	}
+	if !present {
 		next.Plex.Claimed = prev.Plex.Claimed
 	}
 	next, perrs := UnredactConfig(next, prev)
@@ -171,6 +195,12 @@ func (h *Handler) handlePutSection(w http.ResponseWriter, r *http.Request) {
 			body = v
 		}
 	}
+	if field == "plex" {
+		if _, err := validatePlexClaimInput(body); err != nil {
+			writeError(w, http.StatusBadRequest, "bad_json", err.Error())
+			return
+		}
+	}
 	prev := h.deps.Config.Get()
 	// Merge onto the redacted config: a stored secret the patch leaves out
 	// then comes back as a placeholder and is restored only if still bound
@@ -220,6 +250,32 @@ func (h *Handler) handlePutSection(w http.ResponseWriter, r *http.Request) {
 		_ = json.Unmarshal(raw, &out)
 		writeJSON(w, http.StatusOK, map[string]any{"section": field, "value": json.RawMessage(out[field])})
 	}
+}
+
+// Reject null and duplicate spellings: JSON null decoded into a bool would
+// otherwise silently become false and release the device.
+func validatePlexClaimInput(raw json.RawMessage) (bool, error) {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil || fields == nil {
+		return false, errors.New("plex configuration must be an object")
+	}
+	seen := false
+	for key, value := range fields {
+		if !strings.EqualFold(key, "claimed") {
+			continue
+		}
+		if key != "claimed" {
+			return false, errors.New("plex claimed field must use canonical spelling")
+		}
+		if seen {
+			return false, errors.New("duplicate plex claimed field")
+		}
+		seen = true
+		if string(bytes.TrimSpace(value)) != "true" && string(bytes.TrimSpace(value)) != "false" {
+			return false, errors.New("plex claimed must be a boolean")
+		}
+	}
+	return seen, nil
 }
 
 // mergeSection overlays patch onto current: for objects the patch keys win

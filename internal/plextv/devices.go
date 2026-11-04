@@ -90,6 +90,7 @@ func (c *Client) RemoveDevice(ctx context.Context, token string) (bool, error) {
 		return false, fmt.Errorf("plextv: devices: %w", err)
 	}
 	var id string
+	var provides string
 	matches := 0
 	for _, d := range root.findAll("Device") {
 		if d.attr("clientIdentifier") != c.id.ClientIdentifier {
@@ -97,12 +98,24 @@ func (c *Client) RemoveDevice(ctx context.Context, token string) (bool, error) {
 		}
 		matches++
 		id = d.attr("id")
+		provides = d.attr("provides")
 	}
 	if matches == 0 {
 		return false, nil
 	}
 	if matches != 1 {
 		return false, errors.New("plextv: ambiguous device identifier")
+	}
+	if provides != "" {
+		server := false
+		for _, kind := range strings.Split(provides, ",") {
+			if strings.EqualFold(strings.TrimSpace(kind), "server") {
+				server = true
+			}
+		}
+		if !server {
+			return false, errors.New("plextv: matching device is not a server")
+		}
 	}
 	n, err := strconv.ParseUint(id, 10, 64)
 	if err != nil || n == 0 {
