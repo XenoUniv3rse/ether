@@ -5,22 +5,25 @@ import {
   CalendarPlus,
   CalendarRange,
   CheckCircle2,
-  ChevronRight,
   Link2,
   Link2Off,
+  Pencil,
+  RefreshCw,
   Search,
   Wand2,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
+import { Segmented } from "../../components/fields";
 import { errorMessage, isAbort } from "../../lib/api";
 import { t, tn, tx } from "../../i18n";
-import { formatNumber } from "../../lib/format";
+import { formatNumber, relativeTime } from "../../lib/format";
 import { useDebouncedValue } from "../../lib/hooks";
 import { ChannelLogo } from "./ChannelLogo";
 import {
   clock,
   dayClock,
   progress,
+  isGuideSource,
   plexLineupName,
   tv,
   type Channel,
@@ -160,223 +163,81 @@ export function MapGuideButton({
   );
 }
 
-const GROUP_PAGE = 120;
+const ROW_PAGE = 80;
 
-/** A collapsible lineup section with a sticky header, as on the Channels tab. */
-function GuideGroup({
-  title,
-  icon,
-  count,
-  tone,
-  defaultOpen = true,
-  children,
-}: {
-  title: string;
-  icon: React.ReactNode;
-  count: number;
-  tone?: "warning";
-  defaultOpen?: boolean;
-  children: React.ReactNode;
-}) {
-  const [open, setOpen] = useState(defaultOpen);
-  return (
-    <section aria-label={title}>
-      <button
-        type="button"
-        aria-expanded={open}
-        onClick={() => setOpen((o) => !o)}
-        className={cn(
-          "sticky top-0 z-10 flex w-full items-center gap-1.5 border-b border-border/60 bg-bg-subtle/95 px-4 py-1.5 text-left text-[11px] font-semibold uppercase tracking-wider backdrop-blur hover:text-fg",
-          tone === "warning" ? "text-warning" : "text-fg-subtle",
-        )}
-      >
-        <ChevronRight size={12} className={cn("transition-transform", open && "rotate-90")} />
-        {icon}
-        <span className="min-w-0 flex-1 truncate">{title}</span>
-        <span className="tabular-nums">{formatNumber(count)}</span>
-      </button>
-      {open ? children : null}
-    </section>
-  );
-}
-
-function GuideChannelRow({
-  channel: c,
-  coverage,
-  selected,
-  onSelect,
-}: {
-  channel: Channel;
-  coverage?: Coverage;
-  selected: boolean;
-  onSelect: (id: string) => void;
-}) {
-  const listed = (coverage?.programmes ?? 0) > 0;
-  return (
-    <li>
-      <button
-        type="button"
-        onClick={() => onSelect(c.id)}
-        aria-current={selected ? "true" : undefined}
-        aria-label={t("Guide for {channel}", { channel: `${c.number} ${c.name}` })}
-        className={cn(
-          "flex w-full items-center gap-2.5 rounded-lg px-2 py-1.5 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
-          selected
-            ? "bg-primary-subtle ring-1 ring-inset ring-primary/30"
-            : "hover:bg-surface-hover",
-          !c.enabled && "opacity-55",
-        )}
-      >
-        <span
-          className={cn(
-            "w-9 shrink-0 text-right font-mono text-xs tabular-nums",
-            selected ? "text-primary" : "text-fg-subtle",
-          )}
-        >
-          {c.number}
-        </span>
-        <ChannelLogo name={c.name} logo={c.logo} seed={c.id} size={34} />
-        <span className="min-w-0 flex-1">
-          <span
-            className={cn(
-              "block truncate text-sm font-medium",
-              selected ? "text-primary" : "text-fg",
-            )}
-          >
-            {c.name}
-          </span>
-          <span className="block truncate text-xs text-fg-muted">
-            {listed
-              ? coverage?.until
-                ? t("Listings to {time}", { time: dayClock(coverage.until) })
-                : t("Listed")
-              : c.guideId
-                ? t("Its guide has no listings ahead")
-                : t("Not matched to a guide")}
-          </span>
-        </span>
-        {listed ? (
-          <ChevronRight size={14} className="shrink-0 text-fg-subtle" />
-        ) : (
-          <AlertTriangle
-            size={13}
-            className="shrink-0 text-warning"
-            aria-label={t("No guide data")}
-          />
-        )}
-      </button>
-    </li>
-  );
-}
-
-function PagedRows({
-  items,
-  render,
-}: {
-  items: Channel[];
-  render: (c: Channel) => React.ReactNode;
-}) {
-  const [limit, setLimit] = useState(GROUP_PAGE);
-  return (
-    <ul className="px-2 py-1">
-      {items.slice(0, limit).map(render)}
-      {items.length > limit ? (
-        <li className="px-2 py-1">
-          <Button
-            variant="ghost"
-            size="sm"
-            className="w-full text-xs"
-            onClick={() => setLimit((l) => l + GROUP_PAGE * 4)}
-          >
-            {t("Show {count} more", {
-              count: formatNumber(Math.min(items.length - limit, GROUP_PAGE * 4)),
-            })}
-          </Button>
-        </li>
-      ) : null}
-    </ul>
-  );
-}
+const sourceTitle = (s: Source) => (s.kind === "plex" ? plexLineupName(s.name) : s.name);
 
 /** A guide source is stale when it has failed, or its listings end within six hours. */
 const STALE_MS = 6 * 60 * 60 * 1000;
 
+const usesGuide = (c: Channel, s: Source) =>
+  c.kind === "iptv" && Boolean(c.guideId) && (c.guideSourceId || c.sourceId) === s.id;
+
+/** One line on how a guide source is doing: size, use, horizon, or its error. */
+function guideSourceStatus(s: Source, used: number, now: number): { text: string; warn: boolean } {
+  const until = s.guideUntil ? Date.parse(s.guideUntil) : 0;
+  if (s.lastError) return { text: t("Last refresh failed"), warn: true };
+  const total = s.guideChannelCount ?? 0;
+  if (s.kind === "plex" && !used)
+    return {
+      text: tn(total, "{count} channel · none in use yet", "{count} channels · none in use yet"),
+      warn: false,
+    };
+  if (until && until <= now) return { text: t("Listings have run out"), warn: true };
+  const parts = [tn(total, "{count} channel", "{count} channels")];
+  if (used) parts.push(tn(used, "{count} in use", "{count} in use"));
+  if (until) parts.push(t("to {time}", { time: dayClock(new Date(until)) }));
+  return { text: parts.join(" · "), warn: Boolean(until && until - now < STALE_MS) };
+}
+
 /**
- * The Guide tab: how much of the lineup has listings, the channels that still
- * need a guide, every matched channel grouped by where its listings come
- * from, and the guide sources with how fresh they are. Each row opens a
- * drawer; the guide grid stays on the right.
+ * The Guide tab's lineup: overall coverage, then every guide source. Picking
+ * one opens its workbench on the right; "All guides" is the whole lineup.
  */
-export function GuideList({
-  channels,
+export function GuideSourceList({
   lineup,
   sources,
   coverage,
   selected,
   onSelect,
-  onOpenSource,
-  onAutoMatch,
   onAddGuideSource,
   now,
 }: {
-  /** Channels after the panel's search and filter. */
-  channels: Channel[];
-  /** The whole lineup, for the coverage totals. */
   lineup: Channel[];
   sources: Source[];
   coverage: Map<string, Coverage> | null;
+  /** The selected guide source id, or null for All guides. */
   selected: string | null;
-  onSelect: (id: string) => void;
-  onOpenSource: (id: string) => void;
-  onAutoMatch: () => void;
+  onSelect: (id: string | null) => void;
   onAddGuideSource: () => void;
   now: number;
 }) {
   const has = (c: Channel) => (coverage?.get(c.id)?.programmes ?? 0) > 0;
   const live = lineup.filter((c) => c.enabled && c.kind === "iptv");
-  const liveMissing = coverage === null ? null : live.filter((c) => !has(c)).length;
-  const pct = liveMissing === null || !live.length ? 1 : (live.length - liveMissing) / live.length;
-
-  const iptv = channels.filter((c) => c.kind === "iptv");
-  const needs = iptv.filter((c) => !has(c));
-  const sourceName = (id?: string) => {
-    const source = sources.find((s) => s.id === id);
-    return source
-      ? source.kind === "plex"
-        ? plexLineupName(source.name)
-        : source.name
-      : t("Unknown source");
-  };
-  const matched = new Map<string, Channel[]>();
-  for (const c of iptv) {
-    if (!has(c)) continue;
-    const k = c.guideSourceId || c.sourceId || "";
-    matched.set(k, [...(matched.get(k) ?? []), c]);
-  }
-  const guideSources = sources.filter(
-    (s) => s.hasGuide || Boolean(s.guideUrl) || (s.guideChannelCount ?? 0) > 0,
-  );
-  const row = (c: Channel) => (
-    <GuideChannelRow
-      key={c.id}
-      channel={c}
-      coverage={coverage?.get(c.id)}
-      selected={selected === c.id}
-      onSelect={onSelect}
-    />
-  );
+  const missing = coverage === null ? null : live.filter((c) => !has(c)).length;
+  const pct = missing === null || !live.length ? 1 : (live.length - missing) / live.length;
+  const guides = sources.filter(isGuideSource);
 
   return (
-    <div className="pb-6">
-      <div className="space-y-3 border-b border-border/60 p-3 sm:px-4">
-        <div className="flex items-start gap-3">
-          <div className="min-w-0 flex-1">
-            <p className="text-sm font-semibold text-fg">
-              {liveMissing === null
+    <div className="space-y-4 p-3 sm:p-4">
+      <button
+        type="button"
+        onClick={() => onSelect(null)}
+        aria-current={selected === null ? "true" : undefined}
+        className={cn(
+          "w-full space-y-2.5 rounded-xl border bg-surface p-3 text-left shadow-xs transition-colors hover:border-border-strong",
+          selected === null ? "border-primary/40 ring-1 ring-primary/30" : "border-border",
+        )}
+      >
+        <span className="flex items-start gap-3">
+          <span className="min-w-0 flex-1">
+            <span className="block text-sm font-semibold text-fg">{t("All guides")}</span>
+            <span className="block text-xs text-fg-muted">
+              {missing === null
                 ? t("Checking listings…")
-                : liveMissing
+                : missing
                   ? t("{covered} of {total} on-air channels have listings", {
-                      covered: formatNumber(live.length - liveMissing),
+                      covered: formatNumber(live.length - missing),
                       total: formatNumber(live.length),
                     })
                   : tn(
@@ -384,159 +245,469 @@ export function GuideList({
                       "Your {count} on-air channel has listings",
                       "All {count} on-air channels have listings",
                     )}
-            </p>
-            <p className="text-xs text-fg-muted">{t("Virtual channels build their own guide.")}</p>
-          </div>
-          <span className="text-lg font-semibold tabular-nums text-fg">
-            {liveMissing === null ? "—" : `${Math.round(pct * 100)}%`}
+            </span>
           </span>
-        </div>
-        <div className="h-1.5 overflow-hidden rounded-full bg-bg-subtle">
-          <div
+          <span className="text-lg font-semibold tabular-nums text-fg">
+            {missing === null ? "—" : `${Math.round(pct * 100)}%`}
+          </span>
+        </span>
+        <span className="block h-1.5 overflow-hidden rounded-full bg-bg-subtle">
+          <span
             className={cn(
-              "h-full rounded-full transition-all",
+              "block h-full rounded-full transition-all",
               pct >= 0.999 ? "bg-success" : "bg-gradient-to-r from-primary to-info",
             )}
             style={{ width: `${pct * 100}%` }}
           />
-        </div>
-        <div className="flex gap-2">
-          <Button
-            size="sm"
-            className="flex-1"
-            onClick={onAutoMatch}
-            disabled={coverage === null || !liveMissing}
-          >
-            <Wand2 size={13} /> {t("Auto-match")}
-          </Button>
-          <Button size="sm" variant="outline" className="flex-1" onClick={onAddGuideSource}>
+        </span>
+      </button>
+
+      <div className="space-y-1.5">
+        <div className="flex items-center gap-2 px-1">
+          <h2 className="flex-1 text-[11px] font-semibold uppercase tracking-wider text-fg-subtle">
+            {t("Guide sources")}
+          </h2>
+          <Button size="sm" variant="ghost" onClick={onAddGuideSource}>
             <CalendarPlus size={13} /> {t("Add guide")}
           </Button>
         </div>
+        {guides.length === 0 ? (
+          <p className="px-1 text-xs text-fg-muted">
+            {t(
+              "No guide sources yet. Add an XMLTV guide or your Plex guide to give channels listings.",
+            )}
+          </p>
+        ) : null}
+        {guides.map((s) => {
+          const on = selected === s.id;
+          const used = lineup.filter((c) => usesGuide(c, s)).length;
+          const status = guideSourceStatus(s, used, now);
+          return (
+            <button
+              key={s.id}
+              type="button"
+              onClick={() => onSelect(s.id)}
+              aria-current={on ? "true" : undefined}
+              className={cn(
+                "flex w-full items-start gap-3 rounded-xl border bg-surface p-3 text-left transition-colors hover:border-border-strong",
+                on ? "border-primary/40 ring-1 ring-primary/30" : "border-border",
+              )}
+            >
+              <span className="grid size-9 shrink-0 place-items-center rounded-lg bg-info/15 text-info">
+                <CalendarRange size={17} />
+              </span>
+              <span className="min-w-0 flex-1 space-y-1">
+                <span className="flex items-center gap-2">
+                  <span className="truncate text-sm font-medium text-fg">{sourceTitle(s)}</span>
+                  <Badge variant="secondary" className="shrink-0">
+                    {s.kind === "plex" ? t("Plex") : s.hasPlaylist ? t("M3U guide") : t("XMLTV")}
+                  </Badge>
+                </span>
+                <span
+                  className={cn(
+                    "flex items-center gap-1 text-xs",
+                    status.warn ? "text-warning" : "text-fg-muted",
+                  )}
+                >
+                  {status.warn ? <AlertTriangle size={12} className="shrink-0" /> : null}
+                  <span className="truncate">{status.text}</span>
+                </span>
+              </span>
+            </button>
+          );
+        })}
       </div>
+    </div>
+  );
+}
 
-      {needs.length ? (
-        <GuideGroup
-          title={t("Needs a guide")}
-          icon={<AlertTriangle size={12} />}
-          count={needs.length}
-          tone="warning"
+/**
+ * The guide workbench on the right of the Guide tab. For All guides: how
+ * much of the lineup has listings, suggested matches, and every channel's
+ * mapping. For one source: its health, the channels using it, and the
+ * channels it could cover. Mapping a channel opens its guide drawer.
+ */
+export function GuideWorkbench({
+  channels,
+  sources,
+  coverage,
+  source,
+  onMapChannel,
+  onAddGuideSource,
+  onEditSource,
+  onReload,
+  now,
+}: {
+  channels: Channel[];
+  sources: Source[];
+  coverage: Map<string, Coverage> | null;
+  /** The selected guide source, or undefined for All guides. */
+  source?: Source;
+  onMapChannel: (id: string) => void;
+  onAddGuideSource: () => void;
+  onEditSource: (id: string) => void;
+  onReload: () => Promise<void>;
+  now: number;
+}) {
+  type Show = "missing" | "all" | "using";
+  const [show, setShow] = useState<Show>("missing");
+  const [limit, setLimit] = useState(ROW_PAGE);
+  const [proposals, setProposals] = useState<MatchChange[] | null>(null);
+  const [accepted, setAccepted] = useState<Set<string>>(new Set());
+  const [busy, setBusy] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const iptv = useMemo(() => channels.filter((c) => c.kind === "iptv"), [channels]);
+  const live = iptv.filter((c) => c.enabled);
+  const has = (c: Channel) => (coverage?.get(c.id)?.programmes ?? 0) > 0;
+  const missing = live.filter((c) => !has(c));
+  const using = source ? iptv.filter((c) => usesGuide(c, source)) : [];
+  const byId = useMemo(() => new Map(channels.map((c) => [c.id, c])), [channels]);
+  const sourceName = (id?: string) => {
+    const s = sources.find((x) => x.id === id);
+    return s ? sourceTitle(s) : "";
+  };
+  const sourceId = source?.id;
+
+  // A source opens on the channels it feeds, or on the gaps when it feeds none.
+  useEffect(() => {
+    setShow(source ? (iptv.some((c) => usesGuide(c, source)) ? "using" : "missing") : "missing");
+    setLimit(ROW_PAGE);
+    setProposals(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sourceId]);
+
+  const rows = show === "using" ? using : show === "all" ? iptv : missing;
+  const pct = live.length ? (live.length - missing.length) / live.length : 1;
+  const status = source ? guideSourceStatus(source, using.length, now) : { text: "", warn: false };
+
+  const propose = async () => {
+    setBusy(true);
+    try {
+      const r = await tv.match({ dryRun: true });
+      const changes = (r.changes ?? []).filter((c) => !sourceId || c.guideSourceId === sourceId);
+      setProposals(changes);
+      setAccepted(new Set(changes.map((c) => c.channelId)));
+      if (!changes.length)
+        toast.info(t("No new matches found"), {
+          description: source
+            ? t("Open a channel to search this guide by hand.")
+            : t("Try adding another guide source."),
+        });
+    } catch (e) {
+      toast.error(t("Couldn't match guide channels"), { description: errorMessage(e) });
+    } finally {
+      setBusy(false);
+    }
+  };
+  const apply = async () => {
+    setBusy(true);
+    try {
+      const r = await tv.match({ channelIds: [...accepted] });
+      toast.success(
+        tn(r.matched, "{count} channel matched to a guide", "{count} channels matched to a guide"),
+      );
+      setProposals(null);
+      await onReload();
+    } catch (e) {
+      toast.error(t("Couldn't apply matches"), { description: errorMessage(e) });
+    } finally {
+      setBusy(false);
+    }
+  };
+  const refresh = async () => {
+    if (!source) return;
+    setRefreshing(true);
+    try {
+      await tv.refreshSource(source.id);
+      toast.success(t("{name} refreshed", { name: sourceTitle(source) }));
+      await onReload();
+    } catch (e) {
+      toast.error(t("Couldn't refresh the guide"), { description: errorMessage(e) });
+    } finally {
+      setRefreshing(false);
+    }
+  };
+
+  return (
+    <div className="mx-auto max-w-5xl space-y-5 p-3 sm:p-6">
+      <section className="relative overflow-hidden rounded-2xl border border-border bg-surface p-5 shadow-xs">
+        <div
+          className="pointer-events-none absolute -right-16 -top-24 size-72 rounded-full bg-primary/10 blur-3xl"
+          aria-hidden
+        />
+        {source ? (
+          <div className="relative flex flex-wrap items-center gap-4">
+            <span className="grid size-12 shrink-0 place-items-center rounded-xl bg-info/15 text-info">
+              <CalendarRange size={22} />
+            </span>
+            <div className="min-w-0 flex-1">
+              <p className="text-xs font-semibold uppercase tracking-wider text-fg-subtle">
+                {source.kind === "plex" ? t("Plex guide") : t("XMLTV guide")}
+              </p>
+              <h2 className="mt-0.5 truncate text-xl font-semibold tracking-tight text-fg">
+                {sourceTitle(source)}
+              </h2>
+              <p className={cn("mt-0.5 text-sm", status.warn ? "text-warning" : "text-fg-muted")}>
+                {status.text}
+                {source.updatedAt
+                  ? ` · ${t("refreshed {when}", { when: relativeTime(source.updatedAt) })}`
+                  : ""}
+              </p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <Button variant="outline" onClick={() => void refresh()} disabled={refreshing}>
+                <RefreshCw size={14} className={cn(refreshing && "animate-spin")} /> {t("Refresh")}
+              </Button>
+              <Button variant="outline" onClick={() => onEditSource(source.id)}>
+                <Pencil size={14} /> {t("Edit")}
+              </Button>
+              <Button onClick={() => void propose()} disabled={busy || coverage === null}>
+                <Wand2 size={14} /> {t("Auto-match")}
+              </Button>
+            </div>
+            {source.lastError ? (
+              <p
+                role="alert"
+                className="relative w-full rounded-lg border border-danger/30 bg-danger/10 px-3 py-2 text-sm text-danger"
+              >
+                {source.lastError}
+              </p>
+            ) : null}
+          </div>
+        ) : (
+          <>
+            <div className="relative flex flex-wrap items-center gap-5">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-wider text-fg-subtle">
+                  {t("Guide data")}
+                </p>
+                <p className="mt-1 text-3xl font-semibold tracking-tight tabular-nums text-fg">
+                  {coverage === null ? "—" : `${Math.round(pct * 100)}%`}
+                  <span className="ml-2 text-sm font-normal text-fg-muted">
+                    {t("of live IPTV channels have listings")}
+                  </span>
+                </p>
+                <p className="mt-1 text-sm text-fg-muted">
+                  {coverage === null
+                    ? t("Checking which channels have listings…")
+                    : missing.length
+                      ? t("{missing} of {total} need a guide. Virtual channels build their own.", {
+                          missing: formatNumber(missing.length),
+                          total: formatNumber(live.length),
+                        })
+                      : t("Every live channel has listings. Virtual channels build their own.")}
+                </p>
+              </div>
+              <div className="ml-auto flex flex-wrap gap-2">
+                <Button variant="outline" onClick={onAddGuideSource}>
+                  <CalendarPlus size={14} /> {t("Add guide source")}
+                </Button>
+                <Button onClick={() => void propose()} disabled={busy || coverage === null}>
+                  <Wand2 size={14} /> {t("Auto-match")}
+                </Button>
+              </div>
+            </div>
+            <div className="relative mt-4 h-2 overflow-hidden rounded-full bg-bg-subtle">
+              <div
+                className={cn(
+                  "h-full rounded-full transition-all",
+                  pct >= 0.999 ? "bg-success" : "bg-gradient-to-r from-primary to-info",
+                )}
+                style={{ width: `${pct * 100}%` }}
+              />
+            </div>
+          </>
+        )}
+      </section>
+
+      {proposals && proposals.length ? (
+        <section
+          aria-label={t("Suggested matches")}
+          className="space-y-3 rounded-2xl border border-primary/30 bg-primary-subtle/40 p-4"
         >
-          <PagedRows items={needs} render={row} />
-        </GuideGroup>
-      ) : coverage !== null && iptv.length ? (
-        <div className="flex items-center gap-2 px-4 py-3 text-xs text-fg-muted">
-          <CheckCircle2 size={14} className="text-success" />
-          {t("Every channel here is getting listings.")}
-        </div>
-      ) : null}
-
-      {[...matched.entries()]
-        .sort((a, b) => b[1].length - a[1].length)
-        .map(([id, items]) => (
-          <GuideGroup
-            key={id}
-            title={sourceName(id)}
-            icon={<Link2 size={12} />}
-            count={items.length}
-          >
-            <PagedRows items={items} render={row} />
-          </GuideGroup>
-        ))}
-
-      {iptv.length === 0 && coverage !== null ? (
-        <p className="px-4 py-8 text-center text-xs text-fg-muted">
-          {channels.length
-            ? t("No IPTV channels match.")
-            : t("Add an M3U source to bring in IPTV channels.")}
-        </p>
-      ) : null}
-
-      <GuideGroup
-        title={t("Listings from")}
-        icon={<CalendarRange size={12} />}
-        count={guideSources.length}
-      >
-        {guideSources.length ? (
-          <ul className="px-2 py-1">
-            {guideSources.map((s) => {
-              const until = s.guideUntil ? Date.parse(s.guideUntil) : 0;
-              const used = lineup.filter(
-                (c) => c.kind === "iptv" && c.guideId && (c.guideSourceId || c.sourceId) === s.id,
-              ).length;
-              const stale = Boolean(s.lastError) || (until > 0 && until - now < STALE_MS);
-              const total = s.guideChannelCount ?? 0;
-              const plexStatus = !used
-                ? tn(
-                    total,
-                    "{count} channel · none in use yet",
-                    "{count} channels · none in use yet",
-                  )
-                : until > now
-                  ? tn(
-                      total,
-                      "{count} channel · {used} in use · to {time}",
-                      "{count} channels · {used} in use · to {time}",
-                      { used: formatNumber(used), time: dayClock(new Date(until)) },
-                    )
-                  : tn(
-                      total,
-                      "{count} channel · {used} in use",
-                      "{count} channels · {used} in use",
-                      { used: formatNumber(used) },
-                    );
+          <div className="flex flex-wrap items-center gap-2">
+            <Wand2 size={15} className="text-primary" />
+            <h2 className="text-sm font-semibold text-fg">
+              {tn(proposals.length, "{count} suggested match", "{count} suggested matches")}
+            </h2>
+            <span className="text-xs text-fg-muted">
+              {t("Matched by guide id, then by channel name.")}
+            </span>
+            <div className="ml-auto flex gap-2">
+              <Button variant="ghost" size="sm" onClick={() => setProposals(null)}>
+                {t("Dismiss")}
+              </Button>
+              <Button size="sm" disabled={busy || accepted.size === 0} onClick={() => void apply()}>
+                <CheckCircle2 size={13} /> {t("Apply {count}", { count: accepted.size })}
+              </Button>
+            </div>
+          </div>
+          <ul className="max-h-80 space-y-1 overflow-y-auto">
+            {proposals.map((p) => {
+              const c = byId.get(p.channelId);
+              const on = accepted.has(p.channelId);
               return (
-                <li key={s.id}>
-                  <button
-                    type="button"
-                    onClick={() => onOpenSource(s.id)}
-                    className="flex w-full items-center gap-2.5 rounded-lg px-2 py-1.5 text-left hover:bg-surface-hover"
-                  >
-                    <span className="grid size-[34px] shrink-0 place-items-center rounded-lg bg-surface text-fg-muted ring-1 ring-border">
-                      <CalendarRange size={15} />
+                <li key={p.channelId}>
+                  <label className="flex cursor-pointer items-center gap-3 rounded-lg bg-surface px-3 py-2 text-sm">
+                    <input
+                      type="checkbox"
+                      checked={on}
+                      onChange={() =>
+                        setAccepted((s) => {
+                          const n = new Set(s);
+                          if (on) n.delete(p.channelId);
+                          else n.add(p.channelId);
+                          return n;
+                        })
+                      }
+                      aria-label={t("Accept match for {channel}", {
+                        channel: c?.name ?? p.channelId,
+                      })}
+                    />
+                    <span className="min-w-0 flex-1 truncate text-fg">
+                      {c?.name ?? p.channelName ?? p.channelId}
                     </span>
-                    <span className="min-w-0 flex-1">
-                      <span className="block truncate text-sm font-medium text-fg">
-                        {s.kind === "plex" ? plexLineupName(s.name) : s.name}
-                      </span>
-                      <span
-                        className={cn(
-                          "block truncate text-xs",
-                          stale ? "text-warning" : "text-fg-muted",
-                        )}
-                      >
-                        {s.lastError
-                          ? s.lastError
-                          : s.kind === "plex"
-                            ? plexStatus
-                            : until
-                              ? until <= now
-                                ? t("Listings have run out")
-                                : t("{count} channels · to {time}", {
-                                    count: formatNumber(
-                                      s.kind === "plex" ? used : (s.guideChannelCount ?? 0),
-                                    ),
-                                    time: dayClock(new Date(until)),
-                                  })
-                              : tn(s.guideChannelCount ?? 0, "{count} channel", "{count} channels")}
+                    <ArrowRight size={13} className="shrink-0 text-fg-subtle" />
+                    <span className="min-w-0 flex-1 truncate text-fg-muted">
+                      {p.guideName}{" "}
+                      <span className="text-fg-subtle">
+                        · {p.guideSourceName || sourceName(p.guideSourceId)}
+                        {p.method === "name" ? ` · ${t("by name")}` : ""}
                       </span>
                     </span>
-                    {stale ? (
-                      <AlertTriangle size={13} className="shrink-0 text-warning" />
-                    ) : (
-                      <ChevronRight size={14} className="shrink-0 text-fg-subtle" />
-                    )}
-                  </button>
+                  </label>
                 </li>
               );
             })}
           </ul>
+        </section>
+      ) : null}
+
+      <section aria-label={t("Channel guide mapping")} className="space-y-3">
+        <div className="flex flex-wrap items-center gap-3">
+          <h2 className="text-sm font-semibold text-fg">{t("Channel mapping")}</h2>
+          <Segmented
+            ariaLabel={t("Show channels")}
+            size="sm"
+            value={show}
+            onChange={(v) => {
+              setShow(v);
+              setLimit(ROW_PAGE);
+            }}
+            options={[
+              ...(source
+                ? [
+                    {
+                      value: "using" as Show,
+                      label: t("Using this guide ({count})", { count: using.length }),
+                    },
+                  ]
+                : []),
+              {
+                value: "missing" as Show,
+                label: t("Missing ({count})", { count: missing.length }),
+              },
+              { value: "all" as Show, label: t("All IPTV ({count})", { count: iptv.length }) },
+            ]}
+          />
+        </div>
+        {rows.length === 0 ? (
+          <div className="rounded-xl border border-dashed border-border p-8 text-center">
+            <CheckCircle2 className="mx-auto text-success" size={26} />
+            <p className="mt-2 text-sm font-medium text-fg">
+              {show === "using"
+                ? t("No channels use this guide yet")
+                : iptv.length
+                  ? t("Nothing missing")
+                  : t("No IPTV channels yet")}
+            </p>
+            <p className="text-xs text-fg-muted">
+              {show === "using"
+                ? t("Map a channel from Missing or All IPTV, or run Auto-match.")
+                : iptv.length
+                  ? t("Every live channel is getting listings.")
+                  : t("Add an M3U source to bring in IPTV channels.")}
+            </p>
+          </div>
         ) : (
-          <p className="px-4 py-3 text-xs text-fg-muted">
-            {t("No guide sources yet. Add an XMLTV guide to give channels listings.")}
-          </p>
+          <ul className="divide-y divide-border overflow-hidden rounded-xl border border-border bg-surface">
+            {rows.slice(0, limit).map((c) => {
+              const cov = coverage?.get(c.id);
+              const ok = has(c);
+              const guideSrc = c.guideSourceId || c.sourceId;
+              return (
+                <li key={c.id} className="flex items-center gap-3 px-3 py-2">
+                  <button
+                    type="button"
+                    onClick={() => onMapChannel(c.id)}
+                    className="flex min-w-0 flex-1 items-center gap-2.5 text-left"
+                  >
+                    <ChannelLogo name={c.name} logo={c.logo} seed={c.id} size={30} />
+                    <span className="min-w-0">
+                      <span className="block truncate text-sm font-medium text-fg">
+                        <span className="mr-1.5 font-mono text-xs text-fg-subtle">{c.number}</span>
+                        {c.name}
+                      </span>
+                      <span className="block truncate text-[11px] text-fg-muted">
+                        {sourceName(c.sourceId)}
+                        {!c.enabled ? ` · ${t("disabled")}` : ""}
+                      </span>
+                    </span>
+                  </button>
+                  <span className="hidden min-w-0 flex-1 items-center gap-2 md:flex">
+                    {c.guideId ? (
+                      <>
+                        {ok ? (
+                          <Link2 size={13} className="shrink-0 text-success" />
+                        ) : (
+                          <Link2Off size={13} className="shrink-0 text-warning" />
+                        )}
+                        <span className="min-w-0 truncate text-xs text-fg-muted">
+                          <span className="font-mono">{c.guideId}</span>
+                          {guideSrc ? ` · ${sourceName(guideSrc)}` : ""}
+                        </span>
+                      </>
+                    ) : (
+                      <span className="text-xs text-fg-subtle">{t("Not mapped")}</span>
+                    )}
+                  </span>
+                  <span className="w-36 shrink-0 text-right text-[11px] text-fg-muted">
+                    {ok ? (
+                      <Badge variant="success" className="whitespace-nowrap">
+                        {cov?.until ? t("to {time}", { time: dayClock(cov.until) }) : t("Listed")}
+                      </Badge>
+                    ) : (
+                      <Badge variant="warning">{t("No listings")}</Badge>
+                    )}
+                  </span>
+                  <Button
+                    size="sm"
+                    variant={ok ? "ghost" : "outline"}
+                    aria-label={t("Map guide for {channel}", { channel: c.name })}
+                    onClick={() => onMapChannel(c.id)}
+                  >
+                    <Link2 size={13} /> {c.guideId ? t("Change") : t("Map")}
+                  </Button>
+                </li>
+              );
+            })}
+            {rows.length > limit ? (
+              <li className="p-2">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="w-full"
+                  onClick={() => setLimit((l) => l + 200)}
+                >
+                  {t("Show {count} more", {
+                    count: formatNumber(Math.min(200, rows.length - limit)),
+                  })}
+                </Button>
+              </li>
+            ) : null}
+          </ul>
         )}
-      </GuideGroup>
+      </section>
     </div>
   );
 }
@@ -631,6 +802,8 @@ export function GuideMatchPanel({
   onUse,
   onOpenChannel,
   setFooter,
+  scopeSourceId,
+  scopeName,
 }: {
   channel: Channel;
   sourceName: string;
@@ -638,10 +811,15 @@ export function GuideMatchPanel({
   coverage?: Coverage;
   onUse: (c: Channel) => Promise<void>;
   onOpenChannel: () => void;
+  /** When opened from a guide source, search that source first. */
+  scopeSourceId?: string;
+  scopeName?: string;
   setFooter: (footer: React.ReactNode) => void;
 }) {
   const [q, setQ] = useState(channel.name);
   const debounced = useDebouncedValue(q, 200);
+  const [scope, setScope] = useState<"this" | "all">(scopeSourceId ? "this" : "all");
+  const [widened, setWidened] = useState(false);
   const [items, setItems] = useState<GuideChannel[] | null>(null);
   const [error, setError] = useState("");
   const [pick, setPick] = useState<GuideChannel | null>(null);
@@ -650,9 +828,15 @@ export function GuideMatchPanel({
 
   useEffect(() => {
     const ctl = new AbortController();
-    tv.guideChannels(debounced.trim(), ctl.signal, 12)
-      .then((r) => {
-        const list = r ?? [];
+    const query = debounced.trim();
+    const scoped = scope === "this" ? scopeSourceId : undefined;
+    tv.guideChannels(query, ctl.signal, 12, scoped)
+      .then(async (r) => {
+        let list = r ?? [];
+        // Nothing in the selected guide: look across every guide rather than dead-end.
+        const widen = Boolean(scoped && query && list.length === 0);
+        if (widen) list = (await tv.guideChannels(query, ctl.signal, 12)) ?? [];
+        setWidened(widen && list.length > 0);
         setItems(list);
         setError("");
         setPick(
@@ -667,7 +851,7 @@ export function GuideMatchPanel({
         if (!isAbort(e)) setError(errorMessage(e));
       });
     return () => ctl.abort();
-  }, [debounced, channel]);
+  }, [debounced, channel, scope, scopeSourceId]);
 
   const changed = pick !== null && !sameGuide(channel, pick);
   const use = async (next: Channel) => {
@@ -730,9 +914,23 @@ export function GuideMatchPanel({
       </div>
 
       <section className="space-y-2">
-        <h3 className="text-xs font-semibold uppercase tracking-wider text-fg-subtle">
-          {t("Guide channels")}
-        </h3>
+        <div className="flex flex-wrap items-center gap-2">
+          <h3 className="flex-1 text-xs font-semibold uppercase tracking-wider text-fg-subtle">
+            {t("Guide channels")}
+          </h3>
+          {scopeSourceId ? (
+            <Segmented
+              ariaLabel={t("Search in")}
+              size="sm"
+              value={scope}
+              onChange={setScope}
+              options={[
+                { value: "this", label: scopeName || t("This guide") },
+                { value: "all", label: t("All guides") },
+              ]}
+            />
+          ) : null}
+        </div>
         <div className="relative">
           <Search
             size={14}
@@ -748,6 +946,13 @@ export function GuideMatchPanel({
           />
         </div>
         {error ? <p className="text-xs text-danger">{error}</p> : null}
+        {widened ? (
+          <p className="text-xs text-fg-muted">
+            {t("Nothing in {guide} matches, so these are from every guide.", {
+              guide: scopeName || t("this guide"),
+            })}
+          </p>
+        ) : null}
         {items === null ? (
           <p className="py-3 text-center text-xs text-fg-muted">{t("Searching guides…")}</p>
         ) : items.length === 0 ? (
@@ -812,127 +1017,5 @@ export function GuideMatchPanel({
         <ListingsPreview channel={channel} pick={pick} />
       </section>
     </div>
-  );
-}
-
-/** Suggested matches for every channel without listings, reviewed before applying. */
-export function AutoMatchPanel({
-  channels,
-  sources,
-  onApplied,
-  setFooter,
-}: {
-  channels: Channel[];
-  sources: Source[];
-  onApplied: () => Promise<void>;
-  setFooter: (footer: React.ReactNode) => void;
-}) {
-  const [proposals, setProposals] = useState<MatchChange[] | null>(null);
-  const [accepted, setAccepted] = useState<Set<string>>(new Set());
-  const [error, setError] = useState("");
-  const [busy, setBusy] = useState(false);
-  const byId = useMemo(() => new Map(channels.map((c) => [c.id, c])), [channels]);
-  const sourceName = (id?: string) => sources.find((s) => s.id === id)?.name ?? "";
-
-  useEffect(() => {
-    tv.match({ dryRun: true })
-      .then((r) => {
-        const changes = r.changes ?? [];
-        setProposals(changes);
-        setAccepted(new Set(changes.filter((c) => c.method !== "alias").map((c) => c.channelId)));
-      })
-      .catch((e) => setError(errorMessage(e)));
-  }, []);
-
-  useEffect(() => {
-    setFooter(
-      <div className="flex w-full items-center gap-2">
-        <span className="text-xs text-fg-muted">
-          {t("Matched by guide id, then by channel name.")}
-        </span>
-        <Button
-          className="ml-auto"
-          disabled={busy || accepted.size === 0}
-          onClick={() => {
-            setBusy(true);
-            tv.match({ channelIds: [...accepted] })
-              .then(async (r) => {
-                toast.success(
-                  tn(
-                    r.matched,
-                    "{count} channel matched to a guide",
-                    "{count} channels matched to a guide",
-                  ),
-                );
-                await onApplied();
-              })
-              .catch((e) =>
-                toast.error(t("Couldn't apply matches"), { description: errorMessage(e) }),
-              )
-              .finally(() => setBusy(false));
-          }}
-        >
-          <CheckCircle2 size={14} /> {t("Apply {count}", { count: accepted.size })}
-        </Button>
-      </div>,
-    );
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [accepted, busy]);
-
-  if (error) return <p className="text-sm text-danger">{error}</p>;
-  if (proposals === null)
-    return <p className="py-10 text-center text-sm text-fg-muted">{t("Finding matches…")}</p>;
-  if (!proposals.length)
-    return (
-      <div className="rounded-xl border border-dashed border-border p-8 text-center">
-        <p className="text-sm font-medium text-fg">{t("No new matches found")}</p>
-        <p className="mt-1 text-xs text-fg-muted">
-          {t("Open a channel to search every guide by hand, or add another guide source.")}
-        </p>
-      </div>
-    );
-  return (
-    <ul className="space-y-1">
-      {proposals.map((p) => {
-        const c = byId.get(p.channelId);
-        const on = accepted.has(p.channelId);
-        return (
-          <li key={p.channelId}>
-            <label className="flex cursor-pointer items-center gap-3 rounded-lg border border-border bg-surface px-3 py-2 text-sm">
-              <input
-                type="checkbox"
-                checked={on}
-                onChange={() =>
-                  setAccepted((s) => {
-                    const n = new Set(s);
-                    if (on) n.delete(p.channelId);
-                    else n.add(p.channelId);
-                    return n;
-                  })
-                }
-                aria-label={t("Accept match for {channel}", { channel: c?.name ?? p.channelId })}
-              />
-              {c ? <ChannelLogo name={c.name} logo={c.logo} seed={c.id} size={28} /> : null}
-              <span className="min-w-0 flex-1">
-                <span className="block truncate text-fg">
-                  {c?.name ?? p.channelName ?? p.channelId}
-                </span>
-                <span className="flex min-w-0 items-center gap-1 text-xs text-fg-muted">
-                  <ArrowRight size={11} className="shrink-0" />
-                  <span className="truncate">
-                    {p.guideName} · {p.guideSourceName || sourceName(p.guideSourceId)}
-                  </span>
-                </span>
-              </span>
-              {p.method === "name" ? (
-                <Badge variant="secondary">{t("by name")}</Badge>
-              ) : p.method === "alias" ? (
-                <Badge variant="secondary">{t("Review call sign")}</Badge>
-              ) : null}
-            </label>
-          </li>
-        );
-      })}
-    </ul>
   );
 }

@@ -288,10 +288,11 @@ export const tv = {
   refreshSource: (id: string) =>
     apiFetch<Source>(`/livetv/sources/${enc(id)}/refresh`, { method: "POST" }),
   deleteSource: (id: string) => apiFetch(`/livetv/sources/${enc(id)}`, { method: "DELETE" }),
-  guideChannels: (q: string, signal?: AbortSignal, limit = 50) =>
-    apiFetch<GuideChannel[] | null>(`/livetv/guide/channels?q=${enc(q)}&limit=${limit}`, {
-      signal,
-    }),
+  guideChannels: (q: string, signal?: AbortSignal, limit = 50, source?: string) =>
+    apiFetch<GuideChannel[] | null>(
+      `/livetv/guide/channels?q=${enc(q)}&limit=${limit}${source ? `&source=${enc(source)}` : ""}`,
+      { signal },
+    ),
   coverage: (signal?: AbortSignal) =>
     apiFetch<Coverage[] | null>("/livetv/guide/coverage", { signal }),
   match: (body: { channelIds?: string[]; overwrite?: boolean; dryRun?: boolean }) =>
@@ -588,3 +589,13 @@ function zonedMinutes(ms: number, timeZone: string): { day: number; minute: numb
 export function loopLength(items: Item[]): number {
   return items.reduce((n, i) => n + (i.durationMs || 0), 0);
 }
+
+/** Sources that supply guide listings: XMLTV guides, Plex lineups, and M3U playlists with a guide. */
+export const isGuideSource = (s: Source) =>
+  s.kind === "plex" || s.hasGuide === true || Boolean(s.guideUrl) || (s.guideChannelCount ?? 0) > 0;
+
+/** Sources that supply channels; guide-only XMLTV sources and Plex lineups are not. */
+export const isChannelSource = (s: Source) =>
+  s.kind !== "plex" &&
+  s.hasPlaylist !== false &&
+  !(!s.playlistUrl && !s.channelCount && (s.guideChannelCount ?? 0) > 0);

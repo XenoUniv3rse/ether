@@ -306,7 +306,7 @@ describe("Live TV studio", () => {
     expect(
       await screen.findByText(/0 of 1 on-air channels have listings/, {}, WAIT),
     ).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: /Guide for .*News 24/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Map guide for News 24/ }));
     fireEvent.click(await screen.findByRole("button", { name: /News 24 HD/ }, WAIT));
     fireEvent.click(await screen.findByRole("button", { name: /Use this guide/ }, WAIT));
     await waitFor(() => expect(sent(calls, "PUT", /\/livetv\/channels\/c1$/)).toHaveLength(1));

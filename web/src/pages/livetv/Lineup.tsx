@@ -17,6 +17,7 @@ import {
   clock,
   dayClock,
   duration,
+  isChannelSource,
   onNow,
   progress,
   type Channel,
@@ -273,20 +274,21 @@ export function SourceList({
   selected: Selection;
   onSelect: (s: Selection) => void;
 }) {
+  const channelSources = sources.filter(isChannelSource);
   return (
     <div className="space-y-4 p-3 sm:p-4">
       <div className="space-y-1.5">
         <h2 className="px-1 text-[11px] font-semibold uppercase tracking-wider text-fg-subtle">
-          {t("Sources")}
+          {t("Channel sources")}
         </h2>
-        {sources.length === 0 ? (
+        {channelSources.length === 0 ? (
           <p className="px-1 text-xs text-fg-muted">
             {t(
-              "No sources yet. Add an M3U playlist for IPTV channels, or an XMLTV guide on its own to give channels programme data.",
+              "No channel sources yet. Add an M3U playlist or an add-on for IPTV channels. Guides live on the Guide tab.",
             )}
           </p>
         ) : null}
-        {sources.map((s) => {
+        {channelSources.map((s) => {
           const on = selected.kind === "source" && selected.id === s.id;
           const epgOnly =
             s.hasPlaylist === false ||

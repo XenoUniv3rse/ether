@@ -31,7 +31,7 @@ import {
   type CollectionChoice,
   type StudioDraft,
 } from "./ChannelStudio";
-import { AutoMatchPanel, GuideList, GuideMatchPanel } from "./GuideData";
+import { GuideMatchPanel, GuideSourceList, GuideWorkbench } from "./GuideData";
 import { GuideGrid, OnNowStrip } from "./GuideGrid";
 import { ChannelList, SourceList, type Selection } from "./Lineup";
 import { SourceEditor, type SourceKind } from "./SourceEditor";
@@ -44,7 +44,9 @@ import {
   emptyChannel,
   emptySource,
   groupBy,
+  isChannelSource,
   nextNumber,
+  plexLineupName,
   tv,
   type Channel,
   type Coverage,
@@ -92,6 +94,8 @@ export default function LiveTV() {
   const navigate = useNavigate();
   const [params, setParams] = useSearchParams();
   const selection = selectionFrom(params);
+  // The Guide tab's selected guide source; none means All guides.
+  const guideSourceId = params.get("gsrc");
   const [leftTab, setLeftTab] = useState(
     tab === "guide-data"
       ? "guide"
@@ -125,9 +129,7 @@ export default function LiveTV() {
   const [guideOnlyFlow, setGuideOnlyFlow] = useState(false);
   const [guideMode, setGuideMode] = useState<"xmltv" | "plex">("xmltv");
   const [addingAddon, setAddingAddon] = useState(false);
-  const [autoMatching, setAutoMatching] = useState(false);
   const [guideFooter, setGuideFooter] = useState<React.ReactNode>(null);
-  const [matchFooter, setMatchFooter] = useState<React.ReactNode>(null);
 
   useInterval(() => setNow(Date.now()), 30_000);
   const from = useMemo(() => windowStart(shift), [shift]);
@@ -289,10 +291,13 @@ export default function LiveTV() {
       if (next.kind === "new") p.set("channel", "new");
       if (next.kind === "source") p.set("source", next.id);
       if (next.kind === "map") p.set("guide", next.id);
+      // Guide drawers open over the selected guide source's workbench.
+      const gsrc = params.get("gsrc");
+      if (gsrc && next.kind !== "channel" && next.kind !== "new") p.set("gsrc", gsrc);
       if (tab === "guide-data") navigate(`/livetv${p.size ? `?${p}` : ""}`);
       else setParams(p);
     },
-    [dirty, draft, navigate, setParams, tab],
+    [dirty, draft, navigate, params, setParams, tab],
   );
 
   const startNew = async (templateKey: string) => {
@@ -458,6 +463,14 @@ export default function LiveTV() {
     </div>
   ) : null;
 
+  const addGuideSource = () => {
+    setNewKind("guide");
+    setEditorKind("guide");
+    setGuideOnlyFlow(true);
+    setGuideMode("xmltv");
+    void go({ kind: "source", id: "new" });
+  };
+
   const aside = (
     <>
       <PanelHead>
@@ -497,7 +510,11 @@ export default function LiveTV() {
           onSelect={setLeftTab}
           tabs={[
             { key: "channels", label: t("Channels"), count: filtered.length },
-            { key: "sources", label: t("Sources"), count: sources.length || undefined },
+            {
+              key: "sources",
+              label: t("Sources"),
+              count: sources.filter(isChannelSource).length || undefined,
+            },
             { key: "guide", label: t("Guide"), count: missingCount || undefined },
           ]}
         />
@@ -548,22 +565,15 @@ export default function LiveTV() {
       ) : leftTab === "sources" ? (
         <SourceList sources={sources} selected={selection} onSelect={(s) => void go(s)} />
       ) : (
-        <GuideList
-          channels={filtered}
+        <GuideSourceList
           lineup={sorted}
           sources={sources}
           coverage={coverage}
-          selected={selection.kind === "map" ? selection.id : null}
-          onSelect={(id) => void go({ kind: "map", id })}
-          onOpenSource={(id) => void go({ kind: "source", id })}
-          onAutoMatch={() => setAutoMatching(true)}
-          onAddGuideSource={() => {
-            setNewKind("guide");
-            setEditorKind("guide");
-            setGuideOnlyFlow(true);
-            setGuideMode("xmltv");
-            void go({ kind: "source", id: "new" });
-          }}
+          selected={guideSourceId}
+          onSelect={(id) =>
+            setParams(id ? new URLSearchParams({ gsrc: id }) : new URLSearchParams())
+          }
+          onAddGuideSource={addGuideSource}
           now={now}
         />
       )}
@@ -583,35 +593,50 @@ export default function LiveTV() {
   const missingChannel =
     selection.kind === "channel" && channels !== null && !savedChannel && !draft;
 
-  // Every tab keeps the live guide on the right; records open in drawers.
-  const mainClassName = "flex flex-col lg:overflow-hidden";
-  const main = (
-    <>
-      <OnNowStrip
-        channels={filtered}
-        guide={guide}
+  // Channels and Sources keep the live guide on the right; the Guide tab's
+  // right side is the guide workbench for All guides or one guide source.
+  const guideSource = guideSourceId ? sources.find((x) => x.id === guideSourceId) : undefined;
+  const mainClassName = leftTab === "guide" ? "" : "flex flex-col lg:overflow-hidden";
+  const main =
+    leftTab === "guide" ? (
+      <GuideWorkbench
+        channels={sorted}
+        sources={sources}
+        coverage={coverage}
+        source={guideSource}
+        onMapChannel={(id) => void go({ kind: "map", id })}
+        onAddGuideSource={addGuideSource}
+        onEditSource={(id) => void go({ kind: "source", id })}
+        onReload={reloadAll}
         now={now}
-        onSelect={(id) => void go({ kind: "channel", id })}
       />
-      <div className="min-h-0 flex-1">
-        <GuideGrid
+    ) : (
+      <>
+        <OnNowStrip
           channels={filtered}
           guide={guide}
-          from={from}
-          until={until}
           now={now}
-          selected={selection.kind === "channel" ? selection.id : null}
           onSelect={(id) => void go({ kind: "channel", id })}
-          onShift={(h) => setShift((s) => s + h)}
-          onNow={() => {
-            setShift(0);
-            setNow(Date.now());
-          }}
-          loading={guideLoading}
         />
-      </div>
-    </>
-  );
+        <div className="min-h-0 flex-1">
+          <GuideGrid
+            channels={filtered}
+            guide={guide}
+            from={from}
+            until={until}
+            now={now}
+            selected={selection.kind === "channel" ? selection.id : null}
+            onSelect={(id) => void go({ kind: "channel", id })}
+            onShift={(h) => setShift((s) => s + h)}
+            onNow={() => {
+              setShift(0);
+              setNow(Date.now());
+            }}
+            loading={guideLoading}
+          />
+        </div>
+      </>
+    );
 
   const channelTitle =
     selection.kind === "new"
@@ -694,31 +719,17 @@ export default function LiveTV() {
             }}
             onOpenChannel={() => void go({ kind: "channel", id: guideChannel.id })}
             setFooter={setGuideFooter}
+            scopeSourceId={guideSource?.id}
+            scopeName={
+              guideSource
+                ? guideSource.kind === "plex"
+                  ? plexLineupName(guideSource.name)
+                  : guideSource.name
+                : undefined
+            }
           />
         ) : channels !== null ? (
           <p className="text-sm text-fg-muted">{t("This channel no longer exists.")}</p>
-        ) : null}
-      </Drawer>
-      <Drawer
-        open={autoMatching}
-        onClose={() => setAutoMatching(false)}
-        title={t("Auto-match guides")}
-        description={t(
-          "Suggested guide channels for channels without listings. Untick any you don't want.",
-        )}
-        size="md"
-        footer={autoMatching ? matchFooter : undefined}
-      >
-        {autoMatching ? (
-          <AutoMatchPanel
-            channels={sorted}
-            sources={sources}
-            onApplied={async () => {
-              setAutoMatching(false);
-              await reloadAll();
-            }}
-            setFooter={setMatchFooter}
-          />
         ) : null}
       </Drawer>
       <Drawer
@@ -824,11 +835,14 @@ export default function LiveTV() {
             onKindChange={setEditorKind}
             onSaved={async (s) => {
               await reloadAll();
-              if (selection.kind === "source" && selection.id === "new" && s?.id)
-                await go({ kind: "source", id: s.id }, { force: true });
+              const created = selection.kind === "source" && selection.id === "new" && s?.id;
+              // A guide added from the Guide tab opens in its workbench.
+              if (created && leftTab === "guide") setParams(new URLSearchParams({ gsrc: s.id }));
+              else if (created) await go({ kind: "source", id: s.id }, { force: true });
             }}
             onDeleted={async () => {
-              await go({ kind: "guide" }, { force: true });
+              if (leftTab === "guide") setParams(new URLSearchParams());
+              else await go({ kind: "guide" }, { force: true });
               await reloadAll();
             }}
           />
