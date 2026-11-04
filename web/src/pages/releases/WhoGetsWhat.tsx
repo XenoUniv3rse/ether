@@ -1,4 +1,5 @@
 import { Badge, SearchSelect, SettingsSection, cn } from "@braedonsaunders/appkit-ui";
+import { Link } from "react-router-dom";
 import { useState } from "react";
 import { ErrorPanel, LoadingRows } from "../../components/feedback";
 import { Segmented } from "../../components/fields";
@@ -149,9 +150,9 @@ function Answer({ answer, viewer }: { answer: QualityAnswer; viewer: string }) {
               )}
               {l.edited ? <Badge variant="secondary">{t("Edited")}</Badge> : null}
               <div>
-                <a
+                <Link
                   className="text-sm text-primary underline"
-                  href={
+                  to={
                     l.kind === "device"
                       ? "/playback/devices/apps"
                       : l.kind === "viewer-cap" || l.kind === "remote-blocked"
@@ -164,7 +165,7 @@ function Answer({ answer, viewer }: { answer: QualityAnswer; viewer: string }) {
                   }
                 >
                   {l.decisive ? t("Edit") : t("Set limit")}
-                </a>
+                </Link>
               </div>
             </li>
           );
