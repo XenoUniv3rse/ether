@@ -141,6 +141,7 @@ func goHostCall(ctx context.Context, mod api.Module, stack []uint64) {
 // missing exports) surface here, not on first call.
 func (e *Engine) LoadWASM(id, version string, module []byte, host Host, lim Limits) (*Plugin, error) {
 	lim.normalize()
+	e.scaleHot(&lim)
 	rr, err := e.rawRuntimeFor(lim.MemoryBytes)
 	if err != nil {
 		return nil, err

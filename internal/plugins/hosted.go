@@ -122,7 +122,7 @@ func HostedRuntimeFactory(eng *wasm.Engine) RuntimeFactory {
 			if err != nil {
 				return nil, err
 			}
-			return &hostedRuntime{p: p, budgets: EffectiveBudgets(lim)}, nil
+			return &hostedRuntime{p: p}, nil
 		case decl.Entry != "":
 			src, ok := inst.Files(decl.Entry)
 			if !ok {
@@ -140,7 +140,7 @@ func HostedRuntimeFactory(eng *wasm.Engine) RuntimeFactory {
 			if err != nil {
 				return nil, err
 			}
-			return &hostedRuntime{p: p, budgets: EffectiveBudgets(lim)}, nil
+			return &hostedRuntime{p: p}, nil
 		default:
 			return nil, fmt.Errorf("plugin %s: hosted runtime needs an entry or a module", inst.ID)
 		}
@@ -161,12 +161,12 @@ func diagnosticsError(diags []wasm.Diagnostic) error {
 }
 
 type hostedRuntime struct {
-	p       *wasm.Plugin
-	budgets HotBudgets
+	p *wasm.Plugin
 }
 
-// EffectiveBudgets mirrors the engine's clamping so callers see the limits
-// that actually apply.
+// EffectiveBudgets mirrors the engine's clamping: the budgets a manifest
+// gets as SPEC 5.2 states them, in reference-machine time. The engine
+// scales them by its measured speed (wasm.HotScale); Budgets reports that.
 func EffectiveBudgets(lim wasm.Limits) HotBudgets {
 	per, batch := lim.RankPerCandidate, lim.RankBatch
 	if per <= 0 || per > wasm.DefaultRankPerCandidate {
@@ -178,7 +178,12 @@ func EffectiveBudgets(lim wasm.Limits) HotBudgets {
 	return HotBudgets{PerCandidate: per, PerBatch: batch}
 }
 
-func (r *hostedRuntime) Budgets() HotBudgets { return r.budgets }
+// Budgets reports the limits in force on this machine: the manifest's,
+// scaled by the engine's measured speed.
+func (r *hostedRuntime) Budgets() HotBudgets {
+	per, batch := r.p.Budgets()
+	return HotBudgets{PerCandidate: per, PerBatch: batch}
+}
 
 func (r *hostedRuntime) Call(ctx context.Context, req Request) (Response, error) {
 	q := make(map[string][]string, len(req.Query))

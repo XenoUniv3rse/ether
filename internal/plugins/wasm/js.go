@@ -488,6 +488,7 @@ func (in *jsInstance) condOne(ctx context.Context, cs *callState, cand []byte, o
 // handle surface at load.
 func (e *Engine) LoadJS(id, version, source string, host Host, lim Limits) (*Plugin, error) {
 	lim.normalize()
+	e.scaleHot(&lim)
 	p := &Plugin{id: id, version: version, eng: e, host: host, lim: lim, memo: newMemo(4096), source: source}
 	makeSvc := func(ctx context.Context) (instance, error) {
 		in, err := newJSInstance(ctx, source, &p.lim, false)

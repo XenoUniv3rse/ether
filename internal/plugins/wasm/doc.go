@@ -71,5 +71,8 @@
 // stops starting candidates when its budget is spent; what it finished is
 // memoized, so the next batch for the same releases continues from there.
 // Separately, a hard deadline of twice the batch budget (Limits.hotKill)
-// kills an instance whose code stops returning.
+// kills an instance whose code stops returning. The budgets are stated in
+// reference-machine time; the engine measures its own speed once per
+// process and scales them (see HotScale), so a slow CPU or a race-detector
+// build does not cost a light plugin its ranking.
 package wasm

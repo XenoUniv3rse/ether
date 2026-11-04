@@ -530,6 +530,8 @@ type Engine struct {
 	mu     sync.Mutex
 	raw    map[uint32]*rawRuntime // by memory-limit pages
 	closed bool
+	// speedLog logs the engine's measured speed once (see HotScale).
+	speedLog sync.Once
 }
 
 func NewEngine(logger *slog.Logger) *Engine {
@@ -572,7 +574,14 @@ func (p *Plugin) ID() string      { return p.id }
 func (p *Plugin) Version() string { return p.version }
 
 // HasHandle, HasRankKey and HasCondMatch report the exported entry points.
-func (p *Plugin) HasHandle() bool    { return p.caps.Handle }
+func (p *Plugin) HasHandle() bool { return p.caps.Handle }
+
+// Budgets reports the plugin's effective hot-path budgets: the manifest's
+// (lowered, never raised), scaled by the engine's measured speed.
+func (p *Plugin) Budgets() (perCandidate, perBatch time.Duration) {
+	return p.lim.RankPerCandidate, p.lim.RankBatch
+}
+
 func (p *Plugin) HasRankKey() bool   { return p.caps.RankKey }
 func (p *Plugin) HasCondMatch() bool { return p.caps.CondMatch }
 
