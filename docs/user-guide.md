@@ -848,25 +848,20 @@ the viewer is inactive or the session ends.
 
 ## Plex account watch state
 
-In **Viewers**, open a viewer's **Limits & preferences** and connect that
-viewer's Plex account under **Plex account watch state**. Approve the sign-in
-with that same account and enable **Sync My Watch State and Ratings** in Plex.
-Choose **Off**, **Ether → Plex**, **Plex → Ether**, or **Both**. Existing
-connections that already sent changes keep **Ether → Plex** after upgrade;
-connections that were off stay off.
+Syncing watched state with a viewer's Plex account is **unavailable**. Plex
+accepts watch-state sync only from its own servers: the per-user credential
+Plex issues for it works only inside Plex Media Server, and Plex's watch-state
+service refuses it from any other server. Ether therefore cannot send watched
+state or ratings to a Plex account, or import them from one.
 
-Inbound sync checks for changes every 10 minutes by default; choose 5, 10, 30,
-or 60 minutes. **Import now** uses the same incremental cursor and retry limits.
-Ether backs off when Plex asks it to wait or reports a temporary error. Newer
-watch and rating changes win independently, and imported changes are not sent
-back as new changes. Uploading existing Ether state remains a separate explicit
-**Export current state** action; enabling outbound sync sends future changes.
+In **Viewers › Limits & preferences**, the **Plex account watch state** section
+says so plainly. A Plex account connected in an earlier version stays listed and
+can still be removed with **Disconnect**; its sync settings are kept. Changes
+that were waiting to be sent are kept as they are and are not retried, so
+nothing is lost if Plex ever offers a path for other servers.
 
-The section shows the last successful import and send, the next scheduled import,
-any current problem, and unmatched Plex title identifiers for review. Plex account
-sync covers watched or unwatched state and ratings, not resume positions. If the
-account cannot read watch state, the connected credential may lack permission;
-reconnecting or changing consent is not guaranteed to grant that permission.
+Watch state is unaffected inside Ether: watched marks, ratings and resume
+positions still sync between every app a viewer uses with Ether.
 
 ## Source interruptions
 
