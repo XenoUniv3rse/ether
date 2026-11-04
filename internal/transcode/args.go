@@ -220,7 +220,7 @@ func buildCodecArgs(s runSpec) []string {
 	// the input past it leaves the AAC decoder without its channel layout.
 	// Decode from the beginning and discard to the requested output position
 	// for this precise source class; ordinary sources retain fast input seeks.
-	pceOutputSeek := s.Start > 0 && s.Info.Container == "mpegts" && a != nil && a.AACProgramConfig && !d.AudioCopy
+	pceOutputSeek := s.Protocol == core.ProtocolHLS && d.Container != ContainerMatroska && s.Start > 0 && s.Info.Container == "mpegts" && a != nil && a.AACProgramConfig && !d.AudioCopy
 	segDur := s.SegDur
 	if segDur <= 0 {
 		segDur = DefaultSegmentDuration
@@ -287,7 +287,9 @@ func buildCodecArgs(s runSpec) []string {
 		args = append(args, "-i", textSub.ExternalURL)
 	}
 	if pceOutputSeek {
-		args = append(args, "-ss", secs(s.Start))
+		// Output seeking rebases packet timestamps even with -copyts. Put
+		// the result back on the title clock used by the segment slotter.
+		args = append(args, "-ss", secs(s.Start), "-output_ts_offset", secs(s.Start))
 	}
 
 	// ---- mapping
@@ -599,8 +601,8 @@ func even(n int) int {
 }
 
 // cpuToneMap converts PQ/HLG to SDR BT.709 in software. zscale (zimg) is
-// the accurate path when this ffmpeg has it. libplacebo, then
-// tonemap_opencl, are the alternatives. There is no retag-only fallback:
+// the accurate path when this ffmpeg has it. libplacebo, tonemapx and
+// tonemap_opencl are the alternatives. There is no retag-only fallback:
 // a washed-out picture is not a tone map. ok is false when none of those
 // filters were probed.
 func cpuToneMap(f features) (string, bool) {
@@ -609,6 +611,9 @@ func cpuToneMap(f features) (string, bool) {
 	}
 	if f.hasFilter("libplacebo") {
 		return "libplacebo=tonemapping=hable:color_primaries=bt709:color_trc=bt709:colorspace=bt709:range=tv", true
+	}
+	if f.hasFilter("tonemapx") {
+		return "tonemapx=tonemap=hable:desat=0:t=bt709:m=bt709:p=bt709:format=yuv420p", true
 	}
 	if f.hasFilter("tonemap_opencl") {
 		return "format=p010le,hwupload,tonemap_opencl=tonemap=hable:desat=0:format=nv12,hwdownload,format=nv12", true

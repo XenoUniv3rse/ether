@@ -127,6 +127,9 @@ func toneMapPaths(f features, hw core.HWAccel) []string {
 	if f.hasFilter("libplacebo") {
 		out = append(out, "libplacebo")
 	}
+	if f.hasFilter("tonemapx") {
+		out = append(out, "tonemapx")
+	}
 	if f.hasFilter("tonemap_opencl") {
 		out = append(out, "opencl")
 	}

@@ -40,11 +40,18 @@ func TestTranscodeChaosMatrix(t *testing.T) {
 	if os.Getenv("CHAOS_DEBUG") != "" {
 		logs = os.Stderr
 	}
-	m, err := transcode.New(config.Transcode{FFmpegPath: ff, FFprobePath: fp, HWAccel: "none", TempDir: filepath.Join(t.TempDir(), "work")}, slog.New(slog.NewTextHandler(logs, nil)), transcode.WithSegmentTimeout(10*time.Second))
+	hw := os.Getenv("CHAOS_HW")
+	if hw == "" {
+		hw = "none"
+	}
+	m, err := transcode.New(config.Transcode{FFmpegPath: ff, FFprobePath: fp, HWAccel: hw, TempDir: filepath.Join(t.TempDir(), "work")}, slog.New(slog.NewTextHandler(logs, nil)), transcode.WithSegmentTimeout(10*time.Second))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer m.Close()
+	if hw != "none" && m.HWAccel().Name != hw {
+		t.Skip("requested hardware encoder unavailable")
+	}
 	check := func(t *testing.T, b []byte, ext string, damaged bool) {
 		t.Helper()
 		if len(b) == 0 {
@@ -54,8 +61,24 @@ func TestTranscodeChaosMatrix(t *testing.T) {
 		if e := os.WriteFile(p, b, 0600); e != nil {
 			t.Fatal(e)
 		}
+		if output := os.Getenv("CHAOS_CAPTURE"); output != "" {
+			if e := os.WriteFile(output, b, 0600); e != nil {
+				t.Fatal(e)
+			}
+		}
 		chaosCmd(t, fp, "-v", "error", "-show_streams", p)
 		chaosDecodeMedia(t, ff, fp, p, damaged)
+	}
+	checkAudio := func(t *testing.T, b []byte, ext string) {
+		t.Helper()
+		p := filepath.Join(t.TempDir(), "audio."+ext)
+		if err := os.WriteFile(p, b, 0600); err != nil {
+			t.Fatal(err)
+		}
+		packets, err := exec.Command(fp, "-v", "error", "-select_streams", "a:0", "-show_entries", "packet=pts_time", "-of", "csv=p=0", p).Output()
+		if err != nil || len(strings.TrimSpace(string(packets))) == 0 {
+			t.Fatal("seeked output has no audio packets")
+		}
 	}
 	for _, entry := range entries {
 		name := strings.TrimSuffix(filepath.Base(entry), ".good")
@@ -164,6 +187,15 @@ func TestTranscodeChaosMatrix(t *testing.T) {
 						for n := 0; n < 3 && (info.Duration <= 0 || time.Duration(n)*4*time.Second < info.Duration); n++ {
 							check(t, get(fmt.Sprintf("/video/:/transcode/universal/session/%s/base/%05d.ts", id, n)), "ts", strings.HasPrefix(name, "input-corrupt-"))
 						}
+						if name == "input-multi-audio" {
+							seekID := id + "-seek"
+							seekQuery := strings.Replace(query, "session="+id, "session="+seekID, 1)
+							get("/video/:/transcode/universal/start.m3u8?" + seekQuery + "&protocol=hls&offset=6")
+							media := get("/video/:/transcode/universal/session/" + seekID + "/base/00000.ts")
+							check(t, media, "ts", false)
+							checkAudio(t, media, "ts")
+							get("/video/:/transcode/universal/stop?session=" + seekID)
+						}
 					case "hls-fmp4":
 						get("/video/:/transcode/universal/start.m3u8?" + query + "&protocol=hls")
 						if len(recorder.requests) == 0 || recorder.requests[len(recorder.requests)-1].Decision.Container != "fmp4" {
@@ -184,14 +216,7 @@ func TestTranscodeChaosMatrix(t *testing.T) {
 							media := get(seekBase + "00000.m4s")
 							joined := append(seekInit, media...)
 							check(t, joined, "mp4", false)
-							seekFile := filepath.Join(t.TempDir(), "seek.mp4")
-							if err := os.WriteFile(seekFile, joined, 0600); err != nil {
-								t.Fatal(err)
-							}
-							audio, err := exec.Command(fp, "-v", "error", "-select_streams", "a:0", "-show_entries", "packet=pts_time", "-of", "csv=p=0", seekFile).Output()
-							if err != nil || len(strings.TrimSpace(string(audio))) == 0 {
-								t.Fatal("seeked fMP4 has no audio packets")
-							}
+							checkAudio(t, joined, "mp4")
 							get("/video/:/transcode/universal/stop?session=" + seekID)
 						}
 					case "dash":
