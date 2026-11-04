@@ -149,7 +149,13 @@ func (s *Service) plexGuideRequest(ctx context.Context, path string, q url.Value
 	}
 	release, err := s.acquirePlexGate(ctx)
 	if err != nil {
-		return result, err
+		if ctx.Err() != nil {
+			return result, ctx.Err()
+		}
+		if err.Error() == "Plex guide rate-limited; retry later" {
+			return result, err
+		}
+		return result, fmt.Errorf("Plex guide is unavailable")
 	}
 	defer func() { release(s.plexGate.next, s.plexGate.status) }()
 	base := plexGuideURL
