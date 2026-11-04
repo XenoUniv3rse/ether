@@ -556,7 +556,7 @@ export function GuideWorkbench({
 
       <section aria-label={t("Channel guide mapping")} className="space-y-3">
         <div className="flex flex-wrap items-center gap-3">
-          <div className="min-w-0 flex-1">
+          <div className="min-w-0 basis-full sm:basis-auto sm:flex-1">
             <h2 className="text-sm font-semibold text-fg">{t("Channel mapping")}</h2>
             <p className="mt-1 text-xs text-fg-muted">
               {t("Map a channel from Missing or All IPTV, or run Auto-match.")}
@@ -619,11 +619,14 @@ export function GuideWorkbench({
               const ok = has(c);
               const guideSrc = c.guideSourceId || c.sourceId;
               return (
-                <li key={c.id} className="flex items-center gap-3 px-3 py-2">
+                <li
+                  key={c.id}
+                  className="flex flex-wrap items-center gap-3 px-3 py-2 sm:flex-nowrap"
+                >
                   <button
                     type="button"
                     onClick={() => onMapChannel(c.id)}
-                    className="flex min-w-0 flex-1 items-center gap-2.5 text-left"
+                    className="flex min-w-0 basis-full items-center gap-2.5 text-left sm:basis-auto sm:flex-1"
                   >
                     <ChannelLogo name={c.name} logo={c.logo} seed={c.id} size={30} />
                     <span className="min-w-0">
@@ -654,7 +657,7 @@ export function GuideWorkbench({
                       <span className="text-xs text-fg-subtle">{t("Not mapped")}</span>
                     )}
                   </span>
-                  <span className="w-36 shrink-0 text-right text-[11px] text-fg-muted">
+                  <span className="ml-auto shrink-0 text-right text-[11px] text-fg-muted sm:ml-0 sm:w-36">
                     {ok ? (
                       <Badge variant="success" className="whitespace-nowrap">
                         {cov?.until ? t("to {time}", { time: dayClock(cov.until) }) : t("Listed")}
