@@ -131,7 +131,7 @@ func consolePages() []consolePage {
 				section("preloading", T("Preloading"), T("household selection popular movies tv warm arrivals")),
 			},
 		}},
-		{id: "playback", label: T("Playback"), icon: "MonitorPlay", order: 40, meta: extend.PageMeta{
+		{id: "playback", label: T("Playback"), icon: "MonitorPlay", order: 15, meta: extend.PageMeta{
 			Route: "/playback", NavGroup: extend.NavGroupStreaming, InNav: true,
 			Sections: []extend.PageSection{
 				section("transcoding", T("Transcoding"), T("ffmpeg hardware gpu bitrate startup race health")),

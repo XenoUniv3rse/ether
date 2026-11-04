@@ -45,7 +45,7 @@ func TestConsoleDescriptorsRegister(t *testing.T) {
 	for group, ids := range map[string][]string{
 		"":          {"overview", "activity", "viewers"},
 		"library":   {"catalog", "collections", "home", "livetv", "calendar", "metadata"},
-		"streaming": {"sources", "releases", "cache", "playback"},
+		"streaming": {"sources", "playback", "releases", "cache"},
 		"server":    {"general", "apps", "integrations", "plugins", "notifications", "cluster", "maintenance"},
 	} {
 		var got []string
