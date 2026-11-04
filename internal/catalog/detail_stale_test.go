@@ -153,6 +153,11 @@ func TestSettledMovieAndEndedShowDetailsKeptForever(t *testing.T) {
 		t.Fatalf("ShowTrajectories: %+v %v", trajs, err)
 	}
 	// Test on-demand person filmography hydration via /person/999/combined_credits.
+	// The first browse starts it behind the read; the next one has it.
+	if _, err := c.Browse(ctx, core.BrowseQuery{Filter: core.Filter{Type: core.TypeMovie, Person: 999}}); err != nil {
+		t.Fatal(err)
+	}
+	c.WaitRefreshes()
 	page, err := c.Browse(ctx, core.BrowseQuery{Filter: core.Filter{Type: core.TypeMovie, Person: 999}})
 	if err != nil || page.Total != 1 || page.Items[0].Title != "Old Classic" {
 		t.Fatalf("on-demand person credits browse: %+v %v", page, err)
