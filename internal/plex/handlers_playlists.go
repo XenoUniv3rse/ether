@@ -525,7 +525,8 @@ func (s *Server) handlePlaylistItems(w http.ResponseWriter, r *http.Request) {
 		}
 		mc := &model.MediaContainer{RatingKey: pl.Key.String(), Key: "/playlists/" + pl.Key.String() + "/items", Title1: pl.Title, PlaylistType: "video", Smart: model.Ptr(true), LeafCount: model.Ptr(total), Composite: "/playlists/" + pl.Key.String() + "/composite/1"}
 		storedOnly := len(titles) > 0 && titles[0].Type == core.TypeEpisode
-		mc.Metadata = s.renderTitles(ctx, pr, titles, renderOpts{media: true, storedOnly: storedOnly})
+		sqlAvailability, _ := s.d.Catalog.(interface{ BrowseAvailabilityInSQL() bool })
+		mc.Metadata = s.renderTitles(ctx, pr, titles, renderOpts{media: true, storedOnly: storedOnly, availabilityInSQL: sqlAvailability != nil && sqlAvailability.BrowseAvailabilityInSQL()})
 		for i := range mc.Metadata {
 			mc.Metadata[i].PlaylistItemID = int64(offset + i + 1)
 		}

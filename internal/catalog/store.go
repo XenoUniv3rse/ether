@@ -973,6 +973,16 @@ func pairsEqual(ctx context.Context, tx *sql.Tx, table, col string, key int64, w
 }
 
 func (c *Catalog) queryTitles(ctx context.Context, q string, args ...any) ([]core.Title, error) {
+	return c.queryTitlesMode(ctx, false, q, args...)
+}
+
+// queryPagedTitles is for queries whose SQL already applies all catalogue
+// release and adult guards before LIMIT and OFFSET.
+func (c *Catalog) queryPagedTitles(ctx context.Context, q string, args ...any) ([]core.Title, error) {
+	return c.queryTitlesMode(ctx, true, q, args...)
+}
+
+func (c *Catalog) queryTitlesMode(ctx context.Context, sqlGated bool, q string, args ...any) ([]core.Title, error) {
 	gen := c.writeGen.Load()
 	minute := c.minuteBucket()
 	rows, err := c.db.QueryContext(ctx, q, args...)
@@ -989,7 +999,7 @@ func (c *Catalog) queryTitles(ctx context.Context, q string, args ...any) ([]cor
 		// Let hydration establish an undated Specials container's premiere
 		// from its aired children; all other unknown dates remain excluded.
 		undatedSpecials := st.t.Type == core.TypeSeason && st.t.Key.Season() == 0 && st.t.Released.IsZero()
-		if !st.t.Adult && (st.t.IsReleased(c.now()) || c.upcomingMovie(&st.t) || undatedSpecials) {
+		if sqlGated || (!st.t.Adult && (st.t.IsReleased(c.now()) || c.upcomingMovie(&st.t) || undatedSpecials)) {
 			out = append(out, st.t)
 		}
 	}
@@ -1016,10 +1026,13 @@ func (c *Catalog) queryTitles(ctx context.Context, q string, args ...any) ([]cor
 			out[i] = need[j]
 		}
 	}
-	visible := out[:0]
-	for _, t := range out {
-		if c.upcomingMovie(&t) || (t.IsReleased(c.now()) && (!(c.config().ReleaseMode == config.ModeDigital) || homeReleaseVisible(&t, c.now()))) {
-			visible = append(visible, t)
+	visible := out
+	if !sqlGated {
+		visible = out[:0]
+		for _, t := range out {
+			if c.upcomingMovie(&t) || (t.IsReleased(c.now()) && (!(c.config().ReleaseMode == config.ModeDigital) || homeReleaseVisible(&t, c.now()))) {
+				visible = append(visible, t)
+			}
 		}
 	}
 	c.rememberTitles(gen, minute, visible)

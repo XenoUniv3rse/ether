@@ -40,6 +40,9 @@ type renderOpts struct {
 	// storedOnly renders from stored catalogue rows only without scheduling
 	// background TMDB detail, show-children, or Plex GUID refreshes.
 	storedOnly bool
+	// availabilityInSQL is set for a catalogue page that already applied
+	// the same availability snapshot before counting and pagination.
+	availabilityInSQL bool
 }
 
 // metadataKey is the item's "key": children list for containers, the item
@@ -1186,7 +1189,9 @@ func languageTag(code string) string {
 func (s *Server) renderTitles(ctx context.Context, pr *Request, ts []core.Title, o renderOpts) []model.Metadata {
 	ctx = withStoredPolicy(ctx)
 	ts = s.visibleTitles(pr.User, ts)
-	ts = s.availableForViewer(ctx, pr.User, ts)
+	if !o.availabilityInSQL {
+		ts = s.availableForViewer(ctx, pr.User, ts)
+	}
 	if len(ts) == 0 {
 		return nil
 	}
