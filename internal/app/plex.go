@@ -7,6 +7,7 @@ import (
 	"runtime"
 	"time"
 
+	"github.com/braedonsaunders/ether/internal/catalog"
 	"github.com/braedonsaunders/ether/internal/config"
 	"github.com/braedonsaunders/ether/internal/core"
 	"github.com/braedonsaunders/ether/internal/egress"
@@ -172,6 +173,7 @@ func (a *App) buildPlex(ctx context.Context, cfg config.Config) (http.Handler, e
 			Revision: func(ctx context.Context, u *core.User) (experience.HomeRevision, error) {
 				return experience.ReadHomeRevision(ctx, db, u)
 			},
+			NoProviderWait: func(ctx context.Context) context.Context { return catalog.WithReadWaitBudget(ctx, 0) },
 		}
 		if a.catalog != nil {
 			deps.HomeCache.Catalog = a.catalog.WriteGeneration

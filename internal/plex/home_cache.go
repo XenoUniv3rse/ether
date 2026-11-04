@@ -19,6 +19,7 @@ import (
 	"github.com/braedonsaunders/ether/internal/experience"
 	"github.com/braedonsaunders/ether/internal/plex/model"
 	"github.com/braedonsaunders/ether/internal/reqmemo"
+	"github.com/braedonsaunders/ether/internal/store"
 )
 
 // Plex Home (/hubs, /hubs/promoted, /hubs/sections/{id}) is served from
@@ -66,6 +67,11 @@ type HomeCacheSource struct {
 	Config func() uint64
 	// Catalog changes on catalogue writes (refreshes behind the response).
 	Catalog func() uint64
+	// NoProviderWait marks a Home build's context so catalogue reads never
+	// wait on TMDB: a title or season the mirror lacks is fetched and stored
+	// behind the build, and the catalogue write it makes refreshes the
+	// screen. A Home request therefore never writes or waits on a provider.
+	NoProviderWait func(context.Context) context.Context
 }
 
 // homeBuild is one built Home screen.
@@ -169,7 +175,7 @@ func (s *Server) serveHome(w http.ResponseWriter, r *http.Request, route string,
 		s.home.mu.Unlock()
 		break
 	}
-	b := build(ctx, r)
+	b := build(ctx, s.homeBuildRequest(r))
 	body, err := s.encodeResponse(r, b.mc)
 	if err != nil {
 		s.log.Error("encode response", "path", r.URL.Path, "err", err)
@@ -186,6 +192,14 @@ func (s *Server) serveHome(w http.ResponseWriter, r *http.Request, route string,
 	s.storeHome(&homeEntry{key: key, viewer: pr.User.ID, hard: hard, soft: soft, body: body, gz: gz, offset: b.mc.Offset, total: b.mc.TotalSize,
 		builtAt: time.Now(), usedAt: time.Now(), provisional: b.provisional, impressions: impressions, warm: warm, section: b.section,
 		build: build, tmpl: tmpl, pr: prc})
+}
+
+// homeBuildRequest is r with the cache's build context.
+func (s *Server) homeBuildRequest(r *http.Request) *http.Request {
+	if src := s.d.HomeCache; src != nil && src.NoProviderWait != nil {
+		return r.WithContext(src.NoProviderWait(r.Context()))
+	}
+	return r
 }
 
 // writeHomeBuild writes an uncached build exactly as the handler always did.
@@ -415,8 +429,8 @@ func (s *Server) refreshHome(key string) {
 		c.mu.Unlock()
 		close(flight.done)
 	}()
-	r := tmpl.WithContext(ctx)
-	b := build(ctx, r)
+	r := s.homeBuildRequest(tmpl.WithContext(ctx))
+	b := build(r.Context(), r)
 	if ctx.Err() != nil {
 		return
 	}
@@ -485,6 +499,6 @@ func (s *Server) warmKey(ctx context.Context, pr *Request, key core.RatingKey) {
 		return
 	}
 	if pw, ok := s.d.Playback.(core.Prewarmer); ok {
-		pw.Prewarm(context.WithoutCancel(ctx), pr.User, key, s.clientCaps(pr), core.PrewarmOptions{Reason: core.PrewarmBrowse})
+		pw.Prewarm(store.DetachQueryStats(context.WithoutCancel(ctx)), pr.User, key, s.clientCaps(pr), core.PrewarmOptions{Reason: core.PrewarmBrowse})
 	}
 }

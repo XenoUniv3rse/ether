@@ -20,6 +20,7 @@ import (
 	"github.com/braedonsaunders/ether/internal/frontend"
 	"github.com/braedonsaunders/ether/internal/homefilter"
 	"github.com/braedonsaunders/ether/internal/plex/model"
+	"github.com/braedonsaunders/ether/internal/store"
 )
 
 // hubCtx says where a hub list came from, so each hub's "key" can fetch
@@ -451,7 +452,7 @@ func (s *Server) warmBrowseLink(ctx context.Context, pr *Request, rows []model.H
 	if !ok {
 		return
 	}
-	pw.Prewarm(context.WithoutCancel(ctx), pr.User, key, s.clientCaps(pr), core.PrewarmOptions{Reason: core.PrewarmBrowse})
+	pw.Prewarm(store.DetachQueryStats(context.WithoutCancel(ctx)), pr.User, key, s.clientCaps(pr), core.PrewarmOptions{Reason: core.PrewarmBrowse})
 }
 
 func firstBrowseWarmKey(rows []model.Hub) (core.RatingKey, bool) {
