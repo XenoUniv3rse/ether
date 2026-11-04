@@ -323,7 +323,9 @@ func (r *Runner) Search(ctx context.Context, req core.SearchRequest, movieCats, 
 	}
 	if firstErr == nil {
 		fallbacks := r.fallbackAttempts(req, movieCats, tvCats)
-		if len(fallbacks) > 0 && r.def.RequestDelay <= 0 {
+		// Bursts are for a viewer waiting on Play; a search nobody waits on
+		// asks the site one query at a time.
+		if len(fallbacks) > 0 && r.def.RequestDelay <= 0 && !core.IsUnattendedSearch(ctx) && !core.IsBackgroundCheck(ctx) {
 			const burstWidth = 4
 			for base := 0; base < len(fallbacks); base += burstWidth {
 				if err := ctx.Err(); err != nil {
@@ -391,6 +393,23 @@ func (r *Runner) Search(ctx context.Context, req core.SearchRequest, movieCats, 
 		}
 	}
 	return nil, firstErr
+}
+
+// Recent lists the site's latest releases in the movie and TV categories:
+// one keywordless search, which is how Prowlarr builds an RSS feed for a
+// site without one. It never pages and never retries.
+func (r *Runner) Recent(ctx context.Context, movieCats, tvCats []int, reserve Reserver) ([]core.Release, error) {
+	if reserve == nil {
+		reserve = noReserve
+	}
+	if len(movieCats) == 0 {
+		movieCats = []int{2000}
+	}
+	if len(tvCats) == 0 {
+		tvCats = []int{5000}
+	}
+	wanted := append(append([]int{}, movieCats...), tvCats...)
+	return r.search(ctx, query{mode: "search", wanted: wanted}, reserve)
 }
 
 // found is one parsed row before conversion.

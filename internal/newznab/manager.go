@@ -383,8 +383,10 @@ func (m *Manager) FetchNZB(ctx context.Context, r core.Release) ([]byte, error) 
 	for _, cl := range m.Clients() {
 		if cl.Name() == r.Indexer {
 			started := time.Now()
-			b, err := cl.FetchNZB(ctx, r)
-			m.grabEvent(ctx, cl.Name(), r, started, err)
+			b, asked, err := cl.fetchNZBReporting(ctx, r)
+			if asked {
+				m.grabEvent(ctx, cl.Name(), r, started, err)
+			}
 			return b, err
 		}
 	}
@@ -396,8 +398,10 @@ func (m *Manager) FetchNZB(ctx context.Context, r core.Release) ([]byte, error) 
 			continue
 		}
 		started := time.Now()
-		b, err := cl.FetchNZB(ctx, r)
-		m.grabEvent(ctx, cl.Name(), r, started, err)
+		b, asked, err := cl.fetchNZBReporting(ctx, r)
+		if asked {
+			m.grabEvent(ctx, cl.Name(), r, started, err)
+		}
 		if err == nil {
 			return b, nil
 		}

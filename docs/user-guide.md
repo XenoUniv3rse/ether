@@ -1004,14 +1004,18 @@ to each server process; they are not a shared media-cache directory.
 
 ### Release monitoring and recent availability
 
-Ether automatically follows recent-release feeds on the Newznab/Torznab indexers
-already configured under Sources. No separate RSS URL is needed. Built-in scraper
-sites without a recent-feed API remain searchable; debrid provides streaming,
-not a global new-release feed. If an indexer returns empty results for a combined
-category query but has a working unrestricted feed, Ether learns that format
-with one additional budgeted request and applies your categories locally. The
-learned format survives restarts and is reset when the indexer configuration
-changes. Empty feeds are not repeatedly probed on every poll.
+Ether automatically follows the recent releases of the indexers already
+configured under Sources, the way Radarr and Sonarr use RSS. No separate RSS URL
+is needed. Newznab/Torznab indexers are read through their API; built-in sites
+through their latest-releases page (one page, the way Prowlarr builds RSS for
+them). Stremio addons and plugin sources only answer title searches. Debrid
+provides streaming, not a global new-release feed. If an indexer returns empty
+results for a combined category query but has a working unrestricted feed,
+Ether learns that format with one additional budgeted request and applies your
+categories locally, then tries the category-filtered feed again once a day,
+because an unrestricted feed needs several pages to cover what one filtered page
+covers. The learned format survives restarts and is reset when the indexer
+configuration changes. Empty feeds are not repeatedly probed on every poll.
 Monitoring defaults on for new installs. Existing
 owners can enable it under Sources > Availability. Turning monitoring off stops
 polling, but local evidence and the recent-release visibility rules still apply.
@@ -1037,37 +1041,59 @@ source invalidations and recent failed searches are respected; a genuinely new
 eligible release can supersede an older failed search. Merely browsing does not
 launch per-title availability searches.
 
-The default feed allowance is 400 API requests per UTC day across all indexers,
-with a 15-minute polling interval and at most five pages per sync. Two indexers
-need 192 requests/day for their regular first pages, leaving up to 208 for
-catch-up. Deeper pages reserve the remaining day's scheduled first-page polls,
-so a busy feed cannot consume that allowance on history. An allowance too small
-for the configured feeds and interval is shown in Sources > Availability.
+Each indexer's feed is read once every 30 minutes (48 requests a day), and every
+new item is matched locally against all the titles waiting for a release, at no
+indexer cost per title. A release usually becomes visible within one sync
+interval of being posted. When more releases arrived since the last sync than one
+page holds, Ether reads only the further pages needed to reach the previous
+sync's newest release, at most eight per sync; after downtime the rest of the
+gap is read in later cycles from what the day's allowance has left. **Catch-up**
+(off by default) additionally walks the recent feed history once, ending at the
+feed's available history or a page entirely older than 61 days. Unfinished gaps
+retain their boundaries and page progress across restarts, and a mismatched
+boundary triggers a rescan. Provider retention, rate limits and exhausted daily
+allowances can still leave gaps; these stay visible instead of being reported as
+a successful sync. Feed discovery is not equivalent to an Arr-completed download.
+These are normal API hits, not free RSS traffic.
 
-Unfinished feed gaps retain their boundaries and page progress across restarts.
-Each poll reads fresh arrivals first, then resumes the older gap, checking that
-the saved page boundary still matches. A mismatched boundary triggers a rescan.
-First setup and recovery of old gaps page through recent feed history only,
-ending at the feed's available history or a page entirely older than 61 days.
-This uses feed pages, never a search per catalogue title. Provider retention,
-rate limits and exhausted daily allowances can still leave gaps; these stay
-visible instead of being reported as a successful sync. Sites without a feed
-remain search-only. Feed discovery is not equivalent to an Arr-completed download.
-These are normal API hits, not free RSS traffic. Playback retains the configured
-foreground reserve.
+Ether searches a recent movie by ID only on events, never on a timer: once when
+it enters the window (its earlier releases predate the feeds), once when its
+digital or physical release date arrives, and once after a found release proves
+unplayable. A search cut short by an outage is finished six hours later, and one
+cut short by an exhausted allowance after the next UTC midnight. Each search asks
+one source at a time in priority order and stops at the first release your
+quality settings accept; Play still asks every source. At most ten titles are
+searched per minute, so a restart never bursts every indexer at once. To keep
+background feeds and searches on particular indexers while playback still uses
+all of them, list them in `availability.indexerIds`.
 
-For a recent movie the feeds have not matched, Ether also looks the title up
-directly: once when it enters the window, again when its digital release date
-arrives, and at least weekly on every indexer. Between those, it skips an
-indexer whose feed has been polled without a gap since the last look; that
-feed would already have shown anything new. Of the scraper sites without a
-feed, routine lookups ask only the one that has returned releases most often in
-full lookups; Play still asks them all. A movie with a suitable release is
-available like any other title and is not looked up again in the background
-unless that release proves unplayable. At most ten
-of these lookups run per minute, so a restart never bursts every indexer at
-once. To keep background lookups on particular indexers while playback still
-uses all of them, list them in `availability.indexerIds`.
+Background feeds and searches have a daily allowance per indexer (UTC): 10% of
+the indexer's daily API limit (Gentle 5%; Unlimited up to your `reservePercent`
+share). The limit is the one you set on the indexer, else the one it reports
+(Newznab `apilimits`), else 1,000 a day, the entry tier of strict private
+indexers, so an indexer that reports nothing gets 100 background requests a
+day. The day's remaining head polls are reserved first, so gap pages and
+searches can never starve the feeds, and a feed whose allowance is too small for
+30-minute polls is read less often. Background requests to one indexer are at
+least three seconds apart. On a typical household with two Usenet indexers and
+four built-in sites, a replayed day used 50–64 requests on each Usenet indexer
+and 49 on each site. The total across indexers can be lowered under Sources >
+Indexers (Daily budgets). A `429` response, a `Retry-After` header or a Newznab
+API-limit error pauses that indexer for background and playback alike until the
+time it gives (15 minutes when it gives none, 24 hours at most).
+
+Work nobody is waiting on (detail-page and next-episode warm-ups, preloads,
+prefetches, watchlist checks) shares another 10% of each indexer's daily API
+limit for searches, and 10% of its daily NZB download limit (set on the
+indexer, reported as `grabmax`, else 1,000) for NZB downloads, together with
+availability checks. Play is never limited by these shares; once one is spent,
+the warm-up simply does not happen and Play searches for itself. A downloaded
+NZB is kept on disk and reused for as long as it is kept (until unused for 60
+days, or least recently used beyond 1 GiB), so a release is downloaded from its
+indexer once, however often it is resolved or played. Indexer statistics count
+only these real downloads. A preloaded title whose fill fails is tried again
+after an hour, then two, four and so on up to a day, instead of on every
+15-minute preload pass.
 
 Indexer results are cached per title: six hours for titles out under a month,
 rising to a week for titles out over a year. A search that found nothing is

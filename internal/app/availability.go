@@ -4,6 +4,7 @@ import (
 	"context"
 	"github.com/braedonsaunders/ether/internal/availability"
 	"github.com/braedonsaunders/ether/internal/core"
+	"time"
 )
 
 func (a *App) buildAvailability() error {
@@ -37,6 +38,8 @@ func (a *App) buildAvailability() error {
 		// Section and home loads read the last evidence answer; judging
 		// retained feed releases never runs inside a request (#303).
 		Async: true,
+		// Background requests to one indexer stay at least this far apart.
+		Pace: 3 * time.Second,
 	})
 	a.availability = s
 	if err == nil {

@@ -40,11 +40,11 @@ func TestAvailabilityBudgetPresets(t *testing.T) {
 	}
 	unlimited := []IndexerCap{{ID: "a"}, {ID: "b"}, {ID: "c"}, {ID: "d"}}
 	got := base.Resolved(unlimited)
-	if got.Effort != "normal" || got.FeedRequests != 8000 || got.MaxPages != 8 || got.PollMinutes != 15 {
+	if got.Effort != "normal" || got.FeedRequests != 400 || got.MaxPages != 8 || got.PollMinutes != 30 {
 		t.Fatalf("%+v", got)
 	}
 	capped := base.Resolved([]IndexerCap{{ID: "a", DailyLimit: 100}})
-	if capped.FeedRequests != 20 {
+	if capped.FeedRequests != 10 {
 		t.Fatalf("background share = %d", capped.FeedRequests)
 	}
 	custom := base

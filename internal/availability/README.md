@@ -15,11 +15,17 @@ preferences start enabled and can benefit from ordinary playback observations.
 
 Default daily background allowances (UTC, shared across nodes):
 
-- 100 feed API requests, and 100 validation API requests.
-- 20 candidate checks and 20 descriptor grabs (NZB or torrent).
+- Per indexer: 10% (Gentle 5%; Unlimited up to 100 − `reservePercent`) of its
+  daily API limit: the owner's, else the one it reports (Newznab `apilimits`),
+  else 1,000 (the strictest private tier), so 100 feed and search requests by
+  default. The day's remaining head polls are reserved, so gap pages and title
+  searches cannot starve the feeds; a feed whose allowance cannot fit 30-minute
+  polls in half of it is polled less often. Requests to one indexer are at least
+  `Deps.Pace` (3 s) apart.
+- In total, the sum of those (or the owner's custom total).
+- 100 validation API requests, 20 candidate checks and 20 descriptor grabs.
 - 512 MiB of conservative data reservations. NNTP BODY reservations use the
   provider's maximum article size, so actual transferred bytes can be much lower.
-- Preserve 80% of each indexer's configured daily cap for foreground work.
 
 An allowance of zero disables that work. Foreground requests still have their
 normal account limits. Every feed page, provider API request and source read goes
@@ -30,12 +36,19 @@ background allowance. Shared worker contexts retain the admission hook.
 
 Newznab/Torznab recent-release pages use an empty `t=search` request, following the
 incremental model documented by [Radarr](https://wiki.servarr.com/radarr/faq#how-does-radarr-work).
-One page describes up to 100 releases. Polling defaults to 30 minutes. The first
-sync starts at the head; later syncs look for overlap with the previous head,
-with at most three pages. Failed requests do not advance the cursor. Missing
-overlap records a visible coverage gap rather than triggering unlimited catch-up.
-Search remains the fallback for older and missed releases. Built-in sites without
-a recent-feed contract remain available for ordinary search.
+Built-in sites list their latest page (a keywordless search, as Prowlarr does);
+Stremio addons and plugin sources are search-only. One page describes up to 100
+releases. Head polls default to every 30 minutes. A sync reads from the head
+back to the previous head: one page usually, otherwise only the pages the gap
+needs (at most `MaxPages` per sync), resuming an unfinished gap every minute
+while its allowance has room. A first sync starts at the head; **catch-up**
+(optional) also walks recent history. Failed requests do not advance the cursor.
+
+Feeds detect; title searches are events. A movie in the window is searched by id
+once when it enters the window, once when its digital or physical date arrives,
+and once after its found release proves unplayable (plus finishing a search an
+outage or allowance cut short). A search asks one source at a time in priority
+order and stops at the first acceptable release. Nothing is searched on a timer.
 
 Matching scans local title identities and resolves episodes locally; it does not
 call TMDB for every feed item. Conflicting identifiers and ambiguous title matches

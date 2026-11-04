@@ -67,6 +67,24 @@ type Item struct {
 	Updated     time.Time      `json:"updated"`
 	State       string         `json:"state,omitempty"` // cached | queued | failed
 }
+
+// failureBackoff is how long a title waits after its nth consecutive failed
+// fill: 1h, doubling, at most a day. A pass every 15 minutes used to resolve
+// every failing title again (71 times a day each on production), and each
+// resolve can search and grab.
+func failureBackoff(failures int) time.Duration {
+	if failures <= 0 {
+		return 0
+	}
+	return min(24*time.Hour, time.Hour<<min(failures-1, 5))
+}
+
+// pauseError is a fill stopped by the preload conditions (live playback,
+// disk reserve, pause): not a failure of the title.
+type pauseError struct{ error }
+
+func (e pauseError) Unwrap() error { return e.error }
+
 type Status struct {
 	State     string      `json:"state"`
 	Message   string      `json:"message"`
@@ -90,6 +108,17 @@ type Manager struct {
 	items  map[core.RatingKey]Item
 	cancel context.CancelFunc
 	wake   chan struct{}
+	// settings is the preload configuration of the last pass: a change
+	// gives failed titles another try at once.
+	settings string
+	// failed holds titles waiting out failureBackoff (guarded by mu).
+	failed map[core.RatingKey]failure
+}
+
+// failure is a title's consecutive failed fills and the last one's time.
+type failure struct {
+	count int
+	at    time.Time
 }
 
 func New(dir string, d Deps) (*Manager, error) {
@@ -377,6 +406,10 @@ func (m *Manager) fail(key core.RatingKey, c candidate) error {
 	it.Score = c.Score
 	it.State = "failed"
 	it.Updated = time.Now()
+	if m.failed == nil {
+		m.failed = map[core.RatingKey]failure{}
+	}
+	m.failed[key] = failure{count: m.failed[key].count + 1, at: m.deps.Now()}
 	m.items[key] = it
 	m.mu.Unlock()
 	if it.ReleaseID != "" {
@@ -411,6 +444,19 @@ func (m *Manager) pass(ctx context.Context) error {
 	if maxTitles <= 0 {
 		maxTitles = 200
 	}
+	raw, _ := json.Marshal(cfg) // values, not pointer addresses
+	settings := string(raw)
+	m.mu.Lock()
+	if m.settings != settings {
+		m.failed = nil
+	}
+	for k, f := range m.failed {
+		if m.deps.Now().Sub(f.at) > 2*failureBackoff(f.count) {
+			delete(m.failed, k) // no longer a candidate: keep the map bounded
+		}
+	}
+	m.settings = settings
+	m.mu.Unlock()
 	// Retire excess reservations first, even while disabled/paused. Cached bytes
 	// become ordinary retention candidates, never a forced deletion.
 	snapshot := m.localStatus()
@@ -495,6 +541,12 @@ func (m *Manager) pass(ctx context.Context) error {
 		if ok && existing.Complete && existing.StoredBytes > 0 && m.deps.Cache.ReleaseBytes(existing.ReleaseID) >= existing.StoredBytes {
 			continue
 		}
+		m.mu.Lock()
+		f, waiting := m.failed[title.Key]
+		m.mu.Unlock()
+		if waiting && m.deps.Now().Before(f.at.Add(failureBackoff(f.count))) {
+			continue
+		}
 		if err := m.allowed(); err != nil {
 			return err
 		}
@@ -506,6 +558,7 @@ func (m *Manager) pass(ctx context.Context) error {
 		err = m.fill(job, owner, &title, limit, maxTitles, ranks, core.CacheShelfDetail{ReasonCodes: candidate.ReasonCodes, Score: candidate.Score, State: "reserved"})
 		if err == nil {
 			m.mu.Lock()
+			delete(m.failed, title.Key)
 			it := m.items[title.Key]
 			it.Reason = candidate.Reason
 			it.Score = candidate.Score
@@ -516,6 +569,10 @@ func (m *Manager) pass(ctx context.Context) error {
 		cancel()
 		if ctx.Err() != nil {
 			return ctx.Err()
+		}
+		var pause pauseError
+		if errors.As(err, &pause) {
+			return pause.error
 		}
 		if err != nil {
 			m.mu.Lock()
@@ -592,7 +649,7 @@ func (m *Manager) fill(ctx context.Context, owner *core.User, title *core.Title,
 			return err
 		}
 		if err := m.allowed(); err != nil {
-			return err
+			return pauseError{err}
 		}
 		n := min(chunkBytes, size-off)
 		started := time.Now()

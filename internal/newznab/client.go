@@ -85,6 +85,12 @@ type Backend interface {
 	ResolveTorrent(ctx context.Context, r core.Release, reserve func(context.Context, string) error) (core.Release, error)
 }
 
+// RecentBackend is a Backend that can list a site's latest releases, the
+// release feed of a site with no Newznab API.
+type RecentBackend interface {
+	Recent(ctx context.Context, reserve func(context.Context, string) error) ([]core.Release, error)
+}
+
 // Client is one configured Newznab indexer. It implements core.Indexer.
 type Client struct {
 	cfg  config.Indexer
@@ -107,6 +113,7 @@ type Client struct {
 	mem      memBudget
 	usageDB  *sql.DB // see Options.usageDB
 	rate     rateLimitState
+	apiLimit apiLimitState
 
 	cacheMu  sync.RWMutex
 	memCache map[string]memCacheEntry
@@ -486,6 +493,7 @@ func (c *Client) get(ctx context.Context, rawURL string, limit int64, id config.
 	if int64(len(body)) > limit {
 		return nil, fmt.Errorf("newznab: response exceeds %d bytes", limit)
 	}
+	c.noteAPILimit(ctx, body)
 	// Newznab quota errors can arrive with HTTP 200, including NZB grabs.
 	// Detect these here so caps, searches and downloads share the same backoff.
 	if bytes.Contains(bytes.ToLower(body[:min(len(body), 4096)]), []byte("error")) {
@@ -1297,16 +1305,26 @@ func (c *Client) nzbDiskPath(releaseID string) string {
 // FetchNZB implements core.Indexer. Every call returns a slice of its own,
 // which the caller may keep or modify.
 func (c *Client) FetchNZB(ctx context.Context, r core.Release) ([]byte, error) {
+	body, _, err := c.fetchNZBReporting(ctx, r)
+	return body, err
+}
+
+// fetchNZBReporting is FetchNZB, also reporting whether this call asked
+// the indexer: false for an NZB read from the disk cache or one taken from
+// another caller's download. Only the indexer's own downloads are grabs.
+func (c *Client) fetchNZBReporting(ctx context.Context, r core.Release) ([]byte, bool, error) {
 	if r.Protocol == core.ProtocolTorrent {
-		return nil, fmt.Errorf("newznab: %q is a torrent release; it streams through a debrid provider", r.Name)
+		return nil, false, fmt.Errorf("newznab: %q is a torrent release; it streams through a debrid provider", r.Name)
 	}
 	if path := c.nzbDiskPath(r.ID); path != "" {
 		if b, err := os.ReadFile(path); err == nil && len(b) > 0 {
-			return b, nil
+			c.touchNZB(path)
+			return b, false, nil
 		}
 	}
 	if r.ID == "" {
-		return c.fetchNZB(ctx, r)
+		body, err := c.fetchNZB(ctx, r)
+		return body, true, err
 	}
 	for {
 		f, leader := c.joinNZBFlight(ctx, r)
@@ -1316,7 +1334,7 @@ func (c *Client) FetchNZB(ctx context.Context, r core.Release) ([]byte, error) {
 			// The shared fetch carries on for the other callers and
 			// still lands in the disk cache.
 			c.leaveNZB(f)
-			return nil, ctx.Err()
+			return nil, leader, ctx.Err()
 		}
 		body := c.takeNZB(f)
 		// A background check runs on a reduced grab share; a foreground
@@ -1325,9 +1343,9 @@ func (c *Client) FetchNZB(ctx context.Context, r core.Release) ([]byte, error) {
 			continue
 		}
 		if f.err != nil {
-			return nil, f.err
+			return nil, leader, f.err
 		}
-		return body, nil
+		return body, leader, nil
 	}
 }
 
@@ -1510,9 +1528,30 @@ func (c *Client) backendSearch(ctx context.Context, req core.SearchRequest) ([]c
 	if err != nil {
 		return nil, err
 	}
-	results, err := c.guardSearch(ctx, false, 0, func(ctx context.Context) ([]core.Release, error) {
+	return c.stampBackend(ctx, func(ctx context.Context) ([]core.Release, error) {
 		return b.Search(ctx, req, c.reserve)
 	})
+}
+
+// backendRecent lists a built-in site's latest releases.
+func (c *Client) backendRecent(ctx context.Context) ([]core.Release, error) {
+	b, err := c.backend()
+	if err != nil {
+		return nil, err
+	}
+	rb, ok := b.(RecentBackend)
+	if !ok {
+		return nil, fmt.Errorf("recent-release feed is not supported by this source")
+	}
+	return c.stampBackend(ctx, func(ctx context.Context) ([]core.Release, error) {
+		return rb.Recent(ctx, c.reserve)
+	})
+}
+
+// stampBackend runs a backend request behind the search guard and stamps
+// its results the way Newznab results are stamped.
+func (c *Client) stampBackend(ctx context.Context, run func(context.Context) ([]core.Release, error)) ([]core.Release, error) {
+	results, err := c.guardSearch(ctx, false, 0, run)
 	if err != nil {
 		var rl *RateLimitError
 		if errors.As(err, &rl) {
@@ -1566,4 +1605,67 @@ func TestWithOptions(ctx context.Context, cfg config.Indexer, opts Options) erro
 		return humanError(name, err)
 	}
 	return nil
+}
+
+// An NZB on disk is reused for as long as it is kept, so a release is
+// grabbed from its indexer once. Unused NZBs leave after nzbKeep, and the
+// directory stays under nzbDiskCap (least recently used first).
+const (
+	nzbKeep    = 60 * 24 * time.Hour
+	nzbDiskCap = 1 << 30
+)
+
+// touchNZB marks a cached NZB used, at most once a day.
+func (c *Client) touchNZB(path string) {
+	if info, err := os.Stat(path); err == nil && c.now().Sub(info.ModTime()) > 24*time.Hour {
+		now := c.now()
+		_ = os.Chtimes(path, now, now)
+	}
+}
+
+// pruneNZBs bounds the NZB disk cache in dir; it returns the files removed.
+func pruneNZBs(dir string, now time.Time) int64 {
+	if dir == "" {
+		return 0
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return 0
+	}
+	type file struct {
+		path string
+		at   time.Time
+		size int64
+	}
+	var files []file
+	var total, removed int64
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".nzb") {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil {
+			continue
+		}
+		path := filepath.Join(dir, e.Name())
+		if now.Sub(info.ModTime()) > nzbKeep {
+			if os.Remove(path) == nil {
+				removed++
+			}
+			continue
+		}
+		files = append(files, file{path, info.ModTime(), info.Size()})
+		total += info.Size()
+	}
+	sort.Slice(files, func(i, j int) bool { return files[i].at.Before(files[j].at) })
+	for _, f := range files {
+		if total <= nzbDiskCap {
+			break
+		}
+		if os.Remove(f.path) == nil {
+			removed++
+			total -= f.size
+		}
+	}
+	return removed
 }
