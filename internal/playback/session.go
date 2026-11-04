@@ -189,6 +189,7 @@ type session struct {
 	viewerPosition        time.Duration // guarded by mu, from authenticated Plex timeline
 	viewerAt              time.Time
 	viewerState           string
+	exp                   experienceState // guarded by mu
 	encoderRecoveryReason string
 	encoderRunway         *time.Duration
 	warm                  warmState // the encoder input range being prefetched
@@ -424,6 +425,9 @@ func (s *session) snapshot(now time.Time) *core.PlaySession {
 	if !s.viewerAt.IsZero() {
 		offset := s.viewerPosition.Milliseconds()
 		ps.ViewOffset = &offset
+	}
+	if measuredProtocol(s.caps.Protocol) {
+		ps.Experience = s.exp.snapshot(now)
 	}
 	if s.user.Username == "" {
 		ps.Username = s.user.Title

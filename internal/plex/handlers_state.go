@@ -88,6 +88,9 @@ func (s *Server) handleTimeline(w http.ResponseWriter, r *http.Request) {
 		// The player took the media and never started. End this attempt
 		// with the reason; the stop below closes its encoder and source.
 		s.setTermination(tid, reason)
+		if failed, ok := s.d.Playback.(interface{ NoteFailedStart(string, string) }); ok && ps != nil {
+			failed.NoteFailedStart(ps.ID, reason)
+		}
 		s.reportBrokerTimeline(ctx, pr, key, offset, duration, "stopped", sanitizeSessionID(q.Get("session")))
 	}
 	for _, id := range tids {
