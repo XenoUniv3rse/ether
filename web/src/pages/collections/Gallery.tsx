@@ -639,6 +639,7 @@ export default function CollectionsGallery({
         open={describe}
         onClose={() => setDescribe(false)}
         onApply={(spec) => navigate(newCollectionHref(), { state: { spec } })}
+        onSaved={(saved) => navigate(`/collections/${encodeURIComponent(saved.id!)}`)}
       />
     </>
   );

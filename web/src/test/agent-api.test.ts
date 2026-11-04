@@ -25,11 +25,16 @@ describe("agent API helpers", () => {
 
   it("parses wrapped and bare message pages", () => {
     const message = { id: "1", role: "user" as const, parts: [] };
-    expect(parseMessages({ messages: [message], hasMore: true })).toEqual({
+    expect(parseMessages({ messages: [message], hasMore: true, running: true })).toEqual({
       messages: [message],
       hasOlder: true,
+      running: true,
     });
-    expect(parseMessages([message])).toEqual({ messages: [message], hasOlder: false });
+    expect(parseMessages([message])).toEqual({
+      messages: [message],
+      hasOlder: false,
+      running: false,
+    });
   });
 
   it("infers only record routes", () => {

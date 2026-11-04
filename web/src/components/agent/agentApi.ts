@@ -3,7 +3,7 @@
  * the WS4/WS5 API contract; parsing accepts a wrapped object or a bare
  * array where the spec leaves the envelope open.
  */
-import type { AgentMessage } from "@braedonsaunders/appkit-ai/react";
+import type { AgentMessage, AgentPanelLabels } from "@braedonsaunders/appkit-ai/react";
 import { t } from "../../i18n";
 import { apiFetch } from "../../lib/api";
 import { textOf, type Descriptor } from "../../lib/extend";
@@ -78,6 +78,8 @@ export async function fetchAgentThreads(): Promise<AgentThreadSummary[]> {
 export interface AgentMessagesPage {
   messages: AgentMessage[];
   hasOlder: boolean;
+  /** A turn is still running in this conversation (a reload rejoins it). */
+  running: boolean;
 }
 
 export function parseMessages(value: unknown): AgentMessagesPage {
@@ -85,6 +87,7 @@ export function parseMessages(value: unknown): AgentMessagesPage {
   return {
     messages: listOf<AgentMessage>(value, "messages"),
     hasOlder: body.hasMore === true || body.hasOlder === true || body.hasOlderMessages === true,
+    running: body.running === true,
   };
 }
 
@@ -100,6 +103,11 @@ export async function fetchAgentMessages(
 
 export async function deleteAgentThread(threadId: string): Promise<void> {
   await apiFetch<unknown>(`/agent/threads/${encodeURIComponent(threadId)}`, { method: "DELETE" });
+}
+
+/** Stops a running turn by its assistant message id. */
+export async function cancelAgentTurn(turnId: string): Promise<void> {
+  await apiFetch<unknown>(`/agent/turns/${encodeURIComponent(turnId)}/cancel`, { method: "POST" });
 }
 
 export async function decideAgentApproval(
@@ -270,4 +278,41 @@ export function extractNavigateRoute(
     }
   }
   return null;
+}
+
+/** The console's AgentPanel copy; pages override the few lines that differ. */
+export function agentPanelLabels(): AgentPanelLabels {
+  return {
+    title: t("Ask Ether"),
+    welcomeTitle: t("How can Ether help?"),
+    welcomeDescription: t(
+      "Ask about this server, or ask Ether to make a change. Changes always wait for your approval.",
+    ),
+    disabledTitle: t("Connect a model"),
+    disabledDescription: t("Connect a language model to use Ask Ether."),
+    placeholder: t("Ask Ether…"),
+    send: t("Send"),
+    stop: t("Stop"),
+    failed: t("Ether could not finish that. Try again."),
+    input: t("Input"),
+    result: t("Result"),
+    working: t("Working"),
+    step: t("step"),
+    steps: t("steps"),
+    queue: t("Add to queue"),
+    queueTitle: t("Up next"),
+    queuePosition: t("Position"),
+    queued: t("Queued"),
+    dispatching: t("Starting"),
+    retrying: t("Retrying"),
+    queueFailed: t("This queued message needs attention."),
+    editQueued: t("Edit queued message"),
+    removeQueued: t("Remove queued message"),
+    retryQueued: t("Retry queued message"),
+    sendQueuedNow: t("Send now"),
+    responding: t("Ether is responding"),
+    loadEarlier: t("Load earlier messages"),
+    loadingEarlier: t("Loading earlier messages"),
+    loadEarlierFailed: t("Earlier messages could not be loaded. Try again."),
+  };
 }

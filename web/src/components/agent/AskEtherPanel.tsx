@@ -25,6 +25,7 @@ const KNOWN_TOOLS = [
   "title_details",
   "collection_list",
   "collection_preview",
+  "collection_draft",
   "livetv_channels",
   "sources_list",
   "plugins_list",

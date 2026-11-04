@@ -1,12 +1,16 @@
 import { Sparkles } from "lucide-react";
 import { useEffect, useState } from "react";
 import { t } from "../../i18n";
-import { apiFetch } from "../../lib/api";
+import { api, apiFetch } from "../../lib/api";
+import type { CollectionSpec } from "../../lib/contract";
+import { SORTS, describeRule, describeSource, normalizeSpec } from "../../lib/rules";
 import { GuideStrip, MomentView, type GuideChannel, type Moment, type StreamTile } from "./Stage";
 
 /** One SSE chunk of Ether's agent stream (AI SDK UI message stream). */
 export interface AgentChunk {
   type: string;
+  /** The assistant message (turn) id, on the start chunk. */
+  messageId?: string;
   delta?: string;
   toolCallId?: string;
   toolName?: string;
@@ -231,7 +235,10 @@ export function LiveStageView({ moments, narration }: { moments: Moment[]; narra
   const current = moments[moments.length - 1];
   const result = [...moments]
     .reverse()
-    .find((m) => m.kind === "guide" || m.kind === "streams" || m.kind === "found");
+    .find(
+      (m) =>
+        m.kind === "guide" || m.kind === "streams" || m.kind === "found" || m.kind === "catalog",
+    );
   const done = moments.slice(0, -1);
   return (
     <div className="mx-auto w-full max-w-4xl space-y-4 px-4 py-6 sm:px-6">
@@ -334,9 +341,51 @@ export async function momentsForTool(
     }
     case "plugin_install":
       return [{ kind: "repair", text: t("Prepared the install for your approval") }];
+    case "catalog_search":
+      return [
+        {
+          kind: "repair",
+          text: t("Looked up “{query}” in the catalogue", { query: String(input.query ?? "") }),
+        },
+      ];
+    case "collection_draft": {
+      const spec = output?.spec as Partial<CollectionSpec> | undefined;
+      if (!spec) return [];
+      const draft = normalizeSpec(spec);
+      const preview = await api.previewCollection(draft).catch(() => null);
+      const out: Moment[] = [collectionSteps(draft)];
+      if (preview)
+        out.push({
+          kind: "catalog",
+          tool: name,
+          title: draft.name || t("Untitled collection"),
+          items: preview.items.map((it) => ({ key: it.key, title: it.title, poster: it.poster })),
+          total: preview.total,
+        });
+      return out;
+    }
     default:
       return [];
   }
+}
+
+/**
+ * One collection draft as the steps it takes: where titles come from, each
+ * filter, the ranking and the cut, ticked off in order on the stage.
+ */
+export function collectionSteps(spec: CollectionSpec): Moment {
+  const sort = SORTS.find((s) => s.value === spec.sort)?.label ?? spec.sort;
+  return {
+    kind: "checks",
+    title: t("Drafted “{name}”", { name: spec.name || t("Untitled collection") }),
+    items: [
+      ...spec.sources.map((s) => describeSource(s)),
+      ...spec.rules.map((r) => describeRule(r)),
+      ...spec.exclude.map((r) => t("Not: {rule}", { rule: describeRule(r) })),
+      t("Ranked by {sort}", { sort }),
+      spec.limit > 0 ? t("Top {count}", { count: spec.limit }) : t("Every match"),
+    ],
+  };
 }
 
 export { GuideStrip };

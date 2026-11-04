@@ -25,6 +25,7 @@ import { Drawer } from "../Drawer";
 import { ErrorPanel } from "../feedback";
 import { approvalRequestLabels as approvalLabels } from "./approvalLabels";
 import {
+  agentPanelLabels,
   decideAgentApproval,
   deleteAgentThread,
   extractNavigateRoute,
@@ -76,42 +77,9 @@ export function AskEther() {
     setThreadId(id);
   }, []);
 
-  const labels = useMemo(
-    () => ({
-      title: t("Ask Ether"),
-      welcomeTitle: t("How can Ether help?"),
-      welcomeDescription: t(
-        "Ask about this server, or ask Ether to make a change. Changes always wait for your approval.",
-      ),
-      disabledTitle: t("Connect a model"),
-      disabledDescription: t("Connect a language model to use Ask Ether."),
-      placeholder: t("Ask Ether…"),
-      send: t("Send"),
-      stop: t("Stop"),
-      failed: t("Ether could not finish that. Try again."),
-      input: t("Input"),
-      result: t("Result"),
-      working: t("Working"),
-      step: t("step"),
-      steps: t("steps"),
-      queue: t("Add to queue"),
-      queueTitle: t("Up next"),
-      queuePosition: t("Position"),
-      queued: t("Queued"),
-      dispatching: t("Starting"),
-      retrying: t("Retrying"),
-      queueFailed: t("This queued message needs attention."),
-      editQueued: t("Edit queued message"),
-      removeQueued: t("Remove queued message"),
-      retryQueued: t("Retry queued message"),
-      sendQueuedNow: t("Send now"),
-      responding: t("Ether is responding"),
-      loadEarlier: t("Load earlier messages"),
-      loadingEarlier: t("Loading earlier messages"),
-      loadEarlierFailed: t("Earlier messages could not be loaded. Try again."),
-    }),
-    [locale],
-  );
+  // locale re-renders the copy in the active language.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const labels = useMemo(() => agentPanelLabels(), [locale]);
 
   const approvalRequestLabels = useMemo(() => approvalLabels(), [locale]);
 
