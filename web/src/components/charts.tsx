@@ -379,6 +379,18 @@ export function Meter({
   );
 }
 
+/** The validated chart palette (styles.css --viz-1..5), as literal classes. */
+export type Viz = "viz-1" | "viz-2" | "viz-3" | "viz-4" | "viz-5";
+export const VIZ: Record<Viz, { bg: string; fill: string; stroke: string }> = {
+  "viz-1": { bg: "bg-viz-1", fill: "fill-viz-1", stroke: "stroke-viz-1" },
+  "viz-2": { bg: "bg-viz-2", fill: "fill-viz-2", stroke: "stroke-viz-2" },
+  "viz-3": { bg: "bg-viz-3", fill: "fill-viz-3", stroke: "stroke-viz-3" },
+  "viz-4": { bg: "bg-viz-4", fill: "fill-viz-4", stroke: "stroke-viz-4" },
+  "viz-5": { bg: "bg-viz-5", fill: "fill-viz-5", stroke: "stroke-viz-5" },
+};
+/** Categorical order for parts with no fixed colour of their own. */
+export const VIZ_ORDER: Viz[] = ["viz-4", "viz-2", "viz-3", "viz-5", "viz-1"];
+
 export interface RankDatum {
   key: string;
   label: string;
@@ -398,11 +410,13 @@ export function RankedBars({
   valueFormat = (v) => String(v),
   empty,
   ariaLabel,
+  color = "viz-1",
 }: {
   data: RankDatum[];
   valueFormat?: (v: number) => string;
   empty?: React.ReactNode;
   ariaLabel: string;
+  color?: Viz;
 }) {
   const rows = [...data].sort((a, b) => b.value - a.value);
   const max = Math.max(0, ...rows.map((r) => r.value));
@@ -424,7 +438,7 @@ export function RankedBars({
             </div>
             <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-bg-subtle">
               <div
-                className="h-full rounded-full bg-primary"
+                className={cn("h-full rounded-full", VIZ[color].bg)}
                 style={{ width: `${max > 0 ? Math.max(2, (r.value / max) * 100) : 0}%` }}
               />
             </div>
@@ -439,17 +453,9 @@ export interface SplitDatum {
   key: string;
   label: string;
   value: number;
+  /** Fixed colour for this part, so it matches the same entity elsewhere. */
+  color?: Viz;
 }
-
-/** One hue in decreasing strength, so up to six parts read as one whole. */
-const SPLIT_STEPS = [
-  "bg-primary",
-  "bg-primary/70",
-  "bg-primary/45",
-  "bg-primary/30",
-  "bg-primary/20",
-  "bg-primary/12",
-];
 
 /**
  * A tall segmented bar for one whole split into at most six parts: each
@@ -474,11 +480,17 @@ export function SplitBar({
             key: "other",
             label: t("Other"),
             value: sorted.slice(5).reduce((n, d) => n + d.value, 0),
-          },
+          } as SplitDatum,
         ]
       : sorted;
   const total = parts.reduce((n, d) => n + d.value, 0);
   if (!total) return <p className="text-sm text-fg-muted">{t("Nothing in this period.")}</p>;
+  let next = 0;
+  const colorOf = parts.map((p) =>
+    p.key === "other"
+      ? "bg-fg-subtle/40"
+      : VIZ[p.color ?? VIZ_ORDER[next++ % VIZ_ORDER.length]!].bg,
+  );
   return (
     <div>
       <div
@@ -496,17 +508,12 @@ export function SplitBar({
               title={`${p.label}: ${valueFormat(p.value)} (${formatPercent(share)})`}
               className={cn(
                 "flex min-w-0 items-center justify-center first:rounded-l-lg last:rounded-r-lg",
-                SPLIT_STEPS[i] ?? SPLIT_STEPS[5],
+                colorOf[i],
               )}
               style={{ width: `${share * 100}%` }}
             >
-              {share >= 0.08 ? (
-                <span
-                  className={cn(
-                    "truncate px-1 text-xs font-semibold tabular-nums",
-                    i < 2 ? "text-primary-fg" : "text-fg",
-                  )}
-                >
+              {share >= 0.1 ? (
+                <span className="truncate px-1 text-xs font-semibold tabular-nums text-white">
                   {formatPercent(share)}
                 </span>
               ) : null}
@@ -517,9 +524,11 @@ export function SplitBar({
       <ul className="mt-3 flex flex-wrap gap-x-5 gap-y-1.5 text-xs">
         {parts.map((p, i) => (
           <li key={p.key} className="flex items-center gap-1.5">
-            <span className={cn("size-2.5 rounded-sm", SPLIT_STEPS[i] ?? SPLIT_STEPS[5])} />
+            <span className={cn("size-2.5 rounded-sm", colorOf[i])} />
             <span className="text-fg">{p.label}</span>
-            <span className="tabular-nums text-fg-muted">{valueFormat(p.value)}</span>
+            <span className="tabular-nums text-fg-muted">
+              {valueFormat(p.value)} · {formatPercent(p.value / total)}
+            </span>
           </li>
         ))}
       </ul>
@@ -533,13 +542,8 @@ export interface HeatCell {
   value: number;
 }
 
-const HEAT_STEPS = [
-  "bg-primary/15",
-  "bg-primary/35",
-  "bg-primary/60",
-  "bg-primary/85",
-  "bg-primary",
-];
+/** One hue (blue) that deepens with the value. */
+const HEAT_STEPS = ["bg-viz-4/20", "bg-viz-4/40", "bg-viz-4/60", "bg-viz-4/80", "bg-viz-4"];
 
 /**
  * When something happens across the week: weekdays down, hours across, one
@@ -550,12 +554,15 @@ export function WeekHeatmap({
   valueFormat = (v) => String(v),
   ariaLabel,
   weekStartsOn = 1,
+  fill = false,
 }: {
   cells: HeatCell[];
   valueFormat?: (v: number) => string;
   ariaLabel: string;
   /** 0 = Sunday, 1 = Monday. */
   weekStartsOn?: 0 | 1;
+  /** Stretch the rows to the container's height. */
+  fill?: boolean;
 }) {
   const [hover, setHover] = useState<HeatCell | null>(null);
   const grid = useMemo(() => {
@@ -577,8 +584,18 @@ export function WeekHeatmap({
       ? -1
       : Math.min(HEAT_STEPS.length - 1, Math.floor((v / max) * HEAT_STEPS.length - 1e-9));
   return (
-    <div role="img" aria-label={ariaLabel} onMouseLeave={() => setHover(null)}>
-      <div className="grid grid-cols-[2.5rem_1fr] gap-x-2 gap-y-1">
+    <div
+      role="img"
+      aria-label={ariaLabel}
+      onMouseLeave={() => setHover(null)}
+      className={cn(fill && "flex h-full min-h-[16rem] flex-col")}
+    >
+      <div
+        className={cn(
+          "grid grid-cols-[2.5rem_1fr] gap-x-2 gap-y-1",
+          fill && "flex-1 grid-rows-[repeat(7,minmax(1.25rem,1fr))_auto]",
+        )}
+      >
         {days.map((d) => (
           <div key={d} className="contents">
             <div className="self-center text-right text-[11px] text-fg-subtle">{dayName(d)}</div>
@@ -592,7 +609,7 @@ export function WeekHeatmap({
                     onMouseEnter={() => setHover({ weekday: d, hour: h, value: v })}
                     title={`${dayName(d)} ${formatHour(h)}: ${valueFormat(v)}`}
                     className={cn(
-                      "h-5 rounded-[3px]",
+                      fill ? "h-full min-h-5 rounded-[3px]" : "h-5 rounded-[3px]",
                       s < 0 ? "bg-bg-subtle ring-1 ring-inset ring-border-subtle" : HEAT_STEPS[s],
                       hover && hover.weekday === d && hover.hour === h && "ring-2 ring-fg/60",
                     )}
@@ -647,6 +664,8 @@ export function StackedColumns({
   height = 180,
   ariaLabel,
   valueFormat = (v) => String(v),
+  aColor = "viz-1",
+  bColor = "viz-3",
 }: {
   data: StackDatum[];
   aLabel: string;
@@ -654,6 +673,8 @@ export function StackedColumns({
   height?: number;
   ariaLabel: string;
   valueFormat?: (v: number) => string;
+  aColor?: Viz;
+  bColor?: Viz;
 }) {
   const [hover, setHover] = useState<number | null>(null);
   const [ref, size] = useElementSize<HTMLDivElement>();
@@ -732,13 +753,13 @@ export function StackedColumns({
                         ? `M${x},${base}V${base - ah}H${x + barW}V${base}Z`
                         : roundedTopBar(x, base - ah, barW, ah, 4)
                     }
-                    className="pointer-events-none fill-primary"
+                    className={cn("pointer-events-none", VIZ[aColor].fill)}
                   />
                 ) : null}
                 {bh > 0 ? (
                   <path
                     d={roundedTopBar(x, base - ah - bh - (ah > 0 ? 2 : 0), barW, bh, 4)}
-                    className="pointer-events-none fill-primary/40"
+                    className={cn("pointer-events-none", VIZ[bColor].fill)}
                   />
                 ) : null}
               </g>
@@ -783,13 +804,184 @@ export function StackedColumns({
       </div>
       <ul className="mt-2 flex gap-4 text-xs">
         <li className="flex items-center gap-1.5">
-          <span className="size-2.5 rounded-sm bg-primary" />
+          <span className={cn("size-2.5 rounded-sm", VIZ[aColor].bg)} />
           <span className="text-fg">{aLabel}</span>
         </li>
         <li className="flex items-center gap-1.5">
-          <span className="size-2.5 rounded-sm bg-primary/40" />
+          <span className={cn("size-2.5 rounded-sm", VIZ[bColor].bg)} />
           <span className="text-fg">{bLabel}</span>
         </li>
+      </ul>
+    </div>
+  );
+}
+
+export interface LineSeries {
+  key: string;
+  label: string;
+  color: Viz;
+  values: number[];
+}
+
+/**
+ * Lines over time for a few series that share one unit (never two y-scales).
+ * 2px lines, a soft area under the first series, a crosshair with every
+ * series' value on hover, and a legend.
+ */
+export function SeriesLines({
+  labels,
+  series,
+  height = 200,
+  ariaLabel,
+  valueFormat = (v) => String(v),
+}: {
+  labels: string[];
+  series: LineSeries[];
+  height?: number;
+  ariaLabel: string;
+  valueFormat?: (v: number) => string;
+}) {
+  const [hover, setHover] = useState<number | null>(null);
+  const [ref, size] = useElementSize<HTMLDivElement>();
+  const width = Math.max(240, Math.round(size.width || 600));
+  const padL = 32;
+  const padR = 8;
+  const padB = 22;
+  const padT = 10;
+  const n = labels.length;
+  const max = niceMax(Math.max(0, ...series.flatMap((s) => s.values)));
+  const plotW = width - padL - padR;
+  const plotH = height - padB - padT;
+  const x = (i: number) => padL + (n <= 1 ? plotW / 2 : (i / (n - 1)) * plotW);
+  const y = (v: number) => padT + plotH - (v / max) * plotH;
+  const path = (vals: number[]) => vals.map((v, i) => `${i ? "L" : "M"}${x(i)},${y(v)}`).join("");
+  const labelIdx = n ? [0, Math.floor((n - 1) / 2), n - 1] : [];
+  const pick = (clientX: number, el: SVGSVGElement) => {
+    const r = el.getBoundingClientRect();
+    const px = ((clientX - r.left) / r.width) * width;
+    const i = n <= 1 ? 0 : Math.round(((px - padL) / plotW) * (n - 1));
+    setHover(Math.max(0, Math.min(n - 1, i)));
+  };
+  return (
+    <div>
+      <div ref={ref} className="relative">
+        <svg
+          viewBox={`0 0 ${width} ${height}`}
+          width="100%"
+          height={height}
+          className="block overflow-visible"
+          role="img"
+          aria-label={ariaLabel}
+          onMouseMove={(e) => pick(e.clientX, e.currentTarget)}
+          onMouseLeave={() => setHover(null)}
+        >
+          {[0, max / 2, max].map((tick) => (
+            <g key={tick}>
+              <line
+                x1={padL}
+                x2={width - padR}
+                y1={y(tick)}
+                y2={y(tick)}
+                className="stroke-border-subtle"
+                strokeWidth={1}
+                vectorEffect="non-scaling-stroke"
+              />
+              <text
+                x={padL - 6}
+                y={y(tick) + 3}
+                textAnchor="end"
+                className="fill-fg-subtle text-[10px] tabular-nums"
+              >
+                {valueFormat(tick)}
+              </text>
+            </g>
+          ))}
+          {series[0] && n > 1 ? (
+            <path
+              d={`${path(series[0].values)}L${x(n - 1)},${padT + plotH}L${x(0)},${padT + plotH}Z`}
+              className={cn(VIZ[series[0].color].fill, "opacity-15")}
+            />
+          ) : null}
+          {series.map((s) => (
+            <path
+              key={s.key}
+              d={path(s.values)}
+              fill="none"
+              strokeWidth={2}
+              strokeLinejoin="round"
+              strokeLinecap="round"
+              vectorEffect="non-scaling-stroke"
+              className={VIZ[s.color].stroke}
+            />
+          ))}
+          {hover !== null ? (
+            <g>
+              <line
+                x1={x(hover)}
+                x2={x(hover)}
+                y1={padT}
+                y2={padT + plotH}
+                className="stroke-border"
+                strokeWidth={1}
+                vectorEffect="non-scaling-stroke"
+              />
+              {series.map((s) => (
+                <circle
+                  key={s.key}
+                  cx={x(hover)}
+                  cy={y(s.values[hover] ?? 0)}
+                  r={4.5}
+                  strokeWidth={2}
+                  className={cn(VIZ[s.color].fill, "stroke-surface")}
+                />
+              ))}
+            </g>
+          ) : null}
+          <line
+            x1={padL}
+            x2={width - padR}
+            y1={padT + plotH}
+            y2={padT + plotH}
+            className="stroke-border"
+            strokeWidth={1}
+            vectorEffect="non-scaling-stroke"
+          />
+          {labelIdx.map((i, k) =>
+            k > 0 && i === labelIdx[k - 1] ? null : (
+              <text
+                key={`l${i}`}
+                x={x(i)}
+                y={height - 6}
+                textAnchor={k === 0 ? "start" : k === 2 ? "end" : "middle"}
+                className="fill-fg-subtle text-[10px]"
+              >
+                {labels[i]}
+              </text>
+            ),
+          )}
+        </svg>
+        {hover !== null ? (
+          <div
+            className="pointer-events-none absolute top-0 z-10 -translate-x-1/2 whitespace-nowrap rounded-md border border-border bg-elevated px-2.5 py-1.5 text-xs shadow-md"
+            style={{ left: `${(x(hover) / width) * 100}%` }}
+          >
+            <div className="font-medium text-fg">{labels[hover]}</div>
+            {series.map((s) => (
+              <div key={s.key} className="flex items-center gap-1.5 tabular-nums text-fg-muted">
+                <span className={cn("size-2 rounded-full", VIZ[s.color].bg)} />
+                {s.label} <span className="text-fg">{valueFormat(s.values[hover] ?? 0)}</span>
+              </div>
+            ))}
+          </div>
+        ) : null}
+      </div>
+      <ul className="mt-2 flex flex-wrap gap-4 text-xs">
+        {series.map((s) => (
+          <li key={s.key} className="flex items-center gap-1.5">
+            <span className={cn("h-0.5 w-3 rounded-full", VIZ[s.color].bg)} />
+            <span className="text-fg">{s.label}</span>
+          </li>
+        ))}
       </ul>
     </div>
   );

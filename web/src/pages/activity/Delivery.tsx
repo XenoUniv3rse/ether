@@ -1,6 +1,6 @@
 import { DashboardPanel } from "@braedonsaunders/appkit-dashboard/primitives";
 import { Cpu, Gauge, HardDriveDownload, PlayCircle } from "lucide-react";
-import { RankedBars, SplitBar, StackedColumns } from "../../components/charts";
+import { RankedBars, SplitBar, StackedColumns, type Viz } from "../../components/charts";
 import { ErrorPanel, LoadingRows } from "../../components/feedback";
 import { Kpi, KpiRow } from "../../components/Kpi";
 import { t, tn } from "../../i18n";
@@ -14,12 +14,31 @@ const DECISIONS: Record<string, () => string> = {
   transcode: () => t("Transcode"),
 };
 
-const playsOf = (items: Bucket[] | undefined, label: (b: Bucket) => string = (b) => b.label) =>
+const playsOf = (
+  items: Bucket[] | undefined,
+  label: (b: Bucket) => string = (b) => b.label,
+  color?: (b: Bucket) => Viz | undefined,
+) =>
   (items ?? []).map((b) => ({
     key: b.label || "other",
     label: label(b) || t("Other"),
     value: b.plays,
+    color: color?.(b),
   }));
+
+/** Fixed colours, so each delivery kind reads the same in every chart. */
+const DECISION_COLOR: Record<string, Viz> = {
+  "direct-play": "viz-1",
+  "direct-stream": "viz-4",
+  "audio-transcode": "viz-5",
+  transcode: "viz-3",
+};
+const QUALITY_COLOR: Record<string, Viz> = {
+  "4K HDR": "viz-2",
+  "4K": "viz-5",
+  HDR: "viz-3",
+  "HD/SD": "viz-4",
+};
 
 const mbps = (kbps: number) =>
   t("{rate} Mbps", { rate: fixed(kbps / 1000, kbps >= 10000 ? 0 : 1) });
@@ -103,7 +122,11 @@ export function Delivery({
           <DashboardPanel title={t("How plays were delivered")}>
             <SplitBar
               ariaLabel={t("How plays were delivered")}
-              data={playsOf(decisions, (b) => DECISIONS[b.label]?.() ?? b.label)}
+              data={playsOf(
+                decisions,
+                (b) => DECISIONS[b.label]?.() ?? b.label,
+                (b) => DECISION_COLOR[b.label],
+              )}
               valueFormat={plays}
             />
           </DashboardPanel>
@@ -121,7 +144,7 @@ export function Delivery({
           <DashboardPanel title={t("Picture quality")}>
             <SplitBar
               ariaLabel={t("Picture quality")}
-              data={playsOf(s.qualities)}
+              data={playsOf(s.qualities, undefined, (b) => QUALITY_COLOR[b.label])}
               valueFormat={plays}
             />
           </DashboardPanel>
@@ -130,8 +153,10 @@ export function Delivery({
           <DashboardPanel title={t("Home and away")}>
             <SplitBar
               ariaLabel={t("Home and away")}
-              data={playsOf(s.places, (b) =>
-                b.label === "away" ? t("Away from home") : t("At home"),
+              data={playsOf(
+                s.places,
+                (b) => (b.label === "away" ? t("Away from home") : t("At home")),
+                (b) => (b.label === "away" ? "viz-4" : "viz-1"),
               )}
               valueFormat={plays}
             />
@@ -141,6 +166,7 @@ export function Delivery({
 
       <DashboardPanel title={t("Apps and devices")}>
         <RankedBars
+          color="viz-4"
           ariaLabel={t("Apps and devices")}
           data={s.platforms.slice(0, 10).map((b, i) => ({
             key: `${b.label}-${i}`,

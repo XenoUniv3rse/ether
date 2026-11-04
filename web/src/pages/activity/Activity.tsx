@@ -6,7 +6,7 @@ import { normalizeSessions } from "../../lib/health";
 import { useAsync, useInterval } from "../../lib/hooks";
 import { PlayHistory, ViewingFilters } from "./History";
 import { Experience, ExperiencePeriod } from "./Experience";
-import { NowPlaying, ProtocolFilter } from "./NowPlaying";
+import { NowPlaying, ProtocolFilter, useNowView, ViewSwitch } from "./NowPlaying";
 import { Delivery } from "./Delivery";
 import { Viewing } from "./Viewing";
 import { viewingQuery, type Play, type Summary, type ViewingFilter } from "./types";
@@ -45,6 +45,7 @@ export default function Activity() {
   useInstallableDashboard();
   const [filter, setFilter] = useState<ViewingFilter>({ days: "30", user: "", year: "" });
   const [protocol, setProtocol] = useState("");
+  const [nowView, setNowView] = useNowView();
   const query = viewingQuery(filter);
   const viewingTab = tab === "history" || tab === "viewing" || tab === "delivery";
 
@@ -84,7 +85,10 @@ export default function Activity() {
       // Every tab keeps its filters here, so its four KPIs open the page at the same place.
       tabActions={
         tab === "now" ? (
-          <ProtocolFilter streams={sessions.data ?? []} value={protocol} onChange={setProtocol} />
+          <>
+            <ProtocolFilter streams={sessions.data ?? []} value={protocol} onChange={setProtocol} />
+            <ViewSwitch value={nowView} onChange={setNowView} />
+          </>
         ) : tab === "experience" ? (
           <ExperiencePeriod />
         ) : (
@@ -99,7 +103,7 @@ export default function Activity() {
               {transcoder.data.playbackError || transcoder.data.notice}
             </p>
           ) : null}
-          <NowPlaying state={sessions} protocol={protocol} />
+          <NowPlaying state={sessions} protocol={protocol} view={nowView} />
         </>
       ) : tab === "experience" ? (
         <Experience />
@@ -115,6 +119,7 @@ export default function Activity() {
           ) : tab === "viewing" ? (
             <Viewing
               summary={viewing.data?.summary}
+              viewers={viewers.data ?? []}
               error={viewing.error}
               onRetry={() => void viewing.reload()}
             />

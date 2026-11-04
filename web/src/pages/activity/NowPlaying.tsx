@@ -1,9 +1,21 @@
 import { Badge, Button, EmptyState, Select, toast } from "@braedonsaunders/appkit-ui";
-import { ArrowRight, Cpu, Gauge, Globe, Home, PlayCircle, Radio, Square } from "lucide-react";
+import {
+  ArrowRight,
+  Cpu,
+  Gauge,
+  Globe,
+  Home,
+  LayoutGrid,
+  PlayCircle,
+  Radio,
+  Rows3,
+  Square,
+} from "lucide-react";
 import { useState } from "react";
 import { Artwork } from "../../components/Artwork";
 import { Meter } from "../../components/charts";
 import { ErrorPanel, LoadingRows } from "../../components/feedback";
+import { Segmented } from "../../components/fields";
 import { Kpi, KpiRow } from "../../components/Kpi";
 import { apiFetch, errorMessage } from "../../lib/api";
 import { t, tn } from "../../i18n";
@@ -187,6 +199,129 @@ function StreamCard({ s, stopping, onStop }: { s: Stream; stopping: boolean; onS
   );
 }
 
+/** A compact, information-rich row for the list view. */
+function StreamRow({ s, stopping, onStop }: { s: Stream; stopping: boolean; onStop: () => void }) {
+  const title = useTitle(s.ratingKey ? String(s.ratingKey) : s.key || undefined);
+  const converting = isTranscoding(s);
+  const elapsed = s.progress !== null && s.durationMs ? s.progress * s.durationMs : null;
+  const subtitle =
+    title?.type === "episode" && title.showTitle
+      ? `${title.showTitle} · ${t("S{season} E{episode}", { season: title.season ?? 0, episode: title.episode ?? 0 })}`
+      : title?.year
+        ? String(title.year)
+        : "";
+  return (
+    <li className="grid grid-cols-[3rem_minmax(0,1fr)_auto] items-center gap-x-4 gap-y-3 p-3 sm:grid-cols-[3rem_minmax(0,1.4fr)_minmax(0,1fr)_minmax(0,1fr)_9rem_auto] sm:p-4">
+      <Artwork
+        src={title?.poster}
+        alt={s.title}
+        title=""
+        className="aspect-[2/3] w-12 rounded-md"
+      />
+      <div className="min-w-0">
+        <div className="flex items-center gap-2">
+          <p className="truncate font-medium text-fg">{title?.title || s.title}</p>
+          <Badge variant={converting ? "warning" : "success"} className="shrink-0">
+            {decisionLabel(s)}
+          </Badge>
+        </div>
+        <p className="truncate text-xs text-fg-muted">
+          {[subtitle, s.user, s.device].filter(Boolean).join(" · ")}
+        </p>
+      </div>
+      <div className="hidden min-w-0 space-y-0.5 text-xs sm:block">
+        <p className="truncate text-fg">
+          <Flow from={s.sourceVideo} to={s.outputVideo} />
+        </p>
+        <p className="truncate text-fg-muted">
+          <Flow from={s.sourceAudio} to={s.outputAudio} />
+        </p>
+      </div>
+      <div className="hidden min-w-0 space-y-0.5 text-xs sm:block">
+        <p className="flex items-center gap-1.5 truncate text-fg">
+          {s.remote ? (
+            <Globe size={12} className="shrink-0 text-info" />
+          ) : (
+            <Home size={12} className="shrink-0 text-success" />
+          )}
+          {s.remote ? t("Away") : t("Home")}
+          {s.ip ? <span className="truncate font-mono text-fg-muted">{s.ip}</span> : null}
+        </p>
+        <p className="truncate tabular-nums text-fg-muted">
+          {mbpsOf(s.bitrateKbps ? s.bitrateKbps * 1000 : s.speedBps * 8)}
+          {s.origin ? ` · ${s.origin}` : ""}
+        </p>
+      </div>
+      <div className="col-span-2 min-w-0 sm:col-span-1">
+        {s.progress !== null ? (
+          <Meter
+            value={s.progress}
+            buffered={s.buffered}
+            label={elapsed !== null ? clockOf(elapsed) : undefined}
+            valueLabel={formatPercent(s.progress)}
+          />
+        ) : (
+          <p className="text-xs text-fg-muted">{t("Waiting for playback position")}</p>
+        )}
+      </div>
+      <Button
+        variant="ghost"
+        size="sm"
+        disabled={stopping}
+        onClick={onStop}
+        aria-label={t("Stop stream for {viewer}", { viewer: s.user })}
+        className="col-start-3 row-start-1 sm:col-auto sm:row-auto"
+      >
+        <Square size={13} />
+      </Button>
+    </li>
+  );
+}
+
+/** Card or list layout for Now Playing, remembered on this browser. */
+export type NowView = "cards" | "list";
+const VIEW_KEY = "ether.activity.nowView";
+export function useNowView(): [NowView, (v: NowView) => void] {
+  const [view, setView] = useState<NowView>(() =>
+    typeof localStorage !== "undefined" && localStorage.getItem(VIEW_KEY) === "list"
+      ? "list"
+      : "cards",
+  );
+  return [
+    view,
+    (v) => {
+      setView(v);
+      try {
+        localStorage.setItem(VIEW_KEY, v);
+      } catch {
+        // Private mode: keep the choice for this visit only.
+      }
+    },
+  ];
+}
+
+/** The Cards / List switch on Now Playing's tab row. */
+export function ViewSwitch({
+  value,
+  onChange,
+}: {
+  value: NowView;
+  onChange: (v: NowView) => void;
+}) {
+  return (
+    <Segmented
+      ariaLabel={t("Layout")}
+      size="sm"
+      value={value}
+      onChange={onChange}
+      options={[
+        { value: "cards", label: t("Cards"), icon: <LayoutGrid size={13} /> },
+        { value: "list", label: t("List"), icon: <Rows3 size={13} /> },
+      ]}
+    />
+  );
+}
+
 /** The protocols of the live streams, for the tab row's filter. */
 export const streamProtocols = (streams: Stream[]) =>
   [...new Set(streams.map((stream) => stream.protocol))].sort();
@@ -220,7 +355,15 @@ export function ProtocolFilter({
   );
 }
 
-export function NowPlaying({ state, protocol }: { state: AsyncState<Stream[]>; protocol: string }) {
+export function NowPlaying({
+  state,
+  protocol,
+  view = "cards",
+}: {
+  state: AsyncState<Stream[]>;
+  protocol: string;
+  view?: NowView;
+}) {
   const [stopping, setStopping] = useState<string | null>(null);
   const streams = state.data ?? [];
   const filtered = protocol ? streams.filter((stream) => stream.protocol === protocol) : streams;
@@ -278,16 +421,29 @@ export function NowPlaying({ state, protocol }: { state: AsyncState<Stream[]>; p
       {!state.data ? (
         <LoadingRows rows={2} />
       ) : filtered.length ? (
-        <div className="grid gap-4 xl:grid-cols-2">
-          {filtered.map((s) => (
-            <StreamCard
-              key={s.id || s.key}
-              s={s}
-              stopping={stopping === s.id}
-              onStop={() => void stop(s.id)}
-            />
-          ))}
-        </div>
+        view === "list" ? (
+          <ul className="divide-y divide-border overflow-hidden rounded-xl border border-border bg-surface">
+            {filtered.map((s) => (
+              <StreamRow
+                key={s.id || s.key}
+                s={s}
+                stopping={stopping === s.id}
+                onStop={() => void stop(s.id)}
+              />
+            ))}
+          </ul>
+        ) : (
+          <div className="grid gap-4 xl:grid-cols-2">
+            {filtered.map((s) => (
+              <StreamCard
+                key={s.id || s.key}
+                s={s}
+                stopping={stopping === s.id}
+                onStop={() => void stop(s.id)}
+              />
+            ))}
+          </div>
+        )
       ) : streams.length ? (
         <p>{t("No streams match this protocol.")}</p>
       ) : (
