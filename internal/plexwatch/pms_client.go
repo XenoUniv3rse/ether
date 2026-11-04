@@ -17,29 +17,38 @@ import (
 	"github.com/braedonsaunders/ether/internal/retryafter"
 )
 
-// PMS HTTP API used for server-to-server sync. Shapes and their provenance:
+// PMS HTTP API used for server-to-server sync. Shapes and their provenance.
+// "Recorded" is testdata/conform/plex (PMS 1.43.4). "Probed" is a read-only
+// probe of a real PMS 1.43.5 on 2026-11-04; the fake server in pms_test.go
+// reproduces its shapes with synthetic values.
 //
-//   - GET /identity → MediaContainer.machineIdentifier, version. Recorded
-//     (testdata/conform/plex/*/..._json_identity.json, PMS 1.43.4).
-//   - GET /myplex/account → MyPlex.username, signInState. Recorded
-//     (..._json_myplex_account.json). Only the server's admin token reads it.
-//   - GET /library/metadata/{id}?includeGuids=1 → Metadata[].Guid[].id
-//     (imdb://, tmdb://, tvdb://), guid (plex://…), grandparentRatingKey,
-//     index, parentIndex. Recorded for a movie and an episode. viewCount,
-//     viewOffset and lastViewedAt are the standard per-user fields.
-//   - GET /library/sections → Directory[].key, type. Recorded.
-//   - GET /accounts → Account[].id, name. The repository's PMS importer
-//     (internal/migrate) reads the same route; not in the recorded corpus.
+//   - GET /identity → MediaContainer.machineIdentifier, version. Recorded.
+//     It answers without a token, so it does not prove a token works.
+//   - GET /myplex/account → MyPlex.username. Recorded and probed. Only the
+//     server's admin token reads it.
+//   - GET /accounts → Account[].id (number), name. Probed: the owner is id 1,
+//     and an unnamed id 0 row exists that is not a person.
 //   - GET /status/sessions/history/all?accountID=&sort=viewedAt:asc&viewedAt>=
-//     → Metadata[].ratingKey, type, viewedAt, accountID. Used by
-//     internal/migrate and mirrored by Ether's own PMS handler; not recorded.
-//     "viewedAt>=N" is the query key "viewedAt>" with value N, a strict
-//     greater-than in unix seconds.
-//   - GET /library/sections/{id}/all?type=&guid=plex://… → the item with that
-//     primary GUID, as python-plexapi's LibrarySection.getGuid does. Inferred.
+//     with X-Plex-Container-Start/Size → Metadata[].ratingKey (string), type,
+//     viewedAt and accountID (numbers), grandparentKey (no
+//     grandparentRatingKey), index, parentIndex; no Guid array. Probed: the
+//     account filter holds, "viewedAt>=N" (query key "viewedAt>") is strictly
+//     greater, rows are oldest first and paging works. Item ids therefore
+//     need one /library/metadata read per distinct item, cached per server.
+//   - GET /library/metadata/{id}?includeGuids=1 → guid, Guid[].id (imdb://,
+//     tmdb://, tvdb://), grandparentRatingKey (string), index, parentIndex,
+//     viewCount, lastViewedAt, viewOffset. Recorded and probed: a finished
+//     item omits viewOffset, which reads as no resume position.
+//   - GET /library/sections → Directory[].key, type. Recorded.
+//   - GET /library/sections/{id}/all?type=&guid=plex://…&includeGuids=1 → the
+//     one item with that primary GUID; an unknown GUID gives size 0 and no
+//     Metadata. Probed for a movie (type=1). The episode form (type=4) is
+//     inferred from python-plexapi's LibrarySection.getGuid.
 //   - GET /:/scrobble, /:/unscrobble, /:/progress with key=<ratingKey>,
 //     identifier=com.plexapp.plugins.library (and time= in milliseconds).
-//     Documented PMS routes, as python-plexapi calls them. Inferred.
+//     Writes, deliberately not probed; documented routes as python-plexapi
+//     calls them. Whether a scrobble adds a history row is unconfirmed; the
+//     echo guard assumes it and is harmless if it does not.
 
 const (
 	pmsIdentifier = "com.plexapp.plugins.library"

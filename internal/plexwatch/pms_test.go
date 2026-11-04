@@ -29,16 +29,18 @@ type fakePMS struct {
 	names    map[int64]string
 	items    map[int64]pmsMetadata
 	viewed   map[[2]int64]*pmsMetadata // (account, item) → state
-	history  []pmsMetadata
+	history  []fakeView
 	nextHist int64
 	writes   []string
 	requests []string
 	limitFor int // answer this many history requests with 429
+	// metadataReads counts /library/metadata requests.
+	metadataReads int
 }
 
 func newFakePMS(machine string, clock func() time.Time) *fakePMS {
 	return &fakePMS{machine: machine, clock: clock,
-		tokens: map[string]int64{"owner-" + machine: 1}, names: map[int64]string{1: "owner", 2: "kid"},
+		tokens: map[string]int64{"owner-" + machine: 1}, names: map[int64]string{0: "", 1: "owner", 2: "kid"},
 		items: map[int64]pmsMetadata{}, viewed: map[[2]int64]*pmsMetadata{}}
 }
 
@@ -62,8 +64,9 @@ func (f *fakePMS) viewLocked(account, key int64, at time.Time) {
 	st.LastViewedAt = flexInt(at.Unix())
 	it := f.items[key]
 	f.nextHist++
-	f.history = append(f.history, pmsMetadata{RatingKey: flexInt(key), Type: it.Type, Title: it.Title,
-		ViewedAt: flexInt(at.Unix()), AccountID: flexInt(account), Index: flexInt(f.nextHist)})
+	f.history = append(f.history, fakeView{id: f.nextHist, md: pmsMetadata{RatingKey: flexInt(key), Type: it.Type, Title: it.Title,
+		GrandparentTitle: it.GrandparentTitle, GrandparentRatingKey: it.GrandparentRatingKey, ParentIndex: it.ParentIndex, Index: it.Index,
+		ViewedAt: flexInt(at.Unix()), AccountID: flexInt(account)}})
 }
 
 func (f *fakePMS) stateLocked(account, key int64) *pmsMetadata {
@@ -129,7 +132,7 @@ func (f *fakePMS) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				hits = append(hits, it)
 			}
 		}
-		mc["Metadata"] = hits
+		pmsPage(mc, hits)
 	case strings.HasPrefix(r.URL.Path, "/library/metadata/"):
 		id, _ := strconv.ParseInt(strings.TrimPrefix(r.URL.Path, "/library/metadata/"), 10, 64)
 		it, ok := f.items[id]
@@ -139,7 +142,8 @@ func (f *fakePMS) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		st := f.stateLocked(account, id)
 		it.ViewCount, it.ViewOffset, it.LastViewedAt = st.ViewCount, st.ViewOffset, st.LastViewedAt
-		mc["Metadata"] = []pmsMetadata{it}
+		mc["Metadata"] = []map[string]any{pmsWire(it, false)}
+		f.metadataReads++
 	case r.URL.Path == "/status/sessions/history/all":
 		if f.limitFor > 0 {
 			f.limitFor--
@@ -149,20 +153,29 @@ func (f *fakePMS) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		after, _ := strconv.ParseInt(q.Get("viewedAt>"), 10, 64)
 		acct, _ := strconv.ParseInt(q.Get("accountID"), 10, 64)
-		var rows []pmsMetadata
+		var rows []fakeView
 		for _, h := range f.history {
-			if int64(h.ViewedAt) > after && int64(h.AccountID) == acct {
+			if int64(h.md.ViewedAt) > after && int64(h.md.AccountID) == acct {
 				rows = append(rows, h)
 			}
 		}
-		sort.SliceStable(rows, func(i, j int) bool { return rows[i].ViewedAt < rows[j].ViewedAt })
+		sort.SliceStable(rows, func(i, j int) bool { return rows[i].md.ViewedAt < rows[j].md.ViewedAt })
 		start, _ := strconv.Atoi(r.Header.Get("X-Plex-Container-Start"))
 		size, _ := strconv.Atoi(r.Header.Get("X-Plex-Container-Size"))
 		if start > len(rows) {
 			start = len(rows)
 		}
 		end := min(len(rows), start+size)
-		mc["Metadata"] = rows[start:end]
+		mc["totalSize"], mc["size"], mc["offset"] = len(rows), end-start, start
+		if end > start {
+			list := make([]map[string]any, 0, end-start)
+			for _, h := range rows[start:end] {
+				row := pmsWire(h.md, true)
+				row["historyKey"] = "/status/sessions/history/" + strconv.FormatInt(h.id, 10)
+				list = append(list, row)
+			}
+			mc["Metadata"] = list
+		}
 	case r.URL.Path == "/:/scrobble" || r.URL.Path == "/:/unscrobble" || r.URL.Path == "/:/progress":
 		if q.Get("identifier") != pmsIdentifier || f.items[key].Type == "" {
 			w.WriteHeader(http.StatusBadRequest)
@@ -190,6 +203,61 @@ func (f *fakePMS) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(out)
+}
+
+// pmsWire renders an item as PMS 1.43.5 does (probed read-only on a real
+// server): ratingKey is a string; history rows carry grandparentKey but no
+// grandparentRatingKey and no Guid array, and a string librarySectionID;
+// viewCount, viewOffset and lastViewedAt are omitted when unset (a finished
+// item has no viewOffset at all).
+func pmsWire(md pmsMetadata, history bool) map[string]any {
+	key := strconv.FormatInt(int64(md.RatingKey), 10)
+	out := map[string]any{"ratingKey": key, "key": "/library/metadata/" + key, "type": md.Type, "title": md.Title}
+	if md.Type == "episode" {
+		out["index"], out["parentIndex"] = int64(md.Index), int64(md.ParentIndex)
+		out["grandparentTitle"] = md.GrandparentTitle
+		if md.GrandparentRatingKey > 0 {
+			gp := strconv.FormatInt(int64(md.GrandparentRatingKey), 10)
+			out["grandparentKey"] = "/library/metadata/" + gp
+			if !history {
+				out["grandparentRatingKey"] = gp
+			}
+		}
+	}
+	if history {
+		out["librarySectionID"] = "1"
+		out["viewedAt"], out["accountID"], out["deviceID"] = int64(md.ViewedAt), int64(md.AccountID), 3
+		return out
+	}
+	out["guid"] = md.GUID
+	if len(md.GUIDs) > 0 {
+		out["Guid"] = md.GUIDs
+	}
+	for name, v := range map[string]flexInt{"viewCount": md.ViewCount, "viewOffset": md.ViewOffset, "lastViewedAt": md.LastViewedAt} {
+		if v != 0 {
+			out[name] = int64(v)
+		}
+	}
+	return out
+}
+
+// pmsPage fills a section result; an empty one has no Metadata key, as a
+// real server answers an unknown guid.
+func pmsPage(mc map[string]any, items []pmsMetadata) {
+	mc["size"], mc["totalSize"], mc["offset"] = len(items), len(items), 0
+	if len(items) == 0 {
+		return
+	}
+	list := make([]map[string]any, len(items))
+	for i, it := range items {
+		list[i] = pmsWire(it, false)
+	}
+	mc["Metadata"] = list
+}
+
+type fakeView struct {
+	id int64
+	md pmsMetadata
 }
 
 type fakeCatalog struct {
@@ -421,6 +489,11 @@ func TestPMSHistoryCursorAndMatching(t *testing.T) {
 			t.Fatalf("%v not imported", k)
 		}
 	}
+	// History rows carry no ids: each distinct item is read once (101, 103,
+	// 102, episode 111 and its show 110), not once per row.
+	if a.metadataReads != 5 {
+		t.Fatalf("metadata reads = %d for 263 history rows, want 5", a.metadataReads)
+	}
 	var cursor, skip int64
 	if err := h.svc.db.QueryRow(`SELECT in_cursor,in_skip FROM plexwatch_pms_viewer WHERE server_id=?`, srv.ID).Scan(&cursor, &skip); err != nil {
 		t.Fatal(err)
@@ -552,7 +625,7 @@ func TestPMSServerValidation(t *testing.T) {
 		t.Fatalf("update keeping token: %v", err)
 	}
 	accts, err := h.svc.Accounts(h.ctx, srv.ID)
-	if err != nil || len(accts) != 2 {
+	if err != nil || len(accts) != 2 { // the unnamed id 0 row is not a person
 		t.Fatalf("accounts = %+v, %v", accts, err)
 	}
 	for _, a := range accts {
