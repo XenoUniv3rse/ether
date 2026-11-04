@@ -98,7 +98,7 @@ type homeEntry struct {
 	builtAt     time.Time
 	usedAt      time.Time
 	provisional bool
-	impressions []core.Hub
+	impressions []homeImpression
 	warm        core.RatingKey
 	section     int
 	build       homeBuildFunc
@@ -290,6 +290,9 @@ func detachedTemplate(r *http.Request, pr *Request) (*http.Request, Request) {
 
 func (s *Server) storeHome(e *homeEntry) {
 	e.size = int64(len(e.body)+len(e.gz)) + 2048
+	for _, r := range e.impressions {
+		e.size += int64(len(r.id)+len(r.title)) + 8*int64(len(r.keys)) + 64
+	}
 	c := s.home
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -464,32 +467,46 @@ func gzipBody(body []byte) []byte {
 	return buf.Bytes()
 }
 
-// impressionHubs is what recordImpressions reports for the written rows,
-// reduced to row identities and item keys.
-func (s *Server) impressionHubs(pr *Request, written []model.Hub, served map[string]core.Hub) []core.Hub {
+// homeImpression is one written row as recordImpressions reports it: the
+// row's identity and its item keys (the recommender reads nothing else).
+type homeImpression struct {
+	id, title string
+	keys      []core.RatingKey
+}
+
+// impressionHubs is what recordImpressions reports for the written rows.
+func (s *Server) impressionHubs(pr *Request, written []model.Hub, served map[string]core.Hub) []homeImpression {
 	if _, ok := s.d.Recommender.(core.ImpressionSink); !ok || pr.User == nil {
 		return nil
 	}
-	out := make([]core.Hub, 0, len(written))
+	out := make([]homeImpression, 0, len(written))
 	for _, mh := range written {
 		h, ok := served[mh.HubIdentifier]
 		if !ok {
 			continue
 		}
 		items := s.filterAllowed(pr.User, h.Items)
-		keys := make([]core.Title, len(items))
+		keys := make([]core.RatingKey, len(items))
 		for i := range items {
-			keys[i] = core.Title{Key: items[i].Key}
+			keys[i] = items[i].Key
 		}
-		out = append(out, core.Hub{ID: h.ID, Title: h.Title, Items: keys})
+		out = append(out, homeImpression{id: h.ID, title: h.Title, keys: keys})
 	}
 	return out
 }
 
-func (s *Server) recordCompactImpressions(pr *Request, hc core.HubContext, hubs []core.Hub) {
+func (s *Server) recordCompactImpressions(pr *Request, hc core.HubContext, rows []homeImpression) {
 	sink, ok := s.d.Recommender.(core.ImpressionSink)
-	if !ok || pr.User == nil || len(hubs) == 0 {
+	if !ok || pr.User == nil || len(rows) == 0 {
 		return
+	}
+	hubs := make([]core.Hub, len(rows))
+	for i, r := range rows {
+		items := make([]core.Title, len(r.keys))
+		for j, k := range r.keys {
+			items[j].Key = k
+		}
+		hubs[i] = core.Hub{ID: r.id, Title: r.title, Items: items}
 	}
 	sink.RecordImpressions(pr.User, hc, hubs)
 }
