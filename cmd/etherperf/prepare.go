@@ -8,12 +8,13 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"time"
 
 	sqlite "modernc.org/sqlite"
 
 	"github.com/braedonsaunders/ether/internal/perfharness"
-	"github.com/braedonsaunders/ether/internal/store"
 )
 
 // copyDataDir copies what a server needs from src into dst: a consistent
@@ -118,11 +119,12 @@ func copyTree(src, dst string) error {
 }
 
 // sanitizeConfig rewrites the copied settings so the server cannot reach
-// anything real: no Usenet, debrid or indexer providers, no LLM, subtitle,
+// anything real: no Usenet, debrid or indexer providers (unless keepProviders;
+// the sandbox still blocks outbound), no LLM, subtitle,
 // Trakt or Simkl accounts, no update feed, no UPnP or remote access, and
 // every listener on loopback ports derived from port. Unknown fields are
 // kept as they are.
-func sanitizeConfig(path string, port int) error {
+func sanitizeConfig(path string, port int, keepProviders bool) error {
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return err
@@ -143,6 +145,10 @@ func sanitizeConfig(path string, port int) error {
 	server["port"] = port
 	server["bindAddress"] = "127.0.0.1"
 	server["webFrameOrigins"] = []any{}
+	// A production snapshot may contain absolute paths on another host. Keep
+	// all cache and transcode writes inside the disposable data directory.
+	section("cache")["dir"] = filepath.Join(filepath.Dir(path), "perf-cache")
+	section("transcode")["tempDir"] = filepath.Join(filepath.Dir(path), "perf-transcode")
 	c["frontendPorts"] = map[string]any{"jellyfin": port + 1, "emby": port + 2, "silo": port + 3}
 	plex := section("plex")
 	plex["remoteAccess"] = false
@@ -150,9 +156,11 @@ func sanitizeConfig(path string, port int) error {
 	updates := section("updates")
 	updates["autoUpdate"] = false
 	updates["feedUrl"] = "http://127.0.0.1:1/feed"
-	section("usenet")["providers"] = []any{}
-	section("debrid")["providers"] = []any{}
-	c["indexers"] = []any{}
+	if !keepProviders {
+		section("usenet")["providers"] = []any{}
+		section("debrid")["providers"] = []any{}
+		c["indexers"] = []any{}
+	}
 	for _, name := range []string{"llm", "openSubtitles", "trakt", "simkl", "posters"} {
 		section(name)["enabled"] = false
 	}
@@ -166,13 +174,39 @@ func sanitizeConfig(path string, port int) error {
 
 // mintCopy opens the copied database (applying this tree's migrations, as
 // the server would) and mints viewer credentials into it.
+// mintCopy mints credentials into the copy, which the measured build has
+// already migrated; it is opened without this tool's migrations.
 func mintCopy(ctx context.Context, dataDir string, max int) ([]perfharness.Viewer, error) {
-	db, err := store.Open(ctx, dataDir)
+	db, err := sql.Open("sqlite", "file:"+filepath.Join(dataDir, "ether.db")+"?_pragma=busy_timeout(10000)")
 	if err != nil {
 		return nil, err
 	}
 	defer db.Close()
 	return perfharness.MintCredentials(ctx, db, max)
+}
+
+// migrateCopy starts the measured build on the copy once, so it applies its
+// own migrations, and stops it.
+func migrateCopy(ctx context.Context, bin, dataDir string, port int, dir string) (time.Duration, error) {
+	start := time.Now()
+	srv, err := startServer(ctx, bin, dataDir, port, filepath.Join(dir, "migrate-trace.jsonl"), filepath.Join(dir, "migrate.log"))
+	if err != nil {
+		return 0, err
+	}
+	srv.stop()
+	_ = os.Remove(filepath.Join(dir, "migrate-trace.jsonl"))
+	return time.Since(start), nil
+}
+
+// clusterInit copies the SQLite copy into the empty PostgreSQL database with
+// the measured build's own `ether cluster init`.
+func clusterInit(ctx context.Context, bin, dataDir, url, logPath string) error {
+	out, err := exec.CommandContext(ctx, bin, "cluster", "init", "--data-dir", dataDir, "--database-url", url).CombinedOutput()
+	_ = os.WriteFile(logPath, out, 0o600)
+	if err != nil {
+		return fmt.Errorf("%w (see %s)", err, logPath)
+	}
+	return nil
 }
 
 func fileExists(p string) bool {

@@ -1,3 +1,7 @@
+import { useSlots, PluginActionMenu } from "../../viewspec/slots/Slots";
+import { PluginView } from "../../viewspec/PluginView";
+import { SlotAnchor } from "../../components/SlotXray";
+import { textOf } from "../../lib/extend";
 import { SubtabNav } from "../../components/layout";
 import {
   Avatar,
@@ -7,7 +11,7 @@ import {
   Spinner,
   toast,
 } from "@braedonsaunders/appkit-ui";
-import { ArrowLeft, CheckCircle2, History } from "lucide-react";
+import { ArrowLeft, CheckCircle2, Gauge, History } from "lucide-react";
 import { useCallback, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { PageSubtabs } from "../../components/layout";
@@ -56,7 +60,9 @@ function asTab(raw: string | undefined): Tab | undefined {
 export default function ViewerProfile() {
   const { id: raw, tab: routeTab } = useParams();
   const id = Number(raw);
-  const tab: Tab = asTab(routeTab) ?? "overview";
+  const slots = useSlots("viewer.tab");
+  const pluginTab = slots.find((d) => `plugin:${d.owner}:${d.meta?.key}` === routeTab);
+  const tab = pluginTab ? routeTab! : (asTab(routeTab) ?? "overview");
   const navigate = useNavigate();
   const [search, setSearch] = useSearchParams();
   const listTab = ["alerts", "hidden"].includes(search.get("list") ?? "")
@@ -167,7 +173,13 @@ export default function ViewerProfile() {
               <p className="text-sm text-fg-muted">
                 {v.username} · {t("Active {time}", { time: relativeTime(v.lastActive) })}
               </p>
+              <ExperienceLink viewer={v} />
             </div>
+            <PluginActionMenu
+              slot="actionMenu.viewer"
+              recordId={String(id)}
+              onRefresh={() => void viewer.reload()}
+            />
             <ViewerActions
               viewer={v}
               onChange={() => void viewer.reload()}
@@ -179,24 +191,37 @@ export default function ViewerProfile() {
         </div>
       }
       subtabs={
-        <SubtabNav
-          ariaLabel={t("Viewer sections")}
-          active={tab}
-          onSelect={setTab}
-          tabs={[
-            { key: "overview", label: t("Overview") },
-            { key: "home", label: t("Home") },
-            { key: "taste", label: t("Taste") },
-            { key: "activity", label: t("Recent activity") },
-            { key: "playback", label: t("Audio & subtitles") },
-            { key: "limits", label: t("Limits") },
-            { key: "sign-in", label: t("Sign-in & devices") },
-            ...(serverAccess ? [{ key: "lists", label: t("Lists & alerts") }] : []),
-          ]}
-        />
+        <SlotAnchor slot="viewer.tab" onPickSlot={() => navigate("/plugins/studio")}>
+          <SubtabNav
+            ariaLabel={t("Viewer sections")}
+            active={tab}
+            onSelect={setTab}
+            tabs={[
+              { key: "overview", label: t("Overview") },
+              { key: "home", label: t("Home") },
+              { key: "taste", label: t("Taste") },
+              { key: "activity", label: t("Recent activity") },
+              { key: "playback", label: t("Audio & subtitles") },
+              { key: "limits", label: t("Limits") },
+              { key: "sign-in", label: t("Sign-in & devices") },
+              ...(serverAccess ? [{ key: "lists", label: t("Lists & alerts") }] : []),
+              // Plugin tabs follow Ether's own sections.
+              ...slots.map((d) => ({
+                key: `plugin:${d.owner}:${d.meta!.key}`,
+                label: textOf(d.label),
+              })),
+            ]}
+          />
+        </SlotAnchor>
       }
     >
-      {tab === "overview" ? (
+      {pluginTab ? (
+        <PluginView
+          plugin={pluginTab.owner}
+          page={pluginTab.meta!.key}
+          params={{ recordType: "viewer", recordId: String(id) }}
+        />
+      ) : tab === "overview" ? (
         <ViewerDashboard viewer={v} taste={taste.data} />
       ) : tab === "limits" ? (
         <ViewerAccess key={id} viewer={v} />
@@ -268,6 +293,18 @@ function BackLink() {
       className="inline-flex items-center gap-1 text-sm text-fg-muted hover:text-fg"
     >
       <ArrowLeft size={14} /> {t("Viewers")}
+    </Link>
+  );
+}
+
+/** Deep link to this viewer's drawer in Activity › Experience. */
+function ExperienceLink({ viewer }: { viewer: ViewerDetail }) {
+  return (
+    <Link
+      to={`/activity/experience?viewer=${viewer.id}`}
+      className="inline-flex items-center gap-1 text-sm font-medium text-primary hover:underline"
+    >
+      <Gauge size={14} /> {t("See this viewer's experience")}
     </Link>
   );
 }

@@ -1,0 +1,122 @@
+import { useState } from "react";
+import { fireEvent, render, screen } from "@testing-library/react";
+import { describe, expect, it } from "vitest";
+import type { Source } from "../../lib/contract";
+import type { SourceDescriptor } from "../../lib/rules";
+import { SourceEditor } from "./SourceEditor";
+
+const descriptor: SourceDescriptor = {
+  kind: "collectionSource",
+  id: "plugin:fixture/picks",
+  owner: "fixture",
+  label: { resolved: "Picks" },
+  meta: {
+    editor: "plugin",
+    params: [
+      { name: "genre", kind: "text", label: { resolved: "Genre" }, required: true },
+      { name: "adult", kind: "bool", label: { resolved: "Adult" } },
+    ],
+  },
+};
+
+describe("plugin collection parameters", () => {
+  it("edits and persists the params map", () => {
+    function Harness() {
+      const [source, setSource] = useState<Source>({
+        kind: descriptor.id,
+        params: { adult: "false" },
+      } as unknown as Source);
+      return (
+        <>
+          <SourceEditor
+            source={source}
+            onChange={setSource}
+            onRemove={() => {}}
+            index={0}
+            region="US"
+            removable={false}
+            descriptor={descriptor}
+            descriptors={[descriptor]}
+          />
+          <output>{JSON.stringify(source)}</output>
+        </>
+      );
+    }
+    render(<Harness />);
+    const box = screen.getByRole("checkbox", { name: "Adult" });
+    expect(box).not.toBeChecked();
+    fireEvent.change(screen.getByRole("textbox", { name: "Source 1 Genre" }), {
+      target: { value: "scifi" },
+    });
+    fireEvent.click(box);
+    expect(JSON.parse(screen.getByText(/"kind":"plugin:/).textContent!)).toEqual({
+      kind: descriptor.id,
+      params: { genre: "scifi", adult: "true" },
+    });
+  });
+
+  it("caps how many items a list source reads, within 1 to 2,000", () => {
+    function Harness() {
+      const [source, setSource] = useState<Source>({ kind: descriptor.id } as unknown as Source);
+      return (
+        <>
+          <SourceEditor
+            source={source}
+            onChange={setSource}
+            onRemove={() => {}}
+            index={0}
+            region="US"
+            removable={false}
+            descriptor={descriptor}
+            descriptors={[descriptor]}
+          />
+          <output>{JSON.stringify(source)}</output>
+        </>
+      );
+    }
+    render(<Harness />);
+    const max = screen.getByRole("spinbutton", { name: "Source 1 maximum items" });
+    fireEvent.change(max, { target: { value: "5000" } });
+    expect(JSON.parse(screen.getByText(/"kind":"plugin:/).textContent!).maxItems).toBe(2000);
+    fireEvent.change(max, { target: { value: "" } });
+    expect(JSON.parse(screen.getByText(/"kind":"plugin:/).textContent!)).toEqual({
+      kind: descriptor.id,
+    });
+  });
+});
+
+describe("catalogue lookup options", () => {
+  it("changes the lookup preference without replacing sources", () => {
+    const original = { kind: "catalog" as const };
+    function Harness() {
+      const [storedOnly, setStoredOnly] = useState(true);
+      const [source, setSource] = useState<Source>(original);
+      return (
+        <>
+          <SourceEditor
+            source={source}
+            index={0}
+            region="US"
+            removable={false}
+            onChange={setSource}
+            onRemove={() => {}}
+            descriptors={[]}
+            lookupPolicy={{ storedOnly, onChange: setStoredOnly }}
+          />
+          <output>{JSON.stringify({ source, storedOnly })}</output>
+        </>
+      );
+    }
+    render(<Harness />);
+    expect(
+      screen.queryByRole("switch", { name: "Use stored metadata only" }),
+    ).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Catalogue lookup options" }));
+    expect(screen.getByRole("switch", { name: "Use stored metadata only" })).toBeChecked();
+    fireEvent.click(screen.getByRole("switch", { name: "Use stored metadata only" }));
+    expect(JSON.parse(screen.getByText(/"storedOnly":/).textContent!)).toEqual({
+      source: original,
+      storedOnly: false,
+    });
+  });
+});

@@ -37,23 +37,19 @@ func (x *fixture) cycleFor(t *testing.T, d time.Duration) {
 }
 
 // A movie whose digital date has passed without a release used to be due
-// again on every one-minute cycle: a full search of every indexer per minute
-// for each such title (discussion #244).
-func TestProbeBacksOffAfterDigitalDateWithoutRelease(t *testing.T) {
+// again on every one-minute cycle (discussion #244), then on a 3–12h
+// cadence. Releases are now detected by the feeds; the title itself is
+// searched once when it enters the window and never again on a timer.
+func TestProbeNeverSearchesOnATimer(t *testing.T) {
 	x, searches, _ := probeFixture(t, -time.Hour)
-	x.cycleFor(t, 2*time.Hour)
+	x.cycleFor(t, 4*time.Hour)
 	if *searches != 1 {
-		t.Fatalf("searched %d times in two hours, want 1", *searches)
+		t.Fatalf("searched %d times in four hours, want only the first look", *searches)
 	}
-	x.cycleFor(t, 2*time.Hour)
-	if *searches != 2 {
-		t.Fatalf("searched %d times in four hours, want a recheck after 3h", *searches)
-	}
-	// Past the first days after the digital date, rechecks settle at 12h.
 	x.now = x.now.Add(4 * 24 * time.Hour)
 	x.cycleFor(t, 13*time.Hour)
-	if *searches != 4 {
-		t.Fatalf("searched %d times, want one overdue check then one 12h later", *searches)
+	if *searches != 1 {
+		t.Fatalf("searched %d times, want no timed rechecks", *searches)
 	}
 	if got := x.s.FilterDiscovery(t.Context(), []core.Title{x.cat.titles[core.MovieKey(1)]}); len(got) != 0 {
 		t.Fatal("a movie without a playable release was ungated")

@@ -38,13 +38,21 @@ func (m *Manager) PlaybackProgress(userID int64, clientID string, key core.Ratin
 		s.viewerPosition = max(0, position)
 		s.viewerAt = time.Now()
 		s.viewerState = state
+		if measuredProtocol(s.caps.Protocol) {
+			s.exp.observe(now, reportsBuffering(s.caps.Protocol), max(0, position), state)
+		}
 		if state == "playing" || state == "paused" {
 			s.lastActive = now
 			s.stopAt = time.Time{}
 		} else if state == "stopped" && s.stopAt.IsZero() {
 			s.stopAt = now.Add(m.opts.StoppedGrace)
 		}
+		var pausedRelease string
+		if state == "paused" && s.cur != nil {
+			pausedRelease = s.cur.releaseID()
+		}
 		s.mu.Unlock()
+		m.noteCause(pausedRelease, core.CacheCausePaused)
 		m.maintainReserve(s, position, state)
 	}
 	if state == "stopped" && len(sessions) > 0 {

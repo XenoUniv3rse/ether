@@ -153,7 +153,14 @@ the file over HTTPS from your debrid service; it never joins a torrent swarm and
 never downloads a whole file.
 
 - **Cached torrents only** (on by default): a torrent is used only if your
-  service can serve it now, so playback never waits for a download.
+  service can serve it now, so playback never waits for a download. When no
+  release of a title is cached, the player says so and suggests turning this
+  off. Turned off, pressing Play on such a title sends its best release to your
+  first debrid service that takes it (one download per title). The player says
+  it is downloading, and a later Play starts it once the download finishes. If
+  the service refuses the download or the account is at its active-download
+  limit, the player says that instead. The change applies at once, without a
+  restart.
 - **Remove uncached torrents** (on by default): torrents Ether added that turn
   out not to be cached are removed again. Cached torrents stay on your account,
   so the next play of that title starts straight away.
@@ -345,6 +352,21 @@ changing a Home row does not delete a library or remove a title from the
 catalogue. Plex's own Watchlist and other Plex-provided navigation remain
 client features.
 
+In **Library › Catalog**, use **Add to Watchlist** on a title card or in its
+details drawer. The watchlist viewer picker starts with your owner profile;
+select up to ten household viewers to update them together. A card shows the
+number of selected watchlists containing the title. When only some contain it,
+the add action adds it for all selected viewers; when all contain it, the
+remove action removes it for all. These titles use Ether's watchlist monitoring,
+including the Watchlist and Now available rows and availability alerts when
+those features are enabled in Catalog settings.
+
+Ether also sends the change to an enabled, linked Trakt account. If that write
+fails, the console reports it and the change remains in Ether; update Trakt
+separately. Plex watchlist changes stay in Ether: Ether does not write to
+plex.tv, and a subsequent Plex watchlist sync can restore an item removed in
+Ether. Remove it in Plex as well if you do not want it restored.
+
 ## Organise your Home
 
 Movies, TV and Home put populated **Continue Watching** first, followed by
@@ -365,6 +387,12 @@ A collection can mix movies and TV shows in one Home row. In its editor, choose
 or place it in Home Designer. Each item opens its own movie or show page.
 Viewer access and age limits still apply; Movies and TV library pages keep their
 respective types.
+
+To follow a public TMDB user list, add the **TMDB user list** source and paste
+its list URL or numeric ID. Choose **Source** sort to keep the list order. Ether
+refreshes it on the collection’s chosen schedule and keeps up to 5,000 items.
+Private or missing lists cannot be read. Normal release-date and visibility
+rules still apply to titles in the list.
 
 Movies appear from their theatrical release date. Shows, seasons and episodes
 appear from their air dates. Items with no known release date stay hidden.
@@ -441,6 +469,12 @@ what you want to change:
 | Set up poster providers | **Integrations** |
 | Pick the poster source | **Metadata › Artwork** |
 
+Activity history has one row per viewing. Opens of the same title by the
+same viewer and device within five minutes of each other (probes, a decision
+and start, a reopen after a seek or a stop and replay) continue one row. A row
+appears once media is delivered; an attempt that fails first is listed with
+its error and does not count as a play.
+
 A playback attempt can fail before Activity history begins. Quality history
 records source-selection results, including failures; open its details for
 candidate rejection reasons and effective playback limits. Neither a
@@ -486,6 +520,54 @@ file under these names:
 
 Preview thumbnails appear while a title plays and fill in as playback
 progresses.
+
+## Pre-rolls
+
+A pre-roll is a short video of your own, such as a cinema sting or a seasonal
+greeting, that plays before a movie or an episode. Add them in the owner
+console's **Pre-rolls** page: upload a video, or give the full path of a video
+file on the server (Ether only reads it). Ether converts each clip in the
+background to an MP4 that every app can play directly (H.264 and stereo AAC, at
+most 1080p) and makes a thumbnail. Clips longer than 3 minutes are refused.
+One file can be up to 500 MB, and converted pre-rolls share a 5 GB folder,
+`prerolls` in the data folder.
+
+At most one pre-roll plays before a title, and never when a viewer resumes
+part-way through. Each pre-roll has rules, and all of them must match:
+
+- **Movies and episodes**: which kinds it plays before.
+- **First episode only**: no pre-roll when the next episode plays by itself.
+  Its **Binge gap** also skips the pre-roll when the same viewer finished or
+  stopped something less than that many minutes ago. With **First episode
+  only** off, the pre-roll plays before every episode.
+- **Genres**, **Excluded genres** and **Collections**: checked against the
+  title (an episode uses its show).
+- **Highest rating**: plays only before titles rated at or below it.
+- **Dates**: a yearly window such as 10-01 to 10-31; 12-15 to 01-05 spans the
+  new year.
+- **Viewers**: everyone, only some viewers, or everyone except some.
+- **At home or away** and **Devices** (TV, mobile, desktop, web).
+- **How often**: every time, once a day, once every few hours, or once per
+  title for each viewer.
+
+When several pre-rolls match, the highest **Priority** wins (a tie is chosen at
+random), or choose **Shuffle** to pick at random among all matches. With Plex
+Cinema Trailers on, **Order** puts the pre-roll before or after the trailers.
+The **Test** panel shows, for a viewer, a title and a device, which pre-roll
+would play and why each other one would not. Each pre-roll lists its recent
+plays; a play counts when the video actually starts.
+
+To bring pre-rolls over from Plex Media Server, paste its
+`CinemaTrailersPrerollID` value (Settings › Extras › Cinema Trailers pre-roll
+video) into **Import from Plex**. Paths separated by commas share a priority,
+so one of them plays at random, as in Plex. Paths separated by semicolons play
+in order in Plex; Ether plays one pre-roll per title, so the first group gets
+the highest priority.
+
+Pre-rolls play in every Plex app, in Jellyfin Web and Jellyfin for Android TV,
+and in the Emby apps. Infuse, Swiftfin, Silo, Stremio and DLNA players do not
+ask the server for intros, so they start the title without a pre-roll. In a
+cluster, a pre-roll plays only on the node that converted it.
 
 ## Subtitles from OpenSubtitles
 
@@ -565,6 +647,27 @@ to **Paste JSON** and paste or upload a profile file from the guide's
 `docs/json/radarr/quality-profiles` or `docs/json/sonarr/quality-profiles`
 folder. Custom formats Ether can't fetch are marked **Not found**; paste them
 under **Custom scoring** and import the profile again.
+
+## Rank releases by custom score
+
+A quality profile's **What matters most** list is checked from top to bottom;
+the first step where two releases differ decides which plays first. **Custom
+score** is one of those steps. It ranks the release with the higher total
+score first: Ether's own quality points plus the profile's custom format
+scores (imported from TRaSH Guides, Radarr or Sonarr, or entered under
+**Custom scoring**) plus how well the release suits the app.
+
+By default **Custom score** sits just above **Played fine recently**, so your
+language, resolution, release type and HDR preferences come first, and a
+release that already played well only wins among equally scored ones. Drag it
+to change that. For example, put **Resolution** first and **Custom score**
+second to play 4K whenever a 4K release exists and let your scores rank
+everything else. Profiles saved before this step existed rank exactly as they
+did.
+
+**Edit scores** on the step opens the profile's custom scoring editor.
+**Only play** and **Never play** filters still decide which releases are
+allowed at all; the step only orders the ones that pass.
 
 ## Choose and fix releases
 
@@ -743,6 +846,23 @@ Plex viewers access shared libraries through their own Plex accounts. Refreshing
 Plex sharing removes revoked viewers' access. Stream links stop working when
 the viewer is inactive or the session ends.
 
+## Plex account watch state
+
+Syncing watched state with a viewer's Plex account is **unavailable**. Plex
+accepts watch-state sync only from its own servers: the per-user credential
+Plex issues for it works only inside Plex Media Server, and Plex's watch-state
+service refuses it from any other server. Ether therefore cannot send watched
+state or ratings to a Plex account, or import them from one.
+
+In **Viewers › Limits & preferences**, the **Plex account watch state** section
+says so plainly. A Plex account connected in an earlier version stays listed and
+can still be removed with **Disconnect**; its sync settings are kept. Changes
+that were waiting to be sent are kept as they are and are not retried, so
+nothing is lost if Plex ever offers a path for other servers.
+
+Watch state is unaffected inside Ether: watched marks, ratings and resume
+positions still sync between every app a viewer uses with Ether.
+
 ## Source interruptions
 
 Usenet providers are tried in priority order. When every connection of a
@@ -793,6 +913,18 @@ only updates the draft until you review and save.
   a rolling episode window around each active viewer's progress. Preloading
   pauses while anyone is streaming unless explicitly allowed, respects a
   bandwidth cap and free-space reserve, and never writes watch history.
+- **Explaining the cache:** **Streaming › Cache › Explorer** shows a **Reason**
+  column and the stored file name under each title; search also matches file
+  names. Filters cover **Watching now**, **Paused**, **Unfinished**, **Shelf**,
+  **Prefetched**, **Checked**, **Kept by you**, **Unexplained**, and
+  **Reclaimable**. Expand a row for **Fetched because**, **Kept because**,
+  bytes, play history, and source. Pin badges use the same human labels.
+- **Overview and shelf states:** Overview splits protected bytes by cause and
+  names the title and cause currently warming. **Preloading** lists the **Shelf
+  manifest** with **Cached**, **Queued**, or **Failed** per title, and
+  **Preload selection** explains each choice without untranslated server prose.
+  Releases cached before this version show **Unexplained** until a new cause is
+  recorded; nothing is guessed.
 - **Shared NAS storage:** Under **Edit policy → Where your cache lives → Shared
   NAS**, point a standalone server or every participating PostgreSQL cluster
   node at the same dedicated folder on an OS-mounted NFS or SMB share. Keep
@@ -867,14 +999,18 @@ to each server process; they are not a shared media-cache directory.
 
 ### Release monitoring and recent availability
 
-Ether automatically follows recent-release feeds on the Newznab/Torznab indexers
-already configured under Sources. No separate RSS URL is needed. Built-in scraper
-sites without a recent-feed API remain searchable; debrid provides streaming,
-not a global new-release feed. If an indexer returns empty results for a combined
-category query but has a working unrestricted feed, Ether learns that format
-with one additional budgeted request and applies your categories locally. The
-learned format survives restarts and is reset when the indexer configuration
-changes. Empty feeds are not repeatedly probed on every poll.
+Ether automatically follows the recent releases of the indexers already
+configured under Sources, the way Radarr and Sonarr use RSS. No separate RSS URL
+is needed. Newznab/Torznab indexers are read through their API; built-in sites
+through their latest-releases page (one page, the way Prowlarr builds RSS for
+them). Stremio addons and plugin sources only answer title searches. Debrid
+provides streaming, not a global new-release feed. If an indexer returns empty
+results for a combined category query but has a working unrestricted feed,
+Ether learns that format with one additional budgeted request and applies your
+categories locally, then tries the category-filtered feed again once a day,
+because an unrestricted feed needs several pages to cover what one filtered page
+covers. The learned format survives restarts and is reset when the indexer
+configuration changes. Empty feeds are not repeatedly probed on every poll.
 Monitoring defaults on for new installs. Existing
 owners can enable it under Sources > Availability. Turning monitoring off stops
 polling, but local evidence and the recent-release visibility rules still apply.
@@ -900,24 +1036,70 @@ source invalidations and recent failed searches are respected; a genuinely new
 eligible release can supersede an older failed search. Merely browsing does not
 launch per-title availability searches.
 
-The default feed allowance is 400 API requests per UTC day across all indexers,
-with a 15-minute polling interval and at most five pages per sync. Two indexers
-need 192 requests/day for their regular first pages, leaving up to 208 for
-catch-up. Deeper pages reserve the remaining day's scheduled first-page polls,
-so a busy feed cannot consume that allowance on history. An allowance too small
-for the configured feeds and interval is shown in Sources > Availability.
+Each indexer's feed is read once every 30 minutes (48 requests a day), and every
+new item is matched locally against all the titles waiting for a release, at no
+indexer cost per title. A release usually becomes visible within one sync
+interval of being posted. When more releases arrived since the last sync than one
+page holds, Ether reads only the further pages needed to reach the previous
+sync's newest release, at most eight per sync; after downtime the rest of the
+gap is read in later cycles from what the day's allowance has left. **Catch-up**
+(off by default) additionally walks the recent feed history once, ending at the
+feed's available history or a page entirely older than 61 days. Unfinished gaps
+retain their boundaries and page progress across restarts, and a mismatched
+boundary triggers a rescan. Provider retention, rate limits and exhausted daily
+allowances can still leave gaps; these stay visible instead of being reported as
+a successful sync. Feed discovery is not equivalent to an Arr-completed download.
+These are normal API hits, not free RSS traffic.
 
-Unfinished feed gaps retain their boundaries and page progress across restarts.
-Each poll reads fresh arrivals first, then resumes the older gap, checking that
-the saved page boundary still matches. A mismatched boundary triggers a rescan.
-First setup and recovery of old gaps page through recent feed history only,
-ending at the feed's available history or a page entirely older than 61 days.
-This uses feed pages, never a search per catalogue title. Provider retention,
-rate limits and exhausted daily allowances can still leave gaps; these stay
-visible instead of being reported as a successful sync. Sites without a feed
-remain search-only. Feed discovery is not equivalent to an Arr-completed download.
-These are normal API hits, not free RSS traffic. Playback retains the configured
-foreground reserve. Optional background health verification has separate request,
+Ether searches a recent movie by ID only on events, never on a timer: once when
+it enters the window (its earlier releases predate the feeds), once when its
+digital or physical release date arrives, and once after a found release proves
+unplayable. A search cut short by an outage is finished six hours later, and one
+cut short by an exhausted allowance after the next UTC midnight. Each search asks
+one source at a time in priority order and stops at the first release your
+quality settings accept; Play still asks every source. At most ten titles are
+searched per minute, so a restart never bursts every indexer at once. To keep
+background feeds and searches on particular indexers while playback still uses
+all of them, list them in `availability.indexerIds`.
+
+Background feeds and searches have a daily allowance per indexer (UTC): 10% of
+the indexer's daily API limit (Gentle 5%; Unlimited up to your `reservePercent`
+share). The limit is the one you set on the indexer, else the one it reports
+(Newznab `apilimits`), else 1,000 a day, the entry tier of strict private
+indexers, so an indexer that reports nothing gets 100 background requests a
+day. The day's remaining head polls are reserved first, so gap pages and
+searches can never starve the feeds, and a feed whose allowance is too small for
+30-minute polls is read less often. Background requests to one indexer are at
+least three seconds apart. On a typical household with two Usenet indexers and
+four built-in sites, a replayed day used 50–64 requests on each Usenet indexer
+and 49 on each site. The total across indexers can be lowered under Sources >
+Indexers (Daily budgets). A `429` response, a `Retry-After` header or a Newznab
+API-limit error pauses that indexer for background and playback alike until the
+time it gives (15 minutes when it gives none, 24 hours at most).
+
+Work nobody is waiting on (detail-page and next-episode warm-ups, preloads,
+prefetches, watchlist checks) shares another 10% of each indexer's daily API
+limit for searches, and 10% of its daily NZB download limit (set on the
+indexer, reported as `grabmax`, else 1,000) for NZB downloads, together with
+availability checks. Play is never limited by these shares; once one is spent,
+the warm-up simply does not happen and Play searches for itself. A downloaded
+NZB is kept on disk and reused for as long as it is kept (until unused for 60
+days, or least recently used beyond 1 GiB), so a release is downloaded from its
+indexer once, however often it is resolved or played. Indexer statistics count
+only these real downloads. A preloaded title whose fill fails is tried again
+after an hour, then two, four and so on up to a day, instead of on every
+15-minute preload pass.
+
+Indexer results are cached per title: six hours for titles out under a month,
+rising to a week for titles out over a year. A search that found nothing is
+cached for three minutes for a title out under a week, so a new episode is
+found soon after its upload, and thirty minutes otherwise. When the first,
+ID-based query finds nothing, a Play search fires its fallback queries
+(other IDs, title and year, alternative titles) at once. A search nobody is
+waiting on, such as a detail-page or next-episode warm-up, a watchlist check or
+a preload, tries them one at a time and stops at the first that finds
+releases. Live TV channels built from your collections pre-load upcoming
+programmes only while someone has watched the channel in the last two hours. Optional background health verification has separate request,
 grab and byte budgets and pauses during playback; it is disabled by default.
 
 A listing establishes that an eligible release was observed, not guaranteed

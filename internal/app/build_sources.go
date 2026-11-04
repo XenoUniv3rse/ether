@@ -43,7 +43,11 @@ func (a *App) buildSources(ctx context.Context, cfg config.Config) error {
 	a.closers = append(a.closers, func() { a.cache.Close() })
 	// Keep part of the cache's volume free whatever the budget says.
 	cacheDir := a.cache.Directory()
-	a.cache.SetDiskUsage(func() (int64, int64, error) { return admin.DiskUsage(cacheDir) })
+	diskUsage := a.opts.diskUsage
+	if diskUsage == nil {
+		diskUsage = func() (int64, int64, error) { return admin.DiskUsage(cacheDir) }
+	}
+	a.cache.SetDiskUsage(diskUsage)
 	a.configureCache(cfg.Cache)
 	a.engine = stream.New(a.fetcher, a.cache, stream.OptionsFromConfig(cfg), log.With("component", "stream"))
 	a.closers = append(a.closers, func() { a.engine.Close() })
@@ -55,7 +59,7 @@ func (a *App) buildSources(ctx context.Context, cfg config.Config) error {
 	}
 	a.sites = cardigann.New(siteOpts)
 	a.addons = stremio.NewService(nil)
-	a.indexers = newznab.NewManager(a.db, cfg.Indexers, newznab.Options{
+	a.indexers = newznab.NewManager(a.db, a.addonIndexers(context.Background(), cfg.Indexers), newznab.Options{
 		Logger:         log.With("component", "newznab"),
 		SearchCacheTTL: cfg.Resolver.SearchCacheTTL.D(),
 		NZBDir:         filepath.Join(dataDir, "nzb"),
@@ -64,14 +68,20 @@ func (a *App) buildSources(ctx context.Context, cfg config.Config) error {
 			if ix.IsStremio() {
 				return a.addons.Backend(ix)
 			}
+			// An installed plugin's streams (made at run time, never saved).
+			if ix.IsAddon() {
+				if ss := a.streamSources(); ss != nil {
+					return ss.Backend(ix)
+				}
+				return nil, fmt.Errorf("indexer %q: add-ons are not available yet", ix.Name)
+			}
 			return a.sites.Backend(ix)
 		},
 	})
 	a.debrid = debrid.NewService(cfg.Debrid, debrid.Options{DB: a.db, Logger: log.With("component", "debrid")})
-	a.media = debrid.NewEngine(a.debrid, debrid.EngineOptions{Inner: a.engine, Health: a.engine, Cache: a.cache, Logger: log.With("component", "debrid")})
-	a.closers = append(a.closers, func() { a.media.Close() })
-	a.sources = debrid.NewIndexer(a.indexers, a.debrid)
-	a.sources.SetUsenetReady(func() bool {
+	ss := a.initStreamSources(a.indexers)
+	ss.SetAnimeIDs(a.addons.AnimeIDs())
+	usenetReady := func() bool {
 		if a.fetcher != nil {
 			return a.fetcher.HasUsableProvider()
 		}
@@ -81,6 +91,14 @@ func (a *App) buildSources(ctx context.Context, cfg config.Config) error {
 			}
 		}
 		return false
+	}
+	ss.SetUsenetReady(usenetReady)
+	eng := ss.WrapEngine(a.engine)
+	a.media = debrid.NewEngine(a.debrid, debrid.EngineOptions{Inner: eng, Health: eng, Cache: a.cache, Logger: log.With("component", "debrid")})
+	a.closers = append(a.closers, func() { a.media.Close() })
+	a.sources = debrid.NewIndexer(ss, a.debrid)
+	a.sources.SetUsenetReady(func() bool {
+		return usenetReady() || a.hasEnabledPluginSources()
 	})
 	indexer := core.Indexer(parityIndexer(a.sources, dataDir))
 	health := core.HealthChecker(parityHealth(a.media, dataDir))

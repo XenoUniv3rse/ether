@@ -41,11 +41,31 @@ type Step struct {
 	// window, so its rows grow with the matches only until the window
 	// fills. The gate checks the bound instead of comparing scales.
 	RowsBound int
-	Method    string
-	Path      string
-	Body      string
-	Discover  func(vars map[string]string, body []byte)
+	// QueriesBound, when set, is a hard bound on the statements one
+	// request of the step runs, whatever the library's size, and the step
+	// must write nothing: a read that loops over its titles or rows, or
+	// saves what it shows, breaks it before the scale comparison would.
+	QueriesBound int
+	Method       string
+	Path         string
+	Body         string
+	Discover     func(vars map[string]string, body []byte)
 }
+
+// Statement ceilings for Plex Home, detail, post-play and search. Measured
+// on the production snapshot (58k titles, 30 viewers) at 200-350 statements
+// for a Home request, 12-65 for detail and post-play and 43 for a search,
+// down from 600, 70, 62 and 43 with 30 writes on Home; the synthetic gate
+// library has a heavier viewer history (20k watched, 40 in progress).
+const (
+	homeQueriesBound   = 500
+	detailQueriesBound = 120
+	searchQueriesBound = 100
+	// cachedHomeQueriesBound: a viewer's Home already built for a client of
+	// the same kind is served from memory after one revision read
+	// (plex/home_cache.go), however large the library or the viewer's model.
+	cachedHomeQueriesBound = 5
+)
 
 // client is one real client's request sequence against one protocol.
 type Client struct {
@@ -91,11 +111,17 @@ const infuseFields = "DateCreated%2CEtag%2CGenres%2CMediaSources%2CAlternateMedi
 
 // Clients is every replayed client, in report order.
 func Clients() []Client {
-	return []Client{plexClient("plex-appletv", "Plex for Apple TV", "tvOS", "Apple TV"), plexClient("plex-web", "Plex Web", "Chrome", "Windows"),
+	return []Client{plexClient("plex-appletv", "Plex for Apple TV", "tvOS", "Apple TV"), plexSecondDevice(), plexClient("plex-android", "Plex for Android (TV)", "Android", "BRAVIA 4K VH21"), plexClient("plex-web", "Plex Web", "Chrome", "Windows"),
 		infuseJellyfin(), swiftfin(), embySDK(), infuseEmby(), siloAppleTV(), stremio(), console()}
 }
 
 func plexHeaders(product, platform, device string) func(*session) http.Header {
+	return plexDeviceHeaders(product, platform, device, "")
+}
+
+// plexDeviceHeaders are plexHeaders for one more device of the same kind:
+// suffix makes its client identifier distinct.
+func plexDeviceHeaders(product, platform, device, suffix string) func(*session) http.Header {
 	return func(s *session) http.Header {
 		h := http.Header{}
 		h.Set("Accept", "application/json")
@@ -105,11 +131,23 @@ func plexHeaders(product, platform, device string) func(*session) http.Header {
 		h.Set("X-Plex-Platform-Version", "18.0")
 		h.Set("X-Plex-Device", device)
 		h.Set("X-Plex-Device-Name", "etherperf")
-		h.Set("X-Plex-Client-Identifier", "etherperf-"+strings.ReplaceAll(strings.ToLower(product), " ", "-")+"-"+strconv.FormatInt(s.Viewer.ID, 10))
+		h.Set("X-Plex-Client-Identifier", "etherperf-"+strings.ReplaceAll(strings.ToLower(product), " ", "-")+"-"+strconv.FormatInt(s.Viewer.ID, 10)+suffix)
 		h.Set("X-Plex-Provides", "player,controller")
 		h.Set("X-Plex-Token", s.Viewer.PlexToken)
 		return h
 	}
+}
+
+// plexSecondDevice is a viewer's second Apple TV, first seen right after
+// the first one opened Home: it must be served the viewer's cached Home, not
+// a fresh build (a new client identifier is not a new Home).
+func plexSecondDevice() Client {
+	return Client{Name: "plex-appletv second device", Surface: "plex", Headers: plexDeviceHeaders("Plex for Apple TV", "tvOS", "Apple TV", "-second"), Steps: []Step{
+		{Name: "/library/sections", Class: classBrowse, Path: "/library/sections", Discover: discoverPlexSections},
+		{Name: "/hubs/promoted", Class: classHome, QueriesBound: cachedHomeQueriesBound, Path: "/hubs/promoted?contentDirectoryID={movieSection},{showSection}&pinnedContentDirectoryID={movieSection},{showSection}&includeMeta=1&excludeFields=summary&count=12&includeExternalMetadata=1&includeRecentChannels=1"},
+		{Name: "/hubs", Class: classHome, QueriesBound: cachedHomeQueriesBound, Path: "/hubs?count=12&includeMeta=1&excludeFields=summary"},
+		{Name: "/hubs/promoted bare", Class: classHome, QueriesBound: cachedHomeQueriesBound, Path: "/hubs/promoted?count=12"},
+	}}
 }
 
 func plexClient(name, product, platform, device string) Client {
@@ -118,9 +156,14 @@ func plexClient(name, product, platform, device string) Client {
 		{Name: "/identity", Class: classStatic, Path: "/identity"},
 		{Name: "/", Class: classStatic, Path: "/"},
 		{Name: "/library/sections", Class: classBrowse, Path: "/library/sections", Discover: discoverPlexSections},
-		{Name: "/hubs/promoted", Class: classHome, Path: "/hubs/promoted?contentDirectoryID={movieSection},{showSection}&pinnedContentDirectoryID={movieSection},{showSection}&includeMeta=1&excludeFields=summary&count=12&includeExternalMetadata=1&includeRecentChannels=1"},
+		{Name: "/hubs/promoted", Class: classHome, QueriesBound: homeQueriesBound, Path: "/hubs/promoted?contentDirectoryID={movieSection},{showSection}&pinnedContentDirectoryID={movieSection},{showSection}&includeMeta=1&excludeFields=summary&count=12&includeExternalMetadata=1&includeRecentChannels=1"},
+		// Apple TV and Android TV ask for Home one library at a time.
+		{Name: "/hubs/promoted movies directory", Class: classHome, QueriesBound: homeQueriesBound, Path: "/hubs/promoted?contentDirectoryID={movieSection}&pinnedContentDirectoryID={movieSection},{showSection}&includeMeta=1&excludeFields=summary&count=12&includeExternalMetadata=1&includeRecentChannels=1"},
+		{Name: "/hubs/promoted shows directory", Class: classHome, QueriesBound: homeQueriesBound, Path: "/hubs/promoted?contentDirectoryID={showSection}&pinnedContentDirectoryID={movieSection},{showSection}&includeMeta=1&excludeFields=summary&count=12&includeExternalMetadata=1&includeRecentChannels=1"},
 		{Name: "/hubs/continueWatching", Class: classHome, Path: "/hubs/continueWatching?count=12&includeMeta=1&excludeFields=summary"},
-		{Name: "/hubs", Class: classHome, Path: "/hubs?count=12&includeMeta=1&excludeFields=summary"},
+		{Name: "/hubs", Class: classHome, QueriesBound: homeQueriesBound, Path: "/hubs?count=12&includeMeta=1&excludeFields=summary"},
+		// The shape production logged for Apple TV and Plex Web's Home.
+		{Name: "/hubs/promoted bare", Class: classHome, QueriesBound: homeQueriesBound, Path: "/hubs/promoted?count=12"},
 		{Name: "/library/onDeck", Class: classHome, Path: "/library/onDeck"},
 		{Name: "/hubs/sections/movies", Class: classHome, Path: "/hubs/sections/{movieSection}?count=12&includeMeta=1&excludeFields=summary&includeLibraryPlaylists=1"},
 		{Name: "/hubs/sections/shows", Class: classHome, Path: "/hubs/sections/{showSection}?count=12&includeMeta=1&excludeFields=summary"},
@@ -131,18 +174,21 @@ func plexClient(name, product, platform, device string) Client {
 		{Name: "movies genre filter list", Class: classBrowse, Path: "/library/sections/{movieSection}/genre?type=1"},
 		{Name: "movies jump bar", Class: classBrowse, Path: "/library/sections/{movieSection}/firstCharacter?type=1"},
 		{Name: "shows all titleSort p1", Class: classBrowse, Path: "/library/sections/{showSection}/all?type=2&sort=titleSort&X-Plex-Container-Start=0" + page, Discover: discoverPlexItem("showKey", "show")},
-		{Name: "shows allLeaves p1", Class: classBrowse, Path: "/library/sections/{showSection}/allLeaves?includeGuids=1&X-Plex-Container-Start=0&X-Plex-Container-Size=100"},
+		{Name: "shows allLeaves p1", Class: classBrowse, Path: "/library/sections/{showSection}/allLeaves?includeGuids=1&X-Plex-Container-Start=0&X-Plex-Container-Size=100", Discover: discoverPlexItem("episodeKey", "episode")},
 		{Name: "shows allLeaves deep", Class: classBrowse, Path: "/library/sections/{showSection}/allLeaves?includeGuids=1&X-Plex-Container-Start=6000&X-Plex-Container-Size=100"},
 		{Name: "shows all type=4 p1", Class: classBrowse, Path: "/library/sections/{showSection}/all?type=4&includeGuids=1&X-Plex-Container-Start=0&X-Plex-Container-Size=100"},
 		{Name: "shows all type=3 p1", Class: classBrowse, Path: "/library/sections/{showSection}/all?type=3&includeGuids=1&X-Plex-Container-Start=0&X-Plex-Container-Size=100"},
 		{Name: "shows allLeaves updatedAt", Class: classBrowse, Path: "/library/sections/{showSection}/allLeaves?includeGuids=1&sort=updatedAt:desc&X-Plex-Container-Start=0&X-Plex-Container-Size=100"},
 		{Name: "shows all type=3 updatedAt", Class: classBrowse, Path: "/library/sections/{showSection}/all?type=3&includeGuids=1&sort=updatedAt:desc&X-Plex-Container-Start=0&X-Plex-Container-Size=100"},
-		{Name: "movie detail", Class: classDetail, Path: "/library/metadata/{movieKey}?includeExtras=1&includeRelated=1&includeOnDeck=1&includeChapters=1&includeGuids=1&includeMarkers=1&includeConcerts=1&includePreferences=1&includeReviews=1&asyncAugmentMetadata=1"},
-		{Name: "show detail", Class: classDetail, Path: "/library/metadata/{showKey}?includeExtras=1&includeRelated=1&includeOnDeck=1&includeChapters=1&includeGuids=1&asyncAugmentMetadata=1"},
+		{Name: "movie detail", Class: classDetail, QueriesBound: detailQueriesBound, Path: "/library/metadata/{movieKey}?includeExtras=1&includeRelated=1&includeOnDeck=1&includeChapters=1&includeGuids=1&includeMarkers=1&includeConcerts=1&includePreferences=1&includeReviews=1&asyncAugmentMetadata=1"},
+		{Name: "show detail", Class: classDetail, QueriesBound: detailQueriesBound, Path: "/library/metadata/{showKey}?includeExtras=1&includeRelated=1&includeOnDeck=1&includeChapters=1&includeGuids=1&asyncAugmentMetadata=1"},
 		{Name: "show children", Class: classDetail, Path: "/library/metadata/{showKey}/children?excludeAllLeaves=1", Discover: discoverPlexItem("seasonKey", "season")},
 		{Name: "season children", Class: classDetail, Path: "/library/metadata/{seasonKey}/children?excludeAllLeaves=1", Discover: discoverPlexItem("episodeKey", "episode")},
-		{Name: "episode detail", Class: classDetail, Path: "/library/metadata/{episodeKey}?includeMarkers=1&includeChapters=1&includeExtras=1"},
+		{Name: "episode detail", Class: classDetail, QueriesBound: detailQueriesBound, Path: "/library/metadata/{episodeKey}?includeMarkers=1&includeChapters=1&includeExtras=1"},
+		{Name: "movie postplay", Class: classDetail, QueriesBound: detailQueriesBound, Path: "/hubs/metadata/{movieKey}/postplay"},
+		{Name: "episode postplay", Class: classDetail, QueriesBound: detailQueriesBound, Path: "/hubs/metadata/{episodeKey}/postplay"},
 		{Name: "/hubs/search star", Class: classSearch, RowsBound: searchRowsBound, Path: "/hubs/search?query=star&limit=30&includeCollections=1&includeExternalMedia=1"},
+		{Name: "/library/search star", Class: classSearch, QueriesBound: searchQueriesBound, Path: "/library/search?query=star&limit=30&searchTypes=movies%2Ctv&includeMetadata=1"},
 		{Name: "/hubs/search the", Class: classSearch, Path: "/hubs/search?query=the&limit=30&includeCollections=1"},
 		{Name: "/playlists", Class: classBrowse, Path: "/playlists?playlistType=video&includeCollections=1"},
 		{Name: "/media/providers", Class: classStatic, Path: "/media/providers"},

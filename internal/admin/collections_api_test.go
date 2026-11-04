@@ -31,7 +31,6 @@ func (e flagErr) Upstream() bool      { return e.upstr }
 // fakeStudio is an in-memory CollectionStudio.
 type fakeStudio struct {
 	specs    map[string]core.CollectionSpec
-	genErr   error
 	lastPrev core.CollectionSpec
 }
 
@@ -100,13 +99,6 @@ func (f *fakeStudio) Templates() []core.CollectionTemplate {
 	return []core.CollectionTemplate{{ID: "t1", Name: "T", Category: "Moods", Spec: core.CollectionSpec{Name: "T"}}}
 }
 
-func (f *fakeStudio) Generate(ctx context.Context, prompt, media string) (*core.CollectionSpec, string, error) {
-	if f.genErr != nil {
-		return nil, "", f.genErr
-	}
-	return &core.CollectionSpec{Name: "Generated " + prompt, MediaType: media}, "because", nil
-}
-
 func (f *fakeStudio) Artwork(ctx context.Context, id string, w int) ([]byte, string, time.Time, error) {
 	if _, ok := f.specs[id]; !ok {
 		return nil, "", time.Time{}, core.ErrNotFound
@@ -135,7 +127,7 @@ func (fakeHelper) TitleDetail(ctx context.Context, key core.RatingKey) (*core.Ti
 	if key != core.MovieKey(7) {
 		return nil, core.ErrNotFound
 	}
-	return &core.Title{Key: key, Type: core.TypeMovie, Title: "Seven", Keywords: []string{"heist"}, CollectionID: 10, CollectionName: "Saga",
+	return &core.Title{Key: key, Type: core.TypeMovie, Title: "Seven", IDs: core.IDs{TMDB: 7, IMDB: "tt0000007"}, Keywords: []string{"heist"}, CollectionID: 10, CollectionName: "Saga",
 		Cast: []core.Person{{TMDB: 1, Name: "Actor", Role: "Lead", ThumbPath: "/a.jpg"}}, Directors: []core.Person{{TMDB: 2, Name: "Director"}}}, nil
 }
 
@@ -245,23 +237,6 @@ func TestCollectionsAPI(t *testing.T) {
 		t.Fatalf("templates: %d %s", rec.Code, rec.Body)
 	}
 
-	// Generate: prompt required; LLM off is 501; model failure 502.
-	if rec := serve(h, authed(req(http.MethodPost, "/ether/api/collections/generate", `{"prompt":" "}`))); rec.Code != 400 {
-		t.Fatalf("empty prompt: %d", rec.Code)
-	}
-	rec = serve(h, authed(req(http.MethodPost, "/ether/api/collections/generate", `{"prompt":"cosy","mediaType":"movie"}`)))
-	if rec.Code != 200 || !strings.Contains(rec.Body.String(), `"explanation":"because"`) || !strings.Contains(rec.Body.String(), "Generated cosy") {
-		t.Fatalf("generate: %d %s", rec.Code, rec.Body)
-	}
-	st.genErr = flagErr{msg: "LLM off", notConfigured: true}
-	if rec := serve(h, authed(req(http.MethodPost, "/ether/api/collections/generate", `{"prompt":"x"}`))); rec.Code != 501 {
-		t.Fatalf("llm off: %d", rec.Code)
-	}
-	st.genErr = flagErr{msg: "garbage", upstr: true}
-	if rec := serve(h, authed(req(http.MethodPost, "/ether/api/collections/generate", `{"prompt":"x"}`))); rec.Code != 502 {
-		t.Fatalf("llm garbage: %d", rec.Code)
-	}
-
 	// Mutations need the CSRF header.
 	r := authed(req(http.MethodPost, "/ether/api/collections", `{"name":"x"}`))
 	r.Header.Del("X-Ether-Request")
@@ -335,7 +310,7 @@ func TestCatalogHelperAPI(t *testing.T) {
 	}
 	rec = serve(h, authed(req(http.MethodGet, "/ether/api/catalog/title/"+core.MovieKey(7).String(), "")))
 	body := rec.Body.String()
-	if rec.Code != 200 || !strings.Contains(body, `"keywords":["heist"]`) || !strings.Contains(body, `"collection":{"id":10,"name":"Saga"}`) ||
+	if rec.Code != 200 || !strings.Contains(body, `"tmdbId":7`) || !strings.Contains(body, `"imdbId":"tt0000007"`) || !strings.Contains(body, `"keywords":["heist"]`) || !strings.Contains(body, `"collection":{"id":10,"name":"Saga"}`) ||
 		!strings.Contains(body, `"cast":[{"id":1,"name":"Actor","role":"Lead"`) || !strings.Contains(body, `"directors":[{"id":2`) {
 		t.Fatalf("title: %d %s", rec.Code, body)
 	}

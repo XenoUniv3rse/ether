@@ -15,8 +15,8 @@ type Source string
 
 const (
 	SourceUnknown  Source = ""
-	SourceCam      Source = "cam" // CAM, TS, TC, HDCAM, telesync
-	SourceScreener Source = "screener"
+	SourceCam      Source = "cam"      // CAM, TS, TC, HDCAM, telesync
+	SourceScreener Source = "screener" // SCR, DVDSCR, R5, workprint
 	SourceDVD      Source = "dvd"
 	SourceHDTV     Source = "hdtv"
 	SourceWEBRip   Source = "webrip"
@@ -27,12 +27,20 @@ const (
 
 // Ranking ladder step keys for QualityProfile.Ranking.
 const (
-	RankRulePrefix  = "rule:"
-	RankLanguage    = "language"
-	RankConnection  = "connection"
-	RankResolution  = "resolution"
-	RankReleaseType = "releaseType"
-	RankHDR         = "hdr"
+	RankRulePrefix = "rule:"
+	// RankPluginPrefix namespaces plugin-contributed ranking steps:
+	// "plugin:<plugin id>/<key>". The resolver uses a neutral key when
+	// its hosted runtime is unavailable.
+	RankPluginPrefix = "plugin:"
+	RankLanguage     = "language"
+	RankConnection   = "connection"
+	RankResolution   = "resolution"
+	RankReleaseType  = "releaseType"
+	RankHDR          = "hdr"
+	// RankCustomScore orders by the release's total score: Ether's own
+	// quality points plus the owner's custom format scores (TRaSH,
+	// AIOStreams-style imports) plus client compatibility.
+	RankCustomScore = "customScore"
 	RankVerified    = "verified"
 	RankVideoCodec  = "videoCodec"
 	RankAudioFormat = "audioFormat"
@@ -46,6 +54,7 @@ var DefaultRankingSteps = []string{
 	RankResolution,
 	RankReleaseType,
 	RankHDR,
+	RankCustomScore,
 	RankVerified,
 	RankVideoCodec,
 	RankAudioFormat,
@@ -58,6 +67,17 @@ func builtinRankingIndex(step string) int {
 
 func isBuiltinRankingStep(step string) bool {
 	return builtinRankingIndex(step) >= 0
+}
+
+// IsBuiltinRankingStep reports whether step is one of DefaultRankingSteps
+// (additive, WS1a).
+func IsBuiltinRankingStep(step string) bool { return isBuiltinRankingStep(step) }
+
+// IsPluginRankingStep reports whether step is plugin-namespaced
+// ("plugin:<id>/<key>") (additive, WS1a).
+func IsPluginRankingStep(step string) bool {
+	rest, ok := strings.CutPrefix(step, RankPluginPrefix)
+	return ok && strings.Contains(rest, "/")
 }
 
 // DefaultRanking returns today's default ladder order: each Prefer rule in
@@ -76,8 +96,24 @@ func DefaultRanking(rules []ReleaseRule) []string {
 }
 
 // ValidateRanking checks an explicit ranking ladder against a profile's rules.
-// An empty ladder is valid and means DefaultRanking(rules).
+// An empty ladder is valid and means DefaultRanking(rules). Plugin-namespaced
+// steps are accepted structurally: the config save path has no descriptor
+// registry, and a profile must stay saveable across a plugin's install life.
+// Callers that hold the registry use ValidateRankingWith to require that a
+// plugin step is actually registered.
 func ValidateRanking(ranking []string, rules []ReleaseRule) error {
+	return ValidateRankingWith(ranking, rules, nil)
+}
+
+// ValidateRankingWith is ValidateRanking with a caller-supplied test for
+// non-rule steps. A nil known accepts built-in steps and any
+// plugin-namespaced step (additive, WS1a).
+func ValidateRankingWith(ranking []string, rules []ReleaseRule, known func(step string) bool) error {
+	if known == nil {
+		known = func(step string) bool {
+			return isBuiltinRankingStep(step) || IsPluginRankingStep(step)
+		}
+	}
 	if len(ranking) == 0 {
 		return nil
 	}
@@ -99,7 +135,7 @@ func ValidateRanking(ranking []string, rules []ReleaseRule) error {
 			}
 			continue
 		}
-		if !isBuiltinRankingStep(step) {
+		if !known(step) {
 			return fmt.Errorf("unknown ranking step %q", step)
 		}
 	}
@@ -196,13 +232,14 @@ type Resolution struct {
 // QualityProfile is an owner-editable rule set ranking releases for a class
 // of client.
 type QualityProfile struct {
-	ReleaseRules         []ReleaseRule  `json:"releaseRules,omitempty"`
-	Ranking              []string       `json:"ranking,omitempty"`
-	AllowedQualities     []string       `json:"allowedQualities,omitempty"` // imported source-resolution gates
-	CustomFormatScores   map[string]int `json:"customFormatScores,omitempty"`
-	MinCustomFormatScore *int           `json:"minCustomFormatScore,omitempty"`
-	Name                 string         `json:"name"`
-	MaxHeight            int            `json:"maxHeight"` // cap, e.g. 1080
+	ReleaseRules         []ReleaseRule              `json:"releaseRules,omitempty"`
+	Ranking              []string                   `json:"ranking,omitempty"`
+	RankingConfig        map[string]json.RawMessage `json:"rankingConfig,omitempty"`
+	AllowedQualities     []string                   `json:"allowedQualities,omitempty"` // imported source-resolution gates
+	CustomFormatScores   map[string]int             `json:"customFormatScores,omitempty"`
+	MinCustomFormatScore *int                       `json:"minCustomFormatScore,omitempty"`
+	Name                 string                     `json:"name"`
+	MaxHeight            int                        `json:"maxHeight"` // cap, e.g. 1080
 	// ConfiguredMaxHeight is MaxHeight as the owner configured it,
 	// before download reshaping or a client's caps clamped the
 	// effective MaxHeight. -1 means the owner set no ceiling ("Any");
@@ -222,7 +259,7 @@ type QualityProfile struct {
 	EpisodeMaxSizeMBPerMin float64  `json:"episodeMaxSizeMbPerMin,omitempty"`
 	PreferLargest          bool     `json:"preferLargest,omitempty"` // prefer larger files among candidates matching the profile
 	PreferredLanguages     []string `json:"preferredLanguages"`
-	AllowCam               bool     `json:"allowCam"` // the only CAM switch; cinema recordings play only for profiles that allow them
+	AllowCam               bool     `json:"allowCam"` // the only pre-release switch; CAM/TS/TC and screener/R5/workprint copies play only for profiles that allow them
 	// SelectionKey is the canonical hash of this profile's configured
 	// definition, computed by resolver.SelectProfile from the pristine
 	// configured profile before download reshaping or client-cap
@@ -235,7 +272,9 @@ type QualityProfile struct {
 // EffectiveRanking returns the complete ranking ladder for p: DefaultRanking
 // when Ranking is empty, or p.Ranking with any unmentioned Prefer rules
 // prepended and any omitted built-in steps placed in their default relative
-// positions.
+// positions. An omitted custom score step goes directly before verified:
+// ladders saved before the step existed compared the score there, so they
+// keep ranking exactly as they did.
 func (p QualityProfile) EffectiveRanking() []string {
 	if len(p.Ranking) == 0 {
 		return DefaultRanking(p.ReleaseRules)
@@ -261,7 +300,7 @@ func (p QualityProfile) EffectiveRanking() []string {
 			if !validRules[step] {
 				continue
 			}
-		} else if !isBuiltinRankingStep(step) {
+		} else if !isBuiltinRankingStep(step) && !IsPluginRankingStep(step) {
 			continue
 		}
 		mentioned[step] = true
@@ -278,6 +317,12 @@ func (p QualityProfile) EffectiveRanking() []string {
 	for bi, b := range DefaultRankingSteps {
 		if mentioned[b] {
 			continue
+		}
+		if b == RankCustomScore {
+			if i := slices.Index(out, RankVerified); i >= 0 {
+				out = slices.Insert(out, i, b)
+				continue
+			}
 		}
 		inserted := false
 		for i, step := range out {
@@ -330,6 +375,12 @@ func (p QualityProfile) ComputeSelectionKey() string {
 	if slices.Equal(eff, DefaultRanking(p.ReleaseRules)) {
 		p.Ranking = nil
 	} else {
+		// The custom score directly before verified is where a ladder
+		// without the step ranks it, so both spell the same order and
+		// keep the key they had before the step existed.
+		if i := slices.Index(eff, RankCustomScore); i >= 0 && i+1 < len(eff) && eff[i+1] == RankVerified {
+			eff = slices.Delete(eff, i, i+1)
+		}
 		p.Ranking = eff
 	}
 	b, err := json.Marshal(p)

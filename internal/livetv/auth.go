@@ -234,6 +234,9 @@ func isXtreamURL(raw, server string) bool {
 // redactSourceAuth hides secrets (and Xtream URLs, which embed them) from a
 // source about to be returned by the owner API.
 func redactSourceAuth(src *Source) {
+	if src.Kind == legacyStremioKind && src.PlaylistURL != "" {
+		src.PlaylistURL = redactedSecret
+	}
 	if src.Auth == nil {
 		return
 	}
@@ -358,8 +361,9 @@ func (s *Service) sourceAuth(ctx context.Context, id string) (*SourceAuth, error
 // from the input's AuthSourceID. Without one, only the playlist's own entry
 // (the import-owned input, or a legacy channel's single input) inherits the
 // channel's source; owner-added backups stay anonymous, so an input never
-// receives another provider's credentials. The result is empty, never nil,
-// when no authentication applies.
+// receives another provider's credentials. The input's own headers (an
+// add-on's proxy headers) apply last. The result is empty, never nil, when
+// no authentication applies.
 func (s *Service) upstreamHeaders(ctx context.Context, c Channel, input StreamSource) (http.Header, error) {
 	id := input.AuthSourceID
 	if id == "" && c.SourceID != "" && (input.ID == stableID(c.ID, "playlist") || len(c.StreamSources) <= 1) {
@@ -369,5 +373,9 @@ func (s *Service) upstreamHeaders(ctx context.Context, c Channel, input StreamSo
 	if err != nil {
 		return http.Header{}, err
 	}
-	return a.header(), nil
+	h := a.header()
+	for k, v := range input.Headers {
+		h.Set(k, v)
+	}
+	return h, nil
 }

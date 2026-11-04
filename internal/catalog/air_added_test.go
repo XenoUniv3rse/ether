@@ -11,7 +11,9 @@ import (
 func TestAirAddedAndAiredEpisodeBrowse(t *testing.T) {
 	ctx := context.Background()
 	c := newChunkTestCatalog(t)
-	now := time.Date(2026, 1, 10, 0, 0, 0, 0, time.UTC)
+	// Show date-added triggers read the database clock, so "future" must be
+	// future in real time too.
+	now := time.Now().UTC().Truncate(time.Hour)
 	c.SetNow(func() time.Time { return now })
 	show, other := core.ShowKey(11), core.ShowKey(12)
 	old := now.Add(-48 * time.Hour)
@@ -88,7 +90,9 @@ func TestAirAddedAndAiredEpisodeBrowse(t *testing.T) {
 func TestSeasonAirAddedFallbacks(t *testing.T) {
 	ctx := context.Background()
 	c := newChunkTestCatalog(t)
-	now := time.Date(2026, 1, 10, 0, 0, 0, 0, time.UTC)
+	// Show date-added triggers read the database clock, so "future" must be
+	// future in real time too.
+	now := time.Now().UTC().Truncate(time.Hour)
 	c.SetNow(func() time.Time { return now })
 	show, emptyShow, unknownShow := core.ShowKey(20), core.ShowKey(21), core.ShowKey(22)
 	first := now.Add(-100 * 24 * time.Hour)
@@ -174,5 +178,39 @@ func TestMovieAddedSortIgnoresCatalogueInsertion(t *testing.T) {
 	page, err := c.Browse(ctx, core.BrowseQuery{Filter: core.Filter{Type: core.TypeMovie, KnownAddedDate: true}, Sort: core.SortAdded, Desc: true, Limit: 10})
 	if err != nil || page.Total != 2 || len(page.Items) != 2 || page.Items[0].Key != newer.Key || page.Items[1].Key != old.Key || page.Items[1].AddedAt.Unix() != 1072915200 {
 		t.Fatalf("page=%+v err=%v", page, err)
+	}
+}
+
+func TestLoadedAirAddedTimesMatchSQL(t *testing.T) {
+	c := newChunkTestCatalog(t)
+	now := time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC)
+	var items []core.Title
+	var keys []core.RatingKey
+	for i, date := range []time.Time{{}, time.Unix(0, 0), time.Date(1950, 1, 1, 0, 0, 0, 0, time.UTC), now, now.Add(time.Second)} {
+		for _, typ := range []core.MediaType{core.TypeMovie, core.TypeEpisode} {
+			key := core.MovieKey(int64(100 + i))
+			if typ == core.TypeEpisode {
+				key = core.EpisodeKey(100, 1, i+1)
+			}
+			item := core.Title{Key: key, Type: typ, Released: date}
+			if err := c.UpsertTitle(t.Context(), item, false); err != nil {
+				t.Fatal(err)
+			}
+			items = append(items, item)
+			keys = append(keys, key)
+		}
+	}
+	want, err := cachedAirAddedTimes(t.Context(), c.db, keys, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A nil database proves loaded leaf titles need no further reads.
+	if err := applyAirAddedTimes(t.Context(), nil, items, now); err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range items {
+		if !item.AddedAt.Equal(want[item.Key]) {
+			t.Errorf("%v: got %v, want %v", item.Key, item.AddedAt, want[item.Key])
+		}
 	}
 }

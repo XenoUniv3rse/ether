@@ -8,7 +8,7 @@ import {
   Textarea,
   confirmDialog,
 } from "@braedonsaunders/appkit-ui";
-import { ChevronDown, Download, Plus, SlidersHorizontal } from "lucide-react";
+import { ChevronDown, Download, Plus, SlidersHorizontal, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { Link } from "react-router-dom";
 import { MoreOptions } from "../../components/ConfigSection";
@@ -20,6 +20,7 @@ import { DragHandle, SortableList, type DragHandleProps } from "../../components
 import { localized, t, tn, tx } from "../../i18n";
 import { searchSelectLabels } from "../../i18n/appkit-labels";
 import { api } from "../../lib/api";
+import { isPluginDescriptor, textOf } from "../../lib/extend";
 import { qualityGateLabel } from "../../lib/releases";
 import type { QualityProfile, ReleaseRule } from "../../lib/types";
 import { QUALITY_AUDIO, QUALITY_CODECS, QUALITY_SOURCES } from "../settings/schema";
@@ -38,7 +39,11 @@ import {
   type Errors,
 } from "../sources/form";
 import {
-  DEFAULT_BUILTIN_RANKING,
+  useRankingRegistry,
+  descriptorLabel,
+  descriptorOwnerName,
+  insertStepAtDefaultPosition,
+  PluginBadge,
   FilterRulesEditor,
   RuleEditorCard,
   RulePreview,
@@ -54,7 +59,7 @@ import { useQuality, type Quality } from "./useQuality";
 function blankProfile(n: number): QualityProfile {
   return {
     name: t("Profile {n}", { n }),
-    ranking: [...DEFAULT_BUILTIN_RANKING],
+    ranking: [],
     maxHeight: 1080,
     minHeight: 720,
     allowHdr: false,
@@ -132,6 +137,9 @@ function PreferenceList({
   );
 }
 
+/** Anchor of the profile drawer's custom scoring section. */
+const CUSTOM_SCORES_ID = "profile-custom-scores";
+
 export function hasImportedRules(draft: QualityProfile, resolver: ResolverPolicy | null): boolean {
   const gates = draft.allowedQualities ?? [];
   const ownScores = Object.keys(draft.customFormatScores ?? {}).length;
@@ -153,20 +161,28 @@ function ImportedSection({
   scoring,
   setScoring,
   patch,
+  revealed,
 }: {
   draft: QualityProfile;
   resolver: ResolverPolicy | null;
   scoring: { formats: string; scores: string } | null;
   setScoring: React.Dispatch<React.SetStateAction<{ formats: string; scores: string } | null>>;
   patch: (p: Partial<QualityProfile>) => void;
+  /** The Custom score step's "Edit scores" asked for the scoring editor. */
+  revealed: boolean;
 }) {
-  if (!hasImportedRules(draft, resolver)) return null;
+  const imported = hasImportedRules(draft, resolver);
+  if (!imported && !revealed) return null;
   const gates = draft.allowedQualities ?? [];
   const scored = Object.keys(draft.customFormatScores ?? {}).length;
   return (
     <SettingsSection
-      title={t("Imported from TRaSH / Radarr / Sonarr")}
-      description={t("Carried over from a Radarr or Sonarr profile.")}
+      title={imported ? t("Imported from TRaSH / Radarr / Sonarr") : t("Custom scores")}
+      description={
+        imported
+          ? t("Carried over from a Radarr or Sonarr profile.")
+          : t("Give custom formats points. Higher totals rank first at the Custom score step.")
+      }
     >
       {gates.length ? (
         <SettingsRow
@@ -208,7 +224,7 @@ function ImportedSection({
           />
         }
       />
-      <MoreOptions label={t("More options: Custom scoring")}>
+      <MoreOptions label={t("More options: Custom scoring")} reveal={revealed}>
         <div className="space-y-4 py-3">
           <p className="px-4 text-sm text-fg-muted">
             {tx("Scores are whole numbers, for example {example}.", {
@@ -257,13 +273,20 @@ function WhatMattersMostSection({
   draft,
   patch,
   rankingError,
+  hasScores,
+  onEditScores,
 }: {
   draft: QualityProfile;
   patch: (p: Partial<QualityProfile>) => void;
   rankingError?: string;
+  /** The profile or the shared custom formats carry scores. */
+  hasScores: boolean;
+  /** Shows and scrolls to the profile's custom scoring editor. */
+  onEditScores: () => void;
 }) {
+  const { steps, fields } = useRankingRegistry();
   const [expanded, setExpanded] = useState<string | null>(null);
-  const ladder = normalizeRanking(draft);
+  const ladder = normalizeRanking(draft, steps);
   const rules = draft.releaseRules ?? [];
 
   function updateRanking(nextRanking: string[]) {
@@ -294,6 +317,141 @@ function WhatMattersMostSection({
       ranking: nextRanking,
       releaseRules: nextRules,
     });
+  }
+
+  const [stepToAdd, setStepToAdd] = useState("");
+  const isPluginStep = (step: string) => {
+    const desc = steps.find((d) => d.id === step);
+    return desc ? isPluginDescriptor(desc) : step.startsWith("plugin:");
+  };
+  const addable = steps.filter((d) => isPluginDescriptor(d) && !ladder.includes(d.id));
+  const chosen = addable.some((d) => d.id === stepToAdd) ? stepToAdd : (addable[0]?.id ?? "");
+
+  /** A ranking step a plugin contributes: its badge, its own editor, removal. */
+  function renderPluginStep(step: string, handle: DragHandleProps, index: number) {
+    const desc = steps.find((d) => d.id === step);
+    const meta = desc?.meta;
+    const title = desc ? textOf(desc.label) || step : step;
+    const editor = typeof meta?.editor === "object" ? meta.editor : null;
+    const editorKind =
+      editor?.kind ?? editor?.editor ?? (typeof meta?.editor === "string" ? meta.editor : "none");
+    const choices = (
+      editor?.options ??
+      editor?.choices ??
+      meta?.options ??
+      meta?.choices ??
+      []
+    ).map((o) =>
+      typeof o === "string"
+        ? { value: o, label: o }
+        : { value: o.value, label: textOf(o.label) || o.value },
+    );
+    const config = draft.rankingConfig?.[step] ?? {};
+    const setConfig = (next: Record<string, unknown>) =>
+      patch({ rankingConfig: { ...draft.rankingConfig, [step]: next } });
+    const expandable = ["ordered_list", "choice", "range", "toggle"].includes(editorKind);
+    const isExpanded = expanded === step;
+    const num = (v: unknown) => (typeof v === "number" ? v : 0);
+    return (
+      <div data-ranking-step={step} className="space-y-3 px-3 py-3">
+        <div className="flex items-center gap-2">
+          <DragHandle handle={handle} label={t("Move {name}", { name: title })} />
+          <span className="w-5 text-xs tabular-nums text-fg-muted">{index + 1}</span>
+          <div className="min-w-0 flex-1">
+            <p className="flex flex-wrap items-center gap-2 text-sm font-medium text-fg">
+              {title}
+              {desc ? <PluginBadge owner={descriptorOwnerName(desc)} /> : null}
+            </p>
+            {desc ? null : (
+              <p className="truncate text-xs text-fg-muted">
+                {t("This plugin is off or removed. The step is skipped.")}
+              </p>
+            )}
+          </div>
+          {expandable && desc ? (
+            <Button
+              variant="ghost"
+              size="sm"
+              aria-expanded={isExpanded}
+              aria-label={t("Configure {name}", { name: title })}
+              onClick={() => setExpanded(isExpanded ? null : step)}
+            >
+              {t("Values")}
+              <ChevronDown size={13} />
+            </Button>
+          ) : null}
+          <OrderButtons
+            label={title}
+            i={index}
+            n={ladder.length}
+            onMove={(d) => updateRanking(swap(ladder, index, index + d))}
+          />
+          <Button
+            variant="ghost"
+            size="icon"
+            aria-label={t("Remove step")}
+            onClick={() => updateRanking(ladder.filter((s) => s !== step))}
+          >
+            <Trash2 size={14} />
+          </Button>
+        </div>
+        {isExpanded && desc ? (
+          <div className="space-y-3 border-t border-border pt-3">
+            {editorKind === "toggle" ? (
+              <label className="flex items-center gap-2 text-sm">
+                <Switch
+                  aria-label={title}
+                  checked={config.value === true}
+                  onChange={(e) => setConfig({ value: e.currentTarget.checked })}
+                />
+                {t("Enabled")}
+              </label>
+            ) : null}
+            {editorKind === "choice" ? (
+              <SearchSelect
+                {...searchSelectLabels()}
+                ariaLabel={title}
+                value={typeof config.value === "string" ? config.value : ""}
+                options={choices}
+                onChange={(value) => setConfig({ value })}
+              />
+            ) : null}
+            {editorKind === "ordered_list" ? (
+              <PreferenceList
+                label={title}
+                all={choices.map((c) => c.value)}
+                value={
+                  Array.isArray(config.value)
+                    ? config.value.filter((v): v is string => typeof v === "string")
+                    : []
+                }
+                onChange={(value) => setConfig({ value })}
+              />
+            ) : null}
+            {editorKind === "range" ? (
+              <div className="grid grid-cols-2 gap-3">
+                <label className="space-y-1 text-sm">
+                  {t("Minimum")}
+                  <NumberInput
+                    aria-label={t("Minimum")}
+                    value={num(config.min)}
+                    onChange={(min) => setConfig({ min, max: Math.max(min, num(config.max)) })}
+                  />
+                </label>
+                <label className="space-y-1 text-sm">
+                  {t("Maximum")}
+                  <NumberInput
+                    aria-label={t("Maximum")}
+                    value={num(config.max)}
+                    onChange={(max) => setConfig({ min: Math.min(max, num(config.min)), max })}
+                  />
+                </label>
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+      </div>
+    );
   }
 
   function renderBuiltinStep(step: string, handle: DragHandleProps, index: number) {
@@ -334,6 +492,12 @@ function WhatMattersMostSection({
           : draft.allowHdr
             ? t("HDR10 › SDR")
             : t("SDR only"),
+      },
+      customScore: {
+        title: t("Custom score"),
+        summary: hasScores
+          ? t("Higher total score first, including your custom format scores")
+          : t("Higher total score first. No custom format scores yet."),
       },
       verified: {
         title: t("Played fine recently"),
@@ -380,6 +544,11 @@ function WhatMattersMostSection({
             <p className="truncate text-xs text-fg-muted">{meta.summary}</p>
           </div>
           {fixed ? <Badge variant="secondary">{t("Automatic")}</Badge> : null}
+          {step === "customScore" ? (
+            <Button variant="ghost" size="sm" onClick={onEditScores}>
+              {t("Edit scores")}
+            </Button>
+          ) : null}
           {step === "size" ? (
             <Switch
               aria-label={t("Larger file")}
@@ -480,6 +649,7 @@ function WhatMattersMostSection({
                 <div data-ranking-step={step}>
                   <RuleEditorCard
                     rule={r}
+                    fields={fields}
                     handle={handle}
                     stepNumber={index + 1}
                     canMoveUp={index > 0}
@@ -491,9 +661,32 @@ function WhatMattersMostSection({
                 </div>
               );
             }
-            return renderBuiltinStep(step, handle, index);
+            return isPluginStep(step)
+              ? renderPluginStep(step, handle, index)
+              : renderBuiltinStep(step, handle, index);
           }}
         />
+        {addable.length > 0 ? (
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+            <div className="min-w-0 sm:flex-1">
+              <SearchSelect
+                {...searchSelectLabels()}
+                ariaLabel={t("Step to add")}
+                value={chosen}
+                options={addable.map((d) => ({ value: d.id, label: descriptorLabel(d) }))}
+                onChange={setStepToAdd}
+              />
+            </div>
+            <Button
+              size="sm"
+              disabled={!chosen}
+              onClick={() => updateRanking(insertStepAtDefaultPosition(ladder, steps, chosen))}
+            >
+              <Plus size={14} />
+              {t("Add a step")}
+            </Button>
+          </div>
+        ) : null}
       </div>
       <RulePreview profile={draft} />
     </SettingsSection>
@@ -541,6 +734,7 @@ function ProfileList({
   commit: Commit;
   refresh: () => Promise<void>;
 }) {
+  const { steps, fields } = useRankingRegistry();
   const profiles = quality.profiles ?? [];
   const [importing, setImporting] = useState(false);
   const rules = quality.rules ?? [];
@@ -550,6 +744,7 @@ function ProfileList({
     away: false,
   });
   const [scoring, setScoring] = useState<{ formats: string; scores: string } | null>(null);
+  const [scoringShown, setScoringShown] = useState(false);
   const [errors, setErrors] = useState<Errors>({});
   const [error, setError] = useState<unknown>(null);
   const [saving, setSaving] = useState(false);
@@ -558,7 +753,7 @@ function ProfileList({
     setErrors({});
     setError(null);
     const cloned = structuredClone(draft);
-    cloned.ranking = normalizeRanking(cloned);
+    cloned.ranking = normalizeRanking(cloned, steps);
     setEditing({ index, draft: cloned });
     const isExisting = index < profiles.length;
     setDefaultFor({
@@ -566,17 +761,28 @@ function ProfileList({
       away: isExisting && quality.remote === draft.name,
     });
     setScoring(scoringText(resolver, draft));
+    setScoringShown(false);
   };
+
+  function editScores() {
+    setScoringShown(true);
+    // The section renders on this state change; scroll once it exists.
+    requestAnimationFrame(() =>
+      document
+        .getElementById(CUSTOM_SCORES_ID)
+        ?.scrollIntoView({ behavior: "smooth", block: "start" }),
+    );
+  }
 
   async function save() {
     if (!editing) return;
     const { index, draft: profileDraft } = editing;
     let draft: QualityProfile = {
       ...profileDraft,
-      ranking: normalizeRanking(profileDraft),
+      ranking: normalizeRanking(profileDraft, steps),
     };
     let parsed: ReturnType<typeof parseScoring> | null = null;
-    if (scoring && hasImportedRules(profileDraft, resolver)) {
+    if (scoring && (scoringShown || hasImportedRules(profileDraft, resolver))) {
       try {
         parsed = parseScoring(scoring.formats, scoring.scores);
       } catch (e) {
@@ -618,7 +824,7 @@ function ProfileList({
         ? rules.map((r) => (r.profile === renamed ? { ...r, profile: draft.name } : r))
         : rules,
     };
-    const conflict = releaseRuleConflict(draft.releaseRules ?? []);
+    const conflict = releaseRuleConflict(draft.releaseRules ?? [], fields);
     if (conflict) {
       setErrors({ releaseRules: conflict });
       return;
@@ -934,7 +1140,7 @@ function ProfileList({
                 onChange={(v) => patch({ allowDolbyVision: v })}
               />
               <BoolRow
-                label={t("Allow CAM releases")}
+                label={t("Allow CAM and screener releases")}
                 value={draft.allowCam}
                 onChange={(v) => patch({ allowCam: v })}
               />
@@ -945,15 +1151,27 @@ function ProfileList({
               />
             </SettingsSection>
 
-            <WhatMattersMostSection draft={draft} patch={patch} rankingError={errors.ranking} />
-
-            <ImportedSection
+            <WhatMattersMostSection
               draft={draft}
-              resolver={resolver}
-              scoring={scoring}
-              setScoring={setScoring}
               patch={patch}
+              rankingError={errors.ranking}
+              hasScores={
+                Object.keys(draft.customFormatScores ?? {}).length > 0 ||
+                (resolver?.customFormats ?? []).length > 0
+              }
+              onEditScores={editScores}
             />
+
+            <div id={CUSTOM_SCORES_ID} className="scroll-mt-4">
+              <ImportedSection
+                draft={draft}
+                resolver={resolver}
+                scoring={scoring}
+                setScoring={setScoring}
+                patch={patch}
+                revealed={scoringShown}
+              />
+            </div>
           </>
         ) : null}
       </RecordDrawer>

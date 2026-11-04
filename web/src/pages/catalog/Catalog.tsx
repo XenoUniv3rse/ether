@@ -1,8 +1,9 @@
 import { SubtabNav } from "../../components/layout";
-import { Badge, Button, EmptyState, Input } from "@braedonsaunders/appkit-ui";
+import { Badge, Button, EmptyState, Input, toast } from "@braedonsaunders/appkit-ui";
 import {
   ArrowLeft,
   ArrowRight,
+  Bookmark,
   Film,
   LayoutGrid,
   List,
@@ -12,7 +13,7 @@ import {
   SlidersHorizontal,
   X,
 } from "lucide-react";
-import { useLayoutEffect, useRef, useState } from "react";
+import { useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { useApp } from "../../app-context";
 import { Drawer } from "../../components/Drawer";
@@ -23,15 +24,18 @@ import { LevelBadge } from "../../components/status";
 import { ToolbarPicker } from "../../components/ToolbarPicker";
 import { Workspace } from "../../components/workspace";
 import { localized, t, tn, tx } from "../../i18n";
-import { api } from "../../lib/api";
+import { api, apiFetch } from "../../lib/api";
 import { formatRating } from "../../lib/contentRatings";
 import { fixed, formatNumber } from "../../lib/format";
 import { useAsync, useDebouncedValue } from "../../lib/hooks";
 import { CatalogSettings } from "./CatalogSettings";
+import type { CollectionSpec } from "../../lib/contract";
 import { TitleInspector } from "./TitleInspector";
 import "./catalog.css";
 
 const PAGE_SIZE = 48;
+/** The most titles a collection browse shows (the preview's own cap). */
+const COLLECTION_BROWSE_MAX = 200;
 const SORTS = localized(() => [
   { value: "popularity", label: t("Most popular") },
   { value: "released", label: t("Recently released") },
@@ -91,8 +95,11 @@ export function CatalogBrowser({
   setParams,
   refreshHealth,
   ruleFilter,
+  collection,
 }: {
   ruleFilter?: { ruleVisibility: string; rules: string; ruleFallback: string };
+  /** Browse one collection's titles, in its own order, instead of the catalogue. */
+  collection?: CollectionSpec;
   params: URLSearchParams;
   setParams: (p: URLSearchParams, options?: { replace?: boolean }) => void;
   refreshHealth: () => Promise<void>;
@@ -131,24 +138,51 @@ export function CatalogBrowser({
     latestParams.current = next;
     setParams(next, { replace });
   };
-  const results = useAsync(
+  const specKey = collection ? JSON.stringify(collection) : "";
+  const members = useAsync(
     (signal) =>
-      api.browseCatalog(
-        {
-          ...ruleFilter,
-          q: debouncedQuery,
-          type,
-          genre,
-          decade,
-          waiting: waiting ? "1" : "",
-          sort,
-          offset: (page - 1) * PAGE_SIZE,
-          limit: PAGE_SIZE,
-        },
-        signal,
-      ),
-    [debouncedQuery, type, genre, decade, waiting, sort, page, ruleFilter],
+      collection
+        ? api.previewCollection(collection, signal, COLLECTION_BROWSE_MAX)
+        : Promise.resolve(null),
+    [specKey],
   );
+  const browsed = useAsync(
+    (signal) =>
+      collection
+        ? Promise.resolve(null)
+        : api.browseCatalog(
+            {
+              ...ruleFilter,
+              q: debouncedQuery,
+              type,
+              genre,
+              decade,
+              waiting: waiting ? "1" : "",
+              sort,
+              offset: (page - 1) * PAGE_SIZE,
+              limit: PAGE_SIZE,
+            },
+            signal,
+          ),
+    [debouncedQuery, type, genre, decade, waiting, sort, page, ruleFilter, specKey],
+  );
+  // A collection is at most a few hundred titles: its filters run here.
+  const collectionPage = useMemo(() => {
+    if (!members.data) return undefined;
+    const q = debouncedQuery.trim().toLowerCase();
+    const from = Number(decade);
+    const all = members.data.items.filter(
+      (it) =>
+        (!q || it.title.toLowerCase().includes(q)) &&
+        (!type || it.type === type) &&
+        (!genre || (it.genres ?? []).some((g) => g.toLowerCase() === genre.toLowerCase())) &&
+        (!decade || ((it.year ?? 0) >= from && (it.year ?? 0) < from + 10)),
+    );
+    return { total: all.length, items: all.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE) };
+  }, [members.data, debouncedQuery, type, genre, decade, page]);
+  const results = collection
+    ? { ...members, data: collectionPage }
+    : { ...browsed, data: browsed.data ?? undefined };
   const facets = useAsync(async () => {
     const [genres, decades] = await Promise.all([
       api.facets(type, "genre"),
@@ -159,6 +193,107 @@ export function CatalogBrowser({
   const busy = results.loading || query !== debouncedQuery;
   const total = results.data?.total ?? 0;
   const items = results.data?.items ?? [];
+  const viewers = useAsync(() => api.viewers(), []);
+  const [chosen, setChosen] = useState<number[] | null>(null);
+  const targets =
+    chosen ??
+    viewers.data
+      ?.filter((v) => v.isOwner)
+      .map((v) => v.id)
+      .slice(0, 1) ??
+    [];
+  const keys = Array.from(
+    new Set([...items.map((item) => item.key), ...(selected ? [selected] : [])]),
+  );
+  const membership = useAsync(
+    async (signal) => {
+      const pairs = await Promise.all(
+        targets.map(
+          async (id) =>
+            [
+              id,
+              await apiFetch<Record<string, boolean>>(`/discovery/users/${id}/membership`, {
+                method: "POST",
+                body: JSON.stringify({ keys }),
+                signal,
+              }),
+            ] as const,
+        ),
+      );
+      return Object.fromEntries(pairs);
+    },
+    [targets.join(","), keys.join(",")],
+  );
+  const [writing, setWriting] = useState(false);
+  const allSaved = (key: string) =>
+    targets.length > 0 && targets.every((id) => membership.data?.[id]?.[key]);
+  const toggleWatchlist = async (key: string) => {
+    const add = !allSaved(key);
+    setWriting(true);
+    try {
+      const responses = await Promise.allSettled(
+        targets.map((id) =>
+          apiFetch<{ traktFailed: boolean }>(`/discovery/users/${id}/catalog/${key}`, {
+            method: add ? "PUT" : "DELETE",
+          }),
+        ),
+      );
+      if (responses.some((r) => r.status === "rejected"))
+        toast.error(t("Some watchlists could not be updated. Try again."));
+      if (responses.some((r) => r.status === "fulfilled" && r.value.traktFailed))
+        toast.error(
+          t("Changed in Ether, but Trakt could not be updated. Update Trakt separately."),
+        );
+      await membership.reload();
+    } finally {
+      setWriting(false);
+    }
+  };
+  const watchlistPicker = () => (
+    <details className="catalog-watchlist-picker">
+      <summary>{t("Watchlist viewers")}</summary>
+      <div className="catalog-watchlist-menu">
+        {(viewers.data ?? [])
+          .filter((v) => v.accessStatus !== "inactive")
+          .map((v) => (
+            <label key={v.id}>
+              <input
+                type="checkbox"
+                checked={targets.includes(v.id)}
+                disabled={!targets.includes(v.id) && targets.length >= 10}
+                onChange={(e) =>
+                  setChosen(
+                    e.target.checked ? [...targets, v.id] : targets.filter((id) => id !== v.id),
+                  )
+                }
+              />{" "}
+              {v.title || v.username}
+            </label>
+          ))}
+        <p>{t("Plex watchlist changes stay in Ether. Plex sync may restore removed titles.")}</p>
+      </div>
+    </details>
+  );
+  const watchButton = (key: string) => (
+    <div className="catalog-watchlist-action">
+      <Button
+        size="sm"
+        variant="outline"
+        disabled={!targets.length || membership.loading || !!membership.error || writing}
+        aria-pressed={allSaved(key)}
+        onClick={() => void toggleWatchlist(key)}
+      >
+        <Bookmark size={14} fill={allSaved(key) ? "currentColor" : "none"} />
+        {allSaved(key) ? t("Remove from Watchlist") : t("Add to Watchlist")}
+      </Button>
+      {targets.length > 1 && !membership.loading && !membership.error ? (
+        <span>
+          {t("Watchlist")} {targets.filter((id) => membership.data?.[id]?.[key]).length}/
+          {targets.length}
+        </span>
+      ) : null}
+    </div>
+  );
   const hasFilters = Boolean(query || genre || decade || waiting);
   const catalogStep = dashboard?.setupSteps?.find((s) => s.id === "catalog");
   const tmdbMissing = catalogStep
@@ -184,6 +319,7 @@ export function CatalogBrowser({
           ]}
         />
         <div className="catalog-tools">
+          {watchlistPicker()}
           <Button size="sm" variant="ghost" onClick={() => setLookupOpen(true)}>
             <Search size={14} />
             {t("Find on TMDB")}
@@ -262,16 +398,18 @@ export function CatalogBrowser({
               ]}
             />
           </div>
-          <div className="catalog-filter-field">
-            <button
-              type="button"
-              className={`catalog-waiting-chip${waiting ? " is-on" : ""}`}
-              aria-pressed={waiting}
-              onClick={() => update("waiting", waiting ? "" : "1")}
-            >
-              {t("Waiting for a release")}
-            </button>
-          </div>
+          {collection ? null : (
+            <div className="catalog-filter-field">
+              <button
+                type="button"
+                className={`catalog-waiting-chip${waiting ? " is-on" : ""}`}
+                aria-pressed={waiting}
+                onClick={() => update("waiting", waiting ? "" : "1")}
+              >
+                {t("Waiting for a release")}
+              </button>
+            </div>
+          )}
           <div className="catalog-filter-field">
             <span className="catalog-field-label">{t("Decade")}</span>
             <ToolbarPicker
@@ -289,7 +427,7 @@ export function CatalogBrowser({
             />
           </div>
           <ErrorPanel error={facets.error} onRetry={() => void facets.reload()} />
-          {!ruleFilter ? (
+          {!ruleFilter && !collection ? (
             <div className="catalog-policy">
               <Film size={18} />
               <h4>{t("Ready for discovery")}</h4>
@@ -302,18 +440,23 @@ export function CatalogBrowser({
           ) : null}
         </aside>
         <section className="catalog-results" aria-label={t("Catalog titles")} aria-busy={busy}>
+          {viewers.error || membership.error ? (
+            <p role="alert">{t("Watchlist status could not be loaded.")}</p>
+          ) : null}
           <div className="catalog-results-head">
             <div>
               <h3>
-                {waiting
-                  ? t("Waiting for a release")
-                  : query
-                    ? t("Results for “{query}”", { query })
-                    : type === "movie"
-                      ? t("Movies")
-                      : type === "show"
-                        ? t("TV shows")
-                        : t("Movies & TV shows")}
+                {collection
+                  ? collection.name || t("Untitled collection")
+                  : waiting
+                    ? t("Waiting for a release")
+                    : query
+                      ? t("Results for “{query}”", { query })
+                      : type === "movie"
+                        ? t("Movies")
+                        : type === "show"
+                          ? t("TV shows")
+                          : t("Movies & TV shows")}
               </h3>
               <p role="status">
                 {busy
@@ -336,15 +479,17 @@ export function CatalogBrowser({
                 <SlidersHorizontal size={14} />
                 {t("Filters")}
               </Button>
-              <ToolbarPicker
-                ariaLabel={t("Sort titles")}
-                value={sort}
-                options={SORTS}
-                onChange={(v) => update("sort", v)}
-              />
+              {collection ? null : (
+                <ToolbarPicker
+                  ariaLabel={t("Sort titles")}
+                  value={sort}
+                  options={SORTS}
+                  onChange={(v) => update("sort", v)}
+                />
+              )}
             </div>
           </div>
-          {tmdbMissing ? (
+          {tmdbMissing && !collection ? (
             <p className="mb-3 text-sm text-fg-muted">
               {tx("No TMDB key is configured. {link} to populate the catalog.", {
                 link: (
@@ -415,52 +560,57 @@ export function CatalogBrowser({
             <>
               <div className={list ? "catalog-list" : "catalog-grid"}>
                 {items.map((title) => (
-                  <button
+                  <div
                     key={title.key}
-                    className={list ? "catalog-list-item" : "catalog-poster"}
-                    onClick={() => update("title", title.key)}
-                    aria-label={t("Inspect {title}", { title: title.title })}
+                    className={list ? "catalog-watchlist-row" : "catalog-watchlist-card"}
                   >
-                    <div className="catalog-poster-image">
-                      <Artwork
-                        src={title.poster}
-                        alt=""
-                        title={title.title}
-                        className="aspect-[2/3] w-full rounded-md"
-                      />
-                      {!list ? (
-                        <span className="catalog-inspect">
-                          {t("Inspect title")} <ArrowRight size={13} />
+                    <button
+                      className={list ? "catalog-list-item" : "catalog-poster"}
+                      onClick={() => update("title", title.key)}
+                      aria-label={t("Inspect {title}", { title: title.title })}
+                    >
+                      <div className="catalog-poster-image">
+                        <Artwork
+                          src={title.poster}
+                          alt=""
+                          title={title.title}
+                          className="aspect-[2/3] w-full rounded-md"
+                        />
+                        {!list ? (
+                          <span className="catalog-inspect">
+                            {t("Inspect title")} <ArrowRight size={13} />
+                          </span>
+                        ) : null}
+                      </div>
+                      <div className="catalog-title-copy">
+                        <h4>{title.title}</h4>
+                        <p>
+                          {title.year || t("Year unknown")}
+                          <span>·</span>
+                          {title.type === "show" ? t("TV show") : t("Movie")}
+                        </p>
+                        {list ? (
+                          <p className="catalog-list-genres">
+                            {title.genres?.join(" · ") || t("Genres unavailable")}
+                          </p>
+                        ) : null}
+                      </div>
+                      {title.rating ? (
+                        <span className="catalog-rating">
+                          <span aria-hidden>★</span> {fixed(title.rating, 1)}
                         </span>
                       ) : null}
-                    </div>
-                    <div className="catalog-title-copy">
-                      <h4>{title.title}</h4>
-                      <p>
-                        {title.year || t("Year unknown")}
-                        <span>·</span>
-                        {title.type === "show" ? t("TV show") : t("Movie")}
-                      </p>
                       {list ? (
-                        <p className="catalog-list-genres">
-                          {title.genres?.join(" · ") || t("Genres unavailable")}
-                        </p>
+                        <>
+                          <Badge variant="secondary">
+                            {title.contentRating ? formatRating(title.contentRating) : t("Unrated")}
+                          </Badge>
+                          <ArrowRight size={15} className="text-fg-subtle" />
+                        </>
                       ) : null}
-                    </div>
-                    {title.rating ? (
-                      <span className="catalog-rating">
-                        <span aria-hidden>★</span> {fixed(title.rating, 1)}
-                      </span>
-                    ) : null}
-                    {list ? (
-                      <>
-                        <Badge variant="secondary">
-                          {title.contentRating ? formatRating(title.contentRating) : t("Unrated")}
-                        </Badge>
-                        <ArrowRight size={15} className="text-fg-subtle" />
-                      </>
-                    ) : null}
-                  </button>
+                    </button>
+                    {watchButton(title.key)}
+                  </div>
                 ))}
               </div>
               <nav className="catalog-pagination" aria-label={t("Catalog pages")}>
@@ -521,7 +671,17 @@ export function CatalogBrowser({
         />
       </Drawer>
       {selected ? (
-        <TitleInspector key={selected} titleKey={selected} onClose={() => update("title", "")} />
+        <TitleInspector
+          key={selected}
+          titleKey={selected}
+          onClose={() => update("title", "")}
+          watchlistAction={
+            <>
+              {watchlistPicker()}
+              {watchButton(selected)}
+            </>
+          }
+        />
       ) : null}
     </div>
   );

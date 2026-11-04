@@ -319,6 +319,11 @@ func (s *Service) choice(ctx context.Context, user int64, key core.RatingKey, ki
 	err = json.Unmarshal([]byte(row.raw), &c)
 	return c, err == nil, err
 }
+
+// SDH reports whether a subtitle track is for the hearing impaired (by its
+// title, as pick ranks it).
+func SDH(t core.StreamInfo) bool { return sdh(t) }
+
 func sdh(t core.StreamInfo) bool {
 	v := strings.ToLower(t.Title)
 	return strings.Contains(v, "sdh") || strings.Contains(v, "hearing impaired") || strings.Contains(v, "[cc]") || v == "cc"
@@ -431,10 +436,14 @@ func (s *Service) selectRules(ctx context.Context, user int64, key core.RatingKe
 		bm = &b
 	}
 	style := r.SubtitleStyle
-	if !hasB && r.SubtitleMode == "off" && foreign {
+	// Subtitles off still shows a forced track for foreign audio, and only
+	// a forced one: a full track the viewer never asked for is not "off",
+	// and an image track would be burned into the video (#313).
+	offForeign := !hasB && r.SubtitleMode == "off" && foreign
+	if offForeign {
 		style = "forced"
 	}
-	out.Subtitle = pick(info.Streams, "subtitle", subtitleOrder(r, server, original), style, !hasB && r.SubtitleMode == "forced-only", bm)
+	out.Subtitle = pick(info.Streams, "subtitle", subtitleOrder(r, server, original), style, !hasB && r.SubtitleMode == "forced-only" || offForeign, bm)
 	return out, nil
 }
 

@@ -1,0 +1,46 @@
+/* Describe a collection: the poster wall's waiting state, on Studio's stage motion. */
+@keyframes describe-breathe {
+  0%,
+  100% {
+    opacity: 0.5;
+    transform: translateY(0);
+  }
+  50% {
+    opacity: 0.95;
+    transform: translateY(-5px);
+  }
+}
+.describe-ghost {
+  position: relative;
+  overflow: hidden;
+  border-radius: 0.5rem;
+  border: 1px solid rgb(var(--ch-border) / 0.7);
+  background: linear-gradient(
+    165deg,
+    rgb(var(--ch-primary) / 0.18),
+    rgb(var(--ch-accent-indigo) / 0.08) 55%,
+    rgb(var(--ch-bg-subtle) / 0.6)
+  );
+  animation: describe-breathe 3.6s var(--ease-out) infinite both;
+}
+.describe-ghost::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    100deg,
+    transparent 30%,
+    rgb(var(--ch-fg) / 0.07) 50%,
+    transparent 70%
+  );
+  animation: stage-sweep 2.8s var(--ease-out) infinite;
+}
+.describe-building .describe-ghost::after {
+  animation-duration: 1.4s;
+}
+@media (prefers-reduced-motion: reduce) {
+  .describe-ghost,
+  .describe-ghost::after {
+    animation: none;
+  }
+}

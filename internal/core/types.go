@@ -104,6 +104,10 @@ type Title struct {
 	Rating     float64 `json:"rating,omitempty"` // TMDB vote average 0-10
 	VoteCount  int     `json:"voteCount,omitempty"`
 	Popularity float64 `json:"popularity,omitempty"`
+	// SearchScore is how well the title answers the search that returned it
+	// (1 is the exact title; zero outside search results). Frontends order
+	// result groups and report relevance from it. Never persisted.
+	SearchScore float64 `json:"-"`
 
 	PosterPath   string `json:"posterPath,omitempty"`
 	BackdropPath string `json:"backdropPath,omitempty"`
@@ -209,6 +213,9 @@ type ClientCaps struct {
 	VideoLevels          map[string]int      `json:"videoLevels,omitempty"` // codec level in ffprobe units (H.264 51 = 5.1)
 	Remote               bool                `json:"remote"`                // not on the server's LAN
 
+	// AudioLimits are request-declared limits on source audio and encoded output.
+	AudioLimits []AudioLimit `json:"audioLimits,omitempty"`
+
 	// TranscodeAudioCodecs is the explicit audio target for the current
 	// streaming protocol. It constrains remux/transcode output only; source
 	// selection and direct play continue to use AudioCodecs.
@@ -218,6 +225,18 @@ type ClientCaps struct {
 	// Sync) rather than live playback: the resolver prefers compact,
 	// mobile-native releases and the whole file is remuxed (additive).
 	Download bool `json:"download,omitempty"`
+
+	// DolbyVisionBaseOnly delivers a Dolby Vision 7.6/8.1 source as its
+	// compatible HDR10 base layer: an owner override turned Dolby Vision off
+	// for the client, or a Dolby Vision start stalled on this client
+	// (additive).
+	DolbyVisionBaseOnly bool `json:"dolbyVisionBaseOnly,omitempty"`
+}
+
+// AudioLimit applies to one audio codec, or all codecs when Codec is "*".
+type AudioLimit struct {
+	Codec, Name, Type string
+	Value             int
 }
 
 func (c ClientCaps) SupportsVideo(codec string) bool  { return contains(c.VideoCodecs, codec) }

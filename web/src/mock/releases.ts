@@ -15,6 +15,7 @@ import type {
 } from "../lib/releases";
 import type { ResolverTrace } from "../lib/types";
 import { hash, type FakeTitle } from "./data";
+import { descriptors as rankingDescriptors } from "./extend/descriptors/ranking";
 
 type Reply = { status: number; body: unknown };
 
@@ -201,7 +202,11 @@ function judgeDraft(name: string, index: number, rules: RuleDraft[]): ConsoleRel
 
 function draftConflict(rules: RuleDraft[]): string {
   const needs: { name: string; field: string; value: string }[] = [];
-  const single = new Set(["group", "source", "video", "audio", "indexer", "protocol", "edition"]);
+  const single = new Set(
+    rankingDescriptors
+      .filter((d) => d.kind === "ruleField" && (d.meta as { singleValue?: boolean })?.singleValue)
+      .map((d) => d.id),
+  );
   for (const rule of rules) {
     if (
       rule.disabled ||
@@ -302,6 +307,7 @@ export function createReleaseConsoleMock(catalog: FakeTitle[]) {
       Math.min(9, Math.log10((rel.grabs ?? 0) + 1) * 3);
     if (blocks.has(rel.id)) return { reason: "marked bad", score };
     if (info.source === "cam") return { reason: "cam not allowed", score };
+    if (info.source === "screener") return { reason: "screener not allowed", score };
     const max = profile === "4K" || profile === "none" ? 2160 : profile === "720p" ? 720 : 1080;
     if ((info.height ?? 0) > max) return { reason: "above profile max height", score };
     if (profile === "download" && info.audioCodec === "dtshd")

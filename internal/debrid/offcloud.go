@@ -291,14 +291,15 @@ func (p *offcloud) Acquire(ctx context.Context, req AcquireRequest) (*Acquired, 
 		}
 		id, added, state = out.RequestID, true, out.Status
 	}
-	cleanup := func() {
+	cleanup := func() bool {
 		if added && req.RemoveUncached {
 			rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+			defer cancel()
 			if req.mayRemove(rctx, id) {
-				_ = p.Remove(rctx, id)
+				return p.Remove(rctx, id) == nil
 			}
-			cancel()
 		}
+		return false
 	}
 	for polls := 0; state != "downloaded" && polls < p.opts.ReadyPolls; polls++ {
 		if polls > 0 || state == "" {
@@ -319,10 +320,11 @@ func (p *offcloud) Acquire(ctx context.Context, req AcquireRequest) (*Acquired, 
 		}
 	}
 	if state != "downloaded" {
-		if req.CachedOnly {
-			cleanup()
+		err := fmt.Errorf("offcloud: cloud download is not ready: %w", core.ErrNotCached)
+		if req.CachedOnly && cleanup() {
+			return nil, err
 		}
-		return nil, fmt.Errorf("offcloud: cloud download is not ready: %w", core.ErrNotCached)
+		return nil, pending(id, err)
 	}
 	files, err := p.files(ctx, id)
 	if err != nil {
@@ -330,6 +332,7 @@ func (p *offcloud) Acquire(ctx context.Context, req AcquireRequest) (*Acquired, 
 	}
 	chosen, err := req.Choose(files)
 	if err != nil {
+		cleanup()
 		return nil, err
 	}
 	p.list.remember(req.InfoHash, id)

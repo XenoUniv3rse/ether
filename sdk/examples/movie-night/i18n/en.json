@@ -1,0 +1,11 @@
+{
+  "summary": "A saved movie shortlist and a catalogue search tool for Ask Ether.",
+  "query": "Title search",
+  "count": "Shortlist size",
+  "page": "Movie night",
+  "tool": "Find movies for tonight",
+  "shortlist": "Tonight\u2019s shortlist",
+  "pick": "Pick the next shortlist",
+  "controls": "Choose tonight\u2019s movies",
+  "empty": "Set title words in Setup, then pick. This does not check playback availability."
+}

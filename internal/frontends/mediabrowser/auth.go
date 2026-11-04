@@ -17,6 +17,7 @@ import (
 	"github.com/braedonsaunders/ether/internal/frontend/kit/authhdr"
 	"github.com/braedonsaunders/ether/internal/frontend/kit/ids"
 	"github.com/braedonsaunders/ether/internal/frontend/kit/route"
+	"github.com/braedonsaunders/ether/internal/frontend/kit/support"
 )
 
 // errViewerScope means the request named a viewer other than the grant holder.
@@ -120,6 +121,9 @@ func (i *instance) viewer(r *http.Request) (*frontend.Viewer, string, error) {
 	if err == nil && v != nil && i.host.ClientSeen != nil {
 		i.host.ClientSeen(device(r).ID)
 	}
+	if _, ok := i.host.Identity.(frontend.GrantDeviceIdentity); ok && err == nil && v != nil {
+		support.Seen(r, i.host.Support, string(i.protocol), v, device(r))
+	}
 	return v, token, err
 }
 func (i *instance) syncPlayAccess() string {
@@ -130,30 +134,10 @@ func (i *instance) syncPlayAccess() string {
 }
 
 func (i *instance) userDTO(r *http.Request, v *frontend.Viewer) map[string]any {
-	id, _ := ids.GUID(ids.User, v.ID)
-	// Jellyfin's Kotlin SDK requires these keys even where its OpenAPI schema
-	// omits `required`. Unsupported features are false; the broker and host
-	// remain authoritative for every actual operation.
-	policy := map[string]any{
-		"IsAdministrator": v.IsOwner && !v.Delegated, "IsHidden": true, "IsDisabled": false,
-		"EnableCollectionManagement": false, "EnableSubtitleManagement": false, "EnableLyricManagement": false,
-		"EnableUserPreferenceAccess": i.host.Preferences != nil, "EnableRemoteControlOfOtherUsers": false,
-		"EnableSharedDeviceControl": false, "EnableRemoteAccess": false, "EnableLiveTvManagement": false, "EnableLiveTvAccess": false,
-		"EnableMediaPlayback": i.host.Sessions != nil, "EnablePlaybackRemuxing": i.host.Sessions != nil,
-		// The host's configured playback policy overrides these defaults below.
-		"EnableAudioPlaybackTranscoding": i.host.Sessions != nil, "EnableVideoPlaybackTranscoding": i.host.Sessions != nil,
-		"ForceRemoteSourceTranscoding": false, "EnableContentDeletion": false, "EnableContentDownloading": false,
-		"EnableSyncTranscoding": false, "EnableMediaConversion": false, "EnableAllDevices": true, "EnableAllChannels": true,
-		"EnabledDevices": []string{}, "EnabledChannels": []string{}, "EnableContentDeletionFromFolders": []string{}, "AllowedTags": []string{}, "BlockedTags": []string{},
-		"EnableAllFolders": len(v.AllowedSections) == 0, "InvalidLoginAttemptCount": 0, "LoginAttemptsBeforeLockout": -1,
-		"MaxActiveSessions": v.StreamLimit, "EnablePublicSharing": false, "RemoteClientBitrateLimit": 0,
-		"AuthenticationProviderId": "Ether", "PasswordResetProviderId": "Ether", "SyncPlayAccess": i.syncPlayAccess(),
+	result, policy, configuration := i.baseUserDTO(v)
+	if i.protocol == "emby" {
+		defer i.embyUserDTO(result)
 	}
-	if i.protocol == "jellyfin" {
-		policy["PasswordResetProviderId"] = "Ether"
-	}
-	// Presentation defaults mirror Jellyfin's UserConfiguration constructor.
-	configuration := map[string]any{"PlayDefaultAudioTrack": true, "DisplayMissingEpisodes": false, "GroupedFolders": []string{}, "SubtitleMode": "Default", "DisplayCollectionsView": false, "EnableLocalPassword": false, "OrderedViews": []string{}, "LatestItemsExcludes": []string{}, "MyMediaExcludes": []string{}, "HidePlayedInLatest": true, "RememberAudioSelections": true, "RememberSubtitleSelections": true, "EnableNextEpisodeAutoPlay": true}
 	if len(v.AudioLanguages) > 0 {
 		configuration["AudioLanguagePreference"] = v.AudioLanguages[0]
 		configuration["PlayDefaultAudioTrack"] = false
@@ -172,35 +156,8 @@ func (i *instance) userDTO(r *http.Request, v *frontend.Viewer) map[string]any {
 		}
 	}
 	i.applyOrderedViews(r, v, configuration)
-	if i.protocol == "emby" {
-		for _, key := range []string{"AllowedTags", "EnableCollectionManagement", "EnableLyricManagement", "ForceRemoteSourceTranscoding", "LoginAttemptsBeforeLockout", "MaxActiveSessions", "PasswordResetProviderId", "SyncPlayAccess"} {
-			delete(policy, key)
-		}
-		policy["SimultaneousStreamLimit"] = v.StreamLimit
-		delete(configuration, "DisplayCollectionsView")
-		delete(configuration, "GroupedFolders")
-	}
-	result := map[string]any{"Id": id, "Name": v.Username, "ServerId": i.info.ID, "Policy": policy, "Configuration": configuration}
-	if i.protocol == "emby" {
-		defer i.embyUserDTO(result)
-	}
 	if i.protocol == "emby" && !v.CreatedAt.IsZero() {
 		result["DateCreated"] = wireTime(v.CreatedAt)
-	}
-	if i.protocol == "jellyfin" {
-		// These keys are always present on Jellyfin 12.4 UserDto. Empty values
-		// are facts: Ether has no Chromecast receiver, easy password, auto-login,
-		// access schedule, or blocked channel/folder list.
-		if _, ok := configuration["SubtitleLanguagePreference"]; !ok {
-			configuration["SubtitleLanguagePreference"] = ""
-		}
-		configuration["CastReceiverId"] = ""
-		result["EnableAutoLogin"] = false
-		result["HasConfiguredEasyPassword"] = false
-		policy["AccessSchedules"] = []any{}
-		policy["BlockUnratedItems"] = []any{}
-		policy["BlockedChannels"] = []any{}
-		policy["BlockedMediaFolders"] = []any{}
 	}
 	if i.host.ViewerCapabilities == nil {
 		return result
@@ -320,7 +277,7 @@ func (i *instance) sessionDTO(r *http.Request, v *frontend.Viewer) map[string]an
 	if i.host.Sessions != nil {
 		caps, err := i.host.Sessions.Capabilities(r.Context(), frontend.SessionAccess{Viewer: v, Device: d, Protocol: i.protocol})
 		if err == nil {
-			c := sessionCapabilitiesDTO(caps)
+			c := i.sessionCapabilitiesDTO(caps)
 			if i.protocol == "jellyfin" {
 				session["Capabilities"] = c
 			}
@@ -343,8 +300,29 @@ func (i *instance) sessionDTO(r *http.Request, v *frontend.Viewer) map[string]an
 	return session
 }
 
-func sessionCapabilitiesDTO(c frontend.SessionCapabilities) map[string]any {
+// jellyfinMediaTypes and jellyfinCommands are Jellyfin's MediaType and
+// GeneralCommandType enums. The broker lists sessions from every surface, and
+// jellyfin-sdk-kotlin rejects a whole session list when one entry carries an
+// Emby- or Plex-only value, so a Jellyfin answer keeps only these.
+var (
+	jellyfinMediaTypes = map[string]bool{"Unknown": true, "Video": true, "Audio": true, "Photo": true, "Book": true}
+	jellyfinCommands   = map[string]bool{
+		"MoveUp": true, "MoveDown": true, "MoveLeft": true, "MoveRight": true, "PageUp": true, "PageDown": true,
+		"PreviousLetter": true, "NextLetter": true, "ToggleOsd": true, "ToggleContextMenu": true, "Select": true, "Back": true,
+		"TakeScreenshot": true, "SendKey": true, "SendString": true, "GoHome": true, "GoToSettings": true, "VolumeUp": true,
+		"VolumeDown": true, "Mute": true, "Unmute": true, "ToggleMute": true, "SetVolume": true, "SetAudioStreamIndex": true,
+		"SetSubtitleStreamIndex": true, "ToggleFullscreen": true, "DisplayContent": true, "GoToSearch": true, "DisplayMessage": true,
+		"SetRepeatMode": true, "ChannelUp": true, "ChannelDown": true, "Guide": true, "ToggleStats": true, "PlayMediaSource": true,
+		"PlayTrailers": true, "SetShuffleQueue": true, "PlayState": true, "PlayNext": true, "ToggleOsdMenu": true, "Play": true,
+		"SetMaxStreamingBitrate": true, "SetPlaybackOrder": true,
+	}
+)
+
+func (i *instance) sessionCapabilitiesDTO(c frontend.SessionCapabilities) map[string]any {
 	mediaTypes, commands := c.PlayableMediaTypes, c.SupportedCommands
+	if i.protocol == "jellyfin" {
+		mediaTypes, commands = knownValues(mediaTypes, jellyfinMediaTypes), knownValues(commands, jellyfinCommands)
+	}
 	if mediaTypes == nil {
 		mediaTypes = []string{}
 	}
@@ -369,6 +347,17 @@ func sessionCapabilitiesDTO(c frontend.SessionCapabilities) map[string]any {
 	}
 	return m
 }
+
+// knownValues returns the members of values found in known, in order.
+func knownValues(values []string, known map[string]bool) []string {
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		if known[value] {
+			out = append(out, value)
+		}
+	}
+	return out
+}
 func (i *instance) result(w http.ResponseWriter, r *http.Request, token string) {
 	v, err := i.host.Identity.Resolve(r.Context(), token)
 	if err != nil || v == nil {
@@ -384,15 +373,25 @@ func (i *instance) result(w http.ResponseWriter, r *http.Request, token string) 
 }
 
 // fastResult answers a sign-in with the token and a small user. Home rows,
-// viewer timestamps, session capability lookups and path warming wait until
-// the bytes are written. Swiftfin cancels Quick Connect at about half a second.
-func (i *instance) fastResult(w http.ResponseWriter, r *http.Request, token string) {
+// stored viewer timestamps, session capability lookups and path warming wait
+// until the bytes are written. Swiftfin cancels Quick Connect at about half a
+// second. Jellyfin stamps the sign-in itself as the last login and activity,
+// and its Quick Connect session carries no remote endpoint.
+func (i *instance) fastResult(w http.ResponseWriter, r *http.Request, token string, quickConnect bool) {
 	v, err := i.host.Identity.Resolve(frontend.WithQuietIdentity(r.Context()), token)
 	if err != nil || v == nil {
 		http.Error(w, "Unauthorized", 401)
 		return
 	}
-	jsonReply(w, map[string]any{"AccessToken": token, "ServerId": i.info.ID, "User": i.authUserDTO(v), "SessionInfo": i.authSessionDTO(r, v)})
+	user, session := i.authUserDTO(v), i.authSessionDTO(r, v)
+	if i.protocol == "jellyfin" {
+		now := wireTime(time.Now())
+		user["LastLoginDate"], user["LastActivityDate"] = now, now
+		if quickConnect {
+			delete(session, "RemoteEndPoint")
+		}
+	}
+	jsonReply(w, map[string]any{"AccessToken": token, "ServerId": i.info.ID, "User": user, "SessionInfo": session})
 	if flusher, ok := w.(http.Flusher); ok {
 		flusher.Flush()
 	}
@@ -418,16 +417,35 @@ func (i *instance) finishSignIn(ctx context.Context, v *frontend.Viewer, dev fro
 	}
 }
 
+// authUserDTO is the sign-in user: static keys only. Preferences, home order
+// and capabilities are read on later user requests so sign-in does not walk
+// the catalogue.
 func (i *instance) authUserDTO(v *frontend.Viewer) map[string]any {
+	user, _, _ := i.baseUserDTO(v)
+	if i.protocol == "emby" {
+		i.embyUserDTO(user)
+	}
+	return user
+}
+
+// baseUserDTO builds the user, its policy and its configuration from facts
+// the viewer record already carries. For Jellyfin it holds every key that
+// jellyfin-sdk-kotlin (Jellyfin Android TV, Wholphin, Findroid) declares
+// non-null without a default, even where the OpenAPI schema says nullable: a
+// missing one fails the whole response, and a sign-in then ends with the
+// client dropping the connection after a 200. Unsupported features are false;
+// the broker and host remain authoritative for every actual operation.
+// HasPassword stays true until a capability lookup says otherwise, so a
+// picker asks for a password rather than trying an empty one.
+func (i *instance) baseUserDTO(v *frontend.Viewer) (user, policy, configuration map[string]any) {
 	id, _ := ids.GUID(ids.User, v.ID)
-	// Static keys only. Preferences, home order and capabilities are read on
-	// later user requests so sign-in does not walk the catalogue.
-	policy := map[string]any{
+	policy = map[string]any{
 		"IsAdministrator": v.IsOwner && !v.Delegated, "IsHidden": true, "IsDisabled": false,
 		"EnableCollectionManagement": false, "EnableSubtitleManagement": false, "EnableLyricManagement": false,
 		"EnableUserPreferenceAccess": i.host.Preferences != nil, "EnableRemoteControlOfOtherUsers": false,
 		"EnableSharedDeviceControl": false, "EnableRemoteAccess": false, "EnableLiveTvManagement": false, "EnableLiveTvAccess": false,
 		"EnableMediaPlayback": i.host.Sessions != nil, "EnablePlaybackRemuxing": i.host.Sessions != nil,
+		// The host's configured playback policy overrides these defaults in userDTO.
 		"EnableAudioPlaybackTranscoding": i.host.Sessions != nil, "EnableVideoPlaybackTranscoding": i.host.Sessions != nil,
 		"ForceRemoteSourceTranscoding": false, "EnableContentDeletion": false, "EnableContentDownloading": false,
 		"EnableSyncTranscoding": false, "EnableMediaConversion": false, "EnableAllDevices": true, "EnableAllChannels": true,
@@ -436,30 +454,33 @@ func (i *instance) authUserDTO(v *frontend.Viewer) map[string]any {
 		"MaxActiveSessions": v.StreamLimit, "EnablePublicSharing": false, "RemoteClientBitrateLimit": 0,
 		"AuthenticationProviderId": "Ether", "PasswordResetProviderId": "Ether", "SyncPlayAccess": i.syncPlayAccess(),
 	}
-	configuration := map[string]any{"PlayDefaultAudioTrack": true, "DisplayMissingEpisodes": false, "GroupedFolders": []string{}, "SubtitleMode": "Default", "DisplayCollectionsView": false, "EnableLocalPassword": false, "OrderedViews": []string{}, "LatestItemsExcludes": []string{}, "MyMediaExcludes": []string{}, "HidePlayedInLatest": true, "RememberAudioSelections": true, "RememberSubtitleSelections": true, "EnableNextEpisodeAutoPlay": true}
-	if i.protocol == "emby" {
+	// Presentation defaults mirror Jellyfin's UserConfiguration constructor.
+	configuration = map[string]any{"PlayDefaultAudioTrack": true, "DisplayMissingEpisodes": false, "GroupedFolders": []string{}, "SubtitleMode": "Default", "DisplayCollectionsView": false, "EnableLocalPassword": false, "OrderedViews": []string{}, "LatestItemsExcludes": []string{}, "MyMediaExcludes": []string{}, "HidePlayedInLatest": true, "RememberAudioSelections": true, "RememberSubtitleSelections": true, "EnableNextEpisodeAutoPlay": true}
+	user = map[string]any{"Id": id, "Name": v.Username, "ServerId": i.info.ID, "HasPassword": true, "Policy": policy, "Configuration": configuration}
+	switch i.protocol {
+	case "emby":
 		for _, key := range []string{"AllowedTags", "EnableCollectionManagement", "EnableLyricManagement", "ForceRemoteSourceTranscoding", "LoginAttemptsBeforeLockout", "MaxActiveSessions", "PasswordResetProviderId", "SyncPlayAccess"} {
 			delete(policy, key)
 		}
 		policy["SimultaneousStreamLimit"] = v.StreamLimit
 		delete(configuration, "DisplayCollectionsView")
 		delete(configuration, "GroupedFolders")
-	}
-	user := map[string]any{"Id": id, "Name": v.Username, "ServerId": i.info.ID, "HasPassword": true, "Policy": policy, "Configuration": configuration}
-	if i.protocol == "jellyfin" {
+	case "jellyfin":
+		// These keys are always present on a Jellyfin UserDto. Empty values are
+		// facts: Ether has no Chromecast receiver, easy password, auto-login,
+		// access schedule, or blocked channel/folder list.
 		configuration["SubtitleLanguagePreference"] = ""
 		configuration["CastReceiverId"] = ""
-		user["EnableAutoLogin"] = false
+		user["HasConfiguredPassword"] = true
 		user["HasConfiguredEasyPassword"] = false
+		user["EnableAutoLogin"] = false
 		policy["AccessSchedules"] = []any{}
 		policy["BlockUnratedItems"] = []any{}
 		policy["BlockedChannels"] = []any{}
 		policy["BlockedMediaFolders"] = []any{}
+		policy["EnabledFolders"] = []string{}
 	}
-	if i.protocol == "emby" {
-		i.embyUserDTO(user)
-	}
-	return user
+	return user, policy, configuration
 }
 
 func (i *instance) authSessionDTO(r *http.Request, v *frontend.Viewer) map[string]any {
@@ -562,7 +583,7 @@ func (i *instance) routes() error {
 				identityError(w, err)
 				return
 			}
-			i.fastResult(w, r, token)
+			i.fastResult(w, r, token, false)
 		}},
 		{"POST", "/Users/{userId}/Configuration", i.saveUserConfiguration},
 		{"GET", "/Users/Me", func(w http.ResponseWriter, r *http.Request) {
@@ -674,7 +695,7 @@ func (i *instance) routes() error {
 				identityError(w, err)
 				return
 			}
-			i.fastResult(w, r, token)
+			i.fastResult(w, r, token, true)
 		}},
 	}
 	for _, r := range routes {
@@ -703,11 +724,15 @@ func (i *instance) publicViewers(w http.ResponseWriter, r *http.Request) {
 				item["Prefix"] = prefix
 			}
 		}
+		if i.protocol == "jellyfin" {
+			// jellyfin-sdk-kotlin needs all three password flags on every
+			// listed user; one entry without them fails the whole picker. An
+			// unknown state asks for a password, as baseUserDTO does.
+			item["HasPassword"], item["HasConfiguredPassword"], item["HasConfiguredEasyPassword"] = true, true, false
+		}
 		if viewer.HasConfiguredPassword != nil {
 			item["HasPassword"] = *viewer.HasConfiguredPassword
-			if i.protocol == "emby" {
-				item["HasConfiguredPassword"] = *viewer.HasConfiguredPassword
-			}
+			item["HasConfiguredPassword"] = *viewer.HasConfiguredPassword
 		}
 		items = append(items, item)
 	}

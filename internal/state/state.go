@@ -71,6 +71,13 @@ CREATE TABLE state_playlist_items (
 ALTER TABLE state_watch ADD COLUMN version INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE state_history ADD COLUMN imported INTEGER NOT NULL DEFAULT 0;
 CREATE UNIQUE INDEX state_history_imported ON state_history(user_id, rating_key, viewed_at) WHERE imported=1;`)
+	// Its own component: state/5 must stay unused (prerelease builds recorded
+	// it), as state_search/1 does for the search index.
+	store.Register("state_lastviewed", 1, `CREATE INDEX state_watch_last_viewed ON state_watch(user_id, last_viewed_at DESC, rating_key) WHERE last_viewed_at>0;`)
+	// A viewer's latest watch-state write is one index probe: Plex Home's
+	// cached rows are stamped with it (experience.HomeRevision).
+	store.Register("state_updated", 1, `CREATE INDEX state_watch_updated ON state_watch(user_id, updated_at);`)
+
 }
 
 // WatchedThreshold and StartedThreshold are the fractions of duration at
@@ -780,6 +787,39 @@ func (s *State) Rate(ctx context.Context, userID int64, key core.RatingKey, rati
 		cur.ratingAt = now
 		return false, false, []Event{{Kind: EventRated, UserID: userID, Key: cur.ws.Key, Rating: rating, At: now}}
 	})
+}
+
+// WatchSample counts, over at most limit of a viewer's watch-state rows, how
+// many are in progress and how many are watched (support diagnostics);
+// truncated reports more rows than limit.
+func (s *State) WatchSample(ctx context.Context, userID int64, limit int) (sampled, inProgress, watched int, truncated bool, err error) {
+	if limit <= 0 {
+		limit = 500
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT view_offset_ns, view_count FROM state_watch WHERE user_id=? LIMIT ?`, userID, limit+1)
+	if err != nil {
+		return 0, 0, 0, false, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		if sampled == limit {
+			truncated = true
+			break
+		}
+		var offset int64
+		var count int
+		if err = rows.Scan(&offset, &count); err != nil {
+			return 0, 0, 0, false, err
+		}
+		sampled++
+		if offset > 0 {
+			inProgress++
+		}
+		if count > 0 {
+			watched++
+		}
+	}
+	return sampled, inProgress, watched, truncated, rows.Err()
 }
 
 // InProgress returns items with a resume point, most recently viewed first.

@@ -7,12 +7,23 @@ import {
   ListPlus,
   Plus,
 } from "lucide-react";
+import { useState } from "react";
 import { ActionMenu } from "../../components/ActionMenu";
 import { SectionHeading } from "../../components/feedback";
 import { ChipGroup, Field, NumberInput, Segmented } from "../../components/fields";
-import type { CollectionSpec, Rule, RuleField, SourceKind } from "../../lib/contract";
+import type { CollectionSpec, Rule, RuleField, Source } from "../../lib/contract";
 import { t, tx } from "../../i18n";
-import { FIELDS, SORTS, SOURCE_KINDS, newRule, newSource } from "../../lib/rules";
+import { isPluginDescriptor, textOf, useRegistry } from "../../lib/extend";
+import {
+  FIELDS,
+  SORTS,
+  newRule,
+  newSourceFromDescriptor,
+  sourceDescriptor,
+  type CollectionSourceMeta,
+  type SourceDescriptor,
+} from "../../lib/rules";
+import { AddonCatalogDrawer, type AddonCatalogChoice } from "./AddonCatalogDrawer";
 import { RuleRow } from "./RuleRow";
 import { SourceEditor } from "./SourceEditor";
 
@@ -35,24 +46,60 @@ export function BuildPanel({
   spec,
   update,
   region,
+  pickAddonCatalog = false,
 }: {
   spec: CollectionSpec;
   update: SpecUpdate;
   region: string;
+  /** Open the Stremio add-on catalog picker straight away. */
+  pickAddonCatalog?: boolean;
 }) {
+  const [addonCatalogs, setAddonCatalogs] = useState(pickAddonCatalog);
   const setRules = (key: "rules" | "exclude", rules: Rule[]) => update({ [key]: rules });
+  // Source kinds come from the descriptor registry (built-ins and plugins
+  // in one list); the console keeps no kind list of its own.
+  const registry = useRegistry<CollectionSourceMeta>("collectionSource");
+  const descriptors: SourceDescriptor[] = registry.descriptors;
   // The whole catalogue already contains every other source, so adding a
   // specific source replaces a lone "Whole catalogue".
-  const addSource = (kind: SourceKind) => {
-    const keep =
-      spec.sources.length === 1 && spec.sources[0]?.kind === "catalog" && kind !== "catalog"
-        ? []
-        : spec.sources;
-    update({ sources: [...keep, newSource(kind, spec.mediaType, region)] });
+  const loneCatalog = spec.sources.length === 1 && spec.sources[0]?.kind === "catalog";
+  const addSource = (d: SourceDescriptor) => {
+    const keep = loneCatalog && d.id !== "catalog" ? [] : spec.sources;
+    update({
+      sources: [...keep, newSourceFromDescriptor(d, spec.mediaType, region)],
+      ...(d.id !== "catalog" ? { localOnly: false } : {}),
+    });
   };
-  const sourceItems: ContextMenuEntry[] = SOURCE_KINDS.filter(
-    (k) => k.kind !== "catalog" || !spec.sources.some((s) => s.kind === "catalog"),
-  ).map((k) => ({ key: k.kind, label: k.label, onSelect: () => addSource(k.kind) }));
+  // A catalog added with its add-on may reach the registry after the pick,
+  // so it is added by kind; a new collection takes the catalog's media type.
+  const addAddonCatalog = (c: AddonCatalogChoice) => {
+    const d = sourceDescriptor(descriptors, c.kind);
+    const src = d
+      ? newSourceFromDescriptor(d, spec.mediaType, region)
+      : ({ kind: c.kind } as unknown as Source);
+    update({
+      sources: [...(loneCatalog ? [] : spec.sources), src],
+      localOnly: false,
+      ...(loneCatalog && c.mediaType ? { mediaType: c.mediaType } : {}),
+    });
+  };
+  const sourceItems: ContextMenuEntry[] = [
+    ...descriptors
+      .filter((d) => d.id !== "catalog" || !spec.sources.some((s) => s.kind === "catalog"))
+      .map((d) => ({
+        key: d.id,
+        label: isPluginDescriptor(d)
+          ? t("{label} (from {owner})", { label: textOf(d.label), owner: d.group || d.owner })
+          : textOf(d.label),
+        onSelect: () => addSource(d),
+      })),
+    { key: "addon-catalog-sep", separator: true },
+    {
+      key: "addon-catalog",
+      label: t("Stremio plugin catalog…"),
+      onSelect: () => setAddonCatalogs(true),
+    },
+  ];
   const limitPresets = [25, 50, 100, 0];
 
   return (
@@ -122,26 +169,6 @@ export function BuildPanel({
       </section>
 
       <section aria-labelledby="sources-h">
-        <label className="mb-4 flex gap-3 rounded-lg border border-border p-4 text-sm">
-          <input
-            type="checkbox"
-            checked={Boolean(spec.localOnly)}
-            onChange={(e) =>
-              update({
-                localOnly: e.target.checked,
-                ...(e.target.checked ? { sources: [{ kind: "catalog" as const }] } : {}),
-              })
-            }
-          />
-          <span>
-            <strong>{t("Local catalogue only")}</strong>
-            <span className="mt-1 block text-fg-muted">
-              {t(
-                "Live matching without remote lookups. Ideal for genre, country and network collections.",
-              )}
-            </span>
-          </span>
-        </label>
         <SectionHeading
           id="sources-h"
           title={t("Sources")}
@@ -152,6 +179,16 @@ export function BuildPanel({
             </ActionMenu>
           }
         />
+        {registry.error ? (
+          <p role="alert" className="mb-2 text-sm text-danger">
+            {t("Source kinds could not be loaded.")}{" "}
+            <Button type="button" variant="ghost" size="sm" onClick={registry.reload}>
+              {t("Try again")}
+            </Button>
+          </p>
+        ) : registry.loading ? (
+          <p className="mb-2 text-sm text-fg-muted">{t("Loading source kinds…")}</p>
+        ) : null}
         <div className="space-y-2">
           {spec.sources.map((s, i) => (
             <SourceEditor
@@ -160,6 +197,16 @@ export function BuildPanel({
               source={s}
               region={region}
               removable={spec.sources.length > 1}
+              descriptor={sourceDescriptor(descriptors, s.kind)}
+              descriptors={descriptors}
+              lookupPolicy={
+                s.kind === "catalog" && spec.sources.length === 1
+                  ? {
+                      storedOnly: Boolean(spec.localOnly),
+                      onChange: (storedOnly) => update({ localOnly: storedOnly }),
+                    }
+                  : undefined
+              }
               onChange={(next) =>
                 update({ sources: spec.sources.map((x, j) => (j === i ? next : x)) }, `source-${i}`)
               }
@@ -167,6 +214,11 @@ export function BuildPanel({
             />
           ))}
         </div>
+        <AddonCatalogDrawer
+          open={addonCatalogs}
+          onClose={() => setAddonCatalogs(false)}
+          onPick={addAddonCatalog}
+        />
       </section>
 
       <section aria-labelledby="rules-h">

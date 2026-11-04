@@ -11,13 +11,14 @@ import (
 	"github.com/braedonsaunders/ether/internal/frontend"
 	"github.com/braedonsaunders/ether/internal/frontend/kit/conformance"
 	"github.com/braedonsaunders/ether/internal/frontend/kit/route"
+	"github.com/braedonsaunders/ether/internal/frontend/kit/support"
 )
 
 // Jellyfin provides the native Jellyfin API on an independent surface.
 type Jellyfin struct{ MachineID string }
 
 func (Jellyfin) Describe() frontend.Descriptor {
-	return frontend.Descriptor{ID: "jellyfin", Name: "Jellyfin", Version: "12.4.0", DefaultPort: 8096}
+	return frontend.Descriptor{ID: "jellyfin", Name: "Jellyfin", Version: "12.4.0", DefaultPort: 8096, SettingsSchema: frontend.MediaBrowserSchema(true)}
 }
 func (Jellyfin) ValidateSettings(s frontend.Settings) error { return validatePersonalSettings(s) }
 func (f Jellyfin) Mount(ctx context.Context, host frontend.Host) (frontend.Instance, error) {
@@ -28,7 +29,7 @@ func (f Jellyfin) Mount(ctx context.Context, host frontend.Host) (frontend.Insta
 type Emby struct{ MachineID string }
 
 func (Emby) Describe() frontend.Descriptor {
-	return frontend.Descriptor{ID: "emby", Name: "Emby", Version: "4.10.2.0", DefaultPort: 8097}
+	return frontend.Descriptor{ID: "emby", Name: "Emby", Version: "4.10.2.0", DefaultPort: 8097, SettingsSchema: frontend.MediaBrowserSchema(false)}
 }
 func (Emby) ValidateSettings(s frontend.Settings) error { return validatePersonalSettings(s) }
 func (f Emby) Mount(ctx context.Context, host frontend.Host) (frontend.Instance, error) {
@@ -147,6 +148,16 @@ func (i *instance) Handler() http.Handler {
 	if i.pages != nil && i.host.PageFreshness != nil {
 		inner = i.pages.wrap(inner, i.host.PageFreshness)
 	}
+	inner = support.Wrap(i.host.Support, string(i.protocol), func(r *http.Request) (*frontend.Viewer, frontend.Device) {
+		if _, ok := i.host.Identity.(frontend.GrantDeviceIdentity); !ok {
+			return nil, frontend.Device{}
+		}
+		v, _, err := i.viewer(r)
+		if err != nil {
+			return nil, frontend.Device{}
+		}
+		return v, device(r)
+	}, func(path string) string { return path }, inner)
 	next := StripPrefix("/"+string(i.protocol), inner)
 	if i.protocol == "jellyfin" {
 		// Stored blurhashes and dimensions are joined on every request. This

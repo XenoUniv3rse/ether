@@ -62,6 +62,10 @@ func (a *App) buildIdentity(ctx context.Context, cfg config.Config) error {
 	}); err != nil {
 		return fmt.Errorf("certificates: %w", err)
 	}
+	// Registered after the cluster and database closers, so it runs first:
+	// bus-triggered and polling certificate syncs stop (and finish writing)
+	// while the bus and the shared store are still open.
+	a.closers = append(a.closers, a.certs.Close)
 	ropts := plextv.RegistrarOptions{
 		Config: a.cfg,
 		Client: a.plextv,

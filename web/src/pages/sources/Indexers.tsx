@@ -14,7 +14,7 @@ import { Link } from "react-router-dom";
 import { useApp } from "../../app-context";
 import { localized, t, tn } from "../../i18n";
 import { ActionMenu } from "../../components/ActionMenu";
-import { ConfigSection, MoreOptions } from "../../components/ConfigSection";
+import { MoreOptions } from "../../components/ConfigSection";
 import { Meter } from "../../components/charts";
 import { Drawer } from "../../components/Drawer";
 import { ErrorPanel, LoadingRows } from "../../components/feedback";
@@ -32,7 +32,8 @@ import { api, errorMessage, newId } from "../../lib/api";
 import { isPlainObject } from "../../lib/format";
 import { useAsync } from "../../lib/hooks";
 import type { Indexer, IndexerProtocol, SiteDefinition, SiteTestResult } from "../../lib/types";
-import { CLIENT_IDENTITY, searchIdentityOptions } from "../settings/schema";
+import { searchIdentityOptions } from "../settings/schema";
+import { ClientIdentity } from "./ClientIdentity";
 import { hasUsableDebrid } from "./Debrid";
 import {
   BoolRow,
@@ -46,8 +47,9 @@ import {
   useTests,
   type Errors,
 } from "./form";
-import { SourceCard } from "./cards";
+import { PluginSourceCards, SourceCard } from "./cards";
 import { StremioMark } from "./marks";
+import { normalizeAddonUrl, addonUrlHasDebridKey } from "../../components/addons/addons";
 import {
   MissingDefinition,
   SiteDefinitionRow,
@@ -86,11 +88,7 @@ export function isStremio(ix: { kind?: string }) {
   return ix.kind === "stremio";
 }
 
-/** An addon install link as saved: trimmed, with stremio:// read as https://. */
-export function normalizeAddonUrl(url: string): string {
-  const trimmed = url.trim();
-  return /^stremio:\/\//i.test(trimmed) ? `https://${trimmed.slice("stremio://".length)}` : trimmed;
-}
+export { addonUrlHasDebridKey, normalizeAddonUrl } from "../../components/addons/addons";
 
 /** The addon's host, shown instead of a URL whose path may hold settings. */
 function addonHost(url: string): string {
@@ -99,43 +97,6 @@ function addonHost(url: string): string {
   } catch {
     return url;
   }
-}
-
-const DEBRID_KEY_PARAM =
-  /(?:^|[/|&?,;])(?:realdebrid|torbox|alldebrid|premiumize|debridlink|offcloud|putio)=/i;
-const DEBRID_KEY_FIELD = /"(?:debridApiKey|apiKey|debridService)"\s*:\s*"[^"]+"/i;
-
-/** A base64 or base64url path segment decoded, when it is a JSON object. */
-function decodeJsonSegment(segment: string): string | null {
-  if (segment.length < 16 || !/^[A-Za-z0-9+/_=-]+$/.test(segment)) return null;
-  const b64 = segment.replace(/-/g, "+").replace(/_/g, "/");
-  try {
-    const text = atob(b64.padEnd(Math.ceil(b64.length / 4) * 4, "="));
-    return text.trimStart().startsWith("{") ? text : null;
-  } catch {
-    return null;
-  }
-}
-
-/** Whether an addon URL embeds a debrid API key in its configuration. */
-export function addonUrlHasDebridKey(url: string): boolean {
-  let path = normalizeAddonUrl(url);
-  try {
-    path = new URL(path).pathname;
-  } catch {
-    // Not a URL yet: inspect what was typed.
-  }
-  let decoded = path;
-  try {
-    decoded = decodeURIComponent(path);
-  } catch {
-    // Keep the raw path.
-  }
-  if (DEBRID_KEY_PARAM.test(decoded)) return true;
-  return path.split("/").some((segment) => {
-    const json = decodeJsonSegment(segment);
-    return json !== null && DEBRID_KEY_FIELD.test(json);
-  });
 }
 
 const PROTOCOLS: { value: IndexerProtocol; label: string }[] = localized(() => [
@@ -561,11 +522,13 @@ export function IndexerList({
         )}
       </Section>
 
-      <ConfigSection
-        configKey="clientIdentity"
-        endpoint="clientIdentity"
-        groups={CLIENT_IDENTITY}
-        label={t("Client identity")}
+      <ClientIdentity indexers={indexers} onSaved={() => void config.reload()} />
+      <PluginSourceCards
+        classes={["indexer", "direct"]}
+        sectionTitle={t("Plugin sources")}
+        sectionDescription={t(
+          "Release indexers and direct or local folder sources contributed by enabled plugins.",
+        )}
       />
 
       <SiteDefinitions

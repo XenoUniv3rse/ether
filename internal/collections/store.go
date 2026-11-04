@@ -307,11 +307,11 @@ func (s *Service) insertRow(ctx context.Context, sp core.CollectionSpec, owner i
 
 // insertSpecTx stores a new owner collection inside tx and returns its id.
 func (s *Service) insertSpecTx(ctx context.Context, tx *sql.Tx, sp core.CollectionSpec, owner int64) (int64, error) {
-	js, err := specJSON(sp)
+	id, err := s.nextID(ctx, tx)
 	if err != nil {
 		return 0, err
 	}
-	id, err := s.nextID(ctx, tx)
+	js, err := specJSON(sp)
 	if err != nil {
 		return 0, err
 	}

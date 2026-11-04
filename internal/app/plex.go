@@ -7,14 +7,17 @@ import (
 	"runtime"
 	"time"
 
+	"github.com/braedonsaunders/ether/internal/catalog"
 	"github.com/braedonsaunders/ether/internal/config"
 	"github.com/braedonsaunders/ether/internal/core"
 	"github.com/braedonsaunders/ether/internal/egress"
+	"github.com/braedonsaunders/ether/internal/experience"
 	"github.com/braedonsaunders/ether/internal/plex"
 	"github.com/braedonsaunders/ether/internal/plexguid"
 	"github.com/braedonsaunders/ether/internal/plexmeta"
 	"github.com/braedonsaunders/ether/internal/plextv"
 	"github.com/braedonsaunders/ether/internal/resolver"
+	"github.com/braedonsaunders/ether/internal/state"
 )
 
 // buildPlex assembles the PMS-compatible front end. In spike mode the
@@ -66,6 +69,9 @@ func (a *App) buildPlex(ctx context.Context, cfg config.Config) (http.Handler, e
 	if !cfg.Spike.Enabled && a.availability != nil {
 		deps.Catalog = &availabilityCatalog{Catalog: a.catalog, availability: a.availability}
 		deps.FilterAvailable = a.availability.FilterDiscovery
+	}
+	if !cfg.Spike.Enabled {
+		deps.Search = a.searchSources()
 	}
 	deps.PrioritizeAvailable = func(ctx context.Context, items []core.Title) []core.Title {
 		if a.availability == nil {
@@ -131,6 +137,7 @@ func (a *App) buildPlex(ctx context.Context, cfg config.Config) (http.Handler, e
 	deps.Downloads = a.downloadRemuxer
 	deps.Support = a.support
 	deps.Extras = a.extras
+	deps.Prerolls = a.prerollProvider()
 	deps.Trickplay = a.trickplay.Borrow()
 	a.wirePlexPolicy(&deps)
 	deps.FavoriteShows = a.favoriteShows
@@ -160,8 +167,46 @@ func (a *App) buildPlex(ctx context.Context, cfg config.Config) (http.Handler, e
 		deps.ArtworkImages = a.artwork.Images
 		deps.ArtworkPalettes = a.artwork.Palettes
 	}
+	if !cfg.Spike.Enabled && a.db != nil {
+		db := a.db
+		deps.HomeCache = &plex.HomeCacheSource{
+			Revision: func(ctx context.Context, u *core.User) (experience.HomeRevision, error) {
+				return experience.ReadHomeRevision(ctx, db, u)
+			},
+			NoProviderWait: func(ctx context.Context) context.Context { return catalog.WithReadWaitBudget(ctx, 0) },
+		}
+		if a.catalog != nil {
+			deps.HomeCache.Catalog = a.catalog.WriteGeneration
+		}
+		if a.cfg != nil {
+			deps.HomeCache.Config = a.cfg.Generation
+		}
+		if a.personalize != nil {
+			deps.HomeCache.Layout = a.personalize.LayoutVersion
+		}
+	}
 	srv := plex.NewServer(deps)
 	a.plexServer = srv
+	if deps.HomeCache != nil && a.state != nil {
+		// Rebuild the viewer's cached Home behind playback, so the Home a
+		// client opens after it stops is already current.
+		unsub := a.state.Subscribe(func(ev state.Event) {
+			switch ev.Kind {
+			case state.EventProgress:
+				if ev.State != "stopped" {
+					return
+				}
+			case state.EventCompleted, state.EventScrobble, state.EventUnscrobble, state.EventRated:
+			default:
+				return
+			}
+			srv.ViewerHomeChanged(ev.UserID)
+		})
+		go func() {
+			<-srv.Done()
+			unsub()
+		}()
+	}
 	if a.livetv != nil {
 		a.livetv.SetOnChange(srv.NotifyLiveLineup)
 	}

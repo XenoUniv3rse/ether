@@ -11,6 +11,7 @@ package plex
 // a live session lists its enriched streams plus any track picked since.
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/rand"
@@ -25,8 +26,10 @@ import (
 
 	"github.com/braedonsaunders/ether/internal/core"
 	"github.com/braedonsaunders/ether/internal/experience"
+	"github.com/braedonsaunders/ether/internal/langtag"
 	"github.com/braedonsaunders/ether/internal/plex/model"
 	"github.com/braedonsaunders/ether/internal/subtitles"
+	"github.com/braedonsaunders/ether/internal/trackprefs"
 	"github.com/braedonsaunders/ether/internal/transcode"
 )
 
@@ -56,12 +59,6 @@ type SubtitleSearch interface {
 	// DownloadSubtitle fetches an offer returned by SearchSubtitles for t
 	// and returns its sidecar stream; core.ErrNotFound for unknown offers.
 	DownloadSubtitle(ctx context.Context, t *core.Title, u *core.User, id int64) (core.StreamInfo, error)
-}
-
-// SubtitleTimeline is optionally implemented by Deps.Subtitles: a sidecar
-// with its cues moved back by offset, for a transcode that starts there.
-type SubtitleTimeline interface {
-	OpenFormatAt(id, format string, offset time.Duration) (io.ReadCloser, string, error)
 }
 
 // infoWithSelectedSidecar keeps a chosen external subtitle on a metadata
@@ -151,6 +148,71 @@ func resolveSelection(sel selection, info core.MediaInfo) selection {
 		sel.subtitle, sel.subtitleSet = -1, false
 	}
 	return sel
+}
+
+// burnOnlyShownSubtitle keeps a subtitle this request did not name out of
+// the picture unless the client was shown it selected (#313). Stored and
+// preferred selections resolve on the session's probed tracks, while the
+// stream list the client holds can be the pre-playback estimate (which has
+// no subtitle tracks) or another release's: the app shows None, and burning
+// the track turned a remux into a full transcode the viewer could not turn
+// off. Such a selection plays as None, which is what the client shows. A
+// track the viewer picks, or one the client was shown selected, is burned
+// as before.
+func (s *Server) burnOnlyShownSubtitle(pr *Request, p *playRequest, info core.MediaInfo) {
+	if p.subNamed || !p.subSet || p.opts.SubtitleStream < 0 || p.subSel < 0 || p.subSel >= len(info.Streams) {
+		return
+	}
+	st := info.Streams[p.subSel]
+	if st.Type != "subtitle" || st.External || st.Index != p.opts.SubtitleStream || !transcode.BurnsSubtitle(st, p.caps, p.opts) {
+		return
+	}
+	ik := s.playIdentityFor(pr, p.key)
+	if !ik.valid() {
+		return
+	}
+	shown, _ := s.playIDs.shownSubtitles(ik, s.now())
+	for i := range shown {
+		want := shown[i]
+		if want.External == st.External && transcode.IsImageSubtitle(want.Codec) == transcode.IsImageSubtitle(st.Codec) && resolveSubtitle(&want, -1, info) == p.subSel {
+			return
+		}
+	}
+	s.log.Info("subtitle not burned: the client was not shown it selected", "key", p.key, "client", pr.ClientID, "codec", st.Codec, "language", st.Language)
+	p.subSel, p.subSet, p.subStream = -1, true, nil
+	p.opts.SubtitleStream = -1
+}
+
+// textForImageSubtitle is a text track that can stand in for the image
+// subtitle at pos: same language, forced flag and hearing-impaired style,
+// embedded before external. An image track is burned into the video for
+// most clients, a full transcode; a text track rides beside a remux. -1
+// when there is none.
+func textForImageSubtitle(info core.MediaInfo, pos int) int {
+	if pos < 0 || pos >= len(info.Streams) {
+		return -1
+	}
+	img := info.Streams[pos]
+	if img.Type != "subtitle" || !transcode.IsImageSubtitle(img.Codec) || img.Language == "" {
+		return -1
+	}
+	best := -1
+	for i, st := range info.Streams {
+		if st.Type != "subtitle" || !transcode.IsTextSubtitle(st.Codec) || st.Forced != img.Forced ||
+			trackprefs.SDH(st) != trackprefs.SDH(img) || langtag.Normalize(st.Language) != langtag.Normalize(img.Language) {
+			continue
+		}
+		if st.External && st.ExternalURL == "" {
+			continue
+		}
+		if !st.External {
+			return i
+		}
+		if best < 0 {
+			best = i
+		}
+	}
+	return best
 }
 
 // resolvePlaySelection is resolveSelection for a play request.
@@ -505,13 +567,18 @@ func (s *Server) handleSubtitleUpload(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
-// handleTranscodeSubtitles is /video/:/transcode/universal/subtitles: the
-// selected subtitle of a transcode session. External sidecars are served
-// with their cues moved back by the session's start offset (the HLS
-// timeline starts there), as SRT or, with format=vtt|webvtt, WebVTT.
-// Embedded text tracks are extracted from the session's source as WebVTT
-// when the transcoder supports it; image subtitles and unknown sessions
-// get an empty container.
+// handleTranscodeSubtitles is /video/:/transcode/universal/subtitles (a
+// conversion) and /subtitles/:/transcode/universal/start (a direct play):
+// the selected subtitle of the session the request's transcoder parameters
+// name. Plex Web asks for both without a format and parses the answer as an
+// ASS script with libjass (PMS converts text tracks to ASS for its
+// profile), so a request without a format gets ASS from the direct-play
+// route and for Plex Web, SRT otherwise; format=ass|srt|vtt|webvtt picks
+// one. Cues stay on the title
+// clock: VOD video retains title timestamps across a resume or seek, and
+// a direct-play player's clock is the file's. Embedded text tracks are read
+// from the session's source; image subtitles and unknown sessions get an
+// empty container.
 func (s *Server) handleTranscodeSubtitles(w http.ResponseWriter, r *http.Request) {
 	if s.refuseCapability(w, r) {
 		return
@@ -533,10 +600,6 @@ func (s *Server) handleTranscodeSubtitles(w http.ResponseWriter, r *http.Request
 		resolvePlaySelection(&p, entry.info)
 		pos = p.subSel
 	}
-	offset := entry.offset
-	if perr == nil && q.Get("offset") != "" {
-		offset = p.offset
-	}
 	if pos < 0 || pos >= len(entry.info.Streams) {
 		s.writeEmpty(w, r)
 		return
@@ -546,10 +609,31 @@ func (s *Server) handleTranscodeSubtitles(w http.ResponseWriter, r *http.Request
 		s.writeEmpty(w, r)
 		return
 	}
+	format := subtitleFormat(q.Get("format"))
+	if soft := q.Get("format") == "" && (strings.HasPrefix(r.URL.Path, "/subtitles/") || browserClient(pr)); soft || softASSFormat(q.Get("format")) {
+		format = "ass"
+	}
 	if !st.External {
+		if format == "ass" {
+			// Read from where the player is (a direct play names its
+			// position in offset; a conversion starts at its own offset),
+			// streaming each cue as it is read.
+			from := entry.offset
+			if perr == nil && q.Get("offset") != "" {
+				from = p.offset
+			} else if ps, ok := s.d.Playback.SessionFor(entry.userID, entry.clientID, entry.key); ok && ps != nil && ps.ID == entry.playID && ps.ViewOffset != nil {
+				// A conversion's player reopens the stream after a seek
+				// without naming its position; its timeline has.
+				from = time.Duration(*ps.ViewOffset) * time.Millisecond
+			}
+			if !s.writeEmbeddedASS(w, r, entry.playID, st, from) {
+				s.writeEmpty(w, r)
+			}
+			return
+		}
 		// Embedded track: extract it from the playing source so a subtitle
 		// picked in-player renders without restarting the session.
-		if !s.writeEmbeddedSubtitle(w, r, entry.playID, st, subtitleFormat(q.Get("format")), offset, entry.decision.Container == transcode.ContainerMatroska) {
+		if !s.writeEmbeddedSubtitle(w, r, entry.playID, st, format, entry.decision.Container == transcode.ContainerMatroska) {
 			s.writeEmpty(w, r)
 		}
 		return
@@ -558,7 +642,7 @@ func (s *Server) handleTranscodeSubtitles(w http.ResponseWriter, r *http.Request
 		s.writeEmpty(w, r)
 		return
 	}
-	timeline, ok := s.d.Subtitles.(SubtitleTimeline)
+	timeline, ok := s.d.Subtitles.(SubtitleSource)
 	if !ok {
 		s.writeEmpty(w, r)
 		return
@@ -575,11 +659,11 @@ func (s *Server) handleTranscodeSubtitles(w http.ResponseWriter, r *http.Request
 	var reader io.ReadCloser
 	var actual string
 	if from, ok := timeline.(interface {
-		OpenFormatAtFrom(string, string, time.Duration, string) (io.ReadCloser, string, error)
+		OpenFormatFrom(string, string, string) (io.ReadCloser, string, error)
 	}); ok {
-		reader, actual, err = from.OpenFormatAtFrom(st.ExternalURL, subtitleFormat(q.Get("format")), offset, source)
+		reader, actual, err = from.OpenFormatFrom(st.ExternalURL, subtitleFormat(format), source)
 	} else {
-		reader, actual, err = timeline.OpenFormatAt(st.ExternalURL, subtitleFormat(q.Get("format")), offset)
+		reader, actual, err = timeline.OpenFormat(st.ExternalURL, subtitleFormat(format))
 	}
 	if err != nil {
 		writeHTTPError(w, http.StatusNotFound)
@@ -591,6 +675,14 @@ func (s *Server) handleTranscodeSubtitles(w http.ResponseWriter, r *http.Request
 		writeHTTPError(w, http.StatusNotFound)
 		return
 	}
+	if format == "ass" {
+		cues, perr := subtitles.ParseCues(string(body))
+		if perr != nil {
+			writeHTTPError(w, http.StatusNotFound)
+			return
+		}
+		body, actual = []byte(subtitles.RenderASS(cues)), "ass"
+	}
 	if actual == "vtt" && entry.decision.Container == transcode.ContainerMatroska {
 		body = stampMatroskaVTT(body)
 	}
@@ -598,7 +690,130 @@ func (s *Server) handleTranscodeSubtitles(w http.ResponseWriter, r *http.Request
 	_, _ = w.Write(body)
 }
 
-func (s *Server) extractEmbeddedSubtitle(ctx context.Context, playID string, st core.StreamInfo, format string, offset time.Duration) ([]byte, string, bool) {
+// softASSFormat reports an explicit request for an ASS script.
+func softASSFormat(v string) bool {
+	switch strings.ToLower(strings.TrimPrefix(v, ".")) {
+	case "ass", "ssa":
+		return true
+	}
+	return false
+}
+
+// subtitleStreamer is implemented by the transcoder: an embedded text
+// track streamed as ASS from a position, and a whole track already read.
+type subtitleStreamer interface {
+	StreamSubtitle(ctx context.Context, inputURL string, streamIndex int, codec string, from time.Duration, w io.Writer) error
+	CachedSubtitle(ctx context.Context, streamIndex int, codec string) ([]byte, bool)
+}
+
+// softSubtitleLead starts an ASS stream this far before the player's
+// position, so the cue already on screen there is included.
+const softSubtitleLead = 10 * time.Second
+
+// writeEmbeddedASS answers an embedded text track as an ASS script. A
+// track already read whole is answered at once. Otherwise the cues are
+// streamed as the source is read from the player's position: the script
+// header arrives within seconds and libjass starts drawing, later cues
+// follow, and a blank line (skipped by ASS parsers) every
+// subtitleKeepAlive holds the connection through gaps in the dialogue. It
+// reports false, with nothing written, when the track cannot be read.
+func (s *Server) writeEmbeddedASS(w http.ResponseWriter, r *http.Request, playID string, st core.StreamInfo, from time.Duration) bool {
+	streamer, ok := s.d.Transcoder.(subtitleStreamer)
+	if !ok || s.d.Playback == nil || playID == "" {
+		return false
+	}
+	input := s.d.Playback.InputURL(playID)
+	if input == "" {
+		return false
+	}
+	ctx, cancel := context.WithCancel(r.Context())
+	defer cancel()
+	if keyer, ok := s.d.Playback.(interface{ SourceKey(string) string }); ok {
+		ctx = transcode.WithSubtitleSource(ctx, keyer.SourceKey(playID))
+	}
+	if vtt, ok := streamer.CachedSubtitle(ctx, st.Index, st.Codec); ok {
+		if cues, err := subtitles.ParseCues(string(vtt)); err == nil {
+			w.Header().Set("Content-Type", subtitleContentTypes["ass"])
+			_, _ = io.WriteString(w, subtitles.RenderASS(cues))
+			return true
+		}
+	}
+	from = max(0, from-softSubtitleLead)
+	pr, pw := io.Pipe()
+	defer pr.Close()
+	done := make(chan error, 1)
+	go func() {
+		err := streamer.StreamSubtitle(ctx, input, st.Index, st.Codec, from, pw)
+		_ = pw.CloseWithError(err)
+		done <- err
+	}()
+	lines := make(chan string, 64)
+	go func() {
+		defer close(lines)
+		br := bufio.NewReader(pr)
+		for {
+			line, err := br.ReadString('\n')
+			if line != "" {
+				select {
+				case lines <- line:
+				case <-ctx.Done():
+					return
+				}
+			}
+			if err != nil {
+				return
+			}
+		}
+	}()
+	flusher, _ := w.(http.Flusher)
+	started := false
+	start := func() {
+		if !started {
+			started = true
+			w.Header().Set("Content-Type", subtitleContentTypes["ass"])
+			w.WriteHeader(http.StatusOK)
+		}
+	}
+	write := func(b string) {
+		start()
+		_, _ = io.WriteString(w, b)
+		if flusher != nil {
+			flusher.Flush()
+		}
+	}
+	quiet := time.NewTimer(subtitleQuietWait)
+	defer quiet.Stop()
+	alive := time.NewTicker(subtitleKeepAlive)
+	defer alive.Stop()
+	for {
+		select {
+		case line, ok := <-lines:
+			if !ok {
+				if !started {
+					// Nothing was read: a failed start, or a track
+					// with no cues from this position.
+					if err := <-done; err != nil {
+						return false
+					}
+					write("")
+				}
+				return true
+			}
+			write(line)
+			alive.Reset(subtitleKeepAlive)
+		case <-quiet.C:
+			write("\n")
+		case <-alive.C:
+			if started {
+				write("\n")
+			}
+		case <-r.Context().Done():
+			return true
+		}
+	}
+}
+
+func (s *Server) extractEmbeddedSubtitle(ctx context.Context, playID string, st core.StreamInfo, format string) ([]byte, string, bool) {
 	ex, ok := s.d.Transcoder.(core.SubtitleExtractor)
 	if !ok || s.d.Playback == nil || playID == "" {
 		return nil, "", false
@@ -621,25 +836,8 @@ func (s *Server) extractEmbeddedSubtitle(ctx context.Context, playID string, st 
 		if perr != nil {
 			return nil, "", false
 		}
-		if offset > 0 {
-			shifted, serr := subtitles.Shift(cues, -offset, 1)
-			if serr != nil {
-				return nil, "", false
-			}
-			cues = shifted
-		}
 		body = []byte(subtitles.RenderSRT(cues))
 		format = "srt"
-	} else if offset > 0 {
-		cues, perr := subtitles.ParseCues(string(body))
-		if perr != nil {
-			return nil, "", false
-		}
-		shifted, serr := subtitles.Shift(cues, -offset, 1)
-		if serr != nil {
-			return nil, "", false
-		}
-		body = []byte(subtitles.RenderVTT(shifted))
 	}
 	return body, format, true
 }
@@ -651,7 +849,6 @@ func (s *Server) serveEmbeddedStream(w http.ResponseWriter, r *http.Request, key
 		return
 	}
 	var playID string
-	var offset time.Duration
 	var bestAt time.Time
 	matroska := false
 	for _, id := range s.transcodes.ids() {
@@ -663,7 +860,7 @@ func (s *Server) serveEmbeddedStream(w http.ResponseWriter, r *http.Request, key
 			continue
 		}
 		if playID == "" || e.updatedAt.After(bestAt) {
-			playID, offset, bestAt = e.playID, e.offset, e.updatedAt
+			playID, bestAt = e.playID, e.updatedAt
 			matroska = e.decision.Container == transcode.ContainerMatroska
 		}
 	}
@@ -681,16 +878,11 @@ func (s *Server) serveEmbeddedStream(w http.ResponseWriter, r *http.Request, key
 		}
 	}
 	q := r.URL.Query()
-	if q.Get("offset") != "" {
-		if sec, err := strconv.ParseFloat(q.Get("offset"), 64); err == nil && sec >= 0 {
-			offset = time.Duration(sec * float64(time.Second))
-		}
-	}
 	format := subtitleFormat(q.Get("format"))
 	if _, ext, ok := strings.Cut(chi.URLParam(r, "stream"), "."); ok && q.Get("format") == "" {
 		format = subtitleFormat(ext)
 	}
-	if !s.writeEmbeddedSubtitle(w, r, playID, info, format, offset, matroska) {
+	if !s.writeEmbeddedSubtitle(w, r, playID, info, format, matroska) {
 		writeHTTPError(w, http.StatusNotFound)
 	}
 }
@@ -710,7 +902,7 @@ var (
 // writeEmbeddedSubtitle serves an embedded text track as format (srt or
 // vtt). It reports false, with nothing written, when extraction failed
 // before the response had to start.
-func (s *Server) writeEmbeddedSubtitle(w http.ResponseWriter, r *http.Request, playID string, st core.StreamInfo, format string, offset time.Duration, matroska bool) bool {
+func (s *Server) writeEmbeddedSubtitle(w http.ResponseWriter, r *http.Request, playID string, st core.StreamInfo, format string, matroska bool) bool {
 	type extracted struct {
 		body   []byte
 		actual string
@@ -718,7 +910,7 @@ func (s *Server) writeEmbeddedSubtitle(w http.ResponseWriter, r *http.Request, p
 	}
 	done := make(chan extracted, 1)
 	go func() {
-		body, actual, ok := s.extractEmbeddedSubtitle(r.Context(), playID, st, format, offset)
+		body, actual, ok := s.extractEmbeddedSubtitle(r.Context(), playID, st, format)
 		done <- extracted{body, actual, ok}
 	}()
 	finish := func(got extracted) []byte {
@@ -792,33 +984,4 @@ func vttCues(body []byte) []byte {
 		return []byte(cues)
 	}
 	return nil
-}
-
-// prewarmSidecarSubtitle starts extracting the selected embedded text
-// track a decision hands out as a sidecar, bound to the play session, so
-// the player's request for it joins work already under way.
-func (s *Server) prewarmSidecarSubtitle(u *core.User, ps *core.PlaySession, m model.Media) {
-	if u == nil || ps == nil || ps.ID == "" || len(m.Part) == 0 {
-		return
-	}
-	sessions, ok := s.d.Playback.(interface {
-		SessionContext(string) context.Context
-	})
-	if !ok {
-		return
-	}
-	for _, st := range m.Part[0].Stream {
-		if st.StreamType != 3 || st.Location != "sidecar" || st.Selected == nil || !*st.Selected || !embeddedTextSubtitle(st) {
-			continue
-		}
-		binding, err := s.resolveStream(context.Background(), u, st.ID)
-		if err != nil || binding.Info.Type != "subtitle" || binding.Info.External {
-			continue
-		}
-		ctx := sessions.SessionContext(ps.ID)
-		if ctx == nil {
-			return
-		}
-		go s.extractEmbeddedSubtitle(ctx, ps.ID, binding.Info, "vtt", 0)
-	}
 }

@@ -10,6 +10,32 @@ import (
 )
 
 func init() {
+	// covered_since: since when a feed's head polls have overlapped without a
+	// gap, so it has shown every release posted since then. full_at: a
+	// title's last probe across every indexer (feed coverage aside). Its own
+	// component, so the availability versions upgrade fixtures pin stay put.
+	store.RegisterAfter("availability_coverage", "availability")
+	store.Register("availability_coverage", 1, `
+ALTER TABLE availability_feeds ADD COLUMN covered_since INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE availability_title_checks ADD COLUMN full_at INTEGER NOT NULL DEFAULT 0;`)
+	// How often each feedless source (a scraper or addon) returned anything
+	// when every source was searched, so routine checks ask the best one.
+	store.Register("availability_coverage", 2, `
+CREATE TABLE availability_source_yield (source_id TEXT PRIMARY KEY, searches INTEGER NOT NULL DEFAULT 0, found INTEGER NOT NULL DEFAULT 0);`)
+	// Title probes became event-driven (first look, digital date, an
+	// unplayable release) and ask sources one at a time in priority order,
+	// so feed coverage, full-search times and scraper yields are gone, and
+	// a recorded next_check now means only an unfinished search. Cadence
+	// times from earlier versions would each trigger one more search.
+	// polled_at is a feed's last scheduled head poll; checked_at also moves
+	// with the gap pages between polls.
+	store.Register("availability_coverage", 3, `
+DROP TABLE availability_source_yield;
+ALTER TABLE availability_feeds DROP COLUMN covered_since;
+ALTER TABLE availability_title_checks DROP COLUMN full_at;
+ALTER TABLE availability_feeds ADD COLUMN polled_at INTEGER NOT NULL DEFAULT 0;
+UPDATE availability_feeds SET polled_at=checked_at;
+UPDATE availability_title_checks SET next_check=0 WHERE reason<>'Search could not be completed';`)
 	store.Register("availability", 5, `
 ALTER TABLE availability_budget ADD COLUMN ceiling INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE availability_feeds ADD COLUMN catchup_oldest INTEGER NOT NULL DEFAULT 0;
@@ -85,34 +111,6 @@ func (s *Service) spend(ctx context.Context, kind string, n, limit int64) error 
 	}
 	return nil
 }
-func (s *Service) budgetContext(ctx context.Context, feed bool) context.Context {
-	cfg := s.cfg().Availability
-	ctx = core.WithForegroundReserve(ctx, cfg.ReservePercent)
-	return core.WithBackgroundBudget(ctx, func(ctx context.Context, kind, source string, n int64) error {
-		live := s.cfg().Availability
-		if s.d.Active != nil && s.d.Active() && !feed {
-			return context.Canceled
-		}
-		if (feed && !live.Monitor) || (!feed && !live.Verify) {
-			return context.Canceled
-		}
-		switch kind {
-		case "bytes":
-			return s.spend(ctx, "bytes", n, live.CheckBytes)
-		case "grab":
-			return s.spend(ctx, "grabs", n, int64(live.Grabs))
-		case "debrid":
-			if !live.Debrid {
-				return core.ErrBudgetExhausted
-			}
-		}
-		bucket, limit := "checkRequests", live.CheckRequests
-		if feed {
-			bucket, limit = "feedRequests", s.budgets().FeedRequests
-		}
-		return s.spend(ctx, bucket, n, int64(limit))
-	})
-}
 func (s *Service) remember(ctx context.Context, f core.ReleaseFeed, t core.Title, r core.Release, policy string) error {
 	defer s.clearVisibility()
 	raw, err := s.encode(r)
@@ -135,6 +133,7 @@ func (s *Service) prune(ctx context.Context) error {
 	if err := s.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM availability_feed_items WHERE seen_at<?)`, cutoff).Scan(&hasExpiredFeedItems); err != nil {
 		return err
 	}
+	retainedChanged := hasExpiredFeedItems
 	if hasExpiredFeedItems {
 		if _, err := s.db.ExecContext(ctx, `DELETE FROM availability_feed_items WHERE seen_at<?`, cutoff); err != nil {
 			return err
@@ -144,6 +143,7 @@ func (s *Service) prune(ctx context.Context) error {
 	if err := s.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM availability_feed_items LIMIT 1 OFFSET 30000)`).Scan(&hasOverflowFeedItems); err != nil {
 		return err
 	}
+	retainedChanged = retainedChanged || hasOverflowFeedItems
 	if hasOverflowFeedItems {
 		if _, err := s.db.ExecContext(ctx, `DELETE FROM availability_feed_items WHERE (id,source_id) IN (SELECT id,source_id FROM availability_feed_items ORDER BY seen_at DESC LIMIT 2147483647 OFFSET 30000)`); err != nil {
 			return err
@@ -154,6 +154,7 @@ func (s *Service) prune(ctx context.Context) error {
 	if err := s.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM availability_releases WHERE last_seen<?)`, cutoff).Scan(&hasExpiredReleases); err != nil {
 		return err
 	}
+	retainedChanged = retainedChanged || hasExpiredReleases
 	if hasExpiredReleases {
 		if _, err := s.db.ExecContext(ctx, `DELETE FROM availability_releases WHERE last_seen<?`, cutoff); err != nil {
 			return err
@@ -165,11 +166,15 @@ func (s *Service) prune(ctx context.Context) error {
 	if err := s.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM availability_releases LIMIT 1 OFFSET 30000)`).Scan(&hasOverflowReleases); err != nil {
 		return err
 	}
+	retainedChanged = retainedChanged || hasOverflowReleases
 	if hasOverflowReleases {
 		if _, err := s.db.ExecContext(ctx, `DELETE FROM availability_releases WHERE (id,rating_key,source_id) IN (SELECT id,rating_key,source_id FROM availability_releases ORDER BY last_seen DESC LIMIT 2147483647 OFFSET 30000)`); err != nil {
 			// Retention failures are surfaced rather than silently growing the table.
 			return err
 		}
+	}
+	if err := s.pruneVerdicts(ctx, retainedChanged); err != nil {
+		return err
 	}
 	budgetCutoff := s.now().Add(-35 * 24 * time.Hour).UTC().Format("2006-01-02")
 	var hasExpiredBudget bool
@@ -185,15 +190,31 @@ func (s *Service) prune(ctx context.Context) error {
 func benign(err error) bool {
 	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, core.ErrBudgetExhausted)
 }
-func (s *Service) feedState(ctx context.Context, f core.ReleaseFeed) (string, int64, bool, error) {
-	var anchor string
-	var checked int64
+
+// feedState is a feed's last head release, last scheduled head poll, last
+// request of any kind, and whether a gap is still open.
+type feedState struct {
+	anchor          string
+	polled, checked int64
+	gap             bool
+}
+
+func (s *Service) feedState(ctx context.Context, f core.ReleaseFeed) (feedState, error) {
+	var st feedState
 	var gap int
-	err := s.db.QueryRowContext(ctx, `SELECT anchor,checked_at,gap FROM availability_feeds WHERE source_id=? AND generation=?`, f.ID, f.Generation).Scan(&anchor, &checked, &gap)
+	err := s.db.QueryRowContext(ctx, `SELECT anchor,polled_at,checked_at,gap FROM availability_feeds WHERE source_id=? AND generation=?`, f.ID, f.Generation).Scan(&st.anchor, &st.polled, &st.checked, &gap)
 	if errors.Is(err, sql.ErrNoRows) {
-		return "", 0, false, nil
+		return feedState{}, nil
 	}
-	return anchor, checked, gap != 0, err
+	st.gap = gap != 0
+	return st, err
+}
+
+// markPolled records a scheduled head poll, made or denied: the next one
+// waits a full interval either way.
+func (s *Service) markPolled(ctx context.Context, f core.ReleaseFeed) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE availability_feeds SET polled_at=? WHERE source_id=? AND generation=?`, s.now().Unix(), f.ID, f.Generation)
+	return err
 }
 func boolInt(b bool) int {
 	if b {

@@ -20,6 +20,7 @@ type baseCaps struct {
 	maxHeight    int
 	hdr10        bool
 	dv           bool
+	dvOff        bool // owner override turned Dolby Vision off
 	heightLocked bool
 }
 
@@ -59,6 +60,9 @@ func (pr *Request) ClientCapsWith(remoteMaxKbps int, overrides []core.ClientCapa
 	if b.heightLocked {
 		c.ExplicitMaxHeight = true
 	}
+	if b.dvOff {
+		c.DolbyVisionBaseOnly = true
+	}
 	dv, subs, dvChanged, subsChanged := transcode.PolicyStamp(pr.Product, pr.Platform, pr.Device, pr.Model, pr.Version, overrides)
 	if dvChanged {
 		c.DVProfiles = dv
@@ -84,7 +88,7 @@ func (pr *Request) ClientCapsWith(remoteMaxKbps int, overrides []core.ClientCapa
 
 func playbackCaps(pr *Request, overrides []core.ClientCapabilityOverride) baseCaps {
 	got := transcode.PlaybackDefaultsFor(pr.Product, pr.Platform, pr.Device, pr.Model, pr.Version, overrides)
-	return baseCaps{video: got.Video, audio: got.Audio, containers: got.Containers, maxHeight: got.MaxHeight, hdr10: got.HDR10, dv: got.DolbyVision, heightLocked: got.HeightLocked}
+	return baseCaps{video: got.Video, audio: got.Audio, containers: got.Containers, maxHeight: got.MaxHeight, hdr10: got.HDR10, dv: got.DolbyVision, dvOff: got.DolbyVisionOff, heightLocked: got.HeightLocked}
 }
 
 // declaredCaps is the registry plus this request's headers, before a quality
@@ -316,6 +320,12 @@ func applyProfileExtra(c *core.ClientCaps, extra string) profileExtraEvidence {
 			c.AudioCodecs = addUnique(c.AudioCodecs, splitList(a["audioCodec"])...)
 			c.Containers = addUnique(c.Containers, splitList(a["container"])...)
 		case "add-limitation":
+			if (strings.EqualFold(c.Product, "PM4K") || strings.EqualFold(c.Product, "Plex for Kodi")) && a["scope"] == "videoAudioCodec" {
+				n, err := strconv.Atoi(limitationValue(a))
+				if err == nil && n > 0 && ((a["name"] == "audio.channels" && n <= 32) || (a["name"] == "audio.bitrate" && n <= 100000) || (a["name"] == "audio.samplingRate" && n <= 192000)) && (a["type"] == "upperBound" || a["type"] == "lowerBound") && (a["name"] == "audio.channels" || a["name"] == "audio.bitrate" || a["name"] == "audio.samplingRate") {
+					c.AudioLimits = append(c.AudioLimits, core.AudioLimit{Codec: normalizeCodec(a["scopeName"]), Name: a["name"], Type: a["type"], Value: n})
+				}
+			}
 			if limitationDeniesHDR(a) {
 				ev.hdrDenied = true
 			}

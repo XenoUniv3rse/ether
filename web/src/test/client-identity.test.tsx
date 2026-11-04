@@ -22,6 +22,8 @@ describe("Sources › Indexers client identity", () => {
     await waitFor(() => expect(calls(fake, "PUT", "/config/clientIdentity")).toHaveLength(1), WAIT);
     expect(calls(fake, "PUT", "/config/clientIdentity")[0]!.body).toMatchObject({
       tvSearch: "sonarr",
+      movieSearch: "",
+      tvGrab: "",
       movieGrab: "nzbget",
     });
   });
@@ -111,5 +113,81 @@ describe("Sources › Indexers client identity", () => {
     expect(calls(fake, "PUT", "/config/clientIdentity")[0]!.body).toMatchObject({
       headers: { "X-Api-Client": "s3cret" },
     });
+  });
+
+  it("shows the user agent each selector sends", async () => {
+    renderApp("/sources/indexers");
+    await screen.findByRole("heading", { name: "Client identity" }, WAIT);
+    // Four selectors default to Ether, whose literal agent comes from the server.
+    expect(screen.getAllByText("Ether/1.0")).toHaveLength(4);
+    await choose("TV searches", "Sonarr");
+    expect(screen.getByText("Sonarr/4.0.20.3014 (ubuntu 26.04)")).toBeInTheDocument();
+    // Custom falls back to Ether until the owner supplies an agent.
+    await choose("TV searches", "Custom");
+    expect(screen.getAllByText("Ether/1.0")).toHaveLength(4);
+    fireEvent.click(screen.getByRole("button", { name: "More options: Client identity" }));
+    fireEvent.change(screen.getByLabelText("Custom user agent"), {
+      target: { value: "MyClient/1.0" },
+    });
+    expect(screen.getByText("MyClient/1.0")).toBeInTheDocument();
+  });
+
+  it("counts inheriting indexers and names the backend exceptions", async () => {
+    renderApp("/sources/indexers");
+    await screen.findByRole("heading", { name: "Client identity" }, WAIT);
+    // The mock has three Newznab/Torznab indexers and one Stremio addon.
+    expect(screen.getByText("All 3 indexers inherit this policy")).toBeInTheDocument();
+    expect(
+      screen.getByText("Built-in sites and Stremio addons use their own identity."),
+    ).toBeInTheDocument();
+  });
+
+  it("counts overrides and follows an indexer edit", async () => {
+    renderApp("/sources/indexers", {}, (fake) => {
+      fake.state.config.indexers!.find((ix) => ix.id === "i1")!.clientIdentity = "sonarr";
+    });
+    await screen.findByRole("heading", { name: "Client identity" }, WAIT);
+    expect(
+      screen.getByText("2 of 3 indexers inherit this policy; 1 has its own identity"),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Edit Indexer One" }));
+    const drawer = await screen.findByRole("dialog", { name: "Indexer One" }, WAIT);
+    fireEvent.click(within(drawer).getByRole("button", { name: "Identity" }));
+    fireEvent.click(await screen.findByRole("option", { name: "Inherit" }, WAIT));
+    fireEvent.click(within(drawer).getByRole("button", { name: "Save indexer" }));
+    await waitFor(
+      () => expect(screen.getByText("All 3 indexers inherit this policy")).toBeInTheDocument(),
+      WAIT,
+    );
+  });
+
+  it("omits the count when no indexer can inherit", async () => {
+    renderApp("/sources/indexers", {}, (fake) => {
+      fake.state.config.indexers = fake.state.config.indexers!.filter(
+        (ix) => ix.kind === "stremio",
+      );
+    });
+    await screen.findByRole("heading", { name: "Client identity" }, WAIT);
+    expect(screen.queryByText(/inherit this policy/)).toBeNull();
+  });
+
+  it("labels the disclosure Less options while it is open", async () => {
+    renderApp("/sources/indexers");
+    await screen.findByRole("heading", { name: "Client identity" }, WAIT);
+    const more = screen.getByRole("button", { name: "More options: Client identity" });
+    fireEvent.click(more);
+    expect(more).toHaveTextContent("Less options");
+    fireEvent.click(more);
+    expect(more).toHaveTextContent("More options");
+  });
+
+  it("shows both header fields and the fallback agent", async () => {
+    renderApp("/sources/indexers");
+    await screen.findByRole("heading", { name: "Client identity" }, WAIT);
+    fireEvent.click(screen.getByRole("button", { name: "More options: Client identity" }));
+    expect(screen.getByLabelText("Custom user agent")).toHaveAttribute("placeholder", "Ether/1.0");
+    fireEvent.click(screen.getByRole("button", { name: "Add header" }));
+    expect(screen.getByLabelText("Header name")).toBeInTheDocument();
+    expect(screen.getByLabelText("Value")).toBeInTheDocument();
   });
 });

@@ -5,6 +5,10 @@
 @import "@braedonsaunders/appkit-dashboard/primitives.css";
 
 @source "./";
+/* AppKit's agent panel (Ask Ether, Studio, Describe a collection) styles with
+ * Tailwind classes the console must generate; without them its composer's
+ * focus ring falls back to a solid currentColor ring. */
+@source "../node_modules/@braedonsaunders/appkit-ai/react.js";
 
 :root {
   /* Drawers cover the full height (AppShell header included). */
@@ -434,4 +438,11 @@
   border-radius: 0.5rem;
   box-shadow: 0 0 0 2px var(--color-primary, currentColor);
   transition: box-shadow 0.3s ease;
+}
+
+/* Describe a collection: messages scrolled under the chat header fade out
+ * over the transcript's own top padding instead of showing a clipped edge. */
+.describe-chat .app-scroll {
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, transparent 0.75rem, #000 1.5rem);
+  mask-image: linear-gradient(to bottom, transparent 0, transparent 0.75rem, #000 1.5rem);
 }

@@ -279,6 +279,11 @@ func (b backend) Search(ctx context.Context, req core.SearchRequest, reserve fun
 	return b.r.Search(ctx, req, b.movieCats, b.tvCats, reserve)
 }
 
+// Recent implements newznab.RecentBackend.
+func (b backend) Recent(ctx context.Context, reserve func(context.Context, string) error) ([]core.Release, error) {
+	return b.r.Recent(ctx, b.movieCats, b.tvCats, reserve)
+}
+
 func (b backend) FetchNZB(ctx context.Context, r core.Release, reserve func(context.Context, string) error) ([]byte, error) {
 	return b.r.FetchNZB(ctx, r, reserve)
 }

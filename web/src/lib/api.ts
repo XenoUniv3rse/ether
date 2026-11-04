@@ -36,6 +36,7 @@ import type {
   EtherUser,
   FieldError,
   CatalogEntry,
+  IdentityPreset,
   Indexer,
   LLMModel,
   LLMProvider,
@@ -80,6 +81,7 @@ export interface SupportCapture {
   hypotheses: { code: string; text: string }[];
   coverage: { collector: string; status: string; detail: string }[];
   preview?: {
+    files?: string[];
     identity: {
       usernamesIncluded: boolean;
       addressesIncluded: boolean;
@@ -186,7 +188,7 @@ function authHeaders(init: RequestInit, withSession = true): Headers {
   const method = (init.method ?? "GET").toUpperCase();
   if (method !== "GET" && method !== "HEAD") {
     headers.set("X-Ether-Request", "1");
-    if (init.body != null && !headers.has("Content-Type"))
+    if (init.body != null && !(init.body instanceof FormData) && !headers.has("Content-Type"))
       headers.set("Content-Type", "application/json");
   }
   return headers;
@@ -225,6 +227,14 @@ export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise
     );
   }
   return data as T;
+}
+
+/**
+ * Fetch a streaming console API response (Ask Ether turns) with the same
+ * session and CSRF headers as apiFetch. The caller owns the Response body.
+ */
+export async function apiStream(path: string, init: RequestInit = {}): Promise<Response> {
+  return fetch(API_BASE + path, { ...init, headers: authHeaders(init) });
 }
 
 let routeImagesThroughFetch = false;
@@ -301,6 +311,8 @@ export const api = {
   getConfig: async () => (await apiFetch<{ config: EtherConfig }>("/config")).config,
   putConfig: async (config: EtherConfig) =>
     (await put<{ config: EtherConfig }>("/config", config)).config,
+  getSection: <T>(section: string) =>
+    apiFetch<{ section: string; value: T; presets?: IdentityPreset[] }>(`/config/${section}`),
   putSection: (section: string, value: unknown) =>
     put<{ section: string; value: unknown }>(`/config/${section}`, value),
 
@@ -424,8 +436,8 @@ export const api = {
     put<CollectionSpec>(`/collections/${encodeURIComponent(id)}`, spec),
   deleteCollection: (id: string) =>
     apiFetch<null>(`/collections/${encodeURIComponent(id)}`, { method: "DELETE" }),
-  previewCollection: (spec: CollectionSpec, signal?: AbortSignal) =>
-    post<CollectionPreview>("/collections/preview", spec, signal),
+  previewCollection: (spec: CollectionSpec, signal?: AbortSignal, n?: number) =>
+    post<CollectionPreview>(`/collections/preview${qs({ n })}`, spec, signal),
   rebuildCollection: (id: string) =>
     post<{ itemCount: number; lastBuiltAt: string }>(
       `/collections/${encodeURIComponent(id)}/rebuild`,
@@ -433,11 +445,6 @@ export const api = {
   templates: async () =>
     (await apiFetch<{ templates: CollectionTemplate[] | null }>("/collections/templates"))
       .templates ?? [],
-  generateCollection: (prompt: string, mediaType?: string) =>
-    post<{ spec: CollectionSpec; explanation: string }>("/collections/generate", {
-      prompt,
-      mediaType,
-    }),
   artworkUrl: (id: string, w: number, version?: string) =>
     `${API_BASE}/collections/${encodeURIComponent(id)}/artwork${qs({ w, v: version })}`,
 

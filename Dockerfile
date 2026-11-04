@@ -47,12 +47,14 @@ ARG TARGETARCH
 # only). Note: Debian's free `intel-media-va-driver` strips EU shader kernels,
 # leaving Gen9/Gen10 with only low-power CQP and no video processing;
 # `intel-media-va-driver-non-free` and `i965-va-driver-shaders` live in
-# non-free-firmware / non-free. Keep in sync with
+# non-free-firmware / non-free. fontconfig and DejaVu give libass a font
+# to burn text subtitles with (Plex Web's ASS tracks): with no fontconfig
+# configuration and no fonts, it draws nothing. Keep in sync with
 # packaging/docker/Dockerfile.goreleaser.*.
 RUN sed -i 's/^Components: main$/Components: main contrib non-free non-free-firmware/' /etc/apt/sources.list.d/debian.sources \
  && apt-get update \
  && apt-get install -y --no-install-recommends \
-      ca-certificates tzdata \
+      ca-certificates tzdata fontconfig fonts-dejavu-core \
       libva2 libva-drm2 vainfo mesa-va-drivers \
       ocl-icd-libopencl1 \
  && if [ "$TARGETARCH" = amd64 ]; then \

@@ -229,7 +229,8 @@ func TestGapFailureAndRestart(t *testing.T) {
 	x.now = x.now.Add(time.Hour)
 	x.f.fail = errors.New("transport secret")
 	_ = x.s.Cycle(ctx)
-	anchor, _, _, _ := x.s.feedState(ctx, x.f.sources[0])
+	st, _ := x.s.feedState(ctx, x.f.sources[0])
+	anchor := st.anchor
 	if anchor != "old" {
 		t.Fatal("failed request advanced cursor")
 	}
@@ -243,7 +244,8 @@ func TestGapFailureAndRestart(t *testing.T) {
 	if e := x.s.Cycle(ctx); e != nil {
 		t.Fatal(e)
 	}
-	anchor, _, gap, _ := x.s.feedState(ctx, x.f.sources[0])
+	st, _ = x.s.feedState(ctx, x.f.sources[0])
+	anchor, gap := st.anchor, st.gap
 	if !gap || anchor != "new0" {
 		t.Fatal("gap was not recorded")
 	}

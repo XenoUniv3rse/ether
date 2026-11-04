@@ -65,7 +65,26 @@ type Item struct {
 	Score       float64        `json:"score,omitempty"`
 	StoredBytes int64          `json:"storedBytes"`
 	Updated     time.Time      `json:"updated"`
+	State       string         `json:"state,omitempty"` // cached | queued | failed
 }
+
+// failureBackoff is how long a title waits after its nth consecutive failed
+// fill: 1h, doubling, at most a day. A pass every 15 minutes used to resolve
+// every failing title again (71 times a day each on production), and each
+// resolve can search and grab.
+func failureBackoff(failures int) time.Duration {
+	if failures <= 0 {
+		return 0
+	}
+	return min(24*time.Hour, time.Hour<<min(failures-1, 5))
+}
+
+// pauseError is a fill stopped by the preload conditions (live playback,
+// disk reserve, pause): not a failure of the title.
+type pauseError struct{ error }
+
+func (e pauseError) Unwrap() error { return e.error }
+
 type Status struct {
 	State     string      `json:"state"`
 	Message   string      `json:"message"`
@@ -89,6 +108,17 @@ type Manager struct {
 	items  map[core.RatingKey]Item
 	cancel context.CancelFunc
 	wake   chan struct{}
+	// settings is the preload configuration of the last pass: a change
+	// gives failed titles another try at once.
+	settings string
+	// failed holds titles waiting out failureBackoff (guarded by mu).
+	failed map[core.RatingKey]failure
+}
+
+// failure is a title's consecutive failed fills and the last one's time.
+type failure struct {
+	count int
+	at    time.Time
 }
 
 func New(dir string, d Deps) (*Manager, error) {
@@ -151,9 +181,37 @@ func (m *Manager) Status() Status {
 				st.Ready++
 			}
 		}
+		applySelectionStates(st.Selection, itemStates(st.Items))
 		return st
 	}
 	return m.localStatus()
+}
+
+// itemStates normalizes each manifest entry and returns its state by title.
+func itemStates(items []Item) map[core.RatingKey]string {
+	states := make(map[core.RatingKey]string, len(items))
+	for i := range items {
+		it := &items[i]
+		switch {
+		case it.State == "failed":
+		case it.Complete:
+			it.State = "cached"
+		default:
+			it.State = "queued"
+		}
+		states[it.Key] = it.State
+	}
+	return states
+}
+
+func applySelectionStates(selection []Selection, states map[core.RatingKey]string) {
+	for i := range selection {
+		if state := states[selection[i].Key]; state != "" {
+			selection[i].State = state
+		} else {
+			selection[i].State = "queued"
+		}
+	}
 }
 func (m *Manager) localStatus() Status {
 	sizes := m.releaseSizes()
@@ -173,6 +231,7 @@ func (m *Manager) localStatus() Status {
 		}
 	}
 	sort.Slice(s.Items, func(i, j int) bool { return s.Items[i].Title < s.Items[j].Title })
+	applySelectionStates(s.Selection, itemStates(s.Items))
 	return s
 }
 
@@ -321,6 +380,46 @@ func (m *Manager) save() error {
 	}
 	return os.Rename(name, m.path)
 }
+func releaseLabel(r core.Release) string {
+	if r.Name != "" {
+		return r.Name
+	}
+	return r.Indexer
+}
+
+// noteShelf records the selection reason and file behind a shelf entry.
+func (m *Manager) noteShelf(r core.Release, file, title string, size int64, detail core.CacheShelfDetail) {
+	rec, ok := m.deps.Cache.(core.CacheProvenanceRecorder)
+	if !ok {
+		return
+	}
+	rec.RecordProvenance(core.CacheProvenance{ReleaseID: r.ID, File: file, Size: size, Source: releaseLabel(r), Title: title, Cause: core.CacheCauseShelf, Shelf: &detail})
+}
+
+// fail keeps a failed title in the manifest so the selection list can show it.
+func (m *Manager) fail(key core.RatingKey, c candidate) error {
+	m.mu.Lock()
+	it := m.items[key]
+	it.Key = key
+	it.Title = displayTitle(c.Title)
+	it.Reason = c.Reason
+	it.Score = c.Score
+	it.State = "failed"
+	it.Updated = time.Now()
+	if m.failed == nil {
+		m.failed = map[core.RatingKey]failure{}
+	}
+	m.failed[key] = failure{count: m.failed[key].count + 1, at: m.deps.Now()}
+	m.items[key] = it
+	m.mu.Unlock()
+	if it.ReleaseID != "" {
+		if err := m.pin(it.ReleaseID, false); err != nil {
+			return err
+		}
+	}
+	return m.save()
+}
+
 func (m *Manager) forget(key core.RatingKey) error {
 	m.mu.Lock()
 	it := m.items[key]
@@ -345,6 +444,19 @@ func (m *Manager) pass(ctx context.Context) error {
 	if maxTitles <= 0 {
 		maxTitles = 200
 	}
+	raw, _ := json.Marshal(cfg) // values, not pointer addresses
+	settings := string(raw)
+	m.mu.Lock()
+	if m.settings != settings {
+		m.failed = nil
+	}
+	for k, f := range m.failed {
+		if m.deps.Now().Sub(f.at) > 2*failureBackoff(f.count) {
+			delete(m.failed, k) // no longer a candidate: keep the map bounded
+		}
+	}
+	m.settings = settings
+	m.mu.Unlock()
 	// Retire excess reservations first, even while disabled/paused. Cached bytes
 	// become ordinary retention candidates, never a forced deletion.
 	snapshot := m.localStatus()
@@ -429,6 +541,12 @@ func (m *Manager) pass(ctx context.Context) error {
 		if ok && existing.Complete && existing.StoredBytes > 0 && m.deps.Cache.ReleaseBytes(existing.ReleaseID) >= existing.StoredBytes {
 			continue
 		}
+		m.mu.Lock()
+		f, waiting := m.failed[title.Key]
+		m.mu.Unlock()
+		if waiting && m.deps.Now().Before(f.at.Add(failureBackoff(f.count))) {
+			continue
+		}
 		if err := m.allowed(); err != nil {
 			return err
 		}
@@ -437,9 +555,10 @@ func (m *Manager) pass(ctx context.Context) error {
 			break
 		}
 		job, cancel := context.WithTimeout(ctx, 6*time.Hour)
-		err = m.fill(job, owner, &title, limit, maxTitles, ranks)
+		err = m.fill(job, owner, &title, limit, maxTitles, ranks, core.CacheShelfDetail{ReasonCodes: candidate.ReasonCodes, Score: candidate.Score, State: "reserved"})
 		if err == nil {
 			m.mu.Lock()
+			delete(m.failed, title.Key)
 			it := m.items[title.Key]
 			it.Reason = candidate.Reason
 			it.Score = candidate.Score
@@ -451,12 +570,16 @@ func (m *Manager) pass(ctx context.Context) error {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
+		var pause pauseError
+		if errors.As(err, &pause) {
+			return pause.error
+		}
 		if err != nil {
 			m.mu.Lock()
 			m.status.Failed++
 			m.mu.Unlock()
 			m.deps.Logger.Debug("preload skipped", "key", title.Key, "err", err)
-			if dropErr := m.forget(title.Key); dropErr != nil {
+			if dropErr := m.fail(title.Key, candidate); dropErr != nil {
 				return dropErr
 			}
 		}
@@ -464,7 +587,7 @@ func (m *Manager) pass(ctx context.Context) error {
 	m.state("ready", "Catalogue pass finished; checking again in 15 minutes")
 	return nil
 }
-func (m *Manager) fill(ctx context.Context, owner *core.User, title *core.Title, limit int64, maxTitles int, ranks map[core.RatingKey]int) error {
+func (m *Manager) fill(ctx context.Context, owner *core.User, title *core.Title, limit int64, maxTitles int, ranks map[core.RatingKey]int, shelf core.CacheShelfDetail) error {
 	m.mu.Lock()
 	previous := m.items[title.Key]
 	m.status.Title = displayTitle(*title)
@@ -472,9 +595,10 @@ func (m *Manager) fill(ctx context.Context, owner *core.User, title *core.Title,
 	m.status.Size = 0
 	m.mu.Unlock()
 	m.state("resolving", "Selecting a release using the owner's quality rules")
-	resolveCtx, cancel := context.WithTimeout(ctx, 90*time.Second)
+	resolveCtx, cancel := context.WithTimeout(core.WithIndexerPurpose(ctx, core.IndexerPurposeWarmup), 90*time.Second)
 	caps := core.ClientCaps{ClientID: "ether-managed-cache", Product: "Ether Managed Cache"}
-	res, err := m.deps.Resolver.Resolve(resolveCtx, core.ResolveRequest{Title: title, User: owner, Client: caps, Prefer: previous.ReleaseID})
+	// Nobody waits on a preload: fallback queries go one at a time.
+	res, err := m.deps.Resolver.Resolve(core.WithUnattendedSearch(resolveCtx), core.ResolveRequest{Title: title, User: owner, Client: caps, Prefer: previous.ReleaseID})
 	cancel()
 	if err != nil {
 		return err
@@ -509,7 +633,7 @@ func (m *Manager) fill(ctx context.Context, owner *core.User, title *core.Title,
 	if err := m.pin(res.Release.ID, true); err != nil {
 		return err
 	}
-	it := Item{Key: title.Key, Title: displayTitle(*title), ReleaseID: res.Release.ID, Size: reservation, Updated: time.Now()}
+	it := Item{Key: title.Key, Title: displayTitle(*title), ReleaseID: res.Release.ID, Size: reservation, Updated: time.Now(), State: "queued"}
 	m.mu.Lock()
 	m.items[title.Key] = it
 	m.status.Size = size
@@ -518,14 +642,14 @@ func (m *Manager) fill(ctx context.Context, owner *core.User, title *core.Title,
 		_ = m.pin(res.Release.ID, false)
 		return err
 	}
-	m.deps.Cache.Describe(res.Release.ID, displayTitle(*title), size)
+	m.noteShelf(res.Release, src.Name(), displayTitle(*title), size, shelf)
 	m.state("filling", "Fetching complete source at background priority")
 	for off := int64(0); off < size; {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
 		if err := m.allowed(); err != nil {
-			return err
+			return pauseError{err}
 		}
 		n := min(chunkBytes, size-off)
 		started := time.Now()
@@ -555,6 +679,7 @@ func (m *Manager) fill(ctx context.Context, owner *core.User, title *core.Title,
 	// Prefetch failure is not a complete item. Successful coverage is protected
 	// by its preload pin; changing profiles may still select a different release.
 	it.Complete = true
+	it.State = "cached"
 	it.StoredBytes = m.deps.Cache.ReleaseBytes(it.ReleaseID)
 	it.Updated = time.Now()
 	m.mu.Lock()
@@ -563,6 +688,8 @@ func (m *Manager) fill(ctx context.Context, owner *core.User, title *core.Title,
 	if err := m.save(); err != nil {
 		return err
 	}
+	shelf.State = "fetched"
+	m.noteShelf(res.Release, src.Name(), displayTitle(*title), size, shelf)
 	if m.deps.Remember != nil {
 		if err := m.deps.Remember(ctx, owner, title.Key, caps, res); err != nil {
 			m.deps.Logger.Warn("remember preloaded source", "err", err)

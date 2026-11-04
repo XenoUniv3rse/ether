@@ -138,7 +138,7 @@ func (m *Manager) Prewarm(_ context.Context, user *core.User, key core.RatingKey
 		return false
 	}
 	reason := opts.Reason
-	if reason != core.PrewarmTrailer && reason != core.PrewarmPostPlay && reason != core.PrewarmBrowse {
+	if reason != core.PrewarmTrailer && reason != core.PrewarmPostPlay && reason != core.PrewarmBrowse && reason != core.PrewarmNextEpisode {
 		reason = core.PrewarmDetail
 	}
 	cfg := m.config().Cache
@@ -279,7 +279,7 @@ func (m *Manager) Prewarm(_ context.Context, user *core.User, key core.RatingKey
 			m.mu.Unlock()
 			e.ready.Do(func() { close(e.done) })
 		}()
-		ctx, cancel := warmPreparationContext(m.ctx, timeout, e.foreground)
+		ctx, cancel := warmPreparationContext(core.WithIndexerPurpose(m.ctx, core.IndexerPurposeWarmup), timeout, e.foreground)
 		e.setCancel(cancel)
 		defer cancel()
 		title, err := m.deps.Catalog.Get(ctx, key)
@@ -311,6 +311,7 @@ func (m *Manager) Prewarm(_ context.Context, user *core.User, key core.RatingKey
 		if err != nil {
 			return
 		}
+		m.noteWarmCause(res, src, reason, cacheTitle(*title))
 		generation, err := m.probeGeneration(ctx, session, res, src, finish, func(size int64) core.MediaInfo {
 			info := EstimateInfo(title, caps, m.deps.SelectProfile(caps, &u))
 			info.Size = size
@@ -327,7 +328,7 @@ func (m *Manager) Prewarm(_ context.Context, user *core.User, key core.RatingKey
 		if automaticReserve {
 			info := generation.infoSnapshot()
 			if info.Duration > 0 {
-				prefetchBytes = min(int64(256<<20), max(int64(8<<20), int64(float64(src.Size())*playableReserve.Seconds()/info.Duration.Seconds())))
+				prefetchBytes = min(int64(256<<20), max(int64(8<<20), int64(float64(src.Size())*(40*time.Second).Seconds()/info.Duration.Seconds())))
 			}
 		}
 		// Publish before prefetch so a play request need not wait for
@@ -652,6 +653,7 @@ func (m *Manager) InvalidateTitle(key core.RatingKey) int {
 		return 0
 	}
 	m.mu.Lock()
+	m.forgetStalePrefersLocked(key)
 	n := 0
 	for id, e := range m.warm {
 		if titleIncludes(key, id.key) {

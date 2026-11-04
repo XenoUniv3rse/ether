@@ -40,6 +40,10 @@ func (s *Service) deliverAvailable(ctx context.Context) {
 			s.log.Warn("plex watch echo compact", "err", err.Error())
 		}
 	}
+	if !s.supported {
+		// Queued intents and held attempts stay parked, unread and unlogged.
+		return
+	}
 	if _, err := s.ReconcileOnce(ctx); err != nil && ctx.Err() == nil {
 		s.log.Warn("plex watch hold reconcile", "err", err.Error())
 	}
@@ -57,6 +61,9 @@ func (s *Service) deliverAvailable(ctx context.Context) {
 // DeliverOnce sends at most one live intent. more is true when a row was
 // claimed, including rows skipped because a newer intent replaced them.
 func (s *Service) DeliverOnce(ctx context.Context) (bool, error) {
+	if !s.supported {
+		return false, nil
+	}
 	now := s.now()
 	attempt := s.node + ":" + newID()
 	row, ok, err := s.state.ClaimSync(ctx, attempt, now, s.claimFor)
@@ -89,7 +96,7 @@ func (s *Service) deliverClaim(ctx context.Context, row state.SyncRow, attempt s
 	if err != nil {
 		return err
 	}
-	if !ok || acct.revoked || acct.token == "" || !acct.enabled || acct.plexID <= 0 {
+	if !ok || acct.revoked || acct.token == "" || acct.direction&1 == 0 || acct.plexID <= 0 {
 		return s.state.DeadSync(ctx, row.Seq, attempt, "disabled")
 	}
 	if acct.eligibility != "allowed" {
@@ -203,6 +210,18 @@ func (s *Service) lookupGUID(ctx context.Context, key core.RatingKey) (string, e
 }
 
 func (s *Service) failDelivery(ctx context.Context, row state.SyncRow, attempt, permitID string, generation int64, err error) error {
+	var lookup *credentialLookupError
+	if errors.As(err, &lookup) {
+		if cerr := s.clearAttempt(ctx, permitID, row.Seq, true); cerr != nil {
+			return cerr
+		}
+		delay := time.Minute
+		var status *StatusError
+		if errors.As(lookup, &status) && status.RetryAfter > delay {
+			delay = status.RetryAfter
+		}
+		return s.state.DeferSync(ctx, row.Seq, attempt, s.now().Add(delay), "credential_unavailable")
+	}
 	var st *StatusError
 	if errors.As(err, &st) {
 		switch {
@@ -223,9 +242,9 @@ func (s *Service) failDelivery(ctx context.Context, row state.SyncRow, attempt, 
 			if cerr := s.clearAttempt(ctx, permitID, row.Seq, true); cerr != nil {
 				return cerr
 			}
-			_, _ = s.db.ExecContext(ctx, `UPDATE plexwatch_account SET eligibility='refused', enabled=0, checked_at=? WHERE user_id=? AND token_generation=?`,
+			_, _ = s.db.ExecContext(ctx, `UPDATE plexwatch_account SET send_problem='credential', checked_at=? WHERE user_id=? AND token_generation=?`,
 				s.now().UnixNano(), row.UserID, generation)
-			return s.state.DeferSync(ctx, row.Seq, attempt, s.now().Add(15*time.Minute), "not_eligible")
+			return s.state.DeferSync(ctx, row.Seq, attempt, s.now().Add(15*time.Minute), "credential_forbidden")
 		case st.Status == 400 || st.Status == 422:
 			s.log.Info("plex watch state rejected", "seq", row.Seq, "status", st.Status)
 			if cerr := s.clearAttempt(ctx, permitID, row.Seq, false); cerr != nil {

@@ -30,8 +30,11 @@ const (
 // viewer's account.
 var ErrAccountMismatch = errors.New("plexwatch: plex account does not belong to this viewer")
 
-// ErrNotEligible means Plex refused watch-state sync for this account token.
+// ErrNotEligible means the viewer has not consented to watch-state sync.
 var ErrNotEligible = errors.New("plexwatch: account has not allowed watch-state sync")
+
+// ErrCredentialForbidden means the credential lacks access to watch state.
+var ErrCredentialForbidden = errors.New("plexwatch: credential is not allowed to access watch state")
 
 // ErrRevoked means the stored account token was rejected.
 var ErrRevoked = errors.New("plexwatch: account token rejected")
@@ -41,6 +44,7 @@ type StatusError struct {
 	Status     int
 	RetryAfter time.Duration
 	Op         string
+	PlexCode   int
 }
 
 func (e *StatusError) Error() string {
@@ -51,7 +55,7 @@ func (e *StatusError) Is(target error) bool {
 	switch target {
 	case ErrRevoked:
 		return e.Status == http.StatusUnauthorized
-	case ErrNotEligible:
+	case ErrCredentialForbidden:
 		return e.Status == http.StatusForbidden
 	default:
 		return false
@@ -60,12 +64,14 @@ func (e *StatusError) Is(target error) bool {
 
 // Client is the allowlisted Plex HTTP API used by this package.
 type Client struct {
-	plex     *url.URL
-	servers  *url.URL
-	scrobble *url.URL
-	clientID string
-	http     *http.Client
-	now      func() time.Time
+	serverIdentity func() (string, string)
+	credentials    serviceCredentials
+	plex           *url.URL
+	servers        *url.URL
+	scrobble       *url.URL
+	clientID       string
+	http           *http.Client
+	now            func() time.Time
 }
 
 func newClient(base, clientID string, hc *http.Client, now func() time.Time) (*Client, error) {
@@ -187,12 +193,23 @@ func (c *Client) account(ctx context.Context, token string) (remoteAccount, erro
 	return remoteAccount{ID: out.ID, Username: name, Restricted: out.Restricted}, nil
 }
 
-// eligibility is the read-only view_state_sync check. allowed is true only
-// for HTTP 200. HTTP 403 is ErrNotEligible. Other statuses are returned.
+// eligibility is the read-only view_state_sync check: the account's own
+// "Sync my watch state and ratings" consent, read with the viewer's account
+// token. (server/users/{id}/view_state_sync needs a Plex server token and
+// refuses every account token with 403 code 1080, #288.) Only consent false
+// is ErrNotEligible; HTTP failures are returned separately.
 func (c *Client) eligibility(ctx context.Context, token string, plexID int64) error {
-	path := "/api/v2/server/users/" + strconv.FormatInt(plexID, 10) + "/view_state_sync"
-	_, err := c.call(ctx, http.MethodGet, c.plex, path, token, nil, nil, http.StatusOK)
-	return err
+	_ = plexID // the account endpoint is scoped by the token itself
+	var out struct {
+		Consent bool `json:"consent"`
+	}
+	if _, err := c.call(ctx, http.MethodGet, c.plex, "/api/v2/user/view_state_sync", token, nil, &out, http.StatusOK); err != nil {
+		return err
+	}
+	if !out.Consent {
+		return ErrNotEligible
+	}
+	return nil
 }
 
 type postItem struct {
@@ -209,7 +226,7 @@ func (c *Client) postState(ctx context.Context, token string, plexID int64, item
 	if err != nil {
 		return err
 	}
-	_, err = c.call(ctx, http.MethodPost, c.scrobble, "/state", token, body, nil, http.StatusCreated, http.StatusOK)
+	_, err = c.stateCall(ctx, http.MethodPost, "/state", token, plexID, body, nil, http.StatusCreated, http.StatusOK)
 	return err
 }
 
@@ -250,7 +267,7 @@ func (c *Client) fetchState(ctx context.Context, token string, plexID int64, cur
 		} `json:"pageInfo"`
 	}
 	path := "/state/" + strconv.FormatInt(plexID, 10) + "?" + q.Encode()
-	if _, err := c.call(ctx, http.MethodGet, c.scrobble, path, token, nil, &out, http.StatusOK); err != nil {
+	if _, err := c.stateCall(ctx, http.MethodGet, path, token, plexID, nil, &out, http.StatusOK); err != nil {
 		return remotePage{}, err
 	}
 	return remotePage{Items: out.Items, EndCursor: out.PageInfo.EndCursor, HasNextPage: out.PageInfo.EndCursor != "" && out.PageInfo.HasNextPage}, nil
@@ -270,7 +287,7 @@ func (c *Client) call(ctx context.Context, method string, base *url.URL, pathAnd
 	if !c.allowed(u) {
 		return 0, errors.New("plexwatch: host is not allowlisted")
 	}
-	if strings.Contains(u.Path, "/services") || strings.Contains(u.Path, "/api/home/") {
+	if (strings.Contains(u.Path, "/services") && (u.Path != "/api/v2/server/users/services" || method != http.MethodGet || base != c.plex || c.serverIdentity == nil)) || strings.Contains(u.Path, "/api/home/") {
 		return 0, errors.New("plexwatch: that credential route is not used")
 	}
 	if strings.HasSuffix(u.Path, "/view_state_sync") && method != http.MethodGet {
@@ -286,9 +303,17 @@ func (c *Client) call(ctx context.Context, method string, base *url.URL, pathAnd
 	}
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("X-Plex-Product", "Ether")
+	// Plex selects server service credentials by product as well as claim.
+	if u.Path == "/api/v2/server/users/services" {
+		req.Header.Set("X-Plex-Product", "Plex Media Server")
+	}
 	req.Header.Set("X-Plex-Client-Identifier", c.clientID)
 	if token != "" {
-		req.Header.Set("X-Plex-Token", token)
+		if u.Path == "/state" || strings.HasPrefix(u.Path, "/state/") {
+			req.Header.Set("Authorization", "Bearer "+token)
+		} else {
+			req.Header.Set("X-Plex-Token", token)
+		}
 	}
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
@@ -312,8 +337,18 @@ func (c *Client) call(ctx context.Context, method string, base *url.URL, pathAnd
 		}
 	}
 	if !good {
-		delay, _ := retryafter.Parse(resp.Header.Get("Retry-After"), c.now(), 15*time.Minute)
-		return resp.StatusCode, &StatusError{Status: resp.StatusCode, RetryAfter: delay, Op: method + " " + u.Host}
+		delay, _ := retryafter.Parse(resp.Header.Get("Retry-After"), c.now(), 0)
+		var body struct {
+			Errors []struct {
+				Code int `json:"code"`
+			} `json:"errors"`
+		}
+		_ = json.Unmarshal(slurp, &body)
+		code := 0
+		if len(body.Errors) > 0 {
+			code = body.Errors[0].Code
+		}
+		return resp.StatusCode, &StatusError{Status: resp.StatusCode, RetryAfter: delay, Op: method + " " + u.Host, PlexCode: code}
 	}
 	if dest != nil && len(bytes.TrimSpace(slurp)) > 0 {
 		if err := json.Unmarshal(slurp, dest); err != nil {

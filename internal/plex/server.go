@@ -19,6 +19,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/braedonsaunders/ether/internal/artwork"
 	"github.com/braedonsaunders/ether/internal/clusterbus"
 	"github.com/braedonsaunders/ether/internal/config"
 	"github.com/braedonsaunders/ether/internal/core"
@@ -92,17 +93,20 @@ type Deps struct {
 	PlexGUID            *plexguid.Service
 	PlexMeta            *plexmeta.Service
 	Discovery           *DiscoveryFeatures
-	LiveTV              *livetv.Service
-	AccessPolicy        AccessPolicy
-	Catalog             core.Catalog
-	Collections         core.Collections
-	VibeSearch          core.VibeSearcher
-	Recommender         core.Recommender
-	State               core.State
-	Playlists           core.Playlists
-	Auth                core.Auth
-	Playback            core.Playback
-	Transcoder          core.Transcoder
+	// Search is the app's shared search (every frontend's); zero builds it
+	// from this server's own dependencies.
+	Search       experience.SearchSources
+	LiveTV       *livetv.Service
+	AccessPolicy AccessPolicy
+	Catalog      core.Catalog
+	Collections  core.Collections
+	VibeSearch   core.VibeSearcher
+	Recommender  core.Recommender
+	State        core.State
+	Playlists    core.Playlists
+	Auth         core.Auth
+	Playback     core.Playback
+	Transcoder   core.Transcoder
 	// Variants lists distinct release versions for "Play Version" detail
 	// pages (optional: without it, detail pages stay single-Media).
 	Variants core.VariantResolver
@@ -116,7 +120,10 @@ type Deps struct {
 	Markers          MarkerProvider
 	Subtitles        SubtitleSource
 	Extras           ExtrasProvider
-	Trickplay        core.TrickplayProvider
+	// Prerolls are owner pre-rolls (#298); nil leaves play queues and
+	// extras exactly as without the feature.
+	Prerolls  core.Prerolls
+	Trickplay core.TrickplayProvider
 
 	// ApplyClientRules adjusts caps for the owner's quality rules. Nil leaves
 	// the request caps unchanged. The app wires resolver.ApplyClientRules so
@@ -166,6 +173,9 @@ type Deps struct {
 	Resources *hoststat.Resources
 	// Support records neutral request and playback facts. Nil leaves playback unchanged.
 	Support *diagnostics.Recorder
+	// HomeCache serves Plex Home from memory (home_cache.go); nil builds
+	// every Home request.
+	HomeCache *HomeCacheSource
 	// TracePlayback logs HLS/transcode requests when ETHER_TRACE_PLAYBACK=1.
 	// It does not change responses.
 	TracePlayback bool
@@ -174,6 +184,9 @@ type Deps struct {
 // Server is the PMS API handler. It is an http.Handler; call Close on
 // shutdown to stop background work and notification streams.
 type Server struct {
+	homeSharedMu     sync.Mutex
+	homeShared       map[string]*homeSharedEntry
+	home             *homeCache
 	trickplayMu      sync.Mutex
 	trickplayHolders map[string]*trickplay.Holder
 	trickplayClosed  bool
@@ -184,9 +197,10 @@ type Server struct {
 	sections []Section
 
 	images            *artworkservice.RemoteCache
+	channelLogos      *artwork.Images
 	boundStreams      sessions.PlexStreamAPI
 	variantIDs        *variantIDRegistry
-	renderedVariants  *renderedVariants
+	playIDs           *playIdentities
 	variantWatch      variantWatches
 	downloads         *downloadStore
 	queues            *playQueueStore
@@ -212,6 +226,9 @@ type Server struct {
 	// janitor drops those whose client never reports again.
 	termMu sync.Mutex
 	terms  map[string]termination
+
+	// Stalled-start watches and Dolby Vision base-layer fallbacks.
+	starts startGuard
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -254,8 +271,9 @@ func NewServer(d Deps) *Server {
 		d:                 d,
 		log:               d.Logger.With("component", "plex"),
 		images:            artworkservice.NewRemoteCache(d.ImageCacheBytes, d.HTTPClient),
+		channelLogos:      artwork.NewImages(artwork.ImagesOptions{HTTPClient: d.HTTPClient}),
 		variantIDs:        newVariantIDRegistry(d.DB),
-		renderedVariants:  newRenderedVariants(),
+		playIDs:           newPlayIdentities(),
 		downloads:         newDownloadStore(),
 		queues:            newPlayQueueStore(),
 		sessions:          newSessionActivities(),
@@ -297,6 +315,11 @@ func NewServer(d Deps) *Server {
 	s.router = s.routes()
 	s.wg.Add(1)
 	go s.janitor()
+	if d.HomeCache != nil && d.HomeCache.Revision != nil {
+		s.home = newHomeCache()
+		s.wg.Add(1)
+		go s.homeRefresher()
+	}
 	if s.cl != nil {
 		s.cl.start()
 	}
@@ -310,6 +333,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) { s.router.Se
 func (s *Server) Closed() bool {
 	return s == nil || s.ctx.Err() != nil
 }
+
+// Done is closed when the server is closed.
+func (s *Server) Done() <-chan struct{} { return s.ctx.Done() }
 
 // Close stops background goroutines and disconnects notification clients.
 func (s *Server) Close() error {
@@ -515,11 +541,12 @@ func (s *Server) janitor() {
 			s.expireTrickplayHolders()
 			s.expireDownloads(now)
 			s.queues.expire(now, 6*time.Hour)
-			s.renderedVariants.expire(now, renderedVariantsTTL)
+			s.playIDs.expire(now, s.playIdentityAlive)
 			s.expireTranscodes(now, 2*time.Hour)
 			s.playbackOwners.Expire(now, 2*time.Hour)
 			s.extraPlay.expire(now, 2*time.Hour)
 			s.expireTerminations(now, terminationTTL)
+			s.starts.expire(now)
 			expired := s.sessions.expire(now, 2*time.Minute)
 			for _, e := range expired {
 				s.notifyPlaying(e, "stopped")

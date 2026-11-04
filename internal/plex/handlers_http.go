@@ -58,7 +58,7 @@ func (s *Server) handleStartHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if err, failed := s.transcodes.takeFailure(p.sessionID, pr.User.ID, p.key, s.now()); failed {
 		s.log.Info("start playback failed", "key", p.key, "reason", playbackMessage(err), "err", err, "decision", "remembered")
-		s.writeErr(w, r, err)
+		s.writeStartErr(w, r, pr, err)
 		return
 	}
 	entry, ok := s.transcodes.get(p.sessionID)
@@ -69,7 +69,7 @@ func (s *Server) handleStartHTTP(w http.ResponseWriter, r *http.Request) {
 	if !ok || ps == nil || !p.sameSettings(entry.requested) {
 		if _, ps, _, err = s.prepare(ctx, pr, &p); err != nil {
 			s.log.Info("start playback failed", "key", p.key, "reason", playbackMessage(err), "err", err)
-			s.writeErr(w, r, err)
+			s.writeStartErr(w, r, pr, err)
 			return
 		}
 		entry, _ = s.transcodes.get(p.sessionID)
@@ -111,12 +111,13 @@ func (s *Server) handleStartHTTP(w http.ResponseWriter, r *http.Request) {
 		s.d.Transcoder.Stop(p.sessionID)
 	}
 	hs, err := s.d.Transcoder.StartHLS(context.WithoutCancel(ctx), core.HLSRequest{
-		SessionID:   p.sessionID,
-		InputURL:    s.d.Playback.InputURL(ps.ID),
-		Info:        ps.Info,
-		Decision:    dec,
-		StartOffset: p.offset,
-		Protocol:    core.ProtocolHTTP,
+		SessionID:      p.sessionID,
+		InputURL:       s.d.Playback.InputURL(ps.ID),
+		Info:           ps.Info,
+		Decision:       dec,
+		StartOffset:    p.offset,
+		Protocol:       core.ProtocolHTTP,
+		CopyTimestamps: p.copyTimestamps,
 	})
 	if err != nil {
 		s.log.Warn("start HTTP session", "session", p.sessionID, "key", p.key, "err", err)

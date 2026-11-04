@@ -25,7 +25,7 @@ func (m *Manager) ResumedTracks(ctx context.Context, user *core.User, key core.R
 	if user == nil || user.ID <= 0 {
 		return core.MediaInfo{}, "", false
 	}
-	rp, err := m.ResumeFor(ctx, user, key, caps)
+	rp, err := m.resumeFor(ctx, user, key, caps, false)
 	if rp == nil && err == nil && !caps.Remote && m.deps.SelectProfile != nil {
 		// A client behind a Docker bridge or LAN subnet may send location=wan
 		// on /decision while /library/metadata carries no location query param.
@@ -35,13 +35,13 @@ func (m *Manager) ResumedTracks(ctx context.Context, user *core.User, key core.R
 			rcaps.MaxBitrateKbps = m.cfg.Transcode.RemoteMaxBitrateKbps
 		}
 		if profileKey(m.deps.SelectProfile(rcaps, user)) != profileKey(m.deps.SelectProfile(caps, user)) {
-			rp, err = m.ResumeFor(ctx, user, key, rcaps)
+			rp, err = m.resumeFor(ctx, user, key, rcaps, false)
 		}
 	}
-	if err != nil || rp == nil || rp.Release.ID == "" || len(rp.NZB) == 0 {
+	if err != nil || rp == nil || rp.Release.ID == "" || rp.payloadHash() == "" {
 		return core.MediaInfo{}, "", false
 	}
-	facts := m.persistedProbe(ctx, user.ID, key, rp.Release.ID, rp.NZB)
+	facts := m.persistedProbeHash(ctx, user.ID, key, rp.Release.ID, rp.payloadHash())
 	if facts == nil || facts.releaseID != rp.Release.ID || facts.info.Estimated || facts.info.Video() == nil || len(facts.info.Streams) > 0 == false {
 		// Check active/prepared sessions for this viewer + title + release as well.
 		m.mu.Lock()

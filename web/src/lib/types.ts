@@ -62,6 +62,13 @@ export interface ClientIdentityConfig {
   headers?: Record<string, string> | null;
 }
 
+/** One selectable client identity, as the server reports it. */
+export interface IdentityPreset {
+  key: string;
+  userAgent: string;
+  headers?: Record<string, string> | null;
+}
+
 export type IndexerProtocol = "usenet" | "torrent";
 export type IndexerKind = "newznab" | "cardigann" | "stremio";
 
@@ -238,6 +245,7 @@ export interface EtherConfig {
   posters?: PosterProviderConfig;
   availability?: AvailabilityConfig;
   server: {
+    startupAnimation?: boolean;
     port: number;
     bindAddress: string;
     friendlyName: string;
@@ -387,6 +395,11 @@ export interface EtherConfig {
     apiKey: string;
     skipIntro?: boolean;
     skipCredits?: boolean;
+    sourceOrder?: string[];
+  };
+  liveTV?: { logoIndexUrl?: string; healthSweepMinutes?: number };
+  subtitles?: {
+    providers?: { id: string; kind: string; name?: string; enabled: boolean }[];
   };
   openSubtitles: {
     enabled: boolean;
@@ -443,6 +456,7 @@ export interface EtherConfig {
 export interface QualityProfile {
   releaseRules?: ReleaseRule[] | null;
   ranking?: string[] | null;
+  rankingConfig?: Record<string, Record<string, unknown>> | null;
   name: string;
   maxHeight: number;
   minHeight: number;
@@ -500,6 +514,7 @@ export interface Bootstrap {
   authenticated: boolean;
   authRequired: boolean;
   serverName: string;
+  startupAnimation?: boolean;
   /** False when the Plex app is off. Omitted means Plex is on. */
   plexEnabled?: boolean;
 }
@@ -821,7 +836,7 @@ export interface AvailabilityConfig {
 
 export interface ReleaseCondition {
   field: string;
-  operator: "equals" | "contains" | "regex" | "range";
+  operator: "equals" | "contains" | "regex" | "range" | "in";
   value?: string;
   min?: number;
   max?: number;
@@ -859,6 +874,7 @@ export interface QualityClient {
 export interface QualityQuestion {
   userId: number;
   clientId?: string;
+  titleKey?: string;
   client?: { product: string; platform?: string; device?: string };
   remote: boolean;
 }

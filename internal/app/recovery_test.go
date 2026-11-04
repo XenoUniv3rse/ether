@@ -41,6 +41,7 @@ func ownedDataDir(t *testing.T) (dataDir, bundle string, db *sql.DB) {
 		t.Fatal(err)
 	}
 	bundle = writeBundle(t, dataDir)
+	store.SeedTestDataDir(t, dataDir)
 	db, err = store.Open(context.Background(), dataDir)
 	if err != nil {
 		t.Fatal(err)

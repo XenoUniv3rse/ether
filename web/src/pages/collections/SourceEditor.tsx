@@ -1,23 +1,29 @@
-import { Badge, Button, Input, SearchSelect } from "@braedonsaunders/appkit-ui";
+import { Badge, Button, Input, SearchSelect, Switch, Tooltip } from "@braedonsaunders/appkit-ui";
 import { ArrowDown, ArrowUp, Plus, Trash2, X } from "lucide-react";
-import { useState } from "react";
+import { useId, useState } from "react";
 import { Link } from "react-router-dom";
+import { MoreOptions } from "../../components/ConfigSection";
+import { SettingsRow } from "../../components/SettingsRow";
 import { Artwork } from "../../components/Artwork";
-import { Segmented } from "../../components/fields";
+import { Field, Segmented } from "../../components/fields";
 import { LookupPicker, TitleSearch } from "../../components/pickers";
 import { titleSubtitle } from "../../components/Poster";
 import { DragHandle, SortableList, arrayMove } from "../../components/Sortable";
 import { t, tx } from "../../i18n";
 import { searchSelectLabels } from "../../i18n/appkit-labels";
-import type { Source, TitleCard } from "../../lib/contract";
+import type { LookupKind, Source, TitleCard } from "../../lib/contract";
+import { isPluginDescriptor, textOf } from "../../lib/extend";
 import {
-  STEVENLU_LISTS,
-  TMDB_LISTS,
   describeSource,
   isSourceComplete,
-  sourceMeta,
+  paramField,
+  paramOptions,
+  type ParamField,
+  type SourceDescriptor,
 } from "../../lib/rules";
 import { useTitle } from "../../lib/titles";
+
+type SourceRecord = Source & Record<string, unknown>;
 
 export function SourceEditor({
   source,
@@ -26,6 +32,9 @@ export function SourceEditor({
   index,
   region,
   removable,
+  descriptor,
+  descriptors,
+  lookupPolicy,
 }: {
   source: Source;
   onChange: (s: Source) => void;
@@ -33,19 +42,31 @@ export function SourceEditor({
   index: number;
   region: string;
   removable: boolean;
+  descriptor?: SourceDescriptor;
+  descriptors: readonly SourceDescriptor[];
+  lookupPolicy?: { storedOnly: boolean; onChange: (storedOnly: boolean) => void };
 }) {
-  const meta = sourceMeta(source.kind);
   const n = index + 1;
   const label = t("Source {n}", { n });
+  const plugin = descriptor ? isPluginDescriptor(descriptor) : false;
   return (
     <div className="rounded-lg border border-border bg-surface p-3" role="group" aria-label={label}>
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
-          <p className="text-sm font-medium text-fg">{meta?.label ?? source.kind}</p>
+          <p className="flex flex-wrap items-center gap-1.5 text-sm font-medium text-fg">
+            {descriptor ? textOf(descriptor.label) : source.kind}
+            {plugin ? (
+              <Badge variant="secondary" title={descriptor?.owner}>
+                {t("From {owner}", { owner: descriptor?.group || descriptor?.owner || "" })}
+              </Badge>
+            ) : null}
+          </p>
           <p className="text-xs text-fg-muted">
             {isSourceComplete(source) && source.kind !== "catalog"
-              ? describeSource(source)
-              : meta?.description}
+              ? describeSource(source, descriptors)
+              : descriptor
+                ? textOf(descriptor.hint)
+                : undefined}
           </p>
         </div>
         {removable ? (
@@ -61,53 +82,95 @@ export function SourceEditor({
           </Button>
         ) : null}
       </div>
+      {lookupPolicy ? (
+        <div className="mt-3">
+          <MoreOptions label={t("Catalogue lookup options")} text={t("Catalogue lookup options")}>
+            <SettingsRow
+              title={t("Use stored metadata only")}
+              description={
+                <Tooltip
+                  content={t(
+                    "This controls metadata lookups, not downloaded media files. Adding another source enables its lookups.",
+                  )}
+                >
+                  <span>{t("Match using metadata already stored by Ether.")}</span>
+                </Tooltip>
+              }
+              control={
+                <Switch
+                  aria-label={t("Use stored metadata only")}
+                  checked={lookupPolicy.storedOnly}
+                  onChange={(e) => lookupPolicy.onChange(e.currentTarget.checked)}
+                />
+              }
+            />
+          </MoreOptions>
+        </div>
+      ) : null}
       <div className="mt-2 empty:hidden">
-        <SourceBody source={source} onChange={onChange} region={region} label={label} />
+        <SourceBody
+          source={source as SourceRecord}
+          descriptor={descriptor}
+          onChange={onChange}
+          region={region}
+          label={label}
+        />
       </div>
     </div>
   );
 }
 
+/**
+ * Params are edited through the widget family the descriptor names
+ * (meta.editor). WS1f's served-schema renderer will replace the named
+ * editors; until then each renders the descriptor's params (labels,
+ * options, placeholders) with the existing field components, and unknown
+ * editors fall back to a generic params form so plugin kinds stay usable.
+ */
 function SourceBody({
   source,
+  descriptor,
   onChange,
   region,
   label,
 }: {
-  source: Source;
+  source: SourceRecord;
+  descriptor?: SourceDescriptor;
   onChange: (s: Source) => void;
   region: string;
   label: string;
 }) {
-  switch (source.kind) {
-    case "catalog":
+  const set = (patch: Record<string, unknown>) => onChange({ ...source, ...patch } as Source);
+  switch (descriptor?.meta?.editor) {
+    case "none":
       return null;
-    case "tmdbList": {
-      const lists = TMDB_LISTS.filter((l) => l.media.includes(source.mediaType));
+    case "tmdbChart": {
+      const all = paramOptions(paramField(descriptor, "list"));
+      const mediaType = source.mediaType === "show" ? "show" : "movie";
+      const lists = all.filter((l) => !l.media || l.media.includes(mediaType));
       return (
         <div className="flex flex-wrap items-center gap-2">
           <Segmented
             ariaLabel={t("{label} media", { label })}
             size="sm"
-            value={source.mediaType}
+            value={mediaType}
             onChange={(m) =>
-              onChange({
-                ...source,
+              set({
                 mediaType: m,
-                list: TMDB_LISTS.find((l) => l.value === source.list)?.media.includes(m)
+                list: all.find((l) => l.value === source.list)?.media?.includes(m)
                   ? source.list
                   : "popular",
               })
             }
-            options={[
-              { value: "movie", label: t("Movies") },
-              { value: "show", label: t("TV") },
-            ]}
+            options={paramOptions(paramField(descriptor, "mediaType")).map((o) => ({
+              value: o.value,
+              label: o.label,
+            }))}
           />
           <div className="min-w-48 flex-1">
             <SearchSelect
-              value={source.list}
-              onChange={(v) => v && onChange({ ...source, list: v as typeof source.list })}
+              value={String(source.list ?? "")}
+              onChange={(v) => v && set({ list: v })}
               options={lists.map((l) => ({ value: l.value, label: l.label }))}
               ariaLabel={t("{label} chart", { label })}
               searchable={false}
@@ -117,69 +180,63 @@ function SourceBody({
         </div>
       );
     }
-    case "tmdbCollection":
-    case "tmdbKeyword":
-    case "tmdbCompany":
-    case "tmdbNetwork":
-    case "tmdbPerson":
-    case "watchProvider": {
-      const lookup = sourceMeta(source.kind)?.lookup ?? "keyword";
-      const picked =
-        source.id > 0 ? [{ id: source.id, name: source.label ?? `#${source.id}` }] : [];
+    case "lookup": {
+      const field = paramField(descriptor, "id");
+      const lookup = (field?.lookup ?? "keyword") as LookupKind;
+      const id = typeof source.id === "number" ? source.id : 0;
+      const name = typeof source.label === "string" ? source.label : undefined;
+      const picked = id > 0 ? [{ id, name: name ?? `#${id}` }] : [];
+      const regionField = paramField(descriptor, "region");
       return (
         <div className="space-y-2">
           <LookupPicker
             kind={lookup}
             multiple={false}
-            region={source.kind === "watchProvider" ? source.region || region : region}
+            region={regionField ? String(source.region ?? "") || region : region}
             value={picked}
             ariaLabel={t("{label} search", { label })}
-            onChange={(p) =>
-              onChange({ ...source, id: p[0]?.id ?? 0, label: p[0]?.name } as Source)
-            }
+            onChange={(p) => set({ id: p[0]?.id ?? 0, label: p[0]?.name })}
           />
-          {source.kind === "watchProvider" ? (
+          {descriptor.meta?.params
+            ?.filter((f) => f.kind === "select" && f.name !== "id")
+            .map((f) => (
+              <ParamInput key={f.name} field={f} source={source} set={set} label={label} />
+            ))}
+          {regionField ? (
             <label className="flex items-center gap-2 text-xs text-fg-muted">
-              {t("Region")}
+              {textOf(regionField.label)}
               <Input
-                value={source.region ?? ""}
+                value={String(source.region ?? "")}
                 placeholder={region}
                 maxLength={2}
                 className="h-8 w-16 uppercase"
                 aria-label={t("{label} region", { label })}
-                onChange={(e) =>
-                  onChange({ ...source, region: e.currentTarget.value.toUpperCase() })
-                }
+                onChange={(e) => set({ region: e.currentTarget.value.toUpperCase() })}
               />
             </label>
           ) : null}
         </div>
       );
     }
-    case "traktList":
-    case "letterboxdList":
-    case "mdblist":
-    case "anilistList": {
-      const placeholder = {
-        traktList: "https://trakt.tv/users/…/lists/…",
-        letterboxdList: "https://letterboxd.com/…/list/…",
-        mdblist: "https://mdblist.com/lists/…",
-        anilistList: "https://anilist.co/user/…/animelist/Completed",
-      }[source.kind];
-      const bad = source.url.trim() !== "" && !isSourceComplete(source);
+    case "urlList": {
+      const field = paramField(descriptor, "url");
+      const url = String(source.url ?? "");
+      const bad = url.trim() !== "" && !isSourceComplete(source as Source);
       return (
         <div className="space-y-1">
           <Input
-            type="url"
-            value={source.url}
-            placeholder={placeholder}
+            type={source.kind === "tmdbUserList" ? "text" : "url"}
+            value={url}
+            placeholder={field?.placeholder}
             aria-label={t("{label} URL", { label })}
             aria-invalid={bad || undefined}
-            onChange={(e) => onChange({ ...source, url: e.currentTarget.value })}
+            onChange={(e) => set({ url: e.currentTarget.value })}
           />
           {bad ? (
             <p className="text-xs text-danger">
-              {t("Enter a full https:// link to a public list.")}
+              {source.kind === "tmdbUserList"
+                ? t("Enter a TMDB list ID or a link to a public TMDB list.")
+                : t("Enter a full https:// link to a public list.")}
             </p>
           ) : source.kind === "traktList" ? (
             <p className="text-xs text-fg-muted">
@@ -205,28 +262,162 @@ function SourceBody({
         </div>
       );
     }
-    case "stevenlu":
+    case "listSelect":
       return (
         <SearchSelect
-          value={source.list}
-          onChange={(v) => v && onChange({ ...source, list: v as typeof source.list })}
-          options={STEVENLU_LISTS}
+          value={String(source.list ?? "")}
+          onChange={(v) => v && set({ list: v })}
+          options={paramOptions(paramField(descriptor, "list"))}
           ariaLabel={t("{label} list", { label })}
           searchable={false}
           {...searchSelectLabels()}
         />
       );
-    case "tmdbDiscover":
+    case "plugin": {
+      const params = (source.params ?? {}) as Record<string, string>;
+      return (
+        <div className="space-y-2">
+          <GenericParams
+            descriptor={descriptor}
+            source={params}
+            label={label}
+            set={(patch) => {
+              const next = { ...params };
+              for (const [key, value] of Object.entries(patch)) next[key] = String(value);
+              set({ params: next });
+            }}
+          />
+          <MaxItems
+            value={typeof source.maxItems === "number" ? source.maxItems : undefined}
+            label={label}
+            onChange={(maxItems) => set({ maxItems })}
+          />
+        </div>
+      );
+    }
+    case "discover":
       return (
         <DiscoverParams
-          params={source.params}
-          onChange={(params) => onChange({ ...source, params })}
+          params={(source.params ?? {}) as Record<string, string>}
+          onChange={(params) => set({ params })}
           label={label}
         />
       );
     case "titles":
-      return <HandPicked keys={source.keys} onChange={(keys) => onChange({ ...source, keys })} />;
+      return (
+        <HandPicked keys={(source.keys ?? []) as string[]} onChange={(keys) => set({ keys })} />
+      );
+    default:
+      return <GenericParams descriptor={descriptor} source={source} set={set} label={label} />;
   }
+}
+
+/** How many items a remote list source reads per refresh (blank: its own limit). */
+function MaxItems({
+  value,
+  label,
+  onChange,
+}: {
+  value?: number;
+  label: string;
+  onChange: (n: number | undefined) => void;
+}) {
+  const id = useId();
+  return (
+    <Field label={t("Maximum items")} htmlFor={id} hint={t("Up to 2,000 items per refresh")}>
+      <Input
+        id={id}
+        type="number"
+        min={1}
+        max={2000}
+        value={value ?? ""}
+        aria-label={t("{label} maximum items", { label })}
+        onChange={(e) => {
+          const n = Math.round(Number(e.currentTarget.value));
+          onChange(e.currentTarget.value === "" || !n ? undefined : Math.min(2000, Math.max(1, n)));
+        }}
+      />
+    </Field>
+  );
+}
+
+/** One served param field, for kinds without a named editor yet. */
+function ParamInput({
+  field,
+  source,
+  set,
+  label,
+}: {
+  field: ParamField;
+  source: Record<string, unknown>;
+  set: (patch: Record<string, unknown>) => void;
+  label: string;
+}) {
+  const value = source[field.name];
+  if (field.kind === "select") {
+    return (
+      <Field label={textOf(field.label)}>
+        <SearchSelect
+          value={String(value ?? "")}
+          onChange={(v) => v !== null && set({ [field.name]: v })}
+          options={paramOptions(field)}
+          ariaLabel={t("{label} {field}", { label, field: textOf(field.label) })}
+          searchable={false}
+          {...searchSelectLabels()}
+        />
+      </Field>
+    );
+  }
+  if (field.kind === "bool") {
+    return (
+      <label className="flex items-center gap-2 text-sm text-fg">
+        <input
+          type="checkbox"
+          checked={value === true || value === "true"}
+          onChange={(e) => set({ [field.name]: e.currentTarget.checked })}
+        />
+        {textOf(field.label)}
+      </label>
+    );
+  }
+  return (
+    <Field label={textOf(field.label)} hint={field.hint ? textOf(field.hint) : undefined}>
+      <Input
+        type={field.kind === "number" ? "number" : field.kind === "url" ? "url" : "text"}
+        value={value === undefined || value === null ? "" : String(value)}
+        placeholder={field.placeholder}
+        aria-label={t("{label} {field}", { label, field: textOf(field.label) })}
+        onChange={(e) =>
+          set({
+            [field.name]:
+              field.kind === "number" ? Number(e.currentTarget.value) : e.currentTarget.value,
+          })
+        }
+      />
+    </Field>
+  );
+}
+
+function GenericParams({
+  descriptor,
+  source,
+  set,
+  label,
+}: {
+  descriptor?: SourceDescriptor;
+  source: Record<string, unknown>;
+  set: (patch: Record<string, unknown>) => void;
+  label: string;
+}) {
+  const params = descriptor?.meta?.params ?? [];
+  if (!params.length) return null;
+  return (
+    <div className="space-y-2">
+      {params.map((f) => (
+        <ParamInput key={f.name} field={f} source={source} set={set} label={label} />
+      ))}
+    </div>
+  );
 }
 
 function DiscoverParams({

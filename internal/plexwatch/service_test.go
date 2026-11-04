@@ -122,6 +122,9 @@ func (f *fakeUpstream) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	tok := r.Header.Get("X-Plex-Token")
+	if bearer := r.Header.Get("Authorization"); strings.HasPrefix(bearer, "Bearer ") {
+		tok = strings.TrimPrefix(bearer, "Bearer ")
+	}
 	f.mu.Lock()
 	if tok != "" {
 		f.tokens = append(f.tokens, tok)
@@ -145,7 +148,7 @@ func (f *fakeUpstream) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		refuse := f.refuseToken
 		f.mu.Unlock()
 		if refuse != "" && tok == refuse {
-			w.WriteHeader(http.StatusForbidden)
+			_, _ = w.Write([]byte(`{"consent":false}`))
 			return
 		}
 		if !f.tokenOK(tok) {
@@ -156,7 +159,14 @@ func (f *fakeUpstream) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if code == 0 {
 			code = http.StatusOK
 		}
+		if code == http.StatusForbidden {
+			_, _ = w.Write([]byte(`{"consent":false}`))
+			return
+		}
 		w.WriteHeader(code)
+		if code == http.StatusOK {
+			_, _ = w.Write([]byte(`{"consent":true}`))
+		}
 	case r.Method == http.MethodPost && r.URL.Path == "/state":
 		if f.entered != nil {
 			select {
@@ -269,7 +279,7 @@ func newHarnessDB(t *testing.T, account int64, db *sql.DB) *harness {
 	h := &harness{st: st, now: clock}
 	st.SetJournalGate(func(ctx context.Context, tx *sql.Tx, userID int64) (int64, bool, error) {
 		var enabled, gen int64
-		err := tx.QueryRowContext(ctx, `SELECT a.enabled, f.generation
+		err := tx.QueryRowContext(ctx, `SELECT a.direction, f.generation
 			FROM plexwatch_account a JOIN plexwatch_fence f ON f.user_id=a.user_id
 			WHERE a.user_id=? AND a.revoked=0 AND a.token<>'' AND a.token_generation=f.generation`, userID).Scan(&enabled, &gen)
 		if errors.Is(err, sql.ErrNoRows) {
@@ -281,14 +291,14 @@ func newHarnessDB(t *testing.T, account int64, db *sql.DB) *harness {
 		if h.afterGate != nil {
 			h.afterGate()
 		}
-		return gen, enabled != 0, nil
+		return gen, enabled&1 != 0, nil
 	})
 	guid := &memGUID{forward: map[core.RatingKey]string{}, reverse: map[string]core.RatingKey{}}
 	fake := &fakeUpstream{accountID: account, eligible: http.StatusOK}
 	srv := httptest.NewServer(fake)
 	t.Cleanup(srv.Close)
 	var logs bytes.Buffer
-	svc, err := New(Options{
+	svc, err := newSupported(Options{
 		DB: db, State: st, GUID: guid, BaseURL: srv.URL, NodeID: "node-a",
 		Logger: slog.New(slog.NewTextHandler(&logs, nil)), Now: clock.Now,
 	})
@@ -353,14 +363,14 @@ func TestConnectRejectsOtherAccount(t *testing.T) {
 func TestDeliveryIsolatesViewersAndCoalesces(t *testing.T) {
 	h := newHarness(t, 42)
 	st := h.connect(t, 2, 42)
-	if st.PlexID != 42 || st.Enabled || !st.Connected || st.Eligibility != "allowed" {
+	if st.PlexID != 42 || st.Direction != 0 || !st.Connected || st.Eligibility != "allowed" {
 		t.Fatalf("status %+v", st)
 	}
 	raw, _ := json.Marshal(st)
 	if bytes.Contains(raw, []byte(viewerToken)) {
 		t.Fatal("status included the token")
 	}
-	if _, err := h.svc.SetEnabled(context.Background(), 2, 42, true); err != nil {
+	if _, err := h.svc.SetDirection(context.Background(), 2, 42, 1, 10); err != nil {
 		t.Fatal(err)
 	}
 	movie := core.MovieKey(550)
@@ -420,7 +430,7 @@ func TestDeliveryIsolatesViewersAndCoalesces(t *testing.T) {
 func TestNewerIntentWinsOverBlockedRetry(t *testing.T) {
 	h := newHarness(t, 42)
 	h.connect(t, 2, 42)
-	if _, err := h.svc.SetEnabled(context.Background(), 2, 42, true); err != nil {
+	if _, err := h.svc.SetDirection(context.Background(), 2, 42, 1, 10); err != nil {
 		t.Fatal(err)
 	}
 	key := core.MovieKey(7)
@@ -456,7 +466,7 @@ func TestNewerIntentWinsOverBlockedRetry(t *testing.T) {
 func TestRestartDeliversOnce(t *testing.T) {
 	h := newHarness(t, 42)
 	h.connect(t, 2, 42)
-	if _, err := h.svc.SetEnabled(context.Background(), 2, 42, true); err != nil {
+	if _, err := h.svc.SetDirection(context.Background(), 2, 42, 1, 10); err != nil {
 		t.Fatal(err)
 	}
 	key := core.MovieKey(1)
@@ -465,7 +475,7 @@ func TestRestartDeliversOnce(t *testing.T) {
 		t.Fatal(err)
 	}
 	_ = h.svc.Close()
-	svc, err := New(Options{
+	svc, err := newSupported(Options{
 		DB: h.svc.db, State: h.st, GUID: h.guid, BaseURL: h.svc.client.plex.String(), NodeID: "node-b",
 		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), Now: h.now.Now,
 	})
@@ -493,7 +503,7 @@ func TestHTTPFailuresAndDisable(t *testing.T) {
 			h := newHarness(t, 42)
 			ctx := context.Background()
 			h.connect(t, 2, 42)
-			if _, err := h.svc.SetEnabled(ctx, 2, 42, true); err != nil {
+			if _, err := h.svc.SetDirection(ctx, 2, 42, 1, 10); err != nil {
 				t.Fatal(err)
 			}
 			key := core.MovieKey(3)
@@ -540,8 +550,8 @@ func TestHTTPFailuresAndDisable(t *testing.T) {
 			if code == 401 && !st.Revoked {
 				t.Fatal("authentication refusal did not revoke")
 			}
-			if code == 403 && st.Enabled {
-				t.Fatal("eligibility refusal left sync on")
+			if code == 403 && st.Problem != "credential" {
+				t.Fatal("scrobbles refusal was not classified as a credential problem")
 			}
 			wantHeld := 0
 			if code == 429 || code == 500 {
@@ -560,7 +570,7 @@ func TestHTTPFailuresAndDisable(t *testing.T) {
 func TestMissingAndAmbiguousGUID(t *testing.T) {
 	h := newHarness(t, 42)
 	h.connect(t, 2, 42)
-	if _, err := h.svc.SetEnabled(context.Background(), 2, 42, true); err != nil {
+	if _, err := h.svc.SetDirection(context.Background(), 2, 42, 1, 10); err != nil {
 		t.Fatal(err)
 	}
 	key := core.EpisodeKey(1, 1, 1)
@@ -599,7 +609,7 @@ func TestImportDoesNotEchoOrGuess(t *testing.T) {
 	h.guid.forward[movie] = guid
 	h.guid.reverse[guid] = movie
 	epGUID := "plex://episode/602e5e2294f08e002d003344"
-	if _, err := h.svc.SetEnabled(context.Background(), 2, 42, true); err != nil {
+	if _, err := h.svc.SetDirection(context.Background(), 2, 42, 1, 10); err != nil {
 		t.Fatal(err)
 	}
 	if err := h.st.Scrobble(context.Background(), 2, movie); err != nil {
@@ -634,7 +644,7 @@ func TestImportDoesNotEchoOrGuess(t *testing.T) {
 func TestDisableDropsPending(t *testing.T) {
 	h := newHarness(t, 42)
 	h.connect(t, 2, 42)
-	if _, err := h.svc.SetEnabled(context.Background(), 2, 42, true); err != nil {
+	if _, err := h.svc.SetDirection(context.Background(), 2, 42, 1, 10); err != nil {
 		t.Fatal(err)
 	}
 	key := core.MovieKey(9)
@@ -642,7 +652,7 @@ func TestDisableDropsPending(t *testing.T) {
 	if err := h.st.Scrobble(context.Background(), 2, key); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := h.svc.SetEnabled(context.Background(), 2, 42, false); err != nil {
+	if _, err := h.svc.SetDirection(context.Background(), 2, 42, 0, 10); err != nil {
 		t.Fatal(err)
 	}
 	if more, err := h.svc.DeliverOnce(context.Background()); err != nil || more {
@@ -672,10 +682,10 @@ func TestRefusedEligibilityDoesNotEnable(t *testing.T) {
 	h := newHarness(t, 42)
 	h.fake.eligible = http.StatusForbidden
 	st := h.connect(t, 2, 42)
-	if st.Eligibility != "refused" || st.Enabled {
+	if st.Eligibility != "refused" || st.Direction != 0 {
 		t.Fatalf("%+v", st)
 	}
-	if _, err := h.svc.SetEnabled(context.Background(), 2, 42, true); !errors.Is(err, ErrNotEligible) {
+	if _, err := h.svc.SetDirection(context.Background(), 2, 42, 1, 10); !errors.Is(err, ErrNotEligible) {
 		t.Fatalf("err %v", err)
 	}
 }
@@ -683,7 +693,7 @@ func TestRefusedEligibilityDoesNotEnable(t *testing.T) {
 func TestOverlappingWorkersSendOnce(t *testing.T) {
 	h := newHarness(t, 42)
 	h.connect(t, 2, 42)
-	if _, err := h.svc.SetEnabled(context.Background(), 2, 42, true); err != nil {
+	if _, err := h.svc.SetDirection(context.Background(), 2, 42, 1, 10); err != nil {
 		t.Fatal(err)
 	}
 	key := core.MovieKey(4)
@@ -691,7 +701,7 @@ func TestOverlappingWorkersSendOnce(t *testing.T) {
 	if err := h.st.Scrobble(context.Background(), 2, key); err != nil {
 		t.Fatal(err)
 	}
-	other, err := New(Options{
+	other, err := newSupported(Options{
 		DB: h.svc.db, State: h.st, GUID: h.guid, BaseURL: h.svc.client.plex.String(), NodeID: "node-b",
 		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), Now: h.now.Now,
 	})
@@ -713,7 +723,7 @@ func TestOverlappingWorkersSendOnce(t *testing.T) {
 func TestDisableDuringLookupDoesNotSend(t *testing.T) {
 	h := newHarness(t, 42)
 	h.connect(t, 2, 42)
-	if _, err := h.svc.SetEnabled(context.Background(), 2, 42, true); err != nil {
+	if _, err := h.svc.SetDirection(context.Background(), 2, 42, 1, 10); err != nil {
 		t.Fatal(err)
 	}
 	key := core.MovieKey(11)
@@ -728,11 +738,11 @@ func TestDisableDuringLookupDoesNotSend(t *testing.T) {
 		done <- err
 	}()
 	time.Sleep(20 * time.Millisecond)
-	if _, err := h.svc.SetEnabled(context.Background(), 2, 42, false); err != nil {
+	if _, err := h.svc.SetDirection(context.Background(), 2, 42, 0, 10); err != nil {
 		t.Fatal(err)
 	}
 	st, err := h.svc.Status(context.Background(), 2, 42)
-	if err != nil || st.Enabled || st.InFlight {
+	if err != nil || st.Direction != 0 || st.InFlight {
 		t.Fatalf("status after disable %+v %v", st, err)
 	}
 	close(h.guid.block)
@@ -750,7 +760,7 @@ func TestDisableDuringLookupDoesNotSend(t *testing.T) {
 func TestInFlightSendIsReportedAndNotRecalled(t *testing.T) {
 	h := newHarness(t, 42)
 	h.connect(t, 2, 42)
-	if _, err := h.svc.SetEnabled(context.Background(), 2, 42, true); err != nil {
+	if _, err := h.svc.SetDirection(context.Background(), 2, 42, 1, 10); err != nil {
 		t.Fatal(err)
 	}
 	key := core.MovieKey(12)
@@ -766,11 +776,11 @@ func TestInFlightSendIsReportedAndNotRecalled(t *testing.T) {
 		done <- err
 	}()
 	<-h.fake.entered
-	if _, err := h.svc.SetEnabled(context.Background(), 2, 42, false); err != nil {
+	if _, err := h.svc.SetDirection(context.Background(), 2, 42, 0, 10); err != nil {
 		t.Fatal(err)
 	}
 	st, err := h.svc.Status(context.Background(), 2, 42)
-	if err != nil || !st.InFlight || st.Enabled {
+	if err != nil || !st.InFlight || st.Direction != 0 {
 		t.Fatalf("in flight %+v %v", st, err)
 	}
 	close(h.fake.blocked)
@@ -795,7 +805,7 @@ func TestInFlightSendIsReportedAndNotRecalled(t *testing.T) {
 func TestOldToken401DoesNotRevokeReplacement(t *testing.T) {
 	h := newHarness(t, 42)
 	h.connect(t, 2, 42)
-	if _, err := h.svc.SetEnabled(context.Background(), 2, 42, true); err != nil {
+	if _, err := h.svc.SetDirection(context.Background(), 2, 42, 1, 10); err != nil {
 		t.Fatal(err)
 	}
 	key := core.MovieKey(13)
@@ -822,7 +832,7 @@ func TestOldToken401DoesNotRevokeReplacement(t *testing.T) {
 	if _, err := h.svc.FinishPIN(context.Background(), 2, 42); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := h.svc.SetEnabled(context.Background(), 2, 42, true); err != nil {
+	if _, err := h.svc.SetDirection(context.Background(), 2, 42, 1, 10); err != nil {
 		t.Fatal(err)
 	}
 	close(h.fake.blocked)
@@ -953,7 +963,7 @@ func TestConsentStaysOnTheCheckedGeneration(t *testing.T) {
 	}
 
 	h.connect(t, 2, 42)
-	if _, err := h.svc.SetEnabled(ctx, 2, 42, true); err != nil {
+	if _, err := h.svc.SetDirection(ctx, 2, 42, 1, 10); err != nil {
 		t.Fatal(err)
 	}
 	old, ok, err := h.svc.loadAccount(ctx, 2)
@@ -970,7 +980,7 @@ func TestConsentStaysOnTheCheckedGeneration(t *testing.T) {
 	if _, err := h.svc.FinishPIN(ctx, 2, 42); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := h.svc.SetEnabled(ctx, 2, 42, true); err != nil {
+	if _, err := h.svc.SetDirection(ctx, 2, 42, 1, 10); err != nil {
 		t.Fatal(err)
 	}
 	h.fake.mu.Lock()
@@ -980,7 +990,7 @@ func TestConsentStaysOnTheCheckedGeneration(t *testing.T) {
 		t.Fatal(err)
 	}
 	st, err := h.svc.Status(ctx, 2, 42)
-	if err != nil || !st.Enabled || st.Eligibility != "allowed" || st.Revoked {
+	if err != nil || st.Direction == 0 || st.Eligibility != "allowed" || st.Revoked {
 		t.Fatalf("stale refusal changed the replacement: %+v %v", st, err)
 	}
 
@@ -1018,7 +1028,7 @@ func TestContentionDoesNotStarveOtherTitles(t *testing.T) {
 	h := newHarness(t, 42)
 	ctx := context.Background()
 	h.connect(t, 2, 42)
-	if _, err := h.svc.SetEnabled(ctx, 2, 42, true); err != nil {
+	if _, err := h.svc.SetDirection(ctx, 2, 42, 1, 10); err != nil {
 		t.Fatal(err)
 	}
 	older := core.MovieKey(31)
@@ -1061,10 +1071,10 @@ func TestClusterFenceExpiresAndStaysShared(t *testing.T) {
 	h := newHarness(t, 42)
 	ctx := context.Background()
 	h.connect(t, 2, 42)
-	if _, err := h.svc.SetEnabled(ctx, 2, 42, true); err != nil {
+	if _, err := h.svc.SetDirection(ctx, 2, 42, 1, 10); err != nil {
 		t.Fatal(err)
 	}
-	other, err := New(Options{
+	other, err := newSupported(Options{
 		DB: h.svc.db, State: h.st, GUID: h.guid, BaseURL: h.svc.client.plex.String(), NodeID: "node-b",
 		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), Now: h.now.Now,
 	})
@@ -1111,11 +1121,11 @@ func TestClusterFenceExpiresAndStaysShared(t *testing.T) {
 		done <- err
 	}()
 	<-h.fake.entered
-	if _, err := other.SetEnabled(ctx, 2, 42, false); err != nil {
+	if _, err := other.SetDirection(ctx, 2, 42, 0, 10); err != nil {
 		t.Fatal(err)
 	}
 	st, err = other.Status(ctx, 2, 42)
-	if err != nil || !st.InFlight || st.Enabled {
+	if err != nil || !st.InFlight || st.Direction != 0 {
 		t.Fatalf("other node missed the in-flight send %+v %v", st, err)
 	}
 	close(h.fake.blocked)
@@ -1256,7 +1266,7 @@ func TestStalePermitReleaseDoesNotClearNewer(t *testing.T) {
 	h := newHarness(t, 42)
 	ctx := context.Background()
 	h.connect(t, 2, 42)
-	if _, err := h.svc.SetEnabled(ctx, 2, 42, true); err != nil {
+	if _, err := h.svc.SetDirection(ctx, 2, 42, 1, 10); err != nil {
 		t.Fatal(err)
 	}
 	row, attempt := h.claimedIntent(t, 2)
@@ -1303,7 +1313,7 @@ func TestConcurrentAcquireKeepsEachPermit(t *testing.T) {
 	h := newHarness(t, 42)
 	ctx := context.Background()
 	h.connect(t, 2, 42)
-	if _, err := h.svc.SetEnabled(ctx, 2, 42, true); err != nil {
+	if _, err := h.svc.SetDirection(ctx, 2, 42, 1, 10); err != nil {
 		t.Fatal(err)
 	}
 	row, attempt := h.claimedIntent(t, 2)
@@ -1352,11 +1362,11 @@ func TestStaleEnableDoesNotUndoLaterTransition(t *testing.T) {
 		}
 		errc := make(chan error, 1)
 		go func() {
-			_, err := h.svc.SetEnabled(ctx, 2, 42, true)
+			_, err := h.svc.SetDirection(ctx, 2, 42, 1, 10)
 			errc <- err
 		}()
 		<-started
-		if _, err := h.svc.SetEnabled(ctx, 2, 42, false); err != nil {
+		if _, err := h.svc.SetDirection(ctx, 2, 42, 0, 10); err != nil {
 			t.Fatal(err)
 		}
 		close(release)
@@ -1364,7 +1374,7 @@ func TestStaleEnableDoesNotUndoLaterTransition(t *testing.T) {
 			t.Fatal(err)
 		}
 		st, err := h.svc.Status(ctx, 2, 42)
-		if err != nil || st.Enabled {
+		if err != nil || st.Direction != 0 {
 			t.Fatalf("stale enable undid disable %+v %v", st, err)
 		}
 	})
@@ -1378,7 +1388,7 @@ func TestStaleEnableDoesNotUndoLaterTransition(t *testing.T) {
 		}
 		errc := make(chan error, 1)
 		go func() {
-			_, err := h.svc.SetEnabled(ctx, 2, 42, true)
+			_, err := h.svc.SetDirection(ctx, 2, 42, 1, 10)
 			errc <- err
 		}()
 		<-started
@@ -1396,15 +1406,15 @@ func TestStaleEnableDoesNotUndoLaterTransition(t *testing.T) {
 			t.Fatal(err)
 		}
 		st, err := h.svc.Status(ctx, 2, 42)
-		if err != nil || st.Enabled || !st.Connected {
+		if err != nil || st.Direction != 0 || !st.Connected {
 			t.Fatalf("stale enable armed the replacement %+v %v", st, err)
 		}
 		h.svc.beforeEnable = nil
-		if _, err := h.svc.SetEnabled(ctx, 2, 42, true); err != nil {
+		if _, err := h.svc.SetDirection(ctx, 2, 42, 1, 10); err != nil {
 			t.Fatal(err)
 		}
 		st, err = h.svc.Status(ctx, 2, 42)
-		if err != nil || !st.Enabled {
+		if err != nil || st.Direction == 0 {
 			t.Fatalf("fresh enable %+v %v", st, err)
 		}
 	})
@@ -1414,7 +1424,7 @@ func TestStaleDeliveryDoesNotReleaseReplacement(t *testing.T) {
 	h := newHarness(t, 42)
 	ctx := context.Background()
 	h.connect(t, 2, 42)
-	if _, err := h.svc.SetEnabled(ctx, 2, 42, true); err != nil {
+	if _, err := h.svc.SetDirection(ctx, 2, 42, 1, 10); err != nil {
 		t.Fatal(err)
 	}
 	key := core.MovieKey(81)
@@ -1473,14 +1483,14 @@ func TestIntentAfterDisableIsNotSentOnEnable(t *testing.T) {
 	h := newHarness(t, 42)
 	ctx := context.Background()
 	h.connect(t, 2, 42)
-	if _, err := h.svc.SetEnabled(ctx, 2, 42, true); err != nil {
+	if _, err := h.svc.SetDirection(ctx, 2, 42, 1, 10); err != nil {
 		t.Fatal(err)
 	}
 	var observed int64
 	if err := h.svc.db.QueryRow(`SELECT generation FROM plexwatch_fence WHERE user_id=2`).Scan(&observed); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := h.svc.SetEnabled(ctx, 2, 42, false); err != nil {
+	if _, err := h.svc.SetDirection(ctx, 2, 42, 0, 10); err != nil {
 		t.Fatal(err)
 	}
 	late := core.MovieKey(82)
@@ -1488,7 +1498,7 @@ func TestIntentAfterDisableIsNotSentOnEnable(t *testing.T) {
 		VALUES(?,?,?,?,?,?)`, 2, int64(late), "watch", "complete", h.now.Now().UnixNano(), observed); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := h.svc.SetEnabled(ctx, 2, 42, true); err != nil {
+	if _, err := h.svc.SetDirection(ctx, 2, 42, 1, 10); err != nil {
 		t.Fatal(err)
 	}
 	h.guid.forward[late] = "plex://movie/5d776b8ead5437001f7a0082"
@@ -1528,7 +1538,7 @@ func TestIntentCommittedAfterDisableIsNotSent(t *testing.T) {
 	}
 	ctx := context.Background()
 	h.connect(t, 2, 42)
-	if _, err := h.svc.SetEnabled(ctx, 2, 42, true); err != nil {
+	if _, err := h.svc.SetDirection(ctx, 2, 42, 1, 10); err != nil {
 		t.Fatal(err)
 	}
 	var observed int64
@@ -1547,7 +1557,7 @@ func TestIntentCommittedAfterDisableIsNotSent(t *testing.T) {
 		errc <- h.st.Scrobble(ctx, 2, late)
 	}()
 	<-started
-	if _, err := h.svc.SetEnabled(ctx, 2, 42, false); err != nil {
+	if _, err := h.svc.SetDirection(ctx, 2, 42, 0, 10); err != nil {
 		t.Fatal(err)
 	}
 	close(release)
@@ -1555,7 +1565,7 @@ func TestIntentCommittedAfterDisableIsNotSent(t *testing.T) {
 		t.Fatal(err)
 	}
 	h.afterGate = nil
-	if _, err := h.svc.SetEnabled(ctx, 2, 42, true); err != nil {
+	if _, err := h.svc.SetDirection(ctx, 2, 42, 1, 10); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := h.svc.DeliverOnce(ctx); err != nil {
@@ -1580,7 +1590,7 @@ func TestLookupThenReenableDoesNotSendOldIntent(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			h := newHarness(t, 42)
 			h.connect(t, 2, 42)
-			if _, err := h.svc.SetEnabled(ctx, 2, 42, true); err != nil {
+			if _, err := h.svc.SetDirection(ctx, 2, 42, 1, 10); err != nil {
 				t.Fatal(err)
 			}
 			key := core.MovieKey(90)
@@ -1607,10 +1617,10 @@ func TestLookupThenReenableDoesNotSendOldIntent(t *testing.T) {
 				if _, err := h.svc.FinishPIN(ctx, 2, 42); err != nil {
 					t.Fatal(err)
 				}
-			} else if _, err := h.svc.SetEnabled(ctx, 2, 42, false); err != nil {
+			} else if _, err := h.svc.SetDirection(ctx, 2, 42, 0, 10); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := h.svc.SetEnabled(ctx, 2, 42, true); err != nil {
+			if _, err := h.svc.SetDirection(ctx, 2, 42, 1, 10); err != nil {
 				t.Fatal(err)
 			}
 			close(h.guid.block)
@@ -1631,7 +1641,7 @@ func TestLookupSupersessionDoesNotSendStaleAttempt(t *testing.T) {
 	h := newHarness(t, 42)
 	ctx := context.Background()
 	h.connect(t, 2, 42)
-	if _, err := h.svc.SetEnabled(ctx, 2, 42, true); err != nil {
+	if _, err := h.svc.SetDirection(ctx, 2, 42, 1, 10); err != nil {
 		t.Fatal(err)
 	}
 	key := core.MovieKey(91)
@@ -1667,7 +1677,7 @@ func TestTransientFenceReadStaysRetryable(t *testing.T) {
 	h := newHarness(t, 42)
 	ctx := context.Background()
 	h.connect(t, 2, 42)
-	if _, err := h.svc.SetEnabled(ctx, 2, 42, true); err != nil {
+	if _, err := h.svc.SetDirection(ctx, 2, 42, 1, 10); err != nil {
 		t.Fatal(err)
 	}
 	key := core.MovieKey(92)
@@ -1711,7 +1721,7 @@ func TestAdmissionHoldsFenceUntilPermit(t *testing.T) {
 	}
 	ctx := context.Background()
 	h.connect(t, 2, 42)
-	if _, err := h.svc.SetEnabled(ctx, 2, 42, true); err != nil {
+	if _, err := h.svc.SetDirection(ctx, 2, 42, 1, 10); err != nil {
 		t.Fatal(err)
 	}
 	key := core.MovieKey(93)
@@ -1731,7 +1741,7 @@ func TestAdmissionHoldsFenceUntilPermit(t *testing.T) {
 	}()
 	<-held
 	dctx, cancel := context.WithTimeout(ctx, 400*time.Millisecond)
-	_, err := h.svc.SetEnabled(dctx, 2, 42, false)
+	_, err := h.svc.SetDirection(dctx, 2, 42, 0, 10)
 	cancel()
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("disable during admission: %v", err)
@@ -1740,7 +1750,7 @@ func TestAdmissionHoldsFenceUntilPermit(t *testing.T) {
 	if err := <-done; err != nil {
 		t.Fatal(err)
 	}
-	if _, err := h.svc.SetEnabled(ctx, 2, 42, false); err != nil {
+	if _, err := h.svc.SetDirection(ctx, 2, 42, 0, 10); err != nil {
 		t.Fatal(err)
 	}
 }

@@ -21,6 +21,7 @@ import (
 	"os"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/braedonsaunders/ether/internal/clusterbus"
@@ -97,6 +98,13 @@ type Options struct {
 	StoppedGrace time.Duration
 	// PrepareTimeout bounds resolve+open+probe (default 90s).
 	PrepareTimeout time.Duration
+	// AbandonedPrepareGrace keeps a Prepare running this long after its
+	// last caller gave up (default 30s; negative cancels at once). A Plex
+	// client that drops its decision request follows it with start.mpd,
+	// start.m3u8 or a retry, which joins the same preparation instead of
+	// inheriting its cancellation (#304). Unclaimed work is released when
+	// the grace ends.
+	AbandonedPrepareGrace time.Duration
 	// ProbeTimeout bounds one Transcoder.Probe (default 30s).
 	ProbeTimeout time.Duration
 	// VerifyNativeProbe runs ffprobe in the background after every native
@@ -166,6 +174,9 @@ func (o *Options) defaults() {
 	def(&o.WriteStallTimeout, o.IdleTimeout)
 	def(&o.StoppedGrace, time.Minute)
 	def(&o.PrepareTimeout, 90*time.Second)
+	if o.AbandonedPrepareGrace == 0 {
+		o.AbandonedPrepareGrace = 30 * time.Second
+	}
 	def(&o.ProbeTimeout, 30*time.Second)
 	def(&o.FailoverTimeout, 90*time.Second)
 	def(&o.PinInterval, 5*time.Minute)
@@ -227,8 +238,10 @@ type Manager struct {
 	resumeSaveCond      *sync.Cond
 	reg                 *registry // nil on a standalone server
 	// titleInval broadcasts title invalidations (nil standalone).
-	titleInval *clusterbus.Invalidator
-	bufs       sync.Pool
+	titleInval           *clusterbus.Invalidator
+	bufs                 sync.Pool
+	swapLatency          swapLatencyWindow
+	reserveConfigVersion atomic.Uint64
 
 	cfgMu sync.RWMutex
 	cfg   config.Config
@@ -251,7 +264,8 @@ type Manager struct {
 	lastCaps       map[int64]core.ClientCaps
 	warm           map[identity]*warmEntry
 	warmRequests   map[warmBudgetKey][]time.Time
-	warmMisses     map[identity]time.Time // warm-ups that ended without a source (warmMissTTL)
+	warmMisses     map[identity]time.Time       // warm-ups that ended without a source (warmMissTTL)
+	stalePrefers   map[stalePreferKey]time.Time // picked releases that fell back (stalePreferTTL)
 
 	pinMu        sync.Mutex
 	livePins     map[string]int
@@ -306,12 +320,73 @@ func (m *Manager) hasFlightLocked(id identity) bool {
 
 // flight is one in-progress Prepare shared by concurrent callers.
 type flight struct {
-	sources *sourceLifetime
-	done    chan struct{}
-	cancel  context.CancelFunc
-	waiters int
-	sess    *session
-	err     error
+	sources  *sourceLifetime
+	done     chan struct{}
+	cancel   context.CancelFunc
+	waiters  int
+	detached bool
+	// playRequest: a play request (Prepare, or a bounded PrepareWithin
+	// wait) joined, so the flight outlives its callers for a grace
+	// (abandonFlightLocked). Surface plans and detail pages cancel at once.
+	playRequest bool
+	// playAt is when the first play request joined (experience start time).
+	playAt time.Time
+	// abandoned counts the times the last caller left; a grace timer
+	// acts only if no caller joined since it was armed.
+	abandoned int
+	sess      *session
+	err       error
+}
+
+// releaseLabel prefers the release name and falls back to the indexer.
+func releaseLabel(r core.Release) string {
+	if r.Name != "" {
+		return r.Name
+	}
+	return r.Indexer
+}
+
+// cacheTitle is the display title stored with cache metadata.
+func cacheTitle(t core.Title) string {
+	if t.Type == core.TypeEpisode {
+		return fmt.Sprintf("%s · S%02dE%02d · %s", t.ShowTitle, t.Season, t.Episode, t.Title)
+	}
+	return t.Title
+}
+
+// noteCause records a coarse cache reason when the cache supports provenance.
+func (m *Manager) noteCause(releaseID, cause string) {
+	if releaseID == "" {
+		return
+	}
+	if rec, ok := m.deps.Cache.(core.CacheProvenanceRecorder); ok {
+		rec.RecordProvenance(core.CacheProvenance{ReleaseID: releaseID, Cause: cause})
+	}
+}
+
+// noteWarmCause records the source and reason a speculative open established.
+func (m *Manager) noteWarmCause(res *core.Resolution, src core.MediaSource, reason, title string) {
+	if res == nil || src == nil {
+		return
+	}
+	var cause string
+	switch reason {
+	case core.PrewarmDetail:
+		cause = core.CacheCauseDetailWarm
+	case core.PrewarmTrailer:
+		cause = core.CacheCauseTrailerWarm
+	case core.PrewarmPostPlay:
+		cause = core.CacheCausePostPlay
+	case core.PrewarmBrowse:
+		cause = core.CacheCauseBrowseWarm
+	case core.PrewarmNextEpisode:
+		cause = core.CacheCauseNextEpisode
+	default:
+		return
+	}
+	if rec, ok := m.deps.Cache.(core.CacheProvenanceRecorder); ok {
+		rec.RecordProvenance(core.CacheProvenance{ReleaseID: res.Release.ID, File: src.Name(), Size: src.Size(), Source: releaseLabel(res.Release), Title: title, Cause: cause})
+	}
 }
 
 // Pin reasons used with core.SegmentCache.
@@ -583,11 +658,24 @@ var errDraining = fmt.Errorf("%w: this server is restarting for an update; try a
 // SetConfig applies a new config snapshot (stream limits).
 func (m *Manager) SetConfig(cfg config.Config) {
 	m.cfgMu.Lock()
+	previousReadAhead := m.cfg.Cache.PlaybackReadAhead()
+	previousDebridReadAhead := m.cfg.Debrid.ReadAheadChunks
+	previousDebridChunk := m.cfg.Debrid.ChunkBytes
 	m.cfg = cfg
+	m.reserveConfigVersion.Add(1)
 	m.cfgMu.Unlock()
 	m.mu.Lock()
 	m.warm = map[identity]*warmEntry{}
+	var sessions []*session
+	if cfg.Cache.Mode == "off" || cfg.Cache.PlaybackReadAhead() < previousReadAhead || cfg.Debrid.ReadAheadChunks != previousDebridReadAhead || cfg.Debrid.ChunkBytes != previousDebridChunk {
+		for _, s := range m.sessions {
+			sessions = append(sessions, s)
+		}
+	}
 	m.mu.Unlock()
+	for _, s := range sessions {
+		s.reserve.stop()
+	}
 }
 
 func (m *Manager) config() config.Config {
@@ -734,6 +822,20 @@ func (m *Manager) prepareEntry(ctx context.Context, user *core.User, key core.Ra
 }
 
 func (m *Manager) prepareOwnedEntry(ctx context.Context, user *core.User, key core.RatingKey, caps core.ClientCaps, prefer string, exact, deferSupersession bool) (*core.PlaySession, core.SourceRetirement, error) {
+	return m.prepareOwnedWithin(ctx, 0, user, key, caps, prefer, exact, deferSupersession)
+}
+
+// PrepareWithin leaves a timed-out flight running for a subsequent retry.
+// The prepared source does not supersede the client's current session.
+func (m *Manager) PrepareWithin(ctx context.Context, wait time.Duration, user *core.User, key core.RatingKey, caps core.ClientCaps, release string, exact bool) (*core.PlaySession, error) {
+	if exact && release == "" {
+		return nil, core.ErrNotAvailable
+	}
+	ps, _, err := m.prepareOwnedWithin(ctx, wait, user, key, caps, release, exact, true)
+	return ps, err
+}
+
+func (m *Manager) prepareOwnedWithin(ctx context.Context, wait time.Duration, user *core.User, key core.RatingKey, caps core.ClientCaps, prefer string, exact, deferSupersession bool) (*core.PlaySession, core.SourceRetirement, error) {
 	if user == nil {
 		return nil, nil, core.ErrUnauthorized
 	}
@@ -746,15 +848,25 @@ func (m *Manager) prepareOwnedEntry(ctx context.Context, user *core.User, key co
 	if deferSupersession {
 		id.variant, id.exact = prefer, exact
 	}
+	picked := prefer
+	arrived, play := m.now(), !deferSupersession || wait > 0
 	for {
 		m.mu.Lock()
 		if m.closed {
 			m.mu.Unlock()
 			return nil, nil, errors.New("playback: shutting down")
 		}
+		if prefer != "" && !exact && m.preferenceStaleLocked(key, prefer, m.now()) {
+			// The picked version fell back moments ago: this open is the
+			// automatic choice (stale_prefer.go).
+			prefer = ""
+			if deferSupersession {
+				id.variant = ""
+			}
+		}
 		m.lastCaps[user.ID] = caps
 		if s := m.byIdent[id]; s != nil {
-			if s.exact == exact && (prefer == "" || s.current().releaseID() == prefer) {
+			if s.exact == exact && (prefer == "" || s.current().releaseID() == prefer || (!exact && s.prefer == prefer)) {
 				now := m.now()
 				if !m.sessionCountsForLimit(s, now) {
 					cfg := m.config()
@@ -770,8 +882,14 @@ func (m *Manager) prepareOwnedEntry(ctx context.Context, user *core.User, key co
 						return nil, nil, fmt.Errorf("%w: server is at its limit of %d streams", core.ErrStreamLimit, serverLimit)
 					}
 				}
+				s.claimed = true
 				m.mu.Unlock()
 				s.touch(now)
+				if play {
+					s.mu.Lock()
+					s.exp.noteRequest(arrived)
+					s.mu.Unlock()
+				}
 				m.reg.poke()
 				return s.snapshot(now), s.sources, nil
 			}
@@ -785,6 +903,28 @@ func (m *Manager) prepareOwnedEntry(ctx context.Context, user *core.User, key co
 	}
 	fk := flightKey{id: id, prefer: prefer, exact: exact, deferSupersession: deferSupersession}
 	f := m.flights[fk]
+	if f == nil && !deferSupersession && prefer == "" && !exact {
+		// The automatic choice a bounded decision wait (PrepareWithin) is
+		// already preparing is the same source: join it rather than
+		// resolving and opening a second one in parallel.
+		alt := fk
+		alt.deferSupersession = true
+		if f = m.flights[alt]; f != nil {
+			fk = alt
+		}
+	}
+	if f == nil && picked != prefer {
+		// The open that found the pick stale is still preparing the
+		// automatic choice under the pick's flight: join it.
+		alt := fk
+		alt.prefer = picked
+		if deferSupersession {
+			alt.id.variant = picked
+		}
+		if f = m.flights[alt]; f != nil {
+			fk = alt
+		}
+	}
 	if f == nil {
 		wctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), m.opts.PrepareTimeout)
 		f = &flight{sources: newSourceLifetime(user.ID, string(caps.Protocol), caps.ClientID), done: make(chan struct{}), cancel: cancel}
@@ -793,34 +933,110 @@ func (m *Manager) prepareOwnedEntry(ctx context.Context, user *core.User, key co
 		go m.runFlight(wctx, f, fk, &u, caps)
 	}
 	f.waiters++
+	f.playRequest = f.playRequest || play
+	if play && f.playAt.IsZero() {
+		f.playAt = arrived
+	}
 	m.mu.Unlock()
+	var timeout <-chan time.Time
+	if wait > 0 {
+		timer := time.NewTimer(wait)
+		defer timer.Stop()
+		timeout = timer.C
+	}
 
 	select {
 	case <-f.done:
 		if f.err != nil {
 			return nil, f.sources, f.err
 		}
+		if play {
+			f.sess.mu.Lock()
+			f.sess.exp.noteRequest(arrived)
+			f.sess.mu.Unlock()
+		}
 		return f.sess.snapshot(m.now()), f.sess.sources, nil
 	case <-ctx.Done():
 		m.mu.Lock()
-		if f.waiters--; f.waiters == 0 {
-			f.cancel() // nobody wants it any more
+		if f.waiters--; f.waiters == 0 && !f.detached {
+			m.abandonFlightLocked(fk, f)
 		}
 		m.mu.Unlock()
 		return nil, f.sources, ctx.Err()
+	case <-timeout:
+		m.mu.Lock()
+		f.waiters--
+		f.detached = true
+		m.mu.Unlock()
+		return nil, f.sources, core.ErrPrepareSlow
 	}
+}
+
+// abandonFlightLocked handles a flight whose last caller gave up. One
+// play request's cancellation must not decide for the next: the flight
+// keeps running for AbandonedPrepareGrace so a following start or retry
+// joins it. Only then, still unwanted, is it cancelled, or its prepared session
+// released. A cancelled flight leaves m.flights at once, so a later
+// caller starts a new one instead of inheriting context.Canceled.
+func (m *Manager) abandonFlightLocked(fk flightKey, f *flight) {
+	if !f.playRequest || m.opts.AbandonedPrepareGrace < 0 {
+		m.cancelFlightLocked(fk, f)
+		return
+	}
+	f.abandoned++
+	gen := f.abandoned
+	time.AfterFunc(m.opts.AbandonedPrepareGrace, func() { m.expireAbandonedFlight(fk, f, gen) })
+}
+
+func (m *Manager) cancelFlightLocked(fk flightKey, f *flight) {
+	if m.flights[fk] == f {
+		delete(m.flights, fk)
+	}
+	f.cancel()
+}
+
+func (m *Manager) expireAbandonedFlight(fk flightKey, f *flight, gen int) {
+	m.mu.Lock()
+	if f.waiters > 0 || f.detached || f.abandoned != gen {
+		m.mu.Unlock()
+		return
+	}
+	select {
+	case <-f.done:
+	default:
+		m.cancelFlightLocked(fk, f)
+		m.mu.Unlock()
+		return
+	}
+	s := f.sess
+	if s == nil || s.claimed || m.sessions[s.id] != s {
+		m.mu.Unlock()
+		return
+	}
+	g := m.detachSessionLocked(s)
+	m.mu.Unlock()
+	m.log.Debug("abandoned preparation was not claimed; releasing it", "session", s.id, "key", fk.id.key)
+	m.finishSessionStop(s, g)
 }
 
 func (m *Manager) runFlight(ctx context.Context, f *flight, fk flightKey, user *core.User, caps core.ClientCaps) {
 	defer close(f.done)
 	defer f.cancel()
-	s, err := m.prepare(ctx, fk.id, user, caps, fk.prefer, fk.exact, fk.deferSupersession, f.sources)
+	s, err := m.prepare(ctx, fk.id, user, caps, fk.prefer, fk.exact, fk.deferSupersession, f)
 	m.mu.Lock()
-	delete(m.flights, fk)
+	if m.flights[fk] == f {
+		delete(m.flights, fk)
+	}
 	if err != nil && m.byIdent[fk.id] == nil {
 		delete(m.channelGroups, fk.id)
 	}
+	playAt := f.playAt
 	m.mu.Unlock()
+	if s != nil && !playAt.IsZero() {
+		s.mu.Lock()
+		s.exp.noteRequest(playAt)
+		s.mu.Unlock()
+	}
 	f.sess, f.err = s, err
 	if err != nil {
 		f.sources.seal()
@@ -828,7 +1044,8 @@ func (m *Manager) runFlight(ctx context.Context, f *flight, fk flightKey, user *
 	}
 }
 
-func (m *Manager) prepare(ctx context.Context, id identity, user *core.User, caps core.ClientCaps, prefer string, exact, deferSupersession bool, sources *sourceLifetime) (*session, error) {
+func (m *Manager) prepare(ctx context.Context, id identity, user *core.User, caps core.ClientCaps, prefer string, exact, deferSupersession bool, f *flight) (*session, error) {
+	sources := f.sources
 	log := m.log.With("user", userLabel(user), "client", caps.ClientID, "key", id.key)
 	if err := m.reserve(ctx, user, id); err != nil {
 		log.Info("stream limit", "err", err)
@@ -915,15 +1132,18 @@ func (m *Manager) prepare(ctx context.Context, id identity, user *core.User, cap
 		// Concurrent flights with different exactness must never let an exact
 		// caller inherit a fallback-enabled session, even for the same release.
 		current := existing.current()
-		if existing.exact != exact || (exact && (current == nil || current.releaseID() != prefer)) {
+		if existing.exact != exact || (prefer != "" && (current == nil || (current.releaseID() != prefer && (exact || existing.prefer != prefer)))) {
 			return nil, core.ErrNotAvailable
 		}
 		return existing, nil
 	}
 	var replaced []string
+	// Nobody waits for an abandoned flight: it must not end the client's
+	// other playback, which may be the title it went on to.
+	abandoned := f.waiters == 0 && !f.detached
 	for _, o := range m.sessions {
 		// Broker supersession occurs on Open, not while a plan is prepared.
-		if !deferSupersession && o.ident.userID == id.userID && o.ident.clientID == id.clientID && o.ident.surface == id.surface && o.ident.key != id.key {
+		if !deferSupersession && !abandoned && o.ident.userID == id.userID && o.ident.clientID == id.clientID && o.ident.surface == id.surface && o.ident.key != id.key {
 			replaced = append(replaced, o.id)
 		}
 	}
@@ -942,12 +1162,10 @@ func (m *Manager) prepare(ctx context.Context, id identity, user *core.User, cap
 	}
 	m.reg.poke()
 	m.saveResume(ctx, s, g)
-	if c, ok := m.deps.Cache.(core.CachePlayRecorder); ok {
-		title := s.title.Title
-		if s.title.ShowTitle != "" {
-			title = s.title.ShowTitle + " · " + title
-		}
-		c.RecordPlay(g.releaseID(), title, g.src.Size())
+	if rec, ok := m.deps.Cache.(core.CacheProvenanceRecorder); ok {
+		rec.RecordProvenance(core.CacheProvenance{ReleaseID: g.releaseID(), File: g.src.Name(), Size: g.src.Size(), Source: releaseLabel(g.res.Release), Title: cacheTitle(*s.title), Cause: core.CacheCausePlaying, Play: true})
+	} else if c, ok := m.deps.Cache.(core.CachePlayRecorder); ok {
+		c.RecordPlay(g.releaseID(), cacheTitle(*s.title), g.src.Size())
 	}
 	ginfo := g.infoSnapshot()
 	log.Debug("playback session started", "session", s.id, "release", g.res.Release.Name,
@@ -1024,7 +1242,33 @@ func (m *Manager) Session(id string) (*core.PlaySession, bool) {
 	if s == nil {
 		return nil, false
 	}
-	return s.snapshot(m.now()), true
+	return m.snapshotWithEncoder(s, m.now()), true
+}
+
+func (m *Manager) snapshotWithEncoder(s *session, now time.Time) *core.PlaySession {
+	ps := s.snapshot(now)
+	if m.deps.HLSLookup == nil {
+		return ps
+	}
+	hls, ok := m.deps.HLSLookup(s.id)
+	if !ok || hls == nil {
+		return ps
+	}
+	if source, ok := hls.(interface{ EncoderStatus() *core.EncoderStatus }); ok {
+		ps.Encoder = source.EncoderStatus()
+		if e := ps.Encoder; e != nil {
+			s.mu.Lock()
+			if !s.viewerAt.IsZero() {
+				p := s.viewerPosition
+				e.PlayerPosition = &p
+			}
+			e.RecoveryReason, e.Runway = s.encoderRecoveryReason, s.encoderRunway
+			s.mu.Unlock()
+			ps.Decision, ps.DecisionVideoCopy, ps.DecisionAudioCopy = e.Decision.Kind, e.Decision.VideoCopy, e.Decision.AudioCopy
+			ps.DecisionReason = e.Decision.Reason
+		}
+	}
+	return ps
 }
 
 // SessionFor finds the live session of a client for a title.
@@ -1120,6 +1364,80 @@ func (m *Manager) setSurfacePrepared(id string, prepared bool) bool {
 	return true
 }
 
+// addBuffered reports how far media is ready ahead of the current playhead.
+// HLS sessions publish a decoded buffer; direct sources report downloaded
+// read-ahead bytes.
+func (m *Manager) addBuffered(ps *core.PlaySession) {
+	if ps == nil {
+		return
+	}
+	if m.deps.HLSLookup != nil {
+		if hls, ok := m.deps.HLSLookup(ps.ID); ok && hls != nil {
+			if src, ok := hls.(core.RecoveryBufferSource); ok {
+				b := src.RecoveryBuffer()
+				if b.ReadyUntil > b.Position {
+					ps.BufferedUntil = b.ReadyUntil
+					ps.BufferedBytes = bytesForDuration(ps.Info, b.ReadyUntil-b.Position)
+					return
+				}
+			}
+		}
+	}
+	src, ok := ps.Source.(core.BufferedSource)
+	if !ok {
+		return
+	}
+	ps.BufferedBytes = src.BufferedAhead()
+	if ps.BufferedBytes <= 0 || ps.Info.Size <= 0 || ps.Info.Duration <= 0 {
+		return
+	}
+	ahead := time.Duration(float64(ps.BufferedBytes) / float64(ps.Info.Size) * float64(ps.Info.Duration))
+	pos := time.Duration(0)
+	if ps.ViewOffset != nil {
+		pos = time.Duration(*ps.ViewOffset) * time.Millisecond
+	}
+	ps.BufferedUntil = pos + ahead
+}
+
+// addReserved counts a completed source reserve (reserve.go) as read-ahead
+// for direct play, like the engine's own play-ahead. An HLS session keeps its
+// published-segment buffer, which is what the player can actually use.
+func (m *Manager) addReserved(s *session, ps *core.PlaySession) {
+	if ps == nil {
+		return
+	}
+	if m.deps.HLSLookup != nil {
+		if hls, ok := m.deps.HLSLookup(ps.ID); ok && hls != nil {
+			return
+		}
+	}
+	g := s.current()
+	r := &s.reserve
+	r.mu.Lock()
+	until := r.until
+	done := !r.running && r.generation == g && g != nil
+	r.mu.Unlock()
+	if !done || until <= ps.BufferedUntil {
+		return
+	}
+	pos := time.Duration(0)
+	if ps.ViewOffset != nil {
+		pos = time.Duration(*ps.ViewOffset) * time.Millisecond
+	}
+	if until <= pos {
+		return
+	}
+	ps.BufferedUntil = until
+	ps.BufferedBytes = max(ps.BufferedBytes, bytesForDuration(ps.Info, until-pos))
+}
+
+func bytesForDuration(info core.MediaInfo, d time.Duration) int64 {
+	if d <= 0 || info.Size <= 0 || info.Duration <= 0 {
+		return 0
+	}
+	return int64(float64(info.Size) * float64(d) / float64(info.Duration))
+}
+
 // Sessions returns snapshots of every live session, oldest first.
 func (m *Manager) Sessions() []*core.PlaySession {
 	m.mu.Lock()
@@ -1131,7 +1449,10 @@ func (m *Manager) Sessions() []*core.PlaySession {
 	now := m.now()
 	out := make([]*core.PlaySession, 0, len(list))
 	for _, s := range list {
-		out = append(out, s.snapshot(now))
+		ps := m.snapshotWithEncoder(s, now)
+		m.addBuffered(ps)
+		m.addReserved(s, ps)
+		out = append(out, ps)
 	}
 	sort.Slice(out, func(i, j int) bool {
 		if !out[i].StartedAt.Equal(out[j].StartedAt) {

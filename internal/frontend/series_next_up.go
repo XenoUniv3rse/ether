@@ -3,6 +3,7 @@ package frontend
 import (
 	"context"
 	"sort"
+	"time"
 
 	"github.com/braedonsaunders/ether/internal/core"
 )
@@ -78,6 +79,11 @@ func regularSeriesEpisodes(eps []Title, series RatingKey) []Title {
 	out := make([]Title, 0, len(eps))
 	for _, ep := range eps {
 		if ep.Key.Kind() != KindEpisode {
+			continue
+		}
+		// Specials are skipped later by their presented season (an episode
+		// order may place one inside a regular season); drop unaired ones here.
+		if !ep.Released.IsZero() && ep.Released.After(time.Now()) {
 			continue
 		}
 		if ep.Type != "" && ep.Type != core.TypeEpisode {

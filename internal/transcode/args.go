@@ -15,7 +15,8 @@ import (
 
 // runSpec is everything needed to build one ffmpeg HLS run.
 type runSpec struct {
-	LiveInput bool
+	LiveInput      bool
+	CopyTimestamps bool
 	// RTXTimeline preserves the native session's clock and rendition-local
 	// initialization paths when ordinary FFmpeg takes over.
 	RTXTimeline       bool
@@ -25,12 +26,13 @@ type runSpec struct {
 	Info              core.MediaInfo
 	Decision          core.Decision
 	// Start is the media timestamp of the run's first segment (StartSeg).
-	Start    time.Duration
-	SegDur   time.Duration
-	StartSeg int
-	Dir      string
-	Playlist string // ffmpeg's own playlist file name, in Dir
-	InitName string // fMP4 init segment file name, in Dir
+	Start          time.Duration
+	SegDur         time.Duration
+	StartSeg       int
+	Dir            string
+	Playlist       string // ffmpeg's own playlist file name, in Dir
+	InitName       string // fMP4 init segment file name, in Dir
+	VideoTimescale uint32 // retained fMP4 clock, zero for the first run
 	// Accel is the hardware to use; Name AccelNone (or "") means CPU.
 	Accel    core.HWAccel
 	Features features
@@ -246,9 +248,9 @@ func buildCodecArgs(s runSpec) []string {
 	args = append(args, inputTimestampArgs(s)...)
 	if s.Start > 0 {
 		args = append(args, "-ss", secs(s.Start))
-		if s.Protocol == core.ProtocolHTTP && !s.LiveInput {
-			args = append(args, "-copyts")
-		}
+	}
+	if s.httpCopyTimestamps() {
+		args = append(args, "-copyts")
 	}
 	args = append(args, "-i", s.Input)
 	textSub := matroskaTextSubtitle(s)
@@ -278,10 +280,12 @@ func buildCodecArgs(s runSpec) []string {
 	switch {
 	case textSub != nil && textSub.External && textSub.ExternalURL != "":
 		args = append(args, "-map", "1:0", "-c:s", matroskaSubtitleCodec(textSub.Codec))
+		args = append(args, matroskaSubtitleTrackArgs(textSub)...)
 	case textSub != nil:
 		// The primary -ss applies to this stream too, so its cues share
 		// the run clock that output_ts_offset then places on the title.
 		args = append(args, "-map", fmt.Sprintf("0:%d", textSub.Index), "-c:s", matroskaSubtitleCodec(textSub.Codec))
+		args = append(args, matroskaSubtitleTrackArgs(textSub)...)
 	default:
 		args = append(args, "-sn")
 	}
@@ -385,8 +389,12 @@ func buildCodecArgs(s runSpec) []string {
 					enc = "opus"
 				}
 			}
+			kbps := audioBitrateKbps(codec, ch)
+			if d.AudioBitrateKbps > 0 && d.AudioBitrateKbps < kbps {
+				kbps = d.AudioBitrateKbps
+			}
 			args = append(args, "-c:a", enc, "-ac", strconv.Itoa(ch), "-ar", strconv.Itoa(decisionAudioRate(d)),
-				"-b:a", fmt.Sprintf("%dk", audioBitrateKbps(codec, ch)))
+				"-b:a", fmt.Sprintf("%dk", kbps))
 			filters := append([]string(nil), d.AudioFilters...)
 			if s.AudioGainDB != 0 {
 				filters = append(filters, fmt.Sprintf("volume=%.1fdB", s.AudioGainDB))
@@ -446,8 +454,12 @@ func hlsMuxArgs(s runSpec) []string {
 		// keyframe (HEVC CRA) presents after its leading pictures and
 		// was moved before them. HLS does not use sidx, and the chunked
 		// path already drops it from multi-chunk segments.
+		options := "movflags=+frag_discont+skip_sidx"
+		if s.VideoTimescale != 0 {
+			options += ":video_track_timescale=" + strconv.FormatUint(uint64(s.VideoTimescale), 10)
+		}
 		args = append(args, "-hls_segment_type", "fmp4", "-hls_fmp4_init_filename", s.InitName,
-			"-hls_segment_options", "movflags=+frag_discont+skip_sidx")
+			"-hls_segment_options", options)
 	} else {
 		args = append(args, "-hls_segment_type", "mpegts")
 	}
@@ -605,6 +617,33 @@ func matroskaTextSubtitle(s runSpec) *core.StreamInfo {
 	return sub
 }
 
+// matroskaSubtitleTrackArgs describes the one text track the segments
+// carry. It is the track the viewer picked, so it is flagged default:
+// ExoPlayer (Plex for Android and Android TV) picks a text track by its
+// default flag or its language, and the source's flags are the release's,
+// not the viewer's (an English track a release leaves non-default stayed
+// off, #191). -map_metadata -1 drops the source's language, which the
+// track gets back, as PMS sets each mapped stream's language.
+func matroskaSubtitleTrackArgs(sub *core.StreamInfo) []string {
+	args := []string{"-disposition:s:0", "default"}
+	if sub.Language != "" {
+		args = append(args, "-metadata:s:s:0", "language="+sub.Language)
+	}
+	return args
+}
+
+// httpCopyTimestamps: Plex Desktop's HTTP Matroska stream keeps the
+// source's timestamps from a seek or when asked.
+func (s runSpec) httpCopyTimestamps() bool {
+	return s.Protocol == core.ProtocolHTTP && !s.LiveInput && (s.Start > 0 || s.CopyTimestamps)
+}
+
+// titleClock reports whether this run's decoded frames carry the title's
+// timestamps (-copyts) rather than starting at zero at its -ss point.
+func (s runSpec) titleClock() bool {
+	return len(inputTimestampArgs(s)) > 0 || s.httpCopyTimestamps()
+}
+
 // matroskaSubtitleCodec copies a codec Matroska already stores as text and
 // rewrites the others to SubRip, which the segment muxer can header.
 func matroskaSubtitleCodec(codec string) string {
@@ -700,8 +739,10 @@ func planPicture(s runSpec, v *core.StreamInfo, codec string) picturePlan {
 // convert/tone-map plus finish. finish sizes/pads/formats software frames.
 func planFilterChain(s runSpec, v *core.StreamInfo, pic picturePlan, accel string, burn bool, finish func([]string) []string) (inputArgs, chain []string, hwFrames bool) {
 	// Software filters only: GPU scalers neither pad nor convert SDR to
-	// HDR, and their 8-bit tone-map paths cannot feed a 10-bit contract.
-	gpuOff := s.PictureCrop != nil || pic.pad || pic.convert != "" || (pic.tonemap && pic.tenBit)
+	// HDR, and only the explicitly probed CUDA path can feed a 10-bit
+	// tone-mapped contract. Tone mappers produce limited-range BT.709.
+	p010CUDA := accel == AccelNVENC && s.Features.cudaP010ToneMap && !pictureOf(v).full && (s.Target == nil || (s.Target.pic.prim == "bt709" && s.Target.pic.matrix == "bt709" && !s.Target.pic.full))
+	gpuOff := s.PictureCrop != nil || pic.pad || pic.convert != "" || (pic.tonemap && pic.tenBit && !p010CUDA)
 	gpuInput, gpuFilters, gpuOK := gpuPipeline(s, accel, pic.w, pic.h, pic.tonemap, pic.tenBit, burn)
 	switch {
 	case gpuOK && !gpuOff:
@@ -744,6 +785,16 @@ func planFilterChain(s runSpec, v *core.StreamInfo, pic picturePlan, accel strin
 			dev = DefaultVAAPIDevice
 		}
 		inputArgs = append(inputArgs, "-vaapi_device", dev)
+		if burn && !(v.Codec == "h264" && v.BitDepth > 8) {
+			// A burn-in overlays in software, but the picture is still
+			// decoded on the GPU (on the -vaapi_device device) and handed
+			// to the filters in system memory, as the CUDA and
+			// VideoToolbox paths do: software-decoding 4K HEVC 10-bit
+			// was most of the CPU a burn cost (#313). A codec the GPU
+			// cannot decode falls back to software decoding. H.264 High
+			// 10 has no VAAPI decoder.
+			inputArgs = append(inputArgs, "-hwaccel", "vaapi")
+		}
 	}
 
 	if !hwFrames {
@@ -975,14 +1026,18 @@ func planVideo(s runSpec, v *core.StreamInfo) videoPlan {
 	} else if accel == AccelQSV || accel == AccelVAAPI {
 		swFmt = "nv12"
 	}
-	// finish sizes, pads and formats software frames for the encoder.
-	finish := func(c []string) []string {
+	// size crops and scales software frames to the encoded picture; finish
+	// sizes, pads and formats them for the encoder.
+	size := func(c []string) []string {
 		if crop := s.PictureCrop; crop != nil {
 			c = append(c, fmt.Sprintf("crop=%d:%d:%d:%d", crop.width, crop.height, crop.x, crop.y))
 		}
 		if pic.scaling {
 			c = append(c, fmt.Sprintf("scale=%d:%d", pic.w, pic.h))
 		}
+		return c
+	}
+	format := func(c []string) []string {
 		if pic.pad {
 			c = append(c, fmt.Sprintf("pad=%d:%d:(ow-iw)/2:(oh-ih)/2", s.Target.width, s.Target.height))
 		}
@@ -995,6 +1050,7 @@ func planVideo(s runSpec, v *core.StreamInfo) videoPlan {
 		}
 		return c
 	}
+	finish := func(c []string) []string { return format(size(c)) }
 
 	in := fmt.Sprintf("[0:%d]", v.Index)
 	chainInput, chain, hwFrames := planFilterChain(s, v, pic, accel, burn, finish)
@@ -1007,22 +1063,34 @@ func planVideo(s runSpec, v *core.StreamInfo) videoPlan {
 	var graph string
 	switch {
 	case burn && IsImageSubtitle(sub.Codec) && !sub.External:
+		post := finish(nil)
+		subW, subH := v.Width, v.Height
+		if pic.scaling && s.PictureCrop == nil {
+			// Overlay at the output size: scale the picture first and
+			// draw the subtitle onto the smaller frame, instead of
+			// overlaying every source-size frame and scaling after
+			// (#313). A cropped picture keeps the source-size overlay,
+			// where the subtitle canvas still matches it.
+			chain = size(chain)
+			post = format(nil)
+			subW, subH = pic.w, pic.h
+		}
 		pre := strings.Join(chain, ",")
 		if pre == "" {
 			pre = "null"
 		}
-		post := finish(nil)
-		subW, subH := v.Width, v.Height
 		subScale := "null"
 		if subW > 0 && subH > 0 {
 			subScale = fmt.Sprintf("scale=%d:%d", subW, subH)
 		}
-		// -ss puts this run's frames at PTS 0 while a bitmap subtitle packet
-		// can keep its title timestamp. Reset both before overlay so the
-		// filter does not hold the picture waiting for a clock that never
-		// meets, and so the segment muxer's output_ts_offset is what places
-		// the run on the title timeline.
-		if s.Start > 0 {
+		// Without -copyts, -ss puts this run's frames at PTS 0 while a
+		// bitmap subtitle packet can keep its title timestamp. Reset both
+		// before overlay so the filter does not hold the picture waiting
+		// for a clock that never meets, and so the segment muxer's
+		// output_ts_offset is what places the run on the title timeline.
+		// A -copyts run already has both on the title clock, which its
+		// audio keeps too.
+		if s.Start > 0 && !s.titleClock() {
 			pre += ",setpts=PTS-STARTPTS"
 			if subScale == "null" {
 				subScale = "setpts=PTS-STARTPTS"
@@ -1040,17 +1108,21 @@ func planVideo(s runSpec, v *core.StreamInfo) videoPlan {
 		} else {
 			opt = fmt.Sprintf(":si=%d", subtitleOrdinal(s.Info, sub.Index))
 		}
-		// The subtitles filter looks up cues by frame PTS. Input -ss resets
-		// that to 0, so a seeked run would burn the opening cues (or stall
-		// if the filter then emits the file's own timeline). Shift onto the
-		// title clock for the lookup, then back to the run-relative clock
-		// the muxer offsets. The filter's own offset option saturates at
-		// ten minutes, which is shorter than a resume.
-		if s.Start > 0 {
+		// The subtitles filter looks up cues by frame PTS. Without -copyts,
+		// input -ss resets that to 0, so a seeked run would burn the opening
+		// cues (or stall if the filter then emits the file's own timeline).
+		// Shift onto the title clock for the lookup, then back to the
+		// run-relative clock the muxer offsets. The filter's own offset
+		// option saturates at ten minutes, which is shorter than a resume.
+		// A -copyts run's frames are on the title clock already: shifting
+		// them burned the cues one offset later and moved the picture off
+		// its audio (#191).
+		shift := s.Start > 0 && !s.titleClock()
+		if shift {
 			chain = append(chain, "setpts=PTS+"+secs(s.Start)+"/TB")
 		}
 		chain = append(chain, fmt.Sprintf("subtitles=filename=%s%s", escapeFilterValue(src), opt))
-		if s.Start > 0 {
+		if shift {
 			chain = append(chain, "setpts=PTS-STARTPTS")
 		}
 		chain = finish(chain)
@@ -1130,6 +1202,25 @@ func subtitleArgs(input string, streamIndex int) []string {
 	args = append(args, inputSafetyArgs(input, false)...)
 	args = append(args, httpInputArgs(input, true)...)
 	return append(args, "-i", input, "-map", fmt.Sprintf("0:%d", streamIndex), "-c:s", "webvtt", "-f", "webvtt", "pipe:1")
+}
+
+// subtitleStreamArgs streams one embedded text subtitle stream from from
+// as an ASS script on stdout: input seek with -copyts keeps the cue times
+// on the title clock, and every event is written as soon as it is read.
+// throttle reads the first minute at full speed and then 1.5x real time.
+func subtitleStreamArgs(input string, streamIndex int, from time.Duration, throttle bool) []string {
+	args := []string{"-hide_banner", "-nostdin", "-loglevel", "error"}
+	input = backgroundReadURL(input)
+	args = append(args, inputSafetyArgs(input, false)...)
+	args = append(args, httpInputArgs(input, true)...)
+	if throttle {
+		args = append(args, "-readrate", "1.5", "-readrate_initial_burst", "60")
+	}
+	if from > 0 {
+		args = append(args, "-ss", secs(from))
+	}
+	return append(args, "-copyts", "-i", input, "-map", fmt.Sprintf("0:%d", streamIndex),
+		"-c:s", "ass", "-f", "ass", "-ignore_readorder", "1", "-flush_packets", "1", "pipe:1")
 }
 
 // vaapiCQPForBitrate derives a constant-quantizer value (18..36) when a VAAPI

@@ -15,7 +15,7 @@ func TestLanguagePreferencesAcceptISOCodesAndRegionalVariants(t *testing.T) {
 	score := func(audio, subs []string, prefs ...string) float64 {
 		r := base
 		r.Info.Languages, r.Info.SubtitleLanguages = audio, subs
-		return s.score(r, core.QualityProfile{PreferredLanguages: prefs}, matrixTitle())
+		return s.score(r, core.QualityProfile{PreferredLanguages: prefs}, matrixTitle(), s.now())
 	}
 	one := func(l string) []string { return []string{l} }
 	// The owner UI asks for ISO codes; they must match parsed names.

@@ -1,0 +1,72 @@
+{
+  "id": "community.travel.ranking",
+  "name": "Travel Mode",
+  "version": "1.0.2",
+  "description": "A native ranking step for bandwidth-conscious playback, with a live scorecard.",
+  "ether": {
+    "protocol": 1,
+    "kind": "extension",
+    "capabilities": [
+      "ranking_step",
+      "ui"
+    ],
+    "summary": "$t:summary",
+    "runtime": {
+      "kind": "hosted",
+      "entry": "src/plugin.ts"
+    },
+    "author": {
+      "name": "Server owner"
+    },
+    "license": "MIT",
+    "strings": {
+      "en": "i18n/en.json"
+    },
+    "contributes": {
+      "rankingSteps": [
+        {
+          "key": "travel",
+          "label": "$t:step",
+          "hint": "$t:hint",
+          "defaultPosition": 10,
+          "editor": {
+            "kind": "choice",
+            "options": [
+              {
+                "value": "1",
+                "label": {
+                  "source": "1 GB target"
+                }
+              },
+              {
+                "value": "2",
+                "label": {
+                  "source": "2 GB target"
+                }
+              },
+              {
+                "value": "4",
+                "label": {
+                  "source": "4 GB target"
+                }
+              },
+              {
+                "value": "8",
+                "label": {
+                  "source": "8 GB target"
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "pages": [
+        {
+          "key": "scorecard",
+          "label": "$t:page",
+          "route": "/ether/view/scorecard"
+        }
+      ]
+    }
+  }
+}

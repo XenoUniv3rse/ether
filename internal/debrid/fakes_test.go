@@ -276,14 +276,20 @@ func (p *fakeProvider) Acquire(_ context.Context, req AcquireRequest) (*Acquired
 		return nil, fmt.Errorf("fake: %w", ErrAuth)
 	}
 	if !p.cached[req.InfoHash] {
-		if !req.CachedOnly && p.torrents[req.InfoHash] == "" {
+		if req.CachedOnly {
+			p.mu.Unlock()
+			return nil, fmt.Errorf("fake: %w", core.ErrNotCached)
+		}
+		id := p.torrents[req.InfoHash]
+		if id == "" {
 			// Left on the account to download, like the real services.
-			p.torrents[req.InfoHash] = fmt.Sprintf("T%d", len(p.torrents)+p.removed+1)
+			id = fmt.Sprintf("T%d", len(p.torrents)+p.removed+1)
+			p.torrents[req.InfoHash] = id
 			p.adds++
 			p.downloading++
 		}
 		p.mu.Unlock()
-		return nil, fmt.Errorf("fake: %w", core.ErrNotCached)
+		return nil, pending(id, fmt.Errorf("fake: %w", core.ErrNotCached))
 	}
 	added := false
 	id := req.TorrentID

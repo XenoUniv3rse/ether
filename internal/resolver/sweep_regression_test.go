@@ -56,8 +56,8 @@ func TestUncappedProfileHeightScoreIsBounded(t *testing.T) {
 	s := New(&fakeIndexer{}, nil, nil, testCfg(), Options{})
 	defer s.Close()
 	p := core.QualityProfile{Name: "any"}
-	hi := s.score(withParsed(rel("a", "The.Signal.1999.2160p.WEB-DL.H264-GRP", 0)), p, matrixTitle())
-	lo := s.score(withParsed(rel("b", "The.Signal.1999.1080p.WEB-DL.H264-GRP", 0)), p, matrixTitle())
+	hi := s.score(withParsed(rel("a", "The.Signal.1999.2160p.WEB-DL.H264-GRP", 0)), p, matrixTitle(), s.now())
+	lo := s.score(withParsed(rel("b", "The.Signal.1999.1080p.WEB-DL.H264-GRP", 0)), p, matrixTitle(), s.now())
 	if hi-lo <= 0 || hi-lo > 50 {
 		t.Fatalf("height gap %v", hi-lo)
 	}
@@ -87,11 +87,11 @@ func TestNotEnglishFormatSkipsUntaggedEnglishRelease(t *testing.T) {
 	s := New(&fakeIndexer{}, nil, nil, cfg, Options{})
 	defer s.Close()
 	profile := s.ProfileFor(appleTVCaps(), nil)
-	eng, err := s.scoreRelease(withParsed(rel("e", "The.Signal.1999.1080p.WEB-DL.H264-GRP", 4000)), profile, appleTVCaps(), matrixTitle())
+	eng, err := s.scoreRelease(withParsed(rel("e", "The.Signal.1999.1080p.WEB-DL.H264-GRP", 4000)), profile, appleTVCaps(), matrixTitle(), s.now())
 	if err != nil || eng.format != 0 {
 		t.Fatalf("untagged English release format score %d (%v)", eng.format, err)
 	}
-	fr, _ := s.scoreRelease(withParsed(rel("f", "The.Signal.1999.FRENCH.1080p.WEB-DL.H264-GRP", 4000)), profile, appleTVCaps(), matrixTitle())
+	fr, _ := s.scoreRelease(withParsed(rel("f", "The.Signal.1999.FRENCH.1080p.WEB-DL.H264-GRP", 4000)), profile, appleTVCaps(), matrixTitle(), s.now())
 	if fr.format != -10000 {
 		t.Fatalf("French release format score %d", fr.format)
 	}
@@ -162,7 +162,7 @@ func TestSizeFormatIgnoresSeasonPackTotal(t *testing.T) {
 	pack := withParsed(rel("pack", "Show.S01.1080p.WEB-DL.H264-GRP", 40<<10))
 	pack.Protocol = core.ProtocolTorrent
 	ep := &core.Title{Key: core.EpisodeKey(1, 1, 1), Type: core.TypeEpisode, Runtime: 45 * time.Minute}
-	sc, err := s.scoreRelease(pack, s.ProfileFor(appleTVCaps(), nil), appleTVCaps(), ep)
+	sc, err := s.scoreRelease(pack, s.ProfileFor(appleTVCaps(), nil), appleTVCaps(), ep, s.now())
 	if err != nil || sc.format != 0 {
 		t.Fatalf("pack size format score %d (%v)", sc.format, err)
 	}

@@ -20,6 +20,8 @@ type HLSRequest struct {
 	// LiveInput permits playlist demuxers for owner-configured live sources.
 	// Ordinary resolved media must leave this false, even if duration is unknown.
 	LiveInput bool
+	// CopyTimestamps preserves source timestamps for HTTP Matroska output.
+	CopyTimestamps bool
 	// InputHeaders are optional HTTP headers ffmpeg must send when reading
 	// InputURL (e.g. for resolved trailer URLs). Transcoders that cannot
 	// send headers ignore them; most resolved URLs need none (additive).
@@ -120,6 +122,10 @@ type DecideOptions struct {
 	SubtitleStream int      // -1 none
 	AudioFilters   []string // trusted owner/viewer audio processing; forces audio encoding
 	BurnSubtitles  bool
+	// BurnTextSubtitles lets BurnSubtitles burn a text track too. Set for
+	// a client that draws no soft text track in this playback (Plex Web
+	// asking to burn an ASS track). Additive.
+	BurnTextSubtitles bool
 	// Protocol is the conversion protocol the client asked for (hls, dash,
 	// http). Empty keeps the HLS target. Additive.
 	Protocol string
@@ -130,7 +136,8 @@ type DecideOptions struct {
 
 // PlaySession binds a user, a title and a client to a resolved, open source.
 type PlaySession struct {
-	PlaybackGroup string `json:"playbackGroup,omitempty"`
+	Encoder       *EncoderStatus `json:"encoder,omitempty"`
+	PlaybackGroup string         `json:"playbackGroup,omitempty"`
 	// PreparedOnly marks a source reserved for planning but not opened by a
 	// frontend. Cluster snapshots carry it for owner Activity.
 	PreparedOnly bool `json:"preparedOnly,omitempty"`
@@ -157,7 +164,14 @@ type PlaySession struct {
 	DecisionAudioCopy bool  `json:"decisionAudioCopy,omitempty"`
 	BytesServed       int64 // source bytes delivered (direct play and ffmpeg input)
 	SpeedBps          int64 // recent delivery rate, bytes per second
-	LastActive        time.Time
+	// BufferedBytes is contiguous media downloaded ahead of the reader; zero
+	// when the source cannot report it. BufferedUntil is the absolute media
+	// time that read-ahead reaches, zero when unknown.
+	BufferedBytes int64
+	BufferedUntil time.Duration
+	LastActive    time.Time
+	// ViewerState is the last client timeline state: playing, paused, or stopped.
+	ViewerState string `json:"viewerState,omitempty"`
 	// ViewOffset is the client's last reported playhead in milliseconds.
 	// Nil means no timeline has arrived; source bytes do not imply progress.
 	ViewOffset *int64 `json:"viewOffset,omitempty"`
@@ -175,6 +189,52 @@ type PlaySession struct {
 	// Node is the cluster node serving a session reported by another node
 	// (empty for this node's own sessions and on a standalone server).
 	Node string `json:"node,omitempty"`
+	// Experience is this play's viewer-experience accounting: start time
+	// and mid-play buffering (additive). Nil for a source no play request
+	// or client timeline has reached.
+	Experience *PlayExperience `json:"experience,omitempty"`
+}
+
+// PlayExperience measures what the viewer saw (additive).
+type PlayExperience struct {
+	// Requested is set once a play request (decision, start, part or
+	// stream open) or a client timeline reached the source.
+	Requested bool `json:"requested"`
+	// Pictured is set once the client showed a picture; StartTime is the
+	// time from the play request to it, negative when unknown.
+	Pictured  bool          `json:"pictured"`
+	StartTime time.Duration `json:"startTime"`
+	// RequestedAt and PicturedAt are the instants behind StartTime (zero
+	// when unknown), so a history row spanning several sessions can
+	// measure from its first request to its first picture.
+	RequestedAt time.Time `json:"requestedAt,omitzero"`
+	PicturedAt  time.Time `json:"picturedAt,omitzero"`
+	// StartFailure names why a start never reached a picture even though
+	// the client reported one (a stalled start the server ended).
+	StartFailure string `json:"startFailure,omitempty"`
+	// BufferEvents counts mid-play stalls after the first picture; Buffering
+	// is their total length (startup excluded).
+	BufferEvents int           `json:"bufferEvents"`
+	Buffering    time.Duration `json:"buffering"`
+}
+
+// EncoderStatus describes the currently running output process, not the
+// original playback negotiation. Times are media timestamps or wall-clock
+// instants as indicated by their field names.
+type EncoderStatus struct {
+	RecoveryReason string         `json:"recoveryReason,omitempty"`
+	PlayerPosition *time.Duration `json:"playerPosition,omitempty"`
+	Runway         *time.Duration `json:"runway,omitempty"`
+	Decision       Decision       `json:"decision"`
+	Processor      string         `json:"processor"`
+	Filters        string         `json:"filters"`
+	Phase          string         `json:"phase"`
+	Reason         string         `json:"reason,omitempty"`
+	StartedAt      time.Time      `json:"startedAt"`
+	UpdatedAt      time.Time      `json:"updatedAt"`
+	Speed          float64        `json:"speed"`
+	OutputTime     time.Duration  `json:"outputTime"`
+	ReadyUntil     time.Duration  `json:"readyUntil"`
 }
 
 type Playback interface {

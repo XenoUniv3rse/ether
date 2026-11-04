@@ -48,14 +48,20 @@ type Config struct {
 	Trakt         Trakt         `json:"trakt"`
 	Simkl         Simkl         `json:"simkl"`
 	OpenSubtitles OpenSubtitles `json:"openSubtitles"`
-	LLM           LLM           `json:"llm"`
-	Updates       Updates       `json:"updates"`
-	Spike         Spike         `json:"spike"`
-	Downloads     Downloads     `json:"downloads"`
-	Markers       Markers       `json:"markers"`
-	Personalize   Personalize   `json:"personalize"`
-	Extras        Extras        `json:"extras"`
-	Debrid        Debrid        `json:"debrid"`
+	// Subtitles is the ordered subtitle provider list (OpenSubtitles and
+	// Stremio subtitle add-ons). Empty means OpenSubtitles alone, as before.
+	Subtitles Subtitles `json:"subtitles,omitempty"`
+	// LiveTV holds owner Live TV options (logo index, health sweep).
+	LiveTV      LiveTV      `json:"liveTV,omitempty"`
+	LLM         LLM         `json:"llm"`
+	Updates     Updates     `json:"updates"`
+	Plugins     Plugins     `json:"plugins,omitempty"`
+	Spike       Spike       `json:"spike"`
+	Downloads   Downloads   `json:"downloads"`
+	Markers     Markers     `json:"markers"`
+	Personalize Personalize `json:"personalize"`
+	Extras      Extras      `json:"extras"`
+	Debrid      Debrid      `json:"debrid"`
 	// Clients holds owner overrides of the capability registry.
 	Clients ClientCompatibility `json:"clients"`
 	// Database is node-local storage selection (SQLite or PostgreSQL).
@@ -73,6 +79,8 @@ type Frontend struct {
 }
 
 type Server struct {
+	// StartupAnimation controls the owner console splash for all administrators.
+	StartupAnimation bool `json:"startupAnimation"`
 	// TrustedProxyCIDRs are proxy peer networks whose forwarding headers are trusted.
 	TrustedProxyCIDRs []string `json:"trustedProxyCIDRs,omitempty"`
 	// AllowRemoteConsole lets the owner console (/ether/) answer clients
@@ -201,10 +209,13 @@ type Indexer struct {
 	// Kind selects how the indexer is searched: "" or IndexerKindNewznab
 	// for a Newznab/Torznab API at URL, IndexerKindCardigann for a built-in
 	// site run from an owner-installed definition, IndexerKindStremio for a
-	// Stremio stream addon. For a built-in site URL is the site address and
-	// Protocol follows the definition; for an addon URL is its install URL
-	// and results are torrents.
+	// Stremio stream add-on (Torrentio and the like). For a built-in site URL
+	// is the site address and Protocol follows the definition; for an
+	// add-on URL is its install link and results are torrents.
 	Kind string `json:"kind,omitempty"`
+	// Plugin is the installed plugin an IndexerKindAddon row searches. Such
+	// rows exist only in the running search manager, never in config.
+	Plugin string `json:"plugin,omitempty"`
 	// Definition is the installed definition id of a built-in site.
 	Definition string `json:"definition,omitempty"`
 	// Settings are the definition's setting values by name.
@@ -222,21 +233,29 @@ const (
 	IndexerKindNewznab   = "newznab"
 	IndexerKindCardigann = "cardigann"
 	IndexerKindStremio   = "stremio"
+	// IndexerKindAddon is an installed plugin's streams (an Ether source
+	// plugin or a Stremio add-on installed from Plugins), searched like an
+	// indexer. Rows of this kind are made at run time, never saved.
+	IndexerKindAddon = "addon"
 )
 
 // IsTorrent reports whether the indexer's results are torrents (Torznab or
-// a Stremio addon).
-func (ix Indexer) IsTorrent() bool { return ix.Protocol == "torrent" || ix.IsStremio() }
+// a Stremio add-on).
+func (ix Indexer) IsTorrent() bool { return ix.Protocol == "torrent" || ix.IsStremio() || ix.IsAddon() }
+
+// IsStremio reports whether the indexer is a Stremio stream add-on.
+func (ix Indexer) IsStremio() bool { return ix.Kind == IndexerKindStremio }
 
 // IsBuiltin reports whether the indexer is a built-in site.
 func (ix Indexer) IsBuiltin() bool { return ix.Kind == IndexerKindCardigann }
 
-// IsStremio reports whether the indexer is a Stremio stream addon.
-func (ix Indexer) IsStremio() bool { return ix.Kind == IndexerKindStremio }
+// IsAddon reports whether the indexer is an installed add-on's streams.
+func (ix Indexer) IsAddon() bool { return ix.Kind == IndexerKindAddon }
 
 // UsesBackend reports whether the indexer is searched through a backend
-// rather than the Newznab API: a built-in site or a Stremio addon.
-func (ix Indexer) UsesBackend() bool { return ix.IsBuiltin() || ix.IsStremio() }
+// rather than the Newznab API: a built-in site, a Stremio add-on or a
+// plugin's streams.
+func (ix Indexer) UsesBackend() bool { return ix.IsBuiltin() || ix.IsStremio() || ix.IsAddon() }
 
 type Cache struct {
 	Storage string `json:"storage,omitempty"` // local (default) or shared; restart required
@@ -436,6 +455,43 @@ type OpenSubtitles struct {
 	APIKey   string `json:"apiKey"`
 	Username string `json:"username"`
 	Password string `json:"password"`
+}
+
+// Subtitle provider kinds (SubtitleProvider.Kind). An installed add-on's
+// subtitles are kind "plugin:<id>/subtitles".
+const (
+	SubtitleProviderOpenSubtitles = "opensubtitles"
+	// SubtitleProviderStremio is the retired kind of a subtitle add-on
+	// entered with its link (URL, sealed at rest and redacted). Such
+	// entries are migrated once into installed add-ons and never written.
+	SubtitleProviderStremio = "stremio"
+)
+
+// SubtitleProvider is one entry of the owner's subtitle provider order.
+type SubtitleProvider struct {
+	ID      string `json:"id"`
+	Name    string `json:"name,omitempty"`
+	Kind    string `json:"kind"`
+	URL     string `json:"url,omitempty"`
+	Enabled bool   `json:"enabled"`
+}
+
+// Subtitles is the owner's subtitle provider order. Search results from
+// every enabled provider merge into one ranked list; the order breaks
+// ties. Empty means OpenSubtitles alone.
+type Subtitles struct {
+	Providers []SubtitleProvider `json:"providers,omitempty"`
+}
+
+// LiveTV holds owner Live TV options.
+type LiveTV struct {
+	// LogoIndexURL is an owner-enabled channel logo index (an
+	// iptv-org-style JSON list). Ether ships no list; empty disables
+	// logo matching.
+	LogoIndexURL string `json:"logoIndexUrl,omitempty"`
+	// HealthSweepMinutes is the channel health sweep interval: 0 uses
+	// the default (15), negative disables the sweep.
+	HealthSweepMinutes int `json:"healthSweepMinutes,omitempty"`
 }
 
 type LLM struct {

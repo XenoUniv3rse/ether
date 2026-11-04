@@ -34,7 +34,7 @@ func (a *App) buildAdmin() http.Handler {
 	pollLimiter, _ := identity.NewPollLimiter(a.db, time.Minute, 120, 60, nil)
 	quick, _ := identity.NewQuickConnect(a.db, 10*time.Minute, 30*24*time.Hour, nil)
 	invites, _ := identity.NewInvite(a.db, 24*time.Hour, 30*24*time.Hour, nil)
-	return admin.New(admin.Deps{
+	deps := admin.Deps{
 		FavoritesMirror:  a.favorites,
 		NotInterested:    notInterestedPortal{a},
 		ViewerAlerts:     &notify.ViewerAlerts{DB: a.db, Active: a.users.ActiveUser},
@@ -61,17 +61,18 @@ func (a *App) buildAdmin() http.Handler {
 			return false
 		},
 		AuthenticatePlex: a.users.Authenticate, LinkPlex: a.users.LinkPlex, LocalIdentity: local, IdentityGrants: grants, IdentityLimiter: limiter, OwnerCredentialChanged: a.syncOwnerRecovery, PollLimiter: pollLimiter, QuickConnect: quick, RefreshViewers: a.users.RefreshViewers, OwnerConfigured: func(ctx context.Context) bool { _, err := a.users.Owner(ctx); return err == nil },
-		Config:        a.cfg,
-		Frontends:     a.frontends.control,
-		Extensions:    a.extensionHandlers(),
-		ValidateExtra: a.validateExtra,
-		Logger:        a.log.With("component", "admin"),
-		Logs:          a.logs,
-		Support:       a.support,
-		LogDir:        filepath.Join(a.opts.DataDir, "logs"),
-		Version:       a.opts.Version,
-		PlexAuth:      &plexAuth{app: a, pins: map[string]*plextv.PIN{}},
-		SignIn:        &plexSignIn{app: a, pins: map[string]*plextv.PIN{}},
+		Config:           a.cfg,
+		Frontends:        a.frontends.control,
+		Extensions:       a.extensionHandlers(),
+		PublicExtensions: a.publicExtensionHandlers(),
+		ValidateExtra:    a.validateExtra,
+		Logger:           a.log.With("component", "admin"),
+		Logs:             a.logs,
+		Support:          a.support,
+		LogDir:           filepath.Join(a.opts.DataDir, "logs"),
+		Version:          a.opts.Version,
+		PlexAuth:         &plexAuth{app: a, pins: map[string]*plextv.PIN{}},
+		SignIn:           &plexSignIn{app: a, pins: map[string]*plextv.PIN{}},
 		IsOwnerToken: func(ctx context.Context, token string) bool {
 			if auth.IsOwnerSession(token) {
 				u, err := a.users.OwnerSession(ctx, token)
@@ -93,6 +94,9 @@ func (a *App) buildAdmin() http.Handler {
 					return errors.New(res.Error)
 				}
 				return nil
+			}
+			if a.indexers != nil {
+				return a.indexers.TestIndexer(ctx, ix, a.cfg.Get().ClientIdentity)
 			}
 			return newznab.Test(ctx, ix, a.cfg.Get().ClientIdentity)
 		},
@@ -177,6 +181,7 @@ func (a *App) buildAdmin() http.Handler {
 			"sources":  func(context.Context) any { return map[string]any{"startup": a.resolver.SourceStartups()} },
 			"database": a.databaseStatus,
 			"updates":  a.updateStatus,
+			"storage":  a.storageStatus,
 		},
 		ResolverTraces:  func(context.Context) (any, error) { return a.resolver.Traces(), nil },
 		Users:           a.users,
@@ -184,6 +189,7 @@ func (a *App) buildAdmin() http.Handler {
 		Personalization: a.personalize,
 		Collections:     a.collections,
 		CatalogHelper:   a.collections,
+		TitleSchedules:  a.catalog,
 		WaitingReleaseKeys: func(ctx context.Context) []core.RatingKey {
 			if a.availability == nil {
 				return nil
@@ -195,7 +201,13 @@ func (a *App) buildAdmin() http.Handler {
 		},
 		Images:    a.images,
 		PlexWatch: a.plexWatchAPI(),
-	})
+		Prerolls:  a.prerollAdmin(),
+	}
+	h := admin.NewHandler(deps)
+	if a.streamRT != nil {
+		a.streamRT.SetDashboard(h.SnapshotDashboard)
+	}
+	return h
 }
 
 func (a *App) plexWatchAPI() admin.PlexWatch {

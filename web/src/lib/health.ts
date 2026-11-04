@@ -20,6 +20,7 @@ export interface HealthItem {
     | "database"
     | "remote"
     | "plexdirect"
+    | "storage"
     | "transcode";
   label: string;
   level: HealthLevel;
@@ -697,6 +698,49 @@ export function databaseHealth(v: unknown, now = new Date()): HealthItem | null 
   };
 }
 
+/**
+ * The data folder's filesystem from the "storage" status section (#305).
+ * Only safe mode is a row: a filesystem Ether trusts has nothing to say.
+ */
+export function storageHealth(v: unknown): HealthItem | null {
+  if (!isPlainObject(v) || v.trust !== "safe-mode") return null;
+  const type = str(v.type);
+  const path = str(v.path);
+  const why =
+    v.reasonKind === "network"
+      ? t("It is a network share, so Ether can't tell when a crashed run has let go of its files.")
+      : t(
+          "It failed Ether's startup check, so Ether can't tell when a crashed run has let go of its files.",
+        );
+  const fixes: Record<string, string> = {
+    unraid: t(
+      "Map /config to the pool or disk path, for example /mnt/cache/appdata/ether, not /mnt/user.",
+    ),
+    "docker-desktop": t(
+      "Use a Docker named volume for /config instead of a folder from your computer.",
+    ),
+    network: t("Move the data folder to a disk in this machine."),
+    fuse: t("Move the data folder to a disk in this machine."),
+  };
+  return {
+    id: "storage",
+    label: t("Data folder"),
+    href: "/cache",
+    level: "warn",
+    summary: t("Cache cleanup is in safe mode: {path} is on {type}", { path, type }),
+    note:
+      fixes[str(v.fixKind)] ??
+      t("Move the data folder to a local disk (ext4, XFS, Btrfs, ZFS, f2fs, bcachefs or NTFS)."),
+    details: [
+      why,
+      t(
+        "Files left by a crash are kept for 10 minutes before they are cleaned up. Everything else works normally.",
+      ),
+      str(v.reason),
+    ].filter(Boolean),
+  };
+}
+
 /** One Plex row until the server is claimed. The certificate check is the same missing sign-in. */
 function plexConnectionHealth(remote: unknown, now: Date): HealthItem[] {
   if (isPlainObject(remote) && remote.claimed === false) {
@@ -727,6 +771,7 @@ export function computeHealth(
     cacheHealth(s.cache),
     catalogHealth(s.catalog, now),
     databaseHealth(s.database, now),
+    storageHealth(s.storage),
     ...(plexOn ? plexConnectionHealth(s.remote, now) : []),
   ].filter((item): item is HealthItem => item !== null);
   const transcode = transcodeHealth(s.hwaccel);
@@ -752,6 +797,8 @@ export interface NowPlaying {
   remote: boolean;
   bytesServed: number;
   size: number;
+  /** 0..1 of the file downloaded ahead of the reader. */
+  buffered: number;
   speedBps: number;
   startedAt: Date | null;
   durationMs: number;
@@ -785,6 +832,14 @@ export function normalizeSessions(v: unknown): NowPlaying[] {
       progress = Math.max(0, Math.min(1, explicit));
     else if (typeof offsetMs === "number" && Number.isFinite(offsetMs) && durationMs > 0)
       progress = Math.max(0, Math.min(1, offsetMs / durationMs));
+    const size = num(pick(info, "size", "Size"));
+    const bufferedBytes = num(pick(s, "BufferedBytes", "bufferedBytes"));
+    const bufferedUntilNs = num(pick(s, "BufferedUntil", "bufferedUntil"));
+    let buffered = 0;
+    if (bufferedUntilNs > 0 && durationMs > 0)
+      buffered = Math.min(1, bufferedUntilNs / 1e6 / durationMs);
+    else if (size > 0 && bufferedBytes > 0)
+      buffered = Math.min(1, (progress ?? 0) + bufferedBytes / size);
     return {
       protocol: str(pick(client, "protocol", "Protocol")) || "plex",
       id: str(pick(s, "ID", "id")),
@@ -802,7 +857,8 @@ export function normalizeSessions(v: unknown): NowPlaying[] {
       audioCopy: pick(s, "decisionAudioCopy", "DecisionAudioCopy") === true,
       remote: pick(client, "remote") === true,
       bytesServed: num(pick(s, "BytesServed", "bytesServed")),
-      size: num(pick(info, "size", "Size")),
+      size,
+      buffered,
       speedBps: num(pick(s, "SpeedBps", "speedBps")),
       startedAt: parseTime(pick(s, "StartedAt", "startedAt")),
       durationMs,

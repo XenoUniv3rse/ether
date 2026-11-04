@@ -30,7 +30,15 @@ func TestPublicPickerUsesExplicitPasswordCapability(t *testing.T) {
 			if users[0]["HasPassword"] != true || users[1]["HasPassword"] != false {
 				t.Fatal(users)
 			}
-			if _, ok := users[2]["HasPassword"]; ok {
+			if protocol == "jellyfin" {
+				// Every Jellyfin entry carries the flags jellyfin-sdk-kotlin
+				// requires; an unknown state asks for a password.
+				for n, want := range []bool{true, false, true} {
+					if users[n]["HasPassword"] != want || users[n]["HasConfiguredPassword"] != want || users[n]["HasConfiguredEasyPassword"] != false {
+						t.Fatal(users[n])
+					}
+				}
+			} else if _, ok := users[2]["HasPassword"]; ok {
 				t.Fatal("unknown password capability was invented", users[2])
 			}
 			if protocol == "emby" {
@@ -43,7 +51,7 @@ func TestPublicPickerUsesExplicitPasswordCapability(t *testing.T) {
 				if users[0]["Prefix"] != "K" || users[1]["Prefix"] != "N" || users[2]["Prefix"] != "U" {
 					t.Fatal(users)
 				}
-			} else if _, ok := users[0]["HasConfiguredPassword"]; ok || users[0]["Prefix"] != nil {
+			} else if users[0]["Prefix"] != nil {
 				t.Fatal(users[0])
 			}
 			for _, user := range users {

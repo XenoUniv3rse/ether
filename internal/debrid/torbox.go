@@ -99,7 +99,10 @@ func (p *torBox) classify(status int, env tbEnvelope) error {
 		return fmt.Errorf("torbox: %s: %w", msg, core.ErrNotCached)
 	case code == "ITEM_NOT_FOUND" || strings.Contains(code, "NOT_FOUND"):
 		return fmt.Errorf("torbox: %s: %w", msg, ErrGone)
-	case code == "ACTIVE_LIMIT" || code == "COOLDOWN_LIMIT" || strings.Contains(code, "RATE"):
+	case code == "ACTIVE_LIMIT":
+		// The plan's active-download slots are full: nothing new is added.
+		return fmt.Errorf("torbox: %s: %w", msg, ErrDownloadLimit)
+	case code == "COOLDOWN_LIMIT" || strings.Contains(code, "RATE"):
 		return fmt.Errorf("torbox: %s: %w", msg, ErrRateLimited)
 	}
 	if status >= 200 && status < 300 {
@@ -217,14 +220,15 @@ func (p *torBox) Acquire(ctx context.Context, req AcquireRequest) (*Acquired, er
 			id, added = out.TorrentID.String(), true
 		}
 	}
-	cleanup := func() {
+	cleanup := func() bool {
 		if added && req.RemoveUncached {
 			rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+			defer cancel()
 			if req.mayRemove(rctx, id) {
-				_ = p.Remove(rctx, id)
+				return p.Remove(rctx, id) == nil
 			}
-			cancel()
 		}
+		return false
 	}
 	var t *tbTorrent
 	var err error
@@ -241,10 +245,11 @@ func (p *torBox) Acquire(ctx context.Context, req AcquireRequest) (*Acquired, er
 		}
 	}
 	if t == nil || !(t.DownloadPresent || t.DownloadFinished) {
-		if req.CachedOnly {
-			cleanup()
+		err := fmt.Errorf("torbox: torrent is not ready: %w", core.ErrNotCached)
+		if req.CachedOnly && cleanup() {
+			return nil, err
 		}
-		return nil, fmt.Errorf("torbox: torrent is not ready: %w", core.ErrNotCached)
+		return nil, pending(id, err)
 	}
 	files := make([]File, 0, len(t.Files))
 	for _, f := range t.Files {
@@ -252,6 +257,7 @@ func (p *torBox) Acquire(ctx context.Context, req AcquireRequest) (*Acquired, er
 	}
 	chosen, err := req.Choose(files)
 	if err != nil {
+		cleanup()
 		return nil, err
 	}
 	p.rememberKnown(req.InfoHash, id)

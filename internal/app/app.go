@@ -49,6 +49,7 @@ import (
 	"github.com/braedonsaunders/ether/internal/plextv"
 	"github.com/braedonsaunders/ether/internal/plexwatch"
 	"github.com/braedonsaunders/ether/internal/prefetch"
+	"github.com/braedonsaunders/ether/internal/prerolls"
 	"github.com/braedonsaunders/ether/internal/ratings"
 	"github.com/braedonsaunders/ether/internal/recommend"
 	"github.com/braedonsaunders/ether/internal/remote"
@@ -118,6 +119,10 @@ type Options struct {
 	CatalogNow func() time.Time
 	// plextvHTTP, when set, is the HTTP client used by the plex.tv client in tests.
 	plextvHTTP *http.Client
+	// diskUsage, when set, replaces the cache volume measurement behind the
+	// segment cache's free-space floor, so tests never depend on the free
+	// space of the machine running them.
+	diskUsage segcache.DiskUsageFunc
 	// front is Serve's listener, bound before the database opens; nil
 	// when an App is run on its own (tests), which then binds in Run.
 	front *frontDoor
@@ -228,6 +233,7 @@ type App struct {
 	trackprefs        *trackprefs.Service
 	markers           *markers.Service
 	extras            *extras.Service
+	prerolls          *prerolls.Service
 	backups           *backup.Service
 	migration         *migrate.Service
 	safety            *safety.Service
@@ -258,6 +264,13 @@ type App struct {
 	integrity atomic.Pointer[store.Integrity]
 	// restart is an owner-requested restart (restart.go).
 	restart restartState
+	// Extensibility (docs/extend/SPEC.md). Each runtime type lives in its own
+	// file and is owned by one workstream: extend.go, console_stream.go,
+	// plugins.go and agent.go.
+	extendRT  *extendRuntime
+	streamRT  *consoleStreamRuntime
+	pluginsRT *pluginRuntime
+	agentRT   *agentRuntime
 }
 
 // New builds every component. Nothing listens until Run.
@@ -522,7 +535,7 @@ func (a *App) applyConfig(c config.Config) {
 	a.llm.UpdateConfig(c.LLM)
 	a.fetcher.UpdateConfig(c.Usenet)
 	a.sites.ApplyConfig(c)
-	a.indexers.ApplyConfig(c)
+	a.indexers.ApplyConfig(a.withAddonIndexers(c))
 	a.engine.UpdateRepair(c.Usenet.Repair)
 	a.debrid.UpdateConfig(c.Debrid)
 	a.resolver.UpdateConfig(c)
@@ -540,6 +553,7 @@ func (a *App) applyConfig(c config.Config) {
 	}
 	a.trakt.UpdateConfig(c.Trakt)
 	a.subtitles.UpdateConfig(c.OpenSubtitles)
+	a.subtitles.UpdateProviders(c.Subtitles.Providers)
 	// Re-publish section titles when Movies / TV Shows library names change.
 	a.publishLibrarySections()
 	a.registrar.Trigger()
@@ -608,6 +622,9 @@ func (a *App) Run(ctx context.Context) error {
 	// scrobbles, and its import queue is claimed per row.
 	// Tracked like every other background loop, so Run returns (and the
 	// caller closes the database) only after they have stopped.
+	// Every node serves search: build its title index now, in the
+	// background, so the first search does not fall back to SQL.
+	a.catalog.WarmSearch(ctx)
 	if parityRunCatalogueWorkers() {
 		background.start(func() { a.cluster.RunAsLeader(ctx, "catalogue sync", a.catalog.Run) })
 		background.start(func() { a.cluster.RunAsLeader(ctx, "trending charts", a.catalog.RunTrends) })
@@ -617,6 +634,7 @@ func (a *App) Run(ctx context.Context) error {
 	background.start(func() { a.trakt.Start(ctx) })
 	if a.plexWatch != nil {
 		background.start(func() { a.plexWatch.Run(ctx) })
+		background.start(func() { a.cluster.RunAsLeader(ctx, "plex watch imports", a.plexWatch.RunImports) })
 	}
 	background.start(func() {
 		a.cluster.RunAsLeader(ctx, "simkl delivery", func(ctx context.Context) {
@@ -653,6 +671,9 @@ func (a *App) Run(ctx context.Context) error {
 		background.start(func() { a.cluster.RunAsLeader(ctx, "release calendar", a.calendar.Run) })
 	}
 	background.start(func() { a.ratings.Run(ctx) })
+	if a.prerolls != nil {
+		background.start(func() { a.prerolls.Run(ctx) })
+	}
 	background.start(func() { a.discoveryFeatures.Run(ctx) })
 	background.start(func() {
 		a.cluster.RunAsLeader(ctx, "scheduled backups", func(ctx context.Context) {

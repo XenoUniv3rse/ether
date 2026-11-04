@@ -154,13 +154,21 @@ CREATE INDEX catalog_titles_episode_aired ON catalog_titles(show_key, released_t
 CREATE INDEX catalog_titles_season_episode_aired ON catalog_titles(show_key, season, released_ts DESC) WHERE type='episode' AND release_known=1;
 CREATE INDEX catalog_titles_episode_global_aired ON catalog_titles(released_ts DESC, key ASC) WHERE type='episode' AND release_known=1 AND adult=0;
 `)
-	store.Register("catalog", 23, `
-CREATE INDEX catalog_titles_type_browse_updated ON catalog_titles(type, browsable, adult, fetched_at DESC, key ASC);
-CREATE INDEX catalog_titles_episode_updated ON catalog_titles(fetched_at DESC, key ASC) WHERE type='episode' AND release_known=1 AND adult=0;
-CREATE INDEX catalog_titles_season_key ON catalog_titles(key ASC) WHERE type='season' AND adult=0;
-CREATE INDEX catalog_titles_season_updated ON catalog_titles(fetched_at DESC, key ASC) WHERE type='season' AND adult=0;
-CREATE INDEX catalog_titles_season_released ON catalog_titles(released_ts DESC, key ASC) WHERE type='season' AND release_known=1 AND adult=0;
+	store.Register("catalog", 26, `
+CREATE INDEX IF NOT EXISTS catalog_titles_type_browse_updated ON catalog_titles(type, browsable, adult, fetched_at DESC, key ASC);
+CREATE INDEX IF NOT EXISTS catalog_titles_episode_updated ON catalog_titles(fetched_at DESC, key ASC) WHERE type='episode' AND release_known=1 AND adult=0;
+CREATE INDEX IF NOT EXISTS catalog_titles_season_key ON catalog_titles(key ASC) WHERE type='season' AND adult=0;
+CREATE INDEX IF NOT EXISTS catalog_titles_season_updated ON catalog_titles(fetched_at DESC, key ASC) WHERE type='season' AND adult=0;
+CREATE INDEX IF NOT EXISTS catalog_titles_season_released ON catalog_titles(released_ts DESC, key ASC) WHERE type='season' AND release_known=1 AND adult=0;
 `)
+	// Seasons by show. Hydrating episodes, aired counts and grandchildren
+	// read a show's seasons; through catalog_titles_show that walked every
+	// episode of the show to find its few season rows.
+	store.Register("catalog", 31, `CREATE INDEX IF NOT EXISTS catalog_titles_show_seasons ON catalog_titles(show_key, season) WHERE type='season';`)
+	// Browse and jump-bar ranges use the same byte ordering as SQLite.
+	store.Register("catalog", 30, `SELECT 1;`)
+	store.RegisterDialect("catalog", 30, store.Postgres, `ALTER TABLE catalog_titles ALTER COLUMN sort_title TYPE TEXT COLLATE "C";`)
+	store.Register("catalog", 27, `CREATE INDEX catalog_countries_lower_country ON catalog_countries(LOWER(country), key);`)
 	store.Register("catalog", 7, `
 CREATE INDEX catalog_titles_type_browse_sort ON catalog_titles(type, browsable, adult, sort_title ASC, key ASC);
 CREATE INDEX catalog_titles_browse_warm ON catalog_titles(browsable, detail, adult, popularity DESC, vote_count DESC);
@@ -215,16 +223,19 @@ type tmdbRef struct{ client TMDB }
 
 // Catalog implements core.Catalog.
 type Catalog struct {
-	visibility     *libraryfilter.Filter // every rule: browsing and discovery
-	searchVis      *libraryfilter.Filter // rules scoped everywhere: explicit search
-	db             *sql.DB
-	remote         atomic.Pointer[tmdbRef]
-	configUpdateMu sync.Mutex // serializes transitions without blocking config readers
-	cfgMu          sync.RWMutex
-	cfg            config.Catalog
-	cfgVersion     *configVersion
-	log            *slog.Logger
-	clock          atomic.Value // func() time.Time
+	metadataMu        sync.RWMutex
+	metadataProviders map[string]*metadataRegistration
+	metadataFlights   flight.Group[string, *core.Title]
+	visibility        *libraryfilter.Filter // every rule: browsing and discovery
+	searchVis         *libraryfilter.Filter // rules scoped everywhere: explicit search
+	db                *sql.DB
+	remote            atomic.Pointer[tmdbRef]
+	configUpdateMu    sync.Mutex // serializes transitions without blocking config readers
+	cfgMu             sync.RWMutex
+	cfg               config.Catalog
+	cfgVersion        *configVersion
+	log               *slog.Logger
+	clock             atomic.Value // func() time.Time
 
 	staleAfter time.Duration
 	listTTL    time.Duration
@@ -278,8 +289,14 @@ type Catalog struct {
 
 	personMu       sync.Mutex
 	personHydrated map[int64]time.Time
+	// listMirrored is when each related list's summaries were last saved
+	// (mirror_lists.go), guarded by personMu.
+	listMirrored map[string]time.Time
 
 	saferRating SaferRatingSQL
+
+	// searchIx is the in-memory title search index (search_titles.go).
+	searchIx searchIndexState
 }
 
 // SaferRatingSQL is the optional Plex overlay predicate for viewer limits.
@@ -397,7 +414,7 @@ func New(db *sql.DB, client TMDB, cfg config.Catalog, log *slog.Logger, opts ...
 		genres: map[string]map[int]string{}, listCache: map[string]listEntry{},
 		titleCache: map[core.RatingKey]cachedStoredTitle{}, countCache: map[string]cachedCount{},
 		browseCache: map[string]cachedBrowse{}, grandCache: map[core.RatingKey]cachedBrowse{}, facetCache: map[string]cachedFacet{},
-		personHydrated: map[int64]time.Time{}}
+		personHydrated: map[int64]time.Time{}, listMirrored: map[string]time.Time{}}
 	c.setNow(time.Now)
 	c.SetTMDB(client)
 	for _, fn := range opts {

@@ -100,6 +100,9 @@ func adError(status int, code, msg string) error {
 		return fmt.Errorf("alldebrid: %s: %w", msg, ErrAuth)
 	case code == "MAGNET_INVALID_ID" || code == "LINK_DOWN" || code == "LINK_NOT_FOUND" || code == "MAGNET_NOT_FOUND" || code == "LINK_HOST_UNAVAILABLE":
 		return fmt.Errorf("alldebrid: %s: %w", msg, ErrGone)
+	case code == "MAGNET_TOO_MANY_ACTIVE":
+		// The account's active-magnet slots are full: nothing new is added.
+		return fmt.Errorf("alldebrid: %s: %w", msg, ErrDownloadLimit)
 	case strings.Contains(code, "TOO_MANY") || strings.Contains(code, "RATE"):
 		return fmt.Errorf("alldebrid: %s: %w", msg, ErrRateLimited)
 	case code == "MAGNET_INVALID_URI" || code == "MAGNET_NO_URI" || code == "MAGNET_PROCESSING_FAILED":
@@ -230,14 +233,15 @@ func (p *allDebrid) Acquire(ctx context.Context, req AcquireRequest) (*Acquired,
 		}
 		id, added, ready = ms[0].ID.String(), true, ms[0].Ready
 	}
-	cleanup := func() {
+	cleanup := func() bool {
 		if added && req.RemoveUncached {
 			rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+			defer cancel()
 			if req.mayRemove(rctx, id) {
-				_ = p.Remove(rctx, id)
+				return p.Remove(rctx, id) == nil
 			}
-			cancel()
 		}
+		return false
 	}
 	for polls := 0; !ready && polls < p.opts.ReadyPolls; polls++ {
 		st, err := p.status(ctx, id)
@@ -257,10 +261,11 @@ func (p *allDebrid) Acquire(ctx context.Context, req AcquireRequest) (*Acquired,
 		}
 	}
 	if !ready {
-		if req.CachedOnly {
-			cleanup()
+		err := fmt.Errorf("alldebrid: magnet is not ready: %w", core.ErrNotCached)
+		if req.CachedOnly && cleanup() {
+			return nil, err
 		}
-		return nil, fmt.Errorf("alldebrid: magnet is not ready: %w", core.ErrNotCached)
+		return nil, pending(id, err)
 	}
 	files, err := p.files(ctx, id)
 	if err != nil {
@@ -268,6 +273,7 @@ func (p *allDebrid) Acquire(ctx context.Context, req AcquireRequest) (*Acquired,
 	}
 	chosen, err := req.Choose(files)
 	if err != nil {
+		cleanup()
 		return nil, err
 	}
 	p.list.remember(req.InfoHash, id)

@@ -58,6 +58,16 @@ func WithQueryStats(ctx context.Context) (context.Context, *QueryStats) {
 	return context.WithValue(ctx, queryStatsKey{}, s), s
 }
 
+// DetachQueryStats returns ctx without its QueryStats: work a request starts
+// but does not wait for (a refresh behind the read) is not the request's
+// work, and must not show as its statements, writes or lock waits.
+func DetachQueryStats(ctx context.Context) context.Context {
+	if QueryStatsFrom(ctx) == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, queryStatsKey{}, nil)
+}
+
 // QueryStatsFrom returns the QueryStats ctx carries, or nil.
 func QueryStatsFrom(ctx context.Context) *QueryStats {
 	switch v := ctx.Value(queryStatsKey{}).(type) {

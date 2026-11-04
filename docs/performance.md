@@ -101,7 +101,18 @@ real data:
      sync does.
 7. It writes `report.md`, which checks every endpoint against its budget and
    shows the server's own statement count, rows read, database time and lock
-   wait for it. It also writes `audit.md` and `results.json`.
+   wait for it. Allocation counts and bytes are process-wide deltas while the
+   request runs and can include background work. The harness enables this
+   sampling explicitly; ordinary traces leave it off to avoid perturbing the
+   scale gate. It also writes `audit.md` and `results.json` (including response
+   hashes for comparisons).
+
+To replay specific Plex metadata or postplay paths, `-plex-cases` accepts a
+private JSON file containing an array such as
+`[{"name":"example detail","path":"/library/metadata/123"}]`.
+Only numeric metadata and postplay paths are accepted; metadata cases use
+the detail client's usual include flags. Keep files containing real keys in
+private scratch storage.
 
 `audit.md` is the query audit. It runs `EXPLAIN QUERY PLAN` on every
 statement those requests executed, then ranks the statements by the request
@@ -124,6 +135,14 @@ go run ./cmd/etherperf audit -trace /tmp/etherperf-run/trace.jsonl -db /tmp/ethe
 
 Run it against a copy of a real library, never against a live server's
 directory. Use `-strict` to exit 1 when a gated endpoint misses its budget.
+
+`-keep-providers` keeps the copy's Usenet, debrid and indexer settings
+(outbound stays blocked), so availability filtering runs as it does in
+production. Two production inputs stay out of reach offline: Plex Pass
+comes from plex.tv, so Plex Live TV (and Home's On Now row) is off in the
+sandbox, and TMDB is unreachable, so reads never fetch or store what the
+mirror lacks. Measuring either needs a throwaway build or a TMDB-only
+forward proxy (`HTTPS_PROXY`) that refuses every other host.
 
 ## The CI gate: library scale
 
@@ -298,11 +317,34 @@ catalogue's. Before, it refreshed every series' seasons on the request.
 - An extracted embedded subtitle track is cached per release and track, so
   a seek, a retry or the next session does not run ffmpeg over the file
   again.
+- Plex Web's soft subtitles are streamed as ASS from the player's position
+  instead of after a whole-release read: the cues arrive as the source is
+  read, the first minute at full speed and then at 1.5x real time as a
+  background read, with at most four such readers at once. A track already
+  cached whole is answered from the cache.
 - Identical concurrent work is collapsed with `internal/flight`, the
   singleflight used by TMDB reads, catalogue trends and stats.
 - Per-viewer caches must key on the viewer and on the viewer-policy
   generation (`viewer_policy_epoch`), so a cached response is never served
   across viewers or after a policy change.
+- Plex Home (`/hubs`, `/hubs/promoted`, `/hubs/sections/{id}`) is served
+  from each viewer's cached screen (`internal/plex/home_cache.go`). The key
+  is the viewer and the client's effective rendering profile, never the
+  client identifier or session. A request reads one revision statement
+  (`experience.ReadHomeRevision`: the viewer's latest watch-state write,
+  playlists, watchlist, favorites, exclusions and the epoch). The viewer's
+  revision, effective policy, the owner's settings and the Home layout are
+  hard inputs: a change is rebuilt on the request. For a restricted viewer
+  the epoch is hard too. For an unrestricted viewer the epoch, catalogue
+  writes, the daypart and age refresh the screen behind the response (the
+  epoch also moves on catalogue and guide writes, millions of times on a
+  production server). Home builds never wait on TMDB; what the mirror
+  lacks is fetched behind the build and the catalogue write refreshes the
+  screen.
+- Work a read starts but does not wait for (refreshes behind the read,
+  verdicts and prewarms) runs without the request's query stats
+  (`store.DetachQueryStats`): it is not the request's statements, writes
+  or lock waits.
 
 ## Results
 

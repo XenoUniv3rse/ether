@@ -14,7 +14,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -203,10 +202,18 @@ func (s *Service) CachedSidecars(title *core.Title, user *core.User, embedded []
 }
 
 // SearchOnDemand is the viewer-driven search behind Plex's subtitle
-// "Search": ranked OpenSubtitles candidates for one language (releaseName,
-// when a session knows it, improves the ranking). Results are remembered
-// for an hour so DownloadOnDemand only fetches files offered for the title.
+// "Search": ranked candidates from configured providers for one language
+// (releaseName, when a session knows it, improves the ranking). Results
+// are remembered for an hour so DownloadOnDemand only fetches files
+// offered for the title.
 func (s *Service) SearchOnDemand(ctx context.Context, title *core.Title, lang, releaseName string) ([]Candidate, error) {
+	movieHash, videoSize := s.lookupVideoHash(title, releaseName)
+	return s.SearchOnDemandWithHash(ctx, title, lang, releaseName, movieHash, videoSize)
+}
+
+// SearchOnDemandWithHash is SearchOnDemand when the caller already has a
+// movieHash and videoSize from cached ranges.
+func (s *Service) SearchOnDemandWithHash(ctx context.Context, title *core.Title, lang, releaseName, movieHash string, videoSize int64) ([]Candidate, error) {
 	if title == nil || !s.Enabled() {
 		return nil, nil
 	}
@@ -214,7 +221,7 @@ func (s *Service) SearchOnDemand(ctx context.Context, title *core.Title, lang, r
 	if lang == "" {
 		return nil, fmt.Errorf("subtitle search needs a language")
 	}
-	cands, err := s.SearchWithHash(ctx, title, lang, releaseName, "")
+	cands, err := s.searchProviders(ctx, title, lang, releaseName, movieHash, videoSize)
 	if err != nil {
 		return nil, err
 	}
@@ -251,6 +258,19 @@ func (s *Service) DownloadOnDemand(ctx context.Context, title *core.Title, fileI
 		return core.StreamInfo{}, core.ErrNotFound
 	}
 	id := cacheID(title, o.lang, fileID)
+	if o.cand.PluginID != "" {
+		s.mu.Lock()
+		p := s.pluginProviders[o.cand.PluginID]
+		s.mu.Unlock()
+		if p == nil {
+			return core.StreamInfo{}, core.ErrNotFound
+		}
+		var err error
+		ctx, err = p.Pick(ctx, title, o.cand)
+		if err != nil {
+			return core.StreamInfo{}, err
+		}
+	}
 	if _, err := s.fetchAndCache(ctx, id, o.cand, title.Key); err != nil {
 		return core.StreamInfo{}, err
 	}
@@ -271,42 +291,4 @@ func (s *Service) DownloadOnDemand(ctx context.Context, title *core.Title, fileI
 		return core.StreamInfo{}, err
 	}
 	return sidecarStream(0, o.lang, sel), nil
-}
-
-// OpenFormatAt is OpenFormat with the cue times moved back by offset, for
-// a transcode session whose timeline starts offset into the title. Cues
-// that end before the offset are dropped.
-func (s *Service) OpenFormatAt(id, format string, offset time.Duration) (io.ReadCloser, string, error) {
-	return s.OpenFormatAtFrom(id, format, offset, "")
-}
-
-// OpenFormatAtFrom is OpenFormatAt for a known release/source.
-func (s *Service) OpenFormatAtFrom(id, format string, offset time.Duration, source string) (io.ReadCloser, string, error) {
-	if offset <= 0 {
-		return s.OpenFormatFrom(id, format, source)
-	}
-	rc, _, err := s.OpenFormatFrom(id, "srt", source)
-	if err != nil {
-		return nil, "", err
-	}
-	b, err := io.ReadAll(io.LimitReader(rc, 32<<20))
-	rc.Close()
-	if err != nil {
-		return nil, "", err
-	}
-	format = strings.ToLower(strings.TrimPrefix(format, "."))
-	cues, err := ParseCues(string(b))
-	if err == nil {
-		cues, err = Shift(cues, -offset, 1)
-	}
-	if err != nil {
-		return nil, "", err
-	}
-	text := RenderSRT(cues)
-	if format == "vtt" {
-		text = RenderVTT(cues)
-	} else {
-		format = "srt"
-	}
-	return io.NopCloser(strings.NewReader(text)), format, nil
 }

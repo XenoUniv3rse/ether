@@ -29,10 +29,9 @@ func presentationKey(k memoKey, generic bool) memoKey {
 	k.cw = ""
 	k.owner = 0 // owner collections are rebuilt live; their refresh is not a new browsing session
 	// Android and Android TV poll /hubs with a new count and often a new
-	// session id. Those are the same browsing visit: one bandit sample per
-	// viewer, library surface and device class until the window expires.
-	k.session = ""
-	k.client = ""
+	// session id (memoKey carries neither client nor session). Those are the
+	// same browsing visit: one bandit sample per viewer, library surface and
+	// device class until the window expires.
 	k.limit = 0
 	k.hour = 0
 	// The first personal model should replace cold-start picks.

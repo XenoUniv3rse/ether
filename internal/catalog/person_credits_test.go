@@ -84,6 +84,7 @@ func TestEnsurePersonCreditsInsertFailureRollsBackAndRetries(t *testing.T) {
 	if _, err := c.Browse(ctx, core.BrowseQuery{Filter: core.Filter{Type: core.TypeMovie, Person: 777}}); err != nil {
 		t.Fatalf("browse with failing credit insert: %v", err)
 	}
+	c.WaitRefreshes() // the filmography loads behind the read
 	if n := countPersonCredits(t, db, 777); n != 0 {
 		t.Fatalf("credits persisted = %d, want 0 (insert failure must roll back the transaction)", n)
 	}
@@ -91,12 +92,16 @@ func TestEnsurePersonCreditsInsertFailureRollsBackAndRetries(t *testing.T) {
 	// Removing the cause must allow a retry to persist the credits: the
 	// failed attempt must not stamp personHydrated for 24h.
 	dropSecondCreditFailure(t, db)
-	page, err := c.Browse(ctx, core.BrowseQuery{Filter: core.Filter{Type: core.TypeMovie, Person: 777}})
-	if err != nil {
+	if _, err := c.Browse(ctx, core.BrowseQuery{Filter: core.Filter{Type: core.TypeMovie, Person: 777}}); err != nil {
 		t.Fatalf("browse retry: %v", err)
 	}
+	c.WaitRefreshes()
 	if n := countPersonCredits(t, db, 777); n != 2 {
 		t.Fatalf("credits persisted after retry = %d, want 2", n)
+	}
+	page, err := c.Browse(ctx, core.BrowseQuery{Filter: core.Filter{Type: core.TypeMovie, Person: 777}})
+	if err != nil {
+		t.Fatalf("browse after retry: %v", err)
 	}
 	if page.Total != 2 {
 		t.Fatalf("browse after retry total = %d, want 2 (%+v)", page.Total, page)

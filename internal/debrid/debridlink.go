@@ -147,7 +147,10 @@ func dlClassify(status int, env dlEnvelope) error {
 		// an app without permission, a feature that needs premium, or the
 		// account's daily traffic exhausted: the account, not the release.
 		return fmt.Errorf("debrid-link: %s: %w", msg, ErrAuth)
-	case "floodDetected", "maxTorrent", "maxTransfer", "freeServerOverload":
+	case "maxTransfer":
+		// The simultaneous-transfer limit: nothing new is added for now.
+		return fmt.Errorf("debrid-link: %s: %w", msg, ErrDownloadLimit)
+	case "floodDetected", "maxTorrent", "freeServerOverload":
 		// Too many requests (~1h), the daily new-torrent or simultaneous
 		// transfer limit, or overloaded free servers: back off and retry.
 		return fmt.Errorf("debrid-link: %s: %w", msg, ErrRateLimited)
@@ -282,14 +285,15 @@ func (p *debridLink) Acquire(ctx context.Context, req AcquireRequest) (*Acquired
 			}
 		}
 	}
-	cleanup := func() {
+	cleanup := func() bool {
 		if added && req.RemoveUncached {
 			rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+			defer cancel()
 			if req.mayRemove(rctx, id) {
-				_ = p.Remove(rctx, id)
+				return p.Remove(rctx, id) == nil
 			}
-			cancel()
 		}
+		return false
 	}
 	var chosen File
 	ready := false
@@ -318,10 +322,11 @@ func (p *debridLink) Acquire(ctx context.Context, req AcquireRequest) (*Acquired
 		}
 	}
 	if !ready {
-		if req.CachedOnly {
-			cleanup()
+		err := fmt.Errorf("debrid-link: torrent is not ready: %w", core.ErrNotCached)
+		if req.CachedOnly && cleanup() {
+			return nil, err
 		}
-		return nil, fmt.Errorf("debrid-link: torrent is not ready: %w", core.ErrNotCached)
+		return nil, pending(id, err)
 	}
 	if t.SrvMaint {
 		return nil, fmt.Errorf("debrid-link: the torrent's server is under maintenance: %w", core.ErrSourceUnavailable)

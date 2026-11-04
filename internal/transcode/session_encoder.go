@@ -166,6 +166,13 @@ func (s *Session) startRunLocked(seg int, bigProbe bool) error {
 	// supersedes it; only the newest transition may start another encoder.
 	s.runSeq++
 	sequence := s.runSeq
+	s.pendingStart, s.pendingSegment, s.pendingTrack = true, seg, s.wantTrack
+	defer func() {
+		if sequence == s.runSeq {
+			s.pendingStart = false
+			s.broadcastLocked()
+		}
+	}()
 	for s.reaping != nil || s.starting != nil {
 		barrier := s.reaping
 		if s.starting != nil {
@@ -194,7 +201,11 @@ func (s *Session) startRunLocked(seg int, bigProbe bool) error {
 			s.starting = nil
 		}
 	}
-	if s.emptyRuns > 0 && s.emptyAt >= 0 && seg <= s.emptyAt {
+	// Only a restart at the very start that just published nothing is
+	// moved past it. An earlier start (a seek back, another rung) has
+	// media ahead of it; moving it to the hole would replay the empty
+	// run and trip the cap for a segment that exists.
+	if s.emptyRuns > 0 && s.emptyAt >= 0 && seg == s.emptyAt {
 		s.log.Info("skipping restart at empty segment", "segment", seg, "advance", s.emptyAt+1, "emptyRestarts", s.emptyRuns)
 		seg = s.emptyAt + 1
 	}
@@ -235,6 +246,12 @@ func (s *Session) startRunLocked(seg int, bigProbe bool) error {
 		Protocol:     s.proto,
 		FastStart:    rp.fastStart,
 		Rate:         rp.rate,
+	}
+	if s.container == ContainerFMP4 && !s.isDASH() {
+		_, retained := s.clockLocked(&run{startSeg: seg}, s.wantTrack)
+		if video, ok := retained["vide"]; ok && s.input == s.clockInput {
+			spec.VideoTimescale = video.scale
+		}
 	}
 	if s.container == ContainerMatroska {
 		spec.InitName = fmt.Sprintf("header-%d.mkv", s.runSeq)
@@ -298,8 +315,12 @@ func (s *Session) startRunLocked(seg int, bigProbe bool) error {
 		sl.index = func(t time.Duration) int { return plan.IndexAt(t - base) }
 		cr = &chunkRun{dir: spec.ChunkDir, container: s.container,
 			initPath: filepath.Join(spec.Dir, spec.InitName), startAt: spec.Start, sl: sl}
+		if s.container == ContainerMPEGTS && spec.Start > 0 {
+			cr.tsBoundary = &tsDiscontinuity{needVideo: s.info.Video() != nil, needAudio: findStream(s.info, spec.Decision.AudioStream, "audio") != nil}
+		}
 	}
 	r := &run{
+		reason:   cause,
 		chunks:   cr,
 		seq:      s.runSeq,
 		startSeg: seg,

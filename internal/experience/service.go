@@ -1157,6 +1157,18 @@ func (s *Service) Search(ctx context.Context, viewer *core.Viewer, device core.D
 	if show {
 		types = append(types, core.TypeSeason, core.TypeEpisode)
 	}
+	// Apply the requested media types before the catalogue chooses and
+	// hydrates its candidate window. Filtering only afterwards wastes that
+	// window on other libraries and can crowd out valid results.
+	if len(q.Types) > 0 {
+		filtered := types[:0]
+		for _, typ := range types {
+			if containsMediaType(q.Types, typ) {
+				filtered = append(filtered, typ)
+			}
+		}
+		types = filtered
+	}
 	offset := max(q.Offset, 0)
 	limit := q.Limit
 	if limit <= 0 {

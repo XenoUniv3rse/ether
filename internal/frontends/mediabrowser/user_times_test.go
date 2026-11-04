@@ -50,7 +50,10 @@ func TestUserTimesUseIssuedAndRequestCredentials(t *testing.T) {
 			if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &auth) != nil || auth.User["Id"] == "" {
 				t.Fatal(w.Code, w.Body.String())
 			}
-			if _, ok := auth.User["LastLoginDate"]; ok || calls != 0 {
+			// Jellyfin stamps the sign-in itself as the last login; neither
+			// protocol may look up the stored times before answering.
+			stamped, ok := auth.User["LastLoginDate"]
+			if calls != 0 || stamped == wireTime(login) || ok != (protocol == "jellyfin") {
 				t.Fatal("sign-in waited for viewer times", w.Body.String(), calls)
 			}
 			spec, err := openapi.CachedSpec("../../conform/specs/manifest.json", string(protocol), "")

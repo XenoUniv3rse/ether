@@ -127,9 +127,17 @@ func TestPlaybackReadAheadKeepsMinutesOnDisk(t *testing.T) {
 		}
 	}
 
-	// The target follows the reader.
+	// The target follows the reader. The loop replans only once the target
+	// has moved a low-water mark past what it covered, so a reader that
+	// stops leaves coverage anywhere in (target-lowWater, target], depending
+	// on where the loop's batches fell relative to the reads.
 	playRead(t, src, 6<<20)
-	waitFor(t, "target to follow the reader", func() bool { return onDisk(src, cache, 8<<20, 3<<20) })
+	depth := src.playAheadBytes()
+	covered := 6<<20 + depth - min(int64(playLowWater), depth/8)
+	if covered <= 8<<20 {
+		t.Fatalf("covered target %d does not pass the previous target", covered)
+	}
+	waitFor(t, "target to follow the reader", func() bool { return onDisk(src, cache, 8<<20, covered-8<<20) })
 }
 
 func TestPlaybackReadAheadNeverDelaysDemandReads(t *testing.T) {
@@ -210,6 +218,9 @@ func TestPlaybackReadAheadRespectsCacheLimit(t *testing.T) {
 		defer src.mu.Unlock()
 		return len(src.cursors) > 0 && src.cursors[0].playNext >= 4<<20
 	})
+	if got := src.BufferedAhead(); got < 2<<20 {
+		t.Fatalf("buffered ahead = %d, want at least the 2 MiB read-ahead", got)
+	}
 	time.Sleep(100 * time.Millisecond)
 	for n := (4<<20)/playPart + 2; n <= playSize/playPart; n++ {
 		if c := f.calls(postID("budget.mkv", n)); c != 0 {

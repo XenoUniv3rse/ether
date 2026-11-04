@@ -320,12 +320,22 @@ func TestBuildArgsBurnPGS(t *testing.T) {
 	o := allow()
 	o.SubtitleStream = 2
 	d := Decide(pgs, appleTV, o, Policy{})
-	graph := argValue(buildArgs(baseSpec(pgs, d)), "-filter_complex")
-	// baseSpec seeks to 200s, so both overlay inputs drop the title clock
-	// before the muxer adds it back.
-	want := "[0:0]null,setpts=PTS-STARTPTS[base];[0:2]setpts=PTS-STARTPTS,scale=1920:800[sub];[base][sub]overlay=eof_action=pass,format=yuv420p[vout]"
+	s := baseSpec(pgs, d)
+	// baseSpec seeks to 200s. This run keeps the title clock (-copyts)
+	// for picture, subtitle and audio alike, so the overlay meets them
+	// as they are.
+	graph := argValue(buildArgs(s), "-filter_complex")
+	want := "[0:0]null[base];[0:2]scale=1920:800[sub];[base][sub]overlay=eof_action=pass,format=yuv420p[vout]"
 	if graph != want {
 		t.Errorf("graph\n got %s\nwant %s", graph, want)
+	}
+	// A Matroska run's -ss restarts the picture at 0, so both overlay
+	// inputs drop the title clock before the muxer adds it back.
+	s.Decision.Container = ContainerMatroska
+	graph = argValue(buildArgs(s), "-filter_complex")
+	want = "[0:0]null,setpts=PTS-STARTPTS[base];[0:2]setpts=PTS-STARTPTS,scale=1920:800[sub];[base][sub]overlay=eof_action=pass,format=yuv420p[vout]"
+	if graph != want {
+		t.Errorf("matroska graph\n got %s\nwant %s", graph, want)
 	}
 }
 

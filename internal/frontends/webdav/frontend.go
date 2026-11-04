@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"github.com/braedonsaunders/ether/internal/frontend/kit/mediasafety"
 	"net/http"
 	"strconv"
 	"strings"
@@ -17,7 +18,7 @@ import (
 type Frontend struct{}
 
 func (Frontend) Describe() frontend.Descriptor {
-	return frontend.Descriptor{ID: "webdav", Name: "Files", Version: "1.0", Clients: []string{"Infuse", "VLC", "Kodi", "rclone"}}
+	return frontend.Descriptor{ID: "webdav", Name: "Files", Version: "1.0", Clients: []string{"Infuse", "VLC", "Kodi", "rclone"}, SettingsSchema: frontend.AccountSchema("files")}
 }
 func (Frontend) Mount(_ context.Context, host frontend.Host) (frontend.Instance, error) {
 	if host.Identity == nil || host.Experience == nil || host.Sessions == nil {
@@ -93,6 +94,7 @@ func (i *instance) authenticate(r *http.Request) (*frontend.Viewer, frontend.Dev
 	return viewer, device, token, nil
 }
 func (i *instance) serve(w http.ResponseWriter, r *http.Request) {
+	mediasafety.SetHeaders(w)
 	viewer, device, credential, err := i.authenticate(r)
 	if err != nil {
 		w.Header().Set("WWW-Authenticate", `Basic realm="Ether WebDAV", charset="UTF-8"`)

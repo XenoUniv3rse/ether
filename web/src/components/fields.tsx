@@ -106,7 +106,8 @@ export const PasswordInput = forwardRef<
 
 /**
  * Password input that understands the server's redaction placeholder: the
- * stored secret arrives as "••••" and sending it back unchanged keeps it.
+ * stored secret arrives as "••••" (or "Saved" for plugin secrets) and sending
+ * it back unchanged keeps it.
  */
 export function SecretInput({
   value,
@@ -123,7 +124,8 @@ export function SecretInput({
   ariaLabel?: string;
   invalid?: boolean;
 }) {
-  const isStored = value === REDACTED;
+  const isStored =
+    value === REDACTED || value === "Saved" || /^https?:\/\/[^\s]+ \(saved\)$/.test(value);
   return (
     <div className="space-y-1">
       {isStored ? (
@@ -405,10 +407,11 @@ export function MapInput({
   return (
     <div className="space-y-2" role="group" aria-label={ariaLabel}>
       {rows.map(([name, secret], i) => (
-        <div key={i} className="flex items-start gap-2">
+        <div key={i} className="flex flex-col gap-2 sm:flex-row sm:items-start">
           <Input
             id={i === 0 ? id : undefined}
             aria-label={t("Header name")}
+            className="sm:w-1/2 sm:shrink-0"
             aria-invalid={invalid || undefined}
             value={name}
             placeholder={namePlaceholder}
@@ -426,7 +429,7 @@ export function MapInput({
               );
             }}
           />
-          <div className="flex-1">
+          <div className="min-w-0 flex-1">
             <SecretInput
               ariaLabel={t("Value")}
               value={secret}
@@ -439,6 +442,7 @@ export function MapInput({
             variant="ghost"
             size="sm"
             aria-label={t("Remove header")}
+            className="self-end sm:self-start"
             onClick={() => commit(rows.filter((_, j) => j !== i))}
           >
             <Trash2 size={14} />

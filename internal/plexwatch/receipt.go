@@ -24,6 +24,9 @@ func (s *Service) completeSend(ctx context.Context, row state.SyncRow, id, guid,
 	if _, err := tx.ExecContext(ctx, `INSERT INTO plexwatch_sent(user_id,guid,kind,at_ms,rating,sent_at) VALUES(?,?,?,?,?,?) ON CONFLICT DO NOTHING`, row.UserID, guid, kind, at, rating, s.now().UnixNano()); err != nil {
 		return err
 	}
+	if _, err := tx.ExecContext(ctx, `UPDATE plexwatch_account SET last_send=?,send_problem='' WHERE user_id=?`, s.now().Unix(), row.UserID); err != nil {
+		return err
+	}
 	if s.receiptFault != nil {
 		if err := s.receiptFault("echo"); err != nil {
 			return err
@@ -92,6 +95,9 @@ type heldAttempt struct {
 // ReconcileOnce runs one pass of scheduled hold reconciliation across viewers
 // whose unreceipted attempts are due and have no live in-flight permit.
 func (s *Service) ReconcileOnce(ctx context.Context) (bool, error) {
+	if !s.supported {
+		return false, nil
+	}
 	now := s.now().UnixNano()
 	rows, err := s.db.QueryContext(ctx, `SELECT DISTINCT a.user_id FROM plexwatch_attempt a
 		WHERE a.receipt_at=0 AND a.next_reconcile<=?
@@ -157,6 +163,9 @@ func (s *Service) loadHeldAttempts(ctx context.Context, userID int64) ([]heldAtt
 // does not have it and no permit for that attempt is still in flight, the hold
 // is released and the current intent is allowed one fresh admission.
 func (s *Service) reconcileUser(ctx context.Context, userID int64, manual bool) error {
+	if !s.supported {
+		return nil
+	}
 	held, err := s.loadHeldAttempts(ctx, userID)
 	if err != nil || len(held) == 0 {
 		return err
@@ -197,8 +206,8 @@ func (s *Service) reconcileUser(ctx context.Context, userID int64, manual bool) 
 	if err != nil {
 		if errors.Is(err, ErrRevoked) {
 			_ = s.revoke(ctx, userID, acct.tokenGeneration)
-		} else if errors.Is(err, ErrNotEligible) {
-			_, _ = s.db.ExecContext(ctx, `UPDATE plexwatch_account SET eligibility='refused', enabled=0, checked_at=? WHERE user_id=? AND token_generation=?`,
+		} else if errors.Is(err, ErrCredentialForbidden) {
+			_, _ = s.db.ExecContext(ctx, `UPDATE plexwatch_account SET send_problem='credential', checked_at=? WHERE user_id=? AND token_generation=?`,
 				s.now().UnixNano(), userID, acct.tokenGeneration)
 		}
 		s.deferReconcileAttempts(ctx, held)
@@ -366,6 +375,9 @@ func (s *Service) receiptReconciledAttempt(ctx context.Context, a heldAttempt, t
 	defer tx.Rollback()
 	if _, err := tx.ExecContext(ctx, `INSERT INTO plexwatch_sent(user_id,guid,kind,at_ms,rating,sent_at) VALUES(?,?,?,?,?,?) ON CONFLICT DO NOTHING`,
 		a.userID, targetGUID, sentKind, sentAt, sentRating, now); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE plexwatch_account SET last_send=?,send_problem='' WHERE user_id=?`, s.now().Unix(), a.userID); err != nil {
 		return err
 	}
 	if !remapped {

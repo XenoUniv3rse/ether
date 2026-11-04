@@ -36,6 +36,12 @@ func With(ctx context.Context) context.Context {
 	return context.WithValue(ctx, memoKey{}, &memo{m: map[string]entry{}})
 }
 
+// Active reports whether ctx carries a memo: a read request.
+func Active(ctx context.Context) bool {
+	m, _ := ctx.Value(memoKey{}).(*memo)
+	return m != nil
+}
+
 // Do returns the memoized value for key, or loads, remembers and returns it.
 // A failed load is not remembered. Callers must not change a returned value
 // that other callers share (copy slices and maps before changing them).

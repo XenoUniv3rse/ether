@@ -1,0 +1,15 @@
+{
+  "summary": "Prefers smaller cached files that fit the playing device.",
+  "step": "Travel mode",
+  "hint": "Favour files within the size and resolution targets, with playable codecs.",
+  "height": "Maximum height",
+  "size": "Target file size in GB",
+  "language": "Preferred audio language",
+  "page": "Travel scorecard",
+  "samples": "Example release scores",
+  "sample_hint": "Higher scores rank first when this step is added to a quality profile.",
+  "gb1": "1 GB target",
+  "gb2": "2 GB target",
+  "gb4": "4 GB target",
+  "gb8": "8 GB target"
+}

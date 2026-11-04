@@ -230,6 +230,17 @@ func TestCSRFAllowsLiveTVFileUpload(t *testing.T) {
 	if code := post(guide, same, "application/octet-stream", false); code != http.StatusForbidden {
 		t.Fatalf("upload without csrf header: got %d want 403", code)
 	}
+	for _, path := range []string{"/ether/api/plugins/install", "/ether/api/plugins/install/preview"} {
+		if code := post(path, same, "application/octet-stream", true); code != http.StatusNotFound {
+			t.Fatalf("plugin upload csrf: got %d", code)
+		}
+		if code := post(path, "http://evil.example", "application/octet-stream", true); code != http.StatusForbidden {
+			t.Fatalf("cross-origin plugin upload: got %d", code)
+		}
+		if code := post(path, same, "application/octet-stream", false); code != http.StatusForbidden {
+			t.Fatalf("plugin upload without header: got %d", code)
+		}
+	}
 	refresh := "/ether/api/livetv/sources/abc/refresh"
 	if code := post(refresh, same, "application/octet-stream", true); code != http.StatusForbidden {
 		t.Fatalf("octet-stream refresh: got %d want 403", code)
@@ -1003,5 +1014,41 @@ func TestSimklSecretRedactionBinding(t *testing.T) {
 	restored, errs = admin.UnredactConfig(redacted, prev)
 	if len(errs) == 0 || restored.Simkl.ClientSecret != "" {
 		t.Fatal("secret followed changed client ID")
+	}
+}
+
+func TestExtensionRootKeepsConsolePrefixAndQuery(t *testing.T) {
+	store := newStore(t, seededConfig)
+	handler := admin.New(admin.Deps{Config: store, IsOwnerToken: storedOwner(store), Extensions: map[string]http.Handler{"extend/registry": http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/" || r.URL.Query().Get("kinds") != "page" {
+			t.Errorf("wrong resource: %s", r.URL)
+		}
+		w.WriteHeader(http.StatusOK)
+	})}})
+	for _, suffix := range []string{"", "/"} {
+		req := httptest.NewRequest(http.MethodGet, "/api/extend/registry"+suffix+"?kinds=page", nil)
+		req.Header.Set("X-Ether-Admin-Token", ownerToken)
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+		if w.Code != http.StatusOK || w.Header().Get("Location") != "" {
+			t.Fatalf("subtree root: %d %s", w.Code, w.Header().Get("Location"))
+		}
+	}
+}
+
+func TestExtensionKeepsEscapedPathBehindConsolePrefix(t *testing.T) {
+	store := newStore(t, seededConfig)
+	handler := admin.New(admin.Deps{Config: store, IsOwnerToken: storedOwner(store), Extensions: map[string]http.Handler{"plugins": http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/studio:community.page/views/overview" {
+			t.Errorf("wrong resource: %q", r.URL.Path)
+		}
+		w.WriteHeader(http.StatusOK)
+	})}})
+	req := httptest.NewRequest(http.MethodGet, "/ether/api/plugins/studio%3Acommunity.page/views/overview", nil)
+	req.Header.Set("X-Ether-Admin-Token", ownerToken)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("encoded plugin path: %d %s", w.Code, w.Body.String())
 	}
 }

@@ -33,6 +33,14 @@ func (a *App) extensionHandlers() map[string]http.Handler {
 	m["cache"] = a.cacheHandler()
 	m["availability"] = a.availability.Handler()
 	m["stats"] = a.stats.Handler()
+	m["experience"] = a.stats.ExperienceHandler()
+	m["indexer-usage"] = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if a.indexers == nil {
+			http.NotFound(w, r)
+			return
+		}
+		a.indexers.UsageHandler().ServeHTTP(w, r)
+	})
 	m["notifications"] = a.notifications.Handler()
 	m["livetv"] = a.livetv.Handler()
 	m["calendar"] = a.calendar.Handler()
@@ -66,5 +74,6 @@ func (a *App) extensionHandlers() map[string]http.Handler {
 	})
 	a.discoveryHandlers(m)
 	adoptionHandlers(a, m)
+	a.extensibilityHandlers(m)
 	return m
 }

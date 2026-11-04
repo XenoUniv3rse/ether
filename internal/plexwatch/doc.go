@@ -1,13 +1,17 @@
 // Package plexwatch delivers one viewer's watched state, and whole-star
 // ratings, to that viewer's own Plex account.
 //
+// In this release the integration is dormant: AccountSyncSupported is false
+// because scrobbles.plex.tv accepts no credential a non-Plex server can hold.
+// Nothing below runs against Plex until that constant is turned on.
+//
 // Local watch rows stay authoritative. A watch mark and a rating each have
 // their own timestamp, so one cannot make the other look newer. Intents are
 // rows in state_sync_journal, written in the same transaction as the watch
 // change. This package does not subscribe to in-memory state events.
 //
 // Provenance of the upstream contract, none of it a live call from this
-// repository:
+// repository except the November 2026 interoperability probe:
 //
 //   - POST https://scrobbles.plex.tv/state returned 201 for items with
 //     guid, viewedAt (unix milliseconds), viewState "complete" or "unplayed",
@@ -34,8 +38,8 @@
 //     GET https://plex.tv/api/v2/server/users/{accountId}/view_state_sync
 //     (200 continue, 403 stop). It obtains per-user tokens from
 //     GET https://plex.tv/api/v2/server/users/services?auth_token=<server token>.
-//     This package does not call the services route and does not send a
-//     server, shared-server, or home-switch token.
+//     The services route is authenticated with Ether's claimed server token.
+//     Service credentials are selected by the connected viewer's account ID.
 //     Sources: https://forums.plex.tv/t/unable-to-install-new-plex-server-on-new-w-11-computer/934457
 //     and https://forums.plex.tv/t/403-response-from-get-https-plex-tv-api-v2-server-users-xxx-view-state-sync-reused/883818
 //
@@ -50,15 +54,16 @@
 //     https://github.com/Taxel/PlexTraktSync/discussions/1842
 //
 // The token stored here is the authToken from POST/GET /api/v2/pins, the same
-// credential Ether already uses for GET /api/v2/user. Captured ViewStateSync
-// logs do not show that a PIN token, rather than a services token, is what
-// scrobbles.plex.tv accepts. Eligibility is therefore a read of
-// view_state_sync with that stored token, and a refusal leaves sync off.
-// The check is a GET. A result is stored only for the token generation that
-// was checked, so a late response cannot restore a revoked token or change
-// the account that replaced it. This package does not PUT consent and does
-// not call /api/v2/server/users/services or /api/home. ProbeToken is that
-// read-only pair of requests and does not start a PIN.
+// credential Ether already uses for GET /api/v2/user and the account consent
+// endpoint. It is not sent to scrobbles.plex.tv. The claimed Ether server token
+// obtains the matching account's scrobbling service envelope; the decrypted JWT
+// is sent as Authorization: Bearer. A read-only probe using Ether's own claim
+// returned HTTP 200 with items/pageInfo on 2026-11-04. PMS 1.43.4/1.43.5 loader
+// inspection established the base64/AES-CBC envelope and length-byte padding.
+// Service tokens remain in memory for at most five minutes, bounded by expiry,
+// and are discarded when the claim changes or the service refuses a token.
+// Consent checks never modify Plex settings. Their result is stored only for
+// the generation checked, so late responses cannot restore a revoked account.
 //
 // Permit admission and consent changes (enable, disable, reconnect, revoke)
 // take the same fence-row lock. Admission inserts a permit only when that

@@ -25,10 +25,26 @@ export interface TitleCard {
 }
 
 export interface TitleDetail extends TitleCard {
+  tmdbId?: number;
+  imdbId?: string;
   cast?: { id: number; name: string; role?: string; image?: string }[];
   directors?: { id: number; name: string; image?: string }[];
   keywords?: { id: number; name: string }[] | string[];
   collection?: { id: number; name: string } | null;
+  tagline?: string;
+  originalTitle?: string;
+  language?: string;
+  /** TMDB status: "Returning Series", "Ended", "Released", "In Production"… */
+  status?: string;
+  studios?: string[];
+  countries?: string[];
+  /** YYYY-MM-DD: first air date or theatrical release. */
+  releaseDate?: string;
+  homeReleaseDate?: string;
+  homeReleaseAgeAdmitted?: boolean;
+  lastAirDate?: string;
+  seasonCount?: number;
+  episodeCount?: number;
 }
 
 const RULE_FIELDS = [
@@ -106,6 +122,7 @@ export type Source =
   | { kind: "tmdbDiscover"; params: Record<string, string> }
   | { kind: LookupSourceKind; id: number; label?: string }
   | { kind: "watchProvider"; id: number; region?: string; label?: string }
+  | { kind: "tmdbUserList"; url: string }
   | { kind: "traktList"; url: string }
   | { kind: "letterboxdList"; url: string }
   | { kind: "mdblist"; url: string }

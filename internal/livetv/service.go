@@ -30,21 +30,27 @@ CREATE TABLE livetv_policies(user_id INTEGER PRIMARY KEY, data TEXT NOT NULL);`)
 }
 
 type Service struct {
-	authCache        authCache  // provider credentials for the stream path (auth.go)
-	inputRelay       inputRelay // loopback ffmpeg input relay (input_relay.go)
-	probeMu          sync.Mutex
-	probeCache       map[string]liveProbeEntry
-	probeWait        map[string]*liveProbeFlight
-	sourceMu         sync.Mutex
-	sourceHealth     map[string]streamSourceHealth
-	transMu          sync.RWMutex
-	transcodes       map[string]core.HLSSession
-	o                Options
-	policyReads      atomic.Uint64
-	mu               sync.Mutex
-	lineupUnix       int64
-	onChange         func()
-	sessions         map[string]*session
+	authCache     authCache  // provider credentials for the stream path (auth.go)
+	inputRelay    inputRelay // loopback ffmpeg input relay (input_relay.go)
+	probeMu       sync.Mutex
+	probeCache    map[string]liveProbeEntry
+	probeWait     map[string]*liveProbeFlight
+	healthMu      sync.RWMutex
+	channelHealth map[string]sweepResult
+	sourceMu      sync.Mutex
+	sourceHealth  map[string]streamSourceHealth
+	transMu       sync.RWMutex
+	transcodes    map[string]core.HLSSession
+	o             Options
+	kinds         *KindRegistry
+	policyReads   atomic.Uint64
+	mu            sync.Mutex
+	lineupUnix    int64
+	onChange      func()
+	sessions      map[string]*session
+	// watched is when each channel was last tuned or playing (guarded by
+	// mu): only channels watched lately are pre-warmed.
+	watched          map[string]time.Time
 	nextSubscription int64 // guarded by mu
 	ctx              context.Context
 	cancel           context.CancelFunc
@@ -62,10 +68,15 @@ func New(o Options) (*Service, error) {
 		o.HTTPClient = egress.Client(egress.CapDirect, 20*time.Second)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	s := &Service{o: o, sessions: map[string]*session{}, transcodes: map[string]core.HLSSession{}, ctx: ctx, cancel: cancel, lineupUnix: o.Now().Unix()}
-	s.wg.Add(2)
+	kinds := o.Kinds
+	if kinds == nil {
+		kinds = NewKindRegistry()
+	}
+	s := &Service{o: o, kinds: kinds, sessions: map[string]*session{}, transcodes: map[string]core.HLSSession{}, ctx: ctx, cancel: cancel, lineupUnix: o.Now().Unix()}
+	s.wg.Add(3)
 	go s.maintain()
 	go s.refreshLoop()
+	go s.healthSweepLoop()
 	return s, nil
 }
 func (s *Service) Close() error {
@@ -144,8 +155,11 @@ func (s *Service) maintain() {
 				if err != nil {
 					continue
 				}
+				recent := s.recentlyWatched()
 				for _, c := range cs {
-					if !c.Enabled || c.Kind != "virtual" {
+					// A channel nobody has watched lately is not pre-warmed:
+					// warming resolves every scheduled item, around the clock.
+					if !c.Enabled || c.Kind != "virtual" || !recent[c.ID] {
 						continue
 					}
 					ps := Schedule(c, s.o.Now(), s.o.Now().Add(3*time.Minute))
@@ -197,7 +211,11 @@ func (s *Service) expireSessions() {
 	}
 }
 func (s *Service) Channels(ctx context.Context) ([]Channel, error) {
-	return channels(ctx, s.o.DB)
+	cs, err := channels(ctx, s.o.DB)
+	for i := range cs {
+		cs[i].Health = s.sweepState(cs[i])
+	}
+	return cs, err
 }
 
 type queryer interface {
@@ -539,6 +557,12 @@ func (s *Service) SaveChannel(ctx context.Context, c Channel) (Channel, error) {
 	if c.ID == "" {
 		c.ID = randomID()
 	}
+	if c.LogoMatched {
+		old, err := s.Channel(ctx, c.ID)
+		if err != nil || !old.LogoMatched || old.Logo != c.Logo {
+			c.LogoMatched = false
+		}
+	}
 	if err := s.expand(ctx, &c); err != nil {
 		return c, err
 	}
@@ -657,6 +681,9 @@ func (s *Service) allowedWithLookup(ctx context.Context, u *core.User, c Channel
 	if u == nil || !c.Enabled {
 		return false
 	}
+	if !u.IsOwner && s.sweepState(c) == "unavailable" {
+		return false
+	}
 	_, pol, err := s.withPolicy(ctx, u)
 	if err != nil {
 		return false
@@ -747,14 +774,14 @@ func (s *Service) AllowedChannels(ctx context.Context, u *core.User) ([]Channel,
 	if err != nil {
 		return nil, err
 	}
+	airing, err := s.programmesAt(ctx, cs, s.o.Now())
+	if err != nil {
+		return nil, err
+	}
 	out := []Channel{}
-	for _, c := range cs {
-		p, ok, err := s.programmeAt(ctx, c, s.o.Now())
-		if err != nil {
-			return nil, err
-		}
+	for i, c := range cs {
 		var current *Programme
-		if ok {
+		if p, ok := airing[i]; ok {
 			current = &p
 		}
 		if s.allowed(ctx, u, c, current) {
@@ -828,6 +855,83 @@ func (s *Service) programmeAt(ctx context.Context, c Channel, at time.Time) (Pro
 	p.ChannelID = c.ID
 	p.ID = fmt.Sprintf("%s-%d", c.ID, p.Start.UnixMilli())
 	return p, true, nil
+}
+
+// programmesAtBatch bounds the channels one programmesAt statement covers
+// (two parameters each).
+const programmesAtBatch = 200
+
+// programmesAt is programmeAt for every channel in cs, keyed by index. Guide
+// channels are read in one statement per batch, each channel still an
+// indexed seek on the primary key, so a large lineup costs a handful of
+// statements instead of one per channel.
+func (s *Service) programmesAt(ctx context.Context, cs []Channel, at time.Time) (map[int]Programme, error) {
+	out := make(map[int]Programme, len(cs))
+	type pair struct{ source, channel string }
+	want := map[pair][]int{}
+	var order []pair
+	for i, c := range cs {
+		if c.Kind == "virtual" {
+			if p, ok, err := s.programmeAt(ctx, c, at); err != nil {
+				return nil, err
+			} else if ok {
+				out[i] = p
+			}
+			continue
+		}
+		k := pair{guideSource(c), c.GuideID}
+		if _, ok := want[k]; !ok {
+			order = append(order, k)
+		}
+		want[k] = append(want[k], i)
+	}
+	ms := at.UnixMilli()
+	for start := 0; start < len(order); start += programmesAtBatch {
+		batch := order[start:min(start+programmesAtBatch, len(order))]
+		values := make([]string, len(batch))
+		args := make([]any, 0, 2*len(batch)+1)
+		for i, k := range batch {
+			values[i] = "(?,?)"
+			args = append(args, k.source, k.channel)
+		}
+		args = append(args, ms)
+		rows, err := s.o.DB.QueryContext(ctx, `WITH ch(source_id, channel_id) AS (VALUES `+strings.Join(values, ",")+`)
+SELECT ch.source_id, ch.channel_id, (SELECT p.data FROM livetv_programmes p WHERE p.source_id=ch.source_id AND p.channel_id=ch.channel_id AND p.start_ms<=? ORDER BY p.start_ms DESC LIMIT 1) FROM ch`, args...)
+		if err != nil {
+			return nil, err
+		}
+		for rows.Next() {
+			var k pair
+			var b []byte
+			if err = rows.Scan(&k.source, &k.channel, &b); err != nil {
+				rows.Close()
+				return nil, err
+			}
+			if b == nil {
+				continue
+			}
+			var p Programme
+			if err = json.Unmarshal(b, &p); err != nil {
+				rows.Close()
+				return nil, err
+			}
+			if !p.End.After(at) {
+				continue
+			}
+			for _, i := range want[k] {
+				q := p
+				q.ChannelID = cs[i].ID
+				q.ID = fmt.Sprintf("%s-%d", cs[i].ID, q.Start.UnixMilli())
+				out[i] = q
+			}
+		}
+		if err = rows.Err(); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		rows.Close()
+	}
+	return out, nil
 }
 
 // guideChannel drops titles the resolver already knows cannot play. Unknown
@@ -934,6 +1038,44 @@ func (s *Service) Guide(ctx context.Context, u *core.User, from, until time.Time
 		return nil, err
 	}
 	out := []Programme{}
+	if until.Sub(from) <= time.Second {
+		// What is airing now (Home's On Now row): one batched read.
+		guided := make([]Channel, 0, len(cs))
+		at := make([]int, len(cs))
+		for i, c := range cs {
+			at[i] = -1
+			if c.Enabled && c.Kind != "virtual" {
+				at[i] = len(guided)
+				guided = append(guided, c)
+			}
+		}
+		airing, err := s.programmesAt(ctx, guided, from)
+		if err != nil {
+			return nil, err
+		}
+		for i, c := range cs {
+			if !c.Enabled {
+				continue
+			}
+			if at[i] >= 0 {
+				if p, ok := airing[at[i]]; ok && s.allowed(ctx, u, c, &p) {
+					out = append(out, p)
+				}
+				continue
+			}
+			ps, err := s.programmes(ctx, c, from, until)
+			if err != nil {
+				return nil, err
+			}
+			for _, p := range ps {
+				if s.allowed(ctx, u, c, &p) {
+					out = append(out, p)
+				}
+			}
+		}
+		sort.SliceStable(out, func(i, j int) bool { return out[i].Start.Before(out[j].Start) })
+		return out, nil
+	}
 	for _, c := range cs {
 		if !c.Enabled {
 			continue
@@ -1078,54 +1220,28 @@ func (s *Service) ImportSource(ctx context.Context, src Source) (Source, error) 
 	if strings.TrimSpace(src.Name) == "" {
 		return src, fmt.Errorf("source needs a name")
 	}
+	if src.Kind == legacyStremioKind {
+		return src, errLegacyStremio
+	}
 	if err := s.keepStoredUploads(ctx, &src); err != nil {
 		return src, err
 	}
 	if err := s.prepareSourceAuth(ctx, &src); err != nil {
 		return src, err
 	}
-	var err error
-	if src.PlaylistURL != "" {
-		src.Playlist, err = s.readURLWith(ctx, src.PlaylistURL, maxPlaylistBytes, src.Auth.header(), "playlist")
-		if err != nil {
-			return src, err
-		}
+	kind, ok := s.kindRegistry().Classify(src)
+	if !ok && strings.HasPrefix(src.Kind, "plugin:") {
+		return src, fmt.Errorf("the plugin behind this source is off or removed; switch it on in Plugins")
 	}
-	if strings.TrimSpace(src.Playlist) == "" && strings.TrimSpace(src.Guide) == "" && src.GuideURL == "" {
+	if !ok {
 		return src, fmt.Errorf("source needs a playlist or an XMLTV guide")
 	}
-	var cs []Channel
-	if strings.TrimSpace(src.Playlist) != "" { // guide-only (EPG) sources add no channels
-		cs, err = ParseM3U(strings.NewReader(src.Playlist), src.ID)
-		if err != nil {
-			return src, err
-		}
-	}
-	allow, err := s.guideAllow(ctx, src, cs)
+	fetched, err := kind.Fetch(ctx, s, &src)
 	if err != nil {
 		return src, err
 	}
-	filter := guideFilter{From: s.o.Now().Add(-guideLookback), Until: s.o.Now().Add(guideLookahead), IDs: allow}
-	g := XMLGuide{}
-	if src.GuideURL != "" {
-		g, err = s.readGuide(ctx, src.GuideURL, src.Auth.header(), filter)
-		if err != nil {
-			return src, err
-		}
-	} else if src.Guide != "" {
-		var dropped bool
-		g, dropped, err = parseXMLTV(strings.NewReader(src.Guide), filter)
-		if err != nil {
-			return src, err
-		}
-		if dropped {
-			trimmed, err := formatXMLTV(g)
-			if err != nil {
-				return src, err
-			}
-			src.Guide = trimmed
-		}
-	}
+	cs, g := fetched.Channels, fetched.Guide
+	s.matchLogos(ctx, cs)
 	tx, err := s.o.DB.BeginTx(ctx, nil)
 	if err != nil {
 		return src, err
@@ -1152,6 +1268,9 @@ func (s *Service) ImportSource(ctx context.Context, src Source) (Source, error) 
 			oldByID[c.ID] = c
 		}
 	}
+	if err := assignImportedNumbers(ctx, tx, src.ID, cs, oldByID, old, s.o.Now()); err != nil {
+		return src, err
+	}
 	if _, err = tx.ExecContext(ctx, `DELETE FROM livetv_programmes WHERE source_id=?`, src.ID); err != nil {
 		return src, err
 	}
@@ -1168,9 +1287,15 @@ func (s *Service) ImportSource(ctx context.Context, src Source) (Source, error) 
 			c.GuideID = previous.GuideID
 			c.GuideSourceID = previous.GuideSourceID
 			c.Transcode = previous.Transcode
-			c.StreamSources = mergeImportedStreams(c, previous)
-			if err := normalizeStreamSources(&c); err != nil {
-				return src, err
+			if fetched.AddonInputs {
+				c.StreamSources = mergeAddonStreams(c.StreamSources, previous.StreamSources)
+			} else {
+				c.StreamSources = mergeImportedStreams(c, previous)
+			}
+			if len(c.StreamSources) > 0 {
+				if err := normalizeStreamSources(&c); err != nil {
+					return src, err
+				}
 			}
 		}
 		if guide, ok := g.Channels[c.GuideID]; ok && c.Logo == "" {
@@ -1202,6 +1327,17 @@ func (s *Service) ImportSource(ctx context.Context, src Source) (Source, error) 
 	err = tx.Commit()
 	if err == nil {
 		s.bumpLineup()
+		if fetched.AddonInputs {
+			var newChannels []string
+			for _, c := range stored {
+				if _, existed := oldByID[c.ID]; !existed {
+					newChannels = append(newChannels, c.ID)
+				}
+			}
+			if len(newChannels) > 0 {
+				_, _ = s.MatchGuides(ctx, GuideMatchRequest{ChannelIDs: newChannels})
+			}
+		}
 		// Only tunes whose stream changed or disappeared are interrupted, so
 		// a scheduled refresh does not cut off viewers.
 		for _, id := range changedStreams(oldByID, stored) {

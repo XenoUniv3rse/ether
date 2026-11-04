@@ -42,6 +42,9 @@ type ReleaseFeed struct {
 	DailyLimit int `json:"dailyLimit,omitempty"`
 	// PageMax is the page size reported by caps. Zero means unknown.
 	PageMax int `json:"pageMax,omitempty"`
+	// SinglePage marks a feed that lists only its latest page (a built-in
+	// site's latest releases); it cannot page back to close a gap.
+	SinglePage bool `json:"singlePage,omitempty"`
 }
 type foregroundReserveKey struct{}
 
@@ -61,4 +64,42 @@ func InheritBackground(dst, src context.Context) context.Context {
 		dst = WithForegroundReserve(dst, ForegroundReserve(src))
 	}
 	return dst
+}
+
+type indexerSkipKey struct{}
+
+// WithIndexerSkip marks the indexers (by feed source id, core.ReleaseFeed.ID)
+// a search should leave out: a background probe skips indexers whose
+// release feed has already shown it everything new.
+func WithIndexerSkip(ctx context.Context, ids map[string]bool) context.Context {
+	if len(ids) == 0 {
+		return ctx
+	}
+	return context.WithValue(ctx, indexerSkipKey{}, ids)
+}
+
+// IndexerSkipped reports whether ctx's search leaves out the indexer id.
+func IndexerSkipped(ctx context.Context, id string) bool {
+	ids, _ := ctx.Value(indexerSkipKey{}).(map[string]bool)
+	return ids[id]
+}
+
+type unattendedSearchKey struct{}
+
+// WithUnattendedSearch marks a search nobody is waiting on (a watchlist
+// check, a preload, a next-episode prefetch): an indexer tries its fallback
+// queries one at a time and stops at the first that finds releases,
+// instead of firing them all at once as it does for Play.
+func WithUnattendedSearch(ctx context.Context) context.Context {
+	return context.WithValue(ctx, unattendedSearchKey{}, true)
+}
+
+// IsUnattendedSearch reports whether nobody is waiting on ctx's search:
+// marked unattended, or speculative work (a warm-up) not yet promoted to
+// Play.
+func IsUnattendedSearch(ctx context.Context) bool {
+	if v, _ := ctx.Value(unattendedSearchKey{}).(bool); v {
+		return true
+	}
+	return IsSpeculative(ctx)
 }

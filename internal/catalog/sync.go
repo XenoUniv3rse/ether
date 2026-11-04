@@ -188,6 +188,7 @@ func (c *Catalog) Run(ctx context.Context) {
 		}
 	}()
 	go c.refreshRatingsLoop(ctx)
+	go c.refreshShowAddedLoop(ctx)
 	go c.correctMovieYears(ctx)
 	full := schedule.New(c.now(), c.untilDue(ctx))
 	// Preserve the existing resume behavior while the gate is off. If the
@@ -230,7 +231,7 @@ func (c *Catalog) Run(ctx context.Context) {
 		if warm.Remaining(c.now()) == 0 {
 			if !c.syncing.Load() {
 				if c.config().ReleaseMode == config.ModeDigital {
-					_, _ = c.BackfillHomeReleases(ctx, 15)
+					_, _ = c.BackfillHomeReleases(ctx, 150)
 					_, _ = c.WarmDetails(ctx, 10)
 				} else {
 					_, _ = c.WarmDetails(ctx, 25)
@@ -541,7 +542,11 @@ type personCreditsTMDB interface {
 
 // ensurePersonCredits hydrates a person's filmography from TMDB's
 // /person/{id}/combined_credits on first browse when the local mirror holds
-// only a few detail-enriched titles for them.
+// only a few detail-enriched titles for them. The read never waits for it:
+// detail pages browse three people each, and a synchronous fetch put up to
+// three TMDB round trips and their catalogue writes on every cold detail
+// and post-play request. The browse serves the credits already stored, and
+// the next read has the rest.
 func (c *Catalog) ensurePersonCredits(ctx context.Context, personID int64) {
 	client := c.tmdb()
 	if personID <= 0 || client == nil {
@@ -551,13 +556,20 @@ func (c *Catalog) ensurePersonCredits(ctx context.Context, personID int64) {
 	if !ok {
 		return
 	}
-	now := c.now()
 	c.personMu.Lock()
-	if at, seen := c.personHydrated[personID]; seen && now.Sub(at) < 24*time.Hour {
+	if at, seen := c.personHydrated[personID]; seen && c.now().Sub(at) < 24*time.Hour {
 		c.personMu.Unlock()
 		return
 	}
 	c.personMu.Unlock()
+	_ = c.hydrate(ctx, "person:"+strconv.FormatInt(personID, 10), 0, func(ctx context.Context) error {
+		c.hydratePersonCredits(ctx, client, pc, personID)
+		return nil
+	})
+}
+
+func (c *Catalog) hydratePersonCredits(ctx context.Context, client TMDB, pc personCreditsTMDB, personID int64) {
+	now := c.now()
 	// Stamp only after a successful hydration: stamping before the
 	// work would suppress retries for 24h when the credit insert
 	// transaction below fails and rolls back.

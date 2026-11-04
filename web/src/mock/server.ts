@@ -4,6 +4,7 @@
  * catalogue and builds context-aware Home rows so every screen behaves
  * realistically offline.
  */
+import { createPrerollsMock } from "./prerolls";
 import type {
   ActivityDay,
   CollectionSpec,
@@ -38,6 +39,7 @@ import type {
   ClusterStatus,
   EtherConfig,
   EtherUser,
+  IdentityPreset,
   JoinTokenInfo,
   LogEntry,
 } from "../lib/types";
@@ -57,6 +59,7 @@ import {
   type FakeTitle,
 } from "./data";
 import { createMetadataMock } from "./metadata";
+import { createExperienceMock } from "./experience";
 import { createMaintenance } from "./maintenance";
 import { createOpsMock, UNREACHABLE } from "./ops";
 import { createReleaseConsoleMock } from "./releases";
@@ -66,6 +69,7 @@ import { createTrashMock } from "./trash";
 import { createCacheMock } from "./cache";
 import { createCalendarMock } from "./calendar";
 import { createLiveTVMock } from "./livetv";
+import { createExtendMock } from "./extend";
 import { TEMPLATES } from "./templates";
 import { NOT_RATED, RATING_LEVELS, canonicalRating } from "../lib/contentRatings";
 
@@ -82,8 +86,6 @@ const NOW = () => new Date();
 
 export interface FakeOptions {
   bootstrap?: Partial<Bootstrap>;
-  /** Simulate an LLM being configured (collections/generate). */
-  llm?: boolean;
   /** Artificial latency for realism in the browser; 0 in tests. */
   latencyMs?: number;
   /** Serve as a node of a three-node PostgreSQL cluster instead of a standalone server. */
@@ -102,6 +104,8 @@ export interface FakeOptions {
   restore?: string;
   /** Household audio and subtitle choices, for the Playback screen in the browser mock. */
   householdAudio?: boolean;
+  /** Seed pre-rolls, their recent plays and a video still converting. */
+  prerolls?: boolean;
 }
 
 function json(body: unknown, status = 200): Response {
@@ -113,6 +117,33 @@ function json(body: unknown, status = 200): Response {
 function err(status: number, code: string, message: string): Response {
   return json({ error: { code, message } }, status);
 }
+
+/** Mirrors internal/config/clientid.go identityPresets. */
+const IDENTITY_PRESETS: IdentityPreset[] = [
+  { key: "ether", userAgent: "Ether/1.0" },
+  {
+    key: "sonarr",
+    userAgent: "Sonarr/4.0.20.3014 (ubuntu 26.04)",
+    headers: { Accept: "application/rss+xml, text/rss+xml, application/xml, text/xml" },
+  },
+  {
+    key: "radarr",
+    userAgent: "Radarr/6.4.4.10685 (ubuntu 26.04)",
+    headers: { Accept: "application/rss+xml, text/rss+xml, application/xml, text/xml" },
+  },
+  {
+    key: "prowlarr",
+    userAgent: "Prowlarr/2.7.0.5723 (ubuntu 26.04)",
+    headers: { Accept: "application/rss+xml, text/rss+xml, application/xml, text/xml" },
+  },
+  {
+    key: "nzbhydra2",
+    userAgent: "NZBHydra2 9.2.0",
+    headers: { Accept: "application/xml", "Content-Type": "application/xml" },
+  },
+  { key: "sabnzbd", userAgent: "SABnzbd/5.1.3" },
+  { key: "nzbget", userAgent: "nzbget/26.3", headers: { Accept: "*/*" } },
+];
 
 function defaultConfig(): EtherConfig {
   return {
@@ -151,6 +182,7 @@ function defaultConfig(): EtherConfig {
       reservePercent: 80,
     },
     server: {
+      startupAnimation: true,
       port: 32400,
       bindAddress: "0.0.0.0",
       friendlyName: "Living Room Ether",
@@ -544,6 +576,7 @@ export function createFakeServer(opts: FakeOptions = {}) {
   const releaseConsole = createReleaseConsoleMock(catalog);
   const trash = createTrashMock();
   const maintenance = createMaintenance();
+  const experience = createExperienceMock();
   const sites = createSitesMock();
   const cacheMock = createCacheMock(opts.cacheRestart);
   const liveTV = createLiveTVMock(catalog);
@@ -551,6 +584,12 @@ export function createFakeServer(opts: FakeOptions = {}) {
   const qualityMock = createQualityMock();
   const safetyPolicies = new Map<number, Record<string, unknown>>();
   const simklAccounts = new Map<number, { connected: boolean; lastSync?: string }>();
+  const extendMock = createExtendMock();
+  const prerolls = createPrerollsMock({
+    seed: opts.prerolls,
+    title: (key) => byKey.get(key),
+    viewerName: (id) => VIEWERS.find((v) => v.id === id)?.title ?? `Viewer ${id}`,
+  });
   const state = {
     boot: {
       ok: true,
@@ -633,7 +672,6 @@ export function createFakeServer(opts: FakeOptions = {}) {
     logs: [] as LogEntry[],
     calls: [] as { method: string; path: string; body: unknown }[],
     plexDefaults: {} as Record<number, Record<string, unknown>>,
-    llm: opts.llm ?? true,
     clustered: opts.cluster ?? false,
     joinTokens: [] as JoinTokenInfo[],
     backupSettings: { intervalHours: 24, retain: 7, lastRun: 0, sharedDir: "" },
@@ -911,7 +949,14 @@ export function createFakeServer(opts: FakeOptions = {}) {
     if (sorter) items.sort(sorter);
     if (
       spec.sources.some((s) =>
-        ["traktList", "letterboxdList", "mdblist", "anilistList", "stevenlu"].includes(s.kind),
+        [
+          "traktList",
+          "letterboxdList",
+          "mdblist",
+          "anilistList",
+          "tmdbUserList",
+          "stevenlu",
+        ].includes(s.kind),
       )
     )
       warnings.push(
@@ -1521,7 +1566,7 @@ export function createFakeServer(opts: FakeOptions = {}) {
       },
       {
         hubId: "new-releases",
-        title: "New Releases",
+        title: "New & Noteworthy",
         kind: "new-releases",
         description: "The newest released titles in the catalogue.",
       },
@@ -1894,6 +1939,8 @@ export function createFakeServer(opts: FakeOptions = {}) {
             decisionVideoCopy: true,
             decisionAudioCopy: true,
             BytesServed: 2.1 * 1024 ** 3,
+            BufferedBytes: 183 * 1024 ** 2,
+            BufferedUntil: 3000e9,
             SpeedBps: 3.2e6,
             StartedAt: new Date(Date.now() - 40 * 60000).toISOString(),
             Info: { size: 5.4 * 1024 ** 3, duration: 118 * 60 * 1e9 },
@@ -2271,6 +2318,9 @@ export function createFakeServer(opts: FakeOptions = {}) {
     const site = sites.handle(method, seg, body, state.config);
     if (site) return json(site.body, site.status);
 
+    const ext = await extendMock(method, seg, q, body);
+    if (ext) return ext;
+
     const cal = calendar.handle(method, seg, q);
     if (cal) return json(cal.body, cal.status);
 
@@ -2293,6 +2343,9 @@ export function createFakeServer(opts: FakeOptions = {}) {
     const mr = maintenance.handle(method, seg, body);
     if (mr) return json(mr.body, mr.status);
 
+    const ex = experience.handle(method, seg, q);
+    if (ex) return json(ex.body, ex.status);
+
     const mockConnectUrls = (id: string, port?: number) => {
       if (port)
         return [
@@ -2306,15 +2359,98 @@ export function createFakeServer(opts: FakeOptions = {}) {
       }
       return [];
     };
+    // Settings schemas mirror internal/frontend (WS1d): keep beside the
+    // descriptors so the Apps page renders from the same shape.
+    const rowKindOptions = [
+      "because-you-watched",
+      "trending",
+      "top-10",
+      "fans-also-loved",
+      "new-releases",
+      "hidden-gems",
+      "more-from-person",
+      "popular-on-server",
+    ];
+    const mediaBrowserSchema = (quickConnect: boolean) => ({
+      signInHelp: true,
+      sections: [
+        {
+          key: "home",
+          fields: [
+            { key: "homeRows", kind: "bool" },
+            { key: "homeRowCount", kind: "number", more: true, min: 0, max: 12 },
+            { key: "homeRowKinds", kind: "rowKinds", more: true, options: rowKindOptions },
+          ],
+        },
+        {
+          key: "find",
+          fields: [
+            { key: "serverName", kind: "serverName" },
+            { key: "port", kind: "port", min: 1, max: 65535 },
+            { key: "discovery", kind: "bool", more: true },
+            ...(quickConnect ? [{ key: "quickConnect", kind: "bool", more: true }] : []),
+            { key: "publicViewerPicker", kind: "bool", more: true },
+          ],
+        },
+      ],
+    });
+    const accountSchema = (note: string) => ({
+      accountConnect: true,
+      sections: [{ key: "connect", fields: [{ key: note, kind: "note" }] }],
+    });
     const protocolDefs = [
-      { id: "plex", name: "Plex", defaultPort: 32400 },
-      { id: "jellyfin", name: "Jellyfin", defaultPort: 8096 },
-      { id: "emby", name: "Emby", defaultPort: 8097 },
-      { id: "stremio", name: "Stremio" },
-      { id: "silo", name: "Silo", defaultPort: 8090 },
-      { id: "dlna", name: "DLNA" },
-      { id: "webdav", name: "Files (WebDAV)" },
-      { id: "m3u", name: "M3U & XMLTV" },
+      {
+        id: "plex",
+        name: "Plex",
+        defaultPort: 32400,
+        settingsSchema: {
+          sections: [{ key: "find", fields: [{ key: "port", kind: "port", min: 1, max: 65535 }] }],
+        },
+      },
+      {
+        id: "jellyfin",
+        name: "Jellyfin",
+        defaultPort: 8096,
+        settingsSchema: mediaBrowserSchema(true),
+      },
+      { id: "emby", name: "Emby", defaultPort: 8097, settingsSchema: mediaBrowserSchema(false) },
+      { id: "stremio", name: "Stremio", settingsSchema: accountSchema("addon") },
+      {
+        id: "silo",
+        name: "Silo",
+        defaultPort: 8090,
+        settingsSchema: {
+          signInHelp: true,
+          sections: [
+            {
+              key: "find",
+              fields: [
+                { key: "serverName", kind: "serverName" },
+                { key: "port", kind: "port", min: 1, max: 65535 },
+                { key: "discovery", kind: "bool", more: true },
+              ],
+            },
+          ],
+        },
+      },
+      {
+        id: "dlna",
+        name: "DLNA",
+        settingsSchema: {
+          sections: [
+            {
+              key: "tv",
+              fields: [
+                { key: "serverName", kind: "serverName" },
+                { key: "viewerId", kind: "viewer" },
+                { key: "discovery", kind: "bool", more: true },
+              ],
+            },
+          ],
+        },
+      },
+      { id: "webdav", name: "Files (WebDAV)", settingsSchema: accountSchema("files") },
+      { id: "m3u", name: "M3U & XMLTV", settingsSchema: accountSchema("playlist") },
     ];
     if (seg[0] === "frontends" && seg.length === 1 && method === "GET") {
       return json(
@@ -2474,6 +2610,48 @@ export function createFakeServer(opts: FakeOptions = {}) {
         return json(state.boot);
       case "GET /dashboard":
         return json(dashboard());
+      case "GET /indexer-usage": {
+        const day = (offset: number) =>
+          new Date(Date.now() - offset * 86_400_000).toISOString().slice(0, 10);
+        const days = Array.from({ length: 14 }, (_, i) => ({
+          day: day(13 - i),
+          hits: 40 + ((i * 37) % 55),
+          grabs: i % 4,
+        }));
+        const purposes = (scale: number) => [
+          { purpose: "feed", hits: 30 * scale, grabs: 0 },
+          { purpose: "availability", hits: 18 * scale, grabs: 1 * scale },
+          { purpose: "playback", hits: 9 * scale, grabs: 3 * scale },
+          { purpose: "warmup", hits: 6 * scale, grabs: 1 * scale },
+          { purpose: "rescue", hits: 3 * scale, grabs: 0 },
+          { purpose: "caps", hits: scale, grabs: 0 },
+          { purpose: "test", hits: 2, grabs: 0 },
+        ];
+        const total = (ps: { hits: number; grabs: number }[]) => ({
+          hits: ps.reduce((n, p) => n + p.hits, 0),
+          grabs: ps.reduce((n, p) => n + p.grabs, 0),
+          purposes: ps,
+        });
+        return json({
+          today: day(0),
+          weekStart: day(6),
+          monthStart: day(0).slice(0, 8) + "01",
+          indexers: [
+            {
+              id: "idx-1",
+              name: "Indexer One",
+              enabled: true,
+              torrent: false,
+              dailyLimit: 100,
+              dailyGrabs: 20,
+              today: total(purposes(1)),
+              week: total(purposes(7)),
+              month: total([...purposes(20), { purpose: "unattributed", hits: 240, grabs: 9 }]),
+              days,
+            },
+          ],
+        });
+      }
       case "GET /stats/infrastructure":
         return json({
           month: "2026-10",
@@ -2946,7 +3124,8 @@ export function createFakeServer(opts: FakeOptions = {}) {
           id: `c${seq++}`,
           updatedAt: new Date().toISOString(),
           lastBuiltAt: new Date().toISOString(),
-          itemCount: evaluate(spec).total,
+          itemCount:
+            spec.limit > 0 ? Math.min(evaluate(spec).total, spec.limit) : evaluate(spec).total,
         };
         state.collections.push(saved);
         return json(saved);
@@ -2955,43 +3134,6 @@ export function createFakeServer(opts: FakeOptions = {}) {
         return json(evaluate(normalizeSpec(body as CollectionSpec)));
       case "GET /collections/templates":
         return json({ templates: TEMPLATES });
-      case "POST /collections/generate": {
-        if (!state.llm) return err(501, "not_implemented", "The LLM is not configured");
-        const prompt = String((body as { prompt?: string }).prompt ?? "").toLowerCase();
-        const genres = GENRES.filter(
-          (g) =>
-            prompt.includes(g.toLowerCase()) || (g === "Science Fiction" && /sci-?fi/.test(prompt)),
-        );
-        const rules: Rule[] = genres.length ? [{ field: "genre", op: "in", value: genres }] : [];
-        const dm = /(19|20)(\d)0s/.exec(prompt) ?? /\b(\d)0s\b/.exec(prompt);
-        if (dm)
-          rules.push({
-            field: "decade",
-            op: "in",
-            value: [dm[0].length === 5 ? dm[0].slice(0, 4) : `19${dm[1]}0`],
-          });
-        if (/short|quick|under/.test(prompt))
-          rules.push({ field: "runtime", op: "lte", value: 95 });
-        if (/acclaimed|best|great|top/.test(prompt))
-          rules.push({ field: "rating", op: "gte", value: 7.5 });
-        const name = String((body as { prompt?: string }).prompt ?? "")
-          .replace(/^(a |an )?(collection|row|list) (of|with)\s+/i, "")
-          .replace(/^./, (c) => c.toUpperCase())
-          .slice(0, 48);
-        const spec = normalizeSpec({
-          name,
-          description: `Generated from “${(body as { prompt: string }).prompt}”.`,
-          mediaType: /tv|show|series/.test(prompt) ? "show" : "movie",
-          rules,
-          sort: rules.some((r) => r.field === "rating") ? "rating" : "popularity",
-        });
-        return json({
-          spec,
-          explanation: rules.length
-            ? `Matched ${rules.length} condition${rules.length === 1 ? "" : "s"} from your description: ${rules.map((r) => r.field).join(", ")}.`
-            : "I couldn't find specific conditions, so this starts from the whole catalogue sorted by popularity.",
-        });
-      }
       case "POST /catalog/visibility/preview": {
         const groups =
           (body as { exclusions: { mediaType: string; match: string; rules: Rule[] }[] })
@@ -3299,6 +3441,19 @@ export function createFakeServer(opts: FakeOptions = {}) {
         return json({ days: activity() });
     }
 
+    if (
+      seg[0] === "collections" &&
+      seg[1] === "stremio" &&
+      seg[2] === "manifest" &&
+      method === "POST"
+    ) {
+      return json({
+        id: "example.catalog",
+        name: "Example catalog",
+        catalogs: [{ id: "top", type: "movie", name: "Top movies" }],
+      });
+    }
+
     // Parameterised routes
     if (seg[0] === "collections" && seg[1]) {
       const id = decodeURIComponent(seg[1]);
@@ -3586,6 +3741,7 @@ export function createFakeServer(opts: FakeOptions = {}) {
       return json({
         section: key,
         value: (state.config as unknown as Record<string, unknown>)[key],
+        ...(key === "clientIdentity" ? { presets: IDENTITY_PRESETS } : {}),
       });
     }
     if (seg[0] === "config" && seg[1] && method === "PUT") {
@@ -3710,6 +3866,7 @@ export function createFakeServer(opts: FakeOptions = {}) {
     const method = (init?.method ?? req?.method ?? "GET").toUpperCase();
     let body: unknown = undefined;
     const raw = init?.body ?? null;
+    if (raw instanceof FormData) body = raw;
     if (typeof raw === "string" && raw) {
       try {
         body = JSON.parse(raw);
@@ -3732,6 +3889,7 @@ export function createFakeServer(opts: FakeOptions = {}) {
     const gate = ops.handle(method, seg, body, new Headers(init?.headers ?? req?.headers));
     if (gate === UNREACHABLE) throw new TypeError("Failed to fetch");
     if (gate) return json(gate.body, gate.status);
+    if (seg[0] === "admin" && seg[1] === "prerolls") return prerolls(url, init);
     return handle(method, url, body);
   }
 

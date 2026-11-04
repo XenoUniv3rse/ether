@@ -17,6 +17,7 @@ import (
 // order (full titles when they came from TMDB, so they can be joined to the
 // catalogue), plus problems worth showing the owner.
 type sourceResult struct {
+	err      error
 	titles   []core.Title
 	keys     []core.RatingKey // keys known to be in the catalogue already
 	all      bool             // the whole catalogue
@@ -185,183 +186,24 @@ func stricter(k, a, b string) string {
 	return a
 }
 
-// gather runs one source.
+// gather runs one source through its registered kind. Unknown kinds are
+// skipped silently here; Validate rejects them before a spec is saved.
 func (s *Service) gather(ctx context.Context, sp *core.CollectionSpec, src core.CollectionSource, rules []*rule) sourceResult {
-	want := wantFor(sp)
 	kinds := kindsFor(sp.MediaType)
 	if src.MediaType == MediaMovie || src.MediaType == MediaShow {
 		kinds = kindsFor(src.MediaType)
 	}
-	var res sourceResult
-	warn := func(format string, args ...any) { res.warnings = append(res.warnings, fmt.Sprintf(format, args...)) }
-	needTMDB := func() bool {
-		if s.api == nil || s.api.c == nil {
-			warn("%s needs TMDB, which is not configured", sourceName(src))
-			return false
-		}
-		return true
+	g := &Gather{Ctx: ctx, Svc: s, Spec: sp, Src: src, Rules: rules, Want: wantFor(sp), Kinds: kinds}
+	if k, ok := s.kindRegistry().Lookup(src.Kind); ok {
+		k.Gather(g)
 	}
-	switch src.Kind {
-	case "catalog":
-		res.all = true
-		if sp.ReleaseMode == "upcoming" || sp.ReleaseMode == "mixed" {
-			if !needTMDB() {
-				break
-			}
-			now := s.now().UTC()
-			for _, kind := range kinds {
-				prefix := "primary_release_date"
-				if kind == "tv" {
-					prefix = "first_air_date"
-				}
-				q := url.Values{prefix + ".gte": {now.Format("2006-01-02")}, prefix + ".lte": {now.AddDate(0, 0, sp.LookaheadDays).Format("2006-01-02")}}
-				s.discoverInto(ctx, sp, kind, q, rules, want, &res, "upcoming discovery")
-			}
-		}
-	case "titles":
-		for _, k := range src.Keys {
-			if rk, err := core.ParseRatingKey(k); err == nil {
-				res.keys = append(res.keys, rk)
-			}
-		}
-	case "tmdbList":
-		n := want
-		if n > 100 {
-			n = 100
-		}
-		for _, kind := range kinds {
-			items, err := s.cat.List(ctx, src.List, coreType(kind), n)
-			if err != nil {
-				warn("TMDB list %s: %v", src.List, err)
-				continue
-			}
-			res.titles = append(res.titles, items...)
-		}
-	case "tmdbCollection":
-		id := src.ID
-		if id <= 0 {
-			if !needTMDB() {
-				break
-			}
-			r, err := s.names.resolve(ctx, "collection", ref{Name: src.Label}, "")
-			if err != nil {
-				warn("couldn't find a TMDB collection called %q", src.Label)
-				break
-			}
-			id, res.resolvedID, res.resolvedLabel = r.ID, r.ID, r.Name
-		}
-		name, items, err := s.cat.Collection(ctx, id)
-		if err != nil {
-			warn("TMDB collection %d: %v", id, err)
-			break
-		}
-		if res.resolvedLabel == "" && src.Label == "" {
-			res.resolvedID, res.resolvedLabel = id, name
-		}
-		res.titles = items
-	case "tmdbKeyword", "tmdbCompany", "tmdbNetwork":
-		if !needTMDB() {
-			break
-		}
-		entity := map[string]string{"tmdbKeyword": "keyword", "tmdbCompany": "company", "tmdbNetwork": "network"}[src.Kind]
-		r, err := s.names.resolve(ctx, entity, ref{ID: src.ID, Name: src.Label}, "")
-		if err != nil || r.ID <= 0 {
-			warn("couldn't find the %s %q on TMDB", entity, firstNonEmpty(src.Label, strconv.FormatInt(src.ID, 10)))
-			break
-		}
-		res.resolvedID, res.resolvedLabel = r.ID, r.Name
-		param := map[string]string{"keyword": "with_keywords", "company": "with_companies", "network": "with_networks"}[entity]
-		if entity == "network" {
-			kinds = []string{"tv"}
-		}
-		for _, kind := range kinds {
-			s.discoverInto(ctx, sp, kind, url.Values{param: {strconv.FormatInt(r.ID, 10)}}, rules, want, &res, entity+" "+strconv.Quote(r.Name))
-		}
-	case "tmdbPerson":
-		if !needTMDB() {
-			break
-		}
-		r, err := s.names.resolve(ctx, "person", ref{ID: src.ID, Name: src.Label}, "")
-		if err != nil || r.ID <= 0 {
-			warn("couldn't find the person %q on TMDB", firstNonEmpty(src.Label, strconv.FormatInt(src.ID, 10)))
-			break
-		}
-		items, name, err := s.api.personCredits(ctx, r.ID, src.Role)
-		if err != nil {
-			warn("TMDB credits for %s: %v", firstNonEmpty(r.Name, src.Label), err)
-			break
-		}
-		res.resolvedID, res.resolvedLabel = r.ID, firstNonEmpty(name, r.Name)
-		res.titles = items
-	case "watchProvider":
-		if !needTMDB() {
-			break
-		}
-		region := s.region(src.Region)
-		r, err := s.names.resolve(ctx, "watchProvider", ref{ID: src.ID, Name: src.Label}, region)
-		if err != nil || r.ID <= 0 {
-			warn("couldn't find the streaming service %q in %s", firstNonEmpty(src.Label, strconv.FormatInt(src.ID, 10)), region)
-			break
-		}
-		res.resolvedID, res.resolvedLabel = r.ID, r.Name
-		for _, kind := range kinds {
-			s.discoverInto(ctx, sp, kind, url.Values{
-				"with_watch_providers": {strconv.FormatInt(r.ID, 10)}, "watch_region": {region},
-				"with_watch_monetization_types": {"flatrate|free|ads"},
-			}, rules, want, &res, "watch provider "+strconv.Quote(r.Name))
-		}
-	case "tmdbDiscover":
-		if !needTMDB() {
-			break
-		}
-		for _, kind := range kinds {
-			q, err := s.discoverParams(ctx, kind, src.Params)
-			if err != nil {
-				warn("discover: %v", err)
-				break
-			}
-			s.discoverInto(ctx, sp, kind, q, rules, want, &res, "discover")
-		}
-	case "traktList", "letterboxdList", "mdblist", "anilistList", "stevenlu":
-		var refs []extRef
-		var err error
-		switch src.Kind {
-		case "traktList":
-			refs, err = s.fetchTrakt(ctx, src.URL)
-		case "letterboxdList":
-			refs, err = s.fetchLetterboxd(ctx, src.URL)
-		case "anilistList":
-			refs, err = s.fetchAniList(ctx, src.URL)
-		case "stevenlu":
-			refs, err = s.fetchStevenLu(ctx, src.List)
-		default:
-			refs, err = s.fetchMDBList(ctx, src.URL)
-		}
-		var partial *partialListError
-		if errors.As(err, &partial) && len(refs) > 0 {
-			warn("%v", err)
-		} else if err != nil {
-			warn("%v", err)
-			break
-		}
-		if len(refs) == 0 {
-			warn("%s is empty", sourceName(src))
-			break
-		}
-		titles, unresolved, pending := s.resolveExternal(ctx, src.Kind, refs)
-		res.titles = titles
-		if unresolved > 0 {
-			warn("%d of %d items in %s could not be matched to TMDB", unresolved, len(refs), sourceName(src))
-		}
-		if pending > 0 {
-			warn("%d items in %s are still being matched; they will appear after the next refresh", pending, sourceName(src))
-		}
-	}
-	return res
+	return g.Res
 }
 
 func sourceName(src core.CollectionSource) string {
 	switch src.Kind {
+	case "tmdbUserList":
+		return "the TMDB list"
 	case "traktList":
 		return "the Trakt list"
 	case "letterboxdList":
@@ -451,6 +293,10 @@ func (s *Service) discoverParams(ctx context.Context, kind string, params map[st
 // could not be matched, and how many were deferred to a later refresh to
 // stay polite to Letterboxd.
 func (s *Service) resolveExternal(ctx context.Context, source string, refs []extRef) ([]core.Title, int, int) {
+	titles, unresolved, pending, _ := s.resolveExternalDetailed(ctx, source, refs)
+	return titles, unresolved, pending
+}
+func (s *Service) resolveExternalDetailed(ctx context.Context, source string, refs []extRef) ([]core.Title, int, int, []string) {
 	type slot struct {
 		key core.RatingKey
 		t   *core.Title
@@ -458,6 +304,7 @@ func (s *Service) resolveExternal(ctx context.Context, source string, refs []ext
 	slots := make([]slot, len(refs))
 	var mu sync.Mutex
 	unresolved, pending := 0, 0
+	issues := map[string]int{}
 	filmPageBudget := 25
 	sem := make(chan struct{}, 4)
 	var wg sync.WaitGroup
@@ -477,6 +324,17 @@ func (s *Service) resolveExternal(ctx context.Context, source string, refs []ext
 				}
 				filmPageBudget--
 				return true
+			}, func(err error) {
+				reason := "could not be resolved by the metadata provider"
+				if errors.Is(err, core.ErrMetadataIdentity) {
+					reason = "have no supported catalogue identity"
+				}
+				if errors.Is(err, core.ErrMetadataFiltered) {
+					reason = "are hidden by catalogue visibility rules"
+				}
+				mu.Lock()
+				issues[reason]++
+				mu.Unlock()
 			})
 			mu.Lock()
 			defer mu.Unlock()
@@ -506,13 +364,35 @@ func (s *Service) resolveExternal(ctx context.Context, source string, refs []ext
 	if missing := len(keys) - len(titles); missing > 0 {
 		unresolved += missing
 	}
-	return titles, unresolved, pending
+	var warnings []string
+	for _, reason := range []string{"have no supported catalogue identity", "are hidden by catalogue visibility rules", "could not be resolved by the metadata provider"} {
+		if count := issues[reason]; count > 0 {
+			warnings = append(warnings, fmt.Sprintf("%d items %s", count, reason))
+		}
+	}
+	return titles, unresolved, pending, warnings
 }
 
 // resolveRef maps one external item to a rating key. allowPage reserves a
 // Letterboxd film-page fetch; deferred reports that one was needed but the
 // budget was spent.
-func (s *Service) resolveRef(ctx context.Context, source string, r extRef, allowPage func() bool) (core.RatingKey, bool) {
+func (s *Service) resolveRef(ctx context.Context, source string, r extRef, allowPage func() bool, report func(error)) (core.RatingKey, bool) {
+	if r.MetadataProvider != "" && r.ProviderID != "" {
+		if cat, ok := s.cat.(interface {
+			MaterializeMetadata(context.Context, string, core.MetadataRequest) (*core.Title, error)
+		}); ok {
+			title, err := cat.MaterializeMetadata(ctx, r.MetadataProvider, core.MetadataRequest{ID: r.ProviderID, Type: core.MediaType(r.Type), IDs: core.IDs{TMDB: r.TMDB, IMDB: r.IMDB, TVDB: r.TVDB}})
+			if err == nil && title != nil {
+				return title.Key, false
+			}
+			if err != nil && report != nil {
+				report(err)
+			}
+			// A revoked/mismatched provider must not silently switch to another
+			// identity source. The normal unmatched-item warning reports the gap.
+			return 0, false
+		}
+	}
 	if r.TMDB > 0 {
 		switch r.Type {
 		case "show":

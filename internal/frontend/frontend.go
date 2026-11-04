@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/braedonsaunders/ether/internal/core"
+	"github.com/braedonsaunders/ether/internal/diagnostics"
 	"github.com/braedonsaunders/ether/internal/frontend/kit/ids"
 )
 
@@ -52,19 +53,21 @@ type ListenerSpec struct {
 	Shared bool `json:"shared,omitempty"`
 }
 type Status struct {
-	Mounted          bool     `json:"mounted"`
-	Addresses        []string `json:"addresses"`
-	ConnectURLs      []string `json:"connectUrls,omitempty"`
-	LAN              string   `json:"lan"`
-	WAN              string   `json:"wan"`
-	Clients24h       int      `json:"clients24h"`
-	Clients24hKnown  bool     `json:"clients24hKnown"`
-	LiveStreams      int      `json:"liveStreams"`
-	LiveStreamsKnown bool     `json:"liveStreamsKnown"`
-	TargetVersion    string   `json:"targetVersion"`
-	Conformance      string   `json:"conformance"`
-	Error            string   `json:"error,omitempty"`
-	Warnings         []string `json:"warnings,omitempty"`
+	Mounted          bool      `json:"mounted"`
+	Addresses        []string  `json:"addresses"`
+	ConnectURLs      []string  `json:"connectUrls,omitempty"`
+	LAN              string    `json:"lan"`
+	LANReason        string    `json:"lanReason,omitempty"`
+	LANCheckedAt     time.Time `json:"lanCheckedAt,omitzero"`
+	WAN              string    `json:"wan"`
+	Clients24h       int       `json:"clients24h"`
+	Clients24hKnown  bool      `json:"clients24hKnown"`
+	LiveStreams      int       `json:"liveStreams"`
+	LiveStreamsKnown bool      `json:"liveStreamsKnown"`
+	TargetVersion    string    `json:"targetVersion"`
+	Conformance      string    `json:"conformance"`
+	Error            string    `json:"error,omitempty"`
+	Warnings         []string  `json:"warnings,omitempty"`
 }
 type Announcer interface {
 	Start(context.Context) error
@@ -238,6 +241,8 @@ type Images interface {
 	ServeHTTP(http.ResponseWriter, *http.Request)
 }
 type Host struct {
+	// Support is an owner-initiated, bounded capture; nil disables recording.
+	Support            *diagnostics.Recorder
 	Experience         Experience
 	ViewerCapabilities ViewerCapabilitiesFunc
 	ViewerPolicy       ViewerPolicy
@@ -276,6 +281,9 @@ type Host struct {
 	// Cinema lists preroll trailers of other movies. Nil means cinema intros
 	// are not wired; the intros route returns an empty page after authorization.
 	Cinema CinemaIntros
+	// Prerolls lists the owner's pre-roll as an intro. Nil means pre-rolls
+	// are off and intros are unchanged.
+	Prerolls Prerolls
 	// Subtitles searches and downloads a sidecar only after an explicit pick.
 	// Nil or Enabled false tells clients the server will not fetch one.
 	Subtitles SubtitleCatalog
@@ -365,8 +373,10 @@ func (r *Registry) Register(f Frontend) error {
 	return nil
 }
 
-// ValidateSettings delegates protocol-specific settings to the registered frontend.
-// The bool reports whether it provides a validator.
+// ValidateSettings checks settings against the frontend's descriptor
+// schema, then delegates protocol-specific settings to the registered
+// frontend. The bool reports whether validation beyond the host's common
+// checks applies (a schema or a protocol validator).
 func (r *Registry) ValidateSettings(id Protocol, settings Settings) (bool, error) {
 	r.mu.Lock()
 	e, ok := r.entries[id]
@@ -374,10 +384,17 @@ func (r *Registry) ValidateSettings(id Protocol, settings Settings) (bool, error
 		r.mu.Unlock()
 		return false, ErrNotRegistered
 	}
+	descriptor := e.descriptor
 	validator, supported := e.frontend.(SettingsValidator)
 	r.mu.Unlock()
-	if !supported {
-		return false, nil
+	if schema, has := schemaOf(descriptor); has {
+		supported = true
+		if err := schema.validate(settings); err != nil {
+			return true, err
+		}
+	}
+	if validator == nil {
+		return supported, nil
 	}
 	return true, validator.ValidateSettings(settings)
 }
@@ -503,6 +520,26 @@ func cloneDescriptor(d Descriptor) Descriptor {
 	d.CertifiedApps = append([]CertifiedApp(nil), d.CertifiedApps...)
 	for i := range d.CertifiedApps {
 		d.CertifiedApps[i].Steps = append([]ConnectStep(nil), d.CertifiedApps[i].Steps...)
+	}
+	if schema, ok := d.SettingsSchema.(SettingsSchema); ok {
+		sections := append([]SettingsSection(nil), schema.Sections...)
+		for i := range sections {
+			fields := append([]SettingsField(nil), sections[i].Fields...)
+			for j := range fields {
+				fields[j].Options = append([]string(nil), fields[j].Options...)
+				if fields[j].Min != nil {
+					min := *fields[j].Min
+					fields[j].Min = &min
+				}
+				if fields[j].Max != nil {
+					max := *fields[j].Max
+					fields[j].Max = &max
+				}
+			}
+			sections[i].Fields = fields
+		}
+		schema.Sections = sections
+		d.SettingsSchema = schema
 	}
 	return d
 }

@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/url"
 	"sort"
 	"strings"
 	"time"
@@ -22,6 +24,38 @@ type StreamSource struct {
 	// AuthSourceID names the source whose provider credentials this input
 	// uses; empty means the channel's own source.
 	AuthSourceID string `json:"authSourceId,omitempty"`
+	// Headers are request headers this input needs (a Stremio stream's
+	// proxy headers), sent after the source's own.
+	Headers map[string]string `json:"headers,omitempty"`
+}
+
+// MaxChannelInputs bounds one channel's stream inputs.
+const MaxChannelInputs = 16
+
+// maxInputHeaders bounds one input's request headers.
+const maxInputHeaders = 16
+
+// CleanInputHeaders keeps the request headers an input may carry, with
+// canonical names: no headers the HTTP stack or the proxy manages, no line
+// breaks, at most 16. It returns nil when none remain.
+func CleanInputHeaders(in map[string]string) map[string]string {
+	var out map[string]string
+	for k, v := range in {
+		name := http.CanonicalHeaderKey(strings.TrimSpace(k))
+		if !validInputHeader(name, v) || len(out) == maxInputHeaders {
+			continue
+		}
+		if out == nil {
+			out = map[string]string{}
+		}
+		out[name] = v
+	}
+	return out
+}
+
+func validInputHeader(name, value string) bool {
+	return name != "" && len(name) <= 128 && len(value) <= 4096 &&
+		!strings.ContainsAny(name, " :\r\n") && !strings.ContainsAny(value, "\r\n") && !forbiddenHeaders[name]
 }
 
 type StreamSourceStatus struct {
@@ -38,9 +72,17 @@ type streamSourceHealth struct {
 	StreamSourceStatus
 }
 
+func validStreamURL(raw string) bool {
+	if validHTTP(raw) {
+		return true
+	}
+	u, e := url.Parse(raw)
+	return e == nil && u.Scheme == "plugin" && u.Host != "" && strings.Trim(u.Path, "/") != ""
+}
+
 func normalizeStreamSources(c *Channel) error {
 	if len(c.StreamSources) == 0 {
-		if !validHTTP(c.StreamURL) {
+		if !validStreamURL(c.StreamURL) {
 			return fmt.Errorf("IPTV needs an HTTP(S) stream source")
 		}
 		id := stableID(c.ID, "primary")
@@ -49,8 +91,8 @@ func normalizeStreamSources(c *Channel) error {
 		}
 		c.StreamSources = []StreamSource{{ID: id, Name: "Primary stream", URL: c.StreamURL, Enabled: true}}
 	}
-	if len(c.StreamSources) > 16 {
-		return fmt.Errorf("a channel supports at most 16 stream sources")
+	if len(c.StreamSources) > MaxChannelInputs {
+		return fmt.Errorf("a channel supports at most %d stream sources", MaxChannelInputs)
 	}
 	c.StreamSources = append([]StreamSource(nil), c.StreamSources...)
 	ids, urls := map[string]bool{}, map[string]bool{}
@@ -58,7 +100,7 @@ func normalizeStreamSources(c *Channel) error {
 		src := &c.StreamSources[i]
 		src.URL = strings.TrimSpace(src.URL)
 		src.Name = strings.TrimSpace(src.Name)
-		if !validHTTP(src.URL) {
+		if !validStreamURL(src.URL) {
 			return fmt.Errorf("stream source %d must use HTTP(S)", i+1)
 		}
 		if src.ID == "" {
@@ -69,6 +111,14 @@ func normalizeStreamSources(c *Channel) error {
 		}
 		if src.Name == "" {
 			src.Name = fmt.Sprintf("Stream %d", i+1)
+		}
+		if len(src.Headers) > maxInputHeaders {
+			return fmt.Errorf("stream source %d has more than %d headers", i+1, maxInputHeaders)
+		}
+		for k, v := range src.Headers {
+			if !validInputHeader(http.CanonicalHeaderKey(strings.TrimSpace(k)), v) {
+				return fmt.Errorf("stream source %d: header %q can't be set", i+1, k)
+			}
 		}
 		ids[src.ID], urls[src.URL] = true, true
 	}
@@ -205,6 +255,39 @@ func (s *Service) recordSourceHealth(channelID string, src StreamSource, err err
 	s.sourceHealth[key] = h
 }
 
+// ResolveStreamSource resolves a channel's stream input at tune time. HTTP(S)
+// URLs return directly; plugin:// inputs delegate to the installed stream
+// opener under its Open deadline.
+func (s *Service) ResolveStreamSource(ctx context.Context, c Channel, src StreamSource) (string, http.Header, error) {
+	headers, err := s.upstreamHeaders(ctx, c, src)
+	if err != nil {
+		return "", nil, err
+	}
+	if !strings.HasPrefix(src.URL, "plugin://") {
+		return src.URL, headers, nil
+	}
+	r := s.kindRegistry()
+	r.mu.RLock()
+	opener := r.streamOpener
+	r.mu.RUnlock()
+	if opener == nil {
+		return "", nil, core.ErrNotAvailable
+	}
+	resolved, extra, err := opener(ctx, c, src)
+	if err != nil {
+		return "", nil, err
+	}
+	if !validHTTP(resolved) {
+		return "", nil, core.ErrNotAvailable
+	}
+	for k, vals := range extra {
+		for _, v := range vals {
+			headers.Add(k, v)
+		}
+	}
+	return resolved, headers, nil
+}
+
 // startIPTV selects one input per viewing session, under the caller's existing
 // ten-second startup deadline. It never substitutes another provider's bytes,
 // keys or media sequence into the active HLS resource map.
@@ -231,19 +314,24 @@ func (s *Service) startIPTV(ctx context.Context, ss *session) error {
 			// backup can still be tried. Fast failures advance immediately.
 			attemptCtx, cancel = context.WithTimeout(ctx, 5*time.Second)
 		}
-		ss.inputURL, ss.inputSource = src.URL, src
-		headers, err := s.upstreamHeaders(attemptCtx, c, src)
+		resolvedURL, headers, err := s.ResolveStreamSource(attemptCtx, c, src)
 		if err != nil {
 			cancel()
 			last = err
+			if !errors.Is(ctx.Err(), context.Canceled) {
+				s.recordSourceHealth(c.ID, src, err, false)
+			}
 			continue
 		}
+		grantSrc := src
+		grantSrc.URL = resolvedURL
+		ss.inputURL, ss.inputSource = resolvedURL, src
 		ss.inputHeaders = headers.Clone()
 		ss.info.MediaInfo, ss.relayInfo = nil, nil
 		ss.resources = map[string]string{}
 		// ffmpeg and ffprobe read this input through a loopback grant, never
 		// with the provider URL or headers on their command line.
-		err = s.grantInput(ss, src, headers)
+		err = s.grantInput(ss, grantSrc, headers)
 		if err == nil {
 			err = s.startIPTVSource(attemptCtx, ss)
 		}

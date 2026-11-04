@@ -66,12 +66,12 @@ func TestLegacyDefaultsScaleAndCapsStayProtected(t *testing.T) {
 		t.Fatal("shipped defaults should scale")
 	}
 	four := base.Resolved([]config.IndexerCap{{}, {}, {}, {}})
-	if four.Effort != "normal" || four.FeedRequests != 8000 || four.PollMinutes != 15 || four.MaxPages != 8 {
+	if four.Effort != "normal" || four.FeedRequests != 400 || four.PollMinutes != 30 || four.MaxPages != 8 {
 		t.Fatalf("four unlimited: %+v", four)
 	}
 	capped := base.Resolved([]config.IndexerCap{{DailyLimit: 100}})
-	if capped.FeedRequests != 20 {
-		t.Fatalf("capped usable = %d, want 20", capped.FeedRequests)
+	if capped.FeedRequests != 10 {
+		t.Fatalf("capped usable = %d, want 10", capped.FeedRequests)
 	}
 	custom := base
 	custom.FeedRequests = 50
@@ -80,7 +80,7 @@ func TestLegacyDefaultsScaleAndCapsStayProtected(t *testing.T) {
 	}
 	gentle := base
 	gentle.Effort = "gentle"
-	if got := gentle.Resolved(fourIndexers()); got.FeedRequests != 600 || got.PollMinutes != 60 {
+	if got := gentle.Resolved(fourIndexers()); got.FeedRequests != 200 || got.PollMinutes != 60 {
 		t.Fatalf("gentle: %+v", got)
 	}
 }
@@ -190,6 +190,10 @@ func TestProbeUnlocksPlayableReleaseAndKeepsGate(t *testing.T) {
 	}
 	found = "web"
 	x.now = x.now.Add(7 * time.Hour)
+	// The digital release date arrives, when releases land: the title is
+	// searched once more.
+	cat.homes = map[core.RatingKey]time.Time{title.Key: x.now.Add(-time.Minute)}
+	x.s.d.Catalog = cat
 	if err := x.s.Cycle(t.Context()); err != nil {
 		t.Fatal(err)
 	}
@@ -274,8 +278,17 @@ func TestProbeProcessesEveryInWindowTitle(t *testing.T) {
 		}
 		return nil, nil
 	}
-	if err := x.s.Cycle(t.Context()); err != nil {
-		t.Fatal(err)
+	// A backlog drains probeBatch searches per one-minute cycle, never as
+	// one burst, and every in-window title is reached.
+	for cycle := 0; len(searched) < 520 && cycle < 520; cycle++ {
+		before := len(searched)
+		if err := x.s.Cycle(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+		if n := len(searched) - before; n > probeBatch {
+			t.Fatalf("cycle %d searched %d titles, want at most %d", cycle, n, probeBatch)
+		}
+		x.now = x.now.Add(time.Minute)
 	}
 	if len(searched) != 520 {
 		t.Fatalf("probed %d titles, want every in-window title", len(searched))

@@ -772,6 +772,9 @@ func TestFailoverUsesAlternatesWithFetchNZB(t *testing.T) {
 	if h.resolver.callCount() != calls || len(fetched) != 1 || fetched[0] != "B" {
 		t.Fatalf("resolver calls %d->%d fetched %v", calls, h.resolver.callCount(), fetched)
 	}
+	if !h.cache.hasCause("B", core.CacheCauseFailover) {
+		t.Fatalf("failover cause missing: %+v", h.cache.provenanceFor("B"))
+	}
 }
 
 func TestLoopbackReadFailureTriggersHLSFailover(t *testing.T) {
@@ -793,6 +796,11 @@ func TestLoopbackReadFailureTriggersHLSFailover(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("no background failover")
 	}
+	s := h.m.lookup(ps.ID)
+	if err := lock(t.Context(), s.failSem); err != nil {
+		t.Fatal(err)
+	}
+	unlock(s.failSem)
 	st, _ := h.m.Session(ps.ID)
 	if st.Resolution.Release.ID != "B" {
 		t.Fatalf("release = %s", st.Resolution.Release.ID)

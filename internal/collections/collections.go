@@ -77,7 +77,9 @@ type Service struct {
 	art         *artwork.Renderer
 	images      *artwork.Images
 	catCfg      func() config.Catalog
+	kinds       *KindRegistry
 	traktCfg    func() config.Trakt
+	sealer      config.FieldSealer
 
 	liveTTL     time.Duration
 	tick        time.Duration
@@ -178,7 +180,7 @@ func New(db *sql.DB, cat core.Catalog, log *slog.Logger, opts ...Option) (*Servi
 	if log == nil {
 		log = slog.Default()
 	}
-	s := &Service{db: db, cat: cat, log: log, now: time.Now,
+	s := &Service{db: db, cat: cat, log: log, now: time.Now, kinds: NewKindRegistry(),
 		liveTTL: 2 * time.Minute, tick: time.Minute, buildBudget: 20 * time.Second,
 		members: map[int64]*memberSet{}, failed: map[buildKey]time.Time{}, personal: map[string]personalEntry{}, airGate: make(chan struct{}, 1),
 		opts: options{indexTTL: 2 * time.Minute}}
@@ -272,6 +274,8 @@ func (s *Service) personalScorer() core.PersonalScorer {
 
 // memberSet is a collection's built members plus what serving needs.
 type memberSet struct {
+	setOnce   sync.Once
+	set       map[core.RatingKey]struct{}
 	keys      []core.RatingKey
 	personal  []*rule
 	personalX []*rule
@@ -280,6 +284,54 @@ type memberSet struct {
 	builtAt   time.Time
 	hash      string
 	loadedAt  time.Time
+}
+
+// has reports membership; the lookup set is built once per member set.
+func (ms *memberSet) has(key core.RatingKey) bool {
+	ms.setOnce.Do(func() {
+		ms.set = make(map[core.RatingKey]struct{}, len(ms.keys))
+		for _, k := range ms.keys {
+			ms.set[k] = struct{}{}
+		}
+	})
+	_, ok := ms.set[key]
+	return ok
+}
+
+// Contains reports whether key is a member of owner collection id (an id
+// from the Collection Studio). It never builds a collection on the
+// caller's path: an unbuilt collection contains nothing yet. Genre and
+// studio facets read the one title's index entry.
+func (s *Service) Contains(ctx context.Context, id string, key core.RatingKey) bool {
+	row, err := s.rowByID(ctx, id)
+	if err != nil || !row.enabled {
+		return false
+	}
+	if facet, ok := localFacetSpec(row.spec); ok {
+		snap := s.idx.ready()
+		if snap == nil {
+			return false
+		}
+		e := snap.entries[key]
+		if e == nil {
+			return false
+		}
+		typ, rest, _ := strings.Cut(facet, "|")
+		field, value, _ := strings.Cut(rest, "|")
+		if string(e.typ) != typ {
+			return false
+		}
+		values := e.genresLC
+		if field == "studio" {
+			values = e.studiosLC
+		}
+		return slices.Contains(values, value)
+	}
+	ms, err := s.membersFor(ctx, row, false)
+	if err != nil || ms == nil {
+		return false
+	}
+	return ms.has(key)
 }
 
 func (ms *memberSet) personalRules() personalRules {
@@ -356,6 +408,9 @@ func (s *Service) membersFor(ctx context.Context, row *specRow, wait bool) (*mem
 	fresh := ms != nil && ms.builtAt.Equal(row.lastBuilt) && row.buildHash != "" && ms.hash == row.buildHash
 	if row.spec.Refresh == RefreshLive {
 		fresh = ms != nil && row.buildHash != "" && ms.hash == row.buildHash && s.now().Sub(ms.loadedAt) < s.liveTTL
+		if min := s.minimumSourceRefresh(row.spec); min > 0 {
+			fresh = ms != nil && row.buildHash != "" && ms.hash == row.buildHash && s.now().Sub(row.lastBuilt) < min
+		}
 	}
 	if fresh {
 		return ms, nil
@@ -377,6 +432,28 @@ func (s *Service) membersFor(ctx context.Context, row *specRow, wait bool) (*mem
 			return ms, nil
 		}
 		return nil, errNotBuilt
+	}
+	// Plugin and add-on list sources are remote lists: they are
+	// refreshed in the background and never fetched on a viewer request,
+	// even when a viewer requests a synchronous live evaluation.
+	for _, src := range row.spec.Sources {
+		if backgroundOnlySource(src) {
+			wait = false
+			if ms == nil && !row.lastBuilt.IsZero() && row.buildHash != "" {
+				keys, unshared, err := s.loadMembers(ctx, row.id)
+				if err != nil {
+					return nil, err
+				}
+				ms = s.newMemberSet(row.spec, keys, unshared, row.lastBuilt, row.buildHash)
+				s.mu.Lock()
+				s.members[row.id] = ms
+				s.mu.Unlock()
+				if row.spec.Refresh == RefreshLive && s.now().Sub(row.lastBuilt) < s.minimumSourceRefresh(row.spec) {
+					return ms, nil
+				}
+			}
+			break
+		}
 	}
 	if !wait {
 		go func() {
@@ -883,6 +960,9 @@ func (s *Service) CreateSmart(ctx context.Context, c core.Collection) (*core.Col
 	}
 	if c.Filter == nil {
 		return nil, fmt.Errorf("collections: smart collection needs a filter")
+	}
+	if c.Filter.Group != nil {
+		return nil, fmt.Errorf("collections: grouped smart collection filters are not supported")
 	}
 	sp := specFromFilter(c)
 	if err := Validate(&sp); err != nil {

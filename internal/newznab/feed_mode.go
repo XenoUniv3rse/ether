@@ -59,10 +59,28 @@ func (c *Client) recent(ctx context.Context, offset, limit int) ([]core.Release,
 		c.feedMode = mode
 	}
 	q := url.Values{"t": {"search"}, "extended": {"1"}, "offset": {strconv.Itoa(max(0, offset))}, "limit": {strconv.Itoa(min(100, max(1, limit)))}}
+	id := c.generalIdentity()
+	if c.feedMode.unfiltered && offset == 0 && c.now().Sub(c.feedMode.checked) >= filteredRecheck {
+		// An unfiltered feed lists every category (books, music, …), so it
+		// takes several pages to cover what one filtered page covers. A
+		// single empty answer put it here; ask filtered again once a day.
+		q.Set("cat", joinCats(recentCategories(cfg)))
+		rs, err := c.doSearch(ctx, q, id)
+		if err != nil {
+			return nil, err
+		}
+		if err := c.saveFeedMode(ctx, recentFeedMode{identity: identity, unfiltered: len(rs) == 0, checked: c.now()}); err != nil {
+			return nil, err
+		}
+		if len(rs) > 0 {
+			return rs, nil
+		}
+	}
 	if !c.feedMode.unfiltered {
 		q.Set("cat", joinCats(recentCategories(cfg)))
+	} else {
+		q.Del("cat")
 	}
-	id := c.generalIdentity()
 	rs, err := c.doSearch(ctx, q, id)
 	if err != nil || len(rs) > 0 || offset != 0 || c.feedMode.unfiltered || c.now().Sub(c.feedMode.checked) < 6*time.Hour {
 		return rs, err
@@ -72,17 +90,27 @@ func (c *Client) recent(ctx context.Context, offset, limit int) ([]core.Release,
 	if err != nil {
 		return nil, err
 	} // don't call a denied/failed probe an empty feed
-	mode := recentFeedMode{identity: identity, unfiltered: len(rs) > 0, checked: c.now()}
+	if err := c.saveFeedMode(ctx, recentFeedMode{identity: identity, unfiltered: len(rs) > 0, checked: c.now()}); err != nil {
+		return nil, err
+	}
+	return rs, nil
+}
+
+// filteredRecheck is how long an indexer stays on its unfiltered feed
+// before the category-filtered one is tried again.
+const filteredRecheck = 24 * time.Hour
+
+func (c *Client) saveFeedMode(ctx context.Context, mode recentFeedMode) error {
 	if c.db != nil {
 		flag := 0
 		if mode.unfiltered {
 			flag = 1
 		}
-		_, err = c.db.ExecContext(ctx, `INSERT INTO newznab_feed_modes(indexer_id,identity,unfiltered,checked_at) VALUES(?,?,?,?) ON CONFLICT(indexer_id) DO UPDATE SET identity=excluded.identity,unfiltered=excluded.unfiltered,checked_at=excluded.checked_at`, c.indexerID(), identity, flag, mode.checked.Unix())
+		_, err := c.db.ExecContext(ctx, `INSERT INTO newznab_feed_modes(indexer_id,identity,unfiltered,checked_at) VALUES(?,?,?,?) ON CONFLICT(indexer_id) DO UPDATE SET identity=excluded.identity,unfiltered=excluded.unfiltered,checked_at=excluded.checked_at`, c.indexerID(), mode.identity, flag, mode.checked.Unix())
 		if err != nil {
-			return nil, err
+			return err
 		}
 	}
 	c.feedMode = mode
-	return rs, nil
+	return nil
 }

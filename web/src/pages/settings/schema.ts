@@ -30,6 +30,18 @@ export const SERVER: FieldGroup[] = localized(() => [
     ],
   },
   {
+    id: "console",
+    title: t("Console"),
+    fields: [
+      {
+        key: "startupAnimation",
+        label: t("Startup animation"),
+        kind: "bool",
+        help: t("Show the animated splash when opening the console."),
+      },
+    ],
+  },
+  {
     id: "connect",
     title: t("How apps connect"),
     description: t("The address apps use to reach this computer."),
@@ -939,7 +951,7 @@ export const EXTRAS: FieldGroup[] = localized(() => [
 ]);
 
 /** Preset keys as the server names them; proper nouns are not translated. */
-function identityOptions(includeCustom: boolean, includeEther = true) {
+export function identityOptions(includeCustom: boolean, includeEther = true) {
   const options = [
     ...(includeEther ? [{ value: "ether", label: "Ether" }] : []),
     { value: "sonarr", label: "Sonarr" },
@@ -962,57 +974,3 @@ export function searchIdentityOptions(includeCustom: boolean, includeEther = tru
     (o) => o.value !== "sabnzbd" && o.value !== "nzbget",
   );
 }
-
-export const CLIENT_IDENTITY: FieldGroup[] = localized(() => [
-  {
-    id: "identity",
-    title: t("Client identity"),
-    description: t(
-      "What Newznab and Torznab indexers see when Ether searches or downloads. Defaults to Ether; choose a real client for sites that treat unknown clients badly.",
-    ),
-    fields: [
-      {
-        // Empty is the Ether identity; showing it makes the untouched form
-        // read as what it actually sends.
-        key: "tvSearch",
-        label: t("TV searches"),
-        kind: "select",
-        options: [{ value: "", label: "Ether" }, ...searchIdentityOptions(true, false)],
-      },
-      {
-        key: "movieSearch",
-        label: t("Movie searches"),
-        kind: "select",
-        options: [{ value: "", label: "Ether" }, ...searchIdentityOptions(true, false)],
-      },
-      {
-        key: "tvGrab",
-        label: t("TV downloads"),
-        kind: "select",
-        options: [{ value: "", label: "Ether" }, ...identityOptions(true, false)],
-      },
-      {
-        key: "movieGrab",
-        label: t("Movie downloads"),
-        kind: "select",
-        options: [{ value: "", label: "Ether" }, ...identityOptions(true, false)],
-      },
-    ],
-    more: [
-      {
-        key: "userAgent",
-        label: t("Custom user agent"),
-        kind: "text",
-        help: t("Sent when an identity above is Custom."),
-      },
-      {
-        key: "headers",
-        label: t("Custom headers"),
-        kind: "map",
-        help: t(
-          "Sent to every indexer whose identity is Custom, so don't put one site's login here. Values are sealed at rest and shown as •••• after saving.",
-        ),
-      },
-    ],
-  },
-]);

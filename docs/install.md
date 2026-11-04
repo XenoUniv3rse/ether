@@ -149,11 +149,33 @@ On a fresh install, a mounted `/cache` volume is used automatically, so
 no restart is required for that path. The budget is set in the setup wizard
 or later on the Cache page.
 
-Both volumes must be on a disk in this machine. Network shares (NFS, SMB) and
-FUSE filesystems are refused at startup, because they don't give the file
-locking Ether's database and cache need. **On Unraid, don't map `/config` or
-`/cache` from a user share (`/mnt/user/...`).** User shares are FUSE (`shfs`).
-Use the pool or disk path instead, for example
+Keep `/config` on a disk in this machine. Ether checks the filesystem under
+it at startup, and the error or warning always names the filesystem type and
+the path it found:
+
+| Where `/config` lives | What happens |
+| --- | --- |
+| A local disk: ext4, XFS, Btrfs, ZFS, f2fs, bcachefs, NTFS (`ntfs3`), JFS, ReiserFS, NILFS2, tmpfs or overlay on Linux; NTFS or ReFS on Windows; APFS or HFS+ on macOS; ZFS or UFS on FreeBSD | Fully supported. |
+| A Docker named volume (`-v ether-config:/config`), including on Docker Desktop | Fully supported. The volume is ext4 inside Docker's VM. |
+| Any other local filesystem (exFAT, FAT32, `fuseblk`/ntfs-3g, mergerfs, ecryptfs...) or a **Docker Desktop bind mount** of a folder from your Mac or PC (`virtiofs`, `fakeowner`, `9p`, `grpcfuse`) | Ether tests the folder at startup (file locking, atomic rename, file identity, fsync). If every check passes, it is fully supported. If not, Ether still starts, cleans up its cache in **safe mode**, and the Overview page shows a *Data folder* warning. |
+| A network share (NFS, SMB/CIFS, Ceph, sshfs, rclone...) | With the built-in SQLite database Ether **won't start**: SQLite's locking is not safe over a network. With PostgreSQL it starts with cache cleanup in safe mode. |
+| An Unraid user share (`/mnt/user/...`, `fuse.shfs`) | With SQLite Ether **won't start**, as for network shares. Map the pool or disk path instead (see below). |
+
+Safe mode only changes one thing. Ether can't use file locks on that
+filesystem to prove that a crashed run has stopped using its files, so it
+keeps those files for 10 minutes after the crashed run's last heartbeat
+before cleaning them up. After a normal shutdown nothing is kept. Playback,
+resume and everything else work as usual. To clear the warning, move
+`/config` to one of the fully supported places above.
+
+**On Docker Desktop (Windows and macOS), use a named volume for `/config`**
+rather than a bind mount of a folder on your computer, for example
+`-v ether-config:/config`. Named volumes are faster and always fully
+supported. A bind mount depends on how Docker Desktop shares that folder, and
+it may land in safe mode.
+
+**On Unraid, don't map `/config` from a user share (`/mnt/user/...`).** User
+shares are FUSE (`shfs`). Use the pool or disk path instead, for example
 `/mnt/cache/appdata/ether/config:/config`. If the share already lives on that
 pool, no data has to move.
 
@@ -198,6 +220,14 @@ sudo ./ether service start
 `~/Library/Application Support/Ether` on macOS, `%ProgramData%\Ether`
 on Windows). Logs are written to `<data dir>/logs/ether.log` (rotated)
 and fatal crash traces to `<data dir>/logs/crash.log`.
+
+On Linux, burned-in text subtitles (Plex Web asks for its ASS tracks to
+be burned) need fontconfig and at least one font. Without them the burned
+cues are blank. Desktop installs already have both; on a headless host,
+install them: `sudo apt install fontconfig fonts-dejavu-core`
+(Debian/Ubuntu) or `sudo dnf install fontconfig dejavu-sans-fonts`
+(Fedora/RHEL). The Docker image and the .deb/.rpm packages bring them in
+already.
 
 ## Remote access / port forwarding
 
@@ -679,6 +709,7 @@ chose.
 | `Connection refused. Check the host and port.` / `TLS connection failed. Check the port and TLS setting.` | The provider host is reachable, but the port or TLS toggle does not match the provider's NNTP endpoint (typically `563` or `443` with TLS on, `119` with TLS off). |
 | `Login rejected. Check the username and password.` (NNTP `481` / `502`) | The Usenet provider rejected the credentials or account state. Verify the username and password in **Sources › Usenet** and confirm the subscription is active. |
 | `Password must be at least 12 characters.` | Local owner and viewer passwords set in setup, **Sign-in methods**, **Viewers**, or the API must be at least 12 characters long. Existing shorter passwords continue to work until changed. |
+| Plex Web shows an ASS subtitle track as converted, but no subtitle is drawn (Linux) | libass found no font to burn the cues with. Install `fontconfig` and a font package (`fonts-dejavu-core` on Debian/Ubuntu, `dejavu-sans-fonts` on Fedora/RHEL). The Docker image and the .deb/.rpm packages include them. |
 | `this FFmpeg cannot tone-map` | The stream is HDR and the client requested SDR, but the installed `ffmpeg` lacks `zscale` (`libzimg`), `libplacebo`, and hardware/OpenCL tone-mapping filters. Use Ether's packaged installer/container image or install an `ffmpeg` build with `libzimg`. |
 | `credential key is missing or does not match` | `.credentials-key` in the data directory was deleted or belongs to a different server, while `config.json` or `ether.db` still contains sealed secrets. Restore the matching `.credentials-key` from backup, or join a cluster node with a fresh join token. |
 | `503 Service Unavailable` / `/ether/` shows the startup recovery page | Ether is still migrating/restoring, or database startup failed. Open `/ether/` directly on the host to view the exact startup error, unlock recovery with the owner password or `recovery-code.txt`, and restore a snapshot. |

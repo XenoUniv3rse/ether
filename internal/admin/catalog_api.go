@@ -10,6 +10,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/braedonsaunders/ether/internal/catalog"
+	"github.com/braedonsaunders/ether/internal/config"
 	"github.com/braedonsaunders/ether/internal/core"
 	"github.com/braedonsaunders/ether/internal/libraryfilter"
 )
@@ -25,6 +27,38 @@ type CatalogHelper interface {
 	// Lookup kinds: person, keyword, company, network, collection, watchProvider.
 	Lookup(ctx context.Context, kind, q, region string) ([]core.LookupResult, error)
 	TitleDetail(ctx context.Context, key core.RatingKey) (*core.Title, error)
+}
+
+// CatalogExternal names titles by their IMDb ids.
+type CatalogExternal interface {
+	TitlesByIMDB(ctx context.Context, ids []string) []core.Title
+}
+
+// handleCatalogExternal resolves ?imdb=tt1,tt2 (at most 24) to title cards.
+func (h *Handler) handleCatalogExternal(w http.ResponseWriter, r *http.Request) {
+	ext, ok := h.deps.CatalogHelper.(CatalogExternal)
+	if !ok {
+		writeError(w, http.StatusServiceUnavailable, "unavailable", "Catalog lookup is unavailable")
+		return
+	}
+	var ids []string
+	for _, id := range strings.Split(r.URL.Query().Get("imdb"), ",") {
+		if id = strings.TrimSpace(id); strings.HasPrefix(id, "tt") && len(id) <= 16 {
+			ids = append(ids, id)
+		}
+		if len(ids) == 24 {
+			break
+		}
+	}
+	type card struct {
+		TitleCard
+		IMDBID string `json:"imdbId"`
+	}
+	items := []card{}
+	for _, t := range ext.TitlesByIMDB(r.Context(), ids) {
+		items = append(items, card{CardFor(t), t.IDs.IMDB})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items})
 }
 
 // CatalogBrowser exposes paginated local browsing without a remote TMDB search.
@@ -261,6 +295,8 @@ type personCard struct {
 }
 
 type titleDetail struct {
+	TMDBID int64  `json:"tmdbId,omitempty"`
+	IMDBID string `json:"imdbId,omitempty"`
 	TitleCard
 	Cast       []personCard `json:"cast"`
 	Directors  []personCard `json:"directors"`
@@ -269,6 +305,19 @@ type titleDetail struct {
 		ID   int64  `json:"id"`
 		Name string `json:"name"`
 	} `json:"collection"`
+	// Facts for the drawer's overview; dates are YYYY-MM-DD.
+	Tagline                string   `json:"tagline,omitempty"`
+	OriginalTitle          string   `json:"originalTitle,omitempty"`
+	Language               string   `json:"language,omitempty"`
+	Status                 string   `json:"status,omitempty"`
+	Studios                []string `json:"studios,omitempty"`
+	Countries              []string `json:"countries,omitempty"`
+	ReleaseDate            string   `json:"releaseDate,omitempty"`
+	HomeRelease            string   `json:"homeReleaseDate,omitempty"`
+	HomeReleaseAgeAdmitted bool     `json:"homeReleaseAgeAdmitted,omitempty"`
+	LastAirDate            string   `json:"lastAirDate,omitempty"`
+	Seasons                int      `json:"seasonCount,omitempty"`
+	Episodes               int      `json:"episodeCount,omitempty"`
 }
 
 func people(ps []core.Person, max int) []personCard {
@@ -293,7 +342,14 @@ func (h *Handler) handleCatalogTitle(w http.ResponseWriter, r *http.Request) {
 		h.writeServiceError(w, err)
 		return
 	}
-	d := titleDetail{TitleCard: CardFor(*t), Cast: people(t.Cast, 20), Directors: people(t.Directors, 5), Keywords: t.Keywords}
+	d := titleDetail{TMDBID: t.IDs.TMDB, IMDBID: t.IDs.IMDB, TitleCard: CardFor(*t), Cast: people(t.Cast, 20), Directors: people(t.Directors, 5), Keywords: t.Keywords,
+		Tagline: t.Tagline, Language: t.Language, Status: t.Status, Studios: t.Studios, Countries: t.Countries,
+		ReleaseDate: airDate(t.Released), HomeRelease: airDate(t.HomeReleased), LastAirDate: airDate(t.LastAirDate),
+		Seasons: t.ChildCount, Episodes: t.LeafCount}
+	d.HomeReleaseAgeAdmitted = h.deps.Config.Get().Availability.EffectiveMode() == config.ModeDigital && catalog.HomeReleaseAgeAdmitted(t, time.Now()) && (!t.HomeReleaseChecked || t.HomeReleased.IsZero() || t.HomeReleased.After(time.Now()))
+	if t.OriginalTitle != t.Title {
+		d.OriginalTitle = t.OriginalTitle
+	}
 	if d.Keywords == nil {
 		d.Keywords = []string{}
 	}

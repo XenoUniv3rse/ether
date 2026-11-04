@@ -51,6 +51,9 @@ type frontendRuntime struct {
 	cancel         context.CancelFunc
 	mu             sync.Mutex
 	lifecycleMu    sync.Mutex
+	lan            lanCheck
+	lanChecking    bool
+	lanGeneration  uint64
 	discoveryError string
 	runCtx         context.Context
 	mainAddr       net.Addr
@@ -262,16 +265,20 @@ func newFrontendRuntime(a *App, cfg config.Config) (*frontendRuntime, error) {
 			extraPlay = extraSurface{extras: a.extras}
 			cinema = cinemaSurface{exp: experience, extras: a.extras}
 		}
+		var prerollIntros frontend.Prerolls
+		if a.prerolls != nil {
+			prerollIntros = prerollSurface{svc: a.prerolls, state: a.state}
+		}
 		var subtitleCatalog frontend.SubtitleCatalog
 		if a.subtitles != nil {
 			subtitleCatalog = subtitleSurface{app: a, exp: experience, surface: string(id)}
 		}
-		return frontend.Host{IDs: ids.Codecs{Allocator: compact}, DirectProxy: egress.ProxyFunc(egress.CapDirect), Experience: experience, LastPlayedSource: surfaceLastPlayedSource{experience: experience, state: a.state}, VersionHandles: versionHandles, SourceOffers: sourceOffers, Editions: surfaceEditions{app: a}, VirtualPaths: surfaceVirtualPaths{experience: experience, index: &pathIndex{}, stamp: func(v *core.Viewer) string {
+		return frontend.Host{Support: a.support, IDs: ids.Codecs{Allocator: compact}, DirectProxy: egress.ProxyFunc(egress.CapDirect), Experience: experience, LastPlayedSource: surfaceLastPlayedSource{experience: experience, state: a.state}, VersionHandles: versionHandles, SourceOffers: sourceOffers, Editions: surfaceEditions{app: a}, VirtualPaths: surfaceVirtualPaths{experience: experience, index: &pathIndex{}, stamp: func(v *core.Viewer) string {
 			if v == nil || a.catalog == nil || a.cfg == nil {
 				return ""
 			}
 			return fmt.Sprintf("%d|%d|%d|%s|%v", a.catalog.WriteGeneration(), a.cfg.Generation(), v.ID, v.MaxContentRating, v.AllowedSections)
-		}, enabled: func() bool { _, ok := r.registry.Instance("webdav"); return ok }, base: func(ctx context.Context, req *http.Request) (string, error) { return r.surfaceURL(ctx, "webdav", req) }}, ViewerCapabilities: a.viewerCapabilities(local, experience), ViewerPolicy: surfaceViewerPolicy{app: a}, ImageGrants: imageGrants, Artwork: artwork, ExtraStreams: extraPlay, Cinema: cinema, Subtitles: subtitleCatalog, Preferences: identity.NewPreferences(a.db, id), TrackPreferences: surfaceTrackPreferences{app: a}, LiveTV: surfaceLiveTV{app: a, channelArtwork: channelArtwork, artwork: artwork}, Sessions: scorecardSessions(a, sessions.BindSurface(r.broker, id)), LazyStreams: lazy, LANStreams: lanStreams, Capabilities: surfaceCapabilities{app: a, surface: id}, Identity: surfaceIdentity{settings: settings, surface: id, resolver: resolver, local: local, grants: grants, quick: quick, login: login, poll: poll, times: times}, Events: sessions.BindEvents(r.events, id), Tickets: tickets, WatchParty: parties, Images: frontendImages{source: a.images}, Log: a.log.With("frontend", id), ClientSeen: func(deviceID string) { a.frontendClients.observe(id, deviceID) }, ClientIP: a.frontendClientIP, ViewerPortalURL: r.viewerPortalURL, SecurePortalURL: r.viewerPortalSecureURL, SurfaceURL: func(ctx context.Context, req *http.Request) (string, error) {
+		}, enabled: func() bool { _, ok := r.registry.Instance("webdav"); return ok }, base: func(ctx context.Context, req *http.Request) (string, error) { return r.surfaceURL(ctx, "webdav", req) }}, ViewerCapabilities: a.viewerCapabilities(local, experience), ViewerPolicy: surfaceViewerPolicy{app: a}, ImageGrants: imageGrants, Artwork: artwork, ExtraStreams: extraPlay, Cinema: cinema, Prerolls: prerollIntros, Subtitles: subtitleCatalog, Preferences: identity.NewPreferences(a.db, id), TrackPreferences: surfaceTrackPreferences{app: a}, LiveTV: surfaceLiveTV{app: a, channelArtwork: channelArtwork, artwork: artwork}, Sessions: scorecardSessions(a, sessions.BindSurface(r.broker, id)), LazyStreams: lazy, LANStreams: lanStreams, Capabilities: surfaceCapabilities{app: a, surface: id}, Identity: surfaceIdentity{settings: settings, surface: id, resolver: resolver, local: local, grants: grants, quick: quick, login: login, poll: poll, times: times}, Events: sessions.BindEvents(r.events, id), Tickets: tickets, WatchParty: parties, Images: frontendImages{source: a.images}, Log: a.log.With("frontend", id), ClientSeen: func(deviceID string) { a.frontendClients.observe(id, deviceID) }, ClientIP: a.frontendClientIP, ViewerPortalURL: r.viewerPortalURL, SecurePortalURL: r.viewerPortalSecureURL, SurfaceURL: func(ctx context.Context, req *http.Request) (string, error) {
 			return scorecardSurfaceURL(ctx, r, id, req)
 		}, LANViewer: lanViewer, PageFreshness: func() frontend.PageFreshness {
 			f := a.browseFreshness()
@@ -428,9 +435,16 @@ func (r *frontendRuntime) plexStatus(ctx context.Context) frontend.Status {
 	r.mu.Lock()
 	addr := r.mainAddr
 	discoveryError := r.discoveryError
+	lan := r.lan
 	r.mu.Unlock()
 	cfg := r.app.cfg.Get()
 	st := frontend.Status{TargetVersion: plextv.PMSVersion(cfg), LAN: "unknown", WAN: "unknown", Conformance: "unknown", LiveStreamsKnown: true}
+	targets, machine := r.lanInputs()
+	if !lan.checked.IsZero() && lan.fingerprint == lanFingerprint(targets, machine) {
+		st.LAN = lan.state
+		st.LANReason = lan.reason
+		st.LANCheckedAt = lan.checked
+	}
 	if discoveryError != "" {
 		st.Warnings = append(st.Warnings, discoveryError)
 	}
@@ -508,6 +522,8 @@ func (r *frontendRuntime) start(ctx context.Context, addr net.Addr) {
 	}
 	r.runCtx = ctx
 	r.mainAddr = addr
+	r.lan = lanCheck{}
+	r.lanGeneration++
 	r.mu.Unlock()
 	r.control.Reconcile(r.ctx, r.app.cfg.Get())
 	r.mu.Lock()
@@ -541,6 +557,8 @@ func (r *frontendRuntime) stop() {
 	defer r.mu.Unlock()
 	r.runCtx = nil
 	r.mainAddr = nil
+	r.lan = lanCheck{}
+	r.lanGeneration++
 	if r.gdmRunning {
 		r.discovery.Stop()
 		r.discovery = nil

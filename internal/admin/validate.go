@@ -72,6 +72,30 @@ func (v *validator) clock(field, s string) {
 // strict about structurally broken values.
 func ValidateConfig(cfg config.Config) []FieldError {
 	v := &validator{}
+	ids := map[string]bool{}
+	openSubtitles := false
+	for i, provider := range cfg.Subtitles.Providers {
+		field := fmt.Sprintf("subtitles.providers[%d]", i)
+		if strings.TrimSpace(provider.ID) == "" || ids[provider.ID] {
+			v.add(field+".id", "must be unique and nonempty")
+		}
+		ids[provider.ID] = true
+		switch provider.Kind {
+		case config.SubtitleProviderOpenSubtitles:
+			if openSubtitles {
+				v.add(field+".kind", "OpenSubtitles can only appear once")
+			}
+			openSubtitles = true
+		default:
+			if !strings.HasPrefix(provider.Kind, "plugin:") || !strings.HasSuffix(provider.Kind, "/subtitles") || provider.ID != provider.Kind {
+				v.add(field+".kind", "unknown subtitle provider")
+			}
+		}
+	}
+	if cfg.LiveTV.HealthSweepMinutes < -1 || cfg.LiveTV.HealthSweepMinutes > 1440 {
+		v.add("liveTV.healthSweepMinutes", "must be between -1 and 1440")
+	}
+	v.httpURL("liveTV.logoIndexUrl", cfg.LiveTV.LogoIndexURL, false)
 	if err := cfg.Posters.Validate(); err != nil {
 		v.add("posters", "%s", err.Error())
 	}

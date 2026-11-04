@@ -14,13 +14,14 @@ import (
 	"github.com/braedonsaunders/ether/internal/frontend"
 	"github.com/braedonsaunders/ether/internal/frontend/kit/conformance"
 	"github.com/braedonsaunders/ether/internal/frontend/kit/route"
+	"github.com/braedonsaunders/ether/internal/frontend/kit/support"
 )
 
 // Frontend is the independent Silo surface.
 type Frontend struct{ MachineID string }
 
 func (Frontend) Describe() frontend.Descriptor {
-	return frontend.Descriptor{ID: "silo", Name: "Silo", DefaultPort: 8090}
+	return frontend.Descriptor{ID: "silo", Name: "Silo", DefaultPort: 8090, SettingsSchema: frontend.NamedServerSchema()}
 }
 func (f Frontend) Mount(_ context.Context, host frontend.Host) (frontend.Instance, error) {
 	if f.MachineID == "" || host.Identity == nil {
@@ -84,22 +85,28 @@ type instance struct {
 	plansMu sync.Mutex
 	plans   map[string]playbackPlan
 
-	liveMu       sync.Mutex
-	liveChannels map[string]string
-	liveCards    map[string]liveChannelCardMeta
+	liveMu    sync.Mutex
+	liveCards map[string]liveChannelCardMeta
 }
 
 func (i *instance) Handler() http.Handler {
+	next := support.Wrap(i.host.Support, "silo", func(r *http.Request) (*frontend.Viewer, frontend.Device) {
+		v, _, err := i.deviceViewer(r)
+		if err != nil {
+			return nil, frontend.Device{}
+		}
+		return v, device(r)
+	}, func(path string) string { return path }, i.router)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/silo/") {
 			r2 := r.Clone(context.WithValue(r.Context(), sharedPrefix{}, true))
 			u := *r.URL
 			u.Path = strings.TrimPrefix(u.Path, "/silo")
 			r2.URL = &u
-			i.router.ServeHTTP(w, r2)
+			next.ServeHTTP(w, r2)
 			return
 		}
-		i.router.ServeHTTP(w, r)
+		next.ServeHTTP(w, r)
 	})
 }
 func (i *instance) Listeners() []frontend.ListenerSpec {

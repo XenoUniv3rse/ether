@@ -10,6 +10,7 @@
 
 <p align="center">
   <a href="https://github.com/braedonsaunders/ether/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/braedonsaunders/ether?label=release&color=1f6feb" /></a>
+  <a href="https://discord.gg/t8ewTZ7gpa"><img alt="Discord" src="https://img.shields.io/discord/1567272301672796331?label=discord&logo=discord&logoColor=white&color=5865F2" /></a>
   <img alt="Platforms" src="https://img.shields.io/badge/runs%20on-macOS%20%7C%20Windows%20%7C%20Linux%20%7C%20Docker-555" />
   <img alt="Pure Go" src="https://img.shields.io/badge/Go-CGO__ENABLED%3D0-00ADD8" />
   <a href="LICENSE"><img alt="GPL-3.0" src="https://img.shields.io/badge/license-GPL--3.0-555" /></a>
@@ -342,9 +343,10 @@ By default, no. Ordinary playback fetches only the byte ranges the player is wat
 <summary><b>Won't this hammer my indexers and Usenet providers?</b></summary>
 
 Ether is built not to:
-- **No background crawling of the catalogue:** Indexers are queried when a viewer opens or plays a title, when the next episode is about to play, on a slow schedule for watchlisted items, or within bounded daily budgets when checking in-window movies for the *When they can play* release mode.
+- **No background crawling of the catalogue:** Indexers are queried when a viewer opens or plays a title, when the next episode is about to play, and on a slow schedule for watchlisted items. *When they can play* follows each indexer's recent releases the way Radarr/Sonarr RSS does: one feed request per indexer every 30 minutes, matched locally against every waiting title, plus a single targeted search when a movie enters the window or reaches its digital release date (one source at a time, stopping at the first hit).
+- **Bounded daily budgets:** Background work has its own daily allowance per indexer: 10% of the indexer's API limit (the one you set, the one it reports, or else 1,000/day, the strictest private tier), and work nobody waits on (warm-ups, preloads) shares another 10% for searches and 10% of the NZB download limit. A replayed day of a two-Usenet-indexer, four-site household used 50–64 background requests per indexer. Downloaded NZBs are reused from disk, so a release is grabbed once, and background requests to one indexer are spaced at least three seconds apart.
 - **Detail-page reuse:** Opening a detail page resolves, probes, and caches the keyframe index for 10 minutes; pressing Play reuses that work with no extra queries.
-- **Quota and `Retry-After` discipline:** Per-indexer daily API and download caps are tracked durably across restarts; `429` and `Retry-After` responses pause that indexer cleanly while falling back to others, and concurrent `FetchNZB` requests for the same release are coalesced.
+- **Quota and `Retry-After` discipline:** Per-indexer daily API and download caps are tracked durably across restarts; `429`, `Retry-After` and Newznab API-limit errors pause that indexer cleanly while falling back to others, and concurrent `FetchNZB` requests for the same release are coalesced.
 - **Minimal health sampling:** Health checks sample about 12 spread articles and stop on the first confirmed miss across all providers.
 
 *Always check your indexer's terms of service; some private indexers restrict streaming engines.*

@@ -43,6 +43,7 @@ export type Block = {
   watched?: "" | "watched" | "unwatched";
 };
 export type Channel = {
+  health?: "unchecked" | "available" | "unavailable";
   id: string;
   number: string;
   name: string;
@@ -122,6 +123,7 @@ export type PreviewSession = {
   programme?: Programme;
 };
 export type Source = {
+  kind?: string;
   id: string;
   name: string;
   playlistUrl?: string;
@@ -141,6 +143,7 @@ export type Source = {
   refreshFailures?: number;
 };
 export type SourceDraft = {
+  kind?: string;
   id: string;
   name: string;
   playlistUrl: string;
@@ -288,6 +291,9 @@ export const emptyChannel = (): Channel => ({
   shuffle: false,
   items: [],
 });
+
+/** The Live TV source kind of an installed add-on's channels. */
+export const addonChannelsKind = (pluginId: string) => `plugin:${pluginId}/channels`;
 
 export const emptySource = (): SourceDraft => ({
   id: "",

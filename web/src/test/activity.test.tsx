@@ -2,6 +2,7 @@ import { render, screen, fireEvent, waitFor, within } from "@testing-library/rea
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { describe, it, expect, vi } from "vitest";
 import { setToken } from "../lib/api";
+import { descriptors as notifyDescriptors } from "../mock/extend/descriptors/notify";
 import Activity from "../pages/activity/Activity";
 import Notifications from "../pages/notifications/Notifications";
 import { HardwareStatus } from "../pages/playback/Hardware";
@@ -37,7 +38,8 @@ function backend() {
       const url = String(input);
       calls.push({ url, init });
       let v: unknown = { ok: true };
-      if (url.includes("/stats/summary")) v = emptySummary;
+      if (url.includes("/extend/registry")) v = { version: 1, descriptors: notifyDescriptors };
+      else if (url.includes("/stats/summary")) v = emptySummary;
       else if (url.includes("/stats/history")) v = [];
       else if (url.endsWith("/users"))
         v = {
@@ -62,6 +64,37 @@ function backend() {
               TitleName: "Other film",
               Username: "Alex",
               Client: { deviceName: "TV", protocol: "jellyfin" },
+            },
+          ],
+        };
+      else if (url.endsWith("/indexer-usage"))
+        v = {
+          today: "2026-11-03",
+          weekStart: "2026-10-28",
+          monthStart: "2026-11-01",
+          indexers: [
+            {
+              id: "ix1",
+              name: "My indexer",
+              enabled: true,
+              torrent: false,
+              dailyLimit: 100,
+              dailyGrabs: 0,
+              today: {
+                hits: 7,
+                grabs: 1,
+                purposes: [
+                  { purpose: "feed", hits: 4, grabs: 0 },
+                  { purpose: "playback", hits: 3, grabs: 1 },
+                ],
+              },
+              week: { hits: 30, grabs: 2, purposes: [{ purpose: "feed", hits: 30, grabs: 2 }] },
+              month: {
+                hits: 50,
+                grabs: 2,
+                purposes: [{ purpose: "unattributed", hits: 50, grabs: 2 }],
+              },
+              days: [],
             },
           ],
         };
@@ -109,8 +142,7 @@ function backend() {
           naturalSearch: false,
           recaps: false,
         };
-      else if (url.endsWith("/notifications/"))
-        v = { channels: [], events: ["playback.error", "newsletter.weekly"], deliveries: [] };
+      else if (url.endsWith("/notifications/")) v = { channels: [], deliveries: [] };
       else if (url.endsWith("/status/hwaccel"))
         v = { value: { hwaccel: { name: "none", encoders: [] } } };
       else if (url.endsWith("/newsletter/settings") && !init?.method) v = schedule;
@@ -249,7 +281,7 @@ describe("Notifications", () => {
     renderAt("/notifications");
     fireEvent.click(await screen.findByRole("button", { name: "New channel" }, WAIT));
     const drawer = await screen.findByRole("dialog", { name: "New notification channel" });
-    fireEvent.change(within(drawer).getByLabelText("Endpoint URL"), {
+    fireEvent.change(await within(drawer).findByLabelText("Endpoint URL"), {
       target: { value: "https://notify.example/hook" },
     });
     fireEvent.click(within(drawer).getByRole("button", { name: "Clear" }));
@@ -262,7 +294,7 @@ describe("Notifications", () => {
           (c) =>
             c.url.includes("/notifications/") &&
             c.init?.method === "PUT" &&
-            body(c).endpoint === "https://notify.example/hook" &&
+            body(c).secrets?.endpoint === "https://notify.example/hook" &&
             body(c).events.includes("playback.error"),
         ),
       ).toBe(true),
@@ -290,6 +322,16 @@ describe("Source usage", () => {
     fireEvent.change(screen.getByLabelText("Currency for My indexer"), {
       target: { value: "eur" },
     });
+    // Real API hits by purpose, matching the indexer's own counter.
+    expect(screen.getByText("7 of 100")).toBeInTheDocument();
+    const byPurpose = screen.getByRole("list", { name: "API hits by purpose" });
+    expect(byPurpose).toHaveTextContent("Release-feed polls");
+    expect(byPurpose).toHaveTextContent("Playback searches");
+    expect(screen.queryByText("Searches this month")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("radio", { name: "This month" }));
+    expect(screen.getByRole("list", { name: "API hits by purpose" })).toHaveTextContent(
+      "Before this breakdown",
+    );
     fireEvent.click(screen.getByRole("button", { name: "Save prices" }));
     await waitFor(() =>
       expect(

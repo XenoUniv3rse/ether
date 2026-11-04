@@ -1,9 +1,12 @@
 /**
- * Every owner destination in one place. The sidebar and ⌘K search read this,
- * so a section only ever has one home.
+ * Every owner destination in one place, derived from the descriptor
+ * registry's page descriptors (internal/app/extend_console.go). The sidebar
+ * and ⌘K search read this, so a section only ever has one home.
  */
 
-import { localized, t, msg, searchTerms } from "../i18n";
+import { localized, msg, searchTerms, t } from "../i18n";
+import { textOf, type Descriptor } from "./extend";
+import { pageRoute, searchTextOf, type PageMeta } from "./console-descriptors";
 
 export interface Destination {
   href: string;
@@ -254,8 +257,13 @@ export const PAGES = localized<PageDef[]>(() => [
       {
         key: "extras",
         title: t("Extras"),
+        keywords: searchTerms(msg("intro credits skip chapters up next post-play")),
+      },
+      {
+        key: "prerolls",
+        title: t("Pre-rolls"),
         keywords: searchTerms(
-          msg("trailers cinema yt-dlp intro credits skip chapters up next post-play"),
+          msg("pre-roll preroll intro video before feature trailers cinema yt-dlp"),
         ),
       },
       {
@@ -419,6 +427,31 @@ export const PAGES = localized<PageDef[]>(() => [
     keywords: searchTerms(msg("errors debug support zip record a problem")),
   },
 ]);
+/** Pages in registry order, with their sections, in the active language. */
+export function pagesFrom(pages: Descriptor<PageMeta>[]): PageDef[] {
+  return pages.map((p) => ({
+    href: pageRoute(p),
+    title: textOf(p.label),
+    sections: (p.meta?.sections ?? []).map((s) => ({
+      key: s.key,
+      title: textOf(s.label),
+      keywords: searchTextOf(s.keywords),
+    })),
+    keywords: searchTextOf(p.meta?.keywords),
+  }));
+}
+
+export function destinationsFrom(pages: Descriptor<PageMeta>[]): Destination[] {
+  return pagesFrom(pages).flatMap((p) => [
+    { href: p.href, title: p.title, page: t("Page"), keywords: p.keywords, isPage: true },
+    ...p.sections.map((s) => ({
+      href: s.href ?? `${p.href}/${s.key}`,
+      title: s.title,
+      page: p.title,
+      keywords: s.keywords,
+    })),
+  ]);
+}
 
 export function destinations(): Destination[] {
   return PAGES.flatMap((p) => [

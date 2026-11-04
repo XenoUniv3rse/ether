@@ -128,8 +128,11 @@ type Deps struct {
 	LinkPlex         func(context.Context, int64, string) error
 
 	// Extensions are owner-authenticated API subtrees keyed by relative path.
-	Extensions    map[string]http.Handler
-	ValidateExtra func(config.Config) []FieldError
+	Extensions map[string]http.Handler
+	// PublicExtensions are API subtrees that authorise each request
+	// themselves (the add-on settings relay takes a short-lived token).
+	PublicExtensions map[string]http.Handler
+	ValidateExtra    func(config.Config) []FieldError
 	// Config is the owner settings store. Required.
 	Config *config.Store
 	// Logger defaults to slog.Default().
@@ -223,7 +226,10 @@ type Deps struct {
 	// Collections backs /api/collections* (Collection Studio).
 	Collections CollectionStudio
 	// CatalogHelper backs /api/catalog/*.
-	CatalogHelper     CatalogHelper
+	CatalogHelper CatalogHelper
+	// TitleSchedules backs the catalogue drawer's episode and release tabs;
+	// nil disables them.
+	TitleSchedules    TitleSchedules
 	CatalogVisibility func(context.Context, []core.LibraryExclusion, string) (any, error)
 	// WaitingReleaseKeys are in-window movies still hidden from viewers.
 	// Nil leaves the waiting catalog filter empty.
@@ -234,20 +240,24 @@ type Deps struct {
 	// PlexWatch is the per-viewer Plex account watch-state integration.
 	// Nil hides the routes.
 	PlexWatch PlexWatch
+
+	// Prerolls backs /api/admin/prerolls*. Nil hides the routes.
+	Prerolls Prerolls
 }
 
 // Handler is the admin HTTP handler. Use NewHandler when you need access
 // to the log buffer the handler created.
 type Handler struct {
-	deps       Deps
-	log        *slog.Logger
-	logs       *LogBuffer
-	mux        *http.ServeMux
-	version    string
-	pins       *pinHandles
-	portalPins *pinHandles
-	linkPins   *pinHandles
-	authLimit  *authLimiter
+	deps           Deps
+	log            *slog.Logger
+	logs           *LogBuffer
+	mux            *http.ServeMux
+	version        string
+	pins           *pinHandles
+	portalPins     *pinHandles
+	linkPins       *pinHandles
+	authLimit      *authLimiter
+	loginBodySlots chan struct{}
 }
 
 // New returns the admin handler per the work-package contract.
@@ -274,7 +284,7 @@ func NewHandler(deps Deps) *Handler {
 	if version == "" {
 		version = "dev"
 	}
-	h := &Handler{deps: deps, log: deps.Logger, logs: deps.Logs, version: version, pins: newPINHandles(), portalPins: newPINHandles(), linkPins: newPINHandles(), authLimit: newAuthLimiter()}
+	h := &Handler{deps: deps, log: deps.Logger, logs: deps.Logs, version: version, pins: newPINHandles(), portalPins: newPINHandles(), linkPins: newPINHandles(), authLimit: newAuthLimiter(), loginBodySlots: make(chan struct{}, 32)}
 	h.mux = h.routes()
 	return h
 }
@@ -290,6 +300,13 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		r2.URL.Path = p[6:]
 		if r2.URL.Path == "" {
 			r2.URL.Path = "/"
+		}
+		// Keep the escaped form in step, or StripPrefix rejects encoded
+		// paths such as /api/plugins/studio%3Aid/views/overview.
+		if raw := r.URL.RawPath; strings.HasPrefix(raw, "/ether/") {
+			r2.URL.RawPath = raw[6:]
+		} else {
+			r2.URL.RawPath = ""
 		}
 		r = r2
 	}
@@ -420,10 +437,25 @@ func (h *Handler) routes() *http.ServeMux {
 
 	for path, handler := range h.deps.Extensions {
 		prefix := "/api/" + path
-		mux.Handle(prefix+"/", h.requireAuth(http.StripPrefix(prefix, handler).ServeHTTP))
+		serve := h.requireAuth(http.StripPrefix(prefix, handler).ServeHTTP)
+		mux.Handle(prefix+"/", serve)
+		// Serve the subtree root directly. ServeMux's slash redirect otherwise
+		// loses the outer /ether prefix after the console strips it.
+		mux.Handle(prefix, h.requireAuth(func(w http.ResponseWriter, r *http.Request) {
+			next := r.Clone(r.Context())
+			u := *r.URL
+			u.Path = prefix + "/"
+			next.URL = &u
+			serve(w, next)
+		}))
+	}
+	for path, handler := range h.deps.PublicExtensions {
+		prefix := "/api/" + path
+		mux.Handle(prefix+"/", http.StripPrefix(prefix, handler))
 	}
 	h.personalizationRoutes(api)
 	h.collectionRoutes(mux, api)
+	h.prerollRoutes(api)
 
 	mux.HandleFunc("/api/", h.requireAuth(func(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "not_found", "no such API endpoint")

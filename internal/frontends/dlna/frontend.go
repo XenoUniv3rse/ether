@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"github.com/braedonsaunders/ether/internal/frontend/kit/mediasafety"
 	"math"
 	"net/http"
 	"strings"
@@ -17,7 +18,7 @@ import (
 type Frontend struct{ MachineID string }
 
 func (Frontend) Describe() frontend.Descriptor {
-	return frontend.Descriptor{ID: "dlna", Name: "DLNA", Version: "1.0", Clients: []string{"DLNA MediaServer"}}
+	return frontend.Descriptor{ID: "dlna", Name: "DLNA", Version: "1.0", Clients: []string{"DLNA MediaServer"}, SettingsSchema: frontend.DLNASchema()}
 }
 func (f Frontend) ValidateSettings(settings frontend.Settings) error {
 	for key, value := range settings {
@@ -82,6 +83,7 @@ func (i *instance) registerRoutes() error {
 }
 
 func (i *instance) serveLAN(w http.ResponseWriter, r *http.Request) {
+	mediasafety.SetHeaders(w)
 	if i.host.LANStreams == nil {
 		http.NotFound(w, r)
 		return

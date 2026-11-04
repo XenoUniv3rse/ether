@@ -2,6 +2,7 @@ package stremio
 
 import (
 	"context"
+	"github.com/braedonsaunders/ether/internal/frontend/kit/mediasafety"
 	"net/http"
 	"strings"
 	"time"
@@ -39,7 +40,7 @@ func (i *instance) stream(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
 	}
-	i.observeClient(credential)
+	i.observeClient(r, credential, viewer)
 	if i.host.LazyStreams == nil || i.host.Capabilities == nil || i.host.ClientIP == nil {
 		http.Error(w, "Unavailable", http.StatusServiceUnavailable)
 		return
@@ -108,6 +109,7 @@ func (i *instance) autoVersionName(r *http.Request, viewer *frontend.Viewer, dev
 }
 
 func (i *instance) serveLazy(w http.ResponseWriter, r *http.Request) {
+	mediasafety.SetHeaders(w)
 	if i.host.LazyStreams == nil {
 		http.NotFound(w, r)
 		return

@@ -4,12 +4,14 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"time"
 
 	"github.com/braedonsaunders/ether/internal/core"
 	"github.com/braedonsaunders/ether/internal/diagnostics"
+	"github.com/braedonsaunders/ether/internal/store"
 )
 
-func (s *Server) observeRequest(r *http.Request, sr *statusRecorder) {
+func (s *Server) observeRequest(r *http.Request, sr *statusRecorder, elapsed time.Duration) {
 	if s == nil || s.d.Support == nil || r == nil || sr == nil {
 		return
 	}
@@ -19,11 +21,28 @@ func (s *Server) observeRequest(r *http.Request, sr *statusRecorder) {
 		status = http.StatusOK
 	}
 	kind := diagnostics.ClassifyRequest(r.URL.Path, status, sr.Header().Get("Content-Type"), sr.written)
+	recording := s.d.Support.Recording()
 	ev := s.supportEvent(pr, kind)
 	ev.Method = r.Method
 	ev.Route = r.URL.Path
 	ev.Status = status
 	ev.Bytes = sr.written
+	if recording {
+		if kind != diagnostics.KindDevice {
+			s.d.Support.Observe(ev)
+		}
+		ev.Kind = diagnostics.KindRequest
+		ev.Duration = elapsed
+		ev.Cancelled = r.Context().Err() != nil
+		ev.Query = diagnostics.SafeQuery(r.URL.Query())
+		if stats := store.QueryStatsFrom(r.Context()); stats != nil {
+			ev.DBQueries = stats.Queries()
+			ev.DBTime = stats.DBTime()
+		}
+		if sr.sampling {
+			ev.Response = summarizePlexResponse(sr.sample, sr.truncated, sr.Header().Get("Content-Encoding"))
+		}
+	}
 	s.d.Support.Observe(ev)
 }
 
@@ -113,10 +132,10 @@ func (s *Server) observePlaybackDecision(ctx context.Context, pr *Request, p *pl
 }
 
 func (s *Server) playbackVariants(pr *Request, key core.RatingKey, tr core.DecisionTrace, requested string, requestedPart int64) []diagnostics.PlaybackVariant {
-	if pr == nil || pr.User == nil || s.renderedVariants == nil {
+	if pr == nil || pr.User == nil || s.playIDs == nil {
 		return nil
 	}
-	ids, ok := s.renderedVariants.get(renderedVariantKey{userID: pr.User.ID, clientID: pr.ClientID, key: key}, s.now())
+	ids, ok := s.playIDs.releases(s.playIdentityFor(pr, key), s.now())
 	if !ok || len(ids) == 0 {
 		return nil
 	}
@@ -143,13 +162,17 @@ func (s *Server) playbackVariants(pr *Request, key core.RatingKey, tr core.Decis
 }
 
 func (s *Server) supportEvent(pr *Request, kind diagnostics.Kind) diagnostics.Event {
-	ev := diagnostics.Event{Time: s.now(), Kind: kind}
+	ev := diagnostics.Event{Time: s.now(), Kind: kind, Protocol: "plex"}
 	if pr == nil {
 		return ev
 	}
 	ev.DeviceKey = pr.ClientID
 	ev.SessionKey = pr.SessionID
 	ev.DeviceName = pr.DeviceName
+	ev.Device = pr.Device
+	if ev.DeviceName == "" {
+		ev.DeviceName = pr.Device
+	}
 	ev.Product = pr.Product
 	ev.Model = pr.Model
 	ev.Platform = pr.Platform
@@ -159,6 +182,7 @@ func (s *Server) supportEvent(pr *Request, kind diagnostics.Kind) diagnostics.Ev
 	}
 	if pr.User != nil {
 		ev.Username = pr.User.Username
+		ev.ViewerID = pr.User.ID
 	}
 	return ev
 }

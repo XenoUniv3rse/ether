@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/braedonsaunders/ether/internal/core"
+	"github.com/braedonsaunders/ether/internal/store"
 )
 
 // Reads never wait on TMDB for long. A title whose details are stored but
@@ -110,7 +111,13 @@ func (c *Catalog) startHydration(ctx context.Context, refreshKey string, block b
 	h := &hydration{done: make(chan struct{})}
 	c.hydrating[refreshKey] = h
 	c.hydrateMu.Unlock()
-	bg, cancel := context.WithTimeout(context.WithoutCancel(ctx), hydrateBudget)
+	bg := context.WithoutCancel(ctx)
+	if !block {
+		// Nobody waits for a refresh behind the read: it is not the
+		// read's work (statements, writes, lock waits).
+		bg = store.DetachQueryStats(bg)
+	}
+	bg, cancel := context.WithTimeout(bg, hydrateBudget)
 	go func() {
 		defer cancel()
 		h.val, h.err = fetch(bg)

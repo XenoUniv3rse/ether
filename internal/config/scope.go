@@ -53,6 +53,9 @@ var sectionScopes = map[string]Scope{
 	"personalize":    Shared,
 	"clients":        Shared,
 	"setupComplete":  Shared,
+	"subtitles":      Shared,
+	"liveTV":         Shared,
+	"plugins":        Shared,
 	// Spike serves files from this node's disk.
 	"spike": Local,
 	// Each node holds its own connection settings; the URL is sealed.
@@ -74,6 +77,7 @@ var mixedSections = map[string]map[string]Scope{
 		"tvShowsLibraryName": Shared,
 		"webFrameOrigins":    Shared,
 		"allowRemoteConsole": Shared,
+		"startupAnimation":   Shared, // console preference, the same on every node
 		"machineIdentifier":  Shared, // one server identity for the cluster
 		"defaultStreamLimit": Shared,
 		"maxStreams":         Shared,

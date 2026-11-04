@@ -39,7 +39,11 @@ const generatorSystem = `You turn a request for a film/TV collection into a JSON
 {"spec": <spec>, "explanation": "<one or two sentences on how the rules capture the request>"}
 
 <spec> fields:
-- name (short, like a streaming-service row title), description (one sentence)
+` + SpecGuide
+
+// SpecGuide documents the collection spec a model writes, for the one-shot
+// generator and the agent's collection_draft tool alike.
+const SpecGuide = `- name (short, like a streaming-service row title), description (one sentence)
 - mediaType: "movie" | "show" | "mixed"
 - sources: list, usually [{"kind":"catalog"}] (the whole library). Others:
   {"kind":"tmdbPerson","label":"<person name>","role":"director"|"cast"|"writer"} (a filmography)
@@ -98,6 +102,17 @@ func (s *Service) Generate(ctx context.Context, prompt, mediaType string) (*core
 			llm.Message{Role: "user", Content: "That reply could not be used (" + perr.Error() + "). Reply again with only the JSON object described."})
 	}
 	return nil, "", upstreamError{fmt.Errorf("the model's draft was not usable: %w", lastErr)}
+}
+
+// Draft turns a model-written spec (or {"spec": …} envelope) into a clean,
+// validated spec without calling a model: lists and URLs are dropped, names
+// are resolved to TMDB ids. notes say what was changed or dropped.
+func (s *Service) Draft(ctx context.Context, raw, mediaType string) (*core.CollectionSpec, []string, error) {
+	sp, _, notes, err := s.parseDraft(ctx, raw, mediaType)
+	if err != nil {
+		return nil, nil, err
+	}
+	return sp, notes, nil
 }
 
 // draftSpec is the lenient shape models produce.
@@ -188,7 +203,7 @@ func (s *Service) parseDraft(ctx context.Context, content, mediaType string) (*c
 			src.Label = named.Name
 		}
 		src.URL, src.Keys = "", nil // never let a model point at URLs or pick keys
-		if src.Kind == "titles" || src.Kind == "traktList" || src.Kind == "letterboxdList" || src.Kind == "mdblist" || src.Kind == "anilistList" {
+		if src.Kind == "titles" || src.Kind == "tmdbUserList" || src.Kind == "traktList" || src.Kind == "letterboxdList" || src.Kind == "mdblist" || src.Kind == "anilistList" {
 			notes = append(notes, fmt.Sprintf("Dropped a %s source; add lists yourself.", src.Kind))
 			continue
 		}
@@ -261,7 +276,7 @@ func (s *Service) parseDraft(ctx context.Context, content, mediaType string) (*c
 			sp.Exclude[i] = s.resolveRuleValue(rctx, sp.Exclude[i], &notes)
 		}
 	}
-	if err := Validate(&sp); err != nil {
+	if err := s.validate(&sp); err != nil {
 		return nil, "", nil, err
 	}
 	return &sp, strings.TrimSpace(explanation), notes, nil

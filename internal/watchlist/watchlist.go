@@ -69,6 +69,8 @@ type Options struct {
 	ClientIdentifier string
 	Now              func() time.Time
 	PrewarmBytes     int64
+	// Cache records why an arrival was warmed when it supports provenance.
+	Cache core.CacheProvenanceRecorder
 	// SyncInterval is how often Run passes over every viewer (30m).
 	SyncInterval time.Duration
 	// ResumeSchedule makes Run wait until SyncInterval has passed since the
@@ -499,9 +501,10 @@ func (s *Service) Check(ctx context.Context, u *core.User) error {
 // Resolution, with a nil error, when nothing playable was found.
 func (s *Service) resolve(ctx context.Context, u *core.User, title *core.Title) (*core.Resolution, error) {
 	caps := core.ClientCaps{MaxHeight: 1080, VideoCodecs: []string{"h264", "hevc"}, AudioCodecs: []string{"aac", "ac3", "eac3"}, Containers: []string{"mkv", "mp4"}}
-	job, cancel := context.WithTimeout(ctx, 45*time.Second)
+	job, cancel := context.WithTimeout(core.WithIndexerPurpose(ctx, core.IndexerPurposeWarmup), 45*time.Second)
 	defer cancel()
-	res, err := s.o.Resolver.Resolve(job, core.ResolveRequest{Title: title, User: u, Client: caps})
+	// Nobody waits on a watchlist check: fallback queries go one at a time.
+	res, err := s.o.Resolver.Resolve(core.WithUnattendedSearch(job), core.ResolveRequest{Title: title, User: u, Client: caps})
 	if err != nil {
 		return nil, err
 	}
@@ -514,6 +517,9 @@ func (s *Service) resolve(ctx context.Context, u *core.User, title *core.Title) 
 func (s *Service) prewarm(ctx context.Context, res *core.Resolution) error {
 	job, cancel := context.WithTimeout(ctx, time.Minute)
 	defer cancel()
+	if s.o.Cache != nil {
+		s.o.Cache.RecordProvenance(core.CacheProvenance{ReleaseID: res.Release.ID, Title: res.Release.Name, Source: res.Release.Name, Cause: core.CacheCauseWatchlist})
+	}
 	return s.o.Engine.Prefetch(job, res.Release.ID, res.NZB, 0, s.o.PrewarmBytes)
 }
 

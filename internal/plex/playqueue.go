@@ -530,10 +530,13 @@ func (s *Server) handlePlayQueueCreate(w http.ResponseWriter, r *http.Request) {
 		writeHTTPError(w, http.StatusBadRequest)
 		return
 	}
-	// Cinema Trailers: prepend trailers of other movies before the
-	// feature and warm the feature while they play.
+	// Cinema Trailers and the owner's pre-roll: prepend them before the
+	// feature and warm the feature while they play. A pre-roll needs no
+	// extrasPrefixCount; it never precedes a resume.
 	prefixAt := -1
-	if n, err := strconv.Atoi(q.Get("extrasPrefixCount")); err == nil && n > 0 && q.Get("shuffle") != "1" {
+	if q.Get("shuffle") != "1" {
+		n, err := strconv.Atoi(q.Get("extrasPrefixCount"))
+		cinema := err == nil && n > 0
 		featureIdx := 0
 		if start := keyFromPath(q.Get("key")); start != 0 {
 			for i, k := range keys {
@@ -543,15 +546,24 @@ func (s *Server) handlePlayQueueCreate(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		}
-		if keys[featureIdx].Kind() == core.KindMovie {
-			if prefix := s.cinemaTrailerKeys(ctx, pr, keys[featureIdx], n); len(prefix) > 0 {
-				feature := keys[featureIdx]
-				merged := append([]core.RatingKey(nil), keys[:featureIdx]...)
-				merged = append(append(merged, prefix...), keys[featureIdx:]...)
-				keys = merged
-				prefixAt = featureIdx
-				s.prewarmFeature(ctx, pr, feature, s.clientCaps(pr))
+		feature := keys[featureIdx]
+		var prefix []core.RatingKey
+		if cinema && feature.Kind() == core.KindMovie {
+			prefix = s.cinemaTrailerKeys(ctx, pr, feature, n)
+		}
+		if preroll, order := s.prerollKey(ctx, pr, feature, cinema); preroll != 0 {
+			if order == core.PrerollAfterTrailers {
+				prefix = append(prefix, preroll)
+			} else {
+				prefix = append([]core.RatingKey{preroll}, prefix...)
 			}
+		}
+		if len(prefix) > 0 {
+			merged := append([]core.RatingKey(nil), keys[:featureIdx]...)
+			merged = append(append(merged, prefix...), keys[featureIdx:]...)
+			keys = merged
+			prefixAt = featureIdx
+			s.prewarmFeature(ctx, pr, feature, s.clientCaps(pr))
 		}
 	}
 	snap, err := s.queues.createWith(pr.User.ID, pr.ClientID, keys, s.now(), func(p *playQueue) {
@@ -597,7 +609,17 @@ func (s *Server) continuousKeys(ctx context.Context, pr *Request, uri string, co
 	}
 	for i, e := range eps {
 		if e.Key == ep {
-			return capKeys(titleKeys(s.visibleTitles(pr.User, eps[i:]))), nil
+			candidates := make([]core.Title, 0, len(eps)-i)
+			for _, candidate := range eps[i+1:] {
+				// Presented seasons: an episode order may place a TMDB special
+				// inside a regular season, where it belongs in the queue.
+				if (e.Season > 0 && candidate.Season == 0) || (!candidate.Released.IsZero() && candidate.Released.After(s.now())) {
+					continue
+				}
+				candidates = append(candidates, candidate)
+			}
+			candidates = s.availableForViewer(ctx, pr.User, s.visibleTitles(pr.User, candidates))
+			return capKeys(append([]core.RatingKey{ep}, titleKeys(candidates)...)), nil
 		}
 	}
 	return keys, nil

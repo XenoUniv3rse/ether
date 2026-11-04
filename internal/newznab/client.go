@@ -70,6 +70,9 @@ type Options struct {
 	// Backend builds the search backend for an indexer whose Kind is not
 	// Newznab (built-in sites, internal/cardigann). Nil disables them.
 	Backend func(config.Indexer) (Backend, error)
+	// usageDB records a one-off client's requests in the usage breakdown
+	// without spending budgets (Manager.TestIndexer).
+	usageDB *sql.DB
 }
 
 // Backend searches a site that is not a Newznab API, such as a built-in
@@ -80,6 +83,12 @@ type Backend interface {
 	Search(ctx context.Context, req core.SearchRequest, reserve func(context.Context, string) error) ([]core.Release, error)
 	FetchNZB(ctx context.Context, r core.Release, reserve func(context.Context, string) error) ([]byte, error)
 	ResolveTorrent(ctx context.Context, r core.Release, reserve func(context.Context, string) error) (core.Release, error)
+}
+
+// RecentBackend is a Backend that can list a site's latest releases, the
+// release feed of a site with no Newznab API.
+type RecentBackend interface {
+	Recent(ctx context.Context, reserve func(context.Context, string) error) ([]core.Release, error)
 }
 
 // Client is one configured Newznab indexer. It implements core.Indexer.
@@ -102,11 +111,14 @@ type Client struct {
 	feedMode recentFeedMode
 	budgetMu sync.Mutex
 	mem      memBudget
+	usageDB  *sql.DB // see Options.usageDB
 	rate     rateLimitState
+	apiLimit apiLimitState
 
 	cacheMu  sync.RWMutex
 	memCache map[string]memCacheEntry
 	torrents torrentDescriptorCache
+	br       breaker
 
 	capsMu     sync.Mutex
 	caps       *Caps
@@ -185,7 +197,7 @@ var _ core.Indexer = (*Client)(nil)
 // New builds a Client for one indexer. db may be nil (budgets and cache
 // then live in memory).
 func New(cfg config.Indexer, db *sql.DB, opts Options) *Client {
-	c := &Client{cfg: cfg, db: db, nzbDir: opts.NZBDir, backends: opts.Backend}
+	c := &Client{cfg: cfg, db: db, usageDB: opts.usageDB, nzbDir: opts.NZBDir, backends: opts.Backend}
 	c.http = opts.HTTPClient
 	if c.http == nil {
 		c.http = egress.Client(egress.CapIndexers, defaultHTTPTimeout)
@@ -481,6 +493,7 @@ func (c *Client) get(ctx context.Context, rawURL string, limit int64, id config.
 	if int64(len(body)) > limit {
 		return nil, fmt.Errorf("newznab: response exceeds %d bytes", limit)
 	}
+	c.noteAPILimit(ctx, body)
 	// Newznab quota errors can arrive with HTTP 200, including NZB grabs.
 	// Detect these here so caps, searches and downloads share the same backoff.
 	if bytes.Contains(bytes.ToLower(body[:min(len(body), 4096)]), []byte("error")) {
@@ -556,7 +569,7 @@ func (c *Client) Caps(ctx context.Context) (*Caps, error) {
 		c.capsMu.Unlock()
 		return caps, nil
 	}
-	if err := c.reserve(ctx, "hit"); err != nil {
+	if err := c.reserve(capsPurpose(ctx), "hit"); err != nil {
 		return nil, err
 	}
 	caps, err := c.fetchCaps(ctx)
@@ -847,6 +860,9 @@ func (c *Client) searchAttempts(req core.SearchRequest, caps *Caps, id config.Id
 }
 
 func (c *Client) doSearch(ctx context.Context, params url.Values, id config.Identity) ([]core.Release, error) {
+	if err := c.searchPaused(); err != nil {
+		return nil, err
+	}
 	if err := c.reserve(ctx, "hit"); err != nil {
 		return nil, err
 	}
@@ -854,16 +870,16 @@ func (c *Client) doSearch(ctx context.Context, params url.Values, id config.Iden
 	if err != nil {
 		return nil, err
 	}
-	var results []core.Release
-	if emit, ok := ctx.Value(searchArrivalKey{}).(func([]core.Release)); ok {
-		results, err = c.getSearchStream(ctx, u, emit, id)
-	} else {
-		var body []byte
-		body, err = c.get(ctx, u, 20<<20, id)
-		if err == nil {
-			results, err = parseFeed(body, c.Name())
+	results, err := c.guardSearch(ctx, true, defaultHTTPTimeout, func(ctx context.Context) ([]core.Release, error) {
+		if emit, ok := ctx.Value(searchArrivalKey{}).(func([]core.Release)); ok {
+			return c.getSearchStream(ctx, u, emit, id)
 		}
-	}
+		body, err := c.get(ctx, u, 20<<20, id)
+		if err != nil {
+			return nil, err
+		}
+		return parseFeed(body, c.Name())
+	})
 	if err == nil && c.Config().IsTorrent() {
 		// A Torznab indexer's results are torrents even when an item
 		// carries only a .torrent download link.
@@ -880,6 +896,7 @@ func (c *Client) Search(ctx context.Context, req core.SearchRequest) ([]core.Rel
 		return nil, fmt.Errorf("indexer %q is disabled", c.Name())
 	}
 	key := cacheKey(c, req)
+	ctx = withCacheAge(ctx, req.Released)
 	if cached, ok := c.cacheGet(ctx, key); ok {
 		return cached, nil
 	}
@@ -887,6 +904,9 @@ func (c *Client) Search(ctx context.Context, req core.SearchRequest) ([]core.Rel
 	// results and NZBs. The manager must reach this cache before this check.
 	if c.Exhausted(ctx) {
 		return nil, fmt.Errorf("indexer %q: %w", c.Name(), core.ErrBudgetExhausted)
+	}
+	if err := c.searchPaused(); err != nil {
+		return nil, err
 	}
 	if c.Config().UsesBackend() {
 		results, err := c.backendSearch(ctx, req)
@@ -910,6 +930,11 @@ func (c *Client) Search(ctx context.Context, req core.SearchRequest) ([]core.Rel
 		}
 		firstErr = err
 		c.log.Debug("newznab search attempt failed", "indexer", c.Name(), "t", attempts[0].Get("t"), "err", err)
+		if transientFailure(err) {
+			// The indexer did not answer at all (timeout, outage, 5xx):
+			// the fallback queries would each wait out the same failure.
+			return nil, err
+		}
 	} else if len(results) > 0 {
 		c.cachePut(ctx, key, results)
 		return results, nil
@@ -933,8 +958,10 @@ func (c *Client) Search(ctx context.Context, req core.SearchRequest) ([]core.Rel
 	// When the primary attempt misses on an uncapped indexer, fan out the
 	// fallback queries (alternate IDs, keyword search, OriginalTitle/aliases,
 	// season packs) in bounded parallel bursts so obscure titles resolve in
-	// a single round-trip instead of N serial timeouts.
-	if c.Config().DailyLimit == 0 && firstErr == nil {
+	// a single round-trip instead of N serial timeouts. A search nobody is
+	// waiting on (a warm-up, a watchlist check) tries them one at a time and
+	// stops at the first hit: it spends fewer API hits and has time.
+	if c.Config().DailyLimit == 0 && firstErr == nil && !core.IsUnattendedSearch(ctx) {
 		const burstWidth = 4
 		for base := 0; base < len(rest); base += burstWidth {
 			if err := ctx.Err(); err != nil {
@@ -959,6 +986,7 @@ func (c *Client) Search(ctx context.Context, req core.SearchRequest) ([]core.Rel
 			var merged []core.Release
 			seen := map[string]bool{}
 			var budgetErr error
+			down := false
 			for _, s := range slots {
 				if s.err != nil {
 					if errors.Is(s.err, core.ErrBudgetExhausted) && budgetErr == nil {
@@ -966,6 +994,7 @@ func (c *Client) Search(ctx context.Context, req core.SearchRequest) ([]core.Rel
 					} else if firstErr == nil {
 						firstErr = s.err
 					}
+					down = down || transientFailure(s.err)
 					continue
 				}
 				for _, r := range s.res {
@@ -986,6 +1015,9 @@ func (c *Client) Search(ctx context.Context, req core.SearchRequest) ([]core.Rel
 			if budgetErr != nil {
 				return nil, budgetErr
 			}
+			if down {
+				return nil, firstErr
+			}
 		}
 	} else {
 		for _, params := range rest {
@@ -1001,9 +1033,20 @@ func (c *Client) Search(ctx context.Context, req core.SearchRequest) ([]core.Rel
 					firstErr = err
 				}
 				c.log.Debug("newznab search attempt failed", "indexer", c.Name(), "t", params.Get("t"), "err", err)
+				if transientFailure(err) {
+					return nil, err
+				}
 				continue
 			}
 			if len(results) > 0 {
+				if core.IsUnattendedSearch(ctx) && c.Config().DailyLimit == 0 {
+					// An unattended search stopped at its first fallback hit;
+					// Play would have merged a whole burst. Keep that partial
+					// answer out of the cache Play reads, and tell the resolver
+					// the fleet answer is incomplete so it is not stored there.
+					core.NoteSearchIncomplete(ctx)
+					return results, nil
+				}
 				c.cachePut(ctx, key, results)
 				return results, nil
 			}
@@ -1114,11 +1157,15 @@ func (c *Client) SearchRescue(ctx context.Context, req core.SearchRequest) ([]co
 		return nil, fmt.Errorf("indexer %q is disabled", c.Name())
 	}
 	key := cacheKey(c, req) + "|rescue"
+	ctx = withCacheAge(ctx, req.Released)
 	if cached, ok := c.cacheGet(ctx, key); ok {
 		return cached, nil
 	}
 	if c.Exhausted(ctx) {
 		return nil, fmt.Errorf("indexer %q: %w", c.Name(), core.ErrBudgetExhausted)
+	}
+	if err := c.searchPaused(); err != nil {
+		return nil, err
 	}
 	if cfg := c.Config(); cfg.UsesBackend() {
 		// Built-in sites and addons: if Episode > 0, rescue via season-level
@@ -1138,7 +1185,7 @@ func (c *Client) SearchRescue(ctx context.Context, req core.SearchRequest) ([]co
 				}
 			}
 		}
-		if !cfg.IsStremio() && req.OriginalTitle != "" && !releaseparse.TitlesMatch(req.OriginalTitle, req.Title) {
+		if !cfg.IsStremio() && !cfg.IsAddon() && req.OriginalTitle != "" && !releaseparse.TitlesMatch(req.OriginalTitle, req.Title) {
 			alt := req
 			alt.Title, alt.OriginalTitle = req.OriginalTitle, ""
 			if rs, err := c.backendSearch(ctx, alt); err == nil {
@@ -1167,7 +1214,8 @@ func (c *Client) SearchRescue(ctx context.Context, req core.SearchRequest) ([]co
 	var merged []core.Release
 	seen := map[string]bool{}
 	var firstErr error
-	if c.Config().DailyLimit == 0 {
+	// As for Search: unattended rescues go one query at a time.
+	if c.Config().DailyLimit == 0 && !core.IsUnattendedSearch(ctx) {
 		type slot struct {
 			res []core.Release
 			err error
@@ -1213,6 +1261,9 @@ func (c *Client) SearchRescue(ctx context.Context, req core.SearchRequest) ([]co
 				if firstErr == nil {
 					firstErr = err
 				}
+				if transientFailure(err) {
+					break
+				}
 				continue
 			}
 			for _, r := range res {
@@ -1254,16 +1305,26 @@ func (c *Client) nzbDiskPath(releaseID string) string {
 // FetchNZB implements core.Indexer. Every call returns a slice of its own,
 // which the caller may keep or modify.
 func (c *Client) FetchNZB(ctx context.Context, r core.Release) ([]byte, error) {
+	body, _, err := c.fetchNZBReporting(ctx, r)
+	return body, err
+}
+
+// fetchNZBReporting is FetchNZB, also reporting whether this call asked
+// the indexer: false for an NZB read from the disk cache or one taken from
+// another caller's download. Only the indexer's own downloads are grabs.
+func (c *Client) fetchNZBReporting(ctx context.Context, r core.Release) ([]byte, bool, error) {
 	if r.Protocol == core.ProtocolTorrent {
-		return nil, fmt.Errorf("newznab: %q is a torrent release; it streams through a debrid provider", r.Name)
+		return nil, false, fmt.Errorf("newznab: %q is a torrent release; it streams through a debrid provider", r.Name)
 	}
 	if path := c.nzbDiskPath(r.ID); path != "" {
 		if b, err := os.ReadFile(path); err == nil && len(b) > 0 {
-			return b, nil
+			c.touchNZB(path)
+			return b, false, nil
 		}
 	}
 	if r.ID == "" {
-		return c.fetchNZB(ctx, r)
+		body, err := c.fetchNZB(ctx, r)
+		return body, true, err
 	}
 	for {
 		f, leader := c.joinNZBFlight(ctx, r)
@@ -1273,7 +1334,7 @@ func (c *Client) FetchNZB(ctx context.Context, r core.Release) ([]byte, error) {
 			// The shared fetch carries on for the other callers and
 			// still lands in the disk cache.
 			c.leaveNZB(f)
-			return nil, ctx.Err()
+			return nil, leader, ctx.Err()
 		}
 		body := c.takeNZB(f)
 		// A background check runs on a reduced grab share; a foreground
@@ -1282,9 +1343,9 @@ func (c *Client) FetchNZB(ctx context.Context, r core.Release) ([]byte, error) {
 			continue
 		}
 		if f.err != nil {
-			return nil, f.err
+			return nil, leader, f.err
 		}
-		return body, nil
+		return body, leader, nil
 	}
 }
 
@@ -1467,7 +1528,30 @@ func (c *Client) backendSearch(ctx context.Context, req core.SearchRequest) ([]c
 	if err != nil {
 		return nil, err
 	}
-	results, err := b.Search(ctx, req, c.reserve)
+	return c.stampBackend(ctx, func(ctx context.Context) ([]core.Release, error) {
+		return b.Search(ctx, req, c.reserve)
+	})
+}
+
+// backendRecent lists a built-in site's latest releases.
+func (c *Client) backendRecent(ctx context.Context) ([]core.Release, error) {
+	b, err := c.backend()
+	if err != nil {
+		return nil, err
+	}
+	rb, ok := b.(RecentBackend)
+	if !ok {
+		return nil, fmt.Errorf("recent-release feed is not supported by this source")
+	}
+	return c.stampBackend(ctx, func(ctx context.Context) ([]core.Release, error) {
+		return rb.Recent(ctx, c.reserve)
+	})
+}
+
+// stampBackend runs a backend request behind the search guard and stamps
+// its results the way Newznab results are stamped.
+func (c *Client) stampBackend(ctx context.Context, run func(context.Context) ([]core.Release, error)) ([]core.Release, error) {
+	results, err := c.guardSearch(ctx, false, 0, run)
 	if err != nil {
 		var rl *RateLimitError
 		if errors.As(err, &rl) {
@@ -1521,4 +1605,67 @@ func TestWithOptions(ctx context.Context, cfg config.Indexer, opts Options) erro
 		return humanError(name, err)
 	}
 	return nil
+}
+
+// An NZB on disk is reused for as long as it is kept, so a release is
+// grabbed from its indexer once. Unused NZBs leave after nzbKeep, and the
+// directory stays under nzbDiskCap (least recently used first).
+const (
+	nzbKeep    = 60 * 24 * time.Hour
+	nzbDiskCap = 1 << 30
+)
+
+// touchNZB marks a cached NZB used, at most once a day.
+func (c *Client) touchNZB(path string) {
+	if info, err := os.Stat(path); err == nil && c.now().Sub(info.ModTime()) > 24*time.Hour {
+		now := c.now()
+		_ = os.Chtimes(path, now, now)
+	}
+}
+
+// pruneNZBs bounds the NZB disk cache in dir; it returns the files removed.
+func pruneNZBs(dir string, now time.Time) int64 {
+	if dir == "" {
+		return 0
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return 0
+	}
+	type file struct {
+		path string
+		at   time.Time
+		size int64
+	}
+	var files []file
+	var total, removed int64
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".nzb") {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil {
+			continue
+		}
+		path := filepath.Join(dir, e.Name())
+		if now.Sub(info.ModTime()) > nzbKeep {
+			if os.Remove(path) == nil {
+				removed++
+			}
+			continue
+		}
+		files = append(files, file{path, info.ModTime(), info.Size()})
+		total += info.Size()
+	}
+	sort.Slice(files, func(i, j int) bool { return files[i].at.Before(files[j].at) })
+	for _, f := range files {
+		if total <= nzbDiskCap {
+			break
+		}
+		if os.Remove(f.path) == nil {
+			removed++
+			total -= f.size
+		}
+	}
+	return removed
 }

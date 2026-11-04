@@ -99,8 +99,11 @@ func (s *Server) recoverer(next http.Handler) http.Handler {
 // statusRecorder captures the status code for logging.
 type statusRecorder struct {
 	http.ResponseWriter
-	status  int
-	written int64
+	status    int
+	written   int64
+	sample    []byte
+	sampling  bool
+	truncated bool
 }
 
 func (sr *statusRecorder) WriteHeader(code int) {
@@ -116,6 +119,19 @@ func (sr *statusRecorder) Write(b []byte) (int, error) {
 	}
 	n, err := sr.ResponseWriter.Write(b)
 	sr.written += int64(n)
+	if sr.sampling {
+		const maxSample = 1 << 20
+		remaining := maxSample - len(sr.sample)
+		if remaining < n {
+			sr.truncated = true
+		}
+		if remaining > 0 {
+			if n < remaining {
+				remaining = n
+			}
+			sr.sample = append(sr.sample, b[:remaining]...)
+		}
+	}
 	return n, err
 }
 
@@ -143,8 +159,14 @@ func (s *Server) requestLog(next http.Handler) http.Handler {
 	failures := faillog.New(log.With("frontend", "plex"), "authentication")
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
-		sr := &statusRecorder{ResponseWriter: w}
+		samplePath := supportDocumentPath(r.URL.Path)
+		sample := s.d.Support != nil && samplePath && s.d.Support.BeginSample(FromContext(r.Context()).ClientID)
+		if sample {
+			defer s.d.Support.EndSample()
+		}
+		sr := &statusRecorder{ResponseWriter: w, sampling: sample}
 		next.ServeHTTP(sr, r)
+		s.observeRequest(r, sr, time.Since(start))
 		if sr.status == http.StatusUnauthorized {
 			failures.Fail(errors.New("unauthorized"))
 			return
@@ -163,7 +185,6 @@ func (s *Server) requestLog(next http.Handler) http.Handler {
 			"range", r.Header.Get("Range"), "contentRange", sr.Header().Get("Content-Range"),
 			"pageStart", pr.Start, "pageSize", pr.Size, "paged", pr.HasPage, "format", pr.Format, "includeChildren", r.URL.Query().Get("includeChildren"),
 			"model", pr.Model, "device", pr.Device, "version", pr.Version, "platformVersion", pr.PlatformVersion, "peer", pr.RemoteIP.String())
-		s.observeRequest(r, sr)
 	})
 }
 
@@ -375,6 +396,21 @@ func (s *Server) write(w http.ResponseWriter, r *http.Request, v any) {
 }
 
 func (s *Server) writeStatus(w http.ResponseWriter, r *http.Request, status int, v any) {
+	body, err := s.encodeResponse(r, v)
+	if err != nil {
+		s.log.Error("encode response", "path", r.URL.Path, "err", err)
+		writeHTTPError(w, http.StatusInternalServerError)
+		return
+	}
+	var offset, total *int
+	if mc, ok := v.(*model.MediaContainer); ok {
+		offset, total = mc.Offset, mc.TotalSize
+	}
+	s.writeBody(w, r, status, body, nil, offset, total)
+}
+
+// encodeResponse renders a response model in the client's format.
+func (s *Server) encodeResponse(r *http.Request, v any) ([]byte, error) {
 	pr := FromContext(r.Context())
 	// allowSync on library containers follows the viewer's download
 	// permission; containers that don't carry the attribute keep not
@@ -382,21 +418,23 @@ func (s *Server) writeStatus(w http.ResponseWriter, r *http.Request, status int,
 	if mc, ok := v.(*model.MediaContainer); ok && mc.AllowSync != nil {
 		*mc.AllowSync = s.downloadsAllowed(pr.User)
 	}
-	body, err := model.Marshal(v, pr.Format)
-	if err != nil {
-		s.log.Error("encode response", "path", r.URL.Path, "err", err)
-		writeHTTPError(w, http.StatusInternalServerError)
-		return
-	}
+	return model.Marshal(v, pr.Format)
+}
+
+// writeBody writes an encoded body, gzip-compressed when the client accepts
+// it and the body is worth compressing. gz, when set, is body already
+// compressed (a cached Home screen).
+func (s *Server) writeBody(w http.ResponseWriter, r *http.Request, status int, body, gz []byte, offset, total *int) {
+	pr := FromContext(r.Context())
 	h := w.Header()
 	h.Set("Content-Type", pr.Format.ContentType())
 	if h.Get("Cache-Control") == "" {
 		h.Set("Cache-Control", "no-cache")
 	}
-	if mc, ok := v.(*model.MediaContainer); ok && mc.Offset != nil {
-		h.Set("X-Plex-Container-Start", strconv.Itoa(*mc.Offset))
-		if mc.TotalSize != nil {
-			h.Set("X-Plex-Container-Total-Size", strconv.Itoa(*mc.TotalSize))
+	if offset != nil {
+		h.Set("X-Plex-Container-Start", strconv.Itoa(*offset))
+		if total != nil {
+			h.Set("X-Plex-Container-Total-Size", strconv.Itoa(*total))
 		}
 	}
 	if r.Method == http.MethodHead {
@@ -409,9 +447,13 @@ func (s *Server) writeStatus(w http.ResponseWriter, r *http.Request, status int,
 		h.Add("Vary", "Accept-Encoding")
 		h.Set("X-Plex-Content-Original-Length", strconv.Itoa(len(body)))
 		w.WriteHeader(status)
-		gz := gzip.NewWriter(w)
-		_, _ = gz.Write(body)
-		_ = gz.Close()
+		if gz != nil {
+			_, _ = w.Write(gz)
+			return
+		}
+		zw := gzip.NewWriter(w)
+		_, _ = zw.Write(body)
+		_ = zw.Close()
 		return
 	}
 	h.Set("Content-Length", strconv.Itoa(len(body)))
