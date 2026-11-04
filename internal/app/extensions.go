@@ -33,6 +33,7 @@ func (a *App) extensionHandlers() map[string]http.Handler {
 	m["cache"] = a.cacheHandler()
 	m["availability"] = a.availability.Handler()
 	m["stats"] = a.stats.Handler()
+	m["experience"] = a.stats.ExperienceHandler()
 	m["indexer-usage"] = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if a.indexers == nil {
 			http.NotFound(w, r)

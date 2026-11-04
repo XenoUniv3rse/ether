@@ -34,6 +34,25 @@ CREATE TABLE stats_costs (kind TEXT NOT NULL,id TEXT NOT NULL,monthly REAL NOT N
 	// only its own interrupted sessions, never another live node's.
 	store.Register("stats", 6, `ALTER TABLE stats_plays ADD COLUMN node_id TEXT NOT NULL DEFAULT '';
 CREATE INDEX stats_plays_open ON stats_plays(node_id) WHERE ended=0;`)
+	// Viewer experience (Activity › Experience). measured marks plays
+	// recorded with this accounting; older rows keep 0 and show no start
+	// time or buffering rather than invented numbers.
+	store.Register("stats", 8, `ALTER TABLE stats_plays ADD COLUMN measured INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE stats_plays ADD COLUMN played INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE stats_plays ADD COLUMN pictured INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE stats_plays ADD COLUMN ttff_ms INTEGER NOT NULL DEFAULT -1;
+ALTER TABLE stats_plays ADD COLUMN start_failed INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE stats_plays ADD COLUMN buffer_events INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE stats_plays ADD COLUMN buffer_ms INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE stats_plays ADD COLUMN down_failovers INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE stats_plays ADD COLUMN source_kbps INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE stats_plays ADD COLUMN uhd INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE stats_plays ADD COLUMN hdr INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE stats_plays ADD COLUMN remote INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE stats_plays ADD COLUMN origin TEXT NOT NULL DEFAULT '';
+ALTER TABLE stats_plays ADD COLUMN release_name TEXT NOT NULL DEFAULT '';
+ALTER TABLE stats_plays ADD COLUMN reason_kind TEXT NOT NULL DEFAULT '';
+ALTER TABLE stats_plays ADD COLUMN reason_detail TEXT NOT NULL DEFAULT '';`)
 }
 
 type Options struct {
@@ -80,6 +99,7 @@ type playRecord struct {
 	at      time.Time
 	ended   bool
 	problem string
+	release string // release name, kept after Resolution is dropped
 }
 
 // mergePlay keeps the newest observation of a row but never forgets that
@@ -88,6 +108,9 @@ type playRecord struct {
 func mergePlay(old, nw playRecord) playRecord {
 	if nw.problem == "" {
 		nw.problem = old.problem
+	}
+	if nw.release == "" {
+		nw.release = old.release
 	}
 	return nw
 }
@@ -108,6 +131,10 @@ func New(db *sql.DB, opts Options) *Service {
 	}
 	if _, err := db.Exec(`UPDATE stats_plays SET ended=updated WHERE ended=0 AND node_id=?`, opts.NodeID); err != nil {
 		opts.Logger.Warn("close prior playback stats", "err", err)
+	}
+	// The first start with experience accounting dates "measured from".
+	if _, err := db.Exec(`INSERT INTO stats_snapshots(kind,payload,at) VALUES(?,'{}',?) ON CONFLICT(kind) DO NOTHING`, measuredSinceKind, opts.Now().Unix()); err != nil {
+		opts.Logger.Warn("record experience start", "err", err)
 	}
 	return svc
 }
@@ -133,12 +160,17 @@ func (s *Service) Record(ctx context.Context, p *core.PlaySession, ended bool, p
 	if p == nil || p.ID == "" {
 		return nil
 	}
+	release := ""
+	if p.Resolution != nil {
+		release = p.Resolution.Release.Name
+	}
 	s.vmu.Lock()
 	defer s.vmu.Unlock()
 	r, ok := s.viewings.observe(*p, s.opts.Now().UTC(), ended, problem)
 	if !ok {
 		return nil
 	}
+	r.release = release
 	if s.plays != nil {
 		_, err := s.plays.Write(ctx, r.p.ID, r)
 		return err
@@ -178,12 +210,31 @@ func (s *Service) record(ctx context.Context, r playRecord) error {
 	if device == "" {
 		device = p.Client.Device
 	}
-	_, err := s.db.ExecContext(ctx, `INSERT INTO stats_plays(id,user_id,rating_key,username,title,platform,device,decision,started,updated,ended,bytes,duration_ms,failovers,error,node_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET username=excluded.username,title=excluded.title,platform=excluded.platform,device=excluded.device,decision=excluded.decision,updated=excluded.updated,`+
+	q := measure(p, r.release)
+	if problem == "" {
+		problem = q.startFailure
+	}
+	_, err := s.db.ExecContext(ctx, `INSERT INTO stats_plays(id,user_id,rating_key,username,title,platform,device,decision,started,updated,ended,bytes,duration_ms,failovers,error,node_id,`+
+		`measured,played,pictured,ttff_ms,start_failed,buffer_events,buffer_ms,down_failovers,source_kbps,uhd,hdr,remote,origin,release_name,reason_kind,reason_detail) `+
+		`VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET username=excluded.username,title=excluded.title,platform=excluded.platform,device=excluded.device,decision=excluded.decision,updated=excluded.updated,`+
 		`ended=excluded.ended,`+
 		`bytes=CASE WHEN excluded.bytes>stats_plays.bytes THEN excluded.bytes ELSE stats_plays.bytes END,`+
 		`duration_ms=CASE WHEN excluded.duration_ms>stats_plays.duration_ms THEN excluded.duration_ms ELSE stats_plays.duration_ms END,`+
-		`failovers=excluded.failovers,error=CASE WHEN excluded.error='' THEN stats_plays.error ELSE excluded.error END,node_id=excluded.node_id`,
-		p.ID, p.UserID, int64(p.Key), p.Username, p.TitleName, p.Client.Platform, device, string(p.Decision), start.Unix(), now.Unix(), end, p.BytesServed, p.Info.Duration.Milliseconds(), p.Failovers, problem, s.opts.NodeID)
+		`failovers=excluded.failovers,error=CASE WHEN excluded.error='' THEN stats_plays.error ELSE excluded.error END,node_id=excluded.node_id,`+
+		// The viewing (viewing.go) holds the row's experience totals.
+		`played=excluded.played,pictured=excluded.pictured,ttff_ms=excluded.ttff_ms,start_failed=excluded.start_failed,`+
+		`buffer_events=excluded.buffer_events,buffer_ms=excluded.buffer_ms,down_failovers=excluded.down_failovers,`+
+		// Media facts are replaced only by a record that knows them.
+		`source_kbps=CASE WHEN excluded.source_kbps>0 THEN excluded.source_kbps ELSE stats_plays.source_kbps END,`+
+		`uhd=CASE WHEN excluded.source_kbps>0 THEN excluded.uhd ELSE stats_plays.uhd END,`+
+		`hdr=CASE WHEN excluded.source_kbps>0 THEN excluded.hdr ELSE stats_plays.hdr END,`+
+		`remote=excluded.remote,`+
+		`origin=CASE WHEN excluded.origin='' THEN stats_plays.origin ELSE excluded.origin END,`+
+		`release_name=CASE WHEN excluded.release_name='' THEN stats_plays.release_name ELSE excluded.release_name END,`+
+		`reason_kind=CASE WHEN excluded.decision='' THEN stats_plays.reason_kind ELSE excluded.reason_kind END,`+
+		`reason_detail=CASE WHEN excluded.decision='' THEN stats_plays.reason_detail ELSE excluded.reason_detail END`,
+		p.ID, p.UserID, int64(p.Key), p.Username, p.TitleName, p.Client.Platform, device, string(p.Decision), start.Unix(), now.Unix(), end, p.BytesServed, p.Info.Duration.Milliseconds(), p.Failovers, problem, s.opts.NodeID,
+		q.played, q.pictured, q.ttffMS, q.startFailed, q.bufferEvents, q.bufferMS, p.DownFailovers, q.sourceKbps, q.uhd, q.hdr, q.remote, p.Origin, q.release, q.reasonKind, q.reasonDetail)
 	return err
 }
 

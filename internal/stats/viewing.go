@@ -36,8 +36,65 @@ type viewingKey struct {
 }
 
 type viewingPart struct {
-	bytes     int64
-	failovers int
+	bytes         int64
+	failovers     int
+	downFailovers int
+	// Mid-play buffering of the session (its counters only grow).
+	bufferEvents int
+	buffering    time.Duration
+}
+
+func (p viewingPart) add(o viewingPart) viewingPart {
+	p.bytes += o.bytes
+	p.failovers += o.failovers
+	p.downFailovers += o.downFailovers
+	p.bufferEvents += o.bufferEvents
+	p.buffering += o.buffering
+	return p
+}
+
+// viewingStart is the viewing's start experience across its sessions: the
+// first play request, the first picture, and why a start failed.
+type viewingStart struct {
+	requested   bool
+	requestedAt time.Time
+	picturedAt  time.Time
+	failure     string
+}
+
+func (s *viewingStart) observe(e *core.PlayExperience) {
+	if e == nil {
+		return
+	}
+	s.requested = s.requested || e.Requested
+	if !e.RequestedAt.IsZero() && (s.requestedAt.IsZero() || e.RequestedAt.Before(s.requestedAt)) {
+		s.requestedAt = e.RequestedAt
+	}
+	if e.Pictured && !e.PicturedAt.IsZero() && (s.picturedAt.IsZero() || e.PicturedAt.Before(s.picturedAt)) {
+		s.picturedAt = e.PicturedAt
+	}
+	if e.StartFailure != "" {
+		s.failure = e.StartFailure
+	}
+}
+
+// experience is the row's experience: start time from the first request
+// to the first picture, a failed start only if no session ever pictured,
+// and buffering summed over the sessions.
+func (s viewingStart) experience(t viewingPart) *core.PlayExperience {
+	if !s.requested {
+		return nil
+	}
+	e := &core.PlayExperience{Requested: true, StartTime: -1, RequestedAt: s.requestedAt, PicturedAt: s.picturedAt, BufferEvents: t.bufferEvents, Buffering: t.buffering}
+	if !s.picturedAt.IsZero() {
+		e.Pictured = true
+		if !s.requestedAt.IsZero() {
+			e.StartTime = max(0, s.picturedAt.Sub(s.requestedAt))
+		}
+	} else {
+		e.StartFailure = s.failure
+	}
+	return e
 }
 
 type viewing struct {
@@ -51,6 +108,7 @@ type viewing struct {
 	ended    viewingPart
 	endedIDs []string
 	watched  bool // a timeline said playing
+	start    viewingStart
 	problem  bool
 	written  bool
 }
@@ -58,8 +116,7 @@ type viewing struct {
 func (v *viewing) totals() viewingPart {
 	t := v.ended
 	for _, p := range v.live {
-		t.bytes += p.bytes
-		t.failovers += p.failovers
+		t = t.add(p)
 	}
 	return t
 }
@@ -129,11 +186,16 @@ func (vs *viewings) observe(p core.PlaySession, now time.Time, ended bool, probl
 	part := v.live[p.ID]
 	part.bytes = max(part.bytes, p.BytesServed)
 	part.failovers = max(part.failovers, p.Failovers)
+	part.downFailovers = max(part.downFailovers, p.DownFailovers)
+	if e := p.Experience; e != nil {
+		part.bufferEvents = max(part.bufferEvents, e.BufferEvents)
+		part.buffering = max(part.buffering, e.Buffering)
+	}
+	v.start.observe(p.Experience)
 	if ended {
 		delete(v.live, p.ID)
 		delete(vs.bySession, p.ID)
-		v.ended.bytes += part.bytes
-		v.ended.failovers += part.failovers
+		v.ended = v.ended.add(part)
 		v.endedIDs = append(v.endedIDs, p.ID)
 		if len(v.endedIDs) > maxEndedParts {
 			v.endedIDs = v.endedIDs[len(v.endedIDs)-maxEndedParts:]
@@ -157,7 +219,8 @@ func (vs *viewings) observe(p core.PlaySession, now time.Time, ended bool, probl
 	row := p
 	row.ID, row.UserID, row.Key, row.ClientID = v.row, v.k.user, v.k.key, v.k.client
 	row.StartedAt = v.started
-	row.BytesServed, row.Failovers = t.bytes, t.failovers
+	row.BytesServed, row.Failovers, row.DownFailovers = t.bytes, t.failovers, t.downFailovers
+	row.Experience = v.start.experience(t)
 	row.Source, row.Resolution = nil, nil
 	return playRecord{p: row, at: now, ended: len(v.live) == 0, problem: problem}, true
 }

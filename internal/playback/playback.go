@@ -329,6 +329,8 @@ type flight struct {
 	// wait) joined, so the flight outlives its callers for a grace
 	// (abandonFlightLocked). Surface plans and detail pages cancel at once.
 	playRequest bool
+	// playAt is when the first play request joined (experience start time).
+	playAt time.Time
 	// abandoned counts the times the last caller left; a grace timer
 	// acts only if no caller joined since it was armed.
 	abandoned int
@@ -847,6 +849,7 @@ func (m *Manager) prepareOwnedWithin(ctx context.Context, wait time.Duration, us
 		id.variant, id.exact = prefer, exact
 	}
 	picked := prefer
+	arrived, play := m.now(), !deferSupersession || wait > 0
 	for {
 		m.mu.Lock()
 		if m.closed {
@@ -882,6 +885,11 @@ func (m *Manager) prepareOwnedWithin(ctx context.Context, wait time.Duration, us
 				s.claimed = true
 				m.mu.Unlock()
 				s.touch(now)
+				if play {
+					s.mu.Lock()
+					s.exp.noteRequest(arrived)
+					s.mu.Unlock()
+				}
 				m.reg.poke()
 				return s.snapshot(now), s.sources, nil
 			}
@@ -925,7 +933,10 @@ func (m *Manager) prepareOwnedWithin(ctx context.Context, wait time.Duration, us
 		go m.runFlight(wctx, f, fk, &u, caps)
 	}
 	f.waiters++
-	f.playRequest = f.playRequest || !deferSupersession || wait > 0
+	f.playRequest = f.playRequest || play
+	if play && f.playAt.IsZero() {
+		f.playAt = arrived
+	}
 	m.mu.Unlock()
 	var timeout <-chan time.Time
 	if wait > 0 {
@@ -938,6 +949,11 @@ func (m *Manager) prepareOwnedWithin(ctx context.Context, wait time.Duration, us
 	case <-f.done:
 		if f.err != nil {
 			return nil, f.sources, f.err
+		}
+		if play {
+			f.sess.mu.Lock()
+			f.sess.exp.noteRequest(arrived)
+			f.sess.mu.Unlock()
 		}
 		return f.sess.snapshot(m.now()), f.sess.sources, nil
 	case <-ctx.Done():
@@ -1014,7 +1030,13 @@ func (m *Manager) runFlight(ctx context.Context, f *flight, fk flightKey, user *
 	if err != nil && m.byIdent[fk.id] == nil {
 		delete(m.channelGroups, fk.id)
 	}
+	playAt := f.playAt
 	m.mu.Unlock()
+	if s != nil && !playAt.IsZero() {
+		s.mu.Lock()
+		s.exp.noteRequest(playAt)
+		s.mu.Unlock()
+	}
 	f.sess, f.err = s, err
 	if err != nil {
 		f.sources.seal()

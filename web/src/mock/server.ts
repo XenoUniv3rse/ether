@@ -58,6 +58,7 @@ import {
   type FakeTitle,
 } from "./data";
 import { createMetadataMock } from "./metadata";
+import { createExperienceMock } from "./experience";
 import { createMaintenance } from "./maintenance";
 import { createOpsMock, UNREACHABLE } from "./ops";
 import { createReleaseConsoleMock } from "./releases";
@@ -549,6 +550,7 @@ export function createFakeServer(opts: FakeOptions = {}) {
   const releaseConsole = createReleaseConsoleMock(catalog);
   const trash = createTrashMock();
   const maintenance = createMaintenance();
+  const experience = createExperienceMock();
   const sites = createSitesMock();
   const cacheMock = createCacheMock(opts.cacheRestart);
   const liveTV = createLiveTVMock(catalog);
@@ -2308,6 +2310,9 @@ export function createFakeServer(opts: FakeOptions = {}) {
 
     const mr = maintenance.handle(method, seg, body);
     if (mr) return json(mr.body, mr.status);
+
+    const ex = experience.handle(method, seg, q);
+    if (ex) return json(ex.body, ex.status);
 
     const mockConnectUrls = (id: string, port?: number) => {
       if (port)

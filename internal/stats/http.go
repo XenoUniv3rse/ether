@@ -62,6 +62,18 @@ func (s *Service) Handler() http.Handler {
 		}
 		reply(w, 200, p)
 	})
+	m.HandleFunc("GET /plays/{id}", func(w http.ResponseWriter, r *http.Request) {
+		p, err := s.PlayByID(r.Context(), r.PathValue("id"))
+		if err != nil {
+			fail(w, 500, "Play unavailable")
+			return
+		}
+		if p == nil {
+			fail(w, 404, "Play not found")
+			return
+		}
+		reply(w, 200, p)
+	})
 	m.HandleFunc("GET /summary", func(w http.ResponseWriter, r *http.Request) {
 		since, until, user := s.period(r)
 		v, err := s.Summary(r.Context(), since, until, user)
