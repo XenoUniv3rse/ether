@@ -199,7 +199,8 @@ function StreamCard({ s, stopping, onStop }: { s: Stream; stopping: boolean; onS
   );
 }
 
-/** A compact, information-rich row for the list view. */
+/** A rich single-row view of one stream: artwork wash, who and where, the
+ * conversion, the network and the position. */
 function StreamRow({ s, stopping, onStop }: { s: Stream; stopping: boolean; onStop: () => void }) {
   const title = useTitle(s.ratingKey ? String(s.ratingKey) : s.key || undefined);
   const converting = isTranscoding(s);
@@ -211,69 +212,108 @@ function StreamRow({ s, stopping, onStop }: { s: Stream; stopping: boolean; onSt
         ? String(title.year)
         : "";
   return (
-    <li className="grid grid-cols-[3rem_minmax(0,1fr)_auto] items-center gap-x-4 gap-y-3 p-3 sm:grid-cols-[3rem_minmax(0,1.4fr)_minmax(0,1fr)_minmax(0,1fr)_9rem_auto] sm:p-4">
+    <li className="relative isolate overflow-hidden">
       <Artwork
-        src={title?.poster}
-        alt={s.title}
+        src={title?.backdrop || title?.poster}
+        alt=""
         title=""
-        className="aspect-[2/3] w-12 rounded-md"
+        className="absolute inset-y-0 left-0 -z-10 w-2/3 opacity-30 [mask-image:linear-gradient(to_right,black,transparent)]"
+        imgClassName="size-full object-cover"
       />
-      <div className="min-w-0">
-        <div className="flex items-center gap-2">
-          <p className="truncate font-medium text-fg">{title?.title || s.title}</p>
-          <Badge variant={converting ? "warning" : "success"} className="shrink-0">
-            {decisionLabel(s)}
-          </Badge>
+      <div className="grid grid-cols-[3.5rem_minmax(0,1fr)_auto] items-center gap-x-5 gap-y-3 p-4 lg:grid-cols-[3.5rem_minmax(0,1.5fr)_minmax(0,1fr)_minmax(0,0.9fr)_11rem_auto]">
+        <Artwork
+          src={title?.poster}
+          alt={s.title}
+          title=""
+          className="aspect-[2/3] w-14 rounded-md shadow-md ring-1 ring-white/10"
+        />
+        <div className="min-w-0 space-y-1">
+          <div className="flex min-w-0 items-center gap-2">
+            <p className="truncate text-base font-semibold text-fg">{title?.title || s.title}</p>
+            <Badge variant={converting ? "warning" : "success"} className="shrink-0">
+              {decisionLabel(s)}
+            </Badge>
+          </div>
+          {subtitle ? <p className="truncate text-sm text-fg-muted">{subtitle}</p> : null}
+          <p className="flex min-w-0 items-center gap-1.5 text-xs text-fg-muted">
+            <span className="grid size-4 shrink-0 place-items-center rounded-full bg-primary-subtle text-[9px] font-semibold uppercase text-primary">
+              {(s.user || "?").slice(0, 1)}
+            </span>
+            <span className="truncate">
+              <span className="text-fg">{s.user}</span>
+              {[s.device, s.product !== s.device ? s.product : ""]
+                .filter(Boolean)
+                .map((v) => ` · ${v}`)}
+            </span>
+          </p>
         </div>
-        <p className="truncate text-xs text-fg-muted">
-          {[subtitle, s.user, s.device].filter(Boolean).join(" · ")}
-        </p>
-      </div>
-      <div className="hidden min-w-0 space-y-0.5 text-xs sm:block">
-        <p className="truncate text-fg">
-          <Flow from={s.sourceVideo} to={s.outputVideo} />
-        </p>
-        <p className="truncate text-fg-muted">
-          <Flow from={s.sourceAudio} to={s.outputAudio} />
-        </p>
-      </div>
-      <div className="hidden min-w-0 space-y-0.5 text-xs sm:block">
-        <p className="flex items-center gap-1.5 truncate text-fg">
-          {s.remote ? (
-            <Globe size={12} className="shrink-0 text-info" />
+        <dl className="hidden min-w-0 space-y-1 text-xs lg:block">
+          <div className="flex min-w-0 gap-2">
+            <dt className="w-14 shrink-0 text-fg-subtle">{t("Video")}</dt>
+            <dd className="truncate text-fg">
+              <Flow from={s.sourceVideo} to={s.outputVideo} />
+            </dd>
+          </div>
+          <div className="flex min-w-0 gap-2">
+            <dt className="w-14 shrink-0 text-fg-subtle">{t("Audio")}</dt>
+            <dd className="truncate text-fg">
+              <Flow from={s.sourceAudio} to={s.outputAudio} />
+            </dd>
+          </div>
+          {s.subtitle ? (
+            <div className="flex min-w-0 gap-2">
+              <dt className="w-14 shrink-0 text-fg-subtle">{t("Subtitles")}</dt>
+              <dd className="truncate text-fg">{s.subtitle}</dd>
+            </div>
+          ) : null}
+        </dl>
+        <div className="hidden min-w-0 space-y-1 text-xs lg:block">
+          <p className="flex min-w-0 items-center gap-1.5 text-fg">
+            {s.remote ? (
+              <Globe size={12} className="shrink-0 text-info" />
+            ) : (
+              <Home size={12} className="shrink-0 text-success" />
+            )}
+            {s.remote ? t("Away") : t("Home")}
+            {s.ip ? <span className="truncate font-mono text-fg-muted">{s.ip}</span> : null}
+          </p>
+          <p className="truncate text-fg-muted">
+            <span className="font-medium tabular-nums text-fg">
+              {mbpsOf(s.bitrateKbps ? s.bitrateKbps * 1000 : s.speedBps * 8)}
+            </span>
+            {s.origin ? ` · ${s.origin}` : ""}
+          </p>
+        </div>
+        <div className="col-span-2 min-w-0 lg:col-span-1">
+          {s.progress !== null ? (
+            <Meter
+              value={s.progress}
+              buffered={s.buffered}
+              label={
+                elapsed !== null
+                  ? t("{elapsed} of {total}", {
+                      elapsed: clockOf(elapsed),
+                      total: clockOf(s.durationMs),
+                    })
+                  : undefined
+              }
+              valueLabel={formatPercent(s.progress)}
+            />
           ) : (
-            <Home size={12} className="shrink-0 text-success" />
+            <p className="text-xs text-fg-muted">{t("Waiting for playback position")}</p>
           )}
-          {s.remote ? t("Away") : t("Home")}
-          {s.ip ? <span className="truncate font-mono text-fg-muted">{s.ip}</span> : null}
-        </p>
-        <p className="truncate tabular-nums text-fg-muted">
-          {mbpsOf(s.bitrateKbps ? s.bitrateKbps * 1000 : s.speedBps * 8)}
-          {s.origin ? ` · ${s.origin}` : ""}
-        </p>
+        </div>
+        <Button
+          variant="outline"
+          size="sm"
+          disabled={stopping}
+          onClick={onStop}
+          aria-label={t("Stop stream for {viewer}", { viewer: s.user })}
+          className="col-start-3 row-start-1 lg:col-auto lg:row-auto"
+        >
+          <Square size={13} /> {t("Stop")}
+        </Button>
       </div>
-      <div className="col-span-2 min-w-0 sm:col-span-1">
-        {s.progress !== null ? (
-          <Meter
-            value={s.progress}
-            buffered={s.buffered}
-            label={elapsed !== null ? clockOf(elapsed) : undefined}
-            valueLabel={formatPercent(s.progress)}
-          />
-        ) : (
-          <p className="text-xs text-fg-muted">{t("Waiting for playback position")}</p>
-        )}
-      </div>
-      <Button
-        variant="ghost"
-        size="sm"
-        disabled={stopping}
-        onClick={onStop}
-        aria-label={t("Stop stream for {viewer}", { viewer: s.user })}
-        className="col-start-3 row-start-1 sm:col-auto sm:row-auto"
-      >
-        <Square size={13} />
-      </Button>
     </li>
   );
 }
