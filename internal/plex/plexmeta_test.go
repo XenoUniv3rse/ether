@@ -42,9 +42,6 @@ func plexMetaFixture(t *testing.T, use bool, rt http.RoundTripper) (*fixture, *p
 	if _, err := db.Exec(`INSERT INTO plexguid_mappings(rating_key,guid,checked_at) VALUES(?,?,?)`, int64(fightClub.Key), plexMetaGUID, time.Now().Unix()); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.Exec(`INSERT INTO plexguid_verified(rating_key,guid) SELECT rating_key,guid FROM plexguid_mappings`); err != nil {
-		t.Fatal(err)
-	}
 	pg := plexguid.New(db, plexguid.Options{})
 	t.Cleanup(pg.Close)
 	client := &http.Client{Transport: http.DefaultTransport}

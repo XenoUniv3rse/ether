@@ -26,8 +26,10 @@ import (
 func init() {
 	store.Register("plexguid", 1, `CREATE TABLE plexguid_mappings(rating_key INTEGER PRIMARY KEY,guid TEXT NOT NULL,checked_at INTEGER NOT NULL);`)
 	store.Register("plexguid", 3, `CREATE TABLE plexguid_verified(rating_key INTEGER PRIMARY KEY, guid TEXT NOT NULL);`)
-	// Pre-0.3.4 child matches could be marked verified without a verified parent.
-	store.Register("plexguid", 4, `DELETE FROM plexguid_verified WHERE rating_key >= 3000000000000000 AND rating_key < 5000000000000000;`)
+	// Older child mappings did not retain their parent identity. Keep serving
+	// them while the repair worker checks their ancestry.
+	store.Register("plexguid", 4, `CREATE TABLE plexguid_parentage(rating_key INTEGER PRIMARY KEY, parent_key INTEGER NOT NULL, parent_guid TEXT NOT NULL);`)
+	store.Register("plexguid", 5, `CREATE INDEX plexguid_parentage_parent ON plexguid_parentage(parent_key);`)
 	store.Register("plexguid", 2, `CREATE INDEX plexguid_mappings_guid ON plexguid_mappings(guid);`)
 }
 
@@ -179,13 +181,19 @@ func (s *Service) worker() {
 	}
 }
 
-// repairMappings revisits old, unverified entries at a bounded rate. Reads
-// never expose them while the repair is pending or the provider is offline.
+// repairMappings revisits legacy identities without withholding them. It
+// alternates unverified entries with children whose parentage was not
+// recorded, so legacy children get priority without starving other work.
 func (s *Service) repairMappings() {
 	defer s.wg.Done()
 	tick := time.NewTicker(time.Second)
 	defer tick.Stop()
-	var after int64
+	var after [2]int64
+	var turn int
+	queries := [2]string{
+		`SELECT m.rating_key FROM plexguid_mappings m WHERE m.rating_key>? AND NOT EXISTS (SELECT 1 FROM plexguid_verified v WHERE v.rating_key=m.rating_key AND v.guid=m.guid) ORDER BY m.rating_key LIMIT 1`,
+		`SELECT m.rating_key FROM plexguid_mappings m WHERE m.rating_key>? AND m.rating_key>=3000000000000000 AND m.rating_key<5000000000000000 AND m.guid<>'' AND NOT EXISTS (SELECT 1 FROM plexguid_parentage p WHERE p.rating_key=m.rating_key) ORDER BY m.rating_key LIMIT 1`,
+	}
 	for {
 		select {
 		case <-s.ctx.Done():
@@ -196,10 +204,16 @@ func (s *Service) repairMappings() {
 			continue
 		}
 		var key int64
-		err := s.db.QueryRowContext(s.ctx, `SELECT m.rating_key FROM plexguid_mappings m WHERE m.rating_key>? AND NOT EXISTS (SELECT 1 FROM plexguid_verified v WHERE v.rating_key=m.rating_key AND v.guid=m.guid) ORDER BY m.rating_key LIMIT 1`, after).Scan(&key)
+		queue := turn
+		turn = 1 - turn
+		err := s.db.QueryRowContext(s.ctx, queries[queue], after[queue]).Scan(&key)
 		if err == sql.ErrNoRows {
-			// Retry failed lookups and newly discovered legacy rows later.
-			after = 0
+			after[queue] = 0
+			queue = 1 - queue
+			err = s.db.QueryRowContext(s.ctx, queries[queue], after[queue]).Scan(&key)
+		}
+		if err == sql.ErrNoRows {
+			after[queue] = 0
 			timer := time.NewTimer(time.Minute)
 			select {
 			case <-s.ctx.Done():
@@ -212,23 +226,22 @@ func (s *Service) repairMappings() {
 		if err != nil {
 			continue
 		}
-		// Backpressure: don't advance past a key that could not be queued.
 		k := core.RatingKey(key)
 		if !resolvableKey(k) {
-			after = key
+			after[queue] = key
 			continue
 		}
 		s.mu.Lock()
 		if s.pending[k] {
 			s.mu.Unlock()
-			after = key
+			after[queue] = key
 			continue
 		}
 		s.pending[k] = true
 		s.mu.Unlock()
 		select {
 		case s.jobs <- k:
-			after = key
+			after[queue] = key
 		case <-s.ctx.Done():
 			s.done(k)
 			return
@@ -265,7 +278,7 @@ func resolvableKey(k core.RatingKey) bool {
 // Cached is safe for lists: no network requests or credentials are needed.
 func (s *Service) Cached(ctx context.Context, k core.RatingKey) string {
 	var guid string
-	_ = s.db.QueryRowContext(ctx, `SELECT guid FROM plexguid_mappings m WHERE rating_key=? AND checked_at>? AND EXISTS (SELECT 1 FROM plexguid_verified v WHERE v.rating_key=m.rating_key AND v.guid=m.guid)`, int64(k), time.Now().Add(-cacheTTL).Unix()).Scan(&guid)
+	_ = s.db.QueryRowContext(ctx, `SELECT guid FROM plexguid_mappings m WHERE rating_key=? AND checked_at>?`, int64(k), time.Now().Add(-cacheTTL).Unix()).Scan(&guid)
 	return guid
 }
 
@@ -306,7 +319,7 @@ func (s *Service) CachedMany(ctx context.Context, keys []core.RatingKey) map[cor
 			b.WriteByte('?')
 			args = append(args, int64(k))
 		}
-		b.WriteString(`) AND checked_at>? AND EXISTS (SELECT 1 FROM plexguid_verified v WHERE v.rating_key=plexguid_mappings.rating_key AND v.guid=plexguid_mappings.guid)`)
+		b.WriteString(`) AND checked_at>?`)
 		args = append(args, cutoff)
 		rows, err := s.db.QueryContext(ctx, b.String(), args...)
 		if err != nil {
@@ -330,7 +343,7 @@ func (s *Service) CachedMany(ctx context.Context, keys []core.RatingKey) map[cor
 func (s *Service) freshCached(ctx context.Context, k core.RatingKey) (string, bool) {
 	var cached string
 	var at int64
-	if e := s.db.QueryRowContext(ctx, `SELECT guid,checked_at FROM plexguid_mappings m WHERE rating_key=? AND EXISTS (SELECT 1 FROM plexguid_verified v WHERE v.rating_key=m.rating_key AND v.guid=m.guid)`, int64(k)).Scan(&cached, &at); e == nil && time.Since(time.Unix(at, 0)) < recheckInterval {
+	if e := s.db.QueryRowContext(ctx, `SELECT guid,checked_at FROM plexguid_mappings m WHERE rating_key=? AND EXISTS (SELECT 1 FROM plexguid_verified v WHERE v.rating_key=m.rating_key AND v.guid=m.guid) AND (rating_key<3000000000000000 OR rating_key>=5000000000000000 OR guid='' OR EXISTS (SELECT 1 FROM plexguid_parentage p WHERE p.rating_key=m.rating_key))`, int64(k)).Scan(&cached, &at); e == nil && time.Since(time.Unix(at, 0)) < recheckInterval {
 		return cached, true
 	}
 	return "", false
@@ -358,6 +371,28 @@ func (s *Service) storeMappingUnder(ctx context.Context, k core.RatingKey, guid 
 		return err
 	}
 	if old != guid {
+		// Delete only children whose recorded parentage proves they belong
+		// to the old tree. Unknown legacy children stay available.
+		remove := func(query string, args ...any) error {
+			for _, table := range []string{"plexguid_verified", "plexguid_mappings", "plexguid_parentage"} {
+				if _, err := tx.ExecContext(ctx, `DELETE FROM `+table+` WHERE rating_key IN (`+query+`)`, args...); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
+		if k.Kind() == core.KindShow {
+			q := `SELECT ep.rating_key FROM plexguid_parentage ep JOIN plexguid_parentage sea ON ep.parent_key=sea.rating_key WHERE sea.parent_key=? AND sea.parent_guid<>?`
+			if err = remove(q, int64(k), guid); err != nil {
+				return err
+			}
+		}
+		if k.Kind() == core.KindShow || k.Kind() == core.KindSeason {
+			q := `SELECT rating_key FROM plexguid_parentage WHERE parent_key=? AND parent_guid<>?`
+			if err = remove(q, int64(k), guid); err != nil {
+				return err
+			}
+		}
 		// A child's proof is tied to its parent's identity. Drop those proofs
 		// when a parent changes so they are resolved through the new tree.
 		var ranges [][2]core.RatingKey
@@ -378,6 +413,11 @@ func (s *Service) storeMappingUnder(ctx context.Context, k core.RatingKey, guid 
 	}
 	if _, err = tx.ExecContext(ctx, `INSERT INTO plexguid_verified(rating_key,guid) VALUES(?,?) ON CONFLICT(rating_key) DO UPDATE SET guid=excluded.guid`, int64(k), guid); err != nil {
 		return err
+	}
+	if parent != 0 {
+		if _, err = tx.ExecContext(ctx, `INSERT INTO plexguid_parentage(rating_key,parent_key,parent_guid) VALUES(?,?,?) ON CONFLICT(rating_key) DO UPDATE SET parent_key=excluded.parent_key,parent_guid=excluded.parent_guid`, int64(k), int64(parent), parentGUID); err != nil {
+			return err
+		}
 	}
 	return tx.Commit()
 }

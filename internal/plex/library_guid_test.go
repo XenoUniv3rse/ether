@@ -37,9 +37,6 @@ func TestLibraryGUIDLookup(t *testing.T) {
 	if _, err = db.Exec(`INSERT INTO plexguid_mappings VALUES(?,?,?)`, int64(bbE1.Key), epGUID, time.Now().Unix()); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.Exec(`INSERT INTO plexguid_verified(rating_key,guid) SELECT rating_key,guid FROM plexguid_mappings`); err != nil {
-		t.Fatal(err)
-	}
 	pg := plexguid.New(db, plexguid.Options{})
 	defer pg.Close()
 	f := newFixture(func(d *Deps) { d.PlexGUID = pg })

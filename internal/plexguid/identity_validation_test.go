@@ -61,7 +61,7 @@ func TestDirectChildMatchCannotProveParentIdentity(t *testing.T) {
 }
 
 // A child proof belongs to one specific parent mapping, including during a
-// concurrent rematch. Old unverified rows must never escape through reads.
+// concurrent rematch. Legacy rows without parentage remain available.
 func TestChildProofFollowsParentMapping(t *testing.T) {
 	ctx := context.Background()
 	db, err := store.OpenMemory(ctx)
@@ -86,6 +86,13 @@ func TestChildProofFollowsParentMapping(t *testing.T) {
 	if err = s.storeMappingUnder(ctx, episode, episodeGUID, now, season, seasonGUID); err != nil {
 		t.Fatal(err)
 	}
+	// Legacy children have no saved parentage, so they keep serving even when
+	// the show changes; their verification is removed for a later recheck.
+	legacy := core.SeasonKey(1396, 2)
+	const legacyGUID = "plex://season/eeeeeeeeeeeeeeeeeeeeeeee"
+	if err = s.storeMapping(ctx, legacy, legacyGUID, now); err != nil {
+		t.Fatal(err)
+	}
 	if err = s.storeMapping(ctx, show, newShow, now); err != nil {
 		t.Fatal(err)
 	}
@@ -94,6 +101,12 @@ func TestChildProofFollowsParentMapping(t *testing.T) {
 	}
 	if _, err = s.ExactKey(ctx, episodeGUID); err == nil {
 		t.Fatal("stale reverse mapping exposed")
+	}
+	if s.Cached(ctx, legacy) != legacyGUID {
+		t.Fatal("legacy child was withheld")
+	}
+	if _, ok := s.freshCached(ctx, legacy); ok {
+		t.Fatal("legacy child still marked fresh")
 	}
 	if err = s.storeMappingUnder(ctx, season, seasonGUID, now, show, oldShow); err == nil {
 		t.Fatal("stale parent accepted")
