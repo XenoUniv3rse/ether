@@ -406,14 +406,30 @@ func (c *Catalog) browseWhere(f core.Filter) (string, []any, error) {
 	// movies. Apply that same guard before counting and paging.
 	conds = append(conds, "t.release_known=1 AND (t.released_ts<=? OR (t.type='movie' AND ?))")
 	args = append(args, nowTS, c.config().ShowUpcomingMovies)
-	for _, window := range []struct {
-		typ   core.MediaType
-		after int64
-	}{{core.TypeMovie, f.HiddenRecentMoviesAfter}, {core.TypeShow, f.HiddenRecentShowsAfter}} {
-		if window.after != 0 {
-			conds = append(conds, "NOT (t.type=? AND (t.key<? OR t.key>=?) AND t.released_ts>? AND t.released_ts<=?)")
-			args = append(args, string(window.typ), int64(core.LocalKey(0)), int64(core.LocalKey(0))+1000000000000000, window.after, f.HiddenRecentAsOf)
+	for _, hidden := range []struct{ kind, generation string }{
+		{"movie", f.HiddenMovieGeneration}, {"show", f.HiddenShowGeneration},
+	} {
+		if hidden.generation != "" {
+			conds = append(conds, "NOT EXISTS (SELECT 1 FROM availability_hidden ah WHERE ah.kind=? AND ah.generation=? AND ah.rating_key=t.key)")
+			args = append(args, hidden.kind, hidden.generation)
 		}
+	}
+	// Facets query children directly rather than through storedEpisodesWhere.
+	// They inherit their show's decision and episodes apply their own too.
+	if (f.Type == core.TypeEpisode || f.Type == core.TypeSeason) && f.HiddenShowGeneration != "" {
+		conds = append(conds, "NOT EXISTS (SELECT 1 FROM availability_hidden ah WHERE ah.kind='show' AND ah.generation=? AND ah.rating_key=t.show_key)")
+		args = append(args, f.HiddenShowGeneration)
+	}
+	if f.Type == core.TypeEpisode && f.HiddenEpisodeGeneration != "" {
+		clause := "NOT EXISTS (SELECT 1 FROM availability_hidden ah WHERE ah.kind='episode' AND ah.generation=? AND ah.rating_key=t.key)"
+		args = append(args, f.HiddenEpisodeGeneration)
+		if len(f.AvailabilityKeepKeys) > 0 {
+			clause = "(" + clause + " OR t.key IN (" + placeholders(len(f.AvailabilityKeepKeys)) + "))"
+			for _, key := range f.AvailabilityKeepKeys {
+				args = append(args, key)
+			}
+		}
+		conds = append(conds, clause)
 	}
 	if f.KnownAddedDate {
 		// Same membership as airAddedSQL<>0. Browse already requires the

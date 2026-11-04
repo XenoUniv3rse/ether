@@ -76,10 +76,10 @@ type Filter struct {
 	DigitalDateEvidence bool `json:"-"`
 	// AvailabilityKeepKeys are the viewer's active playback sessions.
 	AvailabilityKeepKeys []RatingKey `json:"-"`
-	// Cold availability snapshots conservatively hide these release windows.
-	HiddenRecentMoviesAfter int64 `json:"-"`
-	HiddenRecentShowsAfter  int64 `json:"-"`
-	HiddenRecentAsOf        int64 `json:"-"`
+	// Availability generations pin one evaluated hidden set across SQL reads.
+	HiddenMovieGeneration   string `json:"-"`
+	HiddenShowGeneration    string `json:"-"`
+	HiddenEpisodeGeneration string `json:"-"`
 	// ChildVisibility is the viewer policy evaluated on hydrated episodes.
 	ChildVisibility *Filter            `json:"-"`
 	RuleVisibility  string             `json:"-"` // owner-only rules browser: hidden or shown

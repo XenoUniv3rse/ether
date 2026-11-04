@@ -22,32 +22,31 @@ var (
 // the parent-series filter (t) and any child-level conditions.
 func splitStoredFilter(f core.Filter, childKind core.KeyKind) (show core.Filter, childExclude []core.RatingKey) {
 	show = core.Filter{
-		KnownAddedDate:          f.KnownAddedDate,
-		HiddenRecentMoviesAfter: f.HiddenRecentMoviesAfter,
-		HiddenRecentShowsAfter:  f.HiddenRecentShowsAfter,
-		HiddenRecentAsOf:        f.HiddenRecentAsOf,
-		ExcludeGenres:           f.ExcludeGenres,
-		ExcludeKeywords:         f.ExcludeKeywords,
-		Type:                    core.TypeShow,
-		Genres:                  f.Genres,
-		Keywords:                f.Keywords,
-		Languages:               f.Languages,
-		Countries:               f.Countries,
-		ExcludeCountries:        f.ExcludeCountries,
-		ContentRatings:          f.ContentRatings,
-		ExcludeContentRatings:   f.ExcludeContentRatings,
-		MaxContentRating:        f.MaxContentRating,
-		Collection:              f.Collection,
-		Collections:             f.Collections,
-		ExcludeCollections:      f.ExcludeCollections,
-		MinContentRating:        f.MinContentRating,
-		IncludeCollectionNames:  f.IncludeCollectionNames,
-		ExcludeCollectionNames:  f.ExcludeCollectionNames,
-		SaferPlexRating:         f.SaferPlexRating,
-		Person:                  f.Person,
-		Credits:                 f.Credits,
-		Studio:                  f.Studio,
-		StudioFilters:           f.StudioFilters,
+		KnownAddedDate:         f.KnownAddedDate,
+		HiddenMovieGeneration:  f.HiddenMovieGeneration,
+		HiddenShowGeneration:   f.HiddenShowGeneration,
+		ExcludeGenres:          f.ExcludeGenres,
+		ExcludeKeywords:        f.ExcludeKeywords,
+		Type:                   core.TypeShow,
+		Genres:                 f.Genres,
+		Keywords:               f.Keywords,
+		Languages:              f.Languages,
+		Countries:              f.Countries,
+		ExcludeCountries:       f.ExcludeCountries,
+		ContentRatings:         f.ContentRatings,
+		ExcludeContentRatings:  f.ExcludeContentRatings,
+		MaxContentRating:       f.MaxContentRating,
+		Collection:             f.Collection,
+		Collections:            f.Collections,
+		ExcludeCollections:     f.ExcludeCollections,
+		MinContentRating:       f.MinContentRating,
+		IncludeCollectionNames: f.IncludeCollectionNames,
+		ExcludeCollectionNames: f.ExcludeCollectionNames,
+		SaferPlexRating:        f.SaferPlexRating,
+		Person:                 f.Person,
+		Credits:                f.Credits,
+		Studio:                 f.Studio,
+		StudioFilters:          f.StudioFilters,
 	}
 	for _, k := range f.ExcludeKeys {
 		switch k.Kind() {
@@ -63,6 +62,17 @@ func splitStoredFilter(f core.Filter, childKind core.KeyKind) (show core.Filter,
 func (c *Catalog) childFilterConds(alias string, f core.Filter, childExclude []core.RatingKey) ([]string, []any) {
 	var conds []string
 	var args []any
+	if alias == "e" && f.HiddenEpisodeGeneration != "" {
+		clause := "NOT EXISTS (SELECT 1 FROM availability_hidden ah WHERE ah.kind='episode' AND ah.generation=? AND ah.rating_key=" + alias + ".key)"
+		args = append(args, f.HiddenEpisodeGeneration)
+		if len(f.AvailabilityKeepKeys) > 0 {
+			clause = "(" + clause + " OR " + alias + ".key IN (" + placeholders(len(f.AvailabilityKeepKeys)) + "))"
+			for _, key := range f.AvailabilityKeepKeys {
+				args = append(args, key)
+			}
+		}
+		conds = append(conds, clause)
+	}
 	if len(childExclude) > 0 {
 		conds = append(conds, alias+".key NOT IN ("+placeholders(len(childExclude))+")")
 		for _, k := range childExclude {

@@ -12,55 +12,6 @@ import (
 	"github.com/braedonsaunders/ether/internal/releaseparse"
 )
 
-// PagedDecision is the availability decision used by a SQL page.
-type PagedDecision struct {
-	Keys                          []core.RatingKey
-	Digital, DigitalEvidence      bool
-	MoviesAfter, ShowsAfter, AsOf int64
-}
-
-// PagedExclusions preserves prior exclusions while a settings change is
-// resolved, then captures one decision for counting, paging, and rendering.
-func (s *Service) PagedExclusions(ctx context.Context, episodes bool) (PagedDecision, error) {
-	input := s.snapshotFor(ctx)
-	out := PagedDecision{Digital: input.availability.EffectiveMode() == config.ModeDigital, DigitalEvidence: input.availability.DigitalDateEvidence}
-	for _, kind := range []string{hiddenMovies, hiddenShows} {
-		// Digital movies are decided by the indexed home-release predicate in
-		// Browse. A background hidden set (or its cold-start placeholder) would
-		// apply a second, changing decision before LIMIT/OFFSET.
-		if kind == hiddenMovies && (out.Digital || input.availability.DisableMovieEvidenceGate) {
-			continue
-		}
-		old := s.currentHidden(kind, input)
-		if old == nil {
-			// This is the existing cold-start decision: hide the recent window.
-			out.AsOf = input.now.Unix()
-			if kind == hiddenMovies {
-				out.MoviesAfter = input.now.Add(-time.Duration(input.availability.EffectiveMovieEvidenceDays()) * 24 * time.Hour).Unix()
-			} else {
-				out.ShowsAfter = input.now.Add(-24 * time.Hour).Unix()
-			}
-			continue
-		}
-		out.Keys = append(out.Keys, old.keys...)
-		if old.key != hiddenKey(kind, input) {
-			fresh, err := s.waitHidden(ctx, kind, input, false)
-			if err != nil {
-				return PagedDecision{}, err
-			}
-			out.Keys = append(out.Keys, fresh.keys...)
-		}
-	}
-	if episodes {
-		fresh, err := s.waitHidden(ctx, hiddenEpisodes, input, true)
-		if err != nil {
-			return PagedDecision{}, err
-		}
-		out.Keys = append(out.Keys, fresh.keys...)
-	}
-	return out, nil
-}
-
 // waitHidden waits for the bounded recent-window background calculation; it
 // does not scan the catalogue or evaluate release policy in the page handler.
 func (s *Service) waitHidden(ctx context.Context, kind string, input discoverySnapshot, requireFresh bool) (*hiddenSet, error) {
@@ -318,27 +269,17 @@ func hiddenKey(kind string, input discoverySnapshot) string {
 	return fmt.Sprintf("%s:%s:%+v:%+v", kind, input.policy, input.availability, input.feeds)
 }
 
-// hidden is the titles in the evidence window that no observation unlocks
-// yet. Every library page and section hub excludes them, so requests only
-// read the last computed answer; judging retained feed releases happens in
-// a refresh (in the background when Deps.Async is set). A stale answer
-// is served while its refresh runs. Before the first answer exists every
-// title in the window stays hidden, as it would until evidence arrives.
+// hidden returns the last evaluated set, waiting for its first calculation.
+// SQL paging uses the independently retained published generations.
 func (s *Service) hidden(ctx context.Context, kind string, input discoverySnapshot) []core.RatingKey {
 	if h := s.currentHidden(kind, input); h != nil {
 		return slices.Clone(h.keys)
 	}
-	items, ok, err := s.recent(ctx, kind, input)
-	if !ok || err != nil {
+	h, err := s.waitHidden(ctx, kind, input, true)
+	if err != nil {
 		return nil
 	}
-	var hidden []core.RatingKey
-	for _, t := range items {
-		if !input.upcomingMovie(t) && evidenceWindow(t, input.now, input.availability) {
-			hidden = append(hidden, t.Key)
-		}
-	}
-	return hidden
+	return slices.Clone(h.keys)
 }
 
 // currentHidden returns the last computed set for kind, first scheduling a
@@ -421,8 +362,11 @@ func (s *Service) computeHidden(ctx context.Context, kind string) {
 	revision := s.visibilityRevision
 	s.visibilityMu.Unlock()
 	items, ok, err := s.recent(ctx, kind, input)
-	if !ok || err != nil {
+	if err != nil {
 		return
+	}
+	if !ok {
+		items = nil
 	}
 	visible := map[core.RatingKey]bool{}
 	for _, t := range s.filterDiscovery(ctx, items, input) {
@@ -439,6 +383,10 @@ func (s *Service) computeHidden(ctx context.Context, kind string) {
 		}
 	}
 	if ctx.Err() != nil {
+		return
+	}
+	if err := s.publishHidden(ctx, kind, hiddenPolicy(kind, input), h.keys); err != nil {
+		s.log.Warn("availability hidden set publication failed", "kind", kind, "err", err)
 		return
 	}
 	s.visibilityMu.Lock()
