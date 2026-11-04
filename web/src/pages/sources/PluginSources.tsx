@@ -30,12 +30,8 @@ type PluginRecord = {
   name?: string;
   enabled?: boolean;
   state?: string;
-  health?: {
-    status?: string;
-    reason?: string;
-    state?: string;
-    lastError?: string;
-  };
+  health?: string;
+  healthReason?: string;
   lastError?: string;
 };
 
@@ -100,7 +96,7 @@ function limitsSummary(limits: SourceKindMeta["limits"] | undefined): string[] {
 }
 
 function PluginStateBadge({ plugin }: { plugin?: PluginRecord }) {
-  const state = plugin?.health?.status ?? plugin?.health?.state ?? plugin?.state;
+  const state = plugin?.health ?? plugin?.state;
   if (plugin && plugin.enabled === false) {
     return <Badge variant="secondary">{t("Off")}</Badge>;
   }
@@ -250,8 +246,9 @@ export function PluginSourceCards({
             const cls = normalizeClass(d.meta?.class);
             const abilities = (d.meta?.abilities ?? []).map(abilityLabel);
             const limits = limitsSummary(d.meta?.limits);
+            const nativeDebrid = cls === "debrid" && d.id.endsWith("/debrid");
             const plugin = pluginsById.get(d.owner);
-            const lastError = plugin?.health?.reason || plugin?.health?.lastError || plugin?.lastError;
+            const lastError = plugin?.healthReason || plugin?.lastError;
             const testState = tests[d.owner];
             const tested =
               testState?.status === "ok"
@@ -261,7 +258,7 @@ export function PluginSourceCards({
                   : undefined;
 
             const details = [
-              i === 0 ? t("Tried first") : t("Priority {number}", { number: i + 1 }),
+              nativeDebrid ? t("Uses native cache checks and playback") : i === 0 ? t("Tried first") : t("Priority {number}", { number: i + 1 }),
               hint,
               ...abilities,
               ...limits,
@@ -287,15 +284,15 @@ export function PluginSourceCards({
                     ) : null}
                   </>
                 }
-                order={
+                order={nativeDebrid ? undefined : (
                   <OrderButtons
                     label={label}
                     i={i}
                     n={ordered.length}
                     onMove={(dir) => move(i, dir)}
                   />
-                }
-                handle={handle}
+                )}
+                handle={nativeDebrid ? undefined : handle}
                 editLabel={t("Edit {name}", { name: label })}
                 onEdit={() => setActiveId(d.id)}
               />
