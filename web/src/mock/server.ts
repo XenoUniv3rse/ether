@@ -2165,6 +2165,53 @@ export function createFakeServer(opts: FakeOptions = {}) {
           },
       );
     }
+    if (seg[0] === "plex-servers") {
+      // Demo: one owner-run Plex Media Server with the owner mapped.
+      const servers = (state as { plexServers?: unknown[] }).plexServers ?? [
+        {
+          id: 1,
+          name: "Living room PMS",
+          url: "http://192.168.1.10:32400",
+          machineId: "demo-pms",
+          version: "1.43.4.10903",
+          owner: "owner",
+          checkedAt: Math.floor(Date.now() / 1000),
+          problem: "",
+          viewers: [
+            {
+              accountId: 1,
+              accountName: "owner",
+              owner: true,
+              userId: 1,
+              direction: 3,
+              interval: 10,
+              canSend: true,
+              lastImport: Math.floor(Date.now() / 1000) - 240,
+              lastSend: Math.floor(Date.now() / 1000) - 240,
+              nextSync: Math.floor(Date.now() / 1000) + 360,
+              problem: "",
+              unmatched: 1,
+            },
+          ],
+        },
+      ];
+      (state as { plexServers?: unknown[] }).plexServers = servers;
+      if (seg[2] === "accounts" && method === "GET")
+        return json([
+          { id: 1, name: "owner", owner: true, userId: 1 },
+          { id: 2, name: "family", owner: false, userId: 0 },
+        ]);
+      if (seg[2] === "unmatched")
+        return json([
+          { direction: "in", ref: "9001", title: "Home Video", reason: "no_match", seenAt: 0 },
+        ]);
+      if (seg[1] && method === "DELETE") {
+        (state as { plexServers?: unknown[] }).plexServers = [];
+        return new Response(null, { status: 204 });
+      }
+      if (seg[1]) return json(servers[0]);
+      return json(servers);
+    }
     if (p === "/discovery/settings") return json({ enabled: true });
     if (seg[0] === "discovery" && seg[1] === "users") return json([]);
     if (seg[0] === "viewers" && seg[2] === "favorite-episode-alert") return json({ enabled: true });

@@ -199,9 +199,10 @@ func (a *App) buildAdmin() http.Handler {
 		CatalogVisibility: func(ctx context.Context, specs []core.LibraryExclusion, fallback string) (any, error) {
 			return a.catalog.PreviewVisibilityPolicy(ctx, specs, fallback)
 		},
-		Images:    a.images,
-		PlexWatch: a.plexWatchAPI(),
-		Prerolls:  a.prerollAdmin(),
+		Images:      a.images,
+		PlexWatch:   a.plexWatchAPI(),
+		PlexServers: a.plexServersAPI(),
+		Prerolls:    a.prerollAdmin(),
 	}
 	h := admin.NewHandler(deps)
 	if a.streamRT != nil {

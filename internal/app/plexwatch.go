@@ -6,6 +6,8 @@ import (
 	"errors"
 
 	"github.com/braedonsaunders/ether/internal/admin"
+	"github.com/braedonsaunders/ether/internal/auth"
+	"github.com/braedonsaunders/ether/internal/core"
 	"github.com/braedonsaunders/ether/internal/plexguid"
 	"github.com/braedonsaunders/ether/internal/plexwatch"
 )
@@ -125,4 +127,69 @@ func (p plexWatchAdmin) ImportCurrent(ctx context.Context, userID, plexID int64)
 
 func (p plexWatchAdmin) Unmatched(ctx context.Context, userID, plexID int64, after string) ([]string, error) {
 	return p.svc.Unmatched(ctx, userID, plexID, after)
+}
+
+// buildPlexServers attaches watch sync with owner-run Plex Media Servers.
+// It does not depend on the Plex front end: plex:// GUIDs, used only to
+// find a server's copy of an Ether title, are read once the front end has
+// built its resolver.
+func (a *App) buildPlexServers() error {
+	if a.plexServers != nil || a.db == nil || a.state == nil || a.cfg == nil {
+		return nil
+	}
+	opts := plexwatch.ServersOptions{
+		DB:       a.db,
+		State:    a.state,
+		Sealer:   a.cfg,
+		GUID:     lazyPlexGUID{a},
+		ClientID: plexguid.ClientIdentifier(a.cfg.Get().Plex.ClientIdentifier, a.cfg.Get().Server.MachineIdentifier),
+		Logger:   a.log.With("component", "plexservers"),
+		ViewerExists: func(ctx context.Context, id int64) (bool, error) {
+			_, err := auth.StoredIdentity(ctx, a.db, id)
+			if errors.Is(err, core.ErrNotFound) {
+				return false, nil
+			}
+			return err == nil, err
+		},
+	}
+	if a.catalog != nil {
+		opts.Catalog = a.catalog
+	}
+	svc, err := plexwatch.NewServers(opts)
+	if err != nil {
+		return err
+	}
+	a.plexServers = svc
+	a.closers = append(a.closers, func() { _ = svc.Close() })
+	return nil
+}
+
+// lazyPlexGUID reads the Plex front end's GUID resolver when it exists.
+type lazyPlexGUID struct{ a *App }
+
+func (g lazyPlexGUID) service() *plexguid.Service {
+	g.a.plexBuildMu.Lock()
+	defer g.a.plexBuildMu.Unlock()
+	return g.a.plexGUID
+}
+
+func (g lazyPlexGUID) Resolve(ctx context.Context, key core.RatingKey) (string, error) {
+	if s := g.service(); s != nil {
+		return s.Resolve(ctx, key)
+	}
+	return "", core.ErrNotFound
+}
+
+func (g lazyPlexGUID) ExactKey(ctx context.Context, guid string) (core.RatingKey, error) {
+	if s := g.service(); s != nil {
+		return s.ExactKey(ctx, guid)
+	}
+	return 0, core.ErrNotFound
+}
+
+func (a *App) plexServersAPI() admin.PlexServers {
+	if a.plexServers == nil {
+		return nil
+	}
+	return a.plexServers
 }
