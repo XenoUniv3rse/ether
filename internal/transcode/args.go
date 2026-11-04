@@ -402,6 +402,7 @@ func buildCodecArgs(s runSpec) []string {
 	if a != nil {
 		if d.AudioCopy {
 			args = append(args, "-c:a", "copy")
+			var audioFilters []string
 			if s.Start > 0 {
 				// Input seeking retains copied packets from the preceding
 				// video keyframe. Drop audio preroll without re-encoding or
@@ -413,7 +414,16 @@ func buildCodecArgs(s runSpec) []string {
 				if len(inputTimestampArgs(s)) > 0 {
 					dropAt = secs(s.Start)
 				}
-				args = append(args, "-bsf:a", "noise=amount=0:drop='lt(pts*tb,"+dropAt+")'")
+				audioFilters = append(audioFilters, "noise=amount=0:drop='lt(pts*tb,"+dropAt+")'")
+			}
+			// The HLS muxer's nested MP4 writer does not auto-insert the
+			// ADTS-to-ASC filter. Preserve compressed audio while moving its
+			// configuration into the initialization segment.
+			if s.Protocol == core.ProtocolHLS && container == ContainerFMP4 && a.Codec == "aac" && (s.Info.Container == "mpegts" || s.Info.Container == "aac") {
+				audioFilters = append(audioFilters, "aac_adtstoasc")
+			}
+			if len(audioFilters) > 0 {
+				args = append(args, "-bsf:a", strings.Join(audioFilters, ","))
 			}
 			if container == ContainerFMP4 {
 				tag := "0"
