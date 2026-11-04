@@ -77,6 +77,13 @@ type pendingError struct {
 	err       error
 }
 
+// untrackedPending marks a successful submission by a provider that does not
+// return a torrent id usable by Acquire. Availability can still be rechecked.
+type untrackedPending struct{ err error }
+
+func (e *untrackedPending) Error() string { return e.err.Error() }
+func (e *untrackedPending) Unwrap() error { return e.err }
+
 func (e *pendingError) Error() string { return e.err.Error() }
 func (e *pendingError) Unwrap() error { return e.err }
 

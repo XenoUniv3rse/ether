@@ -143,7 +143,10 @@ func (p *premiumize) Acquire(ctx context.Context, req AcquireRequest) (*Acquired
 	if !cached[strings.ToLower(req.InfoHash)] {
 		if !req.CachedOnly {
 			// Queue a cloud download for later; playback never waits for it.
-			_ = p.do(ctx, apiRequest{method: http.MethodPost, path: "/transfer/create", form: url.Values{"src": {req.Magnet}}}, nil)
+			if err := p.do(ctx, apiRequest{method: http.MethodPost, path: "/transfer/create", form: url.Values{"src": {req.Magnet}}}, nil); err != nil {
+				return nil, fmt.Errorf("premiumize: create transfer: %w", err)
+			}
+			return nil, &untrackedPending{err: fmt.Errorf("premiumize: %w", core.ErrNotCached)}
 		}
 		return nil, fmt.Errorf("premiumize: %w", core.ErrNotCached)
 	}

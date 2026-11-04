@@ -58,7 +58,8 @@ const (
 	msgNotCachedOnlyBadNZB = "No cached copy; Usenet releases are incomplete. Turn off Cached torrents only to download it."
 	msgNotCachedNoNZB      = "No cached copy or Usenet release is available."
 	msgNotCachedBadNZB     = "No cached copy; Usenet releases are incomplete."
-	msgDownloadRefused     = "Not cached, and your debrid service refused the download."
+	msgDownloadRefused     = "Not cached. The download could not be started; check the Ether log for the reason."
+	msgDownloadPaused      = "Not cached. Ether temporarily paused downloads after debrid service refusals. Try again later."
 	msgDownloadLimit       = "Not cached. Your debrid account has reached its active download limit."
 )
 
@@ -134,6 +135,8 @@ func writePlaybackStatus(w http.ResponseWriter, status int) {
 // Usenet (*core.UncachedError), the same reason Quality › History records.
 func notCachedMessage(err error) string {
 	switch {
+	case errors.Is(err, core.ErrDownloadPaused):
+		return msgDownloadPaused
 	case errors.Is(err, core.ErrDownloadLimit):
 		return msgDownloadLimit
 	case errors.Is(err, core.ErrDownloadRefused):

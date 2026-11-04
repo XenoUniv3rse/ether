@@ -172,7 +172,7 @@ func (e *entry) addsPaused(now time.Time) error {
 }
 
 // errAddsPaused is a release skipped while a provider's adds are paused.
-var errAddsPaused = fmt.Errorf("debrid: adds paused after refusals: %w", core.ErrNotCached)
+var errAddsPaused = fmt.Errorf("debrid: adds paused after refusals: %w", core.ErrDownloadPaused)
 
 // ProviderStats are one provider's counters and latency EWMAs.
 type ProviderStats struct {
@@ -960,7 +960,9 @@ func (s *Service) QueueDownload(ctx context.Context, rel core.Release) ([]byte, 
 			s.forgetQueued(rel, hash)
 			return nil, ctx.Err()
 		}
-		if errors.Is(err, core.ErrNotCached) && !refusal(err) && !errors.Is(err, core.ErrDownloadLimit) {
+		var untracked *untrackedPending
+		confirmed := pendingTorrent(err) != "" || errors.As(err, &untracked)
+		if (confirmed || (e.cfg.Kind != "realdebrid" && e.cfg.Kind != "premiumize")) && errors.Is(err, core.ErrNotCached) && !refusal(err) && !errors.Is(err, core.ErrDownloadLimit) {
 			s.queuedMu.Lock()
 			s.queued[key] = queuedDownload{hash: hash, provider: e.cfg.ID, torrent: pendingTorrent(err), release: rel.Name, at: now}
 			s.queuedMu.Unlock()
@@ -981,7 +983,7 @@ func (s *Service) QueueDownload(ctx context.Context, rel core.Release) ([]byte, 
 			return nil, fmt.Errorf("%q: %w (%v)", rel.Name, core.ErrDownloadLimit, joined)
 		}
 	}
-	return nil, fmt.Errorf("%q: %w (%v)", rel.Name, core.ErrDownloadRefused, joined)
+	return nil, fmt.Errorf("%q: %w (%w)", rel.Name, core.ErrDownloadRefused, joined)
 }
 
 // errBackgroundUndecided is a background check that could not look at a
