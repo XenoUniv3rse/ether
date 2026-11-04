@@ -66,6 +66,9 @@ func run(ff, fp, report, only string) error {
 		return err
 	}
 	cases := []scenario{{"healthy", "mpegts", "none", "", true}, {"healthy", "mpegts", "none", "", false}, {"healthy", "fmp4", "none", "", false}, {"seek", "mpegts", "none", "", false}, {"corrupt-ts", "mpegts", "none", "corrupt", false}, {"truncated", "mpegts", "none", "truncate", false}, {"source-503", "mpegts", "none", "503", false}, {"transient-503", "mpegts", "none", "once-503", false}, {"transient-416", "mpegts", "none", "once-416", false}, {"slow-first-byte", "mpegts", "none", "slow-first", false}, {"midrange-stall", "mpegts", "none", "stall", false}, {"connection-drop", "mpegts", "none", "drop", false}, {"short-reads", "mpegts", "none", "short-writes", false}, {"changing-source", "mpegts", "none", "changing", false}, {"live-corrupt", "mpegts", "none", "corrupt", false}, {"hardware-failure", "mpegts", "videotoolbox", "hwfail", false}, {"healthy", "mpegts", "videotoolbox", "", false}}
+	for _, name := range []string{"input-missing-keyframe", "input-open-gop", "input-long-gop", "input-pts-wrap", "input-resolution-change", "input-samplerate-change", "input-audio-late", "input-audio-early-end", "input-vfr", "input-interlaced", "input-hevc10-hdr", "input-multi-audio"} {
+		cases = append(cases, scenario{name, "mpegts", "none", "", false})
+	}
 	results := make([]result, 0, len(cases))
 	failures := 0
 	for _, sc := range cases {
@@ -73,9 +76,16 @@ func run(ff, fp, report, only string) error {
 			continue
 		}
 		start := time.Now()
-		detail := exercise(ctx, ff, fp, root, data, sc)
+		fixture, fixtureErr := makeFixture(ctx, ff, root, sc.Name, data)
+		detail := ""
 		status := "PASS"
-		if detail != "" {
+		if fixtureErr != nil {
+			status = "SKIP"
+			detail = "fixture unavailable: " + fixtureErr.Error()
+		} else {
+			detail = exercise(ctx, ff, fp, root, fixture, sc)
+		}
+		if detail != "" && status != "SKIP" {
 			status = "FAIL"
 			failures++
 		}
