@@ -469,6 +469,42 @@ func planAudio(a *core.StreamInfo, caps core.ClientCaps, audioIssues []string, b
 	return audioCopy, audioCodec, audioKbps, audioNote
 }
 
+// pceAudioPlan avoids advertising independently decodable TS segments with
+// AAC that relies on an in-band configuration emitted only at source start.
+func pceAudioPlan(a *core.StreamInfo, caps core.ClientCaps, opts core.DecideOptions, video string, copy bool, codec string, kbps int, note string) (bool, string, int, string) {
+	if a == nil || !a.AACProgramConfig || !copy || caps.Download || opts.Protocol == core.ProtocolDASH || opts.Protocol == core.ProtocolHTTP || outputContainer(caps, opts, video, codec) != ContainerMPEGTS {
+		return copy, codec, kbps, note
+	}
+	codec = audioTarget(caps, a)
+	ch := outputChannels(codec, a)
+	return false, codec, audioBitrateKbps(codec, ch), fmt.Sprintf("audio %s converted to %s %dch for independent TS segments", a.Codec, codec, ch)
+}
+
+func applyAudioLimits(d *core.Decision, a *core.StreamInfo, caps core.ClientCaps, audioCopy bool, audioCodec string) {
+	if audioCopy || a == nil {
+		return
+	}
+	for _, limit := range caps.AudioLimits {
+		if limit.Codec != "" && limit.Codec != "*" && limit.Codec != audioCodec {
+			continue
+		}
+		switch {
+		case limit.Name == "audio.channels" && limit.Type == "upperBound":
+			if (d.AudioChannels == 0 && limit.Value < outputChannels(audioCodec, a)) || (d.AudioChannels > 0 && limit.Value < d.AudioChannels) {
+				d.AudioChannels = limit.Value
+			}
+		case limit.Name == "audio.bitrate" && limit.Type == "upperBound":
+			if d.AudioBitrateKbps == 0 || limit.Value < d.AudioBitrateKbps {
+				d.AudioBitrateKbps = limit.Value
+			}
+		case limit.Name == "audio.samplingRate" && limit.Type == "lowerBound":
+			if limit.Value > 48000 {
+				d.AudioSampleRate = limit.Value
+			}
+		}
+	}
+}
+
 // BurnsSubtitle reports whether Decide burns sub into the video. Text
 // subtitles remain sidecars, including legacy burn requests, unless the
 // client cannot draw a soft text track here (BurnTextSubtitles); an image
@@ -580,46 +616,31 @@ func Decide(info core.MediaInfo, caps core.ClientCaps, opts core.DecideOptions, 
 
 	// Audio plan, shared by remux and transcode.
 	audioCopy, audioCodec, audioKbps, audioNote := planAudio(a, caps, audioIssues, bitrateCap)
-	if !audioCopy && a != nil {
-		for _, limit := range caps.AudioLimits {
-			if limit.Codec != "" && limit.Codec != "*" && limit.Codec != audioCodec {
-				continue
-			}
-			switch {
-			case limit.Name == "audio.channels" && limit.Type == "upperBound":
-				if (d.AudioChannels == 0 && limit.Value < outputChannels(audioCodec, a)) || (d.AudioChannels > 0 && limit.Value < d.AudioChannels) {
-					d.AudioChannels = limit.Value
-				}
-			case limit.Name == "audio.bitrate" && limit.Type == "upperBound":
-				if d.AudioBitrateKbps == 0 || limit.Value < d.AudioBitrateKbps {
-					d.AudioBitrateKbps = limit.Value
-				}
-			case limit.Name == "audio.samplingRate" && limit.Type == "lowerBound":
-				if limit.Value > 48000 {
-					d.AudioSampleRate = limit.Value
-				}
-			}
-		}
-	}
 
 	// 2. Remux: copy video into HLS.
 	videoCopyable := v == nil || (len(videoIssues) == 0 && hlsVideoOK(v.Codec))
+	copyVideo := ""
+	if v != nil {
+		copyVideo = v.Codec
+	}
+	remuxCopy, remuxCodec, remuxKbps, remuxNote := pceAudioPlan(a, caps, opts, copyVideo, audioCopy, audioCodec, audioKbps, audioNote)
 	if opts.DirectStream && videoCopyable && !burn && (bitrateCap == 0 || info.BitrateKbps <= bitrateCap ||
 		// only the audio pushes it over: transcoding audio may fix that
-		(!audioCopy && info.BitrateKbps-copiedAudioKbps(a)+audioKbps <= bitrateCap)) {
+		(!remuxCopy && info.BitrateKbps-copiedAudioKbps(a)+remuxKbps <= bitrateCap)) {
 		d.Kind = core.DecisionRemux
 		d.VideoCopy = true
 		d.StripDolbyVision = hdr10Base
-		d.AudioCopy = audioCopy
-		d.AudioCodec = audioCodec
+		d.AudioCopy = remuxCopy
+		d.AudioCodec = remuxCodec
+		applyAudioLimits(&d, a, caps, remuxCopy, remuxCodec)
 		if v != nil {
 			d.VideoCodec = v.Codec
 			d.MaxHeight = v.Height
 		}
-		d.Container = outputContainer(caps, opts, d.VideoCodec, audioCodec)
+		d.Container = outputContainer(caps, opts, d.VideoCodec, remuxCodec)
 		d.BitrateKbps = info.BitrateKbps
-		if !audioCopy && a != nil {
-			d.BitrateKbps = info.BitrateKbps - copiedAudioKbps(a) + audioKbps
+		if !remuxCopy && a != nil {
+			d.BitrateKbps = info.BitrateKbps - copiedAudioKbps(a) + remuxKbps
 		}
 		parts := []string{fmt.Sprintf("remux to HLS (%s)", d.Container)}
 		if v != nil && v.DolbyVision && !SupportsDVProfile(caps, v.DolbyVisionProfile) {
@@ -633,8 +654,8 @@ func Decide(info core.MediaInfo, caps core.ClientCaps, opts core.DecideOptions, 
 		if v != nil {
 			parts = append(parts, fmt.Sprintf("video %s copied", v.Codec))
 		}
-		if audioNote != "" {
-			parts = append(parts, audioNote)
+		if remuxNote != "" {
+			parts = append(parts, remuxNote)
 		} else if a != nil {
 			parts = append(parts, fmt.Sprintf("audio %s copied", a.Codec))
 		}
@@ -649,8 +670,6 @@ func Decide(info core.MediaInfo, caps core.ClientCaps, opts core.DecideOptions, 
 
 	// 3. Full transcode.
 	d.Kind = core.DecisionTranscode
-	d.AudioCopy = audioCopy
-	d.AudioCodec = audioCodec
 	d.BurnSubtitles = burn
 
 	srcH := 1080
@@ -687,6 +706,10 @@ func Decide(info core.MediaInfo, caps core.ClientCaps, opts core.DecideOptions, 
 	case supportsHEVC && pol.HEVCHardware && minPositive(heightCap, srcH) > 1080:
 		codec = "hevc"
 	}
+
+	audioCopy, audioCodec, audioKbps, audioNote = pceAudioPlan(a, caps, opts, codec, audioCopy, audioCodec, audioKbps, audioNote)
+	d.AudioCopy, d.AudioCodec = audioCopy, audioCodec
+	applyAudioLimits(&d, a, caps, audioCopy, audioCodec)
 
 	videoBudget := 0
 	if bitrateCap > 0 {

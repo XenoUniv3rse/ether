@@ -83,6 +83,7 @@ func probeMode(ctx context.Context, r Runner, ffprobe, input string, live bool) 
 		}
 		best = info
 		if probeCompleteMode(info, live) {
+			markADTSProgramConfigs(ctx, r, ffprobe, input, info)
 			return info, nil
 		}
 		if i < len(probeAttempts)-1 {
@@ -90,6 +91,7 @@ func probeMode(ctx context.Context, r Runner, ffprobe, input string, live bool) 
 		}
 	}
 	if best != nil {
+		markADTSProgramConfigs(ctx, r, ffprobe, input, best)
 		return best, nil
 	}
 	return nil, lastErr
@@ -421,6 +423,9 @@ func mapStream(s ffprobeStream) (core.StreamInfo, bool) {
 	case "audio":
 		si.Channels = s.Channels
 		si.ChannelLayout = s.ChannelLayout
+		if si.Codec == "aac" {
+			si.AACProgramConfig = aacASCProgramConfig(probeExtradata(s.Extradata), si.Channels)
+		}
 		si.SampleRate = int(atoi64(s.SampleRate))
 	}
 	return si, true

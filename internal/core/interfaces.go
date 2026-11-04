@@ -557,10 +557,14 @@ type StreamInfo struct {
 	HDR10Plus     *bool  `json:"hdr10Plus,omitempty"`
 	Channels      int    `json:"channels,omitempty"`
 	ChannelLayout string `json:"channelLayout,omitempty"`
-	SampleRate    int    `json:"sampleRate,omitempty"`
-	BitrateKbps   int    `json:"bitrateKbps,omitempty"`
-	External      bool   `json:"external,omitempty"` // sidecar subtitle (OpenSubtitles)
-	ExternalURL   string `json:"externalUrl,omitempty"`
+	// AACProgramConfig records a verified AAC channel_configuration=0 with
+	// an in-band program configuration element. Segmented TS needs a safe
+	// audio plan because later packets may omit that element.
+	AACProgramConfig bool   `json:"aacProgramConfig,omitempty"`
+	SampleRate       int    `json:"sampleRate,omitempty"`
+	BitrateKbps      int    `json:"bitrateKbps,omitempty"`
+	External         bool   `json:"external,omitempty"` // sidecar subtitle (OpenSubtitles)
+	ExternalURL      string `json:"externalUrl,omitempty"`
 
 	// DolbyVisionProfile is the DV profile (5, 7, 8...) from the DOVI
 	// configuration record; 0 when unknown or not Dolby Vision.
@@ -592,7 +596,7 @@ type Chapter struct {
 // ProbeFactsVersion is the generation of facts a probe is expected to carry,
 // including H.264/HEVC reference frames and descriptive audio handler titles.
 // Persisted probes from an older generation are cache misses.
-const ProbeFactsVersion = 2
+const ProbeFactsVersion = 3
 
 type MediaInfo struct {
 	Chapters    []Chapter     `json:"chapters,omitempty"`
