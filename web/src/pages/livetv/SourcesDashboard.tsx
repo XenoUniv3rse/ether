@@ -77,7 +77,7 @@ export function SourcesDashboard({
 
   return (
     <div className="space-y-6 p-4 sm:p-6">
-      <KpiRow>
+      <KpiRow className="lg:grid-cols-2">
         <Kpi
           label={t("Sources")}
           value={formatNumber(list.length)}
@@ -200,7 +200,7 @@ function SourcePanel({
             {s.lastError}
           </p>
         ) : null}
-        <dl className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <dl className="grid gap-4 sm:grid-cols-2 2xl:grid-cols-4">
           <Fact
             label={t("Channels")}
             value={formatNumber(s.channelCount ?? 0)}
