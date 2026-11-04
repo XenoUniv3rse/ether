@@ -2445,6 +2445,7 @@
   "m_0b302dba03a2d1": "Geen extra limiet",
   "m_0b312480d1ae55": "Niet gekoppeld aan een gidskanaal.",
   "m_0b3256882c311f": "Voeg ondertitels toe van ",
+  "m_0b348291859243": "Concept openen",
   "m_0b37402f5b6f1f": "Indexer verwijderen",
   "m_0b376ead0ba613": "Prototype · voorbeeldresultaten",
   "m_0b3867a3945520": "Laat leeg om {url} te gebruiken.",
@@ -2743,6 +2744,7 @@
   "m_0cb0de50907897": "Detail voorverwarmd",
   "m_0cb20425002085": "Abonnementsprijs opgeslagen",
   "m_0cb2a70f129830": "Ether kon dat bestand niet gebruiken. Je andere wijzigingen zijn opgeslagen.",
+  "m_0cb31d24e709c7": "Je aanvullende verzoek wordt uitgevoerd zodra deze stap klaar is.",
   "m_0cb5528eb45440": "Titels verschijnen hier nadat Ether {name} om details vraagt.",
   "m_0cb7d85b9f1cc5": "Sneltoetsen",
   "m_0cb7ed3f5c23f8": "Gesorteerd op {sort} (oplopend)",
@@ -4793,6 +4795,7 @@
   "m_1613b25e12977b": "Inloggen bij plex.tv",
   "m_161728e702956c": "Opgeven na",
   "m_16178f0d418fbe": "Zijn zenders en gids aan Live TV toevoegen.",
+  "m_161818c9b503c5": "Opgeslagen concepten",
   "m_1618efe453815c": "Voorbereiden…",
   "m_1619c83e8f95c7": "Bron verwijderen",
   "m_161a6603b07607": "{label} in {unit}",
@@ -6933,5 +6936,6 @@
   "m_1ffb9d60560b3f": "Uit een cluster",
   "m_1ffceea1081742": "dvd absoluut uitgezonden volgorde",
   "m_1ffe73d99814f5": "Hub-ID's, soorten of globs",
-  "m_1ffeee0f0cedfc": "Database-URL overschrijven (optioneel)"
+  "m_1ffeee0f0cedfc": "Database-URL overschrijven (optioneel)",
+  "Settings need a referenced schema and code that reads them. Secrets use ether.secret.get(name); never copy them into ordinary settings or logs.": "Instellingen vereisen een schema waarnaar wordt verwezen en code die ze leest. Geheimen gebruiken ether.secret.get(name); kopieer ze nooit naar gewone instellingen of logboeken."
 }

@@ -2508,6 +2508,7 @@
   "m_0b302dba03a2d1": "Aucune limite supplémentaire",
   "m_0b312480d1ae55": "Non associée à une chaîne du guide.",
   "m_0b3256882c311f": "Ajouter des sous-titres depuis ",
+  "m_0b348291859243": "Ouvrir le brouillon",
   "m_0b37402f5b6f1f": "Supprimer l’indexeur",
   "m_0b376ead0ba613": "Prototype · résultats d’exemple",
   "m_0b3867a3945520": "Laissez vide pour utiliser {url}.",
@@ -2813,6 +2814,7 @@
   "m_0cb0de50907897": "Détail préchauffé",
   "m_0cb20425002085": "Prix du forfait enregistré",
   "m_0cb2a70f129830": "Ether n’a pas pu utiliser ce fichier. Vos autres modifications sont enregistrées.",
+  "m_0cb31d24e709c7": "Votre demande complémentaire sera exécutée après cette étape.",
   "m_0cb5528eb45440": "Les titres apparaissent ici après qu'Ether demande des informations à {name}.",
   "m_0cb7d85b9f1cc5": "Raccourcis clavier",
   "m_0cb7ed3f5c23f8": "Trié par {sort} (croissant)",
@@ -4918,6 +4920,7 @@
   "m_1613b25e12977b": "Se connecter à plex.tv",
   "m_161728e702956c": "Abandonner après",
   "m_16178f0d418fbe": "Ajouter ses chaînes et son guide à Live TV.",
+  "m_161818c9b503c5": "Brouillons enregistrés",
   "m_1618efe453815c": "Préparation…",
   "m_1619c83e8f95c7": "Supprimer la source",
   "m_161a6603b07607": "{label} en {unit}",
@@ -7113,5 +7116,6 @@
   "m_1ffb9d60560b3f": "Provenant d’un cluster",
   "m_1ffceea1081742": "dvd absolu diffusion ordre",
   "m_1ffe73d99814f5": "ID de hubs, types ou motifs glob",
-  "m_1ffeee0f0cedfc": "URL de base de données de remplacement (facultatif)"
+  "m_1ffeee0f0cedfc": "URL de base de données de remplacement (facultatif)",
+  "Settings need a referenced schema and code that reads them. Secrets use ether.secret.get(name); never copy them into ordinary settings or logs.": "Les paramètres nécessitent un schéma référencé et du code qui les lit. Les secrets utilisent ether.secret.get(name) ; ne les copiez jamais dans les paramètres ordinaires ni les journaux."
 }

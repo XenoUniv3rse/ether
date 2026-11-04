@@ -166,6 +166,7 @@ export function PluginSetup({
       {detail.host ? (
         <AddonSettings
           detail={detail}
+          showEmpty={loaded && !hasSettings}
           onSaved={() => {
             void onDetail();
             onChanged();

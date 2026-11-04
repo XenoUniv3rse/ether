@@ -14,12 +14,13 @@ import (
 type Status string
 
 const (
-	StatusOK         Status = "ok"
-	StatusError      Status = "error"
-	StatusTimeout    Status = "timeout"
-	StatusForbidden  Status = "forbidden"
-	StatusAborted    Status = "aborted"
-	StatusGovernance Status = "governance"
+	StatusOK           Status = "ok"
+	StatusInvalidInput Status = "invalid_input"
+	StatusError        Status = "error"
+	StatusTimeout      Status = "timeout"
+	StatusForbidden    Status = "forbidden"
+	StatusAborted      Status = "aborted"
+	StatusGovernance   Status = "governance"
 )
 
 // Fault is a classified, non-ambient failure. A Host returns a *Fault to make
@@ -335,6 +336,8 @@ type batchRanker interface {
 
 func statusForFaultCode(code string) Status {
 	switch code {
+	case string(StatusInvalidInput):
+		return StatusInvalidInput
 	case string(StatusForbidden):
 		return StatusForbidden
 	case string(StatusAborted):

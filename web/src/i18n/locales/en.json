@@ -2451,6 +2451,7 @@
   "m_0b302dba03a2d1": "No additional limit",
   "m_0b312480d1ae55": "Not mapped to a guide channel.",
   "m_0b3256882c311f": "Add subtitles from ",
+  "m_0b348291859243": "Open draft",
   "m_0b37402f5b6f1f": "Remove indexer",
   "m_0b376ead0ba613": "Prototype · sample results",
   "m_0b3867a3945520": "Leave empty to use {url}.",
@@ -2749,6 +2750,7 @@
   "m_0cb0de50907897": "Detail warm",
   "m_0cb20425002085": "Plan price saved",
   "m_0cb2a70f129830": "Ether couldn't use that file. Your other changes are saved.",
+  "m_0cb31d24e709c7": "Your follow-up will run after this step finishes.",
   "m_0cb5528eb45440": "Titles show here after Ether asks {name} for details.",
   "m_0cb7d85b9f1cc5": "Keyboard shortcuts",
   "m_0cb7ed3f5c23f8": "Sorted by {sort} (ascending)",
@@ -4802,6 +4804,7 @@
   "m_1613b25e12977b": "Sign in to plex.tv",
   "m_161728e702956c": "Give up after",
   "m_16178f0d418fbe": "Add its channels and guide to Live TV.",
+  "m_161818c9b503c5": "Saved drafts",
   "m_1618efe453815c": "Preparing…",
   "m_1619c83e8f95c7": "Delete source",
   "m_161a6603b07607": "{label} in {unit}",
@@ -6951,5 +6954,6 @@
   "m_1ffb9d60560b3f": "From a cluster",
   "m_1ffceea1081742": "dvd absolute aired ordering",
   "m_1ffe73d99814f5": "Hub ids, kinds or globs",
-  "m_1ffeee0f0cedfc": "Database URL override (optional)"
+  "m_1ffeee0f0cedfc": "Database URL override (optional)",
+  "Settings need a referenced schema and code that reads them. Secrets use ether.secret.get(name); never copy them into ordinary settings or logs.": "Settings need a referenced schema and code that reads them. Secrets use ether.secret.get(name); never copy them into ordinary settings or logs."
 }

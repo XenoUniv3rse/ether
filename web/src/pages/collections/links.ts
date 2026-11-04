@@ -6,3 +6,8 @@ export function newCollectionHref(params: Record<string, string> = {}): string {
   });
   return `/collections/new?${q}`;
 }
+
+/** Carry the exact catalogue selected in a plugin drawer into its new collection. */
+export function pluginCollectionHref(kind: string, label: string): string {
+  return newCollectionHref({ pluginSource: kind, name: label });
+}

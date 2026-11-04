@@ -1,3 +1,4 @@
+import { pluginCollectionHref } from "../../collections/links";
 import { Badge, Switch, cn, toast } from "@braedonsaunders/appkit-ui";
 import {
   ArrowUpRight,
@@ -224,7 +225,11 @@ function PartRows({
                     : t("Not used yet")
                 }
                 action={
-                  <RowLink to="/collections/new" label={t("Make a collection")} onClose={onClose} />
+                  <RowLink
+                    to={pluginCollectionHref(d.id, textOf(d.label))}
+                    label={t("Make a collection")}
+                    onClose={onClose}
+                  />
                 }
               />
             );

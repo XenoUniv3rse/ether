@@ -192,3 +192,26 @@ func TestHostFetchKeepsBinaryBodies(t *testing.T) {
 		t.Fatalf("binary body = %x (%v), want %x", got, err, want)
 	}
 }
+
+func TestHostedPublicSettingsAccessor(t *testing.T) {
+	eng := wasm.NewEngine(nil)
+	t.Cleanup(func() { _ = eng.Close() })
+	rt, err := HostedRuntimeFactory(eng)(Installed{ID: "test.settings",
+		Manifest: Manifest{ID: "test.settings", Version: "1.0.0", Ether: &EtherBlock{Runtime: RuntimeDecl{Kind: "hosted", Entry: "plugin.ts"}}},
+		Files: func(path string) ([]byte, bool) {
+			return []byte(`globalThis.handle = () => ({status:200,body:ether.settings.get()});`), path == "plugin.ts"
+		},
+		Host: &memHost{kv: map[string][]byte{}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = rt.Close() })
+	response, err := rt.Call(context.Background(), Request{Method: "GET", Path: "/ether/health"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(response.Body) != `{"greeting":"Hi"}` {
+		t.Fatalf("settings response: %s", response.Body)
+	}
+}

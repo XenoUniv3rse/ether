@@ -227,7 +227,8 @@ func mapHostErr(err error) error {
 		return fmt.Errorf("%w: %v", ErrTooLarge, err)
 	default:
 		var ve *plugins.ValidationError
-		if errors.As(err, &ve) {
+		var collectionInput *plugins.CollectionInputError
+		if errors.As(err, &ve) || errors.As(err, &collectionInput) {
 			return fmt.Errorf("%w: %v", ErrInvalid, err)
 		}
 		return err

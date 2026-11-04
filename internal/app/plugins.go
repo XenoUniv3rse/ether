@@ -48,6 +48,8 @@ func (a *App) buildPlugins(ctx context.Context, cfg config.Config) (*pluginRunti
 		IsLeader: func() bool { return a.cluster == nil || a.cluster.IsLeader() },
 		Bus:      clusterbus.FromCluster(a.cluster),
 		Backends: plugins.Backends{
+			CollectionsUpsert: a.pluginCollectionUpsert,
+			CollectionsDelete: a.pluginCollectionDelete,
 			ViewerNames: func(ctx context.Context, ids []int64) (json.RawMessage, error) {
 				out := make([]map[string]any, 0, len(ids))
 				for _, id := range ids {

@@ -2571,6 +2571,7 @@
   "m_0b302dba03a2d1": "Žádný další limit",
   "m_0b312480d1ae55": "Nepřiřazeno ke kanálu průvodce.",
   "m_0b3256882c311f": "Přidat titulky z ",
+  "m_0b348291859243": "Otevřít koncept",
   "m_0b37402f5b6f1f": "Odebrat indexer",
   "m_0b376ead0ba613": "Prototyp · ukázkové výsledky",
   "m_0b3867a3945520": "Ponechte prázdné pro použití {url}.",
@@ -2883,6 +2884,7 @@
   "m_0cb0de50907897": "Detail v paměti",
   "m_0cb20425002085": "Cena tarifu uložena",
   "m_0cb2a70f129830": "Ether nedokázal tento soubor použít. Ostatní změny jsou uložené.",
+  "m_0cb31d24e709c7": "Váš doplňující požadavek se spustí po dokončení tohoto kroku.",
   "m_0cb5528eb45440": "Tituly se tu zobrazí poté, co se Ether zeptá {name} na podrobnosti.",
   "m_0cb7d85b9f1cc5": "Klávesové zkratky",
   "m_0cb7ed3f5c23f8": "Řazeno podle: {sort} (vzestupně)",
@@ -5043,6 +5045,7 @@
   "m_1613b25e12977b": "Přihlásit se k plex.tv",
   "m_161728e702956c": "Vzdát se po",
   "m_16178f0d418fbe": "Přidat jeho kanály a průvodce do Live TV.",
+  "m_161818c9b503c5": "Uložené koncepty",
   "m_1618efe453815c": "Příprava…",
   "m_1619c83e8f95c7": "Smazat zdroj",
   "m_161a6603b07607": "{label} v jednotkách: {unit}",
@@ -7296,5 +7299,6 @@
   "m_1ffb9d60560b3f": "Z clusteru",
   "m_1ffceea1081742": "dvd absolutní odvysílané řazení pořadí",
   "m_1ffe73d99814f5": "ID hubů, druhy nebo vzory glob",
-  "m_1ffeee0f0cedfc": "Přepsání URL databáze (volitelné)"
+  "m_1ffeee0f0cedfc": "Přepsání URL databáze (volitelné)",
+  "Settings need a referenced schema and code that reads them. Secrets use ether.secret.get(name); never copy them into ordinary settings or logs.": "Nastavení vyžadují odkazované schéma a kód, který je čte. Tajné údaje používají ether.secret.get(name); nikdy je nekopírujte do běžných nastavení ani protokolů."
 }

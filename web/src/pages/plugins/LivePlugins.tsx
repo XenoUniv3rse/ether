@@ -206,6 +206,7 @@ export default function LivePlugins() {
             setOpen(id);
           }}
           onOpenInstall={() => setInstallUrl("")}
+          onBrowseDirectories={() => setBrowsing(true)}
         />
       )}
 

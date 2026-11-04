@@ -390,7 +390,7 @@ func (h *host) CollectionsUpsert(ctx context.Context, doc json.RawMessage) error
 	if h.m.deps.Backends.CollectionsUpsert == nil {
 		return ErrUnavailable
 	}
-	prev, err := h.m.deps.Backends.CollectionsUpsert(ctx, doc)
+	prev, err := h.m.deps.Backends.CollectionsUpsert(collectionContext(ctx, h.plugin), doc)
 	if err != nil {
 		return err
 	}
@@ -448,13 +448,13 @@ func (m *Manager) applyInverse(ctx context.Context, e JournalEntry) error {
 			if m.deps.Backends.CollectionsUpsert == nil {
 				return ErrUnavailable
 			}
-			_, err := m.deps.Backends.CollectionsUpsert(ctx, inv.Previous)
+			_, err := m.deps.Backends.CollectionsUpsert(collectionContext(ctx, e.Plugin), inv.Previous)
 			return err
 		}
 		if m.deps.Backends.CollectionsDelete == nil {
 			return ErrUnavailable
 		}
-		return m.deps.Backends.CollectionsDelete(ctx, inv.Doc)
+		return m.deps.Backends.CollectionsDelete(collectionContext(ctx, e.Plugin), inv.Doc)
 	default:
 		return fmt.Errorf("plugins: no inverse for journal op %q", e.Op)
 	}

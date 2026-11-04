@@ -67,54 +67,103 @@ export default function LiveStudio() {
   const [narration, setNarration] = useState("");
   const [stageError, setStageError] = useState("");
   const abort = useRef<AbortController | null>(null);
+  const queued = useRef<string[]>([]);
+  const builtProject = useRef<string | undefined>(undefined);
+  const [working, setWorking] = useState(false);
+  const [queuedCount, setQueuedCount] = useState(0);
+
+  useEffect(() => () => abort.current?.abort(), []);
 
   const build = async (text: string) => {
     const ask = text.trim();
     if (!ask) return;
     setPrompt("");
+    if (abort.current) {
+      queued.current.push(ask);
+      setQueuedCount(queued.current.length);
+      return;
+    }
+    setWorking(true);
     setStageError("");
     setNarration("");
     setMoments([{ kind: "intent", text: ask, tool: "studio" }]);
     setPhase("stage");
-    sessionStorage.removeItem("ether-studio-thread");
+    if (phase === "home") sessionStorage.removeItem("ether-studio-thread");
     const ctl = new AbortController();
     abort.current = ctl;
-    const calls = new Map<string, { name: string; input: Record<string, unknown> }>();
-    let said = "";
     try {
-      const res = await apiStream("/agent/turn", {
-        method: "POST",
-        signal: ctl.signal,
-        body: JSON.stringify({ prompt: ask, context: { route: "/plugins/studio" } }),
-      });
-      const id = res.headers.get("X-Ether-Thread-Id");
-      if (id) sessionStorage.setItem("ether-studio-thread", id);
-      const pending: Promise<void>[] = [];
-      await readAgentStream(res, (c) => {
-        if (c.type === "text-delta" && c.delta) {
-          said += c.delta;
-          setNarration(said.split(/(?<=[.!?])\s/)[0] ?? said);
-        } else if (c.type === "tool-input-available" && c.toolCallId && c.toolName) {
-          calls.set(c.toolCallId, { name: c.toolName, input: c.input ?? {} });
-        } else if (c.type === "tool-output-available" && c.toolCallId) {
-          const call = calls.get(c.toolCallId);
-          if (call)
-            pending.push(
-              momentsForTool(call.name, call.input, c.output).then((m) =>
-                setMoments((all) => [...all, ...m]),
-              ),
-            );
-        } else if (c.type === "error" && c.errorText) {
-          setStageError(c.errorText);
+      let next: string | undefined = ask;
+      while (next && !ctl.signal.aborted) {
+        const calls = new Map<string, { name: string; input: Record<string, unknown> }>();
+        let said = "";
+        let streamError = "";
+        const res = await apiStream("/agent/turn", {
+          method: "POST",
+          signal: ctl.signal,
+          body: JSON.stringify({
+            threadId: sessionStorage.getItem("ether-studio-thread") || undefined,
+            prompt: next,
+            context: { route: "/plugins/studio" },
+          }),
+        });
+        if (ctl.signal.aborted) return;
+        const id = res.headers.get("X-Ether-Thread-Id");
+        if (id) sessionStorage.setItem("ether-studio-thread", id);
+        const pending: Promise<void>[] = [];
+        await readAgentStream(res, (c) => {
+          if (c.type === "text-delta" && c.delta) {
+            said += c.delta;
+            setNarration(said.split(/(?<=[.!?])\s/)[0] ?? said);
+          } else if (c.type === "tool-input-available" && c.toolCallId && c.toolName) {
+            calls.set(c.toolCallId, { name: c.toolName, input: c.input ?? {} });
+          } else if (c.type === "tool-output-available" && c.toolCallId) {
+            const call = calls.get(c.toolCallId);
+            if (call?.name === "studio_project_create" || call?.name === "studio_project_save") {
+              const draft = c.output?.project as { id?: string } | undefined;
+              if (draft?.id) {
+                builtProject.current = draft.id;
+                setParams((previous) => {
+                  const q = new URLSearchParams(previous);
+                  q.set("project", draft.id!);
+                  return q;
+                }, { replace: true });
+              }
+            }
+            if (call)
+              pending.push(
+                momentsForTool(call.name, call.input, c.output).then((m) =>
+                  setMoments((all) => [...all, ...m]),
+                ),
+              );
+          } else if (c.type === "error" && c.errorText) {
+            streamError = c.errorText;
+            setStageError(c.errorText);
+          }
+        });
+        await Promise.all(pending);
+        if (ctl.signal.aborted) return;
+        if (streamError) {
+          // Keep the failed stage and its error visible; never announce success.
+          return;
         }
-      });
-      await Promise.all(pending);
-      const summary = said.trim().split(/(?<=[.!?])\s/)[0];
-      setMoments((all) => [...all, { kind: "done", text: summary || t("Your draft is ready") }]);
-      window.setTimeout(() => setPhase("editor"), 1800);
+        const summary = said.trim().split(/(?<=[.!?])\s/)[0];
+        setMoments((all) => [...all, { kind: "done", text: summary || t("Your draft is ready") }]);
+        next = queued.current.shift();
+        setQueuedCount(queued.current.length);
+        const followup = next;
+        if (followup)
+          setMoments((all) => [...all, { kind: "intent", text: followup, tool: "studio" }]);
+      }
+      if (!ctl.signal.aborted) setPhase("editor");
     } catch (e) {
       if (!ctl.signal.aborted) setStageError(errorMessage(e));
-      setPhase("editor");
+    } finally {
+      abort.current = null;
+      setWorking(false);
+      // Preserve queued text for retry if the stream failed or was stopped.
+      if (queued.current.length) setPrompt(queued.current.join("\n\n"));
+      queued.current = [];
+      setQueuedCount(0);
     }
   };
 
@@ -124,8 +173,15 @@ export default function LiveStudio() {
         key={opened ?? "agent"}
         mode={mode}
         onMode={(m) => setMode(m)}
-        initialProject={opened}
+        initialProject={opened ?? builtProject.current}
+        onProject={(id) => {
+          if (params.get("project") === id) return;
+          const q = new URLSearchParams(params);
+          q.set("project", id);
+          setParams(q, { replace: true });
+        }}
         onNew={() => {
+          builtProject.current = undefined;
           sessionStorage.removeItem("ether-studio-thread");
           setMoments([]);
           const q = new URLSearchParams(params);
@@ -160,6 +216,9 @@ export default function LiveStudio() {
               {stageError ? (
                 <p role="alert" className="mx-auto max-w-4xl px-6 text-sm text-danger">
                   {stageError}
+                  <Button size="sm" variant="outline" onClick={() => setPhase("editor")}>
+                    {t("Open draft")}
+                  </Button>
                 </p>
               ) : null}
             </>
@@ -181,12 +240,17 @@ export default function LiveStudio() {
             </p>
           ) : null}
         </div>
+        {queuedCount > 0 ? (
+          <p role="status" className="px-4 py-2 text-sm text-fg-muted">
+            {t("Your follow-up will run after this step finishes.")}
+          </p>
+        ) : null}
         {mode === "code" && phase === "home" ? null : (
           <Composer
             value={prompt}
             onChange={setPrompt}
             onSend={(text) => void build(text)}
-            working={phase === "stage"}
+            working={working}
             onStop={() => {
               abort.current?.abort();
               setPhase("editor");
@@ -311,11 +375,13 @@ function LiveWorkspace({
   mode,
   onMode,
   initialProject,
+  onProject,
 }: {
   onNew: () => void;
   mode: StudioMode;
   onMode: (m: StudioMode) => void;
   initialProject?: string;
+  onProject: (id: string) => void;
 }) {
   const [messages, setMessages] = useState<AgentMessage[]>([]);
   const thread = useRef<string | undefined>(
@@ -335,12 +401,15 @@ function LiveWorkspace({
   const stamps = useRef<Record<string, string>>({});
   const dirtyRef = useRef(false);
   dirtyRef.current = dirty;
+  const onProjectRef = useRef(onProject);
+  onProjectRef.current = onProject;
   const loadProject = useCallback(async (id: string) => {
     const r = await apiFetch<{ project: StudioProject }>(
       `/plugins/studio/projects/${encodeURIComponent(id)}`,
     );
     setProject(r.project);
     chosen.current = id;
+    onProjectRef.current(id);
     if (!dirtyRef.current) {
       setFile("src/plugin.ts");
       setSource(r.project.files["src/plugin.ts"] ?? "");
@@ -363,7 +432,7 @@ function LiveWorkspace({
     const first = Object.keys(stamps.current).length === 0;
     stamps.current = Object.fromEntries(r.projects.map((p) => [p.id, p.updatedAt]));
     const follow = !dirtyRef.current && (first ? (initialProject ?? latest[0]?.id) : changed?.id);
-    const id = follow || chosen.current || latest[0]?.id;
+    const id = chosen.current || follow || latest[0]?.id;
     if (id) await loadProject(id);
   }, [loadProject]);
   useEffect(() => {
@@ -441,7 +510,7 @@ function LiveWorkspace({
     setInstallBusy(true);
     setInstallError("");
     try {
-      const r = await apiFetch<{ plugin: { id: string; name: string } }>(
+      const r = await apiFetch<{ plugin: { ID: string; Name: string } }>(
         `/plugins/studio/projects/${encodeURIComponent(project.id)}/install`,
         {
           method: "POST",
@@ -454,8 +523,8 @@ function LiveWorkspace({
       );
       setInstalling(null);
       invalidateRegistry();
-      toast.success(t("{name} is installed", { name: r.plugin.name }));
-      navigate(`/plugins/installed?plugin=${encodeURIComponent(r.plugin.id)}`);
+      toast.success(t("{name} is installed", { name: r.plugin.Name }));
+      navigate(`/plugins/installed?plugin=${encodeURIComponent(r.plugin.ID)}`);
     } catch (e) {
       setInstallError(errorMessage(e));
     } finally {

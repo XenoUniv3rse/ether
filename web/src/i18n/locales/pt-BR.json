@@ -2508,6 +2508,7 @@
   "m_0b302dba03a2d1": "Sem limite adicional",
   "m_0b312480d1ae55": "Não associado a um canal de guia.",
   "m_0b3256882c311f": "Adicionar legendas de ",
+  "m_0b348291859243": "Abrir rascunho",
   "m_0b37402f5b6f1f": "Remover indexador",
   "m_0b376ead0ba613": "Protótipo · resultados de exemplo",
   "m_0b3867a3945520": "Deixe vazio para usar {url}.",
@@ -2813,6 +2814,7 @@
   "m_0cb0de50907897": "Detalhe pré-aquecido",
   "m_0cb20425002085": "Preço do plano salvo",
   "m_0cb2a70f129830": "O Ether não conseguiu usar esse arquivo. Suas outras alterações foram salvas.",
+  "m_0cb31d24e709c7": "Sua solicitação adicional será executada quando esta etapa terminar.",
   "m_0cb5528eb45440": "Os títulos aparecem aqui depois que o Ether pede detalhes a {name}.",
   "m_0cb7d85b9f1cc5": "Atalhos de teclado",
   "m_0cb7ed3f5c23f8": "Ordenado por {sort} (crescente)",
@@ -4918,6 +4920,7 @@
   "m_1613b25e12977b": "Entrar no plex.tv",
   "m_161728e702956c": "Desistir após",
   "m_16178f0d418fbe": "Adicione os canais e o guia dele ao Live TV.",
+  "m_161818c9b503c5": "Rascunhos salvos",
   "m_1618efe453815c": "Preparando…",
   "m_1619c83e8f95c7": "Excluir fonte",
   "m_161a6603b07607": "{label} em {unit}",
@@ -7113,5 +7116,6 @@
   "m_1ffb9d60560b3f": "De um cluster",
   "m_1ffceea1081742": "dvd absoluta exibição ordenação",
   "m_1ffe73d99814f5": "IDs de hub, tipos ou globs",
-  "m_1ffeee0f0cedfc": "URL alternativa do banco de dados (opcional)"
+  "m_1ffeee0f0cedfc": "URL alternativa do banco de dados (opcional)",
+  "Settings need a referenced schema and code that reads them. Secrets use ether.secret.get(name); never copy them into ordinary settings or logs.": "As configurações precisam de um esquema referenciado e de código que as leia. Segredos usam ether.secret.get(name); nunca os copie para configurações comuns ou logs."
 }

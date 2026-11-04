@@ -2445,6 +2445,7 @@
   "m_0b302dba03a2d1": "Ingen ekstra grense",
   "m_0b312480d1ae55": "Ikke koblet til en guidekanal.",
   "m_0b3256882c311f": "Legg til undertekster fra ",
+  "m_0b348291859243": "Åpne utkast",
   "m_0b37402f5b6f1f": "Fjern indekserer",
   "m_0b376ead0ba613": "Prototype · eksempelresultater",
   "m_0b3867a3945520": "La stå tomt for å bruke {url}.",
@@ -2743,6 +2744,7 @@
   "m_0cb0de50907897": "Detalj forhåndsvarmet",
   "m_0cb20425002085": "Abonnementspris lagret",
   "m_0cb2a70f129830": "Ether kunne ikke bruke den filen. De andre endringene dine er lagret.",
+  "m_0cb31d24e709c7": "Tilleggsforespørselen din kjøres når dette trinnet er ferdig.",
   "m_0cb5528eb45440": "Titler vises her etter at Ether spør {name} om opplysninger.",
   "m_0cb7d85b9f1cc5": "Hurtigtaster",
   "m_0cb7ed3f5c23f8": "Sortert etter {sort} (stigende)",
@@ -4793,6 +4795,7 @@
   "m_1613b25e12977b": "Logg inn på plex.tv",
   "m_161728e702956c": "Gi opp etter",
   "m_16178f0d418fbe": "Legg kanalene og guiden til i Live TV.",
+  "m_161818c9b503c5": "Lagrede utkast",
   "m_1618efe453815c": "Forbereder …",
   "m_1619c83e8f95c7": "Slett kilde",
   "m_161a6603b07607": "{label} i {unit}",
@@ -6933,5 +6936,6 @@
   "m_1ffb9d60560b3f": "Fra en klynge",
   "m_1ffceea1081742": "dvd absolutt sendt rekkefølge",
   "m_1ffe73d99814f5": "Hub-ID-er, typer eller glob-mønstre",
-  "m_1ffeee0f0cedfc": "Overstyring av database-URL (valgfritt)"
+  "m_1ffeee0f0cedfc": "Overstyring av database-URL (valgfritt)",
+  "Settings need a referenced schema and code that reads them. Secrets use ether.secret.get(name); never copy them into ordinary settings or logs.": "Innstillinger trenger et referert skjema og kode som leser dem. Hemmeligheter bruker ether.secret.get(name); kopier dem aldri til vanlige innstillinger eller logger."
 }

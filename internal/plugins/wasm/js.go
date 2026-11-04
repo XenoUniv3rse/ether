@@ -74,6 +74,7 @@ globalThis.ether = (() => {
     abort: (msg) => { throw new Error("__ETHER_FAULT__" + JSON.stringify({ code: "aborted", message: String(msg == null ? "aborted" : msg) })); },
     kv: { get: (k) => call("kv.get", [k]), put: (k, v) => call("kv.put", [k, v]),
           delete: (k) => call("kv.delete", [k]), list: (p) => call("kv.list", [p == null ? "" : p]) },
+    settings: { get: () => call("settings.get", []) },
     secret: { get: (n) => call("secret.get", [n]) },
     http: { fetch: (req) => call("http.fetch", [req]) },
     catalog: { search: (q) => call("catalog.search", [q]), get: (id) => call("catalog.get", [id]) },

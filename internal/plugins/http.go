@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/braedonsaunders/ether/internal/plugins/wasm"
 	"github.com/braedonsaunders/ether/internal/viewspec"
 )
 
@@ -183,7 +184,13 @@ func writeErr(w http.ResponseWriter, status int, code, msg string, fields []Fiel
 func (m *Manager) fail(w http.ResponseWriter, err error) {
 	var ve *ValidationError
 	var pie *PermissionIncreaseError
+	var runtimeError *wasm.Error
+	var input *CollectionInputError
 	switch {
+	case errors.As(err, &input):
+		writeErr(w, http.StatusBadRequest, "validation", input.Message, nil)
+	case errors.As(err, &runtimeError) && runtimeError.Status == wasm.StatusInvalidInput:
+		writeErr(w, http.StatusBadRequest, "validation", runtimeError.Message, nil)
 	case errors.Is(err, ErrNotFound):
 		writeErr(w, http.StatusNotFound, "not_found", "That plugin is not installed.", nil)
 	case errors.As(err, &ve):

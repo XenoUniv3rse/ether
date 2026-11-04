@@ -2445,6 +2445,7 @@
   "m_0b302dba03a2d1": "Ei lisärajoitusta",
   "m_0b312480d1ae55": "Ei yhdistetty oppaan kanavaan.",
   "m_0b3256882c311f": "Lisää tekstityksiä kohteesta ",
+  "m_0b348291859243": "Avaa luonnos",
   "m_0b37402f5b6f1f": "Poista indeksoija",
   "m_0b376ead0ba613": "Prototyyppi · esimerkkitulokset",
   "m_0b3867a3945520": "Jätä tyhjäksi käyttääksesi osoitetta {url}.",
@@ -2743,6 +2744,7 @@
   "m_0cb0de50907897": "Tiedot esilämmitetty",
   "m_0cb20425002085": "Paketin hinta tallennettu",
   "m_0cb2a70f129830": "Ether ei voinut käyttää tiedostoa. Muut muutoksesi on tallennettu.",
+  "m_0cb31d24e709c7": "Lisäpyyntösi suoritetaan tämän vaiheen valmistuttua.",
   "m_0cb5528eb45440": "Nimikkeet näkyvät tässä, kun Ether pyytää tietoja palvelulta {name}.",
   "m_0cb7d85b9f1cc5": "Pikanäppäimet",
   "m_0cb7ed3f5c23f8": "Lajittelu: {sort} (nouseva)",
@@ -4793,6 +4795,7 @@
   "m_1613b25e12977b": "Kirjaudu plex.tv:hen",
   "m_161728e702956c": "Luovuta, kun on kulunut",
   "m_16178f0d418fbe": "Lisää sen kanavat ja opas Live TV:hen.",
+  "m_161818c9b503c5": "Tallennetut luonnokset",
   "m_1618efe453815c": "Valmistellaan…",
   "m_1619c83e8f95c7": "Poista lähde",
   "m_161a6603b07607": "{label} yksikössä {unit}",
@@ -6933,5 +6936,6 @@
   "m_1ffb9d60560b3f": "Klusterista",
   "m_1ffceea1081742": "dvd absoluuttinen esitys järjestys",
   "m_1ffe73d99814f5": "Hub-tunnukset, lajit tai glob-mallit",
-  "m_1ffeee0f0cedfc": "Tietokannan URL-osoitteen ohitus (valinnainen)"
+  "m_1ffeee0f0cedfc": "Tietokannan URL-osoitteen ohitus (valinnainen)",
+  "Settings need a referenced schema and code that reads them. Secrets use ether.secret.get(name); never copy them into ordinary settings or logs.": "Asetukset tarvitsevat viitatun skeeman ja niitä lukevan koodin. Salaisuudet luetaan kutsulla ether.secret.get(name); älä koskaan kopioi niitä tavallisiin asetuksiin tai lokeihin."
 }

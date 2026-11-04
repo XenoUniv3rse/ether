@@ -2445,6 +2445,7 @@
   "m_0b302dba03a2d1": "Kein zusätzliches Limit",
   "m_0b312480d1ae55": "Keinem Programmkanal zugeordnet.",
   "m_0b3256882c311f": "Untertitel hinzufügen von ",
+  "m_0b348291859243": "Entwurf öffnen",
   "m_0b37402f5b6f1f": "Indexer entfernen",
   "m_0b376ead0ba613": "Prototyp · Beispielergebnisse",
   "m_0b3867a3945520": "Leer lassen, um {url} zu verwenden.",
@@ -2743,6 +2744,7 @@
   "m_0cb0de50907897": "Detail vorgewärmt",
   "m_0cb20425002085": "Tarifpreis gespeichert",
   "m_0cb2a70f129830": "Ether konnte diese Datei nicht verwenden. Deine anderen Änderungen sind gespeichert.",
+  "m_0cb31d24e709c7": "Deine Ergänzung wird nach Abschluss dieses Schritts ausgeführt.",
   "m_0cb5528eb45440": "Titel erscheinen hier, nachdem Ether {name} nach Details gefragt hat.",
   "m_0cb7d85b9f1cc5": "Tastenkürzel",
   "m_0cb7ed3f5c23f8": "Sortiert nach {sort} (aufsteigend)",
@@ -4793,6 +4795,7 @@
   "m_1613b25e12977b": "Bei plex.tv anmelden",
   "m_161728e702956c": "Aufgeben nach",
   "m_16178f0d418fbe": "Seine Sender und den Programmführer zu Live TV hinzufügen.",
+  "m_161818c9b503c5": "Gespeicherte Entwürfe",
   "m_1618efe453815c": "Wird vorbereitet…",
   "m_1619c83e8f95c7": "Quelle löschen",
   "m_161a6603b07607": "{label} in {unit}",
@@ -6933,5 +6936,6 @@
   "m_1ffb9d60560b3f": "Aus einem Cluster",
   "m_1ffceea1081742": "dvd absolut ausgestrahlt Reihenfolge",
   "m_1ffe73d99814f5": "Hub-IDs, Arten oder Globs",
-  "m_1ffeee0f0cedfc": "Datenbank-URL überschreiben (optional)"
+  "m_1ffeee0f0cedfc": "Datenbank-URL überschreiben (optional)",
+  "Settings need a referenced schema and code that reads them. Secrets use ether.secret.get(name); never copy them into ordinary settings or logs.": "Einstellungen benötigen ein referenziertes Schema und Code, der sie liest. Geheimnisse werden mit ether.secret.get(name) gelesen; kopiere sie niemals in normale Einstellungen oder Protokolle."
 }

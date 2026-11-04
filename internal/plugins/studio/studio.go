@@ -1178,6 +1178,33 @@ func (h *devHost) CallHost(ctx context.Context, name string, raw json.RawMessage
 		return nil, wasm.Forbidden("studio project not found")
 	}
 
+	// Real catalogue reads must obey the same declaration as installed plugins.
+	// Preview is an owner surface, but silently granting access hides defects.
+	if name == "catalog.search" || name == "catalog.get" || name == "secret.get" {
+		man, err := plugins.ParseManifest([]byte(p.Files["manifest.json"]))
+		if err != nil || man.Ether == nil {
+			h.s.mu.Unlock()
+			return nil, wasm.Forbidden("a valid permission declaration is required")
+		}
+		if name == "secret.get" {
+			declared := false
+			for _, key := range man.Ether.Permissions.Secrets {
+				if key == str(0) {
+					declared = true
+				}
+			}
+			h.s.mu.Unlock()
+			if !declared {
+				return nil, wasm.Forbidden("secret access is not declared")
+			}
+			return nil, &wasm.Fault{Code: "unavailable", Message: "secrets are not available in Studio preview"}
+		}
+		if man.Ether.Permissions.Catalog != "read" {
+			h.s.mu.Unlock()
+			return nil, wasm.Forbidden("catalogue read access is not declared")
+		}
+	}
+
 	recordJournal := func(op, detail string, inverse any) {
 		p.nextJournID++
 		invBytes, _ := json.Marshal(inverse)
@@ -1209,6 +1236,20 @@ func (h *devHost) CallHost(ctx context.Context, name string, raw json.RawMessage
 		}
 		h.s.mu.Unlock()
 		return json.RawMessage("null"), nil
+
+	case "settings.get":
+		man, err := plugins.ParseManifest([]byte(p.Files["manifest.json"]))
+		if err != nil || man.Ether == nil {
+			h.s.mu.Unlock()
+			return nil, wasm.Forbidden("a valid settings declaration is required")
+		}
+		schema := man.Ether.Settings
+		if ref := settingsRefOf(schema); ref != "" {
+			schema = json.RawMessage(p.Files[ref])
+		}
+		settings := plugins.NonSecretSettings(p.Settings, schema, man.Ether.Permissions.Secrets)
+		h.s.mu.Unlock()
+		return json.Marshal(settings)
 
 	case "kv.get":
 		v, exists := p.kv[str(0)]

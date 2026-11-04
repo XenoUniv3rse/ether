@@ -2382,6 +2382,7 @@
   "m_0b302dba03a2d1": "没有额外限制",
   "m_0b312480d1ae55": "未映射到指南频道。",
   "m_0b3256882c311f": "从以下位置添加字幕： ",
+  "m_0b348291859243": "打开草稿",
   "m_0b37402f5b6f1f": "移除索引器",
   "m_0b376ead0ba613": "原型 · 示例结果",
   "m_0b3867a3945520": "留空则使用 {url}。",
@@ -2673,6 +2674,7 @@
   "m_0cb0de50907897": "详情预热",
   "m_0cb20425002085": "套餐价格已保存",
   "m_0cb2a70f129830": "Ether 无法使用该文件。你的其他更改已保存。",
+  "m_0cb31d24e709c7": "此步骤完成后，将执行您的补充请求。",
   "m_0cb5528eb45440": "Ether 向 {name} 请求详情后，影片会显示在这里。",
   "m_0cb7d85b9f1cc5": "键盘快捷键",
   "m_0cb7ed3f5c23f8": "按{sort}升序排列",
@@ -4668,6 +4670,7 @@
   "m_1613b25e12977b": "登录 plex.tv",
   "m_161728e702956c": "超时放弃时间",
   "m_16178f0d418fbe": "将它的频道和指南添加到直播电视。",
+  "m_161818c9b503c5": "已保存的草稿",
   "m_1618efe453815c": "准备中…",
   "m_1619c83e8f95c7": "删除来源",
   "m_161a6603b07607": "{label}（单位：{unit}）",
@@ -6754,5 +6757,6 @@
   "m_1ffb9d60560b3f": "来自集群",
   "m_1ffceea1081742": "dvd 绝对 播出 顺序 排序",
   "m_1ffe73d99814f5": "Hub ID、类型或通配符",
-  "m_1ffeee0f0cedfc": "数据库 URL 覆盖（可选）"
+  "m_1ffeee0f0cedfc": "数据库 URL 覆盖（可选）",
+  "Settings need a referenced schema and code that reads them. Secrets use ether.secret.get(name); never copy them into ordinary settings or logs.": "设置需要引用的结构定义和读取设置的代码。机密信息使用 ether.secret.get(name)；切勿将其复制到普通设置或日志中。"
 }

@@ -467,7 +467,10 @@ func (b hostBridge) CallHost(ctx context.Context, name string, raw json.RawMessa
 }
 
 func mapHostError(err error) error {
+	var input *CollectionInputError
 	switch {
+	case errors.As(err, &input):
+		return &wasm.Fault{Code: string(wasm.StatusInvalidInput), Message: input.Message}
 	case errors.Is(err, ErrPermissionDenied):
 		return wasm.Forbidden(err.Error())
 	case errors.Is(err, context.DeadlineExceeded):

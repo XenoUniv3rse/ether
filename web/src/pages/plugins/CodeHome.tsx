@@ -20,7 +20,7 @@ import { t } from "../../i18n";
 import { apiFetch, errorMessage } from "../../lib/api";
 import { Reference } from "./CodeStudio";
 import { PaneResizer, useStudioPanes } from "./code/panes";
-import type { StudioProject } from "./develop/types";
+import type { StudioProject, StudioProjectSummary } from "./develop/types";
 
 const CodeMirrorPane = lazy(() => import("./code/CodeMirrorPane"));
 
@@ -89,6 +89,7 @@ const ENTRY = "src/plugin.ts";
  * read and change its code, and the first save turns it into a draft.
  */
 export function CodeHome({ onOpenProject }: { onOpenProject: (id: string) => void }) {
+  const [drafts, setDrafts] = useState<StudioProjectSummary[]>([]);
   const [templates, setTemplates] = useState<Template[]>([]);
   const [starter, setStarter] = useState(STARTERS[0]!.id);
   const [file, setFile] = useState(ENTRY);
@@ -98,6 +99,13 @@ export function CodeHome({ onOpenProject }: { onOpenProject: (id: string) => voi
   const [error, setError] = useState("");
 
   useEffect(() => {
+    apiFetch<{ projects: StudioProjectSummary[] }>("/plugins/studio/projects")
+      .then((r) =>
+        setDrafts(
+          [...r.projects].sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt)),
+        ),
+      )
+      .catch((e) => setError(errorMessage(e)));
     apiFetch<{ templates: Template[] }>("/plugins/studio/templates")
       .then((r) => setTemplates(r.templates))
       .catch((e) => setError(errorMessage(e)));
@@ -154,6 +162,33 @@ export function CodeHome({ onOpenProject }: { onOpenProject: (id: string) => voi
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
+      {drafts.length > 0 ? (
+        <section
+          aria-label={t("Saved drafts")}
+          className="shrink-0 border-b border-border px-4 py-3"
+        >
+          <h2 className="mb-2 text-sm font-semibold">{t("Saved drafts")}</h2>
+          <div className="flex max-h-28 flex-wrap gap-2 overflow-y-auto">
+            {drafts.map((draft) => (
+              <Button
+                key={draft.id}
+                size="sm"
+                variant="outline"
+                onClick={() => {
+                  if (
+                    Object.keys(edits).length &&
+                    !window.confirm(t("Discard your changes to this starter?"))
+                  )
+                    return;
+                  onOpenProject(draft.id);
+                }}
+              >
+                {draft.name}
+              </Button>
+            ))}
+          </div>
+        </section>
+      ) : null}
       <div ref={panes.grid} className={panes.className} style={panes.style}>
         <aside
           aria-label={t("Start from")}

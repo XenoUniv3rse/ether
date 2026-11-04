@@ -49,11 +49,13 @@ export function CatalogueTab({
   onInstalled,
   onSelectInstalled,
   onOpenInstall,
+  onBrowseDirectories,
 }: {
   installedIds: Set<string>;
   onInstalled: (pluginId: string) => void;
   onSelectInstalled: (pluginId: string) => void;
   onOpenInstall: () => void;
+  onBrowseDirectories?: () => void;
 }) {
   const { locale } = useLocale();
   const [entries, setEntries] = useState<CatalogueEntry[]>([]);
@@ -187,9 +189,16 @@ export function CatalogueTab({
             "You can still install plugins directly from a manifest link, a GitHub repository, or a package file.",
           )}
           action={
-            <Button size="sm" onClick={onOpenInstall}>
-              <Plus size={14} /> {t("Install from a link")}
-            </Button>
+            <div className="flex flex-wrap justify-center gap-2">
+              {onBrowseDirectories ? (
+                <Button size="sm" variant="outline" onClick={onBrowseDirectories}>
+                  {t("Browse plugin directories")}
+                </Button>
+              ) : null}
+              <Button size="sm" onClick={onOpenInstall}>
+                <Plus size={14} /> {t("Install from a link")}
+              </Button>
+            </div>
           }
         />
       </Section>

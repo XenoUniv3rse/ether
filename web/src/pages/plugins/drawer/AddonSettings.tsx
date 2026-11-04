@@ -98,7 +98,15 @@ function serverValues(cfg: AddonConfig): Record<string, unknown> {
  * carried in the link are shown instead. Every change is tried before it
  * is saved.
  */
-export function AddonSettings({ detail, onSaved }: { detail: PluginDetail; onSaved: () => void }) {
+export function AddonSettings({
+  detail,
+  onSaved,
+  showEmpty = true,
+}: {
+  detail: PluginDetail;
+  onSaved: () => void;
+  showEmpty?: boolean;
+}) {
   const [cfg, setCfg] = useState<AddonConfig | null>(null);
   const [values, setValues] = useState<Record<string, unknown>>({});
   const [touched, setTouched] = useState<Record<string, unknown>>({});
@@ -112,10 +120,12 @@ export function AddonSettings({ detail, onSaved }: { detail: PluginDetail; onSav
   const load = useCallback(async () => {
     try {
       const c = await apiFetch<AddonConfig>(base);
+      setError("");
       setCfg(c);
       setValues(serverValues(c));
       setResult(null);
-    } catch {
+    } catch (e) {
+      setError(errorMessage(e));
       setCfg(null);
     }
   }, [base]);
@@ -128,7 +138,18 @@ export function AddonSettings({ detail, onSaved }: { detail: PluginDetail; onSav
   const wantLive = Boolean(cfg?.configurable && cfg.layer !== "declared" && cfg.layer !== "none");
   const live = useLiveForm(openPage, wantLive ? generation + 1 : 0);
 
-  if (!cfg || !cfg.configurable) return null;
+  if (!cfg)
+    return error ? (
+      <p role="alert" className="text-sm text-danger">
+        {error}
+      </p>
+    ) : null;
+  if (!cfg.configurable)
+    return showEmpty ? (
+      <Section title={t("Settings")}>
+        <p className="text-sm text-fg-muted">{t("Nothing to set up. It works as installed.")}</p>
+      </Section>
+    ) : null;
 
   const run = async (kind: "test" | "save", body: () => Promise<object | null>) => {
     setBusy(kind);

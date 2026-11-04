@@ -1,3 +1,4 @@
+import { pluginCollectionHref } from "../../collections/links";
 import { DashboardPanel } from "@braedonsaunders/appkit-dashboard/primitives";
 import { Badge, Button, Skeleton, cn } from "@braedonsaunders/appkit-ui";
 import {
@@ -475,7 +476,13 @@ function CatalogueNow({
         catalog: textOf(current!.label).split("·")[0]!.trim(),
       })}
       icon={<Library size={16} />}
-      actions={<OpenLink to="/collections/new" label={t("Make a collection")} onClose={onClose} />}
+      actions={
+        <OpenLink
+          to={pluginCollectionHref(current!.id, textOf(current!.label))}
+          label={t("Make a collection")}
+          onClose={onClose}
+        />
+      }
     >
       {lists.length > 1 ? (
         <div className="mb-3 flex flex-wrap gap-1.5" role="group" aria-label={t("Catalogues")}>

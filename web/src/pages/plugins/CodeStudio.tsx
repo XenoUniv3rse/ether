@@ -572,6 +572,18 @@ function Activity({ project, epoch }: { project: StudioProject; epoch: number })
 }
 
 const ROUTES: Record<string, [string, string][]> = {
+  list: [
+    [
+      "GET /catalog/{type}/{catalogId}.json",
+      "{ metas: [{ id, type, name, poster?, year? }] }; catalogId matches manifest catalogs and contributes.listSources.catalog",
+    ],
+    ["GET /ether/view/{page}", "{ title, spec, data }; route matches contributes.pages.route"],
+    ["POST /ether/action/{action}", "{ toast?, refresh? }; action matches the ViewSpec action"],
+    [
+      "POST /ether/configure",
+      "Request body: settings object. Response body: { errors: { field: message } }",
+    ],
+  ],
   channels: [
     [
       "GET /ether/channels.json",
@@ -643,13 +655,35 @@ export function Reference({ template }: { template: string }) {
               {t("(plugin drafts: asks the plugin it was made from, with its link kept sealed)")}
             </span>
           </li>
-          <li>ether.kv.get / put / delete / list</li>
+          <li>ether.settings.get() → Record&lt;string, unknown&gt;</li>
+          <li>ether.kv.get(key: string) → string | null</li>
+          <li>ether.kv.put(key: string, value: string) → void</li>
+          <li>ether.kv.delete(key: string) → void</li>
+          <li>ether.kv.list(prefix?: string) → string[]</li>
           <li>ether.secret.get(name)</li>
           <li>ether.log(...)</li>
         </ul>
         <p className="text-fg-muted">
           {t(
             "Network calls reach only the hosts listed in manifest.json permissions. Calls are synchronous; waiting on a host does not count against the plugin's budget.",
+          )}
+        </p>
+      </section>
+      <section className="space-y-2">
+        <h3 className="text-sm font-semibold text-fg">{t("Settings")}</h3>
+        <pre className="overflow-x-auto whitespace-pre-wrap rounded-lg border border-border p-2.5 font-mono text-fg-muted">{`// manifest.json → ether.settings
+{ "$ref": "settings.schema.json" }
+// settings.schema.json
+{ "fields": [{ "key": "maxItems", "kind": "number", "label": "$t:max_items" }] }
+// handle(req): read saved non-secret values, with a default
+const maxItems = Number(ether.settings.get().maxItems ?? 12);
+// POST /ether/configure: req.body contains proposed settings
+// Return { status: 200, body: { errors: {} } } or field errors.
+// State: ether.kv.put("counter", String(next));
+// Read: Number(ether.kv.get("counter") ?? "0");`}</pre>
+        <p className="text-fg-muted">
+          {t(
+            "Settings need a referenced schema and code that reads them. Secrets use ether.secret.get(name); never copy them into ordinary settings or logs.",
           )}
         </p>
       </section>

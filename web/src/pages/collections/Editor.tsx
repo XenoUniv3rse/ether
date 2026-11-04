@@ -36,7 +36,7 @@ import { Segmented } from "../../components/fields";
 import { PosterGrid } from "../../components/Poster";
 import { api, ApiError, errorMessage, isAbort } from "../../lib/api";
 import { t, tn } from "../../i18n";
-import type { CollectionPreview, CollectionSpec } from "../../lib/contract";
+import type { CollectionPreview, CollectionSpec, Source } from "../../lib/contract";
 import { formatNumber, relativeTime } from "../../lib/format";
 import {
   clearDraft,
@@ -102,6 +102,8 @@ export default function CollectionEditor() {
   const location = useLocation();
   const navigate = useNavigate();
   const templateId = search.get("template");
+  const pluginSource = search.get("pluginSource");
+  const pluginName = search.get("name") ?? "";
   const pickAddonCatalog = !id && search.get("source") === "addonCatalog";
   // The picker opens once, with the first Build panel; switching tabs back
   // later does not reopen it.
@@ -127,13 +129,16 @@ export default function CollectionEditor() {
       if (!tpl) throw new ApiError(404, "not_found", t("That template no longer exists."));
       return normalizeSpec({ ...tpl.spec, id: undefined, enabled: false, templateId: tpl.id });
     }
+    if (pluginSource?.startsWith("plugin:")) {
+      return { ...blankSpec(), name: pluginName, sources: [{ kind: pluginSource } as Source] };
+    }
     if (pickAddonCatalog) {
       // A Home row from an add-on catalog: the catalog is chosen in Build.
       const spec = blankSpec();
       return { ...spec, targets: { ...spec.targets, homeRow: true } };
     }
     return blankSpec();
-  }, [id, templateId]);
+  }, [id, templateId, pluginSource, pluginName]);
 
   const config = useAsync(() => api.getConfig(), []);
   const region = config.data?.catalog.region || "US";

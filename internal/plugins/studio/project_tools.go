@@ -17,7 +17,7 @@ func ProjectTools(s *Studio) []tools.Tool {
 	if s == nil {
 		return nil
 	}
-	read := tools.Tool{Name: "studio_project_read", Title: "Read Studio draft", Description: "Read a saved Studio project and its source files, or list projects when id is omitted. Files larger than 6 KB are left out of the overview; read one with file (and offset for the next part).", ReadOnly: true, Audience: tools.AudienceOwner, Owner: "builtin", InputSchema: json.RawMessage(`{"type":"object","properties":{"id":{"type":"string"},"file":{"type":"string"},"offset":{"type":"integer","minimum":0}},"additionalProperties":false}`)}
+	read := tools.Tool{Name: "studio_project_read", Title: "Read Studio draft", Description: "Read a saved Studio project and its source files, or list projects when id is omitted. Native handlers read saved non-secret values with synchronous ether.settings.get(); controls require a manifest ether.settings $ref and a settings.schema.json fields array. KV get returns string or null, put accepts a string, list accepts an optional prefix. See the starter files before changing contracts. Files larger than 6 KB are left out of the overview; read one with file (and offset for the next part).", ReadOnly: true, Audience: tools.AudienceOwner, Owner: "builtin", InputSchema: json.RawMessage(`{"type":"object","properties":{"id":{"type":"string"},"file":{"type":"string"},"offset":{"type":"integer","minimum":0}},"additionalProperties":false}`)}
 	read.Execute = func(ctx context.Context, _ tools.Principal, input map[string]any) (tools.Result, error) {
 		id, err := optString(input, "id", 160)
 		if err != nil {

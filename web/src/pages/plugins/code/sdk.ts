@@ -157,6 +157,8 @@ declare const ether: {
     delete(key: string): void;
     list(prefix?: string): string[];
   };
+  /** Saved non-secret settings. Apply code defaults for unset values. */
+  settings: { get(): Record<string, unknown> };
   secret: { get(name: string): string };
   /** Reaches only hosts listed in the manifest's network permissions. */
   http: { fetch(req: EtherFetchRequest): EtherFetchResponse };
