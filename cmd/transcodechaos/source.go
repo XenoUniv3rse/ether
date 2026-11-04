@@ -47,7 +47,7 @@ func (s *faultSource) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-	case "stall":
+	case "stall", "long-stall":
 		if n == 1 {
 			w.Header().Set("Content-Length", strconv.Itoa(len(s.good)))
 			w.WriteHeader(http.StatusOK)
@@ -55,8 +55,12 @@ func (s *faultSource) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			if f, ok := w.(http.Flusher); ok {
 				f.Flush()
 			}
+			delay := 2 * time.Second
+			if s.fault == "long-stall" {
+				delay = 15 * time.Second
+			}
 			select {
-			case <-time.After(2 * time.Second):
+			case <-time.After(delay):
 				_, _ = w.Write(s.good[len(s.good)/4:])
 			case <-r.Context().Done():
 			}
