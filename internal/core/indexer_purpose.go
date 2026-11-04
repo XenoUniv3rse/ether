@@ -12,6 +12,7 @@ const (
 	IndexerPurposeFeed         = "feed"         // release-feed polls
 	IndexerPurposeAvailability = "availability" // background availability checks
 	IndexerPurposePlayback     = "playback"     // a viewer pressed Play (incl. failover)
+	IndexerPurposeDetail       = "detail"       // a viewer opened a playable detail page
 	IndexerPurposeWarmup       = "warmup"       // warm-ups, prefetch, managed cache, watchlist
 	IndexerPurposeRescue       = "rescue"       // second-pass rescue searches
 	IndexerPurposeCaps         = "caps"         // capability (t=caps) fetches

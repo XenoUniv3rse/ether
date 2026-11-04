@@ -3,6 +3,7 @@ package plex
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -174,6 +175,23 @@ func (s *Server) handleMetadata(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 			if len(keys) == 1 && isPlayable(t.Type) {
+				// Version discovery belongs to the open detail page, not to
+				// admission of the independent playback warm-up. Start it first
+				// so a warm-up that needs a search can join the same work.
+				if pr.User != nil {
+					if refiller, ok := s.d.Variants.(core.SearchCacheRefiller); ok {
+						// Repeated metadata fetches while the same page is being
+						// watched must not retry a failed search on every fetch.
+						watchKey := fmt.Sprintf("%d|%s|%d", pr.User.ID, pr.ClientID, t.Key)
+						s.variantWatch.mu.Lock()
+						watching := s.variantWatch.pending[watchKey]
+						s.variantWatch.mu.Unlock()
+						if !watching {
+							pr.detailRefillRequested = true
+							pr.detailRefill = refiller.RefillSearchCache(t)
+						}
+					}
+				}
 				s.warmDetail(ctx, pr, t)
 			}
 			if len(keys) == 1 {

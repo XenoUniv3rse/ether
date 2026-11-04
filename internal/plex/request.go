@@ -47,6 +47,11 @@ type Request struct {
 
 	User *core.User
 
+	// Set only on a single playable detail request. A nil completion means
+	// the refill was not admitted (or the search cache was already warm).
+	detailRefillRequested bool
+	detailRefill          <-chan struct{}
+
 	// Capability is set when authentication used a stream grant or other
 	// session-scoped credential, not a user token. Only transcode
 	// session/segment handlers may serve a capability-scoped request.
