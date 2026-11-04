@@ -45,6 +45,39 @@ var ErrNotCached = fmt.Errorf("not cached by any debrid provider: %w", ErrNotAva
 // account to download (cached-only off): not playable yet, but it will be.
 var ErrDownloadQueued = fmt.Errorf("sent to the debrid service to download: %w", ErrNotCached)
 
+// ErrDownloadRefused reports that an uncached torrent could not be sent to
+// a debrid account to download (cached-only off): the service refused it
+// (a blocked file, a refused add) or the add failed. Nothing is downloading.
+var ErrDownloadRefused = fmt.Errorf("the debrid service did not take it to download: %w", ErrNotCached)
+
+// ErrDownloadLimit is ErrDownloadRefused because the debrid account is at
+// its active-download limit (Real-Debrid too_many_active_downloads, TorBox
+// ACTIVE_LIMIT): no release of any title can start downloading for now.
+var ErrDownloadLimit = fmt.Errorf("the debrid account is at its active-download limit: %w", ErrDownloadRefused)
+
+// UncachedError is a resolve that failed only because no debrid account
+// holds a torrent release of the title. It wraps the per-release errors and
+// says what the owner's settings and other sources contributed, so a player
+// message can name the real reason.
+type UncachedError struct {
+	Err error
+	// CachedOnly is the owner's "Cached torrents only" setting at the time.
+	CachedOnly bool
+	// Usenet is what Usenet contributed: UsenetNone (a Usenet provider is
+	// set up but the search found no Usenet release), UsenetFailed (Usenet
+	// releases were found and none played), or "" (no Usenet provider).
+	Usenet string
+}
+
+// UncachedError.Usenet values.
+const (
+	UsenetNone   = "none"
+	UsenetFailed = "failed"
+)
+
+func (e *UncachedError) Error() string { return e.Err.Error() }
+func (e *UncachedError) Unwrap() error { return e.Err }
+
 // ErrNoSources reports that there is nothing to search: no enabled indexer
 // at all. A configuration problem, not proof a title has no release, so
 // callers must not record the title as unavailable.

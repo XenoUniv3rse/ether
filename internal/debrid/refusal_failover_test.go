@@ -154,8 +154,10 @@ func TestRefusedTorrentIsNotQueuedForDownload(t *testing.T) {
 	if _, err := solo.Acquire(t.Context(), rel); !errors.Is(err, core.ErrNotCached) || errors.Is(err, core.ErrDownloadQueued) {
 		t.Fatalf("refused torrent reported as %v", err)
 	}
-	if _, err := solo.Acquire(t.Context(), rel); !errors.Is(err, core.ErrNotCached) || errors.Is(err, core.ErrDownloadQueued) {
-		t.Fatalf("second play: %v", err)
+	for i := range 2 {
+		if _, err := solo.QueueDownload(t.Context(), rel); !errors.Is(err, core.ErrDownloadRefused) || errors.Is(err, core.ErrDownloadQueued) {
+			t.Fatalf("queue %d: %v", i, err)
+		}
 	}
 	if f.addCount(h1) != 1 {
 		t.Fatalf("refused torrent queued on Real-Debrid: %d adds", f.addCount(h1))
@@ -164,12 +166,15 @@ func TestRefusedTorrentIsNotQueuedForDownload(t *testing.T) {
 	f2, rd2 := newRefusingRD(t, h1)
 	tb := newFakeProvider("torbox", newMediaServer(t, 1<<10), movieFiles(1<<30))
 	svc := refusalService(t, rd2, tb, false, &now)
+	if _, err := svc.Acquire(t.Context(), rel); !errors.Is(err, core.ErrNotCached) || errors.Is(err, core.ErrDownloadQueued) {
+		t.Fatalf("check: %v", err)
+	}
 	for i := range 2 {
-		if _, err := svc.Acquire(t.Context(), rel); !errors.Is(err, core.ErrDownloadQueued) {
+		if _, err := svc.QueueDownload(t.Context(), rel); !errors.Is(err, core.ErrDownloadQueued) {
 			t.Fatalf("play %d: %v", i, err)
 		}
 	}
-	if f2.addCount(h1) != 1 || tb.callCount("acquire") < 2 {
-		t.Fatalf("Real-Debrid adds %d, TorBox acquires %d", f2.addCount(h1), tb.callCount("acquire"))
+	if f2.addCount(h1) != 1 || tb.adds != 1 || tb.callCount("acquire") < 2 {
+		t.Fatalf("Real-Debrid adds %d, TorBox adds %d, acquires %d", f2.addCount(h1), tb.adds, tb.callCount("acquire"))
 	}
 }

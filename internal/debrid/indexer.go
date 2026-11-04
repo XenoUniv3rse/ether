@@ -3,6 +3,7 @@ package debrid
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sort"
 	"sync"
 	"time"
@@ -168,9 +169,15 @@ func (x *Indexer) SearchWith(ctx context.Context, req core.SearchRequest, arrive
 	// With cached-only off an uncached torrent is still playable later
 	// (playback sends it to download), so it stays, ranked after cached ones.
 	dropUncached := definitive && x.svc.Config().CachedOnly
+	explain := x.explainUncached(out, cached)
+	var explained []string // ids kept only to explain a not-cached failure
 	for _, r := range out {
 		if r.Protocol == core.ProtocolTorrent && r.InfoHash != "" && dropUncached && !cached[r.InfoHash] {
-			continue
+			if explain == 0 {
+				continue
+			}
+			explain--
+			explained = append(explained, r.ID)
 		}
 		if r.Protocol == core.ProtocolTorrent && (cached[r.InfoHash] || x.svc.KnownCached(r.InfoHash)) {
 			anyCached = true
@@ -209,6 +216,10 @@ func (x *Indexer) SearchWith(ctx context.Context, req core.SearchRequest, arrive
 				kept = append(kept, r)
 			}
 		}
+		if len(explained) > 0 && slices.ContainsFunc(packs, func(r core.Release) bool { return packCached[r.InfoHash] }) {
+			// A cached pack plays: nothing is left to explain.
+			kept = slices.DeleteFunc(kept, func(r core.Release) bool { return slices.Contains(explained, r.ID) })
+		}
 	}
 	rank := func(r core.Release) int {
 		if r.Protocol == core.ProtocolTorrent && (cached[r.InfoHash] || x.svc.KnownCached(r.InfoHash)) {
@@ -219,6 +230,39 @@ func (x *Indexer) SearchWith(ctx context.Context, req core.SearchRequest, arrive
 	sort.SliceStable(kept, func(i, j int) bool { return rank(kept[i]) < rank(kept[j]) })
 	return kept, nil
 }
+
+// keepUncached is how many torrents no provider holds a cached-only search
+// keeps when none is cached (the rest are dropped so they do not use up the
+// resolver's check budget). Their availability answer is remembered, so each fails as not
+// cached at once without an API call, and when nothing else plays the
+// player and Quality › History say "not cached" instead of "no release
+// found".
+const keepUncached = 3
+
+// explainUncached is how many uncached torrents a cached-only search keeps:
+// keepUncached when no torrent in it is cached (they are then the reason
+// the title cannot play), else none, as before.
+func (x *Indexer) explainUncached(rels []core.Release, cached map[string]bool) int {
+	for _, r := range rels {
+		if r.Protocol == core.ProtocolTorrent && r.InfoHash != "" && (cached[r.InfoHash] || x.svc.KnownCached(r.InfoHash)) {
+			return 0
+		}
+	}
+	return keepUncached
+}
+
+// QueueDownload sends an uncached torrent release to the owner's debrid
+// service to download (cached-only off); see Service.QueueDownload.
+func (x *Indexer) QueueDownload(ctx context.Context, r core.Release) ([]byte, error) {
+	if r.Protocol != core.ProtocolTorrent || !x.svc.Enabled() {
+		return nil, fmt.Errorf("release %q: %w", r.Name, core.ErrNotCached)
+	}
+	return x.svc.QueueDownload(ctx, r)
+}
+
+// UsenetReady reports whether a Usenet provider is set up, so a failure
+// can say what Usenet contributed.
+func (x *Indexer) UsenetReady() bool { return x.usenetReady == nil || x.usenetReady() }
 
 // playable adapts a search result to what this server can stream, or
 // reports false: torrents need an enabled debrid provider (or else play
@@ -360,9 +404,13 @@ func (x *Indexer) SearchRescue(ctx context.Context, req core.SearchRequest) ([]c
 	}
 	kept := out[:0]
 	dropUncached := definitive && x.svc.Config().CachedOnly
+	explain := x.explainUncached(out, cached)
 	for _, r := range out {
 		if r.Protocol == core.ProtocolTorrent && r.InfoHash != "" && dropUncached && !cached[r.InfoHash] {
-			continue
+			if explain == 0 {
+				continue
+			}
+			explain--
 		}
 		kept = append(kept, r)
 	}

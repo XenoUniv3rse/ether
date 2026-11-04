@@ -42,9 +42,11 @@ func TestIndexerKeepsUncachedTorrentsWhenDownloadsAllowed(t *testing.T) {
 }
 
 // A provider with a bulk availability check (TorBox) reports the torrent
-// uncached during the search; with cached-only off, playback must still send
-// it to download, once per title, and play it when the download is done.
-func TestAcquireSendsKnownUncachedTorrentToDownload(t *testing.T) {
+// uncached during the search; with cached-only off, a Play's checks never
+// start downloads, the resolver's QueueDownload sends the title's best
+// release once, a retry follows that download instead of adding it again,
+// and it plays when the download is done.
+func TestQueueDownloadSendsOneReleasePerTitleAndFollowsIt(t *testing.T) {
 	h := newHarness(t, 1<<20, "torbox")
 	tb := h.provs["torbox-0"]
 	tb.bulk = true
@@ -54,16 +56,19 @@ func TestAcquireSendsKnownUncachedTorrentToDownload(t *testing.T) {
 		t.Fatalf("availability check: %v %v", cached, definitive)
 	}
 
-	// Background checks (detail-page warm-up) never start downloads.
-	bg := core.WithBackgroundBudget(t.Context(), func(context.Context, string, string, int64) error { return nil })
-	if _, err := h.svc.Acquire(bg, torrentRelease("r1")); !errors.Is(err, core.ErrNotCached) || tb.downloading != 0 {
-		t.Fatalf("background check: err=%v downloading=%d", err, tb.downloading)
-	}
-
 	first := torrentRelease("r1")
 	first.TitleIDs = core.IDs{TMDB: 603}
-	if _, err := h.svc.Acquire(t.Context(), first); !errors.Is(err, core.ErrDownloadQueued) {
-		t.Fatalf("first play: %v, want ErrDownloadQueued", err)
+	// A check is only a check, cached-only or not.
+	if _, err := h.svc.Acquire(t.Context(), first); !errors.Is(err, core.ErrNotCached) || errors.Is(err, core.ErrDownloadQueued) || tb.downloading != 0 {
+		t.Fatalf("check: err=%v downloading=%d", err, tb.downloading)
+	}
+	// Background checks (detail-page warm-up) never start downloads.
+	bg := core.WithBackgroundBudget(t.Context(), func(context.Context, string, string, int64) error { return nil })
+	if _, err := h.svc.QueueDownload(bg, first); errors.Is(err, core.ErrDownloadQueued) || tb.downloading != 0 {
+		t.Fatalf("background: err=%v downloading=%d", err, tb.downloading)
+	}
+	if _, err := h.svc.QueueDownload(t.Context(), first); !errors.Is(err, core.ErrDownloadQueued) {
+		t.Fatalf("queue: %v, want ErrDownloadQueued", err)
 	}
 	if tb.downloading != 1 {
 		t.Fatalf("downloads started: %d, want 1", tb.downloading)
@@ -73,15 +78,22 @@ func TestAcquireSendsKnownUncachedTorrentToDownload(t *testing.T) {
 	second := torrentRelease("r2")
 	second.InfoHash = other
 	second.TitleIDs = first.TitleIDs
-	if _, err := h.svc.Acquire(t.Context(), second); errors.Is(err, core.ErrDownloadQueued) || tb.downloading != 1 {
-		t.Fatalf("second release: err=%v downloading=%d", err, tb.downloading)
+	if _, err := h.svc.QueueDownload(t.Context(), second); !errors.Is(err, core.ErrDownloadQueued) || tb.adds != 1 {
+		t.Fatalf("second release: err=%v adds=%d", err, tb.adds)
+	}
+	// A retry of the queued release follows its download.
+	if _, err := h.svc.Acquire(t.Context(), first); !errors.Is(err, core.ErrDownloadQueued) || tb.adds != 1 {
+		t.Fatalf("retry while downloading: err=%v adds=%d", err, tb.adds)
 	}
 
 	// The download finished: the queued release now plays, from the
-	// torrent already on the account.
+	// torrent already on the account, even with cached-only back on.
 	tb.mu.Lock()
 	tb.cached[testHash] = true
 	tb.mu.Unlock()
+	cfg := h.svc.Config()
+	cfg.CachedOnly = true
+	h.svc.UpdateConfig(cfg)
 	if _, err := h.svc.Acquire(t.Context(), first); err != nil {
 		t.Fatalf("after download: %v", err)
 	}
