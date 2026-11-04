@@ -14,13 +14,14 @@ import {
 } from "lucide-react";
 import { Suspense, lazy, useCallback, useEffect, useState, type ReactNode } from "react";
 import { t } from "../../i18n";
+import { Drawer } from "../../components/Drawer";
 import { apiFetch, errorMessage } from "../../lib/api";
 import type { StudioProject } from "./develop/types";
 import { PaneResizer, useStudioPanes } from "./code/panes";
 
 const CodeMirrorPane = lazy(() => import("./code/CodeMirrorPane"));
 
-type Panel = "preview" | "try" | "problems" | "activity" | "reference";
+type Panel = "preview" | "try" | "problems" | "activity";
 
 interface RunResult {
   status: number;
@@ -339,7 +340,6 @@ export function CodeStudio({
               ["try", <TerminalSquare size={14} key="i" />, t("Try it")],
               ["problems", <AlertTriangle size={14} key="i" />, t("Problems")],
               ["activity", <History size={14} key="i" />, t("Activity")],
-              ["reference", <BookOpen size={14} key="i" />, t("Reference")],
             ] as [Panel, ReactNode, string][]
           ).map(([key, icon, label]) => (
             <button
@@ -403,7 +403,6 @@ export function CodeStudio({
             </ul>
           ) : null}
           {panel === "activity" ? <Activity project={project} epoch={epoch} /> : null}
-          {panel === "reference" ? <Reference template={project.template} /> : null}
         </div>
       </section>
     </div>
@@ -621,6 +620,29 @@ const ROUTES: Record<string, [string, string][]> = {
     ["POST /ether/test", "{ ok, message } for the owner's connection test"],
   ],
 };
+
+export function ReferenceButton({ template }: { template: string }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <Button
+        variant="ghost"
+        size="icon"
+        className="size-8"
+        aria-label={t("Reference")}
+        title={t("Reference")}
+        aria-haspopup="dialog"
+        aria-expanded={open}
+        onClick={() => setOpen(true)}
+      >
+        <BookOpen size={17} aria-hidden />
+      </Button>
+      <Drawer open={open} onClose={() => setOpen(false)} title={t("Reference")} size="lg">
+        <Reference template={template} />
+      </Drawer>
+    </>
+  );
+}
 
 export function Reference({ template }: { template: string }) {
   return (

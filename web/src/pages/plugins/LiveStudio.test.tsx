@@ -26,6 +26,7 @@ vi.mock("./code/CodeMirrorPane", () => ({ default: () => <div>Starter code</div>
 vi.mock("./CodeStudio", () => ({
   CodeStudio: () => <div>Code editor</div>,
   Reference: () => null,
+  ReferenceButton: () => null,
 }));
 vi.mock("./PermissionSheet", () => ({ PermissionSheet: () => null }));
 vi.mock("./StudioActions", () => ({

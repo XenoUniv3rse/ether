@@ -17,7 +17,7 @@ import { formatDateTime } from "../../lib/format";
 import { invalidateRegistry } from "../../lib/extend";
 import { PermissionSheet } from "./PermissionSheet";
 import { StudioActions } from "./StudioActions";
-import { CodeStudio } from "./CodeStudio";
+import { CodeStudio, ReferenceButton } from "./CodeStudio";
 import { CodeHome } from "./CodeHome";
 import { Composer } from "./Composer";
 import { LiveStageView, NativePreview, momentsForTool, readAgentStream } from "./LiveStage";
@@ -561,6 +561,7 @@ function LiveWorkspace({
       title={t("Studio")}
       actions={
         <>
+          {mode === "code" && project ? <ReferenceButton template={project.template} /> : null}
           <ModeSwitch mode={mode} onMode={onMode} />
           {project ? (
             <StudioActions

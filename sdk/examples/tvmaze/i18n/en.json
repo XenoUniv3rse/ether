@@ -1,0 +1,13 @@
+{
+  "summary": "Independent show descriptions, artwork and ratings from TVmaze.",
+  "acclaimed": "Acclaimed series",
+  "canada": "Airing in Canada",
+  "page": "TVmaze catalogue",
+  "max_items": "Maximum shows",
+  "count": "Acclaimed shows available",
+  "source": "Metadata source",
+  "provider": "TVmaze public API",
+  "publish": "Publish a TVmaze collection",
+  "sync": "Create or refresh acclaimed series",
+  "credit": "Show data is provided by TVmaze under CC BY-SA. Visit tvmaze.com for source records."
+}

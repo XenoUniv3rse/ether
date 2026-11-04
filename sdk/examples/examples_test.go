@@ -143,3 +143,26 @@ func TestExamplesPackAndRunHosted(t *testing.T) {
 		})
 	}
 }
+
+func TestStudioExamplesPackAndConform(t *testing.T) {
+	for _, name := range []string{"tvmaze", "october-after-dark", "canada-live", "easydebrid", "travel-mode", "movie-night"} {
+		t.Run(name, func(t *testing.T) {
+			pkg, err := kit.LoadDir(name)
+			if err != nil {
+				t.Fatal(err)
+			}
+			raw, err := kit.Pack(pkg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			packed, err := kit.LoadPkgBytes(raw)
+			if err != nil {
+				t.Fatal(err)
+			}
+			report := kit.Check(context.Background(), packed)
+			if !report.OK {
+				t.Fatalf("install conformance: %+v", report.Errors)
+			}
+		})
+	}
+}

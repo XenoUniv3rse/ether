@@ -1,0 +1,95 @@
+{
+  "id": "community.tvmaze.catalog",
+  "name": "TVmaze Native Catalog",
+  "version": "1.0.0",
+  "description": "Independent TVmaze catalogue discovery and native show metadata.",
+  "types": [
+    "series"
+  ],
+  "resources": [
+    "catalog"
+  ],
+  "catalogs": [
+    {
+      "type": "series",
+      "id": "acclaimed",
+      "name": "TVmaze acclaimed shows"
+    },
+    {
+      "type": "series",
+      "id": "canada",
+      "name": "Airing in Canada"
+    }
+  ],
+  "ether": {
+    "protocol": 1,
+    "kind": "extension",
+    "capabilities": [
+      "list_source",
+      "metadata",
+      "ui"
+    ],
+    "summary": "$t:summary",
+    "author": {
+      "name": "Server owner"
+    },
+    "license": "MIT",
+    "runtime": {
+      "kind": "hosted",
+      "entry": "src/plugin.ts"
+    },
+    "permissions": {
+      "network": [
+        "api.tvmaze.com"
+      ],
+      "collections": "write"
+    },
+    "strings": {
+      "en": "i18n/en.json"
+    },
+    "contributes": {
+      "metadata": {
+        "types": [
+          "show"
+        ]
+      },
+      "listSources": [
+        {
+          "key": "acclaimed",
+          "label": "$t:acclaimed",
+          "hint": "$t:summary",
+          "catalog": "series/acclaimed",
+          "maxItems": 100,
+          "refresh": "24h"
+        },
+        {
+          "key": "canada",
+          "label": "$t:canada",
+          "hint": "$t:summary",
+          "catalog": "series/canada",
+          "maxItems": 100,
+          "refresh": "24h"
+        }
+      ],
+      "pages": [
+        {
+          "key": "catalog",
+          "label": "$t:page",
+          "route": "/ether/view/catalog"
+        }
+      ]
+    },
+    "settings": {
+      "fields": [
+        {
+          "key": "maxItems",
+          "kind": "number",
+          "label": "$t:max_items",
+          "default": 30,
+          "min": 10,
+          "max": 100
+        }
+      ]
+    }
+  }
+}
