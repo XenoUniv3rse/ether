@@ -5,7 +5,7 @@ import { ErrorPanel } from "../../components/feedback";
 import { MapInput } from "../../components/fields";
 import { SaveBar, useDraft } from "../../components/SaveBar";
 import { SettingsRow } from "../../components/SettingsRow";
-import { t } from "../../i18n";
+import { t, tn } from "../../i18n";
 import { api, ApiError } from "../../lib/api";
 import { useAsync } from "../../lib/hooks";
 import type { ClientIdentityConfig, Indexer } from "../../lib/types";
@@ -56,7 +56,10 @@ export function ClientIdentity({
   const presetUa = new Map(presets.map((p) => [p.key, p.userAgent]));
   const etherUa = presetUa.get("ether") ?? "";
   const identityUa = (key: IdentityKey) => {
-    const name = String(policy[key] ?? "").trim();
+    // Resolve trims and lowercases, so the display does too.
+    const name = String(policy[key] ?? "")
+      .trim()
+      .toLowerCase();
     if (name === "custom") return String(policy.userAgent ?? "").trim() || etherUa;
     return presetUa.get(name) ?? etherUa;
   };
@@ -85,9 +88,9 @@ export function ClientIdentity({
     },
   ];
 
-  // Built-in sites and Stremio addons have their own request paths and never
-  // resolve this policy.
-  const capable = indexers.filter((ix) => ix.kind !== "cardigann" && ix.kind !== "stremio");
+  // Only the Newznab/Torznab client resolves this policy; built-in sites and
+  // Stremio addons have their own request paths.
+  const capable = indexers.filter((ix) => !ix.kind || ix.kind === "newznab");
   const inherited = capable.filter((ix) => !ix.clientIdentity).length;
   const overrides = capable.length - inherited;
   const backend = indexers.length - capable.length;
@@ -178,12 +181,16 @@ export function ClientIdentity({
           <div className="px-5 py-3">
             <p className="text-sm text-fg-muted">
               {overrides === 0
-                ? capable.length === 1
-                  ? t("The only indexer inherits this policy")
-                  : t("All {count} indexers inherit this policy", { count: capable.length })
-                : t(
-                    "{inherited} of {total} indexers inherit this policy - {count} with their own identity",
-                    { inherited, total: capable.length, count: overrides },
+                ? tn(
+                    capable.length,
+                    "{count} indexer inherits this policy",
+                    "All {count} indexers inherit this policy",
+                  )
+                : tn(
+                    overrides,
+                    "{inherited} of {total} indexers inherit this policy; {count} has its own identity",
+                    "{inherited} of {total} indexers inherit this policy; {count} have their own identity",
+                    { inherited, total: capable.length },
                   )}
             </p>
             {backend > 0 ? (

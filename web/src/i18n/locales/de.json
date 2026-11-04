@@ -433,6 +433,10 @@
   "m_020de65b71f2e0": "Kino-Knoten und Edge-Mediathek aktivieren das vollständige Vorladen von Filmen und Episoden. Alle Größen und Limits lassen sich im nächsten Schritt anpassen.",
   "m_020e1e8acc7bc5": "Releases suchen",
   "m_020e4a02bc94f2": "Eintrag",
+  "m_0210122fad75c1": {
+    "one": "{inherited} von {total} Indexern übernehmen diese Richtlinie; {count} hat eine eigene Identität",
+    "other": "{inherited} von {total} Indexern übernehmen diese Richtlinie; {count} haben eine eigene Identität"
+  },
   "m_0210700bb62862": "Beitritts-Token widerrufen",
   "m_0210bda2e03919": "Torrent-Handhabung",
   "m_0213959961d04a": "Newznab (Usenet)",
@@ -550,7 +554,6 @@
   "m_02812fe8224425": "Programm aus denselben Listen",
   "m_02843fe5467d7d": "Heartbeat angenommen",
   "m_0284f5cee48af0": "Ein normales Herunterfahren oder ein Neustart hat begonnen.",
-  "m_02866c987b89da": "Der einzige Indexer verwendet diese Richtlinie",
   "m_028688447472f5": "Alle beliebten Filme",
   "m_0286c1581a6d6f": "Routen und Funktionen ausführen",
   "m_02885e2073e46c": "Ein Unterstützungspaket für das gewählte Gerät. Die Wiedergabe bleibt unverändert.",
@@ -4009,7 +4012,10 @@
   "m_12b4028079c9c2": "Die Beispielvorschau nutzt dasselbe Rezept wie die Installation",
   "m_12b6e101ca2a00": "Testen",
   "m_12b7c3e79b7467": "Unbestätigte Änderungen werden zurückgehalten, bis sie mit Plex abgeglichen sind.",
-  "m_12b7edbc2f6df6": "Alle {count} Indexer verwenden diese Richtlinie",
+  "m_12b7edbc2f6df6": {
+    "one": "{count} Indexer übernimmt diese Richtlinie",
+    "other": "Alle {count} Indexer übernehmen diese Richtlinie"
+  },
   "m_12b93b1921d466": "+{count} weitere",
   "m_12bad19683eb91": "Gerät hinzufügen",
   "m_12bb8c13b730bc": "Reserviert, einschließlich Overhead",
@@ -4377,7 +4383,6 @@
   "m_1495cd40159b92": "Zertifikatsdaten sind unvollständig",
   "m_1497eefc814967": "Überall ausblenden",
   "m_1499ae12504e21": "ISO-Codes in der Reihenfolge der Präferenz. Leer akzeptiert alle.",
-  "m_149a828660f1cc": "Übernehmen: {inherited} von {total} - {count} mit eigener Identität",
   "m_149ad0735dfcc6": "Der Anzeigeverlauf auf Plex konnte nicht synchronisiert werden.",
   "m_149ae900d4d465": "In dieser Synchronisierung hinzugefügt",
   "m_149d65d991887c": "Startseitenvorschau",

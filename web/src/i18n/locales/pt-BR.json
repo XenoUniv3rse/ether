@@ -442,6 +442,11 @@
   "m_020de65b71f2e0": "Nó cinema e Biblioteca de borda ativam o pré-carregamento completo de filmes e episódios. Todos os tamanhos e limites podem ser personalizados na próxima etapa.",
   "m_020e1e8acc7bc5": "Pesquisar releases",
   "m_020e4a02bc94f2": "Entrada",
+  "m_0210122fad75c1": {
+    "one": "{inherited} de {total} indexadores herdam esta política; {count} tem identidade própria",
+    "many": "{inherited} de {total} indexadores herdam esta política; {count} têm identidade própria",
+    "other": "{inherited} de {total} indexadores herdam esta política; {count} têm identidade própria"
+  },
   "m_0210700bb62862": "Token de adesão revogado",
   "m_0210bda2e03919": "Tratamento de torrents",
   "m_0213959961d04a": "Newznab (Usenet)",
@@ -562,7 +567,6 @@
   "m_02812fe8224425": "Guia das mesmas listas",
   "m_02843fe5467d7d": "Heartbeat aceito",
   "m_0284f5cee48af0": "Um desligamento ou reinício normal foi iniciado.",
-  "m_02866c987b89da": "O único indexador usa esta política",
   "m_028688447472f5": "Todos os filmes populares",
   "m_0286c1581a6d6f": "Executor de rotas e recursos",
   "m_02885e2073e46c": "Um pacote de suporte para o dispositivo escolhido. Ele não muda a reprodução.",
@@ -4110,7 +4114,11 @@
   "m_12b4028079c9c2": "A prévia de exemplo usa a mesma receita da instalação",
   "m_12b6e101ca2a00": "Testar",
   "m_12b7c3e79b7467": "As alterações não confirmadas ficam retidas até serem verificadas com o Plex.",
-  "m_12b7edbc2f6df6": "Todos os {count} indexadores usam esta política",
+  "m_12b7edbc2f6df6": {
+    "one": "{count} indexador herda esta política",
+    "many": "Todos os {count} indexadores herdam esta política",
+    "other": "Todos os {count} indexadores herdam esta política"
+  },
   "m_12b93b1921d466": "+{count} mais",
   "m_12bad19683eb91": "Adicionar um dispositivo",
   "m_12bb8c13b730bc": "Reservado, incluindo sobrecarga",
@@ -4489,7 +4497,6 @@
   "m_1495cd40159b92": "Datas do certificado incompletas",
   "m_1497eefc814967": "Ocultar em todo lugar",
   "m_1499ae12504e21": "Códigos ISO em ordem de preferência. Vazio aceita qualquer um.",
-  "m_149a828660f1cc": "Herdam: {inherited} de {total} - {count} com identidade própria",
   "m_149ad0735dfcc6": "A visualização do histórico no Plex não pôde ser sincronizada.",
   "m_149ae900d4d465": "Adicionados nesta sincronização",
   "m_149d65d991887c": "Pré-visualização do Início",

@@ -433,6 +433,10 @@
   "m_020de65b71f2e0": "Bioscoopnode en Edge-bibliotheek schakelen het volledig vooraf laden van films en afleveringen in. Alle groottes en limieten kun je in de volgende stap aanpassen.",
   "m_020e1e8acc7bc5": "Releases zoeken",
   "m_020e4a02bc94f2": "Vermelding",
+  "m_0210122fad75c1": {
+    "one": "{inherited} van {total} indexeerders nemen dit beleid over; {count} heeft een eigen identiteit",
+    "other": "{inherited} van {total} indexeerders nemen dit beleid over; {count} hebben een eigen identiteit"
+  },
   "m_0210700bb62862": "Join-token ingetrokken",
   "m_0210bda2e03919": "Torrentafhandeling",
   "m_0213959961d04a": "Newznab (Usenet)",
@@ -550,7 +554,6 @@
   "m_02812fe8224425": "Gids uit dezelfde lijsten",
   "m_02843fe5467d7d": "Heartbeat geaccepteerd",
   "m_0284f5cee48af0": "Een normale afsluiting of herstart is begonnen.",
-  "m_02866c987b89da": "De enige indexeerder gebruikt dit beleid",
   "m_028688447472f5": "Alle populaire films",
   "m_0286c1581a6d6f": "Route- en functietester",
   "m_02885e2073e46c": "Eén ondersteuningspakket voor het gekozen apparaat. Het afspelen verandert niet.",
@@ -4009,7 +4012,10 @@
   "m_12b4028079c9c2": "Het voorbeeld gebruikt hetzelfde recept als de installatie",
   "m_12b6e101ca2a00": "Testen",
   "m_12b7c3e79b7467": "Onbevestigde wijzigingen worden vastgehouden totdat ze met Plex zijn gecontroleerd.",
-  "m_12b7edbc2f6df6": "Alle {count} indexeerders gebruiken dit beleid",
+  "m_12b7edbc2f6df6": {
+    "one": "{count} indexeerder neemt dit beleid over",
+    "other": "Alle {count} indexeerders nemen dit beleid over"
+  },
   "m_12b93b1921d466": "+{count} meer",
   "m_12bad19683eb91": "Apparaat toevoegen",
   "m_12bb8c13b730bc": "Gereserveerd, inclusief overhead",
@@ -4377,7 +4383,6 @@
   "m_1495cd40159b92": "Certificaatdatums zijn onvolledig",
   "m_1497eefc814967": "Overal verbergen",
   "m_1499ae12504e21": "ISO-codes in volgorde van voorkeur. Leeg accepteert alles.",
-  "m_149a828660f1cc": "Overnemen: {inherited} van {total} - {count} met eigen identiteit",
   "m_149ad0735dfcc6": "Het bekijken van de geschiedenis op Plex kan niet worden gesynchroniseerd.",
   "m_149ae900d4d465": "Toegevoegd bij deze synchronisatie",
   "m_149d65d991887c": "Home-voorbeeld",

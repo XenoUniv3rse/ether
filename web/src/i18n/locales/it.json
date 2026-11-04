@@ -442,6 +442,11 @@
   "m_020de65b71f2e0": "Nodo cinema e Libreria edge attivano il precaricamento completo di film ed episodi. Tutte le dimensioni e i limiti si possono personalizzare nel passaggio successivo.",
   "m_020e1e8acc7bc5": "Cerca release",
   "m_020e4a02bc94f2": "Voce",
+  "m_0210122fad75c1": {
+    "one": "{inherited} indicizzatori su {total} ereditano questo criterio; {count} ha un'identità propria",
+    "many": "{inherited} indicizzatori su {total} ereditano questo criterio; {count} hanno un'identità propria",
+    "other": "{inherited} indicizzatori su {total} ereditano questo criterio; {count} hanno un'identità propria"
+  },
   "m_0210700bb62862": "Token di adesione revocato",
   "m_0210bda2e03919": "Gestione dei torrent",
   "m_0213959961d04a": "Newznab (Usenet)",
@@ -562,7 +567,6 @@
   "m_02812fe8224425": "Guida dagli stessi elenchi",
   "m_02843fe5467d7d": "Heartbeat accettato",
   "m_0284f5cee48af0": "È iniziato un arresto o riavvio normale.",
-  "m_02866c987b89da": "L'unico indicizzatore usa questo criterio",
   "m_028688447472f5": "Tutti i film popolari",
   "m_0286c1581a6d6f": "Esecutore di route e funzionalità",
   "m_02885e2073e46c": "Un solo pacchetto di assistenza per il dispositivo scelto. Non cambia la riproduzione.",
@@ -4110,7 +4114,11 @@
   "m_12b4028079c9c2": "L’anteprima di esempio usa la stessa ricetta dell’installazione",
   "m_12b6e101ca2a00": "Prova",
   "m_12b7c3e79b7467": "Le modifiche non confermate restano in sospeso finché non vengono verificate con Plex.",
-  "m_12b7edbc2f6df6": "Tutti i {count} indicizzatori usano questo criterio",
+  "m_12b7edbc2f6df6": {
+    "one": "{count} indicizzatore eredita questo criterio",
+    "many": "Tutti i {count} indicizzatori ereditano questo criterio",
+    "other": "Tutti i {count} indicizzatori ereditano questo criterio"
+  },
   "m_12b93b1921d466": "+{count} altri",
   "m_12bad19683eb91": "Aggiungi un dispositivo",
   "m_12bb8c13b730bc": "Riservato, incluso il sovraccarico",
@@ -4489,7 +4497,6 @@
   "m_1495cd40159b92": "Date del certificato incomplete",
   "m_1497eefc814967": "Nascondi ovunque",
   "m_1499ae12504e21": "Codici ISO in ordine di preferenza. Se vuoto accetta qualsiasi lingua.",
-  "m_149a828660f1cc": "Ereditano: {inherited} di {total} - {count} con identità propria",
   "m_149ad0735dfcc6": "Impossibile sincronizzare la cronologia di visualizzazione su Plex.",
   "m_149ae900d4d465": "Aggiunti in questa sincronizzazione",
   "m_149d65d991887c": "Anteprima della Home",

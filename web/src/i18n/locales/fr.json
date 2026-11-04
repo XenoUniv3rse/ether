@@ -442,6 +442,11 @@
   "m_020de65b71f2e0": "Nœud cinéma et Bibliothèque Edge activent le préchargement complet des films et des épisodes. Toutes les tailles et limites peuvent être personnalisées à l’étape suivante.",
   "m_020e1e8acc7bc5": "Rechercher des releases",
   "m_020e4a02bc94f2": "Entrée",
+  "m_0210122fad75c1": {
+    "one": "{inherited} indexeurs sur {total} héritent de cette politique ; {count} a sa propre identité",
+    "many": "{inherited} indexeurs sur {total} héritent de cette politique ; {count} ont leur propre identité",
+    "other": "{inherited} indexeurs sur {total} héritent de cette politique ; {count} ont leur propre identité"
+  },
   "m_0210700bb62862": "Jeton d’adhésion révoqué",
   "m_0210bda2e03919": "Gestion des torrents",
   "m_0213959961d04a": "Newznab (Usenet)",
@@ -562,7 +567,6 @@
   "m_02812fe8224425": "Guide issu des mêmes listes",
   "m_02843fe5467d7d": "Signal de vie accepté",
   "m_0284f5cee48af0": "Un arrêt ou redémarrage normal a commencé.",
-  "m_02866c987b89da": "L'unique indexeur utilise cette politique",
   "m_028688447472f5": "Tous les films populaires",
   "m_0286c1581a6d6f": "Exécution des routes et capacités",
   "m_02885e2073e46c": "Un seul dossier d'assistance pour l'appareil choisi. La lecture n'est pas modifiée.",
@@ -4110,7 +4114,11 @@
   "m_12b4028079c9c2": "L’aperçu d’exemple utilise la même recette que l’installation",
   "m_12b6e101ca2a00": "Tester",
   "m_12b7c3e79b7467": "Les modifications non confirmées sont retenues jusqu'à leur vérification auprès de Plex.",
-  "m_12b7edbc2f6df6": "Les {count} indexeurs utilisent tous cette politique",
+  "m_12b7edbc2f6df6": {
+    "one": "{count} indexeur hérite de cette politique",
+    "many": "Les {count} indexeurs héritent tous de cette politique",
+    "other": "Les {count} indexeurs héritent tous de cette politique"
+  },
   "m_12b93b1921d466": "+{count} de plus",
   "m_12bad19683eb91": "Ajouter un appareil",
   "m_12bb8c13b730bc": "Réservé, frais généraux inclus",
@@ -4489,7 +4497,6 @@
   "m_1495cd40159b92": "Dates du certificat incomplètes",
   "m_1497eefc814967": "Masquer partout",
   "m_1499ae12504e21": "Codes ISO par ordre de préférence. Vide accepte toutes les langues.",
-  "m_149a828660f1cc": "Héritent : {inherited} sur {total} - {count} avec une identité propre",
   "m_149ad0735dfcc6": "L'affichage de l'historique sur Plex n'a ​​pas pu être synchronisé.",
   "m_149ae900d4d465": "Ajoutés lors de cette synchronisation",
   "m_149d65d991887c": "Aperçu de l’accueil",

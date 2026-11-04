@@ -148,7 +148,7 @@ describe("Sources › Indexers client identity", () => {
     });
     await screen.findByRole("heading", { name: "Client identity" }, WAIT);
     expect(
-      screen.getByText("2 of 3 indexers inherit this policy - 1 with their own identity"),
+      screen.getByText("2 of 3 indexers inherit this policy; 1 has its own identity"),
     ).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Edit Indexer One" }));
     const drawer = await screen.findByRole("dialog", { name: "Indexer One" }, WAIT);

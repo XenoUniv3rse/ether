@@ -451,6 +451,12 @@
   "m_020de65b71f2e0": "Węzeł kinowy i Biblioteka brzegowa włączają pełne wstępne ładowanie filmów i odcinków. Wszystkie rozmiary i limity można dostosować w następnym kroku.",
   "m_020e1e8acc7bc5": "Szukaj wydań",
   "m_020e4a02bc94f2": "Pozycja",
+  "m_0210122fad75c1": {
+    "one": "{inherited} z {total} indekserów dziedziczy te zasady; {count} ma własną tożsamość",
+    "few": "{inherited} z {total} indekserów dziedziczy te zasady; {count} mają własną tożsamość",
+    "many": "{inherited} z {total} indekserów dziedziczy te zasady; {count} ma własną tożsamość",
+    "other": "{inherited} z {total} indekserów dziedziczy te zasady; {count} ma własną tożsamość"
+  },
   "m_0210700bb62862": "Token dołączenia unieważniony",
   "m_0210bda2e03919": "Obsługa torrentów",
   "m_0213959961d04a": "Newznab (Usenet)",
@@ -574,7 +580,6 @@
   "m_02812fe8224425": "Program z tych samych list",
   "m_02843fe5467d7d": "Sygnał życia zaakceptowany",
   "m_0284f5cee48af0": "Rozpoczęto normalne zamykanie lub ponowne uruchamianie.",
-  "m_02866c987b89da": "Jedyny indekser używa tych zasad",
   "m_028688447472f5": "Wszystkie popularne filmy",
   "m_0286c1581a6d6f": "Uruchamianie tras i funkcji",
   "m_02885e2073e46c": "Jeden pakiet pomocy dla wybranego urządzenia. Nie zmienia odtwarzania.",
@@ -4211,7 +4216,12 @@
   "m_12b4028079c9c2": "Przykładowy podgląd używa tego samego przepisu co instalacja",
   "m_12b6e101ca2a00": "Testuj",
   "m_12b7c3e79b7467": "Niepotwierdzone zmiany są wstrzymywane do czasu sprawdzenia ich w Plex.",
-  "m_12b7edbc2f6df6": "Wszystkie indeksery ({count}) używają tych zasad",
+  "m_12b7edbc2f6df6": {
+    "one": "{count} indekser dziedziczy te zasady",
+    "few": "Wszystkie {count} indeksery dziedziczą te zasady",
+    "many": "Wszystkich {count} indekserów dziedziczy te zasady",
+    "other": "Wszystkie indeksery ({count}) dziedziczą te zasady"
+  },
   "m_12b93b1921d466": "+{count} więcej",
   "m_12bad19683eb91": "Dodaj urządzenie",
   "m_12bb8c13b730bc": "Zarezerwowane, wraz z narzutem",
@@ -4601,7 +4611,6 @@
   "m_1495cd40159b92": "Daty certyfikatu są niekompletne",
   "m_1497eefc814967": "Ukryj wszędzie",
   "m_1499ae12504e21": "Kody ISO w kolejności preferencji. Puste akceptuje dowolne.",
-  "m_149a828660f1cc": "Dziedziczą: {inherited} z {total} - {count} z własną tożsamością",
   "m_149ad0735dfcc6": "Nie można zsynchronizować historii przeglądania na Plex.",
   "m_149ae900d4d465": "Dodane w tej synchronizacji",
   "m_149d65d991887c": "Podgląd strony głównej",

@@ -433,6 +433,10 @@
   "m_020de65b71f2e0": "Elokuvasolmu ja Reunakirjasto ottavat käyttöön elokuvien ja jaksojen täyden esilatauksen. Kaikkia kokoja ja rajoja voi mukauttaa seuraavassa vaiheessa.",
   "m_020e1e8acc7bc5": "Hae julkaisuja",
   "m_020e4a02bc94f2": "Merkintä",
+  "m_0210122fad75c1": {
+    "one": "{total} indeksoijasta {inherited} perii tämän käytännön; {count} käyttää omaa identiteettiään",
+    "other": "{total} indeksoijasta {inherited} perii tämän käytännön; {count} käyttävät omaa identiteettiään"
+  },
   "m_0210700bb62862": "Liittymistoken peruttu",
   "m_0210bda2e03919": "Torrentien käsittely",
   "m_0213959961d04a": "Newznab (Usenet)",
@@ -550,7 +554,6 @@
   "m_02812fe8224425": "Opas samoista luetteloista",
   "m_02843fe5467d7d": "Sykesignaali hyväksytty",
   "m_0284f5cee48af0": "Tavallinen sammutus tai uudelleenkäynnistys on alkanut.",
-  "m_02866c987b89da": "Ainoa indeksoija käyttää tätä käytäntöä",
   "m_028688447472f5": "Kaikki suositut elokuvat",
   "m_0286c1581a6d6f": "Reittien ja toimintojen suoritus",
   "m_02885e2073e46c": "Yksi tukipaketti valitsemallesi laitteelle. Se ei muuta toistoa.",
@@ -4009,7 +4012,10 @@
   "m_12b4028079c9c2": "Esimerkkiesikatselu käyttää samaa reseptiä kuin asennus",
   "m_12b6e101ca2a00": "Testaa",
   "m_12b7c3e79b7467": "Vahvistamattomat muutokset pidätetään, kunnes ne on tarkistettu Plexistä.",
-  "m_12b7edbc2f6df6": "Kaikki {count} indeksoijaa käyttävät tätä käytäntöä",
+  "m_12b7edbc2f6df6": {
+    "one": "{count} indeksoija perii tämän käytännön",
+    "other": "Kaikki {count} indeksoijaa perivät tämän käytännön"
+  },
   "m_12b93b1921d466": "+{count} lisää",
   "m_12bad19683eb91": "Lisää laite",
   "m_12bb8c13b730bc": "Varattu, mukaan lukien lisäkulu",
@@ -4377,7 +4383,6 @@
   "m_1495cd40159b92": "Varmenteen päivämäärät ovat puutteelliset",
   "m_1497eefc814967": "Piilota kaikkialta",
   "m_1499ae12504e21": "ISO-koodit suosituimmuusjärjestyksessä. Tyhjä hyväksyy minkä tahansa.",
-  "m_149a828660f1cc": "Perii: {inherited}/{total} - {count} omalla identiteetillä",
   "m_149ad0735dfcc6": "Katseluhistoriaa Plex:ssä ei voitu synkronoida.",
   "m_149ae900d4d465": "Lisätty tässä synkronoinnissa",
   "m_149d65d991887c": "Etusivun esikatselu",

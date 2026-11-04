@@ -433,6 +433,10 @@
   "m_020de65b71f2e0": "Cinema node and Edge library enable full movie and episode preloading. All sizes and limits can be customized in the next step.",
   "m_020e1e8acc7bc5": "Search releases",
   "m_020e4a02bc94f2": "Entry",
+  "m_0210122fad75c1": {
+    "one": "{inherited} of {total} indexers inherit this policy; {count} has its own identity",
+    "other": "{inherited} of {total} indexers inherit this policy; {count} have their own identity"
+  },
   "m_0210700bb62862": "Join token revoked",
   "m_0210bda2e03919": "Torrent handling",
   "m_0213959961d04a": "Newznab (Usenet)",
@@ -550,7 +554,6 @@
   "m_02812fe8224425": "Guide from the same lists",
   "m_02843fe5467d7d": "Heartbeat accepted",
   "m_0284f5cee48af0": "A normal shutdown or restart has begun.",
-  "m_02866c987b89da": "The only indexer inherits this policy",
   "m_028688447472f5": "All popular movies",
   "m_0286c1581a6d6f": "Route and capability runner",
   "m_02885e2073e46c": "One support package for the device you choose. It does not change playback.",
@@ -4018,7 +4021,10 @@
   "m_12b4028079c9c2": "Sample preview uses the same recipe as installation",
   "m_12b6e101ca2a00": "Test",
   "m_12b7c3e79b7467": "Unconfirmed changes are held until they are checked against Plex.",
-  "m_12b7edbc2f6df6": "All {count} indexers inherit this policy",
+  "m_12b7edbc2f6df6": {
+    "one": "{count} indexer inherits this policy",
+    "other": "All {count} indexers inherit this policy"
+  },
   "m_12b93b1921d466": "+{count} more",
   "m_12bad19683eb91": "Add a device",
   "m_12bb8c13b730bc": "Reserved, including overhead",
@@ -4386,7 +4392,6 @@
   "m_1495cd40159b92": "Certificate dates are incomplete",
   "m_1497eefc814967": "Hide everywhere",
   "m_1499ae12504e21": "ISO codes in preference order. Empty accepts any.",
-  "m_149a828660f1cc": "{inherited} of {total} indexers inherit this policy - {count} with their own identity",
   "m_149ad0735dfcc6": "Plex watch state could not be synchronized",
   "m_149ae900d4d465": "Added in this sync",
   "m_149d65d991887c": "Home preview",
