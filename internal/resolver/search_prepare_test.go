@@ -87,24 +87,26 @@ func (h *pipelineHealth) Check(ctx context.Context, nzb []byte) (bool, error) {
 }
 
 func TestSearchPreparationOverlapsAndReusesHealth(t *testing.T) {
-	r := rel("a", "The.Signal.1999.1080p.BluRay.x264-GROUP", 6000)
-	checked := make(chan struct{})
-	idx := &pipelinedIndexer{first: []core.Release{r}, final: []core.Release{r}, checked: checked}
-	health := &pipelineHealth{checked: checked}
-	s := New(idx, health, nil, testCfg(), Options{})
-	defer s.Close()
-	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
-	defer cancel()
-	result, err := s.Resolve(ctx, core.ResolveRequest{Title: matrixTitle(), Client: appleTVCaps()})
-	if err != nil {
-		t.Fatal("search waited for slow indexer before starting health", err)
-	}
-	if result.Release.ID != "a" || idx.grabs.Load() != 1 || health.calls.Load() != 1 {
-		t.Fatalf("preparation was repeated: result=%v grabs=%d health=%d", result, idx.grabs.Load(), health.calls.Load())
-	}
-	if got := s.Traces()[0].Discovery; len(got) != 1 || got[0].Path != "live-complete" || got[0].Count != 1 {
-		t.Fatalf("complete trace: %+v", got)
-	}
+	synctest.Test(t, func(t *testing.T) {
+		r := rel("a", "The.Signal.1999.1080p.BluRay.x264-GROUP", 6000)
+		checked := make(chan struct{})
+		idx := &pipelinedIndexer{first: []core.Release{r}, final: []core.Release{r}, checked: checked}
+		health := &pipelineHealth{checked: checked}
+		s := New(idx, health, nil, testCfg(), Options{})
+		defer s.Close()
+		ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+		defer cancel()
+		result, err := s.Resolve(ctx, core.ResolveRequest{Title: matrixTitle(), Client: appleTVCaps()})
+		if err != nil {
+			t.Fatal("search waited for slow indexer before starting health", err)
+		}
+		if result.Release.ID != "a" || idx.grabs.Load() != 1 || health.calls.Load() != 1 {
+			t.Fatalf("preparation was repeated: result=%v grabs=%d health=%d", result, idx.grabs.Load(), health.calls.Load())
+		}
+		if got := s.Traces()[0].Discovery; len(got) != 1 || got[0].Path != "live-complete" || got[0].Count != 1 {
+			t.Fatalf("complete trace: %+v", got)
+		}
+	})
 }
 
 func TestEarlyHealthDoesNotPromoteLowerQuality(t *testing.T) {

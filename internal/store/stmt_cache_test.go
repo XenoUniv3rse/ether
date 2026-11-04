@@ -148,44 +148,58 @@ func TestCachedSQLiteStatementsReuse(t *testing.T) {
 	}
 }
 
+// Keep each reader open until all four connections have entered the query.
+// This checks overlap directly, independent of scheduler speed or disk latency.
 func TestCachedStatementsDoNotSerializeReaders(t *testing.T) {
-	elapsed := func(driver string) time.Duration {
-		t.Helper()
-		db, err := sql.Open(driver, filepath.Join(t.TempDir(), "browse.db")+"?_pragma=busy_timeout(5000)")
-		if err != nil {
-			t.Fatal(err)
-		}
-		t.Cleanup(func() { db.Close() })
-		db.SetMaxOpenConns(4)
-		ctx := context.Background()
-		if _, err := db.ExecContext(ctx, `CREATE TABLE sample(id INTEGER PRIMARY KEY, name TEXT)`); err != nil {
-			t.Fatal(err)
-		}
-		if _, err := db.ExecContext(ctx, `INSERT INTO sample(name) VALUES(?)`, "one"); err != nil {
-			t.Fatal(err)
-		}
-		start := time.Now()
-		var wg sync.WaitGroup
-		for n := 0; n < 8; n++ {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				for i := 0; i < 40; i++ {
-					var name string
-					if err := db.QueryRowContext(ctx, `SELECT name FROM sample WHERE id=?`, 1).Scan(&name); err != nil {
-						t.Errorf("read: %v", err)
-						return
-					}
-				}
-			}()
-		}
-		wg.Wait()
-		return time.Since(start)
+	db, err := sql.Open("sqlite-cached", filepath.Join(t.TempDir(), "browse.db"))
+	if err != nil {
+		t.Fatal(err)
 	}
-	raw := elapsed("sqlite")
-	cached := elapsed("sqlite-cached")
-	if cached > time.Second || (raw > 0 && cached > raw*3 && cached > 150*time.Millisecond) {
-		t.Fatalf("cached reads %s, plain sqlite %s", cached, raw)
+	defer db.Close()
+	db.SetMaxOpenConns(4)
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	ready := make(chan error, 4)
+	release := make(chan struct{})
+	var wg sync.WaitGroup
+	defer wg.Wait()
+	defer close(release)
+	for range 4 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			rows, err := db.QueryContext(ctx, "SELECT 42 UNION ALL SELECT 43")
+			if err != nil {
+				ready <- err
+				return
+			}
+			defer rows.Close()
+			if !rows.Next() {
+				ready <- fmt.Errorf("first row missing: %v", rows.Err())
+				return
+			}
+			var value int
+			if err := rows.Scan(&value); err != nil {
+				ready <- err
+				return
+			}
+			if value != 42 {
+				ready <- fmt.Errorf("first row = %d", value)
+				return
+			}
+			ready <- nil
+			<-release
+		}()
+	}
+	for range 4 {
+		select {
+		case err := <-ready:
+			if err != nil {
+				t.Fatal(err)
+			}
+		case <-ctx.Done():
+			t.Fatal("cached readers could not overlap:", ctx.Err())
+		}
 	}
 }
 
