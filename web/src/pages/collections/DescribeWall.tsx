@@ -9,8 +9,8 @@ import { formatNumber } from "../../lib/format";
 import "../plugins/stage.css";
 import "./describe.css";
 
-/** Two rows of posters fill the wall; the rest are one click away. */
-const ROWS = 2;
+/** Posters shorter than this drop the wall to one row; the rest are one click away. */
+const MIN_TWO_ROW_HEIGHT = 96;
 const GAP = 12;
 const HEAD = 44;
 const PAD = 16;
@@ -22,10 +22,11 @@ interface Size {
   height: number;
 }
 
-/** Poster size and columns that fill the area with two rows. */
+/** Rows, columns and poster size that fill the area: two rows when they fit, else one. */
 function geometry({ width, height }: Size) {
   const rowsHeight = Math.max(0, height - HEAD - PAD * 2);
-  let h = Math.max(60, (rowsHeight - GAP * (ROWS - 1)) / ROWS);
+  const rows = (rowsHeight - GAP) / 2 >= MIN_TWO_ROW_HEIGHT ? 2 : 1;
+  let h = Math.max(48, (rowsHeight - GAP * (rows - 1)) / rows);
   let w = (h * 2) / 3;
   const inner = Math.max(0, width - PAD * 2);
   let cols = Math.max(3, Math.floor((inner + GAP) / (w + GAP)));
@@ -33,8 +34,8 @@ function geometry({ width, height }: Size) {
     w = (inner - GAP * (cols - 1)) / cols;
     h = (w * 3) / 2;
   }
-  cols = Math.min(cols, 14);
-  return { cols, w, h };
+  cols = Math.min(cols, 18);
+  return { rows, cols, w, h };
 }
 
 /**
@@ -90,14 +91,14 @@ export function DescribeWall({
   }, [specKey]);
 
   const fit = geometry(size);
-  const { w, h } = fit;
-  // A short collection splits evenly over the two rows instead of leaving one poster alone.
+  const { rows, w, h } = fit;
+  // A short collection splits evenly over the rows instead of leaving one poster alone.
   const cols =
-    shown && shown.items.length < fit.cols * ROWS
-      ? Math.max(1, Math.ceil(shown.items.length / ROWS))
+    shown && shown.items.length < fit.cols * rows
+      ? Math.max(1, Math.ceil(shown.items.length / rows))
       : fit.cols;
-  const slots = fit.cols * ROWS;
-  const items = shown?.items.slice(0, cols * ROWS) ?? [];
+  const slots = fit.cols * rows;
+  const items = shown?.items.slice(0, cols * rows) ?? [];
   const grid = {
     gridTemplateColumns: `repeat(${cols}, ${w}px)`,
     gridAutoRows: `${h}px`,

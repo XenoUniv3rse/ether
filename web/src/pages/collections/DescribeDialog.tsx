@@ -306,8 +306,8 @@ export function DescribeDialog({
         onClose();
       }}
       size="xl"
-      // One fixed layout: posters on the top two-thirds, the conversation on
-      // the bottom third. Neither grows into the other or the footer.
+      // One fixed layout: posters on the top half, the conversation on the
+      // bottom half. Neither grows into the other or the footer.
       bodyClassName="flex min-h-0 flex-col overflow-hidden p-0"
       title={
         <span className="flex items-center gap-2">
@@ -360,7 +360,7 @@ export function DescribeDialog({
       }
     >
       <section
-        className="relative min-h-0 flex-[2] basis-0 overflow-hidden border-b border-border"
+        className="relative min-h-0 flex-1 basis-0 overflow-hidden border-b border-border"
         aria-label={t("Live build")}
       >
         {enabled === false ? (
