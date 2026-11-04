@@ -1,6 +1,7 @@
 package wasm
 
 import (
+	"encoding/json"
 	"fmt"
 	"path"
 	"strings"
@@ -25,6 +26,10 @@ type Diagnostic struct {
 // cannot reach the filesystem or node_modules. Exports land on the
 // __plugin global, which the JS runtime normalizes onto globalThis, so
 // `export function handle(...)` and `globalThis.handle = ...` both work.
+// A .js entry that is already a plain script (a prebuilt bundle such as
+// an installed plugin's dist/plugin.js: no import, export or CommonJS
+// module use) is checked and returned unchanged; wrapping it again would
+// hide its globals inside a second IIFE.
 // On failure js is nil and diagnostics carries every error.
 func Compile(files map[string]string, entry string) (js []byte, sourcemap []byte, diagnostics []Diagnostic) {
 	if _, ok := files[entry]; !ok {
@@ -78,11 +83,15 @@ func Compile(files map[string]string, entry string) (js []byte, sourcemap []byte
 		Outfile:     "plugin.js",
 		Plugins:     []api.Plugin{vfs},
 		LogLevel:    api.LogLevelSilent,
+		Metafile:    true,
 	})
 	diagnostics = append(diagnostics, convertMessages(result.Errors, "error")...)
 	diagnostics = append(diagnostics, convertMessages(result.Warnings, "warning")...)
 	if len(result.Errors) > 0 {
 		return nil, nil, diagnostics
+	}
+	if isPlainScript(result.Metafile, entry) {
+		return []byte(files[entry]), nil, diagnostics
 	}
 	for _, f := range result.OutputFiles {
 		if strings.HasSuffix(f.Path, ".map") {
@@ -92,6 +101,25 @@ func Compile(files map[string]string, entry string) (js []byte, sourcemap []byte
 		}
 	}
 	return js, sourcemap, diagnostics
+}
+
+// isPlainScript reports a .js entry that esbuild saw as a classic script:
+// no ESM or CommonJS format and no imports.
+func isPlainScript(metafile, entry string) bool {
+	if strings.ToLower(path.Ext(entry)) != ".js" {
+		return false
+	}
+	var meta struct {
+		Inputs map[string]struct {
+			Format  string            `json:"format"`
+			Imports []json.RawMessage `json:"imports"`
+		} `json:"inputs"`
+	}
+	if json.Unmarshal([]byte(metafile), &meta) != nil || len(meta.Inputs) != 1 {
+		return false
+	}
+	in, ok := meta.Inputs["ether-vfs:"+path.Clean(entry)]
+	return ok && in.Format == "" && len(in.Imports) == 0
 }
 
 func convertMessages(msgs []api.Message, severity string) []Diagnostic {
