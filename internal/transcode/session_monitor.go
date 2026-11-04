@@ -282,9 +282,9 @@ func (s *Session) clientNearLocked(seg int) bool {
 }
 
 // finish records a run's exit and reacts to failures: a hardware encoder
-// that dies before its first segment is retried on CPU, any other start
-// failure is retried once with a larger probe, and a mid-stream failure is
-// reported to the failure handler (playback fails over to another release).
+// that fails is retried on CPU at the first unpublished segment, any other
+// start failure is retried once with a larger probe, and other mid-stream
+// failures are reported to the failure handler.
 func (s *Session) finish(r *run) {
 	err := redactScopedCommandError(r.proc.Err(), r.spec)
 	s.mu.Lock()
@@ -394,14 +394,17 @@ func (s *Session) finish(r *run) {
 			_ = s.reportGraphLocked(&GraphError{Message: "FFmpeg rejected a filter in this graph. The same graph will not be retried."})
 			return
 		}
-		if r.hw && !s.forceCPU && looksLikeEncoderFailure(stderr, r.spec) {
-			s.forceCPU = true
-			log.Warn("hardware encoder failed; falling back to CPU", "hwaccel", r.spec.Accel.Name)
-			if err := s.startRunForLocked(r.startSeg, r.spec.BigProbe, "hardware fallback"); err != nil {
-				s.failErr = err
-			}
-			return
+	}
+	if r.hw && !s.forceCPU && looksLikeEncoderFailure(stderr, r.spec) {
+		s.forceCPU = true
+		next := r.next()
+		log.Warn("hardware encoder failed; falling back to CPU", "hwaccel", r.spec.Accel.Name, "segment", next)
+		if err := s.startRunForLocked(next, r.spec.BigProbe, "hardware fallback"); err != nil {
+			s.failErr = err
 		}
+		return
+	}
+	if r.produced == 0 {
 		s.failures++
 		s.failErr = fmt.Errorf("ffmpeg: %w: %s", err, tail(stderr, 300))
 		if s.failures == 1 {
