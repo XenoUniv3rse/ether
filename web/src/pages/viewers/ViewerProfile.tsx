@@ -61,8 +61,8 @@ export default function ViewerProfile() {
   const { id: raw, tab: routeTab } = useParams();
   const id = Number(raw);
   const slots = useSlots("viewer.tab");
-  const pluginTab = slots.find(d => `plugin:${d.owner}:${d.meta?.key}` === routeTab);
-  const tab = pluginTab ? routeTab! : asTab(routeTab) ?? "overview";
+  const pluginTab = slots.find((d) => `plugin:${d.owner}:${d.meta?.key}` === routeTab);
+  const tab = pluginTab ? routeTab! : (asTab(routeTab) ?? "overview");
   const navigate = useNavigate();
   const [search, setSearch] = useSearchParams();
   const listTab = ["alerts", "hidden"].includes(search.get("list") ?? "")
@@ -175,7 +175,11 @@ export default function ViewerProfile() {
               </p>
               <ExperienceLink viewer={v} />
             </div>
-            <PluginActionMenu slot="actionMenu.viewer" recordId={String(id)} onRefresh={()=>void viewer.reload()} />
+            <PluginActionMenu
+              slot="actionMenu.viewer"
+              recordId={String(id)}
+              onRefresh={() => void viewer.reload()}
+            />
             <ViewerActions
               viewer={v}
               onChange={() => void viewer.reload()}
@@ -187,26 +191,37 @@ export default function ViewerProfile() {
         </div>
       }
       subtabs={
-        <SlotAnchor slot="viewer.tab" onPickSlot={()=>navigate("/plugins/studio")}><SubtabNav
-          ariaLabel={t("Viewer sections")}
-          active={tab}
-          onSelect={setTab}
-          tabs={[
-            { key: "overview", label: t("Overview") },
-            { key: "home", label: t("Home") },
-            { key: "taste", label: t("Taste") },
-            { key: "activity", label: t("Recent activity") },
-            { key: "playback", label: t("Audio & subtitles") },
-            { key: "limits", label: t("Limits") },
-            { key: "sign-in", label: t("Sign-in & devices") },
-            ...(serverAccess ? [{ key: "lists", label: t("Lists & alerts") }] : []),
-            // Plugin tabs follow Ether's own sections.
-            ...slots.map(d=>({key:`plugin:${d.owner}:${d.meta!.key}`,label:textOf(d.label)})),
-          ]}
-        /></SlotAnchor>
+        <SlotAnchor slot="viewer.tab" onPickSlot={() => navigate("/plugins/studio")}>
+          <SubtabNav
+            ariaLabel={t("Viewer sections")}
+            active={tab}
+            onSelect={setTab}
+            tabs={[
+              { key: "overview", label: t("Overview") },
+              { key: "home", label: t("Home") },
+              { key: "taste", label: t("Taste") },
+              { key: "activity", label: t("Recent activity") },
+              { key: "playback", label: t("Audio & subtitles") },
+              { key: "limits", label: t("Limits") },
+              { key: "sign-in", label: t("Sign-in & devices") },
+              ...(serverAccess ? [{ key: "lists", label: t("Lists & alerts") }] : []),
+              // Plugin tabs follow Ether's own sections.
+              ...slots.map((d) => ({
+                key: `plugin:${d.owner}:${d.meta!.key}`,
+                label: textOf(d.label),
+              })),
+            ]}
+          />
+        </SlotAnchor>
       }
     >
-      {pluginTab ? <PluginView plugin={pluginTab.owner} page={pluginTab.meta!.key} params={{recordType:"viewer",recordId:String(id)}}/> : tab === "overview" ? (
+      {pluginTab ? (
+        <PluginView
+          plugin={pluginTab.owner}
+          page={pluginTab.meta!.key}
+          params={{ recordType: "viewer", recordId: String(id) }}
+        />
+      ) : tab === "overview" ? (
         <ViewerDashboard viewer={v} taste={taste.data} />
       ) : tab === "limits" ? (
         <ViewerAccess key={id} viewer={v} />

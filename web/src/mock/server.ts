@@ -949,7 +949,14 @@ export function createFakeServer(opts: FakeOptions = {}) {
     if (sorter) items.sort(sorter);
     if (
       spec.sources.some((s) =>
-        ["traktList", "letterboxdList", "mdblist", "anilistList", "tmdbUserList", "stevenlu"].includes(s.kind),
+        [
+          "traktList",
+          "letterboxdList",
+          "mdblist",
+          "anilistList",
+          "tmdbUserList",
+          "stevenlu",
+        ].includes(s.kind),
       )
     )
       warnings.push(

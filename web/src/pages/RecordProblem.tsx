@@ -221,7 +221,9 @@ export function RecordProblem({ open, onClose }: { open: boolean; onClose: () =>
               <span className="mb-1 block text-fg-muted">{t("Note")}</span>
               <Input value={note} onChange={(e) => setNote(e.currentTarget.value)} />
               <span className="mt-1 block text-fg-subtle">
-                {t("The note is saved as data, not instructions. Links and addresses are redacted.")}
+                {t(
+                  "The note is saved as data, not instructions. Links and addresses are redacted.",
+                )}
               </span>
             </label>
           </>

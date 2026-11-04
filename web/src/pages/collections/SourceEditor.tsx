@@ -234,7 +234,9 @@ function SourceBody({
           />
           {bad ? (
             <p className="text-xs text-danger">
-              {source.kind === "tmdbUserList" ? t("Enter a TMDB list ID or a link to a public TMDB list.") : t("Enter a full https:// link to a public list.")}
+              {source.kind === "tmdbUserList"
+                ? t("Enter a TMDB list ID or a link to a public TMDB list.")
+                : t("Enter a full https:// link to a public list.")}
             </p>
           ) : source.kind === "traktList" ? (
             <p className="text-xs text-fg-muted">

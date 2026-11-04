@@ -258,7 +258,11 @@ export function PluginSourceCards({
                   : undefined;
 
             const details = [
-              nativeDebrid ? t("Uses native cache checks and playback") : i === 0 ? t("Tried first") : t("Priority {number}", { number: i + 1 }),
+              nativeDebrid
+                ? t("Uses native cache checks and playback")
+                : i === 0
+                  ? t("Tried first")
+                  : t("Priority {number}", { number: i + 1 }),
               hint,
               ...abilities,
               ...limits,
@@ -284,14 +288,16 @@ export function PluginSourceCards({
                     ) : null}
                   </>
                 }
-                order={nativeDebrid ? undefined : (
-                  <OrderButtons
-                    label={label}
-                    i={i}
-                    n={ordered.length}
-                    onMove={(dir) => move(i, dir)}
-                  />
-                )}
+                order={
+                  nativeDebrid ? undefined : (
+                    <OrderButtons
+                      label={label}
+                      i={i}
+                      n={ordered.length}
+                      onMove={(dir) => move(i, dir)}
+                    />
+                  )
+                }
                 handle={nativeDebrid ? undefined : handle}
                 editLabel={t("Edit {name}", { name: label })}
                 onEdit={() => setActiveId(d.id)}
@@ -318,7 +324,9 @@ export function PluginSourceCards({
                   {t("Close")}
                 </Button>
                 <Button asChild size="sm">
-                  <Link to={`/plugins/installed?plugin=${encodeURIComponent(active.owner)}`}>{t("Manage in Plugins")}</Link>
+                  <Link to={`/plugins/installed?plugin=${encodeURIComponent(active.owner)}`}>
+                    {t("Manage in Plugins")}
+                  </Link>
                 </Button>
               </div>
             </div>

@@ -777,6 +777,7 @@ type memoEntry struct {
 // memoTTL bounds how long an assembled screen is reused; clients poll
 // /hubs often and the rows only change when an input does.
 const memoTTL = 2 * time.Minute
+
 // memoMaxEntries is a count backstop; memoMaxBytes is the real bound. Keys
 // include client and session, so a busy server needs room for many screens.
 const memoMaxEntries = 1024

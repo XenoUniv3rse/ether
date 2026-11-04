@@ -709,10 +709,16 @@ export function storageHealth(v: unknown): HealthItem | null {
   const why =
     v.reasonKind === "network"
       ? t("It is a network share, so Ether can't tell when a crashed run has let go of its files.")
-      : t("It failed Ether's startup check, so Ether can't tell when a crashed run has let go of its files.");
+      : t(
+          "It failed Ether's startup check, so Ether can't tell when a crashed run has let go of its files.",
+        );
   const fixes: Record<string, string> = {
-    unraid: t("Map /config to the pool or disk path, for example /mnt/cache/appdata/ether, not /mnt/user."),
-    "docker-desktop": t("Use a Docker named volume for /config instead of a folder from your computer."),
+    unraid: t(
+      "Map /config to the pool or disk path, for example /mnt/cache/appdata/ether, not /mnt/user.",
+    ),
+    "docker-desktop": t(
+      "Use a Docker named volume for /config instead of a folder from your computer.",
+    ),
     network: t("Move the data folder to a disk in this machine."),
     fuse: t("Move the data folder to a disk in this machine."),
   };
@@ -722,10 +728,14 @@ export function storageHealth(v: unknown): HealthItem | null {
     href: "/cache",
     level: "warn",
     summary: t("Cache cleanup is in safe mode: {path} is on {type}", { path, type }),
-    note: fixes[str(v.fixKind)] ?? t("Move the data folder to a local disk (ext4, XFS, Btrfs, ZFS, f2fs, bcachefs or NTFS)."),
+    note:
+      fixes[str(v.fixKind)] ??
+      t("Move the data folder to a local disk (ext4, XFS, Btrfs, ZFS, f2fs, bcachefs or NTFS)."),
     details: [
       why,
-      t("Files left by a crash are kept for 10 minutes before they are cleaned up. Everything else works normally."),
+      t(
+        "Files left by a crash are kept for 10 minutes before they are cleaned up. Everything else works normally.",
+      ),
       str(v.reason),
     ].filter(Boolean),
   };

@@ -298,7 +298,9 @@ export default function Cache() {
             className="flex shrink-0 flex-col gap-0.5 border-b border-warning/20 bg-warning/10 px-5 py-2 text-xs text-warning"
           >
             <span className="font-medium">{storage.summary}</span>
-            <span>{storage.details[0]} {storage.note}</span>
+            <span>
+              {storage.details[0]} {storage.note}
+            </span>
           </div>
         )}
         {snap?.restartRequired && (

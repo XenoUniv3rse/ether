@@ -42,7 +42,8 @@ const META: Record<
   debrid_provider: {
     icon: Film,
     title: () => t("Debrid provider"),
-    about: () => t("Checks cached torrents and supplies playable files through the native debrid pipeline."),
+    about: () =>
+      t("Checks cached torrents and supplies playable files through the native debrid pipeline."),
     href: "/sources",
     link: () => t("Open Sources"),
   },
@@ -247,7 +248,15 @@ function PartRows({
     case "livetv_channels":
       return <LiveTVRow detail={detail} onClose={onClose} />;
     case "debrid_provider":
-      return <ul><Row title={t("Native debrid provider")} detail={t("Configure its account in Setup, then test the connection.")} action={link} /></ul>;
+      return (
+        <ul>
+          <Row
+            title={t("Native debrid provider")}
+            detail={t("Configure its account in Setup, then test the connection.")}
+            action={link}
+          />
+        </ul>
+      );
     case "stream_source":
     case "subtitles":
     case "metadata": {

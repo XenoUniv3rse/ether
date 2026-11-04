@@ -32,7 +32,14 @@ export const SERVER: FieldGroup[] = localized(() => [
   {
     id: "console",
     title: t("Console"),
-    fields: [{ key: "startupAnimation", label: t("Startup animation"), kind: "bool", help: t("Show the animated splash when opening the console.") }],
+    fields: [
+      {
+        key: "startupAnimation",
+        label: t("Startup animation"),
+        kind: "bool",
+        help: t("Show the animated splash when opening the console."),
+      },
+    ],
   },
   {
     id: "connect",
