@@ -297,7 +297,37 @@ func liveProgrammeMetadata(c livetv.Channel, p livetv.Programme) model.Metadata 
 	if rating == "" {
 		rating = c.Rating
 	}
-	return model.Metadata{RatingKey: p.ID, Key: liveProviderPath + "/metadata/" + url.PathEscape(p.ID), GUID: "ether://livetv/" + p.ID, Type: "clip", Title: p.Item.Title, Summary: p.Item.Summary, ContentRating: rating, Thumb: p.Item.Thumb, Duration: dur, Extra: []model.Attr{model.A("live", true)}, Media: []model.Media{{ID: p.Start.Unix(), Duration: dur, Protocol: "livetv", Extra: []model.Attr{model.A("beginsAt", p.Start.Unix()), model.A("endsAt", p.End.Unix()), model.A("channelIdentifier", c.ID), model.A("channelID", c.ID), model.A("channelTitle", c.Name), model.A("channelCallSign", c.Name), model.A("channelVcn", c.Number), model.A("channelThumb", liveLogo(c)), model.A("gridKey", c.ID)}}}}
+	md := model.Metadata{RatingKey: p.ID, Key: liveProviderPath + "/metadata/" + url.PathEscape(p.ID), GUID: "ether://livetv/" + p.ID, Type: "clip", Title: p.Item.Title, Summary: p.Item.Summary, ContentRating: rating, Thumb: p.Item.Thumb, Duration: dur, Extra: []model.Attr{model.A("live", true)}, Media: []model.Media{{ID: p.Start.Unix(), Duration: dur, Protocol: "livetv", Extra: []model.Attr{model.A("beginsAt", p.Start.Unix()), model.A("endsAt", p.End.Unix()), model.A("channelIdentifier", c.ID), model.A("channelID", c.ID), model.A("channelTitle", c.Name), model.A("channelCallSign", c.Name), model.A("channelVcn", c.Number), model.A("channelThumb", liveLogo(c)), model.A("gridKey", c.ID)}}}}
+	if strings.HasPrefix(p.Item.GUID, "plex://") {
+		md.GUID = p.Item.GUID
+		if p.Item.MediaType == "episode" || p.Item.MediaType == "movie" {
+			md.Type = p.Item.MediaType
+		}
+		if p.Item.EpisodeTitle != "" {
+			md.Title = p.Item.EpisodeTitle
+		}
+		md.GrandparentTitle = p.Item.ShowTitle
+		md.GrandparentGUID = p.Item.ShowGUID
+		md.Art = p.Item.Art
+		md.GrandparentThumb = p.Item.Thumb
+		md.GrandparentArt = p.Item.Art
+		if p.Item.Season > 0 {
+			season := p.Item.Season
+			md.ParentIndex = &season
+		}
+		if p.Item.Episode > 0 {
+			episode := p.Item.Episode
+			md.Index = &episode
+		}
+		if p.Item.ReleasedMS > 0 {
+			md.OriginallyAvailableAt = time.UnixMilli(p.Item.ReleasedMS).UTC().Format("2006-01-02")
+		}
+		for _, g := range p.Item.Genres {
+			md.Genre = append(md.Genre, model.Tag{Tag: g})
+		}
+		md.Media[0].Extra = append(md.Media[0].Extra, model.A("premiere", p.Item.Premiere), model.A("live", p.Item.Live))
+	}
+	return md
 }
 
 // errLiveBadRequest marks a guide query the client got wrong (400, not 500).
