@@ -205,9 +205,7 @@ export function InstallDrawer({
               <>
                 <Field
                   label={t("Plugin address")}
-                  hint={t(
-                    "Paste a manifest.json URL, a Stremio add-on link, or a GitHub repository URL.",
-                  )}
+                  hint={t("Paste a manifest.json URL, a Stremio link, or a GitHub repository URL.")}
                   htmlFor="plugin-install-url"
                 >
                   <div className="relative">

@@ -152,7 +152,7 @@
     "id": "ask.sources.add-stremio",
     "owner": "builtin",
     "label": {
-      "source": "Add a Stremio add-on"
+      "source": "Add a plugin from Stremio"
     },
     "hint": {},
     "order": 130,

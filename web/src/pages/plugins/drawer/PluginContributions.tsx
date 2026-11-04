@@ -62,8 +62,8 @@ const META: Record<
   },
   plugin_directory: {
     icon: FolderSearch,
-    title: () => t("Add-on directories"),
-    about: () => t("Lists of more add-ons you can browse from Plugins → Add."),
+    title: () => t("Plugin directories"),
+    about: () => t("Lists of more plugins you can browse from Plugins → Add."),
   },
 };
 

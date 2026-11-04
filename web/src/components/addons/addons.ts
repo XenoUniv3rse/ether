@@ -57,7 +57,7 @@ export const ADDON_ROLE_LABEL = localized<Record<AddonRole, string>>(() => ({
   livetv_channels: t("Live TV channels"),
   subtitles: t("Subtitles"),
   metadata: t("Title details"),
-  plugin_directory: t("Add-on directory"),
+  plugin_directory: t("Plugin directory"),
 }));
 
 export const addonsApi = {

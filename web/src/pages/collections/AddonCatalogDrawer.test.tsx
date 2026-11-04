@@ -11,7 +11,7 @@ vi.mock("../../components/addons/addons", async (importOriginal) => {
       list: async () => [
         {
           id: "addon.abc",
-          name: "Catalog add-on",
+          name: "Catalog plugin",
           version: "1.0.0",
           enabled: true,
           stremioOnly: true,
@@ -34,7 +34,7 @@ vi.mock("../../lib/extend", async (importOriginal) => {
           kind: "collectionSource",
           id: "plugin:addon.abc/catalog-1",
           owner: "addon.abc",
-          group: "Catalog add-on",
+          group: "Catalog plugin",
           label: { resolved: "Popular · series" },
           meta: { editor: "plugin", catalog: "series/top" },
         },
@@ -51,18 +51,18 @@ vi.mock("../../lib/extend", async (importOriginal) => {
   };
 });
 
-describe("Stremio add-on catalog picker", () => {
-  it("lists only installed add-ons' catalogs and picks one as a source kind", async () => {
+describe("Stremio plugin catalog picker", () => {
+  it("lists only installed plugins' catalogs and picks one as a source kind", async () => {
     const onPick = vi.fn();
     const onClose = vi.fn();
     render(<AddonCatalogDrawer open onClose={onClose} onPick={onPick} />);
-    const dialog = await screen.findByRole("dialog", { name: "Choose a Stremio add-on catalog" });
-    const group = await within(dialog).findByRole("region", { name: "Catalog add-on" });
+    const dialog = await screen.findByRole("dialog", { name: "Choose a Stremio plugin catalog" });
+    const group = await within(dialog).findByRole("region", { name: "Catalog plugin" });
     expect(within(dialog).queryByText("Staff picks")).not.toBeInTheDocument();
     fireEvent.click(within(group).getByRole("button", { name: "Popular · series" }));
     expect(onPick).toHaveBeenCalledWith({
       kind: "plugin:addon.abc/catalog-1",
-      addon: "Catalog add-on",
+      addon: "Catalog plugin",
       label: "Popular · series",
       mediaType: "show",
     });

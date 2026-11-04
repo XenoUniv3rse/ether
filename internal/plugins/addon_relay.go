@@ -83,7 +83,9 @@ func (m *Manager) startRelay(l addonLink) (string, error) {
 	origin := &url.URL{Scheme: u.Scheme, Host: u.Host}
 	rs.sessions[token] = &relaySession{origin: origin, site: siteOf(u.Hostname()), entry: u.EscapedPath(), expires: now.Add(relayTTL)}
 	rs.mu.Unlock()
-	return RelayPublicPrefix + token + u.EscapedPath(), nil
+	// The page's path (which carries the add-on's settings, keys included)
+	// stays on the server; the console only sees the token.
+	return RelayPublicPrefix + token + "/", nil
 }
 
 // AddonConfigPage opens the configure page of an installed add-on.
@@ -104,7 +106,7 @@ func (m *Manager) AddonLinkConfigPage(link string) (string, error) {
 	}
 	l, err := parseAddonLink(link)
 	if err != nil {
-		return "", &ValidationError{[]FieldError{{"url", "That is not an add-on install link."}}}
+		return "", &ValidationError{[]FieldError{{"url", "That is not a plugin install link."}}}
 	}
 	return m.startRelay(l)
 }
@@ -234,7 +236,7 @@ func (m *Manager) RelayHandler() http.Handler {
 		}
 		resp, err := client.Do(req)
 		if err != nil {
-			http.Error(w, "The add-on's settings page didn't answer.", http.StatusBadGateway)
+			http.Error(w, "The plugin's settings page didn't answer.", http.StatusBadGateway)
 			return
 		}
 		defer resp.Body.Close() //nolint:errcheck
@@ -305,7 +307,21 @@ func relayRewrite(page []byte, prefix, origin, site string) []byte {
 		}
 		return []byte(string(g[1]) + prefix + "/~/" + host + tail)
 	})
-	page = relayAttr.ReplaceAll(page, []byte("${1}"+prefix+"/${2}"))
+	// Root-relative paths go through the relay, once: paths already on it
+	// (rewritten above) are left alone.
+	var out bytes.Buffer
+	last := 0
+	for _, g := range relayAttr.FindAllSubmatchIndex(page, -1) {
+		slash := g[3] // the "/" right after the attribute's opening quote
+		if bytes.HasPrefix(page[slash:], []byte(RelayPublicPrefix)) {
+			continue
+		}
+		out.Write(page[last:slash])
+		out.WriteString(prefix)
+		last = slash
+	}
+	out.Write(page[last:])
+	page = out.Bytes()
 	return relayCSS.ReplaceAll(page, []byte("${1}"+prefix+"/${2}"))
 }
 
@@ -327,7 +343,7 @@ function mem(){var d={};return{getItem:function(k){return k in d?d[k]:null},setI
 ["localStorage","sessionStorage"].forEach(function(n){try{window[n].length}catch(e){try{Object.defineProperty(window,n,{value:mem(),configurable:true})}catch(e2){}}});
 try{document.cookie}catch(e){try{Object.defineProperty(Document.prototype,"cookie",{get:function(){return""},set:function(){},configurable:true})}catch(e2){}}
 var LINK=/(stremio:\/\/[^\s"'<>]+?\/manifest\.json|https?:\/\/[^\s"'<>]+?\/manifest\.json)/i;
-function norm(u){u=String(u||"");var m=LINK.exec(u);if(!m)return"";u=m[1];if(/^stremio:\/\//i.test(u))u="https://"+u.slice(10);if(u.indexOf(H+P)===0)u=u.slice(H.length);else if(u.indexOf(H+"/")===0)return O+u.slice(H.length);if(u.indexOf(P+"/~/")===0)return"https://"+u.slice(P.length+3);if(u.indexOf(P)===0)u=O+u.slice(P.length);return u}
+function norm(u){u=String(u||"");var m=LINK.exec(u);if(!m)return"";u=m[1];if(/^stremio:\/\//i.test(u))u="https://"+u.slice(10);var h=/^https?:\/\/([^\/]+)(\/.*)$/i.exec(u);if(h&&h[1]===location.host)u=h[2];if(u.indexOf(P+"/~/")===0)return"https://"+u.slice(P.length+3);if(u.indexOf(P)===0)return O+u.slice(P.length);if(u.charAt(0)==="/")return O+u;return u}
 var sent="";function report(t,u){u=norm(u);if(!u||(t==="link"&&u===sent))return false;if(t==="link")sent=u;parent.postMessage({source:"ether-addon-relay",type:t,url:u},"*");return true}
 document.addEventListener("click",function(e){var a=e.target&&e.target.closest&&e.target.closest("a[href]");if(a&&report("link",a.getAttribute("href"))){e.preventDefault();e.stopPropagation()}},true);
 var hc=HTMLElement.prototype.click;HTMLElement.prototype.click=function(){if(this.tagName==="A"&&report("link",this.getAttribute("href")))return;return hc.apply(this,arguments)};
@@ -354,7 +370,7 @@ func injectWatcher(page []byte, prefix, origin, docPath, site string) []byte {
 	js = strings.Replace(js, "%s", string(d), 1)
 	js = strings.Replace(js, "%s", string(st), 1)
 	dir := docPath[:strings.LastIndex(docPath, "/")+1]
-	head := []byte(`<base href="` + prefix + dir + `"><script>` + js + "</script>")
+	head := []byte(`<base href="` + prefix + dir + `"><script>` + js + formJS + "</script>")
 	if loc := relayHead.FindIndex(page); loc != nil {
 		out := make([]byte, 0, len(page)+len(head))
 		out = append(out, page[:loc[1]]...)

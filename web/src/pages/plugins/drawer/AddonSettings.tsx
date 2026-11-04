@@ -1,18 +1,14 @@
-import { Badge, Button, Dialog, Input, Switch, cn, toast } from "@braedonsaunders/appkit-ui";
-import {
-  CheckCircle2,
-  ExternalLink,
-  Loader2,
-  Settings2,
-  Sparkles,
-  TriangleAlert,
-} from "lucide-react";
-import { Fragment, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
-import { ListInput, SecretInput } from "../../../components/fields";
+import { Badge, Button, Dialog, Input, toast } from "@braedonsaunders/appkit-ui";
+import { CheckCircle2, ExternalLink, Loader2, Sparkles, TriangleAlert } from "lucide-react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { Section } from "../../../components/layout";
 import { t } from "../../../i18n";
 import { apiFetch, errorMessage } from "../../../lib/api";
 import { invalidateRegistry } from "../../../lib/extend";
+import { REDACTED } from "../../../lib/types";
+import { SchemaGroups, type FieldDef, type FieldGroup } from "../../settings/SchemaForm";
 import type { PluginDetail } from "../types";
+import { LiveFields, useLiveForm } from "./liveForm";
 
 interface ConfigField {
   key: string;
@@ -45,29 +41,79 @@ export interface ConfigResult {
   problems?: string[];
 }
 
-const SAVED = "Saved";
+/** Server-read settings (declared or decoded) as Ether fields, one tab per group. */
+function serverGroups(cfg: AddonConfig, title: string, description: string): FieldGroup[] {
+  const order: string[] = [];
+  const by: Record<string, FieldDef[]> = {};
+  for (const f of cfg.fields) {
+    const g = f.group ?? "";
+    if (!(g in by)) {
+      by[g] = [];
+      order.push(g);
+    }
+    by[g]!.push(serverDef(f));
+  }
+  return order.map((g) => ({
+    id: g || "plugin",
+    title: g || title,
+    description: g ? undefined : description,
+    fields: by[g]!,
+  }));
+}
+
+function serverDef(f: ConfigField): FieldDef {
+  const base = { key: f.key, label: f.label };
+  switch (f.kind) {
+    case "switch":
+      return { ...base, kind: "bool" };
+    case "number":
+      return { ...base, kind: "number" };
+    case "list":
+      return { ...base, kind: "list" };
+    case "secret":
+      return { ...base, kind: "secret" };
+    case "select":
+      return { ...base, kind: "select", options: f.options ?? [] };
+    case "fixed":
+      return { ...base, kind: "readonly" };
+    default:
+      return { ...base, kind: "text" };
+  }
+}
+
+function serverValues(cfg: AddonConfig): Record<string, unknown> {
+  const v: Record<string, unknown> = {};
+  for (const f of cfg.fields)
+    v[f.key] =
+      f.kind === "secret" ? (f.set ? REDACTED : "") : f.kind === "fixed" ? f.summary : f.value;
+  return v;
+}
 
 /**
- * An add-on's own settings, inside Ether. Readable settings become native
- * fields; anything else opens the add-on's settings page in Ether and
- * picks up the link it makes. Every change is tried before it is saved.
+ * A plugin's own settings, inside Ether, as Ether fields. A plugin that
+ * declares its settings gets them as declared. Otherwise Ether reads the
+ * settings page the plugin publishes and shows that page's real fields
+ * (choices, lists, switches) as its own; changes are made on the page,
+ * which writes the new link itself. If the page can't be read, settings
+ * carried in the link are shown instead. Every change is tried before it
+ * is saved.
  */
 export function AddonSettings({ detail, onSaved }: { detail: PluginDetail; onSaved: () => void }) {
   const [cfg, setCfg] = useState<AddonConfig | null>(null);
   const [values, setValues] = useState<Record<string, unknown>>({});
+  const [touched, setTouched] = useState<Record<string, unknown>>({});
   const [result, setResult] = useState<ConfigResult | null>(null);
   const [busy, setBusy] = useState<"" | "test" | "save">("");
   const [error, setError] = useState("");
   const [page, setPage] = useState(false);
+  const [generation, setGeneration] = useState(0);
   const base = `/plugins/${encodeURIComponent(detail.id)}/addon-config`;
 
   const load = useCallback(async () => {
     try {
       const c = await apiFetch<AddonConfig>(base);
       setCfg(c);
-      const v: Record<string, unknown> = {};
-      for (const f of c.fields) v[f.key] = f.kind === "secret" ? (f.set ? SAVED : "") : f.value;
-      setValues(v);
+      setValues(serverValues(c));
       setResult(null);
     } catch {
       setCfg(null);
@@ -77,33 +123,34 @@ export function AddonSettings({ detail, onSaved }: { detail: PluginDetail; onSav
     void load();
   }, [load]);
 
+  const openPage = () =>
+    apiFetch<{ page: string }>(`${base}/page`, { method: "POST", body: "{}" }).then((r) => r.page);
+  const wantLive = Boolean(cfg?.configurable && cfg.layer !== "declared" && cfg.layer !== "none");
+  const live = useLiveForm(openPage, wantLive ? generation + 1 : 0);
+
   if (!cfg || !cfg.configurable) return null;
-  const native = cfg.layer === "declared" || cfg.layer === "decoded";
 
-  const payload = () => {
-    const out: Record<string, unknown> = {};
-    for (const f of cfg.fields) {
-      const v = values[f.key];
-      out[f.key] = f.kind === "secret" && v === SAVED ? "" : v;
-    }
-    return { values: out };
-  };
-
-  const run = async (kind: "test" | "save", body: object) => {
+  const run = async (kind: "test" | "save", body: () => Promise<object | null>) => {
     setBusy(kind);
     setError("");
     try {
+      const payload = await body();
+      if (!payload) {
+        setError(t("{host} didn't give a link for these settings yet.", { host: cfg.host }));
+        return;
+      }
       if (kind === "test") {
         setResult(
           await apiFetch<ConfigResult>(`${base}/test`, {
             method: "POST",
-            body: JSON.stringify(body),
+            body: JSON.stringify(payload),
           }),
         );
       } else {
-        await apiFetch(base, { method: "PUT", body: JSON.stringify(body) });
+        await apiFetch(base, { method: "PUT", body: JSON.stringify(payload) });
         invalidateRegistry();
         toast.success(t("Saved {name}'s settings", { name: detail.name }));
+        setTouched({});
         await load();
         onSaved();
       }
@@ -114,100 +161,134 @@ export function AddonSettings({ detail, onSaved }: { detail: PluginDetail; onSav
     }
   };
 
+  const fromPage = async () => {
+    const link = await live.commit();
+    return link ? { link } : null;
+  };
+  const fromFields = async () => {
+    const out: Record<string, unknown> = {};
+    for (const f of cfg.fields) {
+      const v = values[f.key];
+      out[f.key] = f.kind === "secret" && v === REDACTED ? "" : v;
+    }
+    return { values: out };
+  };
+
+  const title = t("Plugin settings");
+  const useLive = live.status === "ready";
+  const native = cfg.layer === "declared" || cfg.layer === "decoded";
+  const actions = (body: () => Promise<object | null>) => (
+    <div className="flex w-full flex-wrap items-center gap-2">
+      <Button variant="ghost" size="sm" onClick={() => setPage(true)}>
+        <ExternalLink size={13} /> {t("Open {host}'s own page", { host: cfg.host })}
+      </Button>
+      <div className="ml-auto flex items-center gap-2">
+        <Button
+          variant="outline"
+          size="sm"
+          disabled={busy !== ""}
+          onClick={() => void run("test", body)}
+        >
+          {busy === "test" ? <Loader2 size={13} className="animate-spin" /> : null}
+          {t("Try it")}
+        </Button>
+        <Button size="sm" disabled={busy !== ""} onClick={() => void run("save", body)}>
+          {busy === "save" ? t("Saving…") : t("Save")}
+        </Button>
+      </div>
+    </div>
+  );
+
+  let body: ReactNode;
+  if (useLive) {
+    body = (
+      <LiveFields
+        form={live}
+        title={title}
+        description={
+          live.partial
+            ? t(
+                "Read from {host}'s own settings page. A few of its settings are only on that page.",
+                { host: cfg.host },
+              )
+            : t("Read from {host}'s own settings page. Changes are tried before they're saved.", {
+                host: cfg.host,
+              })
+        }
+        touched={touched}
+        onTouched={(next) => {
+          setTouched(next);
+          setResult(null);
+        }}
+        footer={actions(fromPage)}
+      />
+    );
+  } else if (live.status === "loading") {
+    body = (
+      <Section title={title}>
+        <p className="flex items-center gap-2 text-sm text-fg-muted" role="status">
+          <Loader2 size={14} className="animate-spin" aria-hidden />
+          {t("Reading {host}'s settings…", { host: cfg.host })}
+        </p>
+      </Section>
+    );
+  } else if (native) {
+    body = (
+      <SchemaGroups
+        groups={serverGroups(
+          cfg,
+          title,
+          t("Read from {host}. Changes are tried before they're saved.", { host: cfg.host }),
+        )}
+        value={values}
+        errors={{}}
+        prefix="plugin"
+        onChange={(next) => {
+          setValues(next);
+          setResult(null);
+        }}
+        footer={actions(fromFields)}
+      />
+    );
+  } else {
+    body = (
+      <Section title={title}>
+        <p className="text-sm text-fg-muted">
+          {t("{host} has its own settings page. Set it up here; Ether picks up the result.", {
+            host: cfg.host,
+          })}
+        </p>
+        <Button className="mt-3" onClick={() => setPage(true)}>
+          <ExternalLink size={14} /> {t("Open {host} settings", { host: cfg.host })}
+        </Button>
+      </Section>
+    );
+  }
+
   return (
-    <section
-      aria-label={t("Add-on settings")}
-      className="overflow-hidden rounded-xl border border-border bg-surface"
-    >
-      <header className="flex items-start gap-3 border-b border-border px-5 py-4">
-        <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
-          <Settings2 size={18} aria-hidden />
-        </span>
-        <div className="min-w-0 flex-1">
-          <h3 className="text-sm font-semibold text-fg">{t("Add-on settings")}</h3>
-          <p className="mt-0.5 text-sm text-fg-muted">
-            {native
-              ? t("Read from {host}. Changes are tried before they're saved.", { host: cfg.host })
-              : t("{host} has its own settings page. Set it up here; Ether picks up the result.", {
-                  host: cfg.host,
-                })}
-          </p>
-        </div>
-        {cfg.required && !cfg.configured ? (
-          <Badge variant="warning">{t("Needs setting up")}</Badge>
-        ) : cfg.configured ? (
-          <Badge variant="success">
-            <CheckCircle2 size={12} aria-hidden /> {t("Set up")}
-          </Badge>
-        ) : null}
-      </header>
-
-      {native ? (
-        <div className="divide-y divide-border">
-          {cfg.fields.map((f, i) => (
-            <Fragment key={f.key}>
-              {f.group && f.group !== cfg.fields[i - 1]?.group ? (
-                <h4 className="bg-bg-subtle px-5 pb-1.5 pt-3 text-[11px] font-semibold uppercase tracking-wider text-fg-subtle">
-                  {f.group}
-                </h4>
-              ) : null}
-              <FieldRow
-                field={f}
-                value={values[f.key]}
-                onChange={(v) => {
-                  setValues((all) => ({ ...all, [f.key]: v }));
-                  setResult(null);
-                }}
-              />
-            </Fragment>
-          ))}
-        </div>
-      ) : (
-        <div className="px-5 py-4">
-          <Button onClick={() => setPage(true)}>
-            <ExternalLink size={14} /> {t("Open {host} settings", { host: cfg.host })}
-          </Button>
-        </div>
-      )}
-
+    <div className="space-y-3">
+      {cfg.required && !cfg.configured ? (
+        <p
+          role="status"
+          className="flex items-center gap-2 rounded-lg bg-warning-subtle px-3 py-2 text-sm"
+        >
+          <TriangleAlert size={15} className="shrink-0 text-warning" aria-hidden />
+          {t("{name} needs setting up before Ether can use it.", { name: detail.name })}
+        </p>
+      ) : null}
+      {body}
       {result ? <ResultCard result={result} /> : null}
       {error ? (
-        <p role="alert" className="border-t border-border px-5 py-3 text-sm text-danger">
+        <p role="alert" className="text-sm text-danger">
           {error}
         </p>
       ) : null}
-
-      {native ? (
-        <footer className="flex flex-wrap items-center gap-2 border-t border-border bg-bg-subtle px-5 py-3">
-          <Button variant="ghost" size="sm" onClick={() => setPage(true)}>
-            {t("Use {host}'s own page", { host: cfg.host })}
-          </Button>
-          <div className="ml-auto flex items-center gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={busy !== ""}
-              onClick={() => void run("test", payload())}
-            >
-              {busy === "test" ? <Loader2 size={13} className="animate-spin" /> : null}
-              {t("Try it")}
-            </Button>
-            <Button size="sm" disabled={busy !== ""} onClick={() => void run("save", payload())}>
-              {busy === "save" ? t("Saving…") : t("Save")}
-            </Button>
-          </div>
-        </footer>
-      ) : null}
-
+      {live.frame}
       <AddonSettingsPage
         open={page}
         name={detail.name}
         host={cfg.host}
-        openPage={() =>
-          apiFetch<{ page: string }>(`${base}/page`, { method: "POST", body: "{}" }).then(
-            (r) => r.page,
-          )
-        }
+        openPage={openPage}
         tryLink={(link) =>
           apiFetch<ConfigResult>(`${base}/test`, { method: "POST", body: JSON.stringify({ link }) })
         }
@@ -216,107 +297,13 @@ export function AddonSettings({ detail, onSaved }: { detail: PluginDetail; onSav
           invalidateRegistry();
           toast.success(t("Saved {name}'s settings", { name: detail.name }));
           setPage(false);
+          setTouched({});
           await load();
+          setGeneration((g) => g + 1);
           onSaved();
         }}
         onClose={() => setPage(false)}
       />
-    </section>
-  );
-}
-
-function FieldRow({
-  field,
-  value,
-  onChange,
-}: {
-  field: ConfigField;
-  value: unknown;
-  onChange: (v: unknown) => void;
-}) {
-  const id = `addon-cfg-${field.key}`;
-  let control: ReactNode;
-  switch (field.kind) {
-    case "switch":
-      control = (
-        <Switch
-          id={id}
-          checked={Boolean(value)}
-          onChange={(e) => onChange(e.currentTarget.checked)}
-          aria-label={field.label}
-        />
-      );
-      break;
-    case "number":
-      control = (
-        <Input
-          id={id}
-          type="number"
-          className="w-32"
-          value={value === undefined || value === null ? "" : String(value)}
-          onChange={(e) => onChange(e.currentTarget.value)}
-        />
-      );
-      break;
-    case "list":
-      control = (
-        <ListInput
-          id={id}
-          ariaLabel={field.label}
-          value={Array.isArray(value) ? (value as string[]) : []}
-          onChange={(v) => onChange(v)}
-        />
-      );
-      break;
-    case "secret":
-      control = (
-        <SecretInput
-          id={id}
-          ariaLabel={field.label}
-          value={String(value ?? "")}
-          onChange={(v) => onChange(v)}
-        />
-      );
-      break;
-    case "select":
-      control = (
-        <select
-          id={id}
-          value={String(value ?? "")}
-          onChange={(e) => onChange(e.currentTarget.value)}
-          className="h-9 rounded-lg border border-border bg-surface px-2 text-sm text-fg"
-        >
-          {(field.options ?? []).map((o) => (
-            <option key={o.value} value={o.value}>
-              {o.label}
-            </option>
-          ))}
-        </select>
-      );
-      break;
-    case "fixed":
-      control = <span className="text-sm text-fg-muted">{field.summary}</span>;
-      break;
-    default:
-      control = (
-        <Input
-          id={id}
-          value={String(value ?? "")}
-          onChange={(e) => onChange(e.currentTarget.value)}
-        />
-      );
-  }
-  return (
-    <div className="grid items-center gap-2 px-5 py-3 sm:grid-cols-[minmax(0,14rem)_minmax(0,1fr)]">
-      <label htmlFor={id} className="text-sm font-medium text-fg">
-        {field.label}
-        {field.required ? <span className="text-danger"> *</span> : null}
-      </label>
-      <div
-        className={cn("min-w-0", field.kind === "switch" && "flex justify-end sm:justify-start")}
-      >
-        {control}
-      </div>
     </div>
   );
 }
@@ -324,14 +311,14 @@ function FieldRow({
 export function ResultCard({ result }: { result: ConfigResult }) {
   const ok = !result.problems?.length;
   return (
-    <div className="space-y-2 border-t border-border bg-bg-subtle px-5 py-4" role="status">
+    <div className="space-y-2 rounded-xl border border-border bg-surface px-4 py-3" role="status">
       <p className="flex items-center gap-2 text-sm font-medium text-fg">
         {ok ? (
           <CheckCircle2 size={16} className="text-success" aria-hidden />
         ) : (
           <TriangleAlert size={16} className="text-warning" aria-hidden />
         )}
-        {result.sample || (ok ? t("The add-on answers with these settings.") : result.problems![0])}
+        {result.sample || (ok ? t("The plugin answers with these settings.") : result.problems![0])}
       </p>
       {result.added?.length || result.removed?.length ? (
         <div className="flex flex-wrap gap-1.5">

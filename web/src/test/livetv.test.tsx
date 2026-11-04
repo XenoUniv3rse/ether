@@ -557,18 +557,18 @@ describe("Live TV source sign-in", () => {
   });
 });
 
-describe("Live TV Stremio add-ons", () => {
+describe("Live TV Stremio plugins", () => {
   const kind = "plugin:addon.abc/channels";
   const addonDescriptor = {
     kind: "liveTVSource",
     id: kind,
     owner: "addon.abc",
     label: { resolved: "Sports TV" },
-    hint: { source: "Live channels from a Stremio add-on." },
+    hint: { source: "Live channels from a Stremio plugin." },
     meta: { editor: "addon", yieldsChannels: true, yieldsGuide: true },
   };
 
-  it("shows an add-on source's add-on and Plugins link, never a link field", async () => {
+  it("shows a plugin source's plugin and Plugins link, never a link field", async () => {
     invalidateRegistry();
     backend([], (url, init) => {
       if (url.includes("/extend/registry")) return { version: 1, descriptors: [addonDescriptor] };
@@ -595,7 +595,7 @@ describe("Live TV Stremio add-ons", () => {
     expect(screen.queryByText("Sign-in")).not.toBeInTheDocument();
   });
 
-  it("adds an add-on through the shared drawer, then imports its channels", async () => {
+  it("adds a plugin through the shared drawer, then imports its channels", async () => {
     invalidateRegistry();
     let sources: unknown[] = [];
     const calls = backend([], (url, init) => {
@@ -627,12 +627,12 @@ describe("Live TV Stremio add-ons", () => {
     });
     renderLiveTV("/livetv");
     fireEvent.click(await screen.findByRole("button", { name: "Add" }));
-    fireEvent.click(await screen.findByRole("menuitem", { name: /Stremio add-on/ }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: /Stremio plugin/ }));
     fireEvent.change(await screen.findByPlaceholderText("https://… /manifest.json"), {
       target: { value: "https://tv.example/cfg/manifest.json" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Continue" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Add add-on" }, WAIT));
+    fireEvent.click(await screen.findByRole("button", { name: "Add plugin" }, WAIT));
     await waitFor(() => expect(sent(calls, "POST", /\/livetv\/sources$/)).toHaveLength(1), WAIT);
     expect(body(sent(calls, "POST", /\/livetv\/sources$/)[0])).toMatchObject({
       name: "Sports TV",

@@ -478,12 +478,12 @@ func (m *Manager) handleAddonPreview(w http.ResponseWriter, r *http.Request) {
 		URL string `json:"url"`
 	}
 	if err := decode(r, &body); err != nil || strings.TrimSpace(body.URL) == "" {
-		writeErr(w, http.StatusBadRequest, "invalid", "Paste the add-on's install link.", nil)
+		writeErr(w, http.StatusBadRequest, "invalid", "Paste the plugin's install link.", nil)
 		return
 	}
 	id, base, err := StremioInstallID(body.URL)
 	if err != nil {
-		writeErr(w, http.StatusBadRequest, "invalid", "That is not an add-on install link. Paste the link the add-on's configure page gives you.", nil)
+		writeErr(w, http.StatusBadRequest, "invalid", "That is not a plugin install link. Paste the link its Stremio settings page gives you.", nil)
 		return
 	}
 	out := AddonPreview{ID: id}
@@ -504,7 +504,7 @@ func (m *Manager) handleAddonPreview(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !p.Manifest.IsStremioOnly() {
-		writeErr(w, http.StatusBadRequest, "invalid", "This link is an Ether plugin, not a Stremio add-on. Install it from Plugins.", nil)
+		writeErr(w, http.StatusBadRequest, "invalid", "This link is an Ether plugin, not a Stremio one. Install it from Plugins.", nil)
 		return
 	}
 	man := p.Manifest
@@ -526,7 +526,7 @@ func (m *Manager) handleAddonInstall(w http.ResponseWriter, r *http.Request) {
 		Roles []Capability `json:"roles"`
 	}
 	if err := decode(r, &body); err != nil || strings.TrimSpace(body.URL) == "" {
-		writeErr(w, http.StatusBadRequest, "invalid", "Paste the add-on's install link.", nil)
+		writeErr(w, http.StatusBadRequest, "invalid", "Paste the plugin's install link.", nil)
 		return
 	}
 	rec, err := m.InstallAddon(r.Context(), AddonInstall{Link: body.URL, Roles: body.Roles, Exclusive: len(body.Roles) > 0})
@@ -547,7 +547,7 @@ func (m *Manager) failAddon(w http.ResponseWriter, err error) {
 		return
 	}
 	m.log.Info("add-on link not read", "err", err)
-	writeErr(w, http.StatusBadGateway, "unreachable", "Ether couldn't read an add-on at that link. Check the link, and that the add-on is online and allows servers.", nil)
+	writeErr(w, http.StatusBadGateway, "unreachable", "Ether couldn't read a plugin at that link. Check the link, and that the plugin is online and allows servers.", nil)
 }
 
 // RoleState is one role of an add-on for the console.

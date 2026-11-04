@@ -312,13 +312,13 @@ function AddPluginMenu({
         {item(
           <Link2 size={16} />,
           t("From a link"),
-          t("A plugin, GitHub repository or Stremio add-on address"),
+          t("A plugin, GitHub repository or Stremio plugin address"),
           onLink,
         )}
         {item(
           <FolderSearch size={16} />,
-          t("Browse add-on directories"),
-          t("Lists of add-ons published by add-ons you installed"),
+          t("Browse plugin directories"),
+          t("Lists of plugins published by plugins you installed"),
           onBrowse,
         )}
       </div>

@@ -19,8 +19,8 @@ function json(body: unknown, status = 200): Response {
 const TEMPLATES: StudioTemplate[] = [
   {
     id: "stremio_remix",
-    label: "From a Stremio add-on link",
-    summary: "Install a Stremio add-on directly, or create a remix with settings and a page.",
+    label: "From a Stremio link",
+    summary: "Install a Stremio plugin directly, or create a remix with settings and a page.",
     kind: "extension",
     capabilities: ["list_source", "ui"],
     defaultPluginId: "community.studio.remix",
@@ -47,7 +47,7 @@ const TEMPLATES: StudioTemplate[] = [
         2,
       ),
       "i18n/en.json": JSON.stringify(
-        { summary: "Wraps a Stremio add-on with settings and a native status page." },
+        { summary: "Wraps a Stremio plugin with settings and a native status page." },
         null,
         2,
       ),

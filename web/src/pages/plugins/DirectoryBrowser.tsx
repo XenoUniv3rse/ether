@@ -77,17 +77,17 @@ export function DirectoryBrowser({
   );
 
   return (
-    <Drawer open onClose={onClose} title={t("Browse add-on directories")} size="lg">
+    <Drawer open onClose={onClose} title={t("Browse plugin directories")} size="lg">
       <div className="space-y-5">
         <p className="text-sm text-fg-muted">
           {t(
-            "Some installed add-ons publish a list of other add-ons, such as Cinemeta's community catalogue. Pick a list to see what is in it, then review any add-on before installing.",
+            "Some installed plugins publish a list of other plugins, such as Cinemeta's community catalogue. Pick a list to see what is in it, then review any plugin before installing.",
           )}
         </p>
         {!registry.loading && !lists.length ? (
           <p className="rounded-xl border border-dashed border-border p-4 text-sm text-fg-muted">
             {t(
-              "No installed add-on publishes a directory yet. Cinemeta does; install it from a link to browse.",
+              "No installed plugin publishes a directory yet. Cinemeta does; install it from a link to browse.",
             )}
           </p>
         ) : null}
@@ -122,8 +122,8 @@ export function DirectoryBrowser({
               aria-hidden
             />
             <Input
-              aria-label={t("Filter add-ons")}
-              placeholder={t("Filter {count} add-ons", { count: entries.length })}
+              aria-label={t("Filter plugins")}
+              placeholder={t("Filter {count} plugins", { count: entries.length })}
               value={filter}
               onChange={(e) => setFilter(e.currentTarget.value)}
               className="pl-8"

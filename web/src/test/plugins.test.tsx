@@ -115,15 +115,15 @@ describe("Server › Plugins (WS10a)", () => {
         .map((t) => t.textContent),
     ).toEqual(["Overview", "Channels", "Setup", "Activity"]);
 
-    // Overview: health tiles instead of a Health tab.
+    // Health tiles open the Activity tab, not the Overview.
+    expect(screen.queryByText("Responding")).toBeNull();
+    fireEvent.click(within(tabs).getByRole("tab", { name: "Activity" }));
     expect(await screen.findByText("Responding")).toBeTruthy();
     expect(screen.getByText("180 ms")).toBeTruthy();
     expect(screen.getByText("Slowest 720 ms")).toBeTruthy();
 
     // Update banner: new access is approved in the confirm step.
-    expect(
-      screen.getByText("Version 1.3.0 is available and asks for new access."),
-    ).toBeTruthy();
+    expect(screen.getByText("Version 1.3.0 is available and asks for new access.")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Update" }));
     fireEvent.click(await screen.findByRole("button", { name: "Allow and update" }));
     await waitFor(() =>

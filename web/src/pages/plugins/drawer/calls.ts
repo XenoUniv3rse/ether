@@ -98,7 +98,7 @@ export function describeCall(
       case "subtitles":
         return t("Subtitles for {title}", { title: name });
       case "addon_catalog":
-        return t("Add-on directory");
+        return t("Plugin directory");
     }
   }
   if (path === "/ether/channels.json") return t("Channel lineup");

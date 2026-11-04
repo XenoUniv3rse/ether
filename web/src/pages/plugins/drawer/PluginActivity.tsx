@@ -16,6 +16,7 @@ import {
   type PluginCall,
   type TitleCardLite,
 } from "./calls";
+import { HealthTiles } from "./HealthTiles";
 
 type Filter = "all" | "errors" | "slow";
 
@@ -45,6 +46,7 @@ export function PluginActivity({
 }) {
   return (
     <div className="space-y-5">
+      <HealthTiles detail={detail} />
       <CallsTable detail={detail} calls={calls} onReload={onReloadCalls} />
       <Changes
         detail={detail}

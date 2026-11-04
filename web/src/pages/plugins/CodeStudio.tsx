@@ -598,7 +598,7 @@ const ROUTES: Record<string, [string, string][]> = {
       "GET /subtitles/{type}/{id}.json",
       "{ subtitles: [{ id, lang, url }] }, changed by editSubtitles",
     ],
-    ["POST /ether/test", "{ ok, message }: checks the add-on still answers"],
+    ["POST /ether/test", "{ ok, message }: checks the plugin still answers"],
   ],
   video_source: [
     [
@@ -640,7 +640,7 @@ export function Reference({ template }: { template: string }) {
           <li>
             ether.addon.get(route) → {"{ status, body }"}{" "}
             <span className="font-sans">
-              {t("(add-on drafts: asks the add-on it was made from, with its link kept sealed)")}
+              {t("(plugin drafts: asks the plugin it was made from, with its link kept sealed)")}
             </span>
           </li>
           <li>ether.kv.get / put / delete / list</li>

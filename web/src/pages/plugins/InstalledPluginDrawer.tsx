@@ -572,7 +572,7 @@ function HeaderLine({ detail }: { detail: PluginDetail }) {
               <span className="block">{t("Licence: {licence}", { licence: ether.license })}</span>
             ) : null}
             {detail.host ? (
-              <span className="block">{t("Add-on at {host}", { host: detail.host })}</span>
+              <span className="block">{t("Plugin at {host}", { host: detail.host })}</span>
             ) : null}
             {!detail.verified ? <span className="block">{t("Not verified by Ether")}</span> : null}
           </span>

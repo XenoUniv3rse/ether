@@ -859,8 +859,8 @@ function AddMenu({
         )}
         {item(
           <Puzzle size={16} />,
-          t("Stremio add-on"),
-          t("Live channels from a Stremio add-on"),
+          t("Stremio plugin"),
+          t("Live channels from a Stremio plugin"),
           onAddon,
         )}
         {item(

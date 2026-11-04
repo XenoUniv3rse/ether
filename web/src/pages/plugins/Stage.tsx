@@ -126,7 +126,7 @@ function channelsScript(): Script {
           sources: [
             { name: t("Free channel directories"), found: t("2 found"), icon: Globe },
             { name: t("Public IPTV lists"), found: t("3 found"), icon: Radio },
-            { name: t("Stremio TV add-ons on this server"), found: t("1 found"), icon: Tv },
+            { name: t("Stremio TV plugins on this server"), found: t("1 found"), icon: Tv },
             { name: t("Broadcaster websites"), found: t("1 found"), icon: Globe },
           ],
         },

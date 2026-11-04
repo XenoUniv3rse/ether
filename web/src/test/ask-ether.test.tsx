@@ -138,7 +138,7 @@ describe("Ask Ether", () => {
     ["/", "What needs my attention?"],
     ["/quality", "Why did this title pick this release?"],
     ["/livetv", "Which channels are failing?"],
-    ["/sources", "Add a Stremio add-on"],
+    ["/sources", "Add a plugin from Stremio"],
   ])("suggests a page prompt on %s", async (path, suggestion) => {
     renderApp(path);
     const dialog = await openAskEther();

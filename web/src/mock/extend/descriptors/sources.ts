@@ -25,7 +25,7 @@ export const descriptors: Descriptor[] = [
     id: "indexer",
     owner: "builtin",
     label: { source: "Release indexer" },
-    hint: { source: "Searches Newznab, Torznab, built-in sites and Stremio add-ons for releases." },
+    hint: { source: "Searches Newznab, Torznab, built-in sites and Stremio plugins for releases." },
     order: 30,
     meta: { class: "indexer" },
   },

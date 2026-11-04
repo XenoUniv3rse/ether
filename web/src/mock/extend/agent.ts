@@ -188,7 +188,7 @@ function planTurn(prompt: string): PlannedTurn {
 
   if (lower.includes("stremio")) {
     return {
-      text: "A Stremio add-on is added from Sources with its manifest URL. Ether reads the manifest, shows what the add-on offers, and treats the install URL as a secret.",
+      text: "A Stremio plugin is added from Sources with its manifest URL. Ether reads the manifest, shows what the plugin offers, and treats the install URL as a secret.",
       tools: [
         tool(
           "sources_list",

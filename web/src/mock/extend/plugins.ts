@@ -281,7 +281,7 @@ export function addonDetail(
     host,
     manifest: { id: "org.example.addon", version: "1.0.0", name, types: ["movie", "series"] },
     permissions: {
-      lines: ["Connects to the add-on address you gave"],
+      lines: ["Connects to the plugin address you gave"],
       declared: {},
       grants: {},
       needsViewers: false,
@@ -917,7 +917,7 @@ export function createPluginsMock(): {
       const url = String((body as { url?: string })?.url ?? "").trim();
       if (!/^(https?|stremio):\/\//.test(url)) {
         return json(
-          { error: { code: "invalid", message: "That is not an add-on install link." } },
+          { error: { code: "invalid", message: "That is not a plugin install link." } },
           400,
         );
       }
@@ -926,8 +926,8 @@ export function createPluginsMock(): {
       const existing = byId(id);
       return json({
         id,
-        name: existing?.detail.name ?? (host.split(".")[0] || "Add-on"),
-        description: "Streams, catalogs and subtitles from one add-on.",
+        name: existing?.detail.name ?? (host.split(".")[0] || "Plugin"),
+        description: "Streams, catalogs and subtitles from one plugin.",
         version: "1.0.0",
         host,
         alreadyInstalled: Boolean(existing),
@@ -952,7 +952,7 @@ export function createPluginsMock(): {
         f = {
           detail: addonDetail(
             id,
-            host.split(".")[0] || "Add-on",
+            host.split(".")[0] || "Plugin",
             host,
             offered.map((role) => ({ role, on: (req.roles ?? offered).includes(role) })),
           ),

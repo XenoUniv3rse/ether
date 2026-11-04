@@ -769,16 +769,16 @@ func (m *Manager) configuredLink(ctx context.Context, id string, ch AddonConfigC
 		}
 		next, err := parseAddonLink(link)
 		if err != nil {
-			return st, "", &ValidationError{[]FieldError{{"link", "That is not an add-on install link."}}}
+			return st, "", &ValidationError{[]FieldError{{"link", "That is not a plugin install link."}}}
 		}
 		out := next.withSegment(next.segment)
 		if !strings.EqualFold(next.root.Host, st.link.root.Host) && !m.sameAddon(ctx, st.link.withSegment(st.link.segment), out) {
-			return st, "", &ValidationError{[]FieldError{{"link", "That link is for a different add-on."}}}
+			return st, "", &ValidationError{[]FieldError{{"link", "That link is for a different plugin."}}}
 		}
 		return st, out, nil
 	}
 	if st.layer != "declared" && st.layer != "decoded" {
-		return st, "", &ValidationError{[]FieldError{{"values", "Use the add-on's own settings page for this one."}}}
+		return st, "", &ValidationError{[]FieldError{{"values", "Use the plugin's own settings page for this one."}}}
 	}
 	doc, err := st.doc.apply(st.fields, ch.Values)
 	if err != nil {
@@ -844,11 +844,11 @@ func (m *Manager) sameAddon(ctx context.Context, current, next string) bool {
 func (m *Manager) tryAddonLink(ctx context.Context, before Manifest, link string) (AddonConfigResult, error) {
 	body, err := m.fetch(ctx, link, false, 4<<20)
 	if err != nil {
-		return AddonConfigResult{}, &ValidationError{[]FieldError{{"link", "The add-on didn't answer with these settings."}}}
+		return AddonConfigResult{}, &ValidationError{[]FieldError{{"link", "The plugin didn't answer with these settings."}}}
 	}
 	man, err := ParseManifest(body)
 	if err != nil {
-		return AddonConfigResult{}, &ValidationError{[]FieldError{{"link", "The add-on answered with something Ether can't read."}}}
+		return AddonConfigResult{}, &ValidationError{[]FieldError{{"link", "The plugin answered with something Ether can't read."}}}
 	}
 	res := AddonConfigResult{Name: man.Name}
 	was := map[string]bool{}
@@ -871,7 +871,7 @@ func (m *Manager) tryAddonLink(ctx context.Context, before Manifest, link string
 		res.Roles = append(res.Roles, string(c))
 	}
 	if man.ConfigurationRequired() {
-		res.Problems = append(res.Problems, "The add-on still asks to be configured.")
+		res.Problems = append(res.Problems, "The plugin still asks to be set up.")
 	}
 	res.Sample = m.sampleAddon(ctx, man, link)
 	return res, nil

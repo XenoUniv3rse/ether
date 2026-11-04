@@ -173,7 +173,7 @@ export function isAddon(p: { stremioOnly?: boolean; host?: string }): boolean {
 }
 
 export function kindLabel(kind?: string, addon?: boolean): string {
-  if (addon) return t("Add-on");
+  if (addon) return t("Stremio");
   switch (kind) {
     case "source":
       return t("Source");

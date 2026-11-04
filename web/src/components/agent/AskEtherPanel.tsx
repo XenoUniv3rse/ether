@@ -47,7 +47,7 @@ const KNOWN_TOOLS = [
 function defaultSuggestion(route: string): string {
   if (route.startsWith("/releases")) return t("Why did this title pick this release?");
   if (route.startsWith("/livetv")) return t("Which channels are failing?");
-  if (route.startsWith("/sources")) return t("Add a Stremio add-on");
+  if (route.startsWith("/sources")) return t("Add a plugin from Stremio");
   return t("What needs my attention?");
 }
 
