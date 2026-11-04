@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/braedonsaunders/ether/internal/core"
+	"github.com/braedonsaunders/ether/internal/transcode"
 )
 
 // extractTranscoder adds embedded-subtitle extraction to the fake.
@@ -160,6 +161,69 @@ func TestDirectPlayEmbeddedTextFollowsPMS(t *testing.T) {
 	selected := selectedTag(subtitleTags(rec.Body.String()))
 	if !strings.Contains(selected, `decision="burn"`) || !strings.Contains(selected, `location="segments-video"`) {
 		t.Fatalf("web PGS burn decision: %s\n%s", selected, rec.Body.String())
+	}
+}
+
+// TestDirectStreamCarriesSelectedTextSubtitle is Plex for Android TV's
+// own request (rex shield_android_tv_decision.json: directPlay=1,
+// directStream=1, hasMDE=1, subtitles=none, a Matroska HLS target) ending
+// in a Direct Stream (#191). subtitles=none means the player draws the
+// track; on a remux it reads it from the Matroska segments, so the run
+// carries the selected SRT or ASS track and the row says so (PMS's copy
+// row for a text track in Plex for Android's segments, subtitles_s1422).
+// A conversion whose segments cannot carry text still delivers nothing.
+func TestDirectStreamCarriesSelectedTextSubtitle(t *testing.T) {
+	f, _ := newSubtitleFixture(t)
+	f.playback.info = core.MediaInfo{
+		Container: "mkv", Duration: 14 * time.Minute, BitrateKbps: 4000,
+		Streams: []core.StreamInfo{
+			{Index: 0, Type: "video", Codec: "h264", Width: 1920, Height: 800, Default: true},
+			{Index: 1, Type: "audio", Codec: "truehd", Language: "en", Channels: 8, Default: true},
+			{Index: 2, Type: "subtitle", Codec: "subrip", Language: "en"},
+			{Index: 3, Type: "subtitle", Codec: "ass", Language: "fr"},
+		},
+	}
+	// An on-demand (Usenet) release: Ether answers an MDE client's
+	// decision with its own Direct Stream.
+	id := fmt.Sprintf("ps-%d-%s-%d", ownerUser.ID, "shield-ds", fightClub.Key)
+	f.playback.sessions[id] = &core.PlaySession{ID: id, UserID: ownerUser.ID, ClientID: "shield-ds", Key: fightClub.Key, Info: f.playback.info,
+		StartedAt: fixedNow, Resolution: &core.Resolution{Release: core.Release{ID: "usenet-release"}}}
+	key := fightClub.Key.String()
+	tags := subtitleTags(f.get(t, "/library/metadata/"+key).Body.String())
+	shield := []string{"X-Plex-Product", "Plex for Android (TV)", "X-Plex-Platform", "Android", "X-Plex-Client-Identifier", "shield-ds",
+		"X-Plex-Client-Profile-Extra", "add-transcode-target(type=videoProfile&context=all&protocol=hls&container=mkv&videoCodec=h264,hevc&audioCodec=aac,ac3,eac3&subtitleCodec=ass,ssa,pgs,srt)"}
+	for _, c := range []struct {
+		lang, codec string
+		index       int
+	}{{"eng", "srt", 2}, {"fre", "ass", 3}} {
+		putSubtitle(t, f, key, subtitleChoice(tags, c.lang, false))
+		for _, container := range []string{transcode.ContainerMatroska, transcode.ContainerMPEGTS} {
+			f.trans.decision = core.Decision{Kind: core.DecisionRemux, VideoCopy: true, AudioCodec: "eac3", Container: container}
+			session := "ds-" + c.codec + "-" + container
+			hdr := shield
+			if container != transcode.ContainerMatroska {
+				hdr = shield[:6] // no Matroska target
+			}
+			rec := f.get(t, "/video/:/transcode/universal/decision?path=/library/metadata/"+key+"&protocol=hls&directPlay=1&directStream=1&hasMDE=1&subtitles=none&advancedSubtitles=text&session="+session, hdr...)
+			if rec.Code != 200 {
+				t.Fatalf("%s decision %d: %s", session, rec.Code, rec.Body.String())
+			}
+			row := selectedTag(subtitleTags(rec.Body.String()))
+			got := f.trans.lastOpts.SubtitleStream
+			if container != transcode.ContainerMatroska {
+				// Segments that cannot carry text: nothing is delivered.
+				if got != -1 || !strings.Contains(row, `decision="ignore"`) {
+					t.Fatalf("%s: run subtitle %d, row %s", session, got, row)
+				}
+				continue
+			}
+			if got != c.index {
+				t.Fatalf("%s: run carries subtitle %d, want %d", session, got, c.index)
+			}
+			if !strings.Contains(row, `decision="copy"`) || !strings.Contains(row, `location="segments-av"`) || !strings.Contains(row, `format="`+c.codec+`"`) || strings.Contains(row, `key="`) {
+				t.Fatalf("%s row: %s", session, row)
+			}
+		}
 	}
 }
 

@@ -176,6 +176,27 @@ func androidFamilyClient(pr *Request) bool {
 	return transcode.HasQuirk(pr.Product, pr.Platform, pr.Device, pr.Model, pr.Version, "plex-list-all-tracks")
 }
 
+// matroskaCarriesText reports whether a conversion for this client is
+// Matroska, whose segments carry the selected embedded text track. Plex for
+// Android and Android TV send subtitles=none ("the player draws it") with
+// the same request that ends in a Direct Stream: the player then reads the
+// track from the Matroska segments as it would from the file, so the run
+// has to mux it. Dropping it left the remux with no subtitle (#191).
+func matroskaCarriesText(p *playRequest, info core.MediaInfo) bool {
+	if p.protocol == core.ProtocolDASH {
+		return false
+	}
+	if p.protocol != core.ProtocolHTTP && transcode.HLSContainer(p.caps, "", "") != transcode.ContainerMatroska {
+		return false
+	}
+	for _, st := range info.Streams {
+		if st.Type == "subtitle" && st.Index == p.opts.SubtitleStream {
+			return !st.External && transcode.IsTextSubtitle(st.Codec)
+		}
+	}
+	return false
+}
+
 // browserClient reports Plex Web. Its HTML player never reads a text track
 // out of the file or the segments: it renders soft subtitles with libjass
 // from a separate ASS stream, and asks for an ASS track to be burned
@@ -452,7 +473,7 @@ func (s *Server) prepare(ctx context.Context, pr *Request, p *playRequest) (*cor
 		s.applyStreamPreferences(ctx, pr, p, t, ps.Info)
 		applySelections(p, ps.Info, s.audioLanguages(pr.User))
 		switch {
-		case p.subtitles == "none":
+		case p.subtitles == "none" && !matroskaCarriesText(p, ps.Info):
 			// The track stays selected; nothing delivers it.
 			p.opts.SubtitleStream = -1
 		case p.opts.BurnSubtitles && browserClient(pr):
@@ -939,7 +960,8 @@ func applyTranscodeMedia(m *model.Media, dec core.Decision, protocol string) {
 // stream's shape never changes.
 //
 // The selected subtitle row follows PMS 1.42 (rex subtitles_s1422 capture):
-// subtitles=none is decision="ignore" with nothing delivered; a burned text
+// subtitles=none is decision="ignore" with nothing delivered (except a
+// text track a Matroska run carries, which keeps the copy row); a burned text
 // track is decision="burn" burn="1" location="segments-av"; Plex Web's text
 // track is converted to ASS (codec/container/format "ass",
 // decision="transcode", location="segments-subs") and read from
@@ -1012,8 +1034,13 @@ func applyStreamDecision(st model.Stream, src core.StreamInfo, dec core.Decision
 			return st, true
 		}
 		text := textSidecarCodec(st.Codec)
+		// Under subtitles=none a Matroska run still muxes the selected
+		// text track (matroskaCarriesText); its row is the segments copy
+		// below, as PMS answers a text track it copies into Plex for
+		// Android's Matroska segments.
+		inSegments := text && dec.Container == transcode.ContainerMatroska && !dec.BurnSubtitles && dec.SubtitleStream >= 0 && dec.SubtitleStream == src.Index
 		switch {
-		case subtitles == "none":
+		case subtitles == "none" && !inSegments:
 			st.Decision, st.Location = "ignore", ""
 			return st, true
 		case dec.BurnSubtitles && text:
