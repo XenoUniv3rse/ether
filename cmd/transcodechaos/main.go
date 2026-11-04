@@ -1,0 +1,201 @@
+// Command transcodechaos runs destructive-input experiments against an isolated
+// transcode.Manager and loopback HTTP source. It never contacts real servers.
+package main
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"flag"
+	"fmt"
+	"io"
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"sync/atomic"
+	"time"
+
+	"github.com/braedonsaunders/ether/internal/config"
+	"github.com/braedonsaunders/ether/internal/core"
+	"github.com/braedonsaunders/ether/internal/transcode"
+)
+
+type scenario struct {
+	Name, Container, HW, Fault string
+	Copy                       bool
+}
+type result struct {
+	Scenario, Path, Status, Detail string
+	Milliseconds                   int64
+}
+
+func main() {
+	ff := flag.String("ffmpeg", "ffmpeg", "ffmpeg executable")
+	fp := flag.String("ffprobe", "ffprobe", "ffprobe executable")
+	report := flag.String("report", "transcodechaos-report.json", "output JSON report")
+	flag.Parse()
+	if err := run(*ff, *fp, *report); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+}
+func command(ctx context.Context, exe string, args ...string) error {
+	out, err := exec.CommandContext(ctx, exe, args...).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("%s: %w: %s", filepath.Base(exe), err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+func run(ff, fp, report string) error {
+	root, err := os.MkdirTemp("", "ether-chaos-")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(root)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	fixture := filepath.Join(root, "input.ts")
+	if err = command(ctx, ff, "-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "testsrc2=size=320x180:rate=24", "-f", "lavfi", "-i", "sine=sample_rate=48000", "-t", "12", "-c:v", "libx264", "-preset", "ultrafast", "-threads", "2", "-g", "48", "-c:a", "aac", "-f", "mpegts", fixture); err != nil {
+		return err
+	}
+	data, err := os.ReadFile(fixture)
+	if err != nil {
+		return err
+	}
+	cases := []scenario{{"healthy", "mpegts", "none", "", true}, {"healthy", "mpegts", "none", "", false}, {"healthy", "fmp4", "none", "", false}, {"seek", "mpegts", "none", "", false}, {"corrupt-ts", "mpegts", "none", "corrupt", false}, {"truncated", "mpegts", "none", "truncate", false}, {"source-503", "mpegts", "none", "503", false}, {"live-corrupt", "mpegts", "none", "corrupt", false}, {"healthy", "mpegts", "videotoolbox", "", false}}
+	results := make([]result, 0, len(cases))
+	failures := 0
+	for _, sc := range cases {
+		start := time.Now()
+		detail := exercise(ctx, ff, fp, root, data, sc)
+		status := "PASS"
+		if detail != "" {
+			status = "FAIL"
+			failures++
+		}
+		r := result{sc.Name, sc.Container + "/" + sc.HW, status, detail, time.Since(start).Milliseconds()}
+		results = append(results, r)
+		fmt.Printf("%-14s %-20s %-4s %6dms %s\n", r.Scenario, r.Path, r.Status, r.Milliseconds, r.Detail)
+	}
+	b, err := json.MarshalIndent(results, "", "  ")
+	if err != nil {
+		return err
+	}
+	if err = os.WriteFile(report, append(b, '\n'), 0644); err != nil {
+		return err
+	}
+	if failures > 0 {
+		return fmt.Errorf("%d scenarios failed; report: %s", failures, report)
+	}
+	return nil
+}
+func exercise(parent context.Context, ff, fp, root string, good []byte, sc scenario) string {
+	ctx, cancel := context.WithTimeout(parent, 40*time.Second)
+	defer cancel()
+	data := bytes.Clone(good)
+	if sc.Fault == "corrupt" { // destroy 30 consecutive packets, preserving the TS sync byte
+		for i := len(data) / 2 / 188 * 188; i < len(data)/2/188*188+30*188 && i < len(data); i++ {
+			if i%188 != 0 {
+				data[i] = 0xff
+			}
+		}
+	}
+	if sc.Fault == "truncate" {
+		data = data[:len(data)/2]
+	}
+	var armed atomic.Bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if sc.Fault == "503" && armed.Load() {
+			http.Error(w, "injected failure", 503)
+			return
+		}
+		content := good
+		if armed.Load() {
+			content = data
+		}
+		http.ServeContent(w, r, "fixture.ts", time.Time{}, bytes.NewReader(content))
+	}))
+	defer srv.Close()
+	dir, err := os.MkdirTemp(root, "session-")
+	if err != nil {
+		return err.Error()
+	}
+	defer os.RemoveAll(dir)
+	m, err := transcode.New(config.Transcode{FFmpegPath: ff, FFprobePath: fp, HWAccel: sc.HW, TempDir: dir}, slog.New(slog.NewTextHandler(io.Discard, nil)), transcode.WithSegmentTimeout(8*time.Second))
+	if err != nil {
+		return err.Error()
+	}
+	defer m.Close()
+	if sc.HW == "videotoolbox" && m.HWAccel().Name != "videotoolbox" {
+		return "VideoToolbox not detected"
+	}
+	info, err := m.Probe(ctx, srv.URL+"/fixture.ts")
+	if err != nil {
+		return "probe: " + err.Error()
+	}
+	d := core.Decision{Kind: core.DecisionTranscode, VideoCodec: "h264", AudioCodec: "aac", Container: sc.Container, AudioStream: -1, SubtitleStream: -1}
+	if sc.Copy {
+		d.Kind = core.DecisionRemux
+		d.VideoCopy = true
+		d.AudioCopy = true
+	}
+	armed.Store(true)
+	live := sc.Name == "live-corrupt"
+	if live {
+		info.Duration = 0
+	}
+	s, err := m.StartHLS(ctx, core.HLSRequest{SessionID: "chaos", LiveInput: live, InputURL: srv.URL + "/fixture.ts", Info: *info, Decision: d, SegmentDuration: 4 * time.Second})
+	if err != nil {
+		return "start: " + err.Error()
+	}
+	defer s.Close()
+	playlist := httptest.NewRecorder()
+	s.ServePlaylist(playlist, httptest.NewRequestWithContext(ctx, "GET", "/index.m3u8", nil))
+	if playlist.Code != 200 || (!live && !strings.Contains(playlist.Body.String(), "#EXTINF")) {
+		return fmt.Sprintf("playlist HTTP %d", playlist.Code)
+	}
+	var init []byte
+	if sc.Container == "fmp4" {
+		w := httptest.NewRecorder()
+		s.ServeSegment(w, httptest.NewRequestWithContext(ctx, "GET", "/init", nil), transcode.InitSegment)
+		if w.Code != 200 {
+			return fmt.Sprintf("init HTTP %d", w.Code)
+		}
+		init = w.Body.Bytes()
+	}
+	order := []int{0, 1, 2}
+	if sc.Name == "seek" {
+		order = []int{0, 2, 1, 2, 0}
+	}
+	for _, n := range order {
+		w := httptest.NewRecorder()
+		start := time.Now()
+		s.ServeSegment(w, httptest.NewRequestWithContext(ctx, "GET", "/segment", nil), n)
+		if w.Code != 200 {
+			return fmt.Sprintf("segment %d HTTP %d after %s", n, w.Code, time.Since(start).Round(time.Millisecond))
+		}
+		if w.Body.Len() == 0 {
+			return fmt.Sprintf("segment %d empty", n)
+		}
+		p := filepath.Join(dir, fmt.Sprintf("check-%d.%s", n, map[bool]string{true: "mp4", false: "ts"}[len(init) > 0]))
+		out := append(bytes.Clone(init), w.Body.Bytes()...)
+		if err := os.WriteFile(p, out, 0600); err != nil {
+			return err.Error()
+		}
+		if err := command(ctx, fp, "-v", "error", "-show_streams", p); err != nil {
+			return fmt.Sprintf("segment %d probe: %v", n, err)
+		}
+		if err := command(ctx, ff, "-v", "error", "-xerror", "-i", p, "-f", "null", "-"); err != nil {
+			return fmt.Sprintf("segment %d decode: %v", n, err)
+		}
+	}
+	m.Stop("chaos")
+	if _, ok := m.Session("chaos"); ok {
+		return "session survived stop"
+	}
+	return ""
+}
