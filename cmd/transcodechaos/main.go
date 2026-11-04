@@ -66,7 +66,7 @@ func run(ff, fp, report, only string) error {
 		return err
 	}
 	cases := []scenario{{"healthy", "mpegts", "none", "", true}, {"healthy", "mpegts", "none", "", false}, {"healthy", "fmp4", "none", "", false}, {"seek", "mpegts", "none", "", false}, {"corrupt-ts", "mpegts", "none", "corrupt", false}, {"truncated", "mpegts", "none", "truncate", false}, {"source-503", "mpegts", "none", "503", false}, {"transient-503", "mpegts", "none", "once-503", false}, {"transient-416", "mpegts", "none", "once-416", false}, {"slow-first-byte", "mpegts", "none", "slow-first", false}, {"midrange-stall", "mpegts", "none", "stall", false}, {"connection-drop", "mpegts", "none", "drop", false}, {"short-reads", "mpegts", "none", "short-writes", false}, {"changing-source", "mpegts", "none", "changing", false}, {"live-corrupt", "mpegts", "none", "corrupt", false}, {"hardware-failure", "mpegts", "videotoolbox", "hwfail", false}, {"healthy", "mpegts", "videotoolbox", "", false}}
-	for _, name := range []string{"input-missing-keyframe", "input-open-gop", "input-long-gop", "input-pts-wrap", "input-resolution-change", "input-samplerate-change", "input-audio-late", "input-audio-early-end", "input-vfr", "input-interlaced", "input-hevc10-hdr", "input-multi-audio"} {
+	for _, name := range []string{"input-backward-dts", "input-timestamp-jump", "input-corrupt-mkv", "input-corrupt-mp4", "input-text-subtitle", "input-ass-subtitle", "input-broken-text", "input-broken-ass", "input-pgs", "input-dolby-vision", "input-missing-keyframe", "input-open-gop", "input-long-gop", "input-pts-wrap", "input-resolution-change", "input-samplerate-change", "input-audio-late", "input-audio-early-end", "input-vfr", "input-interlaced", "input-hevc10-hdr", "input-multi-audio"} {
 		cases = append(cases, scenario{name, "mpegts", "none", "", false})
 	}
 	results := make([]result, 0, len(cases))
@@ -109,6 +109,20 @@ func exercise(parent context.Context, ff, fp, root string, good []byte, sc scena
 	ctx, cancel := context.WithTimeout(parent, 40*time.Second)
 	defer cancel()
 	data := bytes.Clone(good)
+	if sc.Name == "input-broken-text" || sc.Name == "input-broken-ass" {
+		at := bytes.Index(data, []byte("First subtitle"))
+		if at < 0 {
+			return "subtitle packet payload not found"
+		}
+		for i := at; i < at+8; i++ {
+			data[i] = 0xff
+		}
+	}
+	if sc.Name == "input-corrupt-mkv" || sc.Name == "input-corrupt-mp4" {
+		for i := len(data) / 2; i < len(data)/2+4096 && i < len(data); i++ {
+			data[i] = 0xff
+		}
+	}
 	if sc.Fault == "corrupt" { // destroy 30 consecutive packets, preserving the TS sync byte
 		for i := len(data) / 2 / 188 * 188; i < len(data)/2/188*188+30*188 && i < len(data); i++ {
 			if i%188 != 0 {
@@ -153,6 +167,18 @@ func exercise(parent context.Context, ff, fp, root string, good []byte, sc scena
 		return "probe: " + err.Error()
 	}
 	d := core.Decision{Kind: core.DecisionTranscode, VideoCodec: "h264", AudioCodec: "aac", Container: sc.Container, AudioStream: -1, SubtitleStream: -1}
+	if sc.Name == "input-text-subtitle" || sc.Name == "input-ass-subtitle" || sc.Name == "input-broken-text" || sc.Name == "input-broken-ass" {
+		for _, st := range info.Streams {
+			if st.Type == "subtitle" {
+				d.SubtitleStream = st.Index
+				d.BurnSubtitles = true
+				break
+			}
+		}
+		if !d.BurnSubtitles {
+			return "subtitle stream missing from probe"
+		}
+	}
 	if sc.Copy {
 		d.Kind = core.DecisionRemux
 		d.VideoCopy = true

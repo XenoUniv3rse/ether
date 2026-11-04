@@ -14,6 +14,58 @@ func makeFixture(ctx context.Context, ff, root, name string, healthy []byte) ([]
 	if !strings.HasPrefix(name, "input-") {
 		return healthy, nil
 	}
+	if name == "input-backward-dts" {
+		path := filepath.Join(root, name+"-source.ts")
+		if err := command(ctx, ff, "-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "testsrc2=size=320x180:rate=24", "-f", "lavfi", "-i", "sine=sample_rate=48000", "-t", "12", "-c:v", "libx264", "-preset", "veryfast", "-threads", "2", "-bf", "2", "-g", "48", "-c:a", "aac", "-f", "mpegts", path); err != nil {
+			return nil, err
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return nil, err
+		}
+		return distortPES(data, "backward-dts")
+	}
+	if name == "input-timestamp-jump" {
+		return distortPES(healthy, "jump")
+	}
+	if name == "input-pgs" || name == "input-dolby-vision" {
+		return nil, fmt.Errorf("fixture encoder unavailable in this harness")
+	}
+	if name == "input-corrupt-mkv" || name == "input-corrupt-mp4" || name == "input-text-subtitle" || name == "input-ass-subtitle" || name == "input-broken-text" || name == "input-broken-ass" {
+		src := filepath.Join(root, name+"-source.ts")
+		if err := os.WriteFile(src, healthy, 0600); err != nil {
+			return nil, err
+		}
+		ext := "mkv"
+		if name == "input-corrupt-mp4" {
+			ext = "mp4"
+		}
+		out := filepath.Join(root, name+"."+ext)
+		args := []string{"-hide_banner", "-loglevel", "error", "-y", "-i", src}
+		if name == "input-text-subtitle" || name == "input-ass-subtitle" || name == "input-broken-text" || name == "input-broken-ass" {
+			sub := filepath.Join(root, name+".srt")
+			content := "1\n00:00:00,500 --> 00:00:02,000\nFirst subtitle\n\n2\n00:00:04,000 --> 00:00:06,000\n{broken markup} Second subtitle\n"
+			if err := os.WriteFile(sub, []byte(content), 0600); err != nil {
+				return nil, err
+			}
+			args = append(args, "-i", sub, "-map", "0:v", "-map", "0:a", "-map", "1:s", "-c:v", "copy", "-c:a", "copy", "-c:s")
+			if name == "input-ass-subtitle" || name == "input-broken-ass" {
+				args = append(args, "ass")
+			} else {
+				args = append(args, "srt")
+			}
+		} else {
+			args = append(args, "-map", "0", "-c", "copy")
+			if ext == "mp4" {
+				args = append(args, "-movflags", "+faststart")
+			}
+		}
+		args = append(args, out)
+		if err := command(ctx, ff, args...); err != nil {
+			return nil, err
+		}
+		return os.ReadFile(out)
+	}
 	out := filepath.Join(root, name+".ts")
 	args := []string{"-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "testsrc2=size=320x180:rate=24", "-f", "lavfi", "-i", "sine=sample_rate=48000", "-t", "12", "-c:v", "libx264", "-preset", "ultrafast", "-threads", "2", "-g", "48", "-c:a", "aac"}
 	switch name {
