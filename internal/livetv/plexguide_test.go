@@ -72,3 +72,60 @@ func TestPlexGuideGridMapping(t *testing.T) {
 		t.Fatalf("bad mapping: %+v", p)
 	}
 }
+
+func TestPlexGuideMappedRefreshAndReviewedAliases(t *testing.T) {
+	var grids atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/lineups/lineup/channels":
+			fmt.Fprint(w, `{"MediaContainer":{"Channel":[{"gridKey":"one","title":"WCBS-DT","callSign":"WCBSDT","affiliateCallSign":"CBS","vcn":"2.1"},{"gridKey":"two","title":"Other"}]}}`)
+		case "/grid":
+			if r.URL.Query().Get("channelGridKey") != "one" {
+				t.Error("requested an unmapped channel")
+			}
+			grids.Add(1)
+			fmt.Fprintf(w, `{"MediaContainer":{"Metadata":[{"type":"movie","title":"Movie","guid":"plex://movie/example","Media":[{"beginsAt":%d,"endsAt":%d}]}]}}`, guideTestNow.Unix(), guideTestNow.Add(time.Hour).Unix())
+		default:
+			t.Error("unexpected request")
+			w.WriteHeader(404)
+		}
+	}))
+	defer server.Close()
+	ctx := context.Background()
+	s := testService(t, Options{Now: func() time.Time { return guideTestNow }, HTTPClient: server.Client(), PlexGuideURL: server.URL})
+	_, err := s.ImportSource(ctx, Source{ID: "guide", Name: "Guide", Kind: "plex", LineupID: "lineup"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if grids.Load() != 0 {
+		t.Fatal("fetched grid before a mapping")
+	}
+	found, err := s.GuideChannels(ctx, "CBS", "", 50)
+	if err != nil || len(found) != 1 || found[0].GuideID != "one" {
+		t.Fatalf("search: %+v %v", found, err)
+	}
+	_, err = s.ImportSource(ctx, Source{ID: "playlist", Name: "Playlist", Playlist: m3uFixture("=CBS New York")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	proposal, err := s.MatchGuides(ctx, GuideMatchRequest{DryRun: true})
+	if err != nil || len(proposal.Changes) != 1 || proposal.Changes[0].Method != "alias" {
+		t.Fatalf("proposal: %+v %v", proposal, err)
+	}
+	if result, e := s.MatchGuides(ctx, GuideMatchRequest{}); e != nil || len(result.Changes) != 0 {
+		t.Fatalf("alias applied without review: %+v %v", result, e)
+	}
+	if _, err = s.MatchGuides(ctx, GuideMatchRequest{ChannelIDs: []string{proposal.Changes[0].ChannelID}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.RefreshSource(ctx, "guide"); err != nil {
+		t.Fatal(err)
+	}
+	if grids.Load() != 2 {
+		t.Fatalf("got %d grid requests", grids.Load())
+	}
+	src := sourceByID(t, s, "guide")
+	if !src.HasGuide || src.ProgrammeCount != 1 || src.NextRefresh == nil {
+		t.Fatalf("source: %+v", src)
+	}
+}
