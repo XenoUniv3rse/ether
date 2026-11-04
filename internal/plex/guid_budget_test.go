@@ -83,6 +83,11 @@ func TestHubsWarmPlexGUIDsInBackgroundAndEpisodesRenderHierarchy(t *testing.T) {
 			io.WriteString(w, `{"MediaContainer":{"Metadata":[{"guid":"`+fcGUID+`","type":"movie","Guid":[{"id":"tmdb://550"}]}]}}`)
 		case "/library/metadata/5d9c086c46115600200aa2fe":
 			io.WriteString(w, `{"MediaContainer":{"Metadata":[{"guid":"`+showGUID+`","type":"show","Guid":[{"id":"tmdb://1396"}]}]}}`)
+		case "/library/metadata/5d9c086c46115600200aa2fe/children":
+			io.WriteString(w, `{"MediaContainer":{"Metadata":[{"guid":"`+seasonGUID+`","type":"season","index":1}]}}`)
+		case "/library/metadata/602e5e2194f08e002d001122/children":
+			io.WriteString(w, `{"MediaContainer":{"Metadata":[{"guid":"`+ep1GUID+`","type":"episode","index":1,"parentIndex":1}]}}`)
+
 		default:
 			http.NotFound(w, r)
 		}

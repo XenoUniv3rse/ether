@@ -26,6 +26,8 @@ import (
 func init() {
 	store.Register("plexguid", 1, `CREATE TABLE plexguid_mappings(rating_key INTEGER PRIMARY KEY,guid TEXT NOT NULL,checked_at INTEGER NOT NULL);`)
 	store.Register("plexguid", 3, `CREATE TABLE plexguid_verified(rating_key INTEGER PRIMARY KEY, guid TEXT NOT NULL);`)
+	// Pre-0.3.4 child matches could be marked verified without a verified parent.
+	store.Register("plexguid", 4, `DELETE FROM plexguid_verified WHERE rating_key >= 3000000000000000 AND rating_key < 5000000000000000;`)
 	store.Register("plexguid", 2, `CREATE INDEX plexguid_mappings_guid ON plexguid_mappings(guid);`)
 }
 
@@ -263,7 +265,7 @@ func resolvableKey(k core.RatingKey) bool {
 // Cached is safe for lists: no network requests or credentials are needed.
 func (s *Service) Cached(ctx context.Context, k core.RatingKey) string {
 	var guid string
-	_ = s.db.QueryRowContext(ctx, `SELECT guid FROM plexguid_mappings m WHERE rating_key=? AND checked_at>?`, int64(k), time.Now().Add(-cacheTTL).Unix()).Scan(&guid)
+	_ = s.db.QueryRowContext(ctx, `SELECT guid FROM plexguid_mappings m WHERE rating_key=? AND checked_at>? AND EXISTS (SELECT 1 FROM plexguid_verified v WHERE v.rating_key=m.rating_key AND v.guid=m.guid)`, int64(k), time.Now().Add(-cacheTTL).Unix()).Scan(&guid)
 	return guid
 }
 
@@ -304,7 +306,7 @@ func (s *Service) CachedMany(ctx context.Context, keys []core.RatingKey) map[cor
 			b.WriteByte('?')
 			args = append(args, int64(k))
 		}
-		b.WriteString(`) AND checked_at>?`)
+		b.WriteString(`) AND checked_at>? AND EXISTS (SELECT 1 FROM plexguid_verified v WHERE v.rating_key=plexguid_mappings.rating_key AND v.guid=plexguid_mappings.guid)`)
 		args = append(args, cutoff)
 		rows, err := s.db.QueryContext(ctx, b.String(), args...)
 		if err != nil {
@@ -335,11 +337,42 @@ func (s *Service) freshCached(ctx context.Context, k core.RatingKey) (string, bo
 }
 
 func (s *Service) storeMapping(ctx context.Context, k core.RatingKey, guid string, now int64) error {
+	return s.storeMappingUnder(ctx, k, guid, now, 0, "")
+}
+
+func (s *Service) storeMappingUnder(ctx context.Context, k core.RatingKey, guid string, now int64, parent core.RatingKey, parentGUID string) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
+	if parent != 0 {
+		var current string
+		err = tx.QueryRowContext(ctx, `SELECT m.guid FROM plexguid_mappings m JOIN plexguid_verified v ON v.rating_key=m.rating_key AND v.guid=m.guid WHERE m.rating_key=?`, int64(parent)).Scan(&current)
+		if err != nil || current != parentGUID {
+			return fmt.Errorf("Plex parent identity changed")
+		}
+	}
+	var old string
+	if err = tx.QueryRowContext(ctx, `SELECT guid FROM plexguid_mappings WHERE rating_key=?`, int64(k)).Scan(&old); err != nil && err != sql.ErrNoRows {
+		return err
+	}
+	if old != guid {
+		// A child's proof is tied to its parent's identity. Drop those proofs
+		// when a parent changes so they are resolved through the new tree.
+		var ranges [][2]core.RatingKey
+		switch k.Kind() {
+		case core.KindShow:
+			ranges = append(ranges, [2]core.RatingKey{core.SeasonKey(k.TMDB(), 0), core.SeasonKey(k.TMDB()+1, 0)}, [2]core.RatingKey{core.EpisodeKey(k.TMDB(), 0, 0), core.EpisodeKey(k.TMDB()+1, 0, 0)})
+		case core.KindSeason:
+			ranges = append(ranges, [2]core.RatingKey{core.EpisodeKey(k.TMDB(), k.Season(), 0), core.EpisodeKey(k.TMDB(), k.Season()+1, 0)})
+		}
+		for _, bounds := range ranges {
+			if _, err = tx.ExecContext(ctx, `DELETE FROM plexguid_verified WHERE rating_key>=? AND rating_key<?`, int64(bounds[0]), int64(bounds[1])); err != nil {
+				return err
+			}
+		}
+	}
 	if _, err = tx.ExecContext(ctx, `INSERT INTO plexguid_mappings(rating_key,guid,checked_at) VALUES(?,?,?) ON CONFLICT(rating_key) DO UPDATE SET guid=excluded.guid,checked_at=excluded.checked_at`, int64(k), guid, now); err != nil {
 		return err
 	}
@@ -570,39 +603,8 @@ func (s *Service) resolveSeason(ctx context.Context, k core.RatingKey) (string, 
 	showID := k.TMDB()
 	seasonNum := k.Season()
 	showKey := core.ShowKey(showID)
-	showExternal := fmt.Sprintf("tmdb://%d", showID)
-	seasonExternal := fmt.Sprintf("tmdb://%d/%d", showID, seasonNum)
-
-	// 1. Try direct season match first.
-	q := url.Values{
-		"type":         {"3"},
-		"parentIndex":  {strconv.Itoa(seasonNum)},
-		"guid":         {showExternal},
-		"includeGuids": {"1"},
-	}
-	if items, err := s.getItems(ctx, "/library/metadata/matches", q); err == nil {
-		found := ""
-		for _, item := range items {
-			if item.Type != "season" || !validKindGUID(item.GUID, "season") {
-				continue
-			}
-			indexOK := item.Index == nil || *item.Index == seasonNum
-			extOK := hasExternalID(item, seasonExternal) || (item.Index != nil && hasExternalID(item, showExternal))
-			if !indexOK || !extOK {
-				continue
-			}
-			if found != "" && found != item.GUID {
-				return "", fmt.Errorf("ambiguous Plex identity")
-			}
-			found = item.GUID
-		}
-		if found != "" {
-			now := time.Now().Unix()
-			return found, s.storeMapping(ctx, k, found, now)
-		}
-	}
-
-	// 2. Fallback: resolve the parent show and fetch its season children.
+	// Resolve only through a verified show and its actual children. Match
+	// results alone do not establish which show owns a season.
 	showGUID, err := s.Resolve(ctx, showKey)
 	if err != nil {
 		return "", err
@@ -618,18 +620,29 @@ func (s *Service) resolveSeason(ctx context.Context, k core.RatingKey) (string, 
 	}
 	now := time.Now().Unix()
 	found := ""
+	seen := make(map[int]string)
 	for _, item := range children {
 		if item.Type != "season" || !validKindGUID(item.GUID, "season") || item.Index == nil || *item.Index < 0 || *item.Index >= 9000 {
 			continue
 		}
-		sk := core.SeasonKey(showID, *item.Index)
-		_ = s.storeMapping(ctx, sk, item.GUID, now)
-		if *item.Index == seasonNum {
-			found = item.GUID
+		if prior := seen[*item.Index]; prior != "" && prior != item.GUID {
+			return "", fmt.Errorf("ambiguous Plex season")
+		}
+		seen[*item.Index] = item.GUID
+	}
+	for n, guid := range seen {
+		sk := core.SeasonKey(showID, n)
+		if err := s.storeMappingUnder(ctx, sk, guid, now, showKey, showGUID); err != nil {
+			return "", err
+		}
+		if n == seasonNum {
+			found = guid
 		}
 	}
 	if found == "" {
-		_ = s.storeMapping(ctx, k, "", now)
+		if err := s.storeMappingUnder(ctx, k, "", now, showKey, showGUID); err != nil {
+			return "", err
+		}
 	}
 	return found, nil
 }
@@ -638,59 +651,9 @@ func (s *Service) resolveEpisode(ctx context.Context, k core.RatingKey) (string,
 	showID := k.TMDB()
 	seasonNum := k.Season()
 	epNum := k.Episode()
-	showKey := core.ShowKey(showID)
 	seasonKey := core.SeasonKey(showID, seasonNum)
-	showExternal := fmt.Sprintf("tmdb://%d", showID)
-	epExternal := fmt.Sprintf("tmdb://%d/%d/%d", showID, seasonNum, epNum)
-
-	// 1. Try direct episode match first.
-	q := url.Values{
-		"type":         {"4"},
-		"parentIndex":  {strconv.Itoa(seasonNum)},
-		"index":        {strconv.Itoa(epNum)},
-		"guid":         {showExternal},
-		"includeGuids": {"1"},
-	}
-	if items, err := s.getItems(ctx, "/library/metadata/matches", q); err == nil {
-		found := ""
-		parentSeason, grandparentShow := "", ""
-		for _, item := range items {
-			if item.Type != "episode" || !validKindGUID(item.GUID, "episode") {
-				continue
-			}
-			indexOK := (item.Index == nil || *item.Index == epNum) && (item.ParentIndex == nil || *item.ParentIndex == seasonNum)
-			extOK := hasExternalID(item, epExternal) || (item.Index != nil && item.ParentIndex != nil && hasExternalID(item, showExternal))
-			if !indexOK || !extOK {
-				continue
-			}
-			if found != "" && found != item.GUID {
-				return "", fmt.Errorf("ambiguous Plex identity")
-			}
-			found = item.GUID
-			if validKindGUID(item.ParentGUID, "season") {
-				parentSeason = item.ParentGUID
-			}
-			if validKindGUID(item.GrandparentGUID, "show") {
-				grandparentShow = item.GrandparentGUID
-			}
-		}
-		if found != "" {
-			now := time.Now().Unix()
-			// Parents named by an episode match are stored only when the
-			// show itself verifies against its own ids and year (#289).
-			if grandparentShow != "" {
-				if ok, err := s.verifyTitle(ctx, showKey, "show", grandparentShow); err == nil && ok {
-					_ = s.storeMapping(ctx, showKey, grandparentShow, now)
-					if parentSeason != "" {
-						_ = s.storeMapping(ctx, seasonKey, parentSeason, now)
-					}
-				}
-			}
-			return found, s.storeMapping(ctx, k, found, now)
-		}
-	}
-
-	// 2. Fallback: resolve the parent season and fetch its episode children.
+	// A verified season is obtained through its verified show; fetch its
+	// children rather than trusting an independent episode search hit.
 	seasonGUID, err := s.Resolve(ctx, seasonKey)
 	if err != nil {
 		return "", err
@@ -706,18 +669,29 @@ func (s *Service) resolveEpisode(ctx context.Context, k core.RatingKey) (string,
 	}
 	now := time.Now().Unix()
 	found := ""
+	seen := make(map[int]string)
 	for _, item := range children {
-		if item.Type != "episode" || !validKindGUID(item.GUID, "episode") || item.Index == nil || *item.Index <= 0 {
+		if item.Type != "episode" || !validKindGUID(item.GUID, "episode") || item.Index == nil || *item.Index <= 0 || *item.Index >= 10000 || (item.ParentIndex != nil && *item.ParentIndex != seasonNum) {
 			continue
 		}
-		ek := core.EpisodeKey(showID, seasonNum, *item.Index)
-		_ = s.storeMapping(ctx, ek, item.GUID, now)
-		if *item.Index == epNum {
-			found = item.GUID
+		if prior := seen[*item.Index]; prior != "" && prior != item.GUID {
+			return "", fmt.Errorf("ambiguous Plex episode")
+		}
+		seen[*item.Index] = item.GUID
+	}
+	for n, guid := range seen {
+		ek := core.EpisodeKey(showID, seasonNum, n)
+		if err := s.storeMappingUnder(ctx, ek, guid, now, seasonKey, seasonGUID); err != nil {
+			return "", err
+		}
+		if n == epNum {
+			found = guid
 		}
 	}
 	if found == "" {
-		_ = s.storeMapping(ctx, k, "", now)
+		if err := s.storeMappingUnder(ctx, k, "", now, seasonKey, seasonGUID); err != nil {
+			return "", err
+		}
 	}
 	return found, nil
 }
