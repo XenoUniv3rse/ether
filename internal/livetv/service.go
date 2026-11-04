@@ -1250,7 +1250,7 @@ func (s *Service) importSource(ctx context.Context, src Source) (Source, error) 
 		return src, err
 	}
 	stored := make([]Channel, 0, len(cs))
-	for _, c := range cs {
+	for i, c := range cs {
 		if previous, ok := oldByID[c.ID]; ok {
 			c.Number = previous.Number
 			c.Enabled = previous.Enabled
@@ -1275,8 +1275,14 @@ func (s *Service) importSource(ctx context.Context, src Source) (Source, error) 
 			return src, err
 		}
 		stored = append(stored, c)
+		if progress != nil && (i+1)%100 == 0 {
+			progress.setSavedChannels(i + 1)
+		}
 	}
-	for _, p := range g.Programmes {
+	if progress != nil {
+		progress.setSavedChannels(len(stored))
+	}
+	for i, p := range g.Programmes {
 		b, e := json.Marshal(p)
 		if e != nil {
 			return src, e
@@ -1286,6 +1292,12 @@ func (s *Service) importSource(ctx context.Context, src Source) (Source, error) 
 			src.ID, p.ChannelID, p.Start.UnixMilli(), p.End.UnixMilli(), b); err != nil {
 			return src, err
 		}
+		if progress != nil && (i+1)%100 == 0 {
+			progress.setSavedProgrammes(i + 1)
+		}
+	}
+	if progress != nil {
+		progress.setSavedProgrammes(len(g.Programmes))
 	}
 	if err = replaceGuideChannels(ctx, tx, src.ID, g); err != nil {
 		return src, err

@@ -10,13 +10,15 @@ import (
 // Read counts bytes the panel has sent, so a multi-gigabyte guide can be
 // watched while it downloads.
 type SourceProgress struct {
-	Phase      string    `json:"phase"` // starting, playlist, guide, saving
-	Read       int64     `json:"read"`
-	Total      int64     `json:"total,omitempty"`
-	Channels   int       `json:"channels,omitempty"`
-	Programmes int       `json:"programmes,omitempty"`
-	Started    time.Time `json:"started"`
-	Updated    time.Time `json:"updated"`
+	Phase           string    `json:"phase"` // starting, playlist, guide, saving
+	Read            int64     `json:"read"`
+	Total           int64     `json:"total,omitempty"`
+	Channels        int       `json:"channels,omitempty"`
+	Programmes      int       `json:"programmes,omitempty"`
+	SavedChannels   int       `json:"savedChannels,omitempty"`
+	SavedProgrammes int       `json:"savedProgrammes,omitempty"`
+	Started         time.Time `json:"started"`
+	Updated         time.Time `json:"updated"`
 }
 
 type progressTracker struct {
@@ -33,8 +35,9 @@ func newProgressTracker(now func() time.Time) *progressTracker {
 func (t *progressTracker) setPhase(phase string) {
 	t.mu.Lock()
 	t.p.Phase = phase
-	// Read and Total describe the document in flight, not the whole import.
+	// Read, Total and the saved counts describe the step in flight.
 	t.p.Read, t.p.Total = 0, 0
+	t.p.SavedChannels, t.p.SavedProgrammes = 0, 0
 	t.p.Updated = t.now()
 	t.mu.Unlock()
 }
@@ -74,6 +77,26 @@ func (t *progressTracker) setProgrammes(n int) {
 	}
 	t.mu.Lock()
 	t.p.Programmes = n
+	t.p.Updated = t.now()
+	t.mu.Unlock()
+}
+
+func (t *progressTracker) setSavedChannels(n int) {
+	if n < 0 {
+		return
+	}
+	t.mu.Lock()
+	t.p.SavedChannels = n
+	t.p.Updated = t.now()
+	t.mu.Unlock()
+}
+
+func (t *progressTracker) setSavedProgrammes(n int) {
+	if n < 0 {
+		return
+	}
+	t.mu.Lock()
+	t.p.SavedProgrammes = n
 	t.p.Updated = t.now()
 	t.mu.Unlock()
 }

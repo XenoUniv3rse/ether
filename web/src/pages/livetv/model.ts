@@ -157,6 +157,8 @@ export type SourceProgress = {
   total?: number;
   channels?: number;
   programmes?: number;
+  savedChannels?: number;
+  savedProgrammes?: number;
   started: string;
   updated: string;
 };

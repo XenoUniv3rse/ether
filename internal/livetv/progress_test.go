@@ -16,12 +16,14 @@ func TestImportProgressEndpoint(t *testing.T) {
 	tracker.addRead(1024)
 	tracker.setChannels(12)
 	tracker.setProgrammes(34)
+	tracker.setSavedChannels(7)
+	tracker.setSavedProgrammes(3)
 
 	var got SourceProgress
 	if code := ownerJSON(t, s, "GET", "/sources/progress/job", "", &got); code != 200 {
 		t.Fatalf("progress: %d", code)
 	}
-	if got.Phase != "guide" || got.Read != 1024 || got.Total != 4096 || got.Channels != 12 || got.Programmes != 34 {
+	if got.Phase != "guide" || got.Read != 1024 || got.Total != 4096 || got.Channels != 12 || got.Programmes != 34 || got.SavedChannels != 7 || got.SavedProgrammes != 3 {
 		t.Fatalf("progress: %+v", got)
 	}
 	s.endImportProgress("job")
@@ -69,7 +71,7 @@ func TestImportProgressTracksFetchPhases(t *testing.T) {
 		t.Fatal(err)
 	}
 	p, ok := s.ImportProgress("job")
-	if !ok || p.Phase != "saving" || p.Channels != 1 {
+	if !ok || p.Phase != "saving" || p.Channels != 1 || p.SavedChannels != 1 {
 		t.Fatalf("final progress: %+v ok=%v", p, ok)
 	}
 	s.endImportProgress("job")

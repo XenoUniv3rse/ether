@@ -502,14 +502,27 @@ export function SourceEditor({
 
 /** "Fetching guide · 1.2 GiB / 4.1 GiB" while the import request is open. */
 function importProgressText(p: SourceProgress): string {
+  if (p.phase === "saving") {
+    if (p.channels && (p.savedChannels ?? 0) < p.channels) {
+      return t("Saving channels · {saved} of {total}", {
+        saved: formatNumber(p.savedChannels ?? 0),
+        total: formatNumber(p.channels),
+      });
+    }
+    if (p.programmes) {
+      return t("Saving listings · {saved} of {total}", {
+        saved: formatNumber(p.savedProgrammes ?? 0),
+        total: formatNumber(p.programmes),
+      });
+    }
+    return t("Saving channels and listings");
+  }
   const phase =
     p.phase === "playlist"
       ? t("Fetching playlist")
       : p.phase === "guide"
         ? t("Fetching guide")
-        : p.phase === "saving"
-          ? t("Saving channels and listings")
-          : t("Starting import");
+        : t("Starting import");
   const size =
     p.total && p.total > 0
       ? `${formatBytes(p.read)} / ${formatBytes(p.total)}`
@@ -517,11 +530,9 @@ function importProgressText(p: SourceProgress): string {
         ? formatBytes(p.read)
         : "";
   const count =
-    p.phase === "saving" && p.channels
-      ? t("{channels} channels", { channels: formatNumber(p.channels) })
-      : p.phase === "guide" && p.programmes
-        ? t("{programmes} programmes", { programmes: formatNumber(p.programmes) })
-        : "";
+    p.phase === "guide" && p.programmes
+      ? t("{programmes} programmes", { programmes: formatNumber(p.programmes) })
+      : "";
   return [phase, size, count].filter(Boolean).join(" · ");
 }
 
