@@ -672,6 +672,22 @@
   },
   {
     "kind": "navItem",
+    "id": "playback",
+    "owner": "builtin",
+    "label": {
+      "source": "Playback"
+    },
+    "hint": {},
+    "icon": "MonitorPlay",
+    "group": "streaming",
+    "order": 15,
+    "meta": {
+      "route": "/playback",
+      "page": "playback"
+    }
+  },
+  {
+    "kind": "navItem",
     "id": "releases",
     "owner": "builtin",
     "label": {
@@ -700,22 +716,6 @@
     "meta": {
       "route": "/cache",
       "page": "cache"
-    }
-  },
-  {
-    "kind": "navItem",
-    "id": "playback",
-    "owner": "builtin",
-    "label": {
-      "source": "Playback"
-    },
-    "hint": {},
-    "icon": "MonitorPlay",
-    "group": "streaming",
-    "order": 40,
-    "meta": {
-      "route": "/playback",
-      "page": "playback"
     }
   },
   {
@@ -1426,6 +1426,62 @@
   },
   {
     "kind": "page",
+    "id": "playback",
+    "owner": "builtin",
+    "label": {
+      "source": "Playback"
+    },
+    "hint": {},
+    "icon": "MonitorPlay",
+    "group": "streaming",
+    "order": 15,
+    "meta": {
+      "route": "/playback",
+      "navGroup": "streaming",
+      "inNav": true,
+      "keywords": {},
+      "sections": [
+        {
+          "key": "transcoding",
+          "label": {
+            "source": "Transcoding"
+          },
+          "keywords": {
+            "source": "ffmpeg hardware gpu bitrate startup race health"
+          }
+        },
+        {
+          "key": "devices",
+          "label": {
+            "source": "App compatibility"
+          },
+          "keywords": {
+            "source": "compatibility codecs"
+          }
+        },
+        {
+          "key": "markers",
+          "label": {
+            "source": "Skip buttons"
+          },
+          "keywords": {
+            "source": "intro credits skip chapters"
+          }
+        },
+        {
+          "key": "subtitles",
+          "label": {
+            "source": "Audio \u0026 subtitles"
+          },
+          "keywords": {
+            "source": "audio languages subtitles timing sync opensubtitles household"
+          }
+        }
+      ]
+    }
+  },
+  {
+    "kind": "page",
     "id": "releases",
     "owner": "builtin",
     "label": {
@@ -1542,62 +1598,6 @@
           },
           "keywords": {
             "source": "household selection popular movies tv warm arrivals"
-          }
-        }
-      ]
-    }
-  },
-  {
-    "kind": "page",
-    "id": "playback",
-    "owner": "builtin",
-    "label": {
-      "source": "Playback"
-    },
-    "hint": {},
-    "icon": "MonitorPlay",
-    "group": "streaming",
-    "order": 40,
-    "meta": {
-      "route": "/playback",
-      "navGroup": "streaming",
-      "inNav": true,
-      "keywords": {},
-      "sections": [
-        {
-          "key": "transcoding",
-          "label": {
-            "source": "Transcoding"
-          },
-          "keywords": {
-            "source": "ffmpeg hardware gpu bitrate startup race health"
-          }
-        },
-        {
-          "key": "devices",
-          "label": {
-            "source": "App compatibility"
-          },
-          "keywords": {
-            "source": "compatibility codecs"
-          }
-        },
-        {
-          "key": "markers",
-          "label": {
-            "source": "Skip buttons"
-          },
-          "keywords": {
-            "source": "intro credits skip chapters"
-          }
-        },
-        {
-          "key": "subtitles",
-          "label": {
-            "source": "Audio \u0026 subtitles"
-          },
-          "keywords": {
-            "source": "audio languages subtitles timing sync opensubtitles household"
           }
         }
       ]
