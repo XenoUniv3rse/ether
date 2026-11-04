@@ -122,7 +122,7 @@ globalThis.ether = (() => {
     const out = new Array(cands.length);
     for (let i = 0; i < cands.length; i++) {
       const t0 = now();
-      const v = rank_key(JSON.parse(cands[i]), cfg);
+      const v = rank_key(cands[i], cfg);
       out[i] = (now() - t0 > perMs) ? null : (typeof v === "bigint" ? Number(v) : v);
     }
     return JSON.stringify(out);
@@ -131,7 +131,7 @@ globalThis.ether = (() => {
     state = 0x2545F491;
     const cands = JSON.parse(candsJson), value = JSON.parse(valueJson);
     return JSON.stringify(cands.map(c => {
-      const t0 = now(), result = cond_match(JSON.parse(c), op, value);
+      const t0 = now(), result = cond_match(c, op, value);
       return now() - t0 > perMs ? null : !!result;
     }));
   };
@@ -338,11 +338,10 @@ func (in *jsInstance) rankOne(ctx context.Context, cs *callState, cand, cfg []by
 }
 
 func (in *jsInstance) rankBatch(ctx context.Context, cs *callState, cands [][]byte, cfg []byte, per time.Duration) ([]*int64, *Error) {
-	strs := make([]string, len(cands))
-	for i, c := range cands {
-		strs[i] = string(c)
+	candsJSON, ferr := factsArray(cands)
+	if ferr != nil {
+		return nil, ferr
 	}
-	candsJSON, _ := json.Marshal(strs)
 	perMs := float64(per) / float64(time.Millisecond)
 	v, err := in.jsCall(ctx, cs, func() (*qjs.Value, error) {
 		g := in.qc.Global()
@@ -362,12 +361,33 @@ func (in *jsInstance) rankBatch(ctx context.Context, cs *callState, cands [][]by
 	return out, nil
 }
 
-func (in *jsInstance) condBatch(ctx context.Context, cs *callState, cands [][]byte, op string, val []byte, per time.Duration) ([]*bool, *Error) {
-	strs := make([]string, len(cands))
-	for i, c := range cands {
-		strs[i] = string(c)
+// factsArray joins candidate facts into one JSON array, parsed once per
+// batch instead of once per candidate. Each fact must be one JSON value, so
+// a malformed fact cannot shift the others' positions.
+func factsArray(cands [][]byte) ([]byte, *Error) {
+	n := 2
+	for _, c := range cands {
+		if !json.Valid(c) {
+			return nil, &Error{Status: StatusError, Message: "candidate facts are not valid JSON"}
+		}
+		n += len(c) + 1
 	}
-	encoded, _ := json.Marshal(strs)
+	b := make([]byte, 0, n)
+	b = append(b, '[')
+	for i, c := range cands {
+		if i > 0 {
+			b = append(b, ',')
+		}
+		b = append(b, c...)
+	}
+	return append(b, ']'), nil
+}
+
+func (in *jsInstance) condBatch(ctx context.Context, cs *callState, cands [][]byte, op string, val []byte, per time.Duration) ([]*bool, *Error) {
+	encoded, ferr := factsArray(cands)
+	if ferr != nil {
+		return nil, ferr
+	}
 	v, err := in.jsCall(ctx, cs, func() (*qjs.Value, error) {
 		return in.qc.Invoke(in.globalFn("__ether_cond_batch"), in.qc.Global(), in.qc.NewString(string(encoded)), in.qc.NewString(op), in.qc.NewString(string(val)), in.qc.NewFloat64(float64(per)/float64(time.Millisecond)))
 	})
