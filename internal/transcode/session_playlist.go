@@ -107,7 +107,7 @@ func (s *Session) rampTranscodesLocked() bool {
 // tracks (t > 0) are steady transcodes of one shape, so only the primary
 // track can have discontinuities.
 func (s *Session) discontBeforeLocked(t, n int) bool {
-	if s.rtxDiscontinuities[n] {
+	if s.rtxDiscontinuities[n] || s.liveDiscontinuities[n] {
 		return true
 	}
 	if s.plan == nil || t != 0 || n <= 0 {

@@ -315,6 +315,10 @@ func (s *Session) finish(r *run) {
 		s.log.Info("ffmpeg run", "event", "stop", "reason", why, "run", r.seq, "segment", r.startSeg, "maxDone", r.maxDone, "planEnd", r.planEnd, "playhead", s.lastReq, "err", err)
 	}
 	log := s.log.With("run", r.seq)
+	if s.liveInput && s.cur == r {
+		s.recoverLiveLocked(r, err)
+		return
+	}
 	if err == nil {
 		if r.rtx && s.cur == r {
 			s.decision.Enhancement.State = "stopped"
@@ -445,6 +449,73 @@ func (s *Session) finish(r *run) {
 		at := s.segStart(r.next())
 		ferr := s.failErr
 		go h(s.id, at, ferr)
+	}
+}
+
+// restartBudget bounds attempts in a sliding window even if every attempt
+// produces some output. It can also be used for other encoder continuations.
+type restartBudget []time.Time
+
+func (b *restartBudget) take(now time.Time, limit int, window time.Duration) bool {
+	kept := (*b)[:0]
+	for _, at := range *b {
+		if now.Sub(at) < window {
+			kept = append(kept, at)
+		}
+	}
+	*b = kept
+	if len(kept) >= limit {
+		return false
+	}
+	*b = append(kept, now)
+	return true
+}
+
+// continueAfterExitLocked resumes at the first segment the run did not
+// publish. Callers own the timeline and decide whether a discontinuity is
+// required before invoking this shared encoder transition.
+func (s *Session) continueAfterExitLocked(r *run, reason string) error {
+	return s.startRunForLocked(r.next(), false, reason)
+}
+
+// recoverLiveLocked reconnects an active live HLS session at the next
+// unpublished segment. A sliding cap also bounds failures that emit a small
+// amount of media before exiting, rather than only empty runs.
+func (s *Session) recoverLiveLocked(r *run, err error) {
+	now := time.Now()
+	next := r.next()
+	reason := "EOF"
+	if err != nil {
+		reason = "encoder exit: " + err.Error()
+	}
+	stderr := strings.ToLower(r.stderr.String())
+	if strings.Contains(stderr, "corrupt") || strings.Contains(stderr, "pes packet size mismatch") {
+		reason += " (corrupt input observed)"
+	}
+	idle := s.m.opts.idleTimeout > 0 && now.Sub(s.LastAccess()) >= s.m.opts.idleTimeout
+	if idle || !s.liveRestarts.take(now, 3, 2*time.Minute) {
+		endReason := "restart limit reached"
+		if idle {
+			endReason = "session idle"
+		}
+		s.endSeg = next - 1
+		s.inputFailed = true
+		s.failErr = fmt.Errorf("live source ended: %s: %s", endReason, reason)
+		s.log.Warn("live encoder recovery ended", "reason", endReason, "exit", reason, "restarts", len(s.liveRestarts), "lastSegment", s.endSeg)
+		return
+	}
+	if next > 0 {
+		if s.liveDiscontinuities == nil {
+			s.liveDiscontinuities = make(map[int]bool)
+		}
+		s.liveDiscontinuities[next] = true
+	}
+	s.log.Warn("restarting live encoder", "reason", reason, "segment", next, "restart", len(s.liveRestarts))
+	if startErr := s.continueAfterExitLocked(r, "live input recovery"); startErr != nil {
+		s.endSeg = next - 1
+		s.inputFailed = true
+		s.failErr = startErr
+		s.log.Warn("live encoder recovery failed", "err", startErr)
 	}
 }
 
