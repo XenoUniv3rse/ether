@@ -65,6 +65,17 @@ func TestTranscodeChaosMatrix(t *testing.T) {
 				t.Fatalf("probe: %v", err)
 			}
 			info.Keyframes = nil
+			if name == "input-multi-audio" {
+				found := false
+				for _, stream := range info.Streams {
+					if stream.Type == "audio" && stream.Channels == 6 && stream.AACProgramConfig {
+						found = true
+					}
+				}
+				if !found {
+					t.Fatal("probe did not identify the AAC program configuration")
+				}
+			}
 			for _, path := range []string{"hls", "dash", "start-mkv", "download"} {
 				t.Run(path, func(t *testing.T) {
 					if path == "download" && name == "input-hevc10-hdr" {
@@ -116,7 +127,8 @@ func TestTranscodeChaosMatrix(t *testing.T) {
 					defer f.srv.Close()
 					f.playback.info = *info
 					f.srv.d.Playback = &chaosPlayback{f.playback, inputURL}
-					f.srv.d.Transcoder = m
+					recorder := &chaosTranscoderRecorder{Transcoder: m}
+					f.srv.d.Transcoder = recorder
 					id := "matrix-" + path
 					query := "path=%2Flibrary%2Fmetadata%2F" + fightClub.Key.String() + "&session=" + id + "&directPlay=0&directStream=1"
 					if strings.Contains(name, "subtitle") || strings.Contains(name, "broken-") {
@@ -142,6 +154,9 @@ func TestTranscodeChaosMatrix(t *testing.T) {
 					switch path {
 					case "hls":
 						get("/video/:/transcode/universal/start.m3u8?" + query + "&protocol=hls")
+						if name == "input-multi-audio" && (len(recorder.requests) == 0 || recorder.requests[len(recorder.requests)-1].Decision.AudioCopy) {
+							t.Fatal("PCE AAC was incorrectly advertised as copied")
+						}
 						for n := 0; n < 3 && (info.Duration <= 0 || time.Duration(n)*4*time.Second < info.Duration); n++ {
 							check(t, get(fmt.Sprintf("/video/:/transcode/universal/session/%s/base/%05d.ts", id, n)), "ts")
 						}

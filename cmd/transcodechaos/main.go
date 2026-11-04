@@ -246,7 +246,7 @@ func exercise(parent context.Context, ff, fp, root string, good []byte, sc scena
 	if playlist.Code != 200 || (sc.Container == "dash" && !strings.Contains(playlist.Body.String(), "<MPD")) || (sc.Container != "dash" && !live && !strings.Contains(playlist.Body.String(), "#EXTINF")) {
 		return fmt.Sprintf("playlist HTTP %d", playlist.Code)
 	}
-	var init []byte
+	var init, audioInit []byte
 	if sc.Container == "fmp4" || sc.Container == "dash" {
 		w := httptest.NewRecorder()
 		if sc.Container == "dash" {
@@ -258,6 +258,14 @@ func exercise(parent context.Context, ff, fp, root string, good []byte, sc scena
 			return fmt.Sprintf("init HTTP %d", w.Code)
 		}
 		init = w.Body.Bytes()
+		if sc.Container == "dash" {
+			audio := httptest.NewRecorder()
+			s.(core.DASHSession).ServeInit(audio, httptest.NewRequestWithContext(ctx, "GET", "/audio-init", nil), 1)
+			if audio.Code != 200 || audio.Body.Len() == 0 {
+				return fmt.Sprintf("audio init HTTP %d", audio.Code)
+			}
+			audioInit = audio.Body.Bytes()
+		}
 	}
 	order := []int{0, 1, 2}
 	if sc.Name == "seek" {
@@ -296,6 +304,23 @@ func exercise(parent context.Context, ff, fp, root string, good []byte, sc scena
 		}
 		if err := timeline.check(ctx, fp, p, n); err != nil {
 			return err.Error()
+		}
+		if sc.Container == "dash" {
+			audio := httptest.NewRecorder()
+			s.(core.DASHSession).ServeMedia(audio, httptest.NewRequestWithContext(ctx, "GET", "/audio", nil), 1, n)
+			if audio.Code != 200 || audio.Body.Len() == 0 {
+				return fmt.Sprintf("audio segment %d HTTP %d", n, audio.Code)
+			}
+			p := filepath.Join(dir, fmt.Sprintf("audio-%d.mp4", n))
+			if err := os.WriteFile(p, append(bytes.Clone(audioInit), audio.Body.Bytes()...), 0600); err != nil {
+				return err.Error()
+			}
+			if err := command(ctx, fp, "-v", "error", "-show_streams", p); err != nil {
+				return fmt.Sprintf("audio segment %d probe: %v", n, err)
+			}
+			if err := command(ctx, ff, "-v", "error", "-xerror", "-i", p, "-f", "null", "-"); err != nil {
+				return fmt.Sprintf("audio segment %d decode: %v", n, err)
+			}
 		}
 		if n == 0 && injector != nil {
 			if err := injector.fail(); err != nil {

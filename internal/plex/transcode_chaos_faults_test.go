@@ -30,6 +30,28 @@ type plexChaosSource struct {
 	hits          atomic.Int64
 }
 
+type shortChaosWriter struct{ http.ResponseWriter }
+
+func (w shortChaosWriter) Write(p []byte) (int, error) {
+	total := 0
+	for len(p) > 0 {
+		n := min(len(p), 4096)
+		written, err := w.ResponseWriter.Write(p[:n])
+		total += written
+		p = p[written:]
+		if f, ok := w.ResponseWriter.(http.Flusher); ok {
+			f.Flush()
+		}
+		if err != nil {
+			return total, err
+		}
+		if written == 0 {
+			return total, io.ErrShortWrite
+		}
+	}
+	return total, nil
+}
+
 func (s *plexChaosSource) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if !s.armed.Load() {
 		http.ServeContent(w, r, "media.mp4", time.Time{}, bytes.NewReader(s.data))
@@ -105,6 +127,10 @@ func (s *plexChaosSource) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if s.mode == "changing" && n > 1 {
 		content = s.changed
 	}
+	if s.mode == "short-reads" {
+		http.ServeContent(shortChaosWriter{w}, r, "media.mp4", time.Time{}, bytes.NewReader(content))
+		return
+	}
 	http.ServeContent(w, r, "media.mp4", time.Time{}, bytes.NewReader(content))
 }
 func TestTranscodeChaosPlexFaults(t *testing.T) {
@@ -119,7 +145,7 @@ func TestTranscodeChaosPlexFaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, fault := range []string{"503", "416", "slow", "stall", "drop", "mismatched-size", "changing"} {
+	for _, fault := range []string{"503", "416", "slow", "stall", "drop", "short-reads", "mismatched-size", "changing"} {
 		t.Run(fault, func(t *testing.T) {
 			for _, path := range []string{"hls", "dash", "start-mkv", "download"} {
 				t.Run(path, func(t *testing.T) {
@@ -209,6 +235,9 @@ func TestTranscodeChaosPlexFaults(t *testing.T) {
 						}
 						check(rec.Body.Bytes(), "mp4")
 						f.do(t, http.MethodDelete, "/downloadQueue/"+itoa(q)+"/items/"+itoa(id), ownerToken, nil)
+						if source.hits.Load() == 0 || (fault == "changing" && source.hits.Load() < 2) {
+							t.Fatal("source fault was not reached")
+						}
 						return
 					}
 					f := newFixture()
@@ -248,7 +277,7 @@ func TestTranscodeChaosPlexFaults(t *testing.T) {
 					case "start-mkv":
 						check(get("/video/:/transcode/universal/start.mkv?"+query+"&protocol=http"), "mkv")
 					}
-					if source.hits.Load() == 0 {
+					if source.hits.Load() == 0 || (fault == "changing" && source.hits.Load() < 2) {
 						t.Fatal("source fault was not reached")
 					}
 				})
