@@ -397,6 +397,10 @@ func (s *Service) openURL(ctx context.Context, raw string, h http.Header) (io.Re
 		closeBody()
 		return nil, fmt.Errorf("source returned HTTP %d", res.StatusCode)
 	}
+	if stalled.Load() {
+		closeBody()
+		return nil, fmt.Errorf("source fetch failed: the source did not answer within %s", sourceDocumentTimeout)
+	}
 	timer.Reset(sourceIdleTimeout)
 	body := &sourceBody{ReadCloser: res.Body, timer: timer, cancel: cancel, stalled: &stalled}
 	if p := importProgress(ctx); p != nil {
