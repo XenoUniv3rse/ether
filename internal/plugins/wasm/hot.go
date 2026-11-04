@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"runtime"
 	"sync"
 	"time"
 )
@@ -74,19 +75,85 @@ func (p *Plugin) hotCallState(ctx context.Context, start time.Time) *callState {
 		hot: true, logger: p.eng.logger, pluginID: p.id}
 }
 
+// hotInstance waits for an idle hot instance. Waiting is not plugin time,
+// but it is the resolve's time, so it is bounded by the given budget.
+func (p *Plugin) hotInstance(ctx context.Context, wait time.Duration) (instance, error) {
+	waitCtx, cancel := context.WithTimeout(ctx, wait)
+	defer cancel()
+	return p.hot.get(waitCtx)
+}
+
+// fatal reports whether a call error leaves the instance unusable: it
+// trapped or was killed at its deadline.
+func fatal(err *Error) bool { return err != nil && (err.Trap || err.Status == StatusTimeout) }
+
+// each runs candidates one at a time on an instance without a batch entry
+// point (raw modules), under the rules of the JavaScript batch loop (see
+// hotPrelude): the budgets bound the plugin's own time, read from the
+// monotonic clock and, when that says a budget is spent, from the thread's
+// CPU clock; the batch stops starting candidates once its budget is spent,
+// and a candidate over budget by the wall clock runs once more and is slow
+// only if that run's CPU time is over budget too. A nil result is a slow
+// or failed candidate. The loop stops at a fatal error, since the instance
+// is dead; the first error of any kind is returned with the partial
+// results.
+func each[T any](lim *Limits, n int, one func(int) (T, *Error)) ([]*T, *Error) {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	out := make([]*T, n)
+	var first *Error
+	wall0 := time.Now()
+	cpu0, haveCPU := threadCPU()
+	spent := func(w time.Time, c time.Duration, budget time.Duration) bool {
+		if time.Since(w) <= budget {
+			return false
+		}
+		now, ok := threadCPU()
+		return !haveCPU || !ok || now-c > budget
+	}
+	for i := 0; i < n; i++ {
+		if spent(wall0, cpu0, lim.RankBatch) {
+			break
+		}
+		t0 := time.Now()
+		v, err := one(i)
+		if err == nil && time.Since(t0) > lim.RankPerCandidate {
+			c0, _ := threadCPU()
+			t0 = time.Now()
+			v, err = one(i)
+			if err == nil && spent(t0, c0, lim.RankPerCandidate) {
+				continue
+			}
+		}
+		if err != nil {
+			if first == nil {
+				first = err
+			}
+			if fatal(err) {
+				return out, err
+			}
+			continue
+		}
+		out[i] = &v
+	}
+	return out, first
+}
+
 // RankBatch scores candidates with the plugin's rank_key. Scores align
-// with cands; a candidate that exceeds its budget, or arrives after the
-// batch budget is spent, scores the neutral 0 and counts as slow. Errors
-// are returned only for instance-level failures (trap, whole-batch
-// timeout); per-candidate slowness never fails the resolve.
-func (p *Plugin) RankBatch(ctx context.Context, cands []Candidate, config json.RawMessage) ([]int64, Outcome, error) {
+// with cands; a candidate that exceeds its per-candidate budget, or that
+// the batch did not reach before its budget was spent, scores the neutral
+// 0, counts as slow and is not memoized, so a later batch for the same
+// releases picks up where this one stopped. Errors are returned only for
+// instance-level failures (trap, kill at the hard deadline); per-candidate
+// slowness never fails the resolve.
+func (p *Plugin) RankBatch(ctx context.Context, cands []Candidate, config json.RawMessage) (scores []int64, out Outcome, err error) {
 	start := time.Now()
-	out := Outcome{Status: StatusOK}
+	out.Status = StatusOK
 	defer func() {
 		out.Duration = time.Since(start)
 		p.stats.record(out)
 	}()
-	scores := make([]int64, len(cands))
+	scores = make([]int64, len(cands))
 	if !p.caps.RankKey {
 		out.Status = StatusError
 		return scores, out, &Error{Status: StatusError, Message: "plugin does not export rank_key"}
@@ -107,83 +174,54 @@ func (p *Plugin) RankBatch(ctx context.Context, cands []Candidate, config json.R
 	if len(pending) == 0 {
 		return scores, out, nil
 	}
-	batchCtx, cancel := context.WithTimeout(ctx, p.lim.RankBatch)
-	defer cancel()
-	cs := p.hotCallState(batchCtx, start)
-	in, err := p.hot.get(batchCtx)
-	if err != nil {
+	in, gerr := p.hotInstance(ctx, p.lim.RankBatch)
+	if gerr != nil {
 		out.SlowCandidates = len(pending)
 		out.Status = StatusTimeout
 		return scores, out, nil // neutral for the rest; health sees the counters
 	}
-	healthy := true
+	cs := p.hotCallState(ctx, start)
+	facts := make([][]byte, len(pending))
+	for j, i := range pending {
+		facts[j] = cands[i].Facts
+	}
+	var got []*int64
+	var callErr *Error
 	if br, ok := in.(batchRanker); ok {
-		facts := make([][]byte, len(pending))
-		for j, i := range pending {
-			facts[j] = cands[i].Facts
-		}
-		got, callErr := br.rankBatch(batchCtx, cs, facts, config, p.lim.RankPerCandidate)
-		if callErr != nil {
-			healthy = !callErr.Trap && callErr.Status != StatusTimeout
-			out.Status, out.Trap = callErr.Status, callErr.Trap
-			out.SlowCandidates = len(pending)
-			p.hot.put(in, healthy)
-			out.Units = cs.finishUnits()
-			return scores, out, callErr
-		}
-		for j, i := range pending {
-			if got[j] == nil {
-				out.SlowCandidates++
-				continue // neutral 0, not memoized: timing, not a value
-			}
-			scores[i] = *got[j]
-			p.memo.put(hashKey(p.id, p.version, "rank", cfgHash, cands[i].ReleaseID), *got[j])
-		}
+		got, callErr = br.rankBatch(ctx, cs, facts, config, &p.lim)
 	} else {
-		for _, i := range pending {
-			remain := time.Until(start.Add(p.lim.RankBatch))
-			if remain <= 0 {
-				out.SlowCandidates++
-				continue
-			}
-			per := p.lim.RankPerCandidate
-			if remain < per {
-				per = remain
-			}
-			candCtx, ccancel := context.WithTimeout(batchCtx, per)
-			v, callErr := in.rankOne(candCtx, cs, cands[i].Facts, config)
-			ccancel()
-			if callErr != nil {
-				out.SlowCandidates++
-				if callErr.Trap || callErr.Status == StatusTimeout {
-					healthy = false
-					out.Status, out.Trap = callErr.Status, callErr.Trap
-					// Instance is dead or killed; remaining candidates
-					// cannot run on it. They stay neutral.
-					for _, k := range pending {
-						if k > i {
-							out.SlowCandidates++
-						}
-					}
-					break
-				}
-				continue
-			}
-			scores[i] = v
-			p.memo.put(hashKey(p.id, p.version, "rank", cfgHash, cands[i].ReleaseID), v)
+		killCtx, cancel := context.WithTimeout(ctx, p.lim.hotKill())
+		got, callErr = each(&p.lim, len(facts), func(j int) (int64, *Error) { return in.rankOne(killCtx, cs, facts[j], config) })
+		cancel()
+		if !fatal(callErr) {
+			callErr = nil // a failed candidate is neutral, like a slow one
 		}
 	}
-	p.hot.put(in, healthy)
+	p.hot.put(in, !fatal(callErr))
 	out.Units = cs.finishUnits()
+	if callErr != nil {
+		out.Status, out.Trap = callErr.Status, callErr.Trap
+	}
+	for j, i := range pending {
+		if j >= len(got) || got[j] == nil {
+			out.SlowCandidates++
+			continue // neutral 0, not memoized: timing, not a value
+		}
+		scores[i] = *got[j]
+		p.memo.put(hashKey(p.id, p.version, "rank", cfgHash, cands[i].ReleaseID), *got[j])
+	}
+	if callErr != nil && got == nil {
+		return scores, out, callErr
+	}
 	return scores, out, nil
 }
 
 // CondMatch evaluates one rule condition. Budget exhaustion and errors
 // read as false with the reason in the Outcome, matching RankBatch's
 // neutral-on-trouble rule.
-func (p *Plugin) CondMatch(ctx context.Context, cand Candidate, operator string, value json.RawMessage) (bool, Outcome, error) {
+func (p *Plugin) CondMatch(ctx context.Context, cand Candidate, operator string, value json.RawMessage) (match bool, out Outcome, err error) {
 	start := time.Now()
-	out := Outcome{Status: StatusOK}
+	out.Status = StatusOK
 	defer func() {
 		out.Duration = time.Since(start)
 		p.stats.record(out)
@@ -200,30 +238,42 @@ func (p *Plugin) CondMatch(ctx context.Context, cand Candidate, operator string,
 		out.MemoHits = 1
 		return v != 0, out, nil
 	}
-	callCtx, cancel := context.WithTimeout(ctx, p.lim.RankPerCandidate)
-	defer cancel()
-	cs := p.hotCallState(callCtx, start)
-	in, err := p.hot.get(callCtx)
-	if err != nil {
+	in, gerr := p.hotInstance(ctx, p.lim.RankPerCandidate)
+	if gerr != nil {
 		out.Status = StatusTimeout
 		out.SlowCandidates = 1
 		return false, out, nil
 	}
-	got, callErr := in.condOne(callCtx, cs, cand.Facts, operator, value)
+	cs := p.hotCallState(ctx, start)
+	got, callErr := p.condRun(ctx, cs, in, [][]byte{cand.Facts}, operator, value)
+	p.hot.put(in, !fatal(callErr))
 	out.Units = cs.finishUnits()
 	if callErr != nil {
 		out.Status, out.Trap = callErr.Status, callErr.Trap
 		out.SlowCandidates = 1
-		p.hot.put(in, !callErr.Trap && callErr.Status != StatusTimeout)
 		return false, out, callErr
 	}
-	p.hot.put(in, true)
+	if got[0] == nil {
+		out.SlowCandidates = 1
+		return false, out, nil
+	}
 	v := int64(0)
-	if got {
+	if *got[0] {
 		v = 1
 	}
 	p.memo.put(key, v)
-	return got, out, nil
+	return *got[0], out, nil
+}
+
+// condRun evaluates a condition for each candidate under the hot-path
+// budgets, in one crossing where the instance supports it.
+func (p *Plugin) condRun(ctx context.Context, cs *callState, in instance, facts [][]byte, operator string, value json.RawMessage) ([]*bool, *Error) {
+	if bm, ok := in.(batchMatcher); ok {
+		return bm.condBatch(ctx, cs, facts, operator, value, &p.lim)
+	}
+	killCtx, cancel := context.WithTimeout(ctx, p.lim.hotKill())
+	defer cancel()
+	return each(&p.lim, len(facts), func(i int) (bool, *Error) { return in.condOne(killCtx, cs, facts[i], operator, value) })
 }
 
 // CondBatch checks a batch without memoization, suitable for conformance
@@ -238,52 +288,29 @@ func (p *Plugin) CondBatch(ctx context.Context, cands []Candidate, operator stri
 		value = json.RawMessage("null")
 	}
 	start := time.Now()
-	batchCtx, cancel := context.WithTimeout(ctx, p.lim.RankBatch)
-	defer cancel()
-	cs := p.hotCallState(batchCtx, start)
-	in, err := p.hot.get(batchCtx)
+	in, err := p.hotInstance(ctx, p.lim.RankBatch)
 	if err != nil {
 		out.SlowCandidates = len(cands)
 		return results, out, err
 	}
-	healthy := true
-	if br, ok := in.(interface {
-		condBatch(context.Context, *callState, [][]byte, string, []byte, time.Duration) ([]*bool, *Error)
-	}); ok {
-		facts := make([][]byte, len(cands))
-		for i := range cands {
-			facts[i] = cands[i].Facts
-		}
-		got, callErr := br.condBatch(batchCtx, cs, facts, operator, value, p.lim.RankPerCandidate)
-		if callErr != nil {
-			healthy = !callErr.Trap && callErr.Status != StatusTimeout
-			out.Status = callErr.Status
-			out.SlowCandidates = len(cands)
-			err = callErr
-		} else {
-			for i, v := range got {
-				if v == nil {
-					out.SlowCandidates++
-				} else {
-					results[i] = *v
-				}
-			}
-		}
-	} else {
-		for i, c := range cands {
-			callCtx, cancel := context.WithTimeout(batchCtx, p.lim.RankPerCandidate)
-			v, callErr := in.condOne(callCtx, cs, c.Facts, operator, value)
-			cancel()
-			if callErr != nil {
-				out.SlowCandidates += len(cands) - i
-				healthy = !callErr.Trap && callErr.Status != StatusTimeout
-				err = callErr
-				break
-			}
-			results[i] = v
-		}
+	cs := p.hotCallState(ctx, start)
+	facts := make([][]byte, len(cands))
+	for i := range cands {
+		facts[i] = cands[i].Facts
 	}
-	p.hot.put(in, healthy)
+	got, callErr := p.condRun(ctx, cs, in, facts, operator, value)
+	p.hot.put(in, !fatal(callErr))
 	out.Units = cs.finishUnits()
+	if callErr != nil {
+		out.Status = callErr.Status
+		err = callErr
+	}
+	for i := range cands {
+		if i >= len(got) || got[i] == nil {
+			out.SlowCandidates++
+			continue
+		}
+		results[i] = *got[i]
+	}
 	return results, out, err
 }

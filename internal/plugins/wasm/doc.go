@@ -63,4 +63,13 @@
 // budget of 2ms per candidate and 50ms per batch, neutral results (rank 0,
 // condition false) on exhaustion, and memoization keyed by
 // (plugin id, version, config hash, release id).
+//
+// The budgets bound the plugin's own time. Handing over the facts is host
+// work and is not charged. Time is read from the monotonic clock and, when
+// that says a budget is spent, from the thread's CPU clock, so time the
+// thread spent descheduled on a busy host is not charged either. A batch
+// stops starting candidates when its budget is spent; what it finished is
+// memoized, so the next batch for the same releases continues from there.
+// Separately, a hard deadline of twice the batch budget (Limits.hotKill)
+// kills an instance whose code stops returning.
 package wasm

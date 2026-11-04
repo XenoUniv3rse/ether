@@ -489,14 +489,12 @@ func TestHotJSBatchWithinBudget(t *testing.T) {
 		cands[i] = Candidate{ReleaseID: fmt.Sprintf("b-%d", i),
 			Facts: json.RawMessage(fmt.Sprintf(`{"resolution":%d,"cached":%t}`, []int{1080, 2160}[i%2], i%3 == 0))}
 	}
-	start := time.Now()
+	// The engine judges the 50ms batch budget by the plugin's own time (see
+	// hotPrelude), so the outcome, not the test's wall clock, says whether
+	// the batch fit: a loaded host's pauses are not the plugin's.
 	scores, out, err := p.RankBatch(context.Background(), cands, nil)
-	elapsed := time.Since(start)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if elapsed > 50*time.Millisecond {
-		t.Fatalf("500-candidate JS batch took %v, over the 50ms budget", elapsed)
+	if err != nil || out.Status != StatusOK || out.Trap {
+		t.Fatalf("rank: %+v %v", out, err)
 	}
 	if out.SlowCandidates != 0 {
 		t.Fatalf("slow=%d in a simple batch", out.SlowCandidates)

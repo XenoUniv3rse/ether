@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -109,31 +110,67 @@ globalThis.ether = (() => {
   // performance below, and a host-function clock would cost a boundary
   // crossing per check.
   const now = performance.now.bind(performance);
+  // The calling thread's CPU time in ms, or -1 without a CPU clock. Hidden
+  // from plugin code like the monotonic clock.
+  const cpu = typeof __ether_cpu_ms === "function" ? __ether_cpu_ms : () => -1;
+  delete globalThis.__ether_cpu_ms;
   let state = 0x2545F491;
   const nextRandom = () => { state = (state * 1103515245 + 12345) & 0x7fffffff; return state / 0x80000000; };
   class FixedDate extends Date { constructor(...a) { super(...(a.length ? a : [0])); } static now() { return 0; } }
   globalThis.Date = FixedDate;
   globalThis.performance = Object.freeze({ now: () => 0, timeOrigin: 0 });
   Math.random = nextRandom;
-  globalThis.__ether_rank_batch = (candsJson, cfgJson, perMs) => {
-    state = 0x2545F491;
-    const cands = JSON.parse(candsJson);
-    const cfg = JSON.parse(cfgJson);
-    const out = new Array(cands.length);
-    for (let i = 0; i < cands.length; i++) {
-      const t0 = now();
-      const v = rank_key(cands[i], cfg);
-      out[i] = (now() - t0 > perMs) ? null : (typeof v === "bigint" ? Number(v) : v);
-    }
-    return JSON.stringify(out);
+  // A batch arrives in two calls. __ether_load_batch parses the facts and
+  // the config or condition value: host work, run with the JSON functions
+  // captured here so no plugin code runs in it, under its own deadline.
+  // __ether_rank_batch and __ether_cond_batch then run the plugin over it.
+  //
+  // Budgets bound the plugin's own time (SPEC 5.2): each candidate gets
+  // perMs, and the batch stops starting candidates once batchMs is spent;
+  // the rest come back null (neutral, slow, not memoized). Wall time on a
+  // busy host includes the time the thread sat descheduled, which is not
+  // the plugin's. So the cheap monotonic clock is read first, and when it
+  // says a budget is spent the thread's CPU clock decides: the batch goes on
+  // while the plugin's CPU time is within budget, and a candidate over
+  // budget by the wall clock runs once more and is slow only if that run's
+  // CPU time is over budget too. Without a CPU clock the wall clock rules.
+  const parse = JSON.parse, stringify = JSON.stringify;
+  let batch = [], batchArg = null;
+  globalThis.__ether_load_batch = (candsJson, argJson) => {
+    batch = parse(candsJson);
+    batchArg = parse(argJson);
+    return batch.length;
   };
-  globalThis.__ether_cond_batch = (candsJson, op, valueJson, perMs) => {
+  const each = (perMs, batchMs, call, accept) => {
+    const cands = batch;
+    batch = [];
+    const out = [];
+    for (let i = 0; i < cands.length; i++) out.push(null);
+    const wall0 = now(), cpu0 = cpu();
+    for (let i = 0; i < cands.length; i++) {
+      if (now() - wall0 > batchMs && (cpu0 < 0 || cpu() - cpu0 > batchMs)) break;
+      let t0 = now(), v = call(cands[i]);
+      if (now() - t0 > perMs) {
+        // Over by the wall clock: run it again and judge the plugin's own time.
+        const c0 = cpu();
+        t0 = now();
+        v = call(cands[i]);
+        if (c0 < 0 ? now() - t0 > perMs : cpu() - c0 > perMs) continue;
+      }
+      out[i] = accept(v);
+    }
+    return stringify(out);
+  };
+  const score = (v) => (typeof v === "bigint" ? Number(v) : v);
+  globalThis.__ether_rank_batch = (perMs, batchMs) => {
     state = 0x2545F491;
-    const cands = JSON.parse(candsJson), value = JSON.parse(valueJson);
-    return JSON.stringify(cands.map(c => {
-      const t0 = now(), result = cond_match(c, op, value);
-      return now() - t0 > perMs ? null : !!result;
-    }));
+    const cfg = batchArg;
+    return each(perMs, batchMs, (c) => rank_key(c, cfg), score);
+  };
+  globalThis.__ether_cond_batch = (op, perMs, batchMs) => {
+    state = 0x2545F491;
+    const value = batchArg;
+    return each(perMs, batchMs, (c) => cond_match(c, op, value), (v) => !!v);
   };
   return {
     log: (...a) => { try { __ether_host("log", JSON.stringify(a.map(String))); } catch (e) {} },
@@ -222,6 +259,13 @@ func newJSInstance(ctx context.Context, source string, lim *Limits, hot bool) (i
 	prelude := servicePrelude
 	if hot {
 		prelude = hotPrelude
+		qc.SetFunc("__ether_cpu_ms", func(*qjs.This) (*qjs.Value, error) {
+			d, ok := threadCPU()
+			if !ok {
+				return qc.NewFloat64(-1), nil
+			}
+			return qc.NewFloat64(budgetMs(d)), nil
+		})
 	}
 	if _, err := qc.Eval("ether-prelude.js", qjs.Code(prelude)); err != nil {
 		in.closeInstance()
@@ -327,7 +371,8 @@ func (in *jsInstance) handle(ctx context.Context, cs *callState, reqJSON []byte)
 }
 
 func (in *jsInstance) rankOne(ctx context.Context, cs *callState, cand, cfg []byte) (int64, *Error) {
-	scores, err := in.rankBatch(ctx, cs, [][]byte{cand}, cfg, time.Duration(1<<62))
+	unbounded := Limits{RankPerCandidate: 1 << 60, RankBatch: 1 << 60}
+	scores, err := in.rankBatch(ctx, cs, [][]byte{cand}, cfg, &unbounded)
 	if err != nil {
 		return 0, err
 	}
@@ -337,16 +382,36 @@ func (in *jsInstance) rankOne(ctx context.Context, cs *callState, cand, cfg []by
 	return *scores[0], nil
 }
 
-func (in *jsInstance) rankBatch(ctx context.Context, cs *callState, cands [][]byte, cfg []byte, per time.Duration) ([]*int64, *Error) {
+func budgetMs(d time.Duration) float64 { return float64(d) / float64(time.Millisecond) }
+
+// loadBatch hands a batch's facts and its config (or condition value) to
+// the instance: one parse of one JSON array, under its own deadline, so
+// the host's share of a batch is never charged to the plugin.
+func (in *jsInstance) loadBatch(ctx context.Context, cs *callState, cands [][]byte, arg []byte, lim *Limits) *Error {
 	candsJSON, ferr := factsArray(cands)
 	if ferr != nil {
-		return nil, ferr
+		return ferr
 	}
-	perMs := float64(per) / float64(time.Millisecond)
-	v, err := in.jsCall(ctx, cs, func() (*qjs.Value, error) {
-		g := in.qc.Global()
-		return in.qc.Invoke(in.globalFn("__ether_rank_batch"), g,
-			in.qc.NewString(string(candsJSON)), in.qc.NewString(string(cfg)), in.qc.NewFloat64(perMs))
+	loadCtx, cancel := context.WithTimeout(ctx, lim.hotKill())
+	defer cancel()
+	_, err := in.jsCall(loadCtx, cs, func() (*qjs.Value, error) {
+		return in.qc.Invoke(in.globalFn("__ether_load_batch"), in.qc.Global(),
+			in.qc.NewString(string(candsJSON)), in.qc.NewString(string(arg)))
+	})
+	return err
+}
+
+func (in *jsInstance) rankBatch(ctx context.Context, cs *callState, cands [][]byte, cfg []byte, lim *Limits) ([]*int64, *Error) {
+	if err := in.loadBatch(ctx, cs, cands, cfg, lim); err != nil {
+		return nil, err
+	}
+	runCtx, cancel := context.WithTimeout(ctx, lim.hotKill())
+	defer cancel()
+	runtime.LockOSThread() // the budget reads this thread's CPU clock
+	defer runtime.UnlockOSThread()
+	v, err := in.jsCall(runCtx, cs, func() (*qjs.Value, error) {
+		return in.qc.Invoke(in.globalFn("__ether_rank_batch"), in.qc.Global(),
+			in.qc.NewFloat64(budgetMs(lim.RankPerCandidate)), in.qc.NewFloat64(budgetMs(lim.RankBatch)))
 	})
 	if err != nil {
 		return nil, err
@@ -383,13 +448,17 @@ func factsArray(cands [][]byte) ([]byte, *Error) {
 	return append(b, ']'), nil
 }
 
-func (in *jsInstance) condBatch(ctx context.Context, cs *callState, cands [][]byte, op string, val []byte, per time.Duration) ([]*bool, *Error) {
-	encoded, ferr := factsArray(cands)
-	if ferr != nil {
-		return nil, ferr
+func (in *jsInstance) condBatch(ctx context.Context, cs *callState, cands [][]byte, op string, val []byte, lim *Limits) ([]*bool, *Error) {
+	if err := in.loadBatch(ctx, cs, cands, val, lim); err != nil {
+		return nil, err
 	}
-	v, err := in.jsCall(ctx, cs, func() (*qjs.Value, error) {
-		return in.qc.Invoke(in.globalFn("__ether_cond_batch"), in.qc.Global(), in.qc.NewString(string(encoded)), in.qc.NewString(op), in.qc.NewString(string(val)), in.qc.NewFloat64(float64(per)/float64(time.Millisecond)))
+	runCtx, cancel := context.WithTimeout(ctx, lim.hotKill())
+	defer cancel()
+	runtime.LockOSThread() // the budget reads this thread's CPU clock
+	defer runtime.UnlockOSThread()
+	v, err := in.jsCall(runCtx, cs, func() (*qjs.Value, error) {
+		return in.qc.Invoke(in.globalFn("__ether_cond_batch"), in.qc.Global(), in.qc.NewString(op),
+			in.qc.NewFloat64(budgetMs(lim.RankPerCandidate)), in.qc.NewFloat64(budgetMs(lim.RankBatch)))
 	})
 	if err != nil {
 		return nil, err

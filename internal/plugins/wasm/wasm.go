@@ -163,6 +163,21 @@ func (l *Limits) normalize() {
 	}
 }
 
+// hotKill is the hard deadline of one hot-path call: the point where the
+// instance is killed because plugin code stopped returning (an endless
+// loop). It is not the plugin's budget. The budgets bound the plugin's own
+// time and are enforced softly between candidates (see hotPrelude), so a
+// batch that keeps to them ends normally; the deadline only has to catch
+// code that never yields back. It sits one batch budget past the batch
+// budget so the host's own work for the call (encoding and parsing the
+// facts) and a busy machine's scheduling pauses cannot turn a well-behaved
+// batch into a killed one. A JavaScript batch takes the deadline twice:
+// once for the host to hand over the facts, once for the plugin's code.
+// When the kill and the budget were the same
+// instant, the batch lost every score it had already computed, nothing was
+// memoized, and the next resolve started from zero and timed out again.
+func (l *Limits) hotKill() time.Duration { return 2 * l.RankBatch }
+
 func (l *Limits) costOf(name string) int64 {
 	if c, ok := l.Costs[name]; ok {
 		return c
@@ -329,9 +344,16 @@ type instance interface {
 }
 
 // batchRanker is implemented by instances (JavaScript) that can score a
-// whole batch in one boundary crossing. Nil scores mark slow candidates.
+// whole batch in one crossing. They apply the per-candidate and batch
+// budgets themselves and enforce the hot kill deadline (Limits.hotKill)
+// on ctx. Nil scores mark slow candidates.
 type batchRanker interface {
-	rankBatch(ctx context.Context, cs *callState, cands [][]byte, cfg []byte, per time.Duration) ([]*int64, *Error)
+	rankBatch(ctx context.Context, cs *callState, cands [][]byte, cfg []byte, lim *Limits) ([]*int64, *Error)
+}
+
+// batchMatcher is the rule-condition counterpart of batchRanker.
+type batchMatcher interface {
+	condBatch(ctx context.Context, cs *callState, cands [][]byte, op string, val []byte, lim *Limits) ([]*bool, *Error)
 }
 
 func statusForFaultCode(code string) Status {
