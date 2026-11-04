@@ -724,9 +724,28 @@ func typeMatches(sp core.CollectionSpec, t core.MediaType) bool {
 	return false
 }
 
+func sectionKeys(keys []core.RatingKey, typ core.MediaType) []core.RatingKey {
+	if typ == "" {
+		return keys
+	}
+	out := make([]core.RatingKey, 0, len(keys))
+	for _, key := range keys {
+		if typ == core.TypeMovie && key.Kind() == core.KindMovie || typ == core.TypeShow && key.Kind() == core.KindShow {
+			out = append(out, key)
+		}
+	}
+	return out
+}
+
 func (s *Service) collectionFor(ctx context.Context, row *specRow, user *core.User, t core.MediaType, keys []core.RatingKey) core.Collection {
+	if row.spec.MediaType == MediaMixed && t != "" {
+		keys = sectionKeys(keys, t)
+	}
 	c := core.Collection{Key: row.key(), Title: row.spec.Name, Summary: row.spec.Description, Kind: "smart",
 		OwnerUserID: row.owner, ChildCount: len(keys), Upcoming: row.spec.ReleaseMode == "upcoming" || row.spec.ReleaseMode == "mixed"}
+	if row.spec.MediaType == MediaMixed && t != "" {
+		c.Key = core.SectionCollectionKey(c.Key, t)
+	}
 	if row.builtin {
 		c.Kind = "trending"
 	}
@@ -798,6 +817,9 @@ func (s *Service) List(ctx context.Context, user *core.User, t core.MediaType) (
 		if len(keys) == 0 {
 			continue
 		}
+		if row.spec.MediaType == MediaMixed && t != "" && len(sectionKeys(keys, t)) == 0 {
+			continue
+		}
 		out = append(out, s.collectionFor(ctx, row, user, t, keys))
 	}
 	out = append(out, s.listEphemeral(user, t)...)
@@ -815,6 +837,7 @@ func (s *Service) List(ctx context.Context, user *core.User, t core.MediaType) (
 
 // Get returns one collection by key.
 func (s *Service) Get(ctx context.Context, user *core.User, key core.RatingKey) (*core.Collection, error) {
+	base, section := key.CollectionSection()
 	if key.IsEphemeral() {
 		return s.getEphemeral(ctx, user, key)
 	}
@@ -822,18 +845,18 @@ func (s *Service) Get(ctx context.Context, user *core.User, key core.RatingKey) 
 	case core.KindCollection:
 		return s.getFranchise(ctx, user, key)
 	case core.KindSmart:
-		row, err := s.rowByKey(ctx, key)
+		row, err := s.rowByKey(ctx, base)
 		if err != nil {
 			return nil, err
 		}
-		if !visible(row, user) {
+		if !visible(row, user) || section != "" && (row.spec.MediaType != MediaMixed || !typeMatches(row.spec, section)) {
 			return nil, core.ErrNotFound
 		}
 		keys, err := s.serve(ctx, row, user, true)
 		if err != nil {
 			return nil, err
 		}
-		c := s.collectionFor(ctx, row, user, "", keys)
+		c := s.collectionFor(ctx, row, user, section, keys)
 		return &c, nil
 	}
 	return nil, core.ErrNotFound
@@ -841,6 +864,7 @@ func (s *Service) Get(ctx context.Context, user *core.User, key core.RatingKey) 
 
 // Items returns a page of a collection's titles as the user sees them.
 func (s *Service) Items(ctx context.Context, user *core.User, key core.RatingKey, offset, limit int) (core.Page, error) {
+	base, section := key.CollectionSection()
 	if limit <= 0 {
 		limit = 50
 	}
@@ -854,17 +878,18 @@ func (s *Service) Items(ctx context.Context, user *core.User, key core.RatingKey
 	case core.KindCollection:
 		return s.franchiseItems(ctx, user, key, offset, limit)
 	case core.KindSmart:
-		row, err := s.rowByKey(ctx, key)
+		row, err := s.rowByKey(ctx, base)
 		if err != nil {
 			return core.Page{}, err
 		}
-		if !visible(row, user) {
+		if !visible(row, user) || section != "" && row.spec.MediaType != MediaMixed {
 			return core.Page{}, core.ErrNotFound
 		}
 		keys, err := s.serve(ctx, row, user, true)
 		if err != nil {
 			return core.Page{}, err
 		}
+		keys = sectionKeys(keys, section)
 		total := len(keys)
 		if offset >= total {
 			return core.Page{Items: []core.Title{}, Total: total}, nil
@@ -884,6 +909,7 @@ func (s *Service) Items(ctx context.Context, user *core.User, key core.RatingKey
 }
 
 func (s *Service) AllowsPlaceholders(ctx context.Context, user *core.User, collection core.RatingKey, device string) bool {
+	collection, _ = collection.CollectionSection()
 	if collection.Kind() != core.KindSmart || collection.IsEphemeral() {
 		return false
 	}
@@ -892,6 +918,11 @@ func (s *Service) AllowsPlaceholders(ctx context.Context, user *core.User, colle
 }
 
 func (s *Service) Placeholder(ctx context.Context, user *core.User, collection, key core.RatingKey, device string) (*core.Title, error) {
+	var section core.MediaType
+	collection, section = collection.CollectionSection()
+	if section != "" && len(sectionKeys([]core.RatingKey{key}, section)) == 0 {
+		return nil, core.ErrNotFound
+	}
 	if collection.Kind() != core.KindSmart || collection.IsEphemeral() {
 		return nil, core.ErrNotFound
 	}

@@ -112,6 +112,7 @@ func SectionView(h Hub, t MediaType) (Hub, bool) {
 		return h, false
 	}
 	h.Items = items
+	h.Key = SectionCollectionKey(h.Key, t)
 	h.Type = t
 	return h, true
 }

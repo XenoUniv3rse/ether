@@ -26,7 +26,7 @@ func (s *Service) ListComplete(ctx context.Context, user *core.User, typ core.Me
 		if err != nil {
 			return nil, fmt.Errorf("collections: complete list: %w", err)
 		}
-		if len(keys) > 0 {
+		if len(keys) > 0 && (row.spec.MediaType != MediaMixed || typ == "" || len(sectionKeys(keys, typ)) > 0) {
 			out = append(out, s.collectionFor(ctx, row, user, typ, keys))
 		}
 	}
