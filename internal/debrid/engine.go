@@ -186,6 +186,7 @@ func NewEngine(svc *Service, opts EngineOptions) *Engine {
 	// The primary and hedge pools share one per-host connection cap: the
 	// CDN counts every open connection from this server.
 	limit := newConnCap(defaultHostConnections)
+	limit.dialGap = 250 * time.Millisecond
 	var owned []*http.Transport
 	if e.hc == nil {
 		t := newStreamingTransport(limit)
@@ -630,6 +631,29 @@ func (f *remoteFile) link(ctx context.Context, force bool, gen ...int) (string, 
 	return out.URL, g, nil
 }
 
+// moveFromHost changes provider without regenerating links on the blocked host.
+func (f *remoteFile) moveFromHost(ctx context.Context, gen int) bool {
+	f.linkMu.Lock()
+	defer f.linkMu.Unlock()
+	p, current := f.payload()
+	if current != gen {
+		return true
+	}
+	if p.IsDirect() || p.IsPluginProvider() {
+		return false
+	}
+	out, err := f.e.svc.alternateProvider(ctx, p)
+	if err != nil || out.Size != f.size {
+		return false
+	}
+	f.mu.Lock()
+	f.pl = out
+	f.gen++
+	f.mu.Unlock()
+	f.e.kickLeases()
+	return true
+}
+
 func (f *remoteFile) blockLen(idx int64) int64 {
 	if idx == f.nblocks-1 {
 		return f.size - idx*f.e.block
@@ -766,13 +790,16 @@ func (f *remoteFile) block(ctx context.Context, idx int64, mode fetchMode, runBl
 		if !errors.Is(fl.err, errRunCancelled) {
 			return nil, fl.err
 		}
+		if runCtx != nil && runCtx.Err() != nil {
+			return nil, runCtx.Err()
+		}
 		if mode != fetchUrgent {
 			if err := ctx.Err(); err != nil {
 				return nil, err
 			}
 			return nil, errRunCancelled
 		}
-		runCtx, mode = nil, fetchUrgent
+		mode = fetchUrgent
 	}
 	return nil, fmt.Errorf("debrid: block %d: %w", idx, core.ErrSourceUnavailable)
 }
@@ -894,10 +921,7 @@ func (f *remoteFile) fetchRun(ctx context.Context, first int64, fls []*blockFlig
 				"offset", idx*f.e.block, "attempt", bodyRetries, "err", sanitize(err))
 			if bodyRetries == 1 {
 				_, gen := f.payload()
-				if _, _, refreshErr := f.link(reqCtx, true, gen); refreshErr != nil {
-					err = refreshErr
-					break
-				}
+				f.moveFromHost(reqCtx, gen)
 			}
 			body, tm, err = f.rangeGet(reqCtx, idx*f.e.block, end, mode == fetchUrgent || mode == fetchDurable)
 			if err != nil {
@@ -1060,9 +1084,10 @@ func (f *remoteFile) rangeGet(ctx context.Context, start, end int64, urgent bool
 				}
 				f.mu.Unlock()
 				if refresh {
-					if _, _, refreshErr := f.link(ctx, true, gen); refreshErr != nil {
-						return nil, tm, refreshErr
-					}
+					// A transport failure is about the media endpoint, not the
+					// API. Prefer the identical torrent on another provider;
+					// repeatedly signing the same host cannot unblock it.
+					f.moveFromHost(ctx, gen)
 				}
 			}
 			continue
@@ -1264,7 +1289,7 @@ func (e *Engine) get(ctx context.Context, u string, start, end int64, urgent boo
 	var firstErr *result
 	tryHedge := func() {
 		hedged = true
-		if ctx.Err() == nil && acquire(false) {
+		if ctx.Err() == nil && e.limit.hedgeAllowed(dialAddr(u)) && acquire(false) {
 			e.stats.hedges.Add(1)
 			launch(e.hedge, true, nil)
 			pending++
@@ -1523,7 +1548,7 @@ func (e *Engine) send(ctx context.Context, hc *http.Client, u string, start, end
 		// A connect, TLS or transport failure, not a cancelled request
 		// (hedge losers and seeks cancel theirs).
 		e.backoff.failure(host)
-		if isConnReset(err) {
+		if isConnReset(err) || isConnRefused(err) {
 			e.reduceHostCap(u)
 		}
 	}
@@ -1655,6 +1680,7 @@ func (s *httpSource) read(ctx context.Context, p []byte, off int64, mode fetchMo
 	if !live {
 		runLen = min(maxRun, max(1, lastBlock-first+1))
 	}
+	var liveRun context.Context
 	if live {
 		s.mu.Lock()
 		if s.closed {
@@ -1682,6 +1708,7 @@ func (s *httpSource) read(ctx context.Context, p []byte, off int64, mode fetchMo
 			runLen = min(maxRun, 4)
 		}
 		s.last = lastBlock
+		liveRun = s.raCtx
 		s.mu.Unlock()
 		// Start read-ahead past this read before blocking, so the burst
 		// runs in parallel with the request for the bytes asked for.
@@ -1689,7 +1716,7 @@ func (s *httpSource) read(ctx context.Context, p []byte, off int64, mode fetchMo
 	}
 	n := 0
 	for idx := first; idx <= lastBlock; idx++ {
-		data, err := f.block(ctx, idx, mode, min(maxRun, max(runLen, lastBlock-idx+1)), nil)
+		data, err := f.block(ctx, idx, mode, min(maxRun, max(runLen, lastBlock-idx+1)), liveRun)
 		if err != nil {
 			return n, err
 		}

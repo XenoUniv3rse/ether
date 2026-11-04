@@ -101,6 +101,10 @@ func (m *Manager) streamClient(ctx context.Context, w io.Writer, s *session, vst
 		now := m.now()
 		s.addBytes(n, now)
 		if n > 0 {
+			g.mu.Lock()
+			g.retryEpoch++
+			g.retryPending = false
+			g.mu.Unlock()
 			s.touch(now)
 		}
 	}
@@ -143,6 +147,7 @@ func (m *Manager) streamClient(ctx context.Context, w io.Writer, s *session, vst
 				// coordinates. A temporary CDN error must not replace those
 				// bytes with a different encode or strand the client on 409.
 				m.log.Warn("temporary direct-play read failure; retaining source for range retry", "session", s.id, "release", g.releaseID(), "offset", srcpos, "err", rerr)
+				m.limitDirectRetry(s, g, g.timeMapSnapshot().TimeAt(srcpos))
 				return rerr
 			}
 			g.noteReadFailure(rerr)
@@ -174,6 +179,44 @@ func (m *Manager) streamClient(ctx context.Context, w io.Writer, s *session, vst
 		}
 	}
 	return nil
+}
+
+// limitDirectRetry bounds an outage even if the client stops issuing ranges.
+// Progress cancels the pending recovery, and each generation has one timer.
+func (m *Manager) limitDirectRetry(s *session, g *generation, at time.Duration) {
+	g.mu.Lock()
+	if g.retryPending {
+		g.mu.Unlock()
+		return
+	}
+	g.retryPending = true
+	epoch := g.retryEpoch
+	g.mu.Unlock()
+	go func() {
+		timer := time.NewTimer(25 * time.Second)
+		defer timer.Stop()
+		select {
+		case <-timer.C:
+		case <-g.ctx.Done():
+			return
+		}
+		pending := func() bool {
+			g.mu.Lock()
+			defer g.mu.Unlock()
+			return g.retryPending && g.retryEpoch == epoch && !g.retired
+		}
+		if !pending() {
+			return
+		}
+		g.noteReadFailure(core.ErrSourceUnavailable)
+		ctx, cancel := context.WithTimeout(g.ctx, 25*time.Second)
+		defer cancel()
+		_, err := m.failoverWith(ctx, s, g, at, failoverOpts{reason: "media source unavailable", markBad: true, stillNeeded: pending})
+		if err != nil && !errors.Is(err, errRequireRemux) && pending() {
+			m.emitEvent("error", s, err)
+			m.Stop(s.id)
+		}
+	}()
 }
 
 // directRangeCompatible keeps the original HTTP representation immutable even
