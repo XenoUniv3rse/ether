@@ -824,6 +824,11 @@ func (m *Manager) startHLS(ctx context.Context, req core.HLSRequest, life *encod
 		safe = safe[:48]
 	}
 	dir := filepath.Join(m.tempDir, "s-"+safe+"-"+randomHex(4))
+	var softSubtitleStream *int
+	if req.SoftSubtitleStream != nil {
+		index := *req.SoftSubtitleStream
+		softSubtitleStream = &index
+	}
 	s := &Session{
 		encoder:                 life,
 		id:                      id,
@@ -838,7 +843,7 @@ func (m *Manager) startHLS(ctx context.Context, req core.HLSRequest, life *encod
 		log:                     m.log.With("session", id, "initialRelease", req.ReleaseID),
 		created:                 time.Now(),
 		sessionInput: sessionInput{
-			softSubtitleStream: req.SoftSubtitleStream,
+			softSubtitleStream: softSubtitleStream,
 			rtxTimeline:        enhancementSelected(d),
 			rtxConfig:          rtxConfig,
 			liveInput:          req.LiveInput,
@@ -869,8 +874,8 @@ func (m *Manager) startHLS(ctx context.Context, req core.HLSRequest, life *encod
 			governorOn:  adapt.Governor && proto == core.ProtocolHLS && d.VideoCopy && v != nil,
 		},
 	}
-	if req.SoftSubtitleStream != nil {
-		s.softSubtitleInputIndex = *req.SoftSubtitleStream
+	if softSubtitleStream != nil {
+		s.softSubtitleInputIndex = *softSubtitleStream
 	}
 	if !life.attach(s) {
 		return nil, errors.New("transcode: session closed")
