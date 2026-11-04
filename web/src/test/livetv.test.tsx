@@ -370,8 +370,8 @@ describe("Live TV studio", () => {
       target: { value: "https://epg.example/regional.xml.gz" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Import source" }));
-    await waitFor(() => expect(sent(calls, "POST", /\/livetv\/sources$/)).toHaveLength(1));
-    expect(body(sent(calls, "POST", /\/livetv\/sources$/)[0])).toMatchObject({
+    await waitFor(() => expect(sent(calls, "POST", /\/livetv\/sources(\?|$)/)).toHaveLength(1));
+    expect(body(sent(calls, "POST", /\/livetv\/sources(\?|$)/)[0])).toMatchObject({
       name: "Regional listings",
       guideUrl: "https://epg.example/regional.xml.gz",
       playlistUrl: "",
@@ -469,8 +469,8 @@ describe("Live TV source sign-in", () => {
     fireEvent.change(screen.getByLabelText("Username"), { target: { value: "me" } });
     fireEvent.change(screen.getByLabelText("Password"), { target: { value: "pw" } });
     fireEvent.click(screen.getByRole("button", { name: "Import source" }));
-    await waitFor(() => expect(sent(calls, "POST", /\/livetv\/sources$/)).toHaveLength(1));
-    expect(body(sent(calls, "POST", /\/livetv\/sources$/)[0])).toMatchObject({
+    await waitFor(() => expect(sent(calls, "POST", /\/livetv\/sources(\?|$)/)).toHaveLength(1));
+    expect(body(sent(calls, "POST", /\/livetv\/sources(\?|$)/)[0])).toMatchObject({
       name: "My provider",
       playlistUrl: "",
       auth: {
@@ -501,8 +501,8 @@ describe("Live TV source sign-in", () => {
     renderLiveTV("/livetv?source=p1");
     expect(await screen.findByText(/Saved. Leave as is to keep it/, {}, WAIT)).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Save and re-import" }));
-    await waitFor(() => expect(sent(calls, "PUT", /\/livetv\/sources\/p1$/)).toHaveLength(1));
-    expect(body(sent(calls, "PUT", /\/livetv\/sources\/p1$/)[0]).auth).toEqual({
+    await waitFor(() => expect(sent(calls, "PUT", /\/livetv\/sources\/p1(\?|$)/)).toHaveLength(1));
+    expect(body(sent(calls, "PUT", /\/livetv\/sources\/p1(\?|$)/)[0]).auth).toEqual({
       type: "basic",
       username: "owner",
       password: "••••",

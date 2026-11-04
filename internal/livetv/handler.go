@@ -48,6 +48,14 @@ func (s *Service) Handler() http.Handler {
 		ownerResult(w, map[string]bool{"ok": true}, s.DeleteChannel(r.Context(), chi.URLParam(r, "id")))
 	})
 	r.Get("/sources", func(w http.ResponseWriter, r *http.Request) { v, e := s.Sources(r.Context()); ownerResult(w, v, e) })
+	r.Get("/sources/progress/{id}", func(w http.ResponseWriter, r *http.Request) {
+		v, ok := s.ImportProgress(chi.URLParam(r, "id"))
+		if !ok {
+			ownerResult(w, nil, core.ErrNotFound)
+			return
+		}
+		ownerResult(w, v, nil)
+	})
 	importSource := func(w http.ResponseWriter, r *http.Request) {
 		var src Source
 		if !ownerBody(w, r, &src) {
@@ -57,12 +65,17 @@ func (s *Service) Handler() http.Handler {
 			src.ID = id
 		}
 		pending := r.URL.Query().Get("pending") == "1" && src.Playlist == "" && src.PlaylistURL == "" && src.Guide == "" && src.GuideURL == ""
+		ctx := r.Context()
+		if id := r.URL.Query().Get("progress"); id != "" {
+			ctx = withImportProgress(ctx, s.beginImportProgress(id))
+			defer s.endImportProgress(id)
+		}
 		var v Source
 		var e error
 		if pending {
-			v, e = s.SavePendingSource(r.Context(), src)
+			v, e = s.SavePendingSource(ctx, src)
 		} else {
-			v, e = s.ImportSource(r.Context(), src)
+			v, e = s.ImportSource(ctx, src)
 		}
 		ownerResult(w, v, e)
 	}

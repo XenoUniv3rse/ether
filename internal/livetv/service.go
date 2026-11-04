@@ -37,6 +37,8 @@ type Service struct {
 	probeMu          sync.Mutex
 	probeCache       map[string]liveProbeEntry
 	probeWait        map[string]*liveProbeFlight
+	progressMu       sync.Mutex
+	progress         map[string]*progressTracker // manual import progress (progress.go)
 	sourceMu         sync.Mutex
 	sourceHealth     map[string]streamSourceHealth
 	transMu          sync.RWMutex
@@ -1148,8 +1150,13 @@ func (s *Service) importSource(ctx context.Context, src Source) (Source, error) 
 	if err := s.prepareSourceAuth(ctx, &src); err != nil {
 		return src, err
 	}
+	progress := importProgress(ctx)
 	var err error
 	if src.PlaylistURL != "" {
+		if progress != nil {
+			progress.setPhase("playlist")
+		}
+		s.o.Logger.Info("Live TV source fetching", "sourceId", src.ID, "source", src.Name, "url", sourceOrigin(src), "step", "playlist")
 		src.Playlist, err = s.readURLWith(ctx, src.PlaylistURL, maxPlaylistBytes, src.Auth.header(), "playlist")
 		if err != nil {
 			return src, fmt.Errorf("playlist: %w", err)
@@ -1164,6 +1171,10 @@ func (s *Service) importSource(ctx context.Context, src Source) (Source, error) 
 		if err != nil {
 			return src, fmt.Errorf("playlist: %w", err)
 		}
+		if progress != nil {
+			progress.setChannels(len(cs))
+		}
+		s.o.Logger.Info("Live TV source read", "sourceId", src.ID, "source", src.Name, "step", "playlist", "bytes", len(src.Playlist), "channels", len(cs))
 	}
 	allow, err := s.guideAllow(ctx, src, cs)
 	if err != nil {
@@ -1172,11 +1183,18 @@ func (s *Service) importSource(ctx context.Context, src Source) (Source, error) 
 	filter := guideFilter{From: s.o.Now().Add(-guideLookback), Until: s.o.Now().Add(guideLookahead), IDs: allow}
 	g := XMLGuide{}
 	if src.GuideURL != "" {
+		if progress != nil {
+			progress.setPhase("guide")
+		}
+		s.o.Logger.Info("Live TV source fetching", "sourceId", src.ID, "source", src.Name, "url", sourceOrigin(src), "step", "guide")
 		g, err = s.readGuide(ctx, src.GuideURL, src.Auth.header(), filter)
 		if err != nil {
 			return src, fmt.Errorf("guide: %w", err)
 		}
 	} else if src.Guide != "" {
+		if progress != nil {
+			progress.setPhase("guide")
+		}
 		var dropped bool
 		g, dropped, err = parseXMLTV(strings.NewReader(src.Guide), filter)
 		if err != nil {
@@ -1189,6 +1207,15 @@ func (s *Service) importSource(ctx context.Context, src Source) (Source, error) 
 			}
 			src.Guide = trimmed
 		}
+	}
+	if src.Guide != "" || src.GuideURL != "" {
+		if progress != nil {
+			progress.setProgrammes(len(g.Programmes))
+		}
+		s.o.Logger.Info("Live TV source read", "sourceId", src.ID, "source", src.Name, "step", "guide", "channels", len(g.Channels), "programmes", len(g.Programmes))
+	}
+	if progress != nil {
+		progress.setPhase("saving")
 	}
 	tx, err := s.o.DB.BeginTx(ctx, nil)
 	if err != nil {

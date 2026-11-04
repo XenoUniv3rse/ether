@@ -147,6 +147,9 @@ func TestSourceReadTimeoutNamesItsCause(t *testing.T) {
 	if !strings.Contains(got.Error(), "did not finish sending the playlist") {
 		t.Fatalf("read timeout not named: %v", got)
 	}
+	if stalled := sourceReadFailure(errSourceStalled, "guide"); !strings.Contains(stalled.Error(), "stopped sending the guide") {
+		t.Fatalf("stall not named: %v", stalled)
+	}
 	// A size limit already names itself and must not become a timeout.
 	if limit := (&limitError{msg: "playlist exceeds the 64 MB limit"}); sourceReadFailure(limit, "playlist") != limit {
 		t.Fatal("size-limit error rewritten")

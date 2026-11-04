@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/braedonsaunders/ether/internal/core"
@@ -262,22 +263,63 @@ func (s *Service) readURLWith(ctx context.Context, raw string, max int64, h http
 	return string(b), nil
 }
 
-// sourceDocumentTimeout bounds one playlist or guide fetch. An Xtream panel
-// composes both documents on demand, so a large lineup can take minutes; the
-// service client's shorter default is meant for stream requests. A refresh
-// gets refreshBudget, twice this, to fetch the pair.
+// sourceDocumentTimeout bounds the wait for a source to start answering. An
+// Xtream panel composes a playlist or guide on demand, so the wait can be
+// minutes; once bytes flow, sourceIdleTimeout bounds a silent body and the
+// document may take as long as it needs.
 const sourceDocumentTimeout = refreshTimeout
 
+// sourceIdleTimeout is how long a document may go silent mid-transfer before
+// the import fails.
+const sourceIdleTimeout = 2 * time.Minute
+
+// errSourceStalled marks a document whose body stopped flowing.
+var errSourceStalled = errors.New("source stopped sending data")
+
 // documentClient returns the client for a source document. It keeps the
-// service client's transport (and so its live egress routing) but gives a
-// panel up to sourceDocumentTimeout to compose a large playlist or guide
-// instead of the stream request timeout.
+// service client's transport (and so its live egress routing) but has no total
+// timeout: openURL bounds the header wait and a silent body itself.
 func (s *Service) documentClient() *http.Client {
 	c := *s.o.HTTPClient
-	if c.Timeout > 0 && c.Timeout < sourceDocumentTimeout {
-		c.Timeout = sourceDocumentTimeout
-	}
+	c.Timeout = 0
 	return &c
+}
+
+// sourceBody counts a document's bytes for the progress endpoint and cancels
+// a body that stops flowing.
+type sourceBody struct {
+	io.ReadCloser
+	timer    *time.Timer
+	cancel   context.CancelFunc
+	stalled  *atomic.Bool
+	progress *progressTracker
+}
+
+func (b *sourceBody) Read(p []byte) (int, error) {
+	n, err := b.ReadCloser.Read(p)
+	if n > 0 {
+		b.timer.Reset(sourceIdleTimeout)
+		if b.progress != nil {
+			b.progress.addRead(int64(n))
+		}
+	}
+	if err != nil {
+		if errors.Is(err, io.EOF) {
+			b.timer.Stop()
+			return n, err
+		}
+		if b.stalled.Load() {
+			return n, errSourceStalled
+		}
+		b.timer.Stop()
+	}
+	return n, err
+}
+
+func (b *sourceBody) Close() error {
+	b.timer.Stop()
+	b.cancel()
+	return b.ReadCloser.Close()
 }
 
 // sourceFetchFailure explains a transport failure without echoing the request
@@ -297,11 +339,13 @@ func sourceFetchFailure(err error) error {
 	return fmt.Errorf("source fetch failed: %w", err)
 }
 
-// sourceReadFailure wraps a body read that timed out in the same sentence as a
-// failed fetch, so a guide that trickles past the deadline does not surface a
-// Go runtime string. Any other error (a size limit, malformed XML) already
-// says what went wrong.
+// sourceReadFailure wraps a body that stalled or timed out in the same
+// sentence as a failed fetch. Any other error (a size limit, malformed XML)
+// already says what went wrong.
 func sourceReadFailure(err error, kind string) error {
+	if errors.Is(err, errSourceStalled) {
+		return fmt.Errorf("source fetch failed: the source stopped sending the %s for %s", kind, sourceIdleTimeout)
+	}
 	var ne net.Error
 	if errors.As(err, &ne) && ne.Timeout() {
 		return fmt.Errorf("source fetch failed: the source did not finish sending the %s within %s", kind, sourceDocumentTimeout)
@@ -309,13 +353,23 @@ func sourceReadFailure(err error, kind string) error {
 	return err
 }
 
-// openURL fetches a source document and leaves the body to the caller.
+// openURL fetches a source document and leaves the body to the caller. The
+// header wait is sourceDocumentTimeout and a silent body is sourceIdleTimeout;
+// a document that keeps sending data may take as long as it needs.
 func (s *Service) openURL(ctx context.Context, raw string, h http.Header) (io.ReadCloser, error) {
 	if !validHTTP(raw) {
 		return nil, fmt.Errorf("source must use HTTP(S)")
 	}
+	ctx, cancel := context.WithCancel(ctx)
+	var stalled atomic.Bool
+	timer := time.AfterFunc(sourceDocumentTimeout, func() {
+		stalled.Store(true)
+		cancel()
+	})
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, raw, nil)
 	if err != nil {
+		timer.Stop()
+		cancel()
 		return nil, err
 	}
 	for k, v := range h {
@@ -323,17 +377,33 @@ func (s *Service) openURL(ctx context.Context, raw string, h http.Header) (io.Re
 	}
 	res, err := s.documentClient().Do(req)
 	if err != nil {
+		timer.Stop()
+		cancel()
+		if stalled.Load() {
+			return nil, fmt.Errorf("source fetch failed: the source did not answer within %s", sourceDocumentTimeout)
+		}
 		return nil, sourceFetchFailure(err)
+	}
+	closeBody := func() {
+		timer.Stop()
+		cancel()
+		res.Body.Close()
 	}
 	switch {
 	case res.StatusCode == 401 || res.StatusCode == 403:
-		res.Body.Close()
+		closeBody()
 		return nil, fmt.Errorf("source refused the credentials (HTTP %d)", res.StatusCode)
 	case res.StatusCode != 200:
-		res.Body.Close()
+		closeBody()
 		return nil, fmt.Errorf("source returned HTTP %d", res.StatusCode)
 	}
-	return res.Body, nil
+	timer.Reset(sourceIdleTimeout)
+	body := &sourceBody{ReadCloser: res.Body, timer: timer, cancel: cancel, stalled: &stalled}
+	if p := importProgress(ctx); p != nil {
+		p.setTotal(res.ContentLength)
+		body.progress = p
+	}
+	return body, nil
 }
 
 // readGuide streams a guide URL, gunzipping when the body is gzip, and keeps

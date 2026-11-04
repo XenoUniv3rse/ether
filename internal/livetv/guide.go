@@ -48,10 +48,10 @@ const (
 	guideHorizonMargin     = time.Hour
 	refreshCheckInterval   = 5 * time.Minute
 	refreshTimeout         = 5 * time.Minute
-	// refreshBudget bounds one automatic refresh. A refresh fetches the
-	// playlist and then the guide, each with refreshTimeout, so both must fit
-	// or a large panel could save its guide once but never refresh it.
-	refreshBudget  = 2 * refreshTimeout
+	// refreshBudget bounds one automatic refresh. A panel that composes a
+	// large guide can take many minutes; the per-document idle timeout ends a
+	// stalled fetch, so this only caps a source that keeps sending data.
+	refreshBudget  = 30 * time.Minute
 	coverageWindow = 24 * time.Hour
 )
 

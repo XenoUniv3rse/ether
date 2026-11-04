@@ -15,7 +15,7 @@ import { useEffect, useState } from "react";
 import { Field, SecretInput, Segmented } from "../../components/fields";
 import { localized, t } from "../../i18n";
 import { errorMessage } from "../../lib/api";
-import { formatNumber, relativeTime } from "../../lib/format";
+import { formatBytes, formatNumber, relativeTime } from "../../lib/format";
 import {
   dayClock,
   duration,
@@ -25,6 +25,7 @@ import {
   type Source,
   type SourceAuth,
   type SourceDraft,
+  type SourceProgress,
 } from "./model";
 
 export type SourceKind = "playlist" | "guide";
@@ -57,6 +58,7 @@ export function SourceEditor({
   const [kind, setKind] = useState<SourceKind>(initialKind);
   const [busy, setBusy] = useState<"" | "save" | "refresh" | "delete">("");
   const [error, setError] = useState("");
+  const [progress, setProgress] = useState<SourceProgress | null>(null);
   const [files, setFiles] = useState<{ playlist: File | null; guide: File | null }>({
     playlist: null,
     guide: null,
@@ -85,6 +87,7 @@ export function SourceEditor({
     );
     setFiles({ playlist: null, guide: null });
     setError("");
+    setProgress(null);
   }, [source, initialKind]);
 
   const upload = (file: File | undefined, key: "playlist" | "guide") => {
@@ -117,6 +120,16 @@ export function SourceEditor({
   const save = async () => {
     setBusy("save");
     setError("");
+    setProgress(null);
+    const progressId = `import-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+    const poll = window.setInterval(() => {
+      void tv
+        .sourceProgress(progressId)
+        .then((p) => {
+          if (p) setProgress(p);
+        })
+        .catch(() => undefined);
+    }, 750);
     try {
       const body: SourceDraft =
         kind === "guide" || xtream ? { ...draft, playlist: "", playlistUrl: "" } : { ...draft };
@@ -132,7 +145,7 @@ export function SourceEditor({
         !body.guide &&
         !body.guideUrl &&
         Boolean(playlistFile || guideFile);
-      let saved = await tv.saveSource(body, pending);
+      let saved = await tv.saveSource(body, pending, progressId);
       if (playlistFile) saved = await tv.uploadSource(saved.id, "playlist", playlistFile);
       if (guideFile) saved = await tv.uploadSource(saved.id, "guide", guideFile);
       toast.success(source ? t("Source re-imported") : t("Source imported"), {
@@ -142,6 +155,8 @@ export function SourceEditor({
     } catch (e) {
       setError(errorMessage(e));
     } finally {
+      window.clearInterval(poll);
+      setProgress(null);
       setBusy("");
     }
   };
@@ -475,9 +490,39 @@ export function SourceEditor({
             </Button>
           ) : null}
         </div>
+        {busy === "save" ? (
+          <p role="status" className="text-xs text-fg-muted">
+            {progress ? importProgressText(progress) : t("Starting import…")}
+          </p>
+        ) : null}
       </section>
     </div>
   );
+}
+
+/** "Fetching guide · 1.2 GiB / 4.1 GiB" while the import request is open. */
+function importProgressText(p: SourceProgress): string {
+  const phase =
+    p.phase === "playlist"
+      ? t("Fetching playlist")
+      : p.phase === "guide"
+        ? t("Fetching guide")
+        : p.phase === "saving"
+          ? t("Saving channels and listings")
+          : t("Starting import");
+  const size =
+    p.total && p.total > 0
+      ? `${formatBytes(p.read)} / ${formatBytes(p.total)}`
+      : p.read > 0
+        ? formatBytes(p.read)
+        : "";
+  const count =
+    p.phase === "saving" && p.channels
+      ? t("{channels} channels", { channels: formatNumber(p.channels) })
+      : p.phase === "guide" && p.programmes
+        ? t("{programmes} programmes", { programmes: formatNumber(p.programmes) })
+        : "";
+  return [phase, size, count].filter(Boolean).join(" · ");
 }
 
 /** Drop an empty login so plain sources stay plain. */

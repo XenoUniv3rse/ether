@@ -150,6 +150,16 @@ export type SourceDraft = {
   refreshHours?: number;
   auth?: SourceAuth;
 };
+/** Live progress of a manual import, polled while the save request runs. */
+export type SourceProgress = {
+  phase: "starting" | "playlist" | "guide" | "saving" | string;
+  read: number;
+  total?: number;
+  channels?: number;
+  programmes?: number;
+  started: string;
+  updated: string;
+};
 export type Programme = { id: string; channelId: string; start: string; end: string; item: Item };
 export type GuideChannel = {
   sourceId: string;
@@ -252,11 +262,18 @@ export const tv = {
     const suffix = q.size ? `?${q}` : "";
     return apiFetch<Programme[]>(`/livetv/preview${suffix}`, { ...json("POST", c), signal });
   },
-  saveSource: (s: SourceDraft, pending = false) =>
-    apiFetch<Source>(
-      `/livetv/sources${s.id ? `/${enc(s.id)}` : ""}${pending ? "?pending=1" : ""}`,
+  saveSource: (s: SourceDraft, pending = false, progress = "") => {
+    const q = new URLSearchParams();
+    if (pending) q.set("pending", "1");
+    if (progress) q.set("progress", progress);
+    const suffix = q.size ? `?${q}` : "";
+    return apiFetch<Source>(
+      `/livetv/sources${s.id ? `/${enc(s.id)}` : ""}${suffix}`,
       json(s.id ? "PUT" : "POST", s),
-    ),
+    );
+  },
+  sourceProgress: (id: string) =>
+    apiFetch<SourceProgress | null>(`/livetv/sources/progress/${enc(id)}`),
   uploadSource: (id: string, part: "playlist" | "guide", file: File) =>
     apiFetch<Source>(`/livetv/sources/${enc(id)}/${part}`, {
       method: "POST",
