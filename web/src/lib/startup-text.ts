@@ -102,6 +102,8 @@ export function phaseText(s: StartupStatus, now = Date.now()): { title: string; 
       return { title: t("Ether is ready"), detail: "" };
     case "failed":
       return { title: t("Ether couldn't start"), detail: failureText(s).body };
+    default:
+      return { title: t("Starting Ether"), detail: t("Almost ready…") };
   }
 }
 

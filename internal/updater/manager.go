@@ -332,7 +332,7 @@ func (m *Manager) begin() {
 			}
 		}
 	}
-	if !m.requested { // "Update now" before Run keeps its immediate check
+	if !m.requested && !m.checkPending { // Requests before Run keep their immediate check
 		m.nextCheck = now.Add(m.opts.FirstCheckDelay)
 	}
 }
@@ -373,6 +373,7 @@ func (m *Manager) step(ctx context.Context) {
 		m.disabledReason = disabledBySettingsReason
 		m.resetAvailableLocked()
 		m.requested, m.force = false, false
+		m.checkPending = false
 		m.state = StateIdle
 		m.mu.Unlock()
 		m.stopDrain(ctx)
@@ -436,6 +437,9 @@ func (m *Manager) confirmIfHealthy(now time.Time) {
 func (m *Manager) check(ctx context.Context, now time.Time) {
 	cfg := m.opts.Config()
 	if !cfg.Enabled {
+		m.mu.Lock()
+		m.checkPending = false
+		m.mu.Unlock()
 		return
 	}
 	m.mu.Lock()
