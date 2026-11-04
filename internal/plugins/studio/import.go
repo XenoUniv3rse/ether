@@ -11,6 +11,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/braedonsaunders/ether/internal/plugins"
+	"github.com/braedonsaunders/ether/internal/plugins/wasm"
 )
 
 // ErrNotEditable reports a plugin whose code does not live on this server
@@ -84,9 +85,13 @@ func templateFor(m plugins.Manifest, addonOf string) string {
 	return "plugin"
 }
 
-// sourceFiles keeps an installed package's editable text files. A Studio
-// build installs its compiled bundle beside the source; the draft goes
-// back to the source entry.
+// sourceFiles keeps an installed package's editable text files, assets
+// such as its icon included, so the draft reinstalls. An
+// installed bundle (dist/) goes back to its source entry when the package
+// carries a source that compiles on its own; otherwise the draft keeps the
+// installed entry so it still compiles, previews and reinstalls. Shipped
+// SDK examples, whose source imports the SDK from outside the package,
+// take the second path.
 func sourceFiles(pkg map[string][]byte) map[string]string {
 	out := map[string]string{}
 	for name, b := range pkg {
@@ -94,24 +99,35 @@ func sourceFiles(pkg map[string][]byte) map[string]string {
 			continue
 		}
 		switch path.Ext(name) {
-		case ".ts", ".tsx", ".js", ".json", ".md":
+		case ".ts", ".tsx", ".js", ".json", ".md", ".svg", ".css", ".html", ".txt":
 			out[name] = string(b)
 		}
 	}
-	if raw, ok := out["manifest.json"]; ok {
-		var doc map[string]any
-		if json.Unmarshal([]byte(raw), &doc) == nil {
-			if ether, _ := doc["ether"].(map[string]any); ether != nil {
-				if rt, _ := ether["runtime"].(map[string]any); rt != nil {
-					if entry, _ := rt["entry"].(string); entry == installBundlePath {
-						if _, ok := out["src/plugin.ts"]; ok {
-							rt["entry"] = "src/plugin.ts"
-							out["manifest.json"] = prettyJSON(doc)
-						}
-					}
-				}
-			}
+	var doc map[string]any
+	if json.Unmarshal([]byte(out["manifest.json"]), &doc) != nil {
+		return out
+	}
+	ether, _ := doc["ether"].(map[string]any)
+	rt, _ := ether["runtime"].(map[string]any)
+	entry, _ := rt["entry"].(string)
+	if entry == "" {
+		return out
+	}
+	if _, kept := out[entry]; kept {
+		return out
+	}
+	for _, src := range []string{"src/plugin.ts", "plugin.ts", "src/index.ts", "index.ts"} {
+		if _, ok := out[src]; !ok {
+			continue
 		}
+		if js, _, _ := wasm.Compile(out, src); len(js) > 0 {
+			rt["entry"] = src
+			out["manifest.json"] = prettyJSON(doc)
+			return out
+		}
+	}
+	if b, ok := pkg[entry]; ok && utf8.Valid(b) {
+		out[entry] = string(b)
 	}
 	return out
 }
