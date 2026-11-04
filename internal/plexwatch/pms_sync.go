@@ -508,7 +508,7 @@ func (s *Servers) pushRow(ctx context.Context, p *pmsPair, r pmsLocalRow) (int, 
 		rec.remoteWatched, rec.localWatched, rec.localAt, rec.offsetMS = true, true, localAt, 0
 		if remote.ViewCount == 0 {
 			if err := p.writeErr(p.client.mark(ctx, p.writeToken, rec.pmsKey, true)); err != nil {
-				return 0, err
+				return 0, s.writeRefused(ctx, p, r.key, rec.pmsKey, err)
 			}
 			rec.sentAt = s.now().Unix()
 			writes++
@@ -527,7 +527,7 @@ func (s *Servers) pushRow(ctx context.Context, p *pmsPair, r pmsLocalRow) (int, 
 			// Watched on the server after Ether's unwatch: the server is newer.
 		default:
 			if err := p.writeErr(p.client.mark(ctx, p.writeToken, rec.pmsKey, false)); err != nil {
-				return 0, err
+				return 0, s.writeRefused(ctx, p, r.key, rec.pmsKey, err)
 			}
 			rec.remoteWatched, rec.sentAt = false, s.now().Unix()
 			writes++
@@ -556,7 +556,11 @@ func (s *Servers) pushRow(ctx context.Context, p *pmsPair, r pmsLocalRow) (int, 
 	}
 	if absDuration(time.Duration(int64(remote.ViewOffset)-offsetMS)*time.Millisecond) >= pmsOffsetStep {
 		if err := p.writeErr(p.client.progress(ctx, p.writeToken, rec.pmsKey, r.offset)); err != nil {
-			return writes, err
+			var st *StatusError
+			if errors.As(err, &st) && st.Status == http.StatusBadRequest {
+				return writes, nil // a resume point the server won't take; the mark still syncs
+			}
+			return writes, s.writeRefused(ctx, p, r.key, rec.pmsKey, err)
 		}
 		writes++
 	}
@@ -576,6 +580,23 @@ func (p *pmsPair) writeErr(err error) error {
 		return errPMSAccountToken
 	}
 	return err
+}
+
+// writeRefused settles a write the server refused for this item (404 or
+// 400): the match is forgotten and the title listed as unmatched, so one
+// stale item cannot hold the cursor. Any other error stays retryable.
+func (s *Servers) writeRefused(ctx context.Context, p *pmsPair, key core.RatingKey, pmsKey int64, err error) error {
+	var st *StatusError
+	if !errors.As(err, &st) || (st.Status != http.StatusNotFound && st.Status != http.StatusBadRequest) {
+		return err
+	}
+	if _, e := s.db.ExecContext(ctx, `DELETE FROM plexwatch_pms_item WHERE server_id=? AND pms_key=?`, p.serverID, pmsKey); e != nil {
+		return e
+	}
+	if _, e := s.db.ExecContext(ctx, `UPDATE plexwatch_pms_sent SET pms_key=0 WHERE server_id=? AND user_id=? AND rating_key=?`, p.serverID, p.userID, int64(key)); e != nil {
+		return e
+	}
+	return s.noteUnmatched(ctx, p, "out", key.String(), s.localTitle(ctx, key), "not_on_server")
 }
 
 func absDuration(d time.Duration) time.Duration {

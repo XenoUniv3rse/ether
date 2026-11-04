@@ -562,7 +562,8 @@ func (s *Servers) MapAccount(ctx context.Context, id, accountID int64, in PMSMap
 		}
 		sealed = ""
 		if plain != "" {
-			if _, _, err := c.identity(ctx, plain); err != nil {
+			// /identity answers without a token; the library list does not.
+			if _, err := c.sections(ctx, plain); err != nil {
 				return PMSServer{}, mapPMSError(err)
 			}
 			if sealed, err = s.seal(plain, row.machineID, "account", strconv.FormatInt(accountID, 10)); err != nil {
