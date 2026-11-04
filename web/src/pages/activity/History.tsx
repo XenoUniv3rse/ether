@@ -1,12 +1,14 @@
 import { Badge, EmptyState, Input, PagedTable, Select } from "@braedonsaunders/appkit-ui";
 import { CheckCircle2, Clock, History as HistoryIcon, PlayCircle, Users } from "lucide-react";
 import { Link, useSearchParams } from "react-router-dom";
+import { Artwork } from "../../components/Artwork";
 import { Drawer } from "../../components/Drawer";
 import { ErrorPanel, LoadingRows } from "../../components/feedback";
 import { Kpi, KpiRow } from "../../components/Kpi";
 import { apiFetch } from "../../lib/api";
-import { fixed, formatDateTime, formatNumber, formatPercent } from "../../lib/format";
+import { fixed, formatBytes, formatDateTime, formatNumber, formatPercent } from "../../lib/format";
 import { useAsync } from "../../lib/hooks";
+import { useTitle } from "../../lib/titles";
 import { ToneValue } from "./ExperienceDrawer";
 import {
   DASH,
@@ -230,6 +232,19 @@ function Detail({ label, children }: { label: string; children: React.ReactNode 
   );
 }
 
+/** The play's poster, when the catalogue knows the title. */
+function PlayPoster({ ratingKey, title }: { ratingKey?: number; title: string }) {
+  const detail = useTitle(ratingKey ? String(ratingKey) : undefined);
+  return (
+    <Artwork
+      src={detail?.poster}
+      alt={title}
+      title={title}
+      className="aspect-[2/3] w-14 shrink-0 rounded-md"
+    />
+  );
+}
+
 /** One recorded play, opened from a History row or a `?play=` link. */
 function PlayDrawer({ id, onClose }: { id: string | null; onClose: () => void }) {
   const play = useAsync(
@@ -255,74 +270,149 @@ function PlayDrawer({ id, onClose }: { id: string | null; onClose: () => void })
       ) : !p ? (
         <LoadingRows rows={4} />
       ) : (
-        <div className="space-y-4">
-          <div className="flex flex-wrap gap-1">
-            <Badge variant={p.completed ? "success" : "secondary"}>
-              {p.completed ? t("Completed") : p.ended ? t("Ended") : t("Last observed")}
-            </Badge>
-            {p.failed ? <Badge variant="destructive">{t("Never started")}</Badge> : null}
-            {decision ? <Badge variant="secondary">{decision}</Badge> : null}
-            {p.remote ? <Badge variant="secondary">{t("Away")}</Badge> : null}
+        <div className="space-y-5">
+          <div className="flex items-center gap-3">
+            <PlayPoster ratingKey={p.ratingKey} title={p.title} />
+            <div className="min-w-0 flex-1 space-y-1.5">
+              <div className="flex flex-wrap gap-1">
+                <Badge variant={p.completed ? "success" : "secondary"}>
+                  {p.completed ? t("Completed") : p.ended ? t("Ended") : t("Last observed")}
+                </Badge>
+                {p.failed ? <Badge variant="destructive">{t("Never started")}</Badge> : null}
+                {decision ? <Badge variant="secondary">{decision}</Badge> : null}
+                {p.uhd ? <Badge variant="secondary">4K</Badge> : null}
+                {p.hdr ? <Badge variant="secondary">HDR</Badge> : null}
+              </div>
+              <p className="text-sm text-fg-muted">
+                {p.username || t("Unknown viewer")} · {p.device || p.platform || t("Unknown")}
+              </p>
+            </div>
           </div>
-          <dl className="divide-y divide-border">
-            <Detail label={t("Viewer")}>
-              {p.userId ? (
-                <Link
-                  to={`/activity/experience?viewer=${p.userId}`}
-                  className="text-primary hover:underline"
-                >
-                  {p.username || t("Unknown viewer")}
-                </Link>
-              ) : (
-                p.username || t("Unknown viewer")
-              )}
-            </Detail>
-            <Detail label={t("Device")}>{p.device || p.platform || t("Unknown")}</Detail>
-            <Detail label={t("Start time")}>
-              {p.failed ? (
-                <span className="text-danger">{failedReason(p.error)}</span>
-              ) : p.measured ? (
-                <ToneValue value={formatSeconds(p.startMs)} tone={startTone(p.startMs)} />
-              ) : (
-                DASH
-              )}
-            </Detail>
-            <Detail label={t("Buffering")}>
-              {p.measured && p.bufferEvents != null
-                ? p.bufferEvents
-                  ? tn(p.bufferEvents, "{count} time, {time}", "{count} times, {time}", {
-                      time: formatSeconds(p.bufferMs),
+
+          <div className="grid grid-cols-2 gap-3">
+            <Kpi
+              label={t("Watched")}
+              value={t("{minutes} min", { minutes: fixed(p.watchedMs / 60000, 0) })}
+              detail={
+                p.durationMs
+                  ? t("{percent} of {length}", {
+                      percent: formatPercent(Math.min(1, p.watchedMs / p.durationMs)),
+                      length: t("{minutes} min", { minutes: fixed(p.durationMs / 60000, 0) }),
                     })
-                  : t("none")
-                : DASH}
-            </Detail>
-            <Detail label={t("Playback")}>
-              {decision || DASH}
-              {why ? (
-                <span className="block text-xs text-fg-muted">
-                  {t("Converted because of {reason}", { reason: why })}
-                </span>
-              ) : null}
-            </Detail>
-            <Detail label={t("Source")}>
-              {p.origin || DASH}
-              {p.release ? (
-                <span className="block break-all font-mono text-xs text-fg-muted">{p.release}</span>
-              ) : null}
-            </Detail>
-            <Detail label={t("Source switches")}>{String(p.switches ?? p.failovers ?? 0)}</Detail>
-            <Detail label={t("Viewing time")}>
-              {t("{minutes} min", { minutes: fixed(p.watchedMs / 60000, 0) })}
-            </Detail>
-            {p.ended ? (
-              <Detail label={t("Ended")}>{formatDateTime(new Date(p.ended * 1000))}</Detail>
-            ) : null}
-            {p.error && !p.failed ? (
-              <Detail label={t("Error")}>
-                <span className="text-danger">{p.error}</span>
+                  : undefined
+              }
+            />
+            <Kpi label={t("Transferred")} value={p.bytes ? formatBytes(p.bytes) : DASH} />
+            <Kpi
+              label={t("Average bitrate")}
+              value={
+                p.avgBitrateKbps
+                  ? t("{rate} Mbps", { rate: fixed(p.avgBitrateKbps / 1000, 1) })
+                  : DASH
+              }
+              detail={
+                p.sourceKbps
+                  ? t("Source {rate} Mbps", { rate: fixed(p.sourceKbps / 1000, 1) })
+                  : undefined
+              }
+            />
+            <Kpi
+              label={t("Start time")}
+              value={
+                p.failed ? (
+                  <span className="text-danger">{t("Failed")}</span>
+                ) : p.measured ? (
+                  <ToneValue value={formatSeconds(p.startMs)} tone={startTone(p.startMs)} />
+                ) : (
+                  DASH
+                )
+              }
+              detail={p.failed ? failedReason(p.error) : undefined}
+            />
+          </div>
+
+          <section aria-label={t("Viewer and network")}>
+            <h3 className="mb-1 text-xs font-semibold uppercase tracking-wider text-fg-subtle">
+              {t("Viewer and network")}
+            </h3>
+            <dl className="divide-y divide-border">
+              <Detail label={t("Viewer")}>
+                {p.userId ? (
+                  <Link
+                    to={`/activity/experience?viewer=${p.userId}`}
+                    className="text-primary hover:underline"
+                  >
+                    {p.username || t("Unknown viewer")}
+                  </Link>
+                ) : (
+                  p.username || t("Unknown viewer")
+                )}
               </Detail>
-            ) : null}
-          </dl>
+              <Detail label={t("Device")}>
+                {p.device || t("Unknown")}
+                {p.platform && p.platform !== p.device ? (
+                  <span className="block text-xs text-fg-muted">{p.platform}</span>
+                ) : null}
+              </Detail>
+              <Detail label={t("Network")}>
+                {p.remote ? t("Away from home") : t("At home")}
+                {p.ip ? (
+                  <span className="block font-mono text-xs text-fg-muted">{p.ip}</span>
+                ) : null}
+              </Detail>
+            </dl>
+          </section>
+
+          <section aria-label={t("Playback")}>
+            <h3 className="mb-1 text-xs font-semibold uppercase tracking-wider text-fg-subtle">
+              {t("Playback")}
+            </h3>
+            <dl className="divide-y divide-border">
+              <Detail label={t("Delivered as")}>
+                {decision || DASH}
+                {why ? (
+                  <span className="block text-xs text-fg-muted">
+                    {t("Converted because of {reason}", { reason: why })}
+                  </span>
+                ) : null}
+              </Detail>
+              <Detail label={t("Buffering")}>
+                {p.measured && p.bufferEvents != null
+                  ? p.bufferEvents
+                    ? tn(p.bufferEvents, "{count} time, {time}", "{count} times, {time}", {
+                        time: formatSeconds(p.bufferMs),
+                      })
+                    : t("none")
+                  : DASH}
+              </Detail>
+              <Detail label={t("Source switches")}>{String(p.switches ?? p.failovers ?? 0)}</Detail>
+              <Detail label={t("Source")}>
+                {p.origin || DASH}
+                {p.release ? (
+                  <span className="block break-all font-mono text-xs text-fg-muted">
+                    {p.release}
+                  </span>
+                ) : null}
+              </Detail>
+            </dl>
+          </section>
+
+          <section aria-label={t("Timing")}>
+            <h3 className="mb-1 text-xs font-semibold uppercase tracking-wider text-fg-subtle">
+              {t("Timing")}
+            </h3>
+            <dl className="divide-y divide-border">
+              <Detail label={t("Started")}>{formatDateTime(new Date(p.started * 1000))}</Detail>
+              {p.ended ? (
+                <Detail label={t("Ended")}>{formatDateTime(new Date(p.ended * 1000))}</Detail>
+              ) : null}
+              {p.error && !p.failed ? (
+                <Detail label={t("Error")}>
+                  <span className="text-danger">{p.error}</span>
+                </Detail>
+              ) : null}
+            </dl>
+          </section>
           {!p.measured ? (
             <p className="text-xs text-fg-muted">
               {t("This play was recorded before start time and buffering were measured.")}

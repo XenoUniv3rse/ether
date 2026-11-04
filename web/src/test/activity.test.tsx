@@ -178,14 +178,18 @@ describe("Activity", () => {
     const calls = backend();
     renderAt("/activity");
     expect(await screen.findByText("Example film", {}, WAIT)).toBeInTheDocument();
-    expect(screen.getByText("Sam · Phone")).toBeInTheDocument();
+    const card = screen.getByText("Example film").closest("article")!;
+    expect(within(card).getByText("Sam")).toBeInTheDocument();
+    expect(within(card).getByText("Phone")).toBeInTheDocument();
     await choose("Protocol", "jellyfin");
     expect(screen.queryByText("Example film")).toBeNull();
     expect(screen.getByText("Other film")).toBeInTheDocument();
     await choose("Protocol", "plex");
     expect(screen.queryByText("Other film")).toBeNull();
-    expect(within(screen.getByText("Example film").closest("li")!).getByText("plex")).toBeVisible();
-    fireEvent.click(screen.getByRole("button", { name: "Stop stream" }));
+    expect(
+      within(screen.getByText("Example film").closest("article")!).getByText("plex"),
+    ).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: /Stop stream for/ }));
     await waitFor(() =>
       expect(
         calls.some((c) => c.url.endsWith("/stats/sessions/live/stop") && c.init?.method === "POST"),
@@ -216,13 +220,13 @@ describe("Activity", () => {
     );
   });
 
-  it("shows viewing totals and breakdowns on the stats tab", async () => {
+  it("shows viewing totals and breakdowns on the Viewing tab", async () => {
     backend();
-    renderAt("/activity/stats");
+    renderAt("/activity/viewing");
     expect(await screen.findByText("Hours watched", {}, WAIT)).toBeInTheDocument();
-    expect(screen.getByRole("radiogroup", { name: "Viewing breakdown" })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("radio", { name: "Titles" }));
-    expect(screen.getByText("Popular titles")).toBeInTheDocument();
+    expect(screen.getByText("Watch time")).toBeInTheDocument();
+    expect(screen.getByText("Top titles")).toBeInTheDocument();
+    expect(screen.getByText("Top viewers")).toBeInTheDocument();
   });
 });
 
