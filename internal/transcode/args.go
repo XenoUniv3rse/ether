@@ -1058,7 +1058,7 @@ func planVideo(s runSpec, v *core.StreamInfo) videoPlan {
 	// overlay. Upload the result back to the same device for encoding.
 	vaapiBitmap := burn && IsImageSubtitle(sub.Codec) && !sub.External && accel == AccelVAAPI &&
 		!(v.Codec == "h264" && v.BitDepth > 8) && !s.Accel.NoGPUScale &&
-		s.PictureCrop == nil && !pic.pad && pic.convert == "" && !pic.tonemap && !pic.tenBit && pic.setSAR == ""
+		pic.w > 0 && pic.h > 0 && s.PictureCrop == nil && !pic.pad && pic.convert == "" && !pic.tonemap && !pic.tenBit && pic.setSAR == ""
 	if vaapiBitmap {
 		chainInput = append(chainInput, "-hwaccel_output_format", "vaapi")
 		chain = []string{fmt.Sprintf("scale_vaapi=w=%d:h=%d:format=nv12", pic.w, pic.h), "hwdownload", "format=nv12"}
@@ -1157,7 +1157,7 @@ func planVideo(s runSpec, v *core.StreamInfo) videoPlan {
 	// VAAPI's software-filter paths end in hwupload too. Output colour
 	// options after that upload cause FFmpeg to insert an impossible software
 	// conversion between VAAPI surfaces and the encoder.
-	p.encodeArgs = planEncodeArgs(s, pic, enc, codec, hwFrames || accel == AccelVAAPI)
+	p.encodeArgs = planEncodeArgs(s, pic, enc, codec, hwFrames || (accel == AccelVAAPI && burn))
 	return p
 }
 
