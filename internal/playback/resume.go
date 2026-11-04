@@ -74,6 +74,20 @@ type ResumePoint struct {
 	// originalLanguage is the catalogue language the release was chosen
 	// under. Empty on rows written before that context was stored.
 	originalLanguage string
+	// nzbHash is the stored payload's hash; set on stored points, which a
+	// track view may return without NZB.
+	nzbHash string
+}
+
+// payloadHash is the hash of the point's payload.
+func (p *ResumePoint) payloadHash() string {
+	if p.nzbHash != "" {
+		return p.nzbHash
+	}
+	if len(p.NZB) > 0 {
+		return nzbHash(p.NZB)
+	}
+	return ""
 }
 
 // ReleaseID is the stable release identifier.
@@ -146,6 +160,10 @@ type resumeStore struct {
 
 	nzbMu    sync.Mutex
 	nzbCache map[string][]byte
+	// payloadChecked holds "hash|key" for stored payloads this process has
+	// read, verified and matched to that title (guarded by nzbMu), so a
+	// view that only shows the release's tracks need not read it again.
+	payloadChecked map[string]bool
 
 	// fresh is the resume row this process last confirmed. A repeated play
 	// of the same release skips the database read that only checks sameness.
@@ -486,6 +504,15 @@ func (s *resumeStore) noteLive(rec resumeRecord, nzb []byte, probe ...*probeCach
 }
 
 func (s *resumeStore) liveProbe(userID int64, key core.RatingKey, releaseID string, nzb []byte) *probeCache {
+	hash := ""
+	if len(nzb) > 0 {
+		hash = nzbHash(nzb)
+	}
+	return s.liveProbeHash(userID, key, releaseID, hash)
+}
+
+// liveProbeHash is liveProbe for the payload with this hash ("" matches any).
+func (s *resumeStore) liveProbeHash(userID int64, key core.RatingKey, releaseID, hash string) *probeCache {
 	if s == nil || releaseID == "" {
 		return nil
 	}
@@ -495,7 +522,7 @@ func (s *resumeStore) liveProbe(userID int64, key core.RatingKey, releaseID stri
 	if !ok || got.probe == nil || got.releaseID != releaseID {
 		return nil
 	}
-	if len(nzb) > 0 && got.probe.nzbHash != "" && got.probe.nzbHash != nzbHash(nzb) {
+	if hash != "" && got.probe.nzbHash != "" && got.probe.nzbHash != hash {
 		return nil
 	}
 	copyInfo := core.CloneMediaInfo(got.probe.info)
@@ -599,6 +626,39 @@ func (s *resumeStore) cachedNZB(hash string) ([]byte, bool) {
 	return append([]byte(nil), b...), true
 }
 
+// payloadCheckedMax bounds the remembered payload checks.
+const payloadCheckedMax = 4096
+
+func payloadCheckKey(hash string, key core.RatingKey) string {
+	return hash + "|" + strconv.FormatInt(int64(key), 10)
+}
+
+// notePayloadChecked records that the payload with hash was read intact and
+// matches key.
+func (s *resumeStore) notePayloadChecked(hash string, key core.RatingKey) {
+	s.nzbMu.Lock()
+	defer s.nzbMu.Unlock()
+	if s.payloadChecked == nil || len(s.payloadChecked) >= payloadCheckedMax {
+		s.payloadChecked = map[string]bool{}
+	}
+	s.payloadChecked[payloadCheckKey(hash, key)] = true
+}
+
+// payloadStillChecked reports that the payload with hash was verified for
+// key and its file is still there. Payload files are named by their hash.
+func (s *resumeStore) payloadStillChecked(hash string, key core.RatingKey) bool {
+	s.nzbMu.Lock()
+	ok := s.payloadChecked[payloadCheckKey(hash, key)]
+	s.nzbMu.Unlock()
+	if !ok {
+		return false
+	}
+	if _, err := os.Stat(s.nzbPath(hash)); err != nil {
+		return false
+	}
+	return true
+}
+
 func (s *resumeStore) rememberNZB(hash string, b []byte) {
 	if hash == "" || len(b) == 0 || len(b) > 1<<20 {
 		return
@@ -622,6 +682,15 @@ func (s *resumeStore) rememberNZB(hash string, b []byte) {
 func (s *resumeStore) readResumeNZB(ctx context.Context, rec *resumeRecord) ([]byte, error) {
 	if b, ok := s.cachedNZB(rec.nzbHash); ok {
 		return b, nil
+	}
+	// A payload that is gone cannot be read; do not take an ownership
+	// transaction (three writes and their release) to find that out on
+	// every view of the title.
+	if !validPayloadID(rec.nzbHash) {
+		return nil, core.ErrNotAvailable
+	}
+	if _, err := os.Stat(s.nzbPath(rec.nzbHash)); err != nil {
+		return nil, err
 	}
 	owner, err := s.payload.reserve(ctx, rec.userID, "resume", "", fmt.Sprintf("%d/%d", rec.userID, rec.key), rec.nzbHash, "resume-read")
 	if err != nil {
@@ -828,6 +897,7 @@ func (s *resumeStore) gcNZB(ctx context.Context, hash string) {
 
 func (rec *resumeRecord) point(nzb []byte) *ResumePoint {
 	return &ResumePoint{
+		nzbHash:   rec.nzbHash,
 		UserID:    rec.userID,
 		Key:       rec.key,
 		Release:   rec.release,
