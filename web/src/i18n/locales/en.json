@@ -1406,6 +1406,7 @@
   "m_063bb7c87cb8ff": "No connection address reported yet",
   "m_063bd391e42d81": "Limits",
   "m_063ce704e76b48": "Viewer removed",
+  "m_063d340e6fb04f": "Plex doesn't let other servers sync watch state. Plex accepts this only from its own servers, so Ether can't send or import watched state through a Plex account. Watch state still syncs between this viewer's Ether apps.",
   "m_063f68e2d72f6a": "It hasn't changed anything",
   "m_06422a9896d898": "Discovery sources",
   "m_0643a12e17aa72": "Not reported by this hardware",

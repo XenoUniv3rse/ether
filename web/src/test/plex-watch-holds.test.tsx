@@ -92,4 +92,36 @@ describe("Plex watch state actions", () => {
       screen.getByRole("button", { name: "Connect this viewer's Plex account" }),
     ).toBeEnabled();
   });
+  it("shows sync as unavailable while keeping Disconnect", async () => {
+    const calls: string[] = [];
+    let status = {
+      connected: true,
+      username: "viewer",
+      accountMatch: true,
+      direction: 3,
+      importInterval: 10,
+      skipped: 0,
+      held: 1,
+      dead: 2,
+      problem: "unsupported",
+      eligibility: "unsupported",
+    };
+    mockFetch((path, init) => {
+      calls.push(`${init?.method ?? "GET"} ${path}`);
+      if (path.endsWith("/disconnect")) status = { ...status, connected: false, username: "" };
+      return status;
+    });
+    render(<PlexWatchSync viewerId={7} plexId={77} />);
+    expect(await screen.findByText("Unavailable")).toBeInTheDocument();
+    expect(screen.getByText(/Plex doesn't let other servers sync watch state/)).toBeInTheDocument();
+    for (const name of [/Import now/, /Export current state/, /Retry/, /Resolve/, /Connect this/]) {
+      expect(screen.queryByRole("button", { name })).not.toBeInTheDocument();
+    }
+    expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Disconnect" }));
+    await waitFor(() => expect(calls).toContain("POST /api/viewers/7/plex-watch/disconnect"));
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: "Disconnect" })).not.toBeInTheDocument(),
+    );
+  });
 });

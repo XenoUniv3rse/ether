@@ -1443,6 +1443,7 @@
   "m_063bb7c87cb8ff": "Aucune adresse de connexion communiquée pour l’instant",
   "m_063bd391e42d81": "Limites",
   "m_063ce704e76b48": "Spectateur supprimé",
+  "m_063d340e6fb04f": "Plex ne permet pas aux autres serveurs de synchroniser l'état de visionnage. Plex ne l'accepte que de ses propres serveurs, donc Ether ne peut pas envoyer ni importer l'état de visionnage via un compte Plex. L'état de visionnage reste synchronisé entre les applications Ether de ce spectateur.",
   "m_063f68e2d72f6a": "Il n'a rien modifié",
   "m_06422a9896d898": "Sources de découverte",
   "m_0643a12e17aa72": "Non fourni par ce matériel",

@@ -1443,6 +1443,7 @@
   "m_063bb7c87cb8ff": "Aún no se ha informado de ninguna dirección de conexión",
   "m_063bd391e42d81": "Límites",
   "m_063ce704e76b48": "Espectador eliminado",
+  "m_063d340e6fb04f": "Plex no permite que otros servidores sincronicen el estado de visualización. Plex solo lo acepta de sus propios servidores, así que Ether no puede enviar ni importar el estado de visualización a través de una cuenta de Plex. El estado de visualización se sigue sincronizando entre las aplicaciones de Ether de este espectador.",
   "m_063f68e2d72f6a": "No ha cambiado nada",
   "m_06422a9896d898": "Fuentes de descubrimiento",
   "m_0643a12e17aa72": "Este hardware no lo informa",

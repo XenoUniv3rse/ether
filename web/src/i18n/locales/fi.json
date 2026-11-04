@@ -1403,6 +1403,7 @@
   "m_063bb7c87cb8ff": "Yhteysosoitetta ei ole vielä ilmoitettu",
   "m_063bd391e42d81": "Rajat",
   "m_063ce704e76b48": "Katselija poistettu",
+  "m_063d340e6fb04f": "Plex ei anna muiden palvelimien synkronoida katselutilaa. Plex hyväksyy tämän vain omilta palvelimiltaan, joten Ether ei voi lähettää tai tuoda katselutilaa Plex-tilin kautta. Katselutila synkronoituu edelleen tämän katsojan Ether-sovellusten välillä.",
   "m_063f68e2d72f6a": "Se ei ole muuttanut mitään",
   "m_06422a9896d898": "Löytölähteet",
   "m_0643a12e17aa72": "Tämä laitteisto ei ilmoita tätä",

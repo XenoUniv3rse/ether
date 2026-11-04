@@ -1483,6 +1483,7 @@
   "m_063bb7c87cb8ff": "Nie zgłoszono jeszcze adresu połączenia",
   "m_063bd391e42d81": "Limity",
   "m_063ce704e76b48": "Usunięto widza",
+  "m_063d340e6fb04f": "Plex nie pozwala innym serwerom synchronizować stanu oglądania. Plex akceptuje to tylko od własnych serwerów, więc Ether nie może wysyłać ani importować stanu obejrzenia przez konto Plex. Stan oglądania nadal synchronizuje się między aplikacjami Ether tego widza.",
   "m_063f68e2d72f6a": "Niczego nie zmienił",
   "m_06422a9896d898": "Źródła odkrywania",
   "m_0643a12e17aa72": "Nie jest raportowane przez ten sprzęt",
