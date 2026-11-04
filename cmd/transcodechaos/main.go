@@ -105,7 +105,8 @@ func run(ff, fp, report, only string) error {
 	}
 	return nil
 }
-func exercise(parent context.Context, ff, fp, root string, good []byte, sc scenario) string {
+func exercise(parent context.Context, ff, fp, root string, good []byte, sc scenario) (detail string) {
+	baseline := takeBaseline()
 	ctx, cancel := context.WithTimeout(parent, 40*time.Second)
 	defer cancel()
 	data := bytes.Clone(good)
@@ -149,16 +150,29 @@ func exercise(parent context.Context, ff, fp, root string, good []byte, sc scena
 	}
 	defer os.RemoveAll(dir)
 	var injector *hardwareFaultRunner
+	var inner transcode.Runner = transcode.ExecRunner{}
 	opts := []transcode.Option{transcode.WithSegmentTimeout(12 * time.Second)}
 	if sc.Fault == "hwfail" {
 		injector = &hardwareFaultRunner{}
-		opts = append(opts, transcode.WithRunner(injector))
+		inner = injector
 	}
-	m, err := transcode.New(config.Transcode{FFmpegPath: ff, FFprobePath: fp, HWAccel: sc.HW, TempDir: dir}, slog.New(slog.NewTextHandler(io.Discard, nil)), opts...)
+	runner := &trackingRunner{inner: inner}
+	opts = append(opts, transcode.WithRunner(runner))
+	transcodeDir := filepath.Join(dir, "transcodes")
+	m, err := transcode.New(config.Transcode{FFmpegPath: ff, FFprobePath: fp, HWAccel: sc.HW, TempDir: transcodeDir}, slog.New(slog.NewTextHandler(io.Discard, nil)), opts...)
 	if err != nil {
 		return err.Error()
 	}
-	defer m.Close()
+	defer func() {
+		_ = m.Close()
+		srv.Close()
+		if err := baseline.check(transcodeDir, runner); err != nil {
+			if detail != "" {
+				detail += "; "
+			}
+			detail += "cleanup: " + err.Error()
+		}
+	}()
 	if sc.HW == "videotoolbox" && m.HWAccel().Name != "videotoolbox" {
 		return "VideoToolbox not detected"
 	}
@@ -233,6 +247,11 @@ func exercise(parent context.Context, ff, fp, root string, good []byte, sc scena
 		}
 		if err := command(ctx, ff, "-v", "error", "-xerror", "-i", p, "-f", "null", "-"); err != nil {
 			return fmt.Sprintf("segment %d decode: %v", n, err)
+		}
+		if size, err := diskBytes(transcodeDir); err != nil {
+			return err.Error()
+		} else if size > 128<<20 {
+			return fmt.Sprintf("transcode disk usage %d exceeds 128 MiB", size)
 		}
 		if err := timeline.check(ctx, fp, p, n); err != nil {
 			return err.Error()
