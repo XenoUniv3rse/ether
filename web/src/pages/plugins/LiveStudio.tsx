@@ -54,6 +54,7 @@ export default function LiveStudio() {
         body: JSON.stringify({ template, name }),
       });
       sessionStorage.removeItem("ether-studio-thread");
+      builtProject.current = r.project.id;
       setMode("code", r.project.id);
       setPhase("editor");
     } catch (e) {
@@ -122,11 +123,14 @@ export default function LiveStudio() {
               const draft = c.output?.project as { id?: string } | undefined;
               if (draft?.id) {
                 builtProject.current = draft.id;
-                setParams((previous) => {
-                  const q = new URLSearchParams(previous);
-                  q.set("project", draft.id!);
-                  return q;
-                }, { replace: true });
+                setParams(
+                  (previous) => {
+                    const q = new URLSearchParams(previous);
+                    q.set("project", draft.id!);
+                    return q;
+                  },
+                  { replace: true },
+                );
               }
             }
             if (call)
@@ -192,6 +196,7 @@ export default function LiveStudio() {
       />
     );
   const openDraft = (id: string) => {
+    builtProject.current = id;
     sessionStorage.removeItem("ether-studio-thread");
     setMode("code", id);
     setPhase("editor");

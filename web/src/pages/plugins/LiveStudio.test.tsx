@@ -160,10 +160,11 @@ it("persists an AI draft URL and uses the server install record for navigation a
 });
 
 it("offers saved drafts from Code home and reopens the chosen URL", async () => {
+  const other = { ...project, id: "priya", name: "Priya", updatedAt: "2026-11-04T12:00:00Z" };
   vi.mocked(apiFetch).mockImplementation(async (path) => {
     if (path.endsWith("/templates")) return { templates: [] };
-    if (path === "/plugins/studio/projects") return { projects: [project] };
-    return { project };
+    if (path === "/plugins/studio/projects") return { projects: [other, project] };
+    return { project: path.endsWith("/priya") ? other : project };
   });
   mount("/plugins/studio?view=code");
   expect(await screen.findByRole("region", { name: "Saved drafts" })).toBeInTheDocument();
@@ -172,15 +173,23 @@ it("offers saved drafts from Code home and reopens the chosen URL", async () => 
     expect(screen.getByTestId("location")).toHaveTextContent("view=code&project=viktor"),
   );
   expect(await screen.findByText("Code editor")).toBeInTheDocument();
+  expect(apiFetch).not.toHaveBeenCalledWith("/plugins/studio/projects/priya");
 });
 
 it("opens the draft created by this conversation even when another draft is newer", async () => {
   vi.mocked(readAgentStream).mockImplementation(async (_r, onChunk) => {
-    onChunk({ type: "tool-input-available", toolCallId: "create", toolName: "studio_project_create" });
+    onChunk({
+      type: "tool-input-available",
+      toolCallId: "create",
+      toolName: "studio_project_create",
+    });
     onChunk({ type: "tool-output-available", toolCallId: "create", output: { project } });
   });
   vi.mocked(apiFetch).mockImplementation(async (path) => {
-    if (path === "/plugins/studio/projects") return { projects: [{ ...project, id: "someone-else", updatedAt: "2026-11-04T12:00:00Z" }, project] };
+    if (path === "/plugins/studio/projects")
+      return {
+        projects: [{ ...project, id: "someone-else", updatedAt: "2026-11-04T12:00:00Z" }, project],
+      };
     return { project };
   });
   mount();

@@ -298,17 +298,48 @@ export async function momentsForTool(
     case "studio_project_save": {
       const out: Moment[] = [];
       if (name === "studio_project_save") {
-        const compile = output?.compile as { ok?: boolean } | undefined;
-        const preview = output?.preview as { ok?: boolean } | undefined;
+        const compile = output?.compile as
+          | { ok?: boolean; diagnostics?: { file?: string; line?: number; text?: string }[] }
+          | undefined;
+        const preview = output?.preview as
+          { ok?: boolean; error?: string; errors?: unknown[]; problems?: string[] } | undefined;
         const install = output?.installCheck;
+        const checks = [
+          { text: compile?.ok ? t("Compiles") : t("Has compile errors"), failed: !compile?.ok },
+          ...(preview
+            ? [
+                {
+                  text: preview.ok ? t("Preview renders") : t("Preview needs fixes"),
+                  failed: !preview.ok,
+                },
+              ]
+            : []),
+          ...(typeof install === "string"
+            ? [
+                {
+                  text: install === "ok" ? t("Ready to install") : t("Install check has notes"),
+                  failed: install !== "ok",
+                },
+              ]
+            : []),
+        ];
+        const issues = [
+          ...(compile?.diagnostics ?? []).map((d) =>
+            `${d.file ?? ""}${d.line ? `:${d.line}` : ""} ${d.text ?? ""}`.trim(),
+          ),
+          preview?.error,
+          ...(preview?.problems ?? []),
+          ...(preview?.errors ?? []).map((e) =>
+            typeof e === "string" ? e : (e as { message?: string })?.message,
+          ),
+          typeof install === "string" && install !== "ok" ? install : undefined,
+        ].filter((s): s is string => typeof s === "string" && s.length > 0);
         out.push({
           kind: "checks",
           title: t("Checked the draft"),
-          items: [
-            compile?.ok ? t("Compiles") : t("Has compile errors"),
-            preview?.ok === false ? t("Preview needs fixes") : t("Preview renders"),
-            install === "ok" ? t("Ready to install") : t("Install check has notes"),
-          ],
+          items: checks.map((check) => check.text),
+          failed: checks.map((check) => check.failed),
+          issues: [...new Set(issues)].slice(0, 6).map((issue) => issue.slice(0, 600)),
         });
       }
       if (project?.id && project.template === "channels") {

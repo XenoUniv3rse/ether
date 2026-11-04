@@ -8,6 +8,7 @@ import { useLocale } from "../../i18n/react";
 import { Badge, Skeleton, cn } from "@braedonsaunders/appkit-ui";
 import {
   Check,
+  TriangleAlert,
   Globe,
   Library,
   ListChecks,
@@ -50,7 +51,7 @@ export type Moment =
       items: { key: string; title: string; poster?: string }[];
       total: number;
     }
-  | { kind: "checks"; title: string; items: string[] }
+  | { kind: "checks"; title: string; items: string[]; failed?: boolean[]; issues?: string[] }
   | { kind: "done"; text: string };
 
 export interface StreamTile {
@@ -383,13 +384,36 @@ export function MomentView({ moment }: { moment: Moment }) {
                 className="stage-snap flex items-center gap-2.5 text-sm text-fg"
                 style={{ animationDelay: `${i * 260}ms` }}
               >
-                <span className="flex size-5 items-center justify-center rounded-full bg-success/15 text-success">
-                  <Check size={12} strokeWidth={3} aria-hidden />
+                <span
+                  className={cn(
+                    "flex size-5 shrink-0 items-center justify-center rounded-full",
+                    moment.failed?.[i]
+                      ? "bg-warning/15 text-warning"
+                      : "bg-success/15 text-success",
+                  )}
+                >
+                  {moment.failed?.[i] ? (
+                    <TriangleAlert size={12} aria-hidden />
+                  ) : (
+                    <Check size={12} strokeWidth={3} aria-hidden />
+                  )}
                 </span>
                 {it}
               </li>
             ))}
           </ul>
+          {moment.issues?.length ? (
+            <div
+              role="status"
+              className="mt-3 space-y-1 border-t border-border pt-3 text-sm text-warning"
+            >
+              {moment.issues.map((issue, i) => (
+                <p key={i} className="whitespace-pre-wrap break-words">
+                  {issue}
+                </p>
+              ))}
+            </div>
+          ) : null}
         </Panel>
       );
     case "done":
