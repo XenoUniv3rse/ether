@@ -131,7 +131,7 @@ export function Viewing({
         </div>
       </div>
 
-      <div className="grid gap-6 lg:grid-cols-3">
+      <div className={s.shows ? "grid gap-6 lg:grid-cols-3" : "grid gap-6 lg:grid-cols-2"}>
         <DashboardPanel title={t("Top titles")}>
           <RankedBars
             ariaLabel={t("Top titles")}

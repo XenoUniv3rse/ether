@@ -7,7 +7,7 @@ import { ErrorPanel, LoadingRows } from "../../components/feedback";
 import { Kpi, KpiRow } from "../../components/Kpi";
 import { apiFetch, errorMessage } from "../../lib/api";
 import { t, tn } from "../../i18n";
-import { formatNumber, formatPercent, formatRate } from "../../lib/format";
+import { formatNumber, formatPercent } from "../../lib/format";
 import { decisionLabel, type NowPlaying as Stream } from "../../lib/health";
 import type { AsyncState } from "../../lib/hooks";
 import { useTitle } from "../../lib/titles";
@@ -20,6 +20,12 @@ const clockOf = (ms: number) => {
   return h ? `${h}:${String(m).padStart(2, "0")}:${sec}` : `${m}:${sec}`;
 };
 
+/** Mbps, the unit Activity uses everywhere. */
+export const mbpsOf = (bitsPerSecond: number) =>
+  bitsPerSecond > 0
+    ? t("{rate} Mbps", { rate: (bitsPerSecond / 1e6).toFixed(bitsPerSecond >= 1e7 ? 0 : 1) })
+    : "—";
+
 const isTranscoding = (s: Stream) =>
   s.decision === "transcode" || (s.decision === "copy" && !s.audioCopy);
 
@@ -29,7 +35,7 @@ function Fact({ label, children }: { label: string; children: React.ReactNode })
   return (
     <div className="min-w-0">
       <dt className="text-[11px] font-medium uppercase tracking-wider text-fg-subtle">{label}</dt>
-      <dd className="mt-0.5 truncate text-sm text-fg">{children}</dd>
+      <dd className="mt-0.5 line-clamp-2 break-words text-sm text-fg">{children}</dd>
     </div>
   );
 }
@@ -39,10 +45,10 @@ function Flow({ from, to }: { from: string; to: string }) {
   if (!from && !to) return null;
   if (!to || to === from) return <>{from}</>;
   return (
-    <span className="inline-flex min-w-0 items-center gap-1.5">
-      <span className="truncate text-fg-muted">{from || "—"}</span>
-      <ArrowRight size={12} className="shrink-0 text-fg-subtle" aria-label={t("becomes")} />
-      <span className="truncate">{to}</span>
+    <span>
+      <span className="text-fg-muted">{from || "—"}</span>
+      <ArrowRight size={12} className="mx-1 inline text-fg-subtle" aria-label={t("becomes")} />
+      <span>{to}</span>
     </span>
   );
 }
@@ -57,9 +63,7 @@ function StreamCard({ s, stopping, onStop }: { s: Stream; stopping: boolean; onS
       : title?.year
         ? String(title.year)
         : "";
-  const rate = s.bitrateKbps
-    ? t("{rate} Mbps", { rate: (s.bitrateKbps / 1000).toFixed(1) })
-    : formatRate(s.speedBps);
+  const rate = mbpsOf(s.bitrateKbps ? s.bitrateKbps * 1000 : s.speedBps * 8);
   return (
     <article className="overflow-hidden rounded-2xl border border-border bg-surface shadow-xs">
       <div className="relative isolate h-44 overflow-hidden">
@@ -266,7 +270,7 @@ export function NowPlaying({ state, protocol }: { state: AsyncState<Stream[]>; p
         />
         <Kpi
           label={t("Throughput")}
-          value={ready ? formatRate(throughput) : "—"}
+          value={ready ? mbpsOf(throughput * 8) : "—"}
           icon={<Gauge size={18} />}
           tone="info"
         />
