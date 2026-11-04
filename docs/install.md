@@ -221,6 +221,14 @@ sudo ./ether service start
 on Windows). Logs are written to `<data dir>/logs/ether.log` (rotated)
 and fatal crash traces to `<data dir>/logs/crash.log`.
 
+On Linux, burned-in text subtitles (Plex Web asks for its ASS tracks to
+be burned) need fontconfig and at least one font. Without them the burned
+cues are blank. Desktop installs already have both; on a headless host,
+install them: `sudo apt install fontconfig fonts-dejavu-core`
+(Debian/Ubuntu) or `sudo dnf install fontconfig dejavu-sans-fonts`
+(Fedora/RHEL). The Docker image and the .deb/.rpm packages bring them in
+already.
+
 ## Remote access / port forwarding
 
 Ether's main listener defaults to **TCP 32400**. Other frontends can have
@@ -701,6 +709,7 @@ chose.
 | `Connection refused. Check the host and port.` / `TLS connection failed. Check the port and TLS setting.` | The provider host is reachable, but the port or TLS toggle does not match the provider's NNTP endpoint (typically `563` or `443` with TLS on, `119` with TLS off). |
 | `Login rejected. Check the username and password.` (NNTP `481` / `502`) | The Usenet provider rejected the credentials or account state. Verify the username and password in **Sources › Usenet** and confirm the subscription is active. |
 | `Password must be at least 12 characters.` | Local owner and viewer passwords set in setup, **Sign-in methods**, **Viewers**, or the API must be at least 12 characters long. Existing shorter passwords continue to work until changed. |
+| Plex Web shows an ASS subtitle track as converted, but no subtitle is drawn (Linux) | libass found no font to burn the cues with. Install `fontconfig` and a font package (`fonts-dejavu-core` on Debian/Ubuntu, `dejavu-sans-fonts` on Fedora/RHEL). The Docker image and the .deb/.rpm packages include them. |
 | `this FFmpeg cannot tone-map` | The stream is HDR and the client requested SDR, but the installed `ffmpeg` lacks `zscale` (`libzimg`), `libplacebo`, and hardware/OpenCL tone-mapping filters. Use Ether's packaged installer/container image or install an `ffmpeg` build with `libzimg`. |
 | `credential key is missing or does not match` | `.credentials-key` in the data directory was deleted or belongs to a different server, while `config.json` or `ether.db` still contains sealed secrets. Restore the matching `.credentials-key` from backup, or join a cluster node with a fresh join token. |
 | `503 Service Unavailable` / `/ether/` shows the startup recovery page | Ether is still migrating/restoring, or database startup failed. Open `/ether/` directly on the host to view the exact startup error, unlock recovery with the owner password or `recovery-code.txt`, and restore a snapshot. |

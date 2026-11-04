@@ -104,6 +104,13 @@ nfpms:
     license: GPL-3.0
     formats: [deb, rpm]
     bindir: /usr/lib/ether
+    # libass (burned text subtitles) needs fontconfig and a font: a
+    # headless host without them burns nothing.
+    overrides:
+      deb:
+        recommends: [fontconfig, fonts-dejavu-core]
+      rpm:
+        recommends: [fontconfig, dejavu-sans-fonts]
     contents:
       - src: packaging/linux/ether.service
         dst: /lib/systemd/system/ether.service
