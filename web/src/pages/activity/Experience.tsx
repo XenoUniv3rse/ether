@@ -12,15 +12,15 @@ import { useAsync, useInterval } from "../../lib/hooks";
 import { ExperienceDrawer, MetricFacts, ToneValue } from "./ExperienceDrawer";
 import {
   BUFFER_GOOD_PER_HOUR,
-  START_FAIR_MS,
   START_GOOD_MS,
   badness,
   bufferTone,
   directShare,
   failedTone,
+  formatHours,
+  formatMbps,
   formatPerHour,
   formatSeconds,
-  measuredNote,
   pct,
   startTone,
 } from "./experience-format";
@@ -64,16 +64,10 @@ export function Experience() {
   const h = o?.household;
   const direct = h ? directShare(h) : null;
   const viewerName = rows.find((r) => r.userId === viewerId)?.username;
-  const partial = o ? !o.measuredSince || o.measuredSince > o.since : false;
 
   return (
     <>
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <p className="max-w-2xl text-sm text-fg-muted">
-          {t(
-            "How playback feels to your viewers: how long the picture takes to appear, how often it stops to buffer, and how often a title plays as-is.",
-          )}
-        </p>
+      <div className="flex flex-wrap items-center justify-end gap-3">
         <Segmented
           ariaLabel={t("Period")}
           size="sm"
@@ -91,9 +85,6 @@ export function Experience() {
         <LoadingRows rows={4} />
       ) : (
         <>
-          {partial ? (
-            <p className="text-xs text-fg-muted">{measuredNote(o.measuredSince)}</p>
-          ) : null}
           <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
             <DashboardMetricCard
               label={t("Median start time")}
@@ -235,18 +226,43 @@ export function Experience() {
                 sortValue: (r) => directShare(r.metrics) ?? -1,
                 cell: (r) => <span className="tabular-nums">{pct(directShare(r.metrics))}</span>,
               },
+              {
+                key: "bitrate",
+                header: t("Avg bitrate"),
+                align: "right",
+                sortValue: (r) => r.metrics.deliveredKbps ?? -1,
+                cell: (r) => (
+                  <span className="tabular-nums">{formatMbps(r.metrics.deliveredKbps)}</span>
+                ),
+              },
+              {
+                key: "device",
+                header: t("Most-used device"),
+                search: (r) => r.metrics.topDevice?.name ?? "",
+                sortValue: (r) => r.metrics.topDevice?.name.toLowerCase() ?? "",
+                cell: (r) =>
+                  r.metrics.topDevice ? (
+                    <>
+                      <p className="max-w-48 truncate text-fg">{r.metrics.topDevice.name}</p>
+                      <p className="text-xs text-fg-muted">
+                        {tn(r.metrics.topDevice.plays, "{count} play", "{count} plays")}
+                      </p>
+                    </>
+                  ) : (
+                    "—"
+                  ),
+              },
+              {
+                key: "hours",
+                header: t("Hours watched"),
+                align: "right",
+                sortValue: (r) => r.metrics.watchedMs,
+                cell: (r) => (
+                  <span className="tabular-nums">{formatHours(r.metrics.watchedMs)}</span>
+                ),
+              },
             ]}
           />
-          <p className="text-xs text-fg-muted">
-            {t(
-              "Worst first. Start time is the median from pressing Play to the first picture; buffering counts stalls after playback began, per hour watched. Targets: start within {good} (fair within {fair}), buffering under {rate}.",
-              {
-                good: formatSeconds(START_GOOD_MS),
-                fair: formatSeconds(START_FAIR_MS),
-                rate: formatPerHour(BUFFER_GOOD_PER_HOUR),
-              },
-            )}
-          </p>
         </>
       )}
       <ExperienceDrawer

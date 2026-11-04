@@ -20,10 +20,10 @@ import {
   directShare,
   failedReason,
   failedTone,
+  formatHours,
   formatMbps,
   formatPerHour,
   formatSeconds,
-  measuredNote,
   pct,
   reasonPhrase,
   startTone,
@@ -276,6 +276,13 @@ export function MetricFacts({ m, wide = false }: { m: ExperienceMetrics; wide?: 
         {t("{finished} / {abandoned}", { finished: m.finished, abandoned: m.abandoned })}
       </Fact>
       <Fact label={t("Away from home")}>{pct(m.remotePct)}</Fact>
+      <Fact
+        label={t("Most-used device")}
+        hint={m.topDevice ? tn(m.topDevice.plays, "{count} play", "{count} plays") : undefined}
+      >
+        <span className="block truncate">{m.topDevice?.name || DASH}</span>
+      </Fact>
+      <Fact label={t("Hours watched")}>{formatHours(m.watchedMs)}</Fact>
       <Fact label={t("Top transcode reason")}>
         {m.topTranscodeReason ? (
           <span className="block first-letter:uppercase">
@@ -384,7 +391,6 @@ export function ExperienceDrawer({
     [viewerId, days],
   );
   const d = detail.data && detail.data.userId === viewerId ? detail.data : null;
-  const unmeasured = d?.plays.some((p) => !p.measured) ?? false;
   return (
     <Drawer
       open={viewerId != null}
@@ -461,9 +467,6 @@ export function ExperienceDrawer({
             ) : (
               <p className="py-4 text-sm text-fg-muted">{t("No recorded plays yet.")}</p>
             )}
-            {unmeasured || !d.measuredSince ? (
-              <p className="mt-2 text-xs text-fg-muted">{measuredNote(d.measuredSince)}</p>
-            ) : null}
           </section>
         </div>
       )}

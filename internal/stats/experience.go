@@ -1,6 +1,7 @@
 package stats
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"net/http"
@@ -154,6 +155,13 @@ type ExperienceMetrics struct {
 	Finished            int              `json:"finished"`
 	Abandoned           int              `json:"abandoned"`
 	RemotePct           *float64         `json:"remotePct"`
+	WatchedMS           int64            `json:"watchedMs"`
+	// TopDevice is the device with the most plays, as recorded.
+	TopDevice *DeviceCount `json:"topDevice"`
+}
+type DeviceCount struct {
+	Name  string `json:"name"`
+	Plays int    `json:"plays"`
 }
 type ReasonCount struct {
 	Reason string `json:"reason"`
@@ -322,7 +330,11 @@ func metrics(plays []ExperiencePlay) ExperienceMetrics {
 	var watched, sourceW, sourceSum, deliveredW, deliveredSum, uhdW, hdrW, mediaW, remoteW, measuredW int64
 	failed := map[string]int{}
 	reasons := map[[2]string]int{}
+	devices := map[string]int{}
 	for _, p := range plays {
+		if device := cmp.Or(p.Device, p.Platform); device != "" {
+			devices[device]++
+		}
 		switch core.DecisionKind(p.Decision) {
 		case core.DecisionDirectPlay:
 			m.Decisions.DirectPlay++
@@ -391,6 +403,12 @@ func metrics(plays []ExperiencePlay) ExperienceMetrics {
 	}
 	m.UHDPct, m.HDRPct = pct(uhdW, mediaW), pct(hdrW, mediaW)
 	m.RemotePct = pct(remoteW, measuredW)
+	m.WatchedMS = watched
+	for name, n := range devices {
+		if top := m.TopDevice; top == nil || n > top.Plays || (n == top.Plays && name < top.Name) {
+			m.TopDevice = &DeviceCount{Name: name, Plays: n}
+		}
+	}
 	for reason, n := range failed {
 		m.FailedReasons = append(m.FailedReasons, ReasonCount{reason, n})
 	}

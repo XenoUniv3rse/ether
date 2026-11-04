@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { getLocale, t, tn, tx } from "../../i18n";
-import { fixed, formatDate, formatPercent } from "../../lib/format";
+import { fixed, formatPercent } from "../../lib/format";
 import type { ExperienceCause, ExperienceMetrics, ReasonKind } from "./types";
 
 /** Targets the owner approved: start ≤5 s good, ≤10 s fair; buffering <1/h good. */
@@ -149,13 +149,9 @@ export function failedReason(reason: string): string {
   return reason || t("Left before the picture appeared");
 }
 
-/** The note shown when some plays predate measurement. */
-export function measuredNote(measuredSince: number): string {
-  return measuredSince
-    ? t("Start time and buffering are measured from {date} on.", {
-        date: formatDate(new Date(measuredSince * 1000).toISOString()),
-      })
-    : t("Start time and buffering are measured from the next play on.");
+/** Viewing time in hours. */
+export function formatHours(ms: number): string {
+  return t("{hours} h", { hours: fixed(ms / 3600000, 1) });
 }
 
 /** One plain-language sentence (with any useful links) for the likely cause. */
