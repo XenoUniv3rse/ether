@@ -94,19 +94,26 @@ globalThis.console = { log: (...a) => ether.log(...a), error: (...a) => ether.lo
 // hotPrelude locks a hot-path instance down: no host services except log
 // and abort, Date fixed at the epoch, Math.random a seeded generator that
 // __ether_rank_batch resets per batch. The monotonic clock is captured in
-// a closure for budget checks, then removed from the global scope.
+// a closure for budget checks, then hidden from plugin code.
+//
+// Budgets are measured with performance.now (WASI's monotonic clock), not
+// Date.now: the wall clock counts whole milliseconds, can step, and on
+// Windows advances only once per ~15.6 ms timer tick, so a 2 ms budget read
+// from it flagged fast candidates that straddled a tick as slow. wazero
+// backs the monotonic clock with QueryPerformanceCounter on Windows.
 const hotPrelude = `
 "use strict";
 globalThis.ether = (() => {
-  // Capture the real clock for budget checks before it is replaced. It
-  // lives only in this closure; plugin code sees the frozen Date below,
-  // and a host-function clock would cost a boundary crossing per check.
-  const now = Date.now.bind(Date);
-  globalThis.__ether_now_ms = undefined;
+  // Capture the monotonic clock for budget checks before it is replaced.
+  // It lives only in this closure; plugin code sees the frozen Date and
+  // performance below, and a host-function clock would cost a boundary
+  // crossing per check.
+  const now = performance.now.bind(performance);
   let state = 0x2545F491;
   const nextRandom = () => { state = (state * 1103515245 + 12345) & 0x7fffffff; return state / 0x80000000; };
   class FixedDate extends Date { constructor(...a) { super(...(a.length ? a : [0])); } static now() { return 0; } }
   globalThis.Date = FixedDate;
+  globalThis.performance = Object.freeze({ now: () => 0, timeOrigin: 0 });
   Math.random = nextRandom;
   globalThis.__ether_rank_batch = (candsJson, cfgJson, perMs) => {
     state = 0x2545F491;
@@ -211,9 +218,6 @@ func newJSInstance(ctx context.Context, source string, lim *Limits, hot bool) (i
 			return nil, errors.New(encodeFault(fault))
 		}
 		return qc.NewString(string(out)), nil
-	})
-	qc.SetFunc("__ether_now_ms", func(this *qjs.This) (*qjs.Value, error) {
-		return qc.NewFloat64(float64(time.Now().UnixNano()) / 1e6), nil
 	})
 	prelude := servicePrelude
 	if hot {
