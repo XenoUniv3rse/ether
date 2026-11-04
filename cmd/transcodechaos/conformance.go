@@ -37,7 +37,7 @@ func muxConformance(ctx context.Context, ff, cache, input, digest string) (strin
 	defer z.Close()
 	var stream *zip.File
 	for _, f := range z.File {
-		if strings.HasSuffix(f.Name, ".bit") || strings.HasSuffix(f.Name, ".264") {
+		if strings.HasSuffix(f.Name, ".bit") || strings.HasSuffix(f.Name, ".264") || strings.HasSuffix(f.Name, ".jsv") {
 			if stream != nil || f.UncompressedSize64 > 16<<20 {
 				return "", fmt.Errorf("unexpected conformance archive")
 			}

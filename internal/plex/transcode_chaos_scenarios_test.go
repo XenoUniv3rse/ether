@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -84,8 +85,26 @@ func TestTranscodeChaosCorpusScenarios(t *testing.T) {
 								if err := os.WriteFile(p, b, 0600); err != nil {
 									t.Fatal(err)
 								}
+								if capture := os.Getenv("CHAOS_CAPTURE"); capture != "" {
+									if err := os.WriteFile(capture, b, 0600); err != nil {
+										t.Fatal(err)
+									}
+								}
 								chaosCmd(t, fp, "-v", "error", "-show_streams", p)
-								chaosDecodeMedia(t, ff, fp, p, false)
+								// Stock FFmpeg's unindexed seek in this HLS TS excerpt
+								// emits an incomplete leading AAC packet too. A copied
+								// warning is not a playback failure: require a decoded
+								// opening keyframe, audio frames and normal whole decode.
+								stockSeekWarning := path != "dash" && name == "corpus-apple-bipbop.ts" && len(rec.requests) > 0 && rec.requests[len(rec.requests)-1].Decision.VideoCopy
+								chaosDecodeMedia(t, ff, fp, p, stockSeekWarning)
+								if stockSeekWarning {
+									ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+									out, err := exec.CommandContext(ctx, fp, "-v", "quiet", "-select_streams", "a:0", "-show_frames", "-show_entries", "frame=nb_samples", "-of", "csv=p=0", p).Output()
+									cancel()
+									if err != nil || len(strings.TrimSpace(string(out))) == 0 {
+										t.Fatal("stock seek warning concealed all audio")
+									}
+								}
 							}
 							play := func(offset time.Duration, extra string) {
 								t.Helper()

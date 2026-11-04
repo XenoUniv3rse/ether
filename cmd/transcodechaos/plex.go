@@ -17,9 +17,9 @@ import (
 func runPlex(ctx context.Context, ff, fp, fixtures, mode string) ([]result, error) {
 	pattern := "^TestTranscodeChaos(Plex|Clients|Matrix)$"
 	if mode == "full" {
-		pattern = "^TestTranscodeChaos(Plex|Clients|Matrix|PlexFaults|LiveRelay|LiveHardware|AppleRelay|DASHIFRelay|HTTPHardware|PCELongSeek|CorpusScenarios)$"
+		pattern = "^TestTranscodeChaos(Plex|Clients|Matrix|PlexFaults|LiveRelay|LiveHardware|AppleRelay|DASHIFRelay|HTTPHardware|PCELongSeek|CorpusScenarios|DV5Graphs)$"
 	}
-	cmd := exec.CommandContext(ctx, "go", "test", "-tags", "transcodechaos", "./internal/plex", "-run", pattern, "-count=1", "-timeout=12m", "-json")
+	cmd := exec.CommandContext(ctx, "go", "test", "-p", "1", "-tags", "transcodechaos", "./internal/plex", "./internal/transcode", "-run", pattern, "-count=1", "-timeout=12m", "-json")
 	cmd.Env = append(os.Environ(), "CHAOS_FFMPEG="+ff, "CHAOS_FFPROBE="+fp, "CHAOS_CORPUS="+fixtures, "GOMAXPROCS=2")
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -94,6 +94,9 @@ func runPlex(ctx context.Context, ff, fp, fixtures, mode string) ([]result, erro
 			path = "plex/" + parts[len(parts)-1]
 		}
 		item := result{name, path, strings.ToUpper(e.Action), "", int64(e.Elapsed * 1000)}
+		if parts[0] == "TestTranscodeChaosDV5Graphs" {
+			item.Scenario, item.Path = "dv5-filter-graph", "graph/"+parts[len(parts)-1]
+		}
 		if item.Status == "FAIL" {
 			item.Detail = "handler scenario failed; rerun this test with -v for details"
 		}
