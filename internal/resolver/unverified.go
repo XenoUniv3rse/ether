@@ -128,10 +128,15 @@ func (s *Service) lastResort(ctx context.Context, p *unverifiedPool, key core.Ra
 		s.log.Info("resolver: playing unverified release after health checks timed out", "title", key, "release", c.rel.ID)
 		// Inconclusive candidates stay usable alternates; confirmed
 		// failures and fetches that produced no NZB do not.
-		return s.resolutionSkipping(key, keep, winner, nzb, func(o candidate) bool {
+		res := s.resolutionSkipping(key, keep, winner, nzb, func(o candidate) bool {
 			_, inconclusive := p.nzbs[o.rel.ID]
 			return tr.Candidates[o.trace].Rejected && !inconclusive
 		})
+		if c.fallback {
+			res.QualityFallback = qualityFallbackReason(c.rel, tr)
+			tr.Downgrade = res.QualityFallback
+		}
+		return res
 	}
 	return nil
 }

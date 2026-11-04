@@ -23,6 +23,7 @@ import {
   isPlainObject,
   relativeTime,
 } from "../../lib/format";
+import { qualityFallback } from "../../lib/quality-fallback";
 import { useAsync } from "../../lib/hooks";
 import { releaseConsole, type HistoryRecord } from "../../lib/releases";
 import type { CandidateTrace, ResolverTrace } from "../../lib/types";
@@ -114,6 +115,7 @@ function normalizeTrace(raw: Record<string, unknown>, i: number): ResolverTrace 
     pinned: typeof raw.pinned === "string" ? raw.pinned : undefined,
     pinStatus: typeof raw.pinStatus === "string" ? raw.pinStatus : undefined,
     omitted: Number(raw.omitted ?? 0) || undefined,
+    downgrade: typeof raw.downgrade === "string" ? raw.downgrade : undefined,
     routing: typeof raw.routing === "string" ? raw.routing : undefined,
     chooser: chooserOf(raw.chooser ?? nested.chooser),
     chosenVersion:
@@ -457,6 +459,9 @@ export function TraceDetail({ trace, titleKey }: { trace: ResolverTrace; titleKe
         {trace.err ? <span className="text-sm text-danger">{trace.err}</span> : null}
       </div>
       {ceilings ? <p className="text-sm text-fg-muted">{ceilings}</p> : null}
+      {trace.downgrade ? (
+        <p className="text-sm text-fg-muted">{qualityFallback(trace.downgrade)}</p>
+      ) : null}
       {trace.routing ? (
         <p className="text-sm text-fg-muted">
           {t("Source routing: {routing}", { routing: trace.routing })}

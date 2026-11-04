@@ -7,6 +7,7 @@ import { ErrorPanel, LoadingRows } from "../../components/feedback";
 import { Field } from "../../components/fields";
 import { Section } from "../../components/layout";
 import { apiFetch } from "../../lib/api";
+import { qualityFallback } from "../../lib/quality-fallback";
 import { fixed, formatDateTime } from "../../lib/format";
 import { useAsync } from "../../lib/hooks";
 import { ToneValue } from "./ExperienceDrawer";
@@ -246,6 +247,9 @@ function PlayDrawer({ id, onClose }: { id: string | null; onClose: () => void })
             {decision ? <Badge variant="secondary">{decision}</Badge> : null}
             {p.remote ? <Badge variant="secondary">{t("Away")}</Badge> : null}
           </div>
+          {p.qualityFallback ? (
+            <p className="text-sm text-fg-muted">{qualityFallback(p.qualityFallback)}</p>
+          ) : null}
           <dl className="divide-y divide-border">
             <Detail label={t("Viewer")}>
               {p.userId ? (

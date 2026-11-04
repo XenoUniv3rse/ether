@@ -53,10 +53,11 @@ func (s *Service) LatestDecision(key core.RatingKey) (core.DecisionTrace, bool) 
 
 func decisionFromTrace(tr Trace) core.DecisionTrace {
 	d := core.DecisionTrace{
-		Profile:       tr.Profile,
-		Chooser:       tr.Chooser,
-		ChosenVersion: tr.ChosenVersion,
-		Candidates:    compactDecisionCandidates(tr),
+		QualityFallback: tr.Downgrade,
+		Profile:         tr.Profile,
+		Chooser:         tr.Chooser,
+		ChosenVersion:   tr.ChosenVersion,
+		Candidates:      compactDecisionCandidates(tr),
 	}
 	if tr.Limits != nil {
 		d.ClientMaxHeight = tr.Limits.ClientMaxHeight

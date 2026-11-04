@@ -115,6 +115,7 @@ export type ExperiencePlay = {
   decision: string;
   reasonKind: ReasonKind | "";
   reasonDetail: string;
+  qualityFallback?: string;
   origin: string;
   release: string;
   remote: boolean;

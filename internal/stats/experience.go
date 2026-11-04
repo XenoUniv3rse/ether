@@ -172,30 +172,31 @@ type TranscodeReason struct {
 
 // ExperiencePlay is one recorded play with its experience.
 type ExperiencePlay struct {
-	ID           string `json:"id"`
-	UserID       int64  `json:"userId"`
-	Username     string `json:"-"`
-	Title        string `json:"title"`
-	Device       string `json:"device"`
-	Platform     string `json:"platform"`
-	Started      int64  `json:"started"`
-	Ended        int64  `json:"-"`
-	Measured     bool   `json:"measured"`
-	StartMS      *int64 `json:"startMs"`
-	BufferEvents *int   `json:"bufferEvents"`
-	BufferMS     *int64 `json:"bufferMs"`
-	Failed       bool   `json:"failed"`
-	Error        string `json:"error"`
-	Decision     string `json:"decision"`
-	ReasonKind   string `json:"reasonKind"`
-	ReasonDetail string `json:"reasonDetail"`
-	Origin       string `json:"origin"`
-	Release      string `json:"release"`
-	Remote       bool   `json:"remote"`
-	WatchedMS    int64  `json:"watchedMs"`
-	DurationMS   int64  `json:"durationMs"`
-	Switches     int    `json:"switches"`
-	Completed    bool   `json:"-"`
+	ID              string `json:"id"`
+	UserID          int64  `json:"userId"`
+	Username        string `json:"-"`
+	Title           string `json:"title"`
+	Device          string `json:"device"`
+	Platform        string `json:"platform"`
+	Started         int64  `json:"started"`
+	Ended           int64  `json:"-"`
+	Measured        bool   `json:"measured"`
+	StartMS         *int64 `json:"startMs"`
+	BufferEvents    *int   `json:"bufferEvents"`
+	BufferMS        *int64 `json:"bufferMs"`
+	Failed          bool   `json:"failed"`
+	Error           string `json:"error"`
+	Decision        string `json:"decision"`
+	ReasonKind      string `json:"reasonKind"`
+	ReasonDetail    string `json:"reasonDetail"`
+	QualityFallback string `json:"qualityFallback,omitempty"`
+	Origin          string `json:"origin"`
+	Release         string `json:"release"`
+	Remote          bool   `json:"remote"`
+	WatchedMS       int64  `json:"watchedMs"`
+	DurationMS      int64  `json:"durationMs"`
+	Switches        int    `json:"switches"`
+	Completed       bool   `json:"-"`
 
 	downSwitches, sourceKbps, deliveredKbps int // delivered: bytes over watched time
 	uhd, hdr, pictured                      bool
@@ -249,7 +250,7 @@ type ExperienceViewer struct {
 	Cause         ExperienceCause   `json:"cause"`
 }
 
-const experienceColumns = `id,user_id,username,title,platform,device,decision,started,ended,bytes,watched_ms,duration_ms,completed,failovers,error,measured,pictured,ttff_ms,start_failed,buffer_events,buffer_ms,down_failovers,played,source_kbps,uhd,hdr,remote,origin,release_name,reason_kind,reason_detail`
+const experienceColumns = `id,user_id,username,title,platform,device,decision,started,ended,bytes,watched_ms,duration_ms,completed,failovers,error,measured,pictured,ttff_ms,start_failed,buffer_events,buffer_ms,down_failovers,played,source_kbps,uhd,hdr,remote,origin,release_name,reason_kind,reason_detail,quality_fallback`
 
 // realPlay is a play History counts (stats.Summary): one that delivered
 // media, plus a measured start that never did (a failed start). Older
@@ -269,7 +270,7 @@ func (s *Service) experienceRows(ctx context.Context, where string, limit int, a
 		var measured, played, pictured, startFailed, events, uhd, hdr, remote int
 		var ttff, bufferMS, bytes int64
 		if err := rows.Scan(&p.ID, &p.UserID, &p.Username, &p.Title, &p.Platform, &p.Device, &p.Decision, &p.Started, &p.Ended, &bytes, &p.WatchedMS, &p.DurationMS, &p.Completed, &p.Switches, &p.Error,
-			&measured, &pictured, &ttff, &startFailed, &events, &bufferMS, &p.downSwitches, &played, &p.sourceKbps, &uhd, &hdr, &remote, &p.Origin, &p.Release, &p.ReasonKind, &p.ReasonDetail); err != nil {
+			&measured, &pictured, &ttff, &startFailed, &events, &bufferMS, &p.downSwitches, &played, &p.sourceKbps, &uhd, &hdr, &remote, &p.Origin, &p.Release, &p.ReasonKind, &p.ReasonDetail, &p.QualityFallback); err != nil {
 			return nil, err
 		}
 		// Measured: a play request reached a client that reports timelines;

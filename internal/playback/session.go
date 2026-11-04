@@ -437,6 +437,7 @@ func (s *session) snapshot(now time.Time) *core.PlaySession {
 	if g := s.cur; g != nil {
 		res := *g.res
 		ps.Resolution = &res
+		ps.QualityFallback = res.QualityFallback
 		ps.Source = g.src
 		ps.Info = g.infoSnapshot()
 		ps.Origin = sourceOrigin(g.src, res.Release.Protocol)

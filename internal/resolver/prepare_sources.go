@@ -16,6 +16,11 @@ type sourcePreparer interface {
 }
 
 func (s *Service) prepareSources(ctx context.Context, cands []candidate, title *core.Title, tr *Trace, scopes ...*candidateChecks) []candidate {
+	// Fallback ordering is strict by resolution and imported source preference.
+	// Source preparation routes peers and can promote a lower tier.
+	if len(cands) > 0 && cands[0].fallback {
+		return cands
+	}
 	p, ok := s.indexer.(sourcePreparer)
 	if !ok || len(cands) < 2 {
 		return cands
