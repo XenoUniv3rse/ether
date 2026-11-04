@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/braedonsaunders/ether/internal/core"
@@ -265,7 +266,7 @@ func (s *resumeStore) put(ctx context.Context, rec resumeRecord, nzb []byte, poi
 // putWithProbe is put plus the probed facts of the serving generation,
 // persisted in the same (possibly held) write as the resume row.
 func (s *resumeStore) putWithProbe(ctx context.Context, rec resumeRecord, nzb []byte, points []core.KeyframePoint, probe core.MediaInfo) error {
-	reqmemo.Forget(ctx, resumeMemoKey(rec.userID, rec.key))
+	forgetResume(ctx, rec.userID, rec.key)
 	if len(nzb) == 0 {
 		return errors.New("playback: empty nzb")
 	}
@@ -707,7 +708,7 @@ func (s *resumeStore) readResumeNZB(ctx context.Context, rec *resumeRecord) ([]b
 }
 
 func (s *resumeStore) save(ctx context.Context, rec resumeRecord, nzb []byte) error {
-	reqmemo.Forget(ctx, resumeMemoKey(rec.userID, rec.key))
+	forgetResume(ctx, rec.userID, rec.key)
 	if len(nzb) == 0 {
 		return errors.New("playback: empty nzb")
 	}
@@ -794,9 +795,67 @@ func resumeMemoKey(userID int64, key core.RatingKey) string {
 	return "playback:resume:" + strconv.FormatInt(userID, 10) + ":" + strconv.FormatInt(int64(key), 10)
 }
 
+// resumeKeysMemoKey names a read request's set of a viewer's resume keys;
+// it shares resumeMemoKey's prefix, so ForgetPrefix drops it too.
+func resumeKeysMemoKey(userID int64) string {
+	return "playback:resume:" + strconv.FormatInt(userID, 10) + ":keys"
+}
+
+// resumeKeySetMax bounds the keys a read request loads at once; a viewer
+// with more is asked per title.
+const resumeKeySetMax = 4096
+
+type resumeKeySet struct {
+	has      map[core.RatingKey]bool
+	complete bool
+}
+
+// manyLookups counts a read request's resume lookups for a viewer and
+// reports when they are past resumeKeySetAfter.
+func (s *resumeStore) manyLookups(ctx context.Context, userID int64) bool {
+	n, _ := reqmemo.Do(ctx, "playback:resume-lookups:"+strconv.FormatInt(userID, 10), func() (*atomic.Int32, error) {
+		return new(atomic.Int32), nil
+	})
+	return n.Add(1) > resumeKeySetAfter
+}
+
+// forgetResume drops a read request's memo of one record and of the set.
+func forgetResume(ctx context.Context, userID int64, key core.RatingKey) {
+	reqmemo.Forget(ctx, resumeMemoKey(userID, key))
+	reqmemo.Forget(ctx, resumeKeysMemoKey(userID))
+}
+
+// resumeKeySetAfter is how many titles a read request looks up one by one
+// before it reads the viewer's whole key set instead.
+const resumeKeySetAfter = 8
+
 // A list builds several stream views per item, each asking for its resume
-// record, so a read request reads each record once.
+// record, so a read request reads each record once. Past a few titles it
+// reads which titles have a record at all, once: a Home or list page asks
+// for every title it shows, and most have none.
 func (s *resumeStore) get(ctx context.Context, userID int64, key core.RatingKey) (*resumeRecord, error) {
+	if reqmemo.Active(ctx) && s.manyLookups(ctx, userID) {
+		set, err := reqmemo.Do(ctx, resumeKeysMemoKey(userID), func() (resumeKeySet, error) {
+			rows, err := s.db.QueryContext(ctx, `SELECT rating_key FROM playback_resume WHERE user_id=? LIMIT ?`, userID, resumeKeySetMax+1)
+			if err != nil {
+				return resumeKeySet{}, err
+			}
+			defer rows.Close()
+			set := resumeKeySet{has: map[core.RatingKey]bool{}}
+			for rows.Next() {
+				var k int64
+				if err := rows.Scan(&k); err != nil {
+					return resumeKeySet{}, err
+				}
+				set.has[core.RatingKey(k)] = true
+			}
+			set.complete = len(set.has) <= resumeKeySetMax
+			return set, rows.Err()
+		})
+		if err == nil && set.complete && !set.has[key] {
+			return nil, nil
+		}
+	}
 	rec, err := reqmemo.Do(ctx, resumeMemoKey(userID, key), func() (*resumeRecord, error) {
 		row := s.db.QueryRowContext(ctx, `SELECT `+resumeColumns+` FROM playback_resume WHERE user_id=? AND rating_key=?`,
 			userID, int64(key))
@@ -834,7 +893,7 @@ func (s *resumeStore) all(ctx context.Context) ([]resumeRecord, error) {
 }
 
 func (s *resumeStore) delete(ctx context.Context, userID int64, key core.RatingKey) error {
-	reqmemo.Forget(ctx, resumeMemoKey(userID, key))
+	forgetResume(ctx, userID, key)
 	var hash string
 	err := s.db.QueryRowContext(ctx, `SELECT nzb_hash FROM playback_resume WHERE user_id=? AND rating_key=?`,
 		userID, int64(key)).Scan(&hash)
