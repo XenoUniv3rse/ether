@@ -5,7 +5,6 @@ import { Artwork } from "../../components/Artwork";
 import { Meter } from "../../components/charts";
 import { ErrorPanel, LoadingRows } from "../../components/feedback";
 import { Kpi, KpiRow } from "../../components/Kpi";
-import { Section } from "../../components/layout";
 import { apiFetch, errorMessage } from "../../lib/api";
 import { t, tn } from "../../i18n";
 import { formatNumber, formatPercent, formatRate, relativeTime } from "../../lib/format";
@@ -175,30 +174,28 @@ export function NowPlaying({ state, protocol }: { state: AsyncState<Stream[]>; p
           tone="info"
         />
       </KpiRow>
-      <Section>
-        {!state.data ? (
-          <LoadingRows rows={2} />
-        ) : filtered.length ? (
-          <ul className="divide-y divide-border">
-            {filtered.map((s) => (
-              <StreamRow
-                key={s.id || s.key}
-                s={s}
-                stopping={stopping === s.id}
-                onStop={() => void stop(s.id)}
-              />
-            ))}
-          </ul>
-        ) : streams.length ? (
-          <p>{t("No streams match this protocol.")}</p>
-        ) : (
-          <EmptyState
-            icon={<Radio />}
-            title={t("Nothing is playing")}
-            description={t("Streams appear here as soon as a viewer presses play.")}
-          />
-        )}
-      </Section>
+      {!state.data ? (
+        <LoadingRows rows={2} />
+      ) : filtered.length ? (
+        <ul className="divide-y divide-border overflow-hidden rounded-xl border border-border bg-surface px-4">
+          {filtered.map((s) => (
+            <StreamRow
+              key={s.id || s.key}
+              s={s}
+              stopping={stopping === s.id}
+              onStop={() => void stop(s.id)}
+            />
+          ))}
+        </ul>
+      ) : streams.length ? (
+        <p>{t("No streams match this protocol.")}</p>
+      ) : (
+        <EmptyState
+          icon={<Radio />}
+          title={t("Nothing is playing")}
+          description={t("Streams appear here as soon as a viewer presses play.")}
+        />
+      )}
     </>
   );
 }

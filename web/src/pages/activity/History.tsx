@@ -4,7 +4,6 @@ import { Link, useSearchParams } from "react-router-dom";
 import { Drawer } from "../../components/Drawer";
 import { ErrorPanel, LoadingRows } from "../../components/feedback";
 import { Kpi, KpiRow } from "../../components/Kpi";
-import { Section } from "../../components/layout";
 import { apiFetch } from "../../lib/api";
 import { fixed, formatDateTime, formatNumber, formatPercent } from "../../lib/format";
 import { useAsync } from "../../lib/hooks";
@@ -65,7 +64,7 @@ export function ViewingFilters({
         type="number"
         min={2000}
         max={new Date().getFullYear()}
-        placeholder={t("Year in review")}
+        placeholder={t("Year")}
         value={value.year}
         onChange={(e) => onChange({ ...value, year: e.target.value })}
       />
@@ -154,71 +153,69 @@ export function PlayHistory({
           tone="success"
         />
       </KpiRow>
-      <Section>
-        {!history ? (
-          <LoadingRows rows={4} />
-        ) : history.length ? (
-          <PagedTable
-            rows={history}
-            rowKey={(p) => p.id}
-            pageSize={20}
-            onRowClick={(p) => openPlay(p.id)}
-            empty={t("No recorded plays in this period.")}
-            defaultSort={{ key: "started", dir: "desc" }}
-            labels={pagedTableLabels({
-              searchLabel: t("Search play history"),
-              searchPlaceholder: t("Find a title, viewer or device…"),
-            })}
-            columns={[
-              {
-                key: "title",
-                header: t("Title / viewer"),
-                search: (p) => p.title + " " + p.username,
-                sortValue: (p) => p.title,
-                cell: (p) => (
-                  <>
-                    <p className="font-medium text-fg">{p.title}</p>
-                    <p className="text-xs text-fg-muted">{p.username || t("Unknown viewer")}</p>
-                  </>
-                ),
-              },
-              {
-                key: "started",
-                header: t("Started"),
-                sortValue: (p) => p.started,
-                cell: (p) => new Date(p.started * 1000).toLocaleString(getLocale()),
-              },
-              {
-                key: "device",
-                header: t("Device"),
-                search: (p) => (p.device || p.platform) + " " + p.decision,
-                cell: (p) => (
-                  <>
-                    {p.device || p.platform || t("Unknown")}
-                    <span className="block text-xs text-fg-muted">{p.decision}</span>
-                  </>
-                ),
-              },
-              {
-                key: "duration",
-                header: t("Viewing time"),
-                align: "right",
-                sortValue: (p) => p.watchedMs,
-                cell: (p) => t("{minutes} min", { minutes: fixed(p.watchedMs / 60000, 0) }),
-              },
-              { key: "status", header: t("Status"), cell: statusCell },
-            ]}
-          />
-        ) : (
-          <EmptyState
-            icon={<HistoryIcon />}
-            title={t("No plays yet")}
-            description={t(
-              "History starts when Ether observes playback. There are no recorded plays in this period.",
-            )}
-          />
-        )}
-      </Section>
+      {!history ? (
+        <LoadingRows rows={4} />
+      ) : history.length ? (
+        <PagedTable
+          rows={history}
+          rowKey={(p) => p.id}
+          pageSize={20}
+          onRowClick={(p) => openPlay(p.id)}
+          empty={t("No recorded plays in this period.")}
+          defaultSort={{ key: "started", dir: "desc" }}
+          labels={pagedTableLabels({
+            searchLabel: t("Search play history"),
+            searchPlaceholder: t("Find a title, viewer or device…"),
+          })}
+          columns={[
+            {
+              key: "title",
+              header: t("Title / viewer"),
+              search: (p) => p.title + " " + p.username,
+              sortValue: (p) => p.title,
+              cell: (p) => (
+                <>
+                  <p className="font-medium text-fg">{p.title}</p>
+                  <p className="text-xs text-fg-muted">{p.username || t("Unknown viewer")}</p>
+                </>
+              ),
+            },
+            {
+              key: "started",
+              header: t("Started"),
+              sortValue: (p) => p.started,
+              cell: (p) => new Date(p.started * 1000).toLocaleString(getLocale()),
+            },
+            {
+              key: "device",
+              header: t("Device"),
+              search: (p) => (p.device || p.platform) + " " + p.decision,
+              cell: (p) => (
+                <>
+                  {p.device || p.platform || t("Unknown")}
+                  <span className="block text-xs text-fg-muted">{p.decision}</span>
+                </>
+              ),
+            },
+            {
+              key: "duration",
+              header: t("Viewing time"),
+              align: "right",
+              sortValue: (p) => p.watchedMs,
+              cell: (p) => t("{minutes} min", { minutes: fixed(p.watchedMs / 60000, 0) }),
+            },
+            { key: "status", header: t("Status"), cell: statusCell },
+          ]}
+        />
+      ) : (
+        <EmptyState
+          icon={<HistoryIcon />}
+          title={t("No plays yet")}
+          description={t(
+            "History starts when Ether observes playback. There are no recorded plays in this period.",
+          )}
+        />
+      )}
       {drawer}
     </>
   );

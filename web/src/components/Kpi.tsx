@@ -44,7 +44,8 @@ export function Kpi({
             {label}
           </div>
           <div className="mt-3 truncate text-2xl font-semibold tabular-nums text-fg">{value}</div>
-          {detail ? <div className="mt-1 truncate text-xs text-fg-muted">{detail}</div> : null}
+          {/* The detail line is always reserved, so every KPI row is the same height. */}
+          <div className="mt-1 h-4 truncate text-xs text-fg-muted">{detail}</div>
         </div>
         {icon ? (
           <span
