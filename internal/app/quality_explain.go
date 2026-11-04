@@ -39,6 +39,7 @@ func qualityClients() []qualityClient {
 		{ID: "plex-web-chrome", Name: "Plex Web in Chrome", Product: "Plex Web", Platform: "Chrome"},
 		{ID: "plex-web-safari", Name: "Plex Web in Safari", Product: "Plex Web", Platform: "Safari"},
 		{ID: "plex-htpc", Name: "Plex HTPC", Product: "Plex HTPC", Platform: "Windows"},
+		{ID: "plex-kodi", Name: "Plex for Kodi", Product: "PM4K", Device: "Kodi"},
 		{ID: "plex-desktop", Name: "Plex for Windows and Mac", Product: "Plex for Windows", Platform: "Windows"},
 		{ID: "jellyfin", Name: "Jellyfin", Product: "Jellyfin", Protocol: "jellyfin"},
 		{ID: "emby", Name: "Emby", Product: "Emby", Protocol: "emby"},

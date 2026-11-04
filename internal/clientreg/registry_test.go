@@ -21,6 +21,41 @@ func TestRegistryVersionAndFallback(t *testing.T) {
 	}
 }
 
+func TestAppOverridesAreScoped(t *testing.T) {
+	phone := Identity{Product: "  plex for android (mobile) ", Platform: "Android", Device: "Pixel"}
+	tv := Identity{Product: "Plex for Android (TV)", Platform: "Android", Device: "Android TV"}
+	edit := core.ClientCapabilityOverride{Product: "Plex for Android (Mobile)", MaxHeight: 2160}
+	if !Playback(phone, []core.ClientCapabilityOverride{edit}).HeightLocked || Playback(tv, []core.ClientCapabilityOverride{edit}).HeightLocked {
+		t.Fatal("phone edit crossed app boundary")
+	}
+	kodi := Identity{Product: "PM4K", Device: "Kodi"}
+	htpc := Identity{Product: "Plex HTPC", Platform: "Windows", Device: "HTPC"}
+	for _, o := range []core.ClientCapabilityOverride{{Product: "Plex HTPC", MaxHeight: 720}, {ID: "htpc", MaxHeight: 720}} {
+		if !Playback(htpc, []core.ClientCapabilityOverride{o}).HeightLocked || Playback(kodi, []core.ClientCapabilityOverride{o}).HeightLocked {
+			t.Fatal("HTPC edit crossed into PM4K")
+		}
+	}
+	if !Playback(kodi, []core.ClientCapabilityOverride{{Product: "PM4K", MaxHeight: 720}}).HeightLocked || Playback(htpc, []core.ClientCapabilityOverride{{Product: "PM4K", MaxHeight: 720}}).HeightLocked {
+		t.Fatal("PM4K edit crossed into HTPC")
+	}
+}
+
+func TestLegacyAppOverrideAndExactPrecedence(t *testing.T) {
+	legacy := core.ClientCapabilityOverride{Product: "Plex for Android", ProductMatch: "contains", MaxHeight: 720, HDR10: new(bool)}
+	exact := core.ClientCapabilityOverride{Product: "Plex for Android (Mobile)", ProductExact: true, MaxHeight: 2160}
+	phone := Identity{Product: "Plex for Android (Mobile)", Platform: "Android"}
+	unlisted := Identity{Product: "Plex for Android experimental", Platform: "Android"}
+	for _, edits := range [][]core.ClientCapabilityOverride{{legacy, exact}, {exact, legacy}} {
+		got := Playback(phone, edits)
+		if got.MaxHeight != 2160 || got.HDR10 != Playback(phone, nil).HDR10 {
+			t.Fatalf("exact did not replace legacy: %+v", got)
+		}
+		if got := Playback(unlisted, edits); got.MaxHeight != 720 || got.HDR10 {
+			t.Fatalf("unlisted client lost legacy edit: %+v", got)
+		}
+	}
+}
+
 func TestPolicyMatchesHistoricalFamilies(t *testing.T) {
 	text := []string{"srt", "subrip", "webvtt", "vtt", "ass", "ssa"}
 	image := append(append([]string{}, text...), "pgs", "hdmv_pgs_subtitle", "vobsub", "dvd_subtitle")
