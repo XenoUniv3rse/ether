@@ -11,7 +11,7 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Field, SecretInput, Segmented } from "../../components/fields";
 import { localized, t } from "../../i18n";
 import { errorMessage } from "../../lib/api";
@@ -59,6 +59,9 @@ export function SourceEditor({
   const [busy, setBusy] = useState<"" | "save" | "refresh" | "delete">("");
   const [error, setError] = useState("");
   const [progress, setProgress] = useState<SourceProgress | null>(null);
+  const [progressRate, setProgressRate] = useState(0);
+  // First sample of the current import step, for a stable rows-or-bytes rate.
+  const rateBase = useRef<{ stage: string; at: number; value: number } | null>(null);
   const [files, setFiles] = useState<{ playlist: File | null; guide: File | null }>({
     playlist: null,
     guide: null,
@@ -88,6 +91,8 @@ export function SourceEditor({
     setFiles({ playlist: null, guide: null });
     setError("");
     setProgress(null);
+    setProgressRate(0);
+    rateBase.current = null;
   }, [source, initialKind]);
 
   const upload = (file: File | undefined, key: "playlist" | "guide") => {
@@ -121,12 +126,26 @@ export function SourceEditor({
     setBusy("save");
     setError("");
     setProgress(null);
+    setProgressRate(0);
+    rateBase.current = null;
     const progressId = `import-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
     const poll = window.setInterval(() => {
       void tv
         .sourceProgress(progressId)
         .then((p) => {
-          if (p) setProgress(p);
+          if (!p) return;
+          const stage = progressStage(p);
+          const value = progressValue(p, stage);
+          const now = Date.now();
+          const base = rateBase.current;
+          if (!base || base.stage !== stage) {
+            rateBase.current = { stage, at: now, value };
+            setProgressRate(0);
+          } else if (now - base.at >= 2000) {
+            const delta = value - base.value;
+            if (delta > 0) setProgressRate(delta / ((now - base.at) / 1000));
+          }
+          setProgress(p);
         })
         .catch(() => undefined);
     }, 750);
@@ -157,6 +176,8 @@ export function SourceEditor({
     } finally {
       window.clearInterval(poll);
       setProgress(null);
+      setProgressRate(0);
+      rateBase.current = null;
       setBusy("");
     }
   };
@@ -492,7 +513,7 @@ export function SourceEditor({
         </div>
         {busy === "save" ? (
           <p role="status" className="text-xs text-fg-muted">
-            {progress ? importProgressText(progress) : t("Starting import…")}
+            {progress ? importProgressText(progress, progressRate) : t("Starting import…")}
           </p>
         ) : null}
       </section>
@@ -500,40 +521,74 @@ export function SourceEditor({
   );
 }
 
-/** "Fetching guide · 1.2 GiB / 4.1 GiB" while the import request is open. */
-function importProgressText(p: SourceProgress): string {
+/** The import step whose counter is moving; the rate is measured per step. */
+function progressStage(p: SourceProgress): string {
+  if (p.phase === "saving") {
+    return p.channels && (p.savedChannels ?? 0) < p.channels ? "channels" : "listings";
+  }
+  return p.phase;
+}
+
+function progressValue(p: SourceProgress, stage: string): number {
+  if (stage === "channels") return p.savedChannels ?? 0;
+  if (stage === "listings") return p.savedProgrammes ?? 0;
+  return p.read;
+}
+
+function etaText(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds <= 0) return "";
+  if (seconds < 1) return t("almost done");
+  if (seconds < 60) return t("~{seconds}s left", { seconds: Math.round(seconds) });
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return t("~{minutes}m left", { minutes });
+  return t("~{hours}h {minutes}m left", {
+    hours: Math.floor(minutes / 60),
+    minutes: minutes % 60,
+  });
+}
+
+/** "Fetching guide · 1.2 GiB / 4.1 GiB · ~2m left" while an import runs. */
+function importProgressText(p: SourceProgress, rate: number): string {
+  let text: string;
+  let remaining = 0;
   if (p.phase === "saving") {
     if (p.channels && (p.savedChannels ?? 0) < p.channels) {
-      return t("Saving channels · {saved} of {total}", {
+      text = t("Saving channels · {saved} of {total}", {
         saved: formatNumber(p.savedChannels ?? 0),
         total: formatNumber(p.channels),
       });
-    }
-    if (p.programmes) {
-      return t("Saving listings · {saved} of {total}", {
+      remaining = p.channels - (p.savedChannels ?? 0);
+    } else if (p.programmes) {
+      text = t("Saving listings · {saved} of {total}", {
         saved: formatNumber(p.savedProgrammes ?? 0),
         total: formatNumber(p.programmes),
       });
+      remaining = p.programmes - (p.savedProgrammes ?? 0);
+    } else {
+      return t("Saving channels and listings");
     }
-    return t("Saving channels and listings");
-  }
-  const phase =
-    p.phase === "playlist"
-      ? t("Fetching playlist")
-      : p.phase === "guide"
-        ? t("Fetching guide")
-        : t("Starting import");
-  const size =
-    p.total && p.total > 0
-      ? `${formatBytes(p.read)} / ${formatBytes(p.total)}`
-      : p.read > 0
-        ? formatBytes(p.read)
+  } else {
+    const phase =
+      p.phase === "playlist"
+        ? t("Fetching playlist")
+        : p.phase === "guide"
+          ? t("Fetching guide")
+          : t("Starting import");
+    const size =
+      p.total && p.total > 0
+        ? `${formatBytes(p.read)} / ${formatBytes(p.total)}`
+        : p.read > 0
+          ? formatBytes(p.read)
+          : "";
+    const count =
+      p.phase === "guide" && p.programmes
+        ? t("{programmes} programmes", { programmes: formatNumber(p.programmes) })
         : "";
-  const count =
-    p.phase === "guide" && p.programmes
-      ? t("{programmes} programmes", { programmes: formatNumber(p.programmes) })
-      : "";
-  return [phase, size, count].filter(Boolean).join(" · ");
+    text = [phase, size, count].filter(Boolean).join(" · ");
+    if (p.total && p.total > p.read) remaining = p.total - p.read;
+  }
+  const eta = rate > 0 && remaining > 0 ? etaText(remaining / rate) : "";
+  return eta ? `${text} · ${eta}` : text;
 }
 
 /** Drop an empty login so plain sources stay plain. */

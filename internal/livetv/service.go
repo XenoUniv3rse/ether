@@ -1249,51 +1249,73 @@ func (s *Service) importSource(ctx context.Context, src Source) (Source, error) 
 	if _, err = tx.ExecContext(ctx, `DELETE FROM livetv_channels WHERE `+store.JSONText(store.DialectOf(s.o.DB), "data", "sourceId")+`=?`, src.ID); err != nil {
 		return src, err
 	}
+	// Insert in batches: one statement per row also fires the database's
+	// per-statement viewer-policy trigger once per row, which made a large
+	// import take many minutes. SQLite's default variable limit is 999.
+	batch := 1000
+	if store.DialectOf(s.o.DB) == store.SQLite {
+		batch = 150
+	}
 	stored := make([]Channel, 0, len(cs))
-	for i, c := range cs {
-		if previous, ok := oldByID[c.ID]; ok {
-			c.Number = previous.Number
-			c.Enabled = previous.Enabled
-			c.Favorite = previous.Favorite
-			c.Rating = previous.Rating
-			c.GuideID = previous.GuideID
-			c.GuideSourceID = previous.GuideSourceID
-			c.Transcode = previous.Transcode
-			c.StreamSources = mergeImportedStreams(c, previous)
-			if err := normalizeStreamSources(&c); err != nil {
-				return src, err
+	for start := 0; start < len(cs); start += batch {
+		end := min(start+batch, len(cs))
+		placeholders := make([]string, 0, end-start)
+		args := make([]any, 0, (end-start)*2)
+		for _, c := range cs[start:end] {
+			if previous, ok := oldByID[c.ID]; ok {
+				c.Number = previous.Number
+				c.Enabled = previous.Enabled
+				c.Favorite = previous.Favorite
+				c.Rating = previous.Rating
+				c.GuideID = previous.GuideID
+				c.GuideSourceID = previous.GuideSourceID
+				c.Transcode = previous.Transcode
+				c.StreamSources = mergeImportedStreams(c, previous)
+				if err := normalizeStreamSources(&c); err != nil {
+					return src, err
+				}
 			}
+			if guide, ok := g.Channels[c.GuideID]; ok && c.Logo == "" {
+				c.Logo = guide.Logo
+			}
+			b, e := json.Marshal(c)
+			if e != nil {
+				return src, e
+			}
+			placeholders = append(placeholders, "(?,?)")
+			args = append(args, c.ID, b)
+			stored = append(stored, c)
 		}
-		if guide, ok := g.Channels[c.GuideID]; ok && c.Logo == "" {
-			c.Logo = guide.Logo
-		}
-		b, e := json.Marshal(c)
-		if e != nil {
-			return src, e
-		}
-		if _, err = tx.ExecContext(ctx, `INSERT INTO livetv_channels(id,data) VALUES(?,?)`, c.ID, b); err != nil {
+		q := `INSERT INTO livetv_channels(id,data) VALUES ` + strings.Join(placeholders, ",")
+		if _, err = tx.ExecContext(ctx, q, args...); err != nil {
 			return src, err
 		}
-		stored = append(stored, c)
-		if progress != nil && (i+1)%100 == 0 {
-			progress.setSavedChannels(i + 1)
+		if progress != nil {
+			progress.setSavedChannels(end)
 		}
 	}
 	if progress != nil {
 		progress.setSavedChannels(len(stored))
 	}
-	for i, p := range g.Programmes {
-		b, e := json.Marshal(p)
-		if e != nil {
-			return src, e
+	for start := 0; start < len(g.Programmes); start += batch {
+		end := min(start+batch, len(g.Programmes))
+		placeholders := make([]string, 0, end-start)
+		args := make([]any, 0, (end-start)*5)
+		for _, p := range g.Programmes[start:end] {
+			b, e := json.Marshal(p)
+			if e != nil {
+				return src, e
+			}
+			placeholders = append(placeholders, "(?,?,?,?,?)")
+			args = append(args, src.ID, p.ChannelID, p.Start.UnixMilli(), p.End.UnixMilli(), b)
 		}
-		if _, err = tx.ExecContext(ctx, `INSERT INTO livetv_programmes(source_id,channel_id,start_ms,end_ms,data) VALUES(?,?,?,?,?)
-			ON CONFLICT(source_id,channel_id,start_ms) DO UPDATE SET end_ms=excluded.end_ms, data=excluded.data`,
-			src.ID, p.ChannelID, p.Start.UnixMilli(), p.End.UnixMilli(), b); err != nil {
+		q := `INSERT INTO livetv_programmes(source_id,channel_id,start_ms,end_ms,data) VALUES ` + strings.Join(placeholders, ",") + `
+			ON CONFLICT(source_id,channel_id,start_ms) DO UPDATE SET end_ms=excluded.end_ms, data=excluded.data`
+		if _, err = tx.ExecContext(ctx, q, args...); err != nil {
 			return src, err
 		}
-		if progress != nil && (i+1)%100 == 0 {
-			progress.setSavedProgrammes(i + 1)
+		if progress != nil {
+			progress.setSavedProgrammes(end)
 		}
 	}
 	if progress != nil {
