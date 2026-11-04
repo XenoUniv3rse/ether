@@ -438,6 +438,10 @@
   "m_020de65b71f2e0": "Kino-Knoten und Edge-Mediathek aktivieren das vollständige Vorladen von Filmen und Episoden. Alle Größen und Limits lassen sich im nächsten Schritt anpassen.",
   "m_020e1e8acc7bc5": "Releases suchen",
   "m_020e4a02bc94f2": "Eintrag",
+  "m_0210122fad75c1": {
+    "one": "{inherited} von {total} Indexern übernehmen diese Richtlinie; {count} hat eine eigene Identität",
+    "other": "{inherited} von {total} Indexern übernehmen diese Richtlinie; {count} haben eine eigene Identität"
+  },
   "m_0210700bb62862": "Beitritts-Token widerrufen",
   "m_0210bda2e03919": "Torrent-Handhabung",
   "m_0213959961d04a": "Newznab (Usenet)",
@@ -1312,6 +1316,7 @@
   "m_05f38d67c4d16f": "Programmkanal zuordnen",
   "m_05f5d1a9d9d041": "Katalogbewertung verwenden",
   "m_05f5f57b94335a": "Trakt- und Letterboxd-Dateien",
+  "m_05fba39a80da51": "Integrierte Websites und Stremio-Addons verwenden ihre eigene Identität.",
   "m_05fbd42a8980b2": "Du hast nicht gespeicherte Änderungen",
   "m_05fbde0dc24ff4": "Intro- und Abspann-Marker, damit Zuschauer sie überspringen können.",
   "m_05fca85a3878bb": "Intro überspringen",
@@ -2937,7 +2942,6 @@
   "m_0da74bdcaf79de": "Keine deklariert",
   "m_0da7d1eed7b9cc": "Cluster",
   "m_0da80f5a7fce71": "Jetzt fertig, den TMDB-Schlüssel später hinzufügen",
-  "m_0da8125667faac": "Was Newznab- und Torznab-Indexer sehen, wenn Ether sucht oder herunterlädt. Standard ist Ether; wähle einen echten Client für Seiten, die unbekannte Clients schlecht behandeln.",
   "m_0da887606ad840": "So melden sie sich an",
   "m_0da9d1f35ff95f": "Verwalte Sammlungen im Collection Studio. Serien werden in Episoden aufgelöst.",
   "m_0da9ebe6d8081c": "Swap {size}",
@@ -3353,6 +3357,7 @@
   "m_0f8edfd5434ec0": "Optionen konnten nicht geladen werden: {error}",
   "m_0f90618417a9de": "Vorwärmen und Prefetch",
   "m_0f920e347229a1": "Titel, die für diesen Zuschauer beobachtet werden. Jeder erscheint auf der Startseite, sobald er abspielbar ist.",
+  "m_0f941a001e1b93": "Was Newznab- und Torznab-Indexer sehen, wenn Ether sucht oder herunterlädt. Standard ist Ether; wähle einen echten Client für Seiten, die unbekannte Clients schlecht behandeln. Indexer mit der Einstellung Übernehmen verwenden diese Richtlinie; die eigene Identität eines Indexers hat Vorrang.",
   "m_0f94dc84dff3aa": {
     "one": "{count} passender Titel",
     "other": "{count} passende Titel"
@@ -3582,6 +3587,7 @@
   "m_10a557ed3fe993": "Marker-Abdeckung",
   "m_10a5fbb2ff3d29": "Stummschalten",
   "m_10a61d2adb37f5": "Blendet tote Kanäle für Zuschauer aus und holt sie zurück, sobald sie wieder laufen.",
+  "m_10a62ade2ca607": "Weniger Optionen",
   "m_10a95869fe0f6c": "{count} Titel, die niemand begonnen hat",
   "m_10aa31270e92a6": "Parameter",
   "m_10aea138220ce4": "das Audioformat ({format})",
@@ -4067,6 +4073,10 @@
   "m_12b4028079c9c2": "Die Beispielvorschau nutzt dasselbe Rezept wie die Installation",
   "m_12b6e101ca2a00": "Testen",
   "m_12b7c3e79b7467": "Unbestätigte Änderungen werden zurückgehalten, bis sie mit Plex abgeglichen sind.",
+  "m_12b7edbc2f6df6": {
+    "one": "{count} Indexer übernimmt diese Richtlinie",
+    "other": "Alle {count} Indexer übernehmen diese Richtlinie"
+  },
   "m_12b93b1921d466": "+{count} weitere",
   "m_12bad19683eb91": "Gerät hinzufügen",
   "m_12bb8c13b730bc": "Reserviert, einschließlich Overhead",
@@ -4112,6 +4122,7 @@
   "m_12f049fdd68d04": "Extragroß",
   "m_12f0eb2376d74f": "Debrid-Dienst",
   "m_12f20bdf71635c": "{name} entfernen?",
+  "m_12f2e0a7e7ba0e": "Suchen",
   "m_12f38826c0ce25": "Konfiguriert",
   "m_12f538b331c308": "Backup fehlgeschlagen",
   "m_12f54df22bbb38": "{name} konfigurieren",

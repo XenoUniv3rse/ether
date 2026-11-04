@@ -438,6 +438,10 @@
   "m_020de65b71f2e0": "Kinonode og Kantbibliotek slår på full forhåndslasting av filmer og episoder. Alle størrelser og grenser kan tilpasses i neste trinn.",
   "m_020e1e8acc7bc5": "Søk etter utgivelser",
   "m_020e4a02bc94f2": "Oppføring",
+  "m_0210122fad75c1": {
+    "one": "{inherited} av {total} indeksere arver denne retningslinjen; {count} har egen identitet",
+    "other": "{inherited} av {total} indeksere arver denne retningslinjen; {count} har egen identitet"
+  },
   "m_0210700bb62862": "Bli-med-token tilbakekalt",
   "m_0210bda2e03919": "Torrent-håndtering",
   "m_0213959961d04a": "Newznab (Usenet)",
@@ -1312,6 +1316,7 @@
   "m_05f38d67c4d16f": "Koble guidekanal",
   "m_05f5d1a9d9d041": "Bruk katalogens vurdering",
   "m_05f5f57b94335a": "Trakt- og Letterboxd-filer",
+  "m_05fba39a80da51": "Innebygde nettsteder og Stremio-utvidelser bruker sin egen identitet.",
   "m_05fbd42a8980b2": "Du har ulagrede endringer",
   "m_05fbde0dc24ff4": "Markører for intro og rulletekst slik at seere kan hoppe over dem.",
   "m_05fca85a3878bb": "Hopp over intro",
@@ -2937,7 +2942,6 @@
   "m_0da74bdcaf79de": "Ingen oppgitt",
   "m_0da7d1eed7b9cc": "Klynge",
   "m_0da80f5a7fce71": "Fullfør nå, legg til TMDB-nøkkelen senere",
-  "m_0da8125667faac": "Hva Newznab- og Torznab-indekserer ser når Ether søker eller laster ned. Standard er Ether; velg en ekte klient for nettsteder som behandler ukjente klienter dårlig.",
   "m_0da887606ad840": "Slik logger de inn",
   "m_0da9d1f35ff95f": "Administrer samlinger i Samlingsstudio. Serier utvides til episoder.",
   "m_0da9ebe6d8081c": "swap {size}",
@@ -3353,6 +3357,7 @@
   "m_0f8edfd5434ec0": "Kunne ikke laste inn valgene: {error}",
   "m_0f90618417a9de": "Forvarming og forhåndshenting",
   "m_0f920e347229a1": "Titler som overvåkes for denne seeren. Hver vises på Hjem når den kan streames.",
+  "m_0f941a001e1b93": "Hva Newznab- og Torznab-indeksere ser når Ether søker eller laster ned. Standard er Ether; velg en ekte klient for nettsteder som behandler ukjente klienter dårlig. Indeksere satt til Arv bruker denne retningslinjen; indekserens egen identitet vinner.",
   "m_0f94dc84dff3aa": {
     "one": "{count} samsvarende tittel",
     "other": "{count} samsvarende titler"
@@ -3582,6 +3587,7 @@
   "m_10a557ed3fe993": "Markørdekning",
   "m_10a5fbb2ff3d29": "Slå av lyden",
   "m_10a61d2adb37f5": "Skjuler døde kanaler for seerne og henter dem tilbake når de kommer seg.",
+  "m_10a62ade2ca607": "Færre alternativer",
   "m_10a95869fe0f6c": "{count} titler ingen har startet",
   "m_10aa31270e92a6": "parameter",
   "m_10aea138220ce4": "lydformatet ({format})",
@@ -4067,6 +4073,10 @@
   "m_12b4028079c9c2": "Eksempelvisningen bruker samme oppskrift som installasjonen",
   "m_12b6e101ca2a00": "Test",
   "m_12b7c3e79b7467": "Ubekreftede endringer holdes tilbake til de er kontrollert mot Plex.",
+  "m_12b7edbc2f6df6": {
+    "one": "{count} indekser arver denne retningslinjen",
+    "other": "Alle {count} indeksere arver denne retningslinjen"
+  },
   "m_12b93b1921d466": "+{count} til",
   "m_12bad19683eb91": "Legg til en enhet",
   "m_12bb8c13b730bc": "Reservert, inkludert overhead",
@@ -4112,6 +4122,7 @@
   "m_12f049fdd68d04": "Ekstra stor",
   "m_12f0eb2376d74f": "Debrid-tjeneste",
   "m_12f20bdf71635c": "Fjerne {name}?",
+  "m_12f2e0a7e7ba0e": "Søk",
   "m_12f38826c0ce25": "Konfigurert",
   "m_12f538b331c308": "Sikkerhetskopiering mislyktes",
   "m_12f54df22bbb38": "Konfigurer {name}",

@@ -447,6 +447,11 @@
   "m_020de65b71f2e0": "Nó cinema e Biblioteca de borda ativam o pré-carregamento completo de filmes e episódios. Todos os tamanhos e limites podem ser personalizados na próxima etapa.",
   "m_020e1e8acc7bc5": "Pesquisar releases",
   "m_020e4a02bc94f2": "Entrada",
+  "m_0210122fad75c1": {
+    "one": "{inherited} de {total} indexadores herdam esta política; {count} tem identidade própria",
+    "many": "{inherited} de {total} indexadores herdam esta política; {count} têm identidade própria",
+    "other": "{inherited} de {total} indexadores herdam esta política; {count} têm identidade própria"
+  },
   "m_0210700bb62862": "Token de adesão revogado",
   "m_0210bda2e03919": "Tratamento de torrents",
   "m_0213959961d04a": "Newznab (Usenet)",
@@ -1347,6 +1352,7 @@
   "m_05f38d67c4d16f": "Associar canal de guia",
   "m_05f5d1a9d9d041": "Usar avaliação do catálogo",
   "m_05f5f57b94335a": "Arquivos do Trakt e do Letterboxd",
+  "m_05fba39a80da51": "Sites integrados e complementos do Stremio usam a própria identidade.",
   "m_05fbd42a8980b2": "Você tem alterações não salvas",
   "m_05fbde0dc24ff4": "Marcadores de abertura e de créditos para que os espectadores possam pulá-los.",
   "m_05fca85a3878bb": "Pular a abertura",
@@ -3009,7 +3015,6 @@
   "m_0da74bdcaf79de": "Nenhum declarado",
   "m_0da7d1eed7b9cc": "Cluster",
   "m_0da80f5a7fce71": "Concluir agora, adicionar a chave TMDB depois",
-  "m_0da8125667faac": "O que os indexadores Newznab e Torznab veem quando o Ether busca ou baixa. O padrão é Ether; escolha um cliente real para sites que tratam mal clientes desconhecidos.",
   "m_0da887606ad840": "Como eles entram",
   "m_0da9d1f35ff95f": "Gerencie as coleções no Estúdio de coleções. As séries são expandidas em episódios.",
   "m_0da9ebe6d8081c": "swap {size}",
@@ -3436,6 +3441,7 @@
   "m_0f8edfd5434ec0": "Não foi possível carregar as opções: {error}",
   "m_0f90618417a9de": "Aquecimento e pré-busca",
   "m_0f920e347229a1": "Títulos acompanhados para este espectador. Cada um aparece no Início quando puder ser reproduzido.",
+  "m_0f941a001e1b93": "O que os indexadores Newznab e Torznab veem quando o Ether busca ou baixa. O padrão é Ether; escolha um cliente real para sites que tratam mal clientes desconhecidos. Indexadores definidos como Herdar usam esta política; a identidade própria do indexador tem prioridade.",
   "m_0f94dc84dff3aa": {
     "many": "{count} títulos correspondentes",
     "one": "{count} título correspondente",
@@ -3672,6 +3678,7 @@
   "m_10a557ed3fe993": "Cobertura de marcadores",
   "m_10a5fbb2ff3d29": "Silenciar",
   "m_10a61d2adb37f5": "Oculta canais fora do ar dos espectadores e os traz de volta quando se recuperam.",
+  "m_10a62ade2ca607": "Menos opções",
   "m_10a95869fe0f6c": "{count} títulos que ninguém começou",
   "m_10aa31270e92a6": "parâmetro",
   "m_10aea138220ce4": "o formato de áudio ({format})",
@@ -4172,6 +4179,11 @@
   "m_12b4028079c9c2": "A prévia de exemplo usa a mesma receita da instalação",
   "m_12b6e101ca2a00": "Testar",
   "m_12b7c3e79b7467": "As alterações não confirmadas ficam retidas até serem verificadas com o Plex.",
+  "m_12b7edbc2f6df6": {
+    "one": "{count} indexador herda esta política",
+    "many": "Todos os {count} indexadores herdam esta política",
+    "other": "Todos os {count} indexadores herdam esta política"
+  },
   "m_12b93b1921d466": "+{count} mais",
   "m_12bad19683eb91": "Adicionar um dispositivo",
   "m_12bb8c13b730bc": "Reservado, incluindo sobrecarga",
@@ -4218,6 +4230,7 @@
   "m_12f049fdd68d04": "Extragrande",
   "m_12f0eb2376d74f": "Serviço debrid",
   "m_12f20bdf71635c": "Remover {name}?",
+  "m_12f2e0a7e7ba0e": "Buscas",
   "m_12f38826c0ce25": "Configurado",
   "m_12f538b331c308": "Falha no backup",
   "m_12f54df22bbb38": "Configurar {name}",

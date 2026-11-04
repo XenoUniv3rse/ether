@@ -438,6 +438,10 @@
   "m_020de65b71f2e0": "Biografnode og Edge-bibliotek aktiverer fuld forudindlæsning af film og episoder. Alle størrelser og grænser kan tilpasses i næste trin.",
   "m_020e1e8acc7bc5": "Søg efter udgivelser",
   "m_020e4a02bc94f2": "Post",
+  "m_0210122fad75c1": {
+    "one": "{inherited} af {total} indeksere arver denne politik; {count} har sin egen identitet",
+    "other": "{inherited} af {total} indeksere arver denne politik; {count} har deres egen identitet"
+  },
   "m_0210700bb62862": "Join-token tilbagekaldt",
   "m_0210bda2e03919": "Håndtering af torrents",
   "m_0213959961d04a": "Newznab (Usenet)",
@@ -1312,6 +1316,7 @@
   "m_05f38d67c4d16f": "Knyt guidekanal",
   "m_05f5d1a9d9d041": "Brug katalogets bedømmelse",
   "m_05f5f57b94335a": "Trakt- og Letterboxd-filer",
+  "m_05fba39a80da51": "Indbyggede sider og Stremio-udvidelser bruger deres egen identitet.",
   "m_05fbd42a8980b2": "Du har ugemte ændringer",
   "m_05fbde0dc24ff4": "Markører for intro og rulletekster, så seere kan springe dem over.",
   "m_05fca85a3878bb": "Spring intro over",
@@ -2937,7 +2942,6 @@
   "m_0da74bdcaf79de": "Ingen angivet",
   "m_0da7d1eed7b9cc": "Cluster",
   "m_0da80f5a7fce71": "Afslut nu, tilføj TMDB-nøglen senere",
-  "m_0da8125667faac": "Hvad Newznab- og Torznab-indexere ser, når Ether søger eller henter. Standarden er Ether; vælg en rigtig klient til sider, der behandler ukendte klienter dårligt.",
   "m_0da887606ad840": "Sådan logger de ind",
   "m_0da9d1f35ff95f": "Administrer samlinger i Samlingsstudie. Serier udvides til episoder.",
   "m_0da9ebe6d8081c": "swap {size}",
@@ -3353,6 +3357,7 @@
   "m_0f8edfd5434ec0": "Kunne ikke indlæse valgmulighederne: {error}",
   "m_0f90618417a9de": "Forvarmning og forhåndshentning",
   "m_0f920e347229a1": "Titler, der overvåges for denne seer. Hver vises på deres Hjem, når den kan streames.",
+  "m_0f941a001e1b93": "Hvad Newznab- og Torznab-indeksere ser, når Ether søger eller downloader. Standarden er Ether; vælg en rigtig klient til sider, der behandler ukendte klienter dårligt. Indeksere sat til Overtag bruger denne politik; en indeksers egen identitet vinder.",
   "m_0f94dc84dff3aa": {
     "one": "{count} matchende titel",
     "other": "{count} matchende titler"
@@ -3582,6 +3587,7 @@
   "m_10a557ed3fe993": "Markørdækning",
   "m_10a5fbb2ff3d29": "Slå lyd fra",
   "m_10a61d2adb37f5": "Skjuler døde kanaler for seerne og henter dem tilbage, når de kommer sig.",
+  "m_10a62ade2ca607": "Færre valgmuligheder",
   "m_10a95869fe0f6c": "{count} titler, ingen har startet",
   "m_10aa31270e92a6": "parameter",
   "m_10aea138220ce4": "lydformatet ({format})",
@@ -4067,6 +4073,10 @@
   "m_12b4028079c9c2": "Eksempelvisningen bruger samme opskrift som installationen",
   "m_12b6e101ca2a00": "Test",
   "m_12b7c3e79b7467": "Ubekræftede ændringer holdes tilbage, indtil de er kontrolleret mod Plex.",
+  "m_12b7edbc2f6df6": {
+    "one": "{count} indekser arver denne politik",
+    "other": "Alle {count} indeksere arver denne politik"
+  },
   "m_12b93b1921d466": "+{count} mere",
   "m_12bad19683eb91": "Tilføj en enhed",
   "m_12bb8c13b730bc": "Reserveret, inklusive overhead",
@@ -4112,6 +4122,7 @@
   "m_12f049fdd68d04": "Ekstra stor",
   "m_12f0eb2376d74f": "Debrid-tjeneste",
   "m_12f20bdf71635c": "Fjern {name}?",
+  "m_12f2e0a7e7ba0e": "Søgninger",
   "m_12f38826c0ce25": "Konfigureret",
   "m_12f538b331c308": "Backup mislykkedes",
   "m_12f54df22bbb38": "Konfigurer {name}",

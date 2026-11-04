@@ -39,6 +39,7 @@ import type {
   ClusterStatus,
   EtherConfig,
   EtherUser,
+  IdentityPreset,
   JoinTokenInfo,
   LogEntry,
 } from "../lib/types";
@@ -118,6 +119,33 @@ function json(body: unknown, status = 200): Response {
 function err(status: number, code: string, message: string): Response {
   return json({ error: { code, message } }, status);
 }
+
+/** Mirrors internal/config/clientid.go identityPresets. */
+const IDENTITY_PRESETS: IdentityPreset[] = [
+  { key: "ether", userAgent: "Ether/1.0" },
+  {
+    key: "sonarr",
+    userAgent: "Sonarr/4.0.20.3014 (ubuntu 26.04)",
+    headers: { Accept: "application/rss+xml, text/rss+xml, application/xml, text/xml" },
+  },
+  {
+    key: "radarr",
+    userAgent: "Radarr/6.4.4.10685 (ubuntu 26.04)",
+    headers: { Accept: "application/rss+xml, text/rss+xml, application/xml, text/xml" },
+  },
+  {
+    key: "prowlarr",
+    userAgent: "Prowlarr/2.7.0.5723 (ubuntu 26.04)",
+    headers: { Accept: "application/rss+xml, text/rss+xml, application/xml, text/xml" },
+  },
+  {
+    key: "nzbhydra2",
+    userAgent: "NZBHydra2 9.2.0",
+    headers: { Accept: "application/xml", "Content-Type": "application/xml" },
+  },
+  { key: "sabnzbd", userAgent: "SABnzbd/5.1.3" },
+  { key: "nzbget", userAgent: "nzbget/26.3", headers: { Accept: "*/*" } },
+];
 
 function defaultConfig(): EtherConfig {
   return {
@@ -3746,6 +3774,7 @@ export function createFakeServer(opts: FakeOptions = {}) {
       return json({
         section: key,
         value: (state.config as unknown as Record<string, unknown>)[key],
+        ...(key === "clientIdentity" ? { presets: IDENTITY_PRESETS } : {}),
       });
     }
     if (seg[0] === "config" && seg[1] && method === "PUT") {

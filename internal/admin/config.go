@@ -128,7 +128,13 @@ func (h *Handler) handleGetSection(w http.ResponseWriter, r *http.Request) {
 	}
 	var all map[string]json.RawMessage
 	_ = json.Unmarshal(raw, &all)
-	writeJSON(w, http.StatusOK, map[string]any{"section": field, "value": json.RawMessage(all[field])})
+	out := map[string]any{"section": field, "value": json.RawMessage(all[field])}
+	if field == "clientIdentity" {
+		// The owner's selectors show each preset's literal user agent; serving
+		// the table keeps that display identical to what is sent.
+		out["presets"] = config.IdentityPresets()
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 // handlePutSection replaces (PUT) or patches (PATCH) one section. Both

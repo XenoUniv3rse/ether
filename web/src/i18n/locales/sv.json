@@ -438,6 +438,10 @@
   "m_020de65b71f2e0": "Biografnod och Edge-bibliotek aktiverar fullständig förladdning av filmer och avsnitt. Alla storlekar och gränser kan anpassas i nästa steg.",
   "m_020e1e8acc7bc5": "Sök releaser",
   "m_020e4a02bc94f2": "Post",
+  "m_0210122fad75c1": {
+    "one": "{inherited} av {total} indexerare ärver den här policyn; {count} har en egen identitet",
+    "other": "{inherited} av {total} indexerare ärver den här policyn; {count} har en egen identitet"
+  },
   "m_0210700bb62862": "Anslutningstoken återkallades",
   "m_0210bda2e03919": "Torrenthantering",
   "m_0213959961d04a": "Newznab (Usenet)",
@@ -1312,6 +1316,7 @@
   "m_05f38d67c4d16f": "Koppla guidekanal",
   "m_05f5d1a9d9d041": "Använd katalogens betyg",
   "m_05f5f57b94335a": "Trakt- och Letterboxd-filer",
+  "m_05fba39a80da51": "Inbyggda webbplatser och Stremio-tillägg använder sin egen identitet.",
   "m_05fbd42a8980b2": "Du har osparade ändringar",
   "m_05fbde0dc24ff4": "Markörer för intro och eftertexter så att tittare kan hoppa över dem.",
   "m_05fca85a3878bb": "Hoppa över intro",
@@ -2937,7 +2942,6 @@
   "m_0da74bdcaf79de": "Inga deklarerade",
   "m_0da7d1eed7b9cc": "Kluster",
   "m_0da80f5a7fce71": "Slutför nu, lägg till TMDB-nyckeln senare",
-  "m_0da8125667faac": "Vad Newznab- och Torznab-indexerare ser när Ether söker eller hämtar. Standard är Ether; välj en riktig klient för sajter som behandlar okända klienter illa.",
   "m_0da887606ad840": "Så loggar de in",
   "m_0da9d1f35ff95f": "Hantera samlingar i Samlingsstudion. Serier expanderas till avsnitt.",
   "m_0da9ebe6d8081c": "växlingsminne {size}",
@@ -3353,6 +3357,7 @@
   "m_0f8edfd5434ec0": "Kunde inte läsa in alternativen: {error}",
   "m_0f90618417a9de": "Uppvärmning och förhämtning",
   "m_0f920e347229a1": "Titlar som bevakas för den här tittaren. Var och en visas på Hem när den kan spelas.",
+  "m_0f941a001e1b93": "Vad Newznab- och Torznab-indexerare ser när Ether söker eller laddar ner. Standard är Ether; välj en riktig klient för webbplatser som behandlar okända klienter dåligt. Indexerare inställda på Ärv använder den här policyn; indexerarens egen identitet har företräde.",
   "m_0f94dc84dff3aa": {
     "one": "{count} matchande titel",
     "other": "{count} matchande titlar"
@@ -3582,6 +3587,7 @@
   "m_10a557ed3fe993": "Markörtäckning",
   "m_10a5fbb2ff3d29": "Ljud av",
   "m_10a61d2adb37f5": "Döljer döda kanaler för tittarna och tar tillbaka dem när de återhämtar sig.",
+  "m_10a62ade2ca607": "Färre alternativ",
   "m_10a95869fe0f6c": "{count} titlar som ingen har startat",
   "m_10aa31270e92a6": "parameter",
   "m_10aea138220ce4": "ljudformatet ({format})",
@@ -4067,6 +4073,10 @@
   "m_12b4028079c9c2": "Exempelförhandsvisningen använder samma recept som installationen",
   "m_12b6e101ca2a00": "Testa",
   "m_12b7c3e79b7467": "Obekräftade ändringar hålls kvar tills de har kontrollerats mot Plex.",
+  "m_12b7edbc2f6df6": {
+    "one": "{count} indexerare ärver den här policyn",
+    "other": "Alla {count} indexerare ärver den här policyn"
+  },
   "m_12b93b1921d466": "+{count} till",
   "m_12bad19683eb91": "Lägg till en enhet",
   "m_12bb8c13b730bc": "Reserverat, inklusive overhead",
@@ -4112,6 +4122,7 @@
   "m_12f049fdd68d04": "Extra stor",
   "m_12f0eb2376d74f": "Debrid-tjänst",
   "m_12f20bdf71635c": "Ta bort {name}?",
+  "m_12f2e0a7e7ba0e": "Sökningar",
   "m_12f38826c0ce25": "Konfigurerad",
   "m_12f538b331c308": "Säkerhetskopieringen misslyckades",
   "m_12f54df22bbb38": "Konfigurera {name}",

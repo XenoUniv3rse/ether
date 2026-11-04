@@ -85,9 +85,22 @@ func TestClientIdentitySection(t *testing.T) {
 		t.Fatalf("section GET leaks the header: %s", rec.Body)
 	}
 	var section struct {
-		Value json.RawMessage `json:"value"`
+		Value   json.RawMessage         `json:"value"`
+		Presets []config.IdentityPreset `json:"presets"`
 	}
 	decode(t, rec, &section)
+	wantPresets := []string{"ether", "sonarr", "radarr", "prowlarr", "nzbhydra2", "sabnzbd", "nzbget"}
+	if len(section.Presets) != len(wantPresets) {
+		t.Fatalf("presets = %+v", section.Presets)
+	}
+	for i, key := range wantPresets {
+		if section.Presets[i].Key != key {
+			t.Fatalf("preset %d = %q, want %q", i, section.Presets[i].Key, key)
+		}
+		if section.Presets[i].UserAgent == "" {
+			t.Fatalf("%s has no user agent", key)
+		}
+	}
 	// Sending the redacted form back keeps the stored value.
 	if rec = put(string(section.Value)); rec.Code != http.StatusOK {
 		t.Fatalf("re-PUT redacted section: %d %s", rec.Code, rec.Body)

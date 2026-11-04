@@ -438,6 +438,10 @@
   "m_020de65b71f2e0": "Elokuvasolmu ja Reunakirjasto ottavat käyttöön elokuvien ja jaksojen täyden esilatauksen. Kaikkia kokoja ja rajoja voi mukauttaa seuraavassa vaiheessa.",
   "m_020e1e8acc7bc5": "Hae julkaisuja",
   "m_020e4a02bc94f2": "Merkintä",
+  "m_0210122fad75c1": {
+    "one": "{total} indeksoijasta {inherited} perii tämän käytännön; {count} käyttää omaa identiteettiään",
+    "other": "{total} indeksoijasta {inherited} perii tämän käytännön; {count} käyttävät omaa identiteettiään"
+  },
   "m_0210700bb62862": "Liittymistoken peruttu",
   "m_0210bda2e03919": "Torrentien käsittely",
   "m_0213959961d04a": "Newznab (Usenet)",
@@ -1312,6 +1316,7 @@
   "m_05f38d67c4d16f": "Yhdistä oppaan kanava",
   "m_05f5d1a9d9d041": "Käytä luettelon arvostelua",
   "m_05f5f57b94335a": "Trakt- ja Letterboxd-tiedostot",
+  "m_05fba39a80da51": "Sisäänrakennetut sivustot ja Stremio-lisäosat käyttävät omaa identiteettiään.",
   "m_05fbd42a8980b2": "Sinulla on tallentamattomia muutoksia",
   "m_05fbde0dc24ff4": "Introjen ja lopputekstien merkinnät, jotta katselijat voivat ohittaa ne.",
   "m_05fca85a3878bb": "Ohita intro",
@@ -2937,7 +2942,6 @@
   "m_0da74bdcaf79de": "Ei ilmoitettuja",
   "m_0da7d1eed7b9cc": "Klusteri",
   "m_0da80f5a7fce71": "Valmis nyt, lisää TMDB-avain myöhemmin",
-  "m_0da8125667faac": "Mitä Newznab- ja Torznab-hakemistot näkevät, kun Ether hakee tai lataa. Oletus on Ether; valitse oikea asiakas sivustoille, jotka kohtelevat tuntemattomia asiakkaita huonosti.",
   "m_0da887606ad840": "Miten he kirjautuvat",
   "m_0da9d1f35ff95f": "Hallitse kokoelmia Kokoelmastudiossa. Sarjat laajenevat jaksoiksi.",
   "m_0da9ebe6d8081c": "swap {size}",
@@ -3353,6 +3357,7 @@
   "m_0f8edfd5434ec0": "Valintoja ei voitu ladata: {error}",
   "m_0f90618417a9de": "Esilämmitys ja esilataus",
   "m_0f920e347229a1": "Tälle katsojalle seurattavat teokset. Kukin näkyy etusivulla, kun sen voi toistaa.",
+  "m_0f941a001e1b93": "Mitä Newznab- ja Torznab-indeksoijat näkevät, kun Ether hakee tai lataa. Oletus on Ether; valitse oikea asiakas sivustoille, jotka kohtelevat tuntemattomia asiakkaita huonosti. Peri-asetuksessa olevat indeksoijat käyttävät tätä käytäntöä; indeksoijan oma identiteetti on etusijalla.",
   "m_0f94dc84dff3aa": {
     "one": "{count} vastaava nimike",
     "other": "{count} vastaavaa nimikettä"
@@ -3582,6 +3587,7 @@
   "m_10a557ed3fe993": "Merkintöjen kattavuus",
   "m_10a5fbb2ff3d29": "Mykistä",
   "m_10a61d2adb37f5": "Piilottaa toimimattomat kanavat katselijoilta ja tuo ne takaisin, kun ne toipuvat.",
+  "m_10a62ade2ca607": "Vähemmän vaihtoehtoja",
   "m_10a95869fe0f6c": "{count} nimikettä, joita kukaan ei ole aloittanut",
   "m_10aa31270e92a6": "parametri",
   "m_10aea138220ce4": "ääniformaatti ({format})",
@@ -4067,6 +4073,10 @@
   "m_12b4028079c9c2": "Esimerkkiesikatselu käyttää samaa reseptiä kuin asennus",
   "m_12b6e101ca2a00": "Testaa",
   "m_12b7c3e79b7467": "Vahvistamattomat muutokset pidätetään, kunnes ne on tarkistettu Plexistä.",
+  "m_12b7edbc2f6df6": {
+    "one": "{count} indeksoija perii tämän käytännön",
+    "other": "Kaikki {count} indeksoijaa perivät tämän käytännön"
+  },
   "m_12b93b1921d466": "+{count} lisää",
   "m_12bad19683eb91": "Lisää laite",
   "m_12bb8c13b730bc": "Varattu, mukaan lukien lisäkulu",
@@ -4112,6 +4122,7 @@
   "m_12f049fdd68d04": "Erittäin suuri",
   "m_12f0eb2376d74f": "Debrid-palvelu",
   "m_12f20bdf71635c": "Poistetaanko {name}?",
+  "m_12f2e0a7e7ba0e": "Haut",
   "m_12f38826c0ce25": "Määritetty",
   "m_12f538b331c308": "Varmuuskopiointi epäonnistui",
   "m_12f54df22bbb38": "Määritä {name}",

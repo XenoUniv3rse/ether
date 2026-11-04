@@ -447,6 +447,11 @@
   "m_020de65b71f2e0": "Nodo cinema e Libreria edge attivano il precaricamento completo di film ed episodi. Tutte le dimensioni e i limiti si possono personalizzare nel passaggio successivo.",
   "m_020e1e8acc7bc5": "Cerca release",
   "m_020e4a02bc94f2": "Voce",
+  "m_0210122fad75c1": {
+    "one": "{inherited} indicizzatori su {total} ereditano questo criterio; {count} ha un'identità propria",
+    "many": "{inherited} indicizzatori su {total} ereditano questo criterio; {count} hanno un'identità propria",
+    "other": "{inherited} indicizzatori su {total} ereditano questo criterio; {count} hanno un'identità propria"
+  },
   "m_0210700bb62862": "Token di adesione revocato",
   "m_0210bda2e03919": "Gestione dei torrent",
   "m_0213959961d04a": "Newznab (Usenet)",
@@ -1347,6 +1352,7 @@
   "m_05f38d67c4d16f": "Associa un canale guida",
   "m_05f5d1a9d9d041": "Usa la valutazione del catalogo",
   "m_05f5f57b94335a": "File di Trakt e Letterboxd",
+  "m_05fba39a80da51": "I siti integrati e gli add-on Stremio usano la propria identità.",
   "m_05fbd42a8980b2": "Hai modifiche non salvate",
   "m_05fbde0dc24ff4": "Marcatori di intro e titoli di coda per permettere agli spettatori di saltarli.",
   "m_05fca85a3878bb": "Salta l'intro",
@@ -3009,7 +3015,6 @@
   "m_0da74bdcaf79de": "Nessuno dichiarato",
   "m_0da7d1eed7b9cc": "Cluster",
   "m_0da80f5a7fce71": "Finisci ora, aggiungi la chiave TMDB dopo",
-  "m_0da8125667faac": "Ciò che vedono gli indexer Newznab e Torznab quando Ether cerca o scarica. Il valore predefinito è Ether; scegli un client reale per i siti che trattano male i client sconosciuti.",
   "m_0da887606ad840": "Come accedono",
   "m_0da9d1f35ff95f": "Gestisci le raccolte in Collection Studio. Le serie si espandono in episodi.",
   "m_0da9ebe6d8081c": "swap {size}",
@@ -3436,6 +3441,7 @@
   "m_0f8edfd5434ec0": "Impossibile caricare le scelte: {error}",
   "m_0f90618417a9de": "Preparazione e precaricamento",
   "m_0f920e347229a1": "Titoli seguiti per questo spettatore. Ognuno compare sulla sua Home quando si può riprodurre.",
+  "m_0f941a001e1b93": "Ciò che gli indicizzatori Newznab e Torznab vedono quando Ether cerca o scarica. Il valore predefinito è Ether; scegli un client reale per i siti che trattano male i client sconosciuti. Gli indicizzatori impostati su Eredita usano questo criterio; l'identità propria di un indicizzatore ha la precedenza.",
   "m_0f94dc84dff3aa": {
     "many": "{count} titoli corrispondenti",
     "one": "{count} titolo corrispondente",
@@ -3672,6 +3678,7 @@
   "m_10a557ed3fe993": "Copertura dei marcatori",
   "m_10a5fbb2ff3d29": "Disattiva l'audio",
   "m_10a61d2adb37f5": "Nasconde i canali morti agli spettatori e li ripristina quando tornano attivi.",
+  "m_10a62ade2ca607": "Meno opzioni",
   "m_10a95869fe0f6c": "{count} titoli che nessuno ha iniziato",
   "m_10aa31270e92a6": "parametro",
   "m_10aea138220ce4": "il formato audio ({format})",
@@ -4172,6 +4179,11 @@
   "m_12b4028079c9c2": "L’anteprima di esempio usa la stessa ricetta dell’installazione",
   "m_12b6e101ca2a00": "Prova",
   "m_12b7c3e79b7467": "Le modifiche non confermate restano in sospeso finché non vengono verificate con Plex.",
+  "m_12b7edbc2f6df6": {
+    "one": "{count} indicizzatore eredita questo criterio",
+    "many": "Tutti i {count} indicizzatori ereditano questo criterio",
+    "other": "Tutti i {count} indicizzatori ereditano questo criterio"
+  },
   "m_12b93b1921d466": "+{count} altri",
   "m_12bad19683eb91": "Aggiungi un dispositivo",
   "m_12bb8c13b730bc": "Riservato, incluso il sovraccarico",
@@ -4218,6 +4230,7 @@
   "m_12f049fdd68d04": "Molto grande",
   "m_12f0eb2376d74f": "Servizio debrid",
   "m_12f20bdf71635c": "Rimuovere {name}?",
+  "m_12f2e0a7e7ba0e": "Ricerche",
   "m_12f38826c0ce25": "Configurato",
   "m_12f538b331c308": "Backup non riuscito",
   "m_12f54df22bbb38": "Configura {name}",
