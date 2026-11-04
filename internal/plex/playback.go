@@ -1462,6 +1462,15 @@ func (s *Server) handleTranscodeStop(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusOK)
 			return
 		}
+		// Preserve the failure and the last client playhead even if stop
+		// removes the encoder before a terminal timeline is delivered.
+		if s.d.Transcoder != nil {
+			if session, ok := s.d.Transcoder.Session(id); ok {
+				if failed, ok := session.(interface{ ProgressiveFailed() bool }); ok && failed.ProgressiveFailed() {
+					s.rememberProgressiveStop(r.Context(), e)
+				}
+			}
+		}
 		shared := false
 		if s.d.Transcoder != nil && e.playID != "" {
 			for _, other := range s.transcodes.byPlayID(e.playID) {

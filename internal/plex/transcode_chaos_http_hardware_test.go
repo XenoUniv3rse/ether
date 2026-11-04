@@ -149,6 +149,23 @@ func TestTranscodeChaosHTTPHardware(t *testing.T) {
 	if rangeResp.StatusCode != http.StatusRequestedRangeNotSatisfiable {
 		t.Fatalf("range reconnect HTTP %d", rangeResp.StatusCode)
 	}
+	reconnect, e := http.NewRequestWithContext(ctx, "GET", server.URL+path, nil)
+	if e != nil {
+		t.Fatal(e)
+	}
+	reconnect.Header.Set("X-Plex-Token", ownerToken)
+	reconnect.Header.Set("X-Plex-Client-Identifier", "client-1")
+	reconnected, e := server.Client().Do(reconnect)
+	if e != nil {
+		t.Fatal(e)
+	}
+	io.Copy(io.Discard, reconnected.Body)
+	reconnected.Body.Close()
+	if reconnected.StatusCode != http.StatusBadGateway {
+		t.Fatalf("same-session reconnect HTTP %d", reconnected.StatusCode)
+	}
+	// Some clients stop their encoder before their terminal timeline arrives.
+	f.get(t, "/video/:/transcode/universal/stop?session=http-hardware", "X-Plex-Client-Identifier", "client-1")
 	// An exaggerated terminal timeline must not turn the abort into watched.
 	f.get(t, "/:/timeline?ratingKey="+fightClub.Key.String()+"&state=stopped&time=12000&duration=12000", "X-Plex-Client-Identifier", "client-1")
 	watchStatus, e := watch.Get(context.Background(), ownerUser.ID, fightClub.Key)

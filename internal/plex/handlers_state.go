@@ -108,6 +108,9 @@ func (s *Server) handleTimeline(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	if saved, ok := s.progressiveStops.get(user.ID, pr.ClientID, pr.SessionID, key, s.now()); ok {
+		offset, duration = saved.offset, saved.duration
+	}
 	if !s.reportBrokerTimeline(ctx, pr, key, offset, duration, state, sanitizeSessionID(q.Get("session"))) {
 		s.log.Warn("timeline report", "key", key, "state", state)
 	}

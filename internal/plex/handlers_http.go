@@ -101,6 +101,10 @@ func (s *Server) handleStartHTTP(w http.ResponseWriter, r *http.Request) {
 	if existing, ok := s.d.Transcoder.Session(p.sessionID); ok && existing != nil {
 		if entry.started && entry.offset == p.offset {
 			if hs, ok := existing.(core.HTTPSession); ok {
+				if failed, ok := hs.(interface{ ProgressiveFailed() bool }); ok && failed.ProgressiveFailed() && r.Header.Get("Range") == "" {
+					http.Error(w, "progressive transcode failed; start a new session", http.StatusBadGateway)
+					return
+				}
 				s.notePlexEncoder(p.sessionID, frontend.StreamHTTP, dec, p.offset)
 				unlockEncoder()
 				unlockOwner()
@@ -132,6 +136,7 @@ func (s *Server) handleStartHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.bindTranscodeStarted(entry, dec, p.offset)
+	s.progressiveStops.clear(pr.User.ID, pr.ClientID, pr.SessionID, p.key)
 	s.notePlexEncoder(p.sessionID, frontend.StreamHTTP, dec, p.offset)
 	unlockEncoder()
 	unlockOwner()
