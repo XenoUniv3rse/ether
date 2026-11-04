@@ -161,7 +161,29 @@ func (s *Server) smartPlaylistBrowse(ctx context.Context, pr *Request, uri strin
 	if t == "" {
 		t = sec.Type
 	}
-	return s.browse(ctx, pr, s.parseBrowse(ctx, sec, t, pr.User, q, raw))
+	br := s.parseBrowse(ctx, sec, t, pr.User, q, raw)
+	if t == core.TypeShow {
+		// Select episodes by the complete show predicate in SQL. Do not
+		// reinterpret show title/year/watch rules as episode rules or expand
+		// all matching shows in memory before paging.
+		show := br.q.Filter
+		if br.unwatched != nil || br.inProgress != nil || br.lastViewedAfter > 0 || br.lastViewedBefore > 0 {
+			var uid int64
+			if pr.User != nil && s.d.State != nil {
+				uid = pr.User.ID
+			}
+			state := core.FilterGroup{UserID: uid, Unwatched: br.unwatched, InProgress: br.inProgress, LastViewedAfter: br.lastViewedAfter, LastViewedBefore: br.lastViewedBefore}
+			if show.Group == nil {
+				show.Group = &state
+			} else {
+				show.Group = &core.FilterGroup{Operator: "and", Children: []core.FilterGroup{*show.Group, state}}
+			}
+			br.unwatched, br.inProgress = nil, nil
+			br.lastViewedAfter, br.lastViewedBefore = 0, 0
+		}
+		br.q.Filter = core.Filter{Type: core.TypeEpisode, Group: &core.FilterGroup{ParentOnly: true, Filter: &show}}
+	}
+	return s.browse(ctx, pr, br)
 }
 
 func titleKeys(ts []core.Title) []core.RatingKey {
@@ -502,7 +524,8 @@ func (s *Server) handlePlaylistItems(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		mc := &model.MediaContainer{RatingKey: pl.Key.String(), Key: "/playlists/" + pl.Key.String() + "/items", Title1: pl.Title, PlaylistType: "video", Smart: model.Ptr(true), LeafCount: model.Ptr(total), Composite: "/playlists/" + pl.Key.String() + "/composite/1"}
-		mc.Metadata = s.renderTitles(ctx, pr, titles, renderOpts{media: true})
+		storedOnly := len(titles) > 0 && titles[0].Type == core.TypeEpisode
+		mc.Metadata = s.renderTitles(ctx, pr, titles, renderOpts{media: true, storedOnly: storedOnly})
 		for i := range mc.Metadata {
 			mc.Metadata[i].PlaylistItemID = int64(offset + i + 1)
 		}

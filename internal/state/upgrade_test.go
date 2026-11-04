@@ -49,6 +49,13 @@ func migrationKeys(t *testing.T, db *sql.DB) map[string]bool {
 	return got
 }
 
+func TestSmartPlaylistMigrationPostgresDDL(t *testing.T) {
+	const ddl = `ALTER TABLE state_playlists ADD COLUMN smart_uri TEXT NOT NULL DEFAULT '';`
+	if got := store.TranslateDDL(ddl); got != ddl {
+		t.Fatalf("PostgreSQL migration = %q", got)
+	}
+}
+
 func requireMigrations(t *testing.T, db *sql.DB, want []string, absent []string) {
 	t.Helper()
 	got := migrationKeys(t, db)
@@ -94,7 +101,7 @@ func assertFreshSchema(t *testing.T, ctx context.Context, db *sql.DB) {
 		t.Fatal(err)
 	}
 	requireMigrations(t, db, []string{
-		"state/1", "state/2", "state/3", "state/4",
+		"state/1", "state/2", "state/3", "state/4", "state/6",
 		"state_plexwatch/1", "state_plexwatch/2", "state_plexwatch/3", "state_plexwatch/4",
 	}, []string{"state/5"})
 	var watchAt, ratingAt, consent, neverSent int64
