@@ -51,6 +51,15 @@ const (
 	msgDebridAuth       = "Your debrid service rejected Ether's API key: check the account under Sources › Debrid."
 	msgNotCached        = "No cached release on your debrid account right now: every release found was uncached or blocked by the provider. Try again later."
 	msgDownloadQueued   = "Not cached yet: Ether sent it to your debrid service to download. Try again in a few minutes."
+	// Every release is a torrent no debrid account holds, with the owner's
+	// "Cached torrents only" on: nothing downloads until it is turned off.
+	msgNotCachedOnly       = "No cached copy of this title on your debrid service. Turn off Cached torrents only under Sources › Debrid to download it, or try again later."
+	msgNotCachedOnlyNoNZB  = "No cached copy of this title on your debrid service, and Usenet found no release. Turn off Cached torrents only under Sources › Debrid to download it, or try again later."
+	msgNotCachedOnlyBadNZB = "No cached copy of this title on your debrid service, and the Usenet releases found are incomplete. Turn off Cached torrents only under Sources › Debrid to download it, or try again later."
+	msgNotCachedNoNZB      = "No cached release on your debrid account right now, and Usenet found no release. Try again later."
+	msgNotCachedBadNZB     = "No cached release on your debrid account right now, and the Usenet releases found are incomplete. Try again later."
+	msgDownloadRefused     = "Not cached, and your debrid service would not download it. Try again later, or pick another version."
+	msgDownloadLimit       = "Not cached, and your debrid account is at its limit of active downloads, so nothing new can start. Remove finished or stalled downloads from the account, or try again later."
 )
 
 func playbackMessage(err error) string {
@@ -65,8 +74,8 @@ func playbackMessage(err error) string {
 		return msgNoSources
 	case errors.Is(err, core.ErrDownloadQueued):
 		return msgDownloadQueued
-	case onlyNotCached(err):
-		return msgNotCached
+	case errors.As(err, new(*core.UncachedError)), onlyNotCached(err):
+		return notCachedMessage(err)
 	case errors.Is(err, core.ErrNotAvailable):
 		return msgNotAvailable
 	case errors.Is(err, core.ErrStreamLimit):
@@ -77,6 +86,48 @@ func playbackMessage(err error) string {
 		return "Indexers are temporarily at their limit. Ether will retry automatically; previously cached releases may still play."
 	}
 	return msgPlayFailed
+}
+
+// writeStartErr answers a failed start.m3u8, start.mpd or part request.
+// A 503 alone leaves some players buffering, so when no debrid account holds
+// the title (cached-only, a download queued or refused) the reason is also
+// queued as terminationText for the client's next timeline, the way a
+// start stall is reported.
+func (s *Server) writeStartErr(w http.ResponseWriter, r *http.Request, pr *Request, err error) {
+	if pr != nil && pr.User != nil && errors.Is(err, core.ErrNotCached) {
+		s.setTermination(trackID(pr.User.ID, pr.ClientID, pr.SessionID), playbackMessage(err))
+	}
+	s.writeErr(w, r, err)
+}
+
+// notCachedMessage words a failure whose every cause is core.ErrNotCached:
+// the account's download limit or a refused download first (the owner can
+// act on those), then what the resolver said about the owner's setting and
+// Usenet (*core.UncachedError), the same reason Quality › History records.
+func notCachedMessage(err error) string {
+	switch {
+	case errors.Is(err, core.ErrDownloadLimit):
+		return msgDownloadLimit
+	case errors.Is(err, core.ErrDownloadRefused):
+		return msgDownloadRefused
+	}
+	var ue *core.UncachedError
+	if !errors.As(err, &ue) {
+		return msgNotCached
+	}
+	switch {
+	case ue.CachedOnly && ue.Usenet == core.UsenetNone:
+		return msgNotCachedOnlyNoNZB
+	case ue.CachedOnly && ue.Usenet == core.UsenetFailed:
+		return msgNotCachedOnlyBadNZB
+	case ue.CachedOnly:
+		return msgNotCachedOnly
+	case ue.Usenet == core.UsenetNone:
+		return msgNotCachedNoNZB
+	case ue.Usenet == core.UsenetFailed:
+		return msgNotCachedBadNZB
+	}
+	return msgNotCached
 }
 
 // onlyNotCached reports whether every cause in err is core.ErrNotCached
@@ -1103,7 +1154,7 @@ func (s *Server) handleStartHLS(w http.ResponseWriter, r *http.Request) {
 	}
 	if err, failed := s.transcodes.takeFailure(p.sessionID, pr.User.ID, p.key, s.now()); failed {
 		s.log.Info("start playback failed", "key", p.key, "reason", playbackMessage(err), "err", err, "decision", "remembered")
-		s.writeErr(w, r, err)
+		s.writeStartErr(w, r, pr, err)
 		return
 	}
 	entry, ok := s.transcodes.get(p.sessionID)
@@ -1120,7 +1171,7 @@ func (s *Server) handleStartHLS(w http.ResponseWriter, r *http.Request) {
 				return // the player dropped this request; its preparation carries on
 			}
 			s.log.Info("start playback failed", "key", p.key, "reason", playbackMessage(err), "err", err)
-			s.writeErr(w, r, err)
+			s.writeStartErr(w, r, pr, err)
 			return
 		}
 		entry, _ = s.transcodes.get(p.sessionID)
@@ -1526,7 +1577,7 @@ func (s *Server) handlePart(w http.ResponseWriter, r *http.Request) {
 		ps, err = s.prepareForRelease(ctx, pr.User, key, caps, releaseID)
 		if err != nil {
 			s.log.Info("direct play failed", "key", key, "reason", playbackMessage(err), "err", err)
-			s.writeErr(w, r, err)
+			s.writeStartErr(w, r, pr, err)
 			return
 		}
 		s.observePlaybackDecision(ctx, pr, &playRequest{key: key, caps: caps, partReleaseID: releaseID, requestedPart: id}, ps)

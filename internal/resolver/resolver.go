@@ -101,6 +101,8 @@ type CandidateTrace struct {
 	Healthy        bool          `json:"healthy"`
 	FetchDuration  time.Duration `json:"fetchDuration"`
 	HealthDuration time.Duration `json:"healthDuration"`
+	// err is the validation error behind Reason (uncached.go).
+	err error
 }
 
 // Trace is one recorded resolution attempt, for the admin UI.
@@ -881,6 +883,7 @@ func (s *Service) resolve(ctx context.Context, req core.ResolveRequest, profile 
 		}
 		trace.Candidates[cands[0].trace].Rejected = true
 		trace.Candidates[cands[0].trace].Reason = "nzb fetch: " + err.Error()
+		trace.Candidates[cands[0].trace].err = err
 		if !permanentFailure(err) {
 			optimisticErr = err
 		}
@@ -897,6 +900,14 @@ func (s *Service) resolve(ctx context.Context, req core.ResolveRequest, profile 
 		if err != nil {
 			if res := s.lastResort(ctx, inconclusive, t.Key, concat(lead, primary, downgrades), &trace); res != nil {
 				return res, nil
+			}
+			// The viewer's own pick (lead) is the one sent to download.
+			tried := concat(lead, primary)
+			if i, payload, uerr, ok := s.uncachedOutcome(ctx, tried, results, &trace); ok {
+				if i >= 0 {
+					return s.acceptResolution(ctx, t.Key, tried, i, payload, &trace), nil
+				}
+				return nil, uerr
 			}
 			trace.Err = err.Error()
 			return nil, err
@@ -954,6 +965,17 @@ func (s *Service) resolve(ctx context.Context, req core.ResolveRequest, profile 
 	}
 	if searchErr != nil {
 		return nil, failed(nil)
+	}
+	// Every release checked was a torrent no debrid account holds (or a
+	// broken Usenet release): say so, send one to download when the owner
+	// allows it, and do not record the title unavailable (a download may
+	// finish, or the provider may cache it, at any time).
+	all := concat(lead, primary, rescuePrimary, downgrades)
+	if i, payload, uerr, ok := s.uncachedOutcome(ctx, all, results, &trace); ok {
+		if i >= 0 {
+			return s.acceptResolution(ctx, t.Key, all, i, payload, &trace), nil
+		}
+		return nil, uerr
 	}
 	// A capped warm-up did not check every candidate, so it proves nothing.
 	if !clientRejected && len(req.Exclude) == 0 && len(cands) <= maxHealthAttempts && !(core.IsSpeculative(ctx) && len(cands) > speculativeHealthAttempts) && !coverage.Incomplete() {

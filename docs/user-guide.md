@@ -153,7 +153,14 @@ the file over HTTPS from your debrid service; it never joins a torrent swarm and
 never downloads a whole file.
 
 - **Cached torrents only** (on by default): a torrent is used only if your
-  service can serve it now, so playback never waits for a download.
+  service can serve it now, so playback never waits for a download. When no
+  release of a title is cached, the player says so and suggests turning this
+  off. Turned off, pressing Play on such a title sends its best release to your
+  first debrid service that takes it (one download per title). The player says
+  it is downloading, and a later Play starts it once the download finishes. If
+  the service refuses the download or the account is at its active-download
+  limit, the player says that instead. The change applies at once, without a
+  restart.
 - **Remove uncached torrents** (on by default): torrents Ether added that turn
   out not to be cached are removed again. Cached torrents stay on your account,
   so the next play of that title starts straight away.

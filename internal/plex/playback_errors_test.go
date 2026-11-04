@@ -166,6 +166,12 @@ func TestPlaybackMessageNamesTheCause(t *testing.T) {
 		{"plain not available", fmt.Errorf("%q: %w", "x", core.ErrNotAvailable), msgNotAvailable},
 		{"sent to download", errors.Join(notCached("a"), fmt.Errorf("%q: %w", "b", core.ErrDownloadQueued)), msgDownloadQueued},
 		{"stream limit", core.ErrStreamLimit, msgStreamLimit},
+		{"cached-only", &core.UncachedError{Err: notCached("a"), CachedOnly: true}, msgNotCachedOnly},
+		{"cached-only, Usenet found nothing", &core.UncachedError{Err: notCached("a"), CachedOnly: true, Usenet: core.UsenetNone}, msgNotCachedOnlyNoNZB},
+		{"cached-only, Usenet releases broken", fmt.Errorf("%w (last failure: x)", &core.UncachedError{Err: notCached("a"), CachedOnly: true, Usenet: core.UsenetFailed}), msgNotCachedOnlyBadNZB},
+		{"warm-up with cached-only off", &core.UncachedError{Err: notCached("a"), Usenet: core.UsenetNone}, msgNotCachedNoNZB},
+		{"download limit", &core.UncachedError{Err: fmt.Errorf("%q: %w", "a", core.ErrDownloadLimit)}, msgDownloadLimit},
+		{"download refused after a transient add failure", &core.UncachedError{Err: fmt.Errorf("%w: %w", core.ErrDownloadRefused, errors.New("HTTP 503"))}, msgDownloadRefused},
 	}
 	for _, c := range cases {
 		if got := playbackMessage(c.err); got != c.want {

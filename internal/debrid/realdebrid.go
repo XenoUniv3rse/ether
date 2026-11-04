@@ -94,6 +94,8 @@ func (p *realDebrid) classify(status int, e rdError) error {
 		// locked or not activated, premium only, IP not allowed, traffic
 		// exhausted, fair-usage limit: the account, not the release.
 		return fmt.Errorf("real-debrid: %s: %w", msg, ErrAuth)
+	case 21: // too many active downloads: no new torrent until one finishes
+		return fmt.Errorf("real-debrid: %s: %w", msg, ErrDownloadLimit)
 	case 5, 34: // slow down, too many requests
 		return fmt.Errorf("real-debrid: %s: %w", msg, ErrRateLimited)
 	case 7, 24: // resource not found, file unavailable
@@ -207,14 +209,15 @@ func (p *realDebrid) Acquire(ctx context.Context, req AcquireRequest) (_ *Acquir
 			p.list.remember(req.InfoHash, id)
 		}
 	}()
-	cleanup := func() {
+	cleanup := func() bool {
 		if added && req.RemoveUncached {
 			rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+			defer cancel()
 			if req.mayRemove(rctx, id) {
-				_ = p.Remove(rctx, id)
+				return p.Remove(rctx, id) == nil
 			}
-			cancel()
 		}
+		return false
 	}
 	info, err := p.info(ctx, id)
 	for polls := 0; err == nil && info.Status == "magnet_conversion" && polls < p.opts.ReadyPolls*2; polls++ {
@@ -267,10 +270,11 @@ func (p *realDebrid) Acquire(ctx context.Context, req AcquireRequest) (_ *Acquir
 		cleanup()
 		return nil, fmt.Errorf("real-debrid: torrent %s: %w", info.Status, core.ErrNotCached)
 	default: // queued, downloading, compressing, uploading: not cached
-		if req.CachedOnly {
-			cleanup()
+		err := fmt.Errorf("real-debrid: torrent is %s: %w", info.Status, core.ErrNotCached)
+		if req.CachedOnly && cleanup() {
+			return nil, err
 		}
-		return nil, fmt.Errorf("real-debrid: torrent is %s: %w", info.Status, core.ErrNotCached)
+		return nil, pending(id, err)
 	}
 	chosen.Link = rdLinkFor(info, chosen.ID)
 	if chosen.Link == "" {

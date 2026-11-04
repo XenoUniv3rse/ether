@@ -46,6 +46,11 @@ var (
 	// after a burst of adds, for any torrent for a while. The release is
 	// skipped on that provider for now and repeated refusals pause adds.
 	ErrAddRefused = fmt.Errorf("debrid: the provider refused to add the torrent: %w", core.ErrNotCached)
+	// ErrDownloadLimit is the account at its active-download limit
+	// (Real-Debrid too_many_active_downloads, TorBox ACTIVE_LIMIT): it adds
+	// no new torrent for now, cached or not. The provider still answers and
+	// serves what it holds, so this is not an outage.
+	ErrDownloadLimit = fmt.Errorf("debrid: %w", core.ErrDownloadLimit)
 	// ErrNoProvider means no debrid provider is enabled.
 	ErrNoProvider = errors.New("debrid: no debrid provider is enabled")
 	// ErrUnsupported is an operation a provider does not offer.
@@ -62,6 +67,35 @@ type rateLimitError struct{ retryAfter time.Duration }
 
 func (e *rateLimitError) Error() string { return ErrRateLimited.Error() }
 func (e *rateLimitError) Unwrap() error { return ErrRateLimited }
+
+// pendingError is core.ErrNotCached for a torrent that stays on the account
+// unfinished (left to download, or an earlier download still running): a
+// later Acquire passes TorrentID to follow that download instead of adding
+// the torrent a second time.
+type pendingError struct {
+	torrentID string
+	err       error
+}
+
+func (e *pendingError) Error() string { return e.err.Error() }
+func (e *pendingError) Unwrap() error { return e.err }
+
+// pending marks err (core.ErrNotCached) as a download left on the account.
+func pending(torrentID string, err error) error {
+	if torrentID == "" {
+		return err
+	}
+	return &pendingError{torrentID: torrentID, err: err}
+}
+
+// pendingTorrent is the torrent id a pendingError names, or "".
+func pendingTorrent(err error) string {
+	var pe *pendingError
+	if errors.As(err, &pe) {
+		return pe.torrentID
+	}
+	return ""
+}
 
 // File is one file of a torrent as a provider lists it.
 type File struct {
@@ -128,7 +162,9 @@ type Account struct {
 // Provider is one debrid service. Implementations must never wait for an
 // actual torrent download: Acquire returns core.ErrNotCached for a torrent
 // the service cannot serve instantly (removing a torrent it just added when
-// req.CachedOnly and req.RemoveUncached are set).
+// req.CachedOnly and req.RemoveUncached are set). A torrent that stays on
+// the account unfinished is reported with pending(id, err), so the download
+// is followed rather than added again.
 type Provider interface {
 	Kind() string
 	// CheckCached reports which hashes are cached; ErrUnsupported when the

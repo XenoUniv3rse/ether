@@ -123,6 +123,7 @@ func (s *Service) validateRanked(ctx context.Context, cands []candidate, tr *Tra
 			return
 		}
 		ct.Rejected = true
+		ct.err = v.err
 		if v.err != nil {
 			ct.Reason = v.err.Error()
 		} else {
