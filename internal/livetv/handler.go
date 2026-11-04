@@ -182,6 +182,12 @@ func (s *Service) Handler() http.Handler {
 		if until.Sub(from) > 8*24*time.Hour {
 			until = from.Add(8 * 24 * time.Hour)
 		}
+		if c.Kind == "iptv" {
+			// An unsaved guide mapping previews the stored listings it would use.
+			ps, e := s.programmes(r.Context(), c, from, until)
+			ownerResult(w, ps, e)
+			return
+		}
 		ownerResult(w, Schedule(c, from, until), nil)
 	})
 	return r

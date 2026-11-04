@@ -324,8 +324,13 @@ func (s *Service) fillSourceStats(ctx context.Context, srcs []Source) error {
 	return s.planRefresh(ctx, srcs)
 }
 
-// GuideChannels searches stored XMLTV channels by case-insensitive substring
-// of name, any display name, or guide id.
+// maxGuideSearchWords bounds the per-word predicates one search builds.
+const maxGuideSearchWords = 6
+
+// GuideChannels searches stored XMLTV channels. Every word of q must appear,
+// in any order, in the name, a display name or the guide id, so "fox phoenix"
+// finds "FOX LOCAL Phoenix". Exact matches rank first, then channels that
+// still have listings ahead, then by name.
 func (s *Service) GuideChannels(ctx context.Context, q, source string, limit int) ([]GuideChannel, error) {
 	if limit <= 0 {
 		limit = 50
@@ -340,12 +345,26 @@ func (s *Service) GuideChannels(ctx context.Context, q, source string, limit int
 	}
 	now := s.o.Now().UnixMilli()
 	d := store.DialectOf(s.o.DB)
-	rows, err := s.o.DB.QueryContext(ctx, guideChannelsCTE+`SELECT g.source_id, g.guide_id, g.name, g.logo,
-		(SELECT COUNT(*) FROM livetv_programmes p WHERE p.source_id=g.source_id AND p.channel_id=g.guide_id AND p.end_ms>?1),
-		(SELECT MAX(end_ms) FROM livetv_programmes p WHERE p.source_id=g.source_id AND p.channel_id=g.guide_id)
+	args := []any{now, source, q, limit}
+	words := strings.Fields(q)
+	if len(words) > maxGuideSearchWords {
+		words = words[:maxGuideSearchWords]
+	}
+	match := ""
+	for _, w := range words {
+		args = append(args, w)
+		p := fmt.Sprintf("?%d", len(args))
+		match += ` AND (` + store.Contains(d, "lower(g.name)", p) + ` OR ` + store.Contains(d, "lower(g.guide_id)", p) + ` OR ` + store.Contains(d, "lower(g.names)", p) + `)`
+	}
+	rows, err := s.o.DB.QueryContext(ctx, guideChannelsCTE+`SELECT source_id, guide_id, name, logo, ahead, until_ms FROM (
+		SELECT g.source_id, g.guide_id, g.name, g.logo,
+			(SELECT COUNT(*) FROM livetv_programmes p WHERE p.source_id=g.source_id AND p.channel_id=g.guide_id AND p.end_ms>?1) AS ahead,
+			(SELECT MAX(end_ms) FROM livetv_programmes p WHERE p.source_id=g.source_id AND p.channel_id=g.guide_id) AS until_ms,
+			CASE WHEN lower(g.guide_id)=?3 OR lower(g.name)=?3 THEN 1 ELSE 0 END AS exact,
+			lower(g.name) AS sort_name
 		FROM gc g
-		WHERE (?2='' OR g.source_id=?2) AND (?3='' OR `+store.Contains(d, "lower(g.name)", "?3")+` OR `+store.Contains(d, "lower(g.guide_id)", "?3")+` OR `+store.Contains(d, "lower(g.names)", "?3")+`)
-		ORDER BY (lower(g.guide_id)=?3 OR lower(g.name)=?3) DESC, lower(g.name), g.source_id, g.guide_id LIMIT ?4`, now, source, q, limit)
+		WHERE (?2='' OR g.source_id=?2)`+match+`) m
+		ORDER BY exact DESC, CASE WHEN ahead>0 THEN 1 ELSE 0 END DESC, sort_name, source_id, guide_id LIMIT ?4`, args...)
 	if err != nil {
 		return nil, err
 	}

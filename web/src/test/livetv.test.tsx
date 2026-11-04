@@ -287,7 +287,7 @@ describe("Live TV studio", () => {
     ).toBe(true);
   });
 
-  it("maps a channel without listings to a guide channel from Guide data", async () => {
+  it("maps a channel without listings from the Guide tab's drawer", async () => {
     const calls = backend([iptv("c1")], (url) => {
       if (url.endsWith("/livetv/guide/coverage")) return [{ channelId: "c1", programmes: 0 }];
       if (url.includes("/livetv/guide/channels"))
@@ -303,9 +303,12 @@ describe("Live TV studio", () => {
       return undefined;
     });
     renderLiveTV("/livetv/guide-data");
-    expect(await screen.findByText(/1 of 1 need a guide/, {}, WAIT)).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Map guide for News 24" }));
+    expect(
+      await screen.findByText(/0 of 1 on-air channels have listings/, {}, WAIT),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /Guide for .*News 24/ }));
     fireEvent.click(await screen.findByRole("button", { name: /News 24 HD/ }, WAIT));
+    fireEvent.click(await screen.findByRole("button", { name: /Use this guide/ }, WAIT));
     await waitFor(() => expect(sent(calls, "PUT", /\/livetv\/channels\/c1$/)).toHaveLength(1));
     expect(body(sent(calls, "PUT", /\/livetv\/channels\/c1$/)[0])).toMatchObject({
       guideSourceId: "epg1",
@@ -350,9 +353,8 @@ describe("Live TV studio", () => {
     );
     renderLiveTV("/livetv/guide-data");
     fireEvent.click(await screen.findByRole("button", { name: /Auto-match/ }, WAIT));
-    const proposals = await screen.findByRole("region", { name: "Suggested matches" }, WAIT);
-    fireEvent.click(within(proposals).getByLabelText("Accept match for Cartoons"));
-    fireEvent.click(within(proposals).getByRole("button", { name: /Apply 1/ }));
+    fireEvent.click(await screen.findByLabelText("Accept match for Cartoons", {}, WAIT));
+    fireEvent.click(await screen.findByRole("button", { name: /Apply 1/ }, WAIT));
     await waitFor(() => expect(sent(calls, "POST", /\/livetv\/guide\/match$/)).toHaveLength(2));
     const [dry, apply] = sent(calls, "POST", /\/livetv\/guide\/match$/);
     expect(body(dry)).toEqual({ dryRun: true });
