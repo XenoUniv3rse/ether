@@ -22,7 +22,6 @@ import {
   formatSeconds,
   measuredNote,
   pct,
-  reasonPhrase,
   startTone,
 } from "./experience-format";
 import type { ExperienceOverview } from "./types";
@@ -101,6 +100,7 @@ export function Experience() {
               value={
                 <ToneValue
                   value={formatSeconds(h.startMedianMs)}
+                  dot={false}
                   tone={startTone(h.startMedianMs)}
                 />
               }
@@ -120,6 +120,7 @@ export function Experience() {
               value={
                 <ToneValue
                   value={formatPerHour(h.bufferEventsPerHour)}
+                  dot={false}
                   tone={bufferTone(h.bufferEventsPerHour)}
                 />
               }
@@ -139,6 +140,7 @@ export function Experience() {
               value={
                 <ToneValue
                   value={String(h.failedStarts)}
+                  dot={false}
                   tone={failedTone(h.failedStarts, h.plays)}
                 />
               }
@@ -149,20 +151,14 @@ export function Experience() {
             <DashboardMetricCard
               label={t("Direct play")}
               value={pct(direct)}
-              detail={
-                h.topTranscodeReason
-                  ? t("Most transcodes: {reason}", {
-                      reason: reasonPhrase(h.topTranscodeReason.kind, h.topTranscodeReason.detail),
-                    })
-                  : t("Plays sent to the app as-is")
-              }
+              detail={t("Plays sent to the app as-is")}
               icon={<PlayCircle size={18} />}
               tone="info"
             />
           </div>
 
           <DashboardPanel title={t("Household detail")} icon={<Gauge size={16} />}>
-            <MetricFacts m={h} />
+            <MetricFacts m={h} wide />
           </DashboardPanel>
 
           <PagedTable<Row>

@@ -32,10 +32,21 @@ import {
 import type { ExperienceMetrics, ExperiencePlay, ExperienceViewer } from "./types";
 
 /** A value coloured against its target, with a dot so colour is not the only cue. */
-export function ToneValue({ value, tone }: { value: string; tone?: Tone }) {
+export function ToneValue({
+  value,
+  tone,
+  dot = true,
+}: {
+  value: string;
+  tone?: Tone;
+  /** Tiles already carry the tone in their accent; they colour the value only. */
+  dot?: boolean;
+}) {
   return (
     <span className={cn("inline-flex items-center gap-1.5 tabular-nums", tone && TONE_TEXT[tone])}>
-      {tone ? <span aria-hidden className={cn("size-1.5 rounded-full", TONE_DOT[tone])} /> : null}
+      {tone && dot ? (
+        <span aria-hidden className={cn("size-1.5 rounded-full", TONE_DOT[tone])} />
+      ) : null}
       {value}
     </span>
   );
@@ -197,11 +208,16 @@ function Fact({
 }
 
 /** The four headline measures plus quality, decisions and endings, compactly. */
-export function MetricFacts({ m }: { m: ExperienceMetrics }) {
+export function MetricFacts({ m, wide = false }: { m: ExperienceMetrics; wide?: boolean }) {
   const direct = directShare(m);
   const total = m.decisions.directplay + m.decisions.copy + m.decisions.transcode;
   return (
-    <dl className="grid grid-cols-2 gap-x-4 gap-y-3 sm:grid-cols-3">
+    <dl
+      className={cn(
+        "grid grid-cols-2 gap-x-4 gap-y-3",
+        wide ? "sm:grid-cols-3 lg:grid-cols-5" : "sm:grid-cols-3",
+      )}
+    >
       <Fact
         label={t("Start time")}
         hint={
@@ -260,6 +276,15 @@ export function MetricFacts({ m }: { m: ExperienceMetrics }) {
         {t("{finished} / {abandoned}", { finished: m.finished, abandoned: m.abandoned })}
       </Fact>
       <Fact label={t("Away from home")}>{pct(m.remotePct)}</Fact>
+      <Fact label={t("Top transcode reason")}>
+        {m.topTranscodeReason ? (
+          <span className="block first-letter:uppercase">
+            {reasonPhrase(m.topTranscodeReason.kind, m.topTranscodeReason.detail)}
+          </span>
+        ) : (
+          DASH
+        )}
+      </Fact>
     </dl>
   );
 }
@@ -302,20 +327,22 @@ function PlayRow({ p }: { p: ExperiencePlay }) {
             />
           </span>
         )}
-        <span>
-          {t("Buffering")}{" "}
-          {p.measured && p.bufferEvents != null ? (
-            <span className="tabular-nums text-fg">
-              {p.bufferEvents
-                ? tn(p.bufferEvents, "{count} time, {time}", "{count} times, {time}", {
-                    time: formatSeconds(p.bufferMs),
-                  })
-                : t("none")}
-            </span>
-          ) : (
-            DASH
-          )}
-        </span>
+        {p.failed ? null : (
+          <span>
+            {t("Buffering")}{" "}
+            {p.measured && p.bufferEvents != null ? (
+              <span className="tabular-nums text-fg">
+                {p.bufferEvents
+                  ? tn(p.bufferEvents, "{count} time, {time}", "{count} times, {time}", {
+                      time: formatSeconds(p.bufferMs),
+                    })
+                  : t("none")}
+              </span>
+            ) : (
+              DASH
+            )}
+          </span>
+        )}
         {decision ? (
           <Badge variant={p.decision === "transcode" ? "warning" : "secondary"}>{decision}</Badge>
         ) : null}
