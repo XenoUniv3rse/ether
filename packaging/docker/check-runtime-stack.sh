@@ -61,6 +61,9 @@ for file in "$root_df" "$amd64_df" "$arm64_df"; do
 	require "$file" 'libva-drm2'
 	require "$file" 'mesa-va-drivers'
 	require "$file" 'ocl-icd-libopencl1'
+	# libass burns text subtitles only with a font it can find.
+	require "$file" 'fontconfig'
+	require "$file" 'fonts-dejavu-core'
 	require "$file" '--gid 999'
 	require "$file" '--uid 999'
 	forbid "$file" 'libmfx1'
@@ -249,6 +252,16 @@ docker run --rm --user 999:999 --entrypoint /usr/lib/ether/ffmpeg "$image" \
 	-f lavfi -i testsrc2=size=160x120:rate=10:duration=0.2 \
 	-f lavfi -i sine=frequency=440:sample_rate=48000:duration=0.2 \
 	-c:v libx264 -preset ultrafast -c:a aac -f null -
+
+echo "runtime check: libass finds a font to burn a text subtitle with"
+font_out=$(docker run --rm --user 999:999 --entrypoint /bin/sh "$image" -c \
+	'printf "[Script Info]\nScriptType: v4.00+\n\n[V4+ Styles]\nFormat: Name, Fontname, Fontsize\nStyle: Default,Arial,40\n\n[Events]\nFormat: Layer, Start, End, Style, Text\nDialogue: 0,0:00:00.00,0:00:01.00,Default,Burned\n" > /tmp/burn.ass &&
+	/usr/lib/ether/ffmpeg -hide_banner -v verbose -f lavfi -i color=size=320x180:duration=0.2 -vf subtitles=/tmp/burn.ass -f null - 2>&1')
+printf '%s\n' "$font_out" | grep -e 'fontselect' -e 'font provider' || true
+if printf '%s\n' "$font_out" | grep -q -e 'failed to find any fallback' -e 'Failed to load fontconfig fonts'; then
+	echo "libass finds no font: burned text subtitles would be blank" >&2
+	exit 1
+fi
 
 echo "runtime check: VAAPI init without a device must not miss $symbol"
 set +e
