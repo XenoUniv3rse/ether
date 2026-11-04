@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -1078,5 +1079,74 @@ func TestConfigEditsPreserveClaimWhenOmitted(t *testing.T) {
 	}
 	if got := store.Get().Plex; !got.Claimed || got.Token != ownerToken {
 		t.Fatal("config edits lost claim or token")
+	}
+}
+
+func TestConfigRejectsNullClaim(t *testing.T) {
+	for _, tc := range []struct{ name, method, path, payload string }{
+		{"section null claim", http.MethodPatch, "/ether/api/config/plex", `{"claimed":null}`},
+		{"section null object", http.MethodPut, "/ether/api/config/plex", `null`},
+		{"section invalid", http.MethodPatch, "/ether/api/config/plex", `{"claimed":"false"}`},
+		{"section alias", http.MethodPatch, "/ether/api/config/plex", `{"Claimed":false}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := newStore(t, func(c *config.Config) { seededConfig(c); c.SetupComplete = true })
+			h := admin.New(admin.Deps{Config: store, IsOwnerToken: storedOwner(store)})
+			r := req(tc.method, tc.path, tc.payload)
+			r.Header.Set("X-Plex-Token", ownerToken)
+			if res := serve(h, r); res.Code != http.StatusBadRequest {
+				t.Fatalf("status %d: %s", res.Code, res.Body)
+			}
+			if !store.Get().Plex.Claimed {
+				t.Fatal("claim changed")
+			}
+		})
+	}
+	for _, envelope := range []bool{false, true} {
+		t.Run(fmt.Sprintf("full envelope=%v", envelope), func(t *testing.T) {
+			store := newStore(t, func(c *config.Config) { seededConfig(c); c.SetupComplete = true })
+			h := admin.New(admin.Deps{Config: store, IsOwnerToken: storedOwner(store)})
+			get := req(http.MethodGet, "/ether/api/config", "")
+			get.Header.Set("X-Plex-Token", ownerToken)
+			var doc map[string]any
+			if err := json.Unmarshal(serve(h, get).Body.Bytes(), &doc); err != nil {
+				t.Fatal(err)
+			}
+			cfg := doc["config"].(map[string]any)
+			cfg["plex"].(map[string]any)["claimed"] = nil
+			var payload any = cfg
+			if envelope {
+				payload = doc
+			}
+			b, _ := json.Marshal(payload)
+			put := req(http.MethodPut, "/ether/api/config", string(b))
+			put.Header.Set("X-Plex-Token", ownerToken)
+			if res := serve(h, put); res.Code != http.StatusBadRequest {
+				t.Fatalf("status %d: %s", res.Code, res.Body)
+			}
+			if !store.Get().Plex.Claimed {
+				t.Fatal("claim changed")
+			}
+		})
+	}
+}
+
+func TestExplicitClaimChangeRequiresOwner(t *testing.T) {
+	store := newStore(t, func(c *config.Config) { seededConfig(c); c.SetupComplete = true })
+	h := admin.New(admin.Deps{Config: store, IsOwnerToken: storedOwner(store)})
+	bad := req(http.MethodPatch, "/ether/api/config/plex", `{"claimed":false}`)
+	if res := serve(h, bad); res.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated status %d", res.Code)
+	}
+	if !store.Get().Plex.Claimed {
+		t.Fatal("unauthenticated request changed claim")
+	}
+	good := req(http.MethodPatch, "/ether/api/config/plex", `{"claimed":false}`)
+	good.Header.Set("X-Plex-Token", ownerToken)
+	if res := serve(h, good); res.Code != http.StatusOK {
+		t.Fatalf("owner status %d: %s", res.Code, res.Body)
+	}
+	if store.Get().Plex.Claimed {
+		t.Fatal("explicit owner unclaim ignored")
 	}
 }

@@ -15,6 +15,8 @@ func TestRemoveDeviceRequiresUniqueIdentity(t *testing.T) {
 	}{
 		{"empty", "", `<Device id="1"/>`, "", true},
 		{"ambiguous", "ether", `<Device id="1" clientIdentifier="ether"/><Device id="2" clientIdentifier="ether"/>`, "", true},
+		{"client collision", "ether", `<Device id="5" clientIdentifier="ether" provides="client"/>`, "", true},
+		{"server type", "ether", `<Device id="5" clientIdentifier="ether" provides="server,player"/>`, "/devices/5.xml", false},
 		{"invalid id", "ether", `<Device id="-1" clientIdentifier="ether"/>`, "", true},
 		{"unrelated PMS survives", "ether", `<Device id="10" clientIdentifier="pms"/><Device id="20" clientIdentifier="ether"/>`, "/devices/20.xml", false},
 		{"no match", "ether", `<Device id="10" clientIdentifier="pms"/>`, "", false},
