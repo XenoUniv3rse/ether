@@ -91,7 +91,7 @@ const infuseFields = "DateCreated%2CEtag%2CGenres%2CMediaSources%2CAlternateMedi
 
 // Clients is every replayed client, in report order.
 func Clients() []Client {
-	return []Client{plexClient("plex-appletv", "Plex for Apple TV", "tvOS", "Apple TV"), plexClient("plex-web", "Plex Web", "Chrome", "Windows"),
+	return []Client{plexClient("plex-appletv", "Plex for Apple TV", "tvOS", "Apple TV"), plexClient("plex-android", "Plex for Android (TV)", "Android", "BRAVIA 4K VH21"), plexClient("plex-web", "Plex Web", "Chrome", "Windows"),
 		infuseJellyfin(), swiftfin(), embySDK(), infuseEmby(), siloAppleTV(), stremio(), console()}
 }
 
@@ -119,6 +119,9 @@ func plexClient(name, product, platform, device string) Client {
 		{Name: "/", Class: classStatic, Path: "/"},
 		{Name: "/library/sections", Class: classBrowse, Path: "/library/sections", Discover: discoverPlexSections},
 		{Name: "/hubs/promoted", Class: classHome, Path: "/hubs/promoted?contentDirectoryID={movieSection},{showSection}&pinnedContentDirectoryID={movieSection},{showSection}&includeMeta=1&excludeFields=summary&count=12&includeExternalMetadata=1&includeRecentChannels=1"},
+		// Apple TV and Android TV ask for Home one library at a time.
+		{Name: "/hubs/promoted movies directory", Class: classHome, Path: "/hubs/promoted?contentDirectoryID={movieSection}&pinnedContentDirectoryID={movieSection},{showSection}&includeMeta=1&excludeFields=summary&count=12&includeExternalMetadata=1&includeRecentChannels=1"},
+		{Name: "/hubs/promoted shows directory", Class: classHome, Path: "/hubs/promoted?contentDirectoryID={showSection}&pinnedContentDirectoryID={movieSection},{showSection}&includeMeta=1&excludeFields=summary&count=12&includeExternalMetadata=1&includeRecentChannels=1"},
 		{Name: "/hubs/continueWatching", Class: classHome, Path: "/hubs/continueWatching?count=12&includeMeta=1&excludeFields=summary"},
 		{Name: "/hubs", Class: classHome, Path: "/hubs?count=12&includeMeta=1&excludeFields=summary"},
 		{Name: "/library/onDeck", Class: classHome, Path: "/library/onDeck"},
@@ -145,6 +148,7 @@ func plexClient(name, product, platform, device string) Client {
 		{Name: "movie postplay", Class: classDetail, Path: "/hubs/metadata/{movieKey}/postplay"},
 		{Name: "episode postplay", Class: classDetail, Path: "/hubs/metadata/{episodeKey}/postplay"},
 		{Name: "/hubs/search star", Class: classSearch, RowsBound: searchRowsBound, Path: "/hubs/search?query=star&limit=30&includeCollections=1&includeExternalMedia=1"},
+		{Name: "/library/search star", Class: classSearch, Path: "/library/search?query=star&limit=30&searchTypes=movies%2Ctv&includeMetadata=1"},
 		{Name: "/hubs/search the", Class: classSearch, Path: "/hubs/search?query=the&limit=30&includeCollections=1"},
 		{Name: "/playlists", Class: classBrowse, Path: "/playlists?playlistType=video&includeCollections=1"},
 		{Name: "/media/providers", Class: classStatic, Path: "/media/providers"},
