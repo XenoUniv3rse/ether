@@ -11,6 +11,7 @@ import (
 	"github.com/braedonsaunders/ether/internal/config"
 	"github.com/braedonsaunders/ether/internal/core"
 	"github.com/braedonsaunders/ether/internal/egress"
+	"github.com/braedonsaunders/ether/internal/reqmemo"
 	"github.com/braedonsaunders/ether/internal/store"
 	"io"
 	"math"
@@ -143,14 +144,23 @@ func (s *Service) settings(ctx context.Context) (Settings, error) {
 		return snap.value, snap.err
 	}
 	v := Settings{Provider: "omdb", Critic: "tomatoes", Audience: "imdb", CacheHours: 168}
-	var raw string
-	e := s.db.QueryRowContext(ctx, `SELECT value FROM ratings_settings WHERE id=1`).Scan(&raw)
-	if errors.Is(e, sql.ErrNoRows) {
-		return v, nil
-	}
+	// Rendering a list asks for the settings once per item; read the row
+	// once per request.
+	row, e := reqmemo.Do(ctx, fmt.Sprintf("ratings:settings:%p", s), func() (storedSettings, error) {
+		var raw string
+		err := s.db.QueryRowContext(ctx, `SELECT value FROM ratings_settings WHERE id=1`).Scan(&raw)
+		if errors.Is(err, sql.ErrNoRows) {
+			return storedSettings{}, nil
+		}
+		return storedSettings{raw: raw, ok: err == nil}, err
+	})
 	if e != nil {
 		return v, e
 	}
+	if !row.ok {
+		return v, nil
+	}
+	raw := row.raw
 	if e = json.Unmarshal([]byte(raw), &v); e != nil {
 		return v, e
 	}
@@ -161,6 +171,12 @@ func (s *Service) settings(ctx context.Context) (Settings, error) {
 		return v, fmt.Errorf("ratings: stored backup API key: %w", e)
 	}
 	return v, nil
+}
+
+// storedSettings is the settings row as stored; ok is false when there is none.
+type storedSettings struct {
+	raw string
+	ok  bool
 }
 
 // apiKeyContext binds the stored key to the provider it is sent to.
