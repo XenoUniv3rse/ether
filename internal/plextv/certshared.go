@@ -73,11 +73,20 @@ func (m *CertManager) renewalAllowed() bool {
 
 // SetEventBus subscribes to certificate change announcements from other
 // nodes (and the bus's resync notice) and announces this node's writes.
-// Nil disconnects.
+// Nil disconnects. A closed manager ignores it.
+//
+// Each announcement starts a sync tracked by the manager, so Close cancels
+// it and waits for it.
 func (m *CertManager) SetEventBus(bus EventBus) {
 	m.mu.Lock()
+	if m.closed {
+		m.mu.Unlock()
+		return
+	}
 	old := m.unsubs
 	m.unsubs, m.bus = nil, bus
+	m.busGen++
+	gen := m.busGen
 	m.mu.Unlock()
 	for _, u := range old {
 		if u != nil {
@@ -88,30 +97,46 @@ func (m *CertManager) SetEventBus(bus EventBus) {
 		return
 	}
 	sync := func([]byte) {
+		if !m.track() {
+			return
+		}
 		go func() {
-			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer m.tasks.Done()
+			ctx, cancel := context.WithTimeout(m.life, 30*time.Second)
 			defer cancel()
-			if _, err := m.SyncShared(ctx); err != nil {
+			if _, err := m.SyncShared(ctx); err != nil && m.life.Err() == nil {
 				m.o.Logger.Warn("sync shared certificate", "err", err)
 			}
 		}()
 	}
 	unsubs := []func(){bus.Subscribe(CertTopic, sync), bus.Subscribe("bus:resync", sync)}
 	m.mu.Lock()
+	if m.closed || m.busGen != gen {
+		// Closed or replaced while subscribing.
+		m.mu.Unlock()
+		for _, u := range unsubs {
+			u()
+		}
+		return
+	}
 	m.unsubs = append(m.unsubs, unsubs...)
 	m.mu.Unlock()
 }
 
 // RunSharedSync polls the shared certificate every interval (default
-// DefaultCertSyncInterval) until ctx ends. It returns at once when the
-// manager has no shared store.
+// DefaultCertSyncInterval) until ctx ends or the manager closes. It returns
+// at once when the manager has no shared store.
 func (m *CertManager) RunSharedSync(ctx context.Context, every time.Duration) {
-	if m.o.Shared == nil {
+	if m.o.Shared == nil || !m.track() {
 		return
 	}
+	defer m.tasks.Done()
 	if every <= 0 {
 		every = DefaultCertSyncInterval
 	}
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	defer context.AfterFunc(m.life, cancel)()
 	for schedule.Wait(ctx, time.Now, every) {
 		sctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		if _, err := m.SyncShared(sctx); err != nil && ctx.Err() == nil {
@@ -126,8 +151,11 @@ func (m *CertManager) RunSharedSync(ctx context.Context, every time.Duration) {
 // certificate when the cluster has none. It reports whether the served
 // certificate changed.
 func (m *CertManager) SyncShared(ctx context.Context) (bool, error) {
-	m.opMu.Lock()
-	defer m.opMu.Unlock()
+	ctx, done, err := m.begin(ctx)
+	if err != nil {
+		return false, err
+	}
+	defer done()
 	return m.syncSharedLocked(ctx)
 }
 
@@ -175,6 +203,9 @@ func (m *CertManager) syncSharedLocked(ctx context.Context) (bool, error) {
 		// The stored certificate is the cluster's: a newer version replaces
 		// whatever this node serves.
 		if !cur.Present || cur.SelfSigned || Fingerprint(leaf) != cur.Fingerprint {
+			if err := ctx.Err(); err != nil {
+				return false, err // shutting down: the next start syncs again
+			}
 			if err := m.writeFiles(blob.CertPEM, blob.KeyPEM); err != nil {
 				return false, err
 			}
@@ -245,8 +276,5 @@ func (m *CertManager) writeFiles(certPEM, keyPEM []byte) error {
 			return nil
 		}
 	}
-	if err := writeFileAtomic(m.keyPath(), keyPEM, 0o600); err != nil {
-		return err
-	}
-	return writeFileAtomic(m.certPath(), certPEM, 0o644)
+	return writePairAtomic(m.keyPath(), keyPEM, m.certPath(), certPEM)
 }

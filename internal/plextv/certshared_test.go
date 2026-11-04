@@ -2,8 +2,11 @@ package plextv
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"os"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -78,6 +81,7 @@ func TestCertManagerSharedAcrossNodes(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		t.Cleanup(m.Close) // before t.TempDir's cleanup: no sync outlives the test
 		m.SetEventBus(events)
 		return m
 	}
@@ -105,12 +109,18 @@ func TestCertManagerSharedAcrossNodes(t *testing.T) {
 	}
 	// Its local copy survives a restart without the database.
 	cached, err := NewCertManager(CertManagerOptions{Dir: followerDir, Now: clock})
+	if err == nil {
+		t.Cleanup(cached.Close)
+	}
 	if err != nil || cached.Info().Fingerprint != info.Fingerprint {
 		t.Fatalf("local cache: %+v %v", cached.Info(), err)
 	}
 
 	// A node without the event bus.
 	quiet, err := NewCertManager(CertManagerOptions{Dir: t.TempDir(), Client: c, Now: clock, Shared: blobs})
+	if err == nil {
+		t.Cleanup(quiet.Close)
+	}
 	if err != nil || quiet.Info().Fingerprint != info.Fingerprint {
 		t.Fatalf("quiet node: %+v %v", quiet.Info(), err)
 	}
@@ -159,12 +169,14 @@ func TestCertManagerSharesBackoff(t *testing.T) {
 			Request: CertRequest{PollInterval: time.Millisecond, Timeout: time.Second}}
 	}
 	a, _ := NewCertManager(opts())
+	t.Cleanup(a.Close)
 	if _, err := a.Ensure(context.Background(), "server-token-42", nil, false); !errors.Is(err, ErrRateLimited) {
 		t.Fatalf("err = %v", err)
 	}
 	n := f.count("PUT /api/v2/devices/")
 	// A new leader (after failover) honours the back-off the old one hit.
 	b, _ := NewCertManager(opts())
+	t.Cleanup(b.Close)
 	if b.Info().LastError == "" {
 		t.Fatal("back-off state not shared")
 	}
@@ -176,5 +188,76 @@ func TestCertManagerSharesBackoff(t *testing.T) {
 	}
 	if v, _ := blobs.Version(context.Background(), SharedCertName); v != 1 {
 		t.Fatalf("self-signed fallback was shared (version %d)", v)
+	}
+}
+
+// stallingBlobs holds Version calls until their context ends, then answers
+// anyway, like a store that completes a query the caller gave up on.
+type stallingBlobs struct {
+	memBlobs
+	stall    atomic.Bool
+	stalled  chan struct{} // receives once per stalled call
+	versions atomic.Int32
+}
+
+func (b *stallingBlobs) Version(ctx context.Context, name string) (int64, error) {
+	b.versions.Add(1)
+	if b.stall.Load() {
+		b.stalled <- struct{}{}
+		<-ctx.Done()
+	}
+	return b.memBlobs.Version(ctx, name)
+}
+
+// A sync started by a bus event is cancelled and finished by Close: nothing
+// is written into the certificate directory after Close returns, and later
+// events start no sync.
+func TestCertManagerCloseStopsBusSyncs(t *testing.T) {
+	blobs := &stallingBlobs{stalled: make(chan struct{}, 1)}
+	events := &memEvents{}
+	dir := t.TempDir()
+	m, err := NewCertManager(CertManagerOptions{Dir: dir, Shared: blobs})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.SetEventBus(events)
+
+	// Another node stores a certificate and announces it.
+	b, err := GenerateSelfSigned([]string{"node-b"}, "", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := json.Marshal(sharedCertBlob{CertPEM: b.CertPEM, KeyPEM: b.KeyPEM})
+	if _, err := blobs.Put(context.Background(), SharedCertName, raw); err != nil {
+		t.Fatal(err)
+	}
+	blobs.stall.Store(true)
+	_ = events.Publish(context.Background(), CertTopic, nil)
+	<-blobs.stalled // the bus-triggered sync is in flight
+
+	m.Close()
+	select {
+	case m.op <- struct{}{}:
+		t.Fatal("Close returned before in-flight operations finished")
+	default:
+	}
+	if _, err := os.Stat(m.certPath()); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("cancelled sync wrote the certificate: %v", err)
+	}
+	if got := m.Info(); got.Present {
+		t.Fatalf("cancelled sync installed a certificate: %+v", got)
+	}
+
+	n := blobs.versions.Load()
+	_ = events.Publish(context.Background(), CertTopic, nil)
+	if _, err := m.SyncShared(context.Background()); !errors.Is(err, ErrCertManagerClosed) {
+		t.Fatalf("SyncShared after Close: %v", err)
+	}
+	if blobs.versions.Load() != n {
+		t.Fatal("an event after Close started a sync")
+	}
+	entries, _ := os.ReadDir(dir)
+	if len(entries) != 0 {
+		t.Fatalf("certificate directory not empty: %v", entries)
 	}
 }

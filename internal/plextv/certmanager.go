@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -82,7 +83,17 @@ type CertManagerOptions struct {
 type CertManager struct {
 	o CertManagerOptions
 
-	opMu sync.Mutex // serialises Ensure
+	// op is a one-slot semaphore serialising certificate operations
+	// (Ensure, Install, SyncShared, RequireReissue); see begin. Close takes
+	// the slot for good, so no operation writes after it returns.
+	op chan struct{}
+	// life ends when Close is called; every operation's context follows it.
+	life     context.Context
+	stopLife context.CancelFunc
+	// tasks tracks goroutines the manager starts (bus-triggered syncs) and
+	// RunSharedSync; Add happens under mu while closed is false.
+	tasks     sync.WaitGroup
+	closeOnce sync.Once
 
 	mu   sync.RWMutex
 	cert *tls.Certificate
@@ -97,7 +108,19 @@ type CertManager struct {
 	sharedVer  int64
 	bus        EventBus
 	unsubs     []func()
+	busGen     uint64 // bumped by SetEventBus
+	closed     bool
 }
+
+// ErrCertManagerClosed is returned by operations started after Close.
+var ErrCertManagerClosed = errors.New("plextv: certificate manager closed")
+
+// certCloseWait bounds how long Close waits for in-flight operations,
+// which have already been cancelled and only finish their current step.
+const certCloseWait = 10 * time.Second
+
+// shareTimeout bounds shareState's store-and-announce (under certCloseWait).
+const shareTimeout = 5 * time.Second
 
 type certState struct {
 	LastAttempt     time.Time     `json:"lastAttempt"`
@@ -124,11 +147,13 @@ func NewCertManager(o CertManagerOptions) (*CertManager, error) {
 	if o.Now == nil {
 		o.Now = time.Now
 	}
-	m := &CertManager{o: o, trustRoots: o.TrustRoots}
+	m := &CertManager{o: o, trustRoots: o.TrustRoots, op: make(chan struct{}, 1)}
+	m.life, m.stopLife = context.WithCancel(context.Background())
 	if o.Dir != "" {
 		if err := os.MkdirAll(o.Dir, 0o700); err != nil {
 			return nil, err
 		}
+		removeStaleTemps(o.Dir)
 	}
 	if err := m.load(); err != nil && !errors.Is(err, os.ErrNotExist) {
 		o.Logger.Warn("stored certificate unusable", "err", err)
@@ -141,6 +166,70 @@ func NewCertManager(o CertManagerOptions) (*CertManager, error) {
 		cancel()
 	}
 	return m, nil
+}
+
+// begin starts a serialised certificate operation. The returned context
+// ends with ctx or when the manager closes; done releases the slot.
+func (m *CertManager) begin(ctx context.Context) (context.Context, func(), error) {
+	select {
+	case m.op <- struct{}{}:
+	case <-ctx.Done():
+		return nil, nil, ctx.Err()
+	case <-m.life.Done():
+		return nil, nil, ErrCertManagerClosed
+	}
+	if m.life.Err() != nil {
+		<-m.op
+		return nil, nil, ErrCertManagerClosed
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	unhook := context.AfterFunc(m.life, cancel)
+	return ctx, func() { unhook(); cancel(); <-m.op }, nil
+}
+
+// track registers a goroutine the manager is about to start; false once
+// the manager is closed (the goroutine must not start).
+func (m *CertManager) track() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.closed {
+		return false
+	}
+	m.tasks.Add(1)
+	return true
+}
+
+// Close disconnects the event bus, cancels in-flight certificate syncs and
+// requests, and waits (up to certCloseWait) for them to finish, so no
+// certificate file is written after it returns. Later operations fail with
+// ErrCertManagerClosed. The served certificate stays available.
+func (m *CertManager) Close() {
+	m.closeOnce.Do(func() {
+		m.mu.Lock()
+		m.closed = true
+		unsubs := m.unsubs
+		m.unsubs, m.bus = nil, nil
+		m.mu.Unlock()
+		for _, u := range unsubs {
+			if u != nil {
+				u()
+			}
+		}
+		m.stopLife()
+		done := make(chan struct{})
+		go func() {
+			m.tasks.Wait()
+			m.op <- struct{}{} // held for good: nothing runs after Close
+			close(done)
+		}()
+		t := time.NewTimer(certCloseWait)
+		defer t.Stop()
+		select {
+		case <-done:
+		case <-t.C:
+			m.o.Logger.Warn("certificate operations still running at shutdown", "waited", certCloseWait)
+		}
+	})
 }
 
 func (m *CertManager) certPath() string  { return filepath.Join(m.o.Dir, "plexdirect.crt") }
@@ -294,8 +383,11 @@ func (m *CertManager) NeedsRenewal() bool {
 // the error reports the plex.tv failure, if any, even when a fallback is
 // in place.
 func (m *CertManager) Ensure(ctx context.Context, serverToken string, hosts []string, force bool) (CertInfo, error) {
-	m.opMu.Lock()
-	defer m.opMu.Unlock()
+	ctx, done, err := m.begin(ctx)
+	if err != nil {
+		return m.Info(), err
+	}
+	defer done()
 	if m.custom() {
 		if err := m.load(); err != nil {
 			return m.Info(), fmt.Errorf("plextv: custom certificate: %w", err)
@@ -414,23 +506,31 @@ func (m *CertManager) installSelfSigned(hosts []string, hash string) error {
 // Install stores and activates a bundle (used by Ensure; exported so the
 // spike can install a certificate it obtained by hand).
 func (m *CertManager) Install(b *CertBundle) error {
-	m.opMu.Lock()
-	defer m.opMu.Unlock()
+	ctx, done, err := m.begin(context.Background())
+	if err != nil {
+		return err
+	}
+	defer done()
 	if err := m.write(b); err != nil {
 		return err
 	}
 	if !isSelfSigned(b.Leaf) {
-		m.shareState(context.Background(), m.currentState())
+		m.shareState(ctx, m.currentState())
 	}
 	return nil
 }
 
 // shareState stores the certificate and request state for the cluster;
-// failures are logged (the local copy keeps serving).
+// failures are logged (the local copy keeps serving). It outlives ctx's
+// cancellation for a few seconds: a certificate plex.tv issued as shutdown
+// began must still reach the cluster, or the next start would replace it
+// with the older shared copy. Close waits for it.
 func (m *CertManager) shareState(ctx context.Context, st certState) {
 	if m.o.Shared == nil {
 		return
 	}
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), shareTimeout)
+	defer cancel()
 	if err := m.pushSharedLocked(ctx, st); err != nil {
 		m.o.Logger.Warn("store certificate for the cluster", "err", err)
 	}
@@ -445,10 +545,7 @@ func (m *CertManager) write(b *CertBundle) error {
 		return err
 	}
 	pair.Leaf = b.Leaf
-	if err := writeFileAtomic(m.keyPath(), b.KeyPEM, 0o600); err != nil {
-		return err
-	}
-	if err := writeFileAtomic(m.certPath(), b.CertPEM, 0o644); err != nil {
+	if err := writePairAtomic(m.keyPath(), b.KeyPEM, m.certPath(), b.CertPEM); err != nil {
 		return err
 	}
 	m.install(&pair, b.Leaf, m.certPath(), m.keyPath(), false)
@@ -471,8 +568,11 @@ func (m *CertManager) persistState(st certState) error {
 
 // RequireReissue records a claim lifecycle change without touching certificate files.
 func (m *CertManager) RequireReissue(ctx context.Context) error {
-	m.opMu.Lock()
-	defer m.opMu.Unlock()
+	ctx, done, err := m.begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer done()
 	if m.custom() {
 		return nil
 	}
@@ -496,12 +596,92 @@ func (m *CertManager) RequireReissue(ctx context.Context) error {
 	return m.pushSharedLocked(ctx, st)
 }
 
+// writeFileAtomic replaces path with data: a uniquely named, fsynced temp
+// file in the same directory renamed over path, so an interrupted write
+// (shutdown, crash, power loss) leaves the old file or the new one.
 func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, perm); err != nil {
+	tmp, err := writeTemp(path, data, perm)
+	if err != nil {
 		return err
 	}
-	return os.Rename(tmp, path)
+	if err := os.Rename(tmp, path); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	syncDir(filepath.Dir(path))
+	return nil
+}
+
+// writePairAtomic replaces a key and its certificate. Both are written and
+// fsynced before either is renamed into place, so an interruption leaves
+// the old pair unless it falls between the two renames.
+func writePairAtomic(keyPath string, keyPEM []byte, certPath string, certPEM []byte) error {
+	keyTmp, err := writeTemp(keyPath, keyPEM, 0o600)
+	if err != nil {
+		return err
+	}
+	certTmp, err := writeTemp(certPath, certPEM, 0o644)
+	if err != nil {
+		_ = os.Remove(keyTmp)
+		return err
+	}
+	if err := os.Rename(keyTmp, keyPath); err != nil {
+		_ = os.Remove(keyTmp)
+		_ = os.Remove(certTmp)
+		return err
+	}
+	if err := os.Rename(certTmp, certPath); err != nil {
+		_ = os.Remove(certTmp)
+		return err
+	}
+	syncDir(filepath.Dir(certPath))
+	return nil
+}
+
+func writeTemp(path string, data []byte, perm os.FileMode) (string, error) {
+	f, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".*.tmp")
+	if err != nil {
+		return "", err
+	}
+	tmp := f.Name()
+	err = f.Chmod(perm)
+	if err != nil && runtime.GOOS == "windows" {
+		err = nil
+	}
+	if err == nil {
+		_, err = f.Write(data)
+	}
+	if err == nil {
+		err = f.Sync()
+	}
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		_ = os.Remove(tmp)
+		return "", err
+	}
+	return tmp, nil
+}
+
+// syncDir makes renames in dir durable (best effort; Windows journals
+// renames and cannot fsync a directory).
+func syncDir(dir string) {
+	if runtime.GOOS == "windows" {
+		return
+	}
+	if d, err := os.Open(dir); err == nil {
+		_ = d.Sync()
+		_ = d.Close()
+	}
+}
+
+// removeStaleTemps deletes temp files a crash left mid-write.
+func removeStaleTemps(dir string) {
+	stale, _ := filepath.Glob(filepath.Join(dir, ".*.tmp"))
+	for _, p := range stale {
+		_ = os.Remove(p)
+	}
 }
 
 // keyFromPEM parses a PKCS#8/PKCS#1/EC private key (tests and Install
