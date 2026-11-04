@@ -785,6 +785,16 @@ func planFilterChain(s runSpec, v *core.StreamInfo, pic picturePlan, accel strin
 			dev = DefaultVAAPIDevice
 		}
 		inputArgs = append(inputArgs, "-vaapi_device", dev)
+		if burn && !(v.Codec == "h264" && v.BitDepth > 8) {
+			// A burn-in overlays in software, but the picture is still
+			// decoded on the GPU (on the -vaapi_device device) and handed
+			// to the filters in system memory, as the CUDA and
+			// VideoToolbox paths do: software-decoding 4K HEVC 10-bit
+			// was most of the CPU a burn cost (#313). A codec the GPU
+			// cannot decode falls back to software decoding. H.264 High
+			// 10 has no VAAPI decoder.
+			inputArgs = append(inputArgs, "-hwaccel", "vaapi")
+		}
 	}
 
 	if !hwFrames {
@@ -1016,14 +1026,18 @@ func planVideo(s runSpec, v *core.StreamInfo) videoPlan {
 	} else if accel == AccelQSV || accel == AccelVAAPI {
 		swFmt = "nv12"
 	}
-	// finish sizes, pads and formats software frames for the encoder.
-	finish := func(c []string) []string {
+	// size crops and scales software frames to the encoded picture; finish
+	// sizes, pads and formats them for the encoder.
+	size := func(c []string) []string {
 		if crop := s.PictureCrop; crop != nil {
 			c = append(c, fmt.Sprintf("crop=%d:%d:%d:%d", crop.width, crop.height, crop.x, crop.y))
 		}
 		if pic.scaling {
 			c = append(c, fmt.Sprintf("scale=%d:%d", pic.w, pic.h))
 		}
+		return c
+	}
+	format := func(c []string) []string {
 		if pic.pad {
 			c = append(c, fmt.Sprintf("pad=%d:%d:(ow-iw)/2:(oh-ih)/2", s.Target.width, s.Target.height))
 		}
@@ -1036,6 +1050,7 @@ func planVideo(s runSpec, v *core.StreamInfo) videoPlan {
 		}
 		return c
 	}
+	finish := func(c []string) []string { return format(size(c)) }
 
 	in := fmt.Sprintf("[0:%d]", v.Index)
 	chainInput, chain, hwFrames := planFilterChain(s, v, pic, accel, burn, finish)
@@ -1048,12 +1063,22 @@ func planVideo(s runSpec, v *core.StreamInfo) videoPlan {
 	var graph string
 	switch {
 	case burn && IsImageSubtitle(sub.Codec) && !sub.External:
+		post := finish(nil)
+		subW, subH := v.Width, v.Height
+		if pic.scaling && s.PictureCrop == nil {
+			// Overlay at the output size: scale the picture first and
+			// draw the subtitle onto the smaller frame, instead of
+			// overlaying every source-size frame and scaling after
+			// (#313). A cropped picture keeps the source-size overlay,
+			// where the subtitle canvas still matches it.
+			chain = size(chain)
+			post = format(nil)
+			subW, subH = pic.w, pic.h
+		}
 		pre := strings.Join(chain, ",")
 		if pre == "" {
 			pre = "null"
 		}
-		post := finish(nil)
-		subW, subH := v.Width, v.Height
 		subScale := "null"
 		if subW > 0 && subH > 0 {
 			subScale = fmt.Sprintf("scale=%d:%d", subW, subH)
