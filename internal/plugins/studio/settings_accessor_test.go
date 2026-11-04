@@ -21,7 +21,7 @@ func TestSettingsAccessorReadsSavedDraftWithoutSecrets(t *testing.T) {
 	raw, _ := json.Marshal(man)
 	files := map[string]string{
 		"manifest.json":        string(raw),
-		"settings.schema.json": `{"fields":[{"key":"schemaSecret","kind":"secret","label":"Secret"},{"key":"maxItems","kind":"number","label":"Maximum"}]}`,
+		"settings.schema.json": `{"fields":[{"key":"schemaSecret","kind":"secret","label":"Secret"},{"key":"maxItems","kind":"number","label":"Maximum","default":20},{"key":"minimumYear","kind":"number","label":"Year","default":1950}]}`,
 		"src/plugin.ts":        `export function handle() { return {status:200, body:ether.settings.get()}; } (globalThis as any).handle = handle;`,
 	}
 	_, compiled, err := st.SaveFiles(ctx, p.ID, files, nil, map[string]any{"maxItems": 7, "schemaSecret": "synthetic-one", "declaredSecret": "synthetic-two"})
@@ -36,7 +36,7 @@ func TestSettingsAccessorReadsSavedDraftWithoutSecrets(t *testing.T) {
 	if err := json.Unmarshal(result.Body, &settings); err != nil {
 		t.Fatal(err)
 	}
-	if result.Status != 200 || settings["maxItems"] != float64(7) || len(settings) != 1 {
+	if result.Status != 200 || settings["maxItems"] != float64(7) || settings["minimumYear"] != float64(1950) || len(settings) != 2 {
 		t.Fatalf("unexpected settings: status=%d body=%s", result.Status, result.Body)
 	}
 }
