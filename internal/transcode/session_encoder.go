@@ -247,6 +247,11 @@ func (s *Session) startRunLocked(seg int, bigProbe bool) error {
 		FastStart:    rp.fastStart,
 		Rate:         rp.rate,
 	}
+	if s.liveInput {
+		// A live source cannot seek back to the session's elapsed time.
+		// Its new transport clock is signalled by an HLS discontinuity.
+		spec.Start = 0
+	}
 	if s.container == ContainerFMP4 && !s.isDASH() {
 		_, retained := s.clockLocked(&run{startSeg: seg}, s.wantTrack)
 		if video, ok := retained["vide"]; ok && s.input == s.clockInput {
@@ -504,7 +509,7 @@ func (s *Session) startRunLocked(seg int, bigProbe bool) error {
 // The collector removes that already-held media before publishing.
 // Other encodes on nominal plans cut at uniform boundaries directly.
 func (s *Session) chunkedLocked(d core.Decision) bool {
-	if s.isDASH() || s.plan == nil || s.info.Video() == nil {
+	if s.liveInput || s.isDASH() || s.plan == nil || s.info.Video() == nil {
 		return false
 	}
 	return s.plan.Keyframed() || d.VideoCopy || s.container == ContainerMatroska

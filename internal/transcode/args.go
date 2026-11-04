@@ -153,7 +153,7 @@ func buildArgs(s runSpec) []string {
 			args = append(args, "-muxdelay", "0", "-muxpreload", "0")
 			segmentOptions = append(segmentOptions, "mpegts_copyts=1", "avoid_negative_ts=disabled")
 		}
-		if s.Start > 0 {
+		if s.Start > 0 || (s.LiveInput && s.StartSeg > 0) {
 			// A new muxer resets each PID's continuity counter. Mark that reset
 			// in-band so a decoder retaining buffered TS does not flag the first
 			// replacement packet as corrupt. Media timestamps remain unchanged.
@@ -234,13 +234,19 @@ func buildCodecArgs(s runSpec) []string {
 	// ---- input
 	args = append(args, inputSafetyArgs(s.Input, s.LiveInput)...)
 	args = append(args, httpInputArgs(s.Input, true)...)
+	if s.LiveInput {
+		if isNetworkURL(s.Input) {
+			args = append(args, "-reconnect_streamed", "1", "-reconnect_max_retries", "3")
+		}
+		args = append(args, "-fflags", "+discardcorrupt+genpts", "-err_detect", "ignore_err")
+	}
 	args = appendInputHeaders(args, s.commandHeaders())
 	if s.BigProbe {
 		args = append(args, "-probesize", "50000000", "-analyzeduration", "10000000")
 	} else {
 		args = append(args, "-probesize", "5000000", "-analyzeduration", "2000000")
 	}
-	if !transcodeVideo {
+	if !transcodeVideo && !s.LiveInput {
 		args = append(args, "-fflags", "+genpts")
 	}
 	vp := planVideo(s, v)

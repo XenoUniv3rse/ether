@@ -770,7 +770,7 @@ func (m *Manager) startHLS(ctx context.Context, req core.HLSRequest, life *encod
 				segDur = short
 			}
 		}
-		fastStart := adapt.FastStart && v != nil && (!d.VideoCopy || d.Container == ContainerMPEGTS)
+		fastStart := !req.LiveInput && adapt.FastStart && v != nil && (!d.VideoCopy || d.Container == ContainerMPEGTS)
 		plan = buildTimeline(span, segDur, timelineOptions{
 			steadyMode: steadyMode,
 			fastStart:  fastStart,
