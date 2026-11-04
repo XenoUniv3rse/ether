@@ -124,6 +124,11 @@ func isConnReset(err error) bool {
 	return strings.Contains(msg, "connection reset") || strings.Contains(msg, "forcibly closed")
 }
 
+// isConnRefused includes wrapped platform errors without relying on their text.
+func isConnRefused(err error) bool {
+	return errors.Is(err, syscall.ECONNREFUSED) || (err != nil && strings.Contains(strings.ToLower(err.Error()), "connection refused"))
+}
+
 // dialAddr is the host:port the transport dials for a URL (no proxy), the
 // key connCap counts under.
 func dialAddr(raw string) string {

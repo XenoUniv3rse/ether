@@ -1,6 +1,7 @@
 package playback
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -178,6 +179,12 @@ func serveSingleRangeBody(w http.ResponseWriter, r *http.Request, status int, st
 			return nil
 		}
 		if r.Context().Err() != nil {
+			return err
+		}
+		if errors.Is(err, context.Canceled) {
+			// A superseded read ends its already-advertised representation
+			// early without reporting that the source itself failed.
+			w.WriteHeader(status)
 			return err
 		}
 		h := w.Header()

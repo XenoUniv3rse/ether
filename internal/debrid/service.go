@@ -1291,6 +1291,27 @@ func (s *Service) Refresh(ctx context.Context, p Payload, force bool) (Payload, 
 	return p, fmt.Errorf("debrid: refresh link for %s: %w (%v)", p.Name(), core.ErrSourceUnavailable, joined)
 }
 
+// alternateProvider obtains the same torrent file on another provider after
+// a media host refuses connections. It never treats a different signed URL
+// on the same host as a change of route.
+func (s *Service) alternateProvider(ctx context.Context, p Payload) (Payload, error) {
+	for _, e := range s.active() {
+		if e.cfg.ID == p.Provider || e.blocked(s.now()) != nil {
+			continue
+		}
+		base := Payload{Key: p.Key, ReleaseID: p.ReleaseID, InfoHash: p.InfoHash, Magnet: p.Magnet, Target: p.Target, Release: p.Release}
+		out, err := s.acquireOn(ctx, e, base, sameFile(p), false)
+		if err == nil && dialAddr(out.URL) != "" && dialAddr(out.URL) != dialAddr(p.URL) {
+			s.savePayload(ctx, out)
+			return out, nil
+		}
+		if ctx.Err() != nil {
+			return p, ctx.Err()
+		}
+	}
+	return p, core.ErrSourceUnavailable
+}
+
 // relink regenerates a link on the payload's own provider.
 func (s *Service) relink(ctx context.Context, e *entry, p Payload) (Payload, error) {
 	if err := e.acquire(ctx); err != nil {

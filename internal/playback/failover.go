@@ -686,6 +686,7 @@ type failoverOpts struct {
 	markBad        bool
 	down           bool
 	stopOnFailure  bool
+	strictDirect   bool // a different release needs a new direct-play decision
 	// followPlayer: at was mapped from a failed source read, which may be
 	// a container tail/index read or predate a seek; resume at the
 	// player's latest segment request when the HLS session reports it.
@@ -708,7 +709,7 @@ func (m *Manager) failoverWith(ctx context.Context, s *session, observed *genera
 
 	s.mu.Lock()
 	cur, closed, failovers, pinned := s.cur, s.closed, s.failovers, s.sourcePins > 0
-	direct := s.decision == core.DecisionDirectPlay && !spliceable(s.container, s.name)
+	direct := fo.strictDirect || (s.decision == core.DecisionDirectPlay && !spliceable(s.container, s.name))
 	s.mu.Unlock()
 	if closed {
 		return nil, fmt.Errorf("playback: session %s ended: %w", s.id, core.ErrNotFound)
@@ -860,7 +861,7 @@ func (m *Manager) failoverWith(ctx context.Context, s *session, observed *genera
 		// offsets. Only an exact-size repost may replace a non-spliceable
 		// direct source in place; a healthy mismatched candidate is kept
 		// as a remux-switch fallback instead of being spliced in.
-		if err == nil && direct && g.src.Size() != cur.src.Size() {
+		if err == nil && direct && (g.src.Size() != cur.src.Size() || fo.strictDirect) {
 			keep := fallbackGen == nil
 			if !keep && fo.down {
 				// A down-failover's remux fallback only helps at a lower
@@ -881,7 +882,7 @@ func (m *Manager) failoverWith(ctx context.Context, s *session, observed *genera
 				m.dropGeneration(g)
 			}
 			g = nil
-			err = fmt.Errorf("incompatible direct-play replacement size: %w", core.ErrNotAvailable)
+			err = fmt.Errorf("incompatible direct-play replacement: %w", core.ErrNotAvailable)
 		}
 		if err == nil && fo.down {
 			if bps := mediaBps(g.infoSnapshot(), g.src.Size()); curBps > 0 && bps > 0 && bps >= curBps {

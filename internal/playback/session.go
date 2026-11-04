@@ -56,6 +56,8 @@ type generation struct {
 	articleMissing     atomic.Bool
 	backgroundFailover atomic.Bool // at most one recovery worker for this source
 	readFailure        error       // protected by mu; distinguishes transient failover from bad data
+	retryEpoch         uint64
+	retryPending       bool
 
 	mu      sync.Mutex
 	refs    int
