@@ -111,3 +111,23 @@ func TestOneProviderConnectionPerChannel(t *testing.T) {
 		t.Fatalf("provider connections = %d", total.Load())
 	}
 }
+
+// New provider streams are spaced by the gap and capped per hour.
+func TestTapPacesNewProviderStreams(t *testing.T) {
+	var r tapRegistry
+	now := time.Unix(1_000_000, 0)
+	for i, want := range []time.Duration{0, 2 * time.Second, 4 * time.Second} {
+		if wait, err := r.reserveOpen("p", 2*time.Second, 3, now); err != nil || wait != want {
+			t.Fatalf("open %d: wait %v err %v", i, wait, err)
+		}
+	}
+	if _, err := r.reserveOpen("p", 2*time.Second, 3, now.Add(time.Minute)); !errors.Is(err, ErrProviderPaced) {
+		t.Fatalf("fourth open in the hour: %v", err)
+	}
+	if wait, err := r.reserveOpen("p", 2*time.Second, 3, now.Add(time.Hour+5*time.Second)); err != nil || wait != 0 {
+		t.Fatalf("after the hour: %v %v", wait, err)
+	}
+	if wait, err := r.reserveOpen("other", 0, 0, now); err != nil || wait != 0 {
+		t.Fatalf("unpaced source: %v %v", wait, err)
+	}
+}

@@ -324,9 +324,11 @@ type authCache struct {
 }
 
 type authEntry struct {
-	auth  *SourceAuth
-	limit int // provider connection limit; 0 is none
-	at    time.Time
+	auth    *SourceAuth
+	limit   int           // connection limit; 0 is none
+	gap     time.Duration // least time between new provider streams
+	perHour int           // new provider streams per hour; 0 is no cap
+	at      time.Time
 }
 
 const authCacheTTL = 30 * time.Second
@@ -353,6 +355,10 @@ func (s *Service) sourceConnectionLimit(id string) int {
 	return e.limit
 }
 
+// defaultTuneGap spaces new streams on a connection-limited account: a
+// viewer flicking through channels must not look like a scan.
+const defaultTuneGap = 2 * time.Second
+
 func (s *Service) sourceEntry(ctx context.Context, id string) (authEntry, error) {
 	if id == "" {
 		return authEntry{}, nil
@@ -371,9 +377,18 @@ func (s *Service) sourceEntry(ctx context.Context, id string) (authEntry, error)
 	if err != nil {
 		return authEntry{}, err
 	}
-	e = authEntry{auth: src.Auth, at: s.o.Now()}
+	e = authEntry{auth: src.Auth, at: s.o.Now(), perHour: max(src.TunesPerHour, 0)}
 	if src.Account != nil {
 		e.limit = src.Account.MaxConnections
+	}
+	if src.MaxConnections > 0 && (e.limit == 0 || src.MaxConnections < e.limit) {
+		e.limit = src.MaxConnections
+	}
+	switch {
+	case src.TuneGapSeconds > 0:
+		e.gap = time.Duration(src.TuneGapSeconds) * time.Second
+	case src.TuneGapSeconds == 0 && e.limit > 0:
+		e.gap = defaultTuneGap
 	}
 	c.mu.Lock()
 	if c.m == nil {

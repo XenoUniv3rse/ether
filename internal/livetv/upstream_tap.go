@@ -65,10 +65,56 @@ const tapBusyHeader = "X-Ether-Provider-Busy"
 // use by other channels.
 var ErrProviderBusy = fmt.Errorf("every connection this IPTV provider allows is in use: %w", core.ErrStreamLimit)
 
+// ErrProviderPaced reports that the source's hourly allowance of new
+// provider streams is spent.
+var ErrProviderPaced = fmt.Errorf("this IPTV source has started as many streams this hour as its owner allows: %w", core.ErrStreamLimit)
+
 type tapRegistry struct {
 	mu       sync.Mutex
 	byKey    map[string]*upstreamTap
 	bySource map[string]map[*upstreamTap]struct{}
+	pace     map[string]*sourcePace
+}
+
+// sourcePace spaces a source's new provider streams.
+type sourcePace struct {
+	next  time.Time   // earliest start of the next stream
+	opens []time.Time // starts in the last hour
+}
+
+// reserveOpen books the source's next stream start and returns how long the
+// caller waits for it. A spent hourly allowance refuses the stream.
+func (r *tapRegistry) reserveOpen(source string, gap time.Duration, perHour int, now time.Time) (time.Duration, error) {
+	if source == "" || gap <= 0 && perHour <= 0 {
+		return 0, nil
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.pace == nil {
+		r.pace = map[string]*sourcePace{}
+	}
+	p := r.pace[source]
+	if p == nil {
+		p = &sourcePace{}
+		r.pace[source] = p
+	}
+	kept := p.opens[:0]
+	for _, at := range p.opens {
+		if now.Sub(at) < time.Hour {
+			kept = append(kept, at)
+		}
+	}
+	p.opens = kept
+	if perHour > 0 && len(p.opens) >= perHour {
+		return 0, ErrProviderPaced
+	}
+	start := now
+	if p.next.After(start) {
+		start = p.next
+	}
+	p.next = start.Add(gap)
+	p.opens = append(p.opens, start)
+	return start.Sub(now), nil
 }
 
 type upstreamTap struct {
@@ -435,7 +481,22 @@ func (s *Service) openTap(t *upstreamTap, g *inputGrant, raw string, hdr http.He
 		reqCtx = openContext{Context: ctx, deadline: dl}
 	}
 	stop := context.AfterFunc(opener, cancel)
-	res, err := s.relayFetch(reqCtx, cancel, g, raw, &http.Request{Header: hdr})
+	var res *http.Response
+	var err error
+	if g.source != "" {
+		e, _ := s.sourceEntry(ctx, g.source)
+		var wait time.Duration
+		if wait, err = t.reg.reserveOpen(g.source, e.gap, e.perHour, time.Now()); err == nil && wait > 0 {
+			select {
+			case <-time.After(wait):
+			case <-ctx.Done():
+				err = context.Cause(ctx)
+			}
+		}
+	}
+	if err == nil {
+		res, err = s.relayFetch(reqCtx, cancel, g, raw, &http.Request{Header: hdr})
+	}
 	if !stop() && err == nil {
 		// The opener left while headers arrived; nobody asked for this stream.
 		res.Body.Close()
@@ -514,6 +575,9 @@ func (s *Service) sniffInput(ctx context.Context, ss *session, n int) ([]byte, s
 	if t.openErr != nil {
 		if ctx.Err() != nil {
 			return nil, "", ctx.Err()
+		}
+		if errors.Is(t.openErr, ErrProviderPaced) {
+			return nil, "", ErrProviderPaced
 		}
 		if errors.Is(t.openErr, context.DeadlineExceeded) {
 			return nil, "", context.DeadlineExceeded

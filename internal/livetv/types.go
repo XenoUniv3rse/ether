@@ -189,6 +189,16 @@ type Source struct {
 	// order and numbers; otherwise channels are numbered 1… down the
 	// listed groups (unlisted groups follow in provider order).
 	GroupOrder []string `json:"groupOrder,omitempty"`
+
+	// Provider etiquette for the source's streams. MaxConnections caps
+	// simultaneous provider connections below what the panel allows (0 uses
+	// the panel's limit; it can never raise it). TuneGapSeconds is the least
+	// time between two new provider streams: 0 is the default (2 s on a
+	// connection-limited account, none otherwise), negative turns it off.
+	// TunesPerHour caps new provider streams per hour; 0 is no cap.
+	MaxConnections int `json:"maxConnections,omitempty"`
+	TuneGapSeconds int `json:"tuneGapSeconds,omitempty"`
+	TunesPerHour   int `json:"tunesPerHour,omitempty"`
 }
 
 // ProviderAccount is what an IPTV panel reports about the owner's login.
