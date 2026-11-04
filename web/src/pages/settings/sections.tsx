@@ -1,13 +1,15 @@
 import { Button, SettingsSection, toast } from "@braedonsaunders/appkit-ui";
 import { useEffect, useState } from "react";
-import { ErrorPanel, LoadingRows } from "../../components/feedback";
+import { ErrorPanel, LoadingInline, LoadingRows } from "../../components/feedback";
 import { LevelBadge } from "../../components/status";
 import { SettingsRow } from "../../components/SettingsRow";
 import { localized, t, tn } from "../../i18n";
-import { api } from "../../lib/api";
+import { api, ApiError } from "../../lib/api";
 import { isPlainObject, relativeTime } from "../../lib/format";
 import { plexDirectHealth, remoteHealth } from "../../lib/health";
 import { useAsync } from "../../lib/hooks";
+import { phaseText } from "../../lib/startup-text";
+import type { StartupPhase } from "../../lib/ops";
 import type { UpdateStatus } from "../../lib/types";
 import { SecureAddresses } from "./SecureAddresses";
 
@@ -83,12 +85,53 @@ export function UpdatesStatus() {
   const status = useAsync(() => api.updateStatus(), []);
   const [busy, setBusy] = useState(false);
   const s = status.data;
+  const starting =
+    status.error instanceof ApiError &&
+    status.error.code === "starting" &&
+    status.error.phase !== "failed";
+  const reconnecting =
+    status.error instanceof ApiError &&
+    status.error.status === 0 &&
+    (s?.state === "applying" || s?.requested === true);
   useEffect(() => {
-    if (!s || !(s.requested || s.state === "downloading" || s.state === "applying")) return;
+    if (!starting && !reconnecting) return;
+    const timer = setInterval(() => void status.reload(), 5000);
+    return () => clearInterval(timer);
+  }, [starting, reconnecting, status.reload]);
+  useEffect(() => {
+    if (!s?.enabled) return;
+    void api
+      .checkUpdates()
+      .then(status.setData)
+      .catch(() => {});
+    // Check once on entry; subsequent checks are manual.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [s?.enabled]);
+  useEffect(() => {
+    if (!s || !(s.checking || s.requested || s.state === "downloading" || s.state === "applying"))
+      return;
     const timer = setInterval(() => void status.reload(), 5000);
     return () => clearInterval(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [s?.requested, s?.state]);
+  }, [s?.checking, s?.requested, s?.state]);
+  if (starting) {
+    const phase = (status.error as ApiError).phase as StartupPhase;
+    const text = phaseText({
+      phase,
+      ready: false,
+      message: "",
+      started: "",
+      since: "",
+      elapsedSeconds: 0,
+    });
+    return (
+      <div>
+        <LoadingInline label={text.title} />
+        <p>{text.detail}</p>
+      </div>
+    );
+  }
+  if (reconnecting) return <LoadingInline label={t("Starting Ether")} />;
   if (status.error) return <ErrorPanel error={status.error} onRetry={() => void status.reload()} />;
   if (!s) return <LoadingRows rows={2} />;
 
@@ -199,6 +242,23 @@ export function UpdatesStatus() {
       />
       <SettingsRow
         title={t("Last check")}
+        control={
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={!s.enabled || busy || s.checking}
+            onClick={() => {
+              setBusy(true);
+              void api
+                .checkUpdates()
+                .then(status.setData)
+                .catch((e) => toast.error((e as Error).message))
+                .finally(() => setBusy(false));
+            }}
+          >
+            {s.checking ? t("Checking…") : t("Check for updates")}
+          </Button>
+        }
         description={
           s.lastError
             ? s.lastError

@@ -68,3 +68,21 @@ describe("update availability confidence", () => {
     expect(screen.queryByText("Ether is up to date")).not.toBeInTheDocument();
   });
 });
+
+describe("update startup progress", () => {
+  it("shows a neutral startup phase", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({ error: { code: "starting", phase: "backing_up", message: "Saving" } }),
+            { status: 503 },
+          ),
+      ),
+    );
+    render(<UpdatesStatus />);
+    expect(await screen.findByText("Saving a safety copy")).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+});

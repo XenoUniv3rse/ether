@@ -178,6 +178,8 @@ type Manager struct {
 	startedAt      time.Time
 	confirmed      bool
 	restarting     bool
+	checking       bool
+	checkPending   bool
 
 	// Rolling updates (Coordinator set).
 	leaseHeld      bool      // lease taken by this process for a pending install
@@ -272,6 +274,21 @@ func (m *Manager) Enabled() bool {
 // Wake prompts the manager to re-evaluate settings immediately.
 func (m *Manager) Wake() {
 	m.wake()
+}
+
+// CheckNow schedules a feed check, coalescing concurrent requests.
+func (m *Manager) CheckNow() error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if !m.opts.Config().Enabled || m.noKey || m.opts.NewClient == nil {
+		return ErrUpdatesDisabled
+	}
+	if !m.checking && !m.checkPending {
+		m.checkPending = true
+		m.nextCheck = time.Time{}
+		m.wake()
+	}
+	return nil
 }
 
 // Run drives the manager until ctx ends or a restart has been requested.
@@ -422,6 +439,9 @@ func (m *Manager) check(ctx context.Context, now time.Time) {
 		return
 	}
 	m.mu.Lock()
+	m.checkPending = false
+	m.checking = true
+	defer func() { m.mu.Lock(); m.checking = false; m.mu.Unlock() }()
 	if key := clientKey(cfg); m.client == nil || key != m.clientKey {
 		c, err := m.opts.NewClient(cfg)
 		if err != nil {
@@ -887,6 +907,7 @@ type AvailableUpdate struct {
 // ManagerStatus is the admin-facing snapshot.
 type ManagerStatus struct {
 	Enabled            bool             `json:"enabled"`
+	Checking           bool             `json:"checking"`
 	DisabledReason     string           `json:"disabledReason,omitempty"`
 	Current            string           `json:"current"`
 	Available          *AvailableUpdate `json:"available,omitempty"`
@@ -938,6 +959,7 @@ func (m *Manager) Status() ManagerStatus {
 	}
 	st := ManagerStatus{
 		Enabled:            enabled,
+		Checking:           m.checking || m.checkPending,
 		DisabledReason:     disabledReason,
 		Current:            m.opts.CurrentVersion,
 		State:              m.state,
