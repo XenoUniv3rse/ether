@@ -1,22 +1,58 @@
 import { DashboardPanel } from "@braedonsaunders/appkit-dashboard/primitives";
 import { CheckCircle2, Clock, PlayCircle, Users2 } from "lucide-react";
-import { RankedBars, SplitBar, TimeBars, WeekHeatmap } from "../../components/charts";
+import {
+  RankedBars,
+  SeriesLines,
+  SplitBar,
+  TimeBars,
+  WeekHeatmap,
+  type Viz,
+} from "../../components/charts";
+import { Artwork } from "../../components/Artwork";
+import { useTitle } from "../../lib/titles";
+import type { EtherUser } from "../../lib/types";
 import { ErrorPanel, LoadingRows } from "../../components/feedback";
 import { Kpi, KpiRow } from "../../components/Kpi";
 import { t, tn } from "../../i18n";
 import { fixed, formatNumber, formatPercent } from "../../lib/format";
 import { hoursOf, type Bucket, type Summary } from "./types";
 
-const rank = (items: Bucket[] | undefined, by: "watchedMs" | "plays" = "watchedMs") =>
+function TitleThumb({ ratingKey, label }: { ratingKey?: string; label: string }) {
+  const title = useTitle(ratingKey || undefined);
+  return (
+    <Artwork
+      src={title?.poster}
+      alt=""
+      title={label}
+      className="aspect-[2/3] w-8 shrink-0 rounded"
+    />
+  );
+}
+
+function ViewerAvatar({ user, label }: { user?: EtherUser; label: string }) {
+  return user?.thumb ? (
+    <img src={user.thumb} alt="" className="size-8 shrink-0 rounded-full object-cover" />
+  ) : (
+    <span className="grid size-8 shrink-0 place-items-center rounded-full bg-viz-5/20 text-xs font-semibold uppercase text-fg">
+      {label.slice(0, 1)}
+    </span>
+  );
+}
+
+const rank = (items: Bucket[] | undefined, leading?: (b: Bucket) => React.ReactNode) =>
   (items ?? [])
     .filter((b) => b.label)
     .slice(0, 10)
     .map((b, i) => ({
       key: `${b.label}-${i}`,
       label: b.label,
-      value: by === "watchedMs" ? hoursOf(b.watchedMs) : b.plays,
+      value: hoursOf(b.watchedMs),
       detail: tn(b.plays, "{count} play", "{count} plays"),
+      leading: leading?.(b),
     }));
+
+const TV: Viz = "viz-1";
+const MOVIES: Viz = "viz-2";
 
 const noPlays = (
   <p className="py-4 text-sm text-fg-muted">{t("No recorded plays in this period.")}</p>
@@ -25,10 +61,12 @@ const noPlays = (
 /** What people watched, when, and who watched most, for the period and viewer. */
 export function Viewing({
   summary,
+  viewers = [],
   error,
   onRetry,
 }: {
   summary: Summary | undefined;
+  viewers?: EtherUser[];
   error: unknown;
   onRetry: () => void;
 }) {
@@ -39,7 +77,10 @@ export function Viewing({
     key: b.label,
     label: b.label === "movie" ? t("Movies") : b.label === "episode" ? t("TV episodes") : b.label,
     value: hoursOf(b.watchedMs),
+    color: b.label === "movie" ? MOVIES : b.label === "episode" ? TV : undefined,
   }));
+  const userById = new Map(viewers.map((v) => [String(v.id), v]));
+  const h = (v: number) => t("{hours} h", { hours: fixed(v, 1) });
   return (
     <>
       <KpiRow>
@@ -81,7 +122,27 @@ export function Viewing({
       </KpiRow>
 
       <DashboardPanel title={t("Watch time")}>
-        {s.daily.length ? (
+        {s.dailyKinds && s.dailyKinds.length ? (
+          <SeriesLines
+            ariaLabel={t("Hours watched by day, TV and movies")}
+            labels={s.dailyKinds.map((d) => d.label)}
+            valueFormat={(v) => fixed(v, v < 10 ? 1 : 0)}
+            series={[
+              {
+                key: "tv",
+                label: t("TV episodes"),
+                color: TV,
+                values: s.dailyKinds.map((d) => hoursOf(d.episodeMs)),
+              },
+              {
+                key: "movies",
+                label: t("Movies"),
+                color: MOVIES,
+                values: s.dailyKinds.map((d) => hoursOf(d.movieMs)),
+              },
+            ]}
+          />
+        ) : s.daily.length ? (
           <TimeBars
             ariaLabel={t("Hours watched by day")}
             height={180}
@@ -98,10 +159,11 @@ export function Viewing({
         )}
       </DashboardPanel>
 
-      <div className="grid gap-6 lg:grid-cols-5">
+      <div className="grid items-stretch gap-6 lg:grid-cols-5">
         {s.heatmap ? (
-          <DashboardPanel title={t("When people watch")} className="lg:col-span-3">
+          <DashboardPanel title={t("When people watch")} className="lg:col-span-3" fill>
             <WeekHeatmap
+              fill
               ariaLabel={t("Plays by weekday and hour")}
               cells={s.heatmap.map((c) => ({ weekday: c.weekday, hour: c.hour, value: c.plays }))}
               valueFormat={(v) => tn(v, "{count} play", "{count} plays")}
@@ -111,19 +173,16 @@ export function Viewing({
         <div className={s.heatmap ? "space-y-6 lg:col-span-2" : "space-y-6 lg:col-span-5"}>
           {kinds.length ? (
             <DashboardPanel title={t("Movies and TV")}>
-              <SplitBar
-                ariaLabel={t("Watch time by kind")}
-                data={kinds}
-                valueFormat={(v) => t("{hours} h", { hours: fixed(v, 1) })}
-              />
+              <SplitBar ariaLabel={t("Watch time by kind")} data={kinds} valueFormat={h} />
             </DashboardPanel>
           ) : null}
           {s.genres ? (
             <DashboardPanel title={t("Top genres")}>
               <RankedBars
+                color="viz-3"
                 ariaLabel={t("Top genres")}
                 data={rank(s.genres).slice(0, 6)}
-                valueFormat={(v) => t("{hours} h", { hours: fixed(v, 1) })}
+                valueFormat={h}
                 empty={noPlays}
               />
             </DashboardPanel>
@@ -134,27 +193,36 @@ export function Viewing({
       <div className={s.shows ? "grid gap-6 lg:grid-cols-3" : "grid gap-6 lg:grid-cols-2"}>
         <DashboardPanel title={t("Top titles")}>
           <RankedBars
+            color="viz-4"
             ariaLabel={t("Top titles")}
-            data={rank(s.titles)}
-            valueFormat={(v) => t("{hours} h", { hours: fixed(v, 1) })}
+            data={rank(s.titles, (b) => (
+              <TitleThumb ratingKey={b.key} label={b.label} />
+            ))}
+            valueFormat={h}
             empty={noPlays}
           />
         </DashboardPanel>
         {s.shows ? (
           <DashboardPanel title={t("Top shows")}>
             <RankedBars
+              color={TV}
               ariaLabel={t("Top shows")}
-              data={rank(s.shows)}
-              valueFormat={(v) => t("{hours} h", { hours: fixed(v, 1) })}
+              data={rank(s.shows, (b) => (
+                <TitleThumb ratingKey={b.key} label={b.label} />
+              ))}
+              valueFormat={h}
               empty={noPlays}
             />
           </DashboardPanel>
         ) : null}
         <DashboardPanel title={t("Top viewers")}>
           <RankedBars
+            color="viz-5"
             ariaLabel={t("Top viewers")}
-            data={rank(s.users)}
-            valueFormat={(v) => t("{hours} h", { hours: fixed(v, 1) })}
+            data={rank(s.users, (b) => (
+              <ViewerAvatar user={b.key ? userById.get(b.key) : undefined} label={b.label} />
+            ))}
+            valueFormat={h}
             empty={noPlays}
           />
         </DashboardPanel>

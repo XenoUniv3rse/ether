@@ -446,3 +446,41 @@
   -webkit-mask-image: linear-gradient(to bottom, transparent 0, transparent 0.75rem, #000 1.5rem);
   mask-image: linear-gradient(to bottom, transparent 0, transparent 0.75rem, #000 1.5rem);
 }
+
+/*
+ * Chart palette: five categorical hues, validated (dataviz validate_palette.js)
+ * for lightness, chroma, colour-blind and normal-vision separation, and >= 3:1
+ * contrast on the console's light (#ffffff) and dark (#0f172a) surfaces.
+ * Status colours (success, warning, danger) are never used as series.
+ */
+:root {
+  --viz-1: #0d9488; /* teal */
+  --viz-2: #6250d6; /* violet */
+  --viz-3: #eb6834; /* orange */
+  --viz-4: #2a78d6; /* blue */
+  --viz-5: #d55181; /* magenta */
+}
+.dark {
+  --viz-1: #0d9488;
+  --viz-2: #9085e9;
+  --viz-3: #d95926;
+  --viz-4: #3987e5;
+  --viz-5: #d55181;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not(.light):not(.dark) {
+    --viz-1: #0d9488;
+    --viz-2: #9085e9;
+    --viz-3: #d95926;
+    --viz-4: #3987e5;
+    --viz-5: #d55181;
+  }
+}
+
+@theme inline {
+  --color-viz-1: var(--viz-1);
+  --color-viz-2: var(--viz-2);
+  --color-viz-3: var(--viz-3);
+  --color-viz-4: var(--viz-4);
+  --color-viz-5: var(--viz-5);
+}
