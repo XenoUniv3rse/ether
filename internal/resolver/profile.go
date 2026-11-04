@@ -254,6 +254,9 @@ type profileDecision struct {
 }
 
 func decideProfile(q config.Quality, caps core.ClientCaps, user *core.User) profileDecision {
+	if caps.Download && caps.DownloadSourceMaxHeight > caps.MaxHeight {
+		caps.MaxHeight = caps.DownloadSourceMaxHeight
+	}
 	caps, eff := applyClientRules(q, caps, user)
 	prof := eff.choice.profile
 	// Deep-copy slices so callers cannot mutate config.
@@ -346,8 +349,12 @@ func decideProfile(q config.Quality, caps core.ClientCaps, user *core.User) prof
 // request still clamp on top of this in SelectProfile.
 func downloadProfile(prof core.QualityProfile, caps core.ClientCaps) core.QualityProfile {
 	prof.Name += "+download"
-	if prof.MaxHeight == 0 || prof.MaxHeight > 1080 {
-		prof.MaxHeight = 1080
+	ceiling := 1080
+	if caps.DownloadSourceMaxHeight > ceiling {
+		ceiling = caps.DownloadSourceMaxHeight
+	}
+	if prof.MaxHeight == 0 || prof.MaxHeight > ceiling {
+		prof.MaxHeight = ceiling
 	}
 	if prof.MinHeight > prof.MaxHeight {
 		prof.MinHeight = prof.MaxHeight
@@ -361,11 +368,15 @@ func downloadProfile(prof core.QualityProfile, caps core.ClientCaps) core.Qualit
 		prof.PreferredCodecs = []string{"h264"}
 	}
 	prof.PreferredAudio = []string{"aac", "eac3", "ac3"}
-	if prof.MaxSizeMBPerMin == 0 || prof.MaxSizeMBPerMin > 80 {
-		prof.MaxSizeMBPerMin = 80
-	}
-	if prof.EpisodeMaxSizeMBPerMin > 80 {
-		prof.EpisodeMaxSizeMBPerMin = 80
+	// A source for conversion can be larger than the compact copy target;
+	// keep the owner's size ceilings instead of adding the copy-only cap.
+	if caps.DownloadSourceMaxHeight == 0 {
+		if prof.MaxSizeMBPerMin == 0 || prof.MaxSizeMBPerMin > 80 {
+			prof.MaxSizeMBPerMin = 80
+		}
+		if prof.EpisodeMaxSizeMBPerMin > 80 {
+			prof.EpisodeMaxSizeMBPerMin = 80
+		}
 	}
 	prof.PreferLargest = false
 	return prof

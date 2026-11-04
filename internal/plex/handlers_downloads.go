@@ -216,14 +216,13 @@ type downloadContainer struct {
 
 func keyPath(k core.RatingKey) string { return "/library/metadata/" + k.String() }
 
-// itemModel renders one queue item. The download "transcode" is a stream
-// copy; the DecisionResult says so honestly (conversion, not direct play).
+// itemModel renders one queue item. Downloads are converted or remuxed to MP4.
 func itemModel(it *downloadItem) downloadQueueItemModel {
 	m := downloadQueueItemModel{
 		ID: it.id, QueueID: it.queueID, Key: keyPath(it.key), Status: it.status, Error: it.errText,
 	}
 	dr := &decisionResultModel{AvailableBandwidth: it.bandwidth}
-	text := "Direct play not available; Remux (copy) to MP4 OK."
+	text := "Direct play not available; Conversion to MP4 OK."
 	switch it.status {
 	case downloadError:
 		dr.DirectPlayDecisionCode, dr.DirectPlayDecisionText = codeDirectPlayError, it.errText
@@ -831,8 +830,30 @@ func (s *Server) processDownloadItem(ctx context.Context, it *downloadItem, run 
 	// other job's deferred Stop.
 	caps.ClientID = it.caps.ClientID + "/download/" + strconv.FormatInt(run, 10)
 	ps, err := s.d.Playback.Prepare(ctx, it.user, it.key, caps)
+	noRelease := func(err error) bool {
+		return err != nil && errors.Is(err, core.ErrNotAvailable) && playbackMessage(err) == msgNotAvailable
+	}
+	// The requested resolution describes the output, not the source. Try
+	// successively larger source ceilings only after the requested tier is
+	// exhausted, so the closest available tier still wins.
+	for _, height := range []int{1080, 2160} {
+		if !noRelease(err) || ctx.Err() != nil || caps.MaxHeight <= 0 || height <= caps.MaxHeight {
+			continue
+		}
+		sourceCaps := caps
+		sourceCaps.DownloadSourceMaxHeight = height
+		ps, err = s.d.Playback.Prepare(ctx, it.user, it.key, sourceCaps)
+	}
 	if err != nil {
-		fail(playbackMessage(err))
+		if ctx.Err() != nil {
+			return
+		}
+		s.log.Warn("download preparation failed", "key", it.key, "err", err)
+		if noRelease(err) {
+			fail("No release available for download at this quality.")
+		} else {
+			fail(playbackMessage(err))
+		}
 		return
 	}
 	defer s.d.Playback.Stop(ps.ID)
@@ -861,6 +882,17 @@ func (s *Server) processDownloadItem(ctx context.Context, it *downloadItem, run 
 	if it.user != nil {
 		viewerID = it.user.ID
 	}
+	subtitle := -1
+	sel := resolveSelection(s.selections.get(viewerID, int64(it.key)), ps.Info)
+	if title, err := s.d.Catalog.Get(ctx, it.key); err == nil && title != nil {
+		sel = s.preferredSelection(ctx, it.user, it.key, ps.Info, title.Language, sel)
+	}
+	if sel.subtitleSet && sel.subtitle >= 0 && sel.subtitle < len(ps.Info.Streams) {
+		st := ps.Info.Streams[sel.subtitle]
+		if st.Type == "subtitle" && !st.External {
+			subtitle = st.Index
+		}
+	}
 	p, size, err := s.d.Downloads.RemuxDownload(ctx, core.DownloadRemuxRequest{
 		InputURL:    s.d.Playback.InputURL(ps.ID),
 		Info:        ps.Info,
@@ -869,7 +901,7 @@ func (s *Server) processDownloadItem(ctx context.Context, it *downloadItem, run 
 		Caps:        caps,
 		Options: core.DecideOptions{
 			DirectPlay: false, DirectStream: true,
-			MaxBitrateKbps: it.bandwidth, AudioStream: -1, SubtitleStream: -1,
+			MaxBitrateKbps: it.bandwidth, MaxHeight: caps.MaxHeight, AudioStream: -1, SubtitleStream: subtitle,
 			BurnSubtitles: it.burn,
 		},
 	}, func(f float64) {
@@ -885,6 +917,9 @@ func (s *Server) processDownloadItem(ctx context.Context, it *downloadItem, run 
 		s.downloads.mu.Unlock()
 	})
 	if err != nil {
+		if ctx.Err() == nil {
+			s.log.Warn("download processing failed", "key", it.key, "err", err)
+		}
 		switch {
 		case ctx.Err() != nil:
 			// Deleted, restarted or shutting down; state already reset.
@@ -893,7 +928,6 @@ func (s *Server) processDownloadItem(ctx context.Context, it *downloadItem, run 
 		case errors.Is(err, core.ErrDownloadBudget):
 			fail("Not enough temporary disk space on the server for this download.")
 		default:
-			s.log.Warn("download remux failed", "key", it.key, "err", err)
 			fail(msgPlayFailed)
 		}
 		return
