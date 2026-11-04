@@ -218,9 +218,10 @@ func buildCodecArgs(s runSpec) []string {
 	a := findStream(s.Info, d.AudioStream, "audio")
 	// An ADTS PCE may appear only in the source's first audio packet. Seeking
 	// the input past it leaves the AAC decoder without its channel layout.
-	// Decode from the beginning and discard to the requested output position
-	// for this precise source class; ordinary sources retain fast input seeks.
+	// Prime the decoder with a short prefix, then seek the same source. When
+	// that is unavailable, only local/short seeks may decode from the start.
 	pceOutputSeek := s.Protocol == core.ProtocolHLS && d.Container != ContainerMatroska && s.Start > 0 && s.Info.Container == "mpegts" && a != nil && a.AACProgramConfig && !d.AudioCopy
+	pceInput, pcePrelude, pceBounded := pceSeekInput(s)
 	segDur := s.SegDur
 	if segDur <= 0 {
 		segDur = DefaultSegmentDuration
@@ -243,8 +244,19 @@ func buildCodecArgs(s runSpec) []string {
 	}
 
 	// ---- input
-	args = append(args, inputSafetyArgs(s.Input, s.LiveInput)...)
-	httpArgs := httpInputArgs(s.Input, true)
+	if pceBounded {
+		protocols := "data,http,https,tcp,tls,crypto"
+		if !isNetworkURL(s.Input) {
+			protocols = "data,file"
+		}
+		args = append(args, "-format_whitelist", "concat,mpegts", "-protocol_whitelist", protocols)
+	} else {
+		args = append(args, inputSafetyArgs(s.Input, s.LiveInput)...)
+	}
+	var httpArgs []string
+	if !pceBounded {
+		httpArgs = httpInputArgs(s.Input, true)
+	}
 	if s.Protocol == core.ProtocolHTTP && s.InputTimeout > 0 && len(httpArgs) > 0 {
 		httpArgs[1] = strconv.FormatInt(s.InputTimeout.Microseconds(), 10)
 		httpArgs = append(httpArgs, "-reconnect_streamed", "1")
@@ -256,7 +268,9 @@ func buildCodecArgs(s runSpec) []string {
 		}
 		args = append(args, "-fflags", "+discardcorrupt+genpts", "-err_detect", "ignore_err")
 	}
-	args = appendInputHeaders(args, s.commandHeaders())
+	if !pceBounded {
+		args = appendInputHeaders(args, s.commandHeaders())
+	}
 	if s.BigProbe {
 		args = append(args, "-probesize", "50000000", "-analyzeduration", "10000000")
 	} else {
@@ -274,7 +288,11 @@ func buildCodecArgs(s runSpec) []string {
 	if s.httpCopyTimestamps() {
 		args = append(args, "-copyts")
 	}
-	args = append(args, "-i", s.Input)
+	if pceBounded {
+		args = append(args, "-f", "concat", "-safe", "0", "-i", pceInput)
+	} else {
+		args = append(args, "-i", s.Input)
+	}
 	textSub := matroskaTextSubtitle(s)
 	if textSub != nil && textSub.External && textSub.ExternalURL != "" {
 		// A sidecar file is a second input. Without the same -ss, its cues
@@ -289,7 +307,11 @@ func buildCodecArgs(s runSpec) []string {
 	if pceOutputSeek {
 		// Output seeking rebases packet timestamps even with -copyts. Put
 		// the result back on the title clock used by the segment slotter.
-		args = append(args, "-ss", secs(s.Start), "-output_ts_offset", secs(s.Start))
+		seek := s.Start
+		if pceBounded {
+			seek = pcePrelude
+		}
+		args = append(args, "-ss", secs(seek), "-output_ts_offset", secs(s.Start))
 	}
 
 	// ---- mapping

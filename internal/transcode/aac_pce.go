@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -130,7 +131,7 @@ func markADTSProgramConfigs(ctx context.Context, runner Runner, ffprobe, input s
 			return
 		}
 		inspected++
-		args := []string{"-hide_banner", "-v", "error", "-show_packets", "-show_data", "-show_entries", "packet=stream_index,data", "-select_streams", strconv.Itoa(st.Index), "-read_intervals", "%+#1", "-of", "json"}
+		args := []string{"-hide_banner", "-v", "error", "-show_packets", "-show_format", "-show_data", "-show_entries", "packet=stream_index,data,pts_time:format=start_time", "-select_streams", strconv.Itoa(st.Index), "-read_intervals", "%+#1", "-of", "json"}
 		args = append(args, inputSafetyArgs(input, false)...)
 		args = append(args, httpInputArgs(input, false)...)
 		args = append(args, "-i", input)
@@ -143,11 +144,30 @@ func markADTSProgramConfigs(ctx context.Context, runner Runner, ffprobe, input s
 			Packets []struct {
 				Stream int    `json:"stream_index"`
 				Data   string `json:"data"`
+				PTS    string `json:"pts_time"`
 			} `json:"packets"`
+			Format struct {
+				Start string `json:"start_time"`
+			} `json:"format"`
 		}
 		if json.Unmarshal(output.buf.Bytes(), &packets) != nil || len(packets.Packets) != 1 || packets.Packets[0].Stream != st.Index {
 			continue
 		}
 		st.AACProgramConfig = aacADTSProgramConfig(probeExtradata(packets.Packets[0].Data), st.Channels)
+		if st.AACProgramConfig {
+			pts, ptsOK := pceTimestamp(packets.Packets[0].PTS)
+			start, startOK := pceTimestamp(packets.Format.Start)
+			if ptsOK && startOK {
+				st.AACConfigPTS, st.AACSourceStart = &pts, &start
+			}
+		}
 	}
+}
+
+func pceTimestamp(s string) (int64, bool) {
+	f, err := strconv.ParseFloat(s, 64)
+	if err != nil || math.IsNaN(f) || math.IsInf(f, 0) || math.Abs(f) > 1e8 {
+		return 0, false
+	}
+	return int64(math.Round(f * 1e6)), true
 }

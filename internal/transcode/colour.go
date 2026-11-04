@@ -109,12 +109,14 @@ func colorspaceColour(src, dst picture) string {
 // graphFailure is the owner-visible reason s cannot be started, or nil
 // when the filter graph is one this ffmpeg can run.
 func graphFailure(s runSpec) error {
-	// A PCE-only ADTS source cannot be decoded after a fast seek. Until
-	// its configuration can be carried forward, do not scan an arbitrarily
-	// long remote source to reach the requested point.
+	// A PCE-only ADTS source needs its initial configuration after a seek.
+	// If the bounded prefix/seek input cannot be built, refuse a long remote
+	// scan rather than decoding the entire source up to the requested point.
 	if s.Protocol == core.ProtocolHLS && s.Info.Container == "mpegts" && s.Start > 30*time.Second && isNetworkURL(s.Input) && !s.Decision.AudioCopy {
 		if a := findStream(s.Info, s.Decision.AudioStream, "audio"); a != nil && a.AACProgramConfig {
-			return core.ErrNotAvailable
+			if _, _, ok := pceSeekInput(s); !ok {
+				return core.ErrNotAvailable
+			}
 		}
 	}
 	if s.Decision.VideoCopy {

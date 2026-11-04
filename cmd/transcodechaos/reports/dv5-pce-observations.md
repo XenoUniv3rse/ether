@@ -32,3 +32,24 @@ the same side-by-side first-frame comparison. The hardware HLS output decoded
 successfully. This remains a single-sample visual check, not calibrated display
 validation. The earlier PCE seek approach is being replaced because its
 source reads grow with the offset.
+
+Bounded PCE follow-up: the probe now retains the first PCE packet and source
+start timestamps. A generated, format-restricted concat input primes the AAC
+decoder with a short source prefix and then seeks the same source directly.
+The real Plex handler long-seek case returned decodable video and audio at a
+70-minute offset, serving 14,782,928 bytes of a 31,092,192-byte synthetic TS
+(after the initial probe). It performs bounded 256 KiB binary-search reads at
+intermediate offsets as well as the prefix and target reads; it does not read
+70 minutes linearly. This artificial source stretches 60 seconds across an
+80-minute clock, so its first video/audio timestamps (4207.067/4206.024) are
+sparse and do not establish normal-content drift. The ordinary six-second
+seek cases above remain the normal-timing verification.
+
+The bounded path requires valid initial timestamps and supports User-Agent,
+Referer and one other source header. Missing facts, multiple generic headers,
+or an oversize manifest retain the conservative fallback: local or <=30-second
+seeks may decode from the start; longer remote seeks fail promptly so playback
+can choose an alternative. Forcing stereo alone did not fix stock FFmpeg's
+missing-PCE decoder error, so the fallback does not claim to do so. The new
+optional probe fields are deep-copied and invalidate older cached probe facts.
+Quick transcode security-manifest and playback snapshot invariants passed.

@@ -367,6 +367,9 @@ func (s *Session) startRunLocked(seg int, bigProbe bool) error {
 		}
 	}}
 	stderr := &lineWriter{fn: func(l string) {
+		if manifest, _, ok := pceSeekInput(spec); ok {
+			l = strings.ReplaceAll(l, manifest, "[source]")
+		}
 		l = redactRTXLine(l, spec.Input, spec.commandHeaders())
 		if strings.Contains(strings.ToLower(l), "resize: ngx-vsr ") {
 			r.rtxConfirmed.Store(true)
@@ -397,6 +400,11 @@ func (s *Session) startRunLocked(seg int, bigProbe bool) error {
 	s.mu.Unlock()
 	var proc Process
 	spec.InputScopeHeaders, err = encoderScopeHeaders(inputLease, spec.Input)
+	if err == nil {
+		// Scoped headers are available only after the lease is opened. They
+		// may make a previously valid bounded AAC seek unsuitable.
+		err = graphFailure(spec)
+	}
 	if err == nil {
 		args = buildArgs(spec)
 		r.spec = spec
