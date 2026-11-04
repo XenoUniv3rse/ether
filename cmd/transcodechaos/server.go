@@ -22,9 +22,11 @@ import (
 var mapURI = regexp.MustCompile(`URI="([^"]+)"`)
 
 type labClient struct {
-	base   *url.URL
-	token  string
-	client *http.Client
+	base     *url.URL
+	token    string
+	clientID string
+	profile  string
+	client   *http.Client
 }
 
 func newLabClient(ctx context.Context, raw, token string) (*labClient, error) {
@@ -43,7 +45,11 @@ func newLabClient(ctx context.Context, raw, token string) (*labClient, error) {
 	}
 	u.Path = ""
 	u.RawPath = ""
-	l := &labClient{base: u, token: token, client: &http.Client{Timeout: 60 * time.Second}}
+	nonce := make([]byte, 12)
+	if _, err := rand.Read(nonce); err != nil {
+		return nil, err
+	}
+	l := &labClient{base: u, token: token, clientID: "ether-chaos-" + hex.EncodeToString(nonce), client: &http.Client{Timeout: 60 * time.Second}}
 	l.client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
 		if req.URL.Scheme != u.Scheme || req.URL.Host != u.Host {
 			return fmt.Errorf("cross-origin redirect refused")
@@ -70,6 +76,9 @@ func newLabClient(ctx context.Context, raw, token string) (*labClient, error) {
 	return l, nil
 }
 func (l *labClient) get(ctx context.Context, path string) ([]byte, int, error) {
+	return l.request(ctx, http.MethodGet, path)
+}
+func (l *labClient) request(ctx context.Context, method, path string) ([]byte, int, error) {
 	ref, err := url.Parse(path)
 	if err != nil {
 		return nil, 0, fmt.Errorf("invalid server path")
@@ -78,14 +87,20 @@ func (l *labClient) get(ctx context.Context, path string) ([]byte, int, error) {
 	if u.Scheme != l.base.Scheme || u.Host != l.base.Host || u.User != nil {
 		return nil, 0, fmt.Errorf("cross-origin media URL refused")
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
+	req, err := http.NewRequestWithContext(ctx, method, u.String(), nil)
 	if err != nil {
 		return nil, 0, fmt.Errorf("request construction failed")
 	}
 	if l.token != "" {
 		req.Header.Set("X-Plex-Token", l.token)
 	}
-	req.Header.Set("X-Plex-Client-Identifier", "ether-chaos-lab")
+	req.Header.Set("X-Plex-Client-Identifier", l.clientID)
+	req.Header.Set("X-Plex-Product", "Plex Web")
+	req.Header.Set("X-Plex-Platform", "Chrome")
+	req.Header.Set("Accept", "application/json")
+	if l.profile != "" {
+		req.Header.Set("X-Plex-Client-Profile-Extra", l.profile)
+	}
 	resp, err := l.client.Do(req)
 	if err != nil {
 		return nil, 0, fmt.Errorf("request failed")
@@ -98,12 +113,26 @@ func (l *labClient) get(ctx context.Context, path string) ([]byte, int, error) {
 	if len(data) > 128<<20 {
 		return nil, resp.StatusCode, fmt.Errorf("response exceeds 128 MiB")
 	}
-	if resp.StatusCode != http.StatusOK {
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, resp.StatusCode, fmt.Errorf("HTTP %d", resp.StatusCode)
 	}
 	return data, resp.StatusCode, nil
 }
 func runLabServer(ctx context.Context, raw, key, token, ff, fp, root, mode string) ([]result, error) {
+	if strings.Contains(key, ",") {
+		var results []result
+		for i, k := range strings.Split(key, ",") {
+			items, err := runLabServer(ctx, raw, strings.TrimSpace(k), token, ff, fp, root, mode)
+			if err != nil {
+				return results, err
+			}
+			for j := range items {
+				items[j].Scenario = fmt.Sprintf("staged-title-%d", i+1)
+			}
+			results = append(results, items...)
+		}
+		return results, nil
+	}
 	if token == "" {
 		return nil, fmt.Errorf("set ETHER_CHAOS_TOKEN for the lab server")
 	}
@@ -116,10 +145,14 @@ func runLabServer(ctx context.Context, raw, key, token, ff, fp, root, mode strin
 	}
 	paths := []string{"hls"}
 	if mode == "full" {
-		paths = append(paths, "dash", "start-mkv")
+		paths = append(paths, "hls-fmp4", "dash", "start-mkv", "download")
 	}
 	results := make([]result, 0, len(paths))
 	for _, path := range paths {
+		lab.profile = ""
+		if path == "hls-fmp4" {
+			lab.profile = "add-transcode-target(type=videoProfile&context=streaming&protocol=hls&container=mp4&videoCodec=h264,hevc&audioCodec=aac)"
+		}
 		start := time.Now()
 		idBytes := make([]byte, 12)
 		if _, err := rand.Read(idBytes); err != nil {
@@ -150,7 +183,7 @@ func runLabServer(ctx context.Context, raw, key, token, ff, fp, root, mode strin
 				return nil
 			}
 			switch path {
-			case "hls":
+			case "hls", "hls-fmp4":
 				q.Set("protocol", "hls")
 				if _, _, err := lab.get(ctx, "/video/:/transcode/universal/start.m3u8?"+q.Encode()); err != nil {
 					return "start: " + err.Error()
@@ -219,6 +252,10 @@ func runLabServer(ctx context.Context, raw, key, token, ff, fp, root, mode strin
 					return "media: " + err.Error()
 				}
 				if err = check(append(init, part...), "mp4"); err != nil {
+					return err.Error()
+				}
+			case "download":
+				if err := lab.download(ctx, key, check); err != nil {
 					return err.Error()
 				}
 			case "start-mkv":

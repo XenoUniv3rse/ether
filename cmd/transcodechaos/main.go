@@ -41,7 +41,7 @@ func main() {
 	cache := flag.String("cache-dir", filepath.Join(cacheDefault, "ether", "transcodechaos"), "public corpus cache, outside the repository (10 GB maximum)")
 	mode := flag.String("mode", "short", "short or full scenario matrix")
 	serverURL := flag.String("server-url", "", "explicit Ether lab server URL")
-	mediaKey := flag.String("media-key", "", "rating key of a staged test title on the lab server")
+	mediaKey := flag.String("media-key", "", "comma-separated rating keys of staged test titles on the lab server")
 	report := flag.String("report", "transcodechaos-report.json", "output JSON report")
 	flag.Parse()
 	if err := run(*ff, *fp, *report, *only, *fixtures, *cache, *mode, *corpus, *serverURL, *mediaKey); err != nil {
@@ -147,6 +147,18 @@ func run(ff, fp, report, only, fixtures, cache, mode string, useCorpus bool, ser
 			if !ok {
 				continue
 			}
+			if strings.HasPrefix(asset.name, "dashif-") {
+				original, e := os.ReadFile(filepath.Join(cache, asset.name))
+				if e != nil {
+					return e
+				}
+				if e = os.WriteFile(filepath.Join(fixtures, asset.name+".relay"), original, 0600); e != nil {
+					return e
+				}
+				if asset.name == "dashif-audio.mp4" {
+					continue
+				} // paired with video in the relay vector
+			}
 			start := time.Now()
 			raw, err := os.ReadFile(path)
 			detail := ""
@@ -162,6 +174,11 @@ func run(ff, fp, report, only, fixtures, cache, mode string, useCorpus bool, ser
 				if reason != "" {
 					status = "XFAIL"
 					detail = reason
+					rejectStart := time.Now()
+					rejection := exercise(ctx, ff, fp, root, raw, scenario{"undecodable-" + asset.name, "mpegts", "none", "", false})
+					if rejection == "" || time.Since(rejectStart) > 10*time.Second || strings.Contains(rejection, "cleanup:") {
+						status, detail = "FAIL", "unsupported source was not rejected promptly with clean resource cleanup"
+					}
 				} else {
 					status = "FAIL"
 					detail = "stock ffmpeg failed; needs triage"

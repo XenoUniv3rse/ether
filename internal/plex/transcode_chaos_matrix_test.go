@@ -184,8 +184,15 @@ func TestTranscodeChaosMatrix(t *testing.T) {
 						if name == "input-multi-audio" && (len(recorder.requests) == 0 || recorder.requests[len(recorder.requests)-1].Decision.AudioCopy) {
 							t.Fatal("PCE AAC was incorrectly advertised as copied")
 						}
+						ext, outputExt := "ts", "ts"
+						var init []byte
+						if len(recorder.requests) > 0 && recorder.requests[len(recorder.requests)-1].Decision.Container == "fmp4" {
+							ext, outputExt = "m4s", "mp4"
+							init = get("/video/:/transcode/universal/session/" + id + "/base/init.mp4")
+						}
 						for n := 0; n < 3 && (info.Duration <= 0 || time.Duration(n)*4*time.Second < info.Duration); n++ {
-							check(t, get(fmt.Sprintf("/video/:/transcode/universal/session/%s/base/%05d.ts", id, n)), "ts", strings.HasPrefix(name, "input-corrupt-"))
+							media := get(fmt.Sprintf("/video/:/transcode/universal/session/%s/base/%05d.%s", id, n, ext))
+							check(t, append(append([]byte(nil), init...), media...), outputExt, strings.HasPrefix(name, "input-corrupt-"))
 						}
 						if name == "input-multi-audio" {
 							seekID := id + "-seek"

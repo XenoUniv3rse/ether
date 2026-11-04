@@ -17,9 +17,9 @@ import (
 func runPlex(ctx context.Context, ff, fp, fixtures, mode string) ([]result, error) {
 	pattern := "^TestTranscodeChaos(Plex|Clients|Matrix)$"
 	if mode == "full" {
-		pattern = "^TestTranscodeChaos(Plex|Clients|Matrix|PlexFaults|LiveRelay|LiveHardware|AppleRelay|HTTPHardware|PCELongSeek)$"
+		pattern = "^TestTranscodeChaos(Plex|Clients|Matrix|PlexFaults|LiveRelay|LiveHardware|AppleRelay|DASHIFRelay|HTTPHardware|PCELongSeek|CorpusScenarios)$"
 	}
-	cmd := exec.CommandContext(ctx, "go", "test", "-tags", "transcodechaos", "./internal/plex", "-run", pattern, "-count=1", "-timeout=4m", "-json")
+	cmd := exec.CommandContext(ctx, "go", "test", "-tags", "transcodechaos", "./internal/plex", "-run", pattern, "-count=1", "-timeout=12m", "-json")
 	cmd.Env = append(os.Environ(), "CHAOS_FFMPEG="+ff, "CHAOS_FFPROBE="+fp, "CHAOS_CORPUS="+fixtures, "GOMAXPROCS=2")
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -29,17 +29,35 @@ func runPlex(ctx context.Context, ff, fp, fixtures, mode string) ([]result, erro
 	if err = cmd.Start(); err != nil {
 		return nil, err
 	}
+	// Keep raw offline test diagnostics beside the fixtures, outside reports.
+	diagnostics, logErr := os.CreateTemp(fixtures, "test-events-*.jsonl")
+	if logErr == nil {
+		defer diagnostics.Close()
+	}
 	var results []result
 	failedGroups := map[string]bool{}
+	hasChildren := map[string]bool{}
 	scanner := bufio.NewScanner(stdout)
 	scanner.Buffer(make([]byte, 4096), 2<<20)
 	for scanner.Scan() {
+		if diagnostics != nil {
+			_, _ = diagnostics.Write(append(append([]byte(nil), scanner.Bytes()...), '\n'))
+		}
 		var e struct {
 			Action  string
 			Test    string
 			Elapsed float64
 		}
 		if json.Unmarshal(scanner.Bytes(), &e) != nil {
+			continue
+		}
+		if e.Action == "run" {
+			if i := strings.LastIndex(e.Test, "/"); i > 0 {
+				hasChildren[e.Test[:i]] = true
+			}
+			continue
+		}
+		if hasChildren[e.Test] {
 			continue
 		}
 		if e.Action != "pass" && e.Action != "fail" && e.Action != "skip" {
@@ -49,7 +67,7 @@ func runPlex(ctx context.Context, ff, fp, fixtures, mode string) ([]result, erro
 		if len(parts) == 0 || parts[0] == "" {
 			continue
 		}
-		if len(parts) == 1 && (parts[0] != "TestTranscodeChaosLiveRelay" && parts[0] != "TestTranscodeChaosLiveHardware" && parts[0] != "TestTranscodeChaosAppleRelay" && parts[0] != "TestTranscodeChaosHTTPHardware" && parts[0] != "TestTranscodeChaosPCELongSeek") {
+		if len(parts) == 1 && (parts[0] != "TestTranscodeChaosLiveRelay" && parts[0] != "TestTranscodeChaosLiveHardware" && parts[0] != "TestTranscodeChaosAppleRelay" && parts[0] != "TestTranscodeChaosDASHIFRelay" && parts[0] != "TestTranscodeChaosHTTPHardware" && parts[0] != "TestTranscodeChaosPCELongSeek") {
 			continue
 		}
 		if len(parts) > 1 && e.Test == parts[0] {

@@ -115,10 +115,11 @@ func (r *liveChaosRunner) interrupt(injectHardware bool) error {
 	return nil
 }
 func (r *liveChaosRunner) softwareStarted() bool  { r.mu.Lock(); defer r.mu.Unlock(); return r.software }
-func TestTranscodeChaosLiveRelay(t *testing.T)    { runLiveChaos(t, false, false) }
-func TestTranscodeChaosLiveHardware(t *testing.T) { runLiveChaos(t, true, false) }
-func TestTranscodeChaosAppleRelay(t *testing.T)   { runLiveChaos(t, false, true) }
-func runLiveChaos(t *testing.T, hardware, apple bool) {
+func TestTranscodeChaosLiveRelay(t *testing.T)    { runLiveChaos(t, false, false, false) }
+func TestTranscodeChaosLiveHardware(t *testing.T) { runLiveChaos(t, true, false, false) }
+func TestTranscodeChaosAppleRelay(t *testing.T)   { runLiveChaos(t, false, true, false) }
+func TestTranscodeChaosDASHIFRelay(t *testing.T)  { runLiveChaos(t, false, false, true) }
+func runLiveChaos(t *testing.T, hardware, apple, dashif bool) {
 	ff, fp := os.Getenv("CHAOS_FFMPEG"), os.Getenv("CHAOS_FFPROBE")
 	if ff == "" || fp == "" {
 		t.Fatal("set CHAOS_FFMPEG and CHAOS_FFPROBE")
@@ -141,11 +142,14 @@ func runLiveChaos(t *testing.T, hardware, apple bool) {
 	} else {
 		chaosCmd(t, ff, "-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "testsrc2=size=320x180:rate=24", "-f", "lavfi", "-i", "sine=sample_rate=48000", "-t", "15", "-c:v", "libx264", "-preset", "ultrafast", "-threads", "2", "-g", "48", "-c:a", "aac", "-f", "mpegts", file)
 	}
+	if dashif {
+		chaosDASHIF(t, dir)
+	}
 	data, err := os.ReadFile(file)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for i := len(data) / 2 / 188 * 188; !apple && i < len(data)/2/188*188+30*188 && i < len(data); i++ {
+	for i := len(data) / 2 / 188 * 188; !apple && !dashif && i < len(data)/2/188*188+30*188 && i < len(data); i++ {
 		if i%188 != 0 {
 			data[i] = 0xff
 		}
@@ -179,6 +183,9 @@ func runLiveChaos(t *testing.T, hardware, apple bool) {
 	}
 	defer service.Close()
 	input := "/live.ts"
+	if dashif {
+		input = "/live.mpd"
+	}
 	if apple {
 		input = "/live.m3u8"
 	}
