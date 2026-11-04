@@ -207,7 +207,7 @@ func (s *Server) handleProviders(w http.ResponseWriter, r *http.Request) {
 		},
 	}
 	mc := &model.MediaContainer{Size: 1, Extra: s.serverInfoAttrs(true), MediaProvider: []model.MediaProvider{provider}}
-	if p := s.liveTVProvider(); p != nil {
+	if p := s.liveTVProvider(r.Context(), FromContext(r.Context()).User); p != nil {
 		mc.MediaProvider = append(mc.MediaProvider, *p)
 		mc.Size++
 	}

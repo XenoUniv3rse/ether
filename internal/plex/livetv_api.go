@@ -78,8 +78,8 @@ type liveContainer struct {
 }
 
 func (s *Server) liveTVEnabled() bool { return s.d.LiveTV != nil && s.identity().MyPlexSubscription }
-func (s *Server) liveTVProvider() *model.MediaProvider {
-	if !s.liveTVEnabled() {
+func (s *Server) liveTVProvider(ctx context.Context, u *core.User) *model.MediaProvider {
+	if !s.liveTVEnabled() || !s.d.LiveTV.VisibleTo(ctx, u) {
 		return nil
 	}
 	return &model.MediaProvider{Extra: []model.Attr{model.A("id", 1), model.A("parentID", 1), model.A("providerIdentifier", "tv.plex.providers.epg.xmltv"), model.A("epgSource", "xmltv")}, Identifier: livetv.Provider, Title: "Live TV", Types: "video", Protocols: "livetv", Feature: []model.Feature{
@@ -91,7 +91,7 @@ func (s *Server) liveTVProvider() *model.MediaProvider {
 func (s *Server) registerLiveTVRoutes(r chi.Router) {
 	guard := func(h http.HandlerFunc) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
-			if !s.liveTVEnabled() {
+			if !s.liveTVEnabled() || !s.d.LiveTV.VisibleTo(r.Context(), FromContext(r.Context()).User) {
 				writeHTTPError(w, 404)
 				return
 			}
