@@ -186,6 +186,14 @@ func comparePerfScales(w *bytes.Buffer, small, large []*perfharness.Row) []gateF
 			case float64(l.RowsMin) > gateRowsFactor*float64(s.RowsMax)+gateRowsSlack:
 				why = append(why, fmt.Sprintf("rows read grow with the library (%d → %d)", s.RowsMax, l.RowsMin))
 			}
+			if l.QueriesBound > 0 {
+				if l.QueriesMax > int64(l.QueriesBound) {
+					why = append(why, fmt.Sprintf("statements %d over the step's bound %d", l.QueriesMax, l.QueriesBound))
+				}
+				if l.WritesMax > 0 || s.WritesMax > 0 {
+					why = append(why, fmt.Sprintf("a read wrote (%d, %d statements)", s.WritesMax, l.WritesMax))
+				}
+			}
 			if float64(l.QueriesMin) > gateQueriesFactor*float64(s.QueriesMax)+gateQueriesSlack {
 				why = append(why, fmt.Sprintf("statements grow with the library (%d → %d)", s.QueriesMax, l.QueriesMin))
 			}
