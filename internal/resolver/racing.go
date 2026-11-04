@@ -173,6 +173,7 @@ func (s *Service) validateCandidates(ctx context.Context, cands []candidate, tr 
 				break
 			}
 			ct.Rejected = true
+			ct.err = v.err
 			if v.err != nil {
 				ct.Reason = v.err.Error()
 			} else {
