@@ -1052,3 +1052,31 @@ func TestExtensionKeepsEscapedPathBehindConsolePrefix(t *testing.T) {
 		t.Fatalf("encoded plugin path: %d %s", w.Code, w.Body.String())
 	}
 }
+
+func TestConfigEditsPreserveClaimWhenOmitted(t *testing.T) {
+	store := newStore(t, func(c *config.Config) { seededConfig(c); c.SetupComplete = true })
+	h := admin.New(admin.Deps{Config: store, IsOwnerToken: storedOwner(store)})
+	get := req(http.MethodGet, "/ether/api/config", "")
+	get.Header.Set("X-Plex-Token", ownerToken)
+	response := serve(h, get)
+	var doc map[string]any
+	if err := json.Unmarshal(response.Body.Bytes(), &doc); err != nil {
+		t.Fatal(err)
+	}
+	cfg := doc["config"].(map[string]any)
+	delete(cfg["plex"].(map[string]any), "claimed")
+	body, _ := json.Marshal(doc)
+	put := req(http.MethodPut, "/ether/api/config", string(body))
+	put.Header.Set("X-Plex-Token", ownerToken)
+	if res := serve(h, put); res.Code != http.StatusOK {
+		t.Fatalf("PUT: %d %s", res.Code, res.Body)
+	}
+	patch := req(http.MethodPatch, "/ether/api/config/plex", `{"remoteAccess":false}`)
+	patch.Header.Set("X-Plex-Token", ownerToken)
+	if res := serve(h, patch); res.Code != http.StatusOK {
+		t.Fatalf("PATCH: %d %s", res.Code, res.Body)
+	}
+	if got := store.Get().Plex; !got.Claimed || got.Token != ownerToken {
+		t.Fatal("config edits lost claim or token")
+	}
+}

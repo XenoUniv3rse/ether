@@ -3,12 +3,45 @@ package plextv
 import (
 	"context"
 	"net"
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/braedonsaunders/ether/internal/config"
 )
+
+func TestFailedConfigPersistenceDoesNotReleaseClaim(t *testing.T) {
+	dir := t.TempDir()
+	store, err := config.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Update(func(c *config.Config) error { c.Plex.Claimed = true; c.Plex.Token = "server-token-42"; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	f := newFakePlexTV(t, store.Get().Server.MachineIdentifier)
+	f.addUser("server-token-42", owner())
+	f.deviceOwner = 42
+	_, err = NewRegistrar(RegistrarOptions{Config: store, Client: newServerClient(t, f)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "config.json")
+	if err := os.Rename(path, path+".saved"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(path, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Update(func(c *config.Config) error { c.Plex.Claimed = false; return nil }); err == nil {
+		t.Fatal("expected persistence failure")
+	}
+	if !store.Get().Plex.Claimed || f.deviceDeletes != 0 {
+		t.Fatal("failed write released claim")
+	}
+}
 
 // subConfig is memConfig with config.Store's Subscribe.
 type subConfig struct {
@@ -180,5 +213,31 @@ func TestQueuedReleaseDoesNotDeleteNewClaim(t *testing.T) {
 	}
 	if !store.Get().Plex.Claimed || f.deviceOwner != 42 {
 		t.Fatal("reclaimed device changed")
+	}
+}
+
+func TestReopenRestoredConfigDoesNotReleaseClaim(t *testing.T) {
+	dir := t.TempDir()
+	s, err := config.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Update(func(c *config.Config) error { c.Plex.Claimed = true; c.Plex.Token = "server-token-42"; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	machine := s.Get().Server.MachineIdentifier
+	// Restore/recovery applies files before startup; reopen the persisted config.
+	restored, err := config.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := newFakePlexTV(t, machine)
+	f.deviceOwner = 42
+	_, err = NewRegistrar(RegistrarOptions{Config: restored, Client: newServerClient(t, f)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if restored.Get().Server.MachineIdentifier != machine || !restored.Get().Plex.Claimed || restored.Get().Plex.Token != "server-token-42" || f.deviceDeletes != 0 {
+		t.Fatal("reopened config changed claim or identity")
 	}
 }

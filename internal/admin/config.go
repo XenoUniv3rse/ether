@@ -83,6 +83,18 @@ func (h *Handler) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 		}
 		next = env.Config
 	}
+	// A full document may come from an older client that does not know the
+	// claim field. Only an explicit false is an instruction to unclaim.
+	var fields map[string]json.RawMessage
+	_ = json.Unmarshal(body, &fields)
+	if envelope, ok := fields["config"]; ok {
+		_ = json.Unmarshal(envelope, &fields)
+	}
+	var plexFields map[string]json.RawMessage
+	_ = json.Unmarshal(fields["plex"], &plexFields)
+	if _, present := plexFields["claimed"]; !present {
+		next.Plex.Claimed = prev.Plex.Claimed
+	}
 	next, perrs := UnredactConfig(next, prev)
 	if len(perrs) > 0 {
 		writeValidationError(w, perrs)
