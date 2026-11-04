@@ -1594,6 +1594,15 @@ func (s *Server) handlePart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ps, ok := s.d.Playback.SessionFor(pr.User.ID, pr.ClientID, key)
+	anonymousContinuation := false
+	if pr.ClientID == "" {
+		if lookup, supported := s.d.Playback.(interface {
+			PlexSessionForPart(int64, core.RatingKey, string) (*core.PlaySession, bool)
+		}); supported {
+			ps, ok = lookup.PlexSessionForPart(pr.User.ID, key, releaseID)
+			anonymousContinuation = ok && ps != nil
+		}
+	}
 	live := ""
 	if ok && ps != nil {
 		live = ps.ID
@@ -1601,6 +1610,17 @@ func (s *Server) handlePart(w http.ResponseWriter, r *http.Request) {
 	// A live session on a different release does not satisfy a variant part.
 	if ok && ps != nil && releaseID != "" && (ps.Resolution == nil || ps.Resolution.Release.ID != releaseID) {
 		ok = false
+	}
+	if anonymousContinuation {
+		if confirm, supported := s.playbackBroker.(interface {
+			ConfirmPlexAdmission(context.Context, *core.Viewer, bool) (*core.Viewer, error)
+		}); supported {
+			viewer, err := confirm.ConfirmPlexAdmission(ctx, pr.User, pr.ClientCaps(0).Remote)
+			if err != nil || viewer == nil || viewer.ID != pr.User.ID || !s.playableTitle(ctx, viewer, title) {
+				writeHTTPError(w, http.StatusForbidden)
+				return
+			}
+		}
 	}
 	if !ok || ps == nil {
 		t, err := s.d.Catalog.Get(ctx, key)
@@ -1625,7 +1645,7 @@ func (s *Server) handlePart(w http.ResponseWriter, r *http.Request) {
 			s.observePlaybackDecision(ctx, pr, &playRequest{key: key, caps: caps, partReleaseID: releaseID, requestedPart: id}, ps)
 		}
 	}
-	if r.Method != http.MethodHead && r.URL.Query().Get("download") != "1" {
+	if !anonymousContinuation && r.Method != http.MethodHead && r.URL.Query().Get("download") != "1" {
 		// A part read is the playing Media for clients that skip the
 		// decision; a decision's admission keeps its selection unless this
 		// read prepared another release.
