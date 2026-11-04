@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -247,7 +248,7 @@ func redactSourceAuth(src *Source) {
 }
 
 // readURLWith fetches a source document with the provider's headers.
-// kind names the document in limit errors ("playlist" or "guide").
+// kind names the document in limit and timeout errors ("playlist" or "guide").
 func (s *Service) readURLWith(ctx context.Context, raw string, max int64, h http.Header, kind string) (string, error) {
 	rc, err := s.openURL(ctx, raw, h)
 	if err != nil {
@@ -256,9 +257,56 @@ func (s *Service) readURLWith(ctx context.Context, raw string, max int64, h http
 	defer rc.Close()
 	b, err := readLimited(rc, max, kind)
 	if err != nil {
-		return "", err
+		return "", sourceReadFailure(err, kind)
 	}
 	return string(b), nil
+}
+
+// sourceDocumentTimeout bounds one playlist or guide fetch. An Xtream panel
+// composes both documents on demand, so a large lineup can take minutes; the
+// service client's shorter default is meant for stream requests. A refresh
+// gets refreshBudget, twice this, to fetch the pair.
+const sourceDocumentTimeout = refreshTimeout
+
+// documentClient returns the client for a source document. It keeps the
+// service client's transport (and so its live egress routing) but gives a
+// panel up to sourceDocumentTimeout to compose a large playlist or guide
+// instead of the stream request timeout.
+func (s *Service) documentClient() *http.Client {
+	c := *s.o.HTTPClient
+	if c.Timeout > 0 && c.Timeout < sourceDocumentTimeout {
+		c.Timeout = sourceDocumentTimeout
+	}
+	return &c
+}
+
+// sourceFetchFailure explains a transport failure without echoing the request
+// URL: source URLs, Xtream's derived ones in particular, carry the provider's
+// credentials, and callers store and surface these errors. The cause itself
+// (DNS, refused connection, TLS, timeout) is what tells an owner how to fix
+// the source.
+func sourceFetchFailure(err error) error {
+	var ue *url.Error
+	if errors.As(err, &ue) {
+		err = ue.Err
+	}
+	var ne net.Error
+	if errors.As(err, &ne) && ne.Timeout() {
+		return fmt.Errorf("source fetch failed: the source did not answer within %s", sourceDocumentTimeout)
+	}
+	return fmt.Errorf("source fetch failed: %w", err)
+}
+
+// sourceReadFailure wraps a body read that timed out in the same sentence as a
+// failed fetch, so a guide that trickles past the deadline does not surface a
+// Go runtime string. Any other error (a size limit, malformed XML) already
+// says what went wrong.
+func sourceReadFailure(err error, kind string) error {
+	var ne net.Error
+	if errors.As(err, &ne) && ne.Timeout() {
+		return fmt.Errorf("source fetch failed: the source did not finish sending the %s within %s", kind, sourceDocumentTimeout)
+	}
+	return err
 }
 
 // openURL fetches a source document and leaves the body to the caller.
@@ -273,9 +321,9 @@ func (s *Service) openURL(ctx context.Context, raw string, h http.Header) (io.Re
 	for k, v := range h {
 		req.Header[k] = v
 	}
-	res, err := s.o.HTTPClient.Do(req)
+	res, err := s.documentClient().Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("source fetch failed")
+		return nil, sourceFetchFailure(err)
 	}
 	switch {
 	case res.StatusCode == 401 || res.StatusCode == 403:
@@ -298,10 +346,13 @@ func (s *Service) readGuide(ctx context.Context, raw string, h http.Header, f gu
 	defer rc.Close()
 	rd, err := maybeGunzip(rc, maxGuideBytes, "guide")
 	if err != nil {
-		return XMLGuide{}, err
+		return XMLGuide{}, sourceReadFailure(err, "guide")
 	}
 	defer closeReader(rd)
 	g, _, err := parseXMLTV(rd, f)
+	if err != nil {
+		err = sourceReadFailure(err, "guide")
+	}
 	return g, err
 }
 

@@ -2,10 +2,14 @@ package livetv
 
 import (
 	"context"
+	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
+	"time"
 )
 
 // provider serves a playlist and guide only to requests that pass check.
@@ -89,6 +93,81 @@ func TestXtreamSourceDerivesAndHidesItsURLs(t *testing.T) {
 	}
 	if err := (&SourceAuth{Type: "xtream", Server: "ftp://x", Username: "u", Password: "p"}).validate(); err == nil {
 		t.Fatal("non-HTTP panel accepted")
+	}
+}
+
+func TestXtreamFetchFailureNamesItsCauseWithoutTheURL(t *testing.T) {
+	raw := "http://panel.example:8080/get.php?username=panel-user&password=panel-pass"
+	refused := sourceFetchFailure(&url.Error{Op: "Get", URL: raw, Err: errors.New("dial tcp 203.0.113.5:8080: connect: connection refused")})
+	if !strings.Contains(refused.Error(), "source fetch failed") || !strings.Contains(refused.Error(), "connection refused") {
+		t.Fatalf("cause lost: %v", refused)
+	}
+	if strings.Contains(refused.Error(), "panel-user") || strings.Contains(refused.Error(), "panel-pass") {
+		t.Fatalf("error leaks credentials: %v", refused)
+	}
+	slow := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		time.Sleep(80 * time.Millisecond)
+	}))
+	defer slow.Close()
+	_, doErr := (&http.Client{Timeout: 10 * time.Millisecond}).Get(slow.URL + "/get.php?username=panel-user&password=panel-pass")
+	if doErr == nil {
+		t.Fatal("expected a client timeout")
+	}
+	timedOut := sourceFetchFailure(doErr)
+	if !strings.Contains(timedOut.Error(), "did not answer") {
+		t.Fatalf("timeout not named: %v", timedOut)
+	}
+	if strings.Contains(timedOut.Error(), "panel-user") || strings.Contains(timedOut.Error(), "panel-pass") {
+		t.Fatalf("timeout error leaks credentials: %v", timedOut)
+	}
+	if strings.Contains(timedOut.Error(), "panel") {
+		t.Fatalf("a plain source is called a panel: %v", timedOut)
+	}
+}
+
+func TestSourceReadTimeoutNamesItsCause(t *testing.T) {
+	slow := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.(http.Flusher).Flush()
+		time.Sleep(80 * time.Millisecond)
+	}))
+	defer slow.Close()
+	res, err := (&http.Client{Timeout: 10 * time.Millisecond}).Get(slow.URL + "/list.m3u")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	_, readErr := io.ReadAll(res.Body)
+	if readErr == nil {
+		t.Fatal("expected a body read timeout")
+	}
+	got := sourceReadFailure(readErr, "playlist")
+	if !strings.Contains(got.Error(), "did not finish sending the playlist") {
+		t.Fatalf("read timeout not named: %v", got)
+	}
+	// A size limit already names itself and must not become a timeout.
+	if limit := (&limitError{msg: "playlist exceeds the 64 MB limit"}); sourceReadFailure(limit, "playlist") != limit {
+		t.Fatal("size-limit error rewritten")
+	}
+}
+
+func TestXtreamPanelHasTimeToComposeItsDocuments(t *testing.T) {
+	// The service client bounds stream work to 20 s; a panel that composes a
+	// large playlist or guide gets the refresh budget instead.
+	up := provider(t, func(*http.Request) bool {
+		time.Sleep(60 * time.Millisecond)
+		return true
+	})
+	s := testService(t, Options{HTTPClient: &http.Client{Timeout: 20 * time.Millisecond}})
+	got, err := s.ImportSource(context.Background(), Source{ID: "x", Name: "Slow panel", Auth: &SourceAuth{Type: "xtream", Server: up.URL, Username: "u", Password: "p"}})
+	if err != nil {
+		t.Fatalf("slow panel: %v", err)
+	}
+	if got.ChannelCount != 1 {
+		t.Fatalf("import: %+v", got)
+	}
+	if s.o.HTTPClient.Timeout != 20*time.Millisecond {
+		t.Fatalf("service client changed: %s", s.o.HTTPClient.Timeout)
 	}
 }
 

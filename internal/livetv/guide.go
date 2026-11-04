@@ -48,7 +48,11 @@ const (
 	guideHorizonMargin     = time.Hour
 	refreshCheckInterval   = 5 * time.Minute
 	refreshTimeout         = 5 * time.Minute
-	coverageWindow         = 24 * time.Hour
+	// refreshBudget bounds one automatic refresh. A refresh fetches the
+	// playlist and then the guide, each with refreshTimeout, so both must fit
+	// or a large panel could save its guide once but never refresh it.
+	refreshBudget  = 2 * refreshTimeout
+	coverageWindow = 24 * time.Hour
 )
 
 // GuideChannel is an XMLTV <channel> (or programme channel id) stored for a
@@ -783,7 +787,7 @@ func (s *Service) refreshDueSources(ctx context.Context) []string {
 		if ctx.Err() != nil {
 			break
 		}
-		rctx, cancel := context.WithTimeout(ctx, refreshTimeout)
+		rctx, cancel := context.WithTimeout(ctx, refreshBudget)
 		s.RefreshSource(rctx, id)
 		cancel()
 	}
