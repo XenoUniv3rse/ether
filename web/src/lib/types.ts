@@ -62,6 +62,13 @@ export interface ClientIdentityConfig {
   headers?: Record<string, string> | null;
 }
 
+/** One selectable client identity, as the server reports it. */
+export interface IdentityPreset {
+  key: string;
+  userAgent: string;
+  headers?: Record<string, string> | null;
+}
+
 export type IndexerProtocol = "usenet" | "torrent";
 export type IndexerKind = "newznab" | "cardigann" | "stremio";
 

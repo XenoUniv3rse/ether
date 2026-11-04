@@ -14,7 +14,7 @@ import { Link } from "react-router-dom";
 import { useApp } from "../../app-context";
 import { localized, t, tn } from "../../i18n";
 import { ActionMenu } from "../../components/ActionMenu";
-import { ConfigSection, MoreOptions } from "../../components/ConfigSection";
+import { MoreOptions } from "../../components/ConfigSection";
 import { Meter } from "../../components/charts";
 import { Drawer } from "../../components/Drawer";
 import { ErrorPanel, LoadingRows } from "../../components/feedback";
@@ -32,7 +32,8 @@ import { api, errorMessage, newId } from "../../lib/api";
 import { isPlainObject } from "../../lib/format";
 import { useAsync } from "../../lib/hooks";
 import type { Indexer, IndexerProtocol, SiteDefinition, SiteTestResult } from "../../lib/types";
-import { CLIENT_IDENTITY, searchIdentityOptions } from "../settings/schema";
+import { searchIdentityOptions } from "../settings/schema";
+import { ClientIdentity } from "./ClientIdentity";
 import { hasUsableDebrid } from "./Debrid";
 import {
   BoolRow,
@@ -521,12 +522,7 @@ export function IndexerList({
         )}
       </Section>
 
-      <ConfigSection
-        configKey="clientIdentity"
-        endpoint="clientIdentity"
-        groups={CLIENT_IDENTITY}
-        label={t("Client identity")}
-      />
+      <ClientIdentity indexers={indexers} onSaved={() => void config.reload()} />
       <PluginSourceCards
         classes={["indexer", "direct"]}
         sectionTitle={t("Plugin sources")}
