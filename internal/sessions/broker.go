@@ -76,10 +76,12 @@ type BrokerDeps struct {
 }
 
 type brokerPlan struct {
-	request       frontend.PlanRequest
-	source        *core.PlaySession
-	decision      core.Decision
-	created       time.Time
+	request  frontend.PlanRequest
+	source   *core.PlaySession
+	decision core.Decision
+	created  time.Time
+	// requested is when the play request that made this plan arrived.
+	requested     time.Time
 	etag          string
 	live          bool
 	exactRelease  string
@@ -343,6 +345,7 @@ func publicMedia(info core.MediaInfo) core.MediaInfo {
 	return info
 }
 func (b *Broker) Plan(ctx context.Context, req frontend.PlanRequest) (frontend.PlayPlan, error) {
+	requested := b.deps.Now()
 	req = copyRequest(req)
 	v, err := b.viewer(ctx, req.Viewer)
 	if err != nil {
@@ -687,7 +690,7 @@ func (b *Broker) Plan(ctx context.Context, req frontend.PlanRequest) (frontend.P
 	if detail != nil {
 		exactRelease = detail.release
 	}
-	b.plans[id] = brokerPlan{request: req, source: ps, decision: dec, created: b.deps.Now(), etag: etag, exactRelease: exactRelease, versionHandle: versionHandle, pinned: pinned}
+	b.plans[id] = brokerPlan{request: req, source: ps, decision: dec, created: b.deps.Now(), requested: requested, etag: etag, exactRelease: exactRelease, versionHandle: versionHandle, pinned: pinned}
 	stored = true
 	b.mu.Unlock()
 	direct, remux, transcoding := b.planAlternatives(ps, req)
@@ -695,6 +698,7 @@ func (b *Broker) Plan(ctx context.Context, req frontend.PlanRequest) (frontend.P
 	return frontend.PlayPlan{ID: id, Media: publicMedia(ps.Info), Decision: dec, DirectPlay: direct, DirectStream: remux, Transcoding: transcoding, HLS: hls, HLSContainer: hlsContainer, ETag: etag}, nil
 }
 func (b *Broker) Open(ctx context.Context, req frontend.OpenRequest) (frontend.Session, error) {
+	opened := b.deps.Now()
 	v, err := b.viewer(ctx, req.Viewer)
 	if err != nil {
 		return frontend.Session{}, err
@@ -876,6 +880,15 @@ func (b *Broker) Open(ctx context.Context, req frontend.OpenRequest) (frontend.S
 	b.transferPlanSourceLocked(ps.ID)
 	transferred = true
 	b.mu.Unlock()
+	if noter, ok := b.deps.Playback.(interface{ NotePlayRequest(string, time.Time) }); ok {
+		// The play request is the plan's (Jellyfin PlaybackInfo plans and
+		// opens in one request); a plan made earlier counts from this open.
+		at := p.requested
+		if at.IsZero() {
+			at = opened
+		}
+		noter.NotePlayRequest(ps.ID, at)
+	}
 	if b.deps.SourceHistory != nil && session.Protocol != "plex" {
 		// The epoch and the opened-file facts are durable bookkeeping. The
 		// session URL does not wait for that write. Start after the session

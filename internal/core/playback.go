@@ -189,6 +189,28 @@ type PlaySession struct {
 	// Node is the cluster node serving a session reported by another node
 	// (empty for this node's own sessions and on a standalone server).
 	Node string `json:"node,omitempty"`
+	// Experience is this play's viewer-experience accounting: start time
+	// and mid-play buffering (additive). Nil for a source no play request
+	// or client timeline has reached.
+	Experience *PlayExperience `json:"experience,omitempty"`
+}
+
+// PlayExperience measures what the viewer saw (additive).
+type PlayExperience struct {
+	// Requested is set once a play request (decision, start, part or
+	// stream open) or a client timeline reached the source.
+	Requested bool `json:"requested"`
+	// Pictured is set once the client showed a picture; StartTime is the
+	// time from the play request to it, negative when unknown.
+	Pictured  bool          `json:"pictured"`
+	StartTime time.Duration `json:"startTime"`
+	// StartFailure names why a start never reached a picture even though
+	// the client reported one (a stalled start the server ended).
+	StartFailure string `json:"startFailure,omitempty"`
+	// BufferEvents counts mid-play stalls after the first picture; Buffering
+	// is their total length (startup excluded).
+	BufferEvents int           `json:"bufferEvents"`
+	Buffering    time.Duration `json:"buffering"`
 }
 
 // EncoderStatus describes the currently running output process, not the

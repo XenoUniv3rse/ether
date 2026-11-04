@@ -5,6 +5,7 @@ import { api, apiFetch } from "../../lib/api";
 import { normalizeSessions } from "../../lib/health";
 import { useAsync, useInterval } from "../../lib/hooks";
 import { PlayHistory, ViewingFilters } from "./History";
+import { Experience } from "./Experience";
 import { NowPlaying } from "./NowPlaying";
 import { ViewingStats } from "./Stats";
 import { viewingQuery, type Play, type Summary, type ViewingFilter } from "./types";
@@ -15,6 +16,7 @@ const TABS = localized(
       { key: "now", label: t("Now playing") },
       { key: "history", label: t("History") },
       { key: "stats", label: t("Stats") },
+      { key: "experience", label: t("Experience") },
     ] as const,
 );
 
@@ -41,7 +43,7 @@ export default function Activity() {
   useInstallableDashboard();
   const [filter, setFilter] = useState<ViewingFilter>({ days: "30", user: "", year: "" });
   const query = viewingQuery(filter);
-  const viewingTab = tab !== "now";
+  const viewingTab = tab === "history" || tab === "stats";
 
   const sessions = useAsync(
     async () =>
@@ -86,6 +88,8 @@ export default function Activity() {
           ) : null}
           <NowPlaying state={sessions} />
         </>
+      ) : tab === "experience" ? (
+        <Experience />
       ) : (
         <>
           <ViewingFilters value={filter} onChange={setFilter} viewers={viewers.data ?? []} />
