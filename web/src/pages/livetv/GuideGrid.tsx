@@ -1,5 +1,5 @@
 import { Button, cn } from "@braedonsaunders/appkit-ui";
-import { ChevronLeft, ChevronRight, Star, Tv } from "lucide-react";
+import { ChevronLeft, ChevronRight, Maximize2, Minimize2, Star, Tv } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Segmented } from "../../components/fields";
 import { Artwork } from "../../components/Artwork";
@@ -98,8 +98,46 @@ export function GuideGrid({
     day: "numeric",
   });
 
+  // Full screen shows only the guide: the browser's Fullscreen API on this
+  // element, or a window-filling overlay where that API is missing.
+  const root = useRef<HTMLDivElement>(null);
+  const [nativeFull, setNativeFull] = useState(false);
+  const [pseudoFull, setPseudoFull] = useState(false);
+  const full = nativeFull || pseudoFull;
+  useEffect(() => {
+    const sync = () => setNativeFull(document.fullscreenElement === root.current);
+    document.addEventListener("fullscreenchange", sync);
+    return () => document.removeEventListener("fullscreenchange", sync);
+  }, []);
+  useEffect(() => {
+    if (!pseudoFull) return;
+    const esc = (e: KeyboardEvent) => e.key === "Escape" && setPseudoFull(false);
+    window.addEventListener("keydown", esc);
+    return () => window.removeEventListener("keydown", esc);
+  }, [pseudoFull]);
+  const toggleFull = async () => {
+    if (pseudoFull) return setPseudoFull(false);
+    if (document.fullscreenElement) return void (await document.exitFullscreen());
+    if (root.current?.requestFullscreen) {
+      try {
+        await root.current.requestFullscreen();
+        return;
+      } catch {
+        // Refused (e.g. an iframe without allowfullscreen): fill the window.
+      }
+    }
+    setPseudoFull(true);
+  };
+
   return (
-    <div className="flex h-full min-h-[28rem] flex-col">
+    <div
+      ref={root}
+      className={cn(
+        "flex h-full min-h-[28rem] flex-col bg-bg",
+        // Without the Fullscreen API (iOS Safari), fill the window instead.
+        pseudoFull && "fixed inset-0 z-[100] h-dvh",
+      )}
+    >
       <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-border bg-surface px-3 py-2 sm:px-4">
         <div className="mr-auto flex items-baseline gap-2">
           <h2 className="text-sm font-semibold text-fg">{t("Guide")}</h2>
@@ -143,6 +181,15 @@ export function GuideGrid({
             { value: "wide", label: unit(3, "hour") },
           ]}
         />
+        <Button
+          variant="ghost"
+          size="sm"
+          aria-label={full ? t("Exit full screen") : t("Full screen guide")}
+          aria-pressed={full}
+          onClick={() => void toggleFull()}
+        >
+          {full ? <Minimize2 size={15} /> : <Maximize2 size={15} />}
+        </Button>
       </div>
 
       <div
@@ -365,8 +412,10 @@ export function GuideGrid({
           })}
 
           {nowVisible ? (
+            // Above programme cards (z-10 on hover) but below the sticky
+            // channel column (z-20), so scrolling never draws it over names.
             <div
-              className="pointer-events-none absolute bottom-0 z-[25] w-0.5 bg-danger shadow-[0_0_8px] shadow-danger/60"
+              className="pointer-events-none absolute bottom-0 z-[15] w-0.5 bg-danger shadow-[0_0_8px] shadow-danger/60"
               style={{ left: CH_COL + nowX - 1, top: HEADER }}
               aria-hidden
             />
