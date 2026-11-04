@@ -140,7 +140,7 @@ const (
 // torrents on the provider (existing torrents and links keep working),
 // doubling while refusals continue, so Ether does not keep provoking an
 // account-level throttle.
-func (e *entry) addRefused(now time.Time) {
+func (e *entry) addRefused(now time.Time) time.Duration {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if now.Sub(e.lastRefusal) > addPauseMax {
@@ -149,8 +149,11 @@ func (e *entry) addRefused(now time.Time) {
 	e.addRefusals++
 	e.lastRefusal = now
 	if e.addRefusals >= 2 {
-		e.addsUntil = now.Add(min(addPauseMin<<min(e.addRefusals-2, 3), addPauseMax))
+		duration := min(addPauseMin<<min(e.addRefusals-2, 3), addPauseMax)
+		e.addsUntil = now.Add(duration)
+		return duration
 	}
+	return 0
 }
 
 // addAccepted ends a run of refusals.
@@ -1019,6 +1022,7 @@ func (s *Service) acquireOn(ctx context.Context, e *entry, base Payload, choose 
 	}
 	ctx, cancel := context.WithTimeout(ctx, providerOpTimeout)
 	defer cancel()
+	ctx = context.WithValue(ctx, diagnosticKey{}, providerDiagnostic{s.log, displayName(e.cfg), base.Release, base.InfoHash})
 	cfg := s.Config()
 	hash := base.InfoHash
 
@@ -1102,7 +1106,9 @@ func (s *Service) acquireOn(ctx context.Context, e *entry, base Payload, choose 
 		acq, err := e.p.Acquire(ctx, req)
 		switch {
 		case errors.Is(err, ErrAddRefused):
-			e.addRefused(s.now())
+			if duration := e.addRefused(s.now()); duration > 0 {
+				s.log.Warn("debrid provider adds paused", "provider", cleanDiagnostic(displayName(e.cfg), e.cfg.APIKey), "reason", "repeated add refusals", "duration", duration, "release", cleanDiagnostic(base.Release, e.cfg.APIKey), "infohash", cleanDiagnostic(base.InfoHash, e.cfg.APIKey))
+			}
 		case err == nil && acq.Added:
 			e.addAccepted()
 		}
@@ -1299,6 +1305,7 @@ func (s *Service) relink(ctx context.Context, e *entry, p Payload) (Payload, err
 		return p, err
 	}
 	lctx, cancel := context.WithTimeout(ctx, providerOpTimeout)
+	lctx = context.WithValue(lctx, diagnosticKey{}, providerDiagnostic{s.log, displayName(e.cfg), p.Release, p.InfoHash})
 	start := s.now()
 	dl, err := e.p.Link(lctx, p.handle())
 	if err == nil || ctx.Err() == nil { // the caller's budget is not a provider failure
