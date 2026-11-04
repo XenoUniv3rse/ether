@@ -414,23 +414,19 @@ export function GuideWorkbench({
       <section
         className={cn(
           "relative overflow-hidden rounded-2xl border border-border bg-surface shadow-xs",
-          source ? "p-5" : "px-4 py-3",
+          "px-4 py-3",
         )}
       >
-        <div
-          className="pointer-events-none absolute -right-16 -top-24 size-72 rounded-full bg-primary/10 blur-3xl"
-          aria-hidden
-        />
         {source ? (
           <div className="relative flex flex-wrap items-center gap-4">
-            <span className="grid size-12 shrink-0 place-items-center rounded-xl bg-info/15 text-info">
-              <CalendarRange size={22} />
+            <span className="grid size-9 shrink-0 place-items-center rounded-lg bg-info/15 text-info">
+              <CalendarRange size={18} />
             </span>
             <div className="min-w-0 flex-1">
               <p className="text-xs font-semibold uppercase tracking-wider text-fg-subtle">
                 {source.kind === "plex" ? t("Plex guide") : t("XMLTV guide")}
               </p>
-              <h2 className="mt-0.5 truncate text-xl font-semibold tracking-tight text-fg">
+              <h2 className="mt-0.5 truncate text-base font-semibold tracking-tight text-fg">
                 {sourceTitle(source)}
               </h2>
               <p className={cn("mt-0.5 text-sm", status.warn ? "text-warning" : "text-fg-muted")}>
@@ -560,7 +556,12 @@ export function GuideWorkbench({
 
       <section aria-label={t("Channel guide mapping")} className="space-y-3">
         <div className="flex flex-wrap items-center gap-3">
-          <h2 className="text-sm font-semibold text-fg">{t("Channel mapping")}</h2>
+          <div className="min-w-0 flex-1">
+            <h2 className="text-sm font-semibold text-fg">{t("Channel mapping")}</h2>
+            <p className="mt-1 text-xs text-fg-muted">
+              {t("Map a channel from Missing or All IPTV, or run Auto-match.")}
+            </p>
+          </div>
           <Segmented
             ariaLabel={t("Show channels")}
             size="sm"
@@ -605,10 +606,10 @@ export function GuideWorkbench({
               {needle
                 ? t("Try another name, number or group.")
                 : show === "using"
-                ? t("Map a channel from Missing or All IPTV, or run Auto-match.")
-                : iptv.length
-                  ? t("Every live channel is getting listings.")
-                  : t("Add an M3U source to bring in IPTV channels.")}
+                  ? t("Map a channel from Missing or All IPTV, or run Auto-match.")
+                  : iptv.length
+                    ? t("Every live channel is getting listings.")
+                    : t("Add an M3U source to bring in IPTV channels.")}
             </p>
           </div>
         ) : (

@@ -64,6 +64,7 @@ func (s *Service) Handler() http.Handler {
 		ownerResult(w, map[string]bool{"ok": true}, s.DeleteChannel(r.Context(), chi.URLParam(r, "id")))
 	})
 	r.Get("/sources", func(w http.ResponseWriter, r *http.Request) { v, e := s.Sources(r.Context()); ownerResult(w, v, e) })
+	r.Get("/usage", func(w http.ResponseWriter, r *http.Request) { v, e := s.LiveUsage(r.Context()); ownerResult(w, v, e) })
 	importSource := func(w http.ResponseWriter, r *http.Request) {
 		var src Source
 		if !ownerBody(w, r, &src) {

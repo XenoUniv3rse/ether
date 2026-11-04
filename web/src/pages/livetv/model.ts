@@ -279,7 +279,24 @@ export function policyPermits(
   return !isPrivate || (p?.granted ?? []).includes(channelId);
 }
 
+/** Live viewing and provider usage (GET /livetv/usage). */
+export type LiveUsage = {
+  sessions: number;
+  viewers: number;
+  watching: { channelId: string; viewers: number }[];
+  sources: {
+    sourceId: string;
+    /** Provider connections Ether holds now, and the most it may hold (0: no limit). */
+    open: number;
+    limit: number;
+    /** New provider streams in the last hour; perHour is the owner's cap (0: none). */
+    startsLastHour: number;
+    perHour: number;
+    gapSeconds: number;
+  }[];
+};
 export const tv = {
+  usage: (signal?: AbortSignal) => apiFetch<LiveUsage>("/livetv/usage", { signal }),
   plexLineups: (country: string, postalCode: string) =>
     apiFetch<PlexLineup[]>(
       `/livetv/plex-guide/lineups?country=${enc(country)}&postalCode=${enc(postalCode)}`,

@@ -1,5 +1,13 @@
 import { SubtabNav } from "../../components/layout";
-import { Badge, Button, Input, Popover, cn, confirmDialog, toast } from "@braedonsaunders/appkit-ui";
+import {
+  Badge,
+  Button,
+  Input,
+  Popover,
+  cn,
+  confirmDialog,
+  toast,
+} from "@braedonsaunders/appkit-ui";
 import {
   CalendarRange,
   ListVideo,
@@ -40,7 +48,9 @@ import {
   type StudioDraft,
 } from "./ChannelStudio";
 import { GuideMatchPanel, GuideSourceList, GuideWorkbench } from "./GuideData";
-import { GuideGrid, OnNowStrip } from "./GuideGrid";
+import { GuideGrid } from "./GuideGrid";
+import { LiveOverview } from "./Overview";
+import { SourcesDashboard } from "./SourcesDashboard";
 import { SourceList, type Selection } from "./Lineup";
 import { SourceEditor, type SourceKind } from "./SourceEditor";
 import {
@@ -59,6 +69,7 @@ import {
   type Channel,
   type Coverage,
   type LiveTVPolicy,
+  type LiveUsage,
   type Programme,
   type Source,
 } from "./model";
@@ -109,7 +120,9 @@ export default function LiveTV() {
       ? "guide"
       : tab === "sources" || selection.kind === "source"
         ? "sources"
-        : "channels",
+        : tab === "channels" || selection.kind === "channel"
+          ? "channels"
+          : "overview",
   );
 
   useEffect(() => {
@@ -123,6 +136,39 @@ export default function LiveTV() {
   const [collections, setCollections] = useState<CollectionChoice[]>([]);
   const [programmes, setProgrammes] = useState<Programme[]>([]);
   const [coverageList, setCoverageList] = useState<Coverage[] | null | "unsupported">(null);
+  const [rawUsage, setUsage] = useState<LiveUsage | null>(null);
+  const usage = useMemo(
+    () =>
+      rawUsage && {
+        ...rawUsage,
+        sources: sources.filter(isChannelSource).map((s) => {
+          const accountLimit = s.account?.maxConnections ?? 0;
+          const limit =
+            s.maxConnections && s.maxConnections > 0
+              ? accountLimit > 0
+                ? Math.min(accountLimit, s.maxConnections)
+                : s.maxConnections
+              : accountLimit;
+          const counters = rawUsage.sources.find((u) => u.sourceId === s.id);
+          return {
+            sourceId: s.id,
+            open: counters?.open ?? 0,
+            startsLastHour: counters?.startsLastHour ?? 0,
+            limit,
+            perHour: s.tunesPerHour ?? 0,
+            gapSeconds:
+              (s.tuneGapSeconds ?? 0) > 0
+                ? s.tuneGapSeconds!
+                : (s.tuneGapSeconds ?? 0) < 0
+                  ? 0
+                  : limit > 0
+                    ? 2
+                    : 0,
+          };
+        }),
+      },
+    [rawUsage, sources],
+  );
   const [error, setError] = useState<unknown>(null);
   const [guideLoading, setGuideLoading] = useState(false);
   const [now, setNow] = useState(() => Date.now());
@@ -140,6 +186,21 @@ export default function LiveTV() {
   const [guideFooter, setGuideFooter] = useState<React.ReactNode>(null);
 
   useInterval(() => setNow(Date.now()), 30_000);
+  // Local server usage only; polling never contacts an IPTV provider.
+  const loadUsage = useCallback(async (signal?: AbortSignal) => {
+    try {
+      setUsage((await tv.usage(signal)) ?? null);
+    } catch {
+      // Older or unavailable servers must not leave stale usage on screen.
+      if (!signal?.aborted) setUsage(null);
+    }
+  }, []);
+  useEffect(() => {
+    const ctl = new AbortController();
+    void loadUsage(ctl.signal);
+    return () => ctl.abort();
+  }, [loadUsage]);
+  useInterval(() => void loadUsage(), 15_000);
   const from = useMemo(() => windowStart(shift), [shift]);
   const until = useMemo(() => new Date(from.getTime() + 24 * HOUR), [from]);
 
@@ -515,78 +576,76 @@ export default function LiveTV() {
     </div>
   ) : null;
 
-
   const panelHead = (
-      <PanelHead>
-        <div className="flex items-center gap-1.5">
-          <div className="relative min-w-0 flex-1">
-            <Search
-              size={13}
-              className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-fg-subtle"
-              aria-hidden
-            />
-            <Input
-              type="search"
-              value={q}
-              onChange={(e) => setQ(e.currentTarget.value)}
-              placeholder={
-                leftTab === "sources"
-                  ? t("Find a channel, group or source…")
-                  : leftTab === "guide"
-                    ? t("Find a channel or guide…")
-                    : t("Find a channel or group…")
-              }
-              aria-label={t("Search channels")}
-              className="h-8 pl-7 text-sm"
-            />
-          </div>
-          <ToolbarPicker
-            ariaLabel={t("Show")}
-            value={filter}
-            onChange={setFilter}
-            options={FILTERS.map((f) => ({
-              ...f,
-              hint:
-                f.value === "missing" && missingCount !== null
-                  ? tn(missingCount, "{count} channel", "{count} channels")
-                  : undefined,
-            }))}
-            menuClassName="w-48"
+    <PanelHead>
+      <div className="flex items-center gap-1.5">
+        <div className="relative min-w-0 flex-1">
+          <Search
+            size={13}
+            className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-fg-subtle"
+            aria-hidden
+          />
+          <Input
+            type="search"
+            value={q}
+            onChange={(e) => setQ(e.currentTarget.value)}
+            placeholder={
+              leftTab === "sources"
+                ? t("Find a channel, group or source…")
+                : leftTab === "guide"
+                  ? t("Find a channel or guide…")
+                  : t("Find a channel or group…")
+            }
+            aria-label={t("Search channels")}
+            className="h-8 pl-7 text-sm"
           />
         </div>
-        <SubtabNav
-          ariaLabel={t("Lineup")}
-          active={leftTab}
-          onSelect={setLeftTab}
-          tabs={[
-            { key: "channels", label: t("Channels"), count: filtered.length },
-            {
-              key: "sources",
-              label: t("Sources"),
-              count: sources.filter(isChannelSource).length || undefined,
-            },
-            { key: "guide", label: t("Guide"), count: missingCount || undefined },
-          ]}
+        <ToolbarPicker
+          ariaLabel={t("Show")}
+          value={filter}
+          onChange={setFilter}
+          options={FILTERS.map((f) => ({
+            ...f,
+            hint:
+              f.value === "missing" && missingCount !== null
+                ? tn(missingCount, "{count} channel", "{count} channels")
+                : undefined,
+          }))}
+          menuClassName="w-48"
         />
-      </PanelHead>
+      </div>
+      <SubtabNav
+        ariaLabel={t("Lineup")}
+        active={leftTab}
+        onSelect={setLeftTab}
+        tabs={[
+          { key: "overview", label: t("Overview") },
+          { key: "channels", label: t("Channels"), count: filtered.length },
+          {
+            key: "sources",
+            label: t("Sources"),
+            count: sources.filter(isChannelSource).length || undefined,
+          },
+          { key: "guide", label: t("Guide"), count: missingCount || undefined },
+        ]}
+      />
+    </PanelHead>
   );
   const lineupEmpty = channels?.length ? (
-                  <p className="text-xs text-fg-muted">{t("No channels match.")}</p>
-                ) : (
-                  <div className="space-y-3">
-                    <p className="text-sm font-medium text-fg">{t("No channels yet")}</p>
-                    <p className="text-xs text-fg-muted">
-                      {t(
-                        "Build a virtual channel from your catalogue, or bring in IPTV from an M3U playlist.",
-                      )}
-                    </p>
-                    <div className="flex justify-center gap-2">
-                      <Button size="sm" onClick={() => void go({ kind: "new" })}>
-                        <Sparkles size={13} /> {t("New channel")}
-                      </Button>
-                    </div>
-                  </div>
-                );
+    <p className="text-xs text-fg-muted">{t("No channels match.")}</p>
+  ) : (
+    <div className="space-y-3">
+      <p className="text-sm font-medium text-fg">{t("No channels yet")}</p>
+      <p className="text-xs text-fg-muted">
+        {t("Build a virtual channel from your catalogue, or bring in IPTV from an M3U playlist.")}
+      </p>
+      <div className="flex justify-center gap-2">
+        <Button size="sm" onClick={() => void go({ kind: "new" })}>
+          <Sparkles size={13} /> {t("New channel")}
+        </Button>
+      </div>
+    </div>
+  );
 
   const aside = (
     <>
@@ -625,10 +684,9 @@ export default function LiveTV() {
   const missingChannel =
     selection.kind === "channel" && channels !== null && !savedChannel && !draft;
 
-  // Channels and Sources keep the live guide on the right; the Guide tab's
-  // right side is the guide workbench for All guides or one guide source.
+  // Sources show provider health; Guide shows channel-to-listing mappings.
   const guideSource = guideSourceId ? sources.find((x) => x.id === guideSourceId) : undefined;
-  const mainClassName = leftTab === "guide" ? "" : "flex flex-col lg:overflow-hidden";
+  const mainClassName = "";
   const main =
     leftTab === "guide" ? (
       <GuideWorkbench
@@ -643,31 +701,15 @@ export default function LiveTV() {
         now={now}
       />
     ) : (
-      <>
-        <OnNowStrip
-          channels={filtered}
-          guide={guide}
-          now={now}
-          onSelect={(id) => void go({ kind: "channel", id })}
-        />
-        <div className="min-h-0 flex-1">
-          <GuideGrid
-            channels={filtered}
-            guide={guide}
-            from={from}
-            until={until}
-            now={now}
-            selected={selection.kind === "channel" ? selection.id : null}
-            onSelect={(id) => void go({ kind: "channel", id })}
-            onShift={(h) => setShift((s) => s + h)}
-            onNow={() => {
-              setShift(0);
-              setNow(Date.now());
-            }}
-            loading={guideLoading}
-          />
-        </div>
-      </>
+      <SourcesDashboard
+        sources={sources}
+        channels={sorted}
+        coverage={coverage}
+        usage={usage}
+        selected={selection.kind === "source" ? selection.id : null}
+        now={now}
+        onEdit={(id) => void go({ kind: "source", id })}
+      />
     );
 
   // Channels: one guide whose left third is the lineup (search, tabs and
@@ -708,6 +750,26 @@ export default function LiveTV() {
           )
         }
       />
+    </div>
+  );
+
+  // Overview uses the full workspace for both navigation and dashboard.
+  const overviewView = (
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div className="shrink-0 border-b border-border bg-bg-subtle">{panelHead}</div>
+      <div className="app-scroll min-h-0 flex-1 overflow-y-auto bg-bg p-4 sm:p-6">
+        <LiveOverview
+          channels={filtered}
+          lineup={sorted}
+          sources={sources}
+          guide={guide}
+          coverage={coverage}
+          usage={usage}
+          now={now}
+          onSelectChannel={selectChannel}
+          onSelectSource={(id) => void go({ kind: "source", id })}
+        />
+      </div>
     </div>
   );
 
@@ -756,7 +818,12 @@ export default function LiveTV() {
         aside={aside}
         main={main}
       >
-        {state ?? (leftTab === "channels" ? lineupGuide : undefined)}
+        {state ??
+          (leftTab === "channels"
+            ? lineupGuide
+            : leftTab === "overview"
+              ? overviewView
+              : undefined)}
       </Workspace>
       <Drawer
         open={guideOpen}

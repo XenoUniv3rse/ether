@@ -85,7 +85,7 @@ type sourcePace struct {
 // reserveOpen books the source's next stream start and returns how long the
 // caller waits for it. A spent hourly allowance refuses the stream.
 func (r *tapRegistry) reserveOpen(source string, gap time.Duration, perHour int, now time.Time) (time.Duration, error) {
-	if source == "" || gap <= 0 && perHour <= 0 {
+	if source == "" {
 		return 0, nil
 	}
 	r.mu.Lock()
