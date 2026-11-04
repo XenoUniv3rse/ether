@@ -62,16 +62,27 @@ func cachedAirAddedTimes(ctx context.Context, db *sql.DB, keys []core.RatingKey,
 }
 
 func applyAirAddedTimes(ctx context.Context, db *sql.DB, items []core.Title, now time.Time) error {
-	keys := make([]core.RatingKey, len(items))
+	// Movies and episodes already carry the exact date used by airAddedSQL.
+	// Only containers need another query to find their latest aired child.
+	keys := make([]core.RatingKey, 0, len(items))
 	for i := range items {
-		keys[i] = items[i].Key
+		if items[i].Type == core.TypeMovie || items[i].Type == core.TypeEpisode {
+			items[i].AddedAt = time.Time{}
+			if released := items[i].Released; !released.IsZero() && released.Unix() != 0 && released.Unix() <= now.Unix() {
+				items[i].AddedAt = time.Unix(released.Unix(), 0).UTC()
+			}
+		} else {
+			keys = append(keys, items[i].Key)
+		}
 	}
 	times, err := cachedAirAddedTimes(ctx, db, keys, now)
 	if err != nil {
 		return err
 	}
 	for i := range items {
-		items[i].AddedAt = times[items[i].Key]
+		if items[i].Type != core.TypeMovie && items[i].Type != core.TypeEpisode {
+			items[i].AddedAt = times[items[i].Key]
+		}
 	}
 	return nil
 }
