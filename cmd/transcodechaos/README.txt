@@ -27,3 +27,13 @@ short reads, subtitle tracks, timestamp and format changes, resource leak
 checks, timeline monotonicity or A/V drift. VideoToolbox is exercised only for
 healthy encoding. VAAPI and NVENC need suitable hardware. A PASS means only
 that this specific short scenario met the checks described above.
+
+The Plex endpoint group uses the existing handler fixtures and a real
+transcode manager (the build tag keeps it out of default CI):
+
+  CHAOS_FFMPEG=/path/to/ffmpeg CHAOS_FFPROBE=/path/to/ffprobe \
+    go test -tags transcodechaos ./internal/plex -run '^TestTranscodeChaosPlex$' -count=1 -v
+
+It exercises one healthy HLS direct-stream, DASH video, start.mkv and download
+conversion, including ffprobe and ffmpeg null-decode of returned media. It does
+not yet apply the adversarial matrix or exercise the real source resolver.

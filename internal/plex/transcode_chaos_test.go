@@ -1,0 +1,138 @@
+//go:build transcodechaos
+
+package plex
+
+import (
+	"context"
+	"fmt"
+	"io"
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/braedonsaunders/ether/internal/config"
+	"github.com/braedonsaunders/ether/internal/transcode"
+)
+
+type chaosPlayback struct {
+	*fakePlayback
+	url string
+}
+
+func (p *chaosPlayback) InputURL(string) string { return p.url }
+
+// TestTranscodeChaosPlex is explicitly opt-in: it uses the regular Plex
+// fixture and actual handlers, a real transcode manager, and loopback media.
+func TestTranscodeChaosPlex(t *testing.T) {
+	ff, fp := os.Getenv("CHAOS_FFMPEG"), os.Getenv("CHAOS_FFPROBE")
+	if ff == "" || fp == "" {
+		t.Fatal("set CHAOS_FFMPEG and CHAOS_FFPROBE")
+	}
+	dir := t.TempDir()
+	input := filepath.Join(dir, "fixture.mp4")
+	chaosCmd(t, ff, "-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "testsrc2=size=320x180:rate=24", "-f", "lavfi", "-i", "sine=sample_rate=48000", "-t", "12", "-c:v", "libx264", "-preset", "ultrafast", "-threads", "2", "-g", "48", "-c:a", "aac", "-movflags", "+faststart", input)
+	source := httptest.NewServer(http.FileServer(http.Dir(dir)))
+	defer source.Close()
+	manager, err := transcode.New(config.Transcode{FFmpegPath: ff, FFprobePath: fp, HWAccel: "none", TempDir: filepath.Join(dir, "transcodes")}, slog.New(slog.NewTextHandler(io.Discard, nil)), transcode.WithSegmentTimeout(12*time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close()
+	info, err := manager.Probe(context.Background(), source.URL+"/fixture.mp4")
+	if err != nil {
+		t.Fatal(err)
+	}
+	check := func(t *testing.T, data []byte, ext string) {
+		t.Helper()
+		if len(data) == 0 {
+			t.Fatal("empty media")
+		}
+		path := filepath.Join(t.TempDir(), "output."+ext)
+		if err := os.WriteFile(path, data, 0600); err != nil {
+			t.Fatal(err)
+		}
+		chaosCmd(t, fp, "-v", "error", "-show_streams", path)
+		chaosCmd(t, ff, "-v", "error", "-xerror", "-i", path, "-f", "null", "-")
+	}
+	for _, path := range []string{"hls-remux", "dash", "start-mkv"} {
+		t.Run(path, func(t *testing.T) {
+			f := newFixture()
+			defer f.srv.Close()
+			f.playback.info = *info
+			f.srv.d.Playback = &chaosPlayback{f.playback, source.URL + "/fixture.mp4"}
+			f.srv.d.Transcoder = manager
+			id := "chaos-" + path
+			query := "path=%2Flibrary%2Fmetadata%2F" + fightClub.Key.String() + "&session=" + id + "&directPlay=0&directStream=1"
+			get := func(url string) []byte {
+				t.Helper()
+				rec := f.get(t, url)
+				if rec.Code != 200 {
+					t.Fatalf("%s: HTTP %d %s", url, rec.Code, rec.Body.String())
+				}
+				return rec.Body.Bytes()
+			}
+			switch path {
+			case "hls-remux":
+				playlist := get("/video/:/transcode/universal/start.m3u8?" + query + "&protocol=hls")
+				if !strings.Contains(string(playlist), "#EXTM3U") {
+					t.Fatal("missing HLS playlist")
+				}
+				check(t, get("/video/:/transcode/universal/session/"+id+"/base/00000.ts"), "ts")
+			case "dash":
+				manifest := get("/video/:/transcode/universal/start.mpd?" + query + "&protocol=dash")
+				if !strings.Contains(string(manifest), "<MPD") {
+					t.Fatal("missing MPD")
+				}
+				base := "/video/:/transcode/universal/session/" + id + "/0/"
+				init := get(base + "header")
+				media := get(base + "0.m4s")
+				check(t, append(init, media...), "mp4")
+			case "start-mkv":
+				check(t, get("/video/:/transcode/universal/start.mkv?"+query+"&protocol=http"), "mkv")
+			}
+			get("/video/:/transcode/universal/ping?session=" + id)
+			get("/video/:/transcode/universal/stop?session=" + id)
+		})
+	}
+	t.Run("download", func(t *testing.T) {
+		f := newDownloadFixture(t, true)
+		f.playback.info = *info
+		f.srv.d.Playback = &chaosPlayback{f.playback, source.URL + "/fixture.mp4"}
+		dl, err := manager.NewDownloadRemuxer(config.Downloads{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		f.srv.d.Downloads = dl
+		q := f.queue(t)
+		rec := f.do(t, http.MethodPost, "/downloadQueue/"+itoa(q)+"/add?keys=/library/metadata/"+fightClub.Key.String(), ownerToken, nil)
+		if rec.Code != 200 {
+			t.Fatalf("add HTTP %d", rec.Code)
+		}
+		item := f.waitStatus(t, q, downloadAvailable)
+		id := int64(item["id"].(float64))
+		rec = f.do(t, http.MethodGet, "/downloadQueue/"+itoa(q)+"/item/"+itoa(id)+"/media", ownerToken, nil)
+		if rec.Code != 200 {
+			t.Fatalf("media HTTP %d", rec.Code)
+		}
+		check(t, rec.Body.Bytes(), "mp4")
+		rec = f.do(t, http.MethodDelete, "/downloadQueue/"+itoa(q)+"/items/"+itoa(id), ownerToken, nil)
+		if rec.Code != 200 {
+			t.Fatalf("delete HTTP %d", rec.Code)
+		}
+	})
+}
+func chaosCmd(t *testing.T, exe string, args ...string) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	b, err := exec.CommandContext(ctx, exe, args...).CombinedOutput()
+	if err != nil {
+		t.Fatal(fmt.Errorf("%s: %w: %s", filepath.Base(exe), err, b))
+	}
+}
