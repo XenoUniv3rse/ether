@@ -21,7 +21,7 @@ const plexGuideURL = "https://epg.provider.plex.tv"
 const plexGuideBudget = 80
 
 func init() {
-	store.Register("livetv", 3, `CREATE TABLE livetv_plex_guide_gate (id INTEGER PRIMARY KEY, holder TEXT NOT NULL, locked_until BIGINT NOT NULL, next_at BIGINT NOT NULL);`)
+	store.Register("livetv", 5, `CREATE TABLE livetv_plex_guide_gate (id INTEGER PRIMARY KEY, holder TEXT NOT NULL, locked_until BIGINT NOT NULL, next_at BIGINT NOT NULL);`)
 }
 
 // A database lease coordinates nodes and survives a process restart. A dead
