@@ -21,14 +21,14 @@ const plexGuideURL = "https://epg.provider.plex.tv"
 const plexGuideBudget = 80
 
 func init() {
-	store.Register("livetv", 5, `CREATE TABLE livetv_plex_guide_gate (id INTEGER PRIMARY KEY, holder TEXT NOT NULL, locked_until BIGINT NOT NULL, next_at BIGINT NOT NULL);`)
+	store.Register("livetv", 5, `CREATE TABLE livetv_plex_guide_gate (id INTEGER PRIMARY KEY, holder TEXT NOT NULL, locked_until BIGINT NOT NULL, next_at BIGINT NOT NULL, status INTEGER NOT NULL DEFAULT 0);`)
 }
 
 // A database lease coordinates nodes and survives a process restart. A dead
 // caller loses its lease after a minute; normal requests time out in 20s.
-func (s *Service) acquirePlexGate(ctx context.Context) (func(time.Time), error) {
+func (s *Service) acquirePlexGate(ctx context.Context) (func(time.Time, int), error) {
 	if s.o.DB == nil {
-		return func(time.Time) {}, nil
+		return func(time.Time, int) {}, nil
 	}
 	if _, err := s.o.DB.ExecContext(ctx, `INSERT INTO livetv_plex_guide_gate(id,holder,locked_until,next_at) VALUES(1,'',0,0) ON CONFLICT(id) DO NOTHING`); err != nil {
 		return nil, err
@@ -45,11 +45,19 @@ func (s *Service) acquirePlexGate(ctx context.Context) (func(time.Time), error) 
 			return nil, err
 		}
 		if n == 1 {
-			return func(next time.Time) {
+			return func(next time.Time, status int) {
 				release, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 				defer cancel()
-				_, _ = s.o.DB.ExecContext(release, `UPDATE livetv_plex_guide_gate SET holder='', locked_until=0, next_at=? WHERE id=1 AND holder=?`, next.UnixMilli(), holder)
+				_, _ = s.o.DB.ExecContext(release, `UPDATE livetv_plex_guide_gate SET holder='', locked_until=0, next_at=?, status=? WHERE id=1 AND holder=?`, next.UnixMilli(), status, holder)
 			}, nil
+		}
+		var nextAt int64
+		var status int
+		if err := s.o.DB.QueryRowContext(ctx, `SELECT next_at,status FROM livetv_plex_guide_gate WHERE id=1`).Scan(&nextAt, &status); err != nil {
+			return nil, err
+		}
+		if nextAt > time.Now().UnixMilli() && status == 429 {
+			return nil, fmt.Errorf("Plex guide rate-limited; retry later")
 		}
 		timer := time.NewTimer(time.Second)
 		select {
@@ -67,6 +75,7 @@ type plexGuideGate struct {
 	mu       sync.Mutex
 	next     time.Time
 	failures int
+	status   int
 }
 
 type PlexLineup struct {
@@ -127,6 +136,9 @@ func (s *Service) plexGuideRequest(ctx context.Context, path string, q url.Value
 		*budget--
 	}
 	if delay := time.Until(s.plexGate.next); delay > 0 {
+		if s.plexGate.status == 429 {
+			return result, fmt.Errorf("Plex guide rate-limited; retry later")
+		}
 		t := time.NewTimer(delay)
 		defer t.Stop()
 		select {
@@ -137,9 +149,9 @@ func (s *Service) plexGuideRequest(ctx context.Context, path string, q url.Value
 	}
 	release, err := s.acquirePlexGate(ctx)
 	if err != nil {
-		return result, fmt.Errorf("Plex guide is waiting to retry")
+		return result, err
 	}
-	defer func() { release(s.plexGate.next) }()
+	defer func() { release(s.plexGate.next, s.plexGate.status) }()
 	base := plexGuideURL
 	if s.o.PlexGuideURL != "" {
 		base = strings.TrimRight(s.o.PlexGuideURL, "/")
@@ -165,6 +177,7 @@ func (s *Service) plexGuideRequest(ctx context.Context, path string, q url.Value
 	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	resp, err := client.Do(req)
 	s.plexGate.next = time.Now().Add(time.Second)
+	s.plexGate.status = 0
 	if err != nil {
 		s.plexGate.failures++
 		s.plexGate.next = time.Now().Add(plexBackoff(s.plexGate.failures))
@@ -173,6 +186,7 @@ func (s *Service) plexGuideRequest(ctx context.Context, path string, q url.Value
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		s.plexGate.failures++
+		s.plexGate.status = resp.StatusCode
 		wait := plexBackoff(s.plexGate.failures)
 		if raw := resp.Header.Get("Retry-After"); raw != "" {
 			if n, e := strconv.Atoi(raw); e == nil && n >= 0 && n < int((365*24*time.Hour)/time.Second) {
