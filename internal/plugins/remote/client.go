@@ -218,8 +218,14 @@ func (c *clientConn) write(ctx context.Context, f frame) error {
 }
 
 func (c *clientConn) readLoop(ctx context.Context) error {
+	// When the socket ends, in-flight handlers can no longer reply:
+	// cancel them before waiting, so a handler blocked on its context
+	// does not hold up ServeOnce (and Serve's reconnect) until its
+	// own deadline.
+	ctx, cancel := context.WithCancel(ctx)
 	var wg sync.WaitGroup
 	defer wg.Wait()
+	defer cancel()
 	for {
 		_, raw, err := c.ws.Read(ctx)
 		if err != nil {

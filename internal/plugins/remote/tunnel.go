@@ -233,6 +233,18 @@ func (s *TunnelServer) serve(ctx context.Context, ws *websocket.Conn, pluginID, 
 		return
 	}
 
+	// Welcome before the connection is published: once it is in
+	// s.conns a call can write a request frame on it, and a request
+	// arriving ahead of the welcome fails the sidecar's handshake.
+	if err := conn.write(ctx, frame{
+		Type:     "welcome",
+		Protocol: TunnelProtocol,
+		PluginID: pluginID,
+		ConnID:   conn.id,
+		MaxChunk: s.chunkBytes,
+	}); err != nil {
+		return
+	}
 	s.mu.Lock()
 	if s.closed {
 		s.mu.Unlock()
@@ -246,16 +258,6 @@ func (s *TunnelServer) serve(ctx context.Context, ws *websocket.Conn, pluginID, 
 		// A reconnect replaces the old socket. Its in-flight calls
 		// fail cleanly instead of hanging to their deadlines.
 		old.teardown(ErrDisconnected)
-	}
-
-	if err := conn.write(ctx, frame{
-		Type:     "welcome",
-		Protocol: TunnelProtocol,
-		PluginID: pluginID,
-		ConnID:   conn.id,
-		MaxChunk: s.chunkBytes,
-	}); err != nil {
-		return
 	}
 	s.log.Info("plugin tunnel connected", "plugin", pluginID, "connection", conn.id)
 
