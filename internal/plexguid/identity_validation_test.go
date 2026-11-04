@@ -6,12 +6,13 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/braedonsaunders/ether/internal/core"
 	"github.com/braedonsaunders/ether/internal/store"
 )
 
-func TestDirectChildMatchRequiresExactIdentity(t *testing.T) {
+func TestDirectChildMatchCannotProveParentIdentity(t *testing.T) {
 	for _, tc := range []struct {
 		name, kind, ids, indices string
 		key                      core.RatingKey
@@ -20,9 +21,9 @@ func TestDirectChildMatchRequiresExactIdentity(t *testing.T) {
 		{"season lacks index", "season", "tmdb://1396", "", core.SeasonKey(1396, 1), false},
 		{"episode lacks indices", "episode", "tmdb://1396", "", core.EpisodeKey(1396, 1, 2), false},
 		{"episode lacks parent", "episode", "tmdb://1396", `,"index":2`, core.EpisodeKey(1396, 1, 2), false},
-		{"season exact external ID", "season", "tmdb://1396/1", "", core.SeasonKey(1396, 1), true},
-		{"episode exact external ID", "episode", "tmdb://1396/1/2", "", core.EpisodeKey(1396, 1, 2), true},
-		{"episode exact indices", "episode", "tmdb://1396", `,"index":2,"parentIndex":1`, core.EpisodeKey(1396, 1, 2), true},
+		{"season exact external ID", "season", "tmdb://1396/1", "", core.SeasonKey(1396, 1), false},
+		{"episode exact external ID", "episode", "tmdb://1396/1/2", "", core.EpisodeKey(1396, 1, 2), false},
+		{"episode exact indices", "episode", "tmdb://1396", `,"index":2,"parentIndex":1`, core.EpisodeKey(1396, 1, 2), false},
 		{"episode contradicts external ID", "episode", "tmdb://1396/1/2", `,"index":3,"parentIndex":1`, core.EpisodeKey(1396, 1, 2), false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -56,5 +57,58 @@ func TestDirectChildMatchRequiresExactIdentity(t *testing.T) {
 				t.Fatalf("Resolve=%q, want %q", got, want)
 			}
 		})
+	}
+}
+
+// A child proof belongs to one specific parent mapping, including during a
+// concurrent rematch. Legacy rows without parentage remain available.
+func TestChildProofFollowsParentMapping(t *testing.T) {
+	ctx := context.Background()
+	db, err := store.OpenMemory(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	s := New(db, Options{})
+	defer s.Close()
+	show, season, episode := core.ShowKey(1396), core.SeasonKey(1396, 1), core.EpisodeKey(1396, 1, 2)
+	now := time.Now().Unix()
+	const oldShow = "plex://show/aaaaaaaaaaaaaaaaaaaaaaaa"
+	const newShow = "plex://show/bbbbbbbbbbbbbbbbbbbbbbbb"
+	const seasonGUID = "plex://season/cccccccccccccccccccccccc"
+	const episodeGUID = "plex://episode/dddddddddddddddddddddddd"
+	if err = s.storeMapping(ctx, show, oldShow, now); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.storeMappingUnder(ctx, season, seasonGUID, now, show, oldShow); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.storeMappingUnder(ctx, episode, episodeGUID, now, season, seasonGUID); err != nil {
+		t.Fatal(err)
+	}
+	// Legacy children have no saved parentage, so they keep serving even when
+	// the show changes; their verification is removed for a later recheck.
+	legacy := core.SeasonKey(1396, 2)
+	const legacyGUID = "plex://season/eeeeeeeeeeeeeeeeeeeeeeee"
+	if err = s.storeMapping(ctx, legacy, legacyGUID, now); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.storeMapping(ctx, show, newShow, now); err != nil {
+		t.Fatal(err)
+	}
+	if s.Cached(ctx, season) != "" || len(s.CachedMany(ctx, []core.RatingKey{season, episode})) != 0 {
+		t.Fatal("stale children exposed")
+	}
+	if _, err = s.ExactKey(ctx, episodeGUID); err == nil {
+		t.Fatal("stale reverse mapping exposed")
+	}
+	if s.Cached(ctx, legacy) != legacyGUID {
+		t.Fatal("legacy child was withheld")
+	}
+	if _, ok := s.freshCached(ctx, legacy); ok {
+		t.Fatal("legacy child still marked fresh")
+	}
+	if err = s.storeMappingUnder(ctx, season, seasonGUID, now, show, oldShow); err == nil {
+		t.Fatal("stale parent accepted")
 	}
 }
