@@ -89,12 +89,14 @@ func playbackMessage(err error) string {
 }
 
 // writeStartErr answers a failed start.m3u8, start.mpd or part request.
-// A 503 alone leaves some players buffering, so when no debrid account holds
-// the title (cached-only, a download queued or refused) the reason is also
-// queued as terminationText for the client's next timeline, the way a
-// start stall is reported.
+// A 503 alone leaves some players buffering. Queue the reason as
+// terminationText for the client's next timeline, as for a start stall.
 func (s *Server) writeStartErr(w http.ResponseWriter, r *http.Request, pr *Request, err error) {
-	if pr != nil && pr.User != nil && errors.Is(err, core.ErrNotCached) {
+	if r.Context().Err() != nil {
+		return
+	}
+	s.log.Warn("playback start failed", "reason", playbackMessage(err), "err", err)
+	if pr != nil && pr.User != nil {
 		s.setTermination(trackID(pr.User.ID, pr.ClientID, pr.SessionID), playbackMessage(err))
 	}
 	s.writeErr(w, r, err)
@@ -600,7 +602,7 @@ func (s *Server) handleDecision(w http.ResponseWriter, r *http.Request) {
 		if ctx.Err() != nil {
 			return
 		}
-		s.log.Info("playback decision failed before admission", "user", pr.User.Username, "reason", playbackMessage(err), "err", err)
+		s.log.Warn("playback decision failed before admission", "user", pr.User.Username, "reason", playbackMessage(err), "err", err)
 		p, _ := s.parsePlayRequest(r)
 		// start.m3u8/start.mpd follow a failed decision for the same session:
 		// answer them with this error rather than a second full resolve.
@@ -638,7 +640,7 @@ func (s *Server) handleDecision(w http.ResponseWriter, r *http.Request) {
 		if ctx.Err() != nil {
 			return
 		}
-		s.log.Info("playback decision failed", "key", p.key, "user", pr.User.Username, "reason", playbackMessage(err), "err", err)
+		s.log.Warn("playback decision failed", "key", p.key, "user", pr.User.Username, "reason", playbackMessage(err), "err", err)
 		// The client follows a failed decision with start.mpd/start.m3u8
 		// for the same session: answer it with this error, not a second
 		// full resolve that fails the same way.

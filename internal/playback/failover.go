@@ -196,7 +196,9 @@ func releasesFailed(n int, lastErr error, allUncached bool) error {
 	case errors.Is(lastErr, core.ErrDebridAuth):
 		return fmt.Errorf("%w: %d releases failed (last: %v): %w", core.ErrNotAvailable, n, lastErr, core.ErrDebridAuth)
 	case allUncached && n > 0:
-		return fmt.Errorf("%w: %d releases failed (last: %v)", core.ErrNotCached, n, lastErr)
+		// Keep the typed last cause, including queued/refused/limit and
+		// UncachedError's settings, for the protocol adapter to explain.
+		return fmt.Errorf("%d releases failed: %w", n, lastErr)
 	}
 	return fmt.Errorf("%w: %d releases failed (last: %v)", core.ErrNotAvailable, n, lastErr)
 }
