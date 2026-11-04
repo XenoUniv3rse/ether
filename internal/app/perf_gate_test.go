@@ -3,6 +3,7 @@ package app
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -26,7 +27,7 @@ import (
 const PerfGateEnv = "ETHER_PERF_GATE"
 
 // gateClients are replayed against both scales: one client per protocol.
-var gateClients = []string{"plex-appletv", "infuse-jellyfin", "emby-sdk", "silo-appletv", "stremio", "console"}
+var gateClients = []string{"plex-appletv", "plex-appletv second device", "infuse-jellyfin", "emby-sdk", "silo-appletv", "stremio", "console"}
 
 // TestPerformanceGate fails when a request path scales with the library.
 // It builds the same synthetic household over a library of SmallScale and
@@ -272,6 +273,20 @@ func runPerfScale(t *testing.T, name string, scale perfharness.Scale) []*perfhar
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The owner's Home is measured with their personalization model built
+	// (taste, bandit rows, crowd rows), as a production server serves it,
+	// not the cold-start screen a just-started server answers with.
+	if users, err := a.users.Users(ctx); err != nil {
+		t.Fatal(err)
+	} else {
+		for i := range users {
+			if users[i].ID == viewers[0].ID {
+				if err := a.personalize.Rebuild(ctx, &users[i]); err != nil {
+					t.Fatal(err)
+				}
+			}
+		}
+	}
 	server := httptest.NewServer(a.Handler())
 	a.frontends.start(ctx, server.Listener.Addr())
 	// Run serves with the background WAL checkpointer; without it every
@@ -337,6 +352,13 @@ func runPerfScale(t *testing.T, name string, scale perfharness.Scale) []*perfhar
 			}
 		}
 	}
+	// A Home without the owner's personalized rows would pass the scale
+	// comparison without measuring the screen production serves.
+	if rows := ownerHomeRows(t, port, viewers[0].PlexToken); rows < 1 {
+		t.Errorf("%s: the owner's Home has %d personalized rows", name, rows)
+	} else {
+		t.Logf("%s: the owner's Home has %d personalized rows", name, rows)
+	}
 	if fi, err := os.Stat(filepath.Join(dir, "ether.db-wal")); err == nil {
 		// Every page read searches the WAL index, so a WAL that cannot
 		// restart slows every query.
@@ -364,4 +386,41 @@ func runPerfScale(t *testing.T, name string, scale perfharness.Scale) []*perfhar
 	}
 	t.Logf("%s: replayed in %s", name, time.Since(start).Round(time.Millisecond))
 	return rows
+}
+
+// ownerHomeRows counts the recommender's rows (beyond Continue Watching and
+// the discovery rows) on the owner's Plex Home.
+func ownerHomeRows(t *testing.T, port int, token string) int {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodGet, fmt.Sprintf("http://127.0.0.1:%d/hubs?count=12", port), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("X-Plex-Token", token)
+	req.Header.Set("X-Plex-Client-Identifier", "perf-gate-home-check")
+	req.Header.Set("X-Plex-Product", "Plex for Apple TV")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var body struct {
+		MediaContainer struct {
+			Hub []struct {
+				HubIdentifier string `json:"hubIdentifier"`
+				Size          int    `json:"size"`
+			} `json:"Hub"`
+		} `json:"MediaContainer"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	n := 0
+	for _, h := range body.MediaContainer.Hub {
+		if strings.HasPrefix(h.HubIdentifier, "home.") && h.HubIdentifier != "home.continue" && h.Size > 0 {
+			n++
+		}
+	}
+	return n
 }

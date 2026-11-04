@@ -119,11 +119,12 @@ func copyTree(src, dst string) error {
 }
 
 // sanitizeConfig rewrites the copied settings so the server cannot reach
-// anything real: no Usenet, debrid or indexer providers, no LLM, subtitle,
+// anything real: no Usenet, debrid or indexer providers (unless keepProviders;
+// the sandbox still blocks outbound), no LLM, subtitle,
 // Trakt or Simkl accounts, no update feed, no UPnP or remote access, and
 // every listener on loopback ports derived from port. Unknown fields are
 // kept as they are.
-func sanitizeConfig(path string, port int) error {
+func sanitizeConfig(path string, port int, keepProviders bool) error {
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return err
@@ -155,9 +156,11 @@ func sanitizeConfig(path string, port int) error {
 	updates := section("updates")
 	updates["autoUpdate"] = false
 	updates["feedUrl"] = "http://127.0.0.1:1/feed"
-	section("usenet")["providers"] = []any{}
-	section("debrid")["providers"] = []any{}
-	c["indexers"] = []any{}
+	if !keepProviders {
+		section("usenet")["providers"] = []any{}
+		section("debrid")["providers"] = []any{}
+		c["indexers"] = []any{}
+	}
 	for _, name := range []string{"llm", "openSubtitles", "trakt", "simkl", "posters"} {
 		section(name)["enabled"] = false
 	}

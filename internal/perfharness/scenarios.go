@@ -61,6 +61,10 @@ const (
 	homeQueriesBound   = 500
 	detailQueriesBound = 120
 	searchQueriesBound = 100
+	// cachedHomeQueriesBound: a viewer's Home already built for a client of
+	// the same kind is served from memory after one revision read
+	// (plex/home_cache.go), however large the library or the viewer's model.
+	cachedHomeQueriesBound = 5
 )
 
 // client is one real client's request sequence against one protocol.
@@ -107,11 +111,17 @@ const infuseFields = "DateCreated%2CEtag%2CGenres%2CMediaSources%2CAlternateMedi
 
 // Clients is every replayed client, in report order.
 func Clients() []Client {
-	return []Client{plexClient("plex-appletv", "Plex for Apple TV", "tvOS", "Apple TV"), plexClient("plex-android", "Plex for Android (TV)", "Android", "BRAVIA 4K VH21"), plexClient("plex-web", "Plex Web", "Chrome", "Windows"),
+	return []Client{plexClient("plex-appletv", "Plex for Apple TV", "tvOS", "Apple TV"), plexSecondDevice(), plexClient("plex-android", "Plex for Android (TV)", "Android", "BRAVIA 4K VH21"), plexClient("plex-web", "Plex Web", "Chrome", "Windows"),
 		infuseJellyfin(), swiftfin(), embySDK(), infuseEmby(), siloAppleTV(), stremio(), console()}
 }
 
 func plexHeaders(product, platform, device string) func(*session) http.Header {
+	return plexDeviceHeaders(product, platform, device, "")
+}
+
+// plexDeviceHeaders are plexHeaders for one more device of the same kind:
+// suffix makes its client identifier distinct.
+func plexDeviceHeaders(product, platform, device, suffix string) func(*session) http.Header {
 	return func(s *session) http.Header {
 		h := http.Header{}
 		h.Set("Accept", "application/json")
@@ -121,11 +131,23 @@ func plexHeaders(product, platform, device string) func(*session) http.Header {
 		h.Set("X-Plex-Platform-Version", "18.0")
 		h.Set("X-Plex-Device", device)
 		h.Set("X-Plex-Device-Name", "etherperf")
-		h.Set("X-Plex-Client-Identifier", "etherperf-"+strings.ReplaceAll(strings.ToLower(product), " ", "-")+"-"+strconv.FormatInt(s.Viewer.ID, 10))
+		h.Set("X-Plex-Client-Identifier", "etherperf-"+strings.ReplaceAll(strings.ToLower(product), " ", "-")+"-"+strconv.FormatInt(s.Viewer.ID, 10)+suffix)
 		h.Set("X-Plex-Provides", "player,controller")
 		h.Set("X-Plex-Token", s.Viewer.PlexToken)
 		return h
 	}
+}
+
+// plexSecondDevice is a viewer's second Apple TV, first seen right after
+// the first one opened Home: it must be served the viewer's cached Home, not
+// a fresh build (a new client identifier is not a new Home).
+func plexSecondDevice() Client {
+	return Client{Name: "plex-appletv second device", Surface: "plex", Headers: plexDeviceHeaders("Plex for Apple TV", "tvOS", "Apple TV", "-second"), Steps: []Step{
+		{Name: "/library/sections", Class: classBrowse, Path: "/library/sections", Discover: discoverPlexSections},
+		{Name: "/hubs/promoted", Class: classHome, QueriesBound: cachedHomeQueriesBound, Path: "/hubs/promoted?contentDirectoryID={movieSection},{showSection}&pinnedContentDirectoryID={movieSection},{showSection}&includeMeta=1&excludeFields=summary&count=12&includeExternalMetadata=1&includeRecentChannels=1"},
+		{Name: "/hubs", Class: classHome, QueriesBound: cachedHomeQueriesBound, Path: "/hubs?count=12&includeMeta=1&excludeFields=summary"},
+		{Name: "/hubs/promoted bare", Class: classHome, QueriesBound: cachedHomeQueriesBound, Path: "/hubs/promoted?count=12"},
+	}}
 }
 
 func plexClient(name, product, platform, device string) Client {
@@ -139,7 +161,9 @@ func plexClient(name, product, platform, device string) Client {
 		{Name: "/hubs/promoted movies directory", Class: classHome, QueriesBound: homeQueriesBound, Path: "/hubs/promoted?contentDirectoryID={movieSection}&pinnedContentDirectoryID={movieSection},{showSection}&includeMeta=1&excludeFields=summary&count=12&includeExternalMetadata=1&includeRecentChannels=1"},
 		{Name: "/hubs/promoted shows directory", Class: classHome, QueriesBound: homeQueriesBound, Path: "/hubs/promoted?contentDirectoryID={showSection}&pinnedContentDirectoryID={movieSection},{showSection}&includeMeta=1&excludeFields=summary&count=12&includeExternalMetadata=1&includeRecentChannels=1"},
 		{Name: "/hubs/continueWatching", Class: classHome, Path: "/hubs/continueWatching?count=12&includeMeta=1&excludeFields=summary"},
-		{Name: "/hubs", Class: classHome, Path: "/hubs?count=12&includeMeta=1&excludeFields=summary"},
+		{Name: "/hubs", Class: classHome, QueriesBound: homeQueriesBound, Path: "/hubs?count=12&includeMeta=1&excludeFields=summary"},
+		// The shape production logged for Apple TV and Plex Web's Home.
+		{Name: "/hubs/promoted bare", Class: classHome, QueriesBound: homeQueriesBound, Path: "/hubs/promoted?count=12"},
 		{Name: "/library/onDeck", Class: classHome, Path: "/library/onDeck"},
 		{Name: "/hubs/sections/movies", Class: classHome, Path: "/hubs/sections/{movieSection}?count=12&includeMeta=1&excludeFields=summary&includeLibraryPlaylists=1"},
 		{Name: "/hubs/sections/shows", Class: classHome, Path: "/hubs/sections/{showSection}?count=12&includeMeta=1&excludeFields=summary"},
