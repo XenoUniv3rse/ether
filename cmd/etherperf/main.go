@@ -70,6 +70,7 @@ func runReal(ctx context.Context, args []string) (int, error) {
 	stepNames := f.String("steps", "", "comma-separated substrings of step names to replay (default all)")
 	casesFile := f.String("plex-cases", "", "JSON file of named local Plex metadata/postplay paths to replay")
 	strict := f.Bool("strict", false, "exit 1 when any gated endpoint misses its budget or errors")
+	bodies := f.Bool("bodies", false, "save the first warm response of each viewer, client and step under OUT/bodies")
 	_ = f.Parse(args)
 	if *source == "" {
 		return 2, fmt.Errorf("-source is required")
@@ -157,6 +158,12 @@ func runReal(ctx context.Context, args []string) (int, error) {
 	defer srv.stop()
 	log("ready after %s", srv.ready.Round(time.Millisecond))
 	r := perfharness.NewRunner(*port, false, viewers)
+	if *bodies {
+		if err := os.MkdirAll(filepath.Join(dir, "bodies"), 0o700); err != nil {
+			return 2, err
+		}
+		r.SaveBodies(filepath.Join(dir, "bodies"))
+	}
 	consoleOnlyOwner := func(cs []perfharness.Client) []perfharness.Client {
 		var out []perfharness.Client
 		for _, c := range cs {
