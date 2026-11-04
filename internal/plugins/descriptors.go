@@ -118,6 +118,9 @@ func DescriptorsFor(man Manifest) []extend.Descriptor {
 		add(extend.KindSourceKind, "stream", textOf(id, man.Name), map[string]any{
 			"class": c.Source.Class, "abilities": c.Source.Abilities, "limits": c.Source.Limits})
 	}
+	if man.HasCapability(CapDebridProvider) && c.Source != nil {
+		add(extend.KindSourceKind, "debrid", textOf(id, man.Name), map[string]any{"class": "debrid", "abilities": c.Source.Abilities})
+	}
 	if man.Ether.Kind == KindIntegration && c.Integration != nil {
 		add(extend.KindIntegration, "integration", textOf(id, man.Name), map[string]any{
 			"category": c.Integration.Category, "adds": c.Integration.Adds, "connect": c.Integration.Connect, "logo": c.Integration.Logo})

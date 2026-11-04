@@ -1036,7 +1036,7 @@ func (f *remoteFile) rangeGet(ctx context.Context, start, end int64, urgent bool
 			}
 		}
 		rctx := ctx
-		if payload.IsDirect() {
+		if payload.IsDirect() || payload.IsPluginProvider() {
 			rctx = withDirect(ctx, payload)
 		}
 		resp, tm, err := f.e.get(rctx, u, start, end, urgent, f.conns)

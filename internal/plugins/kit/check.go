@@ -702,6 +702,7 @@ func checkRoutes(ctx context.Context, rep *Report, man plugins.Manifest, plug *w
 		len(man.Ether.Contributes.ListSources) > 0 ||
 		len(man.Ether.Schedule) > 0 ||
 		man.HasCapability(plugins.CapStreamSource) ||
+		man.HasCapability(plugins.CapDebridProvider) ||
 		man.HasCapability(plugins.CapLiveTV) ||
 		man.HasCapability(plugins.CapSubtitles) ||
 		man.HasCapability(plugins.CapMarkers) ||
@@ -753,7 +754,7 @@ func checkRoutes(ctx context.Context, rep *Report, man plugins.Manifest, plug *w
 	if (man.Ether.Contributes.Channels != nil && man.Ether.Contributes.Channels.Test) ||
 		(man.Ether.Contributes.Notification != nil && man.Ether.Contributes.Notification.SendTest) ||
 		(man.Ether.Contributes.Integration != nil && man.Ether.Contributes.Integration.Test) ||
-		man.HasCapability(plugins.CapStreamSource) {
+		(man.HasCapability(plugins.CapStreamSource) || man.HasCapability(plugins.CapDebridProvider)) {
 		fixtures = append(fixtures, routeFixture{
 			method: "POST",
 			path:   "/ether/test",

@@ -6,6 +6,7 @@ export const CONTRIBUTIONS = [
   "livetv_channels",
   "list_source",
   "stream_source",
+  "debrid_provider",
   "subtitles",
   "metadata",
   "plugin_directory",
@@ -36,6 +37,7 @@ export function contributionTab(c: Contribution): string {
       return t("Channels");
     case "list_source":
       return t("Catalogues");
+    case "debrid_provider":
     case "stream_source":
       return t("Sources");
     case "subtitles":

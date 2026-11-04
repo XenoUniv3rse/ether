@@ -20,17 +20,18 @@ const (
 type Capability string
 
 const (
-	CapStreamSource  Capability = "stream_source"
-	CapListSource    Capability = "list_source"
-	CapLiveTV        Capability = "livetv_channels"
-	CapSubtitles     Capability = "subtitles"
-	CapMarkers       Capability = "markers"
-	CapNotify        Capability = "notify"
-	CapEvents        Capability = "events"
-	CapRankingStep   Capability = "ranking_step"
-	CapRuleCondition Capability = "rule_condition"
-	CapTools         Capability = "tools"
-	CapUI            Capability = "ui"
+	CapStreamSource   Capability = "stream_source"
+	CapDebridProvider Capability = "debrid_provider"
+	CapListSource     Capability = "list_source"
+	CapLiveTV         Capability = "livetv_channels"
+	CapSubtitles      Capability = "subtitles"
+	CapMarkers        Capability = "markers"
+	CapNotify         Capability = "notify"
+	CapEvents         Capability = "events"
+	CapRankingStep    Capability = "ranking_step"
+	CapRuleCondition  Capability = "rule_condition"
+	CapTools          Capability = "tools"
+	CapUI             Capability = "ui"
 )
 
 // Manifest is the EPP/1 manifest document served at GET /manifest.json.

@@ -262,6 +262,7 @@ func (a *App) buildPlugins(ctx context.Context, cfg config.Config) (*pluginRunti
 	adapters.Attach(mgr, a.collections, a.personalize, a.livetv)
 	adapters.AttachSubtitles(mgr, a.subtitles)
 	adapters.AttachMetadata(mgr, a.catalog)
+	adapters.AttachDebrid(mgr, a.debrid)
 	subtitleProbe := adapters.NewSubtitleProbe(mgr, a.catalog)
 	a.closers = append(a.closers, subtitleProbe.Close)
 	markerCtx, cancelMarkers := context.WithCancel(context.Background())

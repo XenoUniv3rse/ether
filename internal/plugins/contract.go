@@ -41,6 +41,7 @@ type Capability string
 
 const (
 	CapStreamSource    Capability = "stream_source"
+	CapDebridProvider  Capability = "debrid_provider"
 	CapListSource      Capability = "list_source"
 	CapMetadata        Capability = "metadata"
 	CapPluginDirectory Capability = "plugin_directory"

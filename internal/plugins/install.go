@@ -962,6 +962,9 @@ func (m *Manager) Configure(ctx context.Context, id string, incoming map[string]
 		}
 		resolved[k] = v
 	}
+	if len(resolved) == 0 && r.Manifest.HasCapability(CapDebridProvider) {
+		m.syncDescriptors(ctx, r)
+	}
 	return resolved, nil
 }
 

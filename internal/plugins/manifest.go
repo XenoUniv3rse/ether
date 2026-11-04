@@ -92,6 +92,7 @@ func LintCopy(s string, max int) string {
 // capabilityKinds is the SPEC §5.1.3 table. A nil set means any kind.
 var capabilityKinds = map[Capability]map[Kind]bool{
 	CapStreamSource:    {KindSource: true},
+	CapDebridProvider:  {KindSource: true},
 	CapListSource:      {KindIntegration: true, KindExtension: true},
 	CapPluginDirectory: {KindIntegration: true, KindExtension: true, KindSource: true},
 	CapMetadata:        {KindIntegration: true, KindExtension: true, KindSource: true},
@@ -427,6 +428,9 @@ func validateContributes(m Manifest, add func(string, string)) {
 		} else if !map[string]bool{"debrid": true, "usenet": true, "indexer": true, "direct": true}[c.Source.Class] {
 			add("ether.contributes.source.class", "must be debrid, usenet, indexer or direct")
 		}
+	}
+	if m.HasCapability(CapDebridProvider) && (c.Source == nil || c.Source.Class != "debrid") {
+		add("ether.contributes.source.class", "must be debrid for debrid_provider")
 	}
 	if m.HasCapability(CapLiveTV) {
 		if c.Channels == nil || !c.Channels.Test {

@@ -77,7 +77,7 @@ describe("PluginSources", () => {
             plugins: [
               { id: "org.ether.fixture-source", enabled: true, state: "ready" },
               { id: "org.ether.folders", enabled: true, state: "ready" },
-              { id: "org.ether.debrid-extra", enabled: true, state: "ready" },
+              { id: "org.ether.debrid-extra", enabled: true, state: "ready", health: { status: "attention", reason: "Add an API key in Setup." } },
             ],
           }),
           { status: 200, headers: { "Content-Type": "application/json" } },
@@ -145,6 +145,8 @@ describe("PluginSources", () => {
     );
 
     expect(await screen.findAllByText("Extra Debrid Plugin")).toHaveLength(2);
+    expect(await screen.findByText("Needs attention")).toBeTruthy();
+    expect(screen.getByText("Add an API key in Setup.")).toBeTruthy();
     expect(screen.getByText(/250 searches a day/)).toBeTruthy();
     expect(screen.getByText(/50 grabs a day/)).toBeTruthy();
   });
