@@ -615,6 +615,10 @@ func (s *Server) handleTranscodeSubtitles(w http.ResponseWriter, r *http.Request
 	}
 	if !st.External {
 		if format == "ass" {
+			if strings.HasPrefix(r.URL.Path, "/video/") && browserClient(pr) {
+				s.serveSessionASS(w, r, sessionID, st.Index)
+				return
+			}
 			// Read from where the player is (a direct play names its
 			// position in offset; a conversion starts at its own offset),
 			// streaming each cue as it is read.
@@ -688,6 +692,51 @@ func (s *Server) handleTranscodeSubtitles(w http.ResponseWriter, r *http.Request
 	}
 	w.Header().Set("Content-Type", subtitleContentTypes[actual])
 	_, _ = w.Write(body)
+}
+
+// sessionSoftSubtitle asks the remux to carry the selected browser text
+// subtitle through the same source read as the video.
+func sessionSoftSubtitle(entry *transcodeEntry, pr *Request, dec core.Decision) *int {
+	if entry == nil || !browserClient(pr) || dec.BurnSubtitles || entry.subtitle < 0 || entry.subtitle >= len(entry.info.Streams) {
+		return nil
+	}
+	st := entry.info.Streams[entry.subtitle]
+	if st.External || st.Type != "subtitle" || !transcode.IsTextSubtitle(st.Codec) {
+		return nil
+	}
+	return &st.Index
+}
+
+func (s *Server) serveSessionASS(w http.ResponseWriter, r *http.Request, sessionID string, index int) {
+	if s.d.Transcoder == nil {
+		writeHTTPError(w, http.StatusServiceUnavailable)
+		return
+	}
+	// The subtitle request can race the start request. Wait for the actual
+	// encoder rather than launching another read of the source.
+	timer := time.NewTimer(15 * time.Second)
+	defer timer.Stop()
+	tick := time.NewTicker(100 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		if session, ok := s.d.Transcoder.Session(sessionID); ok {
+			if ass, ok := session.(interface {
+				ServeSoftSubtitle(http.ResponseWriter, *http.Request, int) bool
+			}); ok && ass.ServeSoftSubtitle(w, r, index) {
+				return
+			}
+			writeHTTPError(w, http.StatusNotFound)
+			return
+		}
+		select {
+		case <-r.Context().Done():
+			return
+		case <-timer.C:
+			writeHTTPError(w, http.StatusServiceUnavailable)
+			return
+		case <-tick.C:
+		}
+	}
 }
 
 // softASSFormat reports an explicit request for an ASS script.

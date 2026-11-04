@@ -829,14 +829,15 @@ func (m *Manager) startHLS(ctx context.Context, req core.HLSRequest, life *encod
 		log:                     m.log.With("session", id),
 		created:                 time.Now(),
 		sessionInput: sessionInput{
-			rtxTimeline:  enhancementSelected(d),
-			rtxConfig:    rtxConfig,
-			liveInput:    req.LiveInput,
-			input:        req.InputURL,
-			inputHeaders: inputHeaders,
-			inputLease:   req.InputLease,
-			info:         req.Info,
-			decision:     d,
+			softSubtitleStream: req.SoftSubtitleStream,
+			rtxTimeline:        enhancementSelected(d),
+			rtxConfig:          rtxConfig,
+			liveInput:          req.LiveInput,
+			input:              req.InputURL,
+			inputHeaders:       inputHeaders,
+			inputLease:         req.InputLease,
+			info:               req.Info,
+			decision:           d,
 		},
 		sessionEncoding: sessionEncoding{
 			endSeg:   -1,
@@ -858,6 +859,9 @@ func (m *Manager) startHLS(ctx context.Context, req core.HLSRequest, life *encod
 			segSizes:    map[int]int64{},
 			governorOn:  adapt.Governor && proto == core.ProtocolHLS && d.VideoCopy && v != nil,
 		},
+	}
+	if req.SoftSubtitleStream != nil {
+		s.softSubtitleInputIndex = *req.SoftSubtitleStream
 	}
 	if !life.attach(s) {
 		return nil, errors.New("transcode: session closed")
