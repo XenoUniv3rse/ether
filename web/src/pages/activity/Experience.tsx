@@ -1,0 +1,264 @@
+import { DashboardMetricCard, DashboardPanel } from "@braedonsaunders/appkit-dashboard/primitives";
+import { EmptyState, PagedTable } from "@braedonsaunders/appkit-ui";
+import { AlertTriangle, Gauge, PlayCircle, Timer, Waves } from "lucide-react";
+import { useMemo } from "react";
+import { useSearchParams } from "react-router-dom";
+import { ErrorPanel, LoadingRows } from "../../components/feedback";
+import { Segmented } from "../../components/fields";
+import { t, tn } from "../../i18n";
+import { pagedTableLabels } from "../../i18n/appkit-labels";
+import { apiFetch } from "../../lib/api";
+import { useAsync, useInterval } from "../../lib/hooks";
+import { ExperienceDrawer, MetricFacts, ToneValue } from "./ExperienceDrawer";
+import {
+  BUFFER_GOOD_PER_HOUR,
+  START_FAIR_MS,
+  START_GOOD_MS,
+  badness,
+  bufferTone,
+  directShare,
+  failedTone,
+  formatPerHour,
+  formatSeconds,
+  measuredNote,
+  pct,
+  reasonPhrase,
+  startTone,
+} from "./experience-format";
+import type { ExperienceOverview } from "./types";
+
+type Row = ExperienceOverview["viewers"][number];
+
+/**
+ * Activity › Experience: how playback feels to each viewer — time to the
+ * first picture, buffering, failed starts and how often titles direct play.
+ */
+export function Experience() {
+  const [params, setParams] = useSearchParams();
+  const days = params.get("days") === "30" ? "30" : "7";
+  const viewerParam = params.get("viewer");
+  const viewerId = viewerParam && /^\d+$/.test(viewerParam) ? Number(viewerParam) : null;
+  const overview = useAsync(
+    (signal) => apiFetch<ExperienceOverview>(`/experience?days=${days}`, { signal }),
+    [days],
+  );
+  useInterval(() => void overview.reload(), 60_000);
+
+  const update = (key: string, value: string | null) =>
+    setParams(
+      (prev) => {
+        const next = new URLSearchParams(prev);
+        if (value == null) next.delete(key);
+        else next.set(key, value);
+        return next;
+      },
+      { preventScrollReset: true },
+    );
+
+  const rows = useMemo(
+    () =>
+      [...(overview.data?.viewers ?? [])].sort((a, b) => badness(b.metrics) - badness(a.metrics)),
+    [overview.data],
+  );
+
+  const o = overview.data;
+  const h = o?.household;
+  const direct = h ? directShare(h) : null;
+  const viewerName = rows.find((r) => r.userId === viewerId)?.username;
+  const partial = o ? !o.measuredSince || o.measuredSince > o.since : false;
+
+  return (
+    <>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <p className="max-w-2xl text-sm text-fg-muted">
+          {t(
+            "How playback feels to your viewers: how long the picture takes to appear, how often it stops to buffer, and how often a title plays as-is.",
+          )}
+        </p>
+        <Segmented
+          ariaLabel={t("Period")}
+          size="sm"
+          value={days}
+          onChange={(v) => update("days", v)}
+          options={[
+            { value: "7", label: tn(7, "Last {count} day", "Last {count} days") },
+            { value: "30", label: tn(30, "Last {count} day", "Last {count} days") },
+          ]}
+        />
+      </div>
+      {overview.error && !o ? (
+        <ErrorPanel error={overview.error} onRetry={() => void overview.reload()} />
+      ) : !o || !h ? (
+        <LoadingRows rows={4} />
+      ) : (
+        <>
+          {partial ? (
+            <p className="text-xs text-fg-muted">{measuredNote(o.measuredSince)}</p>
+          ) : null}
+          <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+            <DashboardMetricCard
+              label={t("Median start time")}
+              value={
+                <ToneValue
+                  value={formatSeconds(h.startMedianMs)}
+                  tone={startTone(h.startMedianMs)}
+                />
+              }
+              detail={
+                h.startP90Ms != null
+                  ? t("p90 {time} · target {target}", {
+                      time: formatSeconds(h.startP90Ms),
+                      target: formatSeconds(START_GOOD_MS),
+                    })
+                  : t("Target {value}", { value: formatSeconds(START_GOOD_MS) })
+              }
+              icon={<Timer size={18} />}
+              tone={startTone(h.startMedianMs) ?? "primary"}
+            />
+            <DashboardMetricCard
+              label={t("Buffering")}
+              value={
+                <ToneValue
+                  value={formatPerHour(h.bufferEventsPerHour)}
+                  tone={bufferTone(h.bufferEventsPerHour)}
+                />
+              }
+              detail={
+                h.measuredPlays
+                  ? t("{minutes} min in total · target under {target}", {
+                      minutes: Math.round(h.bufferMs / 60000),
+                      target: formatPerHour(BUFFER_GOOD_PER_HOUR),
+                    })
+                  : t("Target under {value}", { value: formatPerHour(BUFFER_GOOD_PER_HOUR) })
+              }
+              icon={<Waves size={18} />}
+              tone={bufferTone(h.bufferEventsPerHour) ?? "primary"}
+            />
+            <DashboardMetricCard
+              label={t("Failed starts")}
+              value={
+                <ToneValue
+                  value={String(h.failedStarts)}
+                  tone={failedTone(h.failedStarts, h.plays)}
+                />
+              }
+              detail={tn(h.plays, "of {count} play", "of {count} plays")}
+              icon={<AlertTriangle size={18} />}
+              tone={failedTone(h.failedStarts, h.plays) ?? "primary"}
+            />
+            <DashboardMetricCard
+              label={t("Direct play")}
+              value={pct(direct)}
+              detail={
+                h.topTranscodeReason
+                  ? t("Most transcodes: {reason}", {
+                      reason: reasonPhrase(h.topTranscodeReason.kind, h.topTranscodeReason.detail),
+                    })
+                  : t("Plays sent to the app as-is")
+              }
+              icon={<PlayCircle size={18} />}
+              tone="info"
+            />
+          </div>
+
+          <DashboardPanel title={t("Household detail")} icon={<Gauge size={16} />}>
+            <MetricFacts m={h} />
+          </DashboardPanel>
+
+          <PagedTable<Row>
+            rows={rows}
+            rowKey={(r) => String(r.userId)}
+            pageSize={20}
+            onRowClick={(r) => update("viewer", String(r.userId))}
+            labels={pagedTableLabels({
+              searchLabel: t("Search viewers"),
+              searchPlaceholder: t("Find a viewer…"),
+            })}
+            empty={
+              <EmptyState
+                icon={<Timer />}
+                title={t("No plays yet")}
+                description={t("Viewers appear here once they play something in this period.")}
+              />
+            }
+            columns={[
+              {
+                key: "viewer",
+                header: t("Viewer"),
+                search: (r) => r.username,
+                sortValue: (r) => r.username.toLowerCase(),
+                cell: (r) => (
+                  <>
+                    <p className="font-medium text-fg">{r.username || t("Unknown viewer")}</p>
+                    <p className="text-xs text-fg-muted">
+                      {tn(r.metrics.plays, "{count} play", "{count} plays")}
+                    </p>
+                  </>
+                ),
+              },
+              {
+                key: "start",
+                header: t("Start time"),
+                align: "right",
+                sortValue: (r) => r.metrics.startMedianMs ?? -1,
+                cell: (r) => (
+                  <ToneValue
+                    value={formatSeconds(r.metrics.startMedianMs)}
+                    tone={startTone(r.metrics.startMedianMs)}
+                  />
+                ),
+              },
+              {
+                key: "buffering",
+                header: t("Buffering"),
+                align: "right",
+                sortValue: (r) => r.metrics.bufferEventsPerHour ?? -1,
+                cell: (r) => (
+                  <ToneValue
+                    value={formatPerHour(r.metrics.bufferEventsPerHour)}
+                    tone={bufferTone(r.metrics.bufferEventsPerHour)}
+                  />
+                ),
+              },
+              {
+                key: "failed",
+                header: t("Failed starts"),
+                align: "right",
+                sortValue: (r) => r.metrics.failedStarts,
+                cell: (r) => (
+                  <ToneValue
+                    value={String(r.metrics.failedStarts)}
+                    tone={failedTone(r.metrics.failedStarts, r.metrics.plays)}
+                  />
+                ),
+              },
+              {
+                key: "direct",
+                header: t("Direct play"),
+                align: "right",
+                sortValue: (r) => directShare(r.metrics) ?? -1,
+                cell: (r) => <span className="tabular-nums">{pct(directShare(r.metrics))}</span>,
+              },
+            ]}
+          />
+          <p className="text-xs text-fg-muted">
+            {t(
+              "Worst first. Start time is the median from pressing Play to the first picture; buffering counts stalls after playback began, per hour watched. Targets: start within {good} (fair within {fair}), buffering under {rate}.",
+              {
+                good: formatSeconds(START_GOOD_MS),
+                fair: formatSeconds(START_FAIR_MS),
+                rate: formatPerHour(BUFFER_GOOD_PER_HOUR),
+              },
+            )}
+          </p>
+        </>
+      )}
+      <ExperienceDrawer
+        viewerId={viewerId}
+        days={Number(days)}
+        name={viewerName}
+        onClose={() => update("viewer", null)}
+      />
+    </>
+  );
+}

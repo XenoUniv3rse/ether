@@ -11,7 +11,7 @@ import {
   Spinner,
   toast,
 } from "@braedonsaunders/appkit-ui";
-import { ArrowLeft, CheckCircle2, History } from "lucide-react";
+import { ArrowLeft, CheckCircle2, Gauge, History } from "lucide-react";
 import { useCallback, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { PageSubtabs } from "../../components/layout";
@@ -173,6 +173,7 @@ export default function ViewerProfile() {
               <p className="text-sm text-fg-muted">
                 {v.username} · {t("Active {time}", { time: relativeTime(v.lastActive) })}
               </p>
+              <ExperienceLink viewer={v} />
             </div>
             <PluginActionMenu slot="actionMenu.viewer" recordId={String(id)} onRefresh={()=>void viewer.reload()} />
             <ViewerActions
@@ -277,6 +278,18 @@ function BackLink() {
       className="inline-flex items-center gap-1 text-sm text-fg-muted hover:text-fg"
     >
       <ArrowLeft size={14} /> {t("Viewers")}
+    </Link>
+  );
+}
+
+/** Deep link to this viewer's drawer in Activity › Experience. */
+function ExperienceLink({ viewer }: { viewer: ViewerDetail }) {
+  return (
+    <Link
+      to={`/activity/experience?viewer=${viewer.id}`}
+      className="inline-flex items-center gap-1 text-sm font-medium text-primary hover:underline"
+    >
+      <Gauge size={14} /> {t("See this viewer's experience")}
     </Link>
   );
 }
