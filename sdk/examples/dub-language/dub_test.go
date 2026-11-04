@@ -13,6 +13,7 @@ import (
 	"github.com/braedonsaunders/ether/internal/plugins"
 	"github.com/braedonsaunders/ether/internal/plugins/studio"
 	"github.com/braedonsaunders/ether/internal/plugins/wasm"
+	"github.com/braedonsaunders/ether/internal/releaseparse"
 	"github.com/braedonsaunders/ether/internal/resolver"
 	"github.com/braedonsaunders/ether/internal/store"
 )
@@ -33,6 +34,15 @@ func files(t *testing.T) (plugins.Manifest, []byte, []byte) {
 	}
 	return m, raw, js
 }
+
+// TestHostedRanking500 ranks a full 500-release batch through the hosted
+// runtime under the production budgets (2 ms per candidate, 50 ms per
+// batch) and requires every candidate to finish inside them. The engine
+// judges the budgets by the plugin's own time (the thread's CPU time when
+// the wall clock says a budget ran out), so a busy or race-instrumented
+// host does not count against the plugin; a plugin that is itself too slow
+// still fails here. Facts carry real release names and the languages
+// Ether's parser reads from them, so the batch is as heavy as production.
 func TestHostedRanking500(t *testing.T) {
 	m, _, js := files(t)
 	eng := wasm.NewEngine(slog.New(slog.NewTextHandler(io.Discard, nil)))
@@ -43,24 +53,34 @@ func TestHostedRanking500(t *testing.T) {
 	}
 	defer rt.Close()
 	hot := rt.(plugins.HotRuntime)
+	releases := []struct {
+		name string
+		key  int64 // with French then German wanted
+	}{
+		{"The.French.Dispatch.2021.1080p.BluRay.DTS-HD.MA.5.1.x264-GRP", 0},
+		{"Some.Movie.2019.FRENCH.1080p.WEB-DL.DDP5.1.H.264-GRP", 2},
+		{"Some.Movie.2019.MULTi.2160p.WEB-DL.DDP5.1.Atmos.DV.HDR.H.265-GROUP", 2},
+		{"Some.Movie.2019.GERMAN.DL.1080p.WEB.H264-DEFLATE", 1},
+		{"Some.Movie.2019.1080p.AMZN.WEB-DL.DDP5.1.H.264-NTb", 0},
+	}
 	c := make([]plugins.CandidateFacts, 500)
 	for i := range c {
-		c[i] = plugins.CandidateFacts{ReleaseID: fmt.Sprint(i), Name: "fixture", Languages: []string{"de"}}
-		if i%2 == 0 {
-			c[i].Languages = []string{"fr"}
-		}
+		r := releases[i%len(releases)]
+		info := releaseparse.Parse(r.name)
+		c[i] = plugins.CandidateFacts{ReleaseID: fmt.Sprint(i), Name: r.name, Size: 12_000_000_000, Protocol: "usenet",
+			SourceClass: "web", Indexer: "indexer", Resolution: fmt.Sprintf("%dp", info.Height), VideoCodec: info.VideoCodec,
+			AudioCodecs: []string{info.AudioCodec}, AudioChannels: info.Channels, Languages: info.Languages, Group: info.Group}
 	}
 	keys, out, err := hot.RankBatch(context.Background(), c, json.RawMessage(`{"value":["fr","de"]}`))
-	if err != nil {
+	if err != nil || out.Status != "ok" {
 		t.Fatalf("rank: %+v %v", out, err)
 	}
+	if out.Slow != 0 {
+		t.Fatalf("%d of 500 candidates went over budget: %+v", out.Slow, out)
+	}
 	for i, k := range keys {
-		want := int64(1)
-		if i%2 == 0 {
-			want = 2
-		}
-		if k != want {
-			t.Fatalf("key %d = %d", i, k)
+		if want := releases[i%len(releases)].key; k != want {
+			t.Fatalf("key %d (%s) = %d, want %d", i, c[i].Name, k, want)
 		}
 	}
 }

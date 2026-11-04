@@ -1105,21 +1105,17 @@ var __plugin = (() => {
   };
 
   // sdk/examples/dub-language/plugin.ts
-  var aliases = { english: "en", eng: "en", french: "fr", fre: "fr", fra: "fr", german: "de", ger: "de", deu: "de", spanish: "es", spa: "es", italian: "it", ita: "it", japanese: "ja", jpn: "ja", portuguese: "pt", por: "pt" };
-  var codes = /* @__PURE__ */ new Set(["en", "fr", "de", "es", "it", "ja", "pt", "ko", "zh", "hi"]);
-  var separators = /[^a-z0-9]+/;
+  var aliases = { english: "en", eng: "en", french: "fr", fre: "fr", fra: "fr", german: "de", ger: "de", deu: "de", spanish: "es", spa: "es", italian: "it", ita: "it", japanese: "ja", jpn: "ja", portuguese: "pt", por: "pt", korean: "ko", kor: "ko", chinese: "zh", chi: "zh", zho: "zh", hindi: "hi", hin: "hi" };
   function normalize(s) {
-    const v = s.toLowerCase().trim();
+    let v = s.toLowerCase().trim();
+    const dash = v.indexOf("-");
+    if (dash > 0) v = v.slice(0, dash);
     return aliases[v] || v;
   }
   function available(c) {
     const langs = /* @__PURE__ */ new Set();
-    for (const l of c.languages || []) langs.add(normalize(l));
-    for (const token of (c.name || "").toLowerCase().split(separators)) {
-      const alias = aliases[token];
-      if (alias) langs.add(alias);
-      else if (codes.has(token) || token === "multi") langs.add(token);
-    }
+    const list = c.languages || [];
+    for (let i = 0; i < list.length; i++) langs.add(normalize(list[i]));
     return langs;
   }
   function speaks(langs, lang) {
