@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -431,6 +432,24 @@ func formatXMLTV(g XMLGuide) (string, error) {
 
 func xmlEscape(b *strings.Builder, s string) error {
 	return xml.EscapeText(b, []byte(s))
+}
+
+// dedupeProgrammes keeps the last entry for each channel and start time, the
+// same result one-row ON CONFLICT DO UPDATE produced. Provider guides repeat
+// entries, and a multi-row ON CONFLICT cannot touch one row twice.
+func dedupeProgrammes(ps []Programme) []Programme {
+	seen := make(map[string]int, len(ps))
+	out := ps[:0]
+	for _, p := range ps {
+		key := p.ChannelID + "\x00" + strconv.FormatInt(p.Start.UnixMilli(), 10)
+		if i, ok := seen[key]; ok {
+			out[i] = p
+			continue
+		}
+		seen[key] = len(out)
+		out = append(out, p)
+	}
+	return out
 }
 
 // inferMissingStops ends each programme without a stop time at the start

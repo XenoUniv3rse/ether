@@ -1208,6 +1208,7 @@ func (s *Service) importSource(ctx context.Context, src Source) (Source, error) 
 			src.Guide = trimmed
 		}
 	}
+	g.Programmes = dedupeProgrammes(g.Programmes)
 	if src.Guide != "" || src.GuideURL != "" {
 		if progress != nil {
 			progress.setProgrammes(len(g.Programmes))
