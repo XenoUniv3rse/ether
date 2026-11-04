@@ -25,7 +25,10 @@ func (s *Service) PagedExclusions(ctx context.Context, episodes bool) (PagedDeci
 	input := s.snapshotFor(ctx)
 	out := PagedDecision{Digital: input.availability.EffectiveMode() == config.ModeDigital, DigitalEvidence: input.availability.DigitalDateEvidence}
 	for _, kind := range []string{hiddenMovies, hiddenShows} {
-		if kind == hiddenMovies && input.availability.DisableMovieEvidenceGate {
+		// Digital movies are decided by the indexed home-release predicate in
+		// Browse. A background hidden set (or its cold-start placeholder) would
+		// apply a second, changing decision before LIMIT/OFFSET.
+		if kind == hiddenMovies && (out.Digital || input.availability.DisableMovieEvidenceGate) {
 			continue
 		}
 		old := s.currentHidden(kind, input)

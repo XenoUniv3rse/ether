@@ -19,7 +19,9 @@ func (c *availabilityCatalog) excludeHidden(ctx context.Context, f core.Filter) 
 		return f
 	}
 	f.DigitalDiscovery, f.DigitalDateEvidence = c.availability.DigitalDiscovery(ctx)
-	f.ExcludeKeys = append(append([]core.RatingKey{}, f.ExcludeKeys...), c.availability.HiddenMovies(ctx)...)
+	if !f.DigitalDiscovery {
+		f.ExcludeKeys = append(append([]core.RatingKey{}, f.ExcludeKeys...), c.availability.HiddenMovies(ctx)...)
+	}
 	f.ExcludeKeys = append(f.ExcludeKeys, c.availability.HiddenShows(ctx)...)
 	if f.Type == core.TypeEpisode {
 		for _, key := range c.availability.HiddenEpisodes(ctx) {
