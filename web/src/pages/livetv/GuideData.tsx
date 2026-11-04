@@ -202,7 +202,10 @@ export function GuideSourceList({
   onSelect,
   onAddGuideSource,
   now,
+  query = "",
 }: {
+  /** The Live TV search: narrows the guide sources listed by name. */
+  query?: string;
   lineup: Channel[];
   sources: Source[];
   coverage: Map<string, Coverage> | null;
@@ -216,7 +219,10 @@ export function GuideSourceList({
   const live = lineup.filter((c) => c.enabled && c.kind === "iptv");
   const missing = coverage === null ? null : live.filter((c) => !has(c)).length;
   const pct = missing === null || !live.length ? 1 : (live.length - missing) / live.length;
-  const guides = sources.filter(isGuideSource);
+  const needle = query.trim().toLowerCase();
+  const guides = sources
+    .filter(isGuideSource)
+    .filter((s) => !needle || sourceTitle(s).toLowerCase().includes(needle));
 
   return (
     <div className="space-y-4 p-3 sm:p-4">
@@ -337,12 +343,15 @@ export function GuideWorkbench({
   onEditSource,
   onReload,
   now,
+  query = "",
 }: {
   channels: Channel[];
   sources: Source[];
   coverage: Map<string, Coverage> | null;
   /** The selected guide source, or undefined for All guides. */
   source?: Source;
+  /** The Live TV search: narrows the channel mapping list (not the coverage figures). */
+  query?: string;
   onMapChannel: (id: string) => void;
   onAddGuideSource: () => void;
   onEditSource: (id: string) => void;
@@ -357,10 +366,33 @@ export function GuideWorkbench({
   const [busy, setBusy] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const iptv = useMemo(() => channels.filter((c) => c.kind === "iptv"), [channels]);
-  const live = iptv.filter((c) => c.enabled);
+  const live = useMemo(() => iptv.filter((c) => c.enabled), [iptv]);
+  const missing = useMemo(
+    () => live.filter((c) => (coverage?.get(c.id)?.programmes ?? 0) === 0),
+    [live, coverage],
+  );
+  const using = useMemo(
+    () => (source ? iptv.filter((c) => usesGuide(c, source)) : []),
+    [iptv, source],
+  );
   const has = (c: Channel) => (coverage?.get(c.id)?.programmes ?? 0) > 0;
-  const missing = live.filter((c) => !has(c));
-  const using = source ? iptv.filter((c) => usesGuide(c, source)) : [];
+  const needle = query.trim().toLowerCase();
+  const matches = useMemo(() => {
+    if (!needle) return null;
+    return (list: Channel[]) =>
+      list.filter((c) =>
+        `${c.number} ${c.name} ${c.group ?? ""} ${c.guideId ?? ""}`.toLowerCase().includes(needle),
+      );
+  }, [needle]);
+  const shown = useMemo(
+    () => ({
+      using: matches ? matches(using) : using,
+      all: matches ? matches(iptv) : iptv,
+      missing: matches ? matches(missing) : missing,
+    }),
+    [matches, using, iptv, missing],
+  );
+  useEffect(() => setLimit(ROW_PAGE), [needle]);
   const byId = useMemo(() => new Map(channels.map((c) => [c.id, c])), [channels]);
   const sourceName = (id?: string) => {
     const s = sources.find((x) => x.id === id);
@@ -376,7 +408,7 @@ export function GuideWorkbench({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sourceId]);
 
-  const rows = show === "using" ? using : show === "all" ? iptv : missing;
+  const rows = shown[show];
   const pct = live.length ? (live.length - missing.length) / live.length : 1;
   const status = source ? guideSourceStatus(source, using.length, now) : { text: "", warn: false };
 
@@ -599,15 +631,18 @@ export function GuideWorkbench({
                 ? [
                     {
                       value: "using" as Show,
-                      label: t("Using this guide ({count})", { count: using.length }),
+                      label: t("Using this guide ({count})", { count: shown.using.length }),
                     },
                   ]
                 : []),
               {
                 value: "missing" as Show,
-                label: t("Missing ({count})", { count: missing.length }),
+                label: t("Missing ({count})", { count: shown.missing.length }),
               },
-              { value: "all" as Show, label: t("All IPTV ({count})", { count: iptv.length }) },
+              {
+                value: "all" as Show,
+                label: t("All IPTV ({count})", { count: shown.all.length }),
+              },
             ]}
           />
         </div>
@@ -615,14 +650,18 @@ export function GuideWorkbench({
           <div className="rounded-xl border border-dashed border-border p-8 text-center">
             <CheckCircle2 className="mx-auto text-success" size={26} />
             <p className="mt-2 text-sm font-medium text-fg">
-              {show === "using"
-                ? t("No channels use this guide yet")
-                : iptv.length
-                  ? t("Nothing missing")
-                  : t("No IPTV channels yet")}
+              {needle
+                ? t("No channels match your search")
+                : show === "using"
+                  ? t("No channels use this guide yet")
+                  : iptv.length
+                    ? t("Nothing missing")
+                    : t("No IPTV channels yet")}
             </p>
             <p className="text-xs text-fg-muted">
-              {show === "using"
+              {needle
+                ? t("Try another name, number or group.")
+                : show === "using"
                 ? t("Map a channel from Missing or All IPTV, or run Auto-match.")
                 : iptv.length
                   ? t("Every live channel is getting listings.")

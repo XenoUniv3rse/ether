@@ -76,6 +76,43 @@ const IPTV = [
   ["Anime World", "Kids"],
 ];
 
+/** A large Xtream panel's groups, in provider order (events float to the top). */
+const PANEL_GROUPS: { name: string; channels: number; adult?: boolean }[] = [
+  { name: "EVENTS | PPV", channels: 64 },
+  { name: "EVENTS | Live Sports", channels: 120 },
+  ...[
+    "UK",
+    "US",
+    "CA",
+    "IE",
+    "AU",
+    "DE",
+    "FR",
+    "ES",
+    "IT",
+    "NL",
+    "PT",
+    "PL",
+    "TR",
+    "AR",
+    "IN",
+    "BR",
+    "MX",
+    "SE",
+    "NO",
+    "DK",
+  ].flatMap((cc, i) =>
+    ["Entertainment", "News", "Sports", "Kids", "Movies", "Documentary", "Music"].map(
+      (kind, k) => ({ name: `${cc} | ${kind}`, channels: 8 + ((i * 7 + k * 13) % 90) }),
+    ),
+  ),
+  { name: "24/7 Series", channels: 310 },
+  { name: "Radio", channels: 75 },
+  { name: "XXX | Adult", channels: 140, adult: true },
+];
+
+const norm = (name: string) => name.trim().toLowerCase();
+
 function hash(s: string): number {
   let h = 2166136261;
   for (let i = 0; i < s.length; i++) h = Math.imul(h ^ s.charCodeAt(i), 16777619);
@@ -104,6 +141,21 @@ export function createLiveTVMock(titles: FakeTitle[]) {
       hasPlaylist: true,
       hasGuide: true,
       updatedAt: new Date(Date.now() - 2 * 3600e3).toISOString(),
+    },
+    {
+      id: "demo-xtream",
+      name: "Demo Xtream panel",
+      auth: {
+        type: "xtream",
+        server: "http://panel.example:8080",
+        username: "demo",
+        password: "••••",
+        output: "ts",
+      },
+      hasPlaylist: true,
+      hasGuide: true,
+      excludeGroups: ["XXX | Adult", "24/7 Series"],
+      updatedAt: new Date(Date.now() - 50 * 60e3).toISOString(),
     },
     {
       id: "regional-epg",
@@ -238,8 +290,45 @@ export function createLiveTVMock(titles: FakeTitle[]) {
 
   function source(s: Source) {
     const own = channels.filter((c) => c.sourceId === s.id);
+    const out: Record<string, unknown> = { ...s };
+    if (s.id === "demo-xtream") {
+      const left = new Set(((s.excludeGroups as string[] | undefined) ?? []).map(norm));
+      const groups = PANEL_GROUPS.map((g) => ({
+        ...g,
+        excluded: left.has(norm(g.name)) || (Boolean(s.hideAdult) && Boolean(g.adult)),
+      }));
+      return {
+        ...out,
+        groups,
+        account: {
+          status: "Active",
+          trial: true,
+          expiresAt: new Date(Date.now() + 20 * 3600e3).toISOString(),
+          maxConnections: 1,
+          activeConnections: 0,
+          formats: ["ts", "m3u8"],
+          checkedAt: s.updatedAt,
+        },
+        channelCount: groups.reduce((n, g) => n + (g.excluded ? 0 : g.channels), 0),
+        guideChannelCount: 9800,
+        programmeCount: 412000,
+        guideFrom: new Date(Date.now() - 3 * 3600e3).toISOString(),
+        guideUntil: new Date(Date.now() + 48 * 3600e3).toISOString(),
+        nextRefresh: new Date(Date.now() + 5 * 3600e3).toISOString(),
+      };
+    }
+    if (own.length) {
+      const left = new Set(((s.excludeGroups as string[] | undefined) ?? []).map(norm));
+      const counts = new Map<string, number>();
+      for (const c of own) counts.set(c.group ?? "", (counts.get(c.group ?? "") ?? 0) + 1);
+      out.groups = [...counts].map(([name, n]) => ({
+        name,
+        channels: n,
+        ...(left.has(norm(name)) ? { excluded: true } : {}),
+      }));
+    }
     return {
-      ...s,
+      ...out,
       channelCount: own.length,
       guideChannelCount: s.id === "regional-epg" ? 42 : own.length - 3,
       programmeCount: s.id === "regional-epg" ? 3120 : 1840,

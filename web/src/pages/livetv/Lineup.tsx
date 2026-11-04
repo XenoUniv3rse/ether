@@ -9,8 +9,9 @@ import {
   Sparkles,
   Star,
 } from "lucide-react";
-import { useState } from "react";
+import { memo, useMemo, useState } from "react";
 import { t, tn } from "../../i18n";
+import { useLocale } from "../../i18n/react";
 import { formatNumber, relativeTime } from "../../lib/format";
 import { ChannelLogo } from "./ChannelLogo";
 import {
@@ -56,29 +57,29 @@ export function ChannelList({
   now: number;
   emptyHint: React.ReactNode;
 }) {
-  const groups: { key: string; title: string; icon: React.ReactNode; items: Channel[] }[] = [];
-  const virtual = channels.filter((c) => c.kind === "virtual");
-  if (virtual.length)
-    groups.push({
-      key: "virtual",
-      title: t("Virtual channels"),
-      icon: <Sparkles size={12} />,
-      items: virtual,
-    });
-  const bySource = new Map<string, Channel[]>();
-  for (const c of channels) {
-    if (c.kind !== "iptv") continue;
-    const k = c.sourceId ?? "";
-    bySource.set(k, [...(bySource.get(k) ?? []), c]);
-  }
-  for (const [id, items] of bySource) {
-    groups.push({
-      key: `src-${id}`,
-      title: sources.find((s) => s.id === id)?.name ?? "IPTV",
-      icon: <Radio size={12} />,
-      items,
-    });
-  }
+  const { locale } = useLocale();
+  // One pass over the lineup; a 16,000-channel provider is one source group.
+  const groups = useMemo(() => {
+    const out: { key: string; title: string; virtual: boolean; items: Channel[] }[] = [];
+    const virtual: Channel[] = [];
+    const bySource = new Map<string, Channel[]>();
+    for (const c of channels) {
+      if (c.kind === "virtual") virtual.push(c);
+      else if (c.kind === "iptv") {
+        const k = c.sourceId ?? "";
+        const list = bySource.get(k);
+        if (list) list.push(c);
+        else bySource.set(k, [c]);
+      }
+    }
+    if (virtual.length)
+      out.push({ key: "virtual", title: t("Virtual channels"), virtual: true, items: virtual });
+    const names = new Map(sources.map((s) => [s.id, s.name]));
+    for (const [id, items] of bySource)
+      out.push({ key: `src-${id}`, title: names.get(id) ?? "IPTV", virtual: false, items });
+    return out;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [channels, sources, locale]);
   if (!channels.length) return <div className="px-4 py-10 text-center">{emptyHint}</div>;
   return (
     <div className="pb-6">
@@ -86,7 +87,7 @@ export function ChannelList({
         <ChannelGroup
           key={g.key}
           title={g.title}
-          icon={g.icon}
+          icon={g.virtual ? <Sparkles size={12} /> : <Radio size={12} />}
           items={g.items}
           guide={guide}
           covered={covered}
@@ -133,9 +134,22 @@ function ChannelGroup({
       </button>
       {open ? (
         <ul className="px-2 py-1">
-          {items.slice(0, limit).map((c) => (
-            <ChannelRow key={c.id} channel={c} {...rest} />
-          ))}
+          {items.slice(0, limit).map((c) => {
+            const live = onNow(rest.guide.get(c.id), rest.now);
+            return (
+              <ChannelRow
+                key={c.id}
+                channel={c}
+                live={live}
+                hasGuide={rest.covered(c)}
+                on={rest.selected === c.id}
+                // Only rows with a programme on show the clock.
+                now={live ? rest.now : 0}
+                onSelect={rest.onSelect}
+                onToggleFavorite={rest.onToggleFavorite}
+              />
+            );
+          })}
           {items.length > limit ? (
             <li className="px-2 py-1">
               <Button
@@ -156,26 +170,24 @@ function ChannelGroup({
   );
 }
 
-function ChannelRow({
+/** One lineup row; memoised so a selection or favourite only re-renders the rows it touches. */
+const ChannelRow = memo(function ChannelRow({
   channel: c,
-  guide,
-  covered,
-  selected,
+  live,
+  hasGuide,
+  on,
   onSelect,
   onToggleFavorite,
   now,
 }: {
   channel: Channel;
-  guide: Map<string, Programme[]>;
-  covered: (c: Channel) => boolean | undefined;
-  selected: string | null;
+  live: Programme | undefined;
+  hasGuide: boolean | undefined;
+  on: boolean;
   onSelect: (id: string) => void;
   onToggleFavorite: (c: Channel) => void;
   now: number;
 }) {
-  const on = selected === c.id;
-  const live = onNow(guide.get(c.id), now);
-  const hasGuide = covered(c);
   return (
     <li className="group relative">
       <button
@@ -262,19 +274,30 @@ function ChannelRow({
       ) : null}
     </li>
   );
-}
+});
 
 /** Every IPTV and guide source, on the left panel's Sources tab. */
 export function SourceList({
   sources,
   selected,
   onSelect,
+  query = "",
 }: {
   sources: Source[];
   selected: Selection;
   onSelect: (s: Selection) => void;
+  /** The Live TV search: narrows the sources by name or by one of their groups. */
+  query?: string;
 }) {
-  const channelSources = sources.filter(isChannelSource);
+  const needle = query.trim().toLowerCase();
+  const channelSources = sources
+    .filter(isChannelSource)
+    .filter(
+      (s) =>
+        !needle ||
+        s.name.toLowerCase().includes(needle) ||
+        (s.groups ?? []).some((g) => g.name.toLowerCase().includes(needle)),
+    );
   return (
     <div className="space-y-4 p-3 sm:p-4">
       <div className="space-y-1.5">

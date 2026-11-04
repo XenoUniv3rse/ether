@@ -18,9 +18,10 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, type ComponentProps } from "react";
 import { Link } from "react-router-dom";
 import { Field, SecretInput, Segmented } from "../../components/fields";
+import { SubtabNav } from "../../components/layout";
 import { localized, t, tn } from "../../i18n";
 import { useLocale } from "../../i18n/react";
 import { searchSelectLabels } from "../../i18n/appkit-labels";
@@ -30,14 +31,18 @@ import { api, errorMessage } from "../../lib/api";
 import { isPluginDescriptor, textOf, useRegistry, type Descriptor } from "../../lib/extend";
 import type { ParamField } from "../../lib/rules";
 import { formatNumber, relativeTime } from "../../lib/format";
+import { ChannelGroups, ProviderAccountCard } from "./SourceGroups";
+import { SourceLimits } from "./SourceLimits";
 import {
   dayClock,
   duration,
   emptySource,
+  normGroup,
   plexLineupCount,
   plexLineupName,
   tv,
   type AuthType,
+  type GroupRules,
   type Source,
   type SourceAuth,
   type SourceDraft,
@@ -105,6 +110,7 @@ export function SourceEditor({
   const [guideKind, setGuideKind] = useState<"xmltv" | "plex">("xmltv");
   const [lineups, setLineups] = useState<PlexLineup[] | null>(null);
   const [looking, setLooking] = useState(false);
+  const [tab, setTab] = useState<"connection" | "groups" | "limits">("connection");
   const { locale } = useLocale();
   const browserRegion = useMemo(() => {
     const languageRegion = regionFromLocales(browserLanguageList(), "");
@@ -175,9 +181,14 @@ export function SourceEditor({
             guideUrl: source.guideUrl ?? "",
             refreshHours: source.refreshHours,
             auth: source.auth ? structuredClone(source.auth) : undefined,
+            ...groupRules(source),
+            maxConnections: source.maxConnections,
+            tuneGapSeconds: source.tuneGapSeconds,
+            tunesPerHour: source.tunesPerHour,
           }
         : emptySource(),
     );
+    setTab("connection");
     setKind(
       source
         ? source.hasPlaylist === false ||
@@ -297,6 +308,20 @@ export function SourceEditor({
   };
 
   const auto = (draft.refreshHours ?? 0) >= 0;
+  const groups = kind === "playlist" && !pluginBacked ? source?.groups : undefined;
+  const showGroups = Boolean(groups?.length);
+  // Channel sources get Connection, Channel groups (once a lineup is in) and Limits.
+  const showTabs = kind === "playlist" && !pluginBacked && !plex;
+  const onTab = !showTabs || (tab === "groups" && !showGroups) ? "connection" : tab;
+  const rulesChanged = showGroups && source ? rulesKey(draft) !== rulesKey(source) : false;
+  const setRules = useCallback<ComponentProps<typeof ChannelGroups>["onChange"]>(
+    (update) =>
+      setDraft((d) => ({
+        ...d,
+        ...update({ ...d, excludeGroups: d.excludeGroups ?? [], groupOrder: d.groupOrder ?? [] }),
+      })),
+    [],
+  );
   const urlBacked = plex || xtream || Boolean(draft.playlistUrl || draft.guideUrl);
 
   return (
@@ -325,7 +350,10 @@ export function SourceEditor({
             {plex
               ? t("Plex's TV listings for your provider, by postal code.")
               : textOf(
-                  (selectedPlugin ?? byEditor(kind === "guide" ? "guide" : "playlist"))?.hint,
+                  (
+                    selectedPlugin ??
+                    byEditor(kind === "guide" ? "guide" : xtream ? "xtream" : "playlist")
+                  )?.hint,
                 ) ||
                 (kind === "guide"
                   ? t("An XMLTV guide on its own. Map any channel to it for listings.")
@@ -402,7 +430,52 @@ export function SourceEditor({
         </div>
       ) : null}
 
-      <section className="space-y-4 rounded-2xl border border-border bg-surface p-5">
+      {xtream && source?.account ? <ProviderAccountCard account={source.account} /> : null}
+
+      {showTabs ? (
+        <SubtabNav
+          ariaLabel={t("Source settings")}
+          active={onTab}
+          onSelect={(key) =>
+            setTab(key === "groups" ? "groups" : key === "limits" ? "limits" : "connection")
+          }
+          tabs={[
+            { key: "connection", label: t("Connection") },
+            ...(showGroups
+              ? [{ key: "groups", label: t("Channel groups"), count: groups?.length }]
+              : []),
+            { key: "limits", label: t("Limits") },
+          ]}
+        />
+      ) : null}
+
+      {onTab === "limits" ? (
+        <section className="rounded-2xl border border-border bg-surface p-5">
+          <SourceLimits
+            rules={draft}
+            account={xtream ? source?.account : undefined}
+            onChange={(next) =>
+              setDraft((d) => ({
+                ...d,
+                maxConnections: next.maxConnections,
+                tuneGapSeconds: next.tuneGapSeconds,
+                tunesPerHour: next.tunesPerHour,
+              }))
+            }
+          />
+        </section>
+      ) : null}
+
+      {onTab === "groups" && groups ? (
+        <section className="rounded-2xl border border-border bg-surface p-5">
+          <ChannelGroups groups={groups} rules={draft} onChange={setRules} />
+        </section>
+      ) : null}
+
+      <section
+        hidden={onTab !== "connection"}
+        className="space-y-4 rounded-2xl border border-border bg-surface p-5"
+      >
         {!source && !guideOnly ? (
           <div className="space-y-2">
             <Segmented
@@ -733,12 +806,20 @@ export function SourceEditor({
             ]}
           />
         </Field>
+      </section>
+      <div className="space-y-3">
         {error ? (
           <p role="alert" className="text-sm text-danger">
             {error}
           </p>
         ) : null}
-        <div className="flex flex-wrap items-center gap-2 pt-1">
+        {rulesChanged ? (
+          <p className="flex items-center gap-2 text-xs text-fg-muted">
+            <Badge variant="warning">{t("Unsaved changes")}</Badge>
+            {t("Saving re-imports this source with your channel group choices.")}
+          </p>
+        ) : null}
+        <div className="flex flex-wrap items-center gap-2">
           <Button disabled={!canSave || Boolean(busy)} onClick={() => void save()}>
             {busy === "save"
               ? t("Importing…")
@@ -767,9 +848,25 @@ export function SourceEditor({
             </Button>
           ) : null}
         </div>
-      </section>
+      </div>
     </div>
   );
+}
+
+/** The owner's group rules, normalised so an unchanged draft compares equal to its source. */
+function groupRules(r: GroupRules): GroupRules {
+  return {
+    excludeGroups: r.excludeGroups?.length ? [...r.excludeGroups] : [],
+    newGroups: r.newGroups === "exclude" ? "exclude" : "",
+    hideAdult: Boolean(r.hideAdult),
+    groupOrder: r.groupOrder?.length ? [...r.groupOrder] : [],
+  };
+}
+
+/** Compares group rules; the excluded set's order does not matter. */
+function rulesKey(r: GroupRules): string {
+  const g = groupRules(r);
+  return JSON.stringify({ ...g, excludeGroups: g.excludeGroups!.map(normGroup).sort() });
 }
 
 /** Drop an empty login so plain sources stay plain. */

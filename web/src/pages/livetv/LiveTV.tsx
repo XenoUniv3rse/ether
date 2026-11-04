@@ -11,7 +11,15 @@ import {
   Tv,
   Undo2,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  useCallback,
+  useDeferredValue,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { AddAddonDrawer } from "../../components/addons/AddAddonDrawer";
 import type { AddonSummary } from "../../components/addons/addons";
@@ -40,13 +48,13 @@ import {
   TEMPLATES,
   addonChannelsKind,
   browserTimeZone,
-  byNumber,
   emptyChannel,
   emptySource,
   groupBy,
   isChannelSource,
   nextNumber,
   plexLineupName,
+  sortByNumber,
   tv,
   type Channel,
   type Coverage,
@@ -218,9 +226,15 @@ export default function LiveTV() {
     [coverage],
   );
 
-  const sorted = useMemo(() => [...(channels ?? [])].sort(byNumber), [channels]);
+  const sorted = useMemo(() => sortByNumber(channels ?? []), [channels]);
+  const byId = useMemo(() => new Map(sorted.map((c) => [c.id, c])), [sorted]);
+  // Search text per channel, kept across reloads for unchanged channel records.
+  const searchText = useRef(new WeakMap<Channel, string>());
+  // Typing stays responsive while a 16,000-channel lineup filters behind it.
+  const query = useDeferredValue(q);
   const filtered = useMemo(() => {
-    const needle = q.trim().toLowerCase();
+    const needle = query.trim().toLowerCase();
+    const texts = searchText.current;
     return sorted.filter((c) => {
       switch (filter) {
         case "live":
@@ -243,9 +257,14 @@ export default function LiveTV() {
           break;
       }
       if (!needle) return true;
-      return `${c.number} ${c.name} ${c.group ?? ""}`.toLowerCase().includes(needle);
+      let text = texts.get(c);
+      if (text === undefined) {
+        text = `${c.number} ${c.name} ${c.group ?? ""}`.toLowerCase();
+        texts.set(c, text);
+      }
+      return text.includes(needle);
     });
-  }, [sorted, filter, q, covered]);
+  }, [sorted, filter, query, covered]);
   const missingCount = useMemo(
     () =>
       coverage === null
@@ -256,8 +275,7 @@ export default function LiveTV() {
 
   // ---- selection + studio draft -------------------------------------------------
 
-  const savedChannel =
-    selection.kind === "channel" ? (channels ?? []).find((c) => c.id === selection.id) : undefined;
+  const savedChannel = selection.kind === "channel" ? byId.get(selection.id) : undefined;
   const dirty = draft !== null && JSON.stringify(draft) !== baseline;
 
   useEffect(() => {
@@ -377,6 +395,26 @@ export default function LiveTV() {
     }
   };
 
+  // Stable lineup callbacks, so memoised rows skip re-rendering on every page update.
+  const latest = useRef({ go, quickSave });
+  useLayoutEffect(() => {
+    latest.current = { go, quickSave };
+  });
+  const selectChannel = useCallback(
+    (id: string) => void latest.current.go({ kind: "channel", id }),
+    [],
+  );
+  const toggleFavorite = useCallback(
+    (c: Channel) =>
+      void latest.current.quickSave(
+        { ...c, favorite: !c.favorite },
+        c.favorite
+          ? t("{name} unfavourited", { name: c.name })
+          : t("{name} favourited", { name: c.name }),
+      ),
+    [],
+  );
+
   const deleteChannel = async () => {
     if (!draft?.channel.id) return;
     const id = draft.channel.id;
@@ -485,7 +523,13 @@ export default function LiveTV() {
               type="search"
               value={q}
               onChange={(e) => setQ(e.currentTarget.value)}
-              placeholder={t("Find a channel or group…")}
+              placeholder={
+                leftTab === "sources"
+                  ? t("Find a channel, group or source…")
+                  : leftTab === "guide"
+                    ? t("Find a channel or guide…")
+                    : t("Find a channel or group…")
+              }
               aria-label={t("Search channels")}
               className="h-8 pl-7 text-sm"
             />
@@ -530,15 +574,8 @@ export default function LiveTV() {
               guide={guide}
               covered={covered}
               selected={selection.kind === "channel" ? selection.id : null}
-              onSelect={(id) => void go({ kind: "channel", id })}
-              onToggleFavorite={(c) =>
-                void quickSave(
-                  { ...c, favorite: !c.favorite },
-                  c.favorite
-                    ? t("{name} unfavourited", { name: c.name })
-                    : t("{name} favourited", { name: c.name }),
-                )
-              }
+              onSelect={selectChannel}
+              onToggleFavorite={toggleFavorite}
               now={now}
               emptyHint={
                 channels.length ? (
@@ -563,9 +600,15 @@ export default function LiveTV() {
           )}
         </>
       ) : leftTab === "sources" ? (
-        <SourceList sources={sources} selected={selection} onSelect={(s) => void go(s)} />
+        <SourceList
+          sources={sources}
+          selected={selection}
+          onSelect={(s) => void go(s)}
+          query={query}
+        />
       ) : (
         <GuideSourceList
+          query={query}
           lineup={sorted}
           sources={sources}
           coverage={coverage}
@@ -583,8 +626,7 @@ export default function LiveTV() {
   const channelOpen = selection.kind === "new" || selection.kind === "channel";
   const sourceOpen = selection.kind === "source";
   const guideOpen = selection.kind === "map";
-  const guideChannel =
-    selection.kind === "map" ? sorted.find((c) => c.id === selection.id) : undefined;
+  const guideChannel = selection.kind === "map" ? byId.get(selection.id) : undefined;
   const sourceRecord =
     selection.kind === "source" && selection.id !== "new"
       ? (sources.find((s) => s.id === selection.id) ?? null)
@@ -601,6 +643,7 @@ export default function LiveTV() {
     leftTab === "guide" ? (
       <GuideWorkbench
         channels={sorted}
+        query={query}
         sources={sources}
         coverage={coverage}
         source={guideSource}
@@ -654,7 +697,7 @@ export default function LiveTV() {
         ? t("Edit IPTV source")
         : t("IPTV source");
 
-  const live = sorted.filter((c) => c.enabled).length;
+  const live = useMemo(() => sorted.filter((c) => c.enabled).length, [sorted]);
   return (
     <>
       <Workspace
@@ -820,7 +863,9 @@ export default function LiveTV() {
               ? t("Plex's TV listings for your provider, by postal code.")
               : (!sourceRecord && editorKind === "guide") || sourceRecord?.hasPlaylist === false
                 ? t("XMLTV listings for any channel.")
-                : t("An M3U playlist, optionally with a guide.")
+                : sourceRecord?.auth?.type === "xtream"
+                  ? t("An IPTV provider's Xtream Codes login.")
+                  : t("An M3U playlist, optionally with a guide.")
         }
         size="lg"
       >

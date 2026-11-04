@@ -63,6 +63,8 @@ export type Channel = {
   /** Ordered stream sources: the first enabled one plays, the rest are backups. */
   streamSources?: StreamSource[];
   group?: string;
+  /** The provider's channel number; differs from `number` when the owner renumbered it. */
+  providerNumber?: string;
   epoch: string;
   seed: number;
   shuffle: boolean;
@@ -123,6 +125,47 @@ export type PreviewSession = {
   programme?: Programme;
 };
 export type PlexLineup = { id: string; title: string; type: string };
+/** An Xtream Codes login's account, as the panel reported it at the last import. Read-only. */
+export type SourceAccount = {
+  status?: string;
+  trial?: boolean;
+  /** RFC 3339. */
+  expiresAt?: string;
+  maxConnections?: number;
+  activeConnections: number;
+  formats?: string[];
+  checkedAt: string;
+};
+/** One of the provider's channel groups, in provider order. Read-only. */
+export type SourceGroup = {
+  name: string;
+  channels: number;
+  adult?: boolean;
+  /** The owner's rules leave this group out. */
+  excluded?: boolean;
+};
+/** Owner rules that shape a playlist source's lineup; a save re-imports the source. */
+export type GroupRules = {
+  /** Group names left out; their channels are not imported. */
+  excludeGroups?: string[];
+  /** "exclude": groups that appear on a later refresh are left out until the owner includes them. */
+  newGroups?: "" | "exclude";
+  /** Leave out every group flagged adult. */
+  hideAdult?: boolean;
+  /** Empty: the provider's order and numbers. Otherwise channels are numbered 1… down this group order. */
+  groupOrder?: string[];
+};
+/** How gently Ether uses a provider's streams (see SourceLimits). */
+export type SourceLimitRules = {
+  /** Fewer connections than the panel allows; empty uses the panel's limit (or none). */
+  maxConnections?: number;
+  /** Seconds between new provider streams: empty automatic, negative off. */
+  tuneGapSeconds?: number;
+  /** New provider streams per hour; empty is no cap. */
+  tunesPerHour?: number;
+};
+/** Group names match case-insensitively, ignoring surrounding spaces (as the server does). */
+export const normGroup = (name: string) => name.trim().toLowerCase();
 export type Source = {
   lineupId?: string;
   country?: string;
@@ -145,7 +188,10 @@ export type Source = {
   hasGuide?: boolean;
   auth?: SourceAuth;
   refreshFailures?: number;
-};
+  account?: SourceAccount;
+  groups?: SourceGroup[];
+} & GroupRules &
+  SourceLimitRules;
 export type SourceDraft = {
   lineupId?: string;
   country?: string;
@@ -159,7 +205,8 @@ export type SourceDraft = {
   guide: string;
   refreshHours?: number;
   auth?: SourceAuth;
-};
+} & GroupRules &
+  SourceLimitRules;
 export type Programme = { id: string; channelId: string; start: string; end: string; item: Item };
 export function plexLineupName(title: string): string {
   return title.replace(/\s*\([\d,]+\s+channels?\)$/i, "").trim();
@@ -505,12 +552,27 @@ export function progress(p: Programme, at = Date.now()): number {
   return e > s ? Math.min(1, Math.max(0, (at - s) / (e - s))) : 0;
 }
 
+const collator = new Intl.Collator();
+
 export function byNumber(a: Channel, b: Channel): number {
   return (
     (parseFloat(a.number) || 0) - (parseFloat(b.number) || 0) ||
-    a.number.localeCompare(b.number) ||
-    a.name.localeCompare(b.name)
+    collator.compare(a.number, b.number) ||
+    collator.compare(a.name, b.name)
   );
+}
+
+/**
+ * Channels in lineup order (see byNumber). Each number is parsed once rather
+ * than per comparison, which matters for provider lineups of 16,000.
+ */
+export function sortByNumber(channels: Channel[]): Channel[] {
+  const keyed = channels.map((c) => ({ c, n: parseFloat(c.number) || 0 }));
+  keyed.sort(
+    (a, b) =>
+      a.n - b.n || collator.compare(a.c.number, b.c.number) || collator.compare(a.c.name, b.c.name),
+  );
+  return keyed.map((k) => k.c);
 }
 
 export function groupBy<T>(items: T[], key: (t: T) => string): Map<string, T[]> {

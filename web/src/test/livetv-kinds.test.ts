@@ -5,7 +5,7 @@ import { descriptors as collectionDescriptors } from "../mock/extend/descriptors
 describe("Live TV source kinds from the registry", () => {
   it("serves the built-in kinds with editors", () => {
     const byId = new Map(descriptors.map((d) => [d.id, d]));
-    expect([...byId.keys()].sort()).toEqual(["guideOnly", "m3u", "virtual", "xtream"]);
+    expect([...byId.keys()].sort()).toEqual(["guideOnly", "m3u", "plex", "virtual", "xtream"]);
     const meta = (id: string) => byId.get(id)?.meta as { editor?: string } | undefined;
     expect(meta("m3u")?.editor).toBe("playlist");
     expect(meta("guideOnly")?.editor).toBe("guide");
