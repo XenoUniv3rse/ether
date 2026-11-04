@@ -63,6 +63,7 @@
   "m_0040e631ea1713": "Oynatma sırasında çalışabilir",
   "m_0042d36e3a4d31": "Eşleşen aralığa sahip ilk kaynak, atlama düğmesini sağlar.",
   "m_00446ecc28fada": "MDBList",
+  "m_0045187b61cac9": "Video veya ses dönüştürüldü",
   "m_004580cc476c5f": "Doğrulama ipuçları",
   "m_004804edf569b6": "Plex hesabınızı yeniden bağlayın",
   "m_004835dbe00869": {
@@ -137,6 +138,7 @@
   "m_00a084a302868d": "disk bütçesi depolama saklama ön getirme ısıtma sonraki bölüm",
   "m_00a16c19a34f07": "Çağrıları göster",
   "m_00a19f8711afed": "İzlemeye devam et",
+  "m_00a214bd41c61b": "Doğrudan",
   "m_00a230047b55c8": "Disk önbelleğinden teslim edilen",
   "m_00a28c2d495833": "Veritabanı bağlantıyı reddetti",
   "m_00a35ff984d8bc": "Şu an hazırlanıyor",
@@ -355,6 +357,7 @@
   "m_01b5a99921e30a": "{name} öğesini indir",
   "m_01b674ba6b7373": "Kaldığı yerden devam edilen içeriklerde pre-roll oynatılmaz.",
   "m_01b6a81e56578f": "Oturum açma ekranında yerel izleyici adlarını göster",
+  "m_01b75b2d99913d": "Şu anda yayında",
   "m_01b765f613779a": "Kuralı kaydet",
   "m_01b8e57d552637": "Plex Web'de herhangi bir başlığın ⋯ menüsünü açın, Get Info'yu, ardından View XML'i seçin. Belirteç, adresin sonundaki X-Plex-Token değeridir. Ether onu şifreli saklar ve bir daha göstermez.",
   "m_01b9317c523af8": "Kural kaydedildi",
@@ -1006,7 +1009,6 @@
     "one": "günde {count} API isteği",
     "other": "günde {count} API isteği"
   },
-  "m_04736cfe01f746": "Akışlar birkaç saniyede bir güncellenir. Bir akışı durdurmak, onu izleyicinin cihazında sonlandırır.",
   "m_0474b5fa45d5ae": "Kuralı kaldır",
   "m_0474e00de25f80": "Bir dizi seçin",
   "m_0476bbd0877c4e": "Yüklü eklentiyi aç",
@@ -2156,6 +2158,7 @@
   "m_09a87f5bfb453b": "Son içe aktarma {when} · {span} program",
   "m_09a9b9012738ea": "Sürüm sabitlendi",
   "m_09ac1b92a7f43f": "Bağlantıyı kes",
+  "m_09ac79107a1271": "Olduğu gibi oynatılan veya aktarılan",
   "m_09ac7c244189c5": {
     "one": "{count} tanım yüklü, hepsi yukarıdaki dizinleyicileriniz tarafından kullanılıyor.",
     "other": "{count} tanım yüklü, hepsi yukarıdaki dizinleyicileriniz tarafından kullanılıyor."
@@ -2684,6 +2687,7 @@
   "m_0c04b691b6c72d": "Koleksiyon silindi",
   "m_0c04cc873f0352": "4K (2160p)",
   "m_0c072fb8baf115": "Yayımla",
+  "m_0c085fe994cbc4": "Aktarım hızı",
   "m_0c098f051ed4a8": "Etkinlik, ilk başlık izlendikten sonra görünür.",
   "m_0c0cb66d5e7298": {
     "one": "Her biri 8 GiB olan yaklaşık {count} film boyutunda kaynak için yer. Bölüm boyutları değişir; ikisi de bu ayrımı paylaşır.",
@@ -4354,6 +4358,7 @@
   "m_1340e827526923": "Yeni IPTV kaynağı",
   "m_13411c6d3331c3": "Bu koleksiyon ne olsun?",
   "m_1341b9c449f87d": "Canlı TV uygulamaları hesap sayfanızdaki bir oynatma listesini kullanır.",
+  "m_1342a7d73a5c61": "Tamamlanma oranı",
   "m_1345f25f1c9ace": "Son yayınlanan bölüm",
   "m_1346eb034adf81": "Ether internete nasıl ulaşır",
   "m_1349091f213e5d": "Gezinmeyi aç",
@@ -5406,6 +5411,7 @@
   "m_181f4784e63061": "{link} içinde bir IntroDB anahtarı ekleyin.",
   "m_182164a23292fd": "{link} hesap ayarlarınızda ücretsiz bir API anahtarı oluşturun ve aşağıya yapıştırın.",
   "m_18216573f3bae8": "Kurallarla gösterilenler",
+  "m_18222e8154a6d8": "Ortalama oturum",
   "m_1823ad77517060": "Ana sayfaları güncel.",
   "m_182477bf730e82": "Uyarı almak için bir webhook, Discord, Slack, Telegram, e-posta, ntfy veya Gotify kanalı ekleyin.",
   "m_1826e3926a178f": "Test bildirimi",
@@ -5899,7 +5905,6 @@
   "m_1a3532ab03c3f1": "HDR'ye izin verilir",
   "m_1a3561c5e9b1fe": "{section} üzerindeki tüm satırlar.",
   "m_1a361f49e13082": "Telefon veya tablet",
-  "m_1a3658141add24": "Bu dönemdeki son 500 oynatma, cihazınızın saat diliminde.",
   "m_1a37632c11d41d": "Film veya bölüm başlamadan önce oynatılanlar: pre-roll'larınız ve sinema fragmanları.",
   "m_1a3a3f14648f50": "Uç nokta URL'si",
   "m_1a3c710193f62d": "{name} (kopya)",

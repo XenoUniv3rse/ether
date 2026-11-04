@@ -63,6 +63,7 @@
   "m_0040e631ea1713": "Darf während der Wiedergabe laufen",
   "m_0042d36e3a4d31": "Die erste Quelle mit einem passenden Bereich liefert die Überspringen-Schaltfläche.",
   "m_00446ecc28fada": "MDBList",
+  "m_0045187b61cac9": "Video oder Audio umgewandelt",
   "m_004580cc476c5f": "Validierungshinweise",
   "m_004804edf569b6": "Verbinden Sie Ihr Plex-Konto erneut",
   "m_004835dbe00869": {
@@ -137,6 +138,7 @@
   "m_00a084a302868d": "Speicherbudget Festplatte Aufbewahrung Prefetch Vorwärmen nächste Episode",
   "m_00a16c19a34f07": "Aufrufe anzeigen",
   "m_00a19f8711afed": "Weiterschauen",
+  "m_00a214bd41c61b": "Direkt",
   "m_00a230047b55c8": "Aus dem Festplatten-Cache geliefert",
   "m_00a28c2d495833": "Die Datenbank hat die Verbindung abgelehnt",
   "m_00a35ff984d8bc": "Wird vorgewärmt",
@@ -355,6 +357,7 @@
   "m_01b5a99921e30a": "{name} herunterladen",
   "m_01b674ba6b7373": "Beim Fortsetzen eines Titels laufen keine Pre-Rolls.",
   "m_01b6a81e56578f": "Zeigen Sie die Namen lokaler Zuschauer auf dem Anmeldebildschirm an",
+  "m_01b75b2d99913d": "Streamt gerade",
   "m_01b765f613779a": "Regel speichern",
   "m_01b8e57d552637": "Öffne in Plex Web bei einem beliebigen Titel das ⋯-Menü, wähle „Get Info“ und dann „View XML“. Das Token ist der Wert X-Plex-Token am Ende der Adresse. Ether speichert es verschlüsselt und zeigt es nie wieder an.",
   "m_01b9317c523af8": "Regel gespeichert",
@@ -1006,7 +1009,6 @@
     "one": "{count} API-Anfrage pro Tag",
     "other": "{count} API-Anfragen pro Tag"
   },
-  "m_04736cfe01f746": "Streams werden alle paar Sekunden aktualisiert. Wenn du einen Stream beendest, endet er auf dem Gerät des Zuschauers.",
   "m_0474b5fa45d5ae": "Regel entfernen",
   "m_0474e00de25f80": "Serie auswählen",
   "m_0476bbd0877c4e": "Installiertes Plugin öffnen",
@@ -2156,6 +2158,7 @@
   "m_09a87f5bfb453b": "Zuletzt importiert {when} · {span} Programmeinträge",
   "m_09a9b9012738ea": "Release angeheftet",
   "m_09ac1b92a7f43f": "Trennen",
+  "m_09ac79107a1271": "Unverändert abgespielt oder gestreamt",
   "m_09ac7c244189c5": {
     "one": "{count} Definition installiert, sie wird von deinen Indexern oben verwendet.",
     "other": "{count} Definitionen installiert, alle werden von deinen Indexern oben verwendet."
@@ -2684,6 +2687,7 @@
   "m_0c04b691b6c72d": "Sammlung gelöscht",
   "m_0c04cc873f0352": "4K (2160p)",
   "m_0c072fb8baf115": "Veröffentlichen",
+  "m_0c085fe994cbc4": "Durchsatz",
   "m_0c098f051ed4a8": "Aktivität erscheint, sobald der erste Titel gesehen wurde.",
   "m_0c0cb66d5e7298": {
     "one": "Platz für etwa {count} filmgroße Quelle mit je 8 GiB. Episodengrößen variieren; beide teilen sich diese Zuteilung.",
@@ -4354,6 +4358,7 @@
   "m_1340e827526923": "Neue IPTV-Quelle",
   "m_13411c6d3331c3": "Was soll diese Sammlung zeigen?",
   "m_1341b9c449f87d": "Live-TV-Apps nutzen eine Playlist von deiner Kontoseite.",
+  "m_1342a7d73a5c61": "Abschlussquote",
   "m_1345f25f1c9ace": "Zuletzt ausgestrahlte Episode",
   "m_1346eb034adf81": "Wie Ether das Internet erreicht",
   "m_1349091f213e5d": "Navigation öffnen",
@@ -5406,6 +5411,7 @@
   "m_181f4784e63061": "Füge einen IntroDB-Schlüssel unter {link} hinzu.",
   "m_182164a23292fd": "Erstellen Sie in Ihren Kontoeinstellungen auf {link} einen kostenlosen API-Schlüssel und fügen Sie ihn unten ein.",
   "m_18216573f3bae8": "Durch Regeln angezeigt",
+  "m_18222e8154a6d8": "Durchschnittliche Sitzung",
   "m_1823ad77517060": "Die Startseite ist aktuell.",
   "m_182477bf730e82": "Füge einen Webhook-, Discord-, Slack-, Telegram-, E-Mail-, ntfy- oder Gotify-Kanal hinzu, um Benachrichtigungen zu erhalten.",
   "m_1826e3926a178f": "Testbenachrichtigung",
@@ -5899,7 +5905,6 @@
   "m_1a3532ab03c3f1": "HDR erlaubt",
   "m_1a3561c5e9b1fe": "Alle Zeilen auf {section}.",
   "m_1a361f49e13082": "Smartphone oder Tablet",
-  "m_1a3658141add24": "Die letzten 500 Wiedergaben in diesem Zeitraum, in der Zeitzone deines Geräts.",
   "m_1a37632c11d41d": "Was vor einem Film oder einer Folge läuft: deine Pre-Rolls und Kinotrailer.",
   "m_1a3a3f14648f50": "Endpunkt-URL",
   "m_1a3c710193f62d": "{name} (Kopie)",

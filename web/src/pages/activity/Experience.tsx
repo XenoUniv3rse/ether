@@ -1,4 +1,5 @@
-import { DashboardMetricCard, DashboardPanel } from "@braedonsaunders/appkit-dashboard/primitives";
+import { DashboardPanel } from "@braedonsaunders/appkit-dashboard/primitives";
+import { Kpi, KpiRow } from "../../components/Kpi";
 import { EmptyState, PagedTable } from "@braedonsaunders/appkit-ui";
 import { AlertTriangle, Gauge, PlayCircle, Timer, Waves } from "lucide-react";
 import { useMemo } from "react";
@@ -67,26 +68,14 @@ export function Experience() {
 
   return (
     <>
-      <div className="flex flex-wrap items-center justify-end gap-3">
-        <Segmented
-          ariaLabel={t("Period")}
-          size="sm"
-          value={days}
-          onChange={(v) => update("days", v)}
-          options={[
-            { value: "7", label: tn(7, "Last {count} day", "Last {count} days") },
-            { value: "30", label: tn(30, "Last {count} day", "Last {count} days") },
-          ]}
-        />
-      </div>
       {overview.error && !o ? (
         <ErrorPanel error={overview.error} onRetry={() => void overview.reload()} />
       ) : !o || !h ? (
         <LoadingRows rows={4} />
       ) : (
         <>
-          <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-            <DashboardMetricCard
+          <KpiRow>
+            <Kpi
               label={t("Median start time")}
               value={
                 <ToneValue
@@ -106,7 +95,7 @@ export function Experience() {
               icon={<Timer size={18} />}
               tone={startTone(h.startMedianMs) ?? "primary"}
             />
-            <DashboardMetricCard
+            <Kpi
               label={t("Buffering")}
               value={
                 <ToneValue
@@ -126,7 +115,7 @@ export function Experience() {
               icon={<Waves size={18} />}
               tone={bufferTone(h.bufferEventsPerHour) ?? "primary"}
             />
-            <DashboardMetricCard
+            <Kpi
               label={t("Failed starts")}
               value={
                 <ToneValue
@@ -143,14 +132,14 @@ export function Experience() {
               icon={<AlertTriangle size={18} />}
               tone={failedTone(h.failedStarts, h.measuredPlays) ?? "primary"}
             />
-            <DashboardMetricCard
+            <Kpi
               label={t("Direct play")}
               value={pct(direct)}
               detail={t("Plays sent to the app as-is")}
               icon={<PlayCircle size={18} />}
               tone="info"
             />
-          </div>
+          </KpiRow>
 
           <DashboardPanel title={t("Household detail")} icon={<Gauge size={16} />}>
             <MetricFacts m={h} wide />
@@ -276,5 +265,32 @@ export function Experience() {
         onClose={() => update("viewer", null)}
       />
     </>
+  );
+}
+
+/** Experience's period control, on the Activity tab row. */
+export function ExperiencePeriod() {
+  const [params, setParams] = useSearchParams();
+  const days = params.get("days") === "30" ? "30" : "7";
+  return (
+    <Segmented
+      ariaLabel={t("Period")}
+      size="sm"
+      value={days}
+      onChange={(v) =>
+        setParams(
+          (prev) => {
+            const next = new URLSearchParams(prev);
+            next.set("days", v);
+            return next;
+          },
+          { preventScrollReset: true },
+        )
+      }
+      options={[
+        { value: "7", label: tn(7, "Last {count} day", "Last {count} days") },
+        { value: "30", label: tn(30, "Last {count} day", "Last {count} days") },
+      ]}
+    />
   );
 }

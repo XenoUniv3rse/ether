@@ -179,10 +179,10 @@ describe("Activity", () => {
     renderAt("/activity");
     expect(await screen.findByText("Example film", {}, WAIT)).toBeInTheDocument();
     expect(screen.getByText("Sam · Phone")).toBeInTheDocument();
-    fireEvent.change(screen.getByLabelText("Protocol"), { target: { value: "jellyfin" } });
+    await choose("Protocol", "jellyfin");
     expect(screen.queryByText("Example film")).toBeNull();
     expect(screen.getByText("Other film")).toBeInTheDocument();
-    fireEvent.change(screen.getByLabelText("Protocol"), { target: { value: "plex" } });
+    await choose("Protocol", "plex");
     expect(screen.queryByText("Other film")).toBeNull();
     expect(within(screen.getByText("Example film").closest("li")!).getByText("plex")).toBeVisible();
     fireEvent.click(screen.getByRole("button", { name: "Stop stream" }));

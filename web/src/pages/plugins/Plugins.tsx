@@ -10,6 +10,7 @@ import { Marketplace } from "./Marketplace";
 import { PluginDrawer } from "./PluginDrawer";
 import { PluginMark } from "./marks";
 import { installedPlugins, type Installed, type Listing } from "./proto";
+import { Kpi } from "../../components/Kpi";
 
 /** Installed plugins, their real effect, and the two ways to get more. */
 export default function Plugins() {
@@ -120,12 +121,7 @@ function PrototypePlugins() {
 }
 
 function Tile({ label, value }: { label: string; value: React.ReactNode }) {
-  return (
-    <div className="rounded-xl border border-border bg-surface px-4 py-3.5">
-      <p className="text-xs text-fg-muted">{label}</p>
-      <div className="mt-1 text-2xl font-semibold tabular-nums text-fg">{value}</div>
-    </div>
-  );
+  return <Kpi label={label} value={value} />;
 }
 
 function PluginCard({

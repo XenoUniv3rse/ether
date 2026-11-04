@@ -6,6 +6,7 @@ import { t, tn } from "../../i18n";
 import { formatBytes, formatPercent } from "../../lib/format";
 import type { CacheSnapshot } from "./Cache";
 import { causeLabel, pinLabel } from "./reasons";
+import { Kpi } from "../../components/Kpi";
 
 export function CacheOverview({
   snapshot: s,
@@ -89,11 +90,7 @@ export function CacheOverview({
             t("Released by cache retention"),
           ],
         ].map(([label, value, hint]) => (
-          <div key={label} className="rounded-xl border border-border bg-surface px-4 py-3.5">
-            <p className="text-xs text-fg-muted">{label}</p>
-            <p className="mt-1 text-2xl font-semibold tracking-tight tabular-nums">{value}</p>
-            <p className="mt-1 text-[10px] text-fg-subtle">{hint}</p>
-          </div>
+          <Kpi key={label} label={label!} value={value} detail={hint} />
         ))}
       </div>
       <div className="grid gap-4 lg:grid-cols-12 cockpit:min-h-0 cockpit:flex-1">

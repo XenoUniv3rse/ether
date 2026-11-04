@@ -186,6 +186,8 @@ type User struct {
 // ClientCaps is what a Plex client can play, derived from X-Plex-* headers,
 // the client profile and its declared limits.
 type ClientCaps struct {
+	ClientIP string `json:"clientIp,omitempty"` // trusted-proxy-resolved address, when known
+
 	Profiles        *ClientCapabilityProfiles `json:"profiles,omitempty"`
 	Protocol        Protocol                  `json:"protocol,omitempty"`
 	Product         string                    `json:"product"`  // X-Plex-Product: "Plex Web", "Plex for iOS", "Plex for Apple TV"

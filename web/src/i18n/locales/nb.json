@@ -63,6 +63,7 @@
   "m_0040e631ea1713": "Kan kjøre under avspilling",
   "m_0042d36e3a4d31": "Den første kilden med et samsvarende intervall gir hopp over-knappen.",
   "m_00446ecc28fada": "MDBList",
+  "m_0045187b61cac9": "Video eller lyd konvertert",
   "m_004580cc476c5f": "Valideringstips",
   "m_004804edf569b6": "Koble til Plex-kontoen din på nytt",
   "m_004835dbe00869": {
@@ -137,6 +138,7 @@
   "m_00a084a302868d": "disk budsjett lagring oppbevaring forhåndshenting oppvarming neste episode",
   "m_00a16c19a34f07": "Vis kall",
   "m_00a19f8711afed": "Fortsett å se",
+  "m_00a214bd41c61b": "Direkte",
   "m_00a230047b55c8": "Levert fra diskhurtigbufferen",
   "m_00a28c2d495833": "Databasen avviste tilkoblingen",
   "m_00a35ff984d8bc": "Forvarmer nå",
@@ -355,6 +357,7 @@
   "m_01b5a99921e30a": "Last ned {name}",
   "m_01b674ba6b7373": "Pre-rolls spilles ikke når en tittel gjenopptas.",
   "m_01b6a81e56578f": "Vis lokale seernavn på påloggingsskjermen",
+  "m_01b75b2d99913d": "Strømmer nå",
   "m_01b765f613779a": "Lagre regel",
   "m_01b8e57d552637": "I Plex Web åpner du ⋯-menyen på en hvilken som helst tittel, velger Get Info og deretter View XML. Tokenet er X-Plex-Token på slutten av adressen. Ether lagrer det kryptert og viser det aldri igjen.",
   "m_01b9317c523af8": "Regel lagret",
@@ -1006,7 +1009,6 @@
     "one": "{count} API-forespørsel per dag",
     "other": "{count} API-forespørsler per dag"
   },
-  "m_04736cfe01f746": "Strømmer oppdateres med få sekunders mellomrom. Når du stopper en strøm, avsluttes den på seerens enhet.",
   "m_0474b5fa45d5ae": "Fjern regel",
   "m_0474e00de25f80": "Velg en serie",
   "m_0476bbd0877c4e": "Åpne installert utvidelse",
@@ -2156,6 +2158,7 @@
   "m_09a87f5bfb453b": "Sist importert {when} · {span} med programoppføringer",
   "m_09a9b9012738ea": "Utgivelsen er festet",
   "m_09ac1b92a7f43f": "Koble fra",
+  "m_09ac79107a1271": "Spilt av eller strømmet uendret",
   "m_09ac7c244189c5": {
     "one": "{count} definisjon installert, og den brukes av indekserere ovenfor.",
     "other": "{count} definisjoner installert, alle brukt av indekserere ovenfor."
@@ -2684,6 +2687,7 @@
   "m_0c04b691b6c72d": "Samlingen er slettet",
   "m_0c04cc873f0352": "4K (2160p)",
   "m_0c072fb8baf115": "Publiser",
+  "m_0c085fe994cbc4": "Gjennomstrømning",
   "m_0c098f051ed4a8": "Aktivitet vises etter at den første tittelen er sett.",
   "m_0c0cb66d5e7298": {
     "one": "Plass til omtrent {count} filmstor kilde på 8 GiB hver. Episodestørrelser varierer; begge deler denne kvoten.",
@@ -4354,6 +4358,7 @@
   "m_1340e827526923": "Ny IPTV-kilde",
   "m_13411c6d3331c3": "Hva skal denne samlingen være?",
   "m_1341b9c449f87d": "Direktesendte TV-apper bruker en spilleliste fra kontosiden din.",
+  "m_1342a7d73a5c61": "Fullføringsgrad",
   "m_1345f25f1c9ace": "Sist sendte episode",
   "m_1346eb034adf81": "Slik når Ether internett",
   "m_1349091f213e5d": "Åpne navigasjon",
@@ -5406,6 +5411,7 @@
   "m_181f4784e63061": "Legg til en IntroDB-nøkkel i {link}.",
   "m_182164a23292fd": "Opprett en gratis API-nøkkel i kontoinnstillingene på {link}, og lim den inn nedenfor.",
   "m_18216573f3bae8": "Vist av regler",
+  "m_18222e8154a6d8": "Gjennomsnittlig økt",
   "m_1823ad77517060": "Hjemmet deres er oppdatert.",
   "m_182477bf730e82": "Legg til en webhook-, Discord-, Slack-, Telegram-, e-post-, ntfy- eller Gotify-kanal for å få varsler.",
   "m_1826e3926a178f": "Testvarsel",
@@ -5899,7 +5905,6 @@
   "m_1a3532ab03c3f1": "HDR tillatt",
   "m_1a3561c5e9b1fe": "Alle rader på {section}.",
   "m_1a361f49e13082": "Telefon eller nettbrett",
-  "m_1a3658141add24": "De siste 500 avspillingene i perioden, i enhetens tidssone.",
   "m_1a37632c11d41d": "Det som spilles før en film eller episode starter: dine pre-rolls og kinotrailere.",
   "m_1a3a3f14648f50": "Endepunkt-URL",
   "m_1a3c710193f62d": "{name} (kopi)",

@@ -1,4 +1,5 @@
-import { DashboardMetricCard, DashboardPanel } from "@braedonsaunders/appkit-dashboard/primitives";
+import { DashboardPanel } from "@braedonsaunders/appkit-dashboard/primitives";
+import { Kpi, KpiRow } from "../../components/Kpi";
 import { CheckCircle2, Clock, HardDriveDownload, PlayCircle } from "lucide-react";
 import { useState } from "react";
 import { TimeBars } from "../../components/charts";
@@ -59,31 +60,31 @@ export function ViewingStats({
   const timeline = breakdown === "daily" || breakdown === "hourly";
   return (
     <>
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <DashboardMetricCard
+      <KpiRow>
+        <Kpi
           label={t("Plays")}
           value={formatNumber(summary.plays, 0)}
           icon={<PlayCircle size={18} />}
         />
-        <DashboardMetricCard
+        <Kpi
           label={t("Hours watched")}
           value={fixed(summary.watchedMs / 3600000, 1)}
           icon={<Clock size={18} />}
           tone="info"
         />
-        <DashboardMetricCard
+        <Kpi
           label={t("Completed")}
           value={formatNumber(summary.completed, 0)}
           icon={<CheckCircle2 size={18} />}
           tone="success"
         />
-        <DashboardMetricCard
+        <Kpi
           label={t("Transferred")}
           value={formatBytes(summary.bytes)}
           icon={<HardDriveDownload size={18} />}
           tone="warning"
         />
-      </div>
+      </KpiRow>
       <DashboardPanel
         title={view.title}
         actions={

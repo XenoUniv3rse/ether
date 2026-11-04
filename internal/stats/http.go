@@ -76,7 +76,8 @@ func (s *Service) Handler() http.Handler {
 	})
 	m.HandleFunc("GET /summary", func(w http.ResponseWriter, r *http.Request) {
 		since, until, user := s.period(r)
-		v, err := s.Summary(r.Context(), since, until, user)
+		tz, _ := strconv.Atoi(r.URL.Query().Get("tz"))
+		v, err := s.Summary(r.Context(), since, until, user, tz)
 		if err != nil {
 			fail(w, 500, "Summary unavailable")
 			return

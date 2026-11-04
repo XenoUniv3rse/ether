@@ -52,6 +52,7 @@ func (s surfaceCapabilities) Build(ctx context.Context, req frontend.CapabilityR
 		declared.DVProfiles = append([]int(nil), policy.DolbyVisionProfiles...)
 	}
 	declared = resolver.ApplyClientRules(cfg.Quality, declared, req.Viewer)
+	declared.ClientIP = ip.String()
 	result := frontend.CapabilityResult{Client: declared, Quality: resolver.SelectProfile(cfg.Quality, declared, req.Viewer)}
 	if req.Viewer != nil && s.surface != "plex" {
 		s.app.recordFrontendFamily(ctx, s.surface, declared)
