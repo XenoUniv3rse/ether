@@ -74,6 +74,9 @@ CREATE UNIQUE INDEX state_history_imported ON state_history(user_id, rating_key,
 	// Its own component: state/5 must stay unused (prerelease builds recorded
 	// it), as state_search/1 does for the search index.
 	store.Register("state_lastviewed", 1, `CREATE INDEX state_watch_last_viewed ON state_watch(user_id, last_viewed_at DESC, rating_key) WHERE last_viewed_at>0;`)
+	// A viewer's latest watch-state write is one index probe: Plex Home's
+	// cached rows are stamped with it (experience.HomeRevision).
+	store.Register("state_updated", 1, `CREATE INDEX state_watch_updated ON state_watch(user_id, updated_at);`)
 
 }
 

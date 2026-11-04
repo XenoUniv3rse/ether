@@ -72,6 +72,7 @@ func runReal(ctx context.Context, args []string) (int, error) {
 	strict := f.Bool("strict", false, "exit 1 when any gated endpoint misses its budget or errors")
 	pgURL := f.String("pg", "", "run the copy on this empty PostgreSQL database (copied in as `ether cluster init` does); implies -background=false")
 	bodies := f.Bool("bodies", false, "save the last warm response of each viewer, client and step under OUT/bodies")
+	keepProviders := f.Bool("keep-providers", false, "keep the copy's Usenet, debrid and indexer settings (outbound stays blocked), so availability work runs as in production")
 	_ = f.Parse(args)
 	if *source == "" {
 		return 2, fmt.Errorf("-source is required")
@@ -104,7 +105,7 @@ func runReal(ctx context.Context, args []string) (int, error) {
 	if err := copyDataDir(ctx, *source, data); err != nil {
 		return 2, err
 	}
-	if err := sanitizeConfig(filepath.Join(data, "config.json"), *port); err != nil {
+	if err := sanitizeConfig(filepath.Join(data, "config.json"), *port, *keepProviders); err != nil {
 		return 2, fmt.Errorf("sanitize settings: %w", err)
 	}
 	// The measured build migrates its own copy: this tool's migrations may

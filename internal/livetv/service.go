@@ -774,14 +774,14 @@ func (s *Service) AllowedChannels(ctx context.Context, u *core.User) ([]Channel,
 	if err != nil {
 		return nil, err
 	}
+	airing, err := s.programmesAt(ctx, cs, s.o.Now())
+	if err != nil {
+		return nil, err
+	}
 	out := []Channel{}
-	for _, c := range cs {
-		p, ok, err := s.programmeAt(ctx, c, s.o.Now())
-		if err != nil {
-			return nil, err
-		}
+	for i, c := range cs {
 		var current *Programme
-		if ok {
+		if p, ok := airing[i]; ok {
 			current = &p
 		}
 		if s.allowed(ctx, u, c, current) {
@@ -855,6 +855,83 @@ func (s *Service) programmeAt(ctx context.Context, c Channel, at time.Time) (Pro
 	p.ChannelID = c.ID
 	p.ID = fmt.Sprintf("%s-%d", c.ID, p.Start.UnixMilli())
 	return p, true, nil
+}
+
+// programmesAtBatch bounds the channels one programmesAt statement covers
+// (two parameters each).
+const programmesAtBatch = 200
+
+// programmesAt is programmeAt for every channel in cs, keyed by index. Guide
+// channels are read in one statement per batch, each channel still an
+// indexed seek on the primary key, so a large lineup costs a handful of
+// statements instead of one per channel.
+func (s *Service) programmesAt(ctx context.Context, cs []Channel, at time.Time) (map[int]Programme, error) {
+	out := make(map[int]Programme, len(cs))
+	type pair struct{ source, channel string }
+	want := map[pair][]int{}
+	var order []pair
+	for i, c := range cs {
+		if c.Kind == "virtual" {
+			if p, ok, err := s.programmeAt(ctx, c, at); err != nil {
+				return nil, err
+			} else if ok {
+				out[i] = p
+			}
+			continue
+		}
+		k := pair{guideSource(c), c.GuideID}
+		if _, ok := want[k]; !ok {
+			order = append(order, k)
+		}
+		want[k] = append(want[k], i)
+	}
+	ms := at.UnixMilli()
+	for start := 0; start < len(order); start += programmesAtBatch {
+		batch := order[start:min(start+programmesAtBatch, len(order))]
+		values := make([]string, len(batch))
+		args := make([]any, 0, 2*len(batch)+1)
+		for i, k := range batch {
+			values[i] = "(?,?)"
+			args = append(args, k.source, k.channel)
+		}
+		args = append(args, ms)
+		rows, err := s.o.DB.QueryContext(ctx, `WITH ch(source_id, channel_id) AS (VALUES `+strings.Join(values, ",")+`)
+SELECT ch.source_id, ch.channel_id, (SELECT p.data FROM livetv_programmes p WHERE p.source_id=ch.source_id AND p.channel_id=ch.channel_id AND p.start_ms<=? ORDER BY p.start_ms DESC LIMIT 1) FROM ch`, args...)
+		if err != nil {
+			return nil, err
+		}
+		for rows.Next() {
+			var k pair
+			var b []byte
+			if err = rows.Scan(&k.source, &k.channel, &b); err != nil {
+				rows.Close()
+				return nil, err
+			}
+			if b == nil {
+				continue
+			}
+			var p Programme
+			if err = json.Unmarshal(b, &p); err != nil {
+				rows.Close()
+				return nil, err
+			}
+			if !p.End.After(at) {
+				continue
+			}
+			for _, i := range want[k] {
+				q := p
+				q.ChannelID = cs[i].ID
+				q.ID = fmt.Sprintf("%s-%d", cs[i].ID, q.Start.UnixMilli())
+				out[i] = q
+			}
+		}
+		if err = rows.Err(); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		rows.Close()
+	}
+	return out, nil
 }
 
 // guideChannel drops titles the resolver already knows cannot play. Unknown
@@ -961,6 +1038,44 @@ func (s *Service) Guide(ctx context.Context, u *core.User, from, until time.Time
 		return nil, err
 	}
 	out := []Programme{}
+	if until.Sub(from) <= time.Second {
+		// What is airing now (Home's On Now row): one batched read.
+		guided := make([]Channel, 0, len(cs))
+		at := make([]int, len(cs))
+		for i, c := range cs {
+			at[i] = -1
+			if c.Enabled && c.Kind != "virtual" {
+				at[i] = len(guided)
+				guided = append(guided, c)
+			}
+		}
+		airing, err := s.programmesAt(ctx, guided, from)
+		if err != nil {
+			return nil, err
+		}
+		for i, c := range cs {
+			if !c.Enabled {
+				continue
+			}
+			if at[i] >= 0 {
+				if p, ok := airing[at[i]]; ok && s.allowed(ctx, u, c, &p) {
+					out = append(out, p)
+				}
+				continue
+			}
+			ps, err := s.programmes(ctx, c, from, until)
+			if err != nil {
+				return nil, err
+			}
+			for _, p := range ps {
+				if s.allowed(ctx, u, c, &p) {
+					out = append(out, p)
+				}
+			}
+		}
+		sort.SliceStable(out, func(i, j int) bool { return out[i].Start.Before(out[j].Start) })
+		return out, nil
+	}
 	for _, c := range cs {
 		if !c.Enabled {
 			continue

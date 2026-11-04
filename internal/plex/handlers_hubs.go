@@ -20,6 +20,7 @@ import (
 	"github.com/braedonsaunders/ether/internal/frontend"
 	"github.com/braedonsaunders/ether/internal/homefilter"
 	"github.com/braedonsaunders/ether/internal/plex/model"
+	"github.com/braedonsaunders/ether/internal/store"
 )
 
 // hubCtx says where a hub list came from, so each hub's "key" can fetch
@@ -230,6 +231,14 @@ func (s *Server) hubInSections(h core.Hub, ids []int) bool {
 }
 
 func (s *Server) homeHubs(w http.ResponseWriter, r *http.Request, promotedOnly bool) {
+	route := "hubs"
+	if promotedOnly {
+		route = "hubs/promoted"
+	}
+	s.serveHome(w, r, route, func(_ context.Context, r *http.Request) homeBuild { return s.buildHomeHubs(r, promotedOnly) })
+}
+
+func (s *Server) buildHomeHubs(r *http.Request, promotedOnly bool) homeBuild {
 	ctx := withStoredPolicy(r.Context())
 	pr := FromContext(ctx)
 	q := r.URL.Query()
@@ -249,8 +258,7 @@ func (s *Server) homeHubs(w http.ResponseWriter, r *http.Request, promotedOnly b
 			directorySection, ok = s.sectionByID(id)
 		}
 		if !ok || !s.canSeeSection(pr.User, id) {
-			s.write(w, r, hubContainer())
-			return
+			return homeBuild{mc: hubContainer()}
 		}
 	}
 	hc := s.hubContext(pr, 0)
@@ -375,9 +383,18 @@ func (s *Server) homeHubs(w http.ResponseWriter, r *http.Request, promotedOnly b
 		mc.Hub = heroReadyHomeHubs(stableHomeHubs(rows))
 	}
 	mc.Size = len(mc.Hub)
-	s.write(w, r, mc)
-	s.recordImpressions(pr, hc, mc.Hub, served)
-	s.warmBrowseLink(ctx, pr, mc.Hub)
+	return homeBuild{mc: mc, served: served, provisional: s.d.Recommender != nil && !hasRecommendedRows(hubs)}
+}
+
+// hasRecommendedRows reports recommender rows beyond the Continue Watching
+// placeholder: without them the viewer's model was not ready yet.
+func hasRecommendedRows(hubs []core.Hub) bool {
+	for _, h := range hubs {
+		if h.ID != "home.continue" {
+			return true
+		}
+	}
+	return false
 }
 
 // Library hub namespaces identify their source independently of the request.
@@ -435,7 +452,7 @@ func (s *Server) warmBrowseLink(ctx context.Context, pr *Request, rows []model.H
 	if !ok {
 		return
 	}
-	pw.Prewarm(context.WithoutCancel(ctx), pr.User, key, s.clientCaps(pr), core.PrewarmOptions{Reason: core.PrewarmBrowse})
+	pw.Prewarm(store.DetachQueryStats(context.WithoutCancel(ctx)), pr.User, key, s.clientCaps(pr), core.PrewarmOptions{Reason: core.PrewarmBrowse})
 }
 
 func firstBrowseWarmKey(rows []model.Hub) (core.RatingKey, bool) {
@@ -639,6 +656,10 @@ func (s *Server) handleSectionHubs(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	s.serveHome(w, r, "hubs/sections/"+strconv.Itoa(sec.ID), func(_ context.Context, r *http.Request) homeBuild { return s.buildSectionHubs(r, sec) })
+}
+
+func (s *Server) buildSectionHubs(r *http.Request, sec Section) homeBuild {
 	ctx := withStoredPolicy(r.Context())
 	pr := FromContext(ctx)
 	count := countParam(r, 12)
@@ -665,11 +686,13 @@ func (s *Server) handleSectionHubs(w http.ResponseWriter, r *http.Request) {
 	} else {
 		s.log.Warn("recently added hub", "section", sec.ID, "err", err)
 	}
+	provisional := false
 	if s.d.Recommender != nil {
 		hubs, err := s.recommendSection(ctx, pr, sec.Type, pc, s.saferFetchCount(pr.User, count))
 		if err != nil {
 			s.log.Warn("section hubs", "section", sec.ID, "err", err)
 		}
+		provisional = !hasRecommendedRows(hubs)
 		for _, h := range hubs {
 			add(hubSpec{Hub: h})
 		}
@@ -689,9 +712,7 @@ func (s *Server) handleSectionHubs(w http.ResponseWriter, r *http.Request) {
 	mc.Hub = stableHomeHubs(s.arrangeHomeRows(ctx, pr, pc, sectionName, mc.Hub, layoutHubs, layoutNeutral))
 	s.log.Debug("section hubs rendered", "section", sec.ID, "user", pr.User.ID, "count", count, "rows", len(mc.Hub))
 	mc.Size = len(mc.Hub)
-	s.write(w, r, mc)
-	s.recordImpressions(pr, pc, mc.Hub, served)
-	s.warmBrowseLink(ctx, pr, mc.Hub)
+	return homeBuild{mc: mc, served: served, section: sec.ID, provisional: provisional}
 }
 
 // handleHubItems is /hubs/items?identifier=...: one hub with more items.

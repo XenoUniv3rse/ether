@@ -105,11 +105,22 @@ func (c *Catalog) storedKeys(ctx context.Context, titles []core.Title, browsable
 	return out, nil
 }
 
+// listMirrorDue reports whether a list's stored summaries are due to be saved
+// again. A list first seen by this process starts its period now: the stamps
+// live in memory, and treating every list as due after a restart rewrote each
+// detail page's lists on its first view.
 func (c *Catalog) listMirrorDue(list string) bool {
 	c.personMu.Lock()
 	defer c.personMu.Unlock()
 	at, ok := c.listMirrored[list]
-	return !ok || c.now().Sub(at) >= listMirrorEvery
+	if !ok {
+		if len(c.listMirrored) >= listMirrorMax {
+			c.listMirrored = map[string]time.Time{}
+		}
+		c.listMirrored[list] = c.now()
+		return false
+	}
+	return c.now().Sub(at) >= listMirrorEvery
 }
 
 func (c *Catalog) stampListMirrored(list string) {

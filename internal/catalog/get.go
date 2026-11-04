@@ -375,8 +375,28 @@ func (c *Catalog) fetchSeasonOpts(ctx context.Context, showID int64, season int,
 			return err
 		}
 		// Episodes from a season payload lack their own external ids, so they are
-		// not marked detail; Get(episode) enriches and marks them.
-		return c.upsertMany(ctx, eps, upsertOpts{airDates: true})
+		// not marked detail; Get(episode) enriches and marks them. A reader may
+		// be waiting for this season's episode list: store the rows now and
+		// their credits (every guest star, thousands of rows for a long show)
+		// behind it.
+		rows := make([]core.Title, len(eps))
+		credited := false
+		for i, e := range eps {
+			rows[i] = e
+			if e.Cast != nil || e.Directors != nil || e.Writers != nil || e.Crew != nil {
+				credited = true
+				rows[i].Cast, rows[i].Directors, rows[i].Writers, rows[i].Crew = nil, nil, nil, nil
+			}
+		}
+		if err := c.upsertMany(ctx, rows, upsertOpts{airDates: true}); err != nil {
+			return err
+		}
+		if credited {
+			_ = c.hydrate(ctx, seasonRefreshKey(showID, season)+":credits", 0, func(ctx context.Context) error {
+				return c.upsertMany(ctx, eps, upsertOpts{airDates: true})
+			})
+		}
+		return nil
 	}
 	// A forced refresh is synchronous; a mirrored season is served while it
 	// refreshes; a season with no episodes stored waits briefly.

@@ -724,7 +724,11 @@ func (c *Catalog) collection(ctx context.Context, tmdbCollection int64) (string,
 	if c.tmdb() != nil {
 		d, err := c.tmdb().CollectionDetails(ctx, tmdbCollection)
 		if err == nil {
-			c.saveCollection(ctx, d.ID, d.Name, d.Overview, d.PosterPath, d.BackdropPath)
+			// The page has the franchise's fields; storing them is behind it.
+			_ = c.hydrate(ctx, fmt.Sprintf("collection-save:%d", d.ID), 0, func(ctx context.Context) error {
+				c.saveCollection(ctx, d.ID, d.Name, d.Overview, d.PosterPath, d.BackdropPath)
+				return nil
+			})
 			var items []core.Title
 			for _, m := range d.Parts {
 				t := c.movieToTitle(ctx, m)

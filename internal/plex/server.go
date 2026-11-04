@@ -173,6 +173,9 @@ type Deps struct {
 	Resources *hoststat.Resources
 	// Support records neutral request and playback facts. Nil leaves playback unchanged.
 	Support *diagnostics.Recorder
+	// HomeCache serves Plex Home from memory (home_cache.go); nil builds
+	// every Home request.
+	HomeCache *HomeCacheSource
 	// TracePlayback logs HLS/transcode requests when ETHER_TRACE_PLAYBACK=1.
 	// It does not change responses.
 	TracePlayback bool
@@ -183,6 +186,7 @@ type Deps struct {
 type Server struct {
 	homeSharedMu     sync.Mutex
 	homeShared       map[string]*homeSharedEntry
+	home             *homeCache
 	trickplayMu      sync.Mutex
 	trickplayHolders map[string]*trickplay.Holder
 	trickplayClosed  bool
@@ -311,6 +315,11 @@ func NewServer(d Deps) *Server {
 	s.router = s.routes()
 	s.wg.Add(1)
 	go s.janitor()
+	if d.HomeCache != nil && d.HomeCache.Revision != nil {
+		s.home = newHomeCache()
+		s.wg.Add(1)
+		go s.homeRefresher()
+	}
 	if s.cl != nil {
 		s.cl.start()
 	}
@@ -324,6 +333,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) { s.router.Se
 func (s *Server) Closed() bool {
 	return s == nil || s.ctx.Err() != nil
 }
+
+// Done is closed when the server is closed.
+func (s *Server) Done() <-chan struct{} { return s.ctx.Done() }
 
 // Close stops background goroutines and disconnects notification clients.
 func (s *Server) Close() error {

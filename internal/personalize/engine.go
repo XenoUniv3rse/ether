@@ -646,7 +646,7 @@ func (e *Engine) homeWithPolicy(ctx context.Context, user *core.User, hc core.Hu
 	if section != "" && resolveDedupeHome(layoutDoc, u.ID, sectionName(section)) {
 		lead = e.homeLeadFor(ctx, &u, hc, layoutDoc, limit, wait, allow)
 	}
-	key := memoKey{client: hc.ClientID, session: hc.SessionID, user: u.ID, section: section, bucket: hc.Bucket(), day: day, hour: hc.Now.Hour(), limit: limit, model: m.version,
+	key := memoKey{user: u.ID, section: section, bucket: hc.Bucket(), day: day, hour: hc.Now.Hour(), limit: limit, model: m.version,
 		layout: layoutVer, stats: stats.at.UnixNano(), owner: ownerVer, cw: progressSig(inprog),
 		limits: u.MaxContentRating + "|" + fmt.Sprint(u.AllowedSections, u.IsOwner), intent: intentVer, tuning: tune.key(), exclusions: exclusionSig}
 	if lead != nil {
@@ -748,23 +748,22 @@ func (e *Engine) homeWithPolicy(ctx context.Context, user *core.User, hc core.Hu
 // new model, layout, statistics snapshot, owner rows or Continue Watching
 // change produces a new key, so entries never need invalidating.
 type memoKey struct {
-	client, session string
-	user            int64
-	section         core.MediaType
-	bucket          string
-	day             int
-	hour            int // layout schedules have hour windows
-	limit           int
-	model           uint64
-	layout          uint64
-	stats           int64
-	owner           int64
-	cw              string
-	limits          string
-	intent          uint64 // live session-intent version (#32); 0 = none
-	tuning          string // the page's resolved dials
-	lead            uint64 // what the Home leads with (Movies/TV dedupe); 0 = none
-	exclusions      string // current explicit recommendation exclusions
+	user       int64
+	section    core.MediaType
+	bucket     string
+	day        int
+	hour       int // layout schedules have hour windows
+	limit      int
+	model      uint64
+	layout     uint64
+	stats      int64
+	owner      int64
+	cw         string
+	limits     string
+	intent     uint64 // live session-intent version (#32); 0 = none
+	tuning     string // the page's resolved dials
+	lead       uint64 // what the Home leads with (Movies/TV dedupe); 0 = none
+	exclusions string // current explicit recommendation exclusions
 }
 
 type memoEntry struct {
@@ -779,7 +778,9 @@ type memoEntry struct {
 const memoTTL = 2 * time.Minute
 
 // memoMaxEntries is a count backstop; memoMaxBytes is the real bound. Keys
-// include client and session, so a busy server needs room for many screens.
+// are per viewer and device class (bucket), not per client or session: no
+// assembly input depends on them, and a viewer's new client or app session
+// must reuse the screen instead of assembling it again.
 const memoMaxEntries = 1024
 const memoMaxBytes = 32 << 20
 
@@ -888,6 +889,10 @@ func (e *Engine) allowedFor(u *core.User) func(core.MediaType) bool {
 	}
 	return func(t core.MediaType) bool { return ok[t] }
 }
+
+// LayoutVersion counts saved Home layout changes on this node (cluster
+// layout events included). Cached Home screens are stamped with it.
+func (e *Engine) LayoutVersion() uint64 { return e.layoutVersion() }
 
 // layoutVersion counts saved layout changes; it keys the row memo.
 func (e *Engine) layoutVersion() uint64 {

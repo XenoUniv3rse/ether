@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"strings"
+	"time"
 
 	"github.com/braedonsaunders/ether/internal/core"
 	"github.com/braedonsaunders/ether/internal/store"
@@ -144,19 +145,48 @@ func (s *Service) judge(ctx context.Context, pairs []feedPair, anyPerTitle bool)
 	if len(durable) == 0 {
 		return ok
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return ok
-	}
-	defer tx.Rollback()
+	// The read has its answer; remembering it is behind the read, so a
+	// browse request that judges new releases does not write.
 	now := s.now().Unix()
-	for _, f := range durable {
-		if _, err := tx.ExecContext(ctx, `INSERT INTO availability_verdicts(policy,rating_key,release_id,digest,reason,evaluated_at) VALUES(?,?,?,?,?,?) ON CONFLICT(policy,rating_key,release_id,digest) DO UPDATE SET reason=excluded.reason,evaluated_at=excluded.evaluated_at`, policy, int64(f.key), f.id, f.digest, f.why, now); err != nil {
-			return ok
+	s.writeBehind(ctx, func(ctx context.Context) {
+		tx, err := s.db.BeginTx(ctx, nil)
+		if err != nil {
+			return
 		}
-	}
-	_ = tx.Commit()
+		defer tx.Rollback()
+		for _, f := range durable {
+			if _, err := tx.ExecContext(ctx, `INSERT INTO availability_verdicts(policy,rating_key,release_id,digest,reason,evaluated_at) VALUES(?,?,?,?,?,?) ON CONFLICT(policy,rating_key,release_id,digest) DO UPDATE SET reason=excluded.reason,evaluated_at=excluded.evaluated_at`, policy, int64(f.key), f.id, f.digest, f.why, now); err != nil {
+				return
+			}
+		}
+		_ = tx.Commit()
+	})
 	return ok
+}
+
+// writeBehindSlots bounds verdict writes running behind reads.
+const writeBehindSlots = 2
+
+// writeBehind runs fn after the read that computed what it records, without
+// the read's query stats. At most writeBehindSlots run at once; a write that
+// finds them busy is dropped, and the next read that needs it judges again.
+// A Service built without New (tests) writes in line.
+func (s *Service) writeBehind(ctx context.Context, fn func(context.Context)) {
+	if s.behind == nil {
+		fn(ctx)
+		return
+	}
+	select {
+	case s.behind <- struct{}{}:
+	default:
+		return
+	}
+	bg, cancel := context.WithTimeout(store.DetachQueryStats(context.WithoutCancel(ctx)), 30*time.Second)
+	go func() {
+		defer cancel()
+		defer func() { <-s.behind }()
+		fn(bg)
+	}()
 }
 
 func verdictKey(key core.RatingKey, id, digest string) string {

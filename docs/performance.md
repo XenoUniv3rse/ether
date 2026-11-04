@@ -136,6 +136,14 @@ go run ./cmd/etherperf audit -trace /tmp/etherperf-run/trace.jsonl -db /tmp/ethe
 Run it against a copy of a real library, never against a live server's
 directory. Use `-strict` to exit 1 when a gated endpoint misses its budget.
 
+`-keep-providers` keeps the copy's Usenet, debrid and indexer settings
+(outbound stays blocked), so availability filtering runs as it does in
+production. Two production inputs stay out of reach offline: Plex Pass
+comes from plex.tv, so Plex Live TV (and Home's On Now row) is off in the
+sandbox, and TMDB is unreachable, so reads never fetch or store what the
+mirror lacks. Measuring either needs a throwaway build or a TMDB-only
+forward proxy (`HTTPS_PROXY`) that refuses every other host.
+
 ## The CI gate: library scale
 
 `TestPerformanceGate` (`internal/app/perf_gate_test.go`) runs in its own CI
@@ -319,6 +327,24 @@ catalogue's. Before, it refreshed every series' seasons on the request.
 - Per-viewer caches must key on the viewer and on the viewer-policy
   generation (`viewer_policy_epoch`), so a cached response is never served
   across viewers or after a policy change.
+- Plex Home (`/hubs`, `/hubs/promoted`, `/hubs/sections/{id}`) is served
+  from each viewer's cached screen (`internal/plex/home_cache.go`). The key
+  is the viewer and the client's effective rendering profile, never the
+  client identifier or session. A request reads one revision statement
+  (`experience.ReadHomeRevision`: the viewer's latest watch-state write,
+  playlists, watchlist, favorites, exclusions and the epoch). The viewer's
+  revision, effective policy, the owner's settings and the Home layout are
+  hard inputs: a change is rebuilt on the request. For a restricted viewer
+  the epoch is hard too. For an unrestricted viewer the epoch, catalogue
+  writes, the daypart and age refresh the screen behind the response (the
+  epoch also moves on catalogue and guide writes, millions of times on a
+  production server). Home builds never wait on TMDB; what the mirror
+  lacks is fetched behind the build and the catalogue write refreshes the
+  screen.
+- Work a read starts but does not wait for (refreshes behind the read,
+  verdicts and prewarms) runs without the request's query stats
+  (`store.DetachQueryStats`): it is not the request's statements, writes
+  or lock waits.
 
 ## Results
 
