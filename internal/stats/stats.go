@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -422,13 +423,17 @@ func (s *Service) History(ctx context.Context, since, until time.Time, user int6
 }
 
 type Bucket struct {
-	Label     string `json:"label"`
+	Label string `json:"label"`
+	// Key identifies the bucket's subject when it has one: a title's or
+	// show's rating key, or a viewer's user id (for artwork and avatars).
+	Key       string `json:"key,omitempty"`
 	Plays     int64  `json:"plays"`
 	WatchedMS int64  `json:"watchedMs"`
 	Bytes     int64  `json:"bytes"`
 }
 type Summary struct {
 	Heatmap        []HeatCell      `json:"heatmap"`
+	DailyKinds     []DailyKind     `json:"dailyKinds"`
 	DailyDelivery  []DailyDelivery `json:"dailyDelivery"`
 	PeakStreams    int             `json:"peakStreams"`
 	AvgBitrateKbps float64         `json:"avgBitrateKbps"`
@@ -516,6 +521,12 @@ func (s *Service) Summary(ctx context.Context, since, until time.Time, user int6
 			return out, err
 		}
 	}
+	if err := s.keyBuckets(ctx, &out, where, args); err != nil {
+		return out, err
+	}
+	if err := s.dailyKinds(ctx, &out, where, args, shift, day); err != nil {
+		return out, err
+	}
 	if err := s.catalogSummary(ctx, &out, args); err != nil {
 		return out, err
 	}
@@ -545,4 +556,76 @@ func (s *Service) SetCost(ctx context.Context, c Cost) error {
 	}
 	_, err := s.db.ExecContext(ctx, `INSERT INTO stats_costs(kind,id,monthly,currency) VALUES(?,?,?,?) ON CONFLICT(kind,id) DO UPDATE SET monthly=excluded.monthly,currency=excluded.currency`, c.Kind, c.ID, c.Monthly, c.Currency)
 	return err
+}
+
+// DailyKind is one day's watch time split into movies and TV episodes.
+type DailyKind struct {
+	Label     string `json:"label"`
+	MovieMS   int64  `json:"movieMs"`
+	EpisodeMS int64  `json:"episodeMs"`
+}
+
+// keyBuckets gives titles their rating key and viewers their user id (and a
+// plain name), so the console can show artwork and avatars beside them.
+func (s *Service) keyBuckets(ctx context.Context, out *Summary, where string, args []any) error {
+	if len(out.Titles) > 0 {
+		keys := map[string]string{}
+		rows, err := s.db.QueryContext(ctx, `SELECT title,CAST(MAX(rating_key) AS BIGINT)`+where+` GROUP BY title`, args...)
+		if err != nil {
+			return err
+		}
+		for rows.Next() {
+			var title string
+			var key int64
+			if err = rows.Scan(&title, &key); err != nil {
+				rows.Close()
+				return err
+			}
+			if key > 0 {
+				keys[title] = strconv.FormatInt(key, 10)
+			}
+		}
+		err = rows.Err()
+		rows.Close()
+		if err != nil {
+			return err
+		}
+		for i := range out.Titles {
+			out.Titles[i].Key = keys[out.Titles[i].Label]
+		}
+	}
+	// Viewer buckets are labelled "name (id)" so that two viewers sharing a
+	// name stay apart; split that into the name and the id.
+	for i := range out.Users {
+		l := out.Users[i].Label
+		if open := strings.LastIndex(l, " ("); open >= 0 && strings.HasSuffix(l, ")") {
+			out.Users[i].Key = l[open+2 : len(l)-1]
+			out.Users[i].Label = l[:open]
+		}
+	}
+	return nil
+}
+
+// dailyKinds splits each day's watch time into movies and episodes, on the
+// same local-day buckets as Daily.
+func (s *Service) dailyKinds(ctx context.Context, out *Summary, where string, args []any, shift int, day func(int64) string) error {
+	out.DailyKinds = []DailyKind{}
+	rows, err := s.db.QueryContext(ctx, fmt.Sprintf(`SELECT (started+%d)/86400,`+
+		`CAST(COALESCE(SUM(CASE WHEN rating_key/1000000000000000=1 THEN watched_ms ELSE 0 END),0) AS BIGINT),`+
+		`CAST(COALESCE(SUM(CASE WHEN rating_key/1000000000000000=4 THEN watched_ms ELSE 0 END),0) AS BIGINT)`, shift)+
+		where+` GROUP BY 1 ORDER BY 1 LIMIT 366`, args...)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var n int64
+		var d DailyKind
+		if err := rows.Scan(&n, &d.MovieMS, &d.EpisodeMS); err != nil {
+			return err
+		}
+		d.Label = day(n)
+		out.DailyKinds = append(out.DailyKinds, d)
+	}
+	return rows.Err()
 }

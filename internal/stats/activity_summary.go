@@ -112,8 +112,8 @@ func (s *Service) catalogSummary(ctx context.Context, out *Summary, args []any) 
 		query string
 		dst   *[]Bucket
 	}{
-		{`SELECT COALESCE(NULLIF(MAX(show.title),''),MAX(t.show_title)),COUNT(*),CAST(COALESCE(SUM(p.watched_ms),0) AS BIGINT),CAST(COALESCE(SUM(p.bytes),0) AS BIGINT)` + period + ` LEFT JOIN catalog_titles show ON show.key=t.show_key ` + filter + ` AND t.type='episode' AND t.show_key<>0 GROUP BY t.show_key HAVING COALESCE(NULLIF(MAX(show.title),''),MAX(t.show_title))<>'' ORDER BY 3 DESC,1 LIMIT 10`, &out.Shows},
-		{`SELECT g.genre,COUNT(*),CAST(COALESCE(SUM(p.watched_ms),0) AS BIGINT),CAST(COALESCE(SUM(p.bytes),0) AS BIGINT)` + period + ` JOIN catalog_genres g ON g.key=CASE WHEN t.type='episode' THEN t.show_key ELSE t.key END ` + filter + ` GROUP BY g.genre ORDER BY 3 DESC,1 LIMIT 10`, &out.Genres},
+		{`SELECT COALESCE(NULLIF(MAX(show.title),''),MAX(t.show_title)),CAST(t.show_key AS TEXT),COUNT(*),CAST(COALESCE(SUM(p.watched_ms),0) AS BIGINT),CAST(COALESCE(SUM(p.bytes),0) AS BIGINT)` + period + ` LEFT JOIN catalog_titles show ON show.key=t.show_key ` + filter + ` AND t.type='episode' AND t.show_key<>0 GROUP BY t.show_key HAVING COALESCE(NULLIF(MAX(show.title),''),MAX(t.show_title))<>'' ORDER BY 3 DESC,1 LIMIT 10`, &out.Shows},
+		{`SELECT g.genre,'',COUNT(*),CAST(COALESCE(SUM(p.watched_ms),0) AS BIGINT),CAST(COALESCE(SUM(p.bytes),0) AS BIGINT)` + period + ` JOIN catalog_genres g ON g.key=CASE WHEN t.type='episode' THEN t.show_key ELSE t.key END ` + filter + ` GROUP BY g.genre ORDER BY 3 DESC,1 LIMIT 10`, &out.Genres},
 	}
 	for _, q := range queries {
 		*q.dst = []Bucket{}
@@ -123,7 +123,7 @@ func (s *Service) catalogSummary(ctx context.Context, out *Summary, args []any) 
 		}
 		for rows.Next() {
 			var b Bucket
-			if err = rows.Scan(&b.Label, &b.Plays, &b.WatchedMS, &b.Bytes); err != nil {
+			if err = rows.Scan(&b.Label, &b.Key, &b.Plays, &b.WatchedMS, &b.Bytes); err != nil {
 				rows.Close()
 				return err
 			}
