@@ -73,7 +73,14 @@ func (s *Server) preferredSelection(ctx context.Context, u *core.User, key core.
 		sel.audio, sel.audioSet = p.Audio, true
 	}
 	if !sel.subtitleSet {
-		sel.subtitle, sel.subtitleSet = p.Subtitle, true
+		// An automatic pick takes a text track over an image track of the
+		// same language and kind: metadata and playback both choose here,
+		// so the client is shown the track that plays (#313).
+		sub := p.Subtitle
+		if text := textForImageSubtitle(info, sub); text >= 0 {
+			sub = text
+		}
+		sel.subtitle, sel.subtitleSet = sub, true
 	}
 	return sel
 }
