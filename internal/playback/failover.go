@@ -120,6 +120,14 @@ func (m *Manager) openInitial(ctx context.Context, s *session, profile core.Qual
 					if errors.Is(lastErr, core.ErrDebridAuth) {
 						return nil, fmt.Errorf("%w (last failure: %v): %w", err, lastErr, core.ErrDebridAuth)
 					}
+					if !errors.Is(err, core.ErrNotCached) && !errors.Is(err, core.ErrNoSources) {
+						switch {
+						case errors.Is(lastErr, context.DeadlineExceeded):
+							return nil, fmt.Errorf("%w: %w", err, context.DeadlineExceeded)
+						case errors.Is(lastErr, core.ErrSourceUnavailable), errors.Is(lastErr, core.ErrArticleMissing), errors.Is(lastErr, core.ErrArticleCorrupt), errors.Is(lastErr, core.ErrReleaseRejected):
+							return nil, fmt.Errorf("%w: %w", err, core.ErrSourceUnavailable)
+						}
+					}
 					return nil, fmt.Errorf("%w (last failure: %v)", err, lastErr)
 				}
 				return nil, err
@@ -199,6 +207,10 @@ func releasesFailed(n int, lastErr error, allUncached bool) error {
 		// Keep the typed last cause, including queued/refused/limit and
 		// UncachedError's settings, for the protocol adapter to explain.
 		return fmt.Errorf("%d releases failed: %w", n, lastErr)
+	case errors.Is(lastErr, context.DeadlineExceeded):
+		return fmt.Errorf("%w: %d releases failed: %w", core.ErrNotAvailable, n, context.DeadlineExceeded)
+	case errors.Is(lastErr, core.ErrSourceUnavailable), errors.Is(lastErr, core.ErrArticleMissing), errors.Is(lastErr, core.ErrArticleCorrupt), errors.Is(lastErr, core.ErrReleaseRejected):
+		return fmt.Errorf("%w: %d releases failed: %w", core.ErrNotAvailable, n, core.ErrSourceUnavailable)
 	}
 	return fmt.Errorf("%w: %d releases failed (last: %v)", core.ErrNotAvailable, n, lastErr)
 }

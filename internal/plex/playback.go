@@ -49,17 +49,17 @@ const (
 	msgNoSources        = "Ether has no sources to search: add a Stremio addon or Torznab indexer under Sources › Indexers."
 	msgNoTorrentSources = "Ether streams through your debrid account but has no torrent indexer to search: add a Stremio addon or Torznab indexer under Sources › Indexers."
 	msgDebridAuth       = "Your debrid service rejected Ether's API key: check the account under Sources › Debrid."
-	msgNotCached        = "No cached release on your debrid account right now: every release found was uncached or blocked by the provider. Try again later."
-	msgDownloadQueued   = "Not cached yet: Ether sent it to your debrid service to download. Try again in a few minutes."
+	msgNotCached        = "No cached release is available on your debrid service."
+	msgDownloadQueued   = "Not cached yet. Sent to your debrid service to download; try again later."
 	// Every release is a torrent no debrid account holds, with the owner's
 	// "Cached torrents only" on: nothing downloads until it is turned off.
-	msgNotCachedOnly       = "No cached copy of this title on your debrid service. Turn off Cached torrents only under Sources › Debrid to download it, or try again later."
-	msgNotCachedOnlyNoNZB  = "No cached copy of this title on your debrid service, and Usenet found no release. Turn off Cached torrents only under Sources › Debrid to download it, or try again later."
-	msgNotCachedOnlyBadNZB = "No cached copy of this title on your debrid service, and the Usenet releases found are incomplete. Turn off Cached torrents only under Sources › Debrid to download it, or try again later."
-	msgNotCachedNoNZB      = "No cached release on your debrid account right now, and Usenet found no release. Try again later."
-	msgNotCachedBadNZB     = "No cached release on your debrid account right now, and the Usenet releases found are incomplete. Try again later."
-	msgDownloadRefused     = "Not cached, and your debrid service would not download it. Try again later, or pick another version."
-	msgDownloadLimit       = "Not cached, and your debrid account is at its limit of active downloads, so nothing new can start. Remove finished or stalled downloads from the account, or try again later."
+	msgNotCachedOnly       = "No cached copy. Turn off Cached torrents only to download it."
+	msgNotCachedOnlyNoNZB  = "No cached copy or Usenet release. Turn off Cached torrents only to download it."
+	msgNotCachedOnlyBadNZB = "No cached copy; Usenet releases are incomplete. Turn off Cached torrents only to download it."
+	msgNotCachedNoNZB      = "No cached copy or Usenet release is available."
+	msgNotCachedBadNZB     = "No cached copy; Usenet releases are incomplete."
+	msgDownloadRefused     = "Not cached, and your debrid service refused the download."
+	msgDownloadLimit       = "Not cached. Your debrid account has reached its active download limit."
 )
 
 func playbackMessage(err error) string {
@@ -76,6 +76,10 @@ func playbackMessage(err error) string {
 		return msgDownloadQueued
 	case errors.As(err, new(*core.UncachedError)), onlyNotCached(err):
 		return notCachedMessage(err)
+	case errors.Is(err, context.DeadlineExceeded):
+		return "The source timed out. Try again later."
+	case errors.Is(err, core.ErrSourceUnavailable), errors.Is(err, core.ErrArticleMissing), errors.Is(err, core.ErrArticleCorrupt), errors.Is(err, core.ErrReleaseRejected):
+		return "The source could not be opened or is incomplete. Try again later."
 	case errors.Is(err, core.ErrNotAvailable):
 		return msgNotAvailable
 	case errors.Is(err, core.ErrStreamLimit):
@@ -99,7 +103,29 @@ func (s *Server) writeStartErr(w http.ResponseWriter, r *http.Request, pr *Reque
 	if pr != nil && pr.User != nil {
 		s.setTermination(trackID(pr.User.ID, pr.ClientID, pr.SessionID), playbackMessage(err))
 	}
-	s.writeErr(w, r, err)
+	status := http.StatusInternalServerError
+	switch {
+	case errors.Is(err, core.ErrNotFound):
+		status = http.StatusNotFound
+	case errors.Is(err, core.ErrUnauthorized):
+		status = http.StatusUnauthorized
+	case errors.Is(err, core.ErrStreamLimit), errors.Is(err, transcode.ErrTooManyTranscodes):
+		w.Header().Set("Retry-After", "5")
+		status = http.StatusServiceUnavailable
+	case errors.Is(err, core.ErrNotAvailable), errors.Is(err, core.ErrUnreleased), errors.Is(err, core.ErrDebridAuth), errors.Is(err, core.ErrSourceUnavailable), errors.Is(err, context.DeadlineExceeded), errors.Is(err, core.ErrPrepareSlow):
+		w.Header().Set("Retry-After", notAvailableRetryAfter)
+		status = http.StatusServiceUnavailable
+	}
+	writePlaybackStatus(w, status)
+}
+
+// PMS does not specify an error body for start responses. Do not send HTML
+// where the client expected a playlist, manifest, or media bytes.
+func writePlaybackStatus(w http.ResponseWriter, status int) {
+	w.Header().Del("Content-Type")
+	w.Header().Del("Content-Encoding")
+	w.Header().Set("Content-Length", "0")
+	w.WriteHeader(status)
 }
 
 // notCachedMessage words a failure whose every cause is core.ErrNotCached:
@@ -1165,12 +1191,12 @@ func (s *Server) handleStartHLS(w http.ResponseWriter, r *http.Request) {
 	defer unlockOwner()
 
 	if s.d.Transcoder == nil || s.d.Playback == nil {
-		writeHTTPError(w, http.StatusServiceUnavailable)
+		writePlaybackStatus(w, http.StatusServiceUnavailable)
 		return
 	}
 	p, err := s.parsePlayRequest(r)
 	if err != nil {
-		writeHTTPError(w, http.StatusBadRequest)
+		writePlaybackStatus(w, http.StatusBadRequest)
 		return
 	}
 	unlockEncoder, lockErr := s.lockEncoder(ctx, p.sessionID)
@@ -1180,12 +1206,12 @@ func (s *Server) handleStartHLS(w http.ResponseWriter, r *http.Request) {
 	defer unlockEncoder()
 
 	if s.playbackOwners.Stale(pr.User.ID, pr.ClientID, p.key, pr.SessionID) {
-		writeHTTPError(w, http.StatusGone)
+		writePlaybackStatus(w, http.StatusGone)
 		return
 	}
 
 	if !s.transcodes.claim(p.sessionID, pr.User.ID, pr.ClientID, s.now()) {
-		writeHTTPError(w, http.StatusForbidden)
+		writePlaybackStatus(w, http.StatusForbidden)
 		return
 	}
 	if err, failed := s.transcodes.takeFailure(p.sessionID, pr.User.ID, p.key, s.now()); failed {
@@ -1212,8 +1238,7 @@ func (s *Server) handleStartHLS(w http.ResponseWriter, r *http.Request) {
 		}
 		entry, _ = s.transcodes.get(p.sessionID)
 	} else if dec, err := s.publishBrokerPlayback(ctx, pr, replayPlay(p, entry), ps); err != nil {
-		s.log.Info("playback broker publish failed", "key", p.key, "err", err)
-		writeHTTPError(w, http.StatusServiceUnavailable)
+		s.writeStartErr(w, r, pr, err)
 		return
 	} else {
 		entry.decision = dec
@@ -1253,8 +1278,7 @@ func (s *Server) handleStartHLS(w http.ResponseWriter, r *http.Request) {
 		StartOffset: p.offset,
 	})
 	if err != nil {
-		s.log.Warn("start HLS session", "session", p.sessionID, "key", p.key, "err", err)
-		writeHTTPError(w, http.StatusInternalServerError)
+		s.writeStartErr(w, r, pr, err)
 		return
 	}
 	s.bindTranscodeStarted(entry, dec, p.offset)
