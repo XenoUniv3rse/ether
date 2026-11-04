@@ -16,26 +16,38 @@ import (
 
 // ServeManifest must read the media info under the session lock: a
 // concurrent failover (SwapInput) replaces it. Run with -race.
+//
+// The swaps run one after another: two overlapping swaps are a real
+// conflict that SwapInput rejects with core.ErrReplacementSuperseded,
+// whereas this test is about manifest reads racing each swap.
 func TestDASHManifestDuringSwapInputIsRaceFree(t *testing.T) {
 	fr := newFakeRunner()
 	m := newTestManager(t, fr, config.Transcode{})
 	req := dashRequest(t, "manifest-swap", time.Hour)
 	s := startDASHSession(t, m, req)
+	swapped := make(chan struct{})
 	var wg sync.WaitGroup
 	for i := 0; i < 4; i++ {
-		wg.Add(2)
+		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			rec := httptest.NewRecorder()
-			s.ServeManifest(rec, httptest.NewRequest(http.MethodGet, "/manifest", nil))
-		}()
-		go func() {
-			defer wg.Done()
-			if err := s.SwapInput(context.Background(), "http://127.0.0.1:1/source/b", req.Info, 12*time.Second); err != nil {
-				t.Error(err)
+			for {
+				rec := httptest.NewRecorder()
+				s.ServeManifest(rec, httptest.NewRequest(http.MethodGet, "/manifest", nil))
+				select {
+				case <-swapped:
+					return
+				default:
+				}
 			}
 		}()
 	}
+	for i := 0; i < 4; i++ {
+		if err := s.SwapInput(context.Background(), "http://127.0.0.1:1/source/b", req.Info, 12*time.Second); err != nil {
+			t.Error(err)
+		}
+	}
+	close(swapped)
 	wg.Wait()
 }
 
