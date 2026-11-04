@@ -211,14 +211,7 @@ func LoadDir(dir string) (*Package, error) {
 		if len(result.Errors) != 0 {
 			return nil, fmt.Errorf("kit: bundle: %s", result.Errors[0].Text)
 		}
-		var doc map[string]any
-		if err := json.Unmarshal(manRaw, &doc); err != nil {
-			return nil, err
-		}
-		ether := doc["ether"].(map[string]any)
-		runtime := ether["runtime"].(map[string]any)
-		runtime["entry"] = "dist/plugin.js"
-		manRaw, err = json.Marshal(doc)
+		manRaw, err = withEntry(manRaw, bundleEntry)
 		if err != nil {
 			return nil, err
 		}
@@ -226,7 +219,7 @@ func LoadDir(dir string) (*Package, error) {
 		if err != nil {
 			return nil, err
 		}
-		files["dist/plugin.js"] = result.OutputFiles[0].Contents
+		files[bundleEntry] = result.OutputFiles[0].Contents
 		files["manifest.json"] = manRaw
 		pkg.ManifestRaw, pkg.Manifest = manRaw, man
 	}
@@ -336,14 +329,24 @@ func Pack(pkg *Package) ([]byte, error) {
 				outFiles[entry+".map"] = smap
 			}
 		} else if isTSPath(entry) {
+			// The bundle goes to a .js entry and the manifest follows it,
+			// keeping the source beside it. Left at the .ts path, the host
+			// would compile the bundle again and its exports would vanish
+			// inside the second wrapper.
 			srcMap := collectSources(pkg.Files)
 			js, smap, diags := wasm.Compile(srcMap, entry)
 			if err := compileDiagsError(diags); err != nil {
 				return nil, err
 			}
-			outFiles[entry] = js
+			manRaw, err := withEntry(pkg.ManifestRaw, bundleEntry)
+			if err != nil {
+				return nil, err
+			}
+			outFiles["manifest.json"] = manRaw
+			outFiles[bundleEntry] = js
+			delete(outFiles, bundleEntry+".map")
 			if len(smap) > 0 {
-				outFiles[entry+".map"] = smap
+				outFiles[bundleEntry+".map"] = smap
 			}
 		}
 	}
@@ -374,6 +377,24 @@ func Pack(pkg *Package) ([]byte, error) {
 		return nil, err
 	}
 	return buf.Bytes(), nil
+}
+
+// bundleEntry is where a package's compiled TypeScript bundle lives.
+const bundleEntry = "dist/plugin.js"
+
+// withEntry returns manifest JSON whose hosted runtime entry is entry.
+func withEntry(manRaw []byte, entry string) ([]byte, error) {
+	var doc map[string]any
+	if err := json.Unmarshal(manRaw, &doc); err != nil {
+		return nil, err
+	}
+	ether, _ := doc["ether"].(map[string]any)
+	runtime, _ := ether["runtime"].(map[string]any)
+	if runtime == nil {
+		return nil, fmt.Errorf("kit: manifest runtime is missing")
+	}
+	runtime["entry"] = entry
+	return json.Marshal(doc)
 }
 
 func isTSPath(p string) bool {
