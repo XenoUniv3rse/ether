@@ -120,7 +120,7 @@ describe("Live TV studio", () => {
       })),
     );
     renderLiveTV();
-    const lineup = await screen.findByRole("complementary", { name: "Lineup" });
+    const lineup = await screen.findByRole("grid", { name: "Programme guide" });
     await within(lineup).findByRole("button", { name: "1 Station 1" }, WAIT);
     fireEvent.change(screen.getByRole("searchbox", { name: "Search channels" }), {
       target: { value: "Weather" },
@@ -304,7 +304,7 @@ describe("Live TV studio", () => {
     });
     renderLiveTV("/livetv/guide-data");
     expect(
-      await screen.findByText(/0 of 1 on-air channels have listings/, {}, WAIT),
+      await screen.findByText(/1 of 1 need a guide/, {}, WAIT),
     ).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: /Map guide for News 24/ }));
     fireEvent.click(await screen.findByRole("button", { name: /News 24 HD/ }, WAIT));
@@ -419,8 +419,8 @@ describe("Live TV studio", () => {
     fireEvent.click(screen.getByRole("button", { name: /Create channel/ }));
     await waitFor(() => expect(sent(calls, "POST", /\/livetv\/channels$/)).toHaveLength(1));
     expect(await screen.findByLabelText("Name")).toHaveValue("Movie night");
-    const lineup = screen.getByRole("complementary", { name: "Lineup" });
-    expect(lineup.className).toContain("lg:z-[60]");
+    const lineup = screen.getByRole("grid", { name: "Programme guide" });
+    expect(lineup.closest(".lg\\:z-\\[60\\]")).not.toBeNull();
     fireEvent.click(within(lineup).getByRole("button", { name: "2 News 24" }));
     expect(await screen.findByLabelText("Name")).toHaveValue("News 24");
     fireEvent.click(screen.getByRole("tab", { name: "Details" }));

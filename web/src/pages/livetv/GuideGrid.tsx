@@ -1,6 +1,22 @@
-import { Button, cn } from "@braedonsaunders/appkit-ui";
-import { ChevronLeft, ChevronRight, Maximize2, Minimize2, Star, Tv } from "lucide-react";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Badge, Button, cn } from "@braedonsaunders/appkit-ui";
+import {
+  AlertTriangle,
+  ChevronLeft,
+  ChevronRight,
+  Maximize2,
+  Minimize2,
+  Star,
+  Tv,
+} from "lucide-react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import { Segmented } from "../../components/fields";
 import { Artwork } from "../../components/Artwork";
 import { getLocale, t, tn } from "../../i18n";
@@ -11,6 +27,8 @@ import { MINUTE, clock, hueOf, onNow, progress, type Channel, type Programme } f
 const ROW = 60;
 const HEADER = 36;
 const CH_COL = 208;
+/** The Live TV page's lineup column: a third of the guide, never cramped. */
+const LINEUP_MIN = 260;
 const ZOOM = { wide: 5, normal: 3.5, tight: 2.2 } as const;
 export type Zoom = keyof typeof ZOOM;
 
@@ -30,6 +48,11 @@ export function GuideGrid({
   onShift,
   onNow: jumpNow,
   loading,
+  head,
+  covered,
+  onToggleFavorite,
+  emptyHint,
+  lineupOnly = false,
 }: {
   channels: Channel[];
   guide: Map<string, Programme[]>;
@@ -41,14 +64,33 @@ export function GuideGrid({
   onShift: (hours: number) => void;
   onNow: () => void;
   loading: boolean;
+  /**
+   * The lineup view: the channel column becomes the page's lineup (a third
+   * of the width, with favourites, what's on and guide gaps) and head sits
+   * above it, beside the guide's toolbar. One scroller keeps every channel
+   * row level with its listings.
+   */
+  head?: ReactNode;
+  covered?: (c: Channel) => boolean | undefined;
+  onToggleFavorite?: (c: Channel) => void;
+  /** Shown instead of the default when there are no rows. */
+  emptyHint?: ReactNode;
+  /** Only the lineup column, e.g. beside an open channel drawer. */
+  lineupOnly?: boolean;
 }) {
+  const lineup = head !== undefined;
   const [zoom, setZoom] = useState<Zoom>("normal");
   const ppm = ZOOM[zoom];
   const start = from.getTime();
   const minutes = (until.getTime() - start) / MINUTE;
   const width = minutes * ppm;
   const scroller = useRef<HTMLDivElement>(null);
-  const [view, setView] = useState({ top: 0, height: 800, left: 0 });
+  const [view, setView] = useState({ top: 0, height: 800, left: 0, width: 1200 });
+  const chCol = !lineup
+    ? CH_COL
+    : lineupOnly
+      ? Math.max(view.width, 1)
+      : Math.max(LINEUP_MIN, Math.round(view.width / 3));
   const x = (ms: number) => ((ms - start) / MINUTE) * ppm;
   const nowX = x(now);
   const nowVisible = now >= start && now <= until.getTime();
@@ -74,7 +116,12 @@ export function GuideGrid({
     const el = scroller.current;
     if (!el) return;
     const measure = () =>
-      setView({ top: el.scrollTop, height: el.clientHeight, left: el.scrollLeft });
+      setView({
+        top: el.scrollTop,
+        height: el.clientHeight,
+        left: el.scrollLeft,
+        width: el.clientWidth,
+      });
     measure();
     const ro = typeof ResizeObserver !== "undefined" ? new ResizeObserver(measure) : null;
     ro?.observe(el);
@@ -138,7 +185,19 @@ export function GuideGrid({
         pseudoFull && "fixed inset-0 z-[100] h-dvh",
       )}
     >
-      <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-border bg-surface px-3 py-2 sm:px-4">
+      <div className={cn("flex shrink-0", lineup && "border-b border-border")}>
+      {lineup ? (
+        <div className="shrink-0 border-r border-border bg-bg-subtle" style={{ width: chCol }}>
+          {head}
+        </div>
+      ) : null}
+      <div
+        className={cn(
+          "flex min-w-0 flex-1 flex-wrap items-center gap-2 bg-surface px-3 py-2 sm:px-4",
+          lineup ? "self-stretch" : "border-b border-border",
+          lineupOnly && "hidden",
+        )}
+      >
         <div className="mr-auto flex items-baseline gap-2">
           <h2 className="text-sm font-semibold text-fg">{t("Guide")}</h2>
           <span className="text-xs text-fg-muted">
@@ -191,6 +250,7 @@ export function GuideGrid({
           {full ? <Minimize2 size={15} /> : <Maximize2 size={15} />}
         </Button>
       </div>
+      </div>
 
       <div
         ref={scroller}
@@ -202,13 +262,14 @@ export function GuideGrid({
             top: e.currentTarget.scrollTop,
             height: e.currentTarget.clientHeight,
             left: e.currentTarget.scrollLeft,
+            width: e.currentTarget.clientWidth,
           })
         }
         className="app-scroll relative min-h-0 flex-1 overflow-auto bg-bg"
       >
         <div
           className="relative"
-          style={{ width: CH_COL + width, height: HEADER + channels.length * ROW }}
+          style={{ width: chCol + width, height: HEADER + channels.length * ROW }}
         >
           {/* time ruler */}
           <div
@@ -217,7 +278,7 @@ export function GuideGrid({
           >
             <div
               className="sticky left-0 z-40 flex shrink-0 items-center border-r border-border bg-surface px-3 text-[11px] font-semibold uppercase tracking-wider text-fg-subtle"
-              style={{ width: CH_COL }}
+              style={{ width: chCol }}
             >
               {t("Channel")}
             </div>
@@ -255,7 +316,7 @@ export function GuideGrid({
           {/* half-hour gridlines */}
           <div
             className="pointer-events-none absolute bottom-0 z-0"
-            style={{ left: CH_COL, top: HEADER, width }}
+            style={{ left: chCol, top: HEADER, width }}
             aria-hidden
           >
             {ticks.map((tick) => (
@@ -281,8 +342,20 @@ export function GuideGrid({
                   "absolute left-0 flex border-b border-border/60",
                   on ? "bg-primary-subtle/40" : i % 2 ? "bg-bg" : "bg-bg-subtle/40",
                 )}
-                style={{ top: HEADER + i * ROW, height: ROW, width: CH_COL + width }}
+                style={{ top: HEADER + i * ROW, height: ROW, width: chCol + width }}
               >
+                {lineup ? (
+                  <LineupCell
+                    channel={c}
+                    live={live}
+                    hasGuide={covered?.(c)}
+                    on={on}
+                    now={now}
+                    width={chCol}
+                    onSelect={onSelect}
+                    onToggleFavorite={onToggleFavorite}
+                  />
+                ) : (
                 <button
                   type="button"
                   role="rowheader"
@@ -291,7 +364,7 @@ export function GuideGrid({
                     "sticky left-0 z-20 flex shrink-0 items-center gap-2.5 border-r border-border px-3 text-left transition-colors hover:bg-surface-hover",
                     on ? "bg-primary-subtle" : "bg-surface",
                   )}
-                  style={{ width: CH_COL }}
+                  style={{ width: chCol }}
                   aria-label={t("Channel {number} {name}", { number: c.number, name: c.name })}
                 >
                   <span className="w-7 shrink-0 text-right font-mono text-[11px] tabular-nums text-fg-subtle">
@@ -317,6 +390,7 @@ export function GuideGrid({
                     </span>
                   </span>
                 </button>
+                )}
                 <div className="relative" style={{ width }}>
                   {ps.length === 0 ? (
                     <div
@@ -416,12 +490,16 @@ export function GuideGrid({
             // channel column (z-20), so scrolling never draws it over names.
             <div
               className="pointer-events-none absolute bottom-0 z-[15] w-0.5 bg-danger shadow-[0_0_8px] shadow-danger/60"
-              style={{ left: CH_COL + nowX - 1, top: HEADER }}
+              style={{ left: chCol + nowX - 1, top: HEADER }}
               aria-hidden
             />
           ) : null}
         </div>
-        {channels.length === 0 ? (
+        {channels.length === 0 && emptyHint ? (
+          <div className="absolute inset-0 top-9 grid place-items-center p-8 text-center">
+            <div className="max-w-sm">{emptyHint}</div>
+          </div>
+        ) : channels.length === 0 ? (
           <div className="absolute inset-0 top-9 grid place-items-center p-8 text-center">
             <div className="max-w-sm space-y-2">
               <Tv className="mx-auto text-fg-subtle" size={28} />
@@ -435,6 +513,113 @@ export function GuideGrid({
           </div>
         ) : null}
       </div>
+    </div>
+  );
+}
+
+/** A lineup row's channel cell: what the Live TV lineup shows for a channel. */
+function LineupCell({
+  channel: c,
+  live,
+  hasGuide,
+  on,
+  now,
+  width,
+  onSelect,
+  onToggleFavorite,
+}: {
+  channel: Channel;
+  live: Programme | undefined;
+  hasGuide: boolean | undefined;
+  on: boolean;
+  now: number;
+  width: number;
+  onSelect: (id: string) => void;
+  onToggleFavorite?: (c: Channel) => void;
+}) {
+  return (
+    <div
+      role="rowheader"
+      className={cn(
+        "group sticky left-0 z-20 flex shrink-0 items-center border-r border-border",
+        on ? "bg-primary-subtle" : "bg-surface",
+      )}
+      style={{ width }}
+    >
+      <button
+        type="button"
+        onClick={() => onSelect(c.id)}
+        aria-current={on ? "true" : undefined}
+        aria-label={`${c.number} ${c.name}`}
+        className={cn(
+          "flex h-full min-w-0 flex-1 items-center gap-2.5 px-3 text-left transition-colors hover:bg-surface-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/50",
+          !c.enabled && "opacity-55",
+        )}
+      >
+        <span
+          className={cn(
+            "w-9 shrink-0 text-right font-mono text-xs tabular-nums",
+            on ? "text-primary" : "text-fg-subtle",
+          )}
+        >
+          {c.number}
+        </span>
+        <ChannelLogo name={c.name} logo={c.logo} seed={c.id} size={34} />
+        <span className="min-w-0 flex-1">
+          <span className="flex items-center gap-1">
+            <span className={cn("truncate text-sm font-medium", on ? "text-primary" : "text-fg")}>
+              {c.name}
+            </span>
+            {c.health === "unavailable" ? (
+              <Badge variant="secondary">{t("Unavailable")}</Badge>
+            ) : null}
+            {c.favorite ? (
+              <Star
+                size={11}
+                className="shrink-0 fill-warning text-warning"
+                aria-label={t("Favourite")}
+              />
+            ) : null}
+          </span>
+          {live ? (
+            <span className="block">
+              <span className="block truncate text-xs text-fg-muted">{live.item.title}</span>
+              <span className="mt-1 block h-0.5 overflow-hidden rounded-full bg-border">
+                <span
+                  className="block h-full rounded-full bg-primary/70"
+                  style={{ width: `${progress(live, now) * 100}%` }}
+                />
+              </span>
+            </span>
+          ) : (
+            <span className="block truncate text-xs text-fg-subtle">
+              {!c.enabled
+                ? t("Off air")
+                : hasGuide === false
+                  ? t("No guide data")
+                  : c.group || (c.kind === "virtual" ? t("Virtual") : t("Live"))}
+            </span>
+          )}
+        </span>
+        {hasGuide === false && c.enabled ? (
+          <AlertTriangle size={13} className="shrink-0 text-warning" aria-label={t("No guide data")} />
+        ) : null}
+      </button>
+      {onToggleFavorite ? (
+        <button
+          type="button"
+          onClick={() => onToggleFavorite(c)}
+          aria-label={
+            c.favorite
+              ? t("Unfavourite {channel}", { channel: c.name })
+              : t("Favourite {channel}", { channel: c.name })
+          }
+          aria-pressed={c.favorite}
+          className="absolute right-2 top-1/2 hidden -translate-y-1/2 rounded-md bg-surface p-1 text-fg-subtle shadow-sm hover:text-warning focus-visible:block group-hover:block"
+        >
+          <Star size={13} className={cn(c.favorite && "fill-warning text-warning")} />
+        </button>
+      ) : null}
     </div>
   );
 }

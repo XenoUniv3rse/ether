@@ -2,7 +2,6 @@ import { Badge, Button, Input, Popover, cn, toast } from "@braedonsaunders/appki
 import {
   AlertTriangle,
   ArrowRight,
-  CalendarPlus,
   CalendarRange,
   CheckCircle2,
   Link2,
@@ -197,10 +196,8 @@ function guideSourceStatus(s: Source, used: number, now: number): { text: string
 export function GuideSourceList({
   lineup,
   sources,
-  coverage,
   selected,
   onSelect,
-  onAddGuideSource,
   now,
   query = "",
 }: {
@@ -208,17 +205,11 @@ export function GuideSourceList({
   query?: string;
   lineup: Channel[];
   sources: Source[];
-  coverage: Map<string, Coverage> | null;
   /** The selected guide source id, or null for All guides. */
   selected: string | null;
   onSelect: (id: string | null) => void;
-  onAddGuideSource: () => void;
   now: number;
 }) {
-  const has = (c: Channel) => (coverage?.get(c.id)?.programmes ?? 0) > 0;
-  const live = lineup.filter((c) => c.enabled && c.kind === "iptv");
-  const missing = coverage === null ? null : live.filter((c) => !has(c)).length;
-  const pct = missing === null || !live.length ? 1 : (live.length - missing) / live.length;
   const needle = query.trim().toLowerCase();
   const guides = sources
     .filter(isGuideSource)
@@ -226,56 +217,16 @@ export function GuideSourceList({
 
   return (
     <div className="space-y-4 p-3 sm:p-4">
-      <button
-        type="button"
-        onClick={() => onSelect(null)}
-        aria-current={selected === null ? "true" : undefined}
-        className={cn(
-          "w-full space-y-2.5 rounded-xl border bg-surface p-3 text-left shadow-xs transition-colors hover:border-border-strong",
-          selected === null ? "border-primary/40 ring-1 ring-primary/30" : "border-border",
-        )}
-      >
-        <span className="flex items-start gap-3">
-          <span className="min-w-0 flex-1">
-            <span className="block text-sm font-semibold text-fg">{t("All guides")}</span>
-            <span className="block text-xs text-fg-muted">
-              {missing === null
-                ? t("Checking listings…")
-                : missing
-                  ? t("{covered} of {total} on-air channels have listings", {
-                      covered: formatNumber(live.length - missing),
-                      total: formatNumber(live.length),
-                    })
-                  : tn(
-                      live.length,
-                      "Your {count} on-air channel has listings",
-                      "All {count} on-air channels have listings",
-                    )}
-            </span>
-          </span>
-          <span className="text-lg font-semibold tabular-nums text-fg">
-            {missing === null ? "—" : `${Math.round(pct * 100)}%`}
-          </span>
-        </span>
-        <span className="block h-1.5 overflow-hidden rounded-full bg-bg-subtle">
-          <span
-            className={cn(
-              "block h-full rounded-full transition-all",
-              pct >= 0.999 ? "bg-success" : "bg-gradient-to-r from-primary to-info",
-            )}
-            style={{ width: `${pct * 100}%` }}
-          />
-        </span>
-      </button>
-
       <div className="space-y-1.5">
-        <div className="flex items-center gap-2 px-1">
+        <div className="flex min-h-7 items-center gap-2 px-1">
           <h2 className="flex-1 text-[11px] font-semibold uppercase tracking-wider text-fg-subtle">
             {t("Guide sources")}
           </h2>
-          <Button size="sm" variant="ghost" onClick={onAddGuideSource}>
-            <CalendarPlus size={13} /> {t("Add guide")}
-          </Button>
+          {selected !== null ? (
+            <Button size="sm" variant="ghost" onClick={() => onSelect(null)}>
+              {t("Show all guides")}
+            </Button>
+          ) : null}
         </div>
         {guides.length === 0 ? (
           <p className="px-1 text-xs text-fg-muted">
@@ -292,7 +243,7 @@ export function GuideSourceList({
             <button
               key={s.id}
               type="button"
-              onClick={() => onSelect(s.id)}
+              onClick={() => onSelect(on ? null : s.id)}
               aria-current={on ? "true" : undefined}
               className={cn(
                 "flex w-full items-start gap-3 rounded-xl border bg-surface p-3 text-left transition-colors hover:border-border-strong",
@@ -339,7 +290,6 @@ export function GuideWorkbench({
   coverage,
   source,
   onMapChannel,
-  onAddGuideSource,
   onEditSource,
   onReload,
   now,
@@ -353,7 +303,6 @@ export function GuideWorkbench({
   /** The Live TV search: narrows the channel mapping list (not the coverage figures). */
   query?: string;
   onMapChannel: (id: string) => void;
-  onAddGuideSource: () => void;
   onEditSource: (id: string) => void;
   onReload: () => Promise<void>;
   now: number;
@@ -462,7 +411,12 @@ export function GuideWorkbench({
 
   return (
     <div className="mx-auto max-w-5xl space-y-5 p-3 sm:p-6">
-      <section className="relative overflow-hidden rounded-2xl border border-border bg-surface p-5 shadow-xs">
+      <section
+        className={cn(
+          "relative overflow-hidden rounded-2xl border border-border bg-surface shadow-xs",
+          source ? "p-5" : "px-4 py-3",
+        )}
+      >
         <div
           className="pointer-events-none absolute -right-16 -top-24 size-72 rounded-full bg-primary/10 blur-3xl"
           aria-hidden
@@ -507,48 +461,37 @@ export function GuideWorkbench({
             ) : null}
           </div>
         ) : (
-          <>
-            <div className="relative flex flex-wrap items-center gap-5">
-              <div>
-                <p className="text-xs font-semibold uppercase tracking-wider text-fg-subtle">
-                  {t("Guide data")}
-                </p>
-                <p className="mt-1 text-3xl font-semibold tracking-tight tabular-nums text-fg">
-                  {coverage === null ? "—" : `${Math.round(pct * 100)}%`}
-                  <span className="ml-2 text-sm font-normal text-fg-muted">
-                    {t("of live IPTV channels have listings")}
-                  </span>
-                </p>
-                <p className="mt-1 text-sm text-fg-muted">
-                  {coverage === null
-                    ? t("Checking which channels have listings…")
-                    : missing.length
-                      ? t("{missing} of {total} need a guide. Virtual channels build their own.", {
-                          missing: formatNumber(missing.length),
-                          total: formatNumber(live.length),
-                        })
-                      : t("Every live channel has listings. Virtual channels build their own.")}
-                </p>
-              </div>
-              <div className="ml-auto flex flex-wrap gap-2">
-                <Button variant="outline" onClick={onAddGuideSource}>
-                  <CalendarPlus size={14} /> {t("Add guide source")}
-                </Button>
-                <Button onClick={() => void propose()} disabled={busy || coverage === null}>
-                  <Wand2 size={14} /> {t("Auto-match")}
-                </Button>
+          <div className="relative flex flex-wrap items-center gap-x-4 gap-y-2">
+            <p className="text-2xl font-semibold tracking-tight tabular-nums text-fg">
+              {coverage === null ? "—" : `${Math.round(pct * 100)}%`}
+            </p>
+            <div className="min-w-0 flex-1 space-y-1.5">
+              <p className="truncate text-sm text-fg-muted">
+                <span className="text-fg">{t("of live IPTV channels have listings")}</span>
+                {" · "}
+                {coverage === null
+                  ? t("Checking which channels have listings…")
+                  : missing.length
+                    ? t("{missing} of {total} need a guide. Virtual channels build their own.", {
+                        missing: formatNumber(missing.length),
+                        total: formatNumber(live.length),
+                      })
+                    : t("Every live channel has listings. Virtual channels build their own.")}
+              </p>
+              <div className="h-1.5 overflow-hidden rounded-full bg-bg-subtle">
+                <div
+                  className={cn(
+                    "h-full rounded-full transition-all",
+                    pct >= 0.999 ? "bg-success" : "bg-gradient-to-r from-primary to-info",
+                  )}
+                  style={{ width: `${pct * 100}%` }}
+                />
               </div>
             </div>
-            <div className="relative mt-4 h-2 overflow-hidden rounded-full bg-bg-subtle">
-              <div
-                className={cn(
-                  "h-full rounded-full transition-all",
-                  pct >= 0.999 ? "bg-success" : "bg-gradient-to-r from-primary to-info",
-                )}
-                style={{ width: `${pct * 100}%` }}
-              />
-            </div>
-          </>
+            <Button size="sm" onClick={() => void propose()} disabled={busy || coverage === null}>
+              <Wand2 size={14} /> {t("Auto-match")}
+            </Button>
+          </div>
         )}
       </section>
 

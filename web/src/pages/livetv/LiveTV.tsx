@@ -1,5 +1,5 @@
 import { SubtabNav } from "../../components/layout";
-import { Badge, Button, Input, Popover, confirmDialog, toast } from "@braedonsaunders/appkit-ui";
+import { Badge, Button, Input, Popover, cn, confirmDialog, toast } from "@braedonsaunders/appkit-ui";
 import {
   CalendarRange,
   ListVideo,
@@ -41,7 +41,7 @@ import {
 } from "./ChannelStudio";
 import { GuideMatchPanel, GuideSourceList, GuideWorkbench } from "./GuideData";
 import { GuideGrid, OnNowStrip } from "./GuideGrid";
-import { ChannelList, SourceList, type Selection } from "./Lineup";
+import { SourceList, type Selection } from "./Lineup";
 import { SourceEditor, type SourceKind } from "./SourceEditor";
 import {
   MINUTE,
@@ -478,10 +478,24 @@ export default function LiveTV() {
   };
 
   const editing = (selection.kind === "channel" || selection.kind === "new") && !!draft;
+  const addGuideSource = () => {
+    setNewKind("guide");
+    setEditorKind("guide");
+    setGuideOnlyFlow(true);
+    setGuideMode("xmltv");
+    void go({ kind: "source", id: "new" });
+  };
+
   const actions = (
     <AddMenu
       onChannel={() => void go({ kind: "new" })}
       onSource={(k) => {
+        // The menu is the one place to add a guide: it opens on the Guide tab.
+        if (k === "guide") {
+          setLeftTab("guide");
+          addGuideSource();
+          return;
+        }
         setNewKind(k);
         setEditorKind(k);
         setGuideOnlyFlow(false);
@@ -501,16 +515,8 @@ export default function LiveTV() {
     </div>
   ) : null;
 
-  const addGuideSource = () => {
-    setNewKind("guide");
-    setEditorKind("guide");
-    setGuideOnlyFlow(true);
-    setGuideMode("xmltv");
-    void go({ kind: "source", id: "new" });
-  };
 
-  const aside = (
-    <>
+  const panelHead = (
       <PanelHead>
         <div className="flex items-center gap-1.5">
           <div className="relative min-w-0 flex-1">
@@ -563,22 +569,8 @@ export default function LiveTV() {
           ]}
         />
       </PanelHead>
-      {leftTab === "channels" ? (
-        <>
-          {channels === null ? (
-            <p className="px-4 py-8 text-center text-xs text-fg-muted">{t("Loading channels…")}</p>
-          ) : (
-            <ChannelList
-              channels={filtered}
-              sources={sources}
-              guide={guide}
-              covered={covered}
-              selected={selection.kind === "channel" ? selection.id : null}
-              onSelect={selectChannel}
-              onToggleFavorite={toggleFavorite}
-              now={now}
-              emptyHint={
-                channels.length ? (
+  );
+  const lineupEmpty = channels?.length ? (
                   <p className="text-xs text-fg-muted">{t("No channels match.")}</p>
                 ) : (
                   <div className="space-y-3">
@@ -594,12 +586,12 @@ export default function LiveTV() {
                       </Button>
                     </div>
                   </div>
-                )
-              }
-            />
-          )}
-        </>
-      ) : leftTab === "sources" ? (
+                );
+
+  const aside = (
+    <>
+      {panelHead}
+      {leftTab === "channels" ? null : leftTab === "sources" ? (
         <SourceList
           sources={sources}
           selected={selection}
@@ -611,12 +603,10 @@ export default function LiveTV() {
           query={query}
           lineup={sorted}
           sources={sources}
-          coverage={coverage}
           selected={guideSourceId}
           onSelect={(id) =>
             setParams(id ? new URLSearchParams({ gsrc: id }) : new URLSearchParams())
           }
-          onAddGuideSource={addGuideSource}
           now={now}
         />
       )}
@@ -648,7 +638,6 @@ export default function LiveTV() {
         coverage={coverage}
         source={guideSource}
         onMapChannel={(id) => void go({ kind: "map", id })}
-        onAddGuideSource={addGuideSource}
         onEditSource={(id) => void go({ kind: "source", id })}
         onReload={reloadAll}
         now={now}
@@ -680,6 +669,47 @@ export default function LiveTV() {
         </div>
       </>
     );
+
+  // Channels: one guide whose left third is the lineup (search, tabs and
+  // channel rows) and whose right two thirds are the listings, so every
+  // channel is listed once and its programmes stay level with it.
+  // With a channel drawer open the lineup alone stays above the drawer's
+  // backdrop, so another channel is one click away.
+  const lineupGuide = (
+    <div
+      className={cn(
+        "flex min-h-0 flex-1 flex-col",
+        channelOpen && "lg:relative lg:z-[60] lg:w-1/3 lg:border-r lg:border-border",
+      )}
+    >
+      <GuideGrid
+        lineupOnly={channelOpen}
+        channels={filtered}
+        guide={guide}
+        from={from}
+        until={until}
+        now={now}
+        selected={selection.kind === "channel" ? selection.id : null}
+        onSelect={selectChannel}
+        onShift={(h) => setShift((s) => s + h)}
+        onNow={() => {
+          setShift(0);
+          setNow(Date.now());
+        }}
+        loading={guideLoading}
+        head={panelHead}
+        covered={covered}
+        onToggleFavorite={toggleFavorite}
+        emptyHint={
+          channels === null ? (
+            <p className="text-xs text-fg-muted">{t("Loading channels…")}</p>
+          ) : (
+            lineupEmpty
+          )
+        }
+      />
+    </div>
+  );
 
   const channelTitle =
     selection.kind === "new"
@@ -726,7 +756,7 @@ export default function LiveTV() {
         aside={aside}
         main={main}
       >
-        {state}
+        {state ?? (leftTab === "channels" ? lineupGuide : undefined)}
       </Workspace>
       <Drawer
         open={guideOpen}
