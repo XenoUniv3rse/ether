@@ -1080,14 +1080,21 @@ func (f *remoteFile) rangeGet(ctx context.Context, start, end int64, urgent bool
 				f.mu.Lock()
 				refresh := !f.e.now().Before(f.transportRetryAt)
 				if refresh {
-					f.transportRetryAt = f.e.now().Add(5 * time.Second)
+					f.transportRetryAt = f.e.now().Add(resetCooldown)
 				}
 				f.mu.Unlock()
 				if refresh {
-					// A transport failure is about the media endpoint, not the
-					// API. Prefer the identical torrent on another provider;
-					// repeatedly signing the same host cannot unblock it.
-					f.moveFromHost(ctx, gen)
+					// Give the provider one chance to route to a new node. A
+					// new signature on the failed host is not a new route.
+					recoveryCtx, cancelRecovery := context.WithTimeout(ctx, 8*time.Second)
+					newURL, newGen, refreshErr := f.link(recoveryCtx, true, gen)
+					if refreshErr != nil || dialAddr(newURL) == dialAddr(u) {
+						if refreshErr != nil {
+							newGen = gen
+						}
+						f.moveFromHost(recoveryCtx, newGen)
+					}
+					cancelRecovery()
 				}
 			}
 			continue

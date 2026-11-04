@@ -174,8 +174,8 @@ func TestConnCapReducesOnResetAnd429AndRestoresAfterCooldown(t *testing.T) {
 	addr := "edge.example:443"
 	c.reduce(addr)
 
-	// Reduced from 6 to 3 during cooldown.
-	for i := 0; i < 3; i++ {
+	// Reduced from 6 to 1 during cooldown.
+	for i := 0; i < 1; i++ {
 		if err := c.acquire(context.Background(), addr); err != nil {
 			t.Fatalf("acquire %d: %v", i, err)
 		}
@@ -183,15 +183,15 @@ func TestConnCapReducesOnResetAnd429AndRestoresAfterCooldown(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
 	if err := c.acquire(ctx, addr); err == nil {
-		t.Fatal("4th connection admitted while cap is reduced to 3")
+		t.Fatal("second connection admitted while cap is reduced to 1")
 	}
 
-	// After resetCooldown expires, the 4th connection is admitted.
+	// After resetCooldown expires, the second connection is admitted.
 	advance(resetCooldown + time.Second)
 	if err := c.acquire(context.Background(), addr); err != nil {
 		t.Fatalf("acquire after cooldown: %v", err)
 	}
-	for i := 0; i < 4; i++ {
+	for i := 0; i < 2; i++ {
 		c.release(addr)
 	}
 }
