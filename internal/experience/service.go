@@ -32,6 +32,9 @@ type LibraryPageExclusions struct {
 	Keys                           []core.RatingKey
 	ExcludeGenres, ExcludeKeywords []string
 	Movie, Television              core.Filter
+	Availability                   core.Filter
+	AvailabilityInSQL              bool
+	Err                            error
 }
 
 // ServiceDeps contains trusted host dependencies, never provided by a frontend.
@@ -65,7 +68,7 @@ type ServiceDeps struct {
 	// page: hidden titles, blocked genres, blocked keywords, the policy
 	// content-rating cap, and parsed plex.tv share filters. Nil keeps the
 	// catalogue scan, which still applies filters the SQL page cannot see.
-	PageExclusions func(context.Context, *core.User) LibraryPageExclusions
+	PageExclusions func(context.Context, *core.User, core.MediaType) LibraryPageExclusions
 	// CountBrowsable is the indexed library size. The view list uses it instead
 	// of browsing titles.
 	CountBrowsable func(context.Context, core.MediaType) (int, error)

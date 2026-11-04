@@ -23,6 +23,8 @@ var (
 func splitStoredFilter(f core.Filter, childKind core.KeyKind) (show core.Filter, childExclude []core.RatingKey) {
 	show = core.Filter{
 		KnownAddedDate:         f.KnownAddedDate,
+		HiddenMovieGeneration:  f.HiddenMovieGeneration,
+		HiddenShowGeneration:   f.HiddenShowGeneration,
 		ExcludeGenres:          f.ExcludeGenres,
 		ExcludeKeywords:        f.ExcludeKeywords,
 		Type:                   core.TypeShow,
@@ -60,6 +62,17 @@ func splitStoredFilter(f core.Filter, childKind core.KeyKind) (show core.Filter,
 func (c *Catalog) childFilterConds(alias string, f core.Filter, childExclude []core.RatingKey) ([]string, []any) {
 	var conds []string
 	var args []any
+	if alias == "e" && f.HiddenEpisodeGeneration != "" {
+		clause := "NOT EXISTS (SELECT 1 FROM availability_hidden ah WHERE ah.kind='episode' AND ah.generation=? AND ah.rating_key=" + alias + ".key)"
+		args = append(args, f.HiddenEpisodeGeneration)
+		if len(f.AvailabilityKeepKeys) > 0 {
+			clause = "(" + clause + " OR " + alias + ".key IN (" + placeholders(len(f.AvailabilityKeepKeys)) + "))"
+			for _, key := range f.AvailabilityKeepKeys {
+				args = append(args, key)
+			}
+		}
+		conds = append(conds, clause)
+	}
 	if len(childExclude) > 0 {
 		conds = append(conds, alias+".key NOT IN ("+placeholders(len(childExclude))+")")
 		for _, k := range childExclude {
@@ -230,6 +243,9 @@ func (c *Catalog) storedEpisodesWhere(f core.Filter) (string, []any, error) {
 	cConds, cArgs := c.childFilterConds("e", f, childExclude)
 	conds = append(conds, cConds...)
 	outArgs = append(outArgs, cArgs...)
+	visibility, visibilityArgs := c.childVisibilityConds(f.ChildVisibility)
+	conds = append(conds, visibility...)
+	outArgs = append(outArgs, visibilityArgs...)
 	conds = append(conds, where)
 	outArgs = append(outArgs, args...)
 	if f.Group != nil {
@@ -255,7 +271,7 @@ func (c *Catalog) StoredEpisodesByKey(ctx context.Context, show core.Filter, aft
 	}
 	lo := max(int64(after), episodeKeyStart)
 	q := `SELECT ` + prefixedCols("e") + ` FROM catalog_titles e JOIN catalog_titles t ON t.key=e.show_key WHERE e.key>? AND e.key<? AND ` + where + ` ORDER BY e.key LIMIT ?`
-	return c.queryTitles(ctx, q, append(append([]any{lo, episodeKeyEnd}, args...), limit)...)
+	return c.queryPagedTitles(ctx, q, append(append([]any{lo, episodeKeyEnd}, args...), limit)...)
 }
 
 // CountStoredEpisodes counts StoredEpisodesByKey's whole set. Like a browse
@@ -270,16 +286,14 @@ func (c *Catalog) CountStoredEpisodes(ctx context.Context, show core.Filter) (in
 	c.cacheMu.RLock()
 	ent, ok := c.countCache[ckey]
 	c.cacheMu.RUnlock()
-	if show.Group != nil {
+	if groupHasState(show.Group) {
 		ok = false
 	}
 	count := func(ctx context.Context) (int, error) {
 		var total int
 		var bySeries bool
 		var err error
-		if show.Group == nil {
-			total, bySeries, err = c.countStoredEpisodesBySeries(ctx, show)
-		}
+		total, bySeries, err = c.countStoredEpisodesBySeries(ctx, show)
 		if err != nil {
 			return 0, err
 		}
@@ -299,14 +313,6 @@ func (c *Catalog) CountStoredEpisodes(ctx context.Context, show core.Filter) (in
 	}
 	switch {
 	case ok && ent.gen == gen && ent.minute == minute:
-		return ent.total, nil
-	case ok && ent.total >= staleCountMin:
-		if time.Since(ent.counted) >= recountEvery {
-			_ = c.hydrate(ctx, "count:"+ckey, 0, func(ctx context.Context) error {
-				_, err := count(ctx)
-				return err
-			})
-		}
 		return ent.total, nil
 	}
 	return count(ctx)
@@ -343,7 +349,7 @@ func (c *Catalog) BrowseStoredEpisodes(ctx context.Context, q core.BrowseQuery) 
 	cursorPrefix := fmt.Sprintf("cursor:%s|%s|%v|%v|", ckey, q.Sort, q.Desc, q.SecondarySorts)
 
 	c.cacheMu.RLock()
-	if ent, ok := c.browseCache[bkey]; q.Filter.Group == nil && !q.SortLastViewed && ok && ent.gen == gen && ent.minute == minBucket {
+	if ent, ok := c.browseCache[bkey]; !groupHasState(q.Filter.Group) && !q.SortLastViewed && ok && ent.gen == gen && ent.minute == minBucket {
 		items := make([]core.Title, len(ent.page.Items))
 		for i := range ent.page.Items {
 			items[i] = cloneTitle(ent.page.Items[i])
@@ -352,7 +358,7 @@ func (c *Catalog) BrowseStoredEpisodes(ctx context.Context, q core.BrowseQuery) 
 		return core.Page{Items: items, Total: ent.page.Total}, nil
 	}
 	var afterKey core.RatingKey
-	if offset > 0 && q.Filter.Group == nil && !q.SortLastViewed {
+	if offset > 0 && !groupHasState(q.Filter.Group) && !q.SortLastViewed {
 		if cur, ok := c.browseCache[cursorPrefix+strconv.Itoa(offset)]; ok && cur.gen == gen && cur.minute == minBucket && len(cur.page.Items) == 1 {
 			afterKey = cur.page.Items[0].Key
 		}
@@ -404,7 +410,7 @@ func (c *Catalog) BrowseStoredEpisodes(ctx context.Context, q core.BrowseQuery) 
 			return core.Page{}, werr
 		}
 		sqlQ := `SELECT ` + prefixedCols("e") + ` FROM catalog_titles e JOIN catalog_titles t ON t.key=e.show_key WHERE e.key>? AND e.key<? AND ` + where + ` ORDER BY e.key ASC LIMIT ? OFFSET ?`
-		items, err = c.queryTitles(ctx, sqlQ, append(append([]any{episodeKeyStart, episodeKeyEnd}, args...), limit, offset)...)
+		items, err = c.queryPagedTitles(ctx, sqlQ, append(append([]any{episodeKeyStart, episodeKeyEnd}, args...), limit, offset)...)
 	default:
 		where, args, werr := c.storedEpisodesWhere(q.Filter)
 		if werr != nil {
@@ -416,7 +422,7 @@ func (c *Catalog) BrowseStoredEpisodes(ctx context.Context, q core.BrowseQuery) 
 		}
 		order := storedChildOrder("e", q)
 		sqlQ := `SELECT ` + prefixedCols("e") + ` FROM catalog_titles e JOIN catalog_titles t ON t.key=e.show_key WHERE ` + where + ` ORDER BY ` + order + `, e.key ASC LIMIT ? OFFSET ?`
-		items, err = c.queryTitles(ctx, sqlQ, append(append([]any{}, args...), limit, offset)...)
+		items, err = c.queryPagedTitles(ctx, sqlQ, append(append([]any{}, args...), limit, offset)...)
 	}
 	if err != nil {
 		return core.Page{}, err
@@ -427,7 +433,7 @@ func (c *Catalog) BrowseStoredEpisodes(ctx context.Context, q core.BrowseQuery) 
 	if q.NoTotal {
 		total = offset + len(items)
 	}
-	if q.Filter.Group == nil && !q.SortLastViewed && c.writeGen.Load() == gen {
+	if !groupHasState(q.Filter.Group) && !q.SortLastViewed && c.writeGen.Load() == gen {
 		cachedItems := make([]core.Title, len(items))
 		for i := range items {
 			cachedItems[i] = cloneTitle(items[i])

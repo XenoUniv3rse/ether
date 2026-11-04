@@ -7,6 +7,11 @@ import (
 )
 
 func (c *Catalog) compileBrowseGroup(g *core.FilterGroup, alias string, kind core.KeyKind) (string, []any, error) {
+	if g.ParentOnly && kind != 0 {
+		copy := *g
+		copy.ParentOnly = false
+		return c.compileBrowseGroup(&copy, "t", 0)
+	}
 	if g.Unwatched != nil || g.InProgress != nil || g.LastViewedAfter > 0 || g.LastViewedBefore > 0 {
 		var parts []string
 		var args []any

@@ -61,12 +61,26 @@ CREATE TRIGGER catalog_show_episodes_count AFTER INSERT OR DELETE OR UPDATE OF t
 // constrains the episodes themselves; the caller counts those directly.
 func (c *Catalog) countStoredEpisodesBySeries(ctx context.Context, f core.Filter) (int, bool, error) {
 	show, childExclude := splitStoredFilter(f, core.KindEpisode)
-	if conds, _ := c.childFilterConds("e", f, childExclude); len(conds) > 0 {
+	if conds, _ := c.childVisibilityConds(f.ChildVisibility); len(conds) > 0 {
+		return 0, false, nil
+	}
+	if conds, _ := c.childFilterConds("e", f, nil); len(conds) > 0 {
+		return 0, false, nil
+	}
+	if f.Group != nil && !f.Group.ParentOnly {
 		return 0, false, nil
 	}
 	where, args, err := c.browseWhere(show)
 	if err != nil {
 		return 0, false, err
+	}
+	if f.Group != nil {
+		clause, vals, err := c.compileBrowseGroup(f.Group, "t", 0)
+		if err != nil {
+			return 0, false, err
+		}
+		where += " AND (" + clause + ")"
+		args = append(args, vals...)
 	}
 	var known int
 	if err := c.db.QueryRowContext(ctx, `SELECT COALESCE(SUM(a.known),0) FROM catalog_titles t JOIN catalog_show_episodes a ON a.show_key=t.key WHERE `+where, args...).Scan(&known); err != nil {
@@ -79,5 +93,18 @@ func (c *Catalog) countStoredEpisodesBySeries(ctx context.Context, f core.Filter
 		append([]any{c.now().Unix()}, args...)...).Scan(&unaired); err != nil {
 		return 0, false, err
 	}
-	return max(known-unaired, 0), true, nil
+	hidden := 0
+	if len(childExclude) > 0 {
+		vals := make([]any, 0, len(childExclude)+1+len(args))
+		for _, k := range childExclude {
+			vals = append(vals, k)
+		}
+		vals = append(vals, c.now().Unix())
+		vals = append(vals, args...)
+		q := `SELECT COUNT(*) FROM catalog_titles e JOIN catalog_titles t ON t.key=e.show_key WHERE e.key IN (` + placeholders(len(childExclude)) + `) AND e.type='episode' AND e.adult=0 AND e.release_known=1 AND e.released_ts<=? AND ` + where
+		if err := c.db.QueryRowContext(ctx, q, vals...).Scan(&hidden); err != nil {
+			return 0, false, err
+		}
+	}
+	return max(known-unaired-hidden, 0), true, nil
 }

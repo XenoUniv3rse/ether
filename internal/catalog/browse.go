@@ -50,8 +50,9 @@ func (c *Catalog) Browse(ctx context.Context, q core.BrowseQuery) (core.Page, er
 	minBucket := c.minuteBucket()
 	ckey := browseFilterKey(q.Filter) + fmt.Sprintf("|rules:%s:%#v:%s", q.Filter.RuleVisibility, q.Filter.PreviewRules, q.Filter.PreviewFallback)
 	bkey := fmt.Sprintf("%s|%s|%v|%v|%d|%d|%v", ckey, q.Sort, q.Desc, q.SecondarySorts, offset, limit, q.NoTotal)
+	cacheable := !groupHasState(q.Filter.Group)
 	c.cacheMu.RLock()
-	if ent, ok := c.browseCache[bkey]; q.Filter.Group == nil && !q.SortLastViewed && ok && ent.gen == gen && ent.minute == minBucket {
+	if ent, ok := c.browseCache[bkey]; cacheable && !q.SortLastViewed && ok && ent.gen == gen && ent.minute == minBucket {
 		items := make([]core.Title, len(ent.page.Items))
 		for i := range ent.page.Items {
 			items[i] = cloneTitle(ent.page.Items[i])
@@ -61,7 +62,7 @@ func (c *Catalog) Browse(ctx context.Context, q core.BrowseQuery) (core.Page, er
 		return core.Page{Items: items, Total: ent.page.Total}, nil
 	}
 	cntEnt, hasCnt := c.countCache[ckey]
-	if q.Filter.Group != nil {
+	if !cacheable {
 		hasCnt = false
 	}
 	c.cacheMu.RUnlock()
@@ -71,29 +72,14 @@ func (c *Catalog) Browse(ctx context.Context, q core.BrowseQuery) (core.Page, er
 		return core.Page{}, err
 	}
 	var total int
-	// A page answered with a stale total is not cached, so the recounted
-	// total reaches the next read.
-	staleTotal := false
 	switch {
 	case q.NoTotal:
 		// The page query alone; the total is set from the page below.
 		total = offset + limit
 	case hasCnt && cntEnt.gen == gen && cntEnt.minute == minBucket:
 		total = cntEnt.total
-	case hasCnt && cntEnt.total >= staleCountMin:
-		// A large total walks the whole filtered set. Serve the last count
-		// and recount behind the read, at most once per recountEvery: the
-		// catalogue writes continuously, and a total that old only moves
-		// the end of the last page.
-		total, staleTotal = cntEnt.total, true
-		if time.Since(cntEnt.counted) >= recountEvery {
-			_ = c.hydrate(ctx, "count:"+ckey, 0, func(ctx context.Context) error {
-				_, err := c.countBrowse(ctx, ckey, where, args)
-				return err
-			})
-		}
 	default:
-		if q.Filter.Group != nil {
+		if !cacheable {
 			err = c.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM catalog_titles t WHERE `+where, args...).Scan(&total)
 		} else {
 			total, err = c.countBrowse(ctx, ckey, where, args)
@@ -104,7 +90,7 @@ func (c *Catalog) Browse(ctx context.Context, q core.BrowseQuery) (core.Page, er
 	}
 	if total == 0 || offset >= total {
 		page := core.Page{Items: []core.Title{}, Total: total}
-		if q.Filter.Group == nil && !q.SortLastViewed && c.writeGen.Load() == gen && !staleTotal {
+		if cacheable && !q.SortLastViewed && c.writeGen.Load() == gen {
 			c.cacheMu.Lock()
 			if len(c.browseCache) >= 512 {
 				c.browseCache = map[string]cachedBrowse{}
@@ -185,7 +171,7 @@ func (c *Catalog) Browse(ctx context.Context, q core.BrowseQuery) (core.Page, er
 			return core.Page{}, err
 		}
 	default:
-		if items, err = c.queryTitles(ctx, query, append(queryArgs, limit, offset)...); err != nil {
+		if items, err = c.queryPagedTitles(ctx, query, append(queryArgs, limit, offset)...); err != nil {
 			return core.Page{}, err
 		}
 	}
@@ -200,7 +186,7 @@ func (c *Catalog) Browse(ctx context.Context, q core.BrowseQuery) (core.Page, er
 	if q.NoTotal {
 		total = offset + len(items)
 	}
-	if q.Filter.Group == nil && !q.SortLastViewed && c.writeGen.Load() == gen && !staleTotal {
+	if cacheable && !q.SortLastViewed && c.writeGen.Load() == gen {
 		cachedItems := make([]core.Title, len(items))
 		for i := range items {
 			cachedItems[i] = cloneTitle(items[i])
@@ -342,19 +328,24 @@ func (c *Catalog) LibraryPosters(ctx context.Context, typ core.MediaType, limit 
 func browseFilterKey(f core.Filter) string {
 	group := f.Group
 	f.Group = nil
+	childVisibility := f.ChildVisibility
+	f.ChildVisibility = nil
 	key := fmt.Sprintf("%+v", f)
+	if childVisibility != nil {
+		key += "|child:" + browseFilterKey(*childVisibility)
+	}
 	var groupKey func(*core.FilterGroup) string
 	groupKey = func(g *core.FilterGroup) string {
 		if g == nil {
 			return ""
 		}
-		if g.Unwatched != nil || g.InProgress != nil {
-			return fmt.Sprintf("state:%d:%v:%v", g.UserID, g.Unwatched, g.InProgress)
+		if groupHasOwnState(g) {
+			return fmt.Sprintf("state:%d:%v:%v:%d:%d:%v", g.UserID, boolValue(g.Unwatched), boolValue(g.InProgress), g.LastViewedAfter, g.LastViewedBefore, g.ParentOnly)
 		}
 		if g.Filter != nil {
-			return "leaf(" + browseFilterKey(*g.Filter) + ")"
+			return fmt.Sprintf("leaf:%v(", g.ParentOnly) + browseFilterKey(*g.Filter) + ")"
 		}
-		out := g.Operator + "("
+		out := fmt.Sprintf("%s:%v(", g.Operator, g.ParentOnly)
 		for i := range g.Children {
 			out += groupKey(&g.Children[i]) + ";"
 		}
@@ -370,6 +361,35 @@ func browseFilterKey(f core.Filter) string {
 	return key
 }
 
+func boolValue(v *bool) string {
+	if v == nil {
+		return "nil"
+	}
+	return fmt.Sprint(*v)
+}
+
+func groupHasOwnState(g *core.FilterGroup) bool {
+	return g.Unwatched != nil || g.InProgress != nil || g.LastViewedAfter != 0 || g.LastViewedBefore != 0
+}
+
+func groupHasState(g *core.FilterGroup) bool {
+	if g == nil {
+		return false
+	}
+	if groupHasOwnState(g) {
+		return true
+	}
+	if g.Filter != nil && groupHasState(g.Filter.Group) {
+		return true
+	}
+	for i := range g.Children {
+		if groupHasState(&g.Children[i]) {
+			return true
+		}
+	}
+	return false
+}
+
 // Browse filters share one SQL statement; their combined parameters remain subject
 // to the database's statement-wide variable limit.
 func (c *Catalog) browseWhere(f core.Filter) (string, []any, error) {
@@ -381,6 +401,35 @@ func (c *Catalog) browseWhere(f core.Filter) (string, []any, error) {
 		args = append(args, nowTS, cfg.MinPopularity, cfg.MinVotes, cfg.MinPopularity, cfg.MinPopularity, cfg.MinVotes, cfg.MinVotes)
 	} else {
 		conds = append(conds, "t.browsable=1", "t.adult=0")
+	}
+	// queryTitles keeps released titles, plus explicitly enabled upcoming
+	// movies. Apply that same guard before counting and paging.
+	conds = append(conds, "t.release_known=1 AND (t.released_ts<=? OR (t.type='movie' AND ?))")
+	args = append(args, nowTS, c.config().ShowUpcomingMovies)
+	for _, hidden := range []struct{ kind, generation string }{
+		{"movie", f.HiddenMovieGeneration}, {"show", f.HiddenShowGeneration},
+	} {
+		if hidden.generation != "" {
+			conds = append(conds, "NOT EXISTS (SELECT 1 FROM availability_hidden ah WHERE ah.kind=? AND ah.generation=? AND ah.rating_key=t.key)")
+			args = append(args, hidden.kind, hidden.generation)
+		}
+	}
+	// Facets query children directly rather than through storedEpisodesWhere.
+	// They inherit their show's decision and episodes apply their own too.
+	if (f.Type == core.TypeEpisode || f.Type == core.TypeSeason) && f.HiddenShowGeneration != "" {
+		conds = append(conds, "NOT EXISTS (SELECT 1 FROM availability_hidden ah WHERE ah.kind='show' AND ah.generation=? AND ah.rating_key=t.show_key)")
+		args = append(args, f.HiddenShowGeneration)
+	}
+	if f.Type == core.TypeEpisode && f.HiddenEpisodeGeneration != "" {
+		clause := "NOT EXISTS (SELECT 1 FROM availability_hidden ah WHERE ah.kind='episode' AND ah.generation=? AND ah.rating_key=t.key)"
+		args = append(args, f.HiddenEpisodeGeneration)
+		if len(f.AvailabilityKeepKeys) > 0 {
+			clause = "(" + clause + " OR t.key IN (" + placeholders(len(f.AvailabilityKeepKeys)) + "))"
+			for _, key := range f.AvailabilityKeepKeys {
+				args = append(args, key)
+			}
+		}
+		conds = append(conds, clause)
 	}
 	if f.KnownAddedDate {
 		// Same membership as airAddedSQL<>0. Browse already requires the
@@ -409,7 +458,7 @@ func (c *Catalog) browseWhere(f core.Filter) (string, []any, error) {
 	}
 	// Rule browsing gates like everything else: its totals must match the
 	// titles queryTitles hands back, which never include ungated movies.
-	if (c.config().ReleaseMode == config.ModeDigital) && f.IncludeKeys == nil {
+	if c.config().ReleaseMode == config.ModeDigital {
 		gateSQL := homeReleaseSQL("t")
 		if c.config().ShowUpcomingMovies {
 			gateSQL = "(t.type='movie' AND t.release_known=1 AND t.released_ts>? OR (" + gateSQL + "))"
@@ -417,6 +466,26 @@ func (c *Catalog) browseWhere(f core.Filter) (string, []any, error) {
 		}
 		conds = append(conds, gateSQL)
 		args = append(args, homeReleaseCutoff(c.now()), nowTS)
+	}
+	if f.DigitalDiscovery {
+		// FilterDiscovery admits digital-mode movies only when a passed
+		// home date is known. Local and explicitly upcoming movies bypass
+		// that evidence window, as they do in the availability service.
+		digital := "1=0"
+		if f.DigitalDateEvidence {
+			digital = "EXISTS (SELECT 1 FROM catalog_home_release dh WHERE dh.key=t.key AND dh.checked=1 AND dh.earliest_ts>0 AND dh.earliest_ts<=?)"
+		}
+		if len(f.AvailabilityKeepKeys) > 0 {
+			digital += " OR t.key IN (" + placeholders(len(f.AvailabilityKeepKeys)) + ")"
+		}
+		conds = append(conds, "(t.type<>'movie' OR (t.key>=? AND t.key<?) OR (t.release_known=1 AND t.released_ts>? AND ?) OR ("+digital+"))")
+		args = append(args, int64(core.LocalKey(0)), int64(core.LocalKey(0))+1000000000000000, nowTS, c.config().ShowUpcomingMovies)
+		if f.DigitalDateEvidence {
+			args = append(args, nowTS)
+		}
+		for _, key := range f.AvailabilityKeepKeys {
+			args = append(args, key)
+		}
 	}
 	if f.IncludeKeys != nil {
 		if len(f.IncludeKeys) == 0 {
@@ -456,7 +525,7 @@ func (c *Catalog) browseWhere(f core.Filter) (string, []any, error) {
 			conds = append(conds, "t.released_ts>=?")
 			args = append(args, f.AddedAfter)
 		} else {
-			conds = append(conds, `(t.released_ts>=? OR (t.type='show' AND t.key IN (SELECT show_key FROM catalog_titles WHERE type='episode' AND release_known=1 AND adult=0 AND released_ts>=? AND released_ts<=?)))`)
+			conds = append(conds, `(t.released_ts>=? OR (t.type='show' AND EXISTS (SELECT 1 FROM catalog_titles ae WHERE ae.show_key=t.key AND ae.type='episode' AND ae.release_known=1 AND ae.adult=0 AND ae.released_ts>=? AND ae.released_ts<=?)))`)
 			args = append(args, f.AddedAfter, f.AddedAfter, nowTS)
 		}
 	}
@@ -465,7 +534,7 @@ func (c *Catalog) browseWhere(f core.Filter) (string, []any, error) {
 			conds = append(conds, "t.released_ts<=?")
 			args = append(args, f.AddedBefore)
 		} else {
-			conds = append(conds, `(t.released_ts<=? AND (t.type<>'show' OR t.key NOT IN (SELECT show_key FROM catalog_titles WHERE type='episode' AND release_known=1 AND adult=0 AND released_ts>? AND released_ts<=?)))`)
+			conds = append(conds, `(t.released_ts<=? AND (t.type<>'show' OR NOT EXISTS (SELECT 1 FROM catalog_titles ae WHERE ae.show_key=t.key AND ae.type='episode' AND ae.release_known=1 AND ae.adult=0 AND ae.released_ts>? AND ae.released_ts<=?)))`)
 			args = append(args, f.AddedBefore, f.AddedBefore, nowTS)
 		}
 	}
@@ -653,7 +722,7 @@ func (c *Catalog) browseWhere(f core.Filter) (string, []any, error) {
 		}
 	}
 	if f.Studio != "" && len(f.StudioFilters) == 0 {
-		conds = append(conds, `t.key IN (SELECT key FROM catalog_studios WHERE studio=?)`)
+		conds = append(conds, `EXISTS (SELECT 1 FROM catalog_studios bs WHERE bs.key=t.key AND bs.studio=?)`)
 		args = append(args, f.Studio)
 	}
 	for _, sf := range f.StudioFilters {
@@ -1036,7 +1105,7 @@ func (c *Catalog) titlesInKeyOrder(ctx context.Context, keys []core.RatingKey) (
 		args[i] = k
 		at[k] = i
 	}
-	titles, err := c.queryTitles(ctx, `SELECT `+prefixedCols("t")+` FROM catalog_titles t WHERE t.key IN (`+placeholders(len(keys))+`)`, args...)
+	titles, err := c.queryPagedTitles(ctx, `SELECT `+prefixedCols("t")+` FROM catalog_titles t WHERE t.key IN (`+placeholders(len(keys))+`)`, args...)
 	if err != nil {
 		return nil, err
 	}

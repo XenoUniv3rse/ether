@@ -88,6 +88,13 @@ func (p *Playlists) Get(ctx context.Context, uid int64, key core.RatingKey) (*co
 func (p *Playlists) Create(ctx context.Context, uid int64, title string, items []core.RatingKey) (*core.Playlist, error) {
 	return p.Base.Create(ctx, uid, title, items)
 }
+func (p *Playlists) CreateSmartPlaylist(ctx context.Context, uid int64, title, uri string) (*core.Playlist, error) {
+	base, ok := p.Base.(core.SmartPlaylists)
+	if !ok {
+		return nil, errors.New("smart playlists unavailable")
+	}
+	return base.CreateSmartPlaylist(ctx, uid, title, uri)
+}
 func (p *Playlists) Add(ctx context.Context, uid int64, key core.RatingKey, items []core.RatingKey) error {
 	fav, err := p.favorite(ctx, uid)
 	if errors.Is(err, core.ErrNotFound) {

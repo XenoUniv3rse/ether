@@ -187,15 +187,15 @@ func (a *App) newSurfaceExperience(protocol core.Protocol, artwork ...frontend.A
 		}
 		return a.episodeorder.Customized(ctx, u)
 	}}, AddedTimes: a.catalog.CachedAddedTimes, RecentAir: func(ctx context.Context, typ core.MediaType, offset, limit int) ([]core.Title, bool, error) {
-		var hidden []core.RatingKey
+		f := core.Filter{Type: typ}
 		if a.availability != nil {
-			if typ == core.TypeMovie {
-				hidden = a.availability.HiddenMovies(ctx)
-			} else {
-				hidden = a.availability.HiddenShows(ctx)
+			var err error
+			f, err = a.availability.PagingFilter(ctx, f)
+			if err != nil {
+				return nil, false, err
 			}
 		}
-		return a.catalog.RecentAirExcluding(ctx, typ, hidden, offset, limit)
+		return a.catalog.RecentAirFiltered(ctx, typ, f, offset, limit)
 	}, CountUnplayedAired: a.catalog.CountUnplayedAired, SimilarSource: a.catalog.Similar, FilterRecommendations: a.personalize.FilterRecommendations, Collections: a.collections, Playlists: a.playlists, Scheduled: a.scheduledEpisodes, Grouped: a.groupedShows, Search: a.experienceSearch(vis), CachedGet: a.catalog.CachedGet, CachedGetMany: a.catalog.CachedGetMany, ParentTitles: func(ctx context.Context, keys []core.RatingKey) (map[core.RatingKey]core.Title, error) {
 		return a.catalog.ResolveShowParents(ctx, keys)
 	}, Get: func(ctx context.Context, u *core.User, k core.RatingKey) (*core.Title, error) {

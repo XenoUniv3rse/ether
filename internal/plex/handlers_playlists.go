@@ -73,12 +73,117 @@ func uriPath(uri string) (string, error) {
 // expandKey expands containers (show, season, collection, playlist) into
 // playable items.
 func (s *Server) expandKey(ctx context.Context, pr *Request, k core.RatingKey) ([]core.RatingKey, error) {
+	if k.Kind() == core.KindPlaylist {
+		pl, err := s.playlist(ctx, pr.User, k)
+		if err != nil {
+			return nil, err
+		}
+		if pl.SmartURI != "" {
+			copyRequest := *pr
+			copyRequest.HasPage, copyRequest.Start, copyRequest.Size = true, 0, maxExpand
+			titles, _, _, err := s.smartPlaylistBrowse(ctx, &copyRequest, pl.SmartURI)
+			if err != nil {
+				return nil, err
+			}
+			var out []core.RatingKey
+			for _, title := range titles {
+				keys, err := s.expandKey(ctx, pr, title.Key)
+				if err == nil {
+					out = append(out, keys...)
+				}
+				if len(out) >= maxExpand {
+					break
+				}
+			}
+			return capKeys(out), nil
+		}
+	}
 	selection := experience.PlaylistSelection{Playlists: s.d.Playlists, Collections: s.d.Collections, Visibility: s.visibility(), Children: func(ctx context.Context, key core.RatingKey) ([]core.Title, error) {
 		return s.metadataChildren(ctx, pr, key)
 	}, Grandchildren: func(ctx context.Context, key core.RatingKey) ([]core.Title, error) {
 		return s.metadataGrandchildren(ctx, pr, key)
 	}}
 	return selection.Expand(ctx, pr.User, k)
+}
+
+// smartSectionURI keeps only a local section query, without client credentials.
+func (s *Server) smartSectionURI(u *core.User, uri string) (string, error) {
+	p, err := uriPath(uri)
+	if err != nil {
+		return "", err
+	}
+	path, raw, _ := strings.Cut(p, "?")
+	m := reSectionPath.FindStringSubmatch(path)
+	if len(m) == 0 || m[2] != "all" {
+		return "", core.ErrNotFound
+	}
+	id, _ := strconv.Atoi(m[1])
+	sec, ok := s.sectionByID(id)
+	if !ok || !s.canSeeSection(u, id) {
+		return "", core.ErrNotFound
+	}
+	q, err := url.ParseQuery(raw)
+	if err != nil {
+		return "", err
+	}
+	t := typeFromParam(q.Get("type"))
+	if t != "" && t != sec.Type && !(sec.Type == core.TypeShow && (t == core.TypeSeason || t == core.TypeEpisode)) {
+		return "", core.ErrNotFound
+	}
+	var safe []string
+	for _, pair := range strings.Split(raw, "&") {
+		key, _, _ := strings.Cut(pair, "=")
+		key, err = url.QueryUnescape(key)
+		if err != nil {
+			return "", err
+		}
+		if strings.HasPrefix(strings.ToLower(key), "x-plex-") || strings.HasPrefix(strings.ToLower(key), "x-ether-") {
+			continue
+		}
+		if pair != "" {
+			safe = append(safe, pair)
+		}
+	}
+	return path + "?" + strings.Join(safe, "&"), nil
+}
+
+func (s *Server) smartPlaylistBrowse(ctx context.Context, pr *Request, uri string) ([]core.Title, int, int, error) {
+	p, err := s.smartSectionURI(pr.User, uri)
+	if err != nil {
+		return nil, 0, 0, err
+	}
+	path, raw, _ := strings.Cut(p, "?")
+	m := reSectionPath.FindStringSubmatch(path)
+	id, _ := strconv.Atoi(m[1])
+	sec, _ := s.sectionByID(id)
+	q, _ := url.ParseQuery(raw)
+	t := typeFromParam(q.Get("type"))
+	if t == "" {
+		t = sec.Type
+	}
+	br := s.parseBrowse(ctx, sec, t, pr.User, q, raw)
+	if t == core.TypeShow {
+		// Select episodes by the complete show predicate in SQL. Do not
+		// reinterpret show title/year/watch rules as episode rules or expand
+		// all matching shows in memory before paging.
+		show := br.q.Filter
+		if br.unwatched != nil || br.inProgress != nil || br.lastViewedAfter > 0 || br.lastViewedBefore > 0 {
+			var uid int64
+			if pr.User != nil && s.d.State != nil {
+				uid = pr.User.ID
+			}
+			state := core.FilterGroup{UserID: uid, Unwatched: br.unwatched, InProgress: br.inProgress, LastViewedAfter: br.lastViewedAfter, LastViewedBefore: br.lastViewedBefore}
+			if show.Group == nil {
+				show.Group = &state
+			} else {
+				show.Group = &core.FilterGroup{Operator: "and", Children: []core.FilterGroup{*show.Group, state}}
+			}
+			br.unwatched, br.inProgress = nil, nil
+			br.lastViewedAfter, br.lastViewedBefore = 0, 0
+		}
+		br.q.Filter = core.Filter{Type: core.TypeEpisode, Group: &core.FilterGroup{ParentOnly: true, Filter: &show}}
+	}
+	return s.browse(ctx, pr, br)
 }
 
 func titleKeys(ts []core.Title) []core.RatingKey {
@@ -218,6 +323,14 @@ func (s *Server) playlist(ctx context.Context, u *core.User, k core.RatingKey) (
 
 func (s *Server) playlistMetadata(ctx context.Context, pl *core.Playlist) model.Metadata {
 	rk := pl.Key.String()
+	count := len(pl.Items)
+	if pl.SmartURI != "" {
+		pr := *FromContext(ctx)
+		pr.HasPage, pr.Start, pr.Size = true, 0, 0
+		if _, total, _, err := s.smartPlaylistBrowse(ctx, &pr, pl.SmartURI); err == nil {
+			count = total
+		}
+	}
 	stamp := unixOrZero(pl.UpdatedAt)
 	if stamp == 0 {
 		stamp = 1
@@ -232,7 +345,7 @@ func (s *Server) playlistMetadata(ctx context.Context, pl *core.Playlist) model.
 		Smart:        model.Ptr(pl.Smart),
 		PlaylistType: "video",
 		Composite:    "/playlists/" + rk + "/composite/" + strconv.FormatInt(stamp, 10),
-		LeafCount:    model.Ptr(len(pl.Items)),
+		LeafCount:    model.Ptr(count),
 		AddedAt:      unixOrZero(pl.UpdatedAt),
 		UpdatedAt:    unixOrZero(pl.UpdatedAt),
 	}
@@ -303,8 +416,23 @@ func (s *Server) handlePlaylistCreate(w http.ResponseWriter, r *http.Request) {
 		writeHTTPError(w, http.StatusBadRequest)
 		return
 	}
+	title := q.Get("title")
+	if title == "" {
+		title = "Playlist"
+	}
 	if q.Get("smart") == "1" {
-		writeHTTPError(w, http.StatusBadRequest) // smart playlists are generated, not user-created
+		uri, err := s.smartSectionURI(pr.User, q.Get("uri"))
+		store, ok := s.d.Playlists.(core.SmartPlaylists)
+		if err != nil || !ok {
+			writeHTTPError(w, http.StatusBadRequest)
+			return
+		}
+		pl, err := store.CreateSmartPlaylist(ctx, pr.User.ID, title, uri)
+		if err != nil {
+			s.writeErr(w, r, err)
+			return
+		}
+		s.write(w, r, &model.MediaContainer{Size: 1, Metadata: []model.Metadata{s.playlistMetadata(ctx, pl)}})
 		return
 	}
 	var keys []core.RatingKey
@@ -322,10 +450,6 @@ func (s *Server) handlePlaylistCreate(w http.ResponseWriter, r *http.Request) {
 				keys = append(keys, it.key)
 			}
 		}
-	}
-	title := q.Get("title")
-	if title == "" {
-		title = "Playlist"
 	}
 	pl, err := s.d.Playlists.Create(ctx, pr.User.ID, title, keys)
 	if err != nil {
@@ -393,6 +517,26 @@ func (s *Server) handlePlaylistItems(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx := r.Context()
 	pr := FromContext(ctx)
+	if pl.SmartURI != "" {
+		titles, total, offset, err := s.smartPlaylistBrowse(ctx, pr, pl.SmartURI)
+		if err != nil {
+			s.writeErr(w, r, err)
+			return
+		}
+		mc := &model.MediaContainer{RatingKey: pl.Key.String(), Key: "/playlists/" + pl.Key.String() + "/items", Title1: pl.Title, PlaylistType: "video", Smart: model.Ptr(true), LeafCount: model.Ptr(total), Composite: "/playlists/" + pl.Key.String() + "/composite/1"}
+		storedOnly := len(titles) > 0 && titles[0].Type == core.TypeEpisode
+		sqlAvailability, _ := s.d.Catalog.(interface{ BrowseAvailabilityInSQL() bool })
+		mc.Metadata = s.renderTitles(ctx, pr, titles, renderOpts{media: true, storedOnly: storedOnly, availabilityInSQL: sqlAvailability != nil && sqlAvailability.BrowseAvailabilityInSQL()})
+		for i := range mc.Metadata {
+			mc.Metadata[i].PlaylistItemID = int64(offset + i + 1)
+		}
+		mc.Size = len(mc.Metadata)
+		if pr.HasPage {
+			mc.SetPage(offset, total)
+		}
+		s.write(w, r, mc)
+		return
+	}
 	lo, hi := pr.window(len(pl.Items))
 	window := pl.Items[lo:hi]
 	titles := s.visibleTitles(pr.User, s.getTitles(ctx, window))
@@ -434,6 +578,10 @@ func (s *Server) handlePlaylistAdd(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if pl.SmartURI != "" {
+		writeHTTPError(w, http.StatusBadRequest)
+		return
+	}
 	ctx := r.Context()
 	pr := FromContext(ctx)
 	uri := r.URL.Query().Get("uri")
@@ -466,6 +614,10 @@ func (s *Server) handlePlaylistRemove(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if pl.SmartURI != "" {
+		writeHTTPError(w, http.StatusBadRequest)
+		return
+	}
 	ctx := r.Context()
 	uid := FromContext(ctx).User.ID
 	idx, ok := itemIndexParam(r, len(pl.Items))
@@ -485,6 +637,10 @@ func (s *Server) handlePlaylistClear(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if pl.SmartURI != "" {
+		writeHTTPError(w, http.StatusBadRequest)
+		return
+	}
 	ctx := r.Context()
 	uid := FromContext(ctx).User.ID
 	for i := len(pl.Items) - 1; i >= 0; i-- {
@@ -499,6 +655,10 @@ func (s *Server) handlePlaylistClear(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handlePlaylistMove(w http.ResponseWriter, r *http.Request) {
 	pl, ok := s.playlistFromParam(w, r)
 	if !ok {
+		return
+	}
+	if pl.SmartURI != "" {
+		writeHTTPError(w, http.StatusBadRequest)
 		return
 	}
 	ctx := r.Context()

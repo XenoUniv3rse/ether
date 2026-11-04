@@ -12,6 +12,41 @@ import (
 	"github.com/braedonsaunders/ether/internal/releaseparse"
 )
 
+// waitHidden waits for the bounded recent-window background calculation; it
+// does not scan the catalogue or evaluate release policy in the page handler.
+func (s *Service) waitHidden(ctx context.Context, kind string, input discoverySnapshot, requireFresh bool) (*hiddenSet, error) {
+	key := hiddenKey(kind, input)
+	h := s.currentHidden(kind, input)
+	s.visibilityMu.Lock()
+	revision := s.visibilityRevision
+	s.visibilityMu.Unlock()
+	if h != nil && h.key == key && (!requireFresh || h.fresh(key, revision, s.now())) {
+		return h, nil
+	}
+	waitCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-waitCtx.Done():
+			return nil, waitCtx.Err()
+		case <-ticker.C:
+			s.visibilityMu.Lock()
+			h = s.hiddenSets[kind]
+			running := s.refreshing[kind] > 0
+			revision = s.visibilityRevision
+			s.visibilityMu.Unlock()
+			if h != nil && h.key == key && (!requireFresh || h.fresh(key, revision, s.now())) {
+				return h, nil
+			}
+			if !running {
+				s.refreshHidden(kind)
+			}
+		}
+	}
+}
+
 // EvidenceWindow is a proof window, not a delay: an eligible observed release
 // unlocks a title immediately. Older catalogue entries do not need a scan.
 func EvidenceWindow(t core.Title, now time.Time) bool {
@@ -155,14 +190,26 @@ func (s *Service) HiddenMovies(ctx context.Context) []core.RatingKey {
 	return s.hidden(ctx, hiddenMovies, input)
 }
 
+// DigitalDiscovery reports the discovery policy for the current request.
+func (s *Service) DigitalDiscovery(ctx context.Context) (bool, bool) {
+	a := s.snapshotFor(ctx).availability
+	return a.EffectiveMode() == config.ModeDigital, a.DigitalDateEvidence
+}
+
 // HiddenShows excludes first-day series before SQL pagination, just as movies.
 func (s *Service) HiddenShows(ctx context.Context) []core.RatingKey {
 	return s.hidden(ctx, hiddenShows, s.snapshotFor(ctx))
 }
 
+// HiddenEpisodes is the first-day episode evidence decision for SQL paging.
+func (s *Service) HiddenEpisodes(ctx context.Context) []core.RatingKey {
+	return s.hidden(ctx, hiddenEpisodes, s.snapshotFor(ctx))
+}
+
 const (
-	hiddenMovies = "movie"
-	hiddenShows  = "show"
+	hiddenMovies   = "movie"
+	hiddenShows    = "show"
+	hiddenEpisodes = "episode"
 )
 
 // recent lists the catalogue titles of kind inside the evidence window: one
@@ -177,6 +224,15 @@ func (s *Service) recent(ctx context.Context, kind string, input discoverySnapsh
 			return nil, false, nil
 		}
 		ts, err := c.RecentMovies(ctx, input.now.Add(-time.Duration(input.availability.EffectiveMovieEvidenceDays())*24*time.Hour))
+		return ts, true, err
+	case hiddenEpisodes:
+		c, ok := s.d.Catalog.(interface {
+			RecentEvidenceEpisodes(context.Context, time.Time) ([]core.Title, error)
+		})
+		if !ok {
+			return nil, false, nil
+		}
+		ts, err := c.RecentEvidenceEpisodes(ctx, input.now.Add(-24*time.Hour))
 		return ts, true, err
 	default:
 		c, ok := s.d.Catalog.(interface {
@@ -213,27 +269,17 @@ func hiddenKey(kind string, input discoverySnapshot) string {
 	return fmt.Sprintf("%s:%s:%+v:%+v", kind, input.policy, input.availability, input.feeds)
 }
 
-// hidden is the titles in the evidence window that no observation unlocks
-// yet. Every library page and section hub excludes them, so requests only
-// read the last computed answer; judging retained feed releases happens in
-// a refresh (in the background when Deps.Async is set). A stale answer
-// is served while its refresh runs. Before the first answer exists every
-// title in the window stays hidden, as it would until evidence arrives.
+// hidden returns the last evaluated set, waiting for its first calculation.
+// SQL paging uses the independently retained published generations.
 func (s *Service) hidden(ctx context.Context, kind string, input discoverySnapshot) []core.RatingKey {
 	if h := s.currentHidden(kind, input); h != nil {
 		return slices.Clone(h.keys)
 	}
-	items, ok, err := s.recent(ctx, kind, input)
-	if !ok || err != nil {
+	h, err := s.waitHidden(ctx, kind, input, true)
+	if err != nil {
 		return nil
 	}
-	var hidden []core.RatingKey
-	for _, t := range items {
-		if !input.upcomingMovie(t) && evidenceWindow(t, input.now, input.availability) {
-			hidden = append(hidden, t.Key)
-		}
-	}
-	return hidden
+	return slices.Clone(h.keys)
 }
 
 // currentHidden returns the last computed set for kind, first scheduling a
@@ -307,6 +353,7 @@ func (s *Service) warmHidden() {
 		s.currentHidden(hiddenMovies, input)
 	}
 	s.currentHidden(hiddenShows, input)
+	s.currentHidden(hiddenEpisodes, input)
 }
 
 func (s *Service) computeHidden(ctx context.Context, kind string) {
@@ -315,8 +362,11 @@ func (s *Service) computeHidden(ctx context.Context, kind string) {
 	revision := s.visibilityRevision
 	s.visibilityMu.Unlock()
 	items, ok, err := s.recent(ctx, kind, input)
-	if !ok || err != nil {
+	if err != nil {
 		return
+	}
+	if !ok {
+		items = nil
 	}
 	visible := map[core.RatingKey]bool{}
 	for _, t := range s.filterDiscovery(ctx, items, input) {
@@ -333,6 +383,10 @@ func (s *Service) computeHidden(ctx context.Context, kind string) {
 		}
 	}
 	if ctx.Err() != nil {
+		return
+	}
+	if err := s.publishHidden(ctx, kind, hiddenPolicy(kind, input), h.keys); err != nil {
+		s.log.Warn("availability hidden set publication failed", "kind", kind, "err", err)
 		return
 	}
 	s.visibilityMu.Lock()

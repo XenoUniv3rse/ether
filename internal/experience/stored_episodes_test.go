@@ -139,7 +139,7 @@ func TestStoredEpisodePageCarriesRestrictedViewerPredicates(t *testing.T) {
 		ParentTitles: func(_ context.Context, keys []core.RatingKey) (map[core.RatingKey]core.Title, error) {
 			return map[core.RatingKey]core.Title{show.Key: show}, nil
 		},
-		PageExclusions: func(context.Context, *core.User) LibraryPageExclusions {
+		PageExclusions: func(context.Context, *core.User, core.MediaType) LibraryPageExclusions {
 			return LibraryPageExclusions{
 				Keys:       []core.RatingKey{core.ShowKey(99)},
 				Television: core.Filter{ContentRatings: []string{"TV-PG", "TV-14"}, ExcludeCollectionNames: []string{"Hidden"}},

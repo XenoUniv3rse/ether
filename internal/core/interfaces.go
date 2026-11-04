@@ -55,6 +55,8 @@ type CreditFilter struct {
 
 // FilterGroup represents a nested boolean expression of browse filters.
 type FilterGroup struct {
+	// ParentOnly applies this subtree to the series when browsing episodes.
+	ParentOnly       bool          `json:"-"`
 	LastViewedAfter  int64         `json:"lastViewedAfter,omitempty"`
 	LastViewedBefore int64         `json:"lastViewedBefore,omitempty"`
 	Unwatched        *bool         `json:"unwatched,omitempty"`
@@ -67,7 +69,19 @@ type FilterGroup struct {
 
 // Filter narrows a browse or a smart collection. Zero values mean "any".
 type Filter struct {
-	Group           *FilterGroup       `json:"group,omitempty"`
+	Group *FilterGroup `json:"group,omitempty"`
+	// DigitalDiscovery applies the availability service's digital-date gate
+	// before counting and paging a discovery result.
+	DigitalDiscovery    bool `json:"-"`
+	DigitalDateEvidence bool `json:"-"`
+	// AvailabilityKeepKeys are the viewer's active playback sessions.
+	AvailabilityKeepKeys []RatingKey `json:"-"`
+	// Availability generations pin one evaluated hidden set across SQL reads.
+	HiddenMovieGeneration   string `json:"-"`
+	HiddenShowGeneration    string `json:"-"`
+	HiddenEpisodeGeneration string `json:"-"`
+	// ChildVisibility is the viewer policy evaluated on hydrated episodes.
+	ChildVisibility *Filter            `json:"-"`
 	RuleVisibility  string             `json:"-"` // owner-only rules browser: hidden or shown
 	PreviewRules    []LibraryExclusion `json:"-"`
 	PreviewFallback string             `json:"-"`
@@ -306,8 +320,14 @@ type Playlist struct {
 	UserID    int64       `json:"userId"`
 	Title     string      `json:"title"`
 	Smart     bool        `json:"smart"`
+	SmartURI  string      `json:"-"`
 	Items     []RatingKey `json:"items"`
 	UpdatedAt time.Time   `json:"updatedAt"`
+}
+
+// SmartPlaylists persists a section query for evaluation at read time.
+type SmartPlaylists interface {
+	CreateSmartPlaylist(ctx context.Context, userID int64, title, uri string) (*Playlist, error)
 }
 
 type Playlists interface {

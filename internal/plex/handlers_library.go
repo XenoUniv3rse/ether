@@ -550,7 +550,7 @@ func applyTimeFilter(op string, ts int64, dateOnly bool, after, before *int64) {
 func (s *Server) parseBrowse(ctx context.Context, sec Section, t core.MediaType, u *core.User, q url.Values, raw ...string) browseRequest {
 	br := browseRequest{}
 	var group *core.FilterGroup
-	if len(raw) > 0 && (q.Has("push") || q.Has("or") || q.Has("pop")) {
+	if len(raw) > 0 && (q.Has("push") || q.Has("or") || q.Has("pop") || q.Has("and")) {
 		tree := parseQueryTree(raw[0], typeNumber(t), nil)
 		var convert func(*queryRule) *core.FilterGroup
 		convert = func(rule *queryRule) *core.FilterGroup {
@@ -1034,6 +1034,27 @@ func titleSortKey(t core.Title) string {
 // browse runs a catalogue query honouring paging and watch-state filters.
 func (s *Server) browse(ctx context.Context, pr *Request, br browseRequest) ([]core.Title, int, int, error) {
 	offset, size := pr.pageOf(br.limit)
+	if pr.User != nil && s.d.Playback != nil {
+		for _, session := range s.d.Playback.Sessions() {
+			if session != nil && session.UserID == pr.User.ID {
+				br.q.Filter.AvailabilityKeepKeys = append(br.q.Filter.AvailabilityKeepKeys, session.Key)
+			}
+		}
+	}
+	if pr.User != nil && br.q.Filter.Type == core.TypeEpisode {
+		policy := core.Filter{MaxContentRating: pr.User.MaxContentRating, SaferPlexRating: s.needPlexRatingFilter(pr.User)}
+		if blocks, ok := s.d.AccessPolicy.(interface {
+			BrowseBlocks(*core.User) ([]string, []string)
+		}); ok {
+			policy.ExcludeGenres, policy.ExcludeKeywords = blocks.BrowseBlocks(pr.User)
+		}
+		if share, ok := s.d.AccessPolicy.(interface {
+			BrowseShareFilter(*core.User, core.MediaType) core.Filter
+		}); ok {
+			policy, _ = experience.MergeShareFilter(policy, share.BrowseShareFilter(pr.User, core.TypeEpisode))
+		}
+		br.q.Filter.ChildVisibility = &policy
+	}
 	if br.invalidSort {
 		return nil, 0, offset, fmt.Errorf("plex: unknown sort")
 	}
@@ -1264,11 +1285,13 @@ func (s *Server) sectionList(w http.ResponseWriter, r *http.Request, sec Section
 		return
 	}
 	storedOnly := t == core.TypeSeason || t == core.TypeEpisode
+	sqlAvailability, _ := s.d.Catalog.(interface{ BrowseAvailabilityInSQL() bool })
 	mc.Metadata = s.renderTitles(ctx, pr, items, renderOpts{
-		media:      true,
-		inSection:  true,
-		guids:      q.Get("includeGuids") == "1",
-		storedOnly: storedOnly,
+		media:             true,
+		inSection:         true,
+		guids:             q.Get("includeGuids") == "1",
+		storedOnly:        storedOnly,
+		availabilityInSQL: sqlAvailability != nil && sqlAvailability.BrowseAvailabilityInSQL(),
 	})
 	if len(mc.Metadata) < len(items) && offset+len(items) >= total {
 		total = max(offset+len(mc.Metadata), 0)

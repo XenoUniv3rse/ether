@@ -96,19 +96,25 @@ func (s *Service) storedEpisodePage(ctx context.Context, v *core.User, library *
 		return core.Page{}, false, nil
 	}
 	show := core.Filter{Type: core.TypeShow, MaxContentRating: v.MaxContentRating}
+	if s.d.PageExclusions != nil {
+		ex := s.d.PageExclusions(ctx, v, core.TypeEpisode)
+		if ex.Err != nil {
+			return core.Page{}, false, ex.Err
+		}
+		var fits, none bool
+		show, fits, none = viewerBrowseFilter(show, v, ex, core.TypeShow)
+		if !fits {
+			return core.Page{}, false, nil
+		}
+		if none {
+			return core.Page{Items: []core.Title{}}, true, nil
+		}
+	}
 	if ViewerRestricted(s.d.Visibility.Policy, v) {
 		if s.d.PageExclusions == nil {
 			return core.Page{}, false, nil
 		}
 		if id, ok := s.d.Visibility.SectionFor(core.TypeEpisode); !ok || !SectionAllowed(v, id) {
-			return core.Page{Items: []core.Title{}}, true, nil
-		}
-		var fits, none bool
-		show, fits, none = viewerBrowseFilter(show, v, s.d.PageExclusions(ctx, v), core.TypeShow)
-		if !fits {
-			return core.Page{}, false, nil
-		}
-		if none {
 			return core.Page{Items: []core.Title{}}, true, nil
 		}
 	}
@@ -141,7 +147,7 @@ func (s *Service) storedEpisodePage(ctx context.Context, v *core.User, library *
 			break
 		}
 		after = batch[len(batch)-1].Key
-		kept, err := s.visibleEpisodes(ctx, v, batch, q)
+		kept, err := s.visibleEpisodes(ctx, v, batch, q, show.HiddenShowGeneration != "")
 		if err != nil {
 			return core.Page{}, false, err
 		}
@@ -168,7 +174,7 @@ func (s *Service) storedEpisodePage(ctx context.Context, v *core.User, library *
 // visibleEpisodes keeps the episodes of batch the viewer may see, by the
 // checks the library walk applies: the series is visible, and the episode
 // is visible under it and matches the query.
-func (s *Service) visibleEpisodes(ctx context.Context, v *core.User, batch []core.Title, q frontend.ItemQuery) ([]core.Title, error) {
+func (s *Service) visibleEpisodes(ctx context.Context, v *core.User, batch []core.Title, q frontend.ItemQuery, availabilityInSQL bool) ([]core.Title, error) {
 	keys := make([]core.RatingKey, 0, 8)
 	seen := map[core.RatingKey]bool{}
 	for _, t := range batch {
@@ -183,7 +189,11 @@ func (s *Service) visibleEpisodes(ctx context.Context, v *core.User, batch []cor
 	}
 	shown := map[core.RatingKey]bool{}
 	for k, parent := range parents {
-		shown[k] = parent.Key == k && s.visible(ctx, v, &parent)
+		if availabilityInSQL {
+			shown[k] = parent.Key == k && s.d.Visibility.Playable(ctx, v, &parent)
+		} else {
+			shown[k] = parent.Key == k && s.visible(ctx, v, &parent)
+		}
 	}
 	vis := s.d.Visibility
 	vis.GetTitle = func(_ context.Context, key core.RatingKey) (*core.Title, error) {
@@ -200,7 +210,13 @@ func (s *Service) visibleEpisodes(ctx context.Context, v *core.User, batch []cor
 			continue
 		}
 		id, ok := vis.SectionFor(title.Type)
-		if !ok || !SectionAllowed(v, id) || !vis.Visible(ctx, v, &title) {
+		var allowed bool
+		if availabilityInSQL {
+			allowed = vis.Playable(ctx, v, &title)
+		} else {
+			allowed = vis.Visible(ctx, v, &title)
+		}
+		if !ok || !SectionAllowed(v, id) || !allowed {
 			continue
 		}
 		match, err := s.matchesUserQuery(ctx, v, title, q)

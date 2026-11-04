@@ -21,8 +21,8 @@ func (s *State) loadPlaylist(ctx context.Context, userID, id int64) (*core.Playl
 	var p core.Playlist
 	var smart int
 	var upd int64
-	err := s.db.QueryRowContext(ctx, `SELECT title, smart, updated_at FROM state_playlists WHERE id=? AND user_id=?`, id, userID).
-		Scan(&p.Title, &smart, &upd)
+	err := s.db.QueryRowContext(ctx, `SELECT title, smart, updated_at, smart_uri FROM state_playlists WHERE id=? AND user_id=?`, id, userID).
+		Scan(&p.Title, &smart, &upd, &p.SmartURI)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, core.ErrNotFound
 	}
@@ -252,6 +252,14 @@ func (v playlistsView) Get(ctx context.Context, userID int64, key core.RatingKey
 }
 func (v playlistsView) Create(ctx context.Context, userID int64, title string, items []core.RatingKey) (*core.Playlist, error) {
 	return v.s.Create(ctx, userID, title, items)
+}
+func (v playlistsView) CreateSmartPlaylist(ctx context.Context, userID int64, title, uri string) (*core.Playlist, error) {
+	var id int64
+	err := v.s.db.QueryRowContext(ctx, `INSERT INTO state_playlists(user_id,title,smart,updated_at,smart_uri) VALUES(?,?,1,?,?) RETURNING id`, userID, title, v.s.now().UTC().UnixNano(), uri).Scan(&id)
+	if err != nil {
+		return nil, err
+	}
+	return v.s.loadPlaylist(ctx, userID, id)
 }
 func (v playlistsView) Add(ctx context.Context, userID int64, key core.RatingKey, items []core.RatingKey) error {
 	return v.s.Add(ctx, userID, key, items)
