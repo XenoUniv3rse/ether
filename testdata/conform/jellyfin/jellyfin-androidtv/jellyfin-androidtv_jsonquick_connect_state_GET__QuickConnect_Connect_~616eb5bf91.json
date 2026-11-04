@@ -1,0 +1,24 @@
+{
+  "status": 200,
+  "headers": {
+    "Content-Language": [
+      "en-US"
+    ],
+    "Content-Type": [
+      "application/json; charset=utf-8"
+    ],
+    "Date": [
+      "Wed, 04 Nov 2026 [REDACTED_IP] GMT"
+    ],
+    "Server": [
+      "Kestrel"
+    ],
+    "Vary": [
+      "Accept-Encoding"
+    ],
+    "X-Response-Time-Ms": [
+      "3.5306"
+    ]
+  },
+  "body": "eyJBcHBOYW1lIjoiSmVsbHlmaW4gQW5kcm9pZCBUViIsIkFwcFZlcnNpb24iOiIwLjE4LjIiLCJBdXRoZW50aWNhdGVkIjp0cnVlLCJDb2RlIjoiW1JFREFDVEVEXSIsIkRhdGVBZGRlZCI6IltSRURBQ1RFRF0iLCJEZXZpY2VJZCI6IltSRURBQ1RFRF0iLCJEZXZpY2VOYW1lIjoiQW5kcm9pZCBUViIsIlNlY3JldCI6IltSRURBQ1RFRF0ifQ=="
+}
