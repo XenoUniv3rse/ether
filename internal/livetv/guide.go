@@ -597,6 +597,23 @@ func (s *Service) MatchGuides(ctx context.Context, req GuideMatchRequest) (Guide
 			method = "alias"
 			normalized := normalizeGuideName(c.Name)
 			pick = bestCandidate(c, byAlias[normalized])
+			if pick == nil && len(normalized) >= 4 {
+				var aliases []string
+				for alias := range byAlias {
+					if strings.HasPrefix(alias, normalized) {
+						aliases = append(aliases, alias)
+					}
+				}
+				sort.Slice(aliases, func(i, j int) bool {
+					if len(aliases[i]) != len(aliases[j]) {
+						return len(aliases[i]) < len(aliases[j])
+					}
+					return aliases[i] < aliases[j]
+				})
+				if len(aliases) > 0 {
+					pick = bestCandidate(c, byAlias[aliases[0]])
+				}
+			}
 			if pick == nil {
 				for _, word := range strings.FieldsFunc(strings.ToLower(c.Name), func(r rune) bool { return !unicode.IsLetter(r) && !unicode.IsDigit(r) }) {
 					if len(word) >= 3 {
