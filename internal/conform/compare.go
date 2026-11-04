@@ -269,6 +269,16 @@ func buildSchema(body []byte) (*schema, error) {
 		walkJSON(s, "$", v)
 		return s, nil
 	}
+	if t[0] != '<' && json.Valid(t) {
+		// A bare JSON value, such as Jellyfin's /QuickConnect/Enabled `true`.
+		v, e := decodeJSON(t)
+		if e != nil {
+			return nil, e
+		}
+		s := newSchema(false)
+		walkJSON(s, "$", v)
+		return s, nil
+	}
 	if t[0] != '<' {
 		return nil, fmt.Errorf("body is neither XML nor JSON: %q", truncate(string(t), 40))
 	}
