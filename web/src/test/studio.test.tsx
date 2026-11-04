@@ -381,12 +381,16 @@ describe("Collection Studio gallery", () => {
     await user.type(composer, "Top 10 movies of 2010 to 2020");
     await user.click(within(dialog).getByRole("button", { name: "Send" }));
 
-    // Each draft is a stage step; the finished build keeps its posters in view.
+    // The posters stay in view at the top; each draft is a tool step in the chat.
     expect(await within(dialog).findByText(/is ready$/, {}, WAIT)).toBeInTheDocument();
-    expect(
-      within(dialog).getByRole("region", { name: "Top 10 movies of 2010 to 2020" }),
-    ).toBeInTheDocument();
-    expect(within(dialog).getAllByText(/^Drafted “Top 10 movies/).length).toBe(2);
+    const row = within(dialog).getByRole("region", { name: "Top 10 movies of 2010 to 2020" });
+    expect(within(dialog).getAllByText(/Draft the collection/).length).toBeGreaterThan(0);
+    expect(within(dialog).queryByText(/Completed steps/)).toBeNull();
+    // A poster opens the catalogue's title drawer on top.
+    fireEvent.click(within(row).getAllByRole("button")[0]!);
+    await waitFor(() => expect(screen.getAllByRole("dialog")).toHaveLength(2), WAIT);
+    fireEvent.keyDown(document, { key: "Escape" });
+    await waitFor(() => expect(screen.getAllByRole("dialog")).toHaveLength(1), WAIT);
     const turn = calls(fake, "POST", "/agent/turn")[0]?.body as {
       context: { route: string; mediaType: string };
     };
