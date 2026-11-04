@@ -111,6 +111,10 @@ func (a *SourceAuth) header() http.Header {
 	}
 	if a.UserAgent != "" {
 		h.Set("User-Agent", a.UserAgent)
+	} else if a.Type == "xtream" {
+		// One identity for the panel's API, guide and streams: panels that
+		// bind a login to a device compare them.
+		h.Set("User-Agent", defaultUserAgent())
 	}
 	if a.Referer != "" {
 		h.Set("Referer", a.Referer)
@@ -320,8 +324,9 @@ type authCache struct {
 }
 
 type authEntry struct {
-	auth *SourceAuth
-	at   time.Time
+	auth  *SourceAuth
+	limit int // provider connection limit; 0 is none
+	at    time.Time
 }
 
 const authCacheTTL = 30 * time.Second
@@ -334,30 +339,49 @@ func (s *Service) forgetSourceAuth(id string) {
 }
 
 func (s *Service) sourceAuth(ctx context.Context, id string) (*SourceAuth, error) {
+	e, err := s.sourceEntry(ctx, id)
+	return e.auth, err
+}
+
+// sourceConnectionLimit is how many connections the source's provider
+// allows at once (an Xtream panel's max_connections); 0 means no limit.
+func (s *Service) sourceConnectionLimit(id string) int {
+	e, err := s.sourceEntry(s.ctx, id)
+	if err != nil {
+		return 0
+	}
+	return e.limit
+}
+
+func (s *Service) sourceEntry(ctx context.Context, id string) (authEntry, error) {
 	if id == "" {
-		return nil, nil
+		return authEntry{}, nil
 	}
 	c := &s.authCache
 	c.mu.Lock()
 	e, ok := c.m[id]
 	c.mu.Unlock()
 	if ok && s.o.Now().Sub(e.at) < authCacheTTL {
-		return e.auth, nil
+		return e, nil
 	}
 	src, err := s.storedSourceByID(ctx, id)
 	if errors.Is(err, core.ErrNotFound) {
 		src, err = Source{}, nil
 	}
 	if err != nil {
-		return nil, err
+		return authEntry{}, err
+	}
+	e = authEntry{auth: src.Auth, at: s.o.Now()}
+	if src.Account != nil {
+		e.limit = src.Account.MaxConnections
 	}
 	c.mu.Lock()
 	if c.m == nil {
 		c.m = map[string]authEntry{}
 	}
-	c.m[id] = authEntry{auth: src.Auth, at: s.o.Now()}
+	c.m[id] = e
 	c.mu.Unlock()
-	return src.Auth, nil
+	return e, nil
 }
 
 // upstreamHeaders returns the request headers for fetching one channel input

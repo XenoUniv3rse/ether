@@ -126,6 +126,11 @@ func (s *Service) sweepChannels(ctx context.Context) {
 		if c.Kind != "iptv" || !c.Enabled {
 			continue
 		}
+		// A provider that sells connections sees a sweep as a channel scan
+		// and may ban the account; its channels are judged by real tunes.
+		if c.SourceID != "" && s.sourceConnectionLimit(c.SourceID) > 0 {
+			continue
+		}
 		select {
 		case jobs <- c:
 		case <-ctx.Done():
