@@ -291,6 +291,7 @@ func (c *Catalog) searchTitlesOpts(ctx context.Context, query string, types []co
 	if c.tmdb() == nil || (!wantMovie && !wantTV) {
 		return localAnswer()
 	}
+	kinds := fmt.Sprintf("%t%t", wantMovie, wantTV)
 	// TMDB widens the search beyond the mirror. It runs detached and is
 	// waited for briefly: a search never waits long on the provider, and
 	// results that arrive late are already in the mirror for the next one.
@@ -334,10 +335,8 @@ func (c *Catalog) searchTitlesOpts(ctx context.Context, query string, types []co
 				remote = append(remote, c.tvToTitle(ctx, s))
 			}
 		}
-		if len(remote) > 0 {
-			if err := c.upsertMany(ctx, remote, upsertOpts{browsable: true}); err != nil {
-				return nil, err
-			}
+		if err := c.mirrorListSummaries(ctx, "search:"+kinds+":"+strconv.Itoa(limit)+":"+query, remote, true); err != nil {
+			return nil, err
 		}
 		return remote, nil
 	}
@@ -353,7 +352,6 @@ func (c *Catalog) searchTitlesOpts(ctx context.Context, query string, types []co
 		// they are immediate.
 		wait = searchRemoteGrace
 	}
-	kinds := fmt.Sprintf("%t%t", wantMovie, wantTV)
 	got, err := c.hydrateValue(ctx, "search:"+kinds+":"+strconv.Itoa(limit)+":"+query, wait, fetch)
 	if err != nil {
 		// TMDB is slow, failing or still answering: the mirror's matches stand.
@@ -361,11 +359,9 @@ func (c *Catalog) searchTitlesOpts(ctx context.Context, query string, types []co
 	}
 	remote, _ := got.([]core.Title)
 	if len(remote) > 0 {
-		// Reload so callers get hydrated/genres-preserved rows.
-		for _, t := range remote {
-			if st, err := c.loadByKey(ctx, t.Key); err == nil {
-				t = st.t
-			}
+		// Reload so callers get hydrated/genres-preserved rows, in one
+		// batch rather than a read per result.
+		for _, t := range c.reloadSummaries(ctx, remote) {
 			if t.SearchScore = scoreSearchText(sq, &t); t.SearchScore == 0 {
 				// TMDB matched a name the catalogue does not hold.
 				t.SearchScore = searchRemoteOnly + popularityPrior(t.Popularity, t.VoteCount)
@@ -701,7 +697,7 @@ func (c *Catalog) similar(ctx context.Context, key core.RatingKey, limit int) ([
 		return nil, fmt.Errorf("%w: key %s", core.ErrNotFound, key)
 	}
 	out = limitTitles(c.releasedTitles(out), limit)
-	if err := c.upsertSummaries(ctx, out, false); err != nil {
+	if err := c.mirrorListSummaries(ctx, fmt.Sprintf("similar:%d:%d", key, limit), out, false); err != nil {
 		return nil, err
 	}
 	reloaded := c.reloadSummaries(ctx, out)
@@ -728,9 +724,7 @@ func (c *Catalog) collection(ctx context.Context, tmdbCollection int64) (string,
 	if c.tmdb() != nil {
 		d, err := c.tmdb().CollectionDetails(ctx, tmdbCollection)
 		if err == nil {
-			_, _ = c.db.ExecContext(ctx, `INSERT INTO catalog_collections(tmdb_id,name,summary,poster,backdrop,fetched_at) VALUES(?,?,?,?,?,?)
-				ON CONFLICT(tmdb_id) DO UPDATE SET name=excluded.name,summary=excluded.summary,poster=excluded.poster,backdrop=excluded.backdrop,fetched_at=excluded.fetched_at`,
-				d.ID, d.Name, d.Overview, d.PosterPath, d.BackdropPath, c.now().Unix())
+			c.saveCollection(ctx, d.ID, d.Name, d.Overview, d.PosterPath, d.BackdropPath)
 			var items []core.Title
 			for _, m := range d.Parts {
 				t := c.movieToTitle(ctx, m)
@@ -739,7 +733,7 @@ func (c *Catalog) collection(ctx context.Context, tmdbCollection int64) (string,
 				items = append(items, t)
 			}
 			sort.Slice(items, func(i, j int) bool { return items[i].Released.Before(items[j].Released) })
-			if err := c.upsertSummaries(ctx, items, false); err != nil {
+			if err := c.mirrorListSummaries(ctx, fmt.Sprintf("collection:%d", tmdbCollection), items, false); err != nil {
 				return d.Name, nil, err
 			}
 			out := c.reloadSummaries(ctx, items)

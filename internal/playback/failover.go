@@ -1368,6 +1368,15 @@ func (m *Manager) saveResume(ctx context.Context, s *session, g *generation) {
 // ResumePoint returns the release that last served (or was prefetched for)
 // a user's title, with its NZB; nil when there is none.
 func (m *Manager) ResumePoint(ctx context.Context, userID int64, key core.RatingKey) (*ResumePoint, error) {
+	return m.resumePoint(ctx, userID, key, true)
+}
+
+// resumePoint is ResumePoint. Without payload, a stored point whose payload
+// this process already read, verified and matched to the title comes back
+// with no NZB and no keyframes (its hash is kept). Reading a stored payload takes a guarded
+// ownership transaction, and list and Home views showing in-progress titles'
+// tracks did that for every title on every request.
+func (m *Manager) resumePoint(ctx context.Context, userID int64, key core.RatingKey, payload bool) (*ResumePoint, error) {
 	if m.resume == nil {
 		return nil, nil
 	}
@@ -1397,12 +1406,18 @@ func (m *Manager) ResumePoint(ctx context.Context, userID int64, key core.Rating
 	if title != nil && !releaseMatchesTitle(rec.release, title) {
 		return nil, nil
 	}
+	if !payload && rec.nzbHash != "" && m.resume.payloadStillChecked(rec.nzbHash, key) {
+		return rec.point(nil), nil // the track view reads no keyframes either
+	}
 	nzb, err := m.resume.readResumeNZB(ctx, rec)
 	if err != nil {
 		return nil, err
 	}
 	if title != nil && !payloadMatchesTitle(nzb, title) {
 		return nil, nil
+	}
+	if rec.nzbHash != "" {
+		m.resume.notePayloadChecked(rec.nzbHash, key)
 	}
 	point := rec.point(nzb)
 	point.Keyframes, err = m.resume.loadIndex(ctx, userID, key, rec.releaseID)
@@ -1453,10 +1468,15 @@ func (m *Manager) Remember(ctx context.Context, user *core.User, key core.Rating
 // profile this client and user would get, i.e. the release a Prepare from
 // that client would open.
 func (m *Manager) ResumeFor(ctx context.Context, user *core.User, key core.RatingKey, caps core.ClientCaps) (*ResumePoint, error) {
+	return m.resumeFor(ctx, user, key, caps, true)
+}
+
+// resumeFor is ResumeFor; payload is as for resumePoint.
+func (m *Manager) resumeFor(ctx context.Context, user *core.User, key core.RatingKey, caps core.ClientCaps, payload bool) (*ResumePoint, error) {
 	if user == nil {
 		return nil, nil
 	}
-	rp, err := m.ResumePoint(ctx, user.ID, key)
+	rp, err := m.resumePoint(ctx, user.ID, key, payload)
 	if err != nil || rp == nil {
 		return nil, err
 	}
@@ -1472,7 +1492,7 @@ func (m *Manager) ResumeFor(ctx context.Context, user *core.User, key core.Ratin
 	if rp.profileKey != profileKey(prof) || !rememberedOriginalAudioCurrent(prof, rp.originalLanguage, current, rp.Release) || !rememberedCodecCurrent(rp.Release, caps) || !m.resumeSourceAllowed(rp.Release) || !sourceFitsBitrate(rp.Size, rp.Duration, 0, caps.MaxBitrateKbps) {
 		return nil, nil
 	}
-	if probe := m.persistedProbe(ctx, user.ID, key, rp.Release.ID, rp.NZB); probe != nil && !rememberedInfoCodecCurrent(probe.info, caps) {
+	if probe := m.persistedProbeHash(ctx, user.ID, key, rp.Release.ID, rp.payloadHash()); probe != nil && !rememberedInfoCodecCurrent(probe.info, caps) {
 		return nil, nil
 	}
 	rp.Profile = prof.Name // name from the profile object, not the stored column

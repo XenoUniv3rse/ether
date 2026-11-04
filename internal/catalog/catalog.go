@@ -161,6 +161,10 @@ CREATE INDEX IF NOT EXISTS catalog_titles_season_key ON catalog_titles(key ASC) 
 CREATE INDEX IF NOT EXISTS catalog_titles_season_updated ON catalog_titles(fetched_at DESC, key ASC) WHERE type='season' AND adult=0;
 CREATE INDEX IF NOT EXISTS catalog_titles_season_released ON catalog_titles(released_ts DESC, key ASC) WHERE type='season' AND release_known=1 AND adult=0;
 `)
+	// Seasons by show. Hydrating episodes, aired counts and grandchildren
+	// read a show's seasons; through catalog_titles_show that walked every
+	// episode of the show to find its few season rows.
+	store.Register("catalog", 31, `CREATE INDEX IF NOT EXISTS catalog_titles_show_seasons ON catalog_titles(show_key, season) WHERE type='season';`)
 	// Browse and jump-bar ranges use the same byte ordering as SQLite.
 	store.Register("catalog", 30, `SELECT 1;`)
 	store.RegisterDialect("catalog", 30, store.Postgres, `ALTER TABLE catalog_titles ALTER COLUMN sort_title TYPE TEXT COLLATE "C";`)
@@ -285,6 +289,9 @@ type Catalog struct {
 
 	personMu       sync.Mutex
 	personHydrated map[int64]time.Time
+	// listMirrored is when each related list's summaries were last saved
+	// (mirror_lists.go), guarded by personMu.
+	listMirrored map[string]time.Time
 
 	saferRating SaferRatingSQL
 
@@ -407,7 +414,7 @@ func New(db *sql.DB, client TMDB, cfg config.Catalog, log *slog.Logger, opts ...
 		genres: map[string]map[int]string{}, listCache: map[string]listEntry{},
 		titleCache: map[core.RatingKey]cachedStoredTitle{}, countCache: map[string]cachedCount{},
 		browseCache: map[string]cachedBrowse{}, grandCache: map[core.RatingKey]cachedBrowse{}, facetCache: map[string]cachedFacet{},
-		personHydrated: map[int64]time.Time{}}
+		personHydrated: map[int64]time.Time{}, listMirrored: map[string]time.Time{}}
 	c.setNow(time.Now)
 	c.SetTMDB(client)
 	for _, fn := range opts {

@@ -113,7 +113,14 @@ func (s *resumeStore) loadProbe(ctx context.Context, userID int64, key core.Rati
 	if len(nzb) == 0 {
 		return nil, nil
 	}
-	hash := nzbHash(nzb)
+	return s.loadProbeHash(ctx, userID, key, releaseID, nzbHash(nzb))
+}
+
+// loadProbeHash is loadProbe for the payload with this hash.
+func (s *resumeStore) loadProbeHash(ctx context.Context, userID int64, key core.RatingKey, releaseID, hash string) (*probeCache, error) {
+	if hash == "" {
+		return nil, nil
+	}
 	var (
 		raw  string
 		size int64
@@ -152,13 +159,24 @@ func (s *resumeStore) loadProbe(ctx context.Context, userID int64, key core.Rati
 
 // persistedProbe is loadProbe as a cache lookup: any failure is a miss.
 func (m *Manager) persistedProbe(ctx context.Context, userID int64, key core.RatingKey, releaseID string, nzb []byte) *probeCache {
+	if len(nzb) == 0 {
+		if m.resume == nil || releaseID == "" {
+			return nil
+		}
+		return m.resume.liveProbeHash(userID, key, releaseID, "")
+	}
+	return m.persistedProbeHash(ctx, userID, key, releaseID, nzbHash(nzb))
+}
+
+// persistedProbeHash is persistedProbe for the payload with this hash.
+func (m *Manager) persistedProbeHash(ctx context.Context, userID int64, key core.RatingKey, releaseID, hash string) *probeCache {
 	if m.resume == nil || releaseID == "" {
 		return nil
 	}
-	if live := m.resume.liveProbe(userID, key, releaseID, nzb); live != nil {
+	if live := m.resume.liveProbeHash(userID, key, releaseID, hash); live != nil {
 		return live
 	}
-	facts, err := m.resume.loadProbe(ctx, userID, key, releaseID, nzb)
+	facts, err := m.resume.loadProbeHash(ctx, userID, key, releaseID, hash)
 	if err != nil {
 		m.log.Debug("persisted probe lookup failed", "key", key, "release", releaseID, "err", err)
 		return nil

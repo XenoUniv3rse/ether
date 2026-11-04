@@ -15,9 +15,12 @@ type Continue struct {
 	EpisodeOrder interface {
 		Grouped(context.Context, *core.User, []core.RatingKey) (map[core.RatingKey]bool, error)
 	}
-	Now                func() time.Time
-	Grandchildren      func(context.Context, core.RatingKey) ([]core.Title, error)
-	NextEpisode        func(context.Context, core.RatingKey) (*core.Title, error)
+	Now           func() time.Time
+	Grandchildren func(context.Context, core.RatingKey) ([]core.Title, error)
+	NextEpisode   func(context.Context, core.RatingKey) (*core.Title, error)
+	// NextEpisodes, when set, is NextEpisode for several episodes at once
+	// (absent keys have none); it must agree with NextEpisode.
+	NextEpisodes       func(context.Context, []core.RatingKey) (map[core.RatingKey]*core.Title, error)
 	Visible            func(context.Context, *core.User, *core.Title) bool
 	SameDayUnavailable func(context.Context, *core.Title) bool
 	GetTitles          func(context.Context, []core.RatingKey) []core.Title
@@ -65,6 +68,38 @@ func (c Continue) appendNext(ctx context.Context, viewer *core.User, titles []co
 			return titles
 		}
 	}
+	// Each show's first next episode and its watch state are read up front
+	// in one batch; the walk below reads further only past a watched one.
+	firstNext := map[core.RatingKey]*core.Title{}
+	var walk []core.RatingKey
+	for _, h := range recent {
+		if ctx.Err() == nil && statuses[h.Key].ViewCount != 0 && !grouped[core.ShowKey(h.Key.TMDB())] {
+			walk = append(walk, h.Key)
+		}
+	}
+	if c.NextEpisodes != nil && len(walk) > 0 {
+		if got, err := c.NextEpisodes(ctx, walk); err == nil {
+			firstNext = got
+		}
+	} else {
+		for _, k := range walk {
+			if next, err := c.NextEpisode(ctx, k); err == nil && next != nil {
+				firstNext[k] = next
+			}
+		}
+	}
+	var nextKeys []core.RatingKey
+	for _, k := range walk {
+		if next := firstNext[k]; next != nil {
+			nextKeys = append(nextKeys, next.Key)
+		}
+	}
+	nextStates := map[core.RatingKey]core.WatchStatus{}
+	if len(nextKeys) > 0 {
+		if got, err := c.State.GetMany(ctx, viewer.ID, nextKeys); err == nil {
+			nextStates = got
+		}
+	}
 	for _, h := range recent {
 		if ctx.Err() != nil {
 			break
@@ -94,7 +129,11 @@ func (c Continue) appendNext(ctx context.Context, viewer *core.User, titles []co
 				}
 				next = &ordered[n]
 			} else {
-				next, err = c.NextEpisode(ctx, current)
+				if n == 0 && firstNext[current] != nil {
+					next = firstNext[current]
+				} else {
+					next, err = c.NextEpisode(ctx, current)
+				}
 				if err != nil || next == nil || next.Key == current {
 					break
 				}
@@ -109,9 +148,12 @@ func (c Continue) appendNext(ctx context.Context, viewer *core.User, titles []co
 			if !c.Visible(ctx, viewer, next) || c.SameDayUnavailable(ctx, next) {
 				break
 			}
-			st, e := c.State.Get(ctx, viewer.ID, next.Key)
-			if e != nil {
-				break
+			st, ok := nextStates[next.Key]
+			if !ok || n > 0 {
+				var e error
+				if st, e = c.State.Get(ctx, viewer.ID, next.Key); e != nil {
+					break
+				}
 			}
 			if st.ViewCount > 0 && st.ViewOffset <= 0 {
 				continue

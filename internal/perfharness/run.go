@@ -9,6 +9,8 @@ import (
 	"io"
 	"math/rand/v2"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -50,6 +52,38 @@ type Runner struct {
 	results  []Result
 	sessions map[string]*session // viewer/client
 	seq      atomic.Int64
+	// bodies, when set, receives the last warm response body of each
+	// viewer, client and step (SaveBodies).
+	bodies string
+}
+
+// SaveBodies writes the last warm response of each viewer, client and step
+// to dir, so two builds' answers can be compared once personalization has
+// settled.
+func (r *Runner) SaveBodies(dir string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.bodies = dir
+}
+
+func (r *Runner) saveBody(res Result, body []byte) {
+	if res.Phase != "warm" || res.Err != "" {
+		return
+	}
+	name := res.Viewer + "__" + res.Client + "__" + res.Step
+	r.mu.Lock()
+	dir := r.bodies
+	r.mu.Unlock()
+	if dir == "" {
+		return
+	}
+	safe := strings.Map(func(c rune) rune {
+		if c == '/' || c == ' ' || c == ':' || c == '?' || c == '&' || c == '=' {
+			return '_'
+		}
+		return c
+	}, name)
+	_ = os.WriteFile(filepath.Join(dir, safe+".body"), body, 0o600)
 }
 
 // NewRunner drives a server whose main port is basePort. With shared set,
@@ -161,6 +195,7 @@ func (r *Runner) do(ctx context.Context, phase string, c Client, s *session, st 
 		st.Discover(s.vars, buf)
 		r.mu.Unlock()
 	}
+	r.saveBody(res, buf)
 	r.record(res)
 }
 

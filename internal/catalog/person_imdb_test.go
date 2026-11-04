@@ -40,6 +40,10 @@ func TestPersonIMDbPersistsAcrossCreditReplacement(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx := context.Background()
+	if _, err := c.Browse(ctx, core.BrowseQuery{Filter: core.Filter{Type: core.TypeMovie, Person: 777}}); err != nil {
+		t.Fatal(err)
+	}
+	c.WaitRefreshes() // the filmography loads behind the first read
 	page, err := c.Browse(ctx, core.BrowseQuery{Filter: core.Filter{Type: core.TypeMovie, Person: 777}})
 	if err != nil || len(page.Items) != 1 || len(page.Items[0].Cast) != 1 || page.Items[0].Cast[0].IMDB != "nm0000138" || details.Load() != 1 {
 		t.Fatalf("hydrated person: %+v details=%d err=%v", page, details.Load(), err)

@@ -35,5 +35,10 @@ func (s *Server) continueExperience(pr *Request) experience.Continue {
 	if s.d.EpisodeOrder != nil {
 		c.EpisodeOrder = s.d.EpisodeOrder
 	}
+	if local, ok := s.d.Catalog.(interface {
+		NextStoredEpisodes(context.Context, []core.RatingKey) (map[core.RatingKey]*core.Title, error)
+	}); ok {
+		c.NextEpisodes = local.NextStoredEpisodes
+	}
 	return c
 }

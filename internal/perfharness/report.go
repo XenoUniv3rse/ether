@@ -82,8 +82,10 @@ func ReadTrace(path string) (map[string]TraceRecord, []TraceRecord, error) {
 
 // row is one endpoint's line in the report.
 type Row struct {
-	Client, Step, Class                    string
-	RowsBound                              int
+	Client, Step, Class     string
+	RowsBound, QueriesBound int
+	// WritesMax is the most statements that wrote in one request.
+	WritesMax                              int64
 	Cold, WarmP50, WarmP95, ConcP95, BgP95 time.Duration
 	Queries, Writes, Rows                  int64
 	AllocBytes, Allocs                     int64
@@ -134,7 +136,7 @@ func Summarize(results []Result, trace map[string]TraceRecord, order []Client) [
 		for _, st := range steps {
 			k := c.Name + "\x00" + st.Name
 			if rows[k] == nil {
-				rows[k] = &Row{Client: c.Name, Step: st.Name, Class: st.Class, RowsBound: st.RowsBound, samples: map[string][]time.Duration{}}
+				rows[k] = &Row{Client: c.Name, Step: st.Name, Class: st.Class, RowsBound: st.RowsBound, QueriesBound: st.QueriesBound, samples: map[string][]time.Duration{}}
 				keys = append(keys, k)
 			}
 		}
@@ -179,6 +181,7 @@ func Summarize(results []Result, trace map[string]TraceRecord, order []Client) [
 		r.Queries, r.Writes, r.Rows = median64(r.queries), median64(r.writes), median64(r.rowsRead)
 		r.AllocBytes, r.Allocs = median64(r.allocBytes), median64(r.allocs)
 		r.QueriesMin, r.QueriesMax = minMax(r.queries)
+		_, r.WritesMax = minMax(r.writes)
 		r.RowsMin, r.RowsMax = minMax(r.rowsRead)
 		r.DBTime = percentile(r.dbTimes, 0.5)
 		r.LockWait = percentile(r.lockWaits, 1)
