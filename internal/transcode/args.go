@@ -775,9 +775,10 @@ func planFilterChain(s runSpec, v *core.StreamInfo, pic picturePlan, accel strin
 	gpuOff := s.PictureCrop != nil || pic.pad || pic.convert != "" || (pic.tonemap && pic.tenBit && !p010CUDA)
 	dv5 := pic.tonemap && v.DolbyVision && v.DolbyVisionProfile == 5
 	gpuInput, gpuFilters, gpuOK := gpuPipeline(s, accel, pic.w, pic.h, pic.tonemap, pic.tenBit, burn)
-	if dv5 && accel != AccelVideoToolbox {
-		// Other accelerators' tone mappers have not been validated for the
-		// profile-5 Dolby Vision reshape; use the DV-aware CPU path.
+	if dv5 {
+		// The VideoToolbox mapper produced visibly different colours from
+		// tonemapx on profile 5. Keep decode/encode hardware where possible,
+		// but do the RPU reshape and tone map with the validated CPU graph.
 		gpuOK = false
 	}
 	switch {

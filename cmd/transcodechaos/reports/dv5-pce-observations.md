@@ -25,3 +25,10 @@ returned audio packets and decoded; one measured fMP4 start was 6.021 s for
 video and 5.979 s for audio. This seek decodes from the beginning to retain the
 PCE, so startup time and source I/O grow with the offset. Long-title seeks
 remain a performance limitation, not a tested bounded-latency guarantee.
+
+Follow-up: routing profile-5 tone mapping through `tonemapx` with a
+VideoToolbox encoder removed the visible brightness/saturation difference in
+the same side-by-side first-frame comparison. The hardware HLS output decoded
+successfully. This remains a single-sample visual check, not calibrated display
+validation. The earlier PCE seek approach is being replaced because its
+source reads grow with the offset.
