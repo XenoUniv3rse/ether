@@ -281,6 +281,25 @@ func downloadConvertArgs(input string, info core.MediaInfo, dec core.Decision, a
 	return append(args, "-movflags", "+faststart", "-f", "mp4", out)
 }
 
+// downloadTextArgs adds an embedded selected text track to the finished MP4.
+func downloadTextArgs(args []string, info core.MediaInfo, index int, out string) []string {
+	sub := pickSubtitle(info, index)
+	if sub == nil || sub.External || !IsTextSubtitle(sub.Codec) {
+		return args
+	}
+	filtered := make([]string, 0, len(args)+8)
+	for _, arg := range args[:len(args)-1] {
+		if arg != "-sn" {
+			filtered = append(filtered, arg)
+		}
+	}
+	filtered = append(filtered, "-map", fmt.Sprintf("0:%d", sub.Index), "-c:s", "mov_text", "-disposition:s:0", "default")
+	if sub.Language != "" {
+		filtered = append(filtered, "-metadata:s:s:0", "language="+sub.Language)
+	}
+	return append(filtered, out)
+}
+
 func estimateConvertBytes(info core.MediaInfo, d core.Decision) int64 {
 	if d.BitrateKbps > 0 && info.Duration > 0 {
 		return int64(d.BitrateKbps) * 1000 / 8 * int64(info.Duration.Seconds())
@@ -323,11 +342,23 @@ func (d *DownloadRemuxer) RemuxDownload(ctx context.Context, req core.DownloadRe
 		return "", 0, errors.New("transcode: download: empty input URL")
 	}
 	video, audio, ok := DownloadCopyable(req.Info, req.AudioStream, req.Caps)
-	if ok && !downloadBurnsImage(req) {
+	qualityConversion := video != nil && ((req.Options.MaxHeight > 0 && video.Height > req.Options.MaxHeight) ||
+		(req.Options.MaxBitrateKbps > 0 && req.Info.BitrateKbps > req.Options.MaxBitrateKbps))
+	if ok && !downloadBurnsImage(req) && !qualityConversion {
 		return d.runDownload(ctx, req, progress, estimateBytes(req.Info), "remux",
-			func(part string) []string { return downloadArgs(req.InputURL, video, audio, part) })
+			func(part string) []string {
+				return downloadTextArgs(downloadArgs(req.InputURL, video, audio, part), req.Info, req.Options.SubtitleStream, part)
+			})
 	}
-	return d.convertDownload(ctx, req, progress)
+	path, size, err := d.convertDownload(ctx, req, progress)
+	if err != nil && ctx.Err() == nil && !errors.Is(err, core.ErrDownloadBudget) && ok && qualityConversion && !downloadBurnsImage(req) {
+		d.m.log.Warn("download quality conversion failed; trying source quality", "err", err)
+		return d.runDownload(ctx, req, progress, estimateBytes(req.Info), "remux",
+			func(part string) []string {
+				return downloadTextArgs(downloadArgs(req.InputURL, video, audio, part), req.Info, req.Options.SubtitleStream, part)
+			})
+	}
+	return path, size, err
 }
 
 func firstImageSubtitle(info core.MediaInfo) *core.StreamInfo {
@@ -385,7 +416,11 @@ func (d *DownloadRemuxer) convertDownload(ctx context.Context, req core.Download
 	dec.Container = ContainerFMP4
 	return d.runDownload(ctx, req, progress, estimateConvertBytes(req.Info, dec), "convert",
 		func(part string) []string {
-			return downloadConvertArgs(req.InputURL, req.Info, dec, d.m.hw, d.m.feat, part)
+			args := downloadConvertArgs(req.InputURL, req.Info, dec, d.m.hw, d.m.feat, part)
+			if !dec.BurnSubtitles {
+				args = downloadTextArgs(args, req.Info, req.Options.SubtitleStream, part)
+			}
+			return args
 		})
 }
 

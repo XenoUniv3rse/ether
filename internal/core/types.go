@@ -226,6 +226,10 @@ type ClientCaps struct {
 	// mobile-native releases and the whole file is remuxed (additive).
 	Download bool `json:"download,omitempty"`
 
+	// DownloadSourceMaxHeight permits a higher source on a download retry;
+	// MaxHeight remains the output constraint at the download remuxer.
+	DownloadSourceMaxHeight int `json:"downloadSourceMaxHeight,omitempty"`
+
 	// DolbyVisionBaseOnly delivers a Dolby Vision 7.6/8.1 source as its
 	// compatible HDR10 base layer: an owner override turned Dolby Vision off
 	// for the client, or a Dolby Vision start stalled on this client
