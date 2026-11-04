@@ -2349,7 +2349,6 @@
   "m_0a600ae2b22f53": "La définition « {id} » n’est pas installée, ce site ne peut donc pas être interrogé. Téléversez-la à nouveau sous « Définitions de sites » ou supprimez cet indexeur.",
   "m_0a6122b7b998b2": "Le serveur doit prendre en charge TLS.",
   "m_0a613b05c38a34": "Minimum de Mo par minute",
-  "m_0a6172a52e10d4": "Toute la liste des chaînes, en direct",
   "m_0a6245265a6bcc": "Modification enregistrée dans Ether, mais pas dans Trakt. Modifiez Trakt séparément.",
   "m_0a626cea89697e": "{name} installé",
   "m_0a64c5b05d139f": "Filtrer les journaux",

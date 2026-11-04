@@ -2292,7 +2292,6 @@
   "m_0a600ae2b22f53": "The definition “{id}” is not installed, so this site cannot be searched. Upload it again under Site definitions, or remove this indexer.",
   "m_0a6122b7b998b2": "The server must support TLS.",
   "m_0a613b05c38a34": "Minimum MB per minute",
-  "m_0a6172a52e10d4": "The whole lineup, live",
   "m_0a6245265a6bcc": "Changed in Ether, but Trakt could not be updated. Update Trakt separately.",
   "m_0a626cea89697e": "Installed {name}",
   "m_0a64c5b05d139f": "Filter logs",

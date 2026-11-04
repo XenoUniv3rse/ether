@@ -2289,7 +2289,6 @@
   "m_0a600ae2b22f53": "Määritystä ”{id}” ei ole asennettu, joten tätä sivustoa ei voi hakea. Lataa se uudelleen kohdassa Sivustomääritykset tai poista tämä indeksoija.",
   "m_0a6122b7b998b2": "Palvelimen on tuettava TLS:ää.",
   "m_0a613b05c38a34": "Vähimmäiskoko (MB/min)",
-  "m_0a6172a52e10d4": "Koko kanavalista livenä",
   "m_0a6245265a6bcc": "Muutos tehtiin Etherissä, mutta Traktia ei voitu päivittää. Päivitä Trakt erikseen.",
   "m_0a626cea89697e": "Asennettu: {name}",
   "m_0a64c5b05d139f": "Suodata lokeja",

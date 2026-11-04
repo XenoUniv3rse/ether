@@ -265,14 +265,13 @@ function ChannelRow({
 }
 
 /** Guide-data health and every source, on the left panel's Sources tab. */
-export function SourceList({
-  sources,
+/** Guide-data coverage at a glance; opens the coverage workbench. */
+export function GuideSummary({
   channels,
   missing,
   selected,
   onSelect,
 }: {
-  sources: Source[];
   channels: Channel[];
   missing: number | null;
   selected: Selection;
@@ -284,8 +283,7 @@ export function SourceList({
   const r = 15.5;
   const circ = 2 * Math.PI * r;
   return (
-    <div className="space-y-4 p-3 sm:p-4">
-      <LiveTVOptions />
+    <div className="p-3 sm:p-4">
       <button
         type="button"
         onClick={() => onSelect({ kind: "coverage" })}
@@ -332,6 +330,22 @@ export function SourceList({
         </span>
         <ChevronRight size={15} className="shrink-0 text-fg-subtle" />
       </button>
+    </div>
+  );
+}
+
+export function SourceList({
+  sources,
+  selected,
+  onSelect,
+}: {
+  sources: Source[];
+  selected: Selection;
+  onSelect: (s: Selection) => void;
+}) {
+  return (
+    <div className="space-y-4 p-3 sm:p-4">
+      <LiveTVOptions />
 
       <div className="space-y-1.5">
         <h2 className="px-1 text-[11px] font-semibold uppercase tracking-wider text-fg-subtle">

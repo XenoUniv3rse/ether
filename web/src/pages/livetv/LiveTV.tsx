@@ -1,16 +1,7 @@
 import { SubtabNav } from "../../components/layout";
-import {
-  Badge,
-  Button,
-  Input,
-  Popover,
-  confirmDialog,
-  cn,
-  toast,
-} from "@braedonsaunders/appkit-ui";
+import { Badge, Button, Input, Popover, confirmDialog, toast } from "@braedonsaunders/appkit-ui";
 import {
   CalendarRange,
-  LayoutGrid,
   ListVideo,
   Plus,
   Puzzle,
@@ -42,7 +33,7 @@ import {
 } from "./ChannelStudio";
 import { GuideCoverage } from "./GuideData";
 import { GuideGrid, OnNowStrip } from "./GuideGrid";
-import { ChannelList, SourceList, type Selection } from "./Lineup";
+import { ChannelList, GuideSummary, SourceList, type Selection } from "./Lineup";
 import { SourceEditor, type SourceKind } from "./SourceEditor";
 import {
   MINUTE,
@@ -101,11 +92,12 @@ export default function LiveTV() {
   const [params, setParams] = useSearchParams();
   const selection = selectionFrom(params, tab);
   const [leftTab, setLeftTab] = useState(
-    tab === "sources" || tab === "guide-data" ? "sources" : "channels",
+    tab === "guide-data" ? "guide" : tab === "sources" ? "sources" : "channels",
   );
 
   useEffect(() => {
-    if (selection.kind === "source" || selection.kind === "coverage") setLeftTab("sources");
+    if (selection.kind === "source") setLeftTab("sources");
+    if (selection.kind === "coverage") setLeftTab("guide");
   }, [selection.kind]);
 
   const [channels, setChannels] = useState<Channel[] | null>(null);
@@ -492,38 +484,21 @@ export default function LiveTV() {
         <SubtabNav
           ariaLabel={t("Lineup")}
           active={leftTab}
-          onSelect={setLeftTab}
+          onSelect={(key) => {
+            setLeftTab(key);
+            // The Guide tab is the guide-data workbench; leaving it returns to the grid.
+            if (key === "guide") void go({ kind: "coverage" });
+            else if (selection.kind === "coverage") void go({ kind: "guide" });
+          }}
           tabs={[
             { key: "channels", label: t("Channels"), count: filtered.length },
             { key: "sources", label: t("Sources"), count: sources.length || undefined },
+            { key: "guide", label: t("Guide"), count: missingCount || undefined },
           ]}
         />
       </PanelHead>
       {leftTab === "channels" ? (
         <>
-          <div className="px-2 pt-2">
-            <button
-              type="button"
-              onClick={() => void go({ kind: "guide" })}
-              aria-current={selection.kind === "guide" ? "true" : undefined}
-              className={cn(
-                "flex w-full items-center gap-2.5 rounded-lg px-2 py-2 text-left text-sm font-medium transition-colors",
-                selection.kind === "guide"
-                  ? "bg-primary-subtle text-primary ring-1 ring-inset ring-primary/30"
-                  : "text-fg hover:bg-surface-hover",
-              )}
-            >
-              <span className="grid size-[34px] place-items-center rounded-lg bg-surface text-fg-muted ring-1 ring-border">
-                <LayoutGrid size={16} />
-              </span>
-              <span className="min-w-0 flex-1">
-                <span className="block">{t("Guide")}</span>
-                <span className="block text-xs font-normal text-fg-muted">
-                  {t("The whole lineup, live")}
-                </span>
-              </span>
-            </button>
-          </div>
           {channels === null ? (
             <p className="px-4 py-8 text-center text-xs text-fg-muted">{t("Loading channels…")}</p>
           ) : (
@@ -565,9 +540,10 @@ export default function LiveTV() {
             />
           )}
         </>
+      ) : leftTab === "sources" ? (
+        <SourceList sources={sources} selected={selection} onSelect={(s) => void go(s)} />
       ) : (
-        <SourceList
-          sources={sources}
+        <GuideSummary
           channels={sorted}
           missing={missingCount}
           selected={selection}
