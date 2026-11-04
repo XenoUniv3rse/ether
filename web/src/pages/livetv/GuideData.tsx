@@ -626,6 +626,7 @@ const sameGuide = (c: Channel, g: GuideChannel) =>
 export function GuideMatchPanel({
   channel,
   sourceName,
+  guideSourceKind,
   coverage,
   onUse,
   onOpenChannel,
@@ -633,6 +634,7 @@ export function GuideMatchPanel({
 }: {
   channel: Channel;
   sourceName: string;
+  guideSourceKind?: string;
   coverage?: Coverage;
   onUse: (c: Channel) => Promise<void>;
   onOpenChannel: () => void;
@@ -720,6 +722,8 @@ export function GuideMatchPanel({
           <Badge variant="success">
             {coverage?.until ? t("to {time}", { time: dayClock(coverage.until) }) : t("Listed")}
           </Badge>
+        ) : channel.guideId && guideSourceKind === "plex" ? (
+          <Badge variant="secondary">{t("Plex guide · listings load when used")}</Badge>
         ) : (
           <Badge variant="warning">{t("No listings")}</Badge>
         )}

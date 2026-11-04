@@ -675,6 +675,10 @@ export default function LiveTV() {
             key={guideChannel.id}
             channel={guideChannel}
             sourceName={sources.find((s) => s.id === guideChannel.sourceId)?.name ?? ""}
+            guideSourceKind={
+              sources.find((s) => s.id === (guideChannel.guideSourceId || guideChannel.sourceId))
+                ?.kind
+            }
             coverage={coverage?.get(guideChannel.id)}
             onUse={async (c) => {
               await quickSave(
