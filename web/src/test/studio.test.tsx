@@ -381,14 +381,27 @@ describe("Collection Studio gallery", () => {
     await user.type(composer, "Top 10 movies of 2010 to 2020");
     await user.click(within(dialog).getByRole("button", { name: "Send" }));
 
-    // The posters stay in view at the top; each draft is a tool step in the chat.
-    expect(await within(dialog).findByText(/is ready$/, {}, WAIT)).toBeInTheDocument();
-    const row = within(dialog).getByRole("region", { name: "Top 10 movies of 2010 to 2020" });
+    // The posters fill the top; each draft is a tool step in the chat.
+    const wall = within(dialog).getByRole("region", { name: "Live build" });
+    expect(
+      await within(wall).findByRole("heading", { name: "Top 10 movies of 2010 to 2020" }, WAIT),
+    ).toBeInTheDocument();
+    await waitFor(() => expect(within(dialog).queryByText(/Ether is building/)).toBeNull(), WAIT);
     expect(within(dialog).getAllByText(/Draft the collection/).length).toBeGreaterThan(0);
-    expect(within(dialog).queryByText(/Completed steps/)).toBeNull();
     // A poster opens the catalogue's title drawer on top.
-    fireEvent.click(within(row).getAllByRole("button")[0]!);
+    const posters = within(wall).getByLabelText("Collection posters");
+    fireEvent.click(within(posters).getAllByRole("button")[0]!);
     await waitFor(() => expect(screen.getAllByRole("dialog")).toHaveLength(2), WAIT);
+    fireEvent.keyDown(document, { key: "Escape" });
+    await waitFor(() => expect(screen.getAllByRole("dialog")).toHaveLength(1), WAIT);
+    // Show more opens the catalogue browser on the collection's titles.
+    fireEvent.click(within(wall).getByRole("button", { name: /Show more/ }));
+    const browser = await screen.findByRole(
+      "dialog",
+      { name: "Top 10 movies of 2010 to 2020" },
+      WAIT,
+    );
+    expect(await within(browser).findByText(/^\d+ titles?$/, {}, WAIT)).toBeInTheDocument();
     fireEvent.keyDown(document, { key: "Escape" });
     await waitFor(() => expect(screen.getAllByRole("dialog")).toHaveLength(1), WAIT);
     const turn = calls(fake, "POST", "/agent/turn")[0]?.body as {

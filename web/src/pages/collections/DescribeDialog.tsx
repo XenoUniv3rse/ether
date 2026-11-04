@@ -16,16 +16,11 @@ import { localized, t, tx } from "../../i18n";
 import { useLocale } from "../../i18n/react";
 import { api, ApiError, apiStream, errorMessage } from "../../lib/api";
 import type { CollectionSpec } from "../../lib/contract";
-import { registryDescriptors } from "../../lib/extend";
-import { normalizeSpec, type SourceDescriptor } from "../../lib/rules";
-import {
-  LiveStageView,
-  collectionSteps,
-  momentsForTool,
-  readAgentStream,
-} from "../plugins/LiveStage";
-import type { Moment } from "../plugins/Stage";
+import { normalizeSpec } from "../../lib/rules";
+import { readAgentStream } from "../plugins/LiveStage";
+import { CatalogBrowser } from "../catalog/Catalog";
 import { TitleInspector } from "../catalog/TitleInspector";
+import { DescribeWall } from "./DescribeWall";
 
 /** The agent route whose turns build one collection and outlive a reload. */
 const ROUTE = "/collections/describe";
@@ -85,31 +80,11 @@ function draftOf(step: ToolStep): CollectionSpec | null {
   return step.name === "collection_draft" && spec ? normalizeSpec(spec) : null;
 }
 
-/** Rebuilds the stage from a stored transcript; only the latest draft fetches posters. */
-async function replay(
-  messages: AgentMessage[],
-): Promise<{ moments: Moment[]; spec: CollectionSpec | null }> {
-  const entries = transcriptEntries(messages);
-  let last = -1;
-  entries.forEach((e, i) => {
-    if ("tool" in e && draftOf(e.tool)) last = i;
-  });
-  const kinds = (await registryDescriptors("collectionSource").catch(
-    () => [],
-  )) as SourceDescriptor[];
-  const moments: Moment[] = [];
+/** The latest draft in a stored transcript. */
+function latestDraft(messages: AgentMessage[]): CollectionSpec | null {
   let spec: CollectionSpec | null = null;
-  for (const [i, e] of entries.entries()) {
-    if ("intent" in e) {
-      moments.push({ kind: "intent", text: e.intent, tool: "describe" });
-      continue;
-    }
-    const draft = draftOf(e.tool);
-    if (draft) spec = draft;
-    if (draft && i !== last) moments.push(collectionSteps(draft, kinds));
-    else moments.push(...(await momentsForTool(e.tool.name, e.tool.input, e.tool.output)));
-  }
-  return { moments, spec };
+  for (const e of transcriptEntries(messages)) if ("tool" in e) spec = draftOf(e.tool) ?? spec;
+  return spec;
 }
 
 /** Finished tool calls in a transcript; a change means the stage has news. */
@@ -145,7 +120,6 @@ export function DescribeDialog({
   const { locale } = useLocale();
   const [enabled, setEnabled] = useState<boolean | null>(null);
   const [messages, setMessages] = useState<AgentMessage[]>([]);
-  const [moments, setMoments] = useState<Moment[]>([]);
   const [spec, setSpec] = useState<CollectionSpec | null>(null);
   const [media, setMedia] = useState<Media>("movie");
   const [streaming, setStreaming] = useState(false);
@@ -163,14 +137,13 @@ export function DescribeDialog({
     seen.current = 0;
     sessionStorage.removeItem(THREAD_KEY);
     setMessages([]);
-    setMoments([]);
     setSpec(null);
     setRejoined(false);
     setStreaming(false);
     setError("");
   };
 
-  /** Reads the stored conversation; redraws the stage when a step finished. */
+  /** Reads the stored conversation; picks up the latest draft when a step finished. */
   const sync = useCallback(async (id: string) => {
     const page = await fetchAgentMessages(id);
     if (thread.current !== id) return;
@@ -178,10 +151,7 @@ export function DescribeDialog({
     const count = toolCount(page.messages);
     if (count !== seen.current || !page.running) {
       seen.current = count;
-      const r = await replay(page.messages);
-      if (thread.current !== id) return;
-      setMoments(r.moments);
-      setSpec(r.spec);
+      setSpec(latestDraft(page.messages));
     }
     setRejoined(page.running);
   }, []);
@@ -221,7 +191,6 @@ export function DescribeDialog({
 
   const follow = async (body: ReadableStream<Uint8Array>, signal: AbortSignal) => {
     const calls = new Map<string, { name: string; input: Record<string, unknown> }>();
-    const pending: Promise<void>[] = [];
     try {
       await readAgentStream(new Response(body), (c) => {
         if (c.type === "start" && c.messageId) turn.current = c.messageId;
@@ -232,22 +201,15 @@ export function DescribeDialog({
           if (!call) return;
           const draft = draftOf({ ...call, output: c.output });
           if (draft) setSpec(draft);
-          pending.push(
-            momentsForTool(call.name, call.input, c.output).then((m) =>
-              setMoments((all) => [...all, ...m]),
-            ),
-          );
         } else if (c.type === "error" && c.errorText) setError(c.errorText);
       });
     } catch (e) {
       if (!signal.aborted) setError(errorMessage(e));
     }
-    await Promise.all(pending);
   };
 
   const send = async (prompt: string, signal: AbortSignal): Promise<Response> => {
     setError("");
-    setMoments((all) => [...all, { kind: "intent", text: prompt, tool: "describe" }]);
     const res = await apiStream("/agent/turn", {
       method: "POST",
       signal,
@@ -282,15 +244,9 @@ export function DescribeDialog({
 
   const busy = streaming || rejoined;
   const [openTitle, setOpenTitle] = useState<string | null>(null);
-  // The top shows the request and the draft's posters; each step is a tool
-  // call in the chat below.
-  const stage = useMemo(() => {
-    const shown = moments.filter((m) => m.kind === "intent" || m.kind === "catalog");
-    if (busy || !spec) return shown;
-    const name = spec.name || t("Untitled collection");
-    return [...shown, { kind: "done", text: t("“{name}” is ready", { name }) } as Moment];
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- copy follows the language
-  }, [moments, busy, spec, locale]);
+  const [browsing, setBrowsing] = useState(false);
+  const [browseParams, setBrowseParams] = useState(() => new URLSearchParams());
+  const chat = useRef<HTMLDivElement>(null);
   const lastAssistant = [...messages].reverse().find((m) => m.role === "assistant");
 
   /** Ends the conversation: the collection (or nothing) is the outcome. */
@@ -326,10 +282,6 @@ export function DescribeDialog({
     () => ({
       ...agentPanelLabels(),
       title: t("Build with Ether"),
-      welcomeTitle: t("What should this collection be?"),
-      welcomeDescription: t(
-        "Say it in plain words. Ether searches your catalogue, tries a few drafts and shows the posters as it goes. Nothing is saved until you choose.",
-      ),
       disabledDescription: t("Connect a language model to describe collections."),
       placeholder: t("e.g. Feel-good 80s adventure films for a Saturday night"),
     }),
@@ -354,7 +306,9 @@ export function DescribeDialog({
         onClose();
       }}
       size="xl"
-      bodyClassName="flex min-h-0 flex-col p-0"
+      // One fixed layout: posters on the top two-thirds, the conversation on
+      // the bottom third. Neither grows into the other or the footer.
+      bodyClassName="flex min-h-0 flex-col overflow-hidden p-0"
       title={
         <span className="flex items-center gap-2">
           <Sparkles size={18} className="text-primary" /> {t("Describe a collection")}
@@ -405,48 +359,58 @@ export function DescribeDialog({
         </div>
       }
     >
-      {enabled === false ? (
-        <Alert variant="info" className="m-4">
-          <AlertTitle>{t("Describe it needs a language model")}</AlertTitle>
-          <AlertDescription>
-            {tx(
-              "Connect an OpenAI-compatible endpoint (a local Ollama works) in {integrations}, then try again. You can still build collections by hand or from a template.",
-              {
-                integrations: (
-                  <Link to="/services" className="font-medium underline" onClick={onClose}>
-                    {t("Integrations")}
-                  </Link>
-                ),
-              },
-            )}
-          </AlertDescription>
-        </Alert>
-      ) : null}
-      {stage.length ? (
-        // Sized to its content so every poster shows; the chat below scrolls.
-        <div className="shrink-0 border-b border-border" aria-label={t("Live build")} role="region">
-          <LiveStageView
-            moments={stage}
-            narration=""
-            showCompleted={false}
+      <section
+        className="relative min-h-0 flex-[2] basis-0 overflow-hidden border-b border-border"
+        aria-label={t("Live build")}
+      >
+        {enabled === false ? (
+          <Alert variant="info" className="m-4">
+            <AlertTitle>{t("Describe it needs a language model")}</AlertTitle>
+            <AlertDescription>
+              {tx(
+                "Connect an OpenAI-compatible endpoint (a local Ollama works) in {integrations}, then try again. You can still build collections by hand or from a template.",
+                {
+                  integrations: (
+                    <Link to="/services" className="font-medium underline" onClick={onClose}>
+                      {t("Integrations")}
+                    </Link>
+                  ),
+                },
+              )}
+            </AlertDescription>
+          </Alert>
+        ) : (
+          <DescribeWall
+            spec={spec}
+            building={busy}
+            examples={EXAMPLES}
+            onExample={(text) => fillComposer(chat.current, text)}
             onOpenTitle={setOpenTitle}
+            onShowMore={() => {
+              setBrowseParams(new URLSearchParams());
+              setBrowsing(true);
+            }}
           />
-        </div>
-      ) : null}
+        )}
+      </section>
       {error ? (
-        <p role="alert" className="border-b border-border px-4 py-2 text-sm text-danger">
+        <p role="alert" className="shrink-0 border-b border-border px-4 py-2 text-sm text-danger">
           {error}
         </p>
       ) : null}
-      <div className="describe-chat flex min-h-[220px] flex-1 flex-col">
+      <div ref={chat} className="describe-chat flex min-h-0 flex-1 basis-0 flex-col">
         <AgentPanel
           enabled={enabled !== false}
           initialMessages={messages}
-          suggestions={EXAMPLES}
           labels={labels}
           toolLabels={toolLabels}
           working={rejoined && !streaming}
           send={send}
+          emptyContent={
+            <p className="m-auto max-w-md px-6 text-center text-sm text-fg-muted">
+              {t("Describe the collection below, or pick an idea above.")}
+            </p>
+          }
           composerActions={
             // The composer row aligns to its bottom; centre the switch on the input line.
             <div className="flex h-10 shrink-0 items-center">
@@ -465,9 +429,37 @@ export function DescribeDialog({
           }
         />
       </div>
+      <Drawer
+        open={browsing && spec !== null}
+        onClose={() => setBrowsing(false)}
+        title={spec?.name || t("Untitled collection")}
+        size="2xl"
+      >
+        {browsing && spec ? (
+          <CatalogBrowser
+            params={browseParams}
+            setParams={setBrowseParams}
+            refreshHealth={async () => {}}
+            collection={spec}
+          />
+        ) : null}
+      </Drawer>
       {openTitle ? (
         <TitleInspector key={openTitle} titleKey={openTitle} onClose={() => setOpenTitle(null)} />
       ) : null}
     </Drawer>
   );
+}
+
+/**
+ * Puts an example into the agent panel's composer so the owner can send or
+ * edit it. The composer keeps its own state, so this goes through the input
+ * event React listens for.
+ */
+function fillComposer(root: HTMLElement | null, text: string) {
+  const box = root?.querySelector("textarea");
+  if (!box) return;
+  Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set?.call(box, text);
+  box.dispatchEvent(new Event("input", { bubbles: true }));
+  box.focus();
 }

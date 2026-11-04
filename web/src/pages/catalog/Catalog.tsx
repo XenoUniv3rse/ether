@@ -13,7 +13,7 @@ import {
   SlidersHorizontal,
   X,
 } from "lucide-react";
-import { useLayoutEffect, useRef, useState } from "react";
+import { useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { useApp } from "../../app-context";
 import { Drawer } from "../../components/Drawer";
@@ -29,10 +29,13 @@ import { formatRating } from "../../lib/contentRatings";
 import { fixed, formatNumber } from "../../lib/format";
 import { useAsync, useDebouncedValue } from "../../lib/hooks";
 import { CatalogSettings } from "./CatalogSettings";
+import type { CollectionSpec } from "../../lib/contract";
 import { TitleInspector } from "./TitleInspector";
 import "./catalog.css";
 
 const PAGE_SIZE = 48;
+/** The most titles a collection browse shows (the preview's own cap). */
+const COLLECTION_BROWSE_MAX = 200;
 const SORTS = localized(() => [
   { value: "popularity", label: t("Most popular") },
   { value: "released", label: t("Recently released") },
@@ -92,8 +95,11 @@ export function CatalogBrowser({
   setParams,
   refreshHealth,
   ruleFilter,
+  collection,
 }: {
   ruleFilter?: { ruleVisibility: string; rules: string; ruleFallback: string };
+  /** Browse one collection's titles, in its own order, instead of the catalogue. */
+  collection?: CollectionSpec;
   params: URLSearchParams;
   setParams: (p: URLSearchParams, options?: { replace?: boolean }) => void;
   refreshHealth: () => Promise<void>;
@@ -132,24 +138,51 @@ export function CatalogBrowser({
     latestParams.current = next;
     setParams(next, { replace });
   };
-  const results = useAsync(
+  const specKey = collection ? JSON.stringify(collection) : "";
+  const members = useAsync(
     (signal) =>
-      api.browseCatalog(
-        {
-          ...ruleFilter,
-          q: debouncedQuery,
-          type,
-          genre,
-          decade,
-          waiting: waiting ? "1" : "",
-          sort,
-          offset: (page - 1) * PAGE_SIZE,
-          limit: PAGE_SIZE,
-        },
-        signal,
-      ),
-    [debouncedQuery, type, genre, decade, waiting, sort, page, ruleFilter],
+      collection
+        ? api.previewCollection(collection, signal, COLLECTION_BROWSE_MAX)
+        : Promise.resolve(null),
+    [specKey],
   );
+  const browsed = useAsync(
+    (signal) =>
+      collection
+        ? Promise.resolve(null)
+        : api.browseCatalog(
+            {
+              ...ruleFilter,
+              q: debouncedQuery,
+              type,
+              genre,
+              decade,
+              waiting: waiting ? "1" : "",
+              sort,
+              offset: (page - 1) * PAGE_SIZE,
+              limit: PAGE_SIZE,
+            },
+            signal,
+          ),
+    [debouncedQuery, type, genre, decade, waiting, sort, page, ruleFilter, specKey],
+  );
+  // A collection is at most a few hundred titles: its filters run here.
+  const collectionPage = useMemo(() => {
+    if (!members.data) return undefined;
+    const q = debouncedQuery.trim().toLowerCase();
+    const from = Number(decade);
+    const all = members.data.items.filter(
+      (it) =>
+        (!q || it.title.toLowerCase().includes(q)) &&
+        (!type || it.type === type) &&
+        (!genre || (it.genres ?? []).some((g) => g.toLowerCase() === genre.toLowerCase())) &&
+        (!decade || ((it.year ?? 0) >= from && (it.year ?? 0) < from + 10)),
+    );
+    return { total: all.length, items: all.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE) };
+  }, [members.data, debouncedQuery, type, genre, decade, page]);
+  const results = collection
+    ? { ...members, data: collectionPage }
+    : { ...browsed, data: browsed.data ?? undefined };
   const facets = useAsync(async () => {
     const [genres, decades] = await Promise.all([
       api.facets(type, "genre"),
@@ -365,16 +398,18 @@ export function CatalogBrowser({
               ]}
             />
           </div>
-          <div className="catalog-filter-field">
-            <button
-              type="button"
-              className={`catalog-waiting-chip${waiting ? " is-on" : ""}`}
-              aria-pressed={waiting}
-              onClick={() => update("waiting", waiting ? "" : "1")}
-            >
-              {t("Waiting for a release")}
-            </button>
-          </div>
+          {collection ? null : (
+            <div className="catalog-filter-field">
+              <button
+                type="button"
+                className={`catalog-waiting-chip${waiting ? " is-on" : ""}`}
+                aria-pressed={waiting}
+                onClick={() => update("waiting", waiting ? "" : "1")}
+              >
+                {t("Waiting for a release")}
+              </button>
+            </div>
+          )}
           <div className="catalog-filter-field">
             <span className="catalog-field-label">{t("Decade")}</span>
             <ToolbarPicker
@@ -392,7 +427,7 @@ export function CatalogBrowser({
             />
           </div>
           <ErrorPanel error={facets.error} onRetry={() => void facets.reload()} />
-          {!ruleFilter ? (
+          {!ruleFilter && !collection ? (
             <div className="catalog-policy">
               <Film size={18} />
               <h4>{t("Ready for discovery")}</h4>
@@ -411,15 +446,17 @@ export function CatalogBrowser({
           <div className="catalog-results-head">
             <div>
               <h3>
-                {waiting
-                  ? t("Waiting for a release")
-                  : query
-                    ? t("Results for “{query}”", { query })
-                    : type === "movie"
-                      ? t("Movies")
-                      : type === "show"
-                        ? t("TV shows")
-                        : t("Movies & TV shows")}
+                {collection
+                  ? collection.name || t("Untitled collection")
+                  : waiting
+                    ? t("Waiting for a release")
+                    : query
+                      ? t("Results for “{query}”", { query })
+                      : type === "movie"
+                        ? t("Movies")
+                        : type === "show"
+                          ? t("TV shows")
+                          : t("Movies & TV shows")}
               </h3>
               <p role="status">
                 {busy
@@ -442,15 +479,17 @@ export function CatalogBrowser({
                 <SlidersHorizontal size={14} />
                 {t("Filters")}
               </Button>
-              <ToolbarPicker
-                ariaLabel={t("Sort titles")}
-                value={sort}
-                options={SORTS}
-                onChange={(v) => update("sort", v)}
-              />
+              {collection ? null : (
+                <ToolbarPicker
+                  ariaLabel={t("Sort titles")}
+                  value={sort}
+                  options={SORTS}
+                  onChange={(v) => update("sort", v)}
+                />
+              )}
             </div>
           </div>
-          {tmdbMissing ? (
+          {tmdbMissing && !collection ? (
             <p className="mb-3 text-sm text-fg-muted">
               {tx("No TMDB key is configured. {link} to populate the catalog.", {
                 link: (
