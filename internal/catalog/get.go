@@ -766,14 +766,46 @@ func (c *Catalog) NextStoredEpisode(ctx context.Context, episode core.RatingKey)
 		query = `SELECT ` + titleCols + ` FROM catalog_titles WHERE type='episode' AND show_key=? AND season>0 AND (season>? OR (season=? AND episode>?)) ORDER BY season ASC, episode ASC LIMIT 8`
 		args = []any{showKey, episode.Season(), episode.Season(), episode.Episode()}
 	}
-	rows, err := c.queryTitles(ctx, query, args...)
+	// The window lets an undated or future episode give way to the next
+	// aired one. Only the episode returned is hydrated: Continue Watching
+	// asks this for each of up to fifty shows, and hydrating the whole
+	// window read eight episodes' facts and their show's seasons per show.
+	candidates, err := c.scanTitleKeys(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
-	if len(rows) == 0 {
-		return nil, core.ErrNotFound
+	now := c.now()
+	for _, cand := range candidates {
+		if cand.Adult || !cand.IsReleased(now) {
+			continue
+		}
+		rows, err := c.queryTitles(ctx, `SELECT `+titleCols+` FROM catalog_titles WHERE key=?`, int64(cand.Key))
+		if err != nil {
+			return nil, err
+		}
+		if len(rows) > 0 {
+			return &rows[0], nil
+		}
 	}
-	return &rows[0], nil
+	return nil, core.ErrNotFound
+}
+
+// scanTitleKeys reads title rows without hydrating them.
+func (c *Catalog) scanTitleKeys(ctx context.Context, q string, args ...any) ([]core.Title, error) {
+	rows, err := c.db.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []core.Title
+	for rows.Next() {
+		st, err := scanTitle(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, st.t)
+	}
+	return out, rows.Err()
 }
 
 // NextEpisode returns the next regular episode (specials, season 0, are skipped
