@@ -451,6 +451,7 @@ export function GuideList({
           <ul className="px-2 py-1">
             {guideSources.map((s) => {
               const until = s.guideUntil ? Date.parse(s.guideUntil) : 0;
+              const used = lineup.filter((c) => c.kind === "iptv" && c.guideId && (c.guideSourceId || c.sourceId) === s.id).length;
               const stale = Boolean(s.lastError) || (until > 0 && until - now < STALE_MS);
               return (
                 <li key={s.id}>
@@ -471,15 +472,15 @@ export function GuideList({
                         )}
                       >
                         {s.lastError
-                          ? t("Last refresh failed")
+                          ? s.lastError
                           : until
                             ? until <= now
                               ? t("Listings have run out")
                               : t("{count} channels · to {time}", {
-                                  count: formatNumber(s.guideChannelCount ?? 0),
+                                  count: formatNumber(s.kind === "plex" ? used : (s.guideChannelCount ?? 0)),
                                   time: dayClock(new Date(until)),
                                 })
-                            : tn(s.guideChannelCount ?? 0, "{count} channel", "{count} channels")}
+                            : s.kind === "plex" ? tn(used, "{count} channel in use", "{count} channels in use") : tn(s.guideChannelCount ?? 0, "{count} channel", "{count} channels")}
                       </span>
                     </span>
                     {stale ? (

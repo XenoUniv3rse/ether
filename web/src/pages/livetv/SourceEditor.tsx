@@ -15,7 +15,7 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { Field, SecretInput, Segmented } from "../../components/fields";
 import { localized, t } from "../../i18n";
-import { errorMessage } from "../../lib/api";
+import { api, errorMessage } from "../../lib/api";
 import { isPluginDescriptor, textOf, useRegistry, type Descriptor } from "../../lib/extend";
 import type { ParamField } from "../../lib/rules";
 import { formatNumber, relativeTime } from "../../lib/format";
@@ -28,6 +28,7 @@ import {
   type Source,
   type SourceAuth,
   type SourceDraft,
+  type PlexLineup,
 } from "./model";
 
 export type SourceKind = "playlist" | "guide";
@@ -82,6 +83,11 @@ export function SourceEditor({
   const [kind, setKind] = useState<SourceKind>(initialKind);
   const [busy, setBusy] = useState<"" | "save" | "refresh" | "delete">("");
   const [error, setError] = useState("");
+  const [guideKind, setGuideKind] = useState<"xmltv" | "plex">("xmltv");
+  const [lineups, setLineups] = useState<PlexLineup[] | null>(null);
+  const [looking, setLooking] = useState(false);
+  const [region, setRegion] = useState("");
+  useEffect(() => { void api.getConfig().then((cfg) => setRegion(cfg.catalog.region?.toUpperCase() ?? "")).catch(() => {}); }, []);
   const [files, setFiles] = useState<{ playlist: File | null; guide: File | null }>({
     playlist: null,
     guide: null,
@@ -92,7 +98,7 @@ export function SourceEditor({
   const kindDescriptors: LiveTVDescriptor[] = registry.descriptors;
   const byEditor = (editor: string) => kindDescriptors.find((d) => d.meta?.editor === editor);
   const typeDescriptors = kindDescriptors.filter(
-    (d) => d.meta?.editor === "playlist" || d.meta?.editor === "guide",
+    (d) => (d.meta?.editor === "playlist" || d.meta?.editor === "guide") && d.id !== "plex",
   );
   const pluginKinds = kindDescriptors.filter(
     (d) =>
@@ -118,6 +124,7 @@ export function SourceEditor({
             id: source.id,
             kind: source.kind,
             name: source.name,
+            lineupId: source.lineupId, country: source.country, postalCode: source.postalCode,
             playlistUrl: source.playlistUrl ?? "",
             guideUrl: source.guideUrl ?? "",
             refreshHours: source.refreshHours,
@@ -133,6 +140,8 @@ export function SourceEditor({
           : "playlist"
         : initialKind,
     );
+    setGuideKind(source?.kind === "plex" ? "plex" : "xmltv");
+    setLineups(null);
     setFiles({ playlist: null, guide: null });
     setError("");
   }, [source, initialKind]);
@@ -156,13 +165,14 @@ export function SourceEditor({
   const auth = draft.auth ?? {};
   const xtream = kind === "playlist" && auth.type === "xtream";
   const setAuth = (patch: SourceAuth) => setDraft((d) => ({ ...d, auth: { ...d.auth, ...patch } }));
+  const plex = kind === "guide" && guideKind === "plex";
   const canSave =
     draft.name.trim() !== "" &&
     (xtream
       ? Boolean(auth.server?.trim() && auth.username?.trim() && auth.password)
       : kind === "playlist"
         ? Boolean(files.playlist || draft.playlist || draft.playlistUrl)
-        : Boolean(files.guide || draft.guide || draft.guideUrl));
+        : plex ? Boolean(draft.lineupId && (draft.country || region) && draft.postalCode) : Boolean(files.guide || draft.guide || draft.guideUrl));
 
   const save = async () => {
     setBusy("save");
@@ -170,7 +180,8 @@ export function SourceEditor({
     try {
       const body: SourceDraft =
         kind === "guide" || xtream ? { ...draft, playlist: "", playlistUrl: "" } : { ...draft };
-      body.kind = pluginBacked ? (selectedPlugin?.id ?? draft.kind) : "";
+      body.kind = plex ? "plex" : pluginBacked ? (selectedPlugin?.id ?? draft.kind) : "";
+      if (plex) body.country = (draft.country || region).toUpperCase();
       body.auth = pluginBacked ? undefined : cleanAuth(draft.auth, kind);
       const playlistFile = kind === "playlist" && !xtream ? files.playlist : null;
       const guideFile = files.guide;
@@ -238,7 +249,7 @@ export function SourceEditor({
   };
 
   const auto = (draft.refreshHours ?? 0) >= 0;
-  const urlBacked = xtream || Boolean(draft.playlistUrl || draft.guideUrl);
+  const urlBacked = plex || xtream || Boolean(draft.playlistUrl || draft.guideUrl);
 
   return (
     <div className="mx-auto max-w-3xl space-y-5 p-3 sm:p-6">
@@ -385,6 +396,15 @@ export function SourceEditor({
             ) : null}
           </div>
         ) : null}
+        {kind === "guide" && !source ? <Segmented ariaLabel={t("Guide type")} value={guideKind} onChange={(v) => { setGuideKind(v); setDraft((d) => ({ ...d, lineupId: "" })); setLineups(null); }} options={[{ value: "xmltv", label: t("XMLTV guide") }, { value: "plex", label: t("Plex guide") }]} /> : null}
+        {plex ? <div className="space-y-3">
+          <div className="grid grid-cols-2 gap-3">
+            <Field label={t("Country code")} htmlFor="plex-country"><Input id="plex-country" maxLength={2} value={draft.country ?? region} onChange={(e) => setDraft({ ...draft, country: e.currentTarget.value.toUpperCase(), lineupId: "" })} /></Field>
+            <Field label={t("Postal code")} htmlFor="plex-postal"><Input id="plex-postal" value={draft.postalCode ?? ""} onChange={(e) => setDraft({ ...draft, postalCode: e.currentTarget.value, lineupId: "" })} /></Field>
+          </div>
+          <Button variant="outline" size="sm" disabled={looking || !(draft.country || region) || !draft.postalCode} onClick={() => { setLooking(true); setError(""); void tv.plexLineups(draft.country || region, draft.postalCode || "").then(setLineups).catch((e) => setError(errorMessage(e))).finally(() => setLooking(false)); }}>{looking ? t("Finding lineups…") : t("Find lineups")}</Button>
+          {lineups ? <div className="space-y-1"><p className="text-xs font-semibold text-fg-muted">{t("Choose a lineup")}</p>{lineups.length ? lineups.map((l) => <label key={l.id} className="flex cursor-pointer items-center gap-2 rounded-lg border border-border p-2 text-sm"><input type="radio" name="plex-lineup" checked={draft.lineupId === l.id} onChange={() => setDraft({ ...draft, lineupId: l.id, name: l.title })} /><span>{l.title} · {l.type}</span></label>) : <p className="text-sm text-fg-muted">{t("No lineups found for this postal code.")}</p>}</div> : null}
+        </div> : null}
         <Field label={t("Source name")} htmlFor="src-name">
           <Input
             id="src-name"
@@ -495,7 +515,7 @@ export function SourceEditor({
             onFile={(f) => void upload(f, "playlist")}
           />
         ) : null}
-        {!pluginBacked ? (
+        {!pluginBacked && !plex ? (
           <UrlOrFile
             id="src-xmltv"
             label={
@@ -522,8 +542,8 @@ export function SourceEditor({
             onFile={(f) => void upload(f, "guide")}
           />
         ) : null}
-        {!xtream && !pluginBacked ? <SignIn auth={auth} onChange={setAuth} /> : null}
-        {!pluginBacked ? <ClientIdentity auth={auth} onChange={setAuth} /> : null}
+        {!xtream && !pluginBacked && !plex ? <SignIn auth={auth} onChange={setAuth} /> : null}
+        {!pluginBacked && !plex ? <ClientIdentity auth={auth} onChange={setAuth} /> : null}
         <Field
           label={t("Keep it fresh")}
           hint={

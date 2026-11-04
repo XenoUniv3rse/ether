@@ -122,7 +122,11 @@ export type PreviewSession = {
   activeSourceName?: string;
   programme?: Programme;
 };
+export type PlexLineup = { id: string; title: string; type: string };
 export type Source = {
+  lineupId?: string;
+  country?: string;
+  postalCode?: string;
   kind?: string;
   id: string;
   name: string;
@@ -143,6 +147,9 @@ export type Source = {
   refreshFailures?: number;
 };
 export type SourceDraft = {
+  lineupId?: string;
+  country?: string;
+  postalCode?: string;
   kind?: string;
   id: string;
   name: string;
@@ -171,7 +178,7 @@ export type MatchChange = {
   guideSourceName?: string;
   guideId: string;
   guideName: string;
-  method?: "id" | "name";
+  method?: "id" | "name" | "alias";
 };
 export type MatchResult = {
   matched: number;
@@ -218,6 +225,7 @@ export function policyPermits(
 }
 
 export const tv = {
+  plexLineups: (country: string, postalCode: string) => apiFetch<PlexLineup[]>(`/livetv/plex-guide/lineups?country=${enc(country)}&postalCode=${enc(postalCode)}`),
   channels: (signal?: AbortSignal) => apiFetch<Channel[]>("/livetv/channels", { signal }),
   sources: (signal?: AbortSignal) => apiFetch<Source[]>("/livetv/sources", { signal }),
   guide: (from: Date, until: Date, signal?: AbortSignal) =>
