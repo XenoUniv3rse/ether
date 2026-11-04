@@ -2,11 +2,12 @@ package core
 
 import "context"
 
-// Indexer purposes say why an indexer API request was made. They are
-// observability only: the owner console breaks each indexer's real API
-// hits and grabs down by purpose, so an owner comparing Ether with the
-// indexer's own counter can see what spent the quota. A purpose never
-// changes how a search or a budget behaves.
+// Indexer purposes say why an indexer API request was made. The owner
+// console breaks each indexer's real API hits and grabs down by purpose, so
+// an owner comparing Ether with the indexer's own counter can see what
+// spent the quota. A purpose never changes how a search behaves; warm-up
+// (and availability grabs) share a small daily slice of each indexer's
+// limit, so work nobody is waiting on leaves the rest to playback.
 const (
 	IndexerPurposeFeed         = "feed"         // release-feed polls
 	IndexerPurposeAvailability = "availability" // background availability checks

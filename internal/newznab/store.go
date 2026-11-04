@@ -108,7 +108,15 @@ func (c *Client) reserve(ctx context.Context, kind string) error {
 	} else {
 		limit = cfg.DailyGrabs
 	}
+	if err := c.speculativeRoom(ctx, kind); err != nil {
+		return err
+	}
 	if core.IsBackgroundCheck(ctx) {
+		if limit == 0 {
+			// Background work also respects a limit the indexer reports
+			// itself; foreground requests are left to the indexer.
+			limit = c.reportedLimit(kind)
+		}
 		if limit > 0 {
 			limit = limit * (100 - core.ForegroundReserve(ctx)) / 100
 			if limit == 0 {
