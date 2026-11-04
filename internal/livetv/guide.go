@@ -57,6 +57,7 @@ const (
 type GuideChannel struct {
 	SourceID   string     `json:"sourceId"`
 	SourceName string     `json:"sourceName"`
+	SourceKind string     `json:"sourceKind,omitempty"`
 	GuideID    string     `json:"guideId"`
 	Name       string     `json:"name"`
 	Logo       string     `json:"logo"`
@@ -324,8 +325,13 @@ func (s *Service) fillSourceStats(ctx context.Context, srcs []Source) error {
 	return s.planRefresh(ctx, srcs)
 }
 
-// GuideChannels searches stored XMLTV channels by case-insensitive substring
-// of name, any display name, or guide id.
+// maxGuideSearchWords bounds the per-word predicates one search builds.
+const maxGuideSearchWords = 6
+
+// GuideChannels searches stored XMLTV channels. Every word of q must appear,
+// in any order, in the name, a display name or the guide id, so "fox phoenix"
+// finds "FOX LOCAL Phoenix". Exact matches rank first, then channels that
+// still have listings ahead, then by name.
 func (s *Service) GuideChannels(ctx context.Context, q, source string, limit int) ([]GuideChannel, error) {
 	if limit <= 0 {
 		limit = 50
@@ -338,14 +344,48 @@ func (s *Service) GuideChannels(ctx context.Context, q, source string, limit int
 	if err != nil {
 		return nil, err
 	}
-	now := s.o.Now().UnixMilli()
+	kinds := map[string]string{}
 	d := store.DialectOf(s.o.DB)
-	rows, err := s.o.DB.QueryContext(ctx, guideChannelsCTE+`SELECT g.source_id, g.guide_id, g.name, g.logo,
-		(SELECT COUNT(*) FROM livetv_programmes p WHERE p.source_id=g.source_id AND p.channel_id=g.guide_id AND p.end_ms>?1),
-		(SELECT MAX(end_ms) FROM livetv_programmes p WHERE p.source_id=g.source_id AND p.channel_id=g.guide_id)
+	sourceRows, err := s.o.DB.QueryContext(ctx, `SELECT id, `+store.JSONText(d, "data", "kind")+` FROM livetv_sources`)
+	if err != nil {
+		return nil, err
+	}
+	for sourceRows.Next() {
+		var id string
+		var kind sql.NullString
+		if err = sourceRows.Scan(&id, &kind); err != nil {
+			break
+		}
+		kinds[id] = kind.String
+	}
+	if err == nil {
+		err = sourceRows.Err()
+	}
+	sourceRows.Close()
+	if err != nil {
+		return nil, err
+	}
+	now := s.o.Now().UnixMilli()
+	args := []any{now, source, q, limit}
+	words := strings.Fields(q)
+	if len(words) > maxGuideSearchWords {
+		words = words[:maxGuideSearchWords]
+	}
+	match := ""
+	for _, w := range words {
+		args = append(args, w)
+		p := fmt.Sprintf("?%d", len(args))
+		match += ` AND (` + store.Contains(d, "lower(g.name)", p) + ` OR ` + store.Contains(d, "lower(g.guide_id)", p) + ` OR ` + store.Contains(d, "lower(g.names)", p) + `)`
+	}
+	rows, err := s.o.DB.QueryContext(ctx, guideChannelsCTE+`SELECT source_id, guide_id, name, logo, ahead, until_ms FROM (
+		SELECT g.source_id, g.guide_id, g.name, g.logo,
+			(SELECT COUNT(*) FROM livetv_programmes p WHERE p.source_id=g.source_id AND p.channel_id=g.guide_id AND p.end_ms>?1) AS ahead,
+			(SELECT MAX(end_ms) FROM livetv_programmes p WHERE p.source_id=g.source_id AND p.channel_id=g.guide_id) AS until_ms,
+			CASE WHEN lower(g.guide_id)=?3 OR lower(g.name)=?3 THEN 1 ELSE 0 END AS exact,
+			lower(g.name) AS sort_name
 		FROM gc g
-		WHERE (?2='' OR g.source_id=?2) AND (?3='' OR `+store.Contains(d, "lower(g.name)", "?3")+` OR `+store.Contains(d, "lower(g.guide_id)", "?3")+` OR `+store.Contains(d, "lower(g.names)", "?3")+`)
-		ORDER BY (lower(g.guide_id)=?3 OR lower(g.name)=?3) DESC, lower(g.name), g.source_id, g.guide_id LIMIT ?4`, now, source, q, limit)
+		WHERE (?2='' OR g.source_id=?2)`+match+`) m
+		ORDER BY exact DESC, CASE WHEN ahead>0 THEN 1 ELSE 0 END DESC, sort_name, source_id, guide_id LIMIT ?4`, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -358,6 +398,7 @@ func (s *Service) GuideChannels(ctx context.Context, q, source string, limit int
 			return nil, err
 		}
 		g.SourceName = names[g.SourceID]
+		g.SourceKind = kinds[g.SourceID]
 		if until.Valid {
 			g.Until = msTime(until.Int64)
 		}
@@ -483,6 +524,30 @@ func (s *Service) MatchGuides(ctx context.Context, req GuideMatchRequest) (Guide
 	byID := map[string][]*guideCandidate{}
 	byFold := map[string][]*guideCandidate{}
 	byName := map[string][]*guideCandidate{}
+	byAlias := map[string][]*guideCandidate{}
+	plexSources := map[string]bool{}
+	sourceRows, err := s.o.DB.QueryContext(ctx, `SELECT id, data FROM livetv_sources`)
+	if err != nil {
+		return res, err
+	}
+	for sourceRows.Next() {
+		var id string
+		var data []byte
+		var source Source
+		if err = sourceRows.Scan(&id, &data); err != nil {
+			break
+		}
+		if json.Unmarshal(data, &source) == nil && source.Kind == "plex" {
+			plexSources[id] = true
+		}
+	}
+	if err == nil {
+		err = sourceRows.Err()
+	}
+	sourceRows.Close()
+	if err != nil {
+		return res, err
+	}
 	rows, err := s.o.DB.QueryContext(ctx, guideChannelsCTE+`SELECT source_id, guide_id, name, names FROM gc`)
 	if err != nil {
 		return res, err
@@ -494,8 +559,8 @@ func (s *Service) MatchGuides(ctx context.Context, req GuideMatchRequest) (Guide
 			return res, err
 		}
 		st, ok := stats[guideKey{src, id}]
-		if !ok {
-			continue // no upcoming programmes; mapping to it would not help
+		if !ok && !plexSources[src] {
+			continue
 		}
 		cand := &guideCandidate{source: src, guide: id, name: name, window: st.window, until: st.until}
 		byID[id] = append(byID[id], cand)
@@ -505,6 +570,12 @@ func (s *Service) MatchGuides(ctx context.Context, req GuideMatchRequest) (Guide
 		json.Unmarshal([]byte(raw), &all)
 		seen := map[string]bool{}
 		for _, n := range append(all, name) {
+			if plexSources[src] {
+				if k := normalizeGuideName(n); k != "" {
+					byAlias[k] = append(byAlias[k], cand)
+				}
+				continue
+			}
 			if k := normalizeGuideName(n); k != "" && !seen[k] {
 				seen[k] = true
 				byName[k] = append(byName[k], cand)
@@ -542,6 +613,38 @@ func (s *Service) MatchGuides(ctx context.Context, req GuideMatchRequest) (Guide
 			method = "name"
 			if k := normalizeGuideName(c.Name); k != "" {
 				pick = bestCandidate(c, byName[k])
+			}
+		}
+		if pick == nil && (req.DryRun || len(req.ChannelIDs) > 0) {
+			method = "alias"
+			normalized := normalizeGuideName(c.Name)
+			pick = bestCandidate(c, byAlias[normalized])
+			if pick == nil && len(normalized) >= 4 {
+				var aliases []string
+				for alias := range byAlias {
+					if strings.HasPrefix(alias, normalized) {
+						aliases = append(aliases, alias)
+					}
+				}
+				sort.Slice(aliases, func(i, j int) bool {
+					if len(aliases[i]) != len(aliases[j]) {
+						return len(aliases[i]) < len(aliases[j])
+					}
+					return aliases[i] < aliases[j]
+				})
+				if len(aliases) > 0 {
+					pick = bestCandidate(c, byAlias[aliases[0]])
+				}
+			}
+			if pick == nil {
+				for _, word := range strings.FieldsFunc(strings.ToLower(c.Name), func(r rune) bool { return !unicode.IsLetter(r) && !unicode.IsDigit(r) }) {
+					if len(word) >= 3 {
+						if candidate := bestCandidate(c, byAlias[word]); candidate != nil {
+							pick = candidate
+							break
+						}
+					}
+				}
 			}
 		}
 		if pick == nil {
@@ -623,7 +726,7 @@ func bestCandidate(c Channel, cands []*guideCandidate) *guideCandidate {
 // refreshInterval reports the longest time between automatic refreshes. Only
 // URL-backed sources refresh; inline uploads have nothing new to fetch.
 func refreshInterval(src Source) (time.Duration, bool) {
-	if src.PlaylistURL == "" && src.GuideURL == "" || src.RefreshHours < 0 {
+	if src.Kind != "plex" && src.PlaylistURL == "" && src.GuideURL == "" || src.RefreshHours < 0 {
 		return 0, false
 	}
 	if src.RefreshHours == 0 {
@@ -649,7 +752,7 @@ func nextRefresh(src Source, horizon *time.Time) (time.Time, bool) {
 		return src.LastErrorAt.Add(backoff).UTC(), true
 	}
 	next := src.UpdatedAt.Add(iv)
-	if horizon != nil && src.GuideURL != "" {
+	if horizon != nil && (src.GuideURL != "" || src.Kind == "plex") {
 		if h := horizon.Add(-guideHorizonMargin); h.Before(next) {
 			next = h
 		}
@@ -680,6 +783,7 @@ func (s *Service) planRefresh(ctx context.Context, srcs []Source) error {
 		updated[src.ID] = src.UpdatedAt.UnixMilli()
 	}
 	horizons := map[string]int64{}
+	covered := map[guideKey]bool{}
 	if len(used) > 0 {
 		rows, err := s.o.DB.QueryContext(ctx, `SELECT source_id, channel_id, MAX(end_ms) FROM livetv_programmes GROUP BY source_id, channel_id`)
 		if err != nil {
@@ -691,6 +795,9 @@ func (s *Service) planRefresh(ctx context.Context, srcs []Source) error {
 			if err = rows.Scan(&k.source, &k.guide, &end); err != nil {
 				rows.Close()
 				return err
+			}
+			if end > s.o.Now().UnixMilli() {
+				covered[k] = true
 			}
 			at, ok := updated[k.source]
 			if !ok || !used[k] || end <= at {
@@ -712,6 +819,16 @@ func (s *Service) planRefresh(ctx context.Context, srcs []Source) error {
 		}
 		srcs[i].NextRefresh = nil
 		if next, ok := nextRefresh(srcs[i], horizon); ok {
+			if srcs[i].Kind == "plex" && (srcs[i].LastErrorAt == nil || !srcs[i].LastErrorAt.After(srcs[i].UpdatedAt)) {
+				for key := range used {
+					if key.source == srcs[i].ID && !covered[key] {
+						if earlier := srcs[i].UpdatedAt.Add(minRefreshInterval); earlier.Before(next) {
+							next = earlier
+						}
+						break
+					}
+				}
+			}
 			srcs[i].NextRefresh = &next
 		}
 	}
@@ -749,19 +866,19 @@ func (s *Service) RefreshSource(ctx context.Context, id string) (Source, error) 
 func (s *Service) refreshDueSources(ctx context.Context) []string {
 	// Only scheduling fields are read; inline uploads can be large.
 	d := store.DialectOf(s.o.DB)
-	rows, err := s.o.DB.QueryContext(ctx, `SELECT id, `+store.JSONText(d, "data", "playlistUrl")+`, `+store.JSONText(d, "data", "guideUrl")+`, `+store.JSONInt(d, "data", "refreshHours")+`, `+store.JSONText(d, "data", "updatedAt")+`, `+store.JSONText(d, "data", "lastErrorAt")+`, `+store.JSONInt(d, "data", "refreshFailures")+` FROM livetv_sources ORDER BY id`)
+	rows, err := s.o.DB.QueryContext(ctx, `SELECT id, `+store.JSONText(d, "data", "kind")+`, `+store.JSONText(d, "data", "playlistUrl")+`, `+store.JSONText(d, "data", "guideUrl")+`, `+store.JSONInt(d, "data", "refreshHours")+`, `+store.JSONText(d, "data", "updatedAt")+`, `+store.JSONText(d, "data", "lastErrorAt")+`, `+store.JSONInt(d, "data", "refreshFailures")+` FROM livetv_sources ORDER BY id`)
 	if err != nil {
 		return nil
 	}
 	var srcs []Source
 	for rows.Next() {
 		var id string
-		var playlist, guide, updated, failed sql.NullString
+		var kind, playlist, guide, updated, failed sql.NullString
 		var hours, failures sql.NullInt64
-		if rows.Scan(&id, &playlist, &guide, &hours, &updated, &failed, &failures) != nil {
+		if rows.Scan(&id, &kind, &playlist, &guide, &hours, &updated, &failed, &failures) != nil {
 			continue
 		}
-		src := Source{ID: id, PlaylistURL: playlist.String, GuideURL: guide.String, RefreshHours: int(hours.Int64), RefreshFailures: int(failures.Int64)}
+		src := Source{ID: id, Kind: kind.String, PlaylistURL: playlist.String, GuideURL: guide.String, RefreshHours: int(hours.Int64), RefreshFailures: int(failures.Int64)}
 		src.UpdatedAt, _ = time.Parse(time.RFC3339Nano, updated.String)
 		if t, e := time.Parse(time.RFC3339Nano, failed.String); e == nil {
 			src.LastErrorAt = &t

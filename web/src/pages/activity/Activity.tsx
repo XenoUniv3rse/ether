@@ -6,8 +6,9 @@ import { normalizeSessions } from "../../lib/health";
 import { useAsync, useInterval } from "../../lib/hooks";
 import { PlayHistory, ViewingFilters } from "./History";
 import { Experience, ExperiencePeriod } from "./Experience";
-import { NowPlaying, ProtocolFilter } from "./NowPlaying";
-import { ViewingStats } from "./Stats";
+import { NowPlaying, ProtocolFilter, useNowView, ViewSwitch } from "./NowPlaying";
+import { Delivery } from "./Delivery";
+import { Viewing } from "./Viewing";
 import { viewingQuery, type Play, type Summary, type ViewingFilter } from "./types";
 
 const TABS = localized(
@@ -15,7 +16,8 @@ const TABS = localized(
     [
       { key: "now", label: t("Now playing") },
       { key: "history", label: t("History") },
-      { key: "stats", label: t("Stats") },
+      { key: "viewing", label: t("Viewing") },
+      { key: "delivery", label: t("Delivery") },
       { key: "experience", label: t("Experience") },
     ] as const,
 );
@@ -43,8 +45,9 @@ export default function Activity() {
   useInstallableDashboard();
   const [filter, setFilter] = useState<ViewingFilter>({ days: "30", user: "", year: "" });
   const [protocol, setProtocol] = useState("");
+  const [nowView, setNowView] = useNowView();
   const query = viewingQuery(filter);
-  const viewingTab = tab === "history" || tab === "stats";
+  const viewingTab = tab === "history" || tab === "viewing" || tab === "delivery";
 
   const sessions = useAsync(
     async () =>
@@ -82,7 +85,10 @@ export default function Activity() {
       // Every tab keeps its filters here, so its four KPIs open the page at the same place.
       tabActions={
         tab === "now" ? (
-          <ProtocolFilter streams={sessions.data ?? []} value={protocol} onChange={setProtocol} />
+          <>
+            <ProtocolFilter streams={sessions.data ?? []} value={protocol} onChange={setProtocol} />
+            <ViewSwitch value={nowView} onChange={setNowView} />
+          </>
         ) : tab === "experience" ? (
           <ExperiencePeriod />
         ) : (
@@ -97,7 +103,7 @@ export default function Activity() {
               {transcoder.data.playbackError || transcoder.data.notice}
             </p>
           ) : null}
-          <NowPlaying state={sessions} protocol={protocol} />
+          <NowPlaying state={sessions} protocol={protocol} view={nowView} />
         </>
       ) : tab === "experience" ? (
         <Experience />
@@ -110,8 +116,15 @@ export default function Activity() {
               error={viewing.error}
               onRetry={() => void viewing.reload()}
             />
+          ) : tab === "viewing" ? (
+            <Viewing
+              summary={viewing.data?.summary}
+              viewers={viewers.data ?? []}
+              error={viewing.error}
+              onRetry={() => void viewing.reload()}
+            />
           ) : (
-            <ViewingStats
+            <Delivery
               summary={viewing.data?.summary}
               error={viewing.error}
               onRetry={() => void viewing.reload()}

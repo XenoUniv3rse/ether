@@ -1,13 +1,29 @@
 [
   {
     "kind": "liveTVSource",
+    "id": "plex",
+    "owner": "builtin",
+    "label": {
+      "source": "Plex guide"
+    },
+    "hint": {},
+    "icon": "calendar-range",
+    "order": 31,
+    "meta": {
+      "editor": "guide",
+      "yieldsGuide": true,
+      "test": true
+    }
+  },
+  {
+    "kind": "liveTVSource",
     "id": "xtream",
     "owner": "builtin",
     "label": {
       "source": "Xtream Codes login"
     },
     "hint": {
-      "source": "An M3U playlist of live streams, with an optional XMLTV guide."
+      "source": "Sign in to an IPTV provider's Xtream Codes panel. Ether imports the live channels and the panel's guide."
     },
     "icon": "key-round",
     "order": 10,

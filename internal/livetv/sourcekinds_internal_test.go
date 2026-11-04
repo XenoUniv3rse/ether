@@ -37,8 +37,8 @@ func TestSourceKindClassification(t *testing.T) {
 
 func TestLiveTVSourceDescriptors(t *testing.T) {
 	ds := BuiltinDescriptors()
-	if len(ds) != 4 {
-		t.Fatalf("descriptors = %d, want 4", len(ds))
+	if len(ds) != 5 {
+		t.Fatalf("descriptors = %d, want 5", len(ds))
 	}
 	byID := map[string]extend.Descriptor{}
 	for _, d := range ds {

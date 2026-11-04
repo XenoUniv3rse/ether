@@ -3,7 +3,6 @@ package livetv
 import (
 	"context"
 	"fmt"
-	"io"
 	"math"
 	"net/http"
 	"net/http/httptest"
@@ -245,6 +244,22 @@ func (s *Service) TuneWithSession(ctx context.Context, u *core.User, channelID s
 	if limit > 0 && count >= limit {
 		s.mu.Unlock()
 		return SessionInfo{}, core.ErrStreamLimit
+	}
+	// A provider that allows N connections can carry N different channels;
+	// viewers of a channel already playing share its connection.
+	if c.Kind == "iptv" && c.SourceID != "" {
+		if max := s.sourceConnectionLimit(c.SourceID); max > 0 {
+			playing := map[string]bool{}
+			for _, other := range s.sessions {
+				if other.info.Channel.SourceID == c.SourceID {
+					playing[other.info.Channel.ID] = true
+				}
+			}
+			if !playing[c.ID] && len(playing) >= max {
+				s.mu.Unlock()
+				return SessionInfo{}, ErrProviderBusy
+			}
+		}
 	}
 	s.nextSubscription++
 	ss := &session{
@@ -916,21 +931,13 @@ func (s *Service) startIPTVSource(ctx context.Context, ss *session) error {
 	if probeCancel != nil {
 		defer probeCancel()
 	}
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, c.StreamURL, nil)
-	res, err := s.upstreamWithHeaders(ctx, c.StreamURL, req, ss.inputHeaders, c.StreamURL)
+	// The sniff joins the input's provider connection, which the probe and
+	// ffmpeg then read from too.
+	prefix, ctype, err := s.sniffInput(ctx, ss, 7)
 	if err != nil {
 		return err
 	}
-	prefix := make([]byte, 7)
-	n, readErr := io.ReadFull(res.Body, prefix)
-	res.Body.Close()
-	if res.StatusCode != 200 {
-		return core.ErrNotAvailable
-	}
-	if readErr != nil && readErr != io.EOF && readErr != io.ErrUnexpectedEOF {
-		return readErr
-	}
-	isHLS := strings.HasPrefix(strings.TrimSpace(string(prefix[:n])), "#EXTM3U") || strings.Contains(strings.ToLower(res.Header.Get("Content-Type")), "mpegurl")
+	isHLS := strings.HasPrefix(strings.TrimSpace(string(prefix)), "#EXTM3U") || strings.Contains(strings.ToLower(ctype), "mpegurl")
 	var info *core.MediaInfo
 	if isHLS && !c.Transcode {
 		if s.o.Transcoder != nil && probe {

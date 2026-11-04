@@ -71,7 +71,7 @@ func (s *Service) healthSweepLoop() {
 // sweepChannels performs all network work away from viewer requests. A cancelled
 // sweep leaves the previous complete snapshot in place.
 func (s *Service) sweepChannels(ctx context.Context) {
-	cs, err := channels(ctx, s.o.DB)
+	cs, err := s.allChannels(ctx)
 	if err != nil {
 		return
 	}
@@ -124,6 +124,11 @@ func (s *Service) sweepChannels(ctx context.Context) {
 	}
 	for _, c := range cs {
 		if c.Kind != "iptv" || !c.Enabled {
+			continue
+		}
+		// A provider that sells connections sees a sweep as a channel scan
+		// and may ban the account; its channels are judged by real tunes.
+		if c.SourceID != "" && s.sourceConnectionLimit(c.SourceID) > 0 {
 			continue
 		}
 		select {

@@ -63,6 +63,8 @@ export type Channel = {
   /** Ordered stream sources: the first enabled one plays, the rest are backups. */
   streamSources?: StreamSource[];
   group?: string;
+  /** The provider's channel number; differs from `number` when the owner renumbered it. */
+  providerNumber?: string;
   epoch: string;
   seed: number;
   shuffle: boolean;
@@ -122,7 +124,52 @@ export type PreviewSession = {
   activeSourceName?: string;
   programme?: Programme;
 };
+export type PlexLineup = { id: string; title: string; type: string };
+/** An Xtream Codes login's account, as the panel reported it at the last import. Read-only. */
+export type SourceAccount = {
+  status?: string;
+  trial?: boolean;
+  /** RFC 3339. */
+  expiresAt?: string;
+  maxConnections?: number;
+  activeConnections: number;
+  formats?: string[];
+  checkedAt: string;
+};
+/** One of the provider's channel groups, in provider order. Read-only. */
+export type SourceGroup = {
+  name: string;
+  channels: number;
+  adult?: boolean;
+  /** The owner's rules leave this group out. */
+  excluded?: boolean;
+};
+/** Owner rules that shape a playlist source's lineup; a save re-imports the source. */
+export type GroupRules = {
+  /** Group names left out; their channels are not imported. */
+  excludeGroups?: string[];
+  /** "exclude": groups that appear on a later refresh are left out until the owner includes them. */
+  newGroups?: "" | "exclude";
+  /** Leave out every group flagged adult. */
+  hideAdult?: boolean;
+  /** Empty: the provider's order and numbers. Otherwise channels are numbered 1… down this group order. */
+  groupOrder?: string[];
+};
+/** How gently Ether uses a provider's streams (see SourceLimits). */
+export type SourceLimitRules = {
+  /** Fewer connections than the panel allows; empty uses the panel's limit (or none). */
+  maxConnections?: number;
+  /** Seconds between new provider streams: empty automatic, negative off. */
+  tuneGapSeconds?: number;
+  /** New provider streams per hour; empty is no cap. */
+  tunesPerHour?: number;
+};
+/** Group names match case-insensitively, ignoring surrounding spaces (as the server does). */
+export const normGroup = (name: string) => name.trim().toLowerCase();
 export type Source = {
+  lineupId?: string;
+  country?: string;
+  postalCode?: string;
   kind?: string;
   id: string;
   name: string;
@@ -141,8 +188,14 @@ export type Source = {
   hasGuide?: boolean;
   auth?: SourceAuth;
   refreshFailures?: number;
-};
+  account?: SourceAccount;
+  groups?: SourceGroup[];
+} & GroupRules &
+  SourceLimitRules;
 export type SourceDraft = {
+  lineupId?: string;
+  country?: string;
+  postalCode?: string;
   kind?: string;
   id: string;
   name: string;
@@ -152,9 +205,18 @@ export type SourceDraft = {
   guide: string;
   refreshHours?: number;
   auth?: SourceAuth;
-};
+} & GroupRules &
+  SourceLimitRules;
 export type Programme = { id: string; channelId: string; start: string; end: string; item: Item };
+export function plexLineupName(title: string): string {
+  return title.replace(/\s*\([\d,]+\s+channels?\)$/i, "").trim();
+}
+export function plexLineupCount(title: string): number | null {
+  const match = title.match(/\(([\d,]+)\s+channels?\)$/i);
+  return match ? Number(match[1]!.replaceAll(",", "")) : null;
+}
 export type GuideChannel = {
+  sourceKind?: string;
   sourceId: string;
   sourceName: string;
   guideId: string;
@@ -171,7 +233,7 @@ export type MatchChange = {
   guideSourceName?: string;
   guideId: string;
   guideName: string;
-  method?: "id" | "name";
+  method?: "id" | "name" | "alias";
 };
 export type MatchResult = {
   matched: number;
@@ -217,7 +279,28 @@ export function policyPermits(
   return !isPrivate || (p?.granted ?? []).includes(channelId);
 }
 
+/** Live viewing and provider usage (GET /livetv/usage). */
+export type LiveUsage = {
+  sessions: number;
+  viewers: number;
+  watching: { channelId: string; viewers: number }[];
+  sources: {
+    sourceId: string;
+    /** Provider connections Ether holds now, and the most it may hold (0: no limit). */
+    open: number;
+    limit: number;
+    /** New provider streams in the last hour; perHour is the owner's cap (0: none). */
+    startsLastHour: number;
+    perHour: number;
+    gapSeconds: number;
+  }[];
+};
 export const tv = {
+  usage: (signal?: AbortSignal) => apiFetch<LiveUsage>("/livetv/usage", { signal }),
+  plexLineups: (country: string, postalCode: string) =>
+    apiFetch<PlexLineup[]>(
+      `/livetv/plex-guide/lineups?country=${enc(country)}&postalCode=${enc(postalCode)}`,
+    ),
   channels: (signal?: AbortSignal) => apiFetch<Channel[]>("/livetv/channels", { signal }),
   sources: (signal?: AbortSignal) => apiFetch<Source[]>("/livetv/sources", { signal }),
   guide: (from: Date, until: Date, signal?: AbortSignal) =>
@@ -269,10 +352,11 @@ export const tv = {
   refreshSource: (id: string) =>
     apiFetch<Source>(`/livetv/sources/${enc(id)}/refresh`, { method: "POST" }),
   deleteSource: (id: string) => apiFetch(`/livetv/sources/${enc(id)}`, { method: "DELETE" }),
-  guideChannels: (q: string, signal?: AbortSignal, limit = 50) =>
-    apiFetch<GuideChannel[] | null>(`/livetv/guide/channels?q=${enc(q)}&limit=${limit}`, {
-      signal,
-    }),
+  guideChannels: (q: string, signal?: AbortSignal, limit = 50, source?: string) =>
+    apiFetch<GuideChannel[] | null>(
+      `/livetv/guide/channels?q=${enc(q)}&limit=${limit}${source ? `&source=${enc(source)}` : ""}`,
+      { signal },
+    ),
   coverage: (signal?: AbortSignal) =>
     apiFetch<Coverage[] | null>("/livetv/guide/coverage", { signal }),
   match: (body: { channelIds?: string[]; overwrite?: boolean; dryRun?: boolean }) =>
@@ -485,12 +569,27 @@ export function progress(p: Programme, at = Date.now()): number {
   return e > s ? Math.min(1, Math.max(0, (at - s) / (e - s))) : 0;
 }
 
+const collator = new Intl.Collator();
+
 export function byNumber(a: Channel, b: Channel): number {
   return (
     (parseFloat(a.number) || 0) - (parseFloat(b.number) || 0) ||
-    a.number.localeCompare(b.number) ||
-    a.name.localeCompare(b.name)
+    collator.compare(a.number, b.number) ||
+    collator.compare(a.name, b.name)
   );
+}
+
+/**
+ * Channels in lineup order (see byNumber). Each number is parsed once rather
+ * than per comparison, which matters for provider lineups of 16,000.
+ */
+export function sortByNumber(channels: Channel[]): Channel[] {
+  const keyed = channels.map((c) => ({ c, n: parseFloat(c.number) || 0 }));
+  keyed.sort(
+    (a, b) =>
+      a.n - b.n || collator.compare(a.c.number, b.c.number) || collator.compare(a.c.name, b.c.name),
+  );
+  return keyed.map((k) => k.c);
 }
 
 export function groupBy<T>(items: T[], key: (t: T) => string): Map<string, T[]> {
@@ -569,3 +668,13 @@ function zonedMinutes(ms: number, timeZone: string): { day: number; minute: numb
 export function loopLength(items: Item[]): number {
   return items.reduce((n, i) => n + (i.durationMs || 0), 0);
 }
+
+/** Sources that supply guide listings: XMLTV guides, Plex lineups, and M3U playlists with a guide. */
+export const isGuideSource = (s: Source) =>
+  s.kind === "plex" || s.hasGuide === true || Boolean(s.guideUrl) || (s.guideChannelCount ?? 0) > 0;
+
+/** Sources that supply channels; guide-only XMLTV sources and Plex lineups are not. */
+export const isChannelSource = (s: Source) =>
+  s.kind !== "plex" &&
+  s.hasPlaylist !== false &&
+  !(!s.playlistUrl && !s.channelCount && (s.guideChannelCount ?? 0) > 0);

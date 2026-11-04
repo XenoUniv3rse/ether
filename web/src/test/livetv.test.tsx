@@ -120,7 +120,7 @@ describe("Live TV studio", () => {
       })),
     );
     renderLiveTV();
-    const lineup = await screen.findByRole("complementary", { name: "Lineup" });
+    const lineup = await screen.findByRole("grid", { name: "Programme guide" });
     await within(lineup).findByRole("button", { name: "1 Station 1" }, WAIT);
     fireEvent.change(screen.getByRole("searchbox", { name: "Search channels" }), {
       target: { value: "Weather" },
@@ -287,7 +287,7 @@ describe("Live TV studio", () => {
     ).toBe(true);
   });
 
-  it("maps a channel without listings to a guide channel from Guide data", async () => {
+  it("maps a channel without listings from the Guide tab's drawer", async () => {
     const calls = backend([iptv("c1")], (url) => {
       if (url.endsWith("/livetv/guide/coverage")) return [{ channelId: "c1", programmes: 0 }];
       if (url.includes("/livetv/guide/channels"))
@@ -303,9 +303,12 @@ describe("Live TV studio", () => {
       return undefined;
     });
     renderLiveTV("/livetv/guide-data");
-    expect(await screen.findByText(/1 of 1 need a guide/, {}, WAIT)).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Map guide for News 24" }));
+    expect(
+      await screen.findByText(/1 of 1 need a guide/, {}, WAIT),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /Map guide for News 24/ }));
     fireEvent.click(await screen.findByRole("button", { name: /News 24 HD/ }, WAIT));
+    fireEvent.click(await screen.findByRole("button", { name: /Use this guide/ }, WAIT));
     await waitFor(() => expect(sent(calls, "PUT", /\/livetv\/channels\/c1$/)).toHaveLength(1));
     expect(body(sent(calls, "PUT", /\/livetv\/channels\/c1$/)[0])).toMatchObject({
       guideSourceId: "epg1",
@@ -350,9 +353,8 @@ describe("Live TV studio", () => {
     );
     renderLiveTV("/livetv/guide-data");
     fireEvent.click(await screen.findByRole("button", { name: /Auto-match/ }, WAIT));
-    const proposals = await screen.findByRole("region", { name: "Suggested matches" }, WAIT);
-    fireEvent.click(within(proposals).getByLabelText("Accept match for Cartoons"));
-    fireEvent.click(within(proposals).getByRole("button", { name: /Apply 1/ }));
+    fireEvent.click(await screen.findByLabelText("Accept match for Cartoons", {}, WAIT));
+    fireEvent.click(await screen.findByRole("button", { name: /Apply 1/ }, WAIT));
     await waitFor(() => expect(sent(calls, "POST", /\/livetv\/guide\/match$/)).toHaveLength(2));
     const [dry, apply] = sent(calls, "POST", /\/livetv\/guide\/match$/);
     expect(body(dry)).toEqual({ dryRun: true });
@@ -417,8 +419,8 @@ describe("Live TV studio", () => {
     fireEvent.click(screen.getByRole("button", { name: /Create channel/ }));
     await waitFor(() => expect(sent(calls, "POST", /\/livetv\/channels$/)).toHaveLength(1));
     expect(await screen.findByLabelText("Name")).toHaveValue("Movie night");
-    const lineup = screen.getByRole("complementary", { name: "Lineup" });
-    expect(lineup.className).toContain("lg:z-[60]");
+    const lineup = screen.getByRole("grid", { name: "Programme guide" });
+    expect(lineup.closest(".lg\\:z-\\[60\\]")).not.toBeNull();
     fireEvent.click(within(lineup).getByRole("button", { name: "2 News 24" }));
     expect(await screen.findByLabelText("Name")).toHaveValue("News 24");
     fireEvent.click(screen.getByRole("tab", { name: "Details" }));
@@ -508,6 +510,59 @@ describe("Live TV source sign-in", () => {
       username: "owner",
       password: "••••",
       userAgent: "VLC/3.0",
+    });
+  });
+
+  it("edits an Xtream lineup's channel groups and sends them once on save", async () => {
+    const calls = backend([], (url, init) => {
+      if (url.endsWith("/livetv/sources") && (init?.method ?? "GET") === "GET")
+        return [
+          {
+            id: "x1",
+            name: "Big panel",
+            updatedAt: "2026-10-19T00:00:00Z",
+            hasPlaylist: true,
+            channelCount: 130,
+            auth: {
+              type: "xtream",
+              server: "http://panel.example",
+              username: "me",
+              password: "••••",
+            },
+            account: {
+              status: "Active",
+              trial: true,
+              expiresAt: new Date(Date.now() + 5 * 3600e3).toISOString(),
+              maxConnections: 1,
+              activeConnections: 0,
+              checkedAt: "2026-10-19T00:00:00Z",
+            },
+            groups: [
+              { name: "EVENTS", channels: 20 },
+              { name: "UK | News", channels: 100 },
+              { name: "Adult", channels: 10, adult: true, excluded: true },
+            ],
+            excludeGroups: ["Adult"],
+          },
+        ];
+      return undefined;
+    });
+    renderLiveTV("/livetv?source=x1");
+    expect(await screen.findByText("Allows 1 connection", {}, WAIT)).toBeInTheDocument();
+    expect(screen.getByText("Trial")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("tab", { name: /Channel groups/ }));
+    expect(screen.getByText("120 channels will be imported")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("checkbox", { name: /EVENTS/ }));
+    expect(screen.getByText("100 channels will be imported")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("switch", { name: "Include new groups automatically" }));
+    fireEvent.click(screen.getByRole("radio", { name: "My order" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save and re-import" }));
+    await waitFor(() => expect(sent(calls, "PUT", /\/livetv\/sources\/x1$/)).toHaveLength(1));
+    expect(body(sent(calls, "PUT", /\/livetv\/sources\/x1$/)[0])).toMatchObject({
+      excludeGroups: ["Adult", "EVENTS"],
+      newGroups: "exclude",
+      hideAdult: false,
+      groupOrder: ["UK | News"],
     });
   });
 

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/braedonsaunders/ether/internal/core"
+	"github.com/braedonsaunders/ether/internal/updater"
 )
 
 // redactedSecret is what the owner API shows in place of a stored secret.
@@ -110,6 +111,10 @@ func (a *SourceAuth) header() http.Header {
 	}
 	if a.UserAgent != "" {
 		h.Set("User-Agent", a.UserAgent)
+	} else if a.Type == "xtream" {
+		// One identity for the panel's API, guide and streams: panels that
+		// bind a login to a device compare them.
+		h.Set("User-Agent", defaultUserAgent())
 	}
 	if a.Referer != "" {
 		h.Set("Referer", a.Referer)
@@ -128,17 +133,17 @@ func (a *SourceAuth) header() http.Header {
 	return h
 }
 
-// xtreamURLs derives an Xtream Codes panel's M3U and XMLTV URLs.
-func (a *SourceAuth) xtreamURLs() (playlist, guide string) {
+// xtreamURLs derives an Xtream Codes panel's lineup (its JSON API, see
+// xtream.go) and XMLTV URLs.
+func (a *SourceAuth) xtreamURLs() (lineup, guide string) {
 	base := strings.TrimRight(strings.TrimSpace(a.Server), "/")
 	q := url.Values{"username": {a.Username}, "password": {a.Password}}
-	output := a.Output
-	if output == "" {
-		output = "ts"
-	}
-	pq := url.Values{"username": {a.Username}, "password": {a.Password}, "type": {"m3u_plus"}, "output": {output}}
-	return base + "/get.php?" + pq.Encode(), base + "/xmltv.php?" + q.Encode()
+	return base + "/player_api.php?" + q.Encode(), base + "/xmltv.php?" + q.Encode()
 }
+
+// defaultUserAgent names Ether to providers when the owner sets no user
+// agent. Panels commonly refuse Go's generic client name outright.
+func defaultUserAgent() string { return "Ether/" + updater.Version }
 
 // redacted returns a copy safe for the owner API.
 func (a *SourceAuth) redacted() *SourceAuth {
@@ -276,6 +281,9 @@ func (s *Service) openURL(ctx context.Context, raw string, h http.Header) (io.Re
 	for k, v := range h {
 		req.Header[k] = v
 	}
+	if req.Header.Get("User-Agent") == "" {
+		req.Header.Set("User-Agent", defaultUserAgent())
+	}
 	res, err := s.o.HTTPClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("source fetch failed")
@@ -316,8 +324,11 @@ type authCache struct {
 }
 
 type authEntry struct {
-	auth *SourceAuth
-	at   time.Time
+	auth    *SourceAuth
+	limit   int           // connection limit; 0 is none
+	gap     time.Duration // least time between new provider streams
+	perHour int           // new provider streams per hour; 0 is no cap
+	at      time.Time
 }
 
 const authCacheTTL = 30 * time.Second
@@ -330,30 +341,62 @@ func (s *Service) forgetSourceAuth(id string) {
 }
 
 func (s *Service) sourceAuth(ctx context.Context, id string) (*SourceAuth, error) {
+	e, err := s.sourceEntry(ctx, id)
+	return e.auth, err
+}
+
+// sourceConnectionLimit is how many connections the source's provider
+// allows at once (an Xtream panel's max_connections); 0 means no limit.
+func (s *Service) sourceConnectionLimit(id string) int {
+	e, err := s.sourceEntry(s.ctx, id)
+	if err != nil {
+		return 0
+	}
+	return e.limit
+}
+
+// defaultTuneGap spaces new streams on a connection-limited account: a
+// viewer flicking through channels must not look like a scan.
+const defaultTuneGap = 2 * time.Second
+
+func (s *Service) sourceEntry(ctx context.Context, id string) (authEntry, error) {
 	if id == "" {
-		return nil, nil
+		return authEntry{}, nil
 	}
 	c := &s.authCache
 	c.mu.Lock()
 	e, ok := c.m[id]
 	c.mu.Unlock()
 	if ok && s.o.Now().Sub(e.at) < authCacheTTL {
-		return e.auth, nil
+		return e, nil
 	}
 	src, err := s.storedSourceByID(ctx, id)
 	if errors.Is(err, core.ErrNotFound) {
 		src, err = Source{}, nil
 	}
 	if err != nil {
-		return nil, err
+		return authEntry{}, err
+	}
+	e = authEntry{auth: src.Auth, at: s.o.Now(), perHour: max(src.TunesPerHour, 0)}
+	if src.Account != nil {
+		e.limit = src.Account.MaxConnections
+	}
+	if src.MaxConnections > 0 && (e.limit == 0 || src.MaxConnections < e.limit) {
+		e.limit = src.MaxConnections
+	}
+	switch {
+	case src.TuneGapSeconds > 0:
+		e.gap = time.Duration(src.TuneGapSeconds) * time.Second
+	case src.TuneGapSeconds == 0 && e.limit > 0:
+		e.gap = defaultTuneGap
 	}
 	c.mu.Lock()
 	if c.m == nil {
 		c.m = map[string]authEntry{}
 	}
-	c.m[id] = authEntry{auth: src.Auth, at: s.o.Now()}
+	c.m[id] = e
 	c.mu.Unlock()
-	return src.Auth, nil
+	return e, nil
 }
 
 // upstreamHeaders returns the request headers for fetching one channel input

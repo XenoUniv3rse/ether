@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/braedonsaunders/ether/internal/core"
@@ -63,6 +64,7 @@ func (s *Service) Handler() http.Handler {
 		ownerResult(w, map[string]bool{"ok": true}, s.DeleteChannel(r.Context(), chi.URLParam(r, "id")))
 	})
 	r.Get("/sources", func(w http.ResponseWriter, r *http.Request) { v, e := s.Sources(r.Context()); ownerResult(w, v, e) })
+	r.Get("/usage", func(w http.ResponseWriter, r *http.Request) { v, e := s.LiveUsage(r.Context()); ownerResult(w, v, e) })
 	importSource := func(w http.ResponseWriter, r *http.Request) {
 		var src Source
 		if !ownerBody(w, r, &src) {
@@ -71,7 +73,7 @@ func (s *Service) Handler() http.Handler {
 		if id := chi.URLParam(r, "id"); id != "" {
 			src.ID = id
 		}
-		pending := r.URL.Query().Get("pending") == "1" && src.Playlist == "" && src.PlaylistURL == "" && src.Guide == "" && src.GuideURL == ""
+		pending := src.Kind != "plex" && r.URL.Query().Get("pending") == "1" && src.Playlist == "" && src.PlaylistURL == "" && src.Guide == "" && src.GuideURL == ""
 		var v Source
 		var e error
 		if pending {
@@ -120,6 +122,10 @@ func (s *Service) Handler() http.Handler {
 			return
 		}
 		v, e := s.Guide(r.Context(), owner, from, until)
+		ownerResult(w, v, e)
+	})
+	r.Get("/plex-guide/lineups", func(w http.ResponseWriter, r *http.Request) {
+		v, e := s.PlexLineups(r.Context(), r.URL.Query().Get("country"), r.URL.Query().Get("postalCode"))
 		ownerResult(w, v, e)
 	})
 	s.guideRoutes(r)
@@ -181,6 +187,12 @@ func (s *Service) Handler() http.Handler {
 		}
 		if until.Sub(from) > 8*24*time.Hour {
 			until = from.Add(8 * 24 * time.Hour)
+		}
+		if c.Kind == "iptv" {
+			// An unsaved mapping may preview a Plex channel before it is imported.
+			ps, e := s.previewProgrammes(r.Context(), c, from, until)
+			ownerResult(w, ps, e)
+			return
 		}
 		ownerResult(w, Schedule(c, from, until), nil)
 	})
@@ -261,6 +273,24 @@ func (s *Service) ServeXMLTV(w http.ResponseWriter, r *http.Request, u *core.Use
 	for _, p := range ps {
 		v := xmlProgramme{Channel: p.ChannelID, Start: p.Start.UTC().Format("20060102150405 -0700"), Stop: p.End.UTC().Format("20060102150405 -0700"), Title: []xmlText{{Value: p.Item.Title}}, Desc: []xmlText{{Value: p.Item.Summary}}}
 		v.Icon.Src = p.Item.Thumb
+		if p.Item.EpisodeTitle != "" {
+			v.SubTitle = []xmlText{{Value: p.Item.EpisodeTitle}}
+		}
+		for _, g := range p.Item.Genres {
+			v.Category = append(v.Category, xmlText{Value: g})
+		}
+		if p.Item.ReleasedMS > 0 {
+			v.Date = time.UnixMilli(p.Item.ReleasedMS).UTC().Format("20060102")
+		}
+		if p.Item.Season > 0 && p.Item.Episode > 0 {
+			v.EpisodeNum = append(v.EpisodeNum, xmlEpisodeNum{System: "xmltv_ns", Value: fmt.Sprintf("%d.%d.", p.Item.Season-1, p.Item.Episode-1)})
+		}
+		if strings.HasPrefix(p.Item.GUID, "plex://") {
+			v.EpisodeNum = append(v.EpisodeNum, xmlEpisodeNum{System: "plex", Value: p.Item.GUID})
+		}
+		if p.Item.Premiere {
+			v.New = &struct{}{}
+		}
 		if p.Item.Rating != "" {
 			v.Rating = append(v.Rating, struct {
 				Value string `xml:"value"`

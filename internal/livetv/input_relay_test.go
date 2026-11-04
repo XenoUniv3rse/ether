@@ -228,7 +228,7 @@ func TestFFmpegArgvCarriesNoProviderURLOrHeaders(t *testing.T) {
 	if len(inputs) != 2 || inputs[0] != inputs[1] || !regexp.MustCompile(`^http://127\.0\.0\.1:\d+/livetv/input/[A-Za-z0-9_-]{43}/0/stream\.ts$`).MatchString(inputs[0]) {
 		t.Fatalf("tool inputs = %q", inputs)
 	}
-	if len(bodies) != 2 || bodies[0] != "200 TS-FIXTURE" || bodies[1] != "200 TS-FIXTURE" || hits.Load() < 3 {
+	if len(bodies) != 2 || bodies[0] != "200 TS-FIXTURE" || bodies[1] != "200 TS-FIXTURE" || hits.Load() == 0 {
 		t.Fatalf("tools did not read the authenticated upstream: %q hits=%d", bodies, hits.Load())
 	}
 	assertNoSecrets(t, "transcoder log", logs.String(), hostOf(up.URL))

@@ -107,6 +107,8 @@ func ParseM3U(r io.Reader, sourceID string) ([]Channel, error) {
 		if pending.Number == "" {
 			pending.numberMissing = true
 			pending.Number = fmt.Sprint(len(out) + 1)
+		} else {
+			pending.ProviderNumber = pending.Number
 		}
 		out = append(out, *pending)
 		pending = nil
@@ -139,13 +141,22 @@ type xmlChannel struct {
 		Src string `xml:"src,attr"`
 	} `xml:"icon"`
 }
+type xmlEpisodeNum struct {
+	System string `xml:"system,attr"`
+	Value  string `xml:",chardata"`
+}
 type xmlProgramme struct {
-	Channel string    `xml:"channel,attr"`
-	Start   string    `xml:"start,attr"`
-	Stop    string    `xml:"stop,attr"`
-	Title   []xmlText `xml:"title"`
-	Desc    []xmlText `xml:"desc"`
-	Rating  []struct {
+	Channel    string          `xml:"channel,attr"`
+	Start      string          `xml:"start,attr"`
+	Stop       string          `xml:"stop,attr"`
+	Title      []xmlText       `xml:"title"`
+	Desc       []xmlText       `xml:"desc"`
+	SubTitle   []xmlText       `xml:"sub-title,omitempty"`
+	Category   []xmlText       `xml:"category,omitempty"`
+	Date       string          `xml:"date,omitempty"`
+	EpisodeNum []xmlEpisodeNum `xml:"episode-num,omitempty"`
+	New        *struct{}       `xml:"new,omitempty"`
+	Rating     []struct {
 		Value string `xml:"value"`
 	} `xml:"rating"`
 	Icon struct {
