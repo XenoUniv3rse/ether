@@ -129,3 +129,24 @@ func TestPlexGuideMappedRefreshAndReviewedAliases(t *testing.T) {
 		t.Fatalf("source: %+v", src)
 	}
 }
+
+func TestPlexGuideRateLimitSharedBetweenServices(t *testing.T) {
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		w.Header().Set("Retry-After", "30")
+		w.WriteHeader(429)
+	}))
+	defer server.Close()
+	s := testService(t, Options{HTTPClient: server.Client(), PlexGuideURL: server.URL})
+	if _, err := s.plexGuideRequest(context.Background(), "/grid", nil, nil); err == nil {
+		t.Fatal("expected rate limit")
+	}
+	other := &Service{o: Options{DB: s.o.DB, HTTPClient: server.Client(), PlexGuideURL: server.URL}}
+	if _, err := other.plexGuideRequest(context.Background(), "/grid", nil, nil); err == nil || !strings.Contains(err.Error(), "rate-limited") {
+		t.Fatalf("shared status: %v", err)
+	}
+	if requests.Load() != 1 {
+		t.Fatalf("made %d requests during shared cooldown", requests.Load())
+	}
+}
