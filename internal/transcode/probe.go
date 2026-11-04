@@ -81,8 +81,8 @@ func probeMode(ctx context.Context, r Runner, ffprobe, input string, live bool) 
 			lastErr = err
 			continue
 		}
-		// Both passes inspect the same source. A larger probe can recover
-		// streams while omitting a duration found by the first pass.
+		// Preserve an observed duration if a subsequent pass finds more
+		// stream details but omits that same source's container duration.
 		if info.Duration <= 0 && best != nil && best.Duration > 0 {
 			info.Duration = best.Duration
 		}
@@ -105,6 +105,9 @@ func probeOnceMode(ctx context.Context, r Runner, ffprobe, input string, a probe
 	defer cancel()
 	var stdout, stderr bytes.Buffer
 	err := r.Run(ctx, Command{Path: ffprobe, Args: probeArgsMode(input, a, live), Stdout: &stdout, Stderr: &stderr})
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
 	if err != nil {
 		return nil, fmt.Errorf("transcode: ffprobe: %w: %s", err, tail(stderr.String(), 400))
 	}

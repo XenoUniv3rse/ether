@@ -211,6 +211,7 @@ func (s *Session) renderMPDLocked() []byte {
 		}
 	}
 	if s.info.Duration <= 0 {
+		s.log.Warn("using growing DASH manifest", "reason", "source duration unavailable")
 		return renderLiveMPD(s.created, time.Now(), s.segDur, s.commonDoneLocked(), s.dash.initURL, s.dash.mediaURL, reps)
 	}
 	return renderMPD(s.info.Duration, s.segDur, s.dash.initURL, s.dash.mediaURL, reps)

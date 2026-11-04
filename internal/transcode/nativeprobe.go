@@ -125,13 +125,20 @@ func (s *nativeSource) read(off int64, n int) ([]byte, error) {
 	}
 	s.left -= n
 	b := make([]byte, n)
+	var got int
 	var err error
 	if mr, ok := s.src.(metadataReader); ok {
-		_, err = mr.ReadMetadataAtContext(s.ctx, b, off)
+		got, err = mr.ReadMetadataAtContext(s.ctx, b, off)
 	} else {
-		_, err = s.src.ReadAt(b, off)
+		got, err = s.src.ReadAt(b, off)
 	}
-	if err != nil && !(errors.Is(err, io.EOF) && n > 0) {
+	if got != n {
+		if err != nil && !errors.Is(err, io.EOF) {
+			return nil, err
+		}
+		return nil, io.ErrUnexpectedEOF
+	}
+	if err != nil && !errors.Is(err, io.EOF) {
 		return nil, err
 	}
 	return b, nil

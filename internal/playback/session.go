@@ -436,20 +436,10 @@ func (s *session) snapshot(now time.Time) *core.PlaySession {
 		res := *g.res
 		ps.Resolution = &res
 		ps.Source = g.src
-		ps.Info = s.playbackInfo(g.infoSnapshot())
+		ps.Info = g.infoSnapshot()
 		ps.Origin = sourceOrigin(g.src, res.Release.Protocol)
 	}
 	return ps
-}
-
-// playbackInfo supplies a title runtime when a successful probe did not
-// find one. Keep it out of the generation's probe facts and persistent
-// cache: catalogue runtimes are estimates and can differ between editions.
-func (s *session) playbackInfo(info core.MediaInfo) core.MediaInfo {
-	if info.Duration <= 0 && s.title != nil && s.title.Runtime > 0 {
-		info.Duration = s.title.Runtime
-	}
-	return info
 }
 
 // sourceOrigin names the service a generation streams from.

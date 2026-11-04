@@ -16,7 +16,9 @@ type HLSRequest struct {
 	// Zero preserves the legacy playlist contract for existing callers.
 	RequireIndependentProof bool
 	SessionID               string
-	InputURL                string // ffmpeg input; Ether serves sources on loopback HTTP with range support
+	// ReleaseID identifies the initial source in manifest diagnostics.
+	ReleaseID string
+	InputURL  string // ffmpeg input; Ether serves sources on loopback HTTP with range support
 	// LiveInput permits playlist demuxers for owner-configured live sources.
 	// Ordinary resolved media must leave this false, even if duration is unknown.
 	LiveInput bool
@@ -193,6 +195,14 @@ type PlaySession struct {
 	// and mid-play buffering (additive). Nil for a source no play request
 	// or client timeline has reached.
 	Experience *PlayExperience `json:"experience,omitempty"`
+}
+
+// SourceReleaseID identifies the selected release when one is available.
+func (s *PlaySession) SourceReleaseID() string {
+	if s == nil || s.Resolution == nil {
+		return ""
+	}
+	return s.Resolution.Release.ID
 }
 
 // PlayExperience measures what the viewer saw (additive).

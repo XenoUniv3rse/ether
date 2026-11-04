@@ -1245,6 +1245,7 @@ func (s *Server) handleStartHLS(w http.ResponseWriter, r *http.Request) {
 	}
 	hs, err := s.d.Transcoder.StartHLS(context.WithoutCancel(ctx), core.HLSRequest{
 		SessionID:   p.sessionID,
+		ReleaseID:   ps.SourceReleaseID(),
 		InputURL:    s.d.Playback.InputURL(ps.ID),
 		Info:        ps.Info,
 		Decision:    dec,

@@ -347,6 +347,9 @@ func (m *Manager) probeGeneration(ctx context.Context, s *session, res *core.Res
 		m.log.Warn("probe failed; using estimated media info", "release", res.Release.Name, "err", perr)
 		mi = core.CloneMediaInfo(fallback(src.Size()))
 		mi.Estimated = true
+		// An estimated catalogue runtime is not a container duration. A
+		// guessed end can make part of a longer release unseekable.
+		mi.Duration = 0
 	default:
 		mi = core.CloneMediaInfo(*info)
 	}
@@ -355,13 +358,6 @@ func (m *Manager) probeGeneration(ctx context.Context, s *session, res *core.Res
 	}
 	if mi.Container == "" {
 		mi.Container = containerFromName(src.Name())
-	}
-	if mi.Duration <= 0 {
-		if s.title != nil && s.title.Runtime > 0 {
-			m.log.Warn("probe has no duration; using catalogue runtime for playback", "session", s.id)
-		} else {
-			m.log.Warn("probe and catalogue have no duration; playback timeline will be incomplete", "session", s.id)
-		}
 	}
 	// A cached warm probe was already augmented when it was made; running
 	// AugmentMedia again would put its cost back on the Play path. Facts
@@ -984,7 +980,7 @@ func (m *Manager) failoverWith(ctx context.Context, s *session, observed *genera
 	// Take the replacement pin before it is handed to the encoder. Stop can
 	// race the handoff; until publication this function owns the extra pin.
 	m.pinLive(g.releaseID())
-	newInfo := s.playbackInfo(g.infoSnapshot())
+	newInfo := g.infoSnapshot()
 	if hasHLS {
 		var seekAt time.Time
 		if source, ok := hls.(core.RecoveryBufferSource); ok {
@@ -1170,9 +1166,9 @@ func (m *Manager) rollbackHLS(s *session, hls core.HLSSession, old, replacement 
 		return false
 	}
 	if buffered, ok := hls.(core.BufferedInputSwapper); ok {
-		err = buffered.SwapInputBuffered(ctx, m.urlFor(old), s.playbackInfo(old.infoSnapshot()), at)
+		err = buffered.SwapInputBuffered(ctx, m.urlFor(old), old.infoSnapshot(), at)
 	} else {
-		err = hls.SwapInput(ctx, m.urlFor(old), s.playbackInfo(old.infoSnapshot()), at)
+		err = hls.SwapInput(ctx, m.urlFor(old), old.infoSnapshot(), at)
 	}
 	return err == nil
 }
