@@ -16,7 +16,7 @@ import (
 // Ranking bridges the resolver to installed hosted hot-path plugins.
 type RankingManager interface {
 	HotReady(string) (plugins.HotRuntime, bool)
-	RecordSlow(context.Context, string, int)
+	RecordRanking(context.Context, string, plugins.RankingReport)
 }
 type Ranking struct {
 	Manager  RankingManager
@@ -24,7 +24,7 @@ type Ranking struct {
 }
 
 func (a Ranking) NewResolve(ctx context.Context, caps core.ClientCaps) resolver.RankingSession {
-	return &rankingSession{ctx: ctx, manager: a.Manager, registry: a.Registry, caps: caps, runtimes: map[string]*rankingRuntime{}, matches: map[string]bool{}, slow: map[string]int{}}
+	return &rankingSession{ctx: ctx, manager: a.Manager, registry: a.Registry, caps: caps, runtimes: map[string]*rankingRuntime{}, matches: map[string]bool{}, reports: map[string]*plugins.RankingReport{}}
 }
 
 type rankingRuntime struct {
@@ -38,14 +38,25 @@ type rankingSession struct {
 	caps     core.ClientCaps
 	runtimes map[string]*rankingRuntime
 	matches  map[string]bool
-	slow     map[string]int
+	reports  map[string]*plugins.RankingReport
 }
 
-func (s *rankingSession) Close() {
-	for id, count := range s.slow {
-		s.manager.RecordSlow(context.WithoutCancel(s.ctx), id, count)
+func (s *rankingSession) report(id string) *plugins.RankingReport {
+	r := s.reports[id]
+	if r == nil {
+		r = &plugins.RankingReport{}
+		s.reports[id] = r
 	}
-	clear(s.slow)
+	return r
+}
+
+// Close hands each plugin's outcome to its health: a ranking step left out
+// for running past its budget is shown to the owner, not dropped silently.
+func (s *rankingSession) Close() {
+	for id, r := range s.reports {
+		s.manager.RecordRanking(context.WithoutCancel(s.ctx), id, *r)
+	}
+	clear(s.reports)
 }
 func splitHotID(id string) (string, string, bool) {
 	s, ok := strings.CutPrefix(id, "plugin:")
@@ -104,12 +115,19 @@ func (s *rankingSession) Rank(step string, config json.RawMessage, releases []co
 	if (err != nil || (out.Status != "" && out.Status != "ok")) && slow == 0 {
 		slow = len(releases)
 	}
-	if slow > 0 {
-		s.slow[id] += slow
-	}
+	r := s.report(id)
+	r.Slow += slow
 	if err != nil || (out.Status != "" && out.Status != "ok") || out.Slow > 0 || len(keys) != len(releases) {
+		// A partial ranking would order releases by whichever candidates
+		// the plugin reached, so the whole step is left out. Running out of
+		// time is the owner's to see; what finished is memoized, so the
+		// next resolve of these releases usually completes.
+		if slow > 0 && (err == nil || out.Timeout()) {
+			r.Skipped++
+		}
 		return nil
 	}
+	r.Ranked++
 	return keys
 }
 func (s *rankingSession) Match(rel core.Release, cond core.ReleaseCondition, verified bool) (bool, bool) {
@@ -131,7 +149,7 @@ func (s *rankingSession) Match(rel core.Release, cond core.ReleaseCondition, ver
 	}
 	remain := rt.hot.Budgets().PerBatch - rt.conditionTime
 	if remain <= 0 {
-		s.slow[id]++
+		s.report(id).Slow++
 		return false, true
 	}
 	ctx, cancel := context.WithTimeout(s.ctx, remain)
@@ -140,7 +158,7 @@ func (s *rankingSession) Match(rel core.Release, cond core.ReleaseCondition, ver
 	cancel()
 	rt.conditionTime += time.Since(start)
 	if err != nil || (out.Status != "" && out.Status != "ok") || out.Slow > 0 {
-		s.slow[id] += max(1, out.Slow)
+		s.report(id).Slow += max(1, out.Slow)
 		return false, true
 	}
 	s.matches[memo] = matched

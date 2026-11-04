@@ -19,6 +19,9 @@ import (
 )
 
 func init() {
+	// v3: ranking steps left out because the plugin ran out of time.
+	store.Register("plugins", 3, `ALTER TABLE plugins_health ADD COLUMN ranking_skipped INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE plugins_health ADD COLUMN ranking_skipped_at INTEGER NOT NULL DEFAULT 0;`)
 	// v2: the roles an owner switched off on an installed add-on.
 	store.Register("plugins", 2, `ALTER TABLE plugins_installed ADD COLUMN roles_off TEXT NOT NULL DEFAULT '';`)
 	store.Register("plugins", 1, `
@@ -120,6 +123,11 @@ type Health struct {
 	NextRetry   time.Time      `json:"nextRetry,omitempty"`
 	Observed    map[string]int `json:"observed,omitempty"` // host -> fetch count
 	EgressBytes int64          `json:"egressBytes"`
+	// RankingSkipped counts the resolves since the plugin's last complete
+	// ranking that left its ranking step out because it ran past its time
+	// budget; zero once a ranking finishes in time again.
+	RankingSkipped   int64     `json:"rankingSkipped"`
+	RankingSkippedAt time.Time `json:"rankingSkippedAt,omitempty"`
 }
 
 // JournalEntry is one recorded write and its inverse.
@@ -498,9 +506,9 @@ func (s *storage) kvList(ctx context.Context, plugin, prefix string) ([]string, 
 func (s *storage) health(ctx context.Context, plugin string) (Health, error) {
 	var h Health
 	var failures, observed string
-	var lastOK, nextRetry int64
-	err := s.db.QueryRowContext(ctx, `SELECT status,reason,failures,restarts,slow,drops,last_error,last_ok,next_retry,observed,egress_bytes FROM plugins_health WHERE plugin=?`, plugin).
-		Scan(&h.Status, &h.Reason, &failures, &h.Restarts, &h.Slow, &h.Drops, &h.LastError, &lastOK, &nextRetry, &observed, &h.EgressBytes)
+	var lastOK, nextRetry, skippedAt int64
+	err := s.db.QueryRowContext(ctx, `SELECT status,reason,failures,restarts,slow,drops,last_error,last_ok,next_retry,observed,egress_bytes,ranking_skipped,ranking_skipped_at FROM plugins_health WHERE plugin=?`, plugin).
+		Scan(&h.Status, &h.Reason, &failures, &h.Restarts, &h.Slow, &h.Drops, &h.LastError, &lastOK, &nextRetry, &observed, &h.EgressBytes, &h.RankingSkipped, &skippedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Health{Status: "ok", Observed: map[string]int{}}, nil
 	}
@@ -518,14 +526,17 @@ func (s *storage) health(ctx context.Context, plugin string) (Health, error) {
 	if nextRetry > 0 {
 		h.NextRetry = time.Unix(nextRetry, 0).UTC()
 	}
+	if skippedAt > 0 {
+		h.RankingSkippedAt = time.Unix(skippedAt, 0).UTC()
+	}
 	return h, nil
 }
 
 func (s *storage) putHealth(ctx context.Context, plugin string, h Health) error {
 	failures, _ := json.Marshal(h.Failures)
 	observed, _ := json.Marshal(h.Observed)
-	_, err := s.db.ExecContext(ctx, `INSERT INTO plugins_health(plugin,status,reason,failures,restarts,slow,drops,last_error,last_ok,next_retry,observed,egress_bytes) VALUES(?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(plugin) DO UPDATE SET status=excluded.status,reason=excluded.reason,failures=excluded.failures,restarts=excluded.restarts,slow=excluded.slow,drops=excluded.drops,last_error=excluded.last_error,last_ok=excluded.last_ok,next_retry=excluded.next_retry,observed=excluded.observed,egress_bytes=excluded.egress_bytes`,
-		plugin, h.Status, h.Reason, string(failures), h.Restarts, h.Slow, h.Drops, h.LastError, unixOr0(h.LastOK), unixOr0(h.NextRetry), string(observed), h.EgressBytes)
+	_, err := s.db.ExecContext(ctx, `INSERT INTO plugins_health(plugin,status,reason,failures,restarts,slow,drops,last_error,last_ok,next_retry,observed,egress_bytes,ranking_skipped,ranking_skipped_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(plugin) DO UPDATE SET status=excluded.status,reason=excluded.reason,failures=excluded.failures,restarts=excluded.restarts,slow=excluded.slow,drops=excluded.drops,last_error=excluded.last_error,last_ok=excluded.last_ok,next_retry=excluded.next_retry,observed=excluded.observed,egress_bytes=excluded.egress_bytes,ranking_skipped=excluded.ranking_skipped,ranking_skipped_at=excluded.ranking_skipped_at`,
+		plugin, h.Status, h.Reason, string(failures), h.Restarts, h.Slow, h.Drops, h.LastError, unixOr0(h.LastOK), unixOr0(h.NextRetry), string(observed), h.EgressBytes, h.RankingSkipped, unixOr0(h.RankingSkippedAt))
 	return err
 }
 

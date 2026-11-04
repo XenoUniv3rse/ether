@@ -1057,6 +1057,8 @@ func (m *Manager) CheckHealth(ctx context.Context, id string) (Health, error) {
 	if len(resp.Body) > 0 {
 		_ = json.Unmarshal(resp.Body, &out)
 	}
+	m.healthMu.Lock()
+	defer m.healthMu.Unlock()
 	h, err := m.store.health(ctx, id)
 	if err != nil {
 		return Health{}, err
@@ -1065,7 +1067,7 @@ func (m *Manager) CheckHealth(ctx context.Context, id string) (Health, error) {
 	case "attention", "error":
 		h.Status, h.Reason = out.Status, out.Reason
 	default:
-		h.Status, h.Reason = "ok", ""
+		okUnlessSkipping(&h)
 		h.LastOK = m.now()
 	}
 	if err := m.store.putHealth(ctx, id, h); err != nil {

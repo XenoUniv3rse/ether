@@ -93,8 +93,12 @@ type Manager struct {
 	// failing caches which plugins last recorded an error, so a successful
 	// call clears it without a health read on every call (nil = not loaded).
 	failing map[string]bool
-	pickMu  sync.Mutex
-	picks   map[string]subtitlePick
+	// rankingSkipping caches whether a plugin's ranking step is currently
+	// being left out (Health.RankingSkipped > 0), so a resolve whose
+	// plugins all ranked in time writes nothing (nil = not loaded).
+	rankingSkipping map[string]bool
+	pickMu          sync.Mutex
+	picks           map[string]subtitlePick
 	// warming holds plugin ids whose runtime is loading in the background
 	// (guarded by mu), so the hot path never waits for a load.
 	warming map[string]bool
@@ -723,6 +727,77 @@ func (m *Manager) RecordSlow(ctx context.Context, pluginID string, n int) {
 	_ = m.store.putHealth(ctx, pluginID, h)
 }
 
+// RankingReport is what one resolve saw of a plugin on the hot path.
+type RankingReport struct {
+	// Slow counts candidates and conditions that went neutral on budget.
+	Slow int
+	// Skipped counts ranking steps left out because the plugin ran past
+	// its time budget; Ranked counts ranking steps that finished in time.
+	Skipped, Ranked int
+}
+
+// rankingSkippedReason is the health reason while a plugin's ranking step
+// is being left out. It says "slow" so the console's headline reads Slow;
+// the drawer explains it from Health.RankingSkipped.
+const rankingSkippedReason = "Its ranking step was too slow, so releases were ranked without it."
+
+// RecordRanking records a resolve's hot-path outcome for one plugin. A
+// ranking step left out for running past its budget flags the plugin for
+// the owner until one of its rankings finishes in time again; the
+// periodic health check does not clear it, since the plugin's own health
+// answer says nothing about its ranking. A resolve where the plugin kept
+// to time and was not being skipped writes nothing. Safe for concurrent
+// use; the ranking adapters call it when a resolve ends.
+func (m *Manager) RecordRanking(ctx context.Context, pluginID string, r RankingReport) {
+	if r.Slow <= 0 && r.Skipped <= 0 && r.Ranked <= 0 {
+		return
+	}
+	m.healthMu.Lock()
+	defer m.healthMu.Unlock()
+	if m.rankingSkipping == nil {
+		m.rankingSkipping = map[string]bool{}
+	}
+	if skipping, known := m.rankingSkipping[pluginID]; known && !skipping && r.Slow <= 0 && r.Skipped <= 0 {
+		return
+	}
+	h, err := m.store.health(ctx, pluginID)
+	if err != nil {
+		return
+	}
+	before := h
+	h.Slow += int64(r.Slow)
+	switch {
+	case r.Skipped > 0:
+		h.RankingSkipped += int64(r.Skipped)
+		h.RankingSkippedAt = m.now()
+		if h.Status == "ok" || h.Status == "attention" {
+			h.Status, h.Reason = "attention", rankingSkippedReason
+		}
+	case r.Ranked > 0 && h.RankingSkipped > 0:
+		// It kept to time again: its ranking counts and the flag clears.
+		h.RankingSkipped = 0
+		if h.Status == "attention" && h.Reason == rankingSkippedReason {
+			h.Status, h.Reason = "ok", ""
+		}
+	case r.Slow > 0 && h.Status == "ok":
+		h.Status, h.Reason = "attention", "Recent calls were slow."
+	}
+	m.rankingSkipping[pluginID] = h.RankingSkipped > 0
+	if h.Slow == before.Slow && h.RankingSkipped == before.RankingSkipped && h.Status == before.Status {
+		return
+	}
+	_ = m.store.putHealth(ctx, pluginID, h)
+}
+
+// okUnlessSkipping marks a plugin healthy, unless its ranking step is
+// being left out: only a ranking that finishes in time clears that.
+func okUnlessSkipping(h *Health) {
+	h.Status, h.Reason = "ok", ""
+	if h.RankingSkipped > 0 {
+		h.Status, h.Reason = "attention", rankingSkippedReason
+	}
+}
+
 func (m *Manager) recordOK(ctx context.Context, pluginID string) {
 	m.healthMu.Lock()
 	defer m.healthMu.Unlock()
@@ -730,8 +805,7 @@ func (m *Manager) recordOK(ctx context.Context, pluginID string) {
 	if err != nil {
 		return
 	}
-	h.Status = "ok"
-	h.Reason = ""
+	okUnlessSkipping(&h)
 	h.LastOK = m.now()
 	_ = m.store.putHealth(ctx, pluginID, h)
 	if m.failing == nil {

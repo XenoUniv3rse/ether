@@ -22,7 +22,7 @@ import (
 type rankingManagerFake struct {
 	rt       plugins.HotRuntime
 	record   plugins.Record
-	slow     int
+	report   plugins.RankingReport
 	registry *extend.Registry
 	notReady bool
 }
@@ -36,7 +36,11 @@ func (m *rankingManagerFake) HotReady(string) (plugins.HotRuntime, bool) {
 func (m *rankingManagerFake) GetSettings(context.Context, string) (map[string]any, json.RawMessage, error) {
 	return map[string]any{}, nil, nil
 }
-func (m *rankingManagerFake) RecordSlow(_ context.Context, _ string, n int) { m.slow += n }
+func (m *rankingManagerFake) RecordRanking(_ context.Context, _ string, r plugins.RankingReport) {
+	m.report.Slow += r.Slow
+	m.report.Skipped += r.Skipped
+	m.report.Ranked += r.Ranked
+}
 
 type slowHot struct{ plugins.HotRuntime }
 
@@ -72,7 +76,7 @@ func TestRankingHostedJSAndSlowFallback(t *testing.T) {
 	session := (Ranking{Manager: m, Registry: m.registry}).NewResolve(context.Background(), core.ClientCaps{})
 	rels := []core.Release{{ID: "a", Name: "film.1080p"}, {ID: "b", Name: "film.DUB.1080p"}}
 	keys := session.Rank("plugin:test.dub/dub", nil, rels, nil)
-	if session.(*rankingSession).slow["test.dub"] > 0 {
+	if session.(*rankingSession).report("test.dub").Slow > 0 {
 		t.Skip("hosted runtime exhausted its budget under load")
 	}
 	if len(keys) != 2 || keys[0] != 0 || keys[1] != 10 {
@@ -81,7 +85,7 @@ func TestRankingHostedJSAndSlowFallback(t *testing.T) {
 	cond := core.ReleaseCondition{Field: "plugin:test.dub/dub", Operator: "equals", Value: "dub"}
 	matchedDub, _ := session.Match(rels[1], cond, false)
 	matchedPlain, _ := session.Match(rels[0], cond, false)
-	if session.(*rankingSession).slow["test.dub"] > 0 {
+	if session.(*rankingSession).report("test.dub").Slow > 0 {
 		t.Skip("hosted runtime exhausted its budget under load")
 	}
 	if !matchedDub || matchedPlain {
@@ -109,8 +113,8 @@ func TestRankingSlowFallback(t *testing.T) {
 		t.Fatal("timeout condition must be false")
 	}
 	session.Close()
-	if m.slow != 3 {
-		t.Fatalf("slow count %d", m.slow)
+	if m.report.Slow != 3 || m.report.Skipped != 1 || m.report.Ranked != 0 {
+		t.Fatalf("report %+v, want 3 slow and the ranking step skipped once", m.report)
 	}
 }
 
@@ -149,7 +153,7 @@ func BenchmarkResolve500PluginStep(b *testing.B) {
 			b.Fatal(err)
 		}
 	}
-	b.ReportMetric(float64(m.slow)/float64(b.N), "slow-candidates/op")
+	b.ReportMetric(float64(m.report.Slow)/float64(b.N), "slow-candidates/op")
 }
 
 func TestHostedJSChangesActualResolve(t *testing.T) {
@@ -173,11 +177,11 @@ func TestHostedJSChangesActualResolve(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if m.slow > 0 {
+	if m.report.Slow > 0 {
 		t.Skip("hosted runtime exhausted its budget under load")
 	}
 	if got.Release.ID != "1" {
-		t.Fatalf("winner %q, slow=%d", got.Release.ID, m.slow)
+		t.Fatalf("winner %q, slow=%d", got.Release.ID, m.report.Slow)
 	}
 }
 
@@ -198,8 +202,8 @@ func TestUnreadyAndMissingPluginAreNeutral(t *testing.T) {
 		t.Fatal("missing plugin should remain unknown")
 	}
 	session.Close()
-	if m.slow != 0 {
-		t.Fatalf("warming recorded as slow: %d", m.slow)
+	if m.report.Slow != 0 {
+		t.Fatalf("warming recorded as slow: %d", m.report.Slow)
 	}
 }
 
