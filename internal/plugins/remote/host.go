@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/braedonsaunders/ether/internal/httpjson"
 	"io"
 	"log/slog"
 	"net/http"
@@ -399,10 +400,7 @@ func readBody(w http.ResponseWriter, r *http.Request, max int64) ([]byte, error)
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("Cache-Control", "no-store")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(v)
+	httpjson.Write(w, status, v)
 }
 
 // writeHostError emits the EPP error shape (SPEC §5.1.2).
