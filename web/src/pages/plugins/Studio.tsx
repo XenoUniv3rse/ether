@@ -17,7 +17,6 @@ import {
 import { useCallback, useMemo, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { Segmented } from "../../components/fields";
-import { settingHref } from "../../components/SettingFocus";
 import { Workspace, PanelHead } from "../../components/workspace";
 import { t } from "../../i18n";
 import { api } from "../../lib/api";
@@ -247,7 +246,7 @@ function Editor({
 
   const install = async () => {
     if (channels) {
-      navigate(settingHref("/livetv", "Kigali Sport 1"));
+      navigate("/livetv");
       return;
     }
     const created = await api
@@ -256,7 +255,7 @@ function Editor({
     const at = created?.id
       ? `/collections?collection=${encodeURIComponent(created.id)}`
       : "/collections";
-    navigate(settingHref(at, ROW_NAME));
+    navigate(at);
   };
 
   const preview = channels ? (

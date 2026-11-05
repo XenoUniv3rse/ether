@@ -1,5 +1,6 @@
 import { SubtabNav } from "../../components/layout";
 import { parseDuration, formatDuration, type DurationUnit } from "./duration";
+import { SettingAnchor } from "../../components/SettingFocus";
 import { SettingsRow } from "../../components/SettingsRow";
 import {
   Button,
@@ -289,7 +290,6 @@ export function useSettingsSchemas(ids: readonly string[]): {
     }
     return out;
     // textOf reads the active catalogue; locale changes with the language.
-
   }, [descriptors, idsKey, locale]);
   return { groups, loading, error };
 }
@@ -369,8 +369,28 @@ export function SchemaForm({
 
 const UNIT_BYTES = { GiB: 1024 ** 3, MiB: 1024 ** 2 } as const;
 
-/** Renders one field as an AppKit SettingsRow. `errors` is keyed by the field's dotted path. */
-export function SchemaField({
+/**
+ * Renders one field as an AppKit SettingsRow. `errors` is keyed by the
+ * field's dotted path; the row carries `data-setting` so ⌘K can jump to it.
+ */
+export function SchemaField(props: {
+  def: FieldDef;
+  value: unknown;
+  onChange: (v: unknown) => void;
+  error?: string;
+  errors?: Record<string, string>;
+  path: string;
+  loadOptions?: LoadOptions;
+}) {
+  if (props.def.kind === "hidden") return null;
+  return (
+    <SettingAnchor id={props.def.key}>
+      <SchemaFieldBody {...props} />
+    </SettingAnchor>
+  );
+}
+
+function SchemaFieldBody({
   def,
   value,
   onChange,
@@ -1058,10 +1078,12 @@ function TitleRow({
 /** A group's advanced (more) fields, collapsed until asked or in error. */
 function MoreFields({
   title,
+  setting,
   children,
   hasError,
 }: {
   title?: string;
+  setting?: string;
   children: ReactNode;
   hasError: boolean;
 }) {
@@ -1076,6 +1098,7 @@ function MoreFields({
         className="w-full px-4 py-3 text-left text-sm font-medium text-primary"
         aria-expanded={open}
         aria-label={title ? t("More options: {title}", { title }) : t("More options")}
+        data-more={setting}
         onClick={() => setOpen((v) => !v)}
       >
         {t("More options")}
@@ -1148,6 +1171,7 @@ export function SchemaGroups({
             {g.more?.length ? (
               <MoreFields
                 title={g.title}
+                setting={g.id}
                 hasError={g.more.some((f) => hasFieldError(f, errors, prefix))}
               >
                 {g.more.map((f) => (

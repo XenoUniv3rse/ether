@@ -53,7 +53,9 @@ export function AppConnections() {
     <SettingsSection>
       <div className="flex flex-wrap items-start justify-between gap-3 border-b border-border px-5 py-4">
         <div>
-          <h2 data-setting="how-apps-connect" className="text-sm font-medium">{t("How apps connect")}</h2>
+          <h2 data-setting="how-apps-connect" className="text-sm font-medium">
+            {t("How apps connect")}
+          </h2>
           <p className="mt-1 text-sm text-fg-muted">
             {t("Use the address for your network. Port changes need a restart.")}
           </p>

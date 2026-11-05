@@ -28,9 +28,12 @@ export function MoreOptions({
   text,
   hasError = false,
   reveal = false,
+  setting,
   children,
 }: {
   label: string;
+  /** Stable id a ⌘K setting jump uses to open these options. */
+  setting?: string;
   text?: string;
   hasError?: boolean;
   /** Opens the options when it turns true, such as a link to them elsewhere. */
@@ -48,6 +51,7 @@ export function MoreOptions({
         className="w-full px-4 py-3 text-left text-sm font-medium text-primary"
         aria-expanded={open}
         aria-label={label}
+        data-more={setting}
         onClick={() => setOpen((v) => !v)}
       >
         {open && !text ? t("Less options") : (text ?? t("More options"))}

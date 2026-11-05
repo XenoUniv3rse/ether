@@ -363,6 +363,7 @@ export function buildGrantItems(detail: PluginDetail): GrantItem[] {
 }
 
 export interface PlacementLink {
+  kind: string;
   id: string;
   label: string;
   area: string;
@@ -382,6 +383,7 @@ export function buildPlacements(descriptors: Descriptor[], pluginId: string): Pl
     if (d.kind === "navItem") continue;
     const rawKey = d.id.includes("/") ? (d.id.split("/").pop() ?? d.id) : d.id;
     const label = textOf(d.label) || rawKey;
+    let kind: string = d.kind;
     let area = t("Console");
     let href = "/plugins";
 
@@ -447,13 +449,14 @@ export function buildPlacements(descriptors: Descriptor[], pluginId: string): Pl
         href = "/plugins";
         break;
       default:
+        kind = "console";
         break;
     }
 
     const dedupeKey = `${d.kind}:${rawKey}:${href}`;
     if (seen.has(dedupeKey)) continue;
     seen.add(dedupeKey);
-    out.push({ id: dedupeKey, label, area, href });
+    out.push({ kind, id: dedupeKey, label, area, href });
   }
   return out;
 }

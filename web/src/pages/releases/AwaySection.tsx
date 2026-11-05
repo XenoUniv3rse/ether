@@ -64,6 +64,7 @@ export function AwaySection({
   return (
     <SettingsSection title={t("Away from home")}>
       <SettingsRow
+        setting="away-profile"
         title={t("Away profile")}
         description={t("Used away from home. Device and viewer rules still win.")}
         control={
@@ -80,7 +81,11 @@ export function AwaySection({
         }
       />
       <SettingsRow
-        title={<label htmlFor="away-bitrate-cap">{t("Bitrate limit")}</label>}
+        title={
+          <label htmlFor="away-bitrate-cap" data-setting="bitrate-limit">
+            {t("Bitrate limit")}
+          </label>
+        }
         description={t("Caps the stream for people away from home. 0 means no limit.")}
         control={
           <span className="flex items-center gap-2">
