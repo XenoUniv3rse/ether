@@ -8,6 +8,7 @@ package libraryfilter
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/braedonsaunders/ether/internal/store"
 	"strings"
 
 	"github.com/braedonsaunders/ether/internal/contentrating"
@@ -579,7 +580,7 @@ func (c condition) sql() (string, []any) {
 		default:
 			q = "0=1"
 			if len(c.levels) > 0 {
-				q = "t.content_rating_rank IN (" + strings.TrimSuffix(strings.Repeat("?,", len(c.levels)), ",") + ")"
+				q = "t.content_rating_rank IN (" + store.Placeholders(len(c.levels)) + ")"
 			}
 			if c.op == "notIn" || c.op == "isNot" {
 				q = "NOT (" + q + ")"
@@ -614,7 +615,7 @@ func (c condition) sql() (string, []any) {
 		}
 		return q, args
 	}
-	ph := strings.TrimSuffix(strings.Repeat("?,", len(c.values)), ",")
+	ph := store.Placeholders(len(c.values))
 	args := make([]any, len(c.values))
 	for i, v := range c.values {
 		args[i] = v

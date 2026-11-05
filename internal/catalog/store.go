@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/braedonsaunders/ether/internal/config"
+	"github.com/braedonsaunders/ether/internal/store"
 	"math"
 	"sort"
 	"strconv"
@@ -551,14 +552,7 @@ func keyArgs(items []core.Title) []any {
 	return args
 }
 func placeholders(n int) string {
-	if n <= 0 {
-		return "NULL"
-	}
-	s := "?"
-	for i := 1; i < n; i++ {
-		s += ",?"
-	}
-	return s
+	return store.Placeholders(n)
 }
 
 type upsertOpts struct {

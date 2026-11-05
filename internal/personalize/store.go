@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"errors"
 	"math"
-	"strings"
 	"time"
 
 	"github.com/braedonsaunders/ether/internal/core"
@@ -232,10 +231,7 @@ func (s *sqlStore) attribute(ctx context.Context, userID int64, keys []core.Rati
 }
 
 func placeholders(n int) string {
-	if n <= 0 {
-		return ""
-	}
-	return strings.Repeat("?,", n-1) + "?"
+	return store.Placeholders(n)
 }
 
 // shownDays returns, per item key, the number of distinct days the item was
