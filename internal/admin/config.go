@@ -31,7 +31,7 @@ func (h *Handler) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 
 // saveConfig validates and persists next (secrets already unredacted),
 // preserving identity fields the UI must never rotate accidentally.
-func (h *Handler) saveConfig(next config.Config) ([]FieldError, error) {
+func (h *Handler) saveConfig(next, prev config.Config, plexFields map[string]json.RawMessage) ([]FieldError, error) {
 	errs := ValidateConfig(next)
 	if h.deps.ValidateExtra != nil {
 		errs = append(errs, h.deps.ValidateExtra(next)...)
@@ -41,6 +41,26 @@ func (h *Handler) saveConfig(next config.Config) ([]FieldError, error) {
 	}
 	err := h.deps.Config.Update(func(c *config.Config) error {
 		keepMachine, keepClient := c.Server.MachineIdentifier, c.Plex.ClientIdentifier
+		livePlex := c.Plex
+		// An omitted field or a redacted token represents no identity edit.
+		// Unchanged snapshot values also must not undo a concurrent claim.
+		_, claimProvided := plexFields["claimed"]
+		if !claimProvided {
+			next.Plex.Claimed = livePlex.Claimed
+		}
+		// Older unclaimed documents contain empty identity values. Treat those
+		// as stale when they omit claimed and a claim now exists; explicit
+		// unclaim or a new nonempty account value remains an owner edit.
+		staleEmptyIdentity := !claimProvided && livePlex.Claimed && next.Plex.Token == ""
+		if raw, ok := plexFields["token"]; !ok || isRedactedJSON(raw) || staleEmptyIdentity || next.Plex.Token == prev.Plex.Token {
+			next.Plex.Token = livePlex.Token
+		}
+		if _, ok := plexFields["ownerplexid"]; !ok || (staleEmptyIdentity && next.Plex.OwnerPlexID == 0) || next.Plex.OwnerPlexID == prev.Plex.OwnerPlexID {
+			next.Plex.OwnerPlexID = livePlex.OwnerPlexID
+		}
+		if _, ok := plexFields["ownerusername"]; !ok || (staleEmptyIdentity && next.Plex.OwnerUsername == "") || next.Plex.OwnerUsername == prev.Plex.OwnerUsername {
+			next.Plex.OwnerUsername = livePlex.OwnerUsername
+		}
 		// The database is node-local and chosen at startup (config file or
 		// ETHER_DATABASE_URL); the admin API shows it redacted, never edits it.
 		keepDatabase := c.Database
@@ -87,10 +107,18 @@ func (h *Handler) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	// A full document may come from an older client that does not know the
 	// claim field. Only an explicit false is an instruction to unclaim.
+	if err := rejectDuplicateKeys(body, "config", "plex"); err != nil {
+		writeError(w, http.StatusBadRequest, "bad_json", err.Error())
+		return
+	}
 	var fields map[string]json.RawMessage
 	_ = json.Unmarshal(body, &fields)
 	for key, envelope := range fields {
 		if strings.EqualFold(key, "config") {
+			if err := rejectDuplicateKeys(envelope, "plex"); err != nil {
+				writeError(w, http.StatusBadRequest, "bad_json", err.Error())
+				return
+			}
 			fields = nil
 			_ = json.Unmarshal(envelope, &fields)
 			break
@@ -126,7 +154,7 @@ func (h *Handler) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	next.Availability.ApplyMode()
 	next.SetCachePolicy(next.Cache)
-	errs, err := h.saveConfig(next)
+	errs, err := h.saveConfig(next, prev, identityFields(plexRaw))
 	switch {
 	case err != nil:
 		h.log.Error("admin: save config", "err", err)
@@ -188,6 +216,11 @@ func (h *Handler) handlePutSection(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "bad_json", "could not read request body")
 		return
 	}
+	// Reject ambiguous envelope keys before decoding into a map.
+	if err := rejectDuplicateKeys(body, "value"); err != nil {
+		writeError(w, http.StatusBadRequest, "bad_json", err.Error())
+		return
+	}
 	// Accept {"value": {...}} envelope too.
 	var probe map[string]json.RawMessage
 	if json.Unmarshal(body, &probe) == nil {
@@ -237,7 +270,11 @@ func (h *Handler) handlePutSection(w http.ResponseWriter, r *http.Request) {
 	} else {
 		next.Cache = prev.Cache
 	}
-	errs, err := h.saveConfig(next)
+	var identity map[string]json.RawMessage
+	if field == "plex" {
+		identity = identityFields(body)
+	}
+	errs, err := h.saveConfig(next, prev, identity)
 	switch {
 	case err != nil:
 		h.log.Error("admin: save config section", "section", field, "err", err)
@@ -255,6 +292,9 @@ func (h *Handler) handlePutSection(w http.ResponseWriter, r *http.Request) {
 // Reject null and duplicate spellings: JSON null decoded into a bool would
 // otherwise silently become false and release the device.
 func validatePlexClaimInput(raw json.RawMessage) (bool, error) {
+	if err := rejectDuplicateKeys(raw, "claimed"); err != nil {
+		return false, err
+	}
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &fields); err != nil || fields == nil {
 		return false, errors.New("plex configuration must be an object")
@@ -276,6 +316,55 @@ func validatePlexClaimInput(raw json.RawMessage) (bool, error) {
 		}
 	}
 	return seen, nil
+}
+
+// rejectDuplicateKeys inspects object members before map decoding loses duplicates.
+func rejectDuplicateKeys(raw []byte, keys ...string) error {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	tok, err := dec.Token()
+	if err != nil || tok != json.Delim('{') {
+		return nil
+	} // schema validation handles non-objects
+	seen := map[string]bool{}
+	for dec.More() {
+		t, err := dec.Token()
+		if err != nil {
+			return err
+		}
+		key, ok := t.(string)
+		if !ok {
+			return errBadJSON
+		}
+		for _, target := range keys {
+			if strings.EqualFold(key, target) {
+				if seen[target] {
+					return errors.New("duplicate " + target + " field")
+				}
+				seen[target] = true
+			}
+		}
+		var value json.RawMessage
+		if err := dec.Decode(&value); err != nil {
+			return err
+		}
+	}
+	_, err = dec.Token()
+	return err
+}
+
+func identityFields(raw []byte) map[string]json.RawMessage {
+	var fields map[string]json.RawMessage
+	_ = json.Unmarshal(raw, &fields)
+	out := make(map[string]json.RawMessage, len(fields))
+	for k, v := range fields {
+		out[strings.ToLower(k)] = v
+	}
+	return out
+}
+
+func isRedactedJSON(raw json.RawMessage) bool {
+	var value string
+	return json.Unmarshal(raw, &value) == nil && isRedacted(value)
 }
 
 // mergeSection overlays patch onto current: for objects the patch keys win
