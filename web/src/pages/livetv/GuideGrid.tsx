@@ -48,6 +48,7 @@ export function GuideGrid({
   onSelect,
   onShift,
   onNow: jumpNow,
+  onRange,
   loading,
   head,
   covered,
@@ -56,7 +57,8 @@ export function GuideGrid({
   selection,
   bulkActions,
 }: {
-  channels: Channel[];
+  /** Sparse by design: only rows near the viewport have been fetched. */
+  channels: (Channel | undefined)[];
   guide: Map<string, Programme[]>;
   from: Date;
   until: Date;
@@ -65,6 +67,7 @@ export function GuideGrid({
   onSelect: (id: string) => void;
   onShift: (hours: number) => void;
   onNow: () => void;
+  onRange?: (first: number, last: number) => void;
   loading: boolean;
   /**
    * The lineup view: the channel column becomes the page's lineup (a third
@@ -81,6 +84,10 @@ export function GuideGrid({
   bulkActions?: ReactNode;
 }) {
   const lineup = head !== undefined;
+  const loadedChannels = useMemo(
+    () => channels.filter((c): c is Channel => c !== undefined),
+    [channels],
+  );
   const [zoom, setZoom] = useState<Zoom>("normal");
   const ppm = ZOOM[zoom];
   const start = from.getTime();
@@ -128,6 +135,9 @@ export function GuideGrid({
 
   const first = Math.max(0, Math.floor((view.top - HEADER) / ROW) - 6);
   const last = Math.min(channels.length, Math.ceil((view.top + view.height) / ROW) + 6);
+  useEffect(() => {
+    onRange?.(first, last);
+  }, [first, last, onRange]);
 
   const ticks = useMemo(() => {
     const out: number[] = [];
@@ -191,7 +201,7 @@ export function GuideGrid({
         ) : null}
         <div className={cn("flex min-w-0 flex-1", lineup && "h-[104px]")}>
           {lineup ? (
-            <OnNowStrip channels={channels} guide={guide} now={now} onSelect={onSelect} />
+            <OnNowStrip channels={loadedChannels} guide={guide} now={now} onSelect={onSelect} />
           ) : null}
           <div
             className={cn(
@@ -359,6 +369,16 @@ export function GuideGrid({
 
           {channels.slice(first, last).map((c, k) => {
             const i = first + k;
+            if (!c)
+              return (
+                <div
+                  key={`pending-${i}`}
+                  role="row"
+                  aria-rowindex={i + 1}
+                  className="absolute left-0 animate-pulse border-b border-border/60 bg-bg-subtle/40"
+                  style={{ top: HEADER + i * ROW, height: ROW, width: CH_COL + width }}
+                />
+              );
             const ps = guide.get(c.id) ?? [];
             const on = c.id === selected;
             const live = onNow(ps, now);

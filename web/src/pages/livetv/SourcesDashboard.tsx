@@ -9,7 +9,7 @@ import { formatDateTime, formatNumber, formatPercent, relativeTime } from "../..
 import {
   MINUTE,
   isChannelSource,
-  type Channel,
+  type ChannelSummary,
   type Coverage,
   type LiveUsage,
   type Source,
@@ -32,7 +32,7 @@ export function SourcesDashboard({
   onEdit,
 }: {
   sources: Source[];
-  channels: Channel[];
+  channels: ChannelSummary[];
   coverage: Map<string, Coverage> | null;
   usage: LiveUsage | null;
   selected: string | null;

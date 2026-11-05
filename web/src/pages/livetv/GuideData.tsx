@@ -26,6 +26,7 @@ import {
   plexLineupName,
   tv,
   type Channel,
+  type ChannelSummary,
   type Coverage,
   type GuideChannel,
   type MatchChange,
@@ -122,8 +123,8 @@ export function MapGuideButton({
   label = t("Map guide"),
   variant = "outline",
 }: {
-  channel: Channel;
-  onMapped: (c: Channel) => void | Promise<void>;
+  channel: ChannelSummary;
+  onMapped: (c: ChannelSummary) => void | Promise<void>;
   label?: string;
   variant?: "outline" | "ghost" | "default";
 }) {
@@ -169,7 +170,7 @@ const sourceTitle = (s: Source) => (s.kind === "plex" ? plexLineupName(s.name) :
 /** A guide source is stale when it has failed, or its listings end within six hours. */
 const STALE_MS = 6 * 60 * 60 * 1000;
 
-const usesGuide = (c: Channel, s: Source) =>
+const usesGuide = (c: ChannelSummary, s: Source) =>
   c.kind === "iptv" && Boolean(c.guideId) && (c.guideSourceId || c.sourceId) === s.id;
 
 /** One line on how a guide source is doing: size, use, horizon, or its error. */
@@ -203,7 +204,7 @@ export function GuideSourceList({
 }: {
   /** The Live TV search: narrows the guide sources listed by name. */
   query?: string;
-  lineup: Channel[];
+  lineup: ChannelSummary[];
   sources: Source[];
   /** The selected guide source id, or null for All guides. */
   selected: string | null;
@@ -295,7 +296,7 @@ export function GuideWorkbench({
   now,
   query = "",
 }: {
-  channels: Channel[];
+  channels: ChannelSummary[];
   sources: Source[];
   coverage: Map<string, Coverage> | null;
   /** The selected guide source, or undefined for All guides. */
@@ -311,6 +312,7 @@ export function GuideWorkbench({
   const [show, setShow] = useState<Show>("missing");
   const [limit, setLimit] = useState(ROW_PAGE);
   const [proposals, setProposals] = useState<MatchChange[] | null>(null);
+  const [matchCounts, setMatchCounts] = useState({ ambiguous: 0, regionRejected: 0 });
   const [accepted, setAccepted] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
@@ -324,11 +326,11 @@ export function GuideWorkbench({
     () => (source ? iptv.filter((c) => usesGuide(c, source)) : []),
     [iptv, source],
   );
-  const has = (c: Channel) => (coverage?.get(c.id)?.programmes ?? 0) > 0;
+  const has = (c: ChannelSummary) => (coverage?.get(c.id)?.programmes ?? 0) > 0;
   const needle = query.trim().toLowerCase();
   const matches = useMemo(() => {
     if (!needle) return null;
-    return (list: Channel[]) =>
+    return (list: ChannelSummary[]) =>
       list.filter((c) =>
         `${c.number} ${c.name} ${c.group ?? ""} ${c.guideId ?? ""}`.toLowerCase().includes(needle),
       );
@@ -367,6 +369,7 @@ export function GuideWorkbench({
       const r = await tv.match({ dryRun: true });
       const changes = (r.changes ?? []).filter((c) => !sourceId || c.guideSourceId === sourceId);
       setProposals(changes);
+      setMatchCounts({ ambiguous: r.ambiguous ?? 0, regionRejected: r.regionRejected ?? 0 });
       setAccepted(new Set(changes.map((c) => c.channelId)));
       if (!changes.length)
         toast.info(t("No new matches found"), {
@@ -491,7 +494,7 @@ export function GuideWorkbench({
         )}
       </section>
 
-      {proposals && proposals.length ? (
+      {proposals !== null ? (
         <section
           aria-label={t("Suggested matches")}
           className="space-y-3 rounded-2xl border border-primary/30 bg-primary-subtle/40 p-4"
@@ -513,6 +516,11 @@ export function GuideWorkbench({
               </Button>
             </div>
           </div>
+          <p className="text-xs text-fg-muted">
+            {t("Ambiguous matches: {count}", { count: formatNumber(matchCounts.ambiguous) })}
+            {" · "}
+            {t("Region conflicts: {count}", { count: formatNumber(matchCounts.regionRejected) })}
+          </p>
           <ul className="max-h-80 space-y-1 overflow-y-auto">
             {proposals.map((p) => {
               const c = byId.get(p.channelId);
