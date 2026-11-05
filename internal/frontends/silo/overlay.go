@@ -1,6 +1,7 @@
 package silo
 
 import (
+	"github.com/braedonsaunders/ether/internal/core"
 	"net/http"
 	"strings"
 
