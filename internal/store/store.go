@@ -37,6 +37,7 @@ type migration struct {
 	component   string
 	version     int
 	sql         string
+	registered  bool
 	overrides   map[Dialect]string
 	sqliteApply func(context.Context, *sql.Tx) error
 	pgApply     func(context.Context, *sql.Tx) error
@@ -66,18 +67,23 @@ func RegisterAfter(component string, dependsOn ...string) {
 // Register adds a migration written in SQLite's dialect. Versions are per
 // component and start at 1. Call from init(); a migration must never change
 // after release. On PostgreSQL the DDL is translated by TranslateDDL unless
-// RegisterDialect supplied an override.
+// RegisterDialect supplied an override. Register panics if the base migration
+// for a component/version was already registered.
 func Register(component string, version int, sql string) {
 	regMu.Lock()
 	defer regMu.Unlock()
 	for i := range migrations {
-		// Fill a placeholder left by an earlier RegisterDialect.
-		if migrations[i].component == component && migrations[i].version == version && migrations[i].sql == "" {
+		if migrations[i].component == component && migrations[i].version == version {
+			// RegisterDialect may reserve the version before its base SQL.
+			if migrations[i].registered || migrations[i].sql != "" {
+				panic("store: Register " + component + "/" + strconv.Itoa(version) + " already registered")
+			}
 			migrations[i].sql = sql
+			migrations[i].registered = true
 			return
 		}
 	}
-	migrations = append(migrations, migration{component: component, version: version, sql: sql})
+	migrations = append(migrations, migration{component: component, version: version, sql: sql, registered: true})
 }
 
 // RegisterDialect overrides one registered migration for dialect d, for DDL

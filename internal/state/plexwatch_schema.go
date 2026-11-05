@@ -2,20 +2,11 @@ package state
 
 import "github.com/braedonsaunders/ether/internal/store"
 
-// Component state_plexwatch holds the account-sync additions to watch state.
-// The origin/prism tip fetched in this worktree on 2026-10-30 was
-// b4ef791d53a68741c0f1513071328594b62eb9ed. That commit registers state/3
-// (state_playlist_markers) and state/4 (state_last_source,
-// state_source_sequence). It is the snapshot this integration check read,
-// not a claim about a newer coordinator head. Those version numbers stay
-// Prism's. state/1 and state/2 stay the watch tables.
-//
-// Migrations apply by component name, then version. This tree has no
-// RegisterAfter. state_plexwatch sorts after state, so Prism's state/3 and
-// state/4 run before these statements when both are registered.
-// plexwatch_state would sort before state, and the clock ALTER would run
-// before state_watch exists. Account tables stay on component plexwatch.
+// Component state_plexwatch adds account-sync clocks and intents to state_watch.
+// Its migrations depend on the real state component, including the playlist
+// markers and last-source migrations. Account tables belong to plexwatch.
 func init() {
+	store.RegisterAfter("state_plexwatch", "state")
 	// Durable intents share the watch-state transaction. A subscriber that
 	// only listens in memory can miss a commit that crashes before the
 	// callback runs. Rows here are the source for account sync.

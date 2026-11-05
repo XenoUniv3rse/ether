@@ -59,6 +59,23 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+      - name: Cache protocol specs
+        if: matrix.shard == 'protocols-catalog' || matrix.shard == 'rest' || matrix.shard == 'all'
+        id: specs
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: .ci-specs
+          key: protocol-specs-${{ hashFiles('internal/conform/specs/manifest.json') }}
+      - name: Stage protocol specs
+        if: matrix.shard == 'protocols-catalog' || matrix.shard == 'rest' || matrix.shard == 'all'
+        shell: bash
+        run: |
+          if [ '${{ steps.specs.outputs.cache-hit }}' != 'true' ]; then
+            bash internal/conform/specs/fetch.sh .ci-specs
+          fi
+          specdir="$GITHUB_WORKSPACE/.ci-specs"
+          if [ "$RUNNER_OS" = Windows ]; then specdir=$(cygpath -w "$specdir"); fi
+          echo "ETHER_CONFORM_SPECS_DIR=$specdir" >> "$GITHUB_ENV"
       # Stage the pinned ffmpeg/ffprobe (packaging/ffmpeg.lock.json,
       # SHA-256 verified by scripts/fetch-ffmpeg.sh) and put them first on
       # PATH so the real integration tests in internal/transcode run

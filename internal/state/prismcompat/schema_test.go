@@ -7,7 +7,6 @@ import (
 	"encoding/hex"
 	"net/url"
 	"os"
-	"sync"
 	"testing"
 	"time"
 
@@ -19,33 +18,10 @@ import (
 	_ "github.com/braedonsaunders/ether/internal/plexwatch"
 )
 
-// origin/prism b4ef791d. Registered only in this test process so the state
-// package's own suite does not grow a second state/3.
-const prismPlaylistMarkersSQL = `CREATE TABLE state_playlist_markers (user_id INTEGER NOT NULL, marker TEXT NOT NULL, playlist_id INTEGER NOT NULL UNIQUE, PRIMARY KEY(user_id,marker), FOREIGN KEY(playlist_id) REFERENCES state_playlists(id) ON DELETE CASCADE);`
-
-const prismLastSourceSQL = `
-CREATE TABLE state_source_sequence (id INTEGER PRIMARY KEY AUTOINCREMENT);
-CREATE TABLE state_last_source (
- user_id INTEGER NOT NULL, rating_key INTEGER NOT NULL, session_order INTEGER NOT NULL, sequence INTEGER NOT NULL,
- revision TEXT NOT NULL, release_digest TEXT NOT NULL, video_codec TEXT NOT NULL,
- height INTEGER NOT NULL, hdr INTEGER, PRIMARY KEY(user_id,rating_key)
-);`
-
-var registerPrism sync.Once
-
-func registerPrismState(t *testing.T) {
-	t.Helper()
-	registerPrism.Do(func() {
-		store.Register("state", 3, prismPlaylistMarkersSQL)
-		store.Register("state", 4, prismLastSourceSQL)
-	})
-}
-
 // TestPrismStateAndPlexwatchSchema migrates Prism state/3 and state/4
 // together with state_plexwatch/1-4 and the plexwatch account component.
 // Fresh and state/2 baselines both keep their rows.
 func TestPrismStateAndPlexwatchSchema(t *testing.T) {
-	registerPrismState(t)
 	ctx := context.Background()
 	t.Run("sqlite", func(t *testing.T) {
 		db := openSQLite(t)

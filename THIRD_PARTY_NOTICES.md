@@ -28,6 +28,9 @@ Installers and the Docker image bundle `ffmpeg` and `ffprobe` from the
 
 | Module | Used for | Licence |
 | --- | --- | --- |
+| `github.com/SherClockHolmes/webpush-go` | Web Push notification delivery | MIT (© Ethan Holmes) |
+| `github.com/coder/websocket` | Viewer event and playback-control WebSockets | ISC (© Coder) |
+| `github.com/golang-jwt/jwt/v5` | VAPID token signing via webpush-go (indirect, shipped) | MIT (© Dave Grijalva and golang-jwt maintainers) |
 | `modernc.org/sqlite` (+ its modernc.org support modules) | Pure-Go SQLite store | BSD-3-Clause (module); SQLite itself is public domain |
 | `github.com/jackc/pgx/v5` (+ `github.com/jackc/pgpassfile`, `github.com/jackc/pgservicefile`, `github.com/jackc/puddle/v2`) | Pure-Go PostgreSQL driver (database/sql adapter) for clustered mode, `internal/store` | MIT (© Jack Christensen) |
 | `github.com/kardianos/service` | OS service (systemd/launchd/Windows SCM), `internal/service` | Zlib-style (“as-is”, © Daniel Theophanes) |
@@ -53,7 +56,7 @@ Installers and the Docker image bundle `ffmpeg` and `ffprobe` from the
 | `github.com/godbus/dbus/v5` | Linux StatusNotifier (systray transport) | BSD-2-Clause |
 | `github.com/google/uuid` | IDs (via modernc / components) | BSD-3-Clause |
 | `github.com/dustin/go-humanize` | Human-readable sizes (indirect) | MIT |
-| `github.com/mattn/go-isatty`, `github.com/ncruces/go-strftime`, `github.com/remyoudompheng/bigfft`, `github.com/hashicorp/golang-lru/v2` | modernc/sqlite internals (indirect) | MIT / MIT / BSD-3-Clause / MPL-2.0 respectively |
+| `github.com/mattn/go-isatty`, `github.com/ncruces/go-strftime`, `github.com/remyoudompheng/bigfft` | modernc/sqlite internals (indirect) | MIT / MIT / BSD-3-Clause respectively |
 | `golang.org/x/sync` | pgx internals (indirect) | BSD-3-Clause |
 | `golang.org/x/sys` (and other `golang.org/x/*` in the build graph) | Platform primitives (indirect) | BSD-3-Clause |
 
@@ -102,7 +105,11 @@ binary. The bundle includes these packages (exact versions are pinned in
 
 | Package | Used for | Licence |
 | --- | --- | --- |
-| `@braedonsaunders/appkit-ui`, `@braedonsaunders/appkit-tokens`, `@braedonsaunders/appkit-dashboard` (primitives entry) | Design system: components, semantic tokens, dashboard tiles | AGPL-3.0-or-later |
+| `@braedonsaunders/appkit-ui`, `@braedonsaunders/appkit-tokens`, `@braedonsaunders/appkit-dashboard` (primitives entry), `@braedonsaunders/appkit-ai`, `@braedonsaunders/appkit-i18n`, `@braedonsaunders/appkit-viewspec` | Design system: components, semantic tokens, dashboard tiles | AGPL-3.0-or-later |
+| `@codemirror/lang-javascript`, `@codemirror/lang-json`, `@codemirror/autocomplete`, `@codemirror/language`, `@codemirror/lint`, `@codemirror/merge`, `@codemirror/state`, `@codemirror/view`, `@lezer/highlight`, `@uiw/react-codemirror` | Plugin source editor and syntax highlighting | MIT |
+| `@monaco-editor/react`, `monaco-editor`, `@typescript/vfs` | Plugin editor and TypeScript language support | MIT |
+| `@valtown/codemirror-ts` | TypeScript editor integration | ISC |
+| `react-markdown`, `remark-gfm` | Markdown rendering | MIT |
 | `react`, `react-dom`, `react-router`, `react-router-dom` | UI runtime and routing | MIT |
 | `@dnd-kit/core`, `@dnd-kit/sortable`, `@dnd-kit/utilities` | Accessible drag-to-reorder | MIT |
 | `lucide-react` | Icons | ISC |
