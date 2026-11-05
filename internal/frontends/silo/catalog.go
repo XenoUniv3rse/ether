@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"github.com/braedonsaunders/ether/internal/frontend/kit/paging"
 	"net/http"
 	"strconv"
 
@@ -24,15 +25,15 @@ func (i *instance) catalog(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	limit := 50
 	if x := q.Get("limit"); x != "" {
-		limit, err = strconv.Atoi(x)
-		if err != nil || limit < 1 || limit > 100 {
+		limit, err = paging.ParseLimit(x, limit, 100)
+		if err != nil {
 			http.Error(w, "Bad Request", 400)
 			return
 		}
 	}
 	offset := 0
 	if x := q.Get("cursor"); x != "" {
-		offset, err = strconv.Atoi(x)
+		offset, err = paging.ParseOffset(x, limit)
 		if err != nil || offset < 0 {
 			http.Error(w, "Bad Request", 400)
 			return
