@@ -164,6 +164,57 @@ func TestLiveTVDVRGuideProviderAndTuneShapes(t *testing.T) {
 		t.Fatal("unknown consumer accepted")
 	}
 }
+
+// TestLiveGridAndTuneLoadOneChannel pins the Plex grid and tune to the
+// requested channel: the old paths converted every channel's programmes in the
+// window and ran a current-programme query per channel.
+func TestLiveGridAndTuneLoadOneChannel(t *testing.T) {
+	f, service, channel := liveFixture(t)
+	var playlist, guide strings.Builder
+	playlist.WriteString("#EXTM3U\n")
+	guide.WriteString("<tv>")
+	for i := 1; i <= 20; i++ {
+		id := fmt.Sprintf("bulk%d", i)
+		fmt.Fprintf(&playlist, "#EXTINF:-1 tvg-id=\"%s\",Bulk %d\nhttps://owner.invalid/%s.m3u8\n", id, i, id)
+		fmt.Fprintf(&guide, `<channel id="%s"><display-name>Bulk %d</display-name></channel><programme channel="%s" start="20261018110000 +0000" stop="20261018130000 +0000"><title>%s show</title></programme>`, id, i, id, id)
+	}
+	guide.WriteString("</tv>")
+	if _, err := service.ImportSource(context.Background(), livetv.Source{ID: "bulk", Name: "Bulk", Playlist: playlist.String(), Guide: guide.String()}); err != nil {
+		t.Fatal(err)
+	}
+	ctx, stats := store.WithQueryStats(context.Background())
+	req := httptest.NewRequest("GET", liveProviderPath+"/grid?date=2026-10-18&channelGridKey="+url.QueryEscape(channel.ID), nil)
+	req = req.WithContext(ctx)
+	req.Header.Set("X-Plex-Token", ownerToken)
+	req.Header.Set("X-Plex-Client-Identifier", "client-1")
+	rec := httptest.NewRecorder()
+	f.srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("grid: %d %s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "Owner programme") || strings.Contains(body, "bulk1 show") {
+		t.Fatalf("grid not channel-scoped: %s", body)
+	}
+	if rows := stats.Rows(); rows > 6 {
+		t.Fatalf("scoped grid read %d rows; the whole-lineup path read 21 channels plus programmes", rows)
+	}
+
+	tuneCtx, tuneStats := store.WithQueryStats(context.Background())
+	tune := httptest.NewRequest("POST", "/livetv/dvrs/1/channels/"+url.PathEscape(channel.ID)+"/tune", nil)
+	tune = tune.WithContext(tuneCtx)
+	tune.Header.Set("X-Plex-Token", ownerToken)
+	tune.Header.Set("X-Plex-Client-Identifier", "client-1")
+	trec := httptest.NewRecorder()
+	f.srv.ServeHTTP(trec, tune)
+	if trec.Code != http.StatusOK {
+		t.Fatalf("tune: %d %s", trec.Code, trec.Body.String())
+	}
+	if q := tuneStats.Queries(); q > 10 {
+		t.Fatalf("tune used %d queries; the old path ran one per channel", q)
+	}
+}
+
 func TestLiveTVHonestPassAndViewerRestrictions(t *testing.T) {
 	f, service, c := liveFixture(t)
 	f.srv.d.Identity.MyPlexSubscription = false
