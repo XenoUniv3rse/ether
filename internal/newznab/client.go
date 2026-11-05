@@ -964,7 +964,7 @@ func (c *Client) Search(ctx context.Context, req core.SearchRequest) ([]core.Rel
 	// a single round-trip instead of N serial timeouts. A search nobody is
 	// waiting on (a warm-up, a watchlist check) tries them one at a time and
 	// stops at the first hit: it spends fewer API hits and has time.
-	if c.Config().DailyLimit == 0 && firstErr == nil && !core.IsUnattendedSearch(ctx) {
+	if c.Config().DailyLimit == 0 && firstErr == nil && !core.SpeculativeIndexerWork(ctx) {
 		const burstWidth = 4
 		for base := 0; base < len(rest); base += burstWidth {
 			if err := ctx.Err(); err != nil {
@@ -1042,7 +1042,7 @@ func (c *Client) Search(ctx context.Context, req core.SearchRequest) ([]core.Rel
 				continue
 			}
 			if len(results) > 0 {
-				if core.IsUnattendedSearch(ctx) && c.Config().DailyLimit == 0 {
+				if core.SpeculativeIndexerWork(ctx) && c.Config().DailyLimit == 0 {
 					// An unattended search stopped at its first fallback hit;
 					// Play would have merged a whole burst. Keep that partial
 					// answer out of the cache Play reads, and tell the resolver
@@ -1218,7 +1218,7 @@ func (c *Client) SearchRescue(ctx context.Context, req core.SearchRequest) ([]co
 	seen := map[string]bool{}
 	var firstErr error
 	// As for Search: unattended rescues go one query at a time.
-	if c.Config().DailyLimit == 0 && !core.IsUnattendedSearch(ctx) {
+	if c.Config().DailyLimit == 0 && !core.SpeculativeIndexerWork(ctx) {
 		type slot struct {
 			res []core.Release
 			err error

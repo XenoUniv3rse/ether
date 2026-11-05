@@ -225,7 +225,7 @@ type Service struct {
 	bgClosed         bool
 	bgWG             sync.WaitGroup
 	refills          map[string]chan struct{} // episode search key -> completion; guarded by bgMu
-	refillRetryAfter map[string]time.Time     // failed attempts; guarded by bgMu
+	refillRetryAfter map[string]refillMark    // next detail discovery allowed; guarded by bgMu
 
 	flightMu sync.Mutex
 	flights  map[string]*inflight
@@ -1106,7 +1106,7 @@ func (s *Service) searchCached(ctx context.Context, req core.SearchRequest, fres
 	if !fresh && ctx.Value(refillSearchContextKey{}) == nil {
 		s.bgMu.Lock()
 		done := s.refills[key]
-		cooldown := s.refillRetryAfter[key]
+		mark := s.refillRetryAfter[key]
 		s.bgMu.Unlock()
 		if done != nil {
 			select {
@@ -1114,7 +1114,7 @@ func (s *Service) searchCached(ctx context.Context, req core.SearchRequest, fres
 				if results, ok := s.peekSearchCache(key); ok {
 					return results, true, nil
 				}
-				// A failed attended search is not a reason for speculative
+				// A failed detail discovery is not a reason for speculative
 				// playback preparation to immediately spend the quota again.
 				if core.IsSpeculative(ctx) {
 					return nil, false, core.ErrBudgetExhausted
@@ -1122,7 +1122,9 @@ func (s *Service) searchCached(ctx context.Context, req core.SearchRequest, fres
 			case <-ctx.Done():
 				return nil, false, ctx.Err()
 			}
-		} else if core.IsSpeculative(ctx) && s.now().Before(cooldown) {
+		} else if core.IsSpeculative(ctx) && mark.missed && s.now().Before(mark.until) {
+			// Discovery for this title found nothing this cooloff: speculative
+			// playback preparation does not spend the quota asking again.
 			return nil, false, core.ErrBudgetExhausted
 		}
 	}
