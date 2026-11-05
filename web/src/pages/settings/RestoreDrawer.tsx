@@ -1,3 +1,4 @@
+import { copyText } from "../../components/CopyButton";
 import {
   Alert,
   AlertDescription,
@@ -185,7 +186,6 @@ export function RestoreDrawer({
     return () => {
       live = false;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [requested]);
 
   /** Closing before the restore starts discards the prepared copy. */
@@ -561,8 +561,8 @@ function GuidedRestore({ staged }: { staged: StagedBackup }) {
         variant="outline"
         size="sm"
         onClick={() =>
-          void navigator.clipboard?.writeText(staged.path).then(() => {
-            setCopied(true);
+          void copyText(staged.path).then((ok) => {
+            setCopied(ok);
             window.setTimeout(() => setCopied(false), 2000);
           })
         }

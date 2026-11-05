@@ -97,6 +97,7 @@ export function SourceOrderSection() {
   return (
     <SettingsSection title={t("Which source goes first")}>
       <SettingsRow
+        setting="source-order"
         title={t("Source order")}
         description={
           <QualityHelp

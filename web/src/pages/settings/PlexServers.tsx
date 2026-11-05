@@ -16,6 +16,7 @@ import { PlexMark } from "../../components/integration-brands";
 import { IntegrationTab } from "../../components/IntegrationTab";
 import { SettingsRow } from "../../components/SettingsRow";
 import { t, tn } from "../../i18n";
+import { formatDateTime } from "../../lib/format";
 import { api, apiFetch } from "../../lib/api";
 import { useAsync } from "../../lib/hooks";
 
@@ -151,7 +152,7 @@ function errorText(e: unknown): string {
 }
 
 const when = (seconds: number) =>
-  seconds ? new Date(seconds * 1000).toLocaleString() : t("Never");
+  seconds ? formatDateTime(new Date(seconds * 1000)) : t("Never");
 
 /** Integrations overview card. It has no switch: a server is on once added. */
 export function PlexServersCard() {
@@ -313,7 +314,7 @@ export function PlexServers() {
       if (accounts[srv.id] === undefined) void loadAccounts(srv);
     }
     // loadAccounts only sets state; re-running on accounts would refetch failures.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+
   }, [serverIDs]);
 
   const openMapping = (srv: PMSServer, account: PMSAccount) => {

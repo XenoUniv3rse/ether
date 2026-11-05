@@ -223,7 +223,7 @@ export function WhoGetsWhat() {
         <LoadingRows rows={3} />
       ) : (
         <>
-          <div className="grid gap-4 px-5 py-4 sm:grid-cols-3">
+          <div data-setting="check-quality" className="grid gap-4 px-5 py-4 sm:grid-cols-3">
             <div className="min-w-0 space-y-2">
               <p className="text-xs font-medium text-fg-muted">{t("Viewer")}</p>{" "}
               <div className="w-full">

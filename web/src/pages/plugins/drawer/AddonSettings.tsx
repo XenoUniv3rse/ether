@@ -404,7 +404,7 @@ export function AddonSettingsPage({
       .then(setSrc)
       .catch((e) => setError(errorMessage(e)));
     // openPage is a fresh closure per render; the page opens once per open.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+
   }, [open]);
 
   const take = useCallback(

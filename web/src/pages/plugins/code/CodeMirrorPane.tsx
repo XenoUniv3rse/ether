@@ -113,7 +113,7 @@ export default function CodeMirrorPane({
       tsHover(),
     ];
     // The TypeScript environment is created once per file.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+
   }, [file, original, locale]);
   return (
     <CodeMirror

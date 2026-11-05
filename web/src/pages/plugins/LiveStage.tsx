@@ -188,7 +188,7 @@ export function NativePreview({
     return () => {
       live = false;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- reruns on save, not per keystroke
+
   }, [projectId, template, epoch]);
   if (catalog?.items.length) {
     return (

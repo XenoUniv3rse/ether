@@ -1,4 +1,5 @@
 import { t, tn } from "../../i18n";
+import { formatDate } from "../../lib/format";
 import type { CacheRetention } from "./Cache";
 
 /** Human labels for the closed cache-cause vocabulary. */
@@ -102,10 +103,7 @@ export function retentionLabel(retention?: CacheRetention): string {
       const days = tn(retention.days ?? 0, "{count} inactive day", "{count} inactive days");
       return retention.until
         ? `${t("Expires {when}", {
-            when: new Date(retention.until).toLocaleDateString(undefined, {
-              month: "short",
-              day: "numeric",
-            }),
+            when: formatDate(retention.until),
           })} · ${days}`
         : days;
     }

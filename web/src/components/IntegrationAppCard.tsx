@@ -117,6 +117,7 @@ export function IntegrationAppCard({
       aria-label={label ?? identity.name}
       aria-busy={busy || undefined}
       data-app-id={identity.id}
+      data-setting={identity.id}
       className="flex h-full flex-col rounded-xl border border-border bg-surface p-5"
     >
       <div className="flex items-start gap-3">
