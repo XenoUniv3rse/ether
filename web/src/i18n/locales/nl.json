@@ -2031,6 +2031,7 @@
   "m_08e321c57534d1": "Geïnstalleerd, maar pas doorzocht zodra je ze toevoegt.",
   "m_08e334452ceff6": "Automatisch",
   "m_08e3fb9b7323f3": "Controleren welke kanalen programma-informatie hebben…",
+  "m_08e44775898375": "Uit favorieten verwijderen",
   "m_08e44edbf4cb4f": "Eigen rijpatroon",
   "m_08e6b2776c1ca5": {
     "one": "{count} kijkbeurt",
@@ -2473,6 +2474,7 @@
   "m_0abc686f94c34e": "{count} uitgesloten door je regels",
   "m_0abce084240d5f": "aangepast",
   "m_0abd37a346cd74": "Opname starten",
+  "m_0abe527dca8fa6": "Inschakelen",
   "m_0abe86d2db0457": {
     "one": "{count} aanroep",
     "other": "{count} aanroepen"
@@ -3061,6 +3063,7 @@
   "m_0d559428c21290": "{name} (eigenaar)",
   "m_0d55d3597eb393": "Gebruikt weer de standaard",
   "m_0d56dcd10edcc2": "Verloop",
+  "m_0d5780d08ac6d2": "Naar groep verplaatsen",
   "m_0d59414168b910": "Onbeperkt",
   "m_0d5a50945dee0b": "Sommige geïnstalleerde plugins publiceren een lijst met andere plugins, zoals de communitycatalogus van Cinemeta. Kies een lijst om te zien wat erin staat en bekijk elke plugin voordat u hem installeert.",
   "m_0d5b16a55abd92": "Nieuwe sessie na",
@@ -3291,6 +3294,7 @@
   "m_0e5e490b1c6457": "Schakel het in via de Catalogusinstellingen",
   "m_0e5efef029f2f6": "Behoud de volgorde van de lijst of je selectie",
   "m_0e603cd6024127": "Vernieuwt catalogi één keer per dag",
+  "m_0e63074a2d3246": "Kanalen bijgewerkt",
   "m_0e64f4fd11f8c4": "Verbind met je cluster",
   "m_0e65501bca012f": "Eén keer per titel per kijker",
   "m_0e655e777b7e81": "Een opgeslagen kijkpositie houdt deze release beschikbaar.",
@@ -3691,6 +3695,7 @@
   "m_1010905e5780d3": "Toestaan en bijwerken",
   "m_10119c55470439": "De gids kon niet worden geladen",
   "m_101307138aa18d": "Zoals opgegeven",
+  "m_1013583a7c0e28": "Selectie wissen",
   "m_1013ed9ad67661": "Voeg TMDB-discover-parameters toe, bijv. {first} of {second}.",
   "m_10168c657d795d": "Compressie voor nachtmodus",
   "m_10173d0ea81b0c": "Vandaag uitgezonden",
@@ -3787,6 +3792,7 @@
   "m_107e66090c813c": "Dat adres hoort bij een andere Plex Media Server. Voeg hem toe als nieuwe server.",
   "m_10820e26555349": "Bron {number}",
   "m_1082d1a6a743cc": "Simkl-account verbonden.",
+  "m_1083e252cdd4f4": "Alle overeenkomsten selecteren",
   "m_1084ceab8e0923": {
     "one": "{count} grab",
     "other": "{count} grabs"
@@ -3796,6 +3802,7 @@
   "m_1086584d9aca6a": "Algemeen",
   "m_108685d2f9e078": "Alles in orde",
   "m_1088e8316eb2f9": "Indexer hersteld",
+  "m_1089c04c64834f": "Kanaalacties",
   "m_108a5844831529": "Deze console ook buiten je netwerk openen",
   "m_108b41637f364f": "Categorie",
   "m_108bd8cfca2c2c": "Audioformaat",
@@ -4551,6 +4558,7 @@
   "m_13b490420daada": "Als geen enkele regel overeenkomt, geldt de standaard voor Thuis of Buitenshuis. Apparaatmogelijkheden gelden nog steeds vóór het afspelen.",
   "m_13b54a5acef468": "Zoeken in {label}",
   "m_13b74ddb61ff98": "{channel}: {title}, {start} tot {end}",
+  "m_13b801904d8adf": "Uitschakelen",
   "m_13bb3428a18d16": {
     "one": "{count} definitie geïnstalleerd, {used} gebruikt door je indexers hierboven.",
     "other": "{count} definities geïnstalleerd, {used} gebruikt door je indexers hierboven."
@@ -5353,6 +5361,7 @@
   "m_173f541d90d544": "Samples voor gezondheidscontrole",
   "m_173fc198ad8055": "Laat alles uit om op elk apparaat af te spelen.",
   "m_1740501133cb56": "Gecachete resultaten van {when}",
+  "m_17409f9c55f614": "{count} geselecteerd",
   "m_17440f2f9cc7d8": "Editor laden",
   "m_1744a26058ac14": {
     "one": "{count} programma de komende dag",
@@ -5785,6 +5794,7 @@
   "m_192149882f3811": "Sleep om de breedte aan te passen, dubbelklik om terug te zetten",
   "m_1921d872bf7248": "Lijst van {label}",
   "m_1922c581498469": "Gestart",
+  "m_1923a1a39346b0": "{channel} selecteren",
   "m_1924fb5aeba7f0": "Apps zoeken…",
   "m_19258b899ae5df": "Vastgezette posities",
   "m_19258e5926421f": "Serietitel",
@@ -6677,6 +6687,7 @@
   "m_1d211772446474": "Of voer {code} in op plex.tv/link.",
   "m_1d2163f63c76f8": "Negeren",
   "m_1d218ad59632e4": "Minuten",
+  "m_1d2244e7ae66fa": "Kanalen konden niet worden bijgewerkt",
   "m_1d240c1034bd02": "Volgende stappen",
   "m_1d2516f81747b0": "Streamt torrents die Offcloud al heeft.",
   "m_1d2578b2eb536a": "Regel {line}:{col}",

@@ -98,6 +98,7 @@ type Channel struct {
 	StreamURL     string         `json:"streamUrl,omitempty"`     // owner API only
 	StreamSources []StreamSource `json:"streamSources,omitempty"` // ordered inputs; independent of channel/guide identity
 	Group         string         `json:"group,omitempty"`
+	CustomGroup   bool           `json:"customGroup,omitempty"` // preserve owner grouping on provider refresh
 	Epoch         time.Time      `json:"epoch"`
 	Seed          int64          `json:"seed"`
 	Shuffle       bool           `json:"shuffle"`

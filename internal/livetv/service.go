@@ -1263,6 +1263,11 @@ func (s *Service) ImportSource(ctx context.Context, src Source) (Source, error) 
 		return src, err
 	}
 	defer tx.Rollback()
+	// Bulk edits share this source lock, so refresh cannot restore a stale
+	// enabled/favourite/group snapshot over an edit that already succeeded.
+	if err := s.lockSourceEdits(ctx, tx, []string{src.ID}); err != nil {
+		return src, err
+	}
 	// Writing the source row first takes its row lock, so a concurrent save
 	// of the same source on another node waits here; the owner's channel
 	// edits are then read inside the transaction and cannot be lost.
@@ -1311,6 +1316,9 @@ func (s *Service) ImportSource(ctx context.Context, src Source) (Source, error) 
 			c.GuideID = previous.GuideID
 			c.GuideSourceID = previous.GuideSourceID
 			c.Transcode = previous.Transcode
+			if previous.CustomGroup {
+				c.Group, c.CustomGroup = previous.Group, true
+			}
 			if fetched.AddonInputs {
 				c.StreamSources = mergeAddonStreams(c.StreamSources, previous.StreamSources)
 			} else {

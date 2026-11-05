@@ -1,4 +1,4 @@
-import { Badge, Button, cn } from "@braedonsaunders/appkit-ui";
+import { Badge, Button, Checkbox, cn } from "@braedonsaunders/appkit-ui";
 import {
   AlertTriangle,
   ChevronLeft,
@@ -21,6 +21,7 @@ import { Segmented } from "../../components/fields";
 import { Artwork } from "../../components/Artwork";
 import { getLocale, t, tn } from "../../i18n";
 import { unit } from "../../lib/format";
+import type { ChannelSelection } from "./ChannelBulkBar";
 import { ChannelLogo } from "./ChannelLogo";
 import { MINUTE, clock, hueOf, onNow, progress, type Channel, type Programme } from "./model";
 
@@ -52,6 +53,8 @@ export function GuideGrid({
   covered,
   onToggleFavorite,
   emptyHint,
+  selection,
+  bulkActions,
 }: {
   channels: Channel[];
   guide: Map<string, Programme[]>;
@@ -74,6 +77,8 @@ export function GuideGrid({
   onToggleFavorite?: (c: Channel) => void;
   /** Shown instead of the default when there are no rows. */
   emptyHint?: ReactNode;
+  selection?: ChannelSelection;
+  bulkActions?: ReactNode;
 }) {
   const lineup = head !== undefined;
   const [zoom, setZoom] = useState<Zoom>("normal");
@@ -173,7 +178,7 @@ export function GuideGrid({
     <div
       ref={root}
       className={cn(
-        "flex h-full min-h-[28rem] flex-col bg-bg",
+        "relative flex h-full min-h-[28rem] flex-col bg-bg",
         // Without the Fullscreen API (iOS Safari), fill the window instead.
         pseudoFull && "fixed inset-0 z-[100] h-dvh",
       )}
@@ -278,7 +283,10 @@ export function GuideGrid({
       >
         <div
           className="relative"
-          style={{ width: chCol + width, height: HEADER + channels.length * ROW }}
+          style={{
+            width: chCol + width,
+            height: HEADER + channels.length * ROW + (selection?.ids.size ? 100 : 0),
+          }}
         >
           {/* time ruler */}
           <div
@@ -289,6 +297,18 @@ export function GuideGrid({
               className="sticky left-0 z-40 flex shrink-0 items-center border-r border-border bg-surface px-3 text-[11px] font-semibold uppercase tracking-wider text-fg-subtle"
               style={{ width: chCol }}
             >
+              {selection ? (
+                <Checkbox
+                  className="mr-3"
+                  checked={selection.all}
+                  ref={(el) => {
+                    if (el) el.indeterminate = !selection.all && selection.ids.size > 0;
+                  }}
+                  disabled={selection.busy || !channels.length}
+                  aria-label={t("Select all matches")}
+                  onChange={selection.toggleAll}
+                />
+              ) : null}
               {t("Channel")}
             </div>
             <div className="relative" style={{ width }}>
@@ -346,6 +366,7 @@ export function GuideGrid({
               <div
                 key={c.id}
                 role="row"
+                aria-selected={selection ? selection.ids.has(c.id) : undefined}
                 aria-rowindex={i + 1}
                 className={cn(
                   "absolute left-0 flex border-b border-border/60",
@@ -363,6 +384,7 @@ export function GuideGrid({
                     width={chCol}
                     onSelect={onSelect}
                     onToggleFavorite={onToggleFavorite}
+                    selection={selection}
                   />
                 ) : (
                   <button
@@ -522,6 +544,11 @@ export function GuideGrid({
           </div>
         ) : null}
       </div>
+      {bulkActions ? (
+        <div className="pointer-events-none absolute inset-x-3 bottom-3 z-40 flex justify-center">
+          {bulkActions}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -536,6 +563,7 @@ function LineupCell({
   width,
   onSelect,
   onToggleFavorite,
+  selection,
 }: {
   channel: Channel;
   live: Programme | undefined;
@@ -545,29 +573,41 @@ function LineupCell({
   width: number;
   onSelect: (id: string) => void;
   onToggleFavorite?: (c: Channel) => void;
+  selection?: ChannelSelection;
 }) {
+  const checked = selection?.ids.has(c.id) ?? false;
   return (
     <div
       role="rowheader"
       className={cn(
         "group sticky left-0 z-20 flex shrink-0 items-center border-r border-border",
-        on ? "bg-primary-subtle" : "bg-surface",
+        on || checked ? "bg-primary-subtle" : "bg-surface",
       )}
       style={{ width }}
     >
+      {selection ? (
+        <div className="flex w-8 shrink-0 justify-end">
+          <Checkbox
+            checked={checked}
+            disabled={selection.busy}
+            aria-label={t("Select {channel}", { channel: c.name })}
+            onChange={(e) => selection.toggle(c.id, (e.nativeEvent as MouseEvent).shiftKey)}
+          />
+        </div>
+      ) : null}
       <button
         type="button"
         onClick={() => onSelect(c.id)}
         aria-current={on ? "true" : undefined}
         aria-label={`${c.number} ${c.name}`}
         className={cn(
-          "flex h-full min-w-0 flex-1 items-center gap-2.5 px-3 text-left transition-colors hover:bg-surface-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/50",
+          "flex h-full min-w-0 flex-1 items-center gap-2.5 px-2 text-left transition-colors hover:bg-surface-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/50",
           !c.enabled && "opacity-55",
         )}
       >
         <span
           className={cn(
-            "w-9 shrink-0 text-right font-mono text-xs tabular-nums",
+            "w-7 shrink-0 text-right font-mono text-xs tabular-nums",
             on ? "text-primary" : "text-fg-subtle",
           )}
         >

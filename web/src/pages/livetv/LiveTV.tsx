@@ -48,6 +48,7 @@ import {
   type StudioDraft,
 } from "./ChannelStudio";
 import { GuideMatchPanel, GuideSourceList, GuideWorkbench } from "./GuideData";
+import { ChannelBulkBar, type ChannelPatch } from "./ChannelBulkBar";
 import { GuideGrid } from "./GuideGrid";
 import { SourcesDashboard } from "./SourcesDashboard";
 import { SourceList, type Selection } from "./Lineup";
@@ -126,6 +127,10 @@ export default function LiveTV() {
     if (selection.kind === "map") setLeftTab("guide");
   }, [selection.kind]);
 
+  const [checkedChannels, setCheckedChannels] = useState<Set<string>>(new Set());
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const bulkLock = useRef(false);
+  const selectionAnchor = useRef<string | null>(null);
   const [channels, setChannels] = useState<Channel[] | null>(null);
   const [sources, setSources] = useState<Source[]>([]);
   const [users, setUsers] = useState<EtherUser[]>([]);
@@ -670,6 +675,83 @@ export default function LiveTV() {
     </>
   );
 
+  // Selection follows the current search/filter, never hidden matches or mounted rows only.
+  const selectable = useMemo(() => new Set(filtered.map((c) => c.id)), [filtered]);
+  useEffect(() => {
+    setCheckedChannels((old) => {
+      const next = new Set([...old].filter((id) => selectable.has(id)));
+      return next.size === old.size ? old : next;
+    });
+  }, [selectable]);
+  const checked = useMemo(
+    () => new Set([...checkedChannels].filter((id) => selectable.has(id))),
+    [checkedChannels, selectable],
+  );
+  const selectAllChannels = () => {
+    if (!bulkLock.current) setCheckedChannels(new Set(selectable));
+  };
+  const clearChannels = () => {
+    if (!bulkLock.current) {
+      setCheckedChannels(new Set());
+      selectionAnchor.current = null;
+    }
+  };
+  const toggleChecked = (id: string, range = false) => {
+    if (bulkLock.current) return;
+    const anchor = selectionAnchor.current;
+    selectionAnchor.current = id;
+    setCheckedChannels((old) => {
+      const next = new Set(old);
+      const include = !old.has(id);
+      const first = range && anchor ? filtered.findIndex((c) => c.id === anchor) : -1;
+      const last = filtered.findIndex((c) => c.id === id);
+      const ids =
+        first >= 0 && last >= 0
+          ? filtered.slice(Math.min(first, last), Math.max(first, last) + 1).map((c) => c.id)
+          : [id];
+      for (const key of ids) {
+        if (include) next.add(key);
+        else next.delete(key);
+      }
+      return next;
+    });
+  };
+  const applyChannels = async (patch: ChannelPatch) => {
+    if (bulkLock.current || !checked.size) return false;
+    const ids = [...checked];
+    const targets = new Set(ids);
+    bulkLock.current = true;
+    setBulkBusy(true);
+    try {
+      await tv.updateChannels(ids, patch);
+      setChannels((cs) =>
+        (cs ?? []).map((c) =>
+          targets.has(c.id)
+            ? { ...c, ...patch, ...(patch.group !== undefined ? { customGroup: true } : {}) }
+            : c,
+        ),
+      );
+      setCheckedChannels(new Set());
+      selectionAnchor.current = null;
+      toast.success(t("Channels updated"));
+      if (patch.enabled !== undefined) {
+        void loadGuide();
+        void loadCoverage();
+      }
+      return true;
+    } catch (e) {
+      toast.error(t("Couldn't update the channels"), { description: errorMessage(e) });
+      return false;
+    } finally {
+      bulkLock.current = false;
+      setBulkBusy(false);
+    }
+  };
+  const channelGroups = useMemo(
+    () => [...new Set(sorted.map((c) => c.group).filter((g): g is string => Boolean(g)))].sort(),
+    [sorted],
+  );
+
   const channelOpen = selection.kind === "new" || selection.kind === "channel";
   const sourceOpen = selection.kind === "source";
   const guideOpen = selection.kind === "map";
@@ -718,6 +800,26 @@ export default function LiveTV() {
   const lineupGuide = (
     <div className="flex min-h-0 flex-1 flex-col">
       <GuideGrid
+        selection={{
+          ids: checked,
+          busy: bulkBusy,
+          all: filtered.length > 0 && checked.size === filtered.length,
+          toggle: toggleChecked,
+          toggleAll: checked.size === filtered.length ? clearChannels : selectAllChannels,
+        }}
+        bulkActions={
+          checked.size ? (
+            <ChannelBulkBar
+              count={checked.size}
+              total={filtered.length}
+              busy={bulkBusy}
+              groups={channelGroups}
+              onAll={selectAllChannels}
+              onClear={clearChannels}
+              onApply={applyChannels}
+            />
+          ) : undefined
+        }
         channels={filtered}
         guide={guide}
         from={from}
