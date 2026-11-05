@@ -34,22 +34,24 @@ type track struct {
 	count      int
 }
 type session struct {
-	inputURL        string // selected upstream, immutable once the tune is ready
-	inputSource     StreamSource
-	inputHeaders    http.Header
-	consumed        bool
-	mediaStarted    bool
-	startupCancel   context.CancelFunc // immutable after publication; cancels I/O before locking
-	view            core.PlaySession   // immutable monitoring snapshot, including pending tunes
-	reserved        bool
-	ready           bool
-	nextSequence    int64
-	discontinuities int64
-	relay           core.HLSSession
-	relayCancel     context.CancelFunc
-	relayInfo       *core.MediaInfo
-	dash            core.DASHSession
-	http            core.HTTPSession
+	inputURL            string // selected upstream, immutable once the tune is ready
+	inputSource         StreamSource
+	inputHeaders        http.Header
+	firstMediaDelivered bool
+	lastMediaWarning    time.Time
+	consumed            bool
+	mediaStarted        bool
+	startupCancel       context.CancelFunc // immutable after publication; cancels I/O before locking
+	view                core.PlaySession   // immutable monitoring snapshot, including pending tunes
+	reserved            bool
+	ready               bool
+	nextSequence        int64
+	discontinuities     int64
+	relay               core.HLSSession
+	relayCancel         context.CancelFunc
+	relayInfo           *core.MediaInfo
+	dash                core.DASHSession
+	http                core.HTTPSession
 	// httpStart is closed when an in-flight ensureHTTP StartHLS finishes.
 	// Waiters re-check liveHTTP instead of starting a second encoder.
 	httpStart chan struct{}
@@ -201,6 +203,7 @@ func (ss *session) close(s *Service) {
 	ss.dash = nil
 	ss.http = nil
 	reserved := ss.reserved
+	ready, requested, delivered := ss.ready, ss.consumed, ss.firstMediaDelivered
 	ss.mu.Unlock()
 	s.revokeInput(ss)
 	if relayCancel != nil {
@@ -223,6 +226,7 @@ func (ss *session) close(s *Service) {
 			limiter.EndChannel(ss.info.ID)
 		}
 	}
+	s.sessionLog(ss).Info("live session resources released", "ready", ready, "media_requested", requested, "media_delivered", delivered, "age", s.o.Now().Sub(ss.info.StartedAt), "viewer_reservation_released", reserved)
 }
 
 func (s *Service) Tune(ctx context.Context, u *core.User, channelID string, caps core.ClientCaps) (SessionInfo, error) {
@@ -231,7 +235,26 @@ func (s *Service) Tune(ctx context.Context, u *core.User, channelID string, caps
 
 // TuneWithSession preserves the client's playback-session identity independently
 // of the server's stream, subscription and activity identities.
-func (s *Service) TuneWithSession(ctx context.Context, u *core.User, channelID string, caps core.ClientCaps, clientSessionID string) (SessionInfo, error) {
+func (s *Service) TuneWithSession(ctx context.Context, u *core.User, channelID string, caps core.ClientCaps, clientSessionID string) (result SessionInfo, resultErr error) {
+	started := time.Now()
+	attemptID := liveSessionID()
+	log := s.logger().With("session", attemptID, "channel", channelID, "client", caps.ClientID, "product", caps.Product)
+	log.Info("live tune started")
+	defer func() {
+		attrs := []any{"elapsed", time.Since(started)}
+		if resultErr != nil {
+			detail := Diagnose("tune", resultErr)
+			attrs = append(attrs, detail.LogAttrs()...)
+			if detail.Code == "cancelled" {
+				log.Debug("live tune cancelled", attrs...)
+			} else {
+				log.Warn("live tune failed", attrs...)
+			}
+		} else {
+			log.Info("live tune ready", append(attrs, "source", result.Channel.SourceID, "analyzed", result.MediaInfo != nil)...)
+		}
+	}()
+
 	if clientSessionID == "" {
 		clientSessionID = caps.ClientID
 	}
@@ -271,6 +294,7 @@ func (s *Service) TuneWithSession(ctx context.Context, u *core.User, channelID s
 		}
 		s.mu.Unlock()
 		for _, old := range superseded {
+			s.sessionLog(old).Info("live session superseded", "replacement_session", attemptID)
 			old.close(s)
 		}
 	}
@@ -319,7 +343,7 @@ func (s *Service) TuneWithSession(ctx context.Context, u *core.User, channelID s
 	s.nextSubscription++
 	ss := &session{
 		info: SessionInfo{
-			ID: liveSessionID(), SubscriptionID: s.nextSubscription,
+			ID: attemptID, SubscriptionID: s.nextSubscription,
 			ActivityID: liveSessionID(), ClientSessionID: clientSessionID,
 			UserID: u.ID, Channel: c, Programme: p, StartedAt: s.o.Now(),
 		},
@@ -438,10 +462,14 @@ func (s *Service) getSession(ctx context.Context, id string, u *core.User) (*ses
 // a repeatedly requested manifest can otherwise preserve a failed tune forever.
 func (s *Service) touchMedia(ss *session) {
 	ss.mu.Lock()
+	first := !ss.consumed
 	ss.consumed = true
 	ss.mediaStarted = true
 	ss.last = s.o.Now()
 	ss.mu.Unlock()
+	if first {
+		s.sessionLog(ss).Info("live media first requested", "since_tune", s.o.Now().Sub(ss.info.StartedAt))
+	}
 	s.recordSourceHealth(ss.info.Channel.ID, ss.inputSource, nil, true)
 }
 func (s *Service) Session(ctx context.Context, id string, u *core.User) (SessionInfo, error) {
@@ -881,7 +909,9 @@ func (s *Service) ServeSegment(w http.ResponseWriter, r *http.Request, id string
 	hs := tr.hls
 	ss.mu.Unlock()
 	s.touchMedia(ss)
-	hs.ServeSegment(w, r, n)
+	observed := s.observeMedia(w, ss)
+	defer observed.done()
+	hs.ServeSegment(observed, r, n)
 }
 
 // Failover keeps the channel timestamp when Playback resolves another release.
@@ -1004,7 +1034,7 @@ func (s *Service) startIPTVSource(ctx context.Context, ss *session) error {
 	// ffmpeg then read from too.
 	prefix, ctype, err := s.sniffInput(ctx, ss, 7)
 	if err != nil {
-		return err
+		return Diagnose("input_sniff", err)
 	}
 	isHLS := strings.HasPrefix(strings.TrimSpace(string(prefix)), "#EXTM3U") || strings.Contains(strings.ToLower(ctype), "mpegurl")
 	var info *core.MediaInfo
@@ -1022,10 +1052,10 @@ func (s *Service) startIPTVSource(ctx context.Context, ss *session) error {
 			info, err = s.takeEarlyProbe(probeWaitCtx, ss, probeCh)
 			if analyze && ss.caps.Protocol != "silo" {
 				if err != nil {
-					return err
+					return Diagnose("probe", err)
 				}
 				if info == nil || info.Video() == nil {
-					return core.ErrNotAvailable
+					return &TuneError{Code: "no_video", Stage: "probe", cause: core.ErrNotAvailable}
 				}
 			}
 			if err == nil && info != nil && info.Video() != nil {
@@ -1044,6 +1074,7 @@ func (s *Service) startIPTVSource(ctx context.Context, ss *session) error {
 			}
 		}
 		ss.resources["index.m3u8"] = c.StreamURL
+		s.sessionLog(ss).Info("live playback path selected", "path", "hls_passthrough", "analyzed", ss.info.MediaInfo != nil)
 		return nil
 	}
 	if s.o.Transcoder == nil {
@@ -1051,10 +1082,10 @@ func (s *Service) startIPTVSource(ctx context.Context, ss *session) error {
 	}
 	info, err = s.takeEarlyProbe(ctx, ss, probeCh)
 	if err != nil {
-		return err
+		return Diagnose("probe", err)
 	}
 	if info == nil {
-		return core.ErrNotAvailable
+		return &TuneError{Code: "no_video", Stage: "probe", cause: core.ErrNotAvailable}
 	}
 	copy := *info
 	copy.Duration = 0
@@ -1152,7 +1183,9 @@ func (s *Service) ServeRelaySegment(w http.ResponseWriter, r *http.Request, id s
 		return
 	}
 	s.touchMedia(ss)
-	relay.ServeSegment(w, r, n)
+	observed := s.observeMedia(w, ss)
+	defer observed.done()
+	relay.ServeSegment(observed, r, n)
 }
 
 // TranscodeFor lets the playback manager's existing release failover locate

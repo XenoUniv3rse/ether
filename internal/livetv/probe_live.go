@@ -45,7 +45,25 @@ func (s *Service) probeSessionInput(ctx context.Context, ss *session) (*core.Med
 		encoded, _ := json.Marshal(ss.inputHeaders)
 		key = stableID(ss.inputURL, string(encoded))
 	}
-	return s.probeLiveCached(ctx, key, input)
+	started := time.Now()
+	s.probeMu.Lock()
+	entry, found := s.probeCache[key]
+	cached := found && s.o.Now().Before(entry.expires)
+	_, shared := s.probeWait[key]
+	s.probeMu.Unlock()
+	info, err := s.probeLiveCached(ctx, key, input)
+	attrs := []any{"elapsed", time.Since(started), "cache_hit_at_start", cached, "probe_in_flight_at_start", shared}
+	if err != nil {
+		s.sessionLog(ss).Debug("live probe failed", append(attrs, Diagnose("probe", err).LogAttrs()...)...)
+	} else {
+		if info != nil {
+			if video := info.Video(); video != nil {
+				attrs = append(attrs, "video_codec", video.Codec, "width", video.Width, "height", video.Height)
+			}
+		}
+		s.sessionLog(ss).Debug("live probe ready", attrs...)
+	}
+	return info, err
 }
 
 func (s *Service) probeLiveCached(ctx context.Context, key, input string) (*core.MediaInfo, error) {
