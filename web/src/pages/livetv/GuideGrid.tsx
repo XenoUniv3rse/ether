@@ -376,9 +376,17 @@ export function GuideGrid({
                   role="row"
                   aria-busy="true"
                   aria-rowindex={i + 1}
-                  className="absolute left-0 animate-pulse border-b border-border/60 bg-bg-subtle/40"
+                  className="absolute left-0 flex border-b border-border/60 bg-bg-subtle/40"
                   style={{ top: HEADER + i * ROW, height: ROW, width: chCol + width }}
-                />
+                >
+                  <div
+                    className="sticky left-0 z-20 flex shrink-0 items-center border-r border-border bg-surface px-4"
+                    style={{ width: chCol }}
+                    aria-hidden
+                  >
+                    <div className="h-3 w-2/3 animate-pulse rounded bg-fg-subtle/15" />
+                  </div>
+                </div>
               );
             const ps = guide.get(c.id) ?? [];
             const on = c.id === selected;
