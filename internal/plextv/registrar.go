@@ -1110,6 +1110,12 @@ func (r *Registrar) refreshCertTrust(ctx context.Context) {
 	}
 	addr := localPlexDirectDial(r.connections(cfg))
 	host, port, _ := net.SplitHostPort(addr)
+	// The listener can be checked even when no LAN HTTPS URI is advertised
+	// (for example, LAN discovery failed or secure connections are disabled).
+	// Use a name covered by the installed wildcard for SNI in that case.
+	if host == "" && info.Hash != "" {
+		host = "x." + info.Hash + ".plex.direct"
+	}
 	// Ether's own listener first (its bind address when it has one, else
 	// loopback), then the LAN address the plex.direct name spells out, dialled
 	// by IP. The name is only the TLS server name, so neither attempt needs

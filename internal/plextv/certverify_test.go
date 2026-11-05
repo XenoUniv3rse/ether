@@ -183,3 +183,44 @@ func TestVerifyTrustDialsOwnListenerFirst(t *testing.T) {
 		t.Fatalf("fallback: ok=%v dialed %v", ok, addrs)
 	}
 }
+
+func TestRegistrarTrustWithoutAdvertisedHTTPS(t *testing.T) {
+	for _, disabled := range []bool{false, true} {
+		t.Run(map[bool]string{false: "no LAN", true: "HTTPS disabled"}[disabled], func(t *testing.T) {
+			now := time.Now()
+			const hash = "abc123def456abc123def456abc123de"
+			leaf, pair, roots := testPlexLeaf(t, hash, now, now.Add(time.Hour))
+			m := &CertManager{trustRoots: roots}
+			installLeaf(m, pair, leaf)
+			ln, err := tls.Listen("tcp", "127.0.0.1:0", m.TLSConfig())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer ln.Close()
+			go func() {
+				for {
+					c, err := ln.Accept()
+					if err != nil {
+						return
+					}
+					_ = c.(*tls.Conn).Handshake()
+					_ = c.Close()
+				}
+			}()
+			cfg := testConfig()
+			cfg.Server.Port = ln.Addr().(*net.TCPAddr).Port
+			cfg.Plex.CertHash = hash
+			if disabled {
+				cfg.Plex.SecureConnections = remote.SecureDisabled
+			}
+			r := &Registrar{o: RegistrarOptions{Config: &memConfig{cfg: cfg}, Certs: m, Now: time.Now}}
+			if disabled {
+				r.lastLAN = []string{"192.168.1.5"}
+			}
+			r.refreshCertTrust(context.Background())
+			if got := m.Info(); !got.Verified {
+				t.Fatalf("local TLS check: %+v", got)
+			}
+		})
+	}
+}
