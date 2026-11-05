@@ -1,4 +1,5 @@
-import { Badge, Button, Dialog, Input, cn, toast } from "@braedonsaunders/appkit-ui";
+import { copyText } from "../../components/CopyButton";
+import { Badge, Button, Dialog, Input, cn } from "@braedonsaunders/appkit-ui";
 import { useLocale } from "../../i18n/react";
 import {
   ArrowLeft,
@@ -511,10 +512,7 @@ function SourceChip({ address }: { address: string }) {
         size="sm"
         aria-label={t("Copy address")}
         onClick={() => {
-          void navigator.clipboard
-            .writeText(address)
-            .then(() => toast.success(t("Address copied")))
-            .catch(() => toast.error(t("Couldn't copy address")));
+          void copyText(address);
         }}
       >
         <Copy size={15} />

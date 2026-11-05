@@ -1,3 +1,4 @@
+import { copyText } from "../../components/CopyButton";
 import {
   Alert,
   AlertDescription,
@@ -137,10 +138,7 @@ function sortNodes(nodes: ClusterNode[]): ClusterNode[] {
 }
 
 function copyToken(text: string) {
-  void navigator.clipboard
-    .writeText(text)
-    .then(() => toast.success(t("Token copied")))
-    .catch(() => toast.error(t("Select and copy the token")));
+  void copyText(text);
 }
 
 /**
@@ -536,7 +534,10 @@ function SharedSettings({ status, settings }: { status: ClusterStatus; settings:
         }
         control={<Badge variant="info">{nodeName(self)}</Badge>}
       />
-      <MoreOptions label={t("More options: {title}", { title: t("Shared settings") })}>
+      <MoreOptions
+        setting="shared-settings"
+        label={t("More options: {title}", { title: t("Shared settings") })}
+      >
         <SettingsRow
           title={t("Settings version")}
           description={t(
