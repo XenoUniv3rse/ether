@@ -88,7 +88,6 @@ var mixedSections = map[string]map[string]Scope{
 		"compatibilityVersion":       Shared,
 		"latestCompatibilityVersion": Shared,
 		"trackLatestVersion":         Shared,
-		"disableVersionTracking":     Shared,
 		"token":                      Shared,
 		"clientIdentifier":           Shared,
 		"ownerPlexId":                Shared,
