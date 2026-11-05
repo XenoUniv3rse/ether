@@ -2,7 +2,6 @@ package silo
 
 import (
 	"net/http"
-	"strconv"
 	"strings"
 
 	"github.com/braedonsaunders/ether/internal/frontend"
@@ -79,7 +78,7 @@ func siloOverlay(version frontend.Version) (map[string]any, int) {
 	if sawVideo {
 		if video.Height > 0 {
 			height = video.Height
-			if label := resolutionLabel(video.Height); label != "" {
+			if label := core.ResolutionLabel(video.Width, video.Height); label != "" {
 				summary["resolution"] = label
 			}
 		}
@@ -110,13 +109,6 @@ func siloOverlay(version frontend.Version) (map[string]any, int) {
 		return nil, -1
 	}
 	return summary, height
-}
-
-func resolutionLabel(height int) string {
-	if height <= 0 {
-		return ""
-	}
-	return strconv.Itoa(height) + "p"
 }
 
 func codecBadge(codec string) string {
