@@ -1275,12 +1275,12 @@ func (s *Server) handleStartHLS(w http.ResponseWriter, r *http.Request) {
 	}
 	hs, err := s.d.Transcoder.StartHLS(context.WithoutCancel(ctx), core.HLSRequest{
 		SoftSubtitleStream: sessionSoftSubtitle(entry, pr, dec),
-		SessionID:   p.sessionID,
-		ReleaseID:   ps.SourceReleaseID(),
-		InputURL:    s.d.Playback.InputURL(ps.ID),
-		Info:        ps.Info,
-		Decision:    dec,
-		StartOffset: p.offset,
+		SessionID:          p.sessionID,
+		ReleaseID:          ps.SourceReleaseID(),
+		InputURL:           s.d.Playback.InputURL(ps.ID),
+		Info:               ps.Info,
+		Decision:           dec,
+		StartOffset:        p.offset,
 	})
 	if err != nil {
 		s.writeStartErr(w, r, pr, err)

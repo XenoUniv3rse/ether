@@ -303,9 +303,7 @@ describe("Live TV studio", () => {
       return undefined;
     });
     renderLiveTV("/livetv/guide-data");
-    expect(
-      await screen.findByText(/1 of 1 need a guide/, {}, WAIT),
-    ).toBeInTheDocument();
+    expect(await screen.findByText(/1 of 1 need a guide/, {}, WAIT)).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: /Map guide for News 24/ }));
     fireEvent.click(await screen.findByRole("button", { name: /News 24 HD/ }, WAIT));
     fireEvent.click(await screen.findByRole("button", { name: /Use this guide/ }, WAIT));
