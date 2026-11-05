@@ -88,7 +88,6 @@ type specRow struct {
 	spec      core.CollectionSpec
 	rawSpec   string
 	enabled   bool
-	createdAt time.Time
 	updatedAt time.Time
 	lastBuilt time.Time
 	itemCount int
@@ -158,7 +157,6 @@ func scanSpecRow(sc interface{ Scan(...any) error }) (*specRow, error) {
 	Normalize(&r.spec)
 	r.builtin = builtin != 0
 	r.enabled = enabled != 0
-	r.createdAt = unixStamp(created)
 	r.updatedAt = unixStamp(updated)
 	r.lastBuilt = unixStamp(built)
 	r.changedAt = unixStamp(changed)
