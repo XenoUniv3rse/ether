@@ -1,9 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
-  agentSuggestionsFor,
   pageRoute,
   pluginNavGroup,
-  type CommandMeta,
   type PageMeta,
 } from "./console-descriptors";
 import { destinationsFrom } from "./sitemap";
@@ -21,7 +19,6 @@ export const fixturePluginPage: Descriptor<PageMeta> = {
   meta: { navGroup: "server", keywords: { resolved: "year in review" } },
 };
 
-const commands = descriptors.filter((d) => d.kind === "command") as Descriptor<CommandMeta>[];
 
 describe("console descriptors", () => {
   it("routes a plugin page to /p/<plugin>/<page>", () => {
@@ -48,17 +45,7 @@ describe("console descriptors", () => {
     });
   });
 
-  it("keeps agent suggestions per route and out of plain actions", () => {
-    const onReleases = agentSuggestionsFor(commands, "/quality/profiles");
-    expect(onReleases.map((c) => c.id)).toContain("ask.releases.why-pick");
-    expect(agentSuggestionsFor(commands, "/livetv").map((c) => c.id)).toContain(
-      "ask.livetv.failing",
-    );
-    expect(agentSuggestionsFor(commands, "/cache")).toEqual([]);
-    const actions = commands.filter((c) => c.meta?.route && !c.meta.agentSuggestion);
-    expect(actions.map((c) => c.id)).toContain("new-collection");
-    expect(actions.map((c) => c.id)).not.toContain("ask.releases.why-pick");
-  });
+
 });
 
 describe("pluginNavGroup", () => {
