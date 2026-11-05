@@ -1,6 +1,7 @@
 package stremio
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -383,7 +384,7 @@ func convertWith(streams []stream, req core.SearchRequest, packs bool, opts conv
 			rel.GUID = "btih:" + hash + guidSuffix(s, req, packs)
 			rel.Protocol = core.ProtocolTorrent
 			rel.InfoHash = hash
-			rel.MagnetURL = newznab.MagnetFor(hash, firstNonEmpty(torrent, name), streamTrackers(s))
+			rel.MagnetURL = newznab.MagnetFor(hash, cmp.Or(torrent, name), streamTrackers(s))
 			if streamURL != "" && !packs {
 				rel.StreamURL, rel.StreamHeaders, rel.StreamOrigin = streamURL, s.requestHeaders(), opts.origin
 			}
@@ -865,15 +866,6 @@ func trackers(sources []string) []string {
 		}
 	}
 	return out
-}
-
-func firstNonEmpty(vs ...string) string {
-	for _, v := range vs {
-		if v != "" {
-			return v
-		}
-	}
-	return ""
 }
 
 // hintRe matches a debrid service tag with its availability marker:

@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
+	"slices"
 	"sort"
 
 	"github.com/braedonsaunders/ether/internal/config"
@@ -39,12 +41,7 @@ func secretContext(c Channel, key string) []string {
 }
 
 func sortedKeys(m map[string]string) []string {
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	return keys
+	return append([]string{}, slices.Sorted(maps.Keys(m))...)
 }
 
 // sealChannel returns the stored form of c.
