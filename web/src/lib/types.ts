@@ -390,7 +390,6 @@ export interface EtherConfig {
   trakt: { enabled: boolean; clientId: string; clientSecret: string };
   simkl?: { enabled: boolean; clientId: string; clientSecret: string };
   markers?: {
-    accountEnabled?: boolean;
     theIntroDb: boolean;
     apiKey: string;
     skipIntro?: boolean;

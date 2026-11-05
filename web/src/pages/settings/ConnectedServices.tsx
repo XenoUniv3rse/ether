@@ -108,7 +108,7 @@ interface Service {
   configKey: "trakt" | "simkl" | "llm" | "openSubtitles" | "markers";
   endpoint: string;
   /** Boolean this card's switch writes. Omitted fields stay stored. */
-  flag: "enabled" | "accountEnabled";
+  flag: "enabled" | "theIntroDb";
   label: string;
   groups: FieldGroup[];
   form?: (props: {
@@ -187,7 +187,7 @@ const SERVICES: Service[] = localized(() => [
     tab: "introdb",
     configKey: "markers",
     endpoint: "markers",
-    flag: "accountEnabled",
+    flag: "theIntroDb",
     label: "TheIntroDB",
     groups: S.MARKERS,
     testLabel: t("Test TheIntroDB"),
@@ -354,7 +354,7 @@ function mergeSection(
         ...base,
         markers: {
           ...prev,
-          accountEnabled: boolField(section, "accountEnabled", prev.accountEnabled ?? false),
+          theIntroDb: boolField(section, "theIntroDb", prev.theIntroDb),
           apiKey: textField(section, "apiKey", prev.apiKey),
         },
       };
