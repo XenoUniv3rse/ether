@@ -78,6 +78,7 @@ type Block struct {
 	Watched     string          `json:"watched,omitempty"`
 }
 type Channel struct {
+	sweepKey      string
 	numberMissing bool
 	Health        string `json:"health,omitempty"`
 	Transcode     bool   `json:"transcode"` // IPTV: normalize codecs through the transcoder

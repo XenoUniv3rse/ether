@@ -392,7 +392,7 @@ export default function LiveTV() {
     });
   }, [allChannels, search, filter, coverage]);
   const indexedChannels = useMemo(() => {
-    const a = new Array<Channel | undefined>(page?.total ?? 0);
+    const a = new Array<Channel | undefined>(page?.total ?? 0).fill(undefined);
     rows.forEach((c, i) => {
       a[i] = c;
     });

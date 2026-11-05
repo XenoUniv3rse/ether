@@ -278,6 +278,7 @@ export type MatchChange = {
   guideId: string;
   guideName: string;
   method?: "id" | "name" | "alias";
+  reviewRegion?: boolean;
 };
 export type MatchResult = {
   matched: number;

@@ -1,3 +1,4 @@
+import { sourceImportError } from "./sourceErrors";
 import { Badge, Button, Input, Popover, cn, toast } from "@braedonsaunders/appkit-ui";
 import {
   AlertTriangle,
@@ -370,7 +371,7 @@ export function GuideWorkbench({
       const changes = (r.changes ?? []).filter((c) => !sourceId || c.guideSourceId === sourceId);
       setProposals(changes);
       setMatchCounts({ ambiguous: r.ambiguous ?? 0, regionRejected: r.regionRejected ?? 0 });
-      setAccepted(new Set(changes.map((c) => c.channelId)));
+      setAccepted(new Set(changes.filter((c) => !c.reviewRegion).map((c) => c.channelId)));
       if (!changes.length)
         toast.info(t("No new matches found"), {
           description: source
@@ -406,7 +407,7 @@ export function GuideWorkbench({
       toast.success(t("{name} refreshed", { name: sourceTitle(source) }));
       await onReload();
     } catch (e) {
-      toast.error(t("Couldn't refresh the guide"), { description: errorMessage(e) });
+      toast.error(t("Couldn't refresh the guide"), { description: sourceImportError(e) });
     } finally {
       setRefreshing(false);
     }
@@ -455,7 +456,7 @@ export function GuideWorkbench({
                 role="alert"
                 className="relative w-full rounded-lg border border-danger/30 bg-danger/10 px-3 py-2 text-sm text-danger"
               >
-                {source.lastError}
+                {sourceImportError(source.lastError)}
               </p>
             ) : null}
           </div>
@@ -527,7 +528,7 @@ export function GuideWorkbench({
               const on = accepted.has(p.channelId);
               return (
                 <li key={p.channelId}>
-                  <label className="flex cursor-pointer items-center gap-3 rounded-lg bg-surface px-3 py-2 text-sm">
+                  <label className="flex cursor-pointer flex-wrap items-center gap-3 rounded-lg bg-surface px-3 py-2 text-sm">
                     <input
                       type="checkbox"
                       checked={on}
@@ -554,6 +555,14 @@ export function GuideWorkbench({
                         {p.method === "name" ? ` · ${t("by name")}` : ""}
                       </span>
                     </span>
+                    {p.reviewRegion ? (
+                      <span className="basis-full pl-7 text-xs text-fg-muted">
+                        <Badge variant="warning" className="mr-2">
+                          {t("Check region")}
+                        </Badge>
+                        {t("A region is missing from the channel or guide. Confirm they match.")}
+                      </span>
+                    ) : null}
                   </label>
                 </li>
               );

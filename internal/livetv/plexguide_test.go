@@ -109,7 +109,7 @@ func TestPlexGuideMappedRefreshAndReviewedAliases(t *testing.T) {
 		t.Fatal(err)
 	}
 	proposal, err := s.MatchGuides(ctx, GuideMatchRequest{DryRun: true})
-	if err != nil || len(proposal.Changes) != 1 || proposal.Changes[0].Method != "alias" {
+	if err != nil || len(proposal.Changes) != 1 || proposal.Changes[0].Method != "alias" || !proposal.Changes[0].ReviewRegion {
 		t.Fatalf("proposal: %+v %v", proposal, err)
 	}
 	if result, e := s.MatchGuides(ctx, GuideMatchRequest{}); e != nil || len(result.Changes) != 0 {

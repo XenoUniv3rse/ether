@@ -109,7 +109,7 @@ function backend(
       const url = String(input);
       calls.push({ url, init });
       const method = init?.method ?? "GET";
-      let data: unknown = extra(url, init);
+      let data: unknown = await extra(url, init);
       if (data !== undefined) return new Response(JSON.stringify(data), { status: 200 });
       data = [];
       if (url.includes("/livetv/channels/page")) data = channelPage(channels, url);
@@ -406,6 +406,7 @@ describe("Live TV studio", () => {
                 guideId: "n24",
                 guideName: "News 24 HD",
                 method: "name",
+                reviewRegion: true,
               },
               {
                 channelId: "c2",
@@ -422,6 +423,11 @@ describe("Live TV studio", () => {
     );
     renderLiveTV("/livetv/guide-data");
     fireEvent.click(await screen.findByRole("button", { name: /Auto-match/ }, WAIT));
+    const uncertain = await screen.findByLabelText("Accept match for News 24", {}, WAIT);
+    expect(uncertain).not.toBeChecked();
+    expect(screen.getByText("Check region")).toBeVisible();
+    expect(screen.getByLabelText("Accept match for Cartoons")).toBeChecked();
+    fireEvent.click(uncertain);
     fireEvent.click(await screen.findByLabelText("Accept match for Cartoons", {}, WAIT));
     fireEvent.click(await screen.findByRole("button", { name: /Apply 1/ }, WAIT));
     await waitFor(() => expect(sent(calls, "POST", /\/livetv\/guide\/match$/)).toHaveLength(2));
@@ -820,7 +826,7 @@ it("bulk selects matching channels beyond the loaded page without fetching full 
   renderLiveTV();
   await screen.findByRole("button", { name: "1 Paged 1" }, WAIT);
   fireEvent.click(screen.getByRole("checkbox", { name: "Select all matches" }));
-  fireEvent.click(await screen.findByRole("button", { name: "Favourite", exact: true }));
+  fireEvent.click(await screen.findByRole("button", { name: /^Favourite$/ }));
   await waitFor(() => expect(sent(calls, "PATCH", /\/livetv\/channels\/bulk$/)).toHaveLength(1));
   const edit = body(sent(calls, "PATCH", /\/livetv\/channels\/bulk$/)[0]);
   expect(edit.ids).toHaveLength(449);
@@ -833,4 +839,74 @@ it("bulk selects matching channels beyond the loaded page without fetching full 
       .filter((c) => c.url.includes("/livetv/channels/page"))
       .every((c) => new URL(c.url, "http://local").searchParams.get("offset") === "0"),
   ).toBe(true);
+});
+
+it("keeps placeholder rows aligned while a deep page is loading", async () => {
+  const channels = Array.from({ length: 450 }, (_, i) =>
+    iptv(`sparse-${i}`, { number: String(i + 1), name: `Sparse ${i + 1}` }),
+  );
+  let release: (() => void) | undefined;
+  backend(channels, (url) => {
+    if (
+      url.includes("/livetv/channels/page") &&
+      new URL(url, "http://local").searchParams.get("offset") === "200"
+    )
+      return new Promise((resolve) => {
+        release = () => resolve(channelPage(channels, url));
+      });
+    return undefined;
+  });
+  renderLiveTV();
+  await screen.findByRole("button", { name: "1 Sparse 1" }, WAIT);
+  const grid = screen.getByRole("grid", { name: "Programme guide" });
+  fireEvent.scroll(grid, { target: { scrollTop: 21000 } });
+  await waitFor(() =>
+    expect(grid.querySelectorAll('[role="row"][aria-busy="true"]').length).toBeGreaterThan(0),
+  );
+  await waitFor(() => expect(release).toBeDefined());
+  release!();
+  await within(grid).findByRole("button", { name: "351 Sparse 351" }, WAIT);
+  await waitFor(() =>
+    expect(grid.querySelectorAll('[role="row"][aria-busy="true"]').length).toBe(0),
+  );
+});
+
+it("uses saved source state when a different cluster node has no import progress", async () => {
+  const source = {
+    id: "src1",
+    name: "Shared source",
+    hasPlaylist: true,
+    playlistUrl: "https://example.invalid/list.m3u",
+    channelCount: 17,
+  };
+  let finish!: (v: unknown) => void;
+  const importing = new Promise((resolve) => {
+    finish = resolve;
+  });
+  const calls = backend([iptv("c1")], (url, init) => {
+    if (url.endsWith("/livetv/sources")) return [source];
+    if (url.includes("/livetv/sources/progress/")) return null;
+    if (url.includes("/livetv/sources/src1?") && init?.method === "PUT") return importing;
+    return undefined;
+  });
+  renderLiveTV("/livetv?source=src1");
+  const save = await screen.findByRole("button", { name: "Save and re-import" }, WAIT);
+  await waitFor(() => expect(save).toBeEnabled());
+  fireEvent.click(save);
+  await waitFor(() => expect(sent(calls, "PUT", /sources/)).toHaveLength(1));
+  expect(
+    await screen.findByText(
+      "Import in progress. Detailed progress is unavailable on this server.",
+      {},
+      WAIT,
+    ),
+  ).toBeVisible();
+  expect(await screen.findByText("17 channels in the last saved import", {}, WAIT)).toBeVisible();
+  expect(sent(calls, "GET", /\/livetv\/sources$/).length).toBeGreaterThan(1);
+  finish(source);
+  await waitFor(() =>
+    expect(
+      screen.queryByText("Import in progress. Detailed progress is unavailable on this server."),
+    ).toBeNull(),
+  );
 });

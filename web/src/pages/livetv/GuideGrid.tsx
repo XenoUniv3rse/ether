@@ -207,7 +207,7 @@ export function GuideGrid({
             className={cn(
               "flex min-w-0 flex-wrap items-center gap-1 bg-surface px-2 py-1.5",
               lineup
-                ? "w-44 shrink-0 content-center justify-center border-l border-border"
+                ? "ml-auto w-44 shrink-0 content-center justify-center border-l border-border"
                 : "flex-1 border-b border-border sm:px-4",
             )}
           >
@@ -374,9 +374,10 @@ export function GuideGrid({
                 <div
                   key={`pending-${i}`}
                   role="row"
+                  aria-busy="true"
                   aria-rowindex={i + 1}
                   className="absolute left-0 animate-pulse border-b border-border/60 bg-bg-subtle/40"
-                  style={{ top: HEADER + i * ROW, height: ROW, width: CH_COL + width }}
+                  style={{ top: HEADER + i * ROW, height: ROW, width: chCol + width }}
                 />
               );
             const ps = guide.get(c.id) ?? [];

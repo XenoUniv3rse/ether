@@ -32,6 +32,7 @@ import { isPluginDescriptor, textOf, useRegistry, type Descriptor } from "../../
 import type { ParamField } from "../../lib/rules";
 import { formatBytes, formatNumber, relativeTime } from "../../lib/format";
 import { ChannelGroups, ProviderAccountCard } from "./SourceGroups";
+import { sourceImportError } from "./sourceErrors";
 import { SourceLimits } from "./SourceLimits";
 import {
   dayClock,
@@ -141,6 +142,8 @@ export function SourceEditor({
   }, [locale]);
   const [progress, setProgress] = useState<SourceProgress | null>(null);
   const [progressRate, setProgressRate] = useState(0);
+  const [progressUnavailable, setProgressUnavailable] = useState(false);
+  const [savedImport, setSavedImport] = useState<Source | null>(null);
   // First sample of the current import step, for a stable rows-or-bytes rate.
   const rateBase = useRef<{ stage: string; at: number; value: number } | null>(null);
   const [files, setFiles] = useState<{ playlist: File | null; guide: File | null }>({
@@ -207,6 +210,8 @@ export function SourceEditor({
     setFiles({ playlist: null, guide: null });
     setError("");
     setProgress(null);
+    setProgressUnavailable(false);
+    setSavedImport(null);
     setProgressRate(0);
     rateBase.current = null;
   }, [source, initialKind]);
@@ -244,15 +249,21 @@ export function SourceEditor({
   const save = async () => {
     setBusy("save");
     setError("");
+    setProgressUnavailable(false);
+    setSavedImport(null);
     setProgress(null);
     setProgressRate(0);
     rateBase.current = null;
     const progressId = `import-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+    let polling = false;
     const poll = window.setInterval(() => {
+      if (polling) return;
+      polling = true;
       void tv
         .sourceProgress(progressId)
         .then((p) => {
-          if (!p) return;
+          if (!p) throw new Error("progress unavailable");
+          setProgressUnavailable(false);
           const stage = progressStage(p);
           const value = progressValue(p, stage);
           const now = Date.now();
@@ -266,7 +277,21 @@ export function SourceEditor({
           }
           setProgress(p);
         })
-        .catch(() => undefined);
+        .catch(async () => {
+          setProgressUnavailable(true);
+          // Progress is local to the importing node. A load-balanced poll may
+          // reach another node: saved source state is shared and authoritative.
+          if (source) {
+            try {
+              setSavedImport((await tv.sources()).find((s) => s.id === source.id) ?? null);
+            } catch {
+              /* The import request still reports its final result. */
+            }
+          }
+        })
+        .finally(() => {
+          polling = false;
+        });
     }, 750);
     try {
       const body: SourceDraft =
@@ -293,7 +318,7 @@ export function SourceEditor({
       });
       await onSaved(saved);
     } catch (e) {
-      setError(errorMessage(e));
+      setError(sourceImportError(e, Boolean(source)));
     } finally {
       window.clearInterval(poll);
       setProgress(null);
@@ -314,7 +339,7 @@ export function SourceEditor({
       });
       await onSaved(s);
     } catch (e) {
-      setError(errorMessage(e));
+      setError(sourceImportError(e, Boolean(source)));
     } finally {
       setBusy("");
     }
@@ -459,9 +484,7 @@ export function SourceEditor({
           <AlertTriangle size={15} className="mt-0.5 shrink-0 text-danger" />
           <div>
             <p className="font-medium text-fg">{t("The last automatic refresh failed")}</p>
-            <p className="text-fg-muted">
-              {t("{error}. The previous listings are still in use.", { error: source.lastError })}
-            </p>
+            <p className="text-fg-muted">{sourceImportError(source.lastError)}</p>
           </div>
         </div>
       ) : null}
@@ -875,7 +898,7 @@ export function SourceEditor({
           ) : null}
           {source?.skippedVod ? (
             <span className="text-xs text-fg-muted">
-              {t("{count} VOD entries skipped", { count: formatNumber(source.skippedVod) })}
+              {tn(source.skippedVod, "{count} VOD entry skipped", "{count} VOD entries skipped")}
             </span>
           ) : null}
           {source ? (
@@ -891,7 +914,20 @@ export function SourceEditor({
         </div>
         {busy === "save" ? (
           <p role="status" className="text-xs text-fg-muted">
-            {progress ? importProgressText(progress, progressRate) : t("Starting import…")}
+            {progressUnavailable
+              ? t("Import in progress. Detailed progress is unavailable on this server.")
+              : progress
+                ? importProgressText(progress, progressRate)
+                : t("Starting import…")}
+            {progressUnavailable && savedImport ? (
+              <span className="block text-xs text-fg-muted">
+                {tn(
+                  savedImport.channelCount ?? 0,
+                  "{count} channel in the last saved import",
+                  "{count} channels in the last saved import",
+                )}
+              </span>
+            ) : null}
           </p>
         ) : null}
       </div>

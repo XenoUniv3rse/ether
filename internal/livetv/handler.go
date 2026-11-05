@@ -168,7 +168,12 @@ func (s *Service) Handler() http.Handler {
 			ownerResult(w, nil, e)
 			return
 		}
-		v, e := s.GuideForChannels(r.Context(), owner, from, until, guideChannelIDs(r))
+		ids := guideChannelIDs(r)
+		if len(ids) > 4096 {
+			ownerResult(w, nil, fmt.Errorf("too many guide channels"))
+			return
+		}
+		v, e := s.GuideForChannels(r.Context(), owner, from, until, ids)
 		ownerResult(w, v, e)
 	})
 	r.Get("/plex-guide/lineups", func(w http.ResponseWriter, r *http.Request) {

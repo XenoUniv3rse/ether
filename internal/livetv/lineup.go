@@ -39,6 +39,7 @@ type ChannelSummary struct {
 	Group         string `json:"group,omitempty"`
 
 	numberKey numberKey
+	sweepKey  string
 }
 
 type ChannelCounts struct {
@@ -107,6 +108,14 @@ func (s *Service) channelSummaries(ctx context.Context) ([]ChannelSummary, error
 		if err = json.Unmarshal(b, &c); err != nil {
 			return nil, err
 		}
+		var stream struct {
+			StreamURL     string         `json:"streamUrl"`
+			StreamSources []StreamSource `json:"streamSources"`
+		}
+		if err = json.Unmarshal(b, &stream); err != nil {
+			return nil, err
+		}
+		c.sweepKey = sweepSignature(Channel{StreamURL: stream.StreamURL, StreamSources: stream.StreamSources})
 		c.numberKey = parseNumberKey(c.Number)
 		out = append(out, c)
 	}

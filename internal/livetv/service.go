@@ -827,17 +827,27 @@ func (s *Service) AllowedChannels(ctx context.Context, u *core.User) ([]Channel,
 	}
 	rated := u != nil && (strings.TrimSpace(u.MaxContentRating) != "" || strings.TrimSpace(pol.MaxRating) != "")
 	now := s.o.Now()
-	var airing map[guideKey]Programme
-	for _, c := range cs {
-		if c.Enabled && c.Kind != "virtual" && rated {
-			if airing, err = s.currentProgrammes(ctx, now); err != nil {
-				return nil, err
+	var airing map[int]Programme
+	if rated {
+		guided := make([]Channel, 0, len(cs))
+		positions := make([]int, 0, len(cs))
+		for i, c := range cs {
+			if c.Enabled && c.Kind != "virtual" {
+				guided = append(guided, c)
+				positions = append(positions, i)
 			}
-			break
+		}
+		current, e := s.programmesAt(ctx, guided, now)
+		if e != nil {
+			return nil, e
+		}
+		airing = make(map[int]Programme, len(current))
+		for i, p := range current {
+			airing[positions[i]] = p
 		}
 	}
 	out := []Channel{}
-	for _, c := range cs {
+	for i, c := range cs {
 		var current *Programme
 		switch {
 		case c.Kind == "virtual":
@@ -845,7 +855,7 @@ func (s *Service) AllowedChannels(ctx context.Context, u *core.User) ([]Channel,
 				current = &ps[0]
 			}
 		default:
-			if p, ok := airing[guideKey{guideSource(c), c.GuideID}]; ok {
+			if p, ok := airing[i]; ok {
 				p.ChannelID = c.ID
 				p.ID = fmt.Sprintf("%s-%d", c.ID, p.Start.UnixMilli())
 				current = &p
@@ -860,49 +870,46 @@ func (s *Service) AllowedChannels(ctx context.Context, u *core.User) ([]Channel,
 	return out, nil
 }
 
-// currentProgrammes answers "what airs now" for every guide in one range scan.
-// AllowedChannels used to call programmeAt per channel: 15,815 round trips on a
-// large lineup. When channels overlap a guide, the latest start wins, matching
-// programmeAt.
-func (s *Service) currentProgrammes(ctx context.Context, at time.Time) (map[guideKey]Programme, error) {
-	rows, err := s.o.DB.QueryContext(ctx, `SELECT source_id, channel_id, data FROM livetv_programmes WHERE end_ms>? AND start_ms<=?`, at.UnixMilli(), at.UnixMilli())
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	out := map[guideKey]Programme{}
-	for rows.Next() {
-		var k guideKey
-		var b []byte
-		if err = rows.Scan(&k.source, &k.guide, &b); err != nil {
-			return nil, err
-		}
-		var p Programme
-		if err = json.Unmarshal(b, &p); err != nil {
-			return nil, err
-		}
-		if prev, ok := out[k]; !ok || p.Start.After(prev.Start) {
-			out[k] = p
-		}
-	}
-	return out, rows.Err()
-}
-
 // AllowedChannel resolves one channel by id or number and applies the same
 // policy check as AllowedChannels without loading the lineup. Plex tune used
 // the whole list only to find the requested channel.
 func (s *Service) AllowedChannel(ctx context.Context, u *core.User, key string) (Channel, error) {
+	ctx, _, err := s.withPolicy(ctx, u)
+	if err != nil {
+		return Channel{}, err
+	}
 	c, err := s.Channel(ctx, key)
-	if errors.Is(err, core.ErrNotFound) {
-		c, err = s.channelByNumber(ctx, key)
+	if err == nil {
+		return s.allowedChannelRecord(ctx, u, c)
 	}
+	if !errors.Is(err, core.ErrNotFound) {
+		return Channel{}, err
+	}
+	all, err := s.channelSummaries(ctx)
 	if err != nil {
 		return Channel{}, err
 	}
-	ctx, _, err = s.withPolicy(ctx, u)
-	if err != nil {
-		return Channel{}, err
+	for _, summary := range all {
+		if summary.Number != key || !summary.Enabled {
+			continue
+		}
+		c, err = s.Channel(ctx, summary.ID)
+		if errors.Is(err, core.ErrNotFound) {
+			continue
+		}
+		if err != nil {
+			return Channel{}, err
+		}
+		c, err = s.allowedChannelRecord(ctx, u, c)
+		if errors.Is(err, core.ErrNotFound) {
+			continue
+		}
+		return c, err
 	}
+	return Channel{}, core.ErrNotFound
+}
+
+func (s *Service) allowedChannelRecord(ctx context.Context, u *core.User, c Channel) (Channel, error) {
 	p, ok, err := s.programmeAt(ctx, c, s.o.Now())
 	if err != nil {
 		return Channel{}, err
@@ -917,19 +924,6 @@ func (s *Service) AllowedChannel(ctx context.Context, u *core.User, key string) 
 	c.StreamURL = ""
 	c.StreamSources = nil
 	return c, nil
-}
-
-func (s *Service) channelByNumber(ctx context.Context, number string) (Channel, error) {
-	all, err := s.channelSummaries(ctx)
-	if err != nil {
-		return Channel{}, err
-	}
-	for _, c := range all {
-		if c.Number == number {
-			return s.Channel(ctx, c.ID)
-		}
-	}
-	return Channel{}, core.ErrNotFound
 }
 
 // ChannelPermitted decides one channel. A memo on ctx, when present, answers
@@ -1170,15 +1164,12 @@ func (s *Service) Guide(ctx context.Context, u *core.User, from, until time.Time
 // GuideForChannels builds the guide for the requested channels only. The
 // console sends the rows it can see; nil means the whole lineup (XMLTV).
 func (s *Service) GuideForChannels(ctx context.Context, u *core.User, from, until time.Time, ids []string) ([]Programme, error) {
-	if ids != nil && len(ids) > 4096 {
-		return nil, fmt.Errorf("too many guide channels")
-	}
 	return s.guide(ctx, u, from, until, ids)
 }
 
 func channelFromSummary(c ChannelSummary) Channel {
 	return Channel{
-		ID: c.ID, Number: c.Number, Name: c.Name, Kind: c.Kind,
+		ID: c.ID, Number: c.Number, Name: c.Name, Kind: c.Kind, sweepKey: c.sweepKey,
 		Private: c.Private, Enabled: c.Enabled, Favorite: c.Favorite,
 		Rating: c.Rating, Logo: c.Logo, SourceID: c.SourceID,
 		GuideID: c.GuideID, GuideSourceID: c.GuideSourceID, Group: c.Group,
@@ -1322,8 +1313,8 @@ func (s *Service) guide(ctx context.Context, u *core.User, from, until time.Time
 	return out, nil
 }
 
-// programmesForKeys reads the window once, either as one range scan for a
-// large lineup or as row-value IN batches for the handful of visible rows.
+// programmesForKeys uses bounded channel-key batches for every lineup size.
+// The source/channel/end index skips expired rows and unrelated sources.
 func (s *Service) programmesForKeys(ctx context.Context, wanted map[guideKey][]Channel, from, until time.Time) (map[guideKey][]Programme, error) {
 	out := make(map[guideKey][]Programme, len(wanted))
 	if len(wanted) == 0 {
@@ -1351,9 +1342,6 @@ func (s *Service) programmesForKeys(ctx context.Context, wanted map[guideKey][]C
 			out[k] = append(out[k], p)
 		}
 		return rows.Err()
-	}
-	if len(wanted) > guideBatch {
-		return out, scan(`SELECT source_id, channel_id, data FROM livetv_programmes WHERE end_ms>? AND start_ms<?`, from.UnixMilli(), until.UnixMilli())
 	}
 	keys := make([]guideKey, 0, len(wanted))
 	for k := range wanted {
@@ -1510,6 +1498,8 @@ func (s *Service) ImportSource(ctx context.Context, src Source) (Source, error) 
 
 // importSource is ImportSource without the outcome log.
 func (s *Service) importSource(ctx context.Context, src Source) (Source, error) {
+	ctx, cancel := context.WithTimeout(ctx, refreshBudget)
+	defer cancel()
 	if src.ID == "" {
 		src.ID = randomID()
 	}
@@ -1682,6 +1672,11 @@ func (s *Service) importSource(ctx context.Context, src Source) (Source, error) 
 		progress.setSavedProgrammes(len(g.Programmes))
 	}
 	if err = replaceGuideChannels(ctx, tx, src.ID, g); err != nil {
+		return src, err
+	}
+	// Guide-only sources change coverage without touching any channel rows.
+	// Publish that change transactionally to every cluster node's caches.
+	if _, err = tx.ExecContext(ctx, `UPDATE livetv_channel_epoch SET generation=generation+1 WHERE id=1`); err != nil {
 		return src, err
 	}
 	err = tx.Commit()
@@ -1936,6 +1931,9 @@ func (s *Service) DeleteSource(ctx context.Context, id string) error {
 		if _, err = tx.ExecContext(ctx, q, id); err != nil {
 			return err
 		}
+	}
+	if _, err = tx.ExecContext(ctx, `UPDATE livetv_channel_epoch SET generation=generation+1 WHERE id=1`); err != nil {
+		return err
 	}
 	err = tx.Commit()
 	if err == nil {

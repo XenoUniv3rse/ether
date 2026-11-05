@@ -15,6 +15,8 @@ import (
 	"time"
 )
 
+var xtreamVODFile = regexp.MustCompile(`^[0-9]+\.[A-Za-z0-9]+$`)
+
 var m3uAttr = regexp.MustCompile(`([a-zA-Z0-9_-]+)="([^"]*)"`)
 
 func stableID(parts ...string) string {
@@ -32,7 +34,7 @@ type m3uStats struct {
 }
 
 // isVODStream reports whether an Xtream URL belongs to a VOD family: a path
-// segment "movie" or "series" followed by at least two more segments
+// segment "movie" or "series" followed by exactly three more segments
 // (username/password/id). The query is ignored. /live/ and /timeshift/ are
 // never VOD, and non-Xtream layouts are left alone.
 func isVODStream(raw string) bool {
@@ -44,7 +46,7 @@ func isVODStream(raw string) bool {
 	for i, segment := range segments {
 		switch strings.ToLower(segment) {
 		case "movie", "series":
-			if len(segments)-i-1 >= 2 {
+			if len(segments)-i-1 == 3 && segments[i+1] != "" && segments[i+2] != "" && xtreamVODFile.MatchString(segments[i+3]) {
 				return true
 			}
 		}

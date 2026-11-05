@@ -48,7 +48,7 @@ const (
 	guideHorizonMargin     = time.Hour
 	refreshCheckInterval   = 5 * time.Minute
 	refreshTimeout         = 5 * time.Minute
-	// refreshBudget bounds one automatic refresh. A panel that composes a
+	// refreshBudget bounds one manual import or automatic refresh. A panel that composes a
 	// large guide can take many minutes; the per-document idle timeout ends a
 	// stalled fetch, so this only caps a source that keeps sending data.
 	refreshBudget  = 30 * time.Minute
@@ -83,7 +83,8 @@ type GuideMatchChange struct {
 	GuideSourceName string `json:"guideSourceName"`
 	GuideID         string `json:"guideId"`
 	GuideName       string `json:"guideName"`
-	Method          string `json:"method"` // "id" or "name"
+	Method          string `json:"method"` // "id", "name" or "alias"
+	ReviewRegion    bool   `json:"reviewRegion,omitempty"`
 }
 type GuideMatchResult struct {
 	Matched   int `json:"matched"`
@@ -833,7 +834,7 @@ func (s *Service) MatchGuides(ctx context.Context, req GuideMatchRequest) (Guide
 		if pick.source == guideSource(c) && pick.guide == c.GuideID {
 			continue
 		}
-		res.Changes = append(res.Changes, GuideMatchChange{ChannelID: c.ID, ChannelName: c.Name, GuideSourceID: pick.source, GuideSourceName: sourceNames[pick.source], GuideID: pick.guide, GuideName: pick.name, Method: method})
+		res.Changes = append(res.Changes, GuideMatchChange{ChannelID: c.ID, ChannelName: c.Name, GuideSourceID: pick.source, GuideSourceName: sourceNames[pick.source], GuideID: pick.guide, GuideName: pick.name, Method: method, ReviewRegion: method != "id" && (channelRegion(c) == "" || pick.region == "")})
 		c.GuideID = pick.guide
 		c.GuideSourceID = pick.source
 		if pick.source == c.SourceID {

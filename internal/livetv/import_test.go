@@ -152,3 +152,16 @@ func TestParseXMLTVResolvesAtEOFWithoutProgrammes(t *testing.T) {
 		t.Fatalf("caller's allow map was mutated: %+v", ids)
 	}
 }
+
+func TestVODExclusionRequiresXtreamShape(t *testing.T) {
+	for _, url := range []string{"https://cdn.example/movie/hls/master.m3u8", "https://cdn.example/movie/hls/hd/master.m3u8", "https://cdn.example/series/u/p/12.ts/extra", "https://cdn.example/movie//p/12.mp4"} {
+		if isVODStream(url) {
+			t.Errorf("excluded live URL %s", url)
+		}
+	}
+	for _, url := range []string{"https://cdn.example/movie/u/p/12.mp4", "https://cdn.example/prefix/series/u/p/12.mkv"} {
+		if !isVODStream(url) {
+			t.Errorf("kept VOD URL %s", url)
+		}
+	}
+}

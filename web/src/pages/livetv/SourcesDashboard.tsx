@@ -1,3 +1,4 @@
+import { sourceImportError } from "./sourceErrors";
 import { DashboardPanel } from "@braedonsaunders/appkit-dashboard/primitives";
 import { Badge, Button, cn } from "@braedonsaunders/appkit-ui";
 import { AlertTriangle, KeyRound, ListVideo, Pencil, Plug } from "lucide-react";
@@ -197,7 +198,7 @@ function SourcePanel({
             role="alert"
             className="rounded-lg border border-danger/30 bg-danger/10 px-3 py-2 text-sm text-danger"
           >
-            {s.lastError}
+            {sourceImportError(s.lastError)}
           </p>
         ) : null}
         <dl className="grid gap-4 sm:grid-cols-2 2xl:grid-cols-4">

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -91,17 +92,17 @@ func TestAllowedChannelsBatchesCurrentProgramme(t *testing.T) {
 	}
 
 	statsCtx, stats := store.WithQueryStats(ctx)
-	airing, err := s.currentProgrammes(statsCtx, guideTestNow)
+	airing, err := s.programmesAt(statsCtx, channels, guideTestNow)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if q := stats.Queries(); q != 1 {
 		t.Fatalf("current programmes used %d queries, want 1", q)
 	}
-	if p := airing[guideKey{"src", "a"}]; p.Item.Title != "A short" {
+	if p := airing[0]; p.Item.Title != "A short" {
 		t.Fatalf("overlapping programme: got %q, want the latest start", p.Item.Title)
 	}
-	if p := airing[guideKey{"src", "b"}]; p.Item.Title != "B long" {
+	if p := airing[1]; p.Item.Title != "B long" {
 		t.Fatalf("single programme: got %q", p.Item.Title)
 	}
 
@@ -121,6 +122,24 @@ func TestAllowedChannelsBatchesCurrentProgramme(t *testing.T) {
 	if _, err := s.AllowedChannel(ctx, viewer, byGuide["a"]); !errors.Is(err, core.ErrNotFound) {
 		t.Fatalf("restricted channel permitted: %v", err)
 	}
+	// Once the latest-starting overlap ends, both listing and tune see no
+	// current programme, rather than resurrecting the older long programme.
+	clock.now = guideTestNow.Add(time.Hour)
+	listed, err := s.AllowedChannels(ctx, viewer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range channels {
+		_, tuneErr := s.AllowedChannel(ctx, viewer, c.ID)
+		present := false
+		for _, visible := range listed {
+			present = present || visible.ID == c.ID
+		}
+		if present != (tuneErr == nil) {
+			t.Fatalf("lineup/tune disagreement for %s: %v", c.ID, tuneErr)
+		}
+	}
+
 	c, err := s.AllowedChannel(ctx, ownerUser(), channels[0].Number)
 	if err != nil || c.ID != channels[0].ID {
 		t.Fatalf("resolve by number: %v %+v", err, c)
@@ -271,5 +290,108 @@ func TestChannelPageInvalidatesAcrossServices(t *testing.T) {
 	summaries, err := second.ChannelSummaries(ctx)
 	if err != nil || len(summaries) != 2 || summaries[0].Name != "After" {
 		t.Fatalf("stale summaries: %+v %v", summaries, err)
+	}
+}
+
+func TestSummaryGuideRetainsHealthSweepPolicy(t *testing.T) {
+	ctx := context.Background()
+	s := testService(t, Options{Now: func() time.Time { return guideTestNow }})
+	if _, err := s.ImportSource(ctx, Source{ID: "health", Name: "Health", Playlist: m3uFixture("a=A"), Guide: xmltvFixture(3, "a")}); err != nil {
+		t.Fatal(err)
+	}
+	cs, _ := s.Channels(ctx)
+	c := cs[0]
+	// Prime the summary, then update health without rebuilding its cached identity.
+	if _, err := s.ChannelSummaries(ctx); err != nil {
+		t.Fatal(err)
+	}
+	s.healthMu.Lock()
+	s.channelHealth = map[string]sweepResult{c.ID: {signature: sweepSignature(c), available: false}}
+	s.healthMu.Unlock()
+	viewer := &core.User{ID: 7}
+	for _, u := range []*core.User{viewer, ownerUser()} {
+		for _, span := range []time.Duration{time.Second, 2 * time.Hour} {
+			for _, ids := range [][]string{nil, {c.ID}} {
+				ps, err := s.GuideForChannels(ctx, u, guideTestNow, guideTestNow.Add(span), ids)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if u.IsOwner && len(ps) == 0 || !u.IsOwner && len(ps) != 0 {
+					t.Fatalf("guide owner=%v span=%s ids=%v programmes=%d", u.IsOwner, span, ids, len(ps))
+				}
+			}
+		}
+		allowed, err := s.AllowedChannels(ctx, u)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if u.IsOwner && len(allowed) != 1 || !u.IsOwner && len(allowed) != 0 {
+			t.Fatal("lineup health policy")
+		}
+		_, ps, err := s.OnNow(ctx, u, guideTestNow, guideTestNow.Add(time.Hour))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if u.IsOwner && len(ps) == 0 || !u.IsOwner && len(ps) != 0 {
+			t.Fatal("on-now health policy")
+		}
+		rec := httptest.NewRecorder()
+		s.ServeXMLTV(rec, httptest.NewRequest("GET", "/guide.xml", nil), u)
+		if rec.Code != 200 || (!u.IsOwner && strings.Contains(rec.Body.String(), "<programme")) {
+			t.Fatal("XMLTV health policy", rec.Code)
+		}
+	}
+}
+
+func TestAllowedChannelNumberSkipsUnavailableMatches(t *testing.T) {
+	ctx := context.Background()
+	s := testService(t, Options{})
+	for i, c := range []Channel{
+		{ID: "a", Kind: "iptv", Enabled: false, Group: "Disabled"},
+		{ID: "b", Kind: "iptv", Enabled: true, Private: true, Group: "Private"},
+		{ID: "c", Kind: "iptv", Enabled: true, Group: "Visible"},
+	} {
+		c.Number = "1"
+		c.Name = c.ID
+		c.StreamURL = fmt.Sprintf("https://example.invalid/%d.ts", i)
+		if _, err := s.SaveChannel(ctx, c); err != nil {
+			t.Fatal(err)
+		}
+	}
+	c, err := s.AllowedChannel(ctx, &core.User{ID: 7}, "1")
+	if err != nil || c.ID != "c" {
+		t.Fatalf("number resolve: %+v %v", c, err)
+	}
+}
+
+func TestGuideOnlyImportInvalidatesRemoteCoverage(t *testing.T) {
+	ctx := context.Background()
+	first := testService(t, Options{Now: func() time.Time { return guideTestNow }})
+	second := testService(t, Options{DB: first.o.DB, Now: first.o.Now})
+	c := Channel{ID: "guide-only-channel", Name: "Channel", Number: "1", Kind: "iptv", Enabled: true, GuideSourceID: "epg", GuideID: "a", StreamURL: "https://example.invalid/live.ts"}
+	if _, err := first.SaveChannel(ctx, c); err != nil {
+		t.Fatal(err)
+	}
+	before, err := second.ChannelPage(ctx, ChannelPageQuery{Filter: "missing"})
+	if err != nil || before.Total != 1 {
+		t.Fatal(before, err)
+	}
+	if _, err = first.ImportSource(ctx, Source{ID: "epg", Name: "Guide", Guide: xmltvFixture(3, "a")}); err != nil {
+		t.Fatal(err)
+	}
+	after, err := second.ChannelPage(ctx, ChannelPageQuery{Filter: "missing"})
+	if err != nil || after.Total != 0 {
+		t.Fatal(after, err)
+	}
+}
+
+func TestOwnerGuideChannelFilterRemainsBounded(t *testing.T) {
+	s := testService(t, Options{})
+	ids := make([]string, 4097)
+	for i := range ids {
+		ids[i] = fmt.Sprintf("channel-%d", i)
+	}
+	if code := ownerJSON(t, s, "GET", "/guide?channels="+strings.Join(ids, ","), "", nil); code != 400 {
+		t.Fatalf("owner guide cap: %d", code)
 	}
 }
