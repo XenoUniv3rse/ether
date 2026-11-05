@@ -2,6 +2,7 @@ package livetv
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"slices"
@@ -57,6 +58,9 @@ func (s *Service) UpdateChannels(ctx context.Context, change ChannelBatch) (int,
 		return 0, err
 	}
 	defer tx.Rollback()
+	if err := s.lockChannelBatchSources(ctx, tx, ids); err != nil {
+		return 0, err
+	}
 	expression := "json_patch(data,?)"
 	if store.DialectOf(s.o.DB) == store.Postgres {
 		expression = "(data::jsonb || ?::jsonb)::text"
@@ -92,4 +96,54 @@ func (s *Service) UpdateChannels(ctx context.Context, change ChannelBatch) (int,
 	}
 	s.bumpLineup()
 	return len(ids), nil
+}
+
+// Source refresh takes this same lock before reading owner overrides. Acquire
+// every source in a stable order before touching channels, including sources
+// whose row does not yet exist (hence advisory locks rather than row locks).
+func (s *Service) lockSourceEdits(ctx context.Context, tx *sql.Tx, ids []string) error {
+	ids = slices.Clone(ids)
+	slices.Sort(ids)
+	for _, id := range slices.Compact(ids) {
+		if id == "" {
+			continue
+		}
+		if err := store.LockKey(ctx, store.DialectOf(s.o.DB), tx, "livetv-source-edit:"+id); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Service) lockChannelBatchSources(ctx context.Context, tx *sql.Tx, ids []string) error {
+	if store.DialectOf(s.o.DB) != store.Postgres {
+		return nil
+	}
+	var sources []string
+	for start := 0; start < len(ids); start += 500 {
+		batch := ids[start:min(start+500, len(ids))]
+		args := make([]any, len(batch))
+		for i, id := range batch {
+			args[i] = id
+		}
+		marks := strings.TrimSuffix(strings.Repeat("?,", len(batch)), ",")
+		rows, err := tx.QueryContext(ctx, "SELECT DISTINCT COALESCE("+store.JSONText(store.Postgres, "data", "sourceId")+",'') FROM livetv_channels WHERE id IN ("+marks+")", args...)
+		if err != nil {
+			return err
+		}
+		for rows.Next() {
+			var id string
+			if err := rows.Scan(&id); err != nil {
+				rows.Close()
+				return err
+			}
+			sources = append(sources, id)
+		}
+		err = rows.Err()
+		rows.Close()
+		if err != nil {
+			return err
+		}
+	}
+	return s.lockSourceEdits(ctx, tx, sources)
 }
