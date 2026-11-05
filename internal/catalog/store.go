@@ -756,6 +756,9 @@ ON CONFLICT(key) DO UPDATE SET
 	if err != nil {
 		return fmt.Errorf("catalog: upsert %d: %w", t.Key, err)
 	}
+	if err := updateReleaseNames(ctx, tx, int64(t.Key)); err != nil {
+		return fmt.Errorf("catalog: index release name: %w", err)
+	}
 	if t.RemoteTrailerURL != "" {
 		if _, err := tx.ExecContext(ctx, `INSERT INTO catalog_remote_trailers(key, name, url) VALUES(?,?,?) ON CONFLICT(key) DO UPDATE SET name=excluded.name, url=excluded.url`, int64(t.Key), t.RemoteTrailerName, t.RemoteTrailerURL); err != nil {
 			return err

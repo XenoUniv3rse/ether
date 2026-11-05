@@ -135,3 +135,26 @@ func TestEtherCredentialNames(t *testing.T) {
 		}
 	}
 }
+
+func TestCapabilityShapesAreRedacted(t *testing.T) {
+	const secret = "sensitiveValue_12345"
+	inputs := []string{
+		"/stremio/" + secret + "/manifest.json", "/m3u/" + secret + "/playlist.m3u",
+		"/stremio/image/" + secret, "/m3u/image/" + secret, "/silo/api/v2/images/" + secret,
+		"/ether/api/addon-relay/" + secret + "/configure", "/src/session/" + secret,
+		"/sessions/lazy/" + secret + "/file", "/sessions/media/session/" + secret + "/file",
+		"X-Ether-Plugin-Credential: " + secret, "X-Ether-Backup-Password: " + secret, "X-Ether-Pick: " + secret,
+		"X-Emby-Token: " + secret, "X-MediaBrowser-Token: " + secret, "X-Room-Token: " + secret,
+		"Authorization: MediaBrowser Client=TV, Token=\"" + secret + "\"",
+		"Sec-WebSocket-Protocol: ether-credential." + secret,
+		"Sec-WebSocket-Protocol: silo.ticket." + secret,
+		"credential=eg1_" + secret, "refresh_token=er1_" + secret,
+		"?tag=" + secret, `{"ImageTags":{"Primary":"` + secret + `"}}`, `{"BackdropImageTags":["` + secret + `"]}`, `{"device_code":"` + secret + `"}`, "?OpenToken=" + secret, "?code=" + secret, "?code_verifier=" + secret,
+		"#invite=" + secret, `{"join_token":"` + secret + `","room_access_token":"` + secret + `","ticket":"` + secret + `"}`,
+	}
+	for _, input := range inputs {
+		if got := String(input); strings.Contains(got, secret) {
+			t.Errorf("%q leaked: %q", input, got)
+		}
+	}
+}

@@ -32,6 +32,7 @@ var sensitive = map[string]bool{
 	"xetherrecoverytoken": true, "recoverytoken": true,
 	"xetherstreamtoken": true, "streamtoken": true, "xetherreadtoken": true, "readtoken": true,
 	"plugintoken": true, "sharetoken": true, "downloadtoken": true,
+	"credential": true, "xetherplugincredential": true, "xetherbackuppassword": true, "xetherpick": true, "xembytoken": true, "xembyauthorization": true, "xmediabrowsertoken": true, "xroomtoken": true, "jointoken": true, "roomaccesstoken": true, "opentoken": true, "ticket": true, "code": true, "devicecode": true, "pincode": true, "codeverifier": true, "invite": true, "secrets": true, "tag": true, "imagetags": true, "backdropimagetags": true,
 	"password": true, "passwd": true, "pwd": true, "passkey": true,
 	"secret": true, "clientsecret": true, "apikey": true, "xapikey": true, "apitoken": true,
 	"authorization": true, "proxyauthorization": true, "cookie": true, "setcookie": true,
@@ -66,14 +67,15 @@ func Sensitive(name string) bool {
 var (
 	// name=value after a query, form or log-text boundary. A value stops at
 	// '?' so that url=https://host/?apikey=… is still seen as apikey=….
-	param = regexp.MustCompile(`(^|[?&;\s,(\[{])([^=&#\s"'<>?;,(){}\[\]]+)=("[^"?]*"|[^&#\s"'<>;,)\]}?]*)`)
+	param = regexp.MustCompile(`(^|[?&#;\s,(\[{])([^=&#\s"'<>?;,(){}\[\]]+)=("[^"?]*"|[^&#\s"'<>;,)\]}?]*)`)
 	// "name": "value" in JSON.
-	jsonField = regexp.MustCompile(`("([^"\\]{1,64})"\s*:\s*)"((?:[^"\\]|\\.)*)"`)
+	jsonImageTags = regexp.MustCompile(`(?i)("(?:ImageTags|BackdropImageTags)"\s*:\s*)(?:\{[^}]*\}|\[[^]]*\])`)
+	jsonField     = regexp.MustCompile(`("([^"\\]{1,64})"\s*:\s*)"((?:[^"\\]|\\.)*)"`)
 	// Header lines and Go's map[Name:[value]] dumps: cookies to the end of
 	// the line, token headers and Authorization (in its canonical spelling,
 	// so prose such as "authorization: failed" is left alone) one value.
 	cookie      = regexp.MustCompile(`(?i)\b(cookie|set-cookie)(\s*:\s*\[?|:\[)([^\]\r\n]+)`)
-	tokenHeader = regexp.MustCompile(`(?i)\b(x-plex-token|x-ether-admin-token|x-ether-recovery-token|x-ether-stream-token|x-ether-read-token|x-api-key)(\s*:\s*\[?|:\[)([^\s\],;"]+)`)
+	tokenHeader = regexp.MustCompile(`(?i)\b(x-plex-token|x-ether-admin-token|x-ether-recovery-token|x-ether-stream-token|x-ether-read-token|x-ether-plugin-credential|x-ether-backup-password|x-ether-pick|x-emby-token|x-mediabrowser-token|x-room-token|x-api-key)(\s*:\s*\[?|:\[)([^\s\],;"]+)`)
 	authHeader  = regexp.MustCompile(`\b(Authorization|Proxy-Authorization)(: ?\[?|:\[)((?:[A-Za-z]+ )?[^\s\],;"]+)`)
 	// scheme://user:password@host
 	userinfo = regexp.MustCompile(`([a-zA-Z][a-zA-Z0-9+.-]*://[^/\s:@]*):([^@/\s]+)@`)
@@ -81,6 +83,10 @@ var (
 	scheme = regexp.MustCompile(`(?i)\b(bearer|basic)\s+[A-Za-z0-9._~+/=-]{6,}`)
 	// Ether's own credentials: console sessions and cast delegations.
 	own = regexp.MustCompile(`\bether-(admin|cast|recovery)-[A-Za-z0-9]+`)
+	// Path capabilities and WebSocket subprotocol credentials have no key=value name.
+	pathCapability   = regexp.MustCompile(`(?i)(/(?:stremio/image|m3u/image|api/v2/images|sessions/lazy|ether/api/addon-relay)/|/(?:sessions/media|src)/[^/\s?#"']+/)([^/\s?#"']+)`)
+	appPath          = regexp.MustCompile(`(?i)(/(?:stremio|m3u)/)([^/\s?#"']+)`)
+	opaqueCredential = regexp.MustCompile(`\b(?:eg1_|er1_|ether-credential\.|silo\.ticket\.)[A-Za-z0-9_-]+`)
 	// JSON Web Tokens by shape (header.payload.signature, base64url), so a
 	// signed stream URL or a token under any name is masked.
 	jwt = regexp.MustCompile(`\beyJ[A-Za-z0-9_-]{4,}\.eyJ[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]+`)
@@ -88,9 +94,20 @@ var (
 
 // String returns s with credentials replaced by Mask.
 func String(s string) string {
-	if s == "" || !strings.ContainsAny(s, "=:@") && !strings.Contains(s, "ether-") && !strings.Contains(s, "eyJ") && !strings.Contains(strings.ToLower(s), "earer") && !strings.Contains(strings.ToLower(s), "basic ") {
+	if s == "" {
 		return s
 	}
+	s = pathCapability.ReplaceAllString(s, "${1}"+Mask)
+	s = appPath.ReplaceAllStringFunc(s, func(m string) string {
+		sub := appPath.FindStringSubmatch(m)
+		switch strings.ToLower(sub[2]) {
+		case "image", "sessions", "[redacted]":
+			return m
+		}
+		return sub[1] + Mask
+	})
+	s = opaqueCredential.ReplaceAllString(s, Mask)
+	s = jsonImageTags.ReplaceAllString(s, `${1}"`+Mask+`"`)
 	s = jwt.ReplaceAllString(s, Mask)
 	s = maskValue(cookie, s)
 	s = maskValue(tokenHeader, s)
