@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/braedonsaunders/ether/internal/atomicfile"
+	"github.com/braedonsaunders/ether/internal/logredact"
 	"io"
 	"log/slog"
 	"net/http"
@@ -50,11 +51,7 @@ var errCapsUnavailable = errors.New("newznab: capabilities unavailable; retrying
 // redactURLError drops the request URL from a *url.Error: indexer URLs
 // carry the API key, and callers log and surface these errors.
 func redactURLError(err error) error {
-	var ue *url.Error
-	if errors.As(err, &ue) {
-		return fmt.Errorf("newznab: %s request: %w", ue.Op, ue.Err)
-	}
-	return err
+	return logredact.TransportError(err, "newznab", nil)
 }
 
 // Options tunes a Client or Manager. Zero values get sensible defaults.

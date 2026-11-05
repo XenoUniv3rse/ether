@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/braedonsaunders/ether/internal/httpclient"
 	"io"
 	"log/slog"
 	"net/http"
@@ -361,7 +362,7 @@ func (s *Service) fetch() (*index, error) {
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("User-Agent", "Ether")
+	req.Header.Set("User-Agent", httpclient.UserAgent)
 	resp, err := s.opts.Client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("animemap: fetch failed: %w", err)

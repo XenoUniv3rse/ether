@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/braedonsaunders/ether/internal/lru"
+	"github.com/braedonsaunders/ether/internal/textutil"
 	"io"
 	"net/http"
 	"net/url"
@@ -69,8 +71,7 @@ type TrashGuides struct {
 	mu sync.Mutex
 	// dirs: "radarr/cf" -> listed file names. files: "radarr/cf/x.json".
 	dirs    map[string]trashCached[[]string]
-	files   map[string]trashCached[[]byte]
-	bytes   int
+	files   *lru.Cache[string, trashCached[[]byte]]
 	flights flight.Group[string, []string]
 }
 
@@ -96,7 +97,7 @@ func NewTrashGuides(o TrashOptions) *TrashGuides {
 	if o.Parallel <= 0 {
 		o.Parallel = trashParallel
 	}
-	return &TrashGuides{o: o, dirs: map[string]trashCached[[]string]{}, files: map[string]trashCached[[]byte]{}}
+	return &TrashGuides{o: o, dirs: map[string]trashCached[[]string]{}, files: lru.New(lru.Options[string, trashCached[[]byte]]{MaxEntries: trashCacheEntries, MaxCost: trashCacheBytes, Cost: func(_ string, c trashCached[[]byte]) int64 { return int64(len(c.v)) }})}
 }
 
 // TrashProfile summarises one TRaSH quality profile for picking.
@@ -486,7 +487,7 @@ func (g *TrashGuides) fetchList(ctx context.Context, app, kind string) ([]string
 func (g *TrashGuides) cachedFile(app, kind, name string) ([]byte, bool) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	c, ok := g.files[app+"/"+kind+"/"+name]
+	c, ok := g.files.Peek(app + "/" + kind + "/" + name)
 	if !ok || g.o.Now().Sub(c.at) >= g.o.TTL {
 		return nil, false
 	}
@@ -500,7 +501,7 @@ func (g *TrashGuides) file(ctx context.Context, app, kind, name string) ([]byte,
 	}
 	key := app + "/" + kind + "/" + name
 	g.mu.Lock()
-	cached, have := g.files[key]
+	cached, have := g.files.Peek(key)
 	g.mu.Unlock()
 	if have && g.o.Now().Sub(cached.at) < g.o.TTL {
 		return cached.v, nil
@@ -524,22 +525,7 @@ func (g *TrashGuides) file(ctx context.Context, app, kind, name string) ([]byte,
 func (g *TrashGuides) store(key string, data []byte) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	if old, ok := g.files[key]; ok {
-		g.bytes -= len(old.v)
-	}
-	g.files[key] = trashCached[[]byte]{v: data, at: g.o.Now()}
-	g.bytes += len(data)
-	for len(g.files) > trashCacheEntries || g.bytes > trashCacheBytes {
-		var oldest string
-		var at time.Time
-		for k, c := range g.files {
-			if oldest == "" || c.at.Before(at) {
-				oldest, at = k, c.at
-			}
-		}
-		g.bytes -= len(g.files[oldest].v)
-		delete(g.files, oldest)
-	}
+	g.files.Add(key, trashCached[[]byte]{v: data, at: g.o.Now()})
 }
 
 func (g *TrashGuides) get(ctx context.Context, u string, limit int64, api bool) ([]byte, error) {
@@ -645,10 +631,8 @@ func plainText(s string) string {
 	}
 }
 
-var nonSlug = regexp.MustCompile(`[^a-z0-9]+`)
-
 // trashSlug guesses a custom format's file name from its name the way
 // TRaSH usually names them ("Remux Tier 01" -> "remux-tier-01").
 func trashSlug(name string) string {
-	return strings.Trim(nonSlug.ReplaceAllString(strings.ToLower(name), "-"), "-")
+	return textutil.Slug(name, "", 0)
 }
