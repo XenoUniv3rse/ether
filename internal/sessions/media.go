@@ -177,7 +177,7 @@ func (b *Broker) StartStream(ctx context.Context, a frontend.SessionAccess, id s
 	if leaseErr != nil {
 		return "", leaseErr
 	}
-	hs, err := b.deps.Transcoder.StartHLS(context.WithoutCancel(ctx), core.HLSRequest{RequireIndependentProof: s.public.Protocol == "emby" || s.public.Protocol == "jellyfin", SessionID: id, InputURL: b.deps.Playback.InputURL(s.playID), InputLease: lease, Info: ps.Info, Decision: dec, StartOffset: req.Position, SegmentDuration: req.SegmentDuration, Protocol: proto})
+	hs, err := b.deps.Transcoder.StartHLS(context.WithoutCancel(ctx), core.HLSRequest{RequireIndependentProof: s.public.Protocol == "emby" || s.public.Protocol == "jellyfin", SessionID: id, ReleaseID: ps.SourceReleaseID(), InputURL: b.deps.Playback.InputURL(s.playID), InputLease: lease, Info: ps.Info, Decision: dec, StartOffset: req.Position, SegmentDuration: req.SegmentDuration, Protocol: proto})
 	if err != nil || hs == nil {
 		if lease != nil {
 			lease.SealInput()

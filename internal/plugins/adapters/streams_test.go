@@ -6,8 +6,10 @@ import (
 	"encoding/json"
 	"errors"
 	"github.com/braedonsaunders/ether/internal/newznab"
+	"github.com/braedonsaunders/ether/internal/plugins/remotetest"
 	"io"
 	"log/slog"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -26,6 +28,7 @@ import (
 	"github.com/braedonsaunders/ether/internal/plugins/remote"
 	"github.com/braedonsaunders/ether/internal/resolver"
 	"github.com/braedonsaunders/ether/internal/store"
+	sdk "github.com/braedonsaunders/ether/sdk/go"
 )
 
 type fakePluginRuntime struct {
@@ -631,24 +634,38 @@ func TestRemoteFileRangePlaybackAndGrantRevocation(t *testing.T) {
 	defer cancel()
 	env := newStreamTestEnv(t)
 	dir := t.TempDir()
-	data := bytes.Repeat([]byte("0123456789abcdef"), 4096)
+	data := bytes.Repeat([]byte("0123456789abcdef"), 16384)
 	if err := os.WriteFile(filepath.Join(dir, "movie.mkv"), data, 0600); err != nil {
 		t.Fatal(err)
 	}
-	tun := remote.NewTunnelServer(remote.TunnelOptions{Auth: remote.StaticCredentials{"credential": "example.remote"}})
+	tun := remote.NewTunnelServer(remote.TunnelOptions{Auth: remotetest.Credentials{"credential": "example.remote"}})
 	defer tun.Close()
 	server := httptest.NewServer(tun.Handler())
 	defer server.Close()
-	client, err := remote.NewTunnelClient(remote.TunnelClientOptions{URL: server.URL, Credential: "credential", Plugin: "example.remote", StreamHandler: remote.FileHandler(dir), Handler: func(_ context.Context, req remote.Request) (remote.Response, error) {
-		body, _ := json.Marshal(map[string]any{"streams": []any{map[string]any{"ether": map[string]any{"id": "file1", "file": filepath.Join(dir, "movie.mkv"), "releaseName": "Arrival.2016.2160p.REMUX.mkv", "size": 1}}}})
-		return remote.Response{Status: 200, Body: body}, nil
+	sidecar := sdk.New(sdk.Definition{Manifest: sdk.Manifest{ID: "example.remote"}, Routes: sdk.Routes{
+		Stream: func(_ *sdk.Context, _ sdk.StreamRequest) (sdk.StreamResponse, error) {
+			body, _ := json.Marshal(map[string]any{"streams": []any{map[string]any{"ether": map[string]any{"id": "file1", "file": filepath.Join(dir, "movie.mkv"), "releaseName": "Arrival.2016.2160p.REMUX.mkv", "size": 1}}}})
+			var response sdk.StreamResponse
+			err := json.Unmarshal(body, &response)
+			return response, err
+		},
+		File: func(_ *sdk.Context, req sdk.FileRequest) (sdk.FileRangeResponse, error) {
+			method := "GET"
+			if req.HeadOnly {
+				method = "HEAD"
+			}
+			request := httptest.NewRequest(method, "/movie.mkv", nil)
+			request.Header.Set("Range", req.Range)
+			response := httptest.NewRecorder()
+			http.ServeContent(response, request, "movie.mkv", time.Time{}, bytes.NewReader(data))
+			return sdk.FileRangeResponse{Status: response.Code, ContentType: response.Header().Get("Content-Type"), ContentRange: response.Header().Get("Content-Range"), Body: response.Body.Bytes()}, nil
+		},
 	}})
+	handle, err := sidecar.Start(ctx, sdk.ServeOptions{Mode: "tunnel", TunnelURL: server.URL, Credential: "credential"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	done := make(chan struct{})
-	go func() { defer close(done); _ = client.ServeOnce(ctx) }()
-	defer func() { cancel(); tun.Close(); <-done }()
+	defer func() { cancel(); _ = handle.Close(); <-handle.Done }()
 	env.mgr.RegisterRuntime("remote", (&remote.Factory{Tunnel: tun}).RuntimeFactory())
 	manifest := []byte(`{"id":"example.remote","version":"1.0.0","name":"Sidecar","ether":{"protocol":1,"kind":"source","summary":"Provides streams for titles","capabilities":["stream_source"],"runtime":{"kind":"remote"},"permissions":{"folders":"read"},"contributes":{"source":{"class":"direct"}}}}`)
 	preview, err := env.mgr.PreviewInstall(ctx, plugins.Source{Kind: "studio", Manifest: manifest})
@@ -704,6 +721,12 @@ func TestRemoteFileRangePlaybackAndGrantRevocation(t *testing.T) {
 		if !bytes.Equal(buf[:n], data[int(off):int(off)+n]) {
 			t.Fatalf("bytes at %d", off)
 		}
+	}
+	// Read across multiple SDK chunks as well as the short probes/seeks above.
+	// No reconnect wait or retry may hide a tunnel lost to probe cancellation.
+	full := make([]byte, len(data))
+	if n, err := source.ReadAt(full, 0); n != len(data) || err != nil || !bytes.Equal(full, data) {
+		t.Fatalf("full remote range: n=%d err=%v", n, err)
 	}
 	if err = env.mgr.SetGrants(ctx, rec.ID, plugins.Grants{Folders: []string{dir}, Revoked: []string{"folders"}}); err != nil {
 		t.Fatal(err)

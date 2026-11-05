@@ -1,4 +1,5 @@
 import { Badge, SearchSelect, SettingsSection, cn } from "@braedonsaunders/appkit-ui";
+import { Link } from "react-router-dom";
 import { useState } from "react";
 import { ErrorPanel, LoadingRows } from "../../components/feedback";
 import { Segmented } from "../../components/fields";
@@ -14,12 +15,12 @@ import type { QualityAnswer, QualityLayer } from "../../lib/types";
 
 type Where = "home" | "away";
 
-export function heightName(h: number | undefined): string {
+function heightName(h: number | undefined): string {
   if (!h) return t("Any resolution");
   return h === 2160 ? t("4K") : `${h}p`;
 }
 
-export function rateName(kbps: number): string {
+function rateName(kbps: number): string {
   return t("{rate} Mbps", { rate: formatNumber(kbps / 1000, 1) });
 }
 
@@ -149,9 +150,9 @@ function Answer({ answer, viewer }: { answer: QualityAnswer; viewer: string }) {
               )}
               {l.edited ? <Badge variant="secondary">{t("Edited")}</Badge> : null}
               <div>
-                <a
+                <Link
                   className="text-sm text-primary underline"
-                  href={
+                  to={
                     l.kind === "device"
                       ? "/playback/devices/apps"
                       : l.kind === "viewer-cap" || l.kind === "remote-blocked"
@@ -164,7 +165,7 @@ function Answer({ answer, viewer }: { answer: QualityAnswer; viewer: string }) {
                   }
                 >
                   {l.decisive ? t("Edit") : t("Set limit")}
-                </a>
+                </Link>
               </div>
             </li>
           );
@@ -180,10 +181,9 @@ function Answer({ answer, viewer }: { answer: QualityAnswer; viewer: string }) {
 /**
  * "Who gets what": pick a viewer, an app and At home or Away, and see the
  * quality ceiling that combination gets and which setting decided it. The
- * answer comes from the server's playback code. Pass `refreshKey` (such as
- * the saved quality settings) to check again after a save.
+ * answer comes from the server's playback code.
  */
-export function WhoGetsWhat({ refreshKey }: { refreshKey?: unknown }) {
+export function WhoGetsWhat() {
   const { viewers, error: viewersError } = useViewers();
   const clients = useAsync(() => api.qualityClients(), []);
   const [pickedViewer, setViewer] = useState(0);
@@ -207,7 +207,7 @@ export function WhoGetsWhat({ refreshKey }: { refreshKey?: unknown }) {
             signal,
           )
         : Promise.resolve(null),
-    [viewerId, clientId, remote, title?.key, refreshKey],
+    [viewerId, clientId, remote, title?.key],
   );
   const viewer = viewers?.find((v) => v.id === viewerId);
 
@@ -223,7 +223,7 @@ export function WhoGetsWhat({ refreshKey }: { refreshKey?: unknown }) {
         <LoadingRows rows={3} />
       ) : (
         <>
-          <div className="grid gap-4 px-5 py-4 sm:grid-cols-3">
+          <div data-setting="check-quality" className="grid gap-4 px-5 py-4 sm:grid-cols-3">
             <div className="min-w-0 space-y-2">
               <p className="text-xs font-medium text-fg-muted">{t("Viewer")}</p>{" "}
               <div className="w-full">

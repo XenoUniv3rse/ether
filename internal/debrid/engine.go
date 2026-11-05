@@ -6,6 +6,7 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"github.com/braedonsaunders/ether/internal/httpclient"
 	"io"
 	"log/slog"
 	"net"
@@ -68,10 +69,13 @@ type EngineOptions struct {
 	// connection pools so a hedged request opens a fresh connection.
 	HTTPClient  *http.Client
 	HedgeClient *http.Client
-	Logger      *slog.Logger
-	Now         func() time.Time
-	HedgeDelay  time.Duration // 0 = 400ms; negative disables hedging
-	BlockSize   int64         // tests; 0 = 512 KiB
+	// WrapMediaTransport wraps each engine-owned media transport while retaining
+	// its shared connection cap. Ignored for explicitly supplied clients.
+	WrapMediaTransport func(http.RoundTripper) http.RoundTripper
+	Logger             *slog.Logger
+	Now                func() time.Time
+	HedgeDelay         time.Duration // 0 = 400ms; negative disables hedging
+	BlockSize          int64         // tests; 0 = 512 KiB
 }
 
 // Engine implements core.Engine and core.HealthChecker: debrid payloads
@@ -133,13 +137,6 @@ var (
 	_ core.HealthChecker = (*Engine)(nil)
 )
 
-// NewStreamingTransport is an HTTP transport tuned for media streaming:
-// keep-alive, HTTP/2 when offered, many idle connections per host and
-// connect/TLS timeouts that tolerate a busy CDN edge.
-func NewStreamingTransport() *http.Transport {
-	return newStreamingTransport(nil)
-}
-
 // Busy debrid CDN edges can take several seconds to accept a connection and
 // finish the TLS handshake (5.08s was observed). Failing at 5s threw away
 // a handshake about to complete and started another, which is slower again
@@ -186,16 +183,24 @@ func NewEngine(svc *Service, opts EngineOptions) *Engine {
 	// The primary and hedge pools share one per-host connection cap: the
 	// CDN counts every open connection from this server.
 	limit := newConnCap(defaultHostConnections)
+	limit.dialGap = 250 * time.Millisecond
 	var owned []*http.Transport
+	client := func(t *http.Transport) *http.Client {
+		var transport http.RoundTripper = t
+		if opts.WrapMediaTransport != nil {
+			transport = opts.WrapMediaTransport(transport)
+		}
+		return &http.Client{Transport: transport}
+	}
 	if e.hc == nil {
 		t := newStreamingTransport(limit)
 		owned = append(owned, t)
-		e.hc = &http.Client{Transport: t}
+		e.hc = client(t)
 	}
 	if e.hedge == nil {
 		t := newStreamingTransport(limit)
 		owned = append(owned, t)
-		e.hedge = &http.Client{Transport: t}
+		e.hedge = client(t)
 	}
 	limit.closeIdle = func() {
 		for _, t := range owned {
@@ -630,6 +635,29 @@ func (f *remoteFile) link(ctx context.Context, force bool, gen ...int) (string, 
 	return out.URL, g, nil
 }
 
+// moveFromHost changes provider without regenerating links on the blocked host.
+func (f *remoteFile) moveFromHost(ctx context.Context, gen int) bool {
+	f.linkMu.Lock()
+	defer f.linkMu.Unlock()
+	p, current := f.payload()
+	if current != gen {
+		return true
+	}
+	if p.IsDirect() || p.IsPluginProvider() {
+		return false
+	}
+	out, err := f.e.svc.alternateProvider(ctx, p)
+	if err != nil || out.Size != f.size {
+		return false
+	}
+	f.mu.Lock()
+	f.pl = out
+	f.gen++
+	f.mu.Unlock()
+	f.e.kickLeases()
+	return true
+}
+
 func (f *remoteFile) blockLen(idx int64) int64 {
 	if idx == f.nblocks-1 {
 		return f.size - idx*f.e.block
@@ -766,13 +794,16 @@ func (f *remoteFile) block(ctx context.Context, idx int64, mode fetchMode, runBl
 		if !errors.Is(fl.err, errRunCancelled) {
 			return nil, fl.err
 		}
+		if runCtx != nil && runCtx.Err() != nil {
+			return nil, runCtx.Err()
+		}
 		if mode != fetchUrgent {
 			if err := ctx.Err(); err != nil {
 				return nil, err
 			}
 			return nil, errRunCancelled
 		}
-		runCtx, mode = nil, fetchUrgent
+		mode = fetchUrgent
 	}
 	return nil, fmt.Errorf("debrid: block %d: %w", idx, core.ErrSourceUnavailable)
 }
@@ -894,10 +925,7 @@ func (f *remoteFile) fetchRun(ctx context.Context, first int64, fls []*blockFlig
 				"offset", idx*f.e.block, "attempt", bodyRetries, "err", sanitize(err))
 			if bodyRetries == 1 {
 				_, gen := f.payload()
-				if _, _, refreshErr := f.link(reqCtx, true, gen); refreshErr != nil {
-					err = refreshErr
-					break
-				}
+				f.moveFromHost(reqCtx, gen)
 			}
 			body, tm, err = f.rangeGet(reqCtx, idx*f.e.block, end, mode == fetchUrgent || mode == fetchDurable)
 			if err != nil {
@@ -1056,13 +1084,21 @@ func (f *remoteFile) rangeGet(ctx context.Context, start, end int64, urgent bool
 				f.mu.Lock()
 				refresh := !f.e.now().Before(f.transportRetryAt)
 				if refresh {
-					f.transportRetryAt = f.e.now().Add(5 * time.Second)
+					f.transportRetryAt = f.e.now().Add(resetCooldown)
 				}
 				f.mu.Unlock()
 				if refresh {
-					if _, _, refreshErr := f.link(ctx, true, gen); refreshErr != nil {
-						return nil, tm, refreshErr
+					// Give the provider one chance to route to a new node. A
+					// new signature on the failed host is not a new route.
+					recoveryCtx, cancelRecovery := context.WithTimeout(ctx, 8*time.Second)
+					newURL, newGen, refreshErr := f.link(recoveryCtx, true, gen)
+					if refreshErr != nil || dialAddr(newURL) == dialAddr(u) {
+						if refreshErr != nil {
+							newGen = gen
+						}
+						f.moveFromHost(recoveryCtx, newGen)
 					}
+					cancelRecovery()
 				}
 			}
 			continue
@@ -1264,7 +1300,7 @@ func (e *Engine) get(ctx context.Context, u string, start, end int64, urgent boo
 	var firstErr *result
 	tryHedge := func() {
 		hedged = true
-		if ctx.Err() == nil && acquire(false) {
+		if ctx.Err() == nil && e.limit.hedgeAllowed(dialAddr(u)) && acquire(false) {
 			e.stats.hedges.Add(1)
 			launch(e.hedge, true, nil)
 			pending++
@@ -1499,7 +1535,7 @@ func (e *Engine) send(ctx context.Context, hc *http.Client, u string, start, end
 		return nil, timing{}, fmt.Errorf("debrid: bad media URL: %w", core.ErrSourceUnavailable)
 	}
 	req.Header.Set("Range", fmt.Sprintf("bytes=%d-%d", start, end))
-	req.Header.Set("User-Agent", "Ether")
+	req.Header.Set("User-Agent", httpclient.UserAgent)
 	if p, ok := ctx.Value(directKey{}).(Payload); ok {
 		// Addon links go through the SSRF guard, never the CDN pools.
 		e.svc.direct.init()
@@ -1523,7 +1559,7 @@ func (e *Engine) send(ctx context.Context, hc *http.Client, u string, start, end
 		// A connect, TLS or transport failure, not a cancelled request
 		// (hedge losers and seeks cancel theirs).
 		e.backoff.failure(host)
-		if isConnReset(err) {
+		if isConnReset(err) || isConnRefused(err) {
 			e.reduceHostCap(u)
 		}
 	}
@@ -1655,6 +1691,7 @@ func (s *httpSource) read(ctx context.Context, p []byte, off int64, mode fetchMo
 	if !live {
 		runLen = min(maxRun, max(1, lastBlock-first+1))
 	}
+	var liveRun context.Context
 	if live {
 		s.mu.Lock()
 		if s.closed {
@@ -1682,6 +1719,7 @@ func (s *httpSource) read(ctx context.Context, p []byte, off int64, mode fetchMo
 			runLen = min(maxRun, 4)
 		}
 		s.last = lastBlock
+		liveRun = s.raCtx
 		s.mu.Unlock()
 		// Start read-ahead past this read before blocking, so the burst
 		// runs in parallel with the request for the bytes asked for.
@@ -1689,7 +1727,7 @@ func (s *httpSource) read(ctx context.Context, p []byte, off int64, mode fetchMo
 	}
 	n := 0
 	for idx := first; idx <= lastBlock; idx++ {
-		data, err := f.block(ctx, idx, mode, min(maxRun, max(runLen, lastBlock-idx+1)), nil)
+		data, err := f.block(ctx, idx, mode, min(maxRun, max(runLen, lastBlock-idx+1)), liveRun)
 		if err != nil {
 			return n, err
 		}

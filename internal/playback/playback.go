@@ -278,7 +278,6 @@ type Manager struct {
 	sharedMu sync.Mutex
 	shared   map[string]*sharedHold
 
-	ln      net.Listener
 	srv     *http.Server
 	baseURL string
 
@@ -467,7 +466,6 @@ func New(deps Deps, cfg config.Config, opts Options) (*Manager, error) {
 		m.titleInval.Close()
 		return nil, fmt.Errorf("playback: loopback listen: %w", err)
 	}
-	m.ln = ln
 	m.baseURL = "http://" + ln.Addr().String()
 	mux := http.NewServeMux()
 	mux.HandleFunc("/src/{session}/{token}", m.serveLoopback)
@@ -1266,6 +1264,8 @@ func (m *Manager) snapshotWithEncoder(s *session, now time.Time) *core.PlaySessi
 			s.mu.Unlock()
 			ps.Decision, ps.DecisionVideoCopy, ps.DecisionAudioCopy = e.Decision.Kind, e.Decision.VideoCopy, e.Decision.AudioCopy
 			ps.DecisionReason = e.Decision.Reason
+			decision := e.Decision
+			ps.DeliveryDecision = &decision
 		}
 	}
 	return ps
@@ -1280,6 +1280,35 @@ func (m *Manager) SessionFor(userID int64, clientID string, key core.RatingKey) 
 		return nil, false
 	}
 	return s.snapshot(m.now()), true
+}
+
+// PlexSessionForPart finds the newest Plex source belonging to this viewer.
+// A variant part may only reuse the release that it names.
+func (m *Manager) PlexSessionForPart(userID int64, key core.RatingKey, release string) (*core.PlaySession, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var best *session
+	for _, s := range m.sessions {
+		if s.closed || s.ident.surface != "" || s.ident.userID != userID || s.ident.key != key {
+			continue
+		}
+		s.mu.Lock()
+		prepared := s.preparedOnly
+		s.mu.Unlock()
+		if prepared {
+			continue
+		}
+		if g := s.current(); g == nil || (release != "" && g.releaseID() != release) {
+			continue
+		}
+		if best == nil || s.startedAt.After(best.startedAt) || (s.startedAt.Equal(best.startedAt) && s.id > best.id) {
+			best = s
+		}
+	}
+	if best == nil {
+		return nil, false
+	}
+	return best.snapshot(m.now()), true
 }
 
 func (m *Manager) SessionForSurface(surface string, userID int64, clientID string, key core.RatingKey, release string, exact bool) (*core.PlaySession, bool) {
@@ -1573,6 +1602,7 @@ func (m *Manager) SetDecision(id string, d core.Decision) {
 	if s := m.lookup(id); s != nil {
 		s.mu.Lock()
 		s.decision, s.explicit = d.Kind, true
+		s.deliveryDecision = &d
 		s.decisionReason = d.Reason
 		s.decisionVideoCopy, s.decisionAudioCopy = d.VideoCopy, d.AudioCopy
 		if d.Kind == core.DecisionDirectPlay {

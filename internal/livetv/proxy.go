@@ -72,7 +72,7 @@ func (s *Service) upstreamWithHeaders(ctx context.Context, raw string, r *http.R
 	}
 	origin := relayOrigin(originURL)
 	client := *s.o.HTTPClient
-	scopeInputRedirects(&client, origin, headers, r.Header.Get("User-Agent"), true)
+	scopeInputRedirects(&client, origin, headers, r.Header.Get("User-Agent"))
 	var last error
 	for attempt := 0; attempt < 3; attempt++ {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, raw, nil)
@@ -140,7 +140,7 @@ func (s *Service) ServeResource(w http.ResponseWriter, r *http.Request, id, key 
 		if res.StatusCode != 200 && res.StatusCode != 206 {
 			res.Body.Close()
 			if res.StatusCode >= 500 || res.StatusCode == 401 || res.StatusCode == 403 || res.StatusCode == 404 || res.StatusCode == 410 || res.StatusCode == 429 {
-				s.recordStreamFailure(ss, r.Context(), core.ErrNotAvailable)
+				s.recordStreamFailure(ss, r.Context(), providerResponseError(res.StatusCode))
 			}
 			http.Error(w, "upstream stream unavailable", res.StatusCode)
 			return
@@ -217,9 +217,11 @@ func (s *Service) ServeResource(w http.ResponseWriter, r *http.Request, id, key 
 	}
 	w.Header().Set("Cache-Control", "private, max-age=10")
 	armWriteDeadline(w)
-	w.WriteHeader(res.StatusCode)
+	observed := s.observeMedia(w, ss)
+	defer observed.done()
+	observed.WriteHeader(res.StatusCode)
 	if r.Method != "HEAD" {
-		_, _ = w.Write(body)
+		_, _ = observed.Write(body)
 	}
 }
 

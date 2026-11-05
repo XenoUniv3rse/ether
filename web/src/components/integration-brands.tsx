@@ -79,6 +79,7 @@ export function IntegrationMark({ id }: { id: string }) {
   if (id === "tmdb") return <TmdbMark />;
   if (id === "trakt") return <TraktMark />;
   if (id === "simkl") return <SimklMark />;
+  if (id === "plexservers") return <PlexMark />;
   const posters: Record<string, string> = { postersplus, xrdb, betterposters, rpdb };
   if (posters[id])
     return (

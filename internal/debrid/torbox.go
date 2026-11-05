@@ -74,6 +74,9 @@ func (p *torBox) do(ctx context.Context, r apiRequest) (json.RawMessage, error) 
 		req.Header.Set("Authorization", "Bearer "+p.key)
 	})
 	if err != nil {
+		if status != 0 {
+			logProviderHTTPError(ctx, p.key, status, body)
+		}
 		return nil, err
 	}
 	var env tbEnvelope
@@ -81,6 +84,7 @@ func (p *torBox) do(ctx context.Context, r apiRequest) (json.RawMessage, error) 
 	if status >= 200 && status < 300 && derr == nil && env.Success {
 		return env.Data, nil
 	}
+	logProviderResponse(ctx, p.key, status, env.Error, env.Detail)
 	return nil, p.classify(status, env)
 }
 

@@ -2,10 +2,6 @@
 
 import type { ViewerLifecycle } from "./contract";
 
-export type { ViewerLifecycle };
-
-export type Json = null | boolean | number | string | Json[] | { [key: string]: Json };
-
 export interface UsenetProvider {
   id: string;
   name: string;
@@ -70,7 +66,7 @@ export interface IdentityPreset {
 }
 
 export type IndexerProtocol = "usenet" | "torrent";
-export type IndexerKind = "newznab" | "cardigann" | "stremio";
+type IndexerKind = "newznab" | "cardigann" | "stremio";
 
 /** Definitions source and FlareSolverr for built-in sites (config.indexerSites). */
 export interface IndexerSitesConfig {
@@ -390,7 +386,6 @@ export interface EtherConfig {
   trakt: { enabled: boolean; clientId: string; clientSecret: string };
   simkl?: { enabled: boolean; clientId: string; clientSecret: string };
   markers?: {
-    accountEnabled?: boolean;
     theIntroDb: boolean;
     apiKey: string;
     skipIntro?: boolean;
@@ -460,6 +455,7 @@ export interface QualityProfile {
   name: string;
   maxHeight: number;
   minHeight: number;
+  fallbackBelowMin?: boolean;
   allowHdr: boolean;
   allowDolbyVision: boolean;
   preferredSources: string[] | null;
@@ -490,7 +486,7 @@ export interface QualityRule {
   convertSurroundAudio?: boolean;
 }
 
-export interface SetupStep {
+interface SetupStep {
   id: string;
   title: string;
   complete: boolean;
@@ -557,6 +553,7 @@ export interface EtherUser {
 
 /** GET /api/updates/ — the server's self-update manager. */
 export interface UpdateStatus {
+  checking?: boolean;
   enabled: boolean;
   disabledReason?: string;
   current: string;
@@ -652,6 +649,7 @@ export interface CandidateTrace {
   route?: string;
 }
 export interface ResolverTrace {
+  downgrade?: string;
   discovery?: { path: string; count: number; rescue?: boolean }[];
   limits?: {
     profileMinHeight: number;
@@ -717,7 +715,7 @@ export interface ClusterNode {
   draining?: boolean;
 }
 
-export interface ClusterHealth {
+interface ClusterHealth {
   channel: string;
   busConnected: boolean;
   lastHeartbeat?: string;
@@ -879,7 +877,7 @@ export interface QualityQuestion {
   remote: boolean;
 }
 
-export type QualityLayerKind =
+type QualityLayerKind =
   | "profile"
   | "device"
   | "rule-height"

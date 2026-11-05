@@ -162,7 +162,6 @@ type Manager struct {
 	noKey          bool // build has no release key: never check
 	state          string
 	available      *Update
-	skipped        string // available version ignored because it was rolled back
 	failed         *FailedUpdate
 	staged         string // verified download for available
 	stagedVersion  string
@@ -178,6 +177,8 @@ type Manager struct {
 	startedAt      time.Time
 	confirmed      bool
 	restarting     bool
+	checking       bool
+	checkPending   bool
 
 	// Rolling updates (Coordinator set).
 	leaseHeld      bool      // lease taken by this process for a pending install
@@ -274,6 +275,21 @@ func (m *Manager) Wake() {
 	m.wake()
 }
 
+// CheckNow schedules a feed check, coalescing concurrent requests.
+func (m *Manager) CheckNow() error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if !m.opts.Config().Enabled || m.noKey || m.opts.NewClient == nil {
+		return ErrUpdatesDisabled
+	}
+	if !m.checking && !m.checkPending {
+		m.checkPending = true
+		m.nextCheck = time.Time{}
+		m.wake()
+	}
+	return nil
+}
+
 // Run drives the manager until ctx ends or a restart has been requested.
 func (m *Manager) Run(ctx context.Context) {
 	m.begin()
@@ -315,7 +331,7 @@ func (m *Manager) begin() {
 			}
 		}
 	}
-	if !m.requested { // "Update now" before Run keeps its immediate check
+	if !m.requested && !m.checkPending { // Requests before Run keep their immediate check
 		m.nextCheck = now.Add(m.opts.FirstCheckDelay)
 	}
 }
@@ -356,6 +372,7 @@ func (m *Manager) step(ctx context.Context) {
 		m.disabledReason = disabledBySettingsReason
 		m.resetAvailableLocked()
 		m.requested, m.force = false, false
+		m.checkPending = false
 		m.state = StateIdle
 		m.mu.Unlock()
 		m.stopDrain(ctx)
@@ -419,9 +436,15 @@ func (m *Manager) confirmIfHealthy(now time.Time) {
 func (m *Manager) check(ctx context.Context, now time.Time) {
 	cfg := m.opts.Config()
 	if !cfg.Enabled {
+		m.mu.Lock()
+		m.checkPending = false
+		m.mu.Unlock()
 		return
 	}
 	m.mu.Lock()
+	m.checkPending = false
+	m.checking = true
+	defer func() { m.mu.Lock(); m.checking = false; m.mu.Unlock() }()
 	if key := clientKey(cfg); m.client == nil || key != m.clientKey {
 		c, err := m.opts.NewClient(cfg)
 		if err != nil {
@@ -473,9 +496,9 @@ func (m *Manager) check(ctx context.Context, now time.Time) {
 	}
 	m.nextCheck = now.Add(m.opts.PollInterval)
 	m.lastErr = ""
-	m.skipped = ""
+
 	if upd != nil && m.failed != nil && sameVersion(upd.Version(), m.failed.Version) {
-		m.skipped = upd.Version()
+
 		m.log.Info("updater: skipping previously rolled-back version", "version", upd.Version())
 		upd = nil
 	}
@@ -728,7 +751,7 @@ func (m *Manager) advanceCoordinated(ctx context.Context, now time.Time, cfg con
 		m.log.Warn("updater: skipping a release that rolled back on another cluster node", "version", upd.Version())
 		m.failed = &FailedUpdate{Version: upd.Version(), From: m.opts.CurrentVersion, At: now,
 			Reason: "rolled back on another cluster node"}
-		m.skipped = upd.Version()
+
 		m.resetAvailableLocked()
 		m.requested, m.force = false, false
 		m.state = StateIdle
@@ -887,6 +910,7 @@ type AvailableUpdate struct {
 // ManagerStatus is the admin-facing snapshot.
 type ManagerStatus struct {
 	Enabled            bool             `json:"enabled"`
+	Checking           bool             `json:"checking"`
 	DisabledReason     string           `json:"disabledReason,omitempty"`
 	Current            string           `json:"current"`
 	Available          *AvailableUpdate `json:"available,omitempty"`
@@ -938,6 +962,7 @@ func (m *Manager) Status() ManagerStatus {
 	}
 	st := ManagerStatus{
 		Enabled:            enabled,
+		Checking:           m.checking || m.checkPending,
 		DisabledReason:     disabledReason,
 		Current:            m.opts.CurrentVersion,
 		State:              m.state,

@@ -11,6 +11,7 @@ import type { TasteProfile, ViewerDetail } from "../../lib/contract";
 import { formatNumber, formatPercent } from "../../lib/format";
 import { useAsync } from "../../lib/hooks";
 import { extractTopPicks } from "./TasteView";
+import { Kpi } from "../../components/Kpi";
 
 export function ViewerDashboard({
   viewer,
@@ -72,10 +73,7 @@ export function ViewerDashboard({
               : "—",
           ],
         ].map(([label, value]) => (
-          <div key={label} className="rounded-xl border border-border bg-surface p-4">
-            <p className="text-xs text-fg-muted">{label}</p>
-            <p className="mt-1 text-2xl font-semibold tabular-nums">{value}</p>
-          </div>
+          <Kpi key={label} label={label!} value={value} />
         ))}
       </div>
       <div className="grid min-h-0 flex-1 grid-cols-1 gap-4 md:grid-cols-2">

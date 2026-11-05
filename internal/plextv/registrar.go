@@ -139,9 +139,10 @@ type RegistrarOptions struct {
 // Registrar runs Ether's plex.tv presence: claim, connection publishing,
 // friend sync, certificate renewal, port mapping and reachability.
 type Registrar struct {
-	o      RegistrarOptions
-	client *Client
-	log    *slog.Logger
+	claimMu sync.Mutex // serializes claim and device release
+	o       RegistrarOptions
+	client  *Client
+	log     *slog.Logger
 
 	wake               chan struct{}
 	mapWake            chan struct{} // RunPortMapping
@@ -1109,6 +1110,12 @@ func (r *Registrar) refreshCertTrust(ctx context.Context) {
 	}
 	addr := localPlexDirectDial(r.connections(cfg))
 	host, port, _ := net.SplitHostPort(addr)
+	// The listener can be checked even when no LAN HTTPS URI is advertised
+	// (for example, LAN discovery failed or secure connections are disabled).
+	// Use a name covered by the installed wildcard for SNI in that case.
+	if host == "" && info.Hash != "" {
+		host = "x." + info.Hash + ".plex.direct"
+	}
 	// Ether's own listener first (its bind address when it has one, else
 	// loopback), then the LAN address the plex.direct name spells out, dialled
 	// by IP. The name is only the TLS server name, so neither attempt needs
@@ -1196,6 +1203,8 @@ func (r *Registrar) scheduleCertCheck() {
 // sign-in), persists the server token and owner, informs UserSync and
 // triggers publishing.
 func (r *Registrar) Claim(ctx context.Context, userToken string) (*ClaimResult, error) {
+	r.claimMu.Lock()
+	defer r.claimMu.Unlock()
 	// Persist before the remote operation so a crash after claim cannot lose
 	// the need to bind a managed certificate to the new device record.
 	if r.o.Certs != nil {
@@ -1258,6 +1267,8 @@ func (r *Registrar) Claim(ctx context.Context, userToken string) (*ClaimResult, 
 // from the owner's account (best effort), so another account can claim it,
 // and the server token is forgotten.
 func (r *Registrar) Unclaim(ctx context.Context) error {
+	r.claimMu.Lock()
+	defer r.claimMu.Unlock()
 	if r.o.Certs != nil {
 		if err := r.o.Certs.RequireReissue(ctx); err != nil {
 			return fmt.Errorf("plextv: prepare certificate for unclaim: %w", err)
@@ -1314,6 +1325,12 @@ func (r *Registrar) onConfig(c config.Config) {
 	r.mu.Unlock()
 	if prev != "" {
 		go func() {
+			r.claimMu.Lock()
+			defer r.claimMu.Unlock()
+			// A newer claim supersedes this queued release.
+			if r.o.Config.Get().Plex.Claimed {
+				return
+			}
 			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 			defer cancel()
 			if r.o.Certs != nil {

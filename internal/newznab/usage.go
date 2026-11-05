@@ -62,7 +62,7 @@ func (c *Client) recordUsage(ctx context.Context, kind string) {
 	_, err := db.ExecContext(context.WithoutCancel(ctx),
 		`INSERT INTO newznab_usage(indexer_id, day, purpose, `+col+`) VALUES (?,?,?,1)
 ON CONFLICT(indexer_id, day, purpose) DO UPDATE SET `+col+`=newznab_usage.`+col+`+1`,
-		c.indexerID(), c.today(), core.IndexerPurpose(ctx))
+		c.indexerID(), c.today(), usagePurpose(ctx))
 	if err != nil {
 		c.log.Debug("newznab: record usage", "indexer", c.Name(), "err", err)
 	}
@@ -180,7 +180,13 @@ func (m *Manager) Usage(ctx context.Context) (UsageReport, error) {
 		out := map[string][2]int64{}
 		var covered [2]int64
 		for p, v := range purposes[k] {
-			out[p] = v
+			// Detail searches have a separate budget class, but belong to
+			// the existing opened-details category in the owner's report.
+			category := p
+			if category == core.IndexerPurposeDetail {
+				category = core.IndexerPurposeWarmup
+			}
+			addCount(out, category, v)
 			if p != core.IndexerPurposeTest {
 				covered[0] += v[0]
 				covered[1] += v[1]

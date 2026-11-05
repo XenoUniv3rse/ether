@@ -12,6 +12,9 @@ import (
 )
 
 var (
+	// errDirectReadDeadline marks an active range that delivered no bytes
+	// for the full direct-play read budget.
+	errDirectReadDeadline = errors.New("playback: direct source stalled")
 	// errRetired: the generation was swapped out between two reads.
 	errRetired = errors.New("playback: source retired")
 	// errEndResponse: a failover happened mid-response in a container that
@@ -88,8 +91,13 @@ func spliceOffset(s *session, g, ng *generation, at time.Duration) (int64, bool)
 	return alignPacket(ng.timeMapSnapshot().OffsetAt(AlignTime(at, g.infoSnapshot().Duration, info.Duration)), packet), true
 }
 
+type directReadBudgetKey struct{}
+
 // streamClient writes [vstart, vstart+length) of the session's virtual file.
 func (m *Manager) streamClient(ctx context.Context, w io.Writer, s *session, vstart, length int64) error {
+	if ctx.Value(directReadBudgetKey{}) == nil {
+		ctx = context.WithValue(ctx, directReadBudgetKey{}, 25*time.Second)
+	}
 	g, compatible := s.directRangeGeneration()
 	if !compatible {
 		return errEndResponse
@@ -101,6 +109,10 @@ func (m *Manager) streamClient(ctx context.Context, w io.Writer, s *session, vst
 		now := m.now()
 		s.addBytes(n, now)
 		if n > 0 {
+			g.mu.Lock()
+			g.retryEpoch++
+			g.retryPending = false
+			g.mu.Unlock()
 			s.touch(now)
 		}
 	}
@@ -122,8 +134,11 @@ func (m *Manager) streamClient(ctx context.Context, w io.Writer, s *session, vst
 			if ng == g || ng == nil {
 				return rerr
 			}
+			if m.RequiresRemux(s.id) {
+				return errEndResponse
+			}
 			at = g.timeMapSnapshot().TimeAt(srcpos)
-			if vpos == vstart && !m.RequiresRemux(s.id) {
+			if vpos == vstart {
 				g, srcpos = ng, s.toSource(ng, vpos)
 				continue
 			}
@@ -133,27 +148,48 @@ func (m *Manager) streamClient(ctx context.Context, w io.Writer, s *session, vst
 			}
 			g, srcpos = ng, pos
 			continue
+		case errors.Is(rerr, errDirectReadDeadline) && ctx.Err() == nil:
+			// The backend has not returned a chunk in the entire budget;
+			// do not wait for its internal retries before replacing it.
+			g.noteReadFailure(core.ErrSourceUnavailable)
+			at = g.timeMapSnapshot().TimeAt(srcpos)
+			_, err := m.failoverWith(ctx, s, g, at, failoverOpts{reason: "media source stalled", strictDirect: true})
+			if err != nil && !errors.Is(err, errRequireRemux) && ctx.Err() == nil {
+				m.emitEvent("error", s, err)
+				m.Stop(s.id)
+			}
+			return errEndResponse
+		case errors.Is(rerr, context.Canceled):
+			// A newer seek abandoned this read, not the source.
+			return rerr
 		case errors.Is(rerr, io.EOF) && srcpos >= g.src.Size():
 			// The source reached its real end before the virtual range did
 			// (a spliced lower-bitrate release): not a read failure.
 			return errShortSource
 		case recoverableSourceFailure(rerr) && ctx.Err() == nil:
-			if retry, ok := g.src.(core.DirectPlayRetrier); ok && retry.RetryDirectPlay() && errors.Is(rerr, core.ErrSourceUnavailable) && !permanentSourceFailure(rerr) {
-				// Native players retry this part URL with its original byte
-				// coordinates. A temporary CDN error must not replace those
-				// bytes with a different encode or strand the client on 409.
-				m.log.Warn("temporary direct-play read failure; retaining source for range retry", "session", s.id, "release", g.releaseID(), "offset", srcpos, "err", rerr)
-				return rerr
+			boundedDirect := false
+			if retry, ok := g.src.(core.DirectPlayRetrier); ok && errors.Is(rerr, core.ErrSourceUnavailable) && !permanentSourceFailure(rerr) {
+				if retry.RetryDirectPlay() {
+					// Keep coordinates for a brief interruption, but arm the
+					// bounded recovery even if the client never retries.
+					m.log.Warn("temporary direct-play read failure; retaining source for range retry", "session", s.id, "release", g.releaseID(), "offset", srcpos, "err", rerr)
+					m.limitDirectRetry(s, g, g.timeMapSnapshot().TimeAt(srcpos))
+					return rerr
+				}
+				// A provider pause cannot improve by retrying this source.
+				boundedDirect = true
 			}
 			g.noteReadFailure(rerr)
 			at = g.timeMapSnapshot().TimeAt(srcpos)
-			ng, err := m.failover(ctx, s, g, at, "source read failed during direct play")
+			ng, err := m.failoverWith(ctx, s, g, at, failoverOpts{reason: "source read failed during direct play", strictDirect: boundedDirect})
 			if errors.Is(err, errRequireRemux) {
-				// Swapped, but the new release cannot continue this
-				// byte stream: end so the client re-decides as remux.
 				return errEndResponse
 			}
 			if err != nil {
+				if boundedDirect && ctx.Err() == nil {
+					m.Stop(s.id)
+					return errEndResponse
+				}
 				return err
 			}
 			if vpos == vstart {
@@ -174,6 +210,48 @@ func (m *Manager) streamClient(ctx context.Context, w io.Writer, s *session, vst
 		}
 	}
 	return nil
+}
+
+// limitDirectRetry bounds an outage even if the client stops issuing ranges.
+// Progress cancels the pending recovery, and each generation has one timer.
+func (m *Manager) limitDirectRetry(s *session, g *generation, at time.Duration) {
+	m.limitDirectRetryAfter(s, g, at, 25*time.Second)
+}
+
+func (m *Manager) limitDirectRetryAfter(s *session, g *generation, at, delay time.Duration) {
+	g.mu.Lock()
+	if g.retryPending {
+		g.mu.Unlock()
+		return
+	}
+	g.retryPending = true
+	epoch := g.retryEpoch
+	g.mu.Unlock()
+	go func() {
+		timer := time.NewTimer(delay)
+		defer timer.Stop()
+		select {
+		case <-timer.C:
+		case <-g.ctx.Done():
+			return
+		}
+		pending := func() bool {
+			g.mu.Lock()
+			defer g.mu.Unlock()
+			return g.retryPending && g.retryEpoch == epoch && !g.retired
+		}
+		if !pending() {
+			return
+		}
+		g.noteReadFailure(core.ErrSourceUnavailable)
+		ctx, cancel := context.WithTimeout(g.ctx, 25*time.Second)
+		defer cancel()
+		_, err := m.failoverWith(ctx, s, g, at, failoverOpts{reason: "media source unavailable", stillNeeded: pending, strictDirect: true})
+		if err != nil && !errors.Is(err, errRequireRemux) && pending() {
+			m.emitEvent("error", s, err)
+			m.Stop(s.id)
+		}
+	}()
 }
 
 // directRangeCompatible keeps the original HTTP representation immutable even
@@ -300,7 +378,18 @@ func (m *Manager) copyFrom(ctx context.Context, w io.Writer, g *generation, off,
 					n, err = g.src.ReadAt((*bp)[:want], pos)
 				}
 			} else if cr, ok := g.src.(core.ContextReaderAt); ok {
-				n, err = cr.ReadAtContext(ctx, (*bp)[:want], pos)
+				readCtx := ctx
+				cancelRead := func() {}
+				if retry, ok := g.src.(core.DirectPlayRetrier); ok && retry.RetryDirectPlay() {
+					if budget, ok := ctx.Value(directReadBudgetKey{}).(time.Duration); ok && budget > 0 {
+						readCtx, cancelRead = context.WithTimeout(ctx, budget)
+					}
+				}
+				n, err = cr.ReadAtContext(readCtx, (*bp)[:want], pos)
+				if err != nil && errors.Is(readCtx.Err(), context.DeadlineExceeded) && ctx.Err() == nil {
+					err = errDirectReadDeadline
+				}
+				cancelRead()
 			} else {
 				n, err = g.src.ReadAt((*bp)[:want], pos)
 			}
@@ -318,7 +407,7 @@ func (m *Manager) copyFrom(ctx context.Context, w io.Writer, g *generation, off,
 			if err == nil && n == 0 {
 				err = io.ErrNoProgress
 			}
-			if err != nil && ctx.Err() == nil && !recoverableSourceFailure(err) {
+			if err != nil && ctx.Err() == nil && !errors.Is(err, context.Canceled) && !errors.Is(err, errDirectReadDeadline) && !recoverableSourceFailure(err) {
 				// An active reader cannot produce a usable source after an
 				// unclassified ReadAt failure either. Preserve the cause but
 				// treat it as a transient source failure, never a permanent
@@ -465,7 +554,6 @@ func (m *Manager) backgroundFailover(s *session, g *generation, at time.Duration
 		if _, err := m.failoverWith(ctx, s, g, at, failoverOpts{
 			reason:         "source read failed while transcoding",
 			preserveBuffer: true,
-			markBad:        true,
 			followPlayer:   true,
 		}); err != nil && ctx.Err() == nil && !errors.Is(err, errRequireRemux) {
 			m.log.Error("background failover failed", "session", s.id, "err", err)

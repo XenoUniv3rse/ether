@@ -23,6 +23,7 @@ import {
   isPlainObject,
   relativeTime,
 } from "../../lib/format";
+import { qualityFallback } from "../../lib/quality-fallback";
 import { useAsync } from "../../lib/hooks";
 import { releaseConsole, type HistoryRecord } from "../../lib/releases";
 import type { CandidateTrace, ResolverTrace } from "../../lib/types";
@@ -53,8 +54,8 @@ function normalizeTrace(raw: Record<string, unknown>, i: number): ResolverTrace 
   const limits = isPlainObject(raw.limits) ? raw.limits : {};
   const nestedLimits = isPlainObject(nested.limits) ? nested.limits : {};
   return {
-    titleKey: String(raw.titleKey ?? raw.key ?? i),
-    titleName: String(raw.titleName ?? raw.title ?? raw.name ?? t("Trace {n}", { n: i + 1 })),
+    titleKey: String(raw.titleKey ?? i),
+    titleName: String(raw.titleName ?? t("Trace {n}", { n: i + 1 })),
     profile: String(raw.profile ?? ""),
     profileMaxHeight: configuredCeiling(
       raw.profileMaxHeight ??
@@ -75,15 +76,10 @@ function normalizeTrace(raw: Record<string, unknown>, i: number): ResolverTrace 
         nestedLimits.profileMaxHeight,
     ),
     at: String(raw.at ?? ""),
-    candidates: (Array.isArray(raw.candidates)
-      ? raw.candidates
-      : Array.isArray(raw.releases)
-        ? raw.releases
-        : []
-    )
+    candidates: (Array.isArray(raw.candidates) ? raw.candidates : [])
       .filter(isPlainObject)
       .map((c) => ({
-        releaseId: String(c.releaseId ?? c.id ?? ""),
+        releaseId: String(c.releaseId ?? ""),
         name: String(c.name ?? ""),
         indexer: String(c.indexer ?? ""),
         score: Number(c.score ?? 0),
@@ -107,13 +103,13 @@ function normalizeTrace(raw: Record<string, unknown>, i: number): ResolverTrace 
         route: typeof c.route === "string" ? c.route : undefined,
       })),
     winner: typeof raw.winner === "string" ? raw.winner : undefined,
-    err:
-      typeof raw.err === "string" ? raw.err : typeof raw.error === "string" ? raw.error : undefined,
+    err: typeof raw.err === "string" ? raw.err : undefined,
     searchDuration: Number(raw.searchDuration ?? 0),
     failover: Boolean(raw.failover),
     pinned: typeof raw.pinned === "string" ? raw.pinned : undefined,
     pinStatus: typeof raw.pinStatus === "string" ? raw.pinStatus : undefined,
     omitted: Number(raw.omitted ?? 0) || undefined,
+    downgrade: typeof raw.downgrade === "string" ? raw.downgrade : undefined,
     routing: typeof raw.routing === "string" ? raw.routing : undefined,
     chooser: chooserOf(raw.chooser ?? nested.chooser),
     chosenVersion:
@@ -457,6 +453,9 @@ export function TraceDetail({ trace, titleKey }: { trace: ResolverTrace; titleKe
         {trace.err ? <span className="text-sm text-danger">{trace.err}</span> : null}
       </div>
       {ceilings ? <p className="text-sm text-fg-muted">{ceilings}</p> : null}
+      {trace.downgrade ? (
+        <p className="text-sm text-fg-muted">{qualityFallback(trace.downgrade)}</p>
+      ) : null}
       {trace.routing ? (
         <p className="text-sm text-fg-muted">
           {t("Source routing: {routing}", { routing: trace.routing })}

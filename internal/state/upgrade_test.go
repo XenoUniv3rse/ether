@@ -49,6 +49,13 @@ func migrationKeys(t *testing.T, db *sql.DB) map[string]bool {
 	return got
 }
 
+func TestSmartPlaylistMigrationPostgresDDL(t *testing.T) {
+	const ddl = `ALTER TABLE state_playlists ADD COLUMN smart_uri TEXT NOT NULL DEFAULT '';`
+	if got := store.TranslateDDL(ddl); got != ddl {
+		t.Fatalf("PostgreSQL migration = %q", got)
+	}
+}
+
 func requireMigrations(t *testing.T, db *sql.DB, want []string, absent []string) {
 	t.Helper()
 	got := migrationKeys(t, db)
@@ -94,7 +101,7 @@ func assertFreshSchema(t *testing.T, ctx context.Context, db *sql.DB) {
 		t.Fatal(err)
 	}
 	requireMigrations(t, db, []string{
-		"state/1", "state/2", "state/3", "state/4",
+		"state/1", "state/2", "state/3", "state/4", "state/6",
 		"state_plexwatch/1", "state_plexwatch/2", "state_plexwatch/3", "state_plexwatch/4",
 	}, []string{"state/5"})
 	var watchAt, ratingAt, consent, neverSent int64
@@ -210,6 +217,13 @@ func assertUpgradeKeepsOldWrite(t *testing.T, ctx context.Context, db *sql.DB) {
 	}
 	if watchAt != t1.UnixNano() || ratingAt != t1.UnixNano() {
 		t.Fatalf("old writer moved the new clocks watch_at %d rating_at %d", watchAt, ratingAt)
+	}
+	// Simulate a v0.3.x install which has not run the v0.3.4 clock repair.
+	if _, err := db.Exec("DELETE FROM schema_migrations WHERE component='state_plexwatch' AND version=5"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Migrate(ctx, db); err != nil {
+		t.Fatal(err)
 	}
 	s := New(db, Options{})
 	t2 := t1.Add(time.Hour)

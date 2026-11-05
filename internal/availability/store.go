@@ -9,7 +9,17 @@ import (
 	"time"
 )
 
+const hiddenMigration = `
+CREATE TABLE availability_hidden (
+ kind TEXT NOT NULL, generation TEXT NOT NULL, rating_key INTEGER NOT NULL,
+ created_at INTEGER NOT NULL, PRIMARY KEY(kind,generation,rating_key)
+);
+CREATE TABLE availability_hidden_current (
+ kind TEXT PRIMARY KEY, generation TEXT NOT NULL, policy TEXT NOT NULL
+);`
+
 func init() {
+	store.Register("availability", 6, hiddenMigration)
 	// covered_since: since when a feed's head polls have overlapped without a
 	// gap, so it has shown every release posted since then. full_at: a
 	// title's last probe across every indexer (feed coverage aside). Its own
@@ -215,12 +225,6 @@ func (s *Service) feedState(ctx context.Context, f core.ReleaseFeed) (feedState,
 func (s *Service) markPolled(ctx context.Context, f core.ReleaseFeed) error {
 	_, err := s.db.ExecContext(ctx, `UPDATE availability_feeds SET polled_at=? WHERE source_id=? AND generation=?`, s.now().Unix(), f.ID, f.Generation)
 	return err
-}
-func boolInt(b bool) int {
-	if b {
-		return 1
-	}
-	return 0
 }
 func safeReason(err error) string {
 	switch {

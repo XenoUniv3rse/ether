@@ -3,7 +3,7 @@ import type { ReconnectStep } from "./reconnect";
 import type { StartupFailureCode, StartupStatus } from "./ops";
 
 /** Seconds until an ISO time, never negative. */
-export function secondsUntil(iso: string | undefined, now = Date.now()): number {
+function secondsUntil(iso: string | undefined, now = Date.now()): number {
   if (!iso) return 0;
   return Math.max(0, Math.ceil((new Date(iso).getTime() - now) / 1000));
 }
@@ -102,6 +102,8 @@ export function phaseText(s: StartupStatus, now = Date.now()): { title: string; 
       return { title: t("Ether is ready"), detail: "" };
     case "failed":
       return { title: t("Ether couldn't start"), detail: failureText(s).body };
+    default:
+      return { title: t("Starting Ether"), detail: t("Almost ready…") };
   }
 }
 

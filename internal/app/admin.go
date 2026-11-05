@@ -128,7 +128,9 @@ func (a *App) buildAdmin() http.Handler {
 			}
 			return out, err
 		},
-		SessionsStatus:       func(context.Context) any { return (ownerPlayback{Playback: a.playback, app: a}).Sessions() },
+		SessionsStatus: func(context.Context) any {
+			return ownerSessionStatuses((ownerPlayback{Playback: a.playback, app: a}).Sessions())
+		},
 		CacheStatus:          a.cacheStatus,
 		CacheRestartRequired: a.cacheRestartRequired,
 		ProvidersStatus:      func(context.Context) any { return a.fetcher.Stats() },
@@ -199,9 +201,10 @@ func (a *App) buildAdmin() http.Handler {
 		CatalogVisibility: func(ctx context.Context, specs []core.LibraryExclusion, fallback string) (any, error) {
 			return a.catalog.PreviewVisibilityPolicy(ctx, specs, fallback)
 		},
-		Images:    a.images,
-		PlexWatch: a.plexWatchAPI(),
-		Prerolls:  a.prerollAdmin(),
+		Images:      a.images,
+		PlexWatch:   a.plexWatchAPI(),
+		PlexServers: a.plexServersAPI(),
+		Prerolls:    a.prerollAdmin(),
 	}
 	h := admin.NewHandler(deps)
 	if a.streamRT != nil {

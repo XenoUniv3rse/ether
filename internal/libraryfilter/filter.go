@@ -8,6 +8,7 @@ package libraryfilter
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/braedonsaunders/ether/internal/store"
 	"strings"
 
 	"github.com/braedonsaunders/ether/internal/contentrating"
@@ -33,11 +34,6 @@ type rule struct {
 type Filter struct {
 	rules    []rule
 	fallback string // show or hide
-}
-
-// Compile treats every rule as hide and leaves unmatched titles visible.
-func Compile(specs []core.LibraryExclusion) (*Filter, error) {
-	return CompilePolicy(specs, "show")
 }
 
 // CompilePolicy compiles ordered rules. fallback is "show" or "hide" for
@@ -495,6 +491,22 @@ func (f *Filter) SQLHidden() (string, []any) {
 	return b.String(), args
 }
 
+// SQLHiddenForType specializes the policy for a known media type. This
+// retains first-match ordering while dropping rules for other media types.
+func (f *Filter) SQLHiddenForType(typ core.MediaType) (string, []any) {
+	if f == nil {
+		return "0=1", nil
+	}
+	copy := &Filter{fallback: f.fallback}
+	for _, r := range f.rules {
+		if r.typ == "mixed" || r.typ == string(typ) {
+			r.typ = "mixed"
+			copy.rules = append(copy.rules, r)
+		}
+	}
+	return copy.SQLHidden()
+}
+
 func (f *Filter) legacyOr() bool {
 	if f.fallback == "hide" {
 		return false
@@ -563,7 +575,7 @@ func (c condition) sql() (string, []any) {
 		default:
 			q = "0=1"
 			if len(c.levels) > 0 {
-				q = "t.content_rating_rank IN (" + strings.TrimSuffix(strings.Repeat("?,", len(c.levels)), ",") + ")"
+				q = "t.content_rating_rank IN (" + store.Placeholders(len(c.levels)) + ")"
 			}
 			if c.op == "notIn" || c.op == "isNot" {
 				q = "NOT (" + q + ")"
@@ -598,7 +610,7 @@ func (c condition) sql() (string, []any) {
 		}
 		return q, args
 	}
-	ph := strings.TrimSuffix(strings.Repeat("?,", len(c.values)), ",")
+	ph := store.Placeholders(len(c.values))
 	args := make([]any, len(c.values))
 	for i, v := range c.values {
 		args[i] = v
@@ -608,8 +620,6 @@ func (c condition) sql() (string, []any) {
 		if c.allCountries {
 			return "EXISTS (SELECT 1 FROM catalog_countries co WHERE co.key=t.key) AND NOT EXISTS (SELECT 1 FROM catalog_countries co WHERE co.key=t.key AND LOWER(co.country) NOT IN (" + ph + "))", args
 		}
-		// Key sets, not a correlated EXISTS per title. The database builds
-		// each set once and probes it by rowid.
 		table, col := "catalog_countries", "country"
 		switch c.field {
 		case "genre":
@@ -619,10 +629,10 @@ func (c condition) sql() (string, []any) {
 		case "keyword":
 			table, col = "catalog_keywords", "keyword"
 		}
-		match := "t.key IN (SELECT key FROM " + table + " WHERE LOWER(" + col + ") IN (" + ph + "))"
+		match := "EXISTS (SELECT 1 FROM " + table + " lf WHERE lf.key=t.key AND LOWER(lf." + col + ") IN (" + ph + "))"
 		if c.op == "notIn" || c.op == "isNot" {
 			// Known values only: a title with none of this facet is not hidden.
-			return "t.key IN (SELECT key FROM " + table + ") AND NOT (" + match + ")", args
+			return "EXISTS (SELECT 1 FROM " + table + " lf WHERE lf.key=t.key) AND NOT (" + match + ")", args
 		}
 		return match, args
 	default:
@@ -651,13 +661,13 @@ func (c condition) knownSQL() string {
 	case "contentRating":
 		return "t.content_rating_rank>0"
 	case "country":
-		return "t.key IN (SELECT key FROM catalog_countries)"
+		return "EXISTS (SELECT 1 FROM catalog_countries lf WHERE lf.key=t.key)"
 	case "genre":
-		return "t.key IN (SELECT key FROM catalog_genres)"
+		return "EXISTS (SELECT 1 FROM catalog_genres lf WHERE lf.key=t.key)"
 	case "studio":
-		return "t.key IN (SELECT key FROM catalog_studios)"
+		return "EXISTS (SELECT 1 FROM catalog_studios lf WHERE lf.key=t.key)"
 	case "keyword":
-		return "t.key IN (SELECT key FROM catalog_keywords)"
+		return "EXISTS (SELECT 1 FROM catalog_keywords lf WHERE lf.key=t.key)"
 	}
 	return "0=1"
 }

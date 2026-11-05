@@ -556,7 +556,8 @@ func TestPrepareProbeFailureUsesEstimate(t *testing.T) {
 	h := newHarness(t, []*fakeRelease{mkv("A", 10000, time.Minute)}, []string{"A"})
 	h.tr.failAll = true
 	ps := h.prepare(owner, movieKey, "c1")
-	if !ps.Info.Estimated || ps.Info.Size != 10000 || ps.Info.Duration != 136*time.Minute {
+	// A catalogue runtime cannot safely bound the source when probing fails.
+	if !ps.Info.Estimated || ps.Info.Size != 10000 || ps.Info.Duration != 0 {
 		t.Fatalf("info = %+v", ps.Info)
 	}
 }

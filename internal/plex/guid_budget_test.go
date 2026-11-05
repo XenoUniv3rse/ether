@@ -18,7 +18,7 @@ type detailWarmer struct {
 	calls int
 }
 
-func (w *detailWarmer) PreResolve(context.Context, *core.User, core.RatingKey, core.ClientCaps) bool {
+func (w *detailWarmer) Prewarm(context.Context, *core.User, core.RatingKey, core.ClientCaps, core.PrewarmOptions) bool {
 	w.calls++
 	return true
 }
@@ -83,6 +83,11 @@ func TestHubsWarmPlexGUIDsInBackgroundAndEpisodesRenderHierarchy(t *testing.T) {
 			io.WriteString(w, `{"MediaContainer":{"Metadata":[{"guid":"`+fcGUID+`","type":"movie","Guid":[{"id":"tmdb://550"}]}]}}`)
 		case "/library/metadata/5d9c086c46115600200aa2fe":
 			io.WriteString(w, `{"MediaContainer":{"Metadata":[{"guid":"`+showGUID+`","type":"show","Guid":[{"id":"tmdb://1396"}]}]}}`)
+		case "/library/metadata/5d9c086c46115600200aa2fe/children":
+			io.WriteString(w, `{"MediaContainer":{"Metadata":[{"guid":"`+seasonGUID+`","type":"season","index":1}]}}`)
+		case "/library/metadata/602e5e2194f08e002d001122/children":
+			io.WriteString(w, `{"MediaContainer":{"Metadata":[{"guid":"`+ep1GUID+`","type":"episode","index":1,"parentIndex":1}]}}`)
+
 		default:
 			http.NotFound(w, r)
 		}
@@ -184,7 +189,7 @@ type keyWarmer struct {
 	keys []core.RatingKey
 }
 
-func (w *keyWarmer) PreResolve(_ context.Context, _ *core.User, k core.RatingKey, _ core.ClientCaps) bool {
+func (w *keyWarmer) Prewarm(_ context.Context, _ *core.User, k core.RatingKey, _ core.ClientCaps, _ core.PrewarmOptions) bool {
 	w.keys = append(w.keys, k)
 	return true
 }

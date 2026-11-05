@@ -272,7 +272,7 @@ func writeServes(ctx context.Context, db *sql.DB, ops []serveOp, ids *serveIDs) 
 		r := op.rec
 		at := ms(r.at)
 		var id int64
-		if err := serveStmt.QueryRowContext(ctx, r.userID, at, at, r.surface, r.hc.Device, r.hc.Daypart, b2i(r.hc.Weekend)).Scan(&id); err != nil {
+		if err := serveStmt.QueryRowContext(ctx, r.userID, at, at, r.surface, r.hc.Device, r.hc.Daypart, store.BoolInt(r.hc.Weekend)).Scan(&id); err != nil {
 			return err
 		}
 		fresh[r.id] = id
@@ -615,12 +615,46 @@ func labelServe(ctx context.Context, db *sql.DB, userID int64, tk core.RatingKey
 // finalizeNegatives labels pending serves whose attribution window closed
 // without a play. It returns how many were labelled.
 func finalizeNegatives(ctx context.Context, db *sql.DB, now time.Time) (int64, error) {
-	res, err := db.ExecContext(ctx, `UPDATE personalize_serve_items SET label = ? WHERE label = ? AND serve_id IN
-		(SELECT id FROM personalize_serves WHERE last_at < ?)`, labelNegative, labelPending, ms(now.Add(-attributionWindow)))
-	if err != nil {
-		return 0, err
+	var total int64
+	cutoff := ms(now.Add(-attributionWindow))
+	for {
+		rows, err := db.QueryContext(ctx, `SELECT i.serve_id,i.row_pos,i.item_pos FROM personalize_serve_items i JOIN personalize_serves s ON s.id=i.serve_id WHERE i.label=? AND s.last_at<? LIMIT 128`, labelPending, cutoff)
+		if err != nil {
+			return total, err
+		}
+		var keys [][3]int64
+		for rows.Next() {
+			var k [3]int64
+			if err := rows.Scan(&k[0], &k[1], &k[2]); err != nil {
+				rows.Close()
+				return total, err
+			}
+			keys = append(keys, k)
+		}
+		err = rows.Err()
+		rows.Close()
+		if err != nil {
+			return total, err
+		}
+		if len(keys) == 0 {
+			return total, nil
+		}
+		var clauses []string
+		args := []any{labelNegative, labelPending, cutoff}
+		for _, k := range keys {
+			clauses = append(clauses, `(serve_id=? AND row_pos=? AND item_pos=?)`)
+			args = append(args, k[0], k[1], k[2])
+		}
+		res, err := db.ExecContext(ctx, `UPDATE personalize_serve_items SET label=? WHERE label=? AND EXISTS (SELECT 1 FROM personalize_serves s WHERE s.id=personalize_serve_items.serve_id AND s.last_at<?) AND (`+strings.Join(clauses, " OR ")+`)`, args...)
+		if err != nil {
+			return total, err
+		}
+		n, err := res.RowsAffected()
+		if err != nil {
+			return total, err
+		}
+		total += n
 	}
-	return res.RowsAffected()
 }
 
 // purgeServes applies serve-log retention: pages older than retention,

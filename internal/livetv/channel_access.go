@@ -261,3 +261,20 @@ func sortedKeys(m map[string]bool) []string {
 	slices.Sort(keys)
 	return keys
 }
+
+// VisibleTo reports whether Live TV should appear in u's apps at all: the
+// server has at least one channel and the owner has not turned Live TV off
+// for this viewer. The owner's own switch applies to the owner's apps too.
+// It is two indexed lookups, cheap enough for the provider list apps fetch
+// on every launch.
+func (s *Service) VisibleTo(ctx context.Context, u *core.User) bool {
+	if u == nil {
+		return false
+	}
+	var one int
+	if err := s.o.DB.QueryRowContext(ctx, `SELECT 1 FROM livetv_channels LIMIT 1`).Scan(&one); err != nil {
+		return false
+	}
+	_, pol, err := s.withPolicy(ctx, u)
+	return err == nil && !pol.Disabled
+}

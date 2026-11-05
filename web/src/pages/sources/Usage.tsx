@@ -15,6 +15,7 @@ import {
   type UsagePeriod,
   type UsageReport,
 } from "./IndexerUsage";
+import { Kpi, KpiRow } from "../../components/Kpi";
 
 type Provider = {
   id: string;
@@ -259,7 +260,7 @@ export function SourceUsage() {
       <p className="text-sm text-fg-muted">
         {t("How each source did this month. Plan prices are the last section.")}
       </p>
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+      <KpiRow>
         {[
           [t("Plays this month"), formatNumber(data.monthPlays, 0)],
           [t("Failovers"), formatNumber(data.failovers ?? 0, 0)],
@@ -272,12 +273,9 @@ export function SourceUsage() {
             ),
           ],
         ].map(([label, value]) => (
-          <div key={label} className="rounded-xl border border-border bg-surface px-5 py-4">
-            <p className="text-xs text-fg-muted">{label}</p>
-            <p className="mt-2 text-2xl font-semibold tabular-nums">{value}</p>
-          </div>
+          <Kpi key={label} label={label!} value={value} />
         ))}
-      </div>
+      </KpiRow>
       <Section
         title={t("Monthly costs")}
         description={t(

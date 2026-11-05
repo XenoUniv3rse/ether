@@ -120,6 +120,14 @@ func (m *Manager) openInitial(ctx context.Context, s *session, profile core.Qual
 					if errors.Is(lastErr, core.ErrDebridAuth) {
 						return nil, fmt.Errorf("%w (last failure: %v): %w", err, lastErr, core.ErrDebridAuth)
 					}
+					if !errors.Is(err, core.ErrNotCached) && !errors.Is(err, core.ErrNoSources) {
+						switch {
+						case errors.Is(lastErr, context.DeadlineExceeded):
+							return nil, fmt.Errorf("%w: %w", err, context.DeadlineExceeded)
+						case errors.Is(lastErr, core.ErrSourceUnavailable), errors.Is(lastErr, core.ErrArticleMissing), errors.Is(lastErr, core.ErrArticleCorrupt), errors.Is(lastErr, core.ErrReleaseRejected):
+							return nil, fmt.Errorf("%w: %w", err, core.ErrSourceUnavailable)
+						}
+					}
 					return nil, fmt.Errorf("%w (last failure: %v)", err, lastErr)
 				}
 				return nil, err
@@ -196,7 +204,13 @@ func releasesFailed(n int, lastErr error, allUncached bool) error {
 	case errors.Is(lastErr, core.ErrDebridAuth):
 		return fmt.Errorf("%w: %d releases failed (last: %v): %w", core.ErrNotAvailable, n, lastErr, core.ErrDebridAuth)
 	case allUncached && n > 0:
-		return fmt.Errorf("%w: %d releases failed (last: %v)", core.ErrNotCached, n, lastErr)
+		// Keep the typed last cause, including queued/refused/limit and
+		// UncachedError's settings, for the protocol adapter to explain.
+		return fmt.Errorf("%d releases failed: %w", n, lastErr)
+	case errors.Is(lastErr, context.DeadlineExceeded):
+		return fmt.Errorf("%w: %d releases failed: %w", core.ErrNotAvailable, n, context.DeadlineExceeded)
+	case errors.Is(lastErr, core.ErrSourceUnavailable), errors.Is(lastErr, core.ErrArticleMissing), errors.Is(lastErr, core.ErrArticleCorrupt), errors.Is(lastErr, core.ErrReleaseRejected):
+		return fmt.Errorf("%w: %d releases failed: %w", core.ErrNotAvailable, n, core.ErrSourceUnavailable)
 	}
 	return fmt.Errorf("%w: %d releases failed (last: %v)", core.ErrNotAvailable, n, lastErr)
 }
@@ -347,6 +361,9 @@ func (m *Manager) probeGeneration(ctx context.Context, s *session, res *core.Res
 		m.log.Warn("probe failed; using estimated media info", "release", res.Release.Name, "err", perr)
 		mi = core.CloneMediaInfo(fallback(src.Size()))
 		mi.Estimated = true
+		// An estimated catalogue runtime is not a container duration. A
+		// guessed end can make part of a longer release unseekable.
+		mi.Duration = 0
 	default:
 		mi = core.CloneMediaInfo(*info)
 	}
@@ -674,18 +691,17 @@ func (m *Manager) FailoverInput(ctx context.Context, sessionID, inputURL string,
 	return err
 }
 
-// failoverOpts distinguishes a broken-source failover (markBad) from a
-// speed-driven down-failover (down: pick a lower-bitrate candidate, never
-// mark the slow release bad).
+// failoverOpts controls candidate selection and recovery behavior. Permanent
+// source failures are marked bad independently of these options.
 type failoverOpts struct {
 	encoder        bool        // encoder shortage: only accept a video-copy candidate
 	stillNeeded    func() bool // speculative recovery rechecks before publishing a swap
 	quietFailure   bool
 	preserveBuffer bool
 	reason         string
-	markBad        bool
 	down           bool
 	stopOnFailure  bool
+	strictDirect   bool // a different release needs a new direct-play decision
 	// followPlayer: at was mapped from a failed source read, which may be
 	// a container tail/index read or predate a seek; resume at the
 	// player's latest segment request when the HLS session reports it.
@@ -693,7 +709,7 @@ type failoverOpts struct {
 }
 
 func (m *Manager) failover(ctx context.Context, s *session, observed *generation, at time.Duration, reason string) (*generation, error) {
-	return m.failoverWith(ctx, s, observed, at, failoverOpts{reason: reason, markBad: true})
+	return m.failoverWith(ctx, s, observed, at, failoverOpts{reason: reason})
 }
 
 // failoverWith replaces generation observed. Concurrent callers that
@@ -704,11 +720,16 @@ func (m *Manager) failoverWith(ctx context.Context, s *session, observed *genera
 		return nil, err
 	}
 	defer unlock(s.failSem)
+	// lock's select is random when the semaphore frees as ctx is cancelled
+	// (a stopped Live TV session): a cancelled caller opens no provider.
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	started := time.Now()
 
 	s.mu.Lock()
 	cur, closed, failovers, pinned := s.cur, s.closed, s.failovers, s.sourcePins > 0
-	direct := s.decision == core.DecisionDirectPlay && !spliceable(s.container, s.name)
+	direct := fo.strictDirect || (s.decision == core.DecisionDirectPlay && !spliceable(s.container, s.name))
 	s.mu.Unlock()
 	if closed {
 		return nil, fmt.Errorf("playback: session %s ended: %w", s.id, core.ErrNotFound)
@@ -835,6 +856,14 @@ func (m *Manager) failoverWith(ctx context.Context, s *session, observed *genera
 		if copySearchCtx != nil {
 			attemptCtx = copySearchCtx
 		}
+		if ctx.Err() != nil {
+			// The copy-preference retry skips the post-failure check
+			// below; never start another candidate's search or open.
+			if fallbackGen != nil {
+				m.dropGeneration(fallbackGen)
+			}
+			return nil, ctx.Err()
+		}
 		res := prepared
 		prepared = nil
 		var err error
@@ -860,7 +889,7 @@ func (m *Manager) failoverWith(ctx context.Context, s *session, observed *genera
 		// offsets. Only an exact-size repost may replace a non-spliceable
 		// direct source in place; a healthy mismatched candidate is kept
 		// as a remux-switch fallback instead of being spliced in.
-		if err == nil && direct && g.src.Size() != cur.src.Size() {
+		if err == nil && direct && (g.src.Size() != cur.src.Size() || fo.strictDirect) {
 			keep := fallbackGen == nil
 			if !keep && fo.down {
 				// A down-failover's remux fallback only helps at a lower
@@ -881,7 +910,7 @@ func (m *Manager) failoverWith(ctx context.Context, s *session, observed *genera
 				m.dropGeneration(g)
 			}
 			g = nil
-			err = fmt.Errorf("incompatible direct-play replacement size: %w", core.ErrNotAvailable)
+			err = fmt.Errorf("incompatible direct-play replacement: %w", core.ErrNotAvailable)
 		}
 		if err == nil && fo.down {
 			if bps := mediaBps(g.infoSnapshot(), g.src.Size()); curBps > 0 && bps > 0 && bps >= curBps {

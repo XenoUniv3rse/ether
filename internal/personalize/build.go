@@ -942,6 +942,9 @@ func (e *Engine) ownerCandidate(cr core.CollectionRow, section core.MediaType, u
 	}
 	hub := cr.Hub
 	if section != "" {
+		if hub.Type == "" {
+			hub.Key = core.SectionCollectionKey(hub.Key, section)
+		}
 		hub.Items = make([]core.Title, 0, len(cr.Hub.Items))
 		for _, item := range cr.Hub.Items {
 			if item.Type == section {

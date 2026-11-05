@@ -144,7 +144,7 @@ func TestContentRatingNotInFailsClosed(t *testing.T) {
 		t.Fatal("unknown language rule changed")
 	}
 	countrySQL, _ := country.SQLHidden()
-	if !strings.Contains(countrySQL, "t.key IN (SELECT key FROM catalog_countries) AND NOT (") {
+	if !strings.Contains(countrySQL, "EXISTS (SELECT 1 FROM catalog_countries lf WHERE lf.key=t.key) AND NOT (") {
 		t.Fatalf("country SQL dropped the known-value guard: %s", countrySQL)
 	}
 	yearSQL, _ := year.SQLHidden()

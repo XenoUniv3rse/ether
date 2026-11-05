@@ -25,6 +25,7 @@ import (
 // track per representation (video, audio); ffmpeg's dash muxer writes short
 // chunks that the session regroups into numbered segments by timestamp.
 type Session struct {
+	normalizeNegativeDTS    bool
 	encoder                 *encoderLifetime
 	id                      string
 	m                       *Manager
@@ -59,22 +60,30 @@ func (s *Session) IndependentSegments() bool { return s.segmentsIndependent }
 
 // sessionInput owns one aspect of the session. Fields are guarded by Session.mu.
 type sessionInput struct {
-	rtxConfig          config.RTXVideo
-	rtxTimeline        bool
-	rtxDiscontinuities map[int]bool
-	liveInput          bool
-	inputLease         core.EncoderInputLease
-	inputHeaders       map[string]string
-	input              string
+	softSubtitleStream     *int
+	softSubtitleInputIndex int
+	rtxConfig              config.RTXVideo
+	rtxTimeline            bool
+	rtxDiscontinuities     map[int]bool
+	loopInput              bool
+	liveInput              bool
+	inputLease             core.EncoderInputLease
+	inputHeaders           map[string]string
+	input                  string
 	// clockInput is the input whose run wrote the retained fMP4 clock. Only a
 	// run reading that same input may be forced onto it (a short-video tail
 	// restart); a swapped-in source must match the clock on its own or be refused.
-	clockInput  string
-	info        core.MediaInfo
-	decision    core.Decision
-	forceCPU    bool // hardware encoder failed; stay on CPU
-	noPause     bool // platform cannot suspend ffmpeg
-	inputFailed bool // exhausted this input; HTTP retries cannot restart it
+	clockInput          string
+	info                core.MediaInfo
+	decision            core.Decision
+	forceCPU            bool // hardware encoder failed; stay on CPU
+	copyFallback        bool // copied video failed its packet conversion; encode this session
+	copyDiscontinuities map[int]bool
+	noPause             bool // platform cannot suspend ffmpeg
+	inputFailed         bool // exhausted this input; HTTP retries cannot restart it
+	stallRestarts       []time.Time
+	liveRestarts        restartBudget
+	liveDiscontinuities map[int]bool
 	// contract is the delivered video a static-header session keeps
 	// across failovers; nil for every other session (contract.go).
 	contract       *videoContract
@@ -162,8 +171,6 @@ type sessionAdaptation struct {
 	goodput        goodputEstimator
 	segSizes       map[int]int64 // primary-track segment sizes (spike governor)
 	governorOn     bool          // plan may change ahead of the player
-	lastGovSeg     int           // last segment the governor evaluated from
-	govCooldown    time.Time     // no new clamp planning before this
 	seekRampSeg    int           // segment a seek restarted at (preset ramp); -1 none
 }
 
@@ -192,6 +199,7 @@ type run struct {
 	produced   int // segments finished (DASH: on the slowest track)
 	finished   bool
 	stopped    bool // stopped deliberately, not a failure
+	stalled    bool // watchdog interrupted a run with no progress
 	paused     bool
 	pausedDone int // maxDone when Pause was applied; later growth means it did not hold
 	err        error
@@ -250,22 +258,6 @@ func (s *Session) Decision() core.Decision {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.decision
-}
-
-// encoding reports whether the session counts against the transcode cap:
-// it is a transcode by decision, or a copy session whose current run
-// encodes (a fast-start ramp, a governor clamp or a lower rung).
-func (s *Session) encoding() bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if !s.decision.VideoCopy {
-		return true
-	}
-	r := s.cur
-	if r == nil || r.finished || r.stopped || r.err != nil {
-		return false
-	}
-	return r.mode != ModeCopy || r.track != 0
 }
 
 // Info is the media info of the current input.
@@ -355,9 +347,6 @@ func (s *Session) Protocol() string { return s.proto }
 func (s *Session) isDASH() bool { return s.proto == core.ProtocolDASH }
 
 func (s *Session) segName(n int) string { return s.m.opts.segmentURI(n, s.container) }
-
-// segPath is the file of segment n of the first track.
-func (s *Session) segPath(n int) string { return s.trackSegPath(0, n) }
 
 // runDirLocked is where the wanted track's ffmpeg run writes segments:
 // the session dir for the primary rung, a rung subdir for other rungs

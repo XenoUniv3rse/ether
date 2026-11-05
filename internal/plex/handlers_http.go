@@ -31,12 +31,12 @@ func (s *Server) handleStartHTTP(w http.ResponseWriter, r *http.Request) {
 	defer unlockOwner()
 
 	if s.d.Transcoder == nil || s.d.Playback == nil {
-		writeHTTPError(w, http.StatusServiceUnavailable)
+		writePlaybackStatus(w, http.StatusServiceUnavailable)
 		return
 	}
 	p, err := s.parsePlayRequest(r)
 	if err != nil {
-		writeHTTPError(w, http.StatusBadRequest)
+		writePlaybackStatus(w, http.StatusBadRequest)
 		return
 	}
 	p.protocol = core.ProtocolHTTP
@@ -48,12 +48,12 @@ func (s *Server) handleStartHTTP(w http.ResponseWriter, r *http.Request) {
 	defer unlockEncoder()
 
 	if s.playbackOwners.Stale(pr.User.ID, pr.ClientID, p.key, pr.SessionID) {
-		writeHTTPError(w, http.StatusGone)
+		writePlaybackStatus(w, http.StatusGone)
 		return
 	}
 
 	if !s.transcodes.claim(p.sessionID, pr.User.ID, pr.ClientID, s.now()) {
-		writeHTTPError(w, http.StatusForbidden)
+		writePlaybackStatus(w, http.StatusForbidden)
 		return
 	}
 	if err, failed := s.transcodes.takeFailure(p.sessionID, pr.User.ID, p.key, s.now()); failed {
@@ -74,8 +74,7 @@ func (s *Server) handleStartHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		entry, _ = s.transcodes.get(p.sessionID)
 	} else if dec, err := s.publishBrokerPlayback(ctx, pr, replayPlay(p, entry), ps); err != nil {
-		s.log.Info("playback broker publish failed", "key", p.key, "err", err)
-		writeHTTPError(w, http.StatusServiceUnavailable)
+		s.writeStartErr(w, r, pr, err)
 		return
 	} else {
 		entry.decision = dec
@@ -101,6 +100,10 @@ func (s *Server) handleStartHTTP(w http.ResponseWriter, r *http.Request) {
 	if existing, ok := s.d.Transcoder.Session(p.sessionID); ok && existing != nil {
 		if entry.started && entry.offset == p.offset {
 			if hs, ok := existing.(core.HTTPSession); ok {
+				if failed, ok := hs.(interface{ ProgressiveFailed() bool }); ok && failed.ProgressiveFailed() && r.Header.Get("Range") == "" {
+					http.Error(w, "progressive transcode failed; start a new session", http.StatusBadGateway)
+					return
+				}
 				s.notePlexEncoder(p.sessionID, frontend.StreamHTTP, dec, p.offset)
 				unlockEncoder()
 				unlockOwner()
@@ -120,18 +123,18 @@ func (s *Server) handleStartHTTP(w http.ResponseWriter, r *http.Request) {
 		CopyTimestamps: p.copyTimestamps,
 	})
 	if err != nil {
-		s.log.Warn("start HTTP session", "session", p.sessionID, "key", p.key, "err", err)
-		writeHTTPError(w, http.StatusInternalServerError)
+		s.writeStartErr(w, r, pr, err)
 		return
 	}
 	stream, ok := hs.(core.HTTPSession)
 	if !ok {
 		s.log.Error("transcoder returned a non-HTTP session", "session", p.sessionID)
 		s.d.Transcoder.Stop(p.sessionID)
-		writeHTTPError(w, http.StatusInternalServerError)
+		writePlaybackStatus(w, http.StatusInternalServerError)
 		return
 	}
 	s.bindTranscodeStarted(entry, dec, p.offset)
+	s.progressiveStops.clear(pr.User.ID, pr.ClientID, pr.SessionID, p.key)
 	s.notePlexEncoder(p.sessionID, frontend.StreamHTTP, dec, p.offset)
 	unlockEncoder()
 	unlockOwner()

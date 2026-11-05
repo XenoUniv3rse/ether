@@ -1,16 +1,35 @@
-import { Button, cn } from "@braedonsaunders/appkit-ui";
-import { ChevronLeft, ChevronRight, Star, Tv } from "lucide-react";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Badge, Button, Checkbox, cn } from "@braedonsaunders/appkit-ui";
+import {
+  AlertTriangle,
+  ChevronLeft,
+  ChevronRight,
+  Maximize2,
+  Minimize2,
+  Star,
+  Tv,
+} from "lucide-react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import { Segmented } from "../../components/fields";
 import { Artwork } from "../../components/Artwork";
 import { getLocale, t, tn } from "../../i18n";
 import { unit } from "../../lib/format";
+import type { ChannelSelection } from "./ChannelBulkBar";
 import { ChannelLogo } from "./ChannelLogo";
 import { MINUTE, clock, hueOf, onNow, progress, type Channel, type Programme } from "./model";
 
 const ROW = 60;
 const HEADER = 36;
 const CH_COL = 208;
+/** The Live TV page's lineup column: a third of the guide, never cramped. */
+const LINEUP_MIN = 260;
 const ZOOM = { wide: 5, normal: 3.5, tight: 2.2 } as const;
 export type Zoom = keyof typeof ZOOM;
 
@@ -29,9 +48,17 @@ export function GuideGrid({
   onSelect,
   onShift,
   onNow: jumpNow,
+  onRange,
   loading,
+  head,
+  covered,
+  onToggleFavorite,
+  emptyHint,
+  selection,
+  bulkActions,
 }: {
-  channels: Channel[];
+  /** Sparse by design: only rows near the viewport have been fetched. */
+  channels: (Channel | undefined)[];
   guide: Map<string, Programme[]>;
   from: Date;
   until: Date;
@@ -40,15 +67,35 @@ export function GuideGrid({
   onSelect: (id: string) => void;
   onShift: (hours: number) => void;
   onNow: () => void;
+  onRange?: (first: number, last: number) => void;
   loading: boolean;
+  /**
+   * The lineup view: the channel column becomes the page's lineup (a third
+   * of the width, with favourites, what's on and guide gaps) and head sits
+   * above it, beside the guide's toolbar. One scroller keeps every channel
+   * row level with its listings.
+   */
+  head?: ReactNode;
+  covered?: (c: Channel) => boolean | undefined;
+  onToggleFavorite?: (c: Channel) => void;
+  /** Shown instead of the default when there are no rows. */
+  emptyHint?: ReactNode;
+  selection?: ChannelSelection;
+  bulkActions?: ReactNode;
 }) {
+  const lineup = head !== undefined;
+  const loadedChannels = useMemo(
+    () => channels.filter((c): c is Channel => c !== undefined),
+    [channels],
+  );
   const [zoom, setZoom] = useState<Zoom>("normal");
   const ppm = ZOOM[zoom];
   const start = from.getTime();
   const minutes = (until.getTime() - start) / MINUTE;
   const width = minutes * ppm;
   const scroller = useRef<HTMLDivElement>(null);
-  const [view, setView] = useState({ top: 0, height: 800, left: 0 });
+  const [view, setView] = useState({ top: 0, height: 800, left: 0, width: 1200 });
+  const chCol = lineup ? Math.max(LINEUP_MIN, Math.round(view.width / 3)) : CH_COL;
   const x = (ms: number) => ((ms - start) / MINUTE) * ppm;
   const nowX = x(now);
   const nowVisible = now >= start && now <= until.getTime();
@@ -74,7 +121,12 @@ export function GuideGrid({
     const el = scroller.current;
     if (!el) return;
     const measure = () =>
-      setView({ top: el.scrollTop, height: el.clientHeight, left: el.scrollLeft });
+      setView({
+        top: el.scrollTop,
+        height: el.clientHeight,
+        left: el.scrollLeft,
+        width: el.clientWidth,
+      });
     measure();
     const ro = typeof ResizeObserver !== "undefined" ? new ResizeObserver(measure) : null;
     ro?.observe(el);
@@ -83,6 +135,9 @@ export function GuideGrid({
 
   const first = Math.max(0, Math.floor((view.top - HEADER) / ROW) - 6);
   const last = Math.min(channels.length, Math.ceil((view.top + view.height) / ROW) + 6);
+  useEffect(() => {
+    onRange?.(first, last);
+  }, [first, last, onRange]);
 
   const ticks = useMemo(() => {
     const out: number[] = [];
@@ -98,51 +153,127 @@ export function GuideGrid({
     day: "numeric",
   });
 
+  // Full screen shows only the guide: the browser's Fullscreen API on this
+  // element, or a window-filling overlay where that API is missing.
+  const root = useRef<HTMLDivElement>(null);
+  const [nativeFull, setNativeFull] = useState(false);
+  const [pseudoFull, setPseudoFull] = useState(false);
+  const full = nativeFull || pseudoFull;
+  useEffect(() => {
+    const sync = () => setNativeFull(document.fullscreenElement === root.current);
+    document.addEventListener("fullscreenchange", sync);
+    return () => document.removeEventListener("fullscreenchange", sync);
+  }, []);
+  useEffect(() => {
+    if (!pseudoFull) return;
+    const esc = (e: KeyboardEvent) => e.key === "Escape" && setPseudoFull(false);
+    window.addEventListener("keydown", esc);
+    return () => window.removeEventListener("keydown", esc);
+  }, [pseudoFull]);
+  const toggleFull = async () => {
+    if (pseudoFull) return setPseudoFull(false);
+    if (document.fullscreenElement) return void (await document.exitFullscreen());
+    if (root.current?.requestFullscreen) {
+      try {
+        await root.current.requestFullscreen();
+        return;
+      } catch {
+        // Refused (e.g. an iframe without allowfullscreen): fill the window.
+      }
+    }
+    setPseudoFull(true);
+  };
+
   return (
-    <div className="flex h-full min-h-[28rem] flex-col">
-      <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-border bg-surface px-3 py-2 sm:px-4">
-        <div className="mr-auto flex items-baseline gap-2">
-          <h2 className="text-sm font-semibold text-fg">{t("Guide")}</h2>
-          <span className="text-xs text-fg-muted">
-            {tn(channels.length, "{day} · {count} channel", "{day} · {count} channels", {
-              day: dayLabel,
-            })}
-          </span>
-          {loading ? <span className="text-xs text-fg-subtle">{t("Updating…")}</span> : null}
-        </div>
-        <div className="flex items-center gap-1">
-          <Button variant="ghost" size="sm" aria-label={t("Earlier")} onClick={() => onShift(-3)}>
-            <ChevronLeft size={15} />
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => {
-              jumpNow();
-              scrollToNow(true);
-            }}
+    <div
+      ref={root}
+      className={cn(
+        "relative flex h-full min-h-[28rem] flex-col bg-bg",
+        // Without the Fullscreen API (iOS Safari), fill the window instead.
+        pseudoFull && "fixed inset-0 z-[100] h-dvh",
+      )}
+    >
+      <div className={cn("flex shrink-0", lineup && "border-b border-border")}>
+        {lineup ? (
+          <div className="shrink-0 border-r border-border bg-bg-subtle" style={{ width: chCol }}>
+            {head}
+          </div>
+        ) : null}
+        <div className={cn("flex min-w-0 flex-1", lineup && "h-[104px]")}>
+          {lineup ? (
+            <OnNowStrip channels={loadedChannels} guide={guide} now={now} onSelect={onSelect} />
+          ) : null}
+          <div
+            className={cn(
+              "flex min-w-0 flex-wrap items-center gap-1 bg-surface px-2 py-1.5",
+              lineup
+                ? "ml-auto w-44 shrink-0 content-center justify-center border-l border-border"
+                : "flex-1 border-b border-border sm:px-4",
+            )}
           >
-            <span className="relative mr-1 flex size-2">
-              <span className="absolute inline-flex size-full animate-ping rounded-full bg-danger/60" />
-              <span className="relative inline-flex size-2 rounded-full bg-danger" />
-            </span>
-            {t("Now")}
-          </Button>
-          <Button variant="ghost" size="sm" aria-label={t("Later")} onClick={() => onShift(3)}>
-            <ChevronRight size={15} />
-          </Button>
+            <div
+              className={cn(
+                "flex min-w-0 items-baseline gap-2",
+                lineup ? "w-full justify-center" : "mr-auto",
+              )}
+            >
+              <h2 className="text-sm font-semibold text-fg">{t("Guide")}</h2>
+              <span className={cn("text-xs text-fg-muted", lineup && "sr-only")}>
+                {tn(channels.length, "{day} · {count} channel", "{day} · {count} channels", {
+                  day: dayLabel,
+                })}
+              </span>
+              {loading ? <span className="text-xs text-fg-subtle">{t("Updating…")}</span> : null}
+            </div>
+            <div className="flex items-center gap-1">
+              <Button
+                variant="ghost"
+                size="sm"
+                aria-label={t("Earlier")}
+                onClick={() => onShift(-3)}
+              >
+                <ChevronLeft size={15} />
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  jumpNow();
+                  scrollToNow(true);
+                }}
+              >
+                <span className="relative mr-1 flex size-2">
+                  <span className="absolute inline-flex size-full animate-ping rounded-full bg-danger/60" />
+                  <span className="relative inline-flex size-2 rounded-full bg-danger" />
+                </span>
+                {t("Now")}
+              </Button>
+              <Button variant="ghost" size="sm" aria-label={t("Later")} onClick={() => onShift(3)}>
+                <ChevronRight size={15} />
+              </Button>
+            </div>
+            <Segmented
+              ariaLabel={t("Zoom")}
+              size="sm"
+              value={zoom}
+              onChange={setZoom}
+              options={[
+                { value: "tight", label: unit(6, "hour") },
+                { value: "normal", label: unit(4, "hour") },
+                { value: "wide", label: unit(3, "hour") },
+              ]}
+            />
+            <Button
+              variant="ghost"
+              size="sm"
+              aria-label={full ? t("Exit full screen") : t("Full screen guide")}
+              aria-pressed={full}
+              onClick={() => void toggleFull()}
+            >
+              {full ? <Minimize2 size={15} /> : <Maximize2 size={15} />}
+            </Button>
+          </div>
         </div>
-        <Segmented
-          ariaLabel={t("Zoom")}
-          size="sm"
-          value={zoom}
-          onChange={setZoom}
-          options={[
-            { value: "tight", label: unit(6, "hour") },
-            { value: "normal", label: unit(4, "hour") },
-            { value: "wide", label: unit(3, "hour") },
-          ]}
-        />
       </div>
 
       <div
@@ -155,13 +286,17 @@ export function GuideGrid({
             top: e.currentTarget.scrollTop,
             height: e.currentTarget.clientHeight,
             left: e.currentTarget.scrollLeft,
+            width: e.currentTarget.clientWidth,
           })
         }
         className="app-scroll relative min-h-0 flex-1 overflow-auto bg-bg"
       >
         <div
           className="relative"
-          style={{ width: CH_COL + width, height: HEADER + channels.length * ROW }}
+          style={{
+            width: chCol + width,
+            height: HEADER + channels.length * ROW + (selection?.ids.size ? 100 : 0),
+          }}
         >
           {/* time ruler */}
           <div
@@ -170,8 +305,20 @@ export function GuideGrid({
           >
             <div
               className="sticky left-0 z-40 flex shrink-0 items-center border-r border-border bg-surface px-3 text-[11px] font-semibold uppercase tracking-wider text-fg-subtle"
-              style={{ width: CH_COL }}
+              style={{ width: chCol }}
             >
+              {selection ? (
+                <Checkbox
+                  className="mr-3"
+                  checked={selection.all}
+                  ref={(el) => {
+                    if (el) el.indeterminate = !selection.all && selection.ids.size > 0;
+                  }}
+                  disabled={selection.busy || !channels.length}
+                  aria-label={t("Select all matches")}
+                  onChange={selection.toggleAll}
+                />
+              ) : null}
               {t("Channel")}
             </div>
             <div className="relative" style={{ width }}>
@@ -208,7 +355,7 @@ export function GuideGrid({
           {/* half-hour gridlines */}
           <div
             className="pointer-events-none absolute bottom-0 z-0"
-            style={{ left: CH_COL, top: HEADER, width }}
+            style={{ left: chCol, top: HEADER, width }}
             aria-hidden
           >
             {ticks.map((tick) => (
@@ -222,6 +369,25 @@ export function GuideGrid({
 
           {channels.slice(first, last).map((c, k) => {
             const i = first + k;
+            if (!c)
+              return (
+                <div
+                  key={`pending-${i}`}
+                  role="row"
+                  aria-busy="true"
+                  aria-rowindex={i + 1}
+                  className="absolute left-0 flex border-b border-border/60 bg-bg-subtle/40"
+                  style={{ top: HEADER + i * ROW, height: ROW, width: chCol + width }}
+                >
+                  <div
+                    className="sticky left-0 z-20 flex shrink-0 items-center border-r border-border bg-surface px-4"
+                    style={{ width: chCol }}
+                    aria-hidden
+                  >
+                    <div className="h-3 w-2/3 animate-pulse rounded bg-fg-subtle/15" />
+                  </div>
+                </div>
+              );
             const ps = guide.get(c.id) ?? [];
             const on = c.id === selected;
             const live = onNow(ps, now);
@@ -229,47 +395,62 @@ export function GuideGrid({
               <div
                 key={c.id}
                 role="row"
+                aria-selected={selection ? selection.ids.has(c.id) : undefined}
                 aria-rowindex={i + 1}
                 className={cn(
                   "absolute left-0 flex border-b border-border/60",
                   on ? "bg-primary-subtle/40" : i % 2 ? "bg-bg" : "bg-bg-subtle/40",
                 )}
-                style={{ top: HEADER + i * ROW, height: ROW, width: CH_COL + width }}
+                style={{ top: HEADER + i * ROW, height: ROW, width: chCol + width }}
               >
-                <button
-                  type="button"
-                  role="rowheader"
-                  onClick={() => onSelect(c.id)}
-                  className={cn(
-                    "sticky left-0 z-20 flex shrink-0 items-center gap-2.5 border-r border-border px-3 text-left transition-colors hover:bg-surface-hover",
-                    on ? "bg-primary-subtle" : "bg-surface",
-                  )}
-                  style={{ width: CH_COL }}
-                  aria-label={t("Channel {number} {name}", { number: c.number, name: c.name })}
-                >
-                  <span className="w-7 shrink-0 text-right font-mono text-[11px] tabular-nums text-fg-subtle">
-                    {c.number}
-                  </span>
-                  <ChannelLogo name={c.name} logo={c.logo} seed={c.id} size={32} />
-                  <span className="min-w-0 flex-1">
-                    <span className="flex items-center gap-1">
-                      <span className="truncate text-[13px] font-medium text-fg">{c.name}</span>
-                      {c.favorite ? (
-                        <Star size={10} className="shrink-0 fill-warning text-warning" />
-                      ) : null}
+                {lineup ? (
+                  <LineupCell
+                    channel={c}
+                    live={live}
+                    hasGuide={covered?.(c)}
+                    on={on}
+                    now={now}
+                    width={chCol}
+                    onSelect={onSelect}
+                    onToggleFavorite={onToggleFavorite}
+                    selection={selection}
+                  />
+                ) : (
+                  <button
+                    type="button"
+                    role="rowheader"
+                    onClick={() => onSelect(c.id)}
+                    className={cn(
+                      "sticky left-0 z-20 flex shrink-0 items-center gap-2.5 border-r border-border px-3 text-left transition-colors hover:bg-surface-hover",
+                      on ? "bg-primary-subtle" : "bg-surface",
+                    )}
+                    style={{ width: chCol }}
+                    aria-label={t("Channel {number} {name}", { number: c.number, name: c.name })}
+                  >
+                    <span className="w-7 shrink-0 text-right font-mono text-[11px] tabular-nums text-fg-subtle">
+                      {c.number}
                     </span>
-                    <span className="block truncate text-[11px] text-fg-subtle">
-                      {live
-                        ? t("{time} left", {
-                            time: unit(
-                              Math.max(1, Math.round((Date.parse(live.end) - now) / MINUTE)),
-                              "minute",
-                            ),
-                          })
-                        : c.group || (c.kind === "virtual" ? t("Virtual") : t("Live"))}
+                    <ChannelLogo name={c.name} logo={c.logo} seed={c.id} size={32} />
+                    <span className="min-w-0 flex-1">
+                      <span className="flex items-center gap-1">
+                        <span className="truncate text-[13px] font-medium text-fg">{c.name}</span>
+                        {c.favorite ? (
+                          <Star size={10} className="shrink-0 fill-warning text-warning" />
+                        ) : null}
+                      </span>
+                      <span className="block truncate text-[11px] text-fg-subtle">
+                        {live
+                          ? t("{time} left", {
+                              time: unit(
+                                Math.max(1, Math.round((Date.parse(live.end) - now) / MINUTE)),
+                                "minute",
+                              ),
+                            })
+                          : c.group || (c.kind === "virtual" ? t("Virtual") : t("Live"))}
+                      </span>
                     </span>
-                  </span>
-                </button>
+                  </button>
+                )}
                 <div className="relative" style={{ width }}>
                   {ps.length === 0 ? (
                     <div
@@ -365,14 +546,20 @@ export function GuideGrid({
           })}
 
           {nowVisible ? (
+            // Above programme cards (z-10 on hover) but below the sticky
+            // channel column (z-20), so scrolling never draws it over names.
             <div
-              className="pointer-events-none absolute bottom-0 z-[25] w-0.5 bg-danger shadow-[0_0_8px] shadow-danger/60"
-              style={{ left: CH_COL + nowX - 1, top: HEADER }}
+              className="pointer-events-none absolute bottom-0 z-[15] w-0.5 bg-danger shadow-[0_0_8px] shadow-danger/60"
+              style={{ left: chCol + nowX - 1, top: HEADER }}
               aria-hidden
             />
           ) : null}
         </div>
-        {channels.length === 0 ? (
+        {channels.length === 0 && emptyHint ? (
+          <div className="absolute inset-0 top-9 grid place-items-center p-8 text-center">
+            <div className="max-w-sm">{emptyHint}</div>
+          </div>
+        ) : channels.length === 0 ? (
           <div className="absolute inset-0 top-9 grid place-items-center p-8 text-center">
             <div className="max-w-sm space-y-2">
               <Tv className="mx-auto text-fg-subtle" size={28} />
@@ -386,6 +573,135 @@ export function GuideGrid({
           </div>
         ) : null}
       </div>
+      {bulkActions ? (
+        <div className="pointer-events-none absolute inset-x-3 bottom-3 z-40 flex justify-center">
+          {bulkActions}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+/** A lineup row's channel cell: what the Live TV lineup shows for a channel. */
+function LineupCell({
+  channel: c,
+  live,
+  hasGuide,
+  on,
+  now,
+  width,
+  onSelect,
+  onToggleFavorite,
+  selection,
+}: {
+  channel: Channel;
+  live: Programme | undefined;
+  hasGuide: boolean | undefined;
+  on: boolean;
+  now: number;
+  width: number;
+  onSelect: (id: string) => void;
+  onToggleFavorite?: (c: Channel) => void;
+  selection?: ChannelSelection;
+}) {
+  const checked = selection?.ids.has(c.id) ?? false;
+  return (
+    <div
+      role="rowheader"
+      className={cn(
+        "group sticky left-0 z-20 flex shrink-0 items-center border-r border-border",
+        on || checked ? "bg-primary-subtle" : "bg-surface",
+      )}
+      style={{ width }}
+    >
+      {selection ? (
+        <div className="flex w-8 shrink-0 justify-end">
+          <Checkbox
+            checked={checked}
+            disabled={selection.busy}
+            aria-label={t("Select {channel}", { channel: c.name })}
+            onChange={(e) => selection.toggle(c.id, (e.nativeEvent as MouseEvent).shiftKey)}
+          />
+        </div>
+      ) : null}
+      <button
+        type="button"
+        onClick={() => onSelect(c.id)}
+        aria-current={on ? "true" : undefined}
+        aria-label={`${c.number} ${c.name}`}
+        className={cn(
+          "flex h-full min-w-0 flex-1 items-center gap-2.5 px-2 text-left transition-colors hover:bg-surface-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/50",
+          !c.enabled && "opacity-55",
+        )}
+      >
+        <span
+          className={cn(
+            "w-7 shrink-0 text-right font-mono text-xs tabular-nums",
+            on ? "text-primary" : "text-fg-subtle",
+          )}
+        >
+          {c.number}
+        </span>
+        <ChannelLogo name={c.name} logo={c.logo} seed={c.id} size={34} />
+        <span className="min-w-0 flex-1">
+          <span className="flex items-center gap-1">
+            <span className={cn("truncate text-sm font-medium", on ? "text-primary" : "text-fg")}>
+              {c.name}
+            </span>
+            {c.health === "unavailable" ? (
+              <Badge variant="secondary">{t("Unavailable")}</Badge>
+            ) : null}
+            {c.favorite ? (
+              <Star
+                size={11}
+                className="shrink-0 fill-warning text-warning"
+                aria-label={t("Favourite")}
+              />
+            ) : null}
+          </span>
+          {live ? (
+            <span className="block">
+              <span className="block truncate text-xs text-fg-muted">{live.item.title}</span>
+              <span className="mt-1 block h-0.5 overflow-hidden rounded-full bg-border">
+                <span
+                  className="block h-full rounded-full bg-primary/70"
+                  style={{ width: `${progress(live, now) * 100}%` }}
+                />
+              </span>
+            </span>
+          ) : (
+            <span className="block truncate text-xs text-fg-subtle">
+              {!c.enabled
+                ? t("Off air")
+                : hasGuide === false
+                  ? t("No guide data")
+                  : c.group || (c.kind === "virtual" ? t("Virtual") : t("Live"))}
+            </span>
+          )}
+        </span>
+        {hasGuide === false && c.enabled ? (
+          <AlertTriangle
+            size={13}
+            className="shrink-0 text-warning"
+            aria-label={t("No guide data")}
+          />
+        ) : null}
+      </button>
+      {onToggleFavorite ? (
+        <button
+          type="button"
+          onClick={() => onToggleFavorite(c)}
+          aria-label={
+            c.favorite
+              ? t("Unfavourite {channel}", { channel: c.name })
+              : t("Favourite {channel}", { channel: c.name })
+          }
+          aria-pressed={c.favorite}
+          className="absolute right-2 top-1/2 hidden -translate-y-1/2 rounded-md bg-surface p-1 text-fg-subtle shadow-sm hover:text-warning focus-visible:block group-hover:block"
+        >
+          <Star size={13} className={cn(c.favorite && "fill-warning text-warning")} />
+        </button>
+      ) : null}
     </div>
   );
 }
@@ -412,15 +728,20 @@ export function OnNowStrip({
         Number(b.c.favorite) - Number(a.c.favorite) ||
         Number(Boolean(b.p.item.thumb)) - Number(Boolean(a.p.item.thumb)),
     );
-    return live.slice(0, 10);
+    const seen = new Set<string>();
+    return live
+      .filter(({ p }) => {
+        const title = p.item.title.trim().toLowerCase();
+        if (seen.has(title)) return false;
+        seen.add(title);
+        return true;
+      })
+      .slice(0, 10);
   }, [channels, guide, now]);
   if (!picks.length) return null;
   return (
-    <section
-      aria-label={t("On now")}
-      className="shrink-0 border-b border-border bg-surface px-3 pb-3 pt-2.5 sm:px-4"
-    >
-      <div className="mb-2 flex items-center gap-2">
+    <section aria-label={t("On now")} className="flex min-w-0 flex-1 items-center bg-surface px-2">
+      <div className="sr-only">
         <span className="relative flex size-2">
           <span className="absolute inline-flex size-full animate-ping rounded-full bg-danger/60" />
           <span className="relative inline-flex size-2 rounded-full bg-danger" />
@@ -429,7 +750,7 @@ export function OnNowStrip({
           {t("On now")}
         </h2>
       </div>
-      <div className="app-scroll -mx-1 flex gap-2.5 overflow-x-auto px-1 pb-1">
+      <div className="app-scroll flex w-full gap-2 overflow-x-auto py-1 [scrollbar-gutter:auto]">
         {picks.map(({ c, p }) => {
           const hue = hueOf(c.id);
           return (
@@ -443,9 +764,9 @@ export function OnNowStrip({
                 background: `linear-gradient(120deg, hsl(${hue} 60% 22%), hsl(${(hue + 50) % 360} 55% 12%))`,
               }}
             >
-              {p.item.thumb ? (
+              {p.item.thumb || c.logo ? (
                 <Artwork
-                  src={p.item.thumb}
+                  src={p.item.thumb || c.logo}
                   alt=""
                   title=""
                   className="absolute inset-y-0 right-0 w-24 opacity-90 [mask-image:linear-gradient(to_left,black_40%,transparent)]"

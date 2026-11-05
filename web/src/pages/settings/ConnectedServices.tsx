@@ -29,6 +29,7 @@ import type { EtherConfig } from "../../lib/types";
 import { PosterAccounts } from "./PosterAccounts";
 import { RatingSources, type RatingSettings } from "../metadata/Ratings";
 import { SimklSettings } from "./SimklIntegration";
+import { PlexServers, PlexServersCard } from "./PlexServers";
 import { LanguageFeatures } from "./LanguageFeatures";
 import { LanguageModelSettings } from "./LanguageModel";
 import { asObj, GenericFields, SchemaField, type FieldGroup } from "./SchemaForm";
@@ -46,6 +47,7 @@ export type ServiceTab =
   | "tmdb"
   | "trakt"
   | "simkl"
+  | "plexservers"
   | "llm"
   | "opensubtitles"
   | "ratings"
@@ -61,6 +63,7 @@ const TAB_ORDER: ServiceTab[] = [
   "tmdb",
   "trakt",
   "simkl",
+  "plexservers",
   "llm",
   "opensubtitles",
   "ratings",
@@ -81,13 +84,19 @@ export function integrationTabs(
     tmdb: "TMDB",
     trakt: "Trakt",
     simkl: "Simkl",
+    plexservers: t("Plex Media Servers"),
     llm: t("Language model"),
     opensubtitles: "OpenSubtitles",
     ratings: t("Ratings"),
     introdb: "TheIntroDB",
   };
   return TAB_ORDER.filter(
-    (key) => key === "overview" || key === "tmdb" || key === "introdb" || enabled[key],
+    (key) =>
+      key === "overview" ||
+      key === "tmdb" ||
+      key === "introdb" ||
+      key === "plexservers" ||
+      enabled[key],
   ).map((key) => ({
     key,
     label: labels[key],
@@ -99,7 +108,7 @@ interface Service {
   configKey: "trakt" | "simkl" | "llm" | "openSubtitles" | "markers";
   endpoint: string;
   /** Boolean this card's switch writes. Omitted fields stay stored. */
-  flag: "enabled" | "accountEnabled";
+  flag: "enabled" | "theIntroDb";
   label: string;
   groups: FieldGroup[];
   form?: (props: {
@@ -178,7 +187,7 @@ const SERVICES: Service[] = localized(() => [
     tab: "introdb",
     configKey: "markers",
     endpoint: "markers",
-    flag: "accountEnabled",
+    flag: "theIntroDb",
     label: "TheIntroDB",
     groups: S.MARKERS,
     testLabel: t("Test TheIntroDB"),
@@ -227,7 +236,6 @@ function useSectionDrafts(stored: Record<string, Obj> | null) {
     setDraft(stored ? structuredClone(stored) : null);
     setBases(sectionBases(stored));
     // storedKey stands in for the stored snapshot.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [storedKey]);
   return { draft, setDraft, dirty, reset };
 }
@@ -261,7 +269,7 @@ function textField(section: Obj, key: string, fallback: string): string {
 }
 
 /** A saved language model can translate and answer search. */
-export function languageModelReady(section: Obj | undefined): boolean {
+function languageModelReady(section: Obj | undefined): boolean {
   if (!section || section.enabled !== true) return false;
   const model = textField(section, "model", "").trim();
   if (!model) return false;
@@ -271,7 +279,7 @@ export function languageModelReady(section: Obj | undefined): boolean {
 }
 
 /** Speech-to-text is a separate endpoint from the chat model. */
-export function speechToTextReady(section: Obj | undefined): boolean {
+function speechToTextReady(section: Obj | undefined): boolean {
   if (!section) return false;
   return (
     textField(section, "speechBaseUrl", "").trim() !== "" &&
@@ -345,7 +353,7 @@ function mergeSection(
         ...base,
         markers: {
           ...prev,
-          accountEnabled: boolField(section, "accountEnabled", prev.accountEnabled ?? false),
+          theIntroDb: boolField(section, "theIntroDb", prev.theIntroDb),
           apiKey: textField(section, "apiKey", prev.apiKey),
         },
       };
@@ -442,6 +450,7 @@ export function ConnectedServices({
     flags.ratings = true;
     flags.tmdb = true;
     flags.introdb = true;
+    flags.plexservers = true;
     return flags;
   }, [stored, posterFlags]);
 
@@ -468,7 +477,6 @@ export function ConnectedServices({
       openSectionSetup(service, draft[service.configKey] ?? {});
     }
     // Setup openers are stable setState wrappers. Re-running would reset a drawer mid-edit.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [draft, requested, enabled, navigate, posterFlags]);
 
   const runTest = useCallback((s: Service, value: Obj) => {
@@ -946,6 +954,11 @@ export function ConnectedServices({
           </div>
         );
       })}
+      {tab === "plexservers" || visited.has("plexservers") ? (
+        <div hidden={tab !== "plexservers"}>
+          <PlexServers />
+        </div>
+      ) : null}
       {tab === "ratings" || visited.has("ratings") ? (
         <div hidden={tab !== "ratings"}>
           <IntegrationTab
@@ -1124,6 +1137,7 @@ function ServiceOverview({
           configureHref="/services/simkl"
           configureLabel={on("simkl") ? t("Manage Simkl") : t("Set up Simkl")}
         />
+        <PlexServersCard />
       </IntegrationGroup>
       <>
         <IntegrationGroup title={t("Artwork and ratings")}>

@@ -1,4 +1,11 @@
-import { Badge, Button, Input, confirmDialog, toast } from "@braedonsaunders/appkit-ui";
+import {
+  Badge,
+  Button,
+  Input,
+  SearchSelect,
+  confirmDialog,
+  toast,
+} from "@braedonsaunders/appkit-ui";
 import {
   AlertTriangle,
   CalendarRange,
@@ -11,23 +18,37 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ComponentProps } from "react";
 import { Link } from "react-router-dom";
 import { Field, SecretInput, Segmented } from "../../components/fields";
-import { localized, t } from "../../i18n";
-import { errorMessage } from "../../lib/api";
+import { SubtabNav } from "../../components/layout";
+import { localized, t, tn } from "../../i18n";
+import { useLocale } from "../../i18n/react";
+import { searchSelectLabels } from "../../i18n/appkit-labels";
+import { REGION_CODES } from "../catalog/CatalogPickers";
+import { browserLanguageList, regionFromLocales, regionFromTimeZone } from "../setup/language";
+import { api, errorMessage } from "../../lib/api";
 import { isPluginDescriptor, textOf, useRegistry, type Descriptor } from "../../lib/extend";
 import type { ParamField } from "../../lib/rules";
-import { formatNumber, relativeTime } from "../../lib/format";
+import { formatBytes, formatNumber, relativeTime } from "../../lib/format";
+import { ChannelGroups, ProviderAccountCard } from "./SourceGroups";
+import { sourceImportError } from "./sourceErrors";
+import { SourceLimits } from "./SourceLimits";
 import {
   dayClock,
   duration,
   emptySource,
+  normGroup,
+  plexLineupCount,
+  plexLineupName,
   tv,
   type AuthType,
+  type GroupRules,
   type Source,
   type SourceAuth,
   type SourceDraft,
+  type PlexLineup,
+  type SourceProgress,
 } from "./model";
 
 export type SourceKind = "playlist" | "guide";
@@ -70,11 +91,17 @@ function uploadError(file: File, key: "playlist" | "guide"): string {
 export function SourceEditor({
   source,
   kind: initialKind,
+  guideOnly = false,
+  onGuideKindChange,
+  onKindChange,
   onSaved,
   onDeleted,
 }: {
   source: Source | null;
   kind: SourceKind;
+  guideOnly?: boolean;
+  onGuideKindChange?: (kind: "xmltv" | "plex") => void;
+  onKindChange?: (kind: SourceKind) => void;
   onSaved: (s: Source) => Promise<void> | void;
   onDeleted: () => Promise<void> | void;
 }) {
@@ -82,6 +109,43 @@ export function SourceEditor({
   const [kind, setKind] = useState<SourceKind>(initialKind);
   const [busy, setBusy] = useState<"" | "save" | "refresh" | "delete">("");
   const [error, setError] = useState("");
+  const [guideKind, setGuideKind] = useState<"xmltv" | "plex">("xmltv");
+  const [lineups, setLineups] = useState<PlexLineup[] | null>(null);
+  const [looking, setLooking] = useState(false);
+  const [tab, setTab] = useState<"connection" | "groups" | "limits">("connection");
+  const { locale } = useLocale();
+  const browserRegion = useMemo(() => {
+    const languageRegion = regionFromLocales(browserLanguageList(), "");
+    const zoneRegion = regionFromTimeZone(Intl.DateTimeFormat().resolvedOptions().timeZone);
+    return languageRegion && languageRegion !== "US"
+      ? languageRegion
+      : zoneRegion || languageRegion;
+  }, []);
+  const [serverRegion, setServerRegion] = useState("");
+  // The catalogue's US/en-US defaults do not establish the server's country.
+  useEffect(() => {
+    void api
+      .getConfig()
+      .then((cfg) => {
+        const code = cfg.catalog.region?.toUpperCase() ?? "";
+        const isDefault = code === "US" && cfg.catalog.language === "en-US";
+        setServerRegion(REGION_CODES.includes(code) && !isDefault ? code : "");
+      })
+      .catch(() => {});
+  }, []);
+  const region = serverRegion || browserRegion;
+  const countries = useMemo(() => {
+    const names = new Intl.DisplayNames([locale], { type: "region" });
+    return REGION_CODES.map((code) => ({ value: code, label: names.of(code) ?? code })).sort(
+      (a, b) => a.label.localeCompare(b.label, locale),
+    );
+  }, [locale]);
+  const [progress, setProgress] = useState<SourceProgress | null>(null);
+  const [progressRate, setProgressRate] = useState(0);
+  const [progressUnavailable, setProgressUnavailable] = useState(false);
+  const [savedImport, setSavedImport] = useState<Source | null>(null);
+  // First sample of the current import step, for a stable rows-or-bytes rate.
+  const rateBase = useRef<{ stage: string; at: number; value: number } | null>(null);
   const [files, setFiles] = useState<{ playlist: File | null; guide: File | null }>({
     playlist: null,
     guide: null,
@@ -92,7 +156,7 @@ export function SourceEditor({
   const kindDescriptors: LiveTVDescriptor[] = registry.descriptors;
   const byEditor = (editor: string) => kindDescriptors.find((d) => d.meta?.editor === editor);
   const typeDescriptors = kindDescriptors.filter(
-    (d) => d.meta?.editor === "playlist" || d.meta?.editor === "guide",
+    (d) => (d.meta?.editor === "playlist" || d.meta?.editor === "guide") && d.id !== "plex",
   );
   const pluginKinds = kindDescriptors.filter(
     (d) =>
@@ -117,14 +181,22 @@ export function SourceEditor({
             ...emptySource(),
             id: source.id,
             kind: source.kind,
-            name: source.name,
+            name: source.kind === "plex" ? plexLineupName(source.name) : source.name,
+            lineupId: source.lineupId,
+            country: source.country,
+            postalCode: source.postalCode,
             playlistUrl: source.playlistUrl ?? "",
             guideUrl: source.guideUrl ?? "",
             refreshHours: source.refreshHours,
             auth: source.auth ? structuredClone(source.auth) : undefined,
+            ...groupRules(source),
+            maxConnections: source.maxConnections,
+            tuneGapSeconds: source.tuneGapSeconds,
+            tunesPerHour: source.tunesPerHour,
           }
         : emptySource(),
     );
+    setTab("connection");
     setKind(
       source
         ? source.hasPlaylist === false ||
@@ -133,8 +205,15 @@ export function SourceEditor({
           : "playlist"
         : initialKind,
     );
+    setGuideKind(source?.kind === "plex" ? "plex" : "xmltv");
+    setLineups(null);
     setFiles({ playlist: null, guide: null });
     setError("");
+    setProgress(null);
+    setProgressUnavailable(false);
+    setSavedImport(null);
+    setProgressRate(0);
+    rateBase.current = null;
   }, [source, initialKind]);
 
   const upload = (file: File | undefined, key: "playlist" | "guide") => {
@@ -156,21 +235,69 @@ export function SourceEditor({
   const auth = draft.auth ?? {};
   const xtream = kind === "playlist" && auth.type === "xtream";
   const setAuth = (patch: SourceAuth) => setDraft((d) => ({ ...d, auth: { ...d.auth, ...patch } }));
+  const plex = kind === "guide" && guideKind === "plex";
   const canSave =
     draft.name.trim() !== "" &&
     (xtream
       ? Boolean(auth.server?.trim() && auth.username?.trim() && auth.password)
       : kind === "playlist"
         ? Boolean(files.playlist || draft.playlist || draft.playlistUrl)
-        : Boolean(files.guide || draft.guide || draft.guideUrl));
+        : plex
+          ? Boolean(draft.lineupId && (draft.country || region) && draft.postalCode)
+          : Boolean(files.guide || draft.guide || draft.guideUrl));
 
   const save = async () => {
     setBusy("save");
     setError("");
+    setProgressUnavailable(false);
+    setSavedImport(null);
+    setProgress(null);
+    setProgressRate(0);
+    rateBase.current = null;
+    const progressId = `import-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+    let polling = false;
+    const poll = window.setInterval(() => {
+      if (polling) return;
+      polling = true;
+      void tv
+        .sourceProgress(progressId)
+        .then((p) => {
+          if (!p) throw new Error("progress unavailable");
+          setProgressUnavailable(false);
+          const stage = progressStage(p);
+          const value = progressValue(p, stage);
+          const now = Date.now();
+          const base = rateBase.current;
+          if (!base || base.stage !== stage) {
+            rateBase.current = { stage, at: now, value };
+            setProgressRate(0);
+          } else if (now - base.at >= 2000) {
+            const delta = value - base.value;
+            if (delta > 0) setProgressRate(delta / ((now - base.at) / 1000));
+          }
+          setProgress(p);
+        })
+        .catch(async () => {
+          setProgressUnavailable(true);
+          // Progress is local to the importing node. A load-balanced poll may
+          // reach another node: saved source state is shared and authoritative.
+          if (source) {
+            try {
+              setSavedImport((await tv.sources()).find((s) => s.id === source.id) ?? null);
+            } catch {
+              /* The import request still reports its final result. */
+            }
+          }
+        })
+        .finally(() => {
+          polling = false;
+        });
+    }, 750);
     try {
       const body: SourceDraft =
         kind === "guide" || xtream ? { ...draft, playlist: "", playlistUrl: "" } : { ...draft };
-      body.kind = pluginBacked ? (selectedPlugin?.id ?? draft.kind) : "";
+      body.kind = plex ? "plex" : pluginBacked ? (selectedPlugin?.id ?? draft.kind) : "";
+      if (plex) body.country = (draft.country || region).toUpperCase();
       body.auth = pluginBacked ? undefined : cleanAuth(draft.auth, kind);
       const playlistFile = kind === "playlist" && !xtream ? files.playlist : null;
       const guideFile = files.guide;
@@ -183,7 +310,7 @@ export function SourceEditor({
         !body.guide &&
         !body.guideUrl &&
         Boolean(playlistFile || guideFile);
-      let saved = await tv.saveSource(body, pending);
+      let saved = await tv.saveSource(body, pending, progressId);
       if (playlistFile) saved = await tv.uploadSource(saved.id, "playlist", playlistFile);
       if (guideFile) saved = await tv.uploadSource(saved.id, "guide", guideFile);
       toast.success(source ? t("Source re-imported") : t("Source imported"), {
@@ -191,8 +318,12 @@ export function SourceEditor({
       });
       await onSaved(saved);
     } catch (e) {
-      setError(errorMessage(e));
+      setError(sourceImportError(e, Boolean(source)));
     } finally {
+      window.clearInterval(poll);
+      setProgress(null);
+      setProgressRate(0);
+      rateBase.current = null;
       setBusy("");
     }
   };
@@ -208,7 +339,7 @@ export function SourceEditor({
       });
       await onSaved(s);
     } catch (e) {
-      setError(errorMessage(e));
+      setError(sourceImportError(e, Boolean(source)));
     } finally {
       setBusy("");
     }
@@ -238,7 +369,21 @@ export function SourceEditor({
   };
 
   const auto = (draft.refreshHours ?? 0) >= 0;
-  const urlBacked = xtream || Boolean(draft.playlistUrl || draft.guideUrl);
+  const groups = kind === "playlist" && !pluginBacked ? source?.groups : undefined;
+  const showGroups = Boolean(groups?.length);
+  // Channel sources get Connection, Channel groups (once a lineup is in) and Limits.
+  const showTabs = kind === "playlist" && !pluginBacked && !plex;
+  const onTab = !showTabs || (tab === "groups" && !showGroups) ? "connection" : tab;
+  const rulesChanged = showGroups && source ? rulesKey(draft) !== rulesKey(source) : false;
+  const setRules = useCallback<ComponentProps<typeof ChannelGroups>["onChange"]>(
+    (update) =>
+      setDraft((d) => ({
+        ...d,
+        ...update({ ...d, excludeGroups: d.excludeGroups ?? [], groupOrder: d.groupOrder ?? [] }),
+      })),
+    [],
+  );
+  const urlBacked = plex || xtream || Boolean(draft.playlistUrl || draft.guideUrl);
 
   return (
     <div className="mx-auto max-w-3xl space-y-5 p-3 sm:p-6">
@@ -254,13 +399,26 @@ export function SourceEditor({
         </span>
         <div className="min-w-0 flex-1">
           <h2 className="truncate text-xl font-semibold tracking-tight text-fg">
-            {source ? source.name : kind === "guide" ? t("New guide source") : t("New IPTV source")}
+            {source
+              ? source.kind === "plex"
+                ? plexLineupName(source.name)
+                : source.name
+              : kind === "guide"
+                ? t("New guide source")
+                : t("New IPTV source")}
           </h2>
           <p className="text-sm text-fg-muted">
-            {textOf((selectedPlugin ?? byEditor(kind === "guide" ? "guide" : "playlist"))?.hint) ||
-              (kind === "guide"
-                ? t("An XMLTV guide on its own. Map any channel to it for listings.")
-                : t("An M3U playlist of live streams, with an optional XMLTV guide."))}
+            {plex
+              ? t("Plex's TV listings for your provider, by postal code.")
+              : textOf(
+                  (
+                    selectedPlugin ??
+                    byEditor(kind === "guide" ? "guide" : xtream ? "xtream" : "playlist")
+                  )?.hint,
+                ) ||
+                (kind === "guide"
+                  ? t("An XMLTV guide on its own. Map any channel to it for listings.")
+                  : t("An M3U playlist of live streams, with an optional XMLTV guide."))}
           </p>
         </div>
         {source ? (
@@ -326,21 +484,65 @@ export function SourceEditor({
           <AlertTriangle size={15} className="mt-0.5 shrink-0 text-danger" />
           <div>
             <p className="font-medium text-fg">{t("The last automatic refresh failed")}</p>
-            <p className="text-fg-muted">
-              {t("{error}. The previous listings are still in use.", { error: source.lastError })}
-            </p>
+            <p className="text-fg-muted">{sourceImportError(source.lastError)}</p>
           </div>
         </div>
       ) : null}
 
-      <section className="space-y-4 rounded-2xl border border-border bg-surface p-5">
-        {!source ? (
+      {xtream && source?.account ? <ProviderAccountCard account={source.account} /> : null}
+
+      {showTabs ? (
+        <SubtabNav
+          ariaLabel={t("Source settings")}
+          active={onTab}
+          onSelect={(key) =>
+            setTab(key === "groups" ? "groups" : key === "limits" ? "limits" : "connection")
+          }
+          tabs={[
+            { key: "connection", label: t("Connection") },
+            ...(showGroups
+              ? [{ key: "groups", label: t("Channel groups"), count: groups?.length }]
+              : []),
+            { key: "limits", label: t("Limits") },
+          ]}
+        />
+      ) : null}
+
+      {onTab === "limits" ? (
+        <section className="rounded-2xl border border-border bg-surface p-5">
+          <SourceLimits
+            rules={draft}
+            account={xtream ? source?.account : undefined}
+            onChange={(next) =>
+              setDraft((d) => ({
+                ...d,
+                maxConnections: next.maxConnections,
+                tuneGapSeconds: next.tuneGapSeconds,
+                tunesPerHour: next.tunesPerHour,
+              }))
+            }
+          />
+        </section>
+      ) : null}
+
+      {onTab === "groups" && groups ? (
+        <section className="rounded-2xl border border-border bg-surface p-5">
+          <ChannelGroups groups={groups} rules={draft} onChange={setRules} />
+        </section>
+      ) : null}
+
+      <section
+        hidden={onTab !== "connection"}
+        className="space-y-4 rounded-2xl border border-border bg-surface p-5"
+      >
+        {!source && !guideOnly ? (
           <div className="space-y-2">
             <Segmented
               ariaLabel={t("Source type")}
               value={kind}
               onChange={(next) => {
                 setKind(next);
+                onKindChange?.(next);
                 if (selectedPlugin) setDraft((d) => ({ ...d, playlistUrl: "" }));
               }}
               options={typeDescriptors.map((d) => ({
@@ -367,6 +569,7 @@ export function SourceEditor({
                     type="button"
                     onClick={() => {
                       setKind("playlist");
+                      onKindChange?.("playlist");
                       setDraft((s) => ({
                         ...s,
                         playlistUrl: d.id,
@@ -381,6 +584,119 @@ export function SourceEditor({
                     </Badge>
                   </button>
                 ))}
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+        {kind === "guide" && !source ? (
+          <Segmented
+            ariaLabel={t("Guide type")}
+            value={guideKind}
+            onChange={(v) => {
+              setGuideKind(v);
+              onGuideKindChange?.(v);
+              setDraft((d) => ({ ...d, lineupId: "" }));
+              setLineups(null);
+            }}
+            options={[
+              { value: "xmltv", label: t("XMLTV guide") },
+              { value: "plex", label: t("Plex guide") },
+            ]}
+          />
+        ) : null}
+        {plex ? (
+          <div className="space-y-3">
+            <div className="grid grid-cols-2 gap-3">
+              <Field label={t("Country")}>
+                <SearchSelect
+                  value={draft.country ?? region}
+                  onChange={(country) => {
+                    setDraft({ ...draft, country, lineupId: "" });
+                    setLineups(null);
+                  }}
+                  options={countries}
+                  ariaLabel={t("Country")}
+                  searchable
+                  {...searchSelectLabels()}
+                />
+              </Field>
+              <Field label={t("Postal code")} htmlFor="plex-postal">
+                <Input
+                  id="plex-postal"
+                  value={draft.postalCode ?? ""}
+                  onChange={(e) => {
+                    setDraft({ ...draft, postalCode: e.currentTarget.value, lineupId: "" });
+                    setLineups(null);
+                  }}
+                />
+              </Field>
+            </div>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={looking || !(draft.country || region) || !draft.postalCode}
+              onClick={() => {
+                setLooking(true);
+                setError("");
+                void tv
+                  .plexLineups(draft.country || region, draft.postalCode || "")
+                  .then(setLineups)
+                  .catch((e) => setError(errorMessage(e)))
+                  .finally(() => setLooking(false));
+              }}
+            >
+              {looking ? t("Finding lineups…") : t("Find lineups")}
+            </Button>
+            {lineups ? (
+              <div className="space-y-1">
+                <p className="text-xs font-semibold text-fg-muted">{t("Choose a lineup")}</p>
+                {lineups.length ? (
+                  [...lineups]
+                    .sort((a, b) => Number(b.type === "ota") - Number(a.type === "ota"))
+                    .map((l) => {
+                      const count = plexLineupCount(l.title);
+                      const type =
+                        l.type === "ota"
+                          ? t("Antenna (over the air)")
+                          : l.type === "cable"
+                            ? t("Cable")
+                            : l.type === "satellite"
+                              ? t("Satellite")
+                              : l.type;
+                      return (
+                        <label
+                          key={l.id}
+                          className="flex cursor-pointer items-center gap-2 rounded-lg border border-border p-2 text-sm"
+                        >
+                          <input
+                            type="radio"
+                            name="plex-lineup"
+                            checked={draft.lineupId === l.id}
+                            onChange={() =>
+                              setDraft({ ...draft, lineupId: l.id, name: plexLineupName(l.title) })
+                            }
+                          />
+                          <span>
+                            <span className="block">{plexLineupName(l.title)}</span>
+                            <span className="text-xs text-fg-muted">
+                              {count === null
+                                ? type
+                                : tn(
+                                    count,
+                                    "{type} · {count} channel",
+                                    "{type} · {count} channels",
+                                    { type },
+                                  )}
+                            </span>
+                          </span>
+                        </label>
+                      );
+                    })
+                ) : (
+                  <p className="text-sm text-fg-muted">
+                    {t("No lineups found for this postal code.")}
+                  </p>
+                )}
               </div>
             ) : null}
           </div>
@@ -495,7 +811,7 @@ export function SourceEditor({
             onFile={(f) => void upload(f, "playlist")}
           />
         ) : null}
-        {!pluginBacked ? (
+        {!pluginBacked && !plex ? (
           <UrlOrFile
             id="src-xmltv"
             label={
@@ -522,8 +838,8 @@ export function SourceEditor({
             onFile={(f) => void upload(f, "guide")}
           />
         ) : null}
-        {!xtream && !pluginBacked ? <SignIn auth={auth} onChange={setAuth} /> : null}
-        {!pluginBacked ? <ClientIdentity auth={auth} onChange={setAuth} /> : null}
+        {!xtream && !pluginBacked && !plex ? <SignIn auth={auth} onChange={setAuth} /> : null}
+        {!pluginBacked && !plex ? <ClientIdentity auth={auth} onChange={setAuth} /> : null}
         <Field
           label={t("Keep it fresh")}
           hint={
@@ -549,12 +865,20 @@ export function SourceEditor({
             ]}
           />
         </Field>
+      </section>
+      <div className="space-y-3">
         {error ? (
           <p role="alert" className="text-sm text-danger">
             {error}
           </p>
         ) : null}
-        <div className="flex flex-wrap items-center gap-2 pt-1">
+        {rulesChanged ? (
+          <p className="flex items-center gap-2 text-xs text-fg-muted">
+            <Badge variant="warning">{t("Unsaved changes")}</Badge>
+            {t("Saving re-imports this source with your channel group choices.")}
+          </p>
+        ) : null}
+        <div className="flex flex-wrap items-center gap-2">
           <Button disabled={!canSave || Boolean(busy)} onClick={() => void save()}>
             {busy === "save"
               ? t("Importing…")
@@ -572,6 +896,11 @@ export function SourceEditor({
                 : t("Last imported {when}", { when: relativeTime(source.updatedAt) })}
             </span>
           ) : null}
+          {source?.skippedVod ? (
+            <span className="text-xs text-fg-muted">
+              {tn(source.skippedVod, "{count} VOD entry skipped", "{count} VOD entries skipped")}
+            </span>
+          ) : null}
           {source ? (
             <Button
               variant="ghost"
@@ -583,9 +912,113 @@ export function SourceEditor({
             </Button>
           ) : null}
         </div>
-      </section>
+        {busy === "save" ? (
+          <p role="status" className="text-xs text-fg-muted">
+            {progressUnavailable
+              ? t("Import in progress. Detailed progress is unavailable on this server.")
+              : progress
+                ? importProgressText(progress, progressRate)
+                : t("Starting import…")}
+            {progressUnavailable && savedImport ? (
+              <span className="block text-xs text-fg-muted">
+                {tn(
+                  savedImport.channelCount ?? 0,
+                  "{count} channel in the last saved import",
+                  "{count} channels in the last saved import",
+                )}
+              </span>
+            ) : null}
+          </p>
+        ) : null}
+      </div>
     </div>
   );
+}
+
+/** The owner's group rules, normalised so an unchanged draft compares equal to its source. */
+function groupRules(r: GroupRules): GroupRules {
+  return {
+    excludeGroups: r.excludeGroups?.length ? [...r.excludeGroups] : [],
+    newGroups: r.newGroups === "exclude" ? "exclude" : "",
+    hideAdult: Boolean(r.hideAdult),
+    groupOrder: r.groupOrder?.length ? [...r.groupOrder] : [],
+  };
+}
+
+/** Compares group rules; the excluded set's order does not matter. */
+function rulesKey(r: GroupRules): string {
+  const g = groupRules(r);
+  return JSON.stringify({ ...g, excludeGroups: g.excludeGroups!.map(normGroup).sort() });
+}
+
+/** The import step whose counter is moving; the rate is measured per step. */
+function progressStage(p: SourceProgress): string {
+  if (p.phase === "saving") {
+    return p.channels && (p.savedChannels ?? 0) < p.channels ? "channels" : "listings";
+  }
+  return p.phase;
+}
+
+function progressValue(p: SourceProgress, stage: string): number {
+  if (stage === "channels") return p.savedChannels ?? 0;
+  if (stage === "listings") return p.savedProgrammes ?? 0;
+  return p.read;
+}
+
+function etaText(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds <= 0) return "";
+  if (seconds < 1) return t("almost done");
+  if (seconds < 60) return t("~{seconds}s left", { seconds: Math.round(seconds) });
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return t("~{minutes}m left", { minutes });
+  return t("~{hours}h {minutes}m left", {
+    hours: Math.floor(minutes / 60),
+    minutes: minutes % 60,
+  });
+}
+
+/** "Fetching guide · 1.2 GiB / 4.1 GiB · ~2m left" while an import runs. */
+function importProgressText(p: SourceProgress, rate: number): string {
+  let text: string;
+  let remaining = 0;
+  if (p.phase === "saving") {
+    if (p.channels && (p.savedChannels ?? 0) < p.channels) {
+      text = t("Saving channels · {saved} of {total}", {
+        saved: formatNumber(p.savedChannels ?? 0),
+        total: formatNumber(p.channels),
+      });
+      remaining = p.channels - (p.savedChannels ?? 0);
+    } else if (p.programmes) {
+      text = t("Saving listings · {saved} of {total}", {
+        saved: formatNumber(p.savedProgrammes ?? 0),
+        total: formatNumber(p.programmes),
+      });
+      remaining = p.programmes - (p.savedProgrammes ?? 0);
+    } else {
+      return t("Saving channels and listings");
+    }
+  } else {
+    const phase =
+      p.phase === "playlist"
+        ? t("Fetching playlist")
+        : p.phase === "guide"
+          ? t("Fetching guide")
+          : t("Starting import");
+    const size =
+      p.total && p.total > 0
+        ? `${formatBytes(p.read)} / ${formatBytes(p.total)}`
+        : p.read > 0
+          ? formatBytes(p.read)
+          : "";
+    const count =
+      p.phase === "guide" && p.programmes
+        ? t("{programmes} programmes", { programmes: formatNumber(p.programmes) })
+        : "";
+    text = [phase, size, count].filter(Boolean).join(" · ");
+    if (p.total && p.total > p.read) remaining = p.total - p.read;
+  }
+  const eta = rate > 0 && remaining > 0 ? etaText(remaining / rate) : "";
+  return eta ? `${text} · ${eta}` : text;
 }
 
 /** Drop an empty login so plain sources stay plain. */

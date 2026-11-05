@@ -27,6 +27,7 @@ import { codecLabel } from "./hardwareCodecs";
 type CompatApp = {
   protocol: string;
   name: string;
+  product?: string;
   devices: string[];
   videoCodecs: string[] | null;
   subtitles: string[] | null;
@@ -53,6 +54,9 @@ type CompatDevice = {
 type CapabilityOverride = {
   id?: string;
   product?: string;
+  productExact?: boolean;
+  productMatch?: string;
+  copiedFrom?: string;
   platform?: string;
   device?: string;
   dolbyVisionProfiles?: number[];
@@ -160,12 +164,22 @@ function appKey(app: CompatApp) {
   return `${app.protocol}:${app.name}`;
 }
 
+function appProduct(app: CompatApp) {
+  return app.product || app.name;
+}
+
 function deviceKey(row: CompatDevice) {
   return row.id ? `id:${row.id}` : `name:${row.name}`;
 }
 
 function isAppOverride(item: CapabilityOverride) {
-  return !item.id && !item.device && !item.platform && Boolean(item.product);
+  return (
+    !item.id &&
+    !item.device &&
+    !item.platform &&
+    item.productMatch !== "contains" &&
+    Boolean(item.product)
+  );
 }
 
 function isDeviceMatch(item: CapabilityOverride) {
@@ -297,7 +311,16 @@ function applyCapabilityDiff(
 
 function capabilityChanged(override: CapabilityOverride) {
   return Object.keys(override).some(
-    (key) => !["id", "product", "device", "platform"].includes(key),
+    (key) =>
+      ![
+        "id",
+        "product",
+        "productExact",
+        "productMatch",
+        "copiedFrom",
+        "device",
+        "platform",
+      ].includes(key),
   );
 }
 
@@ -368,7 +391,7 @@ export function DeviceCapabilities() {
   const overrides = matrix.data?.overrides ?? [];
 
   const appOverride = (name: string) =>
-    overrides.find((item) => isAppOverride(item) && sameText(item.product, name));
+    [...overrides].reverse().find((item) => isAppOverride(item) && sameText(item.product, name));
   const deviceOverride = (row: CompatDevice) =>
     row.id
       ? overrides.find((item) => item.id === row.id)
@@ -382,9 +405,9 @@ export function DeviceCapabilities() {
   };
 
   const openApp = (app: CompatApp) => {
-    const saved = appOverride(app.name);
+    const saved = appOverride(appProduct(app));
     openDraft(
-      { mode: "app", name: app.name, product: app.name, custom: false, saved },
+      { mode: "app", name: app.name, product: appProduct(app), custom: false, saved },
       { ...blankDraft(), pick: appKey(app), ...listsFrom(saved) },
     );
   };
@@ -454,7 +477,7 @@ export function DeviceCapabilities() {
     if (editing.mode === "app") {
       const product = editing.custom ? draft.match.trim() : editing.product;
       if (!product) return null;
-      const override: CapabilityOverride = { ...editing.saved, product };
+      const override: CapabilityOverride = { ...editing.saved, product, productExact: true };
       delete override.id;
       delete override.device;
       delete override.platform;
@@ -479,6 +502,7 @@ export function DeviceCapabilities() {
       if (appsSide) {
         delete override.device;
         override.product = match;
+        override.productExact = true;
       } else {
         override.device = match;
       }
@@ -488,8 +512,12 @@ export function DeviceCapabilities() {
     if (editing.view === "apps") {
       const app = knownApp(draft.pick);
       if (!app) return null;
-      const saved = appOverride(app.name);
-      const override: CapabilityOverride = { ...saved, product: app.name };
+      const saved = appOverride(appProduct(app));
+      const override: CapabilityOverride = {
+        ...saved,
+        product: appProduct(app),
+        productExact: true,
+      };
       delete override.id;
       delete override.device;
       delete override.platform;
@@ -569,14 +597,18 @@ export function DeviceCapabilities() {
       (!deviceFilter || app.devices.includes(deviceFilter)),
   );
   const customApps = overrides.filter(
-    (item) => isAppOverride(item) && !apps.some((app) => sameText(app.name, item.product)),
+    (item) => isAppOverride(item) && !apps.some((app) => sameText(appProduct(app), item.product)),
   );
   const customDevices = overrides.filter(
     (item) => isDeviceMatch(item) && !devices.some((row) => sameText(row.name, item.device)),
   );
 
   const appRows = [
-    ...visibleApps.map((app) => ({ kind: "known" as const, app, saved: appOverride(app.name) })),
+    ...visibleApps.map((app) => ({
+      kind: "known" as const,
+      app,
+      saved: appOverride(appProduct(app)),
+    })),
     ...(protocol || deviceFilter
       ? []
       : customApps.map((saved) => ({ kind: "custom" as const, saved }))),
@@ -713,8 +745,10 @@ export function DeviceCapabilities() {
                             {name}
                           </button>
                           {row.saved ? (
-                            <Badge variant="warning" className="ml-2">
-                              {t("Changed")}
+                            <Badge variant="warning" className="ml-2" title={row.saved.copiedFrom}>
+                              {row.saved.copiedFrom
+                                ? t("Copied from a shared setting")
+                                : t("Changed")}
                             </Badge>
                           ) : null}
                           {seen.length > 0 ? (

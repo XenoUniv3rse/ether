@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/braedonsaunders/ether/internal/plugins/remotetest"
 	"io"
 	"net"
 	"net/http"
@@ -223,7 +224,7 @@ func TestURLClientSafefetchAndTrustedLANOrigin(t *testing.T) {
 		}
 		_, err = c.Call(context.Background(), Request{Path: "/manifest.json"})
 		_ = c.Close()
-		if !IsBlocked(err) {
+		if !errors.Is(err, safefetch.ErrBlocked) {
 			t.Fatalf("Call(%s) err = %v, want safefetch.ErrBlocked", host, err)
 		}
 	}
@@ -234,7 +235,7 @@ func TestURLClientSafefetchAndTrustedLANOrigin(t *testing.T) {
 		t.Fatalf("NewURLClient public: %v", err)
 	}
 	defer pubClient.Close()
-	if _, err := pubClient.Call(context.Background(), Request{Path: "/redirect-private"}); !IsBlocked(err) {
+	if _, err := pubClient.Call(context.Background(), Request{Path: "/redirect-private"}); !errors.Is(err, safefetch.ErrBlocked) {
 		t.Fatalf("redirect to private err = %v, want safefetch.ErrBlocked", err)
 	}
 
@@ -263,7 +264,7 @@ func TestURLClientSafefetchAndTrustedLANOrigin(t *testing.T) {
 	if err != nil || resp.Status != http.StatusOK {
 		t.Fatalf("LAN Call: status=%d err=%v", resp.Status, err)
 	}
-	if _, err := lanClient.Call(context.Background(), Request{Path: "/redirect-other-lan"}); !IsBlocked(err) {
+	if _, err := lanClient.Call(context.Background(), Request{Path: "/redirect-other-lan"}); !errors.Is(err, safefetch.ErrBlocked) {
 		t.Fatalf("LAN redirect to another private origin err = %v, want safefetch.ErrBlocked", err)
 	}
 
@@ -278,7 +279,7 @@ func TestURLClientSafefetchAndTrustedLANOrigin(t *testing.T) {
 func TestTunnelAuthMultiplexDeadlineBackpressureAndReconnect(t *testing.T) {
 	t.Parallel()
 
-	creds := StaticCredentials{"cred-alpha": "org.example.alpha"}
+	creds := remotetest.Credentials{"cred-alpha": "org.example.alpha"}
 	tunnel := NewTunnelServer(TunnelOptions{
 		Auth:         creds,
 		Locale:       "fr-CA",
@@ -340,6 +341,8 @@ func TestTunnelAuthMultiplexDeadlineBackpressureAndReconnect(t *testing.T) {
 	// 3. Connect a real sidecar, test concurrency/multiplexing, backpressure, and deadlines.
 	var active, maxSeen atomic.Int32
 	gate := make(chan struct{})
+	allStarted := make(chan struct{})
+	var startedOnce sync.Once
 	canceled := make(chan string, 4)
 
 	sidecarHandler := func(ctx context.Context, req Request) (Response, error) {
@@ -358,6 +361,9 @@ func TestTunnelAuthMultiplexDeadlineBackpressureAndReconnect(t *testing.T) {
 			canceled <- req.RequestID
 			return Response{}, ctx.Err()
 		case "/gated":
+			if cur == 4 {
+				startedOnce.Do(func() { close(allStarted) })
+			}
 			select {
 			case <-gate:
 			case <-ctx.Done():
@@ -400,7 +406,13 @@ func TestTunnelAuthMultiplexDeadlineBackpressureAndReconnect(t *testing.T) {
 	var wg sync.WaitGroup
 	errs := make(chan error, totalCalls)
 	go func() {
-		time.Sleep(30 * time.Millisecond)
+		timer := time.NewTimer(5 * time.Second)
+		defer timer.Stop()
+		select {
+		case <-allStarted:
+		case <-timer.C:
+			t.Error("four gated handlers did not start")
+		}
 		close(gate)
 	}()
 	for i := range totalCalls {
@@ -612,7 +624,7 @@ func TestSamePluginOverURLAndTunnelPlusRangeRelay(t *testing.T) {
 	defer urlRT.Close()
 
 	tunnel := NewTunnelServer(TunnelOptions{
-		Auth:       StaticCredentials{"cred-simple": "org.example.simple"},
+		Auth:       remotetest.Credentials{"cred-simple": "org.example.simple"},
 		ChunkBytes: 16 * 1024, // force multiple chunks
 	})
 	defer tunnel.Close()
@@ -870,7 +882,7 @@ func TestPluginHostAPIEndpointsAuthAndGrants(t *testing.T) {
 	fh := newFakeHost()
 	handler := NewHostHandler(HostOptions{
 		Host: fh,
-		Auth: StaticCredentials{
+		Auth: remotetest.Credentials{
 			"cred-one": "plugin.one",
 			"cred-two": "plugin.two",
 		},
@@ -986,7 +998,7 @@ func TestFactoryAndContractAdapter(t *testing.T) {
 	defer srv.Close()
 
 	tunnel := NewTunnelServer(TunnelOptions{
-		Auth: StaticCredentials{"cred-tun": "org.example.tun"},
+		Auth: remotetest.Credentials{"cred-tun": "org.example.tun"},
 	})
 	defer tunnel.Close()
 	tunSrv := httptest.NewServer(tunnel.Handler())
@@ -1055,7 +1067,7 @@ func TestPythonReferenceTunnelClientFixture(t *testing.T) {
 	}
 
 	tunnel := NewTunnelServer(TunnelOptions{
-		Auth:         StaticCredentials{"py-cred": "org.example.py"},
+		Auth:         remotetest.Credentials{"py-cred": "org.example.py"},
 		ChunkBytes:   8192,
 		PingInterval: 30 * time.Millisecond,
 	})
@@ -1141,7 +1153,7 @@ func TestSubprotocolCredentialAuth(t *testing.T) {
 	// subprotocol entry (tested directly here so CI without a TS runner
 	// still exercises the exact wire path ether_tunnel.ts uses).
 	tunnel := NewTunnelServer(TunnelOptions{
-		Auth: StaticCredentials{"eg1_subproto_token": "org.example.ts"},
+		Auth: remotetest.Credentials{"eg1_subproto_token": "org.example.ts"},
 	})
 	defer tunnel.Close()
 	srv := httptest.NewServer(tunnel.Handler())
@@ -1214,7 +1226,7 @@ func TestTypeScriptReferencePairing(t *testing.T) {
 	if err := probe.Run(); err != nil {
 		t.Skip("node lacks native TypeScript or WebSocket support")
 	}
-	tunnel := NewTunnelServer(TunnelOptions{Auth: StaticCredentials{"ts-credential": "org.example.ts.pair"}})
+	tunnel := NewTunnelServer(TunnelOptions{Auth: remotetest.Credentials{"ts-credential": "org.example.ts.pair"}})
 	defer tunnel.Close()
 	mux := http.NewServeMux()
 	mux.Handle(TunnelPath, tunnel.Handler())
@@ -1274,7 +1286,7 @@ func TestURLClientErrorDoesNotExposeURLSecrets(t *testing.T) {
 	}
 	defer client.Close()
 	_, err = client.Call(context.Background(), Request{Path: "/manifest.json"})
-	if !IsBlocked(err) {
+	if !errors.Is(err, safefetch.ErrBlocked) {
 		t.Fatalf("expected blocked error, got %v", err)
 	}
 	if strings.Contains(err.Error(), "sensitive-token") {
@@ -1403,7 +1415,7 @@ func TestPlainStremioPublicRedirectsAndEncoding(t *testing.T) {
 	if receivedPath != "/catalog/movie/top/search=space%20travel.json" {
 		t.Fatalf("redirect path %q", receivedPath)
 	}
-	if _, err = c.Call(context.Background(), Request{Path: "/private"}); !IsBlocked(err) {
+	if _, err = c.Call(context.Background(), Request{Path: "/private"}); !errors.Is(err, safefetch.ErrBlocked) {
 		t.Fatalf("private redirect allowed: %v", err)
 	}
 	_, err = c.Call(context.Background(), Request{Path: "/catalog/movie/top/search=space%20travel.json"})

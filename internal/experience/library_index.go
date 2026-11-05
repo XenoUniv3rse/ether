@@ -1,6 +1,7 @@
 package experience
 
 import (
+	"cmp"
 	"context"
 	"strings"
 
@@ -24,7 +25,11 @@ func (s *Service) indexedLibraryPage(ctx context.Context, v *core.User, library 
 	}
 	filter := q.Filter
 	filter.Type = library.Type
-	filter, fits, none := viewerBrowseFilter(filter, v, s.d.PageExclusions(ctx, v), library.Type)
+	ex := s.d.PageExclusions(ctx, v, library.Type)
+	if ex.Err != nil {
+		return core.Page{}, false, ex.Err
+	}
+	filter, fits, none := viewerBrowseFilter(filter, v, ex, library.Type)
 	if !fits {
 		return core.Page{}, false, nil
 	}
@@ -35,7 +40,7 @@ func (s *Service) indexedLibraryPage(ctx context.Context, v *core.User, library 
 	if err != nil {
 		return core.Page{}, false, err
 	}
-	if !s.indexedPageHolds(ctx, v, page.Items, q) {
+	if !s.indexedPageHolds(ctx, v, page.Items, q, ex.AvailabilityInSQL) {
 		return core.Page{}, false, nil
 	}
 	return page, true, nil
@@ -51,6 +56,12 @@ func viewerBrowseFilter(filter core.Filter, v *core.User, ex LibraryPageExclusio
 		return filter, false, false
 	}
 	filter.ExcludeKeys = append(append([]core.RatingKey{}, filter.ExcludeKeys...), ex.Keys...)
+	filter.HiddenMovieGeneration = ex.Availability.HiddenMovieGeneration
+	filter.HiddenShowGeneration = ex.Availability.HiddenShowGeneration
+	filter.HiddenEpisodeGeneration = ex.Availability.HiddenEpisodeGeneration
+	filter.DigitalDiscovery = ex.Availability.DigitalDiscovery
+	filter.DigitalDateEvidence = ex.Availability.DigitalDateEvidence
+	filter.AvailabilityKeepKeys = append(filter.AvailabilityKeepKeys, ex.Availability.AvailabilityKeepKeys...)
 	filter.ExcludeGenres = append(append([]string{}, ex.ExcludeGenres...), filter.ExcludeGenres...)
 	filter.ExcludeKeywords = append(append([]string{}, ex.ExcludeKeywords...), filter.ExcludeKeywords...)
 	if v != nil {
@@ -71,7 +82,7 @@ func viewerBrowseFilter(filter core.Filter, v *core.User, ex LibraryPageExclusio
 func MergeShareFilter(filter, share core.Filter) (out core.Filter, none bool) {
 	filter.ContentRatings, none = intersectFold(filter.ContentRatings, share.ContentRatings)
 	filter.ExcludeContentRatings = append(append([]string{}, share.ExcludeContentRatings...), filter.ExcludeContentRatings...)
-	filter.MinContentRating = firstNonEmpty(filter.MinContentRating, share.MinContentRating)
+	filter.MinContentRating = cmp.Or(filter.MinContentRating, share.MinContentRating)
 	filter.MaxContentRating = tightenRating(filter.MaxContentRating, share.MaxContentRating)
 	filter.IncludeCollectionNames = append(append([]string{}, share.IncludeCollectionNames...), filter.IncludeCollectionNames...)
 	filter.ExcludeCollectionNames = append(append([]string{}, share.ExcludeCollectionNames...), filter.ExcludeCollectionNames...)
@@ -107,20 +118,14 @@ func tightenRating(current, extra string) string {
 	return current
 }
 
-func firstNonEmpty(values ...string) string {
-	for _, v := range values {
-		if v != "" {
-			return v
-		}
-	}
-	return ""
-}
-
-func (s *Service) indexedPageHolds(ctx context.Context, v *core.User, items []core.Title, q frontend.ItemQuery) bool {
+func (s *Service) indexedPageHolds(ctx context.Context, v *core.User, items []core.Title, q frontend.ItemQuery, availabilityInSQL bool) bool {
 	if len(items) == 0 {
 		return true
 	}
-	kept := s.d.Visibility.Available(ctx, v, items)
+	kept := items
+	if !availabilityInSQL {
+		kept = s.d.Visibility.Available(ctx, v, items)
+	}
 	have := make(map[core.RatingKey]bool, len(kept))
 	for _, title := range kept {
 		have[title.Key] = true

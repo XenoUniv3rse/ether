@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"github.com/braedonsaunders/ether/internal/container/ebml"
 	"io"
 	"os"
 	"path/filepath"
@@ -85,6 +86,8 @@ type chunkRun struct {
 
 // chunkStart is the media time a chunk starts at (its first video
 // timestamp), in the run's -ss clock.
+var errNegativeFMP4DecodeTime = errors.New("fmp4: negative decode time")
+
 func (cr *chunkRun) chunkStart(path string) (time.Duration, error) {
 	switch cr.container {
 	case ContainerFMP4:
@@ -245,6 +248,7 @@ func fmp4ChunkStart(path string, track, timescale uint32) (time.Duration, error)
 			}
 			var id uint32
 			base := int64(-1)
+			haveBase := false
 			var cto int64
 			haveRun, badRun := false, false
 			kids, _ := readBoxes(b, traf.start+traf.hdr, traf.end)
@@ -254,6 +258,7 @@ func fmp4ChunkStart(path string, track, timescale uint32) (time.Duration, error)
 				case k.typ == "tfhd" && len(p) >= 8:
 					id = binary.BigEndian.Uint32(p[4:])
 				case k.typ == "tfdt" && len(p) >= 8:
+					haveBase = true
 					if p[0] == 1 && len(p) >= 12 {
 						base = int64(binary.BigEndian.Uint64(p[4:]))
 					} else {
@@ -271,6 +276,9 @@ func fmp4ChunkStart(path string, track, timescale uint32) (time.Duration, error)
 			}
 			if badRun {
 				return 0, fmt.Errorf("fmp4: bad trun for track %d in %s", id, filepath.Base(path))
+			}
+			if haveBase && base < 0 && haveRun {
+				return 0, errNegativeFMP4DecodeTime
 			}
 			if base >= 0 && (!found || base+cto < best) {
 				best, found = base+cto, true
@@ -300,24 +308,7 @@ func emptyCluster(at time.Duration) []byte {
 // chunkVint reads an EBML variable-length integer: an element ID (marker
 // kept) or a size (marker stripped). It returns its length, 0 if invalid.
 func chunkVint(b []byte, keepMarker bool) (uint64, int) {
-	if len(b) == 0 || b[0] == 0 {
-		return 0, 0
-	}
-	l := 1
-	for mask := byte(0x80); b[0]&mask == 0; mask >>= 1 {
-		l++
-	}
-	if l > 8 || len(b) < l {
-		return 0, 0
-	}
-	v := uint64(b[0])
-	if !keepMarker {
-		v &= uint64(0xFF >> l)
-	}
-	for _, c := range b[1:l] {
-		v = v<<8 | uint64(c)
-	}
-	return v, l
+	return ebml.Vint(b, keepMarker)
 }
 
 // assembleChunks makes dst one segment from consecutive chunk files: the

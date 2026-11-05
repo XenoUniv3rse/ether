@@ -2,6 +2,7 @@ package transcode
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/braedonsaunders/ether/internal/core"
 )
@@ -108,6 +109,16 @@ func colorspaceColour(src, dst picture) string {
 // graphFailure is the owner-visible reason s cannot be started, or nil
 // when the filter graph is one this ffmpeg can run.
 func graphFailure(s runSpec) error {
+	// A PCE-only ADTS source needs its initial configuration after a seek.
+	// If the bounded prefix/seek input cannot be built, refuse a long remote
+	// scan rather than decoding the entire source up to the requested point.
+	if s.Protocol == core.ProtocolHLS && s.Info.Container == "mpegts" && s.Start > 30*time.Second && isNetworkURL(s.Input) && !s.Decision.AudioCopy {
+		if a := findStream(s.Info, s.Decision.AudioStream, "audio"); a != nil && a.AACProgramConfig {
+			if _, _, ok := pceSeekInput(s); !ok {
+				return core.ErrNotAvailable
+			}
+		}
+	}
 	if s.Decision.VideoCopy {
 		return nil
 	}
@@ -126,6 +137,9 @@ func toneMapPaths(f features, hw core.HWAccel) []string {
 	}
 	if f.hasFilter("libplacebo") {
 		out = append(out, "libplacebo")
+	}
+	if f.hasFilter("tonemapx") {
+		out = append(out, "tonemapx")
 	}
 	if f.hasFilter("tonemap_opencl") {
 		out = append(out, "opencl")

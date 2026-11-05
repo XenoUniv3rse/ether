@@ -37,12 +37,15 @@ export function DomainPage({
   base,
   tabs,
   active,
+  tabActions,
   children,
   className,
 }: {
   title: string;
   description?: string;
   actions?: ReactNode;
+  /** Controls for the active tab (filters), on the right of the tab row. */
+  tabActions?: ReactNode;
   /** Live state shown above the tabs (health, budgets, now playing). */
   status?: ReactNode;
   /** Route prefix; tabs navigate to `${base}/${key}`. */
@@ -59,13 +62,21 @@ export function DomainPage({
       <PageHeader title={title} description={description} actions={actions} />
       {status}
       {tabs && tabs.length > 1 ? (
-        <div ref={tabsRoot} className="border-b border-border">
-          <OverflowTabs
-            ariaLabel={t("{page} sections", { page: title })}
-            active={active ?? tabs[0]!.key}
-            onSelect={(key) => keepScroll(tabsRoot, () => navigate(`${base}/${key}`))}
-            tabs={tabs.map((x) => ({ key: x.key, label: x.label, count: x.count }))}
-          />
+        <div
+          ref={tabsRoot}
+          className="flex flex-wrap items-end gap-x-4 gap-y-2 border-b border-border"
+        >
+          <div className="min-w-0 flex-1">
+            <OverflowTabs
+              ariaLabel={t("{page} sections", { page: title })}
+              active={active ?? tabs[0]!.key}
+              onSelect={(key) => keepScroll(tabsRoot, () => navigate(`${base}/${key}`))}
+              tabs={tabs.map((x) => ({ key: x.key, label: x.label, count: x.count }))}
+            />
+          </div>
+          {tabActions ? (
+            <div className="flex shrink-0 flex-wrap items-center gap-2 pb-2">{tabActions}</div>
+          ) : null}
         </div>
       ) : null}
       <div className="space-y-6 pb-4">{children}</div>

@@ -11,12 +11,20 @@ import (
 // Transcoder (internal/transcode)
 
 type HLSRequest struct {
+	// SlateText is trusted server-generated copy for a looping silent card.
+	// It is never decoded from client requests. Info.Duration bounds the slot.
+	SlateText []string `json:"-"`
+	// SoftSubtitleStream, when set, asks the encoder to expose this embedded
+	// text stream as ASS alongside its ordinary media output.
+	SoftSubtitleStream *int
 	// RequireIndependentProof emits HLS independence tags only when the
 	// session can guarantee every advertised segment is independently decodable.
 	// Zero preserves the legacy playlist contract for existing callers.
 	RequireIndependentProof bool
 	SessionID               string
-	InputURL                string // ffmpeg input; Ether serves sources on loopback HTTP with range support
+	// ReleaseID identifies the initial source in manifest diagnostics.
+	ReleaseID string
+	InputURL  string // ffmpeg input; Ether serves sources on loopback HTTP with range support
 	// LiveInput permits playlist demuxers for owner-configured live sources.
 	// Ordinary resolved media must leave this false, even if duration is unknown.
 	LiveInput bool
@@ -152,11 +160,13 @@ type PlaySession struct {
 
 	// Status for the admin dashboard and /status/sessions, filled on the
 	// snapshots Playback returns.
-	TitleName      string       // "Movie (2024)" or "Show - S01E02 - Episode"
-	Username       string       // user display name
-	Client         ClientCaps   // the client's product, device and limits
-	DecisionReason string       `json:"decisionReason,omitempty"`
-	Decision       DecisionKind // directplay once bytes go straight to the client; "" until known
+	TitleName        string       // "Movie (2024)" or "Show - S01E02 - Episode"
+	Username         string       // user display name
+	Client           ClientCaps   // the client's product, device and limits
+	DecisionReason   string       `json:"decisionReason,omitempty"`
+	QualityFallback  string       `json:"qualityFallback,omitempty"`
+	Decision         DecisionKind // directplay once bytes go straight to the client; "" until known
+	DeliveryDecision *Decision    `json:"deliveryDecision,omitempty"` // negotiated output and track selection
 	// DecisionVideoCopy and DecisionAudioCopy say whether the current
 	// decision copies each stream (additive): a remux with
 	// DecisionAudioCopy false is transcoding only the audio.
@@ -193,6 +203,14 @@ type PlaySession struct {
 	// and mid-play buffering (additive). Nil for a source no play request
 	// or client timeline has reached.
 	Experience *PlayExperience `json:"experience,omitempty"`
+}
+
+// SourceReleaseID identifies the selected release when one is available.
+func (s *PlaySession) SourceReleaseID() string {
+	if s == nil || s.Resolution == nil {
+		return ""
+	}
+	return s.Resolution.Release.ID
 }
 
 // PlayExperience measures what the viewer saw (additive).

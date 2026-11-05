@@ -54,6 +54,7 @@ type ExactVariantPlayback interface {
 // username, address, or stream URL. Release names are the file names the
 // resolver ranked.
 type DecisionTrace struct {
+	QualityFallback    string
 	Profile            string
 	ProfileMaxHeight   int
 	ClientMaxHeight    int

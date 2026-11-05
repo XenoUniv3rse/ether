@@ -1,10 +1,10 @@
 import { getLocale, localized, t } from "../../i18n";
 import { apiFetch } from "../../lib/api";
 
-export type EntryKind = "episode" | "premiere" | "movie";
+type EntryKind = "episode" | "premiere" | "movie";
 export type EntryState = "available" | "today" | "upcoming" | "unavailable";
-export type Badge = "seriesPremiere" | "seasonPremiere" | "finale";
-export type Reason = "watching" | "watchlist" | "lookahead" | "taste" | "popular";
+type Badge = "seriesPremiere" | "seasonPremiere" | "finale";
+type Reason = "watching" | "watchlist" | "lookahead" | "taste" | "popular";
 
 export interface CalendarEntry {
   id: string;
@@ -42,7 +42,7 @@ export interface CalendarViewer {
   owner?: boolean;
 }
 
-export interface CalendarData {
+interface CalendarData {
   from: string;
   to: string;
   today: string;
@@ -65,13 +65,38 @@ export interface Filters {
 }
 
 export const calendarApi = {
-  load: (from: string, to: string, f: Filters, signal?: AbortSignal) => {
+  load: async (
+    from: string,
+    to: string,
+    f: Filters,
+    signal?: AbortSignal,
+  ): Promise<CalendarData> => {
     const p = new URLSearchParams({ from, to, movies: f.movies });
     if (f.viewer !== "all") p.set("viewer", f.viewer);
     if (f.types !== "all") p.set("types", f.types);
     const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
     if (tz) p.set("tz", tz);
-    return apiFetch<CalendarData>(`/calendar/?${p}`, { signal });
+    // Go encodes nil slices as null, including for an empty calendar.
+    const data = await apiFetch<
+      Omit<CalendarData, "entries" | "viewers"> & {
+        entries:
+          | (Omit<CalendarEntry, "reasons" | "viewers"> & {
+              reasons: Reason[] | null;
+              viewers: number[] | null;
+            })[]
+          | null;
+        viewers: CalendarViewer[] | null;
+      }
+    >(`/calendar/?${p}`, { signal });
+    return {
+      ...data,
+      viewers: data.viewers ?? [],
+      entries: (data.entries ?? []).map((entry) => ({
+        ...entry,
+        reasons: entry.reasons ?? [],
+        viewers: entry.viewers ?? [],
+      })),
+    };
   },
 };
 
@@ -79,12 +104,12 @@ export const calendarApi = {
 
 const DAY = 86_400_000;
 
-export function parseDay(s: string): Date {
+function parseDay(s: string): Date {
   const [y, m, d] = s.split("-").map(Number);
   return new Date(Date.UTC(y ?? 1970, (m ?? 1) - 1, d ?? 1));
 }
 
-export function dayKey(d: Date): string {
+function dayKey(d: Date): string {
   return d.toISOString().slice(0, 10);
 }
 
@@ -132,7 +157,7 @@ export function startOfWeek(s: string, first = weekStartDay()): string {
   return addDays(s, -((dow - first + 7) % 7));
 }
 
-export function startOfMonth(s: string): string {
+function startOfMonth(s: string): string {
   return `${s.slice(0, 7)}-01`;
 }
 

@@ -5,10 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/braedonsaunders/ether/internal/core"
@@ -110,6 +112,10 @@ func (a *SourceAuth) header() http.Header {
 	}
 	if a.UserAgent != "" {
 		h.Set("User-Agent", a.UserAgent)
+	} else if a.Type == "xtream" {
+		// One identity for the panel's API, guide and streams: panels that
+		// bind a login to a device compare them.
+		h.Set("User-Agent", defaultUserAgent())
 	}
 	if a.Referer != "" {
 		h.Set("Referer", a.Referer)
@@ -128,17 +134,17 @@ func (a *SourceAuth) header() http.Header {
 	return h
 }
 
-// xtreamURLs derives an Xtream Codes panel's M3U and XMLTV URLs.
-func (a *SourceAuth) xtreamURLs() (playlist, guide string) {
+// xtreamURLs derives an Xtream Codes panel's lineup (its JSON API, see
+// xtream.go) and XMLTV URLs.
+func (a *SourceAuth) xtreamURLs() (lineup, guide string) {
 	base := strings.TrimRight(strings.TrimSpace(a.Server), "/")
 	q := url.Values{"username": {a.Username}, "password": {a.Password}}
-	output := a.Output
-	if output == "" {
-		output = "ts"
-	}
-	pq := url.Values{"username": {a.Username}, "password": {a.Password}, "type": {"m3u_plus"}, "output": {output}}
-	return base + "/get.php?" + pq.Encode(), base + "/xmltv.php?" + q.Encode()
+	return base + "/player_api.php?" + q.Encode(), base + "/xmltv.php?" + q.Encode()
 }
+
+// defaultUserAgent names Ether to providers when the owner sets no user
+// agent. Panels commonly refuse Go's generic client name outright.
+func defaultUserAgent() string { return sourceUserAgent }
 
 // redacted returns a copy safe for the owner API.
 func (a *SourceAuth) redacted() *SourceAuth {
@@ -250,7 +256,7 @@ func redactSourceAuth(src *Source) {
 }
 
 // readURLWith fetches a source document with the provider's headers.
-// kind names the document in limit errors ("playlist" or "guide").
+// kind names the document in limit and timeout errors ("playlist" or "guide").
 func (s *Service) readURLWith(ctx context.Context, raw string, max int64, h http.Header, kind string) (string, error) {
 	rc, err := s.openURL(ctx, raw, h)
 	if err != nil {
@@ -259,36 +265,159 @@ func (s *Service) readURLWith(ctx context.Context, raw string, max int64, h http
 	defer rc.Close()
 	b, err := readLimited(rc, max, kind)
 	if err != nil {
-		return "", err
+		return "", sourceReadFailure(err, kind)
 	}
 	return string(b), nil
 }
 
-// openURL fetches a source document and leaves the body to the caller.
+// sourceDocumentTimeout bounds the wait for a source to start answering. An
+// Xtream panel composes a playlist or guide on demand, so the wait can be
+// minutes; once bytes flow, sourceIdleTimeout bounds a silent body and the
+// document may take as long as it needs.
+const sourceDocumentTimeout = refreshTimeout
+
+// sourceIdleTimeout is how long a document may go silent mid-transfer before
+// the import fails.
+const sourceIdleTimeout = 2 * time.Minute
+
+// errSourceStalled marks a document whose body stopped flowing.
+var errSourceStalled = errors.New("source stopped sending data")
+
+// documentClient returns the client for a source document. It keeps the
+// service client's transport (and so its live egress routing) but has no total
+// timeout: openURL bounds the header wait and a silent body itself.
+func (s *Service) documentClient() *http.Client {
+	c := *s.o.HTTPClient
+	c.Timeout = 0
+	return &c
+}
+
+// sourceBody counts a document's bytes for the progress endpoint and cancels
+// a body that stops flowing.
+type sourceBody struct {
+	io.ReadCloser
+	timer    *time.Timer
+	cancel   context.CancelFunc
+	stalled  *atomic.Bool
+	progress *progressTracker
+}
+
+func (b *sourceBody) Read(p []byte) (int, error) {
+	n, err := b.ReadCloser.Read(p)
+	if n > 0 {
+		b.timer.Reset(sourceIdleTimeout)
+		if b.progress != nil {
+			b.progress.addRead(int64(n))
+		}
+	}
+	if err != nil {
+		if errors.Is(err, io.EOF) {
+			b.timer.Stop()
+			return n, err
+		}
+		if b.stalled.Load() {
+			return n, errSourceStalled
+		}
+		b.timer.Stop()
+	}
+	return n, err
+}
+
+func (b *sourceBody) Close() error {
+	b.timer.Stop()
+	b.cancel()
+	return b.ReadCloser.Close()
+}
+
+// sourceFetchFailure explains a transport failure without echoing the request
+// URL: source URLs, Xtream's derived ones in particular, carry the provider's
+// credentials, and callers store and surface these errors. The cause itself
+// (DNS, refused connection, TLS, timeout) is what tells an owner how to fix
+// the source.
+func sourceFetchFailure(err error) error {
+	var ue *url.Error
+	if errors.As(err, &ue) {
+		err = ue.Err
+	}
+	var ne net.Error
+	if errors.As(err, &ne) && ne.Timeout() {
+		return fmt.Errorf("source fetch failed: the source did not answer within %s", sourceDocumentTimeout)
+	}
+	return fmt.Errorf("source fetch failed: %w", err)
+}
+
+// sourceReadFailure wraps a body that stalled or timed out in the same
+// sentence as a failed fetch. Any other error (a size limit, malformed XML)
+// already says what went wrong.
+func sourceReadFailure(err error, kind string) error {
+	if errors.Is(err, errSourceStalled) {
+		return fmt.Errorf("source fetch failed: the source stopped sending the %s for %s", kind, sourceIdleTimeout)
+	}
+	var ne net.Error
+	if errors.As(err, &ne) && ne.Timeout() {
+		return fmt.Errorf("source fetch failed: the source did not finish sending the %s within %s", kind, sourceDocumentTimeout)
+	}
+	return err
+}
+
+// openURL fetches a source document and leaves the body to the caller. The
+// header wait is sourceDocumentTimeout and a silent body is sourceIdleTimeout;
+// a document that keeps sending data may take as long as it needs.
 func (s *Service) openURL(ctx context.Context, raw string, h http.Header) (io.ReadCloser, error) {
 	if !validHTTP(raw) {
 		return nil, fmt.Errorf("source must use HTTP(S)")
 	}
+	ctx, cancel := context.WithCancel(ctx)
+	var stalled atomic.Bool
+	timer := time.AfterFunc(sourceDocumentTimeout, func() {
+		stalled.Store(true)
+		cancel()
+	})
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, raw, nil)
 	if err != nil {
+		timer.Stop()
+		cancel()
 		return nil, err
 	}
 	for k, v := range h {
 		req.Header[k] = v
 	}
-	res, err := s.o.HTTPClient.Do(req)
+	if req.Header.Get("User-Agent") == "" {
+		req.Header.Set("User-Agent", defaultUserAgent())
+	}
+	res, err := s.documentClient().Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("source fetch failed")
+		timer.Stop()
+		cancel()
+		if stalled.Load() {
+			return nil, fmt.Errorf("source fetch failed: the source did not answer within %s", sourceDocumentTimeout)
+		}
+		return nil, sourceFetchFailure(err)
+	}
+	closeBody := func() {
+		timer.Stop()
+		cancel()
+		res.Body.Close()
 	}
 	switch {
 	case res.StatusCode == 401 || res.StatusCode == 403:
-		res.Body.Close()
+		closeBody()
 		return nil, fmt.Errorf("source refused the credentials (HTTP %d)", res.StatusCode)
 	case res.StatusCode != 200:
-		res.Body.Close()
+		closeBody()
 		return nil, fmt.Errorf("source returned HTTP %d", res.StatusCode)
 	}
-	return res.Body, nil
+	if stalled.Load() {
+		closeBody()
+		return nil, fmt.Errorf("source fetch failed: the source did not answer within %s", sourceDocumentTimeout)
+	}
+	timer.Reset(sourceIdleTimeout)
+	body := &sourceBody{ReadCloser: res.Body, timer: timer, cancel: cancel, stalled: &stalled}
+	if p := importProgress(ctx); p != nil {
+		p.setTotal(res.ContentLength)
+		body.progress = p
+	}
+	return body, nil
 }
 
 // readGuide streams a guide URL, gunzipping when the body is gzip, and keeps
@@ -301,10 +430,13 @@ func (s *Service) readGuide(ctx context.Context, raw string, h http.Header, f gu
 	defer rc.Close()
 	rd, err := maybeGunzip(rc, maxGuideBytes, "guide")
 	if err != nil {
-		return XMLGuide{}, err
+		return XMLGuide{}, sourceReadFailure(err, "guide")
 	}
 	defer closeReader(rd)
 	g, _, err := parseXMLTV(rd, f)
+	if err != nil {
+		err = sourceReadFailure(err, "guide")
+	}
 	return g, err
 }
 
@@ -316,8 +448,11 @@ type authCache struct {
 }
 
 type authEntry struct {
-	auth *SourceAuth
-	at   time.Time
+	auth    *SourceAuth
+	limit   int           // connection limit; 0 is none
+	gap     time.Duration // least time between new provider streams
+	perHour int           // new provider streams per hour; 0 is no cap
+	at      time.Time
 }
 
 const authCacheTTL = 30 * time.Second
@@ -330,30 +465,62 @@ func (s *Service) forgetSourceAuth(id string) {
 }
 
 func (s *Service) sourceAuth(ctx context.Context, id string) (*SourceAuth, error) {
+	e, err := s.sourceEntry(ctx, id)
+	return e.auth, err
+}
+
+// sourceConnectionLimit is how many connections the source's provider
+// allows at once (an Xtream panel's max_connections); 0 means no limit.
+func (s *Service) sourceConnectionLimit(id string) int {
+	e, err := s.sourceEntry(s.ctx, id)
+	if err != nil {
+		return 0
+	}
+	return e.limit
+}
+
+// defaultTuneGap spaces new streams on a connection-limited account: a
+// viewer flicking through channels must not look like a scan.
+const defaultTuneGap = 2 * time.Second
+
+func (s *Service) sourceEntry(ctx context.Context, id string) (authEntry, error) {
 	if id == "" {
-		return nil, nil
+		return authEntry{}, nil
 	}
 	c := &s.authCache
 	c.mu.Lock()
 	e, ok := c.m[id]
 	c.mu.Unlock()
 	if ok && s.o.Now().Sub(e.at) < authCacheTTL {
-		return e.auth, nil
+		return e, nil
 	}
 	src, err := s.storedSourceByID(ctx, id)
 	if errors.Is(err, core.ErrNotFound) {
 		src, err = Source{}, nil
 	}
 	if err != nil {
-		return nil, err
+		return authEntry{}, err
+	}
+	e = authEntry{auth: src.Auth, at: s.o.Now(), perHour: max(src.TunesPerHour, 0)}
+	if src.Account != nil {
+		e.limit = src.Account.MaxConnections
+	}
+	if src.MaxConnections > 0 && (e.limit == 0 || src.MaxConnections < e.limit) {
+		e.limit = src.MaxConnections
+	}
+	switch {
+	case src.TuneGapSeconds > 0:
+		e.gap = time.Duration(src.TuneGapSeconds) * time.Second
+	case src.TuneGapSeconds == 0 && e.limit > 0:
+		e.gap = defaultTuneGap
 	}
 	c.mu.Lock()
 	if c.m == nil {
 		c.m = map[string]authEntry{}
 	}
-	c.m[id] = authEntry{auth: src.Auth, at: s.o.Now()}
+	c.m[id] = e
 	c.mu.Unlock()
-	return src.Auth, nil
+	return e, nil
 }
 
 // upstreamHeaders returns the request headers for fetching one channel input

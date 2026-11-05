@@ -1,0 +1,9 @@
+[
+  {
+    "Scenario": "hardware-failure-dash",
+    "Path": "dash/videotoolbox",
+    "Status": "PASS",
+    "Detail": "",
+    "Milliseconds": 5260
+  }
+]

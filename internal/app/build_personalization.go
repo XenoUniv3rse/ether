@@ -17,6 +17,7 @@ import (
 	"github.com/braedonsaunders/ether/internal/recommend"
 	"github.com/braedonsaunders/ether/internal/simkl"
 	"github.com/braedonsaunders/ether/internal/state"
+	"github.com/braedonsaunders/ether/internal/store"
 	"github.com/braedonsaunders/ether/internal/subtitles"
 	"github.com/braedonsaunders/ether/internal/trakt"
 )
@@ -26,7 +27,7 @@ func (a *App) buildPersonalization(ctx context.Context, cfg config.Config) error
 	dataDir := a.opts.DataDir
 	var err error
 	// Watch state and recommendations.
-	a.state = state.New(a.db, state.Options{Now: parityClock(), Logger: log.With("component", "state"), Availability: a.dbAvail})
+	a.state = state.New(a.db, state.Options{Now: parityClock(), Logger: log.With("component", "state"), Availability: a.dbAvail, PendingSQLite: store.DialectOf(a.db) == store.SQLite})
 	basePlaylists := a.state.Playlists()
 	marked, ok := basePlaylists.(core.TransactionalMarkedPlaylists)
 	if !ok {

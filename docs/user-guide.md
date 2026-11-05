@@ -706,12 +706,12 @@ titles a detail page has already prepared.
 
 ## Bring your library and history
 
-Use **Libraries & backups** to add existing media or preview a Plex import. Map
+Use **Maintenance › Backups & import › Import & export** to preview a Plex import. Map
 each source viewer to the correct Ether viewer and review unmatched titles
 before importing.
 
-To download a snapshot, sign in as the owner and open **Backups & import ›
-Snapshots** after setup is complete. Enter a backup password of at least 12
+To download a snapshot, sign in as the owner and open **Maintenance › Backups & import ›
+Backups** after setup is complete. Enter a backup password of at least 12
 characters, then choose **Download**. The downloaded `.etherbackup` file is
 encrypted. Ether does not keep this password; save it somewhere safe because
 it is needed to restore the file.
@@ -854,7 +854,7 @@ Plex issues for it works only inside Plex Media Server, and Plex's watch-state
 service refuses it from any other server. Ether therefore cannot send watched
 state or ratings to a Plex account, or import them from one.
 
-In **Viewers › Limits & preferences**, the **Plex account watch state** section
+In **Viewers › viewer › Limits**, the **Plex account watch state** section
 says so plainly. A Plex account connected in an earlier version stays listed and
 can still be removed with **Disconnect**; its sync settings are kept. Changes
 that were waiting to be sent are kept as they are and are not retried, so
@@ -863,6 +863,58 @@ nothing is lost if Plex ever offers a path for other servers.
 Watch state is unaffected inside Ether: watched marks, ratings and resume
 positions still sync between every app a viewer uses with Ether.
 
+## Sync watched state with your Plex Media Server
+
+If you run Ether alongside your own Plex Media Server, Ether can keep watched
+marks in step between them: watch something on either and it shows as watched
+on the other. This talks to your server directly, with your server's own
+token. It is separate from the Plex account sync above and does not use it.
+
+1. Open **Integrations › Plex Media Servers** and choose **Add a Plex Media
+   Server**. Enter a name, the server's address with its port (for example
+   `http://192.168.1.10:32400`) and the **server owner's Plex token**. To find
+   the token, open any title's **⋯** menu in Plex Web, choose **Get Info**,
+   then **View XML**; it is the `X-Plex-Token` at the end of the address. Ether
+   checks the address and that the token belongs to the server's owner, stores
+   the token encrypted and never shows it again.
+2. The server's people are listed. For each person you want synced, choose
+   **Match to a viewer**, pick their Ether viewer, a **Sync direction**
+   (**Ether → Plex**, **Plex → Ether** or **Both**) and how often to check.
+   People you don't match are never synced, and nothing is matched by name.
+3. To send to Plex for anyone other than the server owner, paste that person's
+   own Plex token for the server too: Plex marks titles watched for whoever's
+   token is used. Reading what they watched works with the owner's token.
+
+What syncs:
+
+- **Plex → Ether:** each new view in the server's watch history marks that
+  title watched in Ether, unless the viewer changed it in Ether more recently.
+- **Ether → Plex:** watching or marking a title watched in Ether marks it
+  watched on the server; marking it unwatched in Ether marks it unwatched on
+  the server, unless the server saw a newer view. Resume points for titles in
+  progress in Ether are sent too.
+- Turning a direction on starts from that moment; past history is not copied.
+  To bring older history across once, use **Bring your library and history**.
+- Ratings are not synced, and unwatching a title on the Plex side is not
+  picked up, because Plex's watch history only records views.
+
+With two or more servers, a title watched on one reaches Ether and every other
+server once. A change never bounces back to the server it came from, and
+Ether ignores its own marks when they appear in a server's history.
+
+Titles are matched only by their TMDB, IMDb or TVDB identity (and for
+episodes, the show's identity plus season and episode number). Titles that
+don't match are listed under **unmatched titles** for that person with the
+reason, and are checked again later. Sending to the server also needs the
+title's Plex identity, which Ether looks up through its Plex app connection.
+
+Sync runs in the background on one node of a cluster, reads only what changed
+since the last check, and backs off if the server is busy or unreachable. If a
+server asks Ether to slow down, every person on that server waits as asked.
+Each person's row shows when Ether last read from and sent to the server, the
+next check, and any problem in plain words; **Sync now** runs a check
+immediately.
+
 ## Source interruptions
 
 Usenet providers are tried in priority order. When every connection of a
@@ -870,7 +922,7 @@ higher-priority provider is busy, a viewer's request goes to the next provider
 that has a free connection instead of waiting. Background work does this only
 when that provider is otherwise idle. Backfill (block) accounts are used only
 for articles the other providers lack, so a busy primary never spends block
-data. **Sources › Usage** shows how many requests each provider took over from
+data. **Sources › Stats** shows how many requests each provider took over from
 a busy one this month.
 
 If a server refuses connections because the account is at its limit, Ether
@@ -933,7 +985,7 @@ only updates the draft until you review and save.
 
 ## Catalog
 
-Open **In Plex → Catalog** to browse the released movies and shows in your
+Open **Library › Catalog** to browse the released movies and shows in your
 library. Switch between posters and a list, search by title, filter by genre
 or decade, and sort by popularity, release date, rating, date added, or title.
 Results are paginated across the full local catalog. Select a title to inspect
@@ -1012,7 +1064,7 @@ because an unrestricted feed needs several pages to cover what one filtered page
 covers. The learned format survives restarts and is reset when the indexer
 configuration changes. Empty feeds are not repeatedly probed on every poll.
 Monitoring defaults on for new installs. Existing
-owners can enable it under Sources > Availability. Turning monitoring off stops
+owners can enable it under Catalog › Settings › General › New releases. Turning monitoring off stops
 polling, but local evidence and the recent-release visibility rules still apply.
 
 Before the release or air date, titles remain hidden unless you turn on
@@ -1241,7 +1293,7 @@ The viewer can revoke the connection under **Devices** and create another one
 if needed.
 
 Stremio requires an HTTPS address. If the portal cannot create an install
-link, add a certificate under **Apps › Overview › Away from home › Use your own
+link, add a certificate under **Apps › Away from home › Use your own
 certificate** and try again.
 Catalogue items and streams follow the viewer's library and safety settings.
 

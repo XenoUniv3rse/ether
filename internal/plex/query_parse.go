@@ -26,6 +26,7 @@ type queryRule struct {
 	Operator   string      `json:"operator"`
 	FieldTitle *string     `json:"fieldTitle,omitempty"`
 	Value      *string     `json:"value,omitempty"`
+	ValueTitle *string     `json:"valueTitle,omitempty"`
 	Rule       []queryRule `json:"Rule,omitempty"`
 }
 
@@ -64,6 +65,27 @@ func (s *Server) handleSectionQueryParse(w http.ResponseWriter, r *http.Request,
 		}
 	}
 	q := parseQueryTree(r.URL.RawQuery, typ, titles)
+	tags := map[string]bool{}
+	for _, f := range s.metaType(sec, sec.Type, "").Field {
+		if f.Type == "tag" {
+			tags[f.Key] = true
+		}
+	}
+	var addTitles func(*queryRule)
+	addTitles = func(rule *queryRule) {
+		if rule == nil {
+			return
+		}
+		for i := range rule.Rule {
+			addTitles(&rule.Rule[i])
+		}
+		field := stripFieldTypePrefix(rule.Field)
+		if tags[field] && rule.Value != nil {
+			v := s.facetTitle(r.Context(), sec.Type, field, *rule.Value)
+			rule.ValueTitle = &v
+		}
+	}
+	addTitles(q.Rule)
 	w.Header().Set("Content-Type", "application/json")
 	enc := json.NewEncoder(w)
 	enc.SetEscapeHTML(false) // operators such as ">>=" and "<=" stay literal, as PMS writes them
@@ -113,9 +135,10 @@ func parseQueryTree(rawQuery string, typ int, titles map[string]string) parsedQu
 			}
 		case key == "or":
 			top.Operator = "or"
+		case key == "and":
 		case queryParamIgnored(key):
 		default:
-			field := strings.TrimRight(key, "!<>")
+			field := strings.TrimRight(key, "!<>=")
 			if field == "" {
 				continue
 			}

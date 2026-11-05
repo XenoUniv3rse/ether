@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/braedonsaunders/ether/internal/httpclient"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"path"
@@ -76,6 +78,13 @@ type pendingError struct {
 	torrentID string
 	err       error
 }
+
+// untrackedPending marks a successful submission by a provider that does not
+// return a torrent id usable by Acquire. Availability can still be rechecked.
+type untrackedPending struct{ err error }
+
+func (e *untrackedPending) Error() string { return e.err.Error() }
+func (e *untrackedPending) Unwrap() error { return e.err }
 
 func (e *pendingError) Error() string { return e.err.Error() }
 func (e *pendingError) Unwrap() error { return e.err }
@@ -271,6 +280,86 @@ type apiRequest struct {
 	ctype  string
 }
 
+type diagnosticKey struct{}
+type providerDiagnostic struct {
+	log                     *slog.Logger
+	provider, release, hash string
+}
+
+var diagnosticURL = regexp.MustCompile(`(?i)\b(?:https?|magnet)[:][^\s"']+`)
+var diagnosticCredential = regexp.MustCompile(`(?i)(bearer\s+|(?:api[_-]?key|access[_-]?token|token|password)\s*[=:]\s*)[^\s,;"']+`)
+
+func cleanDiagnostic(s, key string) string {
+	if key != "" {
+		s = strings.ReplaceAll(s, key, "[redacted]")
+		s = strings.ReplaceAll(s, url.QueryEscape(key), "[redacted]")
+	}
+	s = diagnosticURL.ReplaceAllString(s, "[redacted-url]")
+	s = diagnosticCredential.ReplaceAllString(s, "${1}[redacted]")
+	if len(s) > 512 {
+		s = s[:512]
+	}
+	return s
+}
+
+// logProviderResponse records a failed provider response only when a playback
+// acquisition supplies release context. Never log a request or raw body.
+func logProviderResponse(ctx context.Context, key string, status int, code, msg string) {
+	d, ok := ctx.Value(diagnosticKey{}).(providerDiagnostic)
+	if !ok {
+		return
+	}
+	clean := func(s string) string { return cleanDiagnostic(s, key) }
+	if code == "" {
+		code = fmt.Sprintf("HTTP %d", status)
+	}
+	if msg == "" {
+		msg = code
+	}
+	d.log.Warn("debrid provider rejected request", "provider", clean(d.provider), "code", clean(code), "message", clean(msg), "release", clean(d.release), "infohash", clean(d.hash))
+}
+
+// A rate-limited response is returned by call before provider decoding so its
+// Retry-After survives. Extract its diagnostic fields without logging the body.
+func logProviderHTTPError(ctx context.Context, key string, status int, body []byte) {
+	var v struct {
+		ErrorCode   json.Number     `json:"error_code"`
+		Error       json.RawMessage `json:"error"`
+		Message     string          `json:"message"`
+		Detail      string          `json:"detail"`
+		Description string          `json:"error_description"`
+	}
+	_ = json.Unmarshal(body, &v)
+	code, msg := v.ErrorCode.String(), v.Detail
+	if msg == "" {
+		msg = v.Message
+	}
+	if msg == "" {
+		msg = v.Description
+	}
+	var simple string
+	if json.Unmarshal(v.Error, &simple) == nil {
+		if code == "" {
+			code = simple
+		} else if msg == "" {
+			msg = simple
+		}
+	} else {
+		var nested struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+		}
+		_ = json.Unmarshal(v.Error, &nested)
+		if code == "" {
+			code = nested.Code
+		}
+		if msg == "" {
+			msg = nested.Message
+		}
+	}
+	logProviderResponse(ctx, key, status, code, msg)
+}
+
 // call performs an API request and returns the status and body. Errors
 // never include the request URL: several providers take the key as a
 // query parameter.
@@ -299,7 +388,7 @@ func call(ctx context.Context, hc *http.Client, base string, r apiRequest, auth 
 		req.Header.Set("Content-Type", ctype)
 	}
 	req.Header.Set("Accept", "application/json")
-	req.Header.Set("User-Agent", "Ether")
+	req.Header.Set("User-Agent", httpclient.UserAgent)
 	if auth != nil {
 		auth(req)
 	}

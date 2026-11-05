@@ -8,21 +8,12 @@ import (
 	"time"
 )
 
-// defaultHostConnections caps open TCP connections per media host across
-// the primary and hedge transports. Debrid CDNs count connections, not
-// requests: TorBox answers the 21st connection to one host with HTTP 429
-// and a five-minute pause for the whole host. Idle keep-alive connections
-// count too, so two transports with generous idle pools could trip that
-// limit while only a handful of reads were in flight. Twelve leaves room
-// for the owner's other devices and apps on the same account.
-const defaultHostConnections = 12
+// Keep a conservative shared ceiling across primary and hedge pools. TorBox
+// recommends at most four connections, while other providers may impose
+// host-specific limits. No operator tuning is needed.
+const defaultHostConnections = 4
 
-// After a host resets connections or answers 429, new dials to it are held
-// to half the cap (never below minReducedConnections) for resetCooldown.
-const (
-	minReducedConnections = 2
-	resetCooldown         = 3 * time.Minute
-)
+const resetCooldown = 3 * time.Minute
 
 // connCap counts open connections per dial address and makes a dial wait,
 // after asking the transports to drop idle connections, rather than exceed
@@ -34,14 +25,16 @@ type connCap struct {
 
 	now func() time.Time
 
-	mu      sync.Mutex
-	open    map[string]int
-	reduced map[string]time.Time // addr -> end of its reduced-cap cooldown
-	freed   chan struct{}        // closed and replaced whenever a connection closes
+	mu       sync.Mutex
+	open     map[string]int
+	nextDial map[string]time.Time
+	dialGap  time.Duration
+	reduced  map[string]time.Time // addr -> end of its reduced-cap cooldown
+	freed    chan struct{}        // closed and replaced whenever a connection closes
 }
 
 func newConnCap(limit int) *connCap {
-	return &connCap{limit: limit, now: time.Now, open: map[string]int{}, reduced: map[string]time.Time{}, freed: make(chan struct{})}
+	return &connCap{limit: limit, now: time.Now, open: map[string]int{}, nextDial: map[string]time.Time{}, reduced: map[string]time.Time{}, freed: make(chan struct{})}
 }
 
 // limitLocked is addr's effective cap and, while it is reduced, when the
@@ -58,7 +51,7 @@ func (c *connCap) limitLocked(addr string) (int, time.Time) {
 		}
 		return c.limit, time.Time{}
 	}
-	return min(c.limit, max(minReducedConnections, c.limit/2)), until
+	return 1, until
 }
 
 // reduce lowers addr's cap for resetCooldown; further resets extend it.
@@ -107,9 +100,24 @@ func (c *connCap) acquire(ctx context.Context, addr string) error {
 		var until time.Time
 		lim, until = c.limitLocked(addr)
 		if c.open[addr] < lim {
-			c.open[addr]++
+			wait := c.nextDial[addr].Sub(c.now())
+			if wait <= 0 {
+				c.open[addr]++
+				if c.dialGap > 0 {
+					c.nextDial[addr] = c.now().Add(c.dialGap)
+				}
+				c.mu.Unlock()
+				return nil
+			}
 			c.mu.Unlock()
-			return nil
+			t := time.NewTimer(wait)
+			select {
+			case <-t.C:
+			case <-ctx.Done():
+				t.Stop()
+				return ctx.Err()
+			}
+			continue
 		}
 		freed := c.freed
 		c.mu.Unlock()
@@ -152,11 +160,12 @@ func (c *connCap) release(addr string) {
 	c.mu.Unlock()
 }
 
-// inUse reports open connections to addr (tests and diagnostics).
-func (c *connCap) inUse(addr string) int {
+// Reserve headroom for real reads, including connections in both pools.
+func (c *connCap) hedgeAllowed(addr string) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.open[addr]
+	limit, _ := c.limitLocked(addr)
+	return limit > 1 && c.open[addr] < limit-1
 }
 
 type cappedConn struct {

@@ -56,6 +56,8 @@ type generation struct {
 	articleMissing     atomic.Bool
 	backgroundFailover atomic.Bool // at most one recovery worker for this source
 	readFailure        error       // protected by mu; distinguishes transient failover from bad data
+	retryEpoch         uint64
+	retryPending       bool
 
 	mu      sync.Mutex
 	refs    int
@@ -241,15 +243,16 @@ type session struct {
 	// downMisses counts speed-driven down-failovers that found no
 	// lower-bitrate release. They count toward MaxDownFailovers so a
 	// source that stays too slow cannot retry forever.
-	downMisses     int
-	requiresRemux  bool
-	prefer         string // release ID the viewer picked (PrepareVariant); read-only after creation
-	exact          bool   // exact selection must never switch releases
-	lastActive     time.Time
-	lastRead       time.Time
-	stopAt         time.Time // set by a "stopped" timeline; expiry after a grace
-	decision       core.DecisionKind
-	decisionReason string
+	downMisses       int
+	requiresRemux    bool
+	prefer           string // release ID the viewer picked (PrepareVariant); read-only after creation
+	exact            bool   // exact selection must never switch releases
+	lastActive       time.Time
+	lastRead         time.Time
+	stopAt           time.Time // set by a "stopped" timeline; expiry after a grace
+	decision         core.DecisionKind
+	decisionReason   string
+	deliveryDecision *core.Decision
 	// Whether the current decision copies each stream; a remux with
 	// decisionAudioCopy false is transcoding only the audio.
 	decisionVideoCopy bool
@@ -411,6 +414,7 @@ func (s *session) snapshot(now time.Time) *core.PlaySession {
 		Username:          s.user.Username,
 		Client:            s.caps,
 		Decision:          s.decision,
+		DeliveryDecision:  s.deliveryDecision,
 		DecisionReason:    s.decisionReason,
 		DecisionVideoCopy: s.decisionVideoCopy,
 		DecisionAudioCopy: s.decisionAudioCopy,
@@ -435,6 +439,7 @@ func (s *session) snapshot(now time.Time) *core.PlaySession {
 	if g := s.cur; g != nil {
 		res := *g.res
 		ps.Resolution = &res
+		ps.QualityFallback = res.QualityFallback
 		ps.Source = g.src
 		ps.Info = g.infoSnapshot()
 		ps.Origin = sourceOrigin(g.src, res.Release.Protocol)

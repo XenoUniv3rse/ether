@@ -25,7 +25,7 @@ func snapshotFacts(t *testing.T) core.MediaInfo {
 		switch p.Elem().Kind() {
 		case reflect.Bool:
 			p.Elem().SetBool(false) // explicit false must remain distinct from nil
-		case reflect.Int:
+		case reflect.Int, reflect.Int64:
 			p.Elem().SetInt(4)
 		case reflect.Float64:
 			p.Elem().SetFloat(24)
@@ -48,7 +48,7 @@ func mutateSnapshot(info core.MediaInfo) {
 		switch f.Elem().Kind() {
 		case reflect.Bool:
 			f.Elem().SetBool(true)
-		case reflect.Int:
+		case reflect.Int, reflect.Int64:
 			f.Elem().SetInt(-1)
 		case reflect.Float64:
 			f.Elem().SetFloat(-1)

@@ -548,18 +548,11 @@ func streamResolutionClass(info core.MediaInfo) int {
 }
 
 func resolutionClass(w, h int) int {
-	switch {
-	case w >= 3200 || h >= 1800:
-		return 2160
-	case w >= 1700 || h >= 1000:
-		return 1080
-	case w >= 1200 || h >= 700:
-		return 720
-	case w > 0 || h > 0:
+	tier := core.ResolutionTier(w, h)
+	if tier > 0 && tier < 720 {
 		return 480
-	default:
-		return 0
 	}
+	return tier
 }
 
 func audioCodecFamily(c string) string {
@@ -651,23 +644,8 @@ func plexQualityPhrase(info core.ReleaseInfo) string {
 	case info.HDR10:
 		parts = append(parts, "HDR10")
 	}
-	switch info.Source {
-	case core.SourceRemux:
-		parts = append(parts, "Remux")
-	case core.SourceWEBDL:
-		parts = append(parts, "WEB-DL")
-	case core.SourceBluRay:
-		parts = append(parts, "Blu-ray")
-	case core.SourceWEBRip:
-		parts = append(parts, "WEBRip")
-	case core.SourceHDTV:
-		parts = append(parts, "HDTV")
-	case core.SourceDVD:
-		parts = append(parts, "DVD")
-	case core.SourceScreener:
-		parts = append(parts, "Screener")
-	case core.SourceCam:
-		parts = append(parts, "CAM")
+	if source := core.SourceLabel(info.Source); source != "" {
+		parts = append(parts, source)
 	}
 	return strings.Join(parts, " ")
 }
@@ -768,6 +746,9 @@ func (s *Server) watchVariants(pr *Request, t *core.Title) {
 	s.variantWatch.mu.Unlock()
 	caps := s.clientCaps(pr)
 	user, title := *pr.User, *t
+	// If the two refill slots were occupied, retry admission while this
+	// page is being watched. Once admitted, never retry a failed search.
+	retryAdmission := pr.detailRefillRequested && pr.detailRefill == nil
 	s.wg.Add(1)
 	go func() {
 		defer s.wg.Done()
@@ -783,6 +764,11 @@ func (s *Server) watchVariants(pr *Request, t *core.Title) {
 				timer.Stop()
 				return
 			case <-timer.C:
+			}
+			if retryAdmission {
+				if refiller, ok := s.d.Variants.(core.SearchCacheRefiller); ok {
+					retryAdmission = refiller.RefillSearchCache(&title) == nil
+				}
 			}
 			vctx, cancel := context.WithTimeout(s.ctx, variantRenderBudget)
 			vs, err := s.d.Variants.Variants(vctx, core.ResolveRequest{Title: &title, Client: caps, User: &user}, core.MaxVariants)

@@ -271,8 +271,9 @@ func (s *Service) CollectionArtwork(ctx context.Context, user *core.User, key co
 	if key.Kind() != core.KindSmart || s.art == nil {
 		return nil, "", false, nil
 	}
-	row, err := s.rowByKey(ctx, key)
-	if err != nil || !visible(row, user) {
+	base, section := key.CollectionSection()
+	row, err := s.rowByKey(ctx, base)
+	if err != nil || !visible(row, user) || section != "" && row.spec.MediaType != MediaMixed {
 		return nil, "", false, nil
 	}
 	switch element {
@@ -288,6 +289,7 @@ func (s *Service) CollectionArtwork(ctx context.Context, user *core.User, key co
 	if err != nil {
 		return nil, "", false, nil
 	}
+	keys = sectionKeys(keys, section)
 	data, ct, _, err := s.artworkFor(ctx, row, keys, w)
 	if err != nil {
 		return nil, "", false, nil

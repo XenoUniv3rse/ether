@@ -225,27 +225,50 @@ func (s *Session) startRunLocked(seg int, bigProbe bool) error {
 	}
 	rp := s.runPlanLocked(seg)
 	s.prepareRTXRunLocked(&rp, seg)
+	if s.softSubtitleStream != nil && enhancementSelected(rp.decision) {
+		// The native enhancement process cannot expose a second output from
+		// its input. Use the regular encoder for this session's selected track.
+		s.fallbackRTXLocked("selected soft subtitle requires a shared encoder output", seg)
+		rp.decision = s.trackDecisionLocked(s.wantTrack)
+	}
 	s.seekRampSeg = -1
 	spec := runSpec{
-		RTXTimeline:  s.rtxTimeline,
-		AudioGainDB:  s.audioMatch.gain,
-		LiveInput:    s.liveInput,
-		InputHeaders: s.inputHeaders,
-		Input:        s.input,
-		Info:         s.info,
-		Decision:     rp.decision,
-		Start:        s.segStart(seg),
-		SegDur:       rp.hlsDur,
-		StartSeg:     seg,
-		Dir:          s.runDirLocked(),
-		Playlist:     fmt.Sprintf("run-%d.m3u8", s.runSeq),
-		InitName:     fmt.Sprintf("init-%d.mp4", s.runSeq),
-		Accel:        accel,
-		Features:     s.featuresLocked(),
-		BigProbe:     bigProbe,
-		Protocol:     s.proto,
-		FastStart:    rp.fastStart,
-		Rate:         rp.rate,
+		NormalizeNegativeDTS: s.normalizeNegativeDTS,
+		RTXTimeline:          s.rtxTimeline,
+		AudioGainDB:          s.audioMatch.gain,
+		LiveInput:            s.liveInput,
+		LoopInput:            s.loopInput,
+		InputHeaders:         s.inputHeaders,
+		Input:                s.input,
+		Info:                 s.info,
+		Decision:             rp.decision,
+		Start:                s.segStart(seg),
+		SegDur:               rp.hlsDur,
+		StartSeg:             seg,
+		Dir:                  s.runDirLocked(),
+		Playlist:             fmt.Sprintf("run-%d.m3u8", s.runSeq),
+		InitName:             fmt.Sprintf("init-%d.mp4", s.runSeq),
+		Accel:                accel,
+		Features:             s.featuresLocked(),
+		BigProbe:             bigProbe,
+		InBandHeaders:        s.forceCPU && s.container == ContainerFMP4,
+		Protocol:             s.proto,
+		FastStart:            rp.fastStart,
+		Rate:                 rp.rate,
+	}
+	s.normalizeNegativeDTS = false
+	if s.softSubtitleStream != nil && s.softSubtitleInputIndex >= 0 {
+		spec.SoftSubtitleIndex = s.softSubtitleInputIndex
+		var pathErr error
+		spec.SoftSubtitlePath, pathErr = filepath.Abs(filepath.Join(s.dir, fmt.Sprintf("subtitle-%d.ass", s.runSeq)))
+		if pathErr != nil {
+			return pathErr
+		}
+	}
+	if s.liveInput {
+		// A live source cannot seek back to the session's elapsed time.
+		// Its new transport clock is signalled by an HLS discontinuity.
+		spec.Start = 0
 	}
 	if s.container == ContainerFMP4 && !s.isDASH() {
 		_, retained := s.clockLocked(&run{startSeg: seg}, s.wantTrack)
@@ -361,6 +384,9 @@ func (s *Session) startRunLocked(seg int, bigProbe bool) error {
 		}
 	}}
 	stderr := &lineWriter{fn: func(l string) {
+		if manifest, _, ok := pceSeekInput(spec); ok {
+			l = strings.ReplaceAll(l, manifest, "[source]")
+		}
 		l = redactRTXLine(l, spec.Input, spec.commandHeaders())
 		if strings.Contains(strings.ToLower(l), "resize: ngx-vsr ") {
 			r.rtxConfirmed.Store(true)
@@ -391,6 +417,11 @@ func (s *Session) startRunLocked(seg int, bigProbe bool) error {
 	s.mu.Unlock()
 	var proc Process
 	spec.InputScopeHeaders, err = encoderScopeHeaders(inputLease, spec.Input)
+	if err == nil {
+		// Scoped headers are available only after the lease is opened. They
+		// may make a previously valid bounded AAC seek unsuitable.
+		err = graphFailure(spec)
+	}
 	if err == nil {
 		args = buildArgs(spec)
 		r.spec = spec
@@ -504,10 +535,10 @@ func (s *Session) startRunLocked(seg int, bigProbe bool) error {
 // The collector removes that already-held media before publishing.
 // Other encodes on nominal plans cut at uniform boundaries directly.
 func (s *Session) chunkedLocked(d core.Decision) bool {
-	if s.isDASH() || s.plan == nil || s.info.Video() == nil {
+	if s.liveInput || s.isDASH() || s.plan == nil || s.info.Video() == nil {
 		return false
 	}
-	return s.plan.Keyframed() || d.VideoCopy || s.container == ContainerMatroska
+	return s.plan.Keyframed() || d.VideoCopy || s.copyFallback || s.container == ContainerMatroska
 }
 
 // stopRunLocked detaches the current run immediately. Process reaping happens
@@ -518,6 +549,9 @@ func (s *Session) stopRunLocked() {
 	r := s.cur
 	if r == nil {
 		return
+	}
+	if r.finished && r.spec.SoftSubtitlePath != "" {
+		s.removals.remove(r.spec.SoftSubtitlePath)
 	}
 	if s.traceOn() && !r.finished {
 		if reason == "" {

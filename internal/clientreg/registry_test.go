@@ -21,6 +21,25 @@ func TestRegistryVersionAndFallback(t *testing.T) {
 	}
 }
 
+func TestAppOverridesAreScoped(t *testing.T) {
+	phone := Identity{Product: "  plex for android (mobile) ", Platform: "Android", Device: "Pixel"}
+	tv := Identity{Product: "Plex for Android (TV)", Platform: "Android", Device: "Android TV"}
+	edit := core.ClientCapabilityOverride{Product: "Plex for Android (Mobile)", MaxHeight: 2160}
+	if !Playback(phone, []core.ClientCapabilityOverride{edit}).HeightLocked || Playback(tv, []core.ClientCapabilityOverride{edit}).HeightLocked {
+		t.Fatal("phone edit crossed app boundary")
+	}
+	kodi := Identity{Product: "PM4K", Device: "Kodi"}
+	htpc := Identity{Product: "Plex HTPC", Platform: "Windows", Device: "HTPC"}
+	for _, o := range []core.ClientCapabilityOverride{{Product: "Plex HTPC", MaxHeight: 720}, {ID: "htpc", MaxHeight: 720}} {
+		if !Playback(htpc, []core.ClientCapabilityOverride{o}).HeightLocked || Playback(kodi, []core.ClientCapabilityOverride{o}).HeightLocked {
+			t.Fatal("HTPC edit crossed into PM4K")
+		}
+	}
+	if !Playback(kodi, []core.ClientCapabilityOverride{{Product: "PM4K", MaxHeight: 720}}).HeightLocked || Playback(htpc, []core.ClientCapabilityOverride{{Product: "PM4K", MaxHeight: 720}}).HeightLocked {
+		t.Fatal("PM4K edit crossed into HTPC")
+	}
+}
+
 func TestPolicyMatchesHistoricalFamilies(t *testing.T) {
 	text := []string{"srt", "subrip", "webvtt", "vtt", "ass", "ssa"}
 	image := append(append([]string{}, text...), "pgs", "hdmv_pgs_subtitle", "vobsub", "dvd_subtitle")

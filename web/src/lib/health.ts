@@ -313,8 +313,8 @@ export function cacheHealth(v: unknown): HealthItem {
   const base = { id: "cache" as const, label: t("Cache"), href: "/cache" };
   if (!isPlainObject(v))
     return { ...base, level: "unknown", summary: t("Not reported"), details: [] };
-  const used = num(v.used ?? v.usedBytes);
-  const budget = num(v.budget ?? v.budgetBytes);
+  const used = num(v.used);
+  const budget = num(v.budget);
   if (v.mode === "off")
     return { ...base, level: "off", summary: t("Persistent media bypassed"), details: [] };
   if (budget <= 0)
@@ -791,6 +791,7 @@ export interface NowPlaying {
   product: string;
   decision: string;
   decisionReason: string;
+  qualityFallback?: string;
   /** Whether the current decision copies each stream; a remux with audioCopy false is transcoding only the audio. */
   videoCopy: boolean;
   audioCopy: boolean;
@@ -808,6 +809,20 @@ export interface NowPlaying {
   /** Where the release streams from: "Usenet" or a debrid service such as "Real-Debrid". */
   origin: string;
   failovers: number;
+  /** The client's address, when the server reports it. */
+  ip: string;
+  /** Delivered bitrate now (or the encode's target), kbps; 0 when unknown. */
+  bitrateKbps: number;
+  /** Short human descriptions, e.g. "HEVC 2160p HDR10" → "H.264 1080p SDR". */
+  sourceVideo: string;
+  outputVideo: string;
+  sourceAudio: string;
+  outputAudio: string;
+  container: string;
+  /** Catalogue key for artwork, when known. */
+  ratingKey: number;
+  /** Selected subtitle, e.g. "English SRT" or "English PGS (burned)". */
+  subtitle: string;
 }
 
 function pick(o: Record<string, unknown>, ...keys: string[]): unknown {
@@ -853,6 +868,7 @@ export function normalizeSessions(v: unknown): NowPlaying[] {
       product: str(pick(client, "product")),
       decision: str(pick(s, "Decision", "decision")),
       decisionReason: str(pick(s, "decisionReason", "DecisionReason")),
+      qualityFallback: str(pick(s, "qualityFallback", "QualityFallback")),
       videoCopy: pick(s, "decisionVideoCopy", "DecisionVideoCopy") === true,
       audioCopy: pick(s, "decisionAudioCopy", "DecisionAudioCopy") === true,
       remote: pick(client, "remote") === true,
@@ -866,6 +882,15 @@ export function normalizeSessions(v: unknown): NowPlaying[] {
       release: str(release.name),
       origin: str(pick(s, "origin", "Origin")),
       failovers: num(pick(s, "Failovers", "failovers")),
+      ip: str(pick(s, "ip", "IP", "Ip")) || str(pick(client, "ip", "address")),
+      bitrateKbps: num(pick(s, "bitrateKbps", "BitrateKbps")),
+      sourceVideo: str(pick(s, "sourceVideo", "SourceVideo")),
+      outputVideo: str(pick(s, "outputVideo", "OutputVideo")),
+      sourceAudio: str(pick(s, "sourceAudio", "SourceAudio")),
+      outputAudio: str(pick(s, "outputAudio", "OutputAudio")),
+      container: str(pick(s, "container", "Container")),
+      ratingKey: num(pick(s, "ratingKey", "RatingKey")),
+      subtitle: str(pick(s, "subtitle", "Subtitle")),
     };
   });
 }

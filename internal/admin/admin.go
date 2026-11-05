@@ -243,6 +243,10 @@ type Deps struct {
 
 	// Prerolls backs /api/admin/prerolls*. Nil hides the routes.
 	Prerolls Prerolls
+
+	// PlexServers is watch sync with owner-run Plex Media Servers. Nil
+	// hides the routes.
+	PlexServers PlexServers
 }
 
 // Handler is the admin HTTP handler. Use NewHandler when you need access
@@ -259,9 +263,6 @@ type Handler struct {
 	authLimit      *authLimiter
 	loginBodySlots chan struct{}
 }
-
-// New returns the admin handler per the work-package contract.
-func New(deps Deps) http.Handler { return NewHandler(deps) }
 
 // NewHandler builds the admin handler. It panics when Deps.Config is nil.
 func NewHandler(deps Deps) *Handler {
@@ -456,6 +457,7 @@ func (h *Handler) routes() *http.ServeMux {
 	h.personalizationRoutes(api)
 	h.collectionRoutes(mux, api)
 	h.prerollRoutes(api)
+	h.plexServerRoutes(api)
 
 	mux.HandleFunc("/api/", h.requireAuth(func(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "not_found", "no such API endpoint")

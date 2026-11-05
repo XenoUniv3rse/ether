@@ -14,6 +14,7 @@ import (
 type compatApp struct {
 	Protocol      string   `json:"protocol"`
 	Name          string   `json:"name"`
+	Product       string   `json:"product,omitempty"`
 	Devices       []string `json:"devices"`
 	VideoCodecs   []string `json:"videoCodecs"`
 	Subtitles     []string `json:"subtitles"`
@@ -60,6 +61,14 @@ type compatCatalog struct {
 func builtinApps() []compatApp {
 	return []compatApp{
 		{Protocol: "plex", Name: "Plex Web", Devices: []string{"Browser"}, DirectPlay: "browser", Certification: "builtin"},
+		{Protocol: "plex", Name: "Plex for Android phones", Product: "Plex for Android (Mobile)", Devices: []string{"Android"}, DirectPlay: "reported", Certification: "builtin"},
+		{Protocol: "plex", Name: "Plex for Android TV", Product: "Plex for Android (TV)", Devices: []string{"Android TV"}, DirectPlay: "reported", Certification: "builtin"},
+		{Protocol: "plex", Name: "Plex for iOS", Devices: []string{"iOS"}, DirectPlay: "reported", Certification: "builtin"},
+		{Protocol: "plex", Name: "Plex for Apple TV", Devices: []string{"Apple TV"}, DirectPlay: "reported", Certification: "builtin"},
+		{Protocol: "plex", Name: "Plex HTPC", Devices: []string{"Home theater PC"}, DirectPlay: "reported", Certification: "builtin"},
+		{Protocol: "plex", Name: "Plex for Windows", Devices: []string{"Home theater PC"}, DirectPlay: "reported", Certification: "builtin"},
+		{Protocol: "plex", Name: "Plex for Mac", Devices: []string{"Mac"}, DirectPlay: "reported", Certification: "builtin"},
+		{Protocol: "plex", Name: "Plex for Kodi", Product: "PM4K", Devices: []string{"Kodi"}, DirectPlay: "reported", Certification: "builtin"},
 		{Protocol: "jellyfin", Name: "Swiftfin", Devices: []string{"Apple TV", "iOS"}, DirectPlay: "reported", Certification: "pending"},
 		{Protocol: "jellyfin", Name: "Findroid", Devices: []string{"Android"}, Subtitles: []string{"srt", "ass"}, DirectPlay: "findroid", Certification: "pending"},
 		{Protocol: "jellyfin", Name: "Streamyfin", Devices: []string{"Android"}, VideoCodecs: []string{"h264", "hevc", "vp8", "vp9", "av1"}, Subtitles: []string{"srt", "vtt", "ttml"}, DirectPlay: "listed", Note: "no-dv5", Certification: "pending"},

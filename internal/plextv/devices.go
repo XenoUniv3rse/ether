@@ -78,6 +78,9 @@ func (c *Client) PublishConnectionsWith(ctx context.Context, serverToken string,
 // DELETE /devices/{id}.xml removes it (what the plex.tv Authorized Devices
 // page does). It reports false when the account lists no such device.
 func (c *Client) RemoveDevice(ctx context.Context, token string) (bool, error) {
+	if strings.TrimSpace(c.id.ClientIdentifier) == "" {
+		return false, errors.New("plextv: machine identifier required")
+	}
 	resp, err := c.do(ctx, request{method: http.MethodGet, path: "/devices.xml", token: token, accept: "application/xml"})
 	if err != nil {
 		return false, err
@@ -86,20 +89,42 @@ func (c *Client) RemoveDevice(ctx context.Context, token string) (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("plextv: devices: %w", err)
 	}
+	var id string
+	var provides string
+	matches := 0
 	for _, d := range root.findAll("Device") {
 		if d.attr("clientIdentifier") != c.id.ClientIdentifier {
 			continue
 		}
-		id := d.attr("id")
-		if _, err := strconv.ParseInt(id, 10, 64); err != nil {
-			return false, fmt.Errorf("plextv: device record without a numeric id")
-		}
-		if _, err := c.do(ctx, request{method: http.MethodDelete, path: "/devices/" + id + ".xml", token: token, accept: "application/xml"}); err != nil {
-			return false, err
-		}
-		return true, nil
+		matches++
+		id = d.attr("id")
+		provides = d.attr("provides")
 	}
-	return false, nil
+	if matches == 0 {
+		return false, nil
+	}
+	if matches != 1 {
+		return false, errors.New("plextv: ambiguous device identifier")
+	}
+	if provides != "" {
+		server := false
+		for _, kind := range strings.Split(provides, ",") {
+			if strings.EqualFold(strings.TrimSpace(kind), "server") {
+				server = true
+			}
+		}
+		if !server {
+			return false, errors.New("plextv: matching device is not a server")
+		}
+	}
+	n, err := strconv.ParseUint(id, 10, 64)
+	if err != nil || n == 0 {
+		return false, errors.New("plextv: device record without a positive numeric id")
+	}
+	if _, err := c.do(ctx, request{method: http.MethodDelete, path: "/devices/" + id + ".xml", token: token, accept: "application/xml"}); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // ServerRegistration is the server info PMS sends to POST /servers.xml

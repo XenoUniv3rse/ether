@@ -38,6 +38,66 @@ function renderLiveTV(path = "/livetv") {
 
 type Call = { url: string; init?: RequestInit };
 
+// The console asks for pages; this mirrors the server's page shape so the
+// tests can keep declaring a flat channel array.
+function channelPage(channels: any[], url: string) {
+  const u = new URL(url, "http://local");
+  const offset = Number(u.searchParams.get("offset") ?? 0);
+  const limit = Number(u.searchParams.get("limit") ?? 200);
+  const search = (u.searchParams.get("q") ?? "").trim().toLowerCase();
+  const filter = u.searchParams.get("filter") ?? "all";
+  const numeric = (c: any) => parseFloat(c.number) || 0;
+  const sorted = [...channels].sort(
+    (a, b) =>
+      Number(a.kind === "virtual" ? 0 : 1) - Number(b.kind === "virtual" ? 0 : 1) ||
+      String(a.sourceId ?? "").localeCompare(String(b.sourceId ?? "")) ||
+      numeric(a) - numeric(b) ||
+      String(a.number).localeCompare(String(b.number)),
+  );
+  const matches = sorted.filter((c) => {
+    if (filter === "live" && !c.enabled) return false;
+    if (filter === "favorites" && !c.favorite) return false;
+    if (filter === "virtual" && c.kind !== "virtual") return false;
+    if (filter === "iptv" && c.kind !== "iptv") return false;
+    if (filter === "off" && c.enabled) return false;
+    if (filter === "missing" && (!c.enabled || c.kind !== "iptv" || c.guideId)) return false;
+    return !search || `${c.number} ${c.name} ${c.group ?? ""}`.toLowerCase().includes(search);
+  });
+  const groups: any[] = [];
+  matches.forEach((c, i) => {
+    const key = c.kind === "virtual" ? "virtual" : `src-${c.sourceId ?? ""}`;
+    if (!groups.length || groups[groups.length - 1].key !== key)
+      groups.push({
+        key,
+        sourceId: c.sourceId,
+        kind: c.kind === "virtual" ? "virtual" : "iptv",
+        count: 0,
+        start: i,
+      });
+    groups[groups.length - 1].count++;
+  });
+  const counts = {
+    all: channels.length,
+    live: channels.filter((c) => c.enabled).length,
+    favorites: channels.filter((c) => c.favorite).length,
+    virtual: channels.filter((c) => c.kind === "virtual").length,
+    iptv: channels.filter((c) => c.kind === "iptv").length,
+    off: channels.filter((c) => !c.enabled).length,
+    missing: channels.filter((c) => c.enabled && c.kind === "iptv" && !c.guideId).length,
+  };
+  const page = matches.slice(offset, offset + limit);
+  return {
+    channels: page,
+    total: matches.length,
+    counts,
+    groups,
+    coverage: Object.fromEntries(
+      page.map((c) => [c.id, c.kind === "virtual" || Boolean(c.guideId)]),
+    ),
+    nextNumber: String(Math.max(0, ...channels.map((c) => Math.floor(numeric(c)))) + 1),
+  };
+}
+
 function backend(
   channels: unknown[] = [],
   extra: (url: string, init?: RequestInit) => unknown = () => undefined,
@@ -48,10 +108,15 @@ function backend(
     vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       calls.push({ url, init });
-      let data: unknown = extra(url, init);
+      const method = init?.method ?? "GET";
+      let data: unknown = await extra(url, init);
       if (data !== undefined) return new Response(JSON.stringify(data), { status: 200 });
       data = [];
-      if (url.endsWith("/livetv/channels") && (init?.method ?? "GET") === "GET") data = channels;
+      if (url.includes("/livetv/channels/page")) data = channelPage(channels, url);
+      else if (url.endsWith("/livetv/channels/summary")) data = channels;
+      else if (/\/livetv\/channels\/[^/?]+$/.test(url) && method === "GET")
+        data = channels.find((c: any) => url.endsWith(`/livetv/channels/${c.id}`)) ?? {};
+      else if (url.endsWith("/livetv/channels") && method === "GET") data = channels;
       else if (/\/livetv\/channels(\/|$)/.test(url)) data = JSON.parse(String(init?.body ?? "{}"));
       else if (url.endsWith("/users"))
         data = { users: [{ id: 12, title: "Sam", username: "sam" }] };
@@ -120,20 +185,26 @@ describe("Live TV studio", () => {
       })),
     );
     renderLiveTV();
-    const lineup = await screen.findByRole("complementary", { name: "Lineup" });
+    const lineup = await screen.findByRole("grid", { name: "Programme guide" });
     await within(lineup).findByRole("button", { name: "1 Station 1" }, WAIT);
     fireEvent.change(screen.getByRole("searchbox", { name: "Search channels" }), {
       target: { value: "Weather" },
     });
+    await waitFor(
+      () => expect(within(lineup).queryByRole("button", { name: "1 Station 1" })).toBeNull(),
+      WAIT,
+    );
     expect(within(lineup).getByRole("button", { name: "25 Station 25" })).toBeInTheDocument();
-    expect(within(lineup).queryByRole("button", { name: "1 Station 1" })).toBeNull();
     fireEvent.change(screen.getByRole("searchbox", { name: "Search channels" }), {
       target: { value: "" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Show" }));
     fireEvent.click(screen.getByRole("menuitemradio", { name: /Favourites/ }));
+    await waitFor(
+      () => expect(within(lineup).queryByRole("button", { name: "1 Station 1" })).toBeNull(),
+      WAIT,
+    );
     expect(within(lineup).getByRole("button", { name: "25 Station 25" })).toBeInTheDocument();
-    expect(within(lineup).queryByRole("button", { name: "1 Station 1" })).toBeNull();
   });
 
   it("builds a virtual channel from a catalogue search and named viewer", async () => {
@@ -287,7 +358,7 @@ describe("Live TV studio", () => {
     ).toBe(true);
   });
 
-  it("maps a channel without listings to a guide channel from Guide data", async () => {
+  it("maps a channel without listings from the Guide tab's drawer", async () => {
     const calls = backend([iptv("c1")], (url) => {
       if (url.endsWith("/livetv/guide/coverage")) return [{ channelId: "c1", programmes: 0 }];
       if (url.includes("/livetv/guide/channels"))
@@ -304,8 +375,9 @@ describe("Live TV studio", () => {
     });
     renderLiveTV("/livetv/guide-data");
     expect(await screen.findByText(/1 of 1 need a guide/, {}, WAIT)).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Map guide for News 24" }));
+    fireEvent.click(screen.getByRole("button", { name: /Map guide for News 24/ }));
     fireEvent.click(await screen.findByRole("button", { name: /News 24 HD/ }, WAIT));
+    fireEvent.click(await screen.findByRole("button", { name: /Use this guide/ }, WAIT));
     await waitFor(() => expect(sent(calls, "PUT", /\/livetv\/channels\/c1$/)).toHaveLength(1));
     expect(body(sent(calls, "PUT", /\/livetv\/channels\/c1$/)[0])).toMatchObject({
       guideSourceId: "epg1",
@@ -334,6 +406,7 @@ describe("Live TV studio", () => {
                 guideId: "n24",
                 guideName: "News 24 HD",
                 method: "name",
+                reviewRegion: true,
               },
               {
                 channelId: "c2",
@@ -350,9 +423,13 @@ describe("Live TV studio", () => {
     );
     renderLiveTV("/livetv/guide-data");
     fireEvent.click(await screen.findByRole("button", { name: /Auto-match/ }, WAIT));
-    const proposals = await screen.findByRole("region", { name: "Suggested matches" }, WAIT);
-    fireEvent.click(within(proposals).getByLabelText("Accept match for Cartoons"));
-    fireEvent.click(within(proposals).getByRole("button", { name: /Apply 1/ }));
+    const uncertain = await screen.findByLabelText("Accept match for News 24", {}, WAIT);
+    expect(uncertain).not.toBeChecked();
+    expect(screen.getByText("Check region")).toBeVisible();
+    expect(screen.getByLabelText("Accept match for Cartoons")).toBeChecked();
+    fireEvent.click(uncertain);
+    fireEvent.click(await screen.findByLabelText("Accept match for Cartoons", {}, WAIT));
+    fireEvent.click(await screen.findByRole("button", { name: /Apply 1/ }, WAIT));
     await waitFor(() => expect(sent(calls, "POST", /\/livetv\/guide\/match$/)).toHaveLength(2));
     const [dry, apply] = sent(calls, "POST", /\/livetv\/guide\/match$/);
     expect(body(dry)).toEqual({ dryRun: true });
@@ -371,8 +448,8 @@ describe("Live TV studio", () => {
       target: { value: "https://epg.example/regional.xml.gz" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Import source" }));
-    await waitFor(() => expect(sent(calls, "POST", /\/livetv\/sources$/)).toHaveLength(1));
-    expect(body(sent(calls, "POST", /\/livetv\/sources$/)[0])).toMatchObject({
+    await waitFor(() => expect(sent(calls, "POST", /\/livetv\/sources(\?|$)/)).toHaveLength(1));
+    expect(body(sent(calls, "POST", /\/livetv\/sources(\?|$)/)[0])).toMatchObject({
       name: "Regional listings",
       guideUrl: "https://epg.example/regional.xml.gz",
       playlistUrl: "",
@@ -397,11 +474,10 @@ describe("Live TV studio", () => {
     ]);
   });
 
-  it("rebinds an open channel drawer from the lineup and names that channel on delete", async () => {
+  it("rebinds an open channel drawer to another channel and names that channel on delete", async () => {
     const channels: Record<string, unknown>[] = [iptv("news", { number: "2", name: "News 24" })];
     const calls = backend(channels, (url, init) => {
       const method = init?.method ?? "GET";
-      if (url.endsWith("/livetv/channels") && method === "GET") return channels;
       if (url.endsWith("/livetv/channels") && method === "POST") {
         const saved = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
         saved.id = "created";
@@ -417,8 +493,7 @@ describe("Live TV studio", () => {
     fireEvent.click(screen.getByRole("button", { name: /Create channel/ }));
     await waitFor(() => expect(sent(calls, "POST", /\/livetv\/channels$/)).toHaveLength(1));
     expect(await screen.findByLabelText("Name")).toHaveValue("Movie night");
-    const lineup = screen.getByRole("complementary", { name: "Lineup" });
-    expect(lineup.className).toContain("lg:z-[60]");
+    const lineup = screen.getByRole("grid", { name: "Programme guide" });
     fireEvent.click(within(lineup).getByRole("button", { name: "2 News 24" }));
     expect(await screen.findByLabelText("Name")).toHaveValue("News 24");
     fireEvent.click(screen.getByRole("tab", { name: "Details" }));
@@ -470,8 +545,8 @@ describe("Live TV source sign-in", () => {
     fireEvent.change(screen.getByLabelText("Username"), { target: { value: "me" } });
     fireEvent.change(screen.getByLabelText("Password"), { target: { value: "pw" } });
     fireEvent.click(screen.getByRole("button", { name: "Import source" }));
-    await waitFor(() => expect(sent(calls, "POST", /\/livetv\/sources$/)).toHaveLength(1));
-    expect(body(sent(calls, "POST", /\/livetv\/sources$/)[0])).toMatchObject({
+    await waitFor(() => expect(sent(calls, "POST", /\/livetv\/sources(\?|$)/)).toHaveLength(1));
+    expect(body(sent(calls, "POST", /\/livetv\/sources(\?|$)/)[0])).toMatchObject({
       name: "My provider",
       playlistUrl: "",
       auth: {
@@ -502,12 +577,67 @@ describe("Live TV source sign-in", () => {
     renderLiveTV("/livetv?source=p1");
     expect(await screen.findByText(/Saved. Leave as is to keep it/, {}, WAIT)).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Save and re-import" }));
-    await waitFor(() => expect(sent(calls, "PUT", /\/livetv\/sources\/p1$/)).toHaveLength(1));
-    expect(body(sent(calls, "PUT", /\/livetv\/sources\/p1$/)[0]).auth).toEqual({
+    await waitFor(() => expect(sent(calls, "PUT", /\/livetv\/sources\/p1(\?|$)/)).toHaveLength(1));
+    expect(body(sent(calls, "PUT", /\/livetv\/sources\/p1(\?|$)/)[0]).auth).toEqual({
       type: "basic",
       username: "owner",
       password: "••••",
       userAgent: "VLC/3.0",
+    });
+  });
+
+  it("edits an Xtream lineup's channel groups and sends them once on save", async () => {
+    const calls = backend([], (url, init) => {
+      if (url.endsWith("/livetv/sources") && (init?.method ?? "GET") === "GET")
+        return [
+          {
+            id: "x1",
+            name: "Big panel",
+            updatedAt: "2026-10-19T00:00:00Z",
+            hasPlaylist: true,
+            channelCount: 130,
+            auth: {
+              type: "xtream",
+              server: "http://panel.example",
+              username: "me",
+              password: "••••",
+            },
+            account: {
+              status: "Active",
+              trial: true,
+              expiresAt: new Date(Date.now() + 5 * 3600e3).toISOString(),
+              maxConnections: 1,
+              activeConnections: 0,
+              checkedAt: "2026-10-19T00:00:00Z",
+            },
+            groups: [
+              { name: "EVENTS", channels: 20 },
+              { name: "UK | News", channels: 100 },
+              { name: "Adult", channels: 10, adult: true, excluded: true },
+            ],
+            excludeGroups: ["Adult"],
+          },
+        ];
+      return undefined;
+    });
+    renderLiveTV("/livetv?source=x1");
+    expect(await screen.findByText("Allows 1 connection", {}, WAIT)).toBeInTheDocument();
+    expect(screen.getAllByText("Trial").length).toBeGreaterThan(0);
+    fireEvent.click(screen.getByRole("tab", { name: /Channel groups/ }));
+    expect(screen.getByText("120 channels will be imported")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("checkbox", { name: /EVENTS/ }));
+    expect(screen.getByText("100 channels will be imported")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("switch", { name: "Include new groups automatically" }));
+    fireEvent.click(screen.getByRole("radio", { name: "My order" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save and re-import" }));
+    await waitFor(() =>
+      expect(sent(calls, "PUT", /\/livetv\/sources\/x1(?:\?|$)/)).toHaveLength(1),
+    );
+    expect(body(sent(calls, "PUT", /\/livetv\/sources\/x1(?:\?|$)/)[0])).toMatchObject({
+      excludeGroups: ["Adult", "EVENTS"],
+      newGroups: "exclude",
+      hideAdult: false,
+      groupOrder: ["UK | News"],
     });
   });
 
@@ -682,4 +812,101 @@ describe("Live TV access on the viewer profile", () => {
       }),
     );
   });
+});
+
+it("bulk selects matching channels beyond the loaded page without fetching full rows", async () => {
+  const channels = Array.from({ length: 450 }, (_, i) =>
+    iptv(`paged-${i}`, {
+      number: String(i + 1),
+      name: `Paged ${i + 1}`,
+      enabled: i !== 449,
+    }),
+  );
+  const calls = backend(channels);
+  renderLiveTV();
+  await screen.findByRole("button", { name: "1 Paged 1" }, WAIT);
+  fireEvent.click(screen.getByRole("checkbox", { name: "Select all matches" }));
+  fireEvent.click(await screen.findByRole("button", { name: /^Favourite$/ }));
+  await waitFor(() => expect(sent(calls, "PATCH", /\/livetv\/channels\/bulk$/)).toHaveLength(1));
+  const edit = body(sent(calls, "PATCH", /\/livetv\/channels\/bulk$/)[0]);
+  expect(edit.ids).toHaveLength(449);
+  expect(edit.ids).toContain("paged-448");
+  expect(edit.ids).not.toContain("paged-449");
+  expect(edit.favorite).toBe(true);
+  expect(sent(calls, "GET", /\/livetv\/channels$/)).toHaveLength(0);
+  expect(
+    calls
+      .filter((c) => c.url.includes("/livetv/channels/page"))
+      .every((c) => new URL(c.url, "http://local").searchParams.get("offset") === "0"),
+  ).toBe(true);
+});
+
+it("keeps placeholder rows aligned while a deep page is loading", async () => {
+  const channels = Array.from({ length: 450 }, (_, i) =>
+    iptv(`sparse-${i}`, { number: String(i + 1), name: `Sparse ${i + 1}` }),
+  );
+  let release: (() => void) | undefined;
+  backend(channels, (url) => {
+    if (
+      url.includes("/livetv/channels/page") &&
+      new URL(url, "http://local").searchParams.get("offset") === "200"
+    )
+      return new Promise((resolve) => {
+        release = () => resolve(channelPage(channels, url));
+      });
+    return undefined;
+  });
+  renderLiveTV();
+  await screen.findByRole("button", { name: "1 Sparse 1" }, WAIT);
+  const grid = screen.getByRole("grid", { name: "Programme guide" });
+  fireEvent.scroll(grid, { target: { scrollTop: 21000 } });
+  await waitFor(() =>
+    expect(grid.querySelectorAll('[role="row"][aria-busy="true"]').length).toBeGreaterThan(0),
+  );
+  await waitFor(() => expect(release).toBeDefined());
+  release!();
+  await within(grid).findByRole("button", { name: "351 Sparse 351" }, WAIT);
+  await waitFor(() =>
+    expect(grid.querySelectorAll('[role="row"][aria-busy="true"]').length).toBe(0),
+  );
+});
+
+it("uses saved source state when a different cluster node has no import progress", async () => {
+  const source = {
+    id: "src1",
+    name: "Shared source",
+    hasPlaylist: true,
+    playlistUrl: "https://example.invalid/list.m3u",
+    channelCount: 17,
+  };
+  let finish!: (v: unknown) => void;
+  const importing = new Promise((resolve) => {
+    finish = resolve;
+  });
+  const calls = backend([iptv("c1")], (url, init) => {
+    if (url.endsWith("/livetv/sources")) return [source];
+    if (url.includes("/livetv/sources/progress/")) return null;
+    if (url.includes("/livetv/sources/src1?") && init?.method === "PUT") return importing;
+    return undefined;
+  });
+  renderLiveTV("/livetv?source=src1");
+  const save = await screen.findByRole("button", { name: "Save and re-import" }, WAIT);
+  await waitFor(() => expect(save).toBeEnabled());
+  fireEvent.click(save);
+  await waitFor(() => expect(sent(calls, "PUT", /sources/)).toHaveLength(1));
+  expect(
+    await screen.findByText(
+      "Import in progress. Detailed progress is unavailable on this server.",
+      {},
+      WAIT,
+    ),
+  ).toBeVisible();
+  expect(await screen.findByText("17 channels in the last saved import", {}, WAIT)).toBeVisible();
+  expect(sent(calls, "GET", /\/livetv\/sources$/).length).toBeGreaterThan(1);
+  finish(source);
+  await waitFor(() =>
+    expect(
+      screen.queryByText("Import in progress. Detailed progress is unavailable on this server."),
+    ).toBeNull(),
+  );
 });

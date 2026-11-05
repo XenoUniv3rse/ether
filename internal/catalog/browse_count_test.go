@@ -8,11 +8,8 @@ import (
 	"github.com/braedonsaunders/ether/internal/core"
 )
 
-// A large browse total walks the whole filtered set, so after a catalogue
-// write Browse serves the last total and recounts behind the read.
-func TestLargeBrowseTotalRecountsBehindTheRead(t *testing.T) {
-	defer func(d time.Duration) { recountEvery = d }(recountEvery)
-	recountEvery = 0
+// A large browse total must reflect catalogue writes before paging.
+func TestLargeBrowseTotalRecountsAfterWrite(t *testing.T) {
 	ctx := context.Background()
 	c := newChunkTestCatalog(t)
 	now := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
@@ -30,12 +27,8 @@ func TestLargeBrowseTotalRecountsBehindTheRead(t *testing.T) {
 	if err := c.UpsertTitle(ctx, extra, true); err != nil {
 		t.Fatal(err)
 	}
-	if page, err = c.Browse(ctx, q); err != nil || page.Total != staleCountMin {
-		t.Fatalf("total after a write %d %v: want the last count while it recounts", page.Total, err)
-	}
-	c.WaitRefreshes()
 	if page, err = c.Browse(ctx, q); err != nil || page.Total != staleCountMin+1 {
-		t.Fatalf("recounted total %d %v", page.Total, err)
+		t.Fatalf("total after a write %d %v", page.Total, err)
 	}
 }
 

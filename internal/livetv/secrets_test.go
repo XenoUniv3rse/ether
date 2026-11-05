@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"net/http"
 	"strings"
 	"testing"
 
@@ -35,16 +34,15 @@ func rawSource(t *testing.T, db *sql.DB, id string) string {
 
 func TestXtreamSourceSealedAtRestAndStillAuthenticates(t *testing.T) {
 	ctx := context.Background()
-	up := provider(t, func(r *http.Request) bool {
-		q := r.URL.Query()
-		return q.Get("username") == "xtream-user" && q.Get("password") == "xtream-pass"
-	})
+	var paths []string
+	streams := `[{"num":1,"name":"News Network","stream_id":101,"epg_channel_id":"news.us","category_id":"3"}]`
+	up := xtreamPanel(t, "xtream-user", "xtream-pass", &paths, &streams)
 	s := testService(t, Options{HTTPClient: up.Client(), Sealer: upgradedSealer(t)})
 	if _, err := s.ImportSource(ctx, Source{ID: "x", Name: "Panel", Auth: &SourceAuth{Type: "xtream", Server: up.URL + "/", Username: "xtream-user", Password: "xtream-pass"}}); err != nil {
 		t.Fatal(err)
 	}
 	raw := rawSource(t, s.o.DB, "x")
-	if strings.Contains(raw, "xtream-pass") || strings.Contains(raw, "xtream-user") || strings.Contains(raw, "get.php") {
+	if strings.Contains(raw, "xtream-pass") || strings.Contains(raw, "xtream-user") || strings.Contains(raw, "player_api.php") {
 		t.Fatalf("source credentials at rest: %s", raw)
 	}
 	// Refresh and the scheduler read the sealed row.

@@ -44,13 +44,9 @@ func httpInputArgs(input string, reconnect bool) []string {
 	}
 	args := []string{"-rw_timeout", "30000000", "-user_agent", "Ether"}
 	if reconnect {
-		args = append(args, "-reconnect", "1", "-reconnect_on_network_error", "1", "-reconnect_delay_max", "4")
+		args = append(args, "-reconnect", "1", "-reconnect_on_network_error", "1", "-reconnect_on_http_error", "416,5xx", "-reconnect_max_retries", "2", "-reconnect_delay_max", "4")
 	}
 	return args
-}
-
-func probeArgs(input string, a probeAttempt) []string {
-	return probeArgsMode(input, a, false)
 }
 
 func probeArgsMode(input string, a probeAttempt, live bool) []string {
@@ -81,8 +77,14 @@ func probeMode(ctx context.Context, r Runner, ffprobe, input string, live bool) 
 			lastErr = err
 			continue
 		}
+		// Preserve an observed duration if a subsequent pass finds more
+		// stream details but omits that same source's container duration.
+		if info.Duration <= 0 && best != nil && best.Duration > 0 {
+			info.Duration = best.Duration
+		}
 		best = info
 		if probeCompleteMode(info, live) {
+			markADTSProgramConfigs(ctx, r, ffprobe, input, info)
 			return info, nil
 		}
 		if i < len(probeAttempts)-1 {
@@ -90,6 +92,7 @@ func probeMode(ctx context.Context, r Runner, ffprobe, input string, live bool) 
 		}
 	}
 	if best != nil {
+		markADTSProgramConfigs(ctx, r, ffprobe, input, best)
 		return best, nil
 	}
 	return nil, lastErr
@@ -100,16 +103,13 @@ func probeOnceMode(ctx context.Context, r Runner, ffprobe, input string, a probe
 	defer cancel()
 	var stdout, stderr bytes.Buffer
 	err := r.Run(ctx, Command{Path: ffprobe, Args: probeArgsMode(input, a, live), Stdout: &stdout, Stderr: &stderr})
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
 	if err != nil {
 		return nil, fmt.Errorf("transcode: ffprobe: %w: %s", err, tail(stderr.String(), 400))
 	}
 	return ParseProbe(stdout.Bytes())
-}
-
-// probeComplete reports whether every stream ffmpeg needs parameters for has
-// them; otherwise a larger probe is worth the time.
-func probeComplete(m *core.MediaInfo) bool {
-	return probeCompleteMode(m, false)
 }
 
 func probeCompleteMode(m *core.MediaInfo, live bool) bool {
@@ -418,9 +418,15 @@ func mapStream(s ffprobeStream) (core.StreamInfo, bool) {
 		if si.Codec == "hevc" && len(extra) >= 13 && extra[0] == 1 {
 			si.CodecString = "hvc1." + hevcCodecs(extra)
 		}
+		if si.Codec == "hevc" {
+			si.MalformedHEVC = malformedHEVCConfig(extra)
+		}
 	case "audio":
 		si.Channels = s.Channels
 		si.ChannelLayout = s.ChannelLayout
+		if si.Codec == "aac" {
+			si.AACProgramConfig = aacASCProgramConfig(probeExtradata(s.Extradata), si.Channels)
+		}
 		si.SampleRate = int(atoi64(s.SampleRate))
 	}
 	return si, true

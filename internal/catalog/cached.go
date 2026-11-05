@@ -4,6 +4,7 @@ import (
 	"context"
 	"github.com/braedonsaunders/ether/internal/config"
 	"github.com/braedonsaunders/ether/internal/core"
+	"github.com/braedonsaunders/ether/internal/store"
 	"time"
 )
 
@@ -73,8 +74,8 @@ func (c *Catalog) ShowTrajectories(ctx context.Context, shows []core.RatingKey) 
 	// show lands in exactly one chunk, so per-show points stay ordered
 	// and are never merged across queries.
 	const batch = 200
-	for start := 0; start < len(args); start += batch {
-		part := args[start:min(start+batch, len(args))]
+	for chunk := range store.Chunks(args, batch) {
+		part := chunk
 		ph := placeholders(len(part))
 		srows, err := c.db.QueryContext(ctx, `SELECT key, status, rating FROM catalog_titles WHERE key IN (`+ph+`)`, part...)
 		if err != nil {
@@ -233,6 +234,11 @@ func (c *Catalog) RecentMovies(ctx context.Context, since time.Time) ([]core.Tit
 // RecentShows only reads the local premiere-date index.
 func (c *Catalog) RecentShows(ctx context.Context, since time.Time) ([]core.Title, error) {
 	return c.queryTitles(ctx, `SELECT `+titleCols+` FROM catalog_titles WHERE type='show' AND browsable=1 AND released_ts>? AND released_ts<=? ORDER BY key`, since.Unix(), c.now().Unix())
+}
+
+// RecentEpisodes is the bounded evidence window used before episode paging.
+func (c *Catalog) RecentEvidenceEpisodes(ctx context.Context, since time.Time) ([]core.Title, error) {
+	return c.queryTitles(ctx, `SELECT `+titleCols+` FROM catalog_titles WHERE type='episode' AND adult=0 AND release_known=1 AND released_ts>? AND released_ts<=? ORDER BY released_ts`, since.Unix(), c.now().Unix())
 }
 
 // CachedDiscoveryEpisodes returns regular episode metadata without hydration or

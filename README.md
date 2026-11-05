@@ -263,7 +263,7 @@ Open **`http://localhost:32400/ether/`** and complete the setup wizard. If Plex 
 2. **Choose your apps** (Plex, Jellyfin, Emby, Stremio, Silo, DLNA, Files/WebDAV, M3U & XMLTV) and **create your owner account**: sign in with Plex and claim the server, or create a local Ether owner account (password at least 12 characters).
 3. **Add a streaming source and indexer:** a debrid account (**Real-Debrid, TorBox, AllDebrid, Premiumize, Debrid-Link, Offcloud**), a Usenet provider, or both, plus a Stremio addon link, Torznab/Newznab URL, or Prowlarr import (tracker sites can be added later under **Sources › Indexers**).
 4. **Choose a cache preset** (an SSD with 32–50 GiB is plenty to start).
-5. **Catalogue:** official builds include a TMDB key; custom builds need a free [TMDB API key](https://www.themoviedb.org/settings/api). Add Trakt, Simkl, OpenSubtitles, or a local language model (Ollama/LM Studio) later under **Integrations**.
+5. **Catalogue:** official builds include a TMDB key; custom builds without a bundled key need a free [TMDB API key](https://www.themoviedb.org/settings/api). Add Trakt, Simkl, OpenSubtitles, or a local language model (Ollama/LM Studio) later under **Integrations**.
 
 **Documentation:** [**Installation & Clustering Guide**](docs/install.md) · [**Owner & User Guide**](docs/user-guide.md) · [**Multi-App Architecture & Watch Party**](docs/apps.md) · [**Performance Architecture**](docs/performance.md) · [**NAS & Homelab Templates**](packaging/community/README.md)
 
@@ -273,7 +273,7 @@ Open **`http://localhost:32400/ether/`** and complete the setup wizard. If Plex 
 
 - **What Ether is not:** Ether is not a local-file media server. It does not scan folders of video files on your disk, and it does not replace Plex Media Server, Jellyfin, or Emby for your personal media collection. Ether also ships no media content, no Usenet providers, no debrid accounts, no indexers, and no tracker definitions.
 - **What accounts you need:**
-  1. Catalogue metadata and artwork come from TMDB. Official builds include a TMDB key; custom builds need a free [**TMDB API key**](https://www.themoviedb.org/settings/api).
+  1. Catalogue metadata and artwork come from TMDB. Official builds include a TMDB key; custom builds without a bundled key need a free [**TMDB API key**](https://www.themoviedb.org/settings/api).
   2. At least one **streaming source**: a Usenet provider, a debrid service (Real-Debrid, TorBox, AllDebrid, Premiumize, Debrid-Link, or Offcloud), or both.
   3. At least one **indexer**: a Newznab or Torznab indexer, a Prowlarr instance, or a Stremio stream addon.
   4. **Optional:** a Plex account if you want to use official Plex apps. Jellyfin, Emby, Silo, Stremio, WebDAV, M3U/XMLTV, and DLNA work with local Ether accounts alone.
@@ -309,6 +309,8 @@ Ether never emulates, unlocks, or bypasses Plex Pass, Emby Premiere, or any paid
 - **Stremio, WebDAV, DLNA, and M3U/XMLTV:** Stremio apps, WebDAV players (Infuse, VLC, Kodi), LAN DLNA TVs, and IPTV clients (Channels DVR, TiviMate).
 
 **Unsupported web-wrapper apps:** Ether does not bundle third-party web clients (`jellyfin-web` or Emby Web). Client apps that are wrappers around a server-hosted web bundle, specifically **Jellyfin for Android phones**, **Jellyfin Desktop**, and **Emby for TV 2.x on Apple TV**, are unsupported. On Android phones use **Findroid** or **Streamyfin**; on Apple TV use **Infuse**, **Swiftfin**, **Silo**, or **Plex**.
+
+**Emby for Windows:** Compatibility is unverified. The current native Windows app bundles its own UI, but Ether does not serve Emby's `/web` assets; connections that require those assets will not work. Older hash-only Emby sign-in clients are also unsupported: Ether requires the plaintext `Pw` field to verify its stored password hash.
 </details>
 
 <details>

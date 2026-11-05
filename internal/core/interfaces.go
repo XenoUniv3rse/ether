@@ -55,6 +55,8 @@ type CreditFilter struct {
 
 // FilterGroup represents a nested boolean expression of browse filters.
 type FilterGroup struct {
+	// ParentOnly applies this subtree to the series when browsing episodes.
+	ParentOnly       bool          `json:"-"`
 	LastViewedAfter  int64         `json:"lastViewedAfter,omitempty"`
 	LastViewedBefore int64         `json:"lastViewedBefore,omitempty"`
 	Unwatched        *bool         `json:"unwatched,omitempty"`
@@ -67,7 +69,19 @@ type FilterGroup struct {
 
 // Filter narrows a browse or a smart collection. Zero values mean "any".
 type Filter struct {
-	Group           *FilterGroup       `json:"group,omitempty"`
+	Group *FilterGroup `json:"group,omitempty"`
+	// DigitalDiscovery applies the availability service's digital-date gate
+	// before counting and paging a discovery result.
+	DigitalDiscovery    bool `json:"-"`
+	DigitalDateEvidence bool `json:"-"`
+	// AvailabilityKeepKeys are the viewer's active playback sessions.
+	AvailabilityKeepKeys []RatingKey `json:"-"`
+	// Availability generations pin one evaluated hidden set across SQL reads.
+	HiddenMovieGeneration   string `json:"-"`
+	HiddenShowGeneration    string `json:"-"`
+	HiddenEpisodeGeneration string `json:"-"`
+	// ChildVisibility is the viewer policy evaluated on hydrated episodes.
+	ChildVisibility *Filter            `json:"-"`
 	RuleVisibility  string             `json:"-"` // owner-only rules browser: hidden or shown
 	PreviewRules    []LibraryExclusion `json:"-"`
 	PreviewFallback string             `json:"-"`
@@ -306,8 +320,14 @@ type Playlist struct {
 	UserID    int64       `json:"userId"`
 	Title     string      `json:"title"`
 	Smart     bool        `json:"smart"`
+	SmartURI  string      `json:"-"`
 	Items     []RatingKey `json:"items"`
 	UpdatedAt time.Time   `json:"updatedAt"`
+}
+
+// SmartPlaylists persists a section query for evaluation at read time.
+type SmartPlaylists interface {
+	CreateSmartPlaylist(ctx context.Context, userID int64, title, uri string) (*Playlist, error)
 }
 
 type Playlists interface {
@@ -505,6 +525,8 @@ type SegmentCache interface {
 // Transcoder (internal/transcode)
 
 type StreamInfo struct {
+	// MalformedHEVC marks an invalid SPS header found in the probe data.
+	MalformedHEVC bool `json:"malformedHEVC,omitempty"`
 	// Probe hints for enhancement backends that require progressive, steady-rate input.
 	Interlaced        bool `json:"interlaced,omitempty"`
 	VariableFrameRate bool `json:"variableFrameRate,omitempty"`
@@ -557,10 +579,18 @@ type StreamInfo struct {
 	HDR10Plus     *bool  `json:"hdr10Plus,omitempty"`
 	Channels      int    `json:"channels,omitempty"`
 	ChannelLayout string `json:"channelLayout,omitempty"`
-	SampleRate    int    `json:"sampleRate,omitempty"`
-	BitrateKbps   int    `json:"bitrateKbps,omitempty"`
-	External      bool   `json:"external,omitempty"` // sidecar subtitle (OpenSubtitles)
-	ExternalURL   string `json:"externalUrl,omitempty"`
+	// AACProgramConfig records a verified AAC channel_configuration=0 with
+	// an in-band program configuration element. Segmented TS needs a safe
+	// audio plan because later packets may omit that element.
+	AACProgramConfig bool `json:"aacProgramConfig,omitempty"`
+	// Times (microseconds on the source clock) let a bounded seek prime the
+	// decoder with the source's initial PCE before seeking to a later packet.
+	AACConfigPTS   *int64 `json:"aacConfigPts,omitempty"`
+	AACSourceStart *int64 `json:"aacSourceStart,omitempty"`
+	SampleRate     int    `json:"sampleRate,omitempty"`
+	BitrateKbps    int    `json:"bitrateKbps,omitempty"`
+	External       bool   `json:"external,omitempty"` // sidecar subtitle (OpenSubtitles)
+	ExternalURL    string `json:"externalUrl,omitempty"`
 
 	// DolbyVisionProfile is the DV profile (5, 7, 8...) from the DOVI
 	// configuration record; 0 when unknown or not Dolby Vision.
@@ -592,7 +622,7 @@ type Chapter struct {
 // ProbeFactsVersion is the generation of facts a probe is expected to carry,
 // including H.264/HEVC reference frames and descriptive audio handler titles.
 // Persisted probes from an older generation are cache misses.
-const ProbeFactsVersion = 2
+const ProbeFactsVersion = 5
 
 type MediaInfo struct {
 	Chapters    []Chapter     `json:"chapters,omitempty"`

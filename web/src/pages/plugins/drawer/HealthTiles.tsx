@@ -1,10 +1,10 @@
-import { DashboardMetricCard } from "@braedonsaunders/appkit-dashboard/primitives";
 import { Tooltip } from "@braedonsaunders/appkit-ui";
 import { Activity as ActivityIcon, CheckCircle2, Gauge, Globe, Info } from "lucide-react";
 import { t, tn } from "../../../i18n";
 import { formatBytes, formatNumber } from "../../../lib/format";
 import type { PluginDetail } from "../types";
 import { healthSummary } from "./health";
+import { Kpi } from "../../../components/Kpi";
 
 /* --------------------------------------------------------------- health tiles */
 
@@ -23,7 +23,7 @@ export function HealthTiles({ detail }: { detail: PluginDetail }) {
     level === "ok" ? "success" : level === "off" ? "info" : level === "warn" ? "warning" : "danger";
   return (
     <div className="grid gap-3 sm:grid-cols-3">
-      <DashboardMetricCard
+      <Kpi
         label={t("Responding")}
         value={health.word}
         detail={
@@ -40,7 +40,7 @@ export function HealthTiles({ detail }: { detail: PluginDetail }) {
         icon={level === "ok" ? <CheckCircle2 size={16} /> : <ActivityIcon size={16} />}
         tone={tone}
       />
-      <DashboardMetricCard
+      <Kpi
         label={t("Speed")}
         value={answered ? duration(im.p50Ms) : "—"}
         detail={
@@ -53,7 +53,7 @@ export function HealthTiles({ detail }: { detail: PluginDetail }) {
         icon={<Gauge size={16} />}
         tone={slow ? "warning" : "primary"}
       />
-      <DashboardMetricCard
+      <Kpi
         label={t("Network")}
         value={
           undeclared.length

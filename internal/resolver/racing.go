@@ -13,6 +13,7 @@ import (
 )
 
 type candidate struct {
+	fallback   bool
 	pluginKeys map[string]int64
 	policy     releasepolicy.Result
 	rel        core.Release
@@ -83,7 +84,12 @@ func (s *Service) optimisticCheck(r core.Release, nzb []byte) {
 }
 
 func (s *Service) resolution(key core.RatingKey, cands []candidate, winner int, nzb []byte, tr *Trace) *core.Resolution {
-	return s.resolutionSkipping(key, cands, winner, nzb, func(c candidate) bool { return tr.Candidates[c.trace].Rejected })
+	res := s.resolutionSkipping(key, cands, winner, nzb, func(c candidate) bool { return tr.Candidates[c.trace].Rejected })
+	if cands[winner].fallback {
+		res.QualityFallback = qualityFallbackReason(cands[winner].rel, tr)
+		tr.Downgrade = res.QualityFallback
+	}
+	return res
 }
 
 // resolutionSkipping is resolution with the caller deciding which
@@ -111,6 +117,10 @@ func (s *Service) resolutionSkipping(key core.RatingKey, cands []candidate, winn
 // equivalent can then bypass a stalled preferred source without losing quality.
 // Every worker is cancelled and joined before this function returns.
 func (s *Service) validateCandidates(ctx context.Context, cands []candidate, tr *Trace, race int) (int, []byte, error) {
+	if len(cands) > 0 && cands[0].fallback {
+		// Even an owner-enabled health race must preserve fallback tier order.
+		race = 1
+	}
 	if race <= 0 {
 		return s.validateRanked(ctx, cands, tr)
 	}
@@ -236,4 +246,19 @@ func compatibilityScore(r core.Release, c core.ClientCaps, t *core.Title) (float
 
 func permanentFailure(err error) bool {
 	return errors.Is(err, core.ErrArticleMissing) || errors.Is(err, core.ErrArticleCorrupt) || errors.Is(err, core.ErrReleaseRejected)
+}
+
+func qualityFallbackReason(rel core.Release, tr *Trace) string {
+	height := fallbackHeight(rel.Info)
+	label := "unknown resolution"
+	if height > 0 {
+		label = fmt.Sprintf("%dp", height)
+		if source := core.SourceLabel(rel.Info.Source); source != "" {
+			label += " " + source
+		}
+	}
+	if len(tr.Candidates) > 0 && tr.Limits != nil && height > 0 && height < tr.Limits.ProfileMinHeight {
+		return fmt.Sprintf("Played in %s: no acceptable %dp or better release was found.", label, tr.Limits.ProfileMinHeight)
+	}
+	return fmt.Sprintf("Played in %s: none of this profile's allowed qualities were found.", label)
 }

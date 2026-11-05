@@ -40,6 +40,9 @@ type renderOpts struct {
 	// storedOnly renders from stored catalogue rows only without scheduling
 	// background TMDB detail, show-children, or Plex GUID refreshes.
 	storedOnly bool
+	// availabilityInSQL is set for a catalogue page that already applied
+	// the same availability snapshot before counting and pagination.
+	availabilityInSQL bool
 }
 
 // metadataKey is the item's "key": children list for containers, the item
@@ -977,32 +980,20 @@ func containerExt(c string) string {
 
 // videoResolution is PMS's videoResolution value.
 func videoResolution(w, h int) string {
-	switch {
-	case w >= 3200 || h >= 1800:
+	switch tier := core.ResolutionTier(w, h); tier {
+	case 2160:
 		return "4k"
-	case w >= 1700 || h >= 1000:
-		return "1080"
-	case w >= 1200 || h >= 700:
-		return "720"
-	case w >= 960 || h >= 560:
-		return "576"
-	case w >= 640 || h >= 400:
-		return "480"
-	case w > 0 || h > 0:
+	case 0:
+		return ""
+	case 240:
 		return "sd"
+	default:
+		return strconv.Itoa(tier)
 	}
-	return ""
 }
 
 func resolutionLabel(w, h int) string {
-	switch r := videoResolution(w, h); r {
-	case "4k":
-		return "4K"
-	case "sd", "":
-		return "SD"
-	default:
-		return r + "p"
-	}
+	return core.ResolutionLabel(w, h)
 }
 
 // frameRateName is PMS's videoFrameRate value.
@@ -1186,7 +1177,9 @@ func languageTag(code string) string {
 func (s *Server) renderTitles(ctx context.Context, pr *Request, ts []core.Title, o renderOpts) []model.Metadata {
 	ctx = withStoredPolicy(ctx)
 	ts = s.visibleTitles(pr.User, ts)
-	ts = s.availableForViewer(ctx, pr.User, ts)
+	if !o.availabilityInSQL {
+		ts = s.availableForViewer(ctx, pr.User, ts)
+	}
 	if len(ts) == 0 {
 		return nil
 	}
@@ -1278,13 +1271,6 @@ type watchedEpisodesReader interface {
 // watchedEpisodesOfReader reads only the given shows' watched episodes.
 type watchedEpisodesOfReader interface {
 	WatchedEpisodesOf(ctx context.Context, userID int64, shows []int64) ([]core.RatingKey, error)
-}
-
-// applyListLeafCounts populates viewedLeafCount (and viewCount when all
-// episodes are watched) on shows and seasons in list/search/hub responses,
-// touching only shows that have at least one watched episode for the user.
-func (s *Server) applyListLeafCounts(ctx context.Context, pr *Request, items []model.Metadata, ts []core.Title) {
-	s.applyListLeafCountsOpts(ctx, pr, items, ts, false)
 }
 
 func (s *Server) applyListLeafCountsOpts(ctx context.Context, pr *Request, items []model.Metadata, ts []core.Title, storedOnly bool) {

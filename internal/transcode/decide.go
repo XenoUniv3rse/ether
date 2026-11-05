@@ -382,6 +382,13 @@ type issueContext struct {
 func collectIssues(info core.MediaInfo, v, a, sub *core.StreamInfo, ctx issueContext) (videoIssues, audioIssues, otherIssues []string) {
 	caps := ctx.caps
 	if v != nil {
+		identity := strings.ToLower(caps.Platform + " " + caps.Product + " " + caps.Device)
+		product := strings.ToLower(caps.Product)
+		browser := strings.Contains(product, "web") || strings.Contains(product, "chrome") || strings.Contains(product, "firefox") || strings.Contains(product, "safari") || strings.Contains(product, "edge")
+		android := strings.Contains(identity, "android") || strings.Contains(identity, "google tv") || strings.Contains(identity, "shield") || strings.Contains(identity, "fire tv") || strings.Contains(identity, "firetv") || strings.Contains(identity, "fire os")
+		if v.Codec == "hevc" && v.MalformedHEVC && android && !browser {
+			videoIssues = append(videoIssues, "the video header is malformed for hardware decoders")
+		}
 		if len(caps.VideoCodecs) > 0 && !caps.SupportsVideo(v.Codec) {
 			videoIssues = append(videoIssues, fmt.Sprintf("video codec %s not supported", v.Codec))
 		}
@@ -467,6 +474,44 @@ func planAudio(a *core.StreamInfo, caps core.ClientCaps, audioIssues []string, b
 		audioNote = "audio converted to stereo AAC to fit connection bitrate"
 	}
 	return audioCopy, audioCodec, audioKbps, audioNote
+}
+
+// pceAudioPlan avoids copying AAC that relies on an in-band configuration
+// emitted only at source start into formats which cannot retain that state.
+func pceAudioPlan(a *core.StreamInfo, caps core.ClientCaps, opts core.DecideOptions, sourceContainer, video string, copy bool, codec string, kbps int, note string) (bool, string, int, string) {
+	out := outputContainer(caps, opts, video, codec)
+	needsConversion := out == ContainerMPEGTS || (out == ContainerFMP4 && sourceContainer == "mpegts")
+	if a == nil || !a.AACProgramConfig || !copy || caps.Download || opts.Protocol == core.ProtocolDASH || opts.Protocol == core.ProtocolHTTP || !needsConversion {
+		return copy, codec, kbps, note
+	}
+	codec = audioTarget(caps, a)
+	ch := outputChannels(codec, a)
+	return false, codec, audioBitrateKbps(codec, ch), fmt.Sprintf("audio %s converted to %s %dch for segmented playback", a.Codec, codec, ch)
+}
+
+func applyAudioLimits(d *core.Decision, a *core.StreamInfo, caps core.ClientCaps, audioCopy bool, audioCodec string) {
+	if audioCopy || a == nil {
+		return
+	}
+	for _, limit := range caps.AudioLimits {
+		if limit.Codec != "" && limit.Codec != "*" && limit.Codec != audioCodec {
+			continue
+		}
+		switch {
+		case limit.Name == "audio.channels" && limit.Type == "upperBound":
+			if (d.AudioChannels == 0 && limit.Value < outputChannels(audioCodec, a)) || (d.AudioChannels > 0 && limit.Value < d.AudioChannels) {
+				d.AudioChannels = limit.Value
+			}
+		case limit.Name == "audio.bitrate" && limit.Type == "upperBound":
+			if d.AudioBitrateKbps == 0 || limit.Value < d.AudioBitrateKbps {
+				d.AudioBitrateKbps = limit.Value
+			}
+		case limit.Name == "audio.samplingRate" && limit.Type == "lowerBound":
+			if limit.Value > 48000 {
+				d.AudioSampleRate = limit.Value
+			}
+		}
+	}
 }
 
 // BurnsSubtitle reports whether Decide burns sub into the video. Text
@@ -580,46 +625,38 @@ func Decide(info core.MediaInfo, caps core.ClientCaps, opts core.DecideOptions, 
 
 	// Audio plan, shared by remux and transcode.
 	audioCopy, audioCodec, audioKbps, audioNote := planAudio(a, caps, audioIssues, bitrateCap)
-	if !audioCopy && a != nil {
-		for _, limit := range caps.AudioLimits {
-			if limit.Codec != "" && limit.Codec != "*" && limit.Codec != audioCodec {
-				continue
-			}
-			switch {
-			case limit.Name == "audio.channels" && limit.Type == "upperBound":
-				if (d.AudioChannels == 0 && limit.Value < outputChannels(audioCodec, a)) || (d.AudioChannels > 0 && limit.Value < d.AudioChannels) {
-					d.AudioChannels = limit.Value
-				}
-			case limit.Name == "audio.bitrate" && limit.Type == "upperBound":
-				if d.AudioBitrateKbps == 0 || limit.Value < d.AudioBitrateKbps {
-					d.AudioBitrateKbps = limit.Value
-				}
-			case limit.Name == "audio.samplingRate" && limit.Type == "lowerBound":
-				if limit.Value > 48000 {
-					d.AudioSampleRate = limit.Value
-				}
-			}
-		}
-	}
 
 	// 2. Remux: copy video into HLS.
 	videoCopyable := v == nil || (len(videoIssues) == 0 && hlsVideoOK(v.Codec))
+	copyVideo := ""
+	if v != nil {
+		copyVideo = v.Codec
+	}
+	remuxCopy, remuxCodec, remuxKbps, remuxNote := pceAudioPlan(a, caps, opts, info.Container, copyVideo, audioCopy, audioCodec, audioKbps, audioNote)
 	if opts.DirectStream && videoCopyable && !burn && (bitrateCap == 0 || info.BitrateKbps <= bitrateCap ||
 		// only the audio pushes it over: transcoding audio may fix that
-		(!audioCopy && info.BitrateKbps-copiedAudioKbps(a)+audioKbps <= bitrateCap)) {
+		(!remuxCopy && info.BitrateKbps-copiedAudioKbps(a)+remuxKbps <= bitrateCap)) {
 		d.Kind = core.DecisionRemux
 		d.VideoCopy = true
-		d.StripDolbyVision = hdr10Base
-		d.AudioCopy = audioCopy
-		d.AudioCodec = audioCodec
+		// A client without this profile direct-plays the compatible base
+		// layer (above). Once Ether copies the stream anyway, deliver a real
+		// base-only stream: keeping the configuration and RPUs makes some
+		// players pick a Dolby Vision decoder for an HDR10 fallback (#328).
+		d.StripDolbyVision = hdr10Base || (hasHDR10Base(v, caps) && !SupportsDVProfile(caps, v.DolbyVisionProfile))
+		if d.StripDolbyVision && !hdr10Base {
+			why = append([]string{fmt.Sprintf("client lacks Dolby Vision profile %d: delivering its HDR10 base layer", v.DolbyVisionProfile)}, why...)
+		}
+		d.AudioCopy = remuxCopy
+		d.AudioCodec = remuxCodec
+		applyAudioLimits(&d, a, caps, remuxCopy, remuxCodec)
 		if v != nil {
 			d.VideoCodec = v.Codec
 			d.MaxHeight = v.Height
 		}
-		d.Container = outputContainer(caps, opts, d.VideoCodec, audioCodec)
+		d.Container = outputContainer(caps, opts, d.VideoCodec, remuxCodec)
 		d.BitrateKbps = info.BitrateKbps
-		if !audioCopy && a != nil {
-			d.BitrateKbps = info.BitrateKbps - copiedAudioKbps(a) + audioKbps
+		if !remuxCopy && a != nil {
+			d.BitrateKbps = info.BitrateKbps - copiedAudioKbps(a) + remuxKbps
 		}
 		parts := []string{fmt.Sprintf("remux to HLS (%s)", d.Container)}
 		if v != nil && v.DolbyVision && !SupportsDVProfile(caps, v.DolbyVisionProfile) {
@@ -633,8 +670,8 @@ func Decide(info core.MediaInfo, caps core.ClientCaps, opts core.DecideOptions, 
 		if v != nil {
 			parts = append(parts, fmt.Sprintf("video %s copied", v.Codec))
 		}
-		if audioNote != "" {
-			parts = append(parts, audioNote)
+		if remuxNote != "" {
+			parts = append(parts, remuxNote)
 		} else if a != nil {
 			parts = append(parts, fmt.Sprintf("audio %s copied", a.Codec))
 		}
@@ -649,8 +686,6 @@ func Decide(info core.MediaInfo, caps core.ClientCaps, opts core.DecideOptions, 
 
 	// 3. Full transcode.
 	d.Kind = core.DecisionTranscode
-	d.AudioCopy = audioCopy
-	d.AudioCodec = audioCodec
 	d.BurnSubtitles = burn
 
 	srcH := 1080
@@ -687,6 +722,10 @@ func Decide(info core.MediaInfo, caps core.ClientCaps, opts core.DecideOptions, 
 	case supportsHEVC && pol.HEVCHardware && minPositive(heightCap, srcH) > 1080:
 		codec = "hevc"
 	}
+
+	audioCopy, audioCodec, audioKbps, audioNote = pceAudioPlan(a, caps, opts, info.Container, codec, audioCopy, audioCodec, audioKbps, audioNote)
+	d.AudioCopy, d.AudioCodec = audioCopy, audioCodec
+	applyAudioLimits(&d, a, caps, audioCopy, audioCodec)
 
 	videoBudget := 0
 	if bitrateCap > 0 {
@@ -795,7 +834,9 @@ func describeSource(info core.MediaInfo, v, a *core.StreamInfo) string {
 }
 
 // hdr10BaseReason explains why a Dolby Vision copy carries only its HDR10
-// base layer, or returns "" to keep the stream as it is. The player quirks
+// base layer, or returns "" to keep the stream as it is. Unsupported DV
+// profiles require an actual base-only output, not an unchanged copy whose
+// configuration still selects a DV decoder. The player quirks
 // are not hardware certifications or blanket HEVC/HDR limits; the client
 // matches are the registry quirks plex-appletv-hdr10-base (native Plex on
 // tvOS, any output) and plex-ios-hdr10-base (native Plex on iOS/iPadOS,
@@ -809,6 +850,11 @@ func hdr10BaseReason(v *core.StreamInfo, caps core.ClientCaps, opts core.DecideO
 	}
 	id := clientreg.Identity{Product: caps.Product, Platform: caps.Platform, Device: caps.Device, Version: caps.Version}
 	switch {
+	case !SupportsDVProfile(caps, v.DolbyVisionProfile) && androidClient(caps):
+		// Android players can pick a Dolby Vision decoder for a file whose
+		// profile the device lacks (#328); desktop players show the HDR10
+		// base of the same file directly, so only Android loses direct play.
+		return fmt.Sprintf("client lacks Dolby Vision profile %d: delivering its HDR10 base layer", v.DolbyVisionProfile)
 	case clientreg.HasQuirk(id, "plex-appletv-hdr10-base"):
 		return fmt.Sprintf("native Plex Apple TV compatibility: Dolby Vision profile %d uses its HDR10 base layer", v.DolbyVisionProfile)
 	case clientreg.HasQuirk(id, "plex-ios-hdr10-base") && outputContainer(caps, opts, v.Codec, "") == ContainerMatroska:
@@ -837,3 +883,9 @@ func hasHDR10Base(v *core.StreamInfo, caps core.ClientCaps) bool {
 
 // HasHDR10Base is hasHDR10Base for callers outside the package.
 func HasHDR10Base(v *core.StreamInfo, caps core.ClientCaps) bool { return hasHDR10Base(v, caps) }
+
+// androidClient reports an Android player (Plex sends Platform "Android";
+// some callers only know the product name).
+func androidClient(caps core.ClientCaps) bool {
+	return strings.EqualFold(caps.Platform, "Android") || strings.Contains(strings.ToLower(caps.Product), "android")
+}

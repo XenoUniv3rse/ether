@@ -2,7 +2,14 @@ import { t } from "../../i18n";
 import type { EtherUser } from "../../lib/types";
 
 /** One aggregate bucket from /stats/summary (a day, an hour, a device, a title, a viewer). */
-export type Bucket = { label: string; plays: number; watchedMs: number; bytes: number };
+export type Bucket = {
+  label: string;
+  /** A title's or show's rating key, or a viewer's user id, when known. */
+  key?: string;
+  plays: number;
+  watchedMs: number;
+  bytes: number;
+};
 
 export type Summary = {
   plays: number;
@@ -14,6 +21,19 @@ export type Summary = {
   platforms: Bucket[];
   titles: Bucket[];
   users: Bucket[];
+  // Richer breakdowns (absent on servers without them).
+  avgBitrateKbps?: number;
+  peakStreams?: number;
+  decisions?: Bucket[];
+  origins?: Bucket[];
+  qualities?: Bucket[];
+  places?: Bucket[];
+  kinds?: Bucket[];
+  shows?: Bucket[];
+  genres?: Bucket[];
+  heatmap?: { weekday: number; hour: number; plays: number; watchedMs: number }[];
+  dailyDelivery?: { label: string; direct: number; transcode: number; bytes: number }[];
+  dailyKinds?: { label: string; movieMs: number; episodeMs: number }[];
 };
 
 export type Play = {
@@ -46,8 +66,13 @@ export const viewerLabel = (viewer: EtherUser) => {
 };
 
 export function viewingQuery(f: ViewingFilter): string {
-  return `?days=${f.days}&user=${encodeURIComponent(f.user)}${f.year ? `&year=${f.year}` : ""}`;
+  // tz: minutes east of UTC, so day, hour and weekday buckets are local.
+  const tz = -new Date().getTimezoneOffset();
+  return `?days=${f.days}&user=${encodeURIComponent(f.user)}${f.year ? `&year=${f.year}` : ""}&tz=${tz}`;
 }
+
+/** Hours from milliseconds, one decimal. */
+export const hoursOf = (ms: number) => Math.round(ms / 360000) / 10;
 
 /** Why a play was not direct played, grouped for plain-language display. */
 export type ReasonKind =
@@ -115,6 +140,7 @@ export type ExperiencePlay = {
   decision: string;
   reasonKind: ReasonKind | "";
   reasonDetail: string;
+  qualityFallback?: string;
   origin: string;
   release: string;
   remote: boolean;
@@ -162,4 +188,9 @@ export type PlayDetail = Play &
     ratingKey?: number;
     platform: string;
     durationMs: number;
+    ip?: string;
+    avgBitrateKbps?: number;
+    sourceKbps?: number;
+    uhd?: boolean;
+    hdr?: boolean;
   };

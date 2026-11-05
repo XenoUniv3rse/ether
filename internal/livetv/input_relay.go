@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"log/slog"
 	"mime"
 	"net"
 	"net/http"
@@ -54,6 +55,7 @@ var (
 )
 
 type inputRelay struct {
+	taps   tapRegistry // shared provider connections (upstream_tap.go)
 	mu     sync.Mutex
 	host   string // 127.0.0.1:port; "" until first use
 	grants map[[sha256.Size]byte]*inputGrant
@@ -61,12 +63,14 @@ type inputRelay struct {
 }
 
 type inputGrant struct {
+	log     *slog.Logger // immutable, credential-free session correlation
 	token   string
 	origin  string      // the only origin that receives headers
 	headers http.Header // provider headers; immutable
 	ctx     context.Context
 	cancel  context.CancelFunc
 	slots   chan struct{}
+	source  string // the capped provider account behind this input; "" none
 
 	mu        sync.Mutex
 	resources map[string]*relayResource
@@ -105,6 +109,11 @@ func tokenKey(token string) [sha256.Size]byte { return sha256.Sum256([]byte(toke
 // grantInput replaces the session's grant with one for src. The token is
 // the only credential; it reaches ffmpeg as a path component.
 func (s *Service) grantInput(ss *session, src StreamSource, headers http.Header) error {
+	c := ss.info.Channel
+	source := src.AuthSourceID
+	if source == "" && c.SourceID != "" && (src.ID == stableID(c.ID, "playlist") || len(c.StreamSources) <= 1) {
+		source = c.SourceID
+	}
 	u, err := url.Parse(src.URL)
 	if err != nil || !validHTTP(src.URL) {
 		return core.ErrNotAvailable
@@ -115,8 +124,9 @@ func (s *Service) grantInput(ss *session, src StreamSource, headers http.Header)
 	}
 	ctx, cancel := context.WithCancel(s.ctx)
 	g := &inputGrant{
+		log:   s.sessionLog(ss).With("input", src.ID),
 		token: base64.RawURLEncoding.EncodeToString(b[:]), origin: relayOrigin(u), headers: headers.Clone(),
-		ctx: ctx, cancel: cancel, slots: make(chan struct{}, relayConcurrency),
+		ctx: ctx, cancel: cancel, slots: make(chan struct{}, relayConcurrency), source: source,
 		resources: map[string]*relayResource{"0": {name: relayName("stream", u.Path), url: src.URL}},
 		byKey:     map[string]string{},
 	}
@@ -171,6 +181,8 @@ func (r *inputRelay) dropLocked(ss *session, g *inputGrant) {
 	g.cancel()
 	delete(r.grants, tokenKey(g.token))
 	delete(r.bySess, ss)
+	// Synchronous: a retune that follows finds the old connection closed.
+	r.taps.release(g)
 }
 
 // relayInput is the URL ffmpeg and ffprobe read the session's input from.
@@ -251,8 +263,18 @@ func (g *inputGrant) register(host, key string, res *relayResource) string {
 	return "http://" + host + relayPathPrefix + g.token + "/" + id + "/" + tail
 }
 
-// lookup maps a request path to its grant and upstream URL.
-func (r *inputRelay) lookup(p string) (*inputGrant, string, bool) {
+// lookup maps a request path to its grant and upstream URL. root reports
+// the grant's own input (resource 0) rather than a manifest's resource.
+func (r *inputRelay) lookup(p string) (g *inputGrant, raw string, root, ok bool) {
+	g, raw, ok = r.lookupResource(p)
+	if ok {
+		parts := strings.SplitN(strings.TrimPrefix(p, relayPathPrefix), "/", 3)
+		root = len(parts) == 3 && parts[1] == "0"
+	}
+	return g, raw, root, ok
+}
+
+func (r *inputRelay) lookupResource(p string) (*inputGrant, string, bool) {
 	parts := strings.Split(strings.TrimPrefix(p, relayPathPrefix), "/")
 	if !strings.HasPrefix(p, relayPathPrefix) || len(parts) < 3 {
 		return nil, "", false
@@ -291,9 +313,13 @@ func (s *Service) serveInputRelay(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
-	g, raw, ok := s.inputRelay.lookup(r.URL.EscapedPath())
+	g, raw, root, ok := s.inputRelay.lookup(r.URL.EscapedPath())
 	if !ok {
 		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	// The input itself is read through its shared provider connection.
+	if root && s.serveTapped(w, r, g, raw) {
 		return
 	}
 	select {
@@ -419,9 +445,9 @@ func (s *Service) serveRelayManifest(w http.ResponseWriter, g *inputGrant, base 
 }
 
 // scopeInputRedirects confines every configured source header to its origin.
-// The ffmpeg relay rejects HTTPS downgrades; the client resource proxy preserves
-// its existing public-CDN behavior while stripping headers across origins.
-func scopeInputRedirects(client *http.Client, origin string, headers http.Header, ua string, allowDowngrade bool) {
+// Redirects, including a provider's hop through a plain-HTTP CDN edge, are
+// followed; headers and Referer never leave the source's own origin.
+func scopeInputRedirects(client *http.Client, origin string, headers http.Header, ua string) {
 	checkRedirect := client.CheckRedirect
 	client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
 		if checkRedirect != nil {
@@ -431,9 +457,11 @@ func scopeInputRedirects(client *http.Client, origin string, headers http.Header
 		} else if len(via) >= 10 {
 			return errors.New("too many redirects")
 		}
-		if !allowDowngrade && via[len(via)-1].URL.Scheme == "https" && req.URL.Scheme != "https" {
-			return errRelayDowngrade
-		}
+		// Providers often bounce through a plain-HTTP edge on their CDN
+		// (https panel -> http CDN -> https CDN), and every IPTV player
+		// follows it. The redirect itself arrived over TLS, so the provider
+		// chose the hop. An http URL is never the source's https origin, so
+		// none of its configured headers or Referer are sent (below).
 		if relayOrigin(req.URL) != origin {
 			// Go synthesizes Referer from the previous URL, which can carry
 			// source query credentials even without a configured header.
@@ -456,13 +484,27 @@ func (s *Service) relayFetch(ctx context.Context, cancel context.CancelFunc, g *
 	client := *s.o.HTTPClient
 	client.Timeout = 0 // a live input is endless; idle time is bounded instead
 	ua := in.Header.Get("User-Agent")
-	scopeInputRedirects(&client, g.origin, g.headers, ua, false)
+	scopeInputRedirects(&client, g.origin, g.headers, ua)
 	u, err := url.Parse(raw)
 	if err != nil {
 		return nil, errRelayUnsupported
 	}
+	// A provider that sells connections counts every attempt; it gets one,
+	// not a burst of retries.
+	attempts := 3
+	if g.source != "" && s.sourceConnectionLimit(g.source) > 0 {
+		attempts = 1
+	}
+	// Headers wait at most relayIOTimeout, and never past the opener's
+	// startup deadline.
+	budget := func() time.Duration {
+		if dl, ok := ctx.Deadline(); ok && time.Until(dl) < relayIOTimeout {
+			return max(time.Until(dl), 0)
+		}
+		return relayIOTimeout
+	}
 	var last error
-	for attempt := 0; attempt < 3; attempt++ {
+	for attempt := 0; attempt < attempts; attempt++ {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, raw, nil)
 		if err != nil {
 			return nil, errRelayUnsupported
@@ -479,10 +521,10 @@ func (s *Service) relayFetch(ctx context.Context, cancel context.CancelFunc, g *
 			}
 		}
 		var timedOut atomic.Bool
-		t := time.AfterFunc(relayIOTimeout, func() { timedOut.Store(true); cancel() })
+		t := time.AfterFunc(budget(), func() { timedOut.Store(true); cancel() })
 		res, err := client.Do(req)
 		t.Stop()
-		if timedOut.Load() {
+		if timedOut.Load() || errors.Is(err, context.DeadlineExceeded) {
 			if res != nil {
 				res.Body.Close()
 			}
@@ -494,11 +536,18 @@ func (s *Service) relayFetch(ctx context.Context, cancel context.CancelFunc, g *
 		if res != nil {
 			res.Body.Close()
 		}
-		if ctx.Err() != nil || errors.Is(err, errRelayDowngrade) {
-			return nil, core.ErrNotAvailable
+		if ctx.Err() != nil {
+			return nil, Diagnose("upstream_headers", ctx.Err())
 		}
-		last = core.ErrNotAvailable
-		if attempt < 2 {
+		if errors.Is(err, errRelayDowngrade) {
+			return nil, Diagnose("upstream_headers", err)
+		}
+		if err != nil {
+			last = Diagnose("upstream_headers", err)
+		} else {
+			last = providerResponseError(res.StatusCode)
+		}
+		if attempt < attempts-1 {
 			select {
 			case <-ctx.Done():
 				return nil, core.ErrNotAvailable

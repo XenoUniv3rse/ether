@@ -95,6 +95,9 @@ func (p *debridLink) do(ctx context.Context, r apiRequest) (json.RawMessage, err
 		req.Header.Set("Authorization", "Bearer "+p.key)
 	})
 	if err != nil {
+		if status != 0 {
+			logProviderHTTPError(ctx, p.key, status, body)
+		}
 		return nil, err
 	}
 	var env dlEnvelope
@@ -105,6 +108,7 @@ func (p *debridLink) do(ctx context.Context, r apiRequest) (json.RawMessage, err
 	if derr != nil && status >= 200 && status < 300 {
 		return nil, derr
 	}
+	logProviderResponse(ctx, p.key, status, env.Error, env.Desc)
 	return nil, p.classify(status, env)
 }
 

@@ -1,6 +1,7 @@
 package plex
 
 import (
+	"cmp"
 	"context"
 	"crypto/rand"
 	"errors"
@@ -49,17 +50,18 @@ const (
 	msgNoSources        = "Ether has no sources to search: add a Stremio addon or Torznab indexer under Sources › Indexers."
 	msgNoTorrentSources = "Ether streams through your debrid account but has no torrent indexer to search: add a Stremio addon or Torznab indexer under Sources › Indexers."
 	msgDebridAuth       = "Your debrid service rejected Ether's API key: check the account under Sources › Debrid."
-	msgNotCached        = "No cached release on your debrid account right now: every release found was uncached or blocked by the provider. Try again later."
-	msgDownloadQueued   = "Not cached yet: Ether sent it to your debrid service to download. Try again in a few minutes."
+	msgNotCached        = "No cached release is available on your debrid service."
+	msgDownloadQueued   = "Not cached yet. Sent to your debrid service to download; try again later."
 	// Every release is a torrent no debrid account holds, with the owner's
 	// "Cached torrents only" on: nothing downloads until it is turned off.
-	msgNotCachedOnly       = "No cached copy of this title on your debrid service. Turn off Cached torrents only under Sources › Debrid to download it, or try again later."
-	msgNotCachedOnlyNoNZB  = "No cached copy of this title on your debrid service, and Usenet found no release. Turn off Cached torrents only under Sources › Debrid to download it, or try again later."
-	msgNotCachedOnlyBadNZB = "No cached copy of this title on your debrid service, and the Usenet releases found are incomplete. Turn off Cached torrents only under Sources › Debrid to download it, or try again later."
-	msgNotCachedNoNZB      = "No cached release on your debrid account right now, and Usenet found no release. Try again later."
-	msgNotCachedBadNZB     = "No cached release on your debrid account right now, and the Usenet releases found are incomplete. Try again later."
-	msgDownloadRefused     = "Not cached, and your debrid service would not download it. Try again later, or pick another version."
-	msgDownloadLimit       = "Not cached, and your debrid account is at its limit of active downloads, so nothing new can start. Remove finished or stalled downloads from the account, or try again later."
+	msgNotCachedOnly       = "No cached copy. Turn off Cached torrents only to download it."
+	msgNotCachedOnlyNoNZB  = "No cached copy or Usenet release. Turn off Cached torrents only to download it."
+	msgNotCachedOnlyBadNZB = "No cached copy; Usenet releases are incomplete. Turn off Cached torrents only to download it."
+	msgNotCachedNoNZB      = "No cached copy or Usenet release is available."
+	msgNotCachedBadNZB     = "No cached copy; Usenet releases are incomplete."
+	msgDownloadRefused     = "Not cached. The download could not be started; check the Ether log for the reason."
+	msgDownloadPaused      = "Not cached. Ether temporarily paused downloads after debrid service refusals. Try again later."
+	msgDownloadLimit       = "Not cached. Your debrid account has reached its active download limit."
 )
 
 func playbackMessage(err error) string {
@@ -76,6 +78,10 @@ func playbackMessage(err error) string {
 		return msgDownloadQueued
 	case errors.As(err, new(*core.UncachedError)), onlyNotCached(err):
 		return notCachedMessage(err)
+	case errors.Is(err, context.DeadlineExceeded):
+		return "The source timed out. Try again later."
+	case errors.Is(err, core.ErrSourceUnavailable), errors.Is(err, core.ErrArticleMissing), errors.Is(err, core.ErrArticleCorrupt), errors.Is(err, core.ErrReleaseRejected):
+		return "The source could not be opened or is incomplete. Try again later."
 	case errors.Is(err, core.ErrNotAvailable):
 		return msgNotAvailable
 	case errors.Is(err, core.ErrStreamLimit):
@@ -89,15 +95,39 @@ func playbackMessage(err error) string {
 }
 
 // writeStartErr answers a failed start.m3u8, start.mpd or part request.
-// A 503 alone leaves some players buffering, so when no debrid account holds
-// the title (cached-only, a download queued or refused) the reason is also
-// queued as terminationText for the client's next timeline, the way a
-// start stall is reported.
+// A 503 alone leaves some players buffering. Queue the reason as
+// terminationText for the client's next timeline, as for a start stall.
 func (s *Server) writeStartErr(w http.ResponseWriter, r *http.Request, pr *Request, err error) {
-	if pr != nil && pr.User != nil && errors.Is(err, core.ErrNotCached) {
+	if r.Context().Err() != nil {
+		return
+	}
+	s.log.Warn("playback start failed", "reason", playbackMessage(err), "err", err)
+	if pr != nil && pr.User != nil {
 		s.setTermination(trackID(pr.User.ID, pr.ClientID, pr.SessionID), playbackMessage(err))
 	}
-	s.writeErr(w, r, err)
+	status := http.StatusInternalServerError
+	switch {
+	case errors.Is(err, core.ErrNotFound):
+		status = http.StatusNotFound
+	case errors.Is(err, core.ErrUnauthorized):
+		status = http.StatusUnauthorized
+	case errors.Is(err, core.ErrStreamLimit), errors.Is(err, transcode.ErrTooManyTranscodes):
+		w.Header().Set("Retry-After", "5")
+		status = http.StatusServiceUnavailable
+	case errors.Is(err, core.ErrNotAvailable), errors.Is(err, core.ErrUnreleased), errors.Is(err, core.ErrDebridAuth), errors.Is(err, core.ErrSourceUnavailable), errors.Is(err, context.DeadlineExceeded), errors.Is(err, core.ErrPrepareSlow):
+		w.Header().Set("Retry-After", notAvailableRetryAfter)
+		status = http.StatusServiceUnavailable
+	}
+	writePlaybackStatus(w, status)
+}
+
+// PMS does not specify an error body for start responses. Do not send HTML
+// where the client expected a playlist, manifest, or media bytes.
+func writePlaybackStatus(w http.ResponseWriter, status int) {
+	w.Header().Del("Content-Type")
+	w.Header().Del("Content-Encoding")
+	w.Header().Set("Content-Length", "0")
+	w.WriteHeader(status)
 }
 
 // notCachedMessage words a failure whose every cause is core.ErrNotCached:
@@ -106,6 +136,8 @@ func (s *Server) writeStartErr(w http.ResponseWriter, r *http.Request, pr *Reque
 // Usenet (*core.UncachedError), the same reason Quality › History records.
 func notCachedMessage(err error) string {
 	switch {
+	case errors.Is(err, core.ErrDownloadPaused):
+		return msgDownloadPaused
 	case errors.Is(err, core.ErrDownloadLimit):
 		return msgDownloadLimit
 	case errors.Is(err, core.ErrDownloadRefused):
@@ -397,7 +429,7 @@ func (s *Server) parsePlayRequest(r *http.Request) (playRequest, error) {
 			}
 		}
 	}
-	p.sessionID = firstNonEmpty(q.Get("session"), q.Get("transcodeSessionId"), pr.SessionID)
+	p.sessionID = cmp.Or(q.Get("session"), q.Get("transcodeSessionId"), pr.SessionID)
 	if p.sessionID == "" {
 		p.sessionID = sanitizeSessionID(pr.ClientID + "-" + key.String())
 	}
@@ -415,15 +447,6 @@ func isPlayableKey(k core.RatingKey) bool {
 		return true
 	}
 	return false
-}
-
-func firstNonEmpty(vs ...string) string {
-	for _, v := range vs {
-		if v != "" {
-			return v
-		}
-	}
-	return ""
 }
 
 // sanitizeSessionID keeps session ids path-safe.
@@ -600,7 +623,7 @@ func (s *Server) handleDecision(w http.ResponseWriter, r *http.Request) {
 		if ctx.Err() != nil {
 			return
 		}
-		s.log.Info("playback decision failed before admission", "user", pr.User.Username, "reason", playbackMessage(err), "err", err)
+		s.log.Warn("playback decision failed before admission", "user", pr.User.Username, "reason", playbackMessage(err), "err", err)
 		p, _ := s.parsePlayRequest(r)
 		// start.m3u8/start.mpd follow a failed decision for the same session:
 		// answer them with this error rather than a second full resolve.
@@ -638,7 +661,7 @@ func (s *Server) handleDecision(w http.ResponseWriter, r *http.Request) {
 		if ctx.Err() != nil {
 			return
 		}
-		s.log.Info("playback decision failed", "key", p.key, "user", pr.User.Username, "reason", playbackMessage(err), "err", err)
+		s.log.Warn("playback decision failed", "key", p.key, "user", pr.User.Username, "reason", playbackMessage(err), "err", err)
 		// The client follows a failed decision with start.mpd/start.m3u8
 		// for the same session: answer it with this error, not a second
 		// full resolve that fails the same way.
@@ -720,7 +743,7 @@ func (s *Server) decisionError(ctx context.Context, pr *Request, t *core.Title, 
 		// *DecisionText whose code is >= 2000).
 		mc.Extra = append(mc.Extra, model.A("mdeDecisionCode", codeGeneralError), model.A("mdeDecisionText", msg))
 	}
-	mc.Extra = append(mc.Extra, model.A("resourceSession", firstNonEmpty(pr.ClientID, p.sessionID)))
+	mc.Extra = append(mc.Extra, model.A("resourceSession", cmp.Or(pr.ClientID, p.sessionID)))
 	mc.Size = len(mc.Metadata)
 	mc.SetDecision()
 	return mc
@@ -823,7 +846,7 @@ func (s *Server) decisionContainer(ctx context.Context, pr *Request, t *core.Tit
 		mc.Extra = append(mc.Extra, model.A("mdeDecisionCode", code), model.A("mdeDecisionText", text))
 	}
 	// PMS echoes the client identifier as the resource session.
-	mc.Extra = append(mc.Extra, model.A("resourceSession", firstNonEmpty(pr.ClientID, p.sessionID)))
+	mc.Extra = append(mc.Extra, model.A("resourceSession", cmp.Or(pr.ClientID, p.sessionID)))
 	return mc
 }
 
@@ -933,13 +956,6 @@ func directPlayMedia(m model.Media, streams []model.Stream, selectedOnly bool, s
 	}
 	part.Stream = kept
 	return m
-}
-
-func embeddedTextSubtitle(st model.Stream) bool {
-	if st.StreamType != 3 || (st.External != nil && *st.External) {
-		return false
-	}
-	return textSidecarCodec(st.Codec)
 }
 
 func textSidecarCodec(codec string) bool {
@@ -1163,12 +1179,12 @@ func (s *Server) handleStartHLS(w http.ResponseWriter, r *http.Request) {
 	defer unlockOwner()
 
 	if s.d.Transcoder == nil || s.d.Playback == nil {
-		writeHTTPError(w, http.StatusServiceUnavailable)
+		writePlaybackStatus(w, http.StatusServiceUnavailable)
 		return
 	}
 	p, err := s.parsePlayRequest(r)
 	if err != nil {
-		writeHTTPError(w, http.StatusBadRequest)
+		writePlaybackStatus(w, http.StatusBadRequest)
 		return
 	}
 	unlockEncoder, lockErr := s.lockEncoder(ctx, p.sessionID)
@@ -1178,12 +1194,12 @@ func (s *Server) handleStartHLS(w http.ResponseWriter, r *http.Request) {
 	defer unlockEncoder()
 
 	if s.playbackOwners.Stale(pr.User.ID, pr.ClientID, p.key, pr.SessionID) {
-		writeHTTPError(w, http.StatusGone)
+		writePlaybackStatus(w, http.StatusGone)
 		return
 	}
 
 	if !s.transcodes.claim(p.sessionID, pr.User.ID, pr.ClientID, s.now()) {
-		writeHTTPError(w, http.StatusForbidden)
+		writePlaybackStatus(w, http.StatusForbidden)
 		return
 	}
 	if err, failed := s.transcodes.takeFailure(p.sessionID, pr.User.ID, p.key, s.now()); failed {
@@ -1210,8 +1226,7 @@ func (s *Server) handleStartHLS(w http.ResponseWriter, r *http.Request) {
 		}
 		entry, _ = s.transcodes.get(p.sessionID)
 	} else if dec, err := s.publishBrokerPlayback(ctx, pr, replayPlay(p, entry), ps); err != nil {
-		s.log.Info("playback broker publish failed", "key", p.key, "err", err)
-		writeHTTPError(w, http.StatusServiceUnavailable)
+		s.writeStartErr(w, r, pr, err)
 		return
 	} else {
 		entry.decision = dec
@@ -1244,15 +1259,16 @@ func (s *Server) handleStartHLS(w http.ResponseWriter, r *http.Request) {
 		s.d.Transcoder.Stop(p.sessionID)
 	}
 	hs, err := s.d.Transcoder.StartHLS(context.WithoutCancel(ctx), core.HLSRequest{
-		SessionID:   p.sessionID,
-		InputURL:    s.d.Playback.InputURL(ps.ID),
-		Info:        ps.Info,
-		Decision:    dec,
-		StartOffset: p.offset,
+		SoftSubtitleStream: sessionSoftSubtitle(entry, pr, dec),
+		SessionID:          p.sessionID,
+		ReleaseID:          ps.SourceReleaseID(),
+		InputURL:           s.d.Playback.InputURL(ps.ID),
+		Info:               ps.Info,
+		Decision:           dec,
+		StartOffset:        p.offset,
 	})
 	if err != nil {
-		s.log.Warn("start HLS session", "session", p.sessionID, "key", p.key, "err", err)
-		writeHTTPError(w, http.StatusInternalServerError)
+		s.writeStartErr(w, r, pr, err)
 		return
 	}
 	s.bindTranscodeStarted(entry, dec, p.offset)
@@ -1462,6 +1478,15 @@ func (s *Server) handleTranscodeStop(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusOK)
 			return
 		}
+		// Preserve the failure and the last client playhead even if stop
+		// removes the encoder before a terminal timeline is delivered.
+		if s.d.Transcoder != nil {
+			if session, ok := s.d.Transcoder.Session(id); ok {
+				if failed, ok := session.(interface{ ProgressiveFailed() bool }); ok && failed.ProgressiveFailed() {
+					s.rememberProgressiveStop(r.Context(), e)
+				}
+			}
+		}
 		shared := false
 		if s.d.Transcoder != nil && e.playID != "" {
 			for _, other := range s.transcodes.byPlayID(e.playID) {
@@ -1594,6 +1619,15 @@ func (s *Server) handlePart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ps, ok := s.d.Playback.SessionFor(pr.User.ID, pr.ClientID, key)
+	anonymousContinuation := false
+	if pr.ClientID == "" {
+		if lookup, supported := s.d.Playback.(interface {
+			PlexSessionForPart(int64, core.RatingKey, string) (*core.PlaySession, bool)
+		}); supported {
+			ps, ok = lookup.PlexSessionForPart(pr.User.ID, key, releaseID)
+			anonymousContinuation = ok && ps != nil
+		}
+	}
 	live := ""
 	if ok && ps != nil {
 		live = ps.ID
@@ -1601,6 +1635,17 @@ func (s *Server) handlePart(w http.ResponseWriter, r *http.Request) {
 	// A live session on a different release does not satisfy a variant part.
 	if ok && ps != nil && releaseID != "" && (ps.Resolution == nil || ps.Resolution.Release.ID != releaseID) {
 		ok = false
+	}
+	if anonymousContinuation {
+		if confirm, supported := s.playbackBroker.(interface {
+			ConfirmPlexAdmission(context.Context, *core.Viewer, bool) (*core.Viewer, error)
+		}); supported {
+			viewer, err := confirm.ConfirmPlexAdmission(ctx, pr.User, pr.ClientCaps(0).Remote)
+			if err != nil || viewer == nil || viewer.ID != pr.User.ID || !s.playableTitle(ctx, viewer, title) {
+				writeHTTPError(w, http.StatusForbidden)
+				return
+			}
+		}
 	}
 	if !ok || ps == nil {
 		t, err := s.d.Catalog.Get(ctx, key)
@@ -1625,7 +1670,7 @@ func (s *Server) handlePart(w http.ResponseWriter, r *http.Request) {
 			s.observePlaybackDecision(ctx, pr, &playRequest{key: key, caps: caps, partReleaseID: releaseID, requestedPart: id}, ps)
 		}
 	}
-	if r.Method != http.MethodHead && r.URL.Query().Get("download") != "1" {
+	if !anonymousContinuation && r.Method != http.MethodHead && r.URL.Query().Get("download") != "1" {
 		// A part read is the playing Media for clients that skip the
 		// decision; a decision's admission keeps its selection unless this
 		// read prepared another release.

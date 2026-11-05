@@ -186,6 +186,8 @@ type User struct {
 // ClientCaps is what a Plex client can play, derived from X-Plex-* headers,
 // the client profile and its declared limits.
 type ClientCaps struct {
+	ClientIP string `json:"clientIp,omitempty"` // trusted-proxy-resolved address, when known
+
 	Profiles        *ClientCapabilityProfiles `json:"profiles,omitempty"`
 	Protocol        Protocol                  `json:"protocol,omitempty"`
 	Product         string                    `json:"product"`  // X-Plex-Product: "Plex Web", "Plex for iOS", "Plex for Apple TV"
@@ -225,6 +227,10 @@ type ClientCaps struct {
 	// Sync) rather than live playback: the resolver prefers compact,
 	// mobile-native releases and the whole file is remuxed (additive).
 	Download bool `json:"download,omitempty"`
+
+	// DownloadSourceMaxHeight permits a higher source on a download retry;
+	// MaxHeight remains the output constraint at the download remuxer.
+	DownloadSourceMaxHeight int `json:"downloadSourceMaxHeight,omitempty"`
 
 	// DolbyVisionBaseOnly delivers a Dolby Vision 7.6/8.1 source as its
 	// compatible HDR10 base layer: an owner override turned Dolby Vision off

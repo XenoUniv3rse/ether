@@ -48,7 +48,11 @@ const (
 	guideHorizonMargin     = time.Hour
 	refreshCheckInterval   = 5 * time.Minute
 	refreshTimeout         = 5 * time.Minute
-	coverageWindow         = 24 * time.Hour
+	// refreshBudget bounds one manual import or automatic refresh. A panel that composes a
+	// large guide can take many minutes; the per-document idle timeout ends a
+	// stalled fetch, so this only caps a source that keeps sending data.
+	refreshBudget  = 30 * time.Minute
+	coverageWindow = 24 * time.Hour
 )
 
 // GuideChannel is an XMLTV <channel> (or programme channel id) stored for a
@@ -57,6 +61,7 @@ const (
 type GuideChannel struct {
 	SourceID   string     `json:"sourceId"`
 	SourceName string     `json:"sourceName"`
+	SourceKind string     `json:"sourceKind,omitempty"`
 	GuideID    string     `json:"guideId"`
 	Name       string     `json:"name"`
 	Logo       string     `json:"logo"`
@@ -68,6 +73,8 @@ type GuideMatchRequest struct {
 	ChannelIDs []string `json:"channelIds,omitempty"`
 	Overwrite  bool     `json:"overwrite"`
 	DryRun     bool     `json:"dryRun"`
+	// Reviewed is set by the owner route for explicitly accepted proposals, never by imports.
+	Reviewed bool `json:"-"`
 }
 type GuideMatchChange struct {
 	ChannelID       string `json:"channelId"`
@@ -76,14 +83,20 @@ type GuideMatchChange struct {
 	GuideSourceName string `json:"guideSourceName"`
 	GuideID         string `json:"guideId"`
 	GuideName       string `json:"guideName"`
-	Method          string `json:"method"` // "id" or "name"
+	Method          string `json:"method"` // "id", "name" or "alias"
+	ReviewRegion    bool   `json:"reviewRegion,omitempty"`
 }
 type GuideMatchResult struct {
-	Matched   int                `json:"matched"`
-	Unmatched int                `json:"unmatched"`
-	Skipped   int                `json:"skipped"` // already had guide data and overwrite was false
-	DryRun    bool               `json:"dryRun"`
-	Changes   []GuideMatchChange `json:"changes"`
+	Matched   int `json:"matched"`
+	Unmatched int `json:"unmatched"`
+	Skipped   int `json:"skipped"` // already had guide data and overwrite was false
+	// Ambiguous and RegionRejected count name matches the matcher refused:
+	// several guide ids or playlist rows share the name, or the declared
+	// regions contradict.
+	Ambiguous      int                `json:"ambiguous"`
+	RegionRejected int                `json:"regionRejected"`
+	DryRun         bool               `json:"dryRun"`
+	Changes        []GuideMatchChange `json:"changes"`
 }
 type GuideCoverage struct {
 	ChannelID  string     `json:"channelId"`
@@ -110,6 +123,7 @@ func (s *Service) guideRoutes(r chi.Router) {
 			ownerResult(w, nil, fmt.Errorf("invalid request body: %w", err))
 			return
 		}
+		req.Reviewed = len(req.ChannelIDs) > 0
 		v, e := s.MatchGuides(r.Context(), req)
 		ownerResult(w, v, e)
 	})
@@ -268,7 +282,14 @@ func (s *Service) fillSourceStats(ctx context.Context, srcs []Source) error {
 		n          int
 		from, till int64
 	}
+	all, err := s.channelSummaries(ctx)
+	if err != nil {
+		return err
+	}
 	channels := map[string]int{}
+	for _, c := range all {
+		channels[c.SourceID]++
+	}
 	guides := map[string]int{}
 	progs := map[string]progStats{}
 	scan := func(q string, fn func(*sql.Rows) error) error {
@@ -283,15 +304,6 @@ func (s *Service) fillSourceStats(ctx context.Context, srcs []Source) error {
 			}
 		}
 		return rows.Err()
-	}
-	if err := scan(`SELECT COALESCE(`+store.JSONText(store.DialectOf(s.o.DB), "data", "sourceId")+`,''), COUNT(*) FROM livetv_channels GROUP BY 1`, func(r *sql.Rows) error {
-		var id string
-		var n int
-		err := r.Scan(&id, &n)
-		channels[id] = n
-		return err
-	}); err != nil {
-		return err
 	}
 	if err := scan(guideChannelsCTE+`SELECT source_id, COUNT(*) FROM gc GROUP BY source_id`, func(r *sql.Rows) error {
 		var id string
@@ -324,8 +336,13 @@ func (s *Service) fillSourceStats(ctx context.Context, srcs []Source) error {
 	return s.planRefresh(ctx, srcs)
 }
 
-// GuideChannels searches stored XMLTV channels by case-insensitive substring
-// of name, any display name, or guide id.
+// maxGuideSearchWords bounds the per-word predicates one search builds.
+const maxGuideSearchWords = 6
+
+// GuideChannels searches stored XMLTV channels. Every word of q must appear,
+// in any order, in the name, a display name or the guide id, so "fox phoenix"
+// finds "FOX LOCAL Phoenix". Exact matches rank first, then channels that
+// still have listings ahead, then by name.
 func (s *Service) GuideChannels(ctx context.Context, q, source string, limit int) ([]GuideChannel, error) {
 	if limit <= 0 {
 		limit = 50
@@ -338,14 +355,48 @@ func (s *Service) GuideChannels(ctx context.Context, q, source string, limit int
 	if err != nil {
 		return nil, err
 	}
-	now := s.o.Now().UnixMilli()
+	kinds := map[string]string{}
 	d := store.DialectOf(s.o.DB)
-	rows, err := s.o.DB.QueryContext(ctx, guideChannelsCTE+`SELECT g.source_id, g.guide_id, g.name, g.logo,
-		(SELECT COUNT(*) FROM livetv_programmes p WHERE p.source_id=g.source_id AND p.channel_id=g.guide_id AND p.end_ms>?1),
-		(SELECT MAX(end_ms) FROM livetv_programmes p WHERE p.source_id=g.source_id AND p.channel_id=g.guide_id)
+	sourceRows, err := s.o.DB.QueryContext(ctx, `SELECT id, `+store.JSONText(d, "data", "kind")+` FROM livetv_sources`)
+	if err != nil {
+		return nil, err
+	}
+	for sourceRows.Next() {
+		var id string
+		var kind sql.NullString
+		if err = sourceRows.Scan(&id, &kind); err != nil {
+			break
+		}
+		kinds[id] = kind.String
+	}
+	if err == nil {
+		err = sourceRows.Err()
+	}
+	sourceRows.Close()
+	if err != nil {
+		return nil, err
+	}
+	now := s.o.Now().UnixMilli()
+	args := []any{now, source, q, limit}
+	words := strings.Fields(q)
+	if len(words) > maxGuideSearchWords {
+		words = words[:maxGuideSearchWords]
+	}
+	match := ""
+	for _, w := range words {
+		args = append(args, w)
+		p := fmt.Sprintf("?%d", len(args))
+		match += ` AND (` + store.Contains(d, "lower(g.name)", p) + ` OR ` + store.Contains(d, "lower(g.guide_id)", p) + ` OR ` + store.Contains(d, "lower(g.names)", p) + `)`
+	}
+	rows, err := s.o.DB.QueryContext(ctx, guideChannelsCTE+`SELECT source_id, guide_id, name, logo, ahead, until_ms FROM (
+		SELECT g.source_id, g.guide_id, g.name, g.logo,
+			(SELECT COUNT(*) FROM livetv_programmes p WHERE p.source_id=g.source_id AND p.channel_id=g.guide_id AND p.end_ms>?1) AS ahead,
+			(SELECT MAX(end_ms) FROM livetv_programmes p WHERE p.source_id=g.source_id AND p.channel_id=g.guide_id) AS until_ms,
+			CASE WHEN lower(g.guide_id)=?3 OR lower(g.name)=?3 THEN 1 ELSE 0 END AS exact,
+			lower(g.name) AS sort_name
 		FROM gc g
-		WHERE (?2='' OR g.source_id=?2) AND (?3='' OR `+store.Contains(d, "lower(g.name)", "?3")+` OR `+store.Contains(d, "lower(g.guide_id)", "?3")+` OR `+store.Contains(d, "lower(g.names)", "?3")+`)
-		ORDER BY (lower(g.guide_id)=?3 OR lower(g.name)=?3) DESC, lower(g.name), g.source_id, g.guide_id LIMIT ?4`, now, source, q, limit)
+		WHERE (?2='' OR g.source_id=?2)`+match+`) m
+		ORDER BY exact DESC, CASE WHEN ahead>0 THEN 1 ELSE 0 END DESC, sort_name, source_id, guide_id LIMIT ?4`, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -358,6 +409,7 @@ func (s *Service) GuideChannels(ctx context.Context, q, source string, limit int
 			return nil, err
 		}
 		g.SourceName = names[g.SourceID]
+		g.SourceKind = kinds[g.SourceID]
 		if until.Valid {
 			g.Until = msTime(until.Int64)
 		}
@@ -394,27 +446,37 @@ func (s *Service) guideStats(ctx context.Context, from, until time.Time) (map[gu
 // Coverage reports, for every channel, how many programmes the guide has in
 // the next 24 hours and when its guide data runs out.
 func (s *Service) Coverage(ctx context.Context) ([]GuideCoverage, error) {
-	cs, err := s.Channels(ctx)
+	all, err := s.channelSummaries(ctx)
 	if err != nil {
 		return nil, err
 	}
 	from := s.o.Now()
 	until := from.Add(coverageWindow)
-	stats, err := s.guideStats(ctx, from, until)
+	virtualIDs := make([]string, 0)
+	for _, c := range all {
+		if c.Kind == "virtual" {
+			virtualIDs = append(virtualIDs, c.ID)
+		}
+	}
+	virtual, err := s.channelsByIDs(ctx, virtualIDs)
 	if err != nil {
 		return nil, err
 	}
-	out := make([]GuideCoverage, 0, len(cs))
-	for _, c := range cs {
+	stats, err := s.guideCoverageStats(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]GuideCoverage, 0, len(all))
+	for _, c := range all {
 		v := GuideCoverage{ChannelID: c.ID}
 		if c.Kind == "virtual" {
-			ps := Schedule(c, from, until)
+			ps := Schedule(virtual[c.ID], from, until)
 			v.Programmes = len(ps)
 			if len(ps) > 0 {
 				end := ps[len(ps)-1].End.UTC()
 				v.Until = &end
 			}
-		} else if st, ok := stats[guideKey{guideSource(c), c.GuideID}]; ok && c.GuideID != "" {
+		} else if st, ok := stats[guideKey{summaryGuideSource(c), c.GuideID}]; ok && c.GuideID != "" {
 			v.Programmes = st.window
 			v.Until = msTime(st.until)
 		}
@@ -424,39 +486,174 @@ func (s *Service) Coverage(ctx context.Context) ([]GuideCoverage, error) {
 }
 
 var (
-	guideCountryPrefix = regexp.MustCompile(`^[\s|]*[\p{L}]{2,3}\s*[:|]\s*`)
+	guideCountryPrefix = regexp.MustCompile(`^[\s|]*([\p{L}]{2,3})\s*[:|]\s*`)
 	guideBracketed     = regexp.MustCompile(`[\[(]([^\])]*)[\])]`)
 	guideQuality       = map[string]bool{"hd": true, "fhd": true, "uhd": true, "4k": true, "8k": true, "sd": true, "hq": true, "lq": true, "hevc": true, "h264": true, "h265": true, "1080p": true, "1080i": true, "720p": true, "2160p": true, "50fps": true, "60fps": true}
 )
 
-// normalizeGuideName folds a channel name for matching: case, punctuation,
-// country prefixes ("US:", "UK |"), bracketed tags and quality suffixes are
-// ignored, while "+1" style timeshifts stay distinct.
-func normalizeGuideName(name string) string {
-	s := strings.ToLower(strings.TrimSpace(name))
-	s = guideCountryPrefix.ReplaceAllString(s, "")
+// guideRegionCodes is the ISO 3166-1 alpha-2 set (plus "uk" and "usa") used to
+// recognise the region a name declares. The generic pseudo-TLDs .tv, .fm,
+// .io, .me, .cc and .ws are deliberately absent: they are words in channel
+// names and suffixes in fake ids, not regions.
+var guideRegionCodes = func() map[string]string {
+	codes := strings.Fields(`
+		ad ae af ag ai al am ao aq ar as at au aw ax az
+		ba bb bd be bf bg bh bi bj bl bm bn bo bq br bs bt bv bw by bz
+		ca cd cf cg ch ci ck cl cm cn co cr cu cv cw cx cy cz
+		de dj dk dm do dz
+		ec ee eg eh er es et
+		fi fj fk fo fr
+		ga gb gd ge gf gg gh gi gl gm gn gp gq gr gs gt gu gw gy
+		hk hm hn hr ht hu
+		id ie il im in iq ir is it
+		je jm jo jp
+		ke kg kh ki km kn kp kr kw ky kz
+		la lb lc li lk lr ls lt lu lv ly
+		ma mc md mf mg mh mk ml mm mn mo mp mq mr ms mt mu mv mw mx my mz
+		na nc ne nf ng ni nl no np nr nu nz
+		om
+		pa pe pf pg ph pk pl pm pn pr ps pt pw py
+		qa
+		re ro rs ru rw
+		sa sb sc sd se sg sh si sj sk sl sm sn so sr ss st sv sx sy sz
+		tc td tf tg th tj tk tl tm tn to tr tt tw tz
+		ua ug um us uy uz
+		va vc ve vg vi vn vu
+		wf
+		ye yt
+		za zm zw
+		uk usa`)
+	m := make(map[string]string, len(codes))
+	for _, c := range codes {
+		m[c] = strings.ToUpper(c)
+	}
+	m["uk"] = "GB"
+	return m
+}()
+
+// guideNameRegion folds a channel name for matching and reports the region it
+// declares, if any: a leading prefix ("US:", "|UK|", "UK |"), a bracketed
+// tag ("(US)"), or an upper-case trailing country code ("News US"). Case,
+// punctuation, quality tokens and such region labels are ignored; "+" is kept
+// so "+1" timeshifts stay distinct.
+func guideNameRegion(name string) (region, normalized string) {
+	s := strings.TrimSpace(name)
+	if m := guideCountryPrefix.FindStringSubmatch(s); m != nil {
+		if r, ok := guideRegionCodes[strings.ToLower(m[1])]; ok {
+			region = r
+		}
+		// Any short namespace prefix is folded away as before; only a known
+		// country code labels the region.
+		s = s[len(m[0]):]
+	}
 	s = guideBracketed.ReplaceAllStringFunc(s, func(m string) string {
 		inner := strings.TrimSpace(m[1 : len(m)-1])
-		if guideQuality[inner] || len([]rune(inner)) <= 3 && !strings.Contains(inner, "+") {
+		lower := strings.ToLower(inner)
+		if label, ok := upperGuideToken(inner); ok {
+			if r, ok := guideRegionCodes[label]; ok && region == "" {
+				region = r
+			}
+		}
+		if guideQuality[lower] || len([]rune(inner)) <= 3 && !strings.Contains(inner, "+") {
 			return " "
 		}
 		return " " + inner + " "
 	})
 	tokens := strings.FieldsFunc(s, func(r rune) bool { return !unicode.IsLetter(r) && !unicode.IsDigit(r) && r != '+' })
-	var b strings.Builder
+	kept := tokens[:0]
 	for _, t := range tokens {
-		if guideQuality[t] {
-			continue
+		if !guideQuality[strings.ToLower(t)] {
+			kept = append(kept, t)
 		}
-		b.WriteString(t)
 	}
-	return b.String()
+	if n := len(kept); n > 1 {
+		// A trailing country code labels the name before it. A lone token
+		// like "SC", or an ordinary word like "It", is not a region.
+		if label, ok := upperGuideToken(kept[n-1]); ok {
+			if r, ok := guideRegionCodes[label]; ok {
+				if region == "" {
+					region = r
+				}
+				kept = kept[:n-1]
+			}
+		}
+	}
+	var b strings.Builder
+	for _, t := range kept {
+		b.WriteString(strings.ToLower(t))
+	}
+	return region, b.String()
+}
+
+// upperGuideToken reports a token written entirely in upper case, the way a
+// region label is printed ("US", "UK", "USA"). Ordinary words are title or
+// sentence case and are not mistaken for country codes.
+func upperGuideToken(token string) (string, bool) {
+	if token == "" {
+		return "", false
+	}
+	for _, r := range token {
+		if !unicode.IsUpper(r) {
+			return "", false
+		}
+	}
+	return strings.ToLower(token), true
+}
+
+func normalizeGuideName(name string) string {
+	_, normalized := guideNameRegion(name)
+	return normalized
+}
+
+// guideIDRegion reports the region a guide id declares at its end
+// ("News1.de", "Public1.uk") or through a leading prefix. Unknown suffixes and
+// the generic pseudo-TLDs are ignored.
+func guideIDRegion(id string) string {
+	id = strings.TrimSpace(id)
+	if region, _ := guideNameRegion(id); region != "" {
+		return region
+	}
+	if i := strings.LastIndexByte(id, '.'); i >= 0 {
+		if r, ok := guideRegionCodes[strings.ToLower(strings.TrimSpace(id[i+1:]))]; ok {
+			return r
+		}
+	}
+	return ""
+}
+
+// channelRegion reports the region a playlist channel declares: its name or
+// tvg-name prefix/trailing label first, then its group-title, then its
+// current guide id's suffix.
+func channelRegion(c Channel) string {
+	for _, name := range []string{c.Name, c.TvgName} {
+		if region, _ := guideNameRegion(name); region != "" {
+			return region
+		}
+	}
+	if region, _ := guideNameRegion(c.Group); region != "" {
+		return region
+	}
+	return guideIDRegion(c.GuideID)
+}
+
+// guideCandidateRegion reports the region a guide channel declares: its id's
+// suffix first, then its first display name that carries one.
+func guideCandidateRegion(id, name string, names []string) string {
+	if region := guideIDRegion(id); region != "" {
+		return region
+	}
+	for _, n := range append([]string{name}, names...) {
+		if region, _ := guideNameRegion(n); region != "" {
+			return region
+		}
+	}
+	return ""
 }
 
 type guideCandidate struct {
-	source, guide, name string
-	window              int
-	until               int64
+	source, guide, name, region string
+	window                      int
+	until                       int64
 }
 
 // MatchGuides maps IPTV channels to guide channels from any source: an exact
@@ -483,6 +680,30 @@ func (s *Service) MatchGuides(ctx context.Context, req GuideMatchRequest) (Guide
 	byID := map[string][]*guideCandidate{}
 	byFold := map[string][]*guideCandidate{}
 	byName := map[string][]*guideCandidate{}
+	byAlias := map[string][]*guideCandidate{}
+	plexSources := map[string]bool{}
+	sourceRows, err := s.o.DB.QueryContext(ctx, `SELECT id, data FROM livetv_sources`)
+	if err != nil {
+		return res, err
+	}
+	for sourceRows.Next() {
+		var id string
+		var data []byte
+		var source Source
+		if err = sourceRows.Scan(&id, &data); err != nil {
+			break
+		}
+		if json.Unmarshal(data, &source) == nil && source.Kind == "plex" {
+			plexSources[id] = true
+		}
+	}
+	if err == nil {
+		err = sourceRows.Err()
+	}
+	sourceRows.Close()
+	if err != nil {
+		return res, err
+	}
 	rows, err := s.o.DB.QueryContext(ctx, guideChannelsCTE+`SELECT source_id, guide_id, name, names FROM gc`)
 	if err != nil {
 		return res, err
@@ -494,8 +715,8 @@ func (s *Service) MatchGuides(ctx context.Context, req GuideMatchRequest) (Guide
 			return res, err
 		}
 		st, ok := stats[guideKey{src, id}]
-		if !ok {
-			continue // no upcoming programmes; mapping to it would not help
+		if !ok && !plexSources[src] {
+			continue
 		}
 		cand := &guideCandidate{source: src, guide: id, name: name, window: st.window, until: st.until}
 		byID[id] = append(byID[id], cand)
@@ -503,8 +724,15 @@ func (s *Service) MatchGuides(ctx context.Context, req GuideMatchRequest) (Guide
 		byFold[fold] = append(byFold[fold], cand)
 		var all []string
 		json.Unmarshal([]byte(raw), &all)
+		cand.region = guideCandidateRegion(id, name, all)
 		seen := map[string]bool{}
 		for _, n := range append(all, name) {
+			if plexSources[src] {
+				if k := normalizeGuideName(n); k != "" {
+					byAlias[k] = append(byAlias[k], cand)
+				}
+				continue
+			}
 			if k := normalizeGuideName(n); k != "" && !seen[k] {
 				seen[k] = true
 				byName[k] = append(byName[k], cand)
@@ -514,6 +742,23 @@ func (s *Service) MatchGuides(ctx context.Context, req GuideMatchRequest) (Guide
 	rows.Close()
 	if err = rows.Err(); err != nil {
 		return res, err
+	}
+	// A name shared by more than one playlist row is not a key; count those
+	// rows so a name match can refuse instead of picking one.
+	nameCount := map[string]int{}
+	for _, c := range cs {
+		if c.Kind != "iptv" {
+			continue
+		}
+		seen := map[string]bool{}
+		for _, n := range []string{c.TvgName, c.Name} {
+			k := normalizeGuideName(n)
+			if k == "" || seen[k] {
+				continue
+			}
+			seen[k] = true
+			nameCount[k]++
+		}
 	}
 	want := map[string]bool{}
 	for _, id := range req.ChannelIDs {
@@ -531,6 +776,7 @@ func (s *Service) MatchGuides(ctx context.Context, req GuideMatchRequest) (Guide
 			continue
 		}
 		var pick *guideCandidate
+		var rejected string
 		method := "id"
 		if c.GuideID != "" {
 			pick = bestCandidate(c, byID[c.GuideID])
@@ -540,8 +786,44 @@ func (s *Service) MatchGuides(ctx context.Context, req GuideMatchRequest) (Guide
 		}
 		if pick == nil {
 			method = "name"
-			if k := normalizeGuideName(c.Name); k != "" {
-				pick = bestCandidate(c, byName[k])
+			pick, rejected = nameCandidateForChannel(c, byName, nameCount, req.DryRun || req.Reviewed)
+			switch rejected {
+			case "ambiguous":
+				res.Ambiguous++
+			case "region":
+				res.RegionRejected++
+			}
+		}
+		if pick == nil && rejected != "ambiguous" && rejected != "region" && (req.DryRun || req.Reviewed) {
+			method = "alias"
+			normalized := normalizeGuideName(c.Name)
+			pick = bestCandidate(c, byAlias[normalized])
+			if pick == nil && len(normalized) >= 4 {
+				var aliases []string
+				for alias := range byAlias {
+					if strings.HasPrefix(alias, normalized) {
+						aliases = append(aliases, alias)
+					}
+				}
+				sort.Slice(aliases, func(i, j int) bool {
+					if len(aliases[i]) != len(aliases[j]) {
+						return len(aliases[i]) < len(aliases[j])
+					}
+					return aliases[i] < aliases[j]
+				})
+				if len(aliases) > 0 {
+					pick = bestCandidate(c, byAlias[aliases[0]])
+				}
+			}
+			if pick == nil {
+				for _, word := range strings.FieldsFunc(strings.ToLower(c.Name), func(r rune) bool { return !unicode.IsLetter(r) && !unicode.IsDigit(r) }) {
+					if len(word) >= 3 {
+						if candidate := bestCandidate(c, byAlias[word]); candidate != nil {
+							pick = candidate
+							break
+						}
+					}
+				}
 			}
 		}
 		if pick == nil {
@@ -552,7 +834,7 @@ func (s *Service) MatchGuides(ctx context.Context, req GuideMatchRequest) (Guide
 		if pick.source == guideSource(c) && pick.guide == c.GuideID {
 			continue
 		}
-		res.Changes = append(res.Changes, GuideMatchChange{ChannelID: c.ID, ChannelName: c.Name, GuideSourceID: pick.source, GuideSourceName: sourceNames[pick.source], GuideID: pick.guide, GuideName: pick.name, Method: method})
+		res.Changes = append(res.Changes, GuideMatchChange{ChannelID: c.ID, ChannelName: c.Name, GuideSourceID: pick.source, GuideSourceName: sourceNames[pick.source], GuideID: pick.guide, GuideName: pick.name, Method: method, ReviewRegion: method != "id" && (channelRegion(c) == "" || pick.region == "")})
 		c.GuideID = pick.guide
 		c.GuideSourceID = pick.source
 		if pick.source == c.SourceID {
@@ -579,6 +861,107 @@ func (s *Service) MatchGuides(ctx context.Context, req GuideMatchRequest) (Guide
 		}
 	}
 	return res, tx.Commit()
+}
+
+// channelGuideNames lists the normalized labels a playlist channel can match,
+// provider tvg-name first, then its display name.
+func channelGuideNames(c Channel) []string {
+	out := make([]string, 0, 2)
+	seen := map[string]bool{}
+	for _, n := range []string{c.TvgName, c.Name} {
+		k := normalizeGuideName(n)
+		if k == "" || seen[k] {
+			continue
+		}
+		seen[k] = true
+		out = append(out, k)
+	}
+	return out
+}
+
+// uniqueGuideCandidates drops duplicate (source, guide) rows.
+func uniqueGuideCandidates(cands []*guideCandidate) []*guideCandidate {
+	seen := map[guideKey]bool{}
+	out := make([]*guideCandidate, 0, len(cands))
+	for _, c := range cands {
+		k := guideKey{c.source, c.guide}
+		if seen[k] {
+			continue
+		}
+		seen[k] = true
+		out = append(out, c)
+	}
+	return out
+}
+
+// nameCandidateForChannel applies the name-matching rules and reports why it
+// refused a match. A candidate from the channel's own source wins over other
+// sources, so a provider's own guide is preferred. Within that pool there
+// must be one guide id and one playlist channel with the normalized name. A
+// declared region that contradicts is always rejected; one unknown region is
+// only a proposal until the owner explicitly confirms it.
+func nameCandidateForChannel(c Channel, byName map[string][]*guideCandidate, nameCount map[string]int, dryRun bool) (*guideCandidate, string) {
+	for _, k := range channelGuideNames(c) {
+		cands := uniqueGuideCandidates(byName[k])
+		if len(cands) == 0 {
+			continue
+		}
+		own := make([]*guideCandidate, 0, len(cands))
+		for _, g := range cands {
+			if g.source == c.SourceID {
+				own = append(own, g)
+			}
+		}
+		if len(own) > 0 {
+			cands = own
+		}
+		ids := map[string]bool{}
+		for _, g := range cands {
+			ids[g.guide] = true
+		}
+		if len(ids) > 1 || nameCount[k] > 1 {
+			return nil, "ambiguous"
+		}
+		pick := bestNameCandidate(c, cands)
+		cr, gr := channelRegion(c), pick.region
+		if cr != "" && gr != "" && cr != gr {
+			return nil, "region"
+		}
+		if (cr == "" || gr == "") && !dryRun {
+			return nil, "review"
+		}
+		return pick, ""
+	}
+	return nil, ""
+}
+
+// bestNameCandidate picks between candidates that all name the same guide id.
+// It never uses programme counts: a name tie is an ambiguity, not a
+// preference. Only source and the current mapping rank, then ids break ties.
+func bestNameCandidate(c Channel, cands []*guideCandidate) *guideCandidate {
+	best := cands[0]
+	for _, g := range cands[1:] {
+		if a, b := nameCandidateRank(c, g), nameCandidateRank(c, best); a != b {
+			if a > b {
+				best = g
+			}
+			continue
+		}
+		if g.source < best.source || g.source == best.source && g.guide < best.guide {
+			best = g
+		}
+	}
+	return best
+}
+
+func nameCandidateRank(c Channel, g *guideCandidate) int {
+	switch {
+	case g.source == c.SourceID:
+		return 2
+	case g.source == guideSource(c) && g.guide == c.GuideID:
+		return 1
+	}
+	return 0
 }
 
 // bestCandidate prefers guides with programmes in the next 24 hours, then the
@@ -623,7 +1006,7 @@ func bestCandidate(c Channel, cands []*guideCandidate) *guideCandidate {
 // refreshInterval reports the longest time between automatic refreshes. Only
 // URL-backed sources refresh; inline uploads have nothing new to fetch.
 func refreshInterval(src Source) (time.Duration, bool) {
-	if src.PlaylistURL == "" && src.GuideURL == "" || src.RefreshHours < 0 {
+	if src.Kind != "plex" && src.PlaylistURL == "" && src.GuideURL == "" || src.RefreshHours < 0 {
 		return 0, false
 	}
 	if src.RefreshHours == 0 {
@@ -649,7 +1032,7 @@ func nextRefresh(src Source, horizon *time.Time) (time.Time, bool) {
 		return src.LastErrorAt.Add(backoff).UTC(), true
 	}
 	next := src.UpdatedAt.Add(iv)
-	if horizon != nil && src.GuideURL != "" {
+	if horizon != nil && (src.GuideURL != "" || src.Kind == "plex") {
 		if h := horizon.Add(-guideHorizonMargin); h.Before(next) {
 			next = h
 		}
@@ -680,6 +1063,7 @@ func (s *Service) planRefresh(ctx context.Context, srcs []Source) error {
 		updated[src.ID] = src.UpdatedAt.UnixMilli()
 	}
 	horizons := map[string]int64{}
+	covered := map[guideKey]bool{}
 	if len(used) > 0 {
 		rows, err := s.o.DB.QueryContext(ctx, `SELECT source_id, channel_id, MAX(end_ms) FROM livetv_programmes GROUP BY source_id, channel_id`)
 		if err != nil {
@@ -691,6 +1075,9 @@ func (s *Service) planRefresh(ctx context.Context, srcs []Source) error {
 			if err = rows.Scan(&k.source, &k.guide, &end); err != nil {
 				rows.Close()
 				return err
+			}
+			if end > s.o.Now().UnixMilli() {
+				covered[k] = true
 			}
 			at, ok := updated[k.source]
 			if !ok || !used[k] || end <= at {
@@ -712,6 +1099,16 @@ func (s *Service) planRefresh(ctx context.Context, srcs []Source) error {
 		}
 		srcs[i].NextRefresh = nil
 		if next, ok := nextRefresh(srcs[i], horizon); ok {
+			if srcs[i].Kind == "plex" && (srcs[i].LastErrorAt == nil || !srcs[i].LastErrorAt.After(srcs[i].UpdatedAt)) {
+				for key := range used {
+					if key.source == srcs[i].ID && !covered[key] {
+						if earlier := srcs[i].UpdatedAt.Add(minRefreshInterval); earlier.Before(next) {
+							next = earlier
+						}
+						break
+					}
+				}
+			}
 			srcs[i].NextRefresh = &next
 		}
 	}
@@ -749,19 +1146,19 @@ func (s *Service) RefreshSource(ctx context.Context, id string) (Source, error) 
 func (s *Service) refreshDueSources(ctx context.Context) []string {
 	// Only scheduling fields are read; inline uploads can be large.
 	d := store.DialectOf(s.o.DB)
-	rows, err := s.o.DB.QueryContext(ctx, `SELECT id, `+store.JSONText(d, "data", "playlistUrl")+`, `+store.JSONText(d, "data", "guideUrl")+`, `+store.JSONInt(d, "data", "refreshHours")+`, `+store.JSONText(d, "data", "updatedAt")+`, `+store.JSONText(d, "data", "lastErrorAt")+`, `+store.JSONInt(d, "data", "refreshFailures")+` FROM livetv_sources ORDER BY id`)
+	rows, err := s.o.DB.QueryContext(ctx, `SELECT id, `+store.JSONText(d, "data", "kind")+`, `+store.JSONText(d, "data", "playlistUrl")+`, `+store.JSONText(d, "data", "guideUrl")+`, `+store.JSONInt(d, "data", "refreshHours")+`, `+store.JSONText(d, "data", "updatedAt")+`, `+store.JSONText(d, "data", "lastErrorAt")+`, `+store.JSONInt(d, "data", "refreshFailures")+` FROM livetv_sources ORDER BY id`)
 	if err != nil {
 		return nil
 	}
 	var srcs []Source
 	for rows.Next() {
 		var id string
-		var playlist, guide, updated, failed sql.NullString
+		var kind, playlist, guide, updated, failed sql.NullString
 		var hours, failures sql.NullInt64
-		if rows.Scan(&id, &playlist, &guide, &hours, &updated, &failed, &failures) != nil {
+		if rows.Scan(&id, &kind, &playlist, &guide, &hours, &updated, &failed, &failures) != nil {
 			continue
 		}
-		src := Source{ID: id, PlaylistURL: playlist.String, GuideURL: guide.String, RefreshHours: int(hours.Int64), RefreshFailures: int(failures.Int64)}
+		src := Source{ID: id, Kind: kind.String, PlaylistURL: playlist.String, GuideURL: guide.String, RefreshHours: int(hours.Int64), RefreshFailures: int(failures.Int64)}
 		src.UpdatedAt, _ = time.Parse(time.RFC3339Nano, updated.String)
 		if t, e := time.Parse(time.RFC3339Nano, failed.String); e == nil {
 			src.LastErrorAt = &t
@@ -783,7 +1180,7 @@ func (s *Service) refreshDueSources(ctx context.Context) []string {
 		if ctx.Err() != nil {
 			break
 		}
-		rctx, cancel := context.WithTimeout(ctx, refreshTimeout)
+		rctx, cancel := context.WithTimeout(ctx, refreshBudget)
 		s.RefreshSource(rctx, id)
 		cancel()
 	}

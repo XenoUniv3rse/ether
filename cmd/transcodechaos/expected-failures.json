@@ -1,0 +1,7 @@
+[
+  {
+    "name": "FM2_SVA_C.zip",
+    "digest": "7e27a8776c70e47e4b4441809a6ec23c8a62e1a06eea364a6407839fc8650d4f",
+    "reason": "ITU AVC FM2 uses flexible macroblock ordering (three slice groups). Pinned stock FFmpeg reports FMO is not implemented and exits without decoded frames; retain raw AVC to verify Ether rejects it promptly."
+  }
+]

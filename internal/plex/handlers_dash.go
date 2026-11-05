@@ -45,12 +45,12 @@ func (s *Server) handleStartDASH(w http.ResponseWriter, r *http.Request) {
 	defer unlockOwner()
 
 	if s.d.Transcoder == nil || s.d.Playback == nil {
-		writeHTTPError(w, http.StatusServiceUnavailable)
+		writePlaybackStatus(w, http.StatusServiceUnavailable)
 		return
 	}
 	p, err := s.parsePlayRequest(r)
 	if err != nil {
-		writeHTTPError(w, http.StatusBadRequest)
+		writePlaybackStatus(w, http.StatusBadRequest)
 		return
 	}
 	unlockEncoder, lockErr := s.lockEncoder(ctx, p.sessionID)
@@ -59,12 +59,12 @@ func (s *Server) handleStartDASH(w http.ResponseWriter, r *http.Request) {
 	}
 	defer unlockEncoder()
 	if s.playbackOwners.Stale(pr.User.ID, pr.ClientID, p.key, pr.SessionID) {
-		writeHTTPError(w, http.StatusGone)
+		writePlaybackStatus(w, http.StatusGone)
 		return
 	}
 	p.protocol = core.ProtocolDASH
 	if !s.transcodes.claim(p.sessionID, pr.User.ID, pr.ClientID, s.now()) {
-		writeHTTPError(w, http.StatusForbidden)
+		writePlaybackStatus(w, http.StatusForbidden)
 		return
 	}
 	if err, failed := s.transcodes.takeFailure(p.sessionID, pr.User.ID, p.key, s.now()); failed {
@@ -88,8 +88,7 @@ func (s *Server) handleStartDASH(w http.ResponseWriter, r *http.Request) {
 		}
 		entry, _ = s.transcodes.get(p.sessionID)
 	} else if dec, err := s.publishBrokerPlayback(ctx, pr, replayPlay(p, entry), ps); err != nil {
-		s.log.Info("playback broker publish failed", "key", p.key, "err", err)
-		writeHTTPError(w, http.StatusServiceUnavailable)
+		s.writeStartErr(w, r, pr, err)
 		return
 	} else {
 		entry.decision = dec
@@ -123,23 +122,24 @@ func (s *Server) handleStartDASH(w http.ResponseWriter, r *http.Request) {
 		s.d.Transcoder.Stop(p.sessionID)
 	}
 	hs, err := s.d.Transcoder.StartHLS(context.WithoutCancel(ctx), core.HLSRequest{
-		SessionID:   p.sessionID,
-		InputURL:    s.d.Playback.InputURL(ps.ID),
-		Info:        ps.Info,
-		Decision:    dec,
-		StartOffset: p.offset,
-		Protocol:    core.ProtocolDASH,
+		SoftSubtitleStream: sessionSoftSubtitle(entry, pr, dec),
+		SessionID:          p.sessionID,
+		ReleaseID:          ps.SourceReleaseID(),
+		InputURL:           s.d.Playback.InputURL(ps.ID),
+		Info:               ps.Info,
+		Decision:           dec,
+		StartOffset:        p.offset,
+		Protocol:           core.ProtocolDASH,
 	})
 	if err != nil {
-		s.log.Warn("start DASH session", "session", p.sessionID, "key", p.key, "err", err)
-		writeHTTPError(w, http.StatusInternalServerError)
+		s.writeStartErr(w, r, pr, err)
 		return
 	}
 	ds, ok := hs.(core.DASHSession)
 	if !ok {
 		s.log.Error("transcoder returned a non-DASH session", "session", p.sessionID)
 		s.d.Transcoder.Stop(p.sessionID)
-		writeHTTPError(w, http.StatusInternalServerError)
+		writePlaybackStatus(w, http.StatusInternalServerError)
 		return
 	}
 	s.bindTranscodeStarted(entry, dec, p.offset)

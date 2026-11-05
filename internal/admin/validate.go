@@ -488,7 +488,15 @@ func ValidateConfig(cfg config.Config) []FieldError {
 	if cfg.Updates.MaxDrain < 0 {
 		v.add("updates.maxDrain", "must not be negative")
 	}
-	if len(cfg.Clients.Overrides) > 128 {
+	// Migrated shared settings and their copies must not consume the owner's
+	// existing allowance. Bound the total separately for resource safety.
+	ordinary := 0
+	for _, o := range cfg.Clients.Overrides {
+		if o.ProductMatch != "contains" && o.CopiedFrom == "" {
+			ordinary++
+		}
+	}
+	if ordinary > 128 || len(cfg.Clients.Overrides) > 8192 {
 		v.add("clients.overrides", "must be 128 entries or fewer")
 	}
 	for i, o := range cfg.Clients.Overrides {

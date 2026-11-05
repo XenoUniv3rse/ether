@@ -64,6 +64,9 @@ func (p *premiumize) do(ctx context.Context, r apiRequest, out any) error {
 	}
 	status, body, err := call(ctx, p.opts.HTTPClient, p.opts.BaseURL, r, nil)
 	if err != nil {
+		if status != 0 {
+			logProviderHTTPError(ctx, p.key, status, body)
+		}
 		return err
 	}
 	var st pmStatus
@@ -75,6 +78,7 @@ func (p *premiumize) do(ctx context.Context, r apiRequest, out any) error {
 		return nil
 	}
 	msg := st.Message
+	logProviderResponse(ctx, p.key, status, st.Status, msg)
 	lower := strings.ToLower(msg)
 	switch {
 	case status == http.StatusUnauthorized || strings.Contains(lower, "logged in") || strings.Contains(lower, "api key") || strings.Contains(lower, "apikey") || strings.Contains(lower, "premium account") || strings.Contains(lower, "premium membership"):
@@ -143,7 +147,10 @@ func (p *premiumize) Acquire(ctx context.Context, req AcquireRequest) (*Acquired
 	if !cached[strings.ToLower(req.InfoHash)] {
 		if !req.CachedOnly {
 			// Queue a cloud download for later; playback never waits for it.
-			_ = p.do(ctx, apiRequest{method: http.MethodPost, path: "/transfer/create", form: url.Values{"src": {req.Magnet}}}, nil)
+			if err := p.do(ctx, apiRequest{method: http.MethodPost, path: "/transfer/create", form: url.Values{"src": {req.Magnet}}}, nil); err != nil {
+				return nil, fmt.Errorf("premiumize: create transfer: %w", err)
+			}
+			return nil, &untrackedPending{err: fmt.Errorf("premiumize: %w", core.ErrNotCached)}
 		}
 		return nil, fmt.Errorf("premiumize: %w", core.ErrNotCached)
 	}

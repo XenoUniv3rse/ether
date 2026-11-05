@@ -124,6 +124,14 @@ func (s *Session) swapInput(ctx context.Context, inputURL string, info core.Medi
 		// old provider's credentials onto an independently resolved URL.
 		s.inputHeaders = nil
 	}
+	if s.softSubtitleStream != nil && s.input != inputURL {
+		old := findStream(s.info, s.softSubtitleInputIndex, "subtitle")
+		matched := matchStream(info, old, "subtitle")
+		s.softSubtitleInputIndex = -1
+		if matched != nil && !matched.External && IsTextSubtitle(matched.Codec) {
+			s.softSubtitleInputIndex = matched.Index
+		}
+	}
 	s.inputCrop = crop
 	s.input = inputURL
 	s.info = info

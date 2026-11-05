@@ -87,7 +87,7 @@ const HEIGHTS = localized(() => [
 
 const heightLabel = (h: number) => HEIGHTS.find((x) => x.value === String(h))?.label ?? `${h}p`;
 
-export function profileSummary(p: QualityProfile) {
+function profileSummary(p: QualityProfile) {
   const range =
     p.minHeight === p.maxHeight
       ? heightLabel(p.maxHeight)
@@ -140,7 +140,7 @@ function PreferenceList({
 /** Anchor of the profile drawer's custom scoring section. */
 const CUSTOM_SCORES_ID = "profile-custom-scores";
 
-export function hasImportedRules(draft: QualityProfile, resolver: ResolverPolicy | null): boolean {
+function hasImportedRules(draft: QualityProfile, resolver: ResolverPolicy | null): boolean {
   const gates = draft.allowedQualities ?? [];
   const ownScores = Object.keys(draft.customFormatScores ?? {}).length;
   const sharedFormats = (resolver?.customFormats ?? []).length;
@@ -1029,13 +1029,23 @@ function ProfileList({
 
             <SettingsSection
               title={t("Never play")}
-              description={t("Releases outside these limits are skipped.")}
+              description={
+                draft.fallbackBelowMin
+                  ? t(
+                      "When no release meets this profile, allow lower resolutions, including qualities excluded by an imported profile. Other limits still apply.",
+                    )
+                  : t("Releases outside these limits are skipped.")
+              }
             >
               <SettingsRow
                 title={t("Resolution")}
                 description={
                   errors.minHeight || errors.maxHeight ? (
                     <span className="text-danger">{errors.minHeight || errors.maxHeight}</span>
+                  ) : draft.fallbackBelowMin ? (
+                    t(
+                      "When no release meets this profile, allow lower resolutions, including qualities excluded by an imported profile. Other limits still apply.",
+                    )
                   ) : (
                     t("Lowest and highest acceptable.")
                   )
@@ -1064,6 +1074,19 @@ function ProfileList({
                       />
                     </span>
                   </span>
+                }
+              />
+              <SettingsRow
+                title={t("Fall back below minimum resolution")}
+                description={t(
+                  "When no release meets this profile, allow lower resolutions, including qualities excluded by an imported profile. Other limits still apply.",
+                )}
+                control={
+                  <Switch
+                    aria-label={t("Fall back below minimum resolution")}
+                    checked={draft.fallbackBelowMin ?? false}
+                    onChange={(e) => patch({ fallbackBelowMin: e.currentTarget.checked })}
+                  />
                 }
               />
               <div className="grid gap-6 border-t border-border px-4 py-3 sm:grid-cols-2">

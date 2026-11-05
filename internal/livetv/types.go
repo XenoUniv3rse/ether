@@ -5,6 +5,7 @@ package livetv
 import (
 	"context"
 	"database/sql"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -15,12 +16,21 @@ import (
 const Provider = "tv.plex.providers.epg.xmltv:1"
 
 type Item struct {
-	Key        core.RatingKey `json:"key"`
-	Title      string         `json:"title"`
-	DurationMS int64          `json:"durationMs"`
-	Summary    string         `json:"summary,omitempty"`
-	Rating     string         `json:"rating,omitempty"`
-	Thumb      string         `json:"thumb,omitempty"`
+	EpisodeTitle string         `json:"episodeTitle,omitempty"`
+	ShowTitle    string         `json:"showTitle,omitempty"`
+	Art          string         `json:"art,omitempty"`
+	Genres       []string       `json:"genres,omitempty"`
+	GUID         string         `json:"guid,omitempty"`
+	ShowGUID     string         `json:"showGuid,omitempty"`
+	MediaType    string         `json:"mediaType,omitempty"`
+	Premiere     bool           `json:"premiere,omitempty"`
+	Live         bool           `json:"live,omitempty"`
+	Key          core.RatingKey `json:"key"`
+	Title        string         `json:"title"`
+	DurationMS   int64          `json:"durationMs"`
+	Summary      string         `json:"summary,omitempty"`
+	Rating       string         `json:"rating,omitempty"`
+	Thumb        string         `json:"thumb,omitempty"`
 	// Show metadata keeps episodes in season order inside a shuffle,
 	// marathon or newest-first playout. Zero values are movies and items
 	// saved before weekly scheduling, which stay in their stored order.
@@ -68,6 +78,7 @@ type Block struct {
 	Watched     string          `json:"watched,omitempty"`
 }
 type Channel struct {
+	sweepKey      string
 	numberMissing bool
 	Health        string `json:"health,omitempty"`
 	Transcode     bool   `json:"transcode"` // IPTV: normalize codecs through the transcoder
@@ -86,9 +97,11 @@ type Channel struct {
 	Rating        string         `json:"rating,omitempty"`
 	SourceID      string         `json:"sourceId,omitempty"`
 	GuideID       string         `json:"guideId,omitempty"`
+	TvgName       string         `json:"tvgName,omitempty"`       // provider's label; a guide-matching hint
 	StreamURL     string         `json:"streamUrl,omitempty"`     // owner API only
 	StreamSources []StreamSource `json:"streamSources,omitempty"` // ordered inputs; independent of channel/guide identity
 	Group         string         `json:"group,omitempty"`
+	CustomGroup   bool           `json:"customGroup,omitempty"` // preserve owner grouping on provider refresh
 	Epoch         time.Time      `json:"epoch"`
 	Seed          int64          `json:"seed"`
 	Shuffle       bool           `json:"shuffle"`
@@ -116,8 +129,21 @@ type Channel struct {
 	// GuideSourceID names the source whose XMLTV supplies GuideID's
 	// programmes. Empty means SourceID. Virtual channels ignore it.
 	GuideSourceID string `json:"guideSourceId,omitempty"`
+
+	// ProviderNumber is the number the source gave this channel at the last
+	// import (Xtream num, M3U tvg-chno, or the position in the owner's group
+	// order). While Number still equals it the channel follows the
+	// provider's renumbering; an owner edit makes Number differ and sticks.
+	ProviderNumber string `json:"providerNumber,omitempty"`
+
+	// adult is the provider's own adult flag (Xtream is_adult); import only.
+	adult bool
 }
 type Source struct {
+	LineupID    string `json:"lineupId,omitempty"`
+	Country     string `json:"country,omitempty"`
+	PostalCode  string `json:"postalCode,omitempty"`
+	PlexCursor  int    `json:"plexCursor,omitempty"`
 	ID          string `json:"id"`
 	Name        string `json:"name"`
 	Kind        string `json:"kind,omitempty"` // a source kind id, e.g. plugin:<id>/channels
@@ -140,6 +166,10 @@ type Source struct {
 	LastError       string     `json:"lastError,omitempty"`
 	LastErrorAt     *time.Time `json:"lastErrorAt,omitempty"`
 	RefreshFailures int        `json:"refreshFailures,omitempty"`
+	// SkippedVOD counts VOD entries (Xtream /movie/ and /series/ streams)
+	// the last playlist import left out. It is persisted with the source so
+	// the console can report what the import dropped.
+	SkippedVOD int `json:"skippedVod,omitempty"`
 	// Read-only statistics computed by Sources(); ignored on import.
 	HasPlaylist       bool       `json:"hasPlaylist"`
 	HasGuide          bool       `json:"hasGuide"`
@@ -149,6 +179,54 @@ type Source struct {
 	GuideFrom         *time.Time `json:"guideFrom,omitempty"`
 	GuideUntil        *time.Time `json:"guideUntil,omitempty"`
 	NextRefresh       *time.Time `json:"nextRefresh,omitempty"`
+
+	// Account is the provider's report on this login (Xtream panels),
+	// refreshed with the lineup. Read-only.
+	Account *ProviderAccount `json:"account,omitempty"`
+	// Groups are the provider's channel groups from the last refresh, in
+	// provider order, including the ones the owner excludes. Read-only.
+	Groups []SourceGroup `json:"groups,omitempty"`
+	// ExcludeGroups are group names the owner leaves out; their channels
+	// are not imported at all. NewGroups "exclude" adds each group that
+	// first appears on a refresh to ExcludeGroups; "" includes it.
+	// HideAdult leaves out every group the provider flags as adult.
+	ExcludeGroups []string `json:"excludeGroups,omitempty"`
+	NewGroups     string   `json:"newGroups,omitempty"`
+	HideAdult     bool     `json:"hideAdult,omitempty"`
+	// GroupOrder is the owner's group order. Empty keeps the provider's
+	// order and numbers; otherwise channels are numbered 1… down the
+	// listed groups (unlisted groups follow in provider order).
+	GroupOrder []string `json:"groupOrder,omitempty"`
+
+	// Provider etiquette for the source's streams. MaxConnections caps
+	// simultaneous provider connections below what the panel allows (0 uses
+	// the panel's limit; it can never raise it). TuneGapSeconds is the least
+	// time between two new provider streams: 0 is the default (2 s on a
+	// connection-limited account, none otherwise), negative turns it off.
+	// TunesPerHour caps new provider streams per hour; 0 is no cap.
+	MaxConnections int `json:"maxConnections,omitempty"`
+	TuneGapSeconds int `json:"tuneGapSeconds,omitempty"`
+	TunesPerHour   int `json:"tunesPerHour,omitempty"`
+}
+
+// ProviderAccount is what an IPTV panel reports about the owner's login.
+type ProviderAccount struct {
+	Status            string     `json:"status,omitempty"`
+	Trial             bool       `json:"trial,omitempty"`
+	ExpiresAt         *time.Time `json:"expiresAt,omitempty"`
+	MaxConnections    int        `json:"maxConnections,omitempty"`
+	ActiveConnections int        `json:"activeConnections"`
+	Formats           []string   `json:"formats,omitempty"`
+	CheckedAt         time.Time  `json:"checkedAt"`
+}
+
+// SourceGroup is one provider channel group.
+type SourceGroup struct {
+	Name     string `json:"name"`
+	Channels int    `json:"channels"`
+	Adult    bool   `json:"adult,omitempty"`
+	// Excluded reports whether the owner's rules leave this group out.
+	Excluded bool `json:"excluded,omitempty"`
 }
 type Programme struct {
 	ID        string    `json:"id"`
@@ -186,6 +264,9 @@ type Policy struct {
 	channelSet map[string]struct{} // Channels as a set for long lists; see indexChannels
 }
 type Options struct {
+	PlexGuideToken func() string
+	PlexGuideURL   string // test endpoint
+
 	CanPlay            func(*core.User, bool, time.Time) bool
 	StreamLimit        func(*core.User) int
 	DB                 *sql.DB
@@ -198,6 +279,8 @@ type Options struct {
 	LogoIndexURL       func() string
 	HealthSweepMinutes func() int // 0 defaults to 15; negative disables
 	Now                func() time.Time
+	// Logger receives credential-safe import, playback and delivery diagnostics.
+	Logger *slog.Logger
 	// Allowed applies additional owner title/genre policies to every surface.
 	Allowed func(*core.User, *core.Title) bool
 	// Warm resolves/primes a title without opening a viewer stream.

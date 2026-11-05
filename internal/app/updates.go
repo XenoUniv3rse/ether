@@ -162,6 +162,17 @@ func (a *App) updatesHandler() http.Handler {
 	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, a.updateStatus(r.Context()))
 	})
+	mux.HandleFunc("POST /check", func(w http.ResponseWriter, r *http.Request) {
+		if a.updates == nil || a.updates.mgr == nil {
+			writeError(w, http.StatusServiceUnavailable, "updates_disabled", updater.ErrUpdatesDisabled.Error())
+			return
+		}
+		if err := a.updates.mgr.CheckNow(); err != nil {
+			writeError(w, http.StatusServiceUnavailable, "updates_disabled", err.Error())
+			return
+		}
+		writeJSON(w, http.StatusAccepted, a.updates.mgr.Status())
+	})
 	mux.HandleFunc("POST /apply", func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
 			Force bool `json:"force"`

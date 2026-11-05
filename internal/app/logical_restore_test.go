@@ -53,17 +53,21 @@ func TestLogicalRestoreMatchesRowByRowWrites(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			dst := store.OpenTest(t)
 			before := policyEpoch(t, dst)
+			beforeChannel := channelEpoch(t, dst)
 			if err := store.ImportLogical(ctx, dst, bytes.NewReader(dump)); err != nil {
 				t.Fatal(err)
 			}
 			got := tableContents(t, dst)
 			for table, rows := range want {
-				if table != "viewer_policy_epoch" && got[table] != rows {
+				if table != "viewer_policy_epoch" && table != "livetv_channel_epoch" && got[table] != rows {
 					t.Errorf("%s:\n got %q\nwant %q", table, got[table], rows)
 				}
 			}
 			if after := policyEpoch(t, dst); after <= before || after <= policyEpoch(t, src) {
 				t.Errorf("policy epoch %d after restore; target was %d, source %d", after, before, policyEpoch(t, src))
+			}
+			if after := channelEpoch(t, dst); after <= beforeChannel || after <= channelEpoch(t, src) {
+				t.Errorf("channel epoch %d after restore; target was %d, source %d", after, beforeChannel, channelEpoch(t, src))
 			}
 			if store.DialectOf(dst) != store.Postgres {
 				// Full-text indexes are not in dumps; the restore rebuilds them.
@@ -188,4 +192,13 @@ func withoutTables(t *testing.T, dump []byte, drop ...string) []byte {
 		}
 	}
 	return out.Bytes()
+}
+
+func channelEpoch(t *testing.T, db *sql.DB) int64 {
+	t.Helper()
+	var g int64
+	if err := db.QueryRow(`SELECT generation FROM livetv_channel_epoch WHERE id=1`).Scan(&g); err != nil {
+		t.Fatal(err)
+	}
+	return g
 }

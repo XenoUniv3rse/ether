@@ -15,8 +15,13 @@ import (
 
 // runSpec is everything needed to build one ffmpeg HLS run.
 type runSpec struct {
-	LiveInput      bool
-	CopyTimestamps bool
+	// Only a retry of an initial run whose muxer wrote a wrapped tfdt.
+	NormalizeNegativeDTS bool
+	SoftSubtitlePath     string
+	SoftSubtitleIndex    int
+	LoopInput            bool
+	LiveInput            bool
+	CopyTimestamps       bool
 	// RTXTimeline preserves the native session's clock and rendition-local
 	// initialization paths when ordinary FFmpeg takes over.
 	RTXTimeline       bool
@@ -38,6 +43,12 @@ type runSpec struct {
 	Features features
 	// BigProbe raises probesize/analyzeduration (retry after a failed start).
 	BigProbe bool
+	// InputTimeout bounds HTTP reads for the progressive stream; a temporary
+	// source stall can then reconnect without splicing another Matroska stream.
+	InputTimeout time.Duration
+	// Repeat encoder parameter sets on recovery so a decoder holding the
+	// initial fMP4 header can decode the replacement encoder's keyframes.
+	InBandHeaders bool
 	// Protocol is core.ProtocolHLS or core.ProtocolDASH. For DASH, Dir is
 	// the run's own directory and Playlist ffmpeg's manifest in it.
 	Protocol string
@@ -143,7 +154,7 @@ func buildArgs(s runSpec) []string {
 		return append(args, "-flush_packets", "1", "-f", "matroska", "pipe:1")
 	}
 	if s.Protocol == core.ProtocolDASH {
-		return append(args, dashMuxArgs(s)...)
+		return appendSoftSubtitleOutput(append(args, dashMuxArgs(s)...), s)
 	}
 	if s.Decision.Container == ContainerMPEGTS {
 		var segmentOptions []string
@@ -153,7 +164,7 @@ func buildArgs(s runSpec) []string {
 			args = append(args, "-muxdelay", "0", "-muxpreload", "0")
 			segmentOptions = append(segmentOptions, "mpegts_copyts=1", "avoid_negative_ts=disabled")
 		}
-		if s.Start > 0 {
+		if s.Start > 0 || (s.LiveInput && s.StartSeg > 0) {
 			// A new muxer resets each PID's continuity counter. Mark that reset
 			// in-band so a decoder retaining buffered TS does not flag the first
 			// replacement packet as corrupt. Media timestamps remain unchanged.
@@ -180,7 +191,14 @@ func buildArgs(s runSpec) []string {
 			}
 		}
 	}
-	return append(args, hlsMuxArgs(s)...)
+	return appendSoftSubtitleOutput(append(args, hlsMuxArgs(s)...), s)
+}
+
+func appendSoftSubtitleOutput(args []string, s runSpec) []string {
+	if s.SoftSubtitlePath == "" {
+		return args
+	}
+	return append(args, "-map", fmt.Sprintf("0:%d", s.SoftSubtitleIndex), "-c:s", "ass", "-f", "ass", "-ignore_readorder", "1", "-flush_packets", "1", s.SoftSubtitlePath)
 }
 
 // Segmented Matroska carries parameter sets only in the header's
@@ -207,9 +225,26 @@ func matroskaCopyParameterSets(d core.Decision, codec string) string {
 // buildCodecArgs is the input, stream mapping and codec part of a run's
 // command line, shared by HLS and DASH.
 func buildCodecArgs(s runSpec) []string {
+	// A card has no changing content: start its loop at zero, then place it
+	// on the programme clock. Never seek through hours of repeated input.
+	loopStart := s.Start
+	if s.LoopInput {
+		s.Start = 0
+		keys := make([]time.Duration, len(s.KeyTimes))
+		for i, k := range s.KeyTimes {
+			keys[i] = k - loopStart
+		}
+		s.KeyTimes = keys
+	}
 	d := s.Decision
 	v := s.Info.Video()
 	a := findStream(s.Info, d.AudioStream, "audio")
+	// An ADTS PCE may appear only in the source's first audio packet. Seeking
+	// the input past it leaves the AAC decoder without its channel layout.
+	// Prime the decoder with a short prefix, then seek the same source. When
+	// that is unavailable, only local/short seeks may decode from the start.
+	pceOutputSeek := s.Protocol == core.ProtocolHLS && d.Container != ContainerMatroska && s.Start > 0 && s.Info.Container == "mpegts" && a != nil && a.AACProgramConfig && !d.AudioCopy
+	pceInput, pcePrelude, pceBounded := pceSeekInput(s)
 	segDur := s.SegDur
 	if segDur <= 0 {
 		segDur = DefaultSegmentDuration
@@ -232,27 +267,61 @@ func buildCodecArgs(s runSpec) []string {
 	}
 
 	// ---- input
-	args = append(args, inputSafetyArgs(s.Input, s.LiveInput)...)
-	args = append(args, httpInputArgs(s.Input, true)...)
-	args = appendInputHeaders(args, s.commandHeaders())
+	if pceBounded {
+		protocols := "data,http,https,tcp,tls,crypto"
+		if !isNetworkURL(s.Input) {
+			protocols = "data,file"
+		}
+		args = append(args, "-format_whitelist", "concat,mpegts", "-protocol_whitelist", protocols)
+	} else {
+		args = append(args, inputSafetyArgs(s.Input, s.LiveInput)...)
+	}
+	var httpArgs []string
+	if !pceBounded {
+		httpArgs = httpInputArgs(s.Input, true)
+	}
+	if s.Protocol == core.ProtocolHTTP && s.InputTimeout > 0 && len(httpArgs) > 0 {
+		httpArgs[1] = strconv.FormatInt(s.InputTimeout.Microseconds(), 10)
+		httpArgs = append(httpArgs, "-reconnect_streamed", "1")
+	}
+	args = append(args, httpArgs...)
+	if s.LiveInput {
+		if isNetworkURL(s.Input) {
+			args = append(args, "-reconnect_streamed", "1", "-reconnect_max_retries", "3")
+		}
+		args = append(args, "-fflags", "+discardcorrupt+genpts", "-err_detect", "ignore_err")
+	}
+	if !pceBounded {
+		args = appendInputHeaders(args, s.commandHeaders())
+	}
 	if s.BigProbe {
 		args = append(args, "-probesize", "50000000", "-analyzeduration", "10000000")
 	} else {
 		args = append(args, "-probesize", "5000000", "-analyzeduration", "2000000")
 	}
-	if !transcodeVideo {
+	if !transcodeVideo && !s.LiveInput {
 		args = append(args, "-fflags", "+genpts")
 	}
 	vp := planVideo(s, v)
 	args = append(args, vp.inputArgs...)
 	args = append(args, inputTimestampArgs(s)...)
-	if s.Start > 0 {
+	if s.LoopInput {
+		args = append(args, "-stream_loop", "-1")
+	}
+	if s.Start > 0 && !pceOutputSeek {
 		args = append(args, "-ss", secs(s.Start))
 	}
 	if s.httpCopyTimestamps() {
 		args = append(args, "-copyts")
 	}
-	args = append(args, "-i", s.Input)
+	if pceBounded {
+		args = append(args, "-f", "concat", "-safe", "0", "-i", pceInput)
+	} else {
+		args = append(args, "-i", s.Input)
+	}
+	if s.LoopInput {
+		args = append(args, "-t", secs(s.Info.Duration-loopStart))
+	}
 	textSub := matroskaTextSubtitle(s)
 	if textSub != nil && textSub.External && textSub.ExternalURL != "" {
 		// A sidecar file is a second input. Without the same -ss, its cues
@@ -263,6 +332,15 @@ func buildCodecArgs(s runSpec) []string {
 			args = append(args, "-ss", secs(s.Start))
 		}
 		args = append(args, "-i", textSub.ExternalURL)
+	}
+	if pceOutputSeek {
+		// Output seeking rebases packet timestamps even with -copyts. Put
+		// the result back on the title clock used by the segment slotter.
+		seek := s.Start
+		if pceBounded {
+			seek = pcePrelude
+		}
+		args = append(args, "-ss", secs(seek), "-output_ts_offset", secs(s.Start))
 	}
 
 	// ---- mapping
@@ -330,7 +408,7 @@ func buildCodecArgs(s runSpec) []string {
 		} else {
 			args = append(args, vp.encodeArgs...)
 			args = append(args, videotoolboxCaptionArgs(v, vp.encodeArgs)...)
-			if d.Container == ContainerMatroska {
+			if d.Container == ContainerMatroska || s.InBandHeaders {
 				// Encoders emit Annex B with the global header as extradata;
 				// matroskaenc converts both to length-prefixed form.
 				args = append(args, "-bsf:v", "dump_extra=freq=keyframe")
@@ -353,6 +431,7 @@ func buildCodecArgs(s runSpec) []string {
 	if a != nil {
 		if d.AudioCopy {
 			args = append(args, "-c:a", "copy")
+			var audioFilters []string
 			if s.Start > 0 {
 				// Input seeking retains copied packets from the preceding
 				// video keyframe. Drop audio preroll without re-encoding or
@@ -364,7 +443,16 @@ func buildCodecArgs(s runSpec) []string {
 				if len(inputTimestampArgs(s)) > 0 {
 					dropAt = secs(s.Start)
 				}
-				args = append(args, "-bsf:a", "noise=amount=0:drop='lt(pts*tb,"+dropAt+")'")
+				audioFilters = append(audioFilters, "noise=amount=0:drop='lt(pts*tb,"+dropAt+")'")
+			}
+			// The HLS muxer's nested MP4 writer does not auto-insert the
+			// ADTS-to-ASC filter. Preserve compressed audio while moving its
+			// configuration into the initialization segment.
+			if s.Protocol == core.ProtocolHLS && container == ContainerFMP4 && a.Codec == "aac" && (s.Info.Container == "mpegts" || s.Info.Container == "aac") {
+				audioFilters = append(audioFilters, "aac_adtstoasc")
+			}
+			if len(audioFilters) > 0 {
+				args = append(args, "-bsf:a", strings.Join(audioFilters, ","))
 			}
 			if container == ContainerFMP4 {
 				tag := "0"
@@ -411,6 +499,9 @@ func buildCodecArgs(s runSpec) []string {
 		}
 	}
 
+	if s.LoopInput {
+		args = append(args, "-output_ts_offset", secs(loopStart))
+	}
 	return args
 }
 
@@ -455,6 +546,9 @@ func hlsMuxArgs(s runSpec) []string {
 		// was moved before them. HLS does not use sidx, and the chunked
 		// path already drops it from multi-chunk segments.
 		options := "movflags=+frag_discont+skip_sidx"
+		if s.NormalizeNegativeDTS {
+			options += ":avoid_negative_ts=make_non_negative"
+		}
 		if s.VideoTimescale != 0 {
 			options += ":video_track_timescale=" + strconv.FormatUint(uint64(s.VideoTimescale), 10)
 		}
@@ -574,8 +668,8 @@ func even(n int) int {
 }
 
 // cpuToneMap converts PQ/HLG to SDR BT.709 in software. zscale (zimg) is
-// the accurate path when this ffmpeg has it. libplacebo, then
-// tonemap_opencl, are the alternatives. There is no retag-only fallback:
+// the accurate path when this ffmpeg has it. libplacebo, tonemapx and
+// tonemap_opencl are the alternatives. There is no retag-only fallback:
 // a washed-out picture is not a tone map. ok is false when none of those
 // filters were probed.
 func cpuToneMap(f features) (string, bool) {
@@ -584,6 +678,9 @@ func cpuToneMap(f features) (string, bool) {
 	}
 	if f.hasFilter("libplacebo") {
 		return "libplacebo=tonemapping=hable:color_primaries=bt709:color_trc=bt709:colorspace=bt709:range=tv", true
+	}
+	if f.hasFilter("tonemapx") {
+		return "tonemapx=tonemap=hable:desat=0:t=bt709:m=bt709:p=bt709:format=yuv420p", true
 	}
 	if f.hasFilter("tonemap_opencl") {
 		return "format=p010le,hwupload,tonemap_opencl=tonemap=hable:desat=0:format=nv12,hwdownload,format=nv12", true
@@ -676,7 +773,6 @@ func subtitleOrdinal(info core.MediaInfo, idx int) int {
 type picturePlan struct {
 	w, h     int
 	scaling  bool
-	keepHDR  bool
 	tonemap  bool
 	tenBit   bool
 	outRange string
@@ -697,7 +793,7 @@ func planPicture(s runSpec, v *core.StreamInfo, codec string) picturePlan {
 	keepHDR := keepsHDR(v) && !d.ToneMap && codec == "hevc"
 	pic := picturePlan{
 		w: w, h: h, scaling: v.Height > 0 && h < v.Height,
-		keepHDR: keepHDR, tonemap: encodedRange(v) != rangeSDR && !keepHDR,
+		tonemap: encodedRange(v) != rangeSDR && !keepHDR,
 		// tenBit and outRange describe the encoded picture; without a
 		// contract they follow keepHDR.
 		tenBit: keepHDR, outRange: rangeSDR,
@@ -743,7 +839,17 @@ func planFilterChain(s runSpec, v *core.StreamInfo, pic picturePlan, accel strin
 	// tone-mapped contract. Tone mappers produce limited-range BT.709.
 	p010CUDA := accel == AccelNVENC && s.Features.cudaP010ToneMap && !pictureOf(v).full && (s.Target == nil || (s.Target.pic.prim == "bt709" && s.Target.pic.matrix == "bt709" && !s.Target.pic.full))
 	gpuOff := s.PictureCrop != nil || pic.pad || pic.convert != "" || (pic.tonemap && pic.tenBit && !p010CUDA)
+	dv5 := pic.tonemap && v.DolbyVision && v.DolbyVisionProfile == 5
 	gpuInput, gpuFilters, gpuOK := gpuPipeline(s, accel, pic.w, pic.h, pic.tonemap, pic.tenBit, burn)
+	if dv5 {
+		// The VideoToolbox mapper produced visibly different colours from
+		// tonemapx on profile 5. Keep decode/encode hardware where possible,
+		// but do the RPU reshape and tone map with the validated CPU graph.
+		gpuOK = false
+		// The legacy VAAPI branch below is separate from gpuPipeline.
+		// It must not bypass the RPU-aware CPU graph either.
+		gpuOff = true
+	}
 	switch {
 	case gpuOK && !gpuOff:
 		inputArgs = append(inputArgs, gpuInput...)
@@ -752,7 +858,7 @@ func planFilterChain(s runSpec, v *core.StreamInfo, pic picturePlan, accel strin
 			chain = append(chain, pic.setSAR)
 		}
 		hwFrames = true
-	case accel == AccelVideoToolbox && pic.tonemap && !gpuOff && !burn && s.Features.hasFilter("scale_vt"):
+	case accel == AccelVideoToolbox && pic.tonemap && !dv5 && !gpuOff && !burn && s.Features.hasFilter("scale_vt"):
 		// Decode, tone-map and scale on the GPU.
 		inputArgs = append(inputArgs, "-hwaccel", "videotoolbox", "-hwaccel_output_format", "videotoolbox_vld")
 		chain = append(chain, fmt.Sprintf("scale_vt=w=%d:h=%d:color_matrix=bt709:color_primaries=bt709:color_transfer=bt709", pic.w, pic.h))
@@ -784,16 +890,13 @@ func planFilterChain(s runSpec, v *core.StreamInfo, pic picturePlan, accel strin
 		if dev == "" {
 			dev = DefaultVAAPIDevice
 		}
-		inputArgs = append(inputArgs, "-vaapi_device", dev)
-		if burn && !(v.Codec == "h264" && v.BitDepth > 8) {
-			// A burn-in overlays in software, but the picture is still
-			// decoded on the GPU (on the -vaapi_device device) and handed
-			// to the filters in system memory, as the CUDA and
-			// VideoToolbox paths do: software-decoding 4K HEVC 10-bit
-			// was most of the CPU a burn cost (#313). A codec the GPU
-			// cannot decode falls back to software decoding. H.264 High
-			// 10 has no VAAPI decoder.
-			inputArgs = append(inputArgs, "-hwaccel", "vaapi")
+		if burn {
+			inputArgs = append(inputArgs, "-init_hw_device", "vaapi=va:"+dev, "-filter_hw_device", "va")
+			if !(v.Codec == "h264" && v.BitDepth > 8) {
+				inputArgs = append(inputArgs, "-hwaccel", "vaapi", "-hwaccel_device", "va")
+			}
+		} else {
+			inputArgs = append(inputArgs, "-vaapi_device", dev)
 		}
 	}
 
@@ -802,8 +905,14 @@ func planFilterChain(s runSpec, v *core.StreamInfo, pic picturePlan, accel strin
 		case pic.convert != "":
 			chain = append(chain, pic.convert)
 		case pic.tonemap:
-			if filt, ok := cpuToneMap(s.Features); ok {
-				chain = append(chain, filt)
+			if dv5 && s.Features.hasFilter("tonemapx") {
+				// Jellyfin's DV-aware mapper consumes 10-bit 4:2:0 and uses
+				// the decoder's RPU side data for IPT reshaping.
+				chain = append(chain, "format=yuv420p10le", "tonemapx=tonemap=hable:desat=0:t=bt709:m=bt709:p=bt709:format=yuv420p:apply_dovi=1")
+			} else if !dv5 {
+				if filt, ok := cpuToneMap(s.Features); ok {
+					chain = append(chain, filt)
+				}
 			}
 		}
 		if !burn {
@@ -1054,6 +1163,15 @@ func planVideo(s runSpec, v *core.StreamInfo) videoPlan {
 
 	in := fmt.Sprintf("[0:%d]", v.Index)
 	chainInput, chain, hwFrames := planFilterChain(s, v, pic, accel, burn, finish)
+	// For bitmap burns, scale on VAAPI before downloading for the software
+	// overlay. Upload the result back to the same device for encoding.
+	vaapiBitmap := burn && IsImageSubtitle(sub.Codec) && !sub.External && accel == AccelVAAPI &&
+		!(v.Codec == "h264" && v.BitDepth > 8) && !s.Accel.NoGPUScale &&
+		pic.w > 0 && pic.h > 0 && s.PictureCrop == nil && !pic.pad && pic.convert == "" && !pic.tonemap && !pic.tenBit && pic.setSAR == ""
+	if vaapiBitmap {
+		chainInput = append(chainInput, "-hwaccel_output_format", "vaapi")
+		chain = []string{fmt.Sprintf("scale_vaapi=w=%d:h=%d:format=nv12", pic.w, pic.h), "hwdownload", "format=nv12"}
+	}
 	if pic.tonemap && !toneMapped(chain, hwFrames) {
 		p.err = &GraphError{Message: toneMapUnavailableMessage()}
 		return p
@@ -1065,7 +1183,10 @@ func planVideo(s runSpec, v *core.StreamInfo) videoPlan {
 	case burn && IsImageSubtitle(sub.Codec) && !sub.External:
 		post := finish(nil)
 		subW, subH := v.Width, v.Height
-		if pic.scaling && s.PictureCrop == nil {
+		if vaapiBitmap {
+			post = format(nil)
+			subW, subH = pic.w, pic.h
+		} else if pic.scaling && s.PictureCrop == nil {
 			// Overlay at the output size: scale the picture first and
 			// draw the subtitle onto the smaller frame, instead of
 			// overlaying every source-size frame and scaling after
@@ -1142,7 +1263,10 @@ func planVideo(s runSpec, v *core.StreamInfo) videoPlan {
 	}
 	p.graph = graph
 
-	p.encodeArgs = planEncodeArgs(s, pic, enc, codec, hwFrames)
+	// VAAPI's software-filter paths end in hwupload too. Output colour
+	// options after that upload cause FFmpeg to insert an impossible software
+	// conversion between VAAPI surfaces and the encoder.
+	p.encodeArgs = planEncodeArgs(s, pic, enc, codec, hwFrames || (accel == AccelVAAPI && burn))
 	return p
 }
 

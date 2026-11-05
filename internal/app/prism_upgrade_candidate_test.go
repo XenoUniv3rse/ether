@@ -15,7 +15,7 @@ var prismCandidateMigrations = map[string]int{
 	"sessions":              9,
 	"sessions_samples":      1,
 	"viewer_policy":         5,
-	"availability":          5,
+	"availability":          6,
 	"capability_tickets":    1,
 	"capability_headers":    3,
 	"frontend_image_grants": 7,
@@ -23,7 +23,7 @@ var prismCandidateMigrations = map[string]int{
 	"experience_receipts":   5,
 	"handle_reservations":   2,
 	"plexwatch":             5,
-	"state_plexwatch":       4,
+	"state_plexwatch":       5,
 	"watchsend":             1,
 	"plexmeta":              2,
 }
@@ -50,6 +50,9 @@ func TestPrismUpgradeCandidateMigrationFailures(t *testing.T) {
 			first := prismCandidateMigrations[component]
 			if component == "viewer_policy" {
 				first = 1
+			}
+			if component == "availability" {
+				first = 5
 			}
 			for version := first; version <= prismCandidateMigrations[component]; version++ {
 				t.Run(fmt.Sprintf("%s/%s/%d", dialect, component, version), func(t *testing.T) { verifyPrismMigrationFailure(t, dialect, component, version) })

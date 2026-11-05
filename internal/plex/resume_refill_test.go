@@ -172,7 +172,7 @@ func (x *etheLab) start(t *testing.T) {
 		t.Fatal(err)
 	}
 	x.f.srv.d.Playback = x.mgr
-	x.f.srv.d.Variants = x.rs
+	x.f.srv.d.Variants = x.observed
 }
 func (x *etheLab) detail(t *testing.T, label string) []map[string]any {
 	t.Helper()
@@ -274,13 +274,12 @@ func TestResumedDetailNoResumeControl(t *testing.T) {
 	x := newEtheLab(t, false, "", 3)
 	x.detail(t, "first")
 	x.waitWarm(t)
+	waitResumeRefill(t, x.scheduledRefill(t))
 	if media := x.detail(t, "second"); len(media) != 4 {
 		t.Fatalf("no-resume control Media=%d want 4", len(media))
 	}
-	select {
-	case <-x.observed.scheduled:
-		t.Fatal("ordinary Resolve requested extra refill")
-	default:
+	if x.idx.searches.Load() != 1 {
+		t.Fatal("repeated detail caused an extra search")
 	}
 }
 
@@ -310,7 +309,7 @@ func TestResumedDetailRefillDoesNotWaitOrChangeSource(t *testing.T) {
 	caps.ClientID = "client-2"
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if !x.mgr.PreResolve(ctx, &ownerUser, x.title.Key, caps) {
+	if !x.mgr.Prewarm(ctx, &ownerUser, x.title.Key, caps, core.PrewarmOptions{Reason: core.PrewarmDetail}) {
 		t.Fatal("second client warm refused")
 	}
 	x.waitWarm(t)

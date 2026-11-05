@@ -74,8 +74,9 @@ func TestStoredEpisodeTotalBySeriesMatchesDirectCount(t *testing.T) {
 	// Time passes: an episode that had not aired now counts.
 	c.clock.Store(func() time.Time { return now.AddDate(0, 0, 30) })
 	check("later")
-	// A filter on the episodes themselves takes the direct count.
-	if _, ok, _ := c.countStoredEpisodesBySeries(ctx, core.Filter{Type: core.TypeShow, ExcludeKeys: []core.RatingKey{core.EpisodeKey(4, 1, 1)}}); ok {
-		t.Fatal("an episode exclusion used the series sum")
+	// A bounded episode exclusion is subtracted from the series sum.
+	f := core.Filter{Type: core.TypeShow, ExcludeKeys: []core.RatingKey{core.EpisodeKey(4, 1, 1)}}
+	if got, ok, err := c.countStoredEpisodesBySeries(ctx, f); err != nil || !ok || got != direct(f) {
+		t.Fatalf("episode exclusion: by series %d, direct %d, usable %v, error %v", got, direct(f), ok, err)
 	}
 }

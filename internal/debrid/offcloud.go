@@ -91,6 +91,9 @@ func (p *offcloud) do(ctx context.Context, r apiRequest, body any) (json.RawMess
 		req.Header.Set("Authorization", "Bearer "+p.key)
 	})
 	if err != nil {
+		if status != 0 {
+			logProviderHTTPError(ctx, p.key, status, data)
+		}
 		return nil, err
 	}
 	t := bytes.TrimSpace(data)
@@ -107,6 +110,11 @@ func (p *offcloud) do(ctx context.Context, r apiRequest, body any) (json.RawMess
 		}
 		return t, nil
 	}
+	msg := e.Error
+	if msg == "" {
+		msg = e.NotAvailable
+	}
+	logProviderResponse(ctx, p.key, status, "", msg)
 	return nil, ocClassify(status, e)
 }
 
@@ -312,6 +320,7 @@ func (p *offcloud) Acquire(ctx context.Context, req AcquireRequest) (*Acquired, 
 			break
 		}
 		if state == "error" || state == "canceled" {
+			logProviderResponse(ctx, p.key, http.StatusOK, state, "cloud download "+state)
 			cleanup()
 			return nil, fmt.Errorf("offcloud: cloud download %s: %w", state, core.ErrNotCached)
 		}
