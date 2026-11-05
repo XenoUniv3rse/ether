@@ -90,6 +90,7 @@ export function ChannelBulkBar({
         open={groupOpen}
         onOpenChange={setGroupOpen}
         align="end"
+        side="top"
         className="w-72 p-3"
         trigger={
           <Button
