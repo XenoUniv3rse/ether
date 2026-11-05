@@ -213,6 +213,7 @@ func TestFFmpegArgvCarriesNoProviderURLOrHeaders(t *testing.T) {
 	bodies := append([]string(nil), runner.bodies...)
 	runner.mu.Unlock()
 	var inputs []string
+	var analysis, packetProbe, encoder bool
 	for _, args := range calls {
 		assertNoSecrets(t, "command line", strings.Join(args, " "), hostOf(up.URL), "/live/", "Authorization", "X-Provider-Key")
 		if contains(args, "-headers") || contains(args, "-referer") {
@@ -221,15 +222,35 @@ func TestFFmpegArgvCarriesNoProviderURLOrHeaders(t *testing.T) {
 		for i := 0; i+1 < len(args); i++ {
 			if args[i] == "-i" {
 				inputs = append(inputs, args[i+1])
+				if args[0] == "ffprobe" && contains(args, "-show_streams") {
+					analysis = true
+				}
+				if args[0] == "ffprobe" && contains(args, "-show_packets") {
+					packetProbe = true
+				}
+				if args[0] == "ffmpeg" {
+					encoder = true
+				}
 			}
 		}
 	}
-	// One ffprobe analysis and one ffmpeg relay, both reading the loopback grant.
-	if len(inputs) != 2 || inputs[0] != inputs[1] || !regexp.MustCompile(`^http://127\.0\.0\.1:\d+/livetv/input/[A-Za-z0-9_-]{43}/0/stream\.ts$`).MatchString(inputs[0]) {
+	// AAC with an unknown channel layout also triggers an ADTS packet probe.
+	if !analysis || !packetProbe || !encoder || len(inputs) == 0 {
 		t.Fatalf("tool inputs = %q", inputs)
 	}
-	if len(bodies) != 2 || bodies[0] != "200 TS-FIXTURE" || bodies[1] != "200 TS-FIXTURE" || hits.Load() == 0 {
+	grantPattern := regexp.MustCompile(`^http://127\.0\.0\.1:\d+/livetv/input/[A-Za-z0-9_-]{43}/0/stream\.ts$`)
+	for _, input := range inputs {
+		if input != inputs[0] || !grantPattern.MatchString(input) {
+			t.Fatalf("tool input is not the session's loopback grant: %q (all: %q)", input, inputs)
+		}
+	}
+	if len(bodies) != len(inputs) || hits.Load() == 0 {
 		t.Fatalf("tools did not read the authenticated upstream: %q hits=%d", bodies, hits.Load())
+	}
+	for _, body := range bodies {
+		if body != "200 TS-FIXTURE" {
+			t.Fatalf("tool read unexpected relay content: %q", bodies)
+		}
 	}
 	assertNoSecrets(t, "transcoder log", logs.String(), hostOf(up.URL))
 
