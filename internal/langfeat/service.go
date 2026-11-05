@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/braedonsaunders/ether/internal/llm"
 	"os"
 	"path/filepath"
 	"strings"
@@ -420,17 +421,11 @@ func translateCues(ctx context.Context, tr func(context.Context, string, string)
 }
 
 func extractJSON(s string) []byte {
-	s = strings.TrimSpace(s)
-	s = strings.TrimPrefix(s, "```json")
-	s = strings.TrimPrefix(s, "```")
-	s = strings.TrimSuffix(s, "```")
-	s = strings.TrimSpace(s)
-	start := strings.IndexAny(s, "[{")
-	end := strings.LastIndexAny(s, "]}")
-	if start < 0 || end < start {
-		return []byte(s)
+	out := llm.ExtractJSON(s)
+	if out == "" {
+		return []byte(strings.TrimSpace(s))
 	}
-	return []byte(s[start : end+1])
+	return []byte(out)
 }
 
 func clip(s string, n int) string {

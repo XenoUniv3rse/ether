@@ -3,11 +3,11 @@ package llm
 import (
 	"context"
 	"fmt"
+	"github.com/braedonsaunders/ether/internal/releaseparse"
 	"log/slog"
 	"strings"
 	"sync"
 	"time"
-	"unicode"
 
 	"github.com/braedonsaunders/ether/internal/config"
 	"github.com/braedonsaunders/ether/internal/core"
@@ -171,27 +171,7 @@ func describe(t core.Title) string {
 // normTitle folds a title for comparison: lower case, "&" as "and",
 // punctuation dropped, a leading article removed, whitespace collapsed.
 func normTitle(s string) string {
-	s = strings.ToLower(strings.ReplaceAll(s, "&", " and "))
-	var b strings.Builder
-	space := false
-	for _, r := range s {
-		switch {
-		case unicode.IsLetter(r) || unicode.IsDigit(r):
-			b.WriteRune(r)
-			space = false
-		case !space && b.Len() > 0:
-			b.WriteByte(' ')
-			space = true
-		}
-	}
-	out := strings.TrimSpace(b.String())
-	for _, art := range []string{"the ", "a ", "an "} {
-		if strings.HasPrefix(out, art) && len(out) > len(art) {
-			out = out[len(art):]
-			break
-		}
-	}
-	return out
+	return releaseparse.NormalizeTitle(s)
 }
 
 func absInt(n int) int {
