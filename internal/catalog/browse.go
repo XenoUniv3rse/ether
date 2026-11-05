@@ -404,7 +404,7 @@ func (c *Catalog) browseWhere(f core.Filter) (string, []any, error) {
 	}
 	// queryTitles keeps released titles, plus explicitly enabled upcoming
 	// movies. Apply that same guard before counting and paging.
-	conds = append(conds, "t.release_known=1 AND (t.released_ts<=? OR (t.type='movie' AND ?))")
+	conds = append(conds, "t.release_known=1 AND (t.released_ts<=? OR (t.type='movie' AND ?<>0))")
 	args = append(args, nowTS, c.config().ShowUpcomingMovies)
 	for _, hidden := range []struct{ kind, generation string }{
 		{"movie", f.HiddenMovieGeneration}, {"show", f.HiddenShowGeneration},
@@ -478,7 +478,7 @@ func (c *Catalog) browseWhere(f core.Filter) (string, []any, error) {
 		if len(f.AvailabilityKeepKeys) > 0 {
 			digital += " OR t.key IN (" + placeholders(len(f.AvailabilityKeepKeys)) + ")"
 		}
-		conds = append(conds, "(t.type<>'movie' OR (t.key>=? AND t.key<?) OR (t.release_known=1 AND t.released_ts>? AND ?) OR ("+digital+"))")
+		conds = append(conds, "(t.type<>'movie' OR (t.key>=? AND t.key<?) OR (t.release_known=1 AND t.released_ts>? AND ?<>0) OR ("+digital+"))")
 		args = append(args, int64(core.LocalKey(0)), int64(core.LocalKey(0))+1000000000000000, nowTS, c.config().ShowUpcomingMovies)
 		if f.DigitalDateEvidence {
 			args = append(args, nowTS)
