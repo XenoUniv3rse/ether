@@ -106,14 +106,6 @@ func (i *instance) rememberedLiveCard(channelGUID string) (liveChannelCardMeta, 
 	return meta, ok
 }
 
-// liveChannelCards is the On Now shelf. Experience rows carry channels, not
-// catalogue titles, so the home builder cannot reuse title cards. The item
-// uses the catalogue card shape: the programme is the title and the channel
-// is the series line. content_id is the channel the client tunes.
-func liveChannelCards(row frontend.Row) []any {
-	return (*instance)(nil).buildLiveChannelCards(row)
-}
-
 func (i *instance) buildLiveChannelCards(row frontend.Row) []any {
 	items := make([]any, 0, len(row.Entries))
 	for _, entry := range row.Entries {
