@@ -46,29 +46,28 @@ func TestShowQueueAndUnverifiedNextTimeline(t *testing.T) {
 		t.Fatalf("decision: %d %s", rec.Code, rec.Body.String())
 	}
 	f.get(t, fmt.Sprintf("/:/timeline?ratingKey=%s&state=stopped&time=3300000&duration=3361000", episode))
-	before := len(f.state.progress)
 	rec = f.get(t, fmt.Sprintf("/:/timeline?ratingKey=%s&state=playing&time=3300000&duration=540000", special))
-	if rec.Code != http.StatusOK || len(f.state.progress) != before {
+	if rec.Code != http.StatusOK || recordedAt(f.state.progress, special, 3300*time.Second) {
 		t.Fatalf("stale playhead recorded: %+v", f.state.progress)
 	}
+	// A real position for the same item still counts, with or without a
+	// source on this node (cluster hand-off, downloads).
 	f.get(t, fmt.Sprintf("/:/timeline?ratingKey=%s&state=playing&time=500000&duration=540000", special))
-	if len(f.state.progress) != before {
-		t.Fatal("unprepared completion recorded")
-	}
-	rec = f.get(t, "/video/:/transcode/universal/decision?path=/library/metadata/"+special.String()+"&session=t2")
-	if rec.Code != http.StatusOK {
-		t.Fatalf("special decision: %d", rec.Code)
-	}
-	f.get(t, fmt.Sprintf("/:/timeline?ratingKey=%s&state=playing&time=3300000&duration=540000", special))
-	if len(f.state.progress) != before {
-		t.Fatal("impossible playhead recorded after decision")
-	}
-	f.get(t, fmt.Sprintf("/:/timeline?ratingKey=%s&state=playing&time=500000&duration=540000", special))
-	if len(f.state.progress) != before+1 {
-		t.Fatal("prepared completion was not recorded")
+	if !recordedAt(f.state.progress, special, 500*time.Second) {
+		t.Fatalf("real progress was not recorded: %+v", f.state.progress)
 	}
 	f.get(t, "/:/scrobble?key="+special.String()+"&identifier=com.plexapp.plugins.library")
 	if len(f.state.scrobbed) != 1 || f.state.scrobbed[0] != special {
 		t.Fatalf("explicit scrobble: %+v", f.state.scrobbed)
 	}
+}
+
+// recordedAt reports whether progress for key was written at offset.
+func recordedAt(calls []progressCall, key core.RatingKey, offset time.Duration) bool {
+	for _, c := range calls {
+		if c.key == key && c.offset == offset {
+			return true
+		}
+	}
+	return false
 }

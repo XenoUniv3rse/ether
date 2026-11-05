@@ -112,12 +112,12 @@ func (s *Server) handleTimeline(w http.ResponseWriter, r *http.Request) {
 		offset, duration = saved.offset, saved.duration
 	}
 	// Some clients carry the previous queue item's playhead into the first
-	// timeline for the next item. Neither an impossible playhead nor a
-	// completion without a source for this item is evidence of viewing it.
-	if s.unverifiedCompletion(ctx, user.ID, key, offset, duration, ps, len(tids) > 0) {
-		s.log.Debug("ignoring unverified playback progress", "key", key, "position", offset, "duration", duration)
-		s.writeEmpty(w, r)
-		return
+	// timeline for the next item. A position past the item's end is not
+	// evidence of watching it: keep the last real position for this item and
+	// handle the report (session, stop, encoders) as usual.
+	if impossiblePlayhead(offset, duration) {
+		s.log.Debug("ignoring impossible playhead", "key", key, "position", offset, "duration", duration)
+		offset = s.lastKnownOffset(ctx, user.ID, tid, key)
 	}
 	if !s.reportBrokerTimeline(ctx, pr, key, offset, duration, state, sanitizeSessionID(q.Get("session"))) {
 		s.log.Warn("timeline report", "key", key, "state", state)
@@ -209,18 +209,26 @@ func (s *Server) handleTimeline(w http.ResponseWriter, r *http.Request) {
 	s.write(w, r, mc)
 }
 
-// unverifiedCompletion protects the watch threshold from stale queue playheads.
-func (s *Server) unverifiedCompletion(ctx context.Context, userID int64, key core.RatingKey, offset, duration time.Duration, ps *core.PlaySession, hasTranscode bool) bool {
-	if duration <= 0 && ps != nil {
-		duration = ps.Info.Duration
-	}
-	if duration <= 0 && s.d.State != nil {
-		if previous, err := s.d.State.Get(ctx, userID, key); err == nil {
-			duration = previous.Duration
+// impossiblePlayhead reports a position more than two seconds past the
+// reported duration, which no real playback of the item can produce.
+func impossiblePlayhead(offset, duration time.Duration) bool {
+	return duration > 0 && offset-duration > 2*time.Second
+}
+
+// lastKnownOffset is the item's last real position: this session's report,
+// else the viewer's saved state, else the start.
+func (s *Server) lastKnownOffset(ctx context.Context, userID int64, tid string, key core.RatingKey) time.Duration {
+	for _, activity := range s.sessions.list() {
+		if activity.id == tid && activity.key == key {
+			return activity.offset
 		}
 	}
-	return duration > 0 && (offset > duration && offset-duration > 2*time.Second ||
-		float64(offset) >= watchstate.WatchedThreshold*float64(duration) && ps == nil && !hasTranscode)
+	if s.d.State != nil {
+		if previous, err := s.d.State.Get(ctx, userID, key); err == nil && previous.ViewOffset <= previous.Duration {
+			return previous.ViewOffset
+		}
+	}
+	return 0
 }
 
 // handleProgress is the legacy /:/progress?key=&time=&state=.
@@ -234,16 +242,7 @@ func (s *Server) handleProgress(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	q := r.URL.Query()
-	offset := msParam(q.Get("time"))
-	var ps *core.PlaySession
-	if s.d.Playback != nil {
-		ps, _ = s.d.Playback.SessionFor(pr.User.ID, pr.ClientID, key)
-	}
-	if s.unverifiedCompletion(ctx, pr.User.ID, key, offset, 0, ps, len(s.transcodes.forClient(pr.User.ID, pr.ClientID, key)) > 0) {
-		w.WriteHeader(http.StatusOK)
-		return
-	}
-	if err := s.d.State.Progress(ctx, pr.User.ID, key, offset, 0, q.Get("state")); err != nil {
+	if err := s.d.State.Progress(ctx, pr.User.ID, key, msParam(q.Get("time")), 0, q.Get("state")); err != nil {
 		s.writeErr(w, r, err)
 		return
 	}
