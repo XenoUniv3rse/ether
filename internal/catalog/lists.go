@@ -3,6 +3,7 @@ package catalog
 import (
 	"context"
 	"fmt"
+	"github.com/braedonsaunders/ether/internal/store"
 	"slices"
 	"sort"
 	"strconv"
@@ -69,8 +70,8 @@ func (c *Catalog) reloadSummaries(ctx context.Context, titles []core.Title) []co
 	}
 	byKey := make(map[core.RatingKey]core.Title, len(titles))
 	const batch = 200
-	for start := 0; start < len(titles); start += batch {
-		part := titles[start:min(start+batch, len(titles))]
+	for chunk := range store.Chunks(titles, batch) {
+		part := chunk
 		args := make([]any, len(part))
 		for i := range part {
 			args[i] = int64(part[i].Key)
@@ -125,8 +126,8 @@ func (c *Catalog) reloadSummariesIndividually(ctx context.Context, titles []core
 func (c *Catalog) reloadSearchRows(ctx context.Context, titles []core.Title) []core.Title {
 	byKey := make(map[core.RatingKey]core.Title, len(titles))
 	const batch = 200
-	for start := 0; start < len(titles); start += batch {
-		part := titles[start:min(start+batch, len(titles))]
+	for chunk := range store.Chunks(titles, batch) {
+		part := chunk
 		args := make([]any, len(part))
 		for i := range part {
 			args[i] = int64(part[i].Key)

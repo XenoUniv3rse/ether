@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/braedonsaunders/ether/internal/atomicfile"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -381,22 +382,7 @@ func (s *resumeStore) writeNZB(nzb []byte) (string, error) {
 	if _, err := os.Stat(p); err == nil {
 		return hash, nil
 	}
-	f, err := os.CreateTemp(s.dir, "nzb-*.tmp")
-	if err != nil {
-		return "", err
-	}
-	tmp := f.Name()
-	if _, err := f.Write(nzb); err != nil {
-		f.Close()
-		os.Remove(tmp)
-		return "", err
-	}
-	if err := f.Close(); err != nil {
-		os.Remove(tmp)
-		return "", err
-	}
-	if err := os.Rename(tmp, p); err != nil {
-		os.Remove(tmp)
+	if err := atomicfile.Write(p, nzb, 0600); err != nil {
 		return "", err
 	}
 	return hash, nil

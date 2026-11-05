@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"github.com/braedonsaunders/ether/internal/store"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -615,7 +616,7 @@ func (s *Servers) MapAccount(ctx context.Context, id, accountID int64, in PMSMap
 	}
 	if !cur.exists {
 		if _, err := tx.ExecContext(ctx, `INSERT INTO plexwatch_pms_viewer(server_id,account_id,account_name,owner,user_id,token,direction,interval_min)
-			VALUES(?,?,?,?,?,?,0,?)`, id, accountID, acct.Name, boolInt(owner), in.UserID, sealed, in.Interval); err != nil {
+			VALUES(?,?,?,?,?,?,0,?)`, id, accountID, acct.Name, store.BoolInt(owner), in.UserID, sealed, in.Interval); err != nil {
 			return PMSServer{}, err
 		}
 	}
@@ -632,7 +633,7 @@ func (s *Servers) MapAccount(ctx context.Context, id, accountID int64, in PMSMap
 		next_run=CASE WHEN ?<>0 THEN ? ELSE next_run END,
 		problem=CASE WHEN ?=0 THEN '' ELSE problem END
 		WHERE server_id=? AND account_id=?`,
-		acct.Name, boolInt(owner), sealed, in.Direction, in.Interval,
+		acct.Name, store.BoolInt(owner), sealed, in.Direction, in.Interval,
 		gainSend, nowNS, gainSend, gainSend, nowNS,
 		gainRecv, now.Add(-5*time.Minute).Unix(), gainRecv,
 		gainSend || gainRecv, nowNS, in.Direction,
@@ -694,13 +695,6 @@ func (s *Servers) Unmatched(ctx context.Context, id, userID int64, after string)
 		out = append(out, u)
 	}
 	return out, rows.Err()
-}
-
-func boolInt(b bool) int {
-	if b {
-		return 1
-	}
-	return 0
 }
 
 // mapPMSError turns transport results into the owner-facing sentinels.

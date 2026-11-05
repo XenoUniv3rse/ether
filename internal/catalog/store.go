@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/braedonsaunders/ether/internal/config"
+	"github.com/braedonsaunders/ether/internal/store"
 	"math"
 	"sort"
 	"strconv"
@@ -192,8 +193,8 @@ func (c *Catalog) hydrateSlice(ctx context.Context, items []core.Title) error {
 	// (same 200 as titlesByKeys). One statement covers genres, keywords,
 	// studios, countries, credits and home-release dates.
 	const batch = 200
-	for start := 0; start < len(keys); start += batch {
-		if err := c.hydrateFactBatch(ctx, items, idx, keys[start:min(start+batch, len(keys))]); err != nil {
+	for chunk := range store.Chunks(keys, batch) {
+		if err := c.hydrateFactBatch(ctx, items, idx, chunk); err != nil {
 			return err
 		}
 	}
@@ -208,8 +209,8 @@ func (c *Catalog) hydrateSlice(ctx context.Context, items []core.Title) error {
 
 func (c *Catalog) hydrateTrailers(ctx context.Context, items []core.Title, idx map[core.RatingKey][]int, keys []any) error {
 	const batch = 200
-	for start := 0; start < len(keys); start += batch {
-		args := keys[start:min(start+batch, len(keys))]
+	for chunk := range store.Chunks(keys, batch) {
+		args := chunk
 		rows, err := c.db.QueryContext(ctx, `SELECT key, name, url FROM catalog_remote_trailers WHERE key IN (`+placeholders(len(args))+`)`, args...)
 		if err != nil {
 			return err
@@ -387,8 +388,8 @@ func (c *Catalog) hydrateShows(ctx context.Context, items []core.Title) error {
 	}
 	counts := map[core.RatingKey]map[int]int{}
 	const batch = 200
-	for start := 0; start < len(showArgs); start += batch {
-		part := showArgs[start:min(start+batch, len(showArgs))]
+	for chunk := range store.Chunks(showArgs, batch) {
+		part := chunk
 		ph := placeholders(len(part))
 		q := `SELECT tag, key, a, b, c, d, e, f FROM (
 SELECT 'id' AS tag, key, imdb AS a, CAST(tvdb AS TEXT) AS b, CAST(year AS TEXT) AS c, original_title AS d, title AS e, content_rating AS f FROM catalog_titles WHERE key IN (` + ph + `)
@@ -551,14 +552,7 @@ func keyArgs(items []core.Title) []any {
 	return args
 }
 func placeholders(n int) string {
-	if n <= 0 {
-		return "NULL"
-	}
-	s := "?"
-	for i := 1; i < n; i++ {
-		s += ",?"
-	}
-	return s
+	return store.Placeholders(n)
 }
 
 type upsertOpts struct {

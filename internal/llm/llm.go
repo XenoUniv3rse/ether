@@ -418,6 +418,9 @@ func repairJSON(s string) string {
 
 // extractJSON finds the first balanced {...} or [...] in model output,
 // tolerating code fences and prose around it, and repairs common faults.
+// ExtractJSON extracts and repairs the first balanced JSON object or array in model output.
+func ExtractJSON(s string) string { return extractJSON(StripReasoning(s)) }
+
 func extractJSON(s string) string {
 	return repairJSON(extractJSONRaw(s))
 }

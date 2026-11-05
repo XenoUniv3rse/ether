@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/braedonsaunders/ether/internal/atomicfile"
 	"io"
 	"net/http"
 	"os"
@@ -376,22 +377,8 @@ func FetchFormatJSON(ctx context.Context, cl *http.Client, rawURL, cachePath str
 		if err = os.MkdirAll(filepath.Dir(cachePath), 0700); err != nil {
 			return nil, err
 		}
-		f, e := os.CreateTemp(filepath.Dir(cachePath), ".formats-*")
-		if e != nil {
-			return nil, e
-		}
-		tmp := f.Name()
-		defer os.Remove(tmp)
-		_, e = f.Write(data)
-		ce := f.Close()
-		if e != nil {
-			return nil, e
-		}
-		if ce != nil {
-			return nil, ce
-		}
-		if e = os.Rename(tmp, cachePath); e != nil {
-			return nil, e
+		if err := atomicfile.Write(cachePath, data, 0600); err != nil {
+			return nil, err
 		}
 	}
 	return data, nil

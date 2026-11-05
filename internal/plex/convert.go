@@ -980,32 +980,20 @@ func containerExt(c string) string {
 
 // videoResolution is PMS's videoResolution value.
 func videoResolution(w, h int) string {
-	switch {
-	case w >= 3200 || h >= 1800:
+	switch tier := core.ResolutionTier(w, h); tier {
+	case 2160:
 		return "4k"
-	case w >= 1700 || h >= 1000:
-		return "1080"
-	case w >= 1200 || h >= 700:
-		return "720"
-	case w >= 960 || h >= 560:
-		return "576"
-	case w >= 640 || h >= 400:
-		return "480"
-	case w > 0 || h > 0:
+	case 0:
+		return ""
+	case 240:
 		return "sd"
+	default:
+		return strconv.Itoa(tier)
 	}
-	return ""
 }
 
 func resolutionLabel(w, h int) string {
-	switch r := videoResolution(w, h); r {
-	case "4k":
-		return "4K"
-	case "sd", "":
-		return "SD"
-	default:
-		return r + "p"
-	}
+	return core.ResolutionLabel(w, h)
 }
 
 // frameRateName is PMS's videoFrameRate value.

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/braedonsaunders/ether/internal/httpclient"
 	"io"
 	"log/slog"
 	"net"
@@ -74,7 +75,7 @@ func (d *WANDetector) query(ctx context.Context, endpoint string) (net.IP, error
 		return nil, err
 	}
 	req.Header.Set("Accept", "text/plain, application/json;q=0.9")
-	req.Header.Set("User-Agent", "Ether")
+	req.Header.Set("User-Agent", httpclient.UserAgent)
 	resp, err := d.Client.Do(req)
 	if err != nil {
 		return nil, err

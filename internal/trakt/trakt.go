@@ -17,6 +17,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/braedonsaunders/ether/internal/httpclient"
 	"io"
 	"log/slog"
 	"net/http"
@@ -283,7 +284,7 @@ func (c *Client) do(ctx context.Context, method, path string, payload any, token
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("trakt-api-version", "2")
 		req.Header.Set("trakt-api-key", id)
-		req.Header.Set("User-Agent", "Ether")
+		req.Header.Set("User-Agent", httpclient.UserAgent)
 		if token != "" {
 			req.Header.Set("Authorization", "Bearer "+token)
 		}

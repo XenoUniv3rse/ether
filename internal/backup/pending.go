@@ -4,10 +4,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/braedonsaunders/ether/internal/atomicfile"
 	"io/fs"
 	"os"
 	"path/filepath"
-	"runtime"
 	"slices"
 	"sort"
 	"strings"
@@ -628,27 +628,7 @@ func writeJSON(path string, v any) error {
 	if err != nil {
 		return err
 	}
-	tmp := path + ".tmp"
-	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
-	if err != nil {
-		return err
-	}
-	_, err = f.Write(b)
-	if serr := f.Sync(); err == nil {
-		err = serr
-	}
-	if cerr := f.Close(); err == nil {
-		err = cerr
-	}
-	if err == nil {
-		err = os.Rename(tmp, path)
-	}
-	if err != nil {
-		os.Remove(tmp)
-		return err
-	}
-	syncDir(filepath.Dir(path))
-	return nil
+	return atomicfile.Write(path, b, 0600)
 }
 
 // removeFile removes path if it exists and makes the removal durable.
@@ -663,13 +643,7 @@ func removeFile(path string) error {
 // syncDir makes renames and removals in dir durable. Windows cannot open a
 // directory for syncing; NTFS journals its metadata itself.
 func syncDir(dir string) {
-	if runtime.GOOS == "windows" {
-		return
-	}
-	if d, err := os.Open(dir); err == nil {
-		_ = d.Sync()
-		d.Close()
-	}
+	_ = atomicfile.SyncDir(dir)
 }
 
 func readJSON(path string, v any) error {

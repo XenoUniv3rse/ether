@@ -10,6 +10,8 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"github.com/braedonsaunders/ether/internal/atomicfile"
+	"github.com/braedonsaunders/ether/internal/logredact"
 	"io"
 	"log/slog"
 	"net/http"
@@ -49,11 +51,7 @@ var errCapsUnavailable = errors.New("newznab: capabilities unavailable; retrying
 // redactURLError drops the request URL from a *url.Error: indexer URLs
 // carry the API key, and callers log and surface these errors.
 func redactURLError(err error) error {
-	var ue *url.Error
-	if errors.As(err, &ue) {
-		return fmt.Errorf("newznab: %s request: %w", ue.Op, ue.Err)
-	}
-	return err
+	return logredact.TransportError(err, "newznab", nil)
 }
 
 // Options tunes a Client or Manager. Zero values get sensible defaults.
@@ -1527,24 +1525,7 @@ func (c *Client) saveNZB(releaseID string, body []byte) {
 	if err := os.MkdirAll(c.nzbDir, 0o755); err != nil {
 		return
 	}
-	f, err := os.CreateTemp(c.nzbDir, ".nzb-*.tmp")
-	if err != nil {
-		return
-	}
-	tmp := f.Name()
-	defer os.Remove(tmp) // no-op once renamed
-	if _, err := f.Write(body); err != nil {
-		f.Close()
-		return
-	}
-	if err := f.Chmod(0o644); err != nil {
-		f.Close()
-		return
-	}
-	if err := f.Close(); err != nil {
-		return
-	}
-	if err := os.Rename(tmp, path); err != nil {
+	if err := atomicfile.Write(path, body, 0644); err != nil {
 		c.log.Debug("newznab save NZB failed", "indexer", c.Name(), "err", err)
 	}
 }

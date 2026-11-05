@@ -317,7 +317,7 @@ func (s *Service) insertSpecTx(ctx context.Context, tx *sql.Tx, sp core.Collecti
 	}
 	now := s.now().Unix()
 	if _, err := tx.ExecContext(ctx, `INSERT INTO collections_specs(id,slug,builtin,owner_user_id,spec_json,enabled,created_at,updated_at)
-		VALUES(?, '', 0, ?, ?, ?, ?, ?)`, id, owner, js, boolInt(sp.Enabled), now, now); err != nil {
+		VALUES(?, '', 0, ?, ?, ?, ?, ?)`, id, owner, js, store.BoolInt(sp.Enabled), now, now); err != nil {
 		return 0, err
 	}
 	return id, nil
@@ -329,7 +329,7 @@ func (s *Service) updateRow(ctx context.Context, id int64, sp core.CollectionSpe
 		return err
 	}
 	res, err := s.db.ExecContext(ctx, `UPDATE collections_specs SET spec_json=?, enabled=?, updated_at=?, build_hash='' WHERE id=?`,
-		js, boolInt(sp.Enabled), s.now().Unix(), id)
+		js, store.BoolInt(sp.Enabled), s.now().Unix(), id)
 	if err != nil {
 		return err
 	}
@@ -387,7 +387,7 @@ func (s *Service) saveBuild(ctx context.Context, id int64, expected, resolved st
 	}
 	defer stmt.Close()
 	for i, k := range keys {
-		if _, err := stmt.ExecContext(ctx, id, i, int64(k), boolInt(!unshared[k])); err != nil {
+		if _, err := stmt.ExecContext(ctx, id, i, int64(k), store.BoolInt(!unshared[k])); err != nil {
 			return err
 		}
 	}
@@ -428,13 +428,6 @@ func (s *Service) meta(ctx context.Context, k string) string {
 	var v string
 	_ = s.db.QueryRowContext(ctx, `SELECT v FROM collections_meta WHERE k=?`, k).Scan(&v)
 	return v
-}
-
-func boolInt(b bool) int {
-	if b {
-		return 1
-	}
-	return 0
 }
 
 // specFromFilter converts a filter-based smart collection (core.Filter) to a spec.

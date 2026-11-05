@@ -9,6 +9,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"github.com/braedonsaunders/ether/internal/atomicfile"
 	"log/slog"
 	"net/http"
 	"os"
@@ -600,16 +601,7 @@ func (m *CertManager) RequireReissue(ctx context.Context) error {
 // file in the same directory renamed over path, so an interrupted write
 // (shutdown, crash, power loss) leaves the old file or the new one.
 func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
-	tmp, err := writeTemp(path, data, perm)
-	if err != nil {
-		return err
-	}
-	if err := os.Rename(tmp, path); err != nil {
-		_ = os.Remove(tmp)
-		return err
-	}
-	syncDir(filepath.Dir(path))
-	return nil
+	return atomicfile.Write(path, data, perm)
 }
 
 // writePairAtomic replaces a key and its certificate. Both are written and
@@ -667,13 +659,7 @@ func writeTemp(path string, data []byte, perm os.FileMode) (string, error) {
 // syncDir makes renames in dir durable (best effort; Windows journals
 // renames and cannot fsync a directory).
 func syncDir(dir string) {
-	if runtime.GOOS == "windows" {
-		return
-	}
-	if d, err := os.Open(dir); err == nil {
-		_ = d.Sync()
-		_ = d.Close()
-	}
+	_ = atomicfile.SyncDir(dir)
 }
 
 // removeStaleTemps deletes temp files a crash left mid-write.

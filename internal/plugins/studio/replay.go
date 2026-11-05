@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/braedonsaunders/ether/internal/httpjson"
 	"io"
 	"log/slog"
 	"net/http"
@@ -331,9 +332,7 @@ func (r *Runner) HandleReplay(w http.ResponseWriter, req *http.Request) {
 }
 
 func writeStudioJSON(w http.ResponseWriter, status int, v any) {
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(v)
+	httpjson.Write(w, status, v)
 }
 
 func writeStudioErr(w http.ResponseWriter, status int, code, message string) {
