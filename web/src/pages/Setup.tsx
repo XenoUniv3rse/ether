@@ -140,13 +140,7 @@ export function appCatalog(
 }
 
 export function selectionFrom(cfg: EtherConfig, ids: string[]): Record<string, boolean> {
-  if (cfg.frontends) {
-    return Object.fromEntries(ids.map((id) => [id, Boolean(cfg.frontends?.[id]?.enabled)]));
-  }
-  // A finished or claimed server with no front-end map is the legacy Plex install.
-  // A fresh install starts with nothing selected.
-  const legacyPlex = cfg.setupComplete || cfg.plex.claimed;
-  return Object.fromEntries(ids.map((id) => [id, legacyPlex && id === "plex"]));
+  return Object.fromEntries(ids.map((id) => [id, Boolean(cfg.frontends?.[id]?.enabled)]));
 }
 
 /** Enabled flags change without dropping settings or front ends the wizard did not list. */

@@ -49,7 +49,6 @@ export type RestoreSource =
 
 type Stage =
   | { name: "password" }
-  | { name: "legacy" }
   | { name: "checking" }
   | { name: "confirm"; staged: StagedBackup | null }
   | { name: "guided"; staged: StagedBackup }
@@ -132,7 +131,7 @@ export function RestoreDrawer({
     enabled: stage.name === "restoring",
   });
 
-  const check = async (src: RestoreSource, pw: string, legacy = false) => {
+  const check = async (src: RestoreSource, pw: string) => {
     setStage({ name: "checking" });
     setError(null);
     try {
@@ -140,7 +139,7 @@ export function RestoreDrawer({
         src.kind === "snapshot"
           ? await restoreApi.stageSnapshot(src.name)
           : src.kind === "upload"
-            ? await restoreApi.stageUpload(src.file, pw, legacy)
+            ? await restoreApi.stageUpload(src.file, pw)
             : null;
       staged.current = st;
       setPassword("");
@@ -173,7 +172,11 @@ export function RestoreDrawer({
     void isEncryptedBackup(source.file).then(
       (encrypted) => {
         if (!live) return;
-        if (!encrypted) setStage({ name: "legacy" });
+        if (!encrypted)
+          setStage({
+            name: "failed",
+            error: new Error(t("Choose a backup downloaded from Ether (an .etherbackup file).")),
+          });
         else if (source.password) void check(source, source.password);
         else setStage({ name: "password" });
       },
@@ -276,32 +279,6 @@ export function RestoreDrawer({
           <Button type="submit" form="restore-unlock" disabled={!password}>
             {t("Check backup")}
           </Button>
-        </div>
-      );
-      break;
-    case "legacy":
-      body = (
-        <div className="space-y-5">
-          <BackupCard
-            title={source.kind === "upload" ? source.file.name : ""}
-            size={source.kind === "upload" ? source.file.size : undefined}
-          />
-          <Alert variant="warning">
-            <AlertTitle>{t("This backup isn't password protected")}</AlertTitle>
-            <AlertDescription>
-              {t(
-                "It's from an older version of Ether. Restore it only if it came straight from your own server.",
-              )}
-            </AlertDescription>
-          </Alert>
-        </div>
-      );
-      footer = (
-        <div className="flex w-full justify-end gap-2">
-          <Button variant="outline" onClick={close}>
-            {t("Cancel")}
-          </Button>
-          <Button onClick={() => void check(source, "", true)}>{t("Check backup")}</Button>
         </div>
       );
       break;
@@ -501,7 +478,7 @@ function RestoreOutcome() {
 }
 
 /** The restore report's key facts, as the restore's last word. */
-export function ReportSummary({ report }: { report: RestoreReport }) {
+function ReportSummary({ report }: { report: RestoreReport }) {
   if (report.status !== "restored")
     return (
       <Alert variant="destructive" role="alert">
