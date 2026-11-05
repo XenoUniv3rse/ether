@@ -97,8 +97,8 @@ func String(s string) string {
 	if s == "" {
 		return s
 	}
-	s = pathCapability.ReplaceAllString(s, "${1}"+Mask)
-	s = appPath.ReplaceAllStringFunc(s, func(m string) string {
+	s = replaceIf(pathCapability, s, "${1}"+Mask)
+	s = replaceFuncIf(appPath, s, func(m string) string {
 		sub := appPath.FindStringSubmatch(m)
 		switch strings.ToLower(sub[2]) {
 		case "image", "sessions", "[redacted]":
@@ -106,23 +106,23 @@ func String(s string) string {
 		}
 		return sub[1] + Mask
 	})
-	s = opaqueCredential.ReplaceAllString(s, Mask)
-	s = jsonImageTags.ReplaceAllString(s, `${1}"`+Mask+`"`)
-	s = jwt.ReplaceAllString(s, Mask)
+	s = replaceIf(opaqueCredential, s, Mask)
+	s = replaceIf(jsonImageTags, s, `${1}"`+Mask+`"`)
+	s = replaceIf(jwt, s, Mask)
 	s = maskValue(cookie, s)
 	s = maskValue(tokenHeader, s)
 	s = maskValue(authHeader, s)
-	s = scheme.ReplaceAllString(s, "${1} "+Mask)
-	s = userinfo.ReplaceAllString(s, "${1}:"+Mask+"@")
-	s = own.ReplaceAllString(s, "ether-${1}-"+Mask)
-	s = param.ReplaceAllStringFunc(s, func(m string) string {
+	s = replaceIf(scheme, s, "${1} "+Mask)
+	s = replaceIf(userinfo, s, "${1}:"+Mask+"@")
+	s = replaceIf(own, s, "ether-${1}-"+Mask)
+	s = replaceFuncIf(param, s, func(m string) string {
 		sub := param.FindStringSubmatch(m)
 		if !Sensitive(sub[2]) || sub[3] == "" || masked(sub[3]) {
 			return m
 		}
 		return sub[1] + sub[2] + "=" + Mask
 	})
-	s = jsonField.ReplaceAllStringFunc(s, func(m string) string {
+	s = replaceFuncIf(jsonField, s, func(m string) string {
 		sub := jsonField.FindStringSubmatch(m)
 		if !Sensitive(sub[2]) || sub[3] == "" {
 			return m
@@ -135,7 +135,7 @@ func String(s string) string {
 // maskValue replaces the third group of re's matches (name, separator,
 // value) with Mask.
 func maskValue(re *regexp.Regexp, s string) string {
-	return re.ReplaceAllStringFunc(s, func(m string) string {
+	return replaceFuncIf(re, s, func(m string) string {
 		sub := re.FindStringSubmatch(m)
 		if masked(sub[3]) {
 			return m
@@ -298,4 +298,21 @@ func structured(value any) (any, bool) {
 		return clean, clean != x
 	}
 	return value, changed
+}
+
+// replaceIf and replaceFuncIf skip a pattern that does not occur: regexp's
+// ReplaceAll copies the whole input even without a match, and String runs
+// many patterns over every logged value.
+func replaceIf(re *regexp.Regexp, s, repl string) string {
+	if !re.MatchString(s) {
+		return s
+	}
+	return re.ReplaceAllString(s, repl)
+}
+
+func replaceFuncIf(re *regexp.Regexp, s string, repl func(string) string) string {
+	if !re.MatchString(s) {
+		return s
+	}
+	return re.ReplaceAllStringFunc(s, repl)
 }
