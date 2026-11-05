@@ -22,13 +22,6 @@ const (
 	Local
 )
 
-func (s Scope) String() string {
-	if s == Local {
-		return "local"
-	}
-	return "shared"
-}
-
 // sectionScopes classifies every top-level key of Config whose whole value
 // shares one scope.
 var sectionScopes = map[string]Scope{
@@ -194,21 +187,6 @@ var mixedSections = map[string]map[string]Scope{
 	},
 }
 
-// ScopeOf reports the scope of a setting by its JSON path: a top-level key
-// ("usenet") or a section and key ("server.port"). Unknown paths are
-// shared, the safe default for a cluster (one value everywhere).
-func ScopeOf(path string) Scope {
-	for i := 0; i < len(path); i++ {
-		if path[i] == '.' {
-			if sub, ok := mixedSections[path[:i]]; ok {
-				return sub[path[i+1:]]
-			}
-			return sectionScopes[path[:i]]
-		}
-	}
-	return sectionScopes[path]
-}
-
 // splitDoc divides a decoded config document into its shared and local
 // parts. Keys the classification does not know (from a newer or older
 // version) are kept on the shared side.
@@ -320,13 +298,6 @@ func fromDoc(doc map[string]any) (Config, error) {
 func SharedJSON(c Config) []byte {
 	shared, _ := splitDoc(toDoc(c))
 	b, _ := json.Marshal(shared)
-	return b
-}
-
-// LocalJSON is the node-local part of c as JSON (unsealed).
-func LocalJSON(c Config) []byte {
-	_, local := splitDoc(toDoc(c))
-	b, _ := json.Marshal(local)
 	return b
 }
 
