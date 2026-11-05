@@ -344,9 +344,6 @@ func (c *Client) resolveTorrent(ctx context.Context, r core.Release) (core.Relea
 	if r.NZBURL == "" {
 		return r, fmt.Errorf("newznab: torrent %q has no info hash, magnet or download URL: %w", r.Name, core.ErrReleaseRejected)
 	}
-	if err := c.reserve(ctx, "grab"); err != nil {
-		return r, err
-	}
 	rawURL := r.NZBURL
 	if !strings.HasPrefix(rawURL, "http://") && !strings.HasPrefix(rawURL, "https://") {
 		base, err := url.Parse(strings.TrimRight(c.Config().URL, "/") + "/")
@@ -388,6 +385,9 @@ func (c *Client) resolveTorrent(ctx context.Context, r core.Release) (core.Relea
 	}
 	if hc.Timeout == 0 {
 		hc.Timeout = defaultHTTPTimeout
+	}
+	if err := c.reserve(ctx, "grab"); err != nil {
+		return r, err
 	}
 	resp, err := hc.Do(req)
 	if err != nil {

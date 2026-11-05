@@ -226,6 +226,19 @@ type Indexer struct {
 	// ClientIdentity overrides the global client identity for this indexer's
 	// searches and grabs. Empty inherits the policy.
 	ClientIdentity string `json:"clientIdentity,omitempty"`
+	// ProwlarrImport is what the last Prowlarr sync wrote into the fields
+	// the owner may also edit. A later sync updates a field only while it
+	// still holds that value, so owner edits survive syncs. Nil for
+	// indexers not imported from Prowlarr.
+	ProwlarrImport *IndexerImport `json:"prowlarrImport,omitempty"`
+}
+
+// IndexerImport is one Prowlarr sync's values for an imported indexer.
+type IndexerImport struct {
+	DailyLimit int  `json:"dailyLimit"`
+	DailyGrabs int  `json:"dailyGrabs"`
+	Priority   int  `json:"priority"`
+	Enabled    bool `json:"enabled"`
 }
 
 // Indexer kinds (Indexer.Kind).
