@@ -355,7 +355,18 @@ func (s *Service) SearchWithHash(ctx context.Context, title *core.Title, lang, r
 		}
 		q.Set("moviehash", movieHash)
 	}
-	u := s.base + "/subtitles?" + q.Encode()
+	cacheKey := q.Encode()
+	s.mu.Lock()
+	until, missed := s.negative[cacheKey]
+	if missed && !s.now().Before(until) {
+		delete(s.negative, cacheKey)
+		missed = false
+	}
+	s.mu.Unlock()
+	if missed {
+		return nil, nil
+	}
+	u := s.base + "/subtitles?" + cacheKey
 	resp, err := s.send(ctx, func() (*http.Request, error) {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 		if err != nil {
@@ -394,6 +405,27 @@ func (s *Service) SearchWithHash(ctx context.Context, title *core.Title, lang, r
 			Uploader: a.Uploader.Name, UploaderRank: a.Uploader.Rank,
 			HearingImp: a.HearingImp, AITranslated: a.AITranslated, Forced: a.ForeignOnly && !a.HearingImp,
 		})
+	}
+	if len(out) == 0 && ctx.Err() == nil {
+		s.mu.Lock()
+		now := s.now()
+		for key, until := range s.negative {
+			if !now.Before(until) {
+				delete(s.negative, key)
+			}
+		}
+		if len(s.negative) >= 4096 {
+			var oldest string
+			var expiry time.Time
+			for key, until := range s.negative {
+				if oldest == "" || until.Before(expiry) {
+					oldest, expiry = key, until
+				}
+			}
+			delete(s.negative, oldest)
+		}
+		s.negative[cacheKey] = now.Add(s.negTTL)
+		s.mu.Unlock()
 	}
 	Rank(out, releaseName)
 	return out, nil
@@ -958,8 +990,7 @@ func firstPrefs(prefs []Preferences) Preferences {
 	return Preferences{}
 }
 
-// prefSig identifies a preference set for the negative cache, so a
-// "nothing found" for one mode/style never blocks another.
+// prefSig identifies the selection preferences stored for a subtitle.
 func prefSig(p Preferences) string { return p.Mode + "/" + p.Style }
 
 // selectionSatisfies reports whether a persisted selection may serve as
@@ -1138,10 +1169,6 @@ func writeFileAtomic(path string, data []byte) error {
 		return err
 	}
 	return nil
-}
-
-func negKey(title *core.Title, lang, release string, p Preferences) string {
-	return fmt.Sprintf("%d|%s|%s|%s", int64(title.Key), lang, releaseSig(release), prefSig(p))
 }
 
 func sidecarTitle(lang, release string) string {
