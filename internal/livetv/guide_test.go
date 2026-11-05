@@ -795,6 +795,19 @@ func TestImportKeepsNameCandidateWithoutMapping(t *testing.T) {
 	if c, _ := s.Channel(ctx, cs[0].ID); c.GuideID != "" {
 		t.Fatalf("review-only match changed the mapping: %+v", c)
 	}
+	// A restricted internal call (such as a plugin import) is still automatic.
+	if automatic, err := s.MatchGuides(ctx, GuideMatchRequest{ChannelIDs: []string{cs[0].ID}}); err != nil || automatic.Matched != 0 {
+		t.Fatalf("internal channel selection bypassed review: %+v %v", automatic, err)
+	}
+	// The owner's Apply action explicitly confirms the selected proposal.
+	body, _ := json.Marshal(map[string]any{"channelIds": []string{cs[0].ID}})
+	ownerJSON(t, s, "POST", "/guide/match", string(body), &applied)
+	if applied.Matched != 1 || len(applied.Changes) != 1 {
+		t.Fatalf("owner-confirmed proposal not applied: %+v", applied)
+	}
+	if c, _ := s.Channel(ctx, cs[0].ID); c.GuideID != "shared.own" {
+		t.Fatalf("confirmed mapping not persisted: %+v", c)
+	}
 }
 
 func TestMatchGuidesAppliesRegionConsistentName(t *testing.T) {

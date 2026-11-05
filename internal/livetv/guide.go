@@ -73,6 +73,8 @@ type GuideMatchRequest struct {
 	ChannelIDs []string `json:"channelIds,omitempty"`
 	Overwrite  bool     `json:"overwrite"`
 	DryRun     bool     `json:"dryRun"`
+	// Reviewed is set by the owner route for explicitly accepted proposals, never by imports.
+	Reviewed bool `json:"-"`
 }
 type GuideMatchChange struct {
 	ChannelID       string `json:"channelId"`
@@ -120,6 +122,7 @@ func (s *Service) guideRoutes(r chi.Router) {
 			ownerResult(w, nil, fmt.Errorf("invalid request body: %w", err))
 			return
 		}
+		req.Reviewed = len(req.ChannelIDs) > 0
 		v, e := s.MatchGuides(r.Context(), req)
 		ownerResult(w, v, e)
 	})
@@ -772,6 +775,7 @@ func (s *Service) MatchGuides(ctx context.Context, req GuideMatchRequest) (Guide
 			continue
 		}
 		var pick *guideCandidate
+		var rejected string
 		method := "id"
 		if c.GuideID != "" {
 			pick = bestCandidate(c, byID[c.GuideID])
@@ -781,8 +785,7 @@ func (s *Service) MatchGuides(ctx context.Context, req GuideMatchRequest) (Guide
 		}
 		if pick == nil {
 			method = "name"
-			var rejected string
-			pick, rejected = nameCandidateForChannel(c, byName, nameCount, req.DryRun)
+			pick, rejected = nameCandidateForChannel(c, byName, nameCount, req.DryRun || req.Reviewed)
 			switch rejected {
 			case "ambiguous":
 				res.Ambiguous++
@@ -790,7 +793,7 @@ func (s *Service) MatchGuides(ctx context.Context, req GuideMatchRequest) (Guide
 				res.RegionRejected++
 			}
 		}
-		if pick == nil && (req.DryRun || len(req.ChannelIDs) > 0) {
+		if pick == nil && rejected != "ambiguous" && rejected != "region" && (req.DryRun || req.Reviewed) {
 			method = "alias"
 			normalized := normalizeGuideName(c.Name)
 			pick = bestCandidate(c, byAlias[normalized])
@@ -895,7 +898,7 @@ func uniqueGuideCandidates(cands []*guideCandidate) []*guideCandidate {
 // sources, so a provider's own guide is preferred. Within that pool there
 // must be one guide id and one playlist channel with the normalized name. A
 // declared region that contradicts is always rejected; one unknown region is
-// only a dry-run proposal, never applied on the owner's behalf.
+// only a proposal until the owner explicitly confirms it.
 func nameCandidateForChannel(c Channel, byName map[string][]*guideCandidate, nameCount map[string]int, dryRun bool) (*guideCandidate, string) {
 	for _, k := range channelGuideNames(c) {
 		cands := uniqueGuideCandidates(byName[k])
