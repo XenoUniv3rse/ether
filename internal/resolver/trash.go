@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/braedonsaunders/ether/internal/core"
+	"github.com/braedonsaunders/ether/internal/flight"
 	"golang.org/x/net/html"
 )
 
@@ -70,18 +71,12 @@ type TrashGuides struct {
 	dirs    map[string]trashCached[[]string]
 	files   map[string]trashCached[[]byte]
 	bytes   int
-	flights map[string]*trashFlight
+	flights flight.Group[string, []string]
 }
 
 type trashCached[T any] struct {
 	v  T
 	at time.Time
-}
-
-type trashFlight struct {
-	done  chan struct{}
-	names []string
-	err   error
 }
 
 // NewTrashGuides returns a client for TRaSH Guides' published JSON.
@@ -101,7 +96,7 @@ func NewTrashGuides(o TrashOptions) *TrashGuides {
 	if o.Parallel <= 0 {
 		o.Parallel = trashParallel
 	}
-	return &TrashGuides{o: o, dirs: map[string]trashCached[[]string]{}, files: map[string]trashCached[[]byte]{}, flights: map[string]*trashFlight{}}
+	return &TrashGuides{o: o, dirs: map[string]trashCached[[]string]{}, files: map[string]trashCached[[]byte]{}}
 }
 
 // TrashProfile summarises one TRaSH quality profile for picking.
@@ -434,38 +429,30 @@ func (g *TrashGuides) list(ctx context.Context, app, kind string) ([]string, err
 		g.mu.Unlock()
 		return cached.v, nil
 	}
-	f := g.flights[key]
-	if f == nil {
-		f = &trashFlight{done: make(chan struct{})}
-		g.flights[key] = f
-		go func() {
-			// Detached from any one caller, so a cancelled request does not
-			// fail the others waiting on it.
-			lctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-			defer cancel()
-			f.names, f.err = g.fetchList(lctx, app, kind)
-			g.mu.Lock()
-			if f.err == nil {
-				g.dirs[key] = trashCached[[]string]{v: f.names, at: g.o.Now()}
-			}
-			delete(g.flights, key)
-			g.mu.Unlock()
-			close(f.done)
-		}()
-	}
 	g.mu.Unlock()
-	select {
-	case <-f.done:
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	}
-	if f.err != nil {
+	names, err := g.flights.DoDetached(ctx, key, func(fctx context.Context) ([]string, error) {
+		// Detached from any one caller, so a cancelled request does not
+		// fail the others waiting on it.
+		lctx, cancel := context.WithTimeout(fctx, 30*time.Second)
+		defer cancel()
+		names, err := g.fetchList(lctx, app, kind)
+		if err == nil {
+			g.mu.Lock()
+			g.dirs[key] = trashCached[[]string]{v: names, at: g.o.Now()}
+			g.mu.Unlock()
+		}
+		return names, err
+	})
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
 		if have {
 			return cached.v, nil // stale beats nothing
 		}
-		return nil, f.err
+		return nil, err
 	}
-	return f.names, nil
+	return names, nil
 }
 
 func (g *TrashGuides) fetchList(ctx context.Context, app, kind string) ([]string, error) {
