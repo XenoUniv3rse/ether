@@ -297,7 +297,15 @@ export type LiveUsage = {
   }[];
 };
 export const tv = {
-  usage: (signal?: AbortSignal) => apiFetch<LiveUsage>("/livetv/usage", { signal }),
+  usage: async (signal?: AbortSignal): Promise<LiveUsage> => {
+    const u = await apiFetch<Partial<LiveUsage> | null>("/livetv/usage", { signal });
+    return {
+      sessions: u?.sessions ?? 0,
+      viewers: u?.viewers ?? 0,
+      watching: Array.isArray(u?.watching) ? u.watching : [],
+      sources: Array.isArray(u?.sources) ? u.sources : [],
+    };
+  },
   plexLineups: (country: string, postalCode: string) =>
     apiFetch<PlexLineup[]>(
       `/livetv/plex-guide/lineups?country=${enc(country)}&postalCode=${enc(postalCode)}`,

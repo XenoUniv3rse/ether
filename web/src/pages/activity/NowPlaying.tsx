@@ -123,7 +123,7 @@ function StreamCard({ s, stopping, onStop }: { s: Stream; stopping: boolean; onS
                       })
                     : undefined
                 }
-                valueLabel={formatPercent(s.progress)}
+                valueLabel={progressLabel(s.progress, s.buffered)}
               />
             ) : (
               <p className="text-xs text-on-scrim/75">{t("Waiting for playback position")}</p>
@@ -298,7 +298,7 @@ function StreamRow({ s, stopping, onStop }: { s: Stream; stopping: boolean; onSt
                     })
                   : undefined
               }
-              valueLabel={formatPercent(s.progress)}
+              valueLabel={progressLabel(s.progress, s.buffered)}
             />
           ) : (
             <p className="text-xs text-fg-muted">{t("Waiting for playback position")}</p>
@@ -330,6 +330,16 @@ function StreamRow({ s, stopping, onStop }: { s: Stream; stopping: boolean; onSt
 /** Card or list layout for Now Playing, remembered on this browser. */
 export type NowView = "cards" | "list";
 const VIEW_KEY = "ether.activity.nowView";
+/** Watched share, plus the read-ahead buffer when it runs past the playhead. */
+function progressLabel(progress: number, buffered: number) {
+  return buffered > progress
+    ? t("{watched} watched · {buffered} buffered", {
+        watched: formatPercent(progress),
+        buffered: formatPercent(buffered),
+      })
+    : t("{percent}% watched", { percent: Math.round(progress * 100) });
+}
+
 export function useNowView(): [NowView, (v: NowView) => void] {
   const [view, setView] = useState<NowView>(() =>
     typeof localStorage !== "undefined" && localStorage.getItem(VIEW_KEY) === "list"

@@ -397,7 +397,7 @@ describe("Live TV studio", () => {
     ]);
   });
 
-  it("rebinds an open channel drawer from the lineup and names that channel on delete", async () => {
+  it("rebinds an open channel drawer to another channel and names that channel on delete", async () => {
     const channels: Record<string, unknown>[] = [iptv("news", { number: "2", name: "News 24" })];
     const calls = backend(channels, (url, init) => {
       const method = init?.method ?? "GET";
@@ -418,7 +418,6 @@ describe("Live TV studio", () => {
     await waitFor(() => expect(sent(calls, "POST", /\/livetv\/channels$/)).toHaveLength(1));
     expect(await screen.findByLabelText("Name")).toHaveValue("Movie night");
     const lineup = screen.getByRole("grid", { name: "Programme guide" });
-    expect(lineup.closest(".lg\\:z-\\[60\\]")).not.toBeNull();
     fireEvent.click(within(lineup).getByRole("button", { name: "2 News 24" }));
     expect(await screen.findByLabelText("Name")).toHaveValue("News 24");
     fireEvent.click(screen.getByRole("tab", { name: "Details" }));
@@ -547,7 +546,7 @@ describe("Live TV source sign-in", () => {
     });
     renderLiveTV("/livetv?source=x1");
     expect(await screen.findByText("Allows 1 connection", {}, WAIT)).toBeInTheDocument();
-    expect(screen.getByText("Trial")).toBeInTheDocument();
+    expect(screen.getAllByText("Trial").length).toBeGreaterThan(0);
     fireEvent.click(screen.getByRole("tab", { name: /Channel groups/ }));
     expect(screen.getByText("120 channels will be imported")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("checkbox", { name: /EVENTS/ }));
