@@ -1,6 +1,7 @@
 package plex
 
 import (
+"github.com/go-chi/chi/v5"
 	"context"
 	"crypto/rand"
 	"errors"
@@ -14,8 +15,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
-	"github.com/go-chi/chi/v5"
 
 	"github.com/braedonsaunders/ether/internal/core"
 	"github.com/braedonsaunders/ether/internal/frontend"
@@ -964,13 +963,6 @@ func directPlayMedia(m model.Media, streams []model.Stream, selectedOnly bool, s
 	}
 	part.Stream = kept
 	return m
-}
-
-func embeddedTextSubtitle(st model.Stream) bool {
-	if st.StreamType != 3 || (st.External != nil && *st.External) {
-		return false
-	}
-	return textSidecarCodec(st.Codec)
 }
 
 func textSidecarCodec(codec string) bool {
