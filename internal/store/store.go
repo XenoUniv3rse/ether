@@ -228,28 +228,6 @@ type MigrationGate func(ctx context.Context, q Querier, pending []string) error
 // migrations and the owner asked to wait for it).
 var ErrMigrationDeferred = errors.New("store: schema migration deferred")
 
-// HasDependency reports whether component declared a RegisterAfter dependency
-// that is present. Absent dependencies are ignored, matching Migrate.
-func HasDependency(component, dependency string) bool {
-	regMu.Lock()
-	defer regMu.Unlock()
-	return dependencies[component][dependency]
-}
-
-// ComponentOrder is the migration component sequence Migrate will apply.
-func ComponentOrder() []string {
-	var order []string
-	seen := map[string]bool{}
-	for _, m := range registered() {
-		if seen[m.component] {
-			continue
-		}
-		seen[m.component] = true
-		order = append(order, m.component)
-	}
-	return order
-}
-
 // KnownMigrations is the highest migration version this binary registers
 // for each component.
 func KnownMigrations() map[string]int {
