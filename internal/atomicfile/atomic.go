@@ -1,10 +1,13 @@
 package atomicfile
 
 import (
+	"errors"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"runtime"
+	"syscall"
+	"time"
 )
 
 // syncDirAfterRename is the production post-rename step: fsync dir so the
@@ -64,7 +67,7 @@ func WriteWithDirSync(path string, data []byte, perm os.FileMode, syncDir func(s
 	if err := f.Close(); err != nil {
 		return err
 	}
-	if err := os.Rename(tmp, path); err != nil {
+	if err := replace(tmp, path); err != nil {
 		return err
 	}
 	ok = true
@@ -77,4 +80,26 @@ func WriteWithDirSync(path string, data []byte, perm os.FileMode, syncDir func(s
 		}
 	}
 	return nil
+}
+
+// replace renames tmp over path. On Windows a replacement can briefly fail
+// with access denied or a sharing violation while another writer's rename
+// or a reader still holds the target; it is retried for up to about a
+// second. Other platforms rename atomically over an open file.
+func replace(tmp, path string) error {
+	err := os.Rename(tmp, path)
+	if runtime.GOOS != "windows" {
+		return err
+	}
+	for wait := time.Millisecond; err != nil && windowsBusy(err) && wait <= 256*time.Millisecond; wait *= 2 {
+		time.Sleep(wait)
+		err = os.Rename(tmp, path)
+	}
+	return err
+}
+
+// windowsBusy reports ERROR_ACCESS_DENIED (5) or ERROR_SHARING_VIOLATION (32).
+func windowsBusy(err error) bool {
+	var errno syscall.Errno
+	return errors.As(err, &errno) && (errno == 5 || errno == 32)
 }
