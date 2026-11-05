@@ -330,7 +330,13 @@ func TestHealthyTitleCostsOneGrab(t *testing.T) {
 	for _, tc := range []struct {
 		cost  time.Duration
 		grabs int32
-	}{{time.Second, 1}, {defaultHealthHedgeDelay + 500*time.Millisecond, 2}} {
+	}{
+		{time.Second, 1},
+		// Slower than the hedge delay but inside the lead's grace: exactly
+		// at rankedSourceGrace the check finishing and the stall timer tie
+		// at one fake instant, and a stalled lead may add a third check.
+		{rankedSourceGrace - 100*time.Millisecond, 2},
+	} {
 		synctest.Test(t, func(t *testing.T) {
 			var releases []core.Release
 			for i := range 6 {

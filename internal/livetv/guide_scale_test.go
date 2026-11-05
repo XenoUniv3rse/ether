@@ -92,6 +92,11 @@ func TestGuideIndexedScale(t *testing.T) {
 		`SELECT data FROM livetv_programmes WHERE source_id='scale' AND channel_id='scale-00000' AND start_ms<=0 ORDER BY start_ms DESC LIMIT 1`,
 		`SELECT source_id,channel_id,data FROM livetv_programmes WHERE (source_id,channel_id) IN (('scale','scale-00000'),('scale','scale-00001')) AND end_ms>0 AND start_ms<1`,
 	}
+	// The row and query bounds above hold on every dialect; the plan check
+	// reads SQLite's EXPLAIN QUERY PLAN format.
+	if store.DialectOf(s.o.DB) != store.SQLite {
+		return
+	}
 	for _, q := range plans {
 		rows, err := s.o.DB.QueryContext(ctx, "EXPLAIN QUERY PLAN "+q)
 		if err != nil {
