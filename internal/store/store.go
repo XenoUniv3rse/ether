@@ -19,6 +19,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"github.com/braedonsaunders/ether/internal/dburl"
 	"io/fs"
 	"log/slog"
 	"os"
@@ -291,7 +292,7 @@ func UnknownApplied(ctx context.Context, db *sql.DB) ([]string, error) {
 
 // Dialect is the backend these options select.
 func (o Options) Dialect() Dialect {
-	if isPostgresURL(o.URL) {
+	if dburl.IsPostgres(o.URL) {
 		return Postgres
 	}
 	return ParseDialect(o.Driver)
