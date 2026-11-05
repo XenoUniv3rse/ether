@@ -65,13 +65,38 @@ export interface Filters {
 }
 
 export const calendarApi = {
-  load: (from: string, to: string, f: Filters, signal?: AbortSignal) => {
+  load: async (
+    from: string,
+    to: string,
+    f: Filters,
+    signal?: AbortSignal,
+  ): Promise<CalendarData> => {
     const p = new URLSearchParams({ from, to, movies: f.movies });
     if (f.viewer !== "all") p.set("viewer", f.viewer);
     if (f.types !== "all") p.set("types", f.types);
     const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
     if (tz) p.set("tz", tz);
-    return apiFetch<CalendarData>(`/calendar/?${p}`, { signal });
+    // Go encodes nil slices as null, including for an empty calendar.
+    const data = await apiFetch<
+      Omit<CalendarData, "entries" | "viewers"> & {
+        entries:
+          | (Omit<CalendarEntry, "reasons" | "viewers"> & {
+              reasons: Reason[] | null;
+              viewers: number[] | null;
+            })[]
+          | null;
+        viewers: CalendarViewer[] | null;
+      }
+    >(`/calendar/?${p}`, { signal });
+    return {
+      ...data,
+      viewers: data.viewers ?? [],
+      entries: (data.entries ?? []).map((entry) => ({
+        ...entry,
+        reasons: entry.reasons ?? [],
+        viewers: entry.viewers ?? [],
+      })),
+    };
   },
 };
 
