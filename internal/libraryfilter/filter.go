@@ -35,11 +35,6 @@ type Filter struct {
 	fallback string // show or hide
 }
 
-// Compile treats every rule as hide and leaves unmatched titles visible.
-func Compile(specs []core.LibraryExclusion) (*Filter, error) {
-	return CompilePolicy(specs, "show")
-}
-
 // CompilePolicy compiles ordered rules. fallback is "show" or "hide" for
 // titles that match nothing; empty means show.
 func CompilePolicy(specs []core.LibraryExclusion, fallback string) (*Filter, error) {
