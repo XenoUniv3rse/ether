@@ -111,6 +111,14 @@ func (s *Server) handleTimeline(w http.ResponseWriter, r *http.Request) {
 	if saved, ok := s.progressiveStops.get(user.ID, pr.ClientID, pr.SessionID, key, s.now()); ok {
 		offset, duration = saved.offset, saved.duration
 	}
+	// Some clients carry the previous queue item's playhead into the first
+	// timeline for the next item. Neither an impossible playhead nor a
+	// completion without a source for this item is evidence of viewing it.
+	if s.unverifiedCompletion(ctx, user.ID, key, offset, duration, ps, len(tids) > 0) {
+		s.log.Debug("ignoring unverified playback progress", "key", key, "position", offset, "duration", duration)
+		s.writeEmpty(w, r)
+		return
+	}
 	if !s.reportBrokerTimeline(ctx, pr, key, offset, duration, state, sanitizeSessionID(q.Get("session"))) {
 		s.log.Warn("timeline report", "key", key, "state", state)
 	}
@@ -201,6 +209,20 @@ func (s *Server) handleTimeline(w http.ResponseWriter, r *http.Request) {
 	s.write(w, r, mc)
 }
 
+// unverifiedCompletion protects the watch threshold from stale queue playheads.
+func (s *Server) unverifiedCompletion(ctx context.Context, userID int64, key core.RatingKey, offset, duration time.Duration, ps *core.PlaySession, hasTranscode bool) bool {
+	if duration <= 0 && ps != nil {
+		duration = ps.Info.Duration
+	}
+	if duration <= 0 && s.d.State != nil {
+		if previous, err := s.d.State.Get(ctx, userID, key); err == nil {
+			duration = previous.Duration
+		}
+	}
+	return duration > 0 && (offset > duration && offset-duration > 2*time.Second ||
+		float64(offset) >= watchstate.WatchedThreshold*float64(duration) && ps == nil && !hasTranscode)
+}
+
 // handleProgress is the legacy /:/progress?key=&time=&state=.
 func (s *Server) handleProgress(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
@@ -212,7 +234,16 @@ func (s *Server) handleProgress(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	q := r.URL.Query()
-	if err := s.d.State.Progress(ctx, pr.User.ID, key, msParam(q.Get("time")), 0, q.Get("state")); err != nil {
+	offset := msParam(q.Get("time"))
+	var ps *core.PlaySession
+	if s.d.Playback != nil {
+		ps, _ = s.d.Playback.SessionFor(pr.User.ID, pr.ClientID, key)
+	}
+	if s.unverifiedCompletion(ctx, pr.User.ID, key, offset, 0, ps, len(s.transcodes.forClient(pr.User.ID, pr.ClientID, key)) > 0) {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+	if err := s.d.State.Progress(ctx, pr.User.ID, key, offset, 0, q.Get("state")); err != nil {
 		s.writeErr(w, r, err)
 		return
 	}

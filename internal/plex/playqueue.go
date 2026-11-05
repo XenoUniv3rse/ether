@@ -530,6 +530,28 @@ func (s *Server) handlePlayQueueCreate(w http.ResponseWriter, r *http.Request) {
 		writeHTTPError(w, http.StatusBadRequest)
 		return
 	}
+	// A show queue follows regular episodes, including specials explicitly
+	// placed inside a regular presented season, but not the Specials season.
+	if plKey == 0 {
+		if path, err := uriPath(uri); err == nil {
+			path, _, _ = strings.Cut(path, "?")
+			if m := reMetadataPath.FindStringSubmatch(path); len(m) > 0 {
+				if k, err := core.ParseRatingKey(m[1]); err == nil && k.Kind() == core.KindShow {
+					filtered := keys[:0]
+					for _, item := range keys {
+						if !s.queueSpecial(ctx, pr, item) {
+							filtered = append(filtered, item)
+						}
+					}
+					keys = filtered
+				}
+			}
+		}
+	}
+	if len(keys) == 0 {
+		writeHTTPError(w, http.StatusBadRequest)
+		return
+	}
 	// Cinema Trailers and the owner's pre-roll: prepend them before the
 	// feature and warm the feature while they play. A pre-roll needs no
 	// extrasPrefixCount; it never precedes a resume.
@@ -613,7 +635,7 @@ func (s *Server) continuousKeys(ctx context.Context, pr *Request, uri string, co
 			for _, candidate := range eps[i+1:] {
 				// Presented seasons: an episode order may place a TMDB special
 				// inside a regular season, where it belongs in the queue.
-				if (e.Season > 0 && candidate.Season == 0) || (!candidate.Released.IsZero() && candidate.Released.After(s.now())) {
+				if (ep.Season() > 0 && s.queueSpecial(ctx, pr, candidate.Key)) || (!candidate.Released.IsZero() && candidate.Released.After(s.now())) {
 					continue
 				}
 				candidates = append(candidates, candidate)
@@ -623,6 +645,19 @@ func (s *Server) continuousKeys(ctx context.Context, pr *Request, uri string, co
 		}
 	}
 	return keys, nil
+}
+
+// queueSpecial identifies a special outside an explicitly interleaved order.
+func (s *Server) queueSpecial(ctx context.Context, pr *Request, key core.RatingKey) bool {
+	if key.Kind() != core.KindEpisode || key.Season() != 0 {
+		return false
+	}
+	if s.d.EpisodeOrder != nil {
+		if season, _, _, ok := s.d.EpisodeOrder.Position(ctx, pr.User, key); ok && season > 0 {
+			return false
+		}
+	}
+	return true
 }
 
 // keyFromPath extracts a rating key from "/library/metadata/123" or "123".
