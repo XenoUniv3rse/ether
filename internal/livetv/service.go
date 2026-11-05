@@ -77,6 +77,9 @@ func New(o Options) (*Service, error) {
 	if o.DB == nil {
 		return nil, fmt.Errorf("livetv requires a database")
 	}
+	if o.Logger == nil {
+		o.Logger = slog.Default().With("component", "livetv")
+	}
 	if o.Now == nil {
 		o.Now = time.Now
 	}
@@ -179,6 +182,7 @@ func (s *Service) invalidate(channelID, sourceID string) {
 	}
 	s.mu.Unlock()
 	for _, ss := range stale {
+		s.sessionLog(ss).Info("live session expired")
 		ss.close(s)
 	}
 }
@@ -270,6 +274,7 @@ func (s *Service) expireSessions() {
 	}
 	s.mu.Unlock()
 	for _, ss := range stale {
+		s.sessionLog(ss).Info("live session expired")
 		ss.close(s)
 	}
 }

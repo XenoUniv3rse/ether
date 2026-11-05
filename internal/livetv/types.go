@@ -264,6 +264,7 @@ type Policy struct {
 	channelSet map[string]struct{} // Channels as a set for long lists; see indexChannels
 }
 type Options struct {
+	Logger         *slog.Logger
 	PlexGuideToken func() string
 	PlexGuideURL   string // test endpoint
 

@@ -426,7 +426,41 @@ func (s *Server) liveGuideMetadataCapture(r *http.Request, captured *[]livetv.Pr
 	return out, nil
 }
 func (s *Server) handleLiveGuide(w http.ResponseWriter, r *http.Request) {
+	started := time.Now()
 	md, err := s.liveGuideMetadata(r)
+	pr := FromContext(r.Context())
+	attrs := []any{"client", pr.ClientID, "product", pr.Product, "detail", chi.URLParam(r, "programme") != "", "items", len(md), "elapsed", time.Since(started)}
+	for _, name := range []string{"beginsAt", "endsAt", "type", "includeDetails"} {
+		if raw := r.URL.Query().Get(name); raw != "" {
+			if n, e := strconv.ParseInt(raw, 10, 64); e == nil {
+				attrs = append(attrs, name, n)
+			} else {
+				attrs = append(attrs, name, "invalid")
+			}
+		}
+	}
+	summaries, clips, episodes, movies := 0, 0, 0, 0
+	for _, m := range md {
+		switch m.Type {
+		case "clip":
+			clips++
+		case "episode":
+			episodes++
+		case "movie":
+			movies++
+		}
+		if m.Summary != "" {
+			summaries++
+		}
+	}
+	attrs = append(attrs, "with_summary", summaries, "clips", clips, "episodes", episodes, "movies", movies, "format", int(pr.Format))
+	if err != nil {
+		s.log.Warn("live guide request failed", append(attrs, "failure_code", livetv.Diagnose("guide", err).Code)...)
+	} else if chi.URLParam(r, "programme") != "" && len(md) == 0 {
+		s.log.Warn("live guide detail missing", attrs...)
+	} else {
+		s.log.Debug("live guide response", attrs...)
+	}
 	if errors.Is(err, errLiveBadRequest) {
 		writeHTTPError(w, http.StatusBadRequest)
 		return
@@ -592,13 +626,8 @@ func (s *Server) handleLiveTune(w http.ResponseWriter, r *http.Request) {
 	id := c.ID
 	info, err := s.d.LiveTV.TuneWithSession(r.Context(), pr.User, id, s.clientCaps(pr), pr.SessionID)
 	if err != nil {
-		s.log.Warn("live tune failed", "channel", id, "client", pr.ClientID, "product", pr.Product, "err", err)
-		if errors.Is(err, context.DeadlineExceeded) {
-			w.Header().Set("Retry-After", "1")
-			writeHTTPError(w, http.StatusServiceUnavailable)
-			return
-		}
-		s.writeErr(w, r, err)
+		s.log.Warn("live tune response failed", append([]any{"channel", id, "client", pr.ClientID, "product", pr.Product}, livetv.Diagnose("tune", err).LogAttrs()...)...)
+		s.writeLiveTuneError(w, r, err)
 		return
 	}
 	s.log.Info("live tune ready", "channel", info.Channel.Name, "session", info.ID, "client", pr.ClientID, "product", pr.Product, "analyzed", info.MediaInfo != nil)
