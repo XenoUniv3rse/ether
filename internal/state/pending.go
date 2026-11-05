@@ -2,6 +2,7 @@ package state
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"sort"
 	"sync"
@@ -112,8 +113,15 @@ func (p *pendingWrites) next() (progressKey, pendingWrite, bool) {
 func (p *pendingWrites) apply(ctx context.Context, k progressKey, w pendingWrite) error {
 	ctx = WithOrigin(ctx, w.progress.origin)
 	if w.progress.before != nil {
-		if err := p.s.progressAt(ctx, k.user, k.key, *w.progress.before); err != nil {
+		var watchAt int64
+		err := p.s.db.QueryRowContext(ctx, `SELECT watch_at FROM state_watch WHERE user_id=? AND rating_key=?`, k.user, int64(k.key)).Scan(&watchAt)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return err
+		}
+		if errors.Is(err, sql.ErrNoRows) || unixTime(watchAt).Before(w.progress.before.at) {
+			if err := p.s.progressAt(ctx, k.user, k.key, *w.progress.before); err != nil {
+				return err
+			}
 		}
 	}
 	switch w.kind {
