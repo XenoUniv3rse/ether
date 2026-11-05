@@ -1,11 +1,11 @@
 package archive
 
 import (
-"math/rand/v2"
 	"bytes"
 	"errors"
 	"fmt"
 	"io"
+	"math/rand/v2"
 
 	"os"
 	"path/filepath"

@@ -1,11 +1,11 @@
 package usenet
 
 import (
-"math/rand/v2"
 	"context"
 	"errors"
 	"fmt"
 	"log/slog"
+	"math/rand/v2"
 
 	"slices"
 	"sync"

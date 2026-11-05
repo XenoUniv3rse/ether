@@ -44,7 +44,8 @@ func credentialApp(t *testing.T) (*App, *sql.DB) {
 	if _, err := db.Exec(`INSERT INTO trakt_tokens(user_id, access_token, refresh_token, expires_at, username, updated_at) VALUES(1,'legacy-access','legacy-refresh',0,'u',0)`); err != nil {
 		t.Fatal(err)
 	}
-	if err := a.ratings.SaveSettings(ctx, ratings.Settings{Provider: "omdb", APIKey: "legacy-ratings-key", CacheHours: 1}); err != nil {
+	// Insert the pre-sealing representation directly; the current writer always seals.
+	if _, err := db.Exec(`INSERT INTO ratings_settings(id,value) VALUES(1,'{"provider":"omdb","apiKey":"legacy-ratings-key","cacheHours":1}')`); err != nil {
 		t.Fatal(err)
 	}
 	return a, db
