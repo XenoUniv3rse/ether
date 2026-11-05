@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"math"
+	"strings"
 
 	"github.com/braedonsaunders/ether/internal/releaseparse"
 	"github.com/braedonsaunders/ether/internal/store"
@@ -50,11 +51,27 @@ func migrateReleaseNames(ctx context.Context, tx *sql.Tx) error {
 		if len(batch) == 0 {
 			return nil
 		}
+		// One multi-row insert per batch: a large catalogue backfills in
+		// thousands of statements, not one per name.
+		var args []any
+		var values strings.Builder
 		for _, r := range batch {
-			if err = insertReleaseNames(ctx, tx, r.key, r.title, r.original); err != nil {
-				return err
+			for _, name := range []string{r.title, r.original} {
+				if name = releaseparse.NormalizeTitle(name); name == "" {
+					continue
+				}
+				if len(args) > 0 {
+					values.WriteByte(',')
+				}
+				values.WriteString("(?,?)")
+				args = append(args, name, r.key)
 			}
 			last = r.key
+		}
+		if len(args) > 0 {
+			if _, err = tx.ExecContext(ctx, `INSERT INTO catalog_release_names(name,key) VALUES `+values.String()+` ON CONFLICT(name,key) DO NOTHING`, args...); err != nil {
+				return err
+			}
 		}
 	}
 }
