@@ -125,3 +125,13 @@ func TestHandlerKeepsLevelsAndBenignAttrs(t *testing.T) {
 		t.Fatalf("%s", out)
 	}
 }
+
+func TestEtherCredentialNames(t *testing.T) {
+	for _, name := range []string{"X-Ether-Stream-Token", "X-Ether-Read-Token", "stream_token", "read_token", "X-Plex-Token", "api_key", "X-Ether-Admin-Token", "X-Ether-Recovery-Token", "plugin_token", "share_token", "download_token"} {
+		for _, input := range []string{"/path?" + name + "=credential123", name + "=credential123", `{"` + name + `":"credential123"}`} {
+			if got := String(input); strings.Contains(got, "credential123") {
+				t.Errorf("%q leaked: %q", input, got)
+			}
+		}
+	}
+}
