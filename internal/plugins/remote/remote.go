@@ -34,6 +34,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/braedonsaunders/ether/internal/frontend/kit/authhdr"
 )
 
 // Header names Ether sends to every remote plugin (SPEC §5.1.2).
@@ -196,9 +198,9 @@ func credentialFromRequest(r *http.Request) string {
 	if v := strings.TrimSpace(r.Header.Get(HeaderCredential)); v != "" {
 		return v
 	}
-	auth := strings.TrimSpace(r.Header.Get("Authorization"))
-	if len(auth) > 7 && strings.EqualFold(auth[:7], "Bearer ") {
-		return strings.TrimSpace(auth[7:])
+	token, ok := authhdr.Bearer(r.Header.Get("Authorization"))
+	if ok {
+		return token
 	}
 	for _, header := range r.Header.Values("Sec-Websocket-Protocol") {
 		for _, part := range strings.Split(header, ",") {

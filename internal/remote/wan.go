@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/braedonsaunders/ether/internal/egress"
+	"github.com/braedonsaunders/ether/internal/textclip"
 )
 
 // DefaultWANEndpoints are queried in order. The first is the endpoint PMS
@@ -121,5 +122,5 @@ func truncate(s string, n int) string {
 	if len(s) <= n {
 		return s
 	}
-	return s[:n] + "..."
+	return textclip.Bytes(s, n) + "..."
 }

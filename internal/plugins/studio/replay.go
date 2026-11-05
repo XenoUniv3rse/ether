@@ -239,11 +239,16 @@ func (r *Runner) Replay(ctx context.Context, req ReplayRequest) (ReplayReport, e
 
 	select {
 	case r.sem <- struct{}{}:
-		defer func() { <-r.sem }()
+		defer func(sem chan struct{}) { <-sem }(r.sem)
 	case <-runCtx.Done():
 		return ReplayReport{}, errors.New("another replay is already running; try again in a moment")
 	}
 
+	// Each replay owns its lazily created engine. Caller-supplied engines
+	// remain caller-owned; the shared runner retains admission control.
+	worker := NewRunner(r.deps)
+	defer worker.Close()
+	r = worker
 	start := time.Now()
 	target, err := r.resolveTarget(runCtx, req)
 	if err != nil {

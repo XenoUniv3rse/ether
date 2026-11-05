@@ -30,6 +30,7 @@ import (
 	"github.com/braedonsaunders/ether/internal/retryafter"
 	"github.com/braedonsaunders/ether/internal/state"
 	"github.com/braedonsaunders/ether/internal/store"
+	"github.com/braedonsaunders/ether/internal/textclip"
 )
 
 func init() {
@@ -600,7 +601,7 @@ func (c *Client) authed(ctx context.Context, userID int64, method, path string, 
 
 func truncate(s string, n int) string {
 	if len(s) > n {
-		return s[:n] + "…"
+		return textclip.Bytes(s, n) + "…"
 	}
 	return s
 }

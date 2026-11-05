@@ -42,7 +42,7 @@ func TestWatchMarkersStayOnTheirFileAndHonourIntroSkip(t *testing.T) {
 	phase := "watch"
 	exp := frontendtest.Experience{ItemFunc: func(context.Context, frontend.ItemRequest) (frontend.ItemDetail, error) {
 		if phase == "seek" {
-			return frontend.ItemDetail{Title: frontend.Title{Key: key}, Versions: []frontend.Version{{ID: "one", Markers: []frontend.Marker{{Type: "intro", Start: 0, End: 10 * time.Second}}}}}, nil
+			return frontend.ItemDetail{Title: frontend.Title{Key: key}, Versions: []frontend.Version{{ID: "one", Markers: []frontend.Marker{{Type: "intro", Start: 0, End: 10 * time.Second}, {Type: "recap", Start: 10 * time.Second, End: 20 * time.Second}, {Type: "credits", Start: 50 * time.Second, End: 55 * time.Second}}}}}, nil
 		}
 		return frontend.ItemDetail{Title: frontend.Title{Key: key, Type: core.TypeMovie, Title: "Film", Released: time.Unix(10000, 0)}, Markers: []frontend.Marker{{Type: "intro", Start: 50 * time.Second, End: 55 * time.Second}}, Versions: []frontend.Version{
 			{ID: "one", Media: media, Markers: []frontend.Marker{{Type: "intro", Start: time.Second, End: 10 * time.Second}, {Type: "credits", Start: 50 * time.Second, End: 55 * time.Second}}},
@@ -87,6 +87,13 @@ func TestWatchMarkersStayOnTheirFileAndHonourIntroSkip(t *testing.T) {
 	if got := handler.skipIntroAtStart(ask, viewer, frontend.VersionScope{}, key, "", time.Second); got != 10*time.Second || lookups != 1 {
 		t.Fatalf("always seek %s lookups %d", got, lookups)
 	}
+	handler.host.Preferences = skipPreferences{values: map[string]string{"playback.auto_skip_recap": `true`, "playback.auto_skip_credits": `true`}}
+	for position, want := range map[time.Duration]time.Duration{time.Second: time.Second, 11 * time.Second: 20 * time.Second, 51 * time.Second: 55 * time.Second} {
+		if got := handler.skipIntroAtStart(ask, viewer, frontend.VersionScope{}, key, "", position); got != want {
+			t.Fatalf("skip at %s = %s want %s", position, got, want)
+		}
+	}
+
 }
 
 type siloSubtitles struct {
