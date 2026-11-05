@@ -28,8 +28,6 @@ func (s *Service) Handler() http.Handler {
 	mux.HandleFunc("POST /approvals/{id}", s.handleApproval)
 	mux.HandleFunc("POST /secrets/{id}", s.handleSecret)
 	mux.HandleFunc("POST /turns/{id}/cancel", s.handleCancel)
-	// Singular spelling from SPEC §5.11, same handler.
-	mux.HandleFunc("POST /turn/{id}/cancel", s.handleCancel)
 	mux.HandleFunc("GET /status", s.handleStatus)
 	return mux
 }
