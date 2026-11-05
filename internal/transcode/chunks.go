@@ -85,6 +85,8 @@ type chunkRun struct {
 
 // chunkStart is the media time a chunk starts at (its first video
 // timestamp), in the run's -ss clock.
+var errNegativeFMP4DecodeTime = errors.New("fmp4: negative decode time")
+
 func (cr *chunkRun) chunkStart(path string) (time.Duration, error) {
 	switch cr.container {
 	case ContainerFMP4:
@@ -245,6 +247,7 @@ func fmp4ChunkStart(path string, track, timescale uint32) (time.Duration, error)
 			}
 			var id uint32
 			base := int64(-1)
+			haveBase := false
 			var cto int64
 			haveRun, badRun := false, false
 			kids, _ := readBoxes(b, traf.start+traf.hdr, traf.end)
@@ -254,6 +257,7 @@ func fmp4ChunkStart(path string, track, timescale uint32) (time.Duration, error)
 				case k.typ == "tfhd" && len(p) >= 8:
 					id = binary.BigEndian.Uint32(p[4:])
 				case k.typ == "tfdt" && len(p) >= 8:
+					haveBase = true
 					if p[0] == 1 && len(p) >= 12 {
 						base = int64(binary.BigEndian.Uint64(p[4:]))
 					} else {
@@ -271,6 +275,9 @@ func fmp4ChunkStart(path string, track, timescale uint32) (time.Duration, error)
 			}
 			if badRun {
 				return 0, fmt.Errorf("fmp4: bad trun for track %d in %s", id, filepath.Base(path))
+			}
+			if haveBase && base < 0 && haveRun {
+				return 0, errNegativeFMP4DecodeTime
 			}
 			if base >= 0 && (!found || base+cto < best) {
 				best, found = base+cto, true

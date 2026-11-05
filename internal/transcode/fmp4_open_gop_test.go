@@ -3,6 +3,7 @@ package transcode
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"net/http"
@@ -29,6 +30,10 @@ func TestHLSFMP4MuxSkipsSidx(t *testing.T) {
 	s := runSpec{Decision: core.Decision{Container: ContainerFMP4, VideoCopy: true}, Dir: t.TempDir(), Playlist: "p.m3u8", InitName: "init.mp4"}
 	if got := argValue(hlsMuxArgs(s), "-hls_segment_options"); got != "movflags=+frag_discont+skip_sidx" {
 		t.Errorf("fMP4 segment options %q", got)
+	}
+	s.NormalizeNegativeDTS = true
+	if got := argValue(hlsMuxArgs(s), "-hls_segment_options"); got != "movflags=+frag_discont+skip_sidx:avoid_negative_ts=make_non_negative" {
+		t.Errorf("negative decode time retry options %q", got)
 	}
 	s.Decision.Container = ContainerMPEGTS
 	if got := argValue(hlsMuxArgs(s), "-hls_segment_options"); got != "" {
@@ -200,6 +205,13 @@ func TestFMP4ChunkStartIsKeyframePresentation(t *testing.T) {
 	}
 	if _, err := fmp4ChunkStart(filepath.Join(dir, "bad.m4s"), 2, 48000); err != nil {
 		t.Errorf("audio track beside a bad video run: %v", err)
+	}
+	negative := openGOPChunk(^uint64(1599), 0, 3328)
+	if _, err := fmp4ChunkStart(write("negative.m4s", negative), 1, 16000); !errors.Is(err, errNegativeFMP4DecodeTime) {
+		t.Errorf("wrapped negative decode time: %v", err)
+	}
+	if _, err := fmp4ChunkStart(write("missing.m4s", openGOPChunkTfdt(nil, 0, 3328)), 1, 16000); err == nil || errors.Is(err, errNegativeFMP4DecodeTime) {
+		t.Errorf("missing decode time should not trigger normalization: %v", err)
 	}
 }
 

@@ -1,6 +1,7 @@
 package transcode
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -397,6 +398,18 @@ func (s *Session) finish(r *run) {
 	log.Warn("ffmpeg failed", "err", err, "segments", r.produced, "stderr", tail(stderr, 1500))
 	if s.cur != r {
 		return
+	}
+	// Normalization changes the output clock. Retry only before an init has
+	// been published in this scope; an established player clock must not move.
+	if errors.Is(err, errNegativeFMP4DecodeTime) && r.produced == 0 && !r.spec.NormalizeNegativeDTS {
+		_, retained := s.clockLocked(r, runTrack(s, r))
+		if retained == nil {
+			s.normalizeNegativeDTS = true
+			if retryErr := s.startRunForLocked(r.startSeg, r.spec.BigProbe, "negative fMP4 decode time"); retryErr != nil {
+				s.failErr = retryErr
+			}
+			return
+		}
 	}
 	if r.stalled && !s.inputFailed && s.takeStallRetry(time.Now()) {
 		if startErr := s.startRunForLocked(r.next(), false, "stalled encoder recovery"); startErr == nil {
