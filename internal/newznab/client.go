@@ -569,9 +569,6 @@ func (c *Client) Caps(ctx context.Context) (*Caps, error) {
 		c.capsMu.Unlock()
 		return caps, nil
 	}
-	if err := c.reserve(capsPurpose(ctx), "hit"); err != nil {
-		return nil, err
-	}
 	caps, err := c.fetchCaps(ctx)
 	c.capsMu.Lock()
 	current := c.capsEndpoint() == ep // the config did not change meanwhile
@@ -596,6 +593,9 @@ func (c *Client) fetchCaps(ctx context.Context) (*Caps, error) {
 	id := c.generalIdentity()
 	u, err := c.apiURL(url.Values{"t": {"caps"}}, id)
 	if err != nil {
+		return nil, err
+	}
+	if err := c.reserve(capsPurpose(ctx), "hit"); err != nil {
 		return nil, err
 	}
 	body, err := c.get(ctx, u, 5<<20, id)
@@ -863,14 +863,17 @@ func (c *Client) doSearch(ctx context.Context, params url.Values, id config.Iden
 	if err := c.searchPaused(); err != nil {
 		return nil, err
 	}
-	if err := c.reserve(ctx, "hit"); err != nil {
-		return nil, err
-	}
 	u, err := c.apiURL(params, id)
 	if err != nil {
 		return nil, err
 	}
 	results, err := c.guardSearch(ctx, true, defaultHTTPTimeout, func(ctx context.Context) ([]core.Release, error) {
+		// The hit is reserved once the breaker has admitted the request,
+		// right before it is sent: the budget and the usage breakdown count
+		// HTTP requests the indexer actually receives, as Prowlarr does.
+		if err := c.reserve(ctx, "hit"); err != nil {
+			return nil, err
+		}
 		if emit, ok := ctx.Value(searchArrivalKey{}).(func([]core.Release)); ok {
 			return c.getSearchStream(ctx, u, emit, id)
 		}
@@ -1416,9 +1419,6 @@ func (c *Client) fetchNZB(ctx context.Context, r core.Release) ([]byte, error) {
 		c.saveNZB(r.ID, body)
 		return body, nil
 	}
-	if err := c.reserve(ctx, "grab"); err != nil {
-		return nil, err
-	}
 	id := c.clientIdentityFor(releaseIsTV(r), true)
 	// r.NZBURL comes from the indexer's feed, so it is untrusted data:
 	// c.get dials it through the safefetch guard. Only a URL that stays
@@ -1445,6 +1445,11 @@ func (c *Client) fetchNZB(ctx context.Context, r core.Release) ([]byte, error) {
 			return nil, redactURLError(err)
 		}
 		rawURL = base.ResolveReference(ref).String()
+	}
+	// Reserved right before the request, so a release with no usable URL
+	// spends nothing.
+	if err := c.reserve(ctx, "grab"); err != nil {
+		return nil, err
 	}
 	body, err := c.get(ctx, rawURL, c.maxNZB, id)
 	if err != nil {
