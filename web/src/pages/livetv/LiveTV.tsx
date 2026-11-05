@@ -713,17 +713,11 @@ export default function LiveTV() {
   // Channels: one guide whose left third is the lineup (search, tabs and
   // channel rows) and whose right two thirds are the listings, so every
   // channel is listed once and its programmes stay level with it.
-  // With a channel drawer open the lineup alone stays above the drawer's
-  // backdrop, so another channel is one click away.
+  // Keep the full guide mounted at the same width behind the channel drawer.
+  // Resizing it on selection would move the virtual rows and horizontal scroll.
   const lineupGuide = (
-    <div
-      className={cn(
-        "flex min-h-0 flex-1 flex-col",
-        channelOpen && "lg:relative lg:z-[60] lg:w-1/3 lg:border-r lg:border-border",
-      )}
-    >
+    <div className="flex min-h-0 flex-1 flex-col">
       <GuideGrid
-        lineupOnly={channelOpen}
         channels={filtered}
         guide={guide}
         from={from}

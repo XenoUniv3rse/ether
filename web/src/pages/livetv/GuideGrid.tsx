@@ -52,7 +52,6 @@ export function GuideGrid({
   covered,
   onToggleFavorite,
   emptyHint,
-  lineupOnly = false,
 }: {
   channels: Channel[];
   guide: Map<string, Programme[]>;
@@ -75,8 +74,6 @@ export function GuideGrid({
   onToggleFavorite?: (c: Channel) => void;
   /** Shown instead of the default when there are no rows. */
   emptyHint?: ReactNode;
-  /** Only the lineup column, e.g. beside an open channel drawer. */
-  lineupOnly?: boolean;
 }) {
   const lineup = head !== undefined;
   const [zoom, setZoom] = useState<Zoom>("normal");
@@ -86,11 +83,7 @@ export function GuideGrid({
   const width = minutes * ppm;
   const scroller = useRef<HTMLDivElement>(null);
   const [view, setView] = useState({ top: 0, height: 800, left: 0, width: 1200 });
-  const chCol = !lineup
-    ? CH_COL
-    : lineupOnly
-      ? Math.max(view.width, 1)
-      : Math.max(LINEUP_MIN, Math.round(view.width / 3));
+  const chCol = lineup ? Math.max(LINEUP_MIN, Math.round(view.width / 3)) : CH_COL;
   const x = (ms: number) => ((ms - start) / MINUTE) * ppm;
   const nowX = x(now);
   const nowVisible = now >= start && now <= until.getTime();
@@ -191,8 +184,8 @@ export function GuideGrid({
             {head}
           </div>
         ) : null}
-        <div className={cn("flex min-w-0 flex-1", lineup && "h-[104px]", lineupOnly && "hidden")}>
-          {lineup && !lineupOnly ? (
+        <div className={cn("flex min-w-0 flex-1", lineup && "h-[104px]")}>
+          {lineup ? (
             <OnNowStrip channels={channels} guide={guide} now={now} onSelect={onSelect} />
           ) : null}
           <div
@@ -201,7 +194,6 @@ export function GuideGrid({
               lineup
                 ? "w-44 shrink-0 content-center justify-center border-l border-border"
                 : "flex-1 border-b border-border sm:px-4",
-              lineupOnly && "hidden",
             )}
           >
             <div
