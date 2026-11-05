@@ -8,9 +8,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	"unicode"
-
-	"golang.org/x/text/unicode/norm"
 
 	"github.com/braedonsaunders/ether/internal/config"
 	"github.com/braedonsaunders/ether/internal/core"
@@ -215,10 +212,6 @@ func searchTitleYear(query string) (string, int) {
 		return query, 0
 	}
 	return title, year
-}
-
-func (c *Catalog) searchTitles(ctx context.Context, query string, types []core.MediaType, limit, year int) ([]core.Title, error) {
-	return c.searchTitlesOpts(ctx, query, types, limit, year, false)
 }
 
 func (c *Catalog) searchTitlesOpts(ctx context.Context, query string, types []core.MediaType, limit, year int, unfiltered bool) ([]core.Title, error) {
@@ -569,16 +562,6 @@ func (c *Catalog) searchLiteral(ctx context.Context, query, types string, year, 
 		return c.queryTitlesUnfiltered(ctx, q, args...)
 	}
 	return c.queryTitles(ctx, q, args...)
-}
-
-// Fold accents for relevance ranking without changing the title sent to TMDB.
-func searchFold(s string) string {
-	return strings.Map(func(r rune) rune {
-		if unicode.Is(unicode.Mn, r) {
-			return -1
-		}
-		return unicode.ToLower(r)
-	}, norm.NFD.String(s))
 }
 
 // List returns TMDB curated/trending lists with a short in-memory TTL.

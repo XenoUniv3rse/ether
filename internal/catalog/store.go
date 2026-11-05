@@ -24,7 +24,6 @@ child_count,leaf_count,browsable,added_at,fetched_at,detail,adult,last_air_ts,co
 type storedTitle struct {
 	t         core.Title
 	browsable bool
-	addedAt   time.Time
 	fetchedAt time.Time
 	detail    bool
 	// detailAt is when the detail payload was last fetched (zero if never).
@@ -151,9 +150,6 @@ func scanTitle(s scanner) (*storedTitle, error) {
 	st.t = t
 	st.browsable = browsable != 0
 	st.detail = detail != 0
-	if addedAt != 0 {
-		st.addedAt = time.Unix(addedAt, 0).UTC()
-	}
 	if fetchedAt != 0 {
 		st.fetchedAt = time.Unix(fetchedAt, 0).UTC()
 	}
