@@ -344,7 +344,6 @@ export function ListInput({
     if (JSON.stringify(parseListInput(text, numeric)) !== key) {
       setText(list.join(", "));
     }
-
   }, [key, numeric]);
   return (
     <Input
@@ -398,7 +397,6 @@ export function MapInput({
     if (JSON.stringify(toObject(rows)) !== key) {
       setRows(Object.entries(value));
     }
-
   }, [key]);
   const commit = (next: [string, string][]) => {
     setRows(next);

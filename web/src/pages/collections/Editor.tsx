@@ -163,7 +163,6 @@ export default function CollectionEditor() {
       history.reset(base);
       setRestored(null);
     }
-
   }, [source.data, dKey]);
 
   const ready = baseline !== null;

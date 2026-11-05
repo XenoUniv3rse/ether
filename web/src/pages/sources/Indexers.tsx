@@ -250,7 +250,6 @@ export function IndexerList({
         ? blankStremioIndexer(indexers.length)
         : blankIndexer(indexers.length),
     );
-
   }, [addRequest, cfg, indexers.length]);
 
   async function save() {

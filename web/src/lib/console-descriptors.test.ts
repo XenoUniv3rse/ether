@@ -1,9 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  pageRoute,
-  pluginNavGroup,
-  type PageMeta,
-} from "./console-descriptors";
+import { pageRoute, pluginNavGroup, type PageMeta } from "./console-descriptors";
 import { destinationsFrom } from "./sitemap";
 import { descriptors } from "../mock/extend/descriptors/console";
 import type { Descriptor } from "./extend";
@@ -18,7 +14,6 @@ export const fixturePluginPage: Descriptor<PageMeta> = {
   order: 80,
   meta: { navGroup: "server", keywords: { resolved: "year in review" } },
 };
-
 
 describe("console descriptors", () => {
   it("routes a plugin page to /p/<plugin>/<page>", () => {
@@ -44,8 +39,6 @@ describe("console descriptors", () => {
       isPage: true,
     });
   });
-
-
 });
 
 describe("pluginNavGroup", () => {

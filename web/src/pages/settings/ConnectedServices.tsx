@@ -236,7 +236,6 @@ function useSectionDrafts(stored: Record<string, Obj> | null) {
     setDraft(stored ? structuredClone(stored) : null);
     setBases(sectionBases(stored));
     // storedKey stands in for the stored snapshot.
-
   }, [storedKey]);
   return { draft, setDraft, dirty, reset };
 }
@@ -478,7 +477,6 @@ export function ConnectedServices({
       openSectionSetup(service, draft[service.configKey] ?? {});
     }
     // Setup openers are stable setState wrappers. Re-running would reset a drawer mid-edit.
-
   }, [draft, requested, enabled, navigate, posterFlags]);
 
   const runTest = useCallback((s: Service, value: Obj) => {

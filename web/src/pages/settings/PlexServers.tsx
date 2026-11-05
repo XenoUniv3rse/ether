@@ -151,8 +151,7 @@ function errorText(e: unknown): string {
   }
 }
 
-const when = (seconds: number) =>
-  seconds ? formatDateTime(new Date(seconds * 1000)) : t("Never");
+const when = (seconds: number) => (seconds ? formatDateTime(new Date(seconds * 1000)) : t("Never"));
 
 /** Integrations overview card. It has no switch: a server is on once added. */
 export function PlexServersCard() {
@@ -314,7 +313,6 @@ export function PlexServers() {
       if (accounts[srv.id] === undefined) void loadAccounts(srv);
     }
     // loadAccounts only sets state; re-running on accounts would refetch failures.
-
   }, [serverIDs]);
 
   const openMapping = (srv: PMSServer, account: PMSAccount) => {

@@ -2,7 +2,6 @@
 
 import type { ViewerLifecycle } from "./contract";
 
-
 export interface UsenetProvider {
   id: string;
   name: string;

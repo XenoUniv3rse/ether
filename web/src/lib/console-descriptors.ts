@@ -93,4 +93,3 @@ export function pluginLocalId(d: Descriptor): string {
 export function pluginPageRoute(plugin: string, page: string): string {
   return `/p/${encodeURIComponent(plugin)}/${page.split("/").map(encodeURIComponent).join("/")}`;
 }
-

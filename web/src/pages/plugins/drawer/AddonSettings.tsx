@@ -404,7 +404,6 @@ export function AddonSettingsPage({
       .then(setSrc)
       .catch((e) => setError(errorMessage(e)));
     // openPage is a fresh closure per render; the page opens once per open.
-
   }, [open]);
 
   const take = useCallback(

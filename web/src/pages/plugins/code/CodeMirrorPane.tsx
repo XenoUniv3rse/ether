@@ -113,7 +113,6 @@ export default function CodeMirrorPane({
       tsHover(),
     ];
     // The TypeScript environment is created once per file.
-
   }, [file, original, locale]);
   return (
     <CodeMirror

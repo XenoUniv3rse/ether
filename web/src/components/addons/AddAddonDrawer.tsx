@@ -61,7 +61,6 @@ export function AddAddonDrawer({
     setPendingRead("");
     void read(pendingRead);
     // read is recreated each render; this runs once per configured link.
-
   }, [pendingRead]);
 
   const read = async (link = url) => {

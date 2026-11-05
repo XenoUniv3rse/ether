@@ -20,10 +20,7 @@ const SOURCE_PREFERENCE = localized(() => [
 ]);
 
 /** The select value for resolver.sourcePreference + sourceAlwaysFirst. */
-function sourceOrderValue(r?: {
-  sourcePreference?: string;
-  sourceAlwaysFirst?: boolean;
-}): string {
+function sourceOrderValue(r?: { sourcePreference?: string; sourceAlwaysFirst?: boolean }): string {
   const pref = r?.sourcePreference || "auto";
   return r?.sourceAlwaysFirst && (pref === "usenet" || pref === "debrid") ? `${pref}-always` : pref;
 }

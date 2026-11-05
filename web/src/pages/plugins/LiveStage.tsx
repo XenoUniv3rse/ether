@@ -188,7 +188,6 @@ export function NativePreview({
     return () => {
       live = false;
     };
-
   }, [projectId, template, epoch]);
   if (catalog?.items.length) {
     return (
@@ -231,9 +230,7 @@ export function NativePreview({
  */
 export function LiveStageView({ moments, narration }: { moments: Moment[]; narration: string }) {
   const current = moments[moments.length - 1];
-  const result = [...moments]
-    .reverse()
-    .find((m) => m.kind === "guide" || m.kind === "found");
+  const result = [...moments].reverse().find((m) => m.kind === "guide" || m.kind === "found");
   const done = moments.slice(0, -1);
   return (
     <div className="mx-auto w-full max-w-4xl space-y-4 px-4 py-6 sm:px-6">

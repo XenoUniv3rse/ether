@@ -99,14 +99,12 @@ export function UpdatesStatus() {
       .then(status.setData)
       .catch(() => {});
     // Check once on entry; subsequent checks are manual.
-
   }, [s?.enabled]);
   useEffect(() => {
     if (!s || !(s.checking || s.requested || s.state === "downloading" || s.state === "applying"))
       return;
     const timer = setInterval(() => void status.reload(), 5000);
     return () => clearInterval(timer);
-
   }, [s?.checking, s?.requested, s?.state]);
   if (starting) {
     const phase = (status.error as ApiError).phase as StartupPhase;

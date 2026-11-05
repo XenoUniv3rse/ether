@@ -16,18 +16,21 @@ import { formatBytes, formatPercent } from "../../lib/format";
 import type { CacheSnapshot } from "./Cache";
 import { causeDescription, causeLabel, pinLabel, retentionLabel } from "./reasons";
 
-const FILTERS = localized(() => [
-  ["all", t("All releases")],
-  ["watching", t("Watching now")],
-  ["paused", t("Paused")],
-  ["unfinished", t("Unfinished")],
-  ["shelf", t("Shelf")],
-  ["prefetched", t("Prefetched")],
-  ["checked", t("Checked")],
-  ["owner", t("Kept by you")],
-  ["unexplained", t("Unexplained")],
-  ["reclaimable", t("Reclaimable")],
-] as const);
+const FILTERS = localized(
+  () =>
+    [
+      ["all", t("All releases")],
+      ["watching", t("Watching now")],
+      ["paused", t("Paused")],
+      ["unfinished", t("Unfinished")],
+      ["shelf", t("Shelf")],
+      ["prefetched", t("Prefetched")],
+      ["checked", t("Checked")],
+      ["owner", t("Kept by you")],
+      ["unexplained", t("Unexplained")],
+      ["reclaimable", t("Reclaimable")],
+    ] as const,
+);
 
 const PREFETCHED = [
   "next-episode",

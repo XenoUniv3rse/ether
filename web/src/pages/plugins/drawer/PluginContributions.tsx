@@ -334,7 +334,6 @@ function LiveTVRow({ detail, onClose }: { detail: PluginDetail; onClose: () => v
       .catch(() => setSource(null));
   useEffect(() => {
     void load();
-
   }, [kind]);
   if (source === undefined)
     return (

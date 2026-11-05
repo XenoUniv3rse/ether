@@ -176,7 +176,6 @@ export function DescribeDialog({
     return () => {
       live = false;
     };
-
   }, [open]);
 
   // A build started before a reload keeps running on the server; follow it.

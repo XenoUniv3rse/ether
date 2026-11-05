@@ -87,7 +87,6 @@ export function DescribeWall({
       .catch(() => undefined);
     return () => ctl.abort();
     // The spec's content, not its identity, decides a reload.
-
   }, [specKey]);
 
   const fit = geometry(size);

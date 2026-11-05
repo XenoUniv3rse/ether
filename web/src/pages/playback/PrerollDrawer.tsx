@@ -1002,7 +1002,6 @@ function ActivitySection({ id, locale }: { id?: string; locale: string }) {
         ))}
       </ul>
     );
-
   }, [id, plays, error, locale]);
   return (
     <Section title={t("Activity")} description={t("The latest plays, newest first.")}>

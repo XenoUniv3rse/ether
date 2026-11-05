@@ -638,7 +638,14 @@ func Decide(info core.MediaInfo, caps core.ClientCaps, opts core.DecideOptions, 
 		(!remuxCopy && info.BitrateKbps-copiedAudioKbps(a)+remuxKbps <= bitrateCap)) {
 		d.Kind = core.DecisionRemux
 		d.VideoCopy = true
-		d.StripDolbyVision = hdr10Base
+		// A client without this profile direct-plays the compatible base
+		// layer (above). Once Ether copies the stream anyway, deliver a real
+		// base-only stream: keeping the configuration and RPUs makes some
+		// players pick a Dolby Vision decoder for an HDR10 fallback (#328).
+		d.StripDolbyVision = hdr10Base || (hasHDR10Base(v, caps) && !SupportsDVProfile(caps, v.DolbyVisionProfile))
+		if d.StripDolbyVision && !hdr10Base {
+			why = append([]string{fmt.Sprintf("client lacks Dolby Vision profile %d: delivering its HDR10 base layer", v.DolbyVisionProfile)}, why...)
+		}
 		d.AudioCopy = remuxCopy
 		d.AudioCodec = remuxCodec
 		applyAudioLimits(&d, a, caps, remuxCopy, remuxCodec)
@@ -843,7 +850,10 @@ func hdr10BaseReason(v *core.StreamInfo, caps core.ClientCaps, opts core.DecideO
 	}
 	id := clientreg.Identity{Product: caps.Product, Platform: caps.Platform, Device: caps.Device, Version: caps.Version}
 	switch {
-	case !SupportsDVProfile(caps, v.DolbyVisionProfile):
+	case !SupportsDVProfile(caps, v.DolbyVisionProfile) && androidClient(caps):
+		// Android players can pick a Dolby Vision decoder for a file whose
+		// profile the device lacks (#328); desktop players show the HDR10
+		// base of the same file directly, so only Android loses direct play.
 		return fmt.Sprintf("client lacks Dolby Vision profile %d: delivering its HDR10 base layer", v.DolbyVisionProfile)
 	case clientreg.HasQuirk(id, "plex-appletv-hdr10-base"):
 		return fmt.Sprintf("native Plex Apple TV compatibility: Dolby Vision profile %d uses its HDR10 base layer", v.DolbyVisionProfile)
@@ -873,3 +883,9 @@ func hasHDR10Base(v *core.StreamInfo, caps core.ClientCaps) bool {
 
 // HasHDR10Base is hasHDR10Base for callers outside the package.
 func HasHDR10Base(v *core.StreamInfo, caps core.ClientCaps) bool { return hasHDR10Base(v, caps) }
+
+// androidClient reports an Android player (Plex sends Platform "Android";
+// some callers only know the product name).
+func androidClient(caps core.ClientCaps) bool {
+	return strings.EqualFold(caps.Platform, "Android") || strings.Contains(strings.ToLower(caps.Product), "android")
+}

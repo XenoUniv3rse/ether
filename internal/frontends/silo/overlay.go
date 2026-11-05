@@ -1,11 +1,11 @@
 package silo
 
 import (
-	"github.com/braedonsaunders/ether/internal/core"
 	"net/http"
 	"strings"
 
 	"github.com/braedonsaunders/ether/internal/frontend"
+	"github.com/braedonsaunders/ether/internal/frontend/kit/quality"
 )
 
 func (i *instance) applyEditionOverlay(r *http.Request, viewer *frontend.Viewer, key frontend.RatingKey, item map[string]any) {
@@ -79,7 +79,7 @@ func siloOverlay(version frontend.Version) (map[string]any, int) {
 	if sawVideo {
 		if video.Height > 0 {
 			height = video.Height
-			if label := core.ResolutionLabel(video.Width, video.Height); label != "" {
+			if label := quality.ResolutionLabel(video.Width, video.Height); label != "" {
 				summary["resolution"] = label
 			}
 		}

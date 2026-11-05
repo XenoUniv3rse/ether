@@ -47,7 +47,6 @@ export function useAsync<T>(
   useEffect(() => {
     void run();
     return () => controller.current?.abort();
-
   }, deps);
 
   const setData = useCallback((next: T | ((prev: T | undefined) => T)) => {

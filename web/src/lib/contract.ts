@@ -130,7 +130,6 @@ export type Source =
   | { kind: "stevenlu"; list: StevenLuList }
   | { kind: "titles"; keys: string[] };
 
-
 export type CollectionSort =
   | "latestEpisode"
   | "latestSeasonPremiere"
