@@ -191,20 +191,27 @@ export function GuideGrid({
             {head}
           </div>
         ) : null}
-        <div className={cn("min-w-0 flex-1", lineupOnly && "hidden")}>
+        <div className={cn("flex min-w-0 flex-1", lineup && "h-[104px]", lineupOnly && "hidden")}>
           {lineup && !lineupOnly ? (
             <OnNowStrip channels={channels} guide={guide} now={now} onSelect={onSelect} />
           ) : null}
           <div
             className={cn(
-              "flex min-w-0 flex-1 flex-wrap items-center gap-2 bg-surface px-3 py-2 sm:px-4",
-              lineup ? "self-stretch" : "border-b border-border",
+              "flex min-w-0 flex-wrap items-center gap-1 bg-surface px-2 py-1.5",
+              lineup
+                ? "w-44 shrink-0 content-center justify-center border-l border-border"
+                : "flex-1 border-b border-border sm:px-4",
               lineupOnly && "hidden",
             )}
           >
-            <div className="mr-auto flex items-baseline gap-2">
+            <div
+              className={cn(
+                "flex min-w-0 items-baseline gap-2",
+                lineup ? "w-full justify-center" : "mr-auto",
+              )}
+            >
               <h2 className="text-sm font-semibold text-fg">{t("Guide")}</h2>
-              <span className="text-xs text-fg-muted">
+              <span className={cn("text-xs text-fg-muted", lineup && "sr-only")}>
                 {tn(channels.length, "{day} · {count} channel", "{day} · {count} channels", {
                   day: dayLabel,
                 })}
@@ -672,11 +679,8 @@ export function OnNowStrip({
   }, [channels, guide, now]);
   if (!picks.length) return null;
   return (
-    <section
-      aria-label={t("On now")}
-      className="shrink-0 border-b border-border bg-surface px-3 pb-3 pt-2.5 sm:px-4"
-    >
-      <div className="mb-2 flex items-center gap-2">
+    <section aria-label={t("On now")} className="flex min-w-0 flex-1 items-center bg-surface px-2">
+      <div className="sr-only">
         <span className="relative flex size-2">
           <span className="absolute inline-flex size-full animate-ping rounded-full bg-danger/60" />
           <span className="relative inline-flex size-2 rounded-full bg-danger" />
@@ -685,7 +689,7 @@ export function OnNowStrip({
           {t("On now")}
         </h2>
       </div>
-      <div className="app-scroll -mx-1 flex gap-2.5 overflow-x-auto px-1 pb-1">
+      <div className="app-scroll flex w-full gap-2 overflow-x-auto py-1 [scrollbar-gutter:auto]">
         {picks.map(({ c, p }) => {
           const hue = hueOf(c.id);
           return (
