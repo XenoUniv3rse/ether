@@ -19,12 +19,6 @@ import { SecureAddresses } from "./SecureAddresses";
  * status in pages/playback.
  */
 
-export type Errors = Record<string, string>;
-export type RunTest = (
-  key: string,
-  fn: () => Promise<{ ok: boolean; error?: string; durationMs: number }>,
-) => void;
-
 // ---- Status cards -----------------------------------------------------------------------
 
 /** Remote-access and plex.direct health for the Plex app page. Account sign-in lives on that page, not here. */

@@ -50,7 +50,7 @@ import {
 } from "./form";
 import { SortableList } from "../../components/Sortable";
 
-export function debridKindLabel(kind: string): string {
+function debridKindLabel(kind: string): string {
   return DEBRID_KINDS.find((k) => k.value === kind)?.label ?? kind;
 }
 
@@ -58,7 +58,7 @@ export function debridKindLabel(kind: string): string {
 const EMPTY: DebridConfig = { providers: [], cachedOnly: true, removeUncached: true };
 
 /** Debrid settings for `cfg`, with defaults filled in. */
-export function debridOf(cfg: EtherConfig): DebridConfig {
+function debridOf(cfg: EtherConfig): DebridConfig {
   return { ...EMPTY, ...cfg.debrid };
 }
 

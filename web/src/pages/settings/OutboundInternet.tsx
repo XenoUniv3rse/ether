@@ -19,7 +19,7 @@ import { api, ApiError } from "../../lib/api";
 import { useAsync } from "../../lib/hooks";
 import type { EtherConfig } from "../../lib/types";
 
-export interface OutboundConfig {
+interface OutboundConfig {
   enabled: boolean;
   preset?: string;
   url: string;

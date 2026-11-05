@@ -35,7 +35,7 @@ import type {
   JoinTokenInfo,
 } from "../../lib/types";
 
-export const CLUSTER_DOCS =
+const CLUSTER_DOCS =
   "https://github.com/braedonsaunders/ether/blob/main/docs/install.md#running-a-cluster";
 
 /** How often the page refreshes membership and tokens while it is visible. */
@@ -46,7 +46,7 @@ const HEARTBEAT_STALE_MS = 20_000;
 /** Clock differences beyond this confuse liveness and token expiry. */
 const SKEW_WARN_NS = 2e9;
 
-export function isClustered(s: ClusterStatus | null | undefined): boolean {
+function isClustered(s: ClusterStatus | null | undefined): boolean {
   return s?.mode === "postgres";
 }
 
@@ -117,7 +117,7 @@ export function clusterWarnings(s: ClusterStatus, now: Date = new Date()): strin
   return out;
 }
 
-export type TokenState = "used" | "expired" | "unused";
+type TokenState = "used" | "expired" | "unused";
 
 export function tokenState(token: JoinTokenInfo, now: Date = new Date()): TokenState {
   if (parseTime(token.usedAt)) return "used";

@@ -31,9 +31,9 @@ import { awaySummary, type ReachabilityStatus } from "./reachability";
 type Obj = Record<string, unknown>;
 type PlexDraft = { plex: Obj };
 type Pin = { id: string; code: string; authUrl: string };
-export type PlexSection = "account" | "remote" | "downloads";
+type PlexSection = "account" | "remote" | "downloads";
 
-export function plexSection(section: string | undefined): PlexSection {
+function plexSection(section: string | undefined): PlexSection {
   if (section === "remote" || section === "downloads") return section;
   return "account";
 }

@@ -19,7 +19,7 @@ import { t, tn } from "../../i18n";
 import { api, apiFetch } from "../../lib/api";
 import { useAsync } from "../../lib/hooks";
 
-export interface PMSMapping {
+interface PMSMapping {
   accountId: number;
   accountName: string;
   owner: boolean;
@@ -34,7 +34,7 @@ export interface PMSMapping {
   unmatched: number;
 }
 
-export interface PMSServer {
+interface PMSServer {
   id: number;
   name: string;
   url: string;
@@ -74,7 +74,7 @@ type MappingDraft = {
 
 const INTERVALS = [5, 10, 30, 60];
 
-export const listPlexServers = (signal?: AbortSignal) =>
+const listPlexServers = (signal?: AbortSignal) =>
   apiFetch<PMSServer[]>("/plex-servers", { signal });
 
 function problemText(code: string): string {

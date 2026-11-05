@@ -32,7 +32,7 @@ interface AddonConfig {
   host: string;
 }
 
-export interface ConfigResult {
+interface ConfigResult {
   name: string;
   added?: string[];
   removed?: string[];
@@ -329,7 +329,7 @@ export function AddonSettings({
   );
 }
 
-export function ResultCard({ result }: { result: ConfigResult }) {
+function ResultCard({ result }: { result: ConfigResult }) {
   const ok = !result.problems?.length;
   return (
     <div className="space-y-2 rounded-xl border border-border bg-surface px-4 py-3" role="status">

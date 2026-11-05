@@ -34,14 +34,14 @@ import { t } from "../i18n";
  * }
  * ```
  */
-export interface IntegrationAppIdentity {
+interface IntegrationAppIdentity {
   /** Stable key. Not displayed. */
   id: string;
   /** Visible product name. */
   name: string;
 }
 
-export interface IntegrationAppCardProps {
+interface IntegrationAppCardProps {
   identity: IntegrationAppIdentity;
   /**
    * Caller-supplied brand mark. Never derived from `identity.id`.

@@ -53,7 +53,7 @@ export function useUnsavedGuard(dirty: boolean) {
   }, [dirty]);
 }
 
-export interface SaveBarProps {
+interface SaveBarProps {
   dirty: boolean;
   saving?: boolean;
   onSave: () => void | Promise<void>;

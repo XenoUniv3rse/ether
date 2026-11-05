@@ -49,7 +49,7 @@ function toParams(
   return out;
 }
 
-export function pluginViewPath(
+function pluginViewPath(
   plugin: string,
   page: string,
   params: Record<string, string>,

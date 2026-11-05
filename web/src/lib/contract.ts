@@ -3,7 +3,7 @@
  * fake backend and the tests agree on a single definition.
  */
 
-export type MediaKind = "movie" | "show" | "season" | "episode";
+type MediaKind = "movie" | "show" | "season" | "episode";
 
 export interface TitleCard {
   key: string;
@@ -92,7 +92,7 @@ export interface Rule {
   label?: string;
 }
 
-export type TmdbListName =
+type TmdbListName =
   | "trending_day"
   | "trending_week"
   | "popular"
@@ -102,7 +102,7 @@ export type TmdbListName =
   | "airing_today"
   | "on_the_air";
 
-export type StevenLuList =
+type StevenLuList =
   | "movies"
   | "movies-imdb-min7"
   | "movies-imdb-min8"
@@ -113,7 +113,7 @@ export type StevenLuList =
   | "movies-rottentomatoes-min70"
   | "movies-rottentomatoes-min80";
 
-export type LookupSourceKind = "tmdbKeyword" | "tmdbCompany" | "tmdbNetwork" | "tmdbPerson";
+type LookupSourceKind = "tmdbKeyword" | "tmdbCompany" | "tmdbNetwork" | "tmdbPerson";
 
 export type Source =
   | { kind: "catalog" }
@@ -130,7 +130,6 @@ export type Source =
   | { kind: "stevenlu"; list: StevenLuList }
   | { kind: "titles"; keys: string[] };
 
-export type SourceKind = Source["kind"];
 
 export type CollectionSort =
   | "latestEpisode"
@@ -144,7 +143,7 @@ export type CollectionSort =
   | "personal"
   | "source";
 
-export type Refresh = "live" | "hourly" | "daily" | "weekly";
+type Refresh = "live" | "hourly" | "daily" | "weekly";
 export type ArtworkMode = "auto" | "collage" | "backdrop" | "tmdb" | "custom";
 export type DeviceClass = "tv" | "mobile" | "web" | "desktop";
 
@@ -262,7 +261,7 @@ export interface Viewer {
   hoursWatched30d: number;
 }
 
-export interface ViewerActivity {
+interface ViewerActivity {
   title: TitleCard;
   at: string;
   completed: boolean;
@@ -300,7 +299,7 @@ export interface TasteProfile {
   overrides: TasteOverride[];
 }
 
-export type LayerName = "global" | "personalized" | "override";
+type LayerName = "global" | "personalized" | "override";
 
 export interface HomeRow {
   hubId: string;
@@ -323,7 +322,7 @@ export interface HomeRow {
   policyLayer?: "global" | "override";
 }
 
-export interface HomeContext {
+interface HomeContext {
   device: string;
   daypart: string;
   weekend: boolean;
@@ -391,7 +390,7 @@ export interface LayoutTuning {
 }
 export type TuningDial = keyof LayoutTuning;
 
-export interface ViewerLayout {
+interface ViewerLayout {
   userId: number;
   pages: LayoutPage[];
 }
@@ -420,7 +419,7 @@ export interface AvailableRow {
   group?: RowGroup;
 }
 
-export interface RankerFeature {
+interface RankerFeature {
   name: string;
   label: string;
   weight: number;
@@ -442,7 +441,7 @@ export interface LayoutDoc {
   defaults: { maxRows: Record<LayoutSection, number> };
 }
 
-export interface LayoutImpact {
+interface LayoutImpact {
   viewerId: number;
   title: string;
   overrides: number;

@@ -6,9 +6,9 @@ import type { ExperienceCause, ExperienceMetrics, ReasonKind } from "./types";
 
 /** Targets the owner approved: start ≤5 s good, ≤10 s fair; buffering <1/h good. */
 export const START_GOOD_MS = 5_000;
-export const START_FAIR_MS = 10_000;
+const START_FAIR_MS = 10_000;
 export const BUFFER_GOOD_PER_HOUR = 1;
-export const BUFFER_FAIR_PER_HOUR = 3;
+const BUFFER_FAIR_PER_HOUR = 3;
 
 export type Tone = "success" | "warning" | "danger";
 

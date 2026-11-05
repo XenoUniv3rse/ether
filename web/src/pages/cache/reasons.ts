@@ -93,13 +93,6 @@ export function pinLabel(code: string): string {
   }
 }
 
-export function causeLabels(codes: string[] | undefined, limit = 2): string {
-  const labels = (codes ?? []).map(causeLabel);
-  if (!labels.length) return causeLabel("unrecorded");
-  if (labels.length <= limit) return labels.join(" · ");
-  return `${labels.slice(0, limit).join(" · ")} +${labels.length - limit}`;
-}
-
 export function retentionLabel(retention?: CacheRetention): string {
   if (!retention) return t("Reclaimable anytime");
   switch (retention.kind) {

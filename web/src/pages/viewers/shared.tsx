@@ -5,7 +5,7 @@ import { SettingsRow } from "../../components/SettingsRow";
 import { localized, t } from "../../i18n";
 
 /** Split a comma-separated list, optionally lower-casing (language codes). */
-export function parseList(text: string, lower = false): string[] {
+function parseList(text: string, lower = false): string[] {
   return text
     .split(",")
     .map((s) => (lower ? s.trim().toLowerCase() : s.trim()))
@@ -55,7 +55,7 @@ export function ListText({
 
 // ---- Audio & subtitle rules (/stream-preferences/:user; user 0 is the default) ----
 
-export type SubtitleAppearance = {
+type SubtitleAppearance = {
   fontSize: string;
   fontFamily: string;
   fontColor: string;
@@ -67,7 +67,7 @@ export type SubtitleAppearance = {
   position: string;
 };
 
-export const DEFAULT_SUBTITLE_APPEARANCE: SubtitleAppearance = {
+const DEFAULT_SUBTITLE_APPEARANCE: SubtitleAppearance = {
   fontSize: "large",
   fontFamily: "sans-serif",
   fontColor: "#ffffff",
@@ -388,7 +388,7 @@ export type SafetyPolicy = {
   timezone: string;
 };
 
-export function emptyPolicy(): SafetyPolicy {
+function emptyPolicy(): SafetyPolicy {
   return {
     blockedGenres: [],
     blockedKeywords: [],

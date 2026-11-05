@@ -76,12 +76,10 @@ export function ConfigSection({
   schemaId,
   label,
   before,
-  after,
   test,
   onSaved,
   hidden = false,
   show,
-  onFieldErrors,
 }: {
   /** Key in config.json, e.g. "cache" or "openSubtitles". */
   configKey: string;
@@ -102,7 +100,6 @@ export function ConfigSection({
   label: string;
   /** Status or context rendered above the fields, given the live draft. */
   before?: (draft: Obj, cfg: EtherConfig) => ReactNode;
-  after?: (draft: Obj, cfg: EtherConfig) => ReactNode;
   /** A connection test rendered under the fields, given the live draft. */
   test?: (draft: Obj) => ReactNode;
   onSaved?: (value: Obj) => void;
@@ -115,8 +112,6 @@ export function ConfigSection({
   hidden?: boolean;
   /** Which groups to render; all of them when omitted. Hidden groups keep their edits. */
   show?: (group: FieldGroup, index: number) => boolean;
-  /** Field keys (without the section prefix) the server rejected, to reveal their tab. */
-  onFieldErrors?: (keys: string[]) => void;
 }) {
   const { refreshDashboard } = useApp();
   const schemaIds =
@@ -153,28 +148,11 @@ export function ConfigSection({
       setError(e);
       if (e instanceof ApiError && e.fields) {
         setErrors(Object.fromEntries(e.fields.map((f) => [f.field, f.message])));
-        const prefix = `${configKey}.`;
-        onFieldErrors?.(
-          e.fields
-            .filter((f) => f.field.startsWith(prefix))
-            .map((f) => f.field.slice(prefix.length)),
-        );
       }
     } finally {
       setSaving(false);
     }
-  }, [
-    cfg,
-    config,
-    configKey,
-    draft,
-    endpoint,
-    groups,
-    label,
-    onFieldErrors,
-    onSaved,
-    refreshDashboard,
-  ]);
+  }, [cfg, config, configKey, draft, endpoint, groups, label, onSaved, refreshDashboard]);
 
   const saveBar = (
     <SaveBar
@@ -235,7 +213,6 @@ export function ConfigSection({
         ),
       )}
       {test ? <div className="flex justify-end">{test(draft)}</div> : null}
-      {after?.(draft, cfg)}
       {saveBar}
     </>
   );
