@@ -674,9 +674,6 @@ func (s *Service) prepareTrackOnStage(ctx context.Context, ss *session, p Progra
 			return t, nil
 		}
 	}
-	if p.Item.Slate == offAirSlate {
-		return nil, fmt.Errorf("channel is off air")
-	}
 	if s.o.Playback == nil || s.o.Transcoder == nil {
 		return nil, core.ErrNotAvailable
 	}
@@ -690,14 +687,22 @@ func (s *Service) prepareTrackOnStage(ctx context.Context, ss *session, p Progra
 	caps := ss.caps
 	caps.ClientID = "livetv-" + ss.info.ID + "-" + strconv.FormatInt(p.Start.UnixMilli(), 10)
 	var ps *core.PlaySession
+	var slateText []string
+	var input string
 	var err error
-	if grouped, ok := s.o.Playback.(core.ChannelPreparer); ok {
-		ps, err = grouped.PrepareChannel(ctx, &ss.user, p.Item.Key, caps, ss.info.ID)
+	if p.Item.Slate == offAirSlate {
+		slateText = offAirCopy(ss.info.Channel, p)
+		ps = &core.PlaySession{Info: s.slateInfo(ss.info.MediaInfo, caps, p.End.Sub(p.Start))}
 	} else {
-		ps, err = s.o.Playback.Prepare(ctx, &ss.user, p.Item.Key, caps)
-	}
-	if err != nil {
-		return nil, err
+		if grouped, ok := s.o.Playback.(core.ChannelPreparer); ok {
+			ps, err = grouped.PrepareChannel(ctx, &ss.user, p.Item.Key, caps, ss.info.ID)
+		} else {
+			ps, err = s.o.Playback.Prepare(ctx, &ss.user, p.Item.Key, caps)
+		}
+		if err != nil {
+			return nil, err
+		}
+		input = s.o.Playback.InputURL(ps.ID)
 	}
 	info := ps.Info
 	ss.info.MediaInfo = &info
@@ -707,16 +712,20 @@ func (s *Service) prepareTrackOnStage(ctx context.Context, ss *session, p Progra
 		decision.Kind = core.DecisionRemux
 	}
 	decision.Container = "mpegts"
-	hs, lifetimeCancel, err := s.startOwnedHLS(ctx, ss, core.HLSRequest{SessionID: "livetv-" + ss.info.ID + "-" + strconv.FormatInt(p.Start.UnixMilli(), 10), InputURL: s.o.Playback.InputURL(ps.ID), Info: info, Decision: decision, StartOffset: offset, SegmentDuration: segmentDuration})
+	hs, lifetimeCancel, err := s.startOwnedHLS(ctx, ss, core.HLSRequest{SessionID: "livetv-" + ss.info.ID + "-" + strconv.FormatInt(p.Start.UnixMilli(), 10), InputURL: input, SlateText: slateText, Info: info, Decision: decision, StartOffset: offset, SegmentDuration: segmentDuration})
 	if err != nil {
-		s.o.Playback.Stop(ps.ID)
+		if ps.ID != "" {
+			s.o.Playback.Stop(ps.ID)
+		}
 		return nil, err
 	}
 	tr := &track{programme: p, hls: hs, cancel: lifetimeCancel, playbackID: ps.ID, offset: offset, count: trackCount(info.Duration - offset)}
 	tr.sequence = ss.nextSequence
 	ss.nextSequence += int64(tr.count)
 	s.transMu.Lock()
-	s.transcodes[ps.ID] = hs
+	if ps.ID != "" {
+		s.transcodes[ps.ID] = hs
+	}
 	s.transMu.Unlock()
 	ss.tracks = append(ss.tracks, tr)
 	return tr, nil
@@ -963,6 +972,10 @@ func (s *Service) Failover(ctx context.Context, id string, u *core.User) error {
 		}
 	}
 	if current == nil {
+		ss.mu.Unlock()
+		return core.ErrNotAvailable
+	}
+	if current.programme.Item.Slate == offAirSlate {
 		ss.mu.Unlock()
 		return core.ErrNotAvailable
 	}

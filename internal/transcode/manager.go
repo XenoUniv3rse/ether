@@ -186,6 +186,7 @@ func withFinder(f finder) Option { return func(o *options) { o.finder = &f } }
 
 // Manager runs ffmpeg for Ether. It implements core.Transcoder.
 type Manager struct {
+	slateMu   sync.Mutex
 	subtitles subtitleCache
 	// subtitleSlotsCh bounds concurrent StreamSubtitle readers.
 	subtitleSlotsCh   chan struct{}
@@ -361,6 +362,13 @@ func (m *Manager) cleanStale() {
 			path := filepath.Join(m.tempDir, e.Name())
 			if _, protected := encoderCleanup.dirs.Load(path); !protected {
 				_ = os.RemoveAll(path)
+			}
+		case e.IsDir() && e.Name() == "slates":
+			entries, _ := os.ReadDir(filepath.Join(m.tempDir, "slates"))
+			for _, entry := range entries {
+				if entry.IsDir() && strings.HasPrefix(entry.Name(), "render-") {
+					_ = os.RemoveAll(filepath.Join(m.tempDir, "slates", entry.Name()))
+				}
 			}
 		case e.IsDir() && e.Name() == "downloads":
 			cleanStaleDownloads(filepath.Join(m.tempDir, e.Name()))
@@ -612,6 +620,15 @@ func (m *Manager) startHLS(ctx context.Context, req core.HLSRequest, life *encod
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	var slateData []byte
+	if len(req.SlateText) > 0 {
+		var err error
+		slateData, err = m.slate(ctx, req.Info, req.SlateText)
+		if err != nil {
+			return nil, err
+		}
+		req.InputURL = "generated-slate.mp4"
+	}
 	if req.InputURL == "" {
 		return nil, errors.New("transcode: StartHLS: empty input URL")
 	}
@@ -824,6 +841,9 @@ func (m *Manager) startHLS(ctx context.Context, req core.HLSRequest, life *encod
 		safe = safe[:48]
 	}
 	dir := filepath.Join(m.tempDir, "s-"+safe+"-"+randomHex(4))
+	if len(slateData) > 0 {
+		req.InputURL = filepath.Join(dir, "slate.mp4")
+	}
 	var softSubtitleStream *int
 	if req.SoftSubtitleStream != nil {
 		index := *req.SoftSubtitleStream
@@ -847,6 +867,7 @@ func (m *Manager) startHLS(ctx context.Context, req core.HLSRequest, life *encod
 			rtxTimeline:        enhancementSelected(d),
 			rtxConfig:          rtxConfig,
 			liveInput:          req.LiveInput,
+			loopInput:          len(slateData) > 0,
 			input:              req.InputURL,
 			inputHeaders:       inputHeaders,
 			inputLease:         req.InputLease,
@@ -882,6 +903,12 @@ func (m *Manager) startHLS(ctx context.Context, req core.HLSRequest, life *encod
 	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, fmt.Errorf("transcode: session dir: %w", err)
+	}
+	if len(slateData) > 0 {
+		if err := os.WriteFile(req.InputURL, slateData, 0o600); err != nil {
+			os.RemoveAll(dir)
+			return nil, err
+		}
 	}
 	for t := range s.done {
 		s.done[t] = map[int]bool{}

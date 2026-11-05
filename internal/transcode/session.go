@@ -65,6 +65,7 @@ type sessionInput struct {
 	rtxConfig              config.RTXVideo
 	rtxTimeline            bool
 	rtxDiscontinuities     map[int]bool
+	loopInput              bool
 	liveInput              bool
 	inputLease             core.EncoderInputLease
 	inputHeaders           map[string]string
