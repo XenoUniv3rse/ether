@@ -15,10 +15,12 @@ import (
 
 // runSpec is everything needed to build one ffmpeg HLS run.
 type runSpec struct {
-	SoftSubtitlePath  string
-	SoftSubtitleIndex int
-	LiveInput         bool
-	CopyTimestamps    bool
+	// Only a retry of an initial run whose muxer wrote a wrapped tfdt.
+	NormalizeNegativeDTS bool
+	SoftSubtitlePath     string
+	SoftSubtitleIndex    int
+	LiveInput            bool
+	CopyTimestamps       bool
 	// RTXTimeline preserves the native session's clock and rendition-local
 	// initialization paths when ordinary FFmpeg takes over.
 	RTXTimeline       bool
@@ -522,11 +524,10 @@ func hlsMuxArgs(s runSpec) []string {
 		// keyframe (HEVC CRA) presents after its leading pictures and
 		// was moved before them. HLS does not use sidx, and the chunked
 		// path already drops it from multi-chunk segments.
-		// A source can contain pre-zero decode timestamps. frag_discont
-		// otherwise writes them as wrapped uint64 tfdt values. Normalize
-		// priming in the nested muxer; its edit list retains presentation
-		// timing and the existing edit reconciliation handles restarts.
-		options := "movflags=+frag_discont+skip_sidx:avoid_negative_ts=make_non_negative"
+		options := "movflags=+frag_discont+skip_sidx"
+		if s.NormalizeNegativeDTS {
+			options += ":avoid_negative_ts=make_non_negative"
+		}
 		if s.VideoTimescale != 0 {
 			options += ":video_track_timescale=" + strconv.FormatUint(uint64(s.VideoTimescale), 10)
 		}
