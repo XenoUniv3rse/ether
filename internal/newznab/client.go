@@ -10,6 +10,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"github.com/braedonsaunders/ether/internal/atomicfile"
 	"io"
 	"log/slog"
 	"net/http"
@@ -1527,24 +1528,7 @@ func (c *Client) saveNZB(releaseID string, body []byte) {
 	if err := os.MkdirAll(c.nzbDir, 0o755); err != nil {
 		return
 	}
-	f, err := os.CreateTemp(c.nzbDir, ".nzb-*.tmp")
-	if err != nil {
-		return
-	}
-	tmp := f.Name()
-	defer os.Remove(tmp) // no-op once renamed
-	if _, err := f.Write(body); err != nil {
-		f.Close()
-		return
-	}
-	if err := f.Chmod(0o644); err != nil {
-		f.Close()
-		return
-	}
-	if err := f.Close(); err != nil {
-		return
-	}
-	if err := os.Rename(tmp, path); err != nil {
+	if err := atomicfile.Write(path, body, 0644); err != nil {
 		c.log.Debug("newznab save NZB failed", "indexer", c.Name(), "err", err)
 	}
 }

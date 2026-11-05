@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/braedonsaunders/ether/internal/atomicfile"
 	"io"
 	"log/slog"
 	"math"
@@ -1118,25 +1119,7 @@ func (s *Service) saveSelection(title *core.Title, lang, release string, sel sel
 }
 
 func writeFileAtomic(path string, data []byte) error {
-	f, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".*.tmp")
-	if err != nil {
-		return err
-	}
-	tmp := f.Name()
-	if _, err := f.Write(data); err != nil {
-		f.Close()
-		os.Remove(tmp)
-		return err
-	}
-	if err := f.Close(); err != nil {
-		os.Remove(tmp)
-		return err
-	}
-	if err := os.Rename(tmp, path); err != nil {
-		os.Remove(tmp)
-		return err
-	}
-	return nil
+	return atomicfile.Write(path, data, 0600)
 }
 
 func negKey(title *core.Title, lang, release string, p Preferences) string {
