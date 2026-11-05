@@ -64,7 +64,7 @@ export async function fetchAgentStatus(): Promise<AgentStatus> {
 export function parseThreads(value: unknown): AgentThreadSummary[] {
   return listOf<Record_>(value, "threads").map((thread) => ({
     id: String(thread.id ?? ""),
-    title: typeof thread.title === "string" && thread.title ? thread.title : "Conversation",
+    title: typeof thread.title === "string" && thread.title ? thread.title : t("Conversation"),
     createdAt: typeof thread.createdAt === "string" ? thread.createdAt : undefined,
     updatedAt: typeof thread.updatedAt === "string" ? thread.updatedAt : undefined,
     messageCount: typeof thread.messageCount === "number" ? thread.messageCount : undefined,
@@ -133,7 +133,7 @@ export async function submitAgentSecret(requestId: string, value: string): Promi
 export function parseMcpClients(value: unknown): McpClient[] {
   return listOf<Record_>(value, "clients").map((client) => ({
     id: String(client.id ?? ""),
-    name: typeof client.name === "string" && client.name ? client.name : "AI app",
+    name: typeof client.name === "string" && client.name ? client.name : t("AI app"),
     createdAt: typeof client.createdAt === "string" ? client.createdAt : undefined,
     lastSeenAt: typeof client.lastSeenAt === "string" ? client.lastSeenAt : undefined,
     scopes: Array.isArray(client.scopes) ? client.scopes.map(String) : undefined,
