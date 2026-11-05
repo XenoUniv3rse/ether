@@ -48,18 +48,7 @@ func InfoHashFromMagnet(magnet string) string {
 	if !strings.HasPrefix(strings.ToLower(magnet), "magnet:") {
 		return ""
 	}
-	q := magnet[strings.IndexByte(magnet, ':')+1:]
-	q = strings.TrimPrefix(q, "?")
-	values, err := url.ParseQuery(q)
-	if err != nil {
-		// Tolerate unescaped junk in other parameters.
-		values = url.Values{}
-		for _, part := range strings.Split(q, "&") {
-			if k, v, ok := strings.Cut(part, "="); ok {
-				values.Add(k, v)
-			}
-		}
-	}
+	values := MagnetValues(magnet)
 	for _, xt := range values["xt"] {
 		if lower := strings.ToLower(xt); strings.HasPrefix(lower, "urn:btih:") {
 			if h := NormalizeInfoHash(xt[len("urn:btih:"):]); h != "" {
@@ -68,6 +57,25 @@ func InfoHashFromMagnet(magnet string) string {
 		}
 	}
 	return ""
+}
+
+// MagnetValues parses magnet query fields, tolerating malformed unrelated fields.
+func MagnetValues(magnet string) url.Values {
+	q := magnet[strings.IndexByte(magnet, ':')+1:]
+	q = strings.TrimPrefix(q, "?")
+	values, err := url.ParseQuery(q)
+	if err != nil {
+		values = url.Values{}
+		for _, part := range strings.Split(q, "&") {
+			if k, v, ok := strings.Cut(part, "="); ok {
+				if uv, uerr := url.QueryUnescape(v); uerr == nil {
+					v = uv
+				}
+				values.Add(k, v)
+			}
+		}
+	}
+	return values
 }
 
 // MagnetFor builds a magnet URI for an info hash.

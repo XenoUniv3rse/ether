@@ -454,23 +454,7 @@ func streamHash(s *stream) (hash string, ambiguous bool) {
 
 // magnetValues parses a magnet URI's query, tolerating unescaped junk in
 // other parameters (same tolerance as newznab.InfoHashFromMagnet).
-func magnetValues(magnet string) url.Values {
-	q := magnet[strings.IndexByte(magnet, ':')+1:]
-	q = strings.TrimPrefix(q, "?")
-	values, err := url.ParseQuery(q)
-	if err != nil {
-		values = url.Values{}
-		for _, part := range strings.Split(q, "&") {
-			if k, v, ok := strings.Cut(part, "="); ok {
-				if uv, uerr := url.QueryUnescape(v); uerr == nil {
-					v = uv
-				}
-				values.Add(k, v)
-			}
-		}
-	}
-	return values
-}
+func magnetValues(magnet string) url.Values { return newznab.MagnetValues(magnet) }
 
 // hashFromMagnet extracts the v1 info hash from a magnet URI's
 // xt=urn:btih: parameters. ambiguous reports two or more distinct valid
@@ -816,12 +800,7 @@ func parseSize(text string) int64 {
 	if m == nil {
 		return 0
 	}
-	v, err := strconv.ParseFloat(strings.ReplaceAll(m[1], ",", "."), 64)
-	if err != nil || v <= 0 {
-		return 0
-	}
-	shift := map[string]uint{"": 0, "K": 10, "M": 20, "G": 30, "T": 40}[strings.ToUpper(m[2])]
-	return int64(v * float64(uint64(1)<<shift))
+	return releaseparse.ParseSize(m[1] + " " + m[2] + "B")
 }
 
 // streamTrackers returns the announce URLs carried into the generated
