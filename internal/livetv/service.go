@@ -817,15 +817,30 @@ func (s *Service) AllowedChannels(ctx context.Context, u *core.User) ([]Channel,
 	if err != nil {
 		return nil, err
 	}
+	now := s.o.Now()
+	var airing map[guideKey]Programme
+	for _, c := range cs {
+		if c.Kind != "virtual" {
+			if airing, err = s.currentProgrammes(ctx, now); err != nil {
+				return nil, err
+			}
+			break
+		}
+	}
 	out := []Channel{}
 	for _, c := range cs {
-		p, ok, err := s.programmeAt(ctx, c, s.o.Now())
-		if err != nil {
-			return nil, err
-		}
 		var current *Programme
-		if ok {
-			current = &p
+		switch {
+		case c.Kind == "virtual":
+			if ps := Schedule(c, now, now.Add(time.Second)); len(ps) > 0 {
+				current = &ps[0]
+			}
+		default:
+			if p, ok := airing[guideKey{guideSource(c), c.GuideID}]; ok {
+				p.ChannelID = c.ID
+				p.ID = fmt.Sprintf("%s-%d", c.ID, p.Start.UnixMilli())
+				current = &p
+			}
 		}
 		if s.allowed(ctx, u, c, current) {
 			c.StreamURL = ""
@@ -834,6 +849,78 @@ func (s *Service) AllowedChannels(ctx context.Context, u *core.User) ([]Channel,
 		}
 	}
 	return out, nil
+}
+
+// currentProgrammes answers "what airs now" for every guide in one range scan.
+// AllowedChannels used to call programmeAt per channel: 15,815 round trips on a
+// large lineup. When channels overlap a guide, the latest start wins, matching
+// programmeAt.
+func (s *Service) currentProgrammes(ctx context.Context, at time.Time) (map[guideKey]Programme, error) {
+	rows, err := s.o.DB.QueryContext(ctx, `SELECT source_id, channel_id, data FROM livetv_programmes WHERE end_ms>? AND start_ms<=?`, at.UnixMilli(), at.UnixMilli())
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[guideKey]Programme{}
+	for rows.Next() {
+		var k guideKey
+		var b []byte
+		if err = rows.Scan(&k.source, &k.guide, &b); err != nil {
+			return nil, err
+		}
+		var p Programme
+		if err = json.Unmarshal(b, &p); err != nil {
+			return nil, err
+		}
+		if prev, ok := out[k]; !ok || p.Start.After(prev.Start) {
+			out[k] = p
+		}
+	}
+	return out, rows.Err()
+}
+
+// AllowedChannel resolves one channel by id or number and applies the same
+// policy check as AllowedChannels without loading the lineup. Plex tune used
+// the whole list only to find the requested channel.
+func (s *Service) AllowedChannel(ctx context.Context, u *core.User, key string) (Channel, error) {
+	c, err := s.Channel(ctx, key)
+	if errors.Is(err, core.ErrNotFound) {
+		c, err = s.channelByNumber(ctx, key)
+	}
+	if err != nil {
+		return Channel{}, err
+	}
+	ctx, _, err = s.withPolicy(ctx, u)
+	if err != nil {
+		return Channel{}, err
+	}
+	p, ok, err := s.programmeAt(ctx, c, s.o.Now())
+	if err != nil {
+		return Channel{}, err
+	}
+	var current *Programme
+	if ok {
+		current = &p
+	}
+	if !s.allowed(ctx, u, c, current) {
+		return Channel{}, core.ErrNotFound
+	}
+	c.StreamURL = ""
+	c.StreamSources = nil
+	return c, nil
+}
+
+func (s *Service) channelByNumber(ctx context.Context, number string) (Channel, error) {
+	all, err := s.channelSummaries(ctx)
+	if err != nil {
+		return Channel{}, err
+	}
+	for _, c := range all {
+		if c.Number == number {
+			return s.Channel(ctx, c.ID)
+		}
+	}
+	return Channel{}, core.ErrNotFound
 }
 
 // ChannelPermitted decides one channel. A memo on ctx, when present, answers

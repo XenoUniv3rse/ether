@@ -4,11 +4,13 @@ import (
 	"compress/gzip"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http/httptest"
 	"testing"
 	"time"
 
+	"github.com/braedonsaunders/ether/internal/core"
 	"github.com/braedonsaunders/ether/internal/store"
 )
 
@@ -59,6 +61,69 @@ func TestGuideForChannelsIsSetBased(t *testing.T) {
 	all, err := s.Guide(ctx, ownerUser(), guideTestNow, guideTestNow.Add(2*time.Hour))
 	if err != nil || len(all) != 24 {
 		t.Fatalf("all-channel guide: %v %d", err, len(all))
+	}
+}
+
+// TestAllowedChannelsBatchesCurrentProgramme pins the on-now read to one
+// statement and keeps the latest start when guide rows overlap, which is what
+// the old per-channel programmeAt chose.
+func TestAllowedChannelsBatchesCurrentProgramme(t *testing.T) {
+	ctx := context.Background()
+	clock := &testClock{now: guideTestNow}
+	s := testService(t, Options{Now: clock.Now})
+	guide := `<tv>
+<channel id="a"><display-name>A</display-name></channel>
+<channel id="b"><display-name>B</display-name></channel>
+<programme channel="a" start="20261019100000 +0000" stop="20261019140000 +0000"><title>A long</title><rating><value>G</value></rating></programme>
+<programme channel="a" start="20261019113000 +0000" stop="20261019123000 +0000"><title>A short</title><rating><value>R</value></rating></programme>
+<programme channel="b" start="20261019100000 +0000" stop="20261019140000 +0000"><title>B long</title><rating><value>G</value></rating></programme>
+</tv>`
+	if _, err := s.ImportSource(ctx, Source{ID: "src", Name: "IPTV", Playlist: m3uFixture("a=A", "b=B"), Guide: guide}); err != nil {
+		t.Fatal(err)
+	}
+	channels, err := s.Channels(ctx)
+	if err != nil || len(channels) != 2 {
+		t.Fatalf("channels: %v %d", err, len(channels))
+	}
+	byGuide := map[string]string{}
+	for _, c := range channels {
+		byGuide[c.GuideID] = c.ID
+	}
+
+	statsCtx, stats := store.WithQueryStats(ctx)
+	airing, err := s.currentProgrammes(statsCtx, guideTestNow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if q := stats.Queries(); q != 1 {
+		t.Fatalf("current programmes used %d queries, want 1", q)
+	}
+	if p := airing[guideKey{"src", "a"}]; p.Item.Title != "A short" {
+		t.Fatalf("overlapping programme: got %q, want the latest start", p.Item.Title)
+	}
+	if p := airing[guideKey{"src", "b"}]; p.Item.Title != "B long" {
+		t.Fatalf("single programme: got %q", p.Item.Title)
+	}
+
+	// The R-rated overlap hides channel A from a G viewer; channel B stays.
+	viewer := &core.User{ID: 7, MaxContentRating: "G"}
+	statsCtx, stats = store.WithQueryStats(ctx)
+	allowed, err := s.AllowedChannels(statsCtx, viewer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(allowed) != 1 || allowed[0].GuideID != "b" {
+		t.Fatalf("restricted lineup: %+v", allowed)
+	}
+	if q := stats.Queries(); q > 3 {
+		t.Fatalf("allowed channels used %d queries for %d channels", q, len(channels))
+	}
+	if _, err := s.AllowedChannel(ctx, viewer, byGuide["a"]); !errors.Is(err, core.ErrNotFound) {
+		t.Fatalf("restricted channel permitted: %v", err)
+	}
+	c, err := s.AllowedChannel(ctx, ownerUser(), channels[0].Number)
+	if err != nil || c.ID != channels[0].ID {
+		t.Fatalf("resolve by number: %v %+v", err, c)
 	}
 }
 

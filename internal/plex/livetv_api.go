@@ -351,24 +351,41 @@ func (s *Server) liveGuideMetadataCapture(r *http.Request, captured *[]livetv.Pr
 	if !until.After(from) || until.Sub(from) > 7*24*time.Hour {
 		return nil, fmt.Errorf("%w: window", errLiveBadRequest)
 	}
-	ps, err := s.d.LiveTV.Guide(r.Context(), FromContext(r.Context()).User, from, until)
-	if err != nil {
-		return nil, err
+	// Plex asks for one grid channel at a time. Converting the whole lineup's
+	// window (179k rows) to keep one channel made the guide CPU-bound.
+	gridKey := q.Get("channelGridKey")
+	var ps []livetv.Programme
+	var err error
+	if gridKey != "" {
+		ps, err = s.d.LiveTV.GuideForChannels(r.Context(), FromContext(r.Context()).User, from, until, []string{gridKey})
+	} else {
+		ps, err = s.d.LiveTV.Guide(r.Context(), FromContext(r.Context()).User, from, until)
 	}
-	cs, err := s.d.LiveTV.Channels(r.Context())
 	if err != nil {
 		return nil, err
 	}
 	byID := map[string]livetv.Channel{}
-	for _, c := range cs {
+	if gridKey != "" {
+		c, err := s.d.LiveTV.Channel(r.Context(), gridKey)
+		if errors.Is(err, core.ErrNotFound) {
+			return []model.Metadata{}, nil
+		}
+		if err != nil {
+			return nil, err
+		}
 		byID[c.ID] = c
+	} else {
+		cs, err := s.d.LiveTV.Channels(r.Context())
+		if err != nil {
+			return nil, err
+		}
+		for _, c := range cs {
+			byID[c.ID] = c
+		}
 	}
 	out := []model.Metadata{}
 	for _, p := range ps {
 		if id := chi.URLParam(r, "programme"); id != "" && p.ID != id {
-			continue
-		}
-		if id := q.Get("channelGridKey"); id != "" && p.ChannelID != id {
 			continue
 		}
 		out = append(out, liveProgrammeMetadata(byID[p.ChannelID], p))
@@ -483,18 +500,16 @@ func (s *Server) liveChannelMetadata(c livetv.Channel) model.Metadata {
 	return model.Metadata{RatingKey: "channel-" + c.ID, Key: liveProviderPath + "/channels/" + url.PathEscape(c.ID), Type: "clip", Title: c.Name, Summary: "Live channel. No programme guide supplied.", Thumb: liveLogo(c), ContentRating: c.Rating, Extra: []model.Attr{model.A("live", true), model.A("dvrChannel", true)}, Media: []model.Media{{Protocol: "livetv", Extra: []model.Attr{model.A("origin", "livetv"), model.A("channelIdentifier", c.ID), model.A("channelTitle", c.Name), model.A("channelVcn", c.Number), model.A("onAir", true)}}}}
 }
 func (s *Server) handleLiveChannel(w http.ResponseWriter, r *http.Request) {
-	cs, err := s.d.LiveTV.AllowedChannels(r.Context(), FromContext(r.Context()).User)
+	c, err := s.d.LiveTV.AllowedChannel(r.Context(), FromContext(r.Context()).User, chi.URLParam(r, "channel"))
+	if errors.Is(err, core.ErrNotFound) {
+		writeHTTPError(w, 404)
+		return
+	}
 	if err != nil {
 		s.writeErr(w, r, err)
 		return
 	}
-	for _, c := range cs {
-		if c.ID == chi.URLParam(r, "channel") {
-			s.write(w, r, &model.MediaContainer{Size: 1, Identifier: livetv.Provider, Metadata: []model.Metadata{s.liveChannelMetadata(c)}})
-			return
-		}
-	}
-	writeHTTPError(w, 404)
+	s.write(w, r, &model.MediaContainer{Size: 1, Identifier: livetv.Provider, Metadata: []model.Metadata{s.liveChannelMetadata(c)}})
 }
 
 func (s *Server) handleLiveHubs(w http.ResponseWriter, r *http.Request) {
@@ -535,23 +550,16 @@ func (s *Server) handleLiveTune(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	pr := FromContext(r.Context())
-	channel := chi.URLParam(r, "channel")
-	cs, err := s.d.LiveTV.AllowedChannels(r.Context(), pr.User)
+	c, err := s.d.LiveTV.AllowedChannel(r.Context(), pr.User, chi.URLParam(r, "channel"))
+	if errors.Is(err, core.ErrNotFound) {
+		writeHTTPError(w, 404)
+		return
+	}
 	if err != nil {
 		s.writeErr(w, r, err)
 		return
 	}
-	id := ""
-	for _, c := range cs {
-		if c.ID == channel || c.Number == channel {
-			id = c.ID
-			break
-		}
-	}
-	if id == "" {
-		writeHTTPError(w, 404)
-		return
-	}
+	id := c.ID
 	info, err := s.d.LiveTV.TuneWithSession(r.Context(), pr.User, id, s.clientCaps(pr), pr.SessionID)
 	if err != nil {
 		s.log.Warn("live tune failed", "channel", id, "client", pr.ClientID, "product", pr.Product, "err", err)
@@ -663,23 +671,20 @@ func (s *Server) writeLiveDASHError(w http.ResponseWriter, r *http.Request, info
 	})
 }
 func (s *Server) handleLiveLogo(w http.ResponseWriter, r *http.Request) {
-	id := chi.URLParam(r, "channel")
-	cs, err := s.d.LiveTV.AllowedChannels(r.Context(), FromContext(r.Context()).User)
+	c, err := s.d.LiveTV.AllowedChannel(r.Context(), FromContext(r.Context()).User, chi.URLParam(r, "channel"))
+	if errors.Is(err, core.ErrNotFound) {
+		writeHTTPError(w, 404)
+		return
+	}
 	if err != nil {
 		s.writeErr(w, r, err)
 		return
 	}
-	for _, c := range cs {
-		if c.ID == id {
-			setArtworkHeaders(w.Header(), "image/svg+xml")
-			w.Header().Set("Cache-Control", "private, max-age=300")
-			if r.Method != "HEAD" {
-				fmt.Fprintf(w, `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 360"><rect width="640" height="360" rx="24" fill="#182d45"/><text x="40" y="125" fill="#64dfc7" font-size="68" font-family="sans-serif">%s</text><text x="40" y="220" fill="white" font-size="30" font-family="sans-serif">%s</text></svg>`, html.EscapeString(c.Number), html.EscapeString(c.Name))
-			}
-			return
-		}
+	setArtworkHeaders(w.Header(), "image/svg+xml")
+	w.Header().Set("Cache-Control", "private, max-age=300")
+	if r.Method != "HEAD" {
+		fmt.Fprintf(w, `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 360"><rect width="640" height="360" rx="24" fill="#182d45"/><text x="40" y="125" fill="#64dfc7" font-size="68" font-family="sans-serif">%s</text><text x="40" y="220" fill="white" font-size="30" font-family="sans-serif">%s</text></svg>`, html.EscapeString(c.Number), html.EscapeString(c.Name))
 	}
-	writeHTTPError(w, 404)
 }
 
 // Plex Web 4.160's LiveTVSessionModel consumes the active subscription and
