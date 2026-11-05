@@ -24,7 +24,7 @@ import { LiveStageView, NativePreview, momentsForTool, readAgentStream } from ".
 import type { Moment } from "./Stage";
 import type { InstallPreview } from "./types";
 import { t } from "../../i18n";
-import type { StudioProject, StudioProjectSummary, StudioCompileResult } from "./develop/types";
+import type { StudioProject, StudioProjectSummary, StudioCompileResult } from "./studio-types";
 
 /**
  * Studio on the real agent: the approved home, a live stage that draws each
