@@ -38,7 +38,7 @@ export function isBuiltin(ix: { kind?: string }) {
   return ix.kind === "cardigann";
 }
 
-export function isInfoSetting(s: SiteSetting) {
+function isInfoSetting(s: SiteSetting) {
   return s.type.startsWith("info");
 }
 

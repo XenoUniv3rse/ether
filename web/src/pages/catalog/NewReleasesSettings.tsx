@@ -121,7 +121,7 @@ export function NewReleasesSettings({
  * Daily indexer budget for new-release checks (`availability.effort` /
  * `feedRequests`), edited on Sources › Indexers.
  */
-export function NewReleaseBudget({
+function NewReleaseBudget({
   availability,
   onChange,
 }: {

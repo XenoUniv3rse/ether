@@ -15,12 +15,12 @@ import type { QualityAnswer, QualityLayer } from "../../lib/types";
 
 type Where = "home" | "away";
 
-export function heightName(h: number | undefined): string {
+function heightName(h: number | undefined): string {
   if (!h) return t("Any resolution");
   return h === 2160 ? t("4K") : `${h}p`;
 }
 
-export function rateName(kbps: number): string {
+function rateName(kbps: number): string {
   return t("{rate} Mbps", { rate: formatNumber(kbps / 1000, 1) });
 }
 
@@ -181,10 +181,9 @@ function Answer({ answer, viewer }: { answer: QualityAnswer; viewer: string }) {
 /**
  * "Who gets what": pick a viewer, an app and At home or Away, and see the
  * quality ceiling that combination gets and which setting decided it. The
- * answer comes from the server's playback code. Pass `refreshKey` (such as
- * the saved quality settings) to check again after a save.
+ * answer comes from the server's playback code.
  */
-export function WhoGetsWhat({ refreshKey }: { refreshKey?: unknown }) {
+export function WhoGetsWhat() {
   const { viewers, error: viewersError } = useViewers();
   const clients = useAsync(() => api.qualityClients(), []);
   const [pickedViewer, setViewer] = useState(0);
@@ -208,7 +207,7 @@ export function WhoGetsWhat({ refreshKey }: { refreshKey?: unknown }) {
             signal,
           )
         : Promise.resolve(null),
-    [viewerId, clientId, remote, title?.key, refreshKey],
+    [viewerId, clientId, remote, title?.key],
   );
   const viewer = viewers?.find((v) => v.id === viewerId);
 

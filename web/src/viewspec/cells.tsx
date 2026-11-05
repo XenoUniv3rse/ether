@@ -74,7 +74,7 @@ function CellLink({ href, children }: { href: string; children: ReactNode }) {
   );
 }
 
-export function LeafCellView({
+function LeafCellView({
   cell,
   scope,
   root,

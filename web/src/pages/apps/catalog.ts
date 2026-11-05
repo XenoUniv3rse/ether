@@ -5,7 +5,7 @@ import { t } from "../../i18n";
  * Brand marks live in `integration-brands`; this file does not draw logos.
  */
 /** Setup chooser and the Apps page use this order, not alphabetical registration. */
-export const APP_ORDER = [
+const APP_ORDER = [
   "plex",
   "jellyfin",
   "emby",
@@ -16,7 +16,6 @@ export const APP_ORDER = [
   "m3u",
 ] as const;
 
-export const SETUP_APP_IDS = APP_ORDER;
 
 export function appRank(id: string): number {
   const rank = APP_ORDER.indexOf(id as (typeof APP_ORDER)[number]);

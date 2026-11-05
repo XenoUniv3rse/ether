@@ -11,7 +11,7 @@ import { formatNanos } from "../../lib/format";
 import { useAsync } from "../../lib/hooks";
 import { useResolver } from "../releases/resolverDraft";
 
-export const SOURCE_PREFERENCE = localized(() => [
+const SOURCE_PREFERENCE = localized(() => [
   { value: "auto", label: t("Start fastest") },
   { value: "usenet", label: t("Usenet first") },
   { value: "debrid", label: t("Debrid first") },
@@ -20,7 +20,7 @@ export const SOURCE_PREFERENCE = localized(() => [
 ]);
 
 /** The select value for resolver.sourcePreference + sourceAlwaysFirst. */
-export function sourceOrderValue(r?: {
+function sourceOrderValue(r?: {
   sourcePreference?: string;
   sourceAlwaysFirst?: boolean;
 }): string {
@@ -29,7 +29,7 @@ export function sourceOrderValue(r?: {
 }
 
 /** The resolver fields a select value stands for. */
-export function sourceOrderFields(value: string): {
+function sourceOrderFields(value: string): {
   sourcePreference: string;
   sourceAlwaysFirst: boolean;
 } {
@@ -41,7 +41,7 @@ export function sourceOrderFields(value: string): {
 }
 
 /** Measured startup per source, as the resolver sees it. */
-export function SourceStartupNote() {
+function SourceStartupNote() {
   const startup = useAsync(() => api.sourceStartup().catch(() => []), []);
   const rows = startup.data ?? [];
   if (rows.length === 0) return <>{t("No plays measured yet.")}</>;

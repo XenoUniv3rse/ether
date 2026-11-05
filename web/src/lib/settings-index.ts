@@ -10,7 +10,7 @@ import type { FieldDef, FieldGroup } from "../pages/settings/SchemaForm";
 import * as S from "../pages/settings/schema";
 import { UpcomingEpisodeSettings } from "../pages/catalog/HomeReleaseSettings";
 
-export interface SettingHit {
+interface SettingHit {
   /** Visible row title; the jump looks for this text on the page. */
   title: string;
   /** Section or page the setting sits in, shown as the search subtitle. */

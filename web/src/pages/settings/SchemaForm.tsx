@@ -117,7 +117,7 @@ export type LoadOptions = (field: string) => Promise<{ value: string; label: str
 // plugin settings arrive in this shape; fieldGroupsFromServed localises them
 // into the FieldDef the renderers below take.
 
-export type ServedFieldKind =
+type ServedFieldKind =
   | "group"
   | "text"
   | "secret"
@@ -139,7 +139,7 @@ export type ServedFieldKind =
   | "url"
   | "title";
 
-export interface ServedField {
+interface ServedField {
   key: string;
   label: ExtendText;
   help?: ExtendText;
@@ -157,7 +157,7 @@ export interface ServedField {
   fields?: ServedField[];
 }
 
-export interface ServedGroup {
+interface ServedGroup {
   id?: string;
   title?: ExtendText;
   description?: ExtendText;
@@ -179,7 +179,7 @@ function servedOptions(f: ServedField): { value: string; label: string }[] {
   return (f.options ?? []).map((o) => ({ value: o.value, label: textOf(o.label) }));
 }
 
-export function fieldDefFromServed(f: ServedField): FieldDef {
+function fieldDefFromServed(f: ServedField): FieldDef {
   const label = textOf(f.label);
   const help = f.help ? textOf(f.help) : undefined;
   const base = { key: f.key, label, help };
@@ -306,7 +306,7 @@ function pointerKey(seg: string): string {
  * Looks up a field error by full dotted path (`server.port`), relative dotted
  * path (`port`, `rtxVideo.mode`), or JSON pointer (`/port`, `/rtxVideo/mode`).
  */
-export function errorForPath(
+function errorForPath(
   errors: Record<string, string> | undefined,
   path: string,
 ): string | undefined {
@@ -335,36 +335,6 @@ export function hasFieldError(
     return f.fields.some((child) => hasFieldError(child, errors, path));
   }
   return false;
-}
-
-export function SchemaForm({
-  schema,
-  value,
-  onChange,
-  errors = {},
-  prefix = "settings",
-  loadOptions,
-}: {
-  schema: ServedSchema;
-  value: Obj;
-  onChange: (v: Obj) => void;
-  errors?: Record<string, string>;
-  prefix?: string;
-  loadOptions?: LoadOptions;
-}) {
-  const { locale } = useLocale();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  const groups = useMemo(() => fieldGroupsFromServed(schema), [schema, locale]);
-  return (
-    <SchemaGroups
-      groups={groups}
-      value={value}
-      onChange={onChange}
-      errors={errors}
-      prefix={prefix}
-      loadOptions={loadOptions}
-    />
-  );
 }
 
 const UNIT_BYTES = { GiB: 1024 ** 3, MiB: 1024 ** 2 } as const;
@@ -1208,7 +1178,7 @@ function advancedFieldMeta(key: string): { label: string; help?: string } | unde
 }
 
 /** A field definition guessed from a value, for options the UI has no schema for. */
-export function inferField(key: string, value: unknown): FieldDef {
+function inferField(key: string, value: unknown): FieldDef {
   const meta = advancedFieldMeta(key);
   const label = meta?.label ?? humanizeKey(key);
   if (typeof value === "boolean") return { key, label, kind: "bool", help: meta?.help };

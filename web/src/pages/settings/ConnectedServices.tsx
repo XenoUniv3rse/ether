@@ -270,7 +270,7 @@ function textField(section: Obj, key: string, fallback: string): string {
 }
 
 /** A saved language model can translate and answer search. */
-export function languageModelReady(section: Obj | undefined): boolean {
+function languageModelReady(section: Obj | undefined): boolean {
   if (!section || section.enabled !== true) return false;
   const model = textField(section, "model", "").trim();
   if (!model) return false;
@@ -280,7 +280,7 @@ export function languageModelReady(section: Obj | undefined): boolean {
 }
 
 /** Speech-to-text is a separate endpoint from the chat model. */
-export function speechToTextReady(section: Obj | undefined): boolean {
+function speechToTextReady(section: Obj | undefined): boolean {
   if (!section) return false;
   return (
     textField(section, "speechBaseUrl", "").trim() !== "" &&
