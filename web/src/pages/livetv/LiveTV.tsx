@@ -574,7 +574,7 @@ export default function LiveTV() {
   ) : null;
 
   const panelHead = (
-    <PanelHead className="@container pt-3! pb-0! border-b!">
+    <PanelHead className="@container flex h-[104px]! flex-col items-stretch! justify-between space-y-0! pt-3! pb-0! border-b! [&>div:last-child]:mb-0">
       <div className="flex items-center gap-1.5">
         <div className="relative min-w-0 flex-1">
           <Search
