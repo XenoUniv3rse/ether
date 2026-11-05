@@ -111,6 +111,14 @@ func (s *Server) handleTimeline(w http.ResponseWriter, r *http.Request) {
 	if saved, ok := s.progressiveStops.get(user.ID, pr.ClientID, pr.SessionID, key, s.now()); ok {
 		offset, duration = saved.offset, saved.duration
 	}
+	// Some clients carry the previous queue item's playhead into the first
+	// timeline for the next item. A position past the item's end is not
+	// evidence of watching it: keep the last real position for this item and
+	// handle the report (session, stop, encoders) as usual.
+	if impossiblePlayhead(offset, duration) {
+		s.log.Debug("ignoring impossible playhead", "key", key, "position", offset, "duration", duration)
+		offset = s.lastKnownOffset(ctx, user.ID, tid, key)
+	}
 	if !s.reportBrokerTimeline(ctx, pr, key, offset, duration, state, sanitizeSessionID(q.Get("session"))) {
 		s.log.Warn("timeline report", "key", key, "state", state)
 	}
@@ -199,6 +207,28 @@ func (s *Server) handleTimeline(w http.ResponseWriter, r *http.Request) {
 	}
 	s.observePlaybackReported(pr)
 	s.write(w, r, mc)
+}
+
+// impossiblePlayhead reports a position more than two seconds past the
+// reported duration, which no real playback of the item can produce.
+func impossiblePlayhead(offset, duration time.Duration) bool {
+	return duration > 0 && offset-duration > 2*time.Second
+}
+
+// lastKnownOffset is the item's last real position: this session's report,
+// else the viewer's saved state, else the start.
+func (s *Server) lastKnownOffset(ctx context.Context, userID int64, tid string, key core.RatingKey) time.Duration {
+	for _, activity := range s.sessions.list() {
+		if activity.id == tid && activity.key == key {
+			return activity.offset
+		}
+	}
+	if s.d.State != nil {
+		if previous, err := s.d.State.Get(ctx, userID, key); err == nil && previous.ViewOffset <= previous.Duration {
+			return previous.ViewOffset
+		}
+	}
+	return 0
 }
 
 // handleProgress is the legacy /:/progress?key=&time=&state=.
