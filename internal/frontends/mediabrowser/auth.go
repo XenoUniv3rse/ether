@@ -19,7 +19,6 @@ import (
 	"github.com/braedonsaunders/ether/internal/frontend/kit/authhdr"
 	"github.com/braedonsaunders/ether/internal/frontend/kit/ids"
 	"github.com/braedonsaunders/ether/internal/frontend/kit/route"
-	"github.com/braedonsaunders/ether/internal/frontend/kit/support"
 )
 
 // errViewerScope means the request named a viewer other than the grant holder.
@@ -76,7 +75,14 @@ func device(r *http.Request) frontend.Device {
 	return frontend.Device{ID: get("DeviceId", "X-Emby-Device-Id"), Client: client, Product: client, Version: get("Version", "X-Emby-Client-Version"), DeviceName: get("Device", "X-Emby-Device-Name")}
 
 }
-func (i *instance) viewer(r *http.Request) (*frontend.Viewer, string, error) {
+
+type principalKey struct{}
+type principal struct {
+	viewer *frontend.Viewer
+	token  string
+}
+
+func (i *instance) authenticate(r *http.Request) (*frontend.Viewer, string, error) {
 	token := authhdr.MediaBrowserToken(r)
 	if token == "" {
 		return nil, "", errors.New("missing credential")
@@ -102,31 +108,31 @@ func (i *instance) viewer(r *http.Request) (*frontend.Viewer, string, error) {
 			v = boundViewer
 		}
 	}
-	if err == nil && v != nil {
-		scoped := r.PathValue("userId")
-		if scoped == "" {
-			values := route.Query(r.URL.Query(), "userId")
-			if len(values) > 1 {
-				return nil, "", errors.New("ambiguous user")
-			}
-			if len(values) == 1 {
-				scoped = values[0]
-			}
-		}
-		if scoped != "" {
-			id, e := ids.ParseGUID(ids.User, scoped)
-			if e != nil || id != v.ID {
-				return nil, "", errViewerScope
-			}
-		}
-	}
-	if err == nil && v != nil && i.host.ClientSeen != nil {
-		i.host.ClientSeen(device(r).ID)
-	}
-	if _, ok := i.host.Identity.(frontend.GrantDeviceIdentity); ok && err == nil && v != nil {
-		support.Seen(r, i.host.Support, string(i.protocol), v, device(r))
-	}
 	return v, token, err
+}
+func (i *instance) viewer(r *http.Request) (*frontend.Viewer, string, error) {
+	p, ok := r.Context().Value(principalKey{}).(principal)
+	if !ok || p.viewer == nil {
+		return nil, "", errors.New("missing credential")
+	}
+	v, token := p.viewer, p.token
+	scoped := r.PathValue("userId")
+	if scoped == "" {
+		values := route.Query(r.URL.Query(), "userId")
+		if len(values) > 1 {
+			return nil, "", errors.New("ambiguous user")
+		}
+		if len(values) == 1 {
+			scoped = values[0]
+		}
+	}
+	if scoped != "" {
+		id, e := ids.ParseGUID(ids.User, scoped)
+		if e != nil || id != v.ID {
+			return nil, "", errViewerScope
+		}
+	}
+	return v, token, nil
 }
 func (i *instance) syncPlayAccess() string {
 	if i.protocol == "jellyfin" && i.host.WatchParty != nil {
