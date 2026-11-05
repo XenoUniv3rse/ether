@@ -38,9 +38,6 @@ const DefaultCrowdTTL = 72 * time.Hour
 // maxCrowdPages bounds the pages fetched per title (20 results each).
 const maxCrowdPages = 2
 
-// WithCrowdTTL overrides how long co-engagement lists stay fresh.
-func WithCrowdTTL(d time.Duration) Option { return func(c *Catalog) { c.crowdTTL = d } }
-
 // crowdKey maps seasons and episodes onto their show; films and shows map
 // to themselves. Other kinds have no list.
 func crowdKey(key core.RatingKey) (core.RatingKey, bool) {

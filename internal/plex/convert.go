@@ -1273,13 +1273,6 @@ type watchedEpisodesOfReader interface {
 	WatchedEpisodesOf(ctx context.Context, userID int64, shows []int64) ([]core.RatingKey, error)
 }
 
-// applyListLeafCounts populates viewedLeafCount (and viewCount when all
-// episodes are watched) on shows and seasons in list/search/hub responses,
-// touching only shows that have at least one watched episode for the user.
-func (s *Server) applyListLeafCounts(ctx context.Context, pr *Request, items []model.Metadata, ts []core.Title) {
-	s.applyListLeafCountsOpts(ctx, pr, items, ts, false)
-}
-
 func (s *Server) applyListLeafCountsOpts(ctx context.Context, pr *Request, items []model.Metadata, ts []core.Title, storedOnly bool) {
 	if s.d.State == nil || pr.User == nil || len(items) == 0 {
 		return

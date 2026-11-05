@@ -1023,11 +1023,6 @@ func searchCacheKey(req core.SearchRequest) string {
 	return fmt.Sprintf("%s|%v|%s|%d|%d|%d", req.Type, req.IDs, strings.ToLower(req.Title), req.Year, req.Season, req.Episode)
 }
 
-func (s *Service) search(ctx context.Context, req core.SearchRequest) ([]core.Release, error) {
-	results, _, err := s.searchCached(ctx, req, false)
-	return results, err
-}
-
 type rescueSearcher interface {
 	SearchRescue(ctx context.Context, req core.SearchRequest) ([]core.Release, error)
 }
@@ -1199,13 +1194,6 @@ func (s *Service) storeSearchCache(req core.SearchRequest, results []core.Releas
 	}
 	s.searchCache[key] = searchCacheEntry{results: append([]core.Release(nil), results...), expires: now.Add(ttl)}
 	s.mu.Unlock()
-}
-
-// scoreCandidates filters and ranks search results for a request and
-// profile. trace may be nil (the variants path); candidate.trace is then
-// -1 and no trace rows are written.
-func (s *Service) scoreCandidates(ctx context.Context, req core.ResolveRequest, sreq core.SearchRequest, profile core.QualityProfile, results []core.Release, trace *Trace) ([]candidate, bool, error) {
-	return s.rankCandidates(ctx, req, sreq, profile, results, trace, "")
 }
 
 // rankCandidates is scoreCandidates with the owner's pinned release id

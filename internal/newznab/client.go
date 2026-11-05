@@ -227,9 +227,6 @@ func New(cfg config.Indexer, db *sql.DB, opts Options) *Client {
 	return c
 }
 
-// NewClient is an alias for New.
-func NewClient(cfg config.Indexer, db *sql.DB, opts Options) *Client { return New(cfg, db, opts) }
-
 // Config returns the indexer's current config.
 func (c *Client) Config() config.Indexer {
 	c.cfgMu.RLock()

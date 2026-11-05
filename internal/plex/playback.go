@@ -958,13 +958,6 @@ func directPlayMedia(m model.Media, streams []model.Stream, selectedOnly bool, s
 	return m
 }
 
-func embeddedTextSubtitle(st model.Stream) bool {
-	if st.StreamType != 3 || (st.External != nil && *st.External) {
-		return false
-	}
-	return textSidecarCodec(st.Codec)
-}
-
 func textSidecarCodec(codec string) bool {
 	switch strings.ToLower(codec) {
 	case "srt", "subrip", "ass", "ssa", "vtt", "webvtt", "mov_text", "text", "microdvd", "subviewer", "sami", "ttml", "stl":

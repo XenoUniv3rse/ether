@@ -49,6 +49,13 @@ UPDATE state_watch SET rating_at=updated_at WHERE rating_at=0 AND user_rating<>0
 	// intent was admitted. A later generation must not deliver it.
 	store.Register("state_plexwatch", 3, `
 ALTER TABLE state_sync_journal ADD COLUMN consent_generation INTEGER NOT NULL DEFAULT 0;`)
+	// Repair clocks left by pre-clock writers once, rather than keeping a
+	// legacy-reader fallback in every remote import.
+	store.Register("state_plexwatch", 5, `
+ UPDATE state_watch SET
+ rating_at=CASE WHEN updated_at>watch_at AND updated_at>rating_at THEN updated_at ELSE rating_at END,
+ watch_at=CASE WHEN last_viewed_at>watch_at THEN last_viewed_at ELSE watch_at END;
+ `)
 	// never_sent records whether a journal row has never been handed to a
 	// network POST. Rows that were never attempted stay normal queued work;
 	// previously attempted or claimed rows lack durable never-sent proof.

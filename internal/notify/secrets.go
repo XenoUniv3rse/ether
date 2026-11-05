@@ -94,6 +94,15 @@ func (s *Service) encodeChannel(c Channel) (string, error) {
 // shape is converted and reported as legacy so MigrateSecrets rewrites it
 // in the new shape; the flat shape is never written again.
 func (s *Service) decodeChannel(raw string) (Channel, bool, error) {
+	var c Channel
+	if err := json.Unmarshal([]byte(raw), &c); err != nil {
+		return Channel{}, false, err
+	}
+	return s.openChannel(c)
+}
+
+// decodeMigrationChannel is used only by the startup conversion, never delivery.
+func (s *Service) decodeMigrationChannel(raw string) (Channel, bool, error) {
 	var probe map[string]json.RawMessage
 	if err := json.Unmarshal([]byte(raw), &probe); err != nil {
 		return Channel{}, false, err
@@ -102,11 +111,7 @@ func (s *Service) decodeChannel(raw string) (Channel, bool, error) {
 		c, err := s.decodeLegacyChannel(raw)
 		return c, true, err
 	}
-	var c Channel
-	if err := json.Unmarshal([]byte(raw), &c); err != nil {
-		return Channel{}, false, err
-	}
-	return s.openChannel(c)
+	return s.decodeChannel(raw)
 }
 
 var legacyChannelKeys = []string{"smtpMode", "subscription", "endpoint", "token", "target", "username", "password", "from", "to"}
@@ -283,7 +288,7 @@ func (s *Service) MigrateSecrets(ctx context.Context) (int, error) {
 	n, failed := 0, 0
 	var firstErr error
 	for _, r := range all {
-		c, legacy, err := s.decodeChannel(r.raw)
+		c, legacy, err := s.decodeMigrationChannel(r.raw)
 		if err != nil {
 			failed++
 			if firstErr == nil {

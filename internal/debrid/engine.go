@@ -137,13 +137,6 @@ var (
 	_ core.HealthChecker = (*Engine)(nil)
 )
 
-// NewStreamingTransport is an HTTP transport tuned for media streaming:
-// keep-alive, HTTP/2 when offered, many idle connections per host and
-// connect/TLS timeouts that tolerate a busy CDN edge.
-func NewStreamingTransport() *http.Transport {
-	return newStreamingTransport(nil)
-}
-
 // Busy debrid CDN edges can take several seconds to accept a connection and
 // finish the TLS handshake (5.08s was observed). Failing at 5s threw away
 // a handshake about to complete and started another, which is slower again

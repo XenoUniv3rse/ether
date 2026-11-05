@@ -99,11 +99,10 @@ func New(opts Options) *Service {
 
 // entry is one anime database entry (a season, cour, film or special).
 type entry struct {
-	ids     map[string]int64
-	kind    string // TV, ONA, OVA, MOVIE, SPECIAL
-	season  int    // TMDB season; -1 when the entry names none
-	offset  int    // TMDB episodes before the entry's first episode
-	movieOf []int64
+	ids    map[string]int64
+	kind   string // TV, ONA, OVA, MOVIE, SPECIAL
+	season int    // TMDB season; -1 when the entry names none
+	offset int    // TMDB episodes before the entry's first episode
 }
 
 type index struct {

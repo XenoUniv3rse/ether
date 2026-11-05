@@ -272,8 +272,6 @@ func (s *sqlStore) lastSeen(ctx context.Context) (map[int64]time.Time, error) {
 type rowStat struct {
 	kind, hubID, title string
 	shows              float64 // row-days shown
-	plays              float64 // plays attributed
-	reward             float64 // sum of play rewards (completion-weighted)
 }
 
 // kindShows counts days each kind was shown per (user, kind) since
