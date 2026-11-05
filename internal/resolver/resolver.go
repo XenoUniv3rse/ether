@@ -779,8 +779,14 @@ func (s *Service) resolve(ctx context.Context, req core.ResolveRequest, profile 
 		trace.Err = err.Error()
 		return nil, err
 	}
-	rescueTried := false
-	if len(cands) == 0 && searchErr == nil && ctx.Err() == nil {
+	// Speculative work (warm-ups, detail discovery) never runs a rescue: it
+	// is Play's second pass. What speculative work did not find proves
+	// nothing about the title, so it is not remembered unavailable either.
+	speculative := core.SpeculativeIndexerWork(ctx)
+	rescueTried, rescueSkipped := false, false
+	if len(cands) == 0 && searchErr == nil && ctx.Err() == nil && speculative {
+		rescueSkipped = true
+	} else if len(cands) == 0 && searchErr == nil && ctx.Err() == nil {
 		rescueTried = true
 		var rejected bool
 		cands, results, rejected, err = s.rescueCandidates(ctx, req, sreq, profile, results, &trace, pinID)
@@ -806,7 +812,7 @@ func (s *Service) resolve(ctx context.Context, req core.ResolveRequest, profile 
 		}
 		// Client/profile restrictions and temporary source skips do not prove
 		// that the title is unavailable for everyone.
-		if !clientRejected && len(req.Exclude) == 0 && searchErr == nil && !coverage.Incomplete() {
+		if !clientRejected && !rescueSkipped && len(req.Exclude) == 0 && searchErr == nil && !coverage.Incomplete() {
 			s.setAvailability(ctx, int64(t.Key), false, s.cooloffFor(t))
 		}
 		if isFreshRelease(t, s.now()) {
@@ -914,7 +920,9 @@ func (s *Service) resolve(ctx context.Context, req core.ResolveRequest, profile 
 
 	var rescuePrimary []candidate
 	// Retry discovery once after the initially ranked releases failed health.
-	if !rescueTried && searchErr == nil && ctx.Err() == nil {
+	if !rescueTried && searchErr == nil && ctx.Err() == nil && core.SpeculativeIndexerWork(ctx) {
+		rescueSkipped = true
+	} else if !rescueTried && searchErr == nil && ctx.Err() == nil {
 		rescueCands, _, rejected, rerr := s.rescueCandidates(ctx, req, sreq, profile, results, &trace, pinID)
 		clientRejected = clientRejected || rejected
 		if rerr == nil && len(rescueCands) > 0 {
@@ -973,7 +981,7 @@ func (s *Service) resolve(ctx context.Context, req core.ResolveRequest, profile 
 		return nil, uerr
 	}
 	// A capped warm-up did not check every candidate, so it proves nothing.
-	if !clientRejected && len(req.Exclude) == 0 && len(cands) <= maxHealthAttempts && !(core.IsSpeculative(ctx) && len(cands) > speculativeHealthAttempts) && !coverage.Incomplete() {
+	if !clientRejected && !rescueSkipped && len(req.Exclude) == 0 && len(cands) <= maxHealthAttempts && !(core.IsSpeculative(ctx) && len(cands) > speculativeHealthAttempts) && !coverage.Incomplete() {
 		s.setAvailability(ctx, int64(t.Key), false, min(s.cooloff(), failedHealthTTL))
 	}
 	trace.Err = "no healthy candidates"

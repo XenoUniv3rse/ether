@@ -73,8 +73,8 @@ func TestUnattendedWorkKeepsToItsShare(t *testing.T) {
 
 // A rescue keeps the class of the search that asked for it: speculative
 // work (warm-ups, detail discovery, availability) cannot spend past its
-// share by triggering a rescue, while Play's rescue is tagged rescue and is
-// never refused by that share.
+// share by triggering a rescue (it sends none at all), while Play's rescue
+// is tagged rescue and is never refused by that share.
 func TestRescueInheritsSpeculativeClass(t *testing.T) {
 	var hits atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -98,6 +98,7 @@ func TestRescueInheritsSpeculativeClass(t *testing.T) {
 	for _, ctx := range []context.Context{
 		warm,
 		core.WithIndexerPurpose(context.Background(), core.IndexerPurposeDetail),
+		core.WithIndexerPurpose(context.Background(), core.IndexerPurposeAvailability),
 	} {
 		if _, err := m.SearchRescue(ctx, rescue); err != nil && !errors.Is(err, core.ErrBudgetExhausted) {
 			t.Fatal(err)

@@ -894,6 +894,10 @@ func (c *Client) doSearch(ctx context.Context, params url.Values, id config.Iden
 }
 
 // Search implements core.Indexer.
+// primaryMissKey suffixes the cache key of a primary query that found
+// nothing for speculative work, which never asks the fallbacks.
+const primaryMissKey = "|primary-miss"
+
 func (c *Client) Search(ctx context.Context, req core.SearchRequest) ([]core.Release, error) {
 	if cfg := c.Config(); !cfg.Enabled {
 		return nil, fmt.Errorf("indexer %q is disabled", c.Name())
@@ -902,6 +906,13 @@ func (c *Client) Search(ctx context.Context, req core.SearchRequest) ([]core.Rel
 	ctx = withCacheAge(ctx, req.Released)
 	if cached, ok := c.cacheGet(ctx, key); ok {
 		return cached, nil
+	}
+	speculative := core.SpeculativeIndexerWork(ctx) || core.IsBackgroundCheck(ctx)
+	if speculative {
+		// A primary query that already missed for speculative work.
+		if cached, ok := c.cacheGet(ctx, key+primaryMissKey); ok {
+			return cached, nil
+		}
 	}
 	// Exhausted limits prohibit new requests, not reuse of already fetched
 	// results and NZBs. The manager must reach this cache before this check.
@@ -942,12 +953,16 @@ func (c *Client) Search(ctx context.Context, req core.SearchRequest) ([]core.Rel
 		c.cachePut(ctx, key, results)
 		return results, nil
 	}
-	if core.IsBackgroundCheck(ctx) {
-		// A background check (new-release evidence) asks the targeted
-		// primary query only. The fallback fan-out (other ids, keyword
-		// and alias queries) costs several API hits per indexer and is
-		// kept for searches a viewer is waiting on. The miss is not
-		// cached: a foreground search must still run the fallbacks.
+	if speculative {
+		// Speculative work (warm-ups, detail discovery, watchlist, cache
+		// fill, availability) asks the targeted primary query only. The
+		// fallback queries (other ids, keyword and alias searches, season
+		// packs) cost a request each and are kept for a viewer's Play, whose
+		// rescue also runs them when nothing found here plays. The miss is
+		// remembered for speculative work only: Play still runs fallbacks.
+		if firstErr == nil {
+			c.cachePut(ctx, key+primaryMissKey, nil)
+		}
 		return nil, firstErr
 	}
 	rest := attempts[1:]
@@ -961,10 +976,9 @@ func (c *Client) Search(ctx context.Context, req core.SearchRequest) ([]core.Rel
 	// When the primary attempt misses on an uncapped indexer, fan out the
 	// fallback queries (alternate IDs, keyword search, OriginalTitle/aliases,
 	// season packs) in bounded parallel bursts so obscure titles resolve in
-	// a single round-trip instead of N serial timeouts. A search nobody is
-	// waiting on (a warm-up, a watchlist check) tries them one at a time and
-	// stops at the first hit: it spends fewer API hits and has time.
-	if c.Config().DailyLimit == 0 && firstErr == nil && !core.SpeculativeIndexerWork(ctx) {
+	// a single round-trip instead of N serial timeouts. An indexer with a
+	// personal cap tries them one at a time and stops at the first hit.
+	if c.Config().DailyLimit == 0 && firstErr == nil {
 		const burstWidth = 4
 		for base := 0; base < len(rest); base += burstWidth {
 			if err := ctx.Err(); err != nil {
@@ -1042,14 +1056,6 @@ func (c *Client) Search(ctx context.Context, req core.SearchRequest) ([]core.Rel
 				continue
 			}
 			if len(results) > 0 {
-				if core.SpeculativeIndexerWork(ctx) && c.Config().DailyLimit == 0 {
-					// An unattended search stopped at its first fallback hit;
-					// Play would have merged a whole burst. Keep that partial
-					// answer out of the cache Play reads, and tell the resolver
-					// the fleet answer is incomplete so it is not stored there.
-					core.NoteSearchIncomplete(ctx)
-					return results, nil
-				}
 				c.cachePut(ctx, key, results)
 				return results, nil
 			}
@@ -1159,6 +1165,10 @@ func (c *Client) SearchRescue(ctx context.Context, req core.SearchRequest) ([]co
 	if cfg := c.Config(); !cfg.Enabled {
 		return nil, fmt.Errorf("indexer %q is disabled", c.Name())
 	}
+	if core.SpeculativeIndexerWork(ctx) || core.IsBackgroundCheck(ctx) {
+		// Rescue is Play's second pass; speculative work never fans out.
+		return nil, nil
+	}
 	key := cacheKey(c, req) + "|rescue"
 	ctx = withCacheAge(ctx, req.Released)
 	if cached, ok := c.cacheGet(ctx, key); ok {
@@ -1217,8 +1227,8 @@ func (c *Client) SearchRescue(ctx context.Context, req core.SearchRequest) ([]co
 	var merged []core.Release
 	seen := map[string]bool{}
 	var firstErr error
-	// As for Search: unattended rescues go one query at a time.
-	if c.Config().DailyLimit == 0 && !core.SpeculativeIndexerWork(ctx) {
+	// As for Search: a capped indexer's rescue goes one query at a time.
+	if c.Config().DailyLimit == 0 {
 		type slot struct {
 			res []core.Release
 			err error
