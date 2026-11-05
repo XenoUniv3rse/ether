@@ -26,6 +26,7 @@ import (
 
 	"github.com/braedonsaunders/ether/internal/config"
 	"github.com/braedonsaunders/ether/internal/egress"
+	"github.com/braedonsaunders/ether/internal/textclip"
 )
 
 // Message is one chat message.
@@ -604,7 +605,7 @@ func ParseTitlesLinesOnly(content string) []TitleRef {
 
 func truncate(s string, n int) string {
 	if len(s) > n {
-		return s[:n] + "…"
+		return textclip.Bytes(s, n) + "…"
 	}
 	return s
 }

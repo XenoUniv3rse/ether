@@ -12,6 +12,7 @@ import (
 
 	"github.com/braedonsaunders/ether/internal/core"
 	"github.com/braedonsaunders/ether/internal/llm"
+	"github.com/braedonsaunders/ether/internal/textclip"
 )
 
 // Chatter is the LLM the generator drafts specs with; *llm.Client
@@ -405,7 +406,7 @@ func extractObject(s string) string {
 
 func truncate(s string, n int) string {
 	if len(s) > n {
-		return s[:n]
+		return textclip.Bytes(s, n)
 	}
 	return s
 }

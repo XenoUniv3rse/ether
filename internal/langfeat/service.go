@@ -19,6 +19,7 @@ import (
 	"github.com/braedonsaunders/ether/internal/core"
 	"github.com/braedonsaunders/ether/internal/langtag"
 	"github.com/braedonsaunders/ether/internal/subtitles"
+	"github.com/braedonsaunders/ether/internal/textclip"
 )
 
 const (
@@ -436,7 +437,7 @@ func extractJSON(s string) []byte {
 func clip(s string, n int) string {
 	s = strings.TrimSpace(s)
 	if len(s) > n {
-		return s[:n]
+		return textclip.Bytes(s, n)
 	}
 	return s
 }

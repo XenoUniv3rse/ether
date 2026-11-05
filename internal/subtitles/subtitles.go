@@ -41,6 +41,7 @@ import (
 	"github.com/braedonsaunders/ether/internal/flight"
 	"github.com/braedonsaunders/ether/internal/langtag"
 	"github.com/braedonsaunders/ether/internal/retryafter"
+	"github.com/braedonsaunders/ether/internal/textclip"
 )
 
 // URLPrefix prefixes the ExternalURL of sidecar streams from this package.
@@ -1287,7 +1288,7 @@ func (s *Service) OpenFormatFrom(id, format, source string) (io.ReadCloser, stri
 
 func truncate(s string, n int) string {
 	if len(s) > n {
-		return s[:n] + "…"
+		return textclip.Bytes(s, n) + "…"
 	}
 	return s
 }
