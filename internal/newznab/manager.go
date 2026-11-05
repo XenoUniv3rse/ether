@@ -170,8 +170,13 @@ func (m *Manager) SearchRescue(ctx context.Context, req core.SearchRequest) ([]c
 }
 
 // SearchRescueWith is SearchRescue with per-indexer early arrival callbacks.
+// A rescue for Play or the owner is tagged rescue. A rescue asked for by
+// speculative work keeps that work's purpose, and with it the speculative
+// share: a warm-up must not escape its budget by triggering a rescue.
 func (m *Manager) SearchRescueWith(ctx context.Context, req core.SearchRequest, arrived func([]core.Release)) ([]core.Release, error) {
-	ctx = core.WithIndexerPurpose(ctx, core.IndexerPurposeRescue)
+	if !core.SpeculativeIndexerWork(ctx) {
+		ctx = core.WithIndexerPurpose(ctx, core.IndexerPurposeRescue)
+	}
 	clients := m.Clients()
 	type slot struct {
 		results []core.Release

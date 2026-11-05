@@ -1259,6 +1259,8 @@ func (c *Client) SearchRescue(ctx context.Context, req core.SearchRequest) ([]co
 			res, err := c.doSearch(ctx, p, id)
 			if err != nil {
 				if errors.Is(err, core.ErrBudgetExhausted) {
+					// A refused query proves nothing: never cache it as a miss.
+					firstErr = err
 					break
 				}
 				if firstErr == nil {
