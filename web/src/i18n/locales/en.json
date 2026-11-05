@@ -2015,6 +2015,7 @@
   "m_08e321c57534d1": "Installed, but not searched until you add them.",
   "m_08e334452ceff6": "Automatic",
   "m_08e3fb9b7323f3": "Checking which channels have listings…",
+  "m_08e44775898375": "Unfavourite",
   "m_08e44edbf4cb4f": "Custom row pattern",
   "m_08e6b2776c1ca5": {
     "one": "{count} watch",
@@ -2457,6 +2458,7 @@
   },
   "m_0abce084240d5f": "custom",
   "m_0abd37a346cd74": "Start recording",
+  "m_0abe527dca8fa6": "Enable",
   "m_0abe86d2db0457": {
     "one": "{count} hit",
     "other": "{count} hits"
@@ -3040,6 +3042,7 @@
   "m_0d559428c21290": "{name} (owner)",
   "m_0d55d3597eb393": "Uses the default again",
   "m_0d56dcd10edcc2": "Trend",
+  "m_0d5780d08ac6d2": "Move to group",
   "m_0d59414168b910": "Unrestricted",
   "m_0d5a50945dee0b": "Some installed plugins publish a list of other plugins, such as Cinemeta's community catalogue. Pick a list to see what is in it, then review any plugin before installing.",
   "m_0d5b16a55abd92": "New session after",
@@ -3266,6 +3269,7 @@
   "m_0e5e490b1c6457": "Turn it on in Catalog settings",
   "m_0e5efef029f2f6": "Keep the order of the list or your picks",
   "m_0e603cd6024127": "Refreshes catalogues once a day",
+  "m_0e63074a2d3246": "Channels updated",
   "m_0e64f4fd11f8c4": "Connect to your cluster",
   "m_0e65501bca012f": "Once per title per viewer",
   "m_0e655e777b7e81": "A saved viewing position keeps this release available.",
@@ -3664,6 +3668,7 @@
   "m_1010905e5780d3": "Allow and update",
   "m_10119c55470439": "Couldn't load the guide",
   "m_101307138aa18d": "As declared",
+  "m_1013583a7c0e28": "Clear selection",
   "m_1013ed9ad67661": "Add TMDB discover parameters, e.g. {first} or {second}.",
   "m_10168c657d795d": "Night mode compression",
   "m_10173d0ea81b0c": "Airs today",
@@ -3759,6 +3764,7 @@
   "m_107c55bf7f5fde": "Tints generated artwork. Automatic matches the lead poster.",
   "m_10820e26555349": "Source {number}",
   "m_1082d1a6a743cc": "Simkl account connected.",
+  "m_1083e252cdd4f4": "Select all matches",
   "m_1084ceab8e0923": {
     "one": "{count} grab",
     "other": "{count} grabs"
@@ -3768,6 +3774,7 @@
   "m_1086584d9aca6a": "General",
   "m_108685d2f9e078": "All healthy",
   "m_1088e8316eb2f9": "Indexer recovered",
+  "m_1089c04c64834f": "Channel actions",
   "m_108a5844831529": "Open this console from outside your network",
   "m_108b41637f364f": "Category",
   "m_108bd8cfca2c2c": "Audio format",
@@ -4516,6 +4523,7 @@
   "m_13b490420daada": "When no rule matches, the At home or Away default applies. Device capabilities still apply before playback.",
   "m_13b54a5acef468": "{label} search",
   "m_13b74ddb61ff98": "{channel}: {title}, {start} to {end}",
+  "m_13b801904d8adf": "Disable",
   "m_13bb3428a18d16": {
     "one": "{count} definition installed, {used} used by your indexers above.",
     "other": "{count} definitions installed, {used} used by your indexers above."
@@ -5312,6 +5320,7 @@
   "m_173f541d90d544": "Health check samples",
   "m_173fc198ad8055": "Leave all off to play on every device.",
   "m_1740501133cb56": "Cached results from {when}",
+  "m_17409f9c55f614": "{count} selected",
   "m_17440f2f9cc7d8": "Loading editor",
   "m_1744a26058ac14": {
     "one": "{count} listing in the next day",
@@ -5741,6 +5750,7 @@
   "m_192149882f3811": "Drag to resize, double-click to reset",
   "m_1921d872bf7248": "{label} list",
   "m_1922c581498469": "Started",
+  "m_1923a1a39346b0": "Select {channel}",
   "m_1924fb5aeba7f0": "Search apps…",
   "m_19258b899ae5df": "Anchored slots",
   "m_19258e5926421f": "Show title",
@@ -6631,6 +6641,7 @@
     "one": "Minute",
     "other": "Minutes"
   },
+  "m_1d2244e7ae66fa": "Couldn't update the channels",
   "m_1d240c1034bd02": "Next steps",
   "m_1d2516f81747b0": "Stream torrents Offcloud already has.",
   "m_1d2578b2eb536a": "Line {line}:{col}",

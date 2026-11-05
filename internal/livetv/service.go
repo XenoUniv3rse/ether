@@ -1311,6 +1311,9 @@ func (s *Service) ImportSource(ctx context.Context, src Source) (Source, error) 
 			c.GuideID = previous.GuideID
 			c.GuideSourceID = previous.GuideSourceID
 			c.Transcode = previous.Transcode
+			if previous.CustomGroup {
+				c.Group, c.CustomGroup = previous.Group, true
+			}
 			if fetched.AddonInputs {
 				c.StreamSources = mergeAddonStreams(c.StreamSources, previous.StreamSources)
 			} else {

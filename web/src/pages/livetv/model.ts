@@ -63,6 +63,7 @@ export type Channel = {
   /** Ordered stream sources: the first enabled one plays, the rest are backups. */
   streamSources?: StreamSource[];
   group?: string;
+  customGroup?: boolean;
   /** The provider's channel number; differs from `number` when the owner renumbered it. */
   providerNumber?: string;
   epoch: string;
@@ -308,6 +309,10 @@ export const tv = {
       `/livetv/guide?from=${enc(from.toISOString())}&until=${enc(until.toISOString())}`,
       { signal },
     ),
+  updateChannels: (
+    ids: string[],
+    patch: { enabled?: boolean; favorite?: boolean; group?: string },
+  ) => apiFetch<{ updated: number }>("/livetv/channels/bulk", json("PATCH", { ids, ...patch })),
   saveChannel: (c: Channel) =>
     apiFetch<Channel>(
       `/livetv/channels${c.id ? `/${enc(c.id)}` : ""}`,

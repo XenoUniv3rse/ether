@@ -2012,6 +2012,7 @@
   "m_08e321c57534d1": "Installiert, werden aber erst durchsucht, wenn du sie hinzufügst.",
   "m_08e334452ceff6": "Automatisch",
   "m_08e3fb9b7323f3": "Es wird geprüft, welche Kanäle Programmeinträge haben…",
+  "m_08e44775898375": "Aus Favoriten entfernen",
   "m_08e44edbf4cb4f": "Eigenes Reihenmuster",
   "m_08e6b2776c1ca5": {
     "one": "{count} Wiedergabe",
@@ -2451,6 +2452,7 @@
   "m_0abc686f94c34e": "{count} durch deine Regeln ausgeschlossen",
   "m_0abce084240d5f": "benutzerdefiniert",
   "m_0abd37a346cd74": "Aufnahme starten",
+  "m_0abe527dca8fa6": "Aktivieren",
   "m_0abe86d2db0457": {
     "one": "{count} Zugriff",
     "other": "{count} Zugriffe"
@@ -3031,6 +3033,7 @@
   "m_0d559428c21290": "{name} (Besitzer)",
   "m_0d55d3597eb393": "Verwendet wieder den Standard",
   "m_0d56dcd10edcc2": "Verlauf",
+  "m_0d5780d08ac6d2": "In Gruppe verschieben",
   "m_0d59414168b910": "Unbeschränkt",
   "m_0d5a50945dee0b": "Einige installierte Plugins veröffentlichen eine Liste weiterer Plugins, etwa den Community-Katalog von Cinemeta. Wähle eine Liste, um zu sehen, was darin ist, und prüfe jedes Plugin vor der Installation.",
   "m_0d5b16a55abd92": "Neue Sitzung nach",
@@ -3257,6 +3260,7 @@
   "m_0e5e490b1c6457": "In den Katalogeinstellungen aktivieren",
   "m_0e5efef029f2f6": "Reihenfolge der Liste oder deiner Auswahl beibehalten",
   "m_0e603cd6024127": "Aktualisiert Kataloge einmal täglich",
+  "m_0e63074a2d3246": "Kanäle aktualisiert",
   "m_0e64f4fd11f8c4": "Mit deinem Cluster verbinden",
   "m_0e65501bca012f": "Einmal pro Titel je Zuschauer",
   "m_0e655e777b7e81": "Eine gespeicherte Wiedergabeposition hält diese Version verfügbar.",
@@ -3655,6 +3659,7 @@
   "m_1010905e5780d3": "Erlauben und aktualisieren",
   "m_10119c55470439": "Das Programm konnte nicht geladen werden",
   "m_101307138aa18d": "Wie angegeben",
+  "m_1013583a7c0e28": "Auswahl aufheben",
   "m_1013ed9ad67661": "Füge TMDB-Discover-Parameter hinzu, z. B. {first} oder {second}.",
   "m_10168c657d795d": "Nachtmodus-Kompression",
   "m_10173d0ea81b0c": "Läuft heute",
@@ -3750,6 +3755,7 @@
   "m_107c55bf7f5fde": "Färbt generiertes Artwork ein. „Automatisch“ passt sich dem ersten Poster an.",
   "m_10820e26555349": "Quelle {number}",
   "m_1082d1a6a743cc": "Simkl-Konto verbunden.",
+  "m_1083e252cdd4f4": "Alle Treffer auswählen",
   "m_1084ceab8e0923": {
     "one": "{count} Grab",
     "other": "{count} Grabs"
@@ -3759,6 +3765,7 @@
   "m_1086584d9aca6a": "Allgemein",
   "m_108685d2f9e078": "Alles in Ordnung",
   "m_1088e8316eb2f9": "Indexer wieder erreichbar",
+  "m_1089c04c64834f": "Kanalaktionen",
   "m_108a5844831529": "Diese Konsole auch außerhalb deines Netzwerks öffnen",
   "m_108b41637f364f": "Kategorie",
   "m_108bd8cfca2c2c": "Audioformat",
@@ -4507,6 +4514,7 @@
   "m_13b490420daada": "Wenn keine Regel passt, gilt die Vorgabe für Zu Hause oder Unterwegs. Die Gerätefähigkeiten gelten weiterhin vor der Wiedergabe.",
   "m_13b54a5acef468": "Suche für {label}",
   "m_13b74ddb61ff98": "{channel}: {title}, {start} bis {end}",
+  "m_13b801904d8adf": "Deaktivieren",
   "m_13bb3428a18d16": {
     "one": "{count} Definition installiert, {used} wird von deinen Indexern oben verwendet.",
     "other": "{count} Definitionen installiert, {used} werden von deinen Indexern oben verwendet."
@@ -5303,6 +5311,7 @@
   "m_173f541d90d544": "Stichproben der Zustandsprüfung",
   "m_173fc198ad8055": "Lass alles abgewählt, damit er auf jedem Gerät läuft.",
   "m_1740501133cb56": "Zwischengespeicherte Ergebnisse von {when}",
+  "m_17409f9c55f614": "{count} ausgewählt",
   "m_17440f2f9cc7d8": "Editor wird geladen",
   "m_1744a26058ac14": {
     "one": "{count} Programmeintrag am nächsten Tag",
@@ -5732,6 +5741,7 @@
   "m_192149882f3811": "Zum Anpassen ziehen, zum Zurücksetzen doppelklicken",
   "m_1921d872bf7248": "Liste für {label}",
   "m_1922c581498469": "Gestartet",
+  "m_1923a1a39346b0": "{channel} auswählen",
   "m_1924fb5aeba7f0": "Apps suchen…",
   "m_19258b899ae5df": "Verankerte Positionen",
   "m_19258e5926421f": "Serientitel",
@@ -6613,6 +6623,7 @@
   "m_1d211772446474": "Oder gib {code} unter plex.tv/link ein.",
   "m_1d2163f63c76f8": "Verwerfen",
   "m_1d218ad59632e4": "Minuten",
+  "m_1d2244e7ae66fa": "Kanäle konnten nicht aktualisiert werden",
   "m_1d240c1034bd02": "Nächste Schritte",
   "m_1d2516f81747b0": "Streamt Torrents, die Offcloud schon hat.",
   "m_1d2578b2eb536a": "Zeile {line}:{col}",

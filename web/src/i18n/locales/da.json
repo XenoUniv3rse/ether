@@ -2012,6 +2012,7 @@
   "m_08e321c57534d1": "Installeret, men der søges ikke i dem, før du tilføjer dem.",
   "m_08e334452ceff6": "Automatisk",
   "m_08e3fb9b7323f3": "Tjekker, hvilke kanaler der har programmer…",
+  "m_08e44775898375": "Fjern fra favoritter",
   "m_08e44edbf4cb4f": "Brugerdefineret rækkemønster",
   "m_08e6b2776c1ca5": {
     "one": "{count} visning",
@@ -2451,6 +2452,7 @@
   "m_0abc686f94c34e": "{count} udelukket af dine regler",
   "m_0abce084240d5f": "brugerdefineret",
   "m_0abd37a346cd74": "Start optagelse",
+  "m_0abe527dca8fa6": "Aktivér",
   "m_0abe86d2db0457": {
     "one": "{count} kald",
     "other": "{count} kald"
@@ -3031,6 +3033,7 @@
   "m_0d559428c21290": "{name} (ejer)",
   "m_0d55d3597eb393": "Bruger standarden igen",
   "m_0d56dcd10edcc2": "Udvikling",
+  "m_0d5780d08ac6d2": "Flyt til gruppe",
   "m_0d59414168b910": "Ubegrænset",
   "m_0d5a50945dee0b": "Nogle installerede plugins udgiver en liste over andre plugins, f.eks. Cinemetas fællesskabskatalog. Vælg en liste for at se, hvad der er i den, og gennemgå så hvert plugin, før du installerer det.",
   "m_0d5b16a55abd92": "Ny session efter",
@@ -3257,6 +3260,7 @@
   "m_0e5e490b1c6457": "Slå det til i Katalogindstillinger",
   "m_0e5efef029f2f6": "Behold rækkefølgen fra listen eller dine valg",
   "m_0e603cd6024127": "Opdaterer kataloger én gang om dagen",
+  "m_0e63074a2d3246": "Kanaler opdateret",
   "m_0e64f4fd11f8c4": "Forbind til din cluster",
   "m_0e65501bca012f": "Én gang pr. titel pr. seer",
   "m_0e655e777b7e81": "En gemt afspilningsposition holder denne udgivelse tilgængelig.",
@@ -3655,6 +3659,7 @@
   "m_1010905e5780d3": "Tillad og opdatér",
   "m_10119c55470439": "Kunne ikke indlæse guiden",
   "m_101307138aa18d": "Som angivet",
+  "m_1013583a7c0e28": "Ryd markering",
   "m_1013ed9ad67661": "Tilføj TMDB discover-parametre, f.eks. {first} eller {second}.",
   "m_10168c657d795d": "Natfunktionskomprimering",
   "m_10173d0ea81b0c": "Vises i dag",
@@ -3750,6 +3755,7 @@
   "m_107c55bf7f5fde": "Farver genereret grafik. Automatisk matcher hovedplakaten.",
   "m_10820e26555349": "Kilde {number}",
   "m_1082d1a6a743cc": "Simkl-kontoen er tilsluttet.",
+  "m_1083e252cdd4f4": "Vælg alle resultater",
   "m_1084ceab8e0923": {
     "one": "{count} hentning",
     "other": "{count} hentninger"
@@ -3759,6 +3765,7 @@
   "m_1086584d9aca6a": "Generelt",
   "m_108685d2f9e078": "Alt i orden",
   "m_1088e8316eb2f9": "Indexer genoprettet",
+  "m_1089c04c64834f": "Kanalhandlinger",
   "m_108a5844831529": "Åbn denne konsol uden for dit netværk",
   "m_108b41637f364f": "Kategori",
   "m_108bd8cfca2c2c": "Lydformat",
@@ -4507,6 +4514,7 @@
   "m_13b490420daada": "Når ingen regel passer, gælder standarden for Hjemme eller Ude. Enhedens egenskaber gælder stadig før afspilning.",
   "m_13b54a5acef468": "Søgning: {label}",
   "m_13b74ddb61ff98": "{channel}: {title}, {start} til {end}",
+  "m_13b801904d8adf": "Deaktivér",
   "m_13bb3428a18d16": {
     "one": "{count} definition installeret, {used} bruges af dine indexere ovenfor.",
     "other": "{count} definitioner installeret, {used} bruges af dine indexere ovenfor."
@@ -5303,6 +5311,7 @@
   "m_173f541d90d544": "Stikprøver til tilstandstjek",
   "m_173fc198ad8055": "Lad alle være slået fra for at afspille på alle enheder.",
   "m_1740501133cb56": "Cachede resultater fra {when}",
+  "m_17409f9c55f614": "{count} valgt",
   "m_17440f2f9cc7d8": "Indlæser editor",
   "m_1744a26058ac14": {
     "one": "{count} program det næste døgn",
@@ -5732,6 +5741,7 @@
   "m_192149882f3811": "Træk for at ændre størrelse, dobbeltklik for at nulstille",
   "m_1921d872bf7248": "Liste: {label}",
   "m_1922c581498469": "Startet",
+  "m_1923a1a39346b0": "Vælg {channel}",
   "m_1924fb5aeba7f0": "Søg efter apps…",
   "m_19258b899ae5df": "Forankrede pladser",
   "m_19258e5926421f": "Seriens titel",
@@ -6613,6 +6623,7 @@
   "m_1d211772446474": "Eller indtast {code} på plex.tv/link.",
   "m_1d2163f63c76f8": "Kassér dem",
   "m_1d218ad59632e4": "Minutter",
+  "m_1d2244e7ae66fa": "Kanalerne kunne ikke opdateres",
   "m_1d240c1034bd02": "Næste trin",
   "m_1d2516f81747b0": "Streamer torrents, som Offcloud allerede har.",
   "m_1d2578b2eb536a": "Linje {line}:{col}",

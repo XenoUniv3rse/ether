@@ -2012,6 +2012,7 @@
   "m_08e321c57534d1": "Yüklü, ancak siz ekleyene kadar aranmaz.",
   "m_08e334452ceff6": "Otomatik",
   "m_08e3fb9b7323f3": "Hangi kanalların programı olduğu denetleniyor…",
+  "m_08e44775898375": "Favorilerden çıkar",
   "m_08e44edbf4cb4f": "Özel satır deseni",
   "m_08e6b2776c1ca5": {
     "one": "{count} izleme",
@@ -2451,6 +2452,7 @@
   "m_0abc686f94c34e": "{count} sürüm kurallarınla elendi",
   "m_0abce084240d5f": "özel",
   "m_0abd37a346cd74": "Kaydı başlat",
+  "m_0abe527dca8fa6": "Etkinleştir",
   "m_0abe86d2db0457": {
     "one": "{count} çağrı",
     "other": "{count} çağrı"
@@ -3031,6 +3033,7 @@
   "m_0d559428c21290": "{name} (sahip)",
   "m_0d55d3597eb393": "Yeniden varsayılanı kullanıyor",
   "m_0d56dcd10edcc2": "Eğilim",
+  "m_0d5780d08ac6d2": "Gruba taşı",
   "m_0d59414168b910": "Kısıtlamasız",
   "m_0d5a50945dee0b": "Yüklü bazı eklentiler, Cinemeta’nın topluluk kataloğu gibi başka eklentilerin listesini yayınlar. İçindekileri görmek için bir liste seçin, sonra yüklemeden önce her eklentiyi inceleyin.",
   "m_0d5b16a55abd92": "Yeni oturum süresi",
@@ -3257,6 +3260,7 @@
   "m_0e5e490b1c6457": "Katalog ayarlarında açın",
   "m_0e5efef029f2f6": "Listenin veya seçimlerinizin sırasını koru",
   "m_0e603cd6024127": "Katalogları günde bir kez yeniler",
+  "m_0e63074a2d3246": "Kanallar güncellendi",
   "m_0e64f4fd11f8c4": "Kümenize bağlanın",
   "m_0e65501bca012f": "Her izleyiciye içerik başına bir kez",
   "m_0e655e777b7e81": "Kaydedilmiş bir izleme konumu bu sürümü kullanılabilir tutar.",
@@ -3655,6 +3659,7 @@
   "m_1010905e5780d3": "İzin ver ve güncelle",
   "m_10119c55470439": "Rehber yüklenemedi",
   "m_101307138aa18d": "Bildirildiği gibi",
+  "m_1013583a7c0e28": "Seçimi temizle",
   "m_1013ed9ad67661": "TMDB keşfet parametreleri ekleyin, ör. {first} veya {second}.",
   "m_10168c657d795d": "Gece modu sıkıştırması",
   "m_10173d0ea81b0c": "Bugün yayınlanıyor",
@@ -3750,6 +3755,7 @@
   "m_107c55bf7f5fde": "Oluşturulan görseli renklendirir. Otomatik, ilk posterle eşleşir.",
   "m_10820e26555349": "Kaynak {number}",
   "m_1082d1a6a743cc": "Simkl hesabı bağlandı.",
+  "m_1083e252cdd4f4": "Tüm eşleşmeleri seç",
   "m_1084ceab8e0923": {
     "one": "{count} indirme",
     "other": "{count} indirme"
@@ -3759,6 +3765,7 @@
   "m_1086584d9aca6a": "Genel",
   "m_108685d2f9e078": "Hepsi sağlıklı",
   "m_1088e8316eb2f9": "Dizinleyici düzeldi",
+  "m_1089c04c64834f": "Kanal işlemleri",
   "m_108a5844831529": "Bu konsolu ağınızın dışından açın",
   "m_108b41637f364f": "Kategori",
   "m_108bd8cfca2c2c": "Ses biçimi",
@@ -4507,6 +4514,7 @@
   "m_13b490420daada": "Hiçbir kural eşleşmezse Evde veya Evden uzakta varsayılanı uygulanır. Cihaz yetenekleri oynatmadan önce yine de geçerlidir.",
   "m_13b54a5acef468": "{label} arama",
   "m_13b74ddb61ff98": "{channel}: {title}, {start} – {end}",
+  "m_13b801904d8adf": "Devre dışı bırak",
   "m_13bb3428a18d16": {
     "one": "{count} tanım yüklü, {used} tanesi yukarıdaki dizinleyicileriniz tarafından kullanılıyor.",
     "other": "{count} tanım yüklü, {used} tanesi yukarıdaki dizinleyicileriniz tarafından kullanılıyor."
@@ -5303,6 +5311,7 @@
   "m_173f541d90d544": "Sağlık denetimi örnekleri",
   "m_173fc198ad8055": "Her cihazda oynatmak için hepsini kapalı bırakın.",
   "m_1740501133cb56": "{when} tarihli önbellek sonuçları",
+  "m_17409f9c55f614": "{count} seçildi",
   "m_17440f2f9cc7d8": "Düzenleyici yükleniyor",
   "m_1744a26058ac14": {
     "one": "Sonraki gün içinde {count} program",
@@ -5732,6 +5741,7 @@
   "m_192149882f3811": "Boyutlandırmak için sürükleyin, sıfırlamak için çift tıklayın",
   "m_1921d872bf7248": "{label} listesi",
   "m_1922c581498469": "Başlangıç",
+  "m_1923a1a39346b0": "{channel} seç",
   "m_1924fb5aeba7f0": "Uygulama ara…",
   "m_19258b899ae5df": "Sabitlenmiş konumlar",
   "m_19258e5926421f": "Dizi başlığı",
@@ -6613,6 +6623,7 @@
   "m_1d211772446474": "Veya plex.tv/link adresinde {code} kodunu girin.",
   "m_1d2163f63c76f8": "Bunları at",
   "m_1d218ad59632e4": "Dakika",
+  "m_1d2244e7ae66fa": "Kanallar güncellenemedi",
   "m_1d240c1034bd02": "Sonraki adımlar",
   "m_1d2516f81747b0": "Offcloud üzerinde zaten bulunan torrentleri akışa alır.",
   "m_1d2578b2eb536a": "Satır {line}:{col}",

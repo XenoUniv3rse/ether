@@ -20,6 +20,14 @@ import (
 func (s *Service) Handler() http.Handler {
 	r := chi.NewRouter()
 	owner := &core.User{IsOwner: true}
+	r.Patch("/channels/bulk", func(w http.ResponseWriter, r *http.Request) {
+		var change ChannelBatch
+		if !ownerBody(w, r, &change) {
+			return
+		}
+		n, err := s.UpdateChannels(r.Context(), change)
+		ownerResult(w, map[string]int{"updated": n}, err)
+	})
 	r.Get("/channels", func(w http.ResponseWriter, r *http.Request) {
 		v, e := s.Channels(r.Context())
 		if e == nil {

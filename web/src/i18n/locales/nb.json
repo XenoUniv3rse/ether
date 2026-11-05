@@ -2012,6 +2012,7 @@
   "m_08e321c57534d1": "Installert, men ikke søkt i før du legger dem til.",
   "m_08e334452ceff6": "Automatisk",
   "m_08e3fb9b7323f3": "Sjekker hvilke kanaler som har programoppføringer …",
+  "m_08e44775898375": "Fjern fra favoritter",
   "m_08e44edbf4cb4f": "Egendefinert radmønster",
   "m_08e6b2776c1ca5": {
     "one": "{count} visning",
@@ -2451,6 +2452,7 @@
   "m_0abc686f94c34e": "{count} utelukket av reglene dine",
   "m_0abce084240d5f": "egendefinert",
   "m_0abd37a346cd74": "Start opptak",
+  "m_0abe527dca8fa6": "Aktiver",
   "m_0abe86d2db0457": {
     "one": "{count} treff",
     "other": "{count} treff"
@@ -3031,6 +3033,7 @@
   "m_0d559428c21290": "{name} (eier)",
   "m_0d55d3597eb393": "Bruker standard igjen",
   "m_0d56dcd10edcc2": "Utvikling",
+  "m_0d5780d08ac6d2": "Flytt til gruppe",
   "m_0d59414168b910": "Ingen begrensning",
   "m_0d5a50945dee0b": "Noen installerte plugins publiserer en liste over andre plugins, for eksempel Cinemetas fellesskapskatalog. Velg en liste for å se hva den inneholder, og gjennomgå hver plugin før du installerer.",
   "m_0d5b16a55abd92": "Ny økt etter",
@@ -3257,6 +3260,7 @@
   "m_0e5e490b1c6457": "Slå det på i Katalog-innstillingene",
   "m_0e5efef029f2f6": "Behold rekkefølgen fra listen eller valgene dine",
   "m_0e603cd6024127": "Oppdaterer kataloger én gang per dag",
+  "m_0e63074a2d3246": "Kanaler oppdatert",
   "m_0e64f4fd11f8c4": "Koble til klyngen din",
   "m_0e65501bca012f": "Én gang per tittel per seer",
   "m_0e655e777b7e81": "En lagret visningsposisjon holder denne utgivelsen tilgjengelig.",
@@ -3655,6 +3659,7 @@
   "m_1010905e5780d3": "Tillat og oppdater",
   "m_10119c55470439": "Kunne ikke laste programguiden",
   "m_101307138aa18d": "Som oppgitt",
+  "m_1013583a7c0e28": "Fjern markering",
   "m_1013ed9ad67661": "Legg til TMDB discover-parametere, f.eks. {first} eller {second}.",
   "m_10168c657d795d": "Nattmodus-komprimering",
   "m_10173d0ea81b0c": "Sendes i dag",
@@ -3750,6 +3755,7 @@
   "m_107c55bf7f5fde": "Farger genererte omslag. Automatisk tilpasses hovedplakaten.",
   "m_10820e26555349": "Kilde {number}",
   "m_1082d1a6a743cc": "Simkl-kontoen er koblet til.",
+  "m_1083e252cdd4f4": "Velg alle treff",
   "m_1084ceab8e0923": {
     "one": "{count} henting",
     "other": "{count} hentinger"
@@ -3759,6 +3765,7 @@
   "m_1086584d9aca6a": "Generelt",
   "m_108685d2f9e078": "Alt i orden",
   "m_1088e8316eb2f9": "Indekserer gjenopprettet",
+  "m_1089c04c64834f": "Kanalhandlinger",
   "m_108a5844831529": "Åpne denne konsollen utenfor nettverket ditt",
   "m_108b41637f364f": "Kategori",
   "m_108bd8cfca2c2c": "Lydformat",
@@ -4507,6 +4514,7 @@
   "m_13b490420daada": "Når ingen regel passer, brukes standarden for Hjemme eller Borte. Enhetens egenskaper gjelder fortsatt før avspilling.",
   "m_13b54a5acef468": "Søk for {label}",
   "m_13b74ddb61ff98": "{channel}: {title}, {start} til {end}",
+  "m_13b801904d8adf": "Deaktiver",
   "m_13bb3428a18d16": {
     "one": "{count} definisjon installert, {used} brukt av indekserere ovenfor.",
     "other": "{count} definisjoner installert, {used} brukt av indekserere ovenfor."
@@ -5303,6 +5311,7 @@
   "m_173f541d90d544": "Prøver for helsesjekk",
   "m_173fc198ad8055": "La alle være av for å spille på alle enheter.",
   "m_1740501133cb56": "Hurtigbufrede resultater fra {when}",
+  "m_17409f9c55f614": "{count} valgt",
   "m_17440f2f9cc7d8": "Laster redigeringsverktøyet",
   "m_1744a26058ac14": {
     "one": "{count} programoppføring neste døgn",
@@ -5732,6 +5741,7 @@
   "m_192149882f3811": "Dra for å endre størrelse, dobbeltklikk for å tilbakestille",
   "m_1921d872bf7248": "Liste for {label}",
   "m_1922c581498469": "Startet",
+  "m_1923a1a39346b0": "Velg {channel}",
   "m_1924fb5aeba7f0": "Søk i apper…",
   "m_19258b899ae5df": "Forankrede plasser",
   "m_19258e5926421f": "Serietittel",
@@ -6613,6 +6623,7 @@
   "m_1d211772446474": "Eller skriv inn {code} på plex.tv/link.",
   "m_1d2163f63c76f8": "Forkast dem",
   "m_1d218ad59632e4": "Minutter",
+  "m_1d2244e7ae66fa": "Kunne ikke oppdatere kanalene",
   "m_1d240c1034bd02": "Neste steg",
   "m_1d2516f81747b0": "Strømmer torrenter som Offcloud allerede har.",
   "m_1d2578b2eb536a": "Linje {line}:{col}",

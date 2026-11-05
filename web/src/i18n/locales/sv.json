@@ -2012,6 +2012,7 @@
   "m_08e321c57534d1": "Installerade, men de söks inte förrän du lägger till dem.",
   "m_08e334452ceff6": "Automatisk",
   "m_08e3fb9b7323f3": "Kontrollerar vilka kanaler som har programinformation…",
+  "m_08e44775898375": "Ta bort från favoriter",
   "m_08e44edbf4cb4f": "Eget radmönster",
   "m_08e6b2776c1ca5": {
     "one": "{count} titt",
@@ -2451,6 +2452,7 @@
   "m_0abc686f94c34e": "{count} utesluts av dina regler",
   "m_0abce084240d5f": "egen",
   "m_0abd37a346cd74": "Starta inspelning",
+  "m_0abe527dca8fa6": "Aktivera",
   "m_0abe86d2db0457": {
     "one": "{count} anrop",
     "other": "{count} anrop"
@@ -3031,6 +3033,7 @@
   "m_0d559428c21290": "{name} (ägare)",
   "m_0d55d3597eb393": "Använder standard igen",
   "m_0d56dcd10edcc2": "Utveckling",
+  "m_0d5780d08ac6d2": "Flytta till grupp",
   "m_0d59414168b910": "Obegränsad",
   "m_0d5a50945dee0b": "Vissa installerade plugin publicerar en lista över andra plugin, till exempel Cinemetas communitykatalog. Välj en lista för att se vad den innehåller och granska varje plugin innan du installerar.",
   "m_0d5b16a55abd92": "Ny session efter",
@@ -3257,6 +3260,7 @@
   "m_0e5e490b1c6457": "Aktivera det i Katalogens inställningar",
   "m_0e5efef029f2f6": "Behåll listans eller dina valdas ordning",
   "m_0e603cd6024127": "Uppdaterar kataloger en gång om dagen",
+  "m_0e63074a2d3246": "Kanaler uppdaterade",
   "m_0e64f4fd11f8c4": "Anslut till ditt kluster",
   "m_0e65501bca012f": "En gång per titel och tittare",
   "m_0e655e777b7e81": "En sparad uppspelningsposition håller denna utgåva tillgänglig.",
@@ -3655,6 +3659,7 @@
   "m_1010905e5780d3": "Tillåt och uppdatera",
   "m_10119c55470439": "Det gick inte att läsa in guiden",
   "m_101307138aa18d": "Som angivet",
+  "m_1013583a7c0e28": "Rensa markering",
   "m_1013ed9ad67661": "Lägg till TMDB Discover-parametrar, t.ex. {first} eller {second}.",
   "m_10168c657d795d": "Nattlägeskomprimering",
   "m_10173d0ea81b0c": "Sänds i dag",
@@ -3750,6 +3755,7 @@
   "m_107c55bf7f5fde": "Färgsätter genererat omslag. Automatisk matchar huvudaffischen.",
   "m_10820e26555349": "Källa {number}",
   "m_1082d1a6a743cc": "Simkl-kontot har anslutits.",
+  "m_1083e252cdd4f4": "Välj alla träffar",
   "m_1084ceab8e0923": {
     "one": "{count} hämtning",
     "other": "{count} hämtningar"
@@ -3759,6 +3765,7 @@
   "m_1086584d9aca6a": "Allmänt",
   "m_108685d2f9e078": "Allt fungerar",
   "m_1088e8316eb2f9": "Indexeraren har återhämtat sig",
+  "m_1089c04c64834f": "Kanalåtgärder",
   "m_108a5844831529": "Öppna den här konsolen utanför ditt nätverk",
   "m_108b41637f364f": "Kategori",
   "m_108bd8cfca2c2c": "Ljudformat",
@@ -4507,6 +4514,7 @@
   "m_13b490420daada": "När ingen regel matchar gäller standarden för Hemma eller Borta. Enhetens möjligheter gäller fortfarande före uppspelning.",
   "m_13b54a5acef468": "Sök i {label}",
   "m_13b74ddb61ff98": "{channel}: {title}, {start} till {end}",
+  "m_13b801904d8adf": "Inaktivera",
   "m_13bb3428a18d16": {
     "one": "{count} definition installerad, {used} används av dina indexerare ovan.",
     "other": "{count} definitioner installerade, {used} används av dina indexerare ovan."
@@ -5303,6 +5311,7 @@
   "m_173f541d90d544": "Prov för hälsokontroll",
   "m_173fc198ad8055": "Låt alla vara avmarkerade för att spela upp på alla enheter.",
   "m_1740501133cb56": "Cachade resultat från {when}",
+  "m_17409f9c55f614": "{count} valda",
   "m_17440f2f9cc7d8": "Läser in redigeraren",
   "m_1744a26058ac14": {
     "one": "{count} program det närmaste dygnet",
@@ -5732,6 +5741,7 @@
   "m_192149882f3811": "Dra för att ändra storlek, dubbelklicka för att återställa",
   "m_1921d872bf7248": "Lista för {label}",
   "m_1922c581498469": "Startade",
+  "m_1923a1a39346b0": "Välj {channel}",
   "m_1924fb5aeba7f0": "Sök appar…",
   "m_19258b899ae5df": "Förankrade platser",
   "m_19258e5926421f": "Serietitel",
@@ -6613,6 +6623,7 @@
   "m_1d211772446474": "Eller ange {code} på plex.tv/link.",
   "m_1d2163f63c76f8": "Förkasta dem",
   "m_1d218ad59632e4": "Minuter",
+  "m_1d2244e7ae66fa": "Kunde inte uppdatera kanalerna",
   "m_1d240c1034bd02": "Nästa steg",
   "m_1d2516f81747b0": "Streamar torrents som Offcloud redan har.",
   "m_1d2578b2eb536a": "Rad {line}:{col}",
