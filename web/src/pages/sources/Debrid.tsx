@@ -1,3 +1,4 @@
+import { formatThroughput } from "../../lib/format";
 import { t, tn, tx } from "../../i18n";
 import {
   Alert,
@@ -126,10 +127,7 @@ function ms(n: number): string {
 }
 
 /** Megabytes per second, decimal (as speed tests report it). */
-function mbps(bytesPerSecond: number): string {
-  const v = bytesPerSecond / 1e6;
-  return `${fixed(v, v >= 10 ? 0 : 1)} MB/s`;
-}
+const mbps = formatThroughput;
 
 /** Averaged timings for one provider, or null before it has been used. */
 export function latencySummary(l: DebridLatency | undefined): string | null {
@@ -257,7 +255,6 @@ export function DebridSources({
     seenAdd.current = addKind.nonce;
     open(providers.length, { ...blankProvider(providers.length), kind: addKind.kind });
     // Open once per gallery choice. `open` closes over the list at that moment.
-
   }, [addKind, debrid, providers.length]);
   const close = () => {
     if (!saving) setEditing(null);
@@ -618,7 +615,7 @@ function DebridSettings({
         );
       })}
       {collapsed.size ? (
-        <MoreOptions label={t("More options")}>
+        <MoreOptions setting="debrid" label={t("More options")}>
           <p className="px-4 pt-1 text-sm text-fg-muted">
             {t(
               "Leave these at 0. Ether already chooses a fast first byte and how far to read ahead. Change them only when a player stutters.",

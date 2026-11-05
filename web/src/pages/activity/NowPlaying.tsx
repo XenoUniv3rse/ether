@@ -1,3 +1,4 @@
+import { formatBitrate } from "../../lib/format";
 import { Badge, Button, EmptyState, Select, toast } from "@braedonsaunders/appkit-ui";
 import {
   ArrowRight,
@@ -34,10 +35,7 @@ const clockOf = (ms: number) => {
 };
 
 /** Mbps, the unit Activity uses everywhere. */
-export const mbpsOf = (bitsPerSecond: number) =>
-  bitsPerSecond > 0
-    ? t("{rate} Mbps", { rate: (bitsPerSecond / 1e6).toFixed(bitsPerSecond >= 1e7 ? 0 : 1) })
-    : "—";
+export const mbpsOf = formatBitrate;
 
 const isTranscoding = (s: Stream) =>
   s.decision === "transcode" || (s.decision === "copy" && !s.audioCopy);
