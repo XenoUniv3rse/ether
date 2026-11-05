@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"sync"
+	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -19,6 +21,23 @@ import (
 	"github.com/braedonsaunders/ether/internal/frontends/mediabrowser"
 	"github.com/braedonsaunders/ether/internal/sessions"
 )
+
+type replayOutageTransport struct {
+	next     http.RoundTripper
+	outage   *atomic.Bool
+	failures *atomic.Int64
+}
+
+func (t replayOutageTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	if t.outage.Load() {
+		var start int64
+		if _, err := fmt.Sscanf(r.Header.Get("Range"), "bytes=%d-", &start); err == nil && start >= 1_800_000_000 {
+			t.failures.Add(1)
+		}
+		return nil, &net.OpError{Op: "dial", Net: "tcp", Err: syscall.ECONNREFUSED}
+	}
+	return t.next.RoundTrip(r)
+}
 
 // A sparse CDN simulates a large unindexed BD stream without allocating it.
 // Connections are held after one block to expose overlapping seek and
@@ -73,7 +92,11 @@ func TestDebridSeekConnectionReplay(t *testing.T) {
 	cdn.Start()
 	defer cdn.Close()
 	svc := debrid.NewService(config.Debrid{}, debrid.Options{})
-	eng := debrid.NewEngine(svc, debrid.EngineOptions{})
+	var outage atomic.Bool
+	var injectedFailures atomic.Int64
+	eng := debrid.NewEngine(svc, debrid.EngineOptions{WrapMediaTransport: func(next http.RoundTripper) http.RoundTripper {
+		return replayOutageTransport{next: next, outage: &outage, failures: &injectedFailures}
+	}})
 	defer eng.Close()
 	payload := debrid.Payload{ReleaseID: "A", Provider: "torbox-0", Kind: "torbox", InfoHash: "0123456789012345678901234567890123456789", Path: "00001.m2ts", Size: size, URL: cdn.URL, Expires: time.Now().Add(time.Hour)}
 	src, err := eng.Open(context.Background(), "A", payload.Encode())
@@ -189,8 +212,10 @@ func TestDebridSeekConnectionReplay(t *testing.T) {
 	if old != 0 {
 		t.Fatalf("%d superseded upstream requests remain active", old)
 	}
-	// Refuse new CDN connections and seek to an uncached position. The
-	// same Jellyfin URL must stop serving repeated 503s after recovery.
+	// Keep the seek phase on the real capped transports. For the outage,
+	// close the real CDN and inject a prompt refusal at the transport boundary;
+	// OS-specific closed-listener timing must not dictate this recovery test.
+	outage.Store(true)
 	cdn.Listener.Close()
 	cdn.CloseClientConnections()
 	client.Timeout = 15 * time.Second
@@ -204,6 +229,9 @@ func TestDebridSeekConnectionReplay(t *testing.T) {
 	response.Body.Close()
 	if response.StatusCode != http.StatusServiceUnavailable {
 		t.Fatalf("outage status=%d", response.StatusCode)
+	}
+	if injectedFailures.Load() == 0 {
+		t.Fatal("outage did not reach the injected transport failure")
 	}
 	g.mu.Lock()
 	if !g.retryPending {

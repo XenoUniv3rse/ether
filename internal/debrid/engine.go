@@ -68,10 +68,13 @@ type EngineOptions struct {
 	// connection pools so a hedged request opens a fresh connection.
 	HTTPClient  *http.Client
 	HedgeClient *http.Client
-	Logger      *slog.Logger
-	Now         func() time.Time
-	HedgeDelay  time.Duration // 0 = 400ms; negative disables hedging
-	BlockSize   int64         // tests; 0 = 512 KiB
+	// WrapMediaTransport wraps each engine-owned media transport while retaining
+	// its shared connection cap. Ignored for explicitly supplied clients.
+	WrapMediaTransport func(http.RoundTripper) http.RoundTripper
+	Logger             *slog.Logger
+	Now                func() time.Time
+	HedgeDelay         time.Duration // 0 = 400ms; negative disables hedging
+	BlockSize          int64         // tests; 0 = 512 KiB
 }
 
 // Engine implements core.Engine and core.HealthChecker: debrid payloads
@@ -188,15 +191,22 @@ func NewEngine(svc *Service, opts EngineOptions) *Engine {
 	limit := newConnCap(defaultHostConnections)
 	limit.dialGap = 250 * time.Millisecond
 	var owned []*http.Transport
+	client := func(t *http.Transport) *http.Client {
+		var transport http.RoundTripper = t
+		if opts.WrapMediaTransport != nil {
+			transport = opts.WrapMediaTransport(transport)
+		}
+		return &http.Client{Transport: transport}
+	}
 	if e.hc == nil {
 		t := newStreamingTransport(limit)
 		owned = append(owned, t)
-		e.hc = &http.Client{Transport: t}
+		e.hc = client(t)
 	}
 	if e.hedge == nil {
 		t := newStreamingTransport(limit)
 		owned = append(owned, t)
-		e.hedge = &http.Client{Transport: t}
+		e.hedge = client(t)
 	}
 	limit.closeIdle = func() {
 		for _, t := range owned {
