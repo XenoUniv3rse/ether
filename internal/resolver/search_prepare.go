@@ -37,6 +37,7 @@ type searchPreparation struct {
 	first      time.Time
 	closed     bool        // set by close; no check starts after it
 	partial    atomic.Bool // set before returning an early Play start
+	hedge      *time.Timer // pumps again when a held-back grab may start
 }
 
 // earlyCheckLimit caps speculative checks per Play. Four run at once; a
@@ -120,20 +121,31 @@ func (p *searchPreparation) startFeed() {
 	}
 }
 
-// Four in flight, twelve total, with the next ranked candidate replacing a
-// failed check immediately. Reposts do not consume every speculative slot.
+// Four in flight, with the next ranked candidate replacing a failed check
+// immediately. Reposts do not consume every speculative slot. Checks that
+// spend an indexer grab (spendsGrab) run one at a time; a second starts only
+// as a hedge once the first has run past healthHedgeDelay, so a healthy
+// title normally costs one grab.
 func (p *searchPreparation) pumpLocked() {
 	if p.closed {
 		return
 	}
-	active := 0
-	for _, c := range p.byID {
+	active, activeGrabs := 0, 0
+	var youngestGrab time.Time
+	for id, c := range p.byID {
 		select {
 		case <-c.done:
 		default:
 			active++
+			if spendsGrab(p.releases[id]) {
+				activeGrabs++
+				if c.started.After(youngestGrab) {
+					youngestGrab = c.started
+				}
+			}
 		}
 	}
+	var hedgeAt time.Time
 	for _, c := range p.ranked {
 		if active >= 4 || len(p.byID) >= earlyCheckLimit {
 			break
@@ -155,6 +167,15 @@ func (p *searchPreparation) pumpLocked() {
 		if p.identities[identity] {
 			continue
 		}
+		if spendsGrab(c.rel) && activeGrabs > 0 {
+			at := youngestGrab.Add(p.svc.healthHedgeDelay(c.rel))
+			if activeGrabs >= 2 || time.Now().Before(at) {
+				if activeGrabs < 2 && (hedgeAt.IsZero() || at.Before(hedgeAt)) {
+					hedgeAt = at
+				}
+				continue
+			}
+		}
 		p.identities[identity] = true
 		p.releases[c.rel.ID] = c.rel
 		spec := core.WithBackgroundBudget(p.ctx, func(ctx context.Context, resource, source string, amount int64) error {
@@ -166,7 +187,22 @@ func (p *searchPreparation) pumpLocked() {
 		}
 		p.byID[c.rel.ID] = check
 		active++
+		if spendsGrab(c.rel) {
+			activeGrabs++
+			youngestGrab = check.started
+		}
 		go p.refillAfter(check)
+	}
+	if p.hedge != nil {
+		p.hedge.Stop()
+		p.hedge = nil
+	}
+	if !hedgeAt.IsZero() {
+		p.hedge = time.AfterFunc(time.Until(hedgeAt), func() {
+			p.mu.Lock()
+			defer p.mu.Unlock()
+			p.pumpLocked()
+		})
 	}
 }
 
@@ -329,6 +365,9 @@ func (p *searchPreparation) attach(cs []candidate) {
 func (p *searchPreparation) close() {
 	p.mu.Lock()
 	p.closed = true
+	if p.hedge != nil {
+		p.hedge.Stop()
+	}
 	p.mu.Unlock()
 	p.checks.close()
 }

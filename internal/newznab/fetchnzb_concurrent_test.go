@@ -306,3 +306,32 @@ func TestFetchNZBForegroundRetriesBackgroundBudgetRefusal(t *testing.T) {
 		t.Fatalf("server hits = %d, want 1", got)
 	}
 }
+
+// A losing health check's NZB fetch is cancelled once its last caller
+// leaves: it is not left running detached to finish a grab nobody reads.
+func TestAbandonedNZBFetchIsCancelled(t *testing.T) {
+	started, cancelled := make(chan struct{}), make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		close(started)
+		<-r.Context().Done()
+		close(cancelled)
+	}))
+	defer srv.Close()
+	c := New(testConfig(srv.URL), nil, Options{HTTPClient: srv.Client()})
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, err := c.FetchNZB(ctx, core.Release{ID: "loser", Name: "loser", NZBURL: srv.URL + "/nzb"})
+		done <- err
+	}()
+	<-started
+	cancel()
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("fetch error %v", err)
+	}
+	select {
+	case <-cancelled:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the abandoned NZB request kept running")
+	}
+}

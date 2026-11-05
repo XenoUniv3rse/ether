@@ -37,9 +37,10 @@ const (
 	// capsRetry spaces caps requests after a failure. Every caps request
 	// spends a daily API hit, and searches work (ungated) without caps.
 	capsRetry = time.Hour
-	// nzbFlightTimeout caps one shared NZB fetch. The fetch runs detached
-	// from its callers so one cancelled caller cannot fail the others;
-	// this bound keeps an indexer that never answers from pinning it.
+	// nzbFlightTimeout caps one shared NZB fetch. The fetch runs apart
+	// from any one caller's cancellation so a cancelled caller cannot fail
+	// the others, and is cancelled when the last caller leaves; this bound
+	// keeps an indexer that never answers from pinning it.
 	nzbFlightTimeout = 90 * time.Second
 )
 
@@ -157,6 +158,7 @@ type nzbFlight struct {
 	background bool // started by a background check (smaller grab share)
 	waiters    int
 	readers    int
+	cancel     context.CancelFunc // stops the fetch once no caller waits
 }
 
 // nzbSaveLock is a refcounted per-key mutex (see lockNZB).
@@ -1346,9 +1348,10 @@ func (c *Client) fetchNZBReporting(ctx context.Context, r core.Release) ([]byte,
 		select {
 		case <-f.done:
 		case <-ctx.Done():
-			// The shared fetch carries on for the other callers and
-			// still lands in the disk cache.
-			c.leaveNZB(f)
+			// The shared fetch carries on for the other callers; once
+			// none is left it is cancelled (a losing health check must
+			// not finish a grab nobody will read).
+			c.leaveNZB(r.ID, f)
 			return nil, leader, ctx.Err()
 		}
 		body := c.takeNZB(f)
@@ -1380,17 +1383,31 @@ func (c *Client) takeNZB(f *nzbFlight) []byte {
 }
 
 // leaveNZB gives up a caller's turn without reading the body, which may
-// still be in flight.
-func (c *Client) leaveNZB(f *nzbFlight) {
+// still be in flight. The last caller to leave an unfinished fetch cancels
+// it and forgets it, so a later caller starts a fetch of its own.
+func (c *Client) leaveNZB(id string, f *nzbFlight) {
 	c.nzbFlightMu.Lock()
+	defer c.nzbFlightMu.Unlock()
 	f.readers--
-	c.nzbFlightMu.Unlock()
+	if f.readers > 0 {
+		return
+	}
+	select {
+	case <-f.done:
+		return
+	default:
+	}
+	if c.nzbFlights[id] == f {
+		delete(c.nzbFlights, id)
+	}
+	f.cancel()
 }
 
 // joinNZBFlight attaches to the in-flight fetch for r.ID, or starts one.
 // The shared fetch keeps ctx's values (budget class, trust) but not its
-// cancellation, and is bounded by nzbFlightTimeout. The flight is
-// forgotten as soon as it ends, so errors are not cached past it.
+// cancellation: it ends when the last caller leaves (leaveNZB), and is
+// bounded by nzbFlightTimeout. The flight is forgotten as soon as it ends,
+// so errors are not cached past it.
 func (c *Client) joinNZBFlight(ctx context.Context, r core.Release) (*nzbFlight, bool) {
 	c.nzbFlightMu.Lock()
 	defer c.nzbFlightMu.Unlock()
@@ -1402,14 +1419,16 @@ func (c *Client) joinNZBFlight(ctx context.Context, r core.Release) (*nzbFlight,
 	if c.nzbFlights == nil {
 		c.nzbFlights = map[string]*nzbFlight{}
 	}
-	f := &nzbFlight{done: make(chan struct{}), background: core.IsBackgroundCheck(ctx), waiters: 1, readers: 1}
-	c.nzbFlights[r.ID] = f
 	fctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), nzbFlightTimeout)
+	f := &nzbFlight{done: make(chan struct{}), background: core.IsBackgroundCheck(ctx), waiters: 1, readers: 1, cancel: cancel}
+	c.nzbFlights[r.ID] = f
 	go func() {
 		defer cancel()
 		f.body, f.err = c.fetchNZB(fctx, r)
 		c.nzbFlightMu.Lock()
-		delete(c.nzbFlights, r.ID)
+		if c.nzbFlights[r.ID] == f {
+			delete(c.nzbFlights, r.ID)
+		}
 		c.nzbFlightMu.Unlock()
 		close(f.done)
 	}()
