@@ -313,9 +313,6 @@ func (m *Manager) SearchWith(ctx context.Context, req core.SearchRequest, arrive
 	m.searchTimingMu.Lock()
 	m.searchTimings = timings
 	m.searchTimingMu.Unlock()
-	if err := ctx.Err(); err != nil {
-		// Still return whatever arrived if anything did.
-	}
 	seen := map[string]bool{}
 	var merged []core.Release
 	var errs []error

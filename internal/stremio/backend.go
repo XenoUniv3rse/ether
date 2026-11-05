@@ -277,12 +277,6 @@ func guidSuffix(s *stream, req core.SearchRequest, packs bool) string {
 	return ""
 }
 
-// convert turns addon streams into releases with default options (tests,
-// fuzzing).
-func convert(streams []stream, req core.SearchRequest, packs bool) (out []core.Release, skippedNoHash, skippedAmbiguous int) {
-	return convertWith(streams, req, packs, convertOptions{})
-}
-
 // convertOptions carry what conversion needs beyond the streams.
 type convertOptions struct {
 	// origin is the addon's own scheme://host[:port], the one private

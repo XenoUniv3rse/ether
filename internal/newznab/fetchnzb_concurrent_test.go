@@ -256,15 +256,6 @@ func TestFetchNZBErrorNotCachedPastFlight(t *testing.T) {
 	}
 }
 
-func isOneOf(b []byte, set [][]byte) bool {
-	for _, s := range set {
-		if bytes.Equal(b, s) {
-			return true
-		}
-	}
-	return false
-}
-
 // A background check (warm-up) runs on a reduced grab share. When it is
 // refused, a foreground play that joined its flight must not inherit the
 // refusal: it fetches on its own budget.
