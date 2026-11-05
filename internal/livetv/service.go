@@ -167,7 +167,7 @@ func (s *Service) stopTrack(t *track) {
 	if t.hls != nil {
 		t.hls.Close()
 	}
-	if s.o.Playback != nil {
+	if s.o.Playback != nil && t.playbackID != "" {
 		s.o.Playback.Stop(t.playbackID)
 	}
 }
