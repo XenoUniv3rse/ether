@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql/driver"
 	"errors"
+	"log/slog"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -17,7 +19,12 @@ import (
 // on a channel and runs as soon as the previous one finishes. Reads never
 // wait on it. Another process writing the same file is still handled by
 // SQLite's busy_timeout.
-type writeGate struct{ slot chan struct{} }
+type writeGate struct {
+	slot    chan struct{}
+	mu      sync.Mutex
+	holder  string
+	started time.Time
+}
 
 // writeGateWait matches busy_timeout: a writer that waits longer fails the
 // way SQLite would have.
@@ -52,24 +59,76 @@ func gateFor(dsn string) *writeGate {
 }
 
 func (g *writeGate) acquire(ctx context.Context) error {
+	start := time.Now()
 	select {
 	case g.slot <- struct{}{}:
+		g.held()
 		return nil
 	default:
 	}
+	g.mu.Lock()
+	prior, priorStart := g.holder, g.started
+	g.mu.Unlock()
 	t := time.NewTimer(writeGateWait)
 	defer t.Stop()
 	select {
 	case g.slot <- struct{}{}:
+		g.held()
+		if time.Since(start) >= time.Second {
+			slog.Warn("sqlite writer waited", "wait", time.Since(start), "holder_at_start", prior, "holder_age_at_start", start.Sub(priorStart))
+		}
 		return nil
 	case <-ctx.Done():
+		g.logHolder(time.Since(start))
 		return ctx.Err()
 	case <-t.C:
+		g.logHolder(time.Since(start))
 		return errWriteGateTimeout
 	}
 }
 
-func (g *writeGate) release() { <-g.slot }
+func (g *writeGate) held() {
+	var pcs [32]uintptr
+	n := runtime.Callers(3, pcs[:])
+	frames := runtime.CallersFrames(pcs[:n])
+	label := "unknown"
+	for {
+		frame, more := frames.Next()
+		if strings.Contains(frame.Function, "/ether/internal/") && !strings.Contains(frame.Function, "/ether/internal/store.") {
+			label = frame.Function
+			break
+		}
+		if !more {
+			break
+		}
+	}
+	g.mu.Lock()
+	g.holder, g.started = label, time.Now()
+	g.mu.Unlock()
+}
+
+func (g *writeGate) logHolder(wait time.Duration) {
+	if wait < time.Second {
+		return
+	}
+	g.mu.Lock()
+	label, started := g.holder, g.started
+	g.mu.Unlock()
+	if !started.IsZero() {
+		slog.Warn("sqlite writer blocked", "wait", wait, "holder", label, "held", time.Since(started))
+	}
+}
+
+func (g *writeGate) release() {
+	g.mu.Lock()
+	label, started := g.holder, g.started
+	g.holder, g.started = "", time.Time{}
+	g.mu.Unlock()
+	<-g.slot
+	if elapsed := time.Since(started); !started.IsZero() && elapsed >= time.Second {
+		slog.Warn("sqlite writer held", "holder", label, "duration", elapsed)
+	}
+}
 
 // writes reports whether a statement modifies the database (and so takes
 // SQLite's write lock outside a transaction). PRAGMAs are not gated: a WAL

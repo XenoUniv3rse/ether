@@ -79,6 +79,9 @@ func (s *State) journalEvents(ctx context.Context, tx *sql.Tx, events []Event, f
 	admitted := map[int64]bool{}
 	if !force && gate != nil {
 		for _, ev := range events {
+			if _, _, relevant := journalKind(ev); !relevant || ev.Account {
+				continue
+			}
 			if _, seen := admitted[ev.UserID]; seen {
 				continue
 			}
