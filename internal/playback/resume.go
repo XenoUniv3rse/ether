@@ -256,13 +256,6 @@ func (s *resumeStore) close(ctx context.Context) error {
 	return errors.Join(err, s.payload.pendingError())
 }
 
-// put stores a record and its keyframe index: at once, or — on a clustered
-// node that cannot reach the database — when the database is back. The
-// NZB is written to local disk first either way.
-func (s *resumeStore) put(ctx context.Context, rec resumeRecord, nzb []byte, points []core.KeyframePoint) error {
-	return s.putWithProbe(ctx, rec, nzb, points, core.MediaInfo{})
-}
-
 // putWithProbe is put plus the probed facts of the serving generation,
 // persisted in the same (possibly held) write as the resume row.
 func (s *resumeStore) putWithProbe(ctx context.Context, rec resumeRecord, nzb []byte, points []core.KeyframePoint, probe core.MediaInfo) error {
@@ -502,14 +495,6 @@ func (s *resumeStore) noteLive(rec resumeRecord, nzb []byte, probe ...*probeCach
 	defer s.freshMu.Unlock()
 	s.bumpLiveGenLocked(resumeKey{rec.userID, rec.key})
 	s.storeLiveLocked(rec, nzb, probe...)
-}
-
-func (s *resumeStore) liveProbe(userID int64, key core.RatingKey, releaseID string, nzb []byte) *probeCache {
-	hash := ""
-	if len(nzb) > 0 {
-		hash = nzbHash(nzb)
-	}
-	return s.liveProbeHash(userID, key, releaseID, hash)
 }
 
 // liveProbeHash is liveProbe for the payload with this hash ("" matches any).

@@ -113,12 +113,6 @@ type probeCache struct {
 	nzbHash string
 }
 
-// PreResolve schedules detail-page warming; it is the core.PrewarmDetail
-// form of Prewarm, kept for existing callers.
-func (m *Manager) PreResolve(ctx context.Context, user *core.User, key core.RatingKey, caps core.ClientCaps) bool {
-	return m.Prewarm(ctx, user, key, caps, core.PrewarmOptions{Reason: core.PrewarmDetail})
-}
-
 // Prewarm implements core.Prewarmer: it resolves, opens, probes (including
 // the container keyframe index) and pre-buffers a title ahead of Play, so
 // the later Prepare for the same user, client and title needs no resolver

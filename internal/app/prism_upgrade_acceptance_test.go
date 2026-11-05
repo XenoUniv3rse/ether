@@ -802,8 +802,6 @@ func postgresSearchPath(dsn, schema string) (string, error) {
 	return u.String(), nil
 }
 
-type randReader struct{}
-
 func jsonBool(t *testing.T, raw []byte, key string) bool {
 	t.Helper()
 	var doc map[string]any
