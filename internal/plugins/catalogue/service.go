@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/ed25519"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"github.com/braedonsaunders/ether/internal/httpjson"
