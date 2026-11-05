@@ -624,12 +624,12 @@ func (s *Servers) MapAccount(ctx context.Context, id, accountID int64, in PMSMap
 	gainSend := in.Direction&pmsSend != 0 && cur.direction&pmsSend == 0
 	gainRecv := in.Direction&pmsReceive != 0 && cur.direction&pmsReceive == 0
 	_, err = tx.ExecContext(ctx, `UPDATE plexwatch_pms_viewer SET account_name=?,owner=?,token=?,direction=?,interval_min=?,
-		out_cursor=CASE WHEN ? THEN ? ELSE out_cursor END,
-		out_key=CASE WHEN ? THEN 0 ELSE out_key END,
-		out_baseline=CASE WHEN ? THEN ? ELSE out_baseline END,
-		in_cursor=CASE WHEN ? THEN ? ELSE in_cursor END,
-		in_skip=CASE WHEN ? THEN 0 ELSE in_skip END,
-		next_run=CASE WHEN ? THEN ? ELSE next_run END,
+		out_cursor=CASE WHEN ?<>0 THEN ? ELSE out_cursor END,
+		out_key=CASE WHEN ?<>0 THEN 0 ELSE out_key END,
+		out_baseline=CASE WHEN ?<>0 THEN ? ELSE out_baseline END,
+		in_cursor=CASE WHEN ?<>0 THEN ? ELSE in_cursor END,
+		in_skip=CASE WHEN ?<>0 THEN 0 ELSE in_skip END,
+		next_run=CASE WHEN ?<>0 THEN ? ELSE next_run END,
 		problem=CASE WHEN ?=0 THEN '' ELSE problem END
 		WHERE server_id=? AND account_id=?`,
 		acct.Name, boolInt(owner), sealed, in.Direction, in.Interval,

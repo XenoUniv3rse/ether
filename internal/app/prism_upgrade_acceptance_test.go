@@ -795,6 +795,9 @@ func postgresSearchPath(dsn, schema string) (string, error) {
 	}
 	q := u.Query()
 	q.Set("options", "-csearch_path="+schema)
+	// This fixture reads the same tables before and after DDL on one pool.
+	// Re-describe each query so pgx does not reuse a pre-migration row shape.
+	q.Set("default_query_exec_mode", "describe_exec")
 	u.RawQuery = q.Encode()
 	return u.String(), nil
 }

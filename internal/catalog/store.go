@@ -266,7 +266,7 @@ UNION ALL
 SELECT c.key, 'credit', c.kind, c.name, c.role, c.thumb, CAST(c.person_tmdb AS TEXT), COALESCE(p.imdb,''), CAST(c.ord AS TEXT), c.provider_id FROM catalog_credits c LEFT JOIN catalog_people p ON p.person_tmdb=c.person_tmdb WHERE c.key IN (` + ph + `)
 UNION ALL
 SELECT h.key, 'home', CAST(h.checked AS TEXT), CAST(h.earliest_ts AS TEXT), CAST(h.fallback_admitted AS TEXT), CAST(t.released_ts AS TEXT), CAST(t.year AS TEXT), '', '', '' FROM catalog_home_release h JOIN catalog_titles t ON t.key=h.key WHERE h.key IN (` + ph + `)
-)`
+) AS facts`
 	bound := make([]any, 0, len(args)*7)
 	for i := 0; i < 7; i++ {
 		bound = append(bound, args...)
@@ -398,7 +398,7 @@ UNION ALL
 SELECT 'alt', key, title, '', '', '', '', '' FROM catalog_alt_titles WHERE key IN (` + ph + `)
 UNION ALL
 SELECT 'season', show_key, CAST(season AS TEXT), CAST(child_count AS TEXT), '', '', '', '' FROM catalog_titles WHERE type='season' AND season>0 AND show_key IN (` + ph + `)
-)`
+) AS show_facts`
 		bound := make([]any, 0, len(part)*4)
 		for i := 0; i < 4; i++ {
 			bound = append(bound, part...)
