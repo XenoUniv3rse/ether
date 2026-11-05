@@ -135,8 +135,8 @@ func (i *instance) childItems(w http.ResponseWriter, r *http.Request) {
 	if episode {
 		limit = 50
 		if x := r.URL.Query().Get("limit"); x != "" {
-			n, e := strconv.Atoi(x)
-			if e != nil || n < 1 || n > 100 {
+			n, e := paging.ParseLimit(x, 50, 100)
+			if e != nil {
 				http.Error(w, "Bad Request", 400)
 				return
 			}
@@ -243,7 +243,7 @@ func decodeEpisodeCursor(s string) (int, error) {
 		return 0, nil
 	}
 	if n, err := strconv.Atoi(s); err == nil {
-		if n < 0 {
+		if _, e := paging.ParseOffset(strconv.Itoa(n), 100); e != nil {
 			return 0, errors.New("cursor")
 		}
 		return n, nil
@@ -258,7 +258,7 @@ func decodeEpisodeCursor(s string) (int, error) {
 	var c struct {
 		Offset int `json:"offset"`
 	}
-	if json.Unmarshal(raw, &c) != nil || c.Offset < 0 {
+	if json.Unmarshal(raw, &c) != nil || c.Offset < 0 || c.Offset > int(^uint(0)>>1)-100 {
 		return 0, errors.New("cursor")
 	}
 	return c.Offset, nil

@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"github.com/braedonsaunders/ether/internal/frontend/kit/paging"
 	"net/http"
 	"strconv"
 	"strings"
@@ -278,8 +279,8 @@ func (i *instance) sections(w http.ResponseWriter, r *http.Request) {
 	}
 	limit := 0
 	if text := r.URL.Query().Get("item_limit"); text != "" {
-		limit, err = strconv.Atoi(text)
-		if err != nil || limit < 1 || limit > 100 {
+		limit, err = paging.ParseLimit(text, 0, 100)
+		if err != nil {
 			http.Error(w, "Bad Request", 400)
 			return
 		}
