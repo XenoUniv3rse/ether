@@ -2,7 +2,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import { MemoryRouter, useLocation } from "react-router-dom";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
-import LiveStudio from "./LiveStudio";
+import Studio from "./Studio";
 import { apiFetch, apiStream } from "../../lib/api";
 import { readAgentStream } from "./LiveStage";
 import { toast } from "@braedonsaunders/appkit-ui";
@@ -58,7 +58,7 @@ function Location() {
 function mount(path = "/plugins/studio") {
   return render(
     <MemoryRouter initialEntries={[path]}>
-      <LiveStudio />
+      <Studio />
       <Location />
     </MemoryRouter>,
   );

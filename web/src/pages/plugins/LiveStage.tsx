@@ -104,7 +104,7 @@ export async function draftSources(id: string): Promise<{ title: string; tiles: 
     title: `${SAMPLE_FILM.title} (${SAMPLE_FILM.year})`,
     tiles: streams.slice(0, 4).map((s) => {
       const [name, detail] = String(s.title ?? s.name ?? "").split("\n");
-      return { name: name || String(s.name ?? ""), ok: true, ms: r.ms, score: detail };
+      return { name: name || String(s.name ?? ""), score: detail };
     }),
   };
 }
@@ -233,7 +233,7 @@ export function LiveStageView({ moments, narration }: { moments: Moment[]; narra
   const current = moments[moments.length - 1];
   const result = [...moments]
     .reverse()
-    .find((m) => m.kind === "guide" || m.kind === "streams" || m.kind === "found");
+    .find((m) => m.kind === "guide" || m.kind === "found");
   const done = moments.slice(0, -1);
   return (
     <div className="mx-auto w-full max-w-4xl space-y-4 px-4 py-6 sm:px-6">
