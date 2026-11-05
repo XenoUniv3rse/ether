@@ -1,8 +1,8 @@
 package plex
 
-// Live TV wire shapes and route names follow Plex's official PMS OpenAPI 1.2.3,
-// https://developer.plex.tv/pms/ (DVR, Devices, EPG and Live TV groups). In
-// particular the grid attaches broadcast times to Media, not the Video item.
+// Live TV wire shapes and route names follow Plex's official PMS OpenAPI 1.2.3
+// (DVR, Devices, EPG and Live TV groups). In particular the grid attaches
+// broadcast times to Media, not the Video item.
 
 import (
 	"context"

@@ -488,7 +488,7 @@ var guideRegionCodes = func() map[string]string {
 
 // guideNameRegion folds a channel name for matching and reports the region it
 // declares, if any: a leading prefix ("US:", "|UK|", "UK |"), a bracketed
-// tag ("(US)"), or an upper-case trailing country code ("CNN US"). Case,
+// tag ("(US)"), or an upper-case trailing country code ("News US"). Case,
 // punctuation, quality tokens and such region labels are ignored; "+" is kept
 // so "+1" timeshifts stay distinct.
 func guideNameRegion(name string) (region, normalized string) {
@@ -561,7 +561,7 @@ func normalizeGuideName(name string) string {
 }
 
 // guideIDRegion reports the region a guide id declares at its end
-// ("DAZN1.de", "BBC1.uk") or through a leading prefix. Unknown suffixes and
+// ("News1.de", "Public1.uk") or through a leading prefix. Unknown suffixes and
 // the generic pseudo-TLDs are ignored.
 func guideIDRegion(id string) string {
 	id = strings.TrimSpace(id)

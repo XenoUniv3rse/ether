@@ -271,7 +271,7 @@ func TestMatchGuidesByIDAndNameWithDryRunAndOverwrite(t *testing.T) {
 	if _, err := s.ImportSource(ctx, own); err != nil {
 		t.Fatal(err)
 	}
-	epg := Source{ID: "b-epg", Name: "EPG", Guide: xmltvFixture(30, "news.us=CNN-ish", "sports=US: Sports Central|SC", "movies=Movies", "movies1=UK: Movies +1", "own.id=Own Covered", "shared.epg=Shared Name", "news.us.alt=Alt", "stale=Nothing Like It")}
+	epg := Source{ID: "b-epg", Name: "EPG", Guide: xmltvFixture(30, "news.us=News-ish", "sports=US: Sports Central|SC", "movies=Movies", "movies1=UK: Movies +1", "own.id=Own Covered", "shared.epg=Shared Name", "news.us.alt=Alt", "stale=Nothing Like It")}
 	// "stale" has a channel element but no future programmes in this guide.
 	epg.Guide = strings.ReplaceAll(epg.Guide, `<programme channel="stale"`, `<programme channel="stale-old"`)
 	if _, err := s.ImportSource(ctx, epg); err != nil {
@@ -366,14 +366,14 @@ func TestMatchGuidesByIDAndNameWithDryRunAndOverwrite(t *testing.T) {
 
 func TestNormalizeGuideName(t *testing.T) {
 	same := [][2]string{
-		{"US: CNN HD", "CNN"},
-		{"UK | BBC One FHD", "bbc one"},
-		{"|UK| BBC One", "BBC-One"},
-		{"Discovery (US) 4K", "Discovery"},
+		{"US: News HD", "News"},
+		{"UK | Public One FHD", "public one"},
+		{"|UK| Public One", "Public-One"},
+		{"Factual (US) 4K", "Factual"},
 		{"Channel 4 +1", "Channel 4+1"},
-		{"Sky Sports [VIP] UHD", "Sky Sports"},
-		{"CNN US HD", "CNN"},
-		{"BBC One UK FHD", "BBC One"},
+		{"Sports Network [VIP] UHD", "Sports Network"},
+		{"News US HD", "News"},
+		{"Public One UK FHD", "Public One"},
 	}
 	for _, v := range same {
 		if a, b := normalizeGuideName(v[0]), normalizeGuideName(v[1]); a != b || a == "" {
@@ -390,11 +390,11 @@ func TestNormalizeGuideName(t *testing.T) {
 		name, normalized string
 		region           string
 	}{
-		{"US: CNN HD", "cnn", "US"},
-		{"UK | BBC One FHD", "bbcone", "GB"},
-		{"CNN US", "cnn", "US"},
-		{"BBC One UK", "bbcone", "GB"},
-		{"Discovery (US) 4K", "discovery", "US"},
+		{"US: News HD", "news", "US"},
+		{"UK | Public One FHD", "publicone", "GB"},
+		{"News US", "news", "US"},
+		{"Public One UK", "publicone", "GB"},
+		{"Factual (US) 4K", "factual", "US"},
 		{"Nothing Like It", "nothinglikeit", ""}, // an ordinary word is not a region
 		{"SC", "sc", ""},
 	} {
@@ -403,11 +403,11 @@ func TestNormalizeGuideName(t *testing.T) {
 			t.Errorf("guideNameRegion(%q) = %q, %q; want %q, %q", v.name, region, normalized, v.region, v.normalized)
 		}
 	}
-	if guideIDRegion("DAZN1.de") != "DE" || guideIDRegion("BBC1.uk") != "GB" ||
-		guideIDRegion("I12345.json.schedulesdirect.org") != "" || guideIDRegion("Channel.tv") != "" {
-		t.Errorf("guide id regions: DE=%q GB=%q org=%q tv=%q",
-			guideIDRegion("DAZN1.de"), guideIDRegion("BBC1.uk"),
-			guideIDRegion("I12345.json.schedulesdirect.org"), guideIDRegion("Channel.tv"))
+	if guideIDRegion("News1.de") != "DE" || guideIDRegion("Public1.uk") != "GB" ||
+		guideIDRegion("I12345.json.guide.invalid") != "" || guideIDRegion("Channel.tv") != "" {
+		t.Errorf("guide id regions: DE=%q GB=%q invalid=%q tv=%q",
+			guideIDRegion("News1.de"), guideIDRegion("Public1.uk"),
+			guideIDRegion("I12345.json.guide.invalid"), guideIDRegion("Channel.tv"))
 	}
 	if got := channelRegion(Channel{Name: "Sports", Group: "US: Sports"}); got != "US" {
 		t.Errorf("group-title region = %q, want US", got)
@@ -890,8 +890,8 @@ func TestGuideUploadKeepsNameCandidate(t *testing.T) {
 			t.Fatalf("%s: %d %s", path, rec.Code, rec.Body.String())
 		}
 	}
-	post("/sources/up/playlist", "#EXTM3U\n#EXTINF:-1,AR: Al Arabiya\nhttps://owner.invalid/live/one.ts\n")
-	post("/sources/up/guide", xmltvFixture(10, "alarabiya.ar=AR: Al Arabiya"))
+	post("/sources/up/playlist", "#EXTM3U\n#EXTINF:-1,AR: Arabic News\nhttps://owner.invalid/live/one.ts\n")
+	post("/sources/up/guide", xmltvFixture(10, "arabicnews.ar=AR: Arabic News"))
 	src := sourceByID(t, s, "up")
 	if src.ChannelCount != 1 || src.GuideChannelCount != 1 || src.ProgrammeCount != 10 {
 		t.Fatalf("guide upload stats: %+v", src)
@@ -901,34 +901,34 @@ func TestGuideUploadKeepsNameCandidate(t *testing.T) {
 		t.Fatalf("guide upload auto-mapped a name: %+v", cs)
 	}
 	var kept []GuideChannel
-	ownerJSON(t, s, "GET", "/guide/channels?q=alarabiya&source=up", "", &kept)
-	if len(kept) != 1 || kept[0].GuideID != "alarabiya.ar" || kept[0].Programmes == 0 {
+	ownerJSON(t, s, "GET", "/guide/channels?q=arabicnews&source=up", "", &kept)
+	if len(kept) != 1 || kept[0].GuideID != "arabicnews.ar" || kept[0].Programmes == 0 {
 		t.Fatalf("uploaded guide dropped its name candidate: %+v", kept)
 	}
 }
 
 func TestNameCandidatesOnlyForChannelsWithoutGuide(t *testing.T) {
 	cs := []Channel{
-		{Name: "US: CNN"},
+		{Name: "US: News"},
 		{Name: "Mapped", GuideID: "mapped.id"},
 		{Name: "Missing", GuideID: "missing.id"},
 	}
 	channels := map[string]Channel{
-		"cnn.us":    {GuideID: "cnn.us", Name: "CNN"},
+		"news.us":   {GuideID: "news.us", Name: "News"},
 		"mapped.id": {GuideID: "mapped.id", Name: "Mapped"},
 		"missing":   {GuideID: "missing", Name: "Missing"},
 		"other":     {GuideID: "other", Name: "Other"},
 	}
 	names := map[string][]string{
-		"cnn.us":    {"CNN"},
+		"news.us":   {"News"},
 		"mapped.id": {"Mapped"},
 		"missing":   {"Missing"},
 	}
 	got := nameCandidates(cs, channels, names)
 	if len(got) != 2 {
-		t.Fatalf("candidates = %+v, want cnn.us and missing", got)
+		t.Fatalf("candidates = %+v, want news.us and missing", got)
 	}
-	if _, ok := got["cnn.us"]; !ok {
+	if _, ok := got["news.us"]; !ok {
 		t.Fatalf("id-less channel lost its candidate: %+v", got)
 	}
 	if _, ok := got["missing"]; !ok {
