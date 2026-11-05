@@ -71,8 +71,16 @@ type session struct {
 	failoverGate chan struct{} // initialized under mu
 	// ctx is the session lifetime, cancelled by close; preparation I/O is
 	// bound to it (bindContext) so Stop cancels a slow Prepare/probe.
-	ctx         context.Context
-	cancel      context.CancelFunc
+	ctx    context.Context
+	cancel context.CancelFunc
+	// bound holds the cancels of live bindContext contexts. close cancels
+	// them synchronously, so every bound context (a Playback.Failover or
+	// Prepare in flight, including its internal retries) is cancelled
+	// before Stop returns; context.AfterFunc alone runs in a new goroutine
+	// and can lag.
+	boundMu     sync.Mutex
+	bound       map[uint64]context.CancelFunc
+	boundSeq    uint64
 	info        SessionInfo
 	streamGrant string
 	user        core.User
@@ -84,14 +92,60 @@ type session struct {
 }
 
 // bindContext derives a context cancelled when parent ends or when the
-// session is closed, whichever comes first.
+// session is closed, whichever comes first. A context bound after close
+// began is returned already cancelled.
 func (ss *session) bindContext(parent context.Context) (context.Context, context.CancelFunc) {
 	ctx, cancel := context.WithCancel(parent)
 	if ss.ctx == nil {
 		return ctx, cancel
 	}
+	ss.boundMu.Lock()
+	if ss.ctx.Err() != nil {
+		ss.boundMu.Unlock()
+		cancel()
+		return ctx, cancel
+	}
+	if ss.bound == nil {
+		ss.bound = map[uint64]context.CancelFunc{}
+	}
+	ss.boundSeq++
+	id := ss.boundSeq
+	ss.bound[id] = cancel
+	ss.boundMu.Unlock()
+	// Service shutdown cancels ss.ctx without close; that path may lag.
 	stop := context.AfterFunc(ss.ctx, cancel)
-	return ctx, func() { stop(); cancel() }
+	return ctx, func() {
+		stop()
+		cancel()
+		ss.boundMu.Lock()
+		delete(ss.bound, id)
+		ss.boundMu.Unlock()
+	}
+}
+
+// live reports why I/O for ctx must not start: ctx itself ended, or close
+// has begun (it cancels ss.ctx before anything else, so any effect of a
+// Stop — such as a failover gate it freed — is ordered after this check).
+func (ss *session) live(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if ss.ctx != nil && ss.ctx.Err() != nil {
+		return core.ErrNotFound
+	}
+	return nil
+}
+
+// cancelBound cancels every bound context; ss.ctx must already be
+// cancelled so bindContext cannot register another one afterwards.
+func (ss *session) cancelBound() {
+	ss.boundMu.Lock()
+	bound := ss.bound
+	ss.bound = nil
+	ss.boundMu.Unlock()
+	for _, cancel := range bound {
+		cancel()
+	}
 }
 
 // startOwnedHLS ties startup to the request and the returned encoder to the
@@ -130,6 +184,7 @@ func (ss *session) close(s *Service) {
 	}
 	if ss.cancel != nil {
 		ss.cancel()
+		ss.cancelBound()
 	}
 	ss.mu.Lock()
 	if ss.closed {
@@ -501,6 +556,9 @@ func (s *Service) prepareTrackStaged(ctx context.Context, ss *session, p Program
 
 	ctx, cancel := ss.bindContext(ctx)
 	defer cancel()
+	if err := ss.live(ctx); err != nil {
+		return nil, err
+	}
 	tr, err := s.prepareTrackOnStage(ctx, stage, p)
 	if err != nil {
 		return nil, err
@@ -548,6 +606,9 @@ func (s *Service) startIPTVSession(ctx context.Context, ss *session) error {
 
 	ctx, cancel := ss.bindContext(ctx)
 	defer cancel()
+	if err := ss.live(ctx); err != nil {
+		return err
+	}
 	if err := s.startIPTV(ctx, stage); err != nil {
 		return err
 	}
@@ -851,7 +912,10 @@ func (s *Service) Failover(ctx context.Context, id string, u *core.User) error {
 	case <-ctx.Done():
 		return ctx.Err()
 	}
-	if err := ctx.Err(); err != nil {
+	// A Stop can free the gate (by cancelling the holder) before this
+	// waiter's ctx is cancelled, and select picks randomly between ready
+	// cases: re-check that the session has not begun closing.
+	if err := ss.live(ctx); err != nil {
 		return err
 	}
 	now := s.o.Now()
@@ -898,6 +962,11 @@ func (s *Service) Failover(ctx context.Context, id string, u *core.User) error {
 		}
 	}
 
+	// close cancels ss.ctx before it marks the session closed: the last
+	// point a Stop that has begun is visible before provider I/O.
+	if err := ss.live(ctx); err != nil {
+		return err
+	}
 	ps, err := s.o.Playback.Failover(ctx, playbackID, at)
 	if err != nil {
 		return err
