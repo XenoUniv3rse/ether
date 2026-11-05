@@ -718,11 +718,6 @@ done:
 	return languageRank, styleRank, true
 }
 
-// unzipSubtitle is retained for callers without candidate style metadata.
-func unzipSubtitle(raw []byte, lang string) ([]byte, error) {
-	return unzipSubtitleCandidate(raw, Candidate{Language: lang})
-}
-
 // unzipSubtitleCandidate chooses only entries compatible with known filename
 // labels, preferring explicit language and style matches before cue count.
 // Expansion and parsing are bounded even when an entry is corrupt.
@@ -994,48 +989,6 @@ func missingForPreferences(user *core.User, embedded []core.StreamInfo, p Prefer
 	return MissingLanguages(user, suitable)
 }
 
-// candidatesForFetch applies Preferences to ranked candidates: forced-only
-// requires a real forced track (never a full or HI track), style sdh/forced
-// prefers matching tracks via a stable partition that keeps Rank order
-// inside each group. The input slice is not mutated.
-func candidatesForFetch(cands []Candidate, p Preferences) []Candidate {
-	if p.Mode == "forced-only" {
-		out := make([]Candidate, 0, len(cands))
-		for _, c := range cands {
-			if c.Forced {
-				out = append(out, c)
-			}
-		}
-		if len(out) == 0 {
-			return nil
-		}
-		cands = out
-	}
-	var match func(Candidate) bool
-	switch p.Style {
-	case "sdh":
-		match = func(c Candidate) bool { return c.HearingImp }
-	case "forced":
-		match = func(c Candidate) bool { return c.Forced }
-	case "normal":
-		match = func(c Candidate) bool { return !c.Forced && !c.HearingImp }
-	default:
-		return cands
-	}
-	out := make([]Candidate, 0, len(cands))
-	for _, c := range cands {
-		if match(c) {
-			out = append(out, c)
-		}
-	}
-	for _, c := range cands {
-		if !match(c) {
-			out = append(out, c)
-		}
-	}
-	return out
-}
-
 // Sidecars returns external subtitle streams already cached for the
 // user's preferred languages missing from the embedded tracks. It never
 // searches or downloads; a file is fetched only when the viewer picks
@@ -1100,21 +1053,6 @@ func (s *Service) loadSelection(title *core.Title, lang, release string, prefs .
 		return selection{}, false
 	}
 	return sel, true
-}
-
-func (s *Service) saveSelection(title *core.Title, lang, release string, sel selection, prefs ...Preferences) {
-	if s.dir == "" {
-		return
-	}
-	p := s.indexPath(title, lang, release, prefs...)
-	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
-		s.log.Debug("subtitle index dir", "err", err)
-		return
-	}
-	b, _ := json.Marshal(sel)
-	if err := writeFileAtomic(p, b); err != nil {
-		s.log.Debug("subtitle index write", "err", err)
-	}
 }
 
 func writeFileAtomic(path string, data []byte) error {
