@@ -294,7 +294,7 @@ type mkvTrack struct {
 	defaultDur  uint64
 	width       uint64
 	height      uint64
-	bitsPerChan uint64
+
 	transfer    int
 	primaries   int
 	matrix      int
@@ -1000,7 +1000,7 @@ func mkvTracksOf(b []byte) ([]mkvTrack, error) {
 							case mkvRange:
 								t.colourRange = int(mkvUint(c.body))
 							case mkvBitsPerChan:
-								t.bitsPerChan = mkvUint(c.body)
+
 							}
 						}
 					}

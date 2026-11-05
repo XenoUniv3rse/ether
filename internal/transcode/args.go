@@ -752,7 +752,6 @@ func subtitleOrdinal(info core.MediaInfo, idx int) int {
 type picturePlan struct {
 	w, h     int
 	scaling  bool
-	keepHDR  bool
 	tonemap  bool
 	tenBit   bool
 	outRange string
@@ -773,7 +772,7 @@ func planPicture(s runSpec, v *core.StreamInfo, codec string) picturePlan {
 	keepHDR := keepsHDR(v) && !d.ToneMap && codec == "hevc"
 	pic := picturePlan{
 		w: w, h: h, scaling: v.Height > 0 && h < v.Height,
-		keepHDR: keepHDR, tonemap: encodedRange(v) != rangeSDR && !keepHDR,
+		tonemap: encodedRange(v) != rangeSDR && !keepHDR,
 		// tenBit and outRange describe the encoded picture; without a
 		// contract they follow keepHDR.
 		tenBit: keepHDR, outRange: rangeSDR,
