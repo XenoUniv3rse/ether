@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/braedonsaunders/ether/internal/core"
+	"github.com/braedonsaunders/ether/internal/store"
 )
 
 // pendingWrites serializes and coalesces watch changes by viewer and item.
@@ -159,6 +160,13 @@ func (p *pendingWrites) run() {
 			p.remove(k, w.seq)
 			continue
 		}
+		if !store.IsWriteContention(err) {
+			// Only a busy writer is worth waiting for; any other failure would
+			// hold every later watch write behind this one forever.
+			p.s.log.Warn("state: dropping watch write that cannot be applied", "user", k.user, "key", k.key, "kind", w.kind, "err", err)
+			p.remove(k, w.seq)
+			continue
+		}
 		timer := time.NewTimer(100 * time.Millisecond)
 		select {
 		case <-p.stop:
@@ -187,8 +195,11 @@ func (p *pendingWrites) close(ctx context.Context) error {
 			return nil
 		}
 		if err := p.apply(ctx, k, w); err != nil {
-			p.s.log.Warn("state: pending watch writes could not be flushed", "err", err)
-			return err
+			if store.IsWriteContention(err) {
+				p.s.log.Warn("state: pending watch writes could not be flushed", "err", err)
+				return err
+			}
+			p.s.log.Warn("state: dropping watch write that cannot be applied", "user", k.user, "key", k.key, "kind", w.kind, "err", err)
 		}
 		p.remove(k, w.seq)
 	}

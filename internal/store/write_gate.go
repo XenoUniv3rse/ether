@@ -32,6 +32,20 @@ const writeGateWait = 10 * time.Second
 
 var errWriteGateTimeout = errors.New("database is locked (waited 10s for this process's other writer)")
 
+// IsWriteContention reports whether err means another writer held the
+// database (this process's write gate, SQLite's lock, or the caller's
+// deadline while waiting), so the same write may succeed when retried.
+func IsWriteContention(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, errWriteGateTimeout) || errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "database is locked") || strings.Contains(msg, "SQLITE_BUSY")
+}
+
 var (
 	gatesMu sync.Mutex
 	gates   = map[string]*writeGate{}
