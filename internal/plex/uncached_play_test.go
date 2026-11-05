@@ -425,6 +425,8 @@ func TestUncachedReasonsAreNamed(t *testing.T) {
 	}
 	e = newUncachedEnv(t, config.DebridRealDebrid, false, false)
 	e.remote.refuse = "infringing"
+	// Exercise a single refusal; multiple refused candidates trigger the separate add-pause policy.
+	e.ix.torrents = e.ix.torrents[1:2]
 	if _, text := e.decide(t, "refused"); text != msgDownloadRefused {
 		t.Fatalf("refused: %q", text)
 	}
