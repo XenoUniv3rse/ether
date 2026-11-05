@@ -570,7 +570,11 @@ func TestRelayErrorsCarryNoUpstreamDetail(t *testing.T) {
 
 func TestRelayRefusesHTTPSDowngrade(t *testing.T) {
 	plain := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		t.Errorf("plaintext upstream reached: %s", r.URL.Path)
+		// A provider may redirect to a plain-HTTP CDN edge; that hop must
+		// never carry the source's configured headers or Referer.
+		if r.URL.Path != "/seg.ts" || r.Header.Get("X-Case") != "" || r.Header.Get("Referer") != "" {
+			t.Errorf("plaintext upstream reached with source data: %s %v", r.URL.Path, r.Header)
+		}
 		io.WriteString(w, "PLAIN")
 	}))
 	defer plain.Close()
@@ -598,6 +602,14 @@ func TestRelayRefusesHTTPSDowngrade(t *testing.T) {
 		}
 		s.inputRelay.mu.Unlock()
 		code, _, body := relayGet(t, entry, nil)
+		if c == "redirect" {
+			// A cross-origin redirect to plain HTTP is followed without the
+			// source's headers (ESPN on an Xtream panel: https -> http CDN).
+			if code != http.StatusOK || string(body) != "PLAIN" {
+				t.Fatalf("cross-origin redirect downgrade = %d %q", code, body)
+			}
+			continue
+		}
 		if code != http.StatusBadGateway {
 			t.Fatalf("%s downgrade = %d %q", c, code, body)
 		}

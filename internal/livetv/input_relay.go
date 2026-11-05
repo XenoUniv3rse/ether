@@ -445,9 +445,9 @@ func (s *Service) serveRelayManifest(w http.ResponseWriter, g *inputGrant, base 
 }
 
 // scopeInputRedirects confines every configured source header to its origin.
-// The ffmpeg relay rejects HTTPS downgrades; the client resource proxy preserves
-// its existing public-CDN behavior while stripping headers across origins.
-func scopeInputRedirects(client *http.Client, origin string, headers http.Header, ua string, allowDowngrade bool) {
+// Redirects, including a provider's hop through a plain-HTTP CDN edge, are
+// followed; headers and Referer never leave the source's own origin.
+func scopeInputRedirects(client *http.Client, origin string, headers http.Header, ua string) {
 	checkRedirect := client.CheckRedirect
 	client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
 		if checkRedirect != nil {
@@ -457,9 +457,11 @@ func scopeInputRedirects(client *http.Client, origin string, headers http.Header
 		} else if len(via) >= 10 {
 			return errors.New("too many redirects")
 		}
-		if !allowDowngrade && via[len(via)-1].URL.Scheme == "https" && req.URL.Scheme != "https" {
-			return errRelayDowngrade
-		}
+		// Providers often bounce through a plain-HTTP edge on their CDN
+		// (https panel -> http CDN -> https CDN), and every IPTV player
+		// follows it. The redirect itself arrived over TLS, so the provider
+		// chose the hop. An http URL is never the source's https origin, so
+		// none of its configured headers or Referer are sent (below).
 		if relayOrigin(req.URL) != origin {
 			// Go synthesizes Referer from the previous URL, which can carry
 			// source query credentials even without a configured header.
@@ -482,7 +484,7 @@ func (s *Service) relayFetch(ctx context.Context, cancel context.CancelFunc, g *
 	client := *s.o.HTTPClient
 	client.Timeout = 0 // a live input is endless; idle time is bounded instead
 	ua := in.Header.Get("User-Agent")
-	scopeInputRedirects(&client, g.origin, g.headers, ua, false)
+	scopeInputRedirects(&client, g.origin, g.headers, ua)
 	u, err := url.Parse(raw)
 	if err != nil {
 		return nil, errRelayUnsupported
