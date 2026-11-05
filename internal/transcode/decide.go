@@ -827,7 +827,9 @@ func describeSource(info core.MediaInfo, v, a *core.StreamInfo) string {
 }
 
 // hdr10BaseReason explains why a Dolby Vision copy carries only its HDR10
-// base layer, or returns "" to keep the stream as it is. The player quirks
+// base layer, or returns "" to keep the stream as it is. Unsupported DV
+// profiles require an actual base-only output, not an unchanged copy whose
+// configuration still selects a DV decoder. The player quirks
 // are not hardware certifications or blanket HEVC/HDR limits; the client
 // matches are the registry quirks plex-appletv-hdr10-base (native Plex on
 // tvOS, any output) and plex-ios-hdr10-base (native Plex on iOS/iPadOS,
@@ -841,6 +843,8 @@ func hdr10BaseReason(v *core.StreamInfo, caps core.ClientCaps, opts core.DecideO
 	}
 	id := clientreg.Identity{Product: caps.Product, Platform: caps.Platform, Device: caps.Device, Version: caps.Version}
 	switch {
+	case !SupportsDVProfile(caps, v.DolbyVisionProfile):
+		return fmt.Sprintf("client lacks Dolby Vision profile %d: delivering its HDR10 base layer", v.DolbyVisionProfile)
 	case clientreg.HasQuirk(id, "plex-appletv-hdr10-base"):
 		return fmt.Sprintf("native Plex Apple TV compatibility: Dolby Vision profile %d uses its HDR10 base layer", v.DolbyVisionProfile)
 	case clientreg.HasQuirk(id, "plex-ios-hdr10-base") && outputContainer(caps, opts, v.Codec, "") == ContainerMatroska:
