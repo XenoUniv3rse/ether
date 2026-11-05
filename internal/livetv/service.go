@@ -1166,21 +1166,32 @@ func (s *Service) importSource(ctx context.Context, src Source) (Source, error) 
 		return src, fmt.Errorf("source needs a playlist or an XMLTV guide")
 	}
 	var cs []Channel
+	var stats m3uStats
+	src.SkippedVOD = 0
 	if strings.TrimSpace(src.Playlist) != "" { // guide-only (EPG) sources add no channels
-		cs, err = ParseM3U(strings.NewReader(src.Playlist), src.ID)
+		cs, stats, err = parseM3U(strings.NewReader(src.Playlist), src.ID)
 		if err != nil {
 			return src, fmt.Errorf("playlist: %w", err)
 		}
+		src.SkippedVOD = stats.SkippedVOD
 		if progress != nil {
 			progress.setChannels(len(cs))
 		}
-		s.o.Logger.Info("Live TV source read", "sourceId", src.ID, "source", src.Name, "step", "playlist", "bytes", len(src.Playlist), "channels", len(cs))
+		s.o.Logger.Info("Live TV source read", "sourceId", src.ID, "source", src.Name, "step", "playlist", "bytes", len(src.Playlist), "channels", len(cs), "skippedVod", stats.SkippedVOD)
 	}
 	allow, err := s.guideAllow(ctx, src, cs)
 	if err != nil {
 		return src, err
 	}
+	nameCandidateCount := 0
 	filter := guideFilter{From: s.o.Now().Add(-guideLookback), Until: s.o.Now().Add(guideLookahead), IDs: allow}
+	if len(cs) > 0 {
+		filter.Resolve = func(channels map[string]Channel, names map[string][]string) map[string]struct{} {
+			candidates := nameCandidates(cs, channels, names)
+			nameCandidateCount = len(candidates)
+			return candidates
+		}
+	}
 	g := XMLGuide{}
 	if src.GuideURL != "" {
 		if progress != nil {
@@ -1213,7 +1224,7 @@ func (s *Service) importSource(ctx context.Context, src Source) (Source, error) 
 		if progress != nil {
 			progress.setProgrammes(len(g.Programmes))
 		}
-		s.o.Logger.Info("Live TV source read", "sourceId", src.ID, "source", src.Name, "step", "guide", "channels", len(g.Channels), "programmes", len(g.Programmes))
+		s.o.Logger.Info("Live TV source read", "sourceId", src.ID, "source", src.Name, "step", "guide", "guideChannels", len(g.Channels), "nameCandidates", nameCandidateCount, "lateChannels", g.LateChannels, "programmes", len(g.Programmes))
 	}
 	if progress != nil {
 		progress.setPhase("saving")
@@ -1379,6 +1390,50 @@ func (s *Service) guideAllow(ctx context.Context, src Source, playlist []Channel
 	return ids, nil
 }
 
+// nameCandidates returns guide ids whose normalized name matches a playlist
+// channel that has no guide id, or whose guide id the guide does not declare.
+// Ambiguous matches are included: they are only stored for the owner to
+// review, and the resolver never changes a channel's mapping.
+func nameCandidates(cs []Channel, channels map[string]Channel, names map[string][]string) map[string]struct{} {
+	if len(cs) == 0 || len(channels) == 0 {
+		return nil
+	}
+	byName := map[string][]string{}
+	for id, c := range channels {
+		seen := map[string]bool{}
+		for _, n := range append([]string{c.Name}, names[id]...) {
+			k := normalizeGuideName(n)
+			if k == "" || seen[k] {
+				continue
+			}
+			seen[k] = true
+			byName[k] = append(byName[k], id)
+		}
+	}
+	channelIDs := make(map[string]bool, len(channels))
+	for id := range channels {
+		channelIDs[strings.ToLower(strings.TrimSpace(id))] = true
+	}
+	out := map[string]struct{}{}
+	for _, c := range cs {
+		if channelIDs[strings.ToLower(strings.TrimSpace(c.GuideID))] {
+			continue
+		}
+		seen := map[string]bool{}
+		for _, n := range []string{c.TvgName, c.Name} {
+			k := normalizeGuideName(n)
+			if k == "" || seen[k] {
+				continue
+			}
+			seen[k] = true
+			for _, id := range byName[k] {
+				out[id] = struct{}{}
+			}
+		}
+	}
+	return out
+}
+
 // SavePendingSource stores a named source that will receive a file upload
 // next. A body that already has a playlist or guide is imported instead.
 func (s *Service) SavePendingSource(ctx context.Context, src Source) (Source, error) {
@@ -1462,12 +1517,30 @@ func (s *Service) ImportUpload(ctx context.Context, id, part string, body io.Rea
 		if err != nil {
 			return src, err
 		}
+	} else {
+		// URL-backed sources do not store their playlist body. Their current
+		// channels are the best available resolver input for a guide upload.
+		stored, err := s.Channels(ctx)
+		if err != nil {
+			return src, err
+		}
+		for _, c := range stored {
+			if c.SourceID == src.ID {
+				cs = append(cs, c)
+			}
+		}
 	}
 	allow, err := s.guideAllow(ctx, src, cs)
 	if err != nil {
 		return src, err
 	}
-	g, _, err := parseXMLTV(rd, guideFilter{From: s.o.Now().Add(-guideLookback), Until: s.o.Now().Add(guideLookahead), IDs: allow})
+	filter := guideFilter{From: s.o.Now().Add(-guideLookback), Until: s.o.Now().Add(guideLookahead), IDs: allow}
+	if len(cs) > 0 {
+		filter.Resolve = func(channels map[string]Channel, names map[string][]string) map[string]struct{} {
+			return nameCandidates(cs, channels, names)
+		}
+	}
+	g, _, err := parseXMLTV(rd, filter)
 	if err != nil {
 		return src, err
 	}

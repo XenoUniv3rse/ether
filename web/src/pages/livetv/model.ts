@@ -56,6 +56,8 @@ export type Channel = {
   logo?: string;
   sourceId?: string;
   guideId?: string;
+  /** The provider's own tvg-name label; a hint for guide matching, not a key. */
+  tvgName?: string;
   /** The source whose XMLTV guide feeds this channel (blank: its own source). */
   guideSourceId?: string;
   streamUrl?: string;
@@ -131,6 +133,8 @@ export type Source = {
   channelCount?: number;
   guideChannelCount?: number;
   programmeCount?: number;
+  /** VOD entries the last playlist import left out. */
+  skippedVod?: number;
   guideFrom?: string;
   guideUntil?: string;
   lastError?: string;

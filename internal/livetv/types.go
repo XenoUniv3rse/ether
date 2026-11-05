@@ -84,6 +84,7 @@ type Channel struct {
 	Rating        string         `json:"rating,omitempty"`
 	SourceID      string         `json:"sourceId,omitempty"`
 	GuideID       string         `json:"guideId,omitempty"`
+	TvgName       string         `json:"tvgName,omitempty"`       // provider's label; a guide-matching hint
 	StreamURL     string         `json:"streamUrl,omitempty"`     // owner API only
 	StreamSources []StreamSource `json:"streamSources,omitempty"` // ordered inputs; independent of channel/guide identity
 	Group         string         `json:"group,omitempty"`
@@ -137,6 +138,10 @@ type Source struct {
 	LastError       string     `json:"lastError,omitempty"`
 	LastErrorAt     *time.Time `json:"lastErrorAt,omitempty"`
 	RefreshFailures int        `json:"refreshFailures,omitempty"`
+	// SkippedVOD counts VOD entries (Xtream /movie/ and /series/ streams)
+	// the last playlist import left out. It is persisted with the source so
+	// the console can report what the import dropped.
+	SkippedVOD int `json:"skippedVod,omitempty"`
 	// Read-only statistics computed by Sources(); ignored on import.
 	HasPlaylist       bool       `json:"hasPlaylist"`
 	HasGuide          bool       `json:"hasGuide"`

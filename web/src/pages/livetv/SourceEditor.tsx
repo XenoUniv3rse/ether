@@ -500,6 +500,11 @@ export function SourceEditor({
                 : t("Last imported {when}", { when: relativeTime(source.updatedAt) })}
             </span>
           ) : null}
+          {source?.skippedVod ? (
+            <span className="text-xs text-fg-muted">
+              {t("{count} VOD entries skipped", { count: formatNumber(source.skippedVod) })}
+            </span>
+          ) : null}
           {source ? (
             <Button
               variant="ghost"

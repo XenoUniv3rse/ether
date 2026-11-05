@@ -271,7 +271,7 @@ func TestMatchGuidesByIDAndNameWithDryRunAndOverwrite(t *testing.T) {
 	if _, err := s.ImportSource(ctx, own); err != nil {
 		t.Fatal(err)
 	}
-	epg := Source{ID: "b-epg", Name: "EPG", Guide: xmltvFixture(30, "news.us=CNN-ish", "sports=Sports Central|SC", "movies=Movies", "movies1=Movies +1", "own.id=Own Covered", "shared.epg=Shared Name", "news.us.alt=Alt", "stale=Nothing Like It")}
+	epg := Source{ID: "b-epg", Name: "EPG", Guide: xmltvFixture(30, "news.us=CNN-ish", "sports=US: Sports Central|SC", "movies=Movies", "movies1=UK: Movies +1", "own.id=Own Covered", "shared.epg=Shared Name", "news.us.alt=Alt", "stale=Nothing Like It")}
 	// "stale" has a channel element but no future programmes in this guide.
 	epg.Guide = strings.ReplaceAll(epg.Guide, `<programme channel="stale"`, `<programme channel="stale-old"`)
 	if _, err := s.ImportSource(ctx, epg); err != nil {
@@ -287,7 +287,7 @@ func TestMatchGuidesByIDAndNameWithDryRunAndOverwrite(t *testing.T) {
 	if ownerJSON(t, s, "POST", "/guide/match", `{"dryRun":true}`, &dry) != 200 {
 		t.Fatal("dry run failed")
 	}
-	if !dry.DryRun || dry.Matched != 5 || dry.Unmatched != 1 || dry.Skipped != 1 || len(dry.Changes) != 5 {
+	if !dry.DryRun || dry.Matched != 5 || dry.Unmatched != 1 || dry.Skipped != 1 || len(dry.Changes) != 5 || dry.Ambiguous != 0 || dry.RegionRejected != 0 {
 		t.Fatalf("dry run result: %+v", dry)
 	}
 	want := map[string][3]string{
@@ -295,9 +295,9 @@ func TestMatchGuidesByIDAndNameWithDryRunAndOverwrite(t *testing.T) {
 		"US: Sports Central FHD": {"b-epg", "sports", "EPG"},
 		"UK | Movies +1 HD":      {"b-epg", "movies1", "EPG"},
 		"Different Name Here":    {"b-epg", "news.us.alt", "EPG"},
-		// The playlist source keeps only channels its M3U maps, so the
-		// unmapped "Shared Name" listing lives on the guide-only source.
-		"Shared Name": {"b-epg", "shared.epg", "EPG"},
+		// The playlist's own guide now keeps the name candidate, so its
+		// source wins over the guide-only source with the same name.
+		"Shared Name": {"a-own", "shared.own", "Own"},
 	}
 	for _, ch := range dry.Changes {
 		w, ok := want[ch.ChannelName]
@@ -308,6 +308,15 @@ func TestMatchGuidesByIDAndNameWithDryRunAndOverwrite(t *testing.T) {
 	if c, _ := s.Channel(ctx, byName["News Network"].ID); c.GuideSourceID != "" {
 		t.Fatal("dry run saved changes")
 	}
+	// The candidate is only stored for review: import never changes the mapping.
+	if shared, _ := s.Channel(ctx, byName["Shared Name"].ID); shared.GuideID != "" || shared.GuideSourceID != "" {
+		t.Fatalf("name candidate was auto-mapped: %+v", shared)
+	}
+	var kept []GuideChannel
+	ownerJSON(t, s, "GET", "/guide/channels?q=shared&source=a-own", "", &kept)
+	if len(kept) != 1 || kept[0].GuideID != "shared.own" || kept[0].Programmes == 0 {
+		t.Fatalf("playlist source did not keep its name candidate: %+v", kept)
+	}
 
 	var res GuideMatchResult
 	ownerJSON(t, s, "POST", "/guide/match", `{"channelIds":["`+byName["News Network"].ID+`"]}`, &res)
@@ -315,7 +324,9 @@ func TestMatchGuidesByIDAndNameWithDryRunAndOverwrite(t *testing.T) {
 		t.Fatalf("restricted match: %+v", res)
 	}
 	ownerJSON(t, s, "POST", "/guide/match", `{}`, &res)
-	if res.Matched != 4 || res.Unmatched != 1 || res.Skipped != 2 || len(res.Changes) != 4 {
+	// Sports and Movies have a known region on both sides, so they apply;
+	// "Shared Name" has no region on either side and stays a proposal.
+	if res.Matched != 3 || res.Unmatched != 2 || res.Skipped != 2 || len(res.Changes) != 3 || res.Ambiguous != 0 || res.RegionRejected != 0 {
 		t.Fatalf("match result: %+v", res)
 	}
 	sports, _ := s.Channel(ctx, byName["US: Sports Central FHD"].ID)
@@ -327,9 +338,10 @@ func TestMatchGuidesByIDAndNameWithDryRunAndOverwrite(t *testing.T) {
 		t.Fatalf("matched channel has no guide: %+v", ps)
 	}
 
-	// Shared Name was not in the playlist's tvg-ids, so the guide-only source supplies it.
-	if shared, _ := s.Channel(ctx, byName["Shared Name"].ID); shared.GuideSourceID != "b-epg" || shared.GuideID != "shared.epg" {
-		t.Fatalf("unmapped playlist guide channel was kept: %+v", shared)
+	// The candidate is kept for review, but a match with one unknown region
+	// is never applied on the owner's behalf.
+	if shared, _ := s.Channel(ctx, byName["Shared Name"].ID); shared.GuideID != "" || shared.GuideSourceID != "" {
+		t.Fatalf("review-only name match was applied: %+v", shared)
 	}
 
 	// A covered channel mapped to another source keeps it unless overwrite
@@ -347,7 +359,7 @@ func TestMatchGuidesByIDAndNameWithDryRunAndOverwrite(t *testing.T) {
 	if c, _ := s.Channel(ctx, covered.ID); c.GuideSourceID != "" || c.GuideID != "own.id" {
 		t.Fatalf("overwrite did not prefer own source: %+v", c)
 	}
-	if res.Skipped != 0 || res.Unmatched != 1 || len(res.Changes) != 1 {
+	if res.Matched != 5 || res.Skipped != 0 || res.Unmatched != 2 || len(res.Changes) != 1 {
 		t.Fatalf("overwrite result: %+v", res)
 	}
 }
@@ -360,6 +372,8 @@ func TestNormalizeGuideName(t *testing.T) {
 		{"Discovery (US) 4K", "Discovery"},
 		{"Channel 4 +1", "Channel 4+1"},
 		{"Sky Sports [VIP] UHD", "Sky Sports"},
+		{"CNN US HD", "CNN"},
+		{"BBC One UK FHD", "BBC One"},
 	}
 	for _, v := range same {
 		if a, b := normalizeGuideName(v[0]), normalizeGuideName(v[1]); a != b || a == "" {
@@ -371,6 +385,32 @@ func TestNormalizeGuideName(t *testing.T) {
 		if normalizeGuideName(v[0]) == normalizeGuideName(v[1]) {
 			t.Errorf("%q matched %q", v[0], v[1])
 		}
+	}
+	for _, v := range []struct {
+		name, normalized string
+		region           string
+	}{
+		{"US: CNN HD", "cnn", "US"},
+		{"UK | BBC One FHD", "bbcone", "GB"},
+		{"CNN US", "cnn", "US"},
+		{"BBC One UK", "bbcone", "GB"},
+		{"Discovery (US) 4K", "discovery", "US"},
+		{"Nothing Like It", "nothinglikeit", ""}, // an ordinary word is not a region
+		{"SC", "sc", ""},
+	} {
+		region, normalized := guideNameRegion(v.name)
+		if region != v.region || normalized != v.normalized {
+			t.Errorf("guideNameRegion(%q) = %q, %q; want %q, %q", v.name, region, normalized, v.region, v.normalized)
+		}
+	}
+	if guideIDRegion("DAZN1.de") != "DE" || guideIDRegion("BBC1.uk") != "GB" ||
+		guideIDRegion("I12345.json.schedulesdirect.org") != "" || guideIDRegion("Channel.tv") != "" {
+		t.Errorf("guide id regions: DE=%q GB=%q org=%q tv=%q",
+			guideIDRegion("DAZN1.de"), guideIDRegion("BBC1.uk"),
+			guideIDRegion("I12345.json.schedulesdirect.org"), guideIDRegion("Channel.tv"))
+	}
+	if got := channelRegion(Channel{Name: "Sports", Group: "US: Sports"}); got != "US" {
+		t.Errorf("group-title region = %q, want US", got)
 	}
 }
 
@@ -717,5 +757,184 @@ func TestMatchGuidesLeavesDisabledChannelsUnlessListed(t *testing.T) {
 	}
 	if listed.Matched != 1 || listed.Changes[0].ChannelID != retired.ID {
 		t.Fatalf("a listed disabled channel should still match: %+v", listed)
+	}
+}
+
+func TestImportKeepsNameCandidateWithoutMapping(t *testing.T) {
+	ctx := context.Background()
+	s := testService(t, Options{Now: func() time.Time { return guideTestNow }})
+	src := Source{ID: "iptv", Name: "IPTV", Playlist: m3uFixture("=Shared Name"), Guide: xmltvFixture(10, "shared.own=Shared Name")}
+	if _, err := s.ImportSource(ctx, src); err != nil {
+		t.Fatal(err)
+	}
+	cs, _ := s.Channels(ctx)
+	if len(cs) != 1 || cs[0].GuideID != "" || cs[0].GuideSourceID != "" {
+		t.Fatalf("import auto-mapped a name: %+v", cs)
+	}
+	var kept []GuideChannel
+	ownerJSON(t, s, "GET", "/guide/channels?q=shared&source=iptv", "", &kept)
+	if len(kept) != 1 || kept[0].GuideID != "shared.own" || kept[0].Programmes == 0 {
+		t.Fatalf("name candidate was not kept with its programmes: %+v", kept)
+	}
+	if ps, _ := s.programmes(ctx, cs[0], guideTestNow, guideTestNow.Add(time.Hour)); len(ps) != 0 {
+		t.Fatalf("unmapped channel has guide data: %+v", ps)
+	}
+	var dry GuideMatchResult
+	ownerJSON(t, s, "POST", "/guide/match", `{"dryRun":true}`, &dry)
+	if dry.Matched != 1 || dry.Unmatched != 0 || len(dry.Changes) != 1 ||
+		dry.Changes[0].GuideID != "shared.own" || dry.Changes[0].Method != "name" || dry.Ambiguous != 0 || dry.RegionRejected != 0 {
+		t.Fatalf("dry run proposal: %+v", dry)
+	}
+	// Both sides have no region: the owner sees the proposal, but a plain
+	// match does not apply it.
+	var applied GuideMatchResult
+	ownerJSON(t, s, "POST", "/guide/match", `{}`, &applied)
+	if applied.Matched != 0 || applied.Unmatched != 1 || len(applied.Changes) != 0 {
+		t.Fatalf("review-only match applied: %+v", applied)
+	}
+	if c, _ := s.Channel(ctx, cs[0].ID); c.GuideID != "" {
+		t.Fatalf("review-only match changed the mapping: %+v", c)
+	}
+}
+
+func TestMatchGuidesAppliesRegionConsistentName(t *testing.T) {
+	ctx := context.Background()
+	s := testService(t, Options{Now: func() time.Time { return guideTestNow }})
+	if _, err := s.ImportSource(ctx, Source{ID: "iptv", Name: "IPTV", Playlist: m3uFixture("=US: Sports Central HD")}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.ImportSource(ctx, Source{ID: "epg", Name: "EPG", Guide: xmltvFixture(10, "sports.us=US: Sports Central")}); err != nil {
+		t.Fatal(err)
+	}
+	var res GuideMatchResult
+	ownerJSON(t, s, "POST", "/guide/match", `{}`, &res)
+	if res.Matched != 1 || res.Unmatched != 0 || len(res.Changes) != 1 ||
+		res.Changes[0].GuideID != "sports.us" || res.Changes[0].Method != "name" || res.RegionRejected != 0 {
+		t.Fatalf("region-consistent name did not apply: %+v", res)
+	}
+	cs, _ := s.Channels(ctx)
+	c, _ := s.Channel(ctx, cs[0].ID)
+	if c.GuideID != "sports.us" || c.GuideSourceID != "epg" {
+		t.Fatalf("mapping not saved: %+v", c)
+	}
+	if ps, _ := s.programmes(ctx, c, guideTestNow, guideTestNow.Add(time.Hour)); len(ps) != 1 {
+		t.Fatalf("mapped channel has no guide: %+v", ps)
+	}
+}
+
+func TestMatchGuidesRejectsAmbiguousName(t *testing.T) {
+	setup := func(t *testing.T, playlist string, guide string) *Service {
+		t.Helper()
+		ctx := context.Background()
+		s := testService(t, Options{Now: func() time.Time { return guideTestNow }})
+		if _, err := s.ImportSource(ctx, Source{ID: "iptv", Name: "IPTV", Playlist: playlist}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.ImportSource(ctx, Source{ID: "epg", Name: "EPG", Guide: guide}); err != nil {
+			t.Fatal(err)
+		}
+		return s
+	}
+	t.Run("several guide ids", func(t *testing.T) {
+		s := setup(t, m3uFixture("=News One"), xmltvFixture(10, "news.a=News One", "news.b=News One"))
+		var res GuideMatchResult
+		ownerJSON(t, s, "POST", "/guide/match", `{"dryRun":true}`, &res)
+		if res.Matched != 0 || res.Unmatched != 1 || len(res.Changes) != 0 || res.Ambiguous != 1 {
+			t.Fatalf("ambiguous guide name accepted: %+v", res)
+		}
+	})
+	t.Run("several playlist rows", func(t *testing.T) {
+		s := setup(t, m3uFixture("=News One", "=News One"), xmltvFixture(10, "news=News One"))
+		var res GuideMatchResult
+		ownerJSON(t, s, "POST", "/guide/match", `{"dryRun":true}`, &res)
+		if res.Matched != 0 || res.Unmatched != 2 || len(res.Changes) != 0 || res.Ambiguous != 2 {
+			t.Fatalf("duplicate playlist name accepted: %+v", res)
+		}
+	})
+}
+
+func TestMatchGuidesRejectsRegionConflict(t *testing.T) {
+	ctx := context.Background()
+	s := testService(t, Options{Now: func() time.Time { return guideTestNow }})
+	if _, err := s.ImportSource(ctx, Source{ID: "iptv", Name: "IPTV", Playlist: m3uFixture("=US: Sports Central HD")}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.ImportSource(ctx, Source{ID: "epg", Name: "EPG", Guide: xmltvFixture(10, "sports.uk=UK: Sports Central")}); err != nil {
+		t.Fatal(err)
+	}
+	for _, body := range []string{`{"dryRun":true}`, `{}`} {
+		var res GuideMatchResult
+		ownerJSON(t, s, "POST", "/guide/match", body, &res)
+		if res.Matched != 0 || res.Unmatched != 1 || len(res.Changes) != 0 || res.RegionRejected != 1 {
+			t.Fatalf("region conflict accepted (%s): %+v", body, res)
+		}
+	}
+	cs, _ := s.Channels(ctx)
+	if c, _ := s.Channel(ctx, cs[0].ID); c.GuideID != "" {
+		t.Fatalf("region conflict changed the mapping: %+v", c)
+	}
+}
+
+func TestGuideUploadKeepsNameCandidate(t *testing.T) {
+	ctx := context.Background()
+	s := testService(t, Options{Now: func() time.Time { return guideTestNow }})
+	if ownerJSON(t, s, "POST", "/sources?pending=1", `{"id":"up","name":"Upload"}`, nil) != 200 {
+		t.Fatal("pending source")
+	}
+	post := func(path, body string) {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
+		rec := httptest.NewRecorder()
+		s.Handler().ServeHTTP(rec, req)
+		if rec.Code != 200 {
+			t.Fatalf("%s: %d %s", path, rec.Code, rec.Body.String())
+		}
+	}
+	post("/sources/up/playlist", "#EXTM3U\n#EXTINF:-1,AR: Al Arabiya\nhttps://owner.invalid/live/one.ts\n")
+	post("/sources/up/guide", xmltvFixture(10, "alarabiya.ar=AR: Al Arabiya"))
+	src := sourceByID(t, s, "up")
+	if src.ChannelCount != 1 || src.GuideChannelCount != 1 || src.ProgrammeCount != 10 {
+		t.Fatalf("guide upload stats: %+v", src)
+	}
+	cs, _ := s.Channels(ctx)
+	if len(cs) != 1 || cs[0].GuideID != "" || cs[0].GuideSourceID != "" {
+		t.Fatalf("guide upload auto-mapped a name: %+v", cs)
+	}
+	var kept []GuideChannel
+	ownerJSON(t, s, "GET", "/guide/channels?q=alarabiya&source=up", "", &kept)
+	if len(kept) != 1 || kept[0].GuideID != "alarabiya.ar" || kept[0].Programmes == 0 {
+		t.Fatalf("uploaded guide dropped its name candidate: %+v", kept)
+	}
+}
+
+func TestNameCandidatesOnlyForChannelsWithoutGuide(t *testing.T) {
+	cs := []Channel{
+		{Name: "US: CNN"},
+		{Name: "Mapped", GuideID: "mapped.id"},
+		{Name: "Missing", GuideID: "missing.id"},
+	}
+	channels := map[string]Channel{
+		"cnn.us":    {GuideID: "cnn.us", Name: "CNN"},
+		"mapped.id": {GuideID: "mapped.id", Name: "Mapped"},
+		"missing":   {GuideID: "missing", Name: "Missing"},
+		"other":     {GuideID: "other", Name: "Other"},
+	}
+	names := map[string][]string{
+		"cnn.us":    {"CNN"},
+		"mapped.id": {"Mapped"},
+		"missing":   {"Missing"},
+	}
+	got := nameCandidates(cs, channels, names)
+	if len(got) != 2 {
+		t.Fatalf("candidates = %+v, want cnn.us and missing", got)
+	}
+	if _, ok := got["cnn.us"]; !ok {
+		t.Fatalf("id-less channel lost its candidate: %+v", got)
+	}
+	if _, ok := got["missing"]; !ok {
+		t.Fatalf("absent guide id lost its candidate: %+v", got)
+	}
+	if _, ok := got["mapped.id"]; ok {
+		t.Fatalf("present guide id was kept as a name candidate: %+v", got)
 	}
 }
