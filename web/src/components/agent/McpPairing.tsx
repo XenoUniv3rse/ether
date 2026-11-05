@@ -6,17 +6,10 @@ import { Button, Spinner, toast } from "@braedonsaunders/appkit-ui";
 import { Check, Copy } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { t } from "../../i18n";
+import { formatDate } from "../../lib/format";
 import { Drawer } from "../Drawer";
 import { ErrorPanel } from "../feedback";
 import { fetchMcpClients, revokeMcpClient, type McpClient } from "./agentApi";
-
-function formatDate(iso?: string): string {
-  if (!iso) return "";
-  const date = new Date(iso);
-  return Number.isNaN(date.getTime())
-    ? ""
-    : date.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
-}
 
 function CopyButton({ value, label }: { value: string; label: string }) {
   const [copied, setCopied] = useState(false);
@@ -129,7 +122,7 @@ export function McpPairingDrawer({ open, onClose }: { open: boolean; onClose: ()
           ) : (
             <ul className="divide-y divide-border rounded-xl border border-border">
               {clients.map((client) => {
-                const pairedOn = formatDate(client.createdAt);
+                const pairedOn = client.createdAt ? formatDate(client.createdAt) : "";
                 return (
                   <li key={client.id} className="flex items-center gap-3 px-3 py-2.5">
                     <span className="min-w-0 flex-1">

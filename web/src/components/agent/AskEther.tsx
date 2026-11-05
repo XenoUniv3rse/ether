@@ -19,6 +19,7 @@ import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } fro
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { t } from "../../i18n";
 import { useLocale } from "../../i18n/react";
+import { formatDate } from "../../lib/format";
 import { apiStream, errorMessage } from "../../lib/api";
 import { ActionMenu } from "../ActionMenu";
 import { Drawer } from "../Drawer";
@@ -42,14 +43,6 @@ import { McpPairingDrawer } from "./McpPairing";
 // The panel pulls in the AI SDK stream parser and the markdown renderer, so
 // it loads only when the owner opens the drawer.
 const AskEtherPanel = lazy(() => import("./AskEtherPanel"));
-
-function formatThreadDate(iso?: string): string {
-  if (!iso) return "";
-  const date = new Date(iso);
-  return Number.isNaN(date.getTime())
-    ? ""
-    : date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
-}
 
 export function AskEther() {
   const location = useLocation();
@@ -433,7 +426,8 @@ export function AskEther() {
           ) : (
             <ul className="divide-y divide-border rounded-xl border border-border">
               {(threads ?? []).map((thread) => {
-                const date = formatThreadDate(thread.updatedAt ?? thread.createdAt);
+                const stamp = thread.updatedAt ?? thread.createdAt;
+                const date = stamp ? formatDate(stamp) : "";
                 return (
                   <li key={thread.id}>
                     <button
