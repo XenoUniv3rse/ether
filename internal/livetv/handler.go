@@ -1,12 +1,14 @@
 package livetv
 
 import (
+	"compress/gzip"
 	"encoding/json"
 	"encoding/xml"
 	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/braedonsaunders/ether/internal/core"
@@ -20,6 +22,23 @@ func (s *Service) Handler() http.Handler {
 	r := chi.NewRouter()
 	owner := &core.User{IsOwner: true}
 	r.Get("/channels", func(w http.ResponseWriter, r *http.Request) { v, e := s.Channels(r.Context()); ownerResult(w, v, e) })
+	r.Get("/channels/summary", func(w http.ResponseWriter, r *http.Request) {
+		v, e := s.ChannelSummaries(r.Context())
+		ownerResult(w, v, e)
+	})
+	r.Get("/channels/page", func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		limit, _ := strconv.Atoi(q.Get("limit"))
+		offset, _ := strconv.Atoi(q.Get("offset"))
+		v, e := s.ChannelPage(r.Context(), ChannelPageQuery{
+			Limit: limit, Offset: offset, Q: q.Get("q"), Filter: q.Get("filter"), Source: q.Get("source"),
+		})
+		ownerResult(w, v, e)
+	})
+	r.Get("/channels/{id}", func(w http.ResponseWriter, r *http.Request) {
+		v, e := s.Channel(r.Context(), chi.URLParam(r, "id"))
+		ownerResult(w, v, e)
+	})
 	r.Get("/channels/{id}/sources/status", func(w http.ResponseWriter, r *http.Request) {
 		v, e := s.StreamSourceStatuses(r.Context(), chi.URLParam(r, "id"))
 		ownerResult(w, v, e)
@@ -117,7 +136,7 @@ func (s *Service) Handler() http.Handler {
 			ownerResult(w, nil, e)
 			return
 		}
-		v, e := s.Guide(r.Context(), owner, from, until)
+		v, e := s.GuideForChannels(r.Context(), owner, from, until, guideChannelIDs(r))
 		ownerResult(w, v, e)
 	})
 	s.guideRoutes(r)
@@ -182,7 +201,78 @@ func (s *Service) Handler() http.Handler {
 		}
 		ownerResult(w, Schedule(c, from, until), nil)
 	})
-	return r
+	return gzipResponses(r)
+}
+
+// guideChannelIDs reads the optional channels filter. The whole lineup stays
+// the default so existing callers keep their response.
+func guideChannelIDs(r *http.Request) []string {
+	raw := r.URL.Query()["channels"]
+	if len(raw) == 0 {
+		return nil
+	}
+	seen := map[string]bool{}
+	ids := []string{}
+	for _, value := range raw {
+		for _, id := range strings.Split(value, ",") {
+			id = strings.TrimSpace(id)
+			if id != "" && !seen[id] {
+				seen[id] = true
+				ids = append(ids, id)
+			}
+		}
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	return ids
+}
+
+// gzipResponses compresses the JSON owner API. The lineup and coverage
+// payloads are tens of megabytes before compression; browsers negotiate this
+// on their own and clients that do not ask for gzip see the old bytes.
+func gzipResponses(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") {
+			next.ServeHTTP(w, r)
+			return
+		}
+		w.Header().Set("Content-Encoding", "gzip")
+		w.Header().Add("Vary", "Accept-Encoding")
+		w.Header().Del("Content-Length")
+		gz := gzip.NewWriter(w)
+		defer gz.Close()
+		next.ServeHTTP(&gzipResponseWriter{ResponseWriter: w, zw: gz}, r)
+	})
+}
+
+type gzipResponseWriter struct {
+	http.ResponseWriter
+	zw          *gzip.Writer
+	wroteHeader bool
+}
+
+func (w *gzipResponseWriter) WriteHeader(code int) {
+	if w.wroteHeader {
+		return
+	}
+	w.wroteHeader = true
+	w.Header().Del("Content-Length")
+	w.ResponseWriter.WriteHeader(code)
+}
+
+func (w *gzipResponseWriter) Write(p []byte) (int, error) {
+	if !w.wroteHeader {
+		w.WriteHeader(http.StatusOK)
+	}
+	return w.zw.Write(p)
+}
+
+func (w *gzipResponseWriter) Flush() {
+	w.zw.Flush()
+	if f, ok := w.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
 }
 func ownerBody(w http.ResponseWriter, r *http.Request, v any) bool {
 	r.Body = http.MaxBytesReader(w, r.Body, 80<<20)

@@ -84,6 +84,33 @@ export type Channel = {
   /** IANA zone. Empty means block times are UTC, every day, as older channels stored them. */
   timezone?: string;
 };
+/** The lineup identity the paged console API returns; no stream or programme payload. */
+export type ChannelSummary = Omit<Channel, "epoch" | "seed" | "shuffle" | "items"> &
+  Partial<Pick<Channel, "epoch" | "seed" | "shuffle" | "items">>;
+export type ChannelCounts = {
+  all: number;
+  live: number;
+  favorites: number;
+  virtual: number;
+  iptv: number;
+  off: number;
+  missing: number;
+};
+export type ChannelGroup = {
+  key: string;
+  sourceId?: string;
+  kind: "virtual" | "iptv";
+  count: number;
+  start: number;
+};
+export type ChannelPage = {
+  channels: Channel[];
+  total: number;
+  counts: ChannelCounts;
+  groups: ChannelGroup[];
+  coverage: Record<string, boolean>;
+  nextNumber: string;
+};
 export type StreamSource = {
   id: string;
   name: string;
@@ -230,14 +257,35 @@ export function policyPermits(
   return !isPrivate || (p?.granted ?? []).includes(channelId);
 }
 
+export const CHANNELS_PER_PAGE = 200;
+
 export const tv = {
   channels: (signal?: AbortSignal) => apiFetch<Channel[]>("/livetv/channels", { signal }),
+  channelPage: (
+    q: { offset?: number; limit?: number; q?: string; filter?: string; source?: string },
+    signal?: AbortSignal,
+  ) => {
+    const p = new URLSearchParams();
+    p.set("offset", String(q.offset ?? 0));
+    p.set("limit", String(q.limit ?? CHANNELS_PER_PAGE));
+    if (q.q?.trim()) p.set("q", q.q.trim());
+    if (q.filter) p.set("filter", q.filter);
+    if (q.source) p.set("source", q.source);
+    return apiFetch<ChannelPage>(`/livetv/channels/page?${p}`, { signal });
+  },
+  channel: (id: string, signal?: AbortSignal) =>
+    apiFetch<Channel>(`/livetv/channels/${enc(id)}`, { signal }),
+  channelSummaries: (signal?: AbortSignal) =>
+    apiFetch<ChannelSummary[]>("/livetv/channels/summary", { signal }),
   sources: (signal?: AbortSignal) => apiFetch<Source[]>("/livetv/sources", { signal }),
-  guide: (from: Date, until: Date, signal?: AbortSignal) =>
-    apiFetch<Programme[]>(
-      `/livetv/guide?from=${enc(from.toISOString())}&until=${enc(until.toISOString())}`,
-      { signal },
-    ),
+  guide: (from: Date, until: Date, channels?: string[], signal?: AbortSignal) => {
+    const p = new URLSearchParams({
+      from: from.toISOString(),
+      until: until.toISOString(),
+    });
+    if (channels?.length) p.set("channels", channels.join(","));
+    return apiFetch<Programme[]>(`/livetv/guide?${p}`, { signal });
+  },
   saveChannel: (c: Channel) =>
     apiFetch<Channel>(
       `/livetv/channels${c.id ? `/${enc(c.id)}` : ""}`,

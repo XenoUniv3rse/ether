@@ -9,7 +9,7 @@ import {
   Sparkles,
   Star,
 } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { t, tn } from "../../i18n";
 import { formatNumber, relativeTime } from "../../lib/format";
 import { ChannelLogo } from "./ChannelLogo";
@@ -20,6 +20,7 @@ import {
   onNow,
   progress,
   type Channel,
+  type ChannelGroup,
   type Programme,
   type Source,
 } from "./model";
@@ -33,60 +34,50 @@ export type Selection =
 
 const PAGE = 120;
 
-/** The channel lineup: virtual channels, then each IPTV source's channels. */
+/** The channel lineup: virtual channels, then each IPTV source's channels.
+ * Group counts and rows come from the paged API; only expanded groups fetch. */
 export function ChannelList({
-  channels,
+  groups,
   sources,
+  rowAt,
+  onNeedRange,
   guide,
   covered,
   selected,
   onSelect,
   onToggleFavorite,
   now,
+  total,
   emptyHint,
 }: {
-  channels: Channel[];
+  groups: ChannelGroup[];
   sources: Source[];
+  rowAt: (index: number) => Channel | undefined;
+  onNeedRange: (start: number, end: number) => void;
   guide: Map<string, Programme[]>;
   covered: (c: Channel) => boolean | undefined;
   selected: string | null;
   onSelect: (id: string) => void;
   onToggleFavorite: (c: Channel) => void;
   now: number;
+  total: number;
   emptyHint: React.ReactNode;
 }) {
-  const groups: { key: string; title: string; icon: React.ReactNode; items: Channel[] }[] = [];
-  const virtual = channels.filter((c) => c.kind === "virtual");
-  if (virtual.length)
-    groups.push({
-      key: "virtual",
-      title: t("Virtual channels"),
-      icon: <Sparkles size={12} />,
-      items: virtual,
-    });
-  const bySource = new Map<string, Channel[]>();
-  for (const c of channels) {
-    if (c.kind !== "iptv") continue;
-    const k = c.sourceId ?? "";
-    bySource.set(k, [...(bySource.get(k) ?? []), c]);
-  }
-  for (const [id, items] of bySource) {
-    groups.push({
-      key: `src-${id}`,
-      title: sources.find((s) => s.id === id)?.name ?? "IPTV",
-      icon: <Radio size={12} />,
-      items,
-    });
-  }
-  if (!channels.length) return <div className="px-4 py-10 text-center">{emptyHint}</div>;
+  if (!total) return <div className="px-4 py-10 text-center">{emptyHint}</div>;
   return (
     <div className="pb-6">
       {groups.map((g) => (
         <ChannelGroup
           key={g.key}
-          title={g.title}
-          icon={g.icon}
-          items={g.items}
+          group={g}
+          title={
+            g.kind === "virtual"
+              ? t("Virtual channels")
+              : (sources.find((s) => s.id === g.sourceId)?.name ?? "IPTV")
+          }
+          icon={g.kind === "virtual" ? <Sparkles size={12} /> : <Radio size={12} />}
+          rowAt={rowAt}
+          onNeedRange={onNeedRange}
           guide={guide}
           covered={covered}
           selected={selected}
@@ -100,14 +91,18 @@ export function ChannelList({
 }
 
 function ChannelGroup({
+  group,
   title,
   icon,
-  items,
+  rowAt,
+  onNeedRange,
   ...rest
 }: {
+  group: ChannelGroup;
   title: string;
   icon: React.ReactNode;
-  items: Channel[];
+  rowAt: (index: number) => Channel | undefined;
+  onNeedRange: (start: number, end: number) => void;
   guide: Map<string, Programme[]>;
   covered: (c: Channel) => boolean | undefined;
   selected: string | null;
@@ -117,6 +112,11 @@ function ChannelGroup({
 }) {
   const [open, setOpen] = useState(true);
   const [limit, setLimit] = useState(PAGE);
+  const end = Math.min(limit, group.count);
+  useEffect(() => {
+    if (open) onNeedRange(group.start, group.start + end);
+  }, [open, group.start, end, onNeedRange]);
+  const rows = Array.from({ length: end }, (_, k) => group.start + k);
   return (
     <section aria-label={title}>
       <button
@@ -128,14 +128,23 @@ function ChannelGroup({
         <ChevronRight size={12} className={cn("transition-transform", open && "rotate-90")} />
         {icon}
         <span className="min-w-0 flex-1 truncate">{title}</span>
-        <span className="tabular-nums">{formatNumber(items.length)}</span>
+        <span className="tabular-nums">{formatNumber(group.count)}</span>
       </button>
       {open ? (
         <ul className="px-2 py-1">
-          {items.slice(0, limit).map((c) => (
-            <ChannelRow key={c.id} channel={c} {...rest} />
-          ))}
-          {items.length > limit ? (
+          {rows.map((i) => {
+            const c = rowAt(i);
+            return c ? (
+              <ChannelRow key={c.id} channel={c} {...rest} />
+            ) : (
+              <li
+                key={`pending-${i}`}
+                aria-hidden
+                className="mx-2 h-[42px] animate-pulse rounded-lg bg-surface-hover/50"
+              />
+            );
+          })}
+          {group.count > limit ? (
             <li className="px-2 py-1">
               <Button
                 variant="ghost"
@@ -144,7 +153,7 @@ function ChannelGroup({
                 onClick={() => setLimit((l) => l + PAGE * 4)}
               >
                 {t("Show {count} more", {
-                  count: formatNumber(Math.min(items.length - limit, PAGE * 4)),
+                  count: formatNumber(Math.min(group.count - limit, PAGE * 4)),
                 })}
               </Button>
             </li>
@@ -263,20 +272,19 @@ function ChannelRow({
 /** Guide-data health and every source, on the left panel's Sources tab. */
 export function SourceList({
   sources,
-  channels,
+  live,
   missing,
   selected,
   onSelect,
 }: {
   sources: Source[];
-  channels: Channel[];
+  live: number;
   missing: number | null;
   selected: Selection;
   onSelect: (s: Selection) => void;
 }) {
-  const live = channels.filter((c) => c.enabled);
-  const coveredCount = missing === null ? null : Math.max(0, live.length - missing);
-  const pct = coveredCount === null || !live.length ? 1 : coveredCount / live.length;
+  const coveredCount = missing === null ? null : Math.max(0, live - missing);
+  const pct = coveredCount === null || !live ? 1 : coveredCount / live;
   const r = 15.5;
   const circ = 2 * Math.PI * r;
   return (
@@ -315,11 +323,11 @@ export function SourceList({
               : missing
                 ? t("{covered} of {total} channels have a guide · {missing} missing", {
                     covered: formatNumber(coveredCount),
-                    total: formatNumber(live.length),
+                    total: formatNumber(live),
                     missing: formatNumber(missing),
                   })
                 : tn(
-                    live.length,
+                    live,
                     "All {count} live channel has a guide",
                     "All {count} live channels have a guide",
                   )}

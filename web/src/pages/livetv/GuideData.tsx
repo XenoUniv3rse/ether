@@ -18,7 +18,7 @@ import { ChannelLogo } from "./ChannelLogo";
 import {
   dayClock,
   tv,
-  type Channel,
+  type ChannelSummary,
   type Coverage,
   type GuideChannel,
   type MatchChange,
@@ -112,8 +112,8 @@ export function MapGuideButton({
   label = t("Map guide"),
   variant = "outline",
 }: {
-  channel: Channel;
-  onMapped: (c: Channel) => void | Promise<void>;
+  channel: ChannelSummary;
+  onMapped: (c: ChannelSummary) => void | Promise<void>;
   label?: string;
   variant?: "outline" | "ghost" | "default";
 }) {
@@ -165,10 +165,10 @@ export function GuideCoverage({
   onSelectChannel,
   onReload,
 }: {
-  channels: Channel[];
+  channels: ChannelSummary[];
   sources: Source[];
   coverage: Map<string, Coverage> | null;
-  onSaveChannel: (c: Channel) => Promise<void>;
+  onSaveChannel: (c: ChannelSummary) => Promise<void>;
   onAddGuideSource: () => void;
   onSelectChannel: (id: string) => void;
   onReload: () => Promise<void>;
@@ -180,7 +180,7 @@ export function GuideCoverage({
   const [busy, setBusy] = useState(false);
   const iptv = useMemo(() => channels.filter((c) => c.kind === "iptv"), [channels]);
   const live = iptv.filter((c) => c.enabled);
-  const has = (c: Channel) => (coverage?.get(c.id)?.programmes ?? 0) > 0;
+  const has = (c: ChannelSummary) => (coverage?.get(c.id)?.programmes ?? 0) > 0;
   const missing = live.filter((c) => !has(c));
   const rows = show === "missing" ? missing : iptv;
   const pct = live.length ? (live.length - missing.length) / live.length : 1;

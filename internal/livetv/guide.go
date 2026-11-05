@@ -277,7 +277,14 @@ func (s *Service) fillSourceStats(ctx context.Context, srcs []Source) error {
 		n          int
 		from, till int64
 	}
+	all, err := s.channelSummaries(ctx)
+	if err != nil {
+		return err
+	}
 	channels := map[string]int{}
+	for _, c := range all {
+		channels[c.SourceID]++
+	}
 	guides := map[string]int{}
 	progs := map[string]progStats{}
 	scan := func(q string, fn func(*sql.Rows) error) error {
@@ -292,15 +299,6 @@ func (s *Service) fillSourceStats(ctx context.Context, srcs []Source) error {
 			}
 		}
 		return rows.Err()
-	}
-	if err := scan(`SELECT COALESCE(`+store.JSONText(store.DialectOf(s.o.DB), "data", "sourceId")+`,''), COUNT(*) FROM livetv_channels GROUP BY 1`, func(r *sql.Rows) error {
-		var id string
-		var n int
-		err := r.Scan(&id, &n)
-		channels[id] = n
-		return err
-	}); err != nil {
-		return err
 	}
 	if err := scan(guideChannelsCTE+`SELECT source_id, COUNT(*) FROM gc GROUP BY source_id`, func(r *sql.Rows) error {
 		var id string
@@ -403,27 +401,37 @@ func (s *Service) guideStats(ctx context.Context, from, until time.Time) (map[gu
 // Coverage reports, for every channel, how many programmes the guide has in
 // the next 24 hours and when its guide data runs out.
 func (s *Service) Coverage(ctx context.Context) ([]GuideCoverage, error) {
-	cs, err := s.Channels(ctx)
+	all, err := s.channelSummaries(ctx)
 	if err != nil {
 		return nil, err
 	}
 	from := s.o.Now()
 	until := from.Add(coverageWindow)
-	stats, err := s.guideStats(ctx, from, until)
+	virtualIDs := make([]string, 0)
+	for _, c := range all {
+		if c.Kind == "virtual" {
+			virtualIDs = append(virtualIDs, c.ID)
+		}
+	}
+	virtual, err := s.channelsByIDs(ctx, virtualIDs)
 	if err != nil {
 		return nil, err
 	}
-	out := make([]GuideCoverage, 0, len(cs))
-	for _, c := range cs {
+	stats, err := s.guideCoverageStats(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]GuideCoverage, 0, len(all))
+	for _, c := range all {
 		v := GuideCoverage{ChannelID: c.ID}
 		if c.Kind == "virtual" {
-			ps := Schedule(c, from, until)
+			ps := Schedule(virtual[c.ID], from, until)
 			v.Programmes = len(ps)
 			if len(ps) > 0 {
 				end := ps[len(ps)-1].End.UTC()
 				v.Until = &end
 			}
-		} else if st, ok := stats[guideKey{guideSource(c), c.GuideID}]; ok && c.GuideID != "" {
+		} else if st, ok := stats[guideKey{summaryGuideSource(c), c.GuideID}]; ok && c.GuideID != "" {
 			v.Programmes = st.window
 			v.Until = msTime(st.until)
 		}

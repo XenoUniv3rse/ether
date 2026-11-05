@@ -47,6 +47,13 @@ type Service struct {
 	policyReads      atomic.Uint64
 	mu               sync.Mutex
 	lineupUnix       int64
+	lineupMu         sync.Mutex
+	lineupIndex      []ChannelSummary
+	lineupRev        int64
+	coverageMu       sync.Mutex
+	coverageStats    map[guideKey]guideStat
+	coverageAt       time.Time
+	coverageRev      int64
 	onChange         func()
 	sessions         map[string]*session
 	nextSubscription int64 // guarded by mu
@@ -191,7 +198,7 @@ func (s *Service) maintain() {
 		case <-t.C:
 			s.expireSessions()
 			if s.o.Warm != nil {
-				cs, err := s.Channels(s.ctx)
+				cs, err := s.virtualChannels(s.ctx)
 				if err != nil {
 					continue
 				}
@@ -273,8 +280,20 @@ func channels(ctx context.Context, db queryer) ([]Channel, error) {
 		}
 		out = append(out, c)
 	}
-	sort.SliceStable(out, func(i, j int) bool { return naturalNumber(out[i].Number) < naturalNumber(out[j].Number) })
-	return out, rows.Err()
+	keys := make([]string, len(out))
+	for i := range out {
+		keys[i] = naturalNumber(out[i].Number)
+	}
+	order := make([]int, len(out))
+	for i := range order {
+		order[i] = i
+	}
+	sort.SliceStable(order, func(i, j int) bool { return keys[order[i]] < keys[order[j]] })
+	sorted := make([]Channel, len(out))
+	for i, at := range order {
+		sorted[i] = out[at]
+	}
+	return sorted, rows.Err()
 }
 func naturalNumber(n string) string {
 	var a, b int
@@ -972,6 +991,28 @@ func (s *Service) programmes(ctx context.Context, c Channel, from, until time.Ti
 	return out, rows.Err()
 }
 func (s *Service) Guide(ctx context.Context, u *core.User, from, until time.Time) ([]Programme, error) {
+	return s.guide(ctx, u, from, until, nil)
+}
+
+// GuideForChannels builds the guide for the requested channels only. The
+// console sends the rows it can see; nil means the whole lineup (XMLTV).
+func (s *Service) GuideForChannels(ctx context.Context, u *core.User, from, until time.Time, ids []string) ([]Programme, error) {
+	if ids != nil && len(ids) > 4096 {
+		return nil, fmt.Errorf("too many guide channels")
+	}
+	return s.guide(ctx, u, from, until, ids)
+}
+
+func channelFromSummary(c ChannelSummary) Channel {
+	return Channel{
+		ID: c.ID, Number: c.Number, Name: c.Name, Kind: c.Kind,
+		Private: c.Private, Enabled: c.Enabled, Favorite: c.Favorite,
+		Rating: c.Rating, Logo: c.Logo, SourceID: c.SourceID,
+		GuideID: c.GuideID, GuideSourceID: c.GuideSourceID, Group: c.Group,
+	}
+}
+
+func (s *Service) guide(ctx context.Context, u *core.User, from, until time.Time, ids []string) ([]Programme, error) {
 	if !until.After(from) || until.Sub(from) > 7*24*time.Hour {
 		return nil, fmt.Errorf("guide window must be positive and at most 7 days")
 	}
@@ -980,26 +1021,146 @@ func (s *Service) Guide(ctx context.Context, u *core.User, from, until time.Time
 	if err != nil {
 		return nil, err
 	}
-	cs, err := s.Channels(ctx)
-	if err != nil {
-		return nil, err
+	var cs []Channel
+	if ids != nil {
+		full, err := s.channelsByIDs(ctx, ids)
+		if err != nil {
+			return nil, err
+		}
+		cs = make([]Channel, 0, len(ids))
+		for _, id := range ids {
+			if c, ok := full[id]; ok {
+				cs = append(cs, c)
+			}
+		}
+	} else {
+		// Identity comes from the cached lineup index; only virtual channels
+		// need their programming snapshot.
+		all, err := s.channelSummaries(ctx)
+		if err != nil {
+			return nil, err
+		}
+		virtualIDs := make([]string, 0)
+		for _, c := range all {
+			if c.Kind == "virtual" {
+				virtualIDs = append(virtualIDs, c.ID)
+			}
+		}
+		full, err := s.channelsByIDs(ctx, virtualIDs)
+		if err != nil {
+			return nil, err
+		}
+		cs = make([]Channel, 0, len(all))
+		for _, c := range all {
+			if c.Kind == "virtual" {
+				if v, ok := full[c.ID]; ok {
+					cs = append(cs, v)
+				}
+				continue
+			}
+			cs = append(cs, channelFromSummary(c))
+		}
 	}
+
+	orderIndex := make(map[string]int, len(cs))
+	byKey := make(map[guideKey][]Channel)
 	out := []Programme{}
 	for _, c := range cs {
 		if !c.Enabled {
 			continue
 		}
-		ps, err := s.programmes(ctx, c, from, until)
-		if err != nil {
-			return nil, err
+		orderIndex[c.ID] = len(orderIndex)
+		if c.Kind == "virtual" {
+			for _, p := range Schedule(s.guideChannel(ctx, c), from, until) {
+				if s.allowed(ctx, u, c, &p) {
+					out = append(out, p)
+				}
+			}
+			continue
 		}
-		for _, p := range ps {
-			if s.allowed(ctx, u, c, &p) {
-				out = append(out, p)
+		if c.GuideID == "" {
+			continue
+		}
+		k := guideKey{guideSource(c), c.GuideID}
+		byKey[k] = append(byKey[k], c)
+	}
+	perKey, err := s.programmesForKeys(ctx, byKey, from, until)
+	if err != nil {
+		return nil, err
+	}
+	for k, ps := range perKey {
+		for _, c := range byKey[k] {
+			for _, p := range ps {
+				p.ChannelID = c.ID
+				p.ID = fmt.Sprintf("%s-%d", c.ID, p.Start.UnixMilli())
+				if s.allowed(ctx, u, c, &p) {
+					out = append(out, p)
+				}
 			}
 		}
 	}
-	sort.SliceStable(out, func(i, j int) bool { return out[i].Start.Before(out[j].Start) })
+	sort.SliceStable(out, func(i, j int) bool {
+		if !out[i].Start.Equal(out[j].Start) {
+			return out[i].Start.Before(out[j].Start)
+		}
+		if orderIndex[out[i].ChannelID] != orderIndex[out[j].ChannelID] {
+			return orderIndex[out[i].ChannelID] < orderIndex[out[j].ChannelID]
+		}
+		return out[i].ID < out[j].ID
+	})
+	return out, nil
+}
+
+// programmesForKeys reads the window once, either as one range scan for a
+// large lineup or as row-value IN batches for the handful of visible rows.
+func (s *Service) programmesForKeys(ctx context.Context, wanted map[guideKey][]Channel, from, until time.Time) (map[guideKey][]Programme, error) {
+	out := make(map[guideKey][]Programme, len(wanted))
+	if len(wanted) == 0 {
+		return out, nil
+	}
+	scan := func(query string, args ...any) error {
+		rows, err := s.o.DB.QueryContext(ctx, query, args...)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var k guideKey
+			var b []byte
+			if err = rows.Scan(&k.source, &k.guide, &b); err != nil {
+				return err
+			}
+			if _, ok := wanted[k]; !ok {
+				continue
+			}
+			var p Programme
+			if err = json.Unmarshal(b, &p); err != nil {
+				return err
+			}
+			out[k] = append(out[k], p)
+		}
+		return rows.Err()
+	}
+	if len(wanted) > guideBatch {
+		return out, scan(`SELECT source_id, channel_id, data FROM livetv_programmes WHERE end_ms>? AND start_ms<?`, from.UnixMilli(), until.UnixMilli())
+	}
+	keys := make([]guideKey, 0, len(wanted))
+	for k := range wanted {
+		keys = append(keys, k)
+	}
+	for start := 0; start < len(keys); start += guideBatch {
+		end := min(start+guideBatch, len(keys))
+		marks := make([]string, 0, end-start)
+		args := make([]any, 0, (end-start)*2+2)
+		for _, k := range keys[start:end] {
+			marks = append(marks, "(?,?)")
+			args = append(args, k.source, k.guide)
+		}
+		args = append(args, from.UnixMilli(), until.UnixMilli())
+		if err := scan(`SELECT source_id, channel_id, data FROM livetv_programmes WHERE (source_id,channel_id) IN (`+strings.Join(marks, ",")+`) AND end_ms>? AND start_ms<?`, args...); err != nil {
+			return nil, err
+		}
+	}
 	return out, nil
 }
 

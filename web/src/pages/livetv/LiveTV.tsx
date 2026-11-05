@@ -19,7 +19,7 @@ import {
   Tv,
   Undo2,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { Drawer } from "../../components/Drawer";
 import { ErrorPanel } from "../../components/feedback";
@@ -28,7 +28,7 @@ import { PanelHead, Workspace } from "../../components/workspace";
 import { api, errorMessage } from "../../lib/api";
 import { localized, t, tn } from "../../i18n";
 import { formatNumber } from "../../lib/format";
-import { useInterval } from "../../lib/hooks";
+import { useDebouncedValue, useInterval } from "../../lib/hooks";
 import type { EtherUser } from "../../lib/types";
 import {
   ChannelStudio,
@@ -42,15 +42,16 @@ import { GuideGrid, OnNowStrip } from "./GuideGrid";
 import { ChannelList, SourceList, type Selection } from "./Lineup";
 import { SourceEditor, type SourceKind } from "./SourceEditor";
 import {
+  CHANNELS_PER_PAGE,
   MINUTE,
   TEMPLATES,
   browserTimeZone,
-  byNumber,
   emptyChannel,
   groupBy,
-  nextNumber,
   tv,
   type Channel,
+  type ChannelPage,
+  type ChannelSummary,
   type Coverage,
   type LiveTVPolicy,
   type Programme,
@@ -103,7 +104,16 @@ export default function LiveTV() {
     if (selection.kind === "source" || selection.kind === "coverage") setLeftTab("sources");
   }, [selection.kind]);
 
-  const [channels, setChannels] = useState<Channel[] | null>(null);
+  const [page, setPage] = useState<ChannelPage | null>(null);
+  const [rows, setRows] = useState<Map<number, Channel>>(new Map());
+  const [coverageMap, setCoverageMap] = useState<Record<string, boolean>>({});
+  const [allChannels, setAllChannels] = useState<ChannelSummary[] | null>(null);
+  const [selectedChannel, setSelectedChannel] = useState<Channel | null>(null);
+  const [selectionLoading, setSelectionLoading] = useState(false);
+  const [visibleRange, setVisibleRange] = useState<[number, number]>([0, 40]);
+  const [pageNonce, setPageNonce] = useState(0);
+  const [guideNonce, setGuideNonce] = useState(0);
+  const [coverageNonce, setCoverageNonce] = useState(0);
   const [sources, setSources] = useState<Source[]>([]);
   const [users, setUsers] = useState<EtherUser[]>([]);
   const [policies, setPolicies] = useState<Map<number, LiveTVPolicy>>(new Map());
@@ -124,131 +134,140 @@ export default function LiveTV() {
   useInterval(() => setNow(Date.now()), 30_000);
   const from = useMemo(() => windowStart(shift), [shift]);
   const until = useMemo(() => new Date(from.getTime() + 24 * HOUR), [from]);
-
-  const loadCore = useCallback(async (signal?: AbortSignal) => {
-    const [c, s] = await Promise.all([tv.channels(signal), tv.sources(signal)]);
-    setChannels(c ?? []);
-    setSources(s ?? []);
-  }, []);
-  const loadPolicies = useCallback(async (signal?: AbortSignal) => {
-    const list = await tv.policies(signal);
-    setPolicies(new Map((list ?? []).map((p) => [p.userId, p])));
-  }, []);
-  const loadCoverage = useCallback(async (signal?: AbortSignal) => {
-    try {
-      setCoverageList((await tv.coverage(signal)) ?? []);
-    } catch {
-      if (!signal?.aborted) setCoverageList("unsupported");
-    }
-  }, []);
-  const loadGuide = useCallback(
-    async (signal?: AbortSignal) => {
-      setGuideLoading(true);
-      try {
-        setProgrammes((await tv.guide(from, until, signal)) ?? []);
-      } catch (e) {
-        if (!signal?.aborted)
-          toast.error(t("Couldn't load the guide"), { description: errorMessage(e) });
-      } finally {
-        if (!signal?.aborted) setGuideLoading(false);
-      }
-    },
-    [from, until],
-  );
+  const search = useDebouncedValue(q, 200);
+  const queryKey = `${search}\u0000${filter}`;
+  const pageState = useRef<{
+    key: string;
+    loaded: Set<number>;
+    loading: Set<number>;
+    ctl: AbortController | null;
+  }>({ key: "", loaded: new Set(), loading: new Set(), ctl: null });
 
   useEffect(() => {
     const ctl = new AbortController();
     // Collections only feed the virtual-channel pickers: a failure there
     // leaves the list empty instead of taking the whole page down.
     Promise.all([
-      loadCore(ctl.signal),
+      tv.sources(ctl.signal),
       api.users(),
       api.collections().catch(() => []),
-      loadPolicies(ctl.signal),
+      tv.policies(ctl.signal),
     ])
-      .then(([, u, cs]) => {
+      .then(([s, u, cs, ps]) => {
         if (ctl.signal.aborted) return;
+        setSources(s ?? []);
         setUsers(u);
         setCollections(cs);
+        setPolicies(new Map((ps ?? []).map((p) => [p.userId, p])));
       })
       .catch((e) => {
         if (!ctl.signal.aborted) setError(e);
       });
-    void loadCoverage(ctl.signal);
     return () => ctl.abort();
-  }, [loadCore, loadCoverage, loadPolicies]);
+  }, []);
+
+  // The lineup is paged and searched on the server; only rows near the
+  // viewport (plus one page) are fetched.
   useEffect(() => {
     const ctl = new AbortController();
-    void loadGuide(ctl.signal);
+    const state = {
+      key: queryKey,
+      loaded: new Set<number>(),
+      loading: new Set<number>([0]),
+      ctl,
+    };
+    pageState.current = state;
+    setRows(new Map());
+    setPage(null);
+    tv.channelPage({ offset: 0, limit: CHANNELS_PER_PAGE, q: search, filter }, ctl.signal)
+      .then((p) => {
+        if (ctl.signal.aborted || pageState.current !== state) return;
+        state.loaded.add(0);
+        setRows(new Map(p.channels.map((c, i) => [i, c])));
+        setCoverageMap(p.coverage);
+        setPage(p);
+        setError(null);
+      })
+      .catch((e) => {
+        if (!ctl.signal.aborted) setError(e);
+      });
     return () => ctl.abort();
-  }, [loadGuide]);
+  }, [queryKey, pageNonce, search, filter]);
 
-  const reloadAll = useCallback(async () => {
-    await Promise.all([loadCore(), loadGuide(), loadCoverage()]);
-  }, [loadCore, loadGuide, loadCoverage]);
-
-  const guide = useMemo(() => groupBy(programmes, (p) => p.channelId), [programmes]);
-  const coverage = useMemo(() => {
-    if (coverageList === null) return null;
-    if (coverageList === "unsupported") {
-      // Older servers: infer from the guide window (enabled channels only).
-      const m = new Map<string, Coverage>();
-      for (const c of channels ?? [])
-        m.set(c.id, { channelId: c.id, programmes: guide.get(c.id)?.length ?? 0 });
-      return m;
-    }
-    return new Map(coverageList.map((c) => [c.channelId, c]));
-  }, [coverageList, channels, guide]);
-  const covered = useCallback(
-    (c: Channel) => {
-      if (c.kind === "virtual") return true;
-      const v = coverage?.get(c.id);
-      return v ? v.programmes > 0 : undefined;
-    },
-    [coverage],
-  );
-
-  const sorted = useMemo(() => [...(channels ?? [])].sort(byNumber), [channels]);
-  const filtered = useMemo(() => {
-    const needle = q.trim().toLowerCase();
-    return sorted.filter((c) => {
-      switch (filter) {
-        case "live":
-          if (!c.enabled) return false;
-          break;
-        case "favorites":
-          if (!c.favorite) return false;
-          break;
-        case "virtual":
-          if (c.kind !== "virtual") return false;
-          break;
-        case "iptv":
-          if (c.kind !== "iptv") return false;
-          break;
-        case "missing":
-          if (!c.enabled || covered(c) !== false) return false;
-          break;
-        case "off":
-          if (c.enabled) return false;
-          break;
+  const ensureRange = useCallback(
+    (start: number, end: number) => {
+      const state = pageState.current;
+      for (
+        let offset = Math.floor(Math.max(0, start) / CHANNELS_PER_PAGE) * CHANNELS_PER_PAGE;
+        offset < end;
+        offset += CHANNELS_PER_PAGE
+      ) {
+        if (state.loaded.has(offset) || state.loading.has(offset)) continue;
+        state.loading.add(offset);
+        tv.channelPage(
+          { offset, limit: CHANNELS_PER_PAGE, q: search, filter },
+          state.ctl?.signal,
+        )
+          .then((p) => {
+            if (pageState.current !== state) return;
+            state.loaded.add(offset);
+            setRows((prev) => {
+              const next = new Map(prev);
+              p.channels.forEach((c, i) => next.set(offset + i, c));
+              return next;
+            });
+            setCoverageMap((prev) => ({ ...prev, ...p.coverage }));
+          })
+          .catch(() => {})
+          .finally(() => state.loading.delete(offset));
       }
-      if (!needle) return true;
-      return `${c.number} ${c.name} ${c.group ?? ""}`.toLowerCase().includes(needle);
-    });
-  }, [sorted, filter, q, covered]);
-  const missingCount = useMemo(
-    () =>
-      coverage === null
-        ? null
-        : sorted.filter((c) => c.enabled && c.kind === "iptv" && covered(c) === false).length,
-    [sorted, coverage, covered],
+    },
+    [search, filter],
   );
 
-  // ---- selection + studio draft -------------------------------------------------
+  const handleRange = useCallback(
+    (first: number, last: number) => {
+      setVisibleRange((prev) => (prev[0] === first && prev[1] === last ? prev : [first, last]));
+      ensureRange(first, last);
+    },
+    [ensureRange],
+  );
 
+  const rowByID = useMemo(() => new Map(Array.from(rows.values()).map((c) => [c.id, c])), [rows]);
   const savedChannel =
-    selection.kind === "channel" ? (channels ?? []).find((c) => c.id === selection.id) : undefined;
+    selection.kind === "channel"
+      ? (rowByID.get(selection.id) ??
+        (selectedChannel?.id === selection.id ? selectedChannel : undefined))
+      : undefined;
   const dirty = draft !== null && JSON.stringify(draft) !== baseline;
+
+  useEffect(() => {
+    if (selection.kind !== "channel") {
+      setSelectedChannel(null);
+      setSelectionLoading(false);
+      return;
+    }
+    const local = rowByID.get(selection.id);
+    if (local) {
+      setSelectedChannel(local);
+      setSelectionLoading(false);
+      return;
+    }
+    const ctl = new AbortController();
+    setSelectionLoading(true);
+    tv.channel(selection.id, ctl.signal)
+      .then((c) => {
+        if (ctl.signal.aborted) return;
+        setSelectedChannel(c);
+        setSelectionLoading(false);
+      })
+      .catch(() => {
+        if (ctl.signal.aborted) return;
+        setSelectedChannel(null);
+        setSelectionLoading(false);
+      });
+    return () => ctl.abort();
+  }, [selection.kind, selection.kind === "channel" ? selection.id : "", rowByID]);
 
   useEffect(() => {
     if (selection.kind === "channel" && savedChannel) {
@@ -262,6 +281,104 @@ export default function LiveTV() {
     // Only re-seed when the selected record (or its saved copy) changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selection.kind, selection.kind === "channel" ? selection.id : "", savedChannel]);
+
+  const guide = useMemo(() => groupBy(programmes, (p) => p.channelId), [programmes]);
+  const covered = useCallback(
+    (c: Channel) => (c.kind === "virtual" ? true : coverageMap[c.id]),
+    [coverageMap],
+  );
+  const missingCount = page?.counts.missing ?? null;
+  const coverageRows = useMemo(
+    () =>
+      coverageList && coverageList !== "unsupported"
+        ? new Map(coverageList.map((c) => [c.channelId, c]))
+        : null,
+    [coverageList],
+  );
+  const loadedChannels = useMemo(() => Array.from(rows.values()), [rows]);
+  const indexedChannels = useMemo(() => {
+    const a = new Array<Channel | undefined>(page?.total ?? 0);
+    rows.forEach((c, i) => {
+      a[i] = c;
+    });
+    return a;
+  }, [rows, page?.total]);
+
+  const guideIDs = useMemo(() => {
+    const ids: string[] = [];
+    const seen = new Set<string>();
+    const add = (c: Channel | undefined) => {
+      if (c && !seen.has(c.id)) {
+        seen.add(c.id);
+        ids.push(c.id);
+      }
+    };
+    // The left list renders 120 at a time; the guide viewport adds its rows.
+    const first = Math.min(120, page?.total ?? 0);
+    for (let i = 0; i < first; i++) add(rows.get(i));
+    for (let i = visibleRange[0]; i < visibleRange[1]; i++) add(rows.get(i));
+    if (selection.kind === "channel" && savedChannel) add(savedChannel);
+    return ids;
+  }, [rows, visibleRange, page?.total, selection.kind, savedChannel]);
+  const debouncedGuideIDs = useDebouncedValue(guideIDs.join(","), 150);
+  useEffect(() => {
+    if (!debouncedGuideIDs) {
+      setProgrammes([]);
+      return;
+    }
+    const ctl = new AbortController();
+    setGuideLoading(true);
+    tv.guide(from, until, debouncedGuideIDs.split(","), ctl.signal)
+      .then((ps) => {
+        if (!ctl.signal.aborted) setProgrammes(ps ?? []);
+      })
+      .catch((e) => {
+        if (!ctl.signal.aborted)
+          toast.error(t("Couldn't load the guide"), { description: errorMessage(e) });
+      })
+      .finally(() => {
+        if (!ctl.signal.aborted) setGuideLoading(false);
+      });
+    return () => ctl.abort();
+  }, [debouncedGuideIDs, from, until, guideNonce]);
+
+  const loadCoverage = useCallback(async (signal?: AbortSignal) => {
+    try {
+      setCoverageList((await tv.coverage(signal)) ?? []);
+    } catch {
+      if (!signal?.aborted) setCoverageList("unsupported");
+    }
+  }, []);
+
+  useEffect(() => {
+    if (selection.kind !== "coverage") return;
+    const ctl = new AbortController();
+    void loadCoverage(ctl.signal);
+    tv.channelSummaries(ctl.signal)
+      .then((all) => {
+        if (!ctl.signal.aborted) setAllChannels(all ?? []);
+      })
+      .catch(() => {
+        if (!ctl.signal.aborted) setAllChannels([]);
+      });
+    return () => ctl.abort();
+  }, [selection.kind, coverageNonce, loadCoverage]);
+
+  const loadPolicies = useCallback(async (signal?: AbortSignal) => {
+    const list = await tv.policies(signal);
+    setPolicies(new Map((list ?? []).map((p) => [p.userId, p])));
+  }, []);
+
+  const reloadAll = useCallback(async () => {
+    setPageNonce((n) => n + 1);
+    setGuideNonce((n) => n + 1);
+    if (selection.kind === "coverage") setCoverageNonce((n) => n + 1);
+    try {
+      setSources((await tv.sources()) ?? []);
+    } catch {
+      // Keep the sources already on screen; the next save or reload retries.
+    }
+  }, [selection.kind]);
 
   const go = useCallback(
     async (next: Selection, opts?: { force?: boolean }) => {
@@ -293,7 +410,7 @@ export default function LiveTV() {
   const startNew = async (templateKey: string) => {
     const template = TEMPLATES.find((x) => x.key === templateKey) ?? TEMPLATES[0]!;
     const base = emptyChannel();
-    base.number = nextNumber(channels ?? []);
+    base.number = page?.nextNumber ?? "1";
     base.timezone = browserTimeZone();
     const d = studioDraft(template.apply(base));
     setDraft(d);
@@ -339,9 +456,10 @@ export default function LiveTV() {
         toast.error(t("Couldn't save who can watch this channel"), {
           description: errorMessage(viewersError),
         });
-      await loadCore();
-      void loadGuide();
-      void loadCoverage();
+      if (saved) setSelectedChannel(saved);
+      setPageNonce((n) => n + 1);
+      setGuideNonce((n) => n + 1);
+      if (selection.kind === "coverage") setCoverageNonce((n) => n + 1);
       if (saved) {
         const d = studioDraft(saved);
         setDraft(d);
@@ -355,13 +473,20 @@ export default function LiveTV() {
     }
   };
 
-  const quickSave = async (c: Channel, message?: string) => {
+  const quickSave = async (c: Channel | ChannelSummary, message?: string) => {
     try {
-      await tv.saveChannel(c);
-      setChannels((cs) => (cs ?? []).map((x) => (x.id === c.id ? c : x)));
+      // Guide-data rows are summaries; merge onto the stored record so a
+      // mapping change never drops stream URLs or programming.
+      const stored = "items" in c && c.items !== undefined ? (c as Channel) : await tv.channel(c.id);
+      const saved = await tv.saveChannel({ ...stored, ...c } as Channel);
+      setRows((prev) => {
+        const next = new Map(prev);
+        for (const [i, row] of next) if (row.id === saved.id) next.set(i, saved);
+        return next;
+      });
+      if (selectedChannel?.id === saved.id) setSelectedChannel(saved);
       if (message) toast.success(message);
-      void loadGuide();
-      void loadCoverage();
+      setGuideNonce((n) => n + 1);
     } catch (e) {
       toast.error(t("Couldn't update the channel"), { description: errorMessage(e) });
     }
@@ -448,7 +573,7 @@ export default function LiveTV() {
           active={leftTab}
           onSelect={setLeftTab}
           tabs={[
-            { key: "channels", label: t("Channels"), count: filtered.length },
+            { key: "channels", label: t("Channels"), count: page?.total ?? 0 },
             { key: "sources", label: t("Sources"), count: sources.length || undefined },
           ]}
         />
@@ -478,12 +603,15 @@ export default function LiveTV() {
               </span>
             </button>
           </div>
-          {channels === null ? (
+          {page === null ? (
             <p className="px-4 py-8 text-center text-xs text-fg-muted">{t("Loading channels…")}</p>
           ) : (
             <ChannelList
-              channels={filtered}
+              groups={page.groups}
               sources={sources}
+              rowAt={(i) => rows.get(i)}
+              onNeedRange={ensureRange}
+              total={page.total}
               guide={guide}
               covered={covered}
               selected={selection.kind === "channel" ? selection.id : null}
@@ -498,7 +626,7 @@ export default function LiveTV() {
               }
               now={now}
               emptyHint={
-                channels.length ? (
+                page.total ? (
                   <p className="text-xs text-fg-muted">{t("No channels match.")}</p>
                 ) : (
                   <div className="space-y-3">
@@ -522,7 +650,7 @@ export default function LiveTV() {
       ) : (
         <SourceList
           sources={sources}
-          channels={sorted}
+          live={page?.counts.live ?? 0}
           missing={missingCount}
           selected={selection}
           onSelect={(s) => void go(s)}
@@ -539,19 +667,27 @@ export default function LiveTV() {
       : null;
   const missingSource = selection.kind === "source" && selection.id !== "new" && !sourceRecord;
   const missingChannel =
-    selection.kind === "channel" && channels !== null && !savedChannel && !draft;
+    selection.kind === "channel" &&
+    page !== null &&
+    !savedChannel &&
+    !draft &&
+    !selectionLoading;
 
   let main: React.ReactNode = null;
   let mainClassName = "";
   if (selection.kind === "coverage") {
     main = (
       <GuideCoverage
-        channels={sorted}
+        channels={allChannels ?? []}
         sources={sources}
-        coverage={coverage}
-        onSaveChannel={(c) =>
-          quickSave(c, t("{name} mapped to {guide}", { name: c.name, guide: c.guideId ?? "" }))
-        }
+        coverage={coverageRows}
+        onSaveChannel={async (c) => {
+          await quickSave(
+            c,
+            t("{name} mapped to {guide}", { name: c.name, guide: c.guideId ?? "" }),
+          );
+          setCoverageNonce((n) => n + 1);
+        }}
         onAddGuideSource={() => {
           setNewKind("guide");
           void go({ kind: "source", id: "new" });
@@ -565,14 +701,15 @@ export default function LiveTV() {
     main = (
       <>
         <OnNowStrip
-          channels={filtered}
+          channels={loadedChannels}
           guide={guide}
           now={now}
           onSelect={(id) => void go({ kind: "channel", id })}
         />
         <div className="min-h-0 flex-1">
           <GuideGrid
-            channels={filtered}
+            channels={indexedChannels}
+            onRange={handleRange}
             guide={guide}
             from={from}
             until={until}
@@ -606,13 +743,13 @@ export default function LiveTV() {
         ? t("Edit IPTV source")
         : t("IPTV source");
 
-  const live = sorted.filter((c) => c.enabled).length;
+  const live = page?.counts.live ?? 0;
   return (
     <>
       <Workspace
         title={t("Live TV")}
         subtitle={
-          channels
+          page
             ? missingCount
               ? tn(
                   live,
@@ -689,7 +826,11 @@ export default function LiveTV() {
             isNew={selection.kind === "new"}
             dirty={dirty}
             guide={(draft.channel.id && guide.get(draft.channel.id)) || []}
-            coverage={draft.channel.id ? coverage?.get(draft.channel.id) : undefined}
+            coverage={
+              draft.channel.id
+                ? { channelId: draft.channel.id, programmes: covered(draft.channel) ? 1 : 0 }
+                : undefined
+            }
             sources={sources}
             users={users}
             policies={policies}
@@ -704,7 +845,7 @@ export default function LiveTV() {
                   guide: c.guideId ?? "",
                 }),
               );
-              await loadCore();
+              setCoverageNonce((n) => n + 1);
             }}
           />
         ) : (

@@ -29,9 +29,11 @@ export function GuideGrid({
   onSelect,
   onShift,
   onNow: jumpNow,
+  onRange,
   loading,
 }: {
-  channels: Channel[];
+  /** Sparse by design: only rows near the viewport have been fetched. */
+  channels: (Channel | undefined)[];
   guide: Map<string, Programme[]>;
   from: Date;
   until: Date;
@@ -40,6 +42,7 @@ export function GuideGrid({
   onSelect: (id: string) => void;
   onShift: (hours: number) => void;
   onNow: () => void;
+  onRange?: (first: number, last: number) => void;
   loading: boolean;
 }) {
   const [zoom, setZoom] = useState<Zoom>("normal");
@@ -83,6 +86,9 @@ export function GuideGrid({
 
   const first = Math.max(0, Math.floor((view.top - HEADER) / ROW) - 6);
   const last = Math.min(channels.length, Math.ceil((view.top + view.height) / ROW) + 6);
+  useEffect(() => {
+    onRange?.(first, last);
+  }, [first, last, onRange]);
 
   const ticks = useMemo(() => {
     const out: number[] = [];
@@ -222,6 +228,16 @@ export function GuideGrid({
 
           {channels.slice(first, last).map((c, k) => {
             const i = first + k;
+            if (!c)
+              return (
+                <div
+                  key={`pending-${i}`}
+                  role="row"
+                  aria-rowindex={i + 1}
+                  className="absolute left-0 animate-pulse border-b border-border/60 bg-bg-subtle/40"
+                  style={{ top: HEADER + i * ROW, height: ROW, width: CH_COL + width }}
+                />
+              );
             const ps = guide.get(c.id) ?? [];
             const on = c.id === selected;
             const live = onNow(ps, now);
