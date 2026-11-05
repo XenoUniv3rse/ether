@@ -90,7 +90,7 @@ export function useLiveForm(
       window.clearTimeout(timer);
     };
     // openPage is a fresh closure per render; the page opens once per enable.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+
   }, [enabled]);
 
   useEffect(() => {

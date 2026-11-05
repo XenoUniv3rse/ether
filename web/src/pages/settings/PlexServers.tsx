@@ -314,7 +314,7 @@ export function PlexServers() {
       if (accounts[srv.id] === undefined) void loadAccounts(srv);
     }
     // loadAccounts only sets state; re-running on accounts would refetch failures.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+
   }, [serverIDs]);
 
   const openMapping = (srv: PMSServer, account: PMSAccount) => {

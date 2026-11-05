@@ -37,7 +37,7 @@ export function ListText({
   useEffect(() => {
     // Follow outside changes (discard, reset, presets) without fighting typing.
     if (JSON.stringify(parseList(text, lower)) !== key) setText(list.join(", "));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+
   }, [key]);
   return (
     <Input

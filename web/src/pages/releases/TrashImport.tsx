@@ -146,7 +146,7 @@ export function TrashImport({
     setPasted("");
     clearPreview();
     setSaveError(null);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+
   }, [open, initialMode]);
 
   function clearPreview() {

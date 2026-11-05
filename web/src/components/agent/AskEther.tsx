@@ -71,7 +71,7 @@ export function AskEther() {
   }, []);
 
   // locale re-renders the copy in the active language.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+
   const labels = useMemo(() => agentPanelLabels(), [locale]);
 
   const approvalRequestLabels = useMemo(() => approvalLabels(), [locale]);
@@ -317,7 +317,7 @@ export function AskEther() {
       },
     ],
     // Menu copy follows the active language.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+
     [resetConversation, openHistory, clearConversation, threadId, messages.length, locale],
   );
 

@@ -260,7 +260,7 @@ export function useSettingsSchema(id: string): {
     () => (meta ? fieldGroupsFromServed(meta.schema) : undefined),
     // textOf reads the active catalogue; locale is the dependency that
     // changes when the language does.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+
     [meta, locale],
   );
   return { groups, meta, loading, error };
@@ -289,7 +289,7 @@ export function useSettingsSchemas(ids: readonly string[]): {
     }
     return out;
     // textOf reads the active catalogue; locale changes with the language.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+
   }, [descriptors, idsKey, locale]);
   return { groups, loading, error };
 }
@@ -353,7 +353,7 @@ export function SchemaForm({
   loadOptions?: LoadOptions;
 }) {
   const { locale } = useLocale();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+
   const groups = useMemo(() => fieldGroupsFromServed(schema), [schema, locale]);
   return (
     <SchemaGroups

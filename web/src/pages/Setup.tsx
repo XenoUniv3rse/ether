@@ -583,7 +583,7 @@ export default function Setup() {
     return () => {
       diskRun.current++;
     };
-  }, [stepId, cfg?.cache.dir]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [stepId, cfg?.cache.dir]);
 
   const claimServer = async () => {
     if (!mounted.current || claiming.current) return;

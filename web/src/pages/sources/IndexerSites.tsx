@@ -303,7 +303,7 @@ export function SitePicker({
   }
   useEffect(() => {
     void loadCatalog();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+
   }, []);
 
   const q = query.trim().toLowerCase();

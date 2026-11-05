@@ -221,7 +221,7 @@ export function DebridSources({
   const debrid = cfg ? debridOf(cfg) : null;
   const providers = useMemo(
     () => [...(debrid?.providers ?? [])].sort((a, b) => (a.priority ?? 0) - (b.priority ?? 0)),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+
     [JSON.stringify(debrid?.providers ?? [])],
   );
   const live = status.data?.providers ?? [];
@@ -257,7 +257,7 @@ export function DebridSources({
     seenAdd.current = addKind.nonce;
     open(providers.length, { ...blankProvider(providers.length), kind: addKind.kind });
     // Open once per gallery choice. `open` closes over the list at that moment.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+
   }, [addKind, debrid, providers.length]);
   const close = () => {
     if (!saving) setEditing(null);

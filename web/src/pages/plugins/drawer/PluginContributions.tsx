@@ -334,7 +334,7 @@ function LiveTVRow({ detail, onClose }: { detail: PluginDetail; onClose: () => v
       .catch(() => setSource(null));
   useEffect(() => {
     void load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+
   }, [kind]);
   if (source === undefined)
     return (

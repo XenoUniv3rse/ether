@@ -182,7 +182,7 @@ export function RestoreDrawer({
     return () => {
       live = false;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+
   }, [requested]);
 
   /** Closing before the restore starts discards the prepared copy. */

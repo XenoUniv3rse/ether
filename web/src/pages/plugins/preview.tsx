@@ -53,7 +53,7 @@ export function usePreview(spec: CollectionSpec): Result | null {
     void load(5);
     return () => ctl.abort();
     // The spec's content, not its identity, decides a reload.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+
   }, [key]);
   return result;
 }

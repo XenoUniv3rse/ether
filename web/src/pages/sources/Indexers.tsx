@@ -250,7 +250,7 @@ export function IndexerList({
         ? blankStremioIndexer(indexers.length)
         : blankIndexer(indexers.length),
     );
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+
   }, [addRequest, cfg, indexers.length]);
 
   async function save() {
