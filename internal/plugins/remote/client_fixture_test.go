@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"math/rand"
+
 	"net/http"
 	"os"
 	"path/filepath"
@@ -102,34 +102,6 @@ func NewTunnelClient(opts TunnelClientOptions) (*TunnelClient, error) {
 		chunkBytes: DefaultChunkBytes,
 		log:        log,
 	}, nil
-}
-
-// Serve connects and serves until ctx ends, reconnecting with
-// capped exponential backoff after a drop. In-flight requests fail
-// when a connection drops; Ether decides whether to retry them.
-func (c *TunnelClient) Serve(ctx context.Context) error {
-	backoff := 500 * time.Millisecond
-	for {
-		started := time.Now()
-		err := c.ServeOnce(ctx)
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-		if errors.Is(err, ErrUnauthorized) {
-			return err // a rejected credential will not fix itself
-		}
-		if time.Since(started) > time.Minute {
-			backoff = 500 * time.Millisecond
-		}
-		jitter := time.Duration(rand.Int63n(int64(backoff / 4)))
-		c.log.Warn("plugin tunnel dropped; reconnecting", "err", err, "backoff", backoff+jitter)
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(backoff + jitter):
-		}
-		backoff = min(backoff*2, 30*time.Second)
-	}
 }
 
 // ServeOnce serves one tunnel connection until it ends.
