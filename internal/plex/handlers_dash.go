@@ -123,13 +123,13 @@ func (s *Server) handleStartDASH(w http.ResponseWriter, r *http.Request) {
 	}
 	hs, err := s.d.Transcoder.StartHLS(context.WithoutCancel(ctx), core.HLSRequest{
 		SoftSubtitleStream: sessionSoftSubtitle(entry, pr, dec),
-		SessionID:   p.sessionID,
-		ReleaseID:   ps.SourceReleaseID(),
-		InputURL:    s.d.Playback.InputURL(ps.ID),
-		Info:        ps.Info,
-		Decision:    dec,
-		StartOffset: p.offset,
-		Protocol:    core.ProtocolDASH,
+		SessionID:          p.sessionID,
+		ReleaseID:          ps.SourceReleaseID(),
+		InputURL:           s.d.Playback.InputURL(ps.ID),
+		Info:               ps.Info,
+		Decision:           dec,
+		StartOffset:        p.offset,
+		Protocol:           core.ProtocolDASH,
 	})
 	if err != nil {
 		s.writeStartErr(w, r, pr, err)

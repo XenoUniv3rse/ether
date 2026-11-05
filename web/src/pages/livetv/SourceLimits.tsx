@@ -114,9 +114,7 @@ export function SourceLimits({
           className="w-32"
           placeholder={t("No cap")}
           value={rules.tunesPerHour ? String(rules.tunesPerHour) : ""}
-          onChange={(e) =>
-            onChange({ ...rules, tunesPerHour: wholeNumber(e.currentTarget.value) })
-          }
+          onChange={(e) => onChange({ ...rules, tunesPerHour: wholeNumber(e.currentTarget.value) })}
         />
       </Field>
     </div>

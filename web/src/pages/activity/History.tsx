@@ -289,7 +289,9 @@ function PlayDrawer({ id, onClose }: { id: string | null; onClose: () => void })
               </p>
             </div>
           </div>
-{p.qualityFallback ? <p className="text-sm text-fg-muted">{qualityFallback(p.qualityFallback)}</p> : null}
+          {p.qualityFallback ? (
+            <p className="text-sm text-fg-muted">{qualityFallback(p.qualityFallback)}</p>
+          ) : null}
 
           <div className="grid grid-cols-2 gap-3">
             <Kpi
