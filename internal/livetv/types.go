@@ -264,7 +264,6 @@ type Policy struct {
 	channelSet map[string]struct{} // Channels as a set for long lists; see indexChannels
 }
 type Options struct {
-	Logger         *slog.Logger
 	PlexGuideToken func() string
 	PlexGuideURL   string // test endpoint
 
@@ -280,7 +279,7 @@ type Options struct {
 	LogoIndexURL       func() string
 	HealthSweepMinutes func() int // 0 defaults to 15; negative disables
 	Now                func() time.Time
-	// Logger receives credential-safe source import and refresh outcomes.
+	// Logger receives credential-safe import, playback and delivery diagnostics.
 	Logger *slog.Logger
 	// Allowed applies additional owner title/genre policies to every surface.
 	Allowed func(*core.User, *core.Title) bool

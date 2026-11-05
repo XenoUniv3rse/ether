@@ -82,7 +82,7 @@ func TestLiveTVDVRGuideProviderAndTuneShapes(t *testing.T) {
 		t.Fatalf("Dvr shape: %s", dvr.Body.String())
 	}
 	dv := dvrs[0].(map[string]any)
-	if dv["key"] != "1" || dv["lineup"] == nil || dv["Device"] == nil {
+	if dv["key"] != "1" || dv["epgIdentifier"] != livetv.Provider || dv["lineup"] == nil || dv["Device"] == nil {
 		t.Fatalf("DVR fields %s", dvr.Body.String())
 	}
 	channels := f.request(t, "GET", liveProviderPath+"/lineups/dvr/channels", map[string]string{"Accept": "application/json"})
@@ -100,6 +100,13 @@ func TestLiveTVDVRGuideProviderAndTuneShapes(t *testing.T) {
 	programmes := gm["Metadata"].([]any)
 	p := programmes[0].(map[string]any)
 	media := p["Media"].([]any)[0].(map[string]any)
+	if p["type"] != "movie" || p["live"] == true {
+		t.Fatalf("programme advertised as a tune session: %s", grid.Body.String())
+	}
+	detail := f.request(t, "GET", p["key"].(string), map[string]string{"Accept": "application/json"})
+	if detail.Code != 200 || !strings.Contains(detail.Body.String(), "Owner-supplied guide") {
+		t.Fatalf("programme detail: %d %s", detail.Code, detail.Body.String())
+	}
 	if p["title"] != "Owner programme" || media["beginsAt"] != float64(time.Date(2026, 10, 18, 11, 0, 0, 0, time.UTC).Unix()) || media["channelIdentifier"] != channel.ID || media["protocol"] != "livetv" {
 		t.Fatalf("EPG shape: %s", grid.Body.String())
 	}
@@ -198,6 +205,16 @@ func TestLiveGridAndTuneLoadOneChannel(t *testing.T) {
 	}
 	if rows := stats.Rows(); rows > 6 {
 		t.Fatalf("scoped grid read %d rows; the whole-lineup path read 21 channels plus programmes", rows)
+	}
+
+	detailCtx, detailStats := store.WithQueryStats(context.Background())
+	programmeID := fmt.Sprintf("%s-%d", channel.ID, time.Date(2026, 10, 18, 11, 0, 0, 0, time.UTC).UnixMilli())
+	detail := httptest.NewRequest("GET", liveProviderPath+"/metadata/"+programmeID, nil).WithContext(detailCtx)
+	detail.Header.Set("X-Plex-Token", ownerToken)
+	detailRec := httptest.NewRecorder()
+	f.srv.ServeHTTP(detailRec, detail)
+	if detailRec.Code != 200 || !strings.Contains(detailRec.Body.String(), "Owner-supplied guide") || detailStats.Rows() > 6 {
+		t.Fatalf("detail not channel-scoped: status=%d rows=%d", detailRec.Code, detailStats.Rows())
 	}
 
 	tuneCtx, tuneStats := store.WithQueryStats(context.Background())
