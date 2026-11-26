@@ -7,6 +7,9 @@ import (
 	"github.com/braedonsaunders/ether/internal/core"
 )
 
+// maxAddedChecksQueued bounds the immediate checks waiting at once.
+const maxAddedChecksQueued = 32
+
 type addedTitle struct {
 	viewer int64
 	key    core.RatingKey
@@ -18,6 +21,13 @@ func (s *Service) queueAdded(viewer int64, key core.RatingKey) {
 	}
 	job := addedTitle{viewer, key}
 	s.addMu.Lock()
+	// A household adding titles gets them checked at once. A bulk import
+	// (a first watchlist sync, an RSS backfill) is left to the scheduled
+	// pass, which paces the whole list.
+	if len(s.addQueue) >= maxAddedChecksQueued {
+		s.addMu.Unlock()
+		return
+	}
 	if _, exists := s.addPending[job]; !exists {
 		s.addPending[job] = struct{}{}
 		s.addQueue = append(s.addQueue, job)
