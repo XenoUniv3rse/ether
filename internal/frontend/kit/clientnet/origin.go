@@ -253,7 +253,7 @@ func JoinPrefix(forwardedPrefix, mountPrefix string) string {
 		return fp
 	}
 	lf, lm := strings.ToLower(fp), strings.ToLower(mp)
-	if lf == lm || strings.HasSuffix(lf, lm) && (len(lf) == len(lm) || lf[len(lf)-len(lm)-1] == '/') {
+	if strings.HasSuffix(lf, lm) {
 		return fp
 	}
 	return fp + mp

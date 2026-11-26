@@ -315,6 +315,52 @@ func TestAppAddressUnifiedPrecedenceAndEsmailSetup(t *testing.T) {
 	}
 }
 
+func TestStremioAppAddressKeepsMountAfterPublicPrefix(t *testing.T) {
+	store, err := config.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	listeners := newFrontendListeners(nil)
+	listeners.running["stremio"] = &runningFrontend{sharedPrefixes: []string{"/stremio"}}
+	rt := &frontendRuntime{
+		app:      &App{cfg: store},
+		control:  &frontendControl{listeners: listeners},
+		mainAddr: &net.TCPAddr{IP: net.ParseIP("0.0.0.0"), Port: 32400},
+	}
+	consoleReq := httptest.NewRequest(http.MethodPost, "http://ether.example/ether/api/me/apps/stremio", nil)
+	for _, tc := range []struct{ published, want string }{
+		{"https://addon.example", "https://addon.example/stremio"},
+		{"https://addon.example/media/", "https://addon.example/media/stremio"},
+		{"https://addon.example/media/stremio/", "https://addon.example/media/stremio"},
+	} {
+		if err := store.Update(func(c *config.Config) error {
+			c.Frontends = map[string]config.Frontend{
+				"stremio": {Enabled: true, PublishedAddresses: []string{tc.published}},
+			}
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if got, err := rt.appAddress(t.Context(), "stremio", consoleReq, true); err != nil || got != tc.want {
+			t.Errorf("console base for %q = %q, err = %v, want %q", tc.published, got, err, tc.want)
+		}
+		if got, err := rt.surfaceURL(t.Context(), "stremio", nil); err != nil || got != tc.want {
+			t.Errorf("published surface base for %q = %q, err = %v, want %q", tc.published, got, err, tc.want)
+		}
+	}
+	proxyReq := httptest.NewRequest(http.MethodGet, "http://ether.example/stremio/image/example", nil)
+	proxyReq.RemoteAddr = "127.0.0.1:12345"
+	proxyReq.Header.Set("X-Forwarded-Proto", "https")
+	proxyReq.Header.Set("X-Forwarded-Host", "proxy.example")
+	proxyReq = proxyReq.WithContext(frontend.WithMountPrefix(proxyReq.Context(), "stremio", "/stremio"))
+	for _, prefix := range []string{"/media", "/media/stremio"} {
+		proxyReq.Header.Set("X-Forwarded-Prefix", prefix)
+		if got, err := rt.surfaceURL(t.Context(), "stremio", proxyReq); err != nil || got != "https://proxy.example/media/stremio" {
+			t.Errorf("proxied surface base for %q = %q, err = %v", prefix, got, err)
+		}
+	}
+}
+
 func TestAppAddressVelaDedicatedAndConsolePort(t *testing.T) {
 	store, err := config.Open(t.TempDir())
 	if err != nil {

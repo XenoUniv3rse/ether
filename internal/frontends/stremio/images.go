@@ -31,7 +31,7 @@ func (i *instance) imageBase(r *http.Request) *url.URL {
 					u.RawPath = ""
 					return u
 				}
-				if u.Scheme == "http" && strings.HasSuffix(u.Path, "/stremio") && i.host.ClientIP != nil {
+				if u.Scheme == "http" && strings.HasSuffix(u.Path, MountPath) && i.host.ClientIP != nil {
 					if peer, ok := i.host.ClientIP(r); ok && peer.IsLoopback() {
 						if ip := net.ParseIP(u.Hostname()); ip != nil && ip.IsLoopback() {
 							u.Path += "/image/"
@@ -57,7 +57,7 @@ func (i *instance) imageBase(r *http.Request) *url.URL {
 	if !strings.HasSuffix(u.Path, "/ether/me") {
 		return nil
 	}
-	u.Path = strings.TrimSuffix(u.Path, "/ether/me") + "/stremio/image/"
+	u.Path = AddonBasePath(strings.TrimSuffix(u.Path, "/ether/me")) + "/image/"
 	u.RawPath, u.RawQuery, u.Fragment = "", "", ""
 	return u
 }

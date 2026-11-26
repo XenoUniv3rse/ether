@@ -13,6 +13,7 @@ import (
 	"github.com/braedonsaunders/ether/internal/config"
 	"github.com/braedonsaunders/ether/internal/frontend"
 	"github.com/braedonsaunders/ether/internal/frontend/kit/clientnet"
+	"github.com/braedonsaunders/ether/internal/frontends/stremio"
 	"github.com/braedonsaunders/ether/internal/frontends/vela"
 	"github.com/braedonsaunders/ether/internal/identity"
 	"github.com/braedonsaunders/ether/internal/remote"
@@ -107,6 +108,15 @@ func (r *frontendRuntime) appAddress(ctx context.Context, id frontend.Protocol, 
 
 	// 2. App's configured published address(es) / migrated publicUrl.
 	if base, ok := frontendPublishedOrigin(cfg, string(id), requireHTTPS); ok {
+		if id == "stremio" {
+			u, err := url.Parse(base)
+			if err != nil {
+				return "", errors.New("app address unavailable")
+			}
+			u.Path = stremio.AddonBasePath(u.Path)
+			u.RawPath = ""
+			return u.String(), nil
+		}
 		return strings.TrimRight(base, "/"), nil
 	}
 

@@ -15,6 +15,7 @@ import (
 
 	"github.com/braedonsaunders/ether/internal/core"
 	"github.com/braedonsaunders/ether/internal/frontend"
+	"github.com/braedonsaunders/ether/internal/frontends/stremio"
 	qrcode "github.com/skip2/go-qrcode"
 )
 
@@ -279,6 +280,9 @@ func (h *Handler) resolveAppAddress(ctx context.Context, r *http.Request, surfac
 			}
 			if requireHTTPS && parsed.Scheme != "https" {
 				continue
+			}
+			if surface == "stremio" {
+				parsed.Path = stremio.AddonBasePath(parsed.Path)
 			}
 			parsed.RawPath, parsed.RawQuery, parsed.Fragment = "", "", ""
 			return parsed, nil

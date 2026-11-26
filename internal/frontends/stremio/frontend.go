@@ -30,6 +30,18 @@ func writeJSON(w http.ResponseWriter, v any) {
 	_, _ = w.Write(append(b, '\n'))
 }
 
+const MountPath = "/stremio"
+
+// AddonBasePath adds the mount to a public path prefix unless it already
+// ends in the mount.
+func AddonBasePath(prefix string) string {
+	prefix = strings.TrimRight(prefix, "/")
+	if strings.HasSuffix(prefix, MountPath) {
+		return prefix
+	}
+	return prefix + MountPath
+}
+
 // Frontend is mounted on the main listener under /stremio.
 type Frontend struct{}
 
@@ -141,17 +153,17 @@ func (i *instance) Handler() http.Handler {
 			}
 			r = r.WithContext(ctx)
 		}
-		if strings.HasPrefix(r.URL.Path, "/stremio/") {
+		if strings.HasPrefix(r.URL.Path, MountPath+"/") {
 			r = r.Clone(r.Context())
 			u := *r.URL
-			u.Path = strings.TrimPrefix(u.Path, "/stremio")
+			u.Path = strings.TrimPrefix(u.Path, MountPath)
 			r.URL = &u
 		}
 		next.ServeHTTP(w, r)
 	})
 }
 func (*instance) Listeners() []frontend.ListenerSpec {
-	return []frontend.ListenerSpec{{Shared: true, PathPrefix: "/stremio"}}
+	return []frontend.ListenerSpec{{Shared: true, PathPrefix: MountPath}}
 }
 func (*instance) Discovery() []frontend.Announcer { return nil }
 func (*instance) Status(context.Context) frontend.Status {

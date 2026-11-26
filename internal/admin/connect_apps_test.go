@@ -567,7 +567,7 @@ func TestConnectAppsUsesPublishedAddresses(t *testing.T) {
 		c.Frontends = map[string]config.Frontend{
 			"jellyfin": {Enabled: true, PublishedAddresses: []string{"https://jellyfin.example.com/"}},
 			"emby":     {Enabled: true, PublishedAddresses: []string{"https://media.example.com/emby/"}},
-			"stremio":  {Enabled: true, PublishedAddresses: []string{"https://stremio.example.com"}},
+			"stremio":  {Enabled: true, PublishedAddresses: []string{"https://stremio.example.com/media/"}},
 			"webdav":   {Enabled: true, PublishedAddresses: []string{"https://files.example.com/dav"}},
 			"xtream":   {Enabled: true, PublishedAddresses: []string{"https://tv.example.com"}},
 		}
@@ -606,8 +606,8 @@ func TestConnectAppsUsesPublishedAddresses(t *testing.T) {
 	if got := post("emby"); got["url"] != "https://media.example.com/emby" {
 		t.Fatalf("emby url = %q", got["url"])
 	}
-	if got := post("stremio"); !strings.HasPrefix(got["url"], "https://stremio.example.com/") || !strings.HasSuffix(got["url"], "/manifest.json") {
-		t.Fatalf("stremio url = %q", got["url"])
+	if got := post("stremio"); !strings.HasPrefix(got["url"], "https://stremio.example.com/media/stremio/") || !strings.HasSuffix(got["url"], "/manifest.json") {
+		t.Fatal("stremio install URL lacks the expected host, mounted prefix, or manifest path")
 	}
 	if got := post("webdav"); got["url"] != "https://files.example.com/dav/" {
 		t.Fatalf("webdav url = %q", got["url"])
