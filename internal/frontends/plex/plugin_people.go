@@ -564,7 +564,7 @@ func (s *Server) servePluginItemImage(w http.ResponseWriter, r *http.Request, ke
 			writeHTTPError(w, http.StatusBadGateway)
 			return true
 		}
-		data, ct = fitPluginImageBytes(data, ct, width, height)
+		data, ct = s.fitPluginArtwork(r.Context(), data, ct, width, height)
 		s.writePluginImageBytes(w, r, data, ct)
 		return true
 	}
@@ -660,7 +660,7 @@ func (s *Server) servePluginPersonImage(w http.ResponseWriter, r *http.Request, 
 		writeHTTPError(w, http.StatusBadGateway)
 		return
 	}
-	data, ct = fitPluginImageBytes(data, ct, width, height)
+	data, ct = s.fitPluginArtwork(r.Context(), data, ct, width, height)
 	s.writePluginImageBytes(w, r, data, ct)
 }
 
@@ -671,17 +671,23 @@ func (s *Server) writePluginImageBytes(w http.ResponseWriter, r *http.Request, d
 		return
 	}
 	h := w.Header()
-	setArtworkHeaders(h, outCT)
-	if plexAndroidClient(FromContext(r.Context())) {
-		h.Add("Vary", "X-Plex-Product")
-	}
-	h.Set("Cache-Control", "max-age=604800, private")
+	h.Add("Vary", "X-Plex-Product")
 	h.Add("Vary", "X-Plex-Token")
-	h.Set("Content-Length", strconv.Itoa(len(out)))
-	w.WriteHeader(http.StatusOK)
-	if r.Method != http.MethodHead {
-		_, _ = w.Write(out)
+	writeArtworkBytes(w, r, out, outCT, kitimages.Revalidate)
+}
+
+func (s *Server) fitPluginArtwork(ctx context.Context, data []byte, ct string, width, height int) ([]byte, string) {
+	if width <= 0 && height <= 0 {
+		return data, ct
 	}
+	out, outType, err := s.cachePhotoVariant(ctx, data, ct, "plex-plugin-fit-v1/"+strconv.Itoa(width)+"/"+strconv.Itoa(height), func(context.Context) ([]byte, string, error) {
+		out, outType := fitPluginImageBytes(data, ct, width, height)
+		return out, outType, nil
+	})
+	if err != nil {
+		return data, ct
+	}
+	return out, outType
 }
 
 func fitPluginImageBytes(data []byte, ct string, maxW, maxH int) ([]byte, string) {

@@ -6,6 +6,7 @@ import (
 	"strconv"
 
 	"github.com/braedonsaunders/ether/internal/frontend"
+	kitimages "github.com/braedonsaunders/ether/internal/frontend/kit/images"
 )
 
 // CollectionArtworker is optionally implemented by Deps.Collections to
@@ -40,18 +41,9 @@ func (s *Server) serveCollectionArtwork(w http.ResponseWriter, r *http.Request, 
 		return true
 	}
 	h := w.Header()
-	if plexAndroidClient(FromContext(r.Context())) {
-		h.Add("Vary", "X-Plex-Product")
-	}
-	setArtworkHeaders(h, ct)
-	// The URL carries the collection's update stamp, so it is safe to cache.
-	h.Set("Cache-Control", "max-age=86400, private")
+	h.Add("Vary", "X-Plex-Product")
 	h.Add("Vary", "X-Plex-Token")
-	h.Set("Content-Length", strconv.Itoa(len(data)))
-	w.WriteHeader(http.StatusOK)
-	if r.Method != http.MethodHead {
-		_, _ = w.Write(data)
-	}
+	writeArtworkBytes(w, r, data, ct, kitimages.Revalidate)
 	return true
 }
 

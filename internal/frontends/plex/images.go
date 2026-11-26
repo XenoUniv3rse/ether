@@ -102,13 +102,8 @@ func (s *Server) serveGeneratedPoster(w http.ResponseWriter, r *http.Request, ke
 	if plexAndroidClient(FromContext(ctx)) {
 		h.Add("Vary", "X-Plex-Product")
 	}
-	h.Set("Cache-Control", "max-age=604800, private")
 	h.Add("Vary", "X-Plex-Token")
-	h.Set("Content-Length", strconv.Itoa(len(data)))
-	w.WriteHeader(http.StatusOK)
-	if r.Method != http.MethodHead {
-		_, _ = w.Write(data)
-	}
+	writeArtworkBytes(w, r, data, ct, kitimages.Revalidate)
 	return true
 }
 
@@ -164,9 +159,7 @@ func (s *Server) serveItemImage(w http.ResponseWriter, r *http.Request, key fron
 		}
 		if kind != "" {
 			if data, ct, err := reader.OwnerArtwork(r.Context(), frontend.ArtworkRequest{Viewer: FromContext(r.Context()).User, Item: key}, kind); err == nil {
-				setArtworkHeaders(w.Header(), ct)
-				w.Header().Set("Cache-Control", "private, no-cache")
-				w.Write(data)
+				writeArtworkBytes(w, r, data, ct, kitimages.Revalidate)
 				return
 			}
 		}
@@ -280,23 +273,46 @@ func (s *Server) writeRemoteImage(w http.ResponseWriter, r *http.Request, u stri
 	if err != nil {
 		return err
 	}
-	data, ct, err := s.androidPhotoFormat(r, fitPhoto(r.Context(), u, img.Data, img.ContentType), img.ContentType)
+	data, ct, err := s.androidPhotoFormat(r, s.fitPhoto(r.Context(), img.Data, img.ContentType), img.ContentType)
 	if err != nil {
 		return err
 	}
 	h := w.Header()
-	setArtworkHeaders(h, ct)
-	if plexAndroidClient(FromContext(r.Context())) {
-		h.Add("Vary", "X-Plex-Product")
-	}
-	h.Set("Cache-Control", "max-age=604800, private")
+	h.Add("Vary", "X-Plex-Product")
 	h.Add("Vary", "X-Plex-Token")
+	cacheControl := kitimages.Revalidate
+	if explicit, _ := r.Context().Value(explicitPhotoURLKey{}).(bool); explicit {
+		if cache, ok := s.svc().images.(interface{ IsImmutableURL(string) bool }); ok && cache.IsImmutableURL(u) {
+			cacheControl = kitimages.Immutable
+		}
+	}
+	writeArtworkBytes(w, r, data, ct, cacheControl)
+	return nil
+}
+
+func (s *Server) cachePhotoVariant(ctx context.Context, data []byte, contentType, key string, render func(context.Context) ([]byte, string, error)) ([]byte, string, error) {
+	if cache, ok := s.svc().images.(kitimages.VariantCache); ok {
+		return cache.Variant(ctx, data, contentType, key, render)
+	}
+	return render(ctx)
+}
+
+type explicitPhotoURLKey struct{}
+
+func writeArtworkBytes(w http.ResponseWriter, r *http.Request, data []byte, contentType, cacheControl string) {
+	h := w.Header()
+	setArtworkHeaders(h, contentType)
+	h.Set("Cache-Control", cacheControl)
+	if kitimages.NoStore(r.Context()) {
+		h.Set("Cache-Control", "private, no-store")
+	} else if kitimages.NotModified(w, r, kitimages.ETag(data, contentType)) {
+		return
+	}
 	h.Set("Content-Length", strconv.Itoa(len(data)))
 	w.WriteHeader(http.StatusOK)
 	if r.Method != http.MethodHead {
 		_, _ = w.Write(data)
 	}
-	return nil
 }
 
 // Person artwork is scoped to one title so authorization requires one catalog lookup.
@@ -466,7 +482,7 @@ func (s *Server) handlePhotoTranscode(w http.ResponseWriter, r *http.Request) {
 			writeHTTPError(w, http.StatusNotFound)
 			return
 		}
-		s.serveRemoteImage(w, r, resizeTMDBURL(u.String(), width))
+		s.serveRemoteImage(w, r.WithContext(context.WithValue(r.Context(), explicitPhotoURLKey{}, true)), resizeTMDBURL(u.String(), width))
 		return
 	}
 	// Android may wrap an artwork URL from a previous local/remote/relay
@@ -561,7 +577,7 @@ func (s *Server) handlePhotoTranscode(w http.ResponseWriter, r *http.Request) {
 		writeHTTPError(w, http.StatusForbidden)
 		return
 	}
-	s.serveRemoteImage(w, r, resizeTMDBURL(u.String(), width))
+	s.serveRemoteImage(w, r.WithContext(context.WithValue(r.Context(), explicitPhotoURLKey{}, true)), resizeTMDBURL(u.String(), width))
 }
 
 func (s *Server) serveTranscodedDiscoveryPoster(w http.ResponseWriter, r *http.Request, key frontend.RatingKey, kind, lang string, width int) {

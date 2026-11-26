@@ -68,24 +68,21 @@ func RenderUltraBlur(colors Palette, transform frontend.ArtworkTransform) ([]byt
 	return out.Bytes(), "image/jpeg", nil
 }
 
+func needsRasterTransform(contentType string, transform frontend.ArtworkTransform) bool {
+	if transform.Fit && transform.Format == "" && contentType != "image/jpeg" && contentType != "image/png" {
+		return false
+	}
+	return transform.Format != "" || transform.Blur || transform.Height > 0 || (transform.Fit && transform.Width > 0)
+}
+
 func Transform(data []byte, contentType string, transform frontend.ArtworkTransform) ([]byte, string, error) {
-	// Preserve the source encoding on format fallback, including PNG alpha.
-	// Sources without an encoder stay untouched rather than becoming JPEG.
-	if transform.Fit && transform.Format == "" {
-		switch contentType {
-		case "image/png", "image/jpeg":
-		default:
-			return data, contentType, nil
-		}
-	}
-	// Width alone is handled by the existing image sources, including TMDB's
-	// width buckets and the poster provider's resize path.
-	if transform.Width == 0 && transform.Height == 0 && transform.Format == "" && !transform.Blur {
+	if !needsRasterTransform(contentType, transform) {
 		return data, contentType, nil
 	}
-	if !transform.Fit && transform.Height == 0 && transform.Format == "" && !transform.Blur {
-		return data, contentType, nil
-	}
+	return transformRaster(data, contentType, transform)
+}
+
+func transformRaster(data []byte, contentType string, transform frontend.ArtworkTransform) ([]byte, string, error) {
 	cfg, _, err := image.DecodeConfig(bytes.NewReader(data))
 	if err != nil || cfg.Width <= 0 || cfg.Height <= 0 {
 		return nil, "", core.ErrNotAvailable

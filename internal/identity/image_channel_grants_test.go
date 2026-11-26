@@ -162,7 +162,7 @@ func TestChannelImageGrantsStatelessDeterministicAndScoped(t *testing.T) {
 		t.Fatalf("expected stable channel secret across time and devices: %q != %q", sec1, sec2)
 	}
 
-	// 3. Served image for visible channel returns 200 with immutable Cache-Control and ETag, and never expires.
+	// 3. Served image for visible channel returns 200 with a validator for the mutable logo and a long-lived grant.
 	serveReq := func(svc *identity.ImageGrantService, r *http.Request, secret string) *httptest.ResponseRecorder {
 		w := httptest.NewRecorder()
 		svc.Serve(w, r, secret)
@@ -172,8 +172,8 @@ func TestChannelImageGrantsStatelessDeterministicAndScoped(t *testing.T) {
 		return serveReq(svc, httptest.NewRequest("GET", path, nil), secret).Code
 	}
 	resp := serveReq(velaSvc, httptest.NewRequest("GET", "/vela/v0/images/"+sec1, nil), sec1)
-	if resp.Code != 200 || resp.Header().Get("Cache-Control") != "private, max-age=31536000, immutable" || resp.Header().Get("ETag") == "" {
-		t.Fatalf("expected 200 with immutable cache headers, got %d cc=%q etag=%q", resp.Code, resp.Header().Get("Cache-Control"), resp.Header().Get("ETag"))
+	if resp.Code != 200 || resp.Header().Get("Cache-Control") != "private, no-cache" || resp.Header().Get("ETag") == "" {
+		t.Fatalf("expected 200 with revalidating cache headers, got %d cc=%q etag=%q", resp.Code, resp.Header().Get("Cache-Control"), resp.Header().Get("ETag"))
 	}
 
 	// Changing image tag mints a new URL and denies the old URL.

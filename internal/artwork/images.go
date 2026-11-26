@@ -134,6 +134,7 @@ type memImage struct {
 	cacheControl string
 	expires      time.Time
 	hasMeta      bool
+	provider     *providerImage
 }
 
 type negEntry struct {
@@ -569,7 +570,7 @@ func (im *Images) getRevalidatingURL(ctx context.Context, key string, client *ht
 }
 
 func (im *Images) startBackgroundRevalidateLocked(key string, client *http.Client, rawURL string, old *memImage) {
-	if im.closed || im.revalidating[key] {
+	if im.closed || im.revalidating[key] || len(im.revalidating) >= maxPosterFetches {
 		return
 	}
 	im.revalidating[key] = true
@@ -988,7 +989,7 @@ func (im *Images) writeDisk(key string, data []byte) {
 func dirSize(dir string) int64 {
 	var n int64
 	_ = filepath.WalkDir(dir, func(_ string, d os.DirEntry, err error) error {
-		if err == nil && !d.IsDir() {
+		if err == nil && !d.IsDir() && !strings.HasSuffix(d.Name(), ".tmp") {
 			if fi, err := d.Info(); err == nil {
 				n += fi.Size()
 			}
@@ -1009,7 +1010,7 @@ func trimDir(dir string, target int64) int64 {
 	var files []file
 	var total int64
 	_ = filepath.WalkDir(dir, func(p string, d os.DirEntry, err error) error {
-		if err == nil && !d.IsDir() {
+		if err == nil && !d.IsDir() && !strings.HasSuffix(d.Name(), ".tmp") {
 			if fi, err := d.Info(); err == nil {
 				files = append(files, file{p, fi.Size(), fi.ModTime()})
 				total += fi.Size()

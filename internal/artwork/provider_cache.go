@@ -140,15 +140,16 @@ func parseRetryAfter(h http.Header, now time.Time, ceiling time.Duration) (time.
 	return time.Time{}, false
 }
 
-// Originals have a stable key across client widths and clock buckets. Provider
-// scores/styles are revalidated at least every six hours; owner URL/profile/key
-// edits select a new key immediately. Viewer ratings do not alter provider art.
+// Originals have a stable key across client widths. Stale provider art
+// is revalidated on use. Owner edits select a new key immediately. Viewer
+// ratings do not alter provider art.
 type providerImage struct {
 	Data               []byte
 	ETag, LastModified string
 	CacheControl       string
 	Expires            time.Time
 	NoStore            bool
+	digest             [sha256.Size]byte
 }
 
 const (
@@ -173,21 +174,23 @@ func (im *Images) readProviderOriginal(key string) *memImage {
 	if !ok {
 		return nil
 	}
-	return &memImage{key: key, data: data}
-}
-
-func decodeProviderOriginal(entry *memImage) *providerImage {
 	var img providerImage
-	if entry == nil || json.Unmarshal(entry.data, &img) != nil || len(img.Data) == 0 {
+	if json.Unmarshal(data, &img) != nil || len(img.Data) == 0 {
 		return nil
 	}
-	return &img
+	return providerMemoryEntry(key, &img)
 }
 
-func (im *Images) providerOriginal(ctx context.Context, raw string) (*providerImage, error) {
-	key := providerCacheKey(raw)
+func providerMemoryEntry(key string, img *providerImage) *memImage {
+	img.digest = sha256.Sum256(img.Data)
+	return &memImage{key: key, data: img.Data, provider: img}
+}
+
+func (im *Images) providerOriginal(ctx context.Context, raw string, generation uint64) (*providerImage, error) {
+	key := providerCacheKey(raw, generation)
 	entry := im.readProviderOriginal(key)
-	if img := decodeProviderOriginal(entry); img != nil {
+	if entry != nil {
+		img := entry.provider
 		if !im.now().Before(img.Expires) {
 			im.startProviderRefresh(key, raw)
 		} else {
@@ -204,10 +207,7 @@ func (im *Images) providerOriginal(ctx context.Context, raw string) (*providerIm
 	if err != nil {
 		return nil, err
 	}
-	if img := decodeProviderOriginal(entry); img != nil {
-		return img, nil
-	}
-	return nil, errProvider
+	return entry.provider, nil
 }
 
 func (im *Images) startProviderRefresh(key, raw string) {
@@ -238,11 +238,13 @@ func (im *Images) startProviderRefresh(key, raw string) {
 func (im *Images) loadProviderOriginal(ctx context.Context, key, raw string, refresh bool) (*memImage, error) {
 	return im.inflight.Do(ctx, key, func(ctx context.Context) (*memImage, error) {
 		entry := im.readProviderOriginal(key)
-		old := decodeProviderOriginal(entry)
-		if old != nil && (!refresh || im.now().Before(old.Expires)) {
-			return entry, nil
-		}
-		if refresh && old == nil {
+		var old *providerImage
+		if entry != nil {
+			old = entry.provider
+			if !refresh || im.now().Before(old.Expires) {
+				return entry, nil
+			}
+		} else if refresh {
 			return nil, errProvider
 		}
 		img, err := im.fetchProviderOriginal(ctx, raw, old)
@@ -252,15 +254,8 @@ func (im *Images) loadProviderOriginal(ctx context.Context, key, raw string, ref
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		data, err := json.Marshal(img)
-		if err != nil {
-			return nil, err
-		}
-		result := &memImage{key: key, data: data}
+		result := providerMemoryEntry(key, img)
 		if img.NoStore {
-			im.mu.Lock()
-			im.items.Remove(key)
-			im.mu.Unlock()
 			if im.o.Dir != "" {
 				im.diskMu.Lock()
 				if info, err := os.Stat(im.diskPath(key)); err == nil && os.Remove(im.diskPath(key)) == nil && im.diskKnown {
@@ -268,8 +263,17 @@ func (im *Images) loadProviderOriginal(ctx context.Context, key, raw string, ref
 				}
 				im.diskMu.Unlock()
 			}
+			im.mu.Lock()
+			im.items.Remove(key)
+			im.mu.Unlock()
 		} else {
-			im.writeDisk(key, data)
+			if im.o.Dir != "" {
+				data, err := json.Marshal(img)
+				if err != nil {
+					return nil, err
+				}
+				im.writeDisk(key, data)
+			}
 			im.mu.Lock()
 			im.addLocked(result)
 			im.mu.Unlock()
@@ -373,7 +377,7 @@ func (im *Images) fetchProviderOriginal(ctx context.Context, raw string, old *pr
 	return img, nil
 }
 
-func providerCacheKey(raw string) string {
-	sum := sha256.Sum256([]byte(raw))
-	return "provider-original-v2/" + hex.EncodeToString(sum[:])
+func providerCacheKey(raw string, generation uint64) string {
+	sum := sha256.Sum256([]byte(strconv.FormatUint(generation, 10) + "\x00" + raw))
+	return "provider-original-v3/" + hex.EncodeToString(sum[:])
 }
