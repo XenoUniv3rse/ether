@@ -1749,10 +1749,11 @@ func (s *Service) LibraryFacetCollections(ctx context.Context, viewer *core.View
 		if err != nil {
 			return frontend.FacetCollectionPage{}, err
 		}
+		publication := map[core.LibraryID]bool{lib.ID: true}
 		for i := range out.Items {
 			if out.Items[i].NewestItem != nil {
 				piv := PluginItemView{Library: lib, Title: *out.Items[i].NewestItem}
-				if !s.pluginItemAllowed(ctx, v, piv) {
+				if !s.pluginItemAllowedCached(ctx, v, piv, publication) {
 					out.Items[i].NewestItem = nil
 				}
 			}
@@ -1786,14 +1787,25 @@ func (s *Service) LibraryFacetCollections(ctx context.Context, viewer *core.View
 	if err != nil {
 		return frontend.FacetCollectionPage{}, err
 	}
+	var samples []core.Title
+	for _, entry := range raw.Items {
+		if entry.NewestItem != nil {
+			samples = append(samples, *entry.NewestItem)
+		}
+	}
+	visible, err := s.allowTitles(ctx, v, samples)
+	if err != nil {
+		return frontend.FacetCollectionPage{}, err
+	}
+	allowed := make(map[core.RatingKey]bool, len(visible))
+	for _, title := range visible {
+		allowed[title.Key] = true
+	}
 	items := make([]frontend.FacetCollection, 0, len(raw.Items))
 	for _, entry := range raw.Items {
 		var newest *core.Title
-		if entry.NewestItem != nil {
-			t := *entry.NewestItem
-			if s.visible(ctx, v, &t) {
-				newest = &t
-			}
+		if entry.NewestItem != nil && allowed[entry.NewestItem.Key] {
+			newest = entry.NewestItem
 		}
 		items = append(items, frontend.FacetCollection{
 			ID:         entry.ID,
@@ -1860,6 +1872,7 @@ func (s *Service) LibraryFacetPeople(ctx context.Context, viewer *core.Viewer, _
 		if err != nil {
 			return frontend.FacetPersonPage{}, err
 		}
+		publication := map[core.LibraryID]bool{lib.ID: true}
 		items := make([]frontend.FacetPerson, 0, len(raw.Items))
 		for _, entry := range raw.Items {
 			if !core.IsPluginPersonID(entry.PersonID) || strings.TrimSpace(entry.Name) == "" || entry.Count <= 0 {
@@ -1869,7 +1882,7 @@ func (s *Service) LibraryFacetPeople(ctx context.Context, viewer *core.Viewer, _
 			var images []frontend.Image
 			if entry.SampleTitle != nil {
 				piv := PluginItemView{Library: lib, Title: *entry.SampleTitle}
-				if s.pluginItemAllowed(ctx, v, piv) {
+				if s.pluginItemAllowedCached(ctx, v, piv, publication) {
 					artKey = entry.SampleTitle.Key
 					if entry.HasThumb {
 						for _, group := range [][]core.Person{entry.SampleTitle.Cast, entry.SampleTitle.Directors, entry.SampleTitle.Writers, entry.SampleTitle.Crew} {

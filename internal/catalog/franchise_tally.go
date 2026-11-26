@@ -510,6 +510,12 @@ const smallFilterFranchiseCap = 5000
 // matching movies with collection_id>0. usedDirect is false when the filter is
 // broad and the caller should walk catalog_franchises in cursor batches.
 func (c *Catalog) FranchisesInSmallFilter(ctx context.Context, f core.Filter, query string, offset, limit int) (items []core.Collection, hasMore, usedDirect bool, err error) {
+	return c.FranchisesInSmallFilterAfter(ctx, f, query, offset, limit, 0, 0)
+}
+
+// FranchisesInSmallFilterAfter seeks in the same raw tally order used by
+// FranchisesCursor while counting members in the requested library.
+func (c *Catalog) FranchisesInSmallFilterAfter(ctx context.Context, f core.Filter, query string, offset, limit, afterCount, afterID int) (items []core.Collection, hasMore, usedDirect bool, err error) {
 	if limit <= 0 {
 		return nil, false, true, nil
 	}
@@ -546,6 +552,11 @@ func (c *Catalog) FranchisesInSmallFilter(ctx context.Context, f core.Filter, qu
 		extra = ` AND LOWER(COALESCE(NULLIF(f.name,''), cc.name, '')) LIKE ? ESCAPE '\'`
 		args = append(args, "%"+escapeLike(q)+"%")
 	}
+	if afterID != 0 {
+		extra += ` AND (f.member_count < ? OR (f.member_count = ? AND f.collection_id > ?))`
+		args = append(args, afterCount, afterCount, afterID)
+	}
+
 	args = append(args, limit+1, offset)
 	rows, err := c.db.QueryContext(ctx, `SELECT f.collection_id,
 		COALESCE(NULLIF(f.name,''), MAX(cc.name), ''),

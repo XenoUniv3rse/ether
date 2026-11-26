@@ -801,7 +801,10 @@ type CollectionQuery struct {
 	ExistsOnly bool
 	// NoTotal skips computing an exact total when the caller pages by cursor
 	// or limit+1 (e.g. Vela's continuation token).
-	NoTotal       bool
+	NoTotal bool
+	// After seeks from the last visible collection for a cursor client.
+	// Offset remains available when the collection source cannot seek.
+	After         core.RatingKey
 	ViewID        string
 	Query         string
 	Types         []core.MediaType

@@ -928,12 +928,18 @@ func (s *Service) collectionWithArt(ctx context.Context, row *specRow, t core.Me
 // List returns the collections a user sees in a section's Collections tab:
 // owner collections targeted at them, built-ins, and TMDB franchises.
 func (s *Service) List(ctx context.Context, user *core.User, t core.MediaType) ([]core.Collection, error) {
-	return s.list(ctx, user, t, true)
+	return s.list(ctx, user, t, true, nil)
 }
 
 // ListOwned is List without the derived movie franchises.
 func (s *Service) ListOwned(ctx context.Context, user *core.User, t core.MediaType) ([]core.Collection, error) {
-	return s.list(ctx, user, t, false)
+	return s.list(ctx, user, t, false, nil)
+}
+
+// ListOwnedMatching avoids resolving members for specs that cannot match
+// the caller's title search.
+func (s *Service) ListOwnedMatching(ctx context.Context, user *core.User, typ core.MediaType, match func(string) bool) ([]core.Collection, error) {
+	return s.list(ctx, user, typ, false, match)
 }
 
 // ListPage returns one page [offset, offset+limit) of a section's Collections
@@ -946,15 +952,19 @@ func (s *Service) ListPage(ctx context.Context, user *core.User, t core.MediaTyp
 	if limit < 0 {
 		limit = 500
 	}
-	owned, err := s.list(ctx, user, t, false)
+	out, ownedN, handled, err := s.plainOwnedPage(ctx, user, t, offset, limit)
 	if err != nil {
 		return nil, 0, err
 	}
-	ownedN := len(owned)
-	var out []core.Collection
-	if limit > 0 && offset < ownedN {
-		end := min(offset+limit, ownedN)
-		out = append(out, owned[offset:end]...)
+	if !handled {
+		owned, err := s.list(ctx, user, t, false, nil)
+		if err != nil {
+			return nil, 0, err
+		}
+		ownedN = len(owned)
+		if limit > 0 && offset < ownedN {
+			out = owned[offset:min(offset+limit, ownedN)]
+		}
 	}
 	hideFranchises := s.catCfg != nil && s.catCfg().HideFranchiseCollections
 	if hideFranchises || (t != "" && t != core.TypeMovie) {
@@ -1041,7 +1051,7 @@ func (s *Service) ListPage(ctx context.Context, user *core.User, t core.MediaTyp
 	return out, total, nil
 }
 
-func (s *Service) list(ctx context.Context, user *core.User, t core.MediaType, withFranchises bool) ([]core.Collection, error) {
+func (s *Service) list(ctx context.Context, user *core.User, t core.MediaType, withFranchises bool, match func(string) bool) ([]core.Collection, error) {
 	rows, err := s.loadRows(ctx)
 	if err != nil {
 		return nil, err
@@ -1050,10 +1060,7 @@ func (s *Service) list(ctx context.Context, user *core.User, t core.MediaType, w
 	deadline := time.Now().Add(2 * time.Second)
 	// Built-ins first, as Plex has always listed them.
 	sort.SliceStable(rows, func(i, j int) bool { return rows[i].builtin && !rows[j].builtin })
-	for _, row := range rows {
-		if !visible(row, user) || !row.spec.BrowseInApps || !typeMatches(row.spec, t) {
-			continue
-		}
+	listOne := func(row *specRow) {
 		wait := row.spec.Refresh == RefreshLive || time.Now().Before(deadline)
 		bctx, cancel := context.WithDeadline(ctx, deadline.Add(3*time.Second))
 		keys, err := s.serve(bctx, row, user, wait)
@@ -1062,17 +1069,57 @@ func (s *Service) list(ctx context.Context, user *core.User, t core.MediaType, w
 			if !errors.Is(err, errNotBuilt) {
 				s.log.Debug("collections: list", "id", row.publicID(), "err", err)
 			}
-			continue
+			return
 		}
 		if len(keys) == 0 {
-			continue
+			return
 		}
 		if row.spec.MediaType == MediaMixed && t != "" && len(sectionKeys(keys, t)) == 0 {
-			continue
+			return
 		}
 		out = append(out, s.collectionFor(ctx, row, user, t, keys))
 	}
-	out = append(out, s.listEphemeral(user, t)...)
+	var batch []*specRow
+	flush := func() {
+		if len(batch) == 0 {
+			return
+		}
+		bctx, cancel := context.WithDeadline(ctx, deadline.Add(3*time.Second))
+		cols, err := s.collectionHeaders(bctx, batch, user, t)
+		cancel()
+		if err == nil {
+			for _, col := range cols {
+				if col.ChildCount > 0 {
+					out = append(out, col)
+				}
+			}
+		} else {
+			for _, row := range batch {
+				listOne(row)
+			}
+		}
+		batch = batch[:0]
+	}
+	for _, row := range rows {
+		if !visible(row, user) || !row.spec.BrowseInApps || !typeMatches(row.spec, t) || match != nil && !match(row.spec.Name) {
+			continue
+		}
+		if s.plainPersistedMembers(row) {
+			batch = append(batch, row)
+			if len(batch) == 100 {
+				flush()
+			}
+			continue
+		}
+		flush()
+		listOne(row)
+	}
+	flush()
+	for _, ephemeral := range s.listEphemeral(user, t) {
+		if match == nil || match(ephemeral.Title) {
+			out = append(out, ephemeral)
+		}
+	}
 	hideFranchises := s.catCfg != nil && s.catCfg().HideFranchiseCollections
 	if withFranchises && !hideFranchises && (t == "" || t == core.TypeMovie) {
 		fr, err := s.listFranchises(ctx, user)

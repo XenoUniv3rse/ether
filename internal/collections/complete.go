@@ -45,9 +45,15 @@ func (s *Service) ListOwnedComplete(ctx context.Context, user *core.User, typ co
 	return out, !hideFranchises && (typ == "" || typ == core.TypeMovie), nil
 }
 
+// IncludesFranchises reports whether the configured listing adds franchises
+// after owned collections of this type.
+func (s *Service) IncludesFranchises(typ core.MediaType) bool {
+	return (typ == "" || typ == core.TypeMovie) && (s.catCfg == nil || !s.catCfg().HideFranchiseCollections)
+}
+
 // VisitOwned evaluates non-franchise collections in display order, stopping
 // when visit has enough visible results for the requested page.
-func (s *Service) VisitOwned(ctx context.Context, user *core.User, typ core.MediaType, query string, batchSize int, visit func([]core.Collection) (bool, error)) (bool, error) {
+func (s *Service) VisitOwned(ctx context.Context, user *core.User, typ core.MediaType, query string, batchSize int, after core.RatingKey, visit func([]core.Collection) (bool, error)) (bool, error) {
 	batchSize = max(1, batchSize)
 	batchRows := make([]*specRow, 0, batchSize)
 	flush := func() (bool, error) {
@@ -67,7 +73,7 @@ func (s *Service) VisitOwned(ctx context.Context, user *core.User, typ core.Medi
 		}
 		return visit(nonempty)
 	}
-	stop, err := s.visitOwnedSpecs(ctx, user, typ, query, batchSize, func(row *specRow) (bool, error) {
+	stop, err := s.visitOwnedSpecs(ctx, user, typ, query, batchSize, after, func(row *specRow) (bool, error) {
 		batchRows = append(batchRows, row)
 		if len(batchRows) == batchSize {
 			return flush()
@@ -83,8 +89,7 @@ func (s *Service) VisitOwned(ctx context.Context, user *core.User, typ core.Medi
 	if stop, err := visit(s.listEphemeral(user, typ)); stop || err != nil {
 		return false, err
 	}
-	hideFranchises := s.catCfg != nil && s.catCfg().HideFranchiseCollections
-	return !hideFranchises && (typ == "" || typ == core.TypeMovie), nil
+	return s.IncludesFranchises(typ), nil
 }
 
 func (s *Service) collectionHeaders(ctx context.Context, rows []*specRow, user *core.User, typ core.MediaType) ([]core.Collection, error) {
@@ -154,9 +159,11 @@ func (s *Service) collectionHeaders(ctx context.Context, rows []*specRow, user *
 // A plain persisted build has no serving-time transformation of member order
 // or membership beyond the mirror release check.
 func (s *Service) plainPersistedMembers(row *specRow) bool {
-	sp := row.spec
-	if row.lastBuilt.IsZero() || row.buildHash == "" || sp.Refresh == RefreshLive ||
-		sp.ReleaseMode == "upcoming" || sp.ReleaseMode == "mixed" ||
+	return !row.lastBuilt.IsZero() && row.buildHash != "" && plainCollectionSpec(row.spec)
+}
+
+func plainCollectionSpec(sp core.CollectionSpec) bool {
+	if sp.Refresh == RefreshLive || sp.ReleaseMode == "upcoming" || sp.ReleaseMode == "mixed" ||
 		sp.MediaType == MediaMixed || sp.Sort == "personal" || sp.Limit > 0 || sp.Rotate != nil {
 		return false
 	}

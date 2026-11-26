@@ -8,6 +8,14 @@ import (
 	"github.com/braedonsaunders/ether/internal/store"
 )
 
+// CollectionMemberReleasedSQL mirrors Title.IsReleased for the catalog_titles
+// alias t. Pass the current Unix second twice to the two cutoffs.
+const CollectionMemberReleasedSQL = `((t.released_ts <> 0 AND t.released_ts <= ?)
+				    OR (t.type = 'movie' AND EXISTS (
+				      SELECT 1 FROM catalog_home_release h WHERE h.key = t.key
+				        AND h.checked <> 0 AND h.earliest_ts <> 0 AND h.earliest_ts <= ? LIMIT 1 OFFSET 0
+				    )))`
+
 type CollectionMemberHead struct {
 	Keys  []core.RatingKey
 	Count int
@@ -32,11 +40,7 @@ func (m *Mirror) CollectionMemberHeads(ctx context.Context, ids []int64, limit i
 				FROM collections_members cm
 				JOIN catalog_titles t ON t.key = cm.key
 				WHERE cm.spec_id = ? AND t.adult = 0
-				  AND ((t.released_ts <> 0 AND t.released_ts <= ?)
-				    OR (t.type = 'movie' AND EXISTS (
-				      SELECT 1 FROM catalog_home_release h WHERE h.key = cm.key
-				        AND h.checked <> 0 AND h.earliest_ts <> 0 AND h.earliest_ts <= ? LIMIT 1 OFFSET 0
-				    )))
+				  AND `+CollectionMemberReleasedSQL+`
 				ORDER BY cm.pos LIMIT ?
 			) AS head`)
 			if postersOnly {

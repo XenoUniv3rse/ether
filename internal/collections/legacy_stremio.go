@@ -155,7 +155,8 @@ func (s *Service) MigrateLegacyStremioSources(ctx context.Context, migrate func(
 			continue
 		}
 		// Only the document changes: build hash, members and timestamps stay.
-		res, err := s.db.ExecContext(ctx, `UPDATE collections_specs SET spec_json=? WHERE id=? AND spec_json=?`, js, st.id, st.raw)
+		Normalize(&sp)
+		res, err := s.db.ExecContext(ctx, `UPDATE collections_specs SET spec_json=?,browse_mode=?,browse_type=? WHERE id=? AND spec_json=?`, js, browseMode(sp), sp.MediaType, st.id, st.raw)
 		if err != nil {
 			fail(st.id, err)
 			continue

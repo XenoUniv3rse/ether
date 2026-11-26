@@ -354,7 +354,36 @@ func (s *Service) viewCollectionsPageFirst(ctx context.Context, v *core.User, ty
 	if s.d.Franchises == nil {
 		return frontend.CollectionPage{}, false, nil
 	}
+	franchises, canSeekFranchises := s.d.Collections.(interface{ IncludesFranchises(core.MediaType) bool })
+	if q.NoTotal && !q.ExistsOnly && typ == core.TypeMovie && q.After.Kind() == core.KindCollection &&
+		canSeekFranchises && franchises.IncludesFranchises(typ) {
+		items, total, fits, err := s.pageFranchises(ctx, v, stored, q.Query, 0, normalizeListLimit(q.Limit), false, true, q.After)
+		if err == nil && fits {
+			return frontend.CollectionPage{Items: items, Total: q.Offset + total}, true, nil
+		}
+		if err != nil && !errors.Is(err, core.ErrNotAvailable) {
+			return frontend.CollectionPage{}, true, err
+		}
+	}
 	var ownedVisible []core.Collection
+	if q.NoTotal && !q.ExistsOnly && q.After.Kind() == core.KindSmart && !q.After.IsEphemeral() {
+		seek := q
+		seek.Offset = 0
+		found, err := s.visitVisibleOwned(ctx, v, typ, stored, seek, make(map[core.RatingKey]bool), &ownedVisible)
+		if err == nil {
+			if !found || typ != core.TypeMovie {
+				return frontend.CollectionPage{Items: ownedVisible[:min(len(ownedVisible), normalizeListLimit(q.Limit))], Total: q.Offset + len(ownedVisible)}, true, nil
+			}
+			page, handled, err := s.combineOwnedAndFranchises(ctx, v, stored, ownedVisible, seek)
+			page.Total += q.Offset
+			return page, handled, err
+		}
+		if !errors.Is(err, core.ErrNotAvailable) {
+			return frontend.CollectionPage{}, true, err
+		}
+		ownedVisible = nil
+	}
+	q.After = 0
 	includeFranchises, err := s.visitVisibleOwned(ctx, v, typ, stored, q, make(map[core.RatingKey]bool), &ownedVisible)
 	if errors.Is(err, core.ErrNotAvailable) {
 		return frontend.CollectionPage{}, false, nil
@@ -394,13 +423,16 @@ func (s *Service) visitVisibleOwned(ctx context.Context, v *core.User, typ core.
 
 	var includeFranchises bool
 	if visitor, ok := s.d.Collections.(interface {
-		VisitOwned(context.Context, *core.User, core.MediaType, string, int, func([]core.Collection) (bool, error)) (bool, error)
+		VisitOwned(context.Context, *core.User, core.MediaType, string, int, core.RatingKey, func([]core.Collection) (bool, error)) (bool, error)
 	}); ok {
-		includeFranchises, err = visitor.VisitOwned(ctx, v, typ, strings.ToLower(strings.TrimSpace(q.Query)), min(normalizeListLimit(q.Limit), 200), visit)
+		includeFranchises, err = visitor.VisitOwned(ctx, v, typ, strings.ToLower(strings.TrimSpace(q.Query)), min(normalizeListLimit(q.Limit), 200), q.After, visit)
 	} else {
 		err = core.ErrNotAvailable
 	}
 	if errors.Is(err, core.ErrNotAvailable) {
+		if q.After != 0 {
+			return false, err
+		}
 		lister, ok := s.d.Collections.(ownedCompleteLister)
 		if !ok {
 			return false, core.ErrNotAvailable
@@ -447,6 +479,27 @@ func (s *Service) visibleOwnedBatch(ctx context.Context, v *core.User, typ core.
 			return nil, err
 		}
 	}
+	prober, canAnswer := s.d.Collections.(visibleProber)
+	probeInLibrary := stored == nil || stored.ID == core.LibraryMovies || stored.ID == core.LibraryShows
+	var unchecked, needScopedItems []core.Collection
+	for _, c := range eligible {
+		if counts[ownedCountID(c)] > 0 {
+			continue
+		}
+		if probeInLibrary || canAnswer && prober.AnswersVisible(c.Key) {
+			unchecked = append(unchecked, c)
+		} else {
+			needScopedItems = append(needScopedItems, c)
+		}
+	}
+	probes, err := s.collectionVisibleProbes(ctx, v, unchecked)
+	if err != nil {
+		return nil, err
+	}
+	scopedItems, err := s.collectionItemsBatch(ctx, v, needScopedItems)
+	if err != nil {
+		return nil, err
+	}
 	for _, c := range eligible {
 		if seenColKey[c.Key] {
 			continue
@@ -457,27 +510,16 @@ func (s *Service) visibleOwnedBatch(ctx context.Context, v *core.User, typ core.
 			candidates = append(candidates, candidate{col: c, counted: true})
 			continue
 		}
-		// A collection the engine answers for itself (the viewer's own Year
-		// in Review) is probed in any library, never read in full.
-		prober, answered := s.d.Collections.(visibleProber)
-		answered = answered && prober.AnswersVisible(c.Key)
-		if stored == nil || stored.ID == core.LibraryMovies || stored.ID == core.LibraryShows || answered {
-			has, total, err := s.collectionVisibleProbe(ctx, v, c)
-			if err != nil {
-				return nil, err
-			}
-			if !has {
+		if probe, ok := probes[c.Key]; ok {
+			if !probe.has {
 				continue
 			}
 			seenColKey[c.Key] = true
-			c.ChildCount = total
+			c.ChildCount = probe.total
 			candidates = append(candidates, candidate{col: c, counted: true})
 			continue
 		}
-		members, err := s.collectionItemsFor(ctx, v, c.Key, c.Upcoming)
-		if err != nil {
-			return nil, err
-		}
+		members := scopedItems[c.Key]
 		if len(members) == 0 {
 			continue
 		}
@@ -634,7 +676,7 @@ func (s *Service) combineOwnedAndFranchises(ctx context.Context, v *core.User, s
 	if q.ExistsOnly {
 		frOffset, frNeed = 0, 1
 	}
-	frItems, frTotal, fits, err := s.pageFranchises(ctx, v, stored, q.Query, frOffset, frNeed, q.ExistsOnly, q.NoTotal)
+	frItems, frTotal, fits, err := s.pageFranchises(ctx, v, stored, q.Query, frOffset, frNeed, q.ExistsOnly, q.NoTotal, 0)
 	if err != nil {
 		return frontend.CollectionPage{}, true, err
 	}
@@ -744,7 +786,7 @@ func (s *Service) franchiseVisibleCounts(ctx context.Context, v *core.User, base
 	return counts, nil
 }
 
-func (s *Service) pageFranchises(ctx context.Context, v *core.User, stored *core.Library, query string, offset, limit int, existsOnly, noTotal bool) (items []core.Collection, total int, fits bool, err error) {
+func (s *Service) pageFranchises(ctx context.Context, v *core.User, stored *core.Library, query string, offset, limit int, existsOnly, noTotal bool, after core.RatingKey) (items []core.Collection, total int, fits bool, err error) {
 	base, extraLibs, anyAllowed, ok, err := s.franchiseScope(ctx, v, stored)
 	if err != nil || !ok {
 		return nil, 0, ok, err
@@ -753,11 +795,25 @@ func (s *Service) pageFranchises(ctx context.Context, v *core.User, stored *core
 		return nil, 0, true, nil
 	}
 
+	startCount, startID := 0, 0
+	if after != 0 {
+		startID = int(after.TMDB())
+		summaries, err := s.d.Franchises.FranchiseSummaryBatch(ctx, []int{startID})
+		if err != nil {
+			return nil, 0, true, err
+		}
+		pivot, ok := summaries[startID]
+		if !ok {
+			return nil, 0, true, core.ErrNotAvailable
+		}
+		startCount = pivot.ChildCount
+	}
+
 	// Fast path 1: unrestricted viewer and built-in movie library (including
 	// availability gate/hidden sets, which FranchiseVisibleCounts enforces on
 	// every page just as browse_tally treats them as tally-backed shapes).
 	// Reads O(page_size) rows from catalog_franchises and an O(1) total.
-	if !existsOnly && s.franchiseFilterUnrestricted(v, base, extraLibs, query) {
+	if after == 0 && !existsOnly && s.franchiseFilterUnrestricted(v, base, extraLibs, query) {
 		var frTotal int
 		if !noTotal || offset > 0 {
 			frTotal, err = s.d.Franchises.FranchiseTotal(ctx)
@@ -871,7 +927,18 @@ func (s *Service) pageFranchises(ctx context.Context, v *core.User, stored *core
 		if existsOnly {
 			reqOffset = 0
 		}
-		direct, hasMore, usedDirect, err := s.d.Franchises.FranchisesInSmallFilter(ctx, base, query, reqOffset, reqLimit)
+		var direct []core.Collection
+		var hasMore, usedDirect bool
+		var err error
+		if startID != 0 {
+			if seek, ok := s.d.Franchises.(interface {
+				FranchisesInSmallFilterAfter(context.Context, core.Filter, string, int, int, int, int) ([]core.Collection, bool, bool, error)
+			}); ok {
+				direct, hasMore, usedDirect, err = seek.FranchisesInSmallFilterAfter(ctx, base, query, reqOffset, reqLimit, startCount, startID)
+			}
+		} else {
+			direct, hasMore, usedDirect, err = s.d.Franchises.FranchisesInSmallFilter(ctx, base, query, reqOffset, reqLimit)
+		}
 		if err != nil || !usedDirect {
 			return nil, 0, false, err
 		}
@@ -928,7 +995,7 @@ func (s *Service) pageFranchises(ctx context.Context, v *core.User, stored *core
 		batchSize = 64
 	}
 	trimmedQuery := strings.TrimSpace(query)
-	afterCount, afterID := 0, 0
+	afterCount, afterID := startCount, startID
 	matched, checked, batches := 0, 0, 0
 	triedSmallFilter := base.CollectionMembers != 0
 	var kept []core.Collection
@@ -1224,18 +1291,21 @@ func (s *Service) PageArtworkSmartCollections(ctx context.Context, viewer *core.
 				}
 			}
 		}
+		var unchecked []core.Collection
 		for _, item := range cols {
-			c := item.col
-			if counts[ownedCountID(c)] > 0 {
-				out[item.key] = c
-				continue
+			if counts[ownedCountID(item.col)] > 0 {
+				out[item.key] = item.col
+			} else {
+				unchecked = append(unchecked, item.col)
 			}
-			ok, err := s.collectionHasVisibleMember(ctx, v, c)
-			if err != nil {
-				return nil, err
-			}
-			if ok {
-				out[item.key] = c
+		}
+		probes, err := s.collectionVisibleProbes(ctx, v, unchecked)
+		if err != nil {
+			return nil, err
+		}
+		for _, item := range cols {
+			if probes[item.col.Key].has {
+				out[item.key] = item.col
 			}
 		}
 	}

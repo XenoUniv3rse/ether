@@ -197,6 +197,27 @@ func (c *reviewCollections) ListOwned(ctx context.Context, u *core.User, typ cor
 	return c.withReviews(ctx, u, typ, out), nil
 }
 
+// ListOwnedMatching sends the title predicate to the base listing before
+// resolving member data, then includes matching viewer review collections.
+func (c *reviewCollections) ListOwnedMatching(ctx context.Context, u *core.User, typ core.MediaType, match func(string) bool) ([]core.Collection, error) {
+	base, ok := c.base.(interface {
+		ListOwnedMatching(context.Context, *core.User, core.MediaType, func(string) bool) ([]core.Collection, error)
+	})
+	if !ok {
+		return c.ListOwned(ctx, u, typ)
+	}
+	out, err := base.ListOwnedMatching(ctx, u, typ, match)
+	if err != nil {
+		return nil, err
+	}
+	for _, col := range c.withReviews(ctx, u, typ, nil) {
+		if match(col.Title) {
+			out = append(out, col)
+		}
+	}
+	return out, nil
+}
+
 // ListComplete forwards the engine's complete listing (errors included, never
 // a partial result) and adds the viewer's Year in Review collections, so
 // consumers that advertise exact totals (Jellyfin BoxSets) see every
@@ -242,16 +263,21 @@ func (c *reviewCollections) ListOwnedComplete(ctx context.Context, u *core.User,
 	return c.withReviews(ctx, u, typ, out), includeFranchises, nil
 }
 
+func (c *reviewCollections) IncludesFranchises(typ core.MediaType) bool {
+	base, ok := c.base.(interface{ IncludesFranchises(core.MediaType) bool })
+	return ok && base.IncludesFranchises(typ)
+}
+
 // VisitOwned forwards bounded owner batches, followed by the viewer's review.
-func (c *reviewCollections) VisitOwned(ctx context.Context, u *core.User, typ core.MediaType, query string, batchSize int, visit func([]core.Collection) (bool, error)) (bool, error) {
+func (c *reviewCollections) VisitOwned(ctx context.Context, u *core.User, typ core.MediaType, query string, batchSize int, after core.RatingKey, visit func([]core.Collection) (bool, error)) (bool, error) {
 	base, ok := c.base.(interface {
-		VisitOwned(context.Context, *core.User, core.MediaType, string, int, func([]core.Collection) (bool, error)) (bool, error)
+		VisitOwned(context.Context, *core.User, core.MediaType, string, int, core.RatingKey, func([]core.Collection) (bool, error)) (bool, error)
 	})
 	if !ok {
 		return false, core.ErrNotAvailable
 	}
 	stopped := false
-	franchises, err := base.VisitOwned(ctx, u, typ, query, batchSize, func(cols []core.Collection) (bool, error) {
+	franchises, err := base.VisitOwned(ctx, u, typ, query, batchSize, after, func(cols []core.Collection) (bool, error) {
 		stop, err := visit(cols)
 		stopped = stop
 		return stop, err
@@ -584,4 +610,22 @@ func (c *reviewCollections) CollectionPosterCandidates(ctx context.Context, u *c
 		}
 	}
 	return batch.CollectionPosterCandidates(ctx, u, baseKeys)
+}
+
+// VisitCollectionMemberPages forwards catalogue membership without opening
+// review collections, which answer their own visibility from viewer history.
+func (c *reviewCollections) VisitCollectionMemberPages(ctx context.Context, u *core.User, keys []core.RatingKey, size int, visit func(map[core.RatingKey]core.Page) ([]core.RatingKey, error)) error {
+	batch, ok := c.base.(interface {
+		VisitCollectionMemberPages(context.Context, *core.User, []core.RatingKey, int, func(map[core.RatingKey]core.Page) ([]core.RatingKey, error)) error
+	})
+	if !ok {
+		return nil
+	}
+	var baseKeys []core.RatingKey
+	for _, key := range keys {
+		if _, _, review := reviewCollectionParts(key); !review {
+			baseKeys = append(baseKeys, key)
+		}
+	}
+	return batch.VisitCollectionMemberPages(ctx, u, baseKeys, size, visit)
 }

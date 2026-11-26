@@ -1244,6 +1244,7 @@ func (i *instance) libraryCollections(w http.ResponseWriter, r *http.Request) {
 
 	colPage, err := i.host.Experience.Collections(r.Context(), v, requestDevice(r), frontend.CollectionQuery{
 		NoTotal: true,
+		After:   c.CollectionAfter,
 		ViewID:  id,
 		Query:   query,
 		Types:   []frontend.MediaType{view.Type},
@@ -1278,6 +1279,9 @@ func (i *instance) libraryCollections(w http.ResponseWriter, r *http.Request) {
 	}
 	out := object{"items": entries, "continuation": "exhausted"}
 	if hasMore {
+		if len(items) > 0 {
+			c.CollectionAfter = items[len(items)-1].Key
+		}
 		next, err := i.nextLiveCursor(c, c.Offset+len(items), snapshot)
 		if err != nil {
 			fail(w, err, r)
