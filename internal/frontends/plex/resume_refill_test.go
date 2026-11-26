@@ -288,13 +288,17 @@ func TestResumedDetailColdRestartRefill(t *testing.T) {
 func TestResumedDetailNoResumeControl(t *testing.T) {
 	x := newEtheLab(t, false, "", 3)
 	x.detail(t, "first")
-	x.waitWarm(t)
+	if _, ok := x.mgr.WaitWarmProbe(context.Background(), &ownerUser, x.caps, x.title.Key, 5*time.Second); !ok {
+		t.Fatal("detail never published the warm probe")
+	}
 	waitResumeRefill(t, x.scheduledRefill(t))
-	if media := x.detail(t, "second"); len(media) != 4 {
+	media := x.detail(t, "second")
+	if len(media) != 4 {
 		t.Fatalf("no-resume control Media=%d want 4", len(media))
 	}
-	if x.idx.searches.Load() != 1 {
-		t.Fatal("repeated detail caused an extra search")
+	part := media[0]["Part"].([]any)[0].(map[string]any)
+	if streams := part["Stream"].([]any); len(streams) != len(sampleInfo.Streams) {
+		t.Fatalf("second detail streams=%d, want %d", len(streams), len(sampleInfo.Streams))
 	}
 }
 

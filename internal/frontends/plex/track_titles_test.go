@@ -30,7 +30,7 @@ func TestTrackTitleCompositionAndClientProjection(t *testing.T) {
 		{Type: "subtitle", Codec: "srt", Language: "fr", HearingImpaired: model.Ptr(true), VisualImpaired: model.Ptr(true)},
 	}}
 	for _, product := range []string{"Plex Web", "Plex HTPC for Linux", "Plex HTPC", "plex web", ""} {
-		streams, src := f.srv.renderStreams(42, info, selection{}, nil)
+		streams, src := f.srv.renderStreams(42, 42, info, selection{}, nil)
 		projectStreamTitles(streams, src, info, &Request{Product: product, Language: "de"})
 		if streams[0].Default != nil || streams[0].HearingImpaired != nil || streams[0].Dub == nil {
 			t.Fatalf("video dispositions: %+v", streams[0])

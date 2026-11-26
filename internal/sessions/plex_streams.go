@@ -75,6 +75,9 @@ func (t *StreamTable) Bind(binding StreamBinding) (int64, error) {
 	if binding.DistinguishSubtitleIndex {
 		slot = "subtitle-index/" + strconv.Itoa(binding.Info.Index) + "/" + slot
 	}
+	if binding.PartID != 0 {
+		slot = "part/" + strconv.FormatInt(binding.PartID, 10) + "/" + slot
+	}
 	id := WireID(binding.Key, slot)
 	for {
 		ref, ok := t.byID[id]

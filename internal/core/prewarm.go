@@ -45,6 +45,9 @@ type PrewarmOptions struct {
 	// stream that its add-on reports debrid-cached (core.WithOnDemandWarm).
 	// Up Next and next-episode warm-ups imply it. Never set for browsing.
 	PlayIntent bool `json:"-"`
+	// MetadataOnly prepares tracks for an opened detail page without
+	// prefetching the playback window.
+	MetadataOnly bool `json:"-"`
 }
 
 // Prewarmer is implemented by playback managers that can resolve, open,

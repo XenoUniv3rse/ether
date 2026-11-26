@@ -275,6 +275,75 @@ func TestDetailEditionTitleFromAutoVariant(t *testing.T) {
 	}
 }
 
+func TestVariantStreamIDsStayDistinctThroughPartSelection(t *testing.T) {
+	f, pb := newVariantPlaybackFixture(t)
+	key := fightClub.Key
+	media := sampleInfo
+	versions := f.resolver.byKey[key]
+	for i := range versions {
+		versions[i].Info = media
+	}
+	var detail struct {
+		Parts []struct {
+			ID      int64 `xml:"id,attr"`
+			Streams []struct {
+				ID       int64 `xml:"id,attr"`
+				Type     int   `xml:"streamType,attr"`
+				Selected bool  `xml:"selected,attr"`
+			} `xml:"Stream"`
+		} `xml:"Video>Media>Part"`
+	}
+	path := "/library/metadata/" + key.String()
+	read := func() {
+		t.Helper()
+		rec := f.get(t, path)
+		detail.Parts = nil
+		if err := xml.Unmarshal(rec.Body.Bytes(), &detail); err != nil || len(detail.Parts) != len(versions) {
+			t.Fatalf("detail status=%d parts=%d err=%v", rec.Code, len(detail.Parts), err)
+		}
+	}
+	read()
+	seen := map[int64]bool{}
+	for _, part := range detail.Parts {
+		for _, stream := range part.Streams {
+			if stream.ID == 0 || seen[stream.ID] {
+				t.Fatalf("part %d reused stream ID %d", part.ID, stream.ID)
+			}
+			seen[stream.ID] = true
+		}
+	}
+	part := detail.Parts[1]
+	var audio, sub int64
+	for _, stream := range part.Streams {
+		if stream.Type == 2 && !stream.Selected {
+			audio = stream.ID
+		}
+		if stream.Type == 3 {
+			sub = stream.ID
+		}
+	}
+	if audio == 0 || sub == 0 {
+		t.Fatal("fixture needs an alternate audio track and a subtitle")
+	}
+	target := fmt.Sprintf("/library/parts/%d?audioStreamID=%d&subtitleStreamID=%d", part.ID, audio, sub)
+	req := httptest.NewRequest(http.MethodPut, target, nil)
+	req.Header.Set("X-Plex-Token", ownerToken)
+	req.Header.Set("X-Plex-Client-Identifier", "client-1")
+	rec := httptest.NewRecorder()
+	f.srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("part selection status=%d", rec.Code)
+	}
+	read()
+	selected := map[int64]bool{}
+	for _, stream := range detail.Parts[1].Streams {
+		selected[stream.ID] = stream.Selected
+	}
+	if !selected[audio] || !selected[sub] || pb.prepared != 0 || len(pb.variantCalls) != 0 {
+		t.Fatal("detail did not retain the selected part's audio and subtitle IDs")
+	}
+}
+
 func TestListResponsesStaySingleMedia(t *testing.T) {
 	f, _ := newVariantPlaybackFixture(t)
 	rec := f.get(t, "/library/sections/1/all?type=1")

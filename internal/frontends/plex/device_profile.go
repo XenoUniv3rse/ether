@@ -476,7 +476,7 @@ func (s *Server) applyDeviceProfile(pr *Request, t *frontend.Title, ps *frontend
 		}
 	}
 	if len(source.Part) > 0 {
-		source.Part[0].Stream = s.buildStreams(t.Key, ps.Info, sel, pr.User)
+		source.Part[0].Stream, _ = s.renderStreams(t.Key, source.Part[0].ID, ps.Info, sel, pr.User)
 	}
 	explicit := false
 	if pr.User != nil {

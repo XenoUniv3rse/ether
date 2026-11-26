@@ -71,7 +71,7 @@ func TestSubtitleVersionPickIdentity(t *testing.T) {
 		t.Fatal("accepted pick did not start")
 	}
 	close(subs.release)
-	pickedID := flexID(externalID(fightClub.Key, "ether-subtitle:pick-101"))
+	var pickedID flexID
 	check := func(stage string) {
 		t.Helper()
 		after := decodeWireMedia(t, stage, f.get(t, path, headers...).Body)
@@ -84,10 +84,18 @@ func TestSubtitleVersionPickIdentity(t *testing.T) {
 				t.Fatalf("%s: version %d changed identity: %+v", stage, i, m)
 			}
 			for _, st := range m.Part[0].Stream {
-				if st.ID == pickedID {
+				if st.StreamType != 3 {
+					continue
+				}
+				binding, err := f.srv.resolveStream(context.Background(), &ownerUser, int64(st.ID))
+				if err == nil && binding.Info.ExternalURL == "ether-subtitle:pick-101" {
 					if i != 1 || !bool(st.Selected) {
 						t.Fatalf("%s: pick attached to version %d selected=%v", stage, i, st.Selected)
 					}
+					if pickedID != 0 && pickedID != st.ID {
+						t.Fatalf("%s: picked stream ID changed", stage)
+					}
+					pickedID = st.ID
 					found = true
 				}
 			}
