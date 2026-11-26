@@ -75,7 +75,7 @@ func (s *Server) partTitle(partID int64) (key frontend.RatingKey, releaseID stri
 // Ordinary details can gain versions as discovery completes. Explicit
 // pre-play and the selected queue item freeze a short-lived flow. Clustered
 // flows adopt the committed snapshot before returning metadata.
-func (s *Server) mediaForVariants(ctx context.Context, pr *Request, t *frontend.Title, stamp int64, probed frontend.MediaInfo, probedRelease, playedSelector string, playedRec *frontend.Release, ps *frontend.PlaySession) ([]model.Media, string) {
+func (s *Server) mediaForVariants(ctx context.Context, pr *Request, t *frontend.Title, stamp int64, probed frontend.MediaInfo, probedRelease, playedSelector string, playedRec *frontend.Release, ps *frontend.PlaySession, cachedAuto *frontend.MediaInfo) ([]model.Media, string) {
 	if s.svc().variants == nil || pr.User == nil {
 		return nil, ""
 	}
@@ -178,6 +178,12 @@ func (s *Server) mediaForVariants(ctx context.Context, pr *Request, t *frontend.
 		pin = s.playIDs.pinned(ik, live, now)
 		if pin.resolved {
 			resolved = pin.variants
+		}
+		if pr.versionItemKey == t.Key && len(resolved) > 0 && resolved[0].Auto && !resolved[0].Info.Estimated && resolved[0].Info.HasPlayableMedia() {
+			pr.detailTracksKnown = true
+			if len(resolved) == 1 && (probed.Estimated || !probed.HasPlayableMedia()) {
+				*cachedAuto = resolved[0].Info
+			}
 		}
 		if len(resolved) < 2 {
 			if !live {

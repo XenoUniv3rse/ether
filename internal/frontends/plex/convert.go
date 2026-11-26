@@ -903,6 +903,23 @@ func (s *Server) mediaFor(ctx context.Context, pr *Request, t *frontend.Title, w
 
 func (s *Server) mediaForWithInfo(ctx context.Context, pr *Request, t *frontend.Title, withStreams, withVariants, sessionMedia, batchDetail bool, deferSlots func([]frontend.VariantRef, slotMediaRender), selectedChapterMedia *frontend.MediaInfo) ([]model.Media, string, frontend.MediaInfo) {
 	info, ps, resumed, probedSource := s.mediaInfoWithResumed(ctx, pr, t)
+	singleDetail := !batchDetail && withStreams && pr != nil && pr.versionItemKey == t.Key
+	if ps == nil && singleDetail && pr.User != nil {
+		// Explicit decisions are variant-scoped. Match the release admitted
+		// for this client instead of taking an arbitrary session for the title.
+		pin := s.playIDs.pinned(s.playIdentityFor(pr, t.Key), false, s.now())
+		if scoped, ok := s.playback().(interface {
+			SessionForSurface(string, int64, string, frontend.RatingKey, string, bool) (*frontend.PlaySession, bool)
+		}); ok && pin.admittedRelease != "" {
+			if active, ok := scoped.SessionForSurface("plex", pr.User.ID, pr.ClientID, t.Key, pin.admittedRelease, false); ok && active != nil {
+				info, ps, resumed = active.Info, active, resumedVersionResult{}
+				probedSource = !info.Estimated && len(info.Streams) > 0
+			}
+		}
+	}
+	if singleDetail && probedSource {
+		pr.detailTracksKnown = true
+	}
 	stamp := unixOrZero(t.UpdatedAt)
 	if ps != nil && !ps.StartedAt.IsZero() {
 		stamp = ps.StartedAt.Unix()
@@ -938,6 +955,9 @@ func (s *Server) mediaForWithInfo(ctx context.Context, pr *Request, t *frontend.
 		}
 		if len(versions) > 0 {
 			pr.configuredSlots = true
+			if singleDetail && versions[0].Auto && !versions[0].Info.Estimated && versions[0].Info.HasPlayableMedia() {
+				pr.detailTracksKnown = true
+			}
 			refs := s.variantRefs(t, versions)
 			render := func(ids map[frontend.VariantRef]int64) []model.Media {
 				return s.slotMedia(ctx, pr, t, versions, ids, info, ps, resumed, stamp, withStreams, batchDetail, selectedChapterMedia)
@@ -981,8 +1001,12 @@ func (s *Server) mediaForWithInfo(ctx context.Context, pr *Request, t *frontend.
 		} else if !info.Estimated && info.HasPlayableMedia() {
 			probed = info
 		}
-		if media, edition := s.mediaForVariants(ctx, pr, t, stamp, probed, probedRelease, playedSelector, playedRec, ps); len(media) > 0 {
+		var cachedAuto frontend.MediaInfo
+		if media, edition := s.mediaForVariants(ctx, pr, t, stamp, probed, probedRelease, playedSelector, playedRec, ps, &cachedAuto); len(media) > 0 {
 			return media, edition, info
+		}
+		if cachedAuto.HasPlayableMedia() {
+			info, probedSource = cachedAuto, true
 		}
 	}
 	m := buildMedia(t, info, stamp)
@@ -1314,8 +1338,20 @@ func (s *Server) renderStreams(key frontend.RatingKey, info frontend.MediaInfo, 
 	if sel.subtitleSet {
 		subSelected = sel.subtitle
 	}
+	subtitleSlots := make([]string, len(info.Streams))
+	slotCounts := make(map[string]int)
 	for i, st := range info.Streams {
-		id := s.assignStream(context.Background(), u, key, i, st, "", info.Estimated)
+		if st.Type == "subtitle" {
+			slot := frontend.PlexSubtitleSlot(st)
+			subtitleSlots[i] = slot
+			slotCounts[slot]++
+		}
+	}
+	for i, st := range info.Streams {
+		id := s.assignStream(context.Background(), u, frontend.StreamBinding{
+			Key: key, Index: i, Info: st, Estimated: info.Estimated,
+			DistinguishSubtitleIndex: slotCounts[subtitleSlots[i]] > 1,
+		})
 		ps := model.Stream{
 			ID:               id,
 			Codec:            plexCodec(st.Codec),

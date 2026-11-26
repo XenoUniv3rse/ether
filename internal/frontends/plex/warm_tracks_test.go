@@ -2,6 +2,7 @@ package plex
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -145,14 +146,14 @@ func TestFirstOpenMovieAndShowSeasonWarmProbedTracks(t *testing.T) {
 	wpb := &warmWaiterPlayback{Playback: f.playback, info: probed}
 	f.srv.setPlayback(wpb)
 
-	// 1. Cold first open of a movie detail page waits for the warm probe and renders real tracks.
+	// 1. A cold movie detail schedules background work and returns without waiting.
 	rec := f.get(t, "/library/metadata/"+fightClub.Key.String(),
 		"X-Plex-Product", "Plex for Android (TV)", "X-Plex-Platform", "Android", "X-Plex-Client-Identifier", "shield-1")
 	if rec.Code != 200 {
 		t.Fatalf("movie metadata %d: %s", rec.Code, rec.Body.String())
 	}
-	if len(audioTags(rec.Body.String())) < 2 || len(streamTagsOfType(rec.Body.String(), "3")) < 2 {
-		t.Fatalf("first movie open did not include warm probed audio/subtitle tracks:\n%s", rec.Body.String())
+	if len(wpb.waits) != 0 || !slices.Contains(wpb.prewarms, fightClub.Key) {
+		t.Fatal("cold detail did not schedule warm-up without waiting")
 	}
 
 	// 2. Show detail page with includeOnDeck=1 warms the next episode (bbE1) and includes its real streams in OnDeck.

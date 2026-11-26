@@ -50,8 +50,24 @@ func parseVersionSlot(id string) (versionSlot, bool) {
 // on search results. Only the normal admission path opens a selected slot.
 func (s *Service) VersionSlots(ctx context.Context, req core.ResolveRequest, limit int, labels bool) ([]core.ReleaseVariant, error) {
 	if labels && core.LocalResponse(ctx) {
-		if versions, err := s.detailVariantRead(req, limit, true); err != nil || len(versions) > 0 {
+		versions, err := s.detailVariantRead(req, limit, true)
+		if err != nil || (len(versions) > 0 && versions[0].Release.ID != versions[0].ID) {
 			return versions, err
+		}
+		if req.Title != nil && core.ColdDetail(ctx, req.Title.Key) {
+			// The already-cached search can supply tracks before a background
+			// version snapshot exists. Plugin ranking remains off the read path.
+			if results, ok := s.peekSearchCache(searchCacheKey(searchRequestFor(req.Title))); ok && len(results) > 0 {
+				dec := decideProfile(s.qualityCfg(), req.Client, req.User, titleTarget(req.Title, s.membershipFor(ctx, req.Title)))
+				if !usesPluginRanking(dec.profile) {
+					if cached, err := s.versionSlotsWithResults(ctx, req, limit, true, results, true); err == nil && len(cached) > 0 {
+						return cached, nil
+					}
+				}
+			}
+		}
+		if len(versions) > 0 {
+			return versions, nil
 		}
 		// The configured menu needs no release ranking. Missing labels never
 		// remove or renumber a choice while background discovery fills them.

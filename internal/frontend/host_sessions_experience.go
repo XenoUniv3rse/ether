@@ -614,6 +614,21 @@ type StreamBinding struct {
 	Index     int
 	Info      core.StreamInfo
 	Estimated bool
+	// DistinguishSubtitleIndex is set for subtitles with identical descriptors in a Part.
+	DistinguishSubtitleIndex bool
+}
+
+// PlexSubtitleSlot identifies a subtitle by the descriptor shared by Plex renders and bindings.
+func PlexSubtitleSlot(info core.StreamInfo) string {
+	if info.External && info.ExternalURL != "" {
+		return "external/" + info.ExternalURL
+	}
+	source := "embedded"
+	if info.External {
+		source = "external"
+	}
+	raw, _ := json.Marshal([]any{info.Language, info.Codec, source, info.Forced, info.Title})
+	return "subtitle/" + string(raw)
 }
 
 // PlanAdmission is the source and the version and track selections for one
@@ -1906,6 +1921,9 @@ func ResolveSubtitle(want *core.StreamInfo, pos int, info core.MediaInfo) int {
 		}
 		if i == pos {
 			score++
+		}
+		if !want.External && !st.External && st.Index == want.Index && st.Title == want.Title {
+			score += 2
 		}
 		if score > bestScore {
 			best, bestScore = i, score

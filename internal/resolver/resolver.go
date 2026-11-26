@@ -2086,8 +2086,9 @@ func (s *Service) rankCandidatesWith(ctx context.Context, req core.ResolveReques
 	if err != nil {
 		return nil, true, err
 	}
-	env := rankEnv{policy: policy, allowReleaseTitleSync: allowSync, allowReleaseTitleWarm: allowWarm}
-	if usesPluginRanking(profile) {
+	local := core.LocalResponse(ctx)
+	env := rankEnv{policy: policy, allowReleaseTitleSync: allowSync && !local, allowReleaseTitleWarm: allowWarm && !local}
+	if !local && usesPluginRanking(profile) {
 		env.hot = s.rankingSession(ctx, req.Client)
 		if env.hot != nil {
 			defer env.hot.Close()
@@ -2101,7 +2102,7 @@ func (s *Service) rankCandidatesWith(ctx context.Context, req core.ResolveReques
 	env.rcfg = s.resolverCfg()
 	env.lang = s.catalogLanguage()
 	env.audio(profile, req)
-	env.seaDex = s.seaDexForRank(ctx, sreq, seaDexFetchAllowed(ctx, req))
+	env.seaDex = s.seaDexForRank(ctx, sreq, !local && seaDexFetchAllowed(ctx, req))
 	return s.rankWith(ctx, env, req, sreq, profile, results, trace, pinID)
 }
 
@@ -2134,8 +2135,10 @@ func (s *Service) rankWith(ctx context.Context, env rankEnv, req core.ResolveReq
 	if s.db != nil {
 		s.loadRejectionsFor(ctx, req.Title.Key)
 	}
-	s.prepareSeriesYears(ctx, req.Title, sreq, results)
-	s.prepareTitleIDVerifications(ctx, req.Title, sreq, env.lang, results)
+	if !core.LocalResponse(ctx) {
+		s.prepareSeriesYears(ctx, req.Title, sreq, results)
+		s.prepareTitleIDVerifications(ctx, req.Title, sreq, env.lang, results)
+	}
 	traceBase, traceRouting := 0, ""
 	if trace != nil {
 		traceBase = len(trace.Candidates)

@@ -20,6 +20,7 @@ import (
 	"github.com/braedonsaunders/ether/internal/livetv"
 	"github.com/braedonsaunders/ether/internal/plugins/adapters"
 	"github.com/braedonsaunders/ether/internal/resolver"
+	sessionbroker "github.com/braedonsaunders/ether/internal/sessions"
 	"github.com/braedonsaunders/ether/internal/viewerpolicy"
 )
 
@@ -479,6 +480,14 @@ func (a *App) newSurfaceExperience(protocol core.Protocol, artwork ...frontend.A
 			info := resumedInfo
 			if !hasResumed || !core.IsAutoVersionSelector(resumedSelector) {
 				info = a.playback.Estimate(ctx, title, caps)
+				if u != nil && device.ID != "" && core.ColdDetail(ctx, title.Key) &&
+					(protocol == "jellyfin" || protocol == "emby" || protocol == "vela" || protocol == "silo") {
+					warmCaps := caps
+					warmCaps.ClientID = sessionbroker.PlaybackClientID(protocol, device.ID)
+					if warm, ok := a.playback.WarmProbeInfo(u, warmCaps, title.Key); ok {
+						info = core.CloneMediaInfo(warm)
+					}
+				}
 			}
 			markerSession := func(userID int64, clientID string, key core.RatingKey) (*core.PlaySession, bool) {
 				if surf := string(protocol); sessionSurface(surf) != "" {

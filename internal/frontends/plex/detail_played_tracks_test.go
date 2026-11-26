@@ -352,12 +352,16 @@ func TestDetailKeepsPlayedReleaseTracksWhenSearchFails(t *testing.T) {
 				check := func(phase string) {
 					t.Helper()
 					if got := x.detailSubs(t, tc.detailAddr); got != playedSubtitles {
-						t.Errorf("%s: detail lists %d subtitles, want %d", phase, got, playedSubtitles)
+						// The helper drains any background warm-up after the read.
+						if got = x.detailSubs(t, tc.detailAddr); got != playedSubtitles {
+							t.Errorf("%s: detail lists %d subtitles after background warm-up, want %d", phase, got, playedSubtitles)
+						}
 					}
 				}
 
+				x.detailSubs(t, tc.playAddr) // Trigger and drain the background warm-up.
 				if got := x.detailSubs(t, tc.playAddr); got != playedSubtitles {
-					t.Fatalf("before play: detail lists %d subtitles, want %d", got, playedSubtitles)
+					t.Fatalf("before play: warm detail lists %d subtitles, want %d", got, playedSubtitles)
 				}
 				x.play(t, tc.playAddr, tc.playQuery)
 				_, _, resumed := x.mgr.ResumedTracks(context.Background(), &ownerUser, x.title.Key, x.detailCaps(tc.detailAddr == playedPublic))

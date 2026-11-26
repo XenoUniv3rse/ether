@@ -332,6 +332,25 @@ func TestVersionSlotsExplicitNonAutoPlayStaysInOwnSlot(t *testing.T) {
 	}
 }
 
+func TestColdDetailSlotsReadProbeFromCachedSearch(t *testing.T) {
+	ctx := context.Background()
+	svc := New(&fakeIndexer{releases: variantReleases()}, fakeHealth{}, nil, testCfg(), Options{})
+	defer svc.Close()
+	title := matrixTitle()
+	req := core.ResolveRequest{Title: title, Client: appleTVCaps()}
+	primeSearchCache(t, svc, req.Client)
+	svc.SetProbedMedia(func(core.Release) (core.MediaInfo, bool) {
+		return core.MediaInfo{Streams: []core.StreamInfo{
+			{Index: 0, Type: "video", Codec: "h264"},
+			{Index: 4, Type: "subtitle", Codec: "ass"},
+		}}, true
+	})
+	cached, err := svc.VersionSlots(core.WithColdDetail(core.WithLocalResponse(ctx), title.Key), req, core.MaxVariants, true)
+	if err != nil || len(cached) == 0 || cached[0].Info.Estimated || len(cached[0].Info.Streams) != 2 {
+		t.Fatalf("first detail did not use the cached probe: %v", err)
+	}
+}
+
 func TestDetailVariantCacheIgnoresVolatileTitleFieldsAndRefreshKeepsConcrete(t *testing.T) {
 	ctx := context.Background()
 	cfg := testCfg()
