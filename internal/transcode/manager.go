@@ -392,6 +392,10 @@ func New(cfg config.Transcode, logger *slog.Logger, opts ...Option) (*Manager, e
 	qsvTM := newQSVToneMapCache(m.runner, m.ffmpeg, m.ffprobe, m.tempDir, m.feat.encoders)
 	qsvTM.db, qsvTM.log, qsvTM.onChange = o.decodeDB, m.log, o.onChange
 	m.feat.qsvToneMap = qsvTM
+	if m.hw.Name == AccelVAAPI && !m.hw.NoGPUTonemap && m.feat.hwaccels["vulkan"] && m.feat.hasFilter("libplacebo") {
+		m.feat.vaapiVulkan = vaapiVulkanStateFor(m.hw, m.log)
+		detector.vaapiVulkan = m.feat.vaapiVulkan
+	}
 	m.feat.vaapiToneMap = newVAAPIToneMapper(detector, m.feat, m.hw, m.ffprobe, m.tempDir)
 	if m.feat.vaapiToneMap != nil {
 		m.feat.vaapiMeasured = true

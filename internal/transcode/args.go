@@ -1395,13 +1395,13 @@ func cpuToneMap(f features) (string, bool) {
 	if f.hasFilter("zscale") && f.hasFilter("tonemap") {
 		return "zscale=t=linear:npl=100,format=gbrpf32le,zscale=p=bt709,tonemap=tonemap=hable:desat=0,zscale=t=bt709:m=bt709:r=tv", true
 	}
-	if f.hasFilter("libplacebo") {
+	if f.hasFilter("libplacebo") && !f.vaapiVulkan.unavailable() {
 		return "libplacebo=tonemapping=hable:color_primaries=bt709:color_trc=bt709:colorspace=bt709:range=tv", true
 	}
 	if f.hasFilter("tonemapx") {
 		return "tonemapx=tonemap=hable:desat=0:t=bt709:m=bt709:p=bt709:format=yuv420p", true
 	}
-	if f.hasFilter("tonemap_opencl") {
+	if f.hasFilter("tonemap_opencl") && !f.vaapiVulkan.unavailable() {
 		return "format=p010le,hwupload,tonemap_opencl=tonemap=hable:desat=0:format=nv12,hwdownload,format=nv12", true
 	}
 	return "", false

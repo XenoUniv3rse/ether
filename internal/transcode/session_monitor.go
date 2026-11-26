@@ -1031,7 +1031,7 @@ func (s *Session) recoverLiveLocked(r *run, err error) {
 // looksLikeEncoderFailure tells a hardware encoder/filter failure apart
 // from an input failure, so only the former switches the session to CPU.
 func looksLikeEncoderFailure(stderr string, spec runSpec) bool {
-	if strings.TrimSpace(stderr) == "" {
+	if strings.TrimSpace(stderr) == "" || (spec.Accel.Name == AccelVAAPI && vaapiVulkanDeviceLost(stderr)) {
 		return true
 	}
 	l := strings.ToLower(stderr)

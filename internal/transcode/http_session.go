@@ -612,7 +612,8 @@ func (s *httpSession) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		pr, pw := io.Pipe()
 		stderr := newTailBuffer(40)
-		cmd := Command{Path: s.m.ffmpeg, Args: buildArgs(spec), Stdout: pw, Stderr: &lineWriter{fn: stderr.add}}
+		args := buildArgs(spec)
+		cmd := Command{Path: s.m.ffmpeg, Args: args, Stdout: pw, Stderr: spec.Features.vaapiVulkan.watch(args, &lineWriter{fn: stderr.add})}
 		encoding := s.req.Info.Video() != nil && !s.req.Decision.VideoCopy
 		work, err := s.life.runWork(encoding)
 		if err != nil {

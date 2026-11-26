@@ -746,7 +746,8 @@ func (s *Session) startRunLocked(seg int, bigProbe bool) error {
 		}
 	}
 	if err == nil && proc == nil {
-		proc, err = s.m.runner.Start(Command{Path: s.m.ffmpeg, Args: args, Dir: runDir, Stdout: stdout, Stderr: stderr, Background: !s.liveInput && !spec.Decision.EncodesVideo(s.info)})
+		proc, err = s.m.runner.Start(Command{Path: s.m.ffmpeg, Args: args, Dir: runDir, Stdout: stdout,
+			Stderr: spec.Features.vaapiVulkan.watch(args, stderr), Background: !s.liveInput && !spec.Decision.EncodesVideo(s.info)})
 	}
 	if finishTone != nil {
 		finishTone(proc)
