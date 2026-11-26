@@ -496,7 +496,7 @@ func (i *instance) userImage(w http.ResponseWriter, r *http.Request) {
 }
 
 func (i *instance) image(w http.ResponseWriter, r *http.Request) {
-	if strings.EqualFold(r.PathValue("imageType"), "Chapter") || i.host.ImageGrants == nil {
+	if i.host.ImageGrants == nil {
 		mediaBrowserError(w, r, http.StatusNotFound)
 		return
 	}
@@ -699,6 +699,10 @@ func (i *instance) servePublicImage(w http.ResponseWriter, r *http.Request, wire
 // is Primary, an episode still stands in when there is no poster, and a
 // still is also the Thumb fallback.
 func taglessImage(images []frontend.Image, imageType string, index int) (frontend.Image, bool) {
+	// Every chapter shares the item's primary artwork.
+	if strings.EqualFold(imageType, "Chapter") {
+		imageType, index = "Primary", 0
+	}
 	var kinds []string
 	switch strings.ToLower(imageType) {
 	case "primary":

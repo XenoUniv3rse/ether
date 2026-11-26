@@ -36,6 +36,13 @@ func (i *instance) jellyfinItemDetailDTO(detail frontend.ItemDetail, dto map[str
 	} else if _, ok := dto["Chapters"]; !ok {
 		addChapters(dto, frontend.MediaInfo{Chapters: detail.Chapters})
 	}
+	tags, _ := dto["ImageTags"].(map[string]any)
+	if cover, _ := tags["Primary"].(string); cover != "" {
+		chapters, _ := dto["Chapters"].([]any)
+		for _, chapter := range chapters {
+			chapter.(map[string]any)["ImageTag"] = cover
+		}
+	}
 	if detail.Title.Type != "movie" && detail.Title.Type != "episode" {
 		return
 	}

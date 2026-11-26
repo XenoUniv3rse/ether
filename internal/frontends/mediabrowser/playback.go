@@ -1229,7 +1229,11 @@ func addChapters(source map[string]any, media frontend.MediaInfo) {
 func chapterDTOs(known []core.Chapter) []any {
 	chapters := make([]any, 0, len(known))
 	for _, chapter := range known {
-		chapters = append(chapters, map[string]any{"Name": chapter.Title, "StartPositionTicks": chapter.Start.Nanoseconds() / 100, "ImageDateModified": wireTime(time.Time{})})
+		entry := map[string]any{"StartPositionTicks": chapter.Start.Nanoseconds() / 100, "ImageDateModified": wireTime(time.Time{})}
+		if chapter.Title != "" {
+			entry["Name"] = chapter.Title
+		}
+		chapters = append(chapters, entry)
 	}
 	return chapters
 }
