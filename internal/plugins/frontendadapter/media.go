@@ -125,9 +125,10 @@ func (h *MediaHandler) ServeGrant(w http.ResponseWriter, r *http.Request, grant 
 		media, err = h.deps.Open(r.Context(), viewer, grant.ItemID, accept)
 	}
 	if err != nil || media == nil {
-		if errors.Is(err, core.ErrPreparing) {
-			w.Header().Set("Retry-After", strconv.Itoa(core.PreparingRetrySeconds(err, 5)))
-		} else if errors.Is(err, core.ErrJobsBusy) {
+		if frontend.WritePlaybackPending(w, err, r.Header.Get("Accept-Language")) {
+			return
+		}
+		if errors.Is(err, core.ErrJobsBusy) {
 			w.Header().Set("Retry-After", strconv.Itoa(core.JobsBusyRetrySeconds(err, 5)))
 		} else if errors.Is(err, plugins.ErrBusy) {
 			w.Header().Set("Retry-After", "5")
@@ -164,8 +165,6 @@ func (h *MediaHandler) refuse(w http.ResponseWriter, status int, code, message s
 // openFailure classifies why an authorized item could not be opened.
 func openFailure(err error) (int, string, string) {
 	switch {
-	case errors.Is(err, core.ErrPreparing):
-		return http.StatusServiceUnavailable, "preparing", core.PreparingMessage(err)
 	case errors.Is(err, core.ErrJobsBusy):
 		return http.StatusServiceUnavailable, "jobs_busy", core.JobsBusyMessage(err)
 	case err == nil, errors.Is(err, core.ErrNotAvailable):

@@ -43,14 +43,12 @@ const (
 	msgNotAvailable = "Not available yet: no playable release of this title was found. Try again later."
 	msgStreamLimit  = "Stream limit reached: stop another stream on this server and try again."
 	msgPlayFailed   = "This title could not be played right now. Try again in a moment."
-	msgPrepareSlow  = "Ether is still finding a source for this title. Try again in a moment."
 	// Setup problems: the owner can fix these, and "not available" would
 	// send them looking for a missing release instead.
 	msgNoSources        = "Ether has no sources to search: add a Stremio addon or Torznab indexer under Sources › Indexers."
 	msgNoTorrentSources = "Ether streams through your debrid account but has no torrent indexer to search: add a Stremio addon or Torznab indexer under Sources › Indexers."
 	msgDebridAuth       = "Your debrid service rejected Ether's API key: check the account under Sources › Debrid."
 	msgNotCached        = "No cached release is available on your debrid service."
-	msgDownloadQueued   = "Not cached yet. Sent to your debrid service to download; try again later."
 	// Every release is a torrent no debrid account holds, with the owner's
 	// "Cached torrents only" on: nothing downloads until it is turned off.
 	msgNotCachedOnly       = "No cached copy. Turn off Cached torrents only to download it."
@@ -68,6 +66,9 @@ const (
 // own account has video transcoding switched off.
 func (s *Server) playbackMessageFor(pr *Request, err error) string {
 	if pr != nil {
+		if _, msg, _ := frontend.PlaybackPending(err, pr.Language); msg != "" {
+			return msg
+		}
 		if msg := frontend.VideoEncoderCapacityMessage(err, pr.Language); msg != "" {
 			return msg
 		}
@@ -82,6 +83,9 @@ func (s *Server) playbackMessageFor(pr *Request, err error) string {
 }
 
 func playbackMessage(err error) string {
+	if _, msg, _ := frontend.PlaybackPending(err); msg != "" {
+		return msg
+	}
 	if msg := frontend.VideoEncoderCapacityMessage(err); msg != "" {
 		return msg
 	}
@@ -107,11 +111,6 @@ func playbackMessage(err error) string {
 		return msgNoTorrentSources
 	case errors.Is(err, frontend.ErrNoSources):
 		return msgNoSources
-	case errors.Is(err, frontend.ErrDownloadQueued):
-		if detail := frontend.DownloadQueuedDetail(err); detail != "" {
-			return fmt.Sprintf("Not cached yet (%s). Try again later.", detail)
-		}
-		return msgDownloadQueued
 	case errors.As(err, new(*frontend.UncachedError)), onlyNotCached(err):
 		return notCachedMessage(err)
 	case errors.Is(err, frontend.ErrArchiveUnstreamable):
@@ -126,8 +125,6 @@ func playbackMessage(err error) string {
 		return msgNotAvailable
 	case errors.Is(err, frontend.ErrStreamLimit):
 		return msgStreamLimit
-	case errors.Is(err, frontend.ErrPrepareSlow), errors.Is(err, frontend.ErrPreparing):
-		return msgPrepareSlow
 	case errors.Is(err, frontend.ErrJobsBusy):
 		return frontend.JobsBusyMessage(err)
 	}
@@ -139,6 +136,9 @@ func playbackMessage(err error) string {
 // terminationText for the client's next timeline, as for a start stall.
 func (s *Server) writeStartErr(w http.ResponseWriter, r *http.Request, pr *Request, err error) {
 	if r.Context().Err() != nil {
+		return
+	}
+	if frontend.WritePlaybackPending(w, err, notificationLanguage(r)) {
 		return
 	}
 	s.log.Warn("playback start failed", "reason", playbackMessage(err), "err", err)
@@ -1202,6 +1202,9 @@ func (s *Server) handleDecision(w http.ResponseWriter, r *http.Request) {
 		if ctx.Err() != nil {
 			return
 		}
+		if frontend.WritePlaybackPending(w, err, notificationLanguage(r)) {
+			return
+		}
 		s.log.Warn("playback decision failed before admission", "user", pr.User.Username, "reason", playbackMessage(err), "err", err)
 		p, _ := s.parsePlayRequest(r)
 		// start.m3u8/start.mpd follow a failed decision for the same session:
@@ -1247,6 +1250,9 @@ func (s *Server) handleDecision(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if ctx.Err() != nil {
+			return
+		}
+		if frontend.WritePlaybackPending(w, err, notificationLanguage(r)) {
 			return
 		}
 		s.log.Warn("playback decision failed", "key", p.key, "user", pr.User.Username, "reason", playbackMessage(err), "err", err)
@@ -3419,7 +3425,7 @@ func (s *Server) handlePart(w http.ResponseWriter, r *http.Request) {
 // Part acquisition failures distinguish an absent provider file from a failed
 // upstream transport; the conversion start routes retain their own contract.
 func (s *Server) writePartErr(w http.ResponseWriter, r *http.Request, pr *Request, err error) {
-	if errors.Is(err, frontend.ErrNotFound) || errors.Is(err, frontend.ErrNotAvailable) || errors.Is(err, frontend.ErrUnauthorized) || errors.Is(err, frontend.ErrStreamLimit) || errors.Is(err, frontend.ErrPrepareSlow) || errors.Is(err, frontend.ErrPreparing) || errors.Is(err, frontend.ErrJobsBusy) || errors.Is(err, frontend.ErrArchiveUnstreamable) || errors.As(err, new(*frontend.IndexersPausedError)) {
+	if errors.Is(err, frontend.ErrNotFound) || errors.Is(err, frontend.ErrNotAvailable) || errors.Is(err, frontend.ErrUnauthorized) || errors.Is(err, frontend.ErrStreamLimit) || errors.Is(err, frontend.ErrPrepareSlow) || errors.Is(err, frontend.ErrPreparing) || errors.Is(err, frontend.ErrDownloadQueued) || errors.Is(err, frontend.ErrJobsBusy) || errors.Is(err, frontend.ErrArchiveUnstreamable) || errors.As(err, new(*frontend.IndexersPausedError)) {
 		s.writeStartErr(w, r, pr, err)
 		return
 	}

@@ -7,31 +7,18 @@ import (
 
 	"github.com/braedonsaunders/ether/internal/core"
 	"github.com/braedonsaunders/ether/internal/frontend"
+	"github.com/braedonsaunders/ether/internal/plugins"
 )
 
-// A plugin's /resolve is staged: a cold album runs its indexer search,
-// usenet check and archive listing in bounded slices. Manager.Call already
-// re-polls a {pending:true} reply for up to plugins.ResolverTotal, but some
-// answers still came back "preparing" at once: a 202, an empty answer while
-// the host indexer search the plugin started is still running, a sibling
-// holding the album, a queued debrid download. Vela retries a 503 a few
-// times; Plexamp, Plex music playback, many Jellyfin audio clients and
-// Subsonic apps treat it as unplayable and skip to the next track, so a cold
-// album skipped track by track in seconds (W348). The open entry points
-// therefore wait server-side, bounded, re-polling until the item is ready,
-// truly unavailable, or the budget or the caller's context ends. Only a play
-// reaches this, so nothing resolves eagerly.
-
 const (
-	// DefaultKindPreparingWait bounds one open's server-side wait for a
-	// staged plugin resolve. Plex and Jellyfin clients give a media read
-	// well over 20 s before giving up.
+	// DefaultKindPreparingWait bounds how long a play waits before asking
+	// the client to retry. The shared source resolve can run longer.
 	DefaultKindPreparingWait = 18 * time.Second
 
-	kindPreparingPollMin = 100 * time.Millisecond
-	kindPreparingPollMax = 2 * time.Second
-	// kindPreparingDeadlineMargin leaves room under a caller deadline to
-	// answer preparing instead of timing out mid-poll.
+	kindResolveFlightBudget     = 2*plugins.ResolverTotal + 5*time.Second
+	kindResolveRetryTTL         = 30 * time.Second
+	kindPreparingPollMin        = 100 * time.Millisecond
+	kindPreparingPollMax        = 2 * time.Second
 	kindPreparingDeadlineMargin = time.Second
 )
 
@@ -42,14 +29,12 @@ type preparingWaitKey struct{}
 // polling (OpenKindExcluding delegating to OpenKindPartExcluding must not
 // multiply the budget).
 func (r *KindResolver) waitsPreparing(ctx context.Context) bool {
-	return r != nil && r.preparingWait > 0 && ctx.Value(preparingWaitKey{}) == nil
+	return r != nil && r.preparingWait > 0 && ctx.Value(preparingWaitKey{}) == nil &&
+		!core.SpeculativeIndexerWork(ctx) && !core.IsBackgroundCheck(ctx)
 }
 
-// waitPreparing runs open, and while it answers ErrPreparing polls it again
-// after the resolver's retry hint, within the configured wait and the
-// caller's deadline. Any other answer (media, not available, failure)
-// returns at once; when the budget runs out the last preparing error is
-// returned so the frontend still answers 503 + Retry-After.
+// waitPreparing marks viewer opens and rechecks queued downloads while the
+// request has budget. Source discovery is polled inside the shared flight.
 func (r *KindResolver) waitPreparing(ctx context.Context, open func(context.Context) (*frontend.KindMedia, error)) (*frontend.KindMedia, error) {
 	ctx = context.WithValue(ctx, preparingWaitKey{}, true)
 	budget := r.preparingWait
@@ -59,7 +44,7 @@ func (r *KindResolver) waitPreparing(ctx context.Context, open func(context.Cont
 	start := time.Now()
 	for {
 		media, err := open(ctx)
-		if err == nil || !errors.Is(err, core.ErrPreparing) {
+		if err == nil || !errors.Is(err, core.ErrDownloadQueued) || !errors.Is(err, core.ErrPreparing) {
 			return media, err
 		}
 		delay := preparingPollDelay(err)

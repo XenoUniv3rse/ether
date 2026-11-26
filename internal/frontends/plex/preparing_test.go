@@ -15,8 +15,8 @@ func TestPlexPreparingErrorMappingAndRetryableDecision(t *testing.T) {
 	s := &Server{log: slog.Default()}
 	prepErr := &core.PreparingError{RetryAfter: 7 * time.Second}
 
-	if got := playbackMessage(prepErr); got != msgPrepareSlow {
-		t.Fatalf("playbackMessage(PreparingError) = %q, want %q", got, msgPrepareSlow)
+	if got := playbackMessage(prepErr); got != "Finding a source…" {
+		t.Fatalf("playbackMessage(PreparingError) = %q", got)
 	}
 
 	// API error writer returns 503 + Retry-After + code="preparing".
@@ -40,10 +40,10 @@ func TestPlexPreparingErrorMappingAndRetryableDecision(t *testing.T) {
 		t.Fatalf("writeErr body = %s, err = %v", w.Body.String(), err)
 	}
 
-	// Player start routes remain terminal 400 without Retry-After so Plex media loaders do not spin.
+	// Player start routes carry the same retry hint while the source is pending.
 	w = httptest.NewRecorder()
 	s.writeStartErr(w, httptest.NewRequest(http.MethodGet, "/", nil), nil, prepErr)
-	if w.Code != http.StatusBadRequest || w.Header().Get("Retry-After") != "" {
+	if w.Code != http.StatusServiceUnavailable || w.Header().Get("Retry-After") != "7" {
 		t.Fatalf("writeStartErr = %d hdr=%v", w.Code, w.Header())
 	}
 
@@ -52,7 +52,7 @@ func TestPlexPreparingErrorMappingAndRetryableDecision(t *testing.T) {
 	defer f.srv.Close()
 	f.playback.failures[fightClub.Key] = prepErr
 	dec := f.get(t, "/video/:/transcode/universal/decision?path=%2Flibrary%2Fmetadata%2F1000000000000550&session=prep1", jsonAccept...)
-	if dec.Code != http.StatusOK {
+	if dec.Code != http.StatusServiceUnavailable || dec.Header().Get("Retry-After") != "7" {
 		t.Fatalf("decision status = %d", dec.Code)
 	}
 	delete(f.playback.failures, fightClub.Key)

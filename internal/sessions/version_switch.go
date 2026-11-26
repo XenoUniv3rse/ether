@@ -197,19 +197,19 @@ func (b *Broker) SwitchVersion(ctx context.Context, a frontend.SessionAccess, se
 			ps, err = within.PrepareWithin(ctx, wait, viewer, s.public.Item, caps, targetSelector, exact)
 		} else {
 			if chosen != nil && chosen.Availability == core.VersionFetch {
-				return frontend.PlayPlan{}, &core.PreparingError{RetryAfter: versionSwitchRetryAfter}
+				return frontend.PlayPlan{}, core.ErrVersionUnavailable
 			}
 			ps, err = playback.PrepareSurface(ctx, viewer, s.public.Item, caps, targetSelector, exact)
 		}
 	}
 	if err != nil {
 		switch {
-		case errors.Is(err, core.ErrPreparing):
+		case errors.Is(err, core.ErrPreparing), errors.Is(err, core.ErrPrepareSlow):
 			return frontend.PlayPlan{}, err
 		case errors.Is(err, core.ErrDownloadQueued):
 			return frontend.PlayPlan{}, &core.PreparingError{RetryAfter: versionSwitchRetryAfter, Err: err}
-		case errors.Is(err, core.ErrNotCached), errors.Is(err, core.ErrPrepareSlow):
-			return frontend.PlayPlan{}, &core.PreparingError{RetryAfter: versionSwitchRetryAfter}
+		case errors.Is(err, core.ErrNotCached):
+			return frontend.PlayPlan{}, core.ErrVersionUnavailable
 		case errors.Is(err, core.ErrVideoTranscodingDisabled):
 			return frontend.PlayPlan{}, &frontend.NoCompatiblePathError{
 				RejectedPaths: []frontend.RejectedPlaybackPath{{Path: "video", Reasons: []string{reasonVideoTranscodingOff}}},

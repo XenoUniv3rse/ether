@@ -116,29 +116,8 @@ var (
 // DownloadQueuedError wraps ErrDownloadQueued with optional provider queue context.
 type DownloadQueuedError = core.DownloadQueuedError
 
-// DownloadQueuedDetail returns the provider queue reason when err carries one, else "".
-func DownloadQueuedDetail(err error) string {
-	return core.DownloadQueuedDetail(err)
-}
-
 // PreparingError carries a suggested retry delay for ErrPreparing.
 type PreparingError = core.PreparingError
-
-// PreparingRetrySeconds returns the HTTP Retry-After value in whole seconds
-// for an ErrPreparing error.
-func PreparingRetrySeconds(err error, fallback int) int {
-	return core.PreparingRetrySeconds(err, fallback)
-}
-
-// PreparingMessage returns the viewer-facing message for an ErrPreparing error.
-func PreparingMessage(err error) string {
-	return core.PreparingMessage(err)
-}
-
-// PreparingErrorBody returns the JSON media error envelope for preparing.
-func PreparingErrorBody(err error) []byte {
-	return core.PreparingErrorBody(err)
-}
 
 // JobsBusyError carries the refusal message and retry delay for ErrJobsBusy.
 type JobsBusyError = core.JobsBusyError

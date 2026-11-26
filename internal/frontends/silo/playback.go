@@ -851,17 +851,15 @@ func playbackErrorFor(w http.ResponseWriter, policy any, viewer *frontend.Viewer
 		http.Error(w, "Track source unavailable", http.StatusServiceUnavailable)
 		return
 	}
-	if errors.Is(err, frontend.ErrPreparing) {
-		msg := frontend.PreparingMessage(err)
-		w.Header().Set("Retry-After", strconv.Itoa(frontend.PreparingRetrySeconds(err, 5)))
-		w.Header().Set("X-Ether-Media-Error", "preparing")
+	if code, msg, seconds := frontend.PlaybackPending(err, languages...); seconds > 0 {
+		frontend.SetPlaybackRetry(w, code, seconds)
 		requestID, idErr := controlCommandID()
 		if idErr != nil {
 			http.Error(w, msg, http.StatusServiceUnavailable)
 			return
 		}
 		w.Header().Set("X-Request-ID", requestID)
-		problemReply(w, http.StatusServiceUnavailable, map[string]any{"type": "about:blank", "title": "Item is still being prepared", "status": http.StatusServiceUnavailable, "detail": msg, "instance": "urn:silo:request:" + requestID})
+		problemReply(w, http.StatusServiceUnavailable, map[string]any{"type": "about:blank", "title": msg, "status": http.StatusServiceUnavailable, "detail": msg, "instance": "urn:silo:request:" + requestID})
 		return
 	}
 	if errors.Is(err, frontend.ErrSessionBusy) {

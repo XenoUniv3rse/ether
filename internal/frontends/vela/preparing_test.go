@@ -18,10 +18,10 @@ func TestVelaPreparingErrorMapsTo503RetryAfter(t *testing.T) {
 		wantSec   int
 		wantMsg   string
 	}{
-		{"explicit retryAfter", &frontend.PreparingError{RetryAfter: 7 * time.Second}, "7", 7, "item is still being prepared"},
-		{"bare sentinel defaults to 5s", frontend.ErrPreparing, "5", 5, "item is still being prepared"},
-		{"preparing wrapping queued download", &frontend.PreparingError{RetryAfter: 5 * time.Second, Err: &frontend.UncachedError{Err: frontend.ErrDownloadQueued}}, "5", 5, "item is still being prepared"},
-		{"preparing queued behind active downloads", &frontend.PreparingError{RetryAfter: 5 * time.Second, Err: &frontend.UncachedError{Err: &frontend.DownloadQueuedError{Provider: "TorBox", ActiveDownloads: 3, Err: frontend.ErrDownloadQueued}}}, "5", 5, "queued at TorBox behind 3 active downloads"},
+		{"explicit retryAfter", &frontend.PreparingError{RetryAfter: 7 * time.Second}, "7", 7, "Finding a source…"},
+		{"bare sentinel defaults to 5s", frontend.ErrPreparing, "5", 5, "Finding a source…"},
+		{"preparing wrapping queued download", &frontend.PreparingError{RetryAfter: 5 * time.Second, Err: &frontend.UncachedError{Err: frontend.ErrDownloadQueued}}, "5", 5, "Waiting for the download service…"},
+		{"preparing queued behind active downloads", &frontend.PreparingError{RetryAfter: 5 * time.Second, Err: &frontend.UncachedError{Err: &frontend.DownloadQueuedError{Provider: "TorBox", ActiveDownloads: 3, Err: frontend.ErrDownloadQueued}}}, "5", 5, "Waiting for the download service…"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			w := httptest.NewRecorder()

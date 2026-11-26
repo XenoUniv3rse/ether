@@ -124,7 +124,7 @@ func jellyfinStaticPlayable(protocol frontend.Protocol, channel string, opts fro
 }
 
 func jellyfinStaticFallback(err error) bool {
-	return err != nil && !errors.Is(err, frontend.ErrSessionBusy) && !errors.Is(err, frontend.ErrTranscodeCapacity) && !errors.Is(err, frontend.ErrPreparing) && !errors.Is(err, frontend.ErrJobsBusy)
+	return err != nil && !errors.Is(err, frontend.ErrSessionBusy) && !errors.Is(err, frontend.ErrTranscodeCapacity) && !retryableMediaOpen(err) && !errors.Is(err, frontend.ErrJobsBusy)
 }
 
 func offerJellyfinStatic(source map[string]any, opts frontend.DecideOptions) {
@@ -170,13 +170,7 @@ func streamError(protocol frontend.Protocol, w http.ResponseWriter, err error, l
 		return
 	}
 
-	if errors.Is(err, frontend.ErrPreparing) {
-		w.Header().Set("Retry-After", strconv.Itoa(frontend.PreparingRetrySeconds(err, 5)))
-		w.Header().Set("X-Ether-Media-Error", "preparing")
-		w.Header().Set("Content-Type", "application/json")
-		w.Header().Set("Cache-Control", "no-store")
-		w.WriteHeader(http.StatusServiceUnavailable)
-		_, _ = w.Write(frontend.PreparingErrorBody(err))
+	if frontend.WritePlaybackPending(w, err, languages...) {
 		return
 	}
 	if errors.Is(err, frontend.ErrJobsBusy) {
@@ -523,7 +517,7 @@ func (i *instance) playbackInfo(w http.ResponseWriter, r *http.Request) {
 			} else {
 				i.writeNoCompatibleStream(w)
 			}
-		} else if errors.Is(err, frontend.ErrPreparing) || errors.Is(err, frontend.ErrJobsBusy) {
+		} else if retryableMediaOpen(err) || errors.Is(err, frontend.ErrJobsBusy) {
 			streamError(i.protocol, w, err, r.Header.Get("Accept-Language"))
 		} else {
 			http.Error(w, "Playback unavailable", 503)
@@ -626,7 +620,7 @@ func (i *instance) playbackInfo(w http.ResponseWriter, r *http.Request) {
 					i.playbackInfoError(w, v, "open", err, r.Header.Get("Accept-Language"))
 				} else if frontend.WritePlaybackSourceProblem(w, err, r.Header.Get("Accept-Language")) {
 					return
-				} else if errors.Is(err, frontend.ErrPreparing) || errors.Is(err, frontend.ErrJobsBusy) {
+				} else if retryableMediaOpen(err) || errors.Is(err, frontend.ErrJobsBusy) {
 					streamError(i.protocol, w, err, r.Header.Get("Accept-Language"))
 				} else {
 					http.Error(w, "Playback unavailable", 503)
@@ -1480,8 +1474,12 @@ func timelineItem(body timelineRequest) (frontend.RatingKey, bool) {
 	return 0, false
 }
 
+func retryableMediaOpen(err error) bool {
+	return errors.Is(err, frontend.ErrPreparing) || errors.Is(err, frontend.ErrPrepareSlow) || errors.Is(err, frontend.ErrDownloadQueued)
+}
+
 func noCompatibleStream(err error) bool {
-	if errors.Is(err, frontend.ErrPreparing) || errors.Is(err, frontend.ErrJobsBusy) {
+	if retryableMediaOpen(err) || errors.Is(err, frontend.ErrJobsBusy) {
 		return false
 	}
 	return errors.Is(err, frontend.ErrNotFound) || errors.Is(err, frontend.ErrNotAvailable) || errors.Is(err, frontend.ErrSourceGone)
@@ -1495,7 +1493,7 @@ func (i *instance) playbackInfoError(w http.ResponseWriter, v *frontend.Viewer, 
 	if i.host.Log != nil {
 		i.host.Log.Warn("PlaybackInfo failed", "protocol", i.protocol, "stage", stage, "err", err)
 	}
-	if i.protocol != "jellyfin" || errors.Is(err, frontend.ErrSessionBusy) || errors.Is(err, frontend.ErrTranscodeCapacity) || errors.Is(err, frontend.ErrPreparing) || errors.Is(err, frontend.ErrJobsBusy) {
+	if i.protocol != "jellyfin" || errors.Is(err, frontend.ErrSessionBusy) || errors.Is(err, frontend.ErrTranscodeCapacity) || retryableMediaOpen(err) || errors.Is(err, frontend.ErrJobsBusy) {
 		if errors.Is(err, frontend.ErrVideoTranscodingDisabled) {
 			// Emby and the pass-through cases get the viewer's own wording too.
 			http.Error(w, frontend.VideoTranscodingOffMessage(i.host.ViewerPolicy, v), http.StatusUnprocessableEntity)

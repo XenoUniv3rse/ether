@@ -1271,7 +1271,7 @@ func (m *Manager) runFlight(ctx context.Context, f *flight, fk flightKey, user *
 	if err != nil {
 		f.sources.seal()
 		errSess := s
-		if errSess == nil && f.failedSess != nil && f.playRequest && !core.IsBackgroundAnalysis(ctx) && !errors.Is(err, context.Canceled) && !errors.Is(err, core.ErrPrepareSlow) && !errors.Is(err, core.ErrPreparing) && !errors.Is(err, core.ErrJobsBusy) {
+		if errSess == nil && f.failedSess != nil && f.playRequest && !core.IsBackgroundAnalysis(ctx) && !errors.Is(err, context.Canceled) && !errors.Is(err, core.ErrPrepareSlow) && !errors.Is(err, core.ErrPreparing) && !errors.Is(err, core.ErrDownloadQueued) && !errors.Is(err, core.ErrJobsBusy) {
 			errSess = f.failedSess
 			errSess.mu.Lock()
 			errSess.preparedOnly = false

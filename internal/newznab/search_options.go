@@ -24,6 +24,9 @@ const (
 	// Manager at once.
 	maxDetachedSearchFills = 64
 
+	// Keep a single playback search from using up the detached fan-out.
+	maxContinuingSearchParallel = 12
+
 	// maxIndexerTimingSamples caps the per-indexer sliding window used to
 	// report recent median/last latency on sources.resolve({kind: "indexers"}).
 	maxIndexerTimingSamples = 20
@@ -320,7 +323,23 @@ func (m *Manager) SearchWithOptions(ctx context.Context, req core.SearchRequest,
 			m.bgMu.Unlock()
 			return SearchResult{}, context.Canceled
 		}
-		runCtx, bgCancel = context.WithTimeout(withSearchCeiling(context.WithoutCancel(ctx)), bgLimit)
+		parent := context.WithoutCancel(ctx)
+		if opts.ContinuationContext != nil {
+			// Preserve search-specific values on ctx while taking the
+			// lifetime from the enclosing resolve, not the guest slice.
+			var cancel context.CancelFunc
+			parent, cancel = context.WithCancel(parent)
+			stop := context.AfterFunc(opts.ContinuationContext, cancel)
+			var timeoutCancel context.CancelFunc
+			runCtx, timeoutCancel = context.WithTimeout(withSearchCeiling(parent), bgLimit)
+			bgCancel = func() {
+				stop()
+				cancel()
+				timeoutCancel()
+			}
+		} else {
+			runCtx, bgCancel = context.WithTimeout(withSearchCeiling(parent), bgLimit)
+		}
 		if m.bgCancels == nil {
 			m.bgCancels = map[int]context.CancelFunc{}
 		}
@@ -345,6 +364,9 @@ func (m *Manager) SearchWithOptions(ctx context.Context, req core.SearchRequest,
 	parallel := m.par
 	if parallel <= 0 {
 		parallel = max(1, active)
+	}
+	if opts.ContinueSearch != nil {
+		parallel = min(parallel, maxContinuingSearchParallel)
 	}
 	sem := make(chan struct{}, parallel)
 
@@ -553,9 +575,16 @@ waitLoop:
 	}
 
 	if reserved > 0 {
-		stateMu.Lock()
-		merged, statuses, pending, _ := snapshotSearchSlots(slots, searchStart, core.IndexerStatusPending)
-		stateMu.Unlock()
+		snapshot := func(context.Context) SearchResult {
+			stateMu.Lock()
+			defer stateMu.Unlock()
+			merged, statuses, pending, _ := snapshotSearchSlots(slots, searchStart, core.IndexerStatusPending)
+			return SearchResult{Releases: merged, Indexers: statuses, Pending: pending}
+		}
+		result := snapshot(ctx)
+		if opts.ContinueSearch != nil && len(result.Pending) > 0 {
+			opts.ContinueSearch(snapshot)
+		}
 		go func(rem int) {
 			defer func() {
 				m.bgMu.Lock()
@@ -566,7 +595,7 @@ waitLoop:
 			wg.Wait()
 			m.recordSlotsAfterWait(runCtx, slots, false)
 		}(reserved)
-		return SearchResult{Releases: merged, Indexers: statuses, Pending: pending}, nil
+		return result, nil
 	}
 
 	// Snapshot unfinished indexers as timed_out before cancelling them so they

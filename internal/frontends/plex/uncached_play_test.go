@@ -334,7 +334,17 @@ func uncachedStart(session, ext string) string {
 // and the text the player shows.
 func (e *uncachedEnv) decide(t *testing.T, session string) (float64, string) {
 	t.Helper()
-	mc := decodeJSON(t, e.f.get(t, uncachedDecision(session, true), append(jsonAccept, "X-Plex-Product", "Plex Web", "X-Plex-Client-Identifier", session)...))
+	rec := e.f.get(t, uncachedDecision(session, true), append(jsonAccept, "X-Plex-Product", "Plex Web", "X-Plex-Client-Identifier", session)...)
+	if rec.Code == http.StatusServiceUnavailable {
+		var body struct {
+			Error struct{ Message string } `json:"error"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+			t.Fatal(err)
+		}
+		return float64(rec.Code), body.Error.Message
+	}
+	mc := decodeJSON(t, rec)
 	if mc["mdeDecisionText"] != nil && mc["mdeDecisionText"] != mc["generalDecisionText"] {
 		t.Fatalf("Plex Web decision texts disagree: %v", mc)
 	}
@@ -349,51 +359,45 @@ func (e *uncachedEnv) onAccount() int {
 	return len(e.remote.torrents)
 }
 
-// Every release of the title is a torrent no debrid account holds. Whatever
-// the provider (Real-Debrid adds and inspects; TorBox answers a bulk instant
-// check) and the owner's Cached torrents only switch, each Plex path ends
-// with the reason instead of a spinner: the decision for Plex Web (JSON,
-// mdeDecisionText) and Android TV (XML), the remembered failure for the
-// start.m3u8 that follows it, and for start.mpd and part requests a terminal status plus
-// the reason as terminationText on the client's next timeline. With the
-// switch on nothing is left on the account. With it off exactly one release
-// is sent to download, retries follow it rather than adding it again, and it
-// plays once the download finishes. The switch takes effect without a
-// restart.
+// Cached-only failures finish the attempt. Queued downloads are retryable
+// across decision, start and part routes. Replays follow the same download
+// until it finishes, and changing the cached-only setting applies immediately.
 func TestEveryCandidateUncachedMatrix(t *testing.T) {
 	for _, kind := range []string{config.DebridRealDebrid, config.DebridTorBox} {
 		for _, cachedOnly := range []bool{true, false} {
 			t.Run(fmt.Sprintf("%s/cachedOnly=%v", kind, cachedOnly), func(t *testing.T) {
 				e := newUncachedEnv(t, kind, cachedOnly, false)
 				want := msgNotCachedOnly
+				webStatus, decisionStatus, startStatus, retryAfter := float64(codeGeneralError), http.StatusOK, http.StatusNotFound, ""
 				if !cachedOnly {
-					want = msgDownloadQueued
+					want = "Waiting for the download service…"
+					webStatus, decisionStatus, startStatus, retryAfter = http.StatusServiceUnavailable, http.StatusServiceUnavailable, http.StatusServiceUnavailable, "5"
 				}
-				if code, text := e.decide(t, "web"); code != codeGeneralError || text != want {
+				if code, text := e.decide(t, "web"); code != webStatus || text != want {
 					t.Fatalf("Plex Web decision: %v %q, want %q", code, text, want)
 				}
 				android := map[string]string{"X-Plex-Product": "Plex for Android (TV)", "X-Plex-Client-Identifier": "atv", "X-Plex-Session-Identifier": "atv-play"}
 				rec := e.f.request(t, http.MethodGet, uncachedDecision("atv", false), android)
-				if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `generalDecisionText="`+want+`"`) {
+				if rec.Code != decisionStatus || rec.Header().Get("Retry-After") != retryAfter || !strings.Contains(rec.Body.String(), want) {
 					t.Fatalf("Android TV decision: %d %s", rec.Code, rec.Body.String())
 				}
-				if rec := e.f.request(t, http.MethodGet, uncachedStart("atv", "m3u8"), android); rec.Code != http.StatusNotFound || rec.Header().Get("Retry-After") != "" {
-					t.Fatalf("start.m3u8 after the failed decision: %d", rec.Code)
+				if rec := e.f.request(t, http.MethodGet, uncachedStart("atv", "m3u8"), android); rec.Code != startStatus || rec.Header().Get("Retry-After") != retryAfter {
+					t.Fatalf("start.m3u8 after decision: %d", rec.Code)
 				}
 				for _, path := range []string{uncachedStart("dash", "mpd"), "/library/parts/1000000000000550/1759276800/file.mkv"} {
 					client := map[string]string{"X-Plex-Client-Identifier": "c-" + path[len(path)-3:], "X-Plex-Session-Identifier": "play-" + path[len(path)-3:]}
 					if strings.Contains(path, "/start.") {
-						if rec := e.f.request(t, http.MethodGet, decisionPath(path), client); rec.Code != http.StatusOK {
+						if rec := e.f.request(t, http.MethodGet, decisionPath(path), client); rec.Code != decisionStatus {
 							t.Fatalf("decision before %s: %d %s", path, rec.Code, rec.Body.String())
 						}
 					}
-					if rec := e.f.request(t, http.MethodGet, path, client); rec.Code != http.StatusNotFound {
+					if rec := e.f.request(t, http.MethodGet, path, client); rec.Code != startStatus || rec.Header().Get("Retry-After") != retryAfter {
 						t.Fatalf("%s: %d", path, rec.Code)
 					}
 					client["Accept"] = "application/json"
 					tl := decodeJSON(t, e.f.request(t, http.MethodGet, "/:/timeline?ratingKey=1000000000000550&key=%2Flibrary%2Fmetadata%2F1000000000000550&state=buffering&time=0&duration=8340000", client))
-					if tl["terminationText"] != want {
-						t.Fatalf("timeline after %s: %v, want terminationText %q", path, tl, want)
+					if cachedOnly && tl["terminationText"] != want || !cachedOnly && tl["terminationText"] != nil {
+						t.Fatalf("timeline after %s: %v", path, tl)
 					}
 				}
 				// Retries answer the same, without new adds.
@@ -407,7 +411,7 @@ func TestEveryCandidateUncachedMatrix(t *testing.T) {
 					}
 					// Turned off in the console: the next Play downloads.
 					e.setCachedOnly(false)
-					if _, text := e.decide(t, "toggled"); text != msgDownloadQueued {
+					if _, text := e.decide(t, "toggled"); text != "Waiting for the download service…" {
 						t.Fatalf("after turning cached-only off: %q", text)
 					}
 				}

@@ -44,7 +44,13 @@ func (r *KindResolver) recordKindFailure(ctx context.Context, item core.KindItem
 }
 
 func (r *KindResolver) emptyKindResolve(ctx context.Context, item core.KindItem, part *int, key resolveFlightKey, state *resolveSearchState, excluded bool) ([]core.PlayableSource, error) {
+	if state.indexerLookupLimitHit() {
+		return nil, core.ErrSourceUnavailable
+	}
 	if state.hasPending() {
+		if state.playbackCtx != nil {
+			return nil, core.PreparingFromPending(250)
+		}
 		return nil, core.PreparingFromPending(2000)
 	}
 	r.clearResolveProgress(key)
