@@ -119,6 +119,7 @@ func (i *instance) bootstrap(w http.ResponseWriter, r *http.Request) {
 			fail(w, err, r)
 			return
 		}
+		plexHomeSwitchAllowed := i.plexHomeSwitchAllowed(v)
 		downloads := i.downloadsFeature(r.Context(), v)
 		r = r.WithContext(context.WithValue(r.Context(), downloadCapabilityKey{}, downloads))
 		dev := requestDevice(r)
@@ -135,7 +136,7 @@ func (i *instance) bootstrap(w http.ResponseWriter, r *http.Request) {
 		// Credentials scope the image grants and cursor scope includes the complete
 		// viewer policy. Do not reuse wire responses between refresh families/devices,
 		// certificate-region preferences, or viewer spoiler-free preferences.
-		scope := hashJSON([]any{v, dev, token, avatar, spoilerFree, downloads, r.URL.RequestURI(), i.appearanceDocument().etag, i.livePreviewMode(), i.liveEventsAvailable(), i.extrasAvailable(), i.extraPlaybackAvailable(), i.previewAvailable(), i.themeAvailable(), i.capabilitiesRevision(), i.signInMethods(), i.preferredRatingRegions(r), i.screensGeneration(), screenClient(r), frontend.ScreenPreviewFrom(r.Context())})
+		scope := hashJSON([]any{v, dev, token, avatar, spoilerFree, downloads, plexHomeSwitchAllowed, r.URL.RequestURI(), i.appearanceDocument().etag, i.livePreviewMode(), i.liveEventsAvailable(), i.extrasAvailable(), i.extraPlaybackAvailable(), i.previewAvailable(), i.themeAvailable(), i.capabilitiesRevision(), i.signInMethods(), i.preferredRatingRegions(r), i.screensGeneration(), screenClient(r), frontend.ScreenPreviewFrom(r.Context())})
 		freshness := i.bootstrapFreshness()
 		var before frontend.HomeRevision
 		cacheable := false
@@ -215,7 +216,7 @@ func (i *instance) bootstrap(w http.ResponseWriter, r *http.Request) {
 				buildRequest = buildRequest.WithContext(source.BeginBootstrapRead(buildRequest.Context(), v, before))
 			}
 		}
-		out, buildErr := i.buildBootstrap(buildRequest, v, token, avatar, spoilerFree, refresh)
+		out, buildErr := i.buildBootstrap(buildRequest, v, token, avatar, spoilerFree, refresh, plexHomeSwitchAllowed)
 		var payload json.RawMessage
 		if buildErr == nil {
 			payload, buildErr = json.Marshal(out)
@@ -227,7 +228,7 @@ func (i *instance) bootstrap(w http.ResponseWriter, r *http.Request) {
 				buildErr = revisionErr
 			} else if sfErr != nil {
 				buildErr = sfErr
-			} else if !available || before != after || freshness != i.bootstrapFreshness() || afterSpoilerFree != spoilerFree {
+			} else if !available || before != after || freshness != i.bootstrapFreshness() || afterSpoilerFree != spoilerFree || i.plexHomeSwitchAllowed(v) != plexHomeSwitchAllowed {
 				buildErr = frontend.ErrRowViewStale
 			}
 		}

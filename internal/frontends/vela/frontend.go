@@ -1181,14 +1181,29 @@ func (i *instance) requestCapabilities(r *http.Request) object {
 	if err != nil {
 		v = nil
 	}
-	return i.requestCapabilitiesFor(r, v)
+	return i.requestCapabilitiesFor(r, v, i.plexHomeSwitchAllowed(v))
+}
+
+// plexHomeSwitchAllowed preserves the sign-in capability for public requests
+// and only suppresses it for a signed-in viewer with known ineligibility.
+func (i *instance) plexHomeSwitchAllowed(v *frontend.Viewer) bool {
+	if v != nil {
+		if source, ok := i.host.Identity.(frontend.HouseholdProfileAvailability); ok {
+			available, known := source.PlexHomeSwitchAvailable(v)
+			return !known || available
+		}
+	}
+	return true
 }
 
 // requestCapabilitiesFor builds capabilities for an already resolved viewer
 // (nil for none): a signed-in viewer also sees the plugin kinds they can
 // open, and a request without a viewer never learns plugin library names.
-func (i *instance) requestCapabilitiesFor(r *http.Request, v *frontend.Viewer) object {
+func (i *instance) requestCapabilitiesFor(r *http.Request, v *frontend.Viewer, plexHomeSwitchAllowed bool) object {
 	c := i.capabilities()
+	if !plexHomeSwitchAllowed {
+		delete(c, "plexHomeProfiles")
+	}
 	c["features"].(object)["liveCatchUp"] = i.catchUpFeature(r, v)
 	downloads, ok := r.Context().Value(downloadCapabilityKey{}).(downloadCapability)
 	if !ok {

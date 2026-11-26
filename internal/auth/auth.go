@@ -362,6 +362,10 @@ type Service struct {
 	plexDefaults map[int64]PlexViewerDefaults
 	gen          atomic.Uint64
 
+	activeHomeProfiles int // protected by mu and published with users
+	hasCachedHome      bool
+	homeSyncedOwnerID  int64
+
 	incarnation uint64
 	entrySeq    uint64
 	receiptSeq  uint64
@@ -619,6 +623,8 @@ func (s *Service) reload(ctx context.Context) error {
 	users := map[int64]*row{}
 	byPlex := map[int64]int64{}
 	var owner int64
+	var activeHomeProfiles int
+	var hasCachedHome bool
 	for rows.Next() {
 		r, err := scanRow(rows)
 		if err != nil {
@@ -628,6 +634,10 @@ func (s *Service) reload(ctx context.Context) error {
 		users[r.ID] = r
 		if r.PlexID != 0 {
 			byPlex[r.PlexID] = r.ID
+		}
+		hasCachedHome = hasCachedHome || (!r.IsOwner && r.Home && r.PlexShared && r.PlexID > 0 && r.Origin != "dlna_guest")
+		if r.isActivePlexHomeProfile() {
+			activeHomeProfiles++
 		}
 		if r.IsOwner {
 			owner = r.PlexID
@@ -700,6 +710,8 @@ func (s *Service) reload(ctx context.Context) error {
 	}
 	changed := !plexDefaultsEqual(s.plexDefaults, defaults) || userThumbsChanged(oldUsers, users) || userActiveChanged(oldUsers, users)
 	s.users, s.byPlex, s.tokens, s.serverTokens, s.ownerPlexID, s.plexDefaults = users, byPlex, tokens, serverTokens, owner, defaults
+	s.activeHomeProfiles = activeHomeProfiles
+	s.hasCachedHome = hasCachedHome
 	if changed {
 		s.gen.Add(1)
 	}
@@ -1503,8 +1515,8 @@ func (s *Service) SyncFriends(ctx context.Context, friends []plextv.Friend) erro
 	if _, err := tx.ExecContext(ctx, `UPDATE auth_membership_epoch SET epoch=epoch+1 WHERE id=1`); err != nil {
 		return err
 	}
-	var ownerLocal int64
-	if err := tx.QueryRowContext(ctx, `SELECT id FROM auth_users WHERE is_owner=1`).Scan(&ownerLocal); err != nil && !errors.Is(err, sql.ErrNoRows) {
+	var ownerLocal, ownerPlexID int64
+	if err := tx.QueryRowContext(ctx, `SELECT id, COALESCE(plex_id,0) FROM auth_users WHERE is_owner=1`).Scan(&ownerLocal, &ownerPlexID); err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return err
 	}
 	if _, err := tx.ExecContext(ctx, `DELETE FROM auth_tokens WHERE source=?`, sourceFriend); err != nil {
@@ -1590,9 +1602,7 @@ RETURNING id`,
 		if uid != 0 {
 			plexID := f.PlexID
 			if f.Owned {
-				if err := tx.QueryRowContext(ctx, `SELECT COALESCE(plex_id,0) FROM auth_users WHERE id=?`, uid).Scan(&plexID); err != nil {
-					return err
-				}
+				plexID = ownerPlexID
 			}
 			if err := upsertPlexDefaultsTx(ctx, tx, uid, plexID, now, defaultsFromFriend(f)); err != nil {
 				return fmt.Errorf("auth: save plex defaults %d: %w", plexID, err)
@@ -1645,6 +1655,13 @@ RETURNING id`,
 		s.log.Info("friends lost access", "count", len(gone))
 	}
 	err = s.reload(ctx)
+	if err == nil {
+		s.mu.Lock()
+		if s.ownerPlexID == ownerPlexID {
+			s.homeSyncedOwnerID = ownerPlexID
+		}
+		s.mu.Unlock()
+	}
 	s.notify("")
 	if err == nil {
 		for _, jf := range joined {

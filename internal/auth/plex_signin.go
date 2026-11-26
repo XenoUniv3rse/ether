@@ -122,6 +122,25 @@ func (s *Service) ActivePlexUserByPlexID(plexID int64) *core.User {
 	return s.activePlexUser(id)
 }
 
+// PlexHomeSwitchAvailable reports availability from the cached server
+// membership. An owner row alone does not establish a Home roster.
+func (s *Service) PlexHomeSwitchAvailable(viewer *core.Viewer) (available, known bool) {
+	if viewer == nil {
+		return false, false
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.ownerPlexID <= 0 || (!s.hasCachedHome && s.homeSyncedOwnerID != s.ownerPlexID) {
+		return false, false
+	}
+	r := s.users[viewer.ID]
+	return s.activeHomeProfiles >= 2 && r.isActivePlexHomeProfile() && r.PlexID == viewer.PlexID, true
+}
+
+func (r *row) isActivePlexHomeProfile() bool {
+	return r != nil && r.Active && r.PlexID > 0 && r.Origin != "dlna_guest" && (r.IsOwner || r.Home)
+}
+
 // OwnerPlexID returns the server owner's plex.tv account id, or 0.
 func (s *Service) OwnerPlexID() int64 {
 	if s == nil {

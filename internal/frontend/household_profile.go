@@ -53,6 +53,12 @@ type HouseholdProfileSignIn struct {
 	Device    core.Device
 }
 
+// HouseholdProfileAvailability reads signed-in switching availability from
+// cached membership. Unknown eligibility preserves the server capability.
+type HouseholdProfileAvailability interface {
+	PlexHomeSwitchAvailable(*Viewer) (available, known bool)
+}
+
 // HouseholdProfileAuth is optionally implemented by a surface identity that
 // can list and complete Plex Home profile selections. Plex tokens and PINs
 // passed to these methods must never be logged or persisted in plain text.

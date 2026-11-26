@@ -923,7 +923,7 @@ func (i *instance) rowWire(r *http.Request, v *frontend.Viewer, token string, ro
 	return wire, nil
 }
 
-func (i *instance) buildBootstrap(r *http.Request, v *frontend.Viewer, t string, avatar object, spoilerFree bool, refresh bool) (object, error) {
+func (i *instance) buildBootstrap(r *http.Request, v *frontend.Viewer, t string, avatar object, spoilerFree, refresh, plexHomeSwitchAllowed bool) (object, error) {
 	r = r.WithContext(context.WithValue(r.Context(), showNamesKey{}, map[frontend.RatingKey]string{}))
 	sources := map[string]heroSource{}
 	rows, _, e := i.homeVisit(r, v, t, refresh, sources)
@@ -956,7 +956,7 @@ func (i *instance) buildBootstrap(r *http.Request, v *frontend.Viewer, t string,
 	}
 	out := object{
 		"viewer":        viewer,
-		"capabilities":  i.requestCapabilitiesFor(r, v),
+		"capabilities":  i.requestCapabilitiesFor(r, v, plexHomeSwitchAllowed),
 		"navigation":    navigation,
 		"surfaces":      surfaces,
 		"defaultSkinId": appDoc.skinID,
