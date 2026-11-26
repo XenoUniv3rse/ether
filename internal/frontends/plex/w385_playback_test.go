@@ -166,17 +166,79 @@ func TestW385VelaHLSBurnsSelectedTextWithDirectStream(t *testing.T) {
 	}
 }
 
-func TestW385VelaFirstMetadataIncludesAudioAndSubtitleTracks(t *testing.T) {
+func TestSingleItemMetadataUsesCachedTracksAndKeepsDecisionIDs(t *testing.T) {
 	f := newFixture()
 	t.Cleanup(func() { f.srv.Close() })
-	info := sampleInfo
-	info.Streams = append([]core.StreamInfo(nil), sampleInfo.Streams...)
-	info.Streams = append(info.Streams, core.StreamInfo{Index: 20, Type: "subtitle", Codec: "srt", Language: "spa", External: true, ExternalURL: "ether-subtitle:test-sidecar"})
-	f.playback.info.Streams = f.playback.info.Streams[:2]
+	key := fightClub.Key
+	info := core.CloneMediaInfo(sampleInfo)
+	f.playback.info = info
 	warm := &warmWaiterPlayback{Playback: f.playback, info: info}
 	f.srv.setPlayback(warm)
-	rec := f.get(t, "/library/metadata/"+fightClub.Key.String(), "X-Plex-Product", "Vela")
-	if a, s := len(audioTags(rec.Body.String())), len(streamTagsOfType(rec.Body.String(), "3")); rec.Code != 200 || a != 2 || s != 3 {
-		t.Fatalf("first metadata HTTP %d, audio=%d subtitles=%d", rec.Code, a, s)
+	f.srv.setVariants(&configuredFakeVariants{fakeVariantResolver: &fakeVariantResolver{}, plan: []core.ReleaseVariant{{
+		ID: core.KindAutoVersionID, Auto: true, Release: core.Release{ID: "cached"}, Info: info,
+	}}})
+	headers := []string{"X-Plex-Product", "Vela"}
+	detail := "/library/metadata/" + key.String()
+	first := f.get(t, detail, headers...)
+	subs := subtitleTags(first.Body.String())
+	if first.Code != http.StatusOK || len(subs) != 2 || len(audioTags(first.Body.String())) != 2 || len(warm.waits) != 0 || len(warm.prewarms) != 0 {
+		t.Fatalf("first detail HTTP %d, subtitles=%d, waited=%v", first.Code, len(subs), warm.waits)
+	}
+	id := streamID(subs[0])
+	decision := f.get(t, w385Universal+"decision?path="+detail+"&subtitleStreamID="+id+"&session=first-metadata", headers...)
+	if decision.Code != http.StatusOK || streamID(selectedTag(subtitleTags(decision.Body.String()))) != id {
+		t.Fatalf("decision did not select the subtitle issued by detail, HTTP %d", decision.Code)
+	}
+	after := f.get(t, detail, headers...)
+	var found bool
+	for _, subtitle := range subtitleTags(after.Body.String()) {
+		found = found || streamID(subtitle) == id
+	}
+	if after.Code != http.StatusOK || !found {
+		t.Fatalf("metadata after decision did not retain the selected subtitle ID, HTTP %d", after.Code)
+	}
+}
+
+func TestMetadataSubtitleIDsDistinguishIdenticalTracks(t *testing.T) {
+	f := newFixture()
+	t.Cleanup(func() { f.srv.Close() })
+	info := core.CloneMediaInfo(sampleInfo)
+	spanish := core.StreamInfo{Index: 4, Type: "subtitle", Language: "spa", Codec: "ass"}
+	info.Streams = append(info.Streams, spanish)
+	spanish.Index++
+	info.Streams = append(info.Streams, spanish)
+	f.playback.info = info
+	key := fightClub.Key.String()
+	detail := "/library/metadata/" + key
+	headers := map[string]string{"X-Plex-Product": "Vela"}
+	trackIDs := func(rec *httptest.ResponseRecorder) [2]string {
+		t.Helper()
+		if rec.Code != http.StatusOK {
+			t.Fatalf("metadata HTTP %d", rec.Code)
+		}
+		var ids [2]string
+		for _, tag := range subtitleTags(rec.Body.String()) {
+			if strings.Contains(tag, `index="4"`) {
+				ids[0] = streamID(tag)
+			} else if strings.Contains(tag, `index="5"`) {
+				ids[1] = streamID(tag)
+			}
+		}
+		return ids
+	}
+	ids := trackIDs(f.request(t, http.MethodGet, detail, headers))
+	if ids[0] == "" || ids[1] == "" || ids[0] == ids[1] {
+		t.Fatalf("identical subtitle descriptors got IDs %q", ids)
+	}
+	pick := f.request(t, http.MethodPut, "/library/parts/"+key+"?subtitleStreamID="+ids[1], headers)
+	if pick.Code != http.StatusOK {
+		t.Fatalf("select second subtitle HTTP %d", pick.Code)
+	}
+	decision := f.request(t, http.MethodGet, w385Universal+"decision?path="+detail+"&session=distinct-tracks", headers)
+	if decision.Code != http.StatusOK || !strings.Contains(selectedTag(subtitleTags(decision.Body.String())), `id="`+ids[1]+`"`) {
+		t.Fatalf("decision did not select the second subtitle, HTTP %d", decision.Code)
+	}
+	if got := trackIDs(f.request(t, http.MethodGet, detail, headers)); got != ids {
+		t.Fatalf("subtitle IDs changed after the decision: %q -> %q", ids, got)
 	}
 }

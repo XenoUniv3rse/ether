@@ -431,7 +431,12 @@ func (b *Broker) publish(ctx context.Context, event frontend.Event) {
 	}
 }
 func clientKey(protocol frontend.Protocol, device core.Device) string {
-	return fmt.Sprintf("%d:%s%s", len(protocol), protocol, device.ID)
+	return PlaybackClientID(protocol, device.ID)
+}
+
+// PlaybackClientID is the broker's device identity on the playback surface.
+func PlaybackClientID(protocol frontend.Protocol, deviceID string) string {
+	return fmt.Sprintf("%d:%s%s", len(protocol), protocol, deviceID)
 }
 func copyRequest(r frontend.PlanRequest) frontend.PlanRequest {
 	if r.Intent.OriginalPlayback != nil {

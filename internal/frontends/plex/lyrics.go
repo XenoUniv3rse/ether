@@ -24,7 +24,7 @@ func (s *Server) addTrackLyrics(ctx context.Context, viewer *frontend.Viewer, me
 	for _, version := range media {
 		for _, part := range version.Part {
 			if len(part.Stream) > 0 {
-				id := s.assignStream(ctx, viewer, key, -1, frontend.StreamInfo{Type: "lyrics"}, "", false)
+				id := s.assignStream(ctx, viewer, frontend.StreamBinding{Key: key, Index: -1, Info: frontend.StreamInfo{Type: "lyrics"}})
 				if id != 0 {
 					addLyricStream(media, id, lyrics)
 				}

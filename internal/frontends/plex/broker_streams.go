@@ -11,14 +11,12 @@ func (s *Server) plexStreamAccess(u *frontend.Viewer) frontend.SessionAccess {
 	return frontend.SessionAccess{Viewer: u, Protocol: "plex"}
 }
 
-func (s *Server) assignStream(ctx context.Context, u *frontend.Viewer, key frontend.RatingKey, index int, info frontend.StreamInfo, sessionID string, estimated bool) int64 {
+func (s *Server) assignStream(ctx context.Context, u *frontend.Viewer, binding frontend.StreamBinding) int64 {
 	rt := s.streams()
 	if s == nil || rt == nil {
 		return 0
 	}
-	id, err := rt.BindStream(ctx, s.plexStreamAccess(u), frontend.StreamBinding{
-		Key: key, Index: index, Info: info, SessionID: sessionID, Estimated: estimated,
-	})
+	id, err := rt.BindStream(ctx, s.plexStreamAccess(u), binding)
 	if err != nil {
 		return 0
 	}

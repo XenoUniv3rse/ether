@@ -145,6 +145,7 @@ func TestIssue191ShieldDVHybridMultiVersionSubtitlesAndTautulli(t *testing.T) {
 	}
 
 	// Verify 2017 Shield (darcy) across Play #1 and back-out + Play #2.
+	pb.ready = true
 	profile := "add-transcode-target(type=videoProfile&context=all&protocol=hls&container=mkv&videoCodec=h264,hevc&audioCodec=aac,eac3&subtitleCodec=ass,ssa,pgs,srt)"
 	for attempt := 1; attempt <= 2; attempt++ {
 		detailResp := f.request(t, "GET", path, darcyHeaders)
@@ -260,9 +261,8 @@ func TestIssue191ShieldDVHybridMultiVersionSubtitlesAndTautulli(t *testing.T) {
 }
 
 // Regression for #191 Comment #28 (tjukkie, iPhone / Plex for iOS):
-// First detail open and direct PlayQueue creation on Plex for iOS must run
-// bounded synchronous MetadataProber.ProbeMetadata so embedded subtitles are
-// present and selected on first play without backing out and re-entering.
+// Cached tracks are available to iOS detail reads. Direct PlayQueue creation
+// can probe a cold title so the selected subtitle is ready for first play.
 func TestIssue191PlexIOSFirstOpenProbesEmbeddedSubtitles(t *testing.T) {
 	newIOSFixture := func(t *testing.T) (*fixture, *shieldMetadataPlayback, map[string]string) {
 		t.Helper()
@@ -299,13 +299,14 @@ func TestIssue191PlexIOSFirstOpenProbesEmbeddedSubtitles(t *testing.T) {
 
 	t.Run("detail-open", func(t *testing.T) {
 		f, pb, h := newIOSFixture(t)
+		pb.ready = true
 		path := "/library/metadata/" + fightClub.Key.String()
 		r := f.request(t, "GET", path, h)
 		if r.Code != 200 {
 			t.Fatalf("detail: %d %s", r.Code, r.Body.String())
 		}
 		subs := subtitleTags(r.Body.String())
-		if pb.probes != 1 || len(subs) != 1 || streamAttr(selectedTag(subs), "codec") != "srt" {
+		if pb.probes != 0 || len(subs) != 1 || streamAttr(selectedTag(subs), "codec") != "srt" {
 			t.Fatalf("iOS first detail open missed embedded subtitle: probes=%d subs=%v", pb.probes, subs)
 		}
 	})

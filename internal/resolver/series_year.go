@@ -159,6 +159,9 @@ func (s *Service) hasSeriesNamesakeTitle(ctx context.Context, showKey core.Ratin
 	if ok && now.Sub(v.at) < seriesYearTTL {
 		return v.conflict
 	}
+	if core.LocalResponse(ctx) {
+		return false
+	}
 	lookup, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 	found, err := s.seriesNamesake(lookup, showKey, title, year)

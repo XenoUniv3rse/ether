@@ -93,10 +93,20 @@ func TestShieldTroyCaptureFollowup(t *testing.T) {
 							}
 							return r.Body.String()
 						}
-						// FIRST detail GET, before queue/decision/Prepare: exact tracks, selected SRT.
 						first := subtitleTags(read(path))
-						if len(first) != 2 || streamAttr(selectedTag(first), "codec") != "srt" || pb.probes != map[bool]int{false: 1, true: 0}[warm] || f.playback.prepared != 0 {
+						if (warm && (len(first) != 2 || streamAttr(selectedTag(first), "codec") != "srt")) ||
+							(!warm && len(first) != 0) || pb.probes != 0 || f.playback.prepared != 0 {
 							t.Fatalf("first metadata: tracks=%v probes=%d prepares=%d", first, pb.probes, f.playback.prepared)
+						}
+						r := f.request(t, "POST", "/playQueues?type=video&uri="+url.QueryEscape(path), h)
+						if r.Code != 200 {
+							t.Fatalf("queue: %d %s", r.Code, r.Body.String())
+						}
+						if !warm {
+							first = subtitleTags(r.Body.String())
+							if len(first) != 2 {
+								t.Fatalf("cold play queue omitted probed tracks: %v", first)
+							}
 						}
 						ids := []string{streamAttr(first[0], "id"), streamAttr(first[1], "id")}
 						check := func(body, selected string) {
@@ -105,10 +115,6 @@ func TestShieldTroyCaptureFollowup(t *testing.T) {
 							if len(tags) != 2 || streamAttr(tags[0], "id") != ids[0] || streamAttr(tags[1], "id") != ids[1] || streamAttr(selectedTag(tags), "id") != selected {
 								t.Fatalf("track list changed: %v (want %v selected %s)", tags, ids, selected)
 							}
-						}
-						r := f.request(t, "POST", "/playQueues?type=video&uri="+url.QueryEscape(path), h)
-						if r.Code != 200 {
-							t.Fatalf("queue: %d %s", r.Code, r.Body.String())
 						}
 						check(r.Body.String(), ids[0])
 						check(read(path), ids[0])

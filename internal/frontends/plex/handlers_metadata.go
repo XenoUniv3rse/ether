@@ -251,6 +251,7 @@ func (s *Server) handleMetadata(w http.ResponseWriter, r *http.Request) {
 				s.writeErr(w, r, err)
 				return
 			}
+			var warmDetail bool
 			if isPlayable(t.Type) {
 				s.recentClients.recordTitle(r, pr, t.Key, s.now())
 				// Android TV and smart-TV HTML apps build their subtitle picker
@@ -297,7 +298,7 @@ func (s *Server) handleMetadata(w http.ResponseWriter, r *http.Request) {
 							pr.detailRefill = variants.RefillSearchCache(t)
 						}
 					}
-					s.scheduleDetailWarm(ctx, pr, t)
+					warmDetail = true
 				}
 			}
 			// Live session intent (#32): a single-item detail open.
@@ -310,6 +311,9 @@ func (s *Server) handleMetadata(w http.ResponseWriter, r *http.Request) {
 				pr.versionFlowKey = t.Key
 			}
 			md = s.detail(ctx, pr, t, metadataOptionOn(q.Get("includeChildren")), metadataOptionOn(q.Get("includeOnDeck")), metadataOptionOn(q.Get("includeRelated")), metadataOptionOn(q.Get("includeExtras")), q.Get("extraTypes"))
+			if warmDetail && !pr.detailTracksKnown {
+				s.scheduleSingleDetailWarm(ctx, pr, t)
+			}
 			if url := s.themeURL(*t, true); url != "" {
 				switch t.Type {
 				case frontend.TypeShow:
@@ -1849,6 +1853,17 @@ func (s *Server) detailSearchAllowed(pr *Request) bool {
 // searches or warm-ups; see playback.Manager.DetailBurst.
 func (s *Server) detailBurst(pr *Request, key frontend.RatingKey) bool {
 	return pr.User != nil && frontend.DetailBurst(pr.User.ID, pr.ClientID, key)
+}
+
+// An ordinary single-item read can schedule background preparation. Play
+// intent and queue reads have their own probe path.
+func (s *Server) scheduleSingleDetailWarm(ctx context.Context, pr *Request, t *frontend.Title) {
+	if pr.User == nil || libraryToolClient(pr) || !s.playableTitle(ctx, pr.User, t) {
+		return
+	}
+	if warm, ok := s.playback().(frontend.Prewarmer); ok {
+		warm.Prewarm(ctx, pr.User, t.Key, s.clientCapsForKey(pr, t.Key), frontend.PrewarmOptions{Reason: frontend.PrewarmDetail, PlayIntent: true})
+	}
 }
 
 // Detail-family GETs schedule preparation. Flagged Plex clients retain their

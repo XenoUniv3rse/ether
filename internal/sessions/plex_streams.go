@@ -46,12 +46,7 @@ func adapterStreamSlot(index int, info core.StreamInfo) string {
 		return "external/" + info.ExternalURL
 	}
 	if info.Type == "subtitle" {
-		source := "embedded"
-		if info.External {
-			source = "external"
-		}
-		raw, _ := json.Marshal([]any{info.Language, info.Codec, source, info.Forced, info.Title})
-		return "subtitle/" + string(raw)
+		return frontend.PlexSubtitleSlot(info)
 	}
 	if info.Type == "audio" {
 		raw, _ := json.Marshal([]any{index, info.Type, info.Language, info.Codec, info.Channels, info.Title, info.Forced, info.External, info.ExternalURL})
@@ -77,6 +72,9 @@ func (t *StreamTable) Bind(binding StreamBinding) (int64, error) {
 		t.byID = map[int64]adapterStreamRef{}
 	}
 	slot := adapterStreamSlot(binding.Index, binding.Info)
+	if binding.DistinguishSubtitleIndex {
+		slot = "subtitle-index/" + strconv.Itoa(binding.Info.Index) + "/" + slot
+	}
 	id := WireID(binding.Key, slot)
 	for {
 		ref, ok := t.byID[id]

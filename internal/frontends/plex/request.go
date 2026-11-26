@@ -56,6 +56,7 @@ type Request struct {
 	// the refill was not admitted (or the search cache was already warm).
 	detailRefillRequested bool
 	detailRefill          <-chan struct{}
+	detailTracksKnown     bool
 	detailWaitUntil       time.Time // shared Android TV detail probe/version wait budget
 	// Set on play-intent metadata/playQueue reads (Plezy and Bedrock) so
 	// VersionSlots for that title reads concrete search/probe state instead of

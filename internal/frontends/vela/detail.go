@@ -23,7 +23,7 @@ func mediaSummary(d frontend.ItemDetail) object {
 			return nil
 		}
 	}
-	video, audio := []object{}, []object{}
+	video, audio, subtitles := []object{}, []object{}, []object{}
 	for _, s := range tracks {
 		entry := object{}
 		if s.Codec != "" {
@@ -67,12 +67,25 @@ func mediaSummary(d frontend.ItemDetail) object {
 			if len(entry) > 0 {
 				audio = append(audio, entry)
 			}
+		case "subtitle":
+			entry["index"] = s.Index
+			if s.Language != "" {
+				entry["language"] = s.Language
+			}
+			if s.Title != "" {
+				entry["title"] = s.Title
+			}
+			subtitles = append(subtitles, entry)
 		}
 	}
-	if len(video) == 0 && len(audio) == 0 {
+	if len(video) == 0 && len(audio) == 0 && len(subtitles) == 0 {
 		return nil
 	}
-	return object{"video": video, "audio": audio}
+	summary := object{"video": video, "audio": audio}
+	if len(subtitles) > 0 {
+		summary["subtitles"] = subtitles
+	}
+	return summary
 }
 
 // detailChapters surfaces already-known chapters (probed container chapters,
