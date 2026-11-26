@@ -34,17 +34,20 @@ func fakeProxyDNS(t *testing.T, table map[string][]netip.Addr) *sync.Mutex {
 }
 
 func TestValidateProxyEntryAcceptsAddressesRangesAndNames(t *testing.T) {
-	for _, ok := range []string{"192.168.1.5", "10.0.0.0/8", "fd00::/8", "nginx-proxy-manager", "npm", "proxy.lan", "caddy_1", "NPM."} {
+	for _, ok := range []string{"192.168.1.5", "10.0.0.0/8", "fd00::/8", "nginx-proxy-manager", "npm", "proxy.lan", "caddy_1", "NPM.",
+		// Written the way a reverse proxy's own config names an upstream.
+		"http://nginx-proxy-manager:81/health?ready=1#ok", "https://npm", "npm:81", "http://172.18.0.2:81", "[fd00::5]:443"} {
 		if err := ValidateProxyEntry(ok); err != nil {
 			t.Errorf("ValidateProxyEntry(%q) = %v, want ok", ok, err)
 		}
 	}
-	for _, bad := range []string{"", "0.0.0.0/0", "::/0", "1.2.3", "-proxy", "prox y", "proxy..lan", "http://npm", "npm:81", "10.0.0.0/33"} {
+	for _, bad := range []string{"", "0.0.0.0/0", "::/0", "1.2.3", "-proxy", "prox y", "proxy..lan", "http://", "http://prox y:81", "[fd00::/8]:443", "npm:broken", "10.0.0.0/33"} {
 		if err := ValidateProxyEntry(bad); err == nil {
 			t.Errorf("ValidateProxyEntry(%q) = nil, want an error", bad)
 		}
 	}
-	if !HasProxyHostNames([]string{"10.0.0.1", "npm"}) || HasProxyHostNames([]string{"10.0.0.1", "10.0.0.0/8"}) {
+	if !HasProxyHostNames([]string{"10.0.0.1", "npm"}) || !HasProxyHostNames([]string{"http://npm:81"}) ||
+		HasProxyHostNames([]string{"10.0.0.1", "10.0.0.0/8", "http://10.0.0.2:81"}) {
 		t.Fatal("HasProxyHostNames must report only real names")
 	}
 }

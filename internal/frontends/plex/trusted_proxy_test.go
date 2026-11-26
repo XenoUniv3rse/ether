@@ -26,7 +26,7 @@ func TestTrustedLANProxyClientIPAndSessions(t *testing.T) {
 	}
 	// Host names are resolved (see clientnet proxyhosts_test.go); malformed
 	// entries still grant nothing.
-	if got := clientnet.ProxyPrefixes([]string{"0.0.0.0/0", "::/0", "caddy lan", "http://caddy"}); len(got) != 0 {
+	if got := clientnet.ProxyPrefixes([]string{"0.0.0.0/0", "::/0", "caddy lan", "http://"}); len(got) != 0 {
 		t.Fatalf("wildcard/invalid ProxyPrefixes granted trust: %v", got)
 	}
 

@@ -357,6 +357,7 @@ func ProxyPrefixes(entries []string) []netip.Prefix {
 	}
 	var hosts []pendingHost
 	for _, raw := range entries {
+		raw = proxyEntryHost(raw)
 		if p, err := ParseProxyEntry(raw); err == nil {
 			out = append(out, p)
 		} else if name, ok := proxyHostName(raw); ok {
