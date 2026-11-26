@@ -325,14 +325,20 @@ func (s *Server) metaType(sec Section, t frontend.MediaType, activeSort string) 
 	tn := strconv.Itoa(typeNumber(t))
 	typeTitle, _ := sectionTypeTitle(sec)
 	mt := model.MetaType{Key: "/library/sections/" + id + "/all?type=" + tn, Type: string(t), Title: typeTitle, Active: true}
-	for _, f := range filterDefs {
+	sorts, filters := sortDefs, filterDefs
+	if sec.ID == catchUpSectionID {
+		// The Catch-up section is built from the guide: it can be ordered by
+		// title or by when a programme aired, and has no facets to filter on.
+		sorts, filters = catchUpSortDefs, nil
+	}
+	for _, f := range filters {
 		key := "/library/sections/" + id + "/" + f.filter
 		mt.Filter = append(mt.Filter, model.Filter{Filter: f.filter, FilterType: f.filterType, Key: key, Title: f.title, Type: "filter"})
 	}
 	activeKey, activeDir := parseSortParam(activeSort)
-	for i, sd := range sortDefs {
+	for i, sd := range sorts {
 		so := model.Sort{DefaultDirection: sd.defDir, DescKey: sd.key + ":desc", Key: sd.key, Title: sd.title}
-		if sd.key == "titleSort" {
+		if sd.key == "titleSort" && sec.ID != catchUpSectionID {
 			so.FirstCharacterKey = "/library/sections/" + id + "/firstCharacter"
 		}
 		if i == 0 {
@@ -365,6 +371,9 @@ func (s *Server) metaType(sec Section, t frontend.MediaType, activeSort string) 
 		{Key: "audienceRating", Title: "Audience Rating", Type: "integer", SubType: "rating"},
 		{Key: "unwatched", Title: "Unwatched", Type: "boolean"},
 		{Key: "inProgress", Title: "In Progress", Type: "boolean"},
+	}
+	if sec.ID == catchUpSectionID {
+		mt.Field = nil
 	}
 	return mt
 }
@@ -1232,6 +1241,9 @@ func (s *Server) handleSectionSub(w http.ResponseWriter, r *http.Request) {
 		switch sub {
 		case "all", "allLeaves", "newest", "recentlyAdded":
 			s.catchUpBrowse(w, r, frontend.CatchUpLibraryID, sub == "allLeaves" || sub == "recentlyAdded" || r.URL.Query().Get("type") == "4")
+		case "sorts":
+			mt := s.metaType(sec, sec.Type, r.URL.Query().Get("sort"))
+			s.write(w, r, &model.MediaContainer{Size: len(mt.Sort), Sort: mt.Sort})
 		default:
 			s.write(w, r, s.sectionContainer(sec))
 		}

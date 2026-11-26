@@ -15,6 +15,31 @@ import (
 )
 
 const catchUpSectionID = 2147483646
+
+// catchUpSortDefs are the Catch-up section's orders; the first is its default.
+var catchUpSortDefs = []sortDef{
+	{"originallyAvailableAt", "Date Aired", "desc"},
+	{"titleSort", "Title", "asc"},
+}
+
+// catchUpSortOf maps a Plex sort parameter to a catch-up order. Anything else
+// keeps the default, most recently aired first.
+func catchUpSortOf(raw string) frontend.CatchUpSort {
+	key, dir := parseSortParam(raw)
+	switch key {
+	case "titleSort", "title":
+		if dir == "desc" {
+			return frontend.CatchUpSortTitleDesc
+		}
+		return frontend.CatchUpSortTitle
+	case "originallyAvailableAt", "addedAt":
+		if dir == "asc" {
+			return frontend.CatchUpSortOldest
+		}
+	}
+	return frontend.CatchUpSortRecent
+}
+
 const catchUpMetadataPrefix = "/library/metadata/"
 
 func (s *Server) viewerSections(r *http.Request) []Section {
@@ -88,12 +113,16 @@ func (s *Server) catchUpBrowse(w http.ResponseWriter, r *http.Request, parent st
 	pr := FromContext(r.Context())
 	sec := s.sectionDefaults(Section{ID: catchUpSectionID, Title: frontend.CatchUpLibraryName, Type: frontend.TypeShow})
 	offset, limit := pr.pageOf(0)
-	page, err := lib.CatchUpItems(r.Context(), pr.User, frontend.CatchUpQuery{Parent: parent, Offset: offset, Limit: limit, Recursive: recursive})
+	q := r.URL.Query()
+	page, err := lib.CatchUpItems(r.Context(), pr.User, frontend.CatchUpQuery{Parent: parent, Offset: offset, Limit: limit, Recursive: recursive, Sort: catchUpSortOf(q.Get("sort"))})
 	if err != nil {
 		s.writeErr(w, r, err)
 		return
 	}
 	mc := s.sectionContainer(sec)
+	if q.Get("includeMeta") == "1" {
+		mc.Meta = s.meta(sec, sec.Type, q.Get("sort"))
+	}
 	for _, item := range page.Items {
 		mc.Metadata = append(mc.Metadata, catchUpMetadata(sec, item))
 	}
