@@ -24,6 +24,8 @@ type CatchUpQuery struct {
 	Offset, Limit int
 	Recursive     bool
 	Sort          CatchUpSort
+	// Search matches the title or episode title, ignoring case, spacing and punctuation.
+	Search string
 }
 
 // CatchUpSort orders a catch-up listing. The zero value lists the most

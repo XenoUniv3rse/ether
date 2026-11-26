@@ -129,3 +129,42 @@ func TestCatchUpLibrarySort(t *testing.T) {
 		t.Fatalf("sorted total: %d of %d, %v", len(page.Items), page.Total, err)
 	}
 }
+
+func TestCatchUpLibrarySearch(t *testing.T) {
+	now := time.Date(2026, 11, 25, 12, 0, 0, 0, time.UTC)
+	s := testService(t, Options{Now: func() time.Time { return now }})
+	ch, err := s.SaveChannel(t.Context(), Channel{ID: "archive-search", Name: "Archive", Number: "1", Kind: "iptv", Enabled: true, Private: true, GuideID: "guide", StreamURL: "https://example.invalid/live.ts"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ch.Archive = &ChannelArchive{Days: 2, Mode: "xtream"}
+	data, err := json.Marshal(ch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.o.DB.ExecContext(t.Context(), "UPDATE livetv_channels SET data=? WHERE id=?", data, ch.ID); err != nil {
+		t.Fatal(err)
+	}
+	for i, title := range []string{"ABC World News Tonight With David Muir", "Paid Programming", "World-News Now"} {
+		start := now.Add(-time.Duration(i+1) * time.Hour)
+		prog := Programme{Start: start, End: start.Add(30 * time.Minute), Item: Item{Title: title}}
+		raw, err := json.Marshal(prog)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err = s.o.DB.ExecContext(t.Context(), "INSERT INTO livetv_programmes(source_id,channel_id,start_ms,end_ms,data) VALUES(?,?,?,?,?)", guideSource(ch), ch.GuideID, start.UnixMilli(), prog.End.UnixMilli(), raw); err != nil {
+			t.Fatal(err)
+		}
+	}
+	h := s.Frontend().(frontend.CatchUpLibrary)
+	owner := &core.User{ID: 1, IsOwner: true}
+	for query, want := range map[string]int{"world news tonight": 1, "WorldNews": 2, "muir": 1, "weather": 0, "": 3} {
+		page, err := h.CatchUpItems(t.Context(), owner, frontend.CatchUpQuery{Search: query})
+		if err != nil || len(page.Items) != want || page.Total != want {
+			t.Fatalf("search %q: %d items (total %d), want %d, %v", query, len(page.Items), page.Total, want, err)
+		}
+	}
+	if page, err := h.CatchUpItems(t.Context(), &core.User{ID: 2}, frontend.CatchUpQuery{Search: "world"}); err != nil || len(page.Items) != 0 {
+		t.Fatalf("restricted viewer finds airings: %d, %v", len(page.Items), err)
+	}
+}

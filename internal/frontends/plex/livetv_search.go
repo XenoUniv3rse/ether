@@ -313,6 +313,16 @@ func (s *Server) searchLiveTVLibrary(r *http.Request, pr *Request, query string,
 		})
 		out.scores = append(out.scores, sc)
 	}
+	// A programme's past airings rank just above its upcoming ones: they can
+	// be watched now.
+	for i, md := range s.catchUpSearch(r, query, limit) {
+		sc := max(0.1, 0.78-float64(i)*0.001)
+		out.results = append(out.results, model.SearchResult{
+			Score:    math.Round(sc*10000) / 10000,
+			Metadata: &md,
+		})
+		out.scores = append(out.scores, sc)
+	}
 	return out
 }
 
@@ -375,6 +385,20 @@ func (s *Server) appendLiveSearchHubs(r *http.Request, mc *model.MediaContainer,
 			hub.Metadata = append(hub.Metadata, md)
 		}
 		hub.Size = len(hub.Metadata)
+		liveHubs = append(liveHubs, hub)
+	}
+	if shows := s.catchUpSearch(r, query, limit); len(shows) > 0 {
+		hub := model.Hub{
+			Title:         frontend.CatchUpLibraryName,
+			Type:          "show",
+			HubIdentifier: "catchup",
+			Context:       "hub.catchup",
+			Style:         "shelf",
+		}
+		for i := range shows {
+			shows[i].Score = strconv.FormatFloat(reportedScore(searchScore(i, len(shows))), 'f', 5, 64)
+		}
+		hub.Metadata, hub.Size = shows, len(shows)
 		liveHubs = append(liveHubs, hub)
 	}
 	if len(liveHubs) == 0 {

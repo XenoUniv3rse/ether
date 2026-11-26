@@ -205,3 +205,52 @@ func TestCatchUpSectionSorts(t *testing.T) {
 		t.Fatalf("catch-up meta: %s", meta.Body.String())
 	}
 }
+
+type catchUpSearchTestLive struct {
+	catchUpTestLive
+	searched string
+}
+
+func (*catchUpSearchTestLive) SearchLiveTV(context.Context, *frontend.Viewer, string, int) (frontend.LiveSearchResults, error) {
+	return frontend.LiveSearchResults{}, nil
+}
+
+func (f *catchUpSearchTestLive) CatchUpItems(_ context.Context, _ *frontend.Viewer, q frontend.CatchUpQuery) (frontend.CatchUpPage, error) {
+	f.searched = q.Search
+	if q.Search == "" || !strings.Contains(strings.ToLower(f.item.Programme.Item.Title), strings.ToLower(q.Search)) {
+		return frontend.CatchUpPage{}, nil
+	}
+	return frontend.CatchUpPage{Items: []frontend.CatchUpItem{f.item}, Total: 1}, nil
+}
+
+// A search finds a programme's past airings through its Catch-up show, not
+// only its upcoming airings.
+func TestCatchUpInSearch(t *testing.T) {
+	f := newFixture()
+	t.Cleanup(func() { _ = f.srv.Close() })
+	start := time.Unix(1700000000, 0).UTC()
+	show := frontend.CatchUpGroupID(frontend.TypeShow, "World News Tonight")
+	live := &catchUpSearchTestLive{catchUpTestLive: catchUpTestLive{item: frontend.CatchUpItem{
+		ID: show, ShowID: show, Type: frontend.TypeShow,
+		Programme: frontend.LiveTVProgramme{ID: "channel-1700000000000", ChannelID: "channel", Start: start, End: start.Add(30 * time.Minute), Item: frontend.LiveTVItem{Title: "World News Tonight"}},
+	}}}
+	f.srv.setLiveTV(live)
+	f.srv.setTestSubscription(true)
+	json := map[string]string{"Accept": "application/json"}
+
+	hubs := f.request(t, "GET", "/hubs/search?"+url.Values{"query": {"news tonight"}, "limit": {"10"}}.Encode(), json)
+	if live.searched != "news tonight" {
+		t.Fatalf("catch-up was not searched: %q", live.searched)
+	}
+	if hubs.Code != http.StatusOK || !strings.Contains(hubs.Body.String(), `"hubIdentifier":"catchup"`) || !strings.Contains(hubs.Body.String(), show) {
+		t.Fatalf("hub search has no Catch-up hub: %d %s", hubs.Code, hubs.Body.String())
+	}
+	lib := f.request(t, "GET", "/library/search?"+url.Values{"query": {"news tonight"}, "limit": {"10"}, "searchTypes": {"movies,tv,livetv"}}.Encode(), json)
+	if lib.Code != http.StatusOK || !strings.Contains(lib.Body.String(), show) || !strings.Contains(lib.Body.String(), `"librarySectionTitle":"Catch-up"`) {
+		t.Fatalf("library search has no Catch-up show: %d %s", lib.Code, lib.Body.String())
+	}
+	none := f.request(t, "GET", "/hubs/search?"+url.Values{"query": {"weather"}, "limit": {"10"}}.Encode(), json)
+	if strings.Contains(none.Body.String(), `"hubIdentifier":"catchup"`) {
+		t.Fatalf("unmatched query lists a Catch-up hub: %s", none.Body.String())
+	}
+}

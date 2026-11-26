@@ -340,3 +340,26 @@ func (s *Server) isCatchUpMediaRequest(r *http.Request, pr *Request) bool {
 	id := chi.URLParam(r, "session")
 	return id != "" && (chi.URLParam(r, "resource") != "" || chi.URLParam(r, "part") != "") && s.isCatchUpSession(pr.User, id)
 }
+
+// catchUpSearch returns the Catch-up shows whose airings match query, for the
+// search routes. Past airings are only reachable through the Catch-up
+// section, so without this a search finds a programme's upcoming airings but
+// not the ones a viewer can still watch.
+func (s *Server) catchUpSearch(r *http.Request, query string, limit int) []model.Metadata {
+	query = strings.TrimSpace(query)
+	lib, ok := s.svc().liveTV.(frontend.CatchUpLibrary)
+	if !ok || query == "" || limit <= 0 {
+		return nil
+	}
+	pr := FromContext(r.Context())
+	page, err := lib.CatchUpItems(r.Context(), pr.User, frontend.CatchUpQuery{Parent: frontend.CatchUpLibraryID, Search: query, Limit: limit})
+	if err != nil || len(page.Items) == 0 {
+		return nil
+	}
+	sec := s.sectionDefaults(Section{ID: catchUpSectionID, Title: frontend.CatchUpLibraryName, Type: frontend.TypeShow})
+	out := make([]model.Metadata, 0, len(page.Items))
+	for _, item := range page.Items {
+		out = append(out, catchUpMetadata(sec, item))
+	}
+	return out
+}
