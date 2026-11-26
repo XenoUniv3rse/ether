@@ -639,6 +639,24 @@ func (c *reviewCollections) CollectionPosterCandidates(ctx context.Context, u *c
 	return batch.CollectionPosterCandidates(ctx, u, baseKeys)
 }
 
+// CollectionCardHeaders keeps the indexed Home card lookup on the persisted
+// collection source. Private review collections are never Home cards.
+func (c *reviewCollections) CollectionCardHeaders(ctx context.Context, u *core.User, keys []core.RatingKey) (map[core.RatingKey]*core.Collection, error) {
+	source, ok := c.base.(core.CollectionCardHeaders)
+	if !ok {
+		return nil, core.ErrNotAvailable
+	}
+	return source.CollectionCardHeaders(ctx, u, keys)
+}
+
+func (c *reviewCollections) CollectionCardPage(ctx context.Context, u *core.User, key core.RatingKey, after int64, offset, limit int) ([]core.CollectionCardMember, string, error) {
+	source, ok := c.base.(core.CollectionCardMembers)
+	if !ok {
+		return nil, "", core.ErrNotAvailable
+	}
+	return source.CollectionCardPage(ctx, u, key, after, offset, limit)
+}
+
 // VisitCollectionMemberPages forwards catalogue membership without opening
 // review collections, which answer their own visibility from viewer history.
 func (c *reviewCollections) VisitCollectionMemberPages(ctx context.Context, u *core.User, keys []core.RatingKey, size int, visit func(map[core.RatingKey]core.Page) ([]core.RatingKey, error)) error {

@@ -8,7 +8,7 @@ import (
 )
 
 type collectionCardSource interface {
-	CollectionCardHeaders(context.Context, *core.User, []core.RatingKey) (map[core.RatingKey]*core.Collection, error)
+	core.CollectionCardHeaders
 	FindCollectionCardKeys(context.Context, string, int) ([]core.RatingKey, error)
 }
 
@@ -38,7 +38,12 @@ func (e *Engine) CollectionCardHubs(ctx context.Context, user *core.User, hc cor
 		}
 		var rowKeys []core.RatingKey
 		if match := strings.TrimSpace(r.row.Source.Param("match", "")); match != "" {
-			rowKeys, _ = source.FindCollectionCardKeys(ctx, match, core.MaxCollectionCards)
+			var err error
+			rowKeys, err = source.FindCollectionCardKeys(ctx, match, core.MaxCollectionCards)
+			if err != nil {
+				e.log.WarnContext(ctx, "collection card row omitted", "row", r.RowID, "stage", "selection")
+				continue
+			}
 		} else {
 			for id := range strings.SplitSeq(r.row.Source.Param("collections", ""), ",") {
 				if key, err := core.ParseRatingKey(id); err == nil && key.Kind() == core.KindSmart && !key.IsEphemeral() {
@@ -53,15 +58,22 @@ func (e *Engine) CollectionCardHubs(ctx context.Context, user *core.User, hc cor
 		return nil
 	}
 	collections, err := source.CollectionCardHeaders(ctx, user, keys)
-	if err != nil {
-		return nil
-	}
 	if limit <= 0 {
 		limit = 12
 	}
 	limit = min(limit, core.MaxCollectionCards)
 	var hubs []core.Hub
+	batchFailed := err != nil
 	for _, row := range rows {
+		headers := collections
+		if batchFailed {
+			var rowErr error
+			headers, rowErr = source.CollectionCardHeaders(ctx, user, row.keys)
+			if rowErr != nil {
+				e.log.WarnContext(ctx, "collection card row omitted", "row", row.rule.RowID, "stage", "headers")
+				continue
+			}
+		}
 		name := strings.TrimSpace(row.rule.Name)
 		if name == "" {
 			name = e.sourceTitle(SourceCollectionCards)
@@ -69,7 +81,7 @@ func (e *Engine) CollectionCardHubs(ctx context.Context, user *core.User, hc cor
 		hub := core.Hub{ID: "home." + row.rule.RowID, Title: name, Type: "collection", Style: "shelf", Promoted: true}
 		seen := map[core.RatingKey]bool{}
 		for _, key := range row.keys {
-			c := collections[key]
+			c := headers[key]
 			if c == nil || c.OwnerUserID != 0 || c.ChildCount == 0 || seen[key] {
 				continue
 			}
@@ -82,6 +94,7 @@ func (e *Engine) CollectionCardHubs(ctx context.Context, user *core.User, hc cor
 		hub.More = len(hub.Collections) > limit
 		hub.Collections = hub.Collections[:min(limit, len(hub.Collections))]
 		hub.ItemCount = len(hub.Collections)
+		e.registerHub(hub.ID, SourceCollectionCards)
 		hubs = append(hubs, hub)
 	}
 	return hubs

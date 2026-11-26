@@ -1392,6 +1392,60 @@ func (s *Service) PageArtworkSmartCollections(ctx context.Context, viewer *core.
 	return out, nil
 }
 
+func (s *Service) OpenCollectionCard(ctx context.Context, viewer *core.Viewer, key core.RatingKey, after int64, offset, limit int) (frontend.CollectionCardPage, error) {
+	var page frontend.CollectionCardPage
+	v, err := s.viewer(ctx, viewer)
+	if err != nil {
+		return page, err
+	}
+	source, ok := s.d.Collections.(core.CollectionCardMembers)
+	if !ok || limit < 1 || limit > 100 {
+		return page, core.ErrNotFound
+	}
+	ctx = core.WithCatalogViewer(s.NoProviderWait(ctx), v)
+	cards, err := s.PageArtworkSmartCollections(frontend.WithCollectionCardArtwork(ctx), v, []core.RatingKey{key})
+	if err != nil {
+		return page, err
+	}
+	card, found := cards[key]
+	if !found {
+		return page, core.ErrNotFound
+	}
+	members, revision, err := source.CollectionCardPage(ctx, v, key, after, offset, limit+1)
+	if err != nil {
+		return page, err
+	}
+	page.Collection, page.Revision, page.More = card, revision, len(members) > limit
+	members = members[:min(len(members), limit)]
+	if len(members) == 0 {
+		return page, nil
+	}
+	page.Consumed, page.Next = len(members), members[len(members)-1].Position
+	keys := make([]core.RatingKey, len(members))
+	for n, member := range members {
+		keys[n] = member.Key
+	}
+	if s.d.CachedGetMany == nil {
+		return frontend.CollectionCardPage{}, core.ErrNotAvailable
+	}
+	titles, err := s.d.CachedGetMany(ctx, keys)
+	if err != nil {
+		return frontend.CollectionCardPage{}, err
+	}
+	ordered := make([]core.Title, 0, len(keys))
+	for _, k := range keys {
+		if title, ok := titles[k]; ok {
+			ordered = append(ordered, title)
+		}
+	}
+	if card.Upcoming {
+		page.Titles = s.d.Visibility.UpcomingItems(ctx, v, ordered, s.d.Now)
+	} else {
+		page.Titles, err = s.allowTitles(ctx, v, ordered)
+	}
+	return page, err
+}
+
 func (s *Service) libraryCollectionItems(ctx context.Context, v *core.User, device core.Device, library *Library, stored *core.Library, q frontend.ItemQuery) (core.Page, error) {
 	detail, err := s.Item(ctx, frontend.ItemRequest{Viewer: v, Device: device, Key: q.CollectionKey})
 	if err != nil || detail.Collection == nil {

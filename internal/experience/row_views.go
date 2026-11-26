@@ -249,10 +249,13 @@ func (s *RowViewService) ListRowViews(ctx context.Context, req frontend.RowViewR
 		normalized = append(normalized, snap)
 	}
 	if s.o.PrepareSnapshots != nil && len(normalized) > 0 {
-		policyCtx, err = s.o.PrepareSnapshots(policyCtx, u, normalized)
-		if err != nil {
-			return nil, err
+		if prepared, err := s.o.PrepareSnapshots(policyCtx, u, normalized); err == nil {
+			policyCtx = prepared
+		} else if ctx.Err() != nil {
+			return nil, ctx.Err()
 		}
+		// ValidRow checks individual collection membership when the batch
+		// proof is unavailable.
 	}
 	valid := make([]RowViewSnapshot, 0, len(normalized))
 	for _, snap := range normalized {

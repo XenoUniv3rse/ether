@@ -990,6 +990,7 @@ func (i *instance) routes() {
 	i.route("POST", "/libraries/{id}/live/play", i.libraryLivePlay)
 	i.route("GET", "/people/{id}", i.person)
 	i.route("GET", "/people/{id}/titles", i.personTitles)
+	i.route("GET", "/collections/{id}", i.openCollectionCard)
 	i.route("GET", "/capabilities", func(w http.ResponseWriter, r *http.Request) { cache(w, r, i.requestCapabilities(r)) })
 	i.route("POST", "/negotiate", i.negotiate)
 	for _, p := range []string{"sign-in", "plex", "plex/profile", "plex/profiles/challenge", "refresh", "revoke", "web-code", "web-code/redeem", "device", "device/poll", "device/approve", "quick-connect", "quick-connect/poll", "quick-connect/approve"} {

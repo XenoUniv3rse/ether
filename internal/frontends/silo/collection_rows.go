@@ -65,6 +65,19 @@ func collectionViewFor(typ frontend.MediaType, views []frontend.View) string {
 	return ""
 }
 
+// A shared, unscoped collection may contain both types. Its card links
+// through the library of a visible artwork sample, which can differ from the
+// first member returned by detail.
+func collectionVideoView(id string, section frontend.MediaType, views []frontend.View) bool {
+	for _, view := range views {
+		if view.ID == id && !view.Subset && view.PluginID == "" &&
+			(view.Type == frontend.TypeMovie || view.Type == frontend.TypeShow) && (section == "" || view.Type == section) {
+			return true
+		}
+	}
+	return false
+}
+
 func (i *instance) homeSectionItems(w http.ResponseWriter, r *http.Request) {
 	v, token, err := i.viewer(r)
 	if err != nil || v == nil {

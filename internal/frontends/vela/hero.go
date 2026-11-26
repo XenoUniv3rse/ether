@@ -262,7 +262,11 @@ func (i *instance) heroFallback(r *http.Request, viewer *frontend.Viewer, token 
 		}
 		converted, err := i.titles(r, viewer, token, titles)
 		if err != nil {
-			return nil, err
+			if r.Context().Err() != nil {
+				return nil, r.Context().Err()
+			}
+			logDroppedHomeRow(r, row.ID, "hero render", err)
+			continue
 		}
 		byID := map[string]object{}
 		for _, title := range converted {

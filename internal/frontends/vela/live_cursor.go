@@ -13,6 +13,7 @@ type liveCursor struct {
 	Scope, Query, Snapshot string
 	Offset                 int
 	CollectionAfter        frontend.RatingKey `json:",omitempty"`
+	MemberAfter            int64              `json:",omitempty"`
 	Expires                int64
 }
 

@@ -134,6 +134,9 @@ type homeTitlesKey struct{}
 type showNamesKey struct{}
 
 func (i *instance) titles(r *http.Request, v *frontend.Viewer, token string, ts []frontend.Title) ([]object, error) {
+	if len(ts) == 0 {
+		return []object{}, nil
+	}
 	if cached, ok := r.Context().Value(homeTitlesKey{}).(map[frontend.RatingKey]object); ok {
 		out := make([]object, 0, len(ts))
 		complete := true
@@ -552,6 +555,11 @@ func (i *instance) homeVisit(r *http.Request, v *frontend.Viewer, token string, 
 		}
 	}
 	rows := []frontend.Row{}
+	type rowLease struct {
+		id      string
+		expires time.Time
+	}
+	var rowLeases map[string]rowLease
 	var excludedHeroes []string
 	outerMore := false
 	views, hasViews := i.host.Experience.(frontend.RowViews)
@@ -604,36 +612,41 @@ func (i *instance) homeVisit(r *http.Request, v *frontend.Viewer, token string, 
 				reqs[n] = frontend.RowViewPageRequest{Viewer: v, Device: requestDevice(r), Protocol: "vela", ID: view.ID, Limit: rowItemLimit(r)}
 			}
 			pages, e = batch.ResolveRowViews(r.Context(), reqs)
-			if e != nil {
-				return nil, false, e
-			}
-			if len(pages) != len(vv) {
-				return nil, false, frontend.ErrRowViewStale
+			if e != nil || len(pages) != len(vv) {
+				if r.Context().Err() != nil {
+					return nil, false, r.Context().Err()
+				}
+				// Recover the healthy rows when a bounded batch fails.
+				pages = nil
 			}
 		}
+		rowLeases = make(map[string]rowLease, len(vv))
 		for n, view := range vv {
-			noteBootstrapDeadline(r, view.ExpiresAt)
-			noteBootstrapRow(r, frontend.RowViewPageRequest{Viewer: v, Device: requestDevice(r), Protocol: "vela", ID: view.ID, Limit: rowItemLimit(r)})
+			expiry := view.ExpiresAt
+			var row frontend.Row
+			var e error
+			if pages != nil {
+				row = rowFromPage(view.ID, pages[n])
+				expiry = earlierRowExpiry(expiry, pages[n].ExpiresAt)
+			} else {
+				page, err := views.ResolveRowView(r.Context(), frontend.RowViewPageRequest{Viewer: v, Device: requestDevice(r), Protocol: "vela", ID: view.ID, Limit: rowItemLimit(r)})
+				e = err
+				row = rowFromPage(view.ID, page)
+				expiry = earlierRowExpiry(expiry, page.ExpiresAt)
+			}
+			if e != nil {
+				if r.Context().Err() != nil {
+					return nil, false, r.Context().Err()
+				}
+				logDroppedHomeRow(r, cmp.Or(view.Layout.Present.RowID, view.Key, view.ID), "resolve", e)
+				continue
+			}
 			i.rowMu.Lock()
 			if len(i.rowMeta) >= 2000 {
 				i.rowMeta = map[string]frontend.RowView{}
 			}
 			i.rowMeta[view.ID] = view
 			i.rowMu.Unlock()
-			var row frontend.Row
-			var e error
-			if pages != nil {
-				row = rowFromPage(view.ID, pages[n])
-				noteBootstrapDeadline(r, pages[n].ExpiresAt)
-			} else {
-				row, e = i.rowPage(r, v, view.ID, 0, rowItemLimit(r))
-			}
-			if e != nil {
-				if errors.Is(e, frontend.ErrNotFound) {
-					e = frontend.ErrRowViewStale
-				}
-				return nil, false, e
-			}
 			row.Key = view.Key
 			row.Title = view.Title
 			row.Purpose = view.Purpose
@@ -642,6 +655,11 @@ func (i *instance) homeVisit(r *http.Request, v *frontend.Viewer, token string, 
 			row.Style = view.Layout.Style
 			row.PreviewOnFocus = view.Layout.PreviewOnFocus
 			row.RankedTop10 = row.RankedTop10 || view.Layout.RankedTop10
+			wireID := row.ID
+			if row.Layout.Present.Surface != nil {
+				wireID = surfaceRowWire(row)["id"].(string)
+			}
+			rowLeases[wireID] = rowLease{id: view.ID, expires: expiry}
 			rows = append(rows, row)
 		}
 	} else {
@@ -676,7 +694,22 @@ func (i *instance) homeVisit(r *http.Request, v *frontend.Viewer, token string, 
 	if err != nil {
 		return nil, false, err
 	}
+	for _, row := range out {
+		id, _ := row["id"].(string)
+		if lease, ok := rowLeases[id]; ok {
+			noteBootstrapDeadline(r, lease.expires)
+			noteBootstrapRow(r, frontend.RowViewPageRequest{Viewer: v, Device: requestDevice(r), Protocol: "vela", ID: lease.id, Limit: rowItemLimit(r)})
+			delete(rowLeases, id)
+		}
+	}
 	return out, outerMore, nil
+}
+
+func earlierRowExpiry(a, b time.Time) time.Time {
+	if a.IsZero() || (!b.IsZero() && b.Before(a)) {
+		return b
+	}
+	return a
 }
 
 func (i *instance) rowsToWire(r *http.Request, v *frontend.Viewer, token string, rows []frontend.Row, view *frontend.View, excludedHeroes []string, hasViews bool, itemLimit int, sources ...map[string]heroSource) ([]object, error) {
@@ -707,14 +740,16 @@ func (i *instance) rowsToWire(r *http.Request, v *frontend.Viewer, token string,
 		}
 	}
 	converted, err := i.titles(r, v, token, pageTitles)
-	if err != nil {
+	if err != nil && (r.PathValue("id") != "" || r.Context().Err() != nil) {
 		return nil, err
 	}
-	cardCache := make(map[frontend.RatingKey]object, len(converted))
-	for n, title := range pageTitles {
-		cardCache[title.Key] = converted[n]
+	if err == nil {
+		cardCache := make(map[frontend.RatingKey]object, len(converted))
+		for n, title := range pageTitles {
+			cardCache[title.Key] = converted[n]
+		}
+		r = r.WithContext(context.WithValue(r.Context(), homeTitlesKey{}, cardCache))
 	}
-	r = r.WithContext(context.WithValue(r.Context(), homeTitlesKey{}, cardCache))
 	out := []object{}
 	var surfaces map[string]bool
 	for _, row := range rows {
@@ -738,11 +773,15 @@ func (i *instance) rowsToWire(r *http.Request, v *frontend.Viewer, token string,
 			offset = c.Offset
 		}
 		wire, e := i.rowWire(r, v, token, row, offset, excludedHeroes, hasViews)
-		if e != nil {
-			return nil, e
+		if e == nil {
+			e = i.backfillShelf(r, v, token, wire, itemLimit)
 		}
-		if e := i.backfillShelf(r, v, token, wire, itemLimit); e != nil {
-			return nil, e
+		if e != nil {
+			if r.PathValue("id") != "" || r.Context().Err() != nil {
+				return nil, e
+			}
+			logDroppedHomeRow(r, cmp.Or(row.Key, row.ID), "render", e)
+			continue
 		}
 		libraryDefaults(wire, view)
 		out = append(out, wire)
@@ -804,7 +843,10 @@ func (i *instance) rowWire(r *http.Request, v *frontend.Viewer, token string, ro
 			colID := ids.RatingKeyGUID(e.Collection.Key)
 			base["id"] = colID
 			base["kind"] = "collection"
-			base["collection"] = colByID[colID]
+			base["targetId"] = colID
+			base["name"] = e.Collection.Title
+			base["itemCount"] = e.Collection.ChildCount
+			base["artwork"] = colByID[colID]["artwork"]
 		case e.LiveChannel != nil:
 			c := e.LiveChannel
 			base["id"] = c.ID
@@ -848,6 +890,9 @@ func (i *instance) rowWire(r *http.Request, v *frontend.Viewer, token string, ro
 		wire["key"] = row.Key
 	}
 	presentRow(wire, row)
+	if wire["role"] == "collection" && wire["card"] == nil {
+		wire["card"] = "poster"
+	}
 	if wire["presentation"] == "ranked" {
 		wire["continuation"] = "exhausted"
 	}
@@ -911,23 +956,33 @@ func (i *instance) buildBootstrap(r *http.Request, v *frontend.Viewer, t string,
 		for _, hero := range heroes {
 			ids = append(ids, heroFamily(hero["title"].(object)))
 		}
+		kept := shelves[:0]
 		for _, shelf := range shelves {
 			if token, ok := shelf["nextCursor"].(string); ok && token != "" {
+				id, _ := shelf["id"].(string)
 				cursor, err := i.readRowToken(r, v, token)
 				if err != nil {
-					return nil, err
+					logDroppedHomeRow(r, id, "hero cursor", err)
+					continue
 				}
 				cursor.Exclude = ids
 				next := i.sealRowCursor(cursor)
 				if next == "" {
-					return nil, errors.New("vela: cursor encryption failed")
+					logDroppedHomeRow(r, id, "hero cursor", errors.New("cursor encryption failed"))
+					continue
 				}
 				shelf["nextCursor"] = next
 				if err := i.backfillShelf(r, v, t, shelf, rowItemLimit(r)); err != nil {
-					return nil, err
+					if r.Context().Err() != nil || (!refresh && errors.Is(err, frontend.ErrRowViewStale)) {
+						return nil, err
+					}
+					logDroppedHomeRow(r, id, "hero backfill", err)
+					continue
 				}
 			}
+			kept = append(kept, shelf)
 		}
+		out["rows"] = kept
 		out["heroes"] = heroes
 	}
 	return out, nil

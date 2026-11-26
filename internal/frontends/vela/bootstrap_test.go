@@ -18,6 +18,8 @@ import (
 	"github.com/braedonsaunders/ether/internal/experience"
 	"github.com/braedonsaunders/ether/internal/frontend"
 	"github.com/braedonsaunders/ether/internal/frontend/frontendtest"
+	"github.com/braedonsaunders/ether/internal/frontend/kit/ids"
+	"github.com/braedonsaunders/ether/internal/personalize"
 	"github.com/braedonsaunders/ether/internal/state"
 	"github.com/braedonsaunders/ether/internal/store"
 	"github.com/braedonsaunders/ether/internal/viewerpolicy"
@@ -30,9 +32,13 @@ type idleBootstrapExperience struct {
 	staleBackfill bool
 	revisionReads int
 	churn         int
+	revisionErr   error
 }
 
 func (f *idleBootstrapExperience) HomeRevision(ctx context.Context, _ *frontend.Viewer) (frontend.HomeRevision, bool, error) {
+	if f.revisionErr != nil {
+		return frontend.HomeRevision{}, false, f.revisionErr
+	}
 	f.revisionReads++
 	epoch, err := viewerpolicy.Read(ctx, f.db)
 	if f.churn > 0 {
@@ -320,9 +326,7 @@ func TestVelaIdleBootstrap(t *testing.T) {
 
 	// Unexpected failures must give the owner one useful, sanitized WARN.
 	valid = true
-	source.UserDataFunc = func(context.Context, *frontend.Viewer, []frontend.RatingKey) (map[frontend.RatingKey]frontend.WatchStatus, error) {
-		return nil, fmt.Errorf("bootstrap data: %w", errors.New("failed https://example.invalid/private?token=hidden token=hidden Bearer token"))
-	}
+	source.revisionErr = fmt.Errorf("bootstrap revision: %w", errors.New("failed https://example.invalid/private?token=hidden token=hidden Bearer token"))
 	var logs bytes.Buffer
 	prior := slog.Default()
 	slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, nil)))
@@ -394,5 +398,155 @@ func TestVelaBootstrapMapsTransientNotAvailableTo503Retryable(t *testing.T) {
 				t.Fatalf("expected retryable error payload, got %+v (%s)", payload.Error, rec.Body.String())
 			}
 		})
+	}
+}
+
+type bootstrapCardHeaders struct{ core.Collections }
+
+func (bootstrapCardHeaders) CollectionCardHeaders(_ context.Context, _ *core.User, keys []core.RatingKey) (map[core.RatingKey]*core.Collection, error) {
+	out := make(map[core.RatingKey]*core.Collection, len(keys))
+	for _, key := range keys {
+		out[key] = &core.Collection{Key: key, Title: "Services", ChildCount: 2}
+	}
+	return out, nil
+}
+
+func (bootstrapCardHeaders) CollectionCardPage(_ context.Context, _ *core.User, _ core.RatingKey, after int64, _, limit int) ([]core.CollectionCardMember, string, error) {
+	members := []core.CollectionCardMember{{Key: core.MovieKey(1), Position: 0}, {Key: core.ShowKey(1), Position: 1}}
+	start := int(after + 1)
+	return members[start:min(start+limit, len(members))], "revision", nil
+}
+
+type bootstrapCardExperience struct {
+	frontendtest.Experience
+	service *experience.Service
+}
+
+func (s bootstrapCardExperience) OpenCollectionCard(ctx context.Context, viewer *frontend.Viewer, key frontend.RatingKey, after int64, offset, limit int) (frontend.CollectionCardPage, error) {
+	return s.service.OpenCollectionCard(ctx, viewer, key, after, offset, limit)
+}
+
+type bootstrapCardImages struct {
+	frontend.ImageGrants
+	source *experience.Service
+}
+
+func (s bootstrapCardImages) SignPage(ctx context.Context, q frontend.ImagePageRequest) ([]frontend.ImageBatchItem, error) {
+	if !frontend.CollectionCardArtwork(ctx) {
+		return nil, nil
+	}
+	var keys []core.RatingKey
+	for _, title := range q.Titles {
+		if title.Key == core.SmartKey(3) {
+			return nil, frontend.ErrNotAvailable
+		}
+		keys = append(keys, title.Key)
+	}
+	headers, err := s.source.PageArtworkSmartCollections(ctx, &core.User{ID: 1}, keys)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]frontend.ImageBatchItem, 0, len(headers))
+	for key := range headers {
+		out = append(out, frontend.ImageBatchItem{Item: key, Images: []frontend.GrantedImage{
+			{Image: frontend.Image{Kind: frontend.ImagePoster, Path: "poster"}, Secret: "image-grant"},
+		}})
+	}
+	return out, nil
+}
+
+func TestBootstrapCollectionCardsThroughArtworkPolicy(t *testing.T) {
+	db := store.OpenTest(t)
+	get := func(context.Context, *core.User, core.RatingKey) (*core.Title, error) {
+		return nil, core.ErrNotFound
+	}
+	service, err := experience.NewService(experience.ServiceDeps{
+		Protocol: "vela", Active: func(context.Context, int64) (*core.User, error) { return &core.User{ID: 1}, nil },
+		Get: get, Children: func(context.Context, *core.User, core.RatingKey) ([]core.Title, error) { return nil, nil },
+		State: state.New(db, state.Options{}), Rows: &experience.RowsService{},
+		Search: experience.Search{Catalog: func(context.Context, string, []core.MediaType, int) ([]core.Title, error) { return nil, nil }},
+		Visibility: experience.Visibility{
+			GetTitle:   func(context.Context, core.RatingKey) (*core.Title, error) { return nil, core.ErrNotFound },
+			SectionFor: func(core.MediaType) (int, bool) { return 1, true },
+		},
+		CachedGetMany: func(context.Context, []core.RatingKey) (map[core.RatingKey]core.Title, error) {
+			return map[core.RatingKey]core.Title{
+				core.MovieKey(1): {Key: core.MovieKey(1), Type: core.TypeMovie, Title: "Movie"},
+				core.ShowKey(1):  {Key: core.ShowKey(1), Type: core.TypeShow, Title: "Show"},
+			}, nil
+		},
+		Collections: personalize.NewDiscovery(db, nil, nil, nil).ReviewCollections(bootstrapCardHeaders{}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	keys := []core.RatingKey{core.SmartKey(1), core.SmartKey(2)}
+	source := bootstrapCardExperience{service: service, Experience: frontendtest.Experience{RowsFunc: func(_ context.Context, q frontend.RowRequest) ([]frontend.Row, error) {
+		if q.HomeFallbackOnly {
+			return nil, nil
+		}
+		row := frontend.Row{ID: "home.rsvclogos", Kind: "collection-cards", Title: "Services", Purpose: frontend.RowCollection}
+		for _, key := range keys {
+			row.Entries = append(row.Entries, frontend.RowEntry{Kind: frontend.RowEntryCollection, Collection: &core.Collection{Key: key, Title: "Services", ChildCount: 2}})
+		}
+		broken := row
+		broken.ID = "home.rbroken"
+		broken.Entries = []frontend.RowEntry{{Kind: frontend.RowEntryCollection, Collection: &core.Collection{Key: core.SmartKey(3)}}}
+		return []frontend.Row{broken, row}, nil
+	}}}
+	mounted, err := (Frontend{DB: db, ReplayKey: make([]byte, 32)}).Mount(t.Context(), frontend.Host{
+		Identity: identityFake{}, Experience: source, Sessions: frontendtest.Sessions{}, ImageGrants: bootstrapCardImages{source: service},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = mounted.Close(context.Background()) })
+	getPage := func(path string, out any) {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodGet, "/vela/v0/"+path, nil)
+		req.Header.Set("Authorization", "Bearer token")
+		req.Header.Set("X-Vela-Device-Id", "device")
+		rec := httptest.NewRecorder()
+		mounted.Handler().ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200", rec.Code)
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), out); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var wire struct {
+		Rows []struct {
+			Role  string
+			Items []struct {
+				TargetID, Name, Kind string
+				Artwork              []json.RawMessage
+			}
+		}
+	}
+	getPage("bootstrap", &wire)
+	if len(wire.Rows) != 1 || wire.Rows[0].Role != "collection" || len(wire.Rows[0].Items) != len(keys) {
+		t.Fatal("bootstrap did not publish the collection shelf")
+	}
+	for n, item := range wire.Rows[0].Items {
+		if item.TargetID != ids.RatingKeyGUID(keys[n]) || item.Kind != "collection" || item.Name != "Services" || len(item.Artwork) != 1 {
+			t.Fatalf("collection card %d is missing its target, name or artwork", n)
+		}
+	}
+	var opened struct {
+		Collection               struct{ ID string }
+		Items                    []struct{ ID string }
+		Continuation, NextCursor string
+	}
+	target := wire.Rows[0].Items[1].TargetID
+	path := "collections/" + target + "?limit=1"
+	getPage(path, &opened)
+	if opened.Collection.ID != target || opened.Continuation != "more" || opened.NextCursor == "" ||
+		len(opened.Items) != 1 || opened.Items[0].ID != ids.RatingKeyGUID(core.MovieKey(1)) {
+		t.Fatal("collection target did not open at its first item")
+	}
+	getPage(path+"&cursor="+opened.NextCursor, &opened)
+	if opened.Continuation != "exhausted" || len(opened.Items) != 1 || opened.Items[0].ID != ids.RatingKeyGUID(core.ShowKey(1)) {
+		t.Fatal("collection did not continue to its show")
 	}
 }

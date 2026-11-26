@@ -456,6 +456,19 @@ type Collections interface {
 	DeleteSmart(ctx context.Context, key RatingKey) error
 }
 
+type CollectionCardHeaders interface {
+	CollectionCardHeaders(context.Context, *User, []RatingKey) (map[RatingKey]*Collection, error)
+}
+
+type CollectionCardMember struct {
+	Position int64
+	Key      RatingKey
+}
+
+type CollectionCardMembers interface {
+	CollectionCardPage(ctx context.Context, viewer *User, key RatingKey, after int64, offset, limit int) ([]CollectionCardMember, string, error)
+}
+
 // CollectionPlaceholder resolves a future title only through a visible,
 // enabled collection in which it is currently a member for this viewer.
 type CollectionPlaceholder interface {

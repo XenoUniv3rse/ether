@@ -309,8 +309,14 @@ func keepHubMetadata(h model.Hub, keep func(model.Metadata) bool) (model.Hub, bo
 func heroReadyHomeHubs(rows []model.Hub) []model.Hub {
 	out := make([]model.Hub, 0, len(rows))
 	var waiting []model.Hub
+	hasLead := false
 	for _, h := range rows {
-		lead := len(out) == 0
+		if h.Type == "collection" && len(h.Directory) > 0 {
+			h.Style = "shelf"
+			out = append(out, h)
+			continue
+		}
+		lead := !hasLead
 		if lead || strings.EqualFold(h.Style, "hero") {
 			painted, ok := paintHeroItems(h)
 			if !ok {
@@ -328,6 +334,7 @@ func heroReadyHomeHubs(rows []model.Hub) []model.Hub {
 				painted.Style = "hero"
 			}
 			out = append(out, painted)
+			hasLead = true
 		} else {
 			out = append(out, h)
 		}

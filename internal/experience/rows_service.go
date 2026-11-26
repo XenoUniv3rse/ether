@@ -3,6 +3,7 @@ package experience
 import (
 	"context"
 	"errors"
+	"log/slog"
 
 	"github.com/braedonsaunders/ether/internal/core"
 	"github.com/braedonsaunders/ether/internal/frontend"
@@ -229,6 +230,8 @@ func (s *RowsService) rows(ctx context.Context, req frontend.RowRequest, protoco
 	}
 	var subjects []ReceiptSubject
 	var handles []*string
+	var receiptRows []int
+	omitted := make([]bool, len(out))
 	for i := range out {
 		row := &out[i]
 		row.Situation = situation
@@ -241,15 +244,25 @@ func (s *RowsService) rows(ctx context.Context, req frontend.RowRequest, protoco
 			row.More = false
 		}
 		if !s.d.AllowRow(passCtx, req.Viewer, *row) {
+			if req.Placement == frontend.PlacementHome {
+				slog.WarnContext(ctx, "experience: dropping Home row", "row", row.ID, "reason", "row no longer authorized")
+				omitted[i] = true
+				continue
+			}
 			return nil, errors.New("experience: layout returned unauthorized row")
 		}
 		row.Items = nil
 		for j := range row.Entries {
 			if entryIdentity(row.Entries[j]) == "" || !s.permitted(passCtx, req.Viewer, row.Entries[j]) {
+				if req.Placement == frontend.PlacementHome {
+					slog.WarnContext(ctx, "experience: dropping Home row", "row", row.ID, "reason", "entry no longer authorized")
+					omitted[i] = true
+					break
+				}
 				return nil, errors.New("experience: layout returned unauthorized entry")
 			}
 		}
-		if !issue {
+		if !issue || omitted[i] {
 			continue
 		}
 		impression := &core.NeutralImpression{RowID: row.ID, Kind: row.Kind, Title: row.Title, Purpose: row.Purpose, Rank: row.Rank, Situation: situation, Collection: row.Collection, Item: req.Item, Placement: string(req.Placement), ViewID: req.ViewID}
@@ -260,6 +273,7 @@ func (s *RowsService) rows(ctx context.Context, req frontend.RowRequest, protoco
 			}
 		}
 		subjects = append(subjects, ReceiptSubject{Kind: "row", ID: row.ID, Purpose: row.Purpose, Rank: row.Rank, Impression: impression})
+		receiptRows = append(receiptRows, i)
 		handles = append(handles, &row.Handle)
 		for j := range row.Entries {
 			entry := &row.Entries[j]
@@ -277,14 +291,41 @@ func (s *RowsService) rows(ctx context.Context, req frontend.RowRequest, protoco
 		for attempt := 0; attempt < rowsFenceRetries && errors.Is(e, viewerpolicy.ErrChanged) && ctx.Err() == nil; attempt++ {
 			tokens, e = s.d.Receipts.IssueBatch(ctx, req.Viewer, req.Device, protocol, subjects)
 		}
-		if e != nil {
+		if errors.Is(e, ErrReceipt) && req.Placement == frontend.PlacementHome && ctx.Err() == nil {
+			// A row can lose authorization between layout and receipt admission.
+			// Keep the batch on the normal path and isolate rows on rejection.
+			start := 0
+			for _, index := range receiptRows {
+				n := 1 + len(subjects[start].Impression.Entries)
+				subject := subjects[start]
+				rowTokens, err := s.d.Receipts.IssueBatch(ctx, req.Viewer, req.Device, protocol, subjects[start:start+n])
+				if errors.Is(err, ErrReceipt) {
+					slog.WarnContext(ctx, "experience: dropping Home row", "row", subject.ID, "reason", "receipt rejected")
+					omitted[index] = true
+				} else if err != nil {
+					return nil, err
+				} else {
+					for j, token := range rowTokens {
+						*handles[start+j] = token
+					}
+				}
+				start += n
+			}
+		} else if e != nil {
 			return nil, e
-		}
-		for i := range handles {
-			*handles[i] = tokens[i]
+		} else {
+			for i := range handles {
+				*handles[i] = tokens[i]
+			}
 		}
 	}
-	return out, nil
+	kept := out[:0]
+	for i, row := range out {
+		if !omitted[i] {
+			kept = append(kept, row)
+		}
+	}
+	return kept, nil
 }
 
 // rowsFenceRetries bounds the extra receipt attempts after the policy epoch

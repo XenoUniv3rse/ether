@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -35,6 +37,15 @@ type bootstrapDeadlineKey struct{}
 type bootstrapDeadline struct {
 	expires time.Time
 	rows    []frontend.RowViewPageRequest
+	partial bool
+}
+
+func logDroppedHomeRow(r *http.Request, rowID, stage string, err error) {
+	if lease, ok := r.Context().Value(bootstrapDeadlineKey{}).(*bootstrapDeadline); ok {
+		lease.partial = true
+	}
+	// Source errors can contain provider URLs and credentials.
+	slog.WarnContext(r.Context(), "Vela row omitted", "row", rowID, "stage", stage, "error_class", fmt.Sprintf("%T", err))
 }
 
 func noteBootstrapDeadline(r *http.Request, expiry time.Time) {
@@ -219,7 +230,7 @@ func (i *instance) bootstrap(w http.ResponseWriter, r *http.Request) {
 					total += len(old.payload)
 				}
 			}
-			if buildErr == nil && total <= bootstrapBytes {
+			if buildErr == nil && !lease.partial && total <= bootstrapBytes {
 				pending.payload = payload
 				pending.expires = lease.expires
 				pending.rows = lease.rows

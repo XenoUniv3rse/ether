@@ -1,7 +1,10 @@
 package collections
 
 import (
+	"cmp"
 	"context"
+	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -10,6 +13,26 @@ import (
 
 type cardSampleSource interface {
 	CollectionCardSample(context.Context, core.Filter, int64, string, string, *core.FilterGroup, string, int) (core.Title, error)
+}
+
+type cardMemberSource interface {
+	CollectionCardMembers(context.Context, core.Filter, int64, string, string, *core.FilterGroup, string, int, int64, int) ([]core.CollectionCardMember, error)
+}
+
+func cardFacet(spec core.CollectionSpec) (facet, value string, local bool) {
+	if path, ok := localFacetSpec(spec); ok {
+		_, rest, _ := strings.Cut(path, "|")
+		facet, value, _ = strings.Cut(rest, "|")
+		return facet, value, true
+	}
+	return "", "", false
+}
+
+func cardTypes(spec core.CollectionSpec) []core.MediaType {
+	if spec.MediaType == MediaMixed {
+		return []core.MediaType{core.TypeMovie, core.TypeShow}
+	}
+	return []core.MediaType{core.MediaType(spec.MediaType)}
 }
 
 // WithCollectionCardFilter installs the same indexed viewer predicates used
@@ -47,18 +70,11 @@ func (s *Service) CollectionCardHeaders(ctx context.Context, user *core.User, ke
 		if !visible(row, user) || row.owner != 0 {
 			continue
 		}
-		var facet, value string
-		if path, ok := localFacetSpec(row.spec); ok {
-			_, rest, _ := strings.Cut(path, "|")
-			facet, value, _ = strings.Cut(rest, "|")
-		} else if row.itemCount == 0 || row.buildHash == "" {
+		facet, value, local := cardFacet(row.spec)
+		if !local && (row.itemCount == 0 || row.buildHash == "") {
 			continue
 		}
-		types := []core.MediaType{core.MediaType(row.spec.MediaType)}
-		if row.spec.MediaType == MediaMixed {
-			types = []core.MediaType{core.TypeMovie, core.TypeShow}
-		}
-		for _, typ := range types {
+		for _, typ := range cardTypes(row.spec) {
 			p, ok := filters[typ]
 			if !ok {
 				p.filter, p.fits, err = s.cardFilter(ctx, user, typ)
@@ -102,6 +118,58 @@ func (s *Service) CollectionCardHeaders(ctx context.Context, user *core.User, ke
 		}
 	}
 	return out, nil
+}
+
+// CollectionCardPage reads only the requested window of a shared Home card.
+// The mixed page merges movie and show visibility in the stored member order.
+func (s *Service) CollectionCardPage(ctx context.Context, user *core.User, key core.RatingKey, after int64, offset, limit int) ([]core.CollectionCardMember, string, error) {
+	source, ok := s.cat.(cardMemberSource)
+	base, section := key.CollectionSection()
+	if !ok || s.cardFilter == nil || user == nil || base.Kind() != core.KindSmart || section != "" || key.IsEphemeral() {
+		return nil, "", core.ErrNotFound
+	}
+	ctx = core.WithCatalogViewer(ctx, user)
+	row, err := s.rowByKey(ctx, base)
+	if err != nil {
+		return nil, "", err
+	}
+	if !visible(row, user) || row.owner != 0 {
+		return nil, "", core.ErrNotFound
+	}
+	facet, value, local := cardFacet(row.spec)
+	if !local && (row.itemCount == 0 || row.buildHash == "") {
+		return nil, "", core.ErrNotFound
+	}
+	limit = min(limit, 101)
+	if cap := row.spec.Limit; cap > 0 {
+		limit = min(limit, cap-offset)
+	}
+	if row.spec.RankedTop10 {
+		limit = min(limit, 10-offset)
+	}
+	revision := row.buildHash + ":" + strconv.FormatInt(row.stamp().UnixNano(), 10)
+	if limit <= 0 {
+		return nil, revision, nil
+	}
+	var members []core.CollectionCardMember
+	for _, typ := range cardTypes(row.spec) {
+		filter, fits, err := s.cardFilter(ctx, user, typ)
+		if err != nil {
+			return nil, "", err
+		}
+		if !fits {
+			continue
+		}
+		var anyPersonal *core.FilterGroup
+		filter.Group, anyPersonal = cardPersonalRules(row.spec, user.ID)
+		window, err := source.CollectionCardMembers(ctx, filter, row.id, facet, value, anyPersonal, row.spec.ReleaseMode, row.spec.LookaheadDays, after, limit)
+		if err != nil {
+			return nil, "", err
+		}
+		members = append(members, window...)
+	}
+	slices.SortFunc(members, func(a, b core.CollectionCardMember) int { return cmp.Compare(a.Position, b.Position) })
+	return members[:min(len(members), limit)], revision, nil
 }
 
 func cardPersonalRules(spec core.CollectionSpec, viewer int64) (required, anyPersonal *core.FilterGroup) {

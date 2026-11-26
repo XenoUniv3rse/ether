@@ -419,6 +419,7 @@ func (i *instance) sections(w http.ResponseWriter, r *http.Request) {
 		if len(row.Entries) > 0 && row.Entries[0].Kind == frontend.RowEntryCollection {
 			views, err := i.host.Experience.Views(r.Context(), v)
 			if err != nil {
+				i.logSectionError("collection views", placement, view, row.ID, frontend.ErrNotAvailable)
 				partial = true
 			} else if section := i.collectionSection(r, v, credential, row, views); section != nil {
 				sections = append(sections, section)

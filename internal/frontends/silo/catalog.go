@@ -109,8 +109,9 @@ func (i *instance) catalog(w http.ResponseWriter, r *http.Request) {
 		}
 		detail, detailErr := i.host.Experience.Item(frontend.WithNoContainerExpand(r.Context()), frontend.ItemRequest{Viewer: v, Device: device(r), Key: key})
 		views, err := i.host.Experience.Views(r.Context(), v)
+		_, section := key.CollectionSection()
 		if detailErr != nil || err != nil || detail.Collection == nil || detail.Collection.OwnerUserID != 0 ||
-			collectionViewFor(detail.Collection.Type, views) != view {
+			!collectionVideoView(view, section, views) {
 			notFound(w)
 			return
 		}
