@@ -83,8 +83,8 @@ func RekeyTitle(ctx context.Context, tx *sql.Tx, from, to core.RatingKey, ranges
 			}
 			raw = string(encoded)
 		}
-		res, err := tx.ExecContext(ctx, `UPDATE collections_specs SET spec_json=?,build_hash='',changed_at=?
-			WHERE id=? AND spec_json=?`, raw, time.Now().Unix(), row.id, row.raw)
+		res, err := tx.ExecContext(ctx, `UPDATE collections_specs SET `+specDocumentColumns+`,build_hash='',changed_at=?
+			WHERE id=? AND spec_json=?`, append(specDocumentArgs(raw), time.Now().Unix(), row.id, row.raw)...)
 		if err != nil {
 			return nil, err
 		}

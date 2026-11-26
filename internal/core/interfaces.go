@@ -337,6 +337,14 @@ type EpisodeTally struct {
 	Aired, Played int
 }
 
+// IndexedOwnedCollectionPager can skip and count deterministic collections
+// in SQL while passing rule-dependent collections through the caller's policy.
+type IndexedOwnedCollectionPager interface {
+	IndexedOwnedCollections(context.Context, *User, MediaType, *Filter, int, int,
+		func([]Collection) ([]Collection, error),
+	) ([]Collection, int, bool, error)
+}
+
 // Catalog is Ether's library: a local mirror of a TMDB slice plus on-demand
 // fetches for anything else.
 type Catalog interface {

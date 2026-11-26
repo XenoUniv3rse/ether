@@ -770,3 +770,57 @@ func (c *Catalog) libraryFacetFranchises(
 	}
 	return out, more, true, nil
 }
+
+// FranchiseFilteredPage uses the tally's order index to seek across franchises,
+// proving each qualifying bucket with an indexed member EXISTS. It counts
+// members only for the rows it returns.
+func (c *Catalog) FranchiseFilteredPage(ctx context.Context, f core.Filter, offset, limit, afterCount, afterID int, exactTotal bool) ([]core.Collection, int, error) {
+	memberWhere, args, err := c.franchiseMemberWhere(f)
+	if err != nil {
+		return nil, 0, err
+	}
+	where := ` WHERE f.member_count>=2 AND EXISTS (
+		SELECT 1 FROM catalog_titles t WHERE t.collection_id=f.collection_id AND (` + memberWhere + `)
+		LIMIT 1 OFFSET 0
+	)`
+	var total int
+	if exactTotal {
+		if err := c.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM catalog_franchises f`+where, args...).Scan(&total); err != nil {
+			return nil, 0, err
+		}
+	}
+	if limit <= 0 || exactTotal && offset >= total {
+		return nil, total, nil
+	}
+	if afterID > 0 {
+		where += ` AND (f.member_count < ? OR (f.member_count = ? AND f.collection_id > ?))`
+		args = append(args, afterCount, afterCount, afterID)
+	}
+	rows, err := c.db.QueryContext(ctx, `SELECT f.collection_id,COALESCE(NULLIF(f.name,''),cc.name,''),
+		f.member_count,COALESCE(cc.poster,''),COALESCE(cc.backdrop,''),COALESCE(cc.summary,'')
+		FROM catalog_franchises f LEFT JOIN catalog_collections cc ON cc.tmdb_id=f.collection_id`+where+
+		` ORDER BY f.member_count DESC,f.collection_id ASC LIMIT ? OFFSET ?`, append(args, limit, offset)...)
+	if err != nil {
+		return nil, 0, err
+	}
+	page, err := scanFranchiseRows(rows)
+	rows.Close()
+	if err != nil {
+		return nil, 0, err
+	}
+	ids := make([]int, 0, len(page))
+	for _, col := range page {
+		ids = append(ids, int(col.Key.TMDB()))
+	}
+	counts, err := c.FranchiseVisibleCounts(ctx, f, ids)
+	if err != nil {
+		return nil, 0, err
+	}
+	for i := range page {
+		page[i].ChildCount = counts[ids[i]]
+	}
+	if !exactTotal {
+		total = offset + len(page)
+	}
+	return page, total, nil
+}

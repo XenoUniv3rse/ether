@@ -2,52 +2,158 @@ package collections
 
 import (
 	"context"
+	"time"
 
+	"github.com/braedonsaunders/ether/internal/catalog"
 	"github.com/braedonsaunders/ether/internal/core"
 )
 
-// plainOwnedPage answers exact offset paging for persisted collections whose
-// membership is unchanged by the viewer or serving-time rules. Discarded
-// rows need only a membership witness, so only the page gets headers.
-func (s *Service) plainOwnedPage(ctx context.Context, user *core.User, typ core.MediaType, offset, limit int) ([]core.Collection, int, bool, error) {
-	if s.idx.current() != nil || !s.plainMemberViewer(user) {
+// IndexedOwnedCollections answers exact offset paging for persisted
+// collections. SQL skips ordinary collections by index. Only collections
+// whose rules or policy cannot be proven by membership witnesses are
+// evaluated before paging. A nil viewer filter uses Plex's serving rules.
+func (s *Service) IndexedOwnedCollections(ctx context.Context, user *core.User, typ core.MediaType, filter *core.Filter, offset, limit int,
+	evaluate func([]core.Collection) ([]core.Collection, error),
+) ([]core.Collection, int, bool, error) {
+	if !s.plainMemberViewer(user) {
 		return nil, 0, false, nil
 	}
-	var userID int64
+	var viewerID int64
 	if user != nil {
-		userID = user.ID
+		viewerID = user.ID
 	}
-	var complex bool
-	if err := s.db.QueryRowContext(ctx, `SELECT EXISTS(
-		SELECT 1 FROM collections_specs WHERE enabled=1 AND (owner_user_id=0 OR owner_user_id=?)
-		AND (browse_mode<0 OR (browse_mode>0 AND (?='' OR browse_type IN (?, 'mixed'))
-		AND (browse_mode<>1 OR last_built_at=0 OR build_hash='')))
-	)`, userID, typ, typ).Scan(&complex); err != nil || complex {
-		return nil, 0, false, err
-	}
-	ids, total, err := s.mirror.PersistedOwnedCollectionPage(ctx, userID, typ, offset, limit)
-	if err != nil {
-		return nil, 0, true, err
-	}
-	rows, err := s.rowsByIDs(ctx, ids)
-	if err != nil {
-		return nil, 0, true, err
-	}
-	specs := make([]*specRow, 0, len(rows))
-	for _, id := range ids {
-		if row := rows[id]; row != nil {
-			specs = append(specs, row)
+	selection := s.mirror.OwnedCollectionSelection(viewerID, typ)
+	if filter != nil {
+		scoped, ok := s.cat.(interface {
+			ScopedOwnedCollectionSelection(context.Context, int64, core.MediaType, core.Filter) (*catalog.OwnedCollectionSelection, error)
+		})
+		if !ok {
+			return nil, 0, false, nil
+		}
+		var err error
+		selection, err = scoped.ScopedOwnedCollectionSelection(ctx, viewerID, typ, *filter)
+		if err != nil {
+			return nil, 0, true, err
 		}
 	}
-	out, err := s.collectionHeaders(ctx, specs, user, typ)
+	ids, err := selection.ExceptionIDs(ctx)
 	if err != nil {
 		return nil, 0, true, err
 	}
+	exceptions, err := s.orderedSpecRows(ctx, ids)
+	if err != nil {
+		return nil, 0, true, err
+	}
+	exceptions = retainEligibleOwnedSpecs(exceptions, user, typ)
+	byID := make(map[int64]core.Collection, len(exceptions))
+	var exceptionIDs []int64
+	deadline := time.Now().Add(2 * time.Second)
+	evalRows := func(rows []*specRow) ([]core.Collection, error) {
+		if evaluate != nil {
+			cols, err := s.collectionHeaders(ctx, rows, user, typ)
+			if err != nil {
+				return nil, err
+			}
+			nonempty := cols[:0]
+			for _, c := range cols {
+				if c.ChildCount > 0 {
+					nonempty = append(nonempty, c)
+				}
+			}
+			return evaluate(nonempty)
+		}
+		cols := make([]core.Collection, 0, len(rows))
+		for _, row := range rows {
+			if col, ok := s.listCollection(ctx, user, typ, row, deadline); ok {
+				cols = append(cols, col)
+			}
+		}
+		return cols, nil
+	}
+	const batchSize = 100
+	for start := 0; start < len(exceptions); start += batchSize {
+		cols, err := evalRows(exceptions[start:min(start+batchSize, len(exceptions))])
+		if err != nil {
+			return nil, 0, true, err
+		}
+		for _, col := range cols {
+			key, _ := col.Key.CollectionSection()
+			id := key.TMDB()
+			byID[id] = col
+			exceptionIDs = append(exceptionIDs, id)
+		}
+	}
+	pageIDs, total, err := selection.Page(ctx, exceptionIDs, offset, limit)
+	if err != nil {
+		return nil, 0, true, err
+	}
+	var out []core.Collection
+	if len(pageIDs) > 0 {
+		rows, err := s.orderedSpecRows(ctx, pageIDs)
+		if err != nil {
+			return nil, 0, true, err
+		}
+		rows = retainEligibleOwnedSpecs(rows, user, typ)
+		var ordinary []*specRow
+		for _, row := range rows {
+			if _, ok := byID[row.id]; !ok {
+				ordinary = append(ordinary, row)
+			}
+		}
+		cols, err := s.collectionHeaders(ctx, ordinary, user, typ)
+		if err != nil {
+			return nil, 0, true, err
+		}
+		if evaluate != nil {
+			cols, err = evaluate(cols)
+			if err != nil {
+				return nil, 0, true, err
+			}
+		}
+		for _, col := range cols {
+			key, _ := col.Key.CollectionSection()
+			byID[key.TMDB()] = col
+		}
+		for _, row := range rows {
+			if c, ok := byID[row.id]; ok {
+				out = append(out, c)
+			}
+		}
+	}
 	ephemeral := s.listEphemeral(user, typ)
-	start := max(0, offset-total)
-	left := limit - len(out)
+	if evaluate != nil {
+		ephemeral, err = evaluate(ephemeral)
+		if err != nil {
+			return nil, 0, true, err
+		}
+	}
+	start, left := max(0, offset-total), limit-len(out)
 	if left > 0 && start < len(ephemeral) {
 		out = append(out, ephemeral[start:min(start+left, len(ephemeral))]...)
 	}
 	return out, total + len(ephemeral), true, nil
+}
+
+func retainEligibleOwnedSpecs(rows []*specRow, viewer *core.User, typ core.MediaType) []*specRow {
+	out := rows[:0]
+	for _, row := range rows {
+		if visible(row, viewer) && row.spec.BrowseInApps && typeMatches(row.spec, typ) {
+			out = append(out, row)
+		}
+	}
+	return out
+}
+
+func (s *Service) orderedSpecRows(ctx context.Context, ids []int64) ([]*specRow, error) {
+	rows, err := s.rowsByIDs(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*specRow, 0, len(rows))
+	for _, id := range ids {
+		if row := rows[id]; row != nil {
+			out = append(out, row)
+		}
+	}
+	return out, nil
 }

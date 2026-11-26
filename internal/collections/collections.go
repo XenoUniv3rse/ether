@@ -952,7 +952,7 @@ func (s *Service) ListPage(ctx context.Context, user *core.User, t core.MediaTyp
 	if limit < 0 {
 		limit = 500
 	}
-	out, ownedN, handled, err := s.plainOwnedPage(ctx, user, t, offset, limit)
+	out, ownedN, handled, err := s.IndexedOwnedCollections(ctx, user, t, nil, offset, limit, nil)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -1061,23 +1061,9 @@ func (s *Service) list(ctx context.Context, user *core.User, t core.MediaType, w
 	// Built-ins first, as Plex has always listed them.
 	sort.SliceStable(rows, func(i, j int) bool { return rows[i].builtin && !rows[j].builtin })
 	listOne := func(row *specRow) {
-		wait := row.spec.Refresh == RefreshLive || time.Now().Before(deadline)
-		bctx, cancel := context.WithDeadline(ctx, deadline.Add(3*time.Second))
-		keys, err := s.serve(bctx, row, user, wait)
-		cancel()
-		if err != nil {
-			if !errors.Is(err, errNotBuilt) {
-				s.log.Debug("collections: list", "id", row.publicID(), "err", err)
-			}
-			return
+		if col, ok := s.listCollection(ctx, user, t, row, deadline); ok {
+			out = append(out, col)
 		}
-		if len(keys) == 0 {
-			return
-		}
-		if row.spec.MediaType == MediaMixed && t != "" && len(sectionKeys(keys, t)) == 0 {
-			return
-		}
-		out = append(out, s.collectionFor(ctx, row, user, t, keys))
 	}
 	var batch []*specRow
 	flush := func() {
@@ -1130,6 +1116,26 @@ func (s *Service) list(ctx context.Context, user *core.User, t core.MediaType, w
 		}
 	}
 	return out, nil
+}
+
+func (s *Service) listCollection(ctx context.Context, user *core.User, t core.MediaType, row *specRow, deadline time.Time) (core.Collection, bool) {
+	wait := row.spec.Refresh == RefreshLive || time.Now().Before(deadline)
+	bctx, cancel := context.WithDeadline(ctx, deadline.Add(3*time.Second))
+	keys, err := s.serve(bctx, row, user, wait)
+	cancel()
+	if err != nil {
+		if !errors.Is(err, errNotBuilt) {
+			s.log.Debug("collections: list", "id", row.publicID(), "err", err)
+		}
+		return core.Collection{}, false
+	}
+	if len(keys) == 0 {
+		return core.Collection{}, false
+	}
+	if row.spec.MediaType == MediaMixed && t != "" && len(sectionKeys(keys, t)) == 0 {
+		return core.Collection{}, false
+	}
+	return s.collectionFor(ctx, row, user, t, keys), true
 }
 
 // Get returns one collection by key.

@@ -3,6 +3,7 @@ package collections
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"math"
 	"strings"
 
@@ -84,6 +85,19 @@ func browseGroup(builtin bool, spec core.CollectionSpec) string {
 		return "folder:" + strings.ToLower(spec.Folder)
 	}
 	return ""
+}
+
+// specDocumentColumns is shared by all document rewrites, including
+// background builds, so the browse index always describes the same version.
+const specDocumentColumns = `spec_json=?,browse_group=CASE WHEN builtin=0 THEN ? ELSE '' END,browse_rank=?,browse_type=?,browse_mode=?`
+
+func specDocumentArgs(raw string) []any {
+	var spec core.CollectionSpec
+	if err := json.Unmarshal([]byte(raw), &spec); err != nil {
+		return []any{raw, "", browseRank(0), "", -1}
+	}
+	normalizeStoredSpec(&spec, nil)
+	return []any{raw, browseGroup(false, spec), browseRank(spec.SortOrder), spec.MediaType, browseMode(spec)}
 }
 
 // browseMode is kept beside the display tuple so an exact page can detect

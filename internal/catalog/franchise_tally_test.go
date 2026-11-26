@@ -137,6 +137,12 @@ func TestFranchiseTallyTriggersRebuildCursorAndFilters(t *testing.T) {
 		t.Fatalf("FranchisesInSmallFilterAfter = %+v hasMore=%v used=%v err=%v", next, hasMore, usedDirect, err)
 	}
 
+	// The rank-ordered page counts the whole scope and opens only the requested bucket.
+	page, total, err := c.FranchiseFilteredPage(ctx, filtered, 1, 1, 0, 0, true)
+	if err != nil || total != 2 || len(page) != 1 || page[0].Key.TMDB() != 30 || page[0].ChildCount != 2 {
+		t.Fatalf("filtered franchise page=%+v total=%d err=%v", page, total, err)
+	}
+
 	// Transition back down below threshold: marking movie 202 adult removes Franchise 20.
 	exec(`UPDATE catalog_titles SET adult=1 WHERE key=?`, int64(core.MovieKey(202)))
 	if tot, err := c.FranchiseTotal(ctx); err != nil || tot != 2 {

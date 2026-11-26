@@ -13,6 +13,11 @@ import (
 	"github.com/braedonsaunders/ether/internal/store"
 )
 
+func init() {
+	store.Register("catalog", 85, `CREATE INDEX catalog_titles_collection_newest
+		ON catalog_titles(collection_id,released_ts DESC,popularity DESC,key) WHERE collection_id>0;`)
+}
+
 // LibraryFacetCollections returns a bounded, indexed page of facet buckets
 // (genre, studio, network, country, year, decade, or franchise) scoped to the
 // library/viewer Filter, ordered by item count (default) or name, with folded
@@ -401,50 +406,24 @@ func (c *Catalog) hydrateLibraryFacetNewest(
 	}
 
 	keyByBucket := make(map[string]core.RatingKey, len(buckets))
+	var branches []string
+	var qArgs []any
 	if storageFacet == "franchise" {
-		cids := make([]any, 0, len(buckets))
-		for _, b := range buckets {
-			if id, err := strconv.ParseInt(b.ID, 10, 64); err == nil && id > 0 {
-				cids = append(cids, id)
+		for _, bucket := range buckets {
+			id, err := strconv.ParseInt(bucket.ID, 10, 64)
+			if err != nil || id <= 0 {
+				continue
 			}
-		}
-		if len(cids) > 0 {
-			qArgs := make([]any, 0, len(cids)+len(whereArgs))
-			qArgs = append(qArgs, cids...)
+			branches = append(branches, `SELECT CAST(? AS TEXT) AS b, COALESCE((
+				SELECT t.key FROM catalog_titles t
+				WHERE t.collection_id = ? AND t.collection_id > 0 AND (`+where+`)
+				ORDER BY t.released_ts DESC, t.popularity DESC, t.key ASC LIMIT 1
+			), 0) AS k`)
+			qArgs = append(qArgs, bucket.ID, id)
 			qArgs = append(qArgs, whereArgs...)
-			sqlStr := `WITH ranked AS (
-				SELECT t.collection_id AS b,
-					t.key,
-					ROW_NUMBER() OVER (PARTITION BY t.collection_id ORDER BY t.released_ts DESC, t.popularity DESC, t.key ASC) AS rn
-				FROM catalog_titles t
-				WHERE t.collection_id IN (` + placeholders(len(cids)) + `) AND (` + where + `)
-			)
-			SELECT CAST(b AS TEXT), key FROM ranked WHERE rn = 1`
-			rows, err := c.db.QueryContext(ctx, sqlStr, qArgs...)
-			if err != nil {
-				return err
-			}
-			for rows.Next() {
-				var bID string
-				var k core.RatingKey
-				if err := rows.Scan(&bID, &k); err != nil {
-					rows.Close()
-					return err
-				}
-				if k != 0 {
-					keyByBucket[bID] = k
-				}
-			}
-			if err := rows.Err(); err != nil {
-				rows.Close()
-				return err
-			}
-			rows.Close()
 		}
 	} else {
 		broadLibrary := f.CollectionMembers == 0 && len(f.CatalogueSources) == 0 && len(f.IncludeKeys) == 0
-		var branches []string
-		var qArgs []any
 		for _, b := range buckets {
 			switch storageFacet {
 			case "year":
@@ -508,28 +487,28 @@ func (c *Catalog) hydrateLibraryFacetNewest(
 				c.appendHydrateExtraNewestBranch(storageFacet, b, broadLibrary, where, whereArgs, &branches, &qArgs)
 			}
 		}
-		if len(branches) > 0 {
-			rows, err := c.db.QueryContext(ctx, strings.Join(branches, " UNION ALL "), qArgs...)
-			if err != nil {
-				return err
-			}
-			for rows.Next() {
-				var bID string
-				var k core.RatingKey
-				if err := rows.Scan(&bID, &k); err != nil {
-					rows.Close()
-					return err
-				}
-				if k != 0 {
-					keyByBucket[bID] = k
-				}
-			}
-			if err := rows.Err(); err != nil {
+	}
+	if len(branches) > 0 {
+		rows, err := c.db.QueryContext(ctx, strings.Join(branches, " UNION ALL "), qArgs...)
+		if err != nil {
+			return err
+		}
+		for rows.Next() {
+			var bID string
+			var k core.RatingKey
+			if err := rows.Scan(&bID, &k); err != nil {
 				rows.Close()
 				return err
 			}
-			rows.Close()
+			if k != 0 {
+				keyByBucket[bID] = k
+			}
 		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return err
+		}
+		rows.Close()
 	}
 
 	if len(keyByBucket) == 0 {

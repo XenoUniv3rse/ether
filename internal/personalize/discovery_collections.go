@@ -241,6 +241,33 @@ func (c *reviewCollections) ListComplete(ctx context.Context, u *core.User, typ 
 	return c.withReviews(ctx, u, typ, out), nil
 }
 
+// IndexedOwnedCollections forwards indexed owned paging and appends the
+// viewer's review collections in the same order as VisitOwned.
+func (c *reviewCollections) IndexedOwnedCollections(ctx context.Context, u *core.User, typ core.MediaType, filter *core.Filter, offset, limit int,
+	evaluate func([]core.Collection) ([]core.Collection, error),
+) ([]core.Collection, int, bool, error) {
+	pager, ok := c.base.(core.IndexedOwnedCollectionPager)
+	if !ok {
+		return nil, 0, false, nil
+	}
+	page, total, handled, err := pager.IndexedOwnedCollections(ctx, u, typ, filter, offset, limit, evaluate)
+	if err != nil || !handled {
+		return page, total, handled, err
+	}
+	reviews := c.withReviews(ctx, u, typ, nil)
+	if evaluate != nil {
+		reviews, err = evaluate(reviews)
+		if err != nil {
+			return nil, 0, true, err
+		}
+	}
+	start, left := max(0, offset-total), limit-len(page)
+	if left > 0 && start < len(reviews) {
+		page = append(page, reviews[start:min(start+left, len(reviews))]...)
+	}
+	return page, total + len(reviews), true, nil
+}
+
 // ListOwnedComplete forwards the engine's non-franchise listing plus Year in
 // Review collections and reports whether TMDB franchises belong to typ, so
 // page-first collection endpoints never materialize every TMDB franchise.

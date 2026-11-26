@@ -68,7 +68,7 @@ func (s *Service) adoptLibraryDefaultTemplates(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		if _, err = tx.ExecContext(ctx, `UPDATE collections_specs SET spec_json=? WHERE id=?`, string(raw), r.id); err != nil {
+		if _, err = tx.ExecContext(ctx, `UPDATE collections_specs SET `+specDocumentColumns+` WHERE id=?`, append(specDocumentArgs(string(raw)), r.id)...); err != nil {
 			return err
 		}
 	}

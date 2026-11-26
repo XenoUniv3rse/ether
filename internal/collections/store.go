@@ -166,16 +166,22 @@ func scanSpecRow(sc interface{ Scan(...any) error }, extra ...any) (*specRow, er
 		return &r, fmt.Errorf("collections: spec %d: %w", r.id, err)
 	}
 	r.rawSpec = specJSON
-	Normalize(&r.spec)
 	r.builtin = builtin != 0
 	r.enabled = enabled != 0
 	r.updatedAt = unixStamp(updated)
 	r.lastBuilt = unixStamp(built)
 	r.changedAt = unixStamp(changed)
 	_ = json.Unmarshal([]byte(warnJSON), &r.warnings)
-	r.spec.Rules, r.warnings = sanitizeStoredRules(r.spec.Rules, r.warnings)
-	r.spec.Exclude, r.warnings = sanitizeStoredRules(r.spec.Exclude, r.warnings)
+	r.warnings = normalizeStoredSpec(&r.spec, r.warnings)
 	return &r, nil
+}
+
+// normalizeStoredSpec is shared by readers and the browse projection.
+func normalizeStoredSpec(spec *core.CollectionSpec, warnings []string) []string {
+	Normalize(spec)
+	spec.Rules, warnings = sanitizeStoredRules(spec.Rules, warnings)
+	spec.Exclude, warnings = sanitizeStoredRules(spec.Exclude, warnings)
+	return warnings
 }
 
 // maxUnixStamp is 9999-12-31T23:59:59Z, the last second JSON can encode.
@@ -428,8 +434,9 @@ func (s *Service) insertSpecTx(ctx context.Context, tx *sql.Tx, sp core.Collecti
 		return 0, err
 	}
 	now := s.now().Unix()
-	if _, err := tx.ExecContext(ctx, `INSERT INTO collections_specs(id,slug,builtin,owner_user_id,spec_json,enabled,created_at,updated_at,browse_group,browse_rank,browse_type,browse_mode)
-		VALUES(?, '', 0, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, id, owner, js, store.BoolInt(sp.Enabled), now, now, browseGroup(false, sp), browseRank(sp.SortOrder), sp.MediaType, browseMode(sp)); err != nil {
+	args := append([]any{id, owner, store.BoolInt(sp.Enabled), now, now}, specDocumentArgs(js)...)
+	if _, err := tx.ExecContext(ctx, `INSERT INTO collections_specs(id,slug,builtin,owner_user_id,enabled,created_at,updated_at,spec_json,browse_group,browse_rank,browse_type,browse_mode)
+		VALUES(?, '', 0, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, args...); err != nil {
 		return 0, err
 	}
 	return id, nil
@@ -444,9 +451,8 @@ func (s *Service) updateRowWarnings(ctx context.Context, id int64, sp core.Colle
 	if err != nil {
 		return err
 	}
-	q := `UPDATE collections_specs SET spec_json=?, enabled=?, updated_at=?,
-		browse_group=CASE WHEN builtin=0 THEN ? ELSE '' END,browse_rank=?,browse_type=?,browse_mode=?`
-	args := []any{js, store.BoolInt(sp.Enabled), s.now().Unix(), browseGroup(false, sp), browseRank(sp.SortOrder), sp.MediaType, browseMode(sp)}
+	q := `UPDATE collections_specs SET ` + specDocumentColumns + `,enabled=?,updated_at=?`
+	args := append(specDocumentArgs(js), store.BoolInt(sp.Enabled), s.now().Unix())
 	if setWarnings {
 		wj, _ := json.Marshal(warnings)
 		if warnings == nil {
@@ -503,7 +509,13 @@ func (s *Service) saveBuild(ctx context.Context, id int64, expected, resolved st
 		return err
 	}
 	defer tx.Rollback()
-	result, err := tx.ExecContext(ctx, `UPDATE collections_specs SET spec_json=? WHERE id=? AND spec_json=?`, resolved, id, expected)
+	q := `UPDATE collections_specs SET build_hash=build_hash`
+	var args []any
+	if resolved != expected {
+		q = `UPDATE collections_specs SET ` + specDocumentColumns
+		args = specDocumentArgs(resolved)
+	}
+	result, err := tx.ExecContext(ctx, q+` WHERE id=? AND spec_json=?`, append(args, id, expected)...)
 	if err != nil {
 		return err
 	}

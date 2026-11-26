@@ -126,12 +126,7 @@ func (s *Service) TakeLegacyPlacements(ctx context.Context) ([]LegacyPlacement, 
 		if err != nil {
 			return nil, err
 		}
-		var spec core.CollectionSpec
-		if err := json.Unmarshal(js, &spec); err != nil {
-			return nil, err
-		}
-		Normalize(&spec)
-		if _, err := s.db.ExecContext(ctx, `UPDATE collections_specs SET spec_json=?,browse_mode=?,browse_type=? WHERE id=?`, string(js), browseMode(spec), spec.MediaType, st.id); err != nil {
+		if _, err := s.db.ExecContext(ctx, `UPDATE collections_specs SET `+specDocumentColumns+` WHERE id=?`, append(specDocumentArgs(string(js)), st.id)...); err != nil {
 			return nil, err
 		}
 	}

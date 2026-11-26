@@ -317,6 +317,12 @@ func (s *Service) collectionsPageFirst(ctx context.Context, v *core.User, allowe
 	if s.d.Franchises == nil {
 		return frontend.CollectionPage{}, false, nil
 	}
+	if !q.NoTotal && !q.ExistsOnly && strings.TrimSpace(q.Query) == "" {
+		page, handled, err := s.indexedOwnedCollections(ctx, v, allowedTypes, q)
+		if handled || err != nil {
+			return page, handled, err
+		}
+	}
 	seen := make(map[core.RatingKey]bool)
 	var ownedVisible []core.Collection
 	includeFranchises := false
@@ -345,6 +351,53 @@ func (s *Service) collectionsPageFirst(ctx context.Context, v *core.User, allowe
 		return frontend.CollectionPage{Items: ownedVisible[start:end], Total: len(ownedVisible)}, true, nil
 	}
 	return s.combineOwnedAndFranchises(ctx, v, nil, ownedVisible, q)
+}
+
+// indexedOwnedCollections offsets within each media type before resolving
+// the page's headers and retains an exact owned count across both types.
+func (s *Service) indexedOwnedCollections(ctx context.Context, v *core.User, allowedTypes []core.MediaType, q frontend.CollectionQuery) (frontend.CollectionPage, bool, error) {
+	pager, ok := s.d.Collections.(core.IndexedOwnedCollectionPager)
+	franchises, configured := s.d.Collections.(interface{ IncludesFranchises(core.MediaType) bool })
+	if !ok || !configured || s.d.CollectionMemberCounts == nil {
+		return frontend.CollectionPage{}, false, nil
+	}
+	var owned []core.Collection
+	ownedTotal := 0
+	includeFranchises := false
+	for _, typ := range allowedTypes {
+		if !s.d.Visibility.CollectionAllowed(v, &core.Collection{Type: typ}) {
+			continue
+		}
+		filter, fits, err := s.ownedMemberFilter(ctx, v, nil, typ)
+		if err != nil || !fits {
+			return frontend.CollectionPage{}, false, err
+		}
+		seen := make(map[core.RatingKey]bool)
+		counter := func(cols []core.Collection) (map[int64]int, error) {
+			var ids []int64
+			for _, col := range cols {
+				if id := ownedCountID(col); id != 0 {
+					ids = append(ids, id)
+				}
+			}
+			return s.d.CollectionMemberCounts(ctx, filter, ids)
+		}
+		evaluate := func(cols []core.Collection) ([]core.Collection, error) {
+			return s.visibleOwnedBatch(ctx, v, typ, nil, q, counter, cols, seen)
+		}
+		next, total, handled, err := pager.IndexedOwnedCollections(ctx, v, typ, &filter,
+			max(0, q.Offset-ownedTotal), normalizeListLimit(q.Limit)-len(owned), evaluate)
+		if err != nil || !handled {
+			return frontend.CollectionPage{}, handled, err
+		}
+		owned = append(owned, next...)
+		ownedTotal += total
+		includeFranchises = includeFranchises || typ == core.TypeMovie && franchises.IncludesFranchises(typ)
+	}
+	if !includeFranchises {
+		return frontend.CollectionPage{Items: owned, Total: ownedTotal}, true, nil
+	}
+	return s.combineOwnedPageWithFranchises(ctx, v, nil, owned, ownedTotal, q)
 }
 
 // viewCollectionsPageFirst serves Collections scoped to a single library view
@@ -671,6 +724,12 @@ func (s *Service) combineOwnedAndFranchises(ctx context.Context, v *core.User, s
 		end := min(offset+limit, ownedN)
 		out = append(out, ownedVisible[offset:end]...)
 	}
+	return s.combineOwnedPageWithFranchises(ctx, v, stored, out, ownedN, q)
+}
+
+func (s *Service) combineOwnedPageWithFranchises(ctx context.Context, v *core.User, stored *core.Library, out []core.Collection, ownedN int, q frontend.CollectionQuery) (frontend.CollectionPage, bool, error) {
+	offset := max(q.Offset, 0)
+	limit := normalizeListLimit(q.Limit)
 	frOffset := max(0, offset-ownedN)
 	frNeed := limit - len(out)
 	if q.ExistsOnly {
@@ -809,11 +868,17 @@ func (s *Service) pageFranchises(ctx context.Context, v *core.User, stored *core
 		startCount = pivot.ChildCount
 	}
 
+	indexed, canIndex := s.d.Franchises.(interface {
+		FranchiseFilteredPage(context.Context, core.Filter, int, int, int, int, bool) ([]core.Collection, int, error)
+	})
+	canIndex = canIndex && len(extraLibs) == 0 && strings.TrimSpace(query) == ""
+	indexedTotal := canIndex && !noTotal && !existsOnly
+
 	// Fast path 1: unrestricted viewer and built-in movie library (including
 	// availability gate/hidden sets, which FranchiseVisibleCounts enforces on
 	// every page just as browse_tally treats them as tally-backed shapes).
 	// Reads O(page_size) rows from catalog_franchises and an O(1) total.
-	if after == 0 && !existsOnly && s.franchiseFilterUnrestricted(v, base, extraLibs, query) {
+	if after == 0 && !existsOnly && !indexedTotal && s.franchiseFilterUnrestricted(v, base, extraLibs, query) {
 		var frTotal int
 		if !noTotal || offset > 0 {
 			frTotal, err = s.d.Franchises.FranchiseTotal(ctx)
@@ -963,12 +1028,27 @@ func (s *Service) pageFranchises(ctx context.Context, v *core.User, stored *core
 		}
 		return kept, tot, true, nil
 	}
-	if canSmallFilter && base.CollectionMembers != 0 {
+	if canSmallFilter && base.CollectionMembers != 0 && !indexedTotal {
 		if direct, tot, used, err := trySmallFilter(); err != nil {
 			return nil, 0, true, err
 		} else if used {
 			return direct, tot, true, nil
 		}
+	}
+
+	// Single SQL scopes can check membership while walking the rank index.
+	// A sparse filter then returns only the requested rows to the caller.
+	if canIndex {
+		col := core.Collection{Type: core.TypeMovie}
+		if !s.d.Visibility.CollectionAllowed(v, &col) {
+			return nil, 0, true, nil
+		}
+		if existsOnly {
+			_, total, err := indexed.FranchiseFilteredPage(ctx, base, 0, 1, 0, 0, false)
+			return nil, total, true, err
+		}
+		items, total, err := indexed.FranchiseFilteredPage(ctx, base, offset, limit, startCount, startID, !noTotal)
+		return items, total, true, err
 	}
 
 	// Fast path 3: keyset cursor walk over catalog_franchises with one

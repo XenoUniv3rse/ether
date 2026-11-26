@@ -14,11 +14,7 @@ func (c *Catalog) CollectionMemberCounts(ctx context.Context, f core.Filter, ids
 	if len(ids) == 0 {
 		return out, nil
 	}
-	if err := c.ensureCatalogueSources(ctx, f); err != nil {
-		return nil, err
-	}
-	f = c.viewerPaging(ctx, normalizeConsoleFilter(f))
-	where, baseArgs, err := c.browseWhere(f)
+	where, baseArgs, err := c.collectionMemberPredicate(ctx, f)
 	if err != nil {
 		return nil, err
 	}
@@ -51,4 +47,13 @@ func (c *Catalog) CollectionMemberCounts(ctx context.Context, f core.Filter, ids
 		}
 	}
 	return out, nil
+}
+
+// collectionMemberPredicate returns the same scope used by CollectionMemberCounts.
+// The caller supplies the collections_members and catalog_titles aliases cm and t.
+func (c *Catalog) collectionMemberPredicate(ctx context.Context, f core.Filter) (string, []any, error) {
+	if err := c.ensureCatalogueSources(ctx, f); err != nil {
+		return "", nil, err
+	}
+	return c.browseWhere(c.viewerPaging(ctx, normalizeConsoleFilter(f)))
 }
