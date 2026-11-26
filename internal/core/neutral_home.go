@@ -56,7 +56,11 @@ type NeutralImpression struct {
 }
 
 // NeutralEntryRef identifies one delivered entry in a stable namespace.
-type NeutralEntryRef struct{ Kind, ID string }
+type NeutralEntryRef struct {
+	Kind, ID  string
+	Badge     string `json:"badge,omitempty"`
+	Watchlist bool   `json:"watchlist,omitempty"`
+}
 
 // NeutralImpressionSink records a validated server-issued row snapshot.
 type NeutralImpressionSink interface {

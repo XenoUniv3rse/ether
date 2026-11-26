@@ -39,23 +39,23 @@ func TestSocketLibraryChangedNamesTheWatchlistFolder(t *testing.T) {
 		t.Fatal(err)
 	}
 	item := core.MovieKey(3)
-	events <- frontend.Event{Type: "LibraryChanged", ViewerID: 1, Item: item}
+	events <- frontend.Event{Type: "LibraryChanged", ViewerID: 1, Item: item, RowIDs: []string{"watchlist.saved"}}
 	_, b, err := c.Read(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	folder, err := ids.GUID(ids.View, personalViewNumber(1, "watchlist.available"))
+	folder, err := ids.GUID(ids.View, personalViewNumber(1, "watchlist.saved"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	var msg struct {
 		MessageType string
 		Data        struct {
-			ItemsAdded        []string
+			ItemsUpdated      []string
 			CollectionFolders []string
 		}
 	}
-	if json.Unmarshal(b, &msg) != nil || msg.MessageType != "LibraryChanged" || len(msg.Data.ItemsAdded) != 1 || msg.Data.ItemsAdded[0] != ids.RatingKeyGUID(item) || len(msg.Data.CollectionFolders) != 1 || msg.Data.CollectionFolders[0] != folder {
+	if json.Unmarshal(b, &msg) != nil || msg.MessageType != "LibraryChanged" || len(msg.Data.ItemsUpdated) != 1 || msg.Data.ItemsUpdated[0] != ids.RatingKeyGUID(item) || len(msg.Data.CollectionFolders) != 1 || msg.Data.CollectionFolders[0] != folder {
 		t.Fatalf("%s", b)
 	}
 }

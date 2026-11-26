@@ -381,7 +381,7 @@ func (s *RowsService) permitted(ctx context.Context, viewer *core.User, entry fr
 	}
 	switch entry.Kind {
 	case frontend.RowEntryTitle:
-		return s.d.Visibility.Visible(ctx, viewer, entry.Title)
+		return s.d.Visibility.RowTitle(ctx, viewer, entry.Title, entry.Watchlist)
 	case frontend.RowEntryCollection:
 		return s.d.Visibility.CollectionAllowed(viewer, entry.Collection)
 	case frontend.RowEntryPlaylist:

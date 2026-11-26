@@ -56,12 +56,12 @@ func (d RuntimeRowViews) rowViewRevision(ctx context.Context, user *core.User) (
 }
 func (d RuntimeRowViews) readRowViewRevision(ctx context.Context, user *core.User) (string, error) {
 	var layout string
-	var favorites, exclusions, rules int64
+	var favorites, exclusions, rules, listCount, listAdded, listChecked int64
 	var watch WatchRevision
 	if d.PendingWatch != nil {
 		watch.Pending = d.PendingWatch(user.ID)
 	}
-	err := d.DB.QueryRowContext(ctx, `SELECT `+watchRevisionSQL+`, COALESCE((SELECT updated_at FROM favorites_mirror WHERE viewer_id=?),0), COALESCE((SELECT revision FROM notinterested_revisions WHERE viewer_id=?),0), COALESCE((SELECT revision FROM catalog_viewer_rules WHERE viewer_id=?),0)`, user.ID, user.ID, user.ID, user.ID).Scan(&watch.Persisted, &favorites, &exclusions, &rules)
+	err := d.DB.QueryRowContext(ctx, `SELECT `+watchRevisionSQL+`, COALESCE((SELECT updated_at FROM favorites_mirror WHERE viewer_id=?),0), COALESCE((SELECT revision FROM notinterested_revisions WHERE viewer_id=?),0), COALESCE((SELECT revision FROM catalog_viewer_rules WHERE viewer_id=?),0), `+watchlistRevisionSQL, user.ID, user.ID, user.ID, user.ID, user.ID, user.ID, user.ID).Scan(&watch.Persisted, &favorites, &exclusions, &rules, &listCount, &listAdded, &listChecked)
 	if err != nil {
 		return "", err
 	}
@@ -85,7 +85,7 @@ func (d RuntimeRowViews) readRowViewRevision(ctx context.Context, user *core.Use
 	if err := rows.Err(); err != nil {
 		return "", err
 	}
-	b, err := json.Marshal([]any{user.ID, user.IsOwner, user.MaxContentRating, user.AllowedLibraries, layout, favorites, exclusions, rules, watch})
+	b, err := json.Marshal([]any{user.ID, user.IsOwner, user.MaxContentRating, user.AllowedLibraries, layout, favorites, exclusions, rules, watch, listCount, listAdded, listChecked})
 	if err != nil {
 		return "", err
 	}
@@ -220,7 +220,7 @@ func NewRuntimeRowViews(d RuntimeRowViews) (*RowViewService, error) {
 			for _, row := range result {
 				s := RowViewSnapshot{Row: row, Situation: situation, Placement: request.Placement, ViewID: request.ViewID, Item: request.Item, Revision: after, Truncated: row.More || len(row.Entries) >= 50}
 				for _, entry := range row.Entries {
-					s.Entries = append(s.Entries, core.NeutralEntryRef{Kind: string(entry.Kind), ID: RowEntryIdentity(entry)})
+					s.Entries = append(s.Entries, core.NeutralEntryRef{Kind: string(entry.Kind), ID: RowEntryIdentity(entry), Badge: entry.Badge, Watchlist: entry.Watchlist})
 				}
 				out = append(out, s)
 			}
@@ -319,7 +319,7 @@ func NewRuntimeRowViews(d RuntimeRowViews) (*RowViewService, error) {
 					return frontend.RowEntry{}, core.ErrNotFound
 				}
 				t, err := getCached(ctx, u, key)
-				if err != nil || t == nil || t.Key != key || !cacheVisibility.Visible(ctx, u, t) {
+				if err != nil || t == nil || t.Key != key || !cacheVisibility.RowTitle(ctx, u, t, ref.Watchlist) {
 					return frontend.RowEntry{}, core.ErrNotFound
 				}
 				return frontend.RowEntry{Kind: frontend.RowEntryTitle, Title: t}, nil
@@ -454,8 +454,8 @@ func NewRuntimeRowViews(d RuntimeRowViews) (*RowViewService, error) {
 		}
 		if current && d.CurrentAvailable != nil {
 			titles := append([]core.Title(nil), preflight.titles...)
-			for _, entry := range entries {
-				if entry.Title != nil {
+			for i, entry := range entries {
+				if entry.Title != nil && !refs[i].Watchlist {
 					titles = append(titles, *entry.Title)
 				}
 			}

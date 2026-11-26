@@ -15,7 +15,7 @@ func CandidateRows(candidates []RankedCandidate) []frontend.Row {
 		row := frontend.Row{ID: c.ID, Title: c.Title, PreviewOnFocus: c.PreviewOnFocus, RankedTop10: c.RankedTop10, Purpose: c.Purpose, Style: c.Style, Promoted: c.Promoted, More: c.More, Collection: c.Key}
 		for i := range c.Items {
 			item := c.Items[i]
-			row.Entries = append(row.Entries, frontend.RowEntry{Kind: frontend.RowEntryTitle, Title: &item})
+			row.Entries = append(row.Entries, frontend.RowEntry{Kind: frontend.RowEntryTitle, Title: &item, Badge: c.ItemBadges[item.Key], Watchlist: core.IsWatchlistHub(c.ID)})
 		}
 		for i := range c.Collections {
 			collection := c.Collections[i]

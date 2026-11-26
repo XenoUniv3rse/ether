@@ -147,6 +147,15 @@ func (v Visibility) Visible(ctx context.Context, viewer *core.User, title *core.
 	return v.Playable(ctx, viewer, title)
 }
 
+// RowTitle checks policy for entries already selected from a trusted row.
+// A viewer's saved titles remain visible before a playable source exists.
+func (v Visibility) RowTitle(ctx context.Context, viewer *core.User, title *core.Title, watchlist bool) bool {
+	if watchlist {
+		return v.Playable(ctx, viewer, title)
+	}
+	return v.Visible(ctx, viewer, title)
+}
+
 // Available filters discovery evidence, retaining a viewer's open sources.
 // Callers must separately enforce title policy.
 func (v Visibility) Available(ctx context.Context, viewer *core.User, titles []core.Title) []core.Title {

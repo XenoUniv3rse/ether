@@ -965,6 +965,7 @@ func (a *App) Run(ctx context.Context) error {
 	}
 	if parityRunCatalogueWorkers() {
 		background.start(func() { a.cluster.RunAsLeader(ctx, "watchlist sync", a.watchlist.Run) })
+		background.start(func() { a.watchlist.RunAddedChecks(ctx) })
 		background.start(func() { a.cluster.RunAsLeader(ctx, "release calendar", a.calendar.Run) })
 	}
 	background.start(func() { a.ratings.Run(ctx) })

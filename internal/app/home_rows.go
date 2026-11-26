@@ -15,7 +15,9 @@ func (a *App) extraHomeRows(ctx context.Context, u *core.User, hc core.HubContex
 		rows.Filter = a.personalize.FilterRecommendations
 	}
 	if a.watchlist != nil {
-		rows.Watchlist = a.watchlist.Hubs
+		rows.Watchlist = func(ctx context.Context, viewer *core.User, limit int) ([]core.Hub, error) {
+			return a.watchlist.Hubs(ctx, viewer, limit, hc.Language)
+		}
 	}
 	if a.discoveryPersonal != nil {
 		rows.Personal = a.discoveryPersonal.Hubs

@@ -22,7 +22,9 @@ func TestSectionHubsOrderAndMixedRows(t *testing.T) {
 	defer f.srv.Close()
 	ctx := context.Background()
 	db := discoveryDB(t)
-	wl := watchlist.New(db, watchlist.Options{Catalog: f.catalog})
+	wl := watchlist.New(db, watchlist.Options{Catalog: f.catalog, Rows: func(context.Context, *core.User) []core.Row {
+		return []core.Row{{ID: "rfamilypicks", Name: "Family picks"}}
+	}})
 	if err := wl.SaveSettings(ctx, watchlist.Settings{Enabled: true, CheckHours: 6}); err != nil {
 		t.Fatal(err)
 	}
@@ -62,7 +64,7 @@ func TestSectionHubsOrderAndMixedRows(t *testing.T) {
 	}
 
 	movies := hubsOf("/hubs/sections/1")
-	want := []string{"movie.inprogress.1", "movie.recentlyadded.1", "movie.cluster.thriller.heist", "movie.era.1970", "watchlist.coming"}
+	want := []string{"movie.inprogress.1", "movie.recentlyadded.1", "movie.cluster.thriller.heist", "movie.era.1970", "watchlist.rfamilypicks"}
 	if got := ids(movies); len(got) != len(want) {
 		t.Fatalf("movies hubs = %v, want %v", got, want)
 	} else {
@@ -88,7 +90,7 @@ func TestSectionHubsOrderAndMixedRows(t *testing.T) {
 
 	shows := hubsOf("/hubs/sections/2")
 	got := ids(shows)
-	if len(got) < 4 || got[0] != "tv.inprogress.2" || got[1] != "tv.recentlyadded.2" || got[2] != "tv.newseasons" || got[3] != "watchlist.coming" {
+	if len(got) < 4 || got[0] != "tv.inprogress.2" || got[1] != "tv.recentlyadded.2" || got[2] != "tv.newseasons" || got[3] != "watchlist.rfamilypicks" {
 		t.Fatalf("shows hubs = %v", got)
 	}
 	if len(shows[3].Metadata) != 1 || shows[3].Metadata[0].RatingKey != bbE1.Key.String() {
@@ -96,7 +98,7 @@ func TestSectionHubsOrderAndMixedRows(t *testing.T) {
 	}
 	// The Home keeps the mixed row whole.
 	for _, h := range hubsOf("/hubs") {
-		if h.HubIdentifier == "watchlist.coming" && len(h.Metadata) != 2 {
+		if h.HubIdentifier == "watchlist.rfamilypicks" && (h.Title != "Family picks" || len(h.Metadata) != 2) {
 			t.Fatalf("Home watchlist row has %d items", len(h.Metadata))
 		}
 	}

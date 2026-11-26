@@ -108,7 +108,9 @@ func (s *Server) discoveryHubs(ctx context.Context, pr *Request, limit int) []hu
 		}
 	}
 	if d.Watchlist != nil {
-		add(frontend.RowPurpose("watchlist"), d.Watchlist.Hubs)
+		add(frontend.RowWatchlist, func(ctx context.Context, viewer *frontend.User, limit int) ([]frontend.Hub, error) {
+			return d.Watchlist.Hubs(ctx, viewer, limit, pr.Language)
+		})
 	}
 	if d.Personal != nil {
 		add(frontend.RowPurpose("recommendation"), d.Personal.Hubs)

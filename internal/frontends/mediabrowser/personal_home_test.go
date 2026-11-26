@@ -297,7 +297,7 @@ func TestNowAvailableLibraryDoesNotUseThePersonalizedRowBudget(t *testing.T) {
 		return []frontend.Row{
 			{ID: "home.trending", Title: "Trending", Kind: "trending", Purpose: frontend.RowRecommendation, Entries: []frontend.RowEntry{{Kind: frontend.RowEntryTitle, Title: &shown}}},
 			{ID: "home.because.dune", Title: "Because you watched Dune", Kind: "because-you-watched", Purpose: frontend.RowRecommendation, Entries: []frontend.RowEntry{{Kind: frontend.RowEntryTitle, Title: &shown}}},
-			{ID: "watchlist.available", Title: "Now available", Purpose: frontend.RowWatchlist, Entries: []frontend.RowEntry{{Kind: frontend.RowEntryTitle, Title: &ready}}},
+			{ID: "watchlist.saved.available", Title: "Family picks: Now available", Purpose: frontend.RowWatchlist, Entries: []frontend.RowEntry{{Kind: frontend.RowEntryTitle, Title: &ready}}},
 		}, nil
 	}}
 	ident := frontendtest.Identity{ResolveFunc: func(context.Context, string) (*frontend.Viewer, error) {
@@ -317,8 +317,8 @@ func TestNowAvailableLibraryDoesNotUseThePersonalizedRowBudget(t *testing.T) {
 		r.Header.Set("X-Emby-Device-Id", "living-room")
 		inst.Handler().ServeHTTP(rec, r)
 		return rec
-	}, "Now available")
-	if w.Code != 200 || !strings.Contains(w.Body.String(), `"Name":"Trending"`) || !strings.Contains(w.Body.String(), `"Name":"Now available"`) || strings.Contains(w.Body.String(), "Dune and Similar") {
+	}, "Family picks: Now available")
+	if w.Code != 200 || !strings.Contains(w.Body.String(), `"Name":"Trending"`) || !strings.Contains(w.Body.String(), `"Name":"Family picks: Now available"`) || strings.Contains(w.Body.String(), "Dune and Similar") {
 		t.Fatalf("views %d %s", w.Code, w.Body.String())
 	}
 }

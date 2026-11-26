@@ -6418,6 +6418,7 @@
   "m_11ea39fd4ff3d9": "Přenos",
   "m_11ec733b4d377c": "Zkontrolujte skóre, které Plex u titulu zobrazí.",
   "m_11edc01c3d40f0": "Hledat v katalogu…",
+  "m_11ee56dbf4feb4": "Rozdělit podle dostupnosti",
   "m_11f02b9d9bc205": "Vzhled bez názvu",
   "m_11f08bcd4894cb": "Celá obrazovka",
   "m_11f09d5da3d73f": "Řazení vydání",
@@ -8361,6 +8362,7 @@
     "many": "Právě běží {count} běhů",
     "other": "Právě běží {count} běhů"
   },
+  "m_175538e0876479": "Tituly ze seznamu diváka ke zhlédnutí.",
   "m_1755604caec80b": "Odstín",
   "m_1758c5aa2ed762": "Zpracovávat události stejné relace v pořadí",
   "m_1758ced2d6cd4b": "Díly: {genres}",

@@ -828,6 +828,8 @@ func (a *App) newSurfaceExperience(protocol core.Protocol, artwork ...frontend.A
 		return gen
 	}, rowWatch: func(ctx context.Context, id int64) (experience.WatchRevision, error) {
 		return experience.ReadWatchRevision(ctx, a.db, id, a.state.PendingWatchRevision(id))
+	}, rowWatchlist: func(ctx context.Context, id int64) (experience.WatchlistRevision, error) {
+		return experience.ReadWatchlistRevision(ctx, a.db, id)
 	}, rowGen: func() uint64 {
 		if stepAside == nil {
 			return 0
@@ -892,6 +894,7 @@ type surfaceExperience struct {
 	generation   func(context.Context) (int64, error)
 	catalogGen   func() uint64
 	rowGen       func() uint64
+	rowWatchlist func(context.Context, int64) (experience.WatchlistRevision, error)
 	rowWatch     func(context.Context, int64) (experience.WatchRevision, error)
 	posters      func(context.Context, core.MediaType, int) ([]core.Title, error)
 	modelReady   func(int64) bool
@@ -1438,6 +1441,7 @@ func (s *surfaceExperience) Item(ctx context.Context, req frontend.ItemRequest) 
 
 type rowCacheRevision struct {
 	stepAside uint64
+	watchlist experience.WatchlistRevision
 	watch     experience.WatchRevision
 }
 
@@ -1475,6 +1479,14 @@ func (s *surfaceExperience) cachedRows(ctx context.Context, req frontend.RowRequ
 		}
 		gen.watch = watch
 	}
+	if s.rowWatchlist != nil && req.Viewer != nil && req.Placement == frontend.PlacementHome {
+		rev, err := s.rowWatchlist(ctx, req.Viewer.ID)
+		if err != nil {
+			return nil, err
+		}
+		gen.watchlist = rev
+	}
+
 	s.rowMu.Lock()
 	slot := s.rowCache[key]
 	fresh := slot.ready && slot.gen == gen && time.Since(slot.at) < homeRowCacheTTL
@@ -1540,7 +1552,7 @@ func (s *surfaceExperience) rowCacheKey(req frontend.RowRequest) (string, uint64
 	if limit <= 0 {
 		limit = 50
 	}
-	key := fmt.Sprintf("%s\n%d\n%s\n%s\n%s\n%s\n%d\n%t", s.protocol, viewer, req.Device.ID, req.Placement, req.ViewID, req.Purpose, limit, ready)
+	key := fmt.Sprintf("%s\n%d\n%s\n%s\n%s\n%s\n%s\n%d\n%t", s.protocol, viewer, req.Device.ID, req.Device.Language, req.Placement, req.ViewID, req.Purpose, limit, ready)
 	// Home stays cached for the TTL. Catalogue write generation is not part of
 	// the key: a background title refresh bumps it on every provider hydrate
 	// and was forcing the next Home to rebuild. Step-aside revision is rare and

@@ -146,7 +146,7 @@ export interface ParamOption {
 export interface RowParam {
   key: string;
   label: string;
-  type: "choice" | "count" | "facetValue" | "ref" | "collectionList" | "text";
+  type: "bool" | "choice" | "count" | "facetValue" | "ref" | "collectionList" | "text";
   choices?: ParamOption[];
   facet?: string;
   default?: string;

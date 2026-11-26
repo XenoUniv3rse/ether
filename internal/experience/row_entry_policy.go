@@ -132,7 +132,7 @@ func (p RowEntryPolicy) Row(ctx context.Context, u *core.User, row frontend.Row)
 func (p RowEntryPolicy) Entry(ctx context.Context, u *core.User, e frontend.RowEntry) bool {
 	switch e.Kind {
 	case frontend.RowEntryTitle:
-		return e.Title != nil && p.Visibility.Visible(ctx, u, e.Title)
+		return e.Title != nil && p.Visibility.RowTitle(ctx, u, e.Title, e.Watchlist)
 	case frontend.RowEntryCollection:
 		if e.Collection == nil {
 			return false

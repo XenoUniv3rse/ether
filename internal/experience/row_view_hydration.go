@@ -205,7 +205,7 @@ func RowViewHydrateEntries(ctx context.Context, viewer *core.User, refs []core.N
 				}
 				t = *resolved
 			}
-			if !vis.Visible(ctx, viewer, &t) {
+			if !vis.RowTitle(ctx, viewer, &t, ref.Watchlist) {
 				return nil, core.ErrNotFound
 			}
 			copy := t

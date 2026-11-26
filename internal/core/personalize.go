@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"strings"
 	"time"
 )
 
@@ -34,6 +35,7 @@ type HubContext struct {
 	// section's media type and library membership, while layout policies and
 	// collection targeting use the Home ("home") surface.
 	HomeScoped bool   `json:"-"`
+	Language   string `json:"-"`
 	Product    string `json:"product,omitempty"`  // X-Plex-Product
 	Platform   string `json:"platform,omitempty"` // X-Plex-Platform
 	SessionID  string `json:"sessionId,omitempty"`
@@ -55,8 +57,9 @@ type HubImpression struct {
 	HubID    string      `json:"hubId"`
 	Position int         `json:"position"`
 	Keys     []RatingKey `json:"keys"`
-	Context  HubContext  `json:"context"`
-	At       time.Time   `json:"at"`
+	Context  HubContext  `json:"context"
+	"strings"`
+	At time.Time `json:"at"`
 }
 
 // ImpressionSink receives served rows. Implementations must not block.
@@ -110,4 +113,20 @@ func SectionView(h Hub, t MediaType) (Hub, bool) {
 	h.Key = SectionCollectionKey(h.Key, t)
 	h.Type = t
 	return h, true
+}
+
+const WatchlistSplitParam = "splitByAvailability"
+
+func IsWatchlistHub(id string) bool {
+	return strings.HasPrefix(id, "watchlist.")
+}
+
+// WatchlistHubAvailable and WatchlistHubComing identify the split watchlist
+// shelves independently of their configured names and translated labels.
+func WatchlistHubAvailable(id string) bool {
+	return IsWatchlistHub(id) && strings.HasSuffix(id, ".available")
+}
+
+func WatchlistHubComing(id string) bool {
+	return IsWatchlistHub(id) && strings.HasSuffix(id, ".coming")
 }

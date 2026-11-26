@@ -284,6 +284,23 @@ function builtinSources(): Omit<PageSource, "available" | "used" | "libraries">[
       look: {},
     },
     {
+      kind: "watchlist",
+      title: t("Watchlist"),
+      description: t("Titles on the viewer’s watchlist."),
+      group: "keep",
+      personal: true,
+      homeOnly: true,
+      params: [
+        {
+          key: "splitByAvailability",
+          label: t("Split by availability"),
+          type: "bool",
+          default: "false",
+        },
+      ],
+      look: {},
+    },
+    {
       kind: "collection-cards",
       title: t("Collections"),
       description: t("Show collections as clickable cards."),

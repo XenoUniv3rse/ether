@@ -248,7 +248,7 @@ func (i *instance) views(w http.ResponseWriter, r *http.Request) {
 	items := make([]any, 0, len(views)+1)
 	published := false
 	for n, view := range views {
-		if view.ID == nowAvailableLibraryID || view.Name == nowAvailableTitle {
+		if view.ID == nowAvailableLibraryID {
 			published = true
 		}
 		kind := "movies"
@@ -268,8 +268,8 @@ func (i *instance) views(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if !published {
-		if _, ok := i.nowAvailableTitles(r, v); ok {
-			items = append([]any{map[string]any{"id": nowAvailableLibraryID, "name": nowAvailableTitle, "type": "mixed", "sort_order": 0}}, items...)
+		if _, name := i.nowAvailableTitles(r, v); name != "" {
+			items = append([]any{map[string]any{"id": nowAvailableLibraryID, "name": name, "type": "mixed", "sort_order": 0}}, items...)
 		}
 	}
 	reply(w, 200, map[string]any{"items": items})

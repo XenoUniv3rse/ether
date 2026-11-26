@@ -49,14 +49,7 @@ func (a AdditionalRows) Rows(ctx context.Context, req frontend.RowRequest) ([]fr
 		if err != nil {
 			return nil, err
 		}
-		for _, c := range candidates {
-			row := frontend.Row{ID: c.ID, Title: c.Title, Purpose: c.Purpose, Style: c.Style, Promoted: c.Promoted, More: c.More, Collection: c.Key}
-			for i := range c.Items {
-				item := c.Items[i]
-				row.Entries = append(row.Entries, frontend.RowEntry{Kind: frontend.RowEntryTitle, Title: &item})
-			}
-			rows = append(rows, row)
-		}
+		rows = append(rows, CandidateRows(candidates)...)
 	}
 	if a.Live != nil {
 		now := a.Now()
@@ -96,7 +89,7 @@ func (a AdditionalRows) discovery(ctx context.Context, viewer *core.User, limit 
 		}
 		out := make([]DiscoveryCandidate, len(candidates))
 		for i, c := range candidates {
-			out[i] = DiscoveryCandidate{Index: i, Items: c.Items}
+			out[i] = DiscoveryCandidate{Index: i, Purpose: c.Purpose, Items: c.Items}
 		}
 		return out
 	})

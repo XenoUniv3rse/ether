@@ -597,6 +597,18 @@ function ParamControl({
   onChange: (v: string) => void;
   disabled?: boolean;
 }) {
+  if (param.type === "bool") {
+    return (
+      <Line label={param.label}>
+        <Switch
+          aria-label={param.label}
+          checked={(value || param.default) === "true"}
+          disabled={disabled}
+          onChange={(e) => onChange(String(e.currentTarget.checked))}
+        />
+      </Line>
+    );
+  }
   if (param.type === "collectionList") {
     return (
       <CollectionOrder
