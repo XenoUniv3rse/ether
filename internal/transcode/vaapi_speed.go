@@ -125,7 +125,7 @@ func vaapiCPUToneFilter(f features, tenBit bool) string {
 func (c *vaapiSpeedCache) benchmark(key vaapiSpeedKey) vaapiSpeedResult {
 	m := c.m
 	method := m.feat.vaapiToneMap(key.vaapiToneKey)
-	d := hwDetector{runner: m.runner, ffmpeg: m.ffmpeg, log: m.log, background: true}
+	d := hwDetector{runner: m.runner, ffmpeg: m.ffmpeg, log: m.log, background: true, vaapiVulkan: m.feat.vaapiVulkan}
 	ctx, cancel := context.WithTimeout(c.ctx, 24*time.Second)
 	defer cancel()
 	dir, err := os.MkdirTemp(m.tempDir, "vaapi-speed-")
@@ -182,7 +182,7 @@ func (c *vaapiSpeedCache) benchmark(key vaapiSpeedKey) vaapiSpeedResult {
 	}
 	cpuChain := cpuFilter + ",format=" + pixel + ",hwupload"
 	result := vaapiSpeedResult{method: method, cpu: measure(cpuInput, cpuChain, true)}
-	if method != "" {
+	if method != "" && !(method.usesVulkan() && d.vaapiVulkan.unavailable()) {
 		input, chain, _ := vaapiToneGraph(method, m.hw.Device, w, h, true, key.tenBit, false)
 		result.gpu = measure(input, strings.Join(chain, ","), false)
 	}
@@ -233,6 +233,11 @@ func (m *Manager) admitVAAPITone(s *runSpec) func(Process) {
 		input:        vaapiResolutionClass(v.Width, v.Height), output: vaapiResolutionClass(pic.w, pic.h),
 	}
 	result, ready := cache.demand(key)
+	if m.feat.vaapiVulkan.unavailable() && (result.method == "" || result.method.usesVulkan()) {
+		// An old measurement must not re-admit Vulkan or reject the CPU
+		// fallback based on the previously available GPU route.
+		result = vaapiSpeedResult{}
+	}
 	hostBusy := m.opts.cpuLoad != nil && m.opts.cpuLoad() >= vaapiHighCPU
 	admission := &vaapiToneAdmission
 	device := vaapiDevice(s.Accel)

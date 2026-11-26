@@ -4,10 +4,14 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/braedonsaunders/ether/internal/core"
@@ -50,6 +54,52 @@ type vaapiToneKey struct {
 	tenBit, full    bool
 }
 
+func (m vaapiToneMethod) usesVulkan() bool {
+	return m == vaapiToneVulkan || m == vaapiToneVulkanVPP
+}
+
+const vaapiVulkanDevice = "vulkan=vk@va"
+
+// Main and private encoders can open the same render node. Share device-loss
+// state across them for the lifetime of the Ether process.
+var vaapiVulkanDevices sync.Map // canonical render node -> *vaapiVulkanState
+
+type vaapiVulkanState struct {
+	device string
+	log    *slog.Logger
+	lost   atomic.Bool
+}
+
+func vaapiVulkanStateFor(hw core.HWAccel, log *slog.Logger) *vaapiVulkanState {
+	device := vaapiDevice(hw)
+	if canonical, err := filepath.EvalSymlinks(device); err == nil {
+		device = canonical
+	}
+	state, _ := vaapiVulkanDevices.LoadOrStore(device, &vaapiVulkanState{device: device, log: log})
+	return state.(*vaapiVulkanState)
+}
+
+func (s *vaapiVulkanState) unavailable() bool {
+	return s != nil && s.lost.Load()
+}
+
+func vaapiVulkanDeviceLost(line string) bool {
+	line = strings.ToLower(line)
+	return strings.Contains(line, "vk_error_device_lost") ||
+		(strings.Contains(line, "radv/amdgpu:") && strings.Contains(line, "context is lost"))
+}
+
+func (s *vaapiVulkanState) watch(args []string, stderr io.Writer) io.Writer {
+	if s == nil || !slices.Contains(args, vaapiVulkanDevice) {
+		return stderr
+	}
+	return io.MultiWriter(stderr, &lineWriter{fn: func(line string) {
+		if vaapiVulkanDeviceLost(line) && s.lost.CompareAndSwap(false, true) {
+			s.log.Warn("VAAPI Vulkan tone mapping disabled until restart after device loss", "device", s.device)
+		}
+	}})
+}
+
 func vaapiScale(w, h int, pixel string) string {
 	return fmt.Sprintf("scale_vaapi=w=%d:h=%d:format=%s", w, h, pixel)
 }
@@ -63,7 +113,11 @@ func vaapiDevice(hw core.HWAccel) string {
 
 func (s runSpec) vaapiToneMethod(v *core.StreamInfo, pic picturePlan) vaapiToneMethod {
 	if s.vaapiToneDecision != nil {
-		return s.vaapiToneDecision.method
+		method := s.vaapiToneDecision.method
+		if method.usesVulkan() && s.Features.vaapiVulkan.unavailable() {
+			return ""
+		}
+		return method
 	}
 	if s.Features.vaapiMeasured && vaapiCPUToneFilter(s.Features, pic.tenBit) != "" {
 		return ""
@@ -80,7 +134,9 @@ func (s runSpec) vaapiToneMethod(v *core.StreamInfo, pic picturePlan) vaapiToneM
 
 // The Vulkan device is derived from the selected render node. The copy path
 // avoids importing radeonsi's decoded DRM modifiers into RADV, which can fail
-// even when both APIs individually support P010.
+// even when both APIs individually support P010. Keep libplacebo's input and
+// output in software frames: reverse-mapping the Vulkan output into VAAPI can
+// fault and reset the AMD compute ring.
 func vaapiToneGraph(method vaapiToneMethod, device string, w, h int, decode, tenBit, softwareOut bool) (input, chain []string, upload string) {
 	pixel := "nv12"
 	if tenBit {
@@ -90,7 +146,7 @@ func vaapiToneGraph(method vaapiToneMethod, device string, w, h int, decode, ten
 	upload = "hwupload"
 	switch method {
 	case vaapiToneVulkan, vaapiToneVulkanVPP:
-		input = append(input, "-init_hw_device", "vulkan=vk@va", "-filter_hw_device", "vk")
+		input = append(input, "-init_hw_device", vaapiVulkanDevice, "-filter_hw_device", "vk")
 		upload = "hwupload=derive_device=vaapi"
 	case vaapiToneOpenCL:
 		input = append(input, "-init_hw_device", "opencl=ocl@va", "-filter_hw_device", "va")
@@ -157,7 +213,10 @@ func newVAAPIToneMapper(d hwDetector, f features, hw core.HWAccel, ffprobe, dir 
 	}
 	return func(key vaapiToneKey) vaapiToneMethod {
 		if probe := probes[key]; probe != nil {
-			return probe()
+			method := probe()
+			if !method.usesVulkan() || !d.vaapiVulkan.unavailable() {
+				return method
+			}
 		}
 		return ""
 	}
@@ -181,6 +240,11 @@ func vaapiToneCandidates(f features, hw core.HWAccel, key vaapiToneKey) []vaapiT
 }
 
 func probeVAAPIToneMap(d hwDetector, hw core.HWAccel, ffprobe, dir string, key vaapiToneKey, candidates []vaapiToneMethod) vaapiToneMethod {
+	if d.vaapiVulkan.unavailable() && !slices.ContainsFunc(candidates, func(method vaapiToneMethod) bool {
+		return !method.usesVulkan()
+	}) {
+		return ""
+	}
 	tmp, err := os.MkdirTemp(dir, "vaapi-tonemap-")
 	if err != nil {
 		return ""
@@ -206,6 +270,9 @@ func probeVAAPIToneMap(d hwDetector, hw core.HWAccel, ffprobe, dir string, key v
 		wantPixel = "yuv420p10le"
 	}
 	for _, method := range candidates {
+		if method.usesVulkan() && d.vaapiVulkan.unavailable() {
+			continue
+		}
 		input, chain, _ := vaapiToneGraph(method, hw.Device, pic.w, pic.h, true, key.tenBit, false)
 		args = append(append([]string{}, prefix...), input...)
 		args = append(args, "-i", sample, "-vf", strings.Join(chain, ","), "-an")
