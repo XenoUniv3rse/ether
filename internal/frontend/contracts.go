@@ -75,6 +75,10 @@ type View struct {
 	Sorts       []string        `json:"sorts,omitempty"`
 	Facets      []ViewFacet     `json:"facets,omitempty"`
 	ListLevels  []string        `json:"-"`
+	// TabsCustomized distinguishes owner tab lists from protocol defaults.
+	TabsCustomized bool `json:"-"`
+	// HiddenBrowseTabs retain the query settings for direct links to hidden grids.
+	HiddenBrowseTabs []ViewTab `json:"-"`
 }
 
 // EffectiveExperience is the library experience apps should present the view

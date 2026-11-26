@@ -316,6 +316,9 @@ func libraryQuery(r *http.Request, view frontend.View, library object) (frontend
 		} else if tabKey == "library" {
 			activeTab = &frontend.ViewTab{ID: "library", Kind: "library", Search: true}
 		}
+		if idx := slices.IndexFunc(view.HiddenBrowseTabs, func(tab frontend.ViewTab) bool { return tab.ID == tabKey }); idx >= 0 {
+			activeTab = &view.HiddenBrowseTabs[idx]
+		}
 		if activeTab == nil {
 			return q, "", "", 404
 		}
@@ -326,6 +329,9 @@ func libraryQuery(r *http.Request, view frontend.View, library object) (frontend
 				break
 			}
 		}
+	}
+	if activeTab == nil && values.Get("tab") == "" && len(view.HiddenBrowseTabs) > 0 {
+		activeTab = &view.HiddenBrowseTabs[0]
 	}
 
 	if reqLevel := strings.TrimSpace(values.Get("level")); reqLevel != "" {

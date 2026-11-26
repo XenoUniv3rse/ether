@@ -271,31 +271,35 @@ func (s *Service) publishedLibrary(ctx context.Context, lib core.Library) (core.
 
 var defaultCatalogueSortIDs = []string{"title", "added", "released", "year", "rating", "duration", "popularity", "lastViewed"}
 
+func libraryTabToView(tab core.LibraryTab) frontend.ViewTab {
+	sortID := tab.Sort
+	if sortID != "" && core.IsLastViewedSort(sortID) {
+		sortID = string(core.SortLastViewed)
+	}
+	return frontend.ViewTab{
+		ID:                tab.Key,
+		Label:             tab.Label,
+		Kind:              tab.Kind,
+		Level:             tab.Level,
+		Facet:             tab.Facet,
+		Order:             tab.Order,
+		Sort:              sortID,
+		Direction:         tab.Direction,
+		Card:              tab.EffectiveCard(),
+		Layout:            tab.EffectiveLayout(),
+		Search:            tab.EffectiveSearch(),
+		SearchPlaceholder: tab.SearchPlaceholder,
+		Filters:           tab.Filters.Clone(),
+	}
+}
+
 func libraryTabsToViewTabs(tabs []core.LibraryTab, sorts []string, isCatalogue bool) []frontend.ViewTab {
 	out := make([]frontend.ViewTab, 0, len(tabs))
 	for _, tab := range tabs {
 		if tab.Hidden {
 			continue
 		}
-		sortID := tab.Sort
-		if sortID != "" && core.IsLastViewedSort(sortID) {
-			sortID = string(core.SortLastViewed)
-		}
-		vt := frontend.ViewTab{
-			ID:                tab.Key,
-			Label:             tab.Label,
-			Kind:              tab.Kind,
-			Level:             tab.Level,
-			Facet:             tab.Facet,
-			Order:             tab.Order,
-			Sort:              sortID,
-			Direction:         tab.Direction,
-			Card:              tab.EffectiveCard(),
-			Layout:            tab.EffectiveLayout(),
-			Search:            tab.EffectiveSearch(),
-			SearchPlaceholder: tab.SearchPlaceholder,
-			Filters:           tab.Filters.Clone(),
-		}
+		vt := libraryTabToView(tab)
 		switch tab.Kind {
 		case core.TabCollections:
 			if isCatalogue && vt.Facet != "" {
@@ -369,16 +373,17 @@ func (s *Service) storedViews(ctx context.Context, v *core.User) ([]frontend.Vie
 			revision = lib.UpdatedAt.UTC().Format("2006-01-02T15:04:05.999999999Z07:00")
 		}
 		view := frontend.View{
-			Revision:  revision,
-			ID:        strconv.FormatInt(int64(lib.ID), 10),
-			LibraryID: lib.ID,
-			Name:      lib.Name,
-			Type:      mt,
-			Virtual:   true,
-			KindKey:   lib.KindKey,
-			PluginID:  lib.PluginID,
-			Native:    native,
-			Subset:    libraryIsRuleSubset(lib),
+			Revision:       revision,
+			ID:             strconv.FormatInt(int64(lib.ID), 10),
+			LibraryID:      lib.ID,
+			Name:           lib.Name,
+			Type:           mt,
+			Virtual:        true,
+			KindKey:        lib.KindKey,
+			PluginID:       lib.PluginID,
+			Native:         native,
+			Subset:         libraryIsRuleSubset(lib),
+			TabsCustomized: lib.TabsCustomized,
 		}
 		if lib.Source == core.LibraryPlugin {
 			if pres, hasPres := s.d.PluginLibraries.(PluginPresentationLibraries); hasPres {
@@ -406,6 +411,11 @@ func (s *Service) storedViews(ctx context.Context, v *core.User) ([]frontend.Vie
 				srcTabs = core.DefaultCatalogueTabs()
 			}
 			view.Tabs = libraryTabsToViewTabs(srcTabs, defaultCatalogueSortIDs, true)
+		}
+		for _, tab := range lib.Tabs {
+			if tab.Hidden && tab.Kind == core.TabLibrary {
+				view.HiddenBrowseTabs = append(view.HiddenBrowseTabs, libraryTabToView(tab))
+			}
 		}
 		out = append(out, view)
 	}

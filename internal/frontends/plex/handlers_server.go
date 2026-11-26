@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -152,13 +153,25 @@ func sectionPivots(sec Section) []model.Pivot {
 	case plexBasePhoto:
 		playlistType = "photo"
 	}
-	return []model.Pivot{
+	tabs := []model.Pivot{
 		{ID: "recommended", Key: "/hubs/sections/" + id, Type: "hub", Title: "Recommendations", Context: "content.discover", Symbol: "star"},
 		{ID: "library", Key: "/library/sections/" + id + "/all?type=" + typeNum, Type: "list", Title: "Library", Context: "content.library", Symbol: "library"},
 		{ID: "collections", Key: "/library/sections/" + id + "/collections", Type: "list", Title: "Collections", Context: "content.collections", Symbol: "stack"},
-		{ID: "playlists", Key: "/playlists?type=15&sectionID=" + id + "&playlistType=" + playlistType, Type: "list", Title: "Playlists", Context: "content.playlists", Symbol: "playlist"},
-		{ID: "categories", Key: "/library/sections/" + id + "/categories", Type: "list", Title: "Categories", Context: "content.categories", Symbol: "stack"},
 	}
+	pivots := tabs
+	if sec.TabKinds != nil {
+		pivots = make([]model.Pivot, 0, len(tabs)+2)
+		for _, kind := range sec.TabKinds {
+			if idx := slices.IndexFunc(tabs, func(p model.Pivot) bool { return p.ID == kind }); idx >= 0 {
+				pivots = append(pivots, tabs[idx])
+				tabs = slices.Delete(tabs, idx, idx+1)
+			}
+		}
+	}
+	return append(pivots,
+		model.Pivot{ID: "playlists", Key: "/playlists?type=15&sectionID=" + id + "&playlistType=" + playlistType, Type: "list", Title: "Playlists", Context: "content.playlists", Symbol: "playlist"},
+		model.Pivot{ID: "categories", Key: "/library/sections/" + id + "/categories", Type: "list", Title: "Categories", Context: "content.categories", Symbol: "stack"},
+	)
 }
 
 func providerTypes(secs []Section) string {
@@ -222,6 +235,9 @@ func (s *Server) handleProviders(w http.ResponseWriter, r *http.Request) {
 			UpdatedAt:  now,
 			ScannedAt:  now,
 			Pivot:      sectionPivots(sec),
+		}
+		if sec.TabKinds != nil && !slices.Contains(sec.TabKinds, "recommended") {
+			dir.HubKey = ""
 		}
 		if includePrefs {
 			// PMS repeats the section's /prefs settings here; Roku crashes

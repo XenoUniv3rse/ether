@@ -58,6 +58,9 @@ type Section struct {
 	PluginSorts  []string
 	PluginFacets []frontend.ViewFacet
 	ListLevels   []string
+	// TabKinds lists visible owner-configured Plex equivalents in display order.
+	// Nil uses Plex’s default navigation.
+	TabKinds []string
 }
 
 // SessionToucher is optionally implemented by frontend.Playback to keep a play
