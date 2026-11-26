@@ -16,6 +16,7 @@ import (
 	"github.com/braedonsaunders/ether/internal/favorites"
 	"github.com/braedonsaunders/ether/internal/frontend"
 	"github.com/braedonsaunders/ether/internal/frontend/kit/ids"
+	"github.com/braedonsaunders/ether/internal/frontend/kit/reqmemo"
 	"github.com/braedonsaunders/ether/internal/livetv"
 	"github.com/braedonsaunders/ether/internal/plugins/adapters"
 	"github.com/braedonsaunders/ether/internal/resolver"
@@ -1444,6 +1445,7 @@ func (s *surfaceExperience) Item(ctx context.Context, req frontend.ItemRequest) 
 }
 
 type rowCacheRevision struct {
+	policy    int64
 	stepAside uint64
 	watchlist experience.WatchlistRevision
 	watch     experience.WatchRevision
@@ -1471,11 +1473,32 @@ func (s *surfaceExperience) cachedRows(ctx context.Context, req frontend.RowRequ
 	// Issued rows mint receipts. A cached success would skip that transaction,
 	// so a later bind failure could not roll back and the client would keep
 	// handles whose receipts were never written. Snapshots are safe to reuse.
+	for attempt := 0; ; attempt++ {
+		rows, err := s.readRows(ctx, req, issue)
+		if !errors.Is(err, viewerpolicy.ErrChanged) {
+			return rows, err
+		}
+		// Vela owns the complete visit, including heroes and row views.
+		if s.protocol == "vela" || attempt == 2 || ctx.Err() != nil {
+			return nil, frontend.ErrRowViewStale
+		}
+		ctx = frontend.WithFreshRequestMemo(reqmemo.With(ctx))
+	}
+}
+
+func (s *surfaceExperience) readRows(ctx context.Context, req frontend.RowRequest, issue bool) ([]frontend.Row, error) {
 	if issue || req.HomeFallbackOnly || (req.Placement != frontend.PlacementHome && req.Placement != frontend.PlacementLibrary) {
 		return s.loadRows(ctx, req, issue)
 	}
 	key, stepAside := s.rowCacheKey(req)
 	gen := rowCacheRevision{stepAside: stepAside}
+	if s.generation != nil {
+		policy, err := s.generation(ctx)
+		if err != nil {
+			return nil, err
+		}
+		gen.policy = policy
+	}
 	if s.rowWatch != nil && req.Viewer != nil {
 		watch, err := s.rowWatch(ctx, req.Viewer.ID)
 		if err != nil {
@@ -1513,8 +1536,25 @@ func (s *surfaceExperience) cachedRows(ctx context.Context, req frontend.RowRequ
 	if err != nil {
 		return nil, err
 	}
+	if err := s.checkRowCachePolicy(ctx, gen); err != nil {
+		return nil, err
+	}
 	s.storeRows(key, gen, rows)
 	return rows, nil
+}
+
+func (s *surfaceExperience) checkRowCachePolicy(ctx context.Context, gen rowCacheRevision) error {
+	if s.generation == nil {
+		return nil
+	}
+	current, err := s.generation(ctx)
+	if err != nil {
+		return err
+	}
+	if current != gen.policy {
+		return viewerpolicy.ErrChanged
+	}
+	return nil
 }
 
 func (s *surfaceExperience) refreshRows(key string, gen rowCacheRevision, req frontend.RowRequest, issue bool) {
@@ -1528,7 +1568,7 @@ func (s *surfaceExperience) refreshRows(key string, gen rowCacheRevision, req fr
 		s.rowMu.Unlock()
 	}()
 	rows, err := s.loadRows(ctx, req, issue)
-	if err != nil {
+	if err != nil || s.checkRowCachePolicy(ctx, gen) != nil {
 		return
 	}
 	s.storeRows(key, gen, rows)

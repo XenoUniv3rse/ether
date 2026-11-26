@@ -16,6 +16,7 @@ import (
 	"github.com/braedonsaunders/ether/internal/frontend"
 	"github.com/braedonsaunders/ether/internal/frontend/kit/ids"
 	"github.com/braedonsaunders/ether/internal/frontend/kit/reading"
+	"github.com/braedonsaunders/ether/internal/frontend/kit/reqmemo"
 )
 
 func hashJSON(v any) string { b, _ := json.Marshal(v); return hash(string(b)) }
@@ -503,10 +504,11 @@ func selectEpisodeArtwork(images []frontend.GrantedImage) []frontend.GrantedImag
 
 func (i *instance) home(r *http.Request, v *frontend.Viewer, token string, sources ...map[string]heroSource) ([]object, bool, error) {
 	rows, more, err := i.homeVisit(r, v, token, false, sources...)
-	if errors.Is(err, frontend.ErrRowViewStale) && r.PathValue("id") == "" && r.URL.Query().Get("cursor") == "" {
-		// A first page starts a visit; stale cached manifests are a server
-		// assembly concern. Refresh once, retaining strict old-cursor rejection.
-		return i.homeVisit(r, v, token, true, sources...)
+	if retryBootstrap(err) && r.Context().Err() == nil && r.PathValue("id") == "" && r.URL.Query().Get("cursor") == "" {
+		// A first page can start a fresh visit. Continuations retain their
+		// original authorization and snapshot contract.
+		ctx := frontend.WithFreshRequestMemo(reqmemo.With(r.Context()))
+		return i.homeVisit(r.WithContext(ctx), v, token, true, sources...)
 	}
 	return rows, more, err
 }
@@ -612,6 +614,9 @@ func (i *instance) homeVisit(r *http.Request, v *frontend.Viewer, token string, 
 				reqs[n] = frontend.RowViewPageRequest{Viewer: v, Device: requestDevice(r), Protocol: "vela", ID: view.ID, Limit: rowItemLimit(r)}
 			}
 			pages, e = batch.ResolveRowViews(r.Context(), reqs)
+			if retryBootstrap(e) {
+				return nil, false, e
+			}
 			if e != nil || len(pages) != len(vv) {
 				if r.Context().Err() != nil {
 					return nil, false, r.Context().Err()
@@ -638,9 +643,7 @@ func (i *instance) homeVisit(r *http.Request, v *frontend.Viewer, token string, 
 				if r.Context().Err() != nil {
 					return nil, false, r.Context().Err()
 				}
-				// A stale layout is rebuilt once with a fresh listing; only a
-				// row that still fails after that is left out.
-				if !refresh && (errors.Is(e, frontend.ErrRowViewStale) || errors.Is(e, frontend.ErrNotFound)) {
+				if retryBootstrap(e) || (!refresh && errors.Is(e, frontend.ErrNotFound)) {
 					return nil, false, frontend.ErrRowViewStale
 				}
 				logDroppedHomeRow(r, cmp.Or(view.Layout.Present.RowID, view.Key, view.ID), "resolve", e)
@@ -745,7 +748,7 @@ func (i *instance) rowsToWire(r *http.Request, v *frontend.Viewer, token string,
 		}
 	}
 	converted, err := i.titles(r, v, token, pageTitles)
-	if err != nil && (r.PathValue("id") != "" || r.Context().Err() != nil) {
+	if err != nil && (retryBootstrap(err) || r.PathValue("id") != "" || r.Context().Err() != nil) {
 		return nil, err
 	}
 	if err == nil {
@@ -782,7 +785,7 @@ func (i *instance) rowsToWire(r *http.Request, v *frontend.Viewer, token string,
 			e = i.backfillShelf(r, v, token, wire, itemLimit)
 		}
 		if e != nil {
-			if r.PathValue("id") != "" || r.Context().Err() != nil {
+			if retryBootstrap(e) || r.PathValue("id") != "" || r.Context().Err() != nil {
 				return nil, e
 			}
 			logDroppedHomeRow(r, cmp.Or(row.Key, row.ID), "render", e)
@@ -975,8 +978,7 @@ func (i *instance) buildBootstrap(r *http.Request, v *frontend.Viewer, t string,
 				id, _ := shelf["id"].(string)
 				cursor, err := i.readRowToken(r, v, token)
 				if err != nil {
-					logDroppedHomeRow(r, id, "hero cursor", err)
-					continue
+					return nil, err
 				}
 				cursor.Exclude = ids
 				next := i.sealRowCursor(cursor)
@@ -986,7 +988,7 @@ func (i *instance) buildBootstrap(r *http.Request, v *frontend.Viewer, t string,
 				}
 				shelf["nextCursor"] = next
 				if err := i.backfillShelf(r, v, t, shelf, rowItemLimit(r)); err != nil {
-					if r.Context().Err() != nil || (!refresh && errors.Is(err, frontend.ErrRowViewStale)) {
+					if r.Context().Err() != nil || retryBootstrap(err) {
 						return nil, err
 					}
 					logDroppedHomeRow(r, id, "hero backfill", err)

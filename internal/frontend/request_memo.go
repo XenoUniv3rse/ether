@@ -31,6 +31,11 @@ func WithRequestMemo(ctx context.Context) context.Context {
 	if ctx == nil || ctx.Value(requestMemoKey{}) != nil {
 		return ctx
 	}
+	return WithFreshRequestMemo(ctx)
+}
+
+// WithFreshRequestMemo starts an independent read within the same request.
+func WithFreshRequestMemo(ctx context.Context) context.Context {
 	return context.WithValue(ctx, requestMemoKey{}, &RequestMemo{})
 }
 

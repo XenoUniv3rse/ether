@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/braedonsaunders/ether/internal/frontend"
+	"github.com/braedonsaunders/ether/internal/frontend/kit/reqmemo"
 )
 
 // Keep wire grants comfortably inside the row cursor (10m), row visit (15m)
@@ -100,15 +101,6 @@ func (i *instance) viewerSpoilerFree(ctx context.Context, v *frontend.Viewer) (b
 }
 
 func (i *instance) bootstrap(w http.ResponseWriter, r *http.Request) {
-	v, token, err := i.viewer(r)
-	if err != nil {
-		fail(w, err, r)
-		return
-	}
-	downloads := i.downloadsFeature(r.Context(), v)
-	r = r.WithContext(context.WithValue(r.Context(), downloadCapabilityKey{}, downloads))
-	dev := requestDevice(r)
-	avatar := i.viewerAvatar(r, v, token, dev)
 	if local, ok := i.host.Experience.(interface {
 		NoProviderWait(context.Context) context.Context
 	}); ok {
@@ -116,9 +108,27 @@ func (i *instance) bootstrap(w http.ResponseWriter, r *http.Request) {
 	}
 	source, hasRevision := i.host.Experience.(homeRevisionSource)
 	refresh := false
-	for attempt := 0; attempt < bootstrapAttempts; attempt++ {
+	request := r
+	for attempt := 0; attempt < bootstrapAttempts && request.Context().Err() == nil; attempt++ {
+		// A rejected visit's authorization and catalogue reads must not
+		// survive into the replacement visit.
+		ctx := frontend.WithFreshRequestMemo(reqmemo.With(request.Context()))
+		r := request.WithContext(ctx)
+		v, token, err := i.viewer(r)
+		if err != nil {
+			fail(w, err, r)
+			return
+		}
+		downloads := i.downloadsFeature(r.Context(), v)
+		r = r.WithContext(context.WithValue(r.Context(), downloadCapabilityKey{}, downloads))
+		dev := requestDevice(r)
+		avatar := i.viewerAvatar(r, v, token, dev)
 		spoilerFree, err := i.viewerSpoilerFree(r.Context(), v)
 		if err != nil {
+			if retryBootstrap(err) {
+				refresh = true
+				continue
+			}
 			fail(w, err, r)
 			return
 		}
@@ -131,6 +141,10 @@ func (i *instance) bootstrap(w http.ResponseWriter, r *http.Request) {
 		cacheable := false
 		if hasRevision {
 			before, cacheable, err = source.HomeRevision(r.Context(), v)
+			if retryBootstrap(err) {
+				refresh = true
+				continue
+			}
 			if err != nil {
 				fail(w, bootstrapTransientError(err), r)
 				return
@@ -160,7 +174,7 @@ func (i *instance) bootstrap(w http.ResponseWriter, r *http.Request) {
 					cache(w, r, entry.payload)
 					return
 				}
-				if !errors.Is(err, frontend.ErrRowViewStale) {
+				if !retryBootstrap(err) {
 					fail(w, bootstrapTransientError(err), r)
 					return
 				}
@@ -207,8 +221,8 @@ func (i *instance) bootstrap(w http.ResponseWriter, r *http.Request) {
 			payload, buildErr = json.Marshal(out)
 		}
 		if buildErr == nil && cacheable {
-			after, available, revisionErr := source.HomeRevision(r.Context(), v)
-			afterSpoilerFree, sfErr := i.viewerSpoilerFree(r.Context(), v)
+			after, available, revisionErr := source.HomeRevision(request.Context(), v)
+			afterSpoilerFree, sfErr := i.viewerSpoilerFree(request.Context(), v)
 			if revisionErr != nil {
 				buildErr = revisionErr
 			} else if sfErr != nil {
@@ -220,7 +234,7 @@ func (i *instance) bootstrap(w http.ResponseWriter, r *http.Request) {
 		if buildErr == nil {
 			// Use the original context so the final check reads current
 			// policy rather than the proof memoized during assembly.
-			buildErr = i.validateBootstrapRows(r.Context(), lease.rows, lease.expires)
+			buildErr = i.validateBootstrapRows(request.Context(), lease.rows, lease.expires)
 		}
 		if pending != nil {
 			i.bootstrapMu.Lock()
@@ -240,14 +254,11 @@ func (i *instance) bootstrap(w http.ResponseWriter, r *http.Request) {
 			close(pending.ready)
 			i.bootstrapMu.Unlock()
 		}
+		if retryBootstrap(buildErr) {
+			refresh = true
+			continue
+		}
 		if buildErr != nil {
-			if errors.Is(buildErr, frontend.ErrRowViewStale) || errors.Is(buildErr, frontend.ErrLiveGuideStale) {
-				if attempt+1 < bootstrapAttempts {
-					refresh = true
-					continue
-				}
-				buildErr = &bootstrapChangedError{}
-			}
 			fail(w, bootstrapTransientError(buildErr), r)
 			return
 		}
@@ -255,7 +266,15 @@ func (i *instance) bootstrap(w http.ResponseWriter, r *http.Request) {
 		cache(w, r, payload)
 		return
 	}
+	if err := request.Context().Err(); err != nil {
+		fail(w, err, request)
+		return
+	}
 	fail(w, &bootstrapChangedError{}, r)
+}
+
+func retryBootstrap(err error) bool {
+	return errors.Is(err, frontend.ErrRowViewStale) || errors.Is(err, frontend.ErrLiveGuideStale)
 }
 
 // bootstrapTransientError prevents transient unavailability during bootstrap

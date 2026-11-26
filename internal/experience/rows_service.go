@@ -7,7 +7,6 @@ import (
 
 	"github.com/braedonsaunders/ether/internal/core"
 	"github.com/braedonsaunders/ether/internal/frontend"
-	"github.com/braedonsaunders/ether/internal/viewerpolicy"
 )
 
 // RowSource supplies neutral candidate rows for one viewer and device.
@@ -284,13 +283,6 @@ func (s *RowsService) rows(ctx context.Context, req frontend.RowRequest, protoco
 	}
 	if len(subjects) > 0 {
 		tokens, e := s.d.Receipts.IssueBatch(ctx, req.Viewer, req.Device, protocol, subjects)
-		// IssueBatch already retries one overlapping policy write. Further
-		// writes can land between attempts (a catalogue sync, background
-		// metadata refreshes); read the epoch again a bounded number of times
-		// rather than failing the page.
-		for attempt := 0; attempt < rowsFenceRetries && errors.Is(e, viewerpolicy.ErrChanged) && ctx.Err() == nil; attempt++ {
-			tokens, e = s.d.Receipts.IssueBatch(ctx, req.Viewer, req.Device, protocol, subjects)
-		}
 		if errors.Is(e, ErrReceipt) && req.Placement == frontend.PlacementHome && ctx.Err() == nil {
 			// A row can lose authorization between layout and receipt admission.
 			// Keep the batch on the normal path and isolate rows on rejection.
@@ -327,10 +319,6 @@ func (s *RowsService) rows(ctx context.Context, req frontend.RowRequest, protoco
 	}
 	return kept, nil
 }
-
-// rowsFenceRetries bounds the extra receipt attempts after the policy epoch
-// moved under a page being built.
-const rowsFenceRetries = 4
 
 // appendHomeFallback adds policy-checked library shelves when Home is only
 // Continue Watching and Next Up. The host supplies the fallback for each surface.

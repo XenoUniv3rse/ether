@@ -26,7 +26,10 @@ func (s *Receipts) issueBatchChecked(ctx context.Context, viewer *core.User, dev
 	ctx = core.WithCatalogViewer(ctx, viewer)
 	for attempt := 0; ; attempt++ {
 		tokens, err := s.issueBatchAttempt(ctx, viewer, device, protocol, subjects, current, fence)
-		if !errors.Is(err, viewerpolicy.ErrChanged) || attempt == 1 {
+		// A bootstrap proof is fixed to the visit. The outer assembly must
+		// restart to observe the new epoch.
+		if !errors.Is(err, viewerpolicy.ErrChanged) || attempt == 1 || ctx.Err() != nil ||
+			(viewer != nil && bootstrapProofFor(ctx, viewer.ID) != nil) {
 			return tokens, err
 		}
 	}

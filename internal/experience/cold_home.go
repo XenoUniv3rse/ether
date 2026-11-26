@@ -23,6 +23,7 @@ func ColdHomeRows(ctx context.Context, viewer *core.User, libraries []Library, v
 	limit = min(limit, 100)
 	filtered := func(ctx context.Context, q core.BrowseQuery) (core.Page, error) {
 		q.Filter.ExcludeKeys = excluded
+		q.NoTotal = true
 		return browse(ctx, q)
 	}
 	var rows []frontend.Row

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"sort"
 	"strings"
 
@@ -137,6 +138,10 @@ func AddInputs(ctx context.Context, db *sql.DB, tx *sql.Tx, source string, in In
 	if err := store.LockKey(ctx, store.DialectOf(db), tx, inputsLock); err != nil {
 		return err
 	}
+	return insertInputs(ctx, tx, source, in)
+}
+
+func insertInputs(ctx context.Context, tx *sql.Tx, source string, in Inputs) error {
 	for _, r := range in.rows() {
 		if _, err := tx.ExecContext(ctx, `INSERT INTO viewer_policy_inputs(field,value,source) VALUES(?,?,?) ON CONFLICT DO NOTHING`, r[0], r[1], source); err != nil {
 			return err
@@ -178,8 +183,8 @@ type Rebuild struct {
 	Read   func(context.Context, *sql.Tx) (Inputs, error)
 }
 
-// RebuildInputs replaces each given source from durable state. Once every
-// source has been rebuilt, the conservative seed rows the migration wrote go.
+// RebuildInputs compares each source to durable state and publishes changed
+// dependencies together. Once all sources are known, remove the migration seed.
 func RebuildInputs(ctx context.Context, db *sql.DB, sources ...Rebuild) error {
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
@@ -190,6 +195,7 @@ func RebuildInputs(ctx context.Context, db *sql.DB, sources ...Rebuild) error {
 		return err
 	}
 	complete := map[string]bool{}
+	changed := false
 	for _, s := range sources {
 		if s.Read == nil {
 			continue
@@ -198,31 +204,51 @@ func RebuildInputs(ctx context.Context, db *sql.DB, sources ...Rebuild) error {
 		if err != nil {
 			return err
 		}
-		if _, err := tx.ExecContext(ctx, `DELETE FROM viewer_policy_inputs WHERE source=?`, s.Source); err != nil {
-			return err
-		}
-		for _, r := range in.rows() {
-			if _, err := tx.ExecContext(ctx, `INSERT INTO viewer_policy_inputs(field,value,source) VALUES(?,?,?) ON CONFLICT DO NOTHING`, r[0], r[1], s.Source); err != nil {
-				return err
-			}
-		}
-		complete[s.Source] = true
-	}
-	if complete[SourceConfig] && complete[SourceSafety] && complete[SourceRules] {
-		// The seed stood in for every source until all three were known.
-		// Dropping it can only narrow future advances; the epoch moves so
-		// no fence spans the switch.
-		res, err := tx.ExecContext(ctx, `DELETE FROM viewer_policy_inputs WHERE source=?`, sourceSeed)
+		stored, err := readInputs(ctx, tx, s.Source)
 		if err != nil {
 			return err
 		}
-		if n, _ := res.RowsAffected(); n > 0 {
-			if _, err := tx.ExecContext(ctx, `UPDATE viewer_policy_epoch SET generation=generation+1 WHERE id=1`); err != nil {
-				return err
-			}
+		complete[s.Source] = true
+		if maps.Equal(stored, in) {
+			continue
+		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM viewer_policy_inputs WHERE source=?`, s.Source); err != nil {
+			return err
+		}
+		if err := insertInputs(ctx, tx, s.Source, in); err != nil {
+			return err
+		}
+		changed = true
+	}
+	if complete[SourceConfig] && complete[SourceSafety] && complete[SourceRules] {
+		// Removing the seed only narrows future invalidations.
+		if _, err := tx.ExecContext(ctx, `DELETE FROM viewer_policy_inputs WHERE source=?`, sourceSeed); err != nil {
+			return err
+		}
+	}
+	if changed {
+		if _, err := tx.ExecContext(ctx, `UPDATE viewer_policy_epoch SET generation=generation+1 WHERE id=1`); err != nil {
+			return err
 		}
 	}
 	return tx.Commit()
+}
+
+func readInputs(ctx context.Context, tx *sql.Tx, source string) (Inputs, error) {
+	rows, err := tx.QueryContext(ctx, `SELECT field,value FROM viewer_policy_inputs WHERE source=?`, source)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	in := Inputs{}
+	for rows.Next() {
+		var row [2]string
+		if err := rows.Scan(&row[0], &row[1]); err != nil {
+			return nil, err
+		}
+		in[row] = struct{}{}
+	}
+	return in, rows.Err()
 }
 
 const inputsSchema = `CREATE TABLE IF NOT EXISTS viewer_policy_inputs(field TEXT NOT NULL, value TEXT NOT NULL, source TEXT NOT NULL, PRIMARY KEY(field, value, source));`

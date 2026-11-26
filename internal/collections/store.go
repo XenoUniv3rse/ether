@@ -524,10 +524,14 @@ func (s *Service) saveBuild(ctx context.Context, id int64, expected, resolved st
 	} else if n != 1 {
 		return errBuildSuperseded
 	}
-	if _, err := tx.ExecContext(ctx, `DELETE FROM collections_members WHERE spec_id=?`, id); err != nil {
+	if _, err := tx.ExecContext(ctx, `DELETE FROM collections_members WHERE spec_id=? AND (pos<0 OR pos>=?)`, id, len(keys)); err != nil {
 		return err
 	}
-	stmt, err := tx.PrepareContext(ctx, `INSERT INTO collections_members(spec_id,pos,key,shared) VALUES(?,?,?,?)`)
+	// Keep identical positions intact. Deleting and reinserting them would
+	// invalidate every policy snapshot on each scheduled refresh.
+	stmt, err := tx.PrepareContext(ctx, `INSERT INTO collections_members(spec_id,pos,key,shared) VALUES(?,?,?,?)
+		ON CONFLICT(spec_id,pos) DO UPDATE SET key=excluded.key,shared=excluded.shared
+		WHERE collections_members.key<>excluded.key OR collections_members.shared<>excluded.shared`)
 	if err != nil {
 		return err
 	}

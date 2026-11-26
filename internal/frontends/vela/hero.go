@@ -262,8 +262,8 @@ func (i *instance) heroFallback(r *http.Request, viewer *frontend.Viewer, token 
 		}
 		converted, err := i.titles(r, viewer, token, titles)
 		if err != nil {
-			if r.Context().Err() != nil {
-				return nil, r.Context().Err()
+			if retryBootstrap(err) || r.Context().Err() != nil {
+				return nil, err
 			}
 			logDroppedHomeRow(r, row.ID, "hero render", err)
 			continue

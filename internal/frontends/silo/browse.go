@@ -6,7 +6,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
-	"github.com/braedonsaunders/ether/internal/frontend/kit/paging"
 	"net/http"
 	"strconv"
 	"strings"
@@ -16,6 +15,7 @@ import (
 	"github.com/braedonsaunders/ether/internal/frontend"
 	"github.com/braedonsaunders/ether/internal/frontend/kit/caps"
 	"github.com/braedonsaunders/ether/internal/frontend/kit/ids"
+	"github.com/braedonsaunders/ether/internal/frontend/kit/paging"
 )
 
 func notFound(w http.ResponseWriter) {
@@ -345,7 +345,18 @@ func (i *instance) sections(w http.ResponseWriter, r *http.Request) {
 	if i.host.PageFreshness != nil {
 		configGen = i.host.PageFreshness().Config
 	}
-	cacheKey := siloSectionKey(v, configGen, device(r), r.URL.RequestURI())
+	var policyGen int64
+	if source, ok := i.host.Experience.(interface {
+		PolicyGeneration(context.Context) (int64, error)
+	}); ok {
+		policyGen, err = source.PolicyGeneration(r.Context())
+		if err != nil {
+			i.logSectionError("policy", frontend.PlacementHome, "", "", err)
+			http.Error(w, "Unavailable", 503)
+			return
+		}
+	}
+	cacheKey := siloSectionKey(v, configGen, policyGen, device(r), r.URL.RequestURI())
 	if cached, ok := i.cachedSections(cacheKey); ok {
 		reply(w, 200, map[string]any{"sections": cached})
 		return
@@ -492,12 +503,12 @@ type siloSectionPage struct {
 	sections []any
 }
 
-func siloSectionKey(v *frontend.Viewer, configGen uint64, dev frontend.Device, uri string) string {
+func siloSectionKey(v *frontend.Viewer, configGen uint64, policyGen int64, dev frontend.Device, uri string) string {
 	id := int64(0)
 	if v != nil {
 		id = v.ID
 	}
-	return strconv.FormatInt(id, 10) + "\n" + strconv.FormatUint(configGen, 10) + "\n" + dev.ID + "\n" + uri
+	return strconv.FormatInt(id, 10) + "\n" + strconv.FormatUint(configGen, 10) + "\n" + strconv.FormatInt(policyGen, 10) + "\n" + dev.ID + "\n" + uri
 }
 
 func (i *instance) cachedSections(key string) ([]any, bool) {
