@@ -16,7 +16,7 @@ func TestBitmapHDRHardwareRoutes(t *testing.T) {
 		{"cuda-download", AccelNVENC, "tonemap_cuda", "scale_cuda", "cuda", "overlay=eof_action=pass,format=yuv420p", ""},
 		{"cuda-overlay", AccelNVENC, "tonemap_cuda", "scale_cuda", "cuda", "overlay_cuda=eof_action=pass", ",format=yuva420p,hwupload_cuda"},
 		{"vaapi-download", AccelVAAPI, "tonemap_vaapi", "scale_vaapi", "vaapi", "overlay=eof_action=pass,format=nv12,hwupload", ""},
-		{"vaapi-overlay", AccelVAAPI, "tonemap_vaapi", "scale_vaapi", "vaapi", "overlay_vaapi=eof_action=pass", ",format=bgra,hwupload"},
+		{"vaapi-vulkan", AccelVAAPI, "libplacebo", "scale_vaapi", "vaapi", "overlay=eof_action=pass,format=nv12,hwupload=derive_device=vaapi", ""},
 		{"qsv-opencl", AccelQSV, "tonemap_opencl", "scale", "", "overlay=eof_action=pass,format=nv12", ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -31,6 +31,17 @@ func TestBitmapHDRHardwareRoutes(t *testing.T) {
 			s.Accel = core.HWAccel{Name: tc.accel, Encoders: []string{"h264_" + tc.accel}}
 			s.Features.hwaccels = map[string]bool{"videotoolbox": true, "cuda": true, "qsv": true, "vaapi": true}
 			s.Features.filters = map[string]bool{"scale": true, "format": true, "overlay": true, "hwdownload": true, "hwupload": true, "hwupload_cuda": true, "tonemapx": true, tc.mapper: true, tc.scaler: true}
+			if tc.accel == AccelVAAPI {
+				s.Features.vaapiToneMap = func(vaapiToneKey) vaapiToneMethod {
+					if !s.Features.filters[tc.mapper] {
+						return ""
+					}
+					if tc.mapper == "libplacebo" {
+						return vaapiToneVulkanVPP
+					}
+					return vaapiToneVPP
+				}
+			}
 			if tc.accel == AccelQSV {
 				s.Features.hwaccels["opencl"] = true
 			}
@@ -39,7 +50,12 @@ func TestBitmapHDRHardwareRoutes(t *testing.T) {
 			}
 			args := buildArgs(s)
 			graph := filterGraph(args)
-			mustContain(t, args, tc.mapper+"=", "t=bt709:m=bt709:p=bt709", "[0:4]scale=1280:720"+tc.upload+"[sub]", "[base][sub]"+tc.overlay+"[vout]", "-c:v h264_"+tc.accel)
+			if tc.mapper == "libplacebo" {
+				mustContain(t, args, "-init_hw_device vulkan=vk@va -filter_hw_device vk", "color_primaries=bt709:color_trc=bt709:colorspace=bt709:range=tv")
+			} else {
+				mustContain(t, args, "t=bt709:m=bt709:p=bt709")
+			}
+			mustContain(t, args, tc.mapper+"=", "[0:4]scale=1280:720"+tc.upload+"[sub]", "[base][sub]"+tc.overlay+"[vout]", "-c:v h264_"+tc.accel)
 			mustNotContain(t, args, "tonemapx=", "scale=3840:2160")
 			if tc.frame != "" {
 				mustContain(t, args, "-hwaccel_output_format "+tc.frame, tc.scaler+"=w=1280:h=720")

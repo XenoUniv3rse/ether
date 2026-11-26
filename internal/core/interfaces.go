@@ -1157,9 +1157,10 @@ type HWAccel struct {
 	// (VAAPI scale_vaapi) does not, so frames are decoded and scaled in
 	// software and uploaded to the encoder.
 	NoGPUScale bool `json:"noGpuScale,omitempty"`
-	// NoGPUTonemap: the device's VAAPI VPP cannot run tonemap_vaapi, so HDR
-	// tone-mapping falls back to the software zscale/tonemap path.
-	NoGPUTonemap bool `json:"noGpuTonemap,omitempty"`
+	// NoGPUTonemap disables hardware tone mapping.
+	NoGPUTonemap     bool `json:"noGpuTonemap,omitempty"`
+	VAAPIDeinterlace bool `json:"-"`
+	VAAPIMain10Scale bool `json:"-"`
 	// QSV modes are ordered, successfully probed rate-control choices for Device.
 	QSVQualityModes map[string][]string `json:"qsvQualityModes,omitempty"`
 	QSVBitrateModes map[string][]string `json:"qsvBitrateModes,omitempty"`

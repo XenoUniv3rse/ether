@@ -26,6 +26,7 @@ import (
 // track per representation (video, audio); ffmpeg's dash muxer writes short
 // chunks that the session regroups into numbered segments by timestamp.
 type Session struct {
+	vaapiToneLogged  sync.Once
 	archiveInput     bool
 	openArchiveRange core.ArchiveRangeOpener
 	archiveTrim      time.Duration
@@ -194,6 +195,7 @@ type sessionEncoding struct {
 	graphReported   bool
 	// hevcFallbackWarned latches the HEVC->libx264 fallback warning to
 	// at most once per session (warned from startRunLocked, under mu).
+	vaapiToneLogged    sync.Once
 	hevcFallbackWarned bool
 	// traceCause and traceStop are log labels for the next ffmpeg start or
 	// stop. They are read only when ETHER_TRACE_PLAYBACK is on.

@@ -16,13 +16,14 @@ import (
 
 // runSpec is everything needed to build one ffmpeg HLS run.
 type runSpec struct {
-	ArchiveInput   bool
-	ArchiveTrim    time.Duration
-	ArchiveRetuned bool
-	waitDecode     bool // only argv construction may spend the bounded admission budget
-	SoftwareDecode bool // keep hardware encode after a decoder init failure
-	HealTimestamps bool
-	CopyOrigin     bool // retain audio from the measured video presentation origin
+	vaapiToneDecision *VAAPIToneDecision
+	ArchiveInput      bool
+	ArchiveTrim       time.Duration
+	ArchiveRetuned    bool
+	waitDecode        bool // only argv construction may spend the bounded admission budget
+	SoftwareDecode    bool // keep hardware encode after a decoder init failure
+	HealTimestamps    bool
+	CopyOrigin        bool // retain audio from the measured video presentation origin
 	// RampClock keeps every run of a fast-start session on the steady clock.
 	RampClock bool
 	// AuthoredTimeline preserves adaptive sessions with a separate clock.
@@ -126,8 +127,18 @@ func (s runSpec) usesHW() bool {
 	if !s.Decision.EncodesVideo(s.Info) || s.Accel.Name == "" || s.Accel.Name == AccelNone {
 		return false
 	}
-	enc, hw := videoEncoder(s.Decision.VideoCodec, s.Accel, s.Features)
+	enc, hw := s.videoEncoder()
 	return hw && enc != ""
+}
+
+func (s runSpec) videoEncoder() (string, bool) {
+	codec := s.Decision.VideoCodec
+	if s.Accel.Name == AccelVAAPI && codec == "hevc" && s.Accel.VAAPIQualityRC[vaapiMain10] == "" {
+		if v := s.Info.Video(); v != nil && planPicture(s, v, codec).tenBit {
+			return videoEncoder(codec, core.HWAccel{}, s.Features)
+		}
+	}
+	return videoEncoder(codec, s.Accel, s.Features)
 }
 
 // videoEncoder picks the encoder for a target codec: the confirmed hardware
@@ -441,7 +452,7 @@ func buildCodecArgs(s runSpec) []string {
 		args = append(args, "-progress", "pipe:1")
 	}
 	if transcodeVideo {
-		if _, hw := videoEncoder(d.VideoCodec, s.Accel, s.Features); !hw || (!vp.hwFrames && vp.graph != "") {
+		if _, hw := s.videoEncoder(); !hw || (!vp.hwFrames && vp.graph != "") {
 			w, h := outputSize(v.Width, v.Height, d.MaxHeight)
 			args = append(args, "-filter_complex_threads", strconv.Itoa(min(4, softwareThreadBudget(w, h, runtime.GOMAXPROCS(0)))))
 		}
@@ -1603,7 +1614,7 @@ func planFilterChain(s runSpec, v *core.StreamInfo, pic picturePlan, accel strin
 	// A cold asynchronous capability result previously disabled decoding for
 	// the entire first HDR run, even when the hardware supports Main10. Give
 	// this run a small demand-only budget before selecting the GPU graph.
-	if s.waitDecode && !decodeOK && pic.tonemap && !s.SoftwareDecode && (accel == AccelVideoToolbox || accel == AccelNVENC || accel == AccelQSV) {
+	if s.waitDecode && !decodeOK && pic.tonemap && !s.SoftwareDecode && (accel == AccelVideoToolbox || accel == AccelNVENC || accel == AccelQSV || accel == AccelVAAPI) {
 		if cache, ok := s.Features.decode.(*decodeProbeCache); ok {
 			decodeOK = cache.supportsWithin(s.Accel, v, 300*time.Millisecond)
 		}
@@ -1612,13 +1623,42 @@ func planFilterChain(s runSpec, v *core.StreamInfo, pic picturePlan, accel strin
 	gpuOff := !decodeOK || v.Interlaced || s.PictureCrop != nil || pic.pad || pic.convert != "" || (pic.tonemap && pic.tenBit && !p010CUDA)
 	dv5 := pic.tonemap && v.DolbyVision && v.DolbyVisionProfile == 5
 	gpuInput, gpuFilters, gpuOK := gpuPipeline(s, accel, pic.w, pic.h, pic.tonemap, pic.tenBit, burn)
+	if accel == AccelVAAPI && pic.tonemap && !dv5 && pic.convert == "" && pic.w > 0 && pic.h > 0 {
+		method := s.vaapiToneMethod(v, pic)
+		if method != "" {
+			// Subtitle and geometry filters operate on software frames. Map at
+			// source size when those filters still need the original canvas.
+			softwareOut := burn || s.PictureCrop != nil || pic.pad
+			w, h := pic.w, pic.h
+			if softwareOut {
+				w, h = v.Width, v.Height
+			}
+			if w > 0 && h > 0 {
+				input, filters, upload := vaapiToneGraph(method, vaapiDevice(s.Accel), w, h, decodeOK && !v.Interlaced, pic.tenBit, softwareOut)
+				if v.Interlaced {
+					if decodeOK {
+						input = append(input, "-hwaccel", "vaapi", "-hwaccel_device", "va")
+					}
+					filters = append([]string{"yadif=mode=send_frame:parity=auto:deint=all"}, filters...)
+				}
+				if burn {
+					return input, filters, false
+				}
+				if softwareOut {
+					filters = format(size(filters))
+					filters[len(filters)-1] = upload
+				} else if pic.setSAR != "" {
+					filters = append(filters, pic.setSAR)
+				}
+				return input, filters, true
+			}
+		}
+	}
 	if dv5 {
 		// The VideoToolbox mapper produced visibly different colours from
 		// tonemapx on profile 5. Keep decode/encode hardware where possible,
 		// but do the RPU reshape and tone map with the validated CPU graph.
 		gpuOK = false
-		// The legacy VAAPI branch below is separate from gpuPipeline.
-		// It must not bypass the RPU-aware CPU graph either.
 		gpuOff = true
 	}
 
@@ -1638,20 +1678,18 @@ func planFilterChain(s runSpec, v *core.StreamInfo, pic picturePlan, accel strin
 			chain = append(chain, pic.setSAR)
 		}
 		hwFrames = true
-	case accel == AccelVAAPI && !burn && !gpuOff && !s.Accel.NoGPUScale && (!pic.tonemap || (s.Features.hasFilter("tonemap_vaapi") && !s.Accel.NoGPUTonemap)):
-		dev := s.Accel.Device
-		if dev == "" {
-			dev = DefaultVAAPIDevice
+	case accel == AccelVAAPI && !pic.tonemap && !burn && decodeOK && s.PictureCrop == nil && !pic.pad && pic.convert == "" &&
+		pic.w > 0 && pic.h > 0 && !s.Accel.NoGPUScale && s.Features.hasFilter("scale_vaapi") &&
+		(!pic.tenBit || s.Accel.VAAPIMain10Scale) && (!v.Interlaced || (s.Accel.VAAPIDeinterlace && v.BitDepth <= 8 && !pic.tenBit)):
+		inputArgs = append(inputArgs, "-hwaccel", "vaapi", "-hwaccel_device", vaapiDevice(s.Accel), "-hwaccel_output_format", "vaapi")
+		if v.Interlaced {
+			chain = append(chain, vaapiDeinterlace)
 		}
-		inputArgs = append(inputArgs, "-hwaccel", "vaapi", "-hwaccel_device", dev, "-hwaccel_output_format", "vaapi")
-		if pic.tonemap {
-			chain = append(chain, "tonemap_vaapi=format=nv12:t=bt709:m=bt709:p=bt709")
-		}
-		f := "nv12"
+		pixel := "nv12"
 		if pic.tenBit {
-			f = "p010"
+			pixel = "p010le"
 		}
-		chain = append(chain, fmt.Sprintf("scale_vaapi=w=%d:h=%d:format=%s", pic.w, pic.h, f))
+		chain = append(chain, vaapiScale(pic.w, pic.h, pixel))
 		if pic.setSAR != "" {
 			chain = append(chain, pic.setSAR)
 		}
@@ -1663,17 +1701,16 @@ func planFilterChain(s runSpec, v *core.StreamInfo, pic picturePlan, accel strin
 	case accel == AccelQSV && s.Features.hwaccels["qsv"] && decodeOK:
 		inputArgs = append(inputArgs, "-hwaccel", "qsv")
 	case accel == AccelVAAPI:
-		dev := s.Accel.Device
-		if dev == "" {
-			dev = DefaultVAAPIDevice
-		}
+		dev := vaapiDevice(s.Accel)
+		decodeDevice := dev
 		if burn {
 			inputArgs = append(inputArgs, "-init_hw_device", "vaapi=va:"+dev, "-filter_hw_device", "va")
-			if decodeOK {
-				inputArgs = append(inputArgs, "-hwaccel", "vaapi", "-hwaccel_device", "va")
-			}
+			decodeDevice = "va"
 		} else {
 			inputArgs = append(inputArgs, "-vaapi_device", dev)
+		}
+		if decodeOK {
+			inputArgs = append(inputArgs, "-hwaccel", "vaapi", "-hwaccel_device", decodeDevice)
 		}
 	}
 
@@ -1829,13 +1866,21 @@ func planEncodeArgs(s runSpec, pic picturePlan, enc, codec string, hwFrames bool
 			e = append(e, "-profile:v", "main10")
 		}
 	case "h264_vaapi", "hevc_vaapi":
+		rcKey := enc
+		if enc == "hevc_vaapi" && pic.tenBit {
+			rcKey = vaapiMain10
+		}
+		// The VAAPI driver requires the target bitrate to fit within maxrate.
+		if peakKbps < videoKbps {
+			videoKbps, b = peakKbps, maxr
+		}
 		rcMode := "VBR"
 		if s.Rate.Quality {
 			rcMode = "QVBR"
-			if m := s.Accel.VAAPIQualityRC[enc]; m != "" {
+			if m := s.Accel.VAAPIQualityRC[rcKey]; m != "" {
 				rcMode = m
 			}
-		} else if m := s.Accel.VAAPIBitrateRC[enc]; m != "" {
+		} else if m := s.Accel.VAAPIBitrateRC[rcKey]; m != "" {
 			rcMode = m
 		}
 		switch rcMode {
@@ -1920,11 +1965,15 @@ func planVideo(s runSpec, v *core.StreamInfo) videoPlan {
 	if v == nil || d.VideoCopy {
 		return p
 	}
+	if s.vaapiToneDecision != nil && s.vaapiToneDecision.Route == "unavailable" {
+		p.err = &GraphError{Message: toneMapUnavailableMessage()}
+		return p
+	}
 	codec := d.VideoCodec
 	if codec == "" {
 		codec = "h264"
 	}
-	enc, hw := videoEncoder(codec, s.Accel, s.Features)
+	enc, hw := s.videoEncoder()
 	if !hw {
 		p.inputArgs = append(p.inputArgs, "-threads", strconv.Itoa(softwareThreadBudget(v.Width, v.Height, runtime.GOMAXPROCS(0))))
 	}
@@ -1961,6 +2010,7 @@ func planVideo(s runSpec, v *core.StreamInfo) videoPlan {
 		}
 		return c
 	}
+	vaapiUpload := "hwupload"
 	format := func(c []string) []string {
 		if pic.pad {
 			c = append(c, fmt.Sprintf("pad=%d:%d:(ow-iw)/2:(oh-ih)/2", s.Target.width, s.Target.height))
@@ -1970,7 +2020,7 @@ func planVideo(s runSpec, v *core.StreamInfo) videoPlan {
 		}
 		c = append(c, "format="+swFmt)
 		if accel == AccelVAAPI {
-			c = append(c, "hwupload")
+			c = append(c, vaapiUpload)
 		}
 		return c
 	}
@@ -1978,6 +2028,9 @@ func planVideo(s runSpec, v *core.StreamInfo) videoPlan {
 
 	in := "[" + inputStream(s, v) + "]"
 	chainInput, chain, hwFrames := planFilterChain(s, v, pic, accel, burn, size, format)
+	if accel == AccelVAAPI && slices.Contains(chainInput, "vk") {
+		vaapiUpload = "hwupload=derive_device=vaapi"
+	}
 	p.hwFrames = hwFrames
 	bitmapHW := false
 	bitmapOverlay, bitmapUpload := "", ""
@@ -1994,12 +2047,12 @@ func planVideo(s runSpec, v *core.StreamInfo) videoPlan {
 	// For bitmap burns, scale on VAAPI before downloading for the software
 	// overlay. Upload the result back to the same device for encoding.
 	vaapiBitmap := burn && IsImageSubtitle(sub.Codec) && !sub.External && accel == AccelVAAPI &&
-		slices.Contains(chainInput, "-hwaccel") && !s.Accel.NoGPUScale &&
+		slices.Contains(chainInput, "-hwaccel") && !v.Interlaced && !s.Accel.NoGPUScale && s.Features.hasFilter("scale_vaapi") &&
 		pic.w > 0 && pic.h > 0 && s.PictureCrop == nil && !pic.pad && pic.convert == "" && !pic.tonemap && !pic.tenBit && pic.setSAR == ""
 	if vaapiBitmap {
 		chainInput = append(chainInput, "-hwaccel_output_format", "vaapi")
 		p.hwFrames = true
-		chain = []string{fmt.Sprintf("scale_vaapi=w=%d:h=%d:format=nv12", pic.w, pic.h), "hwdownload", "format=nv12"}
+		chain = []string{vaapiScale(pic.w, pic.h, "nv12"), "hwdownload", "format=nv12"}
 	}
 	if pic.tonemap && !toneMapped(chain, hwFrames) {
 		p.err = &GraphError{Message: toneMapUnavailableMessage()}

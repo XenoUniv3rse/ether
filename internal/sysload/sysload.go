@@ -216,6 +216,20 @@ func (s *Sampler) maybeGPULocked(ctx context.Context, now time.Time) {
 	}()
 }
 
+// CPUPercent returns the latest recent host CPU reading without collecting GPU
+// counters or copying history. Zero also represents an unavailable reading.
+func (s *Sampler) CPUPercent() float64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if n := len(s.history); n > 0 {
+		last := s.history[n-1]
+		if s.opts.Now().Sub(last.At) <= 3*s.opts.Interval {
+			return last.CPU
+		}
+	}
+	return 0
+}
+
 // Snapshot returns the current state and history, and keeps GPU readings
 // running for a while.
 func (s *Sampler) Snapshot() Snapshot {

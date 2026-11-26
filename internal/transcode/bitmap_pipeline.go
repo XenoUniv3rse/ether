@@ -22,16 +22,13 @@ func bitmapPipeline(s runSpec, v *core.StreamInfo, pic picturePlan, accel string
 	case AccelVideoToolbox, AccelNVENC:
 		input, chain, ok = gpuPipeline(s, accel, pic.w, pic.h, true, false, false)
 	case AccelVAAPI:
-		if s.Accel.NoGPUScale || s.Accel.NoGPUTonemap || !f.hwaccels["vaapi"] || !f.hasFilter("scale_vaapi") || !f.hasFilter("tonemap_vaapi") || !f.hasFilter("hwupload") {
+		method := s.vaapiToneMethod(v, pic)
+		if method == "" || !f.hasFilter("overlay") || !f.hasFilter("hwdownload") {
 			return
 		}
-		dev := s.Accel.Device
-		if dev == "" {
-			dev = DefaultVAAPIDevice
-		}
-		input = []string{"-init_hw_device", "vaapi=va:" + dev, "-filter_hw_device", "va", "-hwaccel", "vaapi", "-hwaccel_device", "va", "-hwaccel_output_format", "vaapi"}
-		chain = []string{"tonemap_vaapi=format=nv12:t=bt709:m=bt709:p=bt709", fmt.Sprintf("scale_vaapi=w=%d:h=%d:format=nv12", pic.w, pic.h)}
-		ok = true
+		var upload string
+		input, chain, upload = vaapiToneGraph(method, vaapiDevice(s.Accel), pic.w, pic.h, s.canGPUDecode(), false, true)
+		return input, chain, "overlay=eof_action=pass,format=" + swFmt + "," + upload, "", true
 	}
 	if ok {
 		switch {
@@ -40,17 +37,12 @@ func bitmapPipeline(s runSpec, v *core.StreamInfo, pic picturePlan, accel string
 			// surface to planar 4:2:0 and upload a matching alpha-bearing canvas.
 			chain[len(chain)-1] = strings.ReplaceAll(chain[len(chain)-1], "format=nv12", "format=yuv420p")
 			return input, chain, "overlay_cuda=eof_action=pass", ",format=yuva420p,hwupload_cuda", true
-		case accel == AccelVAAPI && f.hasFilter("overlay_vaapi"):
-			return input, chain, "overlay_vaapi=eof_action=pass", ",format=bgra,hwupload", true
 		}
 		if !f.hasFilter("hwdownload") || !f.hasFilter("overlay") {
 			return nil, nil, "", "", false
 		}
 		chain = append(chain, "hwdownload", "format=nv12")
 		overlay = "overlay=eof_action=pass,format=" + swFmt
-		if accel == AccelVAAPI {
-			overlay += ",hwupload"
-		}
 		return input, chain, overlay, "", true
 	}
 	// QSV's VPP HDR mapper is intentionally not enabled by the non-burn

@@ -190,6 +190,22 @@ func TestQSVProbeDeviceIsolation(t *testing.T) {
 		return errUnhandled
 	}
 	d := detector(fr, "linux")
+	d.renderDevices = func() []string { return []string{"/dev/dri/renderD127", "/dev/dri/renderD128", "/dev/dri/renderD129"} }
+	d.vendor = func(device string) string {
+		if device == "/dev/dri/renderD127" {
+			return "amd"
+		}
+		return "intel"
+	}
+	auto := d.detect(context.Background(), AccelQSV, "", testFeatures())
+	if auto.Device != "/dev/dri/renderD128" {
+		t.Fatal(auto)
+	}
+	for _, args := range fr.runCalls {
+		if argValue(args, "-qsv_device") == "/dev/dri/renderD127" {
+			t.Fatalf("QSV probed the AMD render node: %v", args)
+		}
+	}
 	a := d.detect(context.Background(), AccelQSV, "/dev/dri/renderD128", testFeatures())
 	b := d.detect(context.Background(), AccelQSV, "/dev/dri/renderD129", testFeatures())
 	if a.QSVQualityModes["h264_qsv"][0] != qsvLA || b.QSVQualityModes["h264_qsv"][0] != qsvICQ {

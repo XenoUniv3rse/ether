@@ -208,6 +208,9 @@ func (a *App) buildAdmin() http.Handler {
 			if cap.PlaybackError != "" {
 				hw["playbackError"] = cap.PlaybackError
 			}
+			if decision := a.transcoder.VAAPIToneDecision(); decision != nil {
+				hw["toneMapDecision"] = decision
+			}
 			if cap.HardwareToneMap != nil {
 				hw["hardwareToneMap"] = *cap.HardwareToneMap
 			}

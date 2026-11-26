@@ -46,7 +46,12 @@ const decodeProbeVersion = 2
 func (c *decodeProbeCache) storeKey(k decodeKey) string {
 	// A shared cluster store must not reuse another node's device capabilities.
 	host, _ := os.Hostname()
-	b, _ := json.Marshal([]any{decodeProbeVersion, host, k.accel, k.device, k.codec, k.profile, k.pixel, k.depth})
+	key := []any{decodeProbeVersion, host, k.accel, k.device, k.codec, k.profile, k.pixel, k.depth}
+	// Re-probe VAAPI AV1 on builds that previously had no sample encoder.
+	if k.accel == AccelVAAPI && k.codec == "av1" && !c.encoders["libaom-av1"] && c.encoders["libsvtav1"] {
+		key = append(key, "libsvtav1")
+	}
+	b, _ := json.Marshal(key)
 	return string(b)
 }
 

@@ -144,9 +144,6 @@ func toneMapPaths(f features, hw core.HWAccel) []string {
 	if f.hasFilter("tonemap_opencl") {
 		out = append(out, "opencl")
 	}
-	if hw.Name == AccelVAAPI && !hw.NoGPUTonemap && f.hasFilter("tonemap_vaapi") {
-		out = append(out, "vaapi")
-	}
 	if hw.Name == AccelVideoToolbox && (f.hasFilter("tonemap_videotoolbox") || f.hasFilter("scale_vt")) {
 		out = append(out, "videotoolbox")
 	}

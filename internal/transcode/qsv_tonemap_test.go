@@ -149,7 +149,17 @@ func TestQSVToneMapLazyValidationFallbackAndPersistence(t *testing.T) {
 			return errUnhandled
 		}
 
-		m, err := New(config.Transcode{FFmpegPath: ffBin, FFprobePath: fpBin, HWAccel: AccelQSV, TempDir: t.TempDir()}, testLogger(t), WithRunner(fr), withFinder(finder{goos: "linux", isExec: isExecutable}), WithDecodeStore(db))
+		previousDRM := sysfsDRM
+		sysfsDRM = t.TempDir()
+		t.Cleanup(func() { sysfsDRM = previousDRM })
+		intelDevice := filepath.Join(sysfsDRM, "renderD128", "device")
+		if err := os.MkdirAll(intelDevice, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(intelDevice, "vendor"), []byte("0x8086"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		m, err := New(config.Transcode{FFmpegPath: ffBin, FFprobePath: fpBin, HWAccel: AccelQSV, VAAPIDevice: DefaultVAAPIDevice, TempDir: t.TempDir()}, testLogger(t), WithRunner(fr), withFinder(finder{goos: "linux", isExec: isExecutable}), WithDecodeStore(db))
 		if err != nil {
 			t.Fatalf("New: %v", err)
 		}

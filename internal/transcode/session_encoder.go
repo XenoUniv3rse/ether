@@ -696,6 +696,18 @@ func (s *Session) startRunLocked(seg int, bigProbe bool) error {
 		// may make a previously valid bounded AAC seek unsuitable.
 		err = graphFailure(spec)
 	}
+	var finishTone func(Process)
+	if err == nil {
+		finishTone = s.m.admitVAAPITone(&spec)
+		if spec.vaapiToneDecision != nil && spec.vaapiToneDecision.Route == "unavailable" {
+			s.m.recordVAAPITone(spec.vaapiToneDecision, s.log, &s.vaapiToneLogged)
+			if spec.vaapiToneDecision.contended {
+				err = core.ErrStreamLimit
+			} else {
+				err = graphFailure(spec)
+			}
+		}
+	}
 	if err == nil {
 		if !spec.ArchiveInput && needsCopyKeyframe(spec) {
 			probeCtx, cancelProbe := stopContext(stopping)
@@ -735,6 +747,9 @@ func (s *Session) startRunLocked(seg int, bigProbe bool) error {
 	}
 	if err == nil && proc == nil {
 		proc, err = s.m.runner.Start(Command{Path: s.m.ffmpeg, Args: args, Dir: runDir, Stdout: stdout, Stderr: stderr, Background: !s.liveInput && !spec.Decision.EncodesVideo(s.info)})
+	}
+	if finishTone != nil {
+		finishTone(proc)
 	}
 	if proc == nil && r.releaseArchiveInput != nil {
 		r.releaseArchiveInput()
@@ -779,6 +794,7 @@ func (s *Session) startRunLocked(seg int, bigProbe bool) error {
 		s.decision.Enhancement.State = "starting"
 		s.decision.Enhancement.Reason = "waiting for enhanced segments from NVEncC/NGX"
 	}
+	s.m.recordVAAPITone(spec.vaapiToneDecision, s.log, &s.vaapiToneLogged)
 	s.preparationLocked("encoder-start", r.track)
 	r.proc = proc
 	s.cur = r

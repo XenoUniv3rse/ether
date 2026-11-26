@@ -25,6 +25,12 @@ export type Hardware = {
   filtersProbed?: boolean;
   videoEncoderLimit?: number;
   hardwareToneMap?: boolean;
+  toneMapDecision?: {
+    route: "cpu" | "gpu" | "unavailable";
+    output: number;
+    cpu?: number;
+    gpu?: number;
+  };
   toneMap?: string[];
   colour?: string[];
   enhancement?: {
@@ -200,6 +206,16 @@ export function HardwareStatus({ state }: { state?: AsyncState<Hardware | null> 
   const codecs = encodeCodecs(encoders);
   const toneMap = data?.toneMap ?? [];
   const toneMapLabels = Array.from(new Set(toneMap.map(toneMapName)));
+  const toneDecision = data?.toneMapDecision;
+  const toneRoute =
+    toneDecision?.route === "cpu"
+      ? t("Software")
+      : toneDecision?.route === "gpu"
+        ? t("Hardware tone mapping")
+        : t("Unavailable");
+  const formatSpeed = (speed: number) =>
+    `${new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 }).format(speed)}×`;
+
   const colour = data?.colour ?? [];
   const vendor = typeof data?.vendor === "string" ? data.vendor : undefined;
   const copy = vendorCopy(none ? "none" : accel?.name, vendor);
@@ -280,12 +296,29 @@ export function HardwareStatus({ state }: { state?: AsyncState<Hardware | null> 
                   </span>
                 )}
               </div>
-              {toneMapLabels.length ? (
+              {toneDecision || toneMapLabels.length ? (
                 <p className="mt-2 text-xs text-fg-muted">
                   {t("HDR to SDR uses {paths}.", {
-                    paths: toneMapLabels.join(", "),
+                    paths: toneDecision ? toneRoute : toneMapLabels.join(", "),
                   })}
                 </p>
+              ) : null}
+              {toneDecision && (toneDecision.cpu || toneDecision.gpu) ? (
+                <div className="mt-2 flex flex-wrap gap-1.5">
+                  <Badge variant="secondary">
+                    {t("{height}p", { height: toneDecision.output })}
+                  </Badge>
+                  {toneDecision.cpu ? (
+                    <Badge variant="secondary">
+                      {t("Software")} {formatSpeed(toneDecision.cpu)}
+                    </Badge>
+                  ) : null}
+                  {toneDecision.gpu ? (
+                    <Badge variant="secondary">
+                      {t("Hardware tone mapping")} {formatSpeed(toneDecision.gpu)}
+                    </Badge>
+                  ) : null}
+                </div>
               ) : null}
               {data.hardwareToneMap === false && !none ? (
                 <p className="mt-1 text-xs text-fg-muted">
