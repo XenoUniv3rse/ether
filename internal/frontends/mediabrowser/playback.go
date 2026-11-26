@@ -11,7 +11,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/braedonsaunders/ether/internal/core"
 	"github.com/braedonsaunders/ether/internal/frontend"
 	"github.com/braedonsaunders/ether/internal/frontend/kit/caps"
 	"github.com/braedonsaunders/ether/internal/frontend/kit/ids"
@@ -1226,7 +1225,7 @@ func addChapters(source map[string]any, media frontend.MediaInfo) {
 	}
 }
 
-func chapterDTOs(known []core.Chapter) []any {
+func chapterDTOs(known []frontend.Chapter) []any {
 	chapters := make([]any, 0, len(known))
 	for _, chapter := range known {
 		entry := map[string]any{"StartPositionTicks": chapter.Start.Nanoseconds() / 100, "ImageDateModified": wireTime(time.Time{})}

@@ -58,6 +58,9 @@ type WatchStatus = core.WatchStatus
 type ReadingProgress = core.ReadingProgress
 type StreamInfo = core.StreamInfo
 type MediaInfo = core.MediaInfo
+
+// Chapter is a probed or declared chapter marker.
+type Chapter = core.Chapter
 type DecideOptions = core.DecideOptions
 type ClientCaps = core.ClientCaps
 type PlaybackSourceHistory = core.PlaybackSourceHistory
