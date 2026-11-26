@@ -1260,12 +1260,20 @@ func (f *Filter) BindCatalogue(compile func(core.Filter) (string, []any, error),
 	return &out, nil
 }
 
-// SQLShown keeps a single allow rule sargable: its indexed predicates appear
-// directly in WHERE rather than inside an ordered CASE. More involved policy
-// orderings retain the general first-match compiler.
+// SQLShown exposes the indexed predicates of an allow-only policy. Every
+// match has the same action, so rule order does not affect visibility.
 func (f *Filter) SQLShown() (string, []any) {
-	if f != nil && f.movieFallback == "hide" && f.showFallback == "hide" && len(f.rules) == 1 && f.rules[0].action == "show" {
-		return f.rules[0].sql()
+	if f != nil && f.movieFallback == "hide" && f.showFallback == "hide" && len(f.rules) > 0 {
+		allowOnly := true
+		for _, r := range f.rules {
+			if r.action != "show" {
+				allowOnly = false
+				break
+			}
+		}
+		if allowOnly {
+			return f.sqlOr()
+		}
 	}
 	q, a := f.SQLHidden()
 	return "NOT (" + q + ")", a

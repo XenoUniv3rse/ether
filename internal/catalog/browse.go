@@ -4,13 +4,13 @@ import (
 	"cmp"
 	"context"
 	"fmt"
-	"github.com/braedonsaunders/ether/internal/config"
 	"regexp"
 	"slices"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/braedonsaunders/ether/internal/config"
 	"github.com/braedonsaunders/ether/internal/contentrating"
 	"github.com/braedonsaunders/ether/internal/core"
 	"github.com/braedonsaunders/ether/internal/libraryfilter"
@@ -121,7 +121,8 @@ func (c *Catalog) Browse(ctx context.Context, q core.BrowseQuery) (core.Page, er
 			return core.Page{Items: []core.Title{}, Total: offset}, nil
 		}
 	}
-	where, args, err := c.browseWhere(q.Filter)
+	cfg, nowTS := c.config(), c.now().Unix()
+	where, args, err := c.browseWhereTier(q.Filter, false, browseAllTiers, cfg, nowTS)
 	if err != nil {
 		return core.Page{}, err
 	}
@@ -320,7 +321,7 @@ func (c *Catalog) Browse(ctx context.Context, q core.BrowseQuery) (core.Page, er
 			return core.Page{}, err
 		}
 	case titleWalkPage(q):
-		keys, err := c.titlePageKeys(ctx, pageWhere, pageArgs, q, offset, limit)
+		keys, err := c.titlePageKeys(ctx, pageWhere, pageArgs, q, offset, limit, cfg, nowTS)
 		if err != nil {
 			return core.Page{}, err
 		}
@@ -728,6 +729,18 @@ func (c *Catalog) browseWhere(f core.Filter) (string, []any, error) {
 
 // Membership evaluates saved predicates independently of presentation/release gates.
 func (c *Catalog) browseWhereMode(f core.Filter, membershipOnly bool) (string, []any, error) {
+	return c.browseWhereTier(f, membershipOnly, browseAllTiers, c.config(), c.now().Unix())
+}
+
+type browseTier uint8
+
+const (
+	browseAllTiers browseTier = iota
+	browseMirrored
+	browseUpcomingOutsideMirror
+)
+
+func (c *Catalog) browseWhereTier(f core.Filter, membershipOnly bool, tier browseTier, cfg config.Catalog, nowTS int64) (string, []any, error) {
 	f.MovieFilter, f.EpisodeFilter = nil, nil
 	// Positive metadata flags retain their source meaning; absence is unknown.
 	if f.Anime {
@@ -747,7 +760,7 @@ func (c *Catalog) browseWhereMode(f core.Filter, membershipOnly bool) (string, [
 	gateConds, gateArgs := c.consoleGateConditions(f)
 	conds = append(conds, gateConds...)
 	args = append(args, gateArgs...)
-	dateConds, dateArgs := consoleAddedDateConditions(f, c.now().Unix())
+	dateConds, dateArgs := consoleAddedDateConditions(f, nowTS)
 	conds = append(conds, dateConds...)
 	args = append(args, dateArgs...)
 	evidenceConds, evidenceArgs := c.consoleAvailabilityConditions(f)
@@ -756,21 +769,26 @@ func (c *Catalog) browseWhereMode(f core.Filter, membershipOnly bool) (string, [
 	if f.Kids {
 		conds = append(conds, "EXISTS (SELECT 1 FROM catalog_genres kg WHERE kg.key=t.key AND kg.genre='Kids')")
 	}
-	nowTS := c.now().Unix()
 	if !membershipOnly {
-		if cfg := c.config(); cfg.ShowUpcomingMovies && f.RuleVisibility == "" {
-			conds = append(conds, "(t.browsable=1 OR (t.type='movie' AND t.release_known=1 AND t.released_ts>? AND ((?<=0 AND ?<=0) OR (?>0 AND t.popularity>=?) OR (?>0 AND t.vote_count>=?))))", "t.adult=0")
+		if tier != browseMirrored && cfg.ShowUpcomingMovies && f.RuleVisibility == "" && (f.Type == "" || f.Type == core.TypeMovie) {
+			upcoming := "t.type='movie' AND t.release_known=1 AND t.released_ts>? AND ((?<=0 AND ?<=0) OR (?>0 AND t.popularity>=?) OR (?>0 AND t.vote_count>=?))"
+			if tier == browseUpcomingOutsideMirror {
+				conds = append(conds, "t.browsable=0", upcoming)
+			} else {
+				conds = append(conds, "(t.browsable=1 OR ("+upcoming+"))")
+			}
 			args = append(args, nowTS, cfg.MinPopularity, cfg.MinVotes, cfg.MinPopularity, cfg.MinPopularity, cfg.MinVotes, cfg.MinVotes)
 		} else {
-			conds = append(conds, "t.browsable=1", "t.adult=0")
+			conds = append(conds, "t.browsable=1")
 		}
+		conds = append(conds, "t.adult=0")
 		// queryTitles keeps released titles, plus explicitly enabled upcoming
 		// movies. Apply that same guard before counting and paging.
 		// The Postgres driver binds Go bools as 0/1 for the BIGINT flag
 		// columns; a bare `AND ?` would make Postgres infer boolean and reject
 		// the int. Compare the flag numerically with an int argument instead.
 		conds = append(conds, "t.release_known=1 AND (t.released_ts<=? OR (t.type='movie' AND ?<>0))")
-		args = append(args, nowTS, flagInt(c.config().ShowUpcomingMovies))
+		args = append(args, nowTS, flagInt(cfg.ShowUpcomingMovies))
 		if gc, ga := browseGateConds(f, nowTS); len(gc) > 0 {
 			conds = append(conds, gc...)
 			args = append(args, ga...)
@@ -816,7 +834,7 @@ func (c *Catalog) browseWhereMode(f core.Filter, membershipOnly bool) (string, [
 	if f.RuleVisibility != "" {
 		if f.ApplyCanonicalInPreview {
 			if policy := c.viewerFilter(f.CatalogViewerID, false); policy != nil {
-				clause, a := c.policySQLHidden(f.CatalogViewerID, policy)
+				clause, a := c.policySQLShown(f, policy)
 				conds = append(conds, clause)
 				args = append(args, a...)
 			}
@@ -862,7 +880,7 @@ func (c *Catalog) browseWhereMode(f core.Filter, membershipOnly bool) (string, [
 	}
 	// Rule browsing gates like everything else: its totals must match the
 	// titles queryTitles hands back, which never include ungated movies.
-	if cfg := c.config(); !membershipOnly && cfg.ReleaseMode == config.ModeDigital && !(f.DigitalDiscovery && f.HiddenMovieSeq != 0) {
+	if !membershipOnly && cfg.ReleaseMode == config.ModeDigital && !(f.DigitalDiscovery && f.HiddenMovieSeq != 0) {
 		gateSQL := homeReleaseSQL("t")
 		if cfg.ShowUpcomingMovies {
 			gateSQL = "(t.type='movie' AND t.release_known=1 AND t.released_ts>? OR (" + gateSQL + "))"
@@ -1311,7 +1329,7 @@ func (c *Catalog) browseWhereMode(f core.Filter, membershipOnly bool) (string, [
 		// steering the plan: without planner statistics SQLite took it as a
 		// selective range on catalog_titles_type_browse_count and sorted the
 		// whole type for every sorted page instead of walking its sort index.
-		if c.config().ShowUpcomingMovies {
+		if cfg.ShowUpcomingMovies {
 			conds = append(conds, "t.release_known=1 AND (t.type='movie' OR +t.released_ts<=?)")
 		} else {
 			conds = append(conds, "t.release_known=1 AND +t.released_ts<=?")
@@ -1334,7 +1352,7 @@ func (c *Catalog) browseViewerRules(f core.Filter) ([]string, []any) {
 	if policy == nil {
 		return nil, nil
 	}
-	clause, args := c.policySQLHidden(f.CatalogViewerID, policy)
+	clause, args := c.policySQLShown(f, policy)
 	conds := []string{clause}
 	// Strict viewers cannot see rows whose missing facts make a rule undecidable.
 	if !policy.Passive() && c.strictViewer(f.CatalogViewerID, f.MaxContentRating != "") {
