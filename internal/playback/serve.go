@@ -233,17 +233,17 @@ func (m *Manager) ServeRange(w http.ResponseWriter, r *http.Request, sessionID s
 	s.mu.Lock()
 	recovered := s.originalRevision
 	rangeGen := s.cur
-	s.mu.Unlock()
-	if (recovered != "" && original.Revision != recovered) || (recovered == "" && !s.directRangeCompatible()) {
-		// The client still holds the original file's container headers and
-		// byte coordinates. A remux handoff needs a new playback decision;
-		// retrying this URL must never return bytes from a different file.
+	replaced := rangeGen != s.virtualGen
+	compatible := s.directRangeCompatibleLocked()
+	if (recovered != "" && original.Revision != recovered) || (recovered == "" && !compatible) {
+		s.mu.Unlock()
+		// A remux handoff needs a new playback decision. The original file
+		// URL still identifies the old container and its byte coordinates.
 		w.Header().Set("Cache-Control", "no-store")
 		http.Error(w, "source changed; restart playback", http.StatusConflict)
 		return
 	}
 	w = newStallWriter(w, m.opts.WriteStallTimeout)
-	s.mu.Lock()
 	rep := representation{
 		size:                  s.virtual.Size,
 		etag:                  s.etag,
@@ -264,6 +264,10 @@ func (m *Manager) ServeRange(w http.ResponseWriter, r *http.Request, sessionID s
 		}
 	}
 	policy, customResponse := core.RangeResponseFrom(r.Context())
+	if replaced && policy.Serve == nil {
+		policy.StrictRanges = true
+		r = r.WithContext(core.WithRangeResponse(r.Context(), policy))
+	}
 	if customResponse && policy.MIME != nil {
 		if pm := policy.MIME(name); pm != "" && (pm != "application/octet-stream" || !strings.HasPrefix(rep.contentType, "audio/")) {
 			rep.contentType = pm
@@ -592,7 +596,11 @@ func (s *session) directRangeCompatible() bool {
 func (s *session) directRangeGeneration() (*generation, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.cur, !s.closed && s.cur != nil && s.originalRevision == "" && !s.requiresRemux &&
+	return s.cur, s.directRangeCompatibleLocked()
+}
+
+func (s *session) directRangeCompatibleLocked() bool {
+	return !s.closed && s.cur != nil && s.originalRevision == "" && !s.requiresRemux &&
 		(spliceable(s.container, s.name) || (s.virtualGen != nil && s.cur.releaseID() == s.virtualGen.releaseID() && s.cur.src.Size() == s.virtual.Size))
 }
 

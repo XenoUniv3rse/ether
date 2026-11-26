@@ -267,7 +267,7 @@ func TestRokuColdVideoDetailShape(t *testing.T) {
 			}
 			item := rokuJSON(t, body)
 			for _, field := range []string{"MediaStreams", "People", "Chapters", "Studios", "Taglines", "BackdropImageTags"} {
-				if values, ok := item[field].([]any); !ok || (field == "MediaStreams" && len(values) != 0) {
+				if values, ok := item[field].([]any); !ok || (field == "MediaStreams" && len(values) == 0) {
 					t.Errorf("unexpected array shape for %s", field)
 				}
 			}
@@ -284,8 +284,8 @@ func TestRokuColdVideoDetailShape(t *testing.T) {
 				t.Fatal("detail is missing its default source")
 			}
 			source, _ := sources[0].(map[string]any)
-			if streams, ok := source["MediaStreams"].([]any); !ok || len(streams) != 0 || source["Id"] != id || source["VideoType"] != "VideoFile" {
-				t.Error("default video source must have an ID, video type, and empty stream array")
+			if streams, ok := source["MediaStreams"].([]any); !ok || len(streams) == 0 || source["Id"] != id || source["VideoType"] != "VideoFile" {
+				t.Error("default video source must have an ID, video type, and stream estimates")
 			}
 			if title.Type == "episode" {
 				if item["SeriesId"] != showID || item["SeasonId"] != ids.RatingKeyGUID(lib.season.Key) || item["ParentIndexNumber"] != float64(1) {

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/braedonsaunders/ether/internal/frontend"
+	"github.com/braedonsaunders/ether/internal/frontend/kit/ids"
 )
 
 // Listed versions: Jellyfin lists every version of a title in a list row's
@@ -50,7 +51,7 @@ func (i *instance) listScope(r *http.Request, viewer *frontend.Viewer) (frontend
 // listedVersionSources returns the configured slots after Auto as list-row
 // MediaSources, or nil when the menu is Auto alone. auto is the row's
 // existing source; it is renamed for the picker only when slots follow it.
-func (i *instance) listedVersionSources(r *http.Request, viewer *frontend.Viewer, item, auto map[string]any, title frontend.Title) []any {
+func (i *instance) listedVersionSources(r *http.Request, viewer *frontend.Viewer, auto map[string]any, title frontend.Title) []any {
 	if r == nil || viewer == nil || auto == nil || title.Key.IsPluginKey() || (title.Type != "movie" && title.Type != "episode") || mbIsBookItem(title) {
 		return nil
 	}
@@ -87,20 +88,23 @@ func (i *instance) listedVersionSources(r *http.Request, viewer *frontend.Viewer
 		if handle == "" {
 			continue
 		}
-		source := i.detailMediaSourceDTO(handle, v.Info)
+		source := i.mediaSourceDTO(handle, v.Info)
 		source["Name"] = v.Label
 		i.mediaSourceDialect(source)
 		i.jellyfinMediaSourceDTO(source, v.Info, false)
 		jellyfinMediaSourceShape(source, title.Title)
 		delete(source, "Chapters")
-		i.presentJellyfinFile(item, source, title)
+		i.completeFileSource(r, source, title, "")
 		out = append(out, source)
 	}
 	if len(out) == 0 {
 		return nil
 	}
-	if label := versions[0].Label; versions[0].Auto && label != "" {
-		auto["Name"] = label
+	if primary := versions[0]; primary.Auto {
+		i.applyVersionMediaFacts(auto, ids.RatingKeyGUID(title.Key), primary.Info)
+		if primary.Label != "" {
+			auto["Name"] = primary.Label
+		}
 	}
 	return out
 }

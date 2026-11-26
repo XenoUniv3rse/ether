@@ -71,7 +71,13 @@ func (f *fakePlayback) SessionFor(user int64, client string, key core.RatingKey)
 	}
 	return nil, false
 }
-func (f *fakePlayback) ServeRange(w http.ResponseWriter, _ *http.Request, _ string) {
+func (f *fakePlayback) ServeRange(w http.ResponseWriter, r *http.Request, _ string) {
+	if r.Method == http.MethodHead {
+		w.Header().Set("Content-Type", "video/x-matroska")
+		w.Header().Set("Content-Length", "12")
+		w.WriteHeader(http.StatusOK)
+		return
+	}
 	_, _ = w.Write([]byte("source bytes"))
 }
 func (f *fakePlayback) InputURL(id string) string { return "http://loopback/" + id }

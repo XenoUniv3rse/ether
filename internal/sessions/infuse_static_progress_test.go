@@ -251,8 +251,8 @@ func TestInfuseStaticStreamOpensWithoutPlaybackInfo(t *testing.T) {
 		if w.Code != http.StatusOK && w.Code != http.StatusPartialContent {
 			t.Fatalf("%s static stream %d %s", method, w.Code, w.Body.String())
 		}
-		if method == http.MethodHead && w.Body.Len() != 0 {
-			t.Fatalf("HEAD body %q", w.Body.String())
+		if method == http.MethodHead && (w.Body.Len() != 0 || w.Header().Get("Content-Length") != "12" || w.Header().Get("Content-Type") != "video/x-matroska") {
+			t.Fatalf("HEAD length %q, type %q, body length %d", w.Header().Get("Content-Length"), w.Header().Get("Content-Type"), w.Body.Len())
 		}
 	}
 	listed, err := broker.Sessions(ctx, frontend.SessionAccess{Viewer: viewer, Device: core.Device{ID: "appletv"}, Protocol: "jellyfin"})

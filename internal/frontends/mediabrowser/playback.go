@@ -571,7 +571,7 @@ func (i *instance) playbackInfo(w http.ResponseWriter, r *http.Request) {
 	staticPlayable := jellyfinStaticPlayable(i.protocol, channel, opts) && !intent.DeclaredCaps
 	media := plan.Media
 	media.Estimated = media.Estimated || plan.Estimated
-	source := i.detailMediaSourceDTO(sourceID, media)
+	source := i.mediaSourceDTO(sourceID, media)
 	if channel != "" || plan.Decision.Kind == "transcode" {
 		// These streams are produced by Ether, even when their input is remote.
 		source["IsRemote"] = false
@@ -697,7 +697,7 @@ func (i *instance) playbackInfo(w http.ResponseWriter, r *http.Request) {
 						media = *session.Media
 					}
 					media = defaultLiveMediaInfo(media)
-					source = i.detailMediaSourceDTO(sourceID, media)
+					source = i.mediaSourceDTO(sourceID, media)
 					i.shapeLiveMediaSource(source, sourceID, channelName, session.ID, url, media, true)
 				} else if subtitleService := i.host.Sessions; subtitleService != nil {
 					streams := i.mediaStreams(plan.Media.Streams)
@@ -850,25 +850,27 @@ func (i *instance) playbackInfo(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	if (i.protocol == "emby" || i.protocol == "jellyfin") && channel == "" {
+	if !media.Estimated && channel == "" {
 		applyPlannedStreamIndexes(source, media, plan.Decision, plan.SubtitleStream())
 	}
-	// With no explicit version pick, list Auto then the ranked release
-	// variants so the app's version picker offers them; a pick resolves to
-	// the exact release through the returned MediaSource Id.
+	sources := []any{source}
 	if listVersions && !versionRequested && autoSwitchedRelease == "" {
-		if sources := i.releaseVersionSourcesFor(r, scope, key, titleLanguage, variants, source); sources != nil {
-			if channel == "" {
-				i.subtitleLists.note(v, key, sources, time.Now())
-			}
-			jsonReply(w, map[string]any{"MediaSources": sources, "PlaySessionId": playID})
-			return
+		if alternatives := i.releaseVersionSourcesFor(r, scope, key, titleLanguage, variants, source); alternatives != nil {
+			sources = alternatives
 		}
 	}
 	if channel == "" {
-		i.subtitleLists.note(v, key, []any{source}, time.Now())
+		playbackItem.Key = key
+		for _, raw := range sources {
+			file := raw.(map[string]any)
+			i.completeFileSource(r, file, playbackItem, "")
+			if i.protocol == "jellyfin" {
+				delete(file, "Chapters")
+			}
+		}
+		i.subtitleLists.note(v, key, sources, time.Now())
 	}
-	jsonReply(w, map[string]any{"MediaSources": []any{source}, "PlaySessionId": playID})
+	jsonReply(w, map[string]any{"MediaSources": sources, "PlaySessionId": playID})
 }
 
 func (i *instance) liveStreamsOpen(w http.ResponseWriter, r *http.Request) {
@@ -961,7 +963,7 @@ func (i *instance) liveStreamsOpen(w http.ResponseWriter, r *http.Request) {
 		media = *session.Media
 	}
 	media = defaultLiveMediaInfo(media)
-	source := i.detailMediaSourceDTO(wireID, media)
+	source := i.mediaSourceDTO(wireID, media)
 	i.shapeLiveMediaSource(source, wireID, channelName, session.ID, url, media, true)
 	i.mediaSourceDialect(source)
 	if i.protocol == "emby" {
@@ -1036,7 +1038,7 @@ func (i *instance) liveStreamsMediaInfo(w http.ResponseWriter, r *http.Request) 
 			media = *session.Media
 		}
 		media = defaultLiveMediaInfo(media)
-		source := i.detailMediaSourceDTO(id, media)
+		source := i.mediaSourceDTO(id, media)
 		i.shapeLiveMediaSource(source, id, "", streamID, url, media, true)
 		i.mediaSourceDialect(source)
 		if i.protocol == "jellyfin" {
@@ -1130,7 +1132,9 @@ func mediaSourceDTO(id string, media frontend.MediaInfo) map[string]any {
 		"RequiresOpening": false, "RequiresClosing": false, "RequiresLooping": false, "SupportsProbing": !media.Estimated && len(media.Streams) > 0, "TranscodingSubProtocol": "http", "HasSegments": false,
 		"Formats": []string{}, "MediaAttachments": []any{}, "RequiredHttpHeaders": map[string]string{}, "MediaStreams": mediaStreams(media.Streams),
 	}
-	addChapters(source, media)
+	if !media.Estimated {
+		addChapters(source, media)
+	}
 	return source
 }
 

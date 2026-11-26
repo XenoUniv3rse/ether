@@ -3,7 +3,6 @@ package sessions
 import (
 	"context"
 	"fmt"
-	"github.com/braedonsaunders/ether/internal/frontend/kit/mediasafety"
 	"io"
 	"net/http"
 	"strconv"
@@ -13,6 +12,7 @@ import (
 
 	"github.com/braedonsaunders/ether/internal/core"
 	"github.com/braedonsaunders/ether/internal/frontend"
+	"github.com/braedonsaunders/ether/internal/frontend/kit/mediasafety"
 	"github.com/braedonsaunders/ether/internal/streamgrant"
 	"github.com/braedonsaunders/ether/internal/transcode"
 )
@@ -1052,6 +1052,15 @@ func (b *Broker) serveMediaAt(protocol frontend.Protocol, access *frontend.Sessi
 	}
 	if s.format == frontend.StreamHTTP {
 		if httpSess, ok := hs.(core.HTTPSession); ok && len(tail) == 1 && (tail[0] == "stream" || strings.HasPrefix(tail[0], "stream.")) {
+			// Byte offsets from a failed source cannot address a fresh
+			// progressive remux. A client can start it with a plain GET.
+			if r.Header.Get("Range") != "" {
+				if ps, ok := b.deps.Playback.Session(s.playID); ok && ps != nil && ps.Failovers > 0 {
+					w.Header().Set("Cache-Control", "no-store")
+					w.WriteHeader(http.StatusRequestedRangeNotSatisfiable)
+					return
+				}
+			}
 			httpSess.ServeHTTP(w, r)
 			return
 		}

@@ -199,56 +199,19 @@ func jellyfinListFile(r *http.Request) bool {
 	return on
 }
 
-// presentJellyfinFile is the file Infuse reads off a movie or episode row.
-// An estimate leaves Protocol "Http", IsRemote true, and an empty container,
-// which Infuse rejects as DataSourceError. The path is the authorized virtual
-// library name when the host has one, otherwise the same stable libpath name
-// WebDAV uses. Probed streams stay; a row with none still names a video and
-// an audio track so the source is a file rather than an empty remote.
-func (i *instance) presentJellyfinFile(item, source map[string]any, title frontend.Title) {
-	// A declared audio/book/photo item keeps its own probed streams: this
-	// helper would otherwise stamp it as a video file and invent a video
-	// stream for a source that has none yet.
-	if i == nil || item == nil || source == nil || mbDeclaredNonVideo(title) || (title.Type != "movie" && title.Type != "episode") {
-		return
-	}
-	container, _ := source["Container"].(string)
-	if container == "" {
-		container = "mkv"
-	}
-	source["Container"] = container
-	item["Container"] = container
-	if remote, _ := source["Path"].(string); strings.Contains(remote, "://") {
-		// A playback URL stays a remote source. Listing rows do not have one.
+// presentJellyfinFile gives a movie or episode row the file description that
+// static clients read before asking for PlaybackInfo.
+func (i *instance) presentJellyfinFile(r *http.Request, item, source map[string]any, title frontend.Title) {
+	if mbDeclaredNonVideo(title) || (title.Type != "movie" && title.Type != "episode") {
 		return
 	}
 	path, _ := item["Path"].(string)
+	i.completeFileSource(r, source, title, path)
 	if path == "" {
-		if existing, ok := source["Path"].(string); ok && existing != "" {
-			path = existing
-		}
+		item["Path"] = source["Path"]
 	}
-	if path == "" {
-		path = jellyfinLibraryPath(title, container)
-	}
-	if path == "" {
-		return
-	}
-	if current, _ := item["Path"].(string); current == "" {
-		item["Path"] = path
-	}
-	if current, _ := source["Path"].(string); current == "" {
-		source["Path"] = path
-	}
-	source["Protocol"] = "File"
-	source["IsRemote"] = false
+	item["Container"] = source["Container"]
 	source["VideoType"] = "VideoFile"
-	if streams, _ := source["MediaStreams"].([]any); len(streams) == 0 {
-		source["MediaStreams"] = i.mediaStreams([]frontend.StreamInfo{
-			{Type: "video", Index: 0, Codec: "h264"},
-			{Type: "audio", Index: 1, Codec: "aac", Channels: 2},
-		})
-	}
 }
 
 func jellyfinLibraryPath(title frontend.Title, container string) string {
@@ -310,6 +273,12 @@ func (i *instance) shapeJellyfinItem(r *http.Request, viewer *frontend.Viewer, i
 	i.setVideoCanDownload(viewer, item, title)
 	i.attachTitleLibrary(r, viewer, item, title)
 	if i.protocol != "jellyfin" {
+		if sources, ok := item["MediaSources"].([]any); ok {
+			path, _ := item["Path"].(string)
+			for _, raw := range sources {
+				i.completeFileSource(r, raw.(map[string]any), title, path)
+			}
+		}
 		return
 	}
 	setMissing(item, "ChannelId", nil)
@@ -394,15 +363,16 @@ func (i *instance) shapeJellyfinItem(r *http.Request, viewer *frontend.Viewer, i
 			if dto, ok := source.(map[string]any); ok {
 				jellyfinMediaSourceShape(dto, title.Title)
 				if jellyfinListFile(r) {
-					i.presentJellyfinFile(item, dto, title)
+					i.presentJellyfinFile(r, item, dto, title)
 				}
 			}
 		}
 	} else if fields["mediasources"] && jellyfinListFile(r) && !mbIsBookItem(title) && (title.Type == "movie" || title.Type == "episode") && r != nil && viewer != nil {
 		source := i.defaultMediaSource(r, viewer, authhdr.MediaBrowserToken(r), title.Key)
 		jellyfinMediaSourceShape(source, title.Title)
-		i.presentJellyfinFile(item, source, title)
-		item["MediaSources"] = append([]any{source}, i.listedVersionSources(r, viewer, item, source, title)...)
+		alternatives := i.listedVersionSources(r, viewer, source, title)
+		i.presentJellyfinFile(r, item, source, title)
+		item["MediaSources"] = append([]any{source}, alternatives...)
 	}
 	if title.Type == "season" || title.Type == "show" {
 		i.attachUnplayedCount(r, viewer, item, title)
@@ -1074,53 +1044,6 @@ func jellyfinStudioFacts(item map[string]any, title frontend.Title) {
 	setMissing(item, "Studios", []any{})
 }
 
-// jellyfinKnownVersionFacts copies probe facts that BaseItemDto allows from
-// the default version. That is the only version, or the first probed one
-// when several files exist. Estimated media stays off the item.
-func (i *instance) jellyfinKnownVersionFacts(dto map[string]any, versions []frontend.Version) {
-	if i.protocol != "jellyfin" || len(versions) == 0 {
-		return
-	}
-	version, ok := versions[0], !versions[0].Media.Estimated && len(versions[0].Media.Streams) > 0
-	if !ok {
-		for _, candidate := range versions[1:] {
-			if !candidate.Media.Estimated && len(candidate.Media.Streams) > 0 {
-				version = candidate
-				ok = true
-				break
-			}
-		}
-	}
-	if !ok || version.Media.Estimated {
-		return
-	}
-	if len(version.Media.Chapters) > 0 {
-		chapters := make([]any, 0, len(version.Media.Chapters))
-		for _, chapter := range version.Media.Chapters {
-			// ChapterInfo.ImageDateModified is non-null in the Jellyfin
-			// SDK; without it the whole item fails to decode (#614).
-			// Ether has no chapter-image date, so it carries the zero
-			// date Jellyfin itself sends for chapters without images.
-			entry := map[string]any{"StartPositionTicks": chapter.Start.Nanoseconds() / 100, "ImageDateModified": wireTime(time.Time{})}
-			if chapter.Title != "" {
-				entry["Name"] = chapter.Title
-			}
-			chapters = append(chapters, entry)
-		}
-		dto["Chapters"] = chapters
-	}
-	if version.Media.Container != "" {
-		dto["Container"] = version.Media.Container
-	}
-	if !version.Media.Estimated && version.Media.Duration > 0 {
-		dto["RunTimeTicks"] = version.Media.Duration.Nanoseconds() / 100
-	}
-	if !version.Media.Estimated && len(version.Media.Streams) > 0 {
-		dto["MediaStreams"] = i.mediaStreams(version.Media.Streams)
-		dto["HasSubtitles"] = mediaHasSubtitles(version.Media)
-	}
-}
-
 // jellyfinRootID is the user root folder. View numbers 1 and 2 are the
 // movie and show libraries, so 0 stays the root and does not move when a
 // library is renamed.
@@ -1360,7 +1283,7 @@ func (i *instance) jellyfinEditions(r *http.Request, viewer *frontend.Viewer, ti
 			}
 			id = handle
 		}
-		source := i.detailMediaSourceDTO(id, version.Media)
+		source := i.mediaSourceDTO(id, version.Media)
 		if i.protocol == "emby" {
 			i.versionSourceFacts(source, version)
 			i.embyMediaSourceDTO(source, ids.RatingKeyGUID(title.Key), version.Media)

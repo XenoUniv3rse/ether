@@ -38,7 +38,7 @@ func TestStreamMetadataMountedSourceFacts(t *testing.T) {
 			{"measured target facts", target, false, []string{"H264 - 320x180", "AAC - 1 ch"}, []string{"", ""}, []string{"", ""}},
 			{"multiple resolved tracks", multiple, false, []string{"H264 - 720x480", "AAC - 1 ch", "Commentary - Opus - 2 ch", "English captions - Undefined - SUBRIP"}, []string{"avc1", "mp4a", "", ""}, []string{"4:3", "", "", ""}},
 			{"unknown", []frontend.StreamInfo{{Index: 3, Type: "video"}}, false, []string{""}, []string{""}, []string{""}},
-			{"estimated", multiple, true, nil, nil, nil},
+			{"estimated", multiple[:2], true, []string{"H264 - 720x480", "AAC - 1 ch"}, []string{"avc1", "mp4a"}, []string{"4:3", ""}},
 		} {
 			t.Run(protocol+"/"+tc.name, func(t *testing.T) {
 				viewer := &frontend.Viewer{ID: 1}
@@ -125,12 +125,6 @@ func TestStreamMetadataMountedSourceFacts(t *testing.T) {
 						}
 						if _, present := source["ETag"]; protocol == "emby" && present {
 							t.Fatal("Emby gained a Jellyfin-only field", source)
-						}
-					} else if tc.estimated {
-						value, present := dto["MediaStreams"]
-						streams, array := value.([]any)
-						if (protocol == "jellyfin" && (!array || len(streams) != 0)) || (protocol == "emby" && present) {
-							t.Fatal("estimated top-level tracks exposed", dto)
 						}
 					} else {
 						check(dto["MediaStreams"])

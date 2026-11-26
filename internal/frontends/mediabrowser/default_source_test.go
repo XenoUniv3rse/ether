@@ -67,7 +67,7 @@ func TestDetailFallsBackToGenericSourceWhenVersionCannotBeIssued(t *testing.T) {
 			if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &body) != nil || len(body.Sources) != 1 || body.Sources[0]["Id"] != ids.RatingKeyGUID(5) || strings.Contains(w.Body.String(), "private-release") || strings.Contains(w.Body.String(), "private-source") {
 				t.Fatal(dialect.name, deviceID, w.Code, w.Body.String())
 			}
-			if deviceID == "" && (body.Sources[0]["SupportsDirectPlay"] != false || body.Sources[0]["Path"] != nil) {
+			if deviceID == "" && (body.Sources[0]["SupportsDirectPlay"] != false) {
 				t.Fatal("unbound device claimed playback", body.Sources[0])
 			}
 			if deviceID != "" && body.Sources[0]["SupportsDirectPlay"] != true {

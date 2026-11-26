@@ -45,7 +45,7 @@ func TestBrowsePageCacheFollowsFreshness(t *testing.T) {
 		return w
 	}
 	first := get("")
-	if first.Code != 200 || !strings.Contains(first.Body.String(), "First") || first.Header().Get("ETag") == "" {
+	if first.Code != 200 || !strings.Contains(first.Body.String(), "First") || first.Header().Get("ETag") != "" {
 		t.Fatal(first.Code, first.Header().Get("ETag"), first.Body.String())
 	}
 	name = "Second"
@@ -53,13 +53,12 @@ func TestBrowsePageCacheFollowsFreshness(t *testing.T) {
 	if cached.Code != 200 || !strings.Contains(cached.Body.String(), "First") {
 		t.Fatal(cached.Code, cached.Body.String())
 	}
-	etag := cached.Header().Get("ETag")
-	notModified := get(etag)
-	if notModified.Code != http.StatusNotModified || notModified.Body.Len() != 0 {
-		t.Fatal(notModified.Code, notModified.Body.String())
+	conditional := get(`"stale-validator"`)
+	if conditional.Code != http.StatusOK || !strings.Contains(conditional.Body.String(), "First") || conditional.Header().Get("ETag") != "" {
+		t.Fatal(conditional.Code, conditional.Body.String())
 	}
 	revoked = true
-	if denied := get(etag); denied.Code != http.StatusUnauthorized {
+	if denied := get(""); denied.Code != http.StatusUnauthorized {
 		t.Fatalf("revoked cached response: %d", denied.Code)
 	}
 	revoked = false

@@ -12,14 +12,18 @@ import (
 // authority for compatibility and lazy-stream issuance; failures leave the
 // offer without playback claims or a stream URL.
 func (i *instance) defaultMediaSource(r *http.Request, viewer *frontend.Viewer, credential string, key frontend.RatingKey) map[string]any {
-	source := i.detailMediaSourceDTO(ids.RatingKeyGUID(key), frontend.MediaInfo{Estimated: true})
-	i.mediaSourceDialect(source)
-	if i.protocol == "emby" {
-		i.embyMediaSourceDTO(source, ids.RatingKeyGUID(key), frontend.MediaInfo{Estimated: true})
-	}
-	if i.protocol == "jellyfin" {
-		i.jellyfinMediaSourceDTO(source, frontend.MediaInfo{Estimated: true}, false)
-	}
+	id := ids.RatingKeyGUID(key)
+	media := frontend.MediaInfo{Estimated: true}
+	source := i.mediaSourceDTO(id, media)
+	defer func() {
+		i.mediaSourceDialect(source)
+		if i.protocol == "emby" {
+			i.embyMediaSourceDTO(source, id, media)
+		}
+		if i.protocol == "jellyfin" {
+			i.jellyfinMediaSourceDTO(source, media, false)
+		}
+	}()
 	if i.host.Sessions == nil || i.host.Capabilities == nil || listMediaEstimate(r) {
 		return source
 	}
@@ -33,6 +37,9 @@ func (i *instance) defaultMediaSource(r *http.Request, viewer *frontend.Viewer, 
 	if err != nil {
 		return source
 	}
+	media = plan.Media
+	media.Estimated = media.Estimated || plan.Estimated
+	source = i.mediaSourceDTO(id, media)
 	source["SupportsDirectPlay"], source["SupportsDirectStream"], source["SupportsTranscoding"] = plan.DirectPlay, plan.DirectStream, plan.Transcoding
 	if i.protocol == "jellyfin" {
 		offerJellyfinStatic(source, planReq.Intent.Options)

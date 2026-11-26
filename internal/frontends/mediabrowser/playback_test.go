@@ -123,7 +123,7 @@ func TestPlaybackInfoEstimatesAndOpens(t *testing.T) {
 	}
 }
 
-func TestPlaybackInfoExplicitEstimateOmitsSyntheticSourceFacts(t *testing.T) {
+func TestPlaybackInfoExplicitEstimateCarriesSourceFacts(t *testing.T) {
 	viewer := &frontend.Viewer{ID: 1}
 	identity := frontendtest.Identity{ResolveFunc: func(context.Context, string) (*frontend.Viewer, error) { return viewer, nil }}
 	broker := frontendtest.Sessions{PlanFunc: func(_ context.Context, req frontend.PlanRequest) (frontend.PlayPlan, error) {
@@ -146,7 +146,7 @@ func TestPlaybackInfoExplicitEstimateOmitsSyntheticSourceFacts(t *testing.T) {
 			r.Header.Set("X-Emby-Token", "grant")
 			w := httptest.NewRecorder()
 			inst.Handler().ServeHTTP(w, r)
-			if w.Code != 200 || strings.Contains(w.Body.String(), `"Container":"mkv"`) || strings.Contains(w.Body.String(), `1203120000`) || strings.Contains(w.Body.String(), `"Codec":"h264"`) {
+			if w.Code != 200 || !strings.Contains(w.Body.String(), `"Container":"mkv"`) || !strings.Contains(w.Body.String(), `"Size":1203120000`) || !strings.Contains(w.Body.String(), `"Codec":"h264"`) || !strings.Contains(w.Body.String(), `"SupportsProbing":false`) {
 				t.Fatal(w.Code, w.Body.String())
 			}
 		}

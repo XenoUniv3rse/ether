@@ -20,7 +20,6 @@ const browseCacheMaxBody = 1 << 20
 type cachedBody struct {
 	code  int
 	ctype string
-	etag  string
 	body  []byte
 	at    time.Time
 }
@@ -41,27 +40,19 @@ func (c *browseCache) wrap(next http.Handler, fresh func() frontend.PageFreshnes
 			return
 		}
 		key := browseCacheKey(fresh(), r)
-		sum := sha256.Sum256([]byte(key))
-		etag := `"` + hex.EncodeToString(sum[:8]) + `"`
 		if body, ok := c.get(key); ok {
 			h := w.Header()
 			h.Set("Content-Type", body.ctype)
-			h.Set("ETag", etag)
-			if r.Header.Get("If-None-Match") == etag {
-				w.WriteHeader(http.StatusNotModified)
-				return
-			}
 			w.WriteHeader(body.code)
 			_, _ = w.Write(body.body)
 			return
 		}
-		w.Header().Set("ETag", etag)
 		cap := &bodyCapture{ResponseWriter: w}
 		// A stored hash is joined inside the handler. Hashing that has not
 		// finished stays on the background worker; the cache must not wait for it.
 		next.ServeHTTP(cap, r.WithContext(frontend.WithoutSynchronousArtworkMetadata(r.Context())))
 		if cap.code == http.StatusOK && cap.buf.Len() > 0 && cap.buf.Len() <= browseCacheMaxBody {
-			c.put(key, cachedBody{code: cap.code, ctype: cap.Header().Get("Content-Type"), etag: etag, body: append([]byte(nil), cap.buf.Bytes()...), at: time.Now()})
+			c.put(key, cachedBody{code: cap.code, ctype: cap.Header().Get("Content-Type"), body: append([]byte(nil), cap.buf.Bytes()...), at: time.Now()})
 		}
 	})
 }

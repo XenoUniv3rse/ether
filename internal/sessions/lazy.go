@@ -481,38 +481,59 @@ func (s *lazyStreams) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	fileHead := r.Method == http.MethodHead && req.Item != 0 && stored.HLS == nil
 	if r.Method == http.MethodHead {
 		if expires <= s.broker.deps.Now().UnixMilli() || s.grants.ValidateGrantReference(ctx, string(s.protocol), reference, viewerID) != nil {
 			http.NotFound(w, r)
 			return
 		}
-		if (req.Channel != "" && !liveEntryTail(tail)) || (stored.HLS != nil && tail != "hls/master.m3u8") {
+		if fileHead {
 			s.broker.mu.Lock()
 			id := s.broker.lazySessions[binding].id
 			s.broker.mu.Unlock()
 			access := frontend.SessionAccess{Viewer: viewer, Device: req.Device, Protocol: s.protocol}
-			if existing, _, err := s.broker.access(ctx, access, id); id == "" || err != nil || (req.Caps.Remote && !existing.caps.Remote) {
-				http.NotFound(w, r)
+			if existing, _, err := s.broker.access(ctx, access, id); err == nil && existing.format == frontend.StreamDirect && req.Caps.Remote == existing.caps.Remote {
+				if existing.originalReplaced && r.URL.Query().Get("sourceRevision") != existing.sourceETag {
+					w.Header().Set("Cache-Control", "no-store")
+					w.WriteHeader(http.StatusConflict)
+					return
+				}
+				s.serveFileHead(w, r, existing.public.MediaPath)
 				return
 			}
-		} else if req.Channel != "" && tail == "live/stream.ts" {
-			w.Header().Set("Content-Type", "video/mp2t")
-		} else if stored.HLS != nil {
-			w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
-		} else if req.Item != 0 {
-			w.Header().Set("Accept-Ranges", "bytes")
 		}
-		w.Header().Set("Cache-Control", "no-store")
-		w.WriteHeader(http.StatusOK)
-		return
+		// MediaBrowser clients use a cold HEAD as a file probe. Resolve it
+		// on demand so Content-Length comes from the same source as GET.
+		// Other cold HEAD requests remain capability or playlist probes.
+		if !fileHead || (s.protocol != "jellyfin" && s.protocol != "emby") {
+			if (req.Channel != "" && !liveEntryTail(tail)) || (stored.HLS != nil && tail != "hls/master.m3u8") {
+				s.broker.mu.Lock()
+				id := s.broker.lazySessions[binding].id
+				s.broker.mu.Unlock()
+				access := frontend.SessionAccess{Viewer: viewer, Device: req.Device, Protocol: s.protocol}
+				if existing, _, err := s.broker.access(ctx, access, id); id == "" || err != nil || (req.Caps.Remote && !existing.caps.Remote) {
+					http.NotFound(w, r)
+					return
+				}
+			} else if req.Channel != "" && tail == "live/stream.ts" {
+				w.Header().Set("Content-Type", "video/mp2t")
+			} else if stored.HLS != nil {
+				w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
+			} else if req.Item != 0 {
+				w.Header().Set("Accept-Ranges", "bytes")
+			}
+			w.Header().Set("Cache-Control", "no-store")
+			w.WriteHeader(http.StatusOK)
+			return
+		}
 	}
 	// Reserve before opening a source. Stuck dependencies retain a slot, so
 	// they cannot create an unbounded number of heartbeat goroutines.
-	if !s.broker.reserveLazyHeartbeat() {
+	if !fileHead && !s.broker.reserveLazyHeartbeat() {
 		http.Error(w, "playback unavailable", http.StatusServiceUnavailable)
 		return
 	}
-	heartbeatOwned := true
+	heartbeatOwned := !fileHead
 	defer func() {
 		if heartbeatOwned {
 			s.broker.releaseLazyHeartbeat()
@@ -635,7 +656,7 @@ func (s *lazyStreams) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	} else if existingHLS != nil && tail != "hls/master.m3u8" {
 		path = "/sessions/media/" + id + "/" + existingHLS.grant + "/master.m3u8"
 	} else {
-		stream := frontend.StreamRequest{Format: format}
+		stream := frontend.StreamRequest{Format: format, LazyStart: fileHead}
 		if format == frontend.StreamDirect {
 			revision := r.URL.Query().Get("sourceRevision")
 			stream.ExpectedOriginalRevision = &revision
@@ -672,6 +693,10 @@ func (s *lazyStreams) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if reserved {
 		s.broker.releaseLazyCleanup()
 		reserved = false
+	}
+	if fileHead {
+		s.serveFileHead(w, r, path)
+		return
 	}
 	// The scoped path remains internal; every client request must pass this
 	// handler so revoking the issuing grant revokes the capability as well.
@@ -739,6 +764,14 @@ func (s *lazyStreams) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	} else {
 		s.broker.ServeMediaFor(s.protocol, w, clone)
 	}
+}
+
+func (s *lazyStreams) serveFileHead(w http.ResponseWriter, r *http.Request, path string) {
+	clone := r.Clone(r.Context())
+	clone.URL.Path = path
+	clone.URL.RawPath = ""
+	w.Header().Set("Cache-Control", "no-store")
+	s.broker.ServeMediaFor(s.protocol, w, clone)
 }
 
 func (s *lazyStreams) sourceGone(w http.ResponseWriter, r *http.Request) {

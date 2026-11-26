@@ -110,7 +110,7 @@ func TestPlaybackPathUsesOnlyVerifiedSurfaceBase(t *testing.T) {
 	}{
 		{"absolute", func(context.Context, *http.Request) (string, error) { return "https://ether.example/jellyfin", nil }, "https://ether.example/jellyfin/sessions/media/session/grant/file"},
 		{"embedded", nil, "/jellyfin/sessions/media/session/grant/file"},
-		{"unavailable", func(context.Context, *http.Request) (string, error) { return "", errors.New("unavailable") }, ""},
+		{"unavailable", func(context.Context, *http.Request) (string, error) { return "", errors.New("unavailable") }, "/jellyfin/Videos/" + ids.RatingKeyGUID(5) + "/stream?Static=true"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			broker := frontendtest.Sessions{PlanFunc: func(context.Context, frontend.PlanRequest) (frontend.PlayPlan, error) {
