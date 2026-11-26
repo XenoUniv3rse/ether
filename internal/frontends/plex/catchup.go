@@ -3,6 +3,7 @@ package plex
 import (
 	"net/http"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -121,18 +122,29 @@ func (s *Server) catchUpDetail(w http.ResponseWriter, r *http.Request, id string
 	s.write(w, r, mc)
 }
 
+// catchUpArtRe is the artwork route catchUpMetadata hands out. Plex apps
+// fetch it through /photo/:/transcode like every other thumb.
+var catchUpArtRe = regexp.MustCompile(`^/library/catchup/art/([^/]+)/([^/]+)$`)
+
 func (s *Server) catchUpArt(w http.ResponseWriter, r *http.Request) {
+	s.serveCatchUpArt(w, r, chi.URLParam(r, "key"), chi.URLParam(r, "kind"))
+}
+
+// serveCatchUpArt writes one catch-up item's artwork for the request's
+// viewer, scaled to a photo-transcode width when one was asked.
+func (s *Server) serveCatchUpArt(w http.ResponseWriter, r *http.Request, key, kind string) {
 	reader, ok := s.svc().liveTV.(frontend.CatchUpArtworkReader)
 	if !ok {
 		writeHTTPError(w, 404)
 		return
 	}
-	data, kind, err := reader.CatchUpArtwork(r.Context(), FromContext(r.Context()).User, chi.URLParam(r, "key"), chi.URLParam(r, "kind"))
+	data, contentType, err := reader.CatchUpArtwork(r.Context(), FromContext(r.Context()).User, key, kind)
 	if err != nil {
 		s.writeErr(w, r, err)
 		return
 	}
-	w.Header().Set("Content-Type", kind)
+	data = fitPhoto(r.Context(), "catchup:"+key+"/"+kind, data, contentType)
+	w.Header().Set("Content-Type", contentType)
 	_, _ = w.Write(data)
 }
 
