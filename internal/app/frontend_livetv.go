@@ -604,6 +604,14 @@ func (s surfaceLiveTV) AllChannels(ctx context.Context) ([]frontend.LiveTVChanne
 	}
 	return h.AllChannels(ctx)
 }
+func (s surfaceLiveTV) PermittedChannels(ctx context.Context, u *frontend.User, ids []string) (map[string]frontend.LiveTVChannel, error) {
+	h := s.host()
+	if h == nil {
+		return nil, core.ErrNotAvailable
+	}
+	return h.PermittedChannels(s.withApp(ctx), u, ids)
+}
+
 func (s surfaceLiveTV) ChannelPermitted(ctx context.Context, u *frontend.User, id string) (bool, error) {
 	h := s.host()
 	if h == nil {

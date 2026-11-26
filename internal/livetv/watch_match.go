@@ -9,11 +9,13 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 	"unicode/utf8"
 
 	"github.com/braedonsaunders/ether/internal/core"
+	"github.com/braedonsaunders/ether/internal/lru"
 	"github.com/braedonsaunders/ether/internal/store"
 )
 
@@ -389,11 +391,16 @@ func (s *Service) channelWatchHealth(ctx context.Context, c Channel, now time.Ti
 // guide/channel epoch, channel health revision, search index readiness, viewer
 // recent-watch state, and the viewer's effective Live TV access policy.
 func (s *Service) GuideRevision(ctx context.Context, u *core.User) (string, error) {
+	rev, _, err := s.watchGuideRevision(ctx, u)
+	return rev, err
+}
+
+func (s *Service) watchGuideRevision(ctx context.Context, u *core.User) (string, int64, error) {
 	if s == nil || s.o.DB == nil {
-		return "none", nil
+		return "none", 0, nil
 	}
 	if u == nil {
-		return "denied", nil
+		return "denied", 0, nil
 	}
 	var gen int64
 	var rawPol string
@@ -402,7 +409,7 @@ func (s *Service) GuideRevision(ctx context.Context, u *core.User) (string, erro
 		u.ID,
 	).Scan(&gen, &rawPol)
 	if err != nil {
-		return "", err
+		return "", 0, err
 	}
 	healthRev := s.healthRevision()
 	sr := 0
@@ -411,9 +418,9 @@ func (s *Service) GuideRevision(ctx context.Context, u *core.User) (string, erro
 	}
 	rw := s.viewerRecentWatchedGen(u)
 	sum := sha256.New()
-	_, _ = fmt.Fprintf(sum, "g=%d|h=%d|u=%d|owner=%t|rat=%s|pol=%s|sr=%d|rw=%d",
-		gen, healthRev, u.ID, u.IsOwner, u.MaxContentRating, rawPol, sr, rw)
-	return fmt.Sprintf("g%d:h%d:%s", gen, healthRev, hex.EncodeToString(sum.Sum(nil)[:8])), nil
+	_, _ = fmt.Fprintf(sum, "g=%d|h=%d|u=%d|owner=%t|rat=%s|libs=%v|pol=%s|sr=%d|rw=%d|app=%s",
+		gen, healthRev, u.ID, u.IsOwner, u.MaxContentRating, u.AllowedLibraries, rawPol, sr, rw, core.LiveApp(ctx))
+	return fmt.Sprintf("g%d:h%d:%s", gen, healthRev, hex.EncodeToString(sum.Sum(nil)[:8])), gen, nil
 }
 
 // WatchCandidates returns a bounded set of viewer-visible channel+programme
@@ -448,7 +455,7 @@ func (s *Service) WatchCandidatesQuery(ctx context.Context, u *core.User, q Watc
 		return nil, "", err
 	}
 
-	rev, err := s.GuideRevision(ctx, u)
+	rev, gen, err := s.watchGuideRevision(ctx, u)
 	if err != nil {
 		return nil, "", err
 	}
@@ -511,6 +518,11 @@ func (s *Service) WatchCandidatesQuery(ctx context.Context, u *core.User, q Watc
 		}
 	}
 
+	searchCtx := ctx
+	if searchReady {
+		searchCtx = context.WithValue(ctx, watchSearchEpochKey{}, gen)
+	}
+
 	// 1a. Broadcaster callsign indexed lookup.
 	callsignPhrases := expandWatchCallsignQueries(q.Callsigns)
 	if len(callsignPhrases) > watchMaxCallsignQueries {
@@ -524,7 +536,7 @@ func (s *Service) WatchCandidatesQuery(ctx context.Context, u *core.User, q Watc
 		if len(targetedIDs) >= watchSearchTotalChannelCap {
 			break
 		}
-		ids, err := s.searchWatchChannelsByPhrase(ctx, pg, searchReady, phrase, callsignPerQueryLimit)
+		ids, err := s.searchWatchChannelsByPhrase(searchCtx, pg, searchReady, phrase, callsignPerQueryLimit)
 		if err != nil {
 			return nil, "", err
 		}
@@ -543,7 +555,7 @@ func (s *Service) WatchCandidatesQuery(ctx context.Context, u *core.User, q Watc
 			break
 		}
 		if len(eq.SideA) > 0 && len(eq.SideB) > 0 {
-			ids, err := s.searchWatchChannelsHeadToHead(ctx, pg, searchReady, eq.SideA, eq.SideB, watchPerQueryLimit)
+			ids, err := s.searchWatchChannelsHeadToHead(searchCtx, pg, searchReady, eq.SideA, eq.SideB, watchPerQueryLimit)
 			if err != nil {
 				return nil, "", err
 			}
@@ -555,7 +567,7 @@ func (s *Service) WatchCandidatesQuery(ctx context.Context, u *core.User, q Watc
 			if len(targetedIDs) >= watchSearchTotalChannelCap {
 				break
 			}
-			ids, err := s.searchWatchChannelsByPhrase(ctx, pg, searchReady, phrase, watchPerQueryLimit)
+			ids, err := s.searchWatchChannelsByPhrase(searchCtx, pg, searchReady, phrase, watchPerQueryLimit)
 			if err != nil {
 				return nil, "", err
 			}
@@ -567,7 +579,7 @@ func (s *Service) WatchCandidatesQuery(ctx context.Context, u *core.User, q Watc
 
 	// 1c. Stremio event channels (guideId = "event:...").
 	if len(targetedIDs) < watchSearchTotalChannelCap {
-		ids, err := s.searchWatchChannelsByPhrase(ctx, pg, searchReady, []string{"event"}, watchPerQueryLimit)
+		ids, err := s.searchWatchChannelsByPhrase(searchCtx, pg, searchReady, []string{"event"}, watchPerQueryLimit)
 		if err != nil {
 			return nil, "", err
 		}
@@ -676,6 +688,7 @@ func (s *Service) WatchCandidatesQuery(ctx context.Context, u *core.User, q Watc
 	seenProg := make(map[chanProgKey]struct{})
 	channelsWithProg := make(map[string]bool)
 	var out []WatchGuideEntry
+	policyCache := newSearchPolicyCache(s)
 
 	appendChannelProgramme := func(c Channel, p Programme) {
 		dk := chanProgKey{channelID: c.ID, startMS: p.Start.UnixMilli()}
@@ -692,7 +705,7 @@ func (s *Service) WatchCandidatesQuery(ctx context.Context, u *core.User, q Watc
 		if cp.ID == "" {
 			cp.ID = fmt.Sprintf("%s-%d", c.ID, cp.Start.UnixMilli())
 		}
-		if !s.allowedProgrammeForWatch(ctx, u, c, &cp) {
+		if !s.allowedWithLookupOpts(ctx, u, c, &cp, policyCache.lookup(c), false, true) {
 			return
 		}
 		out = append(out, WatchGuideEntry{
@@ -713,20 +726,10 @@ func (s *Service) WatchCandidatesQuery(ctx context.Context, u *core.User, q Watc
 		})
 	}
 
-	// Step 2a: Programmes for targeted channels (callsign, event, Stremio, fav/recent).
-	if len(targetedGuide) > 0 {
-		progs, err := s.programmesForKeys(ctx, targetedGuide, q.From, q.Until)
-		if err != nil {
-			return nil, "", err
-		}
-		for gk, ps := range progs {
-			chans := targetedGuide[gk]
-			for _, p := range ps {
-				for _, c := range chans {
-					appendChannelProgramme(c, p)
-				}
-			}
-		}
+	// Step 2a: Read the guide only for targeted channels over the event window.
+	targetedProgs, err := s.programmesForKeys(ctx, targetedGuide, q.From, q.Until)
+	if err != nil {
+		return nil, "", err
 	}
 
 	// Step 2b: Indexed programme search for event queries in [from, until)
@@ -768,21 +771,48 @@ func (s *Service) WatchCandidatesQuery(ctx context.Context, u *core.User, q Watc
 		}
 	}
 
-	// Step 2c: Bounded time-indexed slices via livetv_programmes_time joined
-	// against livetv_search_channel_guide (no full channel table scan).
-	fromMS := q.From.UnixMilli()
-	untilMS := q.Until.UnixMilli()
-	if err := s.scanWatchTimeSliceJoined(ctx, pg, fromMS, untilMS, fromMS, true, watchPrimaryWindowLimit, collectJoinedProg); err != nil {
-		return nil, "", err
-	}
-	carryFromMS := q.From.Add(-watchCarryoverLookback).UnixMilli()
-	if err := s.scanWatchTimeSliceJoined(ctx, pg, carryFromMS, fromMS, fromMS, false, watchCarryoverWindowLimit, collectJoinedProg); err != nil {
-		return nil, "", err
+	// An unqualified window has no search terms to narrow it. While indexes
+	// are preparing, the time index also covers programmes yet to be indexed.
+	if !searchReady || len(eventQueries) == 0 && len(q.Callsigns) == 0 {
+		fromMS := q.From.UnixMilli()
+		untilMS := q.Until.UnixMilli()
+		if err := s.scanWatchTimeSliceJoined(ctx, pg, fromMS, untilMS, fromMS, true, watchPrimaryWindowLimit, collectJoinedProg); err != nil {
+			return nil, "", err
+		}
+		carryFromMS := q.From.Add(-watchCarryoverLookback).UnixMilli()
+		if err := s.scanWatchTimeSliceJoined(ctx, pg, carryFromMS, fromMS, fromMS, false, watchCarryoverWindowLimit, collectJoinedProg); err != nil {
+			return nil, "", err
+		}
 	}
 
 	if len(discoveredChanIDs) > 0 {
 		if err := hydrateAllowed(discoveredChanIDs); err != nil {
 			return nil, "", err
+		}
+	}
+	// Candidate programme links need local visibility facts only. Load them
+	// once by key before enforcing policy, including candidates found via FTS.
+	var keys []core.RatingKey
+	for _, ps := range targetedProgs {
+		for _, p := range ps {
+			if p.Item.Key != 0 {
+				keys = append(keys, p.Item.Key)
+			}
+		}
+	}
+	for _, dp := range discoveredProgs {
+		if _, ok := allowedChannels[dp.channelID]; ok && dp.prog.Item.Key != 0 {
+			keys = append(keys, dp.prog.Item.Key)
+		}
+	}
+	if err := policyCache.preload(ctx, keys); err != nil {
+		return nil, "", err
+	}
+	for gk, ps := range targetedProgs {
+		for _, p := range ps {
+			for _, c := range targetedGuide[gk] {
+				appendChannelProgramme(c, p)
+			}
 		}
 	}
 	for _, dp := range discoveredProgs {
@@ -868,6 +898,44 @@ JOIN livetv_channels c
 	return rows.Err()
 }
 
+type watchSearchEpochKey struct{}
+
+type watchChannelSearchKey struct {
+	epoch int64
+	query string
+	terms string
+	limit int
+}
+
+type watchChannelSearchCache struct {
+	mu      sync.Mutex
+	results *lru.Cache[watchChannelSearchKey, []string]
+}
+
+// Cache only indexed channel IDs. Viewer policy, health and programme
+// visibility are evaluated separately on each candidate lookup.
+func (s *Service) watchChannelIDs(ctx context.Context, query, terms string, limit int) ([]string, error) {
+	epoch, cacheable := ctx.Value(watchSearchEpochKey{}).(int64)
+	if !cacheable {
+		return s.collectWatchChannelIDs(ctx, query, terms, limit)
+	}
+	key := watchChannelSearchKey{epoch: epoch, query: query, terms: terms, limit: limit}
+	s.watchSearch.mu.Lock()
+	ids, ok := s.watchSearch.results.Get(key)
+	s.watchSearch.mu.Unlock()
+	if ok {
+		return ids, nil
+	}
+	ids, err := s.collectWatchChannelIDs(ctx, query, terms, limit)
+	if err != nil {
+		return nil, err
+	}
+	s.watchSearch.mu.Lock()
+	s.watchSearch.results.Add(key, ids)
+	s.watchSearch.mu.Unlock()
+	return ids, nil
+}
+
 func (s *Service) collectWatchChannelIDs(ctx context.Context, query string, args ...any) ([]string, error) {
 	rows, err := s.o.DB.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -903,7 +971,7 @@ func (s *Service) searchWatchChannelsByPhrase(ctx context.Context, pg, searchRea
 
 	if pg {
 		expr := strings.Join(words, " & ")
-		ids, err := s.collectWatchChannelIDs(ctx,
+		ids, err := s.watchChannelIDs(ctx,
 			`SELECT id FROM livetv_channels WHERE to_tsvector('simple', livetv_channel_search_text(data::jsonb->>'name', data::jsonb->>'number', data::jsonb->>'guideId')) @@ to_tsquery('simple',?) ORDER BY id LIMIT ?`,
 			expr, limit,
 		)
@@ -919,7 +987,7 @@ func (s *Service) searchWatchChannelsByPhrase(ctx context.Context, pg, searchRea
 		quoted[i] = `"` + w + `"`
 	}
 	ftsExpr := strings.Join(quoted, " AND ")
-	ids, err := s.collectWatchChannelIDs(ctx,
+	ids, err := s.watchChannelIDs(ctx,
 		`SELECT id FROM livetv_search_channels WHERE livetv_search_channels MATCH ? ORDER BY rank LIMIT ?`,
 		ftsExpr, limit,
 	)
@@ -937,7 +1005,7 @@ func (s *Service) searchWatchChannelsByPhrase(ctx context.Context, pg, searchRea
 		if len(out) >= limit && compactLimit > 32 {
 			compactLimit = 32
 		}
-		cids, err := s.collectWatchChannelIDs(ctx,
+		cids, err := s.watchChannelIDs(ctx,
 			`SELECT id FROM livetv_search_channels_compact WHERE livetv_search_channels_compact MATCH ? ORDER BY rank LIMIT ?`,
 			`"`+compact+`"`, compactLimit,
 		)
@@ -986,7 +1054,7 @@ func (s *Service) searchWatchChannelsHeadToHead(ctx context.Context, pg, searchR
 	}
 	if pg {
 		expr := "(" + strings.Join(a, " | ") + ") & (" + strings.Join(b, " | ") + ")"
-		return s.collectWatchChannelIDs(ctx,
+		return s.watchChannelIDs(ctx,
 			`SELECT id FROM livetv_channels WHERE to_tsvector('simple', livetv_channel_search_text(data::jsonb->>'name', data::jsonb->>'number', data::jsonb->>'guideId')) @@ to_tsquery('simple',?) ORDER BY id LIMIT ?`,
 			expr, limit,
 		)
@@ -1000,7 +1068,7 @@ func (s *Service) searchWatchChannelsHeadToHead(ctx context.Context, pg, searchR
 		qb[i] = `"` + w + `"`
 	}
 	expr := "(" + strings.Join(qa, " OR ") + ") AND (" + strings.Join(qb, " OR ") + ")"
-	ids, err := s.collectWatchChannelIDs(ctx,
+	ids, err := s.watchChannelIDs(ctx,
 		`SELECT id FROM livetv_search_channels WHERE livetv_search_channels MATCH ? ORDER BY rank LIMIT ?`,
 		expr, limit,
 	)

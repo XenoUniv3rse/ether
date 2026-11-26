@@ -95,7 +95,7 @@ func (h liveEventsScreenHub) SpoilerFree(ctx context.Context, viewer *core.User)
 type screenLiveSubscriber struct{ hub *liveevents.Hub }
 
 func (s screenLiveSubscriber) Subscribe(ctx context.Context, viewer *core.User, feeds, eventIDs []string) (<-chan struct{}, func(), error) {
-	sub, err := s.hub.Subscribe(ctx, liveevents.SubscribeRequest{Feeds: feeds, EventIDs: eventIDs, Viewer: viewer, FilterSpoilers: true})
+	sub, err := s.hub.Subscribe(ctx, liveevents.SubscribeRequest{Feeds: feeds, EventIDs: eventIDs, Viewer: viewer, FilterSpoilers: true, InvalidateOnly: true})
 	if err != nil {
 		return nil, nil, mapLiveEventError(err)
 	}
@@ -191,7 +191,7 @@ func (s surfaceScreens) ScreenData(ctx context.Context, viewer *frontend.Viewer,
 	if s.app == nil || s.app.pluginsRT == nil || s.app.pluginsRT.screens == nil {
 		return nil, frontend.ErrNotFound
 	}
-	res, err := s.app.pluginsRT.screens.Data(ctx, viewer, screens.DataRequest{Kind: req.Kind, ID: req.ID, Page: req.Page, Sources: req.Sources, Params: req.Params, TZ: req.TZ, Images: req.Images, ClientInfo: s.client(req.Client)})
+	res, err := s.app.pluginsRT.screens.Data(core.WithLiveApp(ctx, s.surface), viewer, screens.DataRequest{Kind: req.Kind, ID: req.ID, Page: req.Page, Sources: req.Sources, Params: req.Params, TZ: req.TZ, Images: req.Images, ClientInfo: s.client(req.Client)})
 	if err != nil {
 		return nil, mapScreensError(err)
 	}
@@ -260,7 +260,7 @@ func (s surfaceScreens) ScreenStream(ctx context.Context, viewer *frontend.Viewe
 	if s.app == nil || s.app.pluginsRT == nil || s.app.pluginsRT.screens == nil {
 		return nil, frontend.ErrNotFound
 	}
-	in, stop, err := s.app.pluginsRT.screens.Stream(ctx, viewer, topics, since, images)
+	in, stop, err := s.app.pluginsRT.screens.Stream(core.WithLiveApp(ctx, s.surface), viewer, topics, since, images)
 	if err != nil {
 		return nil, mapScreensError(err)
 	}
@@ -288,7 +288,7 @@ func (s surfaceScreens) ScreenAction(ctx context.Context, viewer *frontend.Viewe
 		return nil, frontend.ErrNotFound
 	}
 	svc := s.app.pluginsRT.screens
-	ctx, cancel := context.WithTimeout(ctx, screenActionBudget)
+	ctx, cancel := context.WithTimeout(core.WithLiveApp(ctx, s.surface), screenActionBudget)
 	defer cancel()
 	// The page must be one the viewer may use, whatever the action.
 	params := req.Params

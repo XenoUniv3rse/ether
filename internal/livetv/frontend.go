@@ -351,6 +351,18 @@ func (h liveTVHost) AllChannels(ctx context.Context) ([]frontend.LiveTVChannel, 
 	return toFrontendChannels(cs), nil
 }
 
+func (h liveTVHost) PermittedChannels(ctx context.Context, u *frontend.User, ids []string) (map[string]frontend.LiveTVChannel, error) {
+	channels, err := h.s.PermittedChannels(ctx, u, ids)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]frontend.LiveTVChannel, len(channels))
+	for id, channel := range channels {
+		out[id] = ToFrontendChannel(channel)
+	}
+	return out, nil
+}
+
 func (h liveTVHost) ChannelPermitted(ctx context.Context, u *frontend.User, id string) (bool, error) {
 	return h.s.ChannelPermitted(ctx, u, id)
 }

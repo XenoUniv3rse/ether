@@ -94,26 +94,14 @@ type liveTVSourceAdapter struct {
 	host frontend.LiveTV
 }
 
-func (a liveTVSourceAdapter) AllowedChannels(ctx context.Context, u *core.User) ([]livetv.Channel, error) {
-	cs, err := a.host.AllowedChannels(ctx, u)
+func (a liveTVSourceAdapter) PermittedChannels(ctx context.Context, u *core.User, ids []string) (map[string]livetv.Channel, error) {
+	channels, err := a.host.PermittedChannels(ctx, u, ids)
 	if err != nil {
 		return nil, err
 	}
-	out := make([]livetv.Channel, len(cs))
-	for i := range cs {
-		out[i] = livetv.FromFrontendChannel(cs[i])
+	out := make(map[string]livetv.Channel, len(channels))
+	for id, channel := range channels {
+		out[id] = livetv.FromFrontendChannel(channel)
 	}
 	return out, nil
-}
-
-func (a liveTVSourceAdapter) ChannelPermitted(ctx context.Context, u *core.User, id string) (bool, error) {
-	return a.host.ChannelPermitted(ctx, u, id)
-}
-
-func (a liveTVSourceAdapter) Channel(ctx context.Context, id string) (livetv.Channel, error) {
-	c, err := a.host.Channel(ctx, id)
-	if err != nil {
-		return livetv.Channel{}, err
-	}
-	return livetv.FromFrontendChannel(c), nil
 }

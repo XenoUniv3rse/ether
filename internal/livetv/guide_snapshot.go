@@ -488,18 +488,6 @@ func (s *Service) allowedProgramme(ctx context.Context, u *core.User, c Channel,
 	return s.allowed(ctx, u, c, p)
 }
 
-func (s *Service) allowedProgrammeForWatch(ctx context.Context, u *core.User, c Channel, p *Programme) bool {
-	if p != nil && p.policyTag != nil {
-		tag := p.policyTag
-		var lookup func(context.Context, core.RatingKey) (*core.Title, error)
-		if tag.catalog {
-			lookup = func(context.Context, core.RatingKey) (*core.Title, error) { return tag.title, nil }
-		}
-		return s.allowedWithLookupOpts(ctx, u, c, p, lookup, false, true)
-	}
-	return s.allowedForWatch(ctx, u, c, p)
-}
-
 type virtualGuideContextKey struct{}
 
 // virtualTuneGuideKey lets tune use its startup deadline for a cold snapshot.

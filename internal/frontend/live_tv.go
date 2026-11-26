@@ -226,6 +226,7 @@ type LiveTV interface {
 	ChannelForViewer(ctx context.Context, u *User, id string) (LiveTVChannel, error)
 	AllChannels(ctx context.Context) ([]LiveTVChannel, error)
 	ChannelPermitted(ctx context.Context, u *User, id string) (bool, error)
+	PermittedChannels(ctx context.Context, u *User, ids []string) (map[string]LiveTVChannel, error)
 	LineupChangedFor(u *User) time.Time
 	GuideForChannels(ctx context.Context, u *User, from, until time.Time, channelIDs []string) ([]LiveTVProgramme, error)
 	GuideWindow(ctx context.Context, u *User, from, until time.Time) ([]LiveTVProgramme, error)

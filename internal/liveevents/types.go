@@ -261,6 +261,8 @@ type SubscribeRequest struct {
 	// FilterSpoilers masks scores, probability, situation, ranking and plays
 	// according to the viewer's spoilerFree preference and per-event reveals.
 	FilterSpoilers bool
+	// InvalidateOnly sends spoiler-filtered updates without resolving watch targets.
+	InvalidateOnly bool
 	// Alerts subscribes to in-app alerts published for Viewer/ViewerID.
 	Alerts bool
 }

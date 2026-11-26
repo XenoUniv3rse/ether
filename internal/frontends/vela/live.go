@@ -90,9 +90,24 @@ func (i *instance) channels(w http.ResponseWriter, r *http.Request) {
 	if liveNotModified(w, r, tag) {
 		return
 	}
+	selected := channels[start:end]
+	if batch, ok := i.host.ImageGrants.(frontend.ChannelArtworkGrantBatch); ok {
+		var ids []string
+		for _, c := range selected {
+			if len(c.Images) > 0 {
+				ids = append(ids, c.ID)
+			}
+		}
+		ctx, err := batch.PrepareChannelArtwork(r.Context(), token, ids)
+		if err != nil {
+			fail(w, err, r)
+			return
+		}
+		r = r.WithContext(ctx)
+	}
 	out := []object{}
 	memo := newLiveArtCache()
-	for _, c := range channels[start:end] {
+	for _, c := range selected {
 		art, err := i.liveArtworkCached(r, token, 0, c.ID, c.Images, memo)
 		if err != nil {
 			fail(w, err, r)

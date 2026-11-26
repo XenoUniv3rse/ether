@@ -248,6 +248,20 @@ func (s *ImageGrantService) sourceStillLive(ctx context.Context, viewerID int64,
 	return nil
 }
 
+func (s *ImageGrantService) PrepareChannelArtwork(ctx context.Context, credential string, ids []string) (context.Context, error) {
+	artwork, ok := s.artwork.(interface {
+		PrepareChannelArtwork(context.Context, *core.Viewer, []string) (context.Context, error)
+	})
+	if !ok || len(ids) == 0 {
+		return ctx, nil
+	}
+	viewer, _, err := s.resolveCredential(ctx, credential)
+	if err != nil {
+		return ctx, err
+	}
+	return artwork.PrepareChannelArtwork(core.WithLiveApp(ctx, string(s.surface)), viewer, ids)
+}
+
 func (s *ImageGrantService) Issue(ctx context.Context, req frontend.ImageGrantRequest) (string, error) {
 	viewer, _, err := s.resolveCredential(ctx, req.Credential)
 	if err != nil {

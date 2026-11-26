@@ -552,7 +552,7 @@ func (e *envelopes) resolve(ctx context.Context) {
 				keep = append(keep, ev)
 			}
 		}
-		rc.eventRecords(ctx, keep, rc.entityKind(feed))
+		rc.eventRecords(keep, rc.entityKind(feed))
 	}
 	type group struct{ feed, kind string }
 	groups := map[group][]string{}

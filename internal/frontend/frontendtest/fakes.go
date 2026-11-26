@@ -797,6 +797,9 @@ func (f LiveTV) AllChannels(context.Context) ([]frontend.LiveTVChannel, error) {
 func (f LiveTV) ChannelPermitted(context.Context, *frontend.User, string) (bool, error) {
 	return false, nil
 }
+func (f LiveTV) PermittedChannels(context.Context, *frontend.User, []string) (map[string]frontend.LiveTVChannel, error) {
+	return nil, nil
+}
 func (f LiveTV) LineupChangedFor(*frontend.User) time.Time { return time.Time{} }
 func (f LiveTV) GuideForChannels(context.Context, *frontend.User, time.Time, time.Time, []string) ([]frontend.LiveTVProgramme, error) {
 	return nil, nil

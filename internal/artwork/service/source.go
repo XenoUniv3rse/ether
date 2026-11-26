@@ -7,17 +7,18 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"net/url"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+
 	"github.com/braedonsaunders/ether/internal/artwork"
 	"github.com/braedonsaunders/ether/internal/core"
 	"github.com/braedonsaunders/ether/internal/experience"
 	"github.com/braedonsaunders/ether/internal/frontend"
 	"github.com/braedonsaunders/ether/internal/livetv"
 	"github.com/braedonsaunders/ether/internal/reqmemo"
-	"net/url"
-	"strconv"
-	"strings"
-	"sync"
-	"time"
 )
 
 // Source has no protocol server or protocol wire model dependencies.
@@ -35,7 +36,7 @@ type Source struct {
 	Playlists        core.Playlists
 	Visibility       experience.Visibility
 	LiveTV           interface {
-		AllowedChannels(context.Context, *core.User) ([]livetv.Channel, error)
+		PermittedChannels(context.Context, *core.User, []string) (map[string]livetv.Channel, error)
 	}
 	Discovery        *frontend.DiscoveryFeatures
 	Images           *RemoteCache
@@ -185,41 +186,60 @@ func artworkReference(req frontend.ArtworkRequest, kind, source string) string {
 	return base64.RawURLEncoding.EncodeToString(sum[:])
 }
 
+type channelArtworkBatchKey struct{}
+
+type channelArtworkBatch struct {
+	viewer   int64
+	app      string
+	channels map[string]livetv.Channel
+}
+
+// PrepareChannelArtwork loads and authorizes the selected channels for a
+// page of logo grants. Fetches continue to authorize each image independently.
+func (a Source) PrepareChannelArtwork(ctx context.Context, viewer *core.Viewer, ids []string) (context.Context, error) {
+	if a.LiveTV == nil || len(ids) == 0 {
+		return ctx, nil
+	}
+	if policy, ok := a.Visibility.Policy.(core.UserPolicySource); ok {
+		viewer = policy.UserPolicy(viewer)
+	}
+	if viewer == nil {
+		return ctx, core.ErrUnauthorized
+	}
+	channels, err := a.LiveTV.PermittedChannels(ctx, viewer, ids)
+	if err != nil {
+		return ctx, err
+	}
+	batch := channelArtworkBatch{viewer: viewer.ID, app: core.LiveApp(ctx), channels: make(map[string]livetv.Channel, len(ids))}
+	for _, id := range ids {
+		batch.channels[id] = channels[id]
+	}
+	return context.WithValue(ctx, channelArtworkBatchKey{}, batch), nil
+}
+
 // oneChannel authorizes a single guide row. Home asks for a logo per
 // channel; scanning every channel for each logo held the request for seconds.
 func (a Source) oneChannel(ctx context.Context, viewer *core.User, id string) (livetv.Channel, error) {
 	if a.LiveTV == nil || viewer == nil || id == "" {
 		return livetv.Channel{}, core.ErrNotFound
 	}
-	if permit, ok := a.LiveTV.(interface {
-		ChannelPermitted(context.Context, *core.User, string) (bool, error)
-		Channel(context.Context, string) (livetv.Channel, error)
-	}); ok {
-		allowed, err := permit.ChannelPermitted(ctx, viewer, id)
-		if err != nil {
-			return livetv.Channel{}, err
-		}
-		if !allowed {
-			return livetv.Channel{}, core.ErrNotFound
-		}
-		channel, err := permit.Channel(ctx, id)
-		if err != nil {
-			return livetv.Channel{}, err
-		}
-		channel.StreamURL = ""
-		channel.StreamSources = nil
-		return channel, nil
-	}
-	channels, err := a.LiveTV.AllowedChannels(ctx, viewer)
-	if err != nil {
-		return livetv.Channel{}, err
-	}
-	for _, channel := range channels {
-		if channel.ID == id {
+	if batch, ok := ctx.Value(channelArtworkBatchKey{}).(channelArtworkBatch); ok && batch.viewer == viewer.ID && batch.app == core.LiveApp(ctx) {
+		if channel, checked := batch.channels[id]; checked {
+			if channel.ID == "" {
+				return livetv.Channel{}, core.ErrNotFound
+			}
 			return channel, nil
 		}
 	}
-	return livetv.Channel{}, core.ErrNotFound
+	channels, err := a.LiveTV.PermittedChannels(ctx, viewer, []string{id})
+	if err != nil {
+		return livetv.Channel{}, err
+	}
+	channel, ok := channels[id]
+	if !ok {
+		return livetv.Channel{}, core.ErrNotFound
+	}
+	return channel, nil
 }
 
 // ChannelImage describes a channel already filtered through AllowedChannels.

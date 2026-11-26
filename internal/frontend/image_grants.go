@@ -36,6 +36,12 @@ type ImageGrants interface {
 	Serve(http.ResponseWriter, *http.Request, string)
 }
 
+// ChannelArtworkGrantBatch prepares channel authorization for a page of
+// subsequent channel logo Issue calls on the returned context.
+type ChannelArtworkGrantBatch interface {
+	PrepareChannelArtwork(context.Context, string, []string) (context.Context, error)
+}
+
 // ImageBatchRequest requests primary artwork for a page of items. At most 50
 // distinct keys and 256 input keys are accepted; duplicates are removed in
 // first-occurrence order. Empty Kinds selects poster. Person and channel

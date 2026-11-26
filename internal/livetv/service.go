@@ -22,6 +22,7 @@ import (
 	"github.com/braedonsaunders/ether/internal/contentrating"
 	"github.com/braedonsaunders/ether/internal/core"
 	"github.com/braedonsaunders/ether/internal/egress"
+	"github.com/braedonsaunders/ether/internal/lru"
 	"github.com/braedonsaunders/ether/internal/store"
 	"github.com/braedonsaunders/ether/internal/transcode"
 )
@@ -36,6 +37,7 @@ CREATE TABLE livetv_policies(user_id INTEGER PRIMARY KEY, data TEXT NOT NULL);`)
 }
 
 type Service struct {
+	watchSearch                               watchChannelSearchCache
 	searchDemanded                            atomic.Bool
 	searchVirtualMu                           sync.Mutex
 	searchVirtualSnapshots                    map[string]virtualSearchIndexedSnapshot
@@ -191,7 +193,18 @@ func New(o Options) (*Service, error) {
 	if kinds == nil {
 		kinds = NewKindRegistry()
 	}
-	s := &Service{breakObserved: make(chan breakObservation, 64), observedBreaks: map[core.RatingKey]breakObservation{}, graphicsWake: make(chan struct{}, 1), o: o, kinds: kinds, sessions: map[string]*session{}, ctx: ctx, cancel: cancel, lineupUnix: o.Now().Unix()}
+	s := &Service{
+		watchSearch:    watchChannelSearchCache{results: lru.New(lru.Options[watchChannelSearchKey, []string]{MaxEntries: 2048})},
+		breakObserved:  make(chan breakObservation, 64),
+		observedBreaks: map[core.RatingKey]breakObservation{},
+		graphicsWake:   make(chan struct{}, 1),
+		o:              o,
+		kinds:          kinds,
+		sessions:       map[string]*session{},
+		ctx:            ctx,
+		cancel:         cancel,
+		lineupUnix:     o.Now().Unix(),
+	}
 	// Identity and wake channels stay stable across worker restarts. History
 	// loading and background work remain gated on channel existence.
 	s.history.s = s
@@ -1309,14 +1322,6 @@ func (s *Service) SavePolicy(ctx context.Context, p Policy) error {
 	return err
 }
 func (s *Service) allowed(ctx context.Context, u *core.User, c Channel, p *Programme) bool {
-	return s.allowedOpts(ctx, u, c, p, false)
-}
-
-func (s *Service) allowedForWatch(ctx context.Context, u *core.User, c Channel, p *Programme) bool {
-	return s.allowedOpts(ctx, u, c, p, true)
-}
-
-func (s *Service) allowedOpts(ctx context.Context, u *core.User, c Channel, p *Programme, skipSweep bool) bool {
 	if !s.Enabled() {
 		return false
 	}
@@ -1331,7 +1336,7 @@ func (s *Service) allowedOpts(ctx context.Context, u *core.User, c Channel, p *P
 			}
 		}
 	}
-	return s.allowedWithLookupOpts(ctx, u, c, p, lookup, false, skipSweep)
+	return s.allowedWithLookup(ctx, u, c, p, lookup, false)
 }
 
 type loadedPolicyKey struct{}
@@ -1547,54 +1552,44 @@ func (s *Service) allowedChannels(ctx context.Context, u *core.User, ids []strin
 	if err != nil {
 		return nil, err
 	}
-	ctx, err = s.withVirtualGuide(ctx, cs)
-	if err != nil {
-		return nil, err
-	}
 	return s.filterAllowedChannels(ctx, u, pol, cs)
 }
 
 func (s *Service) filterAllowedChannels(ctx context.Context, u *core.User, pol Policy, cs []Channel) ([]Channel, error) {
 	rated := u != nil && (strings.TrimSpace(u.MaxContentRating) != "" || strings.TrimSpace(pol.MaxRating) != "")
 	now := s.o.Now()
-	var airing map[int]Programme
-	if rated {
-		guided := make([]Channel, 0, len(cs))
-		positions := make([]int, 0, len(cs))
-		for i, c := range cs {
-			if c.Enabled && c.Kind != "virtual" {
-				guided = append(guided, c)
-				positions = append(positions, i)
-			}
+	var guided []Channel
+	var positions []int
+	audience := make([]bool, len(cs))
+	for i, c := range cs {
+		audience[i] = s.audienceAllowed(ctx, u, c)
+		if audience[i] && (rated || c.Kind == "virtual") {
+			guided = append(guided, c)
+			positions = append(positions, i)
 		}
-		current, e := s.programmesAt(ctx, guided, now)
-		if e != nil {
-			return nil, e
-		}
-		airing = make(map[int]Programme, len(current))
-		for i, p := range current {
-			airing[positions[i]] = p
-		}
+	}
+	current, err := s.programmesAt(ctx, guided, now)
+	if err != nil {
+		return nil, err
+	}
+	airing := make(map[int]Programme, len(current))
+	for i, p := range current {
+		airing[positions[i]] = p
+	}
+	policy, err := s.loadProgrammePolicy(ctx, current)
+	if err != nil {
+		return nil, err
 	}
 	out := []Channel{}
 	for i, c := range cs {
-		if !s.audienceAllowed(ctx, u, c) {
+		if !audience[i] {
 			continue
 		}
-		var current *Programme
-		switch {
-		case c.Kind == "virtual":
-			if ps := s.viewerSchedule(ctx, s.personalChannel(ctx, c, u), now, now.Add(time.Second)); len(ps) > 0 {
-				current = &ps[0]
-			}
-		default:
-			if p, ok := airing[i]; ok {
-				p.ChannelID = c.ID
-				p.ID = fmt.Sprintf("%s-%d", c.ID, p.Start.UnixMilli())
-				current = &p
-			}
+		var programme *Programme
+		if p, ok := airing[i]; ok {
+			programme = &p
 		}
-		if s.allowedProgramme(ctx, u, c, current) {
+		if s.allowedProgrammeWithLookup(ctx, u, c, programme, policy.lookup(c)) {
 			c.StreamURL = ""
 			c.redactArchiveSource()
 			c.StreamSources = nil
@@ -1701,10 +1696,24 @@ func (s *Service) ChannelPermitted(ctx context.Context, u *core.User, id string)
 	return allowed, nil
 }
 
-// ChannelPermissions is the set-based form of ChannelPermitted for one
-// row policy pass. Use the same latest-start programme probe and channel rules.
+// ChannelPermissions is the set-based form of ChannelPermitted for one row
+// policy pass. Unknown and denied channels are both absent from the result.
 func (s *Service) ChannelPermissions(ctx context.Context, u *core.User, ids []string) (map[string]bool, error) {
-	out := make(map[string]bool, len(ids))
+	channels, err := s.PermittedChannels(ctx, u, ids)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]bool, len(channels))
+	for id := range channels {
+		out[id] = true
+	}
+	return out, nil
+}
+
+// PermittedChannels reads selected channel records and their current
+// programmes in batches, returning the records that pass both policies.
+func (s *Service) PermittedChannels(ctx context.Context, u *core.User, ids []string) (map[string]Channel, error) {
+	out := make(map[string]Channel, len(ids))
 	if u == nil || len(ids) == 0 {
 		return out, nil
 	}
@@ -1716,16 +1725,20 @@ func (s *Service) ChannelPermissions(ctx context.Context, u *core.User, ids []st
 	if err != nil {
 		return nil, err
 	}
-	var channels []Channel
+	channels := make([]Channel, 0, len(selected))
 	for _, c := range selected {
-		if c.Kind == "virtual" {
-			// Virtual channels use the prepared viewer schedule, not the SQL guide.
-			out[c.ID], _ = s.ChannelPermitted(ctx, u, c.ID)
-			continue
+		if s.audienceAllowed(ctx, u, c) {
+			channels = append(channels, c)
 		}
-		channels = append(channels, c)
+	}
+	if len(channels) == 0 {
+		return out, nil
 	}
 	programmes, err := s.programmesAt(ctx, channels, s.o.Now())
+	if err != nil {
+		return nil, err
+	}
+	policy, err := s.loadProgrammePolicy(ctx, programmes)
 	if err != nil {
 		return nil, err
 	}
@@ -1734,9 +1747,25 @@ func (s *Service) ChannelPermissions(ctx context.Context, u *core.User, ids []st
 		if p, ok := programmes[i]; ok {
 			current = &p
 		}
-		out[channel.ID] = s.allowedProgramme(ctx, u, channel, current)
+		if s.allowedProgrammeWithLookup(ctx, u, channel, current, policy.lookup(channel)) {
+			channel.StreamURL = ""
+			channel.redactArchiveSource()
+			channel.StreamSources = nil
+			out[channel.ID] = channel
+		}
 	}
 	return out, nil
+}
+
+func (s *Service) loadProgrammePolicy(ctx context.Context, programmes map[int]Programme) (*searchPolicyCache, error) {
+	policy := newSearchPolicyCache(s)
+	keys := make([]core.RatingKey, 0, len(programmes))
+	for _, p := range programmes {
+		if p.policyTag == nil && p.Item.Key != 0 {
+			keys = append(keys, p.Item.Key)
+		}
+	}
+	return policy, policy.preload(ctx, keys)
 }
 
 // programmeAt reads the single programme airing at a time. The primary key
@@ -1825,15 +1854,25 @@ const programmesAtBatch = 200
 // statements instead of one per channel.
 func (s *Service) programmesAt(ctx context.Context, cs []Channel, at time.Time) (map[int]Programme, error) {
 	out := make(map[int]Programme, len(cs))
+	if len(cs) > 0 {
+		var err error
+		ctx, err = s.withVirtualGuide(ctx, cs)
+		if err != nil {
+			return nil, err
+		}
+	}
 	type pair struct{ source, channel string }
 	want := map[pair][]int{}
 	var order []pair
 	for i, c := range cs {
 		if c.Kind == "virtual" {
-			if p, ok, err := s.programmeAt(ctx, c, at); err != nil {
-				return nil, err
-			} else if ok {
-				out[i] = p
+			if c.Personal != nil && c.personalViewer == nil {
+				if v, ok := ctx.Value(loadedPolicyKey{}).(loadedPolicy); ok {
+					c = s.personalChannel(ctx, c, v.user)
+				}
+			}
+			if ps := s.viewerSchedule(ctx, c, at, at.Add(time.Second)); len(ps) > 0 {
+				out[i] = ps[0]
 			}
 			continue
 		}

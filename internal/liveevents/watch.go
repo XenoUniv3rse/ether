@@ -180,7 +180,7 @@ func NewWatchMatcher(opts WatchMatcherOptions) *WatchMatcher {
 }
 
 const (
-	watchBatchMaxSpan         = 36 * time.Hour
+	watchBatchMaxSpan         = 6 * time.Hour
 	watchBatchPrimaryCapGuard = 1800
 	watchBatchMaxEvents       = 32
 )
@@ -364,7 +364,7 @@ func (m *WatchMatcher) WatchTargetsBatch(ctx context.Context, events []core.Live
 		return out, nil
 	}
 
-	// Partition windowed missed events into time-compact buckets (<= 36h span
+	// Partition windowed missed events into time-compact buckets (<= 6h span
 	// and <= watchBatchMaxEvents) so even week-long screens execute a tiny
 	// bounded number of indexed queries without crowding out any event.
 	var unwindowed []pendingEvent

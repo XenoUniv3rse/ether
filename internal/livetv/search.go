@@ -391,9 +391,6 @@ func (pc *searchPolicyCache) lookup(c Channel) func(context.Context, core.Rating
 }
 
 func (s *Service) allowedProgrammeWithLookup(ctx context.Context, u *core.User, c Channel, p *Programme, lookup func(context.Context, core.RatingKey) (*core.Title, error)) bool {
-	if !s.Enabled() {
-		return false
-	}
 	if p != nil && p.policyTag != nil {
 		tag := p.policyTag
 		var tagLookup func(context.Context, core.RatingKey) (*core.Title, error)

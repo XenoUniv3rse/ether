@@ -111,6 +111,7 @@ type Subscription struct {
 	viewer         *core.Viewer
 	viewerID       int64
 	filterSpoilers bool
+	invalidateOnly bool
 	wantsAlerts    bool
 	feeds          map[string]struct{} // "pluginID:feedID"
 	eventIDs       map[string]struct{} // "pluginID:feedID:eventID"
@@ -1090,6 +1091,7 @@ func (h *Hub) Subscribe(ctx context.Context, req SubscribeRequest) (*Subscriptio
 		viewer:         req.Viewer,
 		viewerID:       viewerID,
 		filterSpoilers: req.FilterSpoilers,
+		invalidateOnly: req.InvalidateOnly,
 		wantsAlerts:    req.Alerts && viewerID > 0,
 		feeds:          feeds,
 		eventIDs:       eventIDs,
@@ -1211,7 +1213,9 @@ func (h *Hub) SubscriptionSnapshot(ctx context.Context, sub *Subscription) ([]co
 	}
 
 	var out []core.LiveEvent
-	if sub.filterSpoilers {
+	if sub.filterSpoilers && sub.invalidateOnly {
+		out = h.ApplySpoilers(ctx, sub.viewerWithID(), raw)
+	} else if sub.filterSpoilers {
 		out = h.prepareEventsForViewer(ctx, sub.viewerWithID(), raw)
 	} else {
 		out = raw
@@ -2221,7 +2225,9 @@ func (h *Hub) ingestEvents(pluginID, feedID string, events []core.LiveEvent, bro
 		if len(matched) == 0 {
 			continue
 		}
-		if sub.filterSpoilers {
+		if sub.filterSpoilers && sub.invalidateOnly {
+			matched = h.ApplySpoilers(h.runCtx, sub.viewerWithID(), matched)
+		} else if sub.filterSpoilers {
 			matched = h.prepareEventsForViewer(h.runCtx, sub.viewerWithID(), matched)
 		}
 		// Deduplicate against what this subscriber already saw (suppresses

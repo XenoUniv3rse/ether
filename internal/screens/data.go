@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"regexp"
 	"sort"
 	"strings"
@@ -267,7 +268,12 @@ func (rc *readCtx) signLeagues(ls []LeagueView) []LeagueView {
 
 func (rc *readCtx) addRecord(key string, value any) {
 	rc.mu.Lock()
-	rc.records[key] = value
+	// A detail source may have an already enriched event for this key.
+	if _, staged := value.(eventRecord); !staged {
+		rc.records[key] = value
+	} else if _, exists := rc.records[key]; !exists {
+		rc.records[key] = value
+	}
 	rc.mu.Unlock()
 }
 
@@ -372,9 +378,10 @@ func (s *Service) Data(ctx context.Context, viewer *core.User, req DataRequest) 
 		out.Sources[r.id] = r.value
 	}
 	rc.mu.Lock()
-	recs := rc.records
+	recs := maps.Clone(rc.records)
 	out.refresh = rc.refresh
 	rc.mu.Unlock()
+	rc.resolveEventRecords(ctx, recs)
 	out.Rev = s.revs.stamp(recs, out.Records)
 	for id, v := range out.Sources {
 		out.Rev = max(out.Rev, s.revs.stampSource(t.plugin.pluginID+"\x00"+t.wireID+"\x00"+t.page+"\x00"+id+"\x00"+canonicalBindings(b, t.doc.Sources[id].Deps), v))
@@ -651,19 +658,46 @@ func (rc *readCtx) keep(ev core.LiveEvent, feed, kind string, q eventQueryArgs, 
 	return !start.Before(from) && start.Before(to)
 }
 
-// eventRecords turns events into records and their references, adding
-// watch targets in one batched lookup.
-func (rc *readCtx) eventRecords(ctx context.Context, events []core.LiveEvent, kind string) []map[string]string {
-	rc.enrichWatch(ctx, events)
+type eventRecord struct {
+	event core.LiveEvent
+	kind  string
+}
+
+// eventRecords stages the displayed events. Overlapping page sources (hero,
+// live list, schedule) share one record and one watch lookup by event ID.
+func (rc *readCtx) eventRecords(events []core.LiveEvent, kind string) []map[string]string {
 	refs := make([]map[string]string, 0, len(events))
 	for _, ev := range events {
 		key := "event:" + ev.ID
-		v := buildEventView(ev, rc.favs, kind)
-		rc.signEvent(&v)
-		rc.addRecord(key, v)
+		rc.addRecord(key, eventRecord{event: ev, kind: kind})
 		refs = append(refs, recordRef(key))
 	}
 	return refs
+}
+
+func (rc *readCtx) resolveEventRecords(ctx context.Context, records map[string]any) {
+	var keys []string
+	for key, value := range records {
+		if _, ok := value.(eventRecord); ok {
+			keys = append(keys, key)
+		}
+	}
+	if len(keys) == 0 {
+		return
+	}
+	sort.Strings(keys)
+	events := make([]core.LiveEvent, len(keys))
+	for i, key := range keys {
+		events[i] = records[key].(eventRecord).event
+	}
+	ctx, cancel := context.WithTimeout(ctx, builtinSourceBudget)
+	defer cancel()
+	rc.enrichWatch(ctx, events)
+	for i, key := range keys {
+		v := buildEventView(events[i], rc.favs, records[key].(eventRecord).kind)
+		rc.signEvent(&v)
+		records[key] = v
+	}
 }
 
 func (rc *readCtx) enrichWatch(ctx context.Context, events []core.LiveEvent) {
@@ -764,7 +798,7 @@ func (rc *readCtx) liveEvents(ctx context.Context, src screendoc.Source) (any, e
 	if len(events) > limit {
 		events = events[:limit]
 	}
-	return map[string]any{"events": rc.eventRecords(ctx, events, kind)}, nil
+	return map[string]any{"events": rc.eventRecords(events, kind)}, nil
 }
 
 // tickerMember keeps what a ticker shows: events in progress, finals that
@@ -915,7 +949,7 @@ func (rc *readCtx) liveSchedule(ctx context.Context, src screendoc.Source) (any,
 		"previous": day.AddDate(0, 0, -1).Format("2006-01-02"),
 		"next":     day.AddDate(0, 0, 1).Format("2006-01-02"),
 		"days":     days,
-		"events":   rc.eventRecords(ctx, events, kind),
+		"events":   rc.eventRecords(events, kind),
 	}, nil
 }
 
