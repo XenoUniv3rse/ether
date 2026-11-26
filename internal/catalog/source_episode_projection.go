@@ -4,10 +4,13 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/braedonsaunders/ether/internal/core"
+	"github.com/braedonsaunders/ether/internal/reqmemo"
 	"github.com/braedonsaunders/ether/internal/store"
 )
 
@@ -18,9 +21,54 @@ type showOrder struct {
 
 type resolvingEpisodeDefault struct{}
 
+type requestShowOrders struct {
+	mu    sync.Mutex
+	byKey map[core.RatingKey]showOrder
+}
+
 func (c *Catalog) readShowOrders(ctx context.Context, keys []core.RatingKey) (map[core.RatingKey]showOrder, error) {
-	out := make(map[core.RatingKey]showOrder, len(keys))
 	keys = uniqueRatingKeys(keys)
+	if len(keys) == 0 || !reqmemo.Active(ctx) || ctx.Value(resolvingEpisodeDefault{}) != nil {
+		return c.queryShowOrders(ctx, keys)
+	}
+	// Projection, inherited policy and receipt admission can all ask for the
+	// same order. Fetch only misses, in a batch, and keep facts for this read.
+	key := fmt.Sprintf("catalog:show-orders:%p:%d:%d:%t:%t", c, c.writeGen.Load(),
+		core.CatalogViewerID(ctx), core.CatalogViewerRestricted(ctx), core.ExplicitSearch(ctx))
+	memo, _ := reqmemo.Do(ctx, key, func() (*requestShowOrders, error) {
+		return &requestShowOrders{byKey: make(map[core.RatingKey]showOrder)}, nil
+	})
+	memo.mu.Lock()
+	defer memo.mu.Unlock()
+	out := make(map[core.RatingKey]showOrder, len(keys))
+	var missing []core.RatingKey
+	for _, key := range keys {
+		if order, ok := memo.byKey[key]; !ok {
+			missing = append(missing, key)
+		} else if order.title.Key != 0 {
+			out[key] = order
+		}
+	}
+	if len(missing) > 0 {
+		loaded, err := c.queryShowOrders(ctx, missing)
+		if err != nil {
+			return nil, err
+		}
+		for _, key := range missing {
+			order, found := loaded[key]
+			if found {
+				out[key] = order
+			}
+			if len(memo.byKey) < 4096 {
+				memo.byKey[key] = order
+			}
+		}
+	}
+	return out, nil
+}
+
+func (c *Catalog) queryShowOrders(ctx context.Context, keys []core.RatingKey) (map[core.RatingKey]showOrder, error) {
+	out := make(map[core.RatingKey]showOrder, len(keys))
 	for part := range store.Chunks(keys, 200) {
 		args := make([]any, len(part))
 		for i, k := range part {

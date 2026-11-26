@@ -2,12 +2,14 @@ package personalize
 
 import (
 	"context"
+	"fmt"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/braedonsaunders/ether/internal/core"
+	"github.com/braedonsaunders/ether/internal/reqmemo"
 )
 
 // NotInterestedSignal is explicit viewer feedback for one title.
@@ -34,12 +36,19 @@ func (x excludedTitles) contains(t *core.Title) bool {
 
 func (e *Engine) exclusions(ctx context.Context, u *core.User) (excludedTitles, string, error) {
 	if e.opts.NotInterestedSnapshot != nil && u != nil && u.ID > 0 {
-		signals, revision, err := e.opts.NotInterestedSnapshot(ctx, u)
-		if err != nil {
-			return nil, "", err
+		type snapshot struct {
+			set excludedTitles
+			sig string
 		}
-		set, sig := snapshotSet(signals, revision)
-		return set, sig, nil
+		v, err := reqmemo.Do(ctx, fmt.Sprintf("personalize:exclusions:%p:%#v", e, *u), func() (snapshot, error) {
+			signals, revision, err := e.opts.NotInterestedSnapshot(ctx, u)
+			if err != nil {
+				return snapshot{}, err
+			}
+			set, sig := snapshotSet(signals, revision)
+			return snapshot{set, sig}, nil
+		})
+		return v.set, v.sig, err
 	}
 	if e.opts.NotInterested == nil || u == nil || u.ID <= 0 {
 		return nil, "", nil

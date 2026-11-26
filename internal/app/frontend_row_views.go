@@ -2,11 +2,12 @@ package app
 
 import (
 	"context"
+	"time"
+
 	"github.com/braedonsaunders/ether/internal/core"
 	"github.com/braedonsaunders/ether/internal/experience"
 	"github.com/braedonsaunders/ether/internal/frontend"
 	"github.com/braedonsaunders/ether/internal/livetv"
-	"time"
 )
 
 func (a *App) newRowViews(protocol core.Protocol, rows *experience.RowsService, receipts *experience.Receipts, visibility experience.Visibility, libraries []experience.Library, live ...func() []experience.Library) (*experience.RowViewService, error) {
@@ -49,14 +50,6 @@ func (l liveForApp) AllowedChannels(ctx context.Context, u *core.User) ([]livetv
 	return l.svc.AllowedChannels(core.WithLiveApp(ctx, l.app), u)
 }
 
-func (l liveForApp) Guide(ctx context.Context, u *core.User, from, until time.Time) ([]livetv.Programme, error) {
-	return l.svc.Guide(core.WithLiveApp(ctx, l.app), u, from, until)
-}
-
-func (l liveForApp) OnNow(ctx context.Context, u *core.User, now, until time.Time) ([]livetv.Channel, []livetv.Programme, error) {
-	return l.svc.OnNow(core.WithLiveApp(ctx, l.app), u, now, until)
-}
-
-func (l liveForApp) OnNowN(ctx context.Context, u *core.User, now, until time.Time, limit int) ([]livetv.Channel, []livetv.Programme, error) {
-	return l.svc.OnNowN(core.WithLiveApp(ctx, l.app), u, now, until, limit)
+func (l liveForApp) OnNowForIDs(ctx context.Context, u *core.User, now, until time.Time, ids []string) ([]livetv.Channel, []livetv.Programme, error) {
+	return l.svc.OnNowForIDs(core.WithLiveApp(ctx, l.app), u, now, until, ids)
 }

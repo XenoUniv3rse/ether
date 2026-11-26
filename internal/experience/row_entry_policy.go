@@ -12,6 +12,7 @@ type RowEntryPolicy struct {
 	Favorite            func(context.Context, *core.User, FavoriteSubject) bool
 	Playlist            func(context.Context, *core.User, core.RatingKey) bool
 	Collections         core.Collections
+	ChannelPermissions  func(context.Context, *core.User, []string) (map[string]bool, error)
 	PlaylistExistsBatch func(context.Context, int64, []core.RatingKey) (map[core.RatingKey]bool, error)
 }
 
@@ -34,6 +35,7 @@ type rowEntryBatchProof struct {
 	checkedCols  map[core.RatingKey]bool
 	cards        map[core.RatingKey]*core.Collection
 	cardsChecked bool
+	channels     map[string]bool
 	playlists    map[core.RatingKey]bool
 	checkedPls   map[core.RatingKey]bool
 }
@@ -46,6 +48,7 @@ func (p RowEntryPolicy) PrepareRows(ctx context.Context, u *core.User, rows []fr
 		return ctx
 	}
 	var colKeys, plKeys, cardKeys []core.RatingKey
+	var channelIDs []string
 	checkedCols := map[core.RatingKey]bool{}
 	checkedPls := map[core.RatingKey]bool{}
 	addCol := func(k core.RatingKey) {
@@ -62,6 +65,10 @@ func (p RowEntryPolicy) PrepareRows(ctx context.Context, u *core.User, rows []fr
 				if e.Collection != nil {
 					cardKeys = append(cardKeys, e.Collection.Key)
 				}
+			case frontend.RowEntryLiveChannel:
+				if e.LiveChannel != nil {
+					channelIDs = append(channelIDs, e.LiveChannel.ID)
+				}
 			case frontend.RowEntryPlaylist:
 				if e.Playlist != nil && !checkedPls[e.Playlist.Key] {
 					checkedPls[e.Playlist.Key] = true
@@ -71,6 +78,9 @@ func (p RowEntryPolicy) PrepareRows(ctx context.Context, u *core.User, rows []fr
 		}
 	}
 	proof := rowEntryBatchProof{viewer: u}
+	if p.ChannelPermissions != nil && len(channelIDs) > 0 {
+		proof.channels, _ = p.ChannelPermissions(ctx, u, channelIDs)
+	}
 	if checker, ok := p.Collections.(collectionCardHeaders); ok {
 		if len(cardKeys) > 0 {
 			proof.cards, _ = checker.CollectionCardHeaders(ctx, u, cardKeys)
@@ -93,7 +103,7 @@ func (p RowEntryPolicy) PrepareRows(ctx context.Context, u *core.User, rows []fr
 			proof.checkedPls = checkedPls
 		}
 	}
-	if proof.checkedCols == nil && proof.checkedPls == nil && !proof.cardsChecked {
+	if proof.checkedCols == nil && proof.checkedPls == nil && proof.channels == nil && !proof.cardsChecked {
 		return ctx
 	}
 	return context.WithValue(ctx, rowEntryBatchKey{}, proof)
@@ -112,6 +122,9 @@ func (p RowEntryPolicy) Subject(ctx context.Context, u *core.User, kind, id stri
 		}
 		return p.Favorite(ctx, u, FavoriteSubject{Kind: FavoriteKindCollection, ID: id})
 	case frontend.RowEntryLiveChannel:
+		if proof, ok := ctx.Value(rowEntryBatchKey{}).(rowEntryBatchProof); ok && proof.viewer == u && proof.channels != nil {
+			return proof.channels[id]
+		}
 		return p.Favorite(ctx, u, FavoriteSubject{Kind: FavoriteKindChannel, ID: id})
 	case frontend.RowEntryPlaylist:
 		key, err := core.ParseRatingKey(id)

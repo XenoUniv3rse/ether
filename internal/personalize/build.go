@@ -242,9 +242,9 @@ func (e *Engine) modelFor(ctx context.Context, user *core.User, wait bool) *user
 	var signature string
 	revisionOK := true
 	if e.opts.NotInterestedSnapshot != nil && user != nil && user.ID > 0 {
-		signals, rev, err := e.opts.NotInterestedSnapshot(ctx, user)
+		var err error
+		_, signature, err = e.exclusions(ctx, user)
 		revisionOK = err == nil
-		_, signature = snapshotSet(signals, rev)
 	}
 	e.mu.Lock()
 	if user.ID != 0 || user.Username != "" {

@@ -32,7 +32,7 @@ type RuntimeRowViews struct {
 	CachedVirtualSeason func(context.Context, *core.User, core.RatingKey) (*core.Title, error)
 	Collections         core.Collections
 	Playlists           core.Playlists
-	Live                LiveGuideSource
+	Live                SnapshotLiveSource
 	Situation           func(frontend.RowRequest) core.HomeSituation
 	Snapshot            func(context.Context, frontend.RowRequest, core.HomeSituation) ([]frontend.Row, error)
 }
@@ -363,8 +363,7 @@ func NewRuntimeRowViews(d RuntimeRowViews) (*RowViewService, error) {
 				if d.Live == nil {
 					return frontend.RowEntry{}, core.ErrNotFound
 				}
-				now := time.Now()
-				entries, err := LiveEntries(ctx, u, d.Live, now, now.Add(24*time.Hour), nil)
+				entries, err := snapshotLiveEntries(ctx, u, d.Live, []core.NeutralEntryRef{ref})
 				if err != nil {
 					if errors.Is(err, core.ErrPreparing) || errors.Is(err, core.ErrNotAvailable) {
 						return frontend.RowEntry{}, core.ErrNotFound
@@ -442,8 +441,7 @@ func NewRuntimeRowViews(d RuntimeRowViews) (*RowViewService, error) {
 			if d.Live == nil {
 				return nil, core.ErrNotFound
 			}
-			now := time.Now()
-			live, err := LiveEntries(ctx, viewer, d.Live, now, now.Add(24*time.Hour), nil)
+			live, err := snapshotLiveEntries(ctx, viewer, d.Live, refs)
 			if errors.Is(err, core.ErrPreparing) || errors.Is(err, core.ErrNotAvailable) {
 				return nil, nil
 			}

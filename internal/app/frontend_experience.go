@@ -236,7 +236,11 @@ func (a *App) newSurfaceExperience(protocol core.Protocol, artwork ...frontend.A
 	}); ok {
 		playlistExistsBatch = batch.ExistsBatch
 	}
-	entryPolicy := experience.RowEntryPolicy{Visibility: rowVis, Collections: cols, PlaylistExistsBatch: playlistExistsBatch, Favorite: func(ctx context.Context, u *core.User, subject experience.FavoriteSubject) bool {
+	var channelPermissions func(context.Context, *core.User, []string) (map[string]bool, error)
+	if a.livetv != nil {
+		channelPermissions = a.livetv.ChannelPermissions
+	}
+	entryPolicy := experience.RowEntryPolicy{Visibility: rowVis, Collections: cols, ChannelPermissions: channelPermissions, PlaylistExistsBatch: playlistExistsBatch, Favorite: func(ctx context.Context, u *core.User, subject experience.FavoriteSubject) bool {
 		return a.favoriteAllowedStored(ctx, u, favorites.Subject{Kind: favorites.Kind(subject.Kind), ID: subject.ID}, rowVis)
 	}, Playlist: func(ctx context.Context, u *core.User, key core.RatingKey) bool {
 		if ex, ok := a.playlists.(interface {
@@ -254,7 +258,7 @@ func (a *App) newSurfaceExperience(protocol core.Protocol, artwork ...frontend.A
 		_, err := a.playlists.Get(ctx, u.ID, key)
 		return err == nil
 	}}
-	interactions := experience.RowInteractionPolicy{Libraries: libs, LiveLibraries: liveLibraries, Visibility: rowVis, Get: a.catalog.CachedGet, AllowEntry: entryPolicy.Subject, Collections: cols, PlaylistExistsBatch: playlistExistsBatch, CollectionMembers: func(ctx context.Context, u *core.User, key core.RatingKey, entries []core.NeutralEntryRef) bool {
+	interactions := experience.RowInteractionPolicy{Libraries: libs, LiveLibraries: liveLibraries, Visibility: rowVis, Get: a.catalog.CachedGet, AllowEntry: entryPolicy.Subject, Collections: cols, ChannelPermissions: channelPermissions, PlaylistExistsBatch: playlistExistsBatch, CollectionMembers: func(ctx context.Context, u *core.User, key core.RatingKey, entries []core.NeutralEntryRef) bool {
 		return rowViewCollectionMembers(ctx, a.collections, u, key, entries)
 	}, Impression: a.personalize.RecordNeutralImpression, EntryImpression: a.personalize.RecordNeutralEntryImpression, DetailOpen: a.personalize.RecordDetailOpen}
 	receipts, err := experience.NewReceipts(experience.ReceiptOptions{DB: a.db, PolicyLease: a.cfg.AcquirePolicy, Active: a.users.PolicyUser, TTL: 30 * time.Minute, MaxPerDevice: 10000, Prefetch: func(ctx context.Context, keys []core.RatingKey) {

@@ -2,14 +2,16 @@ package catalog
 
 import (
 	"context"
+	"fmt"
 	"maps"
+	"sync"
 
 	"github.com/braedonsaunders/ether/internal/config"
 	"github.com/braedonsaunders/ether/internal/contentrating"
-	"github.com/braedonsaunders/ether/internal/store"
-
 	"github.com/braedonsaunders/ether/internal/core"
 	"github.com/braedonsaunders/ether/internal/libraryfilter"
+	"github.com/braedonsaunders/ether/internal/reqmemo"
+	"github.com/braedonsaunders/ether/internal/store"
 )
 
 // VisibilityFilter returns the compiled canonical library visibility filter.
@@ -68,46 +70,82 @@ func (c *Catalog) visibleWith(f *libraryfilter.Filter, t *core.Title) bool {
 	return !f.Hidden(t) && (c.upcomingMovie(t) || !(c.config().ReleaseMode == config.ModeDigital) || c.homeVisible(t))
 }
 
-// loadStoredRatings copies already-known content_rating and enforcement_rating
-// facts from catalog_titles onto remote summaries in bounded key chunks so
-// downstream viewer rating policies see stored certifications even when
-// canonical library rules are passive.
+type storedRatingFacts struct {
+	found                bool
+	content, enforcement string
+	certifications       map[string]string
+}
+
+type requestStoredRatingFacts struct {
+	mu    sync.Mutex
+	byKey map[core.RatingKey]storedRatingFacts
+}
+
+// loadStoredRatings copies known local certifications onto remote summaries.
+// Repeated ranking passes often share titles but carry different summaries.
+// Share the stored facts, then apply them to each summary independently.
 func (c *Catalog) loadStoredRatings(ctx context.Context, out []core.Title, idx map[core.RatingKey][]int) error {
 	if c == nil || c.db == nil || len(out) == 0 {
 		return nil
 	}
-	const batch = 200
+	facts, _ := reqmemo.Do(ctx, fmt.Sprintf("catalog:stored-ratings:%p:%d", c, c.writeGen.Load()), func() (*requestStoredRatingFacts, error) {
+		return &requestStoredRatingFacts{byKey: make(map[core.RatingKey]storedRatingFacts)}, nil
+	})
+	facts.mu.Lock()
+	defer facts.mu.Unlock()
+	var missing []core.RatingKey
+	for key := range idx {
+		if _, ok := facts.byKey[key]; !ok {
+			missing = append(missing, key)
+		}
+	}
 	enfCol := `CASE WHEN enforcement_rating<>'' THEN enforcement_rating WHEN content_rating='' AND (` + adultKeywordsExistsSQL("catalog_titles.key") + `) THEN '` + contentrating.UncertifiedAdult + `' ELSE '' END`
-	for chunk := range store.Chunks(out, batch) {
-		part := chunk
-		rows, err := c.db.QueryContext(ctx, `SELECT key, content_rating, `+enfCol+`, certifications FROM catalog_titles WHERE key IN (`+placeholders(len(part))+`)`, keyArgs(part)...)
+	for part := range store.Chunks(missing, 200) {
+		args := make([]any, len(part))
+		for i, key := range part {
+			args[i] = key
+		}
+		rows, err := c.db.QueryContext(ctx, `SELECT key, content_rating, `+enfCol+`, certifications FROM catalog_titles WHERE key IN (`+placeholders(len(args))+`)`, args...)
 		if err != nil {
 			return err
 		}
+		loaded := make(map[core.RatingKey]storedRatingFacts, len(part))
 		for rows.Next() {
-			var k int64
-			var cr, er, certsRaw string
-			if err := rows.Scan(&k, &cr, &er, &certsRaw); err != nil {
+			var key core.RatingKey
+			var fact storedRatingFacts
+			var raw string
+			if err := rows.Scan(&key, &fact.content, &fact.enforcement, &raw); err != nil {
 				rows.Close()
 				return err
 			}
-			certs := decodeCertifications(certsRaw)
-			for _, i := range idx[core.RatingKey(k)] {
-				if cr != "" {
-					out[i].ContentRating = cr
-				}
-				if len(out[i].ContentRatings) == 0 && len(certs) > 0 {
-					out[i].ContentRatings = maps.Clone(certs)
-				}
-				if enf := contentrating.EffectiveEnforcement(er, out[i].ContentRating, out[i].Adult, out[i].Keywords); enf != "" {
-					out[i].EnforcementRating = enf
-				}
-			}
+			fact.found = true
+			fact.certifications = decodeCertifications(raw)
+			loaded[key] = fact
 		}
 		err = rows.Err()
 		rows.Close()
 		if err != nil {
 			return err
+		}
+		for _, key := range part {
+			facts.byKey[key] = loaded[key]
+		}
+	}
+	for key, indexes := range idx {
+		fact := facts.byKey[key]
+		if !fact.found {
+			continue
+		}
+		for _, i := range indexes {
+			if fact.content != "" {
+				out[i].ContentRating = fact.content
+			}
+			if len(out[i].ContentRatings) == 0 && len(fact.certifications) > 0 {
+				out[i].ContentRatings = maps.Clone(fact.certifications)
+			}
+			if enf := contentrating.EffectiveEnforcement(fact.enforcement, out[i].ContentRating, out[i].Adult, out[i].Keywords); enf != "" {
+				out[i].EnforcementRating = enf
+			}
 		}
 	}
 	return nil

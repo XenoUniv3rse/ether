@@ -1697,6 +1697,44 @@ func (s *Service) ChannelPermitted(ctx context.Context, u *core.User, id string)
 	return allowed, nil
 }
 
+// ChannelPermissions is the set-based form of ChannelPermitted for one
+// row policy pass. Use the same latest-start programme probe and channel rules.
+func (s *Service) ChannelPermissions(ctx context.Context, u *core.User, ids []string) (map[string]bool, error) {
+	out := make(map[string]bool, len(ids))
+	if u == nil || len(ids) == 0 {
+		return out, nil
+	}
+	ctx, _, err := s.withPolicy(core.WithCatalogViewer(ctx, u), u)
+	if err != nil {
+		return nil, err
+	}
+	selected, err := s.readChannelsByIDs(ctx, ids, make(map[string]Channel, len(ids)))
+	if err != nil {
+		return nil, err
+	}
+	var channels []Channel
+	for _, c := range selected {
+		if c.Kind == "virtual" {
+			// Virtual channels use the prepared viewer schedule, not the SQL guide.
+			out[c.ID], _ = s.ChannelPermitted(ctx, u, c.ID)
+			continue
+		}
+		channels = append(channels, c)
+	}
+	programmes, err := s.programmesAt(ctx, channels, s.o.Now())
+	if err != nil {
+		return nil, err
+	}
+	for i, channel := range channels {
+		var current *Programme
+		if p, ok := programmes[i]; ok {
+			current = &p
+		}
+		out[channel.ID] = s.allowedProgramme(ctx, u, channel, current)
+	}
+	return out, nil
+}
+
 // programmeAt reads the single programme airing at a time. The primary key
 // is (source, channel, start), so the latest start at or before that time is
 // one indexed row rather than a walk of the channel's guide.
@@ -2149,16 +2187,24 @@ func (s *Service) programmesForKeys(ctx context.Context, wanted map[guideKey][]C
 // OnNow is the bounded guide used to build a live row: one policy read, then
 // at most the current and next programme for each enabled channel.
 func (s *Service) OnNow(ctx context.Context, u *core.User, now, until time.Time) ([]Channel, []Programme, error) {
-	return s.onNow(ctx, u, now, until, 0)
+	return s.onNow(ctx, u, now, until, 0, nil)
 }
 
 // OnNowN stops after limit allowed channels. Home uses it so a large guide
 // does not query a programme window for every channel on the request.
 func (s *Service) OnNowN(ctx context.Context, u *core.User, now, until time.Time, limit int) ([]Channel, []Programme, error) {
-	return s.onNow(ctx, u, now, until, limit)
+	return s.onNow(ctx, u, now, until, limit, nil)
 }
 
-func (s *Service) onNow(ctx context.Context, u *core.User, now, until time.Time, limit int) ([]Channel, []Programme, error) {
+// OnNowForIDs rehydrates only the channels in a persisted live shelf.
+func (s *Service) OnNowForIDs(ctx context.Context, u *core.User, now, until time.Time, ids []string) ([]Channel, []Programme, error) {
+	if len(ids) == 0 {
+		return nil, nil, nil
+	}
+	return s.onNow(ctx, u, now, until, 0, ids)
+}
+
+func (s *Service) onNow(ctx context.Context, u *core.User, now, until time.Time, limit int, ids []string) ([]Channel, []Programme, error) {
 	if u == nil || !until.After(now) {
 		return nil, nil, fmt.Errorf("invalid on-now window")
 	}
@@ -2166,29 +2212,52 @@ func (s *Service) onNow(ctx context.Context, u *core.User, now, until time.Time,
 	if err != nil {
 		return nil, nil, err
 	}
-	cs, err := s.Channels(ctx)
+	var cs []Channel
+	if ids == nil {
+		cs, err = s.Channels(ctx)
+	} else {
+		var selected map[string]Channel
+		selected, err = s.readChannelsByIDs(ctx, ids, make(map[string]Channel, len(ids)))
+		for _, id := range ids {
+			if c, ok := selected[id]; ok {
+				cs = append(cs, c)
+			}
+		}
+	}
 	if err != nil {
 		return nil, nil, err
 	}
 	if _, idx := s.getOwnerGroupCacheState(); idx != nil {
 		ctx = contextWithOwnerGroupIndex(ctx, idx)
 	}
-	ctx, readyVirtual, err := s.withOnNowVirtual(ctx, cs)
-	if err != nil {
-		return nil, nil, err
-	}
 	channels := make([]Channel, 0, min(len(cs), max(limit, 1)))
 	programmes := make([]Programme, 0, 2*min(len(cs), max(limit, 1)))
 	// Channels are read a batch at a time (one guide query per batch, never
 	// one per channel) and the walk stops once the row is full.
-	for start := 0; start < len(cs); start += programmesAtBatch {
-		chunk := make([]Channel, 0, programmesAtBatch)
-		for _, c := range cs[start:min(start+programmesAtBatch, len(cs))] {
-			if !c.Enabled || c.Kind == "virtual" && c.Personal == nil && !readyVirtual[c.ID] {
-				continue
+	const guideChunk = 128
+	size := guideChunk
+	if limit > 0 {
+		size = min(guideChunk, max(limit, 16))
+	}
+	for start := 0; start < len(cs); {
+		end := min(start+size, len(cs))
+		// A sparse lineup can widen the next batch without changing the order.
+		size = min(guideChunk, 2*size)
+		chunk := make([]Channel, 0, end-start)
+		for _, c := range cs[start:end] {
+			if c.Enabled {
+				chunk = append(chunk, c)
 			}
-			chunk = append(chunk, c)
 		}
+		start = end
+		var readyVirtual map[string]bool
+		ctx, readyVirtual, err = s.withOnNowVirtual(ctx, chunk)
+		if err != nil {
+			return nil, nil, err
+		}
+		chunk = slices.DeleteFunc(chunk, func(c Channel) bool {
+			return c.Kind == "virtual" && c.Personal == nil && !readyVirtual[c.ID]
+		})
 		guide, err := s.programmesLimitBatch(ctx, chunk, now, until, 2)
 		if err != nil {
 			return nil, nil, err
@@ -2251,35 +2320,31 @@ func (s *Service) programmesLimitBatch(ctx context.Context, cs []Channel, from, 
 	if len(order) == 0 || limit <= 0 {
 		return out, nil
 	}
-	values := make([]string, len(order))
-	args := make([]any, 0, 2*len(order)+2)
+	// Each branch seeks one guide key and stops at its own limit. Applying
+	// the cap after Scan overreads the whole horizon on every Home proof.
+	branches := make([]string, len(order))
+	args := make([]any, 0, 5*len(order))
 	for i, k := range order {
-		values[i] = "(?,?)"
-		args = append(args, k.source, k.channel)
+		branches[i] = `SELECT * FROM (SELECT source_id,channel_id,data,start_ms FROM livetv_programmes
+ WHERE source_id=? AND channel_id=? AND end_ms>? AND start_ms<? ORDER BY start_ms LIMIT ?) AS p`
+		args = append(args, k.source, k.channel, from.UnixMilli(), until.UnixMilli(), limit)
 	}
-	args = append(args, from.UnixMilli(), until.UnixMilli())
-	rows, err := s.o.DB.QueryContext(ctx, `WITH ch(source_id, channel_id) AS (VALUES `+strings.Join(values, ",")+`)
-SELECT p.source_id, p.channel_id, p.data FROM livetv_programmes p JOIN ch ON p.source_id=ch.source_id AND p.channel_id=ch.channel_id
-WHERE p.end_ms>? AND p.start_ms<? ORDER BY p.source_id, p.channel_id, p.start_ms`, args...)
+	rows, err := s.o.DB.QueryContext(ctx, strings.Join(branches, " UNION ALL ")+" ORDER BY source_id,channel_id,start_ms", args...)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	got := map[pair]int{}
 	for rows.Next() {
 		var k pair
 		var b []byte
-		if err := rows.Scan(&k.source, &k.channel, &b); err != nil {
+		var start int64
+		if err := rows.Scan(&k.source, &k.channel, &b, &start); err != nil {
 			return nil, err
-		}
-		if got[k] >= limit {
-			continue
 		}
 		var p Programme
 		if err := json.Unmarshal(b, &p); err != nil {
 			return nil, err
 		}
-		got[k]++
 		for _, i := range want[k] {
 			q := p
 			q.ChannelID = cs[i].ID

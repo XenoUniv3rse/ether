@@ -21,6 +21,7 @@ type RowInteractionPolicy struct {
 	AllowEntry          func(context.Context, *core.User, string, string) bool
 	CollectionMembers   func(context.Context, *core.User, core.RatingKey, []core.NeutralEntryRef) bool
 	Collections         core.Collections
+	ChannelPermissions  func(context.Context, *core.User, []string) (map[string]bool, error)
 	PlaylistExistsBatch func(context.Context, int64, []core.RatingKey) (map[core.RatingKey]bool, error)
 	Impression          func(*core.User, core.NeutralImpression)
 	EntryImpression     func(*core.User, core.NeutralImpression, core.NeutralEntryRef)
@@ -80,6 +81,7 @@ type rowInteractionPrefetch struct {
 	matched      map[core.RatingKey]bool
 	want         map[core.RatingKey][]core.RatingKey
 	checkedCols  map[core.RatingKey]bool
+	channels     map[string]bool
 	playlists    map[core.RatingKey]bool
 	checkedPls   map[core.RatingKey]bool
 }
@@ -93,6 +95,7 @@ func (p RowInteractionPolicy) PrepareBatch(ctx context.Context, u *core.User, su
 	}
 	seenImp := map[*core.NeutralImpression]bool{}
 	var colKeys, plKeys, cardKeys []core.RatingKey
+	var channelIDs []string
 	checkedCols := map[core.RatingKey]bool{}
 	want := map[core.RatingKey][]core.RatingKey{}
 	checkedPls := map[core.RatingKey]bool{}
@@ -122,6 +125,8 @@ func (p RowInteractionPolicy) PrepareBatch(ctx context.Context, u *core.User, su
 				if k, err := core.ParseRatingKey(entry.ID); err == nil {
 					cardKeys = append(cardKeys, k)
 				}
+			case frontend.RowEntryLiveChannel:
+				channelIDs = append(channelIDs, entry.ID)
 			case frontend.RowEntryPlaylist:
 				if k, err := core.ParseRatingKey(entry.ID); err == nil && !checkedPls[k] {
 					checkedPls[k] = true
@@ -131,6 +136,9 @@ func (p RowInteractionPolicy) PrepareBatch(ctx context.Context, u *core.User, su
 		}
 	}
 	pf := rowInteractionPrefetch{viewer: u}
+	if p.ChannelPermissions != nil && len(channelIDs) > 0 {
+		pf.channels, _ = p.ChannelPermissions(ctx, u, channelIDs)
+	}
 	if checker, ok := p.Collections.(collectionCardHeaders); ok {
 		if len(cardKeys) > 0 {
 			pf.cards, _ = checker.CollectionCardHeaders(ctx, u, cardKeys)
@@ -155,7 +163,7 @@ func (p RowInteractionPolicy) PrepareBatch(ctx context.Context, u *core.User, su
 			pf.checkedPls = checkedPls
 		}
 	}
-	if pf.checkedCols == nil && pf.checkedPls == nil && !pf.cardsChecked {
+	if pf.checkedCols == nil && pf.checkedPls == nil && pf.channels == nil && !pf.cardsChecked {
 		return ctx
 	}
 	return context.WithValue(ctx, rowInteractionPrefetchKey{}, pf)
@@ -237,6 +245,13 @@ func (p RowInteractionPolicy) allowedImpression(ctx context.Context, u *core.Use
 		}
 		if hasPF {
 			switch frontend.RowEntryKind(entry.Kind) {
+			case frontend.RowEntryLiveChannel:
+				if pf.channels != nil {
+					if !pf.channels[entry.ID] {
+						return false
+					}
+					continue
+				}
 			case frontend.RowEntryPlaylist:
 				if k, err := core.ParseRatingKey(entry.ID); err == nil && pf.checkedPls[k] {
 					if !pf.playlists[k] {
