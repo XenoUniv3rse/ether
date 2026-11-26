@@ -6792,6 +6792,7 @@
   "m_1355f4a6a3cd7b": "Fijar {title}",
   "m_1356837acf14f5": "Todo lo que no cubrió ninguna regla anterior",
   "m_1356ecb3a4229e": "Cuenta de Plex desconectada.",
+  "m_1357789b2ef67f": "Mostrar la pestaña Biblioteca",
   "m_13578c45a16baf": "Fuente de la biblioteca",
   "m_1357be1d8582ea": "Deteniendo Ether",
   "m_1359acf8dadd16": {
@@ -9675,6 +9676,7 @@
   "m_1b9e60378e18c3": "Arrastra sobre un día para pintar un bloque. Las flechas se mueven, Intro pinta la hora enfocada, Supr quita el bloque bajo el cursor.",
   "m_1b9f46bed5e2e0": "Navegador web, Vela para macOS, Windows, iPhone, iPad y Apple TV",
   "m_1ba002047d5295": "Idioma preferido",
+  "m_1ba18364ab4d2e": "Muestra la cuadrícula con todo el contenido de la biblioteca en Vela y Plex.",
   "m_1ba20d56d27830": "Cargando mensajes anteriores",
   "m_1ba23329bebb54": "Populares: Fantasía",
   "m_1ba38afe8056ed": "Restaura una copia de seguridad que hayas descargado de Ether. Ether la comprueba primero; en un clúster, después te guía para sustituir la base de datos compartida.",

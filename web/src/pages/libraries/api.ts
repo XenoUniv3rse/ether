@@ -342,6 +342,7 @@ export interface Library {
   effectiveTabs?: LibraryTab[];
   sort: number;
   hidden: boolean;
+  hideLibraryTab?: boolean;
   createdAt: string;
   updatedAt: string;
   itemCount?: number;

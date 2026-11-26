@@ -54,16 +54,17 @@ func (s *Server) publishedKindSections(ctx context.Context) []Section {
 			continue
 		}
 		out = append(out, Section{
-			ID:           id,
-			Type:         frontend.MediaType(base),
-			Title:        v.Name,
-			LibraryID:    frontend.LibraryID(id),
-			PluginID:     v.PluginID,
-			KindKey:      v.KindKey,
-			Subset:       v.Subset,
-			PluginSorts:  append([]string(nil), v.Sorts...),
-			PluginFacets: append([]frontend.ViewFacet(nil), v.Facets...),
-			ListLevels:   v.ListLevels,
+			ID:             id,
+			Type:           frontend.MediaType(base),
+			Title:          v.Name,
+			LibraryID:      frontend.LibraryID(id),
+			PluginID:       v.PluginID,
+			KindKey:        v.KindKey,
+			Subset:         v.Subset,
+			HideLibraryTab: v.HideLibraryTab,
+			PluginSorts:    append([]string(nil), v.Sorts...),
+			PluginFacets:   append([]frontend.ViewFacet(nil), v.Facets...),
+			ListLevels:     v.ListLevels,
 		})
 	}
 	return out

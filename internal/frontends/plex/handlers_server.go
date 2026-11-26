@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -141,6 +142,10 @@ func (s *Server) handleIdentity(w http.ResponseWriter, r *http.Request) {
 	}})
 }
 
+func recommendedSectionPivot(sec Section) model.Pivot {
+	return model.Pivot{ID: "recommended", Key: "/hubs/sections/" + strconv.Itoa(sec.ID), Type: "hub", Title: "Recommendations", Context: "content.discover", Symbol: "star"}
+}
+
 // sectionPivots are the top-level navigation pivots of a section.
 func sectionPivots(sec Section) []model.Pivot {
 	id := strconv.Itoa(sec.ID)
@@ -152,13 +157,17 @@ func sectionPivots(sec Section) []model.Pivot {
 	case plexBasePhoto:
 		playlistType = "photo"
 	}
-	return []model.Pivot{
-		{ID: "recommended", Key: "/hubs/sections/" + id, Type: "hub", Title: "Recommendations", Context: "content.discover", Symbol: "star"},
+	pivots := []model.Pivot{
+		recommendedSectionPivot(sec),
 		{ID: "library", Key: "/library/sections/" + id + "/all?type=" + typeNum, Type: "list", Title: "Library", Context: "content.library", Symbol: "library"},
 		{ID: "collections", Key: "/library/sections/" + id + "/collections", Type: "list", Title: "Collections", Context: "content.collections", Symbol: "stack"},
 		{ID: "playlists", Key: "/playlists?type=15&sectionID=" + id + "&playlistType=" + playlistType, Type: "list", Title: "Playlists", Context: "content.playlists", Symbol: "playlist"},
 		{ID: "categories", Key: "/library/sections/" + id + "/categories", Type: "list", Title: "Categories", Context: "content.categories", Symbol: "stack"},
 	}
+	if sec.HideLibraryTab {
+		pivots = slices.Delete(pivots, 1, 2)
+	}
+	return pivots
 }
 
 func providerTypes(secs []Section) string {

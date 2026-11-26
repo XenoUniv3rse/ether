@@ -463,6 +463,15 @@ func (s *Service) SetPresentAndOverrides(ctx context.Context, id core.LibraryID,
 	return nil
 }
 
+// SetHideLibraryTab controls whether apps advertise the browse-all tab.
+func (s *Service) SetHideLibraryTab(ctx context.Context, id core.LibraryID, hide bool) error {
+	value := 0
+	if hide {
+		value = 1
+	}
+	return s.setColumn(ctx, id, "hide_library_tab", value)
+}
+
 // SetCardShape sets the owner-chosen card shape ("", "poster", "landscape", or
 // "square") on library id.
 func (s *Service) SetCardShape(ctx context.Context, id core.LibraryID, shape string) error {

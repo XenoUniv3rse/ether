@@ -272,7 +272,14 @@ func (s *Server) handleSection(w http.ResponseWriter, r *http.Request) {
 		{"contentRating", "By Content Rating", true},
 		{"firstCharacter", "By First Letter", true},
 	}
+	if sec.HideLibraryTab {
+		recommended := recommendedSectionPivot(sec)
+		mc.Directory = append(mc.Directory, model.Directory{Key: recommended.Key, Title: recommended.Title})
+	}
 	for _, d := range sub {
+		if sec.HideLibraryTab && d.key == "all" {
+			continue
+		}
 		dir := model.Directory{Key: d.key, Title: d.title}
 		if d.secondary {
 			dir.Secondary = model.Ptr(true)

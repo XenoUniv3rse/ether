@@ -473,6 +473,7 @@ type Library struct {
 	// case effective tabs come from the plugin declaration or DefaultCatalogueTabs.
 	Tabs           []LibraryTab `json:"tabs,omitempty"`
 	TabsCustomized bool         `json:"tabsCustomized,omitempty"`
+	HideLibraryTab bool         `json:"hideLibraryTab,omitempty"`
 	// CardShape overrides how item thumbnails in this library are shaped
 	// ("poster", "landscape", or "square"). Empty means default: the plugin's
 	// declared library.card for plugin libraries, or "poster" for catalogue

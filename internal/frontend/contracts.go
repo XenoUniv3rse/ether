@@ -66,6 +66,8 @@ type View struct {
 	// Subset is true when the library narrows a broader canonical catalogue
 	// with rules, visibility defaults, narrower sources, or a collection.
 	Subset bool
+	// HideLibraryTab affects navigation only. Direct browse remains available.
+	HideLibraryTab bool `json:"hideLibraryTab,omitempty"`
 	// Plugin library presentation metadata (optional; populated for plugin libraries).
 	Media       core.MediaClass `json:"media,omitempty"`
 	Card        string          `json:"card,omitempty"`

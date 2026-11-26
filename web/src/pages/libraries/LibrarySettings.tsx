@@ -604,6 +604,7 @@ export function LibrarySettings({ library, onSaved }: { library: Library; onSave
     () => ({
       name: library.name,
       hidden: library.hidden,
+      hideLibraryTab: Boolean(library.hideLibraryTab),
       cardShape: storedCardShape,
       presentApps: initialAppSwitches(resolvedPresentations),
       sources: library.sources ?? [],
@@ -630,6 +631,8 @@ export function LibrarySettings({ library, onSaved }: { library: Library; onSave
         name: draft.name.trim(),
         hidden: draft.hidden,
       };
+      if (draft.hideLibraryTab !== stored.hideLibraryTab)
+        body.hideLibraryTab = draft.hideLibraryTab;
       if (draft.cardShape !== stored.cardShape) {
         body.cardShape =
           library.source !== "plugin" && draft.cardShape === "poster" ? "" : draft.cardShape;
@@ -727,6 +730,17 @@ export function LibrarySettings({ library, onSaved }: { library: Library; onSave
               library={library}
               value={draft.cardShape}
               onChange={(cardShape) => setDraft({ ...draft, cardShape })}
+            />
+            <SettingsRow
+              title={t("Show the Library tab")}
+              description={t("Show the full library grid in Vela and Plex.")}
+              control={
+                <Switch
+                  aria-label={t("Show the Library tab")}
+                  checked={!draft.hideLibraryTab}
+                  onChange={(e) => setDraft({ ...draft, hideLibraryTab: !e.target.checked })}
+                />
+              }
             />
             <SettingsRow
               title={t("Hide from apps")}

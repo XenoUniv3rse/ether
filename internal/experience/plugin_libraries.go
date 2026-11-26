@@ -369,16 +369,17 @@ func (s *Service) storedViews(ctx context.Context, v *core.User) ([]frontend.Vie
 			revision = lib.UpdatedAt.UTC().Format("2006-01-02T15:04:05.999999999Z07:00")
 		}
 		view := frontend.View{
-			Revision:  revision,
-			ID:        strconv.FormatInt(int64(lib.ID), 10),
-			LibraryID: lib.ID,
-			Name:      lib.Name,
-			Type:      mt,
-			Virtual:   true,
-			KindKey:   lib.KindKey,
-			PluginID:  lib.PluginID,
-			Native:    native,
-			Subset:    libraryIsRuleSubset(lib),
+			Revision:       revision,
+			ID:             strconv.FormatInt(int64(lib.ID), 10),
+			LibraryID:      lib.ID,
+			Name:           lib.Name,
+			Type:           mt,
+			Virtual:        true,
+			KindKey:        lib.KindKey,
+			PluginID:       lib.PluginID,
+			Native:         native,
+			Subset:         libraryIsRuleSubset(lib),
+			HideLibraryTab: lib.HideLibraryTab,
 		}
 		if lib.Source == core.LibraryPlugin {
 			if pres, hasPres := s.d.PluginLibraries.(PluginPresentationLibraries); hasPres {

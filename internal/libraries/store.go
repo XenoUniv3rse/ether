@@ -12,7 +12,7 @@ import (
 	"github.com/braedonsaunders/ether/internal/libraryfilter"
 )
 
-const libraryCols = `sources, id, key, name, source, media_type, plugin_id, kind_key, collection_id, rules, visibility_default, tabs, card_shape, quality_profile, present, present_overrides, sort, hidden, created_at, updated_at, metadata_source`
+const libraryCols = `sources, id, key, name, source, media_type, plugin_id, kind_key, collection_id, rules, visibility_default, tabs, card_shape, quality_profile, present, present_overrides, sort, hidden, created_at, updated_at, metadata_source, hide_library_tab`
 
 type scanner interface{ Scan(...any) error }
 
@@ -20,10 +20,10 @@ func scanLibrary(sc scanner) (core.Library, error) {
 	var lib core.Library
 	var id, sort, created, updated int64
 	var source, mediaType, rulesJSON, visDefault, tabsJSON, presentJSON, overridesJSON string
-	var hidden int
+	var hidden, hideLibraryTab int
 	var sourcesJSON string
 	if err := sc.Scan(&sourcesJSON, &id, &lib.Key, &lib.Name, &source, &mediaType, &lib.PluginID, &lib.KindKey,
-		&lib.CollectionID, &rulesJSON, &visDefault, &tabsJSON, &lib.CardShape, &lib.QualityProfile, &presentJSON, &overridesJSON, &sort, &hidden, &created, &updated, &lib.MetadataSource); err != nil {
+		&lib.CollectionID, &rulesJSON, &visDefault, &tabsJSON, &lib.CardShape, &lib.QualityProfile, &presentJSON, &overridesJSON, &sort, &hidden, &created, &updated, &lib.MetadataSource, &hideLibraryTab); err != nil {
 		return core.Library{}, err
 	}
 	lib.ID = core.LibraryID(id)
@@ -32,6 +32,7 @@ func scanLibrary(sc scanner) (core.Library, error) {
 	lib.VisibilityDefault = visDefault
 	lib.Sort = int(sort)
 	lib.Hidden = hidden != 0
+	lib.HideLibraryTab = hideLibraryTab != 0
 	if created > 0 {
 		lib.CreatedAt = time.Unix(created, 0).UTC()
 	}
@@ -116,11 +117,15 @@ func (s *Service) insert(ctx context.Context, tx *sql.Tx, lib core.Library) (cor
 	if lib.Hidden {
 		hidden = 1
 	}
+	hideLibraryTab := 0
+	if lib.HideLibraryTab {
+		hideLibraryTab = 1
+	}
 	sourceData, _ := json.Marshal(defaultSources(lib))
 	lib.Sources = defaultSources(lib)
-	_, err = tx.ExecContext(ctx, `INSERT INTO libraries(`+libraryCols+`) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+	_, err = tx.ExecContext(ctx, `INSERT INTO libraries(`+libraryCols+`) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		string(sourceData), int64(lib.ID), lib.Key, lib.Name, string(lib.Source), string(lib.MediaType), lib.PluginID, lib.KindKey,
-		lib.CollectionID, rulesJSON, lib.VisibilityDefault, tabsJSON, lib.CardShape, lib.QualityProfile, string(presentJSON), overridesJSON, lib.Sort, hidden, lib.CreatedAt.Unix(), lib.UpdatedAt.Unix(), lib.MetadataSource)
+		lib.CollectionID, rulesJSON, lib.VisibilityDefault, tabsJSON, lib.CardShape, lib.QualityProfile, string(presentJSON), overridesJSON, lib.Sort, hidden, lib.CreatedAt.Unix(), lib.UpdatedAt.Unix(), lib.MetadataSource, hideLibraryTab)
 	if err != nil {
 		return core.Library{}, err
 	}
