@@ -1,7 +1,10 @@
 package plex
 
 import (
+	"bytes"
 	"context"
+	"image"
+	"image/jpeg"
 	"net/http"
 	"net/url"
 	"strings"
@@ -108,3 +111,55 @@ func TestCatchUpSectionPlayback(t *testing.T) {
 }
 
 func (*catchUpTestLive) NoteClientActivity() {}
+
+type catchUpArtTestLive struct {
+	catchUpTestLive
+	image []byte
+}
+
+func (f *catchUpArtTestLive) CatchUpArtwork(_ context.Context, _ *frontend.Viewer, id, kind string) ([]byte, string, error) {
+	if id != f.item.ID || kind != frontend.ImageStill {
+		return nil, "", frontend.ErrNotFound
+	}
+	return f.image, "image/jpeg", nil
+}
+
+// Plex apps fetch every thumb through the photo transcoder, so a catch-up
+// item's artwork must resolve there as well as on its own route.
+func TestCatchUpArtworkThroughPhotoTranscoder(t *testing.T) {
+	f := newFixture()
+	t.Cleanup(func() { _ = f.srv.Close() })
+	src := image.NewRGBA(image.Rect(0, 0, 960, 540))
+	var jpg bytes.Buffer
+	if err := jpeg.Encode(&jpg, src, nil); err != nil {
+		t.Fatal(err)
+	}
+	start := time.Unix(1700000000, 0).UTC()
+	programme := "channel-1700000000000"
+	live := &catchUpArtTestLive{image: jpg.Bytes(), catchUpTestLive: catchUpTestLive{item: frontend.CatchUpItem{
+		ID: frontend.CatchUpEpisodeID(programme), Type: frontend.TypeEpisode,
+		Programme: frontend.LiveTVProgramme{ID: programme, ChannelID: "channel", Start: start, End: start.Add(time.Hour)},
+		Artwork:   []frontend.Image{{Kind: frontend.ImageStill}},
+	}}}
+	f.srv.setLiveTV(live)
+	result := f.request(t, "GET", "/library/sections/2147483646/allLeaves", map[string]string{"Accept": "application/json"})
+	thumb, _ := decodeJSON(t, result)["Metadata"].([]any)[0].(map[string]any)["thumb"].(string)
+	if thumb == "" {
+		t.Fatal("catch-up episode has no thumb")
+	}
+	if got := f.request(t, "GET", thumb, nil); got.Code != http.StatusOK {
+		t.Fatalf("catch-up art route: %d", got.Code)
+	}
+	got := f.request(t, "GET", "/photo/:/transcode?"+url.Values{"url": {thumb}, "width": {"320"}, "height": {"180"}}.Encode(), nil)
+	if got.Code != http.StatusOK || got.Header().Get("Content-Type") != "image/jpeg" {
+		t.Fatalf("catch-up art through the photo transcoder: %d %q", got.Code, got.Header().Get("Content-Type"))
+	}
+	cfg, err := jpeg.DecodeConfig(bytes.NewReader(got.Body.Bytes()))
+	if err != nil || cfg.Width != 320 {
+		t.Fatalf("catch-up art not fitted to the requested width: %v %d", err, cfg.Width)
+	}
+	missing := f.request(t, "GET", "/photo/:/transcode?"+url.Values{"url": {"/library/catchup/art/" + live.item.ID + "/backdrop"}, "width": {"320"}}.Encode(), nil)
+	if missing.Code != http.StatusNotFound {
+		t.Fatalf("missing catch-up art: %d", missing.Code)
+	}
+}
