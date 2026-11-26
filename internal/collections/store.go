@@ -152,13 +152,14 @@ func (r *specRow) view() core.CollectionSpec {
 
 const specCols = `id,slug,builtin,owner_user_id,spec_json,enabled,created_at,updated_at,last_built_at,item_count,warnings_json,build_hash,changed_at`
 
-func scanSpecRow(sc interface{ Scan(...any) error }) (*specRow, error) {
+func scanSpecRow(sc interface{ Scan(...any) error }, extra ...any) (*specRow, error) {
 	var r specRow
 	var builtin, enabled int
 	var specJSON, warnJSON string
 	var created, updated, built, changed int64
-	if err := sc.Scan(&r.id, &r.slug, &builtin, &r.owner, &specJSON, &enabled, &created, &updated, &built,
-		&r.itemCount, &warnJSON, &r.buildHash, &changed); err != nil {
+	dest := []any{&r.id, &r.slug, &builtin, &r.owner, &specJSON, &enabled, &created, &updated, &built,
+		&r.itemCount, &warnJSON, &r.buildHash, &changed}
+	if err := sc.Scan(append(dest, extra...)...); err != nil {
 		return nil, err
 	}
 	if err := json.Unmarshal([]byte(specJSON), &r.spec); err != nil {
@@ -258,18 +259,7 @@ func orderRowsForDisplay(rows []*specRow) {
 	if len(rows) < 2 {
 		return
 	}
-	groupOf := func(r *specRow) string {
-		if r.builtin {
-			return ""
-		}
-		if r.spec.AddonSync != nil && r.spec.AddonSync.AddonID != "" {
-			return "addon:" + r.spec.AddonSync.AddonID
-		}
-		if r.spec.Folder != "" {
-			return "folder:" + strings.ToLower(r.spec.Folder)
-		}
-		return ""
-	}
+	groupOf := func(r *specRow) string { return browseGroup(r.builtin, r.spec) }
 	hasGrouped := false
 	anchors := map[string]int64{}
 	for _, r := range rows {
@@ -438,8 +428,8 @@ func (s *Service) insertSpecTx(ctx context.Context, tx *sql.Tx, sp core.Collecti
 		return 0, err
 	}
 	now := s.now().Unix()
-	if _, err := tx.ExecContext(ctx, `INSERT INTO collections_specs(id,slug,builtin,owner_user_id,spec_json,enabled,created_at,updated_at)
-		VALUES(?, '', 0, ?, ?, ?, ?, ?)`, id, owner, js, store.BoolInt(sp.Enabled), now, now); err != nil {
+	if _, err := tx.ExecContext(ctx, `INSERT INTO collections_specs(id,slug,builtin,owner_user_id,spec_json,enabled,created_at,updated_at,browse_group,browse_rank,browse_type,browse_mode)
+		VALUES(?, '', 0, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, id, owner, js, store.BoolInt(sp.Enabled), now, now, browseGroup(false, sp), browseRank(sp.SortOrder), sp.MediaType, browseMode(sp)); err != nil {
 		return 0, err
 	}
 	return id, nil
@@ -454,24 +444,21 @@ func (s *Service) updateRowWarnings(ctx context.Context, id int64, sp core.Colle
 	if err != nil {
 		return err
 	}
-	var res sql.Result
+	q := `UPDATE collections_specs SET spec_json=?, enabled=?, updated_at=?,
+		browse_group=CASE WHEN builtin=0 THEN ? ELSE '' END,browse_rank=?,browse_type=?,browse_mode=?`
+	args := []any{js, store.BoolInt(sp.Enabled), s.now().Unix(), browseGroup(false, sp), browseRank(sp.SortOrder), sp.MediaType, browseMode(sp)}
 	if setWarnings {
 		wj, _ := json.Marshal(warnings)
 		if warnings == nil {
 			wj = []byte("[]")
 		}
-		q := `UPDATE collections_specs SET spec_json=?, enabled=?, updated_at=?, warnings_json=?, build_hash='' WHERE id=?`
-		if keepBuild {
-			q = `UPDATE collections_specs SET spec_json=?, enabled=?, updated_at=?, warnings_json=? WHERE id=?`
-		}
-		res, err = s.db.ExecContext(ctx, q, js, store.BoolInt(sp.Enabled), s.now().Unix(), string(wj), id)
-	} else {
-		q := `UPDATE collections_specs SET spec_json=?, enabled=?, updated_at=?, build_hash='' WHERE id=?`
-		if keepBuild {
-			q = `UPDATE collections_specs SET spec_json=?, enabled=?, updated_at=? WHERE id=?`
-		}
-		res, err = s.db.ExecContext(ctx, q, js, store.BoolInt(sp.Enabled), s.now().Unix(), id)
+		q += `,warnings_json=?`
+		args = append(args, string(wj))
 	}
+	if !keepBuild {
+		q += `,build_hash=''`
+	}
+	res, err := s.db.ExecContext(ctx, q+` WHERE id=?`, append(args, id)...)
 	if err != nil {
 		return err
 	}

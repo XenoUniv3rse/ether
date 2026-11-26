@@ -412,6 +412,9 @@ func TestVelaLibraryCollectionsAndBrowseFilter(t *testing.T) {
 			if q.ViewID != "23" || len(q.Types) != 1 || q.Types[0] != core.TypeMovie {
 				t.Fatalf("unexpected collection query: %+v", q)
 			}
+			if q.Offset == 1 && q.After != col1.Key {
+				t.Fatalf("collection continuation lost its seek key: %v", q.After)
+			}
 			all := []core.Collection{col1, col2}
 			start := min(q.Offset, len(all))
 			end := min(start+q.Limit, len(all))

@@ -121,13 +121,20 @@ func TestFranchiseTallyTriggersRebuildCursorAndFilters(t *testing.T) {
 	}
 
 	// Small-filter direct grouping returns the exact same set and counts.
-	direct, hasMore, usedDirect, err := c.FranchisesInSmallFilter(ctx, core.Filter{
+	filtered := core.Filter{
 		Type:       core.TypeMovie,
 		LocalOnly:  true,
 		ExtraRules: []core.LibraryExclusion{countryRule},
-	}, "", 0, 10)
+	}
+	direct, hasMore, usedDirect, err := c.FranchisesInSmallFilter(ctx, filtered, "", 0, 10)
 	if err != nil || !usedDirect || hasMore || len(direct) != 2 || direct[0].Key.TMDB() != 10 || direct[0].ChildCount != 2 || direct[1].Key.TMDB() != 30 || direct[1].ChildCount != 2 {
 		t.Fatalf("FranchisesInSmallFilter = %+v hasMore=%v used=%v err=%v", direct, hasMore, usedDirect, err)
+	}
+
+	// Seek on raw franchise size, which can differ from its visible size.
+	next, hasMore, usedDirect, err := c.FranchisesInSmallFilterAfter(ctx, filtered, "", 0, 10, 3, 10)
+	if err != nil || !usedDirect || hasMore || len(next) != 1 || next[0].Key.TMDB() != 30 {
+		t.Fatalf("FranchisesInSmallFilterAfter = %+v hasMore=%v used=%v err=%v", next, hasMore, usedDirect, err)
 	}
 
 	// Transition back down below threshold: marking movie 202 adult removes Franchise 20.

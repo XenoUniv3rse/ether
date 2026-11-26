@@ -2128,7 +2128,13 @@ func (s *Server) searchCollections(ctx context.Context, pr *Request, query strin
 		}
 		var cs []frontend.Collection
 		var err error
-		if owned, ok := s.collections().(frontend.OwnedCollectionLister); ok {
+		if matching, ok := s.collections().(interface {
+			ListOwnedMatching(context.Context, *frontend.User, frontend.MediaType, func(string) bool) ([]frontend.Collection, error)
+		}); ok {
+			cs, err = matching.ListOwnedMatching(ctx, pr.User, sec.Type, func(title string) bool {
+				return playlistSearchScore(title, query) > 0
+			})
+		} else if owned, ok := s.collections().(frontend.OwnedCollectionLister); ok {
 			cs, err = owned.ListOwned(ctx, pr.User, sec.Type)
 		} else {
 			cs, err = s.collections().List(ctx, pr.User, sec.Type)

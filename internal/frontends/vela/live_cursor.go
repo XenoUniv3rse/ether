@@ -12,6 +12,7 @@ import (
 type liveCursor struct {
 	Scope, Query, Snapshot string
 	Offset                 int
+	CollectionAfter        frontend.RatingKey `json:",omitempty"`
 	Expires                int64
 }
 
