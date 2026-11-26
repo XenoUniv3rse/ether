@@ -314,69 +314,28 @@ func (s *Service) viewCollections(ctx context.Context, v *core.User, q frontend.
 // the small set of owner/built-in/ephemeral collections and paging TMDB
 // franchises directly from catalog_franchises with set-based visibility checks.
 func (s *Service) collectionsPageFirst(ctx context.Context, v *core.User, allowedTypes []core.MediaType, q frontend.CollectionQuery) (frontend.CollectionPage, bool, error) {
-	ownedLister, ok := s.d.Collections.(ownedCompleteLister)
-	if !ok || s.d.Franchises == nil {
+	if s.d.Franchises == nil {
 		return frontend.CollectionPage{}, false, nil
 	}
-	lowerQuery := strings.ToLower(strings.TrimSpace(q.Query))
-	seenKeys := map[core.RatingKey]bool{}
+	seen := make(map[core.RatingKey]bool)
 	var ownedVisible []core.Collection
 	includeFranchises := false
 	for _, typ := range allowedTypes {
-		owned, hasFr, err := ownedLister.ListOwnedComplete(ctx, v, typ)
+		hasFr, err := s.visitVisibleOwned(ctx, v, typ, nil, q, seen, &ownedVisible)
 		if errors.Is(err, core.ErrNotAvailable) {
 			return frontend.CollectionPage{}, false, nil
 		}
 		if err != nil {
 			return frontend.CollectionPage{}, true, err
 		}
-		if hasFr && typ == core.TypeMovie {
-			includeFranchises = true
+		if q.ExistsOnly && len(ownedVisible) > 0 {
+			return frontend.CollectionPage{Total: 1}, true, nil
 		}
-		counter, err := s.ownedMemberCounter(ctx, v, nil, typ)
-		if err != nil {
-			return frontend.CollectionPage{}, true, err
+		if q.NoTotal && len(ownedVisible)-max(q.Offset, 0) >= normalizeListLimit(q.Limit) {
+			start, end := sliceBounds(len(ownedVisible), q.Offset, q.Limit)
+			return frontend.CollectionPage{Items: ownedVisible[start:end], Total: len(ownedVisible)}, true, nil
 		}
-		for _, c := range owned {
-			if (lowerQuery != "" && !strings.Contains(strings.ToLower(c.Title), lowerQuery)) || c.Type != typ || seenKeys[c.Key] || !s.d.Visibility.CollectionAllowed(v, &c) || (c.OwnerUserID != 0 && c.OwnerUserID != v.ID) {
-				continue
-			}
-			if counter != nil {
-				n, err := counter(c)
-				if err != nil {
-					return frontend.CollectionPage{}, true, err
-				}
-				if n > 0 {
-					if q.ExistsOnly {
-						return frontend.CollectionPage{Total: 1}, true, nil
-					}
-					c.ChildCount = n
-					seenKeys[c.Key] = true
-					ownedVisible = append(ownedVisible, c)
-					continue
-				}
-			}
-			if q.ExistsOnly {
-				has, err := s.collectionHasVisibleMember(ctx, v, c)
-				if err != nil {
-					return frontend.CollectionPage{}, true, err
-				}
-				if has {
-					return frontend.CollectionPage{Total: 1}, true, nil
-				}
-				continue
-			}
-			has, total, err := s.collectionVisibleProbe(ctx, v, c)
-			if err != nil {
-				return frontend.CollectionPage{}, true, err
-			}
-			if !has {
-				continue
-			}
-			c.ChildCount = total
-			seenKeys[c.Key] = true
-			ownedVisible = append(ownedVisible, c)
-		}
+		includeFranchises = includeFranchises || hasFr && typ == core.TypeMovie
 	}
 	if !includeFranchises {
 		if q.ExistsOnly {
@@ -395,47 +354,10 @@ func (s *Service) viewCollectionsPageFirst(ctx context.Context, v *core.User, ty
 	if s.d.Franchises == nil {
 		return frontend.CollectionPage{}, false, nil
 	}
-	counter, err := s.ownedMemberBatchCounter(ctx, v, stored, typ)
-	if err != nil {
-		return frontend.CollectionPage{}, true, err
-	}
 	var ownedVisible []core.Collection
-	seen := make(map[core.RatingKey]bool)
-	visit := func(owned []core.Collection) (bool, error) {
-		visible, err := s.visibleOwnedBatch(ctx, v, typ, stored, q, counter, owned, seen)
-		if err != nil {
-			return false, err
-		}
-		ownedVisible = append(ownedVisible, visible...)
-		if q.ExistsOnly {
-			return len(ownedVisible) > 0, nil
-		}
-		return q.NoTotal && len(ownedVisible)-max(q.Offset, 0) >= normalizeListLimit(q.Limit), nil
-	}
-
-	var includeFranchises bool
-	if visitor, ok := s.d.Collections.(interface {
-		VisitOwned(context.Context, *core.User, core.MediaType, string, int, func([]core.Collection) (bool, error)) (bool, error)
-	}); ok {
-		includeFranchises, err = visitor.VisitOwned(ctx, v, typ, strings.ToLower(strings.TrimSpace(q.Query)), min(normalizeListLimit(q.Limit), 200), visit)
-	} else {
-		err = core.ErrNotAvailable
-	}
+	includeFranchises, err := s.visitVisibleOwned(ctx, v, typ, stored, q, make(map[core.RatingKey]bool), &ownedVisible)
 	if errors.Is(err, core.ErrNotAvailable) {
-		lister, ok := s.d.Collections.(ownedCompleteLister)
-		if !ok {
-			return frontend.CollectionPage{}, false, nil
-		}
-		var owned []core.Collection
-		owned, includeFranchises, err = lister.ListOwnedComplete(ctx, v, typ)
-		if errors.Is(err, core.ErrNotAvailable) {
-			return frontend.CollectionPage{}, false, nil
-		}
-		if err == nil {
-			ownedVisible = nil
-			clear(seen)
-			_, err = visit(owned)
-		}
+		return frontend.CollectionPage{}, false, nil
 	}
 	if err != nil {
 		return frontend.CollectionPage{}, true, err
@@ -451,6 +373,51 @@ func (s *Service) viewCollectionsPageFirst(ctx context.Context, v *core.User, ty
 		return frontend.CollectionPage{Items: ownedVisible[start:end], Total: len(ownedVisible)}, true, nil
 	}
 	return s.combineOwnedAndFranchises(ctx, v, stored, ownedVisible, q)
+}
+
+func (s *Service) visitVisibleOwned(ctx context.Context, v *core.User, typ core.MediaType, stored *core.Library, q frontend.CollectionQuery, seen map[core.RatingKey]bool, ownedVisible *[]core.Collection) (bool, error) {
+	counter, err := s.ownedMemberBatchCounter(ctx, v, stored, typ)
+	if err != nil {
+		return false, err
+	}
+	visit := func(owned []core.Collection) (bool, error) {
+		visible, err := s.visibleOwnedBatch(ctx, v, typ, stored, q, counter, owned, seen)
+		if err != nil {
+			return false, err
+		}
+		*ownedVisible = append(*ownedVisible, visible...)
+		if q.ExistsOnly {
+			return len(*ownedVisible) > 0, nil
+		}
+		return q.NoTotal && len(*ownedVisible)-max(q.Offset, 0) >= normalizeListLimit(q.Limit), nil
+	}
+
+	var includeFranchises bool
+	if visitor, ok := s.d.Collections.(interface {
+		VisitOwned(context.Context, *core.User, core.MediaType, string, int, func([]core.Collection) (bool, error)) (bool, error)
+	}); ok {
+		includeFranchises, err = visitor.VisitOwned(ctx, v, typ, strings.ToLower(strings.TrimSpace(q.Query)), min(normalizeListLimit(q.Limit), 200), visit)
+	} else {
+		err = core.ErrNotAvailable
+	}
+	if errors.Is(err, core.ErrNotAvailable) {
+		lister, ok := s.d.Collections.(ownedCompleteLister)
+		if !ok {
+			return false, core.ErrNotAvailable
+		}
+		var owned []core.Collection
+		owned, includeFranchises, err = lister.ListOwnedComplete(ctx, v, typ)
+		if errors.Is(err, core.ErrNotAvailable) {
+			return false, core.ErrNotAvailable
+		}
+		if err == nil {
+			_, err = visit(owned)
+		}
+	}
+	if err != nil {
+		return false, err
+	}
+	return includeFranchises, nil
 }
 
 type ownedCountBatch func([]core.Collection) (map[int64]int, error)

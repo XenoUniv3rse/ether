@@ -6,9 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"sort"
-	"strings"
 
 	"github.com/braedonsaunders/ether/internal/core"
+	"github.com/braedonsaunders/ether/internal/libraryfilter"
 )
 
 // ListComplete builds every eligible collection or returns an error. Unlike
@@ -48,15 +48,8 @@ func (s *Service) ListOwnedComplete(ctx context.Context, user *core.User, typ co
 // VisitOwned evaluates non-franchise collections in display order, stopping
 // when visit has enough visible results for the requested page.
 func (s *Service) VisitOwned(ctx context.Context, user *core.User, typ core.MediaType, query string, batchSize int, visit func([]core.Collection) (bool, error)) (bool, error) {
-	rows, err := s.loadRows(ctx)
-	if err != nil {
-		return false, err
-	}
-	// loadRows is request-memoized and other consumers use its display order.
-	rows = append([]*specRow(nil), rows...)
-	sort.SliceStable(rows, func(i, j int) bool { return rows[i].builtin && !rows[j].builtin })
 	batchSize = max(1, batchSize)
-	batchRows := make([]*specRow, 0, min(batchSize, len(rows)))
+	batchRows := make([]*specRow, 0, batchSize)
 	flush := func() (bool, error) {
 		if len(batchRows) == 0 {
 			return false, nil
@@ -74,17 +67,15 @@ func (s *Service) VisitOwned(ctx context.Context, user *core.User, typ core.Medi
 		}
 		return visit(nonempty)
 	}
-	for _, row := range rows {
-		if !visible(row, user) || !row.spec.BrowseInApps || !typeMatches(row.spec, typ) ||
-			(query != "" && !strings.Contains(strings.ToLower(row.spec.Name), query)) {
-			continue
-		}
+	stop, err := s.visitOwnedSpecs(ctx, user, typ, query, batchSize, func(row *specRow) (bool, error) {
 		batchRows = append(batchRows, row)
 		if len(batchRows) == batchSize {
-			if stop, err := flush(); stop || err != nil {
-				return false, err
-			}
+			return flush()
 		}
+		return false, nil
+	})
+	if stop || err != nil {
+		return false, err
 	}
 	if stop, err := flush(); stop || err != nil {
 		return false, err
@@ -97,6 +88,105 @@ func (s *Service) VisitOwned(ctx context.Context, user *core.User, typ core.Medi
 }
 
 func (s *Service) collectionHeaders(ctx context.Context, rows []*specRow, user *core.User, typ core.MediaType) ([]core.Collection, error) {
+	var coldIDs []int64
+	var remaining []*specRow
+	var remainingIndexes []int
+	cold := s.idx.current() == nil && s.plainMemberViewer(user)
+	for i, row := range rows {
+		if cold && s.plainPersistedMembers(row) {
+			coldIDs = append(coldIDs, row.id)
+		} else {
+			remaining = append(remaining, row)
+			remainingIndexes = append(remainingIndexes, i)
+		}
+	}
+	heads, err := s.mirror.CollectionMemberHeads(ctx, coldIDs, 4, false)
+	if err != nil {
+		return nil, err
+	}
+	served := make([][]core.RatingKey, len(rows))
+	for i, row := range rows {
+		served[i] = heads[row.id].Keys
+	}
+	if len(remaining) > 0 {
+		batch, err := s.servedMembersBatch(ctx, remaining, user)
+		if err != nil {
+			return nil, err
+		}
+		for i, pos := range remainingIndexes {
+			served[pos] = batch[i]
+		}
+	}
+	var artKeys []core.RatingKey
+	artSeen := make(map[core.RatingKey]bool)
+	for i, row := range rows {
+		keys := served[i]
+		if row.spec.MediaType == MediaMixed && typ != "" {
+			keys = sectionKeys(keys, typ)
+		}
+		for _, key := range keys[:min(len(keys), 4)] {
+			if !artSeen[key] {
+				artSeen[key] = true
+				artKeys = append(artKeys, key)
+			}
+		}
+	}
+	titles, _ := s.mirror.ArtSummary(ctx, artKeys)
+	art := make(map[core.RatingKey]core.Title, len(titles))
+	for _, title := range titles {
+		art[title.Key] = title
+	}
+	out := make([]core.Collection, 0, len(rows))
+	for i, row := range rows {
+		keys := served[i]
+		col := s.collectionWithArt(ctx, row, typ, keys, art)
+		if head, ok := heads[row.id]; ok {
+			col.ChildCount = head.Count
+			if col.RankedTop10 {
+				col.ChildCount = min(col.ChildCount, 10)
+			}
+		}
+		out = append(out, col)
+	}
+	return out, nil
+}
+
+// A plain persisted build has no serving-time transformation of member order
+// or membership beyond the mirror release check.
+func (s *Service) plainPersistedMembers(row *specRow) bool {
+	sp := row.spec
+	if row.lastBuilt.IsZero() || row.buildHash == "" || sp.Refresh == RefreshLive ||
+		sp.ReleaseMode == "upcoming" || sp.ReleaseMode == "mixed" ||
+		sp.MediaType == MediaMixed || sp.Sort == "personal" || sp.Limit > 0 || sp.Rotate != nil {
+		return false
+	}
+	if _, facet := localFacetSpec(sp); facet {
+		return false
+	}
+	for _, rules := range [][]core.CollectionRule{sp.Rules, sp.Exclude} {
+		for _, rule := range rules {
+			if rule.Field == "watched" || rule.Field == "inProgress" {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func (s *Service) plainMemberViewer(user *core.User) bool {
+	if user != nil && (user.MaxContentRating != "" || !user.IsOwner && len(user.AllowedLibraries) > 0) {
+		return false
+	}
+	if source, ok := s.cat.(interface{ VisibilityFilter() *libraryfilter.Filter }); ok {
+		filter := source.VisibilityFilter()
+		return filter == nil || filter.Passive()
+	}
+	return true
+}
+
+// servedMembersBatch shares catalogue and watch-state reads across a batch
+// while applying each collection's own rules and ordering.
+func (s *Service) servedMembersBatch(ctx context.Context, rows []*specRow, user *core.User) ([][]core.RatingKey, error) {
 	if err := s.preloadMembers(ctx, rows); err != nil {
 		return nil, err
 	}
@@ -135,35 +225,40 @@ func (s *Service) collectionHeaders(ctx context.Context, rows []*specRow, user *
 		}
 	}
 	served := make([][]core.RatingKey, len(rows))
-	var artKeys []core.RatingKey
-	artSeen := make(map[core.RatingKey]bool)
+	var statusKeys []core.RatingKey
+	state := s.stateDep()
+	if user != nil && state != nil {
+		seen := make(map[core.RatingKey]bool)
+		for _, ms := range members {
+			pr := ms.personalRules()
+			if len(pr.include)+len(pr.exclude) == 0 {
+				continue
+			}
+			for _, key := range ms.keys {
+				if !seen[key] {
+					seen[key] = true
+					statusKeys = append(statusKeys, key)
+				}
+			}
+		}
+	}
+	var statuses map[core.RatingKey]core.WatchStatus
+	if len(statusKeys) > 0 {
+		var err error
+		statuses, err = state.GetMany(ctx, user.ID, statusKeys)
+		if err != nil {
+			statuses = nil
+			s.log.Debug("collections: watch state", "err", err)
+		}
+	}
 	for i, row := range rows {
 		if len(members[i].keys) == 0 {
 			continue
 		}
-		keys := s.serveMembers(ctx, row, user, members[i], snapshots[groups[i]])
+		keys := s.serveMembersWithStatuses(ctx, row, user, members[i], snapshots[groups[i]], statuses, true)
 		served[i] = keys
-		if row.spec.MediaType == MediaMixed && typ != "" {
-			keys = sectionKeys(keys, typ)
-		}
-		for _, key := range keys[:min(len(keys), 4)] {
-			if !artSeen[key] {
-				artSeen[key] = true
-				artKeys = append(artKeys, key)
-			}
-		}
 	}
-	titles, _ := s.mirror.ArtSummary(ctx, artKeys)
-	art := make(map[core.RatingKey]core.Title, len(titles))
-	for _, title := range titles {
-		art[title.Key] = title
-	}
-	out := make([]core.Collection, 0, len(rows))
-	for i, row := range rows {
-		keys := served[i]
-		out = append(out, s.collectionWithArt(ctx, row, typ, keys, art))
-	}
-	return out, nil
+	return served, nil
 }
 
 // preloadMembers fills cold persisted membership in one batch. Live and

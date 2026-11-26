@@ -706,13 +706,17 @@ func (s *Service) serve(ctx context.Context, row *specRow, user *core.User, wait
 }
 
 func (s *Service) serveMembers(ctx context.Context, row *specRow, user *core.User, ms *memberSet, snap *snapshot) []core.RatingKey {
+	return s.serveMembersWithStatuses(ctx, row, user, ms, snap, nil, false)
+}
+
+func (s *Service) serveMembersWithStatuses(ctx context.Context, row *specRow, user *core.User, ms *memberSet, snap *snapshot, statuses map[core.RatingKey]core.WatchStatus, preloaded bool) []core.RatingKey {
 	present := make([]core.RatingKey, 0, len(ms.keys))
 	for _, k := range ms.keys {
 		if snap.entries[k] != nil {
 			present = append(present, k)
 		}
 	}
-	keys := s.filterForUser(ctx, present, ms.personalRules(), user, snap)
+	keys := s.filterForUserWithStatuses(ctx, present, ms.personalRules(), user, snap, statuses, preloaded)
 	if row.spec.ReleaseMode == "upcoming" || row.spec.ReleaseMode == "mixed" {
 		now := s.now()
 		filtered := make([]core.RatingKey, 0, len(keys))

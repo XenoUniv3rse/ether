@@ -801,6 +801,10 @@ func (a Source) ListPage(ctx context.Context, viewer *core.Viewer, device core.D
 // ListCollectionPage builds images from policy-checked collection headers and
 // preloads metadata for every image on the page together.
 func (a Source) ListCollectionPage(ctx context.Context, viewer *core.Viewer, device core.Device, cols []core.Collection) (map[core.RatingKey][]frontend.Image, error) {
+	posters, err := a.collectionPagePosters(ctx, viewer, cols)
+	if err != nil {
+		return nil, err
+	}
 	type listedCollection struct {
 		req     frontend.ArtworkRequest
 		ctx     context.Context
@@ -813,7 +817,11 @@ func (a Source) ListCollectionPage(ctx context.Context, viewer *core.Viewer, dev
 		c := &cols[i]
 		req := frontend.ArtworkRequest{Viewer: viewer, Device: device, Item: c.Key}
 		listCtx := ctx
-		if frontend.CollectionCardArtwork(ctx) || c.Key.Kind() == core.KindCollection || (!c.Upcoming && c.PosterPath != "") {
+		if poster, ok := posters[c.Key]; ok {
+			withPoster := *c
+			withPoster.PosterPath = poster
+			listCtx = frontend.WithArtworkCollection(ctx, &withPoster)
+		} else if frontend.CollectionCardArtwork(ctx) || c.Key.Kind() == core.KindCollection || (!c.Upcoming && c.PosterPath != "") {
 			listCtx = frontend.WithArtworkCollection(ctx, c)
 		}
 		entries, _, err := a.entries(listCtx, req)
@@ -848,6 +856,67 @@ func (a Source) ListCollectionPage(ctx context.Context, viewer *core.Viewer, dev
 			images = append(images, img)
 		}
 		out[item.req.Item] = images
+	}
+	return out, nil
+}
+
+// collectionPagePosters mirrors the single-image fallback for a whole page,
+// checking title policy and availability once for the combined candidates.
+func (a Source) collectionPagePosters(ctx context.Context, viewer *core.Viewer, cols []core.Collection) (map[core.RatingKey]string, error) {
+	batch, ok := a.Collections.(interface {
+		CollectionPosterCandidates(context.Context, *core.User, []core.RatingKey) (map[core.RatingKey][]core.Title, error)
+	})
+	if !ok || viewer == nil || frontend.CollectionCardArtwork(ctx) {
+		return nil, nil
+	}
+	var keys []core.RatingKey
+	for _, c := range cols {
+		if c.Key.Kind() == core.KindSmart && !c.Upcoming && c.PosterPath == "" {
+			keys = append(keys, c.Key)
+		}
+	}
+	if len(keys) == 0 {
+		return nil, nil
+	}
+	if policy, ok := a.Visibility.Policy.(core.UserPolicySource); ok {
+		current := policy.UserPolicy(viewer)
+		if current == nil || current.ID != viewer.ID {
+			return nil, nil
+		}
+		viewer = current
+	}
+	ctx = core.WithCatalogViewer(ctx, viewer)
+	candidates, err := batch.CollectionPosterCandidates(ctx, viewer, keys)
+	if err != nil {
+		return nil, err
+	}
+	var titles []core.Title
+	seen := make(map[core.RatingKey]bool)
+	for _, key := range keys {
+		for _, title := range candidates[key] {
+			if !seen[title.Key] && a.Visibility.TitleAllowed(viewer, &title) {
+				seen[title.Key] = true
+				titles = append(titles, title)
+			}
+		}
+	}
+	visible := make(map[core.RatingKey]bool)
+	if len(titles) > 0 {
+		vis := a.Visibility
+		vis.GetTitle = a.title
+		for _, title := range vis.Available(ctx, viewer, titles) {
+			visible[title.Key] = vis.Playable(ctx, viewer, &title)
+		}
+	}
+	out := make(map[core.RatingKey]string, len(candidates))
+	for key, titles := range candidates {
+		out[key] = ""
+		for _, title := range titles {
+			if visible[title.Key] {
+				out[key] = title.PosterPath
+				break
+			}
+		}
 	}
 	return out, nil
 }

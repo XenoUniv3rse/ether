@@ -567,3 +567,21 @@ func (c *reviewCollections) CollectionArtwork(ctx context.Context, u *core.User,
 	}
 	return nil, "", false, nil
 }
+
+// CollectionPosterCandidates shares the persisted collection artwork lookup
+// with the base service. Reviews keep their own artwork and membership rules.
+func (c *reviewCollections) CollectionPosterCandidates(ctx context.Context, u *core.User, keys []core.RatingKey) (map[core.RatingKey][]core.Title, error) {
+	batch, ok := c.base.(interface {
+		CollectionPosterCandidates(context.Context, *core.User, []core.RatingKey) (map[core.RatingKey][]core.Title, error)
+	})
+	if !ok {
+		return nil, nil
+	}
+	var baseKeys []core.RatingKey
+	for _, key := range keys {
+		if _, _, review := reviewCollectionParts(key); !review {
+			baseKeys = append(baseKeys, key)
+		}
+	}
+	return batch.CollectionPosterCandidates(ctx, u, baseKeys)
+}
