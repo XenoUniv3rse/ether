@@ -53,7 +53,7 @@ func ImportTitlesTx(ctx context.Context, tx *sql.Tx, id, userID int64, name stri
 		return 0, err
 	}
 	hash := buildHash(sp, memberKeys, nil)
-	if _, err := tx.ExecContext(ctx, `INSERT INTO collections_specs(id,owner_user_id,spec_json,enabled,created_at,updated_at,last_built_at,item_count,build_hash,changed_at,browse_type,browse_mode) VALUES(?,?,?,1,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET spec_json=excluded.spec_json,browse_group=excluded.browse_group,browse_rank=excluded.browse_rank,browse_type=excluded.browse_type,browse_mode=excluded.browse_mode,updated_at=excluded.updated_at,last_built_at=excluded.last_built_at,item_count=excluded.item_count,build_hash=excluded.build_hash,changed_at=excluded.changed_at`, id, userID, string(raw), now, now, now, len(memberKeys), hash, now, sp.MediaType, browseMode(sp)); err != nil {
+	if _, err := tx.ExecContext(ctx, `INSERT INTO collections_specs(id,owner_user_id,spec_json,enabled,created_at,updated_at,last_built_at,item_count,build_hash,changed_at,browse_group,browse_rank,browse_type,browse_mode) VALUES(?,?,?,1,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET spec_json=excluded.spec_json,browse_group=excluded.browse_group,browse_rank=excluded.browse_rank,browse_type=excluded.browse_type,browse_mode=excluded.browse_mode,updated_at=excluded.updated_at,last_built_at=excluded.last_built_at,item_count=excluded.item_count,build_hash=excluded.build_hash,changed_at=excluded.changed_at`, id, userID, string(raw), now, now, now, len(memberKeys), hash, now, browseGroup(false, sp), browseRank(sp.SortOrder), sp.MediaType, browseMode(sp)); err != nil {
 		return 0, err
 	}
 	if _, err := tx.ExecContext(ctx, `DELETE FROM collections_members WHERE spec_id=?`, id); err != nil {
