@@ -94,7 +94,8 @@ type PluginPresentation struct {
 	Sorts        []string
 	Facets       []frontend.ViewFacet
 	Shelves      []PluginShelf
-	TabShelves   map[string][]PluginShelf   // per-tab shelves keyed by recommended tab key
+	TabShelves   map[string][]PluginShelf // per-tab shelves keyed by recommended tab key
+	ListLevels   []string
 	RootLevel    string                     // root hierarchy level key (index 0)
 	LevelMedia   map[string]core.MediaClass // effective media class per declared level
 	LevelParents map[string]string          // effective parent level key per non-root level
@@ -389,6 +390,7 @@ func (s *Service) storedViews(ctx context.Context, v *core.User) ([]frontend.Vie
 					view.Tabs = p.Tabs
 					view.Sorts = p.Sorts
 					view.Facets = p.Facets
+					view.ListLevels = p.ListLevels
 				}
 			}
 			if view.Card == "" && lib.CardShape != "" {
@@ -1165,8 +1167,12 @@ func (s *Service) readPluginLibraryItems(ctx context.Context, v *core.User, lib 
 	scanQ := q
 	scanQ.NoTotal = true
 	scanQ.CheapTotal = false
-	for {
-		page, err := s.d.PluginLibraries.Browse(ctx, lib, scanQ, cursor, 200)
+	for scanned := 0; ; {
+		step := 200
+		if q.PluginScanLimit > 0 {
+			step = min(step, q.PluginScanLimit-scanned)
+		}
+		page, err := s.d.PluginLibraries.Browse(ctx, lib, scanQ, cursor, step)
 		if err != nil {
 			return core.Page{}, err
 		}
@@ -1182,6 +1188,10 @@ func (s *Service) readPluginLibraryItems(ctx context.Context, v *core.User, lib 
 		}
 		if page.NextCursor == "" || len(page.Items) == 0 || page.NextCursor == cursor {
 			exhausted = true
+			break
+		}
+		scanned += len(page.Items)
+		if q.PluginScanLimit > 0 && scanned >= q.PluginScanLimit {
 			break
 		}
 		if !needAll && totalMatched >= wantEnd && q.NoTotal {

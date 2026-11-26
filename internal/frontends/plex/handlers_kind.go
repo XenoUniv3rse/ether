@@ -611,6 +611,9 @@ func kindTypeForBase(base, projected string, t *frontend.Title) string {
 			// (listed on the artist as Extras and playable as video).
 			return "clip"
 		}
+		if t != nil && t.OrderedList {
+			return "playlist"
+		}
 		if t != nil && t.SelfChild {
 			// A flat playable album's own playable incarnation.
 			return plexBaseTrack
@@ -671,6 +674,10 @@ func (s *Server) writeKindChildren(w http.ResponseWriter, r *http.Request, pr *R
 	rendered := s.renderTitles(ctx, pr, page, renderOpts{media: true, inSection: true, storedOnly: true})
 	for i := range rendered {
 		rendered[i].Type = kindTypeForBase(base, rendered[i].Type, &page[i])
+		if parent.OrderedList && page[i].ItemIndex > 0 {
+			rendered[i].Index = model.Ptr(page[i].ItemIndex)
+			rendered[i].ParentIndex = nil
+		}
 	}
 	mc.Metadata = rendered
 	mc.Size = len(mc.Metadata)

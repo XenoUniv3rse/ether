@@ -160,8 +160,18 @@ func (s *Server) titleContainer(ctx context.Context, t *frontend.Title) *model.M
 // keySections attributes stored entries known only by key (playlist items)
 // in one pass.
 func (s *Server) keySections(ctx context.Context, keys []frontend.RatingKey) map[frontend.RatingKey]Section {
+	return s.playlistEntrySections(ctx, keys, s.playlistPluginTitles(ctx, keys))
+}
+
+func (s *Server) playlistEntrySections(ctx context.Context, keys []frontend.RatingKey, plugins map[frontend.RatingKey]frontend.Title) map[frontend.RatingKey]Section {
 	ts := make([]frontend.Title, 0, len(keys))
 	for _, k := range keys {
+		if k.IsPluginKey() {
+			if title, ok := plugins[k]; ok {
+				ts = append(ts, title)
+			}
+			continue
+		}
 		t := playlistKeyMediaType(k)
 		switch k.Kind() {
 		case frontend.KindSeason:

@@ -2369,9 +2369,14 @@ func (c *KindCatalog) projectItems(ctx context.Context, rec pluginitems.KindReco
 
 	flatAlbum := flatPlayableAlbum(rec.Decl, lib.Present)
 	refs := make([]core.ItemRef, len(items))
+	var listRefs []core.ItemRef
 	for i, it := range items {
 		refs[i] = it.Ref
+		if level, _, ok := rec.Decl.Level(it.Level); ok && level.Members {
+			listRefs = append(listRefs, it.Ref)
+		}
 	}
+	memberCounts, _ := c.items.CountMembersMany(ctx, listRefs)
 	partCounts, _ := c.items.CountPartsMany(ctx, refs)
 	var parentCounts map[core.ItemRef]pluginitems.ParentCounts
 	if len(rec.Decl.Levels) >= 2 {
@@ -2390,6 +2395,9 @@ func (c *KindCatalog) projectItems(ctx context.Context, rec pluginitems.KindReco
 		t := pluginitems.ProjectWithText(it, rec.Decl, lib.Present, resolveText, lib.CardShape)
 		t.LibraryID = lib.ID
 		scopeTitleMediaParents(&t, lib.ID)
+		if t.OrderedList {
+			t.ChildCount = memberCounts[it.Ref]
+		}
 		if len(rec.Decl.Levels) >= 2 && rec.Decl.HasChildLevels(it.Level) {
 			// Direct children and per-level counts for tallied parent levels come
 			// strictly from plugin_item_parent_tally, ignoring any plugin-supplied
@@ -2929,6 +2937,12 @@ func levelMatchesTypeName(lv plugins.KindLevel, idx int, decl plugins.MediaKindM
 	name = strings.TrimSpace(name)
 	if name == "" {
 		return false
+	}
+	if lv.Members {
+		switch strings.ToLower(name) {
+		case "artist", "album", "track":
+			return false
+		}
 	}
 	if strings.EqualFold(name, string(projected.Type)) || strings.EqualFold(name, projected.MBItemType) {
 		return true
@@ -3589,6 +3603,7 @@ func (c *KindCatalog) Presentation(ctx context.Context, lib core.Library) (exper
 
 	kindMedia := ResolveKindMediaClass(decl, lib.Present)
 	var rootLevel string
+	var listLevels []string
 	var levelMedia map[string]core.MediaClass
 	var levelParents map[string]string
 	var levelRoles map[string]string
@@ -3599,6 +3614,9 @@ func (c *KindCatalog) Presentation(ctx context.Context, lib core.Library) (exper
 		levelRoles = make(map[string]string, len(decl.Levels))
 		for _, lv := range decl.Levels {
 			levelMedia[lv.Key] = decl.EffectiveLevelMedia(lv.Key, kindMedia)
+			if lv.Members {
+				listLevels = append(listLevels, lv.Key)
+			}
 			if lv.Role != "" {
 				levelRoles[lv.Key] = lv.Role
 			}
@@ -3619,6 +3637,7 @@ func (c *KindCatalog) Presentation(ctx context.Context, lib core.Library) (exper
 		Shelves:      shelves,
 		TabShelves:   tabShelves,
 		RootLevel:    rootLevel,
+		ListLevels:   listLevels,
 		LevelMedia:   levelMedia,
 		LevelParents: levelParents,
 		LevelRoles:   levelRoles,

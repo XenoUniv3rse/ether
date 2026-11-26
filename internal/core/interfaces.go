@@ -568,6 +568,7 @@ type Playlist struct {
 	Title    string    `json:"title"`
 	Smart    bool      `json:"smart"`
 	SmartURI string    `json:"-"`
+	Audio    bool      `json:"-"` // derived from viewer-visible members
 	GUID     string    `json:"-"`
 	Summary  string    `json:"summary,omitempty"`
 	AddedAt  time.Time `json:"addedAt"`

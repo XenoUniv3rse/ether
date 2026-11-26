@@ -47,18 +47,23 @@ func (s *Service) Playlists(ctx context.Context, viewer *core.Viewer, q frontend
 	}
 	out := make([]core.Playlist, 0, len(owned))
 	for _, playlist := range owned {
-		visible := make([]core.RatingKey, 0, len(playlist.Items))
-		for _, key := range playlist.Items {
-			if _, ok := visibleMap[key]; ok {
-				visible = append(visible, key)
-			}
-		}
-		playlist.Items = visible
+		playlist.Items, _ = playlistVisibleEntries(playlist.Items, visibleMap)
+		playlist.Audio = audioPlaylist(playlist.Items, visibleMap)
 		playlist.ItemIDs = nil
 		out = append(out, playlist)
 	}
 	start, end := playlistPage(len(out), q.Offset, q.Limit)
 	return frontend.PlaylistPage{Items: out[start:end], Total: len(out)}, nil
+}
+
+func audioPlaylist(keys []core.RatingKey, titles map[core.RatingKey]core.Title) bool {
+	for _, key := range keys {
+		typ := titles[key].MBItemType
+		if typ != "Audio" && typ != "AudioBook" {
+			return false
+		}
+	}
+	return len(keys) > 0
 }
 
 // ViewerPlaylistContents loads one viewer-owned playlist and its visible
@@ -108,10 +113,19 @@ func (s *Service) CreatePlaylist(ctx context.Context, viewer *core.Viewer, name 
 	if s.d.Playlists == nil || name == "" || len(name) > 200 {
 		return nil, frontend.ErrBadPlaylist
 	}
-	if err := s.playlistTitles(ctx, v, items); err != nil {
-		return nil, err
+	titles := make(map[core.RatingKey]core.Title, len(items))
+	for _, key := range items {
+		title, err := s.item(ctx, v, key)
+		if err != nil {
+			return nil, err
+		}
+		titles[key] = *title
 	}
-	return s.d.Playlists.Create(ctx, v.ID, name, items)
+	pl, err := s.d.Playlists.Create(ctx, v.ID, name, items)
+	if err == nil {
+		pl.Audio = audioPlaylist(items, titles)
+	}
+	return pl, err
 }
 
 // CreateViewerPlaylist creates a viewer-owned playlist, expanding visible
@@ -617,6 +631,11 @@ func (s *Service) visiblePlaylistIndexes(ctx context.Context, v *core.User, item
 	if err != nil {
 		return nil, nil, err
 	}
+	visible, raw := playlistVisibleEntries(items, visibleMap)
+	return visible, raw, nil
+}
+
+func playlistVisibleEntries(items []core.RatingKey, visibleMap map[core.RatingKey]core.Title) ([]core.RatingKey, []int) {
 	visible := make([]core.RatingKey, 0, len(items))
 	raw := make([]int, 0, len(items))
 	for i, key := range items {
@@ -625,7 +644,7 @@ func (s *Service) visiblePlaylistIndexes(ctx context.Context, v *core.User, item
 			raw = append(raw, i)
 		}
 	}
-	return visible, raw, nil
+	return visible, raw
 }
 
 // loadVisiblePlaylistTitles hydrates and policy-filters all unique keys in

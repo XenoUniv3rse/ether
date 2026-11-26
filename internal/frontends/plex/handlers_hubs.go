@@ -774,7 +774,7 @@ func (s *Server) playlistsHubProjection(ctx context.Context, pr *Request, count 
 	meta := make(map[frontend.RatingKey]model.Metadata, len(owned))
 	for i := range owned {
 		st, hasState := states[owned[i].Key]
-		meta[owned[i].Key] = s.playlistListingMetadataWithState(ctx, &owned[i], st, hasState)
+		meta[owned[i].Key] = s.playlistListingMetadataWithState(ctx, &owned[i], s.playlistType(ctx, &owned[i]), st, hasState)
 	}
 	pls = owned
 	sort.SliceStable(pls, func(i, j int) bool { return meta[pls[i].Key].LastViewedAt > meta[pls[j].Key].LastViewedAt })

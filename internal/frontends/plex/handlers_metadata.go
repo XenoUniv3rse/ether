@@ -906,6 +906,10 @@ func (s *Server) handleChildren(w http.ResponseWriter, r *http.Request) {
 		s.writeErr(w, r, err)
 		return
 	}
+	if s.plexTypeFor(parent) == "playlist" {
+		s.writePluginPlaylistItems(w, r, parent)
+		return
+	}
 	if parent.Type == frontend.TypeMovie || parent.Type == frontend.TypeEpisode {
 		writeHTTPError(w, http.StatusBadRequest)
 		return

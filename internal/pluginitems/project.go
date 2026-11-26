@@ -140,6 +140,7 @@ func ProjectWithText(item core.KindItem, decl plugins.MediaKindMeta, present cor
 		LyricsDeclared:    decl.Lyrics && declared && level.Playable && item.Playable && item.Unavailable == nil,
 		RecordingID:       item.Recording,
 		KindLevel:         item.Level,
+		OrderedList:       declared && level.Members,
 		PrimaryChildLevel: primaryChildLevel,
 		ItemIndex:         effIndex,
 		PluginAddedAt:     item.AddedAt,

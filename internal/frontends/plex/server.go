@@ -57,6 +57,7 @@ type Section struct {
 	Subset       bool
 	PluginSorts  []string
 	PluginFacets []frontend.ViewFacet
+	ListLevels   []string
 }
 
 // SessionToucher is optionally implemented by frontend.Playback to keep a play

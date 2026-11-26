@@ -76,7 +76,7 @@ func (s *Server) handlePlayQueueCreate(w http.ResponseWriter, r *http.Request) {
 			writeHTTPError(w, http.StatusBadRequest)
 			return
 		}
-		pl, err := s.playlist(ctx, pr.User, k)
+		pl, err := s.queuePlaylist(ctx, pr, k)
 		if err != nil {
 			s.writeErr(w, r, err)
 			return
@@ -96,7 +96,7 @@ func (s *Server) handlePlayQueueCreate(w http.ResponseWriter, r *http.Request) {
 		if path, e := uriPath(uri); e == nil {
 			if m := rePlaylistPath.FindStringSubmatch(path); len(m) > 0 {
 				if k, e := frontend.ParseRatingKey(m[1]); e == nil {
-					if pl, e := s.playlist(ctx, pr.User, k); e == nil {
+					if pl, e := s.queuePlaylist(ctx, pr, k); e == nil {
 						plKey, plTitle = pl.Key, pl.Title
 					}
 				}
@@ -225,6 +225,17 @@ func (s *Server) handlePlayQueueCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.writePlayQueue(w, r, snap, true)
+}
+
+func (s *Server) queuePlaylist(ctx context.Context, pr *Request, key frontend.RatingKey) (*frontend.Playlist, error) {
+	if key.IsPluginKey() {
+		t, err := s.pluginPlaylistTitle(ctx, pr, key)
+		if err != nil {
+			return nil, err
+		}
+		return &frontend.Playlist{Key: key, Title: t.Title}, nil
+	}
+	return s.playlist(ctx, pr.User, key)
 }
 
 func (s *Server) queueStartPlayable(ctx context.Context, pr *Request, key frontend.RatingKey) bool {
