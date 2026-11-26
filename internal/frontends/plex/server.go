@@ -198,6 +198,7 @@ type Server struct {
 	readCaps          *readCapabilityStore
 	deliveryGrants    *deliveryGrantStore
 	recentClients     recentPartClients
+	companion         *companionRelay
 	liveManifests     liveManifestRefetches
 	extraPlay         *extraPlayStore
 	subtitleOffers    subtitleOffers
@@ -283,6 +284,7 @@ func NewServer(d Deps) *Server {
 		selections:        newSelectionStore(),
 		notifier:          newNotifier(),
 		facets:            newFacetCache(),
+		companion:         newCompanionRelay(),
 		ctx:               ctx,
 		cancel:            cancel,
 	}
