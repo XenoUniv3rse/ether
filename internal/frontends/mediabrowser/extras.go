@@ -37,7 +37,7 @@ func (i *instance) writeExtras(w http.ResponseWriter, r *http.Request, trailers 
 		if extra.Key == 0 || isTrailerExtra(extra) != trailers {
 			continue
 		}
-		items = append(items, i.extraItem(detail, extra))
+		items = append(items, i.extraItem(r, detail, extra))
 	}
 	jsonReply(w, items)
 }
@@ -46,7 +46,7 @@ func isTrailerExtra(extra frontend.Extra) bool {
 	return extra.Kind == "trailer" || extra.Kind == "teaser"
 }
 
-func (i *instance) extraItem(parent frontend.ItemDetail, clip frontend.Extra) map[string]any {
+func (i *instance) extraItem(r *http.Request, parent frontend.ItemDetail, clip frontend.Extra) map[string]any {
 	id := ids.RatingKeyGUID(clip.Key)
 	parentKey := clip.ParentKey
 	if parentKey == 0 {
@@ -56,8 +56,12 @@ func (i *instance) extraItem(parent frontend.ItemDetail, clip frontend.Extra) ma
 	if name == "" {
 		name = "Trailer"
 	}
+	kind := "Video"
+	if isTrailerExtra(clip) {
+		kind = "Trailer"
+	}
 	item := map[string]any{
-		"Id": id, "Name": name, "Type": "Trailer", "MediaType": "Video", "IsFolder": false,
+		"Id": id, "Name": name, "Type": kind, "MediaType": "Video", "IsFolder": false,
 		"ServerId": i.info.ID, "ParentId": ids.RatingKeyGUID(parentKey),
 		"UserData":          i.userDataDTO(id, frontend.WatchStatus{}),
 		"ImageTags":         map[string]string{},
@@ -88,12 +92,28 @@ func (i *instance) extraItem(parent frontend.ItemDetail, clip frontend.Extra) ma
 		delete(source, "ETag")
 	} else {
 		item["LocationType"] = "FileSystem"
+		switch strings.ToLower(clip.Kind) {
+		case "trailer", "teaser":
+			item["ExtraType"] = "Trailer"
+		case "behindthescenes":
+			item["ExtraType"] = "BehindTheScenes"
+		case "featurette":
+			item["ExtraType"] = "Featurette"
+		case "clip":
+			item["ExtraType"] = "Clip"
+		}
 		item["Etag"] = itemEtag(id)
 	}
 	if i.protocol == "emby" {
 		item["Etag"] = embyETag(id)
 	}
+	i.completeFileSource(r, source, frontend.Title{Key: clip.Key}, "")
 	i.mediaSourceDialect(source)
+	if i.protocol == "jellyfin" {
+		jellyfinMediaSourceShape(source, name)
+	}
+	item["MediaStreams"] = source["MediaStreams"]
+	item["Path"] = source["Path"]
 	item["MediaSources"] = []any{source}
 	return item
 }
@@ -154,7 +174,7 @@ func (i *instance) intros(w http.ResponseWriter, r *http.Request) {
 		if clip.Key == 0 {
 			continue
 		}
-		items = append(items, i.extraItem(detail, clip))
+		items = append(items, i.extraItem(r, detail, clip))
 	}
 	jsonReply(w, i.queryResult(items, len(items), 0))
 }
@@ -198,7 +218,7 @@ func (i *instance) authorizedItem(w http.ResponseWriter, r *http.Request) (front
 
 func (i *instance) extraPlayback(w http.ResponseWriter, r *http.Request, viewer *frontend.Viewer, key frontend.RatingKey, playback bool) bool {
 	if key.IsPreroll() && i.host.Prerolls != nil {
-		i.prerollPlayback(w, r, key, playback)
+		i.prerollPlayback(w, r, key)
 		return true
 	}
 	if key.Kind() != frontend.KindExtra || i.host.ExtraStreams == nil {
@@ -213,8 +233,7 @@ func (i *instance) extraPlayback(w http.ResponseWriter, r *http.Request, viewer 
 		http.NotFound(w, r)
 		return true
 	}
-	id := ids.RatingKeyGUID(key)
-	item := i.extraItem(frontend.ItemDetail{Title: frontend.Title{Key: clip.ParentKey}}, clip)
+	item := i.extraItem(r, frontend.ItemDetail{Title: frontend.Title{Key: clip.ParentKey}}, clip)
 	sources, _ := item["MediaSources"].([]any)
 	if len(sources) != 1 {
 		http.Error(w, "Playback unavailable", http.StatusServiceUnavailable)
@@ -230,11 +249,6 @@ func (i *instance) extraPlayback(w http.ResponseWriter, r *http.Request, viewer 
 		if container != "" {
 			source["Container"] = container
 		}
-		path := "/Videos/" + id + "/stream.mp4?Static=true"
-		if prefix, ok := r.Context().Value(prefixKey{}).(string); ok && prefix != "" {
-			path = prefix + path
-		}
-		source["Path"] = path
 	}
 	jsonReply(w, map[string]any{"MediaSources": []any{source}, "PlaySessionId": ""})
 	return true
@@ -378,27 +392,19 @@ func (i *instance) away(r *http.Request) bool {
 }
 
 // prerollPlayback answers PlaybackInfo for a pre-roll: a direct-play MP4.
-func (i *instance) prerollPlayback(w http.ResponseWriter, r *http.Request, key frontend.RatingKey, playback bool) {
+func (i *instance) prerollPlayback(w http.ResponseWriter, r *http.Request, key frontend.RatingKey) {
 	clip, ok := i.host.Prerolls.Lookup(r.Context(), key)
 	if !ok {
 		http.NotFound(w, r)
 		return
 	}
-	id := ids.RatingKeyGUID(key)
-	item := i.extraItem(frontend.ItemDetail{Title: frontend.Title{Key: clip.ParentKey}}, clip)
+	item := i.extraItem(r, frontend.ItemDetail{Title: frontend.Title{Key: clip.ParentKey}}, clip)
 	sources, _ := item["MediaSources"].([]any)
 	if len(sources) != 1 {
 		http.Error(w, "Playback unavailable", http.StatusServiceUnavailable)
 		return
 	}
 	source := sources[0].(map[string]any)
-	if playback {
-		path := "/Videos/" + id + "/stream.mp4?Static=true"
-		if prefix, ok := r.Context().Value(prefixKey{}).(string); ok && prefix != "" {
-			path = prefix + path
-		}
-		source["Path"] = path
-	}
 	jsonReply(w, map[string]any{"MediaSources": []any{source}, "PlaySessionId": ""})
 }
 
@@ -443,6 +449,6 @@ func (i *instance) writeExtraDetail(w http.ResponseWriter, r *http.Request, view
 			return true
 		}
 	}
-	jsonReply(w, i.extraItem(frontend.ItemDetail{Title: frontend.Title{Key: clip.ParentKey}}, clip))
+	jsonReply(w, i.extraItem(r, frontend.ItemDetail{Title: frontend.Title{Key: clip.ParentKey}}, clip))
 	return true
 }

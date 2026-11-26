@@ -675,10 +675,8 @@ func (i *instance) browseRoutes() error {
 			dto["EnableMediaSourceDisplay"] = false
 		}
 		if !mbIsBookItem(d.Title) && (len(d.Versions) > 0 || d.Title.Type == "movie" || d.Title.Type == "episode") {
-			// No explicit release was requested: when the ranked release
-			// variants are available, list Auto then the variants. Otherwise
-			// keep the edition/default shape exactly as before.
 			if sources := i.detailSources(r, v, token, d, dto, key, releaseID); sources != nil {
+				i.completeDetailSources(r, dto, d, sources)
 				dto["MediaSources"] = sources
 				if i.protocol == "jellyfin" {
 					dto["EnableMediaSourceDisplay"] = len(sources) > 1
@@ -710,8 +708,12 @@ func (i *instance) browseRoutes() error {
 		i.addNamedFacets(r, v, d, dto)
 		if i.protocol == "jellyfin" {
 			i.jellyfinItemDetailDTO(d, dto)
+			if sources, ok := dto["MediaSources"].([]any); ok {
+				for _, raw := range sources {
+					delete(raw.(map[string]any), "Chapters")
+				}
+			}
 			i.shapeJellyfinItem(r, v, dto, d.Title)
-			i.jellyfinKnownVersionFacts(dto, shown)
 			jellyfinStudioFacts(dto, d.Title)
 			i.jellyfinDetailShell(dto)
 			if trailers := jellyfinRemoteTrailers(d); len(trailers) > 0 {

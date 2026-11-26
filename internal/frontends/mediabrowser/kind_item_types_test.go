@@ -104,7 +104,7 @@ func TestJellyfinAudioSourceKeepsAudioOnlyStreams(t *testing.T) {
 	title := frontend.Title{Key: core.PluginKey(42), Type: "episode", MBItemType: "Audio", Title: "Fog Horn"}
 	item := map[string]any{}
 	source := map[string]any{"MediaStreams": []any{}}
-	i.presentJellyfinFile(item, source, title)
+	i.presentJellyfinFile(nil, item, source, title)
 	if streams, _ := source["MediaStreams"].([]any); len(streams) != 0 {
 		t.Fatalf("audio source gained streams: %v", streams)
 	}

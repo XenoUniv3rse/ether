@@ -183,6 +183,13 @@ func serveSingleRangeBody(w http.ResponseWriter, r *http.Request, status int, st
 			return nil
 		}
 		if r.Context().Err() != nil {
+			if r.Header.Get("Range") != "" {
+				h := w.Header()
+				h.Del("Content-Range")
+				h.Del("Content-Length")
+				h.Set("Cache-Control", "no-store")
+				w.WriteHeader(http.StatusServiceUnavailable)
+			}
 			return err
 		}
 		if errors.Is(err, context.Canceled) {

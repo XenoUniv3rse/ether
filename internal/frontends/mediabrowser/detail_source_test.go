@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"net/http/httptest"
 	"testing"
-	"time"
 
 	"github.com/braedonsaunders/ether/internal/conform/openapi/spectest"
 	"github.com/braedonsaunders/ether/internal/frontend"
@@ -13,42 +12,7 @@ import (
 	"github.com/braedonsaunders/ether/internal/frontend/kit/ids"
 )
 
-func TestDetailSourceOmitsEstimatedMediaFacts(t *testing.T) {
-	media := frontend.MediaInfo{Estimated: true, Container: "mkv", Size: 1000, BitrateKbps: 5000, Duration: time.Hour, Streams: []frontend.StreamInfo{{Type: "video", Codec: "h264", Width: 1920}}}
-	for _, dialect := range []string{"jellyfin", "emby"} {
-		i := &instance{protocol: frontend.Protocol(dialect)}
-		got := i.detailMediaSourceDTO("scoped", media)
-		for _, field := range []string{"Container", "RunTimeTicks", "Size", "Bitrate", "Chapters"} {
-			if _, ok := got[field]; ok {
-				t.Fatalf("%s: estimated %s exposed: %#v", dialect, field, got[field])
-			}
-		}
-		if streams, ok := got["MediaStreams"].([]any); !ok || len(streams) != 0 {
-			t.Fatalf("%s: streams = %#v", dialect, got["MediaStreams"])
-		}
-		media.Estimated = false
-		actual := i.detailMediaSourceDTO("scoped", media)
-		if actual["Container"] != "mkv" || actual["Size"] != int64(1000) || len(actual["MediaStreams"].([]any)) != 1 {
-			t.Fatalf("%s: authoritative source lost: %#v", dialect, actual)
-		}
-		media.Estimated = true
-	}
-}
-
-func TestJellyfinItemUsesTheFirstProbedVersion(t *testing.T) {
-	i := &instance{protocol: "jellyfin"}
-	dto := map[string]any{}
-	i.jellyfinKnownVersionFacts(dto, []frontend.Version{
-		{Media: frontend.MediaInfo{Estimated: true, Container: "mkv", Streams: []frontend.StreamInfo{{Type: "video", Codec: "hevc"}}}},
-		{Media: frontend.MediaInfo{Container: "mp4", Streams: []frontend.StreamInfo{{Type: "video", Codec: "h264"}, {Type: "audio", Codec: "aac"}}}},
-	})
-	streams, _ := dto["MediaStreams"].([]any)
-	if dto["Container"] != "mp4" || len(streams) != 2 {
-		t.Fatalf("container=%v streams=%d", dto["Container"], len(streams))
-	}
-}
-
-func TestItemDetailDoesNotExposeEstimatedVersionStreams(t *testing.T) {
+func TestItemDetailCarriesEstimatedVersionFile(t *testing.T) {
 	viewer := &frontend.Viewer{ID: 1}
 	identity := frontendtest.Identity{ResolveFunc: func(context.Context, string) (*frontend.Viewer, error) { return viewer, nil }}
 	experience := frontendtest.Experience{ItemFunc: func(context.Context, frontend.ItemRequest) (frontend.ItemDetail, error) {
@@ -80,7 +44,7 @@ func TestItemDetailDoesNotExposeEstimatedVersionStreams(t *testing.T) {
 		}
 		sources := dto["MediaSources"].([]any)
 		source := sources[0].(map[string]any)
-		if _, ok := source["Container"]; ok || len(source["MediaStreams"].([]any)) != 0 {
+		if source["Container"] != "mkv" || source["Size"] != float64(42) || source["Path"] == "" || len(source["MediaStreams"].([]any)) == 0 || len(dto["MediaStreams"].([]any)) == 0 || source["SupportsProbing"] != false {
 			t.Fatal(protocol, source)
 		}
 		doc := spectest.Document(t, string(protocol))

@@ -100,7 +100,7 @@ func (i *instance) channelDTO(r *http.Request, token string, ch frontend.LiveCha
 
 func (i *instance) liveChannelMediaSourceDTO(id, name string) map[string]any {
 	media := frontend.MediaInfo{Container: "ts", Estimated: true}
-	source := i.detailMediaSourceDTO(id, media)
+	source := i.mediaSourceDTO(id, media)
 	i.shapeLiveMediaSource(source, id, name, "", "", media, false)
 	i.mediaSourceDialect(source)
 	if i.protocol == "emby" {

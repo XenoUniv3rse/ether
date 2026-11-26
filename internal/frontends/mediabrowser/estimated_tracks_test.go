@@ -11,7 +11,7 @@ import (
 	"github.com/braedonsaunders/ether/internal/frontend/kit/ids"
 )
 
-func TestItemDetailOmitsEstimatedTracks(t *testing.T) {
+func TestItemDetailCarriesTracks(t *testing.T) {
 	for _, protocol := range []frontend.Protocol{"jellyfin", "emby"} {
 		for _, estimated := range []bool{true, false} {
 			t.Run(string(protocol)+"/"+map[bool]string{true: "estimated", false: "reported"}[estimated], func(t *testing.T) {
@@ -35,12 +35,7 @@ func TestItemDetailOmitsEstimatedTracks(t *testing.T) {
 					t.Fatal(w.Code, w.Body.String())
 				}
 				streams, array := item["MediaStreams"].([]any)
-				_, present := item["MediaStreams"]
-				if estimated && protocol == "emby" {
-					if present {
-						t.Fatalf("Emby exposed estimated tracks: %s", w.Body.String())
-					}
-				} else if !array || (len(streams) == 0) != estimated {
+				if !array || len(streams) == 0 {
 					t.Fatalf("estimated=%v: %s", estimated, w.Body.String())
 				}
 			})

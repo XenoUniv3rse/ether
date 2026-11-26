@@ -779,10 +779,8 @@ func TestJellyfinDetailShellAndKnownVersionFacts(t *testing.T) {
 			t.Fatalf("missing %s", key)
 		}
 	}
-	for _, key := range []string{"Width", "Height"} {
-		if _, ok := item[key]; ok {
-			t.Fatalf("%s belongs to the playback slice", key)
-		}
+	if item["Width"] != float64(1920) || item["Height"] != float64(800) {
+		t.Fatal(item["Width"], item["Height"])
 	}
 	for _, key := range []string{"FileName", "Bitrate", "Size", "DateModified"} {
 		if _, ok := item[key]; ok {

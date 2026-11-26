@@ -126,6 +126,13 @@ func (i *instance) jellyfinItemDetailDTO(detail frontend.ItemDetail, dto map[str
 }
 
 func jellyfinVideoSize(dto map[string]any, detail frontend.ItemDetail) (int, int, bool) {
+	sources, _ := dto["MediaSources"].([]any)
+	if len(sources) > 0 {
+		first, _ := sources[0].(map[string]any)
+		if first["SupportsProbing"] == false && (detail.TracksEstimated || len(detail.Tracks) == 0) {
+			return 0, 0, false
+		}
+	}
 	if streams, ok := dto["MediaStreams"].([]any); ok {
 		for _, entry := range streams {
 			stream, ok := entry.(map[string]any)
