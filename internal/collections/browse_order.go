@@ -41,7 +41,7 @@ END;`)
 CREATE FUNCTION collections_browse_lock() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
 	-- Serialize changes to group minima across writers before row locks.
-	PERFORM v FROM collections_meta WHERE k='next_id' FOR UPDATE;
+	PERFORM pg_advisory_xact_lock(186734219, 32);
 	RETURN NULL;
 END; $$;
 CREATE TRIGGER collections_browse_lock BEFORE INSERT OR DELETE OR UPDATE OF browse_group ON collections_specs
@@ -109,8 +109,7 @@ CREATE INDEX collections_specs_browse_mode ON collections_specs (browse_mode,bro
 CREATE INDEX collections_specs_browse_group ON collections_specs (browse_group,id) WHERE browse_group<>'';
 CREATE INDEX collections_specs_browse_display ON collections_specs (builtin DESC,browse_anchor,browse_rank,id) WHERE enabled=1;
 DROP INDEX collections_specs_browse_order;
-DROP INDEX collections_specs_grouped;
-INSERT INTO collections_meta(k,v) VALUES('next_id','0') ON CONFLICT(k) DO NOTHING;`); err != nil {
+DROP INDEX collections_specs_grouped;`); err != nil {
 		return err
 	}
 

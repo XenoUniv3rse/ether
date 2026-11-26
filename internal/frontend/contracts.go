@@ -227,6 +227,11 @@ type LibraryFacetCollections interface {
 	LibraryFacetCollections(ctx context.Context, viewer *core.Viewer, device core.Device, viewID, field, order string, page PageQuery) (FacetCollectionPage, error)
 }
 
+// OwnedCollectionMatcher lets search select titles before loading collection members.
+type OwnedCollectionMatcher interface {
+	ListOwnedMatching(context.Context, *User, MediaType, func(string) bool) ([]Collection, error)
+}
+
 // CollectionPager is an optional Collections capability returning one page
 // of a library type's collections plus the total, without listing them all.
 type CollectionPager interface {

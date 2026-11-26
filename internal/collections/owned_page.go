@@ -3,7 +3,6 @@ package collections
 import (
 	"context"
 
-	"github.com/braedonsaunders/ether/internal/catalog"
 	"github.com/braedonsaunders/ether/internal/core"
 )
 
@@ -26,43 +25,23 @@ func (s *Service) plainOwnedPage(ctx context.Context, user *core.User, typ core.
 	)`, userID, typ, typ).Scan(&complex); err != nil || complex {
 		return nil, 0, false, err
 	}
-	where := ` FROM collections_specs s WHERE enabled=1 AND browse_mode=1 AND (?='' OR browse_type=?)
-		AND (owner_user_id=0 OR owner_user_id=?) AND EXISTS (
-			SELECT 1 FROM collections_members cm JOIN catalog_titles t ON t.key=cm.key
-			WHERE cm.spec_id=s.id AND t.adult=0 AND ` + catalog.CollectionMemberReleasedSQL + `
-			LIMIT 1 OFFSET 0
-		)`
-	now := s.now().Unix()
-	args := []any{typ, typ, userID, now, now}
-	var total int
-	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*)`+where, args...).Scan(&total); err != nil {
+	ids, total, err := s.mirror.PersistedOwnedCollectionPage(ctx, userID, typ, offset, limit)
+	if err != nil {
 		return nil, 0, true, err
 	}
-	var out []core.Collection
-	if limit > 0 && offset < total {
-		rows, err := s.db.QueryContext(ctx, `SELECT `+specCols+where+
-			` ORDER BY builtin DESC,browse_anchor,browse_rank,id LIMIT ? OFFSET ?`, append(args, limit, offset)...)
-		if err != nil {
-			return nil, 0, true, err
-		}
-		var specs []*specRow
-		for rows.Next() {
-			row, err := scanSpecRow(rows)
-			if err != nil {
-				rows.Close()
-				return nil, 0, true, err
-			}
+	rows, err := s.rowsByIDs(ctx, ids)
+	if err != nil {
+		return nil, 0, true, err
+	}
+	specs := make([]*specRow, 0, len(rows))
+	for _, id := range ids {
+		if row := rows[id]; row != nil {
 			specs = append(specs, row)
 		}
-		err = rows.Err()
-		rows.Close()
-		if err != nil {
-			return nil, 0, true, err
-		}
-		out, err = s.collectionHeaders(ctx, specs, user, typ)
-		if err != nil {
-			return nil, 0, true, err
-		}
+	}
+	out, err := s.collectionHeaders(ctx, specs, user, typ)
+	if err != nil {
+		return nil, 0, true, err
 	}
 	ephemeral := s.listEphemeral(user, typ)
 	start := max(0, offset-total)
