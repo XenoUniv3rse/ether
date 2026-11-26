@@ -14,8 +14,10 @@ import (
 )
 
 func init() {
-	store.Register("catalog", 85, `CREATE INDEX catalog_titles_collection_newest
-		ON catalog_titles(collection_id,released_ts DESC,popularity DESC,key) WHERE collection_id>0;`)
+	// One line: the tier migration recreates catalogue indexes from their
+	// stored SQL, normalised. Popularity stays out of catalog_titles indexes
+	// (titleidx.go): it churns on every TMDB refresh.
+	store.Register("catalog", 85, `CREATE INDEX catalog_titles_collection_newest ON catalog_titles(collection_id,released_ts DESC,key) WHERE collection_id>0;`)
 }
 
 // LibraryFacetCollections returns a bounded, indexed page of facet buckets
