@@ -322,8 +322,8 @@ func (i *instance) plexProfileChallenge(w http.ResponseWriter, r *http.Request, 
 		plexProfileFail(w, err)
 		return
 	}
-	if len(profiles) == 0 {
-		plexProfileFail(w, frontend.ErrHouseholdProfileIneligible)
+	if len(profiles) < 2 {
+		problem(w, http.StatusConflict, "conflict", "no_other_profiles")
 		return
 	}
 	i.sendPlexSelection(w, &plexSelection{

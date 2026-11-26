@@ -64,6 +64,14 @@ func (s surfaceIdentity) plexHomeProfilesSupported() bool {
 	return s.retainedPlexToken() != ""
 }
 
+func (s surfaceIdentity) PlexHomeSwitchAvailable(viewer *core.Viewer) (available, known bool) {
+	source, ok := s.users.(frontend.HouseholdProfileAvailability)
+	if !ok {
+		return false, false
+	}
+	return source.PlexHomeSwitchAvailable(viewer)
+}
+
 func (s surfaceIdentity) retainedPlexToken() string {
 	if s.hostConfig == nil {
 		return ""
@@ -251,11 +259,7 @@ func (s surfaceIdentity) HouseholdProfilesForViewer(ctx context.Context, viewer 
 		return nil, frontend.ErrPlexUnreachable
 	}
 	s.syncHomeThumbs(ctx, members)
-	profiles := eligibleHouseholdProfiles(users, members)
-	if len(profiles) == 0 {
-		return nil, frontend.ErrHouseholdProfileIneligible
-	}
-	return profiles, nil
+	return eligibleHouseholdProfiles(users, members), nil
 }
 
 // SignInWithHouseholdProfile completes a selection. For an initiating-token

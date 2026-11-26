@@ -126,6 +126,9 @@ func TestVelaPlexHomeProfilesEndToEnd(t *testing.T) {
 	if err := a.users.BootstrapOwner(ctx, a.cfg.Read().Plex); err != nil {
 		t.Fatal(err)
 	}
+	if _, known := a.users.PlexHomeSwitchAvailable(a.users.ActivePlexUserByPlexID(42)); known {
+		t.Fatal("owner bootstrap alone should leave Home eligibility unknown")
+	}
 	if err := a.users.SyncFriends(ctx, []plextv.Friend{
 		{Owned: true, PlexID: 42, Token: "owner-synced-token"},
 		{PlexID: 300, UUID: "u-kid", Username: "kid", Title: "Kid", Token: "kid-synced-token", Home: true, Restricted: true, AllLibs: true},
@@ -349,5 +352,75 @@ func TestVelaPlexHomeProfilesEndToEnd(t *testing.T) {
 	}
 	if got := getLib(kidTokens.AccessToken); got != http.StatusUnauthorized {
 		t.Fatalf("kid session after switch = %d, want 401 (revoked)", got)
+	}
+
+	checkSwitchCapability := func(path string, want bool, etag string) string {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		req.Header.Set("Authorization", "Bearer "+ownerTokens.AccessToken)
+		req.Header.Set("X-Vela-Device-Id", "iphone-home")
+		req.Header.Set("If-None-Match", etag)
+		req.RemoteAddr = "198.51.100.60:54321"
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		var doc struct {
+			PlexHomeProfiles  bool `json:"plexHomeProfiles"`
+			PlexAccountSignIn bool `json:"plexAccountSignIn"`
+			Capabilities      *struct {
+				PlexHomeProfiles  bool `json:"plexHomeProfiles"`
+				PlexAccountSignIn bool `json:"plexAccountSignIn"`
+			} `json:"capabilities"`
+		}
+		if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &doc) != nil {
+			t.Fatalf("%s status = %d, want capability document", path, rec.Code)
+		}
+		if doc.Capabilities != nil {
+			doc.PlexHomeProfiles = doc.Capabilities.PlexHomeProfiles
+			doc.PlexAccountSignIn = doc.Capabilities.PlexAccountSignIn
+		}
+		if doc.PlexHomeProfiles != want || !doc.PlexAccountSignIn {
+			t.Fatalf("%s Home switching = %v, account sign-in = %v, want %v and true", path, doc.PlexHomeProfiles, doc.PlexAccountSignIn, want)
+		}
+		return rec.Header().Get("ETag")
+	}
+	capsTag := checkSwitchCapability("/vela/v0/capabilities", true, "")
+	bootstrapTag := checkSwitchCapability("/vela/v0/bootstrap", true, "")
+	for _, plexID := range []int64{300, 301} {
+		if err := a.users.PauseViewer(ctx, a.users.ActivePlexUserByPlexID(plexID).ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	checkSwitchCapability("/vela/v0/capabilities", false, capsTag)
+	checkSwitchCapability("/vela/v0/bootstrap", false, bootstrapTag)
+
+	chal = post("/vela/v0/auth/plex/profiles/challenge", `{"idempotencyKey":"home-chal-solo","device":`+device+`}`, ownerTokens.AccessToken)
+	var conflict struct {
+		Error struct{ Code string } `json:"error"`
+	}
+	if chal.Code != http.StatusConflict || json.Unmarshal(chal.Body.Bytes(), &conflict) != nil || conflict.Error.Code != "no_other_profiles" {
+		t.Fatalf("solo challenge = %d, code %q", chal.Code, conflict.Error.Code)
+	}
+
+	// Native Plex clients use the account service for Home listing and
+	// switching. The PMS server still accepts the active owner's credential.
+	plexInst, ok := a.frontends.registry.Instance("plex")
+	if !ok {
+		t.Fatal("plex frontend not mounted")
+	}
+	for _, route := range []struct {
+		method, path string
+		status       int
+	}{
+		{http.MethodGet, "/", http.StatusOK},
+		{http.MethodGet, "/api/home/users", http.StatusNotFound},
+		{http.MethodPost, "/api/home/users/42/switch", http.StatusNotFound},
+	} {
+		req := httptest.NewRequest(route.method, route.path, nil)
+		req.Header.Set("X-Plex-Token", "owner-synced-token")
+		rec := httptest.NewRecorder()
+		plexInst.Handler().ServeHTTP(rec, req)
+		if rec.Code != route.status {
+			t.Fatalf("Plex %s %s returned %d, want %d", route.method, route.path, rec.Code, route.status)
+		}
 	}
 }
