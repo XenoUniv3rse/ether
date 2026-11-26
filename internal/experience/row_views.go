@@ -602,8 +602,14 @@ func (s *RowViewService) loadManifest(ctx context.Context, req frontend.RowViewR
 type rowViewPolicyPreflightKey struct{}
 type rowViewPolicyPreflight struct{ titles []core.Title }
 
-func (s *RowViewService) ResolveRowView(ctx context.Context, req frontend.RowViewPageRequest) (frontend.RowViewPage, error) {
-	var page frontend.RowViewPage
+func (s *RowViewService) ResolveRowView(ctx context.Context, req frontend.RowViewPageRequest) (page frontend.RowViewPage, err error) {
+	// A policy change while the page is read makes the snapshot stale: the
+	// frontend rebuilds the visit once instead of dropping rows.
+	defer func() {
+		if errors.Is(err, viewerpolicy.ErrChanged) {
+			err = ErrRowViewStale
+		}
+	}()
 	req.ID = normalizeRowViewID(req.ID)
 	u, err := s.viewer(ctx, req.Viewer, req.Device, req.Protocol)
 	if err != nil {

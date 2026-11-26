@@ -19,7 +19,11 @@ import (
 // ResolveRowViews shares hydration, current-policy proofs and receipt admission
 // across a bounded home page. It never scans titles outside these visits.
 func (s *RowViewService) ResolveRowViews(ctx context.Context, reqs []frontend.RowViewPageRequest) ([]frontend.RowViewPage, error) {
-	return s.resolveRowViews(ctx, reqs, true)
+	pages, err := s.resolveRowViews(ctx, reqs, true)
+	if errors.Is(err, viewerpolicy.ErrChanged) {
+		return nil, ErrRowViewStale
+	}
+	return pages, err
 }
 
 func (s *RowViewService) ValidateRowViews(ctx context.Context, reqs []frontend.RowViewPageRequest) error {
