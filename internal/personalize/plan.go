@@ -63,7 +63,7 @@ type pagePlan struct {
 	rules   []*rule
 	byRow   map[string]*rule // "<rowID>" and "<rowID>@<lib>"
 	bySrc   map[string]*rule // plain binding: sourceKey → rule
-	listed  map[string]bool  // source kinds listed on the page
+	listed  map[string]bool  // source kinds listed for this viewer
 	derived []*rule          // rules built as page rows
 	// libraries are the page library's (or Home's) libraries, by id.
 	libraries map[core.LibraryID]core.PageLibrary
@@ -207,10 +207,14 @@ func compilePage(p core.RowPage, saved bool, viewer int64, libs map[core.Library
 		if n, err := fmtAtoi(row.Source.Param("count", "")); err == nil && n > 0 {
 			r.MaxPerPage = n
 		}
+		// Keep the row addressable by ID for previews. Only rows in the
+		// viewer's audience can bind or suppress an engine row by source.
+		pl.rules = append(pl.rules, r)
+		pl.byRow[row.ID] = r
 		if !place.Audience.Includes(viewer) {
 			r.Gate = "audience"
+			continue
 		}
-		pl.rules = append(pl.rules, r)
 		pl.listed[row.Source.Kind] = true
 		_, param := sourceParam(row.Source)
 		skey := sourceKey(row.Source.Kind, param)
@@ -227,7 +231,6 @@ func compilePage(p core.RowPage, saved bool, viewer int64, libs map[core.Library
 			r.Derived = true
 			pl.derived = append(pl.derived, r)
 		}
-		pl.byRow[row.ID] = r
 	}
 	return pl
 }
