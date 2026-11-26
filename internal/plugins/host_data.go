@@ -84,6 +84,8 @@ type FetchCacheRequest struct {
 	// Resume continues a partial cached download with Range: bytes=<cached>-
 	// when the server supports ranges and ETag / Last-Modified validators match.
 	Resume bool `json:"resume,omitempty"`
+	// Connections requests parallel range downloads in jobs and background calls.
+	Connections int `json:"connections,omitempty"`
 }
 
 type FetchCacheResult struct {
@@ -321,9 +323,10 @@ func (h *host) HTTPFetchToCache(ctx context.Context, req FetchCacheRequest) (Fet
 	cacheQuota := decl.Cache.EffectiveMaxBytes()
 	maxBytes := min(fetchLimit, cacheQuota)
 
-	if req.Resume {
+	connections := h.fetchCacheConnections(ctx, req)
+	if req.Resume || connections > 1 {
 		if openPartial := h.m.kindBackends().CachePartial; openPartial != nil {
-			return h.httpFetchToCacheResumable(ctx, fetchCtx, req, fetchLimit, cacheQuota, openPartial)
+			return h.httpFetchToCacheResumable(ctx, fetchCtx, req, connections, fetchLimit, cacheQuota, openPartial)
 		}
 	}
 
@@ -494,6 +497,7 @@ func (h *host) httpFetchToCacheResumable(
 	ctx context.Context,
 	fetchCtx context.Context,
 	req FetchCacheRequest,
+	connections int,
 	fetchLimit, cacheQuota int64,
 	openPartial func(ctx context.Context, pluginID, libraryKey, key string) (*blobcache.Partial, error),
 ) (FetchCacheResult, error) {
@@ -505,11 +509,20 @@ func (h *host) httpFetchToCacheResumable(
 
 	maxBytes := min(fetchLimit, cacheQuota)
 	partialKey := req.URL + "\x00" + req.Name
+	if !req.Resume {
+		partialKey += "\x00transient"
+	}
 	partial, err := openPartial(fetchCtx, h.plugin, req.LibraryKey, partialKey)
 	if err != nil {
 		return FetchCacheResult{}, wrapFetchCacheError(fetchCtx, req.URL, err)
 	}
 	defer partial.Close()
+	if !req.Resume {
+		if err := partial.Discard(); err != nil {
+			return FetchCacheResult{}, err
+		}
+		defer partial.Discard()
+	}
 
 	baseHeaders := cloneHeaders(req.Headers)
 	if baseHeaders == nil {
@@ -528,6 +541,10 @@ func (h *host) httpFetchToCacheResumable(
 		baseHeaders["Accept-Encoding"] = "identity"
 	}
 
+	openFetch := func(req FetchRequest) (*http.Response, error) {
+		return h.openFetchWithOptions(fetchCtx, req, fetchOptions{applyHostLimit: connections > 1})
+	}
+	useParallel := connections > 1
 	if cached := partial.Size(); cached > 0 {
 		meta := partial.Meta()
 		if !hasResumeValidator(meta) || cached > maxBytes || (meta.ContentLength >= 0 && meta.ContentLength > maxBytes) {
@@ -555,7 +572,7 @@ func (h *host) httpFetchToCacheResumable(
 		cached := partial.Size()
 		meta := partial.Meta()
 		sentRange := false
-		if cached > 0 && hasResumeValidator(meta) {
+		if cached > 0 && len(meta.RangeProgress) == 0 && hasResumeValidator(meta) {
 			attemptReq.Headers["Range"] = fmt.Sprintf("bytes=%d-", cached)
 			if ifRange := ifRangeHeaderValue(meta); ifRange != "" {
 				attemptReq.Headers["If-Range"] = ifRange
@@ -563,7 +580,7 @@ func (h *host) httpFetchToCacheResumable(
 			sentRange = true
 		}
 
-		resp, err := h.openFetch(fetchCtx, attemptReq)
+		resp, err := openFetch(attemptReq)
 		if err != nil {
 			return FetchCacheResult{}, wrapFetchCacheError(fetchCtx, req.URL, err)
 		}
@@ -573,6 +590,7 @@ func (h *host) httpFetchToCacheResumable(
 			_ = partial.Discard()
 			if !restarted {
 				restarted = true
+				useParallel = false
 				continue
 			}
 			return FetchCacheResult{}, fmt.Errorf("plugins: fetchToCache HTTP %d", resp.StatusCode)
@@ -596,6 +614,7 @@ func (h *host) httpFetchToCacheResumable(
 				_ = partial.Discard()
 				if !restarted {
 					restarted = true
+					useParallel = false
 					continue
 				}
 				return FetchCacheResult{}, fmt.Errorf("plugins: fetchToCache resume validator or Content-Range mismatch")
@@ -707,6 +726,22 @@ func (h *host) httpFetchToCacheResumable(
 
 		compressed := isCompressedResponse(resp)
 		newMeta := partialMetaFromResponse(resp.Header, expectedTotal, compressed)
+		if (useParallel || len(meta.RangeProgress) != 0) && !sentRange && canFetchCacheRanges(resp, newMeta) {
+			newMeta.RangeSource = fetchCacheRangeSource(resp)
+			if matchesFetchCacheRanges(meta, newMeta, resp.Header) {
+				_ = resp.Body.Close()
+				attemptReq.Headers = baseHeaders
+				result, transferred, err := h.fetchCacheRanges(fetchCtx, req, attemptReq, partial, newMeta, connections)
+				totalTransferred += transferred
+				if !errors.Is(err, errFetchCacheRangeFallback) {
+					return result, wrapFetchCacheError(fetchCtx, req.URL, err)
+				}
+				_ = partial.Discard()
+				useParallel = false
+				continue
+			}
+			newMeta.RangeSource = ""
+		}
 		if err := partial.Reset(newMeta); err != nil {
 			_ = resp.Body.Close()
 			return FetchCacheResult{}, err
@@ -1141,6 +1176,7 @@ func CallDataHost(ctx context.Context, h Host, name string, raw json.RawMessage)
 			LibraryKey            string            `json:"libraryKey"`
 			Name                  string            `json:"name"`
 			Resume                bool              `json:"resume"`
+			Connections           int               `json:"connections"`
 		}
 		if len(args) != 1 {
 			return nil, fmt.Errorf("plugins: fetchToCache takes one request")
@@ -1165,9 +1201,10 @@ func CallDataHost(ctx context.Context, h Host, name string, raw json.RawMessage)
 				Headers:               req.Headers,
 				KeepHeadersOnRedirect: req.KeepHeadersOnRedirect,
 			},
-			LibraryKey: req.LibraryKey,
-			Name:       req.Name,
-			Resume:     req.Resume,
+			LibraryKey:  req.LibraryKey,
+			Name:        req.Name,
+			Resume:      req.Resume,
+			Connections: req.Connections,
 		})
 	} else if name == "cache.rasterize" {
 		if len(args) < 3 || len(args) > 4 {

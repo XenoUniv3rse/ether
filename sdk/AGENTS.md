@@ -573,6 +573,10 @@ server supports ranges and strong `ETag` or `Last-Modified` validators still
 match (restarting cleanly from byte 0 if they do not or the server returns
 `200`/`416`); partial bytes count against the library cache quota and disk
 safety floor and only become a readable cache blob once complete.
+In jobs, schedules, and background calls, set `connections` (1–8, default 1)
+to request parallel ranges, subject to the host's per-origin cap. The server
+must advertise byte ranges, a known length, and a strong validator. Use
+`resume: true` to continue each range's saved progress.
 Hosted code can catch `e.code === "timeout"`. Remote SDK fetches use their local
 request context/timeout.
 

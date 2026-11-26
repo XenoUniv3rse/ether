@@ -949,7 +949,14 @@ func (p policyTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	switch {
 	case proxyURL == nil:
 		bound.URL.Host = dec.poolAddr
-		resp, err = p.direct.RoundTrip(bound)
+		direct := p.direct
+		if bound.Close {
+			// Use an empty, single-use pool so this request cannot share an
+			// existing HTTP/2 connection. The guarded dialer is preserved.
+			direct = direct.Clone()
+			direct.DisableKeepAlives = true
+		}
+		resp, err = direct.RoundTrip(bound)
 	case proxyURL.Scheme == "socks5" || proxyURL.Scheme == "socks5h" || bound.URL.Scheme == "https":
 		// TLS ao destino sobre o CONNECT: o ServerName precisa ser o
 		// hostname original, e o TLSClientConfig do transporte

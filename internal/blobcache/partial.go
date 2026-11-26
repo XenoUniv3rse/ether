@@ -13,8 +13,10 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -31,11 +33,53 @@ const (
 // incomplete resumable blob. Partial blobs are never visible to Open,
 // LookupKey, or CacheOpen until Commit completes.
 type PartialMeta struct {
-	ETag          string `json:"etag,omitempty"`
-	LastModified  string `json:"lastModified,omitempty"`
-	ContentLength int64  `json:"contentLength,omitempty"` // -1 when unknown
-	Size          int64  `json:"size,omitempty"`
-	UpdatedAt     int64  `json:"updatedAt,omitempty"` // UnixNano
+	ETag          string  `json:"etag,omitempty"`
+	LastModified  string  `json:"lastModified,omitempty"`
+	ContentLength int64   `json:"contentLength,omitempty"` // -1 when unknown
+	Size          int64   `json:"size,omitempty"`
+	UpdatedAt     int64   `json:"updatedAt,omitempty"` // UnixNano
+	RangeProgress []int64 `json:"rangeProgress,omitempty"`
+	RangeSource   string  `json:"rangeSource,omitempty"`
+}
+
+// RangeBounds returns the half-open interval for a partition of ContentLength.
+func (m PartialMeta) RangeBounds(index int) (start, end int64) {
+	count := int64(len(m.RangeProgress))
+	width, extra := m.ContentLength/count, m.ContentLength%count
+	i := int64(index)
+	start = i*width + min(i, extra)
+	return start, start + width + min(1, max(0, extra-i))
+}
+
+// stagedEnd validates the persisted byte count and finds the minimum file
+// length required to cover all checkpointed bytes, including sparse writes.
+func (m PartialMeta) stagedEnd() (int64, bool) {
+	if m.Size <= 0 || (m.ContentLength >= 0 && m.Size > m.ContentLength) {
+		return 0, false
+	}
+	if len(m.RangeProgress) == 0 {
+		return m.Size, true
+	}
+	if !m.validRangeLayout() {
+		return 0, false
+	}
+	var size, end int64
+	for i, written := range m.RangeProgress {
+		start, limit := m.RangeBounds(i)
+		if written < 0 || written > limit-start {
+			return 0, false
+		}
+		if written > 0 {
+			end = start + written
+			size += written
+		}
+	}
+	return end, size == m.Size
+}
+
+func (m PartialMeta) validRangeLayout() bool {
+	count := len(m.RangeProgress)
+	return count >= 2 && count <= 8 && int64(count) <= m.ContentLength
 }
 
 // CommitResult is returned by Partial.Commit once a partial blob has been
@@ -146,18 +190,17 @@ func (n *Namespace) loadPartials() {
 	defer n.mu.Unlock()
 	for id, diskSize := range dataSeen {
 		meta, ok := metaSeen[id]
-		if !ok || diskSize <= 0 || meta.Size <= 0 || diskSize < meta.Size || (meta.ContentLength >= 0 && meta.Size > meta.ContentLength) {
+		end, valid := meta.stagedEnd()
+		if !ok || !valid || diskSize < end {
 			_ = os.Remove(n.partialDataPath(id))
 			_ = os.Remove(n.partialMetaPath(id))
 			delete(metaSeen, id)
 			continue
 		}
-		if diskSize > meta.Size {
-			if os.Truncate(n.partialDataPath(id), meta.Size) == nil {
-				diskSize = meta.Size
-			}
+		if diskSize > end {
+			_ = os.Truncate(n.partialDataPath(id), end)
 		}
-		pe := &partialEntry{ID: id, Size: diskSize, UpdatedAt: meta.UpdatedAt}
+		pe := &partialEntry{ID: id, Size: end, UpdatedAt: meta.UpdatedAt}
 		if pe.UpdatedAt <= 0 {
 			pe.UpdatedAt = now.UnixNano()
 		}
@@ -168,7 +211,7 @@ func (n *Namespace) loadPartials() {
 			continue
 		}
 		n.partials[id] = pe
-		n.partialUsed += diskSize
+		n.partialUsed += end
 		delete(metaSeen, id)
 	}
 	for id := range metaSeen {
@@ -263,8 +306,10 @@ type Partial struct {
 	id   string
 	lock chan struct{}
 
+	rangeMu   sync.Mutex // serializes positioned writes and checkpoints
 	f         *os.File
-	size      int64
+	size      int64 // bytes written across all ranges
+	fileEnd   int64 // logical file length, including any holes
 	reserved  int64
 	meta      PartialMeta
 	committed bool
@@ -341,19 +386,21 @@ func (n *Namespace) OpenPartial(ctx context.Context, key string) (*Partial, erro
 	reopened := false
 	if raw, err := os.ReadFile(metaPath); err == nil {
 		var meta PartialMeta
-		if json.Unmarshal(raw, &meta) == nil && meta.Size > 0 && (meta.ContentLength < 0 || meta.Size <= meta.ContentLength) {
+		decodeErr := json.Unmarshal(raw, &meta)
+		end, valid := meta.stagedEnd()
+		if decodeErr == nil && valid {
 			n.mu.Lock()
 			expired := n.isPartialExpiredLocked(&partialEntry{ID: id, Size: meta.Size, UpdatedAt: meta.UpdatedAt}, now)
 			maxBytes := n.quota.EffectiveMaxBytes()
 			n.mu.Unlock()
 			sharedCap := n.cache.EffectiveSharedCap()
-			if !expired && meta.Size <= maxBytes && meta.Size <= sharedCap {
-				if st, serr := os.Stat(dataPath); serr == nil && !st.IsDir() && st.Size() >= meta.Size {
+			if !expired && end <= maxBytes && end <= sharedCap {
+				if st, serr := os.Stat(dataPath); serr == nil && !st.IsDir() && st.Size() >= end {
 					f, oerr := os.OpenFile(dataPath, os.O_RDWR, 0o644)
 					if oerr == nil {
 						ok := true
-						if st.Size() > meta.Size {
-							if err := f.Truncate(meta.Size); err != nil {
+						if st.Size() > end {
+							if err := f.Truncate(end); err != nil {
 								ok = false
 							}
 						}
@@ -365,10 +412,11 @@ func (n *Namespace) OpenPartial(ctx context.Context, key string) (*Partial, erro
 						if ok {
 							p.f = f
 							p.size = meta.Size
+							p.fileEnd = end
 							p.meta = meta
 							reopened = true
 							n.mu.Lock()
-							n.updatePartialLocked(id, meta.Size, meta.UpdatedAt)
+							n.updatePartialLocked(id, end, meta.UpdatedAt)
 							n.mu.Unlock()
 						} else {
 							_ = f.Close()
@@ -394,12 +442,19 @@ func (n *Namespace) OpenPartial(ctx context.Context, key string) (*Partial, erro
 func (p *Partial) Size() int64 { return p.size }
 
 // Meta returns a copy of the stored HTTP validators and expected length.
-func (p *Partial) Meta() PartialMeta { return p.meta }
+func (p *Partial) Meta() PartialMeta {
+	meta := p.meta
+	meta.RangeProgress = slices.Clone(meta.RangeProgress)
+	return meta
+}
 
 // SetMeta updates validators and expected length without truncating staged bytes.
 func (p *Partial) SetMeta(meta PartialMeta) error {
 	if p.closed || p.committed {
 		return ErrClosed
+	}
+	if len(p.meta.RangeProgress) != 0 || len(meta.RangeProgress) != 0 {
+		return errors.New("blobcache: cannot update positioned partial metadata")
 	}
 	meta.Size = p.size
 	meta.UpdatedAt = p.n.cache.now().UnixNano()
@@ -409,7 +464,7 @@ func (p *Partial) SetMeta(meta PartialMeta) error {
 			return err
 		}
 		p.n.mu.Lock()
-		p.n.updatePartialLocked(p.id, p.size, p.meta.UpdatedAt)
+		p.n.updatePartialLocked(p.id, p.fileEnd, p.meta.UpdatedAt)
 		p.n.mu.Unlock()
 	}
 	return nil
@@ -418,6 +473,12 @@ func (p *Partial) SetMeta(meta PartialMeta) error {
 // Reset discards any staged bytes, resets the partial to offset 0, and records
 // new metadata for a fresh transfer.
 func (p *Partial) Reset(meta PartialMeta) error {
+	if len(meta.RangeProgress) != 0 {
+		if !meta.validRangeLayout() {
+			return errors.New("blobcache: invalid partial range layout")
+		}
+		meta.RangeProgress = make([]int64, len(meta.RangeProgress))
+	}
 	return p.reset(meta, false)
 }
 
@@ -442,6 +503,7 @@ func (p *Partial) reset(meta PartialMeta, keepReservation bool) error {
 	}
 	p.f = f
 	p.size = 0
+	p.fileEnd = 0
 	if !keepReservation {
 		p.reserved = 0
 	}
@@ -462,9 +524,9 @@ func (p *Partial) reset(meta PartialMeta, keepReservation bool) error {
 }
 
 // Reserve makes room for and reserves space up to total bytes for this partial
-// (including bytes already staged in p) against the namespace quota, shared
-// cache cap, and disk free-space floor. When total <= p.size or
-// total <= p.reserved, Reserve is a no-op. If sufficient evictable space cannot
+// (including any holes in the file) against the namespace quota, shared cache
+// cap, and disk free-space floor. If the file or reservation already covers
+// total, Reserve is a no-op. If sufficient evictable space cannot
 // be freed, staged bytes and any prior reservation are preserved and
 // ErrQuotaFull (matching ErrTooLarge) is returned.
 func (p *Partial) Reserve(total int64) error {
@@ -480,15 +542,15 @@ func (p *Partial) Reserve(total int64) error {
 	if closed {
 		return ErrClosed
 	}
-	if total <= p.size || total <= p.reserved {
+	if total <= p.fileEnd || total <= p.reserved {
 		return nil
 	}
 
 	prevReserved := p.reserved
-	prevRem := max(prevReserved-p.size, 0)
-	curFootprint := max(p.size, prevReserved)
+	prevRem := max(prevReserved-p.fileEnd, 0)
+	curFootprint := max(p.fileEnd, prevReserved)
 	delta := total - curFootprint
-	newRem := total - p.size
+	newRem := total - p.fileEnd
 
 	p.n.cache.evictMu.Lock()
 	defer p.n.cache.evictMu.Unlock()
@@ -562,9 +624,6 @@ func (p *Partial) Reserve(total int64) error {
 }
 
 func (p *Partial) ensureSpace(add int64) error {
-	if add <= 0 {
-		return nil
-	}
 	p.n.cache.mu.Lock()
 	closed := p.n.cache.closed
 	p.n.cache.mu.Unlock()
@@ -572,8 +631,8 @@ func (p *Partial) ensureSpace(add int64) error {
 		return ErrClosed
 	}
 
-	nextSize := p.size + add
-	curFootprint := max(p.size, p.reserved)
+	nextSize := p.fileEnd + add
+	curFootprint := max(p.fileEnd, p.reserved)
 	nextFootprint := max(nextSize, p.reserved)
 	delta := nextFootprint - curFootprint
 
@@ -633,6 +692,9 @@ func (p *Partial) Write(b []byte) (int, error) {
 	if p.closed || p.committed {
 		return 0, ErrClosed
 	}
+	if len(p.meta.RangeProgress) != 0 {
+		return 0, errors.New("blobcache: cannot append to a positioned partial")
+	}
 	if len(b) == 0 {
 		return 0, nil
 	}
@@ -645,30 +707,73 @@ func (p *Partial) Write(b []byte) (int, error) {
 		}
 	}
 	n, err := p.f.Write(b)
+	p.accountWrite(n, p.fileEnd+int64(n))
+	return n, err
+}
+
+// WriteRange appends bytes within one partition using a positioned write.
+// Only WriteRange and Sync may be used concurrently on a Partial.
+func (p *Partial) WriteRange(index int, b []byte) (int, error) {
+	p.rangeMu.Lock()
+	defer p.rangeMu.Unlock()
+	if p.closed || p.committed || p.f == nil {
+		return 0, ErrClosed
+	}
+	if index < 0 || index >= len(p.meta.RangeProgress) {
+		return 0, errors.New("blobcache: invalid partial range index")
+	}
+	if len(b) == 0 {
+		return 0, nil
+	}
+	start, end := p.meta.RangeBounds(index)
+	offset := start + p.meta.RangeProgress[index]
+	if int64(len(b)) > end-offset {
+		return 0, errors.New("blobcache: write exceeds partial range")
+	}
+	if err := p.ensureSpace(max(offset+int64(len(b))-p.fileEnd, 0)); err != nil {
+		return 0, err
+	}
+	n, err := p.f.WriteAt(b, offset)
+	p.meta.RangeProgress[index] += int64(n)
+	p.accountWrite(n, offset+int64(n))
+	return n, err
+}
+
+func (p *Partial) accountWrite(n int, end int64) {
 	if n > 0 {
 		p.size += int64(n)
+		// Some filesystems allocate the unwritten gaps in positioned files.
+		p.fileEnd = max(p.fileEnd, end)
 		p.sinceCapCheck += int64(n)
 		nowNs := p.n.cache.now().UnixNano()
 		p.meta.Size = p.size
 		p.meta.UpdatedAt = nowNs
 		p.n.mu.Lock()
-		p.n.updatePartialLocked(p.id, p.size, nowNs)
+		p.n.updatePartialLocked(p.id, p.fileEnd, nowNs)
 		if p.reserved > 0 {
-			p.n.setPartialReservationLocked(p.id, max(p.reserved-p.size, 0))
+			p.n.setPartialReservationLocked(p.id, max(p.reserved-p.fileEnd, 0))
 		}
 		p.n.mu.Unlock()
 	}
-	return n, err
 }
 
-// Sync persists the current byte count and validators to disk so a subsequent
-// resume call continues from p.Size().
+// Sync checkpoints staged progress and validators for a subsequent resume call.
 func (p *Partial) Sync() error {
+	p.rangeMu.Lock()
+	defer p.rangeMu.Unlock()
+	if p.size == 0 && len(p.meta.RangeProgress) != 0 {
+		return nil
+	}
 	if p.closed || p.committed || p.discarded {
 		return nil
 	}
 	if p.size <= 0 {
 		return p.Discard()
+	}
+	if len(p.meta.RangeProgress) != 0 && p.f != nil {
+		if err := p.f.Sync(); err != nil {
+			return err
+		}
 	}
 	nowNs := p.n.cache.now().UnixNano()
 	p.meta.Size = p.size
@@ -677,7 +782,7 @@ func (p *Partial) Sync() error {
 		return err
 	}
 	p.n.mu.Lock()
-	p.n.updatePartialLocked(p.id, p.size, nowNs)
+	p.n.updatePartialLocked(p.id, p.fileEnd, nowNs)
 	p.n.mu.Unlock()
 	return nil
 }
@@ -693,6 +798,7 @@ func (p *Partial) Discard() error {
 		p.f = nil
 	}
 	p.size = 0
+	p.fileEnd = 0
 	p.reserved = 0
 	p.meta = PartialMeta{ContentLength: -1}
 	p.discarded = true
@@ -716,6 +822,9 @@ func (p *Partial) Commit(ctx context.Context, key string) (CommitResult, error) 
 	}
 	if p.closed || p.committed {
 		return CommitResult{}, ErrClosed
+	}
+	if len(p.meta.RangeProgress) != 0 && p.size != p.meta.ContentLength {
+		return CommitResult{}, errors.New("blobcache: positioned partial is incomplete")
 	}
 	p.n.cache.mu.Lock()
 	closed := p.n.cache.closed
@@ -965,8 +1074,8 @@ func (n *Namespace) sweepPartialsLocked(now time.Time, target int64) []string {
 	return paths
 }
 
-// PartialStats returns the current bytes and count of incomplete resumable
-// partials in this namespace.
+// PartialStats returns the accounted file bytes and count of incomplete
+// resumable partials in this namespace.
 func (n *Namespace) PartialStats() (bytes int64, count int) {
 	n.mu.Lock()
 	defer n.mu.Unlock()

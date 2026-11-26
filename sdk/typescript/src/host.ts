@@ -150,8 +150,10 @@ export interface FetchCacheRequest {
   keepHeadersOnRedirect?: string[];
   libraryKey: string;
   name: string;
-  /** Continue an incomplete partial download using `Range: bytes=<cached>-` when the server supports ranges and ETag / Last-Modified validators match (restarting cleanly from byte 0 otherwise). Partial bytes stay unreadable in cache until the download completes. */
+  /** Continue an incomplete download, including per-range progress, when the server supports ranges and validators still match. */
   resume?: boolean;
+  /** Defaults to 1. Jobs, schedules, and background calls can request 1–8 concurrent byte ranges, subject to the host cap. */
+  connections?: number;
 }
 export interface FetchCacheResult { blob: string; size: number; crc32: string; md5: string; sha1: string; status: number }
 export interface ArchiveExtractOptions { libraryKey?: string; name?: string }

@@ -1158,7 +1158,7 @@ const extracted = await ctx.ether.archive!.extract(cached.blob, xmlMembers[0]!.i
 // {ref: "blob:<sha256>", size, sha1, md5, crc32} streamed directly into the library cache
 ```
 
-`http.fetchToCache({url, headers?, keepHeadersOnRedirect?, libraryKey, name, timeoutMs?, resume?})` performs a GET, streams
+`http.fetchToCache({url, headers?, keepHeadersOnRedirect?, libraryKey, name, timeoutMs?, resume?, connections?})` performs a GET, streams
 up to the owner download ceiling (8 GiB by default), further bounded by the library cache quota, into the plugin's own library cache, and returns
 `{blob, size, crc32, md5, sha1, status}`. SHA-256 is the blob reference.
 Digests cover the stored response bytes in one pass. Compare the digest with
@@ -1178,8 +1178,13 @@ ranges and strong `ETag` / `Last-Modified` validators match (restarting cleanly
 from byte 0 when validators mismatch or the server ignores ranges); partial
 blobs obey per-library cache quotas, the shared cap, and the disk free-space
 floor, and become readable via `cache.open` / `cache.read` / `archive.*` only
-when complete. The operation is synchronous; there is no background
-prefetch. Cache eviction still applies to returned refs.
+when complete. Jobs, schedules, and background calls can request `connections`
+from 1 to 8 (default 1), capped by the host's per-origin limit. When the
+server advertises byte ranges, a known length, and a strong validator,
+Ether fetches ranges in parallel and hashes the assembled file. With
+`resume: true`, retries continue each range's saved progress.
+Incompatible range responses fall back to a single download. The operation
+runs synchronously within the calling plugin invocation. Cache eviction still applies to returned refs.
 
 The per-call byte ceiling `readBytes` for `cache.read`, `archive.open`, and `archive.read`
 scales with the plugin's granted memory: `readBytes = clamp(memoryBytes / 4, 8 MiB, 512 MiB)`

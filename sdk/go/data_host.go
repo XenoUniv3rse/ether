@@ -50,7 +50,10 @@ type ArchiveReadResult struct {
 // deadline. Setting Resume to true continues an incomplete partial download
 // using Range: bytes=<cached>- when the server supports ranges and ETag or
 // Last-Modified validators still match, restarting cleanly from byte 0 if they
-// do not; the blob becomes readable in cache only once complete.
+// do not; the blob becomes readable in cache only once complete. Connections
+// defaults to 1. Jobs, schedules, and background calls can request up to 8
+// concurrent ranges, subject to the host cap. Resume preserves each range's
+// progress when parallel ranges are in use.
 type FetchCacheRequest struct {
 	TimeoutMS             int64             `json:"timeoutMs,omitempty"`
 	URL                   string            `json:"url"`
@@ -59,6 +62,7 @@ type FetchCacheRequest struct {
 	LibraryKey            string            `json:"libraryKey"`
 	Name                  string            `json:"name"`
 	Resume                bool              `json:"resume,omitempty"`
+	Connections           int               `json:"connections,omitempty"`
 }
 type FetchCacheResult struct {
 	Blob   string `json:"blob"`

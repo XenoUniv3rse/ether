@@ -1952,7 +1952,7 @@ const extracted = await ctx.ether.archive!.extract(cached.blob, xmlMembers[0]!.i
 // {ref: "blob:<sha256>", size, sha1, md5, crc32} streamed directly into the library cache
 ```
 
-`http.fetchToCache({url, headers?, keepHeadersOnRedirect?, libraryKey, name, timeoutMs?, resume?})` performs a GET, streams
+`http.fetchToCache({url, headers?, keepHeadersOnRedirect?, libraryKey, name, timeoutMs?, resume?, connections?})` performs a GET, streams
 up to the owner download ceiling (8 GiB by default), further bounded by the library cache quota, into the plugin's own library cache, and returns
 `{blob, size, crc32, md5, sha1, status}`. SHA-256 is the blob reference.
 Digests cover the stored response bytes in one pass. Compare the digest with
@@ -1972,8 +1972,13 @@ ranges and strong `ETag` / `Last-Modified` validators match (restarting cleanly
 from byte 0 when validators mismatch or the server ignores ranges); partial
 blobs obey per-library cache quotas, the shared cap, and the disk free-space
 floor, and become readable via `cache.open` / `cache.read` / `archive.*` only
-when complete. The operation is synchronous; there is no background
-prefetch. Cache eviction still applies to returned refs.
+when complete. Jobs, schedules, and background calls can request `connections`
+from 1 to 8 (default 1), capped by the host's per-origin limit. When the
+server advertises byte ranges, a known length, and a strong validator,
+Ether fetches ranges in parallel and hashes the assembled file. With
+`resume: true`, retries continue each range's saved progress.
+Incompatible range responses fall back to a single download. The operation
+runs synchronously within the calling plugin invocation. Cache eviction still applies to returned refs.
 
 The per-call byte ceiling `readBytes` for `cache.read`, `archive.open`, and `archive.read`
 scales with the plugin's granted memory: `readBytes = clamp(memoryBytes / 4, 8 MiB, 512 MiB)`
@@ -11306,6 +11311,7 @@ type fetchOptions struct {
 	stripCrossOriginHeaders []string
 	stripAllCallerHeaders   bool
 	applyHostLimit          bool
+	dedicatedConnection     bool
 }
 ``````
 
@@ -11432,6 +11438,7 @@ func (h *host) openFetchWithOptions(ctx context.Context, req FetchRequest, opts 
 	if err != nil {
 		return nil, err
 	}
+	hr.Close = opts.dedicatedConnection
 	for k, v := range req.Headers {
 		hr.Header.Set(k, v)
 	}
@@ -11457,12 +11464,26 @@ func (h *host) openFetchWithOptions(ctx context.Context, req FetchRequest, opts 
 		StripHeaders:          opts.stripCrossOriginHeaders,
 	})
 	previousRedirect := client.CheckRedirect
+	release := func() {}
+	acquire := func(ctx context.Context, target *url.URL) error {
+		if !opts.applyHostLimit || h.m.fetchHosts == nil {
+			return nil
+		}
+		var err error
+		release, err = h.m.fetchHosts.Acquire(ctx, target.String())
+		if err != nil {
+			release = func() {}
+			return fetchError(target.Hostname(), err)
+		}
+		return nil
+	}
 	client.CheckRedirect = func(next *http.Request, via []*http.Request) error {
 		lastURL = next.URL
 		if err := h.m.CheckIndexerNetwork(next.URL.Hostname()); err != nil {
 			return err
 		}
 		redirectHeaders.Apply(next)
+		next.Close = opts.dedicatedConnection
 		current, grants, err := h.record(next.Context())
 		if err != nil {
 			return err
@@ -11489,20 +11510,22 @@ func (h *host) openFetchWithOptions(ctx context.Context, req FetchRequest, opts 
 		}
 		*next = *next.WithContext(safefetch.WithTrustedHosts(next.Context(), trustedFetchHosts(current.Manifest, grants)))
 		if previousRedirect != nil {
-			return previousRedirect(next, via)
-		}
-		if len(via) >= 10 {
+			if err := previousRedirect(next, via); err != nil {
+				return err
+			}
+		} else if len(via) >= 10 {
 			return errors.New("plugins: stopped after 10 redirects")
+		}
+		// Release before acquiring another origin so reciprocal redirects
+		// cannot deadlock at the shared concurrency cap.
+		if opts.applyHostLimit && fetchHostKey(via[len(via)-1].URL.String()) != fetchHostKey(next.URL.String()) {
+			release()
+			return acquire(next.Context(), next.URL)
 		}
 		return nil
 	}
-	release := func() {}
-	if opts.applyHostLimit && h.m.fetchHosts != nil {
-		var aerr error
-		release, aerr = h.m.fetchHosts.Acquire(ctx, req.URL)
-		if aerr != nil {
-			return nil, fetchError(u.Hostname(), aerr)
-		}
+	if err := acquire(ctx, u); err != nil {
+		return nil, err
 	}
 	resp, err := client.Do(hr)
 	if err != nil {
@@ -14676,6 +14699,7 @@ type ArchiveReadResult struct {
 | `libraryKey` | `string` | emitted (validation may require a value) |  |
 | `name` | `string` | emitted (validation may require a value) |  |
 | `resume` | `bool` | may be omitted (see validation for conditions) | Resume continues a partial cached download with Range: bytes=<cached>- when the server supports ranges and ETag / Last-Modified validators match. |
+| `connections` | `int` | may be omitted (see validation for conditions) | Connections requests parallel range downloads in jobs and background calls. |
 
 
 ## Source: internal/plugins/host_data.go#FetchCacheRequest
@@ -14688,6 +14712,8 @@ type FetchCacheRequest struct {
 	// Resume continues a partial cached download with Range: bytes=<cached>-
 	// when the server supports ranges and ETag / Last-Modified validators match.
 	Resume bool `json:"resume,omitempty"`
+	// Connections requests parallel range downloads in jobs and background calls.
+	Connections int `json:"connections,omitempty"`
 }
 ``````
 
@@ -15052,9 +15078,10 @@ func (h *host) HTTPFetchToCache(ctx context.Context, req FetchCacheRequest) (Fet
 	cacheQuota := decl.Cache.EffectiveMaxBytes()
 	maxBytes := min(fetchLimit, cacheQuota)
 
-	if req.Resume {
+	connections := h.fetchCacheConnections(ctx, req)
+	if req.Resume || connections > 1 {
 		if openPartial := h.m.kindBackends().CachePartial; openPartial != nil {
-			return h.httpFetchToCacheResumable(ctx, fetchCtx, req, fetchLimit, cacheQuota, openPartial)
+			return h.httpFetchToCacheResumable(ctx, fetchCtx, req, connections, fetchLimit, cacheQuota, openPartial)
 		}
 	}
 
@@ -15283,6 +15310,7 @@ func (h *host) httpFetchToCacheResumable(
 	ctx context.Context,
 	fetchCtx context.Context,
 	req FetchCacheRequest,
+	connections int,
 	fetchLimit, cacheQuota int64,
 	openPartial func(ctx context.Context, pluginID, libraryKey, key string) (*blobcache.Partial, error),
 ) (FetchCacheResult, error) {
@@ -15294,11 +15322,20 @@ func (h *host) httpFetchToCacheResumable(
 
 	maxBytes := min(fetchLimit, cacheQuota)
 	partialKey := req.URL + "\x00" + req.Name
+	if !req.Resume {
+		partialKey += "\x00transient"
+	}
 	partial, err := openPartial(fetchCtx, h.plugin, req.LibraryKey, partialKey)
 	if err != nil {
 		return FetchCacheResult{}, wrapFetchCacheError(fetchCtx, req.URL, err)
 	}
 	defer partial.Close()
+	if !req.Resume {
+		if err := partial.Discard(); err != nil {
+			return FetchCacheResult{}, err
+		}
+		defer partial.Discard()
+	}
 
 	baseHeaders := cloneHeaders(req.Headers)
 	if baseHeaders == nil {
@@ -15317,6 +15354,10 @@ func (h *host) httpFetchToCacheResumable(
 		baseHeaders["Accept-Encoding"] = "identity"
 	}
 
+	openFetch := func(req FetchRequest) (*http.Response, error) {
+		return h.openFetchWithOptions(fetchCtx, req, fetchOptions{applyHostLimit: connections > 1})
+	}
+	useParallel := connections > 1
 	if cached := partial.Size(); cached > 0 {
 		meta := partial.Meta()
 		if !hasResumeValidator(meta) || cached > maxBytes || (meta.ContentLength >= 0 && meta.ContentLength > maxBytes) {
@@ -15344,7 +15385,7 @@ func (h *host) httpFetchToCacheResumable(
 		cached := partial.Size()
 		meta := partial.Meta()
 		sentRange := false
-		if cached > 0 && hasResumeValidator(meta) {
+		if cached > 0 && len(meta.RangeProgress) == 0 && hasResumeValidator(meta) {
 			attemptReq.Headers["Range"] = fmt.Sprintf("bytes=%d-", cached)
 			if ifRange := ifRangeHeaderValue(meta); ifRange != "" {
 				attemptReq.Headers["If-Range"] = ifRange
@@ -15352,7 +15393,7 @@ func (h *host) httpFetchToCacheResumable(
 			sentRange = true
 		}
 
-		resp, err := h.openFetch(fetchCtx, attemptReq)
+		resp, err := openFetch(attemptReq)
 		if err != nil {
 			return FetchCacheResult{}, wrapFetchCacheError(fetchCtx, req.URL, err)
 		}
@@ -15362,6 +15403,7 @@ func (h *host) httpFetchToCacheResumable(
 			_ = partial.Discard()
 			if !restarted {
 				restarted = true
+				useParallel = false
 				continue
 			}
 			return FetchCacheResult{}, fmt.Errorf("plugins: fetchToCache HTTP %d", resp.StatusCode)
@@ -15385,6 +15427,7 @@ func (h *host) httpFetchToCacheResumable(
 				_ = partial.Discard()
 				if !restarted {
 					restarted = true
+					useParallel = false
 					continue
 				}
 				return FetchCacheResult{}, fmt.Errorf("plugins: fetchToCache resume validator or Content-Range mismatch")
@@ -15496,6 +15539,22 @@ func (h *host) httpFetchToCacheResumable(
 
 		compressed := isCompressedResponse(resp)
 		newMeta := partialMetaFromResponse(resp.Header, expectedTotal, compressed)
+		if (useParallel || len(meta.RangeProgress) != 0) && !sentRange && canFetchCacheRanges(resp, newMeta) {
+			newMeta.RangeSource = fetchCacheRangeSource(resp)
+			if matchesFetchCacheRanges(meta, newMeta, resp.Header) {
+				_ = resp.Body.Close()
+				attemptReq.Headers = baseHeaders
+				result, transferred, err := h.fetchCacheRanges(fetchCtx, req, attemptReq, partial, newMeta, connections)
+				totalTransferred += transferred
+				if !errors.Is(err, errFetchCacheRangeFallback) {
+					return result, wrapFetchCacheError(fetchCtx, req.URL, err)
+				}
+				_ = partial.Discard()
+				useParallel = false
+				continue
+			}
+			newMeta.RangeSource = ""
+		}
 		if err := partial.Reset(newMeta); err != nil {
 			_ = resp.Body.Close()
 			return FetchCacheResult{}, err
@@ -15995,6 +16054,7 @@ func CallDataHost(ctx context.Context, h Host, name string, raw json.RawMessage)
 			LibraryKey            string            `json:"libraryKey"`
 			Name                  string            `json:"name"`
 			Resume                bool              `json:"resume"`
+			Connections           int               `json:"connections"`
 		}
 		if len(args) != 1 {
 			return nil, fmt.Errorf("plugins: fetchToCache takes one request")
@@ -16019,9 +16079,10 @@ func CallDataHost(ctx context.Context, h Host, name string, raw json.RawMessage)
 				Headers:               req.Headers,
 				KeepHeadersOnRedirect: req.KeepHeadersOnRedirect,
 			},
-			LibraryKey: req.LibraryKey,
-			Name:       req.Name,
-			Resume:     req.Resume,
+			LibraryKey:  req.LibraryKey,
+			Name:        req.Name,
+			Resume:      req.Resume,
+			Connections: req.Connections,
 		})
 	} else if name == "cache.rasterize" {
 		if len(args) < 3 || len(args) > 4 {
@@ -41183,6 +41244,10 @@ server supports ranges and strong `ETag` or `Last-Modified` validators still
 match (restarting cleanly from byte 0 if they do not or the server returns
 `200`/`416`); partial bytes count against the library cache quota and disk
 safety floor and only become a readable cache blob once complete.
+In jobs, schedules, and background calls, set `connections` (1–8, default 1)
+to request parallel ranges, subject to the host's per-origin cap. The server
+must advertise byte ranges, a known length, and a strong validator. Use
+`resume: true` to continue each range's saved progress.
 Hosted code can catch `e.code === "timeout"`. Remote SDK fetches use their local
 request context/timeout.
 
@@ -55085,6 +55150,7 @@ type ArchiveReadResult struct {
 | `libraryKey` | `string` | emitted (validation may require a value) |  |
 | `name` | `string` | emitted (validation may require a value) |  |
 | `resume` | `bool` | may be omitted (see validation for conditions) |  |
+| `connections` | `int` | may be omitted (see validation for conditions) |  |
 
 
 ## Source: sdk/go/data_host.go#FetchCacheRequest
@@ -55097,7 +55163,10 @@ type ArchiveReadResult struct {
 // deadline. Setting Resume to true continues an incomplete partial download
 // using Range: bytes=<cached>- when the server supports ranges and ETag or
 // Last-Modified validators still match, restarting cleanly from byte 0 if they
-// do not; the blob becomes readable in cache only once complete.
+// do not; the blob becomes readable in cache only once complete. Connections
+// defaults to 1. Jobs, schedules, and background calls can request up to 8
+// concurrent ranges, subject to the host cap. Resume preserves each range's
+// progress when parallel ranges are in use.
 type FetchCacheRequest struct {
 	TimeoutMS             int64             `json:"timeoutMs,omitempty"`
 	URL                   string            `json:"url"`
@@ -55106,6 +55175,7 @@ type FetchCacheRequest struct {
 	LibraryKey            string            `json:"libraryKey"`
 	Name                  string            `json:"name"`
 	Resume                bool              `json:"resume,omitempty"`
+	Connections           int               `json:"connections,omitempty"`
 }
 ``````
 
@@ -68582,7 +68652,7 @@ class _HttpClient:
         return self._call("POST", "/ether/plugin-host/data/http.hash", [req])
 
     def fetch_to_cache(self, req: Dict[str, Any]) -> Dict[str, Any]:
-        """Stream a remote GET into the plugin's library cache (`{url, headers?, keepHeadersOnRedirect?, libraryKey, name, timeoutMs?, resume?}`). Defaults to a 10 min timeout (also the ceiling on viewer/request paths; jobs, schedules, and background contexts may raise `timeoutMs` up to the calling job's remaining deadline). Set `resume: True` to continue a partial download with `Range: bytes=<cached>-` when validators match."""
+        """Stream a remote GET into the plugin's library cache (`{url, headers?, keepHeadersOnRedirect?, libraryKey, name, timeoutMs?, resume?, connections?}`). Defaults to a 10 min timeout (also the ceiling on viewer/request paths; jobs, schedules, and background contexts may raise `timeoutMs` up to the calling job's remaining deadline). Set `resume: True` to continue a partial download when validators match, preserving progress per range. `connections` defaults to 1. Jobs, schedules, and background calls can request up to 8 concurrent ranges, subject to the host cap."""
         return self._call("POST", "/ether/plugin-host/data/http.fetchToCache", [req])
 
     fetchToCache = fetch_to_cache
@@ -73203,8 +73273,10 @@ export interface FetchCacheRequest {
   keepHeadersOnRedirect?: string[];
   libraryKey: string;
   name: string;
-  /** Continue an incomplete partial download using `Range: bytes=<cached>-` when the server supports ranges and ETag / Last-Modified validators match (restarting cleanly from byte 0 otherwise). Partial bytes stay unreadable in cache until the download completes. */
+  /** Continue an incomplete download, including per-range progress, when the server supports ranges and validators still match. */
   resume?: boolean;
+  /** Defaults to 1. Jobs, schedules, and background calls can request 1–8 concurrent byte ranges, subject to the host cap. */
+  connections?: number;
 }
 export interface FetchCacheResult { blob: string; size: number; crc32: string; md5: string; sha1: string; status: number }
 export interface ArchiveExtractOptions { libraryKey?: string; name?: string }

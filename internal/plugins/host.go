@@ -369,6 +369,7 @@ type fetchOptions struct {
 	stripCrossOriginHeaders []string
 	stripAllCallerHeaders   bool
 	applyHostLimit          bool
+	dedicatedConnection     bool
 }
 
 func validateKeepHeadersOnRedirect(man Manifest, g Grants, raw []string) ([]safefetch.RedirectHeaderPattern, error) {
@@ -475,6 +476,7 @@ func (h *host) openFetchWithOptions(ctx context.Context, req FetchRequest, opts 
 	if err != nil {
 		return nil, err
 	}
+	hr.Close = opts.dedicatedConnection
 	for k, v := range req.Headers {
 		hr.Header.Set(k, v)
 	}
@@ -500,12 +502,26 @@ func (h *host) openFetchWithOptions(ctx context.Context, req FetchRequest, opts 
 		StripHeaders:          opts.stripCrossOriginHeaders,
 	})
 	previousRedirect := client.CheckRedirect
+	release := func() {}
+	acquire := func(ctx context.Context, target *url.URL) error {
+		if !opts.applyHostLimit || h.m.fetchHosts == nil {
+			return nil
+		}
+		var err error
+		release, err = h.m.fetchHosts.Acquire(ctx, target.String())
+		if err != nil {
+			release = func() {}
+			return fetchError(target.Hostname(), err)
+		}
+		return nil
+	}
 	client.CheckRedirect = func(next *http.Request, via []*http.Request) error {
 		lastURL = next.URL
 		if err := h.m.CheckIndexerNetwork(next.URL.Hostname()); err != nil {
 			return err
 		}
 		redirectHeaders.Apply(next)
+		next.Close = opts.dedicatedConnection
 		current, grants, err := h.record(next.Context())
 		if err != nil {
 			return err
@@ -532,20 +548,22 @@ func (h *host) openFetchWithOptions(ctx context.Context, req FetchRequest, opts 
 		}
 		*next = *next.WithContext(safefetch.WithTrustedHosts(next.Context(), trustedFetchHosts(current.Manifest, grants)))
 		if previousRedirect != nil {
-			return previousRedirect(next, via)
-		}
-		if len(via) >= 10 {
+			if err := previousRedirect(next, via); err != nil {
+				return err
+			}
+		} else if len(via) >= 10 {
 			return errors.New("plugins: stopped after 10 redirects")
+		}
+		// Release before acquiring another origin so reciprocal redirects
+		// cannot deadlock at the shared concurrency cap.
+		if opts.applyHostLimit && fetchHostKey(via[len(via)-1].URL.String()) != fetchHostKey(next.URL.String()) {
+			release()
+			return acquire(next.Context(), next.URL)
 		}
 		return nil
 	}
-	release := func() {}
-	if opts.applyHostLimit && h.m.fetchHosts != nil {
-		var aerr error
-		release, aerr = h.m.fetchHosts.Acquire(ctx, req.URL)
-		if aerr != nil {
-			return nil, fetchError(u.Hostname(), aerr)
-		}
+	if err := acquire(ctx, u); err != nil {
+		return nil, err
 	}
 	resp, err := client.Do(hr)
 	if err != nil {
