@@ -162,7 +162,7 @@ func scanSpecRow(sc interface{ Scan(...any) error }) (*specRow, error) {
 		return nil, err
 	}
 	if err := json.Unmarshal([]byte(specJSON), &r.spec); err != nil {
-		return nil, fmt.Errorf("collections: spec %d: %w", r.id, err)
+		return &r, fmt.Errorf("collections: spec %d: %w", r.id, err)
 	}
 	r.rawSpec = specJSON
 	Normalize(&r.spec)
