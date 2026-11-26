@@ -85,6 +85,9 @@ func (a *App) runPublicRole(ctx context.Context) error {
 	case result = <-a.clusterFatal:
 	case result = <-front.errc:
 	}
+	if a.frontends != nil {
+		a.frontends.plex.StopCompanion()
+	}
 	// Preserve existing public representations, private transport and membership
 	// until exact obligations retire. Deadline reports unresolved, never deletes it.
 	a.drainPrivate()

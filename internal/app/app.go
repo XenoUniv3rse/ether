@@ -1044,6 +1044,7 @@ func (a *App) Run(ctx context.Context) error {
 	case runErr = <-a.privateErrors():
 	case runErr = <-a.clusterFatal: // nil channel (never ready) when standalone
 	}
+	a.frontends.plex.StopCompanion()
 	if a.deployment != nil {
 		a.drainPrivate()
 	}

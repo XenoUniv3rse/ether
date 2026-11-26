@@ -331,6 +331,12 @@ func (s *Server) authenticate(next http.Handler) http.Handler {
 					writeHTTPError(w, http.StatusForbidden)
 					return
 				}
+				// Companion registers devices in its own bounded relay. Do not
+				// learn arbitrary poll identifiers as playback devices.
+				if strings.HasPrefix(r.URL.Path, "/player/") {
+					next.ServeHTTP(w, withAuthenticatedViewer(r, pr))
+					return
+				}
 				if s.svc().clientSeen != nil {
 					s.svc().clientSeen(pr.ClientID)
 				}

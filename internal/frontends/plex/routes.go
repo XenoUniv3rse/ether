@@ -121,7 +121,7 @@ func (s *Server) routes() chi.Router {
 				Content string `plex:"content"`
 			}{0, "plugins"})
 		})
-		get("/clients", func(w http.ResponseWriter, r *http.Request) { s.writeEmpty(w, r) })
+		get("/clients", s.handleCompanionClients)
 		get("/devices", s.ownerOnly(s.handleDevices))
 		get("/devices/{id}", s.ownerOnly(s.handleDevice))
 		get("/accounts", s.ownerOnly(s.handleAccounts))
@@ -216,7 +216,7 @@ func (s *Server) routes() chi.Router {
 		get("/photo/:/transcode", s.handlePhotoTranscode)
 
 		// Hubs and search
-		any("/player/*", func(w http.ResponseWriter, r *http.Request) { writeHTTPError(w, http.StatusBadRequest) })
+		any("/player/*", s.handleCompanion)
 		get("/hubs", s.handleHubs)
 		get("/hubs/promoted", s.handlePromotedHubs)
 		get("/hubs/continueWatching", s.handleContinueWatching)

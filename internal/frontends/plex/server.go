@@ -198,6 +198,7 @@ type Server struct {
 	readCaps          *readCapabilityStore
 	deliveryGrants    *deliveryGrantStore
 	recentClients     recentPartClients
+	companion         *companionRelay
 	liveManifests     liveManifestRefetches
 	extraPlay         *extraPlayStore
 	subtitleOffers    subtitleOffers
@@ -283,6 +284,7 @@ func NewServer(d Deps) *Server {
 		selections:        newSelectionStore(),
 		notifier:          newNotifier(),
 		facets:            newFacetCache(),
+		companion:         newCompanionRelay(),
 		ctx:               ctx,
 		cancel:            cancel,
 	}
@@ -848,6 +850,7 @@ func (s *Server) Done() <-chan struct{} { return s.ctx.Done() }
 // Close stops background goroutines and disconnects notification clients.
 func (s *Server) Close() error {
 	s.once.Do(func() {
+		s.companion.stop()
 		if s.runtimeDB() != nil {
 			s.stopDownloadsForRestart()
 		} else {
