@@ -241,7 +241,7 @@ func (i *instance) playbackStart(w http.ResponseWriter, r *http.Request) {
 	}
 	plan, err := i.host.Sessions.Plan(r.Context(), frontend.PlanRequest{Viewer: v, Device: d, Protocol: "silo", Item: key, Channel: channel, Version: versionHandle, DetailSource: offer.Target.DetailSource, ExpectedSourceETag: offer.Target.ETag, Caps: cap.Client, Intent: frontend.PlayIntent{ExactVersion: versionHandle != "", Options: options, AllowTranscoding: &hls, AudioOrdinal: b.Audio, SubtitleOrdinal: b.Subtitle, Position: pos, PlaybackID: b.Attempt, ClientSessionID: b.InstallationID, DeclaredCaps: channel == "" && len(videoCodecs) > 0}})
 	if err != nil {
-		if writeIndexersPaused(w, err, r.Header.Get("Accept-Language")) {
+		if writePlaybackSourceProblem(w, err, r.Header.Get("Accept-Language")) {
 			return
 		}
 		if !errors.Is(err, frontend.ErrSessionBusy) && !errors.Is(err, frontend.ErrTranscodeCapacity) && !errors.Is(err, frontend.ErrTrackNotFound) && !errors.Is(err, frontend.ErrTrackSourceUnavailable) && !errors.Is(err, frontend.ErrVideoTranscodingDisabled) && !errors.As(err, new(*frontend.RequiredAudioLanguageError)) {
@@ -253,7 +253,7 @@ func (i *instance) playbackStart(w http.ResponseWriter, r *http.Request) {
 	}
 	session, err := i.host.Sessions.Open(r.Context(), frontend.OpenRequest{Protocol: "silo", PlanID: plan.ID, Viewer: v, Device: d})
 	if err != nil {
-		if writeIndexersPaused(w, err, r.Header.Get("Accept-Language")) {
+		if writePlaybackSourceProblem(w, err, r.Header.Get("Accept-Language")) {
 			return
 		}
 		if !errors.Is(err, frontend.ErrSessionBusy) && !errors.Is(err, frontend.ErrTranscodeCapacity) && !errors.Is(err, frontend.ErrTrackNotFound) && !errors.Is(err, frontend.ErrTrackSourceUnavailable) && !errors.Is(err, frontend.ErrVideoTranscodingDisabled) && !errors.As(err, new(*frontend.RequiredAudioLanguageError)) {
@@ -809,21 +809,21 @@ func (i *instance) playbackError(w http.ResponseWriter, v *frontend.Viewer, err 
 	playbackErrorFor(w, policy, v, err, languages...)
 }
 
-func writeIndexersPaused(w http.ResponseWriter, err error, languages ...string) bool {
-	msg := frontend.IndexersPausedMessage(err, languages...)
+func writePlaybackSourceProblem(w http.ResponseWriter, err error, languages ...string) bool {
+	code, status, msg := frontend.PlaybackSourceProblem(err, languages...)
 	if msg == "" {
 		return false
 	}
-	w.Header().Set("X-Ether-Media-Error", frontend.IndexersPausedCode)
+	w.Header().Set("X-Ether-Media-Error", code)
 	w.Header().Set("Cache-Control", "no-store")
-	problemReply(w, http.StatusServiceUnavailable, map[string]any{
-		"type": "about:blank", "title": msg, "status": http.StatusServiceUnavailable, "detail": msg,
+	problemReply(w, status, map[string]any{
+		"type": "about:blank", "title": msg, "status": status,
 	})
 	return true
 }
 
 func playbackErrorFor(w http.ResponseWriter, policy any, viewer *frontend.Viewer, err error, languages ...string) {
-	if writeIndexersPaused(w, err, languages...) {
+	if writePlaybackSourceProblem(w, err, languages...) {
 		return
 	}
 	if errors.Is(err, frontend.ErrVideoTranscodingDisabled) {

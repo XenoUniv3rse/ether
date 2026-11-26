@@ -704,7 +704,7 @@ func itemFromTitle(t core.Title) Item {
 		released = t.Released.UnixMilli()
 	}
 	enf := contentrating.EffectiveEnforcement(t.EnforcementRating, t.ContentRating, t.Adult, t.Keywords)
-	return Item{Key: t.Key, Title: t.Title, DurationMS: t.Runtime.Milliseconds(), Summary: t.Summary, Rating: t.ContentRating, EnforcementRating: enf, Thumb: t.PosterPath, ShowKey: t.ShowKey, Season: t.Season, Episode: t.Episode, ReleasedMS: released}
+	return Item{Key: t.Key, Title: t.Title, DurationMS: t.Runtime.Milliseconds(), Summary: t.Summary, Rating: t.ContentRating, EnforcementRating: enf, Thumb: t.PosterPath, Art: t.BackdropPath, ShowKey: t.ShowKey, Season: t.Season, Episode: t.Episode, ReleasedMS: released}
 }
 func (s *Service) expand(ctx context.Context, c *Channel) error {
 	var prepare func([]ProgramSource, string)
@@ -2624,6 +2624,7 @@ func (s *Service) importSource(ctx context.Context, src Source) (Source, error) 
 	}
 	s.matchLogos(ctx, cs)
 	g.Programmes = dedupeProgrammes(g.Programmes)
+	s.enrichImportedArtwork(ctx, g.Programmes)
 	if progress != nil {
 		progress.setChannels(len(cs))
 		progress.setProgrammes(len(g.Programmes))

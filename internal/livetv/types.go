@@ -443,6 +443,7 @@ type Options struct {
 	PersonalChanged func(int64)
 	Graphics        core.ChannelGraphics
 	GuideProvider   guideprovider.Provider
+	ImageURL        core.ImageURLFunc
 
 	ConfirmAdmission     func(context.Context, *core.User, bool, time.Time) (*core.User, error)
 	CanPlay              func(*core.User, bool, time.Time) bool

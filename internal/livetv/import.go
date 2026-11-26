@@ -562,7 +562,16 @@ func parseXMLTV(r io.Reader, f guideFilter) (XMLGuide, bool, error) {
 					continue
 				}
 			}
-			item := Item{Thumb: p.Icon.Src}
+			item := Item{Thumb: strings.TrimSpace(p.Icon.Src)}
+			date := strings.TrimSpace(p.Date)
+			if len(date) >= 4 {
+				if year, err := strconv.Atoi(date[:4]); err == nil && year >= 1800 && year <= 2199 {
+					item.Year = year
+				}
+			}
+			if len(p.SubTitle) > 0 {
+				item.EpisodeTitle = p.SubTitle[0].Value
+			}
 			for _, category := range p.Category {
 				genre := strings.TrimSpace(category.Value)
 				if genre != "" && !slices.Contains(item.Genres, genre) {
@@ -669,6 +678,13 @@ func formatXMLTV(g XMLGuide) (string, error) {
 			return "", err
 		}
 		b.WriteString("</title>")
+		if p.Item.EpisodeTitle != "" {
+			b.WriteString("<sub-title>")
+			if err := xmlEscape(&b, p.Item.EpisodeTitle); err != nil {
+				return "", err
+			}
+			b.WriteString("</sub-title>")
+		}
 		if p.Item.Summary != "" {
 			b.WriteString("<desc>")
 			if err := xmlEscape(&b, p.Item.Summary); err != nil {
@@ -676,12 +692,15 @@ func formatXMLTV(g XMLGuide) (string, error) {
 			}
 			b.WriteString("</desc>")
 		}
-		if p.Item.Rating != "" {
-			b.WriteString("<rating><value>")
-			if err := xmlEscape(&b, p.Item.Rating); err != nil {
+		if p.Item.Year > 0 {
+			fmt.Fprintf(&b, "<date>%d</date>", p.Item.Year)
+		}
+		for _, genre := range p.Item.Genres {
+			b.WriteString("<category>")
+			if err := xmlEscape(&b, genre); err != nil {
 				return "", err
 			}
-			b.WriteString("</value></rating>")
+			b.WriteString("</category>")
 		}
 		if p.Item.Thumb != "" {
 			b.WriteString(`<icon src="`)
@@ -689,6 +708,13 @@ func formatXMLTV(g XMLGuide) (string, error) {
 				return "", err
 			}
 			b.WriteString(`"/>`)
+		}
+		if p.Item.Rating != "" {
+			b.WriteString("<rating><value>")
+			if err := xmlEscape(&b, p.Item.Rating); err != nil {
+				return "", err
+			}
+			b.WriteString("</value></rating>")
 		}
 		b.WriteString("</programme>")
 	}

@@ -390,3 +390,13 @@ func ViewerAvatarImage(v *Viewer) (Image, bool) {
 		Subject: "viewer:" + strconv.FormatInt(v.ID, 10),
 	}, true
 }
+
+// ProgrammeImageGrant scopes an airing image to its channel and time. Images
+// attached by the title artwork service keep their existing title scope.
+func ProgrammeImageGrant(p LiveProgramme, image Image, credential string, device Device) ImageGrantRequest {
+	req := ImageGrantRequest{Credential: credential, Device: device, Item: p.Item, Image: image}
+	if image.Subject == p.ID {
+		req.Item, req.Channel = 0, p.ChannelID
+	}
+	return req
+}

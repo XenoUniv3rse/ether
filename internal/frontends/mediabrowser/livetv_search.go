@@ -54,7 +54,7 @@ func (i *instance) liveSearchItems(r *http.Request, viewer *frontend.Viewer, tok
 	}
 	if wants("livetvprogram", "program") {
 		for _, p := range results.Programmes {
-			if dto, ok := i.programmeDTO(frontend.LiveProgramme{ID: p.ID, ChannelID: p.ChannelID, Start: p.Start, End: p.End, Title: p.Item.Title, Summary: p.Item.Summary, Rating: p.Item.Rating, EpisodeTitle: p.Item.EpisodeTitle, ShowTitle: p.Item.ShowTitle, Genres: p.Item.Genres, MediaType: p.Item.MediaType, Season: p.Item.Season, Episode: p.Item.Episode}, frontend.LiveChannel{}); ok {
+			if dto, ok := i.programmeDTO(r, token, frontend.LiveProgramme{ID: p.ID, ChannelID: p.ChannelID, Start: p.Start, End: p.End, Title: p.Item.Title, Summary: p.Item.Summary, Rating: p.Item.Rating, EpisodeTitle: p.Item.EpisodeTitle, ShowTitle: p.Item.ShowTitle, Genres: p.Item.Genres, MediaType: p.Item.MediaType, Season: p.Item.Season, Episode: p.Item.Episode}, frontend.LiveChannel{}); ok {
 				out = append(out, dto)
 			}
 		}

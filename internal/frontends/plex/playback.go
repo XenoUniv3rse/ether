@@ -71,7 +71,7 @@ func (s *Server) playbackMessageFor(pr *Request, err error) string {
 		if msg := frontend.VideoEncoderCapacityMessage(err, pr.Language); msg != "" {
 			return msg
 		}
-		if msg := frontend.IndexersPausedMessage(err, pr.Language); msg != "" {
+		if _, _, msg := frontend.PlaybackSourceProblem(err, pr.Language); msg != "" {
 			return msg
 		}
 	}
@@ -83,6 +83,9 @@ func (s *Server) playbackMessageFor(pr *Request, err error) string {
 
 func playbackMessage(err error) string {
 	if msg := frontend.VideoEncoderCapacityMessage(err); msg != "" {
+		return msg
+	}
+	if _, _, msg := frontend.PlaybackSourceProblem(err); msg != "" {
 		return msg
 	}
 	var bedtime *frontend.ErrBedtime
@@ -127,8 +130,6 @@ func playbackMessage(err error) string {
 		return msgPrepareSlow
 	case errors.Is(err, frontend.ErrJobsBusy):
 		return frontend.JobsBusyMessage(err)
-	case errors.Is(err, frontend.ErrBudgetExhausted):
-		return "Indexers are temporarily at their limit. Ether will retry automatically; previously cached releases may still play."
 	}
 	return msgPlayFailed
 }
@@ -144,7 +145,7 @@ func (s *Server) writeStartErr(w http.ResponseWriter, r *http.Request, pr *Reque
 	if pr != nil && pr.User != nil {
 		s.setTermination(trackID(pr.User.ID, pr.ClientID, pr.SessionID), s.playbackMessageFor(pr, err))
 	}
-	if frontend.WriteIndexersPaused(w, err, notificationLanguage(r)) {
+	if frontend.WritePlaybackSourceProblem(w, err, notificationLanguage(r)) {
 		return
 	}
 	// A completed attempt is terminal. Retry-After on a 503 makes media

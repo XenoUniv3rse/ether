@@ -788,7 +788,7 @@ func (s *lazyStreams) writePlaybackError(w http.ResponseWriter, r *http.Request,
 		w.WriteHeader(http.StatusConflict)
 		return
 	}
-	if frontend.WriteIndexersPaused(w, err, r.Header.Get("Accept-Language")) {
+	if frontend.WritePlaybackSourceProblem(w, err, r.Header.Get("Accept-Language")) {
 		return
 	}
 	if errors.Is(err, core.ErrPreparing) {

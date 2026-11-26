@@ -691,20 +691,25 @@ func OpenSources(ctx context.Context, sources []core.PlayableSource, deps Deps) 
 	if allGrabRefused && nextGrab != nil {
 		return nil, core.PlayableSource{}, nextGrab
 	}
-	if allUnstreamable && len(errs) > 0 {
-		return nil, core.PlayableSource{}, errors.Join(errs...)
+	joined := errors.Join(errs...)
+	if errors.Is(joined, core.ErrBudgetExhausted) {
+		// Individual attempts already report diagnostic details. Keep the
+		// typed quota failure when all alternatives have failed.
+		return nil, core.PlayableSource{}, core.ErrBudgetExhausted
 	}
-	if allRejected && len(errs) > 0 {
-		joined := errors.Join(errs...)
+	if allUnstreamable && joined != nil {
+		return nil, core.PlayableSource{}, joined
+	}
+	if allRejected && joined != nil {
 		if errors.Is(joined, core.ErrReleaseRejected) {
 			return nil, core.PlayableSource{}, joined
 		}
 		return nil, core.PlayableSource{}, fmt.Errorf("%w: %w", core.ErrReleaseRejected, joined)
 	}
-	if allWrongContent && len(errs) > 0 {
-		return nil, core.PlayableSource{}, errors.Join(errs...)
+	if allWrongContent && joined != nil {
+		return nil, core.PlayableSource{}, joined
 	}
-	return nil, core.PlayableSource{}, fmt.Errorf("%w: %v", core.ErrSourceUnavailable, errors.Join(errs...))
+	return nil, core.PlayableSource{}, fmt.Errorf("%w: %v", core.ErrSourceUnavailable, joined)
 }
 
 // isConfirmedSourceFailure reports whether a candidate open failure is a

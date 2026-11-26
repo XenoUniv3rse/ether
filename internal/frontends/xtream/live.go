@@ -217,6 +217,22 @@ func (i *instance) programmes(r *http.Request, l login, c frontend.LiveChannel, 
 	return i.host.LiveTV.Guide(r.Context(), l.viewer, frontend.LiveGuideQuery{Device: l.device, Channels: []string{c.ID}, From: from, Until: until, Limit: 10000})
 }
 
+func (i *instance) programmeIcon(r *http.Request, l login, p frontend.LiveProgramme) string {
+	base := i.base(r)
+	if base == "" || i.host.ImageGrants == nil {
+		return ""
+	}
+	for _, image := range p.Images {
+		if image.Kind == frontend.ImageStill || image.Kind == frontend.ImagePoster {
+			grant, err := i.host.ImageGrants.Issue(r.Context(), frontend.ProgrammeImageGrant(p, image, l.credential, l.device))
+			if err == nil && grant != "" {
+				return base + "/image/" + grant
+			}
+		}
+	}
+	return ""
+}
+
 func (i *instance) epg(w http.ResponseWriter, r *http.Request, l login, action string) {
 	c, ok := i.findChannel(r, l, r.URL.Query().Get("stream_id"))
 	if !ok {
@@ -254,12 +270,20 @@ func (i *instance) epg(w http.ResponseWriter, r *http.Request, l login, action s
 		if ended, _ := frontend.ArchiveFlags(c.ArchiveDays, p.Start, p.End, now); ended {
 			hasArchive = 1
 		}
-		out = append(out, map[string]any{"id": p.ID, "epg_id": strconv.FormatInt(int64(l.channels[c.ID]), 10), "channel_id": c.ID, "title": base64.StdEncoding.EncodeToString([]byte(p.Title)), "description": base64.StdEncoding.EncodeToString([]byte(p.Summary)), "lang": "", "start": p.Start.UTC().Format("2006-01-02 15:04:05"), "end": p.End.UTC().Format("2006-01-02 15:04:05"), "start_timestamp": strconv.FormatInt(p.Start.Unix(), 10), "stop_timestamp": strconv.FormatInt(p.End.Unix(), 10), "now_playing": playing, "has_archive": hasArchive})
+		row := map[string]any{"id": p.ID, "epg_id": strconv.FormatInt(int64(l.channels[c.ID]), 10), "channel_id": c.ID, "title": base64.StdEncoding.EncodeToString([]byte(p.Title)), "description": base64.StdEncoding.EncodeToString([]byte(p.Summary)), "lang": "", "start": p.Start.UTC().Format("2006-01-02 15:04:05"), "end": p.End.UTC().Format("2006-01-02 15:04:05"), "start_timestamp": strconv.FormatInt(p.Start.Unix(), 10), "stop_timestamp": strconv.FormatInt(p.End.Unix(), 10), "now_playing": playing, "has_archive": hasArchive}
+		if icon := i.programmeIcon(r, l, p); icon != "" {
+			row["icon"] = icon
+		}
+		out = append(out, row)
 		if len(out) >= limit {
 			break
 		}
 	}
 	jsonResponse(w, map[string]any{"epg_listings": out})
+}
+
+type programmeXMLIcon struct {
+	Source string `xml:"src,attr"`
 }
 
 func (i *instance) xmltv(w http.ResponseWriter, r *http.Request, l login) {
@@ -288,14 +312,19 @@ func (i *instance) xmltv(w http.ResponseWriter, r *http.Request, l login) {
 			if p.ChannelID != c.ID || !p.End.After(p.Start) {
 				continue
 			}
+			var icon *programmeXMLIcon
+			if src := i.programmeIcon(r, l, p); src != "" {
+				icon = &programmeXMLIcon{Source: src}
+			}
 			_ = e.Encode(struct {
-				XMLName xml.Name `xml:"programme"`
-				Channel string   `xml:"channel,attr"`
-				Start   string   `xml:"start,attr"`
-				Stop    string   `xml:"stop,attr"`
-				Title   string   `xml:"title"`
-				Desc    string   `xml:"desc"`
-			}{Channel: c.ID, Start: p.Start.UTC().Format("20060102150405 -0700"), Stop: p.End.UTC().Format("20060102150405 -0700"), Title: p.Title, Desc: p.Summary})
+				XMLName xml.Name          `xml:"programme"`
+				Channel string            `xml:"channel,attr"`
+				Start   string            `xml:"start,attr"`
+				Stop    string            `xml:"stop,attr"`
+				Title   string            `xml:"title"`
+				Desc    string            `xml:"desc"`
+				Icon    *programmeXMLIcon `xml:"icon,omitempty"`
+			}{Icon: icon, Channel: c.ID, Start: p.Start.UTC().Format("20060102150405 -0700"), Stop: p.End.UTC().Format("20060102150405 -0700"), Title: p.Title, Desc: p.Summary})
 		}
 	}
 	_ = e.Flush()

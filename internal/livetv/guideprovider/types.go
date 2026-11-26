@@ -29,6 +29,7 @@ type Item struct {
 	Genres                []string       `json:"genres,omitempty"`
 	GUID                  string         `json:"guid,omitempty"`
 	ShowGUID              string         `json:"showGuid,omitempty"`
+	Year                  int            `json:"year,omitempty"`
 	MediaType             string         `json:"mediaType,omitempty"`
 	Premiere              bool           `json:"premiere,omitempty"`
 	Live                  bool           `json:"live,omitempty"`

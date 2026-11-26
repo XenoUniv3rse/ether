@@ -98,6 +98,12 @@ func historyFromTrace(tr Trace) HistoryRecord {
 	return h
 }
 
+// RecordKindFailure adds a credential-free plugin playback decision to the same
+// history as movie and TV resolutions. Callers supply a stable error.
+func (s *Service) RecordKindFailure(ctx context.Context, key core.RatingKey, name string, reason error) {
+	s.recordHistory(ctx, Trace{At: s.now(), TitleKey: key, TitleName: name, Err: reason.Error()})
+}
+
 // recordHistory persists one resolution outcome and prunes rows beyond the
 // retention bounds (count and age) in the same pass.
 func (s *Service) recordHistory(ctx context.Context, tr Trace) {

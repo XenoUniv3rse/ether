@@ -283,7 +283,7 @@ func (i *instance) writeLiveItemsByID(w http.ResponseWriter, r *http.Request, vi
 				break
 			}
 		}
-		if item, ok := i.programmeDTO(p, channel); ok {
+		if item, ok := i.programmeDTO(r, token, p, channel); ok {
 			items = append(items, item)
 		}
 	}
@@ -347,7 +347,7 @@ func (i *instance) recordings(w http.ResponseWriter, r *http.Request) {
 	i.replyItems(w, r, i.queryResult([]any{}, 0, queryInt(r, "StartIndex", 0)))
 }
 
-func (i *instance) programmeDTO(p frontend.LiveProgramme, channel frontend.LiveChannel) (map[string]any, bool) {
+func (i *instance) programmeDTO(r *http.Request, token string, p frontend.LiveProgramme, channel frontend.LiveChannel) (map[string]any, bool) {
 	id, err := ids.StringGUID(ids.Programme, p.ID)
 	if err != nil {
 		return nil, false
@@ -363,6 +363,20 @@ func (i *instance) programmeDTO(p frontend.LiveProgramme, channel frontend.LiveC
 		"IndexNumber": p.Episode, "ParentIndexNumber": p.Season, "Genres": append([]string{}, p.Genres...), "IsMovie": frontend.LiveCategory(p.Genres, "movie", p.MediaType), "IsSeries": frontend.LiveCategory(p.Genres, "series", p.MediaType) || p.Episode > 0 || p.Season > 0,
 		"IsSports": frontend.LiveCategory(p.Genres, "sports", p.MediaType), "IsNews": frontend.LiveCategory(p.Genres, "news", p.MediaType), "IsKids": frontend.LiveCategory(p.Genres, "kids", p.MediaType),
 		"MediaType": "Video", "IsFolder": false, "UserData": map[string]any{"Key": dashedGUID(id), "ItemId": id, "PlaybackPositionTicks": int64(0), "PlayCount": 0, "IsFavorite": false, "Played": false},
+	}
+	if i.host.ImageGrants != nil && len(p.Images) > 0 {
+		for _, kind := range []string{"Primary", "Backdrop"} {
+			if image, ok := taglessImage(p.Images, kind, 0); ok {
+				grant, err := i.host.ImageGrants.Issue(r.Context(), frontend.ProgrammeImageGrant(p, image, token, device(r)))
+				if err == nil && grant != "" {
+					if kind == "Backdrop" {
+						item["BackdropImageTags"] = []string{grant}
+					} else {
+						item["ImageTags"] = map[string]string{"Primary": grant}
+					}
+				}
+			}
+		}
 	}
 	if channel.ID != "" {
 		item["ChannelName"] = channel.Name
@@ -413,7 +427,7 @@ func (i *instance) writeLiveGuideItem(w http.ResponseWriter, r *http.Request, vi
 			}
 		}
 	}
-	item, ok := i.programmeDTO(p, channel)
+	item, ok := i.programmeDTO(r, token, p, channel)
 	if !ok {
 		http.NotFound(w, r)
 		return true
@@ -620,8 +634,9 @@ func (i *instance) writeProgrammes(w http.ResponseWriter, r *http.Request, viewe
 		rows = paging.Slice(rows, offset, limit)
 	}
 	items := make([]any, 0, len(rows))
+	token := authhdr.MediaBrowserToken(r)
 	for _, p := range rows {
-		item, ok := i.programmeDTO(p, names[p.ChannelID])
+		item, ok := i.programmeDTO(r, token, p, names[p.ChannelID])
 		if !ok {
 			continue
 		}

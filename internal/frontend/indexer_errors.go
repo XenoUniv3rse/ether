@@ -71,22 +71,60 @@ func IndexersPausedMessage(err error, languages ...string) string {
 	return fmt.Sprintf(t.noSearch, strings.Join(reasons, ", "))
 }
 
-// WriteIndexersPaused serves the diagnostic for protocols with plain-text
-// playback errors. Structured decision endpoints use IndexersPausedMessage.
-func WriteIndexersPaused(w http.ResponseWriter, err error, languages ...string) bool {
-	msg := IndexersPausedMessage(err, languages...)
+var sourceProblemText = [...]struct{ budget, rejected string }{
+	{"Indexer daily limit reached", "Releases found, but none met the playback requirements"},
+	{"Tageslimit des Indexers erreicht", "Releases gefunden, aber keines erfüllte die Wiedergabeanforderungen"},
+	{"Se alcanzó el límite diario del indexador", "Se encontraron versiones, pero ninguna cumplió los requisitos de reproducción"},
+	{"Limite quotidienne de l’indexeur atteinte", "Des versions ont été trouvées, mais aucune ne répond aux critères de lecture"},
+	{"Limite giornaliero dell’indicizzatore raggiunto", "Sono state trovate versioni, ma nessuna soddisfa i requisiti di riproduzione"},
+	{"インデクサーの1日の上限に達しました", "リリースが見つかりましたが、再生条件を満たすものがありませんでした"},
+	{"인덱서의 일일 한도에 도달했습니다", "릴리스를 찾았지만 재생 요구 사항을 충족하는 항목이 없습니다"},
+	{"Daglimiet van indexer bereikt", "Releases gevonden, maar geen ervan voldoet aan de afspeelvereisten"},
+	{"Dagsgrensen for indeksereren er nådd", "Fant utgivelser, men ingen oppfylte avspillingskravene"},
+	{"Osiągnięto dzienny limit indeksatora", "Znaleziono wydania, ale żadne nie spełnia wymagań odtwarzania"},
+	{"Limite diário do indexador atingido", "Foram encontrados lançamentos, mas nenhum atendeu aos requisitos de reprodução"},
+	{"Достигнут дневной лимит индексатора", "Релизы найдены, но ни один не соответствует требованиям воспроизведения"},
+	{"Indexeraren har nått sin dagsgräns", "Utgåvor hittades, men ingen uppfyllde uppspelningskraven"},
+	{"Dizinleyicinin günlük sınırına ulaşıldı", "Sürümler bulundu ancak hiçbiri oynatma gereksinimlerini karşılamadı"},
+	{"Досягнуто денного ліміту індексатора", "Знайдено релізи, але жоден не відповідає вимогам відтворення"},
+	{"已达到索引器的每日限额", "找到了发布版本，但没有符合播放要求的版本"},
+	{"已達索引器的每日限額", "找到了發行版本，但沒有符合播放要求的版本"},
+	{"Indekserens daglige grænse er nået", "Der blev fundet udgivelser, men ingen opfyldte afspilningskravene"},
+	{"Indeksoijan päivittäinen raja on saavutettu", "Julkaisuja löytyi, mutta yksikään ei täyttänyt toistovaatimuksia"},
+	{"Byl dosažen denní limit indexeru", "Vydání byla nalezena, ale žádné nesplnilo požadavky na přehrávání"},
+}
+
+// PlaybackSourceProblem exposes only localised, credential-free diagnostics.
+func PlaybackSourceProblem(err error, languages ...string) (code string, status int, message string) {
+	if msg := IndexersPausedMessage(err, languages...); msg != "" {
+		return IndexersPausedCode, http.StatusServiceUnavailable, msg
+	}
+	_, locale := language.MatchStrings(playbackErrorLocaleMatcher, languages...)
+	switch {
+	case errors.Is(err, core.ErrBudgetExhausted):
+		return "indexer_budget_exhausted", http.StatusTooManyRequests, sourceProblemText[locale].budget
+	case errors.Is(err, core.ErrKindCandidatesRejected):
+		return "releases_rejected", http.StatusUnprocessableEntity, sourceProblemText[locale].rejected
+	}
+	return "", 0, ""
+}
+
+// WritePlaybackSourceProblem serves the shared source diagnostic for media
+// protocols with plain-text playback errors.
+func WritePlaybackSourceProblem(w http.ResponseWriter, err error, languages ...string) bool {
+	code, status, msg := PlaybackSourceProblem(err, languages...)
 	if msg == "" {
 		return false
 	}
-	w.Header().Set("X-Ether-Media-Error", IndexersPausedCode)
+	w.Header().Set("X-Ether-Media-Error", code)
 	w.Header().Set("Cache-Control", "no-store")
-	http.Error(w, msg, http.StatusServiceUnavailable)
+	http.Error(w, msg, status)
 	return true
 }
 
 // WriteAppConnectionError reports admission failures before media headers are sent.
 func WriteAppConnectionError(w http.ResponseWriter, r *http.Request, err error) {
-	if WriteIndexersPaused(w, err, r.Header.Get("Accept-Language")) {
+	if WritePlaybackSourceProblem(w, err, r.Header.Get("Accept-Language")) {
 		return
 	}
 	var reqLang *RequiredAudioLanguageError

@@ -20,7 +20,7 @@ func (a Source) ProgrammeImages(viewer *core.Viewer, p livetv.Programme) []front
 	req := frontend.ArtworkRequest{Viewer: viewer, Channel: p.ChannelID, Programme: p.ID}
 	var out []frontend.Image
 	for _, source := range []struct{ kind, path string }{{frontend.ImageStill, p.Item.Thumb}, {frontend.ImageBackdrop, p.Item.Art}} {
-		if source.path == "" {
+		if !validRemoteArtwork(source.path) {
 			continue
 		}
 		ref := artworkReference(req, source.kind, p.ChannelID+"\x00"+p.ID+"\x00"+source.path)
