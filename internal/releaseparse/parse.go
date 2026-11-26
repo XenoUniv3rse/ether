@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/braedonsaunders/ether/internal/core"
 )
@@ -1245,6 +1246,13 @@ func parseYearAtWithStem(stem, spaced string) (int, int) {
 		return y, loc[2]
 	}
 	locs := reYear.FindAllStringIndex(spaced, -1)
+	// A year after next year cannot be a release year: it belongs to the
+	// title ("Blade.Runner.2099.S01E01", "Year.2050.2025.1080p").
+	latest := time.Now().Year() + 1
+	locs = slices.DeleteFunc(locs, func(l []int) bool {
+		y, _ := strconv.Atoi(spaced[l[0]:l[1]])
+		return y > latest
+	})
 	if len(locs) == 0 {
 		return 0, -1
 	}
