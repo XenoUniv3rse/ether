@@ -11,11 +11,13 @@ import (
 	"net/url"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/braedonsaunders/ether/internal/config"
 	"github.com/braedonsaunders/ether/internal/logredact"
 	"github.com/braedonsaunders/ether/internal/plugins/wasm"
+	"github.com/braedonsaunders/ether/internal/reqmemo"
 	"github.com/braedonsaunders/ether/internal/store"
 	"github.com/braedonsaunders/ether/internal/textclip"
 )
@@ -255,9 +257,10 @@ type CallRecord struct {
 }
 
 type storage struct {
-	db     *sql.DB
-	sealer config.FieldSealer
-	now    func() time.Time
+	db               *sql.DB
+	sealer           config.FieldSealer
+	now              func() time.Time
+	settingsRevision atomic.Uint64
 }
 
 func (s *storage) record(ctx context.Context, id string) (Record, error) {
@@ -455,23 +458,48 @@ type settingsRow struct {
 	Schema   json.RawMessage
 }
 
+type settingsDocument struct{ settings, secrets, strings, schema string }
+
 func (s *storage) settings(ctx context.Context, plugin string) (settingsRow, error) {
-	var set, sec, str, schema string
-	err := s.db.QueryRowContext(ctx, `SELECT settings,secrets,strings,schema_doc FROM plugins_settings WHERE plugin=?`, plugin).Scan(&set, &sec, &str, &schema)
-	if errors.Is(err, sql.ErrNoRows) {
-		return settingsRow{Settings: map[string]any{}, Secrets: map[string]string{}, Strings: map[string]map[string]string{}}, nil
-	}
+	doc, err := s.readSettings(ctx, plugin)
 	if err != nil {
 		return settingsRow{}, err
 	}
+	return doc.decode()
+}
+
+// Snapshot the encoded settings. Runtime callers can mutate their decoded
+// maps, so sharing a decoded document would leak mutations across reads.
+func (s *storage) requestSettings(ctx context.Context, plugin string) (settingsRow, error) {
+	key := fmt.Sprintf("plugins:settings:%p:%s:%d", s, plugin, s.settingsRevision.Load())
+	doc, err := reqmemo.Do(ctx, key, func() (settingsDocument, error) {
+		return s.readSettings(ctx, plugin)
+	})
+	if err != nil {
+		return settingsRow{}, err
+	}
+	return doc.decode()
+}
+
+func (s *storage) readSettings(ctx context.Context, plugin string) (settingsDocument, error) {
+	var doc settingsDocument
+	err := s.db.QueryRowContext(ctx, `SELECT settings,secrets,strings,schema_doc FROM plugins_settings WHERE plugin=?`, plugin).
+		Scan(&doc.settings, &doc.secrets, &doc.strings, &doc.schema)
+	if errors.Is(err, sql.ErrNoRows) {
+		return settingsDocument{settings: "{}", secrets: "{}", strings: "{}"}, nil
+	}
+	return doc, err
+}
+
+func (doc settingsDocument) decode() (settingsRow, error) {
 	out := settingsRow{}
-	if err := json.Unmarshal([]byte(set), &out.Settings); err != nil {
+	if err := json.Unmarshal([]byte(doc.settings), &out.Settings); err != nil {
 		return out, err
 	}
-	if err := json.Unmarshal([]byte(sec), &out.Secrets); err != nil {
+	if err := json.Unmarshal([]byte(doc.secrets), &out.Secrets); err != nil {
 		return out, err
 	}
-	if err := json.Unmarshal([]byte(str), &out.Strings); err != nil {
+	if err := json.Unmarshal([]byte(doc.strings), &out.Strings); err != nil {
 		return out, err
 	}
 	if out.Settings == nil {
@@ -483,8 +511,8 @@ func (s *storage) settings(ctx context.Context, plugin string) (settingsRow, err
 	if out.Strings == nil {
 		out.Strings = map[string]map[string]string{}
 	}
-	if schema != "" {
-		out.Schema = json.RawMessage(schema)
+	if doc.schema != "" {
+		out.Schema = json.RawMessage(doc.schema)
 	}
 	return out, nil
 }
@@ -504,6 +532,9 @@ func (s *storage) putSettings(ctx context.Context, plugin string, row settingsRo
 	}
 	_, err = s.db.ExecContext(ctx, `INSERT INTO plugins_settings(plugin,settings,secrets,strings,schema_doc) VALUES(?,?,?,?,?) ON CONFLICT(plugin) DO UPDATE SET settings=excluded.settings,secrets=excluded.secrets,strings=excluded.strings,schema_doc=excluded.schema_doc`,
 		plugin, string(set), string(sec), string(str), string(row.Schema))
+	if err == nil {
+		s.settingsRevision.Add(1)
+	}
 	return err
 }
 
@@ -1090,7 +1121,10 @@ func (s *storage) callStats(ctx context.Context, plugin string) (count, errors i
 // in free text or under a harmless-looking field name. Fail closed if the
 // settings cannot be read or decrypted.
 func (s *storage) redactKnown(ctx context.Context, plugin, value string) string {
-	row, err := s.settings(ctx, plugin)
+	if value == "" {
+		return ""
+	}
+	row, err := s.requestSettings(ctx, plugin)
 	if err != nil {
 		return "[redacted]"
 	}
@@ -1257,6 +1291,7 @@ func (s *storage) purge(ctx context.Context, plugin string) error {
 			return err
 		}
 	}
+	s.settingsRevision.Add(1)
 	return nil
 }
 

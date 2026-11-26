@@ -118,6 +118,11 @@ func hubItemsKey(h frontend.Hub, hc hubCtx) string {
 }
 
 func (s *Server) renderHub(ctx context.Context, pr *Request, hs hubSpec, hc hubCtx) model.Hub {
+	hc, vis := s.hubVisibility(hs, hc)
+	return s.renderHubWithVisibility(ctx, pr, hs, hc, vis)
+}
+
+func (s *Server) hubVisibility(hs hubSpec, hc hubCtx) (hubCtx, frontend.Visibility) {
 	vis := s.visibility()
 	if hc.section != 0 && hs.ID != "home.continue" && hs.ID != "home.ondeck" && hs.ID != "continueWatching" {
 		if sec, ok := s.sectionByID(hc.section); ok {
@@ -127,13 +132,24 @@ func (s *Server) renderHub(ctx context.Context, pr *Request, hs hubSpec, hc hubC
 			}
 		}
 	}
-	return s.renderHubWithVisibility(ctx, pr, hs, hc, vis)
+	return hc, vis
 }
 
 func (s *Server) renderHubWithVisibility(ctx context.Context, pr *Request, hs hubSpec, hc hubCtx, vis frontend.Visibility) model.Hub {
+	return s.prepareHub(ctx, pr, hs, hc, vis).paint(ctx)
+}
+
+// hubRender holds the selected page and its wire projection. Keeping these
+// separate lets a screen load the facts for its pages before painting them.
+type hubRender struct {
+	titles []frontend.Title
+	paint  func(context.Context) model.Hub
+}
+
+func (s *Server) prepareHub(ctx context.Context, pr *Request, hs hubSpec, hc hubCtx, vis frontend.Visibility) hubRender {
 	h := hs.Hub
 	if len(h.Collections) > 0 {
-		return s.renderCollectionCardHub(ctx, pr, h)
+		return hubRender{paint: func(ctx context.Context) model.Hub { return s.renderCollectionCardHub(ctx, pr, h) }}
 	}
 	s.rememberHub(ctx, pr, hs, hc)
 	renderSec := hc.renderSec
@@ -160,9 +176,14 @@ func (s *Server) renderHubWithVisibility(ctx context.Context, pr *Request, hs hu
 		if loader, ok := s.catalog().(frontend.RowFactsLoader); ok {
 			h.Items = loader.LoadRowFacts(ctx, h.Items)
 		}
-		unavailable := s.sameDayUnavailableFunc(ctx, pr, h.Items)
+		var unavailable func(*frontend.Title) bool
 		if sel := s.exp().NewRowSelection(frontend.RowSelectionOptions{Visibility: vis, PrioritizeAvailable: s.prioritizeAvailable(),
-			SameDayUnavailable: func(_ context.Context, t *frontend.Title) bool { return unavailable(t) },
+			SameDayUnavailable: func(_ context.Context, t *frontend.Title) bool {
+				if unavailable == nil {
+					unavailable = s.sameDayUnavailableFunc(ctx, pr, h.Items)
+				}
+				return unavailable(t)
+			},
 		}); sel != nil {
 			return sel.Items(ctx, pr.User, h)
 		}
@@ -181,31 +202,9 @@ func (s *Server) renderHubWithVisibility(ctx context.Context, pr *Request, hs hu
 	}
 	related := hc.related != 0
 	pinned := (hc.section != 0 || h.Key != 0) && hs.state == nil && hs.key == "" && !related
-	var sourceItems []frontend.Title
 	isWatchlist := frontend.IsWatchlistHub(h.ID)
-	render := func() []model.Metadata {
-		sourceItems = build()
-		if !pinned && hc.visible > 0 && len(sourceItems) > hc.visible {
-			sourceItems = sourceItems[:hc.visible]
-			h.More = true
-		}
-		renderCtx := ctx
-		if isWatchlist {
-			renderCtx = withShelfMembers(ctx, sourceItems)
-		}
-		md := s.renderTitles(renderCtx, pr, sourceItems, renderOpts{media: true, state: hs.state, inSection: related, guids: related, detailEpisodes: !hs.plain, vis: &vis, section: renderSec, searchIdentity: hc.searchIdentity})
-		if kindSec && len(md) > 0 {
-			byKey := make(map[string]*frontend.Title, len(sourceItems))
-			for i := range sourceItems {
-				byKey[sourceItems[i].Key.String()] = &sourceItems[i]
-			}
-			for i := range md {
-				md[i].Type = kindTypeForBase(string(renderSec.Type), md[i].Type, byKey[md[i].RatingKey])
-			}
-		}
-		return md
-	}
-	var md []model.Metadata
+	var page []frontend.Title
+	opts := renderOpts{media: true, state: hs.state, inSection: related, guids: related, detailEpisodes: !hs.plain, vis: &vis, section: renderSec, searchIdentity: hc.searchIdentity}
 	generation := ""
 	var canonicalTotal *int
 	if pinned {
@@ -222,7 +221,7 @@ func (s *Server) renderHubWithVisibility(ctx context.Context, pr *Request, hs hu
 		if generation == "" {
 			selected, generation = s.shelfSnapshot(ctx, pr, h, hc, func() ([]frontend.Title, []model.Metadata) {
 				// Snapshot membership before decorating the visible page.
-				sourceItems = build()
+				sourceItems := build()
 				memberCtx := withStoredPolicy(ctx)
 				if isWatchlist {
 					memberCtx = withShelfMembers(memberCtx, sourceItems)
@@ -245,62 +244,82 @@ func (s *Server) renderHubWithVisibility(ctx context.Context, pr *Request, hs hu
 			selected = selected[:hc.visible]
 			h.More = true
 		}
-		md = s.renderTitles(withShelfMembers(ctx, selected), pr, selected, renderOpts{media: true, availabilityInSQL: true, vis: &vis, section: renderSec})
-		// More is calculated from the canonical generation, not source hints.
+		page = selected
+		opts = renderOpts{media: true, availabilityInSQL: true, vis: &vis, section: renderSec}
 	} else {
-		md = render()
+		page = build()
+		if hc.visible > 0 && len(page) > hc.visible {
+			page = page[:hc.visible]
+			h.More = true
+		}
 	}
-	if hc.visible > 0 && len(md) > hc.visible {
-		md = md[:hc.visible]
-		h.More = true
-	}
-	if hs.included {
-		stampIncluded(md)
-	}
-	keys := make([]string, 0, len(md))
-	// Recorded PMS Home and related hubs name exactly their rendered cards.
-	for _, item := range md {
-		keys = append(keys, item.RatingKey)
-	}
-	typ := string(h.Type)
-	if typ == "" {
-		typ = "mixed"
-	}
-	style := h.Style
-	if style == "" {
-		style = "shelf"
-	}
-	ctxName := h.Context
-	if ctxName == "" {
-		ctxName = "hub." + h.ID
-	}
-	key := hs.key
-	if key == "" {
-		key = hubItemsKey(h, hc)
-	}
-	mh := model.Hub{
-		Key:            s.shelfURL(key, generation),
-		Title:          h.Title,
-		Type:           typ,
-		HubIdentifier:  h.ID,
-		Context:        ctxName,
-		Size:           len(md),
-		More:           h.More,
-		Style:          style,
-		PreviewOnFocus: h.PreviewOnFocus, RankedTop10: h.RankedTop10,
-		Metadata:  md,
-		TotalSize: canonicalTotal,
-	}
-	if h.ID == "tv.upnext" {
-		mh.UpNext = model.Ptr(true)
-	}
-	if !hs.noPromoted && !related {
-		mh.Promoted = model.Ptr(h.Promoted)
-	}
-	if len(keys) > 0 {
-		mh.HubKey = s.shelfURL("/library/metadata/"+strings.Join(keys, ","), generation)
-	}
-	return mh
+	return hubRender{titles: page, paint: func(ctx context.Context) model.Hub {
+		if pinned || isWatchlist {
+			ctx = withShelfMembers(ctx, page)
+		}
+		md := s.renderTitles(ctx, pr, page, opts)
+		if kindSec && !pinned && len(md) > 0 {
+			byKey := make(map[string]*frontend.Title, len(page))
+			for i := range page {
+				byKey[page[i].Key.String()] = &page[i]
+			}
+			for i := range md {
+				md[i].Type = kindTypeForBase(string(renderSec.Type), md[i].Type, byKey[md[i].RatingKey])
+			}
+		}
+
+		if hc.visible > 0 && len(md) > hc.visible {
+			md = md[:hc.visible]
+			h.More = true
+		}
+		if hs.included {
+			stampIncluded(md)
+		}
+		keys := make([]string, 0, len(md))
+		// Recorded PMS Home and related hubs name exactly their rendered cards.
+		for _, item := range md {
+			keys = append(keys, item.RatingKey)
+		}
+		typ := string(h.Type)
+		if typ == "" {
+			typ = "mixed"
+		}
+		style := h.Style
+		if style == "" {
+			style = "shelf"
+		}
+		ctxName := h.Context
+		if ctxName == "" {
+			ctxName = "hub." + h.ID
+		}
+		key := hs.key
+		if key == "" {
+			key = hubItemsKey(h, hc)
+		}
+		mh := model.Hub{
+			Key:            s.shelfURL(key, generation),
+			Title:          h.Title,
+			Type:           typ,
+			HubIdentifier:  h.ID,
+			Context:        ctxName,
+			Size:           len(md),
+			More:           h.More,
+			Style:          style,
+			PreviewOnFocus: h.PreviewOnFocus, RankedTop10: h.RankedTop10,
+			Metadata:  md,
+			TotalSize: canonicalTotal,
+		}
+		if h.ID == "tv.upnext" {
+			mh.UpNext = model.Ptr(true)
+		}
+		if !hs.noPromoted && !related {
+			mh.Promoted = model.Ptr(h.Promoted)
+		}
+		if len(keys) > 0 {
+			mh.HubKey = s.shelfURL("/library/metadata/"+strings.Join(keys, ","), generation)
+		}
+		return mh
+	}}
 }
 
 // stampIncluded sets includedAt (when an item joined Continue Watching) to
@@ -313,52 +332,100 @@ func stampIncluded(md []model.Metadata) {
 	}
 }
 
+type hubTitlePageKey struct{}
+
+type hubTitlePage struct {
+	guids       map[frontend.RatingKey]string
+	plexMeta    map[frontend.RatingKey]frontend.CachedMetadataOverlay
+	hasPlexMeta bool
+	state       map[frontend.RatingKey]frontend.WatchStatus
+	slots       *slotMediaPage
+	resumes     map[frontend.RatingKey]bool
+	overlays    bool
+}
+
+// paintHubPages batches only the selected pages. Shelf membership and
+// continuation receipts have already been cut using their own row policy.
+func (s *Server) paintHubPages(ctx context.Context, pr *Request, pages []hubRender) []model.Hub {
+	if !reqmemo.Active(ctx) {
+		ctx = reqmemo.With(ctx)
+	}
+	var all []frontend.Title
+	for _, page := range pages {
+		all = append(all, page.titles...)
+	}
+	batch := hubTitlePage{slots: &slotMediaPage{}}
+	if len(all) > 0 {
+		ctx = s.withSeriesRows(ctx, pr.User, all)
+		batch.state = s.stateFor(ctx, pr, all)
+		if pr.User != nil {
+			if pre, ok := s.playback().(resumePagePreloader); ok {
+				var playable []frontend.RatingKey
+				for _, title := range all {
+					if isPlayable(title.Type) {
+						playable = append(playable, title.Key)
+					}
+				}
+				var probed []frontend.RatingKey
+				ctx, probed = pre.PreloadResumes(ctx, pr.User, playable)
+				batch.resumes = make(map[frontend.RatingKey]bool, len(probed))
+				for _, k := range probed {
+					batch.resumes[k] = true
+				}
+			}
+		}
+		if guid := s.libraryGUIDs(); guid != nil {
+			batch.guids = guid.CachedMany(ctx, renderTitleKeys(all))
+		}
+		if s.plexMetaOn() {
+			batch.plexMeta = s.libraryMetadata().CachedMany(ctx, renderTitleKeys(all))
+			batch.hasPlexMeta = true
+		}
+		if d := s.discovery(); d != nil {
+			if d.Ratings != nil {
+				ctx = d.Ratings.WithPage(ctx, all)
+			}
+			if d.Overlays != nil {
+				if next, err := d.Overlays.WithTitlePage(ctx, pr.User, all); err == nil {
+					ctx = next
+					batch.overlays = true
+				}
+			}
+		}
+	}
+	ctx = context.WithValue(ctx, hubTitlePageKey{}, batch)
+	out := make([]model.Hub, 0, len(pages))
+	for _, page := range pages {
+		out = append(out, page.paint(ctx))
+	}
+	s.finishSlotPage(ctx, pr, batch.slots)
+	return out
+}
+
 func (s *Server) renderHubs(ctx context.Context, pr *Request, hubs []frontend.Hub, hc hubCtx) []model.Hub {
 	if !reqmemo.Active(ctx) {
 		ctx = reqmemo.With(ctx)
 	}
-	if len(hubs) > 1 {
-		var all []frontend.Title
-		var preload []frontend.RatingKey
-		seen := map[frontend.RatingKey]bool{}
-		for i := range hubs {
-			for j := range hubs[i].Items {
-				t := hubs[i].Items[j]
-				if t.Key == 0 || t.Key.IsPluginKey() || seen[t.Key] {
-					continue
+	if pre, ok := s.catalog().(frontend.StoredTitlePreloader); ok && len(hubs) > 1 {
+		var keys []frontend.RatingKey
+		for _, h := range hubs {
+			for _, t := range h.Items {
+				if t.Key != 0 && !t.Key.IsPluginKey() {
+					keys = append(keys, t.Key)
 				}
-				seen[t.Key] = true
-				all = append(all, t)
-				preload = append(preload, t.Key)
 			}
 		}
-		if pre, ok := s.catalog().(frontend.StoredTitlePreloader); ok && len(preload) > 1 {
-			pre.PreloadStored(ctx, preload)
-		}
-		if len(all) > 0 {
-			var viewer *frontend.User
-			if pr != nil {
-				viewer = pr.User
-			}
-			ctx = s.withSeriesRows(ctx, viewer, all)
-			if d := s.discovery(); d != nil {
-				if d.Ratings != nil {
-					ctx = d.Ratings.WithPage(ctx, all)
-				}
-				if d.Overlays != nil {
-					if next, err := d.Overlays.WithTitlePage(ctx, viewer, all); err == nil {
-						ctx = next
-					}
-				}
-			}
-			s.preloadUltraBlur(ctx, all)
+		if len(keys) > 1 {
+			pre.PreloadStored(ctx, keys)
 		}
 	}
-	out := make([]model.Hub, 0, len(hubs))
+	pages := make([]hubRender, 0, len(hubs))
 	for _, h := range hubs {
-		out = append(out, s.renderHub(ctx, pr, hubSpec{Hub: h}, hc))
+		spec := hubSpec{Hub: h}
+		rowCtx, vis := s.hubVisibility(spec, hc)
+		pages = append(pages, s.prepareHub(ctx, pr, spec, rowCtx, vis))
 	}
-	return out
+	return s.paintHubPages(ctx, pr, pages)
 }
 
 func countParam(r *http.Request, def int) int {
@@ -480,10 +547,6 @@ func (s *Server) continueHub(ctx context.Context, pr *Request, v cwVariant, sec 
 }
 
 func (s *Server) recentlyAddedHub(ctx context.Context, pr *Request, sec Section, count int) (hubSpec, error) {
-	return s.recentlyAddedHubPage(ctx, pr, sec, count, false)
-}
-
-func (s *Server) recentlyAddedHubPage(ctx context.Context, pr *Request, sec Section, count int, noTotal bool) (hubSpec, error) {
 	var (
 		items []frontend.Title
 		more  bool
@@ -508,7 +571,6 @@ func (s *Server) recentlyAddedHubPage(ctx context.Context, pr *Request, sec Sect
 	} else {
 		recent := s.exp().NewRecent(frontend.RecentOptions{Visibility: s.sectionVisibility(sec), Unrestricted: func(u *frontend.User) bool { return !s.viewerRestricted(u) }})
 		items, more, err = recent.Added(ctx, pr.User, sec.Type, count, func(ctx context.Context, q frontend.BrowseQuery) (frontend.Page, error) {
-			q.NoTotal = noTotal
 			q.Filter, _ = s.sectionBrowseScope(ctx, sec, pr.User, q.Filter)
 			return s.catalogBrowse(ctx, q)
 		})
@@ -606,31 +668,57 @@ func (s *Server) buildHomeHubs(r *http.Request, promotedOnly bool) homeBuild {
 		hubs = append(hubs, source.CollectionCardHubs(ctx, pr.User, hc, count)...)
 	}
 	includeContinue := !metadataOptionOn(q.Get("excludeContinueWatching"))
-	hubs, ondeckHub, cwHomeSpec, cwHomeRendered := s.prepareHomeContinueAndOnDeck(ctx, pr, hc, hubs, selected, includeContinue, count)
+	progress := s.homeProgressSpecs(ctx, pr, selected, includeContinue, count)
+	var discovery []frontend.Hub
+	for _, spec := range s.discoveryHubs(ctx, pr, count) {
+		discovery = append(discovery, spec.Hub)
+	}
+
+	pages := make([]hubRender, 0, len(progress)+len(hubs)+len(discovery))
+	ids := make([]string, 0, len(hubs)+len(discovery))
+	vis := s.visibility()
+	for _, spec := range progress {
+		pages = append(pages, s.prepareHub(ctx, pr, spec, hubCtx{}, vis))
+	}
+	add := func(hub frontend.Hub) {
+		pages = append(pages, s.prepareHub(ctx, pr, hubSpec{Hub: hub}, hubCtx{}, vis))
+		ids = append(ids, hub.ID)
+	}
+	for _, hub := range hubs {
+		if hub.ID != "home.ondeck" && frontend.HomePurpose(hub) != "continue" && (!promotedOnly || hub.Promoted) {
+			add(hub)
+		}
+	}
+	for _, hub := range discovery {
+		add(hub)
+	}
+	paintedRows := s.paintHubPages(ctx, pr, pages)
+	painted := make(map[string][]model.Hub, len(ids))
+	for i, id := range ids {
+		painted[id] = append(painted[id], paintedRows[len(progress)+i])
+	}
+	hubs, ondeckHub := s.placeHomeOnDeck(ctx, pr, hc, hubs, selected, progress, paintedRows[:len(progress)])
+
 	assembly := frontend.HomeAssembly[model.Hub]{
 		Render: func(hub frontend.Hub) model.Hub {
 			if hub.ID == "home.ondeck" && ondeckHub != nil {
 				return *ondeckHub
 			}
-			return s.renderHub(ctx, pr, hubSpec{Hub: hub}, hubCtx{})
+			rows := painted[hub.ID]
+			painted[hub.ID] = rows[1:]
+			return rows[0]
 		},
 		Identity:    func(row model.Hub) string { return row.HubIdentifier },
 		Report:      homeLayoutFacts,
 		InLibraries: func(frontend.Hub) bool { return true },
 		Continue: func() (frontend.Hub, model.Hub) {
-			return cwHomeSpec.Hub, cwHomeRendered
+			return progress[0].Hub, paintedRows[0]
 		},
 		Playlists: func() (model.Hub, bool) {
 			hub, _, ok := s.playlistsHubProjection(ctx, pr, count)
 			return hub, ok
 		},
-		Discovery: func() []frontend.Hub {
-			var disc []frontend.Hub
-			for _, spec := range s.discoveryHubs(ctx, pr, count) {
-				disc = append(disc, spec.Hub)
-			}
-			return disc
-		},
+		Discovery: func() []frontend.Hub { return discovery },
 		Live: func() (model.Hub, bool) {
 			hub, _ := s.liveTVHubProjection(r)
 			if hub == nil {

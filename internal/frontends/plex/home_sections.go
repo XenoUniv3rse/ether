@@ -148,14 +148,35 @@ func (s *Server) sectionHubs(w http.ResponseWriter, r *http.Request, promotedOnl
 	})
 }
 
-// pluginSectionHubs paints a plugin library's rows: its first rows tab,
+type pluginSectionPaint struct {
+	pages  []hubRender
+	layout []frontend.NeutralHomeRow
+	served map[string]frontend.Hub
+}
+
+func (p pluginSectionPaint) rows(painted []model.Hub) []model.Hub {
+	var out []model.Hub
+	for i, row := range painted {
+		if row.Size > 0 {
+			out = append(out, presentHub(row, p.layout[i]))
+		}
+	}
+	return out
+}
+
+func (s *Server) pluginSectionHubs(ctx context.Context, pr *Request, sec Section, count int) ([]model.Hub, map[string]frontend.Hub) {
+	plan := s.preparePluginSectionHubs(ctx, pr, sec, count)
+	return plan.rows(s.paintHubPages(ctx, pr, plan.pages)), plan.served
+}
+
+// preparePluginSectionHubs prepares a plugin library's first rows tab,
 // already arranged by that page (order, length, Look), with their own row
 // ids, drawn the way each row's Present asks.
-func (s *Server) pluginSectionHubs(ctx context.Context, pr *Request, sec Section, visibleCount int) ([]model.Hub, map[string]frontend.Hub) {
+func (s *Server) preparePluginSectionHubs(ctx context.Context, pr *Request, sec Section, visibleCount int) pluginSectionPaint {
 	exp := s.exp()
 	reader, ok := exp.(frontend.PluginLibraryRowsReader)
 	if !ok || visibleCount <= 0 {
-		return nil, nil
+		return pluginSectionPaint{}
 	}
 	rows, err := reader.PluginLibraryRows(ctx, pr.User, plexDevice(pr), sec.IDString(), "")
 	if err != nil {
@@ -163,8 +184,7 @@ func (s *Server) pluginSectionHubs(ctx context.Context, pr *Request, sec Section
 	}
 	secCopy := sec
 	vis := s.sectionVisibility(sec)
-	served := map[string]frontend.Hub{}
-	var hubs []model.Hub
+	plan := pluginSectionPaint{served: map[string]frontend.Hub{}}
 	for _, row := range rows {
 		if row.Layout.Present.Surface != nil {
 			continue
@@ -185,43 +205,46 @@ func (s *Server) pluginSectionHubs(ctx context.Context, pr *Request, sec Section
 		if hasExtra {
 			items = items[:visibleCount]
 		}
-		byKey := make(map[string]*frontend.Title, len(items))
-		for i := range items {
-			byKey[items[i].Key.String()] = &items[i]
-		}
-		md := s.renderTitles(ctx, pr, items, renderOpts{media: true, storedOnly: true, vis: &vis, section: &secCopy})
-		if len(md) == 0 {
-			continue
-		}
-		keys := make([]string, 0, len(md))
-		for i := range md {
-			md[i].Type = kindTypeForBase(string(sec.Type), md[i].Type, byKey[md[i].RatingKey])
-			keys = append(keys, md[i].RatingKey)
-		}
-		fh := frontend.Hub{ID: row.ID, Title: row.Title, Type: sec.Type, Items: rawItems, Promoted: true}
-		s.rememberHub(ctx, pr, hubSpec{Hub: fh}, hubCtx{section: sec.ID})
-		total := len(rawItems)
-		if hasExtra && total <= len(md) {
-			total = len(md) + 1
-		}
-		mh := model.Hub{
-			HubKey:        "/library/metadata/" + strings.Join(keys, ","),
-			Key:           hubItemsKey(fh, hubCtx{section: sec.ID}),
-			Title:         row.Title,
-			Type:          string(sec.Type),
-			HubIdentifier: row.ID,
-			Context:       "hub." + string(sec.Type) + "." + pluginRowContext(row.ID),
-			Size:          len(md),
-			TotalSize:     model.Ptr(total),
-			More:          hasExtra || total > len(md),
-			Style:         "shelf",
-			Promoted:      model.Ptr(true),
-			Metadata:      md,
-		}
-		hubs = append(hubs, presentHub(mh, frontend.NeutralHomeRow{Present: row.Layout.Present}))
-		served[row.ID] = fh
+		plan.layout = append(plan.layout, frontend.NeutralHomeRow{Present: row.Layout.Present})
+		plan.pages = append(plan.pages, hubRender{titles: items, paint: func(ctx context.Context) model.Hub {
+			byKey := make(map[string]*frontend.Title, len(items))
+			for i := range items {
+				byKey[items[i].Key.String()] = &items[i]
+			}
+			md := s.renderTitles(ctx, pr, items, renderOpts{media: true, storedOnly: true, vis: &vis, section: &secCopy})
+			if len(md) == 0 {
+				return model.Hub{}
+			}
+			keys := make([]string, 0, len(md))
+			for i := range md {
+				md[i].Type = kindTypeForBase(string(sec.Type), md[i].Type, byKey[md[i].RatingKey])
+				keys = append(keys, md[i].RatingKey)
+			}
+			fh := frontend.Hub{ID: row.ID, Title: row.Title, Type: sec.Type, Items: rawItems, Promoted: true}
+			s.rememberHub(ctx, pr, hubSpec{Hub: fh}, hubCtx{section: sec.ID})
+			total := len(rawItems)
+			if hasExtra && total <= len(md) {
+				total = len(md) + 1
+			}
+			mh := model.Hub{
+				HubKey:        "/library/metadata/" + strings.Join(keys, ","),
+				Key:           hubItemsKey(fh, hubCtx{section: sec.ID}),
+				Title:         row.Title,
+				Type:          string(sec.Type),
+				HubIdentifier: row.ID,
+				Context:       "hub." + string(sec.Type) + "." + pluginRowContext(row.ID),
+				Size:          len(md),
+				TotalSize:     model.Ptr(total),
+				More:          hasExtra || total > len(md),
+				Style:         "shelf",
+				Promoted:      model.Ptr(true),
+				Metadata:      md,
+			}
+			plan.served[row.ID] = fh
+			return mh
+		}})
 	}
-	return hubs, served
+	return plan
 }
 
 // pluginRowContext is the Plex context suffix of a plugin library row
@@ -262,14 +285,8 @@ func (s *Server) buildSectionHubs(r *http.Request, sec Section, promotedOnly boo
 	served := map[string]frontend.Hub{}
 	var layoutHubs []frontend.Hub
 	var layoutNeutral []frontend.NeutralHomeRow
-	add := func(hs hubSpec) {
-		mh := s.renderHubWithVisibility(ctx, pr, hs, hc, vis)
-		mc.Hub = append(mc.Hub, mh)
-		hub, neutral := homeLayoutFacts(mh)
-		layoutHubs = append(layoutHubs, hub)
-		layoutNeutral = append(layoutNeutral, neutral)
-		served[mh.HubIdentifier] = hs.Hub
-	}
+	var specs []hubSpec
+
 	if !promotedOnly && !metadataOptionOn(r.URL.Query().Get("excludeContinueWatching")) && (!isKindSection(sec) || isCustomTVSection(sec)) {
 		cw := s.continueHub(ctx, pr, cwSection, sec, visibleCount)
 		if !isCustomTVSection(sec) {
@@ -277,11 +294,11 @@ func (s *Server) buildSectionHubs(r *http.Request, sec Section, promotedOnly boo
 			// libraries are scoped inside continueHub.
 			cw.Hub.Items = s.filterSectionMembers(ctx, sec, cw.Hub.Items)
 		}
-		add(cw)
+		specs = append(specs, cw)
 	}
 	if !isKindSection(sec) {
 		if ra, err := s.recentlyAddedHub(ctx, pr, sec, count); err == nil {
-			add(ra)
+			specs = append(specs, ra)
 		} else {
 			s.log.Warn("recently added hub", "section", sec.ID, "err", err)
 		}
@@ -304,7 +321,7 @@ func (s *Server) buildSectionHubs(r *http.Request, sec Section, promotedOnly boo
 				if promotedOnly {
 					view.Promoted = true
 				}
-				add(hubSpec{Hub: view})
+				specs = append(specs, hubSpec{Hub: view})
 			}
 		}
 	}
@@ -320,9 +337,20 @@ func (s *Server) buildSectionHubs(r *http.Request, sec Section, promotedOnly boo
 					h.Promoted = true
 				}
 				hs.Hub = h
-				add(hs)
+				specs = append(specs, hs)
 			}
 		}
+	}
+	pages := make([]hubRender, 0, len(specs))
+	for _, spec := range specs {
+		pages = append(pages, s.prepareHub(ctx, pr, spec, hc, vis))
+	}
+	mc.Hub = s.paintHubPages(ctx, pr, pages)
+	for i, row := range mc.Hub {
+		hub, neutral := homeLayoutFacts(row)
+		layoutHubs = append(layoutHubs, hub)
+		layoutNeutral = append(layoutNeutral, neutral)
+		served[row.HubIdentifier] = specs[i].Hub
 	}
 	sectionName := "library:" + strconv.Itoa(sec.ID)
 	mc.Hub = ownerHeroHubs(stableHomeHubs(pr, s.arrangeHomeRows(ctx, pr, pc, sectionName, mc.Hub, layoutHubs, layoutNeutral)))
@@ -610,64 +638,49 @@ func (s *Server) buildScopedHomeHubs(r *http.Request, promotedOnly bool) homeBui
 		sharedDisc = disc
 	}
 
-	buildOneSection := func(sec Section, withContinue bool, sel map[string]bool) ([]model.Hub, map[string]frontend.Hub, bool) {
+	type finishSection func([]model.Hub) ([]model.Hub, map[string]frontend.Hub, bool)
+	var pages []hubRender
+	prepareSection := func(sec Section, withContinue bool, sel map[string]bool) finishSection {
 		secServed := map[string]frontend.Hub{}
 		if isPluginKindSection(sec) {
-			kindHubs, kindServed := s.pluginSectionHubs(ctx, pr, sec, count)
-			var out []model.Hub
-			for _, mh := range kindHubs {
-				if !inLibraryBlock(mh, sec) {
-					continue
+			plan := s.preparePluginSectionHubs(ctx, pr, sec, count)
+			start := len(pages)
+			pages = append(pages, plan.pages...)
+			return func(painted []model.Hub) ([]model.Hub, map[string]frontend.Hub, bool) {
+				kindHubs := plan.rows(painted[start : start+len(plan.pages)])
+				var out []model.Hub
+				for _, mh := range kindHubs {
+					if !inLibraryBlock(mh, sec) {
+						continue
+					}
+					id := libraryHubID(mh.HubIdentifier, sec)
+					if sel != nil && !sel[mh.HubIdentifier] && !sel[id] {
+						continue
+					}
+					if src, ok := plan.served[mh.HubIdentifier]; ok {
+						secServed[id] = src
+					}
+					mh.HubIdentifier = id
+					if strings.EqualFold(mh.Style, "hero") {
+						mh.Style = "shelf"
+					}
+					out = append(out, mh)
 				}
-				id := libraryHubID(mh.HubIdentifier, sec)
-				if sel != nil && !sel[mh.HubIdentifier] && !sel[id] {
-					continue
-				}
-				if src, ok := kindServed[mh.HubIdentifier]; ok {
-					secServed[id] = src
-				}
-				mh.HubIdentifier = id
-				if strings.EqualFold(mh.Style, "hero") {
-					mh.Style = "shelf"
-				}
-				out = append(out, mh)
+				return nonEmptyUniqueHubs(out), secServed, false
 			}
-			return nonEmptyUniqueHubs(out), secServed, false
 		}
 		secCopy := sec
 		renderHC := hubCtx{visible: count, renderSec: &secCopy}
 		pc := s.hubContext(pr, sec.ID)
 		pc.HomeScoped = true
 		vis := s.sectionVisibility(sec)
-		var secRows []model.Hub
-		var layoutHubs []frontend.Hub
-		var layoutNeutral []frontend.NeutralHomeRow
-		origByID := map[string]frontend.Hub{}
+		progress := s.homeProgressSpecs(ctx, pr, sel, withContinue && sec.ID == firstSec, count)
 		secProv := false
-		appendRow := func(mh model.Hub, src frontend.Hub, record bool) {
-			scoped := libraryHubID(mh.HubIdentifier, sec)
-			if sel != nil && !sel[mh.HubIdentifier] && !sel[scoped] {
-				return
-			}
-			secRows = append(secRows, mh)
-			hFact, nFact := homeLayoutFacts(mh)
-			layoutHubs = append(layoutHubs, hFact)
-			layoutNeutral = append(layoutNeutral, nFact)
-			if record {
-				origByID[mh.HubIdentifier] = src
-			}
-		}
-		if withContinue && sec.ID == firstSec {
-			_, ondeckHub, cwSpec, cwRendered := s.prepareHomeContinueAndOnDeck(ctx, pr, pc, nil, sel, true, count)
-			appendRow(cwRendered, cwSpec.Hub, true)
-			if ondeckHub != nil {
-				appendRow(*ondeckHub, frontend.Hub{ID: "home.ondeck", Title: ondeckHub.Title, Type: frontend.TypeEpisode, Promoted: true}, true)
-			}
-		}
+		var specs []hubSpec
+
 		if !isKindSection(sec) {
-			if ra, err := s.recentlyAddedHubPage(ctx, pr, sec, count, true); err == nil {
-				mh := s.renderHubWithVisibility(ctx, pr, ra, renderHC, vis)
-				appendRow(mh, ra.Hub, true)
+			if ra, err := s.recentlyAddedHub(ctx, pr, sec, count); err == nil {
+				specs = append(specs, ra)
 			}
 		}
 		if s.recommender() != nil {
@@ -690,9 +703,7 @@ func (s *Server) buildScopedHomeHubs(r *http.Request, promotedOnly bool) homeBui
 				rem := view
 				rem.ID = scopedID
 				s.rememberHub(ctx, pr, hubSpec{Hub: rem}, hubCtx{section: sec.ID})
-				spec := hubSpec{Hub: view, key: hubItemsKey(rem, hubCtx{section: sec.ID})}
-				mh := s.renderHubWithVisibility(ctx, pr, spec, renderHC, vis)
-				appendRow(mh, view, true)
+				specs = append(specs, hubSpec{Hub: view, key: hubItemsKey(rem, hubCtx{section: sec.ID})})
 			}
 		}
 		if !isKindSection(sec) {
@@ -712,37 +723,73 @@ func (s *Server) buildScopedHomeHubs(r *http.Request, promotedOnly bool) homeBui
 				rem := view
 				rem.ID = scopedID
 				s.rememberHub(ctx, pr, hubSpec{Hub: rem}, hubCtx{section: sec.ID})
-				spec := hubSpec{Hub: view, key: hubItemsKey(rem, hubCtx{section: sec.ID})}
-				mh := s.renderHubWithVisibility(ctx, pr, spec, renderHC, vis)
-				appendRow(mh, view, true)
+				specs = append(specs, hubSpec{Hub: view, key: hubItemsKey(rem, hubCtx{section: sec.ID})})
 			}
 		}
-		if sec.ID == firstSec {
-			if source, ok := s.recommender().(collectionCardHubSource); ok {
-				for _, h := range source.CollectionCardHubs(ctx, pr.User, pc, count) {
-					appendRow(s.renderCollectionCardHub(ctx, pr, h), h, false)
+		pageStart := len(pages)
+		for _, spec := range progress {
+			pages = append(pages, s.prepareHub(ctx, pr, spec, hubCtx{}, s.visibility()))
+		}
+		for _, spec := range specs {
+			pages = append(pages, s.prepareHub(ctx, pr, spec, renderHC, vis))
+		}
+		pageEnd := len(pages)
+		return func(rows []model.Hub) ([]model.Hub, map[string]frontend.Hub, bool) {
+			var secRows []model.Hub
+			var layoutHubs []frontend.Hub
+			var layoutNeutral []frontend.NeutralHomeRow
+			origByID := map[string]frontend.Hub{}
+			appendRow := func(mh model.Hub, src frontend.Hub, record bool) {
+				scoped := libraryHubID(mh.HubIdentifier, sec)
+				if sel != nil && !sel[mh.HubIdentifier] && !sel[scoped] {
+					return
+				}
+				secRows = append(secRows, mh)
+				hFact, nFact := homeLayoutFacts(mh)
+				layoutHubs = append(layoutHubs, hFact)
+				layoutNeutral = append(layoutNeutral, nFact)
+				if record {
+					origByID[mh.HubIdentifier] = src
 				}
 			}
+			painted := rows[pageStart:pageEnd]
+			if len(progress) > 0 {
+				appendRow(painted[0], progress[0].Hub, true)
+				_, ondeckHub := s.placeHomeOnDeck(ctx, pr, pc, nil, sel, progress, painted[:len(progress)])
+				if ondeckHub != nil {
+					appendRow(*ondeckHub, frontend.Hub{ID: "home.ondeck", Title: ondeckHub.Title, Type: frontend.TypeEpisode, Promoted: true}, true)
+				}
+			}
+			for i, row := range painted[len(progress):] {
+				appendRow(row, specs[i].Hub, true)
+			}
+			if sec.ID == firstSec {
+				if source, ok := s.recommender().(collectionCardHubSource); ok {
+					for _, h := range source.CollectionCardHubs(ctx, pr.User, pc, count) {
+						appendRow(s.renderCollectionCardHub(ctx, pr, h), h, false)
+					}
+				}
+			}
+			secRows = s.arrangeHomeRows(ctx, pr, pc, "home", secRows, layoutHubs, layoutNeutral)
+			out := make([]model.Hub, 0, len(secRows))
+			for _, mh := range secRows {
+				if !inLibraryBlock(mh, sec) {
+					continue
+				}
+				oldID := mh.HubIdentifier
+				if mh.Type != "collection" {
+					mh.HubIdentifier = libraryHubID(oldID, sec)
+				}
+				if mh.HubIdentifier != "home.continue" && strings.EqualFold(mh.Style, "hero") {
+					mh.Style = "shelf"
+				}
+				if src, ok := origByID[oldID]; ok {
+					secServed[mh.HubIdentifier] = src
+				}
+				out = append(out, mh)
+			}
+			return nonEmptyUniqueHubs(out), secServed, secProv
 		}
-		secRows = s.arrangeHomeRows(ctx, pr, pc, "home", secRows, layoutHubs, layoutNeutral)
-		out := make([]model.Hub, 0, len(secRows))
-		for _, mh := range secRows {
-			if !inLibraryBlock(mh, sec) {
-				continue
-			}
-			oldID := mh.HubIdentifier
-			if mh.Type != "collection" {
-				mh.HubIdentifier = libraryHubID(oldID, sec)
-			}
-			if mh.HubIdentifier != "home.continue" && strings.EqualFold(mh.Style, "hero") {
-				mh.Style = "shelf"
-			}
-			if src, ok := origByID[oldID]; ok {
-				secServed[mh.HubIdentifier] = src
-			}
-			out = append(out, mh)
-		}
-		return nonEmptyUniqueHubs(out), secServed, secProv
 	}
 
 	homeBudget := s.homeRowBudget(ctx, pr, s.hubContext(pr, 0))
@@ -766,6 +813,27 @@ func (s *Server) buildScopedHomeHubs(r *http.Request, promotedOnly bool) homeBui
 		}
 	}
 
+	// Select each library's pages before painting so pinned libraries share
+	// the same metadata reads. Keep parent and subset layout in their usual order.
+	finish := make(map[int]finishSection, len(allowedSecs))
+	for _, sec := range allowedSecs {
+		if selected != nil || parentOf[sec.ID] == 0 {
+			finish[sec.ID] = prepareSection(sec, includeContinue, selected)
+		}
+	}
+	parentFinish := map[int]finishSection{}
+	for _, sec := range explicitPinnedSecs {
+		if neededParents[sec.ID] && finish[sec.ID] == nil {
+			parentFinish[sec.ID] = prepareSection(sec, false, nil)
+		}
+	}
+	for _, sec := range allowedSecs {
+		if selected == nil && parentOf[sec.ID] != 0 {
+			finish[sec.ID] = prepareSection(sec, includeContinue, selected)
+		}
+	}
+	painted := s.paintHubPages(ctx, pr, pages)
+
 	served := map[string]frontend.Hub{}
 	secBuilt := make(map[int][]model.Hub, len(allowedSecs))
 	parentIdx := map[int]parentHubIndex{}
@@ -777,7 +845,7 @@ func (s *Server) buildScopedHomeHubs(r *http.Request, promotedOnly bool) homeBui
 		if selected == nil && parentOf[sec.ID] != 0 {
 			continue
 		}
-		rows, secServed, secProv := buildOneSection(sec, includeContinue, selected)
+		rows, secServed, secProv := finish[sec.ID](painted)
 		secBuilt[sec.ID] = rows
 		for id, h := range secServed {
 			served[id] = h
@@ -799,7 +867,7 @@ func (s *Server) buildScopedHomeHubs(r *http.Request, promotedOnly bool) homeBui
 			}
 			for _, pSec := range explicitPinnedSecs {
 				if pSec.ID == pID {
-					pRows, _, _ := buildOneSection(pSec, false, nil)
+					pRows, _, _ := parentFinish[pID](painted)
 					parentIdx[pID] = indexParentHubRows(pRows, pID, parentRefCap)
 					break
 				}
@@ -813,7 +881,7 @@ func (s *Server) buildScopedHomeHubs(r *http.Request, promotedOnly bool) homeBui
 		if selected != nil || parentOf[sec.ID] == 0 {
 			continue
 		}
-		rows, secServed, secProv := buildOneSection(sec, includeContinue, selected)
+		rows, secServed, secProv := finish[sec.ID](painted)
 		if secProv {
 			provisional = true
 		}

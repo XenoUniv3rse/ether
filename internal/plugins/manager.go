@@ -504,7 +504,7 @@ func (m *Manager) TextResolver() extend.TextResolver {
 
 // ResolveText looks up key in the plugin's strings for locale, then en.
 func (m *Manager) ResolveText(ctx context.Context, plugin, key, locale string) (string, bool) {
-	row, err := m.store.settings(ctx, plugin)
+	row, err := m.store.requestSettings(ctx, plugin)
 	if err != nil {
 		return "", false
 	}

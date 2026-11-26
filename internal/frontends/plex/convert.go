@@ -1820,6 +1820,23 @@ func languageTag(code string) string {
 	return canonicalLanguagePrimary(strings.ToLower(code))
 }
 
+func renderTitleKeys(ts []frontend.Title) []frontend.RatingKey {
+	lookup := make([]frontend.RatingKey, 0, len(ts)*2)
+	for i := range ts {
+		t := &ts[i]
+		lookup = append(lookup, t.Key)
+		if show := titleShow(t); show != 0 && show != t.Key {
+			lookup = append(lookup, show)
+		}
+		if t.Type == frontend.TypeEpisode {
+			if parent := titleParent(t); parent != 0 {
+				lookup = append(lookup, parent)
+			}
+		}
+	}
+	return lookup
+}
+
 // renderTitles renders a list, loading the user's watch state in one call.
 func (s *Server) renderTitles(ctx context.Context, pr *Request, ts []frontend.Title, o renderOpts) []model.Metadata {
 	if len(ts) > 1 {
@@ -1852,12 +1869,13 @@ func (s *Server) renderTitles(ctx context.Context, pr *Request, ts []frontend.Ti
 		// row's metadata reads the attribution from the request memo.
 		s.sectionsForTitles(ctx, ts)
 	}
+	batch, batched := ctx.Value(hubTitlePageKey{}).(hubTitlePage)
 	s.warmTitleDetails(ts, o.storedOnly)
 	if d := s.discovery(); d != nil {
 		if d.Ratings != nil {
 			ctx = d.Ratings.WithPage(ctx, ts)
 		}
-		if d.Overlays != nil {
+		if d.Overlays != nil && !batch.overlays {
 			var viewer *frontend.User
 			if pr != nil {
 				viewer = pr.User
@@ -1870,39 +1888,37 @@ func (s *Server) renderTitles(ctx context.Context, pr *Request, ts []frontend.Ti
 		}
 	}
 	if o.state == nil {
-		o.state = s.stateFor(ctx, pr, ts)
+		if batched && batch.state != nil {
+			o.state = batch.state
+		} else {
+			o.state = s.stateFor(ctx, pr, ts)
+		}
 	}
 	s.preloadUltraBlur(ctx, ts)
 	ctx = s.preloadPageStreams(ctx, pr, ts, o)
 	var guids map[frontend.RatingKey]string
 	var missingGUIDs []frontend.RatingKey
-	lookup := make([]frontend.RatingKey, 0, len(ts)*2)
-	for i := range ts {
-		t := &ts[i]
-		lookup = append(lookup, t.Key)
-		if show := titleShow(t); show != 0 && show != t.Key {
-			lookup = append(lookup, show)
-		}
-		if t.Type == frontend.TypeEpisode {
-			if parent := titleParent(t); parent != 0 {
-				lookup = append(lookup, parent)
-			}
-		}
-	}
+	lookup := renderTitleKeys(ts)
 	guidSrc := s.libraryGUIDs()
 	if guidSrc != nil {
-		guids = guidSrc.CachedMany(ctx, lookup)
+		if batched && !o.searchIdentity {
+			guids = batch.guids
+		} else {
+			guids = guidSrc.CachedMany(ctx, lookup)
+		}
 		if o.searchIdentity {
 			guids = resolveSearchGUIDs(ctx, guidSrc, ts, guids)
 		}
 	}
-	ctx = s.withPlexMeta(ctx, lookup, guids, !o.storedOnly)
+	ctx = s.withPlexMeta(ctx, lookup, guids, !o.storedOnly, o.searchIdentity)
 	ctx = s.withPlexCredits(ctx, lookup, guids, o.detail && !o.storedOnly)
 	var order episodeOrderView
 	if !o.storedOnly {
 		order = s.episodeOrderList(ctx, pr, ts, o.detail && !o.batchDetail)
 	}
-	if len(ts) > 1 {
+	if batched {
+		o.slotPage = batch.slots
+	} else if len(ts) > 1 {
 		o.slotPage = &slotMediaPage{}
 	}
 	out := make([]model.Metadata, len(ts))
@@ -1940,7 +1956,9 @@ func (s *Server) renderTitles(ctx context.Context, pr *Request, ts []frontend.Ti
 			}
 		}
 	}
-	s.finishSlotPage(ctx, pr, o.slotPage)
+	if !batched {
+		s.finishSlotPage(ctx, pr, o.slotPage)
+	}
 	if guidSrc != nil && len(missingGUIDs) > 0 && !o.storedOnly {
 		guidSrc.Schedule(missingGUIDs...)
 	}
@@ -2130,9 +2148,13 @@ func (s *Server) stateFor(ctx context.Context, pr *Request, ts []frontend.Title)
 	if s.state() == nil || pr.User == nil || len(ts) == 0 {
 		return nil
 	}
-	keys := make([]frontend.RatingKey, len(ts))
+	keys := make([]frontend.RatingKey, 0, len(ts))
+	seen := make(map[frontend.RatingKey]bool, len(ts))
 	for i := range ts {
-		keys[i] = ts[i].Key
+		if k := ts[i].Key; !seen[k] {
+			seen[k] = true
+			keys = append(keys, k)
+		}
 	}
 	st, err := reqmemo.Do(ctx, fmt.Sprintf("plex:state:%d:%v", pr.User.ID, keys), func() (map[frontend.RatingKey]frontend.WatchStatus, error) {
 		return s.state().GetMany(ctx, pr.User.ID, keys)

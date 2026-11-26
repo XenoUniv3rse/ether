@@ -23,7 +23,7 @@ func RecentlyAdded(ctx context.Context, viewer *core.User, kind core.MediaType, 
 func (r Recent) Added(ctx context.Context, viewer *core.User, kind core.MediaType, count int, browse func(context.Context, core.BrowseQuery) (core.Page, error)) ([]core.Title, bool, error) {
 	ctx = core.WithCatalogViewer(ctx, viewer)
 	if r.Unrestricted != nil && r.Unrestricted(viewer) {
-		q := core.BrowseQuery{Filter: core.Filter{Type: kind, KnownAddedDate: true}, Sort: core.SortAdded, Desc: true, Limit: count + 1}
+		q := core.BrowseQuery{Filter: core.Filter{Type: kind, KnownAddedDate: true}, Sort: core.SortAdded, Desc: true, Limit: count + 1, NoTotal: true}
 		if viewer != nil {
 			q.Filter.MaxContentRating = viewer.MaxContentRating
 		}
@@ -43,7 +43,7 @@ func (r Recent) Added(ctx context.Context, viewer *core.User, kind core.MediaTyp
 	var items []core.Title
 	for offset < 1000 {
 		pageSize := min(fetch, 1000-offset)
-		q := core.BrowseQuery{Filter: core.Filter{Type: kind, KnownAddedDate: true}, Sort: core.SortAdded, Desc: true, Offset: offset, Limit: pageSize}
+		q := core.BrowseQuery{Filter: core.Filter{Type: kind, KnownAddedDate: true}, Sort: core.SortAdded, Desc: true, Offset: offset, Limit: pageSize, NoTotal: true}
 		if viewer != nil {
 			q.Filter.MaxContentRating = viewer.MaxContentRating
 		}

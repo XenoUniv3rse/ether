@@ -277,7 +277,13 @@ func (s *Server) preloadPageStreams(ctx context.Context, pr *Request, ts []front
 	}
 	var probedKeys []frontend.RatingKey
 	if len(playable) > 0 && s.playback() != nil {
-		if pre, ok := s.playback().(resumePagePreloader); ok {
+		if page, ok := ctx.Value(hubTitlePageKey{}).(hubTitlePage); ok && page.resumes != nil {
+			for _, k := range playable {
+				if page.resumes[k] {
+					probedKeys = append(probedKeys, k)
+				}
+			}
+		} else if pre, ok := s.playback().(resumePagePreloader); ok {
 			ctx, probedKeys = pre.PreloadResumes(ctx, pr.User, playable)
 		}
 		if !o.detail && !o.detailEpisodes {
