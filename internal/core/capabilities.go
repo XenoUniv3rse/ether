@@ -267,6 +267,11 @@ type IndexerSearchOptions struct {
 	// running after an early return or WaitTimeout. Zero uses the indexer
 	// manager's default ceiling (30 s).
 	BackgroundTimeout time.Duration
+	// ContinueSearch receives a snapshot function when pending indexers are
+	// left running. Snapshots include results from the same fan-out as they
+	// arrive. ContinuationContext, when set, bounds that work's lifetime.
+	ContinueSearch      func(snapshot func(context.Context) IndexerSearchResult)
+	ContinuationContext context.Context
 }
 
 // IndexerSearchResult carries merged, deduplicated releases alongside

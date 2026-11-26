@@ -241,8 +241,6 @@ func writeVideoDownloadError(protocol frontend.Protocol, w http.ResponseWriter, 
 		http.Error(w, "Forbidden", http.StatusForbidden)
 	case errors.Is(err, frontend.ErrDownloadBudget), errors.Is(err, frontend.ErrDownloadLimit), errors.Is(err, frontend.ErrDownloadPaused):
 		http.Error(w, "Download temporarily unavailable", http.StatusTooManyRequests)
-	case errors.Is(err, frontend.ErrPrepareSlow):
-		streamError(protocol, w, frontend.ErrPreparing)
 	default:
 		streamError(protocol, w, err, languages...)
 	}

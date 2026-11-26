@@ -124,7 +124,7 @@ func WritePlaybackSourceProblem(w http.ResponseWriter, err error, languages ...s
 
 // WriteAppConnectionError reports admission failures before media headers are sent.
 func WriteAppConnectionError(w http.ResponseWriter, r *http.Request, err error) {
-	if WritePlaybackSourceProblem(w, err, r.Header.Get("Accept-Language")) {
+	if WritePlaybackPending(w, err, r.Header.Get("Accept-Language")) || WritePlaybackSourceProblem(w, err, r.Header.Get("Accept-Language")) {
 		return
 	}
 	var reqLang *RequiredAudioLanguageError

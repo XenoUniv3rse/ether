@@ -791,10 +791,7 @@ func (s *lazyStreams) writePlaybackError(w http.ResponseWriter, r *http.Request,
 	if frontend.WritePlaybackSourceProblem(w, err, r.Header.Get("Accept-Language")) {
 		return
 	}
-	if errors.Is(err, core.ErrPreparing) {
-		w.Header().Set("Retry-After", strconv.Itoa(core.PreparingRetrySeconds(err, 5)))
-		w.Header().Set("X-Ether-Media-Error", "preparing")
-		http.Error(w, core.PreparingMessage(err), http.StatusServiceUnavailable)
+	if frontend.WritePlaybackPending(w, err, r.Header.Get("Accept-Language")) {
 		return
 	}
 	if errors.Is(err, core.ErrJobsBusy) {

@@ -166,9 +166,9 @@ func TestPlaybackMessageNamesTheCause(t *testing.T) {
 		{"uncached and a timeout", errors.Join(notCached("a"), errors.New("timeout")), msgNotAvailable},
 		{"uncached among not-available", errors.Join(notCached("a"), fmt.Errorf("x: %w", core.ErrNotAvailable)), msgNotAvailable},
 		{"plain not available", fmt.Errorf("%q: %w", "x", core.ErrNotAvailable), msgNotAvailable},
-		{"sent to download", errors.Join(notCached("a"), fmt.Errorf("%q: %w", "b", core.ErrDownloadQueued)), msgDownloadQueued},
-		{"queued at TorBox behind active downloads", &core.UncachedError{Err: &core.DownloadQueuedError{Provider: "TorBox", ActiveDownloads: 3, Err: core.ErrDownloadQueued}}, "Not cached yet (queued at TorBox behind 3 active downloads). Try again later."},
-		{"preparing queued plugin release", &core.PreparingError{RetryAfter: 5 * time.Second, Err: &core.UncachedError{Err: core.ErrDownloadQueued}}, msgDownloadQueued},
+		{"sent to download", errors.Join(notCached("a"), fmt.Errorf("%q: %w", "b", core.ErrDownloadQueued)), "Waiting for the download service…"},
+		{"queued at TorBox behind active downloads", &core.UncachedError{Err: &core.DownloadQueuedError{Provider: "TorBox", ActiveDownloads: 3, Err: core.ErrDownloadQueued}}, "Waiting for the download service…"},
+		{"preparing queued plugin release", &core.PreparingError{RetryAfter: 5 * time.Second, Err: &core.UncachedError{Err: core.ErrDownloadQueued}}, "Waiting for the download service…"},
 		{"stream limit", core.ErrStreamLimit, msgStreamLimit},
 		{"cached-only", &core.UncachedError{Err: notCached("a"), CachedOnly: true}, msgNotCachedOnly},
 		{"cached-only, Usenet found nothing", &core.UncachedError{Err: notCached("a"), CachedOnly: true, Usenet: core.UsenetNone}, msgNotCachedOnlyNoNZB},
@@ -198,7 +198,7 @@ func TestDecisionExplainsMissingSources(t *testing.T) {
 // attempt, with the specific text available through the timeline.
 func TestTransientPlaybackErrorMapping(t *testing.T) {
 	s := &Server{log: slog.Default()}
-	for _, err := range []error{core.ErrSourceUnavailable, context.DeadlineExceeded, core.ErrPrepareSlow} {
+	for _, err := range []error{core.ErrSourceUnavailable, context.DeadlineExceeded} {
 		w := httptest.NewRecorder()
 		s.writeErr(w, httptest.NewRequest("GET", "/", nil), err)
 		if w.Code != 503 || w.Header().Get("Retry-After") != notAvailableRetryAfter {
@@ -250,9 +250,9 @@ func TestPlaybackFailureClientContract(t *testing.T) {
 	}{
 		{core.ErrNotAvailable, false}, {core.ErrNotCached, false},
 		{&core.UncachedError{Err: core.ErrNotCached, CachedOnly: true}, false},
-		{core.ErrDownloadRefused, false}, {core.ErrDownloadQueued, false}, {core.ErrDownloadLimit, false},
+		{core.ErrDownloadRefused, false}, {core.ErrDownloadLimit, false},
 		{core.ErrDebridAuth, true}, {core.ErrSourceUnavailable, true}, {core.ErrReleaseRejected, true},
-		{context.DeadlineExceeded, true}, {core.ErrPrepareSlow, false}, {core.ErrStreamLimit, false},
+		{context.DeadlineExceeded, true}, {core.ErrStreamLimit, false},
 		{core.ErrNoSources, false}, {errors.New("encoder failed"), true},
 	}
 
@@ -302,7 +302,7 @@ func TestPlaybackFailureClientContract(t *testing.T) {
 							checkTimeline()
 						}
 					}
-					if !errors.Is(failure, core.ErrPrepareSlow) && p.calls != 1 {
+					if p.calls != 1 {
 						t.Fatalf("failed source was retried %d times", p.calls)
 					}
 					// Also exercise clients that skip decision: every media route must

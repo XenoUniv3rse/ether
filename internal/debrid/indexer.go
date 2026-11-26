@@ -161,10 +161,22 @@ func (x *Indexer) SearchWithOptions(ctx context.Context, req core.SearchRequest,
 			}},
 		}, nil
 	}
+	if publish := opts.ContinueSearch; publish != nil {
+		opts.ContinueSearch = func(snapshot func(context.Context) core.IndexerSearchResult) {
+			publish(func(pollCtx context.Context) core.IndexerSearchResult {
+				return x.filterControlledSearch(pollCtx, snapshot(pollCtx), true)
+			})
+		}
+	}
 	res, err := csi.SearchWithOptions(ctx, req, opts)
 	if err != nil {
 		return res, err
 	}
+	bounded := opts.FirstResults || opts.MinResults > 0 || opts.WaitTimeout > 0 || len(res.Pending) > 0
+	return x.filterControlledSearch(ctx, res, bounded), nil
+}
+
+func (x *Indexer) filterControlledSearch(ctx context.Context, res core.IndexerSearchResult, bounded bool) core.IndexerSearchResult {
 	enabled := x.svc != nil && x.svc.Enabled()
 	if enabled {
 		x.svc.ApplyHints(ctx, res.Releases)
@@ -181,7 +193,6 @@ func (x *Indexer) SearchWithOptions(ctx context.Context, req core.SearchRequest,
 		}
 		out = append(out, r)
 	}
-	bounded := opts.FirstResults || opts.MinResults > 0 || opts.WaitTimeout > 0 || len(res.Pending) > 0
 	if len(torrents) == 0 || !enabled || bounded {
 		if enabled && len(torrents) > 0 {
 			sort.SliceStable(out, func(i, j int) bool {
@@ -191,7 +202,7 @@ func (x *Indexer) SearchWithOptions(ctx context.Context, req core.SearchRequest,
 			})
 		}
 		res.Releases = out
-		return res, nil
+		return res
 	}
 	cached := x.checkAvailability(ctx, torrents)
 	kept := out[:0]
@@ -208,7 +219,7 @@ func (x *Indexer) SearchWithOptions(ctx context.Context, req core.SearchRequest,
 	}
 	x.rankAvailability(kept, cached)
 	res.Releases = kept
-	return res, nil
+	return res
 }
 
 // SearchWith exposes arrivals from both sources while cache discovery continues.

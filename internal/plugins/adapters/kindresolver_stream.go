@@ -159,11 +159,21 @@ func (r *KindResolver) streamCeilingDuration() time.Duration {
 	return sourceIndexerSearchTimeout
 }
 
-// Close cancels and cleans up all in-flight streaming indexer searches.
+// Close cancels and drains source resolutions and streaming searches.
 func (r *KindResolver) Close() {
 	if r == nil {
 		return
 	}
+	r.flightMu.Lock()
+	r.flightClosed = true
+	for _, flight := range r.flights {
+		if flight.cancel != nil {
+			flight.cancel()
+		}
+	}
+	clear(r.flights)
+	r.flightMu.Unlock()
+
 	now := r.now()
 	r.streamMu.Lock()
 	r.streamClosed = true
@@ -178,6 +188,7 @@ func (r *KindResolver) Close() {
 	}
 	r.streamWG.Wait()
 	r.closeSourceFlights()
+	r.flightWG.Wait()
 }
 
 func (r *KindResolver) cancelPluginStreamingSearches(pluginID string) {

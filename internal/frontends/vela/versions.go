@@ -2,10 +2,8 @@ package vela
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net/http"
-	"strconv"
 	"strings"
 	"time"
 
@@ -440,17 +438,9 @@ func (i *instance) issueVersionHandles(ctx context.Context, scope frontend.Versi
 	return out
 }
 
-func versionPreparing(w http.ResponseWriter, err error) {
-	secs := 5
-	var prep *frontend.PreparingError
-	if errors.As(err, &prep) && prep.RetryAfter > 0 {
-		secs = min(300, max(1, int((prep.RetryAfter+time.Second-1)/time.Second)))
-	}
-	msg := "version preparing"
-	if detail := frontend.DownloadQueuedDetail(err); detail != "" {
-		msg = detail
-	}
-	w.Header().Set("Retry-After", strconv.Itoa(secs))
+func versionPreparing(w http.ResponseWriter, err error, locale string) {
+	_, msg, secs := frontend.PlaybackPending(err, locale)
+	frontend.SetPlaybackRetry(w, "version_preparing", secs)
 	send(w, 503, object{"error": object{
 		"class":   "source",
 		"code":    "version_preparing",

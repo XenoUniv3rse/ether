@@ -1036,8 +1036,8 @@ func (i *instance) command(w http.ResponseWriter, r *http.Request) {
 		}
 		if err != nil {
 			switch {
-			case errors.Is(err, frontend.ErrPreparing):
-				versionPreparing(w, err)
+			case errors.Is(err, frontend.ErrPreparing), errors.Is(err, frontend.ErrPrepareSlow):
+				versionPreparing(w, err, requestDevice(r).Language)
 			case errors.Is(err, frontend.ErrVersionUnavailable):
 				problem(w, 409, "source", "version_unavailable")
 			case errors.Is(err, frontend.ErrNotFound):

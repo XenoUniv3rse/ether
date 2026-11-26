@@ -400,6 +400,19 @@ func failWithPolicy(w http.ResponseWriter, policy any, viewer *frontend.Viewer, 
 		send(w, status, object{"error": object{"class": class, "code": code, "message": msg, "retry": object{"allowed": false}}})
 		return
 	}
+	pending := err
+	if errors.Is(err, context.DeadlineExceeded) {
+		pending = frontend.ErrPrepareSlow
+	}
+	if code, msg, seconds := frontend.PlaybackPending(pending, acceptLanguage); seconds > 0 {
+		class := "source"
+		if code == "preparation_pending" {
+			class = "capacity"
+		}
+		frontend.SetPlaybackRetry(w, code, seconds)
+		send(w, http.StatusServiceUnavailable, object{"error": object{"class": class, "code": code, "message": msg, "retry": object{"allowed": true, "afterSeconds": seconds, "maxAttempts": 3}}})
+		return
+	}
 	var capErr *frontend.ProviderConnectionCapError
 	if errors.As(err, &capErr) {
 		sendProviderConnectionCap(w, capErr)
@@ -454,17 +467,6 @@ func failWithPolicy(w http.ResponseWriter, policy any, viewer *frontend.Viewer, 
 		problem(w, 403, "policy", "identity_unavailable")
 	case errors.Is(err, context.Canceled):
 		problem(w, 408, "request", "request_canceled")
-	case errors.Is(err, context.DeadlineExceeded), errors.Is(err, frontend.ErrPrepareSlow):
-		w.Header().Set("Retry-After", "2")
-		send(w, 503, object{"error": object{"class": "capacity", "code": "preparation_pending", "message": "preparation pending", "retry": object{"allowed": true, "afterSeconds": 2, "maxAttempts": 3}}})
-	case errors.Is(err, frontend.ErrPreparing):
-		seconds := frontend.PreparingRetrySeconds(err, 5)
-		msg := "item is still being prepared"
-		if detail := frontend.DownloadQueuedDetail(err); detail != "" {
-			msg = detail
-		}
-		w.Header().Set("Retry-After", strconv.Itoa(seconds))
-		send(w, http.StatusServiceUnavailable, object{"error": object{"class": "source", "code": "preparing", "message": msg, "retry": object{"allowed": true, "afterSeconds": seconds, "maxAttempts": 3}}})
 	case errors.Is(err, frontend.ErrJobsBusy):
 		seconds := frontend.JobsBusyRetrySeconds(err, 5)
 		w.Header().Set("Retry-After", strconv.Itoa(seconds))
@@ -474,7 +476,7 @@ func failWithPolicy(w http.ResponseWriter, policy any, viewer *frontend.Viewer, 
 		problem(w, 503, "capacity", "source_capacity")
 	case errors.Is(err, frontend.ErrDebridAuth):
 		problem(w, 502, "source", "source_authentication_failed")
-	case errors.Is(err, frontend.ErrDownloadQueued), errors.Is(err, frontend.ErrDownloadRefused), errors.Is(err, frontend.ErrNotCached), errors.Is(err, frontend.ErrReleaseRejected), errors.Is(err, frontend.ErrArticleCorrupt), errors.Is(err, frontend.ErrArticleMissing):
+	case errors.Is(err, frontend.ErrDownloadRefused), errors.Is(err, frontend.ErrNotCached), errors.Is(err, frontend.ErrReleaseRejected), errors.Is(err, frontend.ErrArticleCorrupt), errors.Is(err, frontend.ErrArticleMissing):
 		problem(w, 502, "source", "source_unavailable")
 	case errors.Is(err, frontend.ErrReceiptCapacity):
 		var capacity *frontend.ReceiptCapacityError

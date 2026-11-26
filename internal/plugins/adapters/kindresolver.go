@@ -142,6 +142,7 @@ type resolveFlightKey struct {
 	part       int
 	source     string
 	background bool
+	variant    string
 }
 
 type resolveFlight struct {
@@ -149,6 +150,8 @@ type resolveFlight struct {
 	cancel  context.CancelFunc
 	sources []core.PlayableSource
 	err     error
+	keep    bool
+	expires time.Time
 }
 
 type cachedKindCandidates struct {
@@ -188,8 +191,10 @@ type KindResolver struct {
 	unitMu    sync.Mutex
 	unitGates map[resolveUnitKey]*resolveUnitGate
 
-	flightMu sync.Mutex
-	flights  map[resolveFlightKey]*resolveFlight
+	flightMu     sync.Mutex
+	flights      map[resolveFlightKey]*resolveFlight
+	flightClosed bool
+	flightWG     sync.WaitGroup
 
 	candMu          sync.Mutex
 	candCache       map[resolveFlightKey]cachedKindCandidates
@@ -1750,6 +1755,9 @@ type resolveSearchState struct {
 	inFlight         int
 	sliceSourceCalls int
 	sliceWorkKeys    map[string]struct{}
+	playbackCtx      context.Context
+	indexerSearches  map[string]*resolveIndexerLookup
+	lookupLimitHit   bool
 }
 
 func withResolveSearchState(ctx context.Context) (context.Context, *resolveSearchState) {
@@ -1770,6 +1778,7 @@ func (s *resolveSearchState) beginSlice() {
 		return
 	}
 	s.mu.Lock()
+	s.oneShotPending = false
 	s.sliceSourceCalls = 0
 	s.sliceWorkKeys = nil
 	s.mu.Unlock()
@@ -1994,6 +2003,9 @@ func (r *KindResolver) resolveIndexerSearch(ctx context.Context, pluginID string
 			defer cancel()
 		}
 		var sr core.IndexerSearchResult
+		if st := resolveSearchStateFrom(ctx); st != nil && st.playbackCtx != nil {
+			return r.continueIndexerSearch(searchCtx, st, csi, q, searchReq, opts)
+		}
 		sr, err = csi.SearchWithOptions(searchCtx, searchReq, opts)
 		rels = sr.Releases
 		statuses = sr.Indexers
@@ -2077,6 +2089,10 @@ func (r *KindResolver) resolveIndexerSearch(ctx context.Context, pluginID string
 		}}
 	}
 
+	return r.finishIndexerSearch(ctx, query, q.Profile, rels, statuses, pending)
+}
+
+func (r *KindResolver) finishIndexerSearch(ctx context.Context, query, profile string, rels []core.Release, statuses []core.IndexerSearchStatus, pending []core.IndexerRef) (core.SourceResolveResult, error) {
 	if query == "" {
 		rels = append([]core.Release(nil), rels...)
 		sort.SliceStable(rels, func(i, j int) bool {
@@ -2090,7 +2106,7 @@ func (r *KindResolver) resolveIndexerSearch(ctx context.Context, pluginID string
 			rels = rels[:maxRecentSourceCandidates]
 		}
 	}
-	scored, err := r.scoreIndexerReleases(ctx, query, q.Profile, rels)
+	scored, err := r.scoreIndexerReleases(ctx, query, profile, rels)
 	if err != nil {
 		return core.SourceResolveResult{}, err
 	}
@@ -3443,131 +3459,15 @@ func (r *KindResolver) filterAndOrderCandidates(sources []core.PlayableSource, d
 }
 
 func (r *KindResolver) resolveItemSourcesExcluding(ctx context.Context, rec pluginitems.KindRecord, lib core.Library, item core.KindItem, partIdx *int, accept, exclude []string) ([]core.PlayableSource, error) {
-	if item.Unavailable != nil {
-		return nil, core.ErrNotAvailable
-	}
-	if r.mgr == nil {
-		return nil, core.ErrSourceUnavailable
-	}
-	fk := flightKeyForItem(item.Ref, partIdx)
-	var partCopy *int
-	if partIdx != nil {
-		v := *partIdx
-		partCopy = &v
-	}
-	sources, err := r.callPluginResolve(ctx, rec, lib, item, partCopy, "", accept, exclude)
-	if err == nil && len(sources) > 0 {
-		r.storeCandidates(fk, sources)
-	}
-	return sources, err
+	return r.resolveSourcesFlight(ctx, rec, lib, item, partIdx, "", accept, exclude)
 }
 
 func (r *KindResolver) resolveItemSourcesForSource(ctx context.Context, rec pluginitems.KindRecord, lib core.Library, item core.KindItem, partIdx *int, sourceID string, accept []string) ([]core.PlayableSource, error) {
-	if item.Unavailable != nil {
-		return nil, core.ErrNotAvailable
-	}
-	if r.mgr == nil {
-		return nil, core.ErrSourceUnavailable
-	}
-	fk := flightKeyForItemSource(item.Ref, partIdx, sourceID)
-	flightKey := fk
-	flightKey.background = core.SpeculativeIndexerWork(ctx) || core.IsBackgroundCheck(ctx)
-	var partCopy *int
-	if partIdx != nil {
-		v := *partIdx
-		partCopy = &v
-	}
-
-	r.flightMu.Lock()
-	fl, ok := r.flights[flightKey]
-	if !ok {
-		rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), plugins.ResolverTotal+5*time.Second)
-		fl = &resolveFlight{done: make(chan struct{}), cancel: cancel}
-		r.flights[flightKey] = fl
-		go func() {
-			defer func() {
-				if p := recover(); p != nil {
-					fl.err = fmt.Errorf("kindresolver: resolve panic: %v", p)
-				}
-				r.flightMu.Lock()
-				if r.flights[flightKey] == fl {
-					delete(r.flights, flightKey)
-				}
-				r.flightMu.Unlock()
-				close(fl.done)
-				cancel()
-			}()
-			fl.sources, fl.err = r.callPluginResolve(rctx, rec, lib, item, partCopy, sourceID, accept, nil)
-		}()
-	}
-	r.flightMu.Unlock()
-
-	select {
-	case <-fl.done:
-		return fl.sources, fl.err
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	}
+	return r.resolveSourcesFlight(ctx, rec, lib, item, partIdx, sourceID, accept, nil)
 }
 
 func (r *KindResolver) resolveItemSources(ctx context.Context, rec pluginitems.KindRecord, lib core.Library, item core.KindItem, partIdx *int, accept []string) ([]core.PlayableSource, error) {
-	if item.Unavailable != nil {
-		return nil, core.ErrNotAvailable
-	}
-	if r.mgr == nil {
-		return nil, core.ErrSourceUnavailable
-	}
-	fk := flightKeyForItem(item.Ref, partIdx)
-	flightKey := fk
-	flightKey.background = core.SpeculativeIndexerWork(ctx) || core.IsBackgroundCheck(ctx)
-	var partCopy *int
-	if partIdx != nil {
-		v := *partIdx
-		partCopy = &v
-	}
-
-	r.flightMu.Lock()
-	fl, ok := r.flights[flightKey]
-	if !ok {
-		// Give the detached flight slightly more headroom than Manager.Call's
-		// ResolverTotal so pending expiry returns HTTP 202 (ErrPreparing)
-		// rather than racing parent context cancellation (#580).
-		rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), plugins.ResolverTotal+5*time.Second)
-		fl = &resolveFlight{done: make(chan struct{}), cancel: cancel}
-		r.flights[flightKey] = fl
-		go func() {
-			defer func() {
-				if p := recover(); p != nil {
-					fl.err = fmt.Errorf("kindresolver: resolve panic: %v", p)
-				}
-				// Leave the map before waking waiters: a request arriving
-				// after a waiter returns must start a new resolve, never
-				// join this finished flight and reuse its result.
-				r.flightMu.Lock()
-				if r.flights[flightKey] == fl {
-					delete(r.flights, flightKey)
-				}
-				r.flightMu.Unlock()
-				close(fl.done)
-				cancel()
-			}()
-			fl.sources, fl.err = r.callPluginResolve(rctx, rec, lib, item, partCopy, "", accept, nil)
-			if fl.err == nil && len(fl.sources) > 0 && rctx.Err() == nil {
-				r.storeCandidates(fk, fl.sources)
-				if r.items != nil {
-					_ = r.items.SavePartCandidates(rctx, item.Ref, partCopy, fl.sources)
-				}
-			}
-		}()
-	}
-	r.flightMu.Unlock()
-
-	select {
-	case <-fl.done:
-		return fl.sources, fl.err
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	}
+	return r.resolveSourcesFlight(ctx, rec, lib, item, partIdx, "", accept, nil)
 }
 
 func parsePreparingReply(body []byte) error {
@@ -3615,7 +3515,10 @@ func (r *KindResolver) callPluginResolve(ctx context.Context, rec pluginitems.Ki
 	}
 	fk := flightKeyForItemSource(item.Ref, partIdx, source)
 	fk.background = core.SpeculativeIndexerWork(ctx) || core.IsBackgroundCheck(ctx)
-	ctx, searchState := withResolveSearchState(ctx)
+	searchState := resolveSearchStateFrom(ctx)
+	if searchState == nil {
+		ctx, searchState = withResolveSearchState(ctx)
+	}
 	ctx = plugins.WithResolveSliceHook(ctx, searchState.beginSlice)
 	unit := resolveUnitKey{pluginID: rec.PluginID, library: lib.Key, parent: item.ParentID}
 	if !item.Playable {
@@ -3653,6 +3556,9 @@ func (r *KindResolver) callPluginResolve(ctx context.Context, rec pluginitems.Ki
 		return nil, fmt.Errorf("%w: %v", core.ErrSourceUnavailable, err)
 	}
 	if resp.Status == http.StatusAccepted {
+		if searchState.indexerLookupLimitHit() {
+			return nil, core.ErrSourceUnavailable
+		}
 		if searchState.hadBudgetSkip() && !searchState.hasPending() {
 			r.clearResolveProgress(fk)
 			return nil, core.ErrBudgetExhausted
@@ -3670,6 +3576,9 @@ func (r *KindResolver) callPluginResolve(ctx context.Context, rec pluginitems.Ki
 		return nil, fmt.Errorf("%w: invalid resolver payload: %v", core.ErrSourceUnavailable, err)
 	}
 	if resolved.Pending {
+		if searchState.indexerLookupLimitHit() {
+			return nil, core.ErrSourceUnavailable
+		}
 		return nil, core.PreparingFromPending(resolved.RetryInMS)
 	}
 	resolvedParts := resolved.Parts

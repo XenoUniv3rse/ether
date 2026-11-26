@@ -410,28 +410,6 @@ func PreparingRetrySeconds(err error, fallback int) int {
 	return fallback
 }
 
-const defaultPreparingMessage = "The item is still being prepared. Try again shortly."
-
-// PreparingMessage returns the viewer-facing message for an ErrPreparing
-// response, including a provider queue reason when one is attached.
-func PreparingMessage(err error) string {
-	if detail := DownloadQueuedDetail(err); detail != "" {
-		return fmt.Sprintf("The item is still being prepared (%s). Try again shortly.", detail)
-	}
-	return defaultPreparingMessage
-}
-
-// PreparingErrorBody encodes the standard JSON media error envelope for preparing.
-func PreparingErrorBody(err error) []byte {
-	b, _ := json.Marshal(map[string]any{
-		"error": map[string]string{
-			"code":    "preparing",
-			"message": PreparingMessage(err),
-		},
-	})
-	return b
-}
-
 // JobsBusyError wraps ErrJobsBusy with an honest refusal message and retry delay (#590).
 type JobsBusyError struct {
 	Message    string
