@@ -22,6 +22,7 @@ type ImpressionSink = core.ImpressionSink
 type NeutralHomeLayoutSource = core.NeutralHomeLayoutSource
 type Playback = core.Playback
 type PlaybackPrepareWithin = core.PlaybackPrepareWithin
+type SurfaceScopedPlayback = core.SurfaceScopedPlayback
 type Playlists = core.Playlists
 
 type Recommender = core.Recommender

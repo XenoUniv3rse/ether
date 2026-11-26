@@ -618,8 +618,9 @@ type StreamBinding struct {
 	DistinguishSubtitleIndex bool
 }
 
-// PlexSubtitleSlot identifies a subtitle by the descriptor shared by Plex renders and bindings.
-func PlexSubtitleSlot(info core.StreamInfo) string {
+// SubtitleDescriptorSlot identifies a subtitle by its descriptor, independent
+// of its position and source stream index.
+func SubtitleDescriptorSlot(info core.StreamInfo) string {
 	if info.External && info.ExternalURL != "" {
 		return "external/" + info.ExternalURL
 	}
@@ -1896,7 +1897,8 @@ func PickAudio(info core.MediaInfo, langs []string) int {
 // The choice is language, codec, and source (sidecar URL, or embedded
 // versus external). A matching track at a new index beats whatever now
 // sits in the old slot: variant lists reorder, and that slot is not the
-// track the viewer picked.
+// track the viewer picked. Among equally scored tracks, the issued position
+// wins if it still matches, otherwise the first match wins.
 func ResolveSubtitle(want *core.StreamInfo, pos int, info core.MediaInfo) int {
 	if want == nil {
 		if pos >= 0 && pos < len(info.Streams) && info.Streams[pos].Type == "subtitle" {
@@ -1921,9 +1923,6 @@ func ResolveSubtitle(want *core.StreamInfo, pos int, info core.MediaInfo) int {
 		}
 		if i == pos {
 			score++
-		}
-		if !want.External && !st.External && st.Index == want.Index && st.Title == want.Title {
-			score += 2
 		}
 		if score > bestScore {
 			best, bestScore = i, score

@@ -908,9 +908,7 @@ func (s *Server) mediaForWithInfo(ctx context.Context, pr *Request, t *frontend.
 		// Explicit decisions are variant-scoped. Match the release admitted
 		// for this client instead of taking an arbitrary session for the title.
 		pin := s.playIDs.pinned(s.playIdentityFor(pr, t.Key), false, s.now())
-		if scoped, ok := s.playback().(interface {
-			SessionForSurface(string, int64, string, frontend.RatingKey, string, bool) (*frontend.PlaySession, bool)
-		}); ok && pin.admittedRelease != "" {
+		if scoped, ok := s.playback().(frontend.SurfaceScopedPlayback); ok && pin.admittedRelease != "" {
 			if active, ok := scoped.SessionForSurface("plex", pr.User.ID, pr.ClientID, t.Key, pin.admittedRelease, false); ok && active != nil {
 				info, ps, resumed = active.Info, active, resumedVersionResult{}
 				probedSource = !info.Estimated && len(info.Streams) > 0
@@ -1342,7 +1340,7 @@ func (s *Server) renderStreams(key frontend.RatingKey, info frontend.MediaInfo, 
 	slotCounts := make(map[string]int)
 	for i, st := range info.Streams {
 		if st.Type == "subtitle" {
-			slot := frontend.PlexSubtitleSlot(st)
+			slot := frontend.SubtitleDescriptorSlot(st)
 			subtitleSlots[i] = slot
 			slotCounts[slot]++
 		}
