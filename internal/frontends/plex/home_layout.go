@@ -18,27 +18,15 @@ func homeLayoutFacts(row model.Hub) (frontend.Hub, frontend.NeutralHomeRow) {
 	return hub, neutral
 }
 
-// prepareHomeContinueAndOnDeck builds the Home Continue Watching and On Deck
-// projections ahead of HomeAssembly so On Deck participates in layout slot
-// placement, Off rules, and page row budgets while suppressing duplicate
-// resume shelves.
-func (s *Server) prepareHomeContinueAndOnDeck(ctx context.Context, pr *Request, hc frontend.HubContext, hubs []frontend.Hub, selected map[string]bool, includeContinue bool, count int) ([]frontend.Hub, *model.Hub, hubSpec, model.Hub) {
-	stripOnDeck := func(in []frontend.Hub) []frontend.Hub {
-		out := make([]frontend.Hub, 0, len(in))
-		for _, h := range in {
-			if h.ID != "home.ondeck" {
-				out = append(out, h)
-			}
-		}
-		return out
-	}
+// homeProgressSpecs selects the two progress rows before the screen batches
+// its metadata reads. The rendered identities decide if On Deck is redundant.
+func (s *Server) homeProgressSpecs(ctx context.Context, pr *Request, selected map[string]bool, includeContinue bool, count int) []hubSpec {
 	if !includeContinue {
-		return stripOnDeck(hubs), nil, hubSpec{}, model.Hub{}
+		return nil
 	}
-	cwSpec := s.continueHub(ctx, pr, cwHome, Section{}, count)
-	cwRendered := s.renderHub(ctx, pr, cwSpec, hubCtx{})
+	cw := s.continueHub(ctx, pr, cwHome, Section{}, count)
 	if selected != nil && !selected["home.ondeck"] {
-		return stripOnDeck(hubs), nil, cwSpec, cwRendered
+		return []hubSpec{cw}
 	}
 	spec := s.continueHub(ctx, pr, cwGlobal, Section{}, count)
 	episodes := spec.Items[:0]
@@ -50,7 +38,25 @@ func (s *Server) prepareHomeContinueAndOnDeck(ctx context.Context, pr *Request, 
 	spec.Items = episodes
 	spec.ID, spec.Context, spec.Title, spec.Style, spec.key = "home.ondeck", "hub.home.ondeck", "On Deck", "shelf", "/hubs/home/onDeck"
 	spec.included, spec.noPromoted, spec.plain = false, false, false
-	ondeck := s.renderHub(ctx, pr, spec, hubCtx{})
+	return []hubSpec{cw, spec}
+}
+
+// placeHomeOnDeck replaces the producer's On Deck with the rendered progress
+// row at the same position, unless Continue Watching already shows its items.
+func (s *Server) placeHomeOnDeck(ctx context.Context, pr *Request, hc frontend.HubContext, hubs []frontend.Hub, selected map[string]bool, specs []hubSpec, painted []model.Hub) ([]frontend.Hub, *model.Hub) {
+	stripOnDeck := func() []frontend.Hub {
+		out := make([]frontend.Hub, 0, len(hubs))
+		for _, h := range hubs {
+			if h.ID != "home.ondeck" {
+				out = append(out, h)
+			}
+		}
+		return out
+	}
+	if len(painted) < 2 {
+		return stripOnDeck(), nil
+	}
+	cwRendered, ondeck := painted[0], painted[1]
 
 	same := len(ondeck.Metadata) > 0 && len(ondeck.Metadata) == len(cwRendered.Metadata)
 	keys := make(map[string]bool, len(cwRendered.Metadata))
@@ -67,14 +73,14 @@ func (s *Server) prepareHomeContinueAndOnDeck(ctx context.Context, pr *Request, 
 		}
 	}
 	if len(ondeck.Metadata) == 0 || (same && cwShown) {
-		return stripOnDeck(hubs), nil, cwSpec, cwRendered
+		return stripOnDeck(), nil
 	}
 	out := make([]frontend.Hub, 0, len(hubs)+1)
 	replaced := false
 	for _, h := range hubs {
 		if h.ID == "home.ondeck" {
 			if !replaced {
-				out = append(out, spec.Hub)
+				out = append(out, specs[1].Hub)
 				replaced = true
 			}
 			continue
@@ -82,9 +88,9 @@ func (s *Server) prepareHomeContinueAndOnDeck(ctx context.Context, pr *Request, 
 		out = append(out, h)
 	}
 	if !replaced {
-		out = append(out, spec.Hub)
+		out = append(out, specs[1].Hub)
 	}
-	return out, &ondeck, cwSpec, cwRendered
+	return out, &ondeck
 }
 
 // arrangeHomeRows reorders painted rows from facts captured at paint time.

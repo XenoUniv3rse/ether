@@ -26,12 +26,19 @@ func (s *Server) plexMetaOn() bool {
 // withPlexMeta preloads cached Plex overlays for keys. schedule=false
 // (stored-only list pages) only reads what is cached: a section walk
 // must not mint refresh work — and its writes — for every page it passes.
-func (s *Server) withPlexMeta(ctx context.Context, keys []frontend.RatingKey, guids map[frontend.RatingKey]string, schedule ...bool) context.Context {
+func (s *Server) withPlexMeta(ctx context.Context, keys []frontend.RatingKey, guids map[frontend.RatingKey]string, schedule, searchIdentity bool) context.Context {
 	if !s.plexMetaOn() {
 		return ctx
 	}
 	metaSrc := s.libraryMetadata()
-	cached := metaSrc.CachedMany(ctx, keys)
+	batch, _ := ctx.Value(hubTitlePageKey{}).(hubTitlePage)
+	cached := batch.plexMeta
+	if !batch.hasPlexMeta || searchIdentity {
+		cached = metaSrc.CachedMany(ctx, keys)
+	}
+	if !schedule {
+		return context.WithValue(ctx, plexMetaCtxKey{}, plexMetaBatch{rows: cached, guids: guids})
+	}
 	now := s.now()
 	refresh := make([]frontend.RatingKey, 0, len(keys))
 	seen := map[frontend.RatingKey]bool{}
@@ -49,9 +56,7 @@ func (s *Server) withPlexMeta(ctx context.Context, keys []frontend.RatingKey, gu
 			refresh = append(refresh, k)
 		}
 	}
-	if len(schedule) == 0 || schedule[0] {
-		metaSrc.Schedule(refresh...)
-	}
+	metaSrc.Schedule(refresh...)
 	return context.WithValue(ctx, plexMetaCtxKey{}, plexMetaBatch{rows: cached, guids: guids})
 }
 

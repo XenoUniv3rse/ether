@@ -443,8 +443,14 @@ func (c *Catalog) hydrateFactBatch(ctx context.Context, items []core.Title, idx 
 	}
 	for _, t := range items {
 		if t.Type == core.TypeEpisode {
+			titles := "catalog_titles t"
+			if store.DialectOf(c.db) == store.SQLite {
+				// With JSON-bound keys SQLite can prefer a type index and
+				// walk every episode. key is the rowid (INTEGER PRIMARY KEY).
+				titles += " NOT INDEXED"
+			}
 			part("t.key", "'episode_air'", "CAST(COALESCE(p.air_ts,CASE WHEN e.earliest_ts=t.released_ts THEN 0 ELSE t.released_ts END) AS TEXT)", "''", "''", "''", "''", "''", "''", "''",
-				`catalog_titles t LEFT JOIN catalog_episode_provider_air p ON p.key=t.key LEFT JOIN catalog_episode_release e ON e.key=t.key WHERE t.type='episode' AND t.key IN (`+ph+`)`)
+				titles+` LEFT JOIN catalog_episode_provider_air p ON p.key=t.key LEFT JOIN catalog_episode_release e ON e.key=t.key WHERE t.type='episode' AND t.key IN (`+ph+`)`)
 			break
 		}
 	}

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/braedonsaunders/ether/internal/frontend"
+	"github.com/braedonsaunders/ether/internal/frontend/kit/reqmemo"
 	"github.com/braedonsaunders/ether/internal/frontends/plex/model"
 )
 
@@ -50,6 +51,21 @@ type shelfGeneration struct {
 }
 
 func (s *Server) shelfScope(ctx context.Context, pr *Request) (string, string, bool) {
+	type scope struct {
+		hash, revision string
+		ok             bool
+	}
+	got, _ := reqmemo.Do(ctx, fmt.Sprintf("plex:shelf-scope:%p:%p", s, pr), func() (scope, error) {
+		hash, revision, ok := s.readShelfScope(ctx, pr)
+		if !ok {
+			return scope{}, frontend.ErrNotAvailable
+		}
+		return scope{hash, revision, ok}, nil
+	})
+	return got.hash, got.revision, got.ok
+}
+
+func (s *Server) readShelfScope(ctx context.Context, pr *Request) (string, string, bool) {
 	user, _ := json.Marshal(pr.User)
 	viewerRevision := ""
 	var policy int64

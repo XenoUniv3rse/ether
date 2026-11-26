@@ -2,12 +2,20 @@ package catalog
 
 import (
 	"context"
+	"fmt"
+	"sync"
 	"time"
 
 	"github.com/braedonsaunders/ether/internal/contentrating"
 	"github.com/braedonsaunders/ether/internal/core"
+	"github.com/braedonsaunders/ether/internal/reqmemo"
 	"github.com/braedonsaunders/ether/internal/store"
 )
+
+type requestRowFacts struct {
+	mu    sync.Mutex
+	byKey map[core.RatingKey]core.Title // zero key records a successful miss
+}
 
 // LoadRowFacts is a bounded read at row assembly, never a visibility predicate.
 // Warm canonical titles reuse the catalogue cache. Each cold chunk reads release,
@@ -21,6 +29,11 @@ func (c *Catalog) LoadRowFacts(ctx context.Context, titles []core.Title) []core.
 	var need []core.Title
 	seen := map[core.RatingKey]bool{}
 	gen, minute := c.writeGen.Load(), c.minuteBucket()
+	memo, _ := reqmemo.Do(ctx, fmt.Sprintf("catalog:row-facts:%p:%d:%d", c, gen, minute), func() (*requestRowFacts, error) {
+		return &requestRowFacts{byKey: map[core.RatingKey]core.Title{}}, nil
+	})
+	memo.mu.Lock()
+	var missing []core.Title
 	for _, t := range titles {
 		if t.Key.IsPluginKey() || t.Type != core.TypeMovie && t.Type != core.TypeShow || seen[t.Key] {
 			continue
@@ -28,8 +41,12 @@ func (c *Catalog) LoadRowFacts(ctx context.Context, titles []core.Title) []core.
 		seen[t.Key] = true
 		if cached, ok := c.cachedStored(t.Key, gen, minute); ok {
 			facts[t.Key] = cached
-		} else {
+		} else if fact, ok := memo.byKey[t.Key]; !ok {
 			need = append(need, t)
+		} else if fact.Key != 0 {
+			facts[t.Key] = fact
+		} else {
+			missing = append(missing, t)
 		}
 	}
 	enfCol := `CASE WHEN t.enforcement_rating<>'' THEN t.enforcement_rating WHEN t.content_rating='' AND (` + adultKeywordsExistsSQL("t.key") + `) THEN '` + contentrating.UncertifiedAdult + `' ELSE '' END`
@@ -37,6 +54,7 @@ func (c *Catalog) LoadRowFacts(ctx context.Context, titles []core.Title) []core.
 		args := keyArgs(chunk)
 		rows, err := c.db.QueryContext(ctx, `SELECT t.key,t.released_ts,t.year,t.adult,t.content_rating,`+enfCol+`,COALESCE(h.checked,0),COALESCE(h.earliest_ts,0),COALESCE(h.fallback_admitted,0) FROM catalog_titles t LEFT JOIN catalog_home_release h ON h.key=t.key WHERE t.key IN (`+placeholders(len(args))+`)`, args...)
 		if err != nil {
+			memo.mu.Unlock()
 			return nil
 		}
 		for rows.Next() {
@@ -45,6 +63,7 @@ func (c *Catalog) LoadRowFacts(ctx context.Context, titles []core.Title) []core.
 			var adult, checked, fallback int
 			if err := rows.Scan(&t.Key, &released, &t.Year, &adult, &t.ContentRating, &t.EnforcementRating, &checked, &home, &fallback); err != nil {
 				rows.Close()
+				memo.mu.Unlock()
 				return nil
 			}
 			if released != 0 {
@@ -61,15 +80,18 @@ func (c *Catalog) LoadRowFacts(ctx context.Context, titles []core.Title) []core.
 		err = rows.Err()
 		rows.Close()
 		if err != nil {
+			memo.mu.Unlock()
 			return nil
 		}
 	}
-	var missing []core.Title
 	for _, t := range need {
-		if _, ok := facts[t.Key]; !ok {
+		fact, ok := facts[t.Key]
+		memo.byKey[t.Key] = fact
+		if !ok {
 			missing = append(missing, t)
 		}
 	}
+	memo.mu.Unlock()
 	c.RememberListSummaries(ctx, missing)
 	out := make([]core.Title, 0, len(titles))
 	for _, t := range titles {

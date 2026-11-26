@@ -2,9 +2,11 @@ package state
 
 import (
 	"context"
+	"strings"
+	"time"
+
 	"github.com/braedonsaunders/ether/internal/core"
 	"github.com/braedonsaunders/ether/internal/store"
-	"time"
 )
 
 func init() {
@@ -15,18 +17,39 @@ func init() {
 // watched flags and shelf recency. Each show is an indexed EXISTS range seek.
 func (s *State) PlaybackCompletedShows(ctx context.Context, uid int64, shows []core.RatingKey) (map[core.RatingKey]bool, error) {
 	out := make(map[core.RatingKey]bool, len(shows))
-	for _, show := range shows {
-		var lo, hi core.RatingKey
-		if !show.Allocated() {
-			lo, hi = core.EpisodeKey(show.TMDB(), 0, 0), core.EpisodeKey(show.TMDB()+1, 0, 0)
+	for chunk := range store.Chunks(shows, 200) {
+		args := make([]any, 0, 3*len(chunk)+2)
+		for _, show := range chunk {
+			var lo, hi core.RatingKey
+			if !show.Allocated() {
+				lo, hi = core.EpisodeKey(show.TMDB(), 0, 0), core.EpisodeKey(show.TMDB()+1, 0, 0)
+			}
+			args = append(args, show, lo, hi)
 		}
-		var yes bool
-		if err := s.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM state_history WHERE user_id=? AND view_type=0 AND completed=1 AND rating_key>=? AND rating_key<?
+		args = append(args, uid, uid)
+		values := strings.TrimSuffix(strings.Repeat("(CAST(? AS BIGINT),CAST(? AS BIGINT),CAST(? AS BIGINT)),", len(chunk)), ",")
+		rows, err := s.db.QueryContext(ctx, `WITH wanted(show_key,lo,hi) AS (VALUES `+values+`)
+SELECT w.show_key, EXISTS(SELECT 1 FROM state_history WHERE user_id=? AND view_type=0 AND completed=1 AND rating_key>=w.lo AND rating_key<w.hi
  UNION ALL SELECT 1 FROM catalog_allocated_child a JOIN state_history h ON h.rating_key=a.key
- WHERE a.show_key=? AND a.kind=4 AND h.user_id=? AND h.view_type=0 AND h.completed=1)`, uid, lo, hi, show, uid).Scan(&yes); err != nil {
+ WHERE a.show_key=w.show_key AND a.kind=4 AND h.user_id=? AND h.view_type=0 AND h.completed=1)
+FROM wanted w`, args...)
+		if err != nil {
 			return nil, err
 		}
-		out[show] = yes
+		for rows.Next() {
+			var show core.RatingKey
+			var yes bool
+			if err := rows.Scan(&show, &yes); err != nil {
+				rows.Close()
+				return nil, err
+			}
+			out[show] = yes
+		}
+		err = rows.Err()
+		rows.Close()
+		if err != nil {
+			return nil, err
+		}
 	}
 	return out, nil
 }

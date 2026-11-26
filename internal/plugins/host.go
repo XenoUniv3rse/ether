@@ -143,7 +143,7 @@ func (h *host) Settings(ctx context.Context) (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
-	row, err := h.m.store.settings(ctx, h.plugin)
+	row, err := h.m.store.requestSettings(ctx, h.plugin)
 	if err != nil {
 		return nil, err
 	}
@@ -181,7 +181,7 @@ func (h *host) SecretGet(ctx context.Context, name string) (string, error) {
 	if _, err := h.checkSecretAccess(ctx, name); err != nil {
 		return "", err
 	}
-	row, err := h.m.store.settings(ctx, h.plugin)
+	row, err := h.m.store.requestSettings(ctx, h.plugin)
 	if err != nil {
 		return "", err
 	}
