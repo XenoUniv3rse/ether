@@ -176,24 +176,63 @@ it("explains an expired code and lets the viewer approve another device", async 
   ).toBeInTheDocument();
 });
 
-it("removes an invite from the address and redeems it only on acceptance", async () => {
+it("keeps invite onboarding ahead of TV approval across a reload", async () => {
   window.history.replaceState(null, "", "/ether/me#invite=secret-invite");
   const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
     if (url.endsWith("/bootstrap"))
-      return new Response(JSON.stringify({ signInMethods: ["local"], version: "1" }));
+      return new Response(
+        JSON.stringify({ signInMethods: ["local", "plex"], serverName: "Verse", version: "1" }),
+      );
     if (url.endsWith("/invite/redeem")) {
       expect(JSON.parse(String(init?.body))).toEqual({ secret: "secret-invite" });
       return new Response(JSON.stringify({ token: "viewer-grant" }));
     }
-    return new Response(JSON.stringify({ id: 1, username: "alice", title: "Alice" }));
+    if (url.endsWith("/me/password")) {
+      expect((init?.headers as Record<string, string>).Authorization).toBe("Bearer viewer-grant");
+      expect(JSON.parse(String(init?.body))).toEqual({
+        username: "samrivera",
+        password: "a-long-enough-password",
+      });
+      return new Response(JSON.stringify({ ok: true }));
+    }
+    return new Response(
+      JSON.stringify({ id: 1, username: "", title: "Sam Rivera", needsSignInSetup: true }),
+    );
   });
   vi.stubGlobal("fetch", fetchMock);
-  render(<Me />);
+  const first = render(<Me />);
   expect(window.location.hash).toBe("");
+  expect(
+    await screen.findByText(
+      "You were invited to watch on this server. Accept to create your account.",
+    ),
+  ).toBeInTheDocument();
+  // An invite link is only an invite: no sign-in choices until the viewer asks.
+  expect(screen.queryByRole("radio")).not.toBeInTheDocument();
+  expect(screen.queryByLabelText("Password")).not.toBeInTheDocument();
   expect(fetchMock.mock.calls.some(([url]) => String(url).endsWith("/invite/redeem"))).toBe(false);
-  fireEvent.click(await screen.findByRole("button", { name: "Accept invite" }));
-  expect(await screen.findByText("Invite accepted. You can approve a TV now.")).toBeInTheDocument();
+
+  fireEvent.click(screen.getByRole("button", { name: "Accept invite" }));
+  expect(await screen.findByRole("heading", { name: "Choose your password" })).toBeInTheDocument();
   expect(sessionStorage.getItem("ether.viewerPortal")).toBe("viewer-grant");
+  expect(screen.queryByLabelText("Enter the code shown on your TV")).not.toBeInTheDocument();
+  first.unmount();
+  render(<Me />);
+  expect(screen.queryByLabelText("Enter the code shown on your TV")).not.toBeInTheDocument();
+  expect(await screen.findByLabelText("Username")).toHaveValue("samrivera");
+  fireEvent.change(screen.getByLabelText("New password"), {
+    target: { value: "a-long-enough-password" },
+  });
+  expect(screen.getByRole("button", { name: "Save and continue" })).toBeDisabled();
+  fireEvent.change(screen.getByLabelText("Confirm new password"), {
+    target: { value: "a-long-enough-password" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Save and continue" }));
+  expect(
+    await screen.findByText("All set. Next time, sign in with samrivera and your password."),
+  ).toBeInTheDocument();
   expect(await screen.findByLabelText("Enter the code shown on your TV")).toBeInTheDocument();
+  // The accepted invite is not listed as a way to sign in.
+  expect(screen.queryByText("Joined with an invite link")).not.toBeInTheDocument();
   window.history.replaceState(null, "", "/");
 });

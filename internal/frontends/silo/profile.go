@@ -108,7 +108,7 @@ func (i *instance) profileData(r *http.Request, v *frontend.Viewer) (map[string]
 	}
 	delete(p, "_updated_at")
 	p["id"] = i.viewerWireID(r.Context(), v.ID)
-	p["name"] = v.Username
+	p["name"] = frontend.ViewerDisplayName(v)
 	p["has_pin"] = false
 	p["is_child"] = false
 	p["is_primary"] = true

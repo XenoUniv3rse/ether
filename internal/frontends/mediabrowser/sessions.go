@@ -63,7 +63,7 @@ func (i *instance) brokerSessionDTO(viewer *frontend.Viewer, session frontend.Se
 	}
 	item["RemoteEndPoint"] = endpoint
 	if session.ViewerID == viewer.ID {
-		item["UserName"] = viewer.Username
+		item["UserName"] = frontend.ViewerDisplayName(viewer)
 	}
 	item["PlayState"] = i.playStateDTO(session)
 	if i.protocol == "jellyfin" {

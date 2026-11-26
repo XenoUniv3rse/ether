@@ -186,7 +186,28 @@ func (h *Handler) handleMe(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 401, "unauthorized", "sign in required")
 		return
 	}
-	writeJSON(w, 200, u)
+	localOn, plexOn := h.portalSignInMethods(h.deps.Config.Read().Plex.Claimed)
+	needsSetup := !plexOn || u.PlexID == 0
+	username := u.Username
+	if needsSetup && localOn {
+		ready, err := h.deps.LocalIdentity.HasPassword(r.Context(), u.ID)
+		if err != nil {
+			writeError(w, 503, "unavailable", "sign in unavailable")
+			return
+		}
+		needsSetup = !ready
+		if needsSetup {
+			// A cleared password retains its sign-in name for the next reset.
+			username, err = h.deps.LocalIdentity.LocalUsername(r.Context(), u.ID)
+			if err != nil {
+				writeError(w, 503, "unavailable", "sign in unavailable")
+				return
+			}
+		}
+	}
+	writeJSON(w, 200, map[string]any{
+		"id": u.ID, "username": username, "title": u.Title, "needsSignInSetup": needsSetup,
+	})
 }
 func (h *Handler) handleApproveQuickConnect(w http.ResponseWriter, r *http.Request) {
 	if !csrfOK(r) {
@@ -457,8 +478,12 @@ func (h *Handler) handleInviteRedeem(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	token, err := h.deps.Invites.Redeem(r.Context(), body.Secret)
+	if errors.Is(err, core.ErrUnauthorized) {
+		writeError(w, 401, "invite_unavailable", "invalid invite")
+		return
+	}
 	if err != nil {
-		writeError(w, 401, "unauthorized", "invalid invite")
+		writeError(w, 503, "unavailable", "unavailable")
 		return
 	}
 	writeJSON(w, 200, map[string]string{"token": token})

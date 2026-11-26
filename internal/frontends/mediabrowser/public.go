@@ -20,6 +20,9 @@ import (
 // across restarts and is distinct for each protocol surface.
 type PublicInfo struct {
 	ID, ServerName, LocalAddress, Version, ProductName string
+	// LoginHint, when set, returns the text the login screen shows under the
+	// form (Branding LoginDisclaimer), such as where to approve Quick Connect.
+	LoginHint func(*http.Request) string
 }
 
 type originResolver func(*http.Request) (clientnet.RequestOrigin, bool)
@@ -66,7 +69,16 @@ func publicRoutes(r *route.Router, getInfo func() PublicInfo, picker http.Handle
 				StartupWizardCompleted bool   `json:"StartupWizardCompleted"`
 			}{info.ID, info.ServerName, address, info.Version, info.ProductName, "", true})
 		}},
-		{"GET", "/Branding/Configuration", func(w http.ResponseWriter, _ *http.Request) { jsonReply(w, map[string]any{}) }},
+		{"GET", "/Branding/Configuration", func(w http.ResponseWriter, r *http.Request) {
+			out := map[string]any{}
+			if hint := getInfo().LoginHint; hint != nil {
+				w.Header().Add("Vary", "Accept-Language")
+				if text := hint(r); text != "" {
+					out["LoginDisclaimer"] = text
+				}
+			}
+			jsonReply(w, out)
+		}},
 		{"GET", "/Branding/Css", func(w http.ResponseWriter, _ *http.Request) {
 			w.Header().Set("Content-Type", "text/css; charset=utf-8")
 			w.WriteHeader(http.StatusOK)

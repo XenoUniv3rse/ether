@@ -183,6 +183,11 @@ func RequestAccess(ctx context.Context) (a Access, ok bool) {
 	return a, ok
 }
 
+func (h *Handler) portalSignInMethods(plexClaimed bool) (local, plex bool) {
+	return h.deps.LocalIdentity != nil && h.deps.IdentityGrants != nil && h.deps.IdentityLimiter != nil,
+		h.deps.SignIn != nil && plexClaimed
+}
+
 // handleBootstrap is intentionally public and minimal: version, whether
 // setup is complete, and whether the caller will need a token. It carries
 // no secrets and no configuration.
@@ -191,11 +196,12 @@ func (h *Handler) handleBootstrap(w http.ResponseWriter, r *http.Request) {
 	token := tokenFromRequest(r)
 	authRequired := h.setupClosed(r)
 	authed := h.isOwner(r, token) || setupOpen(authRequired, r, h.proxyPrefixes()...)
+	local, plex := h.portalSignInMethods(cfg.Plex.Claimed)
 	signInMethods := []string{}
-	if h.deps.LocalIdentity != nil && h.deps.IdentityGrants != nil && h.deps.IdentityLimiter != nil {
+	if local {
 		signInMethods = append(signInMethods, "local")
 	}
-	if h.deps.SignIn != nil && cfg.Plex.Claimed {
+	if plex {
 		signInMethods = append(signInMethods, "plex")
 	}
 	writeJSON(w, http.StatusOK, map[string]any{

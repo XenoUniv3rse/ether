@@ -32,6 +32,8 @@ function providerLabel(provider: string): string {
       return t("Plex");
     case "local":
       return t("Username & password");
+    case "invite":
+      return t("Joined with an invite link");
     default:
       return provider;
   }
@@ -121,6 +123,7 @@ export default function SignInMethods({
       cancelled = true;
     };
   }, [load]);
+  const localName = methods.find((m) => m.provider === "local")?.display ?? "";
   async function update(e: FormEvent) {
     e.preventDefault();
     if (password.length < MIN_LOCAL_PASSWORD) {
@@ -131,7 +134,7 @@ export default function SignInMethods({
     setError("");
     setMessage("");
     try {
-      await call("/password", { username, password });
+      await call("/password", { username: localName || username.trim(), password });
       setPassword("");
       setMessage(t("Password saved."));
       await load();
@@ -157,12 +160,15 @@ export default function SignInMethods({
     setBusy(true);
     setError("");
     setMessage("");
-    const popup = window.open("", "plex-link", "width=560,height=720");
+    const popup = window.open("", "_blank", "width=560,height=720");
     try {
       const pin = await call<{ handle: string; authUrl: string }>("/link/plex", {});
       if (cancelled.current) return;
       setPinURL(pin.authUrl);
-      if (popup) popup.location.href = pin.authUrl;
+      if (popup) {
+        popup.opener = null;
+        popup.location.href = pin.authUrl;
+      }
       const deadline = Date.now() + 10 * 60 * 1000;
       while (!cancelled.current && Date.now() < deadline) {
         await new Promise((resolve) => setTimeout(resolve, 2000));
@@ -200,6 +206,14 @@ export default function SignInMethods({
     }
   }
   const passwordTooShort = password !== "" && password.length < MIN_LOCAL_PASSWORD;
+  // An accepted invite is how the account was made, not a way to sign in:
+  // viewers don't see it, and the owner sees it once however many were used.
+  const shown = methods.filter(
+    (m, index) =>
+      m.provider !== "invite" ||
+      (owner && methods.findIndex((other) => other.provider === "invite") === index),
+  );
+  const plexLinked = methods.some((m) => m.provider === "plex");
   return (
     <div className="space-y-6">
       {error ? (
@@ -220,8 +234,11 @@ export default function SignInMethods({
             : t("Accounts that can sign in as you.")
         }
         footer={
-          !owner ? (
+          !owner && !plexLinked ? (
             <div className="flex flex-wrap items-center gap-3">
+              <span className="mr-auto text-sm text-fg-muted">
+                {t("Link Plex to sign in here with your Plex account next time.")}
+              </span>
               {pinURL ? (
                 <a href={pinURL} target="_blank" rel="noreferrer" className="text-sm text-primary">
                   {t("Open Plex sign-in")}
@@ -243,14 +260,18 @@ export default function SignInMethods({
           <div className="px-5 py-4">
             <LoadingRows rows={2} />
           </div>
-        ) : methods.length ? (
-          methods.map((method) => (
-            <SettingsRow
-              key={method.id}
-              title={method.display || providerLabel(method.provider)}
-              description={method.display ? providerLabel(method.provider) : undefined}
-            />
-          ))
+        ) : shown.length ? (
+          shown.map((method) =>
+            method.provider === "invite" ? (
+              <SettingsRow key={method.id} title={providerLabel(method.provider)} />
+            ) : (
+              <SettingsRow
+                key={method.id}
+                title={method.display || providerLabel(method.provider)}
+                description={method.display ? providerLabel(method.provider) : undefined}
+              />
+            ),
+          )
         ) : (
           <div className="px-5 py-6">
             <EmptyState
@@ -266,7 +287,15 @@ export default function SignInMethods({
         <form onSubmit={update}>
           <SettingsSection
             title={t("Password")}
-            description={t("Choose a username and password. Saving replaces the current password.")}
+            description={
+              localName
+                ? t(
+                    "Sign in here and in the Jellyfin and Emby apps with this username and password. Saving replaces your current password.",
+                  )
+                : t(
+                    "Choose a username and password to sign in here and in the Jellyfin and Emby apps.",
+                  )
+            }
             footer={
               <Button type="submit" disabled={busy || passwordTooShort}>
                 {t("Set or reset password")}
@@ -277,7 +306,8 @@ export default function SignInMethods({
               <Input
                 id={`${base}-username`}
                 aria-label={t("Username")}
-                value={username}
+                value={localName || username}
+                readOnly={Boolean(localName)}
                 onChange={(e) => setUsername(e.currentTarget.value)}
                 autoComplete="username"
                 required

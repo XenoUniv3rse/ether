@@ -16,7 +16,7 @@ import (
 func viewerWire(v *frontend.Viewer) object {
 	id, _ := ids.GUID(ids.User, v.ID)
 	// The viewer value includes current policy; revisions change when those facts do.
-	return object{"id": id, "name": v.Username, "policyRevision": hashJSON(v)}
+	return object{"id": id, "name": frontend.ViewerDisplayName(v), "policyRevision": hashJSON(v)}
 }
 
 func (i *instance) viewerAvatar(r *http.Request, v *frontend.Viewer, token string, d frontend.Device) object {

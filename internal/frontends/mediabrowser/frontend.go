@@ -81,6 +81,7 @@ func mount(ctx context.Context, host frontend.Host, machineID string, protocol f
 		if host.Config != nil {
 			current.ServerName = frontend.AdvertisedName(host.Config())
 		}
+		current.LoginHint = inst.loginHint
 		return current
 	}, inst.publicViewers, host.ClientIP, host.Origin, host.SurfaceURL, inst.webClient); err != nil {
 		return nil, err

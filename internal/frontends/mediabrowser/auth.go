@@ -485,7 +485,7 @@ func (i *instance) baseUserDTO(v *frontend.Viewer) (user, policy, configuration 
 	}
 	// Presentation defaults mirror Jellyfin's UserConfiguration constructor.
 	configuration = map[string]any{"PlayDefaultAudioTrack": true, "DisplayMissingEpisodes": false, "GroupedFolders": []string{}, "SubtitleMode": "Default", "DisplayCollectionsView": false, "EnableLocalPassword": false, "OrderedViews": []string{}, "LatestItemsExcludes": []string{}, "MyMediaExcludes": []string{}, "HidePlayedInLatest": true, "RememberAudioSelections": true, "RememberSubtitleSelections": true, "EnableNextEpisodeAutoPlay": true}
-	user = map[string]any{"Id": id, "Name": v.Username, "ServerId": i.info.ID, "HasPassword": true, "Policy": policy, "Configuration": configuration}
+	user = map[string]any{"Id": id, "Name": frontend.ViewerDisplayName(v), "ServerId": i.info.ID, "HasPassword": true, "Policy": policy, "Configuration": configuration}
 	switch i.protocol {
 	case "emby":
 		for _, key := range []string{"AllowedTags", "EnableCollectionManagement", "EnableLyricManagement", "ForceRemoteSourceTranscoding", "LoginAttemptsBeforeLockout", "MaxActiveSessions", "PasswordResetProviderId", "SyncPlayAccess"} {
@@ -518,7 +518,7 @@ func (i *instance) authSessionDTO(r *http.Request, v *frontend.Viewer) map[strin
 	sum := sha256.Sum256([]byte(fmt.Sprintf("%s:%d:%s", i.protocol, v.ID, d.ID)))
 	now := time.Now().UTC()
 	state := map[string]any{"CanSeek": false, "IsPaused": false, "IsMuted": false, "RepeatMode": "RepeatNone"}
-	session := map[string]any{"Id": hex.EncodeToString(sum[:16]), "UserId": userID, "UserName": v.Username, "ServerId": i.info.ID, "Client": d.Client, "DeviceId": d.ID, "DeviceName": d.DeviceName, "ApplicationVersion": d.Version, "LastActivityDate": wireTime(now), "RemoteEndPoint": "", "AdditionalUsers": []any{}, "PlayableMediaTypes": []any{}, "SupportedCommands": []any{}, "SupportsRemoteControl": false, "PlayState": state}
+	session := map[string]any{"Id": hex.EncodeToString(sum[:16]), "UserId": userID, "UserName": frontend.ViewerDisplayName(v), "ServerId": i.info.ID, "Client": d.Client, "DeviceId": d.ID, "DeviceName": d.DeviceName, "ApplicationVersion": d.Version, "LastActivityDate": wireTime(now), "RemoteEndPoint": "", "AdditionalUsers": []any{}, "PlayableMediaTypes": []any{}, "SupportedCommands": []any{}, "SupportsRemoteControl": false, "PlayState": state}
 	if i.protocol == "jellyfin" {
 		session["LastPlaybackCheckIn"] = wireTime(time.Time{})
 		state["PlaybackOrder"] = "Default"

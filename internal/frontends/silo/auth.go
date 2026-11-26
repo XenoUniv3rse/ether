@@ -106,7 +106,7 @@ func (i *instance) user(r *http.Request, v *frontend.Viewer) map[string]any {
 	if v.IsOwner {
 		role = "admin"
 	}
-	return map[string]any{"id": i.viewerWireID(r.Context(), v.ID), "username": v.Username, "email": v.Email, "role": role, "permissions": []string{}, "download_allowed": false, "password_change_required": false}
+	return map[string]any{"id": i.viewerWireID(r.Context(), v.ID), "username": frontend.ViewerDisplayName(v), "email": v.Email, "role": role, "permissions": []string{}, "download_allowed": false, "password_change_required": false}
 }
 func (i *instance) login(w http.ResponseWriter, r *http.Request) {
 	var b struct {
