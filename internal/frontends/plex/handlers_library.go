@@ -272,12 +272,20 @@ func (s *Server) handleSection(w http.ResponseWriter, r *http.Request) {
 		{"contentRating", "By Content Rating", true},
 		{"firstCharacter", "By First Letter", true},
 	}
-	if sec.HideLibraryTab {
-		recommended := recommendedSectionPivot(sec)
-		mc.Directory = append(mc.Directory, model.Directory{Key: recommended.Key, Title: recommended.Title})
+	if sec.TabKinds != nil {
+		for _, pivot := range sectionPivots(sec) {
+			switch pivot.ID {
+			case "recommended":
+				mc.Directory = append(mc.Directory, model.Directory{Key: pivot.Key, Title: pivot.Title})
+			case "library":
+				mc.Directory = append(mc.Directory, model.Directory{Key: "all", Title: allTitle})
+			case "collections":
+				mc.Directory = append(mc.Directory, model.Directory{Key: "collection", Title: pivot.Title, Secondary: model.Ptr(true)})
+			}
+		}
 	}
 	for _, d := range sub {
-		if sec.HideLibraryTab && d.key == "all" {
+		if sec.TabKinds != nil && (d.key == "all" || d.key == "collection") {
 			continue
 		}
 		dir := model.Directory{Key: d.key, Title: d.title}

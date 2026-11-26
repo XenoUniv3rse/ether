@@ -6632,7 +6632,6 @@
   "m_1355f4a6a3cd7b": "Pin {title}",
   "m_1356837acf14f5": "Everything no rule above caught",
   "m_1356ecb3a4229e": "Plex account disconnected.",
-  "m_1357789b2ef67f": "Show the Library tab",
   "m_13578c45a16baf": "Library font",
   "m_1357be1d8582ea": "Stopping Ether",
   "m_1359acf8dadd16": {
@@ -9460,7 +9459,6 @@
   "m_1b9e60378e18c3": "Drag across a day to paint a block. Arrow keys move, Enter paints the focused hour, Delete removes the block under the cursor.",
   "m_1b9f46bed5e2e0": "Web browser, Vela for macOS, Windows, iPhone, iPad and Apple TV",
   "m_1ba002047d5295": "Preferred language",
-  "m_1ba18364ab4d2e": "Show the full library grid in Vela and Plex.",
   "m_1ba20d56d27830": "Loading earlier messages",
   "m_1ba23329bebb54": "Popular Fantasy",
   "m_1ba38afe8056ed": "Restore a backup you downloaded from Ether. Ether checks it first; on a cluster it then guides you through replacing the shared database.",

@@ -524,7 +524,6 @@ func (c *librariesConsole) handler() http.Handler {
 			MetadataSource    *string                   `json:"metadataSource"`
 			Name              *string                   `json:"name"`
 			Hidden            *bool                     `json:"hidden"`
-			HideLibraryTab    *bool                     `json:"hideLibraryTab"`
 			Sort              *int                      `json:"sort"`
 			CardShape         *string                   `json:"cardShape"`
 			Present           *core.Presentations       `json:"present"`
@@ -574,12 +573,6 @@ func (c *librariesConsole) handler() http.Handler {
 				return
 			}
 			sectionsChanged = true
-		}
-		if body.HideLibraryTab != nil {
-			if err := svc.SetHideLibraryTab(ctx, lib.ID, *body.HideLibraryTab); err != nil {
-				libError(w, libErrStatus(err), "Could not update the library")
-				return
-			}
 		}
 		if body.Sort != nil {
 			if err := svc.SetSort(ctx, lib.ID, *body.Sort); err != nil {

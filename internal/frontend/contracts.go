@@ -66,8 +66,6 @@ type View struct {
 	// Subset is true when the library narrows a broader canonical catalogue
 	// with rules, visibility defaults, narrower sources, or a collection.
 	Subset bool
-	// HideLibraryTab affects navigation only. Direct browse remains available.
-	HideLibraryTab bool `json:"hideLibraryTab,omitempty"`
 	// Plugin library presentation metadata (optional; populated for plugin libraries).
 	Media       core.MediaClass `json:"media,omitempty"`
 	Card        string          `json:"card,omitempty"`
@@ -77,6 +75,10 @@ type View struct {
 	Sorts       []string        `json:"sorts,omitempty"`
 	Facets      []ViewFacet     `json:"facets,omitempty"`
 	ListLevels  []string        `json:"-"`
+	// TabsCustomized distinguishes owner tab lists from protocol defaults.
+	TabsCustomized bool `json:"-"`
+	// HiddenBrowseTabs retain the query settings for direct links to hidden grids.
+	HiddenBrowseTabs []ViewTab `json:"-"`
 }
 
 // EffectiveExperience is the library experience apps should present the view

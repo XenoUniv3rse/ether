@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/braedonsaunders/ether/internal/core"
 	"github.com/braedonsaunders/ether/internal/frontend"
 )
 
@@ -53,18 +54,32 @@ func (s *Server) publishedKindSections(ctx context.Context) []Section {
 		if err != nil || id <= 0 {
 			continue
 		}
+		var tabKinds []string
+		if v.TabsCustomized {
+			tabKinds = make([]string, 0, 3)
+			for _, tab := range v.Tabs {
+				switch tab.Kind {
+				case core.TabRecommended, core.TabLibrary:
+					tabKinds = append(tabKinds, tab.Kind)
+				case core.TabCollections:
+					if tab.Facet == "" {
+						tabKinds = append(tabKinds, tab.Kind)
+					}
+				}
+			}
+		}
 		out = append(out, Section{
-			ID:             id,
-			Type:           frontend.MediaType(base),
-			Title:          v.Name,
-			LibraryID:      frontend.LibraryID(id),
-			PluginID:       v.PluginID,
-			KindKey:        v.KindKey,
-			Subset:         v.Subset,
-			HideLibraryTab: v.HideLibraryTab,
-			PluginSorts:    append([]string(nil), v.Sorts...),
-			PluginFacets:   append([]frontend.ViewFacet(nil), v.Facets...),
-			ListLevels:     v.ListLevels,
+			ID:           id,
+			Type:         frontend.MediaType(base),
+			Title:        v.Name,
+			LibraryID:    frontend.LibraryID(id),
+			PluginID:     v.PluginID,
+			KindKey:      v.KindKey,
+			Subset:       v.Subset,
+			PluginSorts:  append([]string(nil), v.Sorts...),
+			PluginFacets: append([]frontend.ViewFacet(nil), v.Facets...),
+			ListLevels:   v.ListLevels,
+			TabKinds:     tabKinds,
 		})
 	}
 	return out

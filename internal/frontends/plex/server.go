@@ -52,13 +52,15 @@ type Section struct {
 	LibraryID frontend.LibraryID
 	// PluginID and KindKey are set for plugin-provided libraries (empty for
 	// built-in and filter libraries).
-	PluginID       string
-	KindKey        string
-	Subset         bool
-	HideLibraryTab bool
-	PluginSorts    []string
-	PluginFacets   []frontend.ViewFacet
-	ListLevels     []string
+	PluginID     string
+	KindKey      string
+	Subset       bool
+	PluginSorts  []string
+	PluginFacets []frontend.ViewFacet
+	ListLevels   []string
+	// TabKinds lists visible owner-configured Plex equivalents in display order.
+	// Nil uses Plex’s default navigation.
+	TabKinds []string
 }
 
 // SessionToucher is optionally implemented by frontend.Playback to keep a play

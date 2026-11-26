@@ -111,11 +111,10 @@ func libraryWire(view frontend.View) object {
 			filters["facets"] = facetWires
 		}
 	}
-	recommended := object{"id": "recommended", "label": "Recommendations", "kind": "recommended"}
 	var tabs []object
 	if !isPlugin && len(view.Tabs) == 0 {
 		tabs = []object{
-			recommended,
+			{"id": "recommended", "label": "Recommendations", "kind": "recommended"},
 			{"id": "library", "label": "Library", "kind": "library"},
 		}
 		if kind == "movies" || kind == "shows" {
@@ -201,18 +200,6 @@ func libraryWire(view frontend.View) object {
 				}
 			}
 			tabs = append(tabs, tab)
-		}
-	}
-	if view.HideLibraryTab {
-		// Filter the advertised tabs after resolving browse defaults. The
-		// underlying View.Tabs still resolves direct links to the grid.
-		tabs = slices.DeleteFunc(tabs, func(tab object) bool { return tab["kind"] == "library" })
-		if len(tabs) == 0 {
-			tabs = append(tabs, recommended)
-		} else if idx := slices.IndexFunc(tabs, func(tab object) bool { return tab["kind"] == "recommended" }); idx > 0 {
-			first := tabs[idx]
-			copy(tabs[1:idx+1], tabs[:idx])
-			tabs[0] = first
 		}
 	}
 	dateDisplay := "year"
@@ -329,6 +316,9 @@ func libraryQuery(r *http.Request, view frontend.View, library object) (frontend
 		} else if tabKey == "library" {
 			activeTab = &frontend.ViewTab{ID: "library", Kind: "library", Search: true}
 		}
+		if idx := slices.IndexFunc(view.HiddenBrowseTabs, func(tab frontend.ViewTab) bool { return tab.ID == tabKey }); idx >= 0 {
+			activeTab = &view.HiddenBrowseTabs[idx]
+		}
 		if activeTab == nil {
 			return q, "", "", 404
 		}
@@ -339,6 +329,9 @@ func libraryQuery(r *http.Request, view frontend.View, library object) (frontend
 				break
 			}
 		}
+	}
+	if activeTab == nil && values.Get("tab") == "" && len(view.HiddenBrowseTabs) > 0 {
+		activeTab = &view.HiddenBrowseTabs[0]
 	}
 
 	if reqLevel := strings.TrimSpace(values.Get("level")); reqLevel != "" {
@@ -819,12 +812,6 @@ func (i *instance) libraryRows(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	tabID := strings.TrimSpace(r.URL.Query().Get("tab"))
-	// A grid-only configuration advertises the default rows tab when its
-	// grid is hidden. Resolve it through the existing default rows path.
-	if view.HideLibraryTab && tabID == "recommended" && len(view.Tabs) > 0 &&
-		!slices.ContainsFunc(view.Tabs, func(tab frontend.ViewTab) bool { return tab.Kind != "library" }) {
-		tabID = ""
-	}
 	var activeTab *frontend.ViewTab
 	if tabID != "" {
 		if len(view.Tabs) > 0 {

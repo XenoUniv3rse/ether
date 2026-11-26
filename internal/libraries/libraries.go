@@ -19,9 +19,6 @@ import (
 )
 
 func init() {
-	const hideLibraryTab = `ALTER TABLE libraries ADD COLUMN hide_library_tab INTEGER NOT NULL DEFAULT 0;`
-	store.Register("libraries", 17, hideLibraryTab)
-	store.RegisterDialect("libraries", 17, store.Postgres, hideLibraryTab)
 	const metadataSource = `ALTER TABLE libraries ADD COLUMN metadata_source TEXT NOT NULL DEFAULT '';`
 	store.Register("libraries", 16, metadataSource)
 	store.RegisterDialect("libraries", 16, store.Postgres, metadataSource)
