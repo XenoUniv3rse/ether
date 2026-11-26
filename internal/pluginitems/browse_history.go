@@ -219,6 +219,10 @@ LIMIT ?`
 			p1Args = append(p1Args, viewerID, int64(q.LibraryID))
 			p1Args = append(p1Args, p1ItemArgs...)
 			p1Args = append(p1Args, need)
+			if plan.matchSort != "" {
+				querySQL = plan.matchFirstPageSQL(strings.TrimRight(rolledCTE, "\n")+",\n", cols, p1Where, "i.sort_title ASC, i.item_ref ASC")
+				break
+			}
 			querySQL = rolledCTE + `SELECT ` + cols + `
 FROM plugin_items i
 WHERE ` + p1Where + `

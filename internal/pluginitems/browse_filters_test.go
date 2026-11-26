@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -402,4 +403,61 @@ LIMIT 11`, int64(20), "album", "genres", "label", "North", "parentLabel", "North
 		!strings.Contains(pgSQL, "NOT (i.search_tsv @@ to_tsquery('simple', ?))") {
 		t.Fatalf("unexpected Postgres filter SQL: %s", pgSQL)
 	}
+}
+
+func TestBrowseRareEmptyFieldPresence(t *testing.T) {
+	ctx := context.Background()
+	s, _ := openTestService(t, Options{})
+	const pluginID, kindKey, libID = "test.presence", "album", 83
+	if _, err := s.UpsertKind(ctx, pluginID, libID, sampleAlbumFilterDecl(), false); err != nil {
+		t.Fatal(err)
+	}
+	items := make([]core.KindItem, 160)
+	genres := rawJSON(t, []string{"Rock", "Live"})
+	for i := range items {
+		items[i] = core.KindItem{
+			ID: fmt.Sprintf("album-%03d", i), Level: kindKey, Title: "Album",
+			Released: int64(i + 1), Playable: true,
+		}
+		if i > 1 {
+			items[i].Fields = map[string]json.RawMessage{"genres": genres}
+		}
+	}
+	upsert := func(items []core.KindItem) {
+		t.Helper()
+		if _, err := s.UpsertItems(ctx, pluginID, kindKey, items); err != nil {
+			t.Fatal(err)
+		}
+	}
+	upsert(items)
+	q := BrowseQuery{
+		LibraryID: libID, Sort: "released:desc", Limit: 1,
+		Empty: map[string]bool{"genres": true}, NoTotal: true, CheapTotal: true,
+	}
+	check := func(q BrowseQuery, id string, total int, more bool) BrowsePage {
+		t.Helper()
+		page, err := s.Browse(ctx, q)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(page.Items) != 1 || page.Items[0].ID != id || page.Total != total ||
+			!page.TotalExact || (page.NextCursor != "") != more {
+			t.Fatalf("want %s, total %d, more %t: got %+v", id, total, more, page)
+		}
+		return page
+	}
+	first := check(q, items[1].ID, 2, true)
+	q.Cursor = first.NextCursor
+	check(q, items[0].ID, 2, false)
+
+	q.Cursor = ""
+	items[1].Fields = map[string]json.RawMessage{"genres": genres}
+	upsert(items[1:2])
+	if err := s.DeleteItems(ctx, pluginID, kindKey, []string{items[2].ID}); err != nil {
+		t.Fatal(err)
+	}
+	check(q, items[0].ID, 1, false)
+
+	q.Empty = map[string]bool{"genres": false}
+	check(q, items[len(items)-1].ID, len(items)-2, true)
 }

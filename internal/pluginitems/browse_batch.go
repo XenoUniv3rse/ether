@@ -97,6 +97,13 @@ func (s *Service) BrowseBatch(ctx context.Context, queries []BrowseQuery) ([]Bro
 		var active []int
 		for i := range eligible {
 			e := &eligible[i]
+			if len(e.q.Empty) > 0 {
+				var err error
+				e.tally, err = s.probeBrowsePresence(ctx, e.q, e.parentRef, e.level)
+				if err != nil {
+					return nil, err
+				}
+			}
 			if (e.tally.totalExact && e.tally.total == 0) || e.tally.knownEmpty {
 				e.empty = true
 				out[e.idx] = BrowsePage{Items: []core.KindItem{}}
@@ -135,7 +142,10 @@ func (s *Service) BrowseBatch(ctx context.Context, queries []BrowseQuery) ([]Bro
 						dir = "DESC"
 					}
 					var subSQL string
-					if e.plan.driver == nil {
+					if e.plan.matchSort != "" {
+						subSQL = e.plan.matchFirstPageSQL("WITH ", "i.item_ref, i."+e.col+" AS sort_col", e.plan.baseWhere,
+							"i."+e.col+" "+dir+", i.item_ref ASC")
+					} else if e.plan.driver == nil {
 						subSQL = fmt.Sprintf(
 							`SELECT i.item_ref, i.%s AS sort_col FROM plugin_items i WHERE %s ORDER BY i.%s %s, i.item_ref ASC LIMIT ?`,
 							e.col, e.plan.baseWhere, e.col, dir,

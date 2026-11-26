@@ -8,8 +8,8 @@ import (
 	"strings"
 
 	"github.com/braedonsaunders/ether/internal/core"
-	"github.com/braedonsaunders/ether/internal/libraryfilter"
 	"github.com/braedonsaunders/ether/internal/plugins"
+	"github.com/braedonsaunders/ether/internal/store"
 )
 
 // ErrInvalidBrowseField is returned when a browse or search filter references
@@ -126,6 +126,31 @@ func validateBrowseEmptyFields(decl plugins.MediaKindMeta, empty map[string]bool
 // plugin_items for envelope columns (#807). Keys are sorted for deterministic
 // SQL and count-cache keys. Unknown fields are rejected.
 func (s *Service) appendBrowseEmptyFields(ctx context.Context, lib core.LibraryID, where *strings.Builder, args *[]any, empty map[string]bool) error {
+	return s.appendBrowseEmptyPlan(ctx, lib, where, args, empty, nil)
+}
+
+type browsePresenceField struct {
+	key      string
+	textOnly bool
+}
+
+func browsePresenceFields(decl plugins.MediaKindMeta) map[string]browsePresenceField {
+	fields := make(map[string]browsePresenceField, len(decl.Fields))
+	for _, f := range decl.Fields {
+		fields[f.Key] = browsePresenceField{key: f.Key, textOnly: f.Type == "string" || f.Type == "strings" || f.Type == "enum"}
+	}
+	for _, f := range decl.Fields {
+		if f.Type == "date" {
+			alias := f.Key + "-decade"
+			if _, declared := fields[alias]; !declared {
+				fields[alias] = fields[f.Key]
+			}
+		}
+	}
+	return fields
+}
+
+func (s *Service) appendBrowseEmptyPlan(ctx context.Context, lib core.LibraryID, where *strings.Builder, args *[]any, empty, matchFirst map[string]bool) error {
 	if len(empty) == 0 {
 		return nil
 	}
@@ -137,33 +162,31 @@ func (s *Service) appendBrowseEmptyFields(ctx context.Context, lib core.LibraryI
 	if err != nil {
 		return err
 	}
-	fieldTypes := make(map[string]string, len(rec.Decl.Fields))
-	for _, f := range rec.Decl.Fields {
-		fieldTypes[f.Key] = f.Type
-	}
+	fields := browsePresenceFields(rec.Decl)
+	isPG := store.DialectOf(s.db) == store.Postgres
 	for _, k := range keys {
 		wantEmpty := empty[k]
-		if ftype, declared := fieldTypes[k]; declared {
-			op := "EXISTS"
-			if wantEmpty {
-				op = "NOT EXISTS"
+		if field, indexed := fields[k]; indexed {
+			predicate := "f.field = ?"
+			if field.textOnly {
+				predicate += " AND f.v_text <> ''"
 			}
-			switch ftype {
-			case "string", "strings", "enum":
-				where.WriteString(` AND ` + op + ` (SELECT 1 FROM plugin_item_fields f WHERE f.item_ref = i.item_ref AND f.field = ? AND f.v_text <> '')`)
-			default:
-				where.WriteString(` AND ` + op + ` (SELECT 1 FROM plugin_item_fields f WHERE f.item_ref = i.item_ref AND f.field = ?)`)
+			if !isPG && matchFirst[k] {
+				// SQLite has no hash anti-join. Build its membership B-tree
+				// once using the field-led index instead of probing each item.
+				op := "IN"
+				if wantEmpty {
+					op = "NOT IN"
+				}
+				where.WriteString(" AND i.item_ref " + op + " (SELECT f.item_ref FROM plugin_item_fields f WHERE " + predicate + ")")
+			} else {
+				op := "EXISTS"
+				if wantEmpty {
+					op = "NOT EXISTS"
+				}
+				where.WriteString(" AND " + op + " (SELECT 1 FROM plugin_item_fields f WHERE f.item_ref = i.item_ref AND " + predicate + ")")
 			}
-			*args = append(*args, k)
-			continue
-		}
-		if base, isDateDecade := libraryfilter.SplitDateDecadeFacet(k); isDateDecade && fieldTypes[base] == "date" {
-			op := "EXISTS"
-			if wantEmpty {
-				op = "NOT EXISTS"
-			}
-			where.WriteString(` AND ` + op + ` (SELECT 1 FROM plugin_item_fields f WHERE f.item_ref = i.item_ref AND f.field = ?)`)
-			*args = append(*args, base)
+			*args = append(*args, field.key)
 			continue
 		}
 		// Envelope columns on plugin_items are NOT NULL with 0 / '' defaults.

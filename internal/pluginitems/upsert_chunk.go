@@ -88,6 +88,9 @@ func (s *Service) writeUpsertChunk(ctx context.Context, kind KindRecord, pluginI
 		maxItems = s.MaxItemsFor(pluginID)
 	}
 	held, err := s.runWriteChunk(ctx, func(ctx context.Context, tx *sql.Tx) error {
+		if err := lockFieldPresence(ctx, tx, store.DialectOf(s.db) == store.Postgres, kind.LibraryID); err != nil {
+			return err
+		}
 		if plan == nil {
 			var err error
 			plan, err = prepareUpsertChunk(ctx, tx, kind, chunk, nowUnix, captureUndo, snapshotPrevious)
@@ -484,6 +487,24 @@ type upsertFTSChange struct {
 
 func (s *Service) applyUpsertChunk(ctx context.Context, tx *sql.Tx, kind KindRecord, pluginID, kindKey string, chunk []preparedItem, plan *upsertChunkPlan, maxItems int, seenAt, nowUnix int64, bumpGen, markOK, pin bool) (int64, error) {
 	existing, changed, unchangedRefs := plan.existing, plan.changed, plan.unchanged
+	isPG := store.DialectOf(s.db) == store.Postgres
+	var presenceBefore, presenceAfter []core.ItemRef
+	for i, item := range chunk {
+		ref := item.validated.Item.Ref
+		old := existing[ref]
+		if old.presenceCounted {
+			if !changed[i] || (len(plan.fields[i].removed) == 0 && len(plan.fields[i].written) == 0 &&
+				old.level == item.validated.Item.Level && (old.parentRef == "") == (item.parentRef == "")) {
+				continue
+			}
+			presenceBefore = append(presenceBefore, ref)
+		}
+		presenceAfter = append(presenceAfter, ref)
+	}
+	presence := fieldPresenceDelta{isPG: isPG}
+	if err := presence.collect(ctx, tx, presenceBefore, -1); err != nil {
+		return 0, err
+	}
 
 	if plan.result.added > 0 {
 		// The tally is maintained in the same transactions as the items,
@@ -539,7 +560,6 @@ func (s *Service) applyUpsertChunk(ctx context.Context, tx *sql.Tx, kind KindRec
 		pinInt = 1
 	}
 
-	isPG := store.DialectOf(s.db) == store.Postgres
 	tallyDelta := map[string]int64{}
 	recordingDelta := map[string]int64{}
 
@@ -704,6 +724,9 @@ INSERT INTO plugin_items(
 		}
 	}
 
+	if err := presence.finish(ctx, tx, presenceAfter); err != nil {
+		return 0, err
+	}
 	if err := applyRecordingTallyDeltaTx(ctx, tx, kind.LibraryID, recordingDelta); err != nil {
 		return 0, err
 	}

@@ -398,7 +398,7 @@ func TestMigration17BackfillFromPre17Schema(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Roll back only Migration 17 while preserving Migrations 1..16.
+	// Restore the pre-17 schema used by this fixture.
 	for _, stmt := range []string{
 		`DROP TABLE IF EXISTS plugin_item_person_tally`,
 		`DROP INDEX IF EXISTS plugin_item_field_tally_count`,
@@ -416,6 +416,10 @@ func TestMigration17BackfillFromPre17Schema(t *testing.T) {
 		`DROP INDEX IF EXISTS plugin_items_recording`,
 		`ALTER TABLE plugin_items DROP COLUMN recording`,
 		`ALTER TABLE plugin_facet_expansions DROP COLUMN decl_hash`,
+		`DROP INDEX plugin_items_presence_pending`,
+		`DROP INDEX plugin_item_fields_present`,
+		`DROP TABLE plugin_item_field_presence`,
+		`ALTER TABLE plugin_items DROP COLUMN presence_counted`,
 		`DELETE FROM schema_migrations WHERE component = 'pluginitems' AND version >= 17`,
 	} {
 		if _, err := db.ExecContext(ctx, stmt); err != nil {

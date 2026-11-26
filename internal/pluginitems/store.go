@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"time"
@@ -2035,6 +2036,21 @@ LIMIT ?`, pluginID, kindKey, cursor, upsertChunkSize)
 		return 0, cursor, false, false, err
 	}
 	defer tx.Rollback()
+	if err := lockFieldPresence(ctx, tx, isPG, fallbackLibID); err != nil {
+		return 0, cursor, false, false, err
+	}
+	changedRefs := make(map[core.ItemRef]struct{})
+	for _, f := range fieldDeletes {
+		changedRefs[core.ItemRef(f.itemRef)] = struct{}{}
+	}
+	for _, f := range fieldInserts {
+		changedRefs[core.ItemRef(f.itemRef)] = struct{}{}
+	}
+	presenceRefs := slices.Collect(maps.Keys(changedRefs))
+	presence := fieldPresenceDelta{isPG: isPG}
+	if err := presence.collect(ctx, tx, presenceRefs, -1); err != nil {
+		return 0, cursor, false, false, err
+	}
 
 	for _, del := range fieldDeletes {
 		var err error
@@ -2093,6 +2109,9 @@ WHERE item_ref = ?
 				return 0, cursor, false, false, err
 			}
 		}
+	}
+	if err := presence.finish(ctx, tx, presenceRefs); err != nil {
+		return 0, cursor, false, false, err
 	}
 	if hasFieldTally && (len(fieldTallyLibs) > 0 || len(personTallyLibs) > 0) {
 		libSet := make(map[core.LibraryID]struct{}, len(fieldTallyLibs)+len(personTallyLibs))
@@ -2503,14 +2522,15 @@ func extractIndexData(decl plugins.MediaKindMeta, fieldsJSON string) ([]IndexedF
 }
 
 type existingItemMeta struct {
-	seq       int64
-	level     string
-	parentRef core.ItemRef
-	addedAt   int64
-	released  int64
-	year      int64
-	hash      string
-	recording string
+	seq             int64
+	level           string
+	parentRef       core.ItemRef
+	addedAt         int64
+	released        int64
+	year            int64
+	hash            string
+	recording       string
+	presenceCounted bool
 }
 
 func lookupExistingItems(ctx context.Context, tx queryer, items []preparedItem) (map[core.ItemRef]existingItemMeta, error) {
@@ -2526,7 +2546,7 @@ func lookupExistingItems(ctx context.Context, tx queryer, items []preparedItem) 
 			args[i] = string(v.validated.Item.Ref)
 		}
 		rows, err := tx.QueryContext(ctx,
-			`SELECT item_ref, seq, level, parent_ref, added_at, released, year, content_hash, recording FROM plugin_items WHERE item_ref IN (`+strings.Join(placeholders, ",")+`)`,
+			`SELECT item_ref, seq, level, parent_ref, added_at, released, year, content_hash, recording, presence_counted = 1 FROM plugin_items WHERE item_ref IN (`+strings.Join(placeholders, ",")+`)`,
 			args...)
 		if err != nil {
 			return nil, err
@@ -2534,19 +2554,21 @@ func lookupExistingItems(ctx context.Context, tx queryer, items []preparedItem) 
 		for rows.Next() {
 			var refStr, lv, parentStr, hash, rec string
 			var seq, added, released, yr int64
-			if err := rows.Scan(&refStr, &seq, &lv, &parentStr, &added, &released, &yr, &hash, &rec); err != nil {
+			var presenceCounted bool
+			if err := rows.Scan(&refStr, &seq, &lv, &parentStr, &added, &released, &yr, &hash, &rec, &presenceCounted); err != nil {
 				rows.Close()
 				return nil, err
 			}
 			out[core.ItemRef(refStr)] = existingItemMeta{
-				seq:       seq,
-				level:     lv,
-				parentRef: core.ItemRef(parentStr),
-				addedAt:   added,
-				released:  released,
-				year:      yr,
-				hash:      hash,
-				recording: rec,
+				seq:             seq,
+				level:           lv,
+				parentRef:       core.ItemRef(parentStr),
+				addedAt:         added,
+				released:        released,
+				year:            yr,
+				hash:            hash,
+				recording:       rec,
+				presenceCounted: presenceCounted,
 			}
 		}
 		if err := rows.Err(); err != nil {
@@ -2827,6 +2849,9 @@ func (s *Service) writeDeleteChunk(ctx context.Context, kind KindRecord, chunk [
 		}
 	}
 	held, err := s.runWriteChunk(ctx, func(ctx context.Context, tx *sql.Tx) error {
+		if err := lockFieldPresence(ctx, tx, !isSQLite, kind.LibraryID); err != nil {
+			return err
+		}
 		if len(chunk) > 0 {
 			if plan == nil {
 				var err error
@@ -3081,6 +3106,10 @@ func prepareDeleteChunk(ctx context.Context, q queryer, kind KindRecord, targets
 
 func deleteTargetsTx(ctx context.Context, tx *sql.Tx, kind KindRecord, isSQLite bool, targets []deleteTarget, plan *deleteChunkPlan) error {
 	libraryID, decl := kind.LibraryID, kind.Decl
+	presence := fieldPresenceDelta{isPG: !isSQLite}
+	if err := presence.collect(ctx, tx, plan.refs, -1); err != nil {
+		return err
+	}
 	for _, t := range targets {
 		if isSQLite {
 			if err := sqliteDeleteFTS(ctx, tx, t.seq); err != nil {
@@ -3109,6 +3138,9 @@ func deleteTargetsTx(ctx context.Context, tx *sql.Tx, kind KindRecord, isSQLite 
 				return err
 			}
 		}
+	}
+	if err := presence.finish(ctx, tx, nil); err != nil {
+		return err
 	}
 	if err := applyTallyDeltaTx(ctx, tx, libraryID, plan.levelTally); err != nil {
 		return err
@@ -3451,6 +3483,9 @@ func (s *Service) PurgePlugin(ctx context.Context, pluginID string) error {
 }
 
 func (s *Service) purgeKindTx(ctx context.Context, tx *sql.Tx, pluginID, kindKey string, libraryID core.LibraryID) error {
+	if err := lockFieldPresence(ctx, tx, store.DialectOf(s.db) == store.Postgres, libraryID); err != nil {
+		return err
+	}
 	whereItems := `plugin_id = ? AND kind_key = ?`
 	args := []any{pluginID, kindKey}
 	if kindKey == "" {
@@ -3511,6 +3546,9 @@ func (s *Service) purgeKindTx(ctx context.Context, tx *sql.Tx, pluginID, kindKey
 		return err
 	}
 	if libraryID > 0 {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM plugin_item_field_presence WHERE library_id = ?`, int64(libraryID)); err != nil {
+			return err
+		}
 		if _, err := tx.ExecContext(ctx, `DELETE FROM plugin_item_tally WHERE library_id = ?`, int64(libraryID)); err != nil {
 			return err
 		}
@@ -3527,6 +3565,11 @@ func (s *Service) purgeKindTx(ctx context.Context, tx *sql.Tx, pluginID, kindKey
 			return err
 		}
 	} else {
+		if _, err := tx.ExecContext(ctx,
+			`DELETE FROM plugin_item_field_presence WHERE library_id IN (SELECT DISTINCT library_id FROM plugin_items WHERE `+whereItems+`)`,
+			args...); err != nil {
+			return err
+		}
 		if _, err := tx.ExecContext(ctx,
 			`DELETE FROM plugin_item_tally WHERE library_id IN (SELECT DISTINCT library_id FROM plugin_items WHERE `+whereItems+`)`,
 			args...); err != nil {

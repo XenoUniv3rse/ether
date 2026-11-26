@@ -175,6 +175,7 @@ type browseDriver struct {
 
 type browseQueryPlan struct {
 	driver    *browseDriver
+	matchSort string
 	baseWhere string
 	baseArgs  []any
 	viewerID  int64
@@ -186,6 +187,9 @@ func (p browseQueryPlan) pageSQLAndArgs(isPG bool, cols, pageWhere string, pageA
 		args := make([]any, 0, len(pageArgs)+1)
 		args = append(args, pageArgs...)
 		args = append(args, limitPlusOne)
+		if p.matchSort != "" {
+			return p.matchFirstPageSQL("WITH ", cols, pageWhere, orderBy), args
+		}
 		return `SELECT ` + cols + `
 FROM plugin_items i
 WHERE ` + pageWhere + `
@@ -223,6 +227,21 @@ CROSS JOIN plugin_items i
 WHERE i.item_ref = _d.item_ref AND ` + pageWhere + `
 ORDER BY ` + orderBy + `
 LIMIT ?`, args
+}
+
+// Fence the filters from ORDER BY/LIMIT so PostgreSQL can plan a hash
+// (anti-)join independently of the requested order. Keep only refs and the
+// sort key in the materialized result, then read the payload for the page.
+func (p browseQueryPlan) matchFirstPageSQL(prefix, cols, where, orderBy string) string {
+	return prefix + `_matches AS MATERIALIZED (
+	SELECT i.item_ref, i.` + p.matchSort + `
+	FROM plugin_items i WHERE ` + where + `
+), _page AS MATERIALIZED (
+	SELECT i.item_ref FROM _matches i ORDER BY ` + orderBy + ` LIMIT ?
+)
+SELECT ` + cols + `
+FROM _page p CROSS JOIN plugin_items i WHERE i.item_ref = p.item_ref
+ORDER BY ` + orderBy
 }
 
 func (p browseQueryPlan) countSQLAndArgs(isPG bool) (string, []any) {
@@ -297,7 +316,7 @@ func (s *Service) buildBrowsePlan(
 		driveFromFields bool
 	)
 
-	if err := s.appendBrowseEmptyFields(ctx, q.LibraryID, &filterWhere, &filterArgs, q.Empty); err != nil {
+	if err := s.appendBrowseEmptyPlan(ctx, q.LibraryID, &filterWhere, &filterArgs, q.Empty, tally.emptyMatchFirst); err != nil {
 		return browseQueryPlan{}, err
 	}
 
@@ -474,7 +493,15 @@ func (s *Service) buildBrowsePlan(
 	if err := s.appendVisibilityForViewer(ctx, &bw, &baseArgs, q.LibraryID, q.TabPolicy, false, viewerID); err != nil {
 		return browseQueryPlan{}, err
 	}
+	var matchSort string
+	if len(tally.emptyMatchFirst) > 0 && driver == nil {
+		matchSort = col
+		if kind == "last_viewed" {
+			matchSort = "sort_title"
+		}
+	}
 	return browseQueryPlan{
+		matchSort: matchSort,
 		driver:    driver,
 		baseWhere: bw.String(),
 		baseArgs:  baseArgs,
@@ -647,6 +674,7 @@ type browsePersonTallyKey struct {
 }
 
 type browseTallyInfo struct {
+	emptyMatchFirst    map[string]bool
 	totalExact         bool
 	total              int
 	knownEmpty         bool
@@ -907,7 +935,10 @@ func (s *Service) queryPersonTallyCounts(ctx context.Context, libraryID core.Lib
 }
 
 func (s *Service) browseTallyProbe(ctx context.Context, q BrowseQuery, parentRef, level string) (browseTallyInfo, error) {
-	if len(q.Empty) > 0 || hasActiveExcludeQuery(q.ExcludeQuery) {
+	if len(q.Empty) > 0 {
+		return s.probeBrowsePresence(ctx, q, parentRef, level)
+	}
+	if hasActiveExcludeQuery(q.ExcludeQuery) {
 		return browseTallyInfo{}, nil
 	}
 	noExtraFilters := q.Policy.Passive() && q.TabPolicy.Passive() && !q.Hidden && q.PersonID <= 0 && q.Watched == nil && q.MaxContentRating == "" && len(q.ExcludeKeys) == 0
