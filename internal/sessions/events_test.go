@@ -3,6 +3,7 @@ package sessions
 import (
 	"context"
 	"errors"
+	"reflect"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -45,7 +46,7 @@ func TestEventsAcrossNodesAndViewerScope(t *testing.T) {
 	for _, ch := range []<-chan frontend.Event{viewer, owner} {
 		select {
 		case got := <-ch:
-			if got != event {
+			if !reflect.DeepEqual(got, event) {
 				t.Fatalf("event = %+v", got)
 			}
 		case <-time.After(time.Second):

@@ -57,9 +57,8 @@ type HubImpression struct {
 	HubID    string      `json:"hubId"`
 	Position int         `json:"position"`
 	Keys     []RatingKey `json:"keys"`
-	Context  HubContext  `json:"context"
-	"strings"`
-	At time.Time `json:"at"`
+	Context  HubContext  `json:"context"`
+	At       time.Time   `json:"at"`
 }
 
 // ImpressionSink receives served rows. Implementations must not block.
