@@ -175,10 +175,7 @@ func (i *instance) catalog(w http.ResponseWriter, r *http.Request) {
 			more = more || offset+len(archive) < archiveCount
 		}
 	} else if q.Get("library_id") == nowAvailableLibraryID {
-		titles, ok := i.nowAvailableTitles(r, v)
-		if !ok {
-			titles = nil
-		}
+		titles, _ := i.nowAvailableTitles(r, v)
 		total := len(titles)
 		start := min(offset, total)
 		end := total

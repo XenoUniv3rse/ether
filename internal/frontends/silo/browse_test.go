@@ -531,8 +531,9 @@ func TestDiscoverAndNowAvailableUseExperienceRows(t *testing.T) {
 			return []frontend.Row{
 				{ID: "home.continue", Title: "Continue Watching", Purpose: frontend.RowContinue, Items: []frontend.Title{similar}},
 				{ID: "home.because.dune", Title: "Because you watched Dune", Kind: "because-you-watched", Purpose: frontend.RowRecommendation, Items: []frontend.Title{similar}},
-				{ID: nowAvailableRowID, Title: nowAvailableTitle, Purpose: frontend.RowWatchlist, Items: []frontend.Title{ready}},
-				{ID: "watchlist.coming", Title: "Waiting for a stream", Purpose: frontend.RowWatchlist, Items: []frontend.Title{similar}},
+				{ID: "watchlist.saved.available", Title: "Watchlist: Now available", Purpose: frontend.RowWatchlist, Items: []frontend.Title{ready}},
+				{ID: "watchlist.saved.coming", Title: "Watchlist: Waiting for a stream", Purpose: frontend.RowWatchlist, Items: []frontend.Title{similar}},
+				{ID: "watchlist.family", Title: "Family picks", Purpose: frontend.RowWatchlist, Entries: []frontend.RowEntry{{Kind: frontend.RowEntryTitle, Title: &similar, Badge: "Not yet available"}}},
 			}, nil
 		},
 		UserDataFunc: func(context.Context, *frontend.Viewer, []frontend.RatingKey) (map[frontend.RatingKey]frontend.WatchStatus, error) {
@@ -552,12 +553,12 @@ func TestDiscoverAndNowAvailableUseExperienceRows(t *testing.T) {
 		return w
 	}
 	home := call("/api/v2/home/sections")
-	if home.Code != 200 || !strings.Contains(home.Body.String(), `"section_type":"because_you_watched"`) || !strings.Contains(home.Body.String(), `"section_type":"new_to_library"`) || !strings.Contains(home.Body.String(), `"section_type":"continue_watching"`) {
+	if home.Code != 200 || !strings.Contains(home.Body.String(), `"section_type":"because_you_watched"`) || !strings.Contains(home.Body.String(), `"section_type":"new_to_library"`) || !strings.Contains(home.Body.String(), `"section_type":"continue_watching"`) || !strings.Contains(home.Body.String(), `"title":"Family picks"`) || !strings.Contains(home.Body.String(), `"badge":"Not yet available"`) {
 		t.Fatalf("home %d %s", home.Code, home.Body.String())
 	}
 	before := impressions
 	discover := call("/api/v2/recommendations/discover?image_size=medium")
-	if discover.Code != 200 || !strings.Contains(discover.Body.String(), `"title":"Because you watched Dune"`) || !strings.Contains(discover.Body.String(), `"title":"Now available"`) || strings.Contains(discover.Body.String(), "Continue Watching") || strings.Contains(discover.Body.String(), "Waiting for a stream") {
+	if discover.Code != 200 || !strings.Contains(discover.Body.String(), `"title":"Because you watched Dune"`) || !strings.Contains(discover.Body.String(), `"title":"Watchlist: Now available"`) || strings.Contains(discover.Body.String(), "Continue Watching") || !strings.Contains(discover.Body.String(), "Waiting for a stream") {
 		t.Fatalf("discover %d %s", discover.Code, discover.Body.String())
 	}
 	if impressions == before {

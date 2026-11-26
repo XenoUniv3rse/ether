@@ -41,6 +41,9 @@ func (f *rowSizeSource) ResolveRowView(_ context.Context, q frontend.RowViewPage
 	entries := make([]frontend.RowEntry, min(q.Limit, 100-q.Offset))
 	for n := range entries {
 		entries[n] = frontend.RowEntry{Kind: frontend.RowEntryTitle, Title: &frontend.Title{Key: frontend.MovieKey(int64(base + q.Offset + n + 1)), Title: "Movie"}, Handle: fmt.Sprintf("receipt-%d", q.Offset+n)}
+		if q.Offset+n == 0 {
+			entries[n].Badge = "Not yet available"
+		}
 	}
 	return frontend.RowViewPage{Entries: entries, ImpressionHandle: "row-receipt", More: q.Offset+len(entries) < 100}, nil
 }
@@ -121,6 +124,9 @@ func TestVelaRowSizeAndContinuation(t *testing.T) {
 				items := row["items"].([]object)
 				if source.pages[n].Limit != 20 || len(items) != 20 {
 					t.Fatal("wrong per-row page size", row)
+				}
+				if items[0]["badge"] != "Not yet available" || items[1]["badge"] != nil {
+					t.Fatal("row card badges did not stay with their entries")
 				}
 				base := 0
 				if distinct {

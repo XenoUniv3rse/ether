@@ -23,6 +23,7 @@ type RankedCandidate struct {
 	More           bool
 	Key            core.RatingKey
 	ItemCount      int
+	ItemBadges     map[core.RatingKey]string
 }
 
 // CandidateRanker assembles one ranked pool for a visit. A non-nil predicate

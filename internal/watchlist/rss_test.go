@@ -665,11 +665,12 @@ func TestPlexFriendsRSSAttributesAuthorToViewer(t *testing.T) {
 	defer rssServer.Close()
 
 	s := New(db, Options{
-		Sealer:  sealer,
-		Catalog: cat,
-		Users:   func(context.Context) ([]core.User, error) { return []core.User{viewer}, nil },
-		Now:     func() time.Time { return now },
-		Logger:  slog.Default(),
+		Sealer:   sealer,
+		Resolver: &fakeResolver{},
+		Catalog:  cat,
+		Users:    func(context.Context) ([]core.User, error) { return []core.User{viewer}, nil },
+		Now:      func() time.Time { return now },
+		Logger:   slog.Default(),
 	})
 
 	s.recordFriend(ctx, FriendFeedStatus{ID: "93f1c58b6f64a6dc", Username: "Aayoshi"})
@@ -687,13 +688,13 @@ func TestPlexFriendsRSSAttributesAuthorToViewer(t *testing.T) {
 	if len(viewerItems) != 1 || viewerItems[0].Title.Key != show.Key || !slices.Equal(viewerItems[0].Sources, []string{"plex-community:93f1c58b6f64a6dc"}) {
 		t.Fatalf("expected attributed viewer item %d from plex-community:93f1c58b6f64a6dc, got %+v", show.Key, viewerItems)
 	}
-	if queued := s.drainRSSChecks(); len(queued) != 1 || queued[0].ID != viewer.ID {
-		t.Fatalf("expected viewer %d queued for immediate availability check, got %+v", viewer.ID, queued)
+	if queued := s.addQueue; len(queued) != 1 || queued[0] != (addedTitle{viewer.ID, show.Key}) {
+		t.Fatalf("expected only the new title queued for viewer %d, got %+v", viewer.ID, queued)
 	}
 	if err := s.SyncRSS(ctx); err != nil {
 		t.Fatalf("second SyncRSS: %v", err)
 	}
-	if queued := s.drainRSSChecks(); len(queued) != 0 {
+	if queued := s.addQueue; len(queued) != 1 {
 		t.Fatalf("expected no duplicate check queued for existing item, got %+v", queued)
 	}
 

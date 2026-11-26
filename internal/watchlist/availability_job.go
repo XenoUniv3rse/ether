@@ -123,19 +123,15 @@ func (s *Service) runAvailabilityJob(uid int64) {
 		if ctx.Err() != nil {
 			return
 		}
-		// Do not hold the scheduled-pass mutex while waiting for another title.
-		s.mu.Lock()
 		cfg, e := s.settings(ctx)
 		if e == nil && cfg.Enabled && s.o.Resolver != nil {
 			cfg.CheckHours = 0 // explicit owner check bypasses the per-title freshness interval
-			it.CheckedAt = time.Time{}
 			job, stop := context.WithTimeout(ctx, time.Minute)
 			e = s.checkSet(job, cfg, uid, u, u, []Item{it})
 			stop()
 		} else if e == nil {
 			e = errors.New("monitoring disabled")
 		}
-		s.mu.Unlock()
 		if e != nil {
 			incomplete = true
 		}

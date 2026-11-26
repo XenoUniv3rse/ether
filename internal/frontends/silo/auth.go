@@ -51,7 +51,7 @@ func (i *instance) identityContext(r *http.Request) context.Context {
 }
 func device(r *http.Request) frontend.Device {
 	client := r.Header.Get("X-Silo-Client")
-	return frontend.Device{ID: r.Header.Get("X-Silo-Device-Id"), Client: client, Product: client, Version: r.Header.Get("X-Silo-Client-Version"), DeviceName: r.Header.Get("X-Silo-Device-Name"), Platform: r.Header.Get("X-Silo-Device-Platform")}
+	return frontend.Device{ID: r.Header.Get("X-Silo-Device-Id"), Client: client, Product: client, Version: r.Header.Get("X-Silo-Client-Version"), DeviceName: r.Header.Get("X-Silo-Device-Name"), Platform: r.Header.Get("X-Silo-Device-Platform"), Language: r.Header.Get("Accept-Language")}
 }
 
 func (i *instance) resolveDevice(ctx context.Context, token string, d frontend.Device) (*frontend.Viewer, int64, error) {

@@ -43,8 +43,8 @@ type discoveryWatchlist struct {
 	s *watchlist.Service
 }
 
-func (w discoveryWatchlist) Hubs(ctx context.Context, viewer *core.User, limit int) ([]core.Hub, error) {
-	return w.s.Hubs(ctx, viewer, limit)
+func (w discoveryWatchlist) Hubs(ctx context.Context, viewer *core.User, limit int, language string) ([]core.Hub, error) {
+	return w.s.Hubs(ctx, viewer, limit, language)
 }
 
 func (w discoveryWatchlist) RecapsEnabled(ctx context.Context) bool {

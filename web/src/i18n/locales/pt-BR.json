@@ -6263,6 +6263,7 @@
   "m_11ea39fd4ff3d9": "Transporte",
   "m_11ec733b4d377c": "Confira as notas que o Plex mostrará para um título.",
   "m_11edc01c3d40f0": "Pesquisar no catálogo…",
+  "m_11ee56dbf4feb4": "Separar por disponibilidade",
   "m_11f02b9d9bc205": "Visual sem título",
   "m_11f08bcd4894cb": "Tela cheia",
   "m_11f09d5da3d73f": "Classificação de versões",
@@ -8159,6 +8160,7 @@
     "many": "{count} execuções em andamento",
     "other": "{count} execuções em andamento"
   },
+  "m_175538e0876479": "Títulos da lista de acompanhamento do espectador.",
   "m_1755604caec80b": "Tonalidade",
   "m_1758c5aa2ed762": "Executar eventos da mesma sessão em ordem",
   "m_1758ced2d6cd4b": "Episódios de {genres}",

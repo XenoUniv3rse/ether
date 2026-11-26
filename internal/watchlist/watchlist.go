@@ -43,7 +43,7 @@ CREATE INDEX watchlist_viewer ON watchlist_items(user_id,available,added);
 	store.Register("watchlist", 4, `CREATE TABLE watchlist_community_jobs(id INTEGER PRIMARY KEY AUTOINCREMENT,user_id INTEGER NOT NULL,state TEXT NOT NULL,created_at INTEGER NOT NULL,started_at INTEGER NOT NULL DEFAULT 0,finished_at INTEGER NOT NULL DEFAULT 0,count INTEGER NOT NULL DEFAULT 0,error TEXT NOT NULL DEFAULT '',plex TEXT NOT NULL DEFAULT ''); CREATE UNIQUE INDEX watchlist_community_active ON watchlist_community_jobs(user_id) WHERE state IN ('queued','running'); CREATE INDEX watchlist_community_history ON watchlist_community_jobs(user_id,id);`)
 	store.Register("watchlist", 5, `CREATE TABLE watchlist_community_locks(user_id TEXT PRIMARY KEY,touched INTEGER NOT NULL);`)
 	store.Register("watchlist", 7, `CREATE TABLE watchlist_rss_authors(friend_id TEXT NOT NULL,item_key INTEGER NOT NULL,PRIMARY KEY(friend_id,item_key));`)
-
+	store.Register("watchlist", 10, `CREATE INDEX watchlist_checked ON watchlist_items(user_id,checked);`)
 }
 
 type Source interface {
@@ -73,6 +73,8 @@ type Settings struct {
 	OverviewTranslate    bool               `json:"overviewTranslate"`
 }
 type Options struct {
+	Rows    func(context.Context, *core.User) []core.Row
+	User    func(context.Context, int64) (*core.User, error)
 	OnAdded func() // wakes the bounded intent consumer after membership commits
 
 	Community        *plextv.CommunityClient
@@ -129,12 +131,14 @@ type SyncEvent struct {
 type Service struct {
 	db                 *sql.DB
 	o                  Options
-	mu                 sync.Mutex
+	checkSlot          chan struct{}
+	addMu              sync.Mutex
+	addPending         map[addedTitle]struct{}
+	addQueue           []addedTitle
+	addWake            chan struct{}
 	rssMu              sync.Mutex
 	rssClient          *http.Client
 	communityMu        sync.Mutex
-	rssCheckMu         sync.Mutex
-	rssCheckPending    map[int64]core.User
 	nextCheck          time.Time
 	gen                atomic.Uint64
 	friendsSyncRunning atomic.Bool
@@ -146,33 +150,6 @@ func (s *Service) Generation() uint64 {
 		return 0
 	}
 	return s.gen.Load()
-}
-
-func (s *Service) queueRSSCheck(u core.User) {
-	s.rssCheckMu.Lock()
-	if s.rssCheckPending == nil {
-		s.rssCheckPending = make(map[int64]core.User)
-	}
-	// A single worker drains at most 20 viewers; overflow waits for the
-	// regular scheduled pass, which already checks every viewer.
-	if len(s.rssCheckPending) < 20 {
-		s.rssCheckPending[u.ID] = u
-	}
-	s.rssCheckMu.Unlock()
-}
-
-func (s *Service) drainRSSChecks() []core.User {
-	s.rssCheckMu.Lock()
-	defer s.rssCheckMu.Unlock()
-	if len(s.rssCheckPending) == 0 {
-		return nil
-	}
-	out := make([]core.User, 0, len(s.rssCheckPending))
-	for _, u := range s.rssCheckPending {
-		out = append(out, u)
-	}
-	clear(s.rssCheckPending)
-	return out
 }
 
 type Item struct {
@@ -212,7 +189,7 @@ func New(db *sql.DB, o Options) *Service {
 	if o.RSSInterval <= 0 {
 		o.RSSInterval = 5 * time.Minute
 	}
-	return &Service{db: db, o: o, rssClient: rssHTTPClient(o.Client)}
+	return &Service{db: db, o: o, rssClient: rssHTTPClient(o.Client), checkSlot: make(chan struct{}, 1), addWake: make(chan struct{}, 1), addPending: make(map[addedTitle]struct{})}
 }
 
 func (s *Service) memoKey() string { return fmt.Sprintf("watchlist:settings:%p", s) }
@@ -533,18 +510,41 @@ func (s *Service) upsert(ctx context.Context, uid int64, source string, t core.T
 	if err != nil {
 		return err
 	}
-	if err := queueWarmAdd(ctx, s.db, uid, t.Key, s.o.Now().Unix()); err != nil {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
 		return err
 	}
-	_, err = s.db.ExecContext(ctx, `INSERT INTO watchlist_items(user_id,item_key,source,title,added) VALUES(?,?,?,?,?) ON CONFLICT(user_id,item_key,source) DO UPDATE SET title=excluded.title`, uid, t.Key, source, string(raw), s.o.Now().Unix())
-	if err == nil {
-		s.gen.Add(1)
-		if s.o.OnAdded != nil {
-			s.o.OnAdded()
-		}
+	defer tx.Rollback()
+	added, err := s.storeAdd(ctx, tx, uid, source, t.Key, string(raw))
+	if err != nil {
+		return err
 	}
-	return err
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	s.gen.Add(1)
+	if added {
+		s.queueAdded(uid, t.Key)
+	}
+	if s.o.OnAdded != nil {
+		s.o.OnAdded()
+	}
+	return nil
 }
+
+func (s *Service) storeAdd(ctx context.Context, tx *sql.Tx, uid int64, source string, key core.RatingKey, title string) (bool, error) {
+	var present bool
+	if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM watchlist_items WHERE user_id=? AND item_key=?)`, uid, key).Scan(&present); err != nil {
+		return false, err
+	}
+	now := s.o.Now().Unix()
+	if err := queueWarmAdd(ctx, tx, uid, key, now); err != nil {
+		return false, err
+	}
+	_, err := tx.ExecContext(ctx, `INSERT INTO watchlist_items(user_id,item_key,source,title,added) VALUES(?,?,?,?,?) ON CONFLICT(user_id,item_key,source) DO UPDATE SET title=excluded.title`, uid, key, source, title, now)
+	return !present, err
+}
+
 func (s *Service) replace(ctx context.Context, u *core.User, source string, ts []core.Title) error {
 	started := s.o.Now()
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -574,6 +574,8 @@ func (s *Service) replace(ctx context.Context, u *core.User, source string, ts [
 	}
 	keys := map[core.RatingKey]bool{}
 	addedCount := 0
+	scheduled := ctx.Value(communityScheduledKey{}) == true
+	var addedKeys []core.RatingKey
 	for _, t := range ts {
 		if !s.allowed(u, &t) {
 			continue
@@ -586,11 +588,12 @@ func (s *Service) replace(ctx context.Context, u *core.User, source string, ts [
 		if err != nil {
 			return err
 		}
-		if err := queueWarmAdd(ctx, tx, u.ID, t.Key, s.o.Now().Unix()); err != nil {
+		added, err := s.storeAdd(ctx, tx, u.ID, source, t.Key, string(raw))
+		if err != nil {
 			return err
 		}
-		if _, err = tx.ExecContext(ctx, `INSERT INTO watchlist_items(user_id,item_key,source,title,added) VALUES(?,?,?,?,?) ON CONFLICT(user_id,item_key,source) DO UPDATE SET title=excluded.title`, u.ID, t.Key, source, string(raw), s.o.Now().Unix()); err != nil {
-			return err
+		if added && !scheduled {
+			addedKeys = append(addedKeys, t.Key)
 		}
 	}
 	rows, err := tx.QueryContext(ctx, `SELECT item_key FROM watchlist_items WHERE user_id=? AND source=?`, u.ID, source)
@@ -625,6 +628,9 @@ func (s *Service) replace(ctx context.Context, u *core.User, source string, ts [
 		return err
 	}
 	s.gen.Add(1)
+	for _, key := range addedKeys {
+		s.queueAdded(u.ID, key)
+	}
 	if s.o.OnAdded != nil {
 		s.o.OnAdded()
 	}
@@ -724,18 +730,24 @@ func (s *Service) Items(ctx context.Context, u *core.User) ([]Item, error) {
 	if u == nil {
 		return []Item{}, core.ErrUnauthorized
 	}
-	return s.itemsForUser(ctx, u.ID, u)
+	return s.itemsForUser(ctx, u.ID, u, 0, false)
 }
 
 // HouseholdItems returns released titles in the shared "Friends' watchlists"
 // set (user_id=0) for availability monitoring and inspection.
 func (s *Service) HouseholdItems(ctx context.Context) ([]Item, error) {
-	return s.itemsForUser(ctx, householdUserID, nil)
+	return s.itemsForUser(ctx, householdUserID, nil, 0, false)
 }
 
-func (s *Service) itemsForUser(ctx context.Context, userID int64, policyUser *core.User) ([]Item, error) {
+func (s *Service) itemsForUser(ctx context.Context, userID int64, policyUser *core.User, key core.RatingKey, includeUnreleased bool) ([]Item, error) {
 	out := []Item{}
-	rows, err := s.db.QueryContext(ctx, `SELECT title,source,added,checked,available FROM watchlist_items WHERE user_id=? ORDER BY added DESC,item_key`, userID)
+	query := `SELECT title,source,added,checked,available FROM watchlist_items WHERE user_id=?`
+	args := []any{userID}
+	if key != 0 {
+		query += ` AND item_key=?`
+		args = append(args, key)
+	}
+	rows, err := s.db.QueryContext(ctx, query+` ORDER BY added DESC,item_key`, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -748,7 +760,7 @@ func (s *Service) itemsForUser(ctx context.Context, userID int64, policyUser *co
 			return nil, err
 		}
 		var t core.Title
-		if json.Unmarshal([]byte(raw), &t) != nil || !t.IsReleased(s.o.Now()) || !s.allowedForSet(policyUser, &t) {
+		if json.Unmarshal([]byte(raw), &t) != nil || (!includeUnreleased && !t.IsReleased(s.o.Now())) || !s.allowedForSet(policyUser, &t) {
 			continue
 		}
 		if i, ok := byKey[t.Key]; ok {
@@ -785,8 +797,6 @@ func (s *Service) itemsForUser(ctx context.Context, userID int64, policyUser *co
 // After that, each newer regular episode is resolved once it airs and, when
 // a healthy release exists, announced and prewarmed once (see newEpisode).
 func (s *Service) Check(ctx context.Context, u *core.User) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	cfg, err := s.settings(ctx)
 	if err != nil || !cfg.Enabled || s.o.Resolver == nil {
 		return err
@@ -801,8 +811,6 @@ func (s *Service) Check(ctx context.Context, u *core.User) error {
 // CheckHousehold checks availability and prefetches releases for the shared
 // "Friends' watchlists" set within the same per-pass 20-title budget.
 func (s *Service) CheckHousehold(ctx context.Context) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	cfg, err := s.settings(ctx)
 	if err != nil || !cfg.Enabled || s.o.Resolver == nil {
 		return err
@@ -830,119 +838,143 @@ func (s *Service) checkSet(ctx context.Context, cfg Settings, userID int64, poli
 		if checked >= 20 || ctx.Err() != nil {
 			break
 		}
-		t := it.Title
-		if fresh, e := s.o.Catalog.Get(ctx, t.Key); e == nil && fresh != nil {
-			t = *fresh
-		}
-		if !s.allowedForSet(policyUser, &t) || !t.IsReleased(s.o.Now()) {
+		if it.Title.Type != core.TypeShow && it.Title.Type != core.TypeSeason && !it.CheckedAt.IsZero() &&
+			s.o.Now().Sub(it.CheckedAt) < time.Duration(cfg.CheckHours)*time.Hour {
 			continue
 		}
-		resolveTitle := &t
-		var first, newest *core.Title
-		isShow := t.Type == core.TypeShow || t.Type == core.TypeSeason
-		if isShow {
-			var e error
-			if first, newest, e = s.episodeRange(ctx, policyUser, &t); e != nil || first == nil {
-				continue
-			}
-			resolveTitle = first
-		}
-		pending := false // a newer episode of an available show awaits a release
-		if isShow && !it.AvailableAt.IsZero() && newest != nil {
-			known, e := s.episodeKnown(ctx, userID, t.Key, newest.Key)
-			if e != nil {
-				return e
-			}
-			pending = !known
-		}
-		interval := time.Duration(cfg.CheckHours) * time.Hour
-		if pending && s.o.Now().Sub(newest.Released) < freshAiring {
-			interval = min(interval, freshAiringCheck)
-		}
-		// A check before this episode aired says nothing about its release.
-		newlyAired := pending && it.CheckedAt.Before(newest.Released)
-		if !newlyAired && !it.CheckedAt.IsZero() && s.o.Now().Sub(it.CheckedAt) < interval {
-			continue
-		}
-		// Share the scheduled pass budget with owner jobs; concurrency stays one.
-		timer := time.NewTimer(max(time.Until(s.nextCheck), 0))
-		select {
-		case <-ctx.Done():
-			timer.Stop()
-			return ctx.Err()
-		case <-timer.C:
-		}
-		timer.Stop()
-		s.nextCheck = time.Now().Add(3 * time.Second)
-		checked++
-		if pending {
-			if err := s.newEpisodeForSet(ctx, cfg, userID, resolveUser, &t, newest); err != nil {
-				return err
-			}
-			continue
-		}
-		wasAvailable := !it.AvailableAt.IsZero()
-		res, e := s.resolve(ctx, resolveUser, resolveTitle)
-		now := s.o.Now().Unix()
-		// Transient resolver failures do not establish that a stream is absent.
-		if e != nil && !errors.Is(e, core.ErrNotAvailable) {
-			if cfg.CheckHours == 0 {
-				return e
-			}
-			continue
-		}
-		if _, err := s.db.ExecContext(ctx, `UPDATE watchlist_items SET checked=? WHERE user_id=? AND item_key=?`, now, userID, t.Key); err != nil {
+		if err := s.checkTitle(ctx, cfg, userID, policyUser, resolveUser, it.Title.Key, &checked); err != nil {
 			return err
-		}
-		if errors.Is(e, core.ErrNotAvailable) || (e == nil && res == nil) {
-			if _, err := s.db.ExecContext(ctx, `UPDATE watchlist_items SET available=0,notified=0,warmed=0 WHERE user_id=? AND item_key=?`, userID, t.Key); err != nil {
-				return err
-			}
-			if wasAvailable && s.o.OnUnavailable != nil {
-				reason := "no playable release"
-				if e != nil {
-					reason = e.Error()
-				}
-				s.o.OnUnavailable(ctx, userID, t, reason)
-			}
-		}
-		if e != nil || res == nil {
-			continue
-		}
-		if _, err := s.db.ExecContext(ctx, `UPDATE watchlist_items SET available=CASE WHEN available=0 THEN ? ELSE available END,title=? WHERE user_id=? AND item_key=?`, now, mustTitle(t), userID, t.Key); err != nil {
-			return err
-		}
-		if !wasAvailable && s.o.OnAvailable != nil {
-			s.o.OnAvailable(ctx, userID, t.Key)
-		}
-		if newest != nil {
-			// The show's episodes so far count as seen: only later ones are new.
-			if err := s.recordEpisode(ctx, userID, t.Key, newest.Key); err != nil {
-				return err
-			}
-		}
-		var notified, warmed int
-		if err := s.db.QueryRowContext(ctx, `SELECT MAX(notified),MAX(warmed) FROM watchlist_items WHERE user_id=? AND item_key=?`, userID, t.Key).Scan(&notified, &warmed); err != nil {
-			return err
-		}
-		if cfg.Notify && notified == 0 && s.o.Notifier != nil {
-			if e := s.o.Notifier.TitleAvailable(ctx, t.Title); e == nil {
-				_, err := s.db.ExecContext(ctx, `UPDATE watchlist_items SET notified=1 WHERE user_id=? AND item_key=?`, userID, t.Key)
-				if err != nil {
-					return err
-				}
-			}
-		}
-		if !s.o.ManagedWarming && cfg.Prewarm && warmed == 0 && s.o.Engine != nil {
-			if s.prewarm(ctx, res) == nil {
-				_, err := s.db.ExecContext(ctx, `UPDATE watchlist_items SET warmed=1 WHERE user_id=? AND item_key=?`, userID, t.Key)
-				if err != nil {
-					return err
-				}
-			}
 		}
 	}
 	return ctx.Err()
+}
+
+// Take the shared slot for one title at a time so new adds can run between
+// titles in a scheduled pass. Reload membership and check state after waiting.
+func (s *Service) checkTitle(ctx context.Context, cfg Settings, userID int64, policyUser, resolveUser *core.User, key core.RatingKey, checked *int) error {
+	select {
+	case s.checkSlot <- struct{}{}:
+		defer func() { <-s.checkSlot }()
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	items, err := s.itemsForUser(ctx, userID, policyUser, key, false)
+	if err != nil || len(items) == 0 {
+		return err
+	}
+	it := items[0]
+	t := it.Title
+	if fresh, e := s.o.Catalog.Get(ctx, t.Key); e == nil && fresh != nil {
+		t = *fresh
+	}
+	if !s.allowedForSet(policyUser, &t) || !t.IsReleased(s.o.Now()) {
+		return nil
+	}
+	resolveTitle := &t
+	var first, newest *core.Title
+	isShow := t.Type == core.TypeShow || t.Type == core.TypeSeason
+	if isShow {
+		var e error
+		if first, newest, e = s.episodeRange(ctx, policyUser, &t); e != nil || first == nil {
+			return nil
+		}
+		resolveTitle = first
+	}
+	pending := false // a newer episode of an available show awaits a release
+	if isShow && !it.AvailableAt.IsZero() && newest != nil {
+		known, e := s.episodeKnown(ctx, userID, t.Key, newest.Key)
+		if e != nil {
+			return e
+		}
+		pending = !known
+	}
+	interval := time.Duration(cfg.CheckHours) * time.Hour
+	if pending && s.o.Now().Sub(newest.Released) < freshAiring {
+		interval = min(interval, freshAiringCheck)
+	}
+	// A check before this episode aired says nothing about its release.
+	newlyAired := pending && it.CheckedAt.Before(newest.Released)
+	if !newlyAired && !it.CheckedAt.IsZero() && s.o.Now().Sub(it.CheckedAt) < interval {
+		return nil
+	}
+	// Share the scheduled pass budget with owner jobs; concurrency stays one.
+	timer := time.NewTimer(max(time.Until(s.nextCheck), 0))
+	select {
+	case <-ctx.Done():
+		timer.Stop()
+		return ctx.Err()
+	case <-timer.C:
+	}
+	timer.Stop()
+	(*checked)++
+	s.nextCheck = time.Now().Add(3 * time.Second)
+	if pending {
+		if err := s.newEpisodeForSet(ctx, cfg, userID, resolveUser, &t, newest); err != nil {
+			return err
+		}
+		return nil
+	}
+	wasAvailable := !it.AvailableAt.IsZero()
+	res, e := s.resolve(ctx, resolveUser, resolveTitle)
+	now := s.o.Now().Unix()
+	// Transient resolver failures do not establish that a stream is absent.
+	if e != nil && !errors.Is(e, core.ErrNotAvailable) {
+		if cfg.CheckHours == 0 {
+			return e
+		}
+		return nil
+	}
+	if errors.Is(e, core.ErrNotAvailable) || res == nil {
+		result, err := s.db.ExecContext(ctx, `UPDATE watchlist_items SET checked=?,available=0,notified=0,warmed=0 WHERE user_id=? AND item_key=?`, now, userID, t.Key)
+		if err != nil {
+			return err
+		}
+		n, err := result.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if n > 0 && wasAvailable && s.o.OnUnavailable != nil {
+			s.o.OnUnavailable(ctx, userID, t, "no playable release")
+		}
+		return nil
+	}
+	result, err := s.db.ExecContext(ctx, `UPDATE watchlist_items SET checked=?,available=CASE WHEN available=0 THEN ? ELSE available END,title=? WHERE user_id=? AND item_key=?`, now, now, mustTitle(t), userID, t.Key)
+	if err != nil {
+		return err
+	}
+	if n, err := result.RowsAffected(); err != nil || n == 0 {
+		return err
+	}
+	if !wasAvailable && s.o.OnAvailable != nil {
+		s.o.OnAvailable(ctx, userID, t.Key)
+	}
+	if newest != nil {
+		// The show's episodes so far count as seen: only later ones are new.
+		if err := s.recordEpisode(ctx, userID, t.Key, newest.Key); err != nil {
+			return err
+		}
+	}
+	var notified, warmed int
+	if err := s.db.QueryRowContext(ctx, `SELECT MAX(notified),MAX(warmed) FROM watchlist_items WHERE user_id=? AND item_key=?`, userID, t.Key).Scan(&notified, &warmed); err != nil {
+		return err
+	}
+	if cfg.Notify && notified == 0 && s.o.Notifier != nil {
+		if e := s.o.Notifier.TitleAvailable(ctx, t.Title); e == nil {
+			_, err := s.db.ExecContext(ctx, `UPDATE watchlist_items SET notified=1 WHERE user_id=? AND item_key=?`, userID, t.Key)
+			if err != nil {
+				return err
+			}
+		}
+	}
+	if !s.o.ManagedWarming && cfg.Prewarm && warmed == 0 && s.o.Engine != nil {
+		if s.prewarm(ctx, res) == nil {
+			_, err := s.db.ExecContext(ctx, `UPDATE watchlist_items SET warmed=1 WHERE user_id=? AND item_key=?`, userID, t.Key)
+			if err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 // resolve asks for a healthy release of title for u. It returns a nil
@@ -978,37 +1010,6 @@ func (s *Service) prewarm(ctx context.Context, res *core.Resolution) error {
 }
 
 func mustTitle(t core.Title) string { raw, _ := json.Marshal(t); return string(raw) }
-func (s *Service) Hubs(ctx context.Context, u *core.User, limit int) ([]core.Hub, error) {
-	cfg, err := s.settings(ctx)
-	if err != nil || !cfg.Enabled {
-		return nil, err
-	}
-	items, err := s.Items(ctx, u)
-	if err != nil {
-		return nil, err
-	}
-	if limit <= 0 {
-		limit = 12
-	}
-	soon, ready := core.Hub{ID: "watchlist.coming", Title: "Waiting for a stream", Context: "hub.home.watchlist", Promoted: true}, core.Hub{ID: "watchlist.available", Title: "Now available", Context: "hub.home.watchlist.available", Promoted: true}
-	for _, it := range items {
-		if !it.AvailableAt.IsZero() {
-			if len(ready.Items) < limit {
-				ready.Items = append(ready.Items, it.Title)
-			}
-		} else if len(soon.Items) < limit {
-			soon.Items = append(soon.Items, it.Title)
-		}
-	}
-	var out []core.Hub
-	if len(ready.Items) > 0 {
-		out = append(out, ready)
-	}
-	if len(soon.Items) > 0 {
-		out = append(out, soon)
-	}
-	return out, nil
-}
 
 // Run is cancelled by the app; individual viewers are isolated and bounded.
 // Run passes over every viewer (watchlist sync and availability check) plus
@@ -1034,24 +1035,7 @@ func (s *Service) Run(ctx context.Context) {
 					if !schedule.Wait(ctx, s.o.Now, time.Minute) {
 						return
 					}
-				} else if s.o.Resolver != nil {
-					// Inline work keeps one bounded worker, even when checks take
-					// longer than a feed interval. The shared check mutex also
-					// serializes these checks with normal scheduled availability.
-					checkJob, checkCancel := context.WithTimeout(ctx, 2*time.Minute)
-					for _, queued := range s.drainRSSChecks() {
-						if checkJob.Err() != nil {
-							break
-						}
-						latest, err := s.user(checkJob, queued.ID)
-						if err != nil || latest.PlexID != queued.PlexID || latest.UUID != queued.UUID {
-							continue
-						}
-						if err := s.Check(checkJob, latest); err != nil {
-							s.o.Logger.Warn("watchlist rss availability check failed", "user", latest.ID, "err", err)
-						}
-					}
-					checkCancel()
+
 				}
 			}
 		}()
@@ -1159,6 +1143,9 @@ func (s *Service) ownerOrNil(ctx context.Context) *core.User {
 }
 
 func (s *Service) user(ctx context.Context, id int64) (*core.User, error) {
+	if s.o.User != nil {
+		return s.o.User(ctx, id)
+	}
 	if s.o.Users == nil {
 		return nil, core.ErrNotFound
 	}

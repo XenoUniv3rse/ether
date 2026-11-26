@@ -14,7 +14,7 @@ func FilterDiscovery(ctx context.Context, viewer *core.User, visibility Visibili
 	for _, row := range rows {
 		items := make([]core.Title, 0, len(row.Items))
 		for i := range row.Items {
-			if visibility.Visible(ctx, viewer, &row.Items[i]) {
+			if visibility.RowTitle(ctx, viewer, &row.Items[i], row.Purpose == frontend.RowWatchlist) {
 				items = append(items, row.Items[i])
 			}
 		}

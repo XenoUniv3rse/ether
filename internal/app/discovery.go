@@ -36,14 +36,21 @@ func (a *App) buildDiscovery() {
 		sourceCache = a.cache
 	}
 	a.watchlist = watchlist.New(a.db, watchlist.Options{
-		Logger:     a.log.With("component", "watchlist"),
-		Sealer:     a.cfg,
-		Catalog:    a.catalog,
-		Resolver:   sourceResolver,
-		Engine:     sourceEngine,
-		Cache:      sourceCache,
-		Trakt:      a.trakt,
-		Users:      a.users.Users,
+		Logger:   a.log.With("component", "watchlist"),
+		Sealer:   a.cfg,
+		Catalog:  a.catalog,
+		Resolver: sourceResolver,
+		Engine:   sourceEngine,
+		Cache:    sourceCache,
+		Trakt:    a.trakt,
+		Users:    a.users.Users,
+		User:     a.users.User,
+		Rows: func(ctx context.Context, viewer *core.User) []core.Row {
+			if a.personalize == nil {
+				return nil
+			}
+			return a.personalize.WatchlistRows(ctx, viewer)
+		},
 		Allowed:    a.safety.Allowed,
 		Notifier:   a.notifications,
 		Tokens:     a.discoveryToken,
@@ -70,15 +77,13 @@ func (a *App) buildDiscovery() {
 			}
 			a.cachefill.Wake()
 			a.onWatchlistAvailable(ctx, userID, key)
-			if a.sessionEvents == nil {
-				return
-			}
-			if err := a.sessionEvents.Publish(ctx, frontend.Event{Type: "LibraryChanged", ViewerID: userID, Item: key}); err != nil && a.log != nil {
-				a.log.Warn("watchlist available event", "err", err)
-			}
+			a.publishWatchlistChange(ctx, userID, key)
 		},
-		OnUnavailable: a.onWatchlistUnavailable,
-		OnSynced:      a.onWatchlistSynced,
+		OnUnavailable: func(ctx context.Context, userID int64, title core.Title, reason string) {
+			a.onWatchlistUnavailable(ctx, userID, title, reason)
+			a.publishWatchlistChange(ctx, userID, title.Key)
+		},
+		OnSynced: a.onWatchlistSynced,
 		OnFriendsRSSChanged: func(ctx context.Context) {
 			if a.collections != nil {
 				if err := a.collections.SyncFriendsWatchlist(ctx); err != nil && a.log != nil {
@@ -134,6 +139,21 @@ func (a *App) buildDiscovery() {
 		SourceText: a.languageSourceText,
 	})
 	a.discoveryFeatures.OverviewTranslate = a.lang.Overview
+}
+
+func (a *App) publishWatchlistChange(ctx context.Context, userID int64, key core.RatingKey) {
+	if a.sessionEvents == nil {
+		return
+	}
+	event := frontend.Event{Type: "LibraryChanged", ViewerID: userID, Item: key}
+	if userID > 0 {
+		if viewer, err := a.users.User(ctx, userID); err == nil && viewer != nil {
+			event.RowIDs = a.watchlist.HomeHubIDs(ctx, viewer)
+		}
+	}
+	if err := a.sessionEvents.Publish(ctx, event); err != nil && a.log != nil {
+		a.log.Warn("watchlist change publication failed")
+	}
 }
 
 type overlayPageFactsKey struct {

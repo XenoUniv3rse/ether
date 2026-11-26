@@ -182,13 +182,18 @@ func (s *Server) renderHubWithVisibility(ctx context.Context, pr *Request, hs hu
 	related := hc.related != 0
 	pinned := (hc.section != 0 || h.Key != 0) && hs.state == nil && hs.key == "" && !related
 	var sourceItems []frontend.Title
+	isWatchlist := frontend.IsWatchlistHub(h.ID)
 	render := func() []model.Metadata {
 		sourceItems = build()
 		if !pinned && hc.visible > 0 && len(sourceItems) > hc.visible {
 			sourceItems = sourceItems[:hc.visible]
 			h.More = true
 		}
-		md := s.renderTitles(ctx, pr, sourceItems, renderOpts{media: true, state: hs.state, inSection: related, guids: related, detailEpisodes: !hs.plain, vis: &vis, section: renderSec, searchIdentity: hc.searchIdentity})
+		renderCtx := ctx
+		if isWatchlist {
+			renderCtx = withShelfMembers(ctx, sourceItems)
+		}
+		md := s.renderTitles(renderCtx, pr, sourceItems, renderOpts{media: true, state: hs.state, inSection: related, guids: related, detailEpisodes: !hs.plain, vis: &vis, section: renderSec, searchIdentity: hc.searchIdentity})
 		if kindSec && len(md) > 0 {
 			byKey := make(map[string]*frontend.Title, len(sourceItems))
 			for i := range sourceItems {
@@ -218,7 +223,11 @@ func (s *Server) renderHubWithVisibility(ctx context.Context, pr *Request, hs hu
 			selected, generation = s.shelfSnapshot(ctx, pr, h, hc, func() ([]frontend.Title, []model.Metadata) {
 				// Snapshot membership before decorating the visible page.
 				sourceItems = build()
-				members := s.openableTitlesWith(withStoredPolicy(ctx), vis, pr.User, sourceItems, shelfContainsAll(ctx, sourceItems))
+				memberCtx := withStoredPolicy(ctx)
+				if isWatchlist {
+					memberCtx = withShelfMembers(memberCtx, sourceItems)
+				}
+				members := s.openableTitlesWith(memberCtx, vis, pr.User, sourceItems, shelfContainsAll(memberCtx, sourceItems))
 				identities := make([]model.Metadata, 0, len(members))
 				for _, title := range members {
 					identities = append(identities, model.Metadata{RatingKey: title.Key.String()})
@@ -666,6 +675,7 @@ func (s *Server) hubContext(pr *Request, section int) frontend.HubContext {
 	hc.SectionID = section
 	hc.ClientID = pr.ClientID
 	hc.SessionID = pr.SessionID
+	hc.Language = pr.Language
 	return hc
 }
 

@@ -116,6 +116,8 @@ func (s *RowViewService) resolveAll(ctx context.Context, u *core.User, device co
 		if string(entries[i].Kind) != ref.Kind || entryIdentity(entries[i]) != ref.ID {
 			return nil, ErrRowViewStale
 		}
+		entries[i].Badge = ref.Badge
+		entries[i].Watchlist = ref.Watchlist
 	}
 	return entries, nil
 }
@@ -186,7 +188,7 @@ func (s *RowViewService) ListRowViews(ctx context.Context, req frontend.RowViewR
 		return nil, err
 	}
 	req.Viewer = u
-	scopeBytes, err := json.Marshal([]any{u.ID, req.Device.ID, req.Protocol, req.Placement, req.ViewID, req.Item})
+	scopeBytes, err := json.Marshal([]any{u.ID, req.Device.ID, req.Device.Language, req.Protocol, req.Placement, req.ViewID, req.Item})
 	if err != nil {
 		return nil, err
 	}
@@ -293,7 +295,7 @@ func (s *RowViewService) ListRowViews(ctx context.Context, req frontend.RowViewR
 			slog.Warn("experience: dropping row view", "row", snap.Row.ID, "kind", snap.Row.Kind, "reason", "snapshot too large")
 			continue
 		}
-		scope, err := json.Marshal([]any{u.ID, req.Device.ID, req.Protocol, req.Placement, req.ViewID, req.Item, snap.Row.ID})
+		scope, err := json.Marshal([]any{u.ID, req.Device.ID, req.Device.Language, req.Protocol, req.Placement, req.ViewID, req.Item, snap.Row.ID})
 		if err != nil {
 			return nil, err
 		}

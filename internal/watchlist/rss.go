@@ -477,15 +477,8 @@ func (s *Service) attributeFriendsRSSItems(ctx context.Context, byAuthor map[str
 				if !s.allowed(latest, &t) {
 					continue
 				}
-				var exists bool
-				if err := s.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM watchlist_items WHERE user_id=? AND item_key=?)`, latest.ID, t.Key).Scan(&exists); err != nil {
-					return err
-				}
 				if err := s.upsert(ctx, latest.ID, src, t); err != nil {
 					return err
-				}
-				if !exists {
-					s.queueRSSCheck(*latest)
 				}
 			}
 			return nil
@@ -929,6 +922,10 @@ func (s *Service) replaceOwnerFeedSnapshot(ctx context.Context, source string, o
 	}
 	if changed {
 		s.gen.Add(1)
+	}
+
+	for _, t := range toPush {
+		s.queueAdded(owner.ID, t.Key)
 	}
 
 	if owner != nil && source == sourcePlexOwnerRSS && len(toPush) > 0 {

@@ -844,6 +844,9 @@ func (i *instance) rowWire(r *http.Request, v *frontend.Viewer, token string, ro
 			base["id"] = ids.RatingKeyGUID(e.Title.Key)
 			base["kind"] = "title"
 			base["title"] = byID[base["id"].(string)]
+			if e.Badge != "" {
+				base["badge"] = e.Badge
+			}
 		case e.Collection != nil:
 			colID := ids.RatingKeyGUID(e.Collection.Key)
 			base["id"] = colID

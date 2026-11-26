@@ -416,6 +416,9 @@ type Hub struct {
 	// ItemCount carries rendered availability when a front end retains the
 	// actual metadata and asks only for row placement.
 	ItemCount int `json:"itemCount,omitempty"`
+
+	// ItemBadges are localized labels specific to the title’s membership in this row.
+	ItemBadges map[RatingKey]string `json:"-"`
 }
 
 type Collection struct {

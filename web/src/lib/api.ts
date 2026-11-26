@@ -719,15 +719,28 @@ export const api = {
   pageSources: (key: PageKey, signal?: AbortSignal) =>
     apiFetch<SourcesDoc>(`${pagePath(key)}/sources`, { signal }).then((doc) => ({
       ...doc,
-      sources: doc.sources.map((source) =>
-        source.kind === "collection-cards"
-          ? {
-              ...source,
-              title: t("Collections"),
-              description: t("Show collections as clickable cards."),
-            }
-          : source,
-      ),
+      sources: doc.sources.map((source) => {
+        if (source.kind === "watchlist") {
+          return {
+            ...source,
+            title: t("Watchlist"),
+            description: t("Titles on the viewer’s watchlist."),
+            params: source.params?.map((param) =>
+              param.key === "splitByAvailability"
+                ? { ...param, label: t("Split by availability") }
+                : param,
+            ),
+          };
+        }
+        if (source.kind === "collection-cards") {
+          return {
+            ...source,
+            title: t("Collections"),
+            description: t("Show collections as clickable cards."),
+          };
+        }
+        return source;
+      }),
     })),
   previewPage: (key: PageKey, body: PreviewRequest, signal?: AbortSignal) =>
     post<PagePreview>(`${pagePath(key)}/preview`, body, signal),

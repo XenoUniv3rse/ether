@@ -999,3 +999,15 @@ func (e *Engine) HubItemsFor(ctx context.Context, u *core.User, hc core.HubConte
 	}
 	return core.Hub{}, false
 }
+
+// WatchlistRows returns the Home definitions that can bind this viewer's watchlist.
+func (e *Engine) WatchlistRows(ctx context.Context, viewer *core.User) []core.Row {
+	pl := e.planFor(core.WithCatalogViewer(ctx, viewer), userID(viewer), surfHome)
+	var rows []core.Row
+	for _, rule := range pl.rules {
+		if rule.Source == KindWatchlist && rule.Gate != "audience" && rule.row != nil {
+			rows = append(rows, *rule.row)
+		}
+	}
+	return rows
+}

@@ -216,6 +216,9 @@ func compilePage(p core.RowPage, saved bool, viewer int64, libs map[core.Library
 			continue
 		}
 		pl.listed[row.Source.Kind] = true
+		if row.Source.Kind == KindWatchlist {
+			continue // produced from the watchlist membership, keyed by row ID
+		}
 		_, param := sourceParam(row.Source)
 		skey := sourceKey(row.Source.Kind, param)
 		plain := plainParams(row.Source) && len(row.Scope.Libraries) == 0 && !row.Scope.PerLibrary
@@ -277,6 +280,21 @@ func pageRowID(hubID string) (string, core.LibraryID, bool) {
 func (pl *pagePlan) match(row core.HomeRow) *rule {
 	if pl == nil {
 		return nil
+	}
+	if stem, ok := strings.CutPrefix(row.HubID, "watchlist."); ok {
+		id, _, _ := strings.Cut(stem, ".")
+		if base := pl.byRow[id]; base != nil && base.Source == KindWatchlist {
+			// Give the second half an independent placement within the same rule.
+			if core.WatchlistHubComing(row.HubID) && base.row.Source.Param(core.WatchlistSplitParam, "false") == "true" {
+				r := *base
+				r.Row = row.HubID
+				if r.Slot > 0 {
+					r.Slot++
+				}
+				return &r
+			}
+			return base
+		}
 	}
 	if id, lib, ok := pageRowID(row.HubID); ok {
 		base := pl.byRow[id]

@@ -161,7 +161,7 @@ func (i *instance) policyGeneration(ctx context.Context) int64 {
 }
 
 func personalCacheKey(protocol string, v *frontend.Viewer, dev frontend.Device, cfg personalHomeConfig) string {
-	return fmt.Sprintf("%s\n%d\n%s\n%s", protocol, v.ID, dev.ID, personalConfigKey(cfg))
+	return fmt.Sprintf("%s\n%d\n%s\n%s\n%s", protocol, v.ID, dev.ID, dev.Language, personalConfigKey(cfg))
 }
 
 // personalShelves is the cached identity list. It never builds row items and
@@ -232,6 +232,23 @@ func (i *instance) warmPersonalIdentities(key string, gen int64, v *frontend.Vie
 		}
 		i.storePersonalIdentities(key, gen, &viewer, identities)
 	}()
+}
+
+func (i *instance) expirePersonalShelves(viewerID int64) {
+	prefix := fmt.Sprintf("%s\n%d\n", i.protocol, viewerID)
+	i.personal.mu.Lock()
+	defer i.personal.mu.Unlock()
+	for key, slot := range i.personal.items {
+		if strings.HasPrefix(key, prefix) {
+			slot.at = time.Time{}
+			i.personal.items[key] = slot
+		}
+	}
+	for key := range i.personal.loaded {
+		if strings.HasPrefix(key, prefix) {
+			delete(i.personal.loaded, key)
+		}
+	}
 }
 
 func cloneShelves(in []personalShelf) []personalShelf {
@@ -436,7 +453,7 @@ func shelvesFromRows(cfg personalHomeConfig, v *frontend.Viewer, rows []frontend
 	optionalUsed := 0
 	out := make([]personalShelf, 0, max(cfg.count, alwaysCount))
 	seen := map[string]bool{}
-	var pinned *personalShelf
+	var pinned []personalShelf
 	for _, row := range rows {
 		if row.ID == "" || seen[row.ID] {
 			continue
@@ -469,8 +486,7 @@ func shelvesFromRows(cfg personalHomeConfig, v *frontend.Viewer, rows []frontend
 			}
 		}
 		if available {
-			copy := shelf
-			pinned = &copy
+			pinned = append(pinned, shelf)
 			continue
 		}
 		if !always {
@@ -478,17 +494,12 @@ func shelvesFromRows(cfg personalHomeConfig, v *frontend.Viewer, rows []frontend
 		}
 		out = append(out, shelf)
 	}
-	if pinned != nil {
-		out = append(out, *pinned)
-	}
-	return out
+	return append(out, pinned...)
 }
 
-// nowAvailableExperienceRow is the watchlist hub the library-features work
-// fills. Its id stays watchlist.available so Jellyfin, Emby and Silo publish
-// the same shelf. It does not consume the owner's personalized-row count.
+// The available half of a split watchlist does not consume the personalized-row count.
 func nowAvailableExperienceRow(row frontend.Row) bool {
-	return row.ID == "watchlist.available" || row.Title == "Now available"
+	return frontend.WatchlistHubAvailable(row.ID)
 }
 
 // personalShelfCompatible reports whether a Recommendations row becomes a
@@ -539,6 +550,9 @@ func personalTitles(row frontend.Row) []frontend.Title {
 
 func personalLibraryName(row frontend.Row) string {
 	title := strings.TrimSpace(row.Title)
+	if row.Purpose == frontend.RowWatchlist && title != "" {
+		return title
+	}
 	if seed, ok := personalSeed(title, "because you watched ", "because you've watched "); ok {
 		return seed + " and Similar"
 	}

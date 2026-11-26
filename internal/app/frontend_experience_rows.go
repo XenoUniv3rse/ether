@@ -32,7 +32,7 @@ func rankedCandidates(hubs []core.Hub, err error) ([]experience.RankedCandidate,
 	}
 	out := make([]experience.RankedCandidate, len(hubs))
 	for i, h := range hubs {
-		out[i] = experience.RankedCandidate{ID: h.ID, PreviewOnFocus: h.PreviewOnFocus, RankedTop10: h.RankedTop10, Purpose: experience.CandidatePurpose(h), Title: h.Title, Type: h.Type, Style: h.Style, Promoted: h.Promoted, Items: h.Items, Collections: h.Collections, More: h.More, Key: h.Key, ItemCount: h.ItemCount}
+		out[i] = experience.RankedCandidate{ID: h.ID, PreviewOnFocus: h.PreviewOnFocus, RankedTop10: h.RankedTop10, Purpose: experience.CandidatePurpose(h), Title: h.Title, Type: h.Type, Style: h.Style, Promoted: h.Promoted, Items: h.Items, Collections: h.Collections, More: h.More, Key: h.Key, ItemCount: h.ItemCount, ItemBadges: h.ItemBadges}
 	}
 	return out, nil
 }
@@ -277,7 +277,9 @@ func (a *App) experienceAdditionalRows(ctx context.Context, req frontend.RowRequ
 		composer.Playlists = playlists
 	}
 	if a.watchlist != nil {
-		composer.Watchlist = hubDiscoverySource{a.watchlist.Hubs}
+		composer.Watchlist = hubDiscoverySource{func(ctx context.Context, viewer *core.User, limit int) ([]core.Hub, error) {
+			return a.watchlist.Hubs(ctx, viewer, limit, req.Device.Language)
+		}}
 	}
 	if a.discoveryPersonal != nil {
 		composer.Personal = hubDiscoverySource{a.discoveryPersonal.Hubs}

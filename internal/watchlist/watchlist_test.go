@@ -121,7 +121,7 @@ func TestPrewarmRecordsWatchlistCause(t *testing.T) {
 }
 
 func TestAvailableEventFiresOnceWhenATitleBecomesPlayable(t *testing.T) {
-	s, _, _, _, _, now := setup(t)
+	s, _, eng, _, _, now := setup(t)
 	var got []core.RatingKey
 	s.o.OnAvailable = func(_ context.Context, userID int64, key core.RatingKey) {
 		if userID != 1 {
@@ -129,16 +129,24 @@ func TestAvailableEventFiresOnceWhenATitleBecomesPlayable(t *testing.T) {
 		}
 		got = append(got, key)
 	}
-	ctx := context.Background()
+	ctx := t.Context()
 	u := &core.User{ID: 1, MaxContentRating: "PG"}
-	if err := s.Sync(ctx, u); err != nil {
+	s.o.User = func(context.Context, int64) (*core.User, error) { return u, nil }
+	if err := s.SaveSettings(ctx, Settings{Enabled: true, CheckHours: 6}); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Check(ctx, u); err != nil {
-		t.Fatal(err)
+	key := core.MovieKey(1)
+	for range 2 {
+		if err := s.Remind(ctx, u, key); err != nil {
+			t.Fatal(err)
+		}
 	}
-	if len(got) != 1 || got[0] != core.MovieKey(1) {
-		t.Fatalf("available %v", got)
+	if len(s.addQueue) != 1 || s.addQueue[0] != (addedTitle{u.ID, key}) {
+		t.Fatalf("duplicate membership queued extra work: %v", s.addQueue)
+	}
+	s.checkAdded(ctx, s.addQueue[0])
+	if len(got) != 1 || got[0] != key || eng.calls != 0 {
+		t.Fatalf("available events %v, prewarms %d", got, eng.calls)
 	}
 	*now = now.Add(7 * time.Hour)
 	if err := s.Check(ctx, u); err != nil {
@@ -161,10 +169,27 @@ func TestAvailabilityIsHealthyReleasedViewerScopedAndOnce(t *testing.T) {
 	if res.calls != 1 || eng.calls != 1 || note.calls != 1 {
 		t.Fatalf("resolve/warm/notify %d/%d/%d", res.calls, eng.calls, note.calls)
 	}
-	h, e := s.Hubs(ctx, u, 12)
-	if e != nil || len(h) != 1 || h[0].Title != "Now available" || len(h[0].Items) != 1 {
+	h, e := s.Hubs(ctx, u, 12, "en")
+	if e != nil || len(h) != 1 || h[0].Title != "Watchlist" || len(h[0].Items) != 2 {
 		t.Fatalf("hubs %#v %v", h, e)
 	}
+	future := core.Title{Key: core.MovieKey(20), Title: "Future film", Type: core.TypeMovie, ContentRating: "PG", Released: now.Add(24 * time.Hour)}
+	*now = now.Add(time.Second)
+	if err := s.upsert(ctx, u.ID, "manual", future); err != nil {
+		t.Fatal(err)
+	}
+	row := core.Row{ID: "rwatchlist", Name: "Family picks"}
+	s.o.Rows = func(context.Context, *core.User) []core.Row { return []core.Row{row} }
+	h, e = s.Hubs(ctx, u, 12, "en")
+	if e != nil || len(h) != 1 || h[0].Title != row.Name || len(h[0].Items) != 3 || h[0].Items[0].Key != future.Key || h[0].ItemBadges[future.Key] != "Not yet available" {
+		t.Fatalf("combined watchlist %#v %v", h, e)
+	}
+	row.Source.Params = map[string]string{core.WatchlistSplitParam: "true"}
+	h, e = s.Hubs(ctx, u, 12, "en")
+	if e != nil || len(h) != 2 || h[0].Title != "Family picks: Now available" || h[1].Title != "Family picks: Waiting for a stream" || len(h[1].Items) != 2 || h[1].Items[0].Key != future.Key {
+		t.Fatalf("split watchlist %#v %v", h, e)
+	}
+
 	other, e := s.Items(ctx, &core.User{ID: 2})
 	if e != nil || len(other) != 0 {
 		t.Fatalf("viewer leak %v %v", other, e)

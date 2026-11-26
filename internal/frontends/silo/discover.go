@@ -10,8 +10,6 @@ import (
 
 const (
 	nowAvailableLibraryID = "1073741824"
-	nowAvailableRowID     = "watchlist.available"
-	nowAvailableTitle     = "Now available"
 )
 
 // rowSnapshotter reads the same authorized rows as Experience.Rows without
@@ -21,7 +19,7 @@ type rowSnapshotter interface {
 }
 
 func nowAvailableExperienceRow(row frontend.Row) bool {
-	return row.ID == nowAvailableRowID || row.Title == nowAvailableTitle
+	return frontend.WatchlistHubAvailable(row.ID)
 }
 
 func onlyNowAvailable(rows []frontend.Row) []frontend.Row {
@@ -42,21 +40,21 @@ func (i *instance) snapshotHome(r *http.Request, v *frontend.Viewer, limit int) 
 	return i.host.Experience.Rows(r.Context(), req)
 }
 
-func (i *instance) nowAvailableTitles(r *http.Request, v *frontend.Viewer) ([]frontend.Title, bool) {
+func (i *instance) nowAvailableTitles(r *http.Request, v *frontend.Viewer) ([]frontend.Title, string) {
 	if i.host.Experience == nil {
-		return nil, false
+		return nil, ""
 	}
 	rows, err := i.snapshotHome(r, v, 50)
 	if err != nil {
-		return nil, false
+		return nil, ""
 	}
 	for _, row := range onlyNowAvailable(rows) {
 		titles := rowTitles(row)
 		if len(titles) > 0 {
-			return titles, true
+			return titles, row.Title
 		}
 	}
-	return nil, false
+	return nil, ""
 }
 
 func rowTitles(row frontend.Row) []frontend.Title {
@@ -134,9 +132,6 @@ func discoverRow(row frontend.Row) bool {
 	case frontend.RowContinue, frontend.RowNextUp, frontend.RowLive:
 		return false
 	}
-	if row.ID == "watchlist.coming" || strings.EqualFold(row.Title, "Waiting for a stream") {
-		return false
-	}
 	return len(rowTitles(row)) > 0
 }
 
@@ -174,10 +169,19 @@ func (i *instance) sectionCards(r *http.Request, v *frontend.Viewer, credential 
 		overlays, batched = i.editionOverlays(r, v, keys)
 		artwork = i.sectionArtwork(r, v, credential, titles)
 	}
+	badges := make(map[frontend.RatingKey]string)
+	for _, entry := range row.Entries {
+		if entry.Title != nil && entry.Badge != "" {
+			badges[entry.Title.Key] = entry.Badge
+		}
+	}
 	home := !strings.Contains(r.URL.Path, "/library/")
 	items := make([]any, 0, len(titles))
 	for _, t := range titles {
 		item := titleDTO(t, states[t.Key])
+		if badge := badges[t.Key]; badge != "" {
+			item["badge"] = badge
+		}
 		if home {
 			item["keywords"] = []string{}
 		}

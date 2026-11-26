@@ -29,7 +29,7 @@ type DiscoveryRatingsSettings struct {
 }
 
 type DiscoveryWatchlist interface {
-	Hubs(ctx context.Context, viewer *core.User, limit int) ([]core.Hub, error)
+	Hubs(ctx context.Context, viewer *core.User, limit int, language string) ([]core.Hub, error)
 	RecapsEnabled(ctx context.Context) bool
 	NaturalSearchEnabled(ctx context.Context) bool
 }

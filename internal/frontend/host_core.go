@@ -290,3 +290,6 @@ type DetailPending = core.DetailPending
 func WithDetailPending(ctx context.Context, key RatingKey) (context.Context, *DetailPending) {
 	return core.WithDetailPending(ctx, key)
 }
+
+var IsWatchlistHub = core.IsWatchlistHub
+var WatchlistHubAvailable = core.WatchlistHubAvailable

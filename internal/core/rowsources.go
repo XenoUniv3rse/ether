@@ -46,7 +46,8 @@ const MaxCollectionCards = 50
 
 // Row parameter types.
 const (
-	ParamChoice         = "choice"     // one of Choices
+	ParamChoice         = "choice" // one of Choices
+	ParamBool           = "bool"
 	ParamCount          = "count"      // an integer Min..Max
 	ParamFacetValue     = "facetValue" // a value of the row library's Facet ("" = Ether picks)
 	ParamCollectionList = "collectionList"
@@ -96,6 +97,10 @@ func (s RowSourceInfo) ValidateParams(params map[string]string) error {
 			}
 			if !found {
 				return fmt.Errorf("%s: %q is not a choice for %s", s.Title, v, p.Label)
+			}
+		case ParamBool:
+			if v != "true" && v != "false" {
+				return fmt.Errorf("%s: %s must be true or false", s.Title, p.Label)
 			}
 		case ParamCount:
 			n, err := strconv.Atoi(v)

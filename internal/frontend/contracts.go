@@ -260,6 +260,8 @@ const (
 // Handle is an opaque, server-issued interaction capability scoped to the
 // viewer and device; it is not an account credential.
 type RowEntry struct {
+	Watchlist   bool
+	Badge       string
 	Kind        RowEntryKind
 	Handle      string
 	Title       *core.Title
@@ -1423,6 +1425,8 @@ type Event struct {
 	TargetDeviceID  string
 	Session         *Session
 	Timeline        *Timeline
+
+	RowIDs []string // shelves whose contents changed
 }
 
 // TrickplayOffer is sprite geometry and coverage state for one generated width.
