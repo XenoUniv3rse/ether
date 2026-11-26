@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/braedonsaunders/ether/internal/core"
 	"golang.org/x/text/language"
@@ -48,6 +49,11 @@ func PlaybackPending(err error, languages ...string) (code, message string, seco
 	_, locale := language.MatchStrings(playbackErrorLocaleMatcher, languages...)
 	msg := playbackPendingText[locale]
 	if queued {
+		// Keep the provider's queue position ("queued at TorBox behind 3
+		// active downloads") so the viewer knows why it is waiting.
+		if detail := core.DownloadQueuedDetail(err); detail != "" {
+			return code, strings.TrimSuffix(msg.queued, "…") + " (" + detail + ")…", seconds
+		}
 		return code, msg.queued, seconds
 	}
 	return code, msg.finding, seconds
