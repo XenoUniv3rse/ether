@@ -1,6 +1,7 @@
 package plex
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -198,16 +199,20 @@ func TestDiscoveryBackdropResolutionValidator(t *testing.T) {
 			f.srv.setImages(artworkservice.NewRemoteCache(1024, http.DefaultClient))
 			fetched = ""
 			first := f.request(t, "GET", tc.hi, nil)
-			if first.Code != 200 || !strings.HasPrefix(fetched, "/original/") || !strings.HasSuffix(first.Header().Get("ETag"), "w2688\"") {
+			// The validator is a content hash of the bytes sent: two widths
+			// share one only when they render identical bytes.
+			if first.Code != 200 || !strings.HasPrefix(fetched, "/original/") || first.Header().Get("ETag") == "" {
 				t.Fatalf("%d %s %s", first.Code, fetched, first.Header().Get("ETag"))
 			}
 			cached := f.request(t, "GET", tc.hi, map[string]string{"If-None-Match": first.Header().Get("ETag")})
 			if cached.Code != 304 {
 				t.Fatal("lost conditional GET", cached.Code)
 			}
+			plain := f.request(t, "GET", tc.lo, nil)
 			smaller := f.request(t, "GET", tc.lo, map[string]string{"If-None-Match": first.Header().Get("ETag")})
-			if smaller.Code != 200 {
-				t.Fatal("cross-size validator reused", smaller.Code)
+			sameBytes := bytes.Equal(plain.Body.Bytes(), first.Body.Bytes())
+			if sameBytes != (smaller.Code == 304) || sameBytes != (plain.Header().Get("ETag") == first.Header().Get("ETag")) {
+				t.Fatalf("cross-size validator: same bytes %v, conditional %d", sameBytes, smaller.Code)
 			}
 		})
 	}
