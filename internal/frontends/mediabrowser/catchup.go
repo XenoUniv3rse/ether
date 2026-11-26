@@ -80,7 +80,7 @@ func (i *instance) catchUpBrowse(w http.ResponseWriter, r *http.Request, viewer 
 	}
 	q := itemQuery(r)
 	page, err := lib.CatchUpItems(r.Context(), viewer, frontend.CatchUpQuery{
-		Parent: parent, Recursive: recursive, Offset: q.Offset, Limit: q.Limit,
+		Parent: parent, Recursive: recursive, Offset: q.Offset, Limit: q.Limit, Sort: frontend.CatchUpSortFor(q.Sort, q.Desc),
 	})
 	if err != nil {
 		http.Error(w, "Unavailable", 503)

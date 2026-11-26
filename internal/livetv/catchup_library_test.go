@@ -2,6 +2,7 @@ package livetv
 
 import (
 	"encoding/json"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -65,5 +66,66 @@ func TestCatchUpLibraryWindowAndAccess(t *testing.T) {
 	page, err := h.CatchUpItems(t.Context(), owner, q)
 	if err != nil || len(page.Items) != 2 || page.Items[1].ID != episodes.Items[0].ID {
 		t.Fatalf("oldest airing did not expire: %d, %v", len(page.Items), err)
+	}
+}
+
+func TestCatchUpLibrarySort(t *testing.T) {
+	now := time.Date(2026, 11, 25, 12, 0, 0, 0, time.UTC)
+	s := testService(t, Options{Now: func() time.Time { return now }})
+	ch, err := s.SaveChannel(t.Context(), Channel{ID: "archive-sort", Name: "Archive", Number: "1", Kind: "iptv", Enabled: true, GuideID: "guide", StreamURL: "https://example.invalid/live.ts"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ch.Archive = &ChannelArchive{Days: 2, Mode: "xtream"}
+	data, err := json.Marshal(ch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.o.DB.ExecContext(t.Context(), "UPDATE livetv_channels SET data=? WHERE id=?", data, ch.ID); err != nil {
+		t.Fatal(err)
+	}
+	// Newest first: Morning Show, charlie Report, Alpha Hour, Bravo News.
+	for _, p := range []struct {
+		hours int
+		title string
+	}{{-30, "Bravo News"}, {-20, "Alpha Hour"}, {-10, "charlie Report"}, {-2, "Morning Show"}} {
+		start := now.Add(time.Duration(p.hours) * time.Hour)
+		prog := Programme{Start: start, End: start.Add(time.Hour), Item: Item{Title: p.title}}
+		raw, err := json.Marshal(prog)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err = s.o.DB.ExecContext(t.Context(), "INSERT INTO livetv_programmes(source_id,channel_id,start_ms,end_ms,data) VALUES(?,?,?,?,?)", guideSource(ch), ch.GuideID, start.UnixMilli(), prog.End.UnixMilli(), raw); err != nil {
+			t.Fatal(err)
+		}
+	}
+	h := s.Frontend().(frontend.CatchUpLibrary)
+	owner := &core.User{ID: 1, IsOwner: true}
+	titles := func(q frontend.CatchUpQuery) []string {
+		t.Helper()
+		page, err := h.CatchUpItems(t.Context(), owner, q)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out []string
+		for _, item := range page.Items {
+			out = append(out, item.Programme.Item.Title)
+		}
+		return out
+	}
+	check := func(name string, got []string, want ...string) {
+		t.Helper()
+		if strings.Join(got, "|") != strings.Join(want, "|") {
+			t.Fatalf("%s: got %q, want %q", name, got, want)
+		}
+	}
+	check("default", titles(frontend.CatchUpQuery{}), "Morning Show", "charlie Report", "Alpha Hour", "Bravo News")
+	check("title", titles(frontend.CatchUpQuery{Sort: frontend.CatchUpSortTitle}), "Alpha Hour", "Bravo News", "charlie Report", "Morning Show")
+	check("title desc", titles(frontend.CatchUpQuery{Sort: frontend.CatchUpSortTitleDesc}), "Morning Show", "charlie Report", "Bravo News", "Alpha Hour")
+	check("oldest", titles(frontend.CatchUpQuery{Sort: frontend.CatchUpSortOldest}), "Bravo News", "Alpha Hour", "charlie Report", "Morning Show")
+	check("title page", titles(frontend.CatchUpQuery{Sort: frontend.CatchUpSortTitle, Offset: 1, Limit: 2}), "Bravo News", "charlie Report")
+	page, err := h.CatchUpItems(t.Context(), owner, frontend.CatchUpQuery{Sort: frontend.CatchUpSortTitle, Limit: 1})
+	if err != nil || page.Total != 4 || len(page.Items) != 1 {
+		t.Fatalf("sorted total: %d of %d, %v", len(page.Items), page.Total, err)
 	}
 }

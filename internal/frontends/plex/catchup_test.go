@@ -108,3 +108,45 @@ func TestCatchUpSectionPlayback(t *testing.T) {
 }
 
 func (*catchUpTestLive) NoteClientActivity() {}
+
+type catchUpSortTestLive struct {
+	catchUpTestLive
+	got frontend.CatchUpQuery
+}
+
+func (f *catchUpSortTestLive) CatchUpItems(_ context.Context, _ *frontend.Viewer, q frontend.CatchUpQuery) (frontend.CatchUpPage, error) {
+	f.got = q
+	return frontend.CatchUpPage{Items: []frontend.CatchUpItem{f.item}, Total: 1}, nil
+}
+
+func TestCatchUpSectionSorts(t *testing.T) {
+	f := newFixture()
+	t.Cleanup(func() { _ = f.srv.Close() })
+	start := time.Unix(1700000000, 0).UTC()
+	live := &catchUpSortTestLive{catchUpTestLive: catchUpTestLive{item: frontend.CatchUpItem{
+		ID: frontend.CatchUpGroupID(frontend.TypeShow, "News"), Type: frontend.TypeShow,
+		Programme: frontend.LiveTVProgramme{ID: "channel-1700000000000", ChannelID: "channel", Start: start, End: start.Add(time.Hour), Item: frontend.LiveTVItem{Title: "News"}},
+	}}}
+	f.srv.setLiveTV(live)
+	for raw, want := range map[string]frontend.CatchUpSort{
+		"":                          frontend.CatchUpSortRecent,
+		"titleSort":                 frontend.CatchUpSortTitle,
+		"titleSort:desc":            frontend.CatchUpSortTitleDesc,
+		"originallyAvailableAt":     frontend.CatchUpSortRecent,
+		"originallyAvailableAt:asc": frontend.CatchUpSortOldest,
+		"rating:desc":               frontend.CatchUpSortRecent,
+	} {
+		if got := f.request(t, "GET", "/library/sections/2147483646/all?"+url.Values{"sort": {raw}}.Encode(), nil); got.Code != http.StatusOK || live.got.Sort != want {
+			t.Fatalf("sort %q: %d, got %q want %q", raw, got.Code, live.got.Sort, want)
+		}
+	}
+	sorts := f.request(t, "GET", "/library/sections/2147483646/sorts", map[string]string{"Accept": "application/json"})
+	body := sorts.Body.String()
+	if sorts.Code != http.StatusOK || !strings.Contains(body, `"Date Aired"`) || !strings.Contains(body, `"titleSort"`) || strings.Contains(body, `"rating"`) {
+		t.Fatalf("catch-up sorts: %d %s", sorts.Code, body)
+	}
+	meta := f.request(t, "GET", "/library/sections/2147483646/all?includeMeta=1&sort=titleSort", map[string]string{"Accept": "application/json"})
+	if !strings.Contains(meta.Body.String(), `"Date Aired"`) || strings.Contains(meta.Body.String(), `"Genre"`) {
+		t.Fatalf("catch-up meta: %s", meta.Body.String())
+	}
+}

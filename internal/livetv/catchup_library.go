@@ -115,7 +115,56 @@ func (h liveTVHost) CatchUpItem(ctx context.Context, u *frontend.Viewer, id stri
 }
 
 func (h liveTVHost) CatchUpItems(ctx context.Context, u *frontend.Viewer, q frontend.CatchUpQuery) (frontend.CatchUpPage, error) {
-	return h.catchUpItems(ctx, u, q, "")
+	if q.Sort == frontend.CatchUpSortRecent {
+		return h.catchUpItems(ctx, u, q, "")
+	}
+	// Any other order needs the whole listing; the archive window keeps it
+	// to a few thousand rows.
+	all := q
+	all.Offset, all.Limit, all.Sort = 0, catchUpUnlimited, frontend.CatchUpSortRecent
+	page, err := h.catchUpItems(ctx, u, all, "")
+	if err != nil {
+		return frontend.CatchUpPage{}, err
+	}
+	sortCatchUpItems(page.Items, q.Sort)
+	limit := q.Limit
+	if limit <= 0 {
+		limit = 100
+	}
+	limit = min(limit, 1000)
+	out := frontend.CatchUpPage{Total: len(page.Items)}
+	if q.Offset < len(page.Items) {
+		out.Items = page.Items[q.Offset:min(len(page.Items), q.Offset+limit)]
+	}
+	return out, nil
+}
+
+// catchUpUnlimited asks catchUpItems for every matching row.
+const catchUpUnlimited = -1
+
+// sortCatchUpItems reorders a newest-first listing. Equal titles keep their
+// newest-first order.
+func sortCatchUpItems(items []frontend.CatchUpItem, order frontend.CatchUpSort) {
+	switch order {
+	case frontend.CatchUpSortOldest:
+		slices.Reverse(items)
+	case frontend.CatchUpSortTitle, frontend.CatchUpSortTitleDesc:
+		slices.SortStableFunc(items, func(a, b frontend.CatchUpItem) int {
+			c := cmp.Compare(catchUpSortTitle(a), catchUpSortTitle(b))
+			if order == frontend.CatchUpSortTitleDesc {
+				c = -c
+			}
+			return c
+		})
+	}
+}
+
+func catchUpSortTitle(item frontend.CatchUpItem) string {
+	title := item.Programme.Item.Title
+	if item.Type == frontend.TypeEpisode && item.Programme.Item.EpisodeTitle != "" {
+		title += " " + item.Programme.Item.EpisodeTitle
+	}
+	return strings.ToLower(title)
 }
 
 func (h liveTVHost) catchUpItems(ctx context.Context, u *core.User, q frontend.CatchUpQuery, exact string) (frontend.CatchUpPage, error) {
@@ -139,10 +188,14 @@ func (h liveTVHost) catchUpItems(ctx context.Context, u *core.User, q frontend.C
 		kind = frontend.TypeSeason
 	}
 	limit := q.Limit
-	if limit <= 0 {
+	switch {
+	case limit == catchUpUnlimited:
+		limit = int(^uint(0) >> 1)
+	case limit <= 0:
 		limit = 100
+	default:
+		limit = min(limit, 1000)
 	}
-	limit = min(limit, 1000)
 	now := h.s.clockNow()
 	seen := map[string]bool{}
 	_, policy, err := h.s.withPolicy(ctx, u)
