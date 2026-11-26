@@ -13,9 +13,20 @@ var (
 	errSessionExhausted = fmt.Errorf("transcode: session failure limit reached: %w", core.ErrEncoderExhausted)
 	errSegmentExhausted = fmt.Errorf("transcode: segment failure limit reached: %w", core.ErrEncoderExhausted)
 	errSessionStopped   = fmt.Errorf("transcode: session stopped: %w", core.ErrEncoderExhausted)
+	errStartSuperseded  = errors.New("transcode: encoder start superseded")
+	errStartInterrupted = errors.New("transcode: encoder start interrupted by retirement")
 )
 
+func writeSupersededMedia(w http.ResponseWriter) {
+	w.Header().Set("Retry-After", "1")
+	http.Error(w, "superseded by a newer request", http.StatusServiceUnavailable)
+}
+
 func writeStartError(w http.ResponseWriter, err error) {
+	if err == errStartInterrupted {
+		writeSupersededMedia(w)
+		return
+	}
 	if errors.Is(err, errSessionStopped) {
 		http.Error(w, "session stopped", http.StatusGone)
 		return

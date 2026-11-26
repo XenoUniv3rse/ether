@@ -77,7 +77,8 @@ func (s *recoverySession) fetch(w http.ResponseWriter, q *http.Request, rung str
 	case s.r.deliveryScratch <- struct{}{}:
 		defer func() { <-s.r.deliveryScratch }()
 	case <-ctx.Done():
-		http.Error(w, "encoder recovery pending", 503)
+		w.Header().Set("Retry-After", "1")
+		http.Error(w, "encoder recovery pending", http.StatusServiceUnavailable)
 		return
 	}
 	for ctx.Err() == nil {
@@ -119,7 +120,8 @@ func (s *recoverySession) fetch(w http.ResponseWriter, q *http.Request, rung str
 		case <-time.After(25 * time.Millisecond):
 		}
 	}
-	http.Error(w, "encoder recovery pending", 503)
+	w.Header().Set("Retry-After", "1")
+	http.Error(w, "encoder recovery pending", http.StatusServiceUnavailable)
 }
 
 type pendingSegment struct {

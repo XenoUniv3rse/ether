@@ -19,7 +19,7 @@ const deliveryHop = "X-Ether-Delivery-Hop"
 const deliveryURI = "X-Ether-Delivery-URI"
 const deliveryProtocol = "X-Ether-Delivery-Protocol"
 
-var deliveryHeaders = []string{"Allow", "Vary", "Content-Security-Policy", "X-Content-Type-Options", "Access-Control-Allow-Origin", "Access-Control-Allow-Methods", "Access-Control-Allow-Headers", "Content-Type", "Content-Length", "Content-Range", "Accept-Ranges", "Cache-Control", "ETag", "Last-Modified", "Content-Disposition"}
+var deliveryHeaders = []string{"Allow", "Vary", "Content-Security-Policy", "X-Content-Type-Options", "Access-Control-Allow-Origin", "Access-Control-Allow-Methods", "Access-Control-Allow-Headers", "Content-Type", "Content-Length", "Content-Range", "Accept-Ranges", "Cache-Control", "ETag", "Last-Modified", "Content-Disposition", "Retry-After"}
 
 // BindMediaBrowserDelivery replays the original mounted Jellyfin/Emby
 // handlers, including their protocol policy and representation headers.

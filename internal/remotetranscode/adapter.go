@@ -451,8 +451,8 @@ func (s *Session) serveRepresentation(w http.ResponseWriter, r *http.Request, m 
 		facts.Trailers = len(response.Trailer) != 0
 	}()
 	s.touch()
-	// Preserve representation/range/cache headers, never cookies or peer secrets.
-	for _, h := range []string{"Content-Type", "Content-Length", "Content-Range", "Accept-Ranges", "Cache-Control", "ETag", "Last-Modified", "Content-Disposition"} {
+	// Preserve representation headers and retry guidance from the worker.
+	for _, h := range []string{"Content-Type", "Content-Length", "Content-Range", "Accept-Ranges", "Cache-Control", "ETag", "Last-Modified", "Content-Disposition", "Retry-After"} {
 		if v := response.Header.Values(h); len(v) > 0 {
 			w.Header()[h] = v
 		}

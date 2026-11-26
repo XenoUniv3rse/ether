@@ -264,6 +264,14 @@ func (s *Session) traceOn() bool {
 
 // startRunForLocked starts a run and, when playback tracing is on, records why.
 func (s *Session) startRunForLocked(seg int, bigProbe bool, reason string) error {
+	err := s.tryStartRunForLocked(seg, bigProbe, reason)
+	if err == errStartSuperseded {
+		return nil // The newer run owns this session's encoder.
+	}
+	return err
+}
+
+func (s *Session) tryStartRunForLocked(seg int, bigProbe bool, reason string) error {
 	s.traceCause = reason
 	return s.startRunLocked(seg, bigProbe)
 }
@@ -321,12 +329,6 @@ func (s *Session) startRunLocked(seg int, bigProbe bool) error {
 		s.stopRunLocked()
 	}
 	started := false
-	defer func() {
-		if !started && s.cur == nil && s.handoff != nil {
-			s.cur = s.handoff
-			s.handoff = nil
-		}
-	}()
 
 	// This start replaces any throttle resume. Clear it before waiting on
 	// the old process: a collector can take the lock during that wait and
@@ -339,6 +341,10 @@ func (s *Session) startRunLocked(seg int, bigProbe bool) error {
 	s.pendingStart, s.pendingSegment, s.pendingTrack = true, seg, s.wantTrack
 	defer func() {
 		if sequence == s.runSeq {
+			if !started && s.cur == nil && s.handoff != nil {
+				s.cur = s.handoff
+				s.handoff = nil
+			}
 			s.pendingStart = false
 			s.broadcastLocked()
 		}
@@ -358,11 +364,8 @@ func (s *Session) startRunLocked(seg int, bigProbe bool) error {
 		case <-canceled:
 		}
 		s.mu.Lock()
-		if s.closed || (s.encoder != nil && s.encoder.isSealed()) {
-			return errors.New("transcode: session closed")
-		}
-		if sequence != s.runSeq {
-			return nil
+		if err := s.startOwnershipLocked(sequence, seg); err != nil {
+			return err
 		}
 		if s.reaping == barrier {
 			s.reaping = nil
@@ -633,6 +636,9 @@ func (s *Session) startRunLocked(seg int, bigProbe bool) error {
 	}}
 	work, err := s.encoder.runWork(s.decision.EncodesVideo(s.info) || rp.mode != ModeCopy || s.wantTrack != 0)
 	if err != nil {
+		if ownershipErr := s.startOwnershipLocked(sequence, seg); ownershipErr != nil {
+			return ownershipErr
+		}
 		return err
 	}
 	r.watchWork, r.stopWork = work[0], work[1]
@@ -643,6 +649,9 @@ func (s *Session) startRunLocked(seg int, bigProbe bool) error {
 			r.watchWork.finish()
 			r.stopWork.finish()
 			work[2].finish()
+			if ownershipErr := s.startOwnershipLocked(sequence, seg); ownershipErr != nil {
+				return ownershipErr
+			}
 			return reserveErr
 		}
 		hintWork = reserved[0]
@@ -737,33 +746,33 @@ func (s *Session) startRunLocked(seg int, bigProbe bool) error {
 		s.starting = nil
 	}
 	close(starting)
-	stale := s.closed || sequence != s.runSeq || (s.encoder != nil && s.encoder.isSealed())
+	ownershipErr := s.startOwnershipLocked(sequence, seg)
 	if proc != nil {
 		s.encoder.markStarted()
 	}
-	if err != nil || stale || proc == nil {
+	if err != nil || ownershipErr != nil || proc == nil {
 		if proc != nil {
 			s.reapUnpublishedLocked(r, proc)
 		} else {
 			r.watchWork.finish()
 			r.stopWork.finish()
 		}
-		if err != nil {
+		if err != nil || proc == nil {
 			if dr != nil {
 				_ = os.RemoveAll(dr.dir)
 			}
 			if cr != nil {
 				_ = os.RemoveAll(cr.dir)
 			}
+		}
+		if ownershipErr != nil {
+			return ownershipErr
+		}
+		if err != nil {
 			s.noteEncoder(false, args)
 			return fmt.Errorf("transcode: start ffmpeg: %w", err)
 		}
-		// A newer seek or swap owns the session. Match the wait above: this
-		// start is not a failure, and the caller keeps serving the new run.
-		if sequence != s.runSeq && !s.closed && (s.encoder == nil || !s.encoder.isSealed()) {
-			return nil
-		}
-		return errors.New("transcode: start superseded or returned no process")
+		return errors.New("transcode: runner returned no process")
 	}
 	if r.rtx {
 		s.decision.Enhancement = spec.Decision.Enhancement
@@ -798,6 +807,20 @@ func (s *Session) startRunLocked(seg int, bigProbe bool) error {
 	s.watchers.Add(1)
 	go s.watch(r)
 	s.broadcastLocked()
+	return nil
+}
+
+// startOwnershipLocked classifies a displaced start before inspecting any
+// runner error, which may have been caused by canceling that start.
+func (s *Session) startOwnershipLocked(sequence, segment int) error {
+	if s.closed || (s.encoder != nil && s.encoder.isSealed()) {
+		s.log.Debug("encoder start interrupted", "run", sequence, "segment", segment)
+		return errStartInterrupted
+	}
+	if sequence != s.runSeq {
+		s.log.Debug("encoder start superseded", "run", sequence, "replacement", s.runSeq, "segment", segment)
+		return errStartSuperseded
+	}
 	return nil
 }
 
