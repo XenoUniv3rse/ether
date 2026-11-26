@@ -1302,14 +1302,14 @@ func audioProfile(st *frontend.StreamInfo) string {
 
 // buildStreams renders Stream elements and registers their ids.
 func (s *Server) buildStreams(key frontend.RatingKey, info frontend.MediaInfo, sel selection, u *frontend.User) []model.Stream {
-	out, _ := s.renderStreams(key, info, sel, u)
+	out, _ := s.renderStreams(key, 0, info, sel, u)
 	return out
 }
 
 // issuedStreams renders a Media's streams with the ids this client was
 // already issued for that Media (see play_identity.go).
 func (s *Server) issuedStreams(key frontend.RatingKey, ik playIdentityKey, mediaID int64, info frontend.MediaInfo, sel selection, u *frontend.User, requests ...*Request) []model.Stream {
-	out, src := s.renderStreams(key, info, sel, u)
+	out, src := s.renderStreams(key, mediaID, info, sel, u)
 	if ik.valid() && ik.key == key && s.playIDs != nil {
 		s.playIDs.issueStreams(ik, mediaID, out, src, info, s.now())
 	}
@@ -1320,7 +1320,10 @@ func (s *Server) issuedStreams(key frontend.RatingKey, ik playIdentityKey, media
 }
 
 // renderStreams also returns, per rendered stream, its index in info.Streams.
-func (s *Server) renderStreams(key frontend.RatingKey, info frontend.MediaInfo, sel selection, u *frontend.User) ([]model.Stream, []int) {
+func (s *Server) renderStreams(key frontend.RatingKey, partID int64, info frontend.MediaInfo, sel selection, u *frontend.User) ([]model.Stream, []int) {
+	if partID == int64(key) {
+		partID = 0
+	}
 	var out []model.Stream
 	var src []int
 	audioSelected := -1
@@ -1347,7 +1350,7 @@ func (s *Server) renderStreams(key frontend.RatingKey, info frontend.MediaInfo, 
 	}
 	for i, st := range info.Streams {
 		id := s.assignStream(context.Background(), u, frontend.StreamBinding{
-			Key: key, Index: i, Info: st, Estimated: info.Estimated,
+			Key: key, PartID: partID, Index: i, Info: st, Estimated: info.Estimated,
 			DistinguishSubtitleIndex: slotCounts[subtitleSlots[i]] > 1,
 		})
 		ps := model.Stream{

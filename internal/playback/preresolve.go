@@ -209,7 +209,7 @@ type probeCache struct {
 // Prefetch goes through Engine.Prefetch, which runs at core.PriorityPrefetch
 // and yields to live streams.
 func (m *Manager) Prewarm(ctx context.Context, user *core.User, key core.RatingKey, caps core.ClientCaps, opts core.PrewarmOptions) bool {
-	return m.prewarm(ctx, user, key, caps, opts, false, false)
+	return m.prewarm(ctx, user, key, caps, opts, opts.MetadataOnly, false)
 }
 
 // RevealDetail triggers a background season-drop check for a show, season, or
@@ -580,8 +580,10 @@ func (m *Manager) prewarm(requestCtx context.Context, user *core.User, key core.
 	if key.IsPluginKey() {
 		return false
 	}
-	cachedMetadata := metadata && !playProbe && core.LocalResponse(requestCtx)
-	if user == nil || caps.ClientID == "" || (!playProbe && caps.Product == "") {
+	// A synchronous metadata probe respects LocalResponse. An explicitly
+	// scheduled detail probe can resolve in the background for a later read.
+	cachedMetadata := metadata && !playProbe && !opts.MetadataOnly && core.LocalResponse(requestCtx)
+	if user == nil || caps.ClientID == "" || (!playProbe && !opts.MetadataOnly && caps.Product == "") {
 		return false
 	}
 	reason := opts.Reason
@@ -1095,7 +1097,9 @@ func (m *Manager) prewarm(requestCtx context.Context, user *core.User, key core.
 			}
 			return
 		}
-		m.startGenerationFills(chosenGen)
+		if !opts.MetadataOnly {
+			m.startGenerationFills(chosenGen)
+		}
 		generation, res := chosenGen, chosenRes
 		defer m.dropGeneration(generation)
 		facts := &probeCache{releaseID: res.Release.ID, info: generation.infoSnapshot(), warmReads: generation.warmReads, points: generation.timeMapSnapshot().Points}

@@ -380,7 +380,7 @@ type Service struct {
 	bgWG                     sync.WaitGroup
 	detailVariants           map[[32]byte]*detailVariantSnapshot        // bgMu; lazy detail labels
 	detailVariantWorkers     int                                        // bgMu
-	refills                  map[string]chan struct{}                   // episode search key -> completion; guarded by bgMu
+	refills                  map[string]searchRefill                    // search key -> in-flight discovery; guarded by bgMu
 	refillRetryAfter         map[string]refillMark                      // next detail discovery allowed; guarded by bgMu
 	speculativeBudgetUntil   map[string]time.Time                       // purpose -> cooloff after discovery-share exhaustion; guarded by bgMu
 	seaDexQueue              []seaDexJob                                // guarded by bgMu
@@ -1909,22 +1909,25 @@ func (s *Service) searchCached(ctx context.Context, req core.SearchRequest, fres
 	// than spending a second set of indexer requests for the same title.
 	if !fresh && ctx.Value(refillSearchContextKey{}) == nil {
 		s.bgMu.Lock()
-		done := s.refills[key]
+		refill := s.refills[key]
 		mark := s.refillRetryAfter[key]
 		s.bgMu.Unlock()
-		if done != nil {
-			// A viewer's Play joins the detail search only briefly: that search
-			// waits for every indexer, so after playStartDeadline Play runs its
-			// own progressive search instead of a slow indexer's timeout.
+		if refill.done != nil {
+			// Source preparation can use live candidates from the refill.
+			// Keep the same bound on waiting before starting its own search.
 			var bound <-chan time.Time
+			var early *searchPreparation
 			if !core.SpeculativeIndexerWork(ctx) {
 				t := time.NewTimer(playStartDeadline)
 				defer t.Stop()
 				bound = t.C
+				early, _ = ctx.Value(searchPreparationKey{}).(*searchPreparation)
 			}
-			select {
-			case <-bound:
-			case <-done:
+			results, complete, err := refill.wait(ctx, req, early, bound)
+			if err != nil || len(results) > 0 {
+				return results, false, err
+			}
+			if complete {
 				if results, ok := s.peekSearchCacheFor(req); ok {
 					return results, true, nil
 				}
@@ -1933,8 +1936,6 @@ func (s *Service) searchCached(ctx context.Context, req core.SearchRequest, fres
 				if core.SpeculativeIndexerWork(ctx) {
 					return nil, false, core.ErrBudgetExhausted
 				}
-			case <-ctx.Done():
-				return nil, false, ctx.Err()
 			}
 		} else if core.SpeculativeIndexerWork(ctx) && mark.missed && s.now().Before(mark.until) {
 			// Discovery for this title found nothing this cooloff: speculative

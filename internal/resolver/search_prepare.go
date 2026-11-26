@@ -402,6 +402,45 @@ func (p *searchPreparation) searchLive(ctx context.Context, indexer core.Streami
 	}
 }
 
+// wait lets source preparation validate candidates as they arrive. The
+// refill publishes the completed search cache independently.
+func (refill searchRefill) wait(ctx context.Context, req core.SearchRequest, p *searchPreparation, bound <-chan time.Time) ([]core.Release, bool, error) {
+	var ticks <-chan time.Time
+	if p != nil && !p.disabled {
+		ticker := time.NewTicker(25 * time.Millisecond)
+		defer ticker.Stop()
+		ticks = ticker.C
+	}
+	var rev uint64
+	for {
+		select {
+		case <-ctx.Done():
+			return nil, false, ctx.Err()
+		case <-refill.done:
+			return nil, true, nil
+		case <-bound:
+			return nil, false, nil
+		case <-ticks:
+			ls := refill.live
+			ls.mu.Lock()
+			if ls.rev != rev && (searchCacheEntry{req: ls.req}).serves(req) {
+				rev = ls.rev
+				batch := append([]core.Release(nil), ls.all...)
+				ls.mu.Unlock()
+				if len(batch) > 0 {
+					p.arrived(batch)
+				}
+			} else {
+				ls.mu.Unlock()
+			}
+			if ready := p.readyResults(); len(ready) > 0 {
+				p.partial.Store(true)
+				return ready, false, nil
+			}
+		}
+	}
+}
+
 // overdueResults hands a viewer's Play everything that has arrived once
 // playStartDeadline has passed with no early check healthy (early checks run
 // on the background budget, so an uncached torrent waits for foreground

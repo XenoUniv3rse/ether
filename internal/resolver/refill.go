@@ -21,6 +21,11 @@ var (
 
 type refillSearchContextKey struct{}
 
+type searchRefill struct {
+	done chan struct{}
+	live *liveSearch
+}
+
 // refillMark records a finished detail discovery: no other discovery for
 // the title until until; missed reports that it left no search answer.
 type refillMark struct {
@@ -69,8 +74,8 @@ func (s *Service) refillSearchCache(title *core.Title, unattended bool) <-chan s
 	if s.bgClosed {
 		return nil
 	}
-	if done := s.refills[key]; done != nil {
-		return done
+	if refill := s.refills[key]; refill.done != nil {
+		return refill.done
 	}
 	if until, ok := s.speculativeBudgetUntil[purpose]; ok && s.now().Before(until) {
 		return nil
@@ -86,14 +91,14 @@ func (s *Service) refillSearchCache(title *core.Title, unattended bool) <-chan s
 		return nil
 	}
 	if s.refills == nil {
-		s.refills = make(map[string]chan struct{})
+		s.refills = make(map[string]searchRefill)
 	}
 	done := make(chan struct{})
-	s.refills[key] = done
 	cooloff := s.cooloffFor(title)
 	// Publish the live search synchronously before returning so a concurrent
 	// play-intent version prober never misses a refill started by a resumed Auto.
 	ls := s.beginLiveSearch(req)
+	s.refills[key] = searchRefill{done: done, live: ls}
 	// Use the service lifetime, not the metadata request or source warm-up.
 	searchCtx := core.WithIndexerPurpose(context.WithValue(s.bgCtx, refillSearchContextKey{}, true), core.IndexerPurposeDetail)
 	if unattended {

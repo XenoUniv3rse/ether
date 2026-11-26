@@ -170,5 +170,7 @@ func (b *Broker) WarmDetail(ctx context.Context, req frontend.PlanRequest) bool 
 	if req.Intent.DeclaredCaps {
 		b.rememberPlayCaps(v, req.Protocol, req.Device, req.Item, declared)
 	}
-	return warm.Prewarm(context.WithoutCancel(ctx), v, req.Item, b.playCaps(v, req.Protocol, req.Device, declared), core.PrewarmOptions{Reason: core.PrewarmDetail, PlayIntent: true})
+	return warm.Prewarm(context.WithoutCancel(ctx), v, req.Item, b.playCaps(v, req.Protocol, req.Device, declared), core.PrewarmOptions{
+		Reason: core.PrewarmDetail, PlayIntent: true, MetadataOnly: true,
+	})
 }

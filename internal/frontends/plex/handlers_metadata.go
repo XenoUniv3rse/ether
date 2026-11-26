@@ -1862,7 +1862,9 @@ func (s *Server) scheduleSingleDetailWarm(ctx context.Context, pr *Request, t *f
 		return
 	}
 	if warm, ok := s.playback().(frontend.Prewarmer); ok {
-		warm.Prewarm(ctx, pr.User, t.Key, s.clientCapsForKey(pr, t.Key), frontend.PrewarmOptions{Reason: frontend.PrewarmDetail, PlayIntent: true})
+		warm.Prewarm(ctx, pr.User, t.Key, s.clientCapsForKey(pr, t.Key), frontend.PrewarmOptions{
+			Reason: frontend.PrewarmDetail, PlayIntent: true, MetadataOnly: true,
+		})
 	}
 }
 

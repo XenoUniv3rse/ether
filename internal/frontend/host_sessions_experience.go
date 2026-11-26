@@ -614,6 +614,8 @@ type StreamBinding struct {
 	Index     int
 	Info      core.StreamInfo
 	Estimated bool
+	// PartID scopes stream IDs for explicit version Parts. Auto uses zero.
+	PartID int64
 	// DistinguishSubtitleIndex is set for subtitles with identical descriptors in a Part.
 	DistinguishSubtitleIndex bool
 }
