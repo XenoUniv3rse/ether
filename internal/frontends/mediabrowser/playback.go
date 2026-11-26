@@ -144,7 +144,7 @@ func offerJellyfinStatic(source map[string]any, opts frontend.DecideOptions) {
 const msgVideoTranscodingOff = "This title needs a video transcode to play on this device, and video transcoding is turned off."
 
 func streamError(protocol frontend.Protocol, w http.ResponseWriter, err error, languages ...string) {
-	if frontend.WriteIndexersPaused(w, err, languages...) {
+	if frontend.WritePlaybackSourceProblem(w, err, languages...) {
 		return
 	}
 	var bedtime *frontend.ErrBedtime
@@ -512,7 +512,7 @@ func (i *instance) playbackInfo(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		if i.protocol == "jellyfin" {
 			i.playbackInfoError(w, v, "plan", err, r.Header.Get("Accept-Language"))
-		} else if frontend.WriteIndexersPaused(w, err, r.Header.Get("Accept-Language")) {
+		} else if frontend.WritePlaybackSourceProblem(w, err, r.Header.Get("Accept-Language")) {
 			return
 		} else if playback && noCompatibleStream(err) {
 			var reqLang *frontend.RequiredAudioLanguageError
@@ -624,7 +624,7 @@ func (i *instance) playbackInfo(w http.ResponseWriter, r *http.Request) {
 			if !jellyfinStaticFallback(err) || !staticPlayable {
 				if i.protocol == "jellyfin" {
 					i.playbackInfoError(w, v, "open", err, r.Header.Get("Accept-Language"))
-				} else if frontend.WriteIndexersPaused(w, err, r.Header.Get("Accept-Language")) {
+				} else if frontend.WritePlaybackSourceProblem(w, err, r.Header.Get("Accept-Language")) {
 					return
 				} else if errors.Is(err, frontend.ErrPreparing) || errors.Is(err, frontend.ErrJobsBusy) {
 					streamError(i.protocol, w, err, r.Header.Get("Accept-Language"))
@@ -1513,7 +1513,7 @@ func (i *instance) playbackInfoError(w http.ResponseWriter, v *frontend.Viewer, 
 	body := map[string]any{"MediaSources": []any{}, "PlaySessionId": "", "ErrorCode": code}
 	var bedtime *frontend.ErrBedtime
 	var reqLang *frontend.RequiredAudioLanguageError
-	if msg := frontend.IndexersPausedMessage(err, languages...); msg != "" {
+	if _, _, msg := frontend.PlaybackSourceProblem(err, languages...); msg != "" {
 		body["Message"] = msg
 	} else if errors.As(err, &bedtime) {
 		body["Message"] = bedtime.Error()

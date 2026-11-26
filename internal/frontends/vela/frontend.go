@@ -392,8 +392,12 @@ func failWithPolicy(w http.ResponseWriter, policy any, viewer *frontend.Viewer, 
 	if len(requests) > 0 && requests[0] != nil {
 		acceptLanguage = requestDevice(requests[0]).Language
 	}
-	if msg := frontend.IndexersPausedMessage(err, acceptLanguage); msg != "" {
-		send(w, http.StatusServiceUnavailable, object{"error": object{"class": "source", "code": frontend.IndexersPausedCode, "message": msg, "retry": object{"allowed": false}}})
+	if code, status, msg := frontend.PlaybackSourceProblem(err, acceptLanguage); msg != "" {
+		class := "source"
+		if status == http.StatusTooManyRequests {
+			class = "capacity"
+		}
+		send(w, status, object{"error": object{"class": class, "code": code, "message": msg, "retry": object{"allowed": false}}})
 		return
 	}
 	var capErr *frontend.ProviderConnectionCapError
@@ -466,8 +470,6 @@ func failWithPolicy(w http.ResponseWriter, policy any, viewer *frontend.Viewer, 
 		w.Header().Set("Retry-After", strconv.Itoa(seconds))
 		w.Header().Set("X-Ether-Media-Error", "jobs_busy")
 		send(w, http.StatusServiceUnavailable, object{"error": object{"class": "capacity", "code": "jobs_busy", "message": frontend.JobsBusyMessage(err), "retry": object{"allowed": true, "afterSeconds": seconds, "maxAttempts": 3}}})
-	case errors.Is(err, frontend.ErrBudgetExhausted):
-		problem(w, 429, "capacity", "indexer_budget_exhausted")
 	case errors.Is(err, frontend.ErrDownloadLimit), errors.Is(err, frontend.ErrDownloadPaused):
 		problem(w, 503, "capacity", "source_capacity")
 	case errors.Is(err, frontend.ErrDebridAuth):

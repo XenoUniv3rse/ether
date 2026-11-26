@@ -456,6 +456,7 @@ func (r *KindResolver) openSingleSource(ctx context.Context, rec pluginitems.Kin
 			}
 		}
 		if err != nil {
+			r.recordKindFailure(ctx, item, err)
 			return nil, err
 		}
 	}
@@ -757,7 +758,9 @@ func (r *KindResolver) KindVersions(ctx context.Context, viewer *core.Viewer, ke
 		if !speculative && errors.As(err, new(*core.IndexersPausedError)) {
 			return nil, err
 		}
-		if errors.Is(err, core.ErrNotAvailable) || errors.Is(err, core.ErrPreparing) || errors.Is(err, core.ErrSourceUnavailable) {
+		if (speculative && errors.Is(err, core.ErrBudgetExhausted)) ||
+			errors.Is(err, core.ErrKindCandidatesRejected) ||
+			errors.Is(err, core.ErrNotAvailable) || errors.Is(err, core.ErrPreparing) || errors.Is(err, core.ErrSourceUnavailable) {
 			return nil, nil
 		}
 		return nil, err
@@ -1741,6 +1744,7 @@ type resolveSearchState struct {
 	oneShotPending   bool
 	pendingBySearch  map[string]bool
 	budgetSkipped    bool
+	candidatesFound  bool
 	indexerAnswered  bool
 	pausedIndexers   map[string]string
 	inFlight         int
@@ -1854,8 +1858,11 @@ func noteResolveSearchResult(ctx context.Context, res core.SourceResolveResult) 
 	} else if hasPending {
 		st.oneShotPending = true
 	}
+	st.candidatesFound = st.candidatesFound || len(res.Candidates) > 0
 	for _, status := range res.Indexers {
 		switch {
+		case status.Error == "budget_exhausted":
+			st.budgetSkipped = true
 		case status.Status == core.IndexerStatusAnswered:
 			st.indexerAnswered = true
 		case status.Status == core.IndexerStatusSkipped && status.Reason == core.IndexerSkipReasonPaused:
@@ -2005,7 +2012,7 @@ func (r *KindResolver) resolveIndexerSearch(ctx context.Context, pluginID string
 			// fails the whole fan-out when nobody else had a match. For a
 			// plugin that is simply "no releases": its search must not
 			// throw because of an indexer it never chose.
-			r.log.Debug("plugin indexer search found nothing; some indexers failed", "query", q.Query, "err", err)
+			r.log.Debug("plugin indexer search found nothing; some indexers failed")
 			return core.SourceResolveResult{Candidates: []core.SourceCandidate{}, Indexers: statuses, Pending: pending}, nil
 		}
 	} else {
@@ -2049,7 +2056,7 @@ func (r *KindResolver) resolveIndexerSearch(ctx context.Context, pluginID string
 				noteResolveBudgetSkip(ctx)
 				r.noteSpeculativeSourceBudgetExhausted(ctx)
 			}
-			r.log.Debug("plugin indexer search found nothing; some indexers failed", "query", q.Query, "err", err)
+			r.log.Debug("plugin indexer search found nothing; some indexers failed")
 			return core.SourceResolveResult{
 				Candidates: []core.SourceCandidate{},
 				Indexers: []core.IndexerSearchStatus{{
@@ -2134,6 +2141,7 @@ func (r *KindResolver) ResolveSourcesWithResult(ctx context.Context, pluginID st
 		return r.resolveIndexersList(), nil
 	}
 	cands, err := r.ResolveSources(ctx, pluginID, q)
+	noteKindSourceFailure(ctx, err)
 	if err != nil {
 		return core.SourceResolveResult{}, err
 	}
@@ -2838,6 +2846,7 @@ func (r *KindResolver) openItemByteSourceExcluding(ctx context.Context, rec plug
 	// opens reuse a fresh source, or a previously opened NZB that the vault
 	// still has. Respect explicit exclusions and provider backoff.
 	var backingOffCached *core.PlayableSource
+	var cachedBudgetExhausted bool
 	cachedSrc, ok, expired, err := r.items.GetPartResolutionForOpen(ctx, item.Ref, partIdx)
 	if err != nil {
 		return nil, core.PlayableSource{}, err
@@ -2885,6 +2894,7 @@ func (r *KindResolver) openItemByteSourceExcluding(ctx context.Context, rec plug
 					"err", oerr,
 				)
 			}
+			cachedBudgetExhausted = errors.Is(oerr, core.ErrBudgetExhausted)
 			if !expired {
 				// Cached source went stale upstream: invalidate and fall through.
 				_ = r.items.InvalidatePartResolution(ctx, item.Ref, partIdx)
@@ -2904,9 +2914,11 @@ func (r *KindResolver) openItemByteSourceExcluding(ctx context.Context, rec plug
 			cands := r.filterAndOrderCandidates(stored, item.Title, exclude)
 			hasReady := slices.ContainsFunc(cands, func(s core.PlayableSource) bool { return !r.isSourceBackingOff(s) })
 			if len(cands) > 0 && (backingOffCached == nil || hasReady) {
-				if bs, winning, oerr := kindstream.OpenSources(ctx, cands, ksDeps); oerr == nil {
+				bs, winning, oerr := kindstream.OpenSources(ctx, cands, ksDeps)
+				if oerr == nil {
 					return saveAndReturn(bs, winning)
 				}
+				cachedBudgetExhausted = cachedBudgetExhausted || errors.Is(oerr, core.ErrBudgetExhausted)
 			}
 		}
 	}
@@ -2922,9 +2934,16 @@ func (r *KindResolver) openItemByteSourceExcluding(ctx context.Context, rec plug
 	}
 	if err != nil {
 		if backingOffCached != nil {
-			if bs, oerr := kindstream.Open(ctx, *backingOffCached, ksDeps); oerr == nil {
+			bs, oerr := kindstream.Open(ctx, *backingOffCached, ksDeps)
+			if oerr == nil {
 				return saveAndReturn(bs, *backingOffCached)
 			}
+			cachedBudgetExhausted = cachedBudgetExhausted || errors.Is(oerr, core.ErrBudgetExhausted)
+		}
+		if cachedBudgetExhausted && errors.Is(err, core.ErrNotAvailable) {
+			_ = r.items.InvalidatePartResolution(ctx, item.Ref, partIdx)
+			r.recordKindFailure(ctx, item, core.ErrBudgetExhausted)
+			return nil, core.PlayableSource{}, core.ErrBudgetExhausted
 		}
 		return nil, core.PlayableSource{}, err
 	}
@@ -2932,9 +2951,15 @@ func (r *KindResolver) openItemByteSourceExcluding(ctx context.Context, rec plug
 	cands := r.filterAndOrderCandidates(sources, item.Title, exclude)
 	if len(cands) == 0 {
 		if backingOffCached != nil {
-			if bs, oerr := kindstream.Open(ctx, *backingOffCached, ksDeps); oerr == nil {
+			bs, oerr := kindstream.Open(ctx, *backingOffCached, ksDeps)
+			if oerr == nil {
 				return saveAndReturn(bs, *backingOffCached)
 			}
+			cachedBudgetExhausted = cachedBudgetExhausted || errors.Is(oerr, core.ErrBudgetExhausted)
+		}
+		if cachedBudgetExhausted {
+			r.recordKindFailure(ctx, item, core.ErrBudgetExhausted)
+			return nil, core.PlayableSource{}, core.ErrBudgetExhausted
 		}
 		return nil, core.PlayableSource{}, core.ErrNotAvailable
 	}
@@ -2984,6 +3009,7 @@ func (r *KindResolver) openItemByteSourceExcluding(ctx context.Context, rec plug
 				)
 			}
 		}
+		r.recordKindFailure(ctx, item, err)
 		return nil, core.PlayableSource{}, err
 	}
 	return saveAndReturn(bs, winning)
@@ -3553,7 +3579,10 @@ func parsePreparingReply(body []byte) error {
 }
 
 func (r *KindResolver) callPluginResolve(ctx context.Context, rec pluginitems.KindRecord, lib core.Library, item core.KindItem, partIdx *int, source string, accept, exclude []string) (_ []core.PlayableSource, err error) {
-	defer func() { err = logredact.SourceError(err) }()
+	defer func() {
+		r.recordKindFailure(ctx, item, err)
+		err = logredact.SourceError(err)
+	}()
 	pr, err := r.mgr.Get(ctx, rec.PluginID)
 	if err != nil || !pr.Enabled || !pr.Manifest.HasCapability(plugins.CapKindResolver) {
 		return nil, core.ErrSourceUnavailable
@@ -3624,21 +3653,14 @@ func (r *KindResolver) callPluginResolve(ctx context.Context, rec pluginitems.Ki
 		return nil, fmt.Errorf("%w: %v", core.ErrSourceUnavailable, err)
 	}
 	if resp.Status == http.StatusAccepted {
+		if searchState.hadBudgetSkip() && !searchState.hasPending() {
+			r.clearResolveProgress(fk)
+			return nil, core.ErrBudgetExhausted
+		}
 		return nil, parsePreparingReply(resp.Body)
 	}
 	if resp.Status == http.StatusNotFound {
-		if searchState.hasPending() {
-			return nil, &core.PreparingError{RetryAfter: 2 * time.Second}
-		}
-		if err := searchState.indexerPause(); err != nil {
-			r.clearResolveProgress(fk)
-			return nil, err
-		}
-		if source == "" && !fk.background && !searchState.hadBudgetSkip() {
-			_ = r.items.SaveNegativePartResolution(ctx, item.Ref, partIdx)
-		}
-		r.clearResolveProgress(fk)
-		return nil, core.ErrNotAvailable
+		return r.emptyKindResolve(ctx, item, partIdx, fk, searchState, len(exclude) > 0)
 	}
 	if resp.Status != http.StatusOK {
 		return nil, fmt.Errorf("%w: resolver status %d", core.ErrSourceUnavailable, resp.Status)
@@ -3671,18 +3693,7 @@ func (r *KindResolver) callPluginResolve(ctx context.Context, rec pluginitems.Ki
 		}
 	}
 	if len(resolved.Sources) == 0 {
-		if searchState.hasPending() {
-			return nil, &core.PreparingError{RetryAfter: 2 * time.Second}
-		}
-		if err := searchState.indexerPause(); err != nil {
-			r.clearResolveProgress(fk)
-			return nil, err
-		}
-		if source == "" && !fk.background && !searchState.hadBudgetSkip() {
-			_ = r.items.SaveNegativePartResolution(ctx, item.Ref, partIdx)
-		}
-		r.clearResolveProgress(fk)
-		return nil, core.ErrNotAvailable
+		return r.emptyKindResolve(ctx, item, partIdx, fk, searchState, len(exclude) > 0)
 	}
 	if err := r.validateNoRawSecretsInHeaders(ctx, pr.ID, pr.Manifest.Ether.Permissions.Secrets, resolved.Sources); err != nil {
 		return nil, err

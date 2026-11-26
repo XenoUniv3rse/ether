@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 )
 
 type previewRowArtworkKey struct{}
@@ -595,6 +596,20 @@ func (i *instance) serveTaglessImage(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		i.host.ImageGrants.Serve(w, r, secret)
+		return
+	}
+	if _, err := ids.ParseGUID(ids.Programme, wireID); err == nil && i.host.LiveTV != nil {
+		p, err := i.host.LiveTV.ResolveProgrammeGUID(r.Context(), v, wireID, programmeLookupQuery(time.Now().UTC()))
+		if err == nil {
+			if image, ok := taglessImage(p.Images, imageType, index); ok {
+				grant, err := i.host.ImageGrants.Issue(r.Context(), frontend.ProgrammeImageGrant(p, image, token, device(r)))
+				if err == nil && grant != "" {
+					i.host.ImageGrants.Serve(w, r, grant)
+					return
+				}
+			}
+		}
+		mediaBrowserError(w, r, http.StatusNotFound)
 		return
 	}
 	item, images, portrait, err := i.imageTarget(r, v, wireID)

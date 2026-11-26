@@ -699,7 +699,7 @@ const notAvailableRetryAfter = "30"
 
 // writeErr maps a component error to an HTTP status.
 func (s *Server) writeErr(w http.ResponseWriter, r *http.Request, err error) {
-	if frontend.WriteIndexersPaused(w, err, notificationLanguage(r)) {
+	if frontend.WritePlaybackSourceProblem(w, err, notificationLanguage(r)) {
 		return
 	}
 	var bedtime *frontend.ErrBedtime

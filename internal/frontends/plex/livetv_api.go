@@ -478,6 +478,7 @@ func (s *Server) liveProgrammeMetadata(c frontend.LiveTVChannel, p frontend.Live
 		mediaType = "movie"
 	}
 	md := model.Metadata{RatingKey: p.ID, Key: liveProviderPath + "/metadata/" + url.PathEscape(p.ID), GUID: "ether://livetv/" + p.ID, Type: mediaType, Title: p.Item.Title, Summary: p.Item.Summary, ContentRating: rating, Thumb: s.liveProgrammeThumb(p.Item.Key, p.Item.Thumb), Duration: dur, Media: []model.Media{{ID: p.Start.Unix(), Duration: dur, Protocol: "livetv", Extra: []model.Attr{model.A("beginsAt", p.Start.Unix()), model.A("endsAt", p.End.Unix()), model.A("channelIdentifier", c.ID), model.A("channelID", c.ID), model.A("channelTitle", c.Name), model.A("channelCallSign", c.Name), model.A("channelVcn", c.Number), model.A("channelThumb", liveLogo(c)), model.A("gridKey", c.ID)}}}}
+	md.Art = liveProgrammeArt(p.Item.Key, p.Item.Art)
 	for _, g := range p.Item.Genres {
 		md.Genre = append(md.Genre, model.Tag{Tag: g})
 	}
@@ -505,7 +506,6 @@ func (s *Server) liveProgrammeMetadata(c frontend.LiveTVChannel, p frontend.Live
 			md.GrandparentTitle = p.Item.ShowTitle
 		}
 		md.GrandparentGUID = p.Item.ShowGUID
-		md.Art = liveProgrammeArt(p.Item.Key, p.Item.Art)
 		grandparentKey := p.Item.ShowKey
 		if grandparentKey == 0 {
 			grandparentKey = p.Item.Key

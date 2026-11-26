@@ -293,6 +293,10 @@ func (videoTranscodingDisabledError) Error() string {
 
 func (videoTranscodingDisabledError) Unwrap() error { return ErrNotAvailable }
 
+// ErrKindCandidatesRejected means the plugin received releases but returned
+// no playable candidate.
+var ErrKindCandidatesRejected = fmt.Errorf("releases found but rejected: %w", ErrReleaseRejected)
+
 // RequiredAudioLanguageError reports that no release matched the quality
 // profile's required Audio language. It unwraps to ErrNotAvailable so existing
 // availability checks keep working while frontends surface the actionable hint.

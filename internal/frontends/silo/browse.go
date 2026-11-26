@@ -922,7 +922,7 @@ func (i *instance) detail(w http.ResponseWriter, r *http.Request) {
 		if e == nil {
 			versions, offers, e := i.sourceVersions(r, frontend.VersionScope{Viewer: v, Device: dev, Protocol: "silo", Caps: capability.Client}, d)
 			if e != nil {
-				if writeIndexersPaused(w, e, r.Header.Get("Accept-Language")) {
+				if writePlaybackSourceProblem(w, e, r.Header.Get("Accept-Language")) {
 					return
 				}
 				http.Error(w, "Unavailable", 503)

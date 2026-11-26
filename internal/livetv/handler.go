@@ -577,6 +577,9 @@ func (s *Service) ServeXMLTV(w http.ResponseWriter, r *http.Request, u *core.Use
 	for _, p := range ps {
 		v := xmlProgramme{Channel: p.ChannelID, Start: p.Start.UTC().Format("20060102150405 -0700"), Stop: p.End.UTC().Format("20060102150405 -0700"), Title: []xmlText{{Value: p.Item.Title}}, Desc: []xmlText{{Value: p.Item.Summary}}}
 		v.Icon.Src = p.Item.Thumb
+		if p.Item.Key != 0 && s.o.ImageURL != nil && core.ValidArtworkPath(v.Icon.Src) {
+			v.Icon.Src = s.o.ImageURL(v.Icon.Src, "w780")
+		}
 		if p.Item.EpisodeTitle != "" {
 			v.SubTitle = []xmlText{{Value: p.Item.EpisodeTitle}}
 		}
@@ -585,6 +588,8 @@ func (s *Service) ServeXMLTV(w http.ResponseWriter, r *http.Request, u *core.Use
 		}
 		if p.Item.ReleasedMS > 0 {
 			v.Date = time.UnixMilli(p.Item.ReleasedMS).UTC().Format("20060102")
+		} else if p.Item.Year > 0 {
+			v.Date = strconv.Itoa(p.Item.Year)
 		}
 		if p.Item.Season > 0 && p.Item.Episode > 0 {
 			v.EpisodeNum = append(v.EpisodeNum, xmlEpisodeNum{System: "xmltv_ns", Value: fmt.Sprintf("%d.%d.", p.Item.Season-1, p.Item.Episode-1)})
