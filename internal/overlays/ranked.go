@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	kitimages "github.com/braedonsaunders/ether/internal/frontend/kit/images"
 	xdraw "golang.org/x/image/draw"
 	"golang.org/x/image/font"
 	"golang.org/x/image/font/opentype"
@@ -29,10 +30,7 @@ func (s *Service) Ranked(ctx context.Context, source []byte, rank int, wide bool
 	if rank < 1 || rank > 10 {
 		return nil, "", errors.New("invalid rank")
 	}
-	hash := sha256.New()
-	_, _ = hash.Write(source)
-	_, _ = fmt.Fprintf(hash, "ranked-v4:anton:%d:%t:jpeg88", rank, wide)
-	data, err := s.generated.get(ctx, hex.EncodeToString(hash.Sum(nil)), func(ctx context.Context) ([]byte, error) {
+	render := func(ctx context.Context) ([]byte, error) {
 		cfg, _, err := image.DecodeConfig(bytes.NewReader(source))
 		if err != nil || cfg.Width <= 0 || cfg.Height <= 0 || int64(cfg.Width)*int64(cfg.Height) > 20_000_000 {
 			return nil, errors.New("invalid ranked poster dimensions")
@@ -51,7 +49,15 @@ func (s *Service) Ranked(ctx context.Context, source []byte, rank int, wide bool
 		var out bytes.Buffer
 		err = jpeg.Encode(&out, dst, &jpeg.Options{Quality: 88})
 		return out.Bytes(), err
-	})
+	}
+	if kitimages.NoStore(ctx) {
+		data, err := render(ctx)
+		return data, "image/jpeg", err
+	}
+	hash := sha256.New()
+	_, _ = hash.Write(source)
+	_, _ = fmt.Fprintf(hash, "ranked-v4:anton:%d:%t:jpeg88", rank, wide)
+	data, err := s.generated.get(ctx, hex.EncodeToString(hash.Sum(nil)), render)
 	return data, "image/jpeg", err
 }
 

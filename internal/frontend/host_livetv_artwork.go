@@ -47,6 +47,11 @@ type ArtworkImageCache interface {
 	IsNotFound(err error) bool
 }
 
+// ArtworkImmutableURLCache recognizes immutable source URLs in the image store.
+type ArtworkImmutableURLCache interface {
+	IsImmutableURL(string) bool
+}
+
 // ArtworkPalette holds four-corner hex colors (without leading '#').
 type ArtworkPalette struct {
 	TopLeft, TopRight, BottomLeft, BottomRight string

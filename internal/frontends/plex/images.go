@@ -98,10 +98,7 @@ func (s *Server) serveGeneratedPoster(w http.ResponseWriter, r *http.Request, ke
 		return false
 	}
 	h := w.Header()
-	setArtworkHeaders(h, ct)
-	if plexAndroidClient(FromContext(ctx)) {
-		h.Add("Vary", "X-Plex-Product")
-	}
+	h.Add("Vary", "X-Plex-Product")
 	h.Add("Vary", "X-Plex-Token")
 	writeArtworkBytes(w, r, data, ct, kitimages.Revalidate)
 	return true
@@ -282,7 +279,7 @@ func (s *Server) writeRemoteImage(w http.ResponseWriter, r *http.Request, u stri
 	h.Add("Vary", "X-Plex-Token")
 	cacheControl := kitimages.Revalidate
 	if explicit, _ := r.Context().Value(explicitPhotoURLKey{}).(bool); explicit {
-		if cache, ok := s.svc().images.(interface{ IsImmutableURL(string) bool }); ok && cache.IsImmutableURL(u) {
+		if cache, ok := s.svc().images.(frontend.ArtworkImmutableURLCache); ok && cache.IsImmutableURL(u) {
 			cacheControl = kitimages.Immutable
 		}
 	}

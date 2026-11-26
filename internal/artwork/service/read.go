@@ -342,10 +342,13 @@ func (a Source) transform(ctx context.Context, reference string, data []byte, co
 		if transform.Format == "" && !transform.Blur {
 			return data, contentType, nil
 		}
-		return a.Raster.Rasterize(ctx, reference, data, artwork.RasterOptions{Width: transform.Width, Height: transform.Height, Format: transform.Format, Blur: transform.Blur})
+		key := fmt.Sprintf("svg-raster-v1/%d/%d/%s/%t", transform.Width, transform.Height, transform.Format, transform.Blur)
+		return a.Images.Variant(ctx, data, contentType, key, func(ctx context.Context) ([]byte, string, error) {
+			return a.Raster.Rasterize(ctx, reference, data, artwork.RasterOptions{Width: transform.Width, Height: transform.Height, Format: transform.Format, Blur: transform.Blur})
+		})
 	}
 	if core.LiveApp(ctx) == "vela" && transform.Fit && transform.Format == "" && !transform.Blur &&
-		(contentType == "image/webp" || contentType == "image/gif") {
+		(transform.Width > 0 || transform.Height > 0) && (contentType == "image/webp" || contentType == "image/gif") {
 		// Vela requests an actual size for these formats too. Preserve the
 		// source when it already fits.
 		return a.Images.Variant(ctx, data, contentType, fmt.Sprintf("vela-fit-v1/%d/%d", transform.Width, transform.Height), func(context.Context) ([]byte, string, error) {

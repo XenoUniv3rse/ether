@@ -52,6 +52,7 @@ func (s *Server) serveRankedArtwork(w http.ResponseWriter, r *http.Request, key 
 		writeHTTPError(w, 404)
 		return
 	}
+	r = r.WithContext(kitimages.TrackCachePolicy(r.Context()))
 	pr := FromContext(r.Context())
 	req := frontend.ArtworkRequest{Viewer: pr.User, Item: key, Device: frontend.Device{Language: pr.Language, Product: pr.Product, Platform: pr.Platform}}
 	images, complete, err := art.List(r.Context(), req)
