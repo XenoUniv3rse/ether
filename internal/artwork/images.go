@@ -117,10 +117,12 @@ type Images struct {
 
 	inflight flight.Group[string, *memImage]
 
-	posterSlots chan struct{}
-	diskMu      sync.Mutex
-	diskUsed    int64
-	diskKnown   bool
+	posterSlots     chan struct{}
+	posterHosts     map[string]*posterHost
+	posterRefreshes int
+	diskMu          sync.Mutex
+	diskUsed        int64
+	diskKnown       bool
 }
 
 type memImage struct {
@@ -180,7 +182,8 @@ func NewImages(o ImagesOptions) *Images {
 	}
 	bgCtx, bgCancel := context.WithCancel(context.Background())
 	im := &Images{
-		posterSlots:   make(chan struct{}, 2),
+		posterSlots:   make(chan struct{}, maxPosterFetches),
+		posterHosts:   make(map[string]*posterHost),
 		o:             o,
 		log:           o.Logger,
 		guardedClient: guard.Client(o.HTTPClient),

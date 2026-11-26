@@ -85,20 +85,19 @@ func TestProviderOriginalLifecycle(t *testing.T) {
 	}
 	expire()
 	get(200)
-	if hits.Load() != 2 {
-		t.Fatal("missing conditional revalidation", hits.Load())
-	}
-	get(200)
-	if hits.Load() != 2 {
-		t.Fatal("304 did not renew freshness")
+	im.Wait()
+	renewed, err := im.providerOriginal(context.Background(), raw)
+	if err != nil || !im.now().Before(renewed.Expires) {
+		t.Fatal("304 did not renew freshness", err)
 	}
 	version.Store(2)
 	expire()
+	if !bytes.Equal(before, get(200)) {
+		t.Fatal("expired original was not served while refreshing")
+	}
+	im.Wait()
 	if bytes.Equal(before, get(200)) {
 		t.Fatal("changed original reused stale local resize")
-	}
-	if hits.Load() != 3 {
-		t.Fatal("missing changed upstream revalidation")
 	}
 }
 

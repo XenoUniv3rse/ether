@@ -151,39 +151,99 @@ type providerImage struct {
 	NoStore            bool
 }
 
+const (
+	maxPosterFetches        = 32
+	maxPosterFetchesPerHost = 12
+	maxPosterRefreshes      = 8
+)
+
+type posterHost struct {
+	slots chan struct{}
+	users int
+}
+
+func (im *Images) readProviderOriginal(key string) *memImage {
+	im.mu.Lock()
+	cached, ok := im.items.Get(key)
+	im.mu.Unlock()
+	if ok {
+		return cached
+	}
+	data, _, ok := im.readDiskRaw(key)
+	if !ok {
+		return nil
+	}
+	return &memImage{key: key, data: data}
+}
+
+func decodeProviderOriginal(entry *memImage) *providerImage {
+	var img providerImage
+	if entry == nil || json.Unmarshal(entry.data, &img) != nil || len(img.Data) == 0 {
+		return nil
+	}
+	return &img
+}
+
 func (im *Images) providerOriginal(ctx context.Context, raw string) (*providerImage, error) {
 	key := providerCacheKey(raw)
-	read := func() *providerImage {
-		im.mu.Lock()
-		cached, ok := im.items.Get(key)
-		im.mu.Unlock()
-		var data []byte
-		if ok {
-			data = cached.data
+	entry := im.readProviderOriginal(key)
+	if img := decodeProviderOriginal(entry); img != nil {
+		if !im.now().Before(img.Expires) {
+			im.startProviderRefresh(key, raw)
 		} else {
-			data, _, _ = im.readDisk(key)
-		}
-		var img providerImage
-		if json.Unmarshal(data, &img) != nil || len(img.Data) == 0 {
-			return nil
-		}
-		if !ok {
 			im.mu.Lock()
-			im.addLocked(&memImage{key: key, data: data})
+			if _, ok := im.items.Peek(key); !ok {
+				im.addLocked(entry)
+			}
 			im.mu.Unlock()
 		}
-		return &img
-	}
-	if img := read(); img != nil && im.now().Before(img.Expires) {
 		return img, nil
 	}
-	// Different local sizes share this flight. A cancelled leader finishes
-	// its work before returning; live waiters retry on their own context.
-	result, err := im.inflight.Do(ctx, key, func(ctx context.Context) (*memImage, error) {
-		old := read()
-		if old != nil && im.now().Before(old.Expires) {
-			data, _ := json.Marshal(old)
-			return &memImage{key: key, data: data}, nil
+
+	entry, err := im.loadProviderOriginal(ctx, key, raw, false)
+	if err != nil {
+		return nil, err
+	}
+	if img := decodeProviderOriginal(entry); img != nil {
+		return img, nil
+	}
+	return nil, errProvider
+}
+
+func (im *Images) startProviderRefresh(key, raw string) {
+	host := providerBackoffKey(urlHost(raw))
+	im.mu.Lock()
+	defer im.mu.Unlock()
+	if im.closed || im.revalidating[key] || im.posterRefreshes >= maxPosterRefreshes ||
+		im.backoffActiveLocked(key, host, im.now()) {
+		return
+	}
+	im.revalidating[key] = true
+	im.posterRefreshes++
+	go func() {
+		defer func() {
+			im.mu.Lock()
+			im.posterRefreshes--
+			delete(im.revalidating, key)
+			im.revalCond.Broadcast()
+			im.mu.Unlock()
+		}()
+		_, err := im.loadProviderOriginal(im.bgCtx, key, raw, true)
+		if err != nil && im.bgCtx.Err() == nil {
+			im.recordNeg(key, fetchResult{err: err}, im.now(), true)
+		}
+	}()
+}
+
+func (im *Images) loadProviderOriginal(ctx context.Context, key, raw string, refresh bool) (*memImage, error) {
+	return im.inflight.Do(ctx, key, func(ctx context.Context) (*memImage, error) {
+		entry := im.readProviderOriginal(key)
+		old := decodeProviderOriginal(entry)
+		if old != nil && (!refresh || im.now().Before(old.Expires)) {
+			return entry, nil
+		}
+		if refresh && old == nil {
+			return nil, errProvider
 		}
 		img, err := im.fetchProviderOriginal(ctx, raw, old)
 		if err != nil {
@@ -214,27 +274,62 @@ func (im *Images) providerOriginal(ctx context.Context, raw string) (*providerIm
 			im.addLocked(result)
 			im.mu.Unlock()
 		}
+		im.clearNeg(key)
 		return result, nil
 	})
-	if err != nil {
-		return nil, err
-	}
-	var img providerImage
-	if json.Unmarshal(result.data, &img) != nil {
-		return nil, errProvider
-	}
-	return &img, nil
+}
+
+func providerBackoffKey(host string) string {
+	// A credentialed poster provider and an untrusted URL may share a host.
+	return "poster/" + host
 }
 
 func (im *Images) fetchProviderOriginal(ctx context.Context, raw string, old *providerImage) (*providerImage, error) {
-	ctx, cancel := context.WithTimeout(ctx, 8*time.Second)
-	defer cancel()
+	host := urlHost(raw)
+	if host == "" {
+		return nil, errProvider
+	}
+	backoffKey := providerBackoffKey(host)
+	if _, paused := im.hostPausedUntil(backoffKey, im.now()); paused {
+		return nil, errProvider
+	}
+
+	im.mu.Lock()
+	limit := im.posterHosts[host]
+	if limit == nil {
+		limit = &posterHost{slots: make(chan struct{}, maxPosterFetchesPerHost)}
+		im.posterHosts[host] = limit
+	}
+	limit.users++
+	im.mu.Unlock()
+	defer func() {
+		im.mu.Lock()
+		limit.users--
+		if limit.users == 0 {
+			delete(im.posterHosts, host)
+		}
+		im.mu.Unlock()
+	}()
+
+	// Wait for the host first so a busy host cannot occupy the global queue.
+	select {
+	case limit.slots <- struct{}{}:
+		defer func() { <-limit.slots }()
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
 	select {
 	case im.posterSlots <- struct{}{}:
 		defer func() { <-im.posterSlots }()
 	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	if _, paused := im.hostPausedUntil(backoffKey, im.now()); paused {
 		return nil, errProvider
 	}
+
+	ctx, cancel := context.WithTimeout(ctx, 8*time.Second)
+	defer cancel()
 	client := *im.o.HTTPClient
 	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, raw, nil)
@@ -249,6 +344,10 @@ func (im *Images) fetchProviderOriginal(ctx context.Context, raw string, old *pr
 		return nil, errProvider
 	}
 	defer resp.Body.Close()
+	now := im.now()
+	if until, ok := parseRetryAfter(resp.Header, now, hostMaxBackoff); ok || resp.StatusCode == http.StatusTooManyRequests {
+		im.recordHostBackoff(backoffKey, until, ok, now)
+	}
 	img := &providerImage{}
 	if resp.StatusCode == http.StatusNotModified && old != nil {
 		*img = *old
