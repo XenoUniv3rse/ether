@@ -5,7 +5,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/braedonsaunders/ether/internal/core"
 	"github.com/braedonsaunders/ether/internal/frontend"
 )
 
@@ -59,9 +58,9 @@ func (s *Server) publishedKindSections(ctx context.Context) []Section {
 			tabKinds = make([]string, 0, 3)
 			for _, tab := range v.Tabs {
 				switch tab.Kind {
-				case core.TabRecommended, core.TabLibrary:
+				case frontend.TabRecommended, frontend.TabLibrary:
 					tabKinds = append(tabKinds, tab.Kind)
-				case core.TabCollections:
+				case frontend.TabCollections:
 					if tab.Facet == "" {
 						tabKinds = append(tabKinds, tab.Kind)
 					}
