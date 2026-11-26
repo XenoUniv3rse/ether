@@ -233,6 +233,9 @@ func (s *bufferedSession) serveSegment(w http.ResponseWriter, q *http.Request, n
 	// validated contiguous publication; preceding bytes retain backpressure.
 	capture := &segmentCapture{ResponseWriter: w, limit: s.r.o.MaxSegmentBytes, body: make([]byte, 0, int(s.r.o.MaxSegmentBytes))}
 	completion := serve(capture, q)
+	if completion.StatusCode == http.StatusServiceUnavailable && capture.Header().Get("Retry-After") != "" {
+		return
+	}
 	if !completion.Complete() || completion.ReadBytes != int64(len(capture.body)) || !capture.complete(q.Context()) {
 		s.degrade("incomplete or unsupported full segment response")
 		return

@@ -93,6 +93,8 @@ func (s *Session) serveSegment(w http.ResponseWriter, r *http.Request, t, n int)
 	seq := s.reqSeq
 	s.mu.Unlock()
 	tracked := false
+	superseded := false
+	waitingRun := 0
 	defer func() {
 		if !tracked {
 			return
@@ -108,10 +110,15 @@ func (s *Session) serveSegment(w http.ResponseWriter, r *http.Request, t, n int)
 		s.mu.Lock()
 		if s.closed {
 			s.mu.Unlock()
-			http.Error(w, "session closed", http.StatusGone)
+			if waitingRun != 0 || superseded {
+				writeSupersededMedia(w)
+			} else {
+				http.Error(w, "session closed", http.StatusGone)
+			}
 			return
 		}
-		stale := seq < s.movedBy
+		superseded = superseded || (waitingRun != 0 && waitingRun != s.runSeq)
+		stale := superseded || seq < s.movedBy
 		if stale && tracked {
 			// A newer seek owns the encoder. Drop this fetch so it cannot
 			// keep the playhead on the position the player left.
@@ -148,6 +155,11 @@ func (s *Session) serveSegment(w http.ResponseWriter, r *http.Request, t, n int)
 			continue
 		}
 		waitTail := availability == segmentFinalizing
+		if stale && !waitTail && !s.replacementCoversSegmentLocked(t, n) {
+			s.mu.Unlock()
+			writeSupersededMedia(w)
+			return
+		}
 
 		if s.inputFailed {
 			s.mu.Unlock()
@@ -184,29 +196,20 @@ func (s *Session) serveSegment(w http.ResponseWriter, r *http.Request, t, n int)
 		// Only the oldest outstanding fetch may move the encoder. A request
 		// for a segment the encoder has already raced to is a buffer fill,
 		// not a seek, and must not abandon the segment the client is on.
-		if !handoffFetch && !waitTail && !s.mayMoveEncoderLocked(t, n, tracked) && s.needsRestartLocked(n) {
-			s.throttleLocked()
-			s.mu.Unlock()
-			w.Header().Set("Retry-After", "1")
-			http.Error(w, "segment is ahead of the playhead", http.StatusServiceUnavailable)
-			return
-		}
-		if !handoffFetch && !waitTail && s.mayMoveEncoderLocked(t, n, tracked) && s.needsRestartLocked(n) {
+		if !stale && !handoffFetch && !waitTail && s.needsRestartLocked(n) {
+			if !s.mayMoveEncoderLocked(t, n, tracked) {
+				s.throttleLocked()
+				s.mu.Unlock()
+				w.Header().Set("Retry-After", "1")
+				http.Error(w, "segment is ahead of the playhead", http.StatusServiceUnavailable)
+				return
+			}
 			// The cap covers the empty position and what follows it, never
 			// a segment before it: a seek back there still has media.
 			if s.emptyRuns >= emptyRestartCap && n >= s.emptyAt && (s.lastReal < 0 || n > s.lastReal) && !s.segmentPublishedLocked(t, n) {
 				s.mu.Unlock()
 				s.log.Warn("segment unavailable after empty restarts", "segment", n, "lastReal", s.lastReal, "emptyAt", s.emptyAt)
 				http.Error(w, "segment unavailable", http.StatusBadGateway)
-				return
-			}
-			if stale {
-				// Superseded by a seek: answer now instead of moving the
-				// encoder away from where the player went. A player that
-				// still wants this segment retries as a new request.
-				s.mu.Unlock()
-				w.Header().Set("Retry-After", "1")
-				http.Error(w, "superseded by a newer request", http.StatusServiceUnavailable)
 				return
 			}
 			if left := s.rungDwellLocked(r.Method == http.MethodGet && r.Header.Get("Range") == "", n); left > 0 {
@@ -233,15 +236,25 @@ func (s *Session) serveSegment(w http.ResponseWriter, r *http.Request, t, n int)
 				if s.cur != nil && (n < s.cur.startSeg || n < s.cur.next()) {
 					why = "fetch behind"
 				}
-				if err := s.startRunForLocked(n, s.failures > 0, why); err != nil {
+				if err := s.tryStartRunForLocked(n, s.failures > 0, why); err != nil {
 					s.mu.Unlock()
-					s.log.Error("start ffmpeg", "segment", n, "err", err)
+					if err == errStartSuperseded {
+						superseded = true
+						continue
+					}
+					if err != errStartInterrupted {
+						s.log.Error("start ffmpeg", "segment", n, "err", err)
+					}
 					writeStartError(w, err)
 					return
 				}
 			}
 		} else {
 			s.throttleLocked()
+		}
+		waitingRun = 0
+		if s.pendingStart {
+			waitingRun = s.runSeq
 		}
 		ch := s.changed
 		s.mu.Unlock()
@@ -618,6 +631,23 @@ func (s *Session) needsRestartLocked(n int) bool {
 	return n > r.next()+s.restartLimit()
 }
 
+// A displaced fetch can follow a matching run within its normal delivery
+// window. It must never move the playhead or select a rendition again.
+func (s *Session) replacementCoversSegmentLocked(track, n int) bool {
+	audio := track == s.audioTrackLocked()
+	if s.pendingStart && (audio || track == s.pendingTrack) &&
+		n >= s.pendingSegment && n-s.pendingSegment <= s.restartLimit() {
+		return true
+	}
+	for _, r := range []*run{s.cur, s.handoff} {
+		if r != nil && !r.finished && !r.stopped && (track == r.track || (audio && r == s.cur)) &&
+			n >= r.next() && n-r.next() <= s.restartLimit() {
+			return true
+		}
+	}
+	return false
+}
+
 // rungDwellLocked protects the sole encoder from rendition probes. Completed
 // delivery followed by the next media GET is playback progress, in either
 // direction. Holding an upshift for eight seconds after delivering two seconds
@@ -671,6 +701,8 @@ func (s *Session) serveInit(w http.ResponseWriter, r *http.Request, t int) {
 	timeout := time.NewTimer(s.m.opts.segmentTimeout)
 	defer timeout.Stop()
 	restarted := false
+	superseded := false
+	waitingRun := 0
 	for {
 		if r.Context().Err() != nil {
 			return
@@ -678,9 +710,14 @@ func (s *Session) serveInit(w http.ResponseWriter, r *http.Request, t int) {
 		s.mu.Lock()
 		if s.closed {
 			s.mu.Unlock()
-			http.Error(w, "session closed", http.StatusGone)
+			if waitingRun != 0 || superseded {
+				writeSupersededMedia(w)
+			} else {
+				http.Error(w, "session closed", http.StatusGone)
+			}
 			return
 		}
+		superseded = superseded || (waitingRun != 0 && waitingRun != s.runSeq)
 		if name := s.initFileLocked(t); name != "" {
 			// Open under the lock: a newer run's init may replace (and
 			// delete) this one as soon as the lock is released, and the
@@ -727,17 +764,21 @@ func (s *Session) serveInit(w http.ResponseWriter, r *http.Request, t int) {
 		selectTrack := !s.isDASH() || t != s.audioTrackLocked()
 		activeTrack := (s.cur != nil && !s.cur.finished && !s.cur.stopped && (!selectTrack || s.cur.track == t)) ||
 			(s.pendingStart && (!selectTrack || s.pendingTrack == t))
-		if probe && !activeTrack {
+		if (probe || superseded) && !activeTrack {
 			s.mu.Unlock()
-			http.Error(w, "initialization not ready", http.StatusServiceUnavailable)
+			if superseded {
+				writeSupersededMedia(w)
+			} else {
+				http.Error(w, "initialization not ready", http.StatusServiceUnavailable)
+			}
 			return
 		}
 		previousTrack := s.wantTrack
-		if selectTrack && !restarted && !probe {
+		if selectTrack && !restarted && !probe && !superseded {
 			s.wantTrack = t
 		}
 		var dwell *time.Timer
-		if (s.cur == nil || s.cur.finished || s.cur.stopped || (selectTrack && s.cur.track != t)) && !restarted && !probe && !s.pendingStart && !s.headerRecovering && !s.retryRecovering && !s.skipProbing {
+		if (s.cur == nil || s.cur.finished || s.cur.stopped || (selectTrack && s.cur.track != t)) && !restarted && !probe && !superseded && !s.pendingStart && !s.headerRecovering && !s.retryRecovering && !s.skipProbing {
 			left := s.rungDwellLocked(false, s.lastReq)
 			if s.isDASH() && selectTrack && !s.videoRequested && s.runSeq <= 1 {
 				// No video was requested yet: the initial quality choice
@@ -762,12 +803,20 @@ func (s *Session) serveInit(w http.ResponseWriter, r *http.Request, t int) {
 				if start < 0 {
 					start = 0
 				}
-				if err := s.startRunForLocked(start, s.failures > 0, "rendition init"); err != nil {
+				if err := s.tryStartRunForLocked(start, s.failures > 0, "rendition init"); err != nil {
 					s.mu.Unlock()
+					if err == errStartSuperseded {
+						superseded = true
+						continue
+					}
 					writeStartError(w, err)
 					return
 				}
 			}
+		}
+		waitingRun = 0
+		if s.pendingStart {
+			waitingRun = s.runSeq
 		}
 		ch := s.changed
 		s.mu.Unlock()
