@@ -2017,7 +2017,7 @@
   },
   {
     "path": "internal/plugins/host.go#*host.Settings",
-    "code": "// Settings returns the plugin's stored non-secret settings.\nfunc (h *host) Settings(ctx context.Context) (map[string]any, error) {\n\tr, _, err := h.record(ctx)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\trow, err := h.m.store.settings(ctx, h.plugin)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\treturn NonSecretSettings(row.Settings, row.Schema, settingsSecrets(r)), nil\n}"
+    "code": "// Settings returns the plugin's stored non-secret settings.\nfunc (h *host) Settings(ctx context.Context) (map[string]any, error) {\n\tr, _, err := h.record(ctx)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\trow, err := h.m.store.requestSettings(ctx, h.plugin)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\treturn NonSecretSettings(row.Settings, row.Schema, settingsSecrets(r)), nil\n}"
   },
   {
     "path": "internal/plugins/host.go#MaxDerivedSecretBytes",
@@ -2029,7 +2029,7 @@
   },
   {
     "path": "internal/plugins/host.go#*host.SecretGet",
-    "code": "func (h *host) SecretGet(ctx context.Context, name string) (string, error) {\n\tif _, err := h.checkSecretAccess(ctx, name); err != nil {\n\t\treturn \"\", err\n\t}\n\trow, err := h.m.store.settings(ctx, h.plugin)\n\tif err != nil {\n\t\treturn \"\", err\n\t}\n\tif stored, ok := row.Secrets[name]; ok \u0026\u0026 stored != \"\" {\n\t\treturn h.m.store.openSecret(h.plugin, name, stored)\n\t}\n\tif plain, ok, err := h.m.store.derivedSecret(ctx, h.plugin, name); err != nil {\n\t\treturn \"\", err\n\t} else if ok {\n\t\treturn plain, nil\n\t}\n\treturn \"\", fmt.Errorf(\"%w: secret %s is not saved\", ErrUnavailable, name)\n}"
+    "code": "func (h *host) SecretGet(ctx context.Context, name string) (string, error) {\n\tif _, err := h.checkSecretAccess(ctx, name); err != nil {\n\t\treturn \"\", err\n\t}\n\trow, err := h.m.store.requestSettings(ctx, h.plugin)\n\tif err != nil {\n\t\treturn \"\", err\n\t}\n\tif stored, ok := row.Secrets[name]; ok \u0026\u0026 stored != \"\" {\n\t\treturn h.m.store.openSecret(h.plugin, name, stored)\n\t}\n\tif plain, ok, err := h.m.store.derivedSecret(ctx, h.plugin, name); err != nil {\n\t\treturn \"\", err\n\t} else if ok {\n\t\treturn plain, nil\n\t}\n\treturn \"\", fmt.Errorf(\"%w: secret %s is not saved\", ErrUnavailable, name)\n}"
   },
   {
     "path": "internal/plugins/host.go#*host.SecretSet",
