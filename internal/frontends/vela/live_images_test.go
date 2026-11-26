@@ -3,10 +3,12 @@ package vela
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/braedonsaunders/ether/internal/core"
 	"github.com/braedonsaunders/ether/internal/frontend"
@@ -106,4 +108,67 @@ func TestLiveImagesNeverLeakUpstreamURLs(t *testing.T) {
 	if len(grants.plugins) != 3 {
 		t.Fatalf("issued %d plugin grants, want 3 (league, competitor, entity)", len(grants.plugins))
 	}
+}
+
+type liveChannelSelectionFixture struct {
+	frontend.LiveTV
+	revision frontend.LiveChannelRevision
+	channel  frontend.LiveChannel
+	err      error
+}
+
+func (f *liveChannelSelectionFixture) ChannelSelectionRevision(context.Context) (frontend.LiveChannelRevision, error) {
+	return f.revision, f.err
+}
+
+func (f *liveChannelSelectionFixture) ReadChannelSelection(_ context.Context, _ *frontend.Viewer, ids []string) ([]frontend.LiveChannel, error) {
+	if f.channel.ID == "" || len(ids) != 1 || ids[0] != f.channel.ID {
+		return nil, nil
+	}
+	return []frontend.LiveChannel{f.channel}, nil
+}
+
+func TestStreamChannelCardsFollowPolicyAndLineupRevisions(t *testing.T) {
+	now := time.Unix(100, 0)
+	live := &liveChannelSelectionFixture{
+		revision: frontend.LiveChannelRevision{Policy: 1, Lineup: 1},
+		channel:  frontend.LiveChannel{ID: "channel", Name: "Original"},
+	}
+	i := &instance{host: frontend.Host{LiveTV: live, Now: func() time.Time { return now }}}
+	images := i.newLiveImages(httptest.NewRequest(http.MethodGet, "/", nil), "")
+	images.viewer = &frontend.Viewer{ID: 1}
+	images.channelCards = &streamChannelCards{}
+	readName := func() string {
+		_, cards := images.ChannelCards(t.Context(), []string{"channel"}, "")
+		card, _ := cards["channel"].(object)
+		name, _ := card["name"].(string)
+		return name
+	}
+	checkName := func(want string) {
+		t.Helper()
+		if got := readName(); got != want {
+			t.Fatalf("channel card name = %q, want %q", got, want)
+		}
+	}
+	checkName("Original")
+
+	live.channel.Name = "Updated"
+	checkName("Original")
+	live.revision.Lineup++
+	now = now.Add(channelCardRevisionInterval)
+	checkName("Updated")
+
+	live.channel = frontend.LiveChannel{}
+	live.revision.Policy++
+	now = now.Add(channelCardRevisionInterval)
+	checkName("")
+
+	live.channel = frontend.LiveChannel{ID: "channel", Name: "Restored"}
+	live.revision.Policy++
+	now = now.Add(channelCardRevisionInterval)
+	checkName("Restored")
+
+	live.err = errors.New("revision unavailable")
+	now = now.Add(channelCardRevisionInterval)
+	checkName("")
 }

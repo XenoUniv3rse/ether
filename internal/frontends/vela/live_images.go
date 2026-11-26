@@ -7,8 +7,10 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/braedonsaunders/ether/internal/frontend"
+	"github.com/braedonsaunders/ether/internal/frontend/kit/reqmemo"
 )
 
 // liveImages rewrites the image URLs a plugin put in live-event payloads
@@ -24,10 +26,26 @@ type liveImages struct {
 	token string
 	// mu guards issued: one signer can be shared by concurrent readers of one
 	// response (screen data sources resolve in parallel).
-	mu     sync.Mutex
-	issued map[string]string
-	viewer *frontend.Viewer
+	mu           sync.Mutex
+	issued       map[string]string
+	viewer       *frontend.Viewer
+	channelCards *streamChannelCards
 }
+
+type channelCardPage struct {
+	order []string
+	cards map[string]any
+}
+
+type streamChannelCards struct {
+	mu                 sync.Mutex
+	revision           frontend.LiveChannelRevision
+	nextCheck, expires time.Time
+	valid              bool
+	pages              map[string]channelCardPage
+}
+
+const channelCardRevisionInterval = 2 * time.Second
 
 func (i *instance) newLiveImages(r *http.Request, token string) *liveImages {
 	// One access decision per plugin and host for everything this signer
@@ -226,14 +244,67 @@ func (s *liveImages) TitleCards(ctx context.Context, keys []frontend.RatingKey) 
 // group) into Vela channel cards; order is the request's (or the lineup's
 // for a group).
 func (s *liveImages) ChannelCards(ctx context.Context, ids []string, group string) ([]string, map[string]any) {
+	if len(ids) == 0 && group == "" {
+		return nil, nil
+	}
+	selection, _ := s.i.host.LiveTV.(frontend.LiveChannelSelection)
+	memo := s.channelCards
+	if memo == nil || selection == nil {
+		page, _ := s.readChannelCards(ctx, selection, ids, group)
+		return page.order, page.cards
+	}
+	memo.mu.Lock()
+	defer memo.mu.Unlock()
+	now := s.i.serverNow()
+	// Durable writes are checked at a bounded rate. Broadcast schedules and
+	// transient input health can also change without any database write.
+	if !now.Before(memo.nextCheck) || !now.Before(memo.expires) {
+		revision, err := selection.ChannelSelectionRevision(ctx)
+		if err != nil && ctx.Err() != nil {
+			return nil, nil
+		}
+		if err != nil || !memo.valid || memo.revision != revision || !now.Before(memo.expires) {
+			memo.pages = make(map[string]channelCardPage)
+			memo.expires = now.Add(liveStreamHeartbeatSec)
+		}
+		memo.valid = err == nil
+		memo.revision = revision
+		memo.nextCheck = now.Add(channelCardRevisionInterval)
+	}
+	if !memo.valid {
+		return nil, nil
+	}
+	key := hashJSON([]any{ids, group})
+	if page, ok := memo.pages[key]; ok {
+		return page.order, page.cards
+	}
+	fresh := frontend.WithFreshRequestMemo(reqmemo.With(ctx))
+	page, ok := s.readChannelCards(fresh, selection, ids, group)
+	if ok && len(memo.pages) < 32 {
+		memo.pages[key] = page
+	}
+	return page.order, page.cards
+}
+
+func (s *liveImages) readChannelCards(ctx context.Context, selection frontend.LiveChannelSelection, ids []string, group string) (channelCardPage, bool) {
 	out := map[string]any{}
 	v := s.viewerOf()
 	if v == nil || s.i.host.LiveTV == nil {
-		return nil, out
+		return channelCardPage{}, false
 	}
-	channels, err := s.i.host.LiveTV.Channels(ctx, v)
+	var channels []frontend.LiveChannel
+	var err error
+	if selection != nil {
+		selected := ids
+		if group != "" {
+			selected = nil
+		}
+		channels, err = selection.ReadChannelSelection(ctx, v, selected)
+	} else {
+		channels, err = s.i.host.LiveTV.Channels(ctx, v)
+	}
 	if err != nil {
-		return nil, out
+		return channelCardPage{}, false
 	}
 	want := map[string]bool{}
 	for _, id := range ids {
@@ -241,6 +312,7 @@ func (s *liveImages) ChannelCards(ctx context.Context, ids []string, group strin
 	}
 	var order []string
 	memo := newLiveArtCache()
+	complete := true
 	for _, c := range channels {
 		inGroup := false
 		if group != "" {
@@ -254,6 +326,7 @@ func (s *liveImages) ChannelCards(ctx context.Context, ids []string, group strin
 		}
 		art, err := s.i.liveArtworkCached(s.r.WithContext(ctx), s.token, 0, c.ID, c.Images, memo)
 		if err != nil {
+			complete = false
 			continue
 		}
 		out[c.ID] = object{"id": c.ID, "number": c.Number, "name": c.Name, "kind": c.Kind, "artwork": art, "favorite": c.Favorite}
@@ -271,5 +344,5 @@ func (s *liveImages) ChannelCards(ctx context.Context, ids []string, group strin
 			}
 		}
 	}
-	return order, out
+	return channelCardPage{order: order, cards: out}, complete
 }

@@ -72,6 +72,8 @@ func (i *instance) liveEventsStream(w http.ResponseWriter, r *http.Request) {
 		since = n
 	}
 	images := i.newLiveImages(r, token)
+	images.viewer = v
+	images.channelCards = &streamChannelCards{}
 	var screenFrames <-chan frontend.ScreenFrame
 	if len(topics) > 0 {
 		ps, ok := i.pluginScreens()

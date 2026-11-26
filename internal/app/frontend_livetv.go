@@ -76,16 +76,44 @@ func (s surfaceLiveTV) liveChannel(ctx context.Context, viewer *core.Viewer, c l
 }
 
 func (s surfaceLiveTV) Channels(ctx context.Context, v *core.Viewer) ([]frontend.LiveChannel, error) {
-	ctx = s.withApp(ctx)
 	viewer, err := s.viewer(ctx, v)
 	if err != nil {
 		return nil, err
 	}
+	return s.channels(ctx, viewer, nil)
+}
+
+func (s surfaceLiveTV) ReadChannelSelection(ctx context.Context, v *core.Viewer, ids []string) ([]frontend.LiveChannel, error) {
+	if v == nil || v.ID <= 0 {
+		return nil, core.ErrUnauthorized
+	}
+	viewer, err := s.app.users.PolicyUser(ctx, v.ID)
+	if err != nil {
+		return nil, err
+	}
+	return s.channels(ctx, s.app.safety.UserPolicy(viewer), ids)
+}
+
+func (s surfaceLiveTV) ChannelSelectionRevision(ctx context.Context) (frontend.LiveChannelRevision, error) {
+	var rev frontend.LiveChannelRevision
+	err := s.app.db.QueryRowContext(ctx, `SELECT v.generation, c.generation
+		FROM viewer_policy_epoch v CROSS JOIN livetv_channel_epoch c WHERE v.id=1 AND c.id=1`).Scan(&rev.Policy, &rev.Lineup)
+	return rev, err
+}
+
+func (s surfaceLiveTV) channels(ctx context.Context, viewer *core.Viewer, ids []string) ([]frontend.LiveChannel, error) {
+	ctx = s.withApp(ctx)
 	if s.app.livetv == nil {
 		return nil, core.ErrNotAvailable
 	}
 	ctx = s.app.livetv.WithOwnerGroupIndex(ctx)
-	channels, err := s.app.livetv.AllowedChannels(ctx, viewer)
+	var channels []livetv.Channel
+	var err error
+	if ids == nil {
+		channels, err = s.app.livetv.AllowedChannels(ctx, viewer)
+	} else {
+		channels, err = s.app.livetv.AllowedChannelsForIDs(ctx, viewer, ids)
+	}
 	if err == nil {
 		s.app.livetv.NoteClientActivity()
 	}
@@ -752,15 +780,7 @@ func (s surfaceLiveTV) LiveCatchUpMaxDays(ctx context.Context, v *frontend.Viewe
 	if err != nil {
 		return 0, err
 	}
-	channels, err := s.app.livetv.AllowedChannels(s.withApp(ctx), viewer)
-	if err != nil {
-		return 0, err
-	}
-	days := 0
-	for _, ch := range channels {
-		days = max(days, ch.ArchiveDays())
-	}
-	return days, nil
+	return s.app.livetv.CatchUpMaxDays(s.withApp(ctx), viewer)
 }
 
 func (s surfaceLiveTV) LiveTimeshiftMinutes(ctx context.Context, id string) int {

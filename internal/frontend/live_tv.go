@@ -29,6 +29,18 @@ type LiveTVGroups interface {
 	GroupChannels(context.Context, *core.User, string) ([]LiveTVChannel, error)
 }
 
+// LiveChannelSelection reads a set of channel cards and the durable revisions
+// that invalidate those cards during a long-lived screen stream.
+type LiveChannelSelection interface {
+	// A nil selection reads the lineup so the caller can project a named group.
+	ReadChannelSelection(context.Context, *Viewer, []string) ([]LiveChannel, error)
+	ChannelSelectionRevision(context.Context) (LiveChannelRevision, error)
+}
+
+type LiveChannelRevision struct {
+	Policy, Lineup int64
+}
+
 // LiveChannel contains public metadata, never provider URLs or credentials.
 type LiveChannel struct {
 	ArchiveDays                          int `json:"archiveDays,omitempty"`

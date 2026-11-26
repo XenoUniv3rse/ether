@@ -22,13 +22,10 @@ func (s *Service) catchUpChannels(ctx context.Context, u *core.User, first bool)
 	if err != nil || pol.Disabled {
 		return ctx, nil, err
 	}
-	_, snap, err := s.channelSnapshot(ctx)
+	archived, err := s.archiveChannels(ctx)
 	if err != nil {
 		return ctx, nil, err
 	}
-	snap.mu.Lock()
-	archived := snap.archived
-	snap.mu.Unlock()
 	var out []Channel
 	for _, ch := range archived {
 		if s.allowedWithLookup(ctx, u, ch, nil, nil, false) {
@@ -39,6 +36,36 @@ func (s *Service) catchUpChannels(ctx context.Context, u *core.User, first bool)
 		}
 	}
 	return ctx, out, nil
+}
+
+func (s *Service) archiveChannels(ctx context.Context) ([]Channel, error) {
+	_, snap, err := s.channelSnapshot(ctx)
+	if err != nil {
+		return nil, err
+	}
+	snap.mu.Lock()
+	defer snap.mu.Unlock()
+	return snap.archived, nil
+}
+
+// CatchUpMaxDays reports the archive window of the viewer's visible channels.
+// Only IPTV sources can supply archives, so this capability read never needs
+// to prepare a virtual channel or load guide data for the rest of the lineup.
+func (s *Service) CatchUpMaxDays(ctx context.Context, u *core.User) (int, error) {
+	archived, err := s.archiveChannels(ctx)
+	if err != nil || len(archived) == 0 {
+		return 0, err
+	}
+	ctx, pol, err := s.withPolicy(ctx, u)
+	if err != nil {
+		return 0, err
+	}
+	channels, err := s.filterAllowedChannels(ctx, u, pol, archived)
+	days := 0
+	for _, ch := range channels {
+		days = max(days, ch.ArchiveDays())
+	}
+	return days, err
 }
 
 func (h liveTVHost) CatchUpLibraryVisible(ctx context.Context, u *frontend.Viewer) (bool, error) {

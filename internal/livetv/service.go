@@ -1537,7 +1537,7 @@ func (s *Service) allowedChannels(ctx context.Context, u *core.User, ids []strin
 		}
 	} else {
 		var selected map[string]Channel
-		selected, err = s.channelsByIDs(ctx, ids)
+		selected, err = s.readChannelsByIDs(ctx, ids, make(map[string]Channel, len(ids)))
 		for _, id := range ids {
 			if c, ok := selected[id]; ok {
 				cs = append(cs, c)
@@ -1551,6 +1551,10 @@ func (s *Service) allowedChannels(ctx context.Context, u *core.User, ids []strin
 	if err != nil {
 		return nil, err
 	}
+	return s.filterAllowedChannels(ctx, u, pol, cs)
+}
+
+func (s *Service) filterAllowedChannels(ctx context.Context, u *core.User, pol Policy, cs []Channel) ([]Channel, error) {
 	rated := u != nil && (strings.TrimSpace(u.MaxContentRating) != "" || strings.TrimSpace(pol.MaxRating) != "")
 	now := s.o.Now()
 	var airing map[int]Programme
