@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/braedonsaunders/ether/internal/frontend"
+	kitimages "github.com/braedonsaunders/ether/internal/frontend/kit/images"
 	"github.com/braedonsaunders/ether/internal/frontends/plex/model"
 )
 
@@ -85,6 +86,7 @@ func (s *Server) serveCardArtwork(w http.ResponseWriter, r *http.Request, key fr
 		kind = frontend.ImageBackdrop
 	}
 	ctx := frontend.WithCollectionCardArtwork(r.Context())
+	r = r.WithContext(ctx)
 	req := frontend.ArtworkRequest{Viewer: FromContext(ctx).User, Item: key}
 	list, _, err := art.List(ctx, req)
 	if err != nil {
@@ -95,25 +97,20 @@ func (s *Server) serveCardArtwork(w http.ResponseWriter, r *http.Request, key fr
 		if img.Kind != kind {
 			continue
 		}
-		if width <= 0 {
+		if _, height := photoDimensions(r); width <= 0 && height == 0 {
 			width = unsizedImageWidth(element, 500)
 		}
 		data, ct, err := art.Read(ctx, req, img, frontend.ArtworkTransform{Width: width})
 		if err != nil {
 			break
 		}
-		data, ct, err = s.androidPhotoFormat(r, data, ct)
+		data, ct, err = s.transformPhoto(r, data, ct)
 		if err != nil {
 			break
 		}
-		setArtworkHeaders(w.Header(), ct)
-		w.Header().Set("Cache-Control", "private, no-cache")
 		w.Header().Add("Vary", "X-Plex-Token")
-		if r.Method != http.MethodHead {
-			_, _ = w.Write(data)
-		} else {
-			w.WriteHeader(http.StatusOK)
-		}
+		w.Header().Add("Vary", "X-Plex-Product")
+		writeArtworkBytes(w, r, data, ct, kitimages.Revalidate)
 		return
 	}
 	writeHTTPError(w, http.StatusNotFound)

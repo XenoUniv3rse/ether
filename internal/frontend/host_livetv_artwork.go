@@ -167,11 +167,6 @@ func NewArtworkSource(cfg ArtworkSourceConfig) ArtworkSource {
 	return nil
 }
 
-// ResizePoster scales a poster JPEG to width.
-func ResizePoster(data []byte, width int) ([]byte, error) {
-	return artwork.ResizePoster(data, width)
-}
-
 // TitlePosterStamp returns the deterministic stamp for a title's generated poster.
 func TitlePosterStamp(t *Title) (string, bool) {
 	p, ok := artwork.ForTitle(t)

@@ -177,7 +177,12 @@ func (s *Server) serveCatchUpArt(w http.ResponseWriter, r *http.Request, key, ki
 		s.writeErr(w, r, err)
 		return
 	}
-	data = s.fitPhoto(r.Context(), data, contentType)
+	data, contentType, err = s.transformPhoto(r, data, contentType)
+	if err != nil {
+		writeHTTPError(w, http.StatusBadGateway)
+		return
+	}
+	w.Header().Add("Vary", "X-Plex-Product")
 	writeArtworkBytes(w, r, data, contentType, kitimages.Revalidate)
 }
 

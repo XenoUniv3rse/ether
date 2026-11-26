@@ -3,10 +3,8 @@ package plex
 import (
 	"context"
 	"encoding/base64"
-	"fmt"
 	"math"
 	"net/http"
-	"strconv"
 	"strings"
 
 	"github.com/braedonsaunders/ether/internal/frontend"
@@ -327,17 +325,24 @@ func (s *Server) serveDiscoveryPoster(w http.ResponseWriter, r *http.Request, k 
 		writeHTTPError(w, 404)
 		return
 	}
-	backdropWidth, _ := strconv.Atoi(r.URL.Query().Get("width"))
-	highBackdrop := kind == "backdrop" && backdropWidth > 1280 && backdropWidth <= 4000
+	width, height := photoDimensions(r)
 	var data []byte
 	var ct string
-	if highBackdrop {
+	if kind == "backdrop" && (width > 1280 || width == 0 && height > 0) {
 		_, path := d.Overlays.Paths(ctx, pr.User, t, lang)
-		svc := s.svc()
-		image, err := svc.images.Get(ctx, svc.imageURL(path, tmdbSize(backdropWidth)), s.now())
-		e = err
-		if err == nil {
-			data, ct = image.Data, image.ContentType
+		if path == "" {
+			writeHTTPError(w, http.StatusNotFound)
+			return
+		}
+		if strings.HasPrefix(path, "https://") || strings.HasPrefix(path, "http://") {
+			data, ct, e = d.RenderArtwork(ctx, pr.User, t, kind, lang)
+		} else {
+			svc := s.svc()
+			img, err := svc.images.Get(ctx, svc.imageURL(path, tmdbSize(width)), s.now())
+			e = err
+			if err == nil {
+				data, ct = img.Data, img.ContentType
+			}
 		}
 	} else {
 		data, ct, e = d.RenderArtwork(ctx, pr.User, t, kind, lang)
@@ -346,18 +351,7 @@ func (s *Server) serveDiscoveryPoster(w http.ResponseWriter, r *http.Request, k 
 		writeHTTPError(w, 404)
 		return
 	}
-	if d.Overlays.CustomPostersEnabled() {
-		if width, _ := strconv.Atoi(r.URL.Query().Get("width")); width > 0 && (kind == "" || kind == "poster") {
-			resized, resizedType, err := s.cachePhotoVariant(ctx, data, ct, fmt.Sprintf("poster-width-v1/%d", width), func(context.Context) ([]byte, string, error) {
-				out, err := frontend.ResizePoster(data, width)
-				return out, "image/jpeg", err
-			})
-			if err == nil {
-				data, ct = resized, resizedType
-			}
-		}
-	}
-	data, ct, e = s.androidPhotoFormat(r, data, ct)
+	data, ct, e = s.transformPhoto(r, data, ct)
 	if e != nil {
 		writeHTTPError(w, http.StatusBadGateway)
 		return

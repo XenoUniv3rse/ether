@@ -274,17 +274,7 @@ func (a Source) readEntry(ctx context.Context, req frontend.ArtworkRequest, entr
 		if entry.discoveryKind == "logo" {
 			return a.remote(ctx, t.LogoPath, width)
 		}
-		data, ct, err := a.Discovery.RenderArtwork(ctx, req.Viewer, t, entry.discoveryKind, req.Device.Language)
-		if err == nil && a.Discovery.Overlays.CustomPostersEnabled() && width > 0 && (entry.discoveryKind == "" || entry.discoveryKind == "poster") {
-			variant, variantType, resizeErr := a.Images.Variant(ctx, data, ct, fmt.Sprintf("poster-width-v1/%d", width), func(context.Context) ([]byte, string, error) {
-				out, err := artwork.ResizePoster(data, width)
-				return out, "image/jpeg", err
-			})
-			if resizeErr == nil {
-				data, ct = variant, variantType
-			}
-		}
-		return data, ct, err
+		return a.Discovery.RenderArtwork(ctx, req.Viewer, t, entry.discoveryKind, req.Device.Language)
 	case entry.personKind != "":
 		if ctx.Err() != nil {
 			return nil, "", ctx.Err()
@@ -347,21 +337,7 @@ func (a Source) transform(ctx context.Context, reference string, data []byte, co
 			return a.Raster.Rasterize(ctx, reference, data, artwork.RasterOptions{Width: transform.Width, Height: transform.Height, Format: transform.Format, Blur: transform.Blur})
 		})
 	}
-	if core.LiveApp(ctx) == "vela" && transform.Fit && transform.Format == "" && !transform.Blur &&
-		(transform.Width > 0 || transform.Height > 0) && (contentType == "image/webp" || contentType == "image/gif") {
-		// Vela requests an actual size for these formats too. Preserve the
-		// source when it already fits.
-		return a.Images.Variant(ctx, data, contentType, fmt.Sprintf("vela-fit-v1/%d/%d", transform.Width, transform.Height), func(context.Context) ([]byte, string, error) {
-			return transformRaster(data, contentType, transform)
-		})
-	}
-	if !needsRasterTransform(contentType, transform) {
-		return data, contentType, nil
-	}
-	key := fmt.Sprintf("raster-transform-v1/%d/%d/%s/%t/%t/%d", transform.Width, transform.Height, transform.Format, transform.Fit, transform.Blur, transform.Quality)
-	return a.Images.Variant(ctx, data, contentType, key, func(context.Context) ([]byte, string, error) {
-		return Transform(data, contentType, transform)
-	})
+	return kitimages.RasterVariant(ctx, a.Images, data, contentType, transform)
 }
 
 // readPluginItemArt serves a plugin library item's own artwork URL. Plugin

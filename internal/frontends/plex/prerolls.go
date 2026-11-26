@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/braedonsaunders/ether/internal/frontend"
+	kitimages "github.com/braedonsaunders/ether/internal/frontend/kit/images"
 	"github.com/braedonsaunders/ether/internal/frontend/kit/rangefile"
 	"github.com/braedonsaunders/ether/internal/frontends/plex/model"
 )
@@ -187,6 +188,23 @@ func (s *Server) prerollThumb(w http.ResponseWriter, r *http.Request, key fronte
 	path, ok := s.prerollsThumb(r.Context(), key)
 	if !ok {
 		writeHTTPError(w, http.StatusNotFound)
+		return true
+	}
+	width, height := photoDimensions(r)
+	if width > 0 || height > 0 || androidPhotoOutputFormat(r) != "" {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			writeHTTPError(w, http.StatusNotFound)
+			return true
+		}
+		data, ct, err := s.transformPhoto(r, data, "image/jpeg")
+		if err != nil {
+			writeHTTPError(w, http.StatusBadGateway)
+			return true
+		}
+		w.Header().Add("Vary", "X-Plex-Token")
+		w.Header().Add("Vary", "X-Plex-Product")
+		writeArtworkBytes(w, r, data, ct, kitimages.Revalidate)
 		return true
 	}
 	f, err := os.Open(path)

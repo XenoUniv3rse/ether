@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"github.com/braedonsaunders/ether/internal/artwork"
 	artworkservice "github.com/braedonsaunders/ether/internal/artwork/service"
 	"github.com/braedonsaunders/ether/internal/core"
 	"github.com/braedonsaunders/ether/internal/discovery"
@@ -13,9 +14,12 @@ import (
 	"github.com/braedonsaunders/ether/internal/ratings"
 	"github.com/braedonsaunders/ether/internal/store"
 	"github.com/braedonsaunders/ether/internal/watchlist"
+	"image"
+	"image/jpeg"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -163,56 +167,65 @@ func TestDiscoveryPlexRatingNormalizationAndStickyDismissal(t *testing.T) {
 func TestDiscoveryBackdropResolutionValidator(t *testing.T) {
 	f := newFixture()
 	defer f.srv.Close()
-	var fetched string
+	var source bytes.Buffer
+	if err := jpeg.Encode(&source, image.NewRGBA(image.Rect(0, 0, 3000, 1688)), &jpeg.Options{Quality: 90}); err != nil {
+		t.Fatal(err)
+	}
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fetched = r.URL.Path
 		w.Header().Set("Content-Type", "image/jpeg")
-		w.Write([]byte("backdrop"))
+		_, _ = w.Write(source.Bytes())
 	}))
 	defer upstream.Close()
-	f.srv.setImages(artworkservice.NewRemoteCache(1024, http.DefaultClient))
-	f.srv.setImageURL(func(path, size string) string { return upstream.URL + "/" + size + path })
-	f.srv.setDiscovery((&discovery.Features{Overlays: overlays.New(discoveryDB(t), overlays.Options{})}).Frontend())
+	imageURL := func(path, size string) string { return upstream.URL + "/" + size + path }
+	f.srv.setImages(artworkservice.NewRemoteCache(1<<20, upstream.Client()))
+	f.srv.setImageURL(imageURL)
+	overlays := overlays.New(discoveryDB(t), overlays.Options{
+		Images: artwork.NewImages(artwork.ImagesOptions{ImageURL: imageURL, HTTPClient: upstream.Client()}),
+	})
+	f.srv.setDiscovery((&discovery.Features{Overlays: overlays}).Frontend())
 	artPath := discoveryArtworkURL(fightClub.Key, "backdrop", "version", "")
 	for _, tc := range []struct {
 		name string
-		hi   string
-		lo   string
+		path func(string) string
 	}{
-		{
-			name: "pms-art",
-			hi:   artPath + "?width=2688",
-			lo:   artPath + "?width=1920",
-		},
-		{
-			name: "pms-art-transcode",
-			hi:   "/photo/:/transcode?width=2688&url=" + url.QueryEscape(artPath),
-			lo:   "/photo/:/transcode?width=1920&url=" + url.QueryEscape(artPath),
-		},
-		{
-			name: "legacy-discoveryPoster",
-			hi:   "/library/metadata/" + fightClub.Key.String() + "/discoveryPoster/version?kind=backdrop&width=2688",
-			lo:   "/library/metadata/" + fightClub.Key.String() + "/discoveryPoster/version?kind=backdrop&width=1920",
-		},
+		{"pms-art", func(query string) string { return artPath + "?" + query }},
+		{"pms-art-transcode", func(query string) string {
+			return "/photo/:/transcode?" + query + "&url=" + url.QueryEscape(artPath)
+		}},
+		{"legacy-discoveryPoster", func(query string) string {
+			return "/library/metadata/" + fightClub.Key.String() + "/discoveryPoster/version?kind=backdrop&" + query
+		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			f.srv.setImages(artworkservice.NewRemoteCache(1024, http.DefaultClient))
-			fetched = ""
-			first := f.request(t, "GET", tc.hi, nil)
-			// The validator is a content hash of the bytes sent: two widths
-			// share one only when they render identical bytes.
-			if first.Code != 200 || !strings.HasPrefix(fetched, "/original/") || first.Header().Get("ETag") == "" {
-				t.Fatalf("%d %s %s", first.Code, fetched, first.Header().Get("ETag"))
+			etag := ""
+			for _, width := range []int{2688, 1920, 640} {
+				path := tc.path("width=" + strconv.Itoa(width))
+				request := f.request(t, "GET", path, map[string]string{"If-None-Match": etag})
+				cfg, err := jpeg.DecodeConfig(bytes.NewReader(request.Body.Bytes()))
+				if request.Code != 200 || err != nil || cfg.Width != width || cfg.Height != 1688*width/3000 {
+					t.Fatalf("width %d: status %d, config %+v, decode %v", width, request.Code, cfg, err)
+				}
+				if next := request.Header().Get("ETag"); next == "" || next == etag {
+					t.Fatalf("width %d: missing or reused ETag", width)
+				} else {
+					etag = next
+				}
+				cached := f.request(t, "GET", path, map[string]string{"If-None-Match": etag})
+				if cached.Code != 304 {
+					t.Fatal("lost conditional GET", cached.Code)
+				}
+				t.Logf("width %d: %d source bytes, %d served", width, source.Len(), request.Body.Len())
 			}
-			cached := f.request(t, "GET", tc.hi, map[string]string{"If-None-Match": first.Header().Get("ETag")})
-			if cached.Code != 304 {
-				t.Fatal("lost conditional GET", cached.Code)
+			box := f.request(t, "GET", tc.path("width=1920&height=360"), nil)
+			cfg, err := jpeg.DecodeConfig(bytes.NewReader(box.Body.Bytes()))
+			// Height is the tighter constraint for this source.
+			if box.Code != 200 || err != nil || cfg.Width != 3000*360/1688 || cfg.Height != 360 {
+				t.Fatalf("fit within box: status %d, config %+v, decode %v", box.Code, cfg, err)
 			}
-			plain := f.request(t, "GET", tc.lo, nil)
-			smaller := f.request(t, "GET", tc.lo, map[string]string{"If-None-Match": first.Header().Get("ETag")})
-			sameBytes := bytes.Equal(plain.Body.Bytes(), first.Body.Bytes())
-			if sameBytes != (smaller.Code == 304) || sameBytes != (plain.Header().Get("ETag") == first.Header().Get("ETag")) {
-				t.Fatalf("cross-size validator: same bytes %v, conditional %d", sameBytes, smaller.Code)
+			webp := f.request(t, "GET", tc.path("width=640&format=webp"), map[string]string{"X-Plex-Product": "Plex for Android"})
+			cfg, format, err := image.DecodeConfig(bytes.NewReader(webp.Body.Bytes()))
+			if webp.Code != 200 || err != nil || format != "webp" || cfg.Width != 640 || webp.Header().Get("Content-Type") != "image/webp" || webp.Header().Get("ETag") == etag {
+				t.Fatalf("Android WebP: status %d, format %s, config %+v, decode %v", webp.Code, format, cfg, err)
 			}
 		})
 	}

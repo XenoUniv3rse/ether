@@ -1,12 +1,7 @@
 package plex
 
 import (
-	"bytes"
 	"context"
-	"image"
-	_ "image/gif"
-	"image/jpeg"
-	"image/png"
 	"net/http"
 	"slices"
 	"sort"
@@ -516,7 +511,7 @@ func (s *Server) pluginPersonTitles(ctx context.Context, pr *Request, id int64, 
 // servePluginItemImage serves item artwork (/library/metadata/{key}/{element})
 // for a plugin item, routing absolute URLs through Artwork or channelLogos and
 // resizing when dimensions are requested.
-func (s *Server) servePluginItemImage(w http.ResponseWriter, r *http.Request, key frontend.RatingKey, element string, width, height int) bool {
+func (s *Server) servePluginItemImage(w http.ResponseWriter, r *http.Request, key frontend.RatingKey, element string, width int) bool {
 	if !key.IsPluginKey() {
 		return false
 	}
@@ -534,11 +529,7 @@ func (s *Server) servePluginItemImage(w http.ResponseWriter, r *http.Request, ke
 		}
 		if images, _, err := art.List(r.Context(), req); err == nil {
 			if chosen, ok := pickPluginArtwork(images, t.Type, element); ok {
-				tr := frontend.ArtworkTransform{
-					Width:  width,
-					Height: height,
-					Fit:    width > 0 || height > 0,
-				}
+				tr := frontend.ArtworkTransform{Width: width}
 				if data, ct, err := art.Read(r.Context(), req, chosen, tr); err == nil && len(data) > 0 {
 					s.writePluginImageBytes(w, r, data, ct)
 					return true
@@ -564,7 +555,6 @@ func (s *Server) servePluginItemImage(w http.ResponseWriter, r *http.Request, ke
 			writeHTTPError(w, http.StatusBadGateway)
 			return true
 		}
-		data, ct = s.fitPluginArtwork(r.Context(), data, ct, width, height)
 		s.writePluginImageBytes(w, r, data, ct)
 		return true
 	}
@@ -621,7 +611,7 @@ func pluginTitleElementPath(t *frontend.Title, element string) string {
 
 // servePluginPersonImage serves an http(s) cast member portrait for a plugin
 // item, resizing when /photo/:/transcode supplies width or height.
-func (s *Server) servePluginPersonImage(w http.ResponseWriter, r *http.Request, key frontend.RatingKey, personID int64, imagePath string, width, height int) {
+func (s *Server) servePluginPersonImage(w http.ResponseWriter, r *http.Request, key frontend.RatingKey, personID int64, imagePath string, width int) {
 	pr := FromContext(r.Context())
 	wantSubject := ""
 	if personID > 0 {
@@ -638,11 +628,7 @@ func (s *Server) servePluginPersonImage(w http.ResponseWriter, r *http.Request, 
 				if img.Kind != frontend.ImagePerson || img.Subject != wantSubject {
 					continue
 				}
-				tr := frontend.ArtworkTransform{
-					Width:  width,
-					Height: height,
-					Fit:    width > 0 || height > 0,
-				}
+				tr := frontend.ArtworkTransform{Width: width}
 				if data, ct, err := art.Read(r.Context(), req, img, tr); err == nil && len(data) > 0 {
 					s.writePluginImageBytes(w, r, data, ct)
 					return
@@ -660,12 +646,11 @@ func (s *Server) servePluginPersonImage(w http.ResponseWriter, r *http.Request, 
 		writeHTTPError(w, http.StatusBadGateway)
 		return
 	}
-	data, ct = s.fitPluginArtwork(r.Context(), data, ct, width, height)
 	s.writePluginImageBytes(w, r, data, ct)
 }
 
 func (s *Server) writePluginImageBytes(w http.ResponseWriter, r *http.Request, data []byte, ct string) {
-	out, outCT, err := s.androidPhotoFormat(r, data, ct)
+	out, outCT, err := s.transformPhoto(r, data, ct)
 	if err != nil {
 		writeHTTPError(w, http.StatusBadGateway)
 		return
@@ -674,64 +659,4 @@ func (s *Server) writePluginImageBytes(w http.ResponseWriter, r *http.Request, d
 	h.Add("Vary", "X-Plex-Product")
 	h.Add("Vary", "X-Plex-Token")
 	writeArtworkBytes(w, r, out, outCT, kitimages.Revalidate)
-}
-
-func (s *Server) fitPluginArtwork(ctx context.Context, data []byte, ct string, width, height int) ([]byte, string) {
-	if width <= 0 && height <= 0 {
-		return data, ct
-	}
-	out, outType, err := s.cachePhotoVariant(ctx, data, ct, "plex-plugin-fit-v1/"+strconv.Itoa(width)+"/"+strconv.Itoa(height), func(context.Context) ([]byte, string, error) {
-		out, outType := fitPluginImageBytes(data, ct, width, height)
-		return out, outType, nil
-	})
-	if err != nil {
-		return data, ct
-	}
-	return out, outType
-}
-
-func fitPluginImageBytes(data []byte, ct string, maxW, maxH int) ([]byte, string) {
-	if maxW <= 0 && maxH <= 0 {
-		return data, ct
-	}
-	switch ct {
-	case "image/png", "image/jpeg":
-	default:
-		return data, ct
-	}
-	cfg, _, err := image.DecodeConfig(bytes.NewReader(data))
-	if err != nil || cfg.Width <= 0 || cfg.Height <= 0 || int64(cfg.Width)*int64(cfg.Height) > 40_000_000 {
-		return data, ct
-	}
-	w, h := cfg.Width, cfg.Height
-	if maxW > 0 && w > maxW {
-		h = max(1, h*maxW/w)
-		w = maxW
-	}
-	if maxH > 0 && h > maxH {
-		w = max(1, w*maxH/h)
-		h = maxH
-	}
-	if w == cfg.Width && h == cfg.Height {
-		return data, ct
-	}
-	src, _, err := image.Decode(bytes.NewReader(data))
-	if err != nil {
-		return data, ct
-	}
-	resized, err := kitimages.Resize(src, w, h)
-	if err != nil {
-		return data, ct
-	}
-	var buf bytes.Buffer
-	if ct == "image/png" {
-		if png.Encode(&buf, resized) == nil {
-			return buf.Bytes(), "image/png"
-		}
-		return data, ct
-	}
-	if jpeg.Encode(&buf, resized, &jpeg.Options{Quality: 90}) == nil {
-		return buf.Bytes(), "image/jpeg"
-	}
-	return data, ct
 }

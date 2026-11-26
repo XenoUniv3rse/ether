@@ -4,6 +4,7 @@ go 1.27.4
 
 require (
 	fyne.io/systray v1.12.2
+	github.com/HugoSmits86/nativewebp v1.3.0
 	github.com/PuerkitoBio/goquery v1.13.0
 	github.com/SherClockHolmes/webpush-go v1.4.0
 	github.com/andybalholm/cascadia v1.3.5

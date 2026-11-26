@@ -2,12 +2,12 @@ package service
 
 import (
 	"bytes"
+	"context"
 	"github.com/braedonsaunders/ether/internal/core"
 	"github.com/braedonsaunders/ether/internal/frontend"
 	kitimages "github.com/braedonsaunders/ether/internal/frontend/kit/images"
 	"image"
 	"image/color"
-	_ "image/gif"
 	"image/jpeg"
 	"image/png"
 	"strconv"
@@ -68,87 +68,6 @@ func RenderUltraBlur(colors Palette, transform frontend.ArtworkTransform) ([]byt
 	return out.Bytes(), "image/jpeg", nil
 }
 
-func needsRasterTransform(contentType string, transform frontend.ArtworkTransform) bool {
-	if transform.Fit && transform.Format == "" && contentType != "image/jpeg" && contentType != "image/png" {
-		return false
-	}
-	return transform.Format != "" || transform.Blur || transform.Height > 0 || (transform.Fit && transform.Width > 0)
-}
-
 func Transform(data []byte, contentType string, transform frontend.ArtworkTransform) ([]byte, string, error) {
-	if !needsRasterTransform(contentType, transform) {
-		return data, contentType, nil
-	}
-	return transformRaster(data, contentType, transform)
-}
-
-func transformRaster(data []byte, contentType string, transform frontend.ArtworkTransform) ([]byte, string, error) {
-	cfg, _, err := image.DecodeConfig(bytes.NewReader(data))
-	if err != nil || cfg.Width <= 0 || cfg.Height <= 0 {
-		return nil, "", core.ErrNotAvailable
-	}
-	if transform.Fit {
-		width, height := cfg.Width, cfg.Height
-		if transform.Width > 0 && width > transform.Width {
-			height = max(1, height*transform.Width/width)
-			width = transform.Width
-		}
-		if transform.Height > 0 && height > transform.Height {
-			width = max(1, width*transform.Height/height)
-			height = transform.Height
-		}
-		if width == cfg.Width && height == cfg.Height && transform.Format == "" && !transform.Blur {
-			return data, contentType, nil
-		}
-		transform.Width, transform.Height = width, height
-	}
-	if int64(cfg.Width)*int64(cfg.Height) > 40_000_000 {
-		return nil, "", core.ErrNotAvailable
-	}
-	src, _, err := image.Decode(bytes.NewReader(data))
-	if err != nil {
-		return nil, "", err
-	}
-	width, height := transform.Width, transform.Height
-	if width == 0 && height > 0 {
-		width = max(1, cfg.Width*height/cfg.Height)
-	}
-	if height == 0 && width > 0 {
-		height = max(1, cfg.Height*width/cfg.Width)
-	}
-	if width > 4000 || height > 4000 {
-		return nil, "", core.ErrNotAvailable
-	}
-	if width > 0 && height > 0 && (width != cfg.Width || height != cfg.Height) {
-		src, err = kitimages.Resize(src, width, height)
-		if err != nil {
-			return nil, "", err
-		}
-	}
-	if transform.Blur {
-		src, err = kitimages.Blur(src)
-		if err != nil {
-			return nil, "", err
-		}
-	}
-	if transform.Fit && transform.Format == "" && contentType == "image/png" {
-		transform.Format = "png"
-	}
-	var out bytes.Buffer
-	switch transform.Format {
-	case "png":
-		err = png.Encode(&out, src)
-		contentType = "image/png"
-	default:
-		quality := transform.Quality
-		if quality <= 0 || quality > 100 {
-			quality = 90
-		}
-		err = jpeg.Encode(&out, src, &jpeg.Options{Quality: quality})
-		contentType = "image/jpeg"
-	}
-	if err != nil {
-		return nil, "", err
-	}
-	return out.Bytes(), contentType, nil
+	return kitimages.RasterVariant(context.Background(), nil, data, contentType, transform)
 }

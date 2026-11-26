@@ -17,6 +17,7 @@ import (
 
 	"github.com/braedonsaunders/ether/internal/frontend"
 	"github.com/braedonsaunders/ether/internal/frontend/kit/clientnet"
+	kitimages "github.com/braedonsaunders/ether/internal/frontend/kit/images"
 	"github.com/braedonsaunders/ether/internal/frontends/plex/model"
 	"github.com/go-chi/chi/v5"
 )
@@ -1086,21 +1087,24 @@ func (s *Server) serveLiveLogo(w http.ResponseWriter, r *http.Request, id string
 // writeChannelLogo writes channel c's logo: its source image (or matched
 // guide logo), rasterized when asked, else a generated card.
 func (s *Server) writeChannelLogo(w http.ResponseWriter, r *http.Request, c frontend.LiveTVChannel, raster bool, cacheControl string) {
+	r = r.WithContext(kitimages.TrackCachePolicy(r.Context()))
+	width, height := photoDimensions(r)
+	raster = raster || width > 0 || height > 0
 	var err error
 	format := androidPhotoOutputFormat(r)
 	rasterFormat := format
-	if rasterFormat == "" {
+	if rasterFormat == "" || rasterFormat == "webp" {
 		rasterFormat = "png"
 	}
 	write := func(data []byte, ct string) {
-		setArtworkHeaders(w.Header(), ct)
-		w.Header().Set("Cache-Control", cacheControl)
+		data, ct, err := s.transformPhoto(r, data, ct)
+		if err != nil {
+			writeHTTPError(w, http.StatusBadGateway)
+			return
+		}
 		w.Header().Add("Vary", "X-Plex-Token")
 		w.Header().Add("Vary", "X-Plex-Product")
-		w.Header().Set("Content-Length", strconv.Itoa(len(data)))
-		if r.Method != http.MethodHead {
-			_, _ = w.Write(data)
-		}
+		writeArtworkBytes(w, r, data, ct, cacheControl)
 	}
 	src := c.Logo
 	var (
@@ -1120,9 +1124,6 @@ func (s *Server) writeChannelLogo(w http.ResponseWriter, r *http.Request, c fron
 		if raster && strings.HasPrefix(ct, "image/svg+xml") {
 			data, ct, err = s.channelRaster.Rasterize(r.Context(), src, data, frontend.RasterOptions{Format: rasterFormat})
 		}
-		if err == nil && raster && format != "" {
-			data, ct, err = s.svc().images.RasterFormat(r.Context(), data, ct, format, s.now())
-		}
 		if err == nil && len(data) > 0 {
 			write(data, ct)
 			return
@@ -1131,14 +1132,8 @@ func (s *Server) writeChannelLogo(w http.ResponseWriter, r *http.Request, c fron
 	if _, shipped, ok := frontend.ShowcaseLogo(c); ok {
 		// A shipped channel's own artwork, the same file Apple TV fetches
 		// from Ether's public repository.
-		data, ct, err = shipped, "image/png", nil
-		if raster && format != "" {
-			data, ct, err = s.svc().images.RasterFormat(r.Context(), data, ct, format, s.now())
-		}
-		if err == nil && len(data) > 0 {
-			write(data, ct)
-			return
-		}
+		write(shipped, "image/png")
+		return
 	}
 	if raster {
 		data, ct, err := s.channelRaster.ChannelLogo(r.Context(), c.ID, c.Number, c.Name, frontend.RasterOptions{Format: rasterFormat})

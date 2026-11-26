@@ -1,5 +1,7 @@
 fyne.io/systray v1.12.2 h1:Y8DZxgLHsVQt6rY9Zrkkg+j67S7vv/1F2viOWKPpVeA=
 fyne.io/systray v1.12.2/go.mod h1:RVwqP9nYMo7h5zViCBHri2FgjXF7H2cub7MAq4NSoLs=
+github.com/HugoSmits86/nativewebp v1.3.0 h1:n1egtEzSV4KwFtealr7dzdYq1wI/uj/bOQ/QcTcIyVE=
+github.com/HugoSmits86/nativewebp v1.3.0/go.mod h1:YNQuWenlVmSUUASVNhTDwf4d7FwYQGbGhklC8p72Vr8=
 github.com/PuerkitoBio/goquery v1.13.0 h1:mqHbjD7Jmnul4DTR24LKTjo1uUmHUh072kteGV+xpFM=
 github.com/PuerkitoBio/goquery v1.13.0/go.mod h1:Hip5mdBL8K2wEGKJdr27sRaNwIdDajmCwB/ExUPwW+g=
 github.com/SherClockHolmes/webpush-go v1.4.0 h1:ocnzNKWN23T9nvHi6IfyrQjkIc0oJWv1B1pULsf9i3s=

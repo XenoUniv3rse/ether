@@ -1,17 +1,12 @@
 package service
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"fmt"
-	"image"
-	"image/jpeg"
-	"image/png"
 	"time"
 
 	kitimages "github.com/braedonsaunders/ether/internal/frontend/kit/images"
-	_ "golang.org/x/image/webp"
 )
 
 // RasterFormat caches explicit output formats alongside fetched artwork, within
@@ -20,12 +15,12 @@ import (
 // size), so refreshed bytes and different sizes cannot reuse stale conversions.
 // Returning to a warm poster requires a hash/lookup, never a pixel decode.
 func (c *RemoteCache) RasterFormat(ctx context.Context, data []byte, contentType, format string, _ time.Time) ([]byte, string, error) {
-	if (format != "jpeg" && format != "png") || contentType == "image/"+format {
+	switch format {
+	case "jpeg", "png", "webp":
+		return kitimages.RasterVariant(ctx, c, data, contentType, kitimages.RasterTransform{Format: format, Fit: true})
+	default:
 		return data, contentType, nil
 	}
-	return c.Variant(ctx, data, contentType, "raster-format-v1/"+format, func(context.Context) ([]byte, string, error) {
-		return encodeRasterFormat(data, format)
-	})
 }
 
 func (c *RemoteCache) Variant(ctx context.Context, data []byte, contentType, transform string, render func(context.Context) ([]byte, string, error)) ([]byte, string, error) {
@@ -63,25 +58,4 @@ func (c *RemoteCache) Variant(ctx context.Context, data []byte, contentType, tra
 		return nil, "", err
 	}
 	return img.Data, img.ContentType, nil
-}
-
-func encodeRasterFormat(data []byte, format string) ([]byte, string, error) {
-	cfg, _, err := image.DecodeConfig(bytes.NewReader(data))
-	if err != nil {
-		return nil, "", err
-	}
-	if cfg.Width <= 0 || cfg.Height <= 0 || int64(cfg.Width)*int64(cfg.Height) > 16000000 {
-		return nil, "", fmt.Errorf("artwork dimensions exceed raster limit")
-	}
-	decoded, _, err := image.Decode(bytes.NewReader(data))
-	if err != nil {
-		return nil, "", err
-	}
-	var out bytes.Buffer
-	if format == "png" {
-		err = png.Encode(&out, decoded)
-	} else {
-		err = jpeg.Encode(&out, decoded, &jpeg.Options{Quality: 90})
-	}
-	return out.Bytes(), "image/" + format, err
 }

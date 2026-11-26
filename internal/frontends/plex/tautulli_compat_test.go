@@ -5,6 +5,8 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"encoding/xml"
+	"image"
+	"image/jpeg"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -488,7 +490,11 @@ func TestTautulliPhotoTranscodeBIFFrameForActiveStream(t *testing.T) {
 		}})
 	})
 	defer f.srv.Close()
-	frame := []byte{0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0xff, 0xd9}
+	var encoded bytes.Buffer
+	if err := jpeg.Encode(&encoded, image.NewRGBA(image.Rect(0, 0, 160, 90)), nil); err != nil {
+		t.Fatal(err)
+	}
+	frame := encoded.Bytes()
 	bif, err := transcode.MarshalBIF([]transcode.BIFFrame{{Time: 10 * time.Second, JPEG: frame}})
 	if err != nil {
 		t.Fatal(err)

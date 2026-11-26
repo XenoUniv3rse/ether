@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/braedonsaunders/ether/internal/core"
+	kitimages "github.com/braedonsaunders/ether/internal/frontend/kit/images"
 )
 
 // ArtworkImageFile describes one candidate remote artwork variant.
@@ -29,13 +30,7 @@ type ArtworkRequest struct {
 
 // ArtworkTransform describes the requested output. Zero dimensions preserve
 // the source's normal dimensions; Format is empty, "jpeg", or "png".
-type ArtworkTransform struct {
-	Width, Height int
-	Quality       int  // JPEG quality when encoding; zero uses the default.
-	Fit           bool // Fit within dimensions, preserving aspect ratio without upscaling.
-	Format        string
-	Blur          bool
-}
+type ArtworkTransform = kitimages.RasterTransform
 
 // Artwork is the host-side source of authorized descriptors and their bytes.
 // An implementation reports complete when its currently selected artwork is

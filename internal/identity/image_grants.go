@@ -519,15 +519,21 @@ func (s *ImageGrantService) writeGrantedImage(w http.ResponseWriter, r *http.Req
 	var data []byte
 	var contentType string
 	var err error
-	if s.artwork != nil {
-		q := r.URL.Query()
-		siloPluginResize := s.surface == "silo" && item.IsPluginKey() && (q.Get("w") != "" || q.Get("maxWidth") != "" || q.Get("fillWidth") != "" || q.Get("h") != "")
-		data, contentType, err = s.artwork.Read(core.WithLiveApp(ctx, string(s.surface)), grantedArtworkRequest(viewer, device, item, channel, img), img, frontend.ArtworkTransform{Width: width, Height: height, Format: format, Blur: blur, Quality: quality, Fit: mediaBrowser || s.surface == "vela" || siloPluginResize})
-	} else {
-		data, contentType, err = s.images.Get(r.Context(), img.Path, width)
+	q := r.URL.Query()
+	explicitSize := q.Get("w") != "" || q.Get("h") != "" ||
+		(s.surface == "silo" && (q.Get("maxWidth") != "" || q.Get("fillWidth") != ""))
+	transform := frontend.ArtworkTransform{
+		Width: width, Height: height, Format: format, Blur: blur, Quality: quality,
+		Fit: mediaBrowser || s.surface == "vela" || explicitSize,
 	}
-	if err == nil && s.artwork == nil && s.surface == "vela" && !strings.HasPrefix(contentType, "image/svg") {
-		data, contentType, err = fitGrantedImage(data, contentType, width, height)
+	if s.artwork != nil {
+		data, contentType, err = s.artwork.Read(core.WithLiveApp(ctx, string(s.surface)), grantedArtworkRequest(viewer, device, item, channel, img), img, transform)
+	} else {
+		data, contentType, err = s.images.Get(ctx, img.Path, width)
+		cache, _ := s.images.(kitimages.VariantCache)
+		if err == nil && transform.Fit && (cache != nil || s.surface == "vela") && !strings.HasPrefix(contentType, "image/svg") {
+			data, contentType, err = kitimages.RasterVariant(ctx, cache, data, contentType, transform)
+		}
 	}
 	if err != nil {
 		// A missing image is a 404, never a gateway error: clients treat

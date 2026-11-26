@@ -94,7 +94,7 @@ func (s *Server) serveGeneratedPoster(w http.ResponseWriter, r *http.Request, ke
 	if !ok || err != nil {
 		return false
 	}
-	if data, ct, err = s.androidPhotoFormat(r, data, ct); err != nil {
+	if data, ct, err = s.transformPhoto(r, data, ct); err != nil {
 		return false
 	}
 	h := w.Header()
@@ -133,11 +133,12 @@ func (s *Server) handleImage(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	width, _ := strconv.Atoi(r.URL.Query().Get("width"))
-	s.serveItemImage(w, r, key, element, width)
+	s.serveItemImage(w, r, key, element)
 }
 
-func (s *Server) serveItemImage(w http.ResponseWriter, r *http.Request, key frontend.RatingKey, element string, width int) {
+func (s *Server) serveItemImage(w http.ResponseWriter, r *http.Request, key frontend.RatingKey, element string) {
+	r = r.WithContext(kitimages.TrackCachePolicy(r.Context()))
+	width, height := photoDimensions(r)
 	if r.URL.Query().Get("collectionCard") == "1" && key.Kind() == frontend.KindSmart {
 		s.serveCardArtwork(w, r, key, element, width)
 		return
@@ -156,6 +157,13 @@ func (s *Server) serveItemImage(w http.ResponseWriter, r *http.Request, key fron
 		}
 		if kind != "" {
 			if data, ct, err := reader.OwnerArtwork(r.Context(), frontend.ArtworkRequest{Viewer: FromContext(r.Context()).User, Item: key}, kind); err == nil {
+				data, ct, err = s.transformPhoto(r, data, ct)
+				if err != nil {
+					writeHTTPError(w, http.StatusBadGateway)
+					return
+				}
+				w.Header().Add("Vary", "X-Plex-Product")
+				w.Header().Add("Vary", "X-Plex-Token")
 				writeArtworkBytes(w, r, data, ct, kitimages.Revalidate)
 				return
 			}
@@ -168,8 +176,7 @@ func (s *Server) serveItemImage(w http.ResponseWriter, r *http.Request, key fron
 	if element == "composite" || element == "squareArt" {
 		element = "thumb"
 	}
-	height, _ := strconv.Atoi(r.URL.Query().Get("height"))
-	if key.IsPluginKey() && s.servePluginItemImage(w, r, key, element, width, height) {
+	if key.IsPluginKey() && s.servePluginItemImage(w, r, key, element, width) {
 		return
 	}
 	raw := r.URL.Query().Get("collection")
@@ -206,13 +213,13 @@ func (s *Server) serveItemImage(w http.ResponseWriter, r *http.Request, key fron
 			writeHTTPError(w, http.StatusNotFound)
 			return
 		}
-		if width <= 0 {
+		if width <= 0 && height == 0 {
 			width = unsizedImageWidth(element, 500)
 		}
 		s.serveRemoteImage(w, r, s.svc().imageURL(path, tmdbSize(width)))
 		return
 	}
-	if width <= 0 {
+	if width <= 0 && height == 0 {
 		width = unsizedImageWidth(element, defWidth)
 	}
 	s.serveRemoteImage(w, r, s.svc().imageURL(path, tmdbSize(width)))
@@ -266,11 +273,12 @@ func (s *Server) serveRemoteImage(w http.ResponseWriter, r *http.Request, u stri
 }
 
 func (s *Server) writeRemoteImage(w http.ResponseWriter, r *http.Request, u string) error {
+	r = r.WithContext(kitimages.TrackCachePolicy(r.Context()))
 	img, err := s.svc().images.Get(r.Context(), u, s.now())
 	if err != nil {
 		return err
 	}
-	data, ct, err := s.androidPhotoFormat(r, s.fitPhoto(r.Context(), img.Data, img.ContentType), img.ContentType)
+	data, ct, err := s.transformPhoto(r, img.Data, img.ContentType)
 	if err != nil {
 		return err
 	}
@@ -285,13 +293,6 @@ func (s *Server) writeRemoteImage(w http.ResponseWriter, r *http.Request, u stri
 	}
 	writeArtworkBytes(w, r, data, ct, cacheControl)
 	return nil
-}
-
-func (s *Server) cachePhotoVariant(ctx context.Context, data []byte, contentType, key string, render func(context.Context) ([]byte, string, error)) ([]byte, string, error) {
-	if cache, ok := s.svc().images.(kitimages.VariantCache); ok {
-		return cache.Variant(ctx, data, contentType, key, render)
-	}
-	return render(ctx)
 }
 
 type explicitPhotoURLKey struct{}
@@ -314,10 +315,8 @@ func writeArtworkBytes(w http.ResponseWriter, r *http.Request, data []byte, cont
 
 // Person artwork is scoped to one title so authorization requires one catalog lookup.
 func (s *Server) servePersonImage(w http.ResponseWriter, r *http.Request, key frontend.RatingKey, kind, identity string) {
-	s.servePersonImageSized(w, r, key, kind, identity, 0, 0)
-}
-
-func (s *Server) servePersonImageSized(w http.ResponseWriter, r *http.Request, key frontend.RatingKey, kind, identity string, width, height int) {
+	r = r.WithContext(kitimages.TrackCachePolicy(r.Context()))
+	width, height := photoDimensions(r)
 	if r.Context().Err() != nil {
 		return
 	}
@@ -385,15 +384,18 @@ func (s *Server) servePersonImageSized(w http.ResponseWriter, r *http.Request, k
 		return
 	}
 	if key.IsPluginKey() && (strings.HasPrefix(imagePath, "https://") || strings.HasPrefix(imagePath, "http://")) {
-		s.servePluginPersonImage(w, r, key, matchedPerson.TMDB, imagePath, width, height)
+		s.servePluginPersonImage(w, r, key, matchedPerson.TMDB, imagePath, width)
 		return
 	}
 	if plexImageURL(imagePath) {
 		s.serveRemoteImage(w, r, imagePath)
 		return
 	}
-	// Keep the same w185 profile URL emitted by metadata before proxying; poster widths are not profile configuration. Width and height are intentionally ignored.
-	s.serveRemoteImage(w, r, s.svc().imageURL(imagePath, "w185"))
+	size := "w185"
+	if width > 0 || height > 0 {
+		size = tmdbSize(width)
+	}
+	s.serveRemoteImage(w, r, s.svc().imageURL(imagePath, size))
 }
 
 func (s *Server) handlePersonImage(w http.ResponseWriter, r *http.Request) {
@@ -402,9 +404,7 @@ func (s *Server) handlePersonImage(w http.ResponseWriter, r *http.Request) {
 		writeHTTPError(w, http.StatusNotFound)
 		return
 	}
-	width, _ := strconv.Atoi(r.URL.Query().Get("width"))
-	height, _ := strconv.Atoi(r.URL.Query().Get("height"))
-	s.servePersonImageSized(w, r, key, chi.URLParam(r, "kind"), chi.URLParam(r, "identity"), width, height)
+	s.servePersonImage(w, r, key, chi.URLParam(r, "kind"), chi.URLParam(r, "identity"))
 }
 
 var personImageRe = regexp.MustCompile(`^/library/metadata/(\d+)/person/(actor|director|writer|producer)/([A-Za-z0-9_-]+)$`)
@@ -416,8 +416,8 @@ var partIndexFrameRe = regexp.MustCompile(`^/library/parts/(\d+)/indexes/([^/]+)
 
 // handlePhotoTranscode serves /photo/:/transcode. The url parameter may be
 // one of our own artwork paths (relative, or absolute on this server) or an
-// absolute TMDB image URL. Ether does no pixel work: it serves the TMDB
-// variant closest to the requested width.
+// absolute TMDB image URL. Each source handler authorizes its artwork
+// before transforming the returned bytes.
 func (s *Server) handlePhotoTranscode(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	// PMS validates dimensions before resolving the image.
@@ -452,15 +452,7 @@ func (s *Server) handlePhotoTranscode(w http.ResponseWriter, r *http.Request) {
 		writeHTTPError(w, http.StatusNotFound)
 		return
 	}
-	rawWidth, _ := strconv.Atoi(photoQueryValue(q, "width"))
-	height, _ := strconv.Atoi(photoQueryValue(q, "height"))
-	width := rawWidth
-	if width <= 0 && height > 0 {
-		width = height * 2 / 3 // poster aspect
-	} else if strings.HasSuffix(photoQueryValue(q, "minSize"), "1") && height > 0 && height*2/3 > width {
-		width = height * 2 / 3
-	}
-	r = r.WithContext(withPhotoFitWidth(r.Context(), width))
+	width, _ := photoDimensions(r)
 	u, err := url.Parse(raw)
 	if err != nil {
 		writeHTTPError(w, http.StatusBadRequest)
@@ -507,7 +499,7 @@ func (s *Server) handlePhotoTranscode(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			params := u.Query()
-			s.serveTranscodedDiscoveryPoster(w, r, key, params.Get("kind"), params.Get("lang"), width)
+			s.serveDiscoveryPoster(w, r, key, params.Get("kind"), params.Get("lang"))
 			return
 		}
 		if m := personImageRe.FindStringSubmatch(path); m != nil {
@@ -516,7 +508,7 @@ func (s *Server) handlePhotoTranscode(w http.ResponseWriter, r *http.Request) {
 				writeHTTPError(w, http.StatusNotFound)
 				return
 			}
-			s.servePersonImageSized(w, r, key, m[2], m[3], rawWidth, height)
+			s.servePersonImage(w, r, key, m[2], m[3])
 			return
 		}
 		if m := metadataImageRe.FindStringSubmatch(path); m != nil {
@@ -528,7 +520,7 @@ func (s *Server) handlePhotoTranscode(w http.ResponseWriter, r *http.Request) {
 			inner := u.Query()
 			if strings.HasPrefix(path, "/library/metadata/") && !inner.Has("ranked") {
 				if _, kind, lang, ok := decodeDiscoveryArtworkToken(m[3]); ok && discoveryElementMatchesKind(m[2], kind) {
-					s.serveTranscodedDiscoveryPoster(w, r, key, kind, lang, width)
+					s.serveDiscoveryPoster(w, r, key, kind, lang)
 					return
 				}
 			}
@@ -545,7 +537,7 @@ func (s *Server) handlePhotoTranscode(w http.ResponseWriter, r *http.Request) {
 				}
 				r.URL.RawQuery = q.Encode()
 			}
-			s.serveItemImage(w, r, key, m[2], width)
+			s.serveItemImage(w, r, key, m[2])
 			return
 		}
 		if m := playlistImageRe.FindStringSubmatch(path); m != nil {
@@ -554,7 +546,7 @@ func (s *Server) handlePhotoTranscode(w http.ResponseWriter, r *http.Request) {
 				writeHTTPError(w, http.StatusNotFound)
 				return
 			}
-			s.serveItemImage(w, r, key, m[2], width)
+			s.serveItemImage(w, r, key, m[2])
 			return
 		}
 		if m := partIndexFrameRe.FindStringSubmatch(path); m != nil {
@@ -575,14 +567,6 @@ func (s *Server) handlePhotoTranscode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.serveRemoteImage(w, r.WithContext(context.WithValue(r.Context(), explicitPhotoURLKey{}, true)), resizeTMDBURL(u.String(), width))
-}
-
-func (s *Server) serveTranscodedDiscoveryPoster(w http.ResponseWriter, r *http.Request, key frontend.RatingKey, kind, lang string, width int) {
-	r = r.Clone(r.Context())
-	effective := r.URL.Query()
-	effective.Set("width", strconv.Itoa(width))
-	r.URL.RawQuery = effective.Encode()
-	s.serveDiscoveryPoster(w, r, key, kind, lang)
 }
 
 var liveChannelLogoRe = regexp.MustCompile(`^/livetv/channels/([^/]+)/logo\.(?:svg|png)$`)
@@ -644,21 +628,15 @@ func photoQueryValue(q url.Values, name string) string {
 	return vs[len(vs)-1]
 }
 
-// Honor explicit Android formats through the shared, byte-bounded variant
-// cache. Authorization remains in the source handler, before cache lookup.
-func (s *Server) androidPhotoFormat(r *http.Request, data []byte, ct string) ([]byte, string, error) {
-	return s.svc().images.RasterFormat(r.Context(), data, ct, androidPhotoOutputFormat(r), s.now())
-}
-
 func androidPhotoOutputFormat(r *http.Request) string {
-	if !plexAndroidClient(FromContext(r.Context())) || r.URL.Path != "/photo/:/transcode" {
+	if !plexAndroidClient(FromContext(r.Context())) {
 		return ""
 	}
 	format := strings.ToLower(photoQueryValue(r.URL.Query(), "format"))
 	if format == "jpg" {
 		format = "jpeg"
 	}
-	if format == "jpeg" || format == "png" {
+	if format == "jpeg" || format == "png" || format == "webp" {
 		return format
 	}
 	return ""

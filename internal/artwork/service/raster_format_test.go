@@ -96,7 +96,7 @@ func TestRasterFormatSharesByteBudgetAndDoesNotCacheErrors(t *testing.T) {
 	now := time.Now()
 	ctx := context.Background()
 	source := formatSource(t, 20, 30, color.NRGBA{B: 200, A: 255})
-	encoded, _, err := encodeRasterFormat(source, "jpeg")
+	encoded, _, err := NewRemoteCache(0, nil).RasterFormat(ctx, source, "image/png", "jpeg", now)
 	if err != nil {
 		t.Fatal(err)
 	}

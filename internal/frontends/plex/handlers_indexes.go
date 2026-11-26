@@ -148,10 +148,19 @@ func (s *Server) serveIndexFrame(w http.ResponseWriter, r *http.Request, partID 
 		writeHTTPError(w, http.StatusNotFound)
 		return
 	}
-	setArtworkHeaders(w.Header(), "image/jpeg")
+	data, ct, err := s.transformPhoto(r, frame, "image/jpeg")
+	if err != nil {
+		writeHTTPError(w, http.StatusBadGateway)
+		return
+	}
+	setArtworkHeaders(w.Header(), ct)
 	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Content-Length", strconv.Itoa(len(data)))
+	w.Header().Add("Vary", "X-Plex-Product")
 	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write(frame)
+	if r.Method != http.MethodHead {
+		_, _ = w.Write(data)
+	}
 }
 
 // indexPart resolves a virtual part to the active session for this viewer,
