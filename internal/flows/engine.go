@@ -423,11 +423,6 @@ func (e *Engine) ReloadFlows(ctx context.Context) error {
 		}
 	}
 
-	e.mu.Lock()
-	e.enabledFlows = enabled
-	e.flowsByID = byID
-	e.mu.Unlock()
-
 	e.rateMu.Lock()
 	for id := range e.rateWindows {
 		if _, exists := byID[id]; !exists {
@@ -440,6 +435,12 @@ func (e *Engine) ReloadFlows(ctx context.Context) error {
 		}
 	}
 	e.rateMu.Unlock()
+
+	// Workers can update byID through e.flowsByID once it is published.
+	e.mu.Lock()
+	e.enabledFlows = enabled
+	e.flowsByID = byID
+	e.mu.Unlock()
 	return nil
 }
 
