@@ -69,9 +69,13 @@ func (i *instance) writePlaylists(w http.ResponseWriter, r *http.Request, viewer
 
 func (i *instance) playlistDTO(playlist frontend.Playlist) map[string]any {
 	id := ids.RatingKeyGUID(playlist.Key)
+	mediaType := "Video"
+	if playlist.Audio {
+		mediaType = "Audio"
+	}
 	item := map[string]any{
 		"Id": id, "Name": playlist.Title, "Type": "Playlist", "IsFolder": true,
-		"ChildCount": len(playlist.Items), "MediaType": "Video", "Overview": "",
+		"ChildCount": len(playlist.Items), "MediaType": mediaType, "Overview": "",
 		"ServerId": i.info.ID, "SortName": playlist.Title, "CanDelete": !playlist.Smart,
 		"CanDownload": false, "ProviderIds": map[string]string{},
 	}
@@ -79,7 +83,7 @@ func (i *instance) playlistDTO(playlist frontend.Playlist) map[string]any {
 		i.jellyfinCollectionFolder(item, id)
 		item["Type"] = "Playlist"
 		item["ChildCount"] = len(playlist.Items)
-		item["MediaType"] = "Video"
+		item["MediaType"] = mediaType
 		item["CanDelete"] = !playlist.Smart
 		delete(item, "CollectionType")
 	}
@@ -88,7 +92,7 @@ func (i *instance) playlistDTO(playlist frontend.Playlist) map[string]any {
 		item["Type"] = "Playlist"
 		item["IsFolder"] = true
 		item["ChildCount"] = len(playlist.Items)
-		item["MediaType"] = "Video"
+		item["MediaType"] = mediaType
 	}
 	return item
 }

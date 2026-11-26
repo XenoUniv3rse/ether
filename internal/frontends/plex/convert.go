@@ -377,6 +377,15 @@ func (s *Server) metadataInto(ctx context.Context, pr *Request, t *frontend.Titl
 		m.LibrarySectionTitle = sec.Title
 	}
 
+	if m.Type == "playlist" {
+		m.Key = "/playlists/" + m.RatingKey + "/items"
+		m.PlaylistType = "audio"
+		m.Smart = model.Ptr(false)
+		m.LeafCount = model.Ptr(t.ChildCount)
+		m.Composite = m.Thumb
+		return
+	}
+
 	switch t.Type {
 	case frontend.TypeMovie:
 		m.Slug = ov.Slug

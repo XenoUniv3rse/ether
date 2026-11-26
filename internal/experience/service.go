@@ -1180,12 +1180,13 @@ func (s *Service) Item(ctx context.Context, req frontend.ItemRequest) (frontend.
 		if err != nil || p == nil || p.UserID != v.ID || p.Key != req.Key {
 			return frontend.ItemDetail{}, core.ErrNotFound
 		}
-		visible, _, err := s.visiblePlaylistIndexes(ctx, v, p.Items)
+		titles, err := s.loadVisiblePlaylistTitles(ctx, v, p.Items)
 		if err != nil {
 			return frontend.ItemDetail{}, err
 		}
 		copy := *p
-		copy.Items = visible
+		copy.Items, _ = playlistVisibleEntries(p.Items, titles)
+		copy.Audio = audioPlaylist(copy.Items, titles)
 		copy.ItemIDs = nil
 		return frontend.ItemDetail{Playlist: &copy}, nil
 	}

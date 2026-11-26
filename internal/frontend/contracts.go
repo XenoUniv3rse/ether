@@ -74,6 +74,7 @@ type View struct {
 	Tabs        []ViewTab       `json:"tabs,omitempty"`
 	Sorts       []string        `json:"sorts,omitempty"`
 	Facets      []ViewFacet     `json:"facets,omitempty"`
+	ListLevels  []string        `json:"-"`
 }
 
 // EffectiveExperience is the library experience apps should present the view
@@ -469,6 +470,9 @@ type ItemQuery struct {
 	// ChildScanLimit bounds work for a stored plugin subtree probe. If the
 	// subtree cannot be read within this window, the probe returns no items.
 	ChildScanLimit int
+	// PluginScanLimit bounds the candidate window when viewer policy requires
+	// filtering a plugin library outside SQL.
+	PluginScanLimit int
 }
 
 // Continuation distinguishes a known next page from exhaustion and a

@@ -68,11 +68,11 @@ func (s *Server) playlistListingMetadata(ctx context.Context, pl *frontend.Playl
 			st, hasState = loaded, true
 		}
 	}
-	return s.playlistListingMetadataWithState(ctx, pl, st, hasState)
+	return s.playlistListingMetadataWithState(ctx, pl, s.playlistType(ctx, pl), st, hasState)
 }
 
-func (s *Server) playlistListingMetadataWithState(ctx context.Context, pl *frontend.Playlist, st frontend.WatchStatus, hasState bool) model.Metadata {
-	md := s.playlistMetadata(ctx, pl)
+func (s *Server) playlistListingMetadataWithState(ctx context.Context, pl *frontend.Playlist, playlistType string, st frontend.WatchStatus, hasState bool) model.Metadata {
+	md := s.playlistMetadataOfType(ctx, pl, playlistType)
 	md.ViewCount = 1
 	md.LastViewedAt = md.AddedAt
 	if hasState && (!st.UpdatedAt.IsZero() || st.ViewCount > 0 || !st.LastViewedAt.IsZero()) {
@@ -151,39 +151,54 @@ func (s *Server) writePlaylistListing(w http.ResponseWriter, r *http.Request) {
 		mc.Meta = playlistMeta(r)
 	}
 	var rows []model.Metadata
+	allowedType := func(typ string) bool {
+		return q.Get("playlistType") == "" || slices.Contains(strings.Split(q.Get("playlistType"), ","), typ)
+	}
+	allowedKind := !q.Has("type") || q.Get("type") == "15" || q.Get("type") == "-1"
+	titleContains := func(title string) bool {
+		return strings.Contains(strings.ToLower(title), strings.ToLower(q.Get("title")))
+	}
 	if s.playlists() != nil && pr.User != nil {
 		pls, err := s.playlists().List(ctx, pr.User.ID)
 		if err != nil {
 			s.writeErr(w, r, err)
 			return
 		}
-		// A sectionID filter keeps playlists with an entry the named
-		// sections list, resolved for every entry at once.
+		// Resolve explicit playlist members in batches for section and type filters.
+		var keys []frontend.RatingKey
+		var playlistKeys []frontend.RatingKey
+		for i := range pls {
+			if pls[i].UserID == pr.User.ID {
+				keys = append(keys, pls[i].Items...)
+				playlistKeys = append(playlistKeys, pls[i].Key)
+			}
+		}
+		pluginTitles := s.playlistPluginTitles(ctx, keys)
 		var entrySecs map[frontend.RatingKey]Section
 		if section := q.Get("sectionID"); section != "" {
-			var keys []frontend.RatingKey
-			for i := range pls {
-				if pls[i].UserID == pr.User.ID {
-					keys = append(keys, pls[i].Items...)
-				}
-			}
-			entrySecs = s.keySections(withPreferredSections(ctx, sectionIDList(section)...), keys)
+			entrySecs = s.playlistEntrySections(withPreferredSections(ctx, sectionIDList(section)...), keys, pluginTitles)
+		}
+		tracks := s.playlistTrackTypes(pluginTitles)
+		var states map[frontend.RatingKey]frontend.WatchStatus
+		if len(playlistKeys) > 0 && s.state() != nil {
+			states, _ = s.state().GetMany(ctx, pr.User.ID, playlistKeys)
 		}
 		for i := range pls {
 			pl := &pls[i]
 			if pl.UserID != pr.User.ID {
 				continue
 			}
-			if pt := q.Get("playlistType"); pt != "" && !strings.Contains(","+pt+",", ",video,") {
-				continue
+			typ := playlistMembershipType(pl.Items, tracks)
+			if smartAudioSection(pl.SmartURI) != 0 {
+				typ = "audio"
 			}
-			if q.Has("type") && q.Get("type") != "15" && q.Get("type") != "-1" {
+			if !allowedKind || !allowedType(typ) {
 				continue
 			}
 			if q.Get("smart") == "1" && !pl.Smart || q.Get("smart") == "0" && pl.Smart {
 				continue
 			}
-			if title := q.Get("title"); title != "" && !strings.Contains(strings.ToLower(pl.Title), strings.ToLower(title)) {
+			if !titleContains(pl.Title) {
 				continue
 			}
 			if section := q.Get("sectionID"); section != "" {
@@ -205,7 +220,30 @@ func (s *Server) writePlaylistListing(w http.ResponseWriter, r *http.Request) {
 					continue
 				}
 			}
-			rows = append(rows, s.playlistListingMetadata(ctx, pl))
+			st, hasState := states[pl.Key]
+			rows = append(rows, s.playlistListingMetadataWithState(ctx, pl, typ, st, hasState))
+		}
+	}
+	if allowedKind && allowedType("audio") && q.Get("smart") != "1" {
+		sections := sectionIDList(q.Get("sectionID"))
+		for _, sec := range s.userSections(pr.User) {
+			if string(sec.Type) != plexBaseArtist || q.Get("sectionID") != "" && !slices.Contains(sections, sec.ID) {
+				continue
+			}
+			for _, level := range sec.ListLevels {
+				page, err := s.exp().LibraryItems(ctx, pr.User, plexDevice(pr), sec.IDString(), frontend.ItemQuery{
+					Level: level, Limit: maxExpand, NoTotal: true, SuppressExpand: true, PluginScanLimit: maxExpand,
+				})
+				if err != nil {
+					s.writeErr(w, r, err)
+					return
+				}
+				for _, title := range page.Items {
+					if kindTypeForBase(plexBaseArtist, string(title.Type), &title) == "playlist" && titleContains(title.Title) {
+						rows = append(rows, s.metadata(ctx, pr, &title, renderOpts{storedOnly: true}))
+					}
+				}
+			}
 		}
 	}
 	key, dir := parseSortParam(q.Get("sort"))
@@ -287,10 +325,11 @@ func playlistItemsMeta(r *http.Request, types map[frontend.MediaType]bool) *mode
 // playlistRows is one page of a stored playlist's items: the window's
 // rendered rows, and the totals the container reports for every item.
 type playlistRows struct {
-	rows        []model.Metadata
-	total, lo   int
-	durationSec int64 // the sum of every item's duration in whole seconds
-	types       map[frontend.MediaType]bool
+	rows         []model.Metadata
+	total, lo    int
+	durationSec  int64 // the sum of every item's duration in whole seconds
+	types        map[frontend.MediaType]bool
+	playlistType string
 }
 
 // playlistItemRows lists a playlist's items and renders only the page the
@@ -311,8 +350,9 @@ func (s *Server) playlistItemRows(ctx context.Context, pr *Request, pl *frontend
 	}
 	types := map[frontend.MediaType]bool{}
 	for _, t := range titles {
-		types[t.Type] = true
-		if t.Type == frontend.TypeEpisode {
+		typ := frontend.MediaType(s.plexTypeFor(&t))
+		types[typ] = true
+		if typ == frontend.TypeEpisode {
 			types[frontend.TypeSeason] = true
 			types[frontend.TypeShow] = true
 		}
@@ -326,7 +366,8 @@ func (s *Server) playlistItemRows(ctx context.Context, pr *Request, pl *frontend
 		if unknown {
 			continue
 		}
-		if t.Type == frontend.TypeEpisode && (want == frontend.TypeShow || want == frontend.TypeSeason) {
+		typ := frontend.MediaType(s.plexTypeFor(&t))
+		if typ == frontend.TypeEpisode && (want == frontend.TypeShow || want == frontend.TypeSeason) {
 			key := t.ShowKey
 			if want == frontend.TypeSeason {
 				key = titleParent(&t)
@@ -338,7 +379,7 @@ func (s *Server) playlistItemRows(ctx context.Context, pr *Request, pl *frontend
 			if parent, err := s.metadataTitle(ctx, pr, key); err == nil {
 				selected = append(selected, *parent)
 			}
-		} else if want == "" || want == t.Type {
+		} else if want == "" || want == typ {
 			selected = append(selected, t)
 		}
 	}
@@ -350,7 +391,9 @@ func (s *Server) playlistItemRows(ctx context.Context, pr *Request, pl *frontend
 		case "sort", "limit", "type", "includeMeta", "X-Plex-Container-Start", "X-Plex-Container-Size":
 			continue
 		}
-		filterQuery[key] = vals
+		if !queryParamIgnored(key) {
+			filterQuery[key] = vals
+		}
 	}
 	if len(filterQuery) > 0 && len(selected) > 0 {
 		allowed := map[frontend.RatingKey]bool{}
@@ -399,7 +442,11 @@ func (s *Server) playlistItemRows(ctx context.Context, pr *Request, pl *frontend
 			}
 		}
 	}
-	out := playlistRows{total: len(selected), types: types}
+	playlistType := "video"
+	if len(types) == 1 && types[plexBaseTrack] {
+		playlistType = "audio"
+	}
+	out := playlistRows{total: len(selected), types: types, playlistType: playlistType}
 	lo, hi := pr.window(len(selected))
 	out.lo = lo
 	page := selected[lo:hi]

@@ -95,6 +95,7 @@ type Title struct {
 	KindLevel     string    `json:"kindLevel,omitempty"`
 	LibraryID     LibraryID `json:"-"`
 	ItemIndex     int       `json:"-"`
+	OrderedList   bool      `json:"-"` // plugin level with explicit ordered membership
 	PluginAddedAt int64     `json:"-"`
 	LandscapeCard bool      `json:"-"`
 	DateDisplay   string    `json:"-"`

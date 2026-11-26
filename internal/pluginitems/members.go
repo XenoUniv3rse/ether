@@ -3,6 +3,7 @@ package pluginitems
 import (
 	"context"
 	"database/sql"
+	"strings"
 
 	"github.com/braedonsaunders/ether/internal/core"
 	"github.com/braedonsaunders/ether/internal/store"
@@ -89,6 +90,43 @@ WHERE plugin_item_members.member_ref <> excluded.member_ref`, string(ref), membe
 	return err
 }
 
+// CountMembersMany counts the stored members of explicit lists in batches.
+func (s *Service) CountMembersMany(ctx context.Context, refs []core.ItemRef) (map[core.ItemRef]int, error) {
+	counts := make(map[core.ItemRef]int, len(refs))
+	const chunkSize = 250
+	for start := 0; start < len(refs); start += chunkSize {
+		chunk := refs[start:min(start+chunkSize, len(refs))]
+		args := make([]any, len(chunk))
+		for i, ref := range chunk {
+			args[i] = string(ref)
+		}
+		params := strings.Repeat("?,", len(args)-1) + "?"
+		rows, err := s.db.QueryContext(ctx, `
+			SELECT m.item_ref, COUNT(*) FROM plugin_item_members m
+			JOIN plugin_items i ON i.item_ref = m.member_ref
+			WHERE m.item_ref IN (`+params+`)
+			GROUP BY m.item_ref`, args...)
+		if err != nil {
+			return nil, err
+		}
+		for rows.Next() {
+			var ref core.ItemRef
+			var n int
+			if err := rows.Scan(&ref, &n); err != nil {
+				rows.Close()
+				return nil, err
+			}
+			counts[ref] = n
+		}
+		err = rows.Err()
+		rows.Close()
+		if err != nil {
+			return nil, err
+		}
+	}
+	return counts, nil
+}
+
 // MembersPage lists a list item's stored members in order from offset, at
 // most limit, and how many members it names. Members not stored (yet) are
 // skipped; the count is of named members.
@@ -122,10 +160,14 @@ func (s *Service) MembersPage(ctx context.Context, listRef core.ItemRef, offset,
 	if err != nil {
 		return nil, 0, err
 	}
+	items, err := s.fetchItemsByRefsWithArt(ctx, refs)
+	if err != nil {
+		return nil, 0, err
+	}
 	out := make([]core.KindItem, 0, len(refs))
 	for _, ref := range refs {
-		if it, _, err := s.GetByRef(ctx, ref); err == nil {
-			out = append(out, it)
+		if item, ok := items[ref]; ok {
+			out = append(out, item)
 		}
 	}
 	return out, total, nil

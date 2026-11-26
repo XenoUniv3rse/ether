@@ -106,6 +106,10 @@ func (s *Server) expandKey(ctx context.Context, pr *Request, k frontend.RatingKe
 		if t == nil || !s.canSeePluginTitle(pr.User, t) {
 			return nil, frontend.ErrNotFound
 		}
+		if s.plexTypeFor(t) == "playlist" {
+			tracks, err := s.pluginPlaylistTracks(ctx, pr, k)
+			return titleKeys(tracks), err
+		}
 		base, _ := s.kindSectionBaseForTitle(t)
 		excludeVideo := base == plexBaseArtist || (t.MediaClass != "" && t.MediaClass != frontend.MediaClassVideo)
 		var titles []frontend.Title
@@ -145,6 +149,9 @@ func (s *Server) expandKey(ctx context.Context, pr *Request, k frontend.RatingKe
 
 // smartSectionURI keeps only a local section query, without client credentials.
 func (s *Server) smartSectionURI(u *frontend.User, uri string) (string, error) {
+	if !s.playlistItemURI(uri) {
+		return "", frontend.ErrNotFound
+	}
 	p, err := uriPath(uri)
 	if err != nil {
 		return "", err
@@ -164,7 +171,18 @@ func (s *Server) smartSectionURI(u *frontend.User, uri string) (string, error) {
 		return "", err
 	}
 	t := typeFromParam(q.Get("type"))
-	if t != "" && t != sec.Type && !(sec.Type == frontend.TypeShow && (t == frontend.TypeSeason || t == frontend.TypeEpisode)) {
+	audio := sec.PluginID != "" && string(sec.Type) == plexBaseArtist
+	if audio {
+		if q.Has("type") && t != plexBaseTrack {
+			return "", frontend.ErrBadPlaylist
+		}
+		if _, err := smartAudioQuery(sec, q); err != nil {
+			return "", err
+		}
+	} else if sec.PluginID != "" {
+		return "", frontend.ErrBadPlaylist
+	}
+	if !audio && t != "" && t != sec.Type && !(sec.Type == frontend.TypeShow && (t == frontend.TypeSeason || t == frontend.TypeEpisode)) {
 		return "", frontend.ErrNotFound
 	}
 	var safe []string
@@ -180,6 +198,9 @@ func (s *Server) smartSectionURI(u *frontend.User, uri string) (string, error) {
 		if pair != "" {
 			safe = append(safe, pair)
 		}
+	}
+	if audio && !q.Has("type") {
+		safe = append(safe, "type="+strconv.Itoa(typeNumTrack))
 	}
 	return path + "?" + strings.Join(safe, "&"), nil
 }
@@ -224,6 +245,15 @@ func (s *Server) smartPlaylistRequest(ctx context.Context, pr *Request, uri stri
 }
 
 func (s *Server) smartPlaylistBrowse(ctx context.Context, pr *Request, uri string) ([]frontend.Title, int, int, error) {
+	if id := smartAudioSection(uri); id != 0 {
+		sec, ok := s.sectionByID(id)
+		if !ok || sec.PluginID == "" || string(sec.Type) != plexBaseArtist || !s.canSeeSection(pr.User, id) {
+			return nil, 0, 0, frontend.ErrNotFound
+		}
+		_, raw, _ := strings.Cut(uri, "?")
+		q, _ := url.ParseQuery(raw)
+		return s.smartAudioBrowse(ctx, pr, sec, q)
+	}
 	br, err := s.smartPlaylistRequest(ctx, pr, uri)
 	if err != nil {
 		return nil, 0, 0, err
@@ -335,6 +365,16 @@ func (s *Server) expandURI(ctx context.Context, pr *Request, uri string) ([]fron
 		if err != nil {
 			return nil, err
 		}
+		if k.IsPluginKey() {
+			if _, err := s.pluginPlaylistTitle(ctx, pr, k); err != nil {
+				return nil, err
+			}
+			tracks, err := s.pluginPlaylistTracks(ctx, pr, k)
+			return titleKeys(tracks), err
+		}
+		if k.Kind() != frontend.KindPlaylist {
+			return nil, frontend.ErrNotFound
+		}
 		return s.expandKey(ctx, pr, k)
 	case reSectionPath.MatchString(path):
 		m := reSectionPath.FindStringSubmatch(path)
@@ -430,6 +470,10 @@ func (s *Server) playlist(ctx context.Context, u *frontend.User, k frontend.Rati
 }
 
 func (s *Server) playlistMetadata(ctx context.Context, pl *frontend.Playlist, omitState ...bool) model.Metadata {
+	return s.playlistMetadataOfType(ctx, pl, s.playlistType(ctx, pl), omitState...)
+}
+
+func (s *Server) playlistMetadataOfType(ctx context.Context, pl *frontend.Playlist, playlistType string, omitState ...bool) model.Metadata {
 	rk := pl.Key.String()
 	count := len(pl.Items)
 	if pl.SmartURI != "" {
@@ -451,7 +495,7 @@ func (s *Server) playlistMetadata(ctx context.Context, pl *frontend.Playlist, om
 		Title:        pl.Title,
 		Summary:      pl.Summary,
 		Smart:        model.Ptr(pl.Smart),
-		PlaylistType: "video",
+		PlaylistType: playlistType,
 		Composite:    "/playlists/" + rk + "/composite/" + strconv.FormatInt(stamp, 10),
 		LeafCount:    model.Ptr(count),
 		AddedAt:      unixOrZero(pl.AddedAt),
@@ -531,16 +575,14 @@ func (s *Server) handlePlaylistCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	title := q.Get("title")
-	// Ether has video catalogue sections only. Refuse unsupported smart media
-	// domains before attempting to interpret a section query.
-	if mediaType != "video" && q.Get("smart") == "1" {
+	if mediaType == "photo" {
 		writeHTTPError(w, http.StatusBadRequest)
 		return
 	}
 	if q.Get("smart") == "1" {
 		uri, err := s.smartSectionURI(pr.User, q.Get("uri"))
 		store, ok := s.playlists().(frontend.SmartPlaylists)
-		if err != nil || !ok {
+		if err != nil || !ok || (mediaType == "audio") != (smartAudioSection(uri) != 0) {
 			writeHTTPError(w, http.StatusBadRequest)
 			return
 		}
@@ -556,10 +598,9 @@ func (s *Server) handlePlaylistCreate(w http.ResponseWriter, r *http.Request) {
 	var keys []frontend.RatingKey
 	if uri := q.Get("uri"); uri != "" {
 		// Unresolvable sources are valid empty playlist creations.
-		if strings.HasPrefix(uri, "server://"+s.identity().MachineIdentifier+"/") || strings.HasPrefix(uri, "library://") {
+		if s.playlistItemURI(uri) {
 			keys, _ = s.resolveURI(ctx, pr, uri)
 		}
-
 	} else if pqID, err := strconv.ParseInt(q.Get("playQueueID"), 10, 64); err == nil {
 		if pq, ok := s.queues.Get(pqID, pr.User.ID); ok {
 			for _, it := range pq.Items {
@@ -567,15 +608,10 @@ func (s *Server) handlePlaylistCreate(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	// Unresolvable non-video sources cannot name an Ether section. Give the
-	// client a graceful refusal rather than create a mislabeled video list.
-	if mediaType != "video" && len(keys) == 0 {
+	playlistType := playlistMembershipType(keys, s.playlistTrackKeys(ctx, keys))
+	if mediaType != playlistType {
 		writeHTTPError(w, http.StatusBadRequest)
 		return
-	}
-	mismatch := mediaType != "video" && len(keys) > 0
-	if mismatch {
-		keys = nil
 	}
 	pl, err := s.playlists().Create(ctx, pr.User.ID, title, keys)
 	if err != nil {
@@ -583,12 +619,13 @@ func (s *Server) handlePlaylistCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.notifyPlaylistLifecycle(pl, true)
-	if mismatch {
-		writeHTTPError(w, http.StatusBadRequest)
-		return
-	}
-	mc := &model.MediaContainer{Size: 1, Metadata: []model.Metadata{s.playlistMetadata(ctx, pl, true)}}
+	mc := &model.MediaContainer{Size: 1, Metadata: []model.Metadata{s.playlistMetadataOfType(ctx, pl, playlistType, true)}}
 	s.write(w, r, mc)
+}
+
+func (s *Server) playlistItemURI(uri string) bool {
+	return strings.HasPrefix(uri, "server://"+s.identity().MachineIdentifier+"/") ||
+		strings.HasPrefix(uri, "library://") || strings.HasPrefix(uri, "/")
 }
 
 func (s *Server) playlistFromParam(w http.ResponseWriter, r *http.Request) (*frontend.Playlist, bool) {
@@ -609,6 +646,18 @@ func (s *Server) playlistFromParam(w http.ResponseWriter, r *http.Request) (*fro
 }
 
 func (s *Server) handlePlaylist(w http.ResponseWriter, r *http.Request) {
+	if key, err := keyParam(r); err == nil && key.IsPluginKey() {
+		ctx := r.Context()
+		pr := FromContext(ctx)
+		title, err := s.pluginPlaylistTitle(ctx, pr, key)
+		if err != nil {
+			s.writeErr(w, r, err)
+			return
+		}
+		md := s.metadata(ctx, pr, title, renderOpts{storedOnly: true})
+		s.write(w, r, &model.MediaContainer{Size: 1, Metadata: []model.Metadata{md}})
+		return
+	}
 	pl, ok := s.playlistFromParam(w, r)
 	if !ok {
 		return
@@ -674,6 +723,15 @@ func (s *Server) handlePlaylistDelete(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handlePlaylistItems(w http.ResponseWriter, r *http.Request) {
+	if key, err := keyParam(r); err == nil && key.IsPluginKey() {
+		title, err := s.pluginPlaylistTitle(r.Context(), FromContext(r.Context()), key)
+		if err != nil {
+			s.writeErr(w, r, err)
+			return
+		}
+		s.writePluginPlaylistItems(w, r, title)
+		return
+	}
 	pl, ok := s.playlistFromParam(w, r)
 	if !ok {
 		return
@@ -687,17 +745,21 @@ func (s *Server) handlePlaylistItems(w http.ResponseWriter, r *http.Request) {
 	pr := FromContext(ctx)
 	// Ordinary smart reads keep counting and pagination inside the catalogue.
 	// Parent projections need a bounded membership expansion below.
-	if pl.SmartURI != "" && s.smartPlaylistSQLAvailable() && (q.Get("type") != "" && q.Get("type") != "-1" || playlistHasItemFilters(q)) {
+	audioSmart := smartAudioSection(pl.SmartURI) != 0
+	if pl.SmartURI != "" && !audioSmart && s.smartPlaylistSQLAvailable() && (q.Get("type") != "" && q.Get("type") != "-1" || playlistHasItemFilters(q)) {
 		s.writeSmartPlaylistItems(w, r, pl)
 		return
 	}
-	if pl.SmartURI != "" && (q.Get("type") == "" || q.Get("type") == "-1") && !playlistHasItemFilters(q) {
+	if audioSmart || pl.SmartURI != "" && (q.Get("type") == "" || q.Get("type") == "-1") && !playlistHasItemFilters(q) {
 		titles, total, offset, err := s.smartPlaylistBrowse(ctx, pr, pl.SmartURI)
 		if err != nil {
 			s.writeErr(w, r, err)
 			return
 		}
-		mc := &model.MediaContainer{RatingKey: pl.Key.String(), Title1: pl.Title, PlaylistType: "video", Smart: model.Ptr(true), LeafCount: model.Ptr(total)}
+		if audioSmart && q.Has("type") && q.Get("type") != "-1" && q.Get("type") != strconv.Itoa(typeNumTrack) {
+			titles, total = nil, 0
+		}
+		mc := &model.MediaContainer{RatingKey: pl.Key.String(), Title1: pl.Title, PlaylistType: s.playlistType(ctx, pl), Smart: model.Ptr(true), LeafCount: model.Ptr(total)}
 		storedOnly := len(titles) > 0 && titles[0].Type == frontend.TypeEpisode
 		sqlAvailability, _ := s.catalog().(frontend.SQLAvailabilityCatalog)
 		mc.Metadata = s.renderTitles(ctx, pr, titles, renderOpts{media: true, storedOnly: storedOnly, availabilityInSQL: sqlAvailability != nil && sqlAvailability.BrowseAvailabilityInSQL()})
@@ -710,8 +772,9 @@ func (s *Server) handlePlaylistItems(w http.ResponseWriter, r *http.Request) {
 		if q.Get("includeMeta") == "1" {
 			types := map[frontend.MediaType]bool{}
 			for _, t := range titles {
-				types[t.Type] = true
-				if t.Type == frontend.TypeEpisode {
+				typ := frontend.MediaType(s.plexTypeFor(&t))
+				types[typ] = true
+				if typ == frontend.TypeEpisode {
 					types[frontend.TypeShow] = true
 					types[frontend.TypeSeason] = true
 				}
@@ -731,7 +794,7 @@ func (s *Server) handlePlaylistItems(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	total := page.total
-	mc := &model.MediaContainer{RatingKey: pl.Key.String(), Key: "/playlists/" + pl.Key.String() + "/items", Title1: pl.Title, PlaylistType: "video", Smart: model.Ptr(pl.Smart), LeafCount: model.Ptr(total), Metadata: page.rows}
+	mc := &model.MediaContainer{RatingKey: pl.Key.String(), Key: "/playlists/" + pl.Key.String() + "/items", Title1: pl.Title, PlaylistType: page.playlistType, Smart: model.Ptr(pl.Smart), LeafCount: model.Ptr(total), Metadata: page.rows}
 	if total > 0 {
 		mc.Composite = "/playlists/" + pl.Key.String() + "/composite/" + strconv.FormatInt(unixOrZero(pl.UpdatedAt), 10)
 	}
@@ -754,7 +817,7 @@ func (s *Server) handlePlaylistAdd(w http.ResponseWriter, r *http.Request) {
 	if pl.SmartURI != "" {
 		uri, err := s.smartSectionURI(FromContext(r.Context()).User, r.URL.Query().Get("uri"))
 		store, ok := s.playlists().(frontend.PlaylistEditor)
-		if err != nil || !ok {
+		if err != nil || !ok || (smartAudioSection(pl.SmartURI) != 0) != (smartAudioSection(uri) != 0) {
 			writeHTTPError(w, http.StatusBadRequest)
 			return
 		}
@@ -770,7 +833,7 @@ func (s *Server) handlePlaylistAdd(w http.ResponseWriter, r *http.Request) {
 	pr := FromContext(ctx)
 	uri := r.URL.Query().Get("uri")
 	var keys []frontend.RatingKey
-	if strings.HasPrefix(uri, "server://"+s.identity().MachineIdentifier+"/") || strings.HasPrefix(uri, "library://") {
+	if s.playlistItemURI(uri) {
 		keys, _ = s.resolveURI(ctx, pr, uri)
 	}
 	if store, ok := s.playlists().(frontend.PlaylistMutator); ok {

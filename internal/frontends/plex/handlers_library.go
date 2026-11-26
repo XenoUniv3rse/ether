@@ -37,6 +37,8 @@ func typeNumber(t frontend.MediaType) int {
 		return typeNumEpisode
 	case frontend.MediaType(plexBaseArtist):
 		return typeNumArtist
+	case frontend.MediaType(plexBaseTrack):
+		return typeNumTrack
 	case frontend.MediaType(plexBasePhoto):
 		return typeNumPhoto
 	}
