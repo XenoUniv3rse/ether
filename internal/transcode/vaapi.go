@@ -62,6 +62,12 @@ func vaapiDevice(hw core.HWAccel) string {
 }
 
 func (s runSpec) vaapiToneMethod(v *core.StreamInfo, pic picturePlan) vaapiToneMethod {
+	if s.vaapiToneDecision != nil {
+		return s.vaapiToneDecision.method
+	}
+	if s.Features.vaapiMeasured && vaapiCPUToneFilter(s.Features, pic.tenBit) != "" {
+		return ""
+	}
 	if s.Features.vaapiToneMap == nil || s.Accel.NoGPUTonemap {
 		return ""
 	}
@@ -183,18 +189,10 @@ func probeVAAPIToneMap(d hwDetector, hw core.HWAccel, ffprobe, dir string, key v
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer cancel()
 	sample, out := filepath.Join(tmp, "hdr.mkv"), filepath.Join(tmp, "sdr.mkv")
-	transfer, x265HDR := "smpte2084", ":hdr10=1:master-display=G(13250,34500)B(7500,3000)R(34000,16000)WP(15635,16450)L(10000000,50):max-cll=1000,400"
-	if key.source == rangeHLG {
-		transfer, x265HDR = "arib-std-b67", ""
-	}
-	rng := "tv"
-	if key.full {
-		rng = "pc"
-	}
-	src := "testsrc2=size=320x240:rate=24:duration=1,format=yuv420p10le,setparams=range=" + rng + ":color_primaries=bt2020:colorspace=bt2020nc:color_trc=" + transfer
+	src := vaapiHDRSample(key, 320, 240, 1)
 	prefix := []string{"-hide_banner", "-nostdin", "-loglevel", "error", "-xerror", "-abort_on", "empty_output"}
 	args := append(append([]string{}, prefix...), "-f", "lavfi", "-i", src, "-c:v", "libx265", "-preset", "ultrafast",
-		"-x265-params", "pools=none:frame-threads=1:log-level=error"+x265HDR, sample)
+		"-x265-params", "pools=none:frame-threads=1:log-level=error"+vaapiHDRMetadata(key.source), sample)
 	if err := d.testRun(ctx, args); err != nil {
 		d.log.Debug("VAAPI HDR probe sample failed", "err", err)
 		return ""
@@ -226,4 +224,22 @@ func probeVAAPIToneMap(d hwDetector, hw core.HWAccel, ffprobe, dir string, key v
 		}
 	}
 	return ""
+}
+
+func vaapiHDRSample(key vaapiToneKey, w, h, seconds int) string {
+	transfer, rng := "smpte2084", "tv"
+	if key.source == rangeHLG {
+		transfer = "arib-std-b67"
+	}
+	if key.full {
+		rng = "pc"
+	}
+	return fmt.Sprintf("testsrc2=size=%dx%d:rate=30:duration=%d,format=yuv420p10le,setparams=range=%s:color_primaries=bt2020:colorspace=bt2020nc:color_trc=%s", w, h, seconds, rng, transfer)
+}
+
+func vaapiHDRMetadata(source string) string {
+	if source == rangeHLG {
+		return ""
+	}
+	return ":hdr10=1:master-display=G(13250,34500)B(7500,3000)R(34000,16000)WP(15635,16450)L(10000000,50):max-cll=1000,400"
 }

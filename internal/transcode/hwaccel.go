@@ -30,9 +30,10 @@ const DefaultVAAPIDevice = "/dev/dri/renderD128"
 
 // features is what the ffmpeg build offers: encoders, hwaccels, filters.
 type features struct {
-	decode       decodeCapabilities
-	qsvToneMap   qsvToneMapper
-	vaapiToneMap func(vaapiToneKey) vaapiToneMethod
+	decode        decodeCapabilities
+	qsvToneMap    qsvToneMapper
+	vaapiToneMap  func(vaapiToneKey) vaapiToneMethod
+	vaapiMeasured bool
 	// A one-frame device probe confirms the installed CUDA filter accepts
 	// P010 output. A filter name or version alone does not establish this.
 	cudaP010ToneMap bool
@@ -275,10 +276,11 @@ func vaapiRCProbeArgs(encoder, device, rcMode string, main10, scale bool) []stri
 
 // hwDetector confirms hardware encoders.
 type hwDetector struct {
-	runner Runner
-	ffmpeg string
-	goos   string
-	log    *slog.Logger
+	runner     Runner
+	ffmpeg     string
+	goos       string
+	log        *slog.Logger
+	background bool
 	// statDevice reports whether a VAAPI device node exists.
 	statDevice    func(string) bool
 	renderDevices func() []string
@@ -293,7 +295,7 @@ func (d hwDetector) testRun(ctx context.Context, args []string) error {
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
 	var stderr bytes.Buffer
-	err := d.runner.Run(ctx, Command{Path: d.ffmpeg, Args: args, Stderr: &stderr})
+	err := d.runner.Run(ctx, Command{Path: d.ffmpeg, Args: args, Stderr: &stderr, Background: d.background})
 	if err != nil {
 		msg := strings.TrimSpace(stderr.String())
 		if len(msg) > 300 {

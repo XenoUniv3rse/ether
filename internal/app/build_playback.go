@@ -21,6 +21,13 @@ import (
 	"github.com/braedonsaunders/ether/internal/transcode"
 )
 
+func (a *App) transcodeCPUPercent() float64 {
+	if a.load != nil {
+		return a.load.CPUPercent()
+	}
+	return 0
+}
+
 func (a *App) buildPlayback(ctx context.Context, cfg config.Config) error {
 	log := a.log
 	dataDir := a.opts.DataDir
@@ -221,7 +228,7 @@ func (a *App) buildEncoder(ctx context.Context, cfg config.Config) error {
 	tracePlayback := os.Getenv("ETHER_TRACE_PLAYBACK") == "1"
 	a.tracePlayback = tracePlayback
 	if a.opts.FixtureTranscoder == nil {
-		a.transcoder, err = transcode.New(cfg.Transcode, log, transcode.WithPauseRetention(cfg.Server.PausedStreamRetention()), transcode.WithEvents(a.eventBus), transcode.WithDecodeStore(a.db), transcode.WithRuntimeDir(filepath.Join(dataDir, "tools")), transcode.WithTracePlayback(tracePlayback), transcode.WithOnChange(a.publishDashboard), transcode.WithSubtitleOpener(a.openTranscodeSubtitle), transcode.WithEncoderObserver(func(sessionID string, started bool, excerpt string) {
+		a.transcoder, err = transcode.New(cfg.Transcode, log, transcode.WithPauseRetention(cfg.Server.PausedStreamRetention()), transcode.WithEvents(a.eventBus), transcode.WithDecodeStore(a.db), transcode.WithRuntimeDir(filepath.Join(dataDir, "tools")), transcode.WithTracePlayback(tracePlayback), transcode.WithCPULoad(a.transcodeCPUPercent), transcode.WithOnChange(a.publishDashboard), transcode.WithSubtitleOpener(a.openTranscodeSubtitle), transcode.WithEncoderObserver(func(sessionID string, started bool, excerpt string) {
 			if !started && excerpt != "" {
 				a.observePlayTimeline(playback.TimelineEvent{
 					SessionID: a.resolvePlayLogSession(sessionID),

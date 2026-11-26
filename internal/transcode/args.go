@@ -16,13 +16,14 @@ import (
 
 // runSpec is everything needed to build one ffmpeg HLS run.
 type runSpec struct {
-	ArchiveInput   bool
-	ArchiveTrim    time.Duration
-	ArchiveRetuned bool
-	waitDecode     bool // only argv construction may spend the bounded admission budget
-	SoftwareDecode bool // keep hardware encode after a decoder init failure
-	HealTimestamps bool
-	CopyOrigin     bool // retain audio from the measured video presentation origin
+	vaapiToneDecision *VAAPIToneDecision
+	ArchiveInput      bool
+	ArchiveTrim       time.Duration
+	ArchiveRetuned    bool
+	waitDecode        bool // only argv construction may spend the bounded admission budget
+	SoftwareDecode    bool // keep hardware encode after a decoder init failure
+	HealTimestamps    bool
+	CopyOrigin        bool // retain audio from the measured video presentation origin
 	// RampClock keeps every run of a fast-start session on the steady clock.
 	RampClock bool
 	// AuthoredTimeline preserves adaptive sessions with a separate clock.
@@ -1962,6 +1963,10 @@ func planVideo(s runSpec, v *core.StreamInfo) videoPlan {
 	d := s.Decision
 	var p videoPlan
 	if v == nil || d.VideoCopy {
+		return p
+	}
+	if s.vaapiToneDecision != nil && s.vaapiToneDecision.Route == "unavailable" {
+		p.err = &GraphError{Message: toneMapUnavailableMessage()}
 		return p
 	}
 	codec := d.VideoCodec

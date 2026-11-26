@@ -57,6 +57,7 @@ type httpSession struct {
 	life *encoderLifetime
 	log  *slog.Logger
 
+	vaapiToneLogged sync.Once
 	mu              sync.Mutex
 	proc            Process
 	pipe            *io.PipeReader
@@ -602,12 +603,22 @@ func (s *httpSession) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if probe.HasSeekFrom && spec.Input == probe.Input && spec.Start == probe.Start {
 			spec.SeekFrom, spec.HasSeekFrom = probe.SeekFrom, true
 		}
+		finishTone := s.m.admitVAAPITone(&spec)
+		if spec.vaapiToneDecision != nil && spec.vaapiToneDecision.Route == "unavailable" {
+			s.mu.Unlock()
+			s.m.recordVAAPITone(spec.vaapiToneDecision, s.log, &s.vaapiToneLogged)
+			http.Error(w, "transcode failed", http.StatusServiceUnavailable)
+			return
+		}
 		pr, pw := io.Pipe()
 		stderr := newTailBuffer(40)
 		cmd := Command{Path: s.m.ffmpeg, Args: buildArgs(spec), Stdout: pw, Stderr: &lineWriter{fn: stderr.add}}
 		encoding := s.req.Info.Video() != nil && !s.req.Decision.VideoCopy
 		work, err := s.life.runWork(encoding)
 		if err != nil {
+			if finishTone != nil {
+				finishTone(nil)
+			}
 			s.mu.Unlock()
 			_ = pw.Close()
 			_ = pr.Close()
@@ -618,6 +629,9 @@ func (s *httpSession) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// naturally backpressures them when the client has enough media.
 		cmd.Background = !s.req.LiveInput && !s.req.Decision.EncodesVideo(s.req.Info)
 		proc, err := s.m.runner.Start(cmd)
+		if finishTone != nil {
+			finishTone(proc)
+		}
 		if err != nil {
 			s.mu.Unlock()
 			for _, workItem := range work {
@@ -629,6 +643,7 @@ func (s *httpSession) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "transcode failed", http.StatusInternalServerError)
 			return
 		}
+		s.m.recordVAAPITone(spec.vaapiToneDecision, s.log, &s.vaapiToneLogged)
 		s.life.fenceProcess(proc, work[2])
 		s.proc = proc
 		s.pipe = pr

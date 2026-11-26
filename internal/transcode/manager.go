@@ -43,6 +43,7 @@ var ErrImageSubtitle = errors.New("transcode: bitmap subtitles cannot be convert
 type Option func(*options)
 
 type options struct {
+	cpuLoad        func() float64
 	decodeDB       *sql.DB
 	runtimeDir     string
 	runner         Runner
@@ -136,6 +137,9 @@ func WithRuntimeDir(dir string) Option { return func(o *options) { o.runtimeDir 
 
 // WithDecodeStore persists device decode capability results across restarts.
 func WithDecodeStore(db *sql.DB) Option { return func(o *options) { o.decodeDB = db } }
+
+// WithCPULoad supplies the latest host CPU percentage without triggering sampling.
+func WithCPULoad(f func() float64) Option { return func(o *options) { o.cpuLoad = f } }
 
 // WithRunner replaces the process runner (tests).
 func WithRunner(r Runner) Option { return func(o *options) { o.runner = r } }
@@ -252,6 +256,7 @@ func (m *Manager) stageExternalSubtitles(dir string, info core.MediaInfo, source
 
 // Manager runs ffmpeg for Ether. It implements core.Transcoder.
 type Manager struct {
+	vaapiSpeed   *vaapiSpeedCache
 	textCues     textCueStore
 	slotChanged  chan struct{}
 	slotViewers  list.List
@@ -388,6 +393,10 @@ func New(cfg config.Transcode, logger *slog.Logger, opts ...Option) (*Manager, e
 	qsvTM.db, qsvTM.log, qsvTM.onChange = o.decodeDB, m.log, o.onChange
 	m.feat.qsvToneMap = qsvTM
 	m.feat.vaapiToneMap = newVAAPIToneMapper(detector, m.feat, m.hw, m.ffprobe, m.tempDir)
+	if m.feat.vaapiToneMap != nil {
+		m.feat.vaapiMeasured = true
+		m.vaapiSpeed = newVAAPISpeedCache(m)
+	}
 	m.cleanStale()
 	m.log.Info("ffmpeg features", "ffmpeg", m.ffmpeg, "version", m.version,
 		"filters", featureLine(m.feat), "encoders", encoderLine(m.feat),
@@ -1648,6 +1657,9 @@ func (m *Manager) Close() error {
 		setupDone = m.rtxSetup.done
 	}
 	m.mu.Unlock()
+	if m.vaapiSpeed != nil {
+		m.vaapiSpeed.close()
+	}
 	if cache, ok := m.feat.decode.(*decodeProbeCache); ok {
 		cache.close()
 	}

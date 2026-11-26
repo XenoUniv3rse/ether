@@ -17,7 +17,7 @@ func (a *App) buildPrivateEncoder(cfg config.Config) error {
 		return nil
 	}
 	tc := privateEncoderConfig(cfg, p.settings.Capacity)
-	manager, err := transcode.New(tc, a.log.With("component", "private-encoder"), transcode.WithPauseRetention(cfg.Server.PausedStreamRetention()), transcode.WithDecodeStore(a.db), transcode.WithRuntimeDir(filepath.Join(a.opts.DataDir, "tools")))
+	manager, err := transcode.New(tc, a.log.With("component", "private-encoder"), transcode.WithPauseRetention(cfg.Server.PausedStreamRetention()), transcode.WithDecodeStore(a.db), transcode.WithCPULoad(a.transcodeCPUPercent), transcode.WithRuntimeDir(filepath.Join(a.opts.DataDir, "tools")))
 	if err != nil {
 		return errors.New("private transcode role requires a working encoder")
 	}
