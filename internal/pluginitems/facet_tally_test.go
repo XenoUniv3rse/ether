@@ -417,7 +417,6 @@ func TestMigration17BackfillFromPre17Schema(t *testing.T) {
 		`ALTER TABLE plugin_items DROP COLUMN recording`,
 		`ALTER TABLE plugin_facet_expansions DROP COLUMN decl_hash`,
 		`DROP INDEX plugin_items_presence_pending`,
-		`DROP INDEX plugin_item_fields_present`,
 		`DROP TABLE plugin_item_field_presence`,
 		`ALTER TABLE plugin_items DROP COLUMN presence_counted`,
 		`DELETE FROM schema_migrations WHERE component = 'pluginitems' AND version >= 17`,

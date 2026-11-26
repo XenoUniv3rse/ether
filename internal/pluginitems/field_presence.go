@@ -15,7 +15,6 @@ func init() {
 	store.Register("pluginitems", 25, `
 ALTER TABLE plugin_items ADD COLUMN presence_counted INTEGER NOT NULL DEFAULT 0;
 CREATE INDEX plugin_items_presence_pending ON plugin_items(library_id) WHERE presence_counted = 0;
-CREATE INDEX plugin_item_fields_present ON plugin_item_fields(field, item_ref) WHERE v_text <> '';
 CREATE TABLE plugin_item_field_presence (
 	library_id BIGINT NOT NULL,
 	level TEXT NOT NULL,
