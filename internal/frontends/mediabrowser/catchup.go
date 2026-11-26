@@ -42,9 +42,7 @@ func (i *instance) catchUpDTO(r *http.Request, item frontend.CatchUpItem, creden
 		m["Name"], m["IndexNumber"], m["ParentId"] = frontend.CatchUpLibraryName, 1, m["SeriesId"]
 	}
 	if item.Type == frontend.TypeEpisode {
-		if p.Item.EpisodeTitle != "" {
-			m["Name"] = p.Item.EpisodeTitle
-		}
+		m["Name"] = frontend.CatchUpEpisodeTitle(p)
 		season := frontend.CatchUpGroupGUID(item.SeasonID)
 		m["ParentId"], m["SeasonId"], m["ParentIndexNumber"] = season, season, 1
 		m["MediaType"], m["RunTimeTicks"] = "Video", p.End.Sub(p.Start).Nanoseconds()/100

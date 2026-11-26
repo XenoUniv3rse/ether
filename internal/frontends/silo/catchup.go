@@ -33,8 +33,8 @@ func (i *instance) catchUpCard(r *http.Request, token string, item frontend.Catc
 	p := item.Programme
 	id := frontend.CatchUpGUID(item)
 	name := p.Item.Title
-	if item.Type == frontend.TypeEpisode && p.Item.EpisodeTitle != "" {
-		name = p.Item.EpisodeTitle
+	if item.Type == frontend.TypeEpisode {
+		name = frontend.CatchUpEpisodeTitle(p)
 	}
 	if item.Type == frontend.TypeSeason {
 		name = frontend.CatchUpLibraryName

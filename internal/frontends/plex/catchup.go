@@ -64,15 +64,12 @@ func catchUpMetadata(sec Section, item frontend.CatchUpItem) model.Metadata {
 		md.ParentKey = catchUpMetadataPrefix + item.ShowID
 	case frontend.TypeEpisode:
 		md.SetElement("Video")
-		md.Title = p.Item.Title
-		if p.Item.EpisodeTitle != "" {
-			md.Title = p.Item.EpisodeTitle
-		}
+		md.Title = frontend.CatchUpEpisodeTitle(p)
 		md.ParentTitle, md.GrandparentTitle = frontend.CatchUpLibraryName, p.Item.Title
 		md.ParentRatingKey, md.GrandparentRatingKey = item.SeasonID, item.ShowID
 		md.ParentKey, md.GrandparentKey = catchUpMetadataPrefix+item.SeasonID, catchUpMetadataPrefix+item.ShowID
 		md.ParentIndex = model.Ptr(1)
-		md.OriginallyAvailableAt = p.Start.Format("2006-01-02")
+		md.OriginallyAvailableAt = p.Start.In(time.Local).Format("2006-01-02")
 		md.AddedAt = p.Start.Unix()
 		md.Duration = p.End.Sub(p.Start).Milliseconds()
 		part := "/video/:/transcode/universal/start.m3u8?" + url.Values{"path": {key}}.Encode()
