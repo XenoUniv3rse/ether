@@ -170,7 +170,8 @@ func personalBadge(kind string) bool {
 // pageRowIdentity names a page row that isn't on the page, for the
 // "Not shown right now" list: its hub id, kind, title and source.
 func (e *Engine) pageRowIdentity(ctx context.Context, r *rule, user *core.User, hc core.HubContext, section core.MediaType, pl *pagePlan) (hubID, kind, title, source string) {
-	if r.Derived {
+	// An audience-gated row can coexist with the default hub in a preview.
+	if r.Derived || r.Gate == "audience" {
 		hubID = sectionPrefix(section) + "." + r.Row
 		kind = planRowKind(r.row.Source)
 		title = r.Name

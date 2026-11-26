@@ -103,7 +103,7 @@ func TestAudienceVariantsScheduleAndDevices(t *testing.T) {
 		t.Fatalf("viewer 5 = %v", ids)
 	}
 	got := arrangePage(rows, compilePage(p, true, 7, nil), 7, hc, 8)
-	if ids := pageVisibleIDs(got); len(ids) != 0 || pageHiddenReason(got, "home.popular") != "audience" || pageHiddenReason(got, "home.trending") != "hidden_viewer" {
+	if ids := pageVisibleIDs(got); len(ids) != 0 || pageHiddenReason(got, "home.popular") != "picks_off" || pageHiddenReason(got, "home.trending") != "hidden_viewer" {
 		t.Fatalf("viewer 7 = %v %+v", ids, got)
 	}
 	// Weekend evenings on TV only.
@@ -121,6 +121,58 @@ func TestAudienceVariantsScheduleAndDevices(t *testing.T) {
 	}
 	if ids := pageVisibleIDs(arrangePage(rows, compilePage(p2, true, 1, nil), 1, hubContext(saturday, core.DeviceTV), 8)); !slices.Contains(ids, "home.trending") {
 		t.Fatalf("Saturday TV: %v", ids)
+	}
+}
+
+func TestPersonalContinueWatchingOnlyClaimsItsAudience(t *testing.T) {
+	h := newHarness(t, nil)
+	personal := prow(KindContinue, core.PlacementPinned, 2)
+	personal.Placement.Audience = core.Audience{Mode: core.AudienceOnly, Viewers: []int64{15}}
+	hc := hubContext(testNow, core.DeviceTV)
+	for _, page := range []struct {
+		key                    core.PageKey
+		continueID, trendingID string
+	}{
+		{core.PageHome, "home.continue", "home.trending"},
+		{libPage(1), "movie.inprogress.1", "movie.trending@1"},
+	} {
+		t.Run(string(page.key), func(t *testing.T) {
+			p := rpage(page.key, personal)
+			ctx := withDraftPage(context.Background(), p)
+			rows := []core.HomeRow{
+				pageServedRow(page.trendingID, KindTrending, 8),
+				pageServedRow(page.continueID, KindContinue, 3),
+			}
+			for _, viewer := range []int64{1, 2, 15} {
+				pl := compilePage(p, true, viewer, nil)
+				got := arrangePage(rows, pl, viewer, hc, 8)
+				slot, rowID := 1, ""
+				if viewer == 15 {
+					slot, rowID = 2, personal.ID
+				}
+				if len(got) < slot || got[slot-1].Hidden || got[slot-1].HubID != page.continueID || got[slot-1].RowID != rowID || got[slot-1].Pinned != (viewer == 15) {
+					t.Fatalf("viewer %d: want Continue Watching at slot %d with row ID %q, got %+v", viewer, slot, rowID, got)
+				}
+				if page.key != core.PageHome {
+					continue
+				}
+				user := &core.User{ID: viewer}
+				if !h.e.HomeRowEnabled(ctx, user, hc, page.continueID) {
+					t.Errorf("viewer %d: app-built Continue Watching is disabled", viewer)
+				}
+				if viewer != 15 {
+					preview := h.e.appendAbsentPageRows(ctx, got, pl, user, hc, "", nil)
+					if pageHiddenReason(preview, "home."+personal.ID) != "audience" {
+						t.Errorf("viewer %d: personal row missing from the preview's hidden rows", viewer)
+					}
+				}
+			}
+			shared := prow(KindContinue, core.PlacementShow, 0)
+			p.Rows = append(p.Rows, shared)
+			if r := compilePage(p, true, 1, nil).match(rows[1]); r == nil || r.RowID != shared.ID {
+				t.Fatal("the first in-audience plain row should bind the built-in hub")
+			}
+		})
 	}
 }
 
@@ -201,15 +253,22 @@ func TestPageRowsBuiltForThePageAndScope(t *testing.T) {
 func TestSuppressedEngineRowWhenThePageBuildsItsOwn(t *testing.T) {
 	day := prow(KindTrending, core.PlacementShow, 0)
 	day.Source.Params = map[string]string{"window": "day"}
-	pl := compilePage(rpage(core.PageHome, day), true, 1, nil)
-	if !pl.suppressed(core.HomeRow{HubID: "home.trending", Kind: KindTrending}) {
+	day.Placement.Audience = core.Audience{Mode: core.AudienceOnly, Viewers: []int64{15}}
+	p := rpage(core.PageHome, day)
+	weekly := core.HomeRow{HubID: "home.trending", Kind: KindTrending}
+	pl := compilePage(p, true, 15, nil)
+	if !pl.suppressed(weekly) {
 		t.Fatal("the engine's weekly row should give way to the page's Today row")
 	}
 	if pl.match(core.HomeRow{HubID: "home." + day.ID, Kind: KindTrending}) == nil {
 		t.Fatal("the page's own row must bind")
 	}
-	plain := compilePage(rpage(core.PageHome, prow(KindTrending, core.PlacementShow, 0)), true, 1, nil)
-	if plain.suppressed(core.HomeRow{HubID: "home.trending", Kind: KindTrending}) || plain.match(core.HomeRow{HubID: "home.trending", Kind: KindTrending}) == nil {
+	if other := compilePage(p, true, 1, nil); other.suppressed(weekly) || other.match(weekly) != nil {
+		t.Fatal("the engine's weekly row should use defaults outside the Today row's audience")
+	}
+	p.Rows = append(p.Rows, prow(KindTrending, core.PlacementShow, 0))
+	plain := compilePage(p, true, 1, nil)
+	if plain.suppressed(weekly) || plain.match(weekly) == nil {
 		t.Fatal("a plain row binds the engine's own row")
 	}
 }
