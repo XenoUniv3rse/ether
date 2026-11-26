@@ -850,7 +850,12 @@ func (i *instance) rowWire(r *http.Request, v *frontend.Viewer, token string, ro
 			base["kind"] = "collection"
 			base["targetId"] = colID
 			base["name"] = e.Collection.Title
-			base["itemCount"] = e.Collection.ChildCount
+			// Only the owner's card count is the collection's size; for
+			// other viewers it only proves one visible member, so leave
+			// the optional count out rather than show "1 item".
+			if v != nil && v.IsOwner && e.Collection.ChildCount > 0 {
+				base["itemCount"] = e.Collection.ChildCount
+			}
 			base["artwork"] = colByID[colID]["artwork"]
 		case e.LiveChannel != nil:
 			c := e.LiveChannel
