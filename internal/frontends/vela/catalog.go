@@ -638,6 +638,11 @@ func (i *instance) homeVisit(r *http.Request, v *frontend.Viewer, token string, 
 				if r.Context().Err() != nil {
 					return nil, false, r.Context().Err()
 				}
+				// A stale layout is rebuilt once with a fresh listing; only a
+				// row that still fails after that is left out.
+				if !refresh && (errors.Is(e, frontend.ErrRowViewStale) || errors.Is(e, frontend.ErrNotFound)) {
+					return nil, false, frontend.ErrRowViewStale
+				}
 				logDroppedHomeRow(r, cmp.Or(view.Layout.Present.RowID, view.Key, view.ID), "resolve", e)
 				continue
 			}
