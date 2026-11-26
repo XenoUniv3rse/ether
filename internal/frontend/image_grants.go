@@ -400,3 +400,21 @@ func ProgrammeImageGrant(p LiveProgramme, image Image, credential string, device
 	}
 	return req
 }
+
+// ProgrammeIconURL signs the first available still or poster for an airing
+// on a surface that serves grants at /image/{grant}.
+func ProgrammeIconURL(ctx context.Context, grants ImageGrants, base string, p LiveProgramme, credential string, device Device) string {
+	if base == "" || grants == nil {
+		return ""
+	}
+	for _, image := range p.Images {
+		if image.Kind != ImageStill && image.Kind != ImagePoster {
+			continue
+		}
+		grant, err := grants.Issue(ctx, ProgrammeImageGrant(p, image, credential, device))
+		if err == nil && grant != "" {
+			return base + "/image/" + grant
+		}
+	}
+	return ""
+}

@@ -46,7 +46,7 @@ func adapterStreamSlot(index int, info core.StreamInfo) string {
 		return "external/" + info.ExternalURL
 	}
 	if info.Type == "subtitle" {
-		return frontend.PlexSubtitleSlot(info)
+		return frontend.SubtitleDescriptorSlot(info)
 	}
 	if info.Type == "audio" {
 		raw, _ := json.Marshal([]any{index, info.Type, info.Language, info.Codec, info.Channels, info.Title, info.Forced, info.External, info.ExternalURL})

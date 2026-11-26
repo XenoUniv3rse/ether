@@ -218,19 +218,7 @@ func (i *instance) programmes(r *http.Request, l login, c frontend.LiveChannel, 
 }
 
 func (i *instance) programmeIcon(r *http.Request, l login, p frontend.LiveProgramme) string {
-	base := i.base(r)
-	if base == "" || i.host.ImageGrants == nil {
-		return ""
-	}
-	for _, image := range p.Images {
-		if image.Kind == frontend.ImageStill || image.Kind == frontend.ImagePoster {
-			grant, err := i.host.ImageGrants.Issue(r.Context(), frontend.ProgrammeImageGrant(p, image, l.credential, l.device))
-			if err == nil && grant != "" {
-				return base + "/image/" + grant
-			}
-		}
-	}
-	return ""
+	return frontend.ProgrammeIconURL(r.Context(), i.host.ImageGrants, i.base(r), p, l.credential, l.device)
 }
 
 func (i *instance) epg(w http.ResponseWriter, r *http.Request, l login, action string) {

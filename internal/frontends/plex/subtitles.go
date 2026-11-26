@@ -200,8 +200,15 @@ func (s *Server) burnOnlyShownSubtitle(pr *Request, p *playRequest, info fronten
 	shown, _ := s.playIDs.shownSubtitles(ik, s.now())
 	for i := range shown {
 		want := shown[i]
-		if want.External == st.External && frontend.IsImageSubtitle(want.Codec) == frontend.IsImageSubtitle(st.Codec) && resolveSubtitle(&want, -1, info) == p.subSel {
-			return
+		if want.External == st.External && frontend.IsImageSubtitle(want.Codec) == frontend.IsImageSubtitle(st.Codec) {
+			// Shown tracks carry source indexes. Recover the position so a
+			// viewer who picked the second identical subtitle can burn it.
+			pos := slices.IndexFunc(info.Streams, func(track frontend.StreamInfo) bool {
+				return track.Type == "subtitle" && sameShownSubtitle(want, track)
+			})
+			if resolveSubtitle(&want, pos, info) == p.subSel {
+				return
+			}
 		}
 		// The client shows a cached sidecar of this language selected, and
 		// the probe found the same language embedded (cached sidecars omit

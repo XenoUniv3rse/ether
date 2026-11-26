@@ -24,9 +24,14 @@ func (s *Server) subtitleSelectionEcho(pr *Request, key frontend.RatingKey, trac
 	}
 	shown, _ := s.playIDs.shownSubtitles(s.playIdentityFor(pr, key), s.now())
 	for _, selected := range shown {
-		if selected.Index == track.Index && selected.External == track.External && selected.ExternalURL == track.ExternalURL && selected.Language == track.Language && selected.Codec == track.Codec && selected.Forced == track.Forced && selected.Title == track.Title {
+		if sameShownSubtitle(selected, *track) {
 			return true
 		}
 	}
 	return false
+}
+
+func sameShownSubtitle(a, b frontend.StreamInfo) bool {
+	return a.Index == b.Index && a.External == b.External && a.ExternalURL == b.ExternalURL &&
+		a.Language == b.Language && a.Codec == b.Codec && a.Forced == b.Forced && a.Title == b.Title
 }

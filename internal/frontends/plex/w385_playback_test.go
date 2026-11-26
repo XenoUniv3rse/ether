@@ -238,7 +238,11 @@ func TestMetadataSubtitleIDsDistinguishIdenticalTracks(t *testing.T) {
 	if decision.Code != http.StatusOK || !strings.Contains(selectedTag(subtitleTags(decision.Body.String())), `id="`+ids[1]+`"`) {
 		t.Fatalf("decision did not select the second subtitle, HTTP %d", decision.Code)
 	}
-	if got := trackIDs(f.request(t, http.MethodGet, detail, headers)); got != ids {
+	after := f.request(t, http.MethodGet, detail, headers)
+	if got := trackIDs(after); got != ids {
 		t.Fatalf("subtitle IDs changed after the decision: %q -> %q", ids, got)
+	}
+	if got := streamID(selectedTag(subtitleTags(after.Body.String()))); got != ids[1] {
+		t.Fatalf("metadata selected subtitle %q after the decision, want %q", got, ids[1])
 	}
 }
