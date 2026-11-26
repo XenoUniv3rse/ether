@@ -3,6 +3,7 @@ package images
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"image"
 	_ "image/gif"
@@ -41,11 +42,23 @@ func RasterVariant(ctx context.Context, cache VariantCache, data []byte, content
 	render := func(context.Context) ([]byte, string, error) {
 		return transformRaster(data, contentType, transform)
 	}
+	var out []byte
+	var outType string
+	var err error
 	if cache == nil {
-		return render(ctx)
+		out, outType, err = render(ctx)
+	} else {
+		key := fmt.Sprintf("raster-transform-v2/%d/%d/%s/%t/%t/%d", transform.Width, transform.Height, transform.Format, transform.Fit, transform.Blur, transform.Quality)
+		out, outType, err = cache.Variant(ctx, data, contentType, key, render)
 	}
-	key := fmt.Sprintf("raster-transform-v2/%d/%d/%s/%t/%t/%d", transform.Width, transform.Height, transform.Format, transform.Fit, transform.Blur, transform.Quality)
-	return cache.Variant(ctx, data, contentType, key, render)
+	// Fitting only makes a picture smaller. When it fails (an oversized or
+	// undecodable source), the original bytes are still a correct answer,
+	// so serve them rather than an error; a requested format or blur has
+	// no such fallback.
+	if err != nil && transform.Fit && transform.Format == "" && !transform.Blur && !errors.Is(err, context.Canceled) {
+		return data, contentType, nil
+	}
+	return out, outType, err
 }
 
 func transformRaster(data []byte, contentType string, transform RasterTransform) ([]byte, string, error) {
@@ -70,6 +83,8 @@ func transformRaster(data []byte, contentType string, transform RasterTransform)
 		if transform.Height > 0 {
 			maxHeight = min(maxHeight, transform.Height)
 		}
+		// Fitting stays within the encoder's output limit.
+		maxWidth, maxHeight = min(maxWidth, 4000), min(maxHeight, 4000)
 		if maxWidth == cfg.Width && maxHeight == cfg.Height && transform.Format == "" && !transform.Blur && transform.Quality == 0 {
 			return data, contentType, nil
 		}
