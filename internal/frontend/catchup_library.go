@@ -22,6 +22,9 @@ type CatchUpQuery struct {
 	Parent        string
 	Offset, Limit int
 	Recursive     bool
+	// Search keeps only airings whose title or episode title contains it,
+	// ignoring case, spacing and punctuation.
+	Search string
 }
 
 type CatchUpPage struct {

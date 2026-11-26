@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/braedonsaunders/ether/internal/core"
 	"github.com/braedonsaunders/ether/internal/frontend"
@@ -145,6 +146,7 @@ func (h liveTVHost) catchUpItems(ctx context.Context, u *core.User, q frontend.C
 	limit = min(limit, 1000)
 	now := h.s.clockNow()
 	seen := map[string]bool{}
+	search := catchUpSearchKey(q.Search)
 	_, policy, err := h.s.withPolicy(ctx, u)
 	if err != nil {
 		return out, err
@@ -174,6 +176,9 @@ func (h liveTVHost) catchUpItems(ctx context.Context, u *core.User, q frontend.C
 			if exact != "" && item.ID != exact && (exactGUID == "" || frontend.CatchUpGroupGUID(item.ID) != exactGUID) ||
 				show && item.ShowID != q.Parent && (parent == "" || frontend.CatchUpGroupGUID(item.ShowID) != parent) ||
 				season && item.SeasonID != q.Parent && (parent == "" || frontend.CatchUpGroupGUID(item.SeasonID) != parent) {
+				continue
+			}
+			if search != "" && !strings.Contains(catchUpSearchKey(p.Item.Title+" "+p.Item.EpisodeTitle), search) {
 				continue
 			}
 			if kind != frontend.TypeEpisode {
@@ -366,4 +371,16 @@ func (h liveTVHost) LibraryCatchUpSession(access frontend.SessionAccess, id stri
 		return CatchUpInfo{}, false
 	}
 	return ss.catchUp.info, true
+}
+
+// catchUpSearchKey folds a title or query to lower-case letters and digits,
+// so "world news tonight", "World-News Tonight" and "worldnews" all match.
+func catchUpSearchKey(s string) string {
+	var b strings.Builder
+	for _, r := range strings.ToLower(s) {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
 }
