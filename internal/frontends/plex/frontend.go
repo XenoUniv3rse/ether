@@ -55,6 +55,19 @@ func (f Frontend) HasRetainedServer() bool {
 	return f.state.server != nil && !f.state.server.Closed()
 }
 
+// StopCompanion releases held requests before the HTTP listeners drain.
+func (f Frontend) StopCompanion() {
+	srv := f.Server
+	if f.state != nil && srv == nil {
+		f.state.mu.Lock()
+		srv = f.state.server
+		f.state.mu.Unlock()
+	}
+	if srv != nil {
+		srv.companion.stop()
+	}
+}
+
 // Shutdown closes any retained server and prevents future mounts on this frontend.
 func (f Frontend) Shutdown(context.Context) error {
 	if f.state == nil {
