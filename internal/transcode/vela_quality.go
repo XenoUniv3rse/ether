@@ -8,13 +8,13 @@ import (
 	"github.com/braedonsaunders/ether/internal/core"
 )
 
-// QualitySupport is a snapshot of already-probed local encoder capabilities.
+// QualitySupport is a snapshot of the local encoder and filter inventory.
 // Planning must never probe hardware or start a process.
 type QualitySupport struct{ HEVC, ToneMap, DolbyVision5 bool }
 
 func (m *Manager) QualitySupport() QualitySupport {
 	_, hw := videoEncoder("hevc", m.hw, m.feat)
-	return QualitySupport{HEVC: hw, ToneMap: len(toneMapPaths(m.feat, m.hw)) > 0, DolbyVision5: m.ToneMapsDolbyVisionProfile5()}
+	return QualitySupport{HEVC: hw, ToneMap: len(toneMapPaths(m.feat, m.hw)) > 0 || m.feat.vaapiToneMap != nil, DolbyVision5: m.ToneMapsDolbyVisionProfile5()}
 }
 
 // VelaQualityVariants is an explicit menu, independent of the throughput-drop

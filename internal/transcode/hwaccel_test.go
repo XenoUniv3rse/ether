@@ -45,7 +45,14 @@ func TestParseHWAccelsAndFilters(t *testing.T) {
 
 func detector(fr *fakeRunner, goos string) hwDetector {
 	return hwDetector{runner: fr, ffmpeg: "ffmpeg", goos: goos, log: slog.New(slog.NewTextHandler(io.Discard, nil)),
-		statDevice: func(string) bool { return true }}
+		statDevice:    func(string) bool { return true },
+		renderDevices: func() []string { return []string{DefaultVAAPIDevice} },
+		vendor: func(path string) string {
+			if path == DefaultVAAPIDevice {
+				return "intel"
+			}
+			return "amd"
+		}}
 }
 
 func TestDetectHW(t *testing.T) {
@@ -69,7 +76,7 @@ func TestDetectHW(t *testing.T) {
 		{name: "linux auto: nvenc fails, qsv works", goos: "linux", mode: "auto", fail: []string{"h264_nvenc"},
 			want: core.HWAccel{Name: AccelQSV, Device: DefaultVAAPIDevice, Encoders: []string{"h264_qsv"}, QSVQualityModes: map[string][]string{"h264_qsv": {qsvLA, qsvICQ, qsvVBR}}, QSVBitrateModes: map[string][]string{"h264_qsv": {qsvVBR, qsvICQ, qsvLA}}}},
 		{name: "linux auto: only vaapi works", goos: "linux", mode: "auto", fail: []string{"h264_nvenc", "h264_qsv"}, vaapi: "/dev/dri/renderD129",
-			want: core.HWAccel{Name: AccelVAAPI, Encoders: []string{"h264_vaapi"}, Device: "/dev/dri/renderD129"},
+			want: core.HWAccel{Name: AccelVAAPI, Encoders: []string{"h264_vaapi"}, Device: "/dev/dri/renderD129", NoGPUScale: true},
 			checks: func(t *testing.T, fr *fakeRunner) {
 				last := fr.runCalls[len(fr.runCalls)-1]
 				if argValue(last, "-vaapi_device") != "/dev/dri/renderD129" || !strings.Contains(joined(last), "hwupload") {
@@ -110,7 +117,7 @@ func TestDetectHW(t *testing.T) {
 }
 
 func TestTestEncodeArgs(t *testing.T) {
-	a := testEncodeArgs(AccelVideoToolbox, "h264_videotoolbox", "")
+	a := testEncodeArgs(AccelVideoToolbox, "h264_videotoolbox")
 	mustContain(t, a, "-f lavfi -i testsrc=size=320x240:rate=1 -frames:v 1", "-c:v h264_videotoolbox -f null -")
 }
 
@@ -233,18 +240,17 @@ func TestDetectVAAPIScaleProbe(t *testing.T) {
 // support QVBR RC mode (supported modes: CQP)". Startup probes the supported
 // rate-control modes and records the best working mode for quality and
 // explicit-bitrate runs.
-func TestDetectVAAPIRCModeProbeAndTonemapProbe(t *testing.T) {
+func TestDetectVAAPIRCModeProbe(t *testing.T) {
 	f := testFeatures()
 	f.filters = map[string]bool{"scale_vaapi": true, "tonemap_vaapi": true}
 
-	t.Run("CQP-only driver selects CQP and disables unsupported tonemap_vaapi", func(t *testing.T) {
+	t.Run("CQP-only driver selects CQP", func(t *testing.T) {
 		fr := &fakeRunner{failEncode: map[string]bool{
-			"h264_nvenc":    true,
-			"h264_qsv":      true,
-			"rc:QVBR":       true,
-			"rc:VBR":        true,
-			"rc:CBR":        true,
-			"tonemap_vaapi": true,
+			"h264_nvenc": true,
+			"h264_qsv":   true,
+			"rc:QVBR":    true,
+			"rc:VBR":     true,
+			"rc:CBR":     true,
 		}}
 		got := detector(fr, "linux").detect(context.Background(), "auto", "/dev/dri/renderD128", f)
 		if got.Name != AccelVAAPI {
@@ -255,9 +261,6 @@ func TestDetectVAAPIRCModeProbeAndTonemapProbe(t *testing.T) {
 		}
 		if got.NoGPUScale {
 			t.Fatalf("NoGPUScale = true, want false")
-		}
-		if !got.NoGPUTonemap {
-			t.Fatalf("NoGPUTonemap = false, want true when tonemap_vaapi fails")
 		}
 	})
 
@@ -270,9 +273,6 @@ func TestDetectVAAPIRCModeProbeAndTonemapProbe(t *testing.T) {
 		got := detector(fr, "linux").detect(context.Background(), "auto", "/dev/dri/renderD128", f)
 		if got.VAAPIQualityRC["h264_vaapi"] != "VBR" || got.VAAPIBitrateRC["h264_vaapi"] != "VBR" {
 			t.Fatalf("VAAPI RC modes = quality:%v bitrate:%v, want VBR/VBR", got.VAAPIQualityRC, got.VAAPIBitrateRC)
-		}
-		if got.NoGPUTonemap {
-			t.Fatalf("NoGPUTonemap = true, want false")
 		}
 	})
 }

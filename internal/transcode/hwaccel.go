@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -24,13 +25,14 @@ const (
 	AccelVAAPI        = "vaapi"
 )
 
-// DefaultVAAPIDevice is the render node used when none is configured.
+// DefaultVAAPIDevice is used by specs without an assigned VAAPI render node.
 const DefaultVAAPIDevice = "/dev/dri/renderD128"
 
 // features is what the ffmpeg build offers: encoders, hwaccels, filters.
 type features struct {
-	decode     decodeCapabilities
-	qsvToneMap qsvToneMapper
+	decode       decodeCapabilities
+	qsvToneMap   qsvToneMapper
+	vaapiToneMap func(vaapiToneKey) vaapiToneMethod
 	// A one-frame device probe confirms the installed CUDA filter accepts
 	// P010 output. A filter name or version alone does not establish this.
 	cudaP010ToneMap bool
@@ -224,13 +226,10 @@ var accelCandidates = []accelCandidate{
 
 // testEncodeArgs is a 1-frame lavfi encode that proves an encoder works on
 // this machine (drivers present, device usable).
-func testEncodeArgs(accel, encoder, device string) []string {
+func testEncodeArgs(accel, encoder string) []string {
 	args := []string{"-hide_banner", "-nostdin", "-loglevel", "error"}
 	vf := ""
 	switch accel {
-	case AccelVAAPI:
-		args = append(args, "-vaapi_device", device)
-		vf = "format=nv12,hwupload"
 	case AccelQSV:
 		vf = "format=nv12"
 	case AccelNVENC, AccelVideoToolbox:
@@ -243,14 +242,24 @@ func testEncodeArgs(accel, encoder, device string) []string {
 	return append(args, "-c:v", encoder, "-f", "null", "-")
 }
 
-// vaapiRCProbeArgs is a 1-frame lavfi encode that probes a specific VAAPI
+// vaapiRCProbeArgs is a short lavfi encode that probes a specific VAAPI
 // rate-control mode (QVBR, VBR, CBR, CQP). Some drivers (for example Debian's
 // free iHD driver or LP-only EncSliceLP entrypoints) support CQP only and
 // reject QVBR/VBR with "Driver does not support QVBR RC mode".
-func vaapiRCProbeArgs(encoder, device, rcMode string) []string {
-	args := []string{"-hide_banner", "-nostdin", "-loglevel", "error", "-vaapi_device", device,
-		"-f", "lavfi", "-i", "testsrc=size=320x240:rate=1", "-frames:v", "1",
-		"-vf", "format=nv12,hwupload", "-c:v", encoder}
+func vaapiRCProbeArgs(encoder, device, rcMode string, main10, scale bool) []string {
+	pixel, profile := "nv12", "high"
+	if main10 {
+		pixel, profile = "p010le", "main10"
+	} else if encoder == "hevc_vaapi" {
+		profile = "main"
+	}
+	vf := "format=" + pixel + ",hwupload"
+	if scale {
+		vf += "," + vaapiScale(160, 120, pixel)
+	}
+	args := []string{"-hide_banner", "-nostdin", "-loglevel", "error", "-xerror", "-abort_on", "empty_output", "-vaapi_device", device,
+		"-f", "lavfi", "-i", "testsrc2=size=320x240:rate=24", "-frames:v", "4",
+		"-vf", vf, "-c:v", encoder, "-profile:v", profile}
 	switch rcMode {
 	case "QVBR":
 		args = append(args, "-rc_mode", "QVBR", "-global_quality", "23", "-b:v", "1000k", "-maxrate", "1500k", "-bufsize", "2000k")
@@ -264,26 +273,6 @@ func vaapiRCProbeArgs(encoder, device, rcMode string) []string {
 	return append(args, "-f", "null", "-")
 }
 
-// vaapiScaleArgs is a 1-frame encode through scale_vaapi, the GPU scaler
-// real VAAPI sessions use. Some drivers encode but reject video
-// processing ("the requested VAProfile is not supported"), which the
-// encoder-only test cannot see.
-func vaapiScaleArgs(encoder, device string) []string {
-	return []string{"-hide_banner", "-nostdin", "-loglevel", "error", "-vaapi_device", device,
-		"-f", "lavfi", "-i", "testsrc=size=320x240:rate=1", "-frames:v", "1",
-		"-vf", "format=nv12,hwupload,scale_vaapi=w=160:h=120:format=nv12", "-c:v", encoder, "-f", "null", "-"}
-}
-
-// vaapiTonemapArgs is a 1-frame encode through tonemap_vaapi + scale_vaapi,
-// the GPU HDR tone-mapping pipeline. Some VAAPI drivers support scale_vaapi
-// but lack the HDR tone-mapping VPP kernel or OpenCL/Compute path.
-func vaapiTonemapArgs(encoder, device string) []string {
-	return []string{"-hide_banner", "-nostdin", "-loglevel", "error", "-vaapi_device", device,
-		"-f", "lavfi", "-i", "testsrc=size=320x240:rate=1", "-frames:v", "1",
-		"-vf", "format=p010le,setparams=color_primaries=bt2020:color_trc=smpte2084:colorspace=bt2020nc,hwupload,tonemap_vaapi=format=nv12:t=bt709:m=bt709:p=bt709,scale_vaapi=w=160:h=120:format=nv12",
-		"-c:v", encoder, "-f", "null", "-"}
-}
-
 // hwDetector confirms hardware encoders.
 type hwDetector struct {
 	runner Runner
@@ -291,11 +280,13 @@ type hwDetector struct {
 	goos   string
 	log    *slog.Logger
 	// statDevice reports whether a VAAPI device node exists.
-	statDevice func(string) bool
+	statDevice    func(string) bool
+	renderDevices func() []string
+	vendor        func(string) string
 }
 
-func (d hwDetector) testEncode(ctx context.Context, accel, encoder, device string) error {
-	return d.testRun(ctx, testEncodeArgs(accel, encoder, device))
+func (d hwDetector) testEncode(ctx context.Context, accel, encoder string) error {
+	return d.testRun(ctx, testEncodeArgs(accel, encoder))
 }
 
 func (d hwDetector) testRun(ctx context.Context, args []string) error {
@@ -316,10 +307,10 @@ func (d hwDetector) testRun(ctx context.Context, args []string) error {
 // probeVAAPIRCModes checks which rate-control modes (QVBR, VBR, CBR, CQP)
 // a VAAPI encoder supports on device, returning the best mode for quality
 // (VBV reservoir) runs and the best mode for explicit bitrate runs.
-func (d hwDetector) probeVAAPIRCModes(ctx context.Context, encoder, device string) (qualityRC, bitrateRC string) {
+func (d hwDetector) probeVAAPIRCModes(ctx context.Context, encoder, device string, main10 bool) (qualityRC, bitrateRC string) {
 	supported := map[string]bool{}
 	for _, rc := range []string{"QVBR", "VBR", "CBR", "CQP"} {
-		if err := d.testRun(ctx, vaapiRCProbeArgs(encoder, device, rc)); err == nil {
+		if err := d.testRun(ctx, vaapiRCProbeArgs(encoder, device, rc, main10, false)); err == nil {
 			supported[rc] = true
 		}
 	}
@@ -356,8 +347,20 @@ func (d hwDetector) detect(ctx context.Context, mode, vaapiDevice string, f feat
 		d.log.Info("hardware acceleration disabled by config")
 		return cpu
 	}
+	devices := []string{vaapiDevice}
 	if vaapiDevice == "" {
-		vaapiDevice = DefaultVAAPIDevice
+		devices = nil
+		if d.goos == "linux" {
+			if d.renderDevices != nil {
+				devices = d.renderDevices()
+			} else {
+				devices, _ = filepath.Glob("/dev/dri/renderD*")
+			}
+		}
+	}
+	vendor := d.vendor
+	if vendor == nil {
+		vendor = GPUVendor
 	}
 	for _, c := range accelCandidates {
 		if mode == "auto" && !contains(c.platform, d.goos) {
@@ -372,63 +375,43 @@ func (d hwDetector) detect(ctx context.Context, mode, vaapiDevice string, f feat
 			}
 			continue
 		}
-		device := ""
-		if c.name == AccelVAAPI {
-			device = vaapiDevice
-			if d.statDevice != nil && !d.statDevice(device) {
-				d.log.Info("VAAPI device missing", "device", device)
+		if c.name == AccelQSV {
+			if d.goos != "linux" {
+				if hw := d.detectQSV(ctx, "", f); len(hw.Encoders) > 0 {
+					return hw
+				}
 				continue
 			}
-		}
-		if c.name == AccelQSV {
-			if d.goos == "linux" {
-				device = vaapiDevice
-			}
-			hw := d.detectQSV(ctx, device, f)
-			if len(hw.Encoders) > 0 {
-				return hw
+			for _, node := range devices {
+				if vendor(node) != "intel" {
+					continue
+				}
+				if hw := d.detectQSV(ctx, node, f); len(hw.Encoders) > 0 {
+					return hw
+				}
 			}
 			continue
 		}
-		if err := d.testEncode(ctx, c.name, c.h264, device); err != nil {
+		if c.name == AccelVAAPI {
+			for _, node := range devices {
+				if d.statDevice != nil && !d.statDevice(node) {
+					continue
+				}
+				if hw := d.detectVAAPI(ctx, node, c, f); len(hw.Encoders) > 0 {
+					d.log.Info("hardware encoder detected", "hwaccel", hw.Name, "encoders", hw.Encoders, "device", hw.Device, "gpuScale", !hw.NoGPUScale)
+					return hw
+				}
+			}
+			continue
+		}
+		if err := d.testEncode(ctx, c.name, c.h264); err != nil {
 			d.log.Info("hardware encoder test failed", "hwaccel", c.name, "encoder", c.h264, "err", err)
 			continue
 		}
-		hw := core.HWAccel{Name: c.name, Encoders: []string{c.h264}, Device: device}
-		if c.name == AccelVAAPI {
-			if qRC, bRC := d.probeVAAPIRCModes(ctx, c.h264, device); qRC != "" && (qRC != "QVBR" || bRC != "VBR") {
-				hw.VAAPIQualityRC = map[string]string{c.h264: qRC}
-				hw.VAAPIBitrateRC = map[string]string{c.h264: bRC}
-				d.log.Info("VAAPI rate control mode selected", "encoder", c.h264, "qualityRC", qRC, "bitrateRC", bRC)
-			}
-			if f.hasFilter("scale_vaapi") {
-				if err := d.testRun(ctx, vaapiScaleArgs(c.h264, device)); err != nil {
-					hw.NoGPUScale = true
-					d.log.Info("VAAPI video processing unavailable; scaling in software before the hardware encoder", "device", device, "err", err)
-				} else if f.hasFilter("tonemap_vaapi") {
-					if err := d.testRun(ctx, vaapiTonemapArgs(c.h264, device)); err != nil {
-						hw.NoGPUTonemap = true
-						d.log.Info("VAAPI HDR tone-mapping unavailable; tone-mapping in software", "device", device, "err", err)
-					}
-				}
-			}
-		}
+		hw := core.HWAccel{Name: c.name, Encoders: []string{c.h264}}
 		if f.hasEncoder(c.hevc) {
-			if err := d.testEncode(ctx, c.name, c.hevc, device); err == nil {
+			if err := d.testEncode(ctx, c.name, c.hevc); err == nil {
 				hw.Encoders = append(hw.Encoders, c.hevc)
-				if c.name == AccelVAAPI {
-					if qRC, bRC := d.probeVAAPIRCModes(ctx, c.hevc, device); qRC != "" && (qRC != "QVBR" || bRC != "VBR") {
-						if hw.VAAPIQualityRC == nil {
-							hw.VAAPIQualityRC = map[string]string{}
-						}
-						if hw.VAAPIBitrateRC == nil {
-							hw.VAAPIBitrateRC = map[string]string{}
-						}
-						hw.VAAPIQualityRC[c.hevc] = qRC
-						hw.VAAPIBitrateRC[c.hevc] = bRC
-						d.log.Info("VAAPI rate control mode selected", "encoder", c.hevc, "qualityRC", qRC, "bitrateRC", bRC)
-					}
-				}
 			} else {
 				d.log.Info("hardware HEVC encoder test failed", "hwaccel", c.name, "encoder", c.hevc, "err", err)
 			}
@@ -442,6 +425,48 @@ func (d hwDetector) detect(ctx context.Context, mode, vaapiDevice string, f feat
 		d.log.Info("no hardware encoder found; using CPU", "encoders", cpu.Encoders)
 	}
 	return cpu
+}
+
+const vaapiMain10 = "hevc_vaapi/main10"
+
+func (d hwDetector) detectVAAPI(ctx context.Context, device string, c accelCandidate, f features) core.HWAccel {
+	quality, bitrate := d.probeVAAPIRCModes(ctx, c.h264, device, false)
+	if quality == "" {
+		d.log.Debug("VAAPI H.264 rate control unavailable", "device", device)
+		return core.HWAccel{}
+	}
+	hw := core.HWAccel{Name: AccelVAAPI, Device: device, Encoders: []string{c.h264}}
+	recordRC := func(key, quality, bitrate string) {
+		if hw.VAAPIQualityRC == nil {
+			hw.VAAPIQualityRC = map[string]string{}
+			hw.VAAPIBitrateRC = map[string]string{}
+		}
+		hw.VAAPIQualityRC[key], hw.VAAPIBitrateRC[key] = quality, bitrate
+		d.log.Debug("VAAPI rate control selected", "device", device, "profile", key, "qualityMode", quality, "bitrateMode", bitrate)
+	}
+	if quality != "QVBR" || bitrate != "VBR" {
+		recordRC(c.h264, quality, bitrate)
+	}
+	hw.NoGPUScale = !f.hasFilter("scale_vaapi") || d.testRun(ctx, vaapiRCProbeArgs(c.h264, device, bitrate, false, true)) != nil
+	if !hw.NoGPUScale && f.hasFilter("deinterlace_vaapi") && f.hasFilter("idet") {
+		hw.VAAPIDeinterlace = d.probeVAAPIDeinterlace(ctx, device)
+		d.log.Debug("VAAPI deinterlace probe", "device", device, "available", hw.VAAPIDeinterlace)
+	}
+	if f.hasEncoder(c.hevc) {
+		if quality, bitrate := d.probeVAAPIRCModes(ctx, c.hevc, device, false); quality != "" {
+			hw.Encoders = append(hw.Encoders, c.hevc)
+			if quality != "QVBR" || bitrate != "VBR" {
+				recordRC(c.hevc, quality, bitrate)
+			}
+			if quality, bitrate := d.probeVAAPIRCModes(ctx, c.hevc, device, true); quality != "" {
+				recordRC(vaapiMain10, quality, bitrate)
+				if !hw.NoGPUScale {
+					hw.VAAPIMain10Scale = d.testRun(ctx, vaapiRCProbeArgs(c.hevc, device, bitrate, true, true)) == nil
+				}
+			}
+		}
+	}
+	return hw
 }
 
 func deviceExists(p string) bool {

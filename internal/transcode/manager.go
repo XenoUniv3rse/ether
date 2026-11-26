@@ -387,11 +387,12 @@ func New(cfg config.Transcode, logger *slog.Logger, opts ...Option) (*Manager, e
 	qsvTM := newQSVToneMapCache(m.runner, m.ffmpeg, m.ffprobe, m.tempDir, m.feat.encoders)
 	qsvTM.db, qsvTM.log, qsvTM.onChange = o.decodeDB, m.log, o.onChange
 	m.feat.qsvToneMap = qsvTM
+	m.feat.vaapiToneMap = newVAAPIToneMapper(detector, m.feat, m.hw, m.ffprobe, m.tempDir)
 	m.cleanStale()
 	m.log.Info("ffmpeg features", "ffmpeg", m.ffmpeg, "version", m.version,
 		"filters", featureLine(m.feat), "encoders", encoderLine(m.feat),
 		"filtersProbed", m.feat.filtersProbed, "probe", probeState(m.feat))
-	if notice := m.limitation(); notice != "" {
+	if notice := m.limitation(m.feat.vaapiToneMap != nil); notice != "" {
 		m.log.Warn("transcoder limitation", "notice", notice)
 	}
 	m.log.Info("transcoder ready", "ffmpeg", m.ffmpeg, "ffprobe", m.ffprobe, "version", m.version,
@@ -517,6 +518,11 @@ type Capability struct {
 	Colour          []string `json:"colour,omitempty"`
 }
 
+func (m *Manager) vaapiHardwareToneMap() bool {
+	return m.hw.Name == AccelVAAPI && !m.hw.NoGPUTonemap && m.feat.vaapiToneMap != nil &&
+		m.feat.vaapiToneMap(vaapiToneKey{source: rangeHDR10, encoder: "h264_vaapi"}) != ""
+}
+
 // Capability reports probed filters and any owner-visible limitation.
 func (m *Manager) Capability() Capability {
 	if m == nil {
@@ -530,7 +536,7 @@ func (m *Manager) Capability() Capability {
 		avail := false
 		switch m.hw.Name {
 		case AccelVAAPI:
-			avail = !m.hw.NoGPUTonemap && m.feat.hasFilter("tonemap_vaapi")
+			avail = m.vaapiHardwareToneMap()
 		case AccelVideoToolbox:
 			avail = m.feat.hasFilter("tonemap_videotoolbox") || m.feat.hasFilter("scale_vt")
 		case AccelNVENC:
@@ -542,12 +548,17 @@ func (m *Manager) Capability() Capability {
 		}
 		hwToneMap = &avail
 	}
+	paths := toneMapPaths(m.feat, m.hw)
+	vaapiHDR := m.hw.Name == AccelVAAPI && hwToneMap != nil && *hwToneMap
+	if vaapiHDR {
+		paths = append(paths, "vaapi")
+	}
 	return Capability{
-		Notice:          m.limitation(),
+		Notice:          m.limitation(vaapiHDR),
 		PlaybackError:   playback,
 		FiltersProbed:   m.feat.filtersProbed,
 		HardwareToneMap: hwToneMap,
-		ToneMap:         toneMapPaths(m.feat, m.hw),
+		ToneMap:         paths,
 		Colour:          colourPaths(m.feat),
 	}
 }
@@ -566,7 +577,7 @@ func (m *Manager) noteGraphError(err error) {
 	}
 }
 
-func (m *Manager) limitation() string {
+func (m *Manager) limitation(vaapiHDR bool) string {
 	if m == nil {
 		return ""
 	}
@@ -578,7 +589,7 @@ func (m *Manager) limitation() string {
 		}
 		parts = append(parts, detail)
 	}
-	if len(toneMapPaths(m.feat, m.hw)) == 0 && !qsvToneMapPendingCandidate(m.feat, m.hw) {
+	if !vaapiHDR && len(toneMapPaths(m.feat, m.hw)) == 0 && !qsvToneMapPendingCandidate(m.feat, m.hw) {
 		parts = append(parts, toneMapUnavailableMessage())
 	}
 	if !m.feat.hasFilter("zscale") && !m.feat.hasFilter("colorspace") {

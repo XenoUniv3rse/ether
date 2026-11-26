@@ -273,8 +273,9 @@ func TestBuildArgsVAAPI(t *testing.T) {
 	d := Decide(info, plexWeb, allow(), Policy{})
 	s := baseSpec(info, d)
 	s.Accel = core.HWAccel{Name: AccelVAAPI, Encoders: []string{"h264_vaapi"}, Device: "/dev/dri/renderD129"}
+	s.Features.vaapiToneMap = func(vaapiToneKey) vaapiToneMethod { return vaapiToneVPP }
 	args := buildArgs(s)
-	mustContain(t, args, "-hwaccel vaapi -hwaccel_device /dev/dri/renderD129 -hwaccel_output_format vaapi",
+	mustContain(t, args, "-init_hw_device vaapi=va:/dev/dri/renderD129 -filter_hw_device va -hwaccel vaapi -hwaccel_device va -hwaccel_output_format vaapi",
 		"tonemap_vaapi=format=nv12:t=bt709:m=bt709:p=bt709,scale_vaapi=w=1920:h=1080:format=nv12", "-c:v h264_vaapi", "-rc_mode VBR")
 	// Bitmap burn scales on the GPU, overlays in software and uploads again.
 	pgs := mustParse(t, "mkv_pgs.json")
@@ -283,6 +284,7 @@ func TestBuildArgsVAAPI(t *testing.T) {
 	d = Decide(pgs, appleTV, o, Policy{})
 	s = baseSpec(pgs, d)
 	s.Accel = core.HWAccel{Name: AccelVAAPI, Encoders: []string{"h264_vaapi"}, Device: "/dev/dri/renderD128"}
+	s.Features.filters["scale_vaapi"] = true
 	args = buildArgs(s)
 	mustContain(t, args, "-init_hw_device vaapi=va:/dev/dri/renderD128 -filter_hw_device va -hwaccel vaapi -hwaccel_device va -hwaccel_output_format vaapi", "[0:0]scale_vaapi=w=1920:h=800:format=nv12,hwdownload,format=nv12[base];[0:2]scale=1920:800[sub];[base][sub]overlay=eof_action=pass,format=nv12,hwupload[vout]", "-c:v h264_vaapi")
 	mustNotContain(t, args, "-color_primaries", "-color_trc", "-colorspace")
@@ -547,6 +549,7 @@ func TestBuildArgsVAAPIRCModesAndNoGPUTonemap(t *testing.T) {
 		Device:       "/dev/dri/renderD128",
 		NoGPUTonemap: true,
 	}
+	sTonemap.Features.vaapiToneMap = func(vaapiToneKey) vaapiToneMethod { return vaapiToneVPP }
 	tmArgs := buildArgs(sTonemap)
 	mustContain(t, tmArgs, "-vaapi_device /dev/dri/renderD128", "tonemap=tonemap=hable", "hwupload", "-c:v h264_vaapi")
 	mustNotContain(t, tmArgs, "tonemap_vaapi", "scale_vaapi")

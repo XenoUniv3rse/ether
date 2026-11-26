@@ -40,7 +40,7 @@ func TestDecodeCapabilityGraphs(t *testing.T) {
 			s := baseSpec(info, Decide(info, appleTV, opts, Policy{}))
 			s.Accel = core.HWAccel{Name: tc.accel, Device: "test-device", Encoders: []string{tc.encoder}}
 			s.Features.hwaccels = map[string]bool{"cuda": true, "qsv": true, "videotoolbox": true}
-			for _, filter := range []string{"scale_cuda", "vpp_qsv", "scale_vt"} {
+			for _, filter := range []string{"scale_cuda", "vpp_qsv", "scale_vt", "scale_vaapi"} {
 				s.Features.filters[filter] = true
 			}
 			allowed := sourceDecodeKey(s.Accel, s.Info.Video())

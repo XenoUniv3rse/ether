@@ -17,6 +17,9 @@ func GPUVendor(device string) string {
 	if device == "" {
 		return ""
 	}
+	if resolved, err := filepath.EvalSymlinks(device); err == nil {
+		device = resolved
+	}
 	b, err := os.ReadFile(filepath.Join(sysfsDRM, filepath.Base(device), "device", "vendor"))
 	if err != nil {
 		return ""

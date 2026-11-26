@@ -316,6 +316,9 @@ func decodeSample(k decodeKey) (encoder, pixel, profile string) {
 
 func (c *decodeProbeCache) probe(k decodeKey) (bool, string) {
 	enc, pixel, profile := decodeSample(k)
+	if k.accel == AccelVAAPI && enc == "libaom-av1" && !c.encoders[enc] {
+		enc = "libsvtav1"
+	}
 	if enc == "" || !c.encoders[enc] {
 		return false, "unsupported source profile or missing sample encoder"
 	}
@@ -338,7 +341,7 @@ func (c *decodeProbeCache) probe(k decodeKey) (bool, string) {
 		if err != nil && detail == "" {
 			detail = err.Error()
 		}
-		return err == nil && probeStderrClean(stderr.String())
+		return err == nil && (contains(args, "libsvtav1") || probeStderrClean(stderr.String()))
 	}
 	args := []string{"-f", "lavfi", "-i", "color=size=128x128:rate=25,format=" + pixel, "-frames:v", "2", "-an", "-c:v", enc, "-threads", "1", "-pix_fmt", pixel, "-profile:v", profile}
 	switch enc {
@@ -352,6 +355,8 @@ func (c *decodeProbeCache) probe(k decodeKey) (bool, string) {
 		}
 	case "libx265":
 		args = append(args, "-preset", "ultrafast", "-x265-params", "pools=none:frame-threads=1:log-level=error")
+	case "libsvtav1":
+		args = append(args, "-preset", "12", "-svtav1-params", "lp=1")
 	case "libaom-av1":
 		args = append(args, "-cpu-used", "8")
 	case "libvpx-vp9":
