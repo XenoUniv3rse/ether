@@ -22,7 +22,7 @@ func catchUpViewID() string {
 func (i *instance) catchUpView(r *http.Request, v *frontend.Viewer) (map[string]any, bool) {
 	if lib, ok := i.host.LiveTV.(frontend.CatchUpLibrary); ok {
 		if visible, err := lib.CatchUpLibraryVisible(r.Context(), v); err == nil && visible {
-			return i.collectionFolder(r, v, frontend.View{ID: ids.Decimal(catchUpViewNumber), Name: frontend.CatchUpLibraryName, Type: frontend.TypeShow})
+			return i.collectionFolder(r, v, frontend.View{ID: ids.Decimal(catchUpViewNumber), Name: frontend.CatchUpPresentationFor(r.Header.Get("Accept-Language")).Library, Type: frontend.TypeShow})
 		}
 	}
 	return nil, false
@@ -39,12 +39,10 @@ func (i *instance) catchUpDTO(r *http.Request, item frontend.CatchUpItem, creden
 		m["SeriesId"], m["SeriesName"] = frontend.CatchUpGroupGUID(item.ShowID), p.Item.Title
 	}
 	if item.Type == frontend.TypeSeason {
-		m["Name"], m["IndexNumber"], m["ParentId"] = frontend.CatchUpLibraryName, 1, m["SeriesId"]
+		m["Name"], m["IndexNumber"], m["ParentId"] = frontend.CatchUpPresentationFor(r.Header.Get("Accept-Language")).Library, 1, m["SeriesId"]
 	}
 	if item.Type == frontend.TypeEpisode {
-		if p.Item.EpisodeTitle != "" {
-			m["Name"] = p.Item.EpisodeTitle
-		}
+		m["Name"] = frontend.CatchUpPresentationFor(r.Header.Get("Accept-Language")).EpisodeTitle(p)
 		season := frontend.CatchUpGroupGUID(item.SeasonID)
 		m["ParentId"], m["SeasonId"], m["ParentIndexNumber"] = season, season, 1
 		m["MediaType"], m["RunTimeTicks"] = "Video", p.End.Sub(p.Start).Nanoseconds()/100
@@ -80,7 +78,7 @@ func (i *instance) catchUpBrowse(w http.ResponseWriter, r *http.Request, viewer 
 	}
 	q := itemQuery(r)
 	page, err := lib.CatchUpItems(r.Context(), viewer, frontend.CatchUpQuery{
-		Parent: parent, Recursive: recursive, Offset: q.Offset, Limit: q.Limit,
+		Parent: parent, Recursive: recursive, Offset: q.Offset, Limit: q.Limit, Search: q.Filter.Query, Sort: frontend.CatchUpSortFor(q.Sort, q.Desc),
 	})
 	if err != nil {
 		http.Error(w, "Unavailable", 503)

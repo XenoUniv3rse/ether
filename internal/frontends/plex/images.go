@@ -453,6 +453,14 @@ func (s *Server) handlePhotoTranscode(w http.ResponseWriter, r *http.Request) {
 		writeHTTPError(w, http.StatusBadRequest)
 		return
 	}
+	// Android can reuse a nested URL from a different server address.
+	// Resolve the route under the outer viewer without dialing that address.
+	httpURL := u.Scheme == "http" || u.Scheme == "https"
+	if m := catchUpArtRe.FindStringSubmatch(u.Path); m != nil &&
+		(!u.IsAbs() && u.Host == "" || httpURL && (s.isSelfHost(r, u.Scheme, u.Host) || plexAndroidClient(FromContext(r.Context())))) {
+		s.serveCatchUpArt(w, r, m[1], m[2])
+		return
+	}
 	if u.IsAbs() && s.allowedImageHost(u.Host) {
 		if !s.remoteArtworkAllowed(r, u) {
 			writeHTTPError(w, http.StatusNotFound)

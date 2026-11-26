@@ -9,7 +9,6 @@ import (
 	"strings"
 )
 
-const CatchUpLibraryName = "Catch-up"
 const CatchUpLibraryID = "catchup"
 
 type CatchUpLibrary interface {
@@ -22,6 +21,37 @@ type CatchUpQuery struct {
 	Parent        string
 	Offset, Limit int
 	Recursive     bool
+	Sort          CatchUpSort
+	// Search matches the title or episode title, ignoring case, spacing and punctuation.
+	Search string
+}
+
+// CatchUpSort orders a catch-up listing. The zero value lists the most
+// recently aired first.
+type CatchUpSort string
+
+const (
+	CatchUpSortRecent    CatchUpSort = ""
+	CatchUpSortOldest    CatchUpSort = "oldest"
+	CatchUpSortTitle     CatchUpSort = "title"
+	CatchUpSortTitleDesc CatchUpSort = "title-desc"
+)
+
+// CatchUpSortFor maps a library sort to a catch-up order: title, or when a
+// programme aired (release, premiere and added dates all mean that here).
+func CatchUpSortFor(order SortOrder, desc bool) CatchUpSort {
+	switch order {
+	case SortTitle:
+		if desc {
+			return CatchUpSortTitleDesc
+		}
+		return CatchUpSortTitle
+	case SortReleased, SortAdded, SortYear:
+		if !desc {
+			return CatchUpSortOldest
+		}
+	}
+	return CatchUpSortRecent
 }
 
 type CatchUpPage struct {

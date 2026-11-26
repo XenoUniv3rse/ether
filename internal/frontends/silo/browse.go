@@ -264,7 +264,7 @@ func (i *instance) views(w http.ResponseWriter, r *http.Request) {
 	}
 	if lib, ok := i.host.LiveTV.(frontend.CatchUpLibrary); ok {
 		if visible, err := lib.CatchUpLibraryVisible(r.Context(), v); err == nil && visible {
-			items = append(items, map[string]any{"id": frontend.CatchUpLibraryID, "name": frontend.CatchUpLibraryName, "type": "series", "sort_order": len(items) + 1})
+			items = append(items, map[string]any{"id": frontend.CatchUpLibraryID, "name": frontend.CatchUpPresentationFor(r.Header.Get("Accept-Language")).Library, "type": "series", "sort_order": len(items) + 1})
 		}
 	}
 	if !published {

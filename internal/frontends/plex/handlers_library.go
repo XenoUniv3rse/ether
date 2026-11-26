@@ -208,9 +208,13 @@ func (s *Server) handleSections(w http.ResponseWriter, r *http.Request) {
 	now := s.now().Unix()
 	for _, sec := range s.viewerSections(r) {
 		agent, scanner := agentFor(sec.Type)
+		location := "/ether/" + strings.ToLower(strings.ReplaceAll(sec.Title, " ", "-"))
+		if sec.ID == catchUpSectionID {
+			location = "/ether/catch-up"
+		}
 		mc.Directory = append(mc.Directory, model.Directory{
 			AllowSync:        model.Ptr(s.downloadsAllowed(u) || u != nil && u.IsOwner && (s.cfg().Plex.Claimed || s.cfg().Plex.Token != "")),
-			Filters:          model.Ptr(true),
+			Filters:          model.Ptr(sec.ID != catchUpSectionID),
 			Refreshing:       model.Ptr(false),
 			Key:              strconv.Itoa(sec.ID),
 			Type:             string(sec.Type),
@@ -226,7 +230,7 @@ func (s *Server) handleSections(w http.ResponseWriter, r *http.Request) {
 			IsDirectory:      model.Ptr(true),
 			ContentChangedAt: now,
 			Hidden:           model.Ptr(0),
-			Location:         []model.Location{{ID: sec.ID, Path: "/ether/" + strings.ToLower(strings.ReplaceAll(sec.Title, " ", "-"))}},
+			Location:         []model.Location{{ID: sec.ID, Path: location}},
 		})
 	}
 	mc.Size = len(mc.Directory)
@@ -275,6 +279,10 @@ func (s *Server) handleSection(w http.ResponseWriter, r *http.Request) {
 	}
 	mc.Directory = append(mc.Directory, model.Directory{Key: "search?type=" + tn, Prompt: "Search " + typeTitle, Search: model.Ptr(true), Title: "Search..."})
 	mc.Size = len(mc.Directory)
+	if sec.ID == catchUpSectionID {
+		mc.Directory = []model.Directory{{Key: "all", Title: sec.Title}}
+		mc.Size = len(mc.Directory)
+	}
 	q := r.URL.Query()
 	switch {
 	case q.Get("includeDetails") == "1":
@@ -325,14 +333,27 @@ func (s *Server) metaType(sec Section, t frontend.MediaType, activeSort string) 
 	tn := strconv.Itoa(typeNumber(t))
 	typeTitle, _ := sectionTypeTitle(sec)
 	mt := model.MetaType{Key: "/library/sections/" + id + "/all?type=" + tn, Type: string(t), Title: typeTitle, Active: true}
-	for _, f := range filterDefs {
+	sorts, filters := sortDefs, filterDefs
+	var catchUpLabels frontend.CatchUpPresentation
+	if sec.ID == catchUpSectionID {
+		catchUpLabels = frontend.CatchUpPresentationFor(sec.Language)
+		// The Catch-up section is built from the guide: it can be ordered by
+		// title or by when a programme aired, and has no facets to filter on.
+		sorts, filters = catchUpSortDefs, nil
+	}
+	for _, f := range filters {
 		key := "/library/sections/" + id + "/" + f.filter
 		mt.Filter = append(mt.Filter, model.Filter{Filter: f.filter, FilterType: f.filterType, Key: key, Title: f.title, Type: "filter"})
 	}
 	activeKey, activeDir := parseSortParam(activeSort)
-	for i, sd := range sortDefs {
+	for i, sd := range sorts {
 		so := model.Sort{DefaultDirection: sd.defDir, DescKey: sd.key + ":desc", Key: sd.key, Title: sd.title}
-		if sd.key == "titleSort" {
+		if sec.ID == catchUpSectionID {
+			so.Title = catchUpLabels.DateAired
+			if sd.key == "titleSort" {
+				so.Title = catchUpLabels.Title
+			}
+		} else if sd.key == "titleSort" {
 			so.FirstCharacterKey = "/library/sections/" + id + "/firstCharacter"
 		}
 		if i == 0 {
@@ -366,10 +387,16 @@ func (s *Server) metaType(sec Section, t frontend.MediaType, activeSort string) 
 		{Key: "unwatched", Title: "Unwatched", Type: "boolean"},
 		{Key: "inProgress", Title: "In Progress", Type: "boolean"},
 	}
+	if sec.ID == catchUpSectionID {
+		mt.Field = nil
+	}
 	return mt
 }
 
 func (s *Server) meta(sec Section, t frontend.MediaType, activeSort string) *model.Meta {
+	if sec.ID == catchUpSectionID {
+		return &model.Meta{Type: []model.MetaType{s.metaType(sec, t, activeSort)}}
+	}
 	return &model.Meta{
 		Type: []model.MetaType{s.metaType(sec, t, activeSort)},
 		FieldType: []model.FieldType{
@@ -1232,6 +1259,9 @@ func (s *Server) handleSectionSub(w http.ResponseWriter, r *http.Request) {
 		switch sub {
 		case "all", "allLeaves", "newest", "recentlyAdded":
 			s.catchUpBrowse(w, r, frontend.CatchUpLibraryID, sub == "allLeaves" || sub == "recentlyAdded" || r.URL.Query().Get("type") == "4")
+		case "sorts":
+			mt := s.metaType(sec, sec.Type, r.URL.Query().Get("sort"))
+			s.write(w, r, &model.MediaContainer{Size: len(mt.Sort), Sort: mt.Sort})
 		default:
 			s.write(w, r, s.sectionContainer(sec))
 		}

@@ -9,9 +9,12 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/braedonsaunders/ether/internal/core"
 	"github.com/braedonsaunders/ether/internal/frontend"
+	"github.com/braedonsaunders/ether/internal/frontend/kit/paging"
 )
 
 func (s *Service) catchUpChannels(ctx context.Context, u *core.User, first bool) (context.Context, []Channel, error) {
@@ -77,9 +80,12 @@ func (h liveTVHost) CatchUpItem(ctx context.Context, u *frontend.Viewer, id stri
 	}
 	_, groupKind := frontend.CatchUpGUIDGroup(id)
 	if req, ok := frontend.CatchUpEpisodeRequest(id); ok {
-		ctx, _, err := s.withPolicy(ctx, u)
+		ctx, policy, err := s.withPolicy(ctx, u)
 		if err != nil {
 			return frontend.CatchUpItem{}, err
+		}
+		if policy.Disabled {
+			return frontend.CatchUpItem{}, core.ErrNotFound
 		}
 		ch, err := s.Channel(ctx, req.ChannelID)
 		if err != nil {
@@ -118,8 +124,43 @@ func (h liveTVHost) CatchUpItems(ctx context.Context, u *frontend.Viewer, q fron
 	return h.catchUpItems(ctx, u, q, "")
 }
 
+// sortCatchUpItems reorders a newest-first listing. Equal titles keep their
+// newest-first order.
+func sortCatchUpItems(items []frontend.CatchUpItem, order frontend.CatchUpSort) {
+	switch order {
+	case frontend.CatchUpSortOldest:
+		slices.Reverse(items)
+	case frontend.CatchUpSortTitle, frontend.CatchUpSortTitleDesc:
+		slices.SortStableFunc(items, func(a, b frontend.CatchUpItem) int {
+			c := cmp.Compare(catchUpSortTitle(a), catchUpSortTitle(b))
+			if order == frontend.CatchUpSortTitleDesc {
+				c = -c
+			}
+			return c
+		})
+	}
+}
+
+func catchUpSortTitle(item frontend.CatchUpItem) string {
+	title := item.Programme.Item.Title
+	if item.Type == frontend.TypeEpisode && item.Programme.Item.EpisodeTitle != "" {
+		title += " " + item.Programme.Item.EpisodeTitle
+	}
+	return strings.ToLower(title)
+}
+
 func (h liveTVHost) catchUpItems(ctx context.Context, u *core.User, q frontend.CatchUpQuery, exact string) (frontend.CatchUpPage, error) {
 	var out frontend.CatchUpPage
+	var search string
+	if raw := strings.TrimSpace(q.Search); raw != "" {
+		if utf8.RuneCountInString(raw) > 256 {
+			return out, nil
+		}
+		search = catchUpSearchKey(raw)
+		if search == "" {
+			return out, nil
+		}
+	}
 	ctx, channels, err := h.s.catchUpChannels(ctx, u, false)
 	if err != nil || len(channels) == 0 {
 		return out, err
@@ -138,11 +179,14 @@ func (h liveTVHost) catchUpItems(ctx context.Context, u *core.User, q frontend.C
 	case show || exactKind == frontend.TypeSeason || strings.HasPrefix(exact, "catchup-season-"):
 		kind = frontend.TypeSeason
 	}
-	limit := q.Limit
+	limit := min(q.Limit, 1000)
 	if limit <= 0 {
 		limit = 100
 	}
-	limit = min(limit, 1000)
+	// Sort the entire matching archive window before taking a page. Keep
+	// newest-first browsing on the early-return path below.
+	sortAll := q.Sort != frontend.CatchUpSortRecent
+	offset := max(q.Offset, 0)
 	now := h.s.clockNow()
 	seen := map[string]bool{}
 	_, policy, err := h.s.withPolicy(ctx, u)
@@ -155,7 +199,7 @@ func (h liveTVHost) catchUpItems(ctx context.Context, u *core.User, q frontend.C
 		if ch.GuideID == "" {
 			continue
 		}
-		maxDays = max(maxDays, ch.ArchiveDays())
+		maxDays = max(maxDays, min(ch.ArchiveDays(), 30))
 		if u.MaxContentRating != "" || policy.MaxRating != "" {
 			ratings[ch.ID] = h.s.channelContentRating(ctx, ch, nil)
 		}
@@ -165,7 +209,10 @@ func (h liveTVHost) catchUpItems(ctx context.Context, u *core.User, q frontend.C
 	// interval first so small pages do not read the entire archive.
 	for until := now.Add(time.Millisecond); maxDays > 0 && until.After(earliest); {
 		from := until.Add(-12 * time.Hour)
-		rows, err := h.s.catchUpWindow(ctx, u, policy, channels, ratings, from, until, now)
+		if from.Before(earliest) {
+			from = earliest
+		}
+		rows, err := h.s.catchUpWindow(ctx, u, policy, channels, ratings, from, until, now, search)
 		if err != nil {
 			return frontend.CatchUpPage{}, err
 		}
@@ -182,20 +229,24 @@ func (h liveTVHost) catchUpItems(ctx context.Context, u *core.User, q frontend.C
 				}
 				seen[item.ID] = true
 			}
-			if out.Total >= q.Offset && len(out.Items) < limit {
+			if sortAll || out.Total >= offset && len(out.Items) < limit {
 				out.Items = append(out.Items, item)
 			}
 			out.Total++
-			if (exact != "" || kind == frontend.TypeSeason && q.Parent != "") || len(out.Items) == limit && out.Total-q.Offset > limit {
+			if !sortAll && (exact != "" || kind == frontend.TypeSeason && q.Parent != "" || len(out.Items) == limit && out.Total-offset > limit) {
 				return out, nil
 			}
 		}
 		until = from
 	}
+	if sortAll {
+		sortCatchUpItems(out.Items, q.Sort)
+		out.Items = paging.Slice(out.Items, offset, limit)
+	}
 	return out, nil
 }
 
-func (s *Service) catchUpWindow(ctx context.Context, u *core.User, policy Policy, channels []Channel, ratings map[string]string, from, until, now time.Time) ([]Programme, error) {
+func (s *Service) catchUpWindow(ctx context.Context, u *core.User, policy Policy, channels []Channel, ratings map[string]string, from, until, now time.Time, search string) ([]Programme, error) {
 	var out []Programme
 	byID := make(map[string]Channel, len(channels))
 	for batch := range slices.Chunk(channels, 100) {
@@ -234,6 +285,10 @@ func (s *Service) catchUpWindow(ctx context.Context, u *core.User, policy Policy
 			ch := byID[id]
 			eligible, _ := frontend.ArchiveFlags(ch.ArchiveDays(), p.Start, p.End, now)
 			if !eligible || p.Item.Title == "" {
+				continue
+			}
+			if search != "" && !strings.Contains(catchUpSearchKey(p.Item.Title), search) &&
+				!strings.Contains(catchUpSearchKey(p.Item.EpisodeTitle), search) {
 				continue
 			}
 			p.ChannelID = id
@@ -366,4 +421,17 @@ func (h liveTVHost) LibraryCatchUpSession(access frontend.SessionAccess, id stri
 		return CatchUpInfo{}, false
 	}
 	return ss.catchUp.info, true
+}
+
+// catchUpSearchKey folds a title or query to lower-case letters and digits,
+// so "world news tonight", "World-News Tonight" and "worldnews" all match.
+func catchUpSearchKey(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	for _, r := range s {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			b.WriteRune(unicode.ToLower(r))
+		}
+	}
+	return b.String()
 }

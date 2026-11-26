@@ -1229,6 +1229,25 @@ func (i *instance) search(w http.ResponseWriter, r *http.Request) {
 	}
 	_, token, _ := i.viewer(r)
 	parent := route.Query(r.URL.Query(), "parentId")
+	if len(parent) == 1 && strings.EqualFold(parent[0], catchUpViewID()) {
+		var hints []any
+		total := 0
+		if lib, ok := i.host.LiveTV.(frontend.CatchUpLibrary); ok && strings.TrimSpace(terms[0]) != "" {
+			page, err := lib.CatchUpItems(r.Context(), v, frontend.CatchUpQuery{Search: terms[0], Offset: q.Offset, Limit: q.Limit})
+			if err != nil {
+				http.Error(w, "Unavailable", 503)
+				return
+			}
+			total = page.Total
+			for _, item := range page.Items {
+				dto := i.catchUpDTO(r, item, token)
+				dto["ItemId"] = dto["Id"]
+				hints = append(hints, dto)
+			}
+		}
+		i.replyItems(w, r, map[string]any{"SearchHints": append([]any{}, hints...), "TotalRecordCount": total})
+		return
+	}
 	var result frontend.SearchPage
 	var live []any
 	var extra []any
@@ -1247,7 +1266,7 @@ func (i *instance) search(w http.ResponseWriter, r *http.Request) {
 	}
 	{
 		var e error
-		live, e = i.liveSearchItems(r, v, token, terms[0])
+		live, e = i.liveSearchItems(r, v, token, terms[0], len(parent) == 0 || parent[0] == "")
 		if e != nil {
 			http.Error(w, "Unavailable", 503)
 			return
@@ -1451,7 +1470,7 @@ func (i *instance) items(w http.ResponseWriter, r *http.Request) {
 		// filtered by name.
 		q.Filter.Query = ""
 		_, token, _ := i.viewer(r)
-		live, e := i.liveSearchItems(r, v, token, search)
+		live, e := i.liveSearchItems(r, v, token, search, len(parent) == 0 || parent[0] == "")
 		if e != nil {
 			http.Error(w, "Unavailable", 503)
 			return

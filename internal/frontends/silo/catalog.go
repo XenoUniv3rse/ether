@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 
 	"github.com/braedonsaunders/ether/internal/frontend"
 	"github.com/braedonsaunders/ether/internal/frontend/kit/ids"
@@ -96,6 +97,7 @@ func (i *instance) catalog(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	var page frontend.Page
+	var archive []frontend.CatchUpItem
 	exact := true
 	more := false
 	if collectionID := r.PathValue("collection_id"); collectionID != "" {
@@ -141,14 +143,35 @@ func (i *instance) catalog(w http.ResponseWriter, r *http.Request) {
 			}
 			more = offset+len(page.Items) < page.Total
 		} else {
+			// The global search window starts with matching Catch-up shows.
+			// Offset the regular search by the length of that bounded prefix.
+			archiveCount := 0
+			if lib, ok := i.host.LiveTV.(frontend.CatchUpLibrary); ok && q.Get("library_id") == "" && query.Filter.Person == 0 && strings.TrimSpace(term) != "" {
+				matches, e := lib.CatchUpItems(r.Context(), v, frontend.CatchUpQuery{Search: term, Limit: 100})
+				if e != nil {
+					http.Error(w, "Unavailable", 503)
+					return
+				}
+				archiveCount = len(matches.Items)
+				archive = paging.Slice(matches.Items, offset, limit)
+				query.Offset = max(0, offset-archiveCount)
+				query.Limit = max(1, limit-len(archive))
+			}
 			result, e := i.host.Experience.Search(r.Context(), v, device(r), term, query)
 			if e != nil {
 				http.Error(w, "Unavailable", 503)
 				return
 			}
 			page = result.Page
-			exact = result.TotalExact
 			more = result.Continuation == frontend.ContinuationMore
+			room := limit - len(archive)
+			if len(page.Items) > room {
+				page.Items = page.Items[:room]
+				more = true
+			}
+			page.Total += archiveCount
+			exact = result.TotalExact
+			more = more || offset+len(archive) < archiveCount
 		}
 	} else if q.Get("library_id") == nowAvailableLibraryID {
 		titles, ok := i.nowAvailableTitles(r, v)
@@ -190,7 +213,10 @@ func (i *instance) catalog(w http.ResponseWriter, r *http.Request) {
 	}
 	cards := i.catalogCards(r, v, token, page.Items)
 	editions, batched := i.pageEditions(r, v, keys)
-	items := make([]any, 0, len(page.Items))
+	items := make([]any, 0, len(archive)+len(page.Items))
+	for _, item := range archive {
+		items = append(items, i.catchUpCard(r, token, item))
+	}
 	for _, t := range page.Items {
 		item := titleDTO(t, state[t.Key])
 		if granted, ok := cards[t.Key]; ok {
@@ -208,8 +234,8 @@ func (i *instance) catalog(w http.ResponseWriter, r *http.Request) {
 		items = append(items, item)
 	}
 	var next any
-	if more && len(page.Items) > 0 {
-		next = strconv.Itoa(offset + len(page.Items))
+	if more && len(items) > 0 {
+		next = strconv.Itoa(offset + len(items))
 	}
 	reply(w, 200, map[string]any{"items": items, "total": page.Total, "total_exact": exact, "window_cursor": "", "page": map[string]any{"has_more": next != nil, "next_cursor": next}})
 }

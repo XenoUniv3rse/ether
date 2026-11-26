@@ -1,8 +1,12 @@
 package plex
 
 import (
+	"cmp"
+	"crypto/sha256"
+	"fmt"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -14,6 +18,31 @@ import (
 )
 
 const catchUpSectionID = 2147483646
+
+// catchUpSortDefs are the Catch-up section's orders; the first is its default.
+var catchUpSortDefs = []sortDef{
+	{"originallyAvailableAt", "", "desc"},
+	{"titleSort", "", "asc"},
+}
+
+// catchUpSortOf maps a Plex sort parameter to a catch-up order. Anything else
+// keeps the default, most recently aired first.
+func catchUpSortOf(raw string) frontend.CatchUpSort {
+	key, dir := parseSortParam(raw)
+	switch key {
+	case "titleSort", "title":
+		if dir == "desc" {
+			return frontend.CatchUpSortTitleDesc
+		}
+		return frontend.CatchUpSortTitle
+	case "originallyAvailableAt", "addedAt":
+		if dir == "asc" {
+			return frontend.CatchUpSortOldest
+		}
+	}
+	return frontend.CatchUpSortRecent
+}
+
 const catchUpMetadataPrefix = "/library/metadata/"
 
 func (s *Server) viewerSections(r *http.Request) []Section {
@@ -25,13 +54,19 @@ func (s *Server) viewerSections(r *http.Request) []Section {
 }
 
 func (s *Server) catchUpSection(r *http.Request) (Section, bool) {
-	sec := s.sectionDefaults(Section{ID: catchUpSectionID, Title: frontend.CatchUpLibraryName, Type: frontend.TypeShow})
+	sec := s.catchUpSectionInfo(r)
 	lib, ok := s.svc().liveTV.(frontend.CatchUpLibrary)
 	if !ok {
 		return sec, false
 	}
 	visible, err := lib.CatchUpLibraryVisible(r.Context(), FromContext(r.Context()).User)
 	return sec, err == nil && visible
+}
+
+func (s *Server) catchUpSectionInfo(r *http.Request) Section {
+	lang := cmp.Or(plexParam(r, "X-Plex-Language"), plexParam(r, "X-Plex-Accept-Language"), r.Header.Get("Accept-Language"), "en-US")
+	labels := frontend.CatchUpPresentationFor(lang)
+	return s.sectionDefaults(Section{ID: catchUpSectionID, Title: labels.Library, Type: frontend.TypeShow, Language: labels.Language})
 }
 
 func catchUpMetadata(sec Section, item frontend.CatchUpItem) model.Metadata {
@@ -56,22 +91,19 @@ func catchUpMetadata(sec Section, item frontend.CatchUpItem) model.Metadata {
 		md.Key += "/children"
 		md.ChildCount = model.Ptr(1)
 	case frontend.TypeSeason:
-		md.Title = frontend.CatchUpLibraryName
+		md.Title = sec.Title
 		md.Key += "/children"
 		md.Index = model.Ptr(1)
 		md.ParentTitle, md.ParentRatingKey = p.Item.Title, item.ShowID
 		md.ParentKey = catchUpMetadataPrefix + item.ShowID
 	case frontend.TypeEpisode:
 		md.SetElement("Video")
-		md.Title = p.Item.Title
-		if p.Item.EpisodeTitle != "" {
-			md.Title = p.Item.EpisodeTitle
-		}
-		md.ParentTitle, md.GrandparentTitle = frontend.CatchUpLibraryName, p.Item.Title
+		md.Title = frontend.CatchUpPresentationFor(sec.Language).EpisodeTitle(p)
+		md.ParentTitle, md.GrandparentTitle = sec.Title, p.Item.Title
 		md.ParentRatingKey, md.GrandparentRatingKey = item.SeasonID, item.ShowID
 		md.ParentKey, md.GrandparentKey = catchUpMetadataPrefix+item.SeasonID, catchUpMetadataPrefix+item.ShowID
 		md.ParentIndex = model.Ptr(1)
-		md.OriginallyAvailableAt = p.Start.Format("2006-01-02")
+		md.OriginallyAvailableAt = p.Start.In(time.Local).Format("2006-01-02")
 		md.AddedAt = p.Start.Unix()
 		md.Duration = p.End.Sub(p.Start).Milliseconds()
 		part := "/video/:/transcode/universal/start.m3u8?" + url.Values{"path": {key}}.Encode()
@@ -88,14 +120,18 @@ func (s *Server) catchUpBrowse(w http.ResponseWriter, r *http.Request, parent st
 		return
 	}
 	pr := FromContext(r.Context())
-	sec := s.sectionDefaults(Section{ID: catchUpSectionID, Title: frontend.CatchUpLibraryName, Type: frontend.TypeShow})
+	sec := s.catchUpSectionInfo(r)
 	offset, limit := pr.pageOf(0)
-	page, err := lib.CatchUpItems(r.Context(), pr.User, frontend.CatchUpQuery{Parent: parent, Offset: offset, Limit: limit, Recursive: recursive})
+	q := r.URL.Query()
+	page, err := lib.CatchUpItems(r.Context(), pr.User, frontend.CatchUpQuery{Parent: parent, Offset: offset, Limit: limit, Recursive: recursive, Sort: catchUpSortOf(q.Get("sort"))})
 	if err != nil {
 		s.writeErr(w, r, err)
 		return
 	}
 	mc := s.sectionContainer(sec)
+	if q.Get("includeMeta") == "1" {
+		mc.Meta = s.meta(sec, sec.Type, q.Get("sort"))
+	}
 	for _, item := range page.Items {
 		mc.Metadata = append(mc.Metadata, catchUpMetadata(sec, item))
 	}
@@ -115,24 +151,39 @@ func (s *Server) catchUpDetail(w http.ResponseWriter, r *http.Request, id string
 		s.writeErr(w, r, err)
 		return
 	}
-	sec := s.sectionDefaults(Section{ID: catchUpSectionID, Title: frontend.CatchUpLibraryName, Type: frontend.TypeShow})
+	sec := s.catchUpSectionInfo(r)
 	mc := s.sectionContainer(sec)
 	mc.Size, mc.Metadata = 1, []model.Metadata{catchUpMetadata(sec, item)}
 	s.write(w, r, mc)
 }
 
+// catchUpArtRe is the artwork route catchUpMetadata hands out. Plex apps
+// fetch it through /photo/:/transcode like every other thumb.
+var catchUpArtRe = regexp.MustCompile(`^/library/catchup/art/([^/]+)/([^/]+)$`)
+
 func (s *Server) catchUpArt(w http.ResponseWriter, r *http.Request) {
+	s.serveCatchUpArt(w, r, chi.URLParam(r, "key"), chi.URLParam(r, "kind"))
+}
+
+// serveCatchUpArt writes one catch-up item's artwork for the request's
+// viewer, scaled to a photo-transcode width when one was asked.
+func (s *Server) serveCatchUpArt(w http.ResponseWriter, r *http.Request, key, kind string) {
 	reader, ok := s.svc().liveTV.(frontend.CatchUpArtworkReader)
 	if !ok {
 		writeHTTPError(w, 404)
 		return
 	}
-	data, kind, err := reader.CatchUpArtwork(r.Context(), FromContext(r.Context()).User, chi.URLParam(r, "key"), chi.URLParam(r, "kind"))
+	data, contentType, err := reader.CatchUpArtwork(r.Context(), FromContext(r.Context()).User, key, kind)
 	if err != nil {
 		s.writeErr(w, r, err)
 		return
 	}
-	w.Header().Set("Content-Type", kind)
+	if width, _ := r.Context().Value(photoFitWidthKey{}).(int); width > 0 && width <= 4096 && contentType == "image/jpeg" {
+		// A show can resolve to different airings for viewers with different
+		// channel grants. Cache the resized bytes by source content.
+		data = fitPhoto(r.Context(), fmt.Sprintf("catchup:%x", sha256.Sum256(data)), data, contentType)
+	}
+	w.Header().Set("Content-Type", contentType)
 	_, _ = w.Write(data)
 }
 
@@ -165,7 +216,7 @@ func (s *Server) handleCatchUpPlayback(w http.ResponseWriter, r *http.Request) b
 	}
 	dash := strings.HasSuffix(r.URL.Path, "/start.mpd") || r.URL.Query().Get("protocol") == "dash"
 	if strings.HasSuffix(r.URL.Path, "/decision") {
-		md := catchUpMetadata(Section{ID: catchUpSectionID, Title: frontend.CatchUpLibraryName}, item)
+		md := catchUpMetadata(s.catchUpSectionInfo(r), item)
 		md.Media[0].Part[0].Decision = "transcode"
 		if dash {
 			md.Media[0].Protocol, md.Media[0].Part[0].Protocol = "dash", "dash"
@@ -281,7 +332,7 @@ func (s *Server) writeCatchUpQueue(w http.ResponseWriter, r *http.Request, pq pl
 		s.writeErr(w, r, err)
 		return
 	}
-	md := catchUpMetadata(Section{ID: catchUpSectionID, Title: frontend.CatchUpLibraryName}, item)
+	md := catchUpMetadata(s.catchUpSectionInfo(r), item)
 	md.PlayQueueItemID = pq.Items[0].ID
 	s.write(w, r, &model.MediaContainer{Size: 1, Identifier: model.LibraryIdentifier, Metadata: []model.Metadata{md},
 		Extra: []model.Attr{model.A("playQueueID", pq.ID), model.A("playQueueSelectedItemID", pq.Items[0].ID),
@@ -301,4 +352,27 @@ func (s *Server) isCatchUpSession(user *frontend.User, id string) bool {
 func (s *Server) isCatchUpMediaRequest(r *http.Request, pr *Request) bool {
 	id := chi.URLParam(r, "session")
 	return id != "" && (chi.URLParam(r, "resource") != "" || chi.URLParam(r, "part") != "") && s.isCatchUpSession(pr.User, id)
+}
+
+// catchUpSearch returns the Catch-up shows whose airings match query, for the
+// search routes. Past airings are only reachable through the Catch-up
+// section, so without this a search finds a programme's upcoming airings but
+// not the ones a viewer can still watch.
+func (s *Server) catchUpSearch(r *http.Request, query string, limit int) []model.Metadata {
+	query = strings.TrimSpace(query)
+	lib, ok := s.svc().liveTV.(frontend.CatchUpLibrary)
+	if !ok || query == "" || limit <= 0 {
+		return nil
+	}
+	pr := FromContext(r.Context())
+	page, err := lib.CatchUpItems(r.Context(), pr.User, frontend.CatchUpQuery{Parent: frontend.CatchUpLibraryID, Search: query, Limit: limit})
+	if err != nil || len(page.Items) == 0 {
+		return nil
+	}
+	sec := s.catchUpSectionInfo(r)
+	out := make([]model.Metadata, 0, len(page.Items))
+	for _, item := range page.Items {
+		out = append(out, catchUpMetadata(sec, item))
+	}
+	return out
 }
