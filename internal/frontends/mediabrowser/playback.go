@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/braedonsaunders/ether/internal/core"
 	"github.com/braedonsaunders/ether/internal/frontend"
 	"github.com/braedonsaunders/ether/internal/frontend/kit/caps"
 	"github.com/braedonsaunders/ether/internal/frontend/kit/ids"
@@ -464,7 +465,7 @@ func (i *instance) playbackInfo(w http.ResponseWriter, r *http.Request) {
 	if i.host.Editions != nil && !versionRequested && channel == "" && !key.IsPluginKey() && playbackItem.Title != "" {
 		variants = i.releaseVariants(r, scope, playbackItem)
 	}
-	listVersions := len(variants) > 0
+	listVersions := len(variants) > 1
 	// Jellyfin Web posts its hidden subtitle menu's "-1" (a quoted body
 	// value) when the detail page it showed had no subtitle list (the release
 	// was not probed yet). Nobody chose "off" from a list never sent: the
@@ -1220,14 +1221,17 @@ func mediaStreams(streams []frontend.StreamInfo) []any {
 }
 
 func addChapters(source map[string]any, media frontend.MediaInfo) {
-	if len(media.Chapters) == 0 {
-		return
+	if chapters := chapterDTOs(media.Chapters); len(chapters) > 0 {
+		source["Chapters"] = chapters
 	}
-	chapters := make([]any, 0, len(media.Chapters))
-	for _, chapter := range media.Chapters {
+}
+
+func chapterDTOs(known []core.Chapter) []any {
+	chapters := make([]any, 0, len(known))
+	for _, chapter := range known {
 		chapters = append(chapters, map[string]any{"Name": chapter.Title, "StartPositionTicks": chapter.Start.Nanoseconds() / 100, "ImageDateModified": wireTime(time.Time{})})
 	}
-	source["Chapters"] = chapters
+	return chapters
 }
 func (i *instance) playbackRoutes() error {
 	if err := i.router.Handle("GET", "/Playback/BitrateTest", http.HandlerFunc(i.bitrateTest)); err != nil {

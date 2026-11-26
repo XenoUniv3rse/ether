@@ -164,10 +164,8 @@ func mediaSizeLabel(size int64) string {
 	return ""
 }
 
-// releaseVariants lists this client's ranked releases for one title, or nil
-// when no variants service is wired or fewer than two (Auto alone) exist.
-// It never returns an error to the caller: a missing list falls back to the
-// single Auto source exactly as before.
+// releaseVariants reads the ranked releases for one title, including a
+// standalone Auto whose probe facts can still describe the default source.
 func (i *instance) releaseVariants(r *http.Request, scope frontend.VersionScope, title frontend.Title) []frontend.ReleaseVariant {
 	if i.host.Editions == nil || r == nil || scope.Viewer == nil {
 		return nil
@@ -178,7 +176,7 @@ func (i *instance) releaseVariants(r *http.Request, scope frontend.VersionScope,
 		ctx = frontend.WithLocalResponse(ctx)
 	}
 	variants, err := i.host.Editions.Variants(ctx, frontend.ResolveRequest{Title: &t, Client: scope.Caps, User: scope.Viewer}, frontend.MaxVariants)
-	if err != nil || len(variants) < 2 {
+	if err != nil {
 		return nil
 	}
 	return variants
@@ -222,7 +220,14 @@ func (i *instance) releaseVersionSource(r *http.Request, scope frontend.VersionS
 // nil when there is no usable version list, so the caller keeps today's
 // single-source shape.
 func (i *instance) releaseVersionSources(r *http.Request, scope frontend.VersionScope, key frontend.RatingKey, title frontend.Title, auto map[string]any) []any {
-	return i.releaseVersionSourcesFor(r, scope, key, title.Language, i.releaseVariants(r, scope, title), auto)
+	variants := i.releaseVariants(r, scope, title)
+	if len(variants) == 1 && variants[0].Auto && auto != nil {
+		info := variants[0].Info
+		if _, hasChapters := auto["Chapters"]; !hasChapters && !info.Estimated {
+			addChapters(auto, info)
+		}
+	}
+	return i.releaseVersionSourcesFor(r, scope, key, title.Language, variants, auto)
 }
 
 // applyVersionMediaFacts fills an Auto source from its version, preferring
@@ -458,7 +463,7 @@ func (i *instance) detailSources(r *http.Request, v *frontend.Viewer, token stri
 		}
 		sources = append(sources, source)
 	}
-	if needDefault {
+	if needDefault && releaseID == "" {
 		if defaultSource == nil {
 			defaultSource = i.defaultMediaSource(r, v, token, key)
 		}

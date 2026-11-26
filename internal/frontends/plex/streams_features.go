@@ -190,25 +190,7 @@ func (s *Server) addProbedStreamFeatures(ctx context.Context, key frontend.Ratin
 	if info.Duration > 0 {
 		m.Duration = info.Duration.Milliseconds()
 	}
-	partID := int64(key)
-	if len(m.Media) > 0 && len(m.Media[0].Part) > 0 {
-		partID = m.Media[0].Part[0].ID
-	}
-	for _, media := range m.Media {
-		if media.Selected != nil && *media.Selected && len(media.Part) > 0 {
-			partID = media.Part[0].ID
-			break
-		}
-	}
-	for i, c := range info.Chapters {
-		if c.Start < 0 || c.End <= c.Start || c.End > info.Duration {
-			continue
-		}
-		m.Chapter = append(m.Chapter, model.Chapter{ID: tagID("chapter", strconv.FormatInt(partID, 10)+"/"+strconv.Itoa(i)+"/"+strconv.FormatInt(c.Start.Milliseconds(), 10)+"/"+strconv.FormatInt(c.End.Milliseconds(), 10)), Index: i + 1, Title: c.Title, StartTimeOffset: c.Start.Milliseconds(), EndTimeOffset: c.End.Milliseconds()})
-	}
-	if len(m.Chapter) > 0 {
-		m.ChapterSource = "media"
-	}
+	addMediaChapters(key, info, m)
 	ranges, err := s.exp().PlaybackMarkerRanges(ctx, s.markers, key, info)
 	if err != nil {
 		s.log.Debug("marker provider unavailable", "error", err)
@@ -230,6 +212,28 @@ func (s *Server) addProbedStreamFeatures(ctx context.Context, key frontend.Ratin
 		}
 		id++
 		m.Marker = append(m.Marker, model.Marker{ID: id, Type: v.Type, StartTimeOffset: v.StartMS, EndTimeOffset: v.EndMS, Final: model.Ptr(v.Final && i == lastCredits)})
+	}
+}
+
+func addMediaChapters(key frontend.RatingKey, info frontend.MediaInfo, m *model.Metadata) {
+	partID := int64(key)
+	if len(m.Media) > 0 && len(m.Media[0].Part) > 0 {
+		partID = m.Media[0].Part[0].ID
+	}
+	for _, media := range m.Media {
+		if media.Selected != nil && *media.Selected && len(media.Part) > 0 {
+			partID = media.Part[0].ID
+			break
+		}
+	}
+	for i, c := range info.Chapters {
+		if c.Start < 0 || c.End <= c.Start || c.End > info.Duration {
+			continue
+		}
+		m.Chapter = append(m.Chapter, model.Chapter{ID: tagID("chapter", strconv.FormatInt(partID, 10)+"/"+strconv.Itoa(i)+"/"+strconv.FormatInt(c.Start.Milliseconds(), 10)+"/"+strconv.FormatInt(c.End.Milliseconds(), 10)), Index: i + 1, Title: c.Title, StartTimeOffset: c.Start.Milliseconds(), EndTimeOffset: c.End.Milliseconds()})
+	}
+	if len(m.Chapter) > 0 {
+		m.ChapterSource = "media"
 	}
 }
 

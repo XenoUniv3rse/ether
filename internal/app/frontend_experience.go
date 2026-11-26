@@ -495,6 +495,9 @@ func (a *App) newSurfaceExperience(protocol core.Protocol, artwork ...frontend.A
 			}
 			result.Tracks = info.Streams
 			result.TracksEstimated = info.Estimated
+			if !info.Estimated {
+				result.Chapters = info.Chapters
+			}
 		}
 		if a.resolver != nil {
 			caps := core.ClientCaps{PreserveEmptyVideoCodecs: policy.NativePlaybackCapabilities, Protocol: protocol, Product: device.Product, Platform: device.Platform, DeviceName: device.DeviceName, ClientID: device.ID, Version: device.Version}
@@ -526,6 +529,9 @@ func (a *App) newSurfaceExperience(protocol core.Protocol, artwork ...frontend.A
 					}
 				}
 				result.Versions = append(result.Versions, frontendVersion(title, version))
+				if version.Auto && !version.Info.Estimated && len(version.Info.Chapters) > 0 {
+					result.Chapters = version.Info.Chapters
+				}
 			}
 			// When Auto already has real probed tracks (e.g. from the durable
 			// content-ID probe cache or vault), surface them as the detail's

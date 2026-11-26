@@ -72,7 +72,7 @@ func (s *Server) variantIDsFor(ctx context.Context, refs []frontend.VariantRef) 
 // slotMedia is the single projection for configured menus, including hubs.
 // Settings choose the identities; cache/probe state can change their labels
 // and stream facts but never the shape. No release search occurs here.
-func (s *Server) slotMedia(ctx context.Context, pr *Request, t *frontend.Title, versions []frontend.ReleaseVariant, ids map[frontend.VariantRef]int64, info frontend.MediaInfo, ps *frontend.PlaySession, resumed resumedVersionResult, stamp int64, streams, batchDetail bool) []model.Media {
+func (s *Server) slotMedia(ctx context.Context, pr *Request, t *frontend.Title, versions []frontend.ReleaseVariant, ids map[frontend.VariantRef]int64, info frontend.MediaInfo, ps *frontend.PlaySession, resumed resumedVersionResult, stamp int64, streams, batchDetail bool, selectedChapterMedia *frontend.MediaInfo) []model.Media {
 	ik := s.playIdentityFor(pr, t.Key)
 	now := s.now()
 	issuePlayID := !batchDetail || ps != nil || s.playIDs.has(ik)
@@ -204,6 +204,9 @@ func (s *Server) slotMedia(ctx context.Context, pr *Request, t *frontend.Title, 
 		if id == selected {
 			m.Selected = model.Ptr(true)
 			m.Part[0].Selected = model.Ptr(true)
+			if selectedChapterMedia != nil && !v.Info.Estimated && len(v.Info.Chapters) > 0 {
+				*selectedChapterMedia = v.Info
+			}
 		}
 		out = append(out, m)
 	}

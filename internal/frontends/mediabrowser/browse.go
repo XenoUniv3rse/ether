@@ -685,13 +685,18 @@ func (i *instance) browseRoutes() error {
 		}
 		shown := d.Versions
 		if releaseID != "" {
+			d.Chapters = nil
 			shown = nil
 			for _, version := range d.Versions {
 				if version.ID == releaseID {
 					shown = append(shown, version)
+					if !version.Media.Estimated {
+						d.Chapters = version.Media.Chapters
+					}
 				}
 			}
 		}
+		d.Versions = shown
 		// A single item page is still browsing. Compatibility comes from the
 		// estimate plan above; DetailPlan runs only when playback starts.
 		i.versionItemFacts(dto, shown)

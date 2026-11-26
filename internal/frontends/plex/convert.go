@@ -627,6 +627,7 @@ func (s *Server) metadataInto(ctx context.Context, pr *Request, t *frontend.Titl
 	if withMedia && isPlayable(t.Type) {
 		var editionTitle string
 		var info frontend.MediaInfo
+		var selectedChapterMedia frontend.MediaInfo
 		withVariants := o.detail && !o.batchDetail
 		if t.Key.IsPluginKey() && (o.listRender || o.batchDetail || o.detailEpisodes || libraryToolClient(pr)) {
 			// Plugin /resolve must only run on single-item detail or play
@@ -646,6 +647,9 @@ func (s *Server) metadataInto(ctx context.Context, pr *Request, t *frontend.Titl
 			}
 			if detail {
 				s.addProbedStreamFeatures(ctx, t.Key, info, m)
+				if len(m.Chapter) == 0 && len(selectedChapterMedia.Chapters) > 0 {
+					addMediaChapters(t.Key, selectedChapterMedia, m)
+				}
 			}
 			if m.Duration == 0 && len(m.Media) > 0 {
 				m.Duration = m.Media[0].Duration
@@ -663,7 +667,7 @@ func (s *Server) metadataInto(ctx context.Context, pr *Request, t *frontend.Titl
 			}
 		}
 		var media []model.Media
-		media, editionTitle, info = s.mediaForWithInfo(ctx, pr, t, detail, withVariants, o.session, o.batchDetail, deferSlots)
+		media, editionTitle, info = s.mediaForWithInfo(ctx, pr, t, detail, withVariants, o.session, o.batchDetail, deferSlots, &selectedChapterMedia)
 		if !deferred {
 			finish(media)
 		}
@@ -893,11 +897,11 @@ func (s *Server) resumedVersion(ctx context.Context, pr *Request, t *frontend.Ti
 // pages. The second result is editionTitle; session monitoring projects only
 // the admitted source. withVariants permits cached labels on detail/queue.
 func (s *Server) mediaFor(ctx context.Context, pr *Request, t *frontend.Title, withStreams, withVariants, sessionMedia bool) ([]model.Media, string) {
-	media, edition, _ := s.mediaForWithInfo(ctx, pr, t, withStreams, withVariants, sessionMedia, false, nil)
+	media, edition, _ := s.mediaForWithInfo(ctx, pr, t, withStreams, withVariants, sessionMedia, false, nil, nil)
 	return media, edition
 }
 
-func (s *Server) mediaForWithInfo(ctx context.Context, pr *Request, t *frontend.Title, withStreams, withVariants, sessionMedia, batchDetail bool, deferSlots func([]frontend.VariantRef, slotMediaRender)) ([]model.Media, string, frontend.MediaInfo) {
+func (s *Server) mediaForWithInfo(ctx context.Context, pr *Request, t *frontend.Title, withStreams, withVariants, sessionMedia, batchDetail bool, deferSlots func([]frontend.VariantRef, slotMediaRender), selectedChapterMedia *frontend.MediaInfo) ([]model.Media, string, frontend.MediaInfo) {
 	info, ps, resumed, probedSource := s.mediaInfoWithResumed(ctx, pr, t)
 	stamp := unixOrZero(t.UpdatedAt)
 	if ps != nil && !ps.StartedAt.IsZero() {
@@ -936,7 +940,7 @@ func (s *Server) mediaForWithInfo(ctx context.Context, pr *Request, t *frontend.
 			pr.configuredSlots = true
 			refs := s.variantRefs(t, versions)
 			render := func(ids map[frontend.VariantRef]int64) []model.Media {
-				return s.slotMedia(ctx, pr, t, versions, ids, info, ps, resumed, stamp, withStreams, batchDetail)
+				return s.slotMedia(ctx, pr, t, versions, ids, info, ps, resumed, stamp, withStreams, batchDetail, selectedChapterMedia)
 			}
 			if deferSlots != nil && len(refs) != 0 {
 				deferSlots(refs, render)
