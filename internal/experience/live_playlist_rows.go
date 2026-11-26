@@ -100,6 +100,35 @@ func liveEntries(ctx context.Context, viewer *core.User, source LiveGuideSource,
 	if err != nil {
 		return nil, err
 	}
+	return liveChannelEntries(channels, programmes, now, until, image), nil
+}
+
+// SnapshotLiveSource resolves snapshot channel IDs without scanning the lineup.
+type SnapshotLiveSource interface {
+	OnNowForIDs(context.Context, *core.User, time.Time, time.Time, []string) ([]livetv.Channel, []livetv.Programme, error)
+}
+
+// snapshotLiveEntries rechecks channel visibility and reads current programme
+// cards for the referenced channels, even if their lineup position changed.
+func snapshotLiveEntries(ctx context.Context, viewer *core.User, source SnapshotLiveSource, refs []core.NeutralEntryRef) ([]frontend.RowEntry, error) {
+	now := time.Now()
+	until := now.Add(24 * time.Hour)
+	var ids []string
+	seen := map[string]bool{}
+	for _, ref := range refs {
+		if ref.Kind == string(frontend.RowEntryLiveChannel) && !seen[ref.ID] {
+			seen[ref.ID] = true
+			ids = append(ids, ref.ID)
+		}
+	}
+	cs, ps, err := source.OnNowForIDs(core.WithCatalogViewer(ctx, viewer), viewer, now, until, ids)
+	if err != nil {
+		return nil, err
+	}
+	return liveChannelEntries(cs, ps, now, until, nil), nil
+}
+
+func liveChannelEntries(channels []livetv.Channel, programmes []livetv.Programme, now, until time.Time, image func(livetv.Channel) string) []frontend.RowEntry {
 	byChannel := make(map[string][]livetv.Programme)
 	for _, p := range programmes {
 		if p.End.After(now) && p.Start.Before(until) {
@@ -124,7 +153,7 @@ func liveEntries(ctx context.Context, viewer *core.User, source LiveGuideSource,
 		}
 		out = append(out, frontend.RowEntry{Kind: frontend.RowEntryLiveChannel, LiveChannel: channel})
 	}
-	return out, nil
+	return out
 }
 
 // RecentPlaylists preserves source records for adapters that render item counts.

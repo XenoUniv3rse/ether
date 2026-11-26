@@ -1154,13 +1154,15 @@ func (c *Catalog) nextStoredEpisodes(ctx context.Context, episodes []core.Rating
 		return out, nil
 	}
 	type window struct {
-		from  core.RatingKey
-		cands []core.Title
+		from      core.RatingKey
+		query     string
+		args      []any
+		candidate core.RatingKey
 	}
 	now := c.now()
-	// Every show's window (its next eight episodes, so an undated or future
-	// one can give way to the next aired) is read in one statement of
-	// per-show index seeks, chunked so a statement stays small.
+	// Keep the original eight-successor window. Return one eligible key per
+	// show and hydrate those keys together. Only a rejected candidate needs
+	// another indexed read of its window.
 	var order []*window
 	for _, episode := range episodes {
 		if episode.Kind() != core.KindEpisode {
@@ -1195,13 +1197,9 @@ func (c *Catalog) nextStoredEpisodes(ctx context.Context, episodes []core.Rating
 			}
 		}
 
-		branches := make([]string, 0, len(part))
-		var args []any
-		for i, w := range part {
+		for _, w := range part {
 			anchor := byKey[w.from]
 			choice, known := choices[anchor.ShowKey]
-			index := ` AS n` + strconv.Itoa(i)
-			tag := `,` + strconv.Itoa(start+i) + ` AS w`
 			if known && providerLayout(&choice.title, choice.order) {
 				cond := ` WHERE e.show_key=? AND e.provider=? AND e.order_kind=? AND e.season>0 AND e.air_date<>'' AND e.air_date<=? AND t.adult=0
  AND (a.episode_key IS NOT NULL AND (e.season>a.season OR (e.season=a.season AND e.episode>a.episode))
@@ -1211,11 +1209,10 @@ func (c *Catalog) nextStoredEpisodes(ctx context.Context, episodes []core.Rating
 					cond += ` AND NOT EXISTS(SELECT 1 FROM state_watch w WHERE w.user_id=? AND w.rating_key=t.key AND w.view_count>0 AND w.view_offset_ns<=0)`
 					bind = append(bind, *uid)
 				}
-				branches = append(branches, `SELECT * FROM (SELECT `+prefixedCols("t")+tag+`,1 AS projected
- FROM catalog_order_episodes e JOIN catalog_titles t ON t.key=e.episode_key
- LEFT JOIN catalog_order_episodes a ON a.show_key=e.show_key AND a.provider=e.provider AND a.order_kind=e.order_kind AND a.episode_key=?`+
-					cond+` ORDER BY e.season,e.episode LIMIT 8)`+index)
-				args = append(args, bind...)
+				w.query = `FROM catalog_order_episodes e JOIN catalog_titles t ON t.key=e.episode_key
+ LEFT JOIN catalog_order_episodes a ON a.show_key=e.show_key AND a.provider=e.provider AND a.order_kind=e.order_kind AND a.episode_key=?` +
+					cond + ` ORDER BY e.season,e.episode LIMIT 1 OFFSET ?`
+				w.args = bind
 				continue
 			}
 			show := anchor.ShowKey
@@ -1226,8 +1223,8 @@ func (c *Catalog) nextStoredEpisodes(ctx context.Context, episodes []core.Rating
 			if show == 0 {
 				continue
 			}
-			cond := `season>0 AND key<5000000000000000 AND (season>? OR (season=? AND episode>?))`
-			wargs := []any{show, season, season, episode}
+			cond := `season>0 AND key<5000000000000000 AND (season,episode)>(?,?)`
+			wargs := []any{show, season, episode}
 			if season <= 0 {
 				cond, wargs = `season>0 AND key<5000000000000000`, []any{show}
 			}
@@ -1235,48 +1232,50 @@ func (c *Catalog) nextStoredEpisodes(ctx context.Context, episodes []core.Rating
 				cond += ` AND NOT EXISTS(SELECT 1 FROM state_watch watched WHERE watched.user_id=? AND watched.rating_key=catalog_titles.key AND watched.view_count>0 AND watched.view_offset_ns<=0 LIMIT 1 OFFSET 0)`
 				wargs = append(wargs, *uid)
 			}
-			branches = append(branches, `SELECT * FROM (SELECT `+titleCols+tag+`,0 AS projected FROM catalog_titles`+
-				c.indexedBy("catalog_titles_show")+` WHERE type='episode' AND show_key=? AND `+cond+` ORDER BY season,episode LIMIT 8)`+index)
-			args = append(args, wargs...)
-		}
-		if len(branches) == 0 {
-			continue
-		}
-
-		rows, err := c.db.QueryContext(ctx, strings.Join(branches, ` UNION ALL `), args...)
-		if err != nil {
-			return nil, err
-		}
-		for rows.Next() {
-			var at, projected int
-			st, err := scanTitle(extraScan{rows, []any{&at, &projected}})
-			if err != nil {
-				rows.Close()
-				return nil, err
-			}
-			if at >= 0 && at < len(order) && !st.t.Adult && (projected != 0 || st.t.IsReleased(now)) {
-				order[at].cands = append(order[at].cands, st.t)
-			}
-		}
-		err = rows.Err()
-		rows.Close()
-		if err != nil {
-			return nil, err
+			w.query = `FROM (SELECT key,season,episode,adult,released_ts FROM catalog_titles` +
+				c.indexedBy("catalog_titles_show") + ` WHERE type='episode' AND show_key=? AND ` + cond +
+				` ORDER BY season,episode LIMIT 8) AS t
+ WHERE t.adult=0 AND t.released_ts<>0 AND t.released_ts<=? ORDER BY t.season,t.episode LIMIT 1 OFFSET ?`
+			w.args = append(wargs, now.Unix())
 		}
 	}
-	var open []*window
+	open := order[:0]
 	for _, w := range order {
-
-		if len(w.cands) > 0 {
+		if w.query != "" {
 			open = append(open, w)
 		}
 	}
-	// Hydrate each window's first candidate together; a window whose
-	// candidate the hydrated filter drops tries its next one.
-	for len(open) > 0 {
+	for offset := 0; len(open) > 0 && offset < 8; offset++ {
 		keys := make([]any, 0, len(open))
-		for _, w := range open {
-			keys = append(keys, int64(w.cands[0].Key))
+		for start := 0; start < len(open); start += showsPerStatement {
+			part := open[start:min(start+showsPerStatement, len(open))]
+			branches := make([]string, 0, len(part))
+			var args []any
+			for i, w := range part {
+				w.candidate = 0
+				branches = append(branches, `SELECT * FROM (SELECT t.key,`+strconv.Itoa(i)+` AS w `+w.query+`) AS candidate`)
+				args = append(args, w.args...)
+				args = append(args, offset)
+			}
+			rows, err := c.db.QueryContext(ctx, strings.Join(branches, ` UNION ALL `), args...)
+			if err != nil {
+				return nil, err
+			}
+			for rows.Next() {
+				var key core.RatingKey
+				var i int
+				if err := rows.Scan(&key, &i); err != nil {
+					rows.Close()
+					return nil, err
+				}
+				part[i].candidate = key
+				keys = append(keys, int64(key))
+			}
+			err = rows.Err()
+			rows.Close()
+			if err != nil {
+				return nil, err
+			}
 		}
 		got := map[core.RatingKey]core.Title{}
 		const batch = 200
@@ -1290,16 +1289,17 @@ func (c *Catalog) nextStoredEpisodes(ctx context.Context, episodes []core.Rating
 				got[t.Key] = t
 			}
 		}
-		var retry []*window
+		retry := open[:0]
 		for _, w := range open {
-			if t, ok := got[w.cands[0].Key]; ok && c.visibleTitle(&t) {
+			if w.candidate == 0 {
+				continue
+			}
+			if t, ok := got[w.candidate]; ok && c.visibleTitle(&t) {
 				t := t
 				out[w.from] = &t
 				continue
 			}
-			if w.cands = w.cands[1:]; len(w.cands) > 0 {
-				retry = append(retry, w)
-			}
+			retry = append(retry, w)
 		}
 		open = retry
 	}

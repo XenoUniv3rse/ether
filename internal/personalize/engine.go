@@ -53,6 +53,7 @@ import (
 	"github.com/braedonsaunders/ether/internal/core"
 	"github.com/braedonsaunders/ether/internal/homefilter"
 	"github.com/braedonsaunders/ether/internal/recommend"
+	"github.com/braedonsaunders/ether/internal/reqmemo"
 	"github.com/braedonsaunders/ether/internal/state"
 )
 
@@ -747,7 +748,10 @@ func (e *Engine) homeWithPolicy(ctx context.Context, user *core.User, hc core.Hu
 	var inprog []core.WatchStatus
 	if section == "" && !m.generic && e.state != nil {
 		var err error
-		if inprog, err = e.state.InProgress(ctx, u.ID, 50); err != nil {
+		inprog, err = reqmemo.Do(ctx, fmt.Sprintf("personalize:in-progress:%p:%d", e, u.ID), func() ([]core.WatchStatus, error) {
+			return e.state.InProgress(ctx, u.ID, 50)
+		})
+		if err != nil {
 			e.log.Debug("personalize: in progress failed", "err", err)
 		}
 	}
@@ -762,8 +766,11 @@ func (e *Engine) homeWithPolicy(ctx context.Context, user *core.User, hc core.Hu
 				model.rows = append(model.rows, row)
 			}
 		}
-		b := builder{e: e, ctx: core.WithLocalResponse(ctx), user: u, now: hc.Now}
-		for _, row := range b.genUpNext() {
+		rows, _ := reqmemo.Do(ctx, fmt.Sprintf("personalize:up-next:%p:%#v:%d", e, u, hc.Now.Unix()), func() ([]*candRow, error) {
+			b := builder{e: e, ctx: core.WithLocalResponse(ctx), user: u, now: hc.Now}
+			return b.genUpNext(), nil
+		})
+		for _, row := range rows {
 			model.rows = append(model.rows, row)
 			for _, item := range row.items {
 				nextUp.WriteString(item.t.Key.String())

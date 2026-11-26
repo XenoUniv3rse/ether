@@ -503,7 +503,10 @@ func (s *Service) channelsByIDs(ctx context.Context, ids []string) (map[string]C
 		}
 	}
 	s.virtualGuide.mu.RUnlock()
-	ids = pending
+	return s.readChannelsByIDs(ctx, pending, out)
+}
+
+func (s *Service) readChannelsByIDs(ctx context.Context, ids []string, out map[string]Channel) (map[string]Channel, error) {
 	for start := 0; start < len(ids); start += channelPageChunk {
 		end := min(start+channelPageChunk, len(ids))
 		marks := make([]string, 0, end-start)

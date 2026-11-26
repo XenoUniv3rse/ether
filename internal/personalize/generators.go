@@ -219,9 +219,12 @@ func (b *builder) genUpNext() []*candRow {
 	}); ok && len(recent) > 0 {
 		// Batch stored successor lookups and watch-state checks instead of
 		// walking each watched show one episode and one state query at a time.
-		const window = 60
-		for start := 0; start < len(recent) && len(items) < 30; start += window {
-			part := recent[start:min(start+window, len(recent))]
+		for start := 0; start < len(recent) && len(items) < 30; {
+			// A healthy window needs at most one candidate per remaining slot.
+			// Keep a floor so sparse or fully watched histories still batch.
+			end := min(start+max(30-len(items), 15), len(recent))
+			part := recent[start:end]
+			start = end
 			nextByFrom, err := batch.NextUnwatchedStoredEpisodes(b.ctx, b.user.ID, part)
 			if err != nil {
 				break
