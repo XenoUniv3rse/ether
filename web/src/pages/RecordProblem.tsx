@@ -1,5 +1,5 @@
 import { Button, Input, SearchSelect } from "@braedonsaunders/appkit-ui";
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { Drawer } from "../components/Drawer";
 import { Field } from "../components/fields";
 import { localized, t } from "../i18n";
@@ -46,20 +46,32 @@ export function RecordProblem({ open, onClose }: { open: boolean; onClose: () =>
     };
   }, [open]);
 
-  const refresh = useCallback(async (id: string) => {
-    const next = await api.supportGet(id);
-    setCapture(next);
-    return next;
-  }, []);
-
+  const recordingId = capture?.state === "recording" ? capture.id : undefined;
   useEffect(() => {
-    if (!capture || capture.state !== "recording") return;
+    if (!recordingId || busy) return;
+    let stop = false;
+    let polling = false;
     const timer = window.setInterval(() => {
       setNow(Date.now());
-      void refresh(capture.id).catch((e) => setError(errorMessage(e)));
+      if (polling) return;
+      polling = true;
+      void api
+        .supportGet(recordingId)
+        .then((next) => {
+          if (!stop) setCapture(next);
+        })
+        .catch((e) => {
+          if (!stop) setError(errorMessage(e));
+        })
+        .finally(() => {
+          polling = false;
+        });
     }, 2000);
-    return () => window.clearInterval(timer);
-  }, [capture, refresh]);
+    return () => {
+      stop = true;
+      window.clearInterval(timer);
+    };
+  }, [recordingId, busy]);
 
   const close = async () => {
     if (capture && capture.state === "recording") {
@@ -154,6 +166,9 @@ export function RecordProblem({ open, onClose }: { open: boolean; onClose: () =>
   const recording = capture?.state === "recording";
   const finished = capture?.state === "finished";
   const sealed = (capture?.preview?.files?.length ?? 0) > 0;
+  const canSeal = recording || (finished && !sealed);
+  const discovery = capture?.discovery ?? [];
+  const hypotheses = (capture?.hypotheses ?? []).filter((h) => h.code !== "device_unconfirmed");
 
   return (
     <Drawer
@@ -161,7 +176,7 @@ export function RecordProblem({ open, onClose }: { open: boolean; onClose: () =>
       onClose={() => void close()}
       title={t("Record a problem")}
       documentTitle={t("Record a problem")}
-      description={t("One support package for the device you choose. It does not change playback.")}
+      description={t("Record what Ether sees and download a support package.")}
       size="lg"
       footer={
         <div className="flex w-full flex-wrap items-center justify-end gap-2">
@@ -173,17 +188,12 @@ export function RecordProblem({ open, onClose }: { open: boolean; onClose: () =>
               {t("Start recording")}
             </Button>
           )}
-          {recording && (
+          {canSeal && (
             <Button
               size="sm"
               onClick={() => void finish()}
-              disabled={busy || !capture.deviceConfirmed || elapsed < 30 || !reproduced}
+              disabled={busy || (recording && (elapsed < 30 || !reproduced))}
             >
-              {t("Finish")}
-            </Button>
-          )}
-          {finished && !sealed && (
-            <Button size="sm" onClick={() => void finish()} disabled={busy}>
               {t("Finish")}
             </Button>
           )}
@@ -256,6 +266,7 @@ export function RecordProblem({ open, onClose }: { open: boolean; onClose: () =>
                 </p>
                 <p>{t("Recording ends automatically after 10 minutes.")}</p>
                 {elapsed < 30 && <p>{t("Wait at least 30 seconds before finishing.")}</p>}
+                {!reproduced && <p>{t("Tick the box below to enable Finish.")}</p>}
                 <label className="flex items-center gap-2">
                   <input
                     type="checkbox"
@@ -266,14 +277,19 @@ export function RecordProblem({ open, onClose }: { open: boolean; onClose: () =>
                 </label>
               </div>
             )}
-            {!capture.deviceConfirmed && (
+            {!capture.deviceConfirmed && canSeal && discovery.length === 0 && (
+              <p className="text-sm">
+                {t(
+                  "No app has contacted Ether during this recording. You can still finish; the bundle will include the server's side.",
+                )}
+              </p>
+            )}
+            {!capture.deviceConfirmed && recording && discovery.length > 0 && (
               <div className="space-y-2">
                 <p className="text-sm">
-                  {t(
-                    "Choose the device that had the problem. A new device is not selected for you.",
-                  )}
+                  {t("If you see the device that had the problem, you can select it here.")}
                 </p>
-                {(capture.discovery ?? []).map((d) => (
+                {discovery.map((d) => (
                   <Button
                     key={d.id}
                     variant="outline"
@@ -285,6 +301,9 @@ export function RecordProblem({ open, onClose }: { open: boolean; onClose: () =>
                   </Button>
                 ))}
               </div>
+            )}
+            {!capture.deviceConfirmed && finished && (sealed || discovery.length > 0) && (
+              <p className="text-sm">{t("Device not identified.")}</p>
             )}
             <div>
               <h3 className="mb-1 text-sm font-medium">{t("Evidence")}</h3>
@@ -300,15 +319,17 @@ export function RecordProblem({ open, onClose }: { open: boolean; onClose: () =>
                 )}
               </ul>
             </div>
-            <div>
-              <h3 className="mb-1 text-sm font-medium">{t("Hypotheses")}</h3>
-              <ul className="space-y-1 text-sm text-fg-muted">
-                {(capture.hypotheses ?? []).map((h) => (
-                  <li key={h.code}>{h.text}</li>
-                ))}
-              </ul>
-            </div>
-            {(recording || (finished && !sealed)) && (
+            {hypotheses.length > 0 && (
+              <div>
+                <h3 className="mb-1 text-sm font-medium">{t("Hypotheses")}</h3>
+                <ul className="space-y-1 text-sm text-fg-muted">
+                  {hypotheses.map((h) => (
+                    <li key={h.code}>{h.text}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            {canSeal && (
               <div className="space-y-2 text-sm">
                 <p>
                   {t(
@@ -356,11 +377,13 @@ export function RecordProblem({ open, onClose }: { open: boolean; onClose: () =>
                 )}
                 <p className="text-fg-muted">{capture.preview.redaction}</p>
                 <ul className="text-fg-muted">
-                  {capture.coverage.map((g) => (
-                    <li key={`${g.collector}-${g.status}`}>
-                      {g.collector}: {g.detail}
-                    </li>
-                  ))}
+                  {capture.coverage
+                    .filter((g) => g.collector !== "device")
+                    .map((g) => (
+                      <li key={`${g.collector}-${g.status}`}>
+                        {g.collector}: {g.detail}
+                      </li>
+                    ))}
                 </ul>
               </div>
             )}

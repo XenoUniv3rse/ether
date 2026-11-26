@@ -607,7 +607,7 @@ func (r *Recorder) coverageLocked(c *capture) []Gap {
 		{Collector: "query", Status: "omitted", Detail: "Unknown query parameter names and values are masked because they may contain credentials or addresses."},
 	}
 	if !c.confirmed {
-		gaps = append(gaps, Gap{Collector: "device", Status: "unconfirmed", Detail: "No device is confirmed. Playback from other devices is not retained."})
+		gaps = append(gaps, Gap{Collector: "device", Status: "unconfirmed", Detail: "Device not identified. Device-specific playback evidence was omitted."})
 	}
 	if c.uncorrelated > 0 {
 		gaps = append(gaps, Gap{Collector: "encoder", Status: "omitted", Detail: "Encoder events without a device or a known session were omitted."})
@@ -915,7 +915,7 @@ func hypotheses(events []Event, confirmed bool) []Hypothesis {
 	}
 	var out []Hypothesis
 	if !confirmed {
-		out = append(out, Hypothesis{Code: "device_unconfirmed", Text: "No device is confirmed. Choose one before playback evidence is included."})
+		out = append(out, Hypothesis{Code: "device_unconfirmed", Text: "Device not identified. Device-specific playback evidence was omitted."})
 	}
 	if hasPoll && !hasPlay {
 		out = append(out, Hypothesis{Code: "companion_poll_only", Text: "No playback request was observed in this capture. Poll responses, including HTTP 404, are not a playback failure."})
