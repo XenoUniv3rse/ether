@@ -5,6 +5,8 @@ import (
 	"errors"
 	"net"
 	"net/netip"
+	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -12,9 +14,8 @@ import (
 
 // A trusted proxy may be named instead of numbered, for example a Docker
 // container ("nginx-proxy-manager") whose address changes when it is
-// recreated. Names are resolved through the system resolver, which inside a
-// Docker network is Docker's own DNS, and re-resolved in the background so a
-// request never waits on DNS after the first lookup.
+// recreated. Lookups start on use and refresh asynchronously after the first
+// lookup.
 const (
 	proxyHostTTL      = 30 * time.Second
 	proxyHostRetry    = 5 * time.Second
@@ -22,9 +23,7 @@ const (
 )
 
 // lookupProxyHost resolves a proxy name. Tests replace it.
-var lookupProxyHost = func(ctx context.Context, host string) ([]netip.Addr, error) {
-	return net.DefaultResolver.LookupNetIP(ctx, "ip", host)
-}
+var lookupProxyHost = LookupProxyHost
 
 type proxyHostEntry struct {
 	prefixes     []netip.Prefix
@@ -74,6 +73,7 @@ func proxyHostName(raw string) (string, bool) {
 // ValidateProxyEntry accepts what ProxyPrefixes can trust: an IP address, a
 // CIDR range or a host or container name.
 func ValidateProxyEntry(raw string) error {
+	raw = proxyEntryHost(raw)
 	if _, err := ParseProxyEntry(raw); err == nil {
 		return nil
 	} else if strings.Contains(raw, "/") {
@@ -89,6 +89,7 @@ func ValidateProxyEntry(raw string) error {
 // cache ProxyPrefixes know the result can change without a config change.
 func HasProxyHostNames(entries []string) bool {
 	for _, raw := range entries {
+		raw = proxyEntryHost(raw)
 		if _, err := ParseProxyEntry(raw); err == nil {
 			continue
 		}
@@ -131,6 +132,14 @@ func localProxyIP(ip netip.Addr) bool {
 	return ip.IsPrivate() || ip.IsLoopback() || ip.IsLinkLocalUnicast()
 }
 
+func proxyDNSTimedOut(err error) bool {
+	var dnsErr *net.DNSError
+	if errors.As(err, &dnsErr) && dnsErr.IsNotFound {
+		return false
+	}
+	return errors.Is(err, context.DeadlineExceeded) || (dnsErr != nil && dnsErr.IsTimeout)
+}
+
 func resolveProxyHost(name string, e *proxyHostEntry, lookup func(context.Context, string) ([]netip.Addr, error)) {
 	ctx, cancel := context.WithTimeout(context.Background(), proxyLookupBudget)
 	defer cancel()
@@ -150,10 +159,7 @@ func resolveProxyHost(name string, e *proxyHostEntry, lookup func(context.Contex
 			prefixes = append(prefixes, netip.PrefixFrom(a, a.BitLen()))
 		}
 	}
-	var dnsErr *net.DNSError
-	notFound := errors.As(err, &dnsErr) && dnsErr.IsNotFound
-	timedOut := !notFound && (errors.Is(err, context.DeadlineExceeded) ||
-		(dnsErr != nil && dnsErr.IsTimeout))
+	timedOut := proxyDNSTimedOut(err)
 
 	proxyHosts.mu.Lock()
 	defer proxyHosts.mu.Unlock()
@@ -179,4 +185,28 @@ func resetProxyHosts() {
 	proxyHosts.mu.Lock()
 	proxyHosts.entries = nil
 	proxyHosts.mu.Unlock()
+}
+
+// proxyEntryHost reduces an entry written as an address to its host, so
+// "http://nginx-proxy-manager:81" or "nginx-proxy-manager:81" (how a reverse
+// proxy's own config names an upstream) means the container nginx-proxy-manager.
+// Trust is about which host the request came from; scheme and port do not
+// matter. CIDR ranges and plain names pass through unchanged.
+func proxyEntryHost(raw string) string {
+	s := strings.TrimSpace(raw)
+	if i := strings.Index(s, "://"); i > 0 {
+		if u, err := url.Parse(s); err == nil {
+			host := u.Hostname()
+			if host != "" && !strings.Contains(host, "/") && (!strings.Contains(host, ":") || strings.HasPrefix(u.Host, "[")) {
+				return host
+			}
+		}
+		return s
+	}
+	if host, port, err := net.SplitHostPort(s); err == nil && host != "" && !strings.Contains(host, "/") {
+		if _, err := strconv.ParseUint(port, 10, 16); err == nil {
+			return host
+		}
+	}
+	return s
 }
