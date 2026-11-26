@@ -208,9 +208,13 @@ func (s *Server) handleSections(w http.ResponseWriter, r *http.Request) {
 	now := s.now().Unix()
 	for _, sec := range s.viewerSections(r) {
 		agent, scanner := agentFor(sec.Type)
+		location := "/ether/" + strings.ToLower(strings.ReplaceAll(sec.Title, " ", "-"))
+		if sec.ID == catchUpSectionID {
+			location = "/ether/catch-up"
+		}
 		mc.Directory = append(mc.Directory, model.Directory{
 			AllowSync:        model.Ptr(s.downloadsAllowed(u) || u != nil && u.IsOwner && (s.cfg().Plex.Claimed || s.cfg().Plex.Token != "")),
-			Filters:          model.Ptr(true),
+			Filters:          model.Ptr(sec.ID != catchUpSectionID),
 			Refreshing:       model.Ptr(false),
 			Key:              strconv.Itoa(sec.ID),
 			Type:             string(sec.Type),
@@ -226,7 +230,7 @@ func (s *Server) handleSections(w http.ResponseWriter, r *http.Request) {
 			IsDirectory:      model.Ptr(true),
 			ContentChangedAt: now,
 			Hidden:           model.Ptr(0),
-			Location:         []model.Location{{ID: sec.ID, Path: "/ether/" + strings.ToLower(strings.ReplaceAll(sec.Title, " ", "-"))}},
+			Location:         []model.Location{{ID: sec.ID, Path: location}},
 		})
 	}
 	mc.Size = len(mc.Directory)
@@ -275,6 +279,10 @@ func (s *Server) handleSection(w http.ResponseWriter, r *http.Request) {
 	}
 	mc.Directory = append(mc.Directory, model.Directory{Key: "search?type=" + tn, Prompt: "Search " + typeTitle, Search: model.Ptr(true), Title: "Search..."})
 	mc.Size = len(mc.Directory)
+	if sec.ID == catchUpSectionID {
+		mc.Directory = []model.Directory{{Key: "all", Title: sec.Title}}
+		mc.Size = len(mc.Directory)
+	}
 	q := r.URL.Query()
 	switch {
 	case q.Get("includeDetails") == "1":
@@ -326,7 +334,9 @@ func (s *Server) metaType(sec Section, t frontend.MediaType, activeSort string) 
 	typeTitle, _ := sectionTypeTitle(sec)
 	mt := model.MetaType{Key: "/library/sections/" + id + "/all?type=" + tn, Type: string(t), Title: typeTitle, Active: true}
 	sorts, filters := sortDefs, filterDefs
+	var catchUpLabels frontend.CatchUpPresentation
 	if sec.ID == catchUpSectionID {
+		catchUpLabels = frontend.CatchUpPresentationFor(sec.Language)
 		// The Catch-up section is built from the guide: it can be ordered by
 		// title or by when a programme aired, and has no facets to filter on.
 		sorts, filters = catchUpSortDefs, nil
@@ -338,7 +348,12 @@ func (s *Server) metaType(sec Section, t frontend.MediaType, activeSort string) 
 	activeKey, activeDir := parseSortParam(activeSort)
 	for i, sd := range sorts {
 		so := model.Sort{DefaultDirection: sd.defDir, DescKey: sd.key + ":desc", Key: sd.key, Title: sd.title}
-		if sd.key == "titleSort" && sec.ID != catchUpSectionID {
+		if sec.ID == catchUpSectionID {
+			so.Title = catchUpLabels.DateAired
+			if sd.key == "titleSort" {
+				so.Title = catchUpLabels.Title
+			}
+		} else if sd.key == "titleSort" {
 			so.FirstCharacterKey = "/library/sections/" + id + "/firstCharacter"
 		}
 		if i == 0 {
@@ -379,6 +394,9 @@ func (s *Server) metaType(sec Section, t frontend.MediaType, activeSort string) 
 }
 
 func (s *Server) meta(sec Section, t frontend.MediaType, activeSort string) *model.Meta {
+	if sec.ID == catchUpSectionID {
+		return &model.Meta{Type: []model.MetaType{s.metaType(sec, t, activeSort)}}
+	}
 	return &model.Meta{
 		Type: []model.MetaType{s.metaType(sec, t, activeSort)},
 		FieldType: []model.FieldType{

@@ -389,7 +389,7 @@ func (s *Server) appendLiveSearchHubs(r *http.Request, mc *model.MediaContainer,
 	}
 	if shows := s.catchUpSearch(r, query, limit); len(shows) > 0 {
 		hub := model.Hub{
-			Title:         frontend.CatchUpLibraryName,
+			Title:         shows[0].LibrarySectionTitle,
 			Type:          "show",
 			HubIdentifier: "catchup",
 			Context:       "hub.catchup",

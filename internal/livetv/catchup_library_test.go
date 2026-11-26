@@ -158,7 +158,7 @@ func TestCatchUpLibrarySearch(t *testing.T) {
 	}
 	h := s.Frontend().(frontend.CatchUpLibrary)
 	owner := &core.User{ID: 1, IsOwner: true}
-	for query, want := range map[string]int{"world news tonight": 1, "WorldNews": 2, "muir": 1, "weather": 0, "": 3} {
+	for query, want := range map[string]int{"world news tonight": 1, "WorldNews": 2, "muir": 1, "weather": 0, "!!!": 0, "": 3} {
 		page, err := h.CatchUpItems(t.Context(), owner, frontend.CatchUpQuery{Search: query})
 		if err != nil || len(page.Items) != want || page.Total != want {
 			t.Fatalf("search %q: %d items (total %d), want %d, %v", query, len(page.Items), page.Total, want, err)

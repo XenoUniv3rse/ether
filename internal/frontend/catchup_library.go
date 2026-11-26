@@ -7,10 +7,8 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
-	"time"
 )
 
-const CatchUpLibraryName = "Catch-up"
 const CatchUpLibraryID = "catchup"
 
 type CatchUpLibrary interface {
@@ -110,19 +108,4 @@ type CatchUpSessionFinder interface {
 // viewer. A nonempty device ID also requires the opening device to match.
 type CatchUpSessionReader interface {
 	LibraryCatchUpSession(SessionAccess, string) (CatchUpInfo, bool)
-}
-
-// CatchUpAiringLayout names an airing by when it started, in the server's
-// local time: "Wed Nov 25, 6:30 PM".
-const CatchUpAiringLayout = "Mon Jan 2, 3:04 PM"
-
-// CatchUpEpisodeTitle names an archived airing. Guide entries for news, sport
-// and talk shows usually carry no episode title, and the same programme often
-// airs several times a day, so an airing without one is named by when it
-// started; otherwise every airing of the programme shows the same name.
-func CatchUpEpisodeTitle(p LiveTVProgramme) string {
-	if p.Item.EpisodeTitle != "" {
-		return p.Item.EpisodeTitle
-	}
-	return p.Start.In(time.Local).Format(CatchUpAiringLayout)
 }

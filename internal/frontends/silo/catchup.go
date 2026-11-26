@@ -11,7 +11,18 @@ import (
 	"github.com/braedonsaunders/ether/internal/frontend/kit/paging"
 )
 
+func siloCatchUpSort(r *http.Request) frontend.CatchUpSort {
+	switch order := frontend.CatchUpSort(r.URL.Query().Get("sort")); order {
+	case frontend.CatchUpSortOldest, frontend.CatchUpSortTitle, frontend.CatchUpSortTitleDesc:
+		return order
+	default:
+		return frontend.CatchUpSortRecent
+	}
+}
+
 func (i *instance) catchUpPage(w http.ResponseWriter, r *http.Request, viewer *frontend.Viewer, token string, q frontend.CatchUpQuery) ([]any, frontend.CatchUpPage, bool) {
+	q.Sort = siloCatchUpSort(r)
+	q.Search = strings.TrimSpace(r.URL.Query().Get("q"))
 	lib, ok := i.host.LiveTV.(frontend.CatchUpLibrary)
 	if !ok {
 		notFound(w)
@@ -34,10 +45,10 @@ func (i *instance) catchUpCard(r *http.Request, token string, item frontend.Catc
 	id := frontend.CatchUpGUID(item)
 	name := p.Item.Title
 	if item.Type == frontend.TypeEpisode {
-		name = frontend.CatchUpEpisodeTitle(p)
+		name = frontend.CatchUpPresentationFor(r.Header.Get("Accept-Language")).EpisodeTitle(p)
 	}
 	if item.Type == frontend.TypeSeason {
-		name = frontend.CatchUpLibraryName
+		name = frontend.CatchUpPresentationFor(r.Header.Get("Accept-Language")).Library
 	}
 	card := titleDTO(frontend.Title{
 		Type: item.Type, Title: name, Summary: p.Item.Summary, ShowTitle: p.Item.Title,
@@ -219,7 +230,7 @@ func (i *instance) catchUpCatalog(w http.ResponseWriter, r *http.Request, v *fro
 		return
 	}
 	next := catchUpNext(page, offset, strconv.Itoa)
-	reply(w, 200, map[string]any{"items": items, "total": page.Total, "total_exact": !next["has_more"].(bool), "window_cursor": "", "page": next})
+	reply(w, 200, map[string]any{"items": items, "total": page.Total, "total_exact": siloCatchUpSort(r) != frontend.CatchUpSortRecent || !next["has_more"].(bool), "window_cursor": "", "page": next})
 }
 
 func (i *instance) catchUpSections(w http.ResponseWriter, r *http.Request, v *frontend.Viewer, token string) {
@@ -232,7 +243,7 @@ func (i *instance) catchUpSections(w http.ResponseWriter, r *http.Request, v *fr
 	if !ok {
 		return
 	}
-	section := map[string]any{"id": frontend.CatchUpLibraryID, "title": frontend.CatchUpLibraryName, "section_type": "custom",
+	section := map[string]any{"id": frontend.CatchUpLibraryID, "title": frontend.CatchUpPresentationFor(r.Header.Get("Accept-Language")).Library, "section_type": "custom",
 		"customized": false, "featured": false, "is_custom": false, "item_limit": len(items), "items": items}
 	if len(items) >= page.Total {
 		section["total_count"] = page.Total

@@ -8,7 +8,7 @@ import (
 	"strings"
 )
 
-func (i *instance) liveSearchItems(r *http.Request, viewer *frontend.Viewer, token, query string) ([]any, error) {
+func (i *instance) liveSearchItems(r *http.Request, viewer *frontend.Viewer, token, query string, catchUp bool) ([]any, error) {
 	out := []any{}
 	search, ok := i.host.LiveTV.(frontend.LiveTVSearch)
 	if !ok {
@@ -43,6 +43,15 @@ func (i *instance) liveSearchItems(r *http.Request, viewer *frontend.Viewer, tok
 			}
 		}
 	}
+	if lib, ok := i.host.LiveTV.(frontend.CatchUpLibrary); catchUp && ok && wants("series") && strings.TrimSpace(query) != "" {
+		page, err := lib.CatchUpItems(r.Context(), viewer, frontend.CatchUpQuery{Search: query, Limit: 100})
+		if err != nil {
+			return nil, err
+		}
+		for _, item := range page.Items {
+			out = append(out, i.catchUpDTO(r, item, token))
+		}
+	}
 	if wants("livetvprogram", "program") {
 		for _, p := range results.Programmes {
 			if dto, ok := i.programmeDTO(frontend.LiveProgramme{ID: p.ID, ChannelID: p.ChannelID, Start: p.Start, End: p.End, Title: p.Item.Title, Summary: p.Item.Summary, Rating: p.Item.Rating, EpisodeTitle: p.Item.EpisodeTitle, ShowTitle: p.Item.ShowTitle, Genres: p.Item.Genres, MediaType: p.Item.MediaType, Season: p.Item.Season, Episode: p.Item.Episode}, frontend.LiveChannel{}); ok {
@@ -68,7 +77,7 @@ func (i *instance) writeLiveSearchItems(w http.ResponseWriter, r *http.Request, 
 		}
 	}
 	_, token, _ := i.viewer(r)
-	live, err := i.liveSearchItems(r, viewer, token, terms[0])
+	live, err := i.liveSearchItems(r, viewer, token, terms[0], false)
 	if err != nil {
 		http.Error(w, "Unavailable", 503)
 		return true
