@@ -240,6 +240,9 @@ func ArtworkRowsFrom(ctx context.Context) *ArtworkRows {
 	return r
 }
 
+// ImmutableArtworkPrefix marks grants whose descriptor pins a TMDB image path.
+const ImmutableArtworkPrefix = "immutable-artwork/"
+
 // LibraryCollagePrefix marks a generated library-view collage. The remainder
 // is the hex identity of the view and the child posters it was built from.
 const LibraryCollagePrefix = "library-collage/"

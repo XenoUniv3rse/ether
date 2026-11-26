@@ -2,7 +2,6 @@ package plex
 
 import (
 	"context"
-	"crypto/sha256"
 	"encoding/base64"
 	"fmt"
 	"math"
@@ -11,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/braedonsaunders/ether/internal/frontend"
+	kitimages "github.com/braedonsaunders/ether/internal/frontend/kit/images"
 	"github.com/braedonsaunders/ether/internal/frontends/plex/model"
 	"github.com/go-chi/chi/v5"
 )
@@ -311,7 +311,8 @@ func (s *Server) serveDiscoveryPoster(w http.ResponseWriter, r *http.Request, k 
 		writeHTTPError(w, 404)
 		return
 	}
-	ctx := r.Context()
+	ctx := kitimages.TrackCachePolicy(r.Context())
+	r = r.WithContext(ctx)
 	pr := FromContext(ctx)
 	t, e := s.artworkTitle(ctx, k)
 	if e != nil || pr.User == nil || !s.visibleTitle(ctx, pr.User, t) {
@@ -321,27 +322,13 @@ func (s *Server) serveDiscoveryPoster(w http.ResponseWriter, r *http.Request, k 
 	if lang == "" {
 		lang = pr.Language
 	}
-	t, version, e := d.PrepareArtwork(ctx, pr.User, t, lang)
+	t, _, e = d.PrepareArtwork(ctx, pr.User, t, lang)
 	if e != nil {
 		writeHTTPError(w, 404)
 		return
 	}
 	backdropWidth, _ := strconv.Atoi(r.URL.Query().Get("width"))
 	highBackdrop := kind == "backdrop" && backdropWidth > 1280 && backdropWidth <= 4000
-	etag := `"` + version + `"`
-	if highBackdrop {
-		etag = fmt.Sprintf("\"%s-w%d\"", version, backdropWidth)
-	}
-	if format := androidPhotoOutputFormat(r); format != "" {
-		etag = strings.TrimSuffix(etag, `"`) + "-" + format + `"`
-	}
-	w.Header().Set("Cache-Control", "private, max-age=86400")
-	w.Header().Set("Vary", "X-Plex-Token, X-Plex-Language")
-	w.Header().Set("ETag", etag)
-	if !d.Overlays.CustomPostersEnabled() && r.Header.Get("If-None-Match") == etag {
-		w.WriteHeader(http.StatusNotModified)
-		return
-	}
 	var data []byte
 	var ct string
 	if highBackdrop {
@@ -361,9 +348,12 @@ func (s *Server) serveDiscoveryPoster(w http.ResponseWriter, r *http.Request, k 
 	}
 	if d.Overlays.CustomPostersEnabled() {
 		if width, _ := strconv.Atoi(r.URL.Query().Get("width")); width > 0 && (kind == "" || kind == "poster") {
-			if resized, err := frontend.ResizePoster(data, width); err == nil {
-				data = resized
-				ct = "image/jpeg"
+			resized, resizedType, err := s.cachePhotoVariant(ctx, data, ct, fmt.Sprintf("poster-width-v1/%d", width), func(context.Context) ([]byte, string, error) {
+				out, err := frontend.ResizePoster(data, width)
+				return out, "image/jpeg", err
+			})
+			if err == nil {
+				data, ct = resized, resizedType
 			}
 		}
 	}
@@ -372,21 +362,6 @@ func (s *Server) serveDiscoveryPoster(w http.ResponseWriter, r *http.Request, k 
 		writeHTTPError(w, http.StatusBadGateway)
 		return
 	}
-	if plexAndroidClient(pr) {
-		w.Header().Add("Vary", "X-Plex-Product")
-	}
-	if d.Overlays.CustomPostersEnabled() {
-		etag = fmt.Sprintf("\"%x\"", sha256.Sum256(data))
-		w.Header().Set("ETag", etag)
-		w.Header().Set("Cache-Control", "private, max-age=0, must-revalidate")
-		if r.Header.Get("If-None-Match") == etag {
-			w.WriteHeader(http.StatusNotModified)
-			return
-		}
-	}
-	setArtworkHeaders(w.Header(), ct)
-	w.Header().Set("Content-Length", strconv.Itoa(len(data)))
-	if r.Method != http.MethodHead {
-		_, _ = w.Write(data)
-	}
+	w.Header().Set("Vary", "X-Plex-Token, X-Plex-Language, X-Plex-Product")
+	writeArtworkBytes(w, r, data, ct, kitimages.Revalidate)
 }

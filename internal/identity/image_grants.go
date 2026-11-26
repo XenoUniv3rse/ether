@@ -18,11 +18,10 @@ import (
 	"github.com/braedonsaunders/ether/internal/core"
 	"github.com/braedonsaunders/ether/internal/frontend"
 	"github.com/braedonsaunders/ether/internal/frontend/kit/authhdr"
+	kitimages "github.com/braedonsaunders/ether/internal/frontend/kit/images"
 	"github.com/braedonsaunders/ether/internal/reqmemo"
 	"github.com/braedonsaunders/ether/internal/store"
 )
-
-const immutableImageCacheControl = "private, max-age=31536000, immutable"
 
 func init() {
 	store.Register("frontend_image_grants", 1, `CREATE TABLE frontend_image_grants (hash TEXT PRIMARY KEY, source_hash TEXT NOT NULL REFERENCES identity_grants(hash) ON DELETE CASCADE, viewer_id INTEGER NOT NULL REFERENCES auth_users(id) ON DELETE CASCADE, surface TEXT NOT NULL, item INTEGER NOT NULL, device TEXT NOT NULL, image_kind TEXT NOT NULL, image_path TEXT NOT NULL, image_tag TEXT NOT NULL, expires INTEGER NOT NULL, revoked INTEGER NOT NULL DEFAULT 0); CREATE INDEX frontend_image_grants_source ON frontend_image_grants(source_hash);`)
@@ -443,19 +442,6 @@ func imageETag(img frontend.Image, width, height int, format string, blur bool) 
 	return `"` + hex.EncodeToString(sum[:16]) + `"`
 }
 
-func ifNoneMatchMatches(header, etag string) bool {
-	if header == "" || etag == "" {
-		return false
-	}
-	for _, candidate := range strings.Split(header, ",") {
-		trimmed := strings.TrimSpace(candidate)
-		if trimmed == "*" || trimmed == etag || strings.TrimPrefix(trimmed, "W/") == etag {
-			return true
-		}
-	}
-	return false
-}
-
 func (s *ImageGrantService) writeGrantedImage(w http.ResponseWriter, r *http.Request, viewer *core.Viewer, device core.Device, item core.RatingKey, channel string, img frontend.Image) {
 	width := grantedImageWidth(r, s.surface)
 	mediaBrowser := s.surface == "jellyfin" || s.surface == "emby"
@@ -511,32 +497,36 @@ func (s *ImageGrantService) writeGrantedImage(w http.ResponseWriter, r *http.Req
 			return
 		}
 	}
-	if etag := imageETag(img, width, height, format+strconv.Itoa(quality), blur); etag != "" {
-		w.Header().Set("ETag", etag)
-		if strings.HasPrefix(img.Path, frontend.LibraryLiveThumbPrefix) {
-			w.Header().Set("Cache-Control", "private, max-age=60")
-		} else if strings.HasPrefix(img.Path, frontend.PluginImagePrefix) {
-			// The plugin may replace the image behind the same URL.
-			w.Header().Set("Cache-Control", "private, max-age=86400")
-		} else {
-			w.Header().Set("Cache-Control", immutableImageCacheControl)
-		}
-		if ifNoneMatchMatches(r.Header.Get("If-None-Match"), etag) {
-			w.WriteHeader(http.StatusNotModified)
-			return
+	// Direct sources retain their immutable descriptor contract. Shared
+	// artwork descriptors authorize a selection and can resolve to new pixels
+	// after a provider refresh. Collage URLs include their source identity.
+	immutable := (s.artwork == nil && !strings.HasPrefix(img.Path, frontend.LibraryLiveThumbPrefix) &&
+		!strings.HasPrefix(img.Path, frontend.PluginImagePrefix)) ||
+		strings.HasPrefix(img.Path, frontend.ImmutableArtworkPrefix) || strings.HasPrefix(img.Path, frontend.LibraryCollagePrefix)
+	var etag string
+	if immutable {
+		etag = imageETag(img, width, height, format+strconv.Itoa(quality), blur)
+		if etag != "" {
+			w.Header().Set("Cache-Control", kitimages.Immutable)
+			if kitimages.NotModified(w, r, etag) {
+				return
+			}
+			w.Header().Del("Cache-Control")
+			w.Header().Del("ETag")
 		}
 	}
+	ctx := kitimages.TrackCachePolicy(r.Context())
 	var data []byte
 	var contentType string
 	var err error
 	if s.artwork != nil {
 		q := r.URL.Query()
 		siloPluginResize := s.surface == "silo" && item.IsPluginKey() && (q.Get("w") != "" || q.Get("maxWidth") != "" || q.Get("fillWidth") != "" || q.Get("h") != "")
-		data, contentType, err = s.artwork.Read(core.WithLiveApp(r.Context(), string(s.surface)), grantedArtworkRequest(viewer, device, item, channel, img), img, frontend.ArtworkTransform{Width: width, Height: height, Format: format, Blur: blur, Quality: quality, Fit: mediaBrowser || s.surface == "vela" || siloPluginResize})
+		data, contentType, err = s.artwork.Read(core.WithLiveApp(ctx, string(s.surface)), grantedArtworkRequest(viewer, device, item, channel, img), img, frontend.ArtworkTransform{Width: width, Height: height, Format: format, Blur: blur, Quality: quality, Fit: mediaBrowser || s.surface == "vela" || siloPluginResize})
 	} else {
 		data, contentType, err = s.images.Get(r.Context(), img.Path, width)
 	}
-	if err == nil && s.surface == "vela" && !strings.HasPrefix(contentType, "image/svg") {
+	if err == nil && s.artwork == nil && s.surface == "vela" && !strings.HasPrefix(contentType, "image/svg") {
 		data, contentType, err = fitGrantedImage(data, contentType, width, height)
 	}
 	if err != nil {
@@ -578,8 +568,19 @@ func (s *ImageGrantService) writeGrantedImage(w http.ResponseWriter, r *http.Req
 	h.Set("Content-Type", contentType)
 	h.Set("Content-Security-Policy", "default-src 'none'; img-src data:; style-src 'unsafe-inline'; sandbox")
 	h.Set("X-Content-Type-Options", "nosniff")
-	if h.Get("ETag") == "" {
+	if kitimages.NoStore(ctx) {
 		h.Set("Cache-Control", "private, no-store")
+	} else {
+		cacheControl := kitimages.Revalidate
+		if etag != "" {
+			cacheControl = kitimages.Immutable
+		} else {
+			etag = kitimages.ETag(data, contentType)
+		}
+		h.Set("Cache-Control", cacheControl)
+		if kitimages.NotModified(w, r, etag) {
+			return
+		}
 	}
 	h.Set("Content-Length", strconv.Itoa(len(data)))
 	if r.Method == http.MethodGet {

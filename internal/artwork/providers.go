@@ -14,10 +14,10 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/braedonsaunders/ether/internal/config"
 	"github.com/braedonsaunders/ether/internal/core"
+	kitimages "github.com/braedonsaunders/ether/internal/frontend/kit/images"
 	"golang.org/x/image/draw"
 )
 
@@ -31,17 +31,15 @@ func (im *Images) posterSettings() config.Posters {
 	}
 	return config.Posters{}
 }
-func posterVersionAt(p config.Posters, now time.Time) string {
+func (im *Images) PosterVersion() string {
+	p := im.posterSettings()
 	if !p.Enabled {
 		return ""
 	}
 	b, _ := json.Marshal(p)
-	// Periodic refresh permits provider-side style and rating changes.
-	b = append(b, []byte(strconv.FormatInt(now.Unix()/21600, 10))...)
 	h := sha256.Sum256(b)
 	return hex.EncodeToString(h[:])
 }
-func (im *Images) PosterVersion() string { return posterVersionAt(im.posterSettings(), im.now()) }
 func (im *Images) PosterGeneration() uint64 {
 	if im != nil && im.o.Posters != nil {
 		return im.o.Posters().Generation
@@ -55,12 +53,11 @@ func (im *Images) GetPoster(ctx context.Context, t *core.Title, fallback string,
 	p := im.posterSettings()
 	if p.Enabled && p.Validate() == nil {
 		if raw, ok := providerURL(p, t); ok {
-			original, err := im.providerOriginal(ctx, raw)
+			original, err := im.providerOriginal(ctx, raw, p.Generation)
 			if err == nil {
 				// Content identity keeps local variants valid across a 304 and
 				// replaces them immediately when the upstream poster changes.
-				sum := sha256.Sum256(original.Data)
-				key := "provider-resize-v2/" + hex.EncodeToString(sum[:]) + "/" + strconv.Itoa(clampWidth(w))
+				key := "provider-resize-v2/" + hex.EncodeToString(original.digest[:]) + "/" + strconv.Itoa(clampWidth(w))
 				load := func(context.Context) ([]byte, string, error) {
 					data, err := ResizePoster(original.Data, w)
 					return data, "image/jpeg", err
@@ -68,6 +65,7 @@ func (im *Images) GetPoster(ctx context.Context, t *core.Title, fallback string,
 				var data []byte
 				var ct string
 				if original.NoStore {
+					kitimages.MarkNoStore(ctx)
 					data, ct, err = load(ctx)
 				} else {
 					data, ct, err = im.get(ctx, key, load)

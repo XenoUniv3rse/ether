@@ -72,33 +72,33 @@ func TestProviderOriginalLifecycle(t *testing.T) {
 	}
 	raw, _ := providerURL(opts.Posters().Selected(), title)
 	expire := func() {
-		original, err := im.providerOriginal(context.Background(), raw)
+		original, err := im.providerOriginal(context.Background(), raw, 0)
 		if err != nil {
 			t.Fatal(err)
 		}
-		original.Expires = time.Now().Add(-time.Second)
-		data, _ := json.Marshal(original)
+		stale := *original
+		stale.Expires = time.Now().Add(-time.Second)
+		data, _ := json.Marshal(stale)
 		// Find the original's stable disk key without depending on file layout.
-		sum := providerCacheKey(raw)
+		sum := providerCacheKey(raw, 0)
 		im.writeDisk(sum, data)
 		im = NewImages(opts)
 	}
 	expire()
 	get(200)
-	if hits.Load() != 2 {
-		t.Fatal("missing conditional revalidation", hits.Load())
-	}
-	get(200)
-	if hits.Load() != 2 {
-		t.Fatal("304 did not renew freshness")
+	im.Wait()
+	renewed, err := im.providerOriginal(context.Background(), raw, 0)
+	if err != nil || !im.now().Before(renewed.Expires) {
+		t.Fatal("304 did not renew freshness", err)
 	}
 	version.Store(2)
 	expire()
+	if !bytes.Equal(before, get(200)) {
+		t.Fatal("expired original was not served while refreshing")
+	}
+	im.Wait()
 	if bytes.Equal(before, get(200)) {
 		t.Fatal("changed original reused stale local resize")
-	}
-	if hits.Load() != 3 {
-		t.Fatal("missing changed upstream revalidation")
 	}
 }
 
@@ -122,7 +122,7 @@ func TestProviderFreshnessPolicy(t *testing.T) {
 			}))
 			defer srv.Close()
 			im := NewImages(ImagesOptions{Dir: t.TempDir()})
-			img, err := im.providerOriginal(context.Background(), srv.URL)
+			img, err := im.providerOriginal(context.Background(), srv.URL, 0)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -132,7 +132,7 @@ func TestProviderFreshnessPolicy(t *testing.T) {
 			if time.Until(img.Expires) > 6*time.Hour {
 				t.Fatal("upstream extended refresh beyond six hours")
 			}
-			_, _, stored := im.readDisk(providerCacheKey(srv.URL))
+			_, _, stored := im.readDisk(providerCacheKey(srv.URL, 0))
 			if stored != policy.store {
 				t.Fatal("wrong persistence", stored)
 			}

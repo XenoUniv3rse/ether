@@ -15,6 +15,7 @@ import (
 	"github.com/braedonsaunders/ether/internal/artwork"
 	"github.com/braedonsaunders/ether/internal/contentrating"
 	"github.com/braedonsaunders/ether/internal/core"
+	kitimages "github.com/braedonsaunders/ether/internal/frontend/kit/images"
 	"github.com/braedonsaunders/ether/internal/ratings"
 	"github.com/braedonsaunders/ether/internal/reqmemo"
 	"github.com/braedonsaunders/ether/internal/store"
@@ -497,6 +498,10 @@ func (s *Service) compositeContext(ctx context.Context, data []byte, labels []st
 		return nil, "", err
 	}
 	labels = visibleLabels(labels)
+	if kitimages.NoStore(ctx) {
+		result, err := s.renderPoster(ctx, data, labels, settings)
+		return result, "image/jpeg", err
+	}
 	// Hash incrementally; never duplicate the source image on a warm request.
 	hash := sha256.New()
 	_, _ = hash.Write(data)

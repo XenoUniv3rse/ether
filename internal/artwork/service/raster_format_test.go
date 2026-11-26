@@ -86,9 +86,9 @@ func TestRasterFormatReusesVariantsAndCoalesces(t *testing.T) {
 	if _, kind, err := image.DecodeConfig(bytes.NewReader(asPNG)); err != nil || kind != "png" {
 		t.Fatal(kind, err)
 	}
-	expired, _, err := c.RasterFormat(ctx, data, "image/png", "jpeg", now.Add(imageTTL+time.Second))
-	if err != nil || &expired[0] == &out[0] {
-		t.Fatal("expired variant retained")
+	later, _, err := c.RasterFormat(ctx, data, "image/png", "jpeg", now.Add(48*time.Hour))
+	if err != nil || &later[0] != &out[0] {
+		t.Fatal("content-addressed variant expired")
 	}
 }
 

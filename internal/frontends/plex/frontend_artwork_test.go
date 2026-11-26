@@ -238,9 +238,9 @@ func TestFrontendArtworkVariantsAreScopedAndValidated(t *testing.T) {
 	if !complete {
 		t.Fatal("fresh variants did not complete title artwork")
 	}
-	// Validate the legacy artwork-v1 identity independently of the implementation.
+	// Validate the immutable marker and scoped artwork-v1 digest independently.
 	sum := sha256.Sum256([]byte(fmt.Sprintf("%d\x00%d\x00%s\x00%s\x00%s\x00%s", req.Viewer.ID, req.Item, req.Device.Language, frontend.ImagePoster, "variant\x00/alternative.jpg", "artwork-v1")))
-	expected := base64.RawURLEncoding.EncodeToString(sum[:])
+	expected := frontend.ImmutableArtworkPrefix + base64.RawURLEncoding.EncodeToString(sum[:])
 	count := 0
 	for _, entry := range entries {
 		if strings.Contains(entry.Path, "alternative") || strings.Contains(entry.Path, "example.com") {

@@ -46,6 +46,10 @@ func NewBackedRemoteCache(store *artwork.Images) *RemoteCache {
 	return &RemoteCache{store: store}
 }
 
+func (c *RemoteCache) IsImmutableURL(rawURL string) bool {
+	return c != nil && c.store != nil && c.store.IsImmutableURL(rawURL)
+}
+
 var ErrRemoteImageNotFound = errors.New("image not found")
 
 func (c *RemoteCache) IsNotFound(err error) bool {

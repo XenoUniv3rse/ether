@@ -2,8 +2,6 @@ package plex
 
 import (
 	"cmp"
-	"crypto/sha256"
-	"fmt"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -14,6 +12,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/braedonsaunders/ether/internal/frontend"
+	kitimages "github.com/braedonsaunders/ether/internal/frontend/kit/images"
 	"github.com/braedonsaunders/ether/internal/frontends/plex/model"
 )
 
@@ -178,13 +177,8 @@ func (s *Server) serveCatchUpArt(w http.ResponseWriter, r *http.Request, key, ki
 		s.writeErr(w, r, err)
 		return
 	}
-	if width, _ := r.Context().Value(photoFitWidthKey{}).(int); width > 0 && width <= 4096 && contentType == "image/jpeg" {
-		// A show can resolve to different airings for viewers with different
-		// channel grants. Cache the resized bytes by source content.
-		data = fitPhoto(r.Context(), fmt.Sprintf("catchup:%x", sha256.Sum256(data)), data, contentType)
-	}
-	w.Header().Set("Content-Type", contentType)
-	_, _ = w.Write(data)
+	data = s.fitPhoto(r.Context(), data, contentType)
+	writeArtworkBytes(w, r, data, contentType, kitimages.Revalidate)
 }
 
 func (s *Server) handleCatchUpPlayback(w http.ResponseWriter, r *http.Request) bool {

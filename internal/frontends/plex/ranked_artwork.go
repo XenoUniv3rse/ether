@@ -2,12 +2,14 @@ package plex
 
 import (
 	"bytes"
+	"context"
 	"image"
 	"net/http"
 	"net/url"
 	"strconv"
 
 	"github.com/braedonsaunders/ether/internal/frontend"
+	kitimages "github.com/braedonsaunders/ether/internal/frontend/kit/images"
 	"github.com/braedonsaunders/ether/internal/frontends/plex/model"
 )
 
@@ -50,6 +52,7 @@ func (s *Server) serveRankedArtwork(w http.ResponseWriter, r *http.Request, key 
 		writeHTTPError(w, 404)
 		return
 	}
+	r = r.WithContext(kitimages.TrackCachePolicy(r.Context()))
 	pr := FromContext(r.Context())
 	req := frontend.ArtworkRequest{Viewer: pr.User, Item: key, Device: frontend.Device{Language: pr.Language, Product: pr.Product, Platform: pr.Platform}}
 	images, complete, err := art.List(r.Context(), req)
@@ -190,17 +193,15 @@ func (s *Server) writeRankedImage(w http.ResponseWriter, r *http.Request, data [
 		return false
 	}
 	if width > 0 {
-		data, err = frontend.ResizePoster(data, width)
+		data, ct, err = s.cachePhotoVariant(r.Context(), data, ct, "poster-width-v1/"+strconv.Itoa(width), func(context.Context) ([]byte, string, error) {
+			out, err := frontend.ResizePoster(data, width)
+			return out, "image/jpeg", err
+		})
 		if err != nil {
 			return false
 		}
 	}
-	setArtworkHeaders(w.Header(), ct)
-	w.Header().Set("Cache-Control", "private, max-age=3600")
 	w.Header().Add("Vary", "X-Plex-Token")
-	w.Header().Set("Content-Length", strconv.Itoa(len(data)))
-	if r.Method != http.MethodHead {
-		_, _ = w.Write(data)
-	}
+	writeArtworkBytes(w, r, data, ct, kitimages.Revalidate)
 	return true
 }

@@ -140,50 +140,112 @@ func parseRetryAfter(h http.Header, now time.Time, ceiling time.Duration) (time.
 	return time.Time{}, false
 }
 
-// Originals have a stable key across client widths and clock buckets. Provider
-// scores/styles are revalidated at least every six hours; owner URL/profile/key
-// edits select a new key immediately. Viewer ratings do not alter provider art.
+// Originals have a stable key across client widths. Stale provider art
+// is revalidated on use. Owner edits select a new key immediately. Viewer
+// ratings do not alter provider art.
 type providerImage struct {
 	Data               []byte
 	ETag, LastModified string
 	CacheControl       string
 	Expires            time.Time
 	NoStore            bool
+	digest             [sha256.Size]byte
 }
 
-func (im *Images) providerOriginal(ctx context.Context, raw string) (*providerImage, error) {
-	key := providerCacheKey(raw)
-	read := func() *providerImage {
-		im.mu.Lock()
-		cached, ok := im.items.Get(key)
-		im.mu.Unlock()
-		var data []byte
-		if ok {
-			data = cached.data
+const (
+	maxPosterFetches        = 32
+	maxPosterFetchesPerHost = 12
+	maxPosterRefreshes      = 8
+)
+
+type posterHost struct {
+	slots chan struct{}
+	users int
+}
+
+func (im *Images) readProviderOriginal(key string) *memImage {
+	im.mu.Lock()
+	cached, ok := im.items.Get(key)
+	im.mu.Unlock()
+	if ok {
+		return cached
+	}
+	data, _, ok := im.readDiskRaw(key)
+	if !ok {
+		return nil
+	}
+	var img providerImage
+	if json.Unmarshal(data, &img) != nil || len(img.Data) == 0 {
+		return nil
+	}
+	return providerMemoryEntry(key, &img)
+}
+
+func providerMemoryEntry(key string, img *providerImage) *memImage {
+	img.digest = sha256.Sum256(img.Data)
+	return &memImage{key: key, data: img.Data, provider: img}
+}
+
+func (im *Images) providerOriginal(ctx context.Context, raw string, generation uint64) (*providerImage, error) {
+	key := providerCacheKey(raw, generation)
+	entry := im.readProviderOriginal(key)
+	if entry != nil {
+		img := entry.provider
+		if !im.now().Before(img.Expires) {
+			im.startProviderRefresh(key, raw)
 		} else {
-			data, _, _ = im.readDisk(key)
-		}
-		var img providerImage
-		if json.Unmarshal(data, &img) != nil || len(img.Data) == 0 {
-			return nil
-		}
-		if !ok {
 			im.mu.Lock()
-			im.addLocked(&memImage{key: key, data: data})
+			if _, ok := im.items.Peek(key); !ok {
+				im.addLocked(entry)
+			}
 			im.mu.Unlock()
 		}
-		return &img
-	}
-	if img := read(); img != nil && im.now().Before(img.Expires) {
 		return img, nil
 	}
-	// Different local sizes share this flight. A cancelled leader finishes
-	// its work before returning; live waiters retry on their own context.
-	result, err := im.inflight.Do(ctx, key, func(ctx context.Context) (*memImage, error) {
-		old := read()
-		if old != nil && im.now().Before(old.Expires) {
-			data, _ := json.Marshal(old)
-			return &memImage{key: key, data: data}, nil
+
+	entry, err := im.loadProviderOriginal(ctx, key, raw, false)
+	if err != nil {
+		return nil, err
+	}
+	return entry.provider, nil
+}
+
+func (im *Images) startProviderRefresh(key, raw string) {
+	host := providerBackoffKey(urlHost(raw))
+	im.mu.Lock()
+	defer im.mu.Unlock()
+	if im.closed || im.revalidating[key] || im.posterRefreshes >= maxPosterRefreshes ||
+		im.backoffActiveLocked(key, host, im.now()) {
+		return
+	}
+	im.revalidating[key] = true
+	im.posterRefreshes++
+	go func() {
+		defer func() {
+			im.mu.Lock()
+			im.posterRefreshes--
+			delete(im.revalidating, key)
+			im.revalCond.Broadcast()
+			im.mu.Unlock()
+		}()
+		_, err := im.loadProviderOriginal(im.bgCtx, key, raw, true)
+		if err != nil && im.bgCtx.Err() == nil {
+			im.recordNeg(key, fetchResult{err: err}, im.now(), true)
+		}
+	}()
+}
+
+func (im *Images) loadProviderOriginal(ctx context.Context, key, raw string, refresh bool) (*memImage, error) {
+	return im.inflight.Do(ctx, key, func(ctx context.Context) (*memImage, error) {
+		entry := im.readProviderOriginal(key)
+		var old *providerImage
+		if entry != nil {
+			old = entry.provider
+			if !refresh || im.now().Before(old.Expires) {
+				return entry, nil
+			}
+		} else if refresh {
+			return nil, errProvider
 		}
 		img, err := im.fetchProviderOriginal(ctx, raw, old)
 		if err != nil {
@@ -192,15 +254,8 @@ func (im *Images) providerOriginal(ctx context.Context, raw string) (*providerIm
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		data, err := json.Marshal(img)
-		if err != nil {
-			return nil, err
-		}
-		result := &memImage{key: key, data: data}
+		result := providerMemoryEntry(key, img)
 		if img.NoStore {
-			im.mu.Lock()
-			im.items.Remove(key)
-			im.mu.Unlock()
 			if im.o.Dir != "" {
 				im.diskMu.Lock()
 				if info, err := os.Stat(im.diskPath(key)); err == nil && os.Remove(im.diskPath(key)) == nil && im.diskKnown {
@@ -208,33 +263,77 @@ func (im *Images) providerOriginal(ctx context.Context, raw string) (*providerIm
 				}
 				im.diskMu.Unlock()
 			}
+			im.mu.Lock()
+			im.items.Remove(key)
+			im.mu.Unlock()
 		} else {
-			im.writeDisk(key, data)
+			if im.o.Dir != "" {
+				data, err := json.Marshal(img)
+				if err != nil {
+					return nil, err
+				}
+				im.writeDisk(key, data)
+			}
 			im.mu.Lock()
 			im.addLocked(result)
 			im.mu.Unlock()
 		}
+		im.clearNeg(key)
 		return result, nil
 	})
-	if err != nil {
-		return nil, err
-	}
-	var img providerImage
-	if json.Unmarshal(result.data, &img) != nil {
-		return nil, errProvider
-	}
-	return &img, nil
+}
+
+func providerBackoffKey(host string) string {
+	// A credentialed poster provider and an untrusted URL may share a host.
+	return "poster/" + host
 }
 
 func (im *Images) fetchProviderOriginal(ctx context.Context, raw string, old *providerImage) (*providerImage, error) {
-	ctx, cancel := context.WithTimeout(ctx, 8*time.Second)
-	defer cancel()
+	host := urlHost(raw)
+	if host == "" {
+		return nil, errProvider
+	}
+	backoffKey := providerBackoffKey(host)
+	if _, paused := im.hostPausedUntil(backoffKey, im.now()); paused {
+		return nil, errProvider
+	}
+
+	im.mu.Lock()
+	limit := im.posterHosts[host]
+	if limit == nil {
+		limit = &posterHost{slots: make(chan struct{}, maxPosterFetchesPerHost)}
+		im.posterHosts[host] = limit
+	}
+	limit.users++
+	im.mu.Unlock()
+	defer func() {
+		im.mu.Lock()
+		limit.users--
+		if limit.users == 0 {
+			delete(im.posterHosts, host)
+		}
+		im.mu.Unlock()
+	}()
+
+	// Wait for the host first so a busy host cannot occupy the global queue.
+	select {
+	case limit.slots <- struct{}{}:
+		defer func() { <-limit.slots }()
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
 	select {
 	case im.posterSlots <- struct{}{}:
 		defer func() { <-im.posterSlots }()
 	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	if _, paused := im.hostPausedUntil(backoffKey, im.now()); paused {
 		return nil, errProvider
 	}
+
+	ctx, cancel := context.WithTimeout(ctx, 8*time.Second)
+	defer cancel()
 	client := *im.o.HTTPClient
 	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, raw, nil)
@@ -249,6 +348,10 @@ func (im *Images) fetchProviderOriginal(ctx context.Context, raw string, old *pr
 		return nil, errProvider
 	}
 	defer resp.Body.Close()
+	now := im.now()
+	if until, ok := parseRetryAfter(resp.Header, now, hostMaxBackoff); ok || resp.StatusCode == http.StatusTooManyRequests {
+		im.recordHostBackoff(backoffKey, until, ok, now)
+	}
 	img := &providerImage{}
 	if resp.StatusCode == http.StatusNotModified && old != nil {
 		*img = *old
@@ -274,7 +377,7 @@ func (im *Images) fetchProviderOriginal(ctx context.Context, raw string, old *pr
 	return img, nil
 }
 
-func providerCacheKey(raw string) string {
-	sum := sha256.Sum256([]byte(raw))
-	return "provider-original-v2/" + hex.EncodeToString(sum[:])
+func providerCacheKey(raw string, generation uint64) string {
+	sum := sha256.Sum256([]byte(strconv.FormatUint(generation, 10) + "\x00" + raw))
+	return "provider-original-v3/" + hex.EncodeToString(sum[:])
 }

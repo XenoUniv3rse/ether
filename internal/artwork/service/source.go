@@ -165,6 +165,7 @@ type frontendArtworkEntry struct {
 	discoveryKind                 string
 	discovery                     bool
 	remotePath                    string
+	immutable                     bool
 	channel                       bool
 	programmePath                 string
 	channelLogo                   string
@@ -343,6 +344,9 @@ func (a Source) entries(ctx context.Context, req frontend.ArtworkRequest) ([]fro
 			identityReq.Viewer = &viewer
 		}
 		ref := artworkReference(identityReq, kind, source)
+		if entry.immutable || artwork.ValidPath(entry.remotePath) {
+			ref = frontend.ImmutableArtworkPrefix + ref
+		}
 		entry.image = frontend.Image{Kind: kind, Path: ref, Tag: ref, Subject: entry.subject}
 		entry.virtualSeason = virtualSeason
 		entries = append(entries, entry)
@@ -412,7 +416,7 @@ func (a Source) entries(ctx context.Context, req frontend.ArtworkRequest) ([]fro
 			}
 			continue
 		}
-		add(item.kind, item.element+"\x00"+path+"\x00"+collectionVersion, frontendArtworkEntry{element: item.element})
+		add(item.kind, item.element+"\x00"+path+"\x00"+collectionVersion, frontendArtworkEntry{element: item.element, immutable: title != nil && artwork.ValidPath(path)})
 	}
 	complete := true
 	if title != nil {
