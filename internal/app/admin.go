@@ -351,7 +351,7 @@ func (a *App) buildAdmin() http.Handler {
 			})
 		}
 	}
-	return sourceOwnerContext(h)
+	return catalogueDeadline("console", sourceOwnerContext(h))
 }
 
 func (a *App) plexWatchAPI() admin.PlexWatch {

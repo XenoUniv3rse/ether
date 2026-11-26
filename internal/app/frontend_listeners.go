@@ -508,7 +508,8 @@ func (m *frontendListeners) observe(id frontend.Protocol, mountPrefix string, ne
 	if next == nil {
 		return nil
 	}
-	return m.perf.wrap(string(id), m.observeTraffic(id, mountPrefix, next))
+	next = m.observeTraffic(id, mountPrefix, next)
+	return m.perf.wrap(string(id), catalogueDeadline(string(id), next))
 }
 
 func (m *frontendListeners) observeTraffic(id frontend.Protocol, mountPrefix string, next http.Handler) http.Handler {

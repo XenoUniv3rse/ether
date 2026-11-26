@@ -168,15 +168,21 @@ func (c *Catalog) OwnerIncluded(ctx context.Context, key core.RatingKey) (bool, 
 	return true, nil
 }
 
-// policySQLHidden returns the SQL predicate that keeps non-hidden rows for
-// viewerID, preserving zero extra SQL when the policy is passive or no owner
-// includes exist, and keeping custom viewer rules enforced.
-func (c *Catalog) policySQLHidden(viewerID int64, policy *libraryfilter.Filter) (string, []any) {
-	q, a := policy.SQLHidden()
-	if !policy.Passive() && !c.hasCustomViewerRules(viewerID) && c.hasOwnerIncludes() {
-		return "((NOT (" + q + ")) OR EXISTS (SELECT 1 FROM catalog_owner_includes oi WHERE oi.key=t.key LIMIT 1 OFFSET 0))", a
+// policySQLShown keeps visible rows and includes the owner's overrides where
+// they apply. A typed browse exposes just that media type's indexed rules.
+func (c *Catalog) policySQLShown(f core.Filter, policy *libraryfilter.Filter) (string, []any) {
+	var q string
+	var a []any
+	switch f.Type {
+	case core.TypeMovie, core.TypeShow:
+		q, a = policy.SQLShownForType(f.Type)
+	default:
+		q, a = policy.SQLShown()
 	}
-	return "NOT (" + q + ")", a
+	if !policy.Passive() && !c.hasCustomViewerRules(f.CatalogViewerID) && c.hasOwnerIncludes() {
+		q = "(" + q + " OR EXISTS (SELECT 1 FROM catalog_owner_includes oi WHERE oi.key=t.key LIMIT 1 OFFSET 0))"
+	}
+	return "(" + q + ")", a
 }
 
 func meetsBars(cfg config.Catalog, t core.Title) bool {

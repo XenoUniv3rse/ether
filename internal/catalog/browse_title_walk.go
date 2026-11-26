@@ -5,6 +5,7 @@ import (
 	"reflect"
 	"strings"
 
+	"github.com/braedonsaunders/ether/internal/config"
 	"github.com/braedonsaunders/ether/internal/core"
 	"github.com/braedonsaunders/ether/internal/store"
 )
@@ -116,10 +117,34 @@ func walkableFilter(f core.Filter) bool {
 // rejects between them, never the rest of the library. Reading the page's
 // rows apart matters most on PostgreSQL, whose index scan fetches the row
 // of every title it skips: 24,000 titles deep, 800 ms against 11 ms.
-func (c *Catalog) titlePageKeys(ctx context.Context, where string, args []any, q core.BrowseQuery, offset, limit int) ([]core.RatingKey, error) {
+func (c *Catalog) titlePageKeys(ctx context.Context, where string, args []any, q core.BrowseQuery, offset, limit int, cfg config.Catalog, nowTS int64) ([]core.RatingKey, error) {
 	// Keep the page ordered by the covering index even when planner statistics
 	// prefer enumerating and sorting the genre's entire library.
-	rows, err := c.db.QueryContext(ctx, `SELECT t.key FROM catalog_titles t`+c.indexedBy("catalog_titles_type_browse_sort")+` WHERE `+c.genreProbe(where, q.Filter)+` ORDER BY `+browseOrder(q)+`, t.key ASC LIMIT ? OFFSET ?`, append(append([]any{}, args...), limit, offset)...)
+	titleIndex := c.indexedBy("catalog_titles_type_browse_sort")
+	order := browseOrder(q) + ", t.key ASC"
+	query := `SELECT t.key FROM catalog_titles t` + titleIndex + ` WHERE ` + c.genreProbe(where, q.Filter) + ` ORDER BY ` + order + ` LIMIT ? OFFSET ?`
+	queryArgs := append(append([]any{}, args...), limit, offset)
+	if q.Filter.Type == core.TypeMovie && cfg.ShowUpcomingMovies {
+		// The title index needs a single browsable value to emit title order.
+		// Read the mirrored page in index order, seek the separate future
+		// range by release date, and merge just the requested prefixes.
+		mirror, mirrorArgs, err := c.browseWhereTier(q.Filter, false, browseMirrored, cfg, nowTS)
+		if err != nil {
+			return nil, err
+		}
+		upcoming, upcomingArgs, err := c.browseWhereTier(q.Filter, false, browseUpcomingOutsideMirror, cfg, nowTS)
+		if err != nil {
+			return nil, err
+		}
+		releaseIndex := c.indexedBy("catalog_titles_type_browse_count")
+		query = `SELECT t.key FROM (SELECT * FROM (SELECT t.key,t.sort_title FROM catalog_titles t` +
+			titleIndex + ` WHERE ` + c.genreProbe(mirror, q.Filter) + ` ORDER BY ` + order + ` LIMIT ?) AS mirrored
+			UNION ALL SELECT * FROM (SELECT t.key,t.sort_title FROM catalog_titles t` + releaseIndex +
+			` WHERE ` + c.genreProbe(upcoming, q.Filter) + ` ORDER BY ` + order + ` LIMIT ?) AS upcoming) t ORDER BY ` + order + ` LIMIT ? OFFSET ?`
+		queryArgs = append(append(mirrorArgs, offset+limit), upcomingArgs...)
+		queryArgs = append(queryArgs, offset+limit, limit, offset)
+	}
+	rows, err := c.db.QueryContext(ctx, query, queryArgs...)
 	if err != nil {
 		return nil, err
 	}
