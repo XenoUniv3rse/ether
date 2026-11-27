@@ -491,3 +491,25 @@ func (g *Grants) SignOutViewer(ctx context.Context, viewerID int64) (int, error)
 	}
 	return int(total), nil
 }
+
+// ActiveViewerIDs returns the active viewers with a valid grant to surface.
+// It exposes no token material and does not touch grant activity.
+func (g *Grants) ActiveViewerIDs(ctx context.Context, surface string) ([]int64, error) {
+	rows, err := g.db.QueryContext(ctx, `SELECT DISTINCT g.viewer_id FROM identity_grants g
+	 JOIN auth_users u ON u.id=g.viewer_id
+	 WHERE g.surface=? AND g.revoked=0 AND g.expires>? AND u.active=1 AND u.origin<>'dlna_guest'
+	 ORDER BY g.viewer_id`, surface, g.now().UnixMilli())
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var ids []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}

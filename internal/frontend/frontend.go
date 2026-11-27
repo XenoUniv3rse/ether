@@ -614,6 +614,9 @@ type Host struct {
 	// X-Forwarded-Prefix from r, honouring forwarding headers only from trusted proxies.
 	RequestOrigin func(*http.Request) (clientnet.RequestOrigin, bool)
 	// PageFreshness invalidates cached browse bodies. Nil disables the cache.
+	// LineupPolicy returns the viewer's cached rules revision and whether
+	// catalogue changes can alter the policy's admission decisions.
+	LineupPolicy  func(viewerID int64) (revision int64, judged bool)
 	PageFreshness func() PageFreshness
 	// CacheDir is a node-local directory this frontend alone may fill with
 	// files it can regenerate. It may be emptied between mounts. Empty
@@ -651,6 +654,7 @@ type PersonalHomeStore interface {
 // the cached body.
 type PageFreshness struct {
 	Catalog, Config, Layout, Watch, Favorite, Hidden, Listed, Images, Grants, Accounts, Safety, Libraries, KindSync, Screens uint64
+	Availability, EpisodeOrder                                                                                               uint64
 }
 
 var ErrNotRegistered = errors.New("frontend not registered")

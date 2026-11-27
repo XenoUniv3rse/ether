@@ -22,6 +22,7 @@ import (
 	"github.com/braedonsaunders/ether/internal/config"
 	"github.com/braedonsaunders/ether/internal/core"
 	"github.com/braedonsaunders/ether/internal/debrid"
+	"github.com/braedonsaunders/ether/internal/frontend"
 	"github.com/braedonsaunders/ether/internal/perfharness"
 	"github.com/braedonsaunders/ether/internal/store"
 )
@@ -377,6 +378,17 @@ func runPerfMatrixCase(t *testing.T, ctx context.Context, fixture string, c perf
 			selected = append(selected, client)
 		}
 	}
+	// A production Xtream mount starts preparing lineups for granted viewers
+	// on its own. Wait for that startup prerequisite before timing downloads.
+	for _, client := range selected {
+		for _, step := range client.Steps {
+			if client.Surface == "xtream" && step.Name == "M3U lineup export" {
+				if err := waitPerfXtreamLineup(ctx, a, viewers[c.viewer].ID); err != nil {
+					t.Fatal("Xtream startup lineup:", err)
+				}
+			}
+		}
+	}
 	r.Sequential(ctx, c.name, viewers[c.viewer:c.viewer+1], selected)
 	r.Sequential(ctx, c.name, viewers[:1], ownerOnly)
 	if ctx.Err() != nil {
@@ -391,10 +403,33 @@ func runPerfMatrixCase(t *testing.T, ctx context.Context, fixture string, c perf
 	if err != nil {
 		t.Fatal(err)
 	}
+	if os.Getenv("ETHER_PERF_GATE_STEPS") != "" {
+		for _, result := range r.Results() {
+			if record, ok := byTag[result.Tag]; ok {
+				t.Logf("%s / %s: statements=%d rows=%d writes=%d HTTP=%d error=%q",
+					result.Client, result.Step, record.Queries, record.Rows, record.Writes, result.Status, result.Err)
+			}
+		}
+	}
 	report.Add(c.name, r.Results(), byTag, cs)
 	report.CheckRoutes(c.name, inventory, r.Results(), byTag, perfMatrixRouteExceptions)
 	t.Logf("recorded %d attempts", len(r.Results()))
 	writeReport()
+}
+
+func waitPerfXtreamLineup(ctx context.Context, a *App, userID int64) error {
+	inst, _ := a.frontends.registry.Instance("xtream")
+	prepared, ok := inst.(interface {
+		WaitLineup(context.Context, *frontend.Viewer) error
+	})
+	if !ok {
+		return fmt.Errorf("Xtream lineup builder unavailable")
+	}
+	viewer, err := a.users.ActiveUser(ctx, userID)
+	if err != nil {
+		return err
+	}
+	return prepared.WaitLineup(ctx, viewer)
 }
 
 type perfMatrixPlexTV struct{}

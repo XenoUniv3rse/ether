@@ -424,8 +424,20 @@ func newFrontendRuntime(a *App, cfg config.Config) (*frontendRuntime, error) {
 			return r.secureOriginsFor(ctx, id, req)
 		}, SurfaceURL: func(ctx context.Context, req *http.Request) (string, error) {
 			return scorecardSurfaceURL(ctx, r, id, req)
-		}, PublicOrigin: publicOrigin, RepoFileURL: repoFile, TracePlayback: a.tracePlayback, ServerIdentity: serverIdentity, OwnerSubscription: ownerSub, LANViewer: lanViewer, PageFreshness: func() frontend.PageFreshness {
+		}, PublicOrigin: publicOrigin, RepoFileURL: repoFile, TracePlayback: a.tracePlayback, ServerIdentity: serverIdentity, OwnerSubscription: ownerSub, LANViewer: lanViewer, LineupPolicy: func(id int64) (int64, bool) {
+			u, _ := a.users.ActiveUser(context.Background(), id)
+			revision, judged := a.catalog.ViewerRulesJudge(u)
+			return revision, judged || a.safety.Restricted(u)
+		}, PageFreshness: func() frontend.PageFreshness {
 			f := a.browseFreshness()
+			if id == "xtream" {
+				if a.availability != nil {
+					f.Availability = a.availability.VisibilityGeneration()
+				}
+				if a.episodeorder != nil {
+					f.EpisodeOrder = a.episodeorder.Generation()
+				}
+			}
 			if imageRevision != nil {
 				f.Images = imageRevision()
 			}

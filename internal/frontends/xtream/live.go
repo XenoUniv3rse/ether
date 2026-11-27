@@ -2,16 +2,17 @@ package xtream
 
 import (
 	"bufio"
-	"context"
 	"encoding/base64"
 	"encoding/xml"
 	"fmt"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/braedonsaunders/ether/internal/frontend"
+	"github.com/braedonsaunders/ether/internal/frontend/kit/lineup"
 )
 
 func xtreamOwnerGroupRef(id string) string {
@@ -372,15 +373,21 @@ func (i *instance) xmltv(w http.ResponseWriter, r *http.Request, l login) {
 	_, _ = w.Write([]byte("</tv>"))
 }
 
-var m3uEscaper = strings.NewReplacer("\r", " ", "\n", " ", "\"", "'")
-
-func cleanM3U(s string) string { return m3uEscaper.Replace(s) }
-
 func (i *instance) playlist(w http.ResponseWriter, r *http.Request, l login) {
 	base := i.base(r)
 	if base == "" {
 		http.Error(w, "Unavailable", 503)
 		return
+	}
+	var cached io.ReadCloser
+	if i.lineups != nil {
+		var err error
+		cached, err = i.lineups.Open(r.Context(), lineup.ViewerKey(l.viewer, r.URL.Query().Get("category_id")))
+		if err != nil {
+			http.Error(w, "Unavailable", 503)
+			return
+		}
+		defer cached.Close()
 	}
 	cs, err := i.channels(r, l)
 	if err != nil {
@@ -390,51 +397,22 @@ func (i *instance) playlist(w http.ResponseWriter, r *http.Request, l login) {
 	r = i.channelArtwork(r.WithContext(frontend.WithExportTitlesOnly(r.Context())), l, cs, "")
 	w.Header().Set("Content-Type", "audio/x-mpegurl; charset=utf-8")
 	out := bufio.NewWriterSize(w, 64<<10)
-	defer out.Flush()
 	_, _ = fmt.Fprintln(out, "#EXTM3U")
-	liveExt := "m3u8"
-	if strings.EqualFold(r.URL.Query().Get("output"), "ts") || strings.EqualFold(r.URL.Query().Get("output"), "mpegts") {
-		liveExt = "ts"
+	ext := "m3u8"
+	if output := r.URL.Query().Get("output"); strings.EqualFold(output, "ts") || strings.EqualFold(output, "mpegts") {
+		ext = "ts"
 	}
 	for _, c := range cs {
-		group := strings.TrimSpace(c.Group)
-		if len(c.Groups) > 0 {
-			group = strings.TrimSpace(c.Groups[0].Name)
+		if err := lineup.WriteLive(out, c, i.image(r, l, 0, c.ID, c.Images), base, l.username, l.password, l.channels[c.ID], ext); err != nil {
+			panic(http.ErrAbortHandler)
 		}
-		if group == "" {
-			group = "Live TV"
-		}
-		_, _ = fmt.Fprintf(out, "#EXTINF:-1 tvg-id=\"%s\" tvg-logo=\"%s\" group-title=\"%s\",%s\n%s/live/%s/%s/%d.%s\n", cleanM3U(c.ID), cleanM3U(i.image(r, l, 0, c.ID, c.Images)), cleanM3U(group), cleanM3U(c.Name), base, l.username, l.password, l.channels[c.ID], liveExt)
 	}
-	// Movies are emitted a page at a time; exporting never accumulates the catalogue.
-	if err := i.walk(r, l, "movie", false, func(_ *http.Request, l login, t frontend.Title, cat string) error {
-		_, err := fmt.Fprintf(out, "#EXTINF:-1 group-title=\"Movies\",%s\n%s/movie/%s/%s/%d.mkv\n", cleanM3U(t.Title), base, l.username, l.password, l.ids[t.Key])
-		return err
-	}); err != nil {
-		return
+	if cached != nil {
+		err = lineup.WriteSnapshot(out, cached, base, l.username, l.password)
+	} else {
+		err = i.writeLineup(r, l, out, base)
 	}
-	type episodeLine struct {
-		show, title     string
-		season, episode int
+	if err != nil || out.Flush() != nil {
+		panic(http.ErrAbortHandler)
 	}
-	_ = frontend.WalkCompactTitles(r.Context(), pageSize, func(ctx context.Context, refs []string) (map[string]int32, error) {
-		return i.host.IDs.CompactBatch(ctx, "xtream", "item", refs)
-	}, func(emit func(frontend.RatingKey, int32, episodeLine) error) error {
-		return i.walk(r, l, "show", false, func(r *http.Request, l login, show frontend.Title, _ string) error {
-			return i.children(r, l, show.Key, false, func(l login, season frontend.Title) error {
-				if season.Type != frontend.TypeSeason {
-					return nil
-				}
-				return i.children(r, l, season.Key, false, func(_ login, ep frontend.Title) error {
-					if ep.Type != frontend.TypeEpisode {
-						return nil
-					}
-					return emit(ep.Key, frontend.ExportCompactID(r.Context(), ep.Key), episodeLine{show.Title, ep.Title, ep.Season, ep.Episode})
-				})
-			})
-		})
-	}, func(item episodeLine, id int32) error {
-		_, err := fmt.Fprintf(out, "#EXTINF:-1 group-title=\"Series\",%s S%02dE%02d %s\n%s/series/%s/%s/%d.mkv\n", cleanM3U(item.show), item.season, item.episode, cleanM3U(item.title), base, l.username, l.password, id)
-		return err
-	})
 }

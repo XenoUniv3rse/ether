@@ -64,6 +64,7 @@ func mount(t *testing.T, h frontend.Host) http.Handler {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = i.Close(context.Background()) })
 	return i.Handler()
 }
 func request(h http.Handler, path string) *httptest.ResponseRecorder {

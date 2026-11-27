@@ -717,3 +717,10 @@ func (s *Service) SearchNumbering(ctx context.Context, show core.RatingKey, seas
 	}
 	return sn, en, nil
 }
+
+// Generation changes when episode layout preferences are invalidated.
+func (s *Service) Generation() uint64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.generation
+}
