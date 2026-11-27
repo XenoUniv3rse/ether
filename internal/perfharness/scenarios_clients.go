@@ -68,6 +68,9 @@ func jellyfinLibrarySteps(f string) []Step {
 func embyLibrarySteps() []Step {
 	movies := "/Users/{userId}/Items?ParentId={moviesView}&Recursive=true&IncludeItemTypes=Movie&Limit=100&Fields=PrimaryImageAspectRatio%2CBasicSyncInfo%2CProductionYear"
 	return []Step{
+		{Name: "movie detail unscoped", Class: classDetail, Path: "/Items/{movieId}?UserId={userId}"},
+		{Name: "movie LocalTrailers", Class: classDetail, Path: "/Items/{movieId}/LocalTrailers?UserId={userId}"},
+		{Name: "movie SpecialFeatures", Class: classDetail, Path: "/Items/{movieId}/SpecialFeatures?UserId={userId}"},
 		{Name: "/Search/Hints star", Class: classSearch, RowsBound: searchRowsBound, Path: "/Search/Hints?SearchTerm=star&Limit=24&UserId={userId}"},
 		{Name: "user suggestions", Class: classBrowse, Path: "/Users/{userId}/Items/Suggestions?Limit=20&EnableTotalRecordCount=true"},
 		{Name: "GET /Shows/Upcoming", Class: classBrowse, Path: "/Shows/Upcoming"},

@@ -1465,6 +1465,10 @@ func (i *instance) recommendations(w http.ResponseWriter, r *http.Request, want 
 	}); ok && len(genreKeys) > 0 && (fieldSet(r)["genres"] || !jellyfinListFile(r)) {
 		_ = facets.PrefetchNamedFacetIDs(r.Context(), v, genreKeys, "genre")
 	}
+	r = i.noteLocalUnplayedCounts(r, v, allTitles)
+	if i.protocol == "jellyfin" {
+		i.prefetchSeriesFacts(r, v, allTitles)
+	}
 	i.prefetchParentArtwork(r, allTitles)
 	ratingFacts := i.pageRatingFacts(r, v, allTitles)
 	i.primeTitleLibraries(r, v, allTitles)

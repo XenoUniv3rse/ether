@@ -294,6 +294,9 @@ type BrowseQuery struct {
 	// ListRows reads a key-ordered (SortKey) page as list rows instead of
 	// full titles (an export). Other page shapes ignore it.
 	ListRows *ListRows
+	// EpisodeListFacts reads a stored episode page with presentation and
+	// visibility facts, without credits, trailers or alternate titles.
+	EpisodeListFacts bool
 }
 
 // ListRows asks a key-ordered Browse page for a whole-library export's rows:

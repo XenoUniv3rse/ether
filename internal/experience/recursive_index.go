@@ -80,7 +80,10 @@ func (s *Service) indexedRecursivePage(ctx context.Context, v *core.User, librar
 		if single {
 			offset = max(q.Offset, 0)
 		}
-		page, err := s.d.Browse(ctx, core.BrowseQuery{Filter: filter, Sort: q.Sort, Desc: q.Desc, Offset: offset, Limit: window, NoTotal: q.NoTotal})
+		page, err := s.d.Browse(ctx, core.BrowseQuery{
+			Filter: filter, Sort: q.Sort, Desc: q.Desc, Offset: offset, Limit: window, NoTotal: q.NoTotal,
+			EpisodeListFacts: typ == core.TypeEpisode && ex.AvailabilityInSQL && (s.d.Protocol == "jellyfin" || s.d.Protocol == "emby"),
+		})
 		if err != nil {
 			return core.Page{}, true, err
 		}

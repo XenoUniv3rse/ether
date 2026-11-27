@@ -2,10 +2,13 @@ package state
 
 import (
 	"context"
+	"slices"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/braedonsaunders/ether/internal/core"
+	"github.com/braedonsaunders/ether/internal/reqmemo"
 	"github.com/braedonsaunders/ether/internal/store"
 )
 
@@ -45,7 +48,11 @@ func (s *State) SetRecordingPreference(ctx context.Context, uid int64, library c
 			return err
 		}
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	reqmemo.Forget(ctx, hiddenRecordingMemoKey(uid))
+	return nil
 }
 
 // RecordingPreferences answers a viewer's preferred release of each listed
@@ -80,6 +87,17 @@ func (s *State) RecordingPreferences(ctx context.Context, uid int64, library cor
 // HiddenRecordingCopies lists the releases a viewer hid in favour of another
 // release of the same recording.
 func (s *State) HiddenRecordingCopies(ctx context.Context, uid int64) ([]core.RatingKey, error) {
+	keys, err := reqmemo.Do(ctx, hiddenRecordingMemoKey(uid), func() ([]core.RatingKey, error) {
+		return s.hiddenRecordingCopies(ctx, uid)
+	})
+	return slices.Clone(keys), err
+}
+
+func hiddenRecordingMemoKey(uid int64) string {
+	return "state:hidden-recordings:" + strconv.FormatInt(uid, 10)
+}
+
+func (s *State) hiddenRecordingCopies(ctx context.Context, uid int64) ([]core.RatingKey, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT item_key FROM state_recording_hidden WHERE user_id = ? ORDER BY item_key LIMIT 10000`, uid)
 	if err != nil {
 		return nil, err

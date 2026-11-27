@@ -381,7 +381,6 @@ func (b *Broker) confirm(ctx context.Context, v *core.Viewer, caps core.ClientCa
 	return b.confirmPolicy(ctx, v, caps, b.deps.FreshPlay)
 }
 
-// Current item checks deliberately exclude bedtime: an admitted item can finish.
 func (b *Broker) previewAdmission(ctx context.Context, v *core.Viewer, caps core.ClientCaps) (*core.Viewer, error) {
 	if b.deps.PreviewPlay == nil {
 		return b.confirm(ctx, v, caps)
@@ -389,6 +388,7 @@ func (b *Broker) previewAdmission(ctx context.Context, v *core.Viewer, caps core
 	return b.confirmPolicy(ctx, v, caps, b.deps.PreviewPlay)
 }
 
+// Current item checks deliberately exclude bedtime: an admitted item can finish.
 func (b *Broker) confirmCurrent(ctx context.Context, v *core.Viewer, caps core.ClientCaps) (*core.Viewer, error) {
 	fresh := b.deps.CurrentPlay
 	if fresh == nil {

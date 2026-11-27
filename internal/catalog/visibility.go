@@ -191,13 +191,10 @@ func (c *Catalog) FilterVisibility(ctx context.Context, ts []core.Title) []core.
 	// known blocked rating is not revealed by a summary that says otherwise.
 	// An empty local rating leaves the summary rating, if it has one.
 	facts := core.VisibilityFacts
-	if core.SearchSummaryFacts(ctx) {
+	if candidates := core.SearchCandidatesFrom(ctx); candidates != nil && core.SearchSummaryFacts(ctx) {
 		// Compact hits only use facets needed by visibility or explicitly
 		// requested by the caller's predicate; display decoration is absent.
-		facts = f.Facts()
-		if candidates := core.SearchCandidatesFrom(ctx); candidates != nil {
-			facts |= candidates.Facts
-		}
+		facts = f.Facts() | candidates.Facts
 	}
 	const batch = 200
 	for _, p := range []struct {

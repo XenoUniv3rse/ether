@@ -307,7 +307,24 @@ func (a *App) experienceHomeFallback(ctx context.Context, req frontend.RowReques
 	if req.HomeFallbackOnly {
 		return a.experienceHeroFallback(ctx, req, libraries, keys)
 	}
-	return experience.ColdHomeRows(ctx, req.Viewer, libraries, visibility, req.Limit, keys, a.catalog.Browse)
+	browse := func(ctx context.Context, q core.BrowseQuery) (core.Page, error) {
+		if a.availability != nil {
+			filter, err := a.availability.PagingFilter(ctx, q.Filter)
+			if err != nil {
+				return core.Page{}, err
+			}
+			if visibility.Sessions != nil {
+				for _, session := range visibility.Sessions() {
+					if session != nil && session.UserID == req.Viewer.ID {
+						filter.AvailabilityKeepKeys = append(filter.AvailabilityKeepKeys, session.Key)
+					}
+				}
+			}
+			q.Filter = filter
+		}
+		return a.catalog.Browse(ctx, q)
+	}
+	return experience.ColdHomeRows(ctx, req.Viewer, libraries, visibility, req.Limit, keys, browse)
 }
 
 // experienceHeroFallback reads only the remaining slots, with art and policy

@@ -252,6 +252,10 @@ func scanTitle(s scanner) (*storedTitle, error) {
 
 // hydrateSlice fills Genres/Studios/Countries/Cast/Directors/Writers/ShowIDs in place.
 func (c *Catalog) hydrateSlice(ctx context.Context, items []core.Title) error {
+	return c.hydrateTitleFacts(ctx, items, factsFull)
+}
+
+func (c *Catalog) hydrateTitleFacts(ctx context.Context, items []core.Title, facts factSet) error {
 	if len(items) == 0 {
 		return nil
 	}
@@ -279,7 +283,7 @@ func (c *Catalog) hydrateSlice(ctx context.Context, items []core.Title) error {
 	}
 	// Large key sets bind one JSON array, so full episode payloads need one
 	// fact query rather than a new query for every 200 episodes.
-	if err := c.hydrateFactBatch(ctx, items, idx, keys, factsFull); err != nil {
+	if err := c.hydrateFactBatch(ctx, items, idx, keys, facts); err != nil {
 		return err
 	}
 	if err := c.hydrateShows(ctx, items); err != nil {
@@ -1635,6 +1639,8 @@ func (c *Catalog) queryTitlesMode(ctx context.Context, sqlGated bool, q string, 
 	return items, nil
 }
 
+type episodeListFactsKey struct{}
+
 // queryTitlesRows hydrates titles before the caller projects episode orders.
 // With rowsOnly, movies and shows stay as rows for candidate search to
 // filter and complete. Results keep the query's order.
@@ -1677,6 +1683,7 @@ func (c *Catalog) queryTitlesRows(ctx context.Context, sqlGated, rowsOnly bool, 
 		needAt = append(needAt, i)
 	}
 	rank := rankProjectionFrom(ctx)
+	episodeList, _ := ctx.Value(episodeListFactsKey{}).(bool)
 	partial := map[core.RatingKey]bool{}
 	if len(needAt) > 0 && rank != nil {
 		// A ranking window's titles: the projection, then in full each one
@@ -1704,7 +1711,11 @@ func (c *Catalog) queryTitlesRows(ctx context.Context, sqlGated, rowsOnly bool, 
 		for j, i := range needAt {
 			need[j] = out[i]
 		}
-		if err := c.hydrateSlice(ctx, need); err != nil {
+		facts := factsFull
+		if episodeList {
+			facts = factsVisibility
+		}
+		if err := c.hydrateTitleFacts(ctx, need, facts); err != nil {
 			return nil, err
 		}
 		for j, i := range needAt {
@@ -1737,7 +1748,7 @@ func (c *Catalog) queryTitlesRows(ctx context.Context, sqlGated, rowsOnly bool, 
 			}
 		}
 	}
-	if deferred, _ := ctx.Value(deferAiredCountsKey{}).(bool); !deferred {
+	if deferred, _ := ctx.Value(deferAiredCountsKey{}).(bool); !deferred && !episodeList {
 		c.rememberTitles(gen, minute, full)
 	}
 	return visible, nil

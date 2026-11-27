@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -29,6 +30,7 @@ import (
 	"github.com/braedonsaunders/ether/internal/notify"
 	"github.com/braedonsaunders/ether/internal/onair"
 	"github.com/braedonsaunders/ether/internal/plugins/wasm"
+	"github.com/braedonsaunders/ether/internal/reqmemo"
 	"github.com/braedonsaunders/ether/internal/safefetch"
 )
 
@@ -427,11 +429,18 @@ func (m *Manager) SubscribeInvalidations() func() {
 }
 
 // List returns every installed plugin.
-func (m *Manager) List(ctx context.Context) ([]Record, error) { return m.store.list(ctx) }
+func (m *Manager) List(ctx context.Context) ([]Record, error) {
+	records, err := reqmemo.Do(ctx, fmt.Sprintf("plugins:list:%p", m), func() ([]Record, error) {
+		return m.store.list(ctx)
+	})
+	return slices.Clone(records), err
+}
 
 // Get returns one installed plugin.
 func (m *Manager) Get(ctx context.Context, id string) (Record, error) {
-	return m.store.record(ctx, id)
+	return reqmemo.Do(ctx, fmt.Sprintf("plugins:record:%p:%s", m, id), func() (Record, error) {
+		return m.store.record(ctx, id)
+	})
 }
 
 // HealthOf returns one plugin's health record.
