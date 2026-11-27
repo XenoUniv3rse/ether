@@ -214,6 +214,8 @@ func TestSeenDeviceNameKeepsOwnerNames(t *testing.T) {
 	atv := clientreg.Identity{Product: "Plex for Apple TV", Platform: "tvOS", Device: "Apple TV"}
 	for _, tc := range []struct{ name, device, model, want string }{
 		{"Apple TV", "Apple TV", "AppleTV5,3", "Apple TV HD"},
+		{"Apple TV", "Apple TV", "5,3", "Apple TV HD"},
+		{"Apple TV", "Apple TV", "14,1", "Apple TV 4K (3rd gen)"},
 		{"", "Apple TV", "AppleTV11,1", "Apple TV 4K (2nd gen)"},
 		{"Living room", "Apple TV", "AppleTV5,3", "Living room"},
 		{"Apple TV", "Apple TV", "", "Apple TV"},

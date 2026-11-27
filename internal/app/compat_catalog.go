@@ -214,7 +214,8 @@ func (a *App) observedClients(ctx context.Context) ([]observedClient, error) {
 // model's product name ("Apple TV HD", "Apple TV 4K (3rd gen)") replaces
 // it. A name the owner chose ("Living room") is kept.
 func seenDeviceName(name, device, model string, id clientreg.Identity) string {
-	product := clientreg.ModelName(model)
+	id.Model = model
+	product := clientreg.ModelName(clientreg.CanonicalModel(id))
 	if product == "" {
 		// Android TV boxes put the model code in the device field (AFTMM).
 		product = clientreg.ModelName(device)

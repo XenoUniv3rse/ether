@@ -139,6 +139,37 @@ type hardwareModel struct {
 	Name  string `json:"name"`
 }
 
+// CanonicalModel is the client's hardware model code in the form the
+// registry lists it. Plex for Apple TV sends only the numeric part of the
+// Apple identifier ("5,3" for AppleTV5,3), which on its own says nothing
+// about the vendor, so it is prefixed when the client is an Apple TV.
+func CanonicalModel(id Identity) string {
+	m := strings.TrimSpace(id.Model)
+	if bareAppleModel(m) {
+		ident := strings.ToLower(id.Product + " " + id.Platform + " " + id.Device)
+		if strings.Contains(ident, "apple tv") || strings.Contains(ident, "appletv") || strings.Contains(ident, "tvos") {
+			return "AppleTV" + m
+		}
+	}
+	return m
+}
+
+// bareAppleModel reports a "<major>,<minor>" code with no vendor prefix.
+func bareAppleModel(m string) bool {
+	major, minor, ok := strings.Cut(m, ",")
+	if !ok || major == "" || minor == "" {
+		return false
+	}
+	for _, part := range []string{major, minor} {
+		for _, r := range part {
+			if r < '0' || r > '9' {
+				return false
+			}
+		}
+	}
+	return true
+}
+
 // ModelName is the product name of a reported hardware model code
 // ("AppleTV5,3" is "Apple TV HD"), or "" when the code is not known.
 // Codes are compared exactly, ignoring case and surrounding space.
@@ -319,7 +350,7 @@ func fieldValue(id Identity, name string) string {
 	case "device":
 		return id.Device
 	case "model":
-		return id.Model
+		return CanonicalModel(id)
 	case "version":
 		return id.Version
 	case "identity":

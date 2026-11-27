@@ -80,3 +80,29 @@ func TestAppleTVCatalogueRows(t *testing.T) {
 		t.Fatalf("Apple TV rows = %v", ids)
 	}
 }
+
+// Plex for Apple TV sends X-Plex-Model without the "AppleTV" prefix
+// ("5,3"), as captured from a real Apple TV HD on tvOS 26.6.1.
+func TestAppleTVBareModelCodes(t *testing.T) {
+	atv := func(model string) Identity {
+		return Identity{Product: "Plex for Apple TV", Platform: "tvOS", Device: "Apple TV", DeviceName: "Apple TV", Model: model}
+	}
+	if got := Playback(atv("5,3"), nil); got.ID != "apple-tv-hd" || got.MaxHeight != 1080 || got.HDR10 || got.DolbyVision {
+		t.Fatalf("bare 5,3 playback = %+v", got)
+	}
+	for _, model := range []string{"6,2", "11,1", "14,1"} {
+		if got := Playback(atv(model), nil); got.ID != "apple-tv" || got.MaxHeight != 2160 {
+			t.Fatalf("bare %s playback = %+v", model, got)
+		}
+	}
+	if got := CanonicalModel(atv("5,3")); got != "AppleTV5,3" {
+		t.Fatalf("CanonicalModel = %q", got)
+	}
+	if got := ModelName(CanonicalModel(atv("14,1"))); got != "Apple TV 4K (3rd gen)" {
+		t.Fatalf("ModelName = %q", got)
+	}
+	// A bare code from another vendor is left alone.
+	if got := CanonicalModel(Identity{Product: "Plex for Android (TV)", Platform: "Android", Model: "5,3"}); got != "5,3" {
+		t.Fatalf("non-Apple bare code rewritten: %q", got)
+	}
+}
