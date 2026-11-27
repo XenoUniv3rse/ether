@@ -52,7 +52,7 @@ func (h *host) durableWriteCheck(ctx context.Context) error {
 
 func storagePermission(m Manifest) string {
 	if e := m.EffectiveEther(); e != nil {
-		return normLevel(e.Permissions.Storage)
+		return normLevel(string(e.Permissions.Storage))
 	}
 	return "none"
 }

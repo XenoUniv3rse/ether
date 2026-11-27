@@ -264,7 +264,7 @@ type Permissions struct {
 	// configured language model (actions/jobs/sync only, never viewer paths).
 	AI string `json:"ai,omitempty" yaml:"ai,omitempty"` // ""|none|complete|complete+search
 	// Storage lets a plugin retain durable blobs within its per-plugin quota.
-	Storage string `json:"storage,omitempty" yaml:"storage,omitempty"` // ""|none|durable
+	Storage StoragePermission `json:"storage,omitempty" yaml:"storage,omitempty"` // ""|none|durable
 	// Media lets a plugin probe container metadata via media.probe from jobs,
 	// actions, and background sync (never viewer or client request paths).
 	Media   string   `json:"media,omitempty" yaml:"media,omitempty"` // ""|none|probe

@@ -6323,7 +6323,7 @@ type ScheduleEntry struct {
 | `folders` | `string` | may be omitted (see validation for conditions) | ""\|none\|read |
 | `sources` | `string` | may be omitted (see validation for conditions) | Sources lets a kind resolver ask Ether to find bytes through the owner's indexers and debrid accounts (spec §4.5). ""\|none\|search\|acquire |
 | `ai` | `string` | may be omitted (see validation for conditions) | AI lets a plugin send bounded completion requests to the owner's configured language model (actions/jobs/sync only, never viewer paths). ""\|none\|complete\|complete+search |
-| `storage` | `string` | may be omitted (see validation for conditions) | Storage lets a plugin retain durable blobs within its per-plugin quota. ""\|none\|durable |
+| `storage` | `StoragePermission` | may be omitted (see validation for conditions) | Storage lets a plugin retain durable blobs within its per-plugin quota. ""\|none\|durable |
 | `media` | `string` | may be omitted (see validation for conditions) | Media lets a plugin probe container metadata via media.probe from jobs, actions, and background sync (never viewer or client request paths). ""\|none\|probe |
 | `secrets` | `[]string` | may be omitted (see validation for conditions) |  |
 
@@ -6346,7 +6346,7 @@ type Permissions struct {
 	// configured language model (actions/jobs/sync only, never viewer paths).
 	AI string `json:"ai,omitempty" yaml:"ai,omitempty"` // ""|none|complete|complete+search
 	// Storage lets a plugin retain durable blobs within its per-plugin quota.
-	Storage string `json:"storage,omitempty" yaml:"storage,omitempty"` // ""|none|durable
+	Storage StoragePermission `json:"storage,omitempty" yaml:"storage,omitempty"` // ""|none|durable
 	// Media lets a plugin probe container metadata via media.probe from jobs,
 	// actions, and background sync (never viewer or client request paths).
 	Media   string   `json:"media,omitempty" yaml:"media,omitempty"` // ""|none|probe
@@ -9919,7 +9919,7 @@ func PermissionDiff(cur, next Manifest) []string {
 	if raised(a.Folders, b.Folders) {
 		added = append(added, "Reads folders you choose")
 	}
-	if !allowsDurableStorage(normLevel(a.Storage)) && allowsDurableStorage(normLevel(b.Storage)) {
+	if !allowsDurableStorage(normLevel(string(a.Storage))) && allowsDurableStorage(normLevel(string(b.Storage))) {
 		added = append(added, DurableStoragePermissionLine)
 	}
 	if raised(a.Media, b.Media) {
@@ -25681,7 +25681,7 @@ func validatePermissions(p Permissions, add func(string, string)) {
 	level("ether.permissions.folders", normLevel(p.Folders), "none", "read")
 	level("ether.permissions.sources", normLevel(p.Sources), "none", "search", "search+check", "acquire", "acquire+check")
 	level("ether.permissions.ai", normLevel(p.AI), "none", "complete", "complete+search")
-	level("ether.permissions.storage", normLevel(p.Storage), "none", "durable")
+	level("ether.permissions.storage", normLevel(string(p.Storage)), "none", "durable")
 	level("ether.permissions.media", normLevel(p.Media), "none", "probe")
 	level("ether.permissions.viewers.identity", normLevel(p.Viewers.Identity), "none", "granted_viewers", "all")
 	level("ether.permissions.viewers.watch_history", normLevel(p.Viewers.WatchHistory), "none", "granted_viewers", "all")

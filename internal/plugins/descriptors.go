@@ -474,7 +474,7 @@ func PermissionDiff(cur, next Manifest) []string {
 	if raised(a.Folders, b.Folders) {
 		added = append(added, "Reads folders you choose")
 	}
-	if !allowsDurableStorage(normLevel(a.Storage)) && allowsDurableStorage(normLevel(b.Storage)) {
+	if !allowsDurableStorage(normLevel(string(a.Storage))) && allowsDurableStorage(normLevel(string(b.Storage))) {
 		added = append(added, DurableStoragePermissionLine)
 	}
 	if raised(a.Media, b.Media) {
