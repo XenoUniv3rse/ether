@@ -86,6 +86,8 @@ type BrokerDeps struct {
 	// keeps the cached CanPlay decision for an unrestricted viewer.
 	CurrentPlay func(context.Context, *core.Viewer, bool, time.Time) (*core.Viewer, error)
 	FreshPlay   func(context.Context, *core.Viewer, bool, time.Time) (*core.Viewer, error)
+	// PreviewPlay reads policy without fencing when no playback is admitted.
+	PreviewPlay func(context.Context, *core.Viewer, bool, time.Time, bool) (*core.Viewer, error)
 	// ReceiptCurrent rechecks the acceptance Plex stored for this request.
 	ReceiptCurrent func(context.Context, auth.Acceptance) error
 	BitrateLimit   func(*core.Viewer) int
@@ -379,6 +381,18 @@ func (b *Broker) confirm(ctx context.Context, v *core.Viewer, caps core.ClientCa
 	return b.confirmPolicy(ctx, v, caps, b.deps.FreshPlay)
 }
 
+func (b *Broker) confirmPreview(ctx context.Context, v *core.Viewer, caps core.ClientCaps, admission bool) (*core.Viewer, error) {
+	if b.deps.PreviewPlay == nil {
+		if admission {
+			return b.confirm(ctx, v, caps)
+		}
+		return b.confirmCurrent(ctx, v, caps)
+	}
+	return b.confirmPolicy(ctx, v, caps, func(ctx context.Context, u *core.Viewer, remote bool, at time.Time) (*core.Viewer, error) {
+		return b.deps.PreviewPlay(ctx, u, remote, at, admission)
+	})
+}
+
 // Current item checks deliberately exclude bedtime: an admitted item can finish.
 func (b *Broker) confirmCurrent(ctx context.Context, v *core.Viewer, caps core.ClientCaps) (*core.Viewer, error) {
 	fresh := b.deps.CurrentPlay
@@ -565,7 +579,13 @@ func (b *Broker) Plan(ctx context.Context, req frontend.PlanRequest) (planned fr
 	if closed {
 		return frontend.PlayPlan{}, core.ErrNotAvailable
 	}
-	confirmed, err := b.confirm(ctx, v, req.Caps)
+	confirm := b.confirm
+	if req.Intent.Estimate {
+		confirm = func(ctx context.Context, u *core.Viewer, caps core.ClientCaps) (*core.Viewer, error) {
+			return b.confirmPreview(ctx, u, caps, true)
+		}
+	}
+	confirmed, err := confirm(ctx, v, req.Caps)
 	if err != nil {
 		b.emitAdmissionDenied(v, req.Item, "", req.Caps, req.Device, string(req.Protocol), false, err)
 		return frontend.PlayPlan{}, err

@@ -62,11 +62,17 @@ type LiveProgramme struct {
 	Season, Episode                 int
 	Images                          []Image
 }
+
+const MaxLiveGuideExportChannels = 32
+
 type LiveGuideQuery struct {
-	Channels    []string
-	From, Until time.Time
-	Limit       int
-	Device      core.Device
+	// PerChannelLimit applies Limit separately to each of at most
+	// MaxLiveGuideExportChannels selected channels.
+	PerChannelLimit bool
+	Channels        []string
+	From, Until     time.Time
+	Limit           int
+	Device          core.Device
 }
 
 // LiveGuidePageQuery selects a page of one immutable guide window. Snapshot

@@ -4,11 +4,14 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
+	"sync"
+	"time"
+
 	"github.com/braedonsaunders/ether/internal/contentrating"
 	"github.com/braedonsaunders/ether/internal/core"
+	"github.com/braedonsaunders/ether/internal/reqmemo"
 	"github.com/braedonsaunders/ether/internal/store"
-	"strings"
-	"time"
 )
 
 func init() {
@@ -197,7 +200,10 @@ func (d *Discovery) yearInReview(ctx context.Context, u *core.User, year, limit 
 		if maxKeys > 0 {
 			size = min(size, maxKeys-offset)
 		}
-		page, e := completed.CompletedBetween(ctx, u.ID, start, end, kinds, offset, size)
+		key := fmt.Sprintf("discovery:review:%d:%d:%v:%d:%d", u.ID, start.Unix(), kinds, offset, size)
+		page, e := reqmemo.Do(ctx, key, func() ([]core.HistoryEntry, error) {
+			return completed.CompletedBetween(ctx, u.ID, start, end, kinds, offset, size)
+		})
 		if e != nil {
 			return hub, e
 		}
@@ -237,7 +243,7 @@ func (d *Discovery) reviewWindows(ctx context.Context, u *core.User, entries []c
 				return
 			}
 		} else {
-			cached = mirroredTitles(ctx, d.catalog, keys)
+			cached = d.reviewTitles(ctx, u.ID, keys)
 		}
 		title := func(k core.RatingKey) (*core.Title, error) {
 			if lightRead {
@@ -278,6 +284,66 @@ func (d *Discovery) reviewWindows(ctx context.Context, u *core.User, entries []c
 			}
 		}
 	}
+}
+
+type reviewProjectionKey struct{}
+
+// WithReviewProjection requests card and policy facts for a Home projection
+// whose wire format does not display full credits or trailers.
+func WithReviewProjection(ctx context.Context, projection core.ListRows) context.Context {
+	return context.WithValue(ctx, reviewProjectionKey{}, projection)
+}
+
+func (d *Discovery) loadReviewTitles(ctx context.Context, keys []core.RatingKey) map[core.RatingKey]core.Title {
+	if projection, ok := ctx.Value(reviewProjectionKey{}).(core.ListRows); ok {
+		if cat, ok := d.catalog.(interface {
+			CachedReviewTitles(context.Context, []core.RatingKey, core.ListRows) ([]core.Title, error)
+		}); ok {
+			titles, err := cat.CachedReviewTitles(ctx, keys, projection)
+			if err == nil {
+				out := make(map[core.RatingKey]core.Title, len(titles))
+				for _, title := range titles {
+					out[title.Key] = title
+				}
+				return out
+			}
+		}
+	}
+	return mirroredTitles(ctx, d.catalog, keys)
+}
+
+type reviewTitleMemo struct {
+	mu     sync.Mutex
+	titles map[core.RatingKey]core.Title
+}
+
+// reviewTitles keeps hydrated history candidates across successive widening
+// passes. The windows can overlap even when their exact key lists differ.
+func (d *Discovery) reviewTitles(ctx context.Context, viewerID int64, keys []core.RatingKey) map[core.RatingKey]core.Title {
+	if !reqmemo.Active(ctx) {
+		return d.loadReviewTitles(ctx, keys)
+	}
+	memo, _ := reqmemo.Do(ctx, fmt.Sprintf("discovery:review-titles:%p:%d", d, viewerID), func() (*reviewTitleMemo, error) {
+		return &reviewTitleMemo{titles: make(map[core.RatingKey]core.Title)}, nil
+	})
+	memo.mu.Lock()
+	defer memo.mu.Unlock()
+	out := make(map[core.RatingKey]core.Title, len(keys))
+	var missing []core.RatingKey
+	for _, k := range keys {
+		if title, ok := memo.titles[k]; ok {
+			out[k] = title
+		} else {
+			missing = append(missing, k)
+		}
+	}
+	for key, title := range d.loadReviewTitles(ctx, missing) {
+		out[key] = title
+		if len(memo.titles) < 4096 {
+			memo.titles[key] = title
+		}
+	}
+	return out
 }
 
 // visibilityRowSource is the catalogue's batched read of the stored rows a

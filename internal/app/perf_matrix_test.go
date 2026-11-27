@@ -5,6 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"image"
+	"image/jpeg"
 	"io"
 	"log/slog"
 	"net"
@@ -133,6 +135,12 @@ func perfMatrixFixture(t *testing.T, ctx context.Context, cache string) string {
 		db.Close()
 		t.Fatal(err)
 	}
+	// Generate runs a bulk import with catalogue triggers suspended.
+	// Materialize the same protocol IDs a live import would have assigned.
+	if _, err := db.ExecContext(ctx, xtreamIDSeed("item", xtreamCatalogRefs)); err != nil {
+		db.Close()
+		t.Fatal(err)
+	}
 	// Keep one first-time viewer distinct from the heavy and restricted viewers.
 	for _, query := range perfMatrixNewViewerQueries {
 		if _, err := db.ExecContext(ctx, query); err != nil {
@@ -245,6 +253,19 @@ func runPerfMatrixCase(t *testing.T, ctx context.Context, fixture string, c perf
 		t.Fatal(err)
 	}
 	defer a.Close()
+	// All stock matrix posters share this synthetic TMDB path. Seed its
+	// cache, so authorised artwork requests exercise the route offline.
+	var poster bytes.Buffer
+	if err := jpeg.Encode(&poster, image.NewRGBA(image.Rect(0, 0, 10, 16)), nil); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"original/p.jpg", "w500/p.jpg"} {
+		if _, _, err := a.images.GetLoaded(ctx, key, func(context.Context) ([]byte, string, error) {
+			return poster.Bytes(), "image/jpeg", nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
 	a.catalog.FreezeCacheMinute()
 	viewers[0].PluginHost, err = perfMatrixPluginCredential(ctx, a, viewers[0].ID)
 	if err != nil {

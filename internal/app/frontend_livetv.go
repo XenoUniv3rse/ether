@@ -183,7 +183,7 @@ func (s surfaceLiveTV) guidePage(ctx context.Context, v *core.Viewer, pageQuery 
 	if s.surface == "xtream" && len(q.Channels) == 1 {
 		maxSpan = 32 * 24 * time.Hour
 	}
-	if !q.Until.After(q.From) || q.Until.Sub(q.From) > maxSpan || q.Limit < 0 || q.Limit > maxLiveProgrammes || pageQuery.Offset < 0 {
+	if !q.Until.After(q.From) || q.Until.Sub(q.From) > maxSpan || q.Limit < 0 || q.Limit > maxLiveProgrammes || pageQuery.Offset < 0 || (q.PerChannelLimit && (paged || len(q.Channels) == 0 || len(q.Channels) > frontend.MaxLiveGuideExportChannels || q.Limit == 0)) {
 		return frontend.LiveGuidePage{}, errLiveQuery
 	}
 	viewer, err := s.viewer(ctx, v)
@@ -240,8 +240,19 @@ func (s surfaceLiveTV) guidePage(ctx context.Context, v *core.Viewer, pageQuery 
 	}
 	selectedPage := make([]livetv.Programme, 0, min(len(programmes), limit+1))
 	index := 0
+	var channelCounts map[string]int
+	if q.PerChannelLimit {
+		channelCounts = make(map[string]int, len(q.Channels))
+	}
 	for _, p := range programmes {
 		if _, ok := allowed[p.ChannelID]; !ok {
+			continue
+		}
+		if q.PerChannelLimit {
+			if channelCounts[p.ChannelID] < limit {
+				selectedPage = append(selectedPage, p)
+				channelCounts[p.ChannelID]++
+			}
 			continue
 		}
 		if paged {
@@ -261,8 +272,10 @@ func (s surfaceLiveTV) guidePage(ctx context.Context, v *core.Viewer, pageQuery 
 	if pageQuery.Snapshot != "" && pageQuery.Snapshot != snapshot {
 		return frontend.LiveGuidePage{}, frontend.ErrLiveGuideStale
 	}
-	more := len(selectedPage) > limit
-	selectedPage = selectedPage[:min(len(selectedPage), limit)]
+	more := !q.PerChannelLimit && len(selectedPage) > limit
+	if more {
+		selectedPage = selectedPage[:limit]
+	}
 	out := make([]frontend.LiveProgramme, 0, len(selectedPage))
 	imageCache := make(map[core.RatingKey][]frontend.Image)
 	for _, p := range selectedPage {

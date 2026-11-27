@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"maps"
 	"net/http"
 	"runtime"
 	"strconv"
@@ -25,7 +24,7 @@ func jsonEncoder(w http.ResponseWriter, v any) error { return json.NewEncoder(w)
 // walk keeps one policy-filtered page in memory and never fetches item details
 // per listing row. Category selection is pushed down to the library query.
 // emit gets the login whose artwork and ids hold its title's page.
-func (i *instance) walk(r *http.Request, l login, kind string, emit func(login, frontend.Title, string) error) error {
+func (i *instance) walk(r *http.Request, l login, kind string, artwork bool, emit func(*http.Request, login, frontend.Title, string) error) error {
 	views, err := i.host.Experience.Views(r.Context(), l.viewer)
 	if err != nil {
 		return err
@@ -38,11 +37,32 @@ func (i *instance) walk(r *http.Request, l login, kind string, emit func(login, 
 		if exporter, ok := i.host.Experience.(frontend.LibraryExporter); ok {
 			err := exportPages(r.Context(), exporter, l, v.ID, func(page frontend.LibraryExportPage) (login, error) {
 				pl := l.forPage()
-				return pl, i.pageImages(r, pl, page.Items)
+				if kind == "show" && !artwork {
+					return pl, nil
+				}
+				return pl, i.preparePage(r, pl, page.Items, artwork)
 			}, func(page frontend.LibraryExportPage, pl login) error {
+				pageRequest := r
+				if kind == "show" && !artwork {
+					if batch, ok := i.host.Experience.(interface {
+						PrepareExportChildren(context.Context, *frontend.Viewer, []frontend.RatingKey) (context.Context, error)
+					}); ok {
+						shows := make([]frontend.RatingKey, 0, len(page.Items))
+						for _, title := range page.Items {
+							if title.Key.Kind() == frontend.KindShow && !title.Key.Allocated() {
+								shows = append(shows, title.Key)
+							}
+						}
+						ctx, err := batch.PrepareExportChildren(r.Context(), l.viewer, shows)
+						if err != nil {
+							return err
+						}
+						pageRequest = r.WithContext(ctx)
+					}
+				}
 				for _, t := range page.Items {
 					if string(t.Type) == kind {
-						if err := emit(pl, t, v.ID); err != nil {
+						if err := emit(pageRequest, pl, t, v.ID); err != nil {
 							return err
 						}
 					}
@@ -65,12 +85,14 @@ func (i *instance) walk(r *http.Request, l login, kind string, emit func(login, 
 			if len(page.Items) > pageSize {
 				return errors.New("unbounded catalogue response")
 			}
-			if err := i.pageImages(r, l, page.Items); err != nil {
-				return err
+			if kind != "show" || artwork {
+				if err := i.preparePage(r, l, page.Items, artwork); err != nil {
+					return err
+				}
 			}
 			for _, t := range page.Items {
 				if string(t.Type) == kind {
-					if err := emit(l, t, v.ID); err != nil {
+					if err := emit(r, l, t, v.ID); err != nil {
 						return err
 					}
 				}
@@ -270,7 +292,6 @@ func (i *instance) catalog(w http.ResponseWriter, r *http.Request, l login, acti
 			}
 		}
 		jsonResponse(w, out)
-		i.prepareLists(r, l, kind)
 		return
 	}
 	if strings.HasSuffix(action, "info") {
@@ -300,7 +321,7 @@ func (i *instance) writeList(r *http.Request, l login, kind string, w io.Writer)
 	// writes per row through the response writer's wrappers.
 	out := bufio.NewWriterSize(w, 64<<10)
 	n := 0
-	err := i.walk(r, l, kind, func(l login, t frontend.Title, cat string) error {
+	err := i.walk(r, l, kind, true, func(r *http.Request, l login, t frontend.Title, cat string) error {
 		data, err := json.Marshal(i.row(r, l, t, cat, n+1))
 		if err != nil {
 			return err
@@ -345,7 +366,7 @@ func (i *instance) info(w http.ResponseWriter, r *http.Request, l login, kind st
 		return
 	}
 	t := detail.Title
-	if err := i.pageImages(r, l, []frontend.Title{t}); err != nil {
+	if err := i.preparePage(r, l, []frontend.Title{t}, true); err != nil {
 		http.Error(w, "Unavailable", 503)
 		return
 	}
@@ -363,12 +384,12 @@ func (i *instance) info(w http.ResponseWriter, r *http.Request, l login, kind st
 	seasons := []map[string]any{}
 	episodes := map[string][]map[string]any{}
 	count := 0
-	err = i.children(r, l, t.Key, func(season frontend.Title) error {
+	err = i.children(r, l, t.Key, true, func(l login, season frontend.Title) error {
 		if season.Type != "season" {
 			return nil
 		}
 		seasons = append(seasons, map[string]any{"id": l.ids[season.Key], "name": season.Title, "season_number": season.Season, "episode_count": season.ChildCount})
-		return i.children(r, l, season.Key, func(ep frontend.Title) error {
+		return i.children(r, l, season.Key, true, func(l login, ep frontend.Title) error {
 			if ep.Type != "episode" {
 				return nil
 			}
@@ -387,7 +408,7 @@ func (i *instance) info(w http.ResponseWriter, r *http.Request, l login, kind st
 	}
 	jsonResponse(w, map[string]any{"info": info, "seasons": seasons, "episodes": episodes})
 }
-func (i *instance) children(r *http.Request, l login, key frontend.RatingKey, emit func(frontend.Title) error) error {
+func (i *instance) children(r *http.Request, l login, key frontend.RatingKey, artwork bool, emit func(login, frontend.Title) error) error {
 	for offset := 0; offset < 20000; {
 		p, err := i.host.Experience.Children(r.Context(), l.viewer, l.device, key, frontend.ItemQuery{Offset: offset, Limit: pageSize})
 		if err != nil {
@@ -396,13 +417,14 @@ func (i *instance) children(r *http.Request, l login, key frontend.RatingKey, em
 		if len(p.Items) > pageSize {
 			return errors.New("unbounded child response")
 		}
-		if err := i.pageImages(r, l, p.Items); err != nil {
-			return err
+		pl := l.forPage()
+		if artwork || key.Kind() != frontend.KindShow {
+			if err := i.preparePage(r, pl, p.Items, artwork); err != nil {
+				return err
+			}
 		}
-		pageIDs, pageArtwork := maps.Clone(l.ids), maps.Clone(l.artwork)
 		for _, t := range p.Items {
-			l.ids[t.Key], l.artwork[t.Key] = pageIDs[t.Key], pageArtwork[t.Key]
-			if err := emit(t); err != nil {
+			if err := emit(pl, t); err != nil {
 				return err
 			}
 		}
@@ -417,9 +439,8 @@ func (i *instance) children(r *http.Request, l login, key frontend.RatingKey, em
 	return errors.New("series capacity exceeded")
 }
 
-// Stateless page artwork preserves the neutral catalogue's selected identity
-// without one metadata lookup or database grant write per title.
-func (i *instance) pageImages(r *http.Request, l login, titles []frontend.Title) error {
+// preparePage assigns protocol IDs and signs artwork when the response carries it.
+func (i *instance) preparePage(r *http.Request, l login, titles []frontend.Title, artwork bool) error {
 	clear(l.artwork)
 	clear(l.ids)
 	refs := make([]string, len(titles))
@@ -432,6 +453,9 @@ func (i *instance) pageImages(r *http.Request, l login, titles []frontend.Title)
 	}
 	for j, t := range titles {
 		l.ids[t.Key] = allocated[refs[j]]
+	}
+	if !artwork {
+		return nil
 	}
 	signer, ok := i.host.ImageGrants.(frontend.ImagePageSigner)
 	if !ok {
@@ -469,12 +493,20 @@ func (i *instance) pageImages(r *http.Request, l login, titles []frontend.Title)
 	return nil
 }
 
-func (i *instance) resolveItem(r *http.Request, id string) (frontend.RatingKey, error) {
-	n, err := strconv.ParseInt(id, 10, 32)
-	if err != nil || n <= 0 || strconv.FormatInt(n, 10) != id {
+func parseCompactID(raw string) (int32, error) {
+	n, err := strconv.ParseInt(raw, 10, 32)
+	if err != nil || n <= 0 || strconv.FormatInt(n, 10) != raw {
 		return 0, errors.New("invalid identifier")
 	}
-	ref, err := i.host.IDs.Resolve(r.Context(), "xtream", "item", int32(n))
+	return int32(n), nil
+}
+
+func (i *instance) resolveItem(r *http.Request, id string) (frontend.RatingKey, error) {
+	n, err := parseCompactID(id)
+	if err != nil {
+		return 0, err
+	}
+	ref, err := i.host.IDs.Resolve(r.Context(), "xtream", "item", n)
 	if err != nil {
 		return 0, err
 	}
