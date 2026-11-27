@@ -50,6 +50,7 @@ const (
 var reInfoHash = regexp.MustCompile(`^[0-9a-fA-F]{40}$`)
 
 type debridLink struct {
+	pace    *accountPacer
 	key     string
 	opts    ProviderOptions
 	list    listCache
@@ -59,8 +60,10 @@ type debridLink struct {
 }
 
 func newDebridLink(key string, opts ProviderOptions) *debridLink {
-	return &debridLink{key: key, opts: opts.withDefaults(debridLinkBase), known: make(map[string]string)}
+	return &debridLink{pace: opts.paces.forAccount("debridlink", key), key: key, opts: opts.withDefaults(debridLinkBase), known: make(map[string]string)}
 }
+
+func (p *debridLink) accountPace() *accountPacer { return p.pace }
 
 func (p *debridLink) Kind() string { return "debridlink" }
 
@@ -97,6 +100,12 @@ type dlTorrent struct {
 }
 
 func (p *debridLink) do(ctx context.Context, r apiRequest) (json.RawMessage, error) {
+	return pacedCall(ctx, p.pace, r, r.path == "/seedbox/add", func(r apiRequest) (json.RawMessage, error) {
+		return p.request(ctx, r)
+	})
+}
+
+func (p *debridLink) request(ctx context.Context, r apiRequest) (json.RawMessage, error) {
 	status, body, err := call(ctx, p.opts.HTTPClient, p.opts.BaseURL, r, func(req *http.Request) {
 		req.Header.Set("Authorization", "Bearer "+p.key)
 	})
@@ -273,7 +282,7 @@ func (p *debridLink) Acquire(ctx context.Context, req AcquireRequest) (*Acquired
 		if req.CachedOnly && reInfoHash.MatchString(req.InfoHash) {
 			src, hashOnly = strings.ToLower(req.InfoHash), true
 		}
-		data, err := p.do(ctx, apiRequest{method: http.MethodPost, path: "/seedbox/add", form: url.Values{"url": {src}}})
+		data, err := p.do(ctx, apiRequest{method: http.MethodPost, path: "/seedbox/add", torrentHash: req.InfoHash, form: url.Values{"url": {src}}})
 		if errors.Is(err, errDuplicateTorrent) {
 			// The account already holds this hash (added by another app
 			// or node). Only this collision needs a fresh account-wide
@@ -398,6 +407,7 @@ func (p *debridLink) Remove(ctx context.Context, torrentID string) error {
 }
 
 func (p *debridLink) Account(ctx context.Context) (Account, error) {
+	ctx = core.WithIndexerPurpose(ctx, core.IndexerPurposeTest)
 	data, err := p.do(ctx, apiRequest{method: http.MethodGet, path: "/account/infos"})
 	if err != nil {
 		return Account{}, err

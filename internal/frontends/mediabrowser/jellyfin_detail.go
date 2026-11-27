@@ -178,7 +178,8 @@ func (i *instance) probeRokuChapters(r *http.Request, viewer *frontend.Viewer, d
 	if err != nil {
 		return
 	}
-	plan, err := planner.DetailPlan(i.identityContext(r), frontend.PlanRequest{
+	ctx := frontend.WithIndexerPurpose(i.identityContext(r), frontend.IndexerPurposeDetail)
+	plan, err := planner.DetailPlan(ctx, frontend.PlanRequest{
 		Viewer: viewer, Device: scope.Device, Protocol: scope.Protocol, Item: key, Caps: scope.Caps, Version: version,
 		Intent: frontend.PlayIntent{ExactVersion: version != "", ReadChapters: true, Options: frontend.DecideOptions{
 			DirectPlay: true, DirectStream: true, AudioStream: -1, SubtitleStream: -1,

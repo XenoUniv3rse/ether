@@ -371,6 +371,7 @@ type flightKey struct {
 	prefer            string
 	exact             bool
 	deferSupersession bool
+	detail            bool
 }
 
 type warmBudgetKey struct {
@@ -381,7 +382,7 @@ type warmBudgetKey struct {
 // activeFlightLocked returns an in-flight Prepare for id, if any.
 func (m *Manager) activeFlightLocked(id identity) *flight {
 	for k, f := range m.flights {
-		if k.id == id {
+		if k.id == id && !k.detail {
 			return f
 		}
 	}
@@ -1094,7 +1095,10 @@ func (m *Manager) prepareOwnedWithin(ctx context.Context, wait time.Duration, us
 		}
 		break
 	}
-	fk := flightKey{id: id, prefer: prefer, exact: exact, deferSupersession: deferSupersession}
+	// A chapter read can open an existing source but cannot trial-add one.
+	// Play must be able to resolve independently if the read found nothing.
+	detail := core.IndexerPurpose(ctx) == core.IndexerPurposeDetail
+	fk := flightKey{id: id, prefer: prefer, exact: exact, deferSupersession: deferSupersession, detail: detail}
 	f := m.flights[fk]
 	if f == nil && !deferSupersession {
 		// Join the bounded decision wait (PrepareWithin) already preparing
@@ -1126,7 +1130,7 @@ func (m *Manager) prepareOwnedWithin(ctx context.Context, wait time.Duration, us
 	}
 	if f == nil {
 		parent := context.WithoutCancel(ctx)
-		if core.IsBackgroundAnalysis(ctx) || caps.BroadcastBitrateKbps > 0 {
+		if detail || core.IsBackgroundAnalysis(ctx) || caps.BroadcastBitrateKbps > 0 {
 			parent = ctx
 		}
 		wctx, cancel := context.WithTimeout(parent, m.opts.PrepareTimeout)

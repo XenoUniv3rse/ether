@@ -100,9 +100,7 @@ func (s *Server) joinActivePrepare(ctx context.Context, pr *Request, t *frontend
 //     title, waits bounded for its probe to land;
 //   - otherwise, for non-Plezy clients (Plezy has its own detail/play
 //     classifier in plezyFirstPlay), probes for the selected item of an active
-//     PlayQueue (joining any in-flight play probe started by POST /playQueues)
-//     or a lean pre-play fetch for an upcoming item in that queue (e.g.
-//     advancing S01E01 -> S01E02 without a new POST /playQueues, #670, #758).
+//     PlayQueue (joining any in-flight play probe started by POST /playQueues).
 //
 // Ordinary detail browsing returns false immediately without starting a
 // foreground probe.
@@ -128,7 +126,9 @@ func (s *Server) playIntentFirstPlay(ctx, reqCtx context.Context, pr *Request, t
 		maxAge = playIntentSelectedJoinWindow
 	}
 	role := s.queues.ActiveQueueRole(pr.User.ID, pr.ClientID, t.Key, maxAge)
-	if role == 0 || (role == 2 && detailPage) {
+	// Metadata reads for upcoming queue entries can be client prefetches.
+	// They use ordinary detail warming until playback is requested.
+	if role != 1 {
 		return false
 	}
 	return s.probePlayIntent(reqCtx, pr, t)

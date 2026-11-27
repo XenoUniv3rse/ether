@@ -39,14 +39,17 @@ const (
 )
 
 type allDebrid struct {
+	pace *accountPacer
 	key  string
 	opts ProviderOptions
 	list listCache
 }
 
 func newAllDebrid(key string, opts ProviderOptions) *allDebrid {
-	return &allDebrid{key: key, opts: opts.withDefaults(allDebridBase)}
+	return &allDebrid{pace: opts.paces.forAccount("alldebrid", key), key: key, opts: opts.withDefaults(allDebridBase)}
 }
+
+func (p *allDebrid) accountPace() *accountPacer { return p.pace }
 
 func (p *allDebrid) Kind() string { return "alldebrid" }
 
@@ -71,6 +74,12 @@ type adMagnet struct {
 }
 
 func (p *allDebrid) do(ctx context.Context, r apiRequest) (json.RawMessage, error) {
+	return pacedCall(ctx, p.pace, r, r.path == "/v4/magnet/upload", func(r apiRequest) (json.RawMessage, error) {
+		return p.request(ctx, r)
+	})
+}
+
+func (p *allDebrid) request(ctx context.Context, r apiRequest) (json.RawMessage, error) {
 	if r.query == nil {
 		r.query = url.Values{}
 	}
@@ -87,6 +96,13 @@ func (p *allDebrid) do(ctx context.Context, r apiRequest) (json.RawMessage, erro
 	var env adEnvelope
 	derr := decodeJSON("alldebrid", body, &env)
 	if derr == nil && env.Status == "success" {
+		if r.path == "/v4/magnet/upload" {
+			if ms := adMagnets(env.Data); len(ms) > 0 && ms[0].Error != nil {
+				e := ms[0].Error
+				logProviderResponse(ctx, p.key, status, e.Code, e.Message)
+				return nil, adError(status, e.Code, e.Message)
+			}
+		}
 		return env.Data, nil
 	}
 	if derr != nil && status >= 200 && status < 300 {
@@ -150,6 +166,9 @@ func adMagnets(data json.RawMessage) []adMagnet {
 }
 
 func (p *allDebrid) Find(ctx context.Context, hash string) (string, error) {
+	if lowPriority(ctx) {
+		return p.list.known(p.opts.Now(), hash), nil
+	}
 	return p.list.find(ctx, p.opts.Now(), hash, func(ctx context.Context) (map[string]string, error) {
 		data, err := p.do(ctx, apiRequest{method: http.MethodGet, path: "/v4.1/magnet/status"})
 		if err != nil {
@@ -234,17 +253,13 @@ func (p *allDebrid) Acquire(ctx context.Context, req AcquireRequest) (*Acquired,
 	id, added := req.TorrentID, false
 	ready := false
 	if id == "" {
-		data, err := p.do(ctx, apiRequest{method: http.MethodPost, path: "/v4/magnet/upload", form: url.Values{"magnets[]": {req.Magnet}}})
+		data, err := p.do(ctx, apiRequest{method: http.MethodPost, path: "/v4/magnet/upload", torrentHash: req.InfoHash, form: url.Values{"magnets[]": {req.Magnet}}})
 		if err != nil {
 			return nil, err
 		}
 		ms := adMagnets(data)
 		if len(ms) == 0 {
 			return nil, errors.New("alldebrid: upload returned no magnet")
-		}
-		if ms[0].Error != nil {
-			logProviderResponse(ctx, p.key, http.StatusOK, ms[0].Error.Code, ms[0].Error.Message)
-			return nil, adError(http.StatusOK, ms[0].Error.Code, ms[0].Error.Message)
 		}
 		id, added, ready = ms[0].ID.String(), true, ms[0].Ready
 	}
@@ -344,6 +359,7 @@ func (p *allDebrid) Remove(ctx context.Context, torrentID string) error {
 }
 
 func (p *allDebrid) Account(ctx context.Context) (Account, error) {
+	ctx = core.WithIndexerPurpose(ctx, core.IndexerPurposeTest)
 	data, err := p.do(ctx, apiRequest{method: http.MethodGet, path: "/v4/user"})
 	if err != nil {
 		return Account{}, err
