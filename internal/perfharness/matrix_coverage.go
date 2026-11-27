@@ -207,6 +207,15 @@ func addMatrixConsoleCoverage(c *Client) {
 		{Name: "fixture set plugin cache quota", Method: http.MethodPut, Path: "/libraries/{consoleLiveLibrary}/cache", Body: `{"maxBytes":16777216,"ttlSeconds":600}`},
 		{Name: "fixture sweep plugin cache", Method: http.MethodPost, Path: "/libraries/{consoleLiveLibrary}/cache/sweep"},
 		{Name: "fixture purge plugin cache", Method: http.MethodPost, Path: "/libraries/{consoleLiveLibrary}/cache/purge"},
+		{Name: "fixture read overlay settings before save", Path: "/discovery/overlays/settings", Discover: discoverMatrixConsoleDocument("consoleOverlaySettings")},
+		{Name: "fixture save overlay settings", Method: http.MethodPut, Path: "/discovery/overlays/settings", Body: "{consoleOverlaySettings}"},
+		{Name: "fixture read overlay artwork before save", Path: "/discovery/overlays/artwork/{consoleMovieKey}", Discover: discoverMatrixConsoleDocument("consoleOverlayArtwork")},
+		{Name: "fixture save overlay artwork", Method: http.MethodPut, Path: "/discovery/overlays/artwork/{consoleMovieKey}", Body: "{consoleOverlayArtwork}"},
+		{Name: "fixture read rating settings before save", Path: "/discovery/ratings/settings", Discover: discoverMatrixConsoleDocument("consoleRatingSettings")},
+		{Name: "fixture save rating settings", Method: http.MethodPut, Path: "/discovery/ratings/settings", Body: "{consoleRatingSettings}"},
+		{Name: "fixture read Vela settings before save", Path: "/frontends/vela/settings", Discover: discoverMatrixConsoleDocument("consoleVelaSettings")},
+		{Name: "fixture save Vela settings", Method: http.MethodPut, Path: "/frontends/vela/settings", Body: "{consoleVelaSettings}"},
+		{Name: "fixture confirm Vela frontend enabled", Method: http.MethodPut, Path: "/frontends/vela/enabled", Body: `{"enabled":true}`},
 		{Name: "fixture check scratch database", Method: http.MethodPost, Path: "/status/database/check"},
 		{Name: "fixture clear in-memory logs", Method: http.MethodDelete, Path: "/logs"},
 		{Name: "fixture DELETE installed indexer definition", Method: http.MethodDelete, Path: "/indexer-sites/definitions/fakepublic"},
@@ -308,6 +317,15 @@ func discoverMatrixConsoleConfig(vars map[string]string, body []byte) {
 	}
 	if json.Unmarshal(body, &document) == nil && len(document.Config) != 0 {
 		setOnce(vars, "consoleConfig", string(document.Config))
+	}
+}
+
+func discoverMatrixConsoleDocument(variable string) func(map[string]string, []byte) {
+	return func(vars map[string]string, body []byte) {
+		var document map[string]json.RawMessage
+		if json.Unmarshal(body, &document) == nil && document != nil {
+			setOnce(vars, variable, string(body))
+		}
 	}
 }
 

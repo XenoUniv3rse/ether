@@ -16,6 +16,10 @@ func matrixConsoleArtworkScenarios() []Step {
 	asset.Discover = discoverOnAirDigest("matrixUploadedArtwork")
 	replacement.Name, replacement.Path = "fixture replace On-Air image", "/onair/assets/{matrixUploadedArtwork}/replace"
 	replacement.Discover = discoverOnAirDigest("matrixReplacementArtwork")
+	icon := matrixConsoleSVG("icon.svg", `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128"><rect width="128" height="128" fill="#345678"/></svg>`, "")
+	icon.Name, icon.Path = "fixture upload Vela icon", "/frontends/vela/icon"
+	wordmark := matrixConsoleSVG("wordmark.svg", `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 60"><rect width="240" height="60" fill="#56789a"/></svg>`, "")
+	wordmark.Name, wordmark.Path = "fixture upload Vela wordmark", "/frontends/vela/wordmark"
 	return []Step{
 		asset,
 		replacement,
@@ -28,17 +32,25 @@ func matrixConsoleArtworkScenarios() []Step {
 		{Name: "fixture remove look draft", Method: http.MethodDelete, Path: "/onair/looks/{matrixLookDraft}"},
 		{Name: "fixture validate On-Air scene", Method: http.MethodPost, Path: "/onair/scenes/validate",
 			Body: `{"duration":8,"poster":4,"layers":[{"id":"background","type":"rect","x":0,"y":0,"w":1920,"h":1080,"fill":"#345678"}]}`},
+		icon,
+		wordmark,
 	}
 }
 
 func matrixOnAirImage(color string) Step {
+	return matrixConsoleSVG("matrix.svg", `<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48"><rect width="48" height="48" fill="`+color+`"/></svg>`, "image")
+}
+
+func matrixConsoleSVG(filename, svg, kind string) Step {
 	var buf bytes.Buffer
 	form := multipart.NewWriter(&buf)
 	// The static field and file names are valid and bytes.Buffer never
 	// returns a write error.
-	_ = form.WriteField("kind", "image")
-	file, _ := form.CreateFormFile("file", "matrix.svg")
-	_, _ = io.WriteString(file, `<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48"><rect width="48" height="48" fill="`+color+`"/></svg>`)
+	if kind != "" {
+		_ = form.WriteField("kind", kind)
+	}
+	file, _ := form.CreateFormFile("file", filename)
+	_, _ = io.WriteString(file, svg)
 	_ = form.Close()
 	contentType := form.FormDataContentType()
 	return Step{Method: http.MethodPost, Body: buf.String(), Headers: func(h http.Header, _ map[string]string) {

@@ -245,6 +245,8 @@ func matrixRouteExceptions() map[perfharness.MatrixRouteKey]string {
 		"/ether/api/plex-servers/{id}/accounts/{account}", "/ether/api/plex-servers/{id}/step-aside")
 	add("console", http.MethodPut, "requires a verified source match from an external metadata provider",
 		"/ether/api/catalog/title/{key}/match")
+	add("console", http.MethodPost, "refreshes ratings from a configured upstream provider",
+		"/ether/api/discovery/ratings/refresh/{key}")
 	add("console", http.MethodPost, "requires a staged restore archive or snapshot made from a separate source instance",
 		"/ether/api/adoption/backups/restore", "/ether/api/adoption/backups/restore/snapshot/{name}")
 	add("console", http.MethodDelete, "requires a report or staged archive from a completed restore-plan request",
