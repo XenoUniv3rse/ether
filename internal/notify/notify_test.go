@@ -303,3 +303,40 @@ func TestDrainSkipsWritesWhenQueueIdle(t *testing.T) {
 		t.Fatalf("idle Drain issued %d writes, want 0", qs.Writes())
 	}
 }
+
+// A channel whose event list was cleared (all alerts moved to flows) must be
+// listed with "events":[]; the console's Channels page reads events.length
+// and renders blank on null.
+func TestChannelWithNoEventsListsEmptyArray(t *testing.T) {
+	ctx := context.Background()
+	db, err := store.OpenMemory(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	s := New(db, Options{})
+	for id, events := range map[string][]string{"cleared": {}, "unset": nil} {
+		if err := s.Save(ctx, Channel{ID: id, Kind: "ntfy", Secrets: map[string]string{"endpoint": "https://ntfy.example/topic"}, Enabled: true, Events: events}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	w := httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, httptest.NewRequest("GET", "/", nil))
+	if w.Code != 200 {
+		t.Fatalf("status %d: %s", w.Code, w.Body.String())
+	}
+	var body struct {
+		Channels []map[string]json.RawMessage `json:"channels"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if len(body.Channels) != 2 {
+		t.Fatalf("channels: %s", w.Body.String())
+	}
+	for _, c := range body.Channels {
+		if got := string(c["events"]); got != "[]" {
+			t.Fatalf("channel %s events = %s, want []", c["id"], got)
+		}
+	}
+}

@@ -18,6 +18,7 @@ import (
 	"github.com/braedonsaunders/ether/internal/usenet"
 	"log/slog"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -109,9 +110,8 @@ func (c Channel) clone() Channel {
 		}
 		c.Secrets = m
 	}
-	if c.Events != nil {
-		c.Events = append([]string(nil), c.Events...)
-	}
+	// slices.Clone keeps an empty, non-nil list empty instead of nil.
+	c.Events = slices.Clone(c.Events)
 	return c
 }
 
@@ -354,6 +354,11 @@ func (s *Service) Channels(ctx context.Context) ([]Channel, error) {
 	cs, err := s.channels(ctx)
 	for i := range cs {
 		cs[i] = redacted(cs[i])
+		// A channel with no events (or a row saved as null) is listed
+		// as [], never null: the console reads events.length.
+		if cs[i].Events == nil {
+			cs[i].Events = []string{}
+		}
 	}
 	return cs, err
 }
