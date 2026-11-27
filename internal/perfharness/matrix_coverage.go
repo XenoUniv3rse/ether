@@ -155,6 +155,8 @@ func addMatrixConsoleCoverage(c *Client, availabilityMonitor bool) {
 		{Name: "fixture read On-Air reel", Path: "/onair/reels/{consoleReel}"},
 		{Name: "fixture update On-Air reel", Method: http.MethodPut, Path: "/onair/reels/{consoleReel}", Body: `{"name":"Matrix renamed reel","order":"sequence"}`},
 		{Name: "fixture delete On-Air reel", Method: http.MethodDelete, Path: "/onair/reels/{consoleReel}"},
+		{Name: "fixture discover excluded title", Path: "/viewers/{viewerId}/not-interested", Discover: discoverMatrixConsoleNotInterested},
+		{Name: "fixture restore excluded title", Method: http.MethodPost, Path: "/viewers/{viewerId}/not-interested/restore", Body: `{"handle":"{consoleExcludedTitle}"}`},
 		{Name: "fixture discover support player", Path: "/support/devices", Discover: discoverMatrixSupportDevice},
 		{Name: "fixture create support capture", Method: http.MethodPost, Path: "/support/captures", Body: `{"category":"playback","note":"Matrix fixture capture"}`, Discover: discoverMatrixID("consoleCapture")},
 		{Name: "fixture read support capture", Path: "/support/captures/{consoleCapture}"},
@@ -247,6 +249,7 @@ func addMatrixConsoleCoverage(c *Client, availabilityMonitor bool) {
 		{Name: "fixture resume catalogue migration", Method: http.MethodPost, Path: "/catalog/tier-migration", Body: `{"paused":false}`},
 		{Name: "fixture check scratch database", Method: http.MethodPost, Path: "/status/database/check"},
 		{Name: "fixture refresh local diagnostics", Method: http.MethodPost, Path: "/safety/diagnostics/refresh"},
+		{Name: "fixture clear scratch poster uploads", Method: http.MethodPost, Path: "/posters/clear"},
 		{Name: "fixture clear in-memory logs", Method: http.MethodDelete, Path: "/logs"},
 		{Name: "fixture DELETE installed indexer definition", Method: http.MethodDelete, Path: "/indexer-sites/definitions/fakepublic"},
 		// Applying a bundle can change Home rows. Run this after every reader
@@ -379,6 +382,17 @@ func discoverMatrixConsolePMSAccount(vars map[string]string, body []byte) {
 	}
 	if json.Unmarshal(body, &accounts) == nil && len(accounts) != 0 && accounts[0].ID > 0 {
 		setOnce(vars, "consolePMSAccount", strconv.FormatInt(accounts[0].ID, 10))
+	}
+}
+
+func discoverMatrixConsoleNotInterested(vars map[string]string, body []byte) {
+	var response struct {
+		Items []struct {
+			Handle string `json:"handle"`
+		} `json:"items"`
+	}
+	if json.Unmarshal(body, &response) == nil && len(response.Items) != 0 {
+		setOnce(vars, "consoleExcludedTitle", response.Items[0].Handle)
 	}
 }
 

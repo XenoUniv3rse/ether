@@ -46,6 +46,22 @@ func seedPerfMatrixConsoleAPIKey(ctx context.Context, a *App) error {
 	return err
 }
 
+func seedPerfMatrixConsoleNotInterested(ctx context.Context, a *App) error {
+	owner, err := a.users.Owner(ctx)
+	if err != nil {
+		return err
+	}
+	// Use a released title well outside the first catalogue page.
+	var key core.RatingKey
+	if err := a.db.QueryRowContext(ctx, `SELECT key FROM catalog_titles
+		WHERE type='movie' AND adult=0 AND browsable=1 AND released_ts>0 AND released_ts<?
+		ORDER BY key DESC LIMIT 1`, time.Now().Unix()).Scan(&key); err != nil {
+		return err
+	}
+	_, err = a.notInterested.Set(ctx, owner, key, true)
+	return err
+}
+
 // Give viewers without a generated household playlist a real item and queue
 // to open while leaving their watch history and personalization cold.
 func seedPerfMatrixPlaylistCoverage(ctx context.Context, db *sql.DB) error {
