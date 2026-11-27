@@ -77,7 +77,12 @@ func (m *Manager) preparedResolution(ctx context.Context, s *session, profile co
 				// record's persisted probe and keyframe index survive it.
 				cached = m.persistedProbe(ctx, s.ident.userID, s.ident.key, res.Release.ID, res.NZB)
 			}
-			if cached != nil && !rememberedInfoCodecCurrent(cached.info, s.caps) {
+			var info core.MediaInfo
+			if cached != nil {
+				info = cached.info
+			}
+			if exceedsRuleHeight(s.caps.QualityRuleMaxHeight, res.Release, info) ||
+				(cached != nil && !rememberedInfoCodecCurrent(info, s.caps)) {
 				res, cached, fromResume = nil, nil, false
 			}
 		}
@@ -2575,7 +2580,13 @@ func (m *Manager) resumeFor(ctx context.Context, user *core.User, key core.Ratin
 	if rp.profileKey != profileKey(prof) || !rememberedOriginalAudioCurrent(prof, rp.originalLanguage, current, rp.Release) || !rememberedCodecCurrent(rp.Release, caps) || !m.resumeSourceAllowed(rp.Release) || !sourceFitsBitrate(rp.Size, rp.Duration, 0, caps.MaxBitrateKbps) {
 		return nil, nil
 	}
-	if probe := m.persistedProbeInfoHash(ctx, user.ID, key, rp.Release.ID, rp.payloadHash()); probe != nil && !rememberedInfoCodecCurrent(probe.info, caps) {
+	probe := m.persistedProbeInfoHash(ctx, user.ID, key, rp.Release.ID, rp.payloadHash())
+	var info core.MediaInfo
+	if probe != nil {
+		info = probe.info
+	}
+	if exceedsRuleHeight(caps.QualityRuleMaxHeight, rp.Release, info) ||
+		(probe != nil && !rememberedInfoCodecCurrent(info, caps)) {
 		return nil, nil
 	}
 	rp.Profile = prof.Name // name from the profile object, not the stored column

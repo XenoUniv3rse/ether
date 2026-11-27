@@ -3266,6 +3266,7 @@
   "m_099b345bc660cd": "Use a title’s poster",
   "m_099b3543883538": "Server-wide limit",
   "m_099bab7b6a1c8e": "See viewers",
+  "m_099bcbe9582d29": "Applies only to downloads, up to the server’s download limit. To limit playback quality, set a {link} for this viewer.",
   "m_099e4877001931": "Certificate check failed",
   "m_099e9a4e314811": "From Memories of Murder to Parasite.",
   "m_09a0335f4c3309": "They set their own password or link their Plex account at /ether/me.",
@@ -4843,6 +4844,7 @@
   "m_0e5322a9e0a5e3": "Add as a row",
   "m_0e55365789fb94": "Not claimed",
   "m_0e55b9f60cce78": "Browse in apps",
+  "m_0e568a753a8ea4": "quality rule",
   "m_0e56edadca55be": "No era preference yet.",
   "m_0e5a21a46d8ee0": "Automatic · local streams",
   "m_0e5ae3b66cd6d5": "Not set",
@@ -5126,7 +5128,6 @@
   "m_0f21a95c8d829d": "Download the program",
   "m_0f23e8b6156914": "It stops playing right away, and its video and activity are removed.",
   "m_0f24f85421aaa8": "Pins take priority over programme blocks.",
-  "m_0f251f5f3a0763": "Downloads for this viewer are capped at this resolution. It cannot go above the server's download cap.",
   "m_0f261b47c83f5f": {
     "one": "{count} missing or failed article",
     "other": "{count} missing or failed articles"

@@ -3341,6 +3341,7 @@
   "m_099b345bc660cd": "Usar o pôster de um título",
   "m_099b3543883538": "Limite do servidor inteiro",
   "m_099bab7b6a1c8e": "Ver espectadores",
+  "m_099bcbe9582d29": "Aplica-se apenas a downloads, até o limite de download do servidor. Para limitar a qualidade de reprodução, defina uma {link} para este usuário.",
   "m_099e4877001931": "Falha na verificação do certificado",
   "m_099e9a4e314811": "De Memories of Murder a Parasite.",
   "m_09a0335f4c3309": "Ela define a própria senha ou vincula a conta Plex em /ether/me.",
@@ -4951,6 +4952,7 @@
   "m_0e5322a9e0a5e3": "Adicionar como linha",
   "m_0e55365789fb94": "Não reivindicado",
   "m_0e55b9f60cce78": "Explorar em aplicativos",
+  "m_0e568a753a8ea4": "regra de qualidade",
   "m_0e56edadca55be": "Ainda sem preferência de época.",
   "m_0e5a21a46d8ee0": "Automático · streams locais",
   "m_0e5ae3b66cd6d5": "Não definido",
@@ -5244,7 +5246,6 @@
   "m_0f21a95c8d829d": "Baixar o programa",
   "m_0f23e8b6156914": "Ele deixa de passar na hora, e o vídeo e a atividade dele são removidos.",
   "m_0f24f85421aaa8": "Os horários fixos têm prioridade sobre os blocos de programação.",
-  "m_0f251f5f3a0763": "Os downloads deste espectador ficam limitados a esta resolução. Ela não pode ultrapassar o limite de download do servidor.",
   "m_0f261b47c83f5f": {
     "one": "{count} artigo ausente ou com falha",
     "many": "{count} artigos ausentes ou com falha",

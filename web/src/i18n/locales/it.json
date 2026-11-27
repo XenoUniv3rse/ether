@@ -3341,6 +3341,7 @@
   "m_099b345bc660cd": "Usa la locandina di un titolo",
   "m_099b3543883538": "Limite a livello di server",
   "m_099bab7b6a1c8e": "Vedi spettatori",
+  "m_099bcbe9582d29": "Si applica solo ai download, entro il limite di download del server. Per limitare la qualità di riproduzione, imposta una {link} per questo utente.",
   "m_099e4877001931": "Controllo del certificato non riuscito",
   "m_099e9a4e314811": "Da Memories of Murder a Parasite.",
   "m_09a0335f4c3309": "Impostano la loro password o collegano il loro account Plex su /ether/me.",
@@ -4951,6 +4952,7 @@
   "m_0e5322a9e0a5e3": "Aggiungi come riga",
   "m_0e55365789fb94": "Non associato",
   "m_0e55b9f60cce78": "Sfoglia nelle app",
+  "m_0e568a753a8ea4": "regola di qualità",
   "m_0e56edadca55be": "Ancora nessuna preferenza per le epoche.",
   "m_0e5a21a46d8ee0": "Automatico · stream locali",
   "m_0e5ae3b66cd6d5": "Non impostato",
@@ -5244,7 +5246,6 @@
   "m_0f21a95c8d829d": "Scarica il programma",
   "m_0f23e8b6156914": "Smette subito di essere riprodotto e il suo video e la sua attività vengono eliminati.",
   "m_0f24f85421aaa8": "Gli appuntamenti fissi hanno la precedenza sui blocchi di programmi.",
-  "m_0f251f5f3a0763": "I download di questo spettatore sono limitati a questa risoluzione. Non può superare il limite di download del server.",
   "m_0f261b47c83f5f": {
     "one": "{count} articolo mancante o non riuscito",
     "many": "{count} articoli mancanti o non riusciti",

@@ -3264,6 +3264,7 @@
   "m_099b345bc660cd": "Brug en titels plakat",
   "m_099b3543883538": "Grænse for hele serveren",
   "m_099bab7b6a1c8e": "Se seere",
+  "m_099bcbe9582d29": "Gælder kun for downloads og følger serverens downloadgrænse. Opret en {link} for denne seer for at begrænse afspilningskvaliteten.",
   "m_099e4877001931": "Certifikattjek mislykkedes",
   "m_099e9a4e314811": "Fra Memories of Murder til Parasite.",
   "m_09a0335f4c3309": "De vælger deres egen adgangskode eller knytter deres Plex-konto til på /ether/me.",
@@ -4836,6 +4837,7 @@
   "m_0e5322a9e0a5e3": "Tilføj som en række",
   "m_0e55365789fb94": "Ikke tilknyttet",
   "m_0e55b9f60cce78": "Gennemse i apps",
+  "m_0e568a753a8ea4": "kvalitetsregel",
   "m_0e56edadca55be": "Ingen epokepræference endnu.",
   "m_0e5a21a46d8ee0": "Automatisk · lokale streams",
   "m_0e5ae3b66cd6d5": "Ikke angivet",
@@ -5119,7 +5121,6 @@
   "m_0f21a95c8d829d": "Download programmet",
   "m_0f23e8b6156914": "Den bliver ikke afspillet mere, og dens video og aktivitet fjernes med det samme.",
   "m_0f24f85421aaa8": "Faste sendetider har forrang frem for programblokke.",
-  "m_0f251f5f3a0763": "Downloads for denne seer er begrænset til denne opløsning. Den kan ikke overstige serverens downloadgrænse.",
   "m_0f261b47c83f5f": {
     "one": "{count} manglende eller mislykket artikel",
     "other": "{count} manglende eller mislykkede artikler"

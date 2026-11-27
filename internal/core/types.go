@@ -569,6 +569,7 @@ type ClientCaps struct {
 	MaxHeight             int    `json:"maxHeight"`                   // 2160, 1080, 720...
 	ExplicitMaxHeight     bool   `json:"explicitMaxHeight,omitempty"` // true when MaxHeight came from a request header/query limitation rather than a product default
 	MaxHeightSource       string `json:"-"`                           // declaration, preset or override that established MaxHeight
+	QualityRuleMaxHeight  int    `json:"-"`                           // current owner resolution limit, independent of device defaults
 	// HDRFormats preserves explicit display range declarations for Vela.
 	HDRFormats     []string `json:"hdrFormats,omitempty"`
 	HDR10          bool     `json:"hdr10"`
