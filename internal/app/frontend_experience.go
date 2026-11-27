@@ -20,7 +20,6 @@ import (
 	"github.com/braedonsaunders/ether/internal/livetv"
 	"github.com/braedonsaunders/ether/internal/plugins/adapters"
 	"github.com/braedonsaunders/ether/internal/resolver"
-	sessionbroker "github.com/braedonsaunders/ether/internal/sessions"
 	"github.com/braedonsaunders/ether/internal/viewerpolicy"
 )
 
@@ -485,7 +484,7 @@ func (a *App) newSurfaceExperience(protocol core.Protocol, artwork ...frontend.A
 				if u != nil && device.ID != "" && core.ColdDetail(ctx, title.Key) &&
 					(protocol == "jellyfin" || protocol == "emby" || protocol == "vela" || protocol == "silo") {
 					warmCaps := caps
-					warmCaps.ClientID = sessionbroker.PlaybackClientID(protocol, device.ID)
+					warmCaps.ClientID = frontend.PlaybackClientID(protocol, device.ID)
 					if warm, ok := a.playback.WarmProbeInfo(u, warmCaps, title.Key); ok {
 						info = core.CloneMediaInfo(warm)
 					}
@@ -535,9 +534,6 @@ func (a *App) newSurfaceExperience(protocol core.Protocol, artwork ...frontend.A
 					if matched {
 						merged := core.CloneMediaInfo(resumedInfo)
 						merged.Estimated = false
-						if len(version.Info.Chapters) > 0 && len(merged.Chapters) == 0 {
-							merged.Chapters = version.Info.Chapters
-						}
 						version.Info = merged
 						if merged.Size > 0 && version.Release.Size <= 0 {
 							version.Release.Size = merged.Size
@@ -545,7 +541,7 @@ func (a *App) newSurfaceExperience(protocol core.Protocol, artwork ...frontend.A
 					}
 				}
 				result.Versions = append(result.Versions, frontendVersion(title, version))
-				if version.Auto && !version.Info.Estimated && len(version.Info.Chapters) > 0 {
+				if version.Auto && !version.Info.Estimated {
 					result.Chapters = version.Info.Chapters
 				}
 			}

@@ -405,7 +405,7 @@ export function createExperienceMock(nowMs = Date.now()) {
     if (seg[0] === "stats" && seg[1] === "plays" && seg[2] && seg.length === 3) {
       const p = plays.find((x) => x.id === decodeURIComponent(seg[2]!));
       return p
-        ? { status: 200, body: historyPlay(p) }
+        ? { status: 200, body: { ...historyPlay(p), chapterCount: p.uhd ? 12 : 0 } }
         : { status: 404, body: { error: { code: "stats", message: "Play not found" } } };
     }
     if (seg[0] === "stats" && (seg[1] === "history" || seg[1] === "summary")) {

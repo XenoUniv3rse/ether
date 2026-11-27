@@ -621,7 +621,8 @@ func (i *instance) browseRoutes() error {
 			http.NotFound(w, r)
 			return
 		}
-		if d.Collection == nil && d.Playlist == nil && versionID == "" && !mbIsBookItem(d.Title) && (d.Title.Type == "movie" || d.Title.Type == "episode") {
+		rokuChapters := i.protocol == "jellyfin" && isJellyfinRoku(device(r)) && fieldSet(r)["chapters"]
+		if !rokuChapters && d.Collection == nil && d.Playlist == nil && versionID == "" && !mbIsBookItem(d.Title) && (d.Title.Type == "movie" || d.Title.Type == "episode") {
 			i.warmDetail(r, v, key)
 		}
 		if d.Collection != nil || d.Playlist != nil {
@@ -712,6 +713,9 @@ func (i *instance) browseRoutes() error {
 		}
 		i.addNamedFacets(r, v, d, dto)
 		if i.protocol == "jellyfin" {
+			if rokuChapters && (d.Title.Type == "movie" || d.Title.Type == "episode") && !mbDeclaredNonVideo(d.Title) {
+				i.probeRokuChapters(r, v, d, key, versionID, dto)
+			}
 			i.jellyfinItemDetailDTO(d, dto)
 			if sources, ok := dto["MediaSources"].([]any); ok {
 				for _, raw := range sources {

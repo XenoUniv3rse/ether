@@ -88,9 +88,6 @@ func (b *Broker) subtitleURLForSession(s *brokerSession, ps *core.PlaySession, i
 		return "", core.ErrNotAvailable
 	}
 	url := fmt.Sprintf("/sessions/media/%s/%s/subtitles/%d.%s", s.public.ID, s.grant, index, format)
-	if !st.External && index == s.opts.SubtitleStream && !b.progressiveSubtitle(s, ps.Info, st) {
-		b.warmSubtitle(s, st)
-	}
 	if b.progressiveSubtitle(s, ps.Info, st) {
 		window := false
 		for _, p := range s.caps.Profiles.Subtitles {
@@ -105,44 +102,6 @@ func (b *Broker) subtitleURLForSession(s *brokerSession, ps *core.PlaySession, i
 		}
 	}
 	return url, nil
-}
-
-// warmSubtitle starts reading the session's selected embedded text track as
-// soon as its sidecar is handed out: the player asks for it a moment later
-// and joins the read already under way (the extraction cache is shared per
-// source and track). Only the selected track of a playing session is read,
-// and the read ends with the session.
-func (b *Broker) warmSubtitle(s *brokerSession, st core.StreamInfo) {
-	if b.deps.ExtractSubtitle == nil || !transcode.IsTextSubtitle(st.Codec) {
-		return
-	}
-	// Without a cache key the warmed track could not be shared.
-	if keyer, ok := b.deps.Playback.(interface{ SourceKey(string) string }); !ok || keyer.SourceKey(s.playID) == "" {
-		return
-	}
-	key := s.public.ID + "\x00" + strconv.Itoa(st.Index)
-	if _, started := b.subtitleWarm.LoadOrStore(key, struct{}{}); started {
-		return
-	}
-	ctx := context.Background()
-	if sc, ok := b.deps.Playback.(interface {
-		SessionContext(string) context.Context
-	}); ok {
-		if c := sc.SessionContext(s.playID); c != nil {
-			ctx = c
-		}
-	}
-	input := b.deps.Playback.InputURL(s.playID)
-	if input == "" {
-		b.subtitleWarm.Delete(key)
-		return
-	}
-	ctx, cancel := context.WithTimeout(b.subtitleContext(ctx, s.playID), 10*time.Minute)
-	go func() {
-		defer cancel()
-		defer b.subtitleWarm.Delete(key)
-		_ = b.deps.ExtractSubtitle(ctx, input, st.Index, st.Codec, io.Discard)
-	}()
 }
 
 // subtitleFormat includes Jellyfin web's JSON renderer and ASS renderer.
@@ -213,12 +172,25 @@ func (b *Broker) serveSubtitle(w http.ResponseWriter, r *http.Request, s *broker
 		b.serveProgressiveSubtitle(w, r, s, stream)
 		return
 	}
+	// Embedded extraction can read across a large remote file. Bound the
+	// player-blocking request independently of offline extraction.
+	started := time.Now()
+	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+	defer cancel()
+	unavailable := func() {
+		if b.deps.Logger != nil {
+			b.deps.Logger.Debug("subtitle unavailable", "session", s.playID, "stream", index,
+				"external", stream.External, "elapsed_ms", time.Since(started).Milliseconds(), "context_error", ctx.Err())
+		}
+		w.Header().Set("Cache-Control", "no-store")
+		http.NotFound(w, r)
+	}
 	// Authored ASS must retain its styles and positioning, using the same
 	// scoped source reader as the subtitle artifact API.
 	if format == "ass" && !stream.External && subtitles.IsASSCodec(stream.Codec) {
-		raw, err := b.readEmbeddedAuthoredASS(r.Context(), s, ps, stream)
+		raw, err := b.readEmbeddedAuthoredASS(ctx, s, ps, stream)
 		if err != nil {
-			http.Error(w, "subtitle unavailable", http.StatusBadGateway)
+			unavailable()
 			return
 		}
 		if ms, ok := syncMS(r); ok {
@@ -240,13 +212,13 @@ func (b *Broker) serveSubtitle(w http.ResponseWriter, r *http.Request, s *broker
 		}
 		reader, actual, err := b.openSubtitle(s, stream.ExternalURL, sourceFormat)
 		if err != nil {
-			http.NotFound(w, r)
+			unavailable()
 			return
 		}
 		defer reader.Close()
 		raw, err = io.ReadAll(io.LimitReader(reader, maxSubtitle+1))
 		if err != nil || len(raw) > maxSubtitle || actual != sourceFormat {
-			http.Error(w, "subtitle unavailable", http.StatusBadGateway)
+			unavailable()
 			return
 		}
 	} else {
@@ -256,15 +228,15 @@ func (b *Broker) serveSubtitle(w http.ResponseWriter, r *http.Request, s *broker
 		}
 		var buf limitedBuffer
 		buf.limit = maxSubtitle
-		if err := b.deps.ExtractSubtitle(b.subtitleContext(r.Context(), s.playID), b.deps.Playback.InputURL(s.playID), index, stream.Codec, &buf); err != nil {
-			http.Error(w, "subtitle unavailable", http.StatusBadGateway)
+		if err := b.deps.ExtractSubtitle(b.subtitleContext(ctx, s.playID), b.deps.Playback.InputURL(s.playID), index, stream.Codec, &buf); err != nil {
+			unavailable()
 			return
 		}
 		raw = buf.Bytes()
 		if format == "srt" {
 			cues, err := subtitles.ParseCues(string(raw))
 			if err != nil {
-				http.Error(w, "subtitle unavailable", http.StatusBadGateway)
+				unavailable()
 				return
 			}
 			raw = []byte(subtitles.RenderSRT(cues))
@@ -278,7 +250,7 @@ func (b *Broker) serveSubtitle(w http.ResponseWriter, r *http.Request, s *broker
 	case "js", "ass":
 		cues, err := subtitles.ParseCues(string(raw))
 		if err != nil {
-			http.Error(w, "subtitle unavailable", http.StatusBadGateway)
+			unavailable()
 			return
 		}
 		if format == "js" {
@@ -289,7 +261,7 @@ func (b *Broker) serveSubtitle(w http.ResponseWriter, r *http.Request, s *broker
 			contentType = "text/x-ssa; charset=utf-8"
 		}
 		if err != nil {
-			http.Error(w, "subtitle unavailable", http.StatusBadGateway)
+			unavailable()
 			return
 		}
 	}

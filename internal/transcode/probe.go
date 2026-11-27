@@ -216,10 +216,11 @@ func ParseProbe(b []byte) (*core.MediaInfo, error) {
 		return nil, errors.New("transcode: ffprobe returned no format or streams")
 	}
 	m := &core.MediaInfo{
-		Container:   NormalizeContainer(out.Format.FormatName),
-		Duration:    parseSeconds(out.Format.Duration),
-		Size:        atoi64(out.Format.Size),
-		BitrateKbps: probeKbps(atoi64(out.Format.BitRate)),
+		Container:      NormalizeContainer(out.Format.FormatName),
+		ChaptersProbed: true,
+		Duration:       parseSeconds(out.Format.Duration),
+		Size:           atoi64(out.Format.Size),
+		BitrateKbps:    probeKbps(atoi64(out.Format.BitRate)),
 	}
 	for _, c := range out.Chapters {
 		start, e1 := strconv.ParseFloat(c.Start, 64)

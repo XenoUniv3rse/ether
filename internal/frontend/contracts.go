@@ -16,6 +16,12 @@ import (
 // Protocol identifies a surface independently of client product or platform.
 type Protocol = core.Protocol
 
+// PlaybackClientID scopes a client installation to its frontend protocol.
+// Playback and support captures use the same key to correlate one device.
+func PlaybackClientID(protocol Protocol, deviceID string) string {
+	return fmt.Sprintf("%d:%s%s", len(protocol), protocol, deviceID)
+}
+
 // ProtocolHTTP is the release protocol for a stream URL read with HTTP
 // range requests. Its value stays owned by core.
 const ProtocolHTTP = core.ProtocolHTTP
@@ -1107,6 +1113,8 @@ type PlayIntent struct {
 
 	Estimate bool
 	Options  core.DecideOptions
+	// ReadChapters resolves deferred container chapters for an explicit detail request.
+	ReadChapters bool
 	// ExactVersion treats PlanRequest.Version as a scoped opaque handle and
 	// refuses any substitute release, including during later source failover.
 	ExactVersion bool

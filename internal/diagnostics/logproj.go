@@ -182,16 +182,21 @@ type exportLog struct {
 	// Msg is the log line's message, a fixed string in Ether's code. Err
 	// is its error or reason, secrets and URL queries removed; it often
 	// names a release, so it is kept only when titles are included.
-	Msg       string `json:"msg,omitempty"`
-	Err       string `json:"err,omitempty"`
-	Method    string `json:"method,omitempty"`
-	Route     string `json:"route,omitempty"`
-	Dur       string `json:"dur,omitempty"`
-	PageStart string `json:"pageStart,omitempty"`
-	PageSize  string `json:"pageSize,omitempty"`
-	Username  string `json:"username,omitempty"`
-	Peer      string `json:"peer,omitempty"`
-	Title     string `json:"title,omitempty"`
+	Msg           string `json:"msg,omitempty"`
+	Err           string `json:"err,omitempty"`
+	Method        string `json:"method,omitempty"`
+	Route         string `json:"route,omitempty"`
+	Dur           string `json:"dur,omitempty"`
+	PageStart     string `json:"pageStart,omitempty"`
+	PageSize      string `json:"pageSize,omitempty"`
+	Username      string `json:"username,omitempty"`
+	Peer          string `json:"peer,omitempty"`
+	Title         string `json:"title,omitempty"`
+	Chapters      string `json:"chapters,omitempty"`
+	ChapterSource string `json:"chapterSource,omitempty"`
+	RangeOffset   string `json:"rangeOffset,omitempty"`
+	RangeLength   string `json:"rangeLength,omitempty"`
+	FirstWriteMS  string `json:"firstWriteMs,omitempty"`
 }
 
 type logIdentity struct {
@@ -257,6 +262,17 @@ func projectLogs(records []LogRecord, q LogQuery, flags [3]bool, uses []secretUs
 		if len(rec.Message) <= 120 {
 			row.Msg = plainMessage(clipNetwork(rec.Message, 120, uses))
 		}
+		if rec.Message == "playback chapters" {
+			row.Chapters = digitsOnly(attrFold(rec.Attrs, "chapters"))
+			if source := attrFold(rec.Attrs, "source"); source == "probe" || source == "none" {
+				row.ChapterSource = source
+			}
+		}
+		if rec.Message == "direct range first write" {
+			row.RangeOffset = digitsOnly(attrFold(rec.Attrs, "offset"))
+			row.RangeLength = digitsOnly(attrFold(rec.Attrs, "length"))
+			row.FirstWriteMS = digitsOnly(attrFold(rec.Attrs, "first_write_ms"))
+		}
 		if flags[0] {
 			if e := firstPresent(rec.Attrs, "err", "error", "reason"); e != "" {
 				row.Err = clipNetwork(e, 400, uses)
@@ -283,7 +299,7 @@ func projectLogs(records []LogRecord, q LogQuery, flags [3]bool, uses []secretUs
 				ident.peers = append(ident.peers, p)
 			}
 		}
-		if flags[0] {
+		if flags[0] && rec.Message != "playback chapters" {
 			if title := firstPresent(rec.Attrs, "title", "release", "source"); title != "" {
 				title = clipNetwork(title, maxString, uses)
 				row.Title = title

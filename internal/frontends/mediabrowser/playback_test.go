@@ -260,26 +260,44 @@ func TestInfuseTimelineRecordsFileSourceWithoutBrokerSession(t *testing.T) {
 	}
 }
 
-func TestPlaybackInfoWithoutSourceUsesJellyfinErrorCode(t *testing.T) {
+func TestPlaybackInfoWithoutSourceUsesProtocolError(t *testing.T) {
 	viewer := &frontend.Viewer{ID: 1}
 	ident := frontendtest.Identity{ResolveFunc: func(context.Context, string) (*frontend.Viewer, error) { return viewer, nil }}
-	for _, planErr := range []error{nil, frontend.ErrNotFound, frontend.ErrNotAvailable} {
+	for _, planErr := range []error{nil, frontend.ErrNotFound, frontend.ErrNotAvailable, &frontend.NoCompatiblePathError{}} {
 		sessions := frontendtest.Sessions{PlanFunc: func(context.Context, frontend.PlanRequest) (frontend.PlayPlan, error) {
 			if planErr != nil {
 				return frontend.PlayPlan{}, planErr
 			}
 			return frontend.PlayPlan{Estimated: true, Media: frontend.MediaInfo{Estimated: true}}, nil
 		}}
-		inst, err := (Jellyfin{MachineID: "test"}).Mount(context.Background(), frontend.Host{Identity: ident, Sessions: sessions, Capabilities: frontendtest.Capabilities{}})
+		host := frontend.Host{Identity: ident, Sessions: sessions, Capabilities: frontendtest.Capabilities{}}
+		inst, err := (Jellyfin{MachineID: "test"}).Mount(context.Background(), host)
 		if err != nil {
 			t.Fatal(err)
 		}
-		w := httptest.NewRecorder()
-		r := httptest.NewRequest("POST", "/Items/"+ids.RatingKeyGUID(5)+"/PlaybackInfo", strings.NewReader(`{"IsPlayback":true}`))
+		emby, err := (Emby{MachineID: "test"}).Mount(context.Background(), host)
+		if err != nil {
+			t.Fatal(err)
+		}
+		uri := "/Items/" + ids.RatingKeyGUID(5) + "/PlaybackInfo"
+		for _, surface := range []frontend.Instance{inst, emby} {
+			w := httptest.NewRecorder()
+			r := httptest.NewRequest("POST", uri, strings.NewReader(`{"IsPlayback":true}`))
+			r.Header.Set("X-Emby-Token", "grant")
+			surface.Handler().ServeHTTP(w, r)
+			if w.Code != 200 || !strings.Contains(w.Body.String(), `"ErrorCode":"NoCompatibleStream"`) || !strings.Contains(w.Body.String(), `"MediaSources":[]`) {
+				t.Fatal(planErr, w.Code, w.Body.String())
+			}
+		}
+
+		r := httptest.NewRequest("POST", uri, strings.NewReader(`{"IsPlayback":true}`))
 		r.Header.Set("X-Emby-Token", "grant")
+		r.Header.Set("X-Emby-Client", "Jellyfin Roku")
+		r.Header.Set("X-Emby-Client-Version", "3.2.4")
+		w := httptest.NewRecorder()
 		inst.Handler().ServeHTTP(w, r)
-		if w.Code != 200 || !strings.Contains(w.Body.String(), `"ErrorCode":"NoCompatibleStream"`) || !strings.Contains(w.Body.String(), `"MediaSources":[]`) || strings.Contains(w.Body.String(), "Playback unavailable") {
-			t.Fatal(planErr, w.Code, w.Body.String())
+		if w.Code != http.StatusUnprocessableEntity || w.Body.Len() != 0 || w.Header().Get("X-Application-Error-Code") != "NoCompatibleStream" {
+			t.Fatalf("Roku PlaybackInfo: status=%d body=%q", w.Code, w.Body.String())
 		}
 	}
 }

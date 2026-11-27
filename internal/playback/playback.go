@@ -1957,6 +1957,16 @@ func (m *Manager) SetDecision(id string, d core.Decision) {
 	}
 	if s := m.lookup(id); s != nil {
 		s.mu.Lock()
+		first := s.deliveryDecision == nil
+		chapters, chapterSource := 0, "none"
+		if first && s.cur != nil {
+			s.cur.mu.Lock()
+			info := &s.cur.info
+			if !info.Estimated && info.Video() != nil && (info.ChaptersProbed || len(info.Chapters) > 0) {
+				chapters, chapterSource = len(info.Chapters), "probe"
+			}
+			s.cur.mu.Unlock()
+		}
 		changed := s.decision != d.Kind || s.decisionReason != d.Reason
 		hasVideo := s.cur == nil || len(s.cur.info.Streams) == 0 || s.cur.info.Video() != nil
 		s.decision, s.explicit = d.Kind, true
@@ -1972,6 +1982,10 @@ func (m *Manager) SetDecision(id string, d core.Decision) {
 			s.requiresRemux = false
 		}
 		s.mu.Unlock()
+		if first {
+			m.log.Info("playback chapters", "session", s.id, "client_id", s.ident.clientID,
+				"chapters", chapters, "source", chapterSource)
+		}
 		if changed {
 			if hasVideo {
 				m.log.Info("playback delivery decision", "session", s.id, "decision", d.Kind, "videoCopy", d.VideoCopy, "audioCopy", d.AudioCopy, "reason", d.Reason)

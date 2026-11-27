@@ -1215,8 +1215,10 @@ func (m *Manager) startTrailerFill(g *generation) {
 			return
 		}
 		g.mu.Lock()
-		if len(g.info.Chapters) == 0 {
+		chapterRead := info.ChaptersProbed && !g.info.ChaptersProbed
+		if chapterRead {
 			g.info.Chapters = slices.Clone(info.Chapters)
+			g.info.ChaptersProbed = true
 		}
 		streams := slices.Clone(g.info.Streams)
 		for i := range streams {
@@ -1227,13 +1229,51 @@ func (m *Manager) startTrailerFill(g *generation) {
 		g.info.Streams = streams
 		updated := core.CloneMediaInfo(g.info)
 		g.mu.Unlock()
-		if len(updated.Chapters) > 0 && g.res != nil {
+		if (chapterRead || len(updated.Chapters) > 0) && g.res != nil {
 			m.persistReleaseProbe(ctx, g.res.Release, g.res.NZB, updated)
 			if g.res.Title.IsPluginKey() {
 				m.persistItemProbe(ctx, g.res.Title, updated)
 			}
 		}
 	}()
+}
+
+// ProbeChapters resolves deferred chapter metadata for a client that is
+// asking for the chapter timeline now. Ordinary Play never waits for it.
+func (m *Manager) ProbeChapters(ctx context.Context, id, expectedRevision string) ([]core.Chapter, bool) {
+	s := m.lookup(id)
+	if s == nil || m.deps.NativeTrailer == nil {
+		return nil, false
+	}
+	g := s.current()
+	if g == nil || g.src == nil || !g.acquire() {
+		return nil, false
+	}
+	defer g.release()
+	if expectedRevision == "" || core.SourceRevision(&core.PlaySession{Key: s.ident.key, Source: g.src}) != expectedRevision {
+		return nil, false
+	}
+	info := g.infoSnapshot()
+	if !info.ChaptersProbed && info.Container == "mkv" && !info.Estimated {
+		readCtx, cancel := context.WithTimeout(ctx, 750*time.Millisecond)
+		m.deps.NativeTrailer(core.WithReadOrigin(readCtx, "playback.trailer", "requested chapters"), g.src, &info)
+		cancel()
+	}
+	g.mu.Lock()
+	updated := info.ChaptersProbed && !g.info.ChaptersProbed
+	if updated {
+		g.info.Chapters, g.info.ChaptersProbed = slices.Clone(info.Chapters), true
+	}
+	ch := slices.Clone(g.info.Chapters)
+	probed := g.info.ChaptersProbed
+	g.mu.Unlock()
+	if s.current() != g || !probed {
+		return nil, false
+	}
+	if updated && g.res != nil {
+		m.noteReleaseProbeMemory(g.res.Release, g.res.NZB, info)
+	}
+	return ch, true
 }
 
 // startProbeVerify runs ffprobe after a native probe and logs any

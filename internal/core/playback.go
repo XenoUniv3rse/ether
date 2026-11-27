@@ -312,6 +312,16 @@ type PlaySession struct {
 	SegmentStart time.Duration `json:"segmentStart,omitempty"`
 }
 
+// ProbedChapterCount identifies source chapter facts, including a probed
+// file with zero chapters. Estimates and live programmes have no file count.
+func (p *PlaySession) ProbedChapterCount() *int {
+	if p.LiveChannel != nil || p.Info.Estimated || p.Info.Video() == nil || (!p.Info.ChaptersProbed && len(p.Info.Chapters) == 0) {
+		return nil
+	}
+	count := len(p.Info.Chapters)
+	return &count
+}
+
 // LiveChannel identifies a live session's selected channel independently of its programme.
 type LiveChannel struct {
 	ID               string                `json:"id,omitempty"`

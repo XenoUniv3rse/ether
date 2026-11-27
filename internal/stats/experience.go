@@ -665,12 +665,14 @@ func (s *Service) PlayByID(ctx context.Context, id string) (map[string]any, erro
 	}
 	var sourceKbps, uhd, hdr int
 	var release string
-	err = s.db.QueryRowContext(ctx, `SELECT source_kbps,uhd,hdr,release_name FROM stats_plays WHERE id=?`, rowID).Scan(&sourceKbps, &uhd, &hdr, &release)
+	var chapterCount *int
+	err = s.db.QueryRowContext(ctx, `SELECT source_kbps,uhd,hdr,release_name,chapter_count FROM stats_plays WHERE id=?`, rowID).Scan(&sourceKbps, &uhd, &hdr, &release, &chapterCount)
 	if err != nil {
 		return nil, err
 	}
 	out["id"] = id
 	out["sourceKbps"], out["uhd"], out["hdr"], out["releaseName"] = sourceKbps, uhd != 0, hdr != 0, release
+	out["chapterCount"] = chapterCount
 	out["ttffMs"] = exp[0].StartMS
 	out["avgBitrateKbps"] = float64(0)
 	var ipStr string
@@ -783,6 +785,7 @@ func livePlayDetail(id string, live *core.PlaySession, lv liveViewing, hasViewin
 		"releaseName":    rel,
 		"remote":         live.Client.Remote,
 		"sourceKbps":     q.sourceKbps,
+		"chapterCount":   live.ProbedChapterCount(),
 		"avgBitrateKbps": avgBitrateKbps,
 		"uhd":            q.uhd != 0,
 		"hdr":            q.hdr != 0,
@@ -810,6 +813,7 @@ func livePlayDetail(id string, live *core.PlaySession, lv liveViewing, hasViewin
 }
 
 func overlayLivePlay(out map[string]any, live *core.PlaySession, lv liveViewing, hasViewing bool, dbBytes int64, dbFailovers int, watchedMS int64, now time.Time) {
+	out["chapterCount"] = live.ProbedChapterCount()
 	out["ended"] = int64(0)
 	out["updated"] = now.Unix()
 	bytes := max(dbBytes, live.BytesServed)
