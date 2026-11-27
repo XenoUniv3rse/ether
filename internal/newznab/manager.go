@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -308,9 +309,7 @@ func (m *Manager) SearchRescueWith(ctx context.Context, req core.SearchRequest, 
 		for _, r := range s.results {
 			key := mergeDedupeKey(r)
 			if idx, ok := seen[key]; ok {
-				dup := r
-				dup.Fallbacks = nil
-				merged[idx].Fallbacks = append(merged[idx].Fallbacks, dup)
+				foldDuplicate(&merged[idx], r)
 				continue
 			}
 			seen[key] = len(merged)
@@ -425,9 +424,7 @@ func (m *Manager) SearchWith(ctx context.Context, req core.SearchRequest, arrive
 		for _, r := range s.results {
 			key := mergeDedupeKey(r)
 			if idx, ok := seen[key]; ok {
-				dup := r
-				dup.Fallbacks = nil
-				merged[idx].Fallbacks = append(merged[idx].Fallbacks, dup)
+				foldDuplicate(&merged[idx], r)
 				continue
 			}
 			seen[key] = len(merged)
@@ -453,6 +450,23 @@ func (m *Manager) SearchWith(ctx context.Context, req core.SearchRequest, arrive
 		}
 	}
 	return merged, nil
+}
+
+// foldDuplicate adds r, a duplicate of winner, to winner's Fallbacks. When
+// both carry the same info hash they are one torrent, so r's cached markers
+// join winner's; a name-and-size match proves no such thing.
+func foldDuplicate(winner *core.Release, r core.Release) {
+	if winner.InfoHash != "" && winner.InfoHash == r.InfoHash {
+		for _, kind := range r.DebridCached {
+			if !slices.Contains(winner.DebridCached, kind) {
+				// Clipped, so append copies: the slice may be shared with a cached result.
+				winner.DebridCached = append(slices.Clip(winner.DebridCached), kind)
+			}
+		}
+	}
+	dup := r
+	dup.Fallbacks = nil
+	winner.Fallbacks = append(winner.Fallbacks, dup)
 }
 
 func mergeDedupeKey(r core.Release) string {
