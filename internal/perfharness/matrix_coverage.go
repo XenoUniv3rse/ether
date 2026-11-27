@@ -88,6 +88,22 @@ func addMatrixConsoleCoverage(c *Client) {
 	const draftHome = `{"mode":"curated","picks":false,"length":{},"rows":[]}`
 	const spec = `{"name":"Matrix scratch collection","mediaType":"movie","sources":[{"kind":"titles","keys":["{consoleMovieKey}"]}],"sort":"source","refresh":"weekly","enabled":true,"artwork":{"mode":"custom","url":"/p.jpg"}}`
 	for _, step := range []Step{
+		{Name: "fixture local console login", Method: http.MethodPost, Path: "/auth/local", Body: `{"username":"{username}","password":"{password}"}`},
+		{Name: "fixture exchange owner session", Method: http.MethodPost, Path: "/auth/session", Headers: func(h http.Header, vars map[string]string) {
+			h.Set("X-Plex-Token", vars["ownerToken"])
+		}, Discover: func(vars map[string]string, body []byte) {
+			var result struct {
+				Token string `json:"token"`
+			}
+			if json.Unmarshal(body, &result) == nil {
+				setOnce(vars, "consoleScratchSession", result.Token)
+			}
+		}},
+		{Name: "fixture sign out owner session", Method: http.MethodDelete, Path: "/auth/session", Headers: func(h http.Header, vars map[string]string) {
+			h.Del("X-Ether-Admin-Token")
+			h.Set("Authorization", "Bearer "+vars["consoleScratchSession"])
+		}},
+		{Name: "fixture request web player handoff", Method: http.MethodPost, Path: "/web-player?app=jellyfin"},
 		{Name: "fixture create local viewer", Method: http.MethodPost, Path: "/users/local", Body: `{"username":"matrix-console-scratch","password":"Matrix-local-001-fixture"}`, Discover: discoverMatrixID("consoleScratchViewer")},
 		{Name: "fixture patch local viewer", Method: http.MethodPatch, Path: "/users/{consoleScratchViewer}", Body: `{"title":"Matrix viewer","streamLimit":1}`},
 		{Name: "fixture update local viewer", Method: http.MethodPut, Path: "/users/{consoleScratchViewer}", Body: `{"maxContentRating":"PG","streamLimit":2}`},
@@ -106,6 +122,10 @@ func addMatrixConsoleCoverage(c *Client) {
 		{Name: "fixture unpin cache release", Method: http.MethodPost, Path: "/cache/pin", Body: `{"releaseId":"{consoleRelease}","pinned":false}`},
 		{Name: "fixture clear cache release", Method: http.MethodPost, Path: "/cache/clear", Body: `{"releaseId":"{consoleRelease}"}`},
 		{Name: "fixture block cache release", Method: http.MethodPost, Path: "/cache/clear-block", Body: `{"releaseId":"{consoleBlockRelease}"}`},
+		{Name: "fixture save warming pin", Method: http.MethodPost, Path: "/cache/warming", Body: `{"key":{consoleMovieKey},"pinned":true,"speculative":false}`},
+		{Name: "fixture remove warming pin", Method: http.MethodPost, Path: "/cache/warming", Body: `{"key":{consoleMovieKey},"pinned":false}`},
+		{Name: "fixture set title tags", Method: http.MethodPut, Path: "/catalog/title/{consoleMovieKey}/tags", Body: `{"tags":["Matrix fixture"]}`},
+		{Name: "fixture clear title tags", Method: http.MethodPut, Path: "/catalog/title/{consoleMovieKey}/tags", Body: `{"tags":[]}`},
 		{Name: "fixture clear remaining cache", Method: http.MethodPost, Path: "/cache/clear-all"},
 		{Name: "fixture rename On-Air artwork", Method: http.MethodPatch, Path: "/onair/assets/{consoleArtwork}", Body: `{"name":"Matrix renamed artwork"}`},
 		{Name: "fixture delete On-Air artwork", Method: http.MethodDelete, Path: "/onair/assets/{consoleArtwork}"},
