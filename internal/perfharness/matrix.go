@@ -59,11 +59,7 @@ func MatrixClients(live bool) []Client {
 				case "get_live_streams":
 					step.Discover = discoverRegexp("xtreamLive", xtreamStreamID)
 				case "get_vod_streams":
-					old := step.Discover
-					step.Discover = func(vars map[string]string, body []byte) {
-						old(vars, body)
-						discoverMatrixArtwork(vars, body, "xtreamCover", "/xtream/image/", "stream_icon")
-					}
+					step.Discover = discoverMatrixXtreamMovie
 				}
 			}
 			if live {
@@ -156,23 +152,40 @@ func MatrixClients(live bool) []Client {
 	return clients
 }
 
-func discoverMatrixArtwork(vars map[string]string, body []byte, variable, prefix, field string) {
-	delete(vars, variable)
-	var items []map[string]json.RawMessage
-	if json.Unmarshal(body, &items) != nil {
+func discoverMatrixXtreamMovie(vars map[string]string, body []byte) {
+	// Upcoming titles can appear in the lineup but cannot be opened. Pick a
+	// released listing with artwork and follow that same ID in both probes.
+	dec := json.NewDecoder(bytes.NewReader(body))
+	if token, err := dec.Token(); err != nil || token != json.Delim('[') {
 		return
 	}
-	for _, item := range items {
-		var raw string
-		if json.Unmarshal(item[field], &raw) != nil {
+	now, err := strconv.ParseInt(vars["now"], 10, 64)
+	if err != nil {
+		return
+	}
+	delete(vars, "xtreamVod")
+	delete(vars, "xtreamCover")
+	for dec.More() {
+		var item struct {
+			ID       int64  `json:"stream_id"`
+			Released string `json:"release_date"`
+			Cover    string `json:"stream_icon"`
+		}
+		if dec.Decode(&item) != nil {
+			return
+		}
+		released, err := time.Parse(time.DateOnly, item.Released)
+		if err != nil || released.Unix() >= now || item.ID <= 0 {
 			continue
 		}
-		u, err := url.Parse(raw)
+		cover, err := url.Parse(item.Cover)
 		if err != nil {
 			continue
 		}
-		if secret, ok := strings.CutPrefix(u.Path, prefix); ok && secret != "" && !strings.Contains(secret, "/") {
-			vars[variable] = url.PathEscape(secret)
+		secret, ok := strings.CutPrefix(cover.Path, "/xtream/image/")
+		if ok && secret != "" && !strings.Contains(secret, "/") {
+			vars["xtreamVod"] = strconv.FormatInt(item.ID, 10)
+			vars["xtreamCover"] = url.PathEscape(secret)
 			return
 		}
 	}
