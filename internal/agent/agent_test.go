@@ -757,3 +757,43 @@ func TestToolsRefusalMessageKeepsProviderReason(t *testing.T) {
 		t.Fatalf("pre-flight message = %q", got)
 	}
 }
+
+func TestTurnToolsUseOfferedNamesAndExactWebLinks(t *testing.T) {
+	const direct = "https://example.test/docs?tab=api"
+	const found = "https://example.test/reference"
+	model := &fakeModel{scripts: [][]llm.Event{
+		append(callEv("blocked", "flow_get", `{}`), callEv("search", "web_search", `{}`)...),
+		append(append(callEv("owner", "web_fetch", `{"url":"`+direct+`"}`),
+			callEv("result", "web_fetch", `{"url":"`+found+`"}`)...),
+			callEv("changed", "web_fetch", `{"url":"`+found+`?tab=api"}`)...),
+		{{Kind: llm.EventTextDelta, Text: "Finished reading."}},
+	}}
+	fx := newFixture(t, model, Options{})
+	var fetched []string
+	base := tools.Tool{Title: "Test", Description: "Test tool", ReadOnly: true, Audience: tools.AudienceOwner, Owner: "builtin",
+		InputSchema: json.RawMessage(`{"type":"object"}`)}
+	hidden, search, fetch := base, base, base
+	hidden.Name = "flow_get"
+	hidden.Execute = func(context.Context, tools.Principal, map[string]any) (tools.Result, error) {
+		t.Error("tool outside the route ran")
+		return tools.Result{}, nil
+	}
+	search.Name = "web_search"
+	search.Execute = func(context.Context, tools.Principal, map[string]any) (tools.Result, error) {
+		return tools.Result{Data: map[string]any{"results": []map[string]string{{"url": found}}}}, nil
+	}
+	fetch.Name = "web_fetch"
+	fetch.Execute = func(_ context.Context, _ tools.Principal, in map[string]any) (tools.Result, error) {
+		fetched = append(fetched, in["url"].(string))
+		return tools.Result{}, nil
+	}
+	if err := fx.svc.catalogue.Register(hidden, search, fetch); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := fx.svc.RunTurn(context.Background(), fx.p, "", "Read "+direct, TurnContext{Route: "/plugins/studio"}, func(Chunk) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if len(fetched) != 2 || fetched[0] != direct || fetched[1] != found {
+		t.Fatal("fetch must use the owner link or the exact search result")
+	}
+}

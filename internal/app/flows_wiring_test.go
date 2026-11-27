@@ -56,6 +56,8 @@ func TestFlowsAppWiringEndToEnd(t *testing.T) {
 				{Key: "message", Type: events.FieldString, Label: "Message", Template: true},
 				{Key: "color", Type: events.FieldString, Label: "Accent color", Template: true},
 				{Key: "priority", Type: events.FieldInt, Label: "Priority", Template: true},
+				{Key: "credential", Type: events.FieldString, Label: "Credential", Secret: true},
+				{Key: "optionalCredential", Type: events.FieldString, Label: "Optional credential", Secret: true},
 				{Key: "bypassDigest", Type: events.FieldBool, Label: "Bypass digest"},
 			},
 		},
@@ -190,9 +192,11 @@ func TestFlowsAppWiringEndToEnd(t *testing.T) {
 					Config: flows.MustMarshalConfig(flows.ActionNodeConfig{
 						ActionType: "notify.send",
 						Params: map[string]any{
-							"channelIds": []string{"discord-1"},
-							"title":      "Backup failed",
-							"message":    "{{ event.payload.error }}",
+							"channelIds":         []string{"discord-1"},
+							"title":              "Backup failed",
+							"message":            "{{ event.payload.error }}",
+							"credential":         "fixture-value-original",
+							"optionalCredential": "",
 						},
 					}),
 				},
@@ -294,6 +298,54 @@ func TestFlowsAppWiringEndToEnd(t *testing.T) {
 	getRes := callMCP("flow_get", map[string]any{"flowId": flowID})
 	if getRes.Data["flow"].(map[string]any)["id"] != flowID {
 		t.Fatalf("unexpected flow_get result: %+v", getRes.Data)
+	}
+
+	reader := owner
+	reader.Scopes = []string{"read"}
+	getFlow, ok := a.extendRT.tools.Lookup(ctx, reader, "flow_get")
+	if !ok {
+		t.Fatal("flow_get unavailable to read scope")
+	}
+	view, err := getFlow.Execute(ctx, reader, map[string]any{"flowId": flowID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := json.Marshal(view.Data["flow"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(raw, []byte("fixture-value-original")) {
+		t.Fatal("flow output exposed an action credential")
+	}
+	var edit flows.Flow
+	if err := json.Unmarshal(raw, &edit); err != nil {
+		t.Fatal(err)
+	}
+	masked, err := flows.DecodeConfig[flows.ActionNodeConfig](edit.Graph.Nodes[1])
+	if err != nil || masked.Params["credential"] != events.RedactedValue || masked.Params["optionalCredential"] != nil {
+		t.Fatal("flow output did not distinguish set and unset credentials")
+	}
+
+	current, err := a.FlowsStore().GetFlow(ctx, flowID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	action, err := flows.DecodeConfig[flows.ActionNodeConfig](current.Graph.Nodes[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	action.Params["credential"] = "fixture-value-rotated"
+	current.Graph.Nodes[1].Config = flows.MustMarshalConfig(action)
+	if _, err := a.FlowsStore().SaveFlow(ctx, *current); err != nil {
+		t.Fatal(err)
+	}
+	saved, err := a.FlowsStore().SaveFlow(ctx, edit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	action, err = flows.DecodeConfig[flows.ActionNodeConfig](saved.Graph.Nodes[1])
+	if err != nil || action.Params["credential"] != "fixture-value-rotated" {
+		t.Fatal("saving a masked graph did not retain the current credential")
 	}
 
 	// Dry-run test via MCP tool executes immediately without mutating live counter.

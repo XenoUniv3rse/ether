@@ -73,7 +73,7 @@ func (a *App) buildFlows() {
 		}
 	}
 	triggers := flows.NewTriggerRegistry()
-	st := flows.NewSQLStore(a.db)
+	st := flows.NewSQLStore(a.db, flows.WithStoreActions(actionReg))
 
 	var cbus clusterbus.Bus
 	if a.cluster != nil {
@@ -240,7 +240,12 @@ func (s *appFlowsService) GetFlow(ctx context.Context, id string) (*flows.Flow, 
 	if err != nil {
 		return nil, err
 	}
-	return rt.store.GetFlow(ctx, id)
+	f, err := rt.store.GetFlow(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	f.Graph = flows.RedactGraphActions(f.Graph, rt.actions)
+	return f, nil
 }
 
 func (s *appFlowsService) ListTemplates() []flows.Template {
