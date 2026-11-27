@@ -28,6 +28,7 @@ type QueryStats struct {
 	queries      atomic.Int64
 	writes       atomic.Int64
 	rows         atomic.Int64
+	maxRows      atomic.Int64
 	dbNanos      atomic.Int64
 	lockWait     atomic.Int64
 
@@ -174,6 +175,8 @@ const maxTrackedStatements = 256
 func (s *QueryStats) record(query string, rows int64, d time.Duration) {
 	s.queries.Add(1)
 	s.rows.Add(rows)
+	for max := s.maxRows.Load(); rows > max && !s.maxRows.CompareAndSwap(max, rows); max = s.maxRows.Load() {
+	}
 	s.dbNanos.Add(int64(d))
 	s.mu.Lock()
 	st := s.stmts[query]
@@ -214,6 +217,9 @@ func (s *QueryStats) Queries() int64 { return s.queries.Load() }
 
 // Rows is the number of result rows read back from the database.
 func (s *QueryStats) Rows() int64 { return s.rows.Load() }
+
+// MaxRows is the largest result set returned by one statement.
+func (s *QueryStats) MaxRows() int64 { return s.maxRows.Load() }
 
 // DBTime is the time spent inside the driver (executing, stepping rows).
 func (s *QueryStats) DBTime() time.Duration { return time.Duration(s.dbNanos.Load()) }

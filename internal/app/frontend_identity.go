@@ -657,24 +657,3 @@ type plexAccountAuthenticator interface {
 }
 
 var _ frontend.APIKeyIdentity = surfaceIdentity{}
-
-// XtreamLineupViewers gives the exporter its startup work independently of
-// requests. Grant credentials stay in the identity store.
-func (s surfaceIdentity) XtreamLineupViewers(ctx context.Context) ([]frontend.Viewer, error) {
-	if s.surface != "xtream" || s.grants == nil {
-		return nil, core.ErrUnauthorized
-	}
-	ids, err := s.grants.ActiveViewerIDs(ctx, "xtream")
-	if err != nil {
-		return nil, err
-	}
-	viewers := make([]frontend.Viewer, 0, len(ids))
-	for _, id := range ids {
-		viewer, err := s.User(ctx, id)
-		if err != nil {
-			return nil, err
-		}
-		viewers = append(viewers, *viewer)
-	}
-	return viewers, nil
-}

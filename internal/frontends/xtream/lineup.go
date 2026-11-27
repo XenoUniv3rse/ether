@@ -23,10 +23,6 @@ func (i *instance) openLineups() *lineup.Store {
 	})
 }
 
-func (i *instance) WaitLineup(ctx context.Context, viewer *frontend.Viewer) error {
-	return i.lineups.Wait(ctx, lineup.ViewerKey(viewer, ""))
-}
-
 func (i *instance) writeLineup(r *http.Request, l login, out io.Writer, base string) error {
 	return lineup.WriteVOD(r.Context(), out, base, l.username, l.password, pageSize,
 		func(kind string, visit func(context.Context, frontend.Title, int32) error) error {

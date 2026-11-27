@@ -616,8 +616,10 @@ type Host struct {
 	// PageFreshness invalidates cached browse bodies. Nil disables the cache.
 	// LineupPolicy returns the viewer's cached rules revision and whether
 	// catalogue changes can alter the policy's admission decisions.
-	LineupPolicy  func(viewerID int64) (revision int64, judged bool)
-	PageFreshness func() PageFreshness
+	LineupPolicy       func(viewerID int64) (revision int64, judged bool)
+	LineupBoundary     func(context.Context, time.Time) (time.Time, error)
+	ObserveLineupBuild func(context.Context, func(context.Context) error) error
+	PageFreshness      func() PageFreshness
 	// CacheDir is a node-local directory this frontend alone may fill with
 	// files it can regenerate. It may be emptied between mounts. Empty
 	// disables on-disk caches.

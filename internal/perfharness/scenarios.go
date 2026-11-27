@@ -55,7 +55,9 @@ type Step struct {
 	// the gate compares work per response byte instead of per request.
 	Stream time.Duration // observation window for an intentionally open response
 	Export bool
-	Method string
+	// ColdLineup runs the first Xtream download, which may have to build its snapshot.
+	ColdLineup bool
+	Method     string
 	// ExpectedStatus asserts an exact status for an intentional refusal.
 	ExpectedStatus int
 	Path           string

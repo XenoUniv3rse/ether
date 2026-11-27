@@ -8,10 +8,6 @@ import (
 	"github.com/braedonsaunders/ether/internal/frontend"
 )
 
-type ViewerSource interface {
-	XtreamLineupViewers(context.Context) ([]frontend.Viewer, error)
-}
-
 func ViewerKey(v *frontend.Viewer, category string) Key {
 	if category == "0" {
 		category = ""
@@ -39,18 +35,7 @@ func NewForHost(host frontend.Host, build func(context.Context, Key, *frontend.V
 }
 
 func hostOptions(host frontend.Host) Options {
-	return Options{Viewers: func(ctx context.Context) ([]Key, error) {
-		source, ok := host.Identity.(ViewerSource)
-		if !ok {
-			return nil, nil
-		}
-		viewers, err := source.XtreamLineupViewers(ctx)
-		keys := make([]Key, 0, len(viewers))
-		for _, viewer := range viewers {
-			keys = append(keys, ViewerKey(&viewer, ""))
-		}
-		return keys, err
-	}, Revision: func(key Key) Revision {
+	return Options{Boundary: host.LineupBoundary, Observe: host.ObserveLineupBuild, Revision: func(key Key) Revision {
 		f := host.PageFreshness()
 		policy := fmt.Sprint(f.Config, ":", f.Accounts, ":", f.Safety, ":", f.Hidden, ":", f.Libraries, ":", f.KindSync, ":", f.EpisodeOrder, ":", f.Watch, ":", f.Favorite, ":", f.Listed)
 		// A change in catalogue facts may reclassify a title for a limited

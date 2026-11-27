@@ -428,6 +428,10 @@ func newFrontendRuntime(a *App, cfg config.Config) (*frontendRuntime, error) {
 			u, _ := a.users.ActiveUser(context.Background(), id)
 			revision, judged := a.catalog.ViewerRulesJudge(u)
 			return revision, judged || a.safety.Restricted(u)
+		}, LineupBoundary: func(ctx context.Context, now time.Time) (time.Time, error) {
+			return a.catalog.NextLineupBoundary(ctx, now, a.cfg.Read().Availability)
+		}, ObserveLineupBuild: func(ctx context.Context, build func(context.Context) error) error {
+			return a.perf.observeLineupBuild(ctx, build)
 		}, PageFreshness: func() frontend.PageFreshness {
 			f := a.browseFreshness()
 			if id == "xtream" {

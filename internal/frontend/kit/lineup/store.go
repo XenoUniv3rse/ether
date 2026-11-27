@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -23,10 +25,13 @@ type Key struct {
 // can serve the last successful snapshot while a replacement is built.
 type Revision struct {
 	Policy, Content string
+	// NextBoundary is filled by the build for clock-driven content changes.
+	NextBoundary time.Time
 }
 
 type Options struct {
-	Viewers  func(context.Context) ([]Key, error)
+	Boundary func(context.Context, time.Time) (time.Time, error)
+	Observe  func(context.Context, func(context.Context) error) error
 	Revision func(Key) Revision
 	Build    func(context.Context, Key, io.Writer) error
 }
@@ -68,7 +73,6 @@ type Store struct {
 const (
 	poll     = 2 * time.Second
 	debounce = 5 * time.Second
-	refresh  = 2 * time.Minute
 	idle     = time.Hour
 	maxSlots = 128
 	maxBytes = 512 << 20
@@ -81,6 +85,19 @@ func New(parent string, opt Options) *Store {
 	}
 	if err := os.MkdirAll(parent, 0o700); err != nil {
 		return nil
+	}
+	// The registry mounts one lineup store under this node-local cache.
+	// The previous process may have died before Close removed its directory.
+	siblings, err := os.ReadDir(parent)
+	if err != nil {
+		return nil
+	}
+	for _, sibling := range siblings {
+		if sibling.IsDir() && strings.HasPrefix(sibling.Name(), "lineup-") {
+			if err := os.RemoveAll(filepath.Join(parent, sibling.Name())); err != nil {
+				return nil
+			}
+		}
 	}
 	dir, err := os.MkdirTemp(parent, "lineup-")
 	if err != nil {
@@ -129,19 +146,6 @@ func (s *Store) notifyLocked() {
 // when needed. Only an unregistered cold slot adopts the request's tracing
 // context. The caller owns closing the returned reader.
 func (s *Store) Open(ctx context.Context, key Key) (io.ReadCloser, error) {
-	return s.open(ctx, key, true)
-}
-
-// Wait waits for the startup worker to prepare a default snapshot.
-func (s *Store) Wait(ctx context.Context, key Key) error {
-	f, err := s.open(ctx, key, false)
-	if f != nil {
-		_ = f.Close()
-	}
-	return err
-}
-
-func (s *Store) open(ctx context.Context, key Key, cold bool) (io.ReadCloser, error) {
 	if s == nil {
 		return nil, os.ErrNotExist
 	}
@@ -150,7 +154,7 @@ func (s *Store) open(ctx context.Context, key Key, cold bool) (io.ReadCloser, er
 		s.mu.Lock()
 		now := time.Now()
 		e := s.slots[key]
-		if e == nil && cold {
+		if e == nil {
 			e = s.trackLocked(key, now)
 			if e == nil {
 				s.mu.Unlock()
@@ -207,34 +211,23 @@ func (s *Store) run() {
 	defer close(s.done)
 	ticker := time.NewTicker(poll)
 	defer ticker.Stop()
-	var nextScan time.Time
 	for s.ctx.Err() == nil {
 		now := time.Now()
-		if s.opt.Viewers != nil && !now.Before(nextScan) {
-			ctx, cancel := context.WithTimeout(s.ctx, 5*time.Second)
-			viewers, err := s.opt.Viewers(ctx)
-			cancel()
-			nextScan = now.Add(30 * time.Second)
-			if err == nil {
-				s.mu.Lock()
-				for _, key := range viewers {
-					if e := s.trackLocked(key, now); e != nil {
-						e.used = now
-					}
-				}
-				s.notifyLocked()
-				s.mu.Unlock()
-			}
-		}
 		key, e, rev := s.next(now)
 		if e != nil {
 			s.build(key, e, rev)
 			continue
 		}
+		s.mu.Lock()
+		var ticks <-chan time.Time
+		if len(s.slots) != 0 {
+			ticks = ticker.C
+		}
+		s.mu.Unlock()
 		select {
 		case <-s.ctx.Done():
 		case <-s.work:
-		case <-ticker.C:
+		case <-ticks:
 		}
 	}
 }
@@ -258,8 +251,8 @@ func (s *Store) next(now time.Time) (Key, *slot, Revision) {
 		missing := e.ready == nil || e.ready.rev.Policy != rev.Policy
 		stale := false
 		if e.ready != nil {
-			age := now.Sub(e.ready.at)
-			stale = age >= refresh || age >= debounce && e.ready.rev.Content != rev.Content
+			boundaryPassed := !e.ready.rev.NextBoundary.IsZero() && !now.Before(e.ready.rev.NextBoundary)
+			stale = now.Sub(e.ready.at) >= debounce && (boundaryPassed || e.ready.rev.Content != rev.Content)
 		}
 		if !missing && !stale {
 			continue
@@ -288,7 +281,22 @@ func (s *Store) build(key Key, e *slot, rev Revision) {
 	out, err := os.CreateTemp(s.dir, "snapshot-")
 	if err == nil {
 		limited := &boundedWriter{w: out, remaining: maxBytes}
-		err = s.encode(reqmemo.With(ctx), key, limited)
+		started := time.Now()
+		encode := func(ctx context.Context) error {
+			if s.opt.Boundary != nil {
+				var err error
+				rev.NextBoundary, err = s.opt.Boundary(ctx, started)
+				if err != nil {
+					return err
+				}
+			}
+			return s.encode(reqmemo.With(ctx), key, limited)
+		}
+		if s.opt.Observe == nil {
+			err = encode(ctx)
+		} else {
+			err = s.opt.Observe(ctx, encode)
+		}
 		size = int64(maxBytes - limited.remaining)
 		if closeErr := out.Close(); err == nil {
 			err = closeErr

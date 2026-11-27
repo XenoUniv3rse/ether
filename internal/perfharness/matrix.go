@@ -56,13 +56,17 @@ func MatrixClients(live bool) []Client {
 					Step{Name: "get_simple_data_table", Class: classGuide, Path: "/player_api.php" + auth + "&action=get_simple_data_table&stream_id={xtreamLive}"},
 				)
 			}
+			lineup := Step{Name: "M3U lineup export", Class: classGuide, Path: "/get.php" + auth + "&type=m3u_plus", Accept: func(body []byte) bool {
+				return bytes.HasPrefix(body, []byte("#EXTM3U\n")) && bytes.HasSuffix(body, []byte(".mkv\n"))
+			}}
+			cold := lineup
+			cold.Name += " cold"
+			cold.ColdLineup = true
 			clients[i].Steps = append(clients[i].Steps,
 				Step{Name: "VOD cover", Class: classDetail, Path: "/image/{xtreamCover}"},
 				Step{Name: "VOD cover probe", Class: classDetail, Method: http.MethodHead, Path: "/image/{xtreamCover}"},
 				Step{Name: "XMLTV guide export", Class: classGuide, Path: "/xmltv.php" + auth},
-				Step{Name: "M3U lineup export", Class: classGuide, Path: "/get.php" + auth + "&type=m3u_plus", Accept: func(body []byte) bool {
-					return bytes.HasPrefix(body, []byte("#EXTM3U\n")) && bytes.HasSuffix(body, []byte(".mkv\n"))
-				}},
+				cold, lineup,
 			)
 		case "silo-appletv":
 			clients[i].Steps = append(clients[i].Steps,
@@ -220,6 +224,21 @@ type MatrixReport struct {
 	gaps                []matrixGap
 	successes, attempts int
 	configs             []string
+	builds              []matrixBuild
+	lineupHits          []matrixBuild
+}
+
+type matrixBuild struct {
+	config string
+	trace  TraceRecord
+}
+
+func (r *MatrixReport) AddBackground(configuration string, trace []TraceRecord) {
+	for _, record := range trace {
+		if record.Work == "background build" && record.Surface == "xtream" && record.Path == "/xtream/get.php" {
+			r.builds = append(r.builds, matrixBuild{configuration, record})
+		}
+	}
 }
 
 type matrixGap struct {
@@ -267,6 +286,21 @@ func (r *MatrixReport) Add(configuration string, results []Result, trace map[str
 		}
 		if !ok {
 			continue
+		}
+		if step.ColdLineup {
+			buildFound := false
+			for _, work := range r.builds {
+				if work.config == configuration && work.trace.ParentTag == result.Tag && work.trace.ParentTag != "" {
+					buildFound = buildFound || work.trace.Status == http.StatusOK
+					rec.Queries -= work.trace.Queries
+					rec.Rows -= work.trace.Rows
+				}
+			}
+			if !buildFound {
+				r.AddGap(key.config, key.surface, key.route, result.Step, "missing successful cold build trace")
+			}
+		} else if key.surface == "xtream" && result.Step == "M3U lineup export" {
+			r.lineupHits = append(r.lineupHits, matrixBuild{configuration, rec})
 		}
 		budget := matrixBudget(step, rec, result.Route)
 		score := max(overBudget(rec.Queries, budget.Queries), overBudget(rec.Rows, budget.Rows), overBudget(rec.Writes-requiredDetailWrites(result.Route, rec), budget.Writes))
@@ -441,6 +475,17 @@ func (r *MatrixReport) Write(w io.Writer, elapsed time.Duration) {
 		})
 		for _, st := range stats[:min(len(stats), 3)] {
 			fmt.Fprintf(w, "\n- %d calls, %d rows, `%s`\n\n  `%s`\n", st.Count, st.Rows, clip(st.Site, 220), clip(sqlLiteral.ReplaceAllString(st.SQL, "?"), 360))
+		}
+	}
+	if len(r.builds)+len(r.lineupHits) > 0 {
+		fmt.Fprintln(w, "\n## Xtream lineup costs\n\n| Configuration | GET /xtream/get.php work | Statements | Rows | Writes | Largest result | Status |\n|---|---|---:|---:|---:|---:|---:|")
+		for _, build := range r.builds {
+			t := build.trace
+			fmt.Fprintf(w, "| %s | background build | %d | %d | %d | %d | %d |\n", build.config, t.Queries, t.Rows, t.Writes, t.MaxRows, t.Status)
+		}
+		for _, hit := range r.lineupHits {
+			t := hit.trace
+			fmt.Fprintf(w, "| %s | snapshot download | %d | %d | %d | %d | %d |\n", hit.config, t.Queries, t.Rows, t.Writes, t.MaxRows, t.Status)
 		}
 	}
 	fmt.Fprintln(w, "\n## Coverage gaps\n\n| Surface | Configuration | Route | Scenario | Reason |\n|---|---|---|---|---|")
