@@ -375,7 +375,8 @@ type Service struct {
 	// delete, so a revoked verdict is never written back after it was cleared.
 	availPersistMu           sync.Mutex
 	bgClosed                 bool
-	bookkeeping              []func(context.Context)
+	bookkeeping              []bookkeepingJob
+	bookkeepingSize          int
 	bookkeepingRunning       bool
 	bookkeepingIdle          chan struct{}
 	bgWG                     sync.WaitGroup
@@ -1018,8 +1019,7 @@ func (s *Service) resolve(ctx context.Context, req core.ResolveRequest, profile 
 			s.log.Info("resolver: below 4K", "title", trace.TitleName, "profile", profile.Name, "why", trace.Ceiling)
 		}
 		s.addTrace(trace)
-		history := compactTrace(trace)
-		s.persistBookkeeping(ctx, func(ctx context.Context) { s.recordHistory(ctx, history) })
+		s.queueHistory(trace, nil)
 		s.emitResolveOutcome(req, profile, trace, resolved, resolveErr)
 	}()
 

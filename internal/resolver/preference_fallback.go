@@ -12,7 +12,7 @@ var _ core.PreferenceFallbackObserver = (*Service)(nil)
 
 // RecordPreferenceFallback also covers opens that reuse Auto without Resolve.
 // Use the same bounded off-request-path queue as ordinary resolve outcomes.
-func (s *Service) RecordPreferenceFallback(ctx context.Context, req core.ResolveRequest, played, reason string, retry time.Duration) {
+func (s *Service) RecordPreferenceFallback(_ context.Context, req core.ResolveRequest, played, reason string, retry time.Duration) {
 	if req.Title == nil {
 		return
 	}
@@ -22,8 +22,7 @@ func (s *Service) RecordPreferenceFallback(ctx context.Context, req core.Resolve
 	// in the detailed decision, including successful automatic playback.
 	tr.Err = tr.Downgrade
 	s.addTrace(tr)
-	ctx = context.WithValue(ctx, requestBookkeepingKey{}, true)
-	s.persistBookkeeping(ctx, func(ctx context.Context) { s.recordHistory(ctx, tr) })
+	s.queueHistory(tr, nil)
 }
 
 // PreferredVersionRecovered never searches, ranks the library, or reads storage.
