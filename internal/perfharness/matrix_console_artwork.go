@@ -1,6 +1,7 @@
 package perfharness
 
 import (
+	"archive/zip"
 	"bytes"
 	"encoding/json"
 	"io"
@@ -34,6 +35,22 @@ func matrixConsoleArtworkScenarios() []Step {
 			Body: `{"duration":8,"poster":4,"layers":[{"id":"background","type":"rect","x":0,"y":0,"w":1920,"h":1080,"fill":"#345678"}]}`},
 		icon,
 		wordmark,
+		matrixConsoleSkin(),
+		{Name: "fixture remove Vela skin", Method: http.MethodDelete, Path: "/vela/skins/{consoleUploadedSkin}"},
+	}
+}
+
+func matrixConsoleSkin() Step {
+	var buf bytes.Buffer
+	archive := zip.NewWriter(&buf)
+	// The static archive entry name is valid and bytes.Buffer does not fail.
+	manifest, _ := archive.Create("skin.json")
+	_, _ = io.WriteString(manifest, `{"schema":1,"id":"matrix-uploaded-skin","name":"Matrix uploaded skin","version":"1.0.0","engine":"cinematic","swatches":["#123456","#56789a"],"palette":{"canvas":"#123456","ink":"#56789a"}}`)
+	_ = archive.Close()
+	return Step{
+		Name: "fixture upload Vela skin", Method: http.MethodPost, Path: "/vela/skins", Body: buf.String(),
+		Discover: discoverMatrixID("consoleUploadedSkin"),
+		Headers:  func(h http.Header, _ map[string]string) { h.Set("Content-Type", "application/octet-stream") },
 	}
 }
 
