@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"log/slog"
 	"mime"
 	"net/http"
 	"path"
@@ -30,6 +31,7 @@ type downloadCapabilityKey struct{}
 type downloadGrantRequest struct {
 	IdempotencyKey string `json:"idempotencyKey"`
 	VersionID      string `json:"versionId"`
+	Client         client `json:"client"`
 }
 
 type downloadGrant struct {
@@ -88,100 +90,137 @@ func (i *instance) downloadsFeature(ctx context.Context, v *frontend.Viewer) dow
 }
 
 func (i *instance) grantDownload(w http.ResponseWriter, r *http.Request) {
+	k, keyErr := key(r)
+	logRefusal := func(reason string) {
+		slog.DebugContext(r.Context(), "Vela download grant refused", "title_key", k, "reason", reason)
+	}
+	refuse := func(status int, class, code string, after int) {
+		logRefusal(code)
+		downloadProblem(w, status, class, code, downloadProblemMessage(code, requestDevice(r).Language), after)
+	}
+	conflict := func(code string) { refuse(http.StatusConflict, "source", code, 0) }
+	failed := func(stage string, err error) {
+		logRefusal(stage)
+		fail(w, err, r)
+	}
 	v, _, err := i.viewer(r)
 	if err != nil {
-		fail(w, err, r)
+		failed("authentication_failed", err)
 		return
 	}
 	quota, allowed := i.downloadPolicy(v)
 	if !allowed {
-		downloadProblem(w, http.StatusForbidden, "policy", "download_not_allowed", 0)
+		refuse(http.StatusForbidden, "policy", "download_not_allowed", 0)
 		return
 	}
 	var req downloadGrantRequest
 	if body(r, &req) != nil {
-		problem(w, 400, "request", "invalid_request")
+		refuse(http.StatusBadRequest, "request", "invalid_request", 0)
 		return
 	}
 	if header := strings.TrimSpace(r.Header.Get("Idempotency-Key")); header != "" {
 		req.IdempotencyKey = header
 	}
 	if req.IdempotencyKey == "" || len(req.IdempotencyKey) > 256 || len(req.VersionID) > 512 {
-		problem(w, 400, "request", "invalid_request")
+		refuse(http.StatusBadRequest, "request", "invalid_request", 0)
 		return
 	}
-	k, err := key(r)
-	if err != nil {
-		problem(w, 404, "not-found", "not_found")
+	if keyErr != nil {
+		refuse(http.StatusNotFound, "not-found", "not_found", 0)
 		return
 	}
-	unavailable := func() { downloadProblem(w, http.StatusConflict, "source", "version_unavailable", 0) }
 	if k.Kind() == frontend.KindShow || k.Kind() == frontend.KindSeason {
-		unavailable()
+		conflict("not_downloadable_kind")
 		return
 	}
 	ctx := frontend.WithLiveApp(r.Context(), "vela")
 	dev := requestDevice(r)
-	declared := i.negotiatedClientFor(r, dev)
-	capability, err := i.clientCapabilities(r, v, declared)
+	// Keep device-specific owner rules tied to the authenticated device.
+	req.Client.Device.ID = dev.ID
+	capability, err := i.clientCapabilities(r, v, req.Client)
 	if err != nil {
-		fail(w, err, r)
+		failed("capability_build_failed", err)
 		return
 	}
 	caps := capability.Client
 	if p, ok := i.host.ViewerPolicy.(frontend.PlaybackConfirmationPolicy); ok {
 		v, err = p.ConfirmPlayback(ctx, v, caps.Remote, i.serverNow())
 		if err != nil || v == nil {
-			downloadProblem(w, http.StatusForbidden, "policy", "download_not_allowed", 0)
+			refuse(http.StatusForbidden, "policy", "cannot_play_now", 0)
 			return
 		}
 	} else if p, ok := i.host.ViewerPolicy.(frontend.PlaybackAccessPolicy); ok && !p.CanPlay(v, caps.Remote, i.serverNow()) {
-		downloadProblem(w, http.StatusForbidden, "policy", "download_not_allowed", 0)
+		refuse(http.StatusForbidden, "policy", "cannot_play_now", 0)
 		return
 	}
 	detail, err := i.host.Experience.Item(frontend.WithColdDetail(ctx, k), frontend.ItemRequest{Viewer: v, Device: dev, Key: k})
 	if err != nil {
-		fail(w, err, r)
+		switch {
+		case errors.Is(err, frontend.ErrUnreleased):
+			conflict("title_unavailable")
+		case errors.Is(err, frontend.ErrNotFound):
+			refuse(http.StatusNotFound, "not-found", "not_found", 0)
+		default:
+			failed("title_lookup_failed", err)
+		}
 		return
 	}
-	if detail.Title.Key != k || detail.Title.Type == frontend.TypeShow || detail.Title.Type == frontend.TypeSeason ||
-		detail.Unavailable != nil || (detail.CanPlay != nil && !*detail.CanPlay) ||
-		reading.IsBookTitle(detail.Title) || !declared.OriginalPlayback.Valid() {
-		unavailable()
+	switch {
+	case detail.Title.Key != k:
+		conflict("title_unavailable")
+		return
+	case detail.Title.Type == frontend.TypeShow || detail.Title.Type == frontend.TypeSeason || reading.IsBookTitle(detail.Title):
+		conflict("not_downloadable_kind")
+		return
+	case detail.Unavailable != nil || detail.Title.IsFutureRelease(i.serverNow()):
+		conflict("title_unavailable")
+		return
+	case detail.CanPlay != nil && !*detail.CanPlay:
+		conflict("cannot_play_now")
+		return
+	case !req.Client.OriginalPlayback.Valid():
+		conflict("capabilities_unknown")
 		return
 	}
 	receipt := hashJSON([]string{k.String(), req.IdempotencyKey})
 	if runtime, ok := i.host.Sessions.(frontend.SessionRuntime); ok && runtime.LifecycleGates() != nil {
 		unlock, err := runtime.LifecycleGates().Acquire(ctx, "vela-download/"+strconv.FormatInt(v.ID, 10)+"/"+receipt)
 		if err != nil {
-			fail(w, err, r)
+			failed("receipt_lock_failed", err)
 			return
 		}
 		defer unlock()
 	}
 	binding, err := quota.OfflineDownloadReceipt(ctx, v, receipt)
 	if err != nil {
-		fail(w, err, r)
+		failed("receipt_lookup_failed", err)
 		return
 	}
 	scope := frontend.VersionScope{Viewer: v, Device: dev, Protocol: "vela", Caps: caps}
 	release := binding.Release
 	if binding.ETag != "" {
 		if req.VersionID != "" && req.VersionID != binding.VersionID {
-			unavailable()
+			conflict("version_changed")
 			return
 		}
 	} else if req.VersionID != "" {
 		target, err := i.resolveDownloadVersion(ctx, scope, k, req.VersionID)
-		if err != nil || target.Item != k || target.Release == "" {
-			unavailable()
+		switch {
+		case errors.Is(err, frontend.ErrNotFound), errors.Is(err, frontend.ErrVersionUnavailable):
+			conflict("version_not_found")
+			return
+		case err != nil:
+			failed("version_lookup_failed", err)
+			return
+		case target.Item != k || target.Release == "":
+			conflict("version_not_found")
 			return
 		}
 		release = target.Release
 		binding.VersionID = req.VersionID
 	}
 	if !i.downloads.reserve() {
-		downloadProblem(w, http.StatusServiceUnavailable, "capacity", "resource_capacity", 5)
+		refuse(http.StatusServiceUnavailable, "capacity", "resource_capacity", 5)
 		return
 	}
 	var source *frontend.OfflineDownloadSource
@@ -196,19 +235,28 @@ func (i *instance) grantDownload(w http.ResponseWriter, r *http.Request) {
 		caps.MaxHeight = lowerDownloadHeight(caps.MaxHeight, policy.DownloadAllowance(v).MaxHeight)
 	}
 	caps.MaxHeight = lowerDownloadHeight(caps.MaxHeight, i.host.HostConfig().Downloads.MaxHeight)
-	source, err = i.host.OfflineDownloads.OpenOfflineDownload(ctx, v, &detail.Title, caps, release, declared.OriginalPlayback)
+	source, err = i.host.OfflineDownloads.OpenOfflineDownload(ctx, v, &detail.Title, caps, release, req.Client.OriginalPlayback)
 	if err != nil {
 		switch {
 		case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded), errors.Is(err, frontend.ErrPreparing):
-			fail(w, err, r)
+			failed("source_open_failed", err)
+		case errors.Is(err, frontend.ErrUnreleased):
+			conflict("title_unavailable")
+		case errors.Is(err, frontend.ErrSourceChanged):
+			conflict("version_changed")
+		case errors.Is(err, frontend.ErrVersionUnavailable), errors.Is(err, frontend.ErrNotAvailable):
+			conflict("version_unavailable")
 		default:
-			unavailable()
+			failed("source_open_failed", err)
 		}
 		return
 	}
-	if source == nil || source.ReaderAt == nil || source.Size <= 0 || source.Release == "" || source.ETag == "" ||
-		(binding.ETag != "" && (binding.ETag != source.ETag || binding.Release != source.Release)) {
-		unavailable()
+	if source == nil || source.ReaderAt == nil || source.Size <= 0 || source.Release == "" || source.ETag == "" {
+		conflict("version_unavailable")
+		return
+	}
+	if binding.ETag != "" && (binding.ETag != source.ETag || binding.Release != source.Release) {
+		conflict("version_changed")
 		return
 	}
 	if binding.VersionID == "" {
@@ -219,29 +267,29 @@ func (i *instance) grantDownload(w http.ResponseWriter, r *http.Request) {
 	binding.Release, binding.ETag = source.Release, source.ETag
 	token, err := mintReadTicketToken()
 	if err != nil {
-		fail(w, err, r)
+		failed("ticket_mint_failed", err)
 		return
 	}
 	decision, err := quota.AdmitOfflineDownload(ctx, v, k, receipt, binding, source.Size)
 	if errors.Is(err, frontend.ErrSourceChanged) {
-		unavailable()
+		conflict("version_changed")
 		return
 	}
 	if err != nil {
-		fail(w, err, r)
+		failed("quota_admission_failed", err)
 		return
 	}
 	if !decision.Allowed {
 		wait := decision.ResetAt.Sub(i.serverNow())
 		retry := max(1, int((wait+time.Second-1)/time.Second))
-		downloadProblem(w, http.StatusTooManyRequests, "policy", "download_limit", retry)
+		refuse(http.StatusTooManyRequests, "policy", "download_limit", retry)
 		return
 	}
 	expires := i.serverNow().Truncate(time.Second).Add(downloadTicketTTL)
 	filename := downloadFilename(source.Name, detail.Title.Title)
 	issued = i.downloads.issue(token, &downloadTicket{source: source, expiresAt: expires, filename: filename}, expires.Sub(i.serverNow()))
 	if !issued {
-		i.unavailable(w, r)
+		refuse(http.StatusForbidden, "policy", "feature_unavailable", 0)
 		return
 	}
 	send(w, http.StatusOK, downloadGrant{
@@ -285,13 +333,14 @@ func downloadFilename(name, title string) string {
 
 // Error codes are localizable by the client. No source diagnostics or
 // provider identifiers are included in the download response.
-func downloadProblem(w http.ResponseWriter, status int, class, code string, after int) {
-	retry := object{"allowed": after > 0}
-	if after > 0 {
-		w.Header().Set("Retry-After", strconv.Itoa(after))
-		retry["afterSeconds"] = after
+func downloadProblem(w http.ResponseWriter, status int, class, code, message string, after int) {
+	if after <= 0 {
+		problemMessage(w, status, class, code, message)
+		return
 	}
-	send(w, status, object{"error": object{"class": class, "code": code, "message": code, "retry": retry}})
+	w.Header().Set("Retry-After", strconv.Itoa(after))
+	retry := object{"allowed": true, "afterSeconds": after}
+	send(w, status, object{"error": object{"class": class, "code": code, "message": message, "retry": retry}})
 }
 
 func (i *instance) downloadFile(w http.ResponseWriter, r *http.Request) {

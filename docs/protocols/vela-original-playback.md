@@ -96,8 +96,18 @@ An authenticated viewer sees `capabilities.features.downloads` as
 for a daily title-count limit. Download permission and usage are shared with
 Plex and Jellyfin/Emby, including any configured byte or monthly limits.
 
-`POST /vela/v0/titles/{id}/download` takes `{idempotencyKey,versionId?}`.
-Send the device's `originalPlayback` declaration through negotiation first.
+`POST /vela/v0/titles/{id}/download` takes `{idempotencyKey,versionId?,client}`.
+Send the current playback `ClientCapabilities` as `client` on every grant
+request, including renewals. Include the device's `client.originalPlayback`
+declaration. Ether builds capabilities from this request and uses the
+authenticated request device ID. A grant can be the first request after
+sign-in or a server restart.
+
+In the Vela API client, `DownloadRequest.client` uses the same type as
+`NegotiateRequest.client`. The download store already obtains this declaration
+from `session.declared()` for both start and resume. Pass it through to the
+Ether adapter's `resolveDownload` request.
+
 A supplied version uses an ID from the title's version menu. With no
 `versionId`, Ether picks an original whose container and default audio and
 video streams the device can decode. The file needs no server-side conversion
@@ -118,12 +128,30 @@ until `expiresAt` without additional authentication headers. A transfer that
 started before expiry can finish. Download reads use no playback stream
 slot or playback idle timeout and can run alongside a playback session.
 
-Grant refusals use `403 download_not_allowed`, `429 download_limit`, or
-`409 version_unavailable`. A quota refusal includes `Retry-After` in seconds
-until the current UTC quota period resets. An expired ticket responds with
-404. As with other rangefile responses, an `If-Range` mismatch returns the
-full representation. Check the returned status and validator before
-appending bytes to a partial file.
+Grant refusals include a stable `error.code` for client behavior and a
+human-readable `error.message` localized using the request language.
+
+| HTTP status | Code | Meaning |
+| --- | --- | --- |
+| 400 | `invalid_request` | The grant request is malformed or lacks an idempotency key. |
+| 403 | `download_not_allowed` | Offline downloads are disabled for this viewer. |
+| 403 | `feature_unavailable` | The server cannot issue a download ticket right now. |
+| 403 or 409 | `cannot_play_now` | The viewer's current playback policy blocks the request. |
+| 404 | `not_found` | The requested title was not found. |
+| 409 | `not_downloadable_kind` | A show, season, or book cannot be downloaded through this endpoint. |
+| 409 | `title_unavailable` | The title itself is currently unavailable. |
+| 409 | `capabilities_unknown` | The request lacks a valid `client.originalPlayback` declaration. |
+| 409 | `version_changed` | The existing receipt is bound to a different version or file. |
+| 409 | `version_not_found` | The supplied version ID does not match a current offer for this title. |
+| 409 | `version_unavailable` | Ether could not open a compatible original file for the selected version or automatic selection. |
+| 429 | `download_limit` | The viewer has reached a download quota. |
+| 503 | `resource_capacity` | All download ticket slots are occupied. |
+
+Quota and ticket capacity refusals include `Retry-After` in seconds. For
+quota this is the time until the current UTC quota period resets. An
+expired ticket responds with 404. As with other rangefile responses, an
+`If-Range` mismatch returns the full representation. Check the returned
+status and validator before appending bytes to a partial file.
 
 ## Offline watch progress
 
