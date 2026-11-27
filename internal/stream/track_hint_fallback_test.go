@@ -45,6 +45,7 @@ func TestTrackHintFromName(t *testing.T) {
 		title string
 	}{
 		{"1-03 They Don't Care About Us", true, 1, 3, "They Don't Care About Us"},
+		{"CD2/03 Interlude", true, 2, 3, "Interlude"},
 		{"01 I'll Be There", true, 0, 1, "I'll Be There"},
 		{"07 - Mr. Brightside", true, 0, 7, "Mr. Brightside"},
 		{"03 Song.flac", false, 0, 0, ""},
