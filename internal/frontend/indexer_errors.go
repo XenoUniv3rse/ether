@@ -94,13 +94,39 @@ var sourceProblemText = [...]struct{ budget, rejected string }{
 	{"Byl dosažen denní limit indexeru", "Vydání byla nalezena, ale žádné nesplnilo požadavky na přehrávání"},
 }
 
+var debridThrottledText = [...]string{
+	"%s asked Ether to slow down",
+	"%s hat Ether gebeten, weniger Anfragen zu senden",
+	"%s pidió a Ether que redujera el ritmo de solicitudes",
+	"%s a demandé à Ether de ralentir ses requêtes",
+	"%s ha chiesto a Ether di rallentare le richieste",
+	"%s が Ether にリクエストの頻度を下げるよう求めました",
+	"%s에서 Ether에 요청 빈도를 낮추라고 요청했습니다",
+	"%s heeft Ether gevraagd minder verzoeken te sturen",
+	"%s ba Ether om å sende færre forespørsler",
+	"%s prosi Ether o zmniejszenie częstotliwości żądań",
+	"%s pediu ao Ether para reduzir a frequência das requisições",
+	"%s попросил Ether снизить частоту запросов",
+	"%s bad Ether att skicka färre förfrågningar",
+	"%s, Ether’dan istek sıklığını azaltmasını istedi",
+	"%s попросив Ether зменшити частоту запитів",
+	"%s 要求 Ether 降低请求频率",
+	"%s 要求 Ether 降低請求頻率",
+	"%s bad Ether om at sende færre anmodninger",
+	"%s pyysi Etheriä vähentämään pyyntöjen määrää",
+	"%s požádal Ether o snížení počtu požadavků",
+}
+
 // PlaybackSourceProblem exposes only localised, credential-free diagnostics.
 func PlaybackSourceProblem(err error, languages ...string) (code string, status int, message string) {
 	if msg := IndexersPausedMessage(err, languages...); msg != "" {
 		return IndexersPausedCode, http.StatusServiceUnavailable, msg
 	}
 	_, locale := language.MatchStrings(playbackErrorLocaleMatcher, languages...)
+	var throttled *core.DebridThrottleError
 	switch {
+	case errors.As(err, &throttled):
+		return "debrid_throttled", http.StatusTooManyRequests, fmt.Sprintf(debridThrottledText[locale], throttled.Provider)
 	case errors.Is(err, core.ErrBudgetExhausted):
 		return "indexer_budget_exhausted", http.StatusTooManyRequests, sourceProblemText[locale].budget
 	case errors.Is(err, core.ErrKindCandidatesRejected):

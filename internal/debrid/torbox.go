@@ -41,6 +41,7 @@ const (
 )
 
 type torBox struct {
+	api  *accountPacer
 	key  string
 	opts ProviderOptions
 	// edgeApproval, when set (tests), aliases fixture hosts as CDN edges of
@@ -55,8 +56,10 @@ type torBox struct {
 }
 
 func newTorBox(key string, opts ProviderOptions) *torBox {
-	return &torBox{key: key, opts: opts.withDefaults(torBoxBase), known: make(map[string]string)}
+	return &torBox{api: opts.paces.forAccount("torbox", key, opts.Now), key: key, opts: opts.withDefaults(torBoxBase), known: make(map[string]string)}
 }
+
+func (p *torBox) apiAccount() *accountPacer { return p.api }
 
 func (p *torBox) Kind() string { return "torbox" }
 
@@ -207,6 +210,7 @@ func matchesQueuedHash(candidate string, hashes ...string) bool {
 }
 
 func (p *torBox) do(ctx context.Context, r apiRequest) (json.RawMessage, error) {
+	r.pace = p.api
 	status, body, err := call(ctx, p.opts.HTTPClient, p.opts.BaseURL, r, func(req *http.Request) {
 		req.Header.Set("Authorization", "Bearer "+p.key)
 	})

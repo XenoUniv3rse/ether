@@ -741,6 +741,7 @@
   "m_0228876e08de48": "Jellyfin toont eerst Favorieten; je groepen worden zendertags.",
   "m_0229f3ebb5c5f4": "IntroDB",
   "m_022ac34b13be42": "Geprezen en nog niet gezien",
+  "m_022c5575f22bf5": "{attempts} API-pogingen · {retries} herpogingen · {limited} geweigerd wegens snelheidslimiet",
   "m_022cc151865789": "Automatisch bijwerken",
   "m_022e1fe7d764a0": "Filmgenres",
   "m_022ec112c6322d": "Alleen in de zoekindex",
@@ -6591,6 +6592,7 @@
   "m_131fb65bf5e014": "Geclaimd door {name}",
   "m_132162d45882b6": "Opslaan en publiceren",
   "m_132166f2d04b7c": "Handmatig",
+  "m_1321e926d05412": "{reused} keer hergebruikt uit account · {remembered} opgeslagen antwoorden",
   "m_1322ee60131114": "Geen beoordeling tonen",
   "m_132357d36a8f22": {
     "one": "{count} serie gevonden",
@@ -8117,6 +8119,7 @@
   "m_17a4c01dbffc16": "Pagina getoond in de console",
   "m_17a4e9f71f41a1": "Catalogus-ID",
   "m_17a715b256eec6": "Per kijker",
+  "m_17a72b2c7ed8b6": "{average} API-aanroepen per eerste keer afspelen",
   "m_17a871ca35a5b2": "Films en series vooraf laden",
   "m_17a87410ee9978": "Kies een bestand",
   "m_17ab1e528be434": "Films en afleveringen",

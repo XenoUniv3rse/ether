@@ -1637,6 +1637,15 @@ func (s *Service) resolve(ctx context.Context, req core.ResolveRequest, profile 
 		}
 		return res, nil
 	}
+	// Provider pacing is temporary and must not become an uncached or
+	// unavailable title. Other providers and rescue candidates can still win.
+	all := concat(lead, primary, rescuePrimary, downgrades)
+	for _, c := range all {
+		if err := trace.Candidates[c.trace].err; errors.Is(err, core.ErrDebridThrottled) {
+			trace.Err = err.Error()
+			return nil, err
+		}
+	}
 	if optimisticErr != nil {
 		return nil, optimisticErr
 	}
@@ -1650,7 +1659,6 @@ func (s *Service) resolve(ctx context.Context, req core.ResolveRequest, profile 
 	// broken Usenet release): say so, send one to download when the owner
 	// allows it, and do not record the title unavailable (a download may
 	// finish, or the provider may cache it, at any time).
-	all := concat(lead, primary, rescuePrimary, downgrades)
 	if i, payload, uerr, ok := s.uncachedOutcome(ctx, all, results, &trace); ok {
 		if i >= 0 {
 			return s.acceptResolution(ctx, t.Key, all, i, payload, &trace), nil

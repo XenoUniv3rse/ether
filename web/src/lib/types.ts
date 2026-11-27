@@ -294,6 +294,18 @@ export interface DebridProviderStatus {
   lastError?: string;
   backoffUntil?: string;
   rateLimitedUntil?: string;
+  api?: {
+    attempts: number;
+    endpoints: Record<string, number> | null;
+    retries: number;
+    limited: number;
+    http429: number;
+    listHits: number;
+    reuseHits: number;
+    rememberedHits: number;
+    firstPlays: number;
+    firstPlayCalls: number;
+  };
   requests?: number;
   failures?: number;
   cached?: number;

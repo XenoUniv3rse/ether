@@ -1397,6 +1397,18 @@ export function createFakeServer(opts: FakeOptions = {}) {
             notCached: 6,
             linksRefreshed: 3,
             reused: 5,
+            api: {
+              attempts: 156,
+              endpoints: { add: 22, list: 9, info: 71, select: 20, link: 24, delete: 10 },
+              retries: 2,
+              limited: 2,
+              http429: 2,
+              listHits: 7,
+              reuseHits: 5,
+              rememberedHits: 18,
+              firstPlays: 17,
+              firstPlayCalls: 73,
+            },
             latency: {
               resolveMs: 812.5,
               linkMs: 140.2,

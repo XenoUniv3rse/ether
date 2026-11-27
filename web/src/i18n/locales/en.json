@@ -741,6 +741,7 @@
   "m_0228876e08de48": "Jellyfin shows Favorites first; your groups become channel tags.",
   "m_0229f3ebb5c5f4": "IntroDB",
   "m_022ac34b13be42": "Acclaimed and Unwatched",
+  "m_022c5575f22bf5": "{attempts} API attempts · {retries} retries · {limited} rate-limited",
   "m_022cc151865789": "Auto-update",
   "m_022e1fe7d764a0": "Movie genres",
   "m_022ec112c6322d": "In the search-only index",
@@ -6598,6 +6599,7 @@
   "m_131fb65bf5e014": "Claimed by {name}",
   "m_132162d45882b6": "Save & publish",
   "m_132166f2d04b7c": "Manual",
+  "m_1321e926d05412": "{reused} account reuses · {remembered} remembered answers",
   "m_1322ee60131114": "Show no rating",
   "m_132357d36a8f22": {
     "one": "{count} series found",
@@ -8127,6 +8129,7 @@
   "m_17a4c01dbffc16": "Page shown in the console",
   "m_17a4e9f71f41a1": "Catalog ID",
   "m_17a715b256eec6": "By viewer",
+  "m_17a72b2c7ed8b6": "{average} API calls per first play",
   "m_17a871ca35a5b2": "Preload movies & TV",
   "m_17a87410ee9978": "Choose a file",
   "m_17ab1e528be434": "Movies and episodes",

@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"mime"
 	"net/http"
+	"net/http/httptrace"
 	"net/url"
 	"path"
 	"regexp"
@@ -19,6 +20,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/braedonsaunders/ether/internal/config"
@@ -45,7 +47,11 @@ var (
 	// as Real-Debrid's infringing_file answer to a cached torrent. Re-adding
 	// the torrent cannot help, so on this provider it counts as not cached;
 	// another provider may still serve it.
-	ErrBlocked = fmt.Errorf("debrid: the provider blocks this file: %w", core.ErrNotCached)
+	ErrBlocked     = fmt.Errorf("debrid: blocked by the provider: %w", core.ErrNotCached)
+	ErrBlockedHash = fmt.Errorf("debrid: the provider blocks this hash: %w", ErrBlocked)
+	ErrBlockedFile = fmt.Errorf("debrid: the provider blocks this file: %w", ErrBlocked)
+	ErrTransport   = errors.New("debrid: provider transport failure")
+	ErrPending     = fmt.Errorf("debrid: provider is still processing the torrent: %w", core.ErrSourceUnavailable)
 	// ErrAddRefused is a temporary refusal to add a torrent. The release is
 	// skipped on that provider for now and repeated refusals pause adds.
 	// Permanent per-release rejections (including infringing_file) use
@@ -144,8 +150,8 @@ func pendingQueue(err error) (*queuedPending, bool) {
 	return nil, false
 }
 
-func (e *pendingError) Error() string { return e.err.Error() }
-func (e *pendingError) Unwrap() error { return e.err }
+func (e *pendingError) Error() string   { return e.err.Error() }
+func (e *pendingError) Unwrap() []error { return []error{e.err, ErrPending} }
 
 // pending marks err (core.ErrNotCached) as a download left on the account.
 func pending(torrentID string, err error) error {
@@ -187,11 +193,13 @@ type AcquireRequest struct {
 	TorrentID string
 	// Choose picks the wanted file; providers that select files (Real-Debrid)
 	// call it before selection.
-	Choose         func([]File) (File, error)
-	CachedOnly     bool
-	RemoveUncached bool
-	Private        bool
-	privateChecked bool
+	Choose          func([]File) (File, error)
+	CachedOnly      bool
+	RemoveUncached  bool
+	Private         bool
+	privateChecked  bool
+	selectedFiles   func([]File)
+	rememberedFiles []answerFile
 	// AllowCompressedZip permits selecting a deflate-compressed member inside
 	// a provider's server-side ZIP archive (used for non-video release sources
 	// decoded by kindstream and for file-list inspection).
@@ -341,14 +349,16 @@ var kindLabels = map[string]string{
 
 // apiRequest is one provider API call.
 type apiRequest struct {
-	retryDelay  *time.Duration
-	torrentHash string
-	method      string
-	path        string
-	query       url.Values
-	form        url.Values // urlencoded body
-	body        io.Reader  // raw body (with contentType)
-	ctype       string
+	retryDelay *time.Duration
+	pace       *accountPacer
+	retry      bool
+	paced      bool
+	method     string
+	path       string
+	query      url.Values
+	form       url.Values // urlencoded body
+	body       io.Reader  // raw body (with contentType)
+	ctype      string
 }
 
 type diagnosticKey struct{}
@@ -463,17 +473,60 @@ func call(ctx context.Context, hc *http.Client, base string, r apiRequest, auth 
 	if auth != nil {
 		auth(req)
 	}
-	resp, err := hc.Do(req)
+	if r.paced && req.Method != http.MethodGet && req.Method != http.MethodHead {
+		req.GetBody = nil
+	}
+	pace := r.pace
+	if pace != nil {
+		class := endpointClass(r)
+		pace.noteAttempt(ctx, class, r.retry)
+		replayCtx, cancel := context.WithCancelCause(ctx)
+		defer cancel(nil)
+		var connectionSeen atomic.Bool
+		req = req.WithContext(httptrace.WithClientTrace(replayCtx, &httptrace.ClientTrace{
+			GotConn: func(httptrace.GotConnInfo) {
+				if !connectionSeen.Swap(true) {
+					return
+				}
+				// net/http can internally replay on a reused connection.
+				// Mutations must return control to the provider adapter.
+				if r.paced {
+					if req.Method != http.MethodGet && req.Method != http.MethodHead {
+						cancel(fmt.Errorf("%w: API mutation replay interrupted", ErrTransport))
+						return
+					}
+					_, release, err := pace.reserve(replayCtx, false)
+					if err != nil {
+						cancel(err)
+						return
+					}
+					release()
+				}
+				pace.noteAttempt(ctx, class, true)
+			},
+		}))
+	}
+	// Provider API endpoints are fixed. Redirects would bypass pacing and
+	// could forward authentication to an unintended endpoint.
+	client := *hc
+	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	resp, err := client.Do(req)
 	if err != nil {
-		return 0, nil, sanitize(err)
+		if cause := context.Cause(req.Context()); cause != nil && ctx.Err() == nil {
+			return 0, nil, cause
+		}
+		return 0, nil, fmt.Errorf("%w: %w", ErrTransport, sanitize(err))
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusTooManyRequests && pace != nil {
+		pace.noteLimit(true)
+	}
 	if r.retryDelay != nil {
-		*r.retryDelay, _ = retryafter.Parse(resp.Header.Get("Retry-After"), time.Now(), 0)
+		*r.retryDelay, _ = retryafter.Parse(resp.Header.Get("Retry-After"), time.Now(), maxBackoff)
 	}
 	data, err := io.ReadAll(io.LimitReader(resp.Body, 32<<20))
 	if err != nil {
-		return resp.StatusCode, nil, sanitize(err)
+		return resp.StatusCode, nil, fmt.Errorf("%w: %w", ErrTransport, sanitize(err))
 	}
 	if resp.StatusCode == http.StatusTooManyRequests {
 		return resp.StatusCode, data, &rateLimitError{retryAfter: retryAfter(resp.Header.Get("Retry-After"))}
@@ -511,10 +564,12 @@ func statusError(kind string, status int, msg string) error {
 		return fmt.Errorf("%s: %s: %w", kind, msg, ErrAuth)
 	case status == http.StatusNotFound || status == http.StatusGone:
 		return fmt.Errorf("%s: %s: %w", kind, msg, ErrGone)
+	case status == http.StatusUnavailableForLegalReasons:
+		return fmt.Errorf("%s: %w", kind, ErrBlocked)
 	case status == http.StatusTooManyRequests:
 		return fmt.Errorf("%s: %s: %w", kind, msg, ErrRateLimited)
 	}
-	return fmt.Errorf("%s: HTTP %d: %s", kind, status, msg)
+	return fmt.Errorf("%s: HTTP %d: %s: %w", kind, status, msg, ErrTransport)
 }
 
 func decodeJSON(kind string, data []byte, out any) error {
@@ -560,20 +615,44 @@ func (c *listCache) known(now time.Time, hash string) string {
 }
 
 func (c *listCache) find(ctx context.Context, now time.Time, hash string, load func(context.Context) (map[string]string, error)) (string, error) {
+	hash = strings.ToLower(hash)
+	c.mu.Lock()
+	if c.byHash != nil && now.Sub(c.at) <= listTTL {
+		id := c.byHash[hash]
+		c.mu.Unlock()
+		return id, nil
+	}
+	if f := c.flight; f != nil {
+		c.mu.Unlock()
+		select {
+		case <-ctx.Done():
+			return "", ctx.Err()
+		case <-f.done:
+			if f.err != nil {
+				return "", f.err
+			}
+			c.mu.Lock()
+			id := c.byHash[hash]
+			c.mu.Unlock()
+			return id, nil
+		}
+	}
+	f := &listFlight{done: make(chan struct{})}
+	c.flight = f
+	c.mu.Unlock()
+	items, err := load(ctx)
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.byHash == nil || now.Sub(c.at) > listTTL {
-		m, err := load(ctx)
-		if err != nil {
-			return "", err
-		}
-		c.byHash, c.at = m, now
+	if err == nil {
+		c.byHash, c.at = items, now
 	}
-	return c.byHash[strings.ToLower(hash)], nil
+	f.err = err
+	c.flight = nil
+	close(f.done)
+	return items[hash], err
 }
 
 // listFlight publishes one shared refresh without holding mu during I/O.
-// Other providers keep their existing synchronous find behavior.
 type listFlight struct {
 	done chan struct{}
 	err  error

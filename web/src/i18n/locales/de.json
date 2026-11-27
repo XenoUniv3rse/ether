@@ -741,6 +741,7 @@
   "m_0228876e08de48": "Jellyfin zeigt Favoriten zuerst; Ihre Gruppen werden zu Kanal-Tags.",
   "m_0229f3ebb5c5f4": "IntroDB",
   "m_022ac34b13be42": "Gefeiert und noch ungesehen",
+  "m_022c5575f22bf5": "{attempts} API-Versuche · {retries} Wiederholungen · {limited} wegen Ratenlimit abgelehnt",
   "m_022cc151865789": "Automatische Aktualisierung",
   "m_022e1fe7d764a0": "Filmgenres",
   "m_022ec112c6322d": "Nur im Suchindex",
@@ -6591,6 +6592,7 @@
   "m_131fb65bf5e014": "Beansprucht von {name}",
   "m_132162d45882b6": "Speichern und veröffentlichen",
   "m_132166f2d04b7c": "Manuell",
+  "m_1321e926d05412": "{reused} aus dem Konto wiederverwendet · {remembered} gespeicherte Antworten",
   "m_1322ee60131114": "Keine Bewertung anzeigen",
   "m_132357d36a8f22": {
     "one": "{count} Serie gefunden",
@@ -8117,6 +8119,7 @@
   "m_17a4c01dbffc16": "In der Konsole angezeigte Seite",
   "m_17a4e9f71f41a1": "Katalog-ID",
   "m_17a715b256eec6": "Nach Zuschauer",
+  "m_17a72b2c7ed8b6": "{average} API-Aufrufe pro erster Wiedergabe",
   "m_17a871ca35a5b2": "Filme und Serien vorladen",
   "m_17a87410ee9978": "Datei auswählen",
   "m_17ab1e528be434": "Filme und Folgen",
