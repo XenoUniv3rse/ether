@@ -17,6 +17,7 @@ import {
   type KindItem,
   type KindMatcher,
   type KindResolver,
+  type SourceQuery,
 } from "./index.ts";
 
 const fixture = JSON.parse(
@@ -525,13 +526,14 @@ test("resolveSourcesWithResult forwards indexer_search options and decodes index
     credential: "cred",
     fetchImpl: (async (_url: string | URL | Request, init?: RequestInit) => {
       seenRemoteBody = JSON.parse(String(init?.body ?? "{}"));
-      return new Response(JSON.stringify(reply), { status: 200 });
+      return new Response(JSON.stringify((seenRemoteBody as SourceQuery).kind === "debrid" ? { enabled: true, cachedOnly: false } : reply), { status: 200 });
     }) as typeof fetch,
   });
   const rRes = await remote.kinds!.resolveSourcesWithResult!(query);
   assert.deepEqual(seenRemoteBody, query);
   assert.deepEqual(rRes, reply);
   assert.deepEqual(await remote.kinds!.resolveSources(query), reply.candidates);
+  assert.deepEqual(await remote.kinds!.resolveSourcesWithResult!({ kind: "debrid" }), { candidates: [], enabled: true, cachedOnly: false });
 
   // Hosted client forwards query via sources.resolve and preserves indexers.
   const g = globalThis as Record<string, unknown>;
@@ -540,7 +542,7 @@ test("resolveSourcesWithResult forwards indexer_search options and decodes index
   g.__ether_host = (name: string, raw: string) => {
     if (name === "sources.resolve") {
       seenHostedArgs = JSON.parse(raw);
-      return JSON.stringify(reply);
+      return JSON.stringify(JSON.parse(raw)[0].kind === "debrid_check" ? { candidates: [], cachedOnly: false } : reply);
     }
     throw new Error(`unexpected host call: ${name}`);
   };

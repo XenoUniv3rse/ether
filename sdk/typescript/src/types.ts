@@ -1128,6 +1128,7 @@ export interface SourceQuery {
     | "indexer_search_results"
     | "indexer_search_cancel"
     | "indexers"
+    | "debrid"
     | "debrid_check"
     | "debrid_acquire"
     | "release_files"
@@ -1210,6 +1211,10 @@ export interface IndexerSearchStatus {
 
 /** Full response envelope from sources.resolve. */
 export interface SourceResolveResult {
+  /** Debrid availability, returned for kind "debrid". */
+  enabled?: boolean;
+  /** Owner policy, returned for "debrid" and "debrid_check". */
+  cachedOnly?: boolean;
   candidates: SourceCandidate[];
   indexers?: IndexerSearchStatus[];
   /** Indexers still running in the background (early-returning indexer_search and streaming responses). */
@@ -1429,6 +1434,7 @@ export interface PendingReply {
 }
 
 export interface KindResolveResponse {
+  /** With sources, defer only if cache policy blocks every source. */
   pending?: boolean;
   retryInMs?: number;
   job?: string;

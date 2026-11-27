@@ -177,7 +177,7 @@ type KindChangesRequest struct {
 
 // SourceQuery asks Ether to find sources (Host.ResolveSources).
 type SourceQuery struct {
-	Kind  string `json:"kind"` // indexer_search|indexer_search_results|indexer_search_cancel|indexers|debrid_check|debrid_acquire|release_files|usenet_check|nzb_request
+	Kind  string `json:"kind"` // indexer_search|indexer_search_results|indexer_search_cancel|indexers|debrid|debrid_check|debrid_acquire|release_files|usenet_check|nzb_request
 	Query string `json:"query,omitempty"`
 	// Category accepts comma-separated Newznab IDs or standard family names;
 	// when set with an empty Query, indexer_search requests recent releases.
@@ -336,28 +336,39 @@ func (s IndexerSearchStatus) MarshalJSON() ([]byte, error) {
 
 // SourceResolveResult is the full response envelope from sources.resolve (#733).
 type SourceResolveResult struct {
-	Candidates []SourceCandidate     `json:"candidates"`
+	// Enabled is the owner's debrid availability (kind "debrid").
+	Enabled *bool `json:"enabled,omitempty"`
+	// CachedOnly is the owner policy (kinds "debrid" and "debrid_check").
+	CachedOnly *bool                 `json:"cachedOnly,omitempty"`
+	Candidates []SourceCandidate     `json:"candidates,omitempty"`
 	Indexers   []IndexerSearchStatus `json:"indexers,omitempty"`
 	Pending    []IndexerRef          `json:"pending,omitempty"`
 	SearchID   string                `json:"searchId,omitempty"`
 	Done       *bool                 `json:"done,omitempty"`
 }
 
-// MarshalJSON preserves non-nil empty Indexers and Pending slices as [] while
-// omitting nil slices.
+// MarshalJSON emits the debrid policy or the candidate response envelope.
 func (r SourceResolveResult) MarshalJSON() ([]byte, error) {
+	if r.Enabled != nil {
+		return json.Marshal(struct {
+			Enabled    bool  `json:"enabled"`
+			CachedOnly *bool `json:"cachedOnly"`
+		}{Enabled: *r.Enabled, CachedOnly: r.CachedOnly})
+	}
 	cands := r.Candidates
 	if cands == nil {
 		cands = []SourceCandidate{}
 	}
 	wire := struct {
 		Candidates []SourceCandidate      `json:"candidates"`
+		CachedOnly *bool                  `json:"cachedOnly,omitempty"`
 		Indexers   *[]IndexerSearchStatus `json:"indexers,omitempty"`
 		Pending    *[]IndexerRef          `json:"pending,omitempty"`
 		SearchID   string                 `json:"searchId,omitempty"`
 		Done       *bool                  `json:"done,omitempty"`
 	}{
 		Candidates: cands,
+		CachedOnly: r.CachedOnly,
 		SearchID:   r.SearchID,
 		Done:       r.Done,
 	}
@@ -651,6 +662,7 @@ type StreamURLOptions struct {
 
 // KindResolveResponse is a resolver's ordered sources.
 type KindResolveResponse struct {
+	// With sources, Pending is a fallback if cache policy blocks every source.
 	Pending   bool             `json:"pending,omitempty"`
 	RetryInMS int64            `json:"retryInMs,omitempty"`
 	Job       string           `json:"job,omitempty"`

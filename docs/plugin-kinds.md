@@ -500,7 +500,7 @@ until the indexer has been searched), and `lastError` carries a sanitized error
 code when the indexer's most recent search failed. The listing never includes
 API keys, URLs with secrets, or cookies.
 
-Non-indexer source queries (`debrid_check`, `debrid_acquire`, `release_files`,
+Non-indexer candidate queries (`debrid_check`, `debrid_acquire`, `release_files`,
 `usenet_check`) omit `indexers`, `pending`, `searchId`, and `done`. In Go,
 TypeScript, and Python SDKs, `ResolveSources` / `kinds.resolveSources` /
 `resolve_sources` continue returning candidates only, while
@@ -577,12 +577,19 @@ owner's indexers and debrid via the `ResolveSources` host service,
 rank the candidates yourself (or in `/match`), and return a
 `release` source.
 
+`sources.resolve({kind: "debrid"})` returns the owner's debrid availability
+and cache policy as `{enabled, cachedOnly}`. It requires `permissions.sources`
+with search or acquire access. Read these fields through `ResolveSourcesWithResult`
+in Go, `ctx.ether.kinds.resolveSourcesWithResult` in TypeScript, or
+`ctx.resolve_sources_with_result` in Python.
+
 `ResolveSources({kind: "debrid_check", infoHashes})` (or `infoHash`) checks
 which owner-configured debrid services currently hold each torrent and returns
 one candidate per hash with `cached` and `cachedBy: [{id, name}]` in the
 priority order Ether would acquire from them (using the service's configured
 ID and display name, e.g. `"TorBox"` or the owner's account name; omitted when
-not cached). `indexer_search` candidates that Ether already knows are cached
+not cached). The result also includes the owner's `cachedOnly` policy at the
+top level. `indexer_search` candidates that Ether already knows are cached
 and `debrid_acquire` results carry the same `cachedBy` field (for
 `debrid_acquire`, the service that actually served the acquisition).
 
@@ -1325,6 +1332,13 @@ keep short protocol deadlines. See `sdk/AGENTS.md` and the SDK README for exact
 per-route limits and how owners raise ceilings.
 
 ### Pending resolve and match replies
+
+A `/resolve` reply may include both `sources` and `pending: true`. Ether tries
+the sources first. If every attempted option is an uncached torrent blocked by
+the owner's cache policy or the source's `release.cachedOnly` flag, Ether starts the
+optional preparation job and returns `preparing` with the supplied retry hint.
+If a torrent can be queued, normal debrid queueing applies. The next Play can
+pick up the prepared source through `/resolve`.
 
 Both routes can return `{pending:true,retryInMs:1000,job:"/ether/job/prepare"}`.
 `job` is optional. Ether clamps retry delays to 250–5000 ms, retries for up to

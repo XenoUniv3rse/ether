@@ -43,33 +43,33 @@ func (r *KindResolver) recordKindFailure(ctx context.Context, item core.KindItem
 	}
 }
 
-func (r *KindResolver) emptyKindResolve(ctx context.Context, item core.KindItem, part *int, key resolveFlightKey, state *resolveSearchState, excluded bool) ([]core.PlayableSource, error) {
+func (r *KindResolver) emptyKindResolve(ctx context.Context, item core.KindItem, part *int, key resolveFlightKey, state *resolveSearchState, excluded bool) (kindResolveResult, error) {
 	if state.indexerLookupLimitHit() {
-		return nil, core.ErrSourceUnavailable
+		return kindResolveResult{}, core.ErrSourceUnavailable
 	}
 	if state.hasPending() {
 		if state.playbackCtx != nil {
-			return nil, core.PreparingFromPending(250)
+			return kindResolveResult{}, core.PreparingFromPending(250)
 		}
-		return nil, core.PreparingFromPending(2000)
+		return kindResolveResult{}, core.PreparingFromPending(2000)
 	}
 	r.clearResolveProgress(key)
 	if state.hadBudgetSkip() {
-		return nil, core.ErrBudgetExhausted
+		return kindResolveResult{}, core.ErrBudgetExhausted
 	}
 	if err := state.indexerPause(); err != nil {
-		return nil, err
+		return kindResolveResult{}, err
 	}
 	if key.source == "" && !excluded {
 		state.mu.Lock()
 		found := state.candidatesFound
 		state.mu.Unlock()
 		if found {
-			return nil, core.ErrKindCandidatesRejected
+			return kindResolveResult{}, core.ErrKindCandidatesRejected
 		}
 		if !key.background && r.items != nil {
 			_ = r.items.SaveNegativePartResolution(ctx, item.Ref, part)
 		}
 	}
-	return nil, core.ErrNotAvailable
+	return kindResolveResult{}, core.ErrNotAvailable
 }

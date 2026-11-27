@@ -145,10 +145,15 @@ type resolveFlightKey struct {
 	variant    string
 }
 
+type kindResolveResult struct {
+	sources         []core.PlayableSource
+	pendingFallback func() error
+}
+
 type resolveFlight struct {
 	done    chan struct{}
 	cancel  context.CancelFunc
-	sources []core.PlayableSource
+	result  kindResolveResult
 	err     error
 	keep    bool
 	expires time.Time
@@ -388,7 +393,8 @@ func (r *KindResolver) ResolveForMatch(ctx context.Context, lib core.Library, re
 	}
 	fk := flightKeyForItem(item.Ref, partIdx)
 	r.deleteCandidates(fk)
-	sources, err := r.resolveItemSources(ctx, rec, lib, item, partIdx, accept)
+	result, err := r.resolveSourcesFlight(ctx, rec, lib, item, partIdx, "", accept, nil)
+	sources := result.sources
 	if err == nil && len(sources) > 0 && r.items != nil {
 		if _, _, rerr := r.items.GetPartResolution(ctx, item.Ref, partIdx); errors.Is(rerr, core.ErrNotAvailable) {
 			_ = r.items.InvalidatePartResolution(ctx, item.Ref, partIdx)
@@ -448,12 +454,16 @@ func (r *KindResolver) projectedTitle(ctx context.Context, item core.KindItem, r
 	return &t
 }
 
-func (r *KindResolver) openSingleSource(ctx context.Context, rec pluginitems.KindRecord, lib core.Library, item core.KindItem, partIdx *int, targetSrc core.PlayableSource, allowQueue bool) (*frontend.KindMedia, error) {
+func (r *KindResolver) openSingleSource(ctx context.Context, rec pluginitems.KindRecord, lib core.Library, item core.KindItem, partIdx *int, targetSrc core.PlayableSource, allowQueue bool, pendingFallback func() error) (*frontend.KindMedia, error) {
 	ksDeps := r.kindstreamDeps(ctx, rec, lib, item, partIdx, nil)
 	bs, err := kindstream.Open(ctx, targetSrc, ksDeps)
 	if err != nil {
+		failures := []kindstream.SourceFailure{{Source: targetSrc, Err: err}}
+		if pendingErr := r.tryPendingFallback(ctx, pendingFallback, failures, 1); pendingErr != nil {
+			return nil, pendingErr
+		}
 		if allowQueue && isTorrentReleaseSource(targetSrc) && errors.Is(err, core.ErrNotCached) {
-			if qbs, _, qerr, settled := r.settleUncachedReleases(ctx, []kindstream.SourceFailure{{Source: targetSrc, Err: err}}, ksDeps); settled {
+			if qbs, _, qerr, settled := r.settleUncachedReleases(ctx, failures, ksDeps); settled {
 				if qerr != nil {
 					return nil, qerr
 				}
@@ -574,15 +584,15 @@ func (r *KindResolver) OpenKindSource(ctx context.Context, viewer *core.Viewer, 
 		return media, err
 	}
 
-	sources, err := r.resolveCandidates(ctx, rec, lib, item, partIdx, accept)
+	result, err := r.resolveCandidates(ctx, rec, lib, item, partIdx, accept)
 	if err != nil {
 		return nil, err
 	}
-	src, matched := matchPlayableSource(sources, item.Title, sourceID, r.now().Unix())
+	src, matched := matchPlayableSource(result.sources, item.Title, sourceID, r.now().Unix())
 	if !matched {
 		return nil, core.ErrNotAvailable
 	}
-	return r.openSingleSource(ctx, rec, lib, item, partIdx, src, true)
+	return r.openSingleSource(ctx, rec, lib, item, partIdx, src, true, result.pendingFallback)
 }
 
 // OpenKindPartSource opens exactly one resolver source (and optional zero-based
@@ -659,7 +669,7 @@ func (r *KindResolver) OpenKindPartSource(ctx context.Context, viewer *core.View
 	fk := flightKeyForItemSource(targetItem.Ref, effectivePart, sourceID)
 	if cached, ok := r.cachedCandidates(fk); ok {
 		if src, matched := matchPlayableSource(cached, targetItem.Title, sourceID, r.now().Unix()); matched {
-			km, oerr := r.openSingleSource(ctx, rec, lib, targetItem, effectivePart, src, true)
+			km, oerr := r.openSingleSource(ctx, rec, lib, targetItem, effectivePart, src, true, nil)
 			if oerr == nil {
 				return km, nil
 			}
@@ -675,17 +685,17 @@ func (r *KindResolver) OpenKindPartSource(ctx context.Context, viewer *core.View
 		return media, err
 	}
 
-	sources, err := r.resolveItemSourcesForSource(ctx, rec, lib, targetItem, effectivePart, sourceID, accept)
+	result, err := r.resolveSourcesFlight(ctx, rec, lib, targetItem, effectivePart, sourceID, accept, nil)
 	if err != nil {
 		return nil, err
 	}
-	src, matched := matchPlayableSource(sources, targetItem.Title, sourceID, r.now().Unix())
+	src, matched := matchPlayableSource(result.sources, targetItem.Title, sourceID, r.now().Unix())
 	if !matched {
 		return nil, core.ErrNotAvailable
 	}
-	km, err := r.openSingleSource(ctx, rec, lib, targetItem, effectivePart, src, true)
+	km, err := r.openSingleSource(ctx, rec, lib, targetItem, effectivePart, src, true, result.pendingFallback)
 	if err != nil {
-		if errors.Is(err, core.ErrPreparing) {
+		if result.pendingFallback == nil && errors.Is(err, core.ErrPreparing) {
 			r.storeCandidates(fk, []core.PlayableSource{src})
 		}
 		return nil, err
@@ -744,13 +754,13 @@ func (r *KindResolver) KindVersions(ctx context.Context, viewer *core.Viewer, ke
 			} else if r.detailMissActive(fk) {
 				return nil, nil
 			} else {
-				sources, err = r.resolveCandidates(ctx, rec, lib, item, partIdx, accept)
+				sources, err = r.resolveCandidateList(ctx, rec, lib, item, partIdx, accept)
 				if ctx.Err() == nil && (err != nil || len(sources) == 0) {
 					r.noteDetailMiss(fk)
 				}
 			}
 		} else {
-			sources, err = r.resolveCandidates(ctx, rec, lib, item, partIdx, accept)
+			sources, err = r.resolveCandidateList(ctx, rec, lib, item, partIdx, accept)
 		}
 	} else {
 		var hit bool
@@ -1069,7 +1079,11 @@ func (r *KindResolver) OpenKindExcluding(ctx context.Context, viewer *core.Viewe
 					_, hasShow = r.resolver.ViewerChoiceFor(viewer.ID, title.ShowKey)
 				}
 				if hasTitle || hasShow {
-					if sources, cerr := r.resolveCandidates(ctx, rec, lib, item, partIdx, accept); cerr == nil && len(sources) > 0 {
+					if result, cerr := r.resolveCandidates(ctx, rec, lib, item, partIdx, accept); cerr == nil && len(result.sources) > 0 {
+						sources := result.sources
+						if result.pendingFallback != nil {
+							ctx = context.WithValue(ctx, kindOpenResultKey{flightKeyForItem(item.Ref, partIdx)}, result)
+						}
 						nowUnix := r.now().Unix()
 						live := make([]core.PlayableSource, 0, len(sources))
 						rels := make([]core.Release, 0, len(sources))
@@ -1081,7 +1095,7 @@ func (r *KindResolver) OpenKindExcluding(ctx context.Context, viewer *core.Viewe
 							rels = append(rels, playableSourceRelease(src, item.Title))
 						}
 						if idx, _ := r.resolver.MatchViewerChoice(viewer.ID, title, rels); idx >= 0 {
-							if media, oerr := r.openSingleSource(ctx, rec, lib, item, partIdx, live[idx], false); oerr == nil {
+							if media, oerr := r.openSingleSource(ctx, rec, lib, item, partIdx, live[idx], false, nil); oerr == nil {
 								return media, nil
 							}
 						}
@@ -1318,7 +1332,7 @@ func (r *KindResolver) tryOpenPartFromParentRelease(ctx context.Context, rec plu
 	if vaultedOnly {
 		openCtx = newznab.WithVaultedPluginNZB(ctx)
 	}
-	media, err := r.openSingleSource(openCtx, rec, lib, parent, &idx, partSrc, !vaultedOnly)
+	media, err := r.openSingleSource(openCtx, rec, lib, parent, &idx, partSrc, !vaultedOnly, nil)
 	if err != nil {
 		if vaultedOnly && ctx.Err() == nil && errors.Is(err, core.ErrSourceUnavailable) {
 			return nil, false, nil
@@ -2155,6 +2169,11 @@ func (r *KindResolver) ResolveSourcesWithResult(ctx context.Context, pluginID st
 		return r.cancelStreamingIndexerSearch(ctx, pluginID, q)
 	case "indexers":
 		return r.resolveIndexersList(), nil
+	case "debrid":
+		backend, ok := r.debrid.(interface{ Enabled() bool })
+		enabled := ok && backend.Enabled()
+		cachedOnly := r.debridCachedOnly()
+		return core.SourceResolveResult{Enabled: &enabled, CachedOnly: &cachedOnly}, nil
 	}
 	cands, err := r.ResolveSources(ctx, pluginID, q)
 	noteKindSourceFailure(ctx, err)
@@ -2164,7 +2183,12 @@ func (r *KindResolver) ResolveSourcesWithResult(ctx context.Context, pluginID st
 	if cands == nil {
 		cands = []core.SourceCandidate{}
 	}
-	return core.SourceResolveResult{Candidates: cands}, nil
+	result := core.SourceResolveResult{Candidates: cands}
+	if q.Kind == "debrid_check" {
+		cachedOnly := r.debridCachedOnly()
+		result.CachedOnly = &cachedOnly
+	}
+	return result, nil
 }
 
 // ResolveSources implements plugins.KindBackends.ResolveSources for plugins
@@ -2175,7 +2199,7 @@ func (r *KindResolver) ResolveSources(ctx context.Context, pluginID string, q co
 		return nil, core.ErrNotAvailable
 	}
 	switch q.Kind {
-	case "indexer_search", "indexer_search_results", "indexer_search_cancel", "indexers":
+	case "indexer_search", "indexer_search_results", "indexer_search_cancel", "indexers", "debrid":
 		res, err := r.ResolveSourcesWithResult(ctx, pluginID, q)
 		if err != nil {
 			return nil, err
@@ -2942,11 +2966,11 @@ func (r *KindResolver) openItemByteSourceExcluding(ctx context.Context, rec plug
 	// 3. Resolve (or re-resolve excluding failed releases) via the plugin.
 	// On a normal (non-failover) open, reuse warm cached candidates first so
 	// listing versions and then pressing Play only calls /resolve once.
-	var sources []core.PlayableSource
+	var result kindResolveResult
 	if len(exclude) > 0 {
-		sources, err = r.resolveItemSourcesExcluding(ctx, rec, lib, item, partIdx, accept, exclude)
+		result, err = r.resolveSourcesFlight(ctx, rec, lib, item, partIdx, "", accept, exclude)
 	} else {
-		sources, err = r.resolveCandidates(ctx, rec, lib, item, partIdx, accept)
+		result, err = r.resolveCandidates(ctx, rec, lib, item, partIdx, accept)
 	}
 	if err != nil {
 		if backingOffCached != nil {
@@ -2964,7 +2988,7 @@ func (r *KindResolver) openItemByteSourceExcluding(ctx context.Context, rec plug
 		return nil, core.PlayableSource{}, err
 	}
 
-	cands := r.filterAndOrderCandidates(sources, item.Title, exclude)
+	cands := r.filterAndOrderCandidates(result.sources, item.Title, exclude)
 	if len(cands) == 0 {
 		if backingOffCached != nil {
 			bs, oerr := kindstream.Open(ctx, *backingOffCached, ksDeps)
@@ -2983,6 +3007,9 @@ func (r *KindResolver) openItemByteSourceExcluding(ctx context.Context, rec plug
 	skipped.resetAttempts()
 	bs, winning, err := kindstream.OpenSources(ctx, cands, ksDeps)
 	if err != nil {
+		if pendingErr := r.tryPendingFallback(ctx, result.pendingFallback, skipped.attempts, len(cands)); pendingErr != nil {
+			return nil, core.PlayableSource{}, pendingErr
+		}
 		if qbs, qwin, qerr, settled := r.settleUncachedReleases(ctx, skipped.attempts, ksDeps); settled {
 			if qerr == nil {
 				return saveAndReturn(qbs, qwin)
@@ -3044,10 +3071,27 @@ func (r *KindResolver) debridCachedOnly() bool {
 	return true
 }
 
-func (r *KindResolver) allowUncachedReleaseQueue(ctx context.Context) bool {
-	if r.debridCachedOnly() {
-		return false
+func (r *KindResolver) tryPendingFallback(ctx context.Context, fallback func() error, failures []kindstream.SourceFailure, total int) error {
+	if fallback == nil || ctx.Err() != nil || !onDemandReleaseOpen(ctx) || total == 0 || len(failures) != total {
+		return nil
 	}
+	ownerCachedOnly := r.debridCachedOnly()
+	for _, f := range failures {
+		if !isTorrentReleaseSource(f.Source) || !errors.Is(f.Err, core.ErrNotCached) {
+			return nil
+		}
+		if !f.Source.Release.CachedOnly && (!ownerCachedOnly || errors.Is(f.Err, core.ErrDownloadQueued)) {
+			return nil
+		}
+	}
+	return fallback()
+}
+
+func (r *KindResolver) allowUncachedReleaseQueue(ctx context.Context) bool {
+	return !r.debridCachedOnly() && onDemandReleaseOpen(ctx)
+}
+
+func onDemandReleaseOpen(ctx context.Context) bool {
 	if core.IsBackgroundCheck(ctx) || core.IsSpeculative(ctx) || core.IsUnattendedSearch(ctx) {
 		return false
 	}
@@ -3398,13 +3442,25 @@ func (r *KindResolver) cachedCandidatesFor(ctx context.Context, item core.KindIt
 	return nil, false, nil
 }
 
+// kindOpenResultKey carries the mixed reply from the remembered version attempt
+// into the default open for the same item and part.
+type kindOpenResultKey struct{ resolveFlightKey }
+
 // resolveCandidates returns the cached candidate list when fresh (or an active
 // negative cache error), calling the plugin's /resolve only on a cache miss.
-func (r *KindResolver) resolveCandidates(ctx context.Context, rec pluginitems.KindRecord, lib core.Library, item core.KindItem, partIdx *int, accept []string) ([]core.PlayableSource, error) {
-	if sources, ok, err := r.cachedCandidatesFor(ctx, item, partIdx); ok {
-		return sources, err
+func (r *KindResolver) resolveCandidates(ctx context.Context, rec pluginitems.KindRecord, lib core.Library, item core.KindItem, partIdx *int, accept []string) (kindResolveResult, error) {
+	if result, ok := ctx.Value(kindOpenResultKey{flightKeyForItem(item.Ref, partIdx)}).(kindResolveResult); ok {
+		return result, nil
 	}
-	return r.resolveItemSources(ctx, rec, lib, item, partIdx, accept)
+	if sources, ok, err := r.cachedCandidatesFor(ctx, item, partIdx); ok {
+		return kindResolveResult{sources: sources}, err
+	}
+	return r.resolveSourcesFlight(ctx, rec, lib, item, partIdx, "", accept, nil)
+}
+
+func (r *KindResolver) resolveCandidateList(ctx context.Context, rec pluginitems.KindRecord, lib core.Library, item core.KindItem, partIdx *int, accept []string) ([]core.PlayableSource, error) {
+	result, err := r.resolveCandidates(ctx, rec, lib, item, partIdx, accept)
+	return result.sources, err
 }
 
 func (r *KindResolver) isUsenetBackingOff() bool {
@@ -3458,18 +3514,6 @@ func (r *KindResolver) filterAndOrderCandidates(sources []core.PlayableSource, d
 	return append(ready, backingOff...)
 }
 
-func (r *KindResolver) resolveItemSourcesExcluding(ctx context.Context, rec pluginitems.KindRecord, lib core.Library, item core.KindItem, partIdx *int, accept, exclude []string) ([]core.PlayableSource, error) {
-	return r.resolveSourcesFlight(ctx, rec, lib, item, partIdx, "", accept, exclude)
-}
-
-func (r *KindResolver) resolveItemSourcesForSource(ctx context.Context, rec pluginitems.KindRecord, lib core.Library, item core.KindItem, partIdx *int, sourceID string, accept []string) ([]core.PlayableSource, error) {
-	return r.resolveSourcesFlight(ctx, rec, lib, item, partIdx, sourceID, accept, nil)
-}
-
-func (r *KindResolver) resolveItemSources(ctx context.Context, rec pluginitems.KindRecord, lib core.Library, item core.KindItem, partIdx *int, accept []string) ([]core.PlayableSource, error) {
-	return r.resolveSourcesFlight(ctx, rec, lib, item, partIdx, "", accept, nil)
-}
-
 func parsePreparingReply(body []byte) error {
 	var pending plugins.PendingReply
 	if len(body) > 0 {
@@ -3478,14 +3522,14 @@ func parsePreparingReply(body []byte) error {
 	return core.PreparingFromPending(pending.RetryInMS)
 }
 
-func (r *KindResolver) callPluginResolve(ctx context.Context, rec pluginitems.KindRecord, lib core.Library, item core.KindItem, partIdx *int, source string, accept, exclude []string) (_ []core.PlayableSource, err error) {
+func (r *KindResolver) callPluginResolve(ctx context.Context, rec pluginitems.KindRecord, lib core.Library, item core.KindItem, partIdx *int, source string, accept, exclude []string) (_ kindResolveResult, err error) {
 	defer func() {
 		r.recordKindFailure(ctx, item, err)
 		err = logredact.SourceError(err)
 	}()
 	pr, err := r.mgr.Get(ctx, rec.PluginID)
 	if err != nil || !pr.Enabled || !pr.Manifest.HasCapability(plugins.CapKindResolver) {
-		return nil, core.ErrSourceUnavailable
+		return kindResolveResult{}, core.ErrSourceUnavailable
 	}
 	var clientMap map[string]any
 	if len(accept) > 0 || len(exclude) > 0 {
@@ -3507,11 +3551,11 @@ func (r *KindResolver) callPluginResolve(ctx context.Context, rec pluginitems.Ki
 		Client:     clientMap,
 	})
 	if err != nil {
-		return nil, err
+		return kindResolveResult{}, err
 	}
 	body, err = r.NormalizeStoredReleaseLinks(ctx, body)
 	if err != nil {
-		return nil, err
+		return kindResolveResult{}, err
 	}
 	fk := flightKeyForItemSource(item.Ref, partIdx, source)
 	fk.background = core.SpeculativeIndexerWork(ctx) || core.IsBackgroundCheck(ctx)
@@ -3527,11 +3571,11 @@ func (r *KindResolver) callPluginResolve(ctx context.Context, rec pluginitems.Ki
 	releaseUnit, err := r.acquireResolveUnit(ctx, unit)
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
-			return nil, err
+			return kindResolveResult{}, err
 		}
 		// A sibling's resolve of the same unit outlasted this call's
 		// budget: the unit is still resolving, not unavailable.
-		return nil, &core.PreparingError{RetryAfter: time.Second}
+		return kindResolveResult{}, &core.PreparingError{RetryAfter: time.Second}
 	}
 	resp, err := r.mgr.Call(ctx, rec.PluginID, plugins.Request{
 		Method: "POST",
@@ -3541,45 +3585,46 @@ func (r *KindResolver) callPluginResolve(ctx context.Context, rec pluginitems.Ki
 	releaseUnit()
 	if err != nil {
 		if errors.Is(err, core.ErrJobsBusy) {
-			return nil, err
+			return kindResolveResult{}, err
 		}
 		if errors.Is(err, plugins.ErrBusy) {
-			return nil, fmt.Errorf("%w: %w", core.ErrSourceUnavailable, err)
+			return kindResolveResult{}, fmt.Errorf("%w: %w", core.ErrSourceUnavailable, err)
 		}
 		var we *wasm.Error
 		if errors.Is(err, context.DeadlineExceeded) {
-			return nil, &core.PreparingError{RetryAfter: 2 * time.Second}
+			return kindResolveResult{}, &core.PreparingError{RetryAfter: 2 * time.Second}
 		}
 		if errors.As(err, &we) && we.Status == wasm.StatusTimeout && r.allowTimeoutPreparing(fk, searchState) {
-			return nil, &core.PreparingError{RetryAfter: 2 * time.Second}
+			return kindResolveResult{}, &core.PreparingError{RetryAfter: 2 * time.Second}
 		}
-		return nil, fmt.Errorf("%w: %v", core.ErrSourceUnavailable, err)
+		return kindResolveResult{}, fmt.Errorf("%w: %v", core.ErrSourceUnavailable, err)
 	}
-	if resp.Status == http.StatusAccepted {
+	fallback := resp.PendingFallback()
+	if resp.Status == http.StatusAccepted && fallback == nil {
 		if searchState.indexerLookupLimitHit() {
-			return nil, core.ErrSourceUnavailable
+			return kindResolveResult{}, core.ErrSourceUnavailable
 		}
 		if searchState.hadBudgetSkip() && !searchState.hasPending() {
 			r.clearResolveProgress(fk)
-			return nil, core.ErrBudgetExhausted
+			return kindResolveResult{}, core.ErrBudgetExhausted
 		}
-		return nil, parsePreparingReply(resp.Body)
+		return kindResolveResult{}, parsePreparingReply(resp.Body)
 	}
 	if resp.Status == http.StatusNotFound {
 		return r.emptyKindResolve(ctx, item, partIdx, fk, searchState, len(exclude) > 0)
 	}
-	if resp.Status != http.StatusOK {
-		return nil, fmt.Errorf("%w: resolver status %d", core.ErrSourceUnavailable, resp.Status)
+	if resp.Status != http.StatusOK && resp.Status != http.StatusAccepted {
+		return kindResolveResult{}, fmt.Errorf("%w: resolver status %d", core.ErrSourceUnavailable, resp.Status)
 	}
 	var resolved core.KindResolveResponse
 	if err := json.Unmarshal(resp.Body, &resolved); err != nil {
-		return nil, fmt.Errorf("%w: invalid resolver payload: %v", core.ErrSourceUnavailable, err)
+		return kindResolveResult{}, fmt.Errorf("%w: invalid resolver payload: %v", core.ErrSourceUnavailable, err)
 	}
-	if resolved.Pending {
+	if resolved.Pending && fallback == nil {
 		if searchState.indexerLookupLimitHit() {
-			return nil, core.ErrSourceUnavailable
+			return kindResolveResult{}, core.ErrSourceUnavailable
 		}
-		return nil, core.PreparingFromPending(resolved.RetryInMS)
+		return kindResolveResult{}, core.PreparingFromPending(resolved.RetryInMS)
 	}
 	resolvedParts := resolved.Parts
 	if len(resolvedParts) == 0 && len(resolved.Sources) > 0 {
@@ -3597,7 +3642,7 @@ func (r *KindResolver) callPluginResolve(ctx context.Context, rec pluginitems.Ki
 		if strings.EqualFold(strings.TrimSpace(src.Pattern), "file") {
 			s := &StreamSources{mgr: r.mgr}
 			if _, _, err := s.validateLocalFile(ctx, rec.PluginID, src.Path); err != nil {
-				return nil, err
+				return kindResolveResult{}, err
 			}
 		}
 	}
@@ -3605,7 +3650,7 @@ func (r *KindResolver) callPluginResolve(ctx context.Context, rec pluginitems.Ki
 		return r.emptyKindResolve(ctx, item, partIdx, fk, searchState, len(exclude) > 0)
 	}
 	if err := r.validateNoRawSecretsInHeaders(ctx, pr.ID, pr.Manifest.Ether.Permissions.Secrets, resolved.Sources); err != nil {
-		return nil, err
+		return kindResolveResult{}, err
 	}
 	if resolved.TTLSec > 0 {
 		exp := r.now().Add(time.Duration(resolved.TTLSec) * time.Second).Unix()
@@ -3616,7 +3661,7 @@ func (r *KindResolver) callPluginResolve(ctx context.Context, rec pluginitems.Ki
 		}
 	}
 	r.clearResolveProgress(fk)
-	return resolved.Sources, nil
+	return kindResolveResult{sources: resolved.Sources, pendingFallback: fallback}, nil
 }
 
 // validateNoRawSecretsInHeaders rejects resolver headers whose value equals or

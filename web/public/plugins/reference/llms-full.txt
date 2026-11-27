@@ -1294,7 +1294,7 @@ until the indexer has been searched), and `lastError` carries a sanitized error
 code when the indexer's most recent search failed. The listing never includes
 API keys, URLs with secrets, or cookies.
 
-Non-indexer source queries (`debrid_check`, `debrid_acquire`, `release_files`,
+Non-indexer candidate queries (`debrid_check`, `debrid_acquire`, `release_files`,
 `usenet_check`) omit `indexers`, `pending`, `searchId`, and `done`. In Go,
 TypeScript, and Python SDKs, `ResolveSources` / `kinds.resolveSources` /
 `resolve_sources` continue returning candidates only, while
@@ -1371,12 +1371,19 @@ owner's indexers and debrid via the `ResolveSources` host service,
 rank the candidates yourself (or in `/match`), and return a
 `release` source.
 
+`sources.resolve({kind: "debrid"})` returns the owner's debrid availability
+and cache policy as `{enabled, cachedOnly}`. It requires `permissions.sources`
+with search or acquire access. Read these fields through `ResolveSourcesWithResult`
+in Go, `ctx.ether.kinds.resolveSourcesWithResult` in TypeScript, or
+`ctx.resolve_sources_with_result` in Python.
+
 `ResolveSources({kind: "debrid_check", infoHashes})` (or `infoHash`) checks
 which owner-configured debrid services currently hold each torrent and returns
 one candidate per hash with `cached` and `cachedBy: [{id, name}]` in the
 priority order Ether would acquire from them (using the service's configured
 ID and display name, e.g. `"TorBox"` or the owner's account name; omitted when
-not cached). `indexer_search` candidates that Ether already knows are cached
+not cached). The result also includes the owner's `cachedOnly` policy at the
+top level. `indexer_search` candidates that Ether already knows are cached
 and `debrid_acquire` results carry the same `cachedBy` field (for
 `debrid_acquire`, the service that actually served the acquisition).
 
@@ -2119,6 +2126,13 @@ keep short protocol deadlines. See `sdk/AGENTS.md` and the SDK README for exact
 per-route limits and how owners raise ceilings.
 
 ### Pending resolve and match replies
+
+A `/resolve` reply may include both `sources` and `pending: true`. Ether tries
+the sources first. If every attempted option is an uncached torrent blocked by
+the owner's cache policy or the source's `release.cachedOnly` flag, Ether starts the
+optional preparation job and returns `preparing` with the supplied retry hint.
+If a torrent can be queued, normal debrid queueing applies. The next Play can
+pick up the prepared source through `/resolve`.
 
 Both routes can return `{pending:true,retryInMs:1000,job:"/ether/job/prepare"}`.
 `job` is optional. Ether clamps retry delays to 250–5000 ms, retries for up to
@@ -3051,7 +3065,7 @@ type KindMatchResponse struct {
 
 | Field | Go type | Wire presence | Description |
 |---|---|---|---|
-| `kind` | `string` | emitted (validation may require a value) | indexer_search\|indexer_search_results\|indexer_search_cancel\|indexers\|debrid_check\|debrid_acquire\|release_files\|usenet_check\|nzb_request |
+| `kind` | `string` | emitted (validation may require a value) | indexer_search\|indexer_search_results\|indexer_search_cancel\|indexers\|debrid\|debrid_check\|debrid_acquire\|release_files\|usenet_check\|nzb_request |
 | `query` | `string` | may be omitted (see validation for conditions) |  |
 | `category` | `string` | may be omitted (see validation for conditions) | Category accepts comma-separated Newznab IDs or standard family names. When set with an empty Query, indexer_search requests recent releases. |
 | `lookup` | `*SourceLookup` | may be omitted (see validation for conditions) | Lookup, on an indexer_search with a Category, adds a typed lookup (e.g. {type: "album", fields: {artist, title}}) for plugin sources that declared it. Every other indexer searches Query alone. |
@@ -3083,7 +3097,7 @@ type KindMatchResponse struct {
 // SourceQuery asks Ether to find sources for a kind resolver
 // (spec §4.5).
 type SourceQuery struct {
-	Kind  string `json:"kind"` // indexer_search|indexer_search_results|indexer_search_cancel|indexers|debrid_check|debrid_acquire|release_files|usenet_check|nzb_request
+	Kind  string `json:"kind"` // indexer_search|indexer_search_results|indexer_search_cancel|indexers|debrid|debrid_check|debrid_acquire|release_files|usenet_check|nzb_request
 	Query string `json:"query,omitempty"`
 	// Category accepts comma-separated Newznab IDs or standard family names.
 	// When set with an empty Query, indexer_search requests recent releases.
@@ -3304,7 +3318,9 @@ func (s IndexerSearchStatus) MarshalJSON() ([]byte, error) {
 
 | Field | Go type | Wire presence | Description |
 |---|---|---|---|
-| `candidates` | `[]SourceCandidate` | emitted (validation may require a value) |  |
+| `enabled` | `*bool` | may be omitted (see validation for conditions) | Enabled is the owner's debrid availability (kind "debrid"). |
+| `cachedOnly` | `*bool` | may be omitted (see validation for conditions) | CachedOnly is the owner policy (kinds "debrid" and "debrid_check"). |
+| `candidates` | `[]SourceCandidate` | may be omitted (see validation for conditions) |  |
 | `indexers` | `[]IndexerSearchStatus` | may be omitted (see validation for conditions) |  |
 | `pending` | `[]IndexerRef` | may be omitted (see validation for conditions) |  |
 | `searchId` | `string` | may be omitted (see validation for conditions) |  |
@@ -3314,12 +3330,15 @@ func (s IndexerSearchStatus) MarshalJSON() ([]byte, error) {
 ## Source: internal/core/kinditem.go#SourceResolveResult
 
 ``````
-// SourceResolveResult is the full wire response envelope returned by
-// sources.resolve: Candidates for every query kind, plus per-indexer outcomes
-// or listings in Indexers, pending indexers in Pending, and streaming state
-// (SearchID, Done) when streaming.
+// SourceResolveResult is the full wire response returned by sources.resolve.
+// The debrid query returns policy. Other queries return candidates and may
+// include per-indexer outcomes, streaming state, or the cache policy.
 type SourceResolveResult struct {
-	Candidates []SourceCandidate     `json:"candidates"`
+	// Enabled is the owner's debrid availability (kind "debrid").
+	Enabled *bool `json:"enabled,omitempty"`
+	// CachedOnly is the owner policy (kinds "debrid" and "debrid_check").
+	CachedOnly *bool                 `json:"cachedOnly,omitempty"`
+	Candidates []SourceCandidate     `json:"candidates,omitempty"`
 	Indexers   []IndexerSearchStatus `json:"indexers,omitempty"`
 	Pending    []IndexerRef          `json:"pending,omitempty"`
 	SearchID   string                `json:"searchId,omitempty"`
@@ -3330,23 +3349,30 @@ type SourceResolveResult struct {
 ## Source: internal/core/kinditem.go#SourceResolveResult.MarshalJSON
 
 ``````
-// MarshalJSON always emits candidates (as [] when nil), omits nil Indexers and
-// Pending slices (for non-search kinds), and preserves non-nil empty Indexers
-// and Pending slices as [] (for kind:"indexers" with zero indexers and
-// finished streaming searches).
+// MarshalJSON emits the debrid policy by itself for the debrid query.
+// Candidate queries always emit candidates and preserve non-nil empty search
+// slices as [].
 func (r SourceResolveResult) MarshalJSON() ([]byte, error) {
+	if r.Enabled != nil {
+		return json.Marshal(struct {
+			Enabled    bool  `json:"enabled"`
+			CachedOnly *bool `json:"cachedOnly"`
+		}{Enabled: *r.Enabled, CachedOnly: r.CachedOnly})
+	}
 	cands := r.Candidates
 	if cands == nil {
 		cands = []SourceCandidate{}
 	}
 	wire := struct {
 		Candidates []SourceCandidate      `json:"candidates"`
+		CachedOnly *bool                  `json:"cachedOnly,omitempty"`
 		Indexers   *[]IndexerSearchStatus `json:"indexers,omitempty"`
 		Pending    *[]IndexerRef          `json:"pending,omitempty"`
 		SearchID   string                 `json:"searchId,omitempty"`
 		Done       *bool                  `json:"done,omitempty"`
 	}{
 		Candidates: cands,
+		CachedOnly: r.CachedOnly,
 		SearchID:   r.SearchID,
 		Done:       r.Done,
 	}
@@ -3914,7 +3940,7 @@ type KindResolveRequest struct {
 
 | Field | Go type | Wire presence | Description |
 |---|---|---|---|
-| `pending` | `bool` | may be omitted (see validation for conditions) |  |
+| `pending` | `bool` | may be omitted (see validation for conditions) | With sources, Pending is a fallback if cache policy blocks every source. |
 | `retryInMs` | `int64` | may be omitted (see validation for conditions) |  |
 | `job` | `string` | may be omitted (see validation for conditions) |  |
 | `sources` | `[]PlayableSource` | emitted (validation may require a value) |  |
@@ -3928,6 +3954,7 @@ type KindResolveRequest struct {
 // KindResolveResponse is the response returned by a plugin's kind_resolve
 // handler (spec §4.1).
 type KindResolveResponse struct {
+	// With sources, Pending is a fallback if cache policy blocks every source.
 	Pending   bool             `json:"pending,omitempty"`
 	RetryInMS int64            `json:"retryInMs,omitempty"`
 	Job       string           `json:"job,omitempty"`
@@ -8320,6 +8347,8 @@ type Response struct {
 	Status  int               `json:"status"`
 	Headers map[string]string `json:"headers,omitempty"`
 	Body    json.RawMessage   `json:"body,omitempty"`
+
+	pendingFallback func() error
 }
 ``````
 
@@ -18820,6 +18849,8 @@ func (h *host) ResolveSourcesWithResult(ctx context.Context, q core.SourceQuery)
 		}
 	case "indexers":
 		// Lists the owner's enabled indexers (gated by the same search permission).
+	case "debrid":
+		// Reads the owner policy under the same permission as cache checks.
 	case "debrid_check":
 		if len(q.InfoHashes) == 0 && q.InfoHash == "" {
 			return core.SourceResolveResult{}, &ValidationError{Fields: []FieldError{{
@@ -28281,6 +28312,15 @@ func pendingBudgetBody(retryInMS int64) json.RawMessage {
 }
 ``````
 
+## Source: internal/plugins/pending.go#Response.PendingFallback
+
+``````
+// PendingFallback returns the deferred preparation for a mixed resolve reply.
+func (r Response) PendingFallback() func() error {
+	return r.pendingFallback
+}
+``````
+
 ## Source: internal/plugins/pending.go#*Manager.Call
 
 ``````
@@ -28343,19 +28383,35 @@ func (m *Manager) Call(ctx context.Context, pluginID string, req Request) (Respo
 		if pending.RetryInMS > 0 {
 			lastRetryMS = pending.RetryInMS
 		}
+		if strings.HasSuffix(req.Path, "/resolve") {
+			var resolved struct {
+				Sources []json.RawMessage `json:"sources"`
+			}
+			if json.Unmarshal(resp.Body, &resolved) == nil && len(resolved.Sources) > 0 {
+				body := resp.Body
+				resp.pendingFallback = sync.OnceValue(func() error {
+					if !started {
+						if _, err := m.startPendingResolverJob(pluginID, pending.Job, body, req.Body, suffix, lastRetryMS); err != nil {
+							return err
+						}
+					}
+					return core.PreparingFromPending(lastRetryMS)
+				})
+				return resp, nil
+			}
+		}
 		if !started && strings.HasPrefix(pending.Job, "/ether/job/") {
-			job, err = m.startResolverJob(pluginID, resp.Body, req.Body, suffix)
+			job, err = m.startPendingResolverJob(pluginID, pending.Job, resp.Body, req.Body, suffix, lastRetryMS)
 			if err != nil {
-				busyErr := core.JobsBusyFromPending(err.Error(), lastRetryMS)
-				sec := core.JobsBusyRetrySeconds(busyErr, 5)
+				sec := core.JobsBusyRetrySeconds(err, 5)
 				return Response{
 					Status: http.StatusServiceUnavailable,
 					Headers: map[string]string{
 						"Retry-After":         strconv.Itoa(sec),
 						"X-Ether-Media-Error": "jobs_busy",
 					},
-					Body: core.JobsBusyErrorBody(busyErr),
-				}, busyErr
+					Body: core.JobsBusyErrorBody(err),
+				}, err
 			}
 			started = true
 		}
@@ -28377,6 +28433,21 @@ func (m *Manager) Call(ctx context.Context, pluginID string, req Request) (Respo
 		case <-timer.C:
 		}
 	}
+}
+``````
+
+## Source: internal/plugins/pending.go#*Manager.startPendingResolverJob
+
+``````
+func (m *Manager) startPendingResolverJob(pluginID, path string, body, initial json.RawMessage, suffix string, retryMS int64) (*actionJob, error) {
+	if !strings.HasPrefix(path, "/ether/job/") {
+		return nil, nil
+	}
+	job, err := m.startResolverJob(pluginID, body, initial, suffix)
+	if err != nil {
+		return nil, core.JobsBusyFromPending(err.Error(), retryMS)
+	}
+	return job, nil
 }
 ``````
 
@@ -57801,7 +57872,7 @@ type KindChangesRequest struct {
 
 | Field | Go type | Wire presence | Description |
 |---|---|---|---|
-| `kind` | `string` | emitted (validation may require a value) | indexer_search\|indexer_search_results\|indexer_search_cancel\|indexers\|debrid_check\|debrid_acquire\|release_files\|usenet_check\|nzb_request |
+| `kind` | `string` | emitted (validation may require a value) | indexer_search\|indexer_search_results\|indexer_search_cancel\|indexers\|debrid\|debrid_check\|debrid_acquire\|release_files\|usenet_check\|nzb_request |
 | `query` | `string` | may be omitted (see validation for conditions) |  |
 | `category` | `string` | may be omitted (see validation for conditions) | Category accepts comma-separated Newznab IDs or standard family names; when set with an empty Query, indexer_search requests recent releases. Source plugins that declared the category answer it too. |
 | `lookup` | `*SourceLookup` | may be omitted (see validation for conditions) | Lookup (indexer_search with Category) adds a typed lookup, such as an album by artist and title, for source plugins that declared its type. Other indexers search Query alone. |
@@ -57832,7 +57903,7 @@ type KindChangesRequest struct {
 ``````
 // SourceQuery asks Ether to find sources (Host.ResolveSources).
 type SourceQuery struct {
-	Kind  string `json:"kind"` // indexer_search|indexer_search_results|indexer_search_cancel|indexers|debrid_check|debrid_acquire|release_files|usenet_check|nzb_request
+	Kind  string `json:"kind"` // indexer_search|indexer_search_results|indexer_search_cancel|indexers|debrid|debrid_check|debrid_acquire|release_files|usenet_check|nzb_request
 	Query string `json:"query,omitempty"`
 	// Category accepts comma-separated Newznab IDs or standard family names;
 	// when set with an empty Query, indexer_search requests recent releases.
@@ -58039,7 +58110,9 @@ func (s IndexerSearchStatus) MarshalJSON() ([]byte, error) {
 
 | Field | Go type | Wire presence | Description |
 |---|---|---|---|
-| `candidates` | `[]SourceCandidate` | emitted (validation may require a value) |  |
+| `enabled` | `*bool` | may be omitted (see validation for conditions) | Enabled is the owner's debrid availability (kind "debrid"). |
+| `cachedOnly` | `*bool` | may be omitted (see validation for conditions) | CachedOnly is the owner policy (kinds "debrid" and "debrid_check"). |
+| `candidates` | `[]SourceCandidate` | may be omitted (see validation for conditions) |  |
 | `indexers` | `[]IndexerSearchStatus` | may be omitted (see validation for conditions) |  |
 | `pending` | `[]IndexerRef` | may be omitted (see validation for conditions) |  |
 | `searchId` | `string` | may be omitted (see validation for conditions) |  |
@@ -58051,7 +58124,11 @@ func (s IndexerSearchStatus) MarshalJSON() ([]byte, error) {
 ``````
 // SourceResolveResult is the full response envelope from sources.resolve (#733).
 type SourceResolveResult struct {
-	Candidates []SourceCandidate     `json:"candidates"`
+	// Enabled is the owner's debrid availability (kind "debrid").
+	Enabled *bool `json:"enabled,omitempty"`
+	// CachedOnly is the owner policy (kinds "debrid" and "debrid_check").
+	CachedOnly *bool                 `json:"cachedOnly,omitempty"`
+	Candidates []SourceCandidate     `json:"candidates,omitempty"`
 	Indexers   []IndexerSearchStatus `json:"indexers,omitempty"`
 	Pending    []IndexerRef          `json:"pending,omitempty"`
 	SearchID   string                `json:"searchId,omitempty"`
@@ -58062,21 +58139,28 @@ type SourceResolveResult struct {
 ## Source: sdk/go/kinds.go#SourceResolveResult.MarshalJSON
 
 ``````
-// MarshalJSON preserves non-nil empty Indexers and Pending slices as [] while
-// omitting nil slices.
+// MarshalJSON emits the debrid policy or the candidate response envelope.
 func (r SourceResolveResult) MarshalJSON() ([]byte, error) {
+	if r.Enabled != nil {
+		return json.Marshal(struct {
+			Enabled    bool  `json:"enabled"`
+			CachedOnly *bool `json:"cachedOnly"`
+		}{Enabled: *r.Enabled, CachedOnly: r.CachedOnly})
+	}
 	cands := r.Candidates
 	if cands == nil {
 		cands = []SourceCandidate{}
 	}
 	wire := struct {
 		Candidates []SourceCandidate      `json:"candidates"`
+		CachedOnly *bool                  `json:"cachedOnly,omitempty"`
 		Indexers   *[]IndexerSearchStatus `json:"indexers,omitempty"`
 		Pending    *[]IndexerRef          `json:"pending,omitempty"`
 		SearchID   string                 `json:"searchId,omitempty"`
 		Done       *bool                  `json:"done,omitempty"`
 	}{
 		Candidates: cands,
+		CachedOnly: r.CachedOnly,
 		SearchID:   r.SearchID,
 		Done:       r.Done,
 	}
@@ -58673,7 +58757,7 @@ type StreamURLOptions struct {
 
 | Field | Go type | Wire presence | Description |
 |---|---|---|---|
-| `pending` | `bool` | may be omitted (see validation for conditions) |  |
+| `pending` | `bool` | may be omitted (see validation for conditions) | With sources, Pending is a fallback if cache policy blocks every source. |
 | `retryInMs` | `int64` | may be omitted (see validation for conditions) |  |
 | `job` | `string` | may be omitted (see validation for conditions) |  |
 | `sources` | `[]PlayableSource` | emitted (validation may require a value) |  |
@@ -58686,6 +58770,7 @@ type StreamURLOptions struct {
 ``````
 // KindResolveResponse is a resolver's ordered sources.
 type KindResolveResponse struct {
+	// With sources, Pending is a fallback if cache policy blocks every source.
 	Pending   bool             `json:"pending,omitempty"`
 	RetryInMS int64            `json:"retryInMs,omitempty"`
 	Job       string           `json:"job,omitempty"`
@@ -71152,8 +71237,8 @@ class MockHostClient:
 
         def resolve_sources_with_result(self, query: Union[SourceQuery, Dict[str, Any]]) -> SourceResolveResult:
             if self._p.source_handler is not None:
-                res = self._p.source_handler(dict(query))
-                out: Dict[str, Any] = {"candidates": list((res or {}).get("candidates") or [])}
+                res = self._p.source_handler(dict(query)) or {}
+                out: Dict[str, Any] = {"candidates": list(res.get("candidates") or [])}
                 if res and "indexers" in res and res["indexers"] is not None:
                     out["indexers"] = list(res["indexers"])
                 if res and "pending" in res and res["pending"] is not None:
@@ -71162,6 +71247,9 @@ class MockHostClient:
                     out["searchId"] = str(res["searchId"])
                 if res and "done" in res and res["done"] is not None:
                     out["done"] = bool(res["done"])
+                for key in ("enabled", "cachedOnly"):
+                    if isinstance(res.get(key), bool):
+                        out[key] = res[key]
                 return out  # type: ignore[return-value]
             out = {"candidates": list(self._p.sources)}
             if self._p.source_indexers is not None:
@@ -72102,9 +72190,11 @@ class IndexerSearchStatus(TypedDict, total=False):
 
 
 class SourceResolveResult(TypedDict, total=False):
-    """Full response envelope from sources.resolve."""
+    """Full sources.resolve result. Debrid policy uses enabled and cachedOnly."""
 
     candidates: List[SourceCandidate]
+    enabled: bool
+    cachedOnly: bool
     indexers: List[IndexerSearchStatus]
     pending: List[IndexerRef]
     searchId: str
@@ -72124,6 +72214,7 @@ class SourceQuery(TypedDict, total=False):
         "indexer_search_results",
         "indexer_search_cancel",
         "indexers",
+        "debrid",
         "debrid_check",
         "debrid_acquire",
         "release_files",
@@ -72234,6 +72325,17 @@ class PlayableSource(TypedDict, total=False):
     parts: List[Dict[str, Any]]
 
 
+class KindResolveResponse(TypedDict, total=False):
+    """Ordered sources with optional pending preparation if cache policy blocks them all."""
+
+    sources: List[PlayableSource]
+    pending: bool
+    retryInMs: int
+    job: str
+    parts: List[Dict[str, Any]]
+    ttlSec: int
+
+
 class CatalogProvider:
     """Serve browse/detail for one declared kind. Items are plain dicts in
     the KindItem wire shape; requests are dicts with an extra ``kind`` key."""
@@ -72252,7 +72354,7 @@ class CatalogProvider:
 class KindResolver:
     """Turn a playable item into ordered playable sources."""
 
-    def resolve(self, ctx: PluginContext, req: Dict[str, Any]) -> Dict[str, Any]:
+    def resolve(self, ctx: PluginContext, req: Dict[str, Any]) -> KindResolveResponse:
         raise NotImplementedError
 
 
@@ -72435,6 +72537,8 @@ class _KindsClient:
         - ``nzb_request``: return a file list and a vault reference using
           ``nzbRef`` or ``nzbIdentity``.
         - ``debrid_check`` / ``debrid_acquire``: check or acquire torrents.
+          Use ``resolve_sources_with_result`` to read owner policy from
+          ``debrid`` or ``debrid_check``.
         - ``release_files``: list files inside a torrent or NZB candidate.
         - ``usenet_check``: sampled NNTP article check for a Usenet
           ``candidate`` (or ``nzbUrl``). Returns one candidate with
@@ -72464,7 +72568,7 @@ class _KindsClient:
         return result[0]
 
     def resolve_sources_with_result(self, query: Union[SourceQuery, Dict[str, Any]]) -> SourceResolveResult:
-        """Run ``sources.resolve`` and return the full envelope (``candidates``, ``indexers``, ``pending``, ``searchId``, ``done``) (#733)."""
+        """Run ``sources.resolve`` and return candidates, search progress, or debrid policy."""
         result = self._call("POST", "/ether/plugin-host/sources/resolve", dict(query)) or {}
         out: Dict[str, Any] = {"candidates": list(result.get("candidates") or [])}
         if "indexers" in result and result["indexers"] is not None:
@@ -72475,6 +72579,9 @@ class _KindsClient:
             out["searchId"] = str(result["searchId"])
         if "done" in result and result["done"] is not None:
             out["done"] = bool(result["done"])
+        for key in ("enabled", "cachedOnly"):
+            if isinstance(result.get(key), bool):
+                out[key] = result[key]
         return out  # type: ignore[return-value]
 
 
@@ -74189,6 +74296,8 @@ export function createHostedClient(): EtherHost {
         if (r?.pending !== undefined) out.pending = r.pending;
         if (r?.searchId !== undefined) out.searchId = r.searchId;
         if (r?.done !== undefined) out.done = r.done;
+        if (r?.enabled !== undefined) out.enabled = r.enabled;
+        if (r?.cachedOnly !== undefined) out.cachedOnly = r.cachedOnly;
         return out;
       },
     },
@@ -74554,6 +74663,8 @@ export function createRemoteHostClient(opts: RemoteHostOptions = {}): EtherHost 
         if (r?.pending !== undefined) out.pending = r.pending;
         if (r?.searchId !== undefined) out.searchId = r.searchId;
         if (r?.done !== undefined) out.done = r.done;
+        if (r?.enabled !== undefined) out.enabled = r.enabled;
+        if (r?.cachedOnly !== undefined) out.cachedOnly = r.cachedOnly;
         return out;
       },
     },
@@ -79182,6 +79293,7 @@ export interface SourceQuery {
     | "indexer_search_results"
     | "indexer_search_cancel"
     | "indexers"
+    | "debrid"
     | "debrid_check"
     | "debrid_acquire"
     | "release_files"
@@ -79264,6 +79376,10 @@ export interface IndexerSearchStatus {
 
 /** Full response envelope from sources.resolve. */
 export interface SourceResolveResult {
+  /** Debrid availability, returned for kind "debrid". */
+  enabled?: boolean;
+  /** Owner policy, returned for "debrid" and "debrid_check". */
+  cachedOnly?: boolean;
   candidates: SourceCandidate[];
   indexers?: IndexerSearchStatus[];
   /** Indexers still running in the background (early-returning indexer_search and streaming responses). */
@@ -79483,6 +79599,7 @@ export interface PendingReply {
 }
 
 export interface KindResolveResponse {
+  /** With sources, defer only if cache policy blocks every source. */
   pending?: boolean;
   retryInMs?: number;
   job?: string;

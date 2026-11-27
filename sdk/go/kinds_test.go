@@ -716,6 +716,9 @@ func TestResolveSourcesWithResult(t *testing.T) {
 				Pending:    []etherplugin.IndexerRef{{IndexerID: "slow", Indexer: "Slow"}},
 				Indexers:   []etherplugin.IndexerSearchStatus{{IndexerID: "slow", Indexer: "Slow", Status: etherplugin.IndexerStatusPending, MS: 0}},
 			})
+		case "debrid":
+			enabled := true
+			_ = json.NewEncoder(w).Encode(etherplugin.SourceResolveResult{Enabled: &enabled, CachedOnly: &doneFalse})
 		case "indexers":
 			_ = json.NewEncoder(w).Encode(etherplugin.SourceResolveResult{
 				Candidates: []etherplugin.SourceCandidate{},
@@ -732,5 +735,9 @@ func TestResolveSourcesWithResult(t *testing.T) {
 	lres, err := sc.ResolveSourcesWithResult(etherplugin.SourceQuery{Kind: "indexers"})
 	if err != nil || len(lres.Indexers) != 1 || lres.Indexers[0].Kind != "newznab" || lres.Indexers[0].MedianMS == nil || *lres.Indexers[0].MedianMS != 180 {
 		t.Fatalf("indexers listing = (%+v, %v)", lres, err)
+	}
+	policy, err := sc.ResolveSourcesWithResult(etherplugin.SourceQuery{Kind: "debrid"})
+	if err != nil || policy.Enabled == nil || !*policy.Enabled || policy.CachedOnly == nil || *policy.CachedOnly {
+		t.Fatalf("debrid policy did not round-trip: %v", err)
 	}
 }

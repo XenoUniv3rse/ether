@@ -58,7 +58,7 @@ func (r *KindResolver) openSavedKindSource(ctx context.Context, rec pluginitems.
 	}
 	openCtx, cancel := withHardTimeout(newznab.WithVaultedPluginNZB(ctx), r.candidateOpenTimeout)
 	defer cancel()
-	media, err := r.openSingleSource(openCtx, rec, lib, item, partIdx, src, false)
+	media, err := r.openSingleSource(openCtx, rec, lib, item, partIdx, src, false, nil)
 	if ctx.Err() == nil && errors.Is(err, core.ErrSourceUnavailable) {
 		return nil, nil
 	}

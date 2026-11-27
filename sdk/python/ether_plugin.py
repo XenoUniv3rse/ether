@@ -3252,8 +3252,8 @@ class MockHostClient:
 
         def resolve_sources_with_result(self, query: Union[SourceQuery, Dict[str, Any]]) -> SourceResolveResult:
             if self._p.source_handler is not None:
-                res = self._p.source_handler(dict(query))
-                out: Dict[str, Any] = {"candidates": list((res or {}).get("candidates") or [])}
+                res = self._p.source_handler(dict(query)) or {}
+                out: Dict[str, Any] = {"candidates": list(res.get("candidates") or [])}
                 if res and "indexers" in res and res["indexers"] is not None:
                     out["indexers"] = list(res["indexers"])
                 if res and "pending" in res and res["pending"] is not None:
@@ -3262,6 +3262,9 @@ class MockHostClient:
                     out["searchId"] = str(res["searchId"])
                 if res and "done" in res and res["done"] is not None:
                     out["done"] = bool(res["done"])
+                for key in ("enabled", "cachedOnly"):
+                    if isinstance(res.get(key), bool):
+                        out[key] = res[key]
                 return out  # type: ignore[return-value]
             out = {"candidates": list(self._p.sources)}
             if self._p.source_indexers is not None:
@@ -4202,9 +4205,11 @@ class IndexerSearchStatus(TypedDict, total=False):
 
 
 class SourceResolveResult(TypedDict, total=False):
-    """Full response envelope from sources.resolve."""
+    """Full sources.resolve result. Debrid policy uses enabled and cachedOnly."""
 
     candidates: List[SourceCandidate]
+    enabled: bool
+    cachedOnly: bool
     indexers: List[IndexerSearchStatus]
     pending: List[IndexerRef]
     searchId: str
@@ -4224,6 +4229,7 @@ class SourceQuery(TypedDict, total=False):
         "indexer_search_results",
         "indexer_search_cancel",
         "indexers",
+        "debrid",
         "debrid_check",
         "debrid_acquire",
         "release_files",
@@ -4334,6 +4340,17 @@ class PlayableSource(TypedDict, total=False):
     parts: List[Dict[str, Any]]
 
 
+class KindResolveResponse(TypedDict, total=False):
+    """Ordered sources with optional pending preparation if cache policy blocks them all."""
+
+    sources: List[PlayableSource]
+    pending: bool
+    retryInMs: int
+    job: str
+    parts: List[Dict[str, Any]]
+    ttlSec: int
+
+
 class CatalogProvider:
     """Serve browse/detail for one declared kind. Items are plain dicts in
     the KindItem wire shape; requests are dicts with an extra ``kind`` key."""
@@ -4352,7 +4369,7 @@ class CatalogProvider:
 class KindResolver:
     """Turn a playable item into ordered playable sources."""
 
-    def resolve(self, ctx: PluginContext, req: Dict[str, Any]) -> Dict[str, Any]:
+    def resolve(self, ctx: PluginContext, req: Dict[str, Any]) -> KindResolveResponse:
         raise NotImplementedError
 
 
@@ -4535,6 +4552,8 @@ class _KindsClient:
         - ``nzb_request``: return a file list and a vault reference using
           ``nzbRef`` or ``nzbIdentity``.
         - ``debrid_check`` / ``debrid_acquire``: check or acquire torrents.
+          Use ``resolve_sources_with_result`` to read owner policy from
+          ``debrid`` or ``debrid_check``.
         - ``release_files``: list files inside a torrent or NZB candidate.
         - ``usenet_check``: sampled NNTP article check for a Usenet
           ``candidate`` (or ``nzbUrl``). Returns one candidate with
@@ -4564,7 +4583,7 @@ class _KindsClient:
         return result[0]
 
     def resolve_sources_with_result(self, query: Union[SourceQuery, Dict[str, Any]]) -> SourceResolveResult:
-        """Run ``sources.resolve`` and return the full envelope (``candidates``, ``indexers``, ``pending``, ``searchId``, ``done``) (#733)."""
+        """Run ``sources.resolve`` and return candidates, search progress, or debrid policy."""
         result = self._call("POST", "/ether/plugin-host/sources/resolve", dict(query)) or {}
         out: Dict[str, Any] = {"candidates": list(result.get("candidates") or [])}
         if "indexers" in result and result["indexers"] is not None:
@@ -4575,6 +4594,9 @@ class _KindsClient:
             out["searchId"] = str(result["searchId"])
         if "done" in result and result["done"] is not None:
             out["done"] = bool(result["done"])
+        for key in ("enabled", "cachedOnly"):
+            if isinstance(result.get(key), bool):
+                out[key] = result[key]
         return out  # type: ignore[return-value]
 
 

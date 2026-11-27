@@ -874,6 +874,8 @@ func (h *host) ResolveSourcesWithResult(ctx context.Context, q core.SourceQuery)
 		}
 	case "indexers":
 		// Lists the owner's enabled indexers (gated by the same search permission).
+	case "debrid":
+		// Reads the owner policy under the same permission as cache checks.
 	case "debrid_check":
 		if len(q.InfoHashes) == 0 && q.InfoHash == "" {
 			return core.SourceResolveResult{}, &ValidationError{Fields: []FieldError{{

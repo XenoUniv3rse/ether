@@ -505,7 +505,7 @@ type KindMatchResponse struct {
 // SourceQuery asks Ether to find sources for a kind resolver
 // (spec §4.5).
 type SourceQuery struct {
-	Kind  string `json:"kind"` // indexer_search|indexer_search_results|indexer_search_cancel|indexers|debrid_check|debrid_acquire|release_files|usenet_check|nzb_request
+	Kind  string `json:"kind"` // indexer_search|indexer_search_results|indexer_search_cancel|indexers|debrid|debrid_check|debrid_acquire|release_files|usenet_check|nzb_request
 	Query string `json:"query,omitempty"`
 	// Category accepts comma-separated Newznab IDs or standard family names.
 	// When set with an empty Query, indexer_search requests recent releases.
@@ -676,35 +676,45 @@ func (s IndexerSearchStatus) MarshalJSON() ([]byte, error) {
 	})
 }
 
-// SourceResolveResult is the full wire response envelope returned by
-// sources.resolve: Candidates for every query kind, plus per-indexer outcomes
-// or listings in Indexers, pending indexers in Pending, and streaming state
-// (SearchID, Done) when streaming.
+// SourceResolveResult is the full wire response returned by sources.resolve.
+// The debrid query returns policy. Other queries return candidates and may
+// include per-indexer outcomes, streaming state, or the cache policy.
 type SourceResolveResult struct {
-	Candidates []SourceCandidate     `json:"candidates"`
+	// Enabled is the owner's debrid availability (kind "debrid").
+	Enabled *bool `json:"enabled,omitempty"`
+	// CachedOnly is the owner policy (kinds "debrid" and "debrid_check").
+	CachedOnly *bool                 `json:"cachedOnly,omitempty"`
+	Candidates []SourceCandidate     `json:"candidates,omitempty"`
 	Indexers   []IndexerSearchStatus `json:"indexers,omitempty"`
 	Pending    []IndexerRef          `json:"pending,omitempty"`
 	SearchID   string                `json:"searchId,omitempty"`
 	Done       *bool                 `json:"done,omitempty"`
 }
 
-// MarshalJSON always emits candidates (as [] when nil), omits nil Indexers and
-// Pending slices (for non-search kinds), and preserves non-nil empty Indexers
-// and Pending slices as [] (for kind:"indexers" with zero indexers and
-// finished streaming searches).
+// MarshalJSON emits the debrid policy by itself for the debrid query.
+// Candidate queries always emit candidates and preserve non-nil empty search
+// slices as [].
 func (r SourceResolveResult) MarshalJSON() ([]byte, error) {
+	if r.Enabled != nil {
+		return json.Marshal(struct {
+			Enabled    bool  `json:"enabled"`
+			CachedOnly *bool `json:"cachedOnly"`
+		}{Enabled: *r.Enabled, CachedOnly: r.CachedOnly})
+	}
 	cands := r.Candidates
 	if cands == nil {
 		cands = []SourceCandidate{}
 	}
 	wire := struct {
 		Candidates []SourceCandidate      `json:"candidates"`
+		CachedOnly *bool                  `json:"cachedOnly,omitempty"`
 		Indexers   *[]IndexerSearchStatus `json:"indexers,omitempty"`
 		Pending    *[]IndexerRef          `json:"pending,omitempty"`
 		SearchID   string                 `json:"searchId,omitempty"`
 		Done       *bool                  `json:"done,omitempty"`
 	}{
 		Candidates: cands,
+		CachedOnly: r.CachedOnly,
 		SearchID:   r.SearchID,
 		Done:       r.Done,
 	}
@@ -1017,6 +1027,7 @@ type KindResolveRequest struct {
 // KindResolveResponse is the response returned by a plugin's kind_resolve
 // handler (spec §4.1).
 type KindResolveResponse struct {
+	// With sources, Pending is a fallback if cache policy blocks every source.
 	Pending   bool             `json:"pending,omitempty"`
 	RetryInMS int64            `json:"retryInMs,omitempty"`
 	Job       string           `json:"job,omitempty"`

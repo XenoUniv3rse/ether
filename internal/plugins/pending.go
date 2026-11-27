@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/braedonsaunders/ether/internal/core"
@@ -43,6 +44,11 @@ func pendingBudgetBody(retryInMS int64) json.RawMessage {
 		}
 	}
 	return json.RawMessage(`{"pending":true}`)
+}
+
+// PendingFallback returns the deferred preparation for a mixed resolve reply.
+func (r Response) PendingFallback() func() error {
+	return r.pendingFallback
 }
 
 // Call applies the total pending budget to kind resolvers and matchers.
@@ -104,19 +110,35 @@ func (m *Manager) Call(ctx context.Context, pluginID string, req Request) (Respo
 		if pending.RetryInMS > 0 {
 			lastRetryMS = pending.RetryInMS
 		}
+		if strings.HasSuffix(req.Path, "/resolve") {
+			var resolved struct {
+				Sources []json.RawMessage `json:"sources"`
+			}
+			if json.Unmarshal(resp.Body, &resolved) == nil && len(resolved.Sources) > 0 {
+				body := resp.Body
+				resp.pendingFallback = sync.OnceValue(func() error {
+					if !started {
+						if _, err := m.startPendingResolverJob(pluginID, pending.Job, body, req.Body, suffix, lastRetryMS); err != nil {
+							return err
+						}
+					}
+					return core.PreparingFromPending(lastRetryMS)
+				})
+				return resp, nil
+			}
+		}
 		if !started && strings.HasPrefix(pending.Job, "/ether/job/") {
-			job, err = m.startResolverJob(pluginID, resp.Body, req.Body, suffix)
+			job, err = m.startPendingResolverJob(pluginID, pending.Job, resp.Body, req.Body, suffix, lastRetryMS)
 			if err != nil {
-				busyErr := core.JobsBusyFromPending(err.Error(), lastRetryMS)
-				sec := core.JobsBusyRetrySeconds(busyErr, 5)
+				sec := core.JobsBusyRetrySeconds(err, 5)
 				return Response{
 					Status: http.StatusServiceUnavailable,
 					Headers: map[string]string{
 						"Retry-After":         strconv.Itoa(sec),
 						"X-Ether-Media-Error": "jobs_busy",
 					},
-					Body: core.JobsBusyErrorBody(busyErr),
-				}, busyErr
+					Body: core.JobsBusyErrorBody(err),
+				}, err
 			}
 			started = true
 		}
@@ -138,4 +160,15 @@ func (m *Manager) Call(ctx context.Context, pluginID string, req Request) (Respo
 		case <-timer.C:
 		}
 	}
+}
+
+func (m *Manager) startPendingResolverJob(pluginID, path string, body, initial json.RawMessage, suffix string, retryMS int64) (*actionJob, error) {
+	if !strings.HasPrefix(path, "/ether/job/") {
+		return nil, nil
+	}
+	job, err := m.startResolverJob(pluginID, body, initial, suffix)
+	if err != nil {
+		return nil, core.JobsBusyFromPending(err.Error(), retryMS)
+	}
+	return job, nil
 }

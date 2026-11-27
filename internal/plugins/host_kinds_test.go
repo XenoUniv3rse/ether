@@ -1160,8 +1160,13 @@ func TestHostResolveSourcesWithResultAndValidation(t *testing.T) {
 					},
 				}, nil
 			}
+			enabled, cachedOnly := true, false
+			if q.Kind == "debrid" {
+				return core.SourceResolveResult{Enabled: &enabled, CachedOnly: &cachedOnly}, nil
+			}
 			return core.SourceResolveResult{
 				Candidates: []core.SourceCandidate{{InfoHash: q.InfoHash, Cached: true}},
+				CachedOnly: &cachedOnly,
 			}, nil
 		},
 	})
@@ -1210,6 +1215,24 @@ func TestHostResolveSourcesWithResultAndValidation(t *testing.T) {
 	if _, hasIndexers := dcObj["indexers"]; hasIndexers {
 		t.Fatalf("debrid_check reply unexpectedly included indexers: %#v", dcObj)
 	}
+
+	if dcObj["cachedOnly"] != false {
+		t.Fatal("debrid_check did not return the cache policy")
+	}
+
+	policyQuery := json.RawMessage(`[{"kind":"debrid"}]`)
+	policy, err := bridge.CallHost(ctx, "sources.resolve", policyQuery)
+	if err != nil || string(policy) != `{"enabled":true,"cachedOnly":false}` {
+		t.Fatalf("unexpected debrid policy response: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := env.m.SetGrants(ctx, rec.ID, Grants{Revoked: []string{"sources"}}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := h.ResolveSources(ctx, core.SourceQuery{Kind: "debrid"}); !errors.Is(err, ErrPermissionDenied) {
+			t.Fatalf("debrid policy without source permission: %v", err)
+		}
+	})
 
 	// Streaming & listing validation + hosted not_found mapping.
 	for _, q := range []core.SourceQuery{

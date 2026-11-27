@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -756,4 +757,122 @@ func TestKindResolverReleaseUncachedFollowsOwnerPolicyAndCollectionSharing(t *te
 		t.Fatalf("OpenKindPartSource after finish: %v", err)
 	}
 	_ = km.Closer.Close()
+}
+
+func TestKindResolveMixedPendingFallback(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		ownerOnly  bool
+		sourceOnly bool
+		open       string
+		alternate  string
+		wantJob    bool
+		wantQueued bool
+	}{
+		{name: "owner policy", ownerOnly: true, wantJob: true},
+		{name: "source policy explicit version", sourceOnly: true, open: "version", wantJob: true},
+		{name: "source scoped ticket", ownerOnly: true, open: "ticket", wantJob: true},
+		{name: "queue allowed", wantQueued: true},
+		{name: "cached source wins", ownerOnly: true, alternate: "cached"},
+		{name: "unrelated failure", ownerOnly: true, alternate: "invalid"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			tb := newFakeTorBoxServer(t)
+			uncachedHash, cachedHash := strings.Repeat("11", 20), strings.Repeat("33", 20)
+			tb.setFiles(uncachedHash, []fakeTorBoxFile{{ID: 1, Name: "Pack/Game1.rom"}}, false)
+			tb.setFiles(cachedHash, []fakeTorBoxFile{{ID: 1, Name: "Cached/Hit.rom", Body: []byte("CACHED-HIT-DATA")}}, true)
+			uncached := core.PlayableSource{ID: "torrent", Pattern: "release", Release: &core.ReleaseHint{
+				InfoHash: uncachedHash, File: "Pack/Game1.rom", CachedOnly: tc.sourceOnly,
+			}}
+			cached := core.PlayableSource{ID: "prepared", Pattern: "release", Release: &core.ReleaseHint{
+				InfoHash: cachedHash, File: "Cached/Hit.rom",
+			}}
+			prepared := make(chan core.KindResolveRequest, 1)
+			var ready atomic.Bool
+			h, _, kr, viewer, keys := newUncachedKindRig(t, tc.ownerOnly, tb, func(req core.KindResolveRequest) (core.KindResolveResponse, error) {
+				if ready.Load() {
+					return core.KindResolveResponse{Sources: []core.PlayableSource{cached}}, nil
+				}
+				sources := []core.PlayableSource{uncached}
+				switch tc.alternate {
+				case "cached":
+					sources = append(sources, cached)
+				case "invalid":
+					sources = append(sources, core.PlayableSource{ID: "invalid", Pattern: "invalid"})
+				}
+				return core.KindResolveResponse{Sources: sources, Pending: true, RetryInMS: 1700, Job: "/ether/job/prepare"}, nil
+			})
+			call := h.rt.callContext
+			h.rt.callContext = func(ctx context.Context, req plugins.Request) (plugins.Response, error) {
+				if req.Path == "/ether/job/prepare" {
+					var request core.KindResolveRequest
+					_ = json.Unmarshal(req.Body, &request)
+					ready.Store(true)
+					prepared <- request
+					return plugins.Response{Status: 200, Body: json.RawMessage(`{"done":true}`)}, nil
+				}
+				return call(ctx, req)
+			}
+			const pluginID = "com.example.roms"
+			policy, err := kr.ResolveSourcesWithResult(ctx, pluginID, core.SourceQuery{Kind: "debrid"})
+			if err != nil || policy.Enabled == nil || !*policy.Enabled || policy.CachedOnly == nil || *policy.CachedOnly != tc.ownerOnly {
+				t.Fatalf("debrid policy differs from configured policy: %v", err)
+			}
+			check, err := kr.ResolveSourcesWithResult(ctx, pluginID, core.SourceQuery{Kind: "debrid_check", InfoHash: uncachedHash})
+			if err != nil || check.CachedOnly == nil || *check.CachedOnly != tc.ownerOnly || len(check.Candidates) != 1 || check.Candidates[0].Cached {
+				t.Fatalf("debrid check did not return the uncached candidate and owner policy: %v", err)
+			}
+
+			key := keys["game-1"]
+			switch tc.open {
+			case "version", "ticket":
+				const source = "torrent"
+				if tc.open == "version" {
+					_, err = kr.OpenKindSource(ctx, viewer, key, source, nil)
+				} else {
+					_, err = kr.OpenKindPartSource(ctx, viewer, key, nil, source, nil)
+				}
+			default:
+				media, openErr := kr.OpenKind(ctx, viewer, key, nil)
+				err = openErr
+				if media != nil {
+					_ = media.Closer.Close()
+				}
+			}
+			switch {
+			case tc.wantJob:
+				var pending *core.PreparingError
+				if !errors.As(err, &pending) || pending.RetryAfter != 1700*time.Millisecond || errors.Is(err, core.ErrDownloadQueued) {
+					t.Fatalf("open = %v, want preparation with plugin retry hint", err)
+				}
+				select {
+				case req := <-prepared:
+					if req.Item.ID != "game-1" || (tc.open == "ticket" && req.Source != "torrent") {
+						t.Fatal("job did not receive the original resolve identity")
+					}
+				case <-ctx.Done():
+					t.Fatal("fallback job did not start")
+				}
+				media, err := kr.OpenKind(ctx, viewer, key, nil)
+				if err != nil {
+					t.Fatalf("retry did not open prepared source: %v", err)
+				}
+				_ = media.Closer.Close()
+			case tc.wantQueued:
+				if !errors.Is(err, core.ErrPreparing) || !errors.Is(err, core.ErrDownloadQueued) {
+					t.Fatalf("open = %v, want queued torrent", err)
+				}
+			case tc.alternate == "cached":
+				if err != nil {
+					t.Fatalf("cached alternate did not play: %v", err)
+				}
+			default:
+				if err == nil || errors.Is(err, core.ErrPreparing) {
+					t.Fatalf("open = %v, want terminal source error", err)
+				}
+			}
+		})
+	}
 }

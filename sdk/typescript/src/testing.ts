@@ -644,6 +644,8 @@ export function createMockHostClient(initial?: Partial<MockHostState>): MockHost
           if (r?.pending !== undefined) out.pending = [...r.pending];
           if (r?.searchId !== undefined) out.searchId = r.searchId;
           if (r?.done !== undefined) out.done = r.done;
+          if (r?.enabled !== undefined) out.enabled = r.enabled;
+          if (r?.cachedOnly !== undefined) out.cachedOnly = r.cachedOnly;
           return out;
         }
         const out: import("./types.ts").SourceResolveResult = { candidates: [...state.sources] };

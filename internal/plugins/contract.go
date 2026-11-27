@@ -1342,6 +1342,8 @@ type Response struct {
 	Status  int               `json:"status"`
 	Headers map[string]string `json:"headers,omitempty"`
 	Body    json.RawMessage   `json:"body,omitempty"`
+
+	pendingFallback func() error
 }
 
 // Runtime is how the host reaches one installed plugin. WS8a (hosted) and
