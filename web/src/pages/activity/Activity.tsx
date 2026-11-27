@@ -110,7 +110,7 @@ export default function Activity() {
         ) : tab === "experience" ? (
           <ExperiencePeriod />
         ) : tab === "recommendations" ? (
-          <RecommendationPeriod />
+          <RecommendationPeriod viewers={viewers.data ?? []} />
         ) : (
           <ViewingFilters value={filter} onChange={setFilter} viewers={viewers.data ?? []} />
         )

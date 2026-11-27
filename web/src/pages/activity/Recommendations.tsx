@@ -1,12 +1,11 @@
 import { DashboardPanel } from "@braedonsaunders/appkit-dashboard/primitives";
 import { EmptyState, PagedTable, Select, type PagedColumn } from "@braedonsaunders/appkit-ui";
-import { ChevronRight, Clock, Eye, Layers, PlayCircle, TrendingUp } from "lucide-react";
+import { ChevronRight, Clock, Eye, Layers, PlayCircle } from "lucide-react";
 import { useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { CompactTrend } from "../../components/charts";
 import { Drawer } from "../../components/Drawer";
 import { ErrorPanel, LoadingRows } from "../../components/feedback";
-import { Segmented } from "../../components/fields";
 import { Kpi, KpiRow } from "../../components/Kpi";
 import { t, tn } from "../../i18n";
 import { pagedTableLabels } from "../../i18n/appkit-labels";
@@ -42,19 +41,37 @@ function useRecommendationParams() {
   return { days, viewer: params.get("viewer") ?? "", kind: params.get("row") ?? "", update };
 }
 
-export function RecommendationPeriod() {
-  const { days, update } = useRecommendationParams();
+/** Period and viewer, in the same place and style as the Viewing and Delivery filters. */
+export function RecommendationPeriod({ viewers }: { viewers: EtherUser[] }) {
+  const { days, viewer, update } = useRecommendationParams();
   return (
-    <Segmented
-      ariaLabel={t("Period")}
-      size="sm"
-      value={days}
-      onChange={(value) => update("days", value)}
-      options={periods.map((value) => ({
-        value,
-        label: tn(Number(value), "Last {count} day", "Last {count} days"),
-      }))}
-    />
+    <div className="flex flex-wrap items-center gap-2" role="group" aria-label={t("Filters")}>
+      <Select
+        aria-label={t("Period")}
+        className="h-8 w-40 text-sm"
+        value={days}
+        onChange={(event) => update("days", event.target.value)}
+      >
+        {periods.map((value) => (
+          <option key={value} value={value}>
+            {tn(Number(value), "Last {count} day", "Last {count} days")}
+          </option>
+        ))}
+      </Select>
+      <Select
+        aria-label={t("Viewer")}
+        className="h-8 w-44 text-sm"
+        value={viewer}
+        onChange={(event) => update("viewer", event.target.value)}
+      >
+        <option value="">{t("Everyone")}</option>
+        {viewers.map((item) => (
+          <option key={item.id} value={item.id}>
+            {audienceName(item)}
+          </option>
+        ))}
+      </Select>
+    </div>
   );
 }
 
@@ -86,60 +103,43 @@ export function Recommendations({ viewers }: { viewers: EtherUser[] }) {
   const activeRow = data?.rows.find((row) => row.kind === kind);
   return (
     <>
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h2 className="text-lg font-semibold text-fg">{t("Recommendation performance")}</h2>
-        </div>
-        <Select
-          aria-label={t("Viewer")}
-          sheetTitle={t("Viewer")}
-          searchPlaceholder={t("Find a viewer…")}
-          className="w-full sm:w-56"
-          value={viewer}
-          onChange={(event) => update("viewer", event.target.value)}
-        >
-          <option value="">{t("All viewers")}</option>
-          {viewers.map((item) => (
-            <option key={item.id} value={item.id}>
-              {audienceName(item)}
-            </option>
-          ))}
-        </Select>
-      </div>
       {report.loading && !data ? (
         <LoadingRows rows={5} />
       ) : report.error && !data ? (
         <ErrorPanel error={report.error} onRetry={() => void report.reload()} />
       ) : data ? (
         <>
-          <KpiRow className="lg:grid-cols-3 xl:grid-cols-5 [&_.uppercase]:whitespace-normal max-sm:[&>div]:p-3 max-sm:[&_.tabular-nums]:mt-2 max-sm:[&_.leading-snug:empty]:min-h-0">
+          <KpiRow>
             <Kpi
               label={t("Impressions")}
               value={formatNumber(data.impressions, 0)}
+              detail={t("Rows shown to viewers")}
               icon={<Eye size={18} />}
             />
             <Kpi
               label={t("Plays from rows")}
               value={formatNumber(data.plays, 0)}
+              detail={
+                data.impressions
+                  ? t("{percent} play rate", { percent: rate(data.plays, data.impressions) })
+                  : undefined
+              }
               icon={<PlayCircle size={18} />}
-            />
-            <Kpi
-              label={t("Play rate")}
-              value={rate(data.plays, data.impressions)}
-              icon={<TrendingUp size={18} />}
+              tone="info"
             />
             <Kpi
               label={t("Hours watched")}
-              value={hours(data.watchedMs)}
+              value={formatNumber(data.watchedMs / 3_600_000, 1)}
+              detail={t("From recommendation rows")}
               icon={<Clock size={18} />}
+              tone="success"
             />
             <Kpi
               label={t("Share of all plays")}
               value={rate(data.attributedStarts, data.starts)}
-              detail={t("Includes search, library and Continue Watching")}
+              detail={t("Of all plays started")}
               icon={<Layers size={18} />}
               tone="info"
-              className="max-lg:col-span-2"
             />
           </KpiRow>
           <DashboardPanel title={t("Performance by row")} icon={<Layers size={16} />}>
