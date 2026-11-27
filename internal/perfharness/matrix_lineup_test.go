@@ -37,3 +37,15 @@ func TestMatrixSeparatesColdLineupBuildAndGatesSnapshotHit(t *testing.T) {
 		t.Fatal("build measurements missing")
 	}
 }
+
+func TestMatrixXtreamMovieFollowsReleasedArtwork(t *testing.T) {
+	vars := map[string]string{"now": "1767225600"}
+	discoverMatrixXtreamMovie(vars, []byte(`[
+		{"stream_id":10,"release_date":"2026-01-08","stream_icon":"/xtream/image/upcoming"},
+		{"stream_id":11,"release_date":"2025-12-20","stream_icon":"https://fixture.invalid/unrelated"},
+		{"stream_id":12,"release_date":"2025-12-19","stream_icon":"http://127.0.0.1/xtream/image/released"}
+	]`))
+	if vars["xtreamVod"] != "12" || vars["xtreamCover"] != "released" {
+		t.Fatalf("selected VOD %q with cover %q", vars["xtreamVod"], vars["xtreamCover"])
+	}
+}
