@@ -3,7 +3,7 @@
   "capturePolicy": "Captured reference responses; proxy errors excluded; mutating requests fixture-only; listings trimmed to 50 entries; binary bytes omitted.",
   "discoveryWarnings": [],
   "fixtureCounts": {
-    "findroid": 19,
+    "findroid": 20,
     "infuse-jellyfin": 78,
     "jellycon": 19,
     "jellyfin-androidtv": 24,

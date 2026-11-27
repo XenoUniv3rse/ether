@@ -1,7 +1,7 @@
 {
   "discoveryWarnings": [],
   "fixtureCounts": {
-    "emby-sdk": 18
+    "emby-sdk": 19
   },
   "fixturePolicy": "Response listings are trimmed to the first 50 entries per repeated container child.",
   "requestErrors": null,

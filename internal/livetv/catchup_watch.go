@@ -30,6 +30,9 @@ func init() {
 		PRIMARY KEY(user_id, programme_id));
 	CREATE INDEX livetv_catchup_watch_guide ON livetv_catchup_watch(guide_source, guide_id, start_ms);
 	CREATE INDEX livetv_catchup_watch_start ON livetv_catchup_watch(start_ms);`)
+	store.Register("livetv", 29, `ALTER TABLE livetv_catchup_watch ADD COLUMN watch_at_ms BIGINT NOT NULL DEFAULT 0;
+		ALTER TABLE livetv_catchup_watch ADD COLUMN favorite INTEGER NOT NULL DEFAULT 0;
+		ALTER TABLE livetv_catchup_watch ADD COLUMN rating DOUBLE PRECISION NOT NULL DEFAULT 0;`)
 }
 
 // catchUpWatchMaxAge bounds state for airings whose source no longer imports
@@ -68,15 +71,15 @@ func (h liveTVHost) CatchUpProgress(ctx context.Context, u *frontend.Viewer, id 
 		offset = min(offset, dur)
 	}
 	switch {
-	case dur > 0 && float64(offset) >= state.WatchedThreshold*float64(dur):
-		return a.upsert(ctx, h.s, 0, `offset_ms=0, view_count=CASE WHEN livetv_catchup_watch.counted=0 THEN livetv_catchup_watch.view_count+1 ELSE livetv_catchup_watch.view_count END, counted=1`, 1, 1)
+	case state.ReachedWatchedThreshold(offset, dur):
+		return a.upsert(ctx, h.s, 0, `offset_ms=0, view_count=CASE WHEN livetv_catchup_watch.counted=0 THEN livetv_catchup_watch.view_count+1 ELSE livetv_catchup_watch.view_count END, counted=1`, 1, 1, true)
 	case state.NotStarted(offset, dur, resumeAfter):
 		if st != "stopped" {
 			return nil
 		}
-		return catchUpExec(ctx, h.s, `UPDATE livetv_catchup_watch SET offset_ms=0, last_viewed_ms=? WHERE user_id=? AND programme_id=?`, a.now, u.ID, a.programme)
+		return catchUpExec(ctx, h.s, `UPDATE livetv_catchup_watch SET offset_ms=0, last_viewed_ms=?, watch_at_ms=? WHERE user_id=? AND programme_id=?`, a.now, a.now, u.ID, a.programme)
 	default:
-		return a.upsert(ctx, h.s, offset, `offset_ms=excluded.offset_ms, counted=0`, 0, 0)
+		return a.upsert(ctx, h.s, offset, `offset_ms=excluded.offset_ms, counted=0`, 0, 0, true)
 	}
 }
 
@@ -91,9 +94,9 @@ func (h liveTVHost) CatchUpSetWatched(ctx context.Context, u *frontend.Viewer, i
 		return err
 	}
 	if watched {
-		return a.upsert(ctx, h.s, 0, `offset_ms=0, view_count=livetv_catchup_watch.view_count+1, counted=1`, 1, 1)
+		return a.upsert(ctx, h.s, 0, `offset_ms=0, view_count=livetv_catchup_watch.view_count+1, counted=1`, 1, 1, true)
 	}
-	return catchUpExec(ctx, h.s, `UPDATE livetv_catchup_watch SET offset_ms=0, view_count=0, counted=0 WHERE user_id=? AND programme_id=?`, u.ID, a.programme)
+	return a.upsert(ctx, h.s, 0, `offset_ms=0, view_count=0, counted=0`, 0, 0, false)
 }
 
 // catchUpAiring is the airing a write names, resolved through CatchUpItem so
@@ -127,12 +130,17 @@ func (h liveTVHost) catchUpAiring(ctx context.Context, u *frontend.Viewer, id st
 
 // upsert writes the airing's row: a new row gets offset, views and counted as
 // given; an existing one gets set (which may read its own columns).
-func (a catchUpAiring) upsert(ctx context.Context, s *Service, offset time.Duration, set string, views, counted int) error {
-	return catchUpExec(ctx, s, `INSERT INTO livetv_catchup_watch(user_id,programme_id,guide_source,guide_id,start_ms,offset_ms,view_count,counted,last_viewed_ms)
-		VALUES(?,?,?,?,?,?,?,?,?)
+func (a catchUpAiring) upsert(ctx context.Context, s *Service, offset time.Duration, set string, views, counted int, viewed bool) error {
+	var lastViewed int64
+	if viewed {
+		lastViewed = a.now
+		set += ", last_viewed_ms=excluded.last_viewed_ms"
+	}
+	return catchUpExec(ctx, s, `INSERT INTO livetv_catchup_watch(user_id,programme_id,guide_source,guide_id,start_ms,offset_ms,view_count,counted,last_viewed_ms,watch_at_ms)
+		VALUES(?,?,?,?,?,?,?,?,?,?)
 		ON CONFLICT(user_id,programme_id) DO UPDATE SET guide_source=excluded.guide_source, guide_id=excluded.guide_id, start_ms=excluded.start_ms,
-			last_viewed_ms=excluded.last_viewed_ms, `+set,
-		a.user, a.programme, a.source, a.gid, a.start, offset.Milliseconds(), views, counted, a.now)
+			watch_at_ms=excluded.watch_at_ms, `+set,
+		a.user, a.programme, a.source, a.gid, a.start, offset.Milliseconds(), views, counted, lastViewed, a.now)
 }
 
 // catchUpWriteTimeout bounds a watch write that outlives its request.
@@ -183,7 +191,7 @@ func (s *Service) fillCatchUpWatch(ctx context.Context, u *core.User, items []fr
 		for _, id := range batch {
 			args = append(args, id)
 		}
-		rows, err := s.o.DB.QueryContext(ctx, `SELECT programme_id, offset_ms, view_count, last_viewed_ms FROM livetv_catchup_watch
+		rows, err := s.o.DB.QueryContext(ctx, `SELECT programme_id, offset_ms, view_count, last_viewed_ms, favorite, rating FROM livetv_catchup_watch
 			WHERE user_id=? AND programme_id IN (`+strings.TrimSuffix(strings.Repeat("?,", len(batch)), ",")+`)`, args...)
 		if err != nil {
 			return err
@@ -192,7 +200,7 @@ func (s *Service) fillCatchUpWatch(ctx context.Context, u *core.User, items []fr
 			var id string
 			var offsetMS, lastMS int64
 			var w frontend.CatchUpWatch
-			if err := rows.Scan(&id, &offsetMS, &w.ViewCount, &lastMS); err != nil {
+			if err := rows.Scan(&id, &offsetMS, &w.ViewCount, &lastMS, &w.IsFavorite, &w.UserRating); err != nil {
 				rows.Close()
 				return err
 			}

@@ -16,7 +16,7 @@ func TestItemDetailCarriesEstimatedVersionFile(t *testing.T) {
 	viewer := &frontend.Viewer{ID: 1}
 	identity := frontendtest.Identity{ResolveFunc: func(context.Context, string) (*frontend.Viewer, error) { return viewer, nil }}
 	experience := frontendtest.Experience{ItemFunc: func(context.Context, frontend.ItemRequest) (frontend.ItemDetail, error) {
-		return frontend.ItemDetail{Title: frontend.Title{Key: 5, Type: "movie"}, Versions: []frontend.Version{{ID: "private-release", Media: frontend.MediaInfo{Estimated: true, Container: "mkv", Size: 42, Streams: []frontend.StreamInfo{{Type: "video", Width: 1920}}}}}}, nil
+		return frontend.ItemDetail{Title: frontend.Title{Key: 5, Type: "movie"}, Versions: []frontend.Version{{ID: "private-release", Media: frontend.MediaInfo{Estimated: true, Container: "mkv", Size: 42, FileSize: 42, Streams: []frontend.StreamInfo{{Type: "video", Width: 1920}}}}}}, nil
 	}}
 	for _, protocol := range []frontend.Protocol{"jellyfin", "emby"} {
 		var front frontend.Frontend

@@ -3,7 +3,6 @@ package mediabrowser
 import (
 	"net/http"
 	"net/url"
-	"time"
 
 	"github.com/braedonsaunders/ether/internal/frontend"
 	"github.com/braedonsaunders/ether/internal/frontend/kit/ids"
@@ -42,30 +41,6 @@ func (i *instance) completeFileSource(r *http.Request, source map[string]any, ti
 			}
 		}
 		source["MediaStreams"] = i.mediaStreams(tracks)
-	}
-	size, _ := source["Size"].(int64)
-	if size <= 0 {
-		ticks, _ := source["RunTimeTicks"].(int64)
-		if ticks <= 0 {
-			ticks = title.Runtime.Nanoseconds() / 100
-		}
-		if ticks <= 0 {
-			duration := 110 * time.Minute
-			if audio {
-				duration = 4 * time.Minute
-			} else if title.Type == "episode" {
-				duration = 45 * time.Minute
-			}
-			ticks = duration.Nanoseconds() / 100
-		}
-		bitrate, _ := source["Bitrate"].(int)
-		if bitrate <= 0 {
-			bitrate = 5_000_000
-			if audio {
-				bitrate = 192_000
-			}
-		}
-		source["Size"] = int64(float64(ticks) / 1e7 * float64(bitrate) / 8)
 	}
 	if path, _ := source["Path"].(string); path != "" {
 		return

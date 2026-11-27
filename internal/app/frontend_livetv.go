@@ -912,6 +912,24 @@ func (s surfaceLiveTV) CatchUpSetWatched(ctx context.Context, v *frontend.Viewer
 	return h.CatchUpSetWatched(s.withApp(ctx), viewer, id, watched)
 }
 
+func (s surfaceLiveTV) CatchUpPatchUserData(ctx context.Context, v *frontend.Viewer, id string, patch frontend.CatchUpUserDataPatch) error {
+	h, ok := s.host().(interface {
+		CatchUpPatchUserData(context.Context, *frontend.Viewer, string, frontend.CatchUpUserDataPatch, time.Duration) error
+	})
+	if !ok {
+		return core.ErrNotFound
+	}
+	viewer, err := s.viewer(ctx, v)
+	if err != nil {
+		return err
+	}
+	var resumeAfter time.Duration
+	if s.app.state != nil {
+		resumeAfter = s.app.state.ResumeAfter()
+	}
+	return h.CatchUpPatchUserData(s.withApp(ctx), viewer, id, patch, resumeAfter)
+}
+
 func (s surfaceLiveTV) catchUpArtwork(viewer *core.Viewer, item *frontend.CatchUpItem) {
 	p := &item.Programme
 	if s.programmeArtwork != nil {

@@ -7,3 +7,17 @@ import "context"
 type LikesState interface {
 	SetLikes(context.Context, int64, RatingKey, *bool) error
 }
+
+// RatingWithLikes applies a tri-state like to the shared 0–10 rating.
+func RatingWithLikes(rating float64, likes *bool) float64 {
+	switch {
+	case likes == nil:
+		return 0
+	case *likes && rating < 7:
+		return 10
+	case !*likes && (rating == 0 || rating > 3):
+		return 2
+	default:
+		return rating
+	}
+}

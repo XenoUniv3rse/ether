@@ -762,10 +762,25 @@ func estimateVariantInfo(t *core.Title, rel core.Release, wanted []string) core.
 		streams = append(streams, video)
 	}
 	streams = append(streams, audioStreams...)
+	fileSize := int64(0)
+	if len(rel.TorrentFiles) == 1 && !rel.TorrentFiles[0].SizeApproximate {
+		fileSize = rel.TorrentFiles[0].Size
+	} else if rel.Target != nil && rel.Target.FileIndex != nil && rel.Target.Member == "" && rel.Target.MemberIndex == nil {
+		for _, file := range rel.TorrentFiles {
+			if file.Index == *rel.Target.FileIndex && !file.SizeApproximate {
+				fileSize = file.Size
+				break
+			}
+		}
+	} else if rel.Protocol == core.ProtocolTorrent && rel.KnownFileCount() == 1 && len(rel.TorrentFiles) == 0 {
+		fileSize = rel.Size
+	}
+
 	return core.MediaInfo{
 		Container:   container,
 		Duration:    dur,
 		Size:        size,
+		FileSize:    fileSize,
 		BitrateKbps: bitrate,
 		Streams:     streams,
 		Estimated:   true,
