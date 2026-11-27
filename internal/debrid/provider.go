@@ -262,6 +262,7 @@ type Provider interface {
 // ProviderOptions are shared by provider constructors (tests point BaseURL
 // at an httptest server and shorten the polls).
 type ProviderOptions struct {
+	paces        *accountPaces
 	HTTPClient   *http.Client
 	BaseURL      string
 	PollInterval time.Duration // 0 = 500ms
@@ -340,12 +341,14 @@ var kindLabels = map[string]string{
 
 // apiRequest is one provider API call.
 type apiRequest struct {
-	method string
-	path   string
-	query  url.Values
-	form   url.Values // urlencoded body
-	body   io.Reader  // raw body (with contentType)
-	ctype  string
+	retryDelay  *time.Duration
+	torrentHash string
+	method      string
+	path        string
+	query       url.Values
+	form        url.Values // urlencoded body
+	body        io.Reader  // raw body (with contentType)
+	ctype       string
 }
 
 type diagnosticKey struct{}
@@ -465,6 +468,9 @@ func call(ctx context.Context, hc *http.Client, base string, r apiRequest, auth 
 		return 0, nil, sanitize(err)
 	}
 	defer resp.Body.Close()
+	if r.retryDelay != nil {
+		*r.retryDelay, _ = retryafter.Parse(resp.Header.Get("Retry-After"), time.Now(), 0)
+	}
 	data, err := io.ReadAll(io.LimitReader(resp.Body, 32<<20))
 	if err != nil {
 		return resp.StatusCode, nil, sanitize(err)
@@ -540,6 +546,18 @@ type listCache struct {
 }
 
 const listTTL = time.Minute
+
+// known returns a fresh local listing without waiting behind an account refresh.
+func (c *listCache) known(now time.Time, hash string) string {
+	if !c.mu.TryLock() {
+		return ""
+	}
+	defer c.mu.Unlock()
+	if now.Sub(c.at) > listTTL {
+		return ""
+	}
+	return c.byHash[strings.ToLower(hash)]
+}
 
 func (c *listCache) find(ctx context.Context, now time.Time, hash string, load func(context.Context) (map[string]string, error)) (string, error) {
 	c.mu.Lock()

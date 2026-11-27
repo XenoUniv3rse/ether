@@ -643,13 +643,12 @@ func TestRealDebridBlockedReleasesDoNotPauseAdds(t *testing.T) {
 	if _, err := svc.Acquire(t.Context(), good); err != nil {
 		t.Fatalf("next release was prevented from playing: %v", err)
 	}
-	now = now.Add(24 * time.Hour)
 	blocked := good
 	blocked.ID, blocked.InfoHash = h1, h1
 	_, _ = svc.Acquire(t.Context(), blocked)
 	_, _ = svc.QueueDownload(t.Context(), blocked)
 	if remote.addCount(h1) != 1 || remote.addCount(h2) != 1 || remote.addCount(h3) != 1 {
-		t.Fatal("a permanently blocked release was retried")
+		t.Fatal("a remembered provider refusal was retried")
 	}
 }
 
@@ -885,7 +884,6 @@ func TestDebridLinkErrors(t *testing.T) {
 	if !errors.Is(err, ErrAuth) || strings.Contains(err.Error(), "wrong-key-abc") {
 		t.Fatalf("bad key: %v", err)
 	}
-	p := newDebridLink(testKey, fastOpts(srv.URL))
 	for _, c := range []struct {
 		code   string
 		status int
@@ -900,7 +898,7 @@ func TestDebridLinkErrors(t *testing.T) {
 		f.mu.Lock()
 		f.errCode, f.errHTTP = c.code, c.status
 		f.mu.Unlock()
-		_, err := p.Account(ctx)
+		_, err := newDebridLink(testKey, fastOpts(srv.URL)).Account(ctx)
 		if c.want == nil {
 			if err == nil || errors.Is(err, ErrAuth) || errors.Is(err, ErrRateLimited) || errors.Is(err, ErrGone) {
 				t.Errorf("%s: want a transient error, got %v", c.code, err)
@@ -915,15 +913,20 @@ func TestDebridLinkErrors(t *testing.T) {
 	f.mu.Lock()
 	f.errCode, f.errHTTP = "floodDetected", 429
 	f.mu.Unlock()
+	p := newDebridLink(testKey, fastOpts(srv.URL))
 	if _, err := p.Account(ctx); !errors.Is(err, ErrRateLimited) {
 		t.Fatalf("429: %v", err)
+	}
+	bg, _ := core.WithSpeculative(ctx)
+	if _, err := p.Find(bg, testHash); !errors.Is(err, core.ErrBudgetExhausted) {
+		t.Fatalf("account lookup did not yield during cooldown: %v", err)
 	}
 	// An infringing torrent refused at add time is blocked for that
 	// release, like Real-Debrid; it does not pause adds on the account.
 	f.mu.Lock()
 	f.errCode, f.errHTTP = "infringingFile", 451
 	f.mu.Unlock()
-	if _, err := p.Acquire(ctx, acquireReq(true)); !errors.Is(err, ErrBlocked) || errors.Is(err, ErrAddRefused) || !errors.Is(err, core.ErrNotCached) {
+	if _, err := newDebridLink(testKey, fastOpts(srv.URL)).Acquire(ctx, acquireReq(true)); !errors.Is(err, ErrBlocked) || errors.Is(err, ErrAddRefused) || !errors.Is(err, core.ErrNotCached) {
 		t.Fatalf("infringing add: %v", err)
 	}
 }

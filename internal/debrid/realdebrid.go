@@ -33,14 +33,17 @@ const (
 )
 
 type realDebrid struct {
+	pace *accountPacer
 	key  string
 	opts ProviderOptions
 	list listCache
 }
 
 func newRealDebrid(key string, opts ProviderOptions) *realDebrid {
-	return &realDebrid{key: key, opts: opts.withDefaults(realDebridBase)}
+	return &realDebrid{pace: opts.paces.forAccount("realdebrid", key), key: key, opts: opts.withDefaults(realDebridBase)}
 }
+
+func (p *realDebrid) accountPace() *accountPacer { return p.pace }
 
 func (p *realDebrid) Kind() string { return "realdebrid" }
 
@@ -65,6 +68,13 @@ type rdInfo struct {
 }
 
 func (p *realDebrid) do(ctx context.Context, r apiRequest, out any) error {
+	_, err := pacedCall(ctx, p.pace, r, r.path == "/torrents/addMagnet", func(r apiRequest) (struct{}, error) {
+		return struct{}{}, p.request(ctx, r, out)
+	})
+	return err
+}
+
+func (p *realDebrid) request(ctx context.Context, r apiRequest, out any) error {
 	status, body, err := call(ctx, p.opts.HTTPClient, p.opts.BaseURL, r, func(req *http.Request) {
 		req.Header.Set("Authorization", "Bearer "+p.key)
 	})
@@ -136,6 +146,9 @@ func (p *realDebrid) CheckCached(context.Context, []string) (map[string]bool, er
 // Find looks the hash up in the account's most recent torrents
 // (GET /torrents?limit=100).
 func (p *realDebrid) Find(ctx context.Context, hash string) (string, error) {
+	if lowPriority(ctx) {
+		return p.list.known(p.opts.Now(), hash), nil
+	}
 	return p.list.find(ctx, p.opts.Now(), hash, func(ctx context.Context) (map[string]string, error) {
 		var items []struct {
 			ID     string `json:"id"`
@@ -224,6 +237,10 @@ func rdLinkFor(info *rdInfo, fileID string) string {
 }
 
 func (p *realDebrid) Acquire(ctx context.Context, req AcquireRequest) (_ *Acquired, err error) {
+	if p.pace.refused(req.InfoHash) {
+		return nil, ErrBlocked
+	}
+	defer func() { p.pace.rememberRefusal(req.InfoHash, err) }()
 	if req.Private && !req.privateChecked {
 		var perr error
 		req, perr = prepareAcquire(ctx, p, req, false)
@@ -237,7 +254,7 @@ func (p *realDebrid) Acquire(ctx context.Context, req AcquireRequest) (_ *Acquir
 			ID string `json:"id"`
 		}
 		form := url.Values{"magnet": {req.Magnet}}
-		if err := p.do(ctx, apiRequest{method: http.MethodPost, path: "/torrents/addMagnet", form: form}, &out); err != nil {
+		if err := p.do(ctx, apiRequest{method: http.MethodPost, path: "/torrents/addMagnet", form: form, torrentHash: req.InfoHash}, &out); err != nil {
 			return nil, err
 		}
 		if out.ID == "" {
@@ -326,7 +343,11 @@ func (p *realDebrid) Acquire(ctx context.Context, req AcquireRequest) (_ *Acquir
 	return &Acquired{TorrentID: id, File: chosen, Added: added}, nil
 }
 
-func (p *realDebrid) Link(ctx context.Context, h Handle) (DirectLink, error) {
+func (p *realDebrid) Link(ctx context.Context, h Handle) (_ DirectLink, err error) {
+	if p.pace.refused(h.InfoHash) {
+		return DirectLink{}, ErrBlocked
+	}
+	defer func() { p.pace.rememberRefusal(h.InfoHash, err) }()
 	link := h.Link
 	if link == "" {
 		if h.TorrentID == "" {
@@ -365,6 +386,7 @@ func (p *realDebrid) Remove(ctx context.Context, torrentID string) error {
 }
 
 func (p *realDebrid) Account(ctx context.Context) (Account, error) {
+	ctx = core.WithIndexerPurpose(ctx, core.IndexerPurposeTest)
 	var out struct {
 		Username   string `json:"username"`
 		Type       string `json:"type"`

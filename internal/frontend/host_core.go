@@ -239,7 +239,10 @@ func IsExplicitVersionSlotSelector(selector string) bool {
 	return core.IsExplicitVersionSlotSelector(selector)
 }
 
-const IndexerPurposePlayback = core.IndexerPurposePlayback
+const (
+	IndexerPurposePlayback = core.IndexerPurposePlayback
+	IndexerPurposeDetail   = core.IndexerPurposeDetail
+)
 
 // WithIndexerPurpose tags ctx with the indexer usage purpose (for example
 // IndexerPurposePlayback so explicit Play is never gated by discovery shares).

@@ -186,7 +186,7 @@ function StateBadge({ p, s }: { p: DebridProvider; s?: DebridProviderStatus }) {
     case "backoff":
       return (
         <Badge variant="warning">
-          {s.backoffUntil
+          {s.backoffUntil && !s.rateLimitedUntil
             ? t("Paused · retries {time}", { time: relativeTime(s.backoffUntil) })
             : t("Paused")}
         </Badge>
@@ -214,7 +214,12 @@ export function DebridSources({
   const config = useAsync(() => api.getConfig(), []);
   // Live status refreshes on its own; a failed poll leaves the list usable.
   const status = useAsync(() => api.debridStatus().catch(() => null), []);
-  useInterval(() => void status.reload(), 15_000);
+  useInterval(() => void status.reload(), 5_000);
+  const [now, setNow] = useState(Date.now);
+  useInterval(
+    () => setNow(Date.now()),
+    status.data?.providers?.some((p) => p.rateLimitedUntil) ? 1000 : null,
+  );
   const [editing, setEditing] = useState<{ index: number; draft: DebridProvider } | null>(null);
   const [errors, setErrors] = useState<Errors>({});
   const [error, setError] = useState<unknown>(null);
@@ -387,13 +392,28 @@ export function DebridSources({
               const s = live.find((x) => x.id === p.id);
               const label = providerName(p, i);
               const latency = latencySummary(s?.latency);
+              const retrySeconds = s?.rateLimitedUntil
+                ? Math.ceil((Date.parse(s.rateLimitedUntil) - Math.max(now, Date.now())) / 1000)
+                : 0;
               const details: ReactNode = (
                 <>
                   {[role(i), ...(s ? activity(s) : [])].join(" · ")}
                   {latency ? <span className="block tabular-nums">{latency}</span> : null}
-                  {s?.lastError ? (
+                  {retrySeconds > 0 ? (
+                    <span className="block text-danger">
+                      {t("{provider} asked Ether to slow down; retrying in {seconds}s", {
+                        provider: debridKindLabel(p.kind),
+                        seconds: formatNumber(retrySeconds),
+                      })}
+                    </span>
+                  ) : s?.lastError ? (
                     <span className="block truncate text-danger" title={s.lastError}>
                       {s.lastError}
+                    </span>
+                  ) : null}
+                  {p.kind === "realdebrid" && (s?.blocked ?? 0) > 0 ? (
+                    <span className="block">
+                      {t("Real-Debrid refused to serve the blocked files.")}
                     </span>
                   ) : null}
                 </>
@@ -403,7 +423,7 @@ export function DebridSources({
                   name={label}
                   position={i + 1}
                   description={details}
-                  problem={debridFix(p.enabled, s?.state)}
+                  problem={retrySeconds > 0 ? null : debridFix(p.enabled, s?.state)}
                   meta={
                     <>
                       <Badge variant="outline">{debridKindLabel(p.kind)}</Badge>

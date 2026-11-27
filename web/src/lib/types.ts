@@ -293,6 +293,7 @@ export interface DebridProviderStatus {
   state: "ok" | "backoff" | "auth_failed" | "disabled" | string;
   lastError?: string;
   backoffUntil?: string;
+  rateLimitedUntil?: string;
   requests?: number;
   failures?: number;
   cached?: number;
