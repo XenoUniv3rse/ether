@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -423,6 +424,33 @@ type fakeAD struct {
 	mu      sync.Mutex
 	ready   bool
 	deleted []string
+	// held are magnets the account already holds before Ether uploads
+	// (another app's, or one added inside the 60 s list window).
+	held []fakeADMagnet
+	// uploadID is the id an upload answers with: 0 answers with the first
+	// held magnet's id (a fixture assumption about a duplicate upload, not
+	// exercised against AllDebrid), or with a fresh 555 when nothing is held. uploadStatus, when set, is the state
+	// the answered held magnet moves to (a restarted failed one).
+	uploadID, uploadStatus int
+	processing             bool           // the upload answers MAGNET_PROCESSING
+	appear                 []fakeADMagnet // magnets that appear at upload time
+	listBody               string         // raw reply to the account listing, when set
+	uploaded               bool
+	uploads, lists, polls  int
+}
+
+type fakeADMagnet struct {
+	id     int
+	status int
+}
+
+func (f *fakeAD) heldMagnet(id int) *fakeADMagnet {
+	for i := range f.held {
+		if f.held[i].id == id {
+			return &f.held[i]
+		}
+	}
+	return nil
 }
 
 func (f *fakeAD) handler(t *testing.T) http.Handler {
@@ -445,18 +473,59 @@ func (f *fakeAD) handler(t *testing.T) http.Handler {
 		if !strings.Contains(r.PostForm.Get("magnets[]"), testHash) {
 			t.Errorf("upload form %v", r.PostForm)
 		}
-		ok(w, fmt.Sprintf(`{"magnets":[{"magnet":"m","hash":"%s","name":"Movie","size":1,"ready":%v,"id":555}]}`, testHash, f.ready))
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		f.uploads++
+		f.held = append(f.held, f.appear...)
+		if f.processing {
+			fmt.Fprint(w, `{"status":"error","error":{"code":"MAGNET_PROCESSING","message":"Already processing"}}`)
+			return
+		}
+		id := f.uploadID
+		if id == 0 && len(f.held) > 0 {
+			id = f.held[0].id
+		}
+		ready := f.ready
+		if m := f.heldMagnet(id); m != nil {
+			if f.uploadStatus != 0 {
+				m.status = f.uploadStatus
+			}
+			ready = m.status == 4
+		} else {
+			id, f.uploaded = 555, true
+		}
+		ok(w, fmt.Sprintf(`{"magnets":[{"magnet":"m","hash":"%s","name":"Movie","size":1,"ready":%v,"id":%d}]}`, testHash, ready, id))
 	}))
 	mux.HandleFunc("GET /v4.1/magnet/status", auth(func(w http.ResponseWriter, r *http.Request) {
+		f.mu.Lock()
+		defer f.mu.Unlock()
 		code := 1
 		if f.ready {
 			code = 4
 		}
-		if r.URL.Query().Get("id") != "" {
+		if id := r.URL.Query().Get("id"); id != "" {
+			f.polls++
+			n, _ := strconv.Atoi(id)
+			if m := f.heldMagnet(n); m != nil {
+				ok(w, fmt.Sprintf(`{"magnets":{"id":%d,"hash":"%s","statusCode":%d}}`, m.id, testHash, m.status))
+				return
+			}
 			ok(w, fmt.Sprintf(`{"magnets":{"id":555,"hash":"%s","statusCode":%d}}`, testHash, code))
 			return
 		}
-		ok(w, fmt.Sprintf(`{"magnets":[{"id":555,"hash":"%s","statusCode":%d}]}`, testHash, code))
+		f.lists++
+		if f.listBody != "" {
+			fmt.Fprint(w, f.listBody)
+			return
+		}
+		var ms []string
+		for _, m := range f.held {
+			ms = append(ms, fmt.Sprintf(`{"id":%d,"hash":"%s","statusCode":%d}`, m.id, strings.ToUpper(testHash), m.status))
+		}
+		if f.uploaded {
+			ms = append(ms, fmt.Sprintf(`{"id":555,"hash":"%s","statusCode":%d}`, testHash, code))
+		}
+		ok(w, `{"magnets":[`+strings.Join(ms, ",")+`]}`)
 	}))
 	mux.HandleFunc("POST /v4/magnet/files", auth(func(w http.ResponseWriter, r *http.Request) {
 		ok(w, `{"magnets":[{"id":"555","files":[{"n":"Movie.2024","e":[{"n":"Movie.2024.mkv","s":3000000000,"l":"https://alldebrid.com/f/abc"},{"n":"Sample","e":[{"n":"sample.mkv","s":2000,"l":"https://alldebrid.com/f/s"}]}]}]}]}`)
@@ -520,6 +589,229 @@ func TestAllDebridNotReadyIsRemoved(t *testing.T) {
 	}
 	if len(f.deleted) != 1 || f.deleted[0] != "555" {
 		t.Fatalf("deleted %v", f.deleted)
+	}
+}
+
+func adServer(t *testing.T, f *fakeAD) *allDebrid {
+	srv := httptest.NewServer(f.handler(t))
+	t.Cleanup(srv.Close)
+	return newAllDebrid(testKey, fastOpts(srv.URL))
+}
+
+// A live magnet the account already holds for the hash is not Ether's: it
+// is reused without an upload and never deleted, whatever comes of it.
+func TestAllDebridHeldMagnetIsNotOurs(t *testing.T) {
+	failChoose := func([]File) (File, error) { return File{}, core.ErrReleaseRejected }
+	for _, tc := range []struct {
+		name   string
+		status int
+		choose func([]File) (File, error)
+		want   error
+	}{
+		{"still downloading", 1, nil, core.ErrNotCached},
+		{"ready, choice fails", 4, failChoose, core.ErrReleaseRejected},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := &fakeAD{held: []fakeADMagnet{{777, tc.status}}}
+			req := acquireReq(true)
+			if tc.choose != nil {
+				req.Choose = tc.choose
+			}
+			if _, err := adServer(t, f).Acquire(context.Background(), req); !errors.Is(err, tc.want) {
+				t.Fatalf("got %v, want %v", err, tc.want)
+			}
+			if f.uploads != 0 || len(f.deleted) != 0 {
+				t.Fatalf("uploads %d, deleted %v", f.uploads, f.deleted)
+			}
+		})
+	}
+	f := &fakeAD{held: []fakeADMagnet{{777, 4}}}
+	acq, err := adServer(t, f).Acquire(context.Background(), acquireReq(true))
+	if err != nil || acq.TorrentID != "777" || acq.Added || f.uploads != 0 || f.lists != 1 {
+		t.Fatalf("acquire %+v %v, uploads %d, lists %d", acq, err, f.uploads, f.lists)
+	}
+}
+
+// A live match wins over failed ones, and a ready one over one still
+// downloading; a ready match is used without polling it again.
+func TestAllDebridHeldLiveMagnetIsPreferred(t *testing.T) {
+	for name, tc := range map[string]struct {
+		held []fakeADMagnet
+		want string
+	}{
+		"live over failed":       {[]fakeADMagnet{{888, 7}, {777, 4}}, "777"},
+		"ready over downloading": {[]fakeADMagnet{{777, 1}, {778, 4}}, "778"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := &fakeAD{held: tc.held}
+			acq, err := adServer(t, f).Acquire(context.Background(), acquireReq(true))
+			if err != nil || acq.TorrentID != tc.want || acq.Added || f.uploads != 0 || f.polls != 0 || len(f.deleted) != 0 {
+				t.Fatalf("acquire %+v %v, uploads %d, polls %d, deleted %v", acq, err, f.uploads, f.polls, f.deleted)
+			}
+		})
+	}
+}
+
+// A failed magnet for the hash does not block a new upload. The id the
+// upload answers with is Ether's only when it is not one already held.
+func TestAllDebridFailedHeldMagnetIsUploadedAgain(t *testing.T) {
+	t.Run("same id, still failed", func(t *testing.T) {
+		f := &fakeAD{held: []fakeADMagnet{{777, 7}}}
+		if _, err := adServer(t, f).Acquire(context.Background(), acquireReq(true)); !errors.Is(err, core.ErrNotCached) {
+			t.Fatalf("got %v", err)
+		}
+		if f.uploads != 1 || len(f.deleted) != 0 {
+			t.Fatalf("uploads %d, deleted %v", f.uploads, f.deleted)
+		}
+	})
+	t.Run("same id, restarted", func(t *testing.T) {
+		f := &fakeAD{held: []fakeADMagnet{{777, 7}}, uploadStatus: 4}
+		acq, err := adServer(t, f).Acquire(context.Background(), acquireReq(true))
+		if err != nil || acq.TorrentID != "777" || acq.Added || f.uploads != 1 || len(f.deleted) != 0 {
+			t.Fatalf("acquire %+v %v, uploads %d, deleted %v", acq, err, f.uploads, f.deleted)
+		}
+	})
+	t.Run("new id, uncached", func(t *testing.T) {
+		f := &fakeAD{held: []fakeADMagnet{{777, 7}}, uploadID: 555}
+		if _, err := adServer(t, f).Acquire(context.Background(), acquireReq(true)); !errors.Is(err, core.ErrNotCached) {
+			t.Fatalf("got %v", err)
+		}
+		if f.uploads != 1 || len(f.deleted) != 1 || f.deleted[0] != "555" {
+			t.Fatalf("uploads %d, deleted %v", f.uploads, f.deleted)
+		}
+	})
+}
+
+// The 60 s Find cache is not the ownership lookup: a magnet another app
+// added after it was filled is still found and never deleted.
+func TestAllDebridStaleFindCacheDoesNotHideHeldMagnet(t *testing.T) {
+	f := &fakeAD{}
+	p := adServer(t, f)
+	ctx := context.Background()
+	if id, err := p.Find(ctx, testHash); err != nil || id != "" {
+		t.Fatalf("find %q %v", id, err)
+	}
+	f.mu.Lock()
+	f.held = []fakeADMagnet{{777, 1}}
+	f.mu.Unlock()
+	if id, _ := p.Find(ctx, testHash); id != "" {
+		t.Fatalf("find cache not primed: %q", id)
+	}
+	if _, err := p.Acquire(ctx, acquireReq(true)); !errors.Is(err, core.ErrNotCached) {
+		t.Fatalf("got %v", err)
+	}
+	if f.uploads != 0 || len(f.deleted) != 0 {
+		t.Fatalf("uploads %d, deleted %v", f.uploads, f.deleted)
+	}
+}
+
+// MAGNET_PROCESSING (the race between the lookup and the upload) takes
+// only a live match; with none it stays pending.
+func TestAllDebridProcessingTakesOnlyLiveMagnet(t *testing.T) {
+	t.Run("live", func(t *testing.T) {
+		f := &fakeAD{processing: true, appear: []fakeADMagnet{{777, 4}}}
+		acq, err := adServer(t, f).Acquire(context.Background(), acquireReq(true))
+		if err != nil || acq.TorrentID != "777" || acq.Added || f.polls != 0 || len(f.deleted) != 0 {
+			t.Fatalf("acquire %+v %v, polls %d, deleted %v", acq, err, f.polls, f.deleted)
+		}
+	})
+	t.Run("failed only", func(t *testing.T) {
+		f := &fakeAD{processing: true, held: []fakeADMagnet{{888, 7}}}
+		if _, err := adServer(t, f).Acquire(context.Background(), acquireReq(true)); !errors.Is(err, ErrPending) {
+			t.Fatalf("got %v", err)
+		}
+		if f.uploads != 1 || f.polls != 0 || len(f.deleted) != 0 {
+			t.Fatalf("uploads %d, polls %d, deleted %v", f.uploads, f.polls, f.deleted)
+		}
+	})
+}
+
+// A background check that may not add costs no account call at all.
+func TestAllDebridBackgroundCheckDoesNotList(t *testing.T) {
+	f := &fakeAD{held: []fakeADMagnet{{777, 1}}}
+	ctx := core.WithBackgroundBudget(t.Context(), func(context.Context, string, string, int64) error { return nil })
+	if _, err := adServer(t, f).Acquire(ctx, acquireReq(true)); err == nil {
+		t.Fatal("acquire succeeded")
+	}
+	if f.lists != 0 || f.uploads != 0 || f.polls != 0 {
+		t.Fatalf("lists %d, uploads %d, polls %d", f.lists, f.uploads, f.polls)
+	}
+}
+
+// A listing that fails or cannot be fully read leaves the add
+// unattributable: Ether returns the error and does not upload.
+func TestAllDebridLookupFailureDoesNotUpload(t *testing.T) {
+	for name, body := range map[string]string{
+		"error":                `{"status":"error","error":{"code":"GENERIC","message":"down"}}`,
+		"malformed":            `{"status":"success","data":{"magnets":"nope"}}`,
+		"matching hash, no id": `{"status":"success","data":{"magnets":[{"hash":"` + testHash + `","statusCode":1}]}}`,
+		"null data":            `{"status":"success","data":null}`,
+		"null entry":           `{"status":"success","data":{"magnets":[null]}}`,
+		"entry without hash":   `{"status":"success","data":{"magnets":[{"id":777,"statusCode":1}]}}`,
+		"matching, no status":  `{"status":"success","data":{"magnets":[{"id":777,"hash":"` + testHash + `"}]}}`,
+		"object, not a magnet": `{"status":"success","data":{"magnets":{"777":{"id":777,"hash":"` + testHash + `","statusCode":1}}}}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := &fakeAD{listBody: body}
+			if _, err := adServer(t, f).Acquire(context.Background(), acquireReq(true)); err == nil {
+				t.Fatal("acquire succeeded")
+			}
+			if f.uploads != 0 || f.lists == 0 || f.polls != 0 {
+				t.Fatalf("uploads %d, lists %d, polls %d", f.uploads, f.lists, f.polls)
+			}
+		})
+	}
+}
+
+// Only a missing, null, empty array or empty object magnets field is an
+// empty account: the upload runs and the add is Ether's.
+func TestAllDebridEmptyListingUploads(t *testing.T) {
+	for name, data := range map[string]string{
+		"missing": `{}`,
+		"null":    `{"magnets":null}`,
+		"array":   `{"magnets":[]}`,
+		"object":  `{"magnets":{}}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := &fakeAD{ready: true, listBody: `{"status":"success","data":` + data + `}`}
+			acq, err := adServer(t, f).Acquire(context.Background(), acquireReq(false))
+			if err != nil || acq.TorrentID != "555" || !acq.Added || f.uploads != 1 {
+				t.Fatalf("acquire %+v %v, uploads %d", acq, err, f.uploads)
+			}
+		})
+	}
+}
+
+// A held magnet remembered as pending that fails later stays not ours: a
+// retry neither uploads again nor deletes it.
+func TestAllDebridFailedKnownMagnetIsNotUploaded(t *testing.T) {
+	f := &fakeAD{held: []fakeADMagnet{{777, 1}}}
+	p := adServer(t, f)
+	ctx := context.Background()
+	if _, err := p.Acquire(ctx, acquireReq(true)); pendingTorrent(err) != "777" {
+		t.Fatalf("check: %v", err)
+	}
+	f.mu.Lock()
+	f.held[0].status, f.ready = 7, true
+	f.mu.Unlock()
+	if acq, err := p.Acquire(ctx, acquireReq(false)); !errors.Is(err, core.ErrNotCached) {
+		t.Fatalf("got %+v %v", acq, err)
+	}
+	if f.uploads != 0 || len(f.deleted) != 0 {
+		t.Fatalf("uploads %d, deleted %v", f.uploads, f.deleted)
+	}
+}
+
+// A private request for a known id that has failed does not upload.
+func TestAllDebridPrivateFailedKnownMagnetIsNotUploaded(t *testing.T) {
+	f := &fakeAD{held: []fakeADMagnet{{777, 11}}}
+	req := acquireReq(false)
+	req.Private, req.TorrentID = true, "777"
+	if acq, err := adServer(t, f).Acquire(context.Background(), req); err == nil {
+		t.Fatalf("got %+v", acq)
+	}
+	if f.uploads != 0 || len(f.deleted) != 0 {
+		t.Fatalf("uploads %d, deleted %v", f.uploads, f.deleted)
 	}
 }
 
