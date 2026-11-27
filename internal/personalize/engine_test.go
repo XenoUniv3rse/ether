@@ -285,7 +285,8 @@ func TestPreviewMatchesHubs(t *testing.T) {
 		t.Fatalf("section preview head = %v", kindsOf(p.Rows))
 	}
 	for i, r := range p.Rows {
-		if r.HubID == "tv.recentlyadded.2" && !r.Hidden && i < recentlyAddedMinSlot-1 {
+		// Recently Added sits at slot 8 or later; on a shorter page, last.
+		if r.HubID == "tv.recentlyadded.2" && !r.Hidden && i < min(recentlyAddedMinSlot, len(p.Rows))-1 {
 			t.Fatalf("recently added at row %d: %v", i+1, kindsOf(p.Rows))
 		}
 	}
