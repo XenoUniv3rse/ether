@@ -229,6 +229,11 @@ func (r *Runner) do(ctx context.Context, phase string, c Client, s *session, st 
 		port, path = r.basePort, c.SharedPrefix+path
 	}
 	httpClient := r.http
+	if st.ColdLineup {
+		copy := *r.http
+		copy.Timeout = 100 * time.Second
+		httpClient = &copy
+	}
 	if st.Stream != 0 {
 		streamCtx, cancel := context.WithTimeout(ctx, st.Stream)
 		defer cancel()

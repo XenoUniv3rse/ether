@@ -166,7 +166,7 @@ func TestM3ULineupGolden(t *testing.T) {
 			return core.Page{Items: []core.Title{item}, Total: 1}, nil
 		},
 	}
-	response := request(mount(t, host), "/get.php?"+authQuery()+"&type=m3u_plus&output=ts")
+
 	const golden = `#EXTM3U
 #EXTINF:-1 tvg-id="allowed" tvg-logo="" group-title="Live TV",News
 http://ether.test/xtream/live/USER/eg1_test/1.ts
@@ -176,7 +176,89 @@ http://ether.test/xtream/movie/USER/eg1_test/1.mkv
 http://ether.test/xtream/series/USER/eg1_test/2.mkv
 `
 	want := strings.ReplaceAll(golden, "USER", frontend.XtreamUsername("eg1_test"))
-	if response.Code != http.StatusOK || response.Body.String() != want {
-		t.Fatalf("got HTTP %d and lineup:\n%s\nwant:\n%s", response.Code, response.Body, want)
+	check := func(h http.Handler) {
+		t.Helper()
+		response := request(h, "/get.php?"+authQuery()+"&type=m3u_plus&output=ts")
+		if response.Code != http.StatusOK || response.Body.String() != want {
+			t.Fatalf("got HTTP %d and lineup:\n%s\nwant:\n%s", response.Code, response.Body, want)
+		}
+	}
+	check(mount(t, host))
+	host.Identity = lineupTestIdentity{appIdentity: &appIdentity{}}
+	host.CacheDir = t.TempDir()
+	host.PageFreshness = func() frontend.PageFreshness { return frontend.PageFreshness{} }
+	cached := mount(t, host)
+	check(cached)
+	check(cached)
+}
+
+type lineupTestIdentity struct{ *appIdentity }
+
+func (lineupTestIdentity) User(_ context.Context, id int64) (*core.User, error) {
+	return &core.User{ID: id}, nil
+}
+
+type isolatedLineupIdentity struct{ lineupTestIdentity }
+
+func (isolatedLineupIdentity) AuthenticateAppPassword(_ context.Context, username, password string) (*frontend.Viewer, error) {
+	if username == "owner" && password == "owner-test" {
+		return &frontend.Viewer{ID: 1, IsOwner: true}, nil
+	}
+	if username == "restricted" && password == "viewer-test" {
+		return &frontend.Viewer{ID: 2, MaxContentRating: "PG"}, nil
+	}
+	return nil, frontend.ErrUnauthorized
+}
+
+func (isolatedLineupIdentity) User(_ context.Context, id int64) (*core.User, error) {
+	switch id {
+	case 1:
+		return &core.User{ID: 1, IsOwner: true}, nil
+	case 2:
+		return &core.User{ID: 2, MaxContentRating: "PG"}, nil
+	default:
+		return nil, core.ErrNotFound
+	}
+}
+
+func TestM3USnapshotIsolatedByViewerAndRules(t *testing.T) {
+	host, _ := testHost(t)
+	host.Identity = isolatedLineupIdentity{}
+	host.LiveTV = frontendtest.LiveTV{}
+	host.CacheDir = t.TempDir()
+	var policy atomic.Uint64
+	host.PageFreshness = func() frontend.PageFreshness { return frontend.PageFreshness{Safety: policy.Load()} }
+	host.Experience = frontendtest.Experience{
+		ViewsFunc: func(context.Context, *frontend.Viewer) ([]frontend.View, error) {
+			return []frontend.View{{ID: "1", Type: core.TypeMovie}}, nil
+		},
+		LibraryItemsFunc: func(_ context.Context, viewer *core.Viewer, _ core.Device, _ string, _ frontend.ItemQuery) (core.Page, error) {
+			items := []core.Title{{Key: core.MovieKey(8), Type: core.TypeMovie, Title: "Shared"}}
+			if viewer.ID == 1 && policy.Load() == 0 {
+				items = append(items, core.Title{Key: core.MovieKey(9), Type: core.TypeMovie, Title: "Owner-only"})
+			}
+			return core.Page{Items: items, Total: len(items)}, nil
+		},
+	}
+	h := mount(t, host)
+	read := func(query string) string {
+		t.Helper()
+		response := request(h, "/get.php?"+query)
+		if response.Code != http.StatusOK {
+			t.Fatalf("HTTP %d: %s", response.Code, response.Body)
+		}
+		return response.Body.String()
+	}
+	const owner = "username=owner&password=owner-test"
+	const restricted = "username=restricted&password=viewer-test"
+	if body := read(owner); !strings.Contains(body, "Owner-only") || !strings.Contains(body, "/owner/owner-test/") {
+		t.Fatalf("owner lineup: %s", body)
+	}
+	if body := read(restricted); strings.Contains(body, "Owner-only") || strings.Contains(body, "owner-test") || !strings.Contains(body, "/restricted/viewer-test/") {
+		t.Fatalf("restricted lineup: %s", body)
+	}
+	policy.Add(1)
+	if body := read(owner); strings.Contains(body, "Owner-only") {
+		t.Fatalf("lineup retained a title from the previous rules: %s", body)
 	}
 }

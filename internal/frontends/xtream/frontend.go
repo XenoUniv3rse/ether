@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/braedonsaunders/ether/internal/frontend"
+	"github.com/braedonsaunders/ether/internal/frontend/kit/lineup"
 	"github.com/braedonsaunders/ether/internal/frontend/kit/listcache"
 	"github.com/braedonsaunders/ether/internal/frontend/kit/mediasafety"
 	"github.com/braedonsaunders/ether/internal/frontend/kit/reqmemo"
@@ -34,6 +35,7 @@ func (Frontend) Mount(_ context.Context, host frontend.Host) (frontend.Instance,
 		i.exports.Close()
 		return nil, err
 	}
+	i.lineups = i.openLineups()
 	return i, nil
 }
 
@@ -42,6 +44,7 @@ type instance struct {
 	router *route.Router
 	// exports keeps encoded whole-library listings; nil encodes each one.
 	exports *listcache.Store
+	lineups *lineup.Store
 }
 
 func (i *instance) registerRoutes() error {
@@ -108,13 +111,14 @@ func (*instance) Status(context.Context) frontend.Status {
 	return frontend.Status{TargetVersion: "Xtream", Conformance: "partial"}
 }
 func (i *instance) Close(context.Context) error {
+	i.lineups.Close()
 	i.exports.Close()
 	return nil
 }
 func (i *instance) Routes() []route.Route { return i.router.Routes() }
 
 // BackgroundBusy counts listing builds and compressions in flight.
-func (i *instance) BackgroundBusy() int { return i.exports.Busy() }
+func (i *instance) BackgroundBusy() int { return i.exports.Busy() + i.lineups.Busy() }
 
 type login struct {
 	viewer             *frontend.Viewer

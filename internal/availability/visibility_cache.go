@@ -118,3 +118,10 @@ func (s *Service) JudgedOnFacts(ctx context.Context) func(core.Title) bool {
 		return !snap.upcomingMovie(t) && evidenceWindow(t, snap.now, snap.availability)
 	}
 }
+
+// VisibilityGeneration changes when playable evidence is invalidated.
+func (s *Service) VisibilityGeneration() uint64 {
+	s.visibilityMu.Lock()
+	defer s.visibilityMu.Unlock()
+	return s.visibilityRevision
+}

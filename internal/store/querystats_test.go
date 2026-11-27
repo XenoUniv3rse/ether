@@ -61,6 +61,9 @@ func TestQueryStatsCountsStatementsRowsAndTransactions(t *testing.T) {
 	if got := stats.Rows(); got != 4 {
 		t.Fatalf("rows = %d, want 4", got)
 	}
+	if got := stats.MaxRows(); got != 3 {
+		t.Fatalf("largest result = %d, want 3", got)
+	}
 	if stats.DBTime() <= 0 {
 		t.Fatal("no driver time recorded")
 	}

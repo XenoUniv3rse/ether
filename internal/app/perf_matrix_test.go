@@ -445,10 +445,19 @@ func runPerfMatrixCase(t *testing.T, ctx context.Context, fixture string, c perf
 	if misses := settleMisses.Load(); misses != 0 {
 		report.AddGap(c.name, "harness", "", "", fmt.Sprintf("background work was still active after %d responses", misses))
 	}
-	byTag, _, err := perfharness.ReadTrace(trace)
+	byTag, background, err := perfharness.ReadTrace(trace)
 	if err != nil {
 		t.Fatal(err)
 	}
+	if os.Getenv("ETHER_PERF_GATE_STEPS") != "" {
+		for _, result := range r.Results() {
+			if record, ok := byTag[result.Tag]; ok {
+				t.Logf("%s / %s: statements=%d rows=%d writes=%d HTTP=%d error=%q",
+					result.Client, result.Step, record.Queries, record.Rows, record.Writes, result.Status, result.Err)
+			}
+		}
+	}
+	report.AddBackground(c.name, background)
 	report.Add(c.name, r.Results(), byTag, cs)
 	report.CheckRoutes(c.name, inventory, r.Results(), byTag, perfMatrixRouteExceptions)
 	t.Logf("recorded %d attempts", len(r.Results()))
