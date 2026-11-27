@@ -15,7 +15,11 @@ var prismCandidateMigrations = map[string]int{
 	"sessions":              11,
 	"sessions_samples":      1,
 	"viewer_policy":         9,
-	"availability":          6,
+	"availability":          7,
+	"availability_gate":     3,
+	"newznab":               9,
+	"newznab_limits":        2,
+	"newznab_usage":         2,
 	"capability_tickets":    1,
 	"capability_headers":    3,
 	"frontend_image_grants": 8,
@@ -80,6 +84,10 @@ func assertPrismCandidateArtifacts(t *testing.T, db *sql.DB) {
 		`SELECT namespace,digest,purpose,source_hash,device FROM capability_tickets`,
 		`SELECT policy_digest FROM availability_releases`,
 		`SELECT policy_digest FROM availability_feed_items`,
+		`SELECT last_new_at FROM availability_feeds`,
+		`SELECT feed_hits FROM newznab_budget`,
+		`SELECT endpoint FROM newznab_api_limits`,
+		`SELECT at,kind,background,count FROM newznab_request_usage`,
 	} {
 		rows, err := db.Query(query)
 		if err != nil {

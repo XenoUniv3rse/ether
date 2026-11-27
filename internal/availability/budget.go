@@ -33,6 +33,8 @@ const (
 // indexerBucket is the availability_budget resource for one indexer.
 func indexerBucket(id string) string { return "indexer:" + id }
 
+func feedPagesBucket(id string) string { return "indexer-feed-pages:" + id }
+
 func (s *Service) budgetContext(ctx context.Context, kind requestKind) context.Context {
 	cfg := s.cfg().Availability
 	feed := kind != verifyCheck
@@ -68,18 +70,29 @@ func (s *Service) budgetContext(ctx context.Context, kind requestKind) context.C
 		sources := s.d.Feeds.FeedSources()
 		if f, ok := sourceByID(sources, source); ok && resource == "hit" {
 			limit := int64(budgets.IndexerAllowance(f.DailyLimit))
+			var headRoom int64
 			if kind != headPoll {
-				left, err := s.headPollsLeft(ctx, budgets, []core.ReleaseFeed{f})
+				var err error
+				headRoom, err = s.headPollsLeft(ctx, budgets, []core.ReleaseFeed{f})
 				if err != nil {
 					return err
 				}
-				limit -= left
 			}
-			if err := s.spend(ctx, indexerBucket(f.ID), n, max(0, limit)); err != nil {
+			if err := s.spend(ctx, indexerBucket(f.ID), n, max(0, limit-headRoom)); err != nil {
 				return err
+			}
+			isFeedPage := f.DailyFeedLimit > 0 && core.IndexerPurpose(ctx) == core.IndexerPurposeFeed
+			if isFeedPage {
+				if err := s.spend(ctx, feedPagesBucket(f.ID), n, max(0, int64(f.DailyFeedLimit)-headRoom)); err != nil {
+					s.refund(ctx, indexerBucket(f.ID), n)
+					return err
+				}
 			}
 			if err := s.spendTotal(ctx, kind, budgets, sources, n); err != nil {
 				s.refund(ctx, indexerBucket(f.ID), n)
+				if isFeedPage {
+					s.refund(ctx, feedPagesBucket(f.ID), n)
+				}
 				return err
 			}
 			return s.pace(ctx, f.ID)
@@ -143,10 +156,9 @@ func pollInterval(f core.ReleaseFeed, budgets config.Availability) time.Duration
 	interval := time.Duration(max(5, budgets.PollMinutes)) * time.Minute
 	polls := budgets.IndexerAllowance(f.DailyLimit) / 2
 	if f.DailyFeedLimit > 0 {
-		// Single-page sources have no gap continuation. Keep some
-		// of the shared discovery allowance for due title lookups.
-		allowance := budgets.IndexerAllowance(f.DailyLimit)
-		polls = min(f.DailyFeedLimit, allowance-max(1, allowance/5))
+		// Head polls use at most half the feed quota, leaving pages for
+		// a gap after downtime or a quota pause.
+		polls = min(f.DailyFeedLimit/2, polls)
 	}
 	if polls > 0 {
 		interval = max(interval, (24*time.Hour+time.Duration(polls)-1)/time.Duration(polls))
@@ -186,6 +198,9 @@ func (s *Service) pageRoom(ctx context.Context, f core.ReleaseFeed, budgets conf
 		return false, err
 	}
 	if s.used(ctx, indexerBucket(f.ID))+own >= int64(budgets.IndexerAllowance(f.DailyLimit)) {
+		return false, nil
+	}
+	if f.DailyFeedLimit > 0 && s.used(ctx, feedPagesBucket(f.ID))+own >= int64(f.DailyFeedLimit) {
 		return false, nil
 	}
 	all, err := s.headPollsLeft(ctx, budgets, s.d.Feeds.FeedSources())

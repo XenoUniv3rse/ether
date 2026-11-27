@@ -64,8 +64,14 @@ func (a *App) buildDiscovery() {
 		ClientIdentifier: plexguid.ClientIdentifier(a.cfg.Get().Plex.ClientIdentifier, a.cfg.Get().Server.MachineIdentifier),
 		PrewarmBytes:     a.cfg.Get().Cache.PrefetchBytes,
 		ManagedWarming:   true,
-		OnAdded:          a.cachefill.Wake,
-		ResumeSchedule:   a.clustered(), // a new leader continues the schedule
+		Availability: func(ctx context.Context, title *core.Title) (bool, bool, error) {
+			if a.availability == nil {
+				return false, false, nil
+			}
+			return a.availability.WatchlistEvidence(ctx, title)
+		},
+		OnAdded:        a.cachefill.Wake,
+		ResumeSchedule: a.clustered(), // a new leader continues the schedule
 		OnAvailable: func(ctx context.Context, userID int64, key core.RatingKey) {
 			warmKey := key
 			if warmKey.Kind() == core.KindEpisode {

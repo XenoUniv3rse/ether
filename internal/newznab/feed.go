@@ -43,7 +43,7 @@ func (m *Manager) FeedSources() []core.ReleaseFeed {
 			ID: c.indexerID(), Name: c.Name(), Generation: hex.EncodeToString(sum[:]), Protocol: cfg.Protocol,
 			Categories: categories, Supported: hasRecentFeed(cfg) && !anime && len(categories) > 0,
 			DailyLimit: c.DailyAPILimit(), PageMax: page, DailyFeedLimit: maxDailyFeedHits,
-			SinglePage: true, AnimeOnly: anime,
+			SinglePage: cfg.UsesBackend(), AnimeOnly: anime,
 		}
 		if !f.Supported {
 			f.Reason = "This source has no recent-release listing; Ether searches it for a title when needed."
@@ -56,9 +56,6 @@ func (m *Manager) FeedSources() []core.ReleaseFeed {
 // Recent fetches one page, charging the same account-wide limits as Search.
 // Caps disambiguate category support before a Newznab feed is read.
 func (m *Manager) Recent(ctx context.Context, id string, offset, limit int) ([]core.Release, error) {
-	if offset > 0 {
-		return nil, nil // one recent page per scheduled poll
-	}
 	for _, c := range m.Clients() {
 		if c.indexerID() != id {
 			continue
@@ -69,9 +66,12 @@ func (m *Manager) Recent(ctx context.Context, id string, offset, limit int) ([]c
 		}
 		ctx = core.WithIndexerPurpose(ctx, core.IndexerPurposeFeed)
 		if cfg.UsesBackend() {
+			if offset > 0 {
+				return nil, nil
+			}
 			return c.backendRecent(ctx)
 		}
-		return c.recent(ctx, limit)
+		return c.recent(ctx, offset, limit)
 	}
 	return nil, fmt.Errorf("release-feed source no longer configured")
 }
@@ -94,7 +94,7 @@ func recentCategories(cfg config.Indexer) []int {
 	return append(append([]int{}, movies...), tv...)
 }
 
-func (c *Client) recent(ctx context.Context, limit int) ([]core.Release, error) {
+func (c *Client) recent(ctx context.Context, offset, limit int) ([]core.Release, error) {
 	cfg := c.Config()
 	caps, err := c.Caps(ctx)
 	if ctx.Err() != nil || errors.Is(err, core.ErrBudgetExhausted) {
@@ -104,9 +104,9 @@ func (c *Client) recent(ctx context.Context, limit int) ([]core.Release, error) 
 	if animeOnly(cfg, caps) || len(cats) == 0 {
 		return nil, nil
 	}
-	q := url.Values{"t": {"search"}, "extended": {"1"}, "limit": {strconv.Itoa(min(100, max(1, limit)))}, "cat": {joinCats(cats)}}
+	q := url.Values{"t": {"search"}, "extended": {"1"}, "limit": {strconv.Itoa(min(100, max(1, limit)))}, "cat": {joinCats(cats)}, "offset": {strconv.Itoa(max(0, offset))}}
 	rs, err := c.doSearch(ctx, q, c.clientIdentity(), config.IdentityMediaAny)
-	if err == nil && len(rs) > 0 {
+	if err == nil && offset == 0 && len(rs) > 0 {
 		c.cachePut(ctx, c.indexerID()+"|feed|"+searchIdentity(cfg), rs)
 	}
 	return rs, err

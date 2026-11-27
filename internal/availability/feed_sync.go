@@ -130,6 +130,16 @@ func (s *Service) syncFeed(parent context.Context, f core.ReleaseFeed, scheduled
 			}
 			return e
 		}
+		if page == 0 && len(releases) < size && !f.SinglePage {
+			// Recent may have loaded caps after FeedSources produced the
+			// descriptor, for example on the first poll after a restart.
+			for _, source := range s.d.Feeds.FeedSources() {
+				if source.ID == f.ID {
+					size = min(size, pageSize(source))
+					break
+				}
+			}
+		}
 		if len(releases) == 0 {
 			// A resumed offset may have moved beyond the end after deletions. Verify
 			// from the head before accepting the end of the feed as coverage.

@@ -36,53 +36,44 @@ func (x *fixture) cycleFor(t *testing.T, d time.Duration) {
 	}
 }
 
-func TestProbeBoundedRetrySchedule(t *testing.T) {
-	anchor := int64(1794441600)
-	end := anchor + int64((30 * 24 * time.Hour).Seconds())
-	if got := nextRetryAfter(anchor, end, anchor-1); got != anchor {
-		t.Fatalf("first search should wait for the release: %d", got)
-	}
-	day := int64((24 * time.Hour).Seconds())
-	if got := nextRetryAfter(anchor, end, anchor+3*day); got != anchor+7*day {
-		t.Fatalf("next long-tail search should be weekly: %d", got)
-	}
+func TestProbeCompletesOnceThenUsesFeed(t *testing.T) {
 	x, searches, _ := probeFixture(t, 0)
-	x.cycleFor(t, 8*time.Hour+time.Minute)
-	if *searches == 0 || *searches > 3 {
-		t.Fatalf("targeted retries did not stay within the early slots: %d", *searches)
+	x.cycleFor(t, time.Minute)
+	if *searches == 0 {
+		t.Fatal("due title did not get a first look")
 	}
 	before := *searches
-	x.cycleFor(t, 15*time.Hour)
+	x.now = x.now.Add(8 * time.Hour)
+	x.cycleFor(t, time.Minute)
 	if *searches != before {
-		t.Fatalf("searched during the overnight backoff: %d", *searches)
-	}
-}
-
-func TestProbeWaitsForAFutureDigitalDate(t *testing.T) {
-	x, searches, _ := probeFixture(t, 10*time.Hour)
-	x.cycleFor(t, 9*time.Hour)
-	if *searches != 0 {
-		t.Fatalf("searched before the digital date: %d", *searches)
-	}
-	x.cycleFor(t, 75*time.Minute)
-	if *searches == 0 {
-		t.Fatal("the digital date did not trigger a search")
+		t.Fatal("completed first look was repeated")
 	}
 }
 
 // A search that timed out backs off for probeRetry; a spent budget stays due.
-func TestProbeTimeoutIsNotRetriedEveryCycle(t *testing.T) {
-	x, searches, fail := probeFixture(t, 0)
-	*fail = context.DeadlineExceeded
-	x.cycleFor(t, 30*time.Minute)
-	if *searches != 1 {
-		t.Fatalf("timed-out search retried %d times in 30 minutes", *searches)
-	}
-
-	y, budgetSearches, budgetFail := probeFixture(t, 0)
-	*budgetFail = core.ErrBudgetExhausted
-	y.cycleFor(t, 3*time.Minute)
-	if *budgetSearches > 1 {
-		t.Fatalf("budget-denied title retried before the reset: %d", *budgetSearches)
+func TestProbeRetriesIncompleteFirstLookOnce(t *testing.T) {
+	for _, failure := range []error{context.DeadlineExceeded, core.ErrBudgetExhausted} {
+		t.Run(failure.Error(), func(t *testing.T) {
+			x, searches, answer := probeFixture(t, 0)
+			*answer = failure
+			x.cycleFor(t, time.Minute)
+			first := *searches
+			row, err := x.s.titleCheck(t.Context(), core.MovieKey(1))
+			if err != nil || row.next.IsZero() || first == 0 {
+				t.Fatalf("first look did not queue its retry: %+v %v", row, err)
+			}
+			x.now = row.next
+			x.cycleFor(t, time.Minute)
+			second := *searches
+			row, err = x.s.titleCheck(t.Context(), core.MovieKey(1))
+			if err != nil || !row.next.IsZero() || second <= first {
+				t.Fatalf("first look was not settled after retry: %+v %v", row, err)
+			}
+			x.now = x.now.Add(3 * time.Hour)
+			x.cycleFor(t, time.Minute)
+			if *searches != second {
+				t.Fatal("asked again after the one retry")
+			}
+		})
 	}
 }

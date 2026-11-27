@@ -91,7 +91,7 @@ func TestBackgroundCannotConsumeTinyForegroundReserve(t *testing.T) {
 	}
 }
 
-func TestRecentReadsOnlyTheScheduledPage(t *testing.T) {
+func TestRecentCanResumeAtAnOlderPage(t *testing.T) {
 	var polls atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Query().Get("t") == "caps" {
@@ -111,7 +111,7 @@ func TestRecentReadsOnlyTheScheduledPage(t *testing.T) {
 		t.Fatal(err)
 	}
 	before := polls.Load()
-	if _, err := m.Recent(t.Context(), cfg.ID, 100, 100); err != nil || polls.Load() != before {
-		t.Fatalf("page request went past the scheduled head: %v", err)
+	if _, err := m.Recent(t.Context(), cfg.ID, 100, 100); err != nil || polls.Load() <= before {
+		t.Fatalf("gap page did not reach the source: %v", err)
 	}
 }

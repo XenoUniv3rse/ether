@@ -135,6 +135,7 @@ func (p *searchPreparation) pumpLocked() {
 	if channelAvailabilityCheck(p.ctx) {
 		return
 	}
+	background := core.SpeculativeIndexerWork(p.ctx) || core.IsBackgroundCheck(p.ctx)
 	if p.closed {
 		return
 	}
@@ -162,7 +163,7 @@ func (p *searchPreparation) pumpLocked() {
 		if active >= 4 || len(p.byID) >= limit {
 			break
 		}
-		if c.rel.OpensOnDemand() || (spendsGrab(c.rel) && !core.SpeculativeGrabsAllowed(p.ctx)) {
+		if c.rel.OpensOnDemand() || (spendsGrab(c.rel) && background && !core.SpeculativeGrabsAllowed(p.ctx)) {
 			// Each open makes the add-on fetch the release: ranked
 			// validation opens it, alone, if it is reached (ondemand.go).
 			continue
@@ -195,10 +196,9 @@ func (p *searchPreparation) pumpLocked() {
 		}
 		p.identities[identity] = true
 		p.releases[c.rel.ID] = c.rel
-		spec := core.WithBackgroundBudget(p.ctx, func(ctx context.Context, resource, source string, amount int64) error {
-			return core.SpendBackground(p.ctx, resource, source, amount)
-		})
-		check := p.checks.start(context.WithValue(spec, speculativeHealthKey{}, true), p.svc, c.rel)
+		// A candidate actually attempted during Play spends playback
+		// capacity, even when its check overlaps ongoing discovery.
+		check := p.checks.start(context.WithValue(p.ctx, speculativeHealthKey{}, true), p.svc, c.rel)
 		if !core.IsBackgroundCheck(p.ctx) {
 			check.retrySpeculative = func(ctx context.Context) validation { return p.svc.validateOne(ctx, c.rel) }
 		}

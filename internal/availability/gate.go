@@ -42,31 +42,15 @@ CREATE INDEX availability_title_checks_due ON availability_title_checks(next_che
 func init() {
 	store.RegisterAfter("availability_gate", "availability", "availability_hidden_intervals", "availability_coverage", "availability_checks_retention")
 	store.Register("availability_gate", 1, gateMigration)
+	store.Register("availability_gate", 3, `
+CREATE INDEX availability_gate_title ON availability_gate(rating_key);
+UPDATE availability_title_checks
+SET next_check=0
+WHERE checked_at>0;
+`)
 }
-
-// A feed covers new uploads between increasingly sparse title lookups.
-var retryOffsets = []time.Duration{0, time.Hour, 6 * time.Hour, 24 * time.Hour, 3 * 24 * time.Hour}
 
 const firstLookPriorityBoost = 1_000_000.0
-const weeklyRetry = 7 * 24 * time.Hour
-
-// nextRetryAfter selects the next occurrence of the date-anchored schedule.
-func nextRetryAfter(anchorTS, windowEndTS, nowTS int64) int64 {
-	if anchorTS <= 0 || (windowEndTS > 0 && nowTS >= windowEndTS) {
-		return 0
-	}
-	candidate := anchorTS + ((nowTS-anchorTS)/int64(weeklyRetry.Seconds())+1)*int64(weeklyRetry.Seconds())
-	for _, offset := range retryOffsets {
-		if at := anchorTS + int64(offset.Seconds()); at > nowTS {
-			candidate = at
-			break
-		}
-	}
-	if windowEndTS > 0 && candidate >= windowEndTS {
-		return 0
-	}
-	return candidate
-}
 
 // computeGatePolicy hashes the profile, resolver, provider usability, and feed
 // source generations that govern whether an accepted release opens the gate.
@@ -245,18 +229,24 @@ func (s *Service) isGateOpen(ctx context.Context, policy string, key core.Rating
 }
 
 func (s *Service) openGateKeys(ctx context.Context, policy string, keys []core.RatingKey) map[core.RatingKey]bool {
+	if policy == "" {
+		return nil
+	}
+	return s.gateKeys(ctx, "policy=? AND ", []any{policy}, keys)
+}
+
+func (s *Service) gateKeys(ctx context.Context, filter string, filterArgs []any, keys []core.RatingKey) map[core.RatingKey]bool {
 	out := map[core.RatingKey]bool{}
-	if !s.hasGateTable || policy == "" || len(keys) == 0 {
+	if !s.hasGateTable || len(keys) == 0 {
 		return out
 	}
 	for start := 0; start < len(keys); start += 500 {
 		batch := keys[start:min(start+500, len(keys))]
-		args := make([]any, 0, len(batch)+1)
-		args = append(args, policy)
+		args := slices.Clone(filterArgs)
 		for _, k := range batch {
 			args = append(args, int64(k))
 		}
-		rows, err := s.db.QueryContext(ctx, `SELECT rating_key FROM availability_gate WHERE policy=? AND rating_key IN (`+store.Placeholders(len(batch))+`)`, args...)
+		rows, err := s.db.QueryContext(ctx, `SELECT rating_key FROM availability_gate WHERE `+filter+`rating_key IN (`+store.Placeholders(len(batch))+`)`, args...)
 		if err != nil {
 			continue
 		}
@@ -907,25 +897,11 @@ func (s *Service) seedDueChecks(ctx context.Context, cfg config.Availability) er
 	}
 
 	allKeys := make([]core.RatingKey, len(candidates))
-	var movieKeys []core.RatingKey
 	for i, t := range candidates {
 		allKeys[i] = t.Key
-		if t.Type == core.TypeMovie {
-			movieKeys = append(movieKeys, t.Key)
-		}
 	}
-	open := s.openGateKeys(ctx, gp, allKeys)
+	open := s.gateKeys(ctx, "", nil, allKeys)
 
-	homes := map[core.RatingKey]time.Time{}
-	if len(movieKeys) > 0 {
-		if h, ok := s.d.Catalog.(interface {
-			HomeReleases(context.Context, []core.RatingKey) (map[core.RatingKey]time.Time, error)
-		}); ok {
-			if got, err := h.HomeReleases(ctx, movieKeys); err == nil {
-				homes = got
-			}
-		}
-	}
 	type existingRow struct {
 		checked, next, anchor, windowEnd int64
 		state                            string
@@ -962,13 +938,6 @@ func (s *Service) seedDueChecks(ctx context.Context, cfg config.Availability) er
 		priority  float64
 		state     string
 	}
-	hasFeed := false
-	for _, f := range s.d.Feeds.FeedSources() {
-		if f.Supported && selected(cfg.IndexerIDs, f.ID) {
-			hasFeed = true
-			break
-		}
-	}
 	var updates []upsertRow
 	for _, t := range candidates {
 		if t.Adult || t.Released.IsZero() {
@@ -991,30 +960,9 @@ func (s *Service) seedDueChecks(ctx context.Context, cfg config.Availability) er
 			if windowEndTS <= nowTS {
 				continue
 			}
-			digital := t.HomeReleased
-			if digital.IsZero() {
-				digital = homes[t.Key]
-			}
-			switch {
-			case !digital.IsZero():
-				anchorTS = digital.Unix()
-			case watch[t.Key] || !hasFeed || t.IsAnime():
-				anchorTS = t.Released.Unix()
-			default:
-				// A theatrical date alone does not tell us when a movie
-				// will be uploaded. Let the feed discover ordinary titles.
-				if ex, ok := existing[t.Key]; ok && ex.next != 0 {
-					updates = append(updates, upsertRow{key: t.Key, kind: string(t.Type), checked: ex.checked, windowEnd: windowEndTS})
-				}
-				continue
-			}
+			anchorTS = t.Released.Unix()
 			if watch[t.Key] {
 				basePrio += 1000
-			}
-			if !digital.IsZero() && !digital.After(now) {
-				basePrio += 2000
-			} else if !digital.IsZero() && digital.Sub(now) < 72*time.Hour {
-				basePrio += 800
 			}
 		case core.TypeEpisode:
 			if !showPlayable {
@@ -1036,33 +984,23 @@ func (s *Service) seedDueChecks(ctx context.Context, cfg config.Availability) er
 			continue
 		}
 
-		firstAt := max(nowTS, anchorTS)
-		if nowTS-anchorTS >= int64(time.Hour.Seconds()) {
-			// A cold catalogue joins the ongoing cadence. It does not
-			// replay missed slots by searching its whole backlog at boot.
-			firstAt = nextRetryAfter(anchorTS, windowEndTS, nowTS-1)
-		}
 		ex, seen := existing[t.Key]
-		if !seen {
-			if firstAt != 0 && firstAt < windowEndTS {
-				updates = append(updates, upsertRow{
-					key: t.Key, kind: string(t.Type), next: firstAt,
-					anchor: anchorTS, windowEnd: windowEndTS, priority: basePrio + firstLookPriorityBoost,
-				})
-			}
+		if ex.state == "found" || (ex.checked > 0 && ex.state != "retry") {
 			continue
 		}
+		firstAt := max(nowTS, anchorTS)
 		wantPrio := basePrio
 		if ex.checked == 0 {
 			wantPrio += firstLookPriorityBoost
 		}
 		nextAt, state := ex.next, ex.state
-		if state == "found" || ex.anchor != anchorTS {
-			state, nextAt = "", firstAt
+		if !seen || (ex.checked == 0 && (ex.anchor != anchorTS || nextAt == 0)) {
+			nextAt = firstAt
 		}
-		if nextAt != 0 && (nextAt < anchorTS || nextAt >= windowEndTS) {
-			nextAt = nextRetryAfter(anchorTS, windowEndTS, nowTS-1)
+		if nextAt >= windowEndTS {
+			nextAt = 0
 		}
+
 		if ex.anchor != anchorTS || ex.windowEnd != windowEndTS || ex.next != nextAt || ex.state != state || ex.priority != wantPrio {
 			updates = append(updates, upsertRow{
 				key: t.Key, kind: string(t.Type), checked: ex.checked, next: nextAt,
@@ -1100,7 +1038,9 @@ func (s *Service) seedDueChecks(ctx context.Context, cfg config.Availability) er
 				sb.WriteString("(?,?,?,?,?,?,?,?)")
 				args = append(args, int64(u.key), u.kind, u.checked, u.next, u.anchor, u.windowEnd, u.priority, u.state)
 			}
-			sb.WriteString(` ON CONFLICT(rating_key) DO UPDATE SET kind=excluded.kind,next_check=excluded.next_check,anchor_ts=excluded.anchor_ts,window_end_ts=excluded.window_end_ts,priority=excluded.priority,state=excluded.state`)
+			sb.WriteString(` ON CONFLICT(rating_key) DO UPDATE SET kind=excluded.kind,next_check=excluded.next_check,anchor_ts=excluded.anchor_ts,window_end_ts=excluded.window_end_ts,priority=excluded.priority,state=excluded.state
+ WHERE availability_title_checks.checked_at=excluded.checked_at
+ AND availability_title_checks.state<>'found'`)
 			if _, err := tx.ExecContext(ctx, sb.String(), args...); err != nil {
 				return err
 			}

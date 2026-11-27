@@ -8,6 +8,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/braedonsaunders/ether/internal/config"
 	"github.com/braedonsaunders/ether/internal/core"
 )
 
@@ -28,7 +29,9 @@ func (s *Service) probeDue(ctx context.Context) error {
 
 	now := s.now()
 	nowTS := now.Unix()
-	rows, err := s.db.QueryContext(ctx, `SELECT rating_key,kind,anchor_ts,window_end_ts,priority FROM availability_title_checks WHERE next_check>0 AND next_check<=? ORDER BY priority DESC,next_check ASC LIMIT ?`, nowTS, probeBatch)
+	rows, err := s.db.QueryContext(ctx, `SELECT rating_key,kind,anchor_ts,window_end_ts,priority,state,next_check FROM availability_title_checks AS checks
+ WHERE next_check>0 AND next_check<=? AND state<>'found'
+ AND NOT EXISTS (SELECT 1 FROM availability_gate WHERE rating_key=checks.rating_key) ORDER BY priority DESC,next_check ASC LIMIT ?`, nowTS, probeBatch)
 	if err != nil {
 		return err
 	}
@@ -38,12 +41,14 @@ func (s *Service) probeDue(ctx context.Context) error {
 		anchor    int64
 		windowEnd int64
 		priority  float64
+		state     string
+		next      int64
 	}
 	var due []dueRow
 	for rows.Next() {
 		var k int64
 		var r dueRow
-		if err := rows.Scan(&k, &r.kind, &r.anchor, &r.windowEnd, &r.priority); err != nil {
+		if err := rows.Scan(&k, &r.kind, &r.anchor, &r.windowEnd, &r.priority, &r.state, &r.next); err != nil {
 			rows.Close()
 			return err
 		}
@@ -113,13 +118,30 @@ func (s *Service) probeDue(ctx context.Context) error {
 		}
 		if nowTS < item.anchor || !t.IsReleased(now) {
 			nextAt := max(item.anchor, t.Released.Unix())
-			if nextAt >= item.windowEnd {
+			if item.windowEnd > 0 && nextAt >= item.windowEnd {
 				nextAt = 0
 			}
 			_, _ = s.db.ExecContext(ctx, `UPDATE availability_title_checks SET next_check=? WHERE rating_key=?`, nextAt, int64(item.key))
 			continue
 		}
-		err := s.probeOneDue(ctx, *t, item.anchor, item.windowEnd, basePrio)
+		retry := item.state == "retry"
+		next, state := int64(0), "none"
+		if !retry {
+			next, state = s.now().Add(15*time.Minute).Unix(), "retry"
+		}
+		// Claim the first look before making any request. An interrupted
+		// first look leaves its one retry queued.
+		res, err := s.db.ExecContext(ctx, `UPDATE availability_title_checks AS checks
+ SET checked_at=?,next_check=?,state=? WHERE rating_key=? AND next_check=? AND state=?
+ AND NOT EXISTS (SELECT 1 FROM availability_gate WHERE rating_key=checks.rating_key)`,
+			nowTS, next, state, int64(item.key), item.next, item.state)
+		if err != nil {
+			return err
+		}
+		if claimed, err := res.RowsAffected(); err != nil || claimed == 0 {
+			continue
+		}
+		err = s.probeOneDue(ctx, *t, item.anchor, item.windowEnd, basePrio, retry)
 		if err != nil {
 			if benign(err) {
 				return err
@@ -135,13 +157,10 @@ const (
 	probeBatch = 10
 	// probeSourceTimeout bounds one source's answer to a probe.
 	probeSourceTimeout = 20 * time.Second
-	// probeRetry is when a search an outage cut short is finished.
-	probeRetry = 6 * time.Hour
 )
 
-// probeOneDue searches the selected sources (and search-only addons) for t one
-// at a time in priority order, stopping at the first profile-accepted release.
-func (s *Service) probeOneDue(ctx context.Context, t core.Title, anchorTS, windowEndTS int64, basePrio float64) error {
+// probeOneDue asks one eligible source (or the search-only addon fleet) for t.
+func (s *Service) probeOneDue(ctx context.Context, t core.Title, anchorTS, windowEndTS int64, basePrio float64, retry bool) error {
 	anime := t.IsAnime()
 	if t.Type == core.TypeEpisode && t.ShowKey != 0 {
 		if show, err := s.d.Catalog.CachedTitle(ctx, t.ShowKey); err == nil && show != nil {
@@ -196,7 +215,13 @@ func (s *Service) probeOneDue(ctx context.Context, t core.Title, anchorTS, windo
 		case f.AnimeOnly && anime:
 			dedicated = append(dedicated, f)
 		case !f.AnimeOnly:
-			targets = append(targets, f)
+			family := 2000
+			if req.Type == core.TypeEpisode {
+				family = 5000
+			}
+			if len(f.Categories) == 0 || slices.ContainsFunc(f.Categories, func(cat int) bool { return cat/1000*1000 == family }) {
+				targets = append(targets, f)
+			}
 		}
 	}
 	// Support search-only installations (Stremio add-ons, debrid scrapers) that
@@ -205,15 +230,16 @@ func (s *Service) probeOneDue(ctx context.Context, t core.Title, anchorTS, windo
 		targets = []core.ReleaseFeed{{ID: "probe", Name: "probe", Generation: "probe", Supported: true}}
 	}
 
-	// Rotate the small fallback across the catalogue and successive slots.
+	// Spread first looks across eligible sources. Fetch at most one
+	// targeted search per attempt.
 	slot := uint64(max(0, (s.now().Unix()-anchorTS)/3600)) + uint64(t.Key)
-	if len(targets) > 2 {
+	if len(targets) > 1 {
 		first := int(slot % uint64(len(targets)))
-		targets = slices.Concat(targets[first:], targets[:first])[:2]
+		targets = targets[first : first+1]
 	}
 	if len(dedicated) > 0 {
 		source := dedicated[slot%uint64(len(dedicated))]
-		targets = append([]core.ReleaseFeed{source}, targets[:min(1, len(targets))]...)
+		targets = []core.ReleaseFeed{source}
 	}
 	for _, f := range targets {
 		var skip map[string]bool
@@ -265,45 +291,31 @@ func (s *Service) probeOneDue(ctx context.Context, t core.Title, anchorTS, windo
 			if s.isGateOpen(ctx, s.currentGatePolicy(), t.Key) {
 				return s.saveTitleCheckDue(ctx, t.Key, "found", "", 0, basePrio)
 			}
-			// Pre-official-date unverified match: queued in availability_releases
-			// for verification; keep bounded retry active until verified or date passes.
-			nextAt := nextRetryAfter(anchorTS, windowEndTS, s.now().Unix())
-			return s.saveTitleCheckDue(ctx, t.Key, "searching", "", nextAt, basePrio)
+			return s.saveTitleCheckDue(ctx, t.Key, "none", "", 0, basePrio)
 		}
 	}
-	now := s.now()
-	nowTS := now.Unix()
-	nextAt := nextRetryAfter(anchorTS, windowEndTS, nowTS)
-	if failed > 0 {
-		backoff := now.Add(probeRetry).Unix()
-		if nextAt == 0 || backoff > nextAt {
-			if windowEndTS == 0 || backoff < windowEndTS {
-				nextAt = backoff
+	if asked == 0 && (denied > 0 || failed > 0) {
+		nextAt := int64(0)
+		state := "none"
+		if !retry {
+			now := s.now()
+			next := now.Add(15 * time.Minute)
+			if denied > 0 {
+				next = now.UTC().Truncate(24 * time.Hour).Add(24*time.Hour + time.Duration(uint64(t.Key)*2654435761%3600)*time.Second)
+			}
+			if windowEndTS == 0 || next.Unix() < windowEndTS {
+				nextAt, state = next.Unix(), "retry"
 			}
 		}
-	}
-	if denied > 0 {
-		u := now.UTC()
-		reset := time.Date(u.Year(), u.Month(), u.Day()+1, 0, 0, 0, 0, time.UTC).Add(time.Duration(uint64(t.Key)*2654435761%3600) * time.Second).Unix()
-		if nextAt == 0 || reset > nextAt {
-			if windowEndTS == 0 || reset < windowEndTS {
-				nextAt = reset
-			}
-		}
-	}
-	if asked == 0 && failed == 0 && denied > 0 {
-		if err := s.saveTitleCheckDue(ctx, t.Key, "searching", "", nextAt, basePrio); err != nil {
+		if err := s.saveTitleCheckDue(ctx, t.Key, state, "Search could not be completed", nextAt, basePrio); err != nil {
 			return err
 		}
-		return core.ErrBudgetExhausted
+		return nil
 	}
-	switch {
-	case quality != "":
-		return s.saveTitleCheckDue(ctx, t.Key, "quality", quality, nextAt, basePrio)
-	case asked == 0:
-		return s.saveTitleCheckDue(ctx, t.Key, "none", "Search could not be completed", nextAt, basePrio)
+	if quality != "" {
+		return s.saveTitleCheckDue(ctx, t.Key, "quality", quality, 0, basePrio)
 	}
-	return s.saveTitleCheckDue(ctx, t.Key, "none", "", nextAt, basePrio)
+	return s.saveTitleCheckDue(ctx, t.Key, "none", "", 0, basePrio)
 }
 
 func (s *Service) cachedTorrentsWithVerified(ctx context.Context, rs []core.Release) ([]core.Release, map[string]bool) {
@@ -374,7 +386,9 @@ func (s *Service) titleCheck(ctx context.Context, key core.RatingKey) (titleChec
 
 func (s *Service) saveTitleCheckDue(ctx context.Context, key core.RatingKey, state, reason string, nextAt int64, priority float64) error {
 	_, err := s.db.ExecContext(ctx, `INSERT INTO availability_title_checks(rating_key,checked_at,next_check,state,reason,priority) VALUES(?,?,?,?,?,?)
- ON CONFLICT(rating_key) DO UPDATE SET checked_at=excluded.checked_at,next_check=excluded.next_check,state=excluded.state,reason=excluded.reason,priority=excluded.priority`,
+ ON CONFLICT(rating_key) DO UPDATE SET checked_at=excluded.checked_at,next_check=excluded.next_check,state=excluded.state,reason=excluded.reason,priority=excluded.priority
+ WHERE availability_title_checks.state<>'found'
+ AND NOT EXISTS (SELECT 1 FROM availability_gate WHERE rating_key=excluded.rating_key)`,
 		int64(key), s.now().Unix(), nextAt, state, reason, priority)
 	return err
 }
@@ -402,4 +416,39 @@ func (s *Service) acceptDigitalReleases(ctx context.Context, keys []core.RatingK
 			acceptable[k] = true
 		}
 	}
+}
+
+// WatchlistEvidence shares the release monitor's first look across viewers and
+// watchlist providers. Later watchlist passes read the gate locally.
+func (s *Service) WatchlistEvidence(ctx context.Context, title *core.Title) (ready, handled bool, err error) {
+	cfg := s.cfg().Availability
+	kind := hiddenMovies
+	if title.Type == core.TypeEpisode {
+		kind = hiddenShows
+	}
+	if !cfg.Monitor || cfg.ModeFor(kind) != config.ModePlayable || s.d.Search == nil || !s.hasGateTable {
+		return false, false, nil
+	}
+	if s.isGateOpen(ctx, s.currentGatePolicy(), title.Key) {
+		return true, true, nil
+	}
+	now := s.now()
+	if !title.IsReleased(now) {
+		return false, true, nil
+	}
+	anchor := cmp.Or(title.EpisodeAirDate, title.Released)
+	res, err := s.db.ExecContext(ctx, `INSERT INTO availability_title_checks(rating_key,kind,next_check,anchor_ts,priority)
+ SELECT ?,?,?,?,? WHERE NOT EXISTS (SELECT 1 FROM availability_gate WHERE rating_key=?)
+ ON CONFLICT(rating_key) DO NOTHING`, int64(title.Key), string(title.Type), max(now.Unix(), anchor.Unix()),
+		anchor.Unix(), firstLookPriorityBoost+1000+title.Popularity, int64(title.Key))
+	if err != nil {
+		return false, true, err
+	}
+	if inserted, err := res.RowsAffected(); err == nil && inserted > 0 {
+		select {
+		case s.wake <- struct{}{}:
+		default:
+		}
+	}
+	return false, true, nil
 }

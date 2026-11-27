@@ -74,8 +74,7 @@ func releaseSeasonKey(t *core.Title) core.RatingKey {
 	return t.Key.Parent()
 }
 
-// RevealSeason schedules an asynchronous season-level release check for an
-// eligible in-progress regular season, independent of Monitor/Verify toggles.
+// RevealSeason looks for retained episode evidence off the request path.
 func (s *Service) RevealSeason(_ context.Context, seasonKey core.RatingKey) {
 	if s == nil || s.d.Search == nil {
 		return
@@ -83,7 +82,7 @@ func (s *Service) RevealSeason(_ context.Context, seasonKey core.RatingKey) {
 	if seasonKey.Kind() != core.KindSeason {
 		return
 	}
-	s.startSeasonReveal(s.bgCtx, seasonKey, true)
+	s.startSeasonReveal(core.WithCachedIndexerSearch(core.WithUnattendedSearch(s.bgCtx)), seasonKey, true)
 }
 
 func (s *Service) startSeasonReveal(ctx context.Context, seasonKey core.RatingKey, async bool) {
@@ -144,13 +143,18 @@ func (s *Service) runRevealSeason(ctx context.Context, seasonKey core.RatingKey)
 		return
 	}
 	playable := s.playableEpisodeReleases(ctx, episodes)
+	keys := make([]core.RatingKey, len(episodes))
+	for i, ep := range episodes {
+		keys[i] = ep.Key
+	}
+	found := s.gateKeys(ctx, "", nil, keys)
 	releasedCount := 0
 	var unreleased []core.Title
 	for _, ep := range episodes {
 		if ep.Adult || ep.Season <= 0 || ep.Episode <= 0 {
 			continue
 		}
-		if s.episodeReleased(ep, now, playable) {
+		if found[ep.Key] || s.episodeReleased(ep, now, playable) {
 			releasedCount++
 		} else {
 			unreleased = append(unreleased, ep)

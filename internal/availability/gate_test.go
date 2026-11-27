@@ -319,23 +319,6 @@ func TestRetryScheduleDueOrderAndPerTypeModeFor(t *testing.T) {
 		t.Fatalf("per-type ModeFor wrong: movie=%s show=%s ep=%s", cfg.ModeFor("movie"), cfg.ModeFor("show"), cfg.ModeFor("episode"))
 	}
 
-	// 2. Bounded retry cadence steps and window termination.
-	anchor := time.Date(2026, 10, 20, 20, 0, 0, 0, time.UTC).Unix()
-	windowEnd := anchor + int64((72 * time.Hour).Seconds())
-	wantOffsets := []time.Duration{time.Hour, 6 * time.Hour, 24 * time.Hour}
-	cur := anchor
-	for _, off := range wantOffsets {
-		next := nextRetryAfter(anchor, windowEnd, cur)
-		want := anchor + int64(off.Seconds())
-		if next != want {
-			t.Fatalf("after %v: got +%s, want +%s", time.Duration(cur-anchor)*time.Second, time.Duration(next-anchor)*time.Second, off)
-		}
-		cur = next
-	}
-	if got := nextRetryAfter(anchor, windowEnd, cur); got != 0 {
-		t.Fatalf("retry scheduled at/past window end: %d (windowEnd=%d)", got, windowEnd)
-	}
-
 	// 3. Partial index returns due rows in priority DESC, next_check ASC order.
 	x := setup(t)
 	ctx := t.Context()

@@ -289,10 +289,8 @@ func (s *Service) Prune(ctx context.Context) (int64, error) {
 		}
 		total += n
 	}
-	checksCutoff := s.now().Add(-90 * 24 * time.Hour).Unix()
-	n, err := store.PruneBatched(ctx, s.db, `DELETE FROM availability_title_checks WHERE rating_key IN (SELECT rating_key FROM availability_title_checks WHERE next_check=0 AND checked_at>0 AND checked_at<? ORDER BY checked_at LIMIT ?)`, checksCutoff)
-	total += n
-	return total, err
+	// First-look completion is durable. Pruning it would queue old titles again.
+	return total, nil
 }
 
 func (s *Service) prune(ctx context.Context) error {
