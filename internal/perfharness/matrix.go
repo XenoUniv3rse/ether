@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -201,11 +202,19 @@ func discoverMatrixStremioStream(vars map[string]string, body []byte) {
 func discoverMatrixID(variable string) func(map[string]string, []byte) {
 	return func(vars map[string]string, body []byte) {
 		var item struct {
-			ID string `json:"id"`
+			ID json.RawMessage `json:"id"`
 		}
-		if json.Unmarshal(body, &item) == nil && item.ID != "" {
-			setOnce(vars, variable, url.PathEscape(item.ID))
+		if json.Unmarshal(body, &item) != nil {
+			return
 		}
+		var id string
+		if err := json.Unmarshal(item.ID, &id); err != nil {
+			var number int64
+			if json.Unmarshal(item.ID, &number) == nil && number > 0 {
+				id = strconv.FormatInt(number, 10)
+			}
+		}
+		setOnce(vars, variable, url.PathEscape(id))
 	}
 }
 
