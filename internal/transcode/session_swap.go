@@ -195,6 +195,8 @@ func (s *Session) swapInput(ctx context.Context, inputURL string, info core.Medi
 		s.textSubtitleStreams = nil // The durable source identity belongs to the original input.
 		s.textSubtitleSource = ""
 		s.healTimestamps = false // clock evidence belongs to the sampled input
+		s.adaptiveCopyAligned = false
+		s.adaptiveCopyDecodeLead = 0
 		// SwapInput has no replacement-credential parameter. Never carry an
 		// old provider's credentials onto an independently resolved URL.
 		s.inputHeaders = nil

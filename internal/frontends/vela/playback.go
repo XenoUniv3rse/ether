@@ -22,6 +22,9 @@ import (
 )
 
 type client struct {
+	Features struct {
+		AdaptiveHLS bool `json:"adaptiveHLS,omitempty"`
+	} `json:"features,omitempty,omitzero"`
 	OriginalPlayback *frontend.OriginalPlaybackCapabilities `json:"originalPlayback,omitempty"`
 	Device           device                                 `json:"device"`
 	ProtocolVersions []int                                  `json:"protocolVersions"`
@@ -345,13 +348,13 @@ func (i *instance) playback(w http.ResponseWriter, r *http.Request) {
 		plan.Media = *s.Media
 	}
 	audioOnly := b.ChannelID == "" && plan.Media.Video() == nil && plan.Media.HasPlayableMedia()
-	format, transport, mime := playbackTransport(plan, audioOnly, b.Client.HLS || b.Client.MSE)
+	format, transport, mime := playbackTransport(plan, audioOnly, b.Client)
 	if format == "" {
 		_ = i.host.Sessions.Stop(r.Context(), i.access(r, v), s.ID)
 		problem(w, 422, "decoder", "unsupported_transport")
 		return
 	}
-	url, e := i.host.Sessions.StartStream(r.Context(), i.access(r, v), s.ID, frontend.StreamRequest{Format: format, Position: pos, LazyStart: true, Continuous: true})
+	url, e := i.host.Sessions.StartStream(r.Context(), i.access(r, v), s.ID, frontend.StreamRequest{Format: format, Position: pos, LazyStart: true, Continuous: true, AdaptiveHLS: b.Client.Features.AdaptiveHLS})
 	if e != nil {
 		_ = i.host.Sessions.Stop(r.Context(), i.access(r, v), s.ID)
 		i.failFor(w, v, e, r)
@@ -359,6 +362,9 @@ func (i *instance) playback(w http.ResponseWriter, r *http.Request) {
 	}
 	kind := "direct"
 	if plan.Decision.Kind == frontend.DecisionRemux {
+		kind = "remux"
+	}
+	if format == frontend.StreamHLS && plan.Decision.Kind == frontend.DecisionDirectPlay {
 		kind = "remux"
 	}
 	if plan.Decision.Kind == frontend.DecisionTranscode {
@@ -821,7 +827,7 @@ func (i *instance) command(w http.ResponseWriter, r *http.Request) {
 		var url string
 		var err error
 		if !s.port(w, func() {
-			url, err = i.host.Sessions.StartStream(r.Context(), i.access(r, v), id, frontend.StreamRequest{Format: format, Position: origin, LazyStart: true, Continuous: true})
+			url, err = i.host.Sessions.StartStream(r.Context(), i.access(r, v), id, frontend.StreamRequest{Format: format, Position: origin, LazyStart: true, Continuous: true, AdaptiveHLS: s.client.Features.AdaptiveHLS})
 		}) {
 			return
 		}
@@ -834,6 +840,7 @@ func (i *instance) command(w http.ResponseWriter, r *http.Request) {
 				delete(previous, "url")
 				previous["qualities"] = []object{}
 				delete(previous, "initialRenditionId")
+				delete(previous, "adaptive")
 				previous["readiness"] = "on-demand"
 			}
 		}
@@ -894,7 +901,7 @@ func (i *instance) command(w http.ResponseWriter, r *http.Request) {
 			var url string
 			var e error
 			if !s.port(w, func() {
-				url, e = i.host.Sessions.StartStream(r.Context(), i.access(r, v), id, frontend.StreamRequest{Format: frontend.StreamHLS, Position: pos, LazyStart: true, Continuous: true})
+				url, e = i.host.Sessions.StartStream(r.Context(), i.access(r, v), id, frontend.StreamRequest{Format: frontend.StreamHLS, Position: pos, LazyStart: true, Continuous: true, AdaptiveHLS: s.client.Features.AdaptiveHLS})
 			}) {
 				return
 			}
@@ -963,7 +970,7 @@ func (i *instance) command(w http.ResponseWriter, r *http.Request) {
 		var url string
 		var err error
 		if !s.port(w, func() {
-			url, err = i.host.Sessions.StartStream(r.Context(), i.access(r, v), id, frontend.StreamRequest{Format: frontend.StreamHLS, Position: position, LazyStart: true, Continuous: true, AudioStream: audio, SubtitleStream: sub, BurnImageSubtitles: true})
+			url, err = i.host.Sessions.StartStream(r.Context(), i.access(r, v), id, frontend.StreamRequest{Format: frontend.StreamHLS, Position: position, LazyStart: true, Continuous: true, AdaptiveHLS: s.client.Features.AdaptiveHLS, AudioStream: audio, SubtitleStream: sub, BurnImageSubtitles: true})
 		}) {
 			return
 		}
@@ -1090,14 +1097,14 @@ func (i *instance) command(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		audioOnly := plan.Media.Video() == nil && plan.Media.HasPlayableMedia()
-		format, transport, mime := playbackTransport(plan, audioOnly, s.client.HLS || s.client.MSE)
+		format, transport, mime := playbackTransport(plan, audioOnly, s.client)
 		if format == "" {
 			problem(w, 422, "decoder", "unsupported_transport")
 			return
 		}
 		var url string
 		if !s.port(w, func() {
-			url, err = i.host.Sessions.StartStream(r.Context(), i.access(r, v), id, frontend.StreamRequest{Format: format, Position: pos, LazyStart: true, Continuous: true})
+			url, err = i.host.Sessions.StartStream(r.Context(), i.access(r, v), id, frontend.StreamRequest{Format: format, Position: pos, LazyStart: true, Continuous: true, AdaptiveHLS: s.client.Features.AdaptiveHLS})
 		}) {
 			return
 		}
@@ -1107,6 +1114,9 @@ func (i *instance) command(w http.ResponseWriter, r *http.Request) {
 		}
 		kind := "direct"
 		if plan.Decision.Kind == frontend.DecisionRemux {
+			kind = "remux"
+		}
+		if format == frontend.StreamHLS && plan.Decision.Kind == frontend.DecisionDirectPlay {
 			kind = "remux"
 		}
 		if plan.Decision.Kind == frontend.DecisionTranscode {
@@ -1779,7 +1789,11 @@ func sourceMIME(container string) string {
 	return "application/octet-stream"
 }
 
-func playbackTransport(plan frontend.PlayPlan, audioOnly, supportsHLS bool) (frontend.StreamFormat, string, string) {
+func playbackTransport(plan frontend.PlayPlan, audioOnly bool, c client) (frontend.StreamFormat, string, string) {
+	supportsHLS := c.HLS || c.MSE
+	if supportsHLS && c.Features.AdaptiveHLS && !audioOnly && plan.HLS && plan.Decision.Reason != "original_runtime" {
+		return frontend.StreamHLS, "hls", "application/vnd.apple.mpegurl"
+	}
 	if plan.Decision.Kind == frontend.DecisionDirectPlay {
 		if audioOnly {
 			return frontend.StreamDirect, "file", audioSourceMIME(plan.Media.Container, plan.Decision.AudioCodec)

@@ -48,6 +48,10 @@ type HLSRequest struct {
 	// recovery. A new playback start must use a fresh value; empty mints one.
 	MediaGeneration string `json:",omitempty"`
 
+	// AdaptiveHLS lets the player choose variants on the authored timeline.
+	AdaptiveHLS     bool
+	AdaptiveMaxKbps int // peak delivery cap, including audio and mux overhead
+
 	// QualityRungs explicitly requests the lazy, policy-filtered file-session ladder.
 	QualityRungs    bool
 	QualityRungIDs  []string

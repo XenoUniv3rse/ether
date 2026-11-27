@@ -102,6 +102,31 @@ func VelaQualityVariants(info core.MediaInfo, base core.Decision, caps core.Clie
 	return out, limits
 }
 
+// Use the same segmentable audio decision as the base. A copy of an
+// unsupported audio codec can change the mux budget during session startup.
+func adaptiveQualityVariant(info core.MediaInfo, container string, q core.QualityVariant) core.QualityVariant {
+	d := q.Decision
+	d.Container = container
+	if d.AudioStream < 0 {
+		if a := pickAudio(info, -1); a != nil {
+			d.AudioStream = a.Index
+		}
+	}
+	d = segmentableAudio(info, d)
+	if d.AudioCopy && d.AudioCodec == "" {
+		if a := findStream(info, d.AudioStream, "audio"); a != nil {
+			d.AudioCodec = a.Codec
+		}
+	}
+	if q.Rung.VideoBitrate > 0 {
+		d.BitrateKbps = q.Rung.VideoBitrate/1000 + decisionAudioKbps(info, d)
+		q.Rung.AverageBandwidth = d.BitrateKbps * 1000
+		q.Rung.Bandwidth = peakKbps(d.BitrateKbps) * 1000
+	}
+	q.Decision = d
+	return q
+}
+
 func qualityRung(info core.MediaInfo, q core.QualityVariant) rung {
 	return rung{id: q.Rung.ID, decision: q.Decision, width: q.Rung.Width, height: q.Rung.Height, avgKbps: q.Rung.AverageBandwidth / 1000, peakKbps: q.Rung.Bandwidth / 1000, codecs: rungCodecs(info, q.Decision, q.Rung.Height)}
 }

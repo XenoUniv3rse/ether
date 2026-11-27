@@ -1051,13 +1051,33 @@ func (m *Manager) startHLS(ctx context.Context, req core.HLSRequest, life *encod
 	if ValidCopyTimeline(req) {
 		adapt.FastStart, adapt.Governor, adapt.Ladder = false, false, false
 	}
+	req.AdaptiveHLS = req.AdaptiveHLS && proto == core.ProtocolHLS && !req.LiveInput && v != nil
+	if req.AdaptiveHLS {
+		req.LazyStart, req.Continuous = true, true
+		adapt.FastStart, adapt.Governor = false, false
+	}
 	if req.QualityRungs && !videoOff {
 		adapt.Ladder, adapt.LadderUnderCopy = true, true
 	}
+	var basePeak int
+	if req.AdaptiveHLS && req.AdaptiveMaxKbps > 0 && d.EncodesVideo(req.Info) {
+		audio := decisionAudioKbps(req.Info, d)
+		video := qualityPeakVideoKbps(req.AdaptiveMaxKbps, audio)
+		if video >= minRungVideoKbps {
+			d.BitrateKbps = min(decisionTotalKbps(req.Info, d), video+audio)
+			basePeak = req.AdaptiveMaxKbps
+		}
+	}
 	rungs := buildRungs(req.Info, d, adapt)
+	if basePeak > 0 {
+		rungs[0].peakKbps = min(rungs[0].peakKbps, basePeak)
+	}
 	if req.QualityRungs && !videoOff {
 		rungs = rungs[:1]
 		for _, variant := range req.QualityVariants {
+			if req.AdaptiveHLS {
+				variant = adaptiveQualityVariant(req.Info, d.Container, variant)
+			}
 			rungs = append(rungs, qualityRung(req.Info, variant))
 		}
 	}
@@ -1084,6 +1104,11 @@ func (m *Manager) startHLS(ctx context.Context, req core.HLSRequest, life *encod
 			}
 		}
 		rungs = allowed
+	}
+	if req.AdaptiveHLS {
+		for i := range rungs {
+			setAdaptiveHEVCLevel(&rungs[i], v)
+		}
 	}
 	if proto == core.ProtocolHLS && d.Container == ContainerMatroska && len(rungs) > 1 {
 		// Plex's native player probes every rendition's initialization and
@@ -1150,13 +1175,13 @@ func (m *Manager) startHLS(ctx context.Context, req core.HLSRequest, life *encod
 	// Continuous clients rebase their first video presentation packet to zero.
 	// Resolve the true copy origin before authoring the playlist and audio cut.
 	copyOrigin := req.Continuous && req.Info.Duration > 0 && proto == core.ProtocolHLS && d.VideoCopy && v != nil && !req.LiveInput && len(slateData) == 0 && req.Resume == nil && !enhancementSelected(d)
-	copyOpeningEnd := time.Duration(0)
+	var copyStart copyOpening
 	if copyOrigin {
 		scope, err := encoderScopeHeaders(req.InputLease, req.InputURL)
 		if err != nil {
 			return nil, err
 		}
-		measured, next, err := m.continuousCopyOrigin(ctx, runSpec{Input: req.InputURL, InputHeaders: inputHeaders, InputScopeHeaders: scope, Info: req.Info, Start: offset})
+		sample, err := m.continuousCopyOrigin(ctx, runSpec{Input: req.InputURL, InputHeaders: inputHeaders, InputScopeHeaders: scope, Info: req.Info, Start: offset, AdaptiveHLS: req.AdaptiveHLS})
 		if err != nil {
 			// An inconclusive bounded probe must not prevent playback. Keep the
 			// requested clock and the ordinary demuxer/keyframe seek behavior;
@@ -1164,8 +1189,8 @@ func (m *Manager) startHLS(ctx context.Context, req core.HLSRequest, life *encod
 			m.log.Debug("copy presentation origin unavailable; using requested start", "session", req.SessionID, "err", err)
 			copyOrigin = false
 		} else {
-			offset = measured
-			copyOpeningEnd = next
+			offset = sample.origin
+			copyStart = sample
 		}
 	}
 
@@ -1176,8 +1201,8 @@ func (m *Manager) startHLS(ctx context.Context, req core.HLSRequest, life *encod
 	if req.Continuous && proto == core.ProtocolHLS && req.Resume == nil && req.Info.Duration > 0 && !req.LiveInput && v != nil && !enhancementSelected(d) {
 		if !d.VideoCopy {
 			opening = []time.Duration{500 * time.Millisecond, 500 * time.Millisecond, time.Second}
-		} else if copyOpeningEnd > base {
-			opening = []time.Duration{copyOpeningEnd - base}
+		} else if copyStart.next > base {
+			opening = []time.Duration{copyStart.next - base}
 		}
 	}
 	if req.Resume != nil {
@@ -1187,6 +1212,7 @@ func (m *Manager) startHLS(ctx context.Context, req core.HLSRequest, life *encod
 	var tracks int
 	var reps []dashRep
 	var plan *Timeline
+	adaptiveCopyAligned := req.AdaptiveHLS && copyStart.closed && adaptiveCopyIndex(req.Info, base, copyStart.next, segDur)
 	if proto == core.ProtocolDASH {
 		base = 0
 		// Copy DASH cuts video only at source keyframes; build the shared
@@ -1287,7 +1313,7 @@ func (m *Manager) startHLS(ctx context.Context, req core.HLSRequest, life *encod
 			keyframes:       req.Info.Keyframes,
 			base:            base,
 			snap:            d.VideoCopy && len(req.Info.Keyframes) > 0,
-			strictKeyframes: d.AndroidMatroskaHLS && d.Container == ContainerMatroska,
+			strictKeyframes: adaptiveCopyAligned || (d.AndroidMatroskaHLS && d.Container == ContainerMatroska),
 		})
 		total = plan.Total()
 		tracks = len(rungs) // one segment track per rung
@@ -1311,9 +1337,10 @@ func (m *Manager) startHLS(ctx context.Context, req core.HLSRequest, life *encod
 		sampledRamp := offset > 0 && rampBoundary
 		if sample.complete || sampledRamp {
 			req.Info.Keyframes = points
+			adaptiveCopyAligned = req.AdaptiveHLS && copyStart.closed && sample.complete && adaptiveCopyIndex(req.Info, base, copyStart.next, segDur)
 			plan = buildTimeline(plan.span, segDur, timelineOptions{steadyMode: ModeCopy, opening: opening,
 				fastStart: rampBoundary, rampSegs: adapt.RampSegs, rampDur: adapt.RampDur,
-				keyframes: points, base: base, snap: true, strictKeyframes: d.AndroidMatroskaHLS && d.Container == ContainerMatroska && sample.complete})
+				keyframes: points, base: base, snap: true, strictKeyframes: adaptiveCopyAligned || (sample.complete && d.AndroidMatroskaHLS && d.Container == ContainerMatroska)})
 			total = plan.Total()
 		}
 		if len(rungs) > 0 {
@@ -1341,7 +1368,7 @@ func (m *Manager) startHLS(ctx context.Context, req core.HLSRequest, life *encod
 			startSeg = at
 		}
 	}
-	if err := m.admitStartEncoding(ctx, req, life, d.EncodesVideo(req.Info)); err != nil {
+	if err := m.admitStartEncoding(ctx, req, life, !req.AdaptiveHLS && d.EncodesVideo(req.Info)); err != nil {
 		return nil, err
 	}
 
@@ -1370,7 +1397,11 @@ func (m *Manager) startHLS(ctx context.Context, req core.HLSRequest, life *encod
 		archiveInput:            req.ArchiveInput,
 		archiveTrim:             req.ArchiveTrim,
 		openArchiveRange:        req.OpenArchiveRange,
-		serialRungs:             req.QualityRungs,
+		serialRungs:             req.QualityRungs || req.AdaptiveHLS,
+		adaptiveHLS:             req.AdaptiveHLS,
+		adaptiveCopyAligned:     adaptiveCopyAligned,
+		adaptiveCopyDecodeLead:  copyStart.decodeLead,
+		adaptiveMaxKbps:         req.AdaptiveMaxKbps,
 		copyOrigin:              copyOrigin,
 		androidMatroskaHLS:      d.AndroidMatroskaHLS,
 		healTimestamps:          healTimestamps,

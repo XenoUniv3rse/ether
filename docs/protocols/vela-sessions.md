@@ -69,3 +69,29 @@ the new plan with the selected path and advanced source and seek
 generations. `atSeconds` is the absolute title position. If omitted in the
 bitrate form, Ether uses the session's current position. A previously
 prepared rung can retain its timeline origin.
+
+## Adaptive HLS
+
+A Vela client can set `client.features.adaptiveHLS: true` when starting a
+session. Check `features.adaptiveHLS.available` in the server capabilities
+to discover support. When the selected HLS path has `adaptive: true`, give
+its `url` directly to Media3's HLS media source or to AVPlayer. Leave native
+adaptive track selection enabled and do not pin an initial rendition or send
+a `switch` command in response to bandwidth changes. Explicit path switches
+remain available for manual quality choices.
+
+The master uses one muxed audio track across its variants. Every variant has
+its own media playlist and, for fMP4, its own initialization segment. Ether
+uses one segment timeline and forces transcode cuts at that timeline's
+boundaries. A remux can share the master when Ether can establish its
+keyframe grid and the opening GOPs have no leading pictures. The automatic
+variants use the same video codec family, dynamic range, frame rate, and
+audio selection. If fewer than two variants qualify, the path has no
+`adaptive` flag. The viewer and upload ceilings apply when the stream is
+opened. Variant playlists can be read without starting an encoder. The
+first initialization or media GET selects a rung. An idle encoder releases
+its slot and already published segments remain available.
+
+Jellyfin and Emby clients can request this master with
+`EnableAdaptiveBitrateStreaming=true` on PlaybackInfo or their session's
+`master.m3u8` request.

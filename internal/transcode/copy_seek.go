@@ -90,7 +90,7 @@ func copyKeyframeTimes(listing []byte) []time.Duration {
 	for line := range strings.Lines(string(listing)) {
 		f := strings.Split(strings.TrimSpace(line), ",")
 		switch {
-		case len(f) >= 3 && f[0] == "packet" && strings.HasPrefix(f[2], "K"):
+		case len(f) >= 3 && f[0] == "packet" && copyProbeKey(f):
 			if pts, err := strconv.ParseFloat(f[1], 64); err == nil {
 				keys = append(keys, pts)
 			}
@@ -136,11 +136,15 @@ func stopContext(stop <-chan struct{}) (context.Context, context.CancelFunc) {
 // continuousCopyOrigin measures presentation time, not decode time or the
 // requested seek. Bounded packet headers are enough; no frame decoding or
 // whole-title index is needed. A failed proof must not publish a false origin.
-func (m *Manager) continuousCopyOrigin(ctx context.Context, s runSpec) (time.Duration, time.Duration, error) {
+func (m *Manager) continuousCopyOrigin(ctx context.Context, s runSpec) (copyOpening, error) {
 	ctx, cancel := context.WithTimeout(ctx, copyKeyframeProbeTimeout)
 	defer cancel()
-	var measured time.Duration
+	var sample copyOpening
 	haveMeasured := false
+	entries := "packet=pts_time,flags:format=start_time"
+	if s.AdaptiveHLS {
+		entries = "packet=pts_time,dts_time,flags:format=start_time"
+	}
 	for _, window := range copyKeyframeWindows {
 		from := max(0, s.Start-window)
 		args := []string{"-hide_banner", "-v", "error"}
@@ -151,13 +155,13 @@ func (m *Manager) continuousCopyOrigin(ctx context.Context, s runSpec) (time.Dur
 		// later keyframe before the target is not accidentally omitted.
 		args = append(args, "-select_streams", strconv.Itoa(s.Info.Video().Index),
 			"-read_intervals", "+"+secs(from)+"%+"+secs(s.Start-from+window),
-			"-show_entries", "packet=pts_time,flags:format=start_time", "-of", "csv", "-i", s.Input)
+			"-show_entries", entries, "-of", "csv", "-i", s.Input)
 		var out cappedProbeBuffer
 		if err := m.runner.Run(ctx, Command{Path: m.ffprobe, Args: args, Stdout: &out}); err != nil {
 			if haveMeasured {
-				return measured, 0, nil
+				return sample, nil
 			}
-			return 0, 0, errors.New("transcode: cannot prove copy presentation origin")
+			return copyOpening{}, errors.New("transcode: cannot prove copy presentation origin")
 		}
 		if origin, ok := copyKeyframePresentation(out.buf.Bytes(), s.Start); ok {
 			next := time.Duration(0)
@@ -166,20 +170,62 @@ func (m *Manager) continuousCopyOrigin(ctx context.Context, s runSpec) (time.Dur
 					next = k
 				}
 			}
-			measured, haveMeasured = origin, true
+			if s.AdaptiveHLS {
+				sample = inspectCopyOpening(out.buf.Bytes())
+			}
+			sample.origin, sample.next, haveMeasured = origin, next, true
 			if next > 0 {
-				return origin, next, nil
+				return sample, nil
 			}
 		}
 	}
 	if haveMeasured {
-		next := time.Duration(0)
-		if s.Info.Duration > measured && s.Info.Duration-measured <= 20*time.Second {
-			next = s.Info.Duration
+		if s.Info.Duration > sample.origin && s.Info.Duration-sample.origin <= 20*time.Second {
+			sample.next = s.Info.Duration
 		}
-		return measured, next, nil
+		return sample, nil
 	}
-	return 0, 0, errors.New("transcode: no keyframe in bounded copy seek window")
+	return copyOpening{}, errors.New("transcode: no keyframe in bounded copy seek window")
+}
+
+type copyOpening struct {
+	origin, next time.Duration
+	closed       bool
+	decodeLead   time.Duration
+}
+
+func copyProbeKey(fields []string) bool {
+	return len(fields) >= 3 && (strings.HasPrefix(fields[2], "K") ||
+		(len(fields) >= 4 && strings.HasPrefix(fields[3], "K")))
+}
+
+// inspectCopyOpening checks sampled decode order for leading pictures and
+// measures the reorder delay at a random access point.
+func inspectCopyOpening(listing []byte) copyOpening {
+	var key, lead float64
+	keys := 0
+	for line := range strings.Lines(string(listing)) {
+		f := strings.Split(strings.TrimSpace(line), ",")
+		if len(f) < 3 || f[0] != "packet" {
+			continue
+		}
+		pts, err := strconv.ParseFloat(f[1], 64)
+		if err != nil {
+			return copyOpening{}
+		}
+		if copyProbeKey(f) {
+			key = pts
+			keys++
+			if len(f) >= 4 {
+				if dts, err := strconv.ParseFloat(f[2], 64); err == nil && pts-dts <= 1 {
+					lead = max(lead, pts-dts)
+				}
+			}
+		} else if keys > 0 && pts < key {
+			return copyOpening{}
+		}
+	}
+	return copyOpening{closed: keys >= 2, decodeLead: time.Duration(lead * float64(time.Second))}
 }
 
 // Millisecond command precision must not round the keyframe seek backwards

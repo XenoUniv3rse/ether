@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"slices"
+	"sort"
 	"strings"
 	"time"
 
@@ -30,13 +32,14 @@ import (
 
 // rung is one ladder variant.
 type rung struct {
-	id       string
-	decision core.Decision
-	width    int
-	height   int
-	avgKbps  int // average total bitrate
-	peakKbps int
-	codecs   string // RFC 6381, video,audio
+	id        string
+	decision  core.Decision
+	width     int
+	height    int
+	avgKbps   int // average total bitrate
+	peakKbps  int
+	codecs    string // RFC 6381, video,audio
+	hevcLevel int    // HEVC level_idc set in the adaptive encoder output
 }
 
 // ladderSteps are the candidate rungs below the source (id, height,
@@ -310,6 +313,10 @@ func (s *Session) audioTrackLocked() int {
 func (s *Session) Rungs() []core.HLSRung {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.rungsLocked()
+}
+
+func (s *Session) rungsLocked() []core.HLSRung {
 	fr := 0.0
 	if v := s.info.Video(); v != nil {
 		fr = v.FrameRate
@@ -320,13 +327,149 @@ func (s *Session) Rungs() []core.HLSRung {
 		peak := s.rungPeakKbpsLocked(t)
 		video, videoPeak, codec, dr := qualityMetadata(s.info, r)
 
+		frameRate := fr
+		if s.adaptiveHLS && r.decision.H264FrameRate > 0 {
+			frameRate = r.decision.H264FrameRate
+		}
 		out = append(out, core.HLSRung{
 			VideoBitrate: video, PeakVideoBitrate: videoPeak, Codec: codec, DynamicRange: dr,
 			ID: r.id, Bandwidth: peak * 1000, AverageBandwidth: r.avgKbps * 1000,
-			Width: r.width, Height: r.height, Codecs: r.codecs, OutputCodecs: s.outputCodecs[t], OutputAudioChannels: s.outputAudioChannels[t], FrameRate: fr,
+			Width: r.width, Height: r.height, Codecs: r.codecs, OutputCodecs: s.outputCodecs[t], OutputAudioChannels: s.outputAudioChannels[t], FrameRate: frameRate,
 		})
 	}
 	return out
+}
+
+// AdaptiveRungs returns only variants that share a switchable clock and
+// decoder family. The explicit quality menu may include other choices.
+func (s *Session) AdaptiveRungs() []core.HLSRung {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.adaptiveHLS {
+		return nil
+	}
+	out := make([]core.HLSRung, 0, len(s.rungs))
+	if s.closed || len(s.rungs) == 0 {
+		return out
+	}
+	rungs := s.rungsLocked()
+	base := rungs[0]
+	v := s.info.Video()
+	aligned := v != nil && !v.VariableFrameRate && base.FrameRate > 0 && s.plan != nil && s.plan.Total() > 0 && !s.rtxTimeline && !s.copyFallback &&
+		s.sourceLimitKbps == 0 && (s.container == ContainerFMP4 || s.container == ContainerMPEGTS) &&
+		(!s.rungs[0].decision.VideoCopy || s.adaptiveCopyAligned)
+	videoOff := s.videoTranscodingOff()
+	for t, r := range rungs {
+		d := s.rungs[t].decision
+		if r.Bandwidth <= 0 || !s.rungWithinAdaptiveCapLocked(t) ||
+			(videoOff && d.EncodesVideo(s.info)) {
+			continue
+		}
+		if t > 0 {
+			b := s.rungs[0].decision
+			if r.Bandwidth >= base.Bandwidth || r.Codec != base.Codec || r.DynamicRange != base.DynamicRange ||
+				r.FrameRate != base.FrameRate || d.Container != b.Container || d.AudioCodec != b.AudioCodec ||
+				d.AudioStream != b.AudioStream || d.AudioCopy != b.AudioCopy || d.AudioChannels != b.AudioChannels ||
+				d.AudioSampleRate != b.AudioSampleRate || d.AudioBitrateKbps != b.AudioBitrateKbps ||
+				!slices.Equal(d.AudioFilters, b.AudioFilters) || d.SubtitleStream != b.SubtitleStream || d.BurnSubtitles != b.BurnSubtitles {
+				continue
+			}
+		}
+		if d.VideoCopy && v != nil && v.CodecString != "" && !d.StripDolbyVision {
+			_, audio, hasAudio := strings.Cut(r.Codecs, ",")
+			r.Codecs = v.CodecString
+			if hasAudio {
+				r.Codecs += "," + audio
+			}
+		}
+		if r.OutputCodecs != "" {
+			r.Codecs = r.OutputCodecs
+		}
+		out = append(out, r)
+		if !aligned {
+			break
+		}
+	}
+	return out
+}
+
+func (s *Session) rungWithinAdaptiveCapLocked(t int) bool {
+	return !s.adaptiveHLS || s.adaptiveMaxKbps <= 0 || s.rungPeakKbpsLocked(t) <= s.adaptiveMaxKbps
+}
+
+// adaptiveCopyIndex requires a known opening cut and an index reaching the
+// tail. A short probe of a long title is evidence only for the ordinary
+// remux path. A sparse or inaccurate index cannot define an ABR clock.
+func adaptiveCopyIndex(info core.MediaInfo, base, next, segment time.Duration) bool {
+	if next <= base || next-base > 3*segment || info.Duration <= next {
+		return false
+	}
+	keys := info.Keyframes
+	i := sort.Search(len(keys), func(i int) bool { return keys[i].Time >= next-time.Millisecond })
+	if i >= len(keys) || keys[i].Time > next+time.Millisecond {
+		return false
+	}
+	previous := keys[i].Time
+	for _, k := range keys[i+1:] {
+		if k.Time <= previous || k.Time-previous > 3*segment {
+			return false
+		}
+		previous = k.Time
+	}
+	return previous < info.Duration && info.Duration-previous <= 3*segment
+}
+
+// For adaptive HEVC outputs, choose a Main-tier level that fits the coded
+// picture, sample rate and video peak. The encoder applies the same level to
+// its parameter sets. Limits are from ITU-T H.265 Annex A.
+func adaptiveHEVCLevel(r rung, fps float64) int {
+	levels := [...]struct {
+		id, picture, kbps int
+		samples           float64
+	}{
+		{60, 122880, 1500, 3686400},
+		{63, 245760, 3000, 7372800},
+		{90, 552960, 6000, 16588800},
+		{93, 983040, 10000, 33177600},
+		{120, 2228224, 12000, 66846720},
+		{123, 2228224, 20000, 133693440},
+		{150, 8912896, 25000, 267386880},
+		{153, 8912896, 40000, 534773760},
+		{156, 8912896, 60000, 1069547520},
+		{180, 35651584, 60000, 1069547520},
+		{183, 35651584, 120000, 2139095040},
+		{186, 35651584, 240000, 4278190080},
+	}
+	picture := r.width * r.height
+	side := max(r.width, r.height)
+	for _, l := range levels {
+		if picture <= l.picture && side*side <= 8*l.picture && float64(picture)*fps <= l.samples && r.peakKbps <= l.kbps {
+			return l.id
+		}
+	}
+	return 0
+}
+
+func setAdaptiveHEVCLevel(r *rung, v *core.StreamInfo) {
+	if r.decision.VideoCopy || r.decision.VideoCodec != "hevc" || v.FrameRate <= 0 {
+		return
+	}
+	level := adaptiveHEVCLevel(*r, v.FrameRate)
+	if level == 0 {
+		return
+	}
+	r.hevcLevel = level
+	_, audio, hasAudio := strings.Cut(r.codecs, ",")
+	var video string
+	if keepsHDR(v) && !r.decision.ToneMap {
+		video = fmt.Sprintf("hvc1.2.4.L%d.90", level)
+	} else {
+		video = fmt.Sprintf("hvc1.1.6.L%d.90", level)
+	}
+	r.codecs = video
+	if hasAudio {
+		r.codecs += "," + audio
+	}
 }
 
 // hlsPeakWindowLocked is the shortest RFC8216 peak measurement window.
@@ -358,7 +501,7 @@ func (s *Session) ServeRungPlaylist(w http.ResponseWriter, r *http.Request, rung
 	}
 	s.mu.Lock()
 	t := s.rungTrack(rungID)
-	if t < 0 || s.closed {
+	if t < 0 || s.closed || !s.rungWithinAdaptiveCapLocked(t) {
 		s.mu.Unlock()
 		http.NotFound(w, r)
 		return

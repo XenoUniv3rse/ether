@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -171,6 +172,7 @@ func (b *Broker) StartStream(ctx context.Context, a frontend.SessionAccess, id s
 		b.mu.Lock()
 		if live := b.sessions[id]; live != nil {
 			live.format = req.Format
+			live.adaptiveHLS = false
 			live.streamPosition = req.Position
 			if req.Position != s.streamPosition {
 				live.originalPosition = nil
@@ -207,10 +209,14 @@ func (b *Broker) StartStream(ctx context.Context, a frontend.SessionAccess, id s
 	if b.deps.Transcoder == nil {
 		return "", core.ErrNotAvailable
 	}
+	adaptive := req.AdaptiveHLS && req.Format == frontend.StreamHLS && (s.public.Protocol == "vela" || s.public.Protocol == "jellyfin" || s.public.Protocol == "emby")
+	if req.PrepareOnly {
+		adaptive = s.adaptiveHLS
+	}
 	qualityChanged := req.MaxHeight != nil && *req.MaxHeight >= 0 && (req.Format == frontend.StreamHLS || req.Format == frontend.StreamDASH)
 	tracksChanged := req.AudioStream != nil || req.SubtitleStream != nil || qualityChanged
 	reencode := req.ReencodeVideo && s.opts.DirectStream
-	if !tracksChanged && !reencode && (s.format == req.Format || (s.public.Protocol == "vela" && s.format == frontend.StreamDirect && req.Format == frontend.StreamHLS)) && s.streamPosition == req.Position && s.segmentDuration == req.SegmentDuration {
+	if !tracksChanged && !reencode && s.adaptiveHLS == adaptive && (s.format == req.Format || (s.public.Protocol == "vela" && s.format == frontend.StreamDirect && req.Format == frontend.StreamHLS)) && s.streamPosition == req.Position && s.segmentDuration == req.SegmentDuration {
 		if hs, ok := b.transcodeSession(id); ok && hs != nil {
 			var mediaPath string
 			if req.Format == frontend.StreamDASH {
@@ -420,7 +426,39 @@ func (b *Broker) StartStream(ctx context.Context, a frontend.SessionAccess, id s
 			request.QualityRungIDs = append(request.QualityRungIDs, variant.Rung.ID)
 		}
 	}
-	if req.Continuous {
+	if adaptive && ps.Info.Video() != nil {
+		request.AdaptiveHLS = true
+		// The upload allocation is an admission-time ceiling. Budget the
+		// peak of the base rather than the source's average bitrate.
+		demand := 0
+		if s.caps.Remote && dec.VideoCopy {
+			demand = transcode.HLSCopyPeakKbps(ps.Info, req.SegmentDuration)
+		}
+		request.AdaptiveMaxKbps = b.qualityBitrateCap(ctx, s, viewer, demand)
+		request.LazyStart, request.Continuous, request.QualityRungs = true, true, true
+		if (s.allowTranscoding == nil || *s.allowTranscoding) && !b.videoOff(s.caps) {
+			// Media3 and AVPlayer may partition tracks by decoder or HDR mode.
+			// Prefer the base's codec family for automatic rendition switches.
+			caps := s.caps
+			codec := dec.VideoCodec
+			if dec.VideoCopy {
+				codec = ps.Info.Video().Codec
+			}
+			if slices.Contains(caps.VideoCodecs, codec) {
+				caps.VideoCodecs = []string{codec}
+			}
+			variants, _ := b.qualityVariants(ps.Info, dec, s, caps, request.AdaptiveMaxKbps)
+			for _, variant := range variants {
+				if n := slices.Index(request.QualityRungIDs, variant.Rung.ID); n >= 0 {
+					request.QualityVariants[n] = variant
+				} else {
+					request.QualityVariants = append(request.QualityVariants, variant)
+					request.QualityRungIDs = append(request.QualityRungIDs, variant.Rung.ID)
+				}
+			}
+		}
+	}
+	if request.Continuous {
 		// A continuous playback client declares its decoder set. Optional
 		// encoded rungs must also respect its session's transcoding policy.
 		request.LadderVideoCodecs = []string{}
@@ -432,7 +470,7 @@ func (b *Broker) StartStream(ctx context.Context, a frontend.SessionAccess, id s
 		// This viewer's video is never re-encoded: offer the primary rung only.
 		request.LadderVideoCodecs = []string{}
 	}
-	if s.public.Protocol == "jellyfin" && dec.VideoCopy && !s.live {
+	if s.public.Protocol == "jellyfin" && dec.VideoCopy && !s.live && !adaptive {
 		// Jellyfin apps play a copied original alone, as Jellyfin serves it
 		// (owner decision, 0.3.21). Their Media3 players pick the first
 		// variant by an initial bandwidth guess, so they started on the 360p
@@ -498,6 +536,17 @@ func (b *Broker) StartStream(ctx context.Context, a frontend.SessionAccess, id s
 			return "", core.ErrNotAvailable
 		}
 	}
+	if request.AdaptiveHLS {
+		if local, ok := hs.(core.AdaptiveHLSSession); ok {
+			if rungs := local.AdaptiveRungs(); rungs != nil && len(rungs) == 0 {
+				b.transcodeStop(id)
+				return "", &frontend.NoCompatiblePathError{RejectedPaths: []frontend.RejectedPlaybackPath{{Path: string(req.Format), Reasons: []string{"bitrate_limit"}}}}
+			}
+		}
+		if output, ok := hs.(interface{ Decision() core.Decision }); ok {
+			dec = output.Decision()
+		}
+	}
 	httpExt := ""
 	if req.Format == frontend.StreamHTTP {
 		httpExt = httpStreamExt(dec.Container, dec.AudioCodec)
@@ -526,6 +575,7 @@ func (b *Broker) StartStream(ctx context.Context, a frontend.SessionAccess, id s
 		live.httpExt = httpExt
 		live.streamPosition = req.Position
 		live.segmentDuration = req.SegmentDuration
+		live.adaptiveHLS = adaptive
 		if tracksChanged || reencode {
 			live.opts = s.opts
 			live.decision = dec
@@ -1167,8 +1217,25 @@ func (b *Broker) serveMaster(w http.ResponseWriter, r *http.Request, s *brokerSe
 	}
 	var body strings.Builder
 	body.WriteString("#EXTM3U\n")
-	if ls, ok := hs.(core.HLSLadderSession); ok && len(ls.Rungs()) > 1 {
-		for _, rung := range ls.Rungs() {
+	var rungs []core.HLSRung
+	if adaptive, ok := hs.(core.AdaptiveHLSSession); ok && s.adaptiveHLS {
+		rungs = adaptive.AdaptiveRungs()
+		if rungs != nil && len(rungs) == 0 {
+			http.Error(w, "no playable rendition", http.StatusServiceUnavailable)
+			return
+		}
+	} else if ls, ok := hs.(core.HLSLadderSession); ok && s.public.Protocol != "vela" {
+		if all := ls.Rungs(); len(all) > 1 {
+			rungs = all
+		}
+	}
+	if len(rungs) == 1 && rungs[0].ID == "base" && rungs[0].DynamicRange == "dv" {
+		// Single-variant Dolby Vision needs the source profile and optional
+		// supplemental codec declaration emitted by the canonical writer.
+		rungs = nil
+	}
+	if len(rungs) > 0 {
+		for _, rung := range rungs {
 			if !validRung(rung.ID) || rung.Bandwidth <= 0 {
 				continue
 			}
@@ -1184,6 +1251,16 @@ func (b *Broker) serveMaster(w http.ResponseWriter, r *http.Request, s *brokerSe
 			}
 			if rung.FrameRate > 0 {
 				fmt.Fprintf(&body, ",FRAME-RATE=%.3f", rung.FrameRate)
+			}
+			if s.adaptiveHLS {
+				videoRange := "SDR"
+				switch rung.DynamicRange {
+				case "hdr10", "dv":
+					videoRange = "PQ"
+				case "hlg":
+					videoRange = "HLG"
+				}
+				fmt.Fprintf(&body, ",VIDEO-RANGE=%s", videoRange)
 			}
 			fmt.Fprintf(&body, "\n%s/index.m3u8\n", rung.ID)
 		}

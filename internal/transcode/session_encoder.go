@@ -311,7 +311,9 @@ func (s *Session) startRunLocked(seg int, bigProbe bool) error {
 		return errSegmentExhausted
 	}
 
-	s.encoder.decisionEncoding(s.decision.EncodesVideo(s.info))
+	if !s.adaptiveHLS {
+		s.encoder.decisionEncoding(s.decision.EncodesVideo(s.info))
+	}
 	// Keep a delivered rendition alive while a replacement starts at the exact
 	// requested segment. A second switch retires the preceding overlap first.
 	s.stopHandoffLocked()
@@ -448,6 +450,11 @@ func (s *Session) startRunLocked(seg int, bigProbe bool) error {
 		Protocol:             s.proto,
 		FastStart:            rp.fastStart,
 		Rate:                 rp.rate,
+	}
+	if s.adaptiveHLS {
+		spec.AdaptiveHLS = true
+		spec.AdaptiveCopyDecodeLead = s.adaptiveCopyDecodeLead
+		spec.AdaptiveHEVCLevel = s.rungs[s.wantTrack].hevcLevel
 	}
 	if spec.Decision.VideoCodec == s.qsvCodec && spec.Rate.Quality == s.qsvQuality {
 		spec.QSVMode = s.qsvMode
@@ -640,7 +647,30 @@ func (s *Session) startRunLocked(seg int, bigProbe bool) error {
 		r.stderr.add(l)
 		runLog.Debug("ffmpeg", "line", l)
 	}}
-	work, err := s.encoder.runWork(s.decision.EncodesVideo(s.info) || rp.mode != ModeCopy || s.wantTrack != 0)
+	encoding := s.decision.EncodesVideo(s.info) || rp.mode != ModeCopy || s.wantTrack != 0
+	if s.adaptiveHLS {
+		encoding = rp.decision.EncodesVideo(s.info)
+	}
+	if s.adaptiveHLS && encoding {
+		// Reserve under the same manager lock that admits other viewers.
+		// runWork takes over the charge until the process and stop fence drain.
+		s.m.mu.Lock()
+		if s.m.transcodeFullLocked(s.encoder.multiviewGroup, s.id) || s.m.slotViewers.Len() > 0 {
+			s.m.mu.Unlock()
+			return core.ErrStreamLimit
+		}
+		s.encoder.encoding.Store(true)
+		s.m.mu.Unlock()
+		defer func() {
+			s.encoder.encoding.Store(false)
+			if s.encoder.runs.Load() == 0 {
+				s.m.mu.Lock()
+				s.m.notifySlotsLocked()
+				s.m.mu.Unlock()
+			}
+		}()
+	}
+	work, err := s.encoder.runWork(encoding)
 	if err != nil {
 		if ownershipErr := s.startOwnershipLocked(sequence, seg); ownershipErr != nil {
 			return ownershipErr
@@ -802,6 +832,9 @@ func (s *Session) startRunLocked(seg int, bigProbe bool) error {
 		s.decision.Enhancement.Reason = "waiting for enhanced segments from NVEncC/NGX"
 	}
 	s.m.recordVAAPITone(spec.vaapiToneDecision, s.log, &s.vaapiToneLogged)
+	if s.adaptiveHLS {
+		s.adaptiveLastRequest = s.m.now()
+	}
 	s.preparationLocked("encoder-start", r.track)
 	r.proc = proc
 	s.cur = r

@@ -32,6 +32,12 @@ type Session struct {
 	archiveTrim      time.Duration
 	// Explicit quality sessions retire the old run before starting a rung.
 	serialRungs             bool
+	adaptiveHLS             bool
+	adaptiveCopyAligned     bool
+	adaptiveCopyDecodeLead  time.Duration
+	adaptiveMaxKbps         int
+	adaptiveLastRequest     time.Time
+	adaptiveInitRequests    int
 	copyOrigin              bool // continuous copy uses a measured presentation origin
 	diagnosticsEnabled      bool
 	preparation             []core.HLSPreparationEvent

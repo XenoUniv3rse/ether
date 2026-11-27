@@ -128,7 +128,7 @@ func (s *Session) BudgetStatus() (capKbps int, active bool, rungID string) {
 }
 
 func (s *Session) supportsBudgetSteppingLocked() bool {
-	if s.closed || s.liveInput || s.proto != core.ProtocolHLS || len(s.rungs) == 0 {
+	if s.closed || s.adaptiveHLS || s.liveInput || s.proto != core.ProtocolHLS || len(s.rungs) == 0 {
 		return false
 	}
 	if s.videoTranscodingOff() {
