@@ -102,6 +102,12 @@ func (Frontend) Describe() frontend.Descriptor {
 					},
 				},
 				{
+					Key: "trailers",
+					Fields: []frontend.SettingsField{
+						{Key: "trailerPlayback", Kind: "string", Options: []string{trailerPlaybackServer, trailerPlaybackClient}},
+					},
+				},
+				{
 					Key: "liveTV",
 					Fields: []frontend.SettingsField{
 						{Key: "livePreview", Kind: "string", Options: []string{LivePreviewAuto, LivePreviewOnClick, LivePreviewOff}},
@@ -137,6 +143,18 @@ func livePreviewModeFromSettings(settings map[string]any) string {
 		return mode
 	}
 	return LivePreviewAuto
+}
+
+const (
+	trailerPlaybackServer = "server"
+	trailerPlaybackClient = "clientWhenPossible"
+)
+
+func trailerPlaybackMode(settings map[string]any) string {
+	if mode, ok := settings["trailerPlayback"].(string); ok && mode == trailerPlaybackClient {
+		return trailerPlaybackClient
+	}
+	return trailerPlaybackServer
 }
 
 // ValidateSettings keeps the owner setting additive without accepting arbitrary config.
@@ -179,6 +197,11 @@ func (f Frontend) ValidateSettings(s frontend.Settings) error {
 			}
 			if err := validateWordmarkInDB(f.DB, wm); err != nil {
 				return err
+			}
+		case "trailerPlayback":
+			mode, ok := value.(string)
+			if !ok || (mode != trailerPlaybackServer && mode != trailerPlaybackClient) {
+				return errors.New("invalid Vela setting")
 			}
 		case "livePreview":
 			mode, ok := value.(string)
@@ -1105,6 +1128,11 @@ func (i *instance) livePreviewMode() string {
 	return livePreviewModeFromSettings(settings)
 }
 
+func (i *instance) trailerPlaybackMode() string {
+	settings, _ := i.velaSettings()
+	return trailerPlaybackMode(settings)
+}
+
 func (i *instance) signInMethods() SignInMethods {
 	settings, _ := i.velaSettings()
 	return SignInMethodsFromSettings(settings)
@@ -1144,7 +1172,9 @@ func (i *instance) capabilities() object {
 	passwordAvail := auth.Password && methods.Password
 	plexAvail := auth.PlexAccountSignIn && methods.Plex
 	quickAvail := auth.QuickConnect && methods.QuickConnect
-	caps := object{"protocolVersion": 0, "revision": i.capabilitiesRevision(), "compatibleClientBuilds": object{"minInclusive": "0.1.0", "maxExclusive": "0.3.0"}, "server": object{"id": s.MachineID, "name": s.FriendlyName, "version": s.Version}, "features": object{"versions": f(i.versionsAvailable()), "passwordSignIn": f(passwordAvail), "deviceGrant": f(quickAvail && i.host.ViewerPortalURL != nil), "quickConnect": f(quickAvail), "descriptiveSearch": f(descriptive), "unifiedSearch": f(unified), "aiSearch": f(i.aiSearchAvailable()), "proactiveFallback": f(i.proactiveFallbackAvailable()), "liveTV": f(live), "liveEvents": f(i.liveEventsAvailable()), "multiview": object{"available": i.multiviewAvailable(), "maxTiles": frontend.MaxMultiviewTiles}, "livePreview": object{"available": true, "mode": i.livePreviewMode()}, "libraryLive": f(i.host.LibraryLive != nil && i.host.Sessions != nil), "extras": f(i.extrasAvailable()), "initialTrackSelection": f(true), "audioFallback": f(i.audioFallbackAvailable()), "sessionTrackChanges": f(trackChanges), "extraPlayback": f(i.extraPlaybackAvailable()), "trailerPreview": f(i.previewAvailable()), "themeMusic": f(i.themeAvailable()), "playlists": object{"available": i.playlistsAvailable(), "maxEntries": frontend.MaxPlaylistEntries}, "removeFromContinue": f(true), "favoritesList": f(i.favoritesListAvailable()), "lyrics": object{"available": i.lyricsAvailable(), "words": i.lyricsAvailable(), "romanization": i.lyricsAvailable(), "translation": false}, "playContexts": f(i.playContextsAvailable()), "queuedPlayback": object{"available": true, "handoverSeconds": int(frontend.QueuedHandover.Seconds())}, "continuation": f(i.continuationAvailable()), "libraryExperiences": object{"available": true, "experiences": frontend.LibraryExperiences}, "loudness": object{"available": i.host.Loudness != nil, "album": i.host.Loudness != nil, "fades": i.host.Loudness != nil}, "audioQuality": f(true), "historyRecap": object{"available": i.recapAvailable(), "periods": frontend.RecapPeriods}, "duplicates": f(i.duplicatesAvailable()), "playlistImport": i.playlistImportFeature(context.Background()), "mediaClasses": object{"available": true, "classes": []string{string(frontend.MediaClassVideo), string(frontend.MediaClassMusic), string(frontend.MediaClassAudiobook), string(frontend.MediaClassBook), string(frontend.MediaClassPodcast), string(frontend.MediaClassPhoto)}}, "audioPlayback": f(true), "reading": object{"available": i.readingAvailable(), "formats": readingFormats}, "pluginLevels": object{"available": true, "tabRows": true, "childRoles": true, "expandOnOpen": true}}, "searchSorts": []object{{"id": "relevance", "directions": []string{"asc"}}, {"id": "title", "directions": []string{"asc", "desc"}}, {"id": "released", "directions": []string{"asc", "desc"}}, {"id": "added", "directions": []string{"asc", "desc"}}, {"id": "rating", "directions": []string{"asc", "desc"}}, {"id": "popularity", "directions": []string{"asc", "desc"}}}, "searchKinds": []object{{"id": "movie", "label": "Movies"}, {"id": "show", "label": "Shows"}}, "searchLibraries": true, "skins": []object{{"id": "cinematic", "name": "Cinematic"}}, "defaultSkinId": i.appearanceDocument().skinID}
+	trailerMode := i.trailerPlaybackMode()
+	trailerEmbed := object{"available": trailerMode == trailerPlaybackClient, "mode": trailerMode}
+	caps := object{"protocolVersion": 0, "revision": i.capabilitiesRevision(), "compatibleClientBuilds": object{"minInclusive": "0.1.0", "maxExclusive": "0.3.0"}, "server": object{"id": s.MachineID, "name": s.FriendlyName, "version": s.Version}, "features": object{"versions": f(i.versionsAvailable()), "passwordSignIn": f(passwordAvail), "deviceGrant": f(quickAvail && i.host.ViewerPortalURL != nil), "quickConnect": f(quickAvail), "descriptiveSearch": f(descriptive), "unifiedSearch": f(unified), "aiSearch": f(i.aiSearchAvailable()), "proactiveFallback": f(i.proactiveFallbackAvailable()), "liveTV": f(live), "liveEvents": f(i.liveEventsAvailable()), "multiview": object{"available": i.multiviewAvailable(), "maxTiles": frontend.MaxMultiviewTiles}, "livePreview": object{"available": true, "mode": i.livePreviewMode()}, "libraryLive": f(i.host.LibraryLive != nil && i.host.Sessions != nil), "extras": f(i.extrasAvailable()), "initialTrackSelection": f(true), "audioFallback": f(i.audioFallbackAvailable()), "sessionTrackChanges": f(trackChanges), "extraPlayback": f(i.extraPlaybackAvailable()), "trailerPreview": f(i.previewAvailable()), "trailerEmbed": trailerEmbed, "themeMusic": f(i.themeAvailable()), "playlists": object{"available": i.playlistsAvailable(), "maxEntries": frontend.MaxPlaylistEntries}, "removeFromContinue": f(true), "favoritesList": f(i.favoritesListAvailable()), "lyrics": object{"available": i.lyricsAvailable(), "words": i.lyricsAvailable(), "romanization": i.lyricsAvailable(), "translation": false}, "playContexts": f(i.playContextsAvailable()), "queuedPlayback": object{"available": true, "handoverSeconds": int(frontend.QueuedHandover.Seconds())}, "continuation": f(i.continuationAvailable()), "libraryExperiences": object{"available": true, "experiences": frontend.LibraryExperiences}, "loudness": object{"available": i.host.Loudness != nil, "album": i.host.Loudness != nil, "fades": i.host.Loudness != nil}, "audioQuality": f(true), "historyRecap": object{"available": i.recapAvailable(), "periods": frontend.RecapPeriods}, "duplicates": f(i.duplicatesAvailable()), "playlistImport": i.playlistImportFeature(context.Background()), "mediaClasses": object{"available": true, "classes": []string{string(frontend.MediaClassVideo), string(frontend.MediaClassMusic), string(frontend.MediaClassAudiobook), string(frontend.MediaClassBook), string(frontend.MediaClassPodcast), string(frontend.MediaClassPhoto)}}, "audioPlayback": f(true), "reading": object{"available": i.readingAvailable(), "formats": readingFormats}, "pluginLevels": object{"available": true, "tabRows": true, "childRoles": true, "expandOnOpen": true}}, "searchSorts": []object{{"id": "relevance", "directions": []string{"asc"}}, {"id": "title", "directions": []string{"asc", "desc"}}, {"id": "released", "directions": []string{"asc", "desc"}}, {"id": "added", "directions": []string{"asc", "desc"}}, {"id": "rating", "directions": []string{"asc", "desc"}}, {"id": "popularity", "directions": []string{"asc", "desc"}}}, "searchKinds": []object{{"id": "movie", "label": "Movies"}, {"id": "show", "label": "Shows"}}, "searchLibraries": true, "skins": []object{{"id": "cinematic", "name": "Cinematic"}}, "defaultSkinId": i.appearanceDocument().skinID}
 	if plexAvail {
 		caps["plexAccountSignIn"] = true
 	}

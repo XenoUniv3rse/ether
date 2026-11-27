@@ -25,6 +25,12 @@ export const VELA_SETTINGS_SCHEMA = {
       ],
     },
     {
+      key: "trailers",
+      fields: [
+        { key: "trailerPlayback", kind: "string", options: ["server", "clientWhenPossible"] },
+      ],
+    },
+    {
       key: "liveTV",
       fields: [{ key: "livePreview", kind: "string", options: ["auto", "on-click", "off"] }],
     },

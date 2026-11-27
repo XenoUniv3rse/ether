@@ -7,6 +7,7 @@ import (
 	"errors"
 	"math"
 	"net/http"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -1042,6 +1043,9 @@ func (i *instance) rows(w http.ResponseWriter, r *http.Request) {
 	varyLanguage(w)
 	cache(w, r, object{"items": rows, "continuation": continuation})
 }
+
+var youtubeVideoID = regexp.MustCompile(`^[A-Za-z0-9_-]{11}$`)
+
 func (i *instance) detail(w http.ResponseWriter, r *http.Request) {
 	v, t, e := i.viewer(r)
 	if e != nil {
@@ -1065,6 +1069,7 @@ func (i *instance) detail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	extras := []object{}
+	clientTrailers := i.trailerPlaybackMode() == trailerPlaybackClient
 	for _, x := range d.Extras {
 		availability := "unavailable"
 		if i.extraPlaybackAvailable() && (x.Kind == "trailer" || x.Kind == "teaser") {
@@ -1074,7 +1079,18 @@ func (i *instance) detail(w http.ResponseWriter, r *http.Request) {
 		if kind == "teaser" {
 			kind = "trailer"
 		}
-		extras = append(extras, object{"id": ids.RatingKeyGUID(x.Key), "parentId": ids.RatingKeyGUID(x.ParentKey), "kind": kind, "name": x.Title, "durationSeconds": x.Duration.Seconds(), "availability": availability})
+		extra := object{"id": ids.RatingKeyGUID(x.Key), "parentId": ids.RatingKeyGUID(x.ParentKey), "kind": kind, "name": x.Title, "durationSeconds": x.Duration.Seconds(), "availability": availability}
+		if strings.EqualFold(x.Source, "youtube") {
+			extra["source"] = "youtube"
+			if clientTrailers && kind == "trailer" && youtubeVideoID.MatchString(x.SourceID) {
+				extra["clientPlayback"] = object{
+					"provider": "youtube",
+					"videoId":  x.SourceID,
+					"embedUrl": "https://www.youtube-nocookie.com/embed/" + x.SourceID,
+				}
+			}
+		}
+		extras = append(extras, extra)
 	}
 	if strings.HasSuffix(r.URL.Path, "/extras") {
 		cacheDetail(w, r, object{"items": extras}, pending)

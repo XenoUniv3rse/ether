@@ -3968,6 +3968,13 @@ export function createFakeServer(opts: FakeOptions = {}) {
           }
           if (settings.wordmark == null) delete settings.wordmark;
           if (
+            settings.trailerPlayback !== undefined &&
+            settings.trailerPlayback !== "server" &&
+            settings.trailerPlayback !== "clientWhenPossible"
+          ) {
+            return json({ error: { message: "invalid Vela setting" } }, 400);
+          }
+          if (
             settings.livePreview !== undefined &&
             settings.livePreview !== "auto" &&
             settings.livePreview !== "on-click" &&

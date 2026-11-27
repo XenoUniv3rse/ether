@@ -85,7 +85,7 @@ type Config struct {
 type Frontend struct {
 	// AppearanceRevision survives restarts so Vela clients can reject stale looks.
 	AppearanceRevision uint64 `json:"appearanceRevision,omitempty"`
-	// CapabilitiesRevision survives restarts so Vela clients can observe sign-in method changes.
+	// CapabilitiesRevision survives restarts so Vela clients can observe capability changes.
 	CapabilitiesRevision uint64 `json:"capabilitiesRevision,omitempty"`
 	Enabled              bool   `json:"enabled"`
 	// PublicURL is kept for backwards compatibility with configs that stored a
