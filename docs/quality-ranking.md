@@ -171,6 +171,25 @@ release type to 1203. So WEB-DL (4000) always beats WEBRip (2000), and HDR
 profiles use the same shape at smaller weights (release type 1000 a step,
 Viewer's language 10000, Series year differs −5000).
 
+## Local files first
+
+A source plugin such as Local folders can serve files from a folder the
+owner granted it. By default those files rank like any other release, so a
+480p copy you already have loses to a 1080p stream. **Play local files
+first** (Releases › Profiles, `resolver.preferLocalFiles`, off by default)
+plays such a file before every release Ether would stream or download,
+whatever their qualities.
+
+- It applies only to granted files (`plugin:<id>:file:<path>`), not to
+  links or lazy streams a plugin resolves elsewhere.
+- Filters still apply, and so do Never-play fallback tiers, the viewer's
+  audio language and title identity: a local file outside them ranks as
+  usual.
+- A local file leads even below the profile's preferred quality or minimum
+  score. Several local files of one title rank among themselves as usual.
+- Source routing, health racing and hedging never swap a local file for a
+  fetched release; if it fails to open, the next release in rank plays.
+
 ## Stremio add-on order
 
 A Stremio add-on source (such as AIOStreams or Comet) may already sort its

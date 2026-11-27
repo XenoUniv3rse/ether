@@ -27,7 +27,7 @@ import { profileUses, tidyLimits, withProfileRenamed, type RuleRef } from "../..
 import { releaseConsole, type QualitySyncReport } from "../../lib/releases";
 import type { CustomFormatDefinition, QualityProfile } from "../../lib/types";
 import { parseDuration } from "../settings/duration";
-import { SourceOrderSection } from "../sources/EqualQuality";
+import { LocalFilesFirstSection, SourceOrderSection } from "../sources/EqualQuality";
 import { ConfigSection } from "../../components/ConfigSection";
 import { PLAY_VERSIONS } from "../settings/schema";
 import {
@@ -284,6 +284,7 @@ export function QualityTab() {
       />
       <SyncSection quality={quality} onSaved={refresh} />
       <SourceOrderSection />
+      <LocalFilesFirstSection />
       <ConfigSection
         configKey="resolver"
         endpoint="resolver"

@@ -62,6 +62,11 @@ func compareCandidates(a, b candidate) bool {
 	if a.audioUnverified != b.audioUnverified {
 		return !a.audioUnverified
 	}
+	// A file the owner already has plays before any release Ether would
+	// fetch, whatever their qualities (Resolver.PreferLocalFiles).
+	if a.localFirst != b.localFirst {
+		return a.localFirst
+	}
 	// Soft profile preferences precede the ordinary quality comparer.
 	if a.belowScore != b.belowScore {
 		return !a.belowScore
@@ -156,6 +161,7 @@ type rankContext struct {
 	now               time.Time
 	preferSource      string // the owner's source preference: PreferUsenet, PreferDebrid or "" for none
 	preferRevision    bool
+	preferLocal       bool            // the owner plays granted local files first (Resolver.PreferLocalFiles)
 	priority          map[string]int  // indexer id → priority
 	addonOrder        map[string]bool // indexer id → keep add-on result order
 	sourceBand        map[string]int  // indexer id → priority band (nil when no source uses add-on order)
@@ -373,6 +379,20 @@ func preferredSource(mode string) string {
 }
 
 func samePreferenceTier(a, b candidate) bool {
-	return a.audioUnverified == b.audioUnverified && a.belowScore == b.belowScore && a.fallback == b.fallback &&
+	return a.audioUnverified == b.audioUnverified && a.localFirst == b.localFirst && a.belowScore == b.belowScore && a.fallback == b.fallback &&
 		(!a.belowScore || a.counted == b.counted) && (!a.fallback || a.keys.height == b.keys.height)
+}
+
+// grantedLocalFile reports a release a source plugin serves from a folder the
+// owner granted it (the plugin:<id>:file:<path> GUID), as opposed to a
+// stream or download it found elsewhere.
+func grantedLocalFile(rel core.Release) bool {
+	rest, ok := strings.CutPrefix(rel.GUID, "plugin:")
+	return ok && rel.Protocol == "direct" && strings.Contains(rest, ":file:")
+}
+
+// localFirst reports a candidate PreferLocalFiles plays first: a granted local
+// file outside every Never-play fallback tier, in an accepted audio language.
+func localFirst(rc rankContext, rel core.Release, policyFallback int, langOK bool) bool {
+	return rc.preferLocal && grantedLocalFile(rel) && policyFallback == 0 && langOK
 }

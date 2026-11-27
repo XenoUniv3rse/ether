@@ -2534,7 +2534,7 @@ func (s *Service) rankPass(ctx context.Context, env rankEnv, req core.ResolveReq
 		if addonOrdered {
 			cf = 0
 		}
-		cands = append(cands, candidate{identityWeak: !pinned && identity.ambiguous(rel, t, sreq), identityConflict: namesake && identityEv == "" && episodeRegionConflict(rel, t), audioUnverified: audioUnverified, unverifiedLangs: unverifiedLangs, fallback: belowQuality, belowScore: belowScore, counted: sc.counted, policy: policyResult, rel: rel, trace: tr, verified: verified, langOK: langOK, langRank: langRank, starved: starved, bandwidth: bandwidth, delivery: delivery, yearGuessed: yearGuessed, cf: cf, keys: keys})
+		cands = append(cands, candidate{localFirst: localFirst(rc, rel, policyResult.Fallback, langOK), identityWeak: !pinned && identity.ambiguous(rel, t, sreq), identityConflict: namesake && identityEv == "" && episodeRegionConflict(rel, t), audioUnverified: audioUnverified, unverifiedLangs: unverifiedLangs, fallback: belowQuality, belowScore: belowScore, counted: sc.counted, policy: policyResult, rel: rel, trace: tr, verified: verified, langOK: langOK, langRank: langRank, starved: starved, bandwidth: bandwidth, delivery: delivery, yearGuessed: yearGuessed, cf: cf, keys: keys})
 	}
 	if env.seaDex != nil && len(cands) > 0 {
 		s.addSeaDexScores(env.seaDex, cands, trace)
@@ -2574,18 +2574,25 @@ func (s *Service) orderCandidates(cands []candidate, title *core.Title, trace *T
 		if len(group) == 0 {
 			return nil
 		}
+		local := make([]candidate, 0)
 		strict := make([]candidate, 0, len(group))
 		soft := make([]candidate, 0)
 		for _, c := range group {
-			if c.belowScore || c.fallback {
+			switch {
+			case c.localFirst:
+				// A file the owner has leads even below the profile's
+				// preferred quality or minimum score.
+				local = append(local, c)
+			case c.belowScore || c.fallback:
 				soft = append(soft, c)
-			} else {
+			default:
 				strict = append(strict, c)
 			}
 		}
+		local = s.orderPreferenceCandidates(local, title, trace)
 		strict = s.orderPreferenceCandidates(strict, title, trace)
 		soft = s.orderPreferenceCandidates(soft, title, trace)
-		return append(strict, soft...)
+		return append(append(local, strict...), soft...)
 	}
 	ordered := append(orderGroup(confirmed), orderGroup(unverified)...)
 	return s.demoteBackingOffUsenet(ordered, trace)
@@ -2614,6 +2621,7 @@ func (s *Service) rankContext(profile core.QualityProfile, t *core.Title, rcfg c
 		now:               now,
 		preferSource:      preferredSource(rcfg.SourcePreference),
 		preferRevision:    !scorer.scoresRevision(profile.CustomFormatScores),
+		preferLocal:       rcfg.PreferLocalFiles,
 		priority:          priority,
 		addonOrder:        addonOrder,
 		sourceBand:        sourceBand,

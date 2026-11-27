@@ -10,6 +10,7 @@ import { api } from "../../lib/api";
 import { formatNanos } from "../../lib/format";
 import { useAsync } from "../../lib/hooks";
 import { useResolver } from "../releases/resolverDraft";
+import { BoolRow } from "./form";
 
 const SOURCE_PREFERENCE = localized(() => [
   { value: "auto", label: t("Start fastest") },
@@ -123,6 +124,57 @@ export function SourceOrderSection() {
             />
           </div>
         }
+      />
+      <SaveBar
+        dirty={dirty}
+        saving={saving}
+        error={error}
+        onSave={submit}
+        onDiscard={() => {
+          reset();
+          setError(null);
+        }}
+      />
+    </SettingsSection>
+  );
+}
+
+/**
+ * Releases › Profiles: play a file a source plugin (such as Local folders)
+ * serves from a folder the owner granted before any release Ether would
+ * stream or download, whatever their qualities (resolver.preferLocalFiles).
+ */
+export function LocalFilesFirstSection() {
+  const { config, resolver } = useResolver();
+  const saved = useMemo(() => (resolver ? Boolean(resolver.preferLocalFiles) : null), [resolver]);
+  const { draft, setDraft, dirty, reset } = useDraft<boolean>(saved);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<unknown>(null);
+  if (config.error) return <ErrorPanel error={config.error} onRetry={() => void config.reload()} />;
+  if (draft === null) return null;
+  async function submit() {
+    if (draft === null) return;
+    setSaving(true);
+    setError(null);
+    try {
+      await api.putSection("resolver", { preferLocalFiles: draft });
+      toast.success(t("Setting saved"));
+      await config.reload();
+    } catch (e) {
+      setError(e);
+    } finally {
+      setSaving(false);
+    }
+  }
+  return (
+    <SettingsSection title={t("Local files")}>
+      <BoolRow
+        label={t("Play local files first")}
+        value={draft}
+        help={t(
+          "Off by default. When on, a file a source plugin serves from a folder you granted plays before any streamed or downloaded release, even at a lower quality. Device limits, Never-play rules and the viewer's audio language still apply.",
+        )}
+        onChange={setDraft}
       />
       <SaveBar
         dirty={dirty}
