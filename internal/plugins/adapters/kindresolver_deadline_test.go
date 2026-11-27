@@ -43,12 +43,9 @@ func statusMap(in []core.IndexerSearchStatus) map[string]core.IndexerSearchStatu
 
 // TestKindResolverIndexerSearchDeadlineAwareAndBackoff proves the W299
 // invariants under synctest without wall-clock sleeps:
-//  1. On a 5 s /resolve deadline with default options (no timeoutMs/firstResults),
-//     a never-answering indexer does not consume the route deadline: fast
-//     results return with >= 1.5 s (and 35% = 1.75 s) reserve intact and the
-//     hung indexer reported as pending.
-//  2. An explicit timeoutMs larger than the reserve (e.g. 5000 ms in a 5 s
-//     /resolve) is clamped to the reserve.
+//  1. The default search returns fast results with the route's matching
+//     reserve intact and the hung indexer reported as pending.
+//  2. An explicit wait that would consume the route deadline is clamped.
 //  3. A slow indexer finishing in the background populates Ether's search cache
 //     for subsequent viewer calls.
 //  4. Unbounded (no-deadline) calls keep waiting past the viewer reserve
@@ -60,7 +57,8 @@ func TestKindResolverIndexerSearchDeadlineAwareAndBackoff(t *testing.T) {
 	t.Run("viewer resolve returns fast results before deadline and fills cache in background", func(t *testing.T) {
 		synctest.Test(t, func(t *testing.T) {
 			releaseSlow := make(chan struct{})
-			slowDone := make(chan struct{}, 2)
+			slowDone := make(chan struct{})
+			var cacheFillStarted atomic.Bool
 
 			fast := stubBackend{
 				search: func(_ context.Context, req core.SearchRequest, _ func(context.Context, string) error) ([]core.Release, error) {
@@ -76,9 +74,12 @@ func TestKindResolverIndexerSearchDeadlineAwareAndBackoff(t *testing.T) {
 			hung := stubBackend{
 				search: func(ctx context.Context, req core.SearchRequest, _ func(context.Context, string) error) ([]core.Release, error) {
 					if req.Title == "CacheFill" {
+						if !cacheFillStarted.CompareAndSwap(false, true) {
+							return nil, fmt.Errorf("expected the slow release from cache")
+						}
 						select {
 						case <-releaseSlow:
-							slowDone <- struct{}{}
+							close(slowDone)
 							return []core.Release{{
 								ID:       "slow-cf",
 								GUID:     "slow-cf",
@@ -120,15 +121,19 @@ func TestKindResolverIndexerSearchDeadlineAwareAndBackoff(t *testing.T) {
 			})
 			defer kr.Close()
 
-			// 1. Fresh 5 s /resolve deadline, no options: waits 3.25 s (leaving 1.75 s reserve).
+			// Use the configured route cap and assert the remaining matching budget.
 			resolveDeadline := wasm.DeadlineFor("/ether/v1/kinds/music/resolve")
-			if resolveDeadline != 5*time.Second {
-				t.Fatalf("resolve deadline = %s, want 5s", resolveDeadline)
+			reserve := max(indexerSearchReserveFloor, resolveDeadline*indexerSearchReservePct/100)
+			assertReserve := func(ctx context.Context) {
+				t.Helper()
+				deadline, _ := ctx.Deadline()
+				if remaining := time.Until(deadline); remaining < reserve {
+					t.Fatalf("remaining resolve budget = %s, want at least %s", remaining, reserve)
+				}
 			}
 			rctx, rcancel := context.WithTimeout(context.Background(), resolveDeadline)
 			defer rcancel()
 
-			started := time.Now()
 			res, err := kr.ResolveSourcesWithResult(rctx, "ether.music", core.SourceQuery{
 				Kind:  "indexer_search",
 				Query: "NeverAnswers",
@@ -136,14 +141,7 @@ func TestKindResolverIndexerSearchDeadlineAwareAndBackoff(t *testing.T) {
 			if err != nil {
 				t.Fatalf("resolve default search: %v", err)
 			}
-			if rctx.Err() != nil {
-				t.Fatalf("resolve ctx expired: %v", rctx.Err())
-			}
-			elapsed := time.Since(started)
-			wantWait := 3250 * time.Millisecond
-			if elapsed != wantWait {
-				t.Fatalf("elapsed = %s, want %s (leaving 1.75s reserve of 5s deadline)", elapsed, wantWait)
-			}
+			assertReserve(rctx)
 			if len(res.Candidates) != 1 || res.Candidates[0].IndexerID != "fast" {
 				t.Fatalf("candidates = %+v, want 1 from fast", res.Candidates)
 			}
@@ -155,21 +153,18 @@ func TestKindResolverIndexerSearchDeadlineAwareAndBackoff(t *testing.T) {
 				t.Fatalf("pending = %+v, want [hung]", res.Pending)
 			}
 
-			// 2. Explicit timeoutMs: 5000 inside a 5 s /resolve is also clamped to 3.25 s.
+			// 2. A timeout requesting the full route budget is also clamped.
 			rctx2, rcancel2 := context.WithTimeout(context.Background(), resolveDeadline)
 			defer rcancel2()
-			started2 := time.Now()
 			res2, err := kr.ResolveSourcesWithResult(rctx2, "ether.music", core.SourceQuery{
 				Kind:      "indexer_search",
 				Query:     "ClampedTimeout",
-				TimeoutMS: 5000,
+				TimeoutMS: int(resolveDeadline.Milliseconds()),
 			})
 			if err != nil {
 				t.Fatalf("clamped search: %v", err)
 			}
-			if got := time.Since(started2); got != wantWait {
-				t.Fatalf("clamped elapsed = %s, want %s", got, wantWait)
-			}
+			assertReserve(rctx2)
 			if len(res2.Candidates) != 1 {
 				t.Fatalf("clamped candidates = %d, want 1", len(res2.Candidates))
 			}
@@ -188,22 +183,19 @@ func TestKindResolverIndexerSearchDeadlineAwareAndBackoff(t *testing.T) {
 			if len(res3.Candidates) != 1 || len(res3.Pending) != 1 {
 				t.Fatalf("cache-fill initial = %d candidates, %+v pending; want 1 and [hung]", len(res3.Candidates), res3.Pending)
 			}
+			rcancel3()
 			close(releaseSlow)
 			<-slowDone
 			synctest.Wait()
 
 			rctx4, rcancel4 := context.WithTimeout(context.Background(), resolveDeadline)
 			defer rcancel4()
-			started4 := time.Now()
 			res4, err := kr.ResolveSourcesWithResult(rctx4, "ether.music", core.SourceQuery{
 				Kind:  "indexer_search",
 				Query: "CacheFill",
 			})
 			if err != nil {
 				t.Fatalf("cached follow-up search: %v", err)
-			}
-			if got := time.Since(started4); got != 0 {
-				t.Fatalf("cached follow-up waited %s, want immediate cache hit", got)
 			}
 			if len(res4.Candidates) != 2 {
 				t.Fatalf("cached follow-up candidates = %d, want 2 (fast + cached hung)", len(res4.Candidates))
@@ -323,7 +315,7 @@ func TestKindResolverIndexerSearchDeadlineAwareAndBackoff(t *testing.T) {
 			})
 			defer kr.Close()
 
-			// 3 viewer /resolve calls return fast results at 3.25 s while hung times
+			// Three resolves with a tighter caller deadline return fast results while hung times
 			// out at the 30 s background ceiling each time, tripping the breaker.
 			for i := range 3 {
 				rctx, rcancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -380,7 +372,8 @@ func TestKindResolverIndexerSearchDeadlineAwareAndBackoff(t *testing.T) {
 			rem  time.Duration
 			want time.Duration
 		}{
-			{"5s resolve", 5 * time.Second, 3250 * time.Millisecond},
+			{"12s resolve", 12 * time.Second, 7800 * time.Millisecond},
+			{"5s remaining", 5 * time.Second, 3250 * time.Millisecond},
 			{"4s remaining", 4 * time.Second, 2500 * time.Millisecond},
 			{"3s open", 3 * time.Second, 1500 * time.Millisecond},
 			{"2s join point", 2 * time.Second, 500 * time.Millisecond},

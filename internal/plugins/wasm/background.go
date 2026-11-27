@@ -147,13 +147,13 @@ func DeadlineFor(path string) time.Duration {
 	case strings.HasPrefix(p, "/ether/v1/flow-actions/"):
 		return 60 * time.Second
 	case strings.HasPrefix(p, "/ether/v1/kinds/"):
+		if strings.HasSuffix(p, "/live/resolve") || strings.HasSuffix(p, "/match") {
+			return 5 * time.Second
+		}
 		if strings.HasSuffix(p, "/resolve") {
 			// Leave room for a parallel indexer fan-out and the guest's
 			// matching and source checks within a playback slice.
 			return 12 * time.Second
-		}
-		if strings.HasSuffix(p, "/match") {
-			return 5 * time.Second
 		}
 		return 10 * time.Second
 	case strings.HasPrefix(p, "/ether/v1/live/"):

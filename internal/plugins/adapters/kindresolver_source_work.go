@@ -57,7 +57,7 @@ type resolveProgressEntry struct {
 // cancellation (preserving context values such as background budgets and
 // indexer purpose) and bounded by timeout. Concurrent callers with the same
 // flightKey join the single in-flight probe. If the caller's context expires
-// first (e.g. a 5 s plugin /resolve guest deadline), the probe finishes in the
+// first (for example, the plugin exhausts its /resolve slice), the probe finishes in the
 // background so its cached result is ready for the next resolve slice.
 //
 // When onAbandonedDone is non-nil, it is invoked at most once if the probe

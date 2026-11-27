@@ -717,7 +717,7 @@ func TestKindResolverGuestTimeoutDuringUsenetCheckPreparesAndCaches(t *testing.T
 	const pluginID = "community.example.usenettimeout"
 	timeoutErr := &wasm.Error{
 		Status:  wasm.StatusTimeout,
-		Message: "call exceeded its 5 s deadline for /ether/v1/kinds/recordings/resolve",
+		Message: "call exceeded its 12 s deadline for /ether/v1/kinds/recordings/resolve",
 		Trap:    true,
 	}
 

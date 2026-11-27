@@ -1220,7 +1220,7 @@ On a deadline-bounded request (any viewer or interactive route such as `/resolve
 or `/match`), `indexer_search` is deadline-aware by default: even when no fan-out
 options are passed, Ether caps the wait to the remaining route deadline minus
 `max(1.5 s, 35% of remaining time)` (at least 25% of remaining time when under
-2 s left — for example 3.25 s on a fresh 5 s `/resolve`, leaving 1.75 s for the
+2 s left — for example 7.8 s on a fresh 12 s `/resolve`, leaving 4.2 s for the
 plugin to rank, check cache, and reply). Candidates that have already arrived are
 returned immediately, while slower indexers are reported as `"pending"` (and
 listed in top-level `pending`) and continue finishing into Ether's search cache
@@ -2223,11 +2223,11 @@ stops affected jobs so the new ceilings apply immediately.
 
 Viewer search and playback calls derive their unit budget directly from each
 route's deadline (`10,000 units/s`): `/stream/*` and `/ether/open*` get 3 s
-(30,000 units), `/subtitles/*`, `/ether/subtitles/*` and kind `/resolve`,
-`/live/resolve`, and `/match` get 5 s (50,000 units), and `/catalog/*`,
-`/meta/*`, `/ether/metadata/*`, `/ether/markers*`, and kind `/search`, `/live`,
-and `/items/*` get 10 s (100,000 units),
-reported live by `ether.runtime.limits()`. Ranking budgets stay unchanged.
+(30,000 units). `/subtitles/*`, `/ether/subtitles/*`, and kind `/live/resolve`
+and `/match` get 5 s (50,000 units). Kind `/resolve` gets 12 s (120,000 units).
+`/catalog/*`, `/meta/*`, `/ether/metadata/*`, `/ether/markers*`, and kind `/search`,
+`/live`, and `/items/*` get 10 s (100,000 units). `ether.runtime.limits()` reports
+the effective limits for the current call.
 Background kind catalogue sync (`/browse`, `/changes`, and `/expand`), administrative setup,
 actions, tools, events and jobs use owner grants. Health/configuration/view/options/test
 keep short protocol deadlines. See `sdk/AGENTS.md` and the SDK README for exact
@@ -2244,7 +2244,8 @@ pick up the prepared source through `/resolve`.
 
 Both routes can return `{pending:true,retryInMs:1000,job:"/ether/job/prepare"}`.
 `job` is optional. Ether clamps retry delays to 250–5000 ms, retries for up to
-25 seconds total per Play, and keeps each invocation within five seconds.
+25 seconds total per Play, and caps each invocation at 12 seconds for `/resolve`
+and five seconds for `/match`.
 Pending is neutral for health. When the 25-second budget expires while the reply is still `pending`,
 Ether returns `503` with `code: "preparing"` and `Retry-After` set from the last
 `retryInMs` (defaulting to `5` seconds) across `kind-media`, Vela,
@@ -34669,8 +34670,13 @@ func DeadlineFor(path string) time.Duration {
 	case strings.HasPrefix(p, "/ether/v1/flow-actions/"):
 		return 60 * time.Second
 	case strings.HasPrefix(p, "/ether/v1/kinds/"):
-		if strings.HasSuffix(p, "/resolve") || strings.HasSuffix(p, "/match") {
+		if strings.HasSuffix(p, "/live/resolve") || strings.HasSuffix(p, "/match") {
 			return 5 * time.Second
+		}
+		if strings.HasSuffix(p, "/resolve") {
+			// Leave room for a parallel indexer fan-out and the guest's
+			// matching and source checks within a playback slice.
+			return 12 * time.Second
 		}
 		return 10 * time.Second
 	case strings.HasPrefix(p, "/ether/v1/live/"):
@@ -42024,9 +42030,9 @@ With `kind_resolver` and `permissions.sources: "search"` (or `"acquire"`, plus
 `resolve_sources_with_result` to read the full response envelope) supports:
 
 - **Deadline-aware default & stalled-indexer backoff (`kind: "indexer_search"`):**
-  under any viewer/request deadline (such as `/resolve`'s 5 s budget), Ether
+  under any viewer/request deadline (such as `/resolve`'s 12 s budget), Ether
   automatically caps the wait to remaining time minus `max(1.5 s, 35%)` (so a
-  fresh 5 s `/resolve` waits at most 3.25 s, leaving 1.75 s reserve) and returns
+  fresh 12 s `/resolve` waits at most 7.8 s, leaving 4.2 s reserve) and returns
   arrived results while stragglers finish into Ether's search cache in the
   background as `status: "pending"` (unbounded/background jobs still wait up to
   the 30 s ceiling unchanged). Indexers that time out or fail 3 times in a row
@@ -42117,7 +42123,8 @@ than billed as guest wall time):
 | `/stream/*`, `/ether/open*` | 3 s (20 s for Stremio add-ons) | 30,000 units (200,000 for Stremio) |
 | `/ether/search`, `/ether/files/*` (source category search) | 10 s | 100,000 units |
 | `/subtitles/*`, `/ether/subtitles/*` | 5 s (10 s for Stremio add-ons) | 50,000 units (100,000 for Stremio) |
-| `/ether/v1/kinds/*/resolve`, `/ether/v1/kinds/*/match` | 5 s | 50,000 units |
+| `/ether/v1/kinds/*/resolve` | 12 s | 120,000 units |
+| `/ether/v1/kinds/*/live/resolve`, `/ether/v1/kinds/*/match` | 5 s | 50,000 units |
 | `/catalog/*`, `/meta/*`, `/ether/metadata/*`, `/ether/markers*`, `/ether/v1/kinds/*/search`, `/ether/v1/kinds/*/items/*` | 10 s (20 s for Stremio `/catalog/*`) | 100,000 units (200,000 for Stremio `/catalog/*`) |
 | `/ether/options/*`, `/ether/view/*` | 2 s | Owner-granted ceiling |
 | `/ether/configure`, `/ether/health` | 5 s | Owner-granted ceiling |
@@ -42132,7 +42139,7 @@ SDK) inside a hosted handler returns the **effective** `deadline` and
 `unitBudget` for the current call after route and owner clamps, alongside
 `memoryBytes`, `readBytes`, `poolSize`, `fetchBytes`, `maxItems` and archive limits. If a viewer-path
 call spends its whole budget, the error names the route and limit (for example
-`used the whole 5 s budget for /ether/v1/kinds/games/resolve (50010/50000 units)`).
+`used the whole 12 s budget for /ether/v1/kinds/games/resolve (120010/120000 units)`).
 
 Plugins request higher memory, time, instance pool (`poolSize`, default 2, default owner ceiling 4, raisable up to 16),
 download or archive limits in `ether.runtime.limits` in `manifest.json`. With
@@ -42329,7 +42336,8 @@ regenerate the reference instead of duplicating contracts in prose.
 
 Kind `/resolve` and `/match` handlers may return `{pending:true,retryInMs:1000}`.
 Ether retries after 250–5000 ms (clamped), for at most 25 seconds per Play;
-each invocation still has a five-second cap. Pending does not damage health.
+each invocation is capped at 12 seconds for `/resolve` and five seconds for
+`/match`. Pending does not damage health.
 If a call is still `pending` after the 25-second wait budget, Ether answers
 `503` with `code: "preparing"` and `Retry-After` (from `retryInMs`, or `5` s by
 default) on `kind-media`, Vela, Jellyfin and Plex API routes without caching a
@@ -74715,7 +74723,8 @@ including the route-clamped `deadline` and `unitBudget`, `poolSize`, plus
 Viewer request-path calls derive their unit budget directly from each route's
 deadline (`10,000 units/s`): `/stream/*` and `/ether/open*` get 3 s (30,000 units;
 20 s / 200,000 units for Stremio add-ons), `/subtitles/*`, `/ether/subtitles/*` and
-`/ether/v1/kinds/*/resolve` or `/match` get 5 s (50,000 units), and `/catalog/*`,
+`/ether/v1/kinds/*/match` or `/live/resolve` get 5 s (50,000 units).
+Kind `/resolve` gets 12 s (120,000 units). `/catalog/*`,
 `/meta/*`, `/ether/metadata/*`, `/ether/markers*`, `/ether/v1/kinds/*/search`,
 `/items/*`, `/ether/search` and `/ether/files/*` get 10 s (100,000 units), further shortened only if the owner sets a
 lower ceiling. Ranking stays at its existing 2 ms per-candidate and 50 ms

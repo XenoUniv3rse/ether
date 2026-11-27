@@ -426,7 +426,7 @@ On a deadline-bounded request (any viewer or interactive route such as `/resolve
 or `/match`), `indexer_search` is deadline-aware by default: even when no fan-out
 options are passed, Ether caps the wait to the remaining route deadline minus
 `max(1.5 s, 35% of remaining time)` (at least 25% of remaining time when under
-2 s left — for example 3.25 s on a fresh 5 s `/resolve`, leaving 1.75 s for the
+2 s left — for example 7.8 s on a fresh 12 s `/resolve`, leaving 4.2 s for the
 plugin to rank, check cache, and reply). Candidates that have already arrived are
 returned immediately, while slower indexers are reported as `"pending"` (and
 listed in top-level `pending`) and continue finishing into Ether's search cache
@@ -1429,11 +1429,11 @@ stops affected jobs so the new ceilings apply immediately.
 
 Viewer search and playback calls derive their unit budget directly from each
 route's deadline (`10,000 units/s`): `/stream/*` and `/ether/open*` get 3 s
-(30,000 units), `/subtitles/*`, `/ether/subtitles/*` and kind `/resolve`,
-`/live/resolve`, and `/match` get 5 s (50,000 units), and `/catalog/*`,
-`/meta/*`, `/ether/metadata/*`, `/ether/markers*`, and kind `/search`, `/live`,
-and `/items/*` get 10 s (100,000 units),
-reported live by `ether.runtime.limits()`. Ranking budgets stay unchanged.
+(30,000 units). `/subtitles/*`, `/ether/subtitles/*`, and kind `/live/resolve`
+and `/match` get 5 s (50,000 units). Kind `/resolve` gets 12 s (120,000 units).
+`/catalog/*`, `/meta/*`, `/ether/metadata/*`, `/ether/markers*`, and kind `/search`,
+`/live`, and `/items/*` get 10 s (100,000 units). `ether.runtime.limits()` reports
+the effective limits for the current call.
 Background kind catalogue sync (`/browse`, `/changes`, and `/expand`), administrative setup,
 actions, tools, events and jobs use owner grants. Health/configuration/view/options/test
 keep short protocol deadlines. See `sdk/AGENTS.md` and the SDK README for exact
@@ -1450,7 +1450,8 @@ pick up the prepared source through `/resolve`.
 
 Both routes can return `{pending:true,retryInMs:1000,job:"/ether/job/prepare"}`.
 `job` is optional. Ether clamps retry delays to 250–5000 ms, retries for up to
-25 seconds total per Play, and keeps each invocation within five seconds.
+25 seconds total per Play, and caps each invocation at 12 seconds for `/resolve`
+and five seconds for `/match`.
 Pending is neutral for health. When the 25-second budget expires while the reply is still `pending`,
 Ether returns `503` with `code: "preparing"` and `Retry-After` set from the last
 `retryInMs` (defaulting to `5` seconds) across `kind-media`, Vela,

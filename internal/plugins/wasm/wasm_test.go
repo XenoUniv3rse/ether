@@ -574,21 +574,23 @@ func TestLimitsClamp(t *testing.T) {
 	for _, tc := range []struct {
 		path     string
 		deadline time.Duration
-		units    int64
 	}{
-		{"/stream/movie/tt0133093.json", 3 * time.Second, 30000},
-		{"/ether/open/abc", 3 * time.Second, 30000},
-		{"/subtitles/movie/tt0133093.json", 5 * time.Second, 50000},
-		{"/ether/v1/kinds/games/resolve", 5 * time.Second, 50000},
-		{"/ether/v1/kinds/games/match", 5 * time.Second, 50000},
-		{"/catalog/movie/top.json", 10 * time.Second, 100000},
-		{"/meta/movie/tt0133093.json", 10 * time.Second, 100000},
-		{"/ether/v1/kinds/games/search", 10 * time.Second, 100000},
-		{"/ether/v1/kinds/games/items/1", 10 * time.Second, 100000},
+		{"/stream/movie/tt0133093.json", 3 * time.Second},
+		{"/ether/open/abc", 3 * time.Second},
+		{"/subtitles/movie/tt0133093.json", 5 * time.Second},
+		{"/ether/v1/kinds/games/resolve", 12 * time.Second},
+		{"/ether/v1/kinds/music/resolve", 12 * time.Second},
+		{"/ether/v1/kinds/sport/live/resolve", 5 * time.Second},
+		{"/ether/v1/kinds/games/match", 5 * time.Second},
+		{"/catalog/movie/top.json", 10 * time.Second},
+		{"/meta/movie/tt0133093.json", 10 * time.Second},
+		{"/ether/v1/kinds/games/search", 10 * time.Second},
+		{"/ether/v1/kinds/games/items/1", 10 * time.Second},
 	} {
 		got := limitsForRequest(lim, tc.path)
-		if got.Deadline != tc.deadline || got.UnitBudget != tc.units {
-			t.Fatalf("%s: got deadline=%v units=%d, want %v / %d", tc.path, got.Deadline, got.UnitBudget, tc.deadline, tc.units)
+		wantUnits := int64(tc.deadline / WallUnitInterval)
+		if got.Deadline != tc.deadline || got.UnitBudget != wantUnits {
+			t.Fatalf("%s: got deadline=%v units=%d, want %v / %d", tc.path, got.Deadline, got.UnitBudget, tc.deadline, wantUnits)
 		}
 	}
 	stremioLim := lim
@@ -598,6 +600,9 @@ func TestLimitsClamp(t *testing.T) {
 	}
 	if got := limitsForRequest(Limits{Deadline: 2 * time.Second, UnitBudget: 1 << 40}, "/ether/v1/kinds/games/resolve"); got.Deadline != 2*time.Second || got.UnitBudget != 20000 {
 		t.Fatalf("tighter owner ceiling not preserved: %+v", got)
+	}
+	if got := limitsForRequest(Limits{Deadline: time.Hour, UnitBudget: 50000}, "/ether/v1/kinds/games/resolve"); got.UnitBudget != 50000 {
+		t.Fatalf("tighter owner unit grant not preserved: %+v", got)
 	}
 	for _, path := range []string{
 		"/ether/v1/kinds/games/browse",
@@ -769,8 +774,19 @@ globalThis.handle = function(req) {
 	if rem := run(context.Background(), "/ether/action/import", false, int64(time.Hour/time.Millisecond)); rem > 11*time.Minute {
 		t.Fatalf("action path timeout = %v, want <= 10m ceiling", rem)
 	}
-	// 7. Viewer path stays capped at its short route deadline (well below 10 m).
-	if rem := run(context.Background(), "/ether/v1/kinds/games/resolve", false, int64(time.Hour/time.Millisecond)); rem > 10*time.Second {
-		t.Fatalf("viewer path timeout = %v, want <= 5s route deadline", rem)
+	// Pool admission happens before the execution slice, so compare the
+	// observed deadline with a bound anchored after the call.
+	const resolvePath = "/ether/v1/kinds/games/resolve"
+	const requestedMS = int64(time.Hour / time.Millisecond)
+	run(context.Background(), resolvePath, false, requestedMS)
+	if latest := time.Now().Add(DeadlineFor(resolvePath)); seenDeadline.After(latest) {
+		t.Fatalf("viewer host deadline %v exceeds route bound %v", seenDeadline, latest)
+	}
+	callerDeadline := time.Now().Add(DeadlineFor(resolvePath) / 2)
+	callerCtx, cancelCaller := context.WithDeadline(context.Background(), callerDeadline)
+	defer cancelCaller()
+	run(callerCtx, resolvePath, false, requestedMS)
+	if seenDeadline.After(callerDeadline) {
+		t.Fatalf("viewer host deadline %v exceeds caller deadline %v", seenDeadline, callerDeadline)
 	}
 }
