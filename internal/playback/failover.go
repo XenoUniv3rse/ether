@@ -1062,8 +1062,8 @@ func (m *Manager) probeGeneration(ctx context.Context, s *session, res *core.Res
 			return nil, fmt.Errorf("probe %s: %w: runtime doesn't match this title", res.Release.Name, core.ErrReleaseRejected)
 		}
 	}
-	if mi.Size <= 0 {
-		mi.Size = src.Size()
+	if size := src.Size(); size > 0 {
+		mi.Size, mi.FileSize = size, size
 	}
 	if mi.Container == "" {
 		mi.Container = containerFromName(src.Name())

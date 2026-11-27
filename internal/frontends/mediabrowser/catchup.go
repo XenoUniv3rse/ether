@@ -278,7 +278,7 @@ func catchUpWatchStatus(item frontend.CatchUpItem) frontend.WatchStatus {
 	}
 	p := item.Programme
 	return frontend.WatchStatus{ViewOffset: item.Watch.ViewOffset, ViewCount: item.Watch.ViewCount,
-		LastViewedAt: item.Watch.LastViewedAt, Duration: p.End.Sub(p.Start)}
+		LastViewedAt: item.Watch.LastViewedAt, IsFavorite: item.Watch.IsFavorite, UserRating: item.Watch.UserRating, Duration: p.End.Sub(p.Start)}
 }
 
 // catchUpPlayed marks a catch-up airing played or unplayed.
@@ -320,4 +320,24 @@ func (i *instance) catchUpPlayed(w http.ResponseWriter, r *http.Request, v *fron
 
 func isCatchUpRecursive(r *http.Request) bool {
 	return strings.EqualFold(r.URL.Query().Get("IncludeItemTypes"), "Episode")
+}
+
+func (i *instance) patchCatchUpUserData(w http.ResponseWriter, r *http.Request, v *frontend.Viewer, id string, patch frontend.CatchUpUserDataPatch) {
+	lib, okLib := i.host.LiveTV.(frontend.CatchUpLibrary)
+	writer, ok := i.host.LiveTV.(frontend.CatchUpUserDataWriter)
+	if !ok || !okLib || !i.host.LiveTV.Enabled() {
+		http.NotFound(w, r)
+		return
+	}
+	ctx := i.identityContext(r)
+	if err := writer.CatchUpPatchUserData(ctx, v, id, patch); err != nil {
+		writeUserDataError(w, r, err)
+		return
+	}
+	item, err := lib.CatchUpItem(ctx, v, id)
+	if err != nil {
+		writeUserDataError(w, r, err)
+		return
+	}
+	i.updatedUserData(w, r, frontend.CatchUpGUID(item), catchUpWatchStatus(item))
 }

@@ -146,3 +146,19 @@ type OfflineProgressState interface {
 type OfflineProgressWriter interface {
 	SetOfflineProgress(context.Context, *Viewer, RatingKey, OfflineProgress) error
 }
+
+// ItemPlaybackPatch carries the fields of a sessionless user data update.
+type ItemPlaybackPatch struct {
+	Position     *time.Duration
+	Played       *bool
+	PlayCount    *int
+	LastPlayedAt *time.Time
+}
+
+func (p ItemPlaybackPatch) Empty() bool {
+	return p.Position == nil && p.Played == nil && p.PlayCount == nil && p.LastPlayedAt == nil
+}
+
+type ItemPlaybackWriter interface {
+	PatchItemPlayback(context.Context, *Viewer, RatingKey, ItemPlaybackPatch) error
+}

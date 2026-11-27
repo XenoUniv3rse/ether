@@ -236,6 +236,9 @@ func (i *instance) releaseVersionSources(r *http.Request, scope frontend.Version
 	variants := i.releaseVariants(r, scope, title)
 	if len(variants) == 1 && variants[0].Auto && auto != nil {
 		info := variants[0].Info
+		if size := mediaSourceSize(info); size > 0 && auto["Size"] == nil {
+			auto["Size"] = size
+		}
 		if _, hasChapters := auto["Chapters"]; !hasChapters && !info.Estimated {
 			addChapters(auto, info)
 		}
@@ -246,12 +249,18 @@ func (i *instance) releaseVersionSources(r *http.Request, scope frontend.Version
 // applyVersionMediaFacts fills an Auto source from its version, preferring
 // probed facts over estimates. Keep probed facts from an existing plan.
 func (i *instance) applyVersionMediaFacts(source map[string]any, itemID string, info frontend.MediaInfo) {
-	if source == nil || source["SupportsProbing"] == true || !info.HasPlayableMedia() {
+	if source == nil || source["SupportsProbing"] == true {
+		return
+	}
+	if size := mediaSourceSize(info); size > 0 {
+		source["Size"] = size
+	}
+	if !info.HasPlayableMedia() {
 		return
 	}
 	id, _ := source["Id"].(string)
 	dto := i.mediaSourceDTO(id, info)
-	for _, field := range []string{"MediaStreams", "Container", "Size", "RunTimeTicks", "Bitrate", "Chapters", "SupportsProbing"} {
+	for _, field := range []string{"MediaStreams", "Container", "RunTimeTicks", "Bitrate", "Chapters", "SupportsProbing"} {
 		if val, ok := dto[field]; ok {
 			source[field] = val
 		}

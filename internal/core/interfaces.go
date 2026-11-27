@@ -1078,6 +1078,7 @@ type MediaInfo struct {
 	Container             string        `json:"container"` // mkv, mp4, avi, mpegts
 	Duration              time.Duration `json:"duration"`
 	Size                  int64         `json:"size"`
+	FileSize              int64         `json:"fileSize,omitempty"` // measured or known file bytes, even when stream facts are estimated
 	BitrateKbps           int           `json:"bitrateKbps"`
 	Streams               []StreamInfo  `json:"streams"`
 	Estimated             bool          `json:"estimated"` // derived from release name, not probed

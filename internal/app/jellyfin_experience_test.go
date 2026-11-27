@@ -1,19 +1,26 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"net/http/httptest"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
 	"github.com/braedonsaunders/ether/internal/catalog"
+	"github.com/braedonsaunders/ether/internal/conform"
+	mbconform "github.com/braedonsaunders/ether/internal/conform/mediabrowser"
+	"github.com/braedonsaunders/ether/internal/conform/openapi/spectest"
 	"github.com/braedonsaunders/ether/internal/core"
 	"github.com/braedonsaunders/ether/internal/frontend/kit/ids"
 	"github.com/braedonsaunders/ether/internal/identity"
 	"github.com/braedonsaunders/ether/internal/plextv"
 	"github.com/braedonsaunders/ether/internal/tmdb"
-	"net/http/httptest"
-	"strings"
-	"testing"
-	"time"
 )
 
 func TestMediaBrowserRealExperience(t *testing.T) {
@@ -33,13 +40,20 @@ func TestMediaBrowserRealExperience(t *testing.T) {
 	if err = local.Create(ctx, owner.ID, "viewer", "password-1234"); err != nil {
 		t.Fatal(err)
 	}
-	key := core.MovieKey(23)
-	title := core.Title{Key: key, Type: core.TypeMovie, IDs: core.IDs{TMDB: 23}, Title: "Fixture Film", Released: time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)}
-	if err = a.catalog.UpsertTitle(ctx, title, true); err != nil {
-		t.Fatal(err)
-	}
-	for _, surface := range []string{"jellyfin", "emby"} {
+	for _, tc := range []struct {
+		surface, profile string
+		movieID, liveID  int64
+	}{
+		{"jellyfin", "findroid", 23, 30},
+		{"emby", "emby-sdk", 24, 31},
+	} {
+		surface := tc.surface
 		t.Run(surface, func(t *testing.T) {
+			key := core.MovieKey(tc.movieID)
+			title := core.Title{Key: key, Type: core.TypeMovie, IDs: core.IDs{TMDB: tc.movieID}, Title: "Fixture Film", Runtime: time.Hour, Released: time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)}
+			if err := a.catalog.UpsertTitle(ctx, title, true); err != nil {
+				t.Fatal(err)
+			}
 			inst, err := a.frontends.registry.Mount(ctx, core.Protocol(surface))
 			if err != nil {
 				t.Fatal(err)
@@ -109,12 +123,107 @@ func TestMediaBrowserRealExperience(t *testing.T) {
 					t.Fatalf("client replay %s: %d %s", path, response.Code, response.Body)
 				}
 			}
+			id := ids.RatingKeyGUID(key)
+			paths := []string{"/UserItems/" + id + "/UserData?userId=" + uid, "/Users/" + uid + "/Items/" + id + "/UserData"}
+			for _, path := range paths {
+				other, _ := ids.GUID(ids.User, owner.ID+100)
+				if res := call("POST", strings.ReplaceAll(path, uid, other), `{}`, signed.AccessToken); res.Code != 403 {
+					t.Fatalf("cross-viewer update returned %d", res.Code)
+				}
+			}
+			checkOfflineUserDataGolden(t, surface, tc.profile, uid, id, func(path string, body []byte) *httptest.ResponseRecorder {
+				return call("POST", path, string(body), signed.AccessToken)
+			})
+			doc := spectest.Document(t, surface)
+			check := func(path, body string, ticks int64, count int, favorite bool, rating float64) {
+				t.Helper()
+				res := call("POST", path, body, signed.AccessToken)
+				legacy := strings.HasPrefix(path, "/Users/")
+				if doc != nil && (surface == "emby") == legacy {
+					if err := doc.Validate("POST", strings.SplitN(path, "?", 2)[0], res.Code, res.Header().Get("Content-Type"), res.Body.Bytes()); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if surface == "emby" && legacy {
+					if res.Code != 200 || res.Body.Len() != 0 {
+						t.Fatalf("Emby legacy update %d %s", res.Code, res.Body)
+					}
+					res = call("GET", "/UserItems/"+id+"/UserData", "", signed.AccessToken)
+				}
+
+				var got struct {
+					PlaybackPositionTicks int64
+					PlayCount             int
+					IsFavorite            bool
+					Rating                float64
+					Likes                 bool
+				}
+				if res.Code != 200 || json.Unmarshal(res.Body.Bytes(), &got) != nil ||
+					got.PlaybackPositionTicks != ticks || got.PlayCount != count || got.IsFavorite != favorite ||
+					got.Rating != rating || got.Likes != (rating >= 7) {
+					t.Fatalf("user data %d %s", res.Code, res.Body)
+				}
+			}
+			check(paths[0], `{"IsFavorite":true,"Likes":true}`, 6000000000, 0, true, 10)
+			check(paths[1], `{"PlaybackPositionTicks":0,"Played":true,"PlayCount":3,"LastPlayedDate":"2022-01-01T03:04:05Z","Likes":false}`, 6000000000, 0, true, 2)
+			check(paths[1], `{"PlaybackPositionTicks":10000000,"LastPlayedDate":"2022-01-03T03:04:05Z"}`, 0, 0, true, 2)
+			check(paths[0], `{"PlaybackPositionTicks":33000000000,"PlayCount":2,"LastPlayedDate":"2022-01-04T03:04:05Z"}`, 0, 2, true, 2)
+
+			liveTitle := title
+			liveTitle.Key, liveTitle.IDs.TMDB = core.MovieKey(tc.liveID), tc.liveID
+			if err := a.catalog.UpsertTitle(ctx, liveTitle, true); err != nil {
+				t.Fatal(err)
+			}
+			liveID := ids.RatingKeyGUID(liveTitle.Key)
+			for _, step := range []struct {
+				suffix        string
+				ticks, resume int64
+			}{{"Progress", 10000000, 0}, {"Progress", 6000000000, 6000000000}, {"Stopped", 9000000000, 9000000000}} {
+				suffix, ticks := step.suffix, step.ticks
+				res := call("POST", "/"+surface+"/Sessions/Playing/"+suffix, fmt.Sprintf(`{"ItemId":%q,"PositionTicks":%d}`, liveID, ticks), signed.AccessToken)
+				if res.Code != 204 {
+					t.Fatalf("%s report %d %s", suffix, res.Code, res.Body)
+				}
+				res = call("GET", "/"+surface+"/UserItems/"+liveID+"/UserData", "", signed.AccessToken)
+				if res.Code != 200 || !strings.Contains(res.Body.String(), fmt.Sprintf(`"PlaybackPositionTicks":%d`, step.resume)) {
+					t.Fatalf("%s read-back %d %s", suffix, res.Code, res.Body)
+				}
+			}
+			check("/UserItems/"+liveID+"/UserData", `{"PlaybackPositionTicks":0,"Played":true,"LastPlayedDate":"2022-01-02T03:04:05Z"}`, 9000000000, 0, false, 0)
+
 			watched := call("POST", "/UserPlayedItems/"+ids.RatingKeyGUID(key), "", signed.AccessToken)
 			if watched.Code != 200 || !strings.Contains(watched.Body.String(), `"Played":true`) {
 				t.Fatalf("watched %d %s", watched.Code, watched.Body)
 			}
 		})
 	}
+}
+
+// The fixture-only probes are replayed against a disposable Ether viewer.
+func checkOfflineUserDataGolden(t *testing.T, surface, profile, userID, itemID string, post func(string, []byte) *httptest.ResponseRecorder) {
+	t.Helper()
+	p, err := mbconform.Load(surface, filepath.Join("..", "conform", "profiles", surface))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, req := range p.Corpus(profile) {
+		if req.Name != "offline_user_data_resume" {
+			continue
+		}
+		name := p.FixtureName(profile, req, true)
+		want, err := conform.LoadFixture(filepath.Join("..", "..", "testdata", "conform", surface, profile, name+".json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		path := strings.NewReplacer("${user_id}", userID, "${item_id}", itemID).Replace(req.Path)
+		got := post(path, req.Body)
+		body := bytes.TrimSpace(got.Body.Bytes())
+		if got.Code != want.Status || !bytes.Equal(body, want.Body) {
+			t.Fatalf("offline user data golden %d %s", got.Code, body)
+		}
+		return
+	}
+	t.Fatal("missing offline user data probe")
 }
 
 var errMetadataDown = errors.New("metadata down")

@@ -179,7 +179,11 @@ func (i *instance) serveVideoDownload(w http.ResponseWriter, r *http.Request, ct
 		return
 	}
 	if policy != nil && r.Method != http.MethodHead {
-		if size := downloadSize(source.Info); size > 0 {
+		size := mediaSourceSize(source.Info)
+		if source.Source != nil && source.Source.Size() > 0 {
+			size = source.Source.Size()
+		}
+		if size > 0 {
 			if decision := policy.ReconcileDownloadBytes(ctx, viewer, title.Key, size); !decision.Allowed {
 				writeDownloadLimit(w, decision)
 				return

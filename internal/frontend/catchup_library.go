@@ -76,6 +76,8 @@ type CatchUpWatch struct {
 	ViewOffset   time.Duration
 	ViewCount    int
 	LastViewedAt time.Time
+	IsFavorite   bool
+	UserRating   float64
 }
 
 // CatchUpWatchState records watch state for catch-up airings. The id is any
@@ -128,4 +130,15 @@ type CatchUpSessionFinder interface {
 // viewer. A nonempty device ID also requires the opening device to match.
 type CatchUpSessionReader interface {
 	LibraryCatchUpSession(SessionAccess, string) (CatchUpInfo, bool)
+}
+
+// CatchUpUserDataPatch updates one airing's watch state and preferences.
+type CatchUpUserDataPatch struct {
+	ItemPlaybackPatch
+	Favorite, Likes *bool
+	Rating          *float64
+}
+
+type CatchUpUserDataWriter interface {
+	CatchUpPatchUserData(context.Context, *Viewer, string, CatchUpUserDataPatch) error
 }

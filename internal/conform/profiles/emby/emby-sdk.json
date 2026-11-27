@@ -19,6 +19,19 @@
     "example": "Authorization: MediaBrowser Client=\"Emby.SDK v2 reference client\", Device=\"Unknown\", DeviceId=\"${device_id}\", Version=\"4.10\", Token=\"${access_token}\""
   },
   "flows": {
+    "offline_user_data": [
+      {
+        "name": "resume",
+        "method": "POST",
+        "path": "/Users/${user_id}/Items/${item_id}/UserData",
+        "body": {
+          "PlaybackPositionTicks": 6000000000,
+          "LastPlayedDate": "2022-01-02T03:04:05Z"
+        },
+        "fixture_only": true,
+        "expected_status": 200
+      }
+    ],
     "connect": [
       {
         "name": "system info",

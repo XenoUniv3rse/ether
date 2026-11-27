@@ -130,7 +130,7 @@ func TestPlaybackInfoExplicitEstimateCarriesSourceFacts(t *testing.T) {
 		if !req.Intent.Estimate {
 			t.Fatal("estimate resolved a release")
 		}
-		return frontend.PlayPlan{Estimated: true, Media: frontend.MediaInfo{Estimated: true, Container: "mkv", Size: 1203120000, Streams: []frontend.StreamInfo{{Type: "video", Codec: "h264"}}}}, nil
+		return frontend.PlayPlan{Estimated: true, Media: frontend.MediaInfo{Estimated: true, Container: "mkv", Size: 1203120000, FileSize: 1203120000, Streams: []frontend.StreamInfo{{Type: "video", Codec: "h264"}}}}, nil
 	}}
 	for _, front := range []frontend.Frontend{Jellyfin{MachineID: "test"}, Emby{MachineID: "test"}} {
 		inst, err := front.Mount(context.Background(), frontend.Host{Identity: identity, Sessions: broker, Capabilities: frontendtest.Capabilities{}})

@@ -1110,7 +1110,7 @@ func (i *instance) mediaSourceDialect(source map[string]any) {
 // upstream URL. Compatibility is filled in only from the broker's plan.
 func mediaSourceDTO(id string, media frontend.MediaInfo) map[string]any {
 	source := map[string]any{
-		"Id": id, "Container": media.Container, "RunTimeTicks": media.Duration.Nanoseconds() / 100, "Size": media.Size, "Bitrate": media.BitrateKbps * 1000,
+		"Id": id, "Container": media.Container, "RunTimeTicks": media.Duration.Nanoseconds() / 100, "Bitrate": media.BitrateKbps * 1000,
 		"Protocol": "Http", "Type": "Default", "IsRemote": true, "ReadAtNativeFramerate": false, "IgnoreDts": false, "IgnoreIndex": false, "GenPtsInput": false,
 		"SupportsDirectPlay": false, "SupportsDirectStream": false, "SupportsTranscoding": false, "IsInfiniteStream": false,
 		// Jellyfin's strict SDK requires a boolean. Until the broker exposes
@@ -1118,10 +1118,23 @@ func mediaSourceDTO(id string, media frontend.MediaInfo) map[string]any {
 		"RequiresOpening": false, "RequiresClosing": false, "RequiresLooping": false, "SupportsProbing": !media.Estimated && len(media.Streams) > 0, "TranscodingSubProtocol": "http", "HasSegments": false,
 		"Formats": []string{}, "MediaAttachments": []any{}, "RequiredHttpHeaders": map[string]string{}, "MediaStreams": mediaStreams(media.Streams),
 	}
+	if size := mediaSourceSize(media); size > 0 {
+		source["Size"] = size
+	}
 	if !media.Estimated {
 		addChapters(source, media)
 	}
 	return source
+}
+
+func mediaSourceSize(media frontend.MediaInfo) int64 {
+	if media.FileSize > 0 {
+		return media.FileSize
+	}
+	if !media.Estimated {
+		return media.Size
+	}
+	return 0
 }
 
 func (i *instance) mediaSourceDTO(id string, media frontend.MediaInfo) map[string]any {
@@ -1397,6 +1410,17 @@ func (i *instance) timeline(w http.ResponseWriter, r *http.Request, stopped, sta
 			return
 		}
 		item, ok := timelineItem(body)
+		if !ok && (body.ItemId != "" || body.MediaSourceId != "") {
+			// Version rows can report their scoped source id as the item.
+			if scope, e := i.versionScope(r, v); e == nil {
+				sourceID := body.ItemId
+				if sourceID == "" {
+					sourceID = body.MediaSourceId
+				}
+				item, _, _, e = i.resolveSource(r, scope, sourceID)
+				ok = e == nil
+			}
+		}
 		if !ok {
 			http.Error(w, "Bad Request", 400)
 			return

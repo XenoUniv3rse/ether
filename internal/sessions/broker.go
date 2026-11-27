@@ -1791,6 +1791,11 @@ func (b *Broker) ReportItemProgress(ctx context.Context, a frontend.SessionAcces
 	if frontend.ForeignMediaDuration(title.Runtime, t.Duration) {
 		return nil
 	}
+	// Emby and Jellyfin can send item-only reports without a runtime.
+	// Apply the resume and completion thresholds on the first report too.
+	if t.Duration <= 0 {
+		t.Duration = title.Runtime
+	}
 	ctx = state.WithOrigin(ctx, state.Origin{Surface: a.Protocol, SessionID: t.PlaybackID, ClientID: a.Device.ID})
 	if err := RecordProgress(ctx, b.deps.Progress, viewer.ID, item, t.Position, t.Duration, t.State); err != nil {
 		return err

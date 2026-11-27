@@ -18,6 +18,19 @@
     "example": "Authorization: MediaBrowser Client=\"Findroid\", Device=\"Android\", DeviceId=\"${device_id}\", Version=\"0.15.0\", Token=\"${access_token}\""
   },
   "flows": {
+    "offline_user_data": [
+      {
+        "name": "resume",
+        "method": "POST",
+        "path": "/UserItems/${item_id}/UserData?userId=${user_id}",
+        "body": {
+          "PlaybackPositionTicks": 6000000000,
+          "LastPlayedDate": "2022-01-02T03:04:05Z"
+        },
+        "fixture_only": true,
+        "expected_status": 200
+      }
+    ],
     "connect": [
       {
         "name": "system info",
