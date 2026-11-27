@@ -75,6 +75,7 @@ export interface DeclaredPermissions {
   sources?: string;
   ai?: string;
   media?: string;
+  storage?: string;
   secrets?: string[];
 }
 
@@ -599,6 +600,13 @@ export function buildGrantItems(detail: PluginDetail): GrantItem[] {
     items.push({
       key: "ai.search",
       label: t("Uses your language model while a viewer searches"),
+      revocable: true,
+    });
+  }
+  if (d.storage === "durable") {
+    items.push({
+      key: "storage",
+      label: t("Stores up to 1 GiB of data until deleted"),
       revocable: true,
     });
   }

@@ -87,9 +87,10 @@ func leadDefaults(rows []core.HomeRow, pl *pagePlan, maxRows int) (lead string, 
 			}
 		}
 	}
+	// Keep the feed near the bottom even when fewer than eight rows qualify.
 	for _, r := range rows {
 		if r.Kind == KindRecentlyAdded && !covered(r) {
-			defaults[r.HubID] = &rule{Row: r.HubID, Status: "eligible", MinSlot: max(1, min(recentlyAddedMinSlot, maxRows))}
+			defaults[r.HubID] = &rule{Row: r.HubID, Status: "eligible", MinSlot: max(1, min(recentlyAddedMinSlot, maxRows, len(rows)))}
 		}
 	}
 	return lead, defaults

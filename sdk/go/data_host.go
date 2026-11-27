@@ -27,6 +27,29 @@ type BlobHost interface {
 	ArchiveExtract(context.Context, string, int, ...ArchiveExtractOptions) (ArchiveExtractResult, error)
 }
 
+// CachePutOptions selects durable storage and optionally promotes an upload.
+type CachePutOptions struct {
+	Durable  bool   `json:"durable,omitempty"`
+	FromBlob string `json:"fromBlob,omitempty"`
+}
+
+// CacheOptionsHost gives sidecars access to cache.put with storage options.
+type CacheOptionsHost interface {
+	CachePutWithOptions(ctx context.Context, libraryKey, name string, data []byte, opts CachePutOptions) (string, error)
+}
+
+func (c *RemoteHostClient) CachePutWithOptions(ctx context.Context, libraryKey, name string, data []byte, opts CachePutOptions) (string, error) {
+	var payload any
+	if opts.FromBlob == "" || data != nil {
+		payload = map[string]string{"bodyBase64": base64.StdEncoding.EncodeToString(data)}
+	}
+	var out struct {
+		Blob string `json:"blob"`
+	}
+	_, err := c.callJSON(ctx, http.MethodPost, "/ether/plugin-host/data/cache.put", []any{libraryKey, name, payload, opts}, &out, false)
+	return out.Blob, err
+}
+
 type DataRange struct {
 	Offset int64 `json:"offset"`
 	Length int64 `json:"length"`

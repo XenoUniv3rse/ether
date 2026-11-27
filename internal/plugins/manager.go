@@ -94,6 +94,7 @@ type Backends struct {
 
 // Deps are the plugin host's explicit dependencies.
 type Deps struct {
+	DurableStorage    *blobcache.DurableStore
 	Busy              func() bool
 	ReadRuntimeConfig func() config.Plugins
 	SaveRuntimeConfig func(string, config.PluginRuntimeLimits) error
@@ -128,6 +129,7 @@ type Deps struct {
 
 // Manager is the plugin host. It is safe for concurrent use.
 type Manager struct {
+	storageMu    sync.RWMutex // coordinates durable writes with uninstall
 	screenPushMu sync.RWMutex
 	screenPush   ScreenPush
 	// viewerState backs the kinds.state / kinds.favorite / kinds.played /
@@ -723,6 +725,12 @@ func stremioDeadline(path string) time.Duration {
 // DeadlineFor returns the per-route deadline from SPEC §5.1.2.
 func DeadlineFor(path string) time.Duration {
 	return wasm.DeadlineFor(path)
+}
+
+// RedactDiagnostic removes stored plugin credentials from diagnostic text before
+// it leaves the plugin subsystem.
+func (m *Manager) RedactDiagnostic(ctx context.Context, pluginID, text string) string {
+	return m.store.redactKnown(ctx, pluginID, text)
 }
 
 // callOnce makes one call to a plugin through its runtime, records it in the
@@ -1484,7 +1492,16 @@ func (m *Manager) Remove(ctx context.Context, id string, undoFirst bool) error {
 		}
 		return true
 	})
-	if err := m.store.purge(ctx, id); err != nil {
+	m.storageMu.Lock()
+	if m.deps.DurableStorage != nil {
+		if err := m.deps.DurableStorage.Purge(id); err != nil {
+			m.storageMu.Unlock()
+			return ErrUnavailable
+		}
+	}
+	err = m.store.purge(ctx, id)
+	m.storageMu.Unlock()
+	if err != nil {
 		return err
 	}
 	m.clearBlockedLocalHosts(id)

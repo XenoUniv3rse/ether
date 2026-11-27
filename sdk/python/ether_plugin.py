@@ -1230,7 +1230,16 @@ class RemoteHostClient:
             with urllib.request.urlopen(req, timeout=30) as resp:
                 return resp.read()
 
-        def put(self, library_key: str, name: str, data: bytes) -> str:
+        def put(
+            self, library_key: str, name: str, data: Optional[bytes],
+            options: Optional["CachePutOptions"] = None,
+        ) -> str:
+            if options is not None or data is None:
+                payload = None if data is None else {"bodyBase64": base64.b64encode(data).decode("ascii")}
+                result = self._p._call_json(
+                    "POST", "/ether/plugin-host/data/cache.put", [library_key, name, payload, options]
+                )
+                return str((result or {}).get("blob") or "")
             q = urllib.parse.urlencode({"name": name})
             raw = self._request("POST", f"/ether/plugin-host/cache/{urllib.parse.quote(library_key)}?{q}", data)
             return str(json.loads(raw or b"{}").get("blob") or "")
@@ -1364,6 +1373,7 @@ class PluginContext:
     query: Dict[str, str]
     ether: Any
     i18n: I18nHelper
+    upload: Optional["FrontendUpload"] = None
 
     @property
     def pickToken(self) -> Optional[str]:
@@ -2230,10 +2240,23 @@ class PluginInstance:
             req_body = req.get("body")
             if req_body is None and isinstance(req.get("bodyBase64"), str):
                 req_body = base64.b64decode(req["bodyBase64"])
+            headers = dict(req.get("headers") or {})
+            upload = req.get("upload")
+            if _get_header(headers, "X-Ether-Frontend-Upload") == "1":
+                try:
+                    upload = _parse_json_body(req_body)
+                except (ValueError, UnicodeError):
+                    return _error_response(400, "invalid_upload", "Invalid frontend upload metadata.")
+            if upload is not None:
+                ctx.upload = upload
+                req_body = b""
+                headers = {k: v for k, v in headers.items() if k.lower() not in ("content-type", "x-ether-frontend-upload")}
+                if upload.get("contentType"):
+                    headers["Content-Type"] = upload["contentType"]
             if accepts_ctx:
-                status, headers, resp_body = handle_fn(method, sub_path, dict(req.get("headers") or {}), req_body or b"", ctx)
+                status, headers, resp_body = handle_fn(method, sub_path, headers, req_body or b"", ctx)
             else:
-                status, headers, resp_body = handle_fn(method, sub_path, dict(req.get("headers") or {}), req_body or b"")
+                status, headers, resp_body = handle_fn(method, sub_path, headers, req_body or b"")
             # A HEAD reply carries headers only, exactly as a real server would.
             if method == "HEAD":
                 resp_body = b""
@@ -4391,6 +4414,31 @@ class KindLiveProvider:
         raise NotImplementedError
 
 
+class FrontendUploadPath(TypedDict):
+    path: str
+    maxBytes: int
+
+
+class FrontendUploadBlob(TypedDict, total=False):
+    ref: str
+    size: int
+    contentType: str
+    field: str
+    filename: str
+
+
+class FrontendUpload(TypedDict, total=False):
+    contentType: str
+    blob: FrontendUploadBlob
+    files: List[FrontendUploadBlob]
+    fields: Dict[str, List[str]]
+
+
+class CachePutOptions(TypedDict, total=False):
+    durable: bool
+    fromBlob: str
+
+
 class FrontendAdapterMeta(TypedDict, total=False):
     """One ``contributes.frontendAdapters[]`` manifest entry."""
 
@@ -4403,6 +4451,7 @@ class FrontendAdapterMeta(TypedDict, total=False):
     auth: Literal["ether_token", "basic", "none_lan", "query_credentials"]
     libraries: List[str]
     searchPaths: List[str]
+    uploadPaths: List[FrontendUploadPath]
     # Path to an SVG or PNG inside the package, shown as the adapter's mark
     # on the Apps page. Without one the plugin's icon stands in.
     icon: str

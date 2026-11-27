@@ -366,6 +366,9 @@ func PermissionSheet(man Manifest) (lines []string, needsViewers, needsFolders b
 		lines = append(lines, "Uses your configured language model")
 		lines = append(lines, "Uses your language model while a viewer searches")
 	}
+	if allowsDurableStorage(storagePermission(man)) {
+		lines = append(lines, DurableStoragePermissionLine)
+	}
 	if normLevel(p.Media) == "probe" {
 		lines = append(lines, "Probes media container metadata")
 	}
@@ -470,6 +473,9 @@ func PermissionDiff(cur, next Manifest) []string {
 	}
 	if raised(a.Folders, b.Folders) {
 		added = append(added, "Reads folders you choose")
+	}
+	if !allowsDurableStorage(normLevel(string(a.Storage))) && allowsDurableStorage(normLevel(string(b.Storage))) {
+		added = append(added, DurableStoragePermissionLine)
 	}
 	if raised(a.Media, b.Media) {
 		added = append(added, "Probes media container metadata")

@@ -1151,6 +1151,8 @@ func CallDataHost(ctx context.Context, h Host, name string, raw json.RawMessage)
 			}
 		}
 		value = limits
+	} else if name == "cache.put" {
+		value, err = callCachePut(ctx, h, args)
 	} else if name == "http.hash" {
 		var req HashRequest
 		if len(args) != 1 {

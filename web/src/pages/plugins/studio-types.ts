@@ -148,6 +148,7 @@ export interface StudioInstallPreview {
         sources?: string;
         ai?: string;
         media?: string;
+        storage?: string;
         secrets?: string[];
       };
     };

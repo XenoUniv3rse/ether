@@ -967,7 +967,7 @@ query the client sent:
 | `/ether/v1/kinds/{kind}/resolve` | A viewer presses play | `{libraryKey, item, partIndex?, source?, client?}` → ordered `sources`. Never called during browse. |
 | `/ether/v1/kinds/{kind}/match` | Resolve-time matching, console re-match | `{item, candidates}` → `{matches:[{candidateRef, score 0..1, reasons}]}` best first. |
 | `/ether/v1/setup/{step}/test` | The setup wizard | `{step, fields}` → `{ok, detail, fields?}`. Secrets arrive via `SecretGet`, never in this body. |
-| `/ether/v1/frontend/{key}/…` | Your frontend adapter's traffic | Any method, and the original query string (repeated keys flatten to the first value for remote plugins; hosted plugins receive every value of a repeated key, such as Subsonic's `id=1&id=2`, as an array). Ether authenticated the viewer first; you get `X-Ether-Viewer` headers, `X-Ether-Origin` (`scheme://host[:port][/prefix]` derived from the request using Ether's trusted proxy policy, with any client-supplied `X-Ether-Origin` stripped), and a request-scoped `X-Ether-Viewer-Token` for `kinds.visible`, `kinds.browse`, and remote `frontend.streamURL` callbacks — never a credential. Bodies are capped at 1 MiB (larger gets 413). The exact request bytes always arrive base64-encoded in `bodyBase64` with the client's `contentType`; `body` additionally holds the parsed JSON value when the bytes are valid JSON, and is absent for non-JSON bodies (multipart, form-encoded, binary). The TypeScript SDK's `frontendBodyBytes(req)` returns the exact bytes. |
+| `/ether/v1/frontend/{key}/…` | Your frontend adapter's traffic | Any method, and the original query string (repeated keys flatten to the first value for remote plugins; hosted plugins receive every value of a repeated key, such as Subsonic's `id=1&id=2`, as an array). Ether authenticated the viewer first; you get `X-Ether-Viewer` headers, `X-Ether-Origin` (`scheme://host[:port][/prefix]` derived from the request using Ether's trusted proxy policy, with any client-supplied `X-Ether-Origin` stripped), and a request-scoped `X-Ether-Viewer-Token` for `kinds.visible`, `kinds.browse`, and remote `frontend.streamURL` callbacks — never a credential. Outside declared upload routes, bodies are capped at 1 MiB (larger gets 413). The exact request bytes always arrive base64-encoded in `bodyBase64` with the client's `contentType`; `body` additionally holds the parsed JSON value when the bytes are valid JSON, and is absent for non-JSON bodies (multipart, form-encoded, binary). The TypeScript SDK's `frontendBodyBytes(req)` returns the exact bytes. |
 
 Clients are **always served from Ether's store** — browse, search
 and detail never call you live, so nothing scales with your catalogue
@@ -1687,6 +1687,59 @@ adapter icon is missing or cannot be rendered.
 
 Use a protocol's or app's own logo only to identify it, and record its
 source and licence in your package's NOTICE.
+
+### Streamed uploads and durable blobs
+
+Declare upload routes in `ether.contributes.frontendAdapters[].uploadPaths`, for example:
+
+```json
+"uploadPaths": [{ "path": "/saves/*", "maxBytes": 67108864 }]
+```
+
+Paths are relative to the adapter's public prefix. The matcher ignores a trailing
+slash and supports Go path globs such as `*` within a segment. The smallest
+matching limit applies. Declare at most 16 paths, with 1 byte to 64 MiB per route.
+The limit covers the whole HTTP body, including multipart headers and framing.
+For `query_credentials` adapters, send credentials in the query on upload routes.
+
+After viewer authentication, Ether stages the body on disk and passes `upload`
+metadata in place of inline body bytes. Hosted handlers receive `req.upload`.
+The TypeScript adapter receives it as the sixth argument to `handle`, Go uses
+`FrontendUploadFromContext(r.Context())`, and Python uses `ctx.upload`. The
+metadata contains the original `contentType` and either:
+
+- `blob: {ref, size, contentType}` for a raw body.
+- `files: [{ref, size, field, filename, contentType}]` and
+  `fields: {fieldName: [value, ...]}` for multipart. Repeated fields and files are
+  preserved. Multipart allows 64 parts and 128 KiB of inline text and metadata.
+
+A sidecar implementing its own HTTP or tunnel transport receives the metadata as
+a JSON body with `X-Ether-Frontend-Upload: 1`. Uploaded refs work with
+`cache.read` during the request and are cleaned up when the response ends.
+
+Declare `ether.permissions.storage: "durable"` to retain data after the request.
+The owner sees the 1 GiB per-plugin limit in the permission drawer and can revoke
+access. Durable storage allows up to 10,000 unique blobs and has its own quota.
+Its blobs survive restarts, cache sweeps, and cache eviction. They are deleted
+only by `cache.delete` or plugin uninstall. Keep the returned ref in your own
+per-viewer metadata and check the active viewer before accessing that metadata.
+
+```js
+// Hosted handler. The SDK cache.put returns the ref directly.
+const { blob } = ether.cache.put("", "", null, {
+  durable: true,
+  fromBlob: req.upload.files[0].ref,
+});
+```
+
+Promotion links the staged file into permanent storage without copying it. Store
+the returned `durable:<sha256>` ref. Identical saved bytes share a ref and quota
+charge within the plugin, so delete a ref only after your last use. To save small
+bytes directly, use `cache.put("", name, data, {durable: true})`. Go sidecars use
+`CacheOptionsHost.CachePutWithOptions` and Python sidecars pass the options dict
+to `ctx.ether.cache.put`. For a large saved blob, read ranges with `cache.read`.
+The data directory's `plugin-blob-storage/saved` tree should be included in a
+filesystem backup alongside the matching plugin database snapshot.
 
 ### Frontend adapter authentication
 
@@ -6270,6 +6323,7 @@ type ScheduleEntry struct {
 | `folders` | `string` | may be omitted (see validation for conditions) | ""\|none\|read |
 | `sources` | `string` | may be omitted (see validation for conditions) | Sources lets a kind resolver ask Ether to find bytes through the owner's indexers and debrid accounts (spec §4.5). ""\|none\|search\|acquire |
 | `ai` | `string` | may be omitted (see validation for conditions) | AI lets a plugin send bounded completion requests to the owner's configured language model (actions/jobs/sync only, never viewer paths). ""\|none\|complete\|complete+search |
+| `storage` | `StoragePermission` | may be omitted (see validation for conditions) | Storage lets a plugin retain durable blobs within its per-plugin quota. ""\|none\|durable |
 | `media` | `string` | may be omitted (see validation for conditions) | Media lets a plugin probe container metadata via media.probe from jobs, actions, and background sync (never viewer or client request paths). ""\|none\|probe |
 | `secrets` | `[]string` | may be omitted (see validation for conditions) |  |
 
@@ -6291,6 +6345,8 @@ type Permissions struct {
 	// AI lets a plugin send bounded completion requests to the owner's
 	// configured language model (actions/jobs/sync only, never viewer paths).
 	AI string `json:"ai,omitempty" yaml:"ai,omitempty"` // ""|none|complete|complete+search
+	// Storage lets a plugin retain durable blobs within its per-plugin quota.
+	Storage StoragePermission `json:"storage,omitempty" yaml:"storage,omitempty"` // ""|none|durable
 	// Media lets a plugin probe container metadata via media.probe from jobs,
 	// actions, and background sync (never viewer or client request paths).
 	Media   string   `json:"media,omitempty" yaml:"media,omitempty"` // ""|none|probe
@@ -8121,6 +8177,7 @@ type KindMatchDecl struct {
 | `auth` | `string` | may be omitted (see validation for conditions) | ether_token (default)\|basic\|none_lan\|query_credentials |
 | `libraries` | `[]string` | may be omitted (see validation for conditions) | Libraries lists the plugin's media-kind keys this adapter publishes. Ether resolves each key to the library the kind created and admits a viewer only to the libraries they may see; a viewer who sees none of them is answered 404. Empty means the adapter is not library-scoped. |
 | `searchPaths` | `[]string` | may be omitted (see validation for conditions) | SearchPaths optionally lists adapter subpaths (such as "/search", "/rest/search3", or "/graphql") that handle interactive viewer searches and may call ai.complete when permissions.ai is "complete+search" (#702). When omitted, conventional search subpaths (ending in /search, /search2, or /search3, with optional .json/.xml/.view suffix) are recognized. |
+| `uploadPaths` | `[]FrontendUploadPath` | may be omitted (see validation for conditions) | UploadPaths opt in to disk staging for selected adapter subpaths. |
 | `icon` | `string` | may be omitted (see validation for conditions) | Icon is the adapter's own mark on the Apps page: a path to an SVG or PNG inside the package. Without one the plugin's icon stands in. |
 
 
@@ -8148,10 +8205,49 @@ type FrontendAdapterMeta struct {
 	// When omitted, conventional search subpaths (ending in /search, /search2,
 	// or /search3, with optional .json/.xml/.view suffix) are recognized.
 	SearchPaths []string `json:"searchPaths,omitempty"`
+	// UploadPaths opt in to disk staging for selected adapter subpaths.
+	UploadPaths []FrontendUploadPath `json:"uploadPaths,omitempty"`
 	// Icon is the adapter's own mark on the Apps page: a path to an SVG or
 	// PNG inside the package. Without one the plugin's icon stands in.
 	Icon string `json:"icon,omitempty"`
 }
+``````
+
+## Source: internal/plugins/contract.go#FrontendUploadPath.fields.md
+
+| Field | Go type | Wire presence | Description |
+|---|---|---|---|
+| `path` | `string` | emitted (validation may require a value) |  |
+| `maxBytes` | `int64` | emitted (validation may require a value) |  |
+
+
+## Source: internal/plugins/contract.go#FrontendUploadPath
+
+``````
+// FrontendUploadPath declares a glob and the maximum wire body size in bytes.
+type FrontendUploadPath struct {
+	Path     string `json:"path"`
+	MaxBytes int64  `json:"maxBytes"`
+}
+``````
+
+## Source: internal/plugins/contract.go#FrontendUploadHeader
+
+``````
+// FrontendUploadHeader identifies the metadata-only body on sidecar transports.
+const FrontendUploadHeader = "X-Ether-Frontend-Upload"
+``````
+
+## Source: internal/plugins/contract.go#FrontendUpload
+
+``````
+type FrontendUpload = wasm.FrontendUpload
+``````
+
+## Source: internal/plugins/contract.go#FrontendUploadBlob
+
+``````
+type FrontendUploadBlob = wasm.FrontendUploadBlob
 ``````
 
 ## Source: internal/plugins/contract.go#SetupMeta.fields.md
@@ -8212,6 +8308,7 @@ type SetupStep struct {
 | `body` | `json.RawMessage` | may be omitted (see validation for conditions) |  |
 | `bodyBase64` | `string` | may be omitted (see validation for conditions) | BodyBase64 carries the exact request bytes, base64-encoded, when the caller needs them byte-for-byte (frontend adapter routes). Body holds the parsed JSON value when the bytes are valid JSON; a non-JSON body arrives only here, never as an invalid RawMessage. |
 | `contentType` | `string` | may be omitted (see validation for conditions) |  |
+| `upload` | `*FrontendUpload` | may be omitted (see validation for conditions) |  |
 | `locale` | `string` | may be omitted (see validation for conditions) | Locale is the console locale for calls that return copy. |
 
 
@@ -8238,8 +8335,9 @@ type Request struct {
 	// caller needs them byte-for-byte (frontend adapter routes). Body holds
 	// the parsed JSON value when the bytes are valid JSON; a non-JSON body
 	// arrives only here, never as an invalid RawMessage.
-	BodyBase64  string `json:"bodyBase64,omitempty"`
-	ContentType string `json:"contentType,omitempty"`
+	BodyBase64  string          `json:"bodyBase64,omitempty"`
+	ContentType string          `json:"contentType,omitempty"`
+	Upload      *FrontendUpload `json:"upload,omitempty"`
 	// Locale is the console locale for calls that return copy.
 	Locale string `json:"locale,omitempty"`
 	// Foreground marks an /ether/job/ call that a viewer is waiting on
@@ -9709,6 +9807,9 @@ func PermissionSheet(man Manifest) (lines []string, needsViewers, needsFolders b
 		lines = append(lines, "Uses your configured language model")
 		lines = append(lines, "Uses your language model while a viewer searches")
 	}
+	if allowsDurableStorage(storagePermission(man)) {
+		lines = append(lines, DurableStoragePermissionLine)
+	}
 	if normLevel(p.Media) == "probe" {
 		lines = append(lines, "Probes media container metadata")
 	}
@@ -9817,6 +9918,9 @@ func PermissionDiff(cur, next Manifest) []string {
 	}
 	if raised(a.Folders, b.Folders) {
 		added = append(added, "Reads folders you choose")
+	}
+	if !allowsDurableStorage(normLevel(string(a.Storage))) && allowsDurableStorage(normLevel(string(b.Storage))) {
+		added = append(added, DurableStoragePermissionLine)
 	}
 	if raised(a.Media, b.Media) {
 		added = append(added, "Probes media container metadata")
@@ -16058,6 +16162,8 @@ func CallDataHost(ctx context.Context, h Host, name string, raw json.RawMessage)
 			}
 		}
 		value = limits
+	} else if name == "cache.put" {
+		value, err = callCachePut(ctx, h, args)
 	} else if name == "http.hash" {
 		var req HashRequest
 		if len(args) != 1 {
@@ -19470,10 +19576,27 @@ func validateBlobRef(blobRef string) error {
 }
 ``````
 
+## Source: internal/plugins/host_kinds.go#validateDurableBlobRef
+
+``````
+func validateDurableBlobRef(ref string) error {
+	if _, err := blobcache.ParseDurableRef(blobcache.Ref(ref)); err != nil {
+		return &ValidationError{Fields: []FieldError{{Field: "blobRef", Message: "durable reference must be durable:<sha256>"}}}
+	}
+	return nil
+}
+``````
+
 ## Source: internal/plugins/host_kinds.go#*host.CacheOpen
 
 ``````
 func (h *host) CacheOpen(ctx context.Context, blobRef string) (io.ReadSeekCloser, error) {
+	if strings.HasPrefix(blobRef, blobcache.DurableRefPrefix) {
+		if err := validateDurableBlobRef(blobRef); err != nil {
+			return nil, err
+		}
+		return h.openDurableBlob(ctx, blobRef)
+	}
 	r, err := h.callRecord(ctx)
 	if err != nil {
 		return nil, err
@@ -19483,6 +19606,11 @@ func (h *host) CacheOpen(ctx context.Context, blobRef string) (io.ReadSeekCloser
 	}
 	if err := validateBlobRef(blobRef); err != nil {
 		return nil, err
+	}
+	if s := h.m.deps.DurableStorage; s != nil {
+		if src, err := s.Open(h.plugin, blobcache.Ref(blobRef)); !errors.Is(err, blobcache.ErrNotFound) {
+			return src, storageError(err)
+		}
 	}
 	backend := h.m.kindBackends().CacheOpen
 	if backend == nil {
@@ -19499,6 +19627,12 @@ func (h *host) CacheOpen(ctx context.Context, blobRef string) (io.ReadSeekCloser
 // namespaces, freeing its quota immediately. Deleting a ref that is absent or
 // already evicted succeeds.
 func (h *host) CacheDelete(ctx context.Context, blobRef string) error {
+	if strings.HasPrefix(blobRef, blobcache.DurableRefPrefix) {
+		if err := validateDurableBlobRef(blobRef); err != nil {
+			return err
+		}
+		return h.deleteDurableBlob(ctx, blobRef)
+	}
 	if err := h.requireWritableToolContext(ctx); err != nil {
 		return err
 	}
@@ -20112,7 +20246,7 @@ func (r *hostedRuntime) Call(ctx context.Context, req Request) (Response, error)
 		headers = cloneHeaders(headers)
 		headers["X-Ether-Locale"] = req.Locale
 	}
-	resp, err := r.p.Call(ctx, wasm.Request{Op: req.Op, ID: req.ID, Method: req.Method, Path: req.Path, Query: q, Headers: headers, Body: req.Body, BodyBase64: req.BodyBase64, ContentType: req.ContentType, Foreground: req.Foreground, Deadline: req.Deadline, AISearch: req.AISearch})
+	resp, err := r.p.Call(ctx, wasm.Request{Op: req.Op, ID: req.ID, Method: req.Method, Path: req.Path, Query: q, Headers: headers, Body: req.Body, BodyBase64: req.BodyBase64, ContentType: req.ContentType, Upload: req.Upload, Foreground: req.Foreground, Deadline: req.Deadline, AISearch: req.AISearch})
 	if err != nil {
 		return Response{}, err
 	}
@@ -20632,34 +20766,7 @@ func (b hostBridge) CallHost(ctx context.Context, name string, raw json.RawMessa
 		}
 		return result(res, nil)
 	case "cache.put":
-		var body []byte
-		if len(args) > 2 {
-			var s string
-			if err := json.Unmarshal(args[2], &s); err == nil {
-				body = []byte(s)
-			} else {
-				var wrapped struct {
-					Body       string `json:"body"`
-					BodyBase64 string `json:"bodyBase64"`
-				}
-				if err := json.Unmarshal(args[2], &wrapped); err != nil {
-					return nil, &wasm.Fault{Code: "bad_arguments", Message: "cache.put takes (libraryKey, name, data)"}
-				}
-				body = []byte(wrapped.Body)
-				if wrapped.BodyBase64 != "" {
-					decoded, err := base64.StdEncoding.DecodeString(wrapped.BodyBase64)
-					if err != nil {
-						return nil, &wasm.Fault{Code: "bad_arguments", Message: "bodyBase64 is not valid base64"}
-					}
-					body = decoded
-				}
-			}
-		}
-		ref, err := b.h.CachePut(ctx, str(0), str(1), bytes.NewReader(body))
-		if err != nil {
-			return nil, mapHostError(err)
-		}
-		return result(map[string]any{"blob": ref}, nil)
+		return result(callCachePut(ctx, b.h, args))
 	case "cache.open":
 		readCap := int64(MinDataReadBytes)
 		if provider, ok := b.h.(interface {
@@ -25574,6 +25681,7 @@ func validatePermissions(p Permissions, add func(string, string)) {
 	level("ether.permissions.folders", normLevel(p.Folders), "none", "read")
 	level("ether.permissions.sources", normLevel(p.Sources), "none", "search", "search+check", "acquire", "acquire+check")
 	level("ether.permissions.ai", normLevel(p.AI), "none", "complete", "complete+search")
+	level("ether.permissions.storage", normLevel(string(p.Storage)), "none", "durable")
 	level("ether.permissions.media", normLevel(p.Media), "none", "probe")
 	level("ether.permissions.viewers.identity", normLevel(p.Viewers.Identity), "none", "granted_viewers", "all")
 	level("ether.permissions.viewers.watch_history", normLevel(p.Viewers.WatchHistory), "none", "granted_viewers", "all")
@@ -27271,10 +27379,63 @@ func validateFrontendAdapters(m Manifest, add func(string, string), label func(s
 			}
 			seenSearch[norm] = true
 		}
+		if len(a.UploadPaths) > maxAdapterUploadPaths {
+			add(base+".uploadPaths", fmt.Sprintf("must declare at most %d upload paths", maxAdapterUploadPaths))
+		}
+		seenUploads := map[string]bool{}
+		for j, upload := range a.UploadPaths {
+			field := fmt.Sprintf("%s.uploadPaths[%d]", base, j)
+			norm, ok := normalizeAdapterSearchPath(upload.Path)
+			if _, err := path.Match(norm, ""); !ok || err != nil || len(norm) > 256 {
+				add(field+".path", "must be a clean subpath glob starting with /, at most 256 characters")
+			} else if seenUploads[norm] {
+				add(field+".path", "must not repeat an upload path")
+			}
+			seenUploads[norm] = true
+			if upload.MaxBytes < 1 || upload.MaxBytes > MaxAdapterUploadBytes {
+				add(field+".maxBytes", fmt.Sprintf("must be between 1 and %d bytes", MaxAdapterUploadBytes))
+			}
+		}
 		if a.Icon != "" && !ValidAdapterIconPath(a.Icon) {
 			add(base+".icon", "must be an SVG or PNG file inside the package")
 		}
 	}
+}
+``````
+
+## Source: internal/plugins/manifest_kinds.go#MaxAdapterUploadBytes
+
+``````
+const (
+	MaxAdapterUploadBytes int64 = 64 << 20
+	maxAdapterUploadPaths       = 16
+)
+``````
+
+## Source: internal/plugins/manifest_kinds.go#FrontendAdapterMeta.UploadLimit
+
+``````
+// UploadLimit returns the smallest limit of the declared globs matching a
+// normalized adapter subpath, or zero for ordinary inline requests.
+func (a FrontendAdapterMeta) UploadLimit(subpath string) int64 {
+	if len(a.UploadPaths) == 0 {
+		return 0
+	}
+	subpath, ok := normalizeAdapterSearchPath(subpath)
+	if !ok {
+		return 0
+	}
+	var limit int64
+	for _, upload := range a.UploadPaths {
+		pattern, ok := normalizeAdapterSearchPath(upload.Path)
+		if !ok || upload.MaxBytes < 1 || upload.MaxBytes > MaxAdapterUploadBytes {
+			continue
+		}
+		if match, _ := path.Match(pattern, subpath); match && (limit == 0 || upload.MaxBytes < limit) {
+			limit = upload.MaxBytes
+		}
+	}
+	return limit
 }
 ``````
 
@@ -34123,7 +34284,7 @@ globalThis.ether = (() => {
              playlistUpdate: (kind, id, update) => call("kinds.playlistUpdate", [kind, id, update == null ? {} : update]),
              playlistDelete: (kind, id) => call("kinds.playlistDelete", [kind, id]) },
     sources: { resolve: (q) => call("sources.resolve", [q == null ? {} : q]) },
-    cache: { put: (lib, name, data) => call("cache.put", [lib, name == null ? "" : name, data == null ? "" : data]),
+    cache: { put: (lib, name, data, opts) => call("cache.put", [lib, name ?? "", data ?? null, opts ?? null]),
              open: (blobRef) => call("cache.open", [blobRef]), read: (blobRef, range) => call("cache.read", [blobRef, range]),
              rasterize: (lib, name, blobRef, opts) => call("cache.rasterize", opts == null ? [lib, name, blobRef] : [lib, name, blobRef, opts]),
              delete: (blobRef) => call("cache.delete", [blobRef]) },
@@ -35319,6 +35480,51 @@ type Outcome struct {
 }
 ``````
 
+## Source: internal/plugins/wasm/wasm.go#FrontendUpload.fields.md
+
+| Field | Go type | Wire presence | Description |
+|---|---|---|---|
+| `contentType` | `string` | may be omitted (see validation for conditions) |  |
+| `blob` | `*FrontendUploadBlob` | may be omitted (see validation for conditions) |  |
+| `files` | `[]FrontendUploadBlob` | may be omitted (see validation for conditions) |  |
+| `fields` | `map[string][]string` | may be omitted (see validation for conditions) |  |
+
+
+## Source: internal/plugins/wasm/wasm.go#FrontendUpload
+
+``````
+// FrontendUpload describes a staged raw body or multipart files and text fields.
+type FrontendUpload struct {
+	ContentType string               `json:"contentType,omitempty"`
+	Blob        *FrontendUploadBlob  `json:"blob,omitempty"`
+	Files       []FrontendUploadBlob `json:"files,omitempty"`
+	Fields      map[string][]string  `json:"fields,omitempty"`
+}
+``````
+
+## Source: internal/plugins/wasm/wasm.go#FrontendUploadBlob.fields.md
+
+| Field | Go type | Wire presence | Description |
+|---|---|---|---|
+| `ref` | `string` | emitted (validation may require a value) |  |
+| `size` | `int64` | emitted (validation may require a value) |  |
+| `contentType` | `string` | may be omitted (see validation for conditions) |  |
+| `field` | `string` | may be omitted (see validation for conditions) |  |
+| `filename` | `string` | may be omitted (see validation for conditions) |  |
+
+
+## Source: internal/plugins/wasm/wasm.go#FrontendUploadBlob
+
+``````
+type FrontendUploadBlob struct {
+	Ref         string `json:"ref"`
+	Size        int64  `json:"size"`
+	ContentType string `json:"contentType,omitempty"`
+	Field       string `json:"field,omitempty"`
+	Filename    string `json:"filename,omitempty"`
+}
+``````
+
 ## Source: internal/plugins/wasm/wasm.go#Request.fields.md
 
 | Field | Go type | Wire presence | Description |
@@ -35332,6 +35538,7 @@ type Outcome struct {
 | `body` | `json.RawMessage` | may be omitted (see validation for conditions) |  |
 | `bodyBase64` | `string` | may be omitted (see validation for conditions) | BodyBase64 is the exact request bytes when the caller needs them byte-for-byte; ContentType is the caller's Content-Type. A non-JSON body arrives only in BodyBase64. |
 | `contentType` | `string` | may be omitted (see validation for conditions) |  |
+| `upload` | `*FrontendUpload` | may be omitted (see validation for conditions) |  |
 
 
 ## Source: internal/plugins/wasm/wasm.go#Request
@@ -35349,8 +35556,9 @@ type Request struct {
 	// BodyBase64 is the exact request bytes when the caller needs them
 	// byte-for-byte; ContentType is the caller's Content-Type. A non-JSON
 	// body arrives only in BodyBase64.
-	BodyBase64  string `json:"bodyBase64,omitempty"`
-	ContentType string `json:"contentType,omitempty"`
+	BodyBase64  string          `json:"bodyBase64,omitempty"`
+	ContentType string          `json:"contentType,omitempty"`
+	Upload      *FrontendUpload `json:"upload,omitempty"`
 	// Foreground keeps an /ether/job/ call off the background throttle
 	// because a viewer is waiting on it. Host-side only.
 	Foreground bool `json:"-"`
@@ -37378,6 +37586,9 @@ func (p *Plugin) CallDetailed(ctx context.Context, req Request) (resp Response, 
 | `ether.contributes.frontendAdapters[].pathPrefix` | `string` | false | {} |
 | `ether.contributes.frontendAdapters[].protocolHint` | `string` | false | {} |
 | `ether.contributes.frontendAdapters[].searchPaths` | `array` | false | {} |
+| `ether.contributes.frontendAdapters[].uploadPaths` | `array` | false | {"description":"Adapter subpath globs that accept uploads streamed to disk. The smallest matching maxBytes applies to the entire wire body.","maxItems":16} |
+| `ether.contributes.frontendAdapters[].uploadPaths[].maxBytes` | `integer` | true | {"maximum":67108864,"minimum":1} |
+| `ether.contributes.frontendAdapters[].uploadPaths[].path` | `string` | true | {"maxLength":256,"pattern":"^/"} |
 | `ether.contributes.integration` | `object` | false | {"required":["category","adds","connect"]} |
 | `ether.contributes.integration.adds` | `array` | true | {"maxItems":4,"minItems":1} |
 | `ether.contributes.integration.category` | `string` | true | {} |
@@ -37620,6 +37831,7 @@ func (p *Plugin) CallDetailed(ctx context.Context, req Request) (resp Response, 
 | `ether.permissions.network` | `array` | false | {} |
 | `ether.permissions.secrets` | `array` | false | {} |
 | `ether.permissions.sources` | `any` | false | {"description":"Ask Ether to search indexers and inspect or acquire debrid/Usenet releases via sources.resolve (\"search\", \"search+check\", \"acquire\", or \"acquire+check\"). The \"+check\" variants also permit background usenet_check calls in jobs and schedules within the owner's per-plugin daily allowance. Requires the kind_resolver capability.","enum":["none","search","search+check","acquire","acquire+check"]} |
+| `ether.permissions.storage` | `any` | false | {"description":"Keep up to 1 GiB of durable blobs per plugin. Durable blobs are removed by cache.delete or plugin uninstall.","enum":["none","durable"]} |
 | `ether.permissions.viewers` | `object` | false | {} |
 | `ether.permissions.viewers.identity` | `any` | false | {"enum":["none","granted_viewers","all"]} |
 | `ether.permissions.viewers.watch_history` | `any` | false | {"enum":["none","granted_viewers","all"]} |
@@ -38133,6 +38345,28 @@ func (p *Plugin) CallDetailed(ctx context.Context, req Request) (resp Response, 
                     "items": {
                       "type": "string"
                     },
+                    "type": "array"
+                  },
+                  "uploadPaths": {
+                    "description": "Adapter subpath globs that accept uploads streamed to disk. The smallest matching maxBytes applies to the entire wire body.",
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "path": {
+                          "maxLength": 256,
+                          "pattern": "^/",
+                          "type": "string"
+                        },
+                        "maxBytes": {
+                          "maximum": 67108864,
+                          "minimum": 1,
+                          "type": "integer"
+                        }
+                      },
+                      "required": ["path", "maxBytes"],
+                      "type": "object"
+                    },
+                    "maxItems": 16,
                     "type": "array"
                   }
                 },
@@ -39742,6 +39976,13 @@ func (p *Plugin) CallDetailed(ctx context.Context, req Request) (resp Response, 
                 "acquire+check"
               ]
             },
+            "storage": {
+              "description": "Keep up to 1 GiB of durable blobs per plugin. Durable blobs are removed by cache.delete or plugin uninstall.",
+              "enum": [
+                "none",
+                "durable"
+              ]
+            },
             "viewers": {
               "properties": {
                 "identity": {
@@ -40907,6 +41148,22 @@ FoldersList/Stat/Hash need `folders:read` plus an owner-selected root; they retu
 metadata/digests, not bytes. Viewer access requires that viewer's grant.
 Private LAN hosts stay blocked for HTTP fetch, fetchToCache, hash, and remote calls unless the owner allows the exact `host` or `host:port` under "On your network" in the plugin's settings (loopback stays blocked unless `localhost` or `127.0.0.1` is explicitly granted). Exact local hosts declared in `permissions.network` (dotless names, `.local`, `.lan`, `.home.arpa`, or private IPs) are shown on the install sheet and pre-granted when installed. For user-hosted services whose hostname comes from plugin settings, declare `"operator"` in `permissions.network` (never `"*"`); Ether prompts the owner to approve each server address per plugin before requests or stream resolvers admit it.
 Host calls enforce permissions again on every request; revocation is immediate.
+
+## Frontend adapter uploads and saved data
+
+Declare `frontendAdapters[].uploadPaths: [{path, maxBytes}]` for authenticated
+routes that accept large raw or multipart bodies. Paths are adapter-relative
+globs and the host caps the whole body at 64 MiB. Read metadata in `req.upload`
+(hosted), the sixth argument to the TypeScript adapter's `handle`,
+`FrontendUploadFromContext(r.Context())` (Go), or `ctx.upload` (Python).
+Multipart metadata contains one `files` entry per file and repeated text values
+in `fields`. Read a staged blob with `cache.read` while the request is active.
+
+For saves, declare `permissions.storage: "durable"` and promote the staged ref
+using `cache.put("", "", null, {durable: true, fromBlob: ref})`. Store the
+returned ref per viewer and authorize reads and deletions against that viewer.
+The per-plugin quota is 1 GiB and 10,000 unique blobs. Durable bytes remain until
+`cache.delete` or uninstall. See [streamed uploads and durable blobs](../docs/plugin-kinds.md#streamed-uploads-and-durable-blobs).
 
 ## Owner language model (`ether.ai.complete`)
 
@@ -55153,6 +55410,49 @@ type BlobHost interface {
 }
 ``````
 
+## Source: sdk/go/data_host.go#CachePutOptions.fields.md
+
+| Field | Go type | Wire presence | Description |
+|---|---|---|---|
+| `durable` | `bool` | may be omitted (see validation for conditions) |  |
+| `fromBlob` | `string` | may be omitted (see validation for conditions) |  |
+
+
+## Source: sdk/go/data_host.go#CachePutOptions
+
+``````
+// CachePutOptions selects durable storage and optionally promotes an upload.
+type CachePutOptions struct {
+	Durable  bool   `json:"durable,omitempty"`
+	FromBlob string `json:"fromBlob,omitempty"`
+}
+``````
+
+## Source: sdk/go/data_host.go#CacheOptionsHost
+
+``````
+// CacheOptionsHost gives sidecars access to cache.put with storage options.
+type CacheOptionsHost interface {
+	CachePutWithOptions(ctx context.Context, libraryKey, name string, data []byte, opts CachePutOptions) (string, error)
+}
+``````
+
+## Source: sdk/go/data_host.go#*RemoteHostClient.CachePutWithOptions
+
+``````
+func (c *RemoteHostClient) CachePutWithOptions(ctx context.Context, libraryKey, name string, data []byte, opts CachePutOptions) (string, error) {
+	var payload any
+	if opts.FromBlob == "" || data != nil {
+		payload = map[string]string{"bodyBase64": base64.StdEncoding.EncodeToString(data)}
+	}
+	var out struct {
+		Blob string `json:"blob"`
+	}
+	_, err := c.callJSON(ctx, http.MethodPost, "/ether/plugin-host/data/cache.put", []any{libraryKey, name, payload, opts}, &out, false)
+	return out.Blob, err
+}
+``````
+
 ## Source: sdk/go/data_host.go#DataRange.fields.md
 
 | Field | Go type | Wire presence | Description |
@@ -59921,6 +60221,34 @@ func kindPageResponse(page KindPage, err error, limit int) RawResponse {
 type frontendContextKey struct{}
 ``````
 
+## Source: sdk/go/kinds.go#frontendUploadKey.fields.md
+
+| Field | Go type | Wire presence | Description |
+|---|---|---|---|
+
+
+## Source: sdk/go/kinds.go#frontendUploadKey
+
+``````
+type frontendUploadKey struct{}
+``````
+
+## Source: sdk/go/kinds.go#frontendUploadHeader
+
+``````
+const frontendUploadHeader = "X-Ether-Frontend-Upload"
+``````
+
+## Source: sdk/go/kinds.go#FrontendUploadFromContext
+
+``````
+// FrontendUploadFromContext returns upload metadata for a declared upload route.
+func FrontendUploadFromContext(ctx context.Context) (*FrontendUpload, bool) {
+	u, ok := ctx.Value(frontendUploadKey{}).(*FrontendUpload)
+	return u, ok
+}
+``````
+
 ## Source: sdk/go/kinds.go#FrontendContext
 
 ``````
@@ -59971,9 +60299,28 @@ func (p *Plugin) dispatchFrontend(pctx *Context, method, key, subPath string, re
 		pctx.Context = reqCtx
 	}
 	reqCtx = context.WithValue(reqCtx, frontendContextKey{}, pctx)
-	httpReq := httptest.NewRequestWithContext(reqCtx, method, target, bytes.NewReader(req.Body))
+	upload := req.Upload
+	if headerValue(req.Headers, frontendUploadHeader) == "1" {
+		upload = new(FrontendUpload)
+		if err := json.Unmarshal(req.Body, upload); err != nil {
+			return errorJSON(http.StatusBadRequest, "invalid_upload", "Invalid frontend upload metadata.")
+		}
+	}
+	bodyBytes := req.Body
+	if upload != nil {
+		reqCtx = context.WithValue(reqCtx, frontendUploadKey{}, upload)
+		bodyBytes = nil
+	}
+	httpReq := httptest.NewRequestWithContext(reqCtx, method, target, bytes.NewReader(bodyBytes))
 	for k, v := range req.Headers {
 		httpReq.Header.Set(k, v)
+	}
+	if upload != nil {
+		httpReq.Header.Del(frontendUploadHeader)
+		httpReq.Header.Del("Content-Type")
+		if upload.ContentType != "" {
+			httpReq.Header.Set("Content-Type", upload.ContentType)
+		}
 	}
 	rec := httptest.NewRecorder()
 	a.Handler().ServeHTTP(rec, httpReq)
@@ -64935,6 +65282,7 @@ type ScheduleEntry struct {
 | `sources` | `string` | may be omitted (see validation for conditions) | Sources lets a kind resolver ask Ether to find bytes: ""\|none\|search\|search+check\|acquire\|acquire+check. The "+check" variants also allow background usenet_check calls in jobs and schedules within the owner's per-plugin daily allowance. |
 | `ai` | `string` | may be omitted (see validation for conditions) | AI lets a plugin call AIComplete on the owner's configured language model (""\|none\|complete\|complete+search; "complete" allows actions, jobs, sync, and other non-viewer routes, while "complete+search" also allows bounded 20 s cached calls on interactive search routes). |
 | `media` | `string` | may be omitted (see validation for conditions) | Media lets a plugin call MediaProbe (media.probe) from jobs, actions, and background sync (""\|none\|probe; refused on viewer/client paths). |
+| `storage` | `string` | may be omitted (see validation for conditions) | ""\|none\|durable |
 
 
 ## Source: sdk/go/types.go#Permissions
@@ -64960,7 +65308,8 @@ type Permissions struct {
 	AI string `json:"ai,omitempty"`
 	// Media lets a plugin call MediaProbe (media.probe) from jobs, actions,
 	// and background sync (""|none|probe; refused on viewer/client paths).
-	Media string `json:"media,omitempty"`
+	Media   string `json:"media,omitempty"`
+	Storage string `json:"storage,omitempty"` // ""|none|durable
 }
 ``````
 
@@ -65949,6 +66298,7 @@ type KindMatchDecl struct {
 | `auth` | `string` | may be omitted (see validation for conditions) | ether_token (default)\|basic\|none_lan\|query_credentials |
 | `libraries` | `[]string` | may be omitted (see validation for conditions) |  |
 | `searchPaths` | `[]string` | may be omitted (see validation for conditions) | SearchPaths optionally lists adapter subpaths (such as "/search", "/rest/search3", or "/graphql") allowed to call ai.complete when permissions.ai is "complete+search". |
+| `uploadPaths` | `[]FrontendUploadPath` | may be omitted (see validation for conditions) |  |
 | `icon` | `string` | may be omitted (see validation for conditions) | Icon is the adapter's own mark on the Apps page: a path to an SVG or PNG inside the package. Without one the plugin's icon stands in. |
 
 
@@ -65968,10 +66318,72 @@ type FrontendAdapterMeta struct {
 	// SearchPaths optionally lists adapter subpaths (such as "/search",
 	// "/rest/search3", or "/graphql") allowed to call ai.complete when
 	// permissions.ai is "complete+search".
-	SearchPaths []string `json:"searchPaths,omitempty"`
+	SearchPaths []string             `json:"searchPaths,omitempty"`
+	UploadPaths []FrontendUploadPath `json:"uploadPaths,omitempty"`
 	// Icon is the adapter's own mark on the Apps page: a path to an SVG or
 	// PNG inside the package. Without one the plugin's icon stands in.
 	Icon string `json:"icon,omitempty"`
+}
+``````
+
+## Source: sdk/go/types.go#FrontendUploadPath.fields.md
+
+| Field | Go type | Wire presence | Description |
+|---|---|---|---|
+| `path` | `string` | emitted (validation may require a value) |  |
+| `maxBytes` | `int64` | emitted (validation may require a value) |  |
+
+
+## Source: sdk/go/types.go#FrontendUploadPath
+
+``````
+type FrontendUploadPath struct {
+	Path     string `json:"path"`
+	MaxBytes int64  `json:"maxBytes"`
+}
+``````
+
+## Source: sdk/go/types.go#FrontendUpload.fields.md
+
+| Field | Go type | Wire presence | Description |
+|---|---|---|---|
+| `contentType` | `string` | may be omitted (see validation for conditions) |  |
+| `blob` | `*FrontendUploadBlob` | may be omitted (see validation for conditions) |  |
+| `files` | `[]FrontendUploadBlob` | may be omitted (see validation for conditions) |  |
+| `fields` | `map[string][]string` | may be omitted (see validation for conditions) |  |
+
+
+## Source: sdk/go/types.go#FrontendUpload
+
+``````
+type FrontendUpload struct {
+	ContentType string               `json:"contentType,omitempty"`
+	Blob        *FrontendUploadBlob  `json:"blob,omitempty"`
+	Files       []FrontendUploadBlob `json:"files,omitempty"`
+	Fields      map[string][]string  `json:"fields,omitempty"`
+}
+``````
+
+## Source: sdk/go/types.go#FrontendUploadBlob.fields.md
+
+| Field | Go type | Wire presence | Description |
+|---|---|---|---|
+| `ref` | `string` | emitted (validation may require a value) |  |
+| `size` | `int64` | emitted (validation may require a value) |  |
+| `contentType` | `string` | may be omitted (see validation for conditions) |  |
+| `field` | `string` | may be omitted (see validation for conditions) |  |
+| `filename` | `string` | may be omitted (see validation for conditions) |  |
+
+
+## Source: sdk/go/types.go#FrontendUploadBlob
+
+``````
+type FrontendUploadBlob struct {
+	Ref         string `json:"ref"`
+	Size        int64  `json:"size"`
+	ContentType string `json:"contentType,omitempty"`
+	Field       string `json:"field,omitempty"`
+	Filename    string `json:"filename,omitempty"`
 }
 ``````
 
@@ -67739,6 +68151,7 @@ type CandidateFacts struct {
 | `query` | `map[string]string` | may be omitted (see validation for conditions) |  |
 | `headers` | `map[string]string` | may be omitted (see validation for conditions) |  |
 | `body` | `json.RawMessage` | may be omitted (see validation for conditions) |  |
+| `upload` | `*FrontendUpload` | may be omitted (see validation for conditions) |  |
 | `locale` | `string` | may be omitted (see validation for conditions) |  |
 
 
@@ -67753,6 +68166,7 @@ type RawRequest struct {
 	Query    map[string]string `json:"query,omitempty"`
 	Headers  map[string]string `json:"headers,omitempty"`
 	Body     json.RawMessage   `json:"body,omitempty"`
+	Upload   *FrontendUpload   `json:"upload,omitempty"`
 	Locale   string            `json:"locale,omitempty"`
 }
 ``````
@@ -69215,7 +69629,16 @@ class RemoteHostClient:
             with urllib.request.urlopen(req, timeout=30) as resp:
                 return resp.read()
 
-        def put(self, library_key: str, name: str, data: bytes) -> str:
+        def put(
+            self, library_key: str, name: str, data: Optional[bytes],
+            options: Optional["CachePutOptions"] = None,
+        ) -> str:
+            if options is not None or data is None:
+                payload = None if data is None else {"bodyBase64": base64.b64encode(data).decode("ascii")}
+                result = self._p._call_json(
+                    "POST", "/ether/plugin-host/data/cache.put", [library_key, name, payload, options]
+                )
+                return str((result or {}).get("blob") or "")
             q = urllib.parse.urlencode({"name": name})
             raw = self._request("POST", f"/ether/plugin-host/cache/{urllib.parse.quote(library_key)}?{q}", data)
             return str(json.loads(raw or b"{}").get("blob") or "")
@@ -69349,6 +69772,7 @@ class PluginContext:
     query: Dict[str, str]
     ether: Any
     i18n: I18nHelper
+    upload: Optional["FrontendUpload"] = None
 
     @property
     def pickToken(self) -> Optional[str]:
@@ -70215,10 +70639,23 @@ class PluginInstance:
             req_body = req.get("body")
             if req_body is None and isinstance(req.get("bodyBase64"), str):
                 req_body = base64.b64decode(req["bodyBase64"])
+            headers = dict(req.get("headers") or {})
+            upload = req.get("upload")
+            if _get_header(headers, "X-Ether-Frontend-Upload") == "1":
+                try:
+                    upload = _parse_json_body(req_body)
+                except (ValueError, UnicodeError):
+                    return _error_response(400, "invalid_upload", "Invalid frontend upload metadata.")
+            if upload is not None:
+                ctx.upload = upload
+                req_body = b""
+                headers = {k: v for k, v in headers.items() if k.lower() not in ("content-type", "x-ether-frontend-upload")}
+                if upload.get("contentType"):
+                    headers["Content-Type"] = upload["contentType"]
             if accepts_ctx:
-                status, headers, resp_body = handle_fn(method, sub_path, dict(req.get("headers") or {}), req_body or b"", ctx)
+                status, headers, resp_body = handle_fn(method, sub_path, headers, req_body or b"", ctx)
             else:
-                status, headers, resp_body = handle_fn(method, sub_path, dict(req.get("headers") or {}), req_body or b"")
+                status, headers, resp_body = handle_fn(method, sub_path, headers, req_body or b"")
             # A HEAD reply carries headers only, exactly as a real server would.
             if method == "HEAD":
                 resp_body = b""
@@ -72376,6 +72813,31 @@ class KindLiveProvider:
         raise NotImplementedError
 
 
+class FrontendUploadPath(TypedDict):
+    path: str
+    maxBytes: int
+
+
+class FrontendUploadBlob(TypedDict, total=False):
+    ref: str
+    size: int
+    contentType: str
+    field: str
+    filename: str
+
+
+class FrontendUpload(TypedDict, total=False):
+    contentType: str
+    blob: FrontendUploadBlob
+    files: List[FrontendUploadBlob]
+    fields: Dict[str, List[str]]
+
+
+class CachePutOptions(TypedDict, total=False):
+    durable: bool
+    fromBlob: str
+
+
 class FrontendAdapterMeta(TypedDict, total=False):
     """One ``contributes.frontendAdapters[]`` manifest entry."""
 
@@ -72388,6 +72850,7 @@ class FrontendAdapterMeta(TypedDict, total=False):
     auth: Literal["ether_token", "basic", "none_lan", "query_credentials"]
     libraries: List[str]
     searchPaths: List[str]
+    uploadPaths: List[FrontendUploadPath]
     # Path to an SVG or PNG inside the package, shown as the adapter's mark
     # on the Apps page. Without one the plugin's icon stands in.
     icon: str
@@ -73830,7 +74293,7 @@ export interface EtherHost {
     resolveSourcesWithResult?(q: import("./types.ts").SourceQuery): MaybePromise<import("./types.ts").SourceResolveResult>;
   };
   cache?: {
-    put(libraryKey: string, name: string, data: Uint8Array): MaybePromise<string>;
+    put(libraryKey: string, name: string, data: Uint8Array | null, opts?: import("./types.ts").CachePutOptions): MaybePromise<string>;
     open(blobRef: string): MaybePromise<Uint8Array>;
     read?(blobRef: string, range: DataRange): MaybePromise<Uint8Array>;
     /** Rasterises a cached SVG blob into a new cached bitmap blob with Ether's bounded SVG rasteriser; unsafe documents are refused. */
@@ -74015,7 +74478,7 @@ export function createHostedClient(): EtherHost {
       extract: (blob, member, opts) => callHost<ArchiveExtractResult>("archive.extract", opts == null ? [blob, member] : [blob, member, opts]),
     },
     cache: {
-      put: (lib, name, data) => callHost<{blob: string}>("cache.put", [lib, name, {bodyBase64: encodeData(data)}]).blob,
+      put: (lib, name, data, opts) => callHost<{blob: string}>("cache.put", [lib, name, data === null ? null : {bodyBase64: encodeData(data)}, opts ?? null]).blob,
       open: (blob) => { const r = callHost<{body?: string; bodyBase64?: string}>("cache.open", [blob]); return r.bodyBase64 ? decodeData({bodyBase64: r.bodyBase64}) : encodeText(r.body ?? ""); },
       read: (blob, range) => {
         checkDataRange(range);
@@ -74671,7 +75134,11 @@ export function createRemoteHostClient(opts: RemoteHostOptions = {}): EtherHost 
     cache: {
       read: async (blob, range) => { checkDataRange(range); return decodeData((await callJson<{bodyBase64: string}>("POST", "/ether/plugin-host/data/cache.read", [blob, range]))!); },
       rasterize: async (lib, name, blob, opts) => { checkRasterizeOptions(opts); return (await callJson<RasterizeResult>("POST", "/ether/plugin-host/data/cache.rasterize", opts == null ? [lib, name, blob] : [lib, name, blob, opts]))!; },
-      async put(libraryKey, name, data) {
+      async put(libraryKey, name, data, opts) {
+        if (opts !== undefined || data === null) {
+          const payload = data === null ? null : {bodyBase64: encodeData(data)};
+          return (await callJson<{blob: string}>("POST", "/ether/plugin-host/data/cache.put", [libraryKey, name, payload, opts ?? null]))!.blob;
+        }
         const resp = await doFetch(`${base}/ether/plugin-host/cache/${encodeURIComponent(libraryKey)}?name=${encodeURIComponent(name)}`, {
           method: "POST",
           headers: credential ? { "X-Ether-Plugin-Credential": credential } : {},
@@ -75206,11 +75673,12 @@ export {
  * sdk/conformance/kinds/fixture.json across all three SDKs.
  */
 import type { PluginContext } from "./router.ts";
-import { HEADER_VIEWER_TOKEN, MAX_KIND_VISIBLE_IDS, decodeBase64, encodeText, normalizeStreamUrlOptions } from "./host.ts";
+import { HEADER_VIEWER_TOKEN, MAX_KIND_VISIBLE_IDS, decodeBase64, decodeText, encodeText, normalizeStreamUrlOptions } from "./host.ts";
 import type {
   FrontendArt,
   FrontendBlob,
   FrontendMedia,
+  FrontendUpload,
   KindBrowseQuery,
   KindBrowseRequest,
   KindChangePage,
@@ -75296,6 +75764,7 @@ export interface FrontendAdapter<S = Record<string, unknown>> {
     headers: Record<string, string>,
     body: string,
     ctx?: PluginContext<S>,
+    upload?: FrontendUpload,
   ): MaybePromise<{
     status: number;
     headers?: Record<string, string>;
@@ -75590,7 +76059,28 @@ export async function dispatchKinds<S = Record<string, unknown>>(
     const query = frontendQuery(req);
     const qs = query.toString();
     if (qs) subPath += `?${qs}`;
-    const res = await adapter.handle(method, subPath, headers, frontendBodyString(req), ctx);
+    let upload = req.upload;
+    const marker = Object.keys(headers).find((key) => key.toLowerCase() === "x-ether-frontend-upload");
+    if (marker && headers[marker] === "1") {
+      try {
+        const metadata = req.bodyBase64 !== undefined
+          ? decodeText(decodeBase64(req.bodyBase64))
+          : req.body;
+        upload = (typeof metadata === "string" ? JSON.parse(metadata) : metadata) as FrontendUpload;
+      } catch {
+        return err(400, "invalid_upload", "Invalid frontend upload metadata.");
+      }
+      if (!upload || typeof upload !== "object" || Array.isArray(upload)) {
+        return err(400, "invalid_upload", "Invalid frontend upload metadata.");
+      }
+      delete headers[marker];
+    }
+    if (upload) {
+      const contentTypeKey = Object.keys(headers).find((key) => key.toLowerCase() === "content-type");
+      if (contentTypeKey) delete headers[contentTypeKey];
+      if (upload.contentType) headers["Content-Type"] = upload.contentType;
+    }
+    const res = await adapter.handle(method, subPath, headers, upload ? "" : frontendBodyString(req), ctx, upload);
     if (res.body.length > 10 * 1024 * 1024) return err(502, "adapter_error", "Frontend adapter response is larger than 10 MiB; serve media through Ether stream URLs.");
     // A HEAD reply carries headers only, exactly as a real server would.
     const out: RawResponse = { status: res.status, headers: res.headers ?? {}, body: method === "HEAD" ? "" : res.body };
@@ -78380,6 +78870,7 @@ export interface Permissions {
   ai?: "none" | "complete" | "complete+search";
   /** Lets a plugin probe container metadata via ether.media.probe from jobs, actions, and background sync (refused on viewer/client request paths). */
   media?: "none" | "probe";
+  storage?: "none" | "durable";
 }
 
 export type SettingFieldKind =
@@ -79149,6 +79640,7 @@ export interface FrontendAdapterMeta {
   libraries?: string[];
   /** Optional adapter subpaths (such as "/search", "/rest/search3", or "/graphql") allowed to call ai.complete when permissions.ai is "complete+search". */
   searchPaths?: string[];
+  uploadPaths?: FrontendUploadPath[];
   /** Path to an SVG or PNG inside the package, shown as the adapter's mark on the Apps page. Without one the plugin's icon stands in. */
   icon?: string;
 }
@@ -80170,6 +80662,31 @@ export type CondMatchFn<V = unknown> = (
 
 // --- Low-level ABI request/response ---
 
+export interface FrontendUploadPath {
+  path: string;
+  maxBytes: number;
+}
+
+export interface FrontendUploadBlob {
+  ref: string;
+  size: number;
+  contentType?: string;
+  field?: string;
+  filename?: string;
+}
+
+export interface FrontendUpload {
+  contentType?: string;
+  blob?: FrontendUploadBlob;
+  files?: FrontendUploadBlob[];
+  fields?: Record<string, string[]>;
+}
+
+export interface CachePutOptions {
+  durable?: boolean;
+  fromBlob?: string;
+}
+
 export interface RawRequest {
   pluginId?: string;
   method?: string;
@@ -80180,6 +80697,7 @@ export interface RawRequest {
   /** Exact request bytes, base64-encoded (frontend adapter routes). A non-JSON body arrives only here. */
   bodyBase64?: string;
   contentType?: string;
+  upload?: FrontendUpload;
   locale?: string;
 }
 

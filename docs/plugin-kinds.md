@@ -173,7 +173,7 @@ query the client sent:
 | `/ether/v1/kinds/{kind}/resolve` | A viewer presses play | `{libraryKey, item, partIndex?, source?, client?}` → ordered `sources`. Never called during browse. |
 | `/ether/v1/kinds/{kind}/match` | Resolve-time matching, console re-match | `{item, candidates}` → `{matches:[{candidateRef, score 0..1, reasons}]}` best first. |
 | `/ether/v1/setup/{step}/test` | The setup wizard | `{step, fields}` → `{ok, detail, fields?}`. Secrets arrive via `SecretGet`, never in this body. |
-| `/ether/v1/frontend/{key}/…` | Your frontend adapter's traffic | Any method, and the original query string (repeated keys flatten to the first value for remote plugins; hosted plugins receive every value of a repeated key, such as Subsonic's `id=1&id=2`, as an array). Ether authenticated the viewer first; you get `X-Ether-Viewer` headers, `X-Ether-Origin` (`scheme://host[:port][/prefix]` derived from the request using Ether's trusted proxy policy, with any client-supplied `X-Ether-Origin` stripped), and a request-scoped `X-Ether-Viewer-Token` for `kinds.visible`, `kinds.browse`, and remote `frontend.streamURL` callbacks — never a credential. Bodies are capped at 1 MiB (larger gets 413). The exact request bytes always arrive base64-encoded in `bodyBase64` with the client's `contentType`; `body` additionally holds the parsed JSON value when the bytes are valid JSON, and is absent for non-JSON bodies (multipart, form-encoded, binary). The TypeScript SDK's `frontendBodyBytes(req)` returns the exact bytes. |
+| `/ether/v1/frontend/{key}/…` | Your frontend adapter's traffic | Any method, and the original query string (repeated keys flatten to the first value for remote plugins; hosted plugins receive every value of a repeated key, such as Subsonic's `id=1&id=2`, as an array). Ether authenticated the viewer first; you get `X-Ether-Viewer` headers, `X-Ether-Origin` (`scheme://host[:port][/prefix]` derived from the request using Ether's trusted proxy policy, with any client-supplied `X-Ether-Origin` stripped), and a request-scoped `X-Ether-Viewer-Token` for `kinds.visible`, `kinds.browse`, and remote `frontend.streamURL` callbacks — never a credential. Outside declared upload routes, bodies are capped at 1 MiB (larger gets 413). The exact request bytes always arrive base64-encoded in `bodyBase64` with the client's `contentType`; `body` additionally holds the parsed JSON value when the bytes are valid JSON, and is absent for non-JSON bodies (multipart, form-encoded, binary). The TypeScript SDK's `frontendBodyBytes(req)` returns the exact bytes. |
 
 Clients are **always served from Ether's store** — browse, search
 and detail never call you live, so nothing scales with your catalogue
@@ -893,6 +893,59 @@ adapter icon is missing or cannot be rendered.
 
 Use a protocol's or app's own logo only to identify it, and record its
 source and licence in your package's NOTICE.
+
+### Streamed uploads and durable blobs
+
+Declare upload routes in `ether.contributes.frontendAdapters[].uploadPaths`, for example:
+
+```json
+"uploadPaths": [{ "path": "/saves/*", "maxBytes": 67108864 }]
+```
+
+Paths are relative to the adapter's public prefix. The matcher ignores a trailing
+slash and supports Go path globs such as `*` within a segment. The smallest
+matching limit applies. Declare at most 16 paths, with 1 byte to 64 MiB per route.
+The limit covers the whole HTTP body, including multipart headers and framing.
+For `query_credentials` adapters, send credentials in the query on upload routes.
+
+After viewer authentication, Ether stages the body on disk and passes `upload`
+metadata in place of inline body bytes. Hosted handlers receive `req.upload`.
+The TypeScript adapter receives it as the sixth argument to `handle`, Go uses
+`FrontendUploadFromContext(r.Context())`, and Python uses `ctx.upload`. The
+metadata contains the original `contentType` and either:
+
+- `blob: {ref, size, contentType}` for a raw body.
+- `files: [{ref, size, field, filename, contentType}]` and
+  `fields: {fieldName: [value, ...]}` for multipart. Repeated fields and files are
+  preserved. Multipart allows 64 parts and 128 KiB of inline text and metadata.
+
+A sidecar implementing its own HTTP or tunnel transport receives the metadata as
+a JSON body with `X-Ether-Frontend-Upload: 1`. Uploaded refs work with
+`cache.read` during the request and are cleaned up when the response ends.
+
+Declare `ether.permissions.storage: "durable"` to retain data after the request.
+The owner sees the 1 GiB per-plugin limit in the permission drawer and can revoke
+access. Durable storage allows up to 10,000 unique blobs and has its own quota.
+Its blobs survive restarts, cache sweeps, and cache eviction. They are deleted
+only by `cache.delete` or plugin uninstall. Keep the returned ref in your own
+per-viewer metadata and check the active viewer before accessing that metadata.
+
+```js
+// Hosted handler. The SDK cache.put returns the ref directly.
+const { blob } = ether.cache.put("", "", null, {
+  durable: true,
+  fromBlob: req.upload.files[0].ref,
+});
+```
+
+Promotion links the staged file into permanent storage without copying it. Store
+the returned `durable:<sha256>` ref. Identical saved bytes share a ref and quota
+charge within the plugin, so delete a ref only after your last use. To save small
+bytes directly, use `cache.put("", name, data, {durable: true})`. Go sidecars use
+`CacheOptionsHost.CachePutWithOptions` and Python sidecars pass the options dict
+to `ctx.ether.cache.put`. For a large saved blob, read ranges with `cache.read`.
+The data directory's `plugin-blob-storage/saved` tree should be included in a
+filesystem backup alongside the matching plugin database snapshot.
 
 ### Frontend adapter authentication
 

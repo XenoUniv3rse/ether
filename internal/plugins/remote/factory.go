@@ -237,7 +237,13 @@ func toRequest(req plugins.Request) Request {
 		headers[k] = []string{v}
 	}
 	body := []byte(req.Body)
-	if len(body) == 0 && req.BodyBase64 != "" {
+	if req.Upload != nil {
+		// URL and tunnel runtimes carry the same small JSON envelope as the
+		// request body, identified by a host-only header on adapter calls.
+		body, _ = json.Marshal(req.Upload)
+		headers["Content-Type"] = []string{"application/json"}
+		headers[plugins.FrontendUploadHeader] = []string{"1"}
+	} else if len(body) == 0 && req.BodyBase64 != "" {
 		// A non-JSON body travels only base64-encoded; remote transports
 		// carry raw bytes, so restore them here.
 		if raw, err := base64.StdEncoding.DecodeString(req.BodyBase64); err == nil {

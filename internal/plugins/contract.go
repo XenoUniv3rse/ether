@@ -18,13 +18,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/braedonsaunders/ether/internal/core"
-	"github.com/braedonsaunders/ether/internal/events"
-	"github.com/braedonsaunders/ether/internal/stremio"
 	"io"
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/braedonsaunders/ether/internal/core"
+	"github.com/braedonsaunders/ether/internal/events"
+	"github.com/braedonsaunders/ether/internal/plugins/wasm"
+	"github.com/braedonsaunders/ether/internal/stremio"
 )
 
 // Protocol is the Ether Plugin Protocol major this host speaks (EPP/1).
@@ -261,6 +263,8 @@ type Permissions struct {
 	// AI lets a plugin send bounded completion requests to the owner's
 	// configured language model (actions/jobs/sync only, never viewer paths).
 	AI string `json:"ai,omitempty" yaml:"ai,omitempty"` // ""|none|complete|complete+search
+	// Storage lets a plugin retain durable blobs within its per-plugin quota.
+	Storage StoragePermission `json:"storage,omitempty" yaml:"storage,omitempty"` // ""|none|durable
 	// Media lets a plugin probe container metadata via media.probe from jobs,
 	// actions, and background sync (never viewer or client request paths).
 	Media   string   `json:"media,omitempty" yaml:"media,omitempty"` // ""|none|probe
@@ -1245,10 +1249,24 @@ type FrontendAdapterMeta struct {
 	// When omitted, conventional search subpaths (ending in /search, /search2,
 	// or /search3, with optional .json/.xml/.view suffix) are recognized.
 	SearchPaths []string `json:"searchPaths,omitempty"`
+	// UploadPaths opt in to disk staging for selected adapter subpaths.
+	UploadPaths []FrontendUploadPath `json:"uploadPaths,omitempty"`
 	// Icon is the adapter's own mark on the Apps page: a path to an SVG or
 	// PNG inside the package. Without one the plugin's icon stands in.
 	Icon string `json:"icon,omitempty"`
 }
+
+// FrontendUploadPath declares a glob and the maximum wire body size in bytes.
+type FrontendUploadPath struct {
+	Path     string `json:"path"`
+	MaxBytes int64  `json:"maxBytes"`
+}
+
+// FrontendUploadHeader identifies the metadata-only body on sidecar transports.
+const FrontendUploadHeader = "X-Ether-Frontend-Upload"
+
+type FrontendUpload = wasm.FrontendUpload
+type FrontendUploadBlob = wasm.FrontendUploadBlob
 
 // SetupMeta declares guided setup for any plugin kind (spec §8).
 type SetupMeta struct {
@@ -1287,8 +1305,9 @@ type Request struct {
 	// caller needs them byte-for-byte (frontend adapter routes). Body holds
 	// the parsed JSON value when the bytes are valid JSON; a non-JSON body
 	// arrives only here, never as an invalid RawMessage.
-	BodyBase64  string `json:"bodyBase64,omitempty"`
-	ContentType string `json:"contentType,omitempty"`
+	BodyBase64  string          `json:"bodyBase64,omitempty"`
+	ContentType string          `json:"contentType,omitempty"`
+	Upload      *FrontendUpload `json:"upload,omitempty"`
 	// Locale is the console locale for calls that return copy.
 	Locale string `json:"locale,omitempty"`
 	// Foreground marks an /ether/job/ call that a viewer is waiting on

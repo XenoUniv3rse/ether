@@ -66,7 +66,16 @@ func (a *App) buildPlugins(ctx context.Context, cfg config.Config) (*pluginRunti
 	var busyMu sync.Mutex
 	var busyAt time.Time
 	var busyValue bool
+	diskUsage := a.opts.diskUsage
+	if diskUsage == nil {
+		diskUsage = func() (int64, int64, error) { return admin.DiskUsage(a.opts.DataDir) }
+	}
+	durableStorage, err := blobcache.OpenDurableStore(filepath.Join(a.opts.DataDir, "plugin-blob-storage"), diskUsage)
+	if err != nil {
+		return nil, err
+	}
 	mgr, err := plugins.New(plugins.Deps{
+		DurableStorage:    durableStorage,
 		EventBus:          a.EventBus(),
 		IsIndexerHost:     a.isConfiguredIndexerHost,
 		EventRegistry:     a.EventRegistry(),

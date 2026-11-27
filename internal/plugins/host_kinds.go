@@ -1366,7 +1366,20 @@ func validateBlobRef(blobRef string) error {
 	return nil
 }
 
+func validateDurableBlobRef(ref string) error {
+	if _, err := blobcache.ParseDurableRef(blobcache.Ref(ref)); err != nil {
+		return &ValidationError{Fields: []FieldError{{Field: "blobRef", Message: "durable reference must be durable:<sha256>"}}}
+	}
+	return nil
+}
+
 func (h *host) CacheOpen(ctx context.Context, blobRef string) (io.ReadSeekCloser, error) {
+	if strings.HasPrefix(blobRef, blobcache.DurableRefPrefix) {
+		if err := validateDurableBlobRef(blobRef); err != nil {
+			return nil, err
+		}
+		return h.openDurableBlob(ctx, blobRef)
+	}
 	r, err := h.callRecord(ctx)
 	if err != nil {
 		return nil, err
@@ -1376,6 +1389,11 @@ func (h *host) CacheOpen(ctx context.Context, blobRef string) (io.ReadSeekCloser
 	}
 	if err := validateBlobRef(blobRef); err != nil {
 		return nil, err
+	}
+	if s := h.m.deps.DurableStorage; s != nil {
+		if src, err := s.Open(h.plugin, blobcache.Ref(blobRef)); !errors.Is(err, blobcache.ErrNotFound) {
+			return src, storageError(err)
+		}
 	}
 	backend := h.m.kindBackends().CacheOpen
 	if backend == nil {
@@ -1388,6 +1406,12 @@ func (h *host) CacheOpen(ctx context.Context, blobRef string) (io.ReadSeekCloser
 // namespaces, freeing its quota immediately. Deleting a ref that is absent or
 // already evicted succeeds.
 func (h *host) CacheDelete(ctx context.Context, blobRef string) error {
+	if strings.HasPrefix(blobRef, blobcache.DurableRefPrefix) {
+		if err := validateDurableBlobRef(blobRef); err != nil {
+			return err
+		}
+		return h.deleteDurableBlob(ctx, blobRef)
+	}
 	if err := h.requireWritableToolContext(ctx); err != nil {
 		return err
 	}
