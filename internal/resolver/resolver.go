@@ -400,7 +400,8 @@ type Service struct {
 	flightMu sync.Mutex
 	flights  map[string]*inflight
 
-	delivery deliveryState
+	delivery       deliveryState
+	clientDelivery clientDeliveryState
 
 	route routingState // source routing: startup measurements and signals
 
@@ -908,8 +909,9 @@ func (s *Service) Resolve(ctx context.Context, req core.ResolveRequest) (*core.R
 	dec := decideProfile(q, req.Client, req.User, titleTarget(req.Title, inLib))
 	req.Client = dec.caps
 	profile := dec.profile
+	req = s.withClientDeliveryBudget(req)
 	videoOff, _ := s.transcodeSettingsFor(req.Client)
-	key := fmt.Sprintf("%s|pin:%s|vc:%s|vt:%t", flightKey(req, profile), s.PinnedReleaseID(req), s.viewerChoiceFlightKey(req), videoOff)
+	key := fmt.Sprintf("%s|pin:%s|vc:%s|vt:%t|link:%d", flightKey(req, profile), s.PinnedReleaseID(req), s.viewerChoiceFlightKey(req), videoOff, req.ClientDeliveryBudgetKbps)
 	if channelAvailabilityCheck(ctx) {
 		key += "/channel-availability"
 	}
@@ -2478,7 +2480,21 @@ func (s *Service) rankPass(ctx context.Context, env rankEnv, req core.ResolveReq
 			trace.Candidates = append(trace.Candidates, ct)
 			tr = len(trace.Candidates) - 1
 		}
-		bandwidth, delivery, bandwidthReason := s.deliveryFitReason(sizedForEpisode(rel), req.Client, t)
+		sized := sizedForEpisode(rel)
+		bandwidth, delivery, bandwidthReason := s.deliveryFitReason(sized, req.Client, t)
+		baseBandwidth := bandwidth
+		var deliveryDemotion core.AutoSelectionReason
+		if req.Client.Protocol == "vela" && !req.Client.Download && !req.Client.NoPlaybackTelemetry {
+			baseBandwidth = sourceBandwidthFit(sized, req.Client, t)
+			if bandwidth < 0 && baseBandwidth >= 0 {
+				deliveryDemotion = core.AutoSourceDelivery
+			}
+			fit := applyClientDeliveryFit(bandwidth, releaseBitsPerSecond(sized, t), req.ClientDeliveryBudgetKbps)
+			if fit < bandwidth {
+				deliveryDemotion = core.AutoConnectionEstimate
+			}
+			bandwidth = fit
+		}
 		if trace != nil {
 			note := func(n string) {
 				trace.Candidates[tr].CompatibilityReason = strings.TrimPrefix(trace.Candidates[tr].CompatibilityReason+"; "+n, "; ")
@@ -2532,7 +2548,7 @@ func (s *Service) rankPass(ctx context.Context, env rankEnv, req core.ResolveReq
 		if addonOrdered {
 			cf = 0
 		}
-		cands = append(cands, candidate{localFirst: localFirst(rc, rel, policyResult.Fallback, langOK), identityWeak: !pinned && identity.ambiguous(rel, t, sreq), identityConflict: namesake && identityEv == "" && episodeRegionConflict(rel, t), audioUnverified: audioUnverified, unverifiedLangs: unverifiedLangs, fallback: belowQuality, belowScore: belowScore, counted: sc.counted, policy: policyResult, rel: rel, trace: tr, verified: verified, langOK: langOK, langRank: langRank, starved: starved, bandwidth: bandwidth, delivery: delivery, yearGuessed: yearGuessed, cf: cf, keys: keys})
+		cands = append(cands, candidate{localFirst: localFirst(rc, rel, policyResult.Fallback, langOK), identityWeak: !pinned && identity.ambiguous(rel, t, sreq), identityConflict: namesake && identityEv == "" && episodeRegionConflict(rel, t), audioUnverified: audioUnverified, unverifiedLangs: unverifiedLangs, fallback: belowQuality, belowScore: belowScore, counted: sc.counted, policy: policyResult, rel: rel, trace: tr, verified: verified, langOK: langOK, langRank: langRank, starved: starved, bandwidth: bandwidth, preDeliveryBandwidth: baseBandwidth, deliveryDemotion: deliveryDemotion, delivery: delivery, yearGuessed: yearGuessed, cf: cf, keys: keys})
 	}
 	if env.seaDex != nil && len(cands) > 0 {
 		s.addSeaDexScores(env.seaDex, cands, trace)
@@ -2541,6 +2557,9 @@ func (s *Service) rankPass(ctx context.Context, env rankEnv, req core.ResolveReq
 		s.addPluginScores(hot, profile, cands, trace)
 	}
 
+	if req.Client.Protocol == "vela" && pinID == "" && core.IsAutoVersionSelector(req.Prefer) {
+		markAutoDeliveryReasons(cands, t)
+	}
 	ordered := s.orderCandidates(cands, req.Title, trace)
 	capCtx := releasepolicy.Context{OriginalLanguage: titleOriginalLanguage(t)}
 	if hot != nil {

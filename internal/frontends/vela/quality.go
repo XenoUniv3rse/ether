@@ -62,10 +62,6 @@ func (i *instance) addQualityPaths(ctx context.Context, a frontend.SessionAccess
 }
 
 func (i *instance) prepareFallback(w http.ResponseWriter, r *http.Request, v *frontend.Viewer, s *playSession, id string, maxBitrate int) bool {
-	if maxBitrate <= 0 {
-		problem(w, 400, "request", "invalid_bitrate")
-		return false
-	}
 	q, ok := i.host.Sessions.(frontend.QualitySessions)
 	if !ok || len(s.qualityRungs) == 0 {
 		i.unavailable(w, r)
@@ -79,25 +75,11 @@ func (i *instance) prepareFallback(w http.ResponseWriter, r *http.Request, v *fr
 		i.unavailable(w, r)
 		return false
 	}
-	var rungs []frontend.HLSRung
+	chosen, ok := i.selectQualityRung(w, r, v, s, id, maxBitrate)
+	if !ok {
+		return false
+	}
 	var err error
-	if !s.port(w, func() { rungs, err = q.QualityRungs(r.Context(), i.access(r, v), id) }) {
-		return false
-	}
-	if err != nil {
-		fail(w, err, r)
-		return false
-	}
-	var chosen frontend.HLSRung
-	for _, rung := range rungs {
-		if rung.Bandwidth <= maxBitrate && rung.Bandwidth > chosen.Bandwidth {
-			chosen = rung
-		}
-	}
-	if chosen.ID == "" {
-		problem(w, 422, "decoder", "quality_unavailable")
-		return false
-	}
 	pathID := "quality-" + chosen.ID
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
@@ -124,6 +106,38 @@ func (i *instance) prepareFallback(w http.ResponseWriter, r *http.Request, v *fr
 	}
 	s.plan["fallback"] = object{"state": "ready", "pathId": pathID}
 	return s.portSnapshot(w, func(copy *playSession) { i.refreshOutput(ctx, id, copy) })
+}
+
+func (i *instance) selectQualityRung(w http.ResponseWriter, r *http.Request, v *frontend.Viewer, s *playSession, id string, maxBitrate int) (frontend.HLSRung, bool) {
+	if maxBitrate <= 0 {
+		problem(w, 400, "request", "invalid_bitrate")
+		return frontend.HLSRung{}, false
+	}
+	q, ok := i.host.Sessions.(frontend.QualitySessions)
+	if !ok || len(s.qualityRungs) == 0 {
+		i.unavailable(w, r)
+		return frontend.HLSRung{}, false
+	}
+	var rungs []frontend.HLSRung
+	var err error
+	if !s.port(w, func() { rungs, err = q.QualityRungs(r.Context(), i.access(r, v), id) }) {
+		return frontend.HLSRung{}, false
+	}
+	if err != nil {
+		fail(w, err, r)
+		return frontend.HLSRung{}, false
+	}
+	var chosen frontend.HLSRung
+	for _, rung := range rungs {
+		if s.qualityRungs["quality-"+rung.ID] == rung.ID && rung.Bandwidth <= maxBitrate && rung.Bandwidth > chosen.Bandwidth {
+			chosen = rung
+		}
+	}
+	if chosen.ID == "" {
+		problem(w, 422, "decoder", "quality_unavailable")
+		return frontend.HLSRung{}, false
+	}
+	return chosen, true
 }
 
 func (s *playSession) rungFor(path object) string {

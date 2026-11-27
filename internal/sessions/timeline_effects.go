@@ -77,6 +77,11 @@ func (b *Broker) runTimelineEffects(ctx context.Context, done chan struct{}) {
 }
 func (b *Broker) applyTimelineEffects(ctx context.Context, s *brokerSession, v *core.Viewer, t frontend.Timeline) {
 	NotifyTranscodeActivity(b.deps.Transcoder, s.public.ID, t.State)
+	if s.public.Protocol == "vela" && (t.State == "playing" || t.State == "buffering") && frontend.ValidClientThroughput(t.ThroughputBps) {
+		if observer, ok := b.deps.Playback.(interface{ ObserveClientThroughput(string, float64) }); ok {
+			observer.ObserveClientThroughput(s.playID, t.ThroughputBps)
+		}
+	}
 	if progress, ok := b.deps.Playback.(core.PlaybackTimeline); ok {
 		progress.PlaybackProgress(s.public.ViewerID, s.clientID, s.public.Item, t.Position, t.State)
 	}

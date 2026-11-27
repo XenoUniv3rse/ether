@@ -108,13 +108,13 @@ func (s *playSession) applyOutput(copy *playSession) {
 }
 func (s *playSession) portSnapshot(w http.ResponseWriter, call func(*playSession)) bool {
 	copy := s.outputSnapshot()
-	revision := s.revision
+	cursor := s.cursor
 	if !s.port(w, func() { call(copy) }) {
 		return false
 	}
 	// Background refreshes yield to newer events; a serialized command
 	// applies the output facts produced by its own host operation.
-	if revision == s.revision || s.commandActive {
+	if cursor == s.cursor || s.commandActive {
 		s.applyOutput(copy)
 	}
 	return true

@@ -41,6 +41,7 @@ type ViewerChoiceSummary struct {
 // "Play Version" picker: a distinct candidate release, by quality tier or
 // edition (cut).
 type ReleaseVariant struct {
+	AutoSelectionReason AutoSelectionReason `json:"autoSelectionReason,omitempty"`
 	// ID is the stable menu identity; configured slots keep it while the
 	// concrete Release changes. Frontends encode it in Media/Part ids.
 	ID string `json:"id"`

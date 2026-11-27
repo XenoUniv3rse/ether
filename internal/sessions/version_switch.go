@@ -408,7 +408,12 @@ func (b *Broker) SwitchVersion(ctx context.Context, a frontend.SessionAccess, se
 	direct, remux, transcoding := b.planAlternatives(ps, planReq)
 	hls, hlsContainer := b.hlsPlanOutput(ps, planReq, dec)
 	httpOK, httpContainer := b.httpPlanOutput(ps, planReq, dec)
+	var autoReason core.AutoSelectionReason
+	if a.Protocol == "vela" && isAuto && !pinned && ps.Resolution != nil {
+		autoReason = ps.Resolution.AutoSelectionReason
+	}
 	return frontend.PlayPlan{
+		AutoSelectionReason:   autoReason,
 		SourceChosenAt:        sourceChosenAt,
 		DecisionAt:            decisionAt,
 		ID:                    sessionID,

@@ -111,6 +111,24 @@ func (m *Manager) preparedResolution(ctx context.Context, s *session, profile co
 			}
 		}
 	}
+	if res != nil && (prefer == "" || isAutoVersionSelector(prefer)) {
+		if budget := m.clientDeliveryBudget(s); budget > 0 && !m.hasAuthoritativeAutoChoice(s) {
+			var dur time.Duration
+			var bitrate int
+			if s.title != nil {
+				dur = s.title.Runtime
+			}
+			if cached != nil {
+				if cached.info.Duration > 0 {
+					dur = cached.info.Duration
+				}
+				bitrate = cached.info.BitrateKbps
+			}
+			if !sourceFitsBitrate(res.Release.Size, dur, bitrate, budget) {
+				return nil, nil, false
+			}
+		}
+	}
 	if res != nil && m.videoOff(s.caps) {
 		if cached != nil {
 			if _, needs := m.probedNeedsVideoTranscode(cached.info, s.caps); needs {
@@ -143,6 +161,11 @@ func (m *Manager) preparedResolution(ctx context.Context, s *session, profile co
 			s.prefer, s.exact = "", false
 		}
 		return nil, nil, false
+	}
+	if fromResume && res != nil && s.caps.Protocol == "vela" && isAutoVersionSelector(prefer) && !m.hasAuthoritativeAutoChoice(s) {
+		copy := *res
+		copy.AutoSelectionReason = core.AutoResumeSource
+		res = &copy
 	}
 	return res, cached, fromResume
 }
@@ -1660,14 +1683,22 @@ func (m *Manager) failoverWith(ctx context.Context, s *session, observed *genera
 	// Compare file consumption, independently of the codecs the muxer can
 	// copy. Allow a margin for variable-rate media and short fetch stalls.
 	maxSourceBps := fo.sourceBps * 0.8
+	maxReplacementBps := maxSourceBps
+	if fo.down {
+		// The last mile can tighten the swap budget. It supplies no evidence
+		// that the source can feed a video encode.
+		if budget := float64(m.clientDeliveryBudget(s)) * (1000.0 / 8); budget > 0 && (maxSourceBps == 0 || budget < maxSourceBps) {
+			maxReplacementBps = budget
+		}
+	}
 	admitDown := func(next *generation) error {
 		if !fo.down {
 			return nil
 		}
 		bps := replacementBps(next, oldInfo.Duration)
-		if bps <= 0 || bps >= curBps || (fo.sourceBps > 0 && bps > maxSourceBps) ||
+		if bps <= 0 || bps >= curBps || (maxReplacementBps > 0 && bps > maxReplacementBps) ||
 			(cur.src.Size() > 0 && next.src.Size() >= cur.src.Size()) {
-			return fmt.Errorf("down-failover candidate exceeds source budget (candidate %.0f B/s, current %.0f B/s, budget %.0f B/s): %w", bps, curBps, maxSourceBps, core.ErrNotAvailable)
+			return fmt.Errorf("down-failover candidate exceeds bitrate budget (candidate %.0f B/s, current %.0f B/s, budget %.0f B/s): %w", bps, curBps, maxReplacementBps, core.ErrNotAvailable)
 		}
 		return nil
 	}
@@ -1917,7 +1948,7 @@ func (m *Manager) failoverWith(ctx context.Context, s *session, observed *genera
 				return cur, nil
 			}
 			if maxSourceBps > 0 && !direct && ctx.Err() == nil {
-				if err := m.reduceOutputBitrate(ctx, s, cur, int(maxSourceBps*8/1000)); err == nil {
+				if err := m.reduceOutputBitrate(ctx, s, cur, int(maxReplacementBps*8/1000)); err == nil {
 					return cur, nil
 				} else if !errors.Is(err, core.ErrNotAvailable) {
 					lastErr = err
