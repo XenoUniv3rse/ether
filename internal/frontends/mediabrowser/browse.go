@@ -1096,6 +1096,9 @@ func (i *instance) pageWithExtra(w http.ResponseWriter, r *http.Request, v *fron
 	r = i.pageEditions(r, v, keys)
 	r = i.noteLocalUnplayedCounts(r, v, page.Items)
 	i.fillSeriesTitles(r, v, page.Items)
+	if i.protocol == "jellyfin" {
+		i.prefetchSeriesFacts(r, v, page.Items)
+	}
 	i.primeTitleLibraries(r, v, page.Items)
 	for _, title := range page.Items {
 		var editions []jellyfinEdition
@@ -1202,7 +1205,7 @@ func (i *instance) children(w http.ResponseWriter, r *http.Request) {
 }
 
 func (i *instance) search(w http.ResponseWriter, r *http.Request) {
-	r = r.WithContext(frontend.WithSearchMemo(r.Context()))
+	r = r.WithContext(frontend.WithSearchMemo(frontend.WithSearchSummaryFacts(r.Context())))
 	v, _, err := i.viewer(r)
 	if err != nil || v == nil {
 		http.Error(w, "Unauthorized", 401)

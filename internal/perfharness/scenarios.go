@@ -53,13 +53,15 @@ type Step struct {
 	// Export marks a step whose response is the whole library by design
 	// (an IPTV app's VOD list): its work grows with what it renders, so
 	// the gate compares work per response byte instead of per request.
-	Stream   time.Duration // observation window for an intentionally open response
-	Export   bool
-	Method   string
-	Path     string
-	Body     string
-	Discover func(vars map[string]string, body []byte)
-	Accept   func(body []byte) bool
+	Stream time.Duration // observation window for an intentionally open response
+	Export bool
+	Method string
+	// ExpectedStatus asserts an exact status for an intentional refusal.
+	ExpectedStatus int
+	Path           string
+	Body           string
+	Discover       func(vars map[string]string, body []byte)
+	Accept         func(body []byte) bool
 }
 
 // Statement ceilings for Plex Home, detail, post-play and search. Measured

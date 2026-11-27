@@ -227,15 +227,10 @@ func TestPassthroughHandOffToSteadyMovesTheChannel(t *testing.T) {
 	}
 	a.owned.close()
 	b.owned.close()
-	deadline = time.Now().Add(ownedLinger + 5*time.Second)
-	for time.Now().Before(deadline) {
-		feed.mu.Lock()
-		closed := feed.closed
-		feed.mu.Unlock()
-		if closed {
-			return
-		}
-		time.Sleep(100 * time.Millisecond)
+	feed.mu.Lock()
+	closed := feed.closed
+	feed.mu.Unlock()
+	if !closed {
+		t.Fatal("the Steady lease outlived the channel's timeline")
 	}
-	t.Fatal("the Steady lease outlived the channel's timeline")
 }

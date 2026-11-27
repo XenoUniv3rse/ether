@@ -41,6 +41,8 @@ type Search struct {
 	// Details reads in full the titles a candidate search returned partial
 	// (core.SearchCandidates); nil when the catalogue cannot.
 	Details func(context.Context, []core.Title) ([]core.Title, error)
+	// PrefetchParents batches the inherited-policy reads for eligible child hits.
+	PrefetchParents func(context.Context, []core.RatingKey)
 
 	// WaitBound overrides DescriptiveSearchWaitBound when > 0.
 	WaitBound time.Duration
@@ -246,13 +248,34 @@ func (s Search) peopleTitlesFor(ctx context.Context, viewer *core.User, query st
 	if !restricted {
 		return s.filterCandidates(viewer, raw, allowed, len(allowed) > 0), nil
 	}
-	out := make([]core.Title, 0, len(raw))
+	return s.visibleCandidates(ctx, viewer, raw, allowed), nil
+}
+
+// visibleCandidates checks a ranking window in one availability read. The
+// playback and inherited series policy still apply to each surviving title.
+func (s Search) visibleCandidates(ctx context.Context, viewer *core.User, raw []core.Title, types map[core.MediaType]bool) []core.Title {
+	var eligible []core.Title
 	for i := range raw {
-		if (len(allowed) == 0 || allowed[raw[i].Type]) && s.Visibility.Visible(ctx, viewer, &raw[i]) {
-			out = append(out, raw[i])
+		title := &raw[i]
+		if (len(types) == 0 || types[title.Type]) && s.Visibility.TitleAllowed(viewer, title) {
+			eligible = append(eligible, *title)
 		}
 	}
-	return out, nil
+	available := s.Visibility.Available(ctx, viewer, eligible)
+	if s.PrefetchParents != nil {
+		parents := make([]core.RatingKey, 0, len(available))
+		for _, title := range available {
+			if title.ShowKey != 0 {
+				parents = append(parents, title.ShowKey)
+			}
+		}
+		if len(parents) > 0 {
+			s.PrefetchParents(ctx, parents)
+		}
+	}
+	return slices.DeleteFunc(available, func(title core.Title) bool {
+		return title.ShowKey != 0 && !s.Visibility.Playable(ctx, viewer, &title)
+	})
 }
 
 // Find is an explicit search: catalogue rules the owner limited to browsing
@@ -314,12 +337,7 @@ func (s Search) Find(ctx context.Context, viewer *core.User, query string, types
 				return nil, err
 			}
 		}
-		filtered := make([]core.Title, 0, len(items))
-		for i := range items {
-			if allowed[items[i].Type] && s.Visibility.Visible(ctx, viewer, &items[i]) {
-				filtered = append(filtered, items[i])
-			}
-		}
+		filtered := s.visibleCandidates(ctx, viewer, items, allowed)
 		if !ok && s.PeopleTitles != nil {
 			pItems, pErr := s.peopleTitlesFor(ctx, viewer, query, types, fetch, filtered, true, allowed)
 			if pErr != nil && len(filtered) == 0 {

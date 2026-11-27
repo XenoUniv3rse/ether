@@ -82,11 +82,11 @@ type BrokerDeps struct {
 	CanPlay            func(*core.Viewer, bool, time.Time) bool
 	// CurrentPlay rechecks a running item without imposing bedtime.
 	CurrentPlay func(context.Context, *core.Viewer, bool, time.Time) (*core.Viewer, error)
-	// FreshPlay re-reads fenced membership and safety policy for admission.
-	// ErrPolicyUnconfirmed keeps the cached decision for an unrestricted viewer.
+	// FreshPlay re-reads fenced policy before admission. ErrPolicyUnconfirmed
+	// keeps the cached decision for an unrestricted viewer.
 	FreshPlay func(context.Context, *core.Viewer, bool, time.Time) (*core.Viewer, error)
-	// PreviewPlay reads the same policy for an estimate without admitting playback.
-	PreviewPlay func(context.Context, *core.Viewer, bool, time.Time) (*core.Viewer, error)
+	// PreviewPlay reads policy without fencing when no playback is admitted.
+	PreviewPlay func(context.Context, *core.Viewer, bool, time.Time, bool) (*core.Viewer, error)
 	// ReceiptCurrent rechecks the acceptance Plex stored for this request.
 	ReceiptCurrent func(context.Context, auth.Acceptance) error
 	BitrateLimit   func(*core.Viewer) int
@@ -380,14 +380,16 @@ func (b *Broker) confirm(ctx context.Context, v *core.Viewer, caps core.ClientCa
 	return b.confirmPolicy(ctx, v, caps, b.deps.FreshPlay)
 }
 
-// confirmPreview is used before a source exists. The client still goes
-// through confirm when it requests actual playback.
-func (b *Broker) confirmPreview(ctx context.Context, v *core.Viewer, caps core.ClientCaps) (*core.Viewer, error) {
-	check := b.deps.PreviewPlay
-	if check == nil {
-		check = b.deps.FreshPlay
+func (b *Broker) confirmPreview(ctx context.Context, v *core.Viewer, caps core.ClientCaps, admission bool) (*core.Viewer, error) {
+	if b.deps.PreviewPlay == nil {
+		if admission {
+			return b.confirm(ctx, v, caps)
+		}
+		return b.confirmCurrent(ctx, v, caps)
 	}
-	return b.confirmPolicy(ctx, v, caps, check)
+	return b.confirmPolicy(ctx, v, caps, func(ctx context.Context, u *core.Viewer, remote bool, at time.Time) (*core.Viewer, error) {
+		return b.deps.PreviewPlay(ctx, u, remote, at, admission)
+	})
 }
 
 // Current item checks deliberately exclude bedtime: an admitted item can finish.
@@ -578,7 +580,9 @@ func (b *Broker) Plan(ctx context.Context, req frontend.PlanRequest) (planned fr
 	}
 	confirm := b.confirm
 	if req.Intent.Estimate {
-		confirm = b.confirmPreview
+		confirm = func(ctx context.Context, u *core.Viewer, caps core.ClientCaps) (*core.Viewer, error) {
+			return b.confirmPreview(ctx, u, caps, true)
+		}
 	}
 	confirmed, err := confirm(ctx, v, req.Caps)
 	if err != nil {

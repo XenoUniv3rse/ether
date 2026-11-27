@@ -140,7 +140,7 @@ func (r *broadcastRegistry) acquire(ctx context.Context, key broadcastKey, id st
 	}
 	b.mu.Unlock()
 	if err != nil {
-		if !running {
+		if !running || b.providerBacked {
 			r.discardCold(b)
 		}
 		return nil, err
@@ -181,7 +181,15 @@ func (l *broadcastLease) output() (transcode.SegmentIndex, error) {
 }
 func (l *broadcastLease) close() {
 	if l != nil {
-		l.once.Do(func() { l.mu.Lock(); l.closed = true; l.broadcast.releaseRendition(l.rendition); l.mu.Unlock() })
+		l.once.Do(func() {
+			l.mu.Lock()
+			l.closed = true
+			l.broadcast.releaseRendition(l.rendition)
+			l.mu.Unlock()
+			if l.broadcast.providerBacked {
+				l.registry.discardCold(l.broadcast)
+			}
+		})
 	}
 }
 func (r *broadcastRegistry) close() {

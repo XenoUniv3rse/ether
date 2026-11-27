@@ -64,6 +64,9 @@ ALTER TABLE stats_plays ADD COLUMN audio_copy INTEGER;`)
 	store.Register("stats", 15, `ALTER TABLE stats_plays ADD COLUMN channel_id TEXT NOT NULL DEFAULT '';
 ALTER TABLE stats_plays ADD COLUMN channel_name TEXT NOT NULL DEFAULT '';
 ALTER TABLE stats_plays ADD COLUMN channel_number TEXT NOT NULL DEFAULT '';`)
+	store.Register("stats", 16, `ALTER TABLE stats_plays ADD COLUMN live_source_name TEXT NOT NULL DEFAULT '';
+ALTER TABLE stats_plays ADD COLUMN live_login_label TEXT NOT NULL DEFAULT '';
+ALTER TABLE stats_plays ADD COLUMN live_login_number INTEGER NOT NULL DEFAULT 0;`)
 	store.RegisterAfter("stats_seen_devices", "stats")
 	store.Register("stats_seen_devices", 1, `ALTER TABLE stats_plays ADD COLUMN product TEXT NOT NULL DEFAULT '';
 ALTER TABLE stats_plays ADD COLUMN device_match TEXT NOT NULL DEFAULT '';
@@ -316,15 +319,19 @@ func (s *Service) record(ctx context.Context, r playRecord) error {
 	if problem == "" {
 		problem = clampTimelineText(q.startFailure)
 	}
-	var channelID, channelName, channelNumber string
+	var channelID, channelName, channelNumber, liveSourceName, liveLoginLabel string
+	var liveLoginNumber int
 	if p.LiveChannel != nil {
 		channelID = cmp.Or(p.LiveChannel.ID, p.LiveChannel.Name)
 		channelName = cmp.Or(p.LiveChannel.Name, p.TitleName)
 		channelNumber = p.LiveChannel.Number
+		if provider := p.LiveChannel.Provider; provider != nil {
+			liveSourceName, liveLoginLabel, liveLoginNumber = provider.SourceName, provider.LoginLabel, provider.LoginNumber
+		}
 	}
 	_, err := s.db.ExecContext(ctx, `INSERT INTO stats_plays(id,user_id,rating_key,username,title,platform,device,decision,started,updated,ended,bytes,watched_ms,duration_ms,failovers,error,node_id,`+
-		`measured,played,pictured,ttff_ms,start_failed,buffer_events,buffer_ms,down_failovers,source_kbps,uhd,hdr,remote,origin,release_name,reason_kind,reason_detail,quality_fallback,client_ip,audio_copy,product,device_match,channel_id,channel_name,channel_number) `+
-		`VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET username=excluded.username,title=excluded.title,platform=excluded.platform,device=excluded.device,decision=excluded.decision,updated=excluded.updated,`+
+		`measured,played,pictured,ttff_ms,start_failed,buffer_events,buffer_ms,down_failovers,source_kbps,uhd,hdr,remote,origin,release_name,reason_kind,reason_detail,quality_fallback,client_ip,audio_copy,product,device_match,channel_id,channel_name,channel_number,live_source_name,live_login_label,live_login_number) `+
+		`VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET username=excluded.username,title=excluded.title,platform=excluded.platform,device=excluded.device,decision=excluded.decision,updated=excluded.updated,`+
 		`ended=excluded.ended,product=CASE WHEN excluded.product='' THEN stats_plays.product ELSE excluded.product END,device_match=CASE WHEN excluded.device_match='' THEN stats_plays.device_match ELSE excluded.device_match END,`+
 		`bytes=CASE WHEN excluded.bytes>stats_plays.bytes THEN excluded.bytes ELSE stats_plays.bytes END,`+
 		`watched_ms=CASE WHEN excluded.watched_ms>stats_plays.watched_ms THEN excluded.watched_ms ELSE stats_plays.watched_ms END,`+
@@ -345,9 +352,12 @@ func (s *Service) record(ctx context.Context, r playRecord) error {
 		`quality_fallback=CASE WHEN excluded.quality_fallback='' THEN stats_plays.quality_fallback ELSE excluded.quality_fallback END,`+
 		`channel_id=CASE WHEN excluded.channel_id='' THEN stats_plays.channel_id ELSE excluded.channel_id END,`+
 		`channel_name=CASE WHEN excluded.channel_name='' THEN stats_plays.channel_name ELSE excluded.channel_name END,`+
-		`channel_number=CASE WHEN excluded.channel_number='' THEN stats_plays.channel_number ELSE excluded.channel_number END`,
+		`channel_number=CASE WHEN excluded.channel_number='' THEN stats_plays.channel_number ELSE excluded.channel_number END,`+
+		`live_source_name=CASE WHEN excluded.live_source_name='' THEN stats_plays.live_source_name ELSE excluded.live_source_name END,`+
+		`live_login_label=CASE WHEN excluded.live_source_name='' THEN stats_plays.live_login_label ELSE excluded.live_login_label END,`+
+		`live_login_number=CASE WHEN excluded.live_source_name='' THEN stats_plays.live_login_number ELSE excluded.live_login_number END`,
 		p.ID, p.UserID, int64(p.Key), p.Username, p.TitleName, p.Client.Platform, device, string(p.Decision), start.Unix(), now.Unix(), end, p.BytesServed, r.watchedMS, p.Info.Duration.Milliseconds(), p.Failovers, problem, s.opts.NodeID,
-		q.played, q.pictured, q.ttffMS, q.startFailed, q.bufferEvents, q.bufferMS, p.DownFailovers, q.sourceKbps, q.uhd, q.hdr, q.remote, p.Origin, q.release, q.reasonKind, q.reasonDetail, p.QualityFallback, nullIP(p.Client.ClientIP), audioCopy(p), p.Client.Product, deviceMatch, channelID, channelName, channelNumber)
+		q.played, q.pictured, q.ttffMS, q.startFailed, q.bufferEvents, q.bufferMS, p.DownFailovers, q.sourceKbps, q.uhd, q.hdr, q.remote, p.Origin, q.release, q.reasonKind, q.reasonDetail, p.QualityFallback, nullIP(p.Client.ClientIP), audioCopy(p), p.Client.Product, deviceMatch, channelID, channelName, channelNumber, liveSourceName, liveLoginLabel, liveLoginNumber)
 	if err == nil && clientID != "" {
 		_, err = s.db.ExecContext(ctx, `UPDATE stats_device_registry SET last_seen=?,latest_play_id=? WHERE client_identifier=? AND last_seen<=?`, now.Unix(), p.ID, clientID, now.Unix())
 	}
@@ -540,34 +550,37 @@ func audioCopy(p *core.PlaySession) any {
 }
 
 type Play struct {
-	IP            *string `json:"ip"`
-	ID            string  `json:"id"`
-	UserID        int64   `json:"userId"`
-	Key           int64   `json:"ratingKey"`
-	Username      string  `json:"username"`
-	Title         string  `json:"title"`
-	ChannelID     string  `json:"channelId,omitempty"`
-	ChannelName   string  `json:"channelName,omitempty"`
-	ChannelNumber string  `json:"channelNumber,omitempty"`
-	Platform      string  `json:"platform"`
-	Device        string  `json:"device"`
-	Decision      string  `json:"decision"`
-	Started       int64   `json:"started"`
-	Updated       int64   `json:"updated"`
-	Ended         int64   `json:"ended"`
-	Bytes         int64   `json:"bytes"`
-	WatchedMS     int64   `json:"watchedMs"`
-	DurationMS    int64   `json:"durationMs"`
-	Completed     bool    `json:"completed"`
-	Failovers     int     `json:"failovers"`
-	Error         string  `json:"error"`
+	IP              *string `json:"ip"`
+	ID              string  `json:"id"`
+	UserID          int64   `json:"userId"`
+	Key             int64   `json:"ratingKey"`
+	Username        string  `json:"username"`
+	Title           string  `json:"title"`
+	ChannelID       string  `json:"channelId,omitempty"`
+	ChannelName     string  `json:"channelName,omitempty"`
+	ChannelNumber   string  `json:"channelNumber,omitempty"`
+	LiveSourceName  string  `json:"liveSourceName,omitempty"`
+	LiveLoginLabel  string  `json:"liveLoginLabel,omitempty"`
+	LiveLoginNumber int     `json:"liveLoginNumber,omitempty"`
+	Platform        string  `json:"platform"`
+	Device          string  `json:"device"`
+	Decision        string  `json:"decision"`
+	Started         int64   `json:"started"`
+	Updated         int64   `json:"updated"`
+	Ended           int64   `json:"ended"`
+	Bytes           int64   `json:"bytes"`
+	WatchedMS       int64   `json:"watchedMs"`
+	DurationMS      int64   `json:"durationMs"`
+	Completed       bool    `json:"completed"`
+	Failovers       int     `json:"failovers"`
+	Error           string  `json:"error"`
 }
 
 func (s *Service) History(ctx context.Context, since, until time.Time, user int64, limit int) ([]Play, error) {
 	if limit <= 0 || limit > 500 {
 		limit = 100
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT id,user_id,rating_key,username,title,channel_id,channel_name,channel_number,platform,device,decision,started,updated,ended,bytes,watched_ms,duration_ms,completed,failovers,error,client_ip FROM stats_plays WHERE started>=? AND started<? AND (?=0 OR user_id=?) ORDER BY started DESC LIMIT ?`, since.Unix(), until.Unix(), user, user, limit)
+	rows, err := s.db.QueryContext(ctx, `SELECT id,user_id,rating_key,username,title,channel_id,channel_name,channel_number,live_source_name,live_login_label,live_login_number,platform,device,decision,started,updated,ended,bytes,watched_ms,duration_ms,completed,failovers,error,client_ip FROM stats_plays WHERE started>=? AND started<? AND (?=0 OR user_id=?) ORDER BY started DESC LIMIT ?`, since.Unix(), until.Unix(), user, user, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -575,7 +588,7 @@ func (s *Service) History(ctx context.Context, since, until time.Time, user int6
 	out := []Play{}
 	for rows.Next() {
 		var p Play
-		if err := rows.Scan(&p.ID, &p.UserID, &p.Key, &p.Username, &p.Title, &p.ChannelID, &p.ChannelName, &p.ChannelNumber, &p.Platform, &p.Device, &p.Decision, &p.Started, &p.Updated, &p.Ended, &p.Bytes, &p.WatchedMS, &p.DurationMS, &p.Completed, &p.Failovers, &p.Error, &p.IP); err != nil {
+		if err := rows.Scan(&p.ID, &p.UserID, &p.Key, &p.Username, &p.Title, &p.ChannelID, &p.ChannelName, &p.ChannelNumber, &p.LiveSourceName, &p.LiveLoginLabel, &p.LiveLoginNumber, &p.Platform, &p.Device, &p.Decision, &p.Started, &p.Updated, &p.Ended, &p.Bytes, &p.WatchedMS, &p.DurationMS, &p.Completed, &p.Failovers, &p.Error, &p.IP); err != nil {
 			return nil, err
 		}
 		p.Error = clampTimelineText(p.Error)

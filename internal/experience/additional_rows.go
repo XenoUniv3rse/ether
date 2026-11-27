@@ -27,7 +27,9 @@ type AdditionalRows struct {
 }
 
 func (a AdditionalRows) Rows(ctx context.Context, req frontend.RowRequest) ([]frontend.Row, error) {
-	if req.Placement != frontend.PlacementHome || req.Viewer == nil {
+	// These rows come from the continuation source. Additional candidates
+	// would be filtered out before layout.
+	if req.Placement != frontend.PlacementHome || req.Viewer == nil || req.Purpose == frontend.RowContinue || req.Purpose == frontend.RowNextUp {
 		return nil, nil
 	}
 	var rows []frontend.Row

@@ -199,21 +199,19 @@ func (c *reviewCollections) ListOwned(ctx context.Context, u *core.User, typ cor
 
 // ListOwnedMatching sends the title predicate to the base listing before
 // resolving member data, then includes matching viewer review collections.
-func (c *reviewCollections) ListOwnedMatching(ctx context.Context, u *core.User, typ core.MediaType, match func(string) bool) ([]core.Collection, error) {
+func (c *reviewCollections) ListOwnedMatching(ctx context.Context, u *core.User, typ core.MediaType, foldedName string, match func(string) bool) ([]core.Collection, error) {
 	base, ok := c.base.(interface {
-		ListOwnedMatching(context.Context, *core.User, core.MediaType, func(string) bool) ([]core.Collection, error)
+		ListOwnedMatching(context.Context, *core.User, core.MediaType, string, func(string) bool) ([]core.Collection, error)
 	})
 	if !ok {
 		return c.ListOwned(ctx, u, typ)
 	}
-	out, err := base.ListOwnedMatching(ctx, u, typ, match)
+	out, err := base.ListOwnedMatching(ctx, u, typ, foldedName, match)
 	if err != nil {
 		return nil, err
 	}
-	for _, col := range c.withReviews(ctx, u, typ, nil) {
-		if match(col.Title) {
-			out = append(out, col)
-		}
+	if match(reviewTitle(c.latestReviewYear())) {
+		out = c.withReviews(ctx, u, typ, out)
 	}
 	return out, nil
 }
@@ -390,11 +388,16 @@ func (c *reviewCollections) FindVisible(ctx context.Context, u *core.User, typ c
 	return false, nil
 }
 
-func (c *reviewCollections) withReviews(ctx context.Context, u *core.User, typ core.MediaType, out []core.Collection) []core.Collection {
-	year := c.d.now().Year()
-	if c.d.now().Month() < time.December {
-		year--
+func (c *reviewCollections) latestReviewYear() int {
+	now := c.d.now()
+	if now.Month() < time.December {
+		return now.Year() - 1
 	}
+	return now.Year()
+}
+
+func (c *reviewCollections) withReviews(ctx context.Context, u *core.User, typ core.MediaType, out []core.Collection) []core.Collection {
+	year := c.latestReviewYear()
 	types := []core.MediaType{typ}
 	if typ == "" {
 		types = []core.MediaType{core.TypeMovie, core.TypeShow}

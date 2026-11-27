@@ -49,6 +49,7 @@ export function runtimeLimitFields() {
       fallback: MAX_LIST_ITEMS,
       max: MAX_LIST_ITEMS,
     },
+    { key: "uploadBytes", label: t("Upload size (MiB)"), scale: 1048576, fallback: 64, max: 512 },
   ] satisfies {
     key: keyof RuntimeLimits;
     label: string;
@@ -63,7 +64,7 @@ export function limitNumber(key: keyof RuntimeLimits, limits?: Partial<RuntimeLi
 export function formatLimit(key: keyof RuntimeLimits, value: number): string {
   const n = new Intl.NumberFormat(getLocale(), { maximumFractionDigits: 4 }).format(value);
   if (key === "deadline") return t("{value} hours", { value: n });
-  if (key === "memoryBytes") return t("{value} MiB", { value: n });
+  if (key === "memoryBytes" || key === "uploadBytes") return t("{value} MiB", { value: n });
   if (key === "fetchBytes" || key === "archiveMemberBytes" || key === "archiveExpandedBytes")
     return t("{value} GiB", { value: n });
   if (key === "unitBudget" && (!value || value >= 2 ** 53)) return t("No limit");

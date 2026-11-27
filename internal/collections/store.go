@@ -232,11 +232,43 @@ func (s *Service) loadRows(ctx context.Context) ([]*specRow, error) {
 
 func (s *Service) forgetRowMemo(ctx context.Context) {
 	reqmemo.Forget(ctx, fmt.Sprintf("collections-rows:%p", s))
+	reqmemo.ForgetPrefix(ctx, fmt.Sprintf("collections-name-candidates:%p:", s))
 	reqmemo.ForgetPrefix(ctx, fmt.Sprintf("collections-lastchance:%p:", s))
 }
 
+// A folded ASCII query can match an ASCII title only if it contains the
+// query's letters and digits in order. Unicode titles pass through for the
+// searcher's own folding and scoring.
+func (s *Service) loadNameCandidates(ctx context.Context, foldedName string) ([]*specRow, error) {
+	if foldedName == "" || strings.ContainsFunc(foldedName, func(r rune) bool {
+		return !(r >= 'a' && r <= 'z' || r >= '0' && r <= '9')
+	}) {
+		return s.loadRows(ctx)
+	}
+	var pattern strings.Builder
+	for _, r := range foldedName {
+		pattern.WriteByte('%')
+		pattern.WriteRune(r)
+	}
+	pattern.WriteByte('%')
+	name := "CASE WHEN json_valid(spec_json) THEN COALESCE(json_extract(spec_json, '$.name'),'') ELSE '' END"
+	unicodeName := "(" + name + ") GLOB '*[^ -~]*'"
+	if store.DialectOf(s.db) == store.Postgres {
+		name = "COALESCE(spec_json::jsonb->>'name','') COLLATE \"C\""
+		unicodeName = "(" + name + ") ~ '[^ -~]'"
+	}
+	rows, err := reqmemo.Do(ctx, fmt.Sprintf("collections-name-candidates:%p:%s", s, foldedName), func() ([]*specRow, error) {
+		return s.readSpecRows(ctx, " WHERE ("+unicodeName+" OR LOWER("+name+") LIKE ?)", pattern.String())
+	})
+	return append([]*specRow(nil), rows...), err
+}
+
 func (s *Service) readRows(ctx context.Context) ([]*specRow, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT `+specCols+` FROM collections_specs ORDER BY builtin ASC, id ASC`)
+	return s.readSpecRows(ctx, "")
+}
+
+func (s *Service) readSpecRows(ctx context.Context, filter string, args ...any) ([]*specRow, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT `+specCols+` FROM collections_specs`+filter+` ORDER BY builtin ASC, id ASC`, args...)
 	if err != nil {
 		return nil, err
 	}

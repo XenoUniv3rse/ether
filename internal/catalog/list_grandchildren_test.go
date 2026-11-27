@@ -3,6 +3,7 @@ package catalog
 import (
 	"context"
 	"reflect"
+	"slices"
 	"testing"
 	"time"
 
@@ -56,6 +57,28 @@ func TestStoredGrandchildrenMatchesGrandchildren(t *testing.T) {
 	episode(3, 1, 1, past, 0)
 	// Answered, empty: no listable season.
 	show(4, 1)
+
+	// The export projection may omit display-only facts. It must deliver
+	// the same canonical membership, release gates and numbering.
+	export, err := c.PrepareExportChildren(ctx, []core.RatingKey{core.ShowKey(1), core.ShowKey(4)}, &core.ListRows{Facts: core.VisibilityFacts})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, parent := range []core.RatingKey{core.ShowKey(1), core.ShowKey(4), core.SeasonKey(1, 0), core.SeasonKey(1, 1), core.SeasonKey(1, 2)} {
+		want, err := c.Children(ctx, parent)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := c.Children(export, parent)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !slices.EqualFunc(got, want, func(a, b core.Title) bool {
+			return a.Key == b.Key && a.Title == b.Title && a.Season == b.Season && a.Episode == b.Episode && a.ContentRating == b.ContentRating
+		}) {
+			t.Fatalf("export children for %v: got %v want %v", parent, keysOfTitles(got), keysOfTitles(want))
+		}
+	}
 
 	candidates, err := c.StoredEpisodeCandidates(ctx, []core.RatingKey{core.ShowKey(1), core.ShowKey(2), core.ShowKey(3), core.ShowKey(4), core.MovieKey(9)})
 	if err != nil {

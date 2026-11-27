@@ -4,6 +4,7 @@ import (
 	"context"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/braedonsaunders/ether/internal/core"
 )
@@ -49,5 +50,37 @@ func TestPreloadStoredMatchesLoadByKey(t *testing.T) {
 		if !reflect.DeepEqual(got.t, want[k].t) || !got.detailAt.Equal(want[k].detailAt) || got.detail != want[k].detail {
 			t.Fatalf("%v preloaded %+v, loaded %+v", k, got, want[k])
 		}
+	}
+}
+
+// Playlist membership is decided before page hydration. Partial rows must
+// keep the same inherited rating and duration as the full title.
+func TestPlaylistTitleRowsInheritShowPolicy(t *testing.T) {
+	c := newChunkTestCatalog(t)
+	ctx := core.WithCatalogViewer(context.Background(), &core.User{ID: 10, MaxContentRating: "TV-14"})
+	premiere := c.now().AddDate(-1, 0, 0)
+	show := core.Title{Key: core.ShowKey(7), Type: core.TypeShow, Title: "Series",
+		Released: premiere, ContentRating: "TV-MA", Keywords: []string{"drama"}}
+	episode := core.Title{Key: core.EpisodeKey(7, 1, 1), Type: core.TypeEpisode, Title: "Pilot",
+		ShowKey: show.Key, ShowIDs: core.IDs{TMDB: 7}, Season: 1, Episode: 1, Released: premiere, Runtime: 43 * time.Minute}
+	for _, item := range []core.Title{show, episode} {
+		if err := c.upsert(ctx, item, upsertOpts{browsable: true, detail: true}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	keys := []core.RatingKey{episode.Key, episode.Key}
+	rows, err := c.PlaylistTitleRows(ctx, keys, core.FactKeywords)
+	if err != nil {
+		t.Fatal(err)
+	}
+	full, err := c.CachedGetMany(ctx, keys)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, want := rows[episode.Key], full[episode.Key]
+	if got.Key != episode.Key || got.ContentRating != "TV-MA" || got.ContentRating != want.ContentRating ||
+		got.EnforcementRating != want.EnforcementRating || got.Runtime != want.Runtime ||
+		!reflect.DeepEqual(got.Keywords, want.Keywords) {
+		t.Fatalf("partial policy and runtime differ from display metadata: %+v versus %+v", got, want)
 	}
 }

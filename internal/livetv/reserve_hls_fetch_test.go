@@ -154,13 +154,6 @@ func TestSteadyPrefetchRespectsAccountLimit(t *testing.T) {
 	s.authCache.mu.Lock()
 	s.authCache.m["capped"] = entry
 	s.authCache.mu.Unlock()
-	// The Steady channel holds the account's one connection, as a broadcast
-	// does in production.
-	release, err := s.reserveBroadcastProvider("capped", "capped", "broadcast-capped", 1)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer release()
 	ctx, cancel := context.WithCancel(bg)
 	defer cancel()
 	ss := &session{ctx: ctx, cancel: cancel, info: SessionInfo{ID: "steady-capped", Channel: Channel{ID: "capped", Kind: "iptv", SourceID: "capped"}}}

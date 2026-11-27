@@ -66,6 +66,28 @@ func (i *instance) liveTVGuideInfo(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// channelPageDTO shares the channel policy lookup across the selected page.
+func (i *instance) channelPageDTO(r *http.Request, token string, channels []frontend.LiveChannel) []any {
+	if batch, ok := i.host.ImageGrants.(frontend.ChannelArtworkGrantBatch); ok {
+		var artworkIDs []string
+		for _, channel := range channels {
+			if len(channel.Images) > 0 {
+				artworkIDs = append(artworkIDs, channel.ID)
+			}
+		}
+		if ctx, err := batch.PrepareChannelArtwork(r.Context(), token, artworkIDs); err == nil {
+			r = r.WithContext(ctx)
+		}
+	}
+	items := make([]any, 0, len(channels))
+	for _, channel := range channels {
+		if item, ok := i.channelDTO(r, token, channel); ok {
+			items = append(items, item)
+		}
+	}
+	return items
+}
+
 func (i *instance) channelDTO(r *http.Request, token string, ch frontend.LiveChannel) (map[string]any, bool) {
 	id, err := ids.StringGUID(ids.Channel, ch.ID)
 	if err != nil {
@@ -188,14 +210,7 @@ func (i *instance) channels(w http.ResponseWriter, r *http.Request) {
 	}
 	offset := queryInt(r, "StartIndex", 0)
 	limit := queryInt(r, "Limit", 50)
-	items := make([]any, 0)
-	for _, ch := range paging.Slice(channels, offset, limit) {
-		item, ok := i.channelDTO(r, token, ch)
-		if !ok {
-			continue
-		}
-		items = append(items, item)
-	}
+	items := i.channelPageDTO(r, token, paging.Slice(channels, offset, limit))
 	jsonReply(w, i.queryResult(items, len(channels), offset))
 }
 
@@ -325,14 +340,7 @@ func (i *instance) writeLiveChannelItems(w http.ResponseWriter, r *http.Request,
 	if limit <= 0 {
 		limit = 50
 	}
-	items := make([]any, 0)
-	for _, ch := range paging.Slice(channels, offset, limit) {
-		item, ok := i.channelDTO(r, token, ch)
-		if !ok {
-			continue
-		}
-		items = append(items, item)
-	}
+	items := i.channelPageDTO(r, token, paging.Slice(channels, offset, limit))
 	i.replyItems(w, r, i.queryResult(items, len(channels), offset))
 }
 

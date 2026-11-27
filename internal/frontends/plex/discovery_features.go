@@ -85,6 +85,10 @@ func discoveryArtworkURL(key frontend.RatingKey, kind, version, lang string) str
 type DiscoveryFeatures = frontend.DiscoveryFeatures
 
 func (s *Server) discoveryHubs(ctx context.Context, pr *Request, limit int) []hubSpec {
+	return s.discoveryHubsFor(ctx, pr, limit, false)
+}
+
+func (s *Server) discoveryHubsFor(ctx context.Context, pr *Request, limit int, section bool) []hubSpec {
 	d := s.discovery()
 	if d == nil || pr.User == nil {
 		return nil
@@ -113,7 +117,18 @@ func (s *Server) discoveryHubs(ctx context.Context, pr *Request, limit int) []hu
 		})
 	}
 	if d.Personal != nil {
-		add(frontend.RowPurpose("recommendation"), d.Personal.Hubs)
+		load := d.Personal.Hubs
+		if section {
+			// Year in Review is a Home-only row. The section never renders it.
+			load = func(ctx context.Context, viewer *frontend.User, limit int) ([]frontend.Hub, error) {
+				hub, err := d.Personal.Rediscover(ctx, viewer, limit)
+				if err != nil || len(hub.Items) == 0 {
+					return nil, err
+				}
+				return []frontend.Hub{hub}, nil
+			}
+		}
+		add(frontend.RowPurpose("recommendation"), load)
 	}
 	return out
 }

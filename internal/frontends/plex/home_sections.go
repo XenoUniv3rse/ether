@@ -173,6 +173,7 @@ func (s *Server) pluginSectionHubs(ctx context.Context, pr *Request, sec Section
 // already arranged by that page (order, length, Look), with their own row
 // ids, drawn the way each row's Present asks.
 func (s *Server) preparePluginSectionHubs(ctx context.Context, pr *Request, sec Section, visibleCount int) pluginSectionPaint {
+	markHomePluginRead(ctx)
 	exp := s.exp()
 	reader, ok := exp.(frontend.PluginLibraryRowsReader)
 	if !ok || visibleCount <= 0 {
@@ -297,7 +298,7 @@ func (s *Server) buildSectionHubs(r *http.Request, sec Section, promotedOnly boo
 		specs = append(specs, cw)
 	}
 	if !isKindSection(sec) {
-		if ra, err := s.recentlyAddedHub(ctx, pr, sec, count); err == nil {
+		if ra, err := s.recentlyAddedHub(ctx, pr, sec, visibleCount); err == nil {
 			specs = append(specs, ra)
 		} else {
 			s.log.Warn("recently added hub", "section", sec.ID, "err", err)
@@ -327,7 +328,7 @@ func (s *Server) buildSectionHubs(r *http.Request, sec Section, promotedOnly boo
 	}
 	if !isKindSection(sec) {
 		// Mixed discovery rows (watchlist, Rediscover) keep only this section's titles.
-		for _, hs := range s.discoveryHubs(ctx, pr, count) {
+		for _, hs := range s.discoveryHubsFor(ctx, pr, count, true) {
 			if h, ok := frontend.SectionView(hs.Hub, sec.Type); ok {
 				h.Items = s.filterSectionMembers(ctx, sec, h.Items)
 				if len(h.Items) == 0 {

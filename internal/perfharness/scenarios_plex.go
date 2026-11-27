@@ -35,7 +35,6 @@ func plexLibrarySteps(page string) []Step {
 		{Name: "movies filter studio", Class: classBrowse, Path: all + "&studio={studio}"},
 		{Name: "movies filter actor", Class: classBrowse, Path: all + "&actor={actorId}"},
 		{Name: "movies filter director", Class: classBrowse, Path: all + "&director={directorId}"},
-		{Name: "movies filter collection", Class: classBrowse, Path: all + "&collection={collectionId}"},
 		{Name: "movies filter unwatched", Class: classBrowse, Path: all + "&unwatched=1"},
 		// A date filter (Plex's advanced filters: added before a date).
 		{Name: "shows filter addedAt before", Class: classBrowse, Path: "/library/sections/{showSection}/all?type=2&sort=titleSort&addedAt%3C%3C={now}&X-Plex-Container-Start=0" + page},
@@ -47,7 +46,11 @@ func plexLibrarySteps(page string) []Step {
 		{Name: "movies country filter list", Class: classBrowse, Path: "/library/sections/{movieSection}/country?type=1"},
 		// Franchises: the section's collection listing, one franchise and
 		// its titles.
-		{Name: "movies collections type=18", Class: classBrowse, Path: "/library/sections/{movieSection}/all?type=18&X-Plex-Container-Start=0&X-Plex-Container-Size=50", Discover: discoverPlexItem("collectionKey", "collection")},
+		{Name: "movies collections type=18", Class: classBrowse, Path: "/library/sections/{movieSection}/all?type=18&X-Plex-Container-Start=0&X-Plex-Container-Size=50", Discover: func(vars map[string]string, body []byte) {
+			discoverPlexItem("collectionKey", "collection")(vars, body)
+			setOnce(vars, "collectionId", vars["collectionKey"])
+		}},
+		{Name: "movies filter collection", Class: classBrowse, Path: all + "&collection={collectionId}"},
 		{Name: "movies collection dir", Class: classBrowse, Path: "/library/sections/{movieSection}/collection"},
 		{Name: "collection", Class: classDetail, Path: "/library/collections/{collectionKey}"},
 		{Name: "collection children", Class: classDetail, Path: "/library/collections/{collectionKey}/children?excludeAllLeaves=1"},
@@ -60,6 +63,7 @@ func plexLibrarySteps(page string) []Step {
 		// A hub row's "more" page and its next page.
 		{Name: "hub more", Class: classHome, Path: "{hubMore}"},
 		{Name: "hub more p2", Class: classHome, Path: "{hubMoreP2}"},
+		{Name: "continue watching hub more", Class: classHome, Path: "/hubs/items/home.continue?X-Plex-Container-Start=0&X-Plex-Container-Size=24"},
 		{Name: "/hubs/sections/movies/manage", Class: classHome, Path: "/hubs/sections/{movieSection}/manage"},
 		{Name: "/hubs/continueWatching/items", Class: classHome, Path: "/hubs/continueWatching/items?X-Plex-Container-Start=0&X-Plex-Container-Size=50"},
 		{Name: "shows onDeck", Class: classHome, Path: "/library/sections/{showSection}/onDeck"},

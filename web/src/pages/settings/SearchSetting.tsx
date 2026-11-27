@@ -1,35 +1,39 @@
 import { Button, Input, Select } from "@braedonsaunders/appkit-ui";
 import { useEffect, useRef, useState } from "react";
-import { SettingsRow } from "../../../components/SettingsRow";
-import { t } from "../../../i18n";
-import { useLocale } from "../../../i18n/react";
-import { apiFetch, errorMessage } from "../../../lib/api";
+import { SettingsRow } from "../../components/SettingsRow";
+import { t } from "../../i18n";
+import { errorMessage } from "../../lib/api";
+
+import type { SearchOptions } from "./SchemaForm";
 
 type Option = { value: string; label: string };
 /** Runtime-backed choices, with explicit search and no provider-specific UI. */
 export function SearchSetting({
-  plugin,
+  searchOptions,
+  description,
+  disabled,
   field,
   value,
   onChange,
 }: {
-  plugin: string;
+  searchOptions: SearchOptions;
+  description?: React.ReactNode;
+  disabled?: boolean;
   field: { key: string; label: string; placeholder?: string };
   value: unknown;
   onChange: (value: string) => void;
 }) {
-  const { locale } = useLocale();
   const [query, setQuery] = useState("");
   const [options, setOptions] = useState<Option[]>([]);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
-  const generation = useRef(0);
-  useEffect(
-    () => () => {
-      generation.current++;
-    },
-    [plugin, field.key, locale],
-  );
+  const request = useRef<AbortController | null>(null);
+  useEffect(() => {
+    setOptions([]);
+    setBusy(false);
+    setError("");
+    return () => request.current?.abort();
+  }, [searchOptions, field.key]);
   // JSON option values may carry structured provider coordinates and a label.
   let label = String(value ?? "");
   try {
@@ -39,24 +43,24 @@ export function SearchSetting({
     /* opaque option */
   }
   const search = async () => {
-    const current = ++generation.current;
+    request.current?.abort();
+    const current = new AbortController();
+    request.current = current;
     setBusy(true);
     setError("");
     try {
-      const result = await apiFetch<{ options: Option[] }>(
-        `/plugins/${encodeURIComponent(plugin)}/options/${encodeURIComponent(field.key)}?q=${encodeURIComponent(query.trim())}&locale=${encodeURIComponent(locale)}`,
-      );
-      if (current !== generation.current) return;
-      setOptions(result.options);
-      if (!result.options.length) setError(t("No results"));
+      const result = await searchOptions(field.key, query.trim(), current.signal);
+      if (current.signal.aborted) return;
+      setOptions(result);
+      if (!result.length) setError(t("No results"));
     } catch (e) {
-      if (current === generation.current) setError(errorMessage(e));
+      if (!current.signal.aborted) setError(errorMessage(e));
     } finally {
-      if (current === generation.current) setBusy(false);
+      if (!current.signal.aborted) setBusy(false);
     }
   };
   return (
-    <SettingsRow title={field.label}>
+    <SettingsRow title={field.label} description={description}>
       <div className="space-y-2">
         <form
           className="flex gap-2"
@@ -67,22 +71,25 @@ export function SearchSetting({
         >
           <Input
             aria-label={field.label}
+            disabled={disabled}
             placeholder={field.placeholder}
             value={query}
             onChange={(event) => {
               setQuery(event.target.value);
-              generation.current++;
+              request.current?.abort();
               setBusy(false);
               setOptions([]);
+              setError("");
             }}
           />
-          <Button type="submit" size="sm" disabled={busy || query.trim().length < 2}>
+          <Button type="submit" size="sm" disabled={disabled || busy || query.trim().length < 2}>
             {busy ? t("Searching…") : t("Search")}
           </Button>
         </form>
         {options.length > 0 ? (
           <Select
             aria-label={t("Search results")}
+            disabled={disabled}
             value={String(value ?? "")}
             onChange={(event) => onChange(event.target.value)}
           >
@@ -94,7 +101,9 @@ export function SearchSetting({
             ))}
           </Select>
         ) : null}
-        {label ? <p className="text-sm text-fg-muted">{label}</p> : null}
+        {label && !options.some((option) => option.value === String(value)) ? (
+          <p className="text-sm text-fg-muted">{label}</p>
+        ) : null}
         {error ? (
           <p role="status" className="text-sm text-danger">
             {error}

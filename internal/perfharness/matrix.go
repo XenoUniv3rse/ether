@@ -16,10 +16,47 @@ import (
 func MatrixClients(live bool) []Client {
 	clients := Clients()
 	for i := range clients {
+		if clients[i].Surface == "plex" && !live {
+			for j, step := range clients[i].Steps {
+				switch step.Name {
+				case "live guide grid 3h", "live hubs":
+					clients[i].Steps[j].ExpectedStatus = http.StatusNotFound
+				}
+			}
+		}
 		switch clients[i].Name {
+		case "plex-appletv":
+			clients[i].Steps = append(clients[i].Steps,
+				Step{Name: "HEAD /hubs/search with query", Class: classSearch, Method: http.MethodHead, Path: "/hubs/search?query=star&limit=30"},
+				Step{Name: "GET /hubs/search/voice with query", Class: classSearch, Path: "/hubs/search/voice?query=star&limit=30"},
+				Step{Name: "HEAD /hubs/search/voice with query", Class: classSearch, Method: http.MethodHead, Path: "/hubs/search/voice?query=star&limit=30"},
+				Step{Name: "GET /library/all/top movies", Class: classBrowse, Path: "/library/all/top?type=1"},
+				Step{Name: "HEAD /library/all/top movies", Class: classBrowse, Method: http.MethodHead, Path: "/library/all/top?type=1"},
+			)
 		case "xtream":
 			const auth = "?username={xtreamUser}&password={xtreamPass}"
+			for j := range clients[i].Steps {
+				step := &clients[i].Steps[j]
+				switch step.Name {
+				case "get_live_streams":
+					step.Discover = discoverRegexp("xtreamLive", xtreamStreamID)
+				case "get_vod_streams":
+					old := step.Discover
+					step.Discover = func(vars map[string]string, body []byte) {
+						old(vars, body)
+						discoverMatrixArtwork(vars, body, "xtreamCover", "/xtream/image/", "stream_icon")
+					}
+				}
+			}
+			if live {
+				clients[i].Steps = append(clients[i].Steps,
+					Step{Name: "get_short_epg", Class: classGuide, Path: "/player_api.php" + auth + "&action=get_short_epg&stream_id={xtreamLive}"},
+					Step{Name: "get_simple_data_table", Class: classGuide, Path: "/player_api.php" + auth + "&action=get_simple_data_table&stream_id={xtreamLive}"},
+				)
+			}
 			clients[i].Steps = append(clients[i].Steps,
+				Step{Name: "VOD cover", Class: classDetail, Path: "/image/{xtreamCover}"},
+				Step{Name: "VOD cover probe", Class: classDetail, Method: http.MethodHead, Path: "/image/{xtreamCover}"},
 				Step{Name: "XMLTV guide export", Class: classGuide, Path: "/xmltv.php" + auth},
 				Step{Name: "M3U lineup export", Class: classGuide, Path: "/get.php" + auth + "&type=m3u_plus"},
 			)
@@ -29,8 +66,27 @@ func MatrixClients(live bool) []Client {
 				Step{Name: "clear series audio preference", Class: classState, Method: http.MethodDelete, Path: "/api/v2/audio-prefs/{seriesId}"},
 			)
 		case "stremio":
+			clients[i].Prefix = "/stremio"
+			for j := range clients[i].Steps {
+				step := &clients[i].Steps[j]
+				step.Path = "/{stremio}" + step.Path
+				if step.Name == "catalog movies" {
+					old := step.Discover
+					step.Discover = func(vars map[string]string, body []byte) {
+						old(vars, body)
+						var catalog struct {
+							Metas json.RawMessage `json:"metas"`
+						}
+						if json.Unmarshal(body, &catalog) == nil {
+							discoverMatrixArtwork(vars, catalog.Metas, "stremioPoster", "/stremio/image/", "poster")
+						}
+					}
+				}
+			}
 			clients[i].Steps = append(clients[i].Steps,
-				Step{Name: "movie stream choices", Class: classPlayback, Path: "/stream/movie/{movieMeta}.json"},
+				Step{Name: "movie stream choices", Class: classPlayback, Path: "/{stremio}/stream/movie/{movieMeta}.json", Discover: discoverMatrixStremioStream},
+				Step{Name: "catalog poster", Class: classDetail, Path: "/image/{stremioPoster}"},
+				Step{Name: "movie stream probe", Class: classPlayback, Method: http.MethodHead, Path: "/sessions/lazy/{stremioTicket}/file"},
 			)
 		case "vela":
 			clients[i].Steps = append(clients[i].Steps,
@@ -72,6 +128,49 @@ func MatrixClients(live bool) []Client {
 		}
 	}
 	return clients
+}
+
+func discoverMatrixArtwork(vars map[string]string, body []byte, variable, prefix, field string) {
+	delete(vars, variable)
+	var items []map[string]json.RawMessage
+	if json.Unmarshal(body, &items) != nil {
+		return
+	}
+	for _, item := range items {
+		var raw string
+		if json.Unmarshal(item[field], &raw) != nil {
+			continue
+		}
+		u, err := url.Parse(raw)
+		if err != nil {
+			continue
+		}
+		if secret, ok := strings.CutPrefix(u.Path, prefix); ok && secret != "" && !strings.Contains(secret, "/") {
+			vars[variable] = url.PathEscape(secret)
+			return
+		}
+	}
+}
+
+func discoverMatrixStremioStream(vars map[string]string, body []byte) {
+	var result struct {
+		Streams []struct {
+			URL string `json:"url"`
+		} `json:"streams"`
+	}
+	delete(vars, "stremioTicket")
+	if json.Unmarshal(body, &result) != nil || len(result.Streams) == 0 {
+		return
+	}
+	u, err := url.Parse(result.Streams[0].URL)
+	if err != nil {
+		return
+	}
+	rest, ok := strings.CutPrefix(u.Path, "/stremio/sessions/lazy/")
+	token, tail, split := strings.Cut(rest, "/")
+	if ok && split && token != "" && tail == "file" {
+		vars["stremioTicket"] = url.PathEscape(token)
+	}
 }
 
 func discoverMatrixVelaID(variable string) func(map[string]string, []byte) {
@@ -155,8 +254,8 @@ func (r *MatrixReport) Add(configuration string, results []Result, trace map[str
 			r.AddGap(key.config, key.surface, key.route, result.Step, result.Skipped)
 		case !ok:
 			r.AddGap(key.config, key.surface, key.route, result.Step, "missing completed request trace")
-		case result.Status < 200 || result.Status >= 300 || result.Err != "":
-			r.AddGap(key.config, key.surface, key.route, result.Step, fmt.Sprintf("unsuccessful scenario (HTTP %d)", result.Status))
+		case !result.matrixSuccess(rec):
+			r.AddGap(key.config, key.surface, key.route, result.Step, fmt.Sprintf("unexpected scenario result (HTTP %d)", result.Status))
 		case step.Stream != 0 && rec.Duration < step.Stream-time.Second:
 			r.AddGap(key.config, key.surface, key.route, result.Step, "stream closed before the observation window")
 		default:
@@ -166,11 +265,35 @@ func (r *MatrixReport) Add(configuration string, results []Result, trace map[str
 			continue
 		}
 		budget := matrixBudget(step, rec, result.Route)
-		score := max(overBudget(rec.Queries, budget.Queries), overBudget(rec.Rows, budget.Rows), overBudget(rec.Writes, budget.Writes))
+		score := max(overBudget(rec.Queries, budget.Queries), overBudget(rec.Rows, budget.Rows), overBudget(rec.Writes-requiredDetailWrites(result.Route, rec), budget.Writes))
 		if score > 1 && score > r.offenders[key].score {
 			r.offenders[key] = matrixOffender{key, result.Client + " / " + result.Step, rec, budget, score}
 		}
 	}
+}
+
+// Emby item detail carries reversible numeric genre and studio identifiers.
+// The first published identifier must survive restart and be resolvable on
+// other cluster nodes. Only the two namespace batches that publish it are
+// allowed here; any other write still counts against the read budget.
+func requiredDetailWrites(route string, rec TraceRecord) int64 {
+	if rec.Method != http.MethodGet && rec.Method != http.MethodHead {
+		return 0
+	}
+	if route != rec.Method+" /emby/Items/{id}" && route != rec.Method+" /emby/Users/{userId}/Items/{id}" {
+		return 0
+	}
+	var counters, mappings int64
+	for _, statement := range rec.Statements {
+		switch sql := strings.Join(strings.Fields(statement.SQL), " "); {
+		case sql == "INSERT INTO frontend_compact_id_counters(surface,kind,last_id) VALUES(?,?,0) ON CONFLICT(surface,kind) DO UPDATE SET last_id=frontend_compact_id_counters.last_id":
+			counters += statement.Count
+		case sql == "INSERT INTO frontend_compact_ids(surface,kind,ref,id) VALUES(?,?,?,?) ON CONFLICT(surface,kind,ref) DO NOTHING",
+			strings.HasPrefix(sql, "INSERT INTO frontend_compact_ids(surface,kind,ref,id) VALUES (?,?,?,?)"):
+			mappings += statement.Count
+		}
+	}
+	return min(rec.Writes, min(2, counters)+min(2, mappings))
 }
 
 func overBudget(actual, limit int64) float64 {
@@ -199,14 +322,14 @@ func matrixBudget(step Step, rec TraceRecord, route string) matrixWork {
 		b.Rows = min(b.Rows, int64(step.RowsBound))
 	}
 	if rec.Method == http.MethodGet || rec.Method == http.MethodHead {
-		b.Writes = allowedReadWrites(route, rec.Statements)
+		b.Writes = allowedReadWrites(route, rec)
 	}
 	return b
 }
 
 // These writes publish capabilities carried by read responses. Other writes,
 // including cleanup and cache fill, still consume the zero-write budget.
-func allowedReadWrites(route string, statements []statementStat) int64 {
+func allowedReadWrites(route string, rec TraceRecord) int64 {
 	const (
 		lastSeen   = "UPDATE auth_users SET last_seen_at=? WHERE id=? AND last_seen_at<?"
 		epochFence = "UPDATE viewer_policy_epoch SET generation=generation WHERE id=1"
@@ -217,11 +340,15 @@ func allowedReadWrites(route string, statements []statementStat) int64 {
 	siloOffers := route == "GET /silo/api/v2/catalog/items/{id}" || route == "GET /silo/api/v2/catalog/items/{id}/versions" ||
 		route == "GET /silo/api/v2/watch/{id}"
 	velaVersions := route == "GET /vela/v0/titles/{id}/versions"
-	for _, statement := range statements {
+	for _, statement := range rec.Statements {
 		sql := strings.Join(strings.Fields(statement.SQL), " ")
 		switch {
 		case sql == lastSeen:
 			seenWrites = max(seenWrites, min(1, statement.Count))
+		case rec.Surface == "plex" && plexVariantAllocation.MatchString(sql):
+			writes += statement.Count
+		case rec.Surface == "plex" && rec.Method == http.MethodGet && plexWatchMutation(rec.Path, sql):
+			writes += statement.Count
 		case velaRows && strings.HasPrefix(sql, "INSERT INTO experience_row_views(id,scope_hash,viewer_id,device_id,protocol,snapshot,expires,payload) "):
 			writes += min(2, statement.Count)
 		case velaRows && strings.HasPrefix(sql, "INSERT INTO experience_row_view_manifests(scope_hash,viewer_id,device_id,protocol,generation,expires,payload) "):
@@ -248,6 +375,25 @@ func allowedReadWrites(route string, statements []statementStat) int64 {
 	}
 	return writes + seenWrites + receiptInserts + offerInserts + min(headerInserts, receiptInserts+offerInserts)
 }
+
+func plexWatchMutation(path, query string) bool {
+	switch path {
+	case "/:/timeline":
+		switch query {
+		case "DELETE FROM personalize_discovery_hidden WHERE user_id=? AND item_key=?",
+			"DELETE FROM state_continue_hidden WHERE user_id=? AND item_key=?":
+			return true
+		}
+		fallthrough
+	case "/:/scrobble", "/:/unscrobble":
+		return strings.HasPrefix(query, "INSERT INTO state_watch(user_id, rating_key, ") ||
+			strings.HasPrefix(query, "UPDATE state_watch SET view_offset_ns=") ||
+			strings.HasPrefix(query, "INSERT INTO state_history(user_id, ")
+	}
+	return false
+}
+
+var plexVariantAllocation = regexp.MustCompile(`^INSERT INTO variants_ids\(media_id,rating_key,release_id,last_seen\) VALUES \(\?,\?,\?,\?\)(,\(\?,\?,\?,\?\))* ON CONFLICT DO NOTHING$`)
 
 var sqlLiteral = regexp.MustCompile(`'(?:[^']|'')*'`)
 

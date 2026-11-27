@@ -38,7 +38,7 @@ func TestCachedPortraitTitlesWorkBound(t *testing.T) {
 			t.Fatal(err)
 		}
 		readCtx, stats := store.WithQueryStats(ctx)
-		got, err := c.CachedPortraitTitles(readCtx, subjects, config.Catalog{}, now)
+		got, err := c.CachedPortraitTitles(readCtx, subjects, config.Catalog{}, now, core.VisibilityFacts, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -52,13 +52,12 @@ func TestCachedPortraitTitlesWorkBound(t *testing.T) {
 		if stats.Writes() != 0 {
 			t.Fatal("portrait read wrote rows")
 		}
-		fullCtx, fullStats := store.WithQueryStats(ctx)
-		if _, err := c.CachedCreditTitles(fullCtx, []core.RatingKey{key}, config.Catalog{}, now); err != nil {
+		full, err := c.CachedCreditTitles(ctx, []core.RatingKey{key}, config.Catalog{}, now)
+		if err != nil {
 			t.Fatal(err)
 		}
-		t.Logf("unrelated credits=%d: full queries/rows=%d/%d; portrait=%d/%d", extras, fullStats.Queries(), fullStats.Rows(), stats.Queries(), stats.Rows())
-		if extras > 0 && fullStats.Rows() <= stats.Rows()+100 {
-			t.Fatal("fixture did not exercise unrelated full hydration")
+		if row := full[key]; !reflect.DeepEqual(row.Cast, title.Cast) || !reflect.DeepEqual(row.Directors, title.Directors) {
+			t.Fatalf("full credit hydration with %d unrelated credits: cast=%d directors=%d", extras, len(row.Cast), len(row.Directors))
 		}
 	}
 	// Check the exact-pair lookup plan, outside the measured request.
@@ -112,7 +111,7 @@ func TestCachedPortraitTitlesWorkBound(t *testing.T) {
 	if _, err := db.ExecContext(ctx, `DELETE FROM catalog_credits WHERE key=?`, int64(key)); err != nil {
 		t.Fatal(err)
 	}
-	got, err := c.CachedPortraitTitles(ctx, subjects, config.Catalog{}, now)
+	got, err := c.CachedPortraitTitles(ctx, subjects, config.Catalog{}, now, core.VisibilityFacts, nil)
 	if err != nil || len(got[key].Cast)+len(got[key].Directors) != 0 {
 		t.Fatalf("stale credit retained: %+v %v", got, err)
 	}
@@ -120,12 +119,12 @@ func TestCachedPortraitTitlesWorkBound(t *testing.T) {
 	if err := c.SetLibraryPolicies(catalog.LibraryPolicies{ShowRules: []core.LibraryExclusion{{Name: "genre", MediaType: "show", Match: "all", Rules: []core.CollectionRule{{Field: "genre", Op: "is", Value: json.RawMessage(`"Drama"`)}}}}}); err != nil {
 		t.Fatal(err)
 	}
-	gBlocked, errBlocked := c.CachedPortraitTitles(ctx, subjects, blocked, now)
+	gBlocked, errBlocked := c.CachedPortraitTitles(ctx, subjects, blocked, now, core.VisibilityFacts, nil)
 	_ = c.SetLibraryPolicies(catalog.LibraryPolicies{})
 	if got, err := gBlocked, errBlocked; err != nil || len(got) != 0 {
 		t.Fatalf("owned policy ignored: %+v %v", got, err)
 	}
-	if got, err := c.CachedPortraitTitles(ctx, subjects, config.Catalog{}, now.AddDate(-3, 0, 0)); err != nil || len(got) != 0 {
+	if got, err := c.CachedPortraitTitles(ctx, subjects, config.Catalog{}, now.AddDate(-3, 0, 0), core.VisibilityFacts, nil); err != nil || len(got) != 0 {
 		t.Fatalf("owned clock ignored: %+v %v", got, err)
 	}
 }

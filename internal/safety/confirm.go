@@ -25,27 +25,30 @@ func (s *Service) ConfirmAdmission(ctx context.Context, u *core.User, remote boo
 	return s.confirmPlayback(ctx, u, remote, now, true)
 }
 
-// PreviewAdmission reads one policy snapshot for a prediction that cannot
-// open a source or grant playback. Actual admission still takes the fence.
-func (s *Service) PreviewAdmission(ctx context.Context, u *core.User, remote bool, now time.Time) (*core.User, error) {
+// PreviewPlayback reads the policy from one statement snapshot. A preview
+// creates no admission or session; the actual playback request fences policy
+// again when it opens the source.
+func (s *Service) PreviewPlayback(ctx context.Context, u *core.User, remote bool, now time.Time, admission bool) (*core.User, error) {
 	if s == nil || s.db == nil || u == nil || u.ID <= 0 {
 		return nil, core.ErrUnauthorized
 	}
 	started := time.Now()
-	viewer, policy, err := readFreshPlayback(ctx, s.db, u)
+	fresh, policy, err := readFreshPlayback(ctx, s.db, u)
 	if errors.Is(err, core.ErrUnauthorized) {
 		return nil, err
 	}
 	if err != nil {
 		return confirmFallback(ctx, s.Restricted(u))
 	}
-	if !CanPlayWithPolicy(viewer, policy, remote, started) || !CanPlayWithPolicy(viewer, policy, remote, time.Now()) || !CanPlayWithPolicy(viewer, policy, remote, now) {
+	if !CanPlayWithPolicy(fresh, policy, remote, started) || !CanPlayWithPolicy(fresh, policy, remote, time.Now()) || !CanPlayWithPolicy(fresh, policy, remote, now) {
 		return nil, core.ErrUnauthorized
 	}
-	if err := CheckBedtime(viewer, policy, now); err != nil {
-		return nil, err
+	if admission {
+		if err := CheckBedtime(fresh, policy, now); err != nil {
+			return nil, err
+		}
 	}
-	return viewer, nil
+	return fresh, nil
 }
 
 func (s *Service) confirmPlayback(ctx context.Context, u *core.User, remote bool, now time.Time, admission bool) (*core.User, error) {
@@ -154,11 +157,11 @@ func confirmFallback(ctx context.Context, restricted bool) (*core.User, error) {
 	return nil, core.ErrPolicyUnconfirmed
 }
 
-type playbackPolicyQuerier interface {
+type playbackPolicyReader interface {
 	QueryRowContext(context.Context, string, ...any) *sql.Row
 }
 
-func readFreshPlayback(ctx context.Context, db playbackPolicyQuerier, u *core.User) (*core.User, Policy, error) {
+func readFreshPlayback(ctx context.Context, db playbackPolicyReader, u *core.User) (*core.User, Policy, error) {
 	var active, owner, streams int
 	var rating, allowed, plexSecs, raw string
 	err := db.QueryRowContext(ctx, `SELECT active, is_owner, stream_limit, max_content_rating, allowed_libraries, plex_sections, COALESCE((SELECT policy FROM safety_policies WHERE user_id=auth_users.id), '') FROM auth_users WHERE id=?`, u.ID).Scan(&active, &owner, &streams, &rating, &allowed, &plexSecs, &raw)

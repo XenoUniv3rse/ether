@@ -10,6 +10,7 @@ import (
 	"github.com/braedonsaunders/ether/internal/core"
 	"github.com/braedonsaunders/ether/internal/experience"
 	"github.com/braedonsaunders/ether/internal/frontend"
+	"github.com/braedonsaunders/ether/internal/personalize"
 	"github.com/braedonsaunders/ether/internal/reqmemo"
 )
 
@@ -288,7 +289,14 @@ func (a *App) experienceAdditionalRows(ctx context.Context, req frontend.RowRequ
 		}}
 	}
 	if a.discoveryPersonal != nil {
-		composer.Personal = hubDiscoverySource{a.discoveryPersonal.Hubs}
+		composer.Personal = hubDiscoverySource{func(ctx context.Context, viewer *core.User, limit int) ([]core.Hub, error) {
+			if core.LiveApp(ctx) == "stremio" {
+				if detail, ok := visibility.FactJudge(ctx); ok {
+					ctx = personalize.WithReviewProjection(ctx, core.ListRows{Facts: core.VisibilityFacts, Detail: detail, OmitCredits: true})
+				}
+			}
+			return a.discoveryPersonal.Hubs(ctx, viewer, limit)
+		}}
 	}
 	if a.livetv != nil {
 		composer.Live = a.livetv
@@ -298,7 +306,7 @@ func (a *App) experienceAdditionalRows(ctx context.Context, req frontend.RowRequ
 
 // experienceHomeFallback loads the viewer's exclusions and asks Experience for
 // the cold Home shelves. Plex does not use this path.
-func (a *App) experienceHomeFallback(ctx context.Context, req frontend.RowRequest, libraries []experience.Library, visibility experience.Visibility) ([]frontend.Row, error) {
+func (a *App) experienceHomeFallback(ctx context.Context, req frontend.RowRequest, libraries []experience.Library, visibility experience.Visibility, listDisplay bool) ([]frontend.Row, error) {
 	if req.Viewer == nil || a.catalog == nil || a.notInterested == nil {
 		return nil, core.ErrNotAvailable
 	}
@@ -313,7 +321,25 @@ func (a *App) experienceHomeFallback(ctx context.Context, req frontend.RowReques
 	if req.HomeFallbackOnly {
 		return a.experienceHeroFallback(ctx, req, libraries, keys)
 	}
-	return experience.ColdHomeRows(ctx, req.Viewer, libraries, visibility, req.Limit, keys, a.catalog.Browse)
+	browse := func(ctx context.Context, q core.BrowseQuery) (core.Page, error) {
+		if a.availability != nil {
+			filter, err := a.availability.PagingFilter(ctx, q.Filter)
+			if err != nil {
+				return core.Page{}, err
+			}
+			if visibility.Sessions != nil {
+				for _, session := range visibility.Sessions() {
+					if session != nil && session.UserID == req.Viewer.ID {
+						filter.AvailabilityKeepKeys = append(filter.AvailabilityKeepKeys, session.Key)
+					}
+				}
+			}
+			q.Filter = filter
+			q.ListDisplayFacts = listDisplay
+		}
+		return a.catalog.Browse(ctx, q)
+	}
+	return experience.ColdHomeRows(ctx, req.Viewer, libraries, visibility, req.Limit, keys, browse)
 }
 
 // experienceHeroFallback reads only the remaining slots, with art and policy

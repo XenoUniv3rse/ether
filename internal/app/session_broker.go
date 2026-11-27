@@ -165,7 +165,7 @@ func (a *App) newSessionBroker(events *sessions.EventBus) (*sessions.Broker, err
 			}
 			return a.safety.UserPolicy(v), nil
 		},
-		CanPlay: a.safety.CanPlay, FreshPlay: a.safety.ConfirmAdmission, PreviewPlay: a.safety.PreviewAdmission, CurrentPlay: a.safety.ConfirmPlayback, ReceiptCurrent: a.users.ReceiptCurrent, BitrateLimit: func(*core.Viewer) int { return 0 }, ViewerVideoTranscodingOff: a.safety.VideoTranscodingDisabled,
+		CanPlay: a.safety.CanPlay, FreshPlay: a.safety.ConfirmAdmission, CurrentPlay: a.safety.ConfirmPlayback, PreviewPlay: a.safety.PreviewPlayback, ReceiptCurrent: a.users.ReceiptCurrent, BitrateLimit: func(*core.Viewer) int { return 0 }, ViewerVideoTranscodingOff: a.safety.VideoTranscodingDisabled,
 		ApplyRuleLimits: func(ctx context.Context, caps core.ClientCaps, viewer *core.Viewer, title *core.Title) core.ClientCaps {
 			q := a.cfg.Read().Quality
 			if title != nil {

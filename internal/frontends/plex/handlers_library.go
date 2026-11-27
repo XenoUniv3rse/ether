@@ -1704,6 +1704,7 @@ func (s *Server) kindItemsBatch(ctx context.Context, pr *Request, keys []fronten
 	if len(keys) == 0 || s.exp() == nil {
 		return nil
 	}
+	markHomePluginRead(ctx)
 	var viewer *frontend.Viewer
 	if pr != nil {
 		viewer = pr.User

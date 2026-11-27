@@ -158,6 +158,7 @@ var (
 
 type tapRegistry struct {
 	external map[string]int
+	inputs   map[string]map[string]int
 	mu       sync.Mutex
 	byKey    map[string]*upstreamTap
 	bySource map[string]map[*upstreamTap]struct{}
@@ -261,12 +262,15 @@ func (p *tapPace) setRate(rate float64, now time.Time) {
 type tapResume struct{ start, last int64 }
 
 type upstreamTap struct {
+	managed     bool // its grant already holds a provider input slot
 	key, source string
 	reg         *tapRegistry
 	svc         *Service
 	rawURL      string
 
-	ready chan struct{} // closed once the first response is known
+	ready      chan struct{} // closed once the first response is known
+	closedDone chan struct{} // closed after the upstream body and registry entry are gone
+	opening    chan struct{} // set under mu while opening the first response
 	// Set before ready closes and immutable after.
 	status     int
 	header     http.Header
@@ -347,7 +351,10 @@ type upstreamTap struct {
 }
 
 func (g *inputGrant) rootTapKey(raw string, headers, mediaHeaders http.Header) string {
-	key := tapKey(raw+"\x00"+tapKey("", mediaHeaders), headers)
+	key := tapKey(g.source+"\x00"+raw+"\x00"+tapKey("", mediaHeaders), headers)
+	if g.login != nil {
+		key += "\x00" + g.login.login
+	}
 	if g.finite {
 		key += "\x00" + g.token
 	}
@@ -387,14 +394,17 @@ func (r *tapRegistry) acquireOrManifest(key, source string, limit int, g *inputG
 	if r.byKey == nil {
 		r.byKey, r.bySource = map[string]*upstreamTap{}, map[string]map[*upstreamTap]struct{}{}
 	}
+	if g.ctx != nil && g.ctx.Err() != nil {
+		return nil, nil, false, g.ctx.Err()
+	}
 	if t = r.byKey[key]; t != nil {
 		t.mu.Lock()
-		closed := t.closed
-		if !closed {
+		available := !t.closed && len(t.refs) != 0
+		if available {
 			t.refs[g] = struct{}{}
 		}
 		t.mu.Unlock()
-		if !closed {
+		if available {
 			return t, nil, false, nil
 		}
 	}
@@ -403,10 +413,15 @@ func (r *tapRegistry) acquireOrManifest(key, source string, limit int, g *inputG
 			return nil, cm, false, nil
 		}
 	}
-	if source != "" && limit > 0 && len(r.bySource[source])+r.external[source] >= limit {
+	// A retiring tap occupies its key until the old body closes. A
+	// cached manifest above can still be served without opening a body.
+	if t != nil {
 		return nil, nil, false, ErrProviderBusy
 	}
-	t = &upstreamTap{finite: g.finite, key: key, source: source, reg: r, ready: make(chan struct{}), refs: map[*inputGrant]struct{}{g: {}}}
+	if g.releaseSlot == nil && source != "" && limit > 0 && r.inUseLocked(source) >= limit {
+		return nil, nil, false, ErrProviderBusy
+	}
+	t = &upstreamTap{finite: g.finite, managed: g.releaseSlot != nil, key: key, source: source, reg: r, ready: make(chan struct{}), closedDone: make(chan struct{}), refs: map[*inputGrant]struct{}{g: {}}}
 	t.cond = sync.NewCond(&t.mu)
 	r.byKey[key] = t
 	if source != "" {
@@ -432,7 +447,7 @@ func (r *tapRegistry) canJoinOrOpen(key, source string, limit int) (joined bool,
 			return true, nil
 		}
 	}
-	if source != "" && limit > 0 && len(r.bySource[source])+r.external[source] >= limit {
+	if source != "" && limit > 0 && r.inUseLocked(source) >= limit {
 		return false, ErrProviderBusy
 	}
 	return false, nil
@@ -461,6 +476,15 @@ func (r *tapRegistry) release(g *inputGrant) {
 	r.mu.Unlock()
 	for _, t := range done {
 		t.close(nil)
+		if t.closedDone != nil {
+			<-t.closedDone
+		}
+		t.mu.Lock()
+		opening := t.opening
+		t.mu.Unlock()
+		if opening != nil {
+			<-opening
+		}
 	}
 }
 
@@ -496,6 +520,9 @@ func (t *upstreamTap) close(err error) {
 		return
 	}
 	t.closed = true
+	if t.closedDone != nil {
+		defer close(t.closedDone)
+	}
 	if t.err == nil {
 		t.err = err
 		if t.err == nil {
@@ -1274,10 +1301,14 @@ func (s *Service) serveTapped(w http.ResponseWriter, r *http.Request, g *inputGr
 		n, next, err := t.readAs(ctx, rd, off, buf)
 		off = next
 		if n > 0 {
+			_ = rc.SetWriteDeadline(time.Now().Add(relayIOTimeout))
 			if _, werr := w.Write(buf[:n]); werr != nil {
 				return true
 			}
-			_ = rc.Flush()
+			if rc.Flush() != nil {
+				return true
+			}
+			_ = rc.SetWriteDeadline(time.Time{})
 		}
 		if err != nil {
 			return true
@@ -1314,12 +1345,53 @@ func (c openContext) Deadline() (time.Time, bool) { return c.deadline, true }
 // and the open is abandoned if it ends first.
 func (s *Service) openTap(t *upstreamTap, g *inputGrant, raw string, hdr http.Header, opener context.Context) {
 	started := time.Now()
+	var openingBody io.Closer
+	var opening chan struct{}
+	published := false
+	defer func() {
+		if !published {
+			close(t.ready)
+		}
+		if opening != nil {
+			close(opening)
+		}
+	}()
+	defer func() {
+		if recover() != nil {
+			if openingBody != nil {
+				_ = openingBody.Close()
+			}
+			t.openErr = core.ErrNotAvailable
+			t.close(t.openErr)
+		}
+	}()
 	ctx, cancel := context.WithCancel(s.serviceContext())
 	t.mu.Lock()
+	if t.closed {
+		t.mu.Unlock()
+		cancel()
+		t.openErr = context.Canceled
+		return
+	}
+	opening = make(chan struct{})
+	t.opening = opening
 	t.ctx, t.cancel = ctx, cancel
 	t.svc, t.rawURL = s, raw
 	t.mu.Unlock()
-	stop := context.AfterFunc(opener, cancel)
+	stop := context.AfterFunc(opener, func() {
+		t.mu.Lock()
+		other := false
+		for ref := range t.refs {
+			if ref != g && (ref.ctx == nil || ref.ctx.Err() == nil) {
+				other = true
+				break
+			}
+		}
+		t.mu.Unlock()
+		if !other {
+			cancel()
+		}
+	})
 	defer stop() // initial body inspection is part of opening the stream
 	wait, err := s.paceGrant(ctx, g)
 	connCtx, connCancel := context.WithCancel(ctx)
@@ -1331,11 +1403,11 @@ func (s *Service) openTap(t *upstreamTap, g *inputGrant, raw string, hdr http.He
 	if err == nil {
 		res, err = s.relayFetch(reqCtx, connCancel, g, raw, &http.Request{Header: hdr})
 	}
-	if opener.Err() != nil && err == nil {
+	if ctx.Err() != nil && err == nil {
 		// The opener left while headers arrived; nobody asked for this stream.
 		connCancel()
 		res.Body.Close()
-		err = opener.Err()
+		err = ctx.Err()
 	}
 	if err != nil {
 		connCancel()
@@ -1343,11 +1415,11 @@ func (s *Service) openTap(t *upstreamTap, g *inputGrant, raw string, hdr http.He
 			g.log.Debug("live upstream open failed", append(Diagnose("upstream_headers", err).LogAttrs(), "elapsed", time.Since(started))...)
 		}
 		t.openErr = err
-		close(t.ready)
 		t.close(err)
 		return
 	}
 	closer := closeFunc(func() error { connCancel(); return res.Body.Close() })
+	openingBody = closer
 	t.status, t.header, t.base = res.StatusCode, res.Header.Clone(), res.Request.URL
 	t.ctype = res.Header.Get("Content-Type")
 	if g.log != nil {
@@ -1370,7 +1442,6 @@ func (s *Service) openTap(t *upstreamTap, g *inputGrant, raw string, hdr http.He
 			}
 			s.emitProviderAuthFailed(providerID, "", accountID, res.StatusCode, providerResponseError(res.StatusCode))
 		}
-		close(t.ready)
 		t.close(nil)
 		return
 	}
@@ -1393,7 +1464,6 @@ func (s *Service) openTap(t *upstreamTap, g *inputGrant, raw string, hdr http.He
 						g.setManifest(cm)
 						t.header = nil
 						t.close(nil)
-						close(t.ready)
 						return
 					}
 				}
@@ -1420,7 +1490,6 @@ func (s *Service) openTap(t *upstreamTap, g *inputGrant, raw string, hdr http.He
 		}
 		t.header = nil
 		t.close(nil)
-		close(t.ready)
 		return
 	}
 	// Three packets (or two sync bytes when HTTP/2 delivers one TS packet in
@@ -1428,6 +1497,13 @@ func (s *Service) openTap(t *upstreamTap, g *inputGrant, raw string, hdr http.He
 	// reserve can index and splice; anything else is relayed as before.
 	ts := !g.finite && tsPrefixWithType(body, ctype)
 	t.mu.Lock()
+	if t.closed {
+		t.mu.Unlock()
+		idle.Stop()
+		closer.Close()
+		t.openErr = context.Canceled
+		return
+	}
 	now := time.Now()
 	t.body = closer
 	t.lastData, t.epochStart = now, now
@@ -1440,6 +1516,7 @@ func (s *Service) openTap(t *upstreamTap, g *inputGrant, raw string, hdr http.He
 	}
 	t.mu.Unlock()
 	close(t.ready)
+	published = true
 	if g.finite {
 		go t.fillArchive(body, idle)
 		return
@@ -1972,27 +2049,7 @@ func (s *Service) reserveParallelTapSlot(account string, limit int) (func(), err
 	if account == "" {
 		return func() {}, nil
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	channels := map[string]bool{}
-	for _, ss := range s.sessions {
-		if ss.broadcast != nil || !ss.ready {
-			continue
-		}
-		src := ss.info.Channel.SourceID
-		if ss.inputSource.AuthSourceID != "" {
-			src = ss.inputSource.AuthSourceID
-		}
-		if src == account {
-			channels[ss.info.Channel.ID] = true
-		}
-	}
-	active := s.broadcastProviders[account]
-	for _, ch := range active {
-		delete(channels, ch)
-	}
-	live := len(channels) + len(active)
-	return s.inputRelay.taps.reserveWithLive(account, limit, false, live)
+	return s.inputRelay.taps.reserve(account, limit, false)
 }
 
 // startTapRace launches a parallel replacement connection on t if the source's
@@ -2024,7 +2081,9 @@ func (s *Service) startTapRace(t *upstreamTap) bool {
 	}
 	raw := t.rawURL
 	t.mu.Unlock()
-	if g == nil {
+	if g == nil || g.login != nil {
+		// A pooled login owns one durable slot for the shared input.
+		// Reconnect serially rather than open a second stream on it.
 		return false
 	}
 
@@ -2508,38 +2567,25 @@ func (s *Service) sniffInputAttempt(ctx context.Context, ss *session, n int, ref
 	case <-ctx.Done():
 		return nil, "", ctx.Err()
 	}
-	if t.openErr != nil {
-		if ctx.Err() != nil {
-			return nil, "", ctx.Err()
-		}
-		return nil, "", Diagnose("upstream_headers", t.openErr)
+	if err := ctx.Err(); err != nil {
+		return nil, "", err
 	}
-	if t.status != http.StatusOK && t.status != http.StatusPartialContent {
-		if !g.finite && g.login != nil && (t.status == 401 || t.status == 403) && ctx.Err() == nil {
+	if t.openErr != nil || t.status != http.StatusOK && t.status != http.StatusPartialContent {
+		if !g.finite && g.login != nil && (t.status == 401 || t.status == 403) {
 			src := ss.inputSource
 			src.URL = ss.inputURL
 			s.revokeInput(ss)
-			if err := s.grantInputFor(ss, src, ss.inputHeaders, g.steady, g.lead); err != nil {
+			if err := s.grantInputForContext(ctx, ss, src, ss.inputHeaders, g.steady, g.lead); err != nil {
 				return nil, "", err
 			}
 			return s.sniffInputAttempt(ctx, ss, n, refreshed)
 		}
-		if isExpiredStatus(t.status) {
-			g.noteExpiredManifest(t.status)
-			if !refreshed && g.direct != nil && g.direct.canResolve() && ctx.Err() == nil {
-				nextRaw, rerr := g.refreshDirect(ctx, directGen)
-				if rerr != nil {
-					return nil, "", rerr
-				}
-				_, dRawHdrs, dHdrs, _, _, _, _ := g.direct.current()
-				ss.mu.Lock()
-				ss.inputURL = nextRaw
-				ss.inputHeaders = dHdrs
-				ss.inputSource.URL = nextRaw
-				ss.inputSource.Headers = dRawHdrs
-				ss.mu.Unlock()
-				return s.sniffInputAttempt(ctx, ss, n, true)
-			}
+		if !refreshed && g.direct.canResolve() && !errors.Is(t.openErr, ErrProviderPaced) {
+			g.direct.invalidate(directGen, t.status)
+			return s.sniffInputAttempt(ctx, ss, n, false)
+		}
+		if t.openErr != nil {
+			return nil, "", Diagnose("upstream_headers", t.openErr)
 		}
 		return nil, "", providerResponseError(t.status)
 	}
@@ -2575,12 +2621,9 @@ func (s *Service) sniffInputAttempt(ctx context.Context, ss *session, n int, ref
 
 // reserve accounts for VOD and metadata reads in the same mutex as live taps.
 func (r *tapRegistry) reserve(source string, limit int, background bool) (func(), error) {
-	return r.reserveWithLive(source, limit, background, 0)
-}
-func (r *tapRegistry) reserveWithLive(source string, limit int, background bool, live int) (func(), error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	n := max(live, len(r.bySource[source])) + r.external[source]
+	n := r.inUseLocked(source)
 	if (background && n > 0) || (limit > 0 && n >= limit) {
 		return nil, ErrProviderBusy
 	}
@@ -2590,12 +2633,6 @@ func (r *tapRegistry) reserveWithLive(source string, limit int, background bool,
 	r.external[source]++
 	var once sync.Once
 	return func() { once.Do(func() { r.mu.Lock(); r.external[source]--; r.mu.Unlock() }) }, nil
-}
-
-func (r *tapRegistry) externalCount(id string) int {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return r.external[id]
 }
 
 // tapReport is what a tap last reported to the source history.

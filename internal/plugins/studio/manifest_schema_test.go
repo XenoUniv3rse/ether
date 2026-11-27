@@ -73,6 +73,15 @@ func schemaType(typ reflect.Type) map[string]any {
 			props["direction"] = map[string]any{"enum": []string{"asc", "desc"}}
 		case reflect.TypeFor[plugins.KindSyncDecl]():
 			props["undo"] = map[string]any{"enum": []string{"snapshots", "ids"}}
+		case reflect.TypeFor[plugins.FrontendUploadPath]():
+			props["path"] = map[string]any{"type": "string", "pattern": "^/", "maxLength": 256}
+			props["maxBytes"] = map[string]any{"type": "integer", "minimum": 1, "maximum": 536870912}
+			return map[string]any{"type": "object", "properties": props, "required": []string{"path", "maxBytes"}, "additionalProperties": false}
+		case reflect.TypeFor[plugins.FrontendAdapterMeta]():
+			if up, ok := props["uploadPaths"].(map[string]any); ok {
+				up["description"] = "Adapter subpath globs that accept uploads streamed to disk. The smallest matching maxBytes applies to the entire wire body."
+				up["maxItems"] = 16
+			}
 		}
 		return map[string]any{"type": "object", "properties": props}
 	case reflect.Slice, reflect.Array:

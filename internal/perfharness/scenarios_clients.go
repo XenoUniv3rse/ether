@@ -17,6 +17,10 @@ import (
 func jellyfinLibrarySteps(f string) []Step {
 	movies := "/Items?excludeLocationTypes=Virtual&fields=" + f + "&includeItemTypes=Movie&limit=50&parentId={moviesView}&recursive=true&userId={userId}"
 	return []Step{
+		{Name: "user suggestions", Class: classBrowse, Path: "/Users/{userId}/Items/Suggestions?Limit=20&EnableTotalRecordCount=true"},
+		{Name: "GET /Shows/Upcoming", Class: classBrowse, Path: "/Shows/Upcoming"},
+		{Name: "series upcoming", Class: classBrowse, Path: "/Shows/Upcoming?UserId={userId}&ParentId={seriesId}&Limit=20"},
+		{Name: "library upcoming page 2", Class: classBrowse, Path: "/Shows/Upcoming?UserId={userId}&ParentId={showsView}&StartIndex=20&Limit=20"},
 		// Infuse's library sync pages in order: page 2 follows page 1 (the
 		// remembered page end lets it seek), the jumps below do not.
 		{Name: "movies p2 SortName", Class: classBrowse, Path: movies + "&sortBy=SortName&sortOrder=Ascending&startIndex=50", Discover: discoverMBItemBatch("movieIds100", "Movie", 100)},
@@ -64,6 +68,14 @@ func jellyfinLibrarySteps(f string) []Step {
 func embyLibrarySteps() []Step {
 	movies := "/Users/{userId}/Items?ParentId={moviesView}&Recursive=true&IncludeItemTypes=Movie&Limit=100&Fields=PrimaryImageAspectRatio%2CBasicSyncInfo%2CProductionYear"
 	return []Step{
+		{Name: "movie detail unscoped", Class: classDetail, Path: "/Items/{movieId}?UserId={userId}"},
+		{Name: "movie LocalTrailers", Class: classDetail, Path: "/Items/{movieId}/LocalTrailers?UserId={userId}"},
+		{Name: "movie SpecialFeatures", Class: classDetail, Path: "/Items/{movieId}/SpecialFeatures?UserId={userId}"},
+		{Name: "/Search/Hints star", Class: classSearch, RowsBound: searchRowsBound, Path: "/Search/Hints?SearchTerm=star&Limit=24&UserId={userId}"},
+		{Name: "user suggestions", Class: classBrowse, Path: "/Users/{userId}/Items/Suggestions?Limit=20&EnableTotalRecordCount=true"},
+		{Name: "GET /Shows/Upcoming", Class: classBrowse, Path: "/Shows/Upcoming"},
+		{Name: "series upcoming", Class: classBrowse, Path: "/Shows/Upcoming?UserId={userId}&ParentId={seriesId}&Limit=20"},
+		{Name: "library upcoming page 2", Class: classBrowse, Path: "/Shows/Upcoming?UserId={userId}&ParentId={showsView}&StartIndex=20&Limit=20"},
 		{Name: "movies very deep", Class: classBrowse, Path: movies + "&SortBy=SortName&SortOrder=Ascending&StartIndex=24000"},
 		{Name: "movies DateCreated deep", Class: classBrowse, Path: movies + "&SortBy=DateCreated%2CSortName&SortOrder=Descending&StartIndex=12000"},
 		{Name: "/Genres", Class: classBrowse, Path: "/Genres?UserId={userId}&ParentId={moviesView}&IncludeItemTypes=Movie&SortBy=SortName&Recursive=true", Discover: discoverMBItem("genreId", "Genre")},

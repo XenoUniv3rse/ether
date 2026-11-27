@@ -1030,7 +1030,12 @@ func (h *HostHandler) dataCall(w http.ResponseWriter, r *http.Request) {
 		writeHostError(w, http.StatusServiceUnavailable, "unavailable", "Data services unavailable")
 		return
 	}
-	out, err := service.CallDataHost(r.Context(), pluginIDOf(r), r.PathValue("service"), args)
+	name := r.PathValue("service")
+	ctx := r.Context()
+	if name == "cache.stat" && strings.TrimSpace(r.Header.Get(HeaderViewerToken)) != "" {
+		ctx = plugins.WithCallContext(ctx, "/ether/v1/frontend/", "")
+	}
+	out, err := service.CallDataHost(ctx, pluginIDOf(r), name, args)
 	if !h.finishErr(w, err) {
 		return
 	}

@@ -8,9 +8,10 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/braedonsaunders/ether/internal/core"
 	"github.com/braedonsaunders/ether/internal/store"
-	"github.com/google/uuid"
 )
 
 func init() {
@@ -59,50 +60,54 @@ type playlistQuerier interface {
 }
 
 func (s *State) loadPlaylist(ctx context.Context, userID, id int64) (*core.Playlist, error) {
-	return loadPlaylistFrom(ctx, s.db, userID, id)
+	return s.loadPlaylistFrom(ctx, s.db, userID, id)
 }
-func loadPlaylistFrom(ctx context.Context, db playlistQuerier, userID, id int64) (*core.Playlist, error) {
-	var p core.Playlist
-	var smart int
-	var upd, added int64
-	err := db.QueryRowContext(ctx, `SELECT title, smart, updated_at, smart_uri, guid, summary, added_at FROM state_playlists WHERE id=? AND user_id=?`, id, userID).
-		Scan(&p.Title, &smart, &upd, &p.SmartURI, &p.GUID, &p.Summary, &added)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, core.ErrNotFound
+func (s *State) playlistArrayAggregate() string {
+	if store.DialectOf(s.db) == store.Postgres {
+		return "json_agg"
 	}
+	return "json_group_array"
+}
+
+func (s *State) loadPlaylistFrom(ctx context.Context, db playlistQuerier, userID, id int64) (*core.Playlist, error) {
+	p, err := loadPlaylistHeader(ctx, db, userID, id)
 	if err != nil {
 		return nil, err
 	}
-	p.Key = core.PlaylistKey(id)
-	p.AddedAt = time.Unix(0, added).UTC()
-	if p.GUID == "" {
-		p.GUID = uuid.NewSHA1(uuid.NameSpaceOID, []byte(fmt.Sprintf("ether:playlist:%d", id))).String()
-	}
-	p.UserID = userID
-	p.Smart = smart != 0
-	if upd > 0 {
-		p.UpdatedAt = time.Unix(0, upd).UTC()
-	}
-	rows, err := db.QueryContext(ctx, `SELECT rating_key, item_id, added_at FROM state_playlist_items WHERE playlist_id=? ORDER BY position`, id)
+
+	array := s.playlistArrayAggregate()
+	var keysJSON, itemsJSON, datesJSON []byte
+	err = db.QueryRowContext(ctx, `SELECT `+array+`(rating_key ORDER BY position),`+
+		array+`(item_id ORDER BY position),`+array+`(added_at ORDER BY position)
+		FROM state_playlist_items WHERE playlist_id=?`, id).Scan(&keysJSON, &itemsJSON, &datesJSON)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+
 	p.Items = []core.RatingKey{}
-	for rows.Next() {
-		var k, itemID, added int64
-		if err := rows.Scan(&k, &itemID, &added); err != nil {
-			return nil, err
-		}
-		p.Items = append(p.Items, core.RatingKey(k))
-		p.ItemIDs = append(p.ItemIDs, itemID)
-		at := time.Time{}
-		if added > 0 {
-			at = time.Unix(0, added).UTC()
-		}
-		p.ItemAddedAt = append(p.ItemAddedAt, at)
+	if keysJSON == nil {
+		return p, nil
 	}
-	return &p, rows.Err()
+	if err := json.Unmarshal(keysJSON, &p.Items); err != nil {
+		return nil, err
+	}
+	if len(p.Items) == 0 {
+		return p, nil
+	}
+	if err := json.Unmarshal(itemsJSON, &p.ItemIDs); err != nil {
+		return nil, err
+	}
+	var dates []int64
+	if err := json.Unmarshal(datesJSON, &dates); err != nil {
+		return nil, err
+	}
+	p.ItemAddedAt = make([]time.Time, len(dates))
+	for i, added := range dates {
+		if added > 0 {
+			p.ItemAddedAt[i] = time.Unix(0, added).UTC()
+		}
+	}
+	return p, nil
 }
 
 // List returns the user's playlists (with items), most recently updated first.
@@ -119,35 +124,32 @@ func (s *State) List(ctx context.Context, userID int64) ([]core.Playlist, error)
 		byID[id] = i
 		args = append(args, id)
 	}
-	entries := "json_group_array(json_array(rating_key,item_id))"
-	ordered := "SELECT playlist_id,rating_key,item_id FROM state_playlist_items WHERE playlist_id IN (%s) ORDER BY playlist_id,position"
-	if store.DialectOf(s.db) == store.Postgres {
-		entries = "CAST(json_agg(json_build_array(rating_key,item_id) ORDER BY position) AS TEXT)"
-		ordered = "SELECT playlist_id,rating_key,item_id,position FROM state_playlist_items WHERE playlist_id IN (%s)"
-	}
+	// The caller needs one ordered membership vector per playlist. Return
+	// those vectors without repeating playlist IDs and crossing the driver
+	// for every member of every playlist.
+	array := s.playlistArrayAggregate()
 	for chunk := range store.Chunks(args, 400) {
-		query := "SELECT playlist_id," + entries + " FROM (" +
-			fmt.Sprintf(ordered, store.Placeholders(len(chunk))) + ") AS members GROUP BY playlist_id"
-		rows, err := s.db.QueryContext(ctx, query, chunk...)
+		rows, err := s.db.QueryContext(ctx, `SELECT playlist_id,`+array+`(rating_key ORDER BY position),`+
+			array+`(item_id ORDER BY position) FROM state_playlist_items WHERE playlist_id IN (`+
+			store.Placeholders(len(chunk))+`) GROUP BY playlist_id`, chunk...)
 		if err != nil {
 			return nil, err
 		}
 		for rows.Next() {
-			var pid int64
-			var payload string
-			if err := rows.Scan(&pid, &payload); err != nil {
+			var id int64
+			var keysJSON, itemsJSON []byte
+			if err := rows.Scan(&id, &keysJSON, &itemsJSON); err != nil {
 				rows.Close()
 				return nil, err
 			}
-			var members [][2]int64
-			if err := json.Unmarshal([]byte(payload), &members); err != nil {
+			playlist := &out[byID[id]]
+			if err := json.Unmarshal(keysJSON, &playlist.Items); err != nil {
 				rows.Close()
 				return nil, err
 			}
-			playlist := &out[byID[pid]]
-			for _, member := range members {
-				playlist.Items = append(playlist.Items, core.RatingKey(member[0]))
-				playlist.ItemIDs = append(playlist.ItemIDs, member[1])
+			if err := json.Unmarshal(itemsJSON, &playlist.ItemIDs); err != nil {
+				rows.Close()
+				return nil, err
 			}
 		}
 		err = rows.Err()
@@ -204,10 +206,14 @@ func (s *State) GetPlaylistHeader(ctx context.Context, userID int64, key core.Ra
 	if err != nil {
 		return nil, err
 	}
+	return loadPlaylistHeader(ctx, s.db, userID, id)
+}
+
+func loadPlaylistHeader(ctx context.Context, db playlistQuerier, userID, id int64) (*core.Playlist, error) {
 	var p core.Playlist
 	var smart int
 	var upd, added int64
-	err = s.db.QueryRowContext(ctx, `SELECT title, smart, updated_at, smart_uri, guid, summary, added_at FROM state_playlists WHERE id=? AND user_id=?`, id, userID).
+	err := db.QueryRowContext(ctx, `SELECT title, smart, updated_at, smart_uri, guid, summary, added_at FROM state_playlists WHERE id=? AND user_id=?`, id, userID).
 		Scan(&p.Title, &smart, &upd, &p.SmartURI, &p.GUID, &p.Summary, &added)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, core.ErrNotFound
@@ -299,7 +305,7 @@ func (s *State) Create(ctx context.Context, userID int64, title string, items []
 			return nil, err
 		}
 	}
-	snapshot, err := loadPlaylistFrom(ctx, tx, userID, id)
+	snapshot, err := s.loadPlaylistFrom(ctx, tx, userID, id)
 	if err != nil {
 		return nil, err
 	}
@@ -464,6 +470,63 @@ func (v playlistsView) GetHeaders(ctx context.Context, userID int64, keys []core
 	return v.s.GetPlaylistHeaders(ctx, userID, keys)
 }
 
+// QueueWindow takes the bounded window of a stored playlist in one snapshot.
+// Positions can have gaps, so selection and offsets are based on row order.
+func (v playlistsView) QueueWindow(ctx context.Context, userID int64, key, start core.RatingKey, limit int) (playlist *core.Playlist, before, after int, err error) {
+	id, err := playlistID(key)
+	if err != nil {
+		return nil, 0, 0, err
+	}
+	options := &sql.TxOptions{ReadOnly: true}
+	if store.DialectOf(v.s.db) == store.Postgres {
+		options.Isolation = sql.LevelRepeatableRead
+	}
+	tx, err := v.s.db.BeginTx(ctx, options)
+	if err != nil {
+		return nil, 0, 0, err
+	}
+	defer tx.Rollback()
+	playlist, err = loadPlaylistHeader(ctx, tx, userID, id)
+	if err != nil || playlist.SmartURI != "" {
+		return playlist, 0, 0, err
+	}
+	var total int
+	if err = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM state_playlist_items WHERE playlist_id=?`, id).Scan(&total); err != nil {
+		return nil, 0, 0, err
+	}
+	var index int
+	if start != 0 {
+		var position int64
+		err = tx.QueryRowContext(ctx, `SELECT position FROM state_playlist_items WHERE playlist_id=? AND rating_key=? ORDER BY position LIMIT 1`, id, start).Scan(&position)
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, 0, 0, core.ErrNotFound
+		}
+		if err != nil {
+			return nil, 0, 0, err
+		}
+		if err = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM state_playlist_items WHERE playlist_id=? AND position<?`, id, position).Scan(&index); err != nil {
+			return nil, 0, 0, err
+		}
+	}
+	before = max(0, min(index-limit/2, total-limit))
+	rows, err := tx.QueryContext(ctx, `SELECT rating_key FROM state_playlist_items WHERE playlist_id=? ORDER BY position LIMIT ? OFFSET ?`, id, limit, before)
+	if err != nil {
+		return nil, 0, 0, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var item core.RatingKey
+		if err = rows.Scan(&item); err != nil {
+			return nil, 0, 0, err
+		}
+		playlist.Items = append(playlist.Items, item)
+	}
+	if err = rows.Err(); err != nil {
+		return nil, 0, 0, err
+	}
+	return playlist, before, total - before - len(playlist.Items), nil
+}
+
 // PlaylistArtworkHeads returns the first ordered member keys for each owned
 // playlist in the artwork page; an empty playlist still has a map entry.
 func (v playlistsView) PlaylistArtworkHeads(ctx context.Context, userID int64, keys []core.RatingKey, limit int) (map[core.RatingKey][]core.RatingKey, error) {
@@ -551,7 +614,7 @@ func (v playlistsView) CreateSmartPlaylist(ctx context.Context, userID int64, ti
 	if err != nil {
 		return nil, err
 	}
-	snapshot, err := loadPlaylistFrom(ctx, tx, userID, id)
+	snapshot, err := v.s.loadPlaylistFrom(ctx, tx, userID, id)
 	if err != nil {
 		return nil, err
 	}
@@ -599,7 +662,7 @@ func (v playlistsView) EditPlaylist(ctx context.Context, userID int64, key core.
 	if n == 0 {
 		return nil, core.ErrNotFound
 	}
-	snapshot, err := loadPlaylistFrom(ctx, tx, userID, id)
+	snapshot, err := v.s.loadPlaylistFrom(ctx, tx, userID, id)
 	if err != nil {
 		return nil, err
 	}
@@ -632,7 +695,7 @@ func (v playlistsView) MutatePlaylist(ctx context.Context, userID int64, key cor
 	if n == 0 {
 		return nil, 0, core.ErrNotFound
 	}
-	pl, err := loadPlaylistFrom(ctx, tx, userID, id)
+	pl, err := v.s.loadPlaylistFrom(ctx, tx, userID, id)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -703,7 +766,7 @@ func (v playlistsView) MutatePlaylist(ctx context.Context, userID int64, key cor
 			return nil, 0, err
 		}
 	}
-	pl, err = loadPlaylistFrom(ctx, tx, userID, id)
+	pl, err = v.s.loadPlaylistFrom(ctx, tx, userID, id)
 	if err != nil {
 		return nil, 0, err
 	}

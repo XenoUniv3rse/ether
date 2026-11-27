@@ -647,8 +647,8 @@ func (s *Service) PlayByID(ctx context.Context, id string) (map[string]any, erro
 		return nil, nil
 	}
 	var p Play
-	err = s.db.QueryRowContext(ctx, `SELECT id,user_id,rating_key,username,title,channel_id,channel_name,channel_number,platform,device,decision,started,updated,ended,bytes,watched_ms,duration_ms,completed,failovers,error,client_ip FROM stats_plays WHERE id=?`, rowID).
-		Scan(&p.ID, &p.UserID, &p.Key, &p.Username, &p.Title, &p.ChannelID, &p.ChannelName, &p.ChannelNumber, &p.Platform, &p.Device, &p.Decision, &p.Started, &p.Updated, &p.Ended, &p.Bytes, &p.WatchedMS, &p.DurationMS, &p.Completed, &p.Failovers, &p.Error, &p.IP)
+	err = s.db.QueryRowContext(ctx, `SELECT id,user_id,rating_key,username,title,channel_id,channel_name,channel_number,live_source_name,live_login_label,live_login_number,platform,device,decision,started,updated,ended,bytes,watched_ms,duration_ms,completed,failovers,error,client_ip FROM stats_plays WHERE id=?`, rowID).
+		Scan(&p.ID, &p.UserID, &p.Key, &p.Username, &p.Title, &p.ChannelID, &p.ChannelName, &p.ChannelNumber, &p.LiveSourceName, &p.LiveLoginLabel, &p.LiveLoginNumber, &p.Platform, &p.Device, &p.Decision, &p.Started, &p.Updated, &p.Ended, &p.Bytes, &p.WatchedMS, &p.DurationMS, &p.Completed, &p.Failovers, &p.Error, &p.IP)
 	if err != nil {
 		return nil, err
 	}
@@ -797,6 +797,11 @@ func livePlayDetail(id string, live *core.PlaySession, lv liveViewing, hasViewin
 		if live.LiveChannel.Number != "" {
 			out["channelNumber"] = live.LiveChannel.Number
 		}
+		if provider := live.LiveChannel.Provider; provider != nil {
+			out["liveSourceName"] = provider.SourceName
+			out["liveLoginLabel"] = provider.LoginLabel
+			out["liveLoginNumber"] = provider.LoginNumber
+		}
 	}
 	if live.QualityFallback != "" {
 		out["qualityFallback"] = live.QualityFallback
@@ -835,6 +840,11 @@ func overlayLivePlay(out map[string]any, live *core.PlaySession, lv liveViewing,
 		}
 		if live.LiveChannel.Number != "" {
 			out["channelNumber"] = live.LiveChannel.Number
+		}
+		if provider := live.LiveChannel.Provider; provider != nil {
+			out["liveSourceName"] = provider.SourceName
+			out["liveLoginLabel"] = provider.LoginLabel
+			out["liveLoginNumber"] = provider.LoginNumber
 		}
 	}
 	if live.Decision != "" {

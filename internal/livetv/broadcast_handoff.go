@@ -92,19 +92,21 @@ func (s *Service) steadyHandoff(ctx context.Context, ss *session) (SteadyFeed, e
 // linkSessionInput grants a direct session's current input to a new Steady
 // link without resolving it again (a plugin input could resolve elsewhere).
 func (s *Service) linkSessionInput(ss *session, c Channel, src StreamSource, input string, headers http.Header) (*steadyLink, error) {
-	account := src.AuthSourceID
-	if account == "" {
-		account = c.SourceID
-	}
-	entry, err := s.sourceEntry(s.serviceContext(), account)
-	if err != nil {
-		return nil, err
-	}
-	release, err := s.reserveBroadcastProvider(account, c.ID, "broadcast-"+c.ID+"-handoff-"+randomID(), entry.limit)
+	account := providerSourceID(c, src)
+	release, err := s.trackBroadcastProvider(account, c.ID, "broadcast-"+c.ID+"-handoff-"+randomID())
 	if err != nil {
 		return nil, err
 	}
 	inputCtx, cancel := context.WithCancel(s.serviceContext())
+	linked := false
+	var link *session
+	defer func() {
+		if !linked {
+			s.revokeInput(link)
+			cancel()
+			release()
+		}
+	}()
 	ss.mu.Lock()
 	ephemeral := ss.ephemeral
 	direct := ss.direct
@@ -122,17 +124,16 @@ func (s *Service) linkSessionInput(ss *session, c Channel, src StreamSource, inp
 			directGen = dGen
 		}
 	}
-	link := &session{ctx: inputCtx, cancel: cancel, info: SessionInfo{ID: "broadcast-" + c.ID, Channel: c}, ephemeral: ephemeral, direct: direct, sniffedManifest: cm, inputSource: src, inputURL: input, inputHeaders: headers}
+	link = &session{ctx: inputCtx, cancel: cancel, info: SessionInfo{ID: "broadcast-" + c.ID, Channel: c}, ephemeral: ephemeral, direct: direct, sniffedManifest: cm, inputSource: src, inputURL: input, inputHeaders: headers}
 	grant := src
 	grant.URL = input
 	if err := s.grantSteadyInput(link, grant, headers); err != nil {
-		cancel()
-		release()
 		return nil, err
 	}
 	s.retainProbedTap(ss, link)
 	sl := newSteadyLink(src, link, release, s.cachedInputFormat(link))
 	sl.directGen = directGen
+	linked = true
 	return sl, nil
 }
 

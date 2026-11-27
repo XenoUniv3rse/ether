@@ -54,7 +54,9 @@ func (a *App) experienceSearch(vis experience.Visibility, stepAside *experience.
 		}
 		return a.safety != nil && viewer != nil && !a.safety.Restricted(viewer)
 	}
-	return experience.SearchFor(a.searchSourcesFor(stepAside), vis, unrestricted)
+	search := experience.SearchFor(a.searchSourcesFor(stepAside), vis, unrestricted)
+	search.PrefetchParents = a.catalog.PreloadStored
+	return search
 }
 
 func (a *App) searchSourcesFor(stepAside *experience.StepAside) experience.SearchSources {
@@ -282,7 +284,7 @@ func (a *App) newSurfaceExperience(protocol core.Protocol, artwork ...frontend.A
 		if protocol == "plex" {
 			return nil, nil
 		}
-		return a.experienceHomeFallback(ctx, req, liveLibraries(), rowVis)
+		return a.experienceHomeFallback(ctx, req, liveLibraries(), rowVis, protocol == "jellyfin" || protocol == "emby")
 	}, Active: func(ctx context.Context, u *core.User) bool {
 		v, e := a.users.ActiveUser(ctx, u.ID)
 		return e == nil && v != nil
@@ -891,31 +893,55 @@ func (a *App) newSurfaceExperience(protocol core.Protocol, artwork ...frontend.A
 	}); ok {
 		scoped.artwork = withPlugin.WithPluginItem(scoped.pluginArtworkItem)
 	}
+	if protocol == "xtream" {
+		scoped.prepareExportChildren = func(ctx context.Context, viewer *core.Viewer, shows []core.RatingKey) (context.Context, error) {
+			ctx = core.WithCatalogViewer(ctx, viewer)
+			if a.episodeorder != nil {
+				grouped, err := a.episodeorder.Grouped(ctx, viewer, shows)
+				if err != nil {
+					return ctx, err
+				}
+				eligible := make([]core.RatingKey, 0, len(shows))
+				for _, key := range shows {
+					if !grouped[key] {
+						eligible = append(eligible, key)
+					}
+				}
+				shows = eligible
+			}
+			var projection *core.ListRows
+			if detail, ok := vis.FactJudge(ctx); ok {
+				projection = &core.ListRows{Facts: core.VisibilityFacts | vis.TitleFacts(viewer), Detail: detail}
+			}
+			return a.catalog.PrepareExportChildren(ctx, shows, projection)
+		}
+	}
 	return scoped, nil
 }
 
 type surfaceExperience struct {
 	*experience.Service
-	receipts     *experience.Receipts
-	protocol     core.Protocol
-	artwork      frontend.Artwork
-	pluginLibs   experience.PluginLibraries
-	active       func(context.Context, int64) (*core.User, error)
-	rowViews     *experience.RowViewService
-	revealDetail func(*core.Viewer, core.Device, core.RatingKey)
-	playability  func(context.Context, frontend.ItemRequest) *bool
-	detail       detailPersonalization
-	generation   func(context.Context) (int64, error)
-	catalogGen   func() uint64
-	rowGen       func() uint64
-	rowWatchlist func(context.Context, int64) (experience.WatchlistRevision, error)
-	rowWatch     func(context.Context, int64) (experience.WatchRevision, error)
-	posters      func(context.Context, core.MediaType, int) ([]core.Title, error)
-	modelReady   func(int64) bool
-	rowMu        sync.Mutex
-	rowCache     map[string]rowCacheSlot
-	collageMu    sync.Mutex
-	collage      map[string]collageSlot
+	prepareExportChildren func(context.Context, *core.Viewer, []core.RatingKey) (context.Context, error)
+	receipts              *experience.Receipts
+	protocol              core.Protocol
+	artwork               frontend.Artwork
+	pluginLibs            experience.PluginLibraries
+	active                func(context.Context, int64) (*core.User, error)
+	rowViews              *experience.RowViewService
+	revealDetail          func(*core.Viewer, core.Device, core.RatingKey)
+	playability           func(context.Context, frontend.ItemRequest) *bool
+	detail                detailPersonalization
+	generation            func(context.Context) (int64, error)
+	catalogGen            func() uint64
+	rowGen                func() uint64
+	rowWatchlist          func(context.Context, int64) (experience.WatchlistRevision, error)
+	rowWatch              func(context.Context, int64) (experience.WatchRevision, error)
+	posters               func(context.Context, core.MediaType, int) ([]core.Title, error)
+	modelReady            func(int64) bool
+	rowMu                 sync.Mutex
+	rowCache              map[string]rowCacheSlot
+	collageMu             sync.Mutex
+	collage               map[string]collageSlot
 	// Public (unauthenticated) title artwork: the active-user snapshot
 	// and per-item intersection verdicts, cached per policy epoch.
 	publicUsers func(context.Context) ([]core.User, error)
@@ -1677,21 +1703,21 @@ func (s *surfaceExperience) loadRows(ctx context.Context, req frontend.RowReques
 	if req.Viewer != nil {
 		active, _ = s.active(ctx, req.Viewer.ID)
 	}
-	if active != nil {
-		if batch, ok := s.artwork.(interface {
-			PrepareChannelArtwork(context.Context, *core.Viewer, []string) (context.Context, error)
-		}); ok {
-			var channelIDs []string
-			for _, row := range rows {
-				for _, entry := range row.Entries {
-					if channel := entry.LiveChannel; channel != nil {
-						channelIDs = append(channelIDs, channel.ID)
-					}
+	channelCtx := core.WithLiveApp(ctx, string(s.protocol))
+	channelImages := s.protocol != "stremio" || issue
+	if batch, ok := s.artwork.(interface {
+		PrepareChannelArtwork(context.Context, *core.Viewer, []string) (context.Context, error)
+	}); ok && active != nil && channelImages {
+		var ids []string
+		for _, row := range rows {
+			for _, entry := range row.Entries {
+				if entry.LiveChannel != nil {
+					ids = append(ids, entry.LiveChannel.ID)
 				}
 			}
-			if prepared, err := batch.PrepareChannelArtwork(core.WithLiveApp(ctx, string(s.protocol)), active, channelIDs); err == nil {
-				ctx = prepared
-			}
+		}
+		if prepared, err := batch.PrepareChannelArtwork(channelCtx, active, ids); err == nil {
+			channelCtx = prepared
 		}
 	}
 	for _, row := range rows {
@@ -1704,8 +1730,9 @@ func (s *surfaceExperience) loadRows(ctx context.Context, req frontend.RowReques
 				// An upstream logo may carry provider credentials. Only return
 				// a policy-scoped descriptor to non-Plex front ends.
 				channel.Logo = ""
-				if active != nil && s.artwork != nil {
-					images, complete, e := s.artwork.List(ctx, frontend.ArtworkRequest{Viewer: active, Device: req.Device, Channel: channel.ID})
+				// Stremio Home snapshots feed title-only catalogues.
+				if active != nil && s.artwork != nil && channelImages {
+					images, complete, e := s.artwork.List(channelCtx, frontend.ArtworkRequest{Viewer: active, Device: req.Device, Channel: channel.ID})
 					if e == nil && complete {
 						channel.Images = images
 					}
@@ -1727,6 +1754,13 @@ func (s *surfaceExperience) warmArtwork(items []core.Title, device core.Device) 
 		}
 		warmer.Warm(item, device)
 	}
+}
+
+func (s *surfaceExperience) PrepareExportChildren(ctx context.Context, viewer *core.Viewer, shows []core.RatingKey) (context.Context, error) {
+	if s.prepareExportChildren == nil {
+		return ctx, nil
+	}
+	return s.prepareExportChildren(ctx, viewer, shows)
 }
 
 func (s *surfaceExperience) Children(ctx context.Context, viewer *core.Viewer, device core.Device, key core.RatingKey, query frontend.ItemQuery) (core.Page, error) {

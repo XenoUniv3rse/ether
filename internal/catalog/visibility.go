@@ -193,13 +193,29 @@ func (c *Catalog) FilterVisibility(ctx context.Context, ts []core.Title) []core.
 	// known blocked rating is not revealed by a summary that says otherwise.
 	// An empty local rating leaves the summary rating, if it has one.
 	const batch = 200
-	facets := textFactList(c.db, "catalog_countries", "country", "t.key") + "," +
-		textFactList(c.db, "catalog_genres", "genre", "t.key") + "," +
-		textFactList(c.db, "catalog_studios", "studio", "t.key") + "," +
-		textFactList(c.db, "catalog_keywords", "keyword", "t.key")
+	facts := core.VisibilityFacts
+	if candidate := core.SearchCandidatesFrom(ctx); candidate != nil {
+		facts = f.Facts() | candidate.Facts
+	}
+	fields := [...]struct {
+		fact          core.TitleFacts
+		table, column string
+	}{
+		{core.FactCountries, "catalog_countries", "country"},
+		{core.FactGenres, "catalog_genres", "genre"},
+		{core.FactStudios, "catalog_studios", "studio"},
+		{core.FactKeywords, "catalog_keywords", "keyword"},
+	}
+	columns := make([]string, len(fields))
+	for i, field := range fields {
+		columns[i] = "'[]'"
+		if facts&field.fact != 0 {
+			columns[i] = textFactList(c.db, field.table, field.column, "t.key")
+		}
+	}
 	for chunk := range store.Chunks(ts, batch) {
 		values := strings.TrimSuffix(strings.Repeat("(CAST(? AS BIGINT)),", len(chunk)), ",")
-		rows, err := c.db.QueryContext(ctx, "WITH wanted(key) AS (VALUES "+values+") SELECT t.key,"+facets+
+		rows, err := c.db.QueryContext(ctx, "WITH wanted(key) AS (VALUES "+values+") SELECT t.key,"+strings.Join(columns, ",")+
 			" FROM wanted t", keyArgs(chunk)...)
 		if err != nil {
 			return nil

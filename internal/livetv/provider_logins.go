@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/braedonsaunders/ether/internal/config"
@@ -98,6 +99,7 @@ func (s *Service) prepareLogins(ctx context.Context, src *Source) error {
 			}
 			l.Username, l.Password = "", ""
 		}
+		l.Label = providerNickname(*l)
 	}
 	return nil
 }
@@ -214,10 +216,11 @@ type loginPool struct {
 }
 type loginLease struct {
 	source, login, accountID, key, holder, raw string
-	slot, limit, refs                          int
+	slot, limit, refs, number                  int
 	headers                                    http.Header
 	cancel                                     context.CancelFunc
-	lost                                       bool
+	lost                                       atomic.Bool
+	label                                      string
 	grants                                     map[*inputGrant]struct{}
 	onLost                                     context.CancelFunc
 }
@@ -227,6 +230,13 @@ type loginLease struct {
 func (s *Service) leaseLogin(ctx context.Context, source, raw string, headers http.Header) (*loginLease, error) {
 	e, err := s.sourceEntry(ctx, source)
 	if err != nil {
+		return nil, err
+	}
+	return s.leaseLoginFor(ctx, e, source, raw, headers, providerInputKey(raw, headers, nil))
+}
+
+func (s *Service) leaseLoginFor(ctx context.Context, e authEntry, source, raw string, headers http.Header, inputKey string) (*loginLease, error) {
+	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	if e.pool == nil || (!e.pool.LoginPool && len(e.pool.Logins) == 0) {
@@ -240,8 +250,8 @@ func (s *Service) leaseLogin(ctx context.Context, source, raw string, headers ht
 		p.live = map[string]*loginLease{}
 		p.failed = map[string]time.Time{}
 	}
-	key := source + "\x00" + tapKey(raw, headers)
-	if l := p.live[key]; l != nil && !l.lost {
+	key := source + "\x00" + inputKey
+	if l := p.live[key]; l != nil && !l.lost.Load() {
 		l.refs++
 		return l, nil
 	}
@@ -252,7 +262,7 @@ func (s *Service) leaseLogin(ctx context.Context, source, raw string, headers ht
 			delete(p.failed, key)
 		}
 	}
-	for _, candidate := range candidates {
+	for index, candidate := range candidates {
 		if strings.HasPrefix(raw, "vod:") && candidate.ID != "primary" {
 			continue
 		}
@@ -322,7 +332,7 @@ func (s *Service) leaseLogin(ctx context.Context, source, raw string, headers ht
 		if candidate.ID == "primary" {
 			r := &s.inputRelay.taps
 			r.mu.Lock()
-			busy = max(busy, len(r.bySource[source])+r.external[source])
+			busy = max(busy, r.unmanagedInUseLocked(source)+r.external[source])
 			r.mu.Unlock()
 		}
 		for slot := busy; slot < limit; slot++ {
@@ -339,7 +349,16 @@ func (s *Service) leaseLogin(ctx context.Context, source, raw string, headers ht
 				continue
 			}
 			run, cancel := context.WithCancel(s.serviceContext())
-			l := &loginLease{source: source, login: slotLogin, accountID: candidate.ID, key: key, holder: holder, slot: slot, limit: limit, refs: 1, raw: target, headers: h, cancel: cancel, grants: map[*inputGrant]struct{}{}}
+			label := providerLoginLabel(src, candidate)
+			// Several accounts can share the same host or masked prefix.
+			number := 0
+			for _, other := range candidates {
+				if other.ID != candidate.ID && providerLoginLabel(src, other) == label {
+					number = index + 1
+					break
+				}
+			}
+			l := &loginLease{number: number, source: source, login: slotLogin, accountID: candidate.ID, key: key, holder: holder, slot: slot, limit: limit, label: label, refs: 1, raw: target, headers: h, cancel: cancel, grants: map[*inputGrant]struct{}{}}
 			p.live[key] = l
 			go s.renewLogin(run, l)
 			return l, nil
@@ -370,7 +389,7 @@ func (s *Service) renewLogin(ctx context.Context, l *loginLease) {
 			}
 			if err != nil || n != 1 {
 				s.loginPool.mu.Lock()
-				l.lost = true
+				l.lost.Store(true)
 				if l.onLost != nil {
 					l.onLost()
 				}
@@ -407,6 +426,9 @@ func (s *Service) releaseLogin(l *loginLease) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
+	// A failed delete or abrupt restart leaves the holder fenced until
+	// the last 45-second lease expires. No startup sweep takes live slots
+	// away from another process.
 	_, _ = s.o.DB.ExecContext(ctx, `DELETE FROM livetv_login_slots WHERE source_id=? AND login_id=? AND slot=? AND holder=?`, l.source, l.login, l.slot, l.holder)
 }
 func (s *Service) failedLogin(l *loginLease) {
@@ -417,7 +439,7 @@ func (s *Service) failedLogin(l *loginLease) {
 	p := &s.loginPool
 	p.mu.Lock()
 	p.failed[l.source+"\x00"+l.accountID] = failedUntil
-	l.lost = true
+	l.lost.Store(true)
 	for g := range l.grants {
 		g.cancel()
 	}

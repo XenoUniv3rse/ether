@@ -4,6 +4,7 @@ import { ErrorPanel, LoadingRows } from "../../components/feedback";
 import { Kpi, KpiRow } from "../../components/Kpi";
 import { LiveChannelArtwork } from "../../components/SessionArtwork";
 import { fixed, formatNumber, formatPercent } from "../../lib/format";
+import { LiveProvider } from "./LiveProvider";
 import { channelLabel } from "../../lib/health";
 import { DASH } from "./experience-format";
 import { getLocale, t, tn } from "../../i18n";
@@ -164,7 +165,16 @@ export function PlayHistory({
               key: "title",
               header: t("Title / viewer"),
               search: (p) =>
-                [p.channelNumber, p.channelName, p.title, p.username].filter(Boolean).join(" "),
+                [
+                  p.channelNumber,
+                  p.channelName,
+                  p.title,
+                  p.username,
+                  p.liveSourceName,
+                  p.liveLoginLabel,
+                ]
+                  .filter(Boolean)
+                  .join(" "),
               sortValue: (p) => (isLivePlay(p) ? p.channelName || p.title : p.title),
               cell: (p) => {
                 if (isLivePlay(p)) {
@@ -185,6 +195,15 @@ export function PlayHistory({
                       <div className="min-w-0">
                         <p className="truncate font-medium text-fg">{channel}</p>
                         <p className="truncate text-xs text-fg-muted">{sub}</p>
+                        {p.liveSourceName && (
+                          <LiveProvider
+                            provider={{
+                              sourceName: p.liveSourceName,
+                              loginLabel: p.liveLoginLabel,
+                              loginNumber: p.liveLoginNumber,
+                            }}
+                          />
+                        )}
                       </div>
                     </div>
                   );

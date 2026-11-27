@@ -139,21 +139,21 @@ type personKey struct {
 // CachedVisibleTitles is CachedCreditTitles for a visibility decision only:
 // the stored rows, plus the facts visibility rules and the release gate
 // read when they read any, without credits or alternative titles.
-func (c *Catalog) CachedVisibleTitles(ctx context.Context, keys []core.RatingKey, cfg config.Catalog, now time.Time) (map[core.RatingKey]core.Title, error) {
-	return c.cachedPeopleVisibility(ctx, keys, cfg, now, false)
+func (c *Catalog) CachedVisibleTitles(ctx context.Context, keys []core.RatingKey, cfg config.Catalog, now time.Time, facts core.TitleFacts, needsAvailabilityFacts func(core.Title) bool) (map[core.RatingKey]core.Title, error) {
+	return c.cachedPeopleVisibility(ctx, keys, cfg, now, facts, needsAvailabilityFacts, false)
 }
 
 // CachedPeopleParents reads only the facts used for inherited credit policy.
-func (c *Catalog) CachedPeopleParents(ctx context.Context, keys []core.RatingKey, cfg config.Catalog, now time.Time) (map[core.RatingKey]core.Title, error) {
-	return c.cachedPeopleVisibility(ctx, keys, cfg, now, true)
+func (c *Catalog) CachedPeopleParents(ctx context.Context, keys []core.RatingKey, cfg config.Catalog, now time.Time, facts core.TitleFacts, needsAvailabilityFacts func(core.Title) bool) (map[core.RatingKey]core.Title, error) {
+	return c.cachedPeopleVisibility(ctx, keys, cfg, now, facts, needsAvailabilityFacts, true)
 }
 
-func (c *Catalog) cachedPeopleVisibility(ctx context.Context, keys []core.RatingKey, cfg config.Catalog, now time.Time, parentPolicy bool) (map[core.RatingKey]core.Title, error) {
+func (c *Catalog) cachedPeopleVisibility(ctx context.Context, keys []core.RatingKey, cfg config.Catalog, now time.Time, facts core.TitleFacts, needsAvailabilityFacts func(core.Title) bool, parentPolicy bool) (map[core.RatingKey]core.Title, error) {
 	filter := c.visibilityFilter()
 	digital := cfg.ReleaseMode == config.ModeDigital
-	var facts core.TitleFacts
-	if parentPolicy || !filter.Passive() || digital {
-		facts = core.VisibilityFacts
+	facts |= c.policyFacts(filter)
+	if parentPolicy || digital {
+		facts |= core.FactHomeRelease
 	}
 	out := make(map[core.RatingKey]core.Title, len(keys))
 	for part := range store.Chunks(keys, 200) {
@@ -163,6 +163,9 @@ func (c *Catalog) cachedPeopleVisibility(ctx context.Context, keys []core.Rating
 		}
 		items, err := c.readVisibilityRows(ctx, args, facts)
 		if err != nil {
+			return nil, err
+		}
+		if err := c.hydratePeopleAvailability(ctx, items, facts, needsAvailabilityFacts); err != nil {
 			return nil, err
 		}
 		var seasons []*core.Title

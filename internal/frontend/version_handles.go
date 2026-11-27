@@ -59,6 +59,12 @@ type VersionHandleBatch interface {
 	IssueBatch(context.Context, VersionScope, core.RatingKey, []string) (map[string]string, error)
 }
 
+// VersionHandlePreview authorizes version names for item-scoped detail.
+// Playback registers a selected name through ListedVersionHandles.
+type VersionHandlePreview interface {
+	PreviewVersionHandles(context.Context, VersionScope, core.RatingKey, []string) (map[string]string, error)
+}
+
 // VersionSlots is the cache-independent, configured version menu capability.
 // labels permits cached release facts on detail responses; false is the cheap
 // browse projection and must never search or resolve a title.

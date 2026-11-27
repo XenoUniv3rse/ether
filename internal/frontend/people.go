@@ -22,6 +22,8 @@ type PeopleQuery struct {
 	Query string
 	Limit int
 	Scope PeopleScope
+	// PluginResultsOnly retains only plugin people from the combined search's page.
+	PluginResultsOnly bool
 }
 
 type PersonReadOptions struct{ Prefetch bool }

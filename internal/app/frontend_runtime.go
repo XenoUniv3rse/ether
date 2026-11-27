@@ -304,6 +304,12 @@ func newFrontendRuntime(a *App, cfg config.Config) (*frontendRuntime, error) {
 			}
 		}
 		lazy, lazyErr := sessions.NewLazyStreams(a.db, r.broker, id, grants, time.Hour, func(req *http.Request) bool { ip, ok := a.frontendClientIP(req); return !ok || !identity.LAN(ip) })
+		if id == "stremio" && lazyErr == nil {
+			lazyErr = sessions.EnableLazyDirectTickets(lazy, a.cfg.DerivedKey("ether-lazy-direct-ticket-v1"))
+			if lazyErr != nil {
+				lazy = nil
+			}
+		}
 		if setter, ok := lazy.(interface {
 			SetClientIP(func(*http.Request) (netip.Addr, bool))
 		}); ok {
@@ -312,6 +318,12 @@ func newFrontendRuntime(a *App, cfg config.Config) (*frontendRuntime, error) {
 		versionHandles, handleErr := sessions.NewVersionHandles(a.db, r.broker, id, a.cfg.DerivedKey("ether-version-id-v1"))
 		if handleErr != nil {
 			a.log.Error("version handles unavailable", "surface", id, "err", handleErr)
+		}
+		if (id == "jellyfin" || id == "emby") && lazyErr == nil && handleErr == nil {
+			lazyErr = sessions.EnableMediaBrowserDirectTickets(lazy, versionHandles, a.cfg.DerivedKey("ether-lazy-direct-ticket-v1"))
+			if lazyErr != nil {
+				lazy = nil
+			}
 		}
 		var sourceOffers frontend.SourceOffers
 		if id == "silo" {

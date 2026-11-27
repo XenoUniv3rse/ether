@@ -3,6 +3,7 @@ package catalog
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"github.com/braedonsaunders/ether/internal/config"
@@ -252,6 +253,10 @@ func scanTitle(s scanner) (*storedTitle, error) {
 
 // hydrateSlice fills Genres/Studios/Countries/Cast/Directors/Writers/ShowIDs in place.
 func (c *Catalog) hydrateSlice(ctx context.Context, items []core.Title) error {
+	return c.hydrateTitleFacts(ctx, items, factsFull)
+}
+
+func (c *Catalog) hydrateTitleFacts(ctx context.Context, items []core.Title, facts factSet) error {
 	if len(items) == 0 {
 		return nil
 	}
@@ -279,7 +284,7 @@ func (c *Catalog) hydrateSlice(ctx context.Context, items []core.Title) error {
 	}
 	// Large key sets bind one JSON array, so full episode payloads need one
 	// fact query rather than a new query for every 200 episodes.
-	if err := c.hydrateFactBatch(ctx, items, idx, keys, factsFull); err != nil {
+	if err := c.hydrateFactBatch(ctx, items, idx, keys, facts); err != nil {
 		return err
 	}
 	if err := c.hydrateShows(ctx, items); err != nil {
@@ -457,23 +462,31 @@ func (c *Catalog) hydrateFactBatch(ctx context.Context, items []core.Title, idx 
 	if set&factTrailers != 0 {
 		part("key", "'trailer'", "name", "url", "''", "''", "''", "''", "''", "''", `catalog_remote_trailers WHERE key IN (`+ph+`)`)
 	}
+	array, tuple := "json_group_array", "json_array"
+	if store.DialectOf(c.db) == store.Postgres {
+		array, tuple = "json_agg", "json_build_array"
+	}
+	group := func(tag, col, table string) {
+		packed := "CAST(" + array + "(" + col + ") AS TEXT)"
+		part("key", tag, packed, "''", "''", "''", "''", "''", "''", "''", table+" WHERE key IN ("+ph+") GROUP BY key")
+	}
 	if set&factSet(core.FactGenres) != 0 {
-		part("key", "'genre'", "genre", "''", "''", "''", "''", "''", "''", "''", `catalog_genres WHERE key IN (`+ph+`)`)
+		group("'genres'", "genre", "catalog_genres")
 	}
 	if set&factSet(core.FactStudios) != 0 {
-		part("key", "'studio'", "studio", "''", "''", "''", "''", "''", "''", "''", `catalog_studios WHERE key IN (`+ph+`)`)
+		group("'studios'", "studio", "catalog_studios")
 	}
 	if set&factSet(core.FactCountries) != 0 {
-		part("key", "'country'", "country", "''", "''", "''", "''", "''", "''", "''", `catalog_countries WHERE key IN (`+ph+`)`)
+		group("'countries'", "country", "catalog_countries")
 	}
 	if set&factSet(core.FactHomeRelease) != 0 {
 		part("h.key", "'home'", "CAST(h.checked AS TEXT)", "CAST(h.earliest_ts AS TEXT)", "CAST(h.fallback_admitted AS TEXT)", "CAST(t.released_ts AS TEXT)", "CAST(t.year AS TEXT)", "''", "''", "''", `catalog_home_release h JOIN catalog_titles t ON t.key=h.key WHERE h.key IN (`+ph+`)`)
 	}
 	if set&factSet(core.FactKeywords) != 0 {
-		part("key", "'keyword'", "keyword", "''", "''", "''", "''", "''", "''", "''", `catalog_keywords WHERE key IN (`+ph+`)`)
+		group("'keywords'", "keyword", "catalog_keywords")
 	}
 	if set&factAltTitles != 0 {
-		part("key", "'alt'", "title", "''", "''", "''", "''", "''", "''", "''", `catalog_alt_titles WHERE key IN (`+ph+`)`)
+		group("'alternatives'", "title", "catalog_alt_titles")
 	}
 	creditFrom := `catalog_credits c LEFT JOIN catalog_people p ON p.person_tmdb=c.person_tmdb WHERE c.key IN (` + ph + `)`
 	if set&factListCredits != 0 && set&factCredits == 0 {
@@ -481,7 +494,10 @@ func (c *Catalog) hydrateFactBatch(ctx context.Context, items []core.Title, idx 
 		creditFrom += ` AND (c.kind IN ('director','writer') OR (c.kind='cast' AND c.ord<` + strconv.Itoa(listCast) + `))`
 	}
 	if set&(factCredits|factListCredits) != 0 {
-		part("c.key", "'credit'", "c.kind", "c.name", "c.role", "c.thumb", "CAST(c.person_tmdb AS TEXT)", "COALESCE(p.imdb,'')", "CAST(c.ord AS TEXT)", "c.provider_id", creditFrom)
+		// A title's credits arrive together with one key and tag. Keep the
+		// tuple values and their existing ordering rules on both databases.
+		packed := "CAST(" + array + "(" + tuple + "(c.kind,c.name,c.role,c.thumb,CAST(c.person_tmdb AS TEXT),COALESCE(p.imdb,''),CAST(c.ord AS TEXT),c.provider_id) ORDER BY c.kind,c.ord,c.person_tmdb,c.role,c.name,c.thumb,c.provider_id) AS TEXT)"
+		part("c.key", "'credits'", packed, "''", "''", "''", "''", "''", "''", "''", creditFrom+" GROUP BY c.key")
 	} else if set&factRankCredits != 0 {
 		// RANK keeps every credit tied with the last one a ranking reads;
 		// the credit sort below then cuts each list as the full read does.
@@ -529,25 +545,36 @@ func (c *Catalog) hydrateFactBatch(ctx context.Context, items []core.Title, idx 
 			for _, i := range idx[k] {
 				items[i].RemoteTrailerName, items[i].RemoteTrailerURL = a, b
 			}
-		case "genre":
-			for _, i := range idx[k] {
-				items[i].Genres = append(items[i].Genres, a)
+		case "genres", "keywords", "alternatives", "studios", "countries":
+			var values []string
+			if err := json.Unmarshal([]byte(a), &values); err != nil {
+				return err
 			}
-		case "keyword":
 			for _, i := range idx[k] {
-				items[i].Keywords = append(items[i].Keywords, a)
+				switch tag {
+				case "genres":
+					items[i].Genres = append(items[i].Genres, values...)
+				case "keywords":
+					items[i].Keywords = append(items[i].Keywords, values...)
+				case "alternatives":
+					items[i].AlternativeTitles = append(items[i].AlternativeTitles, values...)
+				case "studios":
+					items[i].Studios = append(items[i].Studios, values...)
+				case "countries":
+					items[i].Countries = append(items[i].Countries, values...)
+				}
 			}
-		case "alt":
-			for _, i := range idx[k] {
-				items[i].AlternativeTitles = append(items[i].AlternativeTitles, a)
+		case "credits":
+			var packed [][8]string
+			if err := json.Unmarshal([]byte(a), &packed); err != nil {
+				return err
 			}
-		case "studio":
-			for _, i := range idx[k] {
-				items[i].Studios = append(items[i].Studios, a)
-			}
-		case "country":
-			for _, i := range idx[k] {
-				items[i].Countries = append(items[i].Countries, a)
+			for _, fields := range packed {
+				pid, _ := strconv.ParseInt(fields[4], 10, 64)
+				ord, _ := strconv.ParseInt(fields[6], 10, 64)
+				credits[k] = append(credits[k], creditFact{kind: fields[0], ord: ord, person: core.Person{
+					TMDB: pid, IMDB: fields[5], ID: fields[7], Name: fields[1], Role: fields[2], ThumbPath: fields[3],
+				}})
 			}
 		case "credit":
 			pid, _ := strconv.ParseInt(e, 10, 64)
@@ -641,70 +668,72 @@ func (c *Catalog) hydrateShows(ctx context.Context, items []core.Title) error {
 		return nil
 	}
 	counts := map[core.RatingKey]map[int]int{}
-	const batch = 200
-	for chunk := range store.Chunks(showArgs, batch) {
-		part := chunk
-		ph := placeholders(len(part))
-		q := `SELECT tag, key, a, b, c, d, e, f, g, h, i FROM (
-SELECT 'id' AS tag, key, imdb AS a, CAST(tvdb AS TEXT) AS b, CAST(year AS TEXT) AS c, original_title AS d, title AS e, content_rating AS f, english_title AS g, enforcement_rating AS h, certifications AS i FROM catalog_titles WHERE key IN (` + ph + `)
-UNION ALL
-SELECT 'kw', key, keyword, '', '', '', '', '', '', '', '' FROM catalog_keywords WHERE key IN (` + ph + `)
-UNION ALL
-SELECT 'alt', key, title, '', '', '', '', '', '', '', '' FROM catalog_alt_titles WHERE key IN (` + ph + `)`
-		bound := make([]any, 0, len(part)*4)
-		for i := 0; i < 3; i++ {
-			bound = append(bound, part...)
-		}
-		// Only later episodes use sibling season counts to calculate their
-		// absolute number. Season pages still inherit every parent policy
-		// and display fact, without reading unrendered sibling seasons.
+	array, tuple := "json_group_array", "json_array"
+	if store.DialectOf(c.db) == store.Postgres {
+		array, tuple = "json_agg", "json_build_array"
+	}
+	snapshot := func(values, source string) string {
+		return "COALESCE(CAST((SELECT " + array + "(" + values + ") FROM " + source + ") AS TEXT),'[]')"
+	}
+	for part := range store.Chunks(showArgs, 200) {
+		bound := append([]any(nil), part...)
+		// Only later episodes need sibling counts to get the absolute number.
 		var countArgs []any
 		for _, arg := range part {
 			if needsSeasonCounts[core.RatingKey(arg.(int64))] {
 				countArgs = append(countArgs, arg)
 			}
 		}
-		if len(countArgs) > 0 {
-			q += `
-UNION ALL
-SELECT 'season', show_key, CAST(season AS TEXT), CAST(child_count AS TEXT), '', '', '', '', '', '', '' FROM catalog_titles WHERE type='season' AND season>0 AND show_key IN (` + placeholders(len(countArgs)) + `)`
+		seasonCounts := "'[]'"
+		if len(countArgs) != 0 {
+			seasonCounts = "CASE WHEN wanted.key IN (" + placeholders(len(countArgs)) + ") THEN " +
+				snapshot(tuple+"(s.season,s.child_count) ORDER BY s.key", "catalog_titles s WHERE s.type='season' AND s.season>0 AND s.show_key=wanted.key") +
+				" ELSE '[]' END"
 			bound = append(bound, countArgs...)
 		}
-		q += "\n) AS show_facts"
+		values := strings.TrimSuffix(strings.Repeat("(CAST(? AS BIGINT)),", len(part)), ",")
+		q := `WITH wanted(key) AS (VALUES ` + values + `)
+SELECT wanted.key,COALESCE(t.imdb,''),COALESCE(t.tvdb,0),COALESCE(t.year,0),COALESCE(t.original_title,''),
+	COALESCE(t.title,''),COALESCE(t.content_rating,''),COALESCE(t.english_title,''),COALESCE(t.enforcement_rating,''),COALESCE(t.certifications,''),
+	` + snapshot("keyword", "catalog_keywords WHERE key=wanted.key") + ", " +
+			snapshot("title", "catalog_alt_titles WHERE key=wanted.key") + ", " + seasonCounts +
+			" FROM wanted LEFT JOIN catalog_titles t ON t.key=wanted.key"
 		rows, err := c.db.QueryContext(ctx, q, bound...)
 		if err != nil {
 			return err
 		}
 		for rows.Next() {
-			var key int64
-			var tag, a, b, ccol, d, e, f, g, h, icol string
-			if err := rows.Scan(&tag, &key, &a, &b, &ccol, &d, &e, &f, &g, &h, &icol); err != nil {
+			var key core.RatingKey
+			var row seriesIdentity
+			var certs string
+			var keywords, alternatives, seasons []byte
+			if err = rows.Scan(&key, &row.imdb, &row.tvdb, &row.year, &row.original, &row.title, &row.contentRating,
+				&row.english, &row.enforcementRating, &certs, &keywords, &alternatives, &seasons); err != nil {
 				rows.Close()
 				return err
 			}
-			k := core.RatingKey(key)
-			switch tag {
-			case "id":
-				if show := shows[k]; show != nil {
-					tvdb, _ := strconv.ParseInt(b, 10, 64)
-					year, _ := strconv.Atoi(ccol)
-					show.imdb, show.tvdb, show.year, show.original, show.title, show.contentRating, show.english, show.enforcementRating, show.certifications = a, tvdb, year, d, e, f, g, h, decodeCertifications(icol)
+			row.certifications = decodeCertifications(certs)
+			if err = json.Unmarshal(keywords, &row.keywords); err != nil {
+				rows.Close()
+				return err
+			}
+			if err = json.Unmarshal(alternatives, &row.altTitles); err != nil {
+				rows.Close()
+				return err
+			}
+			shows[key] = &row
+			if needsSeasonCounts[key] {
+				var pairs [][2]int
+				if err = json.Unmarshal(seasons, &pairs); err != nil {
+					rows.Close()
+					return err
 				}
-			case "kw":
-				if show := shows[k]; show != nil {
-					show.keywords = append(show.keywords, a)
+				if len(pairs) != 0 {
+					counts[key] = make(map[int]int, len(pairs))
+					for _, pair := range pairs {
+						counts[key][pair[0]] = pair[1]
+					}
 				}
-			case "alt":
-				if show := shows[k]; show != nil {
-					show.altTitles = append(show.altTitles, a)
-				}
-			case "season":
-				season, _ := strconv.Atoi(a)
-				n, _ := strconv.Atoi(b)
-				if counts[k] == nil {
-					counts[k] = map[int]int{}
-				}
-				counts[k][season] = n
 			}
 		}
 		err = rows.Err()
@@ -1509,7 +1538,10 @@ func (c *Catalog) queryListRows(ctx context.Context, lr *core.ListRows, q string
 			partial, partialAt = append(partial, out[i]), append(partialAt, i)
 		}
 	}
-	need := factSet(lr.Facts|c.policyFacts(c.visibilityFor(ctx))|c.viewerPolicyFacts(ctx)) | factRowCredits
+	need := factSet(lr.Facts | c.policyFacts(c.visibilityFor(ctx)) | c.viewerPolicyFacts(ctx))
+	if !lr.OmitCredits {
+		need |= factRowCredits
+	}
 	if err := c.hydrateRows(ctx, partial, need); err != nil {
 		return nil, err
 	}
@@ -1525,7 +1557,9 @@ func (c *Catalog) queryListRows(ctx context.Context, lr *core.ListRows, q string
 	for j, i := range fullAt {
 		out[i] = full[j]
 	}
-	c.rememberExportTitles(ctx, gen, minute, out)
+	if !lr.OmitCredits {
+		c.rememberExportTitles(ctx, gen, minute, out)
+	}
 	return out, nil
 }
 
@@ -1635,6 +1669,8 @@ func (c *Catalog) queryTitlesMode(ctx context.Context, sqlGated bool, q string, 
 	return items, nil
 }
 
+type listDisplayFactsKey struct{}
+
 // queryTitlesRows hydrates titles before the caller projects episode orders.
 // With rowsOnly, movies and shows stay as rows for candidate search to
 // filter and complete. Results keep the query's order.
@@ -1677,6 +1713,7 @@ func (c *Catalog) queryTitlesRows(ctx context.Context, sqlGated, rowsOnly bool, 
 		needAt = append(needAt, i)
 	}
 	rank := rankProjectionFrom(ctx)
+	listDisplay, _ := ctx.Value(listDisplayFactsKey{}).(bool)
 	partial := map[core.RatingKey]bool{}
 	if len(needAt) > 0 && rank != nil {
 		// A ranking window's titles: the projection, then in full each one
@@ -1704,7 +1741,11 @@ func (c *Catalog) queryTitlesRows(ctx context.Context, sqlGated, rowsOnly bool, 
 		for j, i := range needAt {
 			need[j] = out[i]
 		}
-		if err := c.hydrateSlice(ctx, need); err != nil {
+		facts := factsFull
+		if listDisplay {
+			facts = factsVisibility
+		}
+		if err := c.hydrateTitleFacts(ctx, need, facts); err != nil {
 			return nil, err
 		}
 		for j, i := range needAt {
@@ -1737,7 +1778,7 @@ func (c *Catalog) queryTitlesRows(ctx context.Context, sqlGated, rowsOnly bool, 
 			}
 		}
 	}
-	if deferred, _ := ctx.Value(deferAiredCountsKey{}).(bool); !deferred {
+	if deferred, _ := ctx.Value(deferAiredCountsKey{}).(bool); !deferred && !listDisplay {
 		c.rememberTitles(gen, minute, full)
 	}
 	return visible, nil

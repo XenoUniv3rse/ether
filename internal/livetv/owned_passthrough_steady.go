@@ -117,7 +117,11 @@ func (p *passthroughProducer) takeSteady() bool {
 		return false
 	}
 	p.steady = feed
+	if f, ok := feed.(*steadyFeed); ok {
+		p.providerFeed.Store(f)
+	}
 	p.steadyMu.Unlock()
+	p.releaseInput()
 	p.reportHistory()
 	p.s.noteSourceMode(p.c.ID, p.src, "passthrough", "escalated")
 	if p.ingest == nil {

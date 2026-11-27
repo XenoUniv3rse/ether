@@ -60,8 +60,8 @@ func TestContinueWatchingOpensEveryPage(t *testing.T) {
 	// A viewer the taste model doesn't know yet gets the server's Top 10.
 	cold := append([]core.HomeRow{}, rows[:5]...)
 	cold = append(cold, row("movie.top10.today", KindTop10Today, 10))
-	if got := order(arrangePage(cold, nil, 1, hc, 16)); got[0] != "movie.inprogress.1" || got[1] != "movie.top10.today" {
-		t.Fatalf("cold page head = %v", got)
+	if got := order(arrangePage(cold, nil, 1, hc, 16)); got[0] != "movie.inprogress.1" || got[1] != "movie.top10.today" || len(got) != len(cold) || got[len(got)-1] != "movie.recentlyadded.1" {
+		t.Fatalf("cold page should include every row with Recently Added last: %v", got)
 	}
 	// An empty Top 10 can't lead.
 	empty := append([]core.HomeRow{}, rows...)

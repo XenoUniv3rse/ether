@@ -294,6 +294,9 @@ type BrowseQuery struct {
 	// ListRows reads a key-ordered (SortKey) page as list rows instead of
 	// full titles (an export). Other page shapes ignore it.
 	ListRows *ListRows
+	// ListDisplayFacts reads a browse page with presentation and
+	// visibility facts, without credits, trailers or alternate titles.
+	ListDisplayFacts bool
 }
 
 // ListRows asks a key-ordered Browse page for a whole-library export's rows:
@@ -304,8 +307,9 @@ type BrowseQuery struct {
 // Detail reports (one the caller judges on its full facts) comes back in
 // full. Partial titles never enter a shared cache.
 type ListRows struct {
-	Facts  TitleFacts
-	Detail func(Title) bool
+	Facts       TitleFacts
+	Detail      func(Title) bool
+	OmitCredits bool
 }
 
 type Page struct {

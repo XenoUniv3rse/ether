@@ -400,6 +400,20 @@ func (b *builder) nonVideoCandidates(files []*postedFile, hint nzb.NonVideoHint)
 			}
 		}
 		c := candidate{kind: s.Kind, set: s, bytes: s.Bytes()}
+		if hint.Track.NonEmpty() && hint.Track.Disc > 0 {
+			setDisc := nzb.ParseDirDisc(s.Name)
+			if setDisc == 0 && len(s.Volumes) > 0 {
+				setDisc = nzb.ParseDirDisc(s.Volumes[0].Name)
+			}
+			switch {
+			case setDisc == hint.Track.Disc:
+				c.matchRank = 2
+			case setDisc == 0:
+				c.matchRank = 1
+			default:
+				c.matchRank = 0
+			}
+		}
 		for _, v := range s.Volumes {
 			c.files = append(c.files, byFile[v])
 		}

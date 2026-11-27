@@ -303,7 +303,7 @@ func (g *Grants) viewerMatchesUsername(ctx context.Context, viewer *core.Viewer,
 
 // Resolve rejects malformed, expired, revoked, inactive and cross-surface grants.
 func (g *Grants) Resolve(ctx context.Context, surface, credential string) (*core.Viewer, error) {
-	return g.resolve(ctx, surface, credential, false)
+	return g.resolve(ctx, surface, credential, surface == "stremio")
 }
 
 func (g *Grants) resolve(ctx context.Context, surface, credential string, asyncActivity bool) (*core.Viewer, error) {
@@ -420,7 +420,9 @@ func (g *Grants) GrantReferenceExpiry(ctx context.Context, surface, reference st
 	if viewer == nil || viewer.ID != viewerID {
 		return time.Time{}, core.ErrUnauthorized
 	}
-	_ = g.times.Observe(ctx, viewer.ID)
+	if !frontend.QuietIdentity(ctx) {
+		_ = g.times.Observe(ctx, viewer.ID)
+	}
 	return time.UnixMilli(expires), nil
 }
 

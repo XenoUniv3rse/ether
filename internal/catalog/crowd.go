@@ -265,6 +265,16 @@ func (c *Catalog) titlesByKeys(ctx context.Context, keys []core.RatingKey) ([]co
 }
 
 func (c *Catalog) titlesByKeysMode(ctx context.Context, keys []core.RatingKey, includeUnairedChildren bool) ([]core.Title, error) {
+	return c.titlesByKeysProjected(ctx, keys, includeUnairedChildren, nil)
+}
+
+// CachedReviewTitles keeps the membership of CachedTitles while projecting
+// the facts needed to paint and authorize a recommendation card.
+func (c *Catalog) CachedReviewTitles(ctx context.Context, keys []core.RatingKey, projection core.ListRows) ([]core.Title, error) {
+	return c.titlesByKeysProjected(ctx, keys, true, &projection)
+}
+
+func (c *Catalog) titlesByKeysProjected(ctx context.Context, keys []core.RatingKey, includeUnairedChildren bool, projection *core.ListRows) ([]core.Title, error) {
 	allow := func(t *core.Title) bool {
 		return !t.Adult && (includeUnairedChildren && (t.Type == core.TypeEpisode || t.Type == core.TypeSeason) ||
 			c.upcomingMovie(t) || (selectedEpisodeReleased(t, c.now()) && (c.config().ReleaseMode != config.ModeDigital || c.homeVisible(t))))
@@ -309,7 +319,17 @@ func (c *Catalog) titlesByKeysMode(ctx context.Context, keys []core.RatingKey, i
 		if includeUnairedChildren {
 			query = c.queryPagedTitles
 		}
-		ts, err := query(ctx, `SELECT `+titleCols+` FROM catalog_titles WHERE key IN (`+placeholders(len(part))+`)`, args...)
+		statement := `SELECT ` + titleCols + ` FROM catalog_titles WHERE key IN (` + placeholders(len(part)) + `)`
+		var ts []core.Title
+		var err error
+		if projection == nil {
+			ts, err = query(ctx, statement, args...)
+		} else {
+			ts, err = c.queryListRows(ctx, projection, statement, args...)
+			if err == nil {
+				err = c.ProjectEpisodeTitles(ctx, ts)
+			}
+		}
 		if err != nil {
 			return nil, err
 		}
