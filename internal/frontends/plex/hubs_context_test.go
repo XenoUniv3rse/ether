@@ -124,10 +124,9 @@ func TestHubsUseContextualRecommender(t *testing.T) {
 }
 
 func TestImpressionCreditFollowsMainDuplicateRules(t *testing.T) {
-	// main 4588b9893 recordImpressions credits served[hubIdentifier]. Home
-	// skips a second recommender row whose rendered id was already seen, so
-	// the first arm is the one recorded. Section adds overwrite, so the last
-	// add is credited even when the visible row is the first copy.
+	// recordImpressions credits served[hubIdentifier]. Home and library
+	// pages both drop a second recommender row whose id was already seen
+	// before layout, so the visible first copy is the one credited.
 	rec := &contextualRecommender{fakeRecommender: fakeRecommender{
 		home: []core.Hub{
 			{ID: "home.trending", Title: "First", Promoted: true, Items: []core.Title{fightClub}},
@@ -173,8 +172,8 @@ func TestImpressionCreditFollowsMainDuplicateRules(t *testing.T) {
 			top = append(top, h)
 		}
 	}
-	if len(top) != 1 || len(top[0].Items) != 1 || top[0].Items[0].Key != alien.Key {
-		t.Fatalf("section credit = %+v, want the last add", top)
+	if len(top) != 1 || len(top[0].Items) != 1 || top[0].Items[0].Key != fightClub.Key {
+		t.Fatalf("section credit = %+v, want the visible first copy", top)
 	}
 }
 
