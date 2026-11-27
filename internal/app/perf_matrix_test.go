@@ -3,6 +3,7 @@ package app
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"image"
@@ -12,6 +13,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"slices"
@@ -24,6 +26,9 @@ import (
 	"github.com/braedonsaunders/ether/internal/config"
 	"github.com/braedonsaunders/ether/internal/core"
 	"github.com/braedonsaunders/ether/internal/debrid"
+	"github.com/braedonsaunders/ether/internal/diagnostics"
+	"github.com/braedonsaunders/ether/internal/identity"
+	"github.com/braedonsaunders/ether/internal/livetv"
 	"github.com/braedonsaunders/ether/internal/perfharness"
 	"github.com/braedonsaunders/ether/internal/store"
 )
@@ -210,27 +215,53 @@ func runPerfMatrixCase(t *testing.T, ctx context.Context, fixture string, c perf
 	if err != nil {
 		t.Fatal(err)
 	}
-	var definitionsURL string
+	var consoleFixtureURL string
+	var consoleDefinition string
 	if len(clients) == 0 || slices.Contains(clients, "console") {
 		definition, err := os.ReadFile("../cardigann/testdata/public.yml")
 		if err != nil {
 			t.Fatal(err)
 		}
+		draft, err := json.Marshal(map[string]string{"yaml": string(definition)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		consoleDefinition = string(draft)
 		definitions := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if strings.HasPrefix(r.URL.Path, "/pms/") && r.Header.Get("X-Plex-Token") != "matrix-fixture-token" {
+				w.WriteHeader(http.StatusUnauthorized)
+				return
+			}
 			switch r.URL.Path {
 			case "/definitions/":
 				_, _ = io.WriteString(w, `["fakepublic.yml"]`)
 			case "/definitions/fakepublic.yml":
 				_, _ = w.Write(definition)
+			case "/tracker/browse.php":
+				w.Header().Set("Content-Type", "text/html")
+				_, _ = io.WriteString(w, `<table id="torrents"><tbody><tr><td><a href="browse.php?cat=1">Movies</a>
+					<a class="title" href="details.php?id=1">Matrix Fixture 2026 1080p</a><a href="download.php?id=1">Download</a></td>
+					<td class="size">700 MB</td><td class="seeders">7</td><td class="leechers">1</td></tr></tbody></table>`)
+			case "/pms/identity":
+				_, _ = io.WriteString(w, `{"MediaContainer":{"machineIdentifier":"matrix-scratch-pms","version":"1.41.0"}}`)
+			case "/pms/myplex/account":
+				_, _ = io.WriteString(w, `{"MyPlex":{"username":"Matrix PMS owner"}}`)
+			case "/pms/accounts":
+				_, _ = io.WriteString(w, `{"MediaContainer":{"size":1,"Account":[{"id":1,"name":"Matrix PMS owner"}]}}`)
+			case "/pms/library/sections", "/pms/status/sessions/history/all":
+				_, _ = io.WriteString(w, `{"MediaContainer":{"size":0,"totalSize":0}}`)
 			default:
 				http.NotFound(w, r)
 			}
 		}))
 		defer definitions.Close()
-		definitionsURL = definitions.URL + "/definitions/"
+		consoleFixtureURL = definitions.URL
 	}
 	if err := cfg.Update(func(cfg *config.Config) error {
-		cfg.IndexerSites.DefinitionsURL = definitionsURL
+		cfg.IndexerSites.DefinitionsURL = ""
+		if consoleFixtureURL != "" {
+			cfg.IndexerSites.DefinitionsURL = consoleFixtureURL + "/definitions/"
+		}
 		cfg.SetupComplete = true
 		cfg.Frontends = map[string]config.Frontend{"plex": {Enabled: true}, "jellyfin": {Enabled: true}, "emby": {Enabled: true}, "silo": {Enabled: true}, "vela": {Enabled: true}, "stremio": {Enabled: true}, "xtream": {Enabled: true}}
 		cfg.Server.BindAddress = "127.0.0.1"
@@ -255,7 +286,7 @@ func runPerfMatrixCase(t *testing.T, ctx context.Context, fixture string, c perf
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := seedPerfMatrixCatalogue(ctx, db, c.live); err != nil {
+	if err := seedPerfMatrixCatalogue(ctx, db, c.live, len(clients) == 0 || slices.Contains(clients, "remote plugin")); err != nil {
 		db.Close()
 		t.Fatal(err)
 	}
@@ -263,10 +294,21 @@ func runPerfMatrixCase(t *testing.T, ctx context.Context, fixture string, c perf
 		db.Close()
 		t.Fatal(err)
 	}
+	if len(clients) == 0 || slices.Contains(clients, "infuse-jellyfin") || slices.Contains(clients, "emby-sdk") {
+		if _, err := db.ExecContext(ctx, `UPDATE auth_users SET thumb=?, plex_id=COALESCE(plex_id, 910100+id)
+			WHERE active=1`, matrixAvatarURL); err != nil {
+			db.Close()
+			t.Fatal(err)
+		}
+	}
 	viewers, err := perfharness.MintCredentials(ctx, db, 4)
 	db.Close()
 	if err != nil {
 		t.Fatal(err)
+	}
+	if consoleFixtureURL != "" {
+		viewers[0].ConsoleFixtureURL = consoleFixtureURL
+		viewers[0].ConsoleDefinition = consoleDefinition
 	}
 	if pg := os.Getenv(PerfGatePGEnv); pg != "" {
 		defer perfGatePostgres(t, ctx, dir, strings.ReplaceAll(c.name, "-", "_"), pg)()
@@ -301,10 +343,60 @@ func runPerfMatrixCase(t *testing.T, ctx context.Context, fixture string, c perf
 		t.Fatal(err)
 	}
 	defer a.Close()
-	for _, key := range []string{"original/p.jpg", "w500/p.jpg"} {
+	for _, key := range []string{"original/p.jpg", "w500/p.jpg", "w185/p.jpg", "original/b.jpg"} {
 		if _, _, err := a.images.GetLoaded(ctx, key, func(context.Context) ([]byte, string, error) {
 			return poster.Bytes(), "image/jpeg", nil
 		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(clients) == 0 || slices.Contains(clients, "infuse-jellyfin") || slices.Contains(clients, "emby-sdk") {
+		hash := sha256.Sum256([]byte("plex-avatar-v1\x00" + matrixAvatarURL))
+		if _, _, err := a.images.GetLoaded(ctx, fmt.Sprintf("plex-avatar/%x", hash), func(context.Context) ([]byte, string, error) {
+			return poster.Bytes(), "image/jpeg", nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(clients) == 0 || slices.Contains(clients, "console") {
+		limiter, err := identity.NewLoginLimiter(a.db, 15*time.Minute, 30, 8, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		lockoutIP := netip.MustParseAddr("192.0.2.1")
+		for _, viewer := range []string{"matrix-locked-a", "matrix-locked-b"} {
+			for range 8 {
+				if _, err := limiter.Allow(ctx, viewer, lockoutIP); err != nil {
+					t.Fatal("console lockout fixture:", err)
+				}
+			}
+		}
+		a.support.Observe(diagnostics.Event{Kind: diagnostics.KindDevice, Protocol: "jellyfin",
+			DeviceKey: "matrix-console-playback", DeviceName: "Matrix living room", Product: "Matrix player"})
+		templates, err := a.onair.Templates(ctx)
+		if err != nil || len(templates) == 0 {
+			t.Fatalf("On-Air templates fixture: %v", err)
+		}
+		look := templates[0].Style
+		look.Name = "Matrix fixture look"
+		if _, err := a.onair.SaveLook(ctx, look); err != nil {
+			t.Fatal("On-Air look fixture:", err)
+		}
+		if _, err := a.onair.UploadAsset(ctx, "matrix-artwork.jpg", "image", "", bytes.NewReader(poster.Bytes())); err != nil {
+			t.Fatal("On-Air artwork fixture:", err)
+		}
+		for _, id := range []string{"matrix-cache-release", "matrix-cache-block", "matrix-cache-clear-all"} {
+			if err := a.cache.Put(id, 0, []byte("matrix cache fixture")); err != nil {
+				t.Fatal(err)
+			}
+		}
+		now := time.Now().UTC()
+		play := &core.PlaySession{
+			ID: "matrix-recorded-play", UserID: viewers[0].ID, Username: viewers[0].Username,
+			Key: core.MovieKey(106), TitleName: "Fixture movie", ClientID: "matrix-console-playback",
+			StartedAt: now.Add(-10 * time.Minute), BytesServed: 1 << 20,
+		}
+		if err := a.stats.Record(ctx, play, true, ""); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -319,11 +411,54 @@ func runPerfMatrixCase(t *testing.T, ctx context.Context, fixture string, c perf
 		}
 	}
 	if len(clients) == 0 || slices.Contains(clients, "vela") {
-		if err := installPerfMatrixVelaCatalogue(ctx, a, viewers[c.viewer]); err != nil {
+		if err := seedPerfMatrixBranding(ctx, a); err != nil {
+			t.Fatal("Vela branding fixture:", err)
+		}
+		if err := seedPerfMatrixSkins(ctx, a, poster.Bytes()); err != nil {
+			t.Fatal("Vela skin fixture:", err)
+		}
+	}
+	if len(clients) == 0 || slices.Contains(clients, "vela") || slices.Contains(clients, "console") {
+		if err := installPerfMatrixVelaCatalogue(ctx, a, viewers[c.viewer], poster.Bytes()); err != nil {
 			t.Fatal("Vela catalogue fixture:", err)
 		}
 	}
+	if len(clients) == 0 || slices.Contains(clients, "infuse-jellyfin") || slices.Contains(clients, "emby-sdk") ||
+		slices.Contains(clients, "moonfin") || slices.Contains(clients, "swiftfin") || slices.Contains(clients, "infuse-emby") {
+		if err := installPerfMatrixMediaBrowserMusic(ctx, a, viewers[c.viewer]); err != nil {
+			t.Fatal("MediaBrowser music fixture:", err)
+		}
+	}
+	if len(clients) == 0 || slices.Contains(clients, "infuse-jellyfin") {
+		grants, err := identity.NewGrants(a.db, a.users, time.Hour, nil, a.cfg)
+		if err != nil {
+			t.Fatal("Jellyfin web code fixture:", err)
+		}
+		viewers[c.viewer].MBWebCode, err = grants.IssueWebCode(ctx, viewers[c.viewer].ID)
+		if err != nil {
+			t.Fatal("Jellyfin web code fixture:", err)
+		}
+	}
+	if len(clients) == 0 || slices.Contains(clients, "console") {
+		if err := seedPerfMatrixConsoleQuickConnect(ctx, a, &viewers[0]); err != nil {
+			t.Fatal("Console Quick Connect fixture:", err)
+		}
+		if err := seedPerfMatrixConsoleAPIKey(ctx, a); err != nil {
+			t.Fatal("Console API key fixture:", err)
+		}
+		if err := seedPerfMatrixConsoleNotInterested(ctx, a); err != nil {
+			t.Fatal("Console not-interested fixture:", err)
+		}
+	}
 	if c.live {
+		if len(clients) == 0 || slices.Contains(clients, "plex-appletv") {
+			if err := a.livetv.SaveOwnerGroups(ctx, []livetv.OwnerGroup{{
+				ID: "matrix-sports", Name: "Matrix sports",
+				Groups: []livetv.OwnerGroupSource{{SourceID: "matrix-guide", Name: "Sports"}},
+			}}); err != nil {
+				t.Fatal("live guide group fixture:", err)
+			}
+		}
 		if err := a.registrar.RefreshOwner(ctx); err != nil {
 			report.AddGap(c.name, "plex", "", "", "Plex Pass fixture unavailable")
 			t.Error("Plex Pass fixture:", err)
@@ -337,6 +472,12 @@ func runPerfMatrixCase(t *testing.T, ctx context.Context, fixture string, c perf
 		if err := seedPerfMatrixRows(ctx, a); err != nil {
 			report.AddGap(c.name, "harness", "", "", "recommendation rows could not be seeded")
 			t.Error("recommendations fixture:", err)
+		}
+	}
+	// The curated recommendations fixture already supplies collection-card rows.
+	if !c.rows && (len(clients) == 0 || slices.Contains(clients, "silo-appletv") || slices.Contains(clients, "vela")) {
+		if err := seedPerfMatrixCollectionRow(ctx, a); err != nil {
+			t.Fatal("collection card row fixture:", err)
 		}
 	}
 	if c.visibility != "" {
@@ -394,7 +535,8 @@ func runPerfMatrixCase(t *testing.T, ctx context.Context, fixture string, c perf
 	// window. Its completed trace remains useful even when the client cancels.
 	r.SetTimeout(8 * time.Second)
 	r.SetBefore(func(context.Context) { a.perf.waitTraces() })
-	cs := append(perfharness.MatrixClients(c.live), perfharness.MatrixPluginHost())
+	availabilityMonitor := cfg.Get().Availability.Monitor
+	cs := append(perfharness.MatrixClients(c.live, availabilityMonitor), perfharness.MatrixPluginHost())
 	if len(music.methods) != 0 {
 		cs = append(cs, perfharness.MatrixSubsonic(music.methods))
 	}
@@ -408,7 +550,8 @@ func runPerfMatrixCase(t *testing.T, ctx context.Context, fixture string, c perf
 	}
 	inventory := perfMatrixInventory(t, a, surfaces, music.methods)
 	r.SetMatrixRoutes(inventory)
-	perfharness.AppendMatrixReads(cs, inventory, perfMatrixRouteExceptions)
+	exceptions := matrixCaseRouteExceptions(inventory, c.live, availabilityMonitor)
+	perfharness.AppendMatrixReads(cs, inventory, exceptions)
 	cs = perfharness.Only(cs, clients)
 	if steps := os.Getenv("ETHER_PERF_GATE_STEPS"); steps != "" {
 		cs = perfharness.OnlySteps(cs, strings.Split(steps, ","))
@@ -459,7 +602,7 @@ func runPerfMatrixCase(t *testing.T, ctx context.Context, fixture string, c perf
 	}
 	report.AddBackground(c.name, background)
 	report.Add(c.name, r.Results(), byTag, cs)
-	report.CheckRoutes(c.name, inventory, r.Results(), byTag, perfMatrixRouteExceptions)
+	report.CheckRoutes(c.name, inventory, r.Results(), byTag, exceptions)
 	t.Logf("recorded %d attempts", len(r.Results()))
 	writeReport()
 }

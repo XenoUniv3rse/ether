@@ -137,13 +137,17 @@ func discoverPluginLibrary(vars map[string]string, body []byte) {
 		Libraries []struct {
 			ID     int64  `json:"id"`
 			Source string `json:"source"`
+			Plugin string `json:"pluginId"`
 		} `json:"libraries"`
 	}
 	if json.Unmarshal(body, &list) == nil {
 		for _, lib := range list.Libraries {
 			if lib.Source == "plugin" {
 				setOnce(vars, "pluginLibrary", strconv.FormatInt(lib.ID, 10))
-				break
+				if lib.Plugin == "community.example.matrixcatalogue" {
+					setOnce(vars, "consolePlugin", lib.Plugin)
+					setOnce(vars, "consoleLiveLibrary", strconv.FormatInt(lib.ID, 10))
+				}
 			}
 		}
 	}

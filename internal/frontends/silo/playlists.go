@@ -42,10 +42,6 @@ func (i *instance) playlistLibrary(r *http.Request) (*frontend.Viewer, string, f
 	return viewer, token, library, true
 }
 
-func siloPlaylistHeader(playlist frontend.Playlist) map[string]any {
-	return map[string]any{"id": ids.RatingKeyGUID(playlist.Key), "name": playlist.Title, "count": len(playlist.Items), "smart": playlist.Smart}
-}
-
 func (i *instance) playlists(w http.ResponseWriter, r *http.Request) {
 	viewer, _, library, ok := i.playlistLibrary(r)
 	if !ok {
@@ -63,7 +59,7 @@ func (i *instance) playlists(w http.ResponseWriter, r *http.Request) {
 	}
 	items := make([]any, 0, len(page.Items))
 	for _, playlist := range page.Items {
-		items = append(items, siloPlaylistHeader(playlist))
+		items = append(items, map[string]any{"id": ids.RatingKeyGUID(playlist.Key), "name": playlist.Title, "count": len(playlist.Items), "smart": playlist.Smart})
 	}
 	reply(w, http.StatusOK, map[string]any{"playlists": items})
 }
@@ -74,14 +70,18 @@ func (i *instance) playlist(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if reader, ok := library.(interface {
-		PlaylistHeader(context.Context, *frontend.Viewer, frontend.RatingKey) (*frontend.Playlist, error)
+		PlaylistSummary(context.Context, *frontend.Viewer, frontend.RatingKey) (*frontend.Playlist, error)
 	}); ok {
-		playlist, err := reader.PlaylistHeader(r.Context(), viewer, key)
-		if err != nil {
-			writeSiloPlaylistError(w, err)
+		playlist, err := reader.PlaylistSummary(r.Context(), viewer, key)
+		if errors.Is(err, frontend.ErrNotFound) {
+			http.NotFound(w, r)
 			return
 		}
-		reply(w, http.StatusOK, siloPlaylistHeader(*playlist))
+		if err != nil {
+			http.Error(w, "Unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		writePlaylistSummary(w, playlist)
 		return
 	}
 	page, err := library.Playlists(r.Context(), viewer, frontend.PageQuery{Limit: 500})
@@ -91,11 +91,15 @@ func (i *instance) playlist(w http.ResponseWriter, r *http.Request) {
 	}
 	for _, playlist := range page.Items {
 		if playlist.Key == key {
-			reply(w, http.StatusOK, siloPlaylistHeader(playlist))
+			writePlaylistSummary(w, &playlist)
 			return
 		}
 	}
 	http.NotFound(w, r)
+}
+
+func writePlaylistSummary(w http.ResponseWriter, playlist *frontend.Playlist) {
+	reply(w, http.StatusOK, map[string]any{"id": ids.RatingKeyGUID(playlist.Key), "name": playlist.Title, "count": len(playlist.Items), "smart": playlist.Smart})
 }
 
 func (i *instance) createPlaylist(w http.ResponseWriter, r *http.Request) {
@@ -126,7 +130,7 @@ func (i *instance) createPlaylist(w http.ResponseWriter, r *http.Request) {
 		writeSiloPlaylistError(w, err)
 		return
 	}
-	reply(w, http.StatusOK, siloPlaylistHeader(*playlist))
+	reply(w, http.StatusOK, map[string]any{"id": ids.RatingKeyGUID(playlist.Key), "name": playlist.Title, "count": len(playlist.Items), "smart": playlist.Smart})
 }
 
 func (i *instance) deletePlaylist(w http.ResponseWriter, r *http.Request) {
@@ -146,6 +150,7 @@ func (i *instance) playlistItems(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	r = r.WithContext(frontend.WithRequestMemo(r.Context()))
 	page, err := i.host.Experience.Children(r.Context(), viewer, device(r), key, frontend.ItemQuery{Limit: 500})
 	if err != nil {
 		writeSiloPlaylistError(w, err)
@@ -160,13 +165,59 @@ func (i *instance) playlistItems(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Unavailable", http.StatusServiceUnavailable)
 		return
 	}
+	artwork := i.playlistArtwork(r, token, page.Items)
 	items := make([]any, 0, len(page.Items))
 	for _, title := range page.Items {
 		item := titleDTO(title, states[title.Key])
-		i.artwork(r, viewer, token, title.Key, item)
+		if signed, ok := artwork[title.Key]; ok {
+			i.paintCatalogArtwork(r, signed, item)
+			var backdrops []string
+			for _, grant := range signed {
+				if grant.Image.Kind == frontend.ImageBackdrop && grant.Secret != "" {
+					backdrops = append(backdrops, siloImageURL(r, i.pathPrefix(r)+"/api/v2/images/"+grant.Secret, grant.Image.Kind))
+				}
+			}
+			if len(backdrops) != 0 {
+				item["backdrop_urls"] = backdrops
+			}
+		} else {
+			i.artwork(r, viewer, token, title.Key, item)
+		}
 		items = append(items, item)
 	}
 	reply(w, http.StatusOK, map[string]any{"items": items, "page": map[string]any{"has_more": page.Total > len(page.Items), "next_cursor": nil}})
+}
+
+func (i *instance) playlistArtwork(r *http.Request, token string, titles []frontend.Title) map[frontend.RatingKey][]frontend.GrantedImage {
+	signer, ok := i.host.ImageGrants.(frontend.ImagePageSigner)
+	if !ok {
+		return nil
+	}
+	// Episodes carry additional parent artwork and still provenance. Retain
+	// their detail projection when the page signer cannot supply those.
+	var cards []frontend.Title
+	for _, title := range titles {
+		if title.Type != frontend.TypeEpisode {
+			cards = append(cards, title)
+		}
+	}
+	out := make(map[frontend.RatingKey][]frontend.GrantedImage, len(cards))
+	const batchSize = 50
+	for start := 0; start < len(cards); start += batchSize {
+		images, err := signer.SignPage(r.Context(), frontend.ImagePageRequest{
+			Credential: token, Device: device(r), Titles: cards[start:min(start+batchSize, len(cards))],
+			Kinds: []string{frontend.ImagePoster, frontend.ImageBackdrop, frontend.ImageLogo}, IncludeVariants: true,
+		})
+		if err != nil {
+			continue
+		}
+		for _, item := range images {
+			if item.Authoritative {
+				out[item.Item] = item.Images
+			}
+		}
+	}
+	return out
 }
 
 func (i *instance) addPlaylistItems(w http.ResponseWriter, r *http.Request) {

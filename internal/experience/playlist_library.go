@@ -58,27 +58,33 @@ func (s *Service) Playlists(ctx context.Context, viewer *core.Viewer, q frontend
 	return frontend.PlaylistPage{Items: out, Total: len(owned)}, nil
 }
 
-// PlaylistHeader returns one viewer-owned playlist with the same visible
-// membership used for playlist listings.
-func (s *Service) PlaylistHeader(ctx context.Context, viewer *core.Viewer, key core.RatingKey) (*core.Playlist, error) {
+// PlaylistSummary reads the same visible membership as Playlists for one
+// viewer-owned playlist, without loading unrelated playlists.
+func (s *Service) PlaylistSummary(ctx context.Context, viewer *core.Viewer, key core.RatingKey) (*core.Playlist, error) {
 	ctx = core.WithCatalogViewer(ctx, viewer)
 	v, err := s.viewer(ctx, viewer)
 	if err != nil {
 		return nil, err
 	}
-	playlist, err := s.ownedPlaylist(ctx, v, key)
+	if s.d.Playlists == nil || key.Kind() != core.KindPlaylist {
+		return nil, core.ErrNotFound
+	}
+	playlist, err := s.d.Playlists.Get(ctx, v.ID, key)
 	if err != nil {
 		return nil, err
 	}
-	titles, err := s.loadPlaylistTitles(ctx, v, playlist.Items, true)
+	if playlist == nil || playlist.UserID != v.ID || playlist.Key != key {
+		return nil, core.ErrNotFound
+	}
+	visible, err := s.loadPlaylistTitles(ctx, v, playlist.Items, true)
 	if err != nil {
 		return nil, err
 	}
-	header := *playlist
-	header.Items, _ = playlistVisibleEntries(playlist.Items, titles)
-	header.Audio = audioPlaylist(header.Items, titles)
-	header.ItemIDs = nil
-	return &header, nil
+	summary := *playlist
+	summary.Items, _ = playlistVisibleEntries(playlist.Items, visible)
+	summary.Audio = audioPlaylist(summary.Items, visible)
+	summary.ItemIDs = nil
+	return &summary, nil
 }
 
 func audioPlaylist(keys []core.RatingKey, titles map[core.RatingKey]core.Title) bool {

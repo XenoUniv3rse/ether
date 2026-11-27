@@ -22,10 +22,27 @@ import (
 
 const perfRemotePlugin = "community.example.matrix-remote"
 
-func seedPerfRemotePlugin(ctx context.Context, tx *sql.Tx, now int64) error {
-	const manifest = `{"id":"community.example.matrix-remote","name":"Performance fixture","version":"1.0.0","ether":{"protocol":1,"kind":"tool","runtime":{"kind":"remote"},"permissions":{"catalog":"read","viewers":{"identity":"granted_viewers","watch_history":"granted_viewers"}}}}`
+func seedPerfRemotePlugin(ctx context.Context, tx *sql.Tx, now int64, exerciseHost bool) error {
+	const hostManifest = `{
+		"id":"community.example.matrix-remote","name":"Performance fixture","version":"1.0.0",
+		"ether":{"protocol":1,"kind":"content","runtime":{"kind":"remote"},
+			"capabilities":["catalog_provider","poster_badges","events"],
+			"permissions":{"catalog":"read","collections":"write","secrets":["fixture_secret"],"viewers":{"identity":"granted_viewers","watch_history":"granted_viewers","write_watch_state":"granted_viewers"}},
+			"contributes":{
+				"posterBadges":[{"key":"fixture","label":"Fixture badges"}],
+				"events":{"publish":[{"key":"matrix.finished","label":"Fixture event","version":1}]},
+				"mediaKinds":[{"key":"music","label":"Fixture remote kind","media":"music","library":{"name":"Fixture remote kind"},
+					"levels":[{"key":"track","label":"Track","role":"track","playable":true}],"sync":{"mode":"push"}}]
+			}
+		}
+	}`
+	kind := "tool"
+	manifest := `{"id":"community.example.matrix-remote","name":"Performance fixture","version":"1.0.0","ether":{"protocol":1,"kind":"tool","runtime":{"kind":"remote"},"permissions":{"catalog":"read","viewers":{"identity":"granted_viewers","watch_history":"granted_viewers"}}}}`
+	if exerciseHost {
+		kind, manifest = "content", hostManifest
+	}
 	_, err := tx.ExecContext(ctx, `INSERT INTO plugins_installed(id,name,version,kind,manifest,source_kind,installed_at,updated_at)
-		VALUES(?, 'Performance fixture', '1.0.0', 'tool', ?, 'studio', ?,?)`, perfRemotePlugin, manifest, now, now)
+		VALUES(?, 'Performance fixture', '1.0.0', ?, ?, 'studio', ?,?)`, perfRemotePlugin, kind, manifest, now, now)
 	if err != nil {
 		return err
 	}
@@ -176,32 +193,41 @@ func (fixture perfMusicFixture) install(ctx context.Context, a *App, viewer *per
 	return err
 }
 
-func installPerfMatrixVelaCatalogue(ctx context.Context, a *App, viewer perfharness.Viewer) error {
+func installPerfMatrixVelaCatalogue(ctx context.Context, a *App, viewer perfharness.Viewer, artwork []byte) error {
 	const manifest = `{
 		"id":"community.example.matrixcatalogue","name":"Matrix Catalogue","version":"1.0.0",
 		"ether":{
 			"protocol":1,"kind":"content","summary":"Synthetic Vela catalogue",
 			"runtime":{"kind":"hosted","entry":"plugin.js"},
-			"capabilities":["catalog_provider","kind_resolver"],
-			"contributes":{"mediaKinds":[{
+			"capabilities":["catalog_provider","kind_resolver","screens"],
+			"contributes":{"screens":[{"id":"matrix-fixture","title":"Matrix preview","pages":{"index":"screens/index.json"}}],"mediaKinds":[{
 				"key":"music","label":"Fixture Music","media":"music",
-				"library":{"name":"Matrix Catalogue"},
+				"library":{"name":"Matrix Catalogue","tabs":[{"key":"fixture-live","label":"Live","kind":"live"}]},
 				"levels":[{"key":"track","label":"Track","role":"track","playable":true}],
 				"fields":[{"key":"genre","label":"Genre","type":"string","indexed":true},
 				          {"key":"contentRating","label":"Content rating","type":"string"}],
 				"browse":{"sorts":["title"],"facets":["genre"],"search":true},
-				"sync":{"mode":"push"},"related":{"continuation":true}
+				"sync":{"mode":"push"},"related":{"continuation":true},"lyrics":true
 			}]}
 		}
 	}`
+	const document = `{"schema":1,"kind":"screen","renderer":19,"sources":{"viewer":{"from":"viewer"}},"tree":{"type":"image","src":"asset:assets/cover.jpg"}}`
 	const script = `function handle(req) {
+		if (req.path === "/ether/v1/kinds/music/live") {
+			return {status:200, body:{items:[{id:"fixture-radio",title:"Matrix fixture radio",live:true}]}};
+		}
+		if (req.path === "/ether/v1/kinds/music/lyrics") {
+			return {status:200, body:{plainLyrics:"Synthetic words for the matrix fixture"}};
+		}
 		if (req.path === "/ether/v1/kinds/music/related") {
 			return {status:200, body:{items:[{id:"track-2",level:"track",title:"Fixture Track 2",playable:true,fields:{genre:"Folk",contentRating:"G"}}]}};
 		}
 		return {status:200, body:{status:"ok"}};
 	}`
 	mgr := a.pluginsRT.mgr
-	preview, err := mgr.PreviewInstall(ctx, plugins.Source{Kind: "studio", Manifest: []byte(manifest), Files: map[string][]byte{"plugin.js": []byte(script)}})
+	preview, err := mgr.PreviewInstall(ctx, plugins.Source{Kind: "studio", Manifest: []byte(manifest), Files: map[string][]byte{
+		"plugin.js": []byte(script), "screens/index.json": []byte(document), "assets/cover.jpg": artwork,
+	}})
 	if err != nil {
 		return err
 	}
@@ -210,8 +236,8 @@ func installPerfMatrixVelaCatalogue(ctx context.Context, a *App, viewer perfharn
 		return err
 	}
 	items := []core.KindItem{
-		{ID: "track-1", Level: "track", Title: "Fixture Track 1", Playable: true, Fields: map[string]json.RawMessage{"genre": json.RawMessage(`"Folk"`), "contentRating": json.RawMessage(`"G"`)}},
-		{ID: "track-2", Level: "track", Title: "Fixture Track 2", Playable: true, Fields: map[string]json.RawMessage{"genre": json.RawMessage(`"Folk"`), "contentRating": json.RawMessage(`"G"`)}},
+		{ID: "track-1", Level: "track", Title: "Fixture soundtrack 1", Playable: true, Released: 1577836800, Recording: "isrc:USAAA2600001", Fields: map[string]json.RawMessage{"genre": json.RawMessage(`"Drama"`), "contentRating": json.RawMessage(`"G"`)}},
+		{ID: "track-2", Level: "track", Title: "Fixture soundtrack 2", Playable: true, Released: 1577836800, Recording: "isrc:USAAA2600001", Fields: map[string]json.RawMessage{"genre": json.RawMessage(`"Drama"`), "contentRating": json.RawMessage(`"G"`)}},
 	}
 	if _, err := a.pluginsRT.pluginitems.UpsertItems(ctx, rec.ID, "music", items); err != nil {
 		return err
@@ -276,4 +302,55 @@ func installPerfMatrixSports(ctx context.Context, a *App) error {
 	}
 	a.liveEvents.SyncFeeds(ctx)
 	return nil
+}
+
+func installPerfMatrixMediaBrowserMusic(ctx context.Context, a *App, viewer perfharness.Viewer) error {
+	const manifest = `{
+		"id":"community.example.matrixalbums","name":"Matrix albums","version":"1.0.0",
+		"ether":{"protocol":1,"kind":"content","summary":"Synthetic artists and lyrics","runtime":{"kind":"hosted","entry":"plugin.js"},
+		"capabilities":["catalog_provider","kind_resolver"],"contributes":{"mediaKinds":[{
+			"key":"music","label":"Fixture albums","media":"music","library":{"name":"Matrix Albums"},
+			"levels":[{"key":"artist","label":"Artist","role":"artist","container":true},
+				{"key":"track","label":"Track","parent":"artist","role":"track","playable":true}],
+			"present":{"mediaBrowser":{"collectionType":"music","itemTypes":{"artist":"MusicArtist","track":"Audio"}}},
+			"fields":[{"key":"contentRating","label":"Content rating","type":"string"},{"key":"genre","label":"Genre","type":"string"}],
+			"browse":{"sorts":["title"],"search":true},"sync":{"mode":"push"},"lyrics":true
+		}]}}
+	}`
+	const script = `function handle(req) {
+		if (req.path === "/ether/v1/kinds/music/lyrics") {
+			return {status:200, body:{syncedLyrics:"[00:01.00]Synthetic words for the matrix fixture"}};
+		}
+		return {status:200, body:{status:"ok"}};
+	}`
+	mgr := a.pluginsRT.mgr
+	preview, err := mgr.PreviewInstall(ctx, plugins.Source{Kind: "studio", Manifest: []byte(manifest), Files: map[string][]byte{"plugin.js": []byte(script)}})
+	if err != nil {
+		return err
+	}
+	rec, err := mgr.Install(ctx, preview, plugins.InstallOptions{AcceptAddedPermissions: true})
+	if err != nil {
+		return err
+	}
+	fields := map[string]json.RawMessage{"contentRating": json.RawMessage(`"G"`), "genre": json.RawMessage(`"Drama"`)}
+	items := []core.KindItem{
+		{ID: "artist", Level: "artist", Title: "Matrix artist", Released: 1577836800, Fields: fields},
+		{ID: "song", Level: "track", ParentID: "artist", Title: "Matrix song", Playable: true, Released: 1577836800, Fields: fields},
+	}
+	if _, err := a.pluginsRT.pluginitems.UpsertItems(ctx, rec.ID, "music", items); err != nil {
+		return err
+	}
+	if !viewer.Restricted {
+		return nil
+	}
+	kind, err := a.pluginsRT.pluginitems.GetKind(ctx, rec.ID, "music")
+	if err != nil {
+		return err
+	}
+	u, err := a.users.ActiveUser(ctx, viewer.ID)
+	if err != nil {
+		return err
+	}
+	u.AllowedLibraries = append(u.AllowedLibraries, kind.LibraryID)
+	return a.users.UpdateUser(ctx, *u)
 }

@@ -151,6 +151,9 @@ func (r *Runner) session(v Viewer, c Client) *session {
 			"username": v.Username, "password": Password, "stremio": queryEscape(v.Stremio),
 			"ownerToken": r.owner.PlexToken, "viewerId": strconv.FormatInt(v.ID, 10),
 			"xtreamUser": frontend.XtreamUsername(v.Xtream), "xtreamPass": url.QueryEscape(v.Xtream), "mcp": v.MCP,
+			"mbWebCode":             v.MBWebCode,
+			"consoleOwnerQuickCode": v.ConsoleOwnerQuickCode, "consolePortalQuickCode": v.ConsolePortalQuickCode,
+			"consoleFixtureURL": v.ConsoleFixtureURL, "consoleDefinition": v.ConsoleDefinition,
 			"subsonicUser": url.QueryEscape(v.SubsonicUser), "subsonicPass": url.QueryEscape(v.SubsonicPass),
 		}}
 		r.sessions[key] = s
@@ -185,8 +188,12 @@ func (r *Runner) do(ctx context.Context, phase string, c Client, s *session, st 
 	r.mu.Lock()
 	s.vars["now"] = strconv.FormatInt(now.Unix(), 10)
 	s.vars["now3h"] = strconv.FormatInt(now.Add(3*time.Hour).Unix(), 10)
-	s.vars["guideFrom"] = url.QueryEscape(now.UTC().Truncate(time.Hour).Format(time.RFC3339))
-	s.vars["guideUntil"] = url.QueryEscape(now.UTC().Truncate(time.Hour).Add(3 * time.Hour).Format(time.RFC3339))
+	guideFrom := now.UTC().Truncate(time.Hour)
+	guideUntil := guideFrom.Add(3 * time.Hour)
+	s.vars["guideWindowFrom"] = guideFrom.Format(time.RFC3339)
+	s.vars["guideWindowUntil"] = guideFrom.Add(30 * time.Minute).Format(time.RFC3339)
+	s.vars["guideFrom"] = url.QueryEscape(s.vars["guideWindowFrom"])
+	s.vars["guideUntil"] = url.QueryEscape(guideUntil.Format(time.RFC3339))
 	vars := make(map[string]string, len(s.vars))
 	for k, v := range s.vars {
 		vars[k] = v

@@ -5,9 +5,15 @@ import (
 	"net/http"
 	"net/url"
 	"slices"
+	"strings"
+
+	"github.com/braedonsaunders/ether/internal/core"
 )
 
 func MatrixPluginHost() Client {
+	const badge = `{"entries":[{"title":{"tmdb":106,"type":"movie"},"labels":["Fixture"]}]}`
+	const blob = "matrix fixture blob"
+	library := url.PathEscape(core.PluginLibraryKey("community.example.matrix-remote", "music"))
 	return Client{Name: "remote plugin", Surface: "plugin-host", Prefix: "/ether/plugin-host", Headers: func(s *session) http.Header {
 		h := make(http.Header)
 		h.Set("Authorization", "Bearer "+s.Viewer.PluginHost)
@@ -24,7 +30,44 @@ func MatrixPluginHost() Client {
 		{Name: "KV list", Class: classBrowse, Path: "/kv?limit=20"},
 		{Name: "KV usage", Class: classStatic, Path: "/kv-usage"},
 		{Name: "KV delete", Class: classState, Method: http.MethodDelete, Path: "/kv/fixture"},
+		{Name: "badge usage", Class: classStatic, Path: "/badges/usage"},
+		{Name: "badge usage alias", Class: classStatic, Path: "/badges-usage"},
+		{Name: "badge put", Class: classState, Method: http.MethodPut, Path: "/badges/fixture", Body: badge},
+		{Name: "badge post", Class: classState, Method: http.MethodPost, Path: "/badges/fixture", Body: badge},
+		{Name: "badge clear", Class: classState, Method: http.MethodPost, Path: "/badges/fixture/clear"},
+		{Name: "badge set", Class: classState, Method: http.MethodPost, Path: "/badges/fixture/set", Body: badge},
+		{Name: "badge delete", Class: classState, Method: http.MethodDelete, Path: "/badges/fixture"},
+		{Name: "secret set", Class: classState, Method: http.MethodPut, Path: "/secrets/fixture_secret", Body: `{"value":"synthetic","ttlSec":60}`},
+		{Name: "secret delete", Class: classState, Method: http.MethodDelete, Path: "/secrets/fixture_secret"},
+		{Name: "kind upsert", Class: classState, Method: http.MethodPost, Path: "/kinds/music/upsert", Body: `{"items":[{"id":"fixture-track","level":"track","title":"Fixture track","playable":true}]}`},
+		{Name: "kind items", Class: classBrowse, Path: "/kinds/music/items?limit=24"},
+		{Name: "mark fixture track watched", Class: classState, Method: http.MethodPost, Path: "/viewers/watch-state", Body: `{"viewerId":{viewerId},"titleId":"pk:community.example.matrix-remote:music:fixture-track","watched":true}`},
+		{Name: "clear fixture track watched", Class: classState, Method: http.MethodPost, Path: "/viewers/watch-state", Body: `{"viewerId":{viewerId},"titleId":"pk:community.example.matrix-remote:music:fixture-track","watched":false}`},
+		{Name: "kind delete", Class: classState, Method: http.MethodPost, Path: "/kinds/music/delete", Body: `{"ids":["fixture-track"]}`},
+		{Name: "cache put", Class: classState, Method: http.MethodPut, Path: "/cache/" + library + "/matrix.txt", Body: blob, Discover: discoverMatrixPluginBlob},
+		{Name: "cache read", Class: classDetail, Path: "/cache/{pluginBlob}", Accept: func(body []byte) bool { return string(body) == blob }},
+		{Name: "cache post", Class: classState, Method: http.MethodPost, Path: "/cache/" + library + "?name=matrix.txt", Body: blob, Discover: discoverMatrixPluginBlob},
+		{Name: "cache stat", Class: classState, Method: http.MethodPost, Path: "/data/cache.stat", Body: `["{pluginBlobRef}"]`},
+		{Name: "cache delete", Class: classState, Method: http.MethodDelete, Path: "/cache/{pluginBlob}"},
+		{Name: "publish fixture event", Class: classState, Method: http.MethodPost, Path: "/events/publish", Body: `{"key":"matrix.finished","payload":{}}`},
+		{Name: "fixture owner notice", Class: classState, Method: http.MethodPost, Path: "/notify", Body: `{"text":"Matrix plugin fixture finished"}`},
+		{Name: "fixture collection upsert", Class: classState, Method: http.MethodPost, Path: "/collections/upsert", Body: `{"id":"perf-matrix","name":"Matrix plugin fixture","mediaType":"movie","items":["tmdb:106"]}`},
+		{Name: "log entry", Class: classState, Method: http.MethodPost, Path: "/log", Body: `{"level":"info","message":"Matrix fixture"}`},
 	}}
+}
+
+func discoverMatrixPluginBlob(vars map[string]string, body []byte) {
+	var result struct {
+		Blob string `json:"blob"`
+	}
+	if json.Unmarshal(body, &result) == nil && result.Blob != "" {
+		vars["pluginBlobRef"] = result.Blob
+		segments := strings.Split(result.Blob, "/")
+		for i, segment := range segments {
+			segments[i] = url.PathEscape(segment)
+		}
+		vars["pluginBlob"] = strings.Join(segments, "/")
+	}
 }
 
 func MatrixSubsonic(methods []string) Client {

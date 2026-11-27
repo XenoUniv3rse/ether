@@ -195,6 +195,10 @@ func onairUpload(path string) bool {
 	if path == "/api/onair/assets" {
 		return true
 	}
+	if rest, ok := strings.CutPrefix(path, "/api/onair/assets/"); ok {
+		id, tail, ok := strings.Cut(rest, "/")
+		return ok && id != "" && tail == "replace"
+	}
 	rest, ok := strings.CutPrefix(path, "/api/onair/reels/")
 	if !ok {
 		return false

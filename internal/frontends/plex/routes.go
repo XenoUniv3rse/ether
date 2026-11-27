@@ -75,6 +75,10 @@ func (s *Server) routeExists(r *http.Request) bool {
 }
 
 func (s *Server) routes() chi.Router {
+	return s.routesWithWildcardObserver(nil)
+}
+
+func (s *Server) routesWithWildcardObserver(observe func(string)) chi.Router {
 	r := chi.NewRouter()
 	r.Use(s.recoverer, s.commonHeaders, s.parse, s.requestLog)
 	r.NotFound(s.handleUnknown)
@@ -95,7 +99,12 @@ func (s *Server) routes() chi.Router {
 			r.Get(pattern, handler)
 			r.Head(pattern, handler)
 		}
-		any := func(pattern string, h http.HandlerFunc) { r.HandleFunc(pattern, h) }
+		any := func(pattern string, h http.HandlerFunc) {
+			if observe != nil {
+				observe(pattern)
+			}
+			r.HandleFunc(pattern, h)
+		}
 		return get, any
 	}
 

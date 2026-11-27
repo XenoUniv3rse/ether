@@ -59,6 +59,7 @@ type frontendRuntime struct {
 	control        *frontendControl
 	events         *sessions.EventBus
 	broker         *sessions.Broker
+	pollLimiter    *identity.LoginLimiter
 	stateUnsub     func()
 	artworkWait    func()
 	ctx            context.Context
@@ -117,7 +118,7 @@ func newFrontendRuntime(a *App, cfg config.Config) (*frontendRuntime, error) {
 		return nil, err
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	r := &frontendRuntime{app: a, ctx: ctx, cancel: cancel, events: a.sessionEvents, consoleOnMain: true, discovery: a.gdm, newDiscovery: func() plexDiscovery { return a.newGDMResponder() }}
+	r := &frontendRuntime{app: a, ctx: ctx, cancel: cancel, events: a.sessionEvents, consoleOnMain: true, pollLimiter: poll, discovery: a.gdm, newDiscovery: func() plexDiscovery { return a.newGDMResponder() }}
 	initialized := false
 	defer func() {
 		if !initialized {

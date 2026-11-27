@@ -38,6 +38,7 @@ func (a *App) pruners() []pruner {
 			ps = append(ps, pruner{name, fn})
 		}
 	}
+	add("auth_delegations", a.users != nil, func(ctx context.Context) (int64, error) { return a.users.PruneDelegations(ctx) })
 	add("availability", a.availability != nil, func(ctx context.Context) (int64, error) { return a.availability.Prune(ctx) })
 	add("catalog", a.catalog != nil, func(ctx context.Context) (int64, error) { return a.catalog.Prune(ctx) })
 	add("markers", a.markers != nil, func(ctx context.Context) (int64, error) { return a.markers.Prune(ctx) })
@@ -97,6 +98,29 @@ func (a *App) checkpointWAL(ctx context.Context) {
 	store.RunCheckpointer(ctx, a.db, nil, func(err error) {
 		a.log.Warn("wal checkpoint", "err", err)
 	})
+}
+
+// maintainPollBuckets sweeps expired authentication polling buckets off
+// request paths. A failed batch can be retried without modifying admission.
+func (a *App) maintainPollBuckets(ctx context.Context) {
+	if a.frontends == nil || a.frontends.pollLimiter == nil {
+		return
+	}
+	const batch = 1000
+	for schedule.Wait(ctx, time.Now, time.Minute) {
+		for ctx.Err() == nil {
+			n, err := a.frontends.pollLimiter.Cleanup(ctx, batch)
+			if err != nil {
+				if ctx.Err() == nil {
+					a.log.Warn("poll limiter maintenance", "err", err)
+				}
+				break
+			}
+			if n < batch {
+				break
+			}
+		}
+	}
 }
 
 // maintainDB prunes derived data and runs store.Maintain daily until ctx

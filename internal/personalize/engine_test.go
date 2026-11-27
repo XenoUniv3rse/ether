@@ -303,6 +303,28 @@ func TestPreviewMatchesHubs(t *testing.T) {
 	}
 }
 
+func TestColdTasteOverrideBuildsBeforeFirstHome(t *testing.T) {
+	h := newHarness(t, nil)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	sciFiFan(h, 1)
+	u := core.User{ID: 1}
+	overrides := []core.TasteOverride{{Kind: "genre", Value: "Science Fiction", Weight: -1}}
+
+	taste, err := h.e.SetTasteOverrides(ctx, &u, overrides)
+	if err != nil || len(taste.Overrides) != 1 || taste.Overrides[0] != overrides[0] {
+		t.Fatalf("corrected taste: %+v, %v", taste, err)
+	}
+	model := h.e.modelFor(ctx, &u, false)
+	if model == nil || model.generic || model.user.ID != u.ID {
+		t.Fatalf("first Home used the wrong model: %+v", model)
+	}
+	corrections := model.taste.Profile(nil).Overrides
+	if len(corrections) != 1 || corrections[0] != overrides[0] {
+		t.Fatalf("first Home used the wrong corrections: %+v", corrections)
+	}
+}
+
 func TestOverridesAndLayoutPersist(t *testing.T) {
 	h := newHarness(t, nil)
 	ctx := context.Background()

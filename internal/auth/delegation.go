@@ -32,13 +32,10 @@ var _ core.DelegationAuth = (*Service)(nil)
 // including when another cluster node receives the credential.
 func (s *Service) IssueDelegation(ctx context.Context, userID int64) (string, error) {
 	now := s.o.Now()
-	if _, err := s.db.ExecContext(ctx, `DELETE FROM auth_delegations WHERE expires_at<=?`, now.Unix()); err != nil {
-		return "", err
-	}
 	token := delegationPrefix + rand.Text()
 	result, err := s.db.ExecContext(ctx, `INSERT INTO auth_delegations(token_hash,user_id,expires_at)
  SELECT ?,id,? FROM auth_users WHERE id=? AND active=1 AND origin<>'dlna_guest'
- AND (SELECT COUNT(*) FROM auth_delegations WHERE user_id=?)<64`, HashToken(token), now.Add(delegationTTL).Unix(), userID, userID)
+ AND (SELECT COUNT(*) FROM auth_delegations WHERE user_id=? AND expires_at>?)<64`, HashToken(token), now.Add(delegationTTL).Unix(), userID, userID, now.Unix())
 	if err != nil {
 		return "", err
 	}
@@ -50,6 +47,15 @@ func (s *Service) IssueDelegation(ctx context.Context, userID int64) (string, er
 		return "", core.ErrUnauthorized
 	}
 	return token, nil
+}
+
+// PruneDelegations removes credentials that authentication already rejects.
+func (s *Service) PruneDelegations(ctx context.Context) (int64, error) {
+	result, err := s.db.ExecContext(ctx, `DELETE FROM auth_delegations WHERE expires_at<=?`, s.o.Now().Unix())
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 func (s *Service) authenticateDelegation(ctx context.Context, token string) (*core.User, time.Time, error) {

@@ -960,6 +960,7 @@ func (a *App) Run(ctx context.Context) error {
 	background.start(func() { a.housekeeping(ctx) })
 	background.start(func() { a.checkpointWAL(ctx) })
 	background.start(func() { a.cluster.RunAsLeader(ctx, "database maintenance", a.maintainDB) })
+	background.start(func() { a.cluster.RunAsLeader(ctx, "poll limiter maintenance", a.maintainPollBuckets) })
 	background.start(func() { a.stats.Run(ctx) })
 	if a.hostResources != nil {
 		background.start(func() { a.hostResources.Run(ctx) })

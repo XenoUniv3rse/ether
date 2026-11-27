@@ -668,6 +668,22 @@ func (e *Engine) SetTasteOverrides(ctx context.Context, user *core.User, os []co
 		return nil, err
 	}
 	e.notify("overrides:" + strconv.FormatInt(user.ID, 10))
+	e.mu.Lock()
+	cold := e.models[user.ID] == nil
+	if cold {
+		e.users[user.ID] = *user
+	}
+	e.mu.Unlock()
+	if cold {
+		// The response contains taste evidence, not Home rows. Build those
+		// rows on the model worker and let the first Home use that flight.
+		e.requestModel(user.ID, true)
+		taste, _, err := e.buildTaste(ctx, *user)
+		if err != nil {
+			return nil, err
+		}
+		return taste.Profile(e.opts.ImageURL), nil
+	}
 	if err := e.Rebuild(ctx, user); err != nil {
 		return nil, err
 	}

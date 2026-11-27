@@ -10,11 +10,12 @@ import (
 	"net/url"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 )
 
-func MatrixClients(live bool) []Client {
+func MatrixClients(live, availabilityMonitor bool) []Client {
 	clients := Clients()
 	for i := range clients {
 		if clients[i].Surface == "plex" {
@@ -32,11 +33,14 @@ func MatrixClients(live bool) []Client {
 		}
 		switch clients[i].Name {
 		case "console":
-			addMatrixConsoleCoverage(&clients[i])
+			addMatrixConsoleCoverage(&clients[i], availabilityMonitor)
 		case "infuse-jellyfin", "emby-sdk":
-			addMatrixMediaBrowserCoverage(&clients[i])
+			addMatrixMediaBrowserCoverage(&clients[i], live)
 		case "plex-appletv":
 			addMatrixPlexCoverage(&clients[i])
+			if live {
+				addMatrixPlexLiveCoverage(&clients[i])
+			}
 			clients[i].Steps = append(clients[i].Steps,
 				Step{Name: "HEAD movies collections type=18", Class: classBrowse, Method: http.MethodHead, Path: "/library/sections/{movieSection}/all?type=18&X-Plex-Container-Start=0&X-Plex-Container-Size=50"},
 				Step{Name: "HEAD /hubs/search with query", Class: classSearch, Method: http.MethodHead, Path: "/hubs/search?query=star&limit=30"},
@@ -45,6 +49,8 @@ func MatrixClients(live bool) []Client {
 				Step{Name: "GET /library/all/top movies", Class: classBrowse, Path: "/library/all/top?type=1"},
 				Step{Name: "HEAD /library/all/top movies", Class: classBrowse, Method: http.MethodHead, Path: "/library/all/top?type=1"},
 			)
+		case "plex-appletv playback":
+			addMatrixPlexMutations(&clients[i])
 		case "xtream":
 			const auth = "?username={xtreamUser}&password={xtreamPass}"
 			for j := range clients[i].Steps {
@@ -53,11 +59,7 @@ func MatrixClients(live bool) []Client {
 				case "get_live_streams":
 					step.Discover = discoverRegexp("xtreamLive", xtreamStreamID)
 				case "get_vod_streams":
-					old := step.Discover
-					step.Discover = func(vars map[string]string, body []byte) {
-						old(vars, body)
-						discoverMatrixArtwork(vars, body, "xtreamCover", "/xtream/image/", "stream_icon")
-					}
+					step.Discover = discoverMatrixXtreamMovie
 				}
 			}
 			if live {
@@ -79,27 +81,7 @@ func MatrixClients(live bool) []Client {
 				cold, lineup,
 			)
 		case "silo-appletv":
-			clients[i].Steps = append(clients[i].Steps,
-				Step{Name: "read series subtitle preference", Class: classDetail, Path: "/api/v2/subtitle-prefs/{seriesId}", ExpectedStatus: http.StatusNotFound},
-				Step{Name: "set series subtitle preference", Class: classState, Method: http.MethodPut, Path: "/api/v2/subtitle-prefs/{seriesId}", Body: `{"subtitle_language":"en","subtitle_mode":"always"}`},
-				Step{Name: "clear series subtitle preference", Class: classState, Method: http.MethodDelete, Path: "/api/v2/subtitle-prefs/{seriesId}"},
-				Step{Name: "movie versions", Class: classDetail, Path: "/api/v2/catalog/items/{movieId}/versions"},
-				Step{Name: "create movie playlist", Class: classState, Method: http.MethodPost, Path: "/api/v2/playlists", Body: `{"name":"Matrix playback list","content_ids":["{movieId}"]}`, Discover: discoverMatrixObjectID("matrixSiloPlaylist")},
-				Step{Name: "read movie playlist", Class: classDetail, Path: "/api/v2/playlists/{matrixSiloPlaylist}"},
-				Step{Name: "read movie playlist items", Class: classDetail, Path: "/api/v2/playlists/{matrixSiloPlaylist}/items"},
-				Step{Name: "add movie playlist item", Class: classState, Method: http.MethodPost, Path: "/api/v2/playlists/{matrixSiloPlaylist}/items", Body: `{"content_ids":["{movieId}"]}`},
-				Step{Name: "move movie playlist item", Class: classState, Method: http.MethodPost, Path: "/api/v2/playlists/{matrixSiloPlaylist}/items/{movieId}/move", Body: `{"index":0}`},
-				Step{Name: "remove movie playlist item", Class: classState, Method: http.MethodDelete, Path: "/api/v2/playlists/{matrixSiloPlaylist}/items/{movieId}"},
-				Step{Name: "delete movie playlist", Class: classState, Method: http.MethodDelete, Path: "/api/v2/playlists/{matrixSiloPlaylist}"},
-				Step{Name: "read series audio preference", Class: classDetail, Path: "/api/v2/audio-prefs/{seriesId}", ExpectedStatus: http.StatusNotFound},
-				Step{Name: "mark movie not interested", Class: classState, Method: http.MethodPut, Path: "/api/v2/not-interested/{movieId}"},
-				Step{Name: "read movie not interested", Class: classDetail, Path: "/api/v2/not-interested/{movieId}"},
-				Step{Name: "clear movie not interested", Class: classState, Method: http.MethodDelete, Path: "/api/v2/not-interested/{movieId}"},
-				Step{Name: "set profile theme", Class: classState, Method: http.MethodPut, Path: "/api/v2/settings/values/ui.theme?scope=profile", Body: `{"value":"cobalt-studio"}`},
-				Step{Name: "clear profile theme", Class: classState, Method: http.MethodDelete, Path: "/api/v2/settings/values/ui.theme?scope=profile"},
-				Step{Name: "set series audio preference", Class: classState, Method: http.MethodPut, Path: "/api/v2/audio-prefs/{seriesId}", Body: `{"audio_language":"en"}`},
-				Step{Name: "clear series audio preference", Class: classState, Method: http.MethodDelete, Path: "/api/v2/audio-prefs/{seriesId}"},
-			)
+			addMatrixSiloCoverage(&clients[i])
 		case "stremio":
 			clients[i].Prefix = "/stremio"
 			for j := range clients[i].Steps {
@@ -131,14 +113,6 @@ func MatrixClients(live bool) []Client {
 				Step{Name: "recommendations rows", Class: classHome, Path: "/rows?limit=24"},
 				Step{Name: "movies page", Class: classBrowse, Path: "/libraries/{movieLibrary}/items?limit=48", Discover: discoverMatrixVelaID("velaMovie")},
 				Step{Name: "movie detail", Class: classDetail, Path: "/titles/{velaMovie}"},
-				Step{Name: "create movie playlist", Class: classState, Method: http.MethodPost, Path: "/playlists", Body: `{"idempotencyKey":"matrix-create-playlist","name":"Matrix playback list","titleIds":["{velaMovie}"]}`, Discover: discoverMatrixObjectID("matrixVelaPlaylist")},
-				Step{Name: "read movie playlist", Class: classDetail, Path: "/playlists/{matrixVelaPlaylist}", Discover: discoverMatrixVelaPlaylistEntry},
-				Step{Name: "rename movie playlist", Class: classState, Method: http.MethodPatch, Path: "/playlists/{matrixVelaPlaylist}", Body: `{"idempotencyKey":"matrix-rename-playlist","name":"Matrix playback list updated"}`},
-				Step{Name: "add movie playlist entry", Class: classState, Method: http.MethodPost, Path: "/playlists/{matrixVelaPlaylist}/entries", Body: `{"idempotencyKey":"matrix-add-playlist-entry","titleIds":["{velaMovie}"]}`},
-				Step{Name: "move movie playlist entry", Class: classState, Method: http.MethodPost, Path: "/playlists/{matrixVelaPlaylist}/entries/{matrixVelaPlaylistEntry}/move", Body: `{"idempotencyKey":"matrix-move-playlist-entry","afterEntryId":null}`},
-				Step{Name: "remove movie playlist entry", Class: classState, Method: http.MethodDelete, Path: "/playlists/{matrixVelaPlaylist}/entries/{matrixVelaPlaylistEntry}", Body: `{"idempotencyKey":"matrix-remove-playlist-entry"}`},
-				Step{Name: "delete movie playlist", Class: classState, Method: http.MethodDelete, Path: "/playlists/{matrixVelaPlaylist}", Body: `{"idempotencyKey":"matrix-delete-playlist"}`},
-				Step{Name: "movie playlist membership", Class: classDetail, Path: "/titles/{velaMovie}/playlists"},
 				Step{Name: "movie versions", Class: classDetail, Path: "/titles/{velaMovie}/versions"},
 				Step{Name: "download libraries", Class: classHome, OwnerOnly: true, Path: "/libraries", Discover: discoverVelaLibraries},
 				Step{Name: "download movies page", Class: classBrowse, OwnerOnly: true, Path: "/libraries/{movieLibrary}/items?limit=1", Discover: discoverMatrixVelaID("downloadVelaMovie")},
@@ -160,9 +134,10 @@ func MatrixClients(live bool) []Client {
 				Step{Name: "history recap", Class: classDetail, Path: "/history/recap?period=month"},
 				Step{Name: "recent", Class: classHome, Path: "/recent"},
 				Step{Name: "shows page", Class: classBrowse, Path: "/libraries/{seriesLibrary}/items?limit=48"},
-				Step{Name: "live channels", Class: classGuide, Path: "/live/channels"},
+				Step{Name: "live channels", Class: classGuide, Path: "/live/channels", Discover: discoverMatrixVelaID("velaChannel")},
 				Step{Name: "live guide", Class: classGuide, Path: "/live/guide?from={guideFrom}&until={guideUntil}&limit=100"},
 			)
+			addMatrixVelaCoverage(&clients[i])
 			if live {
 				headers := clients[i].Headers
 				clients[i].Headers = func(s *session) http.Header {
@@ -171,7 +146,9 @@ func MatrixClients(live bool) []Client {
 					return h
 				}
 				clients[i].Steps = append(clients[i].Steps,
+					Step{Name: "live guide window", Method: http.MethodPost, Class: classGuide, Path: "/live/guide/window", Body: `{"channelIds":["{velaChannel}"],"from":"{guideWindowFrom}","until":"{guideWindowUntil}"}`},
 					Step{Name: "sports overlay", Class: classDetail, Path: "/surfaces/matrixsports.scorebug/document"},
+					Step{Name: "enable sports overlay", Method: http.MethodPut, Class: classState, Path: "/surfaces/matrixsports.scorebug/setting", Body: `{"enabled":true}`},
 					Step{Name: "sports overlay data", Class: classDetail, Path: "/surfaces/matrixsports.scorebug/data?p.event=event%3Acommunity.example.matrixsports%3Asports%3Agame-0", Discover: discoverMatrixLiveTopic},
 					Step{Name: "live events stream", Class: classGuide, Path: "/live/stream?alerts=1&topic={overlayTopic}", Stream: time.Minute},
 				)
@@ -203,6 +180,45 @@ func discoverMatrixArtwork(vars map[string]string, body []byte, variable, prefix
 	}
 }
 
+func discoverMatrixXtreamMovie(vars map[string]string, body []byte) {
+	// Upcoming titles can appear in the lineup but cannot be opened. Pick a
+	// released listing with artwork and follow that same ID in both probes.
+	dec := json.NewDecoder(bytes.NewReader(body))
+	if token, err := dec.Token(); err != nil || token != json.Delim('[') {
+		return
+	}
+	now, err := strconv.ParseInt(vars["now"], 10, 64)
+	if err != nil {
+		return
+	}
+	delete(vars, "xtreamVod")
+	delete(vars, "xtreamCover")
+	for dec.More() {
+		var item struct {
+			ID       int64  `json:"stream_id"`
+			Released string `json:"release_date"`
+			Cover    string `json:"stream_icon"`
+		}
+		if dec.Decode(&item) != nil {
+			return
+		}
+		released, err := time.Parse(time.DateOnly, item.Released)
+		if err != nil || released.Unix() >= now || item.ID <= 0 {
+			continue
+		}
+		cover, err := url.Parse(item.Cover)
+		if err != nil {
+			continue
+		}
+		secret, ok := strings.CutPrefix(cover.Path, "/xtream/image/")
+		if ok && secret != "" && !strings.Contains(secret, "/") {
+			vars["xtreamVod"] = strconv.FormatInt(item.ID, 10)
+			vars["xtreamCover"] = url.PathEscape(secret)
+			return
+		}
+	}
+}
+
 func discoverMatrixStremioStream(vars map[string]string, body []byte) {
 	var result struct {
 		Streams []struct {
@@ -224,14 +240,22 @@ func discoverMatrixStremioStream(vars map[string]string, body []byte) {
 	}
 }
 
-func discoverMatrixObjectID(variable string) func(map[string]string, []byte) {
+func discoverMatrixID(variable string) func(map[string]string, []byte) {
 	return func(vars map[string]string, body []byte) {
-		var object struct {
-			ID string `json:"id"`
+		var item struct {
+			ID json.RawMessage `json:"id"`
 		}
-		if json.Unmarshal(body, &object) == nil && object.ID != "" {
-			vars[variable] = url.PathEscape(object.ID)
+		if json.Unmarshal(body, &item) != nil {
+			return
 		}
+		var id string
+		if err := json.Unmarshal(item.ID, &id); err != nil {
+			var number int64
+			if json.Unmarshal(item.ID, &number) == nil && number > 0 {
+				id = strconv.FormatInt(number, 10)
+			}
+		}
+		setOnce(vars, variable, url.PathEscape(id))
 	}
 }
 
@@ -251,17 +275,6 @@ func discoverMatrixVelaRow(vars map[string]string, body []byte) {
 			vars["matrixVelaRowCursor"] = url.QueryEscape(row.NextCursor)
 			break
 		}
-	}
-}
-
-func discoverMatrixVelaPlaylistEntry(vars map[string]string, body []byte) {
-	var page struct {
-		Items []struct {
-			EntryID string `json:"entryId"`
-		} `json:"items"`
-	}
-	if json.Unmarshal(body, &page) == nil && len(page.Items) > 0 && page.Items[0].EntryID != "" {
-		vars["matrixVelaPlaylistEntry"] = url.PathEscape(page.Items[0].EntryID)
 	}
 }
 
@@ -483,6 +496,11 @@ func allowedReadWrites(route string, rec TraceRecord) int64 {
 		switch {
 		case sql == lastSeen:
 			seenWrites = max(seenWrites, min(1, statement.Count))
+		case route == rec.Method+" /security/token" && rec.Surface == "plex" &&
+			strings.HasPrefix(sql, "INSERT INTO auth_delegations(token_hash,user_id,expires_at) SELECT ?,id,? FROM auth_users "):
+			// This read-shaped Plex API mints a credential whose digest must
+			// exist before another node can authenticate it.
+			writes += min(1, statement.Count)
 		case rec.Surface == "plex" && plexVariantAllocation.MatchString(sql):
 			writes += statement.Count
 		case rec.Surface == "plex" && rec.Method == http.MethodGet && plexWatchMutation(rec.Path, sql):

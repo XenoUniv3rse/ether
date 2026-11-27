@@ -44,24 +44,18 @@ type ViewerPurgeFunc func(ctx context.Context, tx *sql.Tx, viewerID int64) error
 // ViewerMergeFunc moves one viewer's data to another inside tx.
 type ViewerMergeFunc func(ctx context.Context, tx *sql.Tx, fromID, intoID int64) error
 
-type viewerPurge struct {
+type viewerChange struct {
 	component string
 	tables    []string
 	early     bool
-	fn        ViewerPurgeFunc
-}
-
-type viewerMerge struct {
-	component string
-	tables    []string
-	early     bool
-	fn        ViewerMergeFunc
+	match     string
+	apply     ViewerMergeFunc
 }
 
 var (
 	viewerMu      sync.Mutex
-	viewerPurges  []viewerPurge
-	viewerMerges  []viewerMerge
+	viewerPurges  []viewerChange
+	viewerMerges  []viewerChange
 	viewerTables  = map[string]string{} // table -> component
 	viewerExempts = map[string]string{} // table -> reason
 )
@@ -80,17 +74,22 @@ func claimViewerTables(component string, tables []string) {
 // that must be transformed rather than deleted (for example detaching a
 // shared collection from its creator).
 func RegisterViewerPurge(component string, tables []string, fn ViewerPurgeFunc) {
-	registerViewerPurge(component, tables, false, fn)
+	registerViewerPurge(component, tables, false, "", fn)
 }
 
-func registerViewerPurge(component string, tables []string, early bool, fn ViewerPurgeFunc) {
+func registerViewerPurge(component string, tables []string, early bool, match string, fn ViewerPurgeFunc) {
 	if fn == nil {
 		panic("store: RegisterViewerPurge requires a function")
 	}
 	viewerMu.Lock()
 	defer viewerMu.Unlock()
 	claimViewerTables(component, tables)
-	viewerPurges = append(viewerPurges, viewerPurge{component: component, tables: tables, early: early, fn: fn})
+	viewerPurges = append(viewerPurges, viewerChange{
+		component: component, tables: tables, early: early, match: match,
+		apply: func(ctx context.Context, tx *sql.Tx, viewerID, _ int64) error {
+			return fn(ctx, tx, viewerID)
+		},
+	})
 }
 
 // RegisterViewerMerge registers a custom merge for the named tables.
@@ -101,7 +100,7 @@ func RegisterViewerMerge(component string, tables []string, fn ViewerMergeFunc) 
 	viewerMu.Lock()
 	defer viewerMu.Unlock()
 	claimViewerTables(component, tables)
-	viewerMerges = append(viewerMerges, viewerMerge{component: component, tables: tables, fn: fn})
+	viewerMerges = append(viewerMerges, viewerChange{component: component, tables: tables, apply: fn})
 }
 
 // RegisterViewerTable registers the standard purge and merge for one table
@@ -122,7 +121,8 @@ func RegisterViewerTableEarly(component, table, column string, merge ViewerMerge
 
 func registerViewerTable(component, table, column string, merge ViewerMergeMode, early bool, conflictColumns []string) {
 	t, c := quoteIdent(table), quoteIdent(column)
-	registerViewerPurge(component, []string{table}, early, func(ctx context.Context, tx *sql.Tx, viewerID int64) error {
+	match := `SELECT 1 FROM ` + t + ` WHERE ` + c + `=?`
+	registerViewerPurge(component, []string{table}, early, match, func(ctx context.Context, tx *sql.Tx, viewerID int64) error {
 		_, err := tx.ExecContext(ctx, `DELETE FROM `+t+` WHERE `+c+`=?`, viewerID)
 		if err != nil {
 			return fmt.Errorf("purge %s: %w", table, err)
@@ -163,29 +163,13 @@ func registerViewerTable(component, table, column string, merge ViewerMergeMode,
 		}
 	}
 	viewerMu.Lock()
-	viewerMerges = append(viewerMerges, viewerMerge{component: component, tables: []string{table}, early: early, fn: fn})
+	viewerMerges = append(viewerMerges, viewerChange{component: component, tables: []string{table}, early: early, match: match, apply: fn})
 	viewerMu.Unlock()
 }
 
-func sortedPurges() []viewerPurge {
+func sortedViewerChanges(registry *[]viewerChange) []viewerChange {
 	viewerMu.Lock()
-	out := append([]viewerPurge(nil), viewerPurges...)
-	viewerMu.Unlock()
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].early != out[j].early {
-			return out[i].early
-		}
-		if out[i].component != out[j].component {
-			return out[i].component < out[j].component
-		}
-		return strings.Join(out[i].tables, "\x00") < strings.Join(out[j].tables, "\x00")
-	})
-	return out
-}
-
-func sortedMerges() []viewerMerge {
-	viewerMu.Lock()
-	out := append([]viewerMerge(nil), viewerMerges...)
+	out := append([]viewerChange(nil), (*registry)...)
 	viewerMu.Unlock()
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].early != out[j].early {
@@ -203,21 +187,69 @@ func sortedMerges() []viewerMerge {
 // registrations first. The caller deletes the auth_users row itself,
 // after PurgeViewer, so ON DELETE CASCADE remains a backstop.
 func PurgeViewer(ctx context.Context, tx *sql.Tx, viewerID int64) error {
-	for _, p := range sortedPurges() {
-		if err := p.fn(ctx, tx, viewerID); err != nil {
-			return fmt.Errorf("store: purge viewer (%s): %w", p.component, err)
-		}
-	}
-	return nil
+	return applyViewerChanges(ctx, tx, sortedViewerChanges(&viewerPurges), "purge", viewerID, 0)
 }
 
 // MergeViewer runs every registered merge from one viewer into another
 // inside tx, early registrations first.
 func MergeViewer(ctx context.Context, tx *sql.Tx, fromID, intoID int64) error {
-	for _, m := range sortedMerges() {
-		if err := m.fn(ctx, tx, fromID, intoID); err != nil {
-			return fmt.Errorf("store: merge viewer (%s): %w", m.component, err)
+	return applyViewerChanges(ctx, tx, sortedViewerChanges(&viewerMerges), "merge", fromID, intoID)
+}
+
+func applyViewerChanges(ctx context.Context, tx *sql.Tx, changes []viewerChange, operation string, fromID, intoID int64) error {
+	const probeSize = 64 // keep statement size and bind count bounded
+	for len(changes) > 0 {
+		first := changes[0]
+		if first.match == "" {
+			if err := first.apply(ctx, tx, fromID, intoID); err != nil {
+				return fmt.Errorf("store: %s viewer (%s): %w", operation, first.component, err)
+			}
+			changes = changes[1:]
+			continue
 		}
+		// Apply custom and early changes in order before probing later tables.
+		n := 1
+		for n < min(probeSize, len(changes)) && changes[n].match != "" && changes[n].early == first.early {
+			n++
+		}
+		batch := changes[:n]
+		present, err := viewerRowsPresent(ctx, tx, batch, fromID)
+		if err != nil {
+			return fmt.Errorf("store: find viewer rows to %s: %w", operation, err)
+		}
+		for i, p := range batch {
+			if present[i] {
+				if err := p.apply(ctx, tx, fromID, intoID); err != nil {
+					return fmt.Errorf("store: %s viewer (%s): %w", operation, p.component, err)
+				}
+			}
+		}
+		changes = changes[n:]
 	}
 	return nil
+}
+
+// Check for matching rows in one read per batch with the same indexed viewer
+// predicate as the changes. Return at most one ordinal per registered table.
+func viewerRowsPresent(ctx context.Context, tx *sql.Tx, changes []viewerChange, viewerID int64) ([]bool, error) {
+	present := make([]bool, len(changes))
+	selects := make([]string, len(changes))
+	args := make([]any, len(changes))
+	for i, p := range changes {
+		selects[i] = fmt.Sprintf("SELECT %d WHERE EXISTS (%s)", i, p.match)
+		args[i] = viewerID
+	}
+	rows, err := tx.QueryContext(ctx, strings.Join(selects, " UNION ALL "), args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var i int
+		if err := rows.Scan(&i); err != nil {
+			return nil, err
+		}
+		present[i] = true
+	}
+	return present, rows.Err()
 }

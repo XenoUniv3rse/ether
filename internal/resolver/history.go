@@ -7,6 +7,7 @@ import (
 	"errors"
 	"github.com/braedonsaunders/ether/internal/store"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/braedonsaunders/ether/internal/core"
@@ -100,70 +101,110 @@ func historyFromTrace(tr Trace) HistoryRecord {
 
 // RecordKindDecision persists a plugin playback outcome alongside movie and TV
 // resolutions. Optionally redact plugin diagnostic text before persistence.
-func (s *Service) RecordKindDecision(ctx context.Context, tr Trace, redact func(context.Context, string) string) {
+func (s *Service) RecordKindDecision(_ context.Context, tr Trace, redact func(context.Context, string) string) {
 	tr.At = s.now()
-	tr = compactTrace(tr)
-	ctx = context.WithValue(context.WithoutCancel(ctx), requestBookkeepingKey{}, true)
-	s.persistBookkeeping(ctx, func(ctx context.Context) {
-		if redact != nil {
-			raw, _ := json.Marshal(tr)
+	s.queueHistory(tr, redact)
+}
+
+type historyWork struct {
+	trace  Trace
+	redact func(context.Context, string) string
+}
+
+// History is optional diagnostics. The resolver owns its writes independently
+// of client admission and can insert queued outcomes and prune retention together.
+func (s *Service) queueHistory(tr Trace, redact func(context.Context, string) string) {
+	work := []historyWork{{trace: compactTrace(tr), redact: redact}}
+	if s.db == nil {
+		s.writeHistory(s.bgCtx, work)
+		return
+	}
+	s.queueBookkeeping(bookkeepingJob{history: work})
+}
+
+func (s *Service) writeHistory(ctx context.Context, work []historyWork) {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	var values []string
+	var args []any
+	for _, item := range work {
+		tr := item.trace
+		if s.db == nil && item.redact == nil {
+			s.recordMemoryHistory(tr, historyFromTrace(tr))
+			continue
+		}
+		raw, err := json.Marshal(tr)
+		if err != nil {
+			continue
+		}
+		if item.redact != nil {
+			raw = []byte(item.redact(ctx, string(raw)))
 			var clean Trace
-			if err := json.Unmarshal([]byte(redact(ctx, string(raw))), &clean); err != nil {
-				return
+			if json.Unmarshal(raw, &clean) != nil {
+				continue
 			}
 			tr = clean
 		}
-		s.recordHistory(ctx, tr)
-	})
-}
-
-// recordHistory persists one resolution outcome and prunes rows beyond the
-// retention bounds (count and age) in the same pass.
-func (s *Service) recordHistory(ctx context.Context, tr Trace) {
-	tr = compactTrace(tr)
-	h := historyFromTrace(tr)
-	if s.db == nil {
-		s.con.mu.Lock()
-		s.con.historySeq++
-		h.ID = s.con.historySeq
-		h.Trace = &tr
-		s.con.history = append(s.con.history, h)
-		cutoff := s.now().Add(-s.con.historyAge)
-		keep := s.con.history[:0]
-		for _, x := range s.con.history {
-			if !x.At.Before(cutoff) {
-				keep = append(keep, x)
-			}
+		h := historyFromTrace(tr)
+		if s.db == nil {
+			s.recordMemoryHistory(tr, h)
+			continue
 		}
-		if over := len(keep) - s.con.historyMax; over > 0 {
-			keep = keep[over:]
-		}
-		s.con.history = append([]HistoryRecord(nil), keep...)
-		s.con.mu.Unlock()
+		values = append(values, "(?,?,?,?,?,?,?,?,?,?,?,?,?)")
+		args = append(args, h.At.Unix(), int64(h.TitleKey), h.TitleName, h.Profile, h.ReleaseID, h.ReleaseName, h.Indexer, h.Size,
+			h.Error, store.BoolInt(h.Failover), store.BoolInt(h.Pinned), h.Candidates, string(raw))
+	}
+	if len(values) == 0 {
 		return
 	}
-	raw, err := json.Marshal(tr)
-	if err != nil {
-		return
-	}
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-	var id int64
-	err = s.db.QueryRowContext(ctx,
-		`INSERT INTO resolver_history(resolved_at, rating_key, title_name, profile, release_id, release_name, indexer, size, error, failover, pinned, candidates, trace)
-		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?) RETURNING id`,
-		h.At.Unix(), int64(h.TitleKey), h.TitleName, h.Profile, h.ReleaseID, h.ReleaseName, h.Indexer, h.Size,
-		h.Error, store.BoolInt(h.Failover), store.BoolInt(h.Pinned), h.Candidates, string(raw)).Scan(&id)
+	id, err := s.insertHistory(ctx, strings.Join(values, ","), args)
 	if err != nil {
 		s.log.Debug("resolver history not saved", "err", err)
 		return
 	}
-	// Ids only grow, so the newest historyMax rows are those above
-	// id-historyMax; both bounds use an index.
+	// Both retention bounds use indexes. Prune once per inserted batch.
 	if _, err := s.db.ExecContext(ctx, `DELETE FROM resolver_history WHERE id<=? OR resolved_at<?`,
 		id-int64(s.con.historyMax), s.now().Add(-s.con.historyAge).Unix()); err != nil {
 		s.log.Debug("resolver history not pruned", "err", err)
 	}
+}
+
+func (s *Service) insertHistory(ctx context.Context, values string, args []any) (int64, error) {
+	rows, err := s.db.QueryContext(ctx, `INSERT INTO resolver_history(resolved_at, rating_key, title_name, profile, release_id, release_name, indexer, size, error, failover, pinned, candidates, trace)
+		VALUES `+values+` RETURNING id`, args...)
+	if err != nil {
+		return 0, err
+	}
+	defer rows.Close()
+	var newest int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return 0, err
+		}
+		newest = max(newest, id)
+	}
+	return newest, rows.Err()
+}
+
+func (s *Service) recordMemoryHistory(tr Trace, h HistoryRecord) {
+	s.con.mu.Lock()
+	s.con.historySeq++
+	h.ID = s.con.historySeq
+	h.Trace = &tr
+	s.con.history = append(s.con.history, h)
+	cutoff := s.now().Add(-s.con.historyAge)
+	keep := s.con.history[:0]
+	for _, x := range s.con.history {
+		if !x.At.Before(cutoff) {
+			keep = append(keep, x)
+		}
+	}
+	if over := len(keep) - s.con.historyMax; over > 0 {
+		keep = keep[over:]
+	}
+	s.con.history = append([]HistoryRecord(nil), keep...)
+	s.con.mu.Unlock()
 }
 
 const historyColumns = `id, resolved_at, rating_key, title_name, profile, release_id, release_name, indexer, size, error, failover, pinned, candidates`
