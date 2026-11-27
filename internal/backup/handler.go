@@ -13,6 +13,7 @@ import (
 
 	"github.com/braedonsaunders/ether/internal/admin"
 	"github.com/braedonsaunders/ether/internal/config"
+	"github.com/braedonsaunders/ether/internal/frontend/kit/route"
 )
 
 // Handler is the owner's backup API, mounted behind the admin API's
@@ -46,7 +47,7 @@ import (
 // keeping the replaced ones for undo. A cluster node only stages: its
 // shared database is restored through a guided procedure.
 func (s *Service) Handler() http.Handler {
-	m := http.NewServeMux()
+	m := &route.Mux{}
 	fail := func(w http.ResponseWriter, status int, code, msg string) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(status)

@@ -38,6 +38,7 @@ import (
 	"github.com/braedonsaunders/ether/internal/diagnostics"
 	"github.com/braedonsaunders/ether/internal/events"
 	"github.com/braedonsaunders/ether/internal/frontend"
+	"github.com/braedonsaunders/ether/internal/frontend/kit/route"
 	"github.com/braedonsaunders/ether/internal/identity"
 	"github.com/braedonsaunders/ether/internal/plextv"
 	"github.com/braedonsaunders/ether/internal/speedtest"
@@ -369,7 +370,7 @@ type Handler struct {
 	deps           Deps
 	log            *slog.Logger
 	logs           *LogBuffer
-	mux            *http.ServeMux
+	mux            *route.Mux
 	version        string
 	ui             fs.FS
 	scriptCSP      string
@@ -412,6 +413,25 @@ func NewHandler(deps Deps) *Handler {
 	return h
 }
 
+// Routes returns the owner API and any enumerable mounted extension routes.
+func (h *Handler) Routes() []route.Route {
+	routes := h.mux.Routes()
+	for _, extensions := range []map[string]http.Handler{h.deps.Extensions, h.deps.PublicExtensions} {
+		for name, handler := range extensions {
+			registered, ok := route.Registered(handler)
+			if !ok {
+				continue
+			}
+			prefix := "/api/" + name
+			for _, r := range registered {
+				r.Pattern = prefix + r.Pattern
+				routes = append(routes, r)
+			}
+		}
+	}
+	return routes
+}
+
 // Logs returns the log ring served by this handler.
 func (h *Handler) Logs() *LogBuffer { return h.logs }
 
@@ -443,8 +463,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	h.mux.ServeHTTP(w, r)
 }
 
-func (h *Handler) routes() *http.ServeMux {
-	mux := http.NewServeMux()
+func (h *Handler) routes() *route.Mux {
+	mux := &route.Mux{}
 	mux.HandleFunc("GET /api/web-player", h.webPlayer)
 	mux.HandleFunc("POST /api/web-player", h.webPlayer)
 	api := func(pattern string, fn http.HandlerFunc) {

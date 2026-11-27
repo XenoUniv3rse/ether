@@ -15,6 +15,7 @@ import (
 	"github.com/braedonsaunders/ether/internal/blobcache"
 	"github.com/braedonsaunders/ether/internal/core"
 	"github.com/braedonsaunders/ether/internal/frontend"
+	"github.com/braedonsaunders/ether/internal/frontend/kit/route"
 	"github.com/braedonsaunders/ether/internal/libraries"
 	"github.com/braedonsaunders/ether/internal/libraryfilter"
 	"github.com/braedonsaunders/ether/internal/pluginitems"
@@ -387,7 +388,7 @@ func (c *librariesConsole) library(w http.ResponseWriter, r *http.Request) (core
 }
 
 func (c *librariesConsole) handler() http.Handler {
-	mux := http.NewServeMux()
+	mux := &route.Mux{}
 	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
 		libs, err := c.app.libraries.List(r.Context())
 		if err != nil {
@@ -1655,7 +1656,7 @@ func (c *librariesConsole) writeSetup(w http.ResponseWriter, r *http.Request, li
 }
 
 func (c *librariesConsole) setupHandler() http.Handler {
-	mux := http.NewServeMux()
+	mux := &route.Mux{}
 	guard := func(w http.ResponseWriter) bool {
 		if c.app.pluginsRT == nil || c.app.pluginsRT.mgr == nil {
 			libError(w, http.StatusServiceUnavailable, "Plugins are unavailable")

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/braedonsaunders/ether/internal/config"
+	"github.com/braedonsaunders/ether/internal/frontend/kit/route"
 	"github.com/braedonsaunders/ether/internal/plextv"
 	"net/http"
 	"os"
@@ -20,7 +21,7 @@ type diagnostic struct {
 
 func (a *App) diagnosticsHandler() http.Handler {
 	pms := installedPMS()
-	m := http.NewServeMux()
+	m := &route.Mux{}
 	m.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
 		st := a.registrar.Status()
 		cfg := a.cfg.Get()

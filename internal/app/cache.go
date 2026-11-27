@@ -10,6 +10,7 @@ import (
 	"github.com/braedonsaunders/ether/internal/admin"
 	"github.com/braedonsaunders/ether/internal/config"
 	"github.com/braedonsaunders/ether/internal/core"
+	"github.com/braedonsaunders/ether/internal/frontend/kit/route"
 	"github.com/braedonsaunders/ether/internal/playback"
 	"github.com/braedonsaunders/ether/internal/resolver"
 	"github.com/braedonsaunders/ether/internal/segcache"
@@ -77,7 +78,7 @@ func hasReleaseInfo(info core.ReleaseInfo) bool {
 // This extension is mounted behind the owner API's authentication and CSRF guard.
 func (a *App) cacheHandler() http.Handler {
 	a.cache.SetBlockCheck(a.resolver.LocalReleaseBlocked)
-	mux := http.NewServeMux()
+	mux := &route.Mux{}
 	a.registerWarmingControls(mux)
 	a.registerVaultAdmin(mux)
 	mux.HandleFunc("POST /clear-all", func(w http.ResponseWriter, r *http.Request) {

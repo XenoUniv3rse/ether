@@ -738,7 +738,7 @@ func (a *App) mountPlugins(mux *http.ServeMux) {
 		mux.Handle("GET "+remote.TunnelPath, a.pluginsRT.tunnel.Handler())
 	}
 	if a.pluginsRT.pluginHost != nil {
-		mux.Handle(remote.HostPath, a.pluginsRT.pluginHost)
+		mux.Handle(remote.HostPath, a.perf.wrap("plugin-host", a.pluginsRT.pluginHost))
 	}
 	if a.pluginsRT.pairing != nil {
 		mux.Handle(remote.PairExchangePath, lanOnly(http.HandlerFunc(a.pluginsRT.pairing.Exchange), a.cfg.TrustedProxyCIDRs, nil))

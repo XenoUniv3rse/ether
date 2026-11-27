@@ -10,6 +10,7 @@ import (
 
 	"github.com/braedonsaunders/ether/internal/admin"
 	"github.com/braedonsaunders/ether/internal/backup"
+	"github.com/braedonsaunders/ether/internal/frontend/kit/route"
 	"github.com/braedonsaunders/ether/internal/service"
 )
 
@@ -179,7 +180,7 @@ func (a *App) restartStatus() restartStatus {
 //	POST   /  {"whenIdle": bool} restart now, or once nobody is watching
 //	DELETE /  cancel a restart waiting for viewers
 func (a *App) restartHandler() http.Handler {
-	mux := http.NewServeMux()
+	mux := &route.Mux{}
 	writeJSON := func(w http.ResponseWriter, code int, v any) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(code)
