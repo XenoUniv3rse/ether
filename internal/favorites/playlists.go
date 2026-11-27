@@ -197,20 +197,36 @@ type playlistOwnershipKey struct{}
 type playlistOwnership struct {
 	viewer int64
 	owned  map[core.RatingKey]bool
+	heads  map[core.RatingKey][]core.RatingKey
 }
 
-// PreparePlaylistArtwork shares ownership checks across the artwork page.
+const playlistArtworkHeadLimit = 16
+
+// PreparePlaylistArtwork shares ownership checks and the first member window
+// across the artwork page.
 func (p *Playlists) PreparePlaylistArtwork(ctx context.Context, uid int64, keys []core.RatingKey) (context.Context, error) {
-	owned, err := p.ExistsBatch(ctx, uid, keys)
-	if err != nil {
-		return ctx, err
-	}
-	for _, key := range keys {
-		if !owned[key] {
-			owned[key] = false
+	page := playlistOwnership{viewer: uid, owned: make(map[core.RatingKey]bool, len(keys))}
+	if base, ok := p.Base.(interface {
+		PlaylistArtworkHeads(context.Context, int64, []core.RatingKey, int) (map[core.RatingKey][]core.RatingKey, error)
+	}); ok {
+		heads, err := base.PlaylistArtworkHeads(ctx, uid, keys, playlistArtworkHeadLimit)
+		if err != nil {
+			return ctx, err
+		}
+		page.heads = heads
+		for _, key := range keys {
+			_, page.owned[key] = heads[key]
+		}
+	} else {
+		owned, err := p.ExistsBatch(ctx, uid, keys)
+		if err != nil {
+			return ctx, err
+		}
+		for _, key := range keys {
+			page.owned[key] = owned[key]
 		}
 	}
-	return context.WithValue(ctx, playlistOwnershipKey{}, playlistOwnership{viewer: uid, owned: owned}), nil
+	return context.WithValue(ctx, playlistOwnershipKey{}, page), nil
 }
 
 // Exists reports whether the viewer owns a playlist with key without reading
@@ -281,6 +297,12 @@ func (p *Playlists) PlaylistItemKeys(ctx context.Context, uid int64, key core.Ra
 			return nil, err
 		}
 		if fav == nil || fav.Key != key {
+			if page, ok := ctx.Value(playlistOwnershipKey{}).(playlistOwnership); ok && page.viewer == uid &&
+				offset == 0 && limit <= playlistArtworkHeadLimit {
+				if keys, loaded := page.heads[key]; loaded {
+					return keys[:min(limit, len(keys))], nil
+				}
+			}
 			return reader.PlaylistItemKeys(ctx, uid, key, offset, limit)
 		}
 	}

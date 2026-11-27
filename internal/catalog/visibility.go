@@ -2,8 +2,10 @@ package catalog
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"maps"
+	"strings"
 	"sync"
 
 	"github.com/braedonsaunders/ether/internal/config"
@@ -191,20 +193,44 @@ func (c *Catalog) FilterVisibility(ctx context.Context, ts []core.Title) []core.
 	// known blocked rating is not revealed by a summary that says otherwise.
 	// An empty local rating leaves the summary rating, if it has one.
 	const batch = 200
-	for _, p := range []struct {
-		table, col string
-		set        func(int, string)
-	}{
-		{"catalog_countries", "country", func(i int, v string) { out[i].Countries = appendUnique(out[i].Countries, v) }},
-		{"catalog_genres", "genre", func(i int, v string) { out[i].Genres = appendUnique(out[i].Genres, v) }},
-		{"catalog_studios", "studio", func(i int, v string) { out[i].Studios = appendUnique(out[i].Studios, v) }},
-		{"catalog_keywords", "keyword", func(i int, v string) { out[i].Keywords = appendUnique(out[i].Keywords, v) }},
-	} {
-		for chunk := range store.Chunks(ts, batch) {
-			part := chunk
-			if err := c.scanPairs(ctx, "SELECT key,"+p.col+" FROM "+p.table+" WHERE key IN ("+placeholders(len(part))+")", keyArgs(part), p.set, idx); err != nil {
+	facets := textFactList(c.db, "catalog_countries", "country", "t.key") + "," +
+		textFactList(c.db, "catalog_genres", "genre", "t.key") + "," +
+		textFactList(c.db, "catalog_studios", "studio", "t.key") + "," +
+		textFactList(c.db, "catalog_keywords", "keyword", "t.key")
+	for chunk := range store.Chunks(ts, batch) {
+		values := strings.TrimSuffix(strings.Repeat("(CAST(? AS BIGINT)),", len(chunk)), ",")
+		rows, err := c.db.QueryContext(ctx, "WITH wanted(key) AS (VALUES "+values+") SELECT t.key,"+facets+
+			" FROM wanted t", keyArgs(chunk)...)
+		if err != nil {
+			return nil
+		}
+		for rows.Next() {
+			var key core.RatingKey
+			var raw [4]string
+			if err := rows.Scan(&key, &raw[0], &raw[1], &raw[2], &raw[3]); err != nil {
+				rows.Close()
 				return nil
 			}
+			for _, i := range idx[key] {
+				for n, dest := range []*[]string{&out[i].Countries, &out[i].Genres, &out[i].Studios, &out[i].Keywords} {
+					if raw[n] == "[]" {
+						continue
+					}
+					var values []string
+					if err := json.Unmarshal([]byte(raw[n]), &values); err != nil {
+						rows.Close()
+						return nil
+					}
+					for _, value := range values {
+						*dest = appendUnique(*dest, value)
+					}
+				}
+			}
+		}
+		err = rows.Err()
+		rows.Close()
+		if err != nil {
+			return nil
 		}
 	}
 	for i := range out {

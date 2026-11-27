@@ -140,10 +140,19 @@ type personKey struct {
 // the stored rows, plus the facts visibility rules and the release gate
 // read when they read any, without credits or alternative titles.
 func (c *Catalog) CachedVisibleTitles(ctx context.Context, keys []core.RatingKey, cfg config.Catalog, now time.Time) (map[core.RatingKey]core.Title, error) {
+	return c.cachedPeopleVisibility(ctx, keys, cfg, now, false)
+}
+
+// CachedPeopleParents reads only the facts used for inherited credit policy.
+func (c *Catalog) CachedPeopleParents(ctx context.Context, keys []core.RatingKey, cfg config.Catalog, now time.Time) (map[core.RatingKey]core.Title, error) {
+	return c.cachedPeopleVisibility(ctx, keys, cfg, now, true)
+}
+
+func (c *Catalog) cachedPeopleVisibility(ctx context.Context, keys []core.RatingKey, cfg config.Catalog, now time.Time, parentPolicy bool) (map[core.RatingKey]core.Title, error) {
 	filter := c.visibilityFilter()
 	digital := cfg.ReleaseMode == config.ModeDigital
 	var facts core.TitleFacts
-	if !filter.Passive() || digital {
+	if parentPolicy || !filter.Passive() || digital {
 		facts = core.VisibilityFacts
 	}
 	out := make(map[core.RatingKey]core.Title, len(keys))
@@ -169,6 +178,9 @@ func (c *Catalog) CachedVisibleTitles(ctx context.Context, keys []core.RatingKey
 		}
 		for i := range items {
 			t := &items[i]
+			if parentPolicy && !c.cachedListVisible(t) {
+				continue
+			}
 			upcoming := cfg.ShowUpcomingMovies && t.Type == core.TypeMovie && !t.Released.IsZero() && t.Released.After(now)
 			if t.Adult || (!upcoming && !t.IsReleased(now)) || (!c.isTitleOrShowOwnerIncluded(t) && filter.Hidden(t)) || (!upcoming && digital && !homeReleaseVisible(t, now, cfg.HomeReleaseOffsetDays)) || (t.Type == core.TypeSeason && !listableSeason(t, now)) {
 				continue

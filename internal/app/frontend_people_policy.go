@@ -84,6 +84,9 @@ func (a *App) beginPeopleRead(ctx context.Context, viewer *core.User) (experienc
 		VisibleTitles: func(ctx context.Context, keys []core.RatingKey) (map[core.RatingKey]core.Title, error) {
 			return a.catalog.CachedVisibleTitles(ctx, keys, cfg.Catalog, now)
 		},
+		ParentTitles: func(ctx context.Context, keys []core.RatingKey) (map[core.RatingKey]core.Title, error) {
+			return a.catalog.CachedPeopleParents(ctx, keys, cfg.Catalog, now)
+		},
 		PortraitTitles: func(ctx context.Context, refs []experience.PersonCreditRef) (map[core.RatingKey]core.Title, error) {
 			subjects := make(map[core.RatingKey][]int64)
 			for _, ref := range refs {

@@ -31,6 +31,7 @@ type PeopleRead struct {
 	// VisibleTitles is Titles for a visibility decision: the same rows and
 	// gates, without credits. Optional.
 	VisibleTitles func(context.Context, []core.RatingKey) (map[core.RatingKey]core.Title, error)
+	ParentTitles  func(context.Context, []core.RatingKey) (map[core.RatingKey]core.Title, error)
 	// PortraitTitles reads fresh policy facts and only the requested credits.
 	// Partial titles are used only inside WithPersonCredits; never cached.
 	PortraitTitles func(context.Context, []PersonCreditRef) (map[core.RatingKey]core.Title, error)
@@ -76,6 +77,7 @@ func (s *Service) readPeople(ctx context.Context, viewer *core.User, read func(*
 	}
 	snapshot.d.CachedGetMany = access.Titles
 	snapshot.d.peopleVisibleTitles = access.VisibleTitles
+	snapshot.d.peopleParentTitles = access.ParentTitles
 	snapshot.d.peoplePortraitTitles = access.PortraitTitles
 	snapshot.d.peopleRecheckPortraitTitles = access.RecheckPortraitTitles
 	if err := read(&snapshot); err != nil {
@@ -168,7 +170,11 @@ func (s *Service) peopleVisibility(ctx context.Context, titles map[core.RatingKe
 		all[key] = title
 	}
 	if len(parents) > 0 {
-		loaded, err := s.d.CachedGetMany(ctx, parents)
+		read := s.d.peopleParentTitles
+		if read == nil {
+			read = s.d.CachedGetMany
+		}
+		loaded, err := read(ctx, parents)
 		if err != nil {
 			return Visibility{}, err
 		}

@@ -464,6 +464,52 @@ func (v playlistsView) GetHeaders(ctx context.Context, userID int64, keys []core
 	return v.s.GetPlaylistHeaders(ctx, userID, keys)
 }
 
+// PlaylistArtworkHeads returns the first ordered member keys for each owned
+// playlist in the artwork page; an empty playlist still has a map entry.
+func (v playlistsView) PlaylistArtworkHeads(ctx context.Context, userID int64, keys []core.RatingKey, limit int) (map[core.RatingKey][]core.RatingKey, error) {
+	out := make(map[core.RatingKey][]core.RatingKey, len(keys))
+	aggregate := "json_group_array(rating_key)"
+	if store.DialectOf(v.s.db) == store.Postgres {
+		aggregate = "CAST(json_agg(rating_key ORDER BY position) AS TEXT)"
+	}
+	for part := range store.Chunks(keys, 400) {
+		args := []any{limit, userID}
+		for _, key := range part {
+			id, err := playlistID(key)
+			if err != nil {
+				return nil, err
+			}
+			args = append(args, id)
+		}
+		rows, err := v.s.db.QueryContext(ctx, `SELECT p.id, COALESCE((SELECT `+aggregate+` FROM (
+			SELECT i.rating_key,i.position FROM state_playlist_items i WHERE i.playlist_id=p.id ORDER BY i.position LIMIT ?
+		) AS head), '[]') FROM state_playlists p WHERE p.user_id=? AND p.id IN (`+store.Placeholders(len(part))+`)`, args...)
+		if err != nil {
+			return nil, err
+		}
+		for rows.Next() {
+			var id int64
+			var payload string
+			if err := rows.Scan(&id, &payload); err != nil {
+				rows.Close()
+				return nil, err
+			}
+			var members []core.RatingKey
+			if err := json.Unmarshal([]byte(payload), &members); err != nil {
+				rows.Close()
+				return nil, err
+			}
+			out[core.PlaylistKey(id)] = members
+		}
+		err = rows.Err()
+		rows.Close()
+		if err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
+}
+
 // PlaylistItemKeys reads one ordered window for artwork selection.
 func (v playlistsView) PlaylistItemKeys(ctx context.Context, userID int64, key core.RatingKey, offset, limit int) ([]core.RatingKey, error) {
 	id, err := playlistID(key)

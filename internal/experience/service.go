@@ -144,7 +144,8 @@ type ServiceDeps struct {
 	LibraryMembers    func(context.Context, core.LibraryID, []core.RatingKey) (map[core.RatingKey]bool, int64, bool, error)
 	PersonCreditForms func(context.Context, int64, []core.MediaType) ([]core.PersonCreditForm, error)
 	PersonFormKeys    func(context.Context, int64, []core.MediaType, []core.PersonCreditForm, core.RatingKey, int) ([]core.RatingKey, error)
-	// peopleVisibleTitles is the people read's VisibleTitles (readPeople).
+	// These readers belong to the current people policy proof.
+	peopleParentTitles          parentTitleReader
 	peopleVisibleTitles         func(context.Context, []core.RatingKey) (map[core.RatingKey]core.Title, error)
 	peoplePortraitTitles        func(context.Context, []PersonCreditRef) (map[core.RatingKey]core.Title, error)
 	peopleRecheckPortraitTitles func(context.Context, []PersonCreditRef) (map[core.RatingKey]core.Title, error)
