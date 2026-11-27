@@ -78,8 +78,6 @@ func (s *Service) filterReleaseDiscovery(ctx context.Context, items []core.Title
 		return s.filterLegacyReleaseEvidence(ctx, items, titles, keys, input)
 	}
 
-	s.ensureGatePolicySeeded(ctx, input)
-
 	movieMode := input.availability.ModeFor(hiddenMovies)
 	acceptable := map[core.RatingKey]bool{}
 	var digitalMovies []core.RatingKey
@@ -122,6 +120,12 @@ func (s *Service) filterReleaseDiscovery(ctx context.Context, items []core.Title
 			feeds := make(map[string]core.ReleaseFeed, len(input.feeds))
 			for _, f := range input.feeds {
 				feeds[f.ID] = f
+			}
+			_ = s.reopenRetainedGates(ctx, ungated, feeds, input, acceptable)
+			for k := range ungated {
+				if acceptable[k] {
+					delete(ungated, k)
+				}
 			}
 			s.matchRetainedAndOpenGate(ctx, ungated, feeds, input, acceptable)
 		}

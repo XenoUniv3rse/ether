@@ -285,27 +285,48 @@ func releaseBase(name string) string {
 }
 
 func (s *Service) loadRejectionsFor(ctx context.Context, key core.RatingKey) {
-	rows, err := s.db.QueryContext(ctx, `SELECT release_json FROM resolver_rejected WHERE rating_key=?`, int64(key))
+	snapshot, err := s.readRejectionsFor(ctx, []core.RatingKey{key})
 	if err != nil {
 		return
 	}
-	defer rows.Close()
-	var snapshot []core.Release
-	for rows.Next() {
-		var raw string
-		var r core.Release
-		if rows.Scan(&raw) == nil && json.Unmarshal([]byte(raw), &r) == nil {
-			snapshot = append(snapshot, r)
+	s.mu.Lock()
+	if s.rejections == nil {
+		s.rejections = map[core.RatingKey][]core.Release{}
+	}
+	s.rejections[key] = snapshot[key]
+	s.mu.Unlock()
+}
+
+func (s *Service) readRejectionsFor(ctx context.Context, keys []core.RatingKey) (map[core.RatingKey][]core.Release, error) {
+	rejections := make(map[core.RatingKey][]core.Release)
+	for chunk := range store.Chunks(keys, 500) {
+		args := make([]any, len(chunk))
+		for i, key := range chunk {
+			args[i] = int64(key)
+		}
+		rows, err := s.db.QueryContext(ctx, `SELECT rating_key,release_json FROM resolver_rejected WHERE rating_key IN (`+store.Placeholders(len(args))+`)`, args...)
+		if err != nil {
+			return nil, err
+		}
+		for rows.Next() {
+			var key core.RatingKey
+			var payload string
+			if err := rows.Scan(&key, &payload); err != nil {
+				rows.Close()
+				return nil, err
+			}
+			var release core.Release
+			if json.Unmarshal([]byte(payload), &release) == nil {
+				rejections[key] = append(rejections[key], release)
+			}
+		}
+		err = rows.Err()
+		rows.Close()
+		if err != nil {
+			return nil, err
 		}
 	}
-	if rows.Err() == nil {
-		s.mu.Lock()
-		if s.rejections == nil {
-			s.rejections = map[core.RatingKey][]core.Release{}
-		}
-		s.rejections[key] = snapshot
-		s.mu.Unlock()
-	}
+	return rejections, nil
 }
 
 // ClaimSubtitleCheck admits one content inspection attempt for an immutable

@@ -1414,9 +1414,26 @@ func (c *Catalog) countBrowseCheap(ctx context.Context, f core.Filter, ckey, whe
 	return total, true, nil
 }
 
+type browseCountRead struct {
+	key    string
+	gen    uint64
+	minute int64
+}
+
 func (c *Catalog) countBrowse(ctx context.Context, f core.Filter, ckey, where string, args []any) (int, error) {
-	gen := c.writeGen.Load()
-	minBucket := c.minuteBucket()
+	read := browseCountRead{ckey, c.writeGen.Load(), c.minuteBucket()}
+	return c.countReads.Do(ctx, read, func(ctx context.Context) (int, error) {
+		c.cacheMu.RLock()
+		entry, ok := c.countCache[ckey]
+		c.cacheMu.RUnlock()
+		if ok && entry.gen == read.gen && entry.minute == read.minute {
+			return entry.total, nil
+		}
+		return c.readBrowseCount(ctx, f, read, where, args)
+	})
+}
+
+func (c *Catalog) readBrowseCount(ctx context.Context, f core.Filter, read browseCountRead, where string, args []any) (int, error) {
 	total, ok, err := c.tallyTotal(ctx, f, where, args)
 	if err != nil {
 		return 0, err
@@ -1433,7 +1450,7 @@ func (c *Catalog) countBrowse(ctx context.Context, f core.Filter, ckey, where st
 	if len(c.countCache) >= 1024 {
 		c.countCache = map[string]cachedCount{}
 	}
-	c.countCache[ckey] = cachedCount{total: total, gen: gen, minute: minBucket, counted: time.Now()}
+	c.countCache[read.key] = cachedCount{total: total, gen: read.gen, minute: read.minute, counted: time.Now()}
 	c.cacheMu.Unlock()
 	return total, nil
 }
@@ -1491,7 +1508,10 @@ func (c *Catalog) FacetFilter(ctx context.Context, f core.Filter, facet string) 
 		}
 		return append([]core.FacetValue(nil), ent.vals...), nil
 	}
-	return c.countFacet(ctx, f, facet)
+	vals, err := c.facetReads.Do(ctx, browseCountRead{fkey, gen, minBucket}, func(ctx context.Context) ([]core.FacetValue, error) {
+		return c.countFacet(ctx, f, facet)
+	})
+	return slices.Clone(vals), err
 }
 
 // facetFamilyKey is a facet's cache key without the fields that move with

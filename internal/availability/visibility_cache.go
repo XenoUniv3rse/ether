@@ -65,7 +65,7 @@ func (s *Service) filterDiscoverySnapshot(ctx context.Context, items []core.Titl
 			allowed[t.Key] = true
 		}
 		s.visibilityMu.Lock()
-		if revision == s.visibilityRevision {
+		if ctx.Err() == nil && revision == s.visibilityRevision {
 			if s.visibilityCache == nil || len(s.visibilityCache)+len(pending) > 8192 {
 				s.visibilityCache = map[string]visibilityEntry{}
 			}

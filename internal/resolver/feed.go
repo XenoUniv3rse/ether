@@ -56,7 +56,8 @@ func (s *Service) feedEvaluationForProfile(ctx context.Context, media string, p 
 // feedEvaluationSet judges a mixed feed under each media's profile. Key
 // covers both so a stored verdict is exact for either title kind.
 type feedEvaluationSet struct {
-	movie, tv *feedEvaluation
+	movie, tv  *feedEvaluation
+	rejections map[core.RatingKey][]core.Release
 }
 
 func (s *Service) feedEvaluationSet(ctx context.Context) (*feedEvaluationSet, error) {
@@ -81,18 +82,31 @@ func (e *feedEvaluationSet) forTitle(t *core.Title) *feedEvaluation {
 
 func (e *feedEvaluationSet) Key() string { return e.movie.Key() + "|" + e.tv.Key() }
 
+// PrepareTitles snapshots the owner's rejection lists for the titles without
+// a stored verdict. Ranking can reuse them across releases in this pass.
+func (e *feedEvaluationSet) PrepareTitles(ctx context.Context, keys []core.RatingKey) error {
+	if e.movie.s.db == nil {
+		return nil
+	}
+	rejections, err := e.movie.s.readRejectionsFor(ctx, keys)
+	if err == nil {
+		e.rejections = rejections
+	}
+	return err
+}
+
 func (e *feedEvaluationSet) Evaluate(ctx context.Context, t *core.Title, rs []core.Release) ([]core.FeedVerdict, error) {
 	base := e.forTitle(t)
 	p := base.s.ProfileForTitle(ctx, feedClient, nil, t)
 	if p.SelectionKey == base.profile.SelectionKey {
-		return base.Evaluate(ctx, t, rs)
+		return base.evaluate(ctx, t, rs, e.rejections)
 	}
 	selected, err := base.s.feedEvaluationForProfile(ctx, titleMedia(t), p)
 	if err != nil {
 		return nil, err
 	}
 	defer selected.Close()
-	return selected.Evaluate(ctx, t, rs)
+	return selected.evaluate(ctx, t, rs, e.rejections)
 }
 
 func (e *feedEvaluationSet) Transient(id string) string { return e.movie.Transient(id) }
@@ -145,10 +159,14 @@ func (e *feedEvaluation) Key() string {
 	return e.key
 }
 
-func (e *feedEvaluation) Evaluate(ctx context.Context, t *core.Title, rs []core.Release) ([]core.FeedVerdict, error) {
+func (e *feedEvaluation) evaluate(ctx context.Context, t *core.Title, rs []core.Release, rejections map[core.RatingKey][]core.Release) ([]core.FeedVerdict, error) {
 	out := make([]core.FeedVerdict, len(rs))
 	req, sreq, env := e.request(t)
+	env.feedRejections = rejections
 	for i, r := range rs {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		_, reason, err := e.judgeWith(ctx, req, sreq, env, r)
 		if err != nil {
 			return nil, err

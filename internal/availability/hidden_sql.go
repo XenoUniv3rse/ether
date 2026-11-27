@@ -201,9 +201,9 @@ func (s *Service) publishHiddenMeasured(ctx context.Context, kind, policy string
 }
 
 // PagingFilter attaches the sticky availability_gate policy and request-clock
-// evidence window bounds to f with zero SQL round trips in steady state. On
-// legacy read-only databases without availability_gate, it falls back to any
-// published availability_hidden_current seqs without issuing writes.
+// evidence window bounds to f. Pages, totals and facets only read published
+// gates. Release observation, direct discovery and due checks admit evidence
+// for the titles they use.
 func (s *Service) PagingFilter(ctx context.Context, f core.Filter) (core.Filter, error) {
 	if f.IncludeKeys != nil {
 		return f, nil
@@ -217,7 +217,6 @@ func (s *Service) PagingFilter(ctx context.Context, f core.Filter) (core.Filter,
 		f.HomeReleaseOffsetDays = input.availability.HomeReleaseOffsetDays
 	}
 	if s.hasGateTable {
-		s.ensureGatePolicySeeded(ctx, input)
 		f.GatePolicy = input.gatePolicy
 		f.GateNow = input.now.Unix()
 		f.GateUpcomingMovies = input.showUpcomingMovies

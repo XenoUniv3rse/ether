@@ -53,6 +53,9 @@ func (s *Service) judge(ctx context.Context, pairs []feedPair, anyPerTitle bool)
 	if !batched {
 		accepted := map[core.RatingKey]bool{}
 		for i, p := range pairs {
+			if ctx.Err() != nil {
+				break
+			}
 			if anyPerTitle && accepted[p.t.Key] {
 				continue
 			}
@@ -106,10 +109,20 @@ func (s *Service) judge(ctx context.Context, pairs []feedPair, anyPerTitle bool)
 		}
 		g.indexes = append(g.indexes, i)
 	}
+	if preparer, supported := ev.(interface {
+		PrepareTitles(context.Context, []core.RatingKey) error
+	}); supported && len(order) > 0 {
+		if err := preparer.PrepareTitles(ctx, order); err != nil {
+			return ok
+		}
+	}
 	var durable []verdictRow
 	written := map[string]bool{}
 	now := s.now().Unix()
 	for _, k := range order {
+		if ctx.Err() != nil {
+			break
+		}
 		g := pending[k]
 		// The whole title in one call, or release by release until one is
 		// accepted when that is all the caller needs.

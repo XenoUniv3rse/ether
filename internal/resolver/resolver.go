@@ -2116,6 +2116,7 @@ type rankEnv struct {
 	seaDex                *seaDexEntry
 	exclude               map[string]bool
 	excludeReleases       []core.Release
+	feedRejections        map[core.RatingKey][]core.Release
 	rcfg                  config.Resolver
 	lang                  string
 	wanted, accepted      []string
@@ -2133,7 +2134,7 @@ func (env *rankEnv) audio(profile core.QualityProfile, req core.ResolveRequest) 
 
 // rankWith is rankCandidates with its environment already prepared.
 func (s *Service) rankWith(ctx context.Context, env rankEnv, req core.ResolveRequest, sreq core.SearchRequest, profile core.QualityProfile, results []core.Release, trace *Trace, pinID string) ([]candidate, bool, error) {
-	if s.db != nil {
+	if s.db != nil && env.feedRejections == nil {
 		s.loadRejectionsFor(ctx, req.Title.Key)
 	}
 	if !core.LocalResponse(ctx) {
@@ -2189,6 +2190,13 @@ func onlyUncachedOrDead(cands []candidate, tr *Trace) bool {
 		}
 	}
 	return sawUncached
+}
+
+func (s *Service) rankRejected(env rankEnv, key core.RatingKey, rel core.Release) bool {
+	if env.feedRejections != nil {
+		return slices.ContainsFunc(env.feedRejections[key], func(old core.Release) bool { return nearRelease(old, rel) })
+	}
+	return s.rejectedFor(key, rel)
 }
 
 func (s *Service) rankPass(ctx context.Context, env rankEnv, req core.ResolveRequest, sreq core.SearchRequest, profile core.QualityProfile, results []core.Release, trace *Trace, pinID string) ([]candidate, bool, releaseTitleRejections, error) {
@@ -2313,7 +2321,7 @@ func (s *Service) rankPass(ctx context.Context, env rankEnv, req core.ResolveReq
 			reason = "excluded (already tried)"
 		} else if rcfg.HardSubtitles == "exclude" && hardSubbed {
 			reason = "blocked hardcoded subtitles"
-		} else if s.rejectedFor(t.Key, rel) {
+		} else if s.rankRejected(env, t.Key, rel) {
 			reason = "release rejected for this title"
 		} else if nonVideoRelease(rel, t, sreq) {
 			reason = ReasonNotAVideoFile
@@ -2337,13 +2345,13 @@ func (s *Service) rankPass(ctx context.Context, env rankEnv, req core.ResolveReq
 			reason = audioAbsentPolicyReason(policy, policyContext, langRel, policyResult)
 		} else {
 			videoOff, _ := s.transcodeSettingsFor(req.Client)
-			reason = s.rejectReasonFor(rel, t, sreq, profile, rcfg, req.Client, exclude, preferred, req.User)
+			reason = s.rejectReasonFor(rel, t, sreq, profile, rcfg, req.Client, exclude, preferred, req.User, env)
 			if !videoOff && reason == "video codec unsupported by client" && req.ExactHEVCTranscode && !req.Client.Download && req.Prefer != "" && rel.ID == req.Prefer && strings.EqualFold(rel.Info.VideoCodec, "hevc") {
 				// Only relax the codec gate for the explicitly selected source;
 				// every other policy and the final probed output decision still apply.
 				caps := req.Client
 				caps.VideoCodecs = append(slices.Clone(caps.VideoCodecs), rel.Info.VideoCodec)
-				reason = s.rejectReasonFor(rel, t, sreq, profile, rcfg, caps, exclude, preferred, req.User)
+				reason = s.rejectReasonFor(rel, t, sreq, profile, rcfg, caps, exclude, preferred, req.User, env)
 			}
 			if strings.HasPrefix(reason, "audio is not in the profile's language (") {
 				clientRejected = true
@@ -2744,11 +2752,11 @@ func (s *Service) scoreRelease(rel core.Release, profile core.QualityProfile, ca
 // Hard client gates and the identity/absolute-size checks always apply.
 func (s *Service) rejectReason(rel core.Release, t *core.Title, sreq core.SearchRequest,
 	profile core.QualityProfile, rcfg config.Resolver, caps core.ClientCaps, exclude map[string]bool, preferred bool) string {
-	return s.rejectReasonFor(rel, t, sreq, profile, rcfg, caps, exclude, preferred, nil)
+	return s.rejectReasonFor(rel, t, sreq, profile, rcfg, caps, exclude, preferred, nil, rankEnv{})
 }
 
 func (s *Service) rejectReasonFor(rel core.Release, t *core.Title, sreq core.SearchRequest,
-	profile core.QualityProfile, rcfg config.Resolver, caps core.ClientCaps, exclude map[string]bool, preferred bool, user *core.User) string {
+	profile core.QualityProfile, rcfg config.Resolver, caps core.ClientCaps, exclude map[string]bool, preferred bool, user *core.User, env rankEnv) string {
 	// Usenet passwords are supplied by NZB metadata and validated by the engine.
 	if rel.Password && rel.Protocol == core.ProtocolTorrent {
 		return "passworded"
@@ -2756,7 +2764,7 @@ func (s *Service) rejectReasonFor(rel core.Release, t *core.Title, sreq core.Sea
 	if exclude[rel.ID] {
 		return "excluded (already tried)"
 	}
-	if s.rejectedFor(t.Key, rel) {
+	if s.rankRejected(env, t.Key, rel) {
 		return "release rejected for this title"
 	}
 	if s.isBadRelease(rel) {

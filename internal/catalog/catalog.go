@@ -350,6 +350,8 @@ type Catalog struct {
 	// rows an image grant read (ArtworkRows), for the image reads after it.
 	exportCache map[exportCacheKey]cachedStoredTitle
 	countCache  map[string]cachedCount
+	countReads  flight.Group[browseCountRead, int]
+	facetReads  flight.Group[browseCountRead, []core.FacetValue]
 	browseCache map[string]cachedBrowse
 	grandCache  map[core.RatingKey]cachedBrowse
 	facetCache  map[string]cachedFacet

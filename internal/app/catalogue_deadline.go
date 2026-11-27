@@ -35,22 +35,26 @@ func catalogueDeadlineRoute(surface string, r *http.Request) bool {
 	switch surface {
 	case "plex":
 		return path == "/library/sections" || strings.HasPrefix(path, "/library/sections/") ||
-			path == "/hubs" || strings.HasPrefix(path, "/hubs/")
+			path == "/hubs" || strings.HasPrefix(path, "/hubs/") ||
+			(strings.HasPrefix(path, "/library/metadata/") && (strings.HasSuffix(path, "/children") || strings.HasSuffix(path, "/allLeaves")))
 	case "jellyfin", "emby":
 		path = strings.TrimPrefix(strings.ToLower(path), "/"+surface+"/")
 		path = strings.TrimPrefix(path, "/")
 		return path == "userviews" || path == "items" || path == "items/latest" ||
 			path == "items/resume" || path == "shows/nextup" ||
+			(strings.HasPrefix(path, "shows/") && (strings.HasSuffix(path, "/seasons") || strings.HasSuffix(path, "/episodes"))) ||
 			(strings.HasPrefix(path, "users/") && (strings.HasSuffix(path, "/items") || strings.HasSuffix(path, "/views") ||
 				strings.HasSuffix(path, "/items/latest") || strings.HasSuffix(path, "/items/resume")))
 	case "silo":
 		path = strings.TrimPrefix(path, "/silo")
 		return path == "/api/v2/catalog" || path == "/api/v2/user/libraries" ||
 			path == "/api/v2/home/sections" || strings.HasPrefix(path, "/api/v2/home/sections/") ||
-			strings.HasPrefix(path, "/api/v2/library/")
+			strings.HasPrefix(path, "/api/v2/library/") || strings.HasPrefix(path, "/api/v2/catalog/series/")
 	case "vela":
 		path = strings.TrimPrefix(path, "/vela/v0")
-		return path == "/bootstrap" || path == "/libraries" || strings.HasPrefix(path, "/libraries/")
+		return path == "/bootstrap" || path == "/libraries" || strings.HasPrefix(path, "/libraries/") ||
+			path == "/rows" || strings.HasPrefix(path, "/rows/") ||
+			(strings.HasPrefix(path, "/titles/") && strings.HasSuffix(path, "/children"))
 	case "stremio":
 		// The first component after the mount is the credential.
 		_, resource, _ := strings.Cut(strings.TrimPrefix(strings.TrimPrefix(path, "/stremio/"), "/"), "/")

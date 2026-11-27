@@ -6,7 +6,8 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
-	"errors"
+	"maps"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -186,13 +187,17 @@ func (s *Service) openGate(ctx context.Context, policy string, key core.RatingKe
 	rows, _ := res.RowsAffected()
 	if rows > 0 {
 		_, _ = s.db.ExecContext(ctx, `UPDATE availability_title_checks SET next_check=0,state='found',reason='' WHERE rating_key=? AND (next_check<>0 OR state<>'found')`, int64(key))
-		s.gateRev.Add(1)
-		s.clearVisibility()
-		if c, ok := s.d.Catalog.(interface{ ConsoleGateChanged() }); ok {
-			c.ConsoleGateChanged()
-		}
+		s.gateChanged()
 	}
 	return nil
+}
+
+func (s *Service) gateChanged() {
+	s.gateRev.Add(1)
+	s.clearVisibility()
+	if c, ok := s.d.Catalog.(interface{ ConsoleGateChanged() }); ok {
+		c.ConsoleGateChanged()
+	}
 }
 
 func (s *Service) recordPlayableEpisode(ctx context.Context, key core.RatingKey, at time.Time) error {
@@ -433,236 +438,160 @@ func (s *Service) maybeOpenGateFromRelease(ctx context.Context, f core.ReleaseFe
 	return nil
 }
 
-// ensureGatePolicySeeded populates availability_gate once per distinct policy
-// fingerprint from retained availability_releases (covering upgrades from
-// pre-gate schemas and owner quality/profile edits). Steady-state calls hit the
-// in-memory map with zero SQL queries and zero allocations.
-func (s *Service) ensureGatePolicySeeded(ctx context.Context, input discoverySnapshot) {
-	gp := input.gatePolicy
-	if !s.hasGateTable || gp == "" {
-		return
+// reopenRetainedGates rechecks retained evidence only for titles being used
+// or checked. Listing pages and their counts read the published gates in SQL.
+func (s *Service) reopenRetainedGates(ctx context.Context, titles map[core.RatingKey]*core.Title, feeds map[string]core.ReleaseFeed, input discoverySnapshot, acceptable map[core.RatingKey]bool) error {
+	if len(titles) == 0 {
+		return nil
 	}
-	s.seededMu.RLock()
-	done := s.seededPolicies[gp]
-	s.seededMu.RUnlock()
-	if done {
-		return
+	if err := ctx.Err(); err != nil {
+		return err
 	}
-
-	s.seedRunMu.Lock()
-	defer s.seedRunMu.Unlock()
-	s.seededMu.RLock()
-	done = s.seededPolicies[gp]
-	s.seededMu.RUnlock()
-	if done || s.bgCtx.Err() != nil {
-		return
+	keys := make([]core.RatingKey, 0, len(titles))
+	for k := range titles {
+		keys = append(keys, k)
 	}
-
-	// Detach HTTP client cancellation so a timed-out request (HTTP 499) cannot
-	// roll back policy seeding mid-flight and force the next request to repeat
-	// the entire scan. Values on ctx (such as query-stats collectors) stay intact,
-	// while service shutdown (bgCtx) still cancels promptly.
-	seedCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Minute)
-	stop := context.AfterFunc(s.bgCtx, cancel)
-	defer func() {
-		stop()
-		cancel()
-	}()
-
-	var exists int
-	if err := s.db.QueryRowContext(seedCtx, `SELECT 1 FROM availability_gate_policy WHERE policy=?`, gp).Scan(&exists); err == nil {
-		s.seededMu.Lock()
-		if s.seededPolicies == nil {
-			s.seededPolicies = map[string]bool{}
-		}
-		s.seededPolicies[gp] = true
-		s.seededMu.Unlock()
-		return
-	} else if !errors.Is(err, sql.ErrNoRows) {
-		return
-	}
-
-	feeds := map[string]core.ReleaseFeed{}
-	for _, f := range input.feeds {
-		feeds[f.ID] = f
-	}
-	type obs struct {
-		key       core.RatingKey
+	slices.Sort(keys)
+	type observation struct {
+		title     *core.Title
+		release   core.Release
 		source    string
-		gen       string
-		payload   string
-		state     string
 		firstSeen int64
-		revision  int64
+		verified  bool
 	}
-	rows, err := s.db.QueryContext(seedCtx, `SELECT rating_key,source_id,generation,payload,state,first_seen,revision FROM availability_releases WHERE last_seen>=? AND state<>'unavailable' AND NOT (state='unknown' AND revision>0)`, input.retentionCutoff().Unix())
-	if err != nil {
-		return
-	}
-	var all []obs
-	seenKeys := map[core.RatingKey]bool{}
-	var keyList []core.RatingKey
-	for rows.Next() {
-		var o obs
-		if rows.Scan(&o.key, &o.source, &o.gen, &o.payload, &o.state, &o.firstSeen, &o.revision) != nil {
-			continue
+	var observations []observation
+	for batch := range store.Chunks(keys, 500) {
+		args := make([]any, 0, len(batch)+1)
+		args = append(args, input.retentionCutoff().Unix())
+		for _, k := range batch {
+			args = append(args, int64(k))
 		}
-		if o.source != "probe" {
-			f, ok := feeds[o.source]
-			if !ok || f.Generation != o.gen || !input.usable(f.Protocol) {
+		rows, err := s.db.QueryContext(ctx, `SELECT rating_key,source_id,generation,payload,state,first_seen
+ FROM availability_releases WHERE last_seen>=? AND state<>'unavailable' AND NOT (state='unknown' AND revision>0)
+ AND rating_key IN (`+store.Placeholders(len(batch))+`)`, args...)
+		if err != nil {
+			return err
+		}
+		for rows.Next() {
+			var k core.RatingKey
+			var source, generation, payload, state string
+			var firstSeen int64
+			if err := rows.Scan(&k, &source, &generation, &payload, &state, &firstSeen); err != nil {
+				rows.Close()
+				return err
+			}
+			t := titles[k]
+			verified := state == "verified"
+			if t.Adult || (!t.IsReleased(input.now) && !(verified && t.Type == core.TypeEpisode)) {
 				continue
 			}
-		}
-		all = append(all, o)
-		if !seenKeys[o.key] {
-			seenKeys[o.key] = true
-			keyList = append(keyList, o.key)
-		}
-	}
-	if rows.Err() != nil {
-		rows.Close()
-		return
-	}
-	rows.Close()
-
-	var openings []gateOpening
-	if len(keyList) > 0 {
-		titleMap := map[core.RatingKey]*core.Title{}
-		for start := 0; start < len(keyList); start += 500 {
-			batch := keyList[start:min(start+500, len(keyList))]
-			if ts, e := s.d.Catalog.CachedTitles(seedCtx, batch); e == nil {
-				for i := range ts {
-					t := ts[i]
-					titleMap[t.Key] = &t
-				}
-			}
-		}
-		// Synthesize premiere S01E01 descriptors for unmirrored episode keys when
-		// the parent show exists in the catalogue. Batch parent show lookups so
-		// large retained feeds never issue one SELECT per premiere episode.
-		var premiereEpKeys []core.RatingKey
-		var showKeys []core.RatingKey
-		seenShow := map[core.RatingKey]bool{}
-		for _, k := range keyList {
-			if titleMap[k] != nil || k.Kind() != core.KindEpisode {
+			feed := feeds[source]
+			if source != "probe" && (feed.ID == "" || feed.Generation != generation || !input.usable(feed.Protocol)) {
 				continue
 			}
-			tmdbID, season, episode := k.TMDB(), k.Season(), k.Episode()
-			if tmdbID > 0 && season == 1 && episode == 1 {
-				premiereEpKeys = append(premiereEpKeys, k)
-				sk := core.ShowKey(tmdbID)
-				if titleMap[sk] == nil && !seenShow[sk] {
-					seenShow[sk] = true
-					showKeys = append(showKeys, sk)
-				}
-			}
-		}
-		for start := 0; start < len(showKeys); start += 500 {
-			batch := showKeys[start:min(start+500, len(showKeys))]
-			if ts, e := s.d.Catalog.CachedTitles(seedCtx, batch); e == nil {
-				for i := range ts {
-					t := ts[i]
-					titleMap[t.Key] = &t
-				}
-			}
-		}
-		for _, k := range premiereEpKeys {
-			show := titleMap[core.ShowKey(k.TMDB())]
-			if show != nil && show.EpisodeOrder.Source != core.MetadataTVDB && !show.Adult && show.IsReleased(input.now) {
-				ep := core.Title{
-					Key: k, Type: core.TypeEpisode, ShowKey: show.Key, ShowIDs: show.IDs,
-					ShowTitle: show.Title, ShowOriginalTitle: show.OriginalTitle, ShowYear: show.Year,
-					Season: 1, Episode: 1, Released: show.Released, Language: show.Language,
-				}
-				titleMap[k] = &ep
-			}
-		}
-		passed := s.officialDatesPassed(seedCtx, titleMap, input.now)
-		unavailable := map[core.RatingKey]time.Time{}
-		if source, ok := s.d.Validator.(interface {
-			KnownUnavailableSince(context.Context, []core.RatingKey) map[core.RatingKey]time.Time
-		}); ok {
-			unavailable = source.KnownUnavailableSince(seedCtx, keyList)
-		}
-		var pairs []feedPair
-		var pairSources []string
-		for _, o := range all {
-			t := titleMap[o.key]
-			if t == nil || t.Adult || (!t.IsReleased(input.now) && !(o.state == "verified" && t.Type == core.TypeEpisode)) {
+			r, err := s.decode(payload)
+			if err != nil {
 				continue
 			}
-			isVerified := o.state == "verified"
-			if !isVerified {
-				if !passed[o.key] {
-					continue
-				}
-				if since, has := unavailable[o.key]; has && o.firstSeen <= since.Unix() {
-					continue
-				}
-			}
-			r, e := s.decode(o.payload)
-			if e != nil {
-				continue
-			}
-			if r.Protocol == "" && o.source != "probe" {
-				r.Protocol = feeds[o.source].Protocol
+			if r.Protocol == "" {
+				r.Protocol = feed.Protocol
 			}
 			if !input.usable(r.Protocol) {
 				continue
 			}
-			if r.Info.Title == "" && r.Name != "" {
-				r.Info = releaseparse.Parse(r.Name)
-			}
-			pairs = append(pairs, feedPair{t: t, r: r})
-			pairSources = append(pairSources, o.source)
+			observations = append(observations, observation{t, r, source, firstSeen, verified})
 		}
-		accepted := map[core.RatingKey]bool{}
-		for i, ok := range s.judge(offRequest(seedCtx), pairs, true) {
-			if ok && !accepted[pairs[i].t.Key] {
-				accepted[pairs[i].t.Key] = true
-				openings = append(openings, gateOpening{key: pairs[i].t.Key, source: pairSources[i]})
-			}
+		err = rows.Err()
+		rows.Close()
+		if err != nil {
+			return err
 		}
+	}
+	if len(observations) == 0 {
+		return nil
 	}
 
-	if len(openings) > 0 {
-		openKeys := make([]core.RatingKey, len(openings))
-		for i, op := range openings {
-			openKeys[i] = op.key
-		}
-		if err := s.recordPlayableEpisodes(seedCtx, openKeys, input.now); err != nil {
-			return
+	unverified := make(map[core.RatingKey]*core.Title)
+	for _, o := range observations {
+		if !o.verified {
+			unverified[o.title.Key] = o.title
 		}
 	}
-	nowTS := input.now.Unix()
-	tx, err := s.db.BeginTx(seedCtx, nil)
+	passed := s.officialDatesPassed(ctx, unverified, input.now)
+	unavailable := s.unavailableSince(ctx, slices.Collect(maps.Keys(unverified)))
+	var pairs []feedPair
+	var sources []string
+	for _, o := range observations {
+		key := o.title.Key
+		if !o.verified {
+			since, blocked := unavailable[key]
+			if !passed[key] || (blocked && o.firstSeen <= since.Unix()) {
+				continue
+			}
+		}
+		r := o.release
+		if r.Info.Title == "" && r.Name != "" {
+			r.Info = releaseparse.Parse(r.Name)
+		}
+		pairs = append(pairs, feedPair{t: o.title, r: r})
+		sources = append(sources, o.source)
+	}
+
+	var openings []gateOpening
+	var openKeys []core.RatingKey
+	seen := make(map[core.RatingKey]bool)
+	for i, ok := range s.judge(ctx, pairs, true) {
+		k := pairs[i].t.Key
+		if ok && !seen[k] {
+			seen[k] = true
+			openings = append(openings, gateOpening{key: k, source: sources[i]})
+			openKeys = append(openKeys, k)
+		}
+	}
+	if len(openings) == 0 {
+		return ctx.Err()
+	}
+	if err := s.recordPlayableEpisodes(ctx, openKeys, input.now); err != nil {
+		return err
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return
+		return err
 	}
 	defer tx.Rollback()
-	added, err := insertGateBatch(seedCtx, tx, gp, openings, nowTS)
+	added, err := insertGateBatch(ctx, tx, input.gatePolicy, openings, input.now.Unix())
 	if err != nil {
-		return
-	}
-	if _, err := tx.ExecContext(seedCtx, `INSERT INTO availability_gate_policy(policy,seeded_at) VALUES(?,?) ON CONFLICT(policy) DO NOTHING`, gp, nowTS); err != nil {
-		return
+		return err
 	}
 	if err := tx.Commit(); err != nil {
-		return
+		return err
 	}
-	s.seededMu.Lock()
-	if s.seededPolicies == nil {
-		s.seededPolicies = map[string]bool{}
+	for _, k := range openKeys {
+		acceptable[k] = true
 	}
-	s.seededPolicies[gp] = true
-	s.seededMu.Unlock()
 	if added > 0 {
-		s.gateRev.Add(1)
-		s.clearVisibility()
-		if c, ok := s.d.Catalog.(interface{ ConsoleGateChanged() }); ok {
-			c.ConsoleGateChanged()
+		s.gateChanged()
+	}
+	return nil
+}
+
+func (s *Service) unavailableSince(ctx context.Context, keys []core.RatingKey) map[core.RatingKey]time.Time {
+	if len(keys) == 0 {
+		return nil
+	}
+	if current, _ := ctx.Value(currentPolicyKey{}).(bool); current {
+		if source, ok := s.d.Validator.(interface {
+			KnownUnavailableSinceCurrent(context.Context, []core.RatingKey) map[core.RatingKey]time.Time
+		}); ok {
+			return source.KnownUnavailableSinceCurrent(ctx, keys)
 		}
 	}
+	if source, ok := s.d.Validator.(interface {
+		KnownUnavailableSince(context.Context, []core.RatingKey) map[core.RatingKey]time.Time
+	}); ok {
+		return source.KnownUnavailableSince(ctx, keys)
+	}
+	return nil
 }
 
 type storedObsState struct {
@@ -812,22 +741,7 @@ func (s *Service) matchRetainedAndOpenGate(ctx context.Context, titles map[core.
 	for k := range titles {
 		keyList = append(keyList, k)
 	}
-	unavailable := map[core.RatingKey]time.Time{}
-	if source, ok := s.d.Validator.(interface {
-		KnownUnavailableSince(context.Context, []core.RatingKey) map[core.RatingKey]time.Time
-	}); ok {
-		if current, _ := ctx.Value(currentPolicyKey{}).(bool); current {
-			if durable, ok := s.d.Validator.(interface {
-				KnownUnavailableSinceCurrent(context.Context, []core.RatingKey) map[core.RatingKey]time.Time
-			}); ok {
-				unavailable = durable.KnownUnavailableSinceCurrent(ctx, keyList)
-			} else {
-				unavailable = source.KnownUnavailableSince(ctx, keyList)
-			}
-		} else {
-			unavailable = source.KnownUnavailableSince(ctx, keyList)
-		}
-	}
+	unavailable := s.unavailableSince(ctx, keyList)
 
 	var toInsert []observed
 	var toOpen []gateOpening

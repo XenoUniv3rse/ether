@@ -89,9 +89,6 @@ type Service struct {
 	revealChecked        map[core.RatingKey]time.Time
 	revealRuns           []time.Time
 	gateRev              atomic.Uint64
-	seedRunMu            sync.Mutex
-	seededMu             sync.RWMutex
-	seededPolicies       map[string]bool
 	lastPrune            time.Time
 	lastVerifyPolicy     string
 	checksSeeded         bool

@@ -62,7 +62,40 @@ func (s *Service) probeDue(ctx context.Context) error {
 		}
 	}
 	inProgressMemo := map[core.RatingKey]bool{}
-	gp := s.currentGatePolicy()
+	input := s.discoverySnapshot()
+	keys := make([]core.RatingKey, 0, len(due))
+	for _, item := range due {
+		if item.windowEnd == 0 || nowTS < item.windowEnd {
+			keys = append(keys, item.key)
+		}
+	}
+	open := s.openGateKeys(ctx, input.gatePolicy, keys)
+	pending := keys[:0]
+	for _, key := range keys {
+		if !open[key] {
+			pending = append(pending, key)
+		}
+	}
+	var titles []core.Title
+	if len(pending) > 0 {
+		titles, err = s.d.Catalog.CachedTitles(ctx, pending)
+		if err != nil {
+			return err
+		}
+	}
+	byKey := make(map[core.RatingKey]*core.Title, len(titles))
+	for i := range titles {
+		byKey[titles[i].Key] = &titles[i]
+	}
+	feeds := make(map[string]core.ReleaseFeed, len(input.feeds))
+	for _, f := range input.feeds {
+		feeds[f.ID] = f
+	}
+	// Check retained observations before spending a provider request on a
+	// due title, including the first check after its gate policy changed.
+	if err := s.reopenRetainedGates(offRequest(ctx), byKey, feeds, input, open); err != nil {
+		return err
+	}
 	for _, item := range due {
 		if ctx.Err() != nil {
 			return ctx.Err()
@@ -75,12 +108,12 @@ func (s *Service) probeDue(ctx context.Context) error {
 			_, _ = s.db.ExecContext(ctx, `UPDATE availability_title_checks SET next_check=0,priority=? WHERE rating_key=?`, basePrio, int64(item.key))
 			continue
 		}
-		if s.isGateOpen(ctx, gp, item.key) {
+		if open[item.key] {
 			_, _ = s.db.ExecContext(ctx, `UPDATE availability_title_checks SET next_check=0,state='found',reason='',priority=? WHERE rating_key=?`, basePrio, int64(item.key))
 			continue
 		}
-		t, e := s.d.Catalog.CachedTitle(ctx, item.key)
-		if e != nil || t == nil || t.Adult {
+		t := byKey[item.key]
+		if t == nil || t.Adult {
 			_, _ = s.db.ExecContext(ctx, `UPDATE availability_title_checks SET next_check=0,priority=? WHERE rating_key=?`, basePrio, int64(item.key))
 			continue
 		}
