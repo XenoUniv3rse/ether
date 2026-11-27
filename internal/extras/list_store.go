@@ -161,7 +161,7 @@ func (s *Service) saveListDB(ctx context.Context, cacheKey string, parentKey cor
 		return
 	}
 	for _, item := range stored {
-		if item.Key == 0 {
+		if item.Key == 0 || item.Source == SourceClientYouTube {
 			continue
 		}
 		itemJSON, err := json.Marshal(item)

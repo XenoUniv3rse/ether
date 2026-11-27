@@ -13,6 +13,7 @@ import (
 	"github.com/braedonsaunders/ether/internal/catalog"
 	"github.com/braedonsaunders/ether/internal/core"
 	"github.com/braedonsaunders/ether/internal/experience"
+	"github.com/braedonsaunders/ether/internal/extras"
 	"github.com/braedonsaunders/ether/internal/favorites"
 	"github.com/braedonsaunders/ether/internal/frontend"
 	"github.com/braedonsaunders/ether/internal/frontend/kit/ids"
@@ -448,7 +449,8 @@ func (a *App) newSurfaceExperience(protocol core.Protocol, artwork ...frontend.A
 		}
 		page, err := a.catalog.SeasonEpisodePage(ctx, show, season, offset, limit)
 		return page, true, err
-	}, Enrich: func(ctx context.Context, u *core.User, device core.Device, title *core.Title) (frontend.ItemDetail, error) {
+	}, Enrich: func(ctx context.Context, u *core.User, req frontend.ItemRequest, title *core.Title) (frontend.ItemDetail, error) {
+		device := req.Device
 		result := frontend.ItemDetail{Title: *title}
 		if title.PosterPath != "" {
 			result.Images = append(result.Images, frontend.Image{Kind: "poster", Path: title.PosterPath})
@@ -568,12 +570,16 @@ func (a *App) newSurfaceExperience(protocol core.Protocol, artwork ...frontend.A
 			}
 		}
 		if a.extras != nil {
-			clips, err := a.extras.List(ctx, title, device.Language)
+			var opts []extras.ListOption
+			if req.IncludeClientYouTube {
+				opts = append(opts, extras.IncludeClientYouTube)
+			}
+			clips, err := a.extras.List(ctx, title, device.Language, opts...)
 			if err != nil {
 				return frontend.ItemDetail{}, err
 			}
 			for _, clip := range clips {
-				result.Extras = append(result.Extras, frontend.Extra{Key: clip.Key, ParentKey: clip.ParentKey, Title: clip.Title, Kind: clip.Subtype, Source: clip.Site, SourceID: clip.SiteKey, Language: clip.Language, Official: clip.Official, PublishedAt: clip.PublishedAt, Duration: clip.Duration, Height: clip.Size})
+				result.Extras = append(result.Extras, frontendExtra(clip))
 			}
 		}
 		return result, nil

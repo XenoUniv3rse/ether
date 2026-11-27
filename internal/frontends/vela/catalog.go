@@ -1079,16 +1079,17 @@ func (i *instance) detail(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, pending := frontend.WithDetailPending(frontend.WithColdDetail(r.Context(), k), k)
 	r = r.WithContext(ctx)
-	d, e := i.host.Experience.Item(r.Context(), frontend.ItemRequest{Viewer: v, Device: requestDevice(r), Key: k})
+	clientTrailers := i.trailerPlaybackMode() == trailerPlaybackClient
+	d, e := i.host.Experience.Item(r.Context(), frontend.ItemRequest{Viewer: v, Device: requestDevice(r), Key: k, IncludeClientYouTube: clientTrailers})
 	if e != nil {
 		fail(w, e, r)
 		return
 	}
 	extras := []object{}
-	clientTrailers := i.trailerPlaybackMode() == trailerPlaybackClient
+	serverPlayback := i.extraPlaybackAvailable()
 	for _, x := range d.Extras {
 		availability := "unavailable"
-		if i.extraPlaybackAvailable() && (x.Kind == "trailer" || x.Kind == "teaser") {
+		if serverPlayback && !x.ClientOnly && (x.Kind == "trailer" || x.Kind == "teaser") {
 			availability = "unresolved"
 		}
 		kind := x.Kind

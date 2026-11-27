@@ -45,7 +45,7 @@ func (s extraSurface) Open(ctx context.Context, key core.RatingKey) (string, str
 }
 
 func frontendExtra(clip extras.Extra) frontend.Extra {
-	return frontend.Extra{Key: clip.Key, ParentKey: clip.ParentKey, Title: clip.Title, Kind: clip.Subtype, Source: clip.Site, SourceID: clip.SiteKey, Language: clip.Language, Official: clip.Official, PublishedAt: clip.PublishedAt, Duration: clip.Duration, Height: clip.Size}
+	return frontend.Extra{Key: clip.Key, ParentKey: clip.ParentKey, Title: clip.Title, Kind: clip.Subtype, Source: clip.Site, SourceID: clip.SiteKey, Language: clip.Language, Official: clip.Official, PublishedAt: clip.PublishedAt, Duration: clip.Duration, Height: clip.Size, ClientOnly: clip.Source == extras.SourceClientYouTube}
 }
 
 func toExtraClip(e extras.Extra) frontend.ExtraClip {
@@ -70,6 +70,10 @@ func toExtraClip(e extras.Extra) frontend.ExtraClip {
 
 func (s extraSurface) Enabled() bool {
 	return s.extras != nil && s.extras.Enabled()
+}
+
+func (s extraSurface) ClientYouTubeAvailable() bool {
+	return s.extras != nil && s.extras.ClientYouTubeAvailable()
 }
 
 func (s extraSurface) List(ctx context.Context, parent *core.Title, lang string) ([]frontend.ExtraClip, error) {

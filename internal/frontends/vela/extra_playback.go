@@ -3,16 +3,22 @@ package vela
 import (
 	"context"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/braedonsaunders/ether/internal/frontend"
 	"github.com/braedonsaunders/ether/internal/frontend/kit/caps"
 	"github.com/braedonsaunders/ether/internal/frontend/kit/ids"
-	"strings"
 )
 
 func (i *instance) extrasAvailable() bool {
 	if i.host.ExtraStreams != nil {
+		if i.trailerPlaybackMode() == trailerPlaybackClient {
+			client, ok := i.host.ExtraStreams.(interface{ ClientYouTubeAvailable() bool })
+			if ok && client.ClientYouTubeAvailable() {
+				return true
+			}
+		}
 		return i.host.ExtraStreams.Enabled()
 	}
 	return i.extraPlaybackAvailable() || i.previewAvailable()

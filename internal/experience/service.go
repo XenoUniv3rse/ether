@@ -246,7 +246,7 @@ type ServiceDeps struct {
 	EntityFavoritesSource   func(context.Context, *core.User, []frontend.FavoriteRef) (map[frontend.FavoriteRef]bool, error)
 
 	// Enrich must use cached or estimated data; it must never resolve releases.
-	Enrich func(context.Context, *core.User, core.Device, *core.Title) (frontend.ItemDetail, error)
+	Enrich func(context.Context, *core.User, frontend.ItemRequest, *core.Title) (frontend.ItemDetail, error)
 
 	Catalog             core.Catalog
 	Recommender         core.Recommender
@@ -1297,7 +1297,7 @@ func (s *Service) Item(ctx context.Context, req frontend.ItemRequest) (frontend.
 	}
 	d := frontend.ItemDetail{Title: *title}
 	if s.d.Enrich != nil {
-		d, err = s.d.Enrich(ctx, v, req.Device, title)
+		d, err = s.d.Enrich(ctx, v, req, title)
 		if err != nil {
 			return frontend.ItemDetail{}, err
 		}

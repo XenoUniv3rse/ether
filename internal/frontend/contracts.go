@@ -416,6 +416,8 @@ type ItemRequest struct {
 	Viewer *core.Viewer
 	Device core.Device
 	Key    core.RatingKey
+	// IncludeClientYouTube opts into YouTube trailers that can play on the device.
+	IncludeClientYouTube bool
 }
 
 // DateFilter is the date predicate accepted by the shared catalogue boundary.
@@ -752,7 +754,7 @@ type SubtitleSidecarUpload interface {
 	UploadSubtitle(ctx context.Context, t *Title, u *User, filename, format, language string, body []byte) (StreamInfo, error)
 }
 
-// Extra describes a playable trailer or clip. Key is the broker-facing item
+// Extra describes a trailer or clip. Key is the item
 // identity; Source and SourceID describe the upstream reference, not a resolved
 // URL or credentials. Plex media and part identifiers remain adapter-owned.
 type Extra struct {
@@ -762,6 +764,7 @@ type Extra struct {
 	PublishedAt                             time.Time
 	Duration                                time.Duration
 	Height                                  int
+	ClientOnly                              bool // playback requires the viewer's device
 }
 type ItemDetail struct {
 	Collection *core.Collection

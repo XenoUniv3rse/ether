@@ -46,6 +46,9 @@ setting is `frontends.vela.settings.trailerPlayback`, editable under Apps ›
 Vela › Trailers. In `clientWhenPossible` mode, an app that uses the embed URL
 connects to YouTube from the viewer's device.
 
-The setting applies to entries returned by Ether's existing extras discovery.
-A cloud host can still list a trailer even if YouTube refuses its playback
-request from the server.
+With extras enabled, `clientWhenPossible` includes TMDB YouTube trailers
+and teasers even when Ether has no resolver command. These client-only entries
+have `availability: "unavailable"` and carry `clientPlayback`. Plex Discover
+clips and TMDB videos can appear together in the same best-first list, with
+repeated video IDs deduplicated. When a resolver is present, server playback
+can still fail even though the trailer is listed.

@@ -235,7 +235,7 @@ func newThreeLevelPluginShowFixture(t *testing.T) *threeLevelPluginShowFixture {
 		IsNotInterestedMany: func(context.Context, *core.User, []core.RatingKey) (map[core.RatingKey]bool, error) { return nil, nil },
 		IsWatchlisted:       func(context.Context, *core.User, core.RatingKey) (bool, error) { return false, nil },
 		IsWatchlistedMany:   func(context.Context, int64, []core.RatingKey) (map[core.RatingKey]bool, error) { return nil, nil },
-		Enrich: func(_ context.Context, _ *core.User, _ core.Device, title *core.Title) (frontend.ItemDetail, error) {
+		Enrich: func(_ context.Context, _ *core.User, _ frontend.ItemRequest, title *core.Title) (frontend.ItemDetail, error) {
 			return frontend.ItemDetail{Title: *title}, nil
 		},
 	})
