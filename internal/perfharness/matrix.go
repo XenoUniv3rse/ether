@@ -111,7 +111,8 @@ func MatrixClients(live bool) []Client {
 		case "vela":
 			clients[i].Steps = append(clients[i].Steps, Step{Name: "HEAD /appearance", Method: http.MethodHead, ExpectedStatus: http.StatusOK, Class: classBrowse, Path: "/appearance"})
 			clients[i].Steps = append(clients[i].Steps,
-				Step{Name: "bootstrap", Class: classHome, Path: "/bootstrap"},
+				Step{Name: "bootstrap", Class: classHome, Path: "/bootstrap", Discover: discoverMatrixVelaRow},
+				Step{Name: "bootstrap shelf", Class: classBrowse, Path: "/rows/{matrixVelaRow}?cursor={matrixVelaRowCursor}"},
 				Step{Name: "recommendations rows", Class: classHome, Path: "/rows?limit=24"},
 				Step{Name: "movies page", Class: classBrowse, Path: "/libraries/{movieLibrary}/items?limit=48", Discover: discoverMatrixVelaID("velaMovie")},
 				Step{Name: "movie detail", Class: classDetail, Path: "/titles/{velaMovie}"},
@@ -202,6 +203,25 @@ func discoverMatrixID(variable string) func(map[string]string, []byte) {
 		}
 		if json.Unmarshal(body, &item) == nil && item.ID != "" {
 			setOnce(vars, variable, url.PathEscape(item.ID))
+		}
+	}
+}
+
+func discoverMatrixVelaRow(vars map[string]string, body []byte) {
+	var bootstrap struct {
+		Rows []struct {
+			ID         string `json:"id"`
+			NextCursor string `json:"nextCursor"`
+		} `json:"rows"`
+	}
+	if json.Unmarshal(body, &bootstrap) != nil {
+		return
+	}
+	for _, row := range bootstrap.Rows {
+		if row.ID != "" && row.NextCursor != "" {
+			vars["matrixVelaRow"] = url.PathEscape(row.ID)
+			vars["matrixVelaRowCursor"] = url.QueryEscape(row.NextCursor)
+			break
 		}
 	}
 }
