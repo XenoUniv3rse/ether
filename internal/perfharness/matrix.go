@@ -145,6 +145,7 @@ func MatrixClients(live bool) []Client {
 				clients[i].Steps = append(clients[i].Steps,
 					Step{Name: "live guide window", Method: http.MethodPost, Class: classGuide, Path: "/live/guide/window", Body: `{"channelIds":["{velaChannel}"],"from":"{guideWindowFrom}","until":"{guideWindowUntil}"}`},
 					Step{Name: "sports overlay", Class: classDetail, Path: "/surfaces/matrixsports.scorebug/document"},
+					Step{Name: "enable sports overlay", Method: http.MethodPut, Class: classState, Path: "/surfaces/matrixsports.scorebug/setting", Body: `{"enabled":true}`},
 					Step{Name: "sports overlay data", Class: classDetail, Path: "/surfaces/matrixsports.scorebug/data?p.event=event%3Acommunity.example.matrixsports%3Asports%3Agame-0", Discover: discoverMatrixLiveTopic},
 					Step{Name: "live events stream", Class: classGuide, Path: "/live/stream?alerts=1&topic={overlayTopic}", Stream: time.Minute},
 				)

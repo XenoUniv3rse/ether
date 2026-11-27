@@ -25,6 +25,7 @@ import (
 	"github.com/braedonsaunders/ether/internal/config"
 	"github.com/braedonsaunders/ether/internal/core"
 	"github.com/braedonsaunders/ether/internal/debrid"
+	"github.com/braedonsaunders/ether/internal/livetv"
 	"github.com/braedonsaunders/ether/internal/perfharness"
 	"github.com/braedonsaunders/ether/internal/store"
 )
@@ -325,6 +326,15 @@ func runPerfMatrixCase(t *testing.T, ctx context.Context, fixture string, c perf
 		}
 	}
 	if len(clients) == 0 || slices.Contains(clients, "console") {
+		templates, err := a.onair.Templates(ctx)
+		if err != nil || len(templates) == 0 {
+			t.Fatalf("On-Air templates fixture: %v", err)
+		}
+		look := templates[0].Style
+		look.Name = "Matrix fixture look"
+		if _, err := a.onair.SaveLook(ctx, look); err != nil {
+			t.Fatal("On-Air look fixture:", err)
+		}
 		if _, err := a.onair.UploadAsset(ctx, "matrix-artwork.jpg", "image", "", bytes.NewReader(poster.Bytes())); err != nil {
 			t.Fatal("On-Air artwork fixture:", err)
 		}
@@ -373,6 +383,14 @@ func runPerfMatrixCase(t *testing.T, ctx context.Context, fixture string, c perf
 		}
 	}
 	if c.live {
+		if len(clients) == 0 || slices.Contains(clients, "plex-appletv") {
+			if err := a.livetv.SaveOwnerGroups(ctx, []livetv.OwnerGroup{{
+				ID: "matrix-sports", Name: "Matrix sports",
+				Groups: []livetv.OwnerGroupSource{{SourceID: "matrix-guide", Name: "Sports"}},
+			}}); err != nil {
+				t.Fatal("live guide group fixture:", err)
+			}
+		}
 		if err := a.registrar.RefreshOwner(ctx); err != nil {
 			report.AddGap(c.name, "plex", "", "", "Plex Pass fixture unavailable")
 			t.Error("Plex Pass fixture:", err)

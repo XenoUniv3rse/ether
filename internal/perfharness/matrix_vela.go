@@ -65,7 +65,8 @@ func addMatrixVelaCoverage(c *Client) {
 		{Name: "collection contents", Class: classBrowse, Path: "/collections/{velaCollection}?limit=24"},
 		{Name: "track lyrics", Class: classDetail, Path: "/titles/{matrixMusicTrack}/lyrics"},
 		{Name: "track recording", Class: classDetail, Path: "/titles/{matrixMusicTrack}/recording"},
-		{Name: "music duplicates", Class: classBrowse, Path: "/libraries/{matrixMusicLibrary}/duplicates?limit=24"},
+		{Name: "music duplicates", Class: classBrowse, Path: "/libraries/{matrixMusicLibrary}/duplicates?limit=24", Discover: discoverMatrixVelaDuplicate},
+		{Name: "prefer recording release", Class: classState, Method: http.MethodPost, Path: "/libraries/{matrixMusicLibrary}/duplicates/{velaRecording}", Body: `{"preferredTitleId":"{velaPreferredRelease}"}`},
 		{Name: "scratch playlist create", Class: classState, Method: http.MethodPost, Path: "/playlists", Body: `{"name":"Matrix scratch playlist","titleIds":["{velaMovie}"]}`, Discover: discoverMatrixID("velaPlaylist")},
 		{Name: "scratch playlist add entry", Class: classState, Method: http.MethodPost, Path: "/playlists/{velaPlaylist}/entries", Body: `{"titleIds":["{velaMovie}"]}`},
 		{Name: "scratch playlist detail", Class: classBrowse, Path: "/playlists/{velaPlaylist}?limit=24", Discover: discoverMatrixVelaEntry},
@@ -246,5 +247,26 @@ func discoverMatrixVelaScratchGrant(vars map[string]string, body []byte) {
 	if pair.AccessToken != "" && pair.RefreshToken != "" {
 		vars["velaScratchAccess"] = pair.AccessToken
 		vars["velaScratchRefresh"] = pair.RefreshToken
+	}
+}
+
+func discoverMatrixVelaDuplicate(vars map[string]string, body []byte) {
+	var page struct {
+		Items []struct {
+			Recording string `json:"recordingId"`
+			Titles    []struct {
+				ID string `json:"id"`
+			} `json:"titles"`
+		} `json:"items"`
+	}
+	if json.Unmarshal(body, &page) != nil {
+		return
+	}
+	for _, item := range page.Items {
+		if item.Recording != "" && len(item.Titles) > 1 && item.Titles[0].ID != "" {
+			setOnce(vars, "velaRecording", url.PathEscape(item.Recording))
+			setOnce(vars, "velaPreferredRelease", item.Titles[0].ID)
+			return
+		}
 	}
 }

@@ -140,6 +140,9 @@ func matrixRouteExceptions() map[perfharness.MatrixRouteKey]string {
 	add("plex", http.MethodPost, "requires an enabled offline download source and a download queue",
 		"/downloadQueue", "/downloadQueue/{queue}/add", "/downloadQueue/{queue}/items/{item}/restart")
 	add("plex", http.MethodDelete, "requires an enabled offline download queue item", "/downloadQueue/{queue}/items/{item}")
+	add("plex", http.MethodPost, "requires an actual resolved part with selectable media tracks", "/library/parts/{part}")
+	add("plex", http.MethodPut, "requires a resolved part or bound playback stream", "/library/parts/{part}", "/library/streams/{stream}")
+	add("plex", http.MethodDelete, "requires a bound uploaded subtitle stream", "/library/streams/{stream}")
 	add("plex", http.MethodPost, "requires a usable live channel transport source", "/livetv/dvrs/{dvr}/channels/{channel}/tune")
 	add("plex", http.MethodDelete, "requires an active live capture or recording subscription",
 		"/media/grabbers/operations/{operation}", "/media/subscriptions/{subscription}")
@@ -167,6 +170,10 @@ func matrixRouteExceptions() map[perfharness.MatrixRouteKey]string {
 		add("plex", method, "requires a live stream subscription or tune operation",
 			"/media/subscriptions/{subscription}", "/media/grabbers/operations/{operation}")
 	}
+	add("vela", http.MethodPost, "requires a published HTTPS origin and a handoff bound to that origin",
+		"/vela/v0/auth/web-code", "/vela/v0/auth/web-code/redeem")
+	add("vela", http.MethodPost, "requires a screen or surface declaring an invokable plugin action",
+		"/vela/v0/screens/{id}/actions/{action}", "/vela/v0/surfaces/{id}/actions/{action}")
 	add("vela", http.MethodPost, "requires a configured Plex account and working Plex Home upstream",
 		"/vela/v0/auth/plex", "/vela/v0/auth/plex/profile", "/vela/v0/auth/plex/profiles/challenge")
 	add("vela", http.MethodPost, "requires a configured playlist import provider and an import job",
@@ -240,6 +247,9 @@ func matrixCaseRouteExceptions(inventory perfharness.MatrixRoutes, live bool) ma
 			case "vela":
 				if read && (path == "/vela/v0/live/stream" || path == "/vela/v0/surfaces/{id}/document" || path == "/vela/v0/surfaces/{id}/data") {
 					reason = "the sports screen and live topic fixture are installed in live configurations"
+				}
+				if entry.Method == http.MethodPut && path == "/vela/v0/surfaces/{id}/setting" {
+					reason = "the settable sports overlay fixture is installed in live configurations"
 				}
 				if entry.Method == http.MethodPost && path == "/vela/v0/live/guide/window" {
 					reason = "this configuration has no channel fixture for a guide window"

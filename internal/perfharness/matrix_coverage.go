@@ -70,7 +70,7 @@ func addMatrixConsoleCoverage(c *Client) {
 		"/frontends/plex/health", "/frontends/plex/settings", "/frontends/plex/status",
 		"/libraries/{pluginLibrary}", "/libraries/{pluginLibrary}/cache",
 		"/config/server", "/status/catalog", "/row-sources/facets/{pluginLibrary}/genre",
-		"/libraries/{pluginLibrary}/tabs", "/libraries/{pluginLibrary}/setup",
+		"/libraries/{pluginLibrary}/tabs", "/libraries/{consoleLiveLibrary}/setup",
 		"/libraries/{pluginLibrary}/item/{consoleItemRef}", "/libraries/{pluginLibrary}/item/{consoleItemRef}/match",
 		"/plugins-setup/{consolePlugin}", "/libraries/{consoleLiveLibrary}/live?tab=fixture-live&limit=24",
 		"/metadata/shows/{consoleKey}/groups", "/metadata/shows/{consoleKey}/release-numbering",
@@ -86,6 +86,11 @@ func addMatrixConsoleCoverage(c *Client) {
 	c.Steps = append(c.Steps, Step{Name: "viewer safety policy", Class: classConsole, Path: "/safety/policies/{viewerId}"})
 	const spec = `{"name":"Matrix scratch collection","mediaType":"movie","sources":[{"kind":"titles","keys":["{consoleMovieKey}"]}],"sort":"source","refresh":"weekly","enabled":true,"artwork":{"mode":"custom","url":"/p.jpg"}}`
 	for _, step := range []Step{
+		{Name: "fixture explain title quality", Method: http.MethodPost, Path: "/quality/explain", Body: `{"userId":{viewerId},"clientId":"type:Apple TV","titleKey":"{consoleMovieKey}","remote":true}`},
+		{Name: "fixture preview library visibility", Method: http.MethodPost, Path: "/catalog/visibility/preview", Body: `{"libraryId":{pluginLibrary},"visibilityDefault":"show","exclusions":[]}`},
+		{Name: "fixture preview plugin live tab", Method: http.MethodPost, Path: "/libraries/{consoleLiveLibrary}/tabs/preview", Body: `{"key":"fixture-live","label":"Live","kind":"live"}`},
+		{Name: "fixture ensure plugin library", Method: http.MethodPost, Path: "/plugins-setup/{consolePlugin}/ensure", Body: `{}`},
+		{Name: "fixture save plugin setup settings", Method: http.MethodPut, Path: "/plugins-setup/{consolePlugin}/settings", Body: `{}`},
 		{Name: "fixture pin cache release", Method: http.MethodPost, Path: "/cache/pin", Body: `{"releaseId":"{consoleRelease}","pinned":true}`},
 		{Name: "fixture unpin cache release", Method: http.MethodPost, Path: "/cache/pin", Body: `{"releaseId":"{consoleRelease}","pinned":false}`},
 		{Name: "fixture clear cache release", Method: http.MethodPost, Path: "/cache/clear", Body: `{"releaseId":"{consoleRelease}"}`},
@@ -477,6 +482,10 @@ func discoverMatrixMBPlaylistEntry(vars map[string]string, body []byte) {
 }
 
 func addMatrixPlexCoverage(c *Client) {
+	c.Steps = append(c.Steps,
+		Step{Name: "fixture person image", Class: classDetail, Path: "/{plexPersonThumb}"},
+		Step{Name: "fixture person image HEAD", Class: classDetail, Method: http.MethodHead, Path: "/{plexPersonThumb}"},
+	)
 	c.Steps = append(c.Steps, Step{Name: "sync compatibility", Class: classStatic, Path: "/sync"})
 	const page = "X-Plex-Container-Start=0&X-Plex-Container-Size=24"
 	for _, path := range []string{
@@ -503,7 +512,6 @@ func addMatrixPlexCoverage(c *Client) {
 		"/status/sessions", "/transcode/sessions", "/updater/status",
 		"/library/metadata/{movieKey}/subtitles?language=en",
 		"/library/metadata/{movieKey}/discoveryPoster/v1",
-		"/{plexPersonThumb}",
 		"/video/:/transcode/universal/decision?path=%2Flibrary%2Fmetadata%2F{movieKey}&directPlay=1&directStream=1&session=matrix-decision",
 	} {
 		c.Steps = append(c.Steps,
@@ -534,6 +542,8 @@ func addMatrixPlexCoverage(c *Client) {
 		Step{Name: "owner refresh movie metadata", Class: classState, Method: http.MethodPut, OwnerOnly: true, Path: "/library/metadata/{matchMovieKey}/refresh"},
 		Step{Name: "owner upload subtitle", Class: classState, Method: http.MethodPost, OwnerOnly: true, Path: "/library/metadata/{matchMovieKey}/subtitles?title=matrix.en.srt&format=srt&language=en", Body: "1\n00:00:00,000 --> 00:00:01,000\nMatrix fixture\n"},
 		Step{Name: "owner search subtitles via PUT", Class: classState, Method: http.MethodPut, OwnerOnly: true, Path: "/library/metadata/{matchMovieKey}/subtitles?language=en"},
+		Step{Name: "owner upload fixture poster", Class: classState, Method: http.MethodPost, OwnerOnly: true, Path: "/library/metadata/{matchMovieKey}/posters?url=https%3A%2F%2Fimages.example.invalid%2Fmatrix%2Falbum.jpg"},
+		Step{Name: "owner upload fixture backdrop", Class: classState, Method: http.MethodPost, OwnerOnly: true, Path: "/library/metadata/{matchMovieKey}/arts?url=https%3A%2F%2Fimages.example.invalid%2Fmatrix%2Falbum.jpg"},
 	)
 	for _, item := range []struct{ leaf, artwork string }{{"art", "art"}, {"arts", "art"}, {"poster", "thumb"}, {"posters", "thumb"}} {
 		c.Steps = append(c.Steps, Step{Name: "owner pick " + item.leaf, Class: classState, Method: http.MethodPut, OwnerOnly: true,
@@ -562,6 +572,7 @@ func addMatrixPlexCoverage(c *Client) {
 			Step{Name: "fixture owner HEAD " + path, Class: classDetail, Method: http.MethodHead, Path: path, OwnerOnly: true},
 		)
 	}
+	c.Steps = append(c.Steps, Step{Name: "owner delete recorded play", Class: classState, Method: http.MethodDelete, OwnerOnly: true, Path: "/status/sessions/history/{plexHistory}"})
 	// Probe the matching HEAD handlers using the same real IDs and paging
 	// parameters. One sample per registered pattern is sufficient here.
 	for _, path := range []string{

@@ -37,6 +37,7 @@ func addMatrixPlexLiveCoverage(c *Client) {
 		provider, provider + "/sections", provider + "/sections/{plexDVR}/all",
 		provider + "/grid?type=1&beginsAt%3C={now3h}&endsAt%3E={now}", provider + "/lineups/dvr/channels",
 		provider + "/lineups/dvr/channels/featured", provider + "/categories/sports/channels",
+		provider + "/guides/matrix-sports/channels",
 		provider + "/channels/{plexChannel}", provider + "/metadata/{plexProgramme}",
 		provider + "/hubs?count=12", provider + "/hubs/sections/home?count=12",
 		provider + "/hubs/discover?count=12", provider + "/hubs/promoted?count=12",

@@ -144,8 +144,8 @@ func discoverPluginLibrary(vars map[string]string, body []byte) {
 		for _, lib := range list.Libraries {
 			if lib.Source == "plugin" {
 				setOnce(vars, "pluginLibrary", strconv.FormatInt(lib.ID, 10))
-				setOnce(vars, "consolePlugin", lib.Plugin)
 				if lib.Plugin == "community.example.matrixcatalogue" {
+					setOnce(vars, "consolePlugin", lib.Plugin)
 					setOnce(vars, "consoleLiveLibrary", strconv.FormatInt(lib.ID, 10))
 				}
 			}
