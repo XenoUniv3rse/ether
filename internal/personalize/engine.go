@@ -322,6 +322,9 @@ type flight struct {
 	// started: a worker is building; again: a request arrived after the
 	// build read its inputs, so it must run once more (guarded by e.mu).
 	started, again bool
+	// fresh marks a cold viewer whose owner just saved a taste correction.
+	// Their first Home must see the rebuilt model instead of the generic one.
+	fresh bool
 }
 
 var (

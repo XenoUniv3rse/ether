@@ -21,8 +21,13 @@ import (
 // request asks for a viewer's model to be (re)built in the background and
 // returns a handle that completes when it is.
 func (e *Engine) request(userID int64) *flight {
+	return e.requestModel(userID, false)
+}
+
+func (e *Engine) requestModel(userID int64, fresh bool) *flight {
 	e.mu.Lock()
 	if f, ok := e.flights[userID]; ok {
+		f.fresh = f.fresh || fresh
 		if f.started {
 			// The running build may predate what triggered this request
 			// (a watch-state change): build again when it finishes.
@@ -31,7 +36,7 @@ func (e *Engine) request(userID int64) *flight {
 		e.mu.Unlock()
 		return f
 	}
-	f := &flight{done: make(chan struct{})}
+	f := &flight{done: make(chan struct{}), fresh: fresh}
 	e.flights[userID] = f
 	closed := e.closed
 	e.mu.Unlock()
@@ -238,6 +243,19 @@ func (e *Engine) modelFor(ctx context.Context, user *core.User, wait bool) *user
 		e.mu.Lock()
 		defer e.mu.Unlock()
 		return e.models[genericID]
+	}
+	e.mu.Lock()
+	pending := e.flights[user.ID]
+	waitForCorrection := pending != nil && pending.fresh
+	e.mu.Unlock()
+	if waitForCorrection {
+		select {
+		case <-pending.done:
+		case <-ctx.Done():
+			return nil
+		case <-e.ctx.Done():
+			return nil
+		}
 	}
 	var signature string
 	revisionOK := true
