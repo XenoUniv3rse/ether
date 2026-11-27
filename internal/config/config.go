@@ -325,6 +325,12 @@ type UsenetProvider struct {
 	// no warm floor for this provider. Backfill providers are never kept
 	// warm regardless.
 	MinIdle int `json:"minIdle,omitempty"`
+	// Backbone names the article store this account shares with others
+	// (for example "omicron" for Newshosting and its resellers). When one
+	// account on a backbone answers "no such article", the others on it
+	// are counted as having answered the same and are not asked. Case and
+	// surrounding spaces are ignored; empty = the account's own store.
+	Backbone string `json:"backbone,omitempty"`
 }
 
 type Indexer struct {

@@ -332,9 +332,12 @@ func (f *Fetcher) startHedge(ctx context.Context, id string, groups []string, pr
 		target.hedgeLosses.Add(1)
 		target.hedgeWaste.Add(wire)
 		if errors.Is(err, ErrNoSuchArticle) {
-			f.misses.add(id, target.key)
+			same := f.noteMissing(id, target)
 			if hint != nil {
 				hint.Miss(target.key)
+				for _, k := range same {
+					hint.Miss(k)
+				}
 			}
 		}
 		if err != nil {

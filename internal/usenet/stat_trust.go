@@ -440,6 +440,7 @@ type statPending struct {
 	caller    string
 	missed    bool
 	uncertain bool
+	backbones []string // backbones whose accounts answered 430 (StatStream)
 }
 
 // verifyUntrustedStatClaims validates STAT-223 claims from a pool whose STAT
