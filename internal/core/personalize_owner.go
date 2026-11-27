@@ -160,7 +160,7 @@ type RowInsight struct {
 	Title         string  `json:"title"`
 	Impressions7d int     `json:"impressions7d"`
 	Plays7d       int     `json:"plays7d"`
-	PlayRate      float64 `json:"playRate"`
+	PlayRate      float64 `json:"playRate"` // Observed rate. The rows arrive in confidence-bound order.
 	LowSample     bool    `json:"lowSample"`
 }
 

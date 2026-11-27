@@ -8,6 +8,7 @@ import (
 	"maps"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/braedonsaunders/ether/internal/core"
 	"github.com/braedonsaunders/ether/internal/store"
@@ -246,7 +247,7 @@ func compareRecommendationCohort(a, b recommendationCohort) int {
 	return cmp.Or(cmp.Compare(a.day, b.day), cmp.Compare(a.user, b.user), cmp.Compare(a.hub, b.hub), cmp.Compare(a.app, b.app))
 }
 
-// recommendationValues bounds each batched statement to 800 bind parameters.
+// recommendationValues builds a placeholder list for a bounded write batch.
 func recommendationValues(rows, width int) string {
 	tuple := "(" + placeholders(width) + ")"
 	return strings.Repeat(tuple+",", rows-1) + tuple
@@ -304,11 +305,15 @@ func (s *sqlStore) recordRecommendationStart(ctx context.Context, tx *sql.Tx, p 
 			return err
 		}
 	}
-	_, err = tx.ExecContext(ctx, `INSERT INTO personalize_recommendation_starts (day, user_id, starts, attributed)
+	return s.countRecommendationStart(ctx, tx, p.started, p.userID, match.kind != "")
+}
+
+func (s *sqlStore) countRecommendationStart(ctx context.Context, tx *sql.Tx, at time.Time, user int64, attributed bool) error {
+	_, err := tx.ExecContext(ctx, `INSERT INTO personalize_recommendation_starts (day, user_id, starts, attributed)
 		VALUES (?, ?, 1, ?) ON CONFLICT(day, user_id) DO UPDATE SET
 		starts = personalize_recommendation_starts.starts + 1,
 		attributed = personalize_recommendation_starts.attributed + excluded.attributed`,
-		dayOf(p.started, s.loc), p.userID, store.BoolInt(match.kind != ""))
+		dayOf(at, s.loc), user, store.BoolInt(attributed))
 	return err
 }
 

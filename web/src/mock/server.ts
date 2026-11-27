@@ -5990,7 +5990,7 @@ export function createFakeServer(opts: FakeOptions = {}) {
             title: row.title,
             impressions7d: row.impressions,
             plays7d: row.plays,
-            playRate: row.rankRate,
+            playRate: row.plays / row.impressions,
             lowSample: row.lowSample,
           })),
         });

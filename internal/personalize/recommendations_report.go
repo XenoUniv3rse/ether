@@ -50,7 +50,7 @@ func (e *Engine) RowInsights(ctx context.Context, days int) ([]core.RowInsight, 
 	out := make([]core.RowInsight, 0, len(report.Rows))
 	for _, row := range report.Rows {
 		out = append(out, core.RowInsight{HubID: row.Kind, Title: row.Title, Impressions7d: row.Impressions,
-			Plays7d: row.Plays, PlayRate: row.RankRate, LowSample: row.LowSample})
+			Plays7d: row.Plays, PlayRate: float64(row.Plays) / float64(row.Impressions), LowSample: row.LowSample})
 	}
 	return out, nil
 }

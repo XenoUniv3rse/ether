@@ -232,7 +232,7 @@ var tierUntouchedTables = []string{
 	"mdblist_accounts", "mdblist_post_pacing",
 	"plexwatch_account", "plexwatch_fence", "plexwatch_pin", "plexwatch_pms", "plexwatch_pms_held", "plexwatch_pms_unmatched",
 	"plexwatch_pms_viewer", "plex_counters", "personalize_overrides", "personalize_ranker",
-	"personalize_recommendation_days", "personalize_recommendation_deliveries", "personalize_recommendation_starts", "personalize_row_impressions", "personalize_serves", "personalize_pages", "trackprefs_rules",
+	"personalize_recommendation_days", "personalize_recommendation_deliveries", "personalize_recommendation_starts", "personalize_recommendation_upgrades", "personalize_row_impressions", "personalize_serves", "personalize_pages", "trackprefs_rules",
 	"episodeorder_groups", "watchlist_meta", "watchlist_settings", "watchlist_community_jobs", "watchlist_community_locks", "watchlist_availability_jobs", "migrate_plans",
 	// Cluster, placement, playback plumbing (titles only through the
 	// scanned sources above).

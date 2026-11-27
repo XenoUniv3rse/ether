@@ -152,7 +152,7 @@ export function Recommendations({ viewers }: { viewers: EtherUser[] }) {
               </p>
               <p>
                 {t(
-                  "Rows need 20 impressions to rank. The ranked rate is the low end of the 95% confidence range.",
+                  "Rows need 20 impressions to rank. Ranking uses the low end of the 95% confidence range.",
                 )}
               </p>
               <p>
@@ -186,12 +186,12 @@ export function Recommendations({ viewers }: { viewers: EtherUser[] }) {
   );
 }
 
-function RankedRate({ row }: { row: RecommendationRow }) {
+function ObservedRate({ row }: { row: RecommendationRow }) {
   if (row.lowSample)
     return <span className="text-xs font-medium text-warning">{t("Not enough data yet")}</span>;
   return (
     <div className="tabular-nums">
-      <span className="font-semibold text-fg">{formatPercent(row.rankRate, 1)}</span>
+      <span className="font-semibold text-fg">{rate(row.plays, row.impressions)}</span>
       <p className="text-xs text-fg-muted">
         {t("{low}–{high} confidence range", {
           low: formatPercent(row.low, 1),
@@ -257,10 +257,10 @@ function PerformanceTable({
     { key: "row", header: rowLabel, sortValue: (row) => row.title, cell: rowButton },
     {
       key: "rate",
-      header: rateLabel,
+      header: t("Play rate"),
       align: "right",
       sortValue: (row) => (row.lowSample ? -1 : row.rankRate),
-      cell: (row) => <RankedRate row={row} />,
+      cell: (row) => <ObservedRate row={row} />,
     },
     ...metrics.map((metric) => ({ ...metric, align: "right" as const })),
     {
@@ -307,7 +307,7 @@ function PerformanceTable({
                     <div className="grid gap-3 py-1">
                       {rowButton(row)}
                       <div className="flex items-center justify-between gap-2">
-                        <RankedRate row={row} />
+                        <ObservedRate row={row} />
                         <CompactTrend values={row.trend} label={trendLabel} />
                       </div>
                       <dl className="grid grid-cols-3 gap-2 text-xs">
@@ -486,6 +486,8 @@ function appLabel(key: string) {
       return "Silo";
     case "stremio":
       return "Stremio";
+    case "unknown":
+      return t("Unknown");
     case "xtream":
       return "Xtream";
     default:

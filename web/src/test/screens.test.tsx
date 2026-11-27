@@ -102,7 +102,7 @@ describe("Overview", () => {
                   title: "Top 10 for You",
                   impressions7d: 80,
                   plays7d: 22,
-                  playRate: 0.191,
+                  playRate: 0.275,
                   lowSample: false,
                 },
                 {
@@ -110,7 +110,7 @@ describe("Overview", () => {
                   title: "Acclaimed by Genre",
                   impressions7d: 5,
                   plays7d: 1,
-                  playRate: 0.02,
+                  playRate: 0.2,
                   lowSample: true,
                 },
                 {
@@ -133,7 +133,7 @@ describe("Overview", () => {
       "section",
     )!;
     const cwItem = (await within(bestRows).findByText("Top 10 for You", {}, WAIT)).closest("li")!;
-    expect(within(cwItem).getByText("19.1%")).toBeInTheDocument();
+    expect(within(cwItem).getByText("27.5%")).toBeInTheDocument();
 
     expect(within(bestRows).getByText("Acclaimed by Genre")).toBeInTheDocument();
     expect(within(bestRows).getByText("Not enough data yet")).toBeInTheDocument();

@@ -377,7 +377,7 @@ func TestInsightsAndActivity(t *testing.T) {
 		byKind[r.HubID] = r
 	}
 	g := byKind[KindHiddenGems]
-	if g.Impressions7d != 1 || g.Plays7d != 1 || !g.LowSample || g.PlayRate <= 0 || g.PlayRate >= 1 || g.Title != "Hidden Gems for You" {
+	if g.Impressions7d != 1 || g.Plays7d != 1 || !g.LowSample || g.PlayRate != 1 || g.Title != "Hidden Gems for You" {
 		t.Fatalf("hidden gems insight = %+v", g)
 	}
 	if tr := byKind[KindTrending]; tr.Impressions7d != 1 || tr.Plays7d != 0 {
