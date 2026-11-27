@@ -41,6 +41,9 @@ type pool struct {
 	sem           *prioSem
 	brk           *breaker
 	statTrust     *statTrust
+	// backboneName is the live backbone name (backbone.go). cfg.Backbone
+	// can be stale: a backbone-only edit reuses the pool.
+	backboneName atomic.Pointer[string]
 
 	mu       sync.Mutex
 	warmMu   sync.Mutex
@@ -166,6 +169,7 @@ func newPool(key string, cfg config.UsenetProvider, o *Options, log *slog.Logger
 		p.brk.authMax = max(o.AuthRetryMax, p.brk.authMin)
 	}
 	p.minIdle.Store(int32(effectiveMinIdle(cfg, globalMinIdle)))
+	p.setBackbone(cfg.Backbone)
 	p.wg.Add(1)
 	go p.janitor()
 	return p

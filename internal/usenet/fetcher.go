@@ -315,8 +315,9 @@ func (f *Fetcher) replacePoolsLocked(providers []config.UsenetProvider) []*pool 
 		}
 		var p *pool
 		for _, op := range old {
-			if op.cfg == cfg && op.dialGen == f.dialGen && !reused[op] {
+			if sameIgnoringBackbone(op.cfg, cfg) && op.dialGen == f.dialGen && !reused[op] {
 				p = op
+				p.setBackbone(cfg.Backbone)
 				break
 			}
 		}

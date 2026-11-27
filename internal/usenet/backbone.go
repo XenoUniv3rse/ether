@@ -1,11 +1,32 @@
 package usenet
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/braedonsaunders/ether/internal/config"
+)
 
 // backbone is the provider's article store name, normalized; "" when the
 // account is not grouped with others.
 func (p *pool) backbone() string {
-	return strings.ToLower(strings.TrimSpace(p.cfg.Backbone))
+	if name := p.backboneName.Load(); name != nil {
+		return *name
+	}
+	return ""
+}
+
+// setBackbone sets the live backbone name. Safe while the pool serves.
+func (p *pool) setBackbone(name string) {
+	name = strings.ToLower(strings.TrimSpace(name))
+	p.backboneName.Store(&name)
+}
+
+// sameIgnoringBackbone reports whether a and b differ at most in Backbone.
+// The name only steers which accounts are asked, so editing it keeps the
+// pool and its warm connections instead of rebuilding the provider.
+func sameIgnoringBackbone(a, b config.UsenetProvider) bool {
+	a.Backbone = b.Backbone
+	return a == b
 }
 
 // noteMissing records that p answered "no such article" for id, and that
