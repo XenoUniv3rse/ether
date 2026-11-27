@@ -2805,6 +2805,9 @@ func (s *Service) importSource(ctx context.Context, src Source) (Source, error) 
 		return src, err
 	}
 	writes.ProgrammesWritten, writes.ProgrammesDeleted, writes.ProgrammesKept = pw.ProgrammesWritten, pw.ProgrammesDeleted, pw.ProgrammesKept
+	if _, err := pruneCatchUpWatch(ctx, tx, src.ID, src.UpdatedAt); err != nil {
+		return src, err
+	}
 	gw, err := writeGuideChannels(ctx, tx, src.ID, g)
 	if err != nil {
 		return src, err
@@ -3159,7 +3162,7 @@ func (s *Service) DeleteSource(ctx context.Context, id string) error {
 		return err
 	}
 	d := store.DialectOf(s.o.DB)
-	for _, q := range []string{`DELETE FROM livetv_channels WHERE ` + store.JSONText(d, "data", "sourceId") + `=?`, `DELETE FROM livetv_programmes WHERE source_id=?`, `DELETE FROM livetv_login_streams WHERE source_id=?`, `DELETE FROM livetv_sources WHERE id=?`, `DELETE FROM livetv_source_refresh WHERE id=?`, `DELETE FROM xtream_vod WHERE provider=?`, `DELETE FROM xtream_vod_refresh WHERE provider=?`, `DELETE FROM livetv_guide_channels WHERE source_id=?`,
+	for _, q := range []string{`DELETE FROM livetv_channels WHERE ` + store.JSONText(d, "data", "sourceId") + `=?`, `DELETE FROM livetv_programmes WHERE source_id=?`, `DELETE FROM livetv_catchup_watch WHERE guide_source=?`, `DELETE FROM livetv_login_streams WHERE source_id=?`, `DELETE FROM livetv_sources WHERE id=?`, `DELETE FROM livetv_source_refresh WHERE id=?`, `DELETE FROM xtream_vod WHERE provider=?`, `DELETE FROM xtream_vod_refresh WHERE provider=?`, `DELETE FROM livetv_guide_channels WHERE source_id=?`,
 		`UPDATE livetv_channels SET data=` + store.JSONRemove(d, "data", "guideSourceId") + ` WHERE ` + store.JSONText(d, "data", "guideSourceId") + `=?`} {
 		if _, err = tx.ExecContext(ctx, q, id); err != nil {
 			return err

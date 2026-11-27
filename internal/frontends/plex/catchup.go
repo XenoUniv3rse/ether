@@ -2,6 +2,7 @@ package plex
 
 import (
 	"cmp"
+	"math"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -108,8 +109,98 @@ func catchUpMetadata(sec Section, item frontend.CatchUpItem) model.Metadata {
 		part := "/video/:/transcode/universal/start.m3u8?" + url.Values{"path": {key}}.Encode()
 		md.Media = []model.Media{{ID: 1, Duration: md.Duration, Container: "mpegts", Protocol: "hls",
 			Part: []model.Part{{ID: 1, Key: part, Duration: md.Duration, Container: "mpegts", Protocol: "hls"}}}}
+		md.ViewOffset, md.ViewCount = item.Watch.ViewOffset.Milliseconds(), item.Watch.ViewCount
+		md.LastViewedAt = unixOrZero(item.Watch.LastViewedAt)
 	}
 	return md
+}
+
+// catchUpStateID returns the catch-up airing a timeline or scrobble names,
+// by ratingKey or key ("/library/metadata/<id>" or the bare id).
+func catchUpStateID(q url.Values) (string, bool) {
+	for _, raw := range []string{q.Get("ratingKey"), q.Get("key")} {
+		id := strings.TrimPrefix(raw, catchUpMetadataPrefix)
+		if _, ok := frontend.CatchUpEpisodeRequest(id); ok {
+			return id, true
+		}
+	}
+	return "", false
+}
+
+func (s *Server) catchUpWatchState() (frontend.CatchUpWatchState, bool) {
+	live := s.svc().liveTV
+	if live == nil || !live.Enabled() {
+		return nil, false
+	}
+	w, ok := live.(frontend.CatchUpWatchState)
+	return w, ok
+}
+
+// catchUpTimeline records a timeline for a catch-up airing as its resume
+// point (and watched once it crosses the watched threshold).
+func (s *Server) catchUpTimeline(w http.ResponseWriter, r *http.Request) bool {
+	q := r.URL.Query()
+	id, ok := catchUpStateID(q)
+	if !ok {
+		return false
+	}
+	pr := FromContext(r.Context())
+	watch, ok := s.catchUpWatchState()
+	if !ok || pr.User == nil {
+		writeHTTPError(w, http.StatusNotFound)
+		return true
+	}
+	state := q.Get("state")
+	switch state {
+	case "playing", "paused", "stopped", "buffering":
+	default:
+		writeHTTPError(w, http.StatusBadRequest)
+		return true
+	}
+	var at [2]time.Duration
+	for i, name := range []string{"time", "duration"} {
+		if !q.Has(name) {
+			continue
+		}
+		n, err := strconv.ParseInt(q.Get(name), 10, 64)
+		if err != nil || n < 0 || n > math.MaxInt64/int64(time.Millisecond) {
+			writeHTTPError(w, http.StatusBadRequest)
+			return true
+		}
+		at[i] = time.Duration(n) * time.Millisecond
+	}
+	if !q.Has("time") {
+		s.writeEmpty(w, r)
+		return true
+	}
+	if err := watch.CatchUpProgress(r.Context(), pr.User, id, at[0], at[1], state); err != nil {
+		s.writeErr(w, r, err)
+		return true
+	}
+	s.writeEmpty(w, r)
+	return true
+}
+
+// catchUpScrobble marks a catch-up airing watched or unwatched.
+func (s *Server) catchUpScrobble(w http.ResponseWriter, r *http.Request, watched bool) bool {
+	q := r.URL.Query()
+	id, ok := catchUpStateID(url.Values{"key": {q.Get("key")}})
+	if !ok {
+		return false
+	}
+	pr := FromContext(r.Context())
+	watch, ok := s.catchUpWatchState()
+	if !ok || pr.User == nil || q.Get("identifier") != "com.plexapp.plugins.library" {
+		writeHTTPError(w, http.StatusNotFound)
+		return true
+	}
+	if err := watch.CatchUpSetWatched(r.Context(), pr.User, id, watched); err != nil {
+		s.writeErr(w, r, err)
+		return true
+	}
+	s.log.Info("watch state changed", "user", pr.User.ID, "client", pr.ClientID, "key", id, "watched", watched, "items", 1)
+	writeStateMutationOK(w)
+	return true
 }
 
 func (s *Server) catchUpBrowse(w http.ResponseWriter, r *http.Request, parent string, recursive bool) {

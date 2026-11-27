@@ -50,6 +50,30 @@ func (f *CatchUpLive) CatchUpItem(_ context.Context, _ *frontend.Viewer, id stri
 	}
 	return f.Item, nil
 }
+
+// CatchUpProgress keeps the latest position as the airing's resume point.
+func (f *CatchUpLive) CatchUpProgress(_ context.Context, _ *frontend.Viewer, id string, offset, _ time.Duration, _ string) error {
+	if id != f.Item.ID && id != frontend.CatchUpGUID(f.Item) {
+		return frontend.ErrNotFound
+	}
+	f.Item.Watch.ViewOffset = offset
+	return nil
+}
+
+// CatchUpSetWatched counts a viewing or clears the airing's state.
+func (f *CatchUpLive) CatchUpSetWatched(_ context.Context, _ *frontend.Viewer, id string, watched bool) error {
+	if id != f.Item.ID && id != frontend.CatchUpGUID(f.Item) {
+		return frontend.ErrNotFound
+	}
+	f.Item.Watch.ViewOffset = 0
+	if watched {
+		f.Item.Watch.ViewCount++
+	} else {
+		f.Item.Watch.ViewCount = 0
+	}
+	return nil
+}
+
 func (f *CatchUpLive) StartCatchUp(_ context.Context, _ *frontend.User, req frontend.CatchUpRequest, _ frontend.ClientCaps, _ string) (frontend.CatchUpInfo, error) {
 	f.Opened = req
 	info, _ := f.LibraryCatchUpSession(frontend.SessionAccess{}, "archive-session")

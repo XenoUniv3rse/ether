@@ -132,7 +132,11 @@ func (h liveTVHost) CatchUpItem(ctx context.Context, u *frontend.Viewer, id stri
 		if !found || p.ID != req.ProgrammeID || !eligible || !s.allowedProgramme(ctx, u, ch, &p) {
 			return frontend.CatchUpItem{}, core.ErrNotFound
 		}
-		return catchUpLibraryItem(p, frontend.TypeEpisode), nil
+		item := []frontend.CatchUpItem{catchUpLibraryItem(p, frontend.TypeEpisode)}
+		if err := s.fillCatchUpWatch(ctx, u, item); err != nil {
+			return frontend.CatchUpItem{}, err
+		}
+		return item[0], nil
 	}
 	if groupKind == "" && !strings.HasPrefix(id, "catchup-show-") && !strings.HasPrefix(id, "catchup-season-") {
 		return frontend.CatchUpItem{}, core.ErrNotFound
@@ -148,7 +152,11 @@ func (h liveTVHost) CatchUpItem(ctx context.Context, u *frontend.Viewer, id stri
 }
 
 func (h liveTVHost) CatchUpItems(ctx context.Context, u *frontend.Viewer, q frontend.CatchUpQuery) (frontend.CatchUpPage, error) {
-	return h.catchUpItems(ctx, u, q, "")
+	page, err := h.catchUpItems(ctx, u, q, "")
+	if err != nil {
+		return page, err
+	}
+	return page, h.s.fillCatchUpWatch(ctx, u, page.Items)
 }
 
 // sortCatchUpItems reorders a newest-first listing. Equal titles keep their

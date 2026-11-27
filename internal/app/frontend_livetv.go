@@ -876,6 +876,42 @@ func (s surfaceLiveTV) CatchUpItem(ctx context.Context, v *frontend.Viewer, id s
 	return item, err
 }
 
+// catchUpWatchHost is the Live TV host's catch-up watch state. Progress takes
+// the server's resume threshold so catch-up follows the same rule as titles.
+type catchUpWatchHost interface {
+	CatchUpProgress(ctx context.Context, viewer *frontend.Viewer, id string, offset, duration time.Duration, state string, resumeAfter time.Duration) error
+	CatchUpSetWatched(ctx context.Context, viewer *frontend.Viewer, id string, watched bool) error
+}
+
+func (s surfaceLiveTV) catchUpWatch(ctx context.Context, v *frontend.Viewer) (catchUpWatchHost, *core.User, error) {
+	h, ok := s.host().(catchUpWatchHost)
+	if !ok {
+		return nil, nil, core.ErrNotFound
+	}
+	viewer, err := s.viewer(ctx, v)
+	return h, viewer, err
+}
+
+func (s surfaceLiveTV) CatchUpProgress(ctx context.Context, v *frontend.Viewer, id string, offset, duration time.Duration, state string) error {
+	h, viewer, err := s.catchUpWatch(ctx, v)
+	if err != nil {
+		return err
+	}
+	var resumeAfter time.Duration
+	if s.app.state != nil {
+		resumeAfter = s.app.state.ResumeAfter()
+	}
+	return h.CatchUpProgress(s.withApp(ctx), viewer, id, offset, duration, state, resumeAfter)
+}
+
+func (s surfaceLiveTV) CatchUpSetWatched(ctx context.Context, v *frontend.Viewer, id string, watched bool) error {
+	h, viewer, err := s.catchUpWatch(ctx, v)
+	if err != nil {
+		return err
+	}
+	return h.CatchUpSetWatched(s.withApp(ctx), viewer, id, watched)
+}
+
 func (s surfaceLiveTV) catchUpArtwork(viewer *core.Viewer, item *frontend.CatchUpItem) {
 	p := &item.Programme
 	if s.programmeArtwork != nil {

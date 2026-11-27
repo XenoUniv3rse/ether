@@ -16,6 +16,10 @@ func (i *instance) mutate(w http.ResponseWriter, r *http.Request, kind string) {
 		http.Error(w, "Unauthorized", 401)
 		return
 	}
+	if kind == "played" && frontend.IsCatchUpGUID(r.PathValue("itemId")) {
+		i.catchUpPlayed(w, r, v, r.PathValue("itemId"))
+		return
+	}
 	if i.host.Experience == nil {
 		http.Error(w, "Unavailable", 503)
 		return
