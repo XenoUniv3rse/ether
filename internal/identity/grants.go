@@ -420,7 +420,9 @@ func (g *Grants) GrantReferenceExpiry(ctx context.Context, surface, reference st
 	if viewer == nil || viewer.ID != viewerID {
 		return time.Time{}, core.ErrUnauthorized
 	}
-	_ = g.times.Observe(ctx, viewer.ID)
+	if !frontend.QuietIdentity(ctx) {
+		_ = g.times.Observe(ctx, viewer.ID)
+	}
 	return time.UnixMilli(expires), nil
 }
 

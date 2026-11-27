@@ -33,14 +33,40 @@ func (i *instance) addNamedFacets(r *http.Request, viewer *frontend.Viewer, deta
 		if err != nil {
 			continue
 		}
-		result := make([]any, 0, len(names))
-		for _, name := range names {
-			if id := authorized[name]; id != "" {
-				wireID, ok := i.namedFacetWireID(r.Context(), group.kind, id)
-				if ok {
-					result = append(result, map[string]any{"Id": wireID, "Name": name})
+		var compact map[string]int32
+		if i.protocol == "emby" {
+			refs := make([]string, 0, len(authorized))
+			for _, name := range names {
+				if id := authorized[name]; id != "" {
+					refs = append(refs, id)
 				}
 			}
+			compact = make(map[string]int32, len(refs))
+			for start := 0; start < len(refs); start += 250 {
+				allocated, err := i.host.IDs.CompactBatch(r.Context(), "emby", "facet-"+group.kind, refs[start:min(start+250, len(refs))])
+				if err != nil {
+					continue
+				}
+				for ref, id := range allocated {
+					compact[ref] = id
+				}
+			}
+		}
+		result := make([]any, 0, len(names))
+		for _, name := range names {
+			id := authorized[name]
+			if id == "" {
+				continue
+			}
+			var wireID any = id
+			if compact != nil {
+				n := compact[id]
+				if n <= 0 {
+					continue
+				}
+				wireID = n
+			}
+			result = append(result, map[string]any{"Id": wireID, "Name": name})
 		}
 		if len(result) > 0 {
 			dto[group.field] = result

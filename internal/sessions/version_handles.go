@@ -88,6 +88,10 @@ func PruneVersionIDs(ctx context.Context, db *sql.DB, now time.Time) (int64, err
 }
 
 func (v *versionHandles) allowedOffers(ctx context.Context, scope frontend.VersionScope, item core.RatingKey) (*core.Viewer, map[string]bool, error) {
+	return v.versionOffers(ctx, scope, item, false)
+}
+
+func (v *versionHandles) versionOffers(ctx context.Context, scope frontend.VersionScope, item core.RatingKey, preview bool) (*core.Viewer, map[string]bool, error) {
 	if scope.Protocol != v.protocol || scope.Device.ID == "" || len(scope.Device.ID) > 512 || item == 0 {
 		return nil, nil, core.ErrNotFound
 	}
@@ -98,7 +102,11 @@ func (v *versionHandles) allowedOffers(ctx context.Context, scope frontend.Versi
 	caps := scope.Caps
 	caps.Protocol = v.protocol
 	caps.ClientID = clientKey(v.protocol, scope.Device)
-	viewer, err = v.broker.confirm(ctx, viewer, caps)
+	confirm := v.broker.confirm
+	if preview {
+		confirm = v.broker.previewAdmission
+	}
+	viewer, err = confirm(ctx, viewer, caps)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -195,10 +203,25 @@ func (v *versionHandles) allowedOffers(ctx context.Context, scope frontend.Versi
 }
 
 func (v *versionHandles) IssueBatch(ctx context.Context, scope frontend.VersionScope, item core.RatingKey, releases []string) (map[string]string, error) {
+	out, err := v.versionHandles(ctx, scope, item, releases, false)
+	if err != nil {
+		return nil, err
+	}
+	if err := v.remember(ctx, item, out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (v *versionHandles) PreviewVersionHandles(ctx context.Context, scope frontend.VersionScope, item core.RatingKey, releases []string) (map[string]string, error) {
+	return v.versionHandles(ctx, scope, item, releases, true)
+}
+
+func (v *versionHandles) versionHandles(ctx context.Context, scope frontend.VersionScope, item core.RatingKey, releases []string, preview bool) (map[string]string, error) {
 	if len(releases) == 0 || len(releases) > 128 {
 		return nil, core.ErrNotAvailable
 	}
-	_, offered, err := v.allowedOffers(ctx, scope, item)
+	_, offered, err := v.versionOffers(ctx, scope, item, preview)
 	if err != nil {
 		return nil, err
 	}
@@ -210,9 +233,6 @@ func (v *versionHandles) IssueBatch(ctx context.Context, scope frontend.VersionS
 	out := make(map[string]string, len(releases))
 	for _, release := range releases {
 		out[release] = versionID(v.key, v.protocol, item, release)
-	}
-	if err := v.remember(ctx, item, out); err != nil {
-		return nil, err
 	}
 	return out, nil
 }
@@ -365,7 +385,7 @@ func (v *versionHandles) resolveRecord(ctx context.Context, scope frontend.Versi
 	if err != nil {
 		return 0, "", err
 	}
-	viewer, offered, err := v.allowedOffers(ctx, scope, item)
+	viewer, offered, err := v.versionOffers(ctx, scope, item, frontend.QuietIdentity(ctx))
 	if err != nil {
 		return 0, "", err
 	}
@@ -394,7 +414,7 @@ func (v *versionHandles) lookupRow(ctx context.Context, scope frontend.VersionSc
 	var item, seen int64
 	var release string
 	err := v.db.QueryRowContext(ctx, `SELECT item_id,release_id,seen_at FROM sessions_version_ids WHERE handle=? AND surface=?`, handle, string(v.protocol)).Scan(&item, &release, &seen)
-	if err == nil && v.broker.deps.Now().Sub(time.Unix(seen, 0)) >= versionIDSeen {
+	if err == nil && !frontend.QuietIdentity(ctx) && v.broker.deps.Now().Sub(time.Unix(seen, 0)) >= versionIDSeen {
 		// A client resolving a cached id keeps it alive without a listing.
 		_, _ = v.db.ExecContext(ctx, `UPDATE sessions_version_ids SET seen_at=? WHERE handle=? AND seen_at<?`, v.broker.deps.Now().Unix(), handle, v.broker.deps.Now().Add(-versionIDSeen).Unix())
 	}

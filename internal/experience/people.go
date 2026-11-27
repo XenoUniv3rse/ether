@@ -168,7 +168,11 @@ func (s *Service) peopleVisibility(ctx context.Context, titles map[core.RatingKe
 		all[key] = title
 	}
 	if len(parents) > 0 {
-		loaded, err := s.d.CachedGetMany(ctx, parents)
+		load := s.d.CachedGetMany
+		if s.d.peopleVisibleTitles != nil {
+			load = s.d.peopleVisibleTitles
+		}
+		loaded, err := load(ctx, parents)
 		if err != nil {
 			return Visibility{}, err
 		}
@@ -463,7 +467,7 @@ func (s *Service) people(ctx context.Context, viewer *core.Viewer, device core.D
 
 	var result []frontend.PersonDetail
 	var err error
-	if len(terms) > 0 && s.d.PeopleIndex != nil && s.d.PersonCreditsMany != nil && s.d.peopleVisibleTitles != nil {
+	if (len(terms) > 0 || strings.TrimSpace(q.Query) == "") && s.d.PeopleIndex != nil && s.d.PersonCreditsMany != nil && s.d.peopleVisibleTitles != nil {
 		result, err = s.pagedPeople(ctx, viewer, q, terms, exact)
 	} else if (len(terms) > 0 || strings.TrimSpace(q.Query) == "") && s.d.PeopleIndex != nil && s.d.PersonCredits != nil {
 		// A query with no name lists the most credited people the viewer can
@@ -627,7 +631,10 @@ func (s *Service) pagedPeople(ctx context.Context, viewer *core.Viewer, q fronte
 	if err != nil {
 		return nil, err
 	}
-	candidateCap := min(max(q.Limit*8, 64), 256)
+	candidateCap := peopleCandidateLimit
+	if len(terms) > 0 {
+		candidateCap = min(max(q.Limit*8, 64), 256)
+	}
 	found, err := s.d.PeopleIndex(ctx, terms, candidateCap)
 	if err != nil {
 		return nil, err
@@ -700,11 +707,14 @@ func (s *Service) pagedPeople(ctx context.Context, viewer *core.Viewer, q fronte
 		}
 		return out, nil
 	}
-	for start := 0; start < len(candidates) && len(result) < q.Limit; start += peoplePage {
+	for start := 0; start < len(candidates) && len(result) < q.Limit; {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		page := candidates[start:min(start+peoplePage, len(candidates))]
+		n := min(peoplePage, max(8, 2*(q.Limit-len(result))))
+		end := min(start+n, len(candidates))
+		page := candidates[start:end]
+		start = end
 		ids := make([]int64, len(page))
 		for i, c := range page {
 			ids[i] = c.TMDB
@@ -719,7 +729,7 @@ func (s *Service) pagedPeople(ctx context.Context, viewer *core.Viewer, q fronte
 				again = append(again, id)
 			}
 		}
-		if len(again) > 0 {
+		if len(terms) > 0 && len(again) > 0 {
 			more, err := check(again, personCreditLimit)
 			if err != nil {
 				return nil, err

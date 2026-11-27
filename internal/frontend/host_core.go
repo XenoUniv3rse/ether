@@ -201,6 +201,11 @@ func SearchWasSuperseded(ctx context.Context) bool {
 	return core.SearchWasSuperseded(ctx)
 }
 
+// WithSearchSummaryFacts requests search rows for compact hits such as hints.
+func WithSearchSummaryFacts(ctx context.Context) context.Context {
+	return core.WithSearchSummaryFacts(ctx)
+}
+
 // WithExplicitSearch marks a request as a viewer or owner typing a search,
 // so browsing-only catalogue rules do not filter out explicit search hits.
 func WithExplicitSearch(ctx context.Context) context.Context {

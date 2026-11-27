@@ -2107,11 +2107,13 @@ func (s *Service) search(ctx context.Context, viewer *core.Viewer, device core.D
 			<-pluginDone
 			return frontend.SearchPage{}, false, err
 		}
-		items = make([]core.Title, 0, len(candidates))
-		for _, title := range candidates {
-			if !s.visible(ctx, v, &title) {
-				continue
-			}
+		visible, err := s.allowTitles(ctx, v, candidates)
+		if err != nil {
+			<-pluginDone
+			return frontend.SearchPage{}, false, err
+		}
+		items = make([]core.Title, 0, len(visible))
+		for _, title := range visible {
 			ok, e := s.matchesUserQuery(ctx, v, title, q)
 			if e != nil {
 				<-pluginDone

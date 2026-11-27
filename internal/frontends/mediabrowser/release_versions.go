@@ -204,12 +204,25 @@ func (i *instance) releaseVersionSourceWithHandle(r *http.Request, scope fronten
 	return source, true
 }
 
+func (i *instance) detailVersionHandle(r *http.Request, scope frontend.VersionScope, item frontend.RatingKey, release string) string {
+	if i.host.VersionHandles == nil {
+		return ""
+	}
+	ctx := i.identityContext(r)
+	if preview, ok := i.host.VersionHandles.(frontend.VersionHandlePreview); ok && frontend.QuietIdentity(ctx) {
+		handles, _ := preview.PreviewVersionHandles(ctx, scope, item, []string{release})
+		return handles[release]
+	}
+	handle, _ := i.host.VersionHandles.Issue(ctx, scope, item, release)
+	return handle
+}
+
 func (i *instance) releaseVersionSource(r *http.Request, scope frontend.VersionScope, key frontend.RatingKey, original string, v frontend.ReleaseVariant) (map[string]any, bool) {
 	if i.host.VersionHandles == nil || v.Release.ID == "" {
 		return nil, false
 	}
-	handle, err := i.host.VersionHandles.Issue(i.identityContext(r), scope, key, v.Release.ID)
-	if err != nil || handle == "" {
+	handle := i.detailVersionHandle(r, scope, key, v.Release.ID)
+	if handle == "" {
 		return nil, false
 	}
 	return i.releaseVersionSourceWithHandle(r, scope, key, original, v, handle)
@@ -295,8 +308,11 @@ func (i *instance) releaseVersionSourcesFor(r *http.Request, scope frontend.Vers
 			releases = append(releases, v.Release.ID)
 		}
 		if len(releases) > 0 {
-			if issued, err := batch.IssueBatch(i.identityContext(r), scope, key, releases); err == nil {
-				batched = issued
+			ctx := i.identityContext(r)
+			if preview, ok := i.host.VersionHandles.(frontend.VersionHandlePreview); ok && frontend.QuietIdentity(ctx) {
+				batched, _ = preview.PreviewVersionHandles(ctx, scope, key, releases)
+			} else {
+				batched, _ = batch.IssueBatch(ctx, scope, key, releases)
 			}
 		}
 	}
@@ -433,8 +449,8 @@ func (i *instance) detailSources(r *http.Request, v *frontend.Viewer, token stri
 		if scopeErr != nil {
 			break
 		}
-		handle, e := i.host.VersionHandles.Issue(i.identityContext(r), scope, key, version.ID)
-		if e != nil || handle == "" {
+		handle := i.detailVersionHandle(r, scope, key, version.ID)
+		if handle == "" {
 			needDefault = true
 			continue
 		}

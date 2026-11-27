@@ -38,7 +38,7 @@ func TestCachedPortraitTitlesWorkBound(t *testing.T) {
 			t.Fatal(err)
 		}
 		readCtx, stats := store.WithQueryStats(ctx)
-		got, err := c.CachedPortraitTitles(readCtx, subjects, config.Catalog{}, now)
+		got, err := c.CachedPortraitTitles(readCtx, subjects, config.Catalog{}, now, core.VisibilityFacts, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -112,7 +112,7 @@ func TestCachedPortraitTitlesWorkBound(t *testing.T) {
 	if _, err := db.ExecContext(ctx, `DELETE FROM catalog_credits WHERE key=?`, int64(key)); err != nil {
 		t.Fatal(err)
 	}
-	got, err := c.CachedPortraitTitles(ctx, subjects, config.Catalog{}, now)
+	got, err := c.CachedPortraitTitles(ctx, subjects, config.Catalog{}, now, core.VisibilityFacts, nil)
 	if err != nil || len(got[key].Cast)+len(got[key].Directors) != 0 {
 		t.Fatalf("stale credit retained: %+v %v", got, err)
 	}
@@ -120,12 +120,12 @@ func TestCachedPortraitTitlesWorkBound(t *testing.T) {
 	if err := c.SetLibraryPolicies(catalog.LibraryPolicies{ShowRules: []core.LibraryExclusion{{Name: "genre", MediaType: "show", Match: "all", Rules: []core.CollectionRule{{Field: "genre", Op: "is", Value: json.RawMessage(`"Drama"`)}}}}}); err != nil {
 		t.Fatal(err)
 	}
-	gBlocked, errBlocked := c.CachedPortraitTitles(ctx, subjects, blocked, now)
+	gBlocked, errBlocked := c.CachedPortraitTitles(ctx, subjects, blocked, now, core.VisibilityFacts, nil)
 	_ = c.SetLibraryPolicies(catalog.LibraryPolicies{})
 	if got, err := gBlocked, errBlocked; err != nil || len(got) != 0 {
 		t.Fatalf("owned policy ignored: %+v %v", got, err)
 	}
-	if got, err := c.CachedPortraitTitles(ctx, subjects, config.Catalog{}, now.AddDate(-3, 0, 0)); err != nil || len(got) != 0 {
+	if got, err := c.CachedPortraitTitles(ctx, subjects, config.Catalog{}, now.AddDate(-3, 0, 0), core.VisibilityFacts, nil); err != nil || len(got) != 0 {
 		t.Fatalf("owned clock ignored: %+v %v", got, err)
 	}
 }

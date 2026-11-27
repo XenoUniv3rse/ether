@@ -955,7 +955,11 @@ func pluginShareCap(movie, television core.Filter) (string, bool) {
 // caller on the in-process walk. Blocked keywords need no push: projected
 // plugin titles never carry Keywords, so they can never match.
 func (s *Service) pluginBrowseQuery(ctx context.Context, v *core.User, lib core.Library, q frontend.ItemQuery) (frontend.ItemQuery, bool) {
-	if v == nil || !pluginQuerySQLReady(q) {
+	shape := q
+	if f := shape.Filter.ReleasedFilters; len(f) == 1 && f[0].Op == ">=" {
+		shape.Filter.ReleasedFilters = nil
+	}
+	if v == nil || !pluginQuerySQLReady(shape) {
 		return q, false
 	}
 	out := q
@@ -1001,6 +1005,10 @@ func pluginCursorPrefix(scope string, q frontend.ItemQuery) string {
 }
 
 func (s *Service) pluginLibraryItems(ctx context.Context, v *core.User, lib core.Library, q frontend.ItemQuery) (core.Page, error) {
+	// filterPluginTitles admits no plugin titles for this predicate.
+	if q.Favorite != nil && *q.Favorite {
+		return core.Page{Items: []core.Title{}, TotalExact: true}, nil
+	}
 	// A studio or performer opened for the first time fills its catalogue
 	// before the page is read (MaybeExpand waits, bounded, on the first page),
 	// so the viewer sees every title the first time.

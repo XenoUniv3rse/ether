@@ -88,7 +88,7 @@ func (s surfaceCapabilities) Build(ctx context.Context, req frontend.CapabilityR
 			"qualityHDR", result.Quality.AllowHDR,
 			"qualityLayers", resolver.ExplainQuality(resolver.QualityQuestion{Quality: cfg.Quality, Caps: qualityCaps, User: req.Viewer}).Layers)
 	}
-	if req.Viewer != nil && !s.policy.NativeClientFamilies {
+	if req.Viewer != nil && !s.policy.NativeClientFamilies && !frontend.QuietIdentity(ctx) {
 		s.app.recordFrontendFamily(ctx, s.surface, declared)
 	}
 	return result, nil

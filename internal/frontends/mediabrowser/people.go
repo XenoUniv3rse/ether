@@ -64,9 +64,18 @@ func (i *instance) peopleDTO(r *http.Request, viewer *frontend.Viewer, token str
 			}
 		}
 	}
-	grants := map[int64]frontend.Image{}
-	granted := map[int64]string{}
-	attempted := map[int64]bool{}
+	var people []frontend.PersonDetail
+	portraitIndex := map[int64]int{}
+	for _, c := range credits {
+		if _, added := portraitIndex[c.id]; added || c.name == "" || facets[c.id] == "" {
+			continue
+		}
+		if img, ok := portraits["tmdb:"+strconv.FormatInt(c.id, 10)]; ok {
+			portraitIndex[c.id] = len(people)
+			people = append(people, frontend.PersonDetail{TMDB: c.id, ArtworkItem: detail.Title.Key, Images: []frontend.Image{img}})
+		}
+	}
+	grants, images := i.issuePersonGrantsFor(r, token, people)
 	result := make([]any, 0, len(credits))
 	for _, c := range credits {
 		if c.name == "" {
@@ -92,20 +101,9 @@ func (i *instance) peopleDTO(r *http.Request, viewer *frontend.Viewer, token str
 		if c.role != "" {
 			dto["Role"] = c.role
 		}
-		if !attempted[c.id] {
-			attempted[c.id] = true
-			if img, ok := portraits["tmdb:"+strconv.FormatInt(c.id, 10)]; ok {
-				grant, err := i.host.ImageGrants.Issue(r.Context(), frontend.ImageGrantRequest{Credential: token, Device: device(r), Item: detail.Title.Key, Image: img})
-				if err == nil {
-					grants[c.id] = img
-					granted[c.id] = grant
-				}
-			}
-		}
-		if grant := granted[c.id]; grant != "" {
-			dto["PrimaryImageTag"] = grant
-			i.addImageMetadata(dto, "Primary", grant, grants[c.id])
-			// A person record carries the portrait hash, not the item aspect ratio.
+		if n, ok := portraitIndex[c.id]; ok && grants[n] != "" {
+			dto["PrimaryImageTag"] = grants[n]
+			i.addImageMetadata(dto, "Primary", grants[n], images[n])
 			delete(dto, "PrimaryImageAspectRatio")
 		}
 		result = append(result, dto)
@@ -156,17 +154,21 @@ func personImagesEnabled(r *http.Request) bool {
 }
 
 func (i *instance) issuePersonGrants(r *http.Request, people []frontend.PersonDetail) ([]string, []frontend.Image) {
+	_, token, _ := i.viewer(r)
+	return i.issuePersonGrantsFor(r, token, people)
+}
+
+func (i *instance) issuePersonGrantsFor(r *http.Request, token string, people []frontend.PersonDetail) ([]string, []frontend.Image) {
 	grants := make([]string, len(people))
 	imgs := make([]frontend.Image, len(people))
 	if i.host.ImageGrants == nil || len(people) == 0 || !personImagesEnabled(r) {
 		return grants, imgs
 	}
-	_, token, _ := i.viewer(r)
 	if batch, ok := i.host.ImageGrants.(frontend.PersonImageGrantBatch); ok {
 		targets := make([]frontend.PersonImageTarget, 0, len(people))
 		positions := make([]int, 0, len(people))
 		for n, person := range people {
-			if person.ArtworkItem == 0 {
+			if person.ArtworkItem == 0 || person.ArtworkItem.IsPluginKey() {
 				continue
 			}
 			if img, ok := personPortrait(person); ok {
@@ -175,10 +177,11 @@ func (i *instance) issuePersonGrants(r *http.Request, people []frontend.PersonDe
 				imgs[n] = img
 			}
 		}
-		if len(targets) > 0 {
-			tokens, err := batch.IssuePersonImages(r.Context(), token, device(r), targets)
-			if err == nil && len(tokens) == len(targets) {
-				for n, pos := range positions {
+		for start := 0; start < len(targets); start += 100 {
+			end := min(start+100, len(targets))
+			tokens, err := batch.IssuePersonImages(r.Context(), token, device(r), targets[start:end])
+			if err == nil && len(tokens) == end-start {
+				for n, pos := range positions[start:end] {
 					grants[pos] = tokens[n]
 				}
 			}

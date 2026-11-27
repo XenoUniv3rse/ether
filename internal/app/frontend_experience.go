@@ -1660,6 +1660,23 @@ func (s *surfaceExperience) loadRows(ctx context.Context, req frontend.RowReques
 	if req.Viewer != nil {
 		active, _ = s.active(ctx, req.Viewer.ID)
 	}
+	if active != nil {
+		if batch, ok := s.artwork.(interface {
+			PrepareChannelArtwork(context.Context, *core.Viewer, []string) (context.Context, error)
+		}); ok {
+			var channels []string
+			for _, row := range rows {
+				for _, entry := range row.Entries {
+					if entry.LiveChannel != nil {
+						channels = append(channels, entry.LiveChannel.ID)
+					}
+				}
+			}
+			if prepared, err := batch.PrepareChannelArtwork(ctx, active, channels); err == nil {
+				ctx = prepared
+			}
+		}
+	}
 	for _, row := range rows {
 		s.warmArtwork(row.Items, req.Device)
 		for _, entry := range row.Entries {

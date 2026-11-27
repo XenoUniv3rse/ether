@@ -791,6 +791,9 @@ func (c *KindCatalog) Browse(ctx context.Context, lib core.Library, q frontend.I
 		Cursor:           cursor,
 		Limit:            limit,
 	}
+	if filters := q.Filter.ReleasedFilters; len(filters) == 1 && filters[0].Op == ">=" {
+		bq.ReleaseFrom = &filters[0].Unix
+	}
 	if len(q.Filter.TabRules) > 0 || q.Filter.TabFallback != "" {
 		tp, tpErr := c.items.CompilePolicy(ctx, lib.ID, q.Filter.TabRules, q.Filter.TabFallback)
 		if tpErr != nil {
@@ -2311,27 +2314,41 @@ func (c *KindCatalog) projectItems(ctx context.Context, rec pluginitems.KindReco
 		ok       bool
 	}
 	itemCache := make(map[string]cachedParent)
-	lookupItem := func(extID string) cachedParent {
-		if extID == "" {
-			return cachedParent{}
+	var parentIDs []string
+	for _, item := range items {
+		if item.ParentID != "" {
+			parentIDs = append(parentIDs, item.ParentID)
 		}
-		if entry, ok := itemCache[extID]; ok {
-			return entry
+	}
+	for depth := 0; depth < 4 && len(parentIDs) > 0; depth++ {
+		var refs []core.ItemRef
+		for _, id := range parentIDs {
+			if _, loaded := itemCache[id]; !loaded {
+				refs = append(refs, core.NewItemRef(rec.PluginID, rec.KindKey, id))
+				itemCache[id] = cachedParent{}
+			}
 		}
-		p, pLib, err := c.items.GetByExternal(ctx, rec.PluginID, rec.KindKey, extID)
-		if err != nil || pLib != lib.ID {
-			itemCache[extID] = cachedParent{}
-			return cachedParent{}
+		parentIDs = nil
+		loaded, err := c.items.GetByRefs(ctx, refs)
+		if err != nil {
+			break
 		}
-		pt := pluginitems.ProjectWithText(p, rec.Decl, lib.Present, resolveText, lib.CardShape)
-		pt.LibraryID = lib.ID
-		scopeTitleMediaParents(&pt, lib.ID)
-		if pt.ContentRating == "" {
-			pt.ContentRating = extractContentRating(p.Fields)
+		for _, entry := range loaded {
+			if entry.LibraryID != lib.ID {
+				continue
+			}
+			parent := entry.Item
+			title := pluginitems.ProjectWithText(parent, rec.Decl, lib.Present, resolveText, lib.CardShape)
+			title.LibraryID = lib.ID
+			scopeTitleMediaParents(&title, lib.ID)
+			if title.ContentRating == "" {
+				title.ContentRating = extractContentRating(parent.Fields)
+			}
+			itemCache[parent.ID] = cachedParent{title: title, parentID: parent.ParentID, ok: true}
+			if parent.ParentID != "" {
+				parentIDs = append(parentIDs, parent.ParentID)
+			}
 		}
-		entry := cachedParent{title: pt, parentID: p.ParentID, ok: true}
-		itemCache[extID] = entry
-		return entry
 	}
 
 	// resolveChain returns ancestors ordered nearest-first (up to 4 hops) and
@@ -2344,7 +2361,7 @@ func (c *KindCatalog) projectItems(ctx context.Context, rec pluginitems.KindReco
 				break
 			}
 			seen[curID] = true
-			entry := lookupItem(curID)
+			entry := itemCache[curID]
 			if !entry.ok {
 				break
 			}

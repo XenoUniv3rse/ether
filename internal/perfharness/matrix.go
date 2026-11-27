@@ -159,11 +159,35 @@ func (r *MatrixReport) Add(configuration string, results []Result, trace map[str
 			continue
 		}
 		budget := matrixBudget(step, rec)
-		score := max(overBudget(rec.Queries, budget.Queries), overBudget(rec.Rows, budget.Rows), overBudget(rec.Writes, budget.Writes))
+		score := max(overBudget(rec.Queries, budget.Queries), overBudget(rec.Rows, budget.Rows), overBudget(rec.Writes-requiredDetailWrites(result.Route, rec), budget.Writes))
 		if score > 1 && score > r.offenders[key].score {
 			r.offenders[key] = matrixOffender{key, result.Client + " / " + result.Step, rec, budget, score}
 		}
 	}
+}
+
+// Emby item detail carries reversible numeric genre and studio identifiers.
+// The first published identifier must survive restart and be resolvable on
+// other cluster nodes. Only the two namespace batches that publish it are
+// allowed here; any other write still counts against the read budget.
+func requiredDetailWrites(route string, rec TraceRecord) int64 {
+	if rec.Method != http.MethodGet && rec.Method != http.MethodHead {
+		return 0
+	}
+	if route != rec.Method+" /emby/Items/{id}" && route != rec.Method+" /emby/Users/{userId}/Items/{id}" {
+		return 0
+	}
+	var counters, mappings int64
+	for _, statement := range rec.Statements {
+		switch sql := strings.Join(strings.Fields(statement.SQL), " "); {
+		case sql == "INSERT INTO frontend_compact_id_counters(surface,kind,last_id) VALUES(?,?,0) ON CONFLICT(surface,kind) DO UPDATE SET last_id=frontend_compact_id_counters.last_id":
+			counters += statement.Count
+		case sql == "INSERT INTO frontend_compact_ids(surface,kind,ref,id) VALUES(?,?,?,?) ON CONFLICT(surface,kind,ref) DO NOTHING",
+			strings.HasPrefix(sql, "INSERT INTO frontend_compact_ids(surface,kind,ref,id) VALUES (?,?,?,?)"):
+			mappings += statement.Count
+		}
+	}
+	return min(rec.Writes, min(2, counters)+min(2, mappings))
 }
 
 func overBudget(actual, limit int64) float64 {

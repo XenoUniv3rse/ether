@@ -71,6 +71,17 @@ func (a *App) beginPeopleRead(ctx context.Context, viewer *core.User) (experienc
 	if err != nil {
 		return experience.PeopleRead{}, err
 	}
+	var facts core.TitleFacts
+	if len(policy.BlockedGenres) > 0 {
+		facts |= core.FactGenres
+	}
+	if len(policy.BlockedKeywords) > 0 {
+		facts |= core.FactKeywords
+	}
+	var needsAvailabilityFacts func(core.Title) bool
+	if a.availability != nil {
+		needsAvailabilityFacts = a.availability.JudgedOnFacts(ctx)
+	}
 	started := time.Now()
 	now := started.UTC()
 	version, clustered := lease.SharedVersion()
@@ -82,21 +93,21 @@ func (a *App) beginPeopleRead(ctx context.Context, viewer *core.User) (experienc
 			return a.catalog.CachedCreditTitles(ctx, keys, cfg.Catalog, now)
 		},
 		VisibleTitles: func(ctx context.Context, keys []core.RatingKey) (map[core.RatingKey]core.Title, error) {
-			return a.catalog.CachedVisibleTitles(ctx, keys, cfg.Catalog, now)
+			return a.catalog.CachedVisibleTitles(ctx, keys, cfg.Catalog, now, facts, needsAvailabilityFacts)
 		},
 		PortraitTitles: func(ctx context.Context, refs []experience.PersonCreditRef) (map[core.RatingKey]core.Title, error) {
 			subjects := make(map[core.RatingKey][]int64)
 			for _, ref := range refs {
 				subjects[ref.Item] = append(subjects[ref.Item], ref.TMDB)
 			}
-			return a.catalog.CachedPortraitTitles(ctx, subjects, cfg.Catalog, now)
+			return a.catalog.CachedPortraitTitles(ctx, subjects, cfg.Catalog, now, facts, needsAvailabilityFacts)
 		},
 		RecheckPortraitTitles: func(ctx context.Context, refs []experience.PersonCreditRef) (map[core.RatingKey]core.Title, error) {
 			subjects := make(map[core.RatingKey][]int64)
 			for _, ref := range refs {
 				subjects[ref.Item] = append(subjects[ref.Item], ref.TMDB)
 			}
-			return a.catalog.RecheckPortraitTitles(ctx, subjects, cfg.Catalog, now)
+			return a.catalog.RecheckPortraitTitles(ctx, subjects, cfg.Catalog, now, facts, needsAvailabilityFacts)
 		},
 		Close: lease.Close,
 		Finish: func(ctx context.Context) error {

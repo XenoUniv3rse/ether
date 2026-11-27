@@ -2,6 +2,7 @@ package sessions
 
 import (
 	"context"
+	"crypto/cipher"
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
@@ -38,14 +39,16 @@ type lazySession struct {
 }
 
 type lazyStreams struct {
-	db           *sql.DB
-	broker       *Broker
-	protocol     frontend.Protocol
-	grants       LazyGrants
-	ttl          time.Duration
-	remote       func(*http.Request) bool
-	clientIP     func(*http.Request) (netip.Addr, bool)
-	newHeartbeat func(time.Duration) (<-chan time.Time, func())
+	deferredFile     cipher.AEAD
+	deferredVersions frontend.ListedVersionHandles
+	db               *sql.DB
+	broker           *Broker
+	protocol         frontend.Protocol
+	grants           LazyGrants
+	ttl              time.Duration
+	remote           func(*http.Request) bool
+	clientIP         func(*http.Request) (netip.Addr, bool)
+	newHeartbeat     func(time.Duration) (<-chan time.Time, func())
 }
 
 // SetClientIP binds a host peer resolver so every lazy stream request updates
@@ -234,75 +237,10 @@ func (s *lazyStreams) issueOutput(ctx context.Context, credential string, req fr
 	if !expires.After(now) {
 		return "", core.ErrUnauthorized
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return "", err
+	if s.deferredFile != nil && !stable && !lineup && output == nil && req.Channel == "" && frontend.QuietIdentity(ctx) {
+		return s.sealDeferredFile(viewer.ID, ref, data, expires)
 	}
-	defer tx.Rollback()
-	// Serialize with old writers before taking the shared reservation lock.
-	if _, err = tx.ExecContext(ctx, `UPDATE sessions_lazy_capacity SET used=used WHERE id=1`); err != nil {
-		return "", err
-	}
-	// Domain guards account for every writer, including binaries without common admission.
-	if _, err = capability.PruneHeadersInTx(ctx, tx, "lazy-stream", now.UnixMilli(), capability.HeaderBatchMax); err != nil {
-		return "", err
-	}
-	if _, err = tx.ExecContext(ctx, `DELETE FROM sessions_lazy_streams WHERE expires<=? AND NOT EXISTS(SELECT 1 FROM capability_headers WHERE namespace='lazy-stream' AND digest=sessions_lazy_streams.hash)`, now.UnixMilli()); err != nil {
-		return "", err
-	}
-
-	var present int
-	if err = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM sessions_lazy_streams WHERE hash=?`, lazyHash(token)).Scan(&present); err != nil {
-		return "", err
-	}
-	if present == 0 {
-		if err = capability.AdmitHeadersInTx(ctx, s.db, tx, []capability.Header{{HeaderScope: capability.HeaderScope{Namespace: "lazy-stream", ViewerID: viewer.ID, Surface: string(s.protocol)}, Digest: lazyHash(token), ExpiresMillis: expires.UnixMilli()}}, capability.Limits{PerScope: maxLazyViewerCapabilities, PerShard: maxLazyCapabilities}); err != nil {
-			return "", err
-		}
-	}
-	result, err := tx.ExecContext(ctx, `INSERT INTO sessions_lazy_streams(hash,protocol,viewer_id,grant_reference,request,expires) VALUES(?,?,?,?,?,?) ON CONFLICT(hash) DO NOTHING`, lazyHash(token), string(s.protocol), viewer.ID, ref, string(data), expires.UnixMilli())
-	if err != nil {
-		return "", err
-	}
-	inserted, err := result.RowsAffected()
-	if err != nil {
-		return "", err
-	}
-	if inserted == 0 {
-		if !stable {
-			return "", core.ErrNotAvailable
-		}
-		var oldRaw, oldRef string
-		var oldViewer int64
-		if err := tx.QueryRowContext(ctx, `SELECT request,grant_reference,viewer_id FROM sessions_lazy_streams WHERE hash=? AND protocol=? AND expires>?`, lazyHash(token), string(s.protocol), now.UnixMilli()).Scan(&oldRaw, &oldRef, &oldViewer); err != nil {
-			return "", core.ErrNotAvailable
-		}
-		var previous frontend.PlanRequest
-		if oldRef != ref || oldViewer != viewer.ID || json.Unmarshal([]byte(oldRaw), &previous) != nil || !sameLazyDecision(previous, req) {
-			return "", core.ErrNotAvailable
-		}
-		var viewerCount, totalCount int
-		if err = tx.QueryRowContext(ctx, `SELECT used FROM sessions_lazy_viewer_capacity WHERE viewer_id=?`, viewer.ID).Scan(&viewerCount); err != nil {
-			return "", err
-		}
-		if err = tx.QueryRowContext(ctx, `SELECT used FROM sessions_lazy_capacity WHERE id=1`).Scan(&totalCount); err != nil {
-			return "", err
-		}
-		if (viewerCount > maxLazyViewerCapabilities || totalCount > maxLazyCapabilities) && !(activeReuse && s.broker.activeLazyBinding(lazyHash(token), viewer.ID, s.protocol, req.Device.ID)) {
-			return "", &capability.CapacityError{Scope: "viewer"}
-		}
-		if err = s.renewHeader(ctx, tx, lazyHash(token), viewer.ID, expires.UnixMilli(), now.UnixMilli()); err != nil {
-			return "", err
-		}
-		result, err = tx.ExecContext(ctx, `UPDATE sessions_lazy_streams SET expires=? WHERE hash=? AND protocol=? AND request=? AND expires>?`, expires.UnixMilli(), lazyHash(token), string(s.protocol), oldRaw, now.UnixMilli())
-		if err != nil {
-			return "", err
-		}
-		if updated, err := result.RowsAffected(); err != nil || updated != 1 {
-			return "", core.ErrNotAvailable
-		}
-	}
-	if err = tx.Commit(); err != nil {
+	if err := s.persistCapability(ctx, token, viewer.ID, ref, req, data, now, expires, stable, activeReuse, false); err != nil {
 		return "", err
 	}
 	if stable {
@@ -323,6 +261,89 @@ func (s *lazyStreams) issueOutput(ctx context.Context, credential string, req fr
 		return "/sessions/lazy/" + token + "/hls/master.m3u8", nil
 	}
 	return "/sessions/lazy/" + token + "/file", nil
+}
+
+// persistCapability admits a capability before any broker transfer can use it.
+func (s *lazyStreams) persistCapability(ctx context.Context, token string, viewerID int64, ref string, req frontend.PlanRequest, data []byte, now, expires time.Time, stable, activeReuse, deferred bool) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	// Serialize with old writers before taking the shared reservation lock.
+	if _, err = tx.ExecContext(ctx, `UPDATE sessions_lazy_capacity SET used=used WHERE id=1`); err != nil {
+		return err
+	}
+	// Domain guards account for every writer, including binaries without common admission.
+	if _, err = capability.PruneHeadersInTx(ctx, tx, "lazy-stream", now.UnixMilli(), capability.HeaderBatchMax); err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, `DELETE FROM sessions_lazy_streams WHERE expires<=? AND NOT EXISTS(SELECT 1 FROM capability_headers WHERE namespace='lazy-stream' AND digest=sessions_lazy_streams.hash)`, now.UnixMilli()); err != nil {
+		return err
+	}
+
+	var present int
+	if err = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM sessions_lazy_streams WHERE hash=?`, lazyHash(token)).Scan(&present); err != nil {
+		return err
+	}
+	if present == 0 {
+		if err = capability.AdmitHeadersInTx(ctx, s.db, tx, []capability.Header{{HeaderScope: capability.HeaderScope{Namespace: "lazy-stream", ViewerID: viewerID, Surface: string(s.protocol)}, Digest: lazyHash(token), ExpiresMillis: expires.UnixMilli()}}, capability.Limits{PerScope: maxLazyViewerCapabilities, PerShard: maxLazyCapabilities}); err != nil {
+			return err
+		}
+	}
+	result, err := tx.ExecContext(ctx, `INSERT INTO sessions_lazy_streams(hash,protocol,viewer_id,grant_reference,request,expires) VALUES(?,?,?,?,?,?) ON CONFLICT(hash) DO NOTHING`, lazyHash(token), string(s.protocol), viewerID, ref, string(data), expires.UnixMilli())
+	if err != nil {
+		return err
+	}
+	inserted, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if inserted == 0 {
+		if deferred {
+			var same int
+			if err := tx.QueryRowContext(ctx, `SELECT 1 FROM sessions_lazy_streams WHERE hash=? AND protocol=? AND viewer_id=? AND grant_reference=? AND request=? AND expires>?`, lazyHash(token), string(s.protocol), viewerID, ref, string(data), now.UnixMilli()).Scan(&same); err != nil {
+				return core.ErrNotAvailable
+			}
+			return tx.Commit()
+		}
+		if !stable {
+			return core.ErrNotAvailable
+		}
+		var oldRaw, oldRef string
+		var oldViewer int64
+		if err := tx.QueryRowContext(ctx, `SELECT request,grant_reference,viewer_id FROM sessions_lazy_streams WHERE hash=? AND protocol=? AND expires>?`, lazyHash(token), string(s.protocol), now.UnixMilli()).Scan(&oldRaw, &oldRef, &oldViewer); err != nil {
+			return core.ErrNotAvailable
+		}
+		var previous frontend.PlanRequest
+		if oldRef != ref || oldViewer != viewerID || json.Unmarshal([]byte(oldRaw), &previous) != nil || !sameLazyDecision(previous, req) {
+			return core.ErrNotAvailable
+		}
+		var viewerCount, totalCount int
+		if err = tx.QueryRowContext(ctx, `SELECT used FROM sessions_lazy_viewer_capacity WHERE viewer_id=?`, viewerID).Scan(&viewerCount); err != nil {
+			return err
+		}
+		if err = tx.QueryRowContext(ctx, `SELECT used FROM sessions_lazy_capacity WHERE id=1`).Scan(&totalCount); err != nil {
+			return err
+		}
+		if (viewerCount > maxLazyViewerCapabilities || totalCount > maxLazyCapabilities) && !(activeReuse && s.broker.activeLazyBinding(lazyHash(token), viewerID, s.protocol, req.Device.ID)) {
+			return &capability.CapacityError{Scope: "viewer"}
+		}
+		if err = s.renewHeader(ctx, tx, lazyHash(token), viewerID, expires.UnixMilli(), now.UnixMilli()); err != nil {
+			return err
+		}
+		result, err = tx.ExecContext(ctx, `UPDATE sessions_lazy_streams SET expires=? WHERE hash=? AND protocol=? AND request=? AND expires>?`, expires.UnixMilli(), lazyHash(token), string(s.protocol), oldRaw, now.UnixMilli())
+		if err != nil {
+			return err
+		}
+		if updated, err := result.RowsAffected(); err != nil || updated != 1 {
+			return core.ErrNotAvailable
+		}
+	}
+	if err = tx.Commit(); err != nil {
+		return err
+	}
+	return nil
 }
 
 // sameLazyDecision ignores display-only fields and the current network flag.
@@ -402,6 +423,9 @@ func (s *lazyStreams) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	var viewerID, expires int64
 	var reference, raw string
 	err := s.db.QueryRowContext(ctx, `SELECT viewer_id,grant_reference,request,expires FROM sessions_lazy_streams WHERE hash=? AND protocol=?`, hash, string(s.protocol)).Scan(&viewerID, &reference, &raw, &expires)
+	if errors.Is(err, sql.ErrNoRows) && !lineup && tail == "file" {
+		viewerID, reference, raw, expires, err = s.admitDeferredFile(ctx, token)
+	}
 	if err != nil || expires <= s.broker.deps.Now().UnixMilli() || s.grants.ValidateGrantReference(ctx, string(s.protocol), reference, viewerID) != nil {
 		http.NotFound(w, r)
 		return

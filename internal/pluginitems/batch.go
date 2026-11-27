@@ -29,32 +29,61 @@ func (p prefixScanner) Scan(dest ...any) error {
 // batches rather than issuing one query per key.
 func (s *Service) GetByKeys(ctx context.Context, keys []core.RatingKey) (map[core.RatingKey]KeyedItem, error) {
 	out := make(map[core.RatingKey]KeyedItem, len(keys))
-	if s == nil || s.db == nil || len(keys) == 0 {
-		return out, nil
-	}
-	seqs := make([]int64, 0, len(keys))
+	seqs := make([]any, 0, len(keys))
 	seen := make(map[int64]bool, len(keys))
-	for _, k := range keys {
-		seq := k.PluginSeq()
-		if seq > 0 && !seen[seq] {
+	for _, key := range keys {
+		if seq := key.PluginSeq(); seq > 0 && !seen[seq] {
 			seen[seq] = true
 			seqs = append(seqs, seq)
 		}
 	}
+	err := s.readItemsBatch(ctx, "seq", seqs, func(item KeyedItem) {
+		out[item.Item.Key] = item
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// GetByRefs reads plugin items and artwork for a page of external references.
+func (s *Service) GetByRefs(ctx context.Context, refs []core.ItemRef) (map[core.ItemRef]KeyedItem, error) {
+	out := make(map[core.ItemRef]KeyedItem, len(refs))
+	values := make([]any, 0, len(refs))
+	seen := make(map[core.ItemRef]bool, len(refs))
+	for _, ref := range refs {
+		if ref != "" && !seen[ref] {
+			seen[ref] = true
+			values = append(values, string(ref))
+		}
+	}
+	err := s.readItemsBatch(ctx, "item_ref", values, func(item KeyedItem) {
+		out[item.Item.Ref] = item
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (s *Service) readItemsBatch(ctx context.Context, column string, values []any, accept func(KeyedItem)) error {
+	if s == nil || s.db == nil {
+		return nil
+	}
 	const chunkSize = 500
-	for start := 0; start < len(seqs); start += chunkSize {
-		chunk := seqs[start:min(start+chunkSize, len(seqs))]
+	for start := 0; start < len(values); start += chunkSize {
+		chunk := values[start:min(start+chunkSize, len(values))]
 		placeholders := make([]string, len(chunk))
 		args := make([]any, len(chunk))
-		for i, seq := range chunk {
+		for i, value := range chunk {
 			placeholders[i] = "?"
-			args[i] = seq
+			args[i] = value
 		}
 		rows, err := s.db.QueryContext(ctx,
-			`SELECT `+itemCols+` FROM plugin_items WHERE seq IN (`+strings.Join(placeholders, ",")+`)`,
+			`SELECT `+itemCols+` FROM plugin_items WHERE `+column+` IN (`+strings.Join(placeholders, ",")+`)`,
 			args...)
 		if err != nil {
-			return nil, err
+			return err
 		}
 		var items []core.KindItem
 		var libs []core.LibraryID
@@ -62,27 +91,27 @@ func (s *Service) GetByKeys(ctx context.Context, keys []core.RatingKey) (map[cor
 			it, libID, _, scanErr := scanItemRow(rows)
 			if scanErr != nil {
 				rows.Close()
-				return nil, scanErr
+				return scanErr
 			}
 			items = append(items, it)
 			libs = append(libs, libID)
 		}
 		if err := rows.Err(); err != nil {
 			rows.Close()
-			return nil, err
+			return err
 		}
 		rows.Close()
 		if len(items) == 0 {
 			continue
 		}
 		if err := s.hydrateArtSlice(ctx, items); err != nil {
-			return nil, err
+			return err
 		}
 		for i, it := range items {
-			out[it.Key] = KeyedItem{Item: it, LibraryID: libs[i]}
+			accept(KeyedItem{Item: it, LibraryID: libs[i]})
 		}
 	}
-	return out, nil
+	return nil
 }
 
 // FilterVisibleRefs evaluates lib's visibility policy for refs in one batched

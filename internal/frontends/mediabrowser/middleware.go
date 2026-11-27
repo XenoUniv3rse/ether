@@ -115,6 +115,9 @@ func (i *instance) routeMiddleware(rt route.Route, next http.Handler) http.Handl
 	return i.requestLog(rt, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet || r.Method == http.MethodHead {
 			ctx := r.Context()
+			if !anonymousStreamRoutes[rt] && !strings.HasPrefix(rt.Pattern, "/sessions/") {
+				ctx = frontend.WithQuietIdentity(ctx)
+			}
 			if !reqmemo.Active(ctx) {
 				ctx = reqmemo.With(ctx)
 			}

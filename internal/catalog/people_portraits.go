@@ -11,23 +11,45 @@ import (
 	"github.com/braedonsaunders/ether/internal/store"
 )
 
+func (c *Catalog) hydratePeopleVisibility(ctx context.Context, items []core.Title, facts core.TitleFacts, needsAvailabilityFacts func(core.Title) bool) error {
+	facts |= c.policyFacts(c.visibilityFilter())
+	if needsAvailabilityFacts == nil || len(items) == 0 {
+		return c.hydrateFacts(ctx, items, facts)
+	}
+	var availabilityRows []core.Title
+	var positions []int
+	for n, title := range items {
+		if needsAvailabilityFacts(title) {
+			availabilityRows = append(availabilityRows, title)
+			positions = append(positions, n)
+		}
+	}
+	if err := c.hydrateFacts(ctx, availabilityRows, core.VisibilityFacts&^facts); err != nil {
+		return err
+	}
+	for n, pos := range positions {
+		items[pos] = availabilityRows[n]
+	}
+	return c.hydrateFacts(ctx, items, facts)
+}
+
 // CachedPortraitTitles reads fresh visibility facts and the requested credits,
 // never the minute cache. Movie/show portraits need no episode counts, trailers,
 // alternate names or other people's credits. Child titles keep the full reader
 // because their visibility can inherit parent facts. The caller owns the policy
 // lease and must repeat this read and fence changes before publishing results.
-func (c *Catalog) CachedPortraitTitles(ctx context.Context, subjects map[core.RatingKey][]int64, cfg config.Catalog, now time.Time) (map[core.RatingKey]core.Title, error) {
-	return c.cachedPortraitTitles(ctx, subjects, cfg, now, false)
+func (c *Catalog) CachedPortraitTitles(ctx context.Context, subjects map[core.RatingKey][]int64, cfg config.Catalog, now time.Time, facts core.TitleFacts, needsAvailabilityFacts func(core.Title) bool) (map[core.RatingKey]core.Title, error) {
+	return c.cachedPortraitTitles(ctx, subjects, cfg, now, facts, needsAvailabilityFacts, false)
 }
 
 // RecheckPortraitTitles repeats current visibility and named-credit membership.
 // Only the initial read needs portrait/IMDb metadata; this result never escapes
 // the final membership proof.
-func (c *Catalog) RecheckPortraitTitles(ctx context.Context, subjects map[core.RatingKey][]int64, cfg config.Catalog, now time.Time) (map[core.RatingKey]core.Title, error) {
-	return c.cachedPortraitTitles(ctx, subjects, cfg, now, true)
+func (c *Catalog) RecheckPortraitTitles(ctx context.Context, subjects map[core.RatingKey][]int64, cfg config.Catalog, now time.Time, facts core.TitleFacts, needsAvailabilityFacts func(core.Title) bool) (map[core.RatingKey]core.Title, error) {
+	return c.cachedPortraitTitles(ctx, subjects, cfg, now, facts, needsAvailabilityFacts, true)
 }
 
-func (c *Catalog) cachedPortraitTitles(ctx context.Context, subjects map[core.RatingKey][]int64, cfg config.Catalog, now time.Time, membershipOnly bool) (map[core.RatingKey]core.Title, error) {
+func (c *Catalog) cachedPortraitTitles(ctx context.Context, subjects map[core.RatingKey][]int64, cfg config.Catalog, now time.Time, facts core.TitleFacts, needsAvailabilityFacts func(core.Title) bool, membershipOnly bool) (map[core.RatingKey]core.Title, error) {
 	filter := c.visibilityFilter()
 	var keys, children []core.RatingKey
 	for key := range subjects {
@@ -69,9 +91,7 @@ func (c *Catalog) cachedPortraitTitles(ctx context.Context, subjects map[core.Ra
 		if err != nil {
 			return nil, err
 		}
-		// Always include policy facets, even when the catalogue's own filter is
-		// passive: the viewer's owned safety policy can still depend on them.
-		if err := c.hydrateVisibilityFacts(ctx, items); err != nil {
+		if err := c.hydratePeopleVisibility(ctx, items, facts, needsAvailabilityFacts); err != nil {
 			return nil, err
 		}
 		for _, title := range items {

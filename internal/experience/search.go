@@ -246,13 +246,20 @@ func (s Search) peopleTitlesFor(ctx context.Context, viewer *core.User, query st
 	if !restricted {
 		return s.filterCandidates(viewer, raw, allowed, len(allowed) > 0), nil
 	}
-	out := make([]core.Title, 0, len(raw))
+	return s.visibleCandidates(ctx, viewer, raw, allowed), nil
+}
+
+// visibleCandidates checks a ranking window in one availability read. The
+// playback and inherited series policy still apply to each surviving title.
+func (s Search) visibleCandidates(ctx context.Context, viewer *core.User, raw []core.Title, types map[core.MediaType]bool) []core.Title {
+	var eligible []core.Title
 	for i := range raw {
-		if (len(allowed) == 0 || allowed[raw[i].Type]) && s.Visibility.Visible(ctx, viewer, &raw[i]) {
-			out = append(out, raw[i])
+		title := &raw[i]
+		if (len(types) == 0 || types[title.Type]) && s.Visibility.Playable(ctx, viewer, title) {
+			eligible = append(eligible, *title)
 		}
 	}
-	return out, nil
+	return s.Visibility.Available(ctx, viewer, eligible)
 }
 
 // Find is an explicit search: catalogue rules the owner limited to browsing
@@ -314,12 +321,7 @@ func (s Search) Find(ctx context.Context, viewer *core.User, query string, types
 				return nil, err
 			}
 		}
-		filtered := make([]core.Title, 0, len(items))
-		for i := range items {
-			if allowed[items[i].Type] && s.Visibility.Visible(ctx, viewer, &items[i]) {
-				filtered = append(filtered, items[i])
-			}
-		}
+		filtered := s.visibleCandidates(ctx, viewer, items, allowed)
 		if !ok && s.PeopleTitles != nil {
 			pItems, pErr := s.peopleTitlesFor(ctx, viewer, query, types, fetch, filtered, true, allowed)
 			if pErr != nil && len(filtered) == 0 {

@@ -86,6 +86,8 @@ type BrokerDeps struct {
 	// keeps the cached CanPlay decision for an unrestricted viewer.
 	CurrentPlay func(context.Context, *core.Viewer, bool, time.Time) (*core.Viewer, error)
 	FreshPlay   func(context.Context, *core.Viewer, bool, time.Time) (*core.Viewer, error)
+	// PreviewPlay checks estimates without locking the policy row. Play uses FreshPlay.
+	PreviewPlay func(context.Context, *core.Viewer, bool, time.Time) (*core.Viewer, error)
 	// ReceiptCurrent rechecks the acceptance Plex stored for this request.
 	ReceiptCurrent func(context.Context, auth.Acceptance) error
 	BitrateLimit   func(*core.Viewer) int
@@ -380,6 +382,13 @@ func (b *Broker) confirm(ctx context.Context, v *core.Viewer, caps core.ClientCa
 }
 
 // Current item checks deliberately exclude bedtime: an admitted item can finish.
+func (b *Broker) previewAdmission(ctx context.Context, v *core.Viewer, caps core.ClientCaps) (*core.Viewer, error) {
+	if b.deps.PreviewPlay == nil {
+		return b.confirm(ctx, v, caps)
+	}
+	return b.confirmPolicy(ctx, v, caps, b.deps.PreviewPlay)
+}
+
 func (b *Broker) confirmCurrent(ctx context.Context, v *core.Viewer, caps core.ClientCaps) (*core.Viewer, error) {
 	fresh := b.deps.CurrentPlay
 	if fresh == nil {
@@ -565,7 +574,11 @@ func (b *Broker) Plan(ctx context.Context, req frontend.PlanRequest) (planned fr
 	if closed {
 		return frontend.PlayPlan{}, core.ErrNotAvailable
 	}
-	confirmed, err := b.confirm(ctx, v, req.Caps)
+	confirm := b.confirm
+	if req.Intent.Estimate {
+		confirm = b.previewAdmission
+	}
+	confirmed, err := confirm(ctx, v, req.Caps)
 	if err != nil {
 		b.emitAdmissionDenied(v, req.Item, "", req.Caps, req.Device, string(req.Protocol), false, err)
 		return frontend.PlayPlan{}, err

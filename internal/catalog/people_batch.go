@@ -138,7 +138,7 @@ type personKey struct {
 // CachedVisibleTitles is CachedCreditTitles for a visibility decision only:
 // the stored rows, plus the facts visibility rules and the release gate
 // read when they read any, without credits or alternative titles.
-func (c *Catalog) CachedVisibleTitles(ctx context.Context, keys []core.RatingKey, cfg config.Catalog, now time.Time) (map[core.RatingKey]core.Title, error) {
+func (c *Catalog) CachedVisibleTitles(ctx context.Context, keys []core.RatingKey, cfg config.Catalog, now time.Time, facts core.TitleFacts, needsAvailabilityFacts func(core.Title) bool) (map[core.RatingKey]core.Title, error) {
 	filter := c.visibilityFilter()
 	digital := cfg.ReleaseMode == config.ModeDigital
 	out := make(map[core.RatingKey]core.Title, len(keys))
@@ -165,10 +165,8 @@ func (c *Catalog) CachedVisibleTitles(ctx context.Context, keys []core.RatingKey
 		if err != nil {
 			return nil, err
 		}
-		if !filter.Passive() || digital {
-			if err := c.hydrateVisibilityFacts(ctx, items); err != nil {
-				return nil, err
-			}
+		if err := c.hydratePeopleVisibility(ctx, items, facts, needsAvailabilityFacts); err != nil {
+			return nil, err
 		}
 		var seasons []*core.Title
 		for i := range items {

@@ -14,7 +14,9 @@ func (s *ImageGrantService) IssuePersonImages(ctx context.Context, credential st
 	if len(targets) > 100 {
 		return nil, frontend.ErrImageBatchLimit
 	}
-	if s.surface != "silo" && s.surface != "vela" {
+	switch s.surface {
+	case "silo", "vela", "jellyfin", "emby":
+	default:
 		return nil, core.ErrUnauthorized
 	}
 	for _, target := range targets {
