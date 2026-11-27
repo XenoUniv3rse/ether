@@ -106,6 +106,23 @@ func (s *Service) ensureHTTP(ctx context.Context, ss *session, id string) (core.
 }
 
 func (s *Service) startHTTPStream(ctx context.Context, ss *session, id string, info *core.MediaInfo, caps core.ClientCaps, liveInput bool, gen int64) (core.HTTPSession, error) {
+	ss.prepareMu.Lock()
+	defer ss.prepareMu.Unlock()
+	ctx, cancel := ss.bindContext(ctx)
+	defer cancel()
+	if !liveInput {
+		return nil, core.ErrNotAvailable
+	}
+	created, err := s.prepareLiveOutputInput(ctx, ss)
+	if err != nil {
+		return nil, err
+	}
+	started := false
+	defer func() {
+		if created && !started {
+			s.revokeInput(ss)
+		}
+	}()
 	if info == nil {
 		probed, err := s.probeSessionInput(ctx, ss)
 		if err != nil {
@@ -133,20 +150,11 @@ func (s *Service) startHTTPStream(ctx context.Context, ss *session, id string, i
 		return nil, core.ErrNotFound
 	}
 	ss.info.MediaInfo = info
-	var input string
-	if liveInput {
-		var err error
-		input, err = s.relayInput(ss)
-		if err != nil {
-			ss.mu.Unlock()
-			return nil, err
-		}
-
-	} else {
-		ss.mu.Unlock()
-		return nil, core.ErrNotAvailable
-	}
+	input, err := s.relayInput(ss)
 	ss.mu.Unlock()
+	if err != nil {
+		return nil, err
+	}
 
 	hs, err := s.transcoder().StartHLS(s.serviceContext(), core.HLSRequest{
 		SessionID: "livetv-http-" + id, InputURL: input, LiveInput: liveInput,
@@ -160,5 +168,6 @@ func (s *Service) startHTTPStream(ctx context.Context, ss *session, id string, i
 		hs.Close()
 		return nil, core.ErrNotAvailable
 	}
+	started = true
 	return stream, nil
 }

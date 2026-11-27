@@ -678,6 +678,7 @@ type authEntry struct {
 	account       *ProviderAccount
 	auth          *SourceAuth
 	limit         int           // connection limit; 0 is none
+	slotWait      time.Duration // maximum viewer admission wait for a connection
 	gap           time.Duration // least time between new provider streams
 	perHour       int           // new provider streams per hour; 0 is no cap
 	at            time.Time

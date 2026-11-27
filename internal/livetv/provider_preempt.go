@@ -1,27 +1,98 @@
 package livetv
 
 import (
+	"container/list"
 	"context"
 	"errors"
+	"sync"
+	"time"
 )
 
-// withProviderCapacity retries admission only after an idle output has fully
-// released its input. The existing reservation/lease/tap locks remain the
-// authority: competing tunes still cannot acquire the same slot twice.
-// Call only from viewer admission, never from a broadcast's own frame workers.
-func (s *Service) withProviderCapacity(ctx context.Context, c Channel, src StreamSource, admit func() error) error {
-	err := admit()
-	if !errors.Is(err, ErrProviderBusy) || ctx.Err() != nil {
+// withProviderCapacity admits a viewer without holding the queue during
+// media startup. Background recovery only attempts immediate acquisition.
+func (s *Service) withProviderCapacity(ctx context.Context, c Channel, src StreamSource, admit func(context.Context) error) error {
+	if err := ctx.Err(); err != nil {
 		return err
 	}
-	account := src.AuthSourceID
-	if account == "" {
-		account = c.SourceID
+	err := admit(ctx)
+	if !errors.Is(err, ErrProviderBusy) {
+		return err
 	}
-	if s.preemptIdleProvider(account, c.ID) && ctx.Err() == nil {
-		return admit()
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	account := providerSourceID(c, src)
+	entry, lookupErr := s.sourceEntry(ctx, account)
+	if lookupErr == nil && entry.slotWait > 0 {
+		err = s.providerWait.wait(ctx, account, entry.slotWait, err, admit)
+	} else if s.preemptIdleProvider(account, c.ID) && ctx.Err() == nil {
+		err = admit(ctx)
+	}
+	if errors.Is(err, ErrProviderBusy) && entry.limit > 0 {
+		used := max(s.inputRelay.taps.inUse(account), entry.limit)
+		s.emitProviderLimitReached(account, used, entry.limit, c.ID)
 	}
 	return err
+}
+
+type providerWaitQueue struct {
+	mu      sync.Mutex
+	sources map[string]*list.List
+}
+
+// Only the head retries. Periodic retries also notice durable login slots
+// released by another process, which cannot signal this in-memory queue.
+func (q *providerWaitQueue) wait(ctx context.Context, account string, budget time.Duration, busy error, admit func(context.Context) error) error {
+	wait, cancel := context.WithTimeout(ctx, budget)
+	defer cancel()
+	q.mu.Lock()
+	queue := q.sources[account]
+	if queue == nil {
+		if q.sources == nil {
+			q.sources = map[string]*list.List{}
+		}
+		queue = list.New()
+		q.sources[account] = queue
+	}
+	turn := make(chan struct{})
+	elem := queue.PushBack(turn)
+	if queue.Front() == elem {
+		close(turn)
+	}
+	q.mu.Unlock()
+	defer func() {
+		q.mu.Lock()
+		head := queue.Front() == elem
+		queue.Remove(elem)
+		if next := queue.Front(); next == nil {
+			delete(q.sources, account)
+		} else if head {
+			close(next.Value.(chan struct{}))
+		}
+		q.mu.Unlock()
+	}()
+	select {
+	case <-turn:
+	case <-wait.Done():
+	}
+	tick := time.NewTicker(75 * time.Millisecond)
+	defer tick.Stop()
+	for wait.Err() == nil {
+		if err := admit(wait); !errors.Is(err, ErrProviderBusy) {
+			if err == nil || wait.Err() == nil {
+				return err
+			}
+			break
+		}
+		select {
+		case <-tick.C:
+		case <-wait.Done():
+		}
+	}
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	return busy
 }
 
 func (s *Service) preemptIdleProvider(account, exceptChannel string) bool {

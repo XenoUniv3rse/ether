@@ -82,15 +82,20 @@ func authEntryFromSource(src Source, now time.Time) authEntry {
 	if src.Account != nil {
 		e.limit = src.Account.MaxConnections
 	}
-	if src.MaxConnections > 0 && (e.limit == 0 || src.MaxConnections < e.limit) {
-		e.limit = src.MaxConnections
-	}
 	if src.LoginPool || len(src.Logins) > 0 {
 		e.limit = loginLimit(src.Account)
 		for _, l := range src.Logins {
 			if l.Error == "" {
 				e.limit += loginLimit(l.Account)
 			}
+		}
+	}
+	e.slotWait = time.Duration(min(max(src.SlotWaitSeconds, 0), 10)) * time.Second
+	if src.MaxConnections > 0 {
+		if e.limit == 0 {
+			e.limit = src.MaxConnections
+		} else {
+			e.limit = min(e.limit, src.MaxConnections)
 		}
 	}
 	switch {

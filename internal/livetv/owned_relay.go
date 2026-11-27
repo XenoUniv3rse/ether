@@ -1197,7 +1197,7 @@ func (s *Service) resolveSessionSource(ctx context.Context, ss *session, c Chann
 	ss.mu.Unlock()
 	if direct != nil {
 		dURL, dRawHdrs, dHdrs, _, dGen, dInvalid, _ := direct.current()
-		if dInvalid || dURL == "" {
+		if dInvalid || !validHTTP(dURL) {
 			dURL, dRawHdrs, dHdrs, _, err = direct.refresh(ctx, dGen)
 			if err != nil {
 				return "", nil, nil, err
@@ -1219,9 +1219,16 @@ func (p *relayProducer) switchSource(ctx context.Context, ss *session, c Channel
 	grantSrc := src
 	grantSrc.URL = raw
 	grantSrc.Headers = rawHdrs
-	if err := p.s.grantDirectInput(ss, grantSrc, headers); err != nil {
+	p.s.revokeInput(ss)
+	if err := p.s.grantInputForContext(sctx, ss, grantSrc, headers, true, p.s.latencyPolicy().TargetLatency()); err != nil {
 		return err
 	}
+	started := false
+	defer func() {
+		if !started {
+			p.s.revokeInput(ss)
+		}
+	}()
 	ss.mu.Lock()
 	ss.inputURL, ss.inputSource, ss.inputHeaders = raw, grantSrc, headers.Clone()
 	ss.info.ActiveSourceID = src.ID
@@ -1241,7 +1248,9 @@ func (p *relayProducer) switchSource(ctx context.Context, ss *session, c Channel
 		info.Duration = 0
 		dec, cut, _ = p.s.relayPlan(ss, info)
 	}
-	return p.start(sctx, info, dec, cut, false)
+	err = p.start(sctx, info, dec, cut, false)
+	started = err == nil
+	return err
 }
 
 // grantDirectInput grants a Direct session's input. The tune's sniff and

@@ -121,8 +121,7 @@ func (p *passthroughProducer) takeSteady() bool {
 		p.providerFeed.Store(f)
 	}
 	p.steadyMu.Unlock()
-	p.s.releaseLogin(p.login)
-	p.login = nil
+	p.releaseInput()
 	p.reportHistory()
 	p.s.noteSourceMode(p.c.ID, p.src, "passthrough", "escalated")
 	if p.ingest == nil {

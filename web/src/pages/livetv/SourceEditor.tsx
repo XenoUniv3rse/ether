@@ -346,6 +346,7 @@ export function SourceEditor({
             ...groupRules(source),
             maxConnections: source.maxConnections,
             tuneGapSeconds: source.tuneGapSeconds,
+            slotWaitSeconds: source.slotWaitSeconds,
             tunesPerHour: source.tunesPerHour,
           }
         : {
@@ -822,6 +823,7 @@ export function SourceEditor({
                 ...d,
                 maxConnections: next.maxConnections,
                 tuneGapSeconds: next.tuneGapSeconds,
+                slotWaitSeconds: next.slotWaitSeconds,
                 tunesPerHour: next.tunesPerHour,
               }))
             }

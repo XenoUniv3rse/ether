@@ -68,6 +68,27 @@ export function SourceLimits({
       </Field>
 
       <Field
+        label={t("Wait for a free connection (seconds)")}
+        htmlFor="src-slot-wait"
+        hint={t("When all connections are busy, wait up to 10 seconds. Set 0 to fail immediately.")}
+      >
+        <Input
+          id="src-slot-wait"
+          type="number"
+          inputMode="numeric"
+          min={0}
+          max={10}
+          className="w-32"
+          placeholder="0"
+          value={rules.slotWaitSeconds ?? ""}
+          onChange={(e) => {
+            const n = wholeNumber(e.currentTarget.value);
+            onChange({ ...rules, slotWaitSeconds: n === undefined ? undefined : Math.min(n, 10) });
+          }}
+        />
+      </Field>
+
+      <Field
         label={t("Wait between new streams")}
         hint={
           gapChoice === "auto"

@@ -232,10 +232,13 @@ func (s *Service) leaseLogin(ctx context.Context, source, raw string, headers ht
 	if err != nil {
 		return nil, err
 	}
-	return s.leaseLoginFor(ctx, e, source, raw, headers)
+	return s.leaseLoginFor(ctx, e, source, raw, headers, providerInputKey(raw, headers, nil))
 }
 
-func (s *Service) leaseLoginFor(ctx context.Context, e authEntry, source, raw string, headers http.Header) (*loginLease, error) {
+func (s *Service) leaseLoginFor(ctx context.Context, e authEntry, source, raw string, headers http.Header, inputKey string) (*loginLease, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if e.pool == nil || (!e.pool.LoginPool && len(e.pool.Logins) == 0) {
 		return nil, nil
 	}
@@ -247,7 +250,7 @@ func (s *Service) leaseLoginFor(ctx context.Context, e authEntry, source, raw st
 		p.live = map[string]*loginLease{}
 		p.failed = map[string]time.Time{}
 	}
-	key := source + "\x00" + tapKey(raw, headers)
+	key := source + "\x00" + inputKey
 	if l := p.live[key]; l != nil && !l.lost.Load() {
 		l.refs++
 		return l, nil
@@ -329,7 +332,7 @@ func (s *Service) leaseLoginFor(ctx context.Context, e authEntry, source, raw st
 		if candidate.ID == "primary" {
 			r := &s.inputRelay.taps
 			r.mu.Lock()
-			busy = max(busy, len(r.bySource[source])+r.external[source])
+			busy = max(busy, r.unmanagedInUseLocked(source)+r.external[source])
 			r.mu.Unlock()
 		}
 		for slot := busy; slot < limit; slot++ {
@@ -423,6 +426,9 @@ func (s *Service) releaseLogin(l *loginLease) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
+	// A failed delete or abrupt restart leaves the holder fenced until
+	// the last 45-second lease expires. No startup sweep takes live slots
+	// away from another process.
 	_, _ = s.o.DB.ExecContext(ctx, `DELETE FROM livetv_login_slots WHERE source_id=? AND login_id=? AND slot=? AND holder=?`, l.source, l.login, l.slot, l.holder)
 }
 func (s *Service) failedLogin(l *loginLease) {

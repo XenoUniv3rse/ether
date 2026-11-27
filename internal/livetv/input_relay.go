@@ -83,6 +83,7 @@ type inputGrant struct {
 	variantLogged sync.Once
 
 	login        *loginLease
+	releaseSlot  func()
 	provider     servingProvider
 	log          *slog.Logger // immutable, credential-free session correlation
 	token        string
@@ -207,9 +208,17 @@ func (s *Service) grantSteadyInputLead(ss *session, src StreamSource, headers ht
 }
 
 func (s *Service) grantInputFor(ss *session, src StreamSource, headers http.Header, steady bool, lead time.Duration) error {
+	ctx := ss.ctx
+	if ctx == nil {
+		ctx = s.serviceContext()
+	}
+	return s.grantInputForContext(ctx, ss, src, headers, steady, lead)
+}
+
+func (s *Service) grantInputForContext(ctx context.Context, ss *session, src StreamSource, headers http.Header, steady bool, lead time.Duration) error {
 	c := ss.info.Channel
 	source := providerSourceID(c, src)
-	entry, err := s.sourceEntry(ss.ctx, source)
+	entry, err := s.sourceEntry(ctx, source)
 	if err != nil {
 		return err
 	}
@@ -219,11 +228,21 @@ func (s *Service) grantInputFor(ss *session, src StreamSource, headers http.Head
 		// connection even when another viewer requests the same time range.
 		leaseKey = "vod:archive:" + randomID()
 	}
-	lease, err := s.leaseLoginFor(ss.ctx, entry, source, leaseKey, headers)
+	inputKey := providerInputKey(leaseKey, headers, src.Headers)
+	release, err := s.holdProviderInput(source, inputKey, entry.limit)
 	if err != nil {
 		return err
 	}
 	accepted := false
+	defer func() {
+		if !accepted && release != nil {
+			release()
+		}
+	}()
+	lease, err := s.leaseLoginFor(ctx, entry, source, leaseKey, headers, inputKey)
+	if err != nil {
+		return err
+	}
 	defer func() {
 		if !accepted {
 			s.releaseLogin(lease)
@@ -273,7 +292,7 @@ func (s *Service) grantInputFor(ss *session, src StreamSource, headers http.Head
 	if reserve == 0 {
 		lead = 0
 	}
-	ctx, cancel := context.WithCancel(s.serviceContext())
+	grantCtx, cancel := context.WithCancel(s.serviceContext())
 	histSrc := src
 	if ss.inputSource.ID != "" {
 		histSrc = ss.inputSource
@@ -281,7 +300,7 @@ func (s *Service) grantInputFor(ss *session, src StreamSource, headers http.Head
 	g := &inputGrant{finite: ss.archiveInput, variantCaps: core.ClientCaps{MaxHeight: ss.caps.MaxHeight, MaxBitrateKbps: ss.caps.MaxBitrateKbps}, login: lease, provider: providerForInput(entry, src, lease), reserve: reserve, lead: lead, steady: steady, service: s, direct: direct, directGen: directGen, histChannel: c.ID, histSrc: histSrc,
 		log:   s.sessionLog(ss).With("input", src.ID),
 		token: base64.RawURLEncoding.EncodeToString(b[:]), origin: relayOrigin(u), headers: headers.Clone(), mediaHeaders: redirectMediaHeaders(src.Headers),
-		ctx: ctx, cancel: cancel, slots: make(chan struct{}, relayConcurrency), source: source,
+		ctx: grantCtx, cancel: cancel, releaseSlot: release, slots: make(chan struct{}, relayConcurrency), source: source,
 		manifest:  manifest,
 		resources: map[string]*relayResource{"0": {name: relayName("stream", u.Path), url: src.URL}},
 		byKey:     map[string]string{},
@@ -289,6 +308,10 @@ func (s *Service) grantInputFor(ss *session, src StreamSource, headers http.Head
 	r := &s.inputRelay
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if err := ss.live(ctx); err != nil {
+		cancel()
+		return err
+	}
 	if old := r.bySess[ss]; old != nil {
 		r.dropLocked(ss, old)
 	}
@@ -379,6 +402,9 @@ func (s *Service) paceSessionInput(ctx context.Context, ss *session) (time.Durat
 	mediaHeaders := g.mediaHeaders.Clone()
 	g.mu.Unlock()
 	source, limit := s.tapSource(g)
+	if g.releaseSlot != nil {
+		limit = 0
+	}
 	joined, err := r.taps.canJoinOrOpen(g.rootTapKey(raw, headers, mediaHeaders), source, limit)
 	if err != nil {
 		return 0, err
@@ -433,6 +459,42 @@ func (r *inputRelay) dropLocked(ss *session, g *inputGrant) {
 		g.service.loginPool.mu.Unlock()
 		g.service.releaseLogin(g.login)
 	}
+	if g.releaseSlot != nil {
+		g.releaseSlot()
+	}
+}
+
+// prepareLiveOutputInput is used on demand by direct DASH and HTTP output.
+// A passthrough viewer keeps no probe grant once its shared producer has
+// started. Keep a new grant only if this output actually starts.
+func (s *Service) prepareLiveOutputInput(ctx context.Context, ss *session) (bool, error) {
+	if _, err := s.relayInput(ss); err == nil {
+		return false, nil
+	}
+	ss.mu.Lock()
+	c, src, headers := ss.info.Channel, ss.inputSource, ss.inputHeaders
+	serving := ss.servingProviderLocked()
+	ss.mu.Unlock()
+	if err := ss.live(ctx); err != nil {
+		return false, err
+	}
+	if serving != nil && serving.active.sourceID != src.ID {
+		for _, candidate := range c.StreamSources {
+			if candidate.ID == serving.active.sourceID {
+				raw, resolveHeaders, err := s.ResolveStreamSource(ctx, c, candidate)
+				if err != nil {
+					return false, err
+				}
+				src, headers = candidate, resolveHeaders
+				src.URL = raw
+				break
+			}
+		}
+	}
+	err := s.withProviderCapacity(ctx, c, src, func(admitCtx context.Context) error {
+		return s.grantInputForContext(admitCtx, ss, src, headers, true, s.latencyPolicy().TargetLatency())
+	})
+	return err == nil, err
 }
 
 // relayInput is the URL ffmpeg and ffprobe read the session's input from.

@@ -226,8 +226,8 @@ func TestFailedMediaFailsOverToHealthyBackup(t *testing.T) {
 	}
 	u := &core.User{ID: 1}
 	first, err := s.Tune(context.Background(), u, c.ID, core.ClientCaps{})
-	if err != nil || first.ActiveSourceID != "primary" {
-		t.Fatalf("tune: %+v %v", first, err)
+	if err != nil || first.ActiveSourceID != "backup" {
+		t.Fatalf("tune source %q: %v", first.ActiveSourceID, err)
 	}
 	defer s.Stop(context.Background(), first.ID, u)
 	r := httptest.NewRequest("GET", "/", nil)

@@ -291,7 +291,8 @@ func (s *Service) StreamSourceStatuses(ctx context.Context, channelID string) ([
 }
 
 func (s *Service) recordSourceHealth(channelID string, src StreamSource, err error, played bool) {
-	if src.ID == "" || strings.HasPrefix(channelID, directChannelPrefix) || errors.Is(err, context.Canceled) {
+	if src.ID == "" || strings.HasPrefix(channelID, directChannelPrefix) || errors.Is(err, context.Canceled) ||
+		errors.Is(err, core.ErrStreamLimit) || errors.Is(err, ErrProviderPaced) {
 		return
 	}
 	s.sourceMu.Lock()
@@ -516,40 +517,24 @@ func liveInputHasAudio(info *core.MediaInfo) bool {
 // sequence into the active HLS resource map.
 func (s *Service) startIPTV(ctx context.Context, ss *session) error {
 	c := ss.info.Channel
-	if err := normalizeStreamSources(&c); err != nil {
-		return err
+	ordered := c.StreamSources
+	if !ss.ephemeral {
+		if err := normalizeStreamSources(&c); err != nil {
+			return err
+		}
+		ordered = s.orderedSourceCandidates(c)
 	}
 	var candidates []StreamSource
 	var earliestRetry time.Time
-	for _, src := range c.StreamSources {
-		if !src.Enabled || !s.autoDonorActive(src.AutoFrom) {
-			continue
-		}
+	for _, src := range ordered {
 		retry := s.sourceStatus(c.ID, src).RetryAfter
 		if retry.After(s.o.Now()) {
 			if earliestRetry.IsZero() || retry.Before(earliestRetry) {
 				earliestRetry = retry
 			}
-			s.sessionLog(ss).Debug("live source skipped", "input", src.ID, "reason", "cooldown", "retry_after", retry.Sub(s.o.Now()))
 			continue
 		}
 		candidates = append(candidates, src)
-	}
-	if !c.OwnerStreamSources && len(candidates) > 1 {
-		var manuals, autos []StreamSource
-		for _, src := range candidates {
-			if src.AutoFrom == "" {
-				manuals = append(manuals, src)
-			} else {
-				autos = append(autos, src)
-			}
-		}
-		if len(autos) > 1 {
-			sort.SliceStable(autos, func(i, j int) bool {
-				return s.compareRuntimeAutoBackups(c, autos[i], autos[j]) < 0
-			})
-		}
-		candidates = append(manuals, autos...)
 	}
 	var last error = core.ErrNotAvailable
 	var failures []TuneInputFailure
@@ -606,27 +591,35 @@ func (s *Service) startIPTV(ctx context.Context, ss *session) error {
 		// ffmpeg and ffprobe read this input through a loopback grant, never
 		// with the provider URL or headers on their command line.
 		var spent time.Duration
-		err = s.withProviderCapacity(ctx, c, src, func() error {
-			ss.owned.close()
-			ss.owned = nil
-			s.revokeInput(ss)
-			if err := s.grantDirectInput(ss, grantSrc, headers); err != nil {
-				return err
-			}
-			// Wait out any inter-tune gap on this provider before starting the
-			// candidate's probe deadline.
-			if _, err := s.paceSessionInput(ctx, ss); err != nil {
-				return err
-			}
-			probeStarted := time.Now()
-			err := s.startIPTVSource(ctx, ss, sniffBudget, probeBudget, primaryCount > 1 && index < primaryCount)
-			spent = time.Since(probeStarted)
-			return err
+		err = s.withProviderCapacity(ctx, c, src, func(admitCtx context.Context) error {
+			return s.grantInputForContext(admitCtx, ss, grantSrc, headers, true, s.latencyPolicy().TargetLatency())
 		})
+		// Provider pacing and slot contention have their own budgets.
+		if err == nil {
+			_, err = s.paceSessionInput(ctx, ss)
+		}
+		if err == nil {
+			probeStarted := time.Now()
+			err = s.startIPTVSource(ctx, ss, sniffBudget, probeBudget, primaryCount > 1 && index < primaryCount)
+			spent = time.Since(probeStarted)
+			if err == nil {
+				err = s.awaitOwnedStart(ctx, ss)
+			}
+		}
 		remaining = max(remaining-min(resolveElapsed+spent, connectBudget), 0)
 		if err == nil {
+			if ss.owned != nil && ss.owned.relay == nil {
+				// The passthrough producer owns the input now. A viewer's
+				// original probe must not pin it after producer failover.
+				s.revokeInput(ss)
+			}
 			ss.info.ActiveSourceID = src.ID
-			s.recordSourceHealth(c.ID, src, nil, false)
+			if serving := ss.servingProviderLocked(); serving != nil && serving.active.sourceID != "" {
+				ss.info.ActiveSourceID = serving.active.sourceID
+			}
+			if ss.info.ActiveSourceID == src.ID {
+				s.recordSourceHealth(c.ID, src, nil, false)
+			}
 			readyAttrs := []any{"elapsed", time.Since(started)}
 			if index > 0 {
 				readyAttrs = append(readyAttrs, "from", candidates[0].ID, "to", src.ID)

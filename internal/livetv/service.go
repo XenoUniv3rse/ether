@@ -95,6 +95,7 @@ type Service struct {
 	personalClocks        map[personalKey]*personalClock
 	broadcasts            broadcastRegistry
 	broadcastProviders    map[string]map[string]string
+	providerWait          providerWaitQueue
 	chanSnap              channelSnapshot // decoded lineup shared by request paths (channel_cache.go)
 	guidePreviewMu        sync.Mutex
 	guidePreview          map[string]guidePreviewEntry
@@ -2592,7 +2593,7 @@ func (s *Service) importSource(ctx context.Context, src Source) (Source, error) 
 	if src.Kind == legacyStremioKind {
 		return src, errLegacyStremio
 	}
-	if src.MaxConnections < 0 || src.MaxConnections > 100 || src.TuneGapSeconds > 60 || src.TunesPerHour < 0 || src.TunesPerHour > 10000 {
+	if src.MaxConnections < 0 || src.MaxConnections > 100 || src.TuneGapSeconds > 60 || src.SlotWaitSeconds < 0 || src.SlotWaitSeconds > 10 || src.TunesPerHour < 0 || src.TunesPerHour > 10000 {
 		return src, fmt.Errorf("connection limits must be between 0 and 100, the gap between streams at most 60 seconds, and streams per hour at most 10,000")
 	}
 	if err := s.keepStoredUploads(ctx, &src); err != nil {

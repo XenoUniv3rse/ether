@@ -48,7 +48,7 @@ type ownedShared struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 	refs   int
-	linger *time.Timer
+	done   chan struct{}
 	// sessions are the viewers on this timeline (guarded by the registry
 	// lock); a hand-off to Steady runs under one of them.
 	sessions map[*session]struct{}
@@ -69,15 +69,11 @@ func (l *ownedLease) close() {
 	}
 }
 
-// ownedLinger keeps a channel's timeline (and its reserve) briefly after the
-// last viewer leaves, so a retune or a Plex session restart rejoins it.
-const ownedLinger = 5 * time.Second
-
 var errNeedsRelay = errors.New("livetv: provider variants need the relay")
 
 func (s *Service) acquirePassthrough(ss *session) *ownedLease {
 	c := ss.info.Channel
-	capped := ss.ephemeral || (c.SourceID != "" && s.sourceConnectionLimit(c.SourceID) > 0)
+	capped := ss.ephemeral || s.sourceConnectionLimit(providerSourceID(c, ss.inputSource)) > 0
 	key := c.ID
 	if !capped {
 		// A capped provider account gets one timeline per channel, whatever
@@ -91,9 +87,14 @@ func (s *Service) acquirePassthrough(ss *session) *ownedLease {
 	slates, reserve := s.slateFor(c), s.stabilityReserve(c)
 	st.mu.Lock()
 	sh := st.channels[key]
-	if sh != nil && sh.ctx.Err() != nil {
-		delete(st.channels, key)
-		sh = nil
+	for sh != nil && sh.ctx.Err() != nil {
+		st.mu.Unlock()
+		<-sh.done
+		st.mu.Lock()
+		if st.channels[key] == sh {
+			delete(st.channels, key)
+		}
+		sh = st.channels[key]
 	}
 	if sh == nil {
 		ctx, cancel := context.WithCancel(s.serviceContext())
@@ -127,7 +128,7 @@ func (s *Service) acquirePassthrough(ss *session) *ownedLease {
 			src: src, raw: raw, headers: hdrs,
 			ephemeral: ephemeral, direct: direct, directGen: directGen, cachedManifest: cm,
 			suggest: make(chan sourceChoice, 1)}
-		sh = &ownedShared{key: key, tl: tl, p: p, ctx: ctx, cancel: cancel}
+		sh = &ownedShared{key: key, tl: tl, p: p, ctx: ctx, cancel: cancel, done: make(chan struct{})}
 		st.channels[key] = sh
 		p.viewer = func() *session {
 			st.mu.Lock()
@@ -137,14 +138,16 @@ func (s *Service) acquirePassthrough(ss *session) *ownedLease {
 			}
 			return nil
 		}
-		if grant := s.sessionGrant(ss); grant != nil && grant.login != nil {
-			s.loginPool.mu.Lock()
-			grant.login.refs++
-			p.login = grant.login
-			s.loginPool.mu.Unlock()
-		}
 		go tl.run(ctx)
-		go p.run(ctx)
+		go func() {
+			defer close(sh.done)
+			defer func() {
+				if recover() != nil {
+					tl.fail(core.ErrNotAvailable)
+				}
+			}()
+			p.run(ctx)
+		}()
 		log.Info("owned passthrough timeline created", "reserve", tl.reserve, "class", key)
 	} else {
 		// This tune just proved a source works. A struggling timeline
@@ -159,45 +162,25 @@ func (s *Service) acquirePassthrough(ss *session) *ownedLease {
 		sh.sessions = map[*session]struct{}{}
 	}
 	sh.sessions[ss] = struct{}{}
-	if sh.linger != nil {
-		sh.linger.Stop()
-		sh.linger = nil
-	}
 	st.mu.Unlock()
 	return &ownedLease{tl: sh.tl, provider: sh.p.servingProvider, release: func() {
 		st.mu.Lock()
 		delete(sh.sessions, ss)
+		sh.refs--
+		last := sh.refs == 0
+		if last {
+			sh.cancel()
+		}
 		st.mu.Unlock()
-		s.releaseShared(sh, capped)
+		if last {
+			<-sh.done
+			st.mu.Lock()
+			if st.channels[sh.key] == sh {
+				delete(st.channels, sh.key)
+			}
+			st.mu.Unlock()
+		}
 	}}
-}
-
-func (s *Service) releaseShared(sh *ownedShared, capped bool) {
-	st := s.owned()
-	st.mu.Lock()
-	defer st.mu.Unlock()
-	sh.refs--
-	if sh.refs > 0 {
-		return
-	}
-	stop := func() {
-		if st.channels[sh.key] == sh {
-			delete(st.channels, sh.key)
-		}
-		sh.cancel()
-	}
-	if capped {
-		// A capped account's connection must be free for the next tune.
-		stop()
-		return
-	}
-	sh.linger = time.AfterFunc(ownedLinger, func() {
-		st.mu.Lock()
-		defer st.mu.Unlock()
-		if sh.refs == 0 {
-			stop()
-		}
-	})
 }
 
 // providerOrigin reads a provider's media playlist and resources with the
@@ -276,6 +259,9 @@ type passthroughProducer struct {
 	provider     providerTracker
 	providerFeed atomic.Pointer[steadyFeed]
 	login        *loginLease // held by the producer, independently of its viewers
+	releaseSlot  func()
+	inputKey     string
+	inputAccount string
 
 	rounds int // failover rounds since the last progress
 
@@ -361,7 +347,25 @@ func (p *passthroughProducer) open(ctx context.Context, src StreamSource, raw st
 	if err != nil {
 		return err
 	}
-	lease, err := p.s.leaseLoginFor(ctx, entry, source, raw, headers)
+	key := providerInputKey(raw, headers, src.Headers)
+	if p.inputKey != key || p.inputAccount != source {
+		p.releaseInput()
+	}
+	release, err := p.s.holdProviderInput(source, key, entry.limit)
+	if err != nil {
+		return err
+	}
+	accepted := false
+	var lease *loginLease
+	defer func() {
+		if !accepted {
+			p.s.releaseLogin(lease)
+			if release != nil {
+				release()
+			}
+		}
+	}()
+	lease, err = p.s.leaseLoginFor(ctx, entry, source, raw, headers, key)
 	if err != nil {
 		return err
 	}
@@ -375,11 +379,12 @@ func (p *passthroughProducer) open(ctx context.Context, src StreamSource, raw st
 	}
 	if err = p.openAttempt(ctx, src, target, upstreamHeaders, keep, false); err != nil {
 		p.noteLoginFailure(lease, err)
-		p.s.releaseLogin(lease)
 		return err
 	}
-	p.s.releaseLogin(p.login)
-	p.login = lease
+	p.releaseInput()
+	p.login, p.releaseSlot = lease, release
+	p.inputKey, p.inputAccount = key, source
+	accepted = true
 	if lease != nil {
 		// The next resolution starts with the original stream coordinates.
 		p.raw, p.headers = raw, headers
@@ -478,8 +483,18 @@ func (p *passthroughProducer) servingProvider() *providerChange {
 	return steadyProvider(p.providerFeed.Load(), p.provider.current.Load())
 }
 
+func (p *passthroughProducer) releaseInput() {
+	p.s.releaseLogin(p.login)
+	p.login = nil
+	if p.releaseSlot != nil {
+		p.releaseSlot()
+		p.releaseSlot = nil
+	}
+	p.inputKey, p.inputAccount = "", ""
+}
+
 func (p *passthroughProducer) run(ctx context.Context) {
-	defer func() { p.s.releaseLogin(p.login) }()
+	defer p.releaseInput()
 	err := p.open(ctx, p.src, p.raw, p.headers, false)
 	if errors.Is(err, errNeedsRelay) {
 		p.tl.fail(errNeedsRelay)
@@ -509,14 +524,13 @@ func (p *passthroughProducer) run(ctx context.Context) {
 		if time.Since(p.reportedAt) >= 30*time.Second {
 			p.reportHistory()
 		}
-		if p.ingest == nil {
+		if p.ingest == nil || p.inputKey == "" {
 			if !sleepCtx(ctx, 2*time.Second) || !p.failover(ctx) {
 				continue
 			}
 		}
 		if p.login != nil && p.login.lost.Load() {
-			p.s.releaseLogin(p.login)
-			p.login = nil
+			p.releaseInput()
 			if !p.failover(ctx) {
 				sleepCtx(ctx, p.roundDelay())
 			}
@@ -665,7 +679,7 @@ func (p *passthroughProducer) reresolve(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		return p.openAttempt(rctx, src, raw, headers, true, true)
+		return p.open(rctx, src, raw, headers, true)
 	}
 	raw, headers, err := p.s.ResolveStreamSource(rctx, p.c, p.src)
 	if err != nil {
@@ -683,7 +697,7 @@ func (p *passthroughProducer) failover(ctx context.Context) bool {
 			rctx, cancel := context.WithTimeout(ctx, 8*time.Second)
 			src, raw, headers, err := p.refreshDirect(rctx)
 			if err == nil {
-				err = p.openAttempt(rctx, src, raw, headers, p.tl.started(), true)
+				err = p.open(rctx, src, raw, headers, p.tl.started())
 			}
 			cancel()
 			if err == nil {

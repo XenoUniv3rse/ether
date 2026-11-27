@@ -236,6 +236,10 @@ func (s *Service) serveOwnedDASHPart(w http.ResponseWriter, r *http.Request, ss 
 // use. A session closed since it was looked up gets none: close has already
 // run and would never stop a transcoder started now.
 func (s *Service) ensureDASH(ctx context.Context, ss *session, id string) (core.DASHSession, error) {
+	ss.prepareMu.Lock()
+	defer ss.prepareMu.Unlock()
+	ctx, cancel := ss.bindContext(ctx)
+	defer cancel()
 	ss.mu.Lock()
 	if ss.closed {
 		ss.mu.Unlock()
@@ -247,13 +251,27 @@ func (s *Service) ensureDASH(ctx context.Context, ss *session, id string) (core.
 		ss.mu.Unlock()
 		return ds, nil
 	}
+	if ss.info.Channel.Kind != "iptv" || s.transcoder() == nil {
+		ss.mu.Unlock()
+		return nil, core.ErrNotAvailable
+	}
+	ss.mu.Unlock()
+	created, err := s.prepareLiveOutputInput(ctx, ss)
+	if err != nil {
+		return nil, err
+	}
 	var replacedOwned *ownedLease
+	started := false
+	ss.mu.Lock()
 	defer func() {
 		ss.mu.Unlock()
+		if created && !started {
+			s.revokeInput(ss)
+		}
 		replacedOwned.close()
 	}()
-	if ss.info.Channel.Kind != "iptv" || s.transcoder() == nil {
-		return nil, core.ErrNotAvailable
+	if err := ss.live(ctx); err != nil {
+		return nil, err
 	}
 	info := ss.info.MediaInfo
 	if info == nil {
@@ -296,6 +314,7 @@ func (s *Service) ensureDASH(ctx context.Context, ss *session, id string) (core.
 		ss.publishOwnedLocked(nil)
 	}
 	ss.dash = ds
+	started = true
 	return ds, nil
 }
 

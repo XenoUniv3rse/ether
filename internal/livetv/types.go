@@ -325,10 +325,12 @@ type Source struct {
 	// the panel's limit; it can never raise it). TuneGapSeconds is the least
 	// time between two new provider streams: 0 is the default (2 s on a
 	// connection-limited account, none otherwise), negative turns it off.
+	// SlotWaitSeconds is the viewer's capacity wait, from 0 to 10 seconds.
 	// TunesPerHour caps new provider streams per hour; 0 is no cap.
-	MaxConnections int `json:"maxConnections,omitempty"`
-	TuneGapSeconds int `json:"tuneGapSeconds,omitempty"`
-	TunesPerHour   int `json:"tunesPerHour,omitempty"`
+	MaxConnections  int `json:"maxConnections,omitempty"`
+	TuneGapSeconds  int `json:"tuneGapSeconds,omitempty"`
+	SlotWaitSeconds int `json:"slotWaitSeconds,omitempty"`
+	TunesPerHour    int `json:"tunesPerHour,omitempty"`
 }
 
 // ProviderAccount is what an IPTV panel reports about the owner's login.
