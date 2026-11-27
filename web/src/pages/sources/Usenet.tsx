@@ -627,6 +627,15 @@ export function UsenetProviders({
                 )}
                 onChange={(n) => set({ connections: n })}
               />
+              <TextRow
+                label={t("Backbone")}
+                value={draft.backbone ?? ""}
+                placeholder="omicron"
+                help={t(
+                  "Give accounts that share one article store the same name. When one says an article is missing, Ether skips the others.",
+                )}
+                onChange={(v) => set({ backbone: v })}
+              />
             </MoreOptions>
             <BoolRow
               label={t("Backfill only")}

@@ -1178,6 +1178,20 @@ missing that file's articles after the others, but still asks it when they miss
 too. Backfill accounts behave the same in both modes. **In order** suits a
 second account you want to use only for overflow.
 
+Several plans resell one provider's servers, so two accounts can hold exactly
+the same articles (Newshosting, Easynews and UsenetServer all sit on the
+Omicron backbone, for example). Under **More options** for each account, type
+the same **Backbone** name for every account that shares an article store.
+When one of them answers that an article is missing, Ether counts the others on
+that backbone as having answered the same and goes straight to an account on a
+different store, for downloads and health checks alike. A damaged copy on one
+server is not shared: the others are still asked. Leave the field empty for an
+account with its own store, and don't group accounts whose retention differs
+(for example a reseller that keeps fewer days than the backbone): one
+account's "missing" then stands for all of them, so health checks could report
+an article missing that a longer-retention account still has. Changing the
+name takes effect at once without dropping connections.
+
 If a server refuses connections because the account is at its limit, Ether
 learns that limit by itself. The provider list then shows, for example,
 "using 47 of 50 connections (server limit learned)". When the server states its

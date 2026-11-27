@@ -14,6 +14,8 @@ export interface UsenetProvider {
   priority: number;
   backfill: boolean;
   enabled: boolean;
+  /** Article store shared with other accounts; "" or absent = its own. */
+  backbone?: string;
 }
 
 export interface Indexer {
