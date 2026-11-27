@@ -150,7 +150,7 @@ func addMatrixConsoleCoverage(c *Client) {
 		{Name: "fixture update preroll", Method: http.MethodPut, Path: "/admin/prerolls/{consolePreroll}", Body: `{"name":"Matrix preroll updated","enabled":false}`},
 		{Name: "fixture simulate preroll", Method: http.MethodPost, Path: "/admin/prerolls/simulate", Body: `{"ratingKey":"{consoleMovieKey}","viewerId":{viewerId},"device":"tv"}`},
 		{Name: "fixture delete preroll", Method: http.MethodDelete, Path: "/admin/prerolls/{consolePreroll}"},
-		{Name: "fixture preview catalogue library", Method: http.MethodPost, Path: "/libraries/preview", Body: `{"mediaType":"movie","visibilityDefault":"show","rules":[]}`},
+		{Name: "fixture preview catalogue library", Method: http.MethodPost, Path: "/libraries/preview", Body: `{"mediaType":"movie","sources":["tmdb-movies"],"visibilityDefault":"show","rules":[]}`},
 		{Name: "fixture discover Home revision", Path: "/pages/home", Discover: discoverMatrixConsolePage},
 		{Name: "fixture preview Home", Method: http.MethodPost, Path: "/pages/home/preview", Body: `{"viewer":{viewerId},"device":"tv","count":4}`},
 		{Name: "fixture preview Home impact", Method: http.MethodPost, Path: "/pages/home/impact", Body: `{"device":"tv","page":` + draftHome + `}`},
@@ -376,7 +376,7 @@ func addMatrixMediaBrowserCoverage(c *Client, live bool) {
 		c.Steps = append(c.Steps,
 			Step{Name: "fixture GET root", Class: classStatic, Path: "/"},
 			Step{Name: "fixture GET web sign-in", Class: classStatic, Path: "/web/ether-signin"},
-			Step{Name: "fixture redeem console web sign-in", Class: classSignIn, Method: http.MethodPost, Path: "/Ether/WebSignIn", Body: `{"Code":"{mbWebCode}","Browser":"matrix-browser"}`},
+			Step{Name: "fixture redeem console web sign-in", Class: classSignIn, Method: http.MethodPost, Path: "/Ether/WebSignIn", Body: `{"Code":"{mbWebCode}","Browser":"etherperf-matrix-browser"}`},
 			Step{Name: "fixture GET user root", Class: classDetail, Path: "/Users/{userId}/Items/Root"},
 			Step{Name: "fixture client log upload", Class: classState, Method: http.MethodPost, Path: "/ClientLog/Document", Body: "Matrix fixture client log"},
 		)
