@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -84,6 +85,7 @@ func addMatrixConsoleCoverage(c *Client) {
 		c.Steps = append(c.Steps, Step{Name: "fixture GET " + path, Class: classConsole, Path: path})
 	}
 	c.Steps = append(c.Steps, Step{Name: "viewer safety policy", Class: classConsole, Path: "/safety/policies/{viewerId}"})
+	const draftHome = `{"mode":"curated","picks":false,"length":{},"rows":[]}`
 	const spec = `{"name":"Matrix scratch collection","mediaType":"movie","sources":[{"kind":"titles","keys":["{consoleMovieKey}"]}],"sort":"source","refresh":"weekly","enabled":true,"artwork":{"mode":"custom","url":"/p.jpg"}}`
 	for _, step := range []Step{
 		{Name: "fixture create local viewer", Method: http.MethodPost, Path: "/users/local", Body: `{"username":"matrix-console-scratch","password":"Matrix-local-001-fixture"}`, Discover: discoverMatrixID("consoleScratchViewer")},
@@ -121,13 +123,26 @@ func addMatrixConsoleCoverage(c *Client) {
 		{Name: "fixture update preroll", Method: http.MethodPut, Path: "/admin/prerolls/{consolePreroll}", Body: `{"name":"Matrix preroll updated","enabled":false}`},
 		{Name: "fixture simulate preroll", Method: http.MethodPost, Path: "/admin/prerolls/simulate", Body: `{"ratingKey":"{consoleMovieKey}","viewerId":{viewerId},"device":"tv"}`},
 		{Name: "fixture delete preroll", Method: http.MethodDelete, Path: "/admin/prerolls/{consolePreroll}"},
+		{Name: "fixture preview catalogue library", Method: http.MethodPost, Path: "/libraries/preview", Body: `{"mediaType":"movie","visibilityDefault":"show","rules":[]}`},
+		{Name: "fixture discover Home revision", Path: "/pages/home", Discover: discoverMatrixConsolePage},
+		{Name: "fixture preview Home", Method: http.MethodPost, Path: "/pages/home/preview", Body: `{"viewer":{viewerId},"device":"tv","count":4}`},
+		{Name: "fixture preview Home impact", Method: http.MethodPost, Path: "/pages/home/impact", Body: `{"device":"tv","page":` + draftHome + `}`},
+		{Name: "fixture save curated Home", Method: http.MethodPut, Path: "/pages/home", Body: draftHome, Headers: func(h http.Header, vars map[string]string) {
+			h.Set("If-Match", vars["matrixPageRevision"])
+		}},
+		{Name: "fixture reset Home", Method: http.MethodDelete, Path: "/pages/home"},
 		{Name: "fixture POST preview collection", Method: http.MethodPost, Path: "/collections/preview?n=1", Body: spec},
-		{Name: "fixture POST create collection", Method: http.MethodPost, Path: "/collections", Body: spec, Discover: discoverMatrixCollection},
+		{Name: "fixture POST create collection", Method: http.MethodPost, Path: "/collections", Body: spec, Discover: discoverMatrixID("scratchCollection")},
 		{Name: "fixture GET scratch collection", Path: "/collections/{scratchCollection}"},
 		{Name: "fixture GET scratch collection artwork", Path: "/collections/{scratchCollection}/artwork?w=500"},
 		{Name: "fixture GET scratch collection usage", Path: "/collections/{scratchCollection}/usage"},
 		{Name: "fixture PUT scratch collection", Method: http.MethodPut, Path: "/collections/{scratchCollection}", Body: spec},
 		{Name: "fixture POST rebuild scratch collection", Method: http.MethodPost, Path: "/collections/{scratchCollection}/rebuild"},
+		{Name: "fixture create collection library", Method: http.MethodPost, Path: "/libraries/", Body: `{"name":"Matrix collection library","mediaType":"movie","collectionId":{scratchCollection}}`, Discover: discoverMatrixID("consoleScratchLibrary")},
+		{Name: "fixture rename collection library", Method: http.MethodPatch, Path: "/libraries/{consoleScratchLibrary}", Body: `{"name":"Matrix renamed library"}`},
+		{Name: "fixture customize collection library tabs", Method: http.MethodPut, Path: "/libraries/{consoleScratchLibrary}/tabs", Body: `{"tabs":[{"key":"library","label":"Library","kind":"library"}]}`},
+		{Name: "fixture reset collection library tabs", Method: http.MethodDelete, Path: "/libraries/{consoleScratchLibrary}/tabs"},
+		{Name: "fixture remove collection library", Method: http.MethodDelete, Path: "/libraries/{consoleScratchLibrary}"},
 		{Name: "fixture DELETE scratch collection", Method: http.MethodDelete, Path: "/collections/{scratchCollection}"},
 		{Name: "fixture POST install indexer definition", Method: http.MethodPost, Path: "/indexer-sites/catalog/install", Body: `{"id":"fakepublic"}`},
 		{Name: "fixture GET installed indexer definition", Path: "/indexer-sites/definitions/fakepublic"},
@@ -135,7 +150,13 @@ func addMatrixConsoleCoverage(c *Client) {
 		{Name: "fixture DELETE installed indexer definition", Method: http.MethodDelete, Path: "/indexer-sites/definitions/fakepublic"},
 	} {
 		step.Class = classConsole
-		step.Headers = matrixConsoleWriteHeader
+		headers := step.Headers
+		step.Headers = func(h http.Header, vars map[string]string) {
+			matrixConsoleWriteHeader(h, vars)
+			if headers != nil {
+				headers(h, vars)
+			}
+		}
 		c.Steps = append(c.Steps, step)
 	}
 	c.Steps = append(c.Steps, Step{Name: "console event stream", Class: classStatic, Path: "/stream", Stream: time.Minute, Accept: func(body []byte) bool {
@@ -210,14 +231,15 @@ func matrixConsoleWriteHeader(h http.Header, _ map[string]string) {
 	h.Set("X-Ether-Request", "1")
 }
 
-func discoverMatrixCollection(vars map[string]string, body []byte) {
-	var result struct {
-		ID string `json:"id"`
+func discoverMatrixConsolePage(vars map[string]string, body []byte) {
+	var document struct {
+		Page struct {
+			Revision int64 `json:"revision"`
+		} `json:"page"`
 	}
-	if json.Unmarshal(body, &result) == nil {
-		setOnce(vars, "scratchCollection", result.ID)
+	if json.Unmarshal(body, &document) == nil {
+		vars["matrixPageRevision"] = strconv.FormatInt(document.Page.Revision, 10)
 	}
-
 }
 
 func addMatrixMediaBrowserCoverage(c *Client, live bool) {
