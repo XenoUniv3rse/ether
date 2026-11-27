@@ -325,7 +325,9 @@ func runPerfMatrixCase(t *testing.T, ctx context.Context, fixture string, c perf
 	a.perf.mu.Unlock()
 	r := perfharness.NewRunner(server.Listener.Addr().(*net.TCPAddr).Port, true, viewers)
 	defer r.Close()
-	r.SetTimeout(20 * time.Second)
+	// A request still running at this point has already missed its replay
+	// window. Its completed trace remains useful even when the client cancels.
+	r.SetTimeout(8 * time.Second)
 	r.SetBefore(func(context.Context) { a.perf.waitTraces() })
 	inventory := perfMatrixInventory(t, a, c, music.methods, report)
 	r.SetMatrixRoutes(inventory)

@@ -181,7 +181,10 @@ The Markdown report updates after every case and includes failed or skipped
 scenarios, registered routes missing successful scenarios, and the worst
 sample for every over-budget route and configuration. It uses route patterns
 and strips SQL string literals. Coverage gaps and budget violations fail the
-test. The run has a 40-minute replay deadline. For local triage,
+test. The run has a 40-minute replay deadline and a three-minute limit per case.
+Ordinary requests have an eight-second replay window. The report retains
+traced database work through cancellation and marks incomplete requests as
+coverage gaps. For local triage,
 `ETHER_PERF_GATE_MATRIX_CASES`, `ETHER_PERF_GATE_CLIENTS` and
 `ETHER_PERF_GATE_STEPS` accept comma-separated exact names. Filtered runs
 still report the routes they skipped. To use PostgreSQL, provide a disposable
