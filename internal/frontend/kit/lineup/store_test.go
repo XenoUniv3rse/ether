@@ -14,13 +14,16 @@ import (
 )
 
 func TestSnapshotRefreshAndViewerIsolation(t *testing.T) {
-	var catalog, rules atomic.Int64
+	var catalog, rules, ownerBuilds atomic.Int64
 	var held atomic.Pointer[chan struct{}]
 	store := New(t.TempDir(), Options{
 		Revision: func(key Key) Revision {
 			return Revision{Policy: fmt.Sprint(rules.Load()), Content: fmt.Sprint(catalog.Load())}
 		},
 		Build: func(ctx context.Context, key Key, out io.Writer) error {
+			if key.Viewer == 1 {
+				ownerBuilds.Add(1)
+			}
 			r, c := rules.Load(), catalog.Load()
 			if gate := held.Load(); gate != nil {
 				select {
@@ -61,24 +64,37 @@ func TestSnapshotRefreshAndViewerIsolation(t *testing.T) {
 		t.Fatal(got)
 	}
 
-	catalog.Store(1)
-	if got := read(owner); !strings.Contains(got, "catalogue=0") {
-		t.Fatalf("catalogue refresh did not retain the last successful snapshot: %q", got)
-	}
-	// Advance the snapshot's age in the test to exercise the debounced
-	// scheduler without sleeping through its production interval.
 	store.mu.Lock()
-	store.slots[owner].ready.at = time.Now().Add(-debounce)
+	builtAt := store.slots[owner].ready.at
+	store.mu.Unlock()
+	for rev := int64(1); rev <= 3; rev++ {
+		catalog.Store(rev)
+		if _, e, _ := store.next(builtAt.Add(10*time.Minute - time.Nanosecond)); e != nil {
+			t.Fatalf("catalogue revision %d scheduled a build inside the window", rev)
+		}
+		if got := read(owner); got != "owner-only viewer=1 catalogue=0\n" {
+			t.Fatalf("catalogue refresh did not retain the last successful snapshot: %q", got)
+		}
+	}
+	if got := ownerBuilds.Load(); got != 1 {
+		t.Fatalf("owner builds inside the window = %d, want 1 (cold build)", got)
+	}
+	// Advance the snapshot's age without waiting through the interval.
+	store.mu.Lock()
+	store.slots[owner].ready.at = time.Now().Add(-10 * time.Minute)
 	store.mu.Unlock()
 	store.signal()
 	for {
-		if got := read(owner); strings.Contains(got, "catalogue=1") {
+		if got := read(owner); got == "owner-only viewer=1 catalogue=3\n" {
 			break
 		}
 		if ctx.Err() != nil {
 			t.Fatal(ctx.Err())
 		}
 		time.Sleep(10 * time.Millisecond)
+	}
+	if got := ownerBuilds.Load(); got != 2 {
+		t.Fatalf("owner builds after the burst = %d, want 2 (cold build and one replacement)", got)
 	}
 
 	gate := make(chan struct{})
@@ -95,10 +111,10 @@ func TestSnapshotRefreshAndViewerIsolation(t *testing.T) {
 		t.Fatal("policy mismatch returned success")
 	}
 	close(gate)
-	if got := read(owner); got != "public viewer=1 catalogue=1\n" {
+	if got := read(owner); got != "public viewer=1 catalogue=3\n" {
 		t.Fatal(got)
 	}
-	if got := read(restricted); got != "public viewer=2 catalogue=1\n" {
+	if got := read(restricted); got != "public viewer=2 catalogue=3\n" {
 		t.Fatal(got)
 	}
 }
@@ -187,9 +203,17 @@ func TestStoreBuildsOnUseAndClockBoundary(t *testing.T) {
 	if _, e, _ := store.next(time.Now()); e != nil || builds.Load() != 1 {
 		t.Fatal("age alone scheduled a replacement")
 	}
-	// A known air or release boundary does create work with the same revisions.
+	// A known air or release boundary creates work once the interval elapses.
 	store.mu.Lock()
+	store.slots[key].ready.at = time.Now()
 	store.slots[key].ready.rev.NextBoundary = time.Now().Add(-time.Second)
+	boundaryCheck := store.slots[key].ready.at.Add(10*time.Minute - time.Nanosecond)
+	store.mu.Unlock()
+	if _, e, _ := store.next(boundaryCheck); e != nil || builds.Load() != 1 {
+		t.Fatal("clock boundary scheduled a replacement inside the window")
+	}
+	store.mu.Lock()
+	store.slots[key].ready.at = time.Now().Add(-10 * time.Minute)
 	store.mu.Unlock()
 	store.signal()
 	for builds.Load() < 2 {

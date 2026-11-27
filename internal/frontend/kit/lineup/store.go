@@ -71,12 +71,13 @@ type Store struct {
 }
 
 const (
-	poll     = 2 * time.Second
-	debounce = 5 * time.Second
-	idle     = time.Hour
-	maxSlots = 128
-	maxBytes = 512 << 20
-	maxDisk  = 2 << 30
+	poll                   = 2 * time.Second
+	debounce               = 5 * time.Second
+	contentRebuildInterval = 10 * time.Minute
+	idle                   = time.Hour
+	maxSlots               = 128
+	maxBytes               = 512 << 20
+	maxDisk                = 2 << 30
 )
 
 func New(parent string, opt Options) *Store {
@@ -252,7 +253,7 @@ func (s *Store) next(now time.Time) (Key, *slot, Revision) {
 		stale := false
 		if e.ready != nil {
 			boundaryPassed := !e.ready.rev.NextBoundary.IsZero() && !now.Before(e.ready.rev.NextBoundary)
-			stale = now.Sub(e.ready.at) >= debounce && (boundaryPassed || e.ready.rev.Content != rev.Content)
+			stale = now.Sub(e.ready.at) >= contentRebuildInterval && (boundaryPassed || e.ready.rev.Content != rev.Content)
 		}
 		if !missing && !stale {
 			continue
