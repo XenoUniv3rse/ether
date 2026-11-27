@@ -313,6 +313,7 @@ func installPerfMatrixMediaBrowserMusic(ctx context.Context, a *App, viewer perf
 			"levels":[{"key":"artist","label":"Artist","role":"artist","container":true},
 				{"key":"track","label":"Track","parent":"artist","role":"track","playable":true}],
 			"present":{"mediaBrowser":{"collectionType":"music","itemTypes":{"artist":"MusicArtist","track":"Audio"}}},
+			"fields":[{"key":"contentRating","label":"Content rating","type":"string"}],
 			"browse":{"sorts":["title"],"search":true},"sync":{"mode":"push"},"lyrics":true
 		}]}}
 	}`
@@ -331,9 +332,10 @@ func installPerfMatrixMediaBrowserMusic(ctx context.Context, a *App, viewer perf
 	if err != nil {
 		return err
 	}
+	rating := map[string]json.RawMessage{"contentRating": json.RawMessage(`"G"`)}
 	items := []core.KindItem{
-		{ID: "artist", Level: "artist", Title: "Matrix artist"},
-		{ID: "song", Level: "track", ParentID: "artist", Title: "Matrix song", Playable: true},
+		{ID: "artist", Level: "artist", Title: "Matrix artist", Fields: rating},
+		{ID: "song", Level: "track", ParentID: "artist", Title: "Matrix song", Playable: true, Fields: rating},
 	}
 	if _, err := a.pluginsRT.pluginitems.UpsertItems(ctx, rec.ID, "music", items); err != nil {
 		return err

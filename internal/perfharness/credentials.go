@@ -31,6 +31,7 @@ type Viewer struct {
 	Xtream                                 string
 	MCP                                    string
 	PluginHost, SubsonicUser, SubsonicPass string
+	MBWebCode                              string
 }
 
 type activeViewers struct{ db *sql.DB }

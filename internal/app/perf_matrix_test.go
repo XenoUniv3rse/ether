@@ -25,6 +25,7 @@ import (
 	"github.com/braedonsaunders/ether/internal/config"
 	"github.com/braedonsaunders/ether/internal/core"
 	"github.com/braedonsaunders/ether/internal/debrid"
+	"github.com/braedonsaunders/ether/internal/identity"
 	"github.com/braedonsaunders/ether/internal/livetv"
 	"github.com/braedonsaunders/ether/internal/perfharness"
 	"github.com/braedonsaunders/ether/internal/store"
@@ -380,6 +381,16 @@ func runPerfMatrixCase(t *testing.T, ctx context.Context, fixture string, c perf
 		slices.Contains(clients, "moonfin") || slices.Contains(clients, "swiftfin") || slices.Contains(clients, "infuse-emby") {
 		if err := installPerfMatrixMediaBrowserMusic(ctx, a, viewers[c.viewer]); err != nil {
 			t.Fatal("MediaBrowser music fixture:", err)
+		}
+	}
+	if len(clients) == 0 || slices.Contains(clients, "infuse-jellyfin") {
+		grants, err := identity.NewGrants(a.db, a.users, time.Hour, nil, a.cfg)
+		if err != nil {
+			t.Fatal("Jellyfin web code fixture:", err)
+		}
+		viewers[c.viewer].MBWebCode, err = grants.IssueWebCode(ctx, viewers[c.viewer].ID)
+		if err != nil {
+			t.Fatal("Jellyfin web code fixture:", err)
 		}
 	}
 	if c.live {

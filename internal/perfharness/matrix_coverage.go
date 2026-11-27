@@ -295,18 +295,31 @@ func addMatrixMediaBrowserCoverage(c *Client, live bool) {
 		Step{Name: "fixture Quick Connect initiate", Class: classState, Method: http.MethodPost, Path: "/QuickConnect/Initiate", Discover: discoverMatrixQuickConnect},
 		Step{Name: "fixture Quick Connect poll", Class: classDetail, Path: "/QuickConnect/Connect?secret={quickConnectSecret}"},
 		Step{Name: "fixture Quick Connect approve", Class: classState, Method: http.MethodPost, Path: "/QuickConnect/Authorize?code={quickConnectCode}"},
-		Step{Name: "fixture Quick Connect redeem", Class: classSignIn, Method: http.MethodPost, Path: "/Users/AuthenticateWithQuickConnect", Body: `{"Secret":"{quickConnectSecret}"}`},
+		Step{Name: "fixture Quick Connect redeem", Class: classSignIn, Method: http.MethodPost, Path: "/Users/AuthenticateWithQuickConnect", Body: `{"Secret":"{quickConnectSecret}"}`, Discover: discoverMatrixMBAccess("mbQuickConnectToken")},
+		Step{Name: "fixture Quick Connect logout", Class: classState, Method: http.MethodPost, Path: "/Sessions/Logout", Headers: func(h http.Header, vars map[string]string) {
+			// The fixture grant belongs to this device, independently of the
+			// original session the remainder of the replay continues using.
+			token := vars["mbQuickConnectToken"]
+			if token == "" {
+				token = "matrix-missing-quick-connect-grant"
+			}
+			h.Set("X-Emby-Token", token)
+		}},
 	)
 	if c.Surface == "jellyfin" {
 		c.Steps = append(c.Steps,
 			Step{Name: "fixture GET root", Class: classStatic, Path: "/"},
 			Step{Name: "fixture GET web sign-in", Class: classStatic, Path: "/web/ether-signin"},
+			Step{Name: "fixture redeem console web sign-in", Class: classSignIn, Method: http.MethodPost, Path: "/Ether/WebSignIn", Body: `{"Code":"{mbWebCode}","Browser":"matrix-browser"}`},
 			Step{Name: "fixture GET user root", Class: classDetail, Path: "/Users/{userId}/Items/Root"},
 			Step{Name: "fixture client log upload", Class: classState, Method: http.MethodPost, Path: "/ClientLog/Document", Body: "Matrix fixture client log"},
 		)
 		addMatrixJellyfinParty(c)
 	} else {
-		c.Steps = append(c.Steps, Step{Name: "fixture GET Emby web", Class: classStatic, Path: "/web/"})
+		c.Steps = append(c.Steps,
+			Step{Name: "fixture GET Emby web", Class: classStatic, Path: "/web/"},
+			Step{Name: "fixture Emby movie playback info", Class: classDetail, Method: http.MethodPost, Path: "/Items/{movieId}/PlaybackInfo?userId={userId}", Body: `{}`},
+		)
 	}
 	c.Steps = append(c.Steps,
 		Step{Name: "fixture POST display preferences", Class: classState, Method: http.MethodPost, Path: "/DisplayPreferences/etherperf?client=etherperf", Body: `{"SortOrder":"Descending"}`},
@@ -331,7 +344,6 @@ func addMatrixMediaBrowserCoverage(c *Client, live bool) {
 		}
 		c.Steps = append(c.Steps,
 			Step{Name: "fixture create viewer " + method, Class: classState, Method: http.MethodPost, Path: "/Users/New", Body: `{"Name":"` + user + `","Password":"Matrix-audio-002-fixture"}`, OwnerOnly: true, Discover: discoverMatrixID(userID)},
-			Step{Name: "fixture viewer configuration " + method, Class: classState, Method: http.MethodPost, Path: "/Users/{" + userID + "}/Configuration", Body: `{"SubtitleMode":"Always","SubtitleLanguagePreference":"en"}`, OwnerOnly: true},
 			Step{Name: "fixture viewer policy " + method, Class: classState, Method: http.MethodPost, Path: "/Users/{" + userID + "}/Policy", Body: `{"IsHidden":true}`, OwnerOnly: true},
 			Step{Name: "fixture viewer password " + method, Class: classState, Method: http.MethodPost, Path: "/Users/{" + userID + "}/Password", Body: `{"NewPw":"Matrix-audio-003-fixture"}`, OwnerOnly: true},
 			Step{Name: "fixture viewer password query " + method, Class: classState, Method: http.MethodPost, Path: "/Users/Password?userId={" + userID + "}", Body: `{"NewPw":"Matrix-audio-004-fixture"}`, OwnerOnly: true},
@@ -356,6 +368,12 @@ func addMatrixMediaBrowserCoverage(c *Client, live bool) {
 			Step{Name: "fixture DELETE " + path, Class: classState, Method: http.MethodDelete, Path: path, registeredOnly: true},
 		)
 	}
+	c.Steps = append(c.Steps,
+		Step{Name: "fixture viewer subtitle configuration", Class: classState, Method: http.MethodPost, Path: "/Users/{userId}/Configuration", Body: `{"SubtitleMode":"Always","SubtitleLanguagePreference":"en"}`},
+		Step{Name: "fixture discover owner movie", Class: classBrowse, OwnerOnly: true, Path: "/Items?IncludeItemTypes=Movie&Recursive=true&Limit=24", Discover: discoverMBItem("mbOwnerMovie", "Movie")},
+		Step{Name: "fixture refresh movie metadata", Class: classState, OwnerOnly: true, Method: http.MethodPost, Path: "/Items/{mbOwnerMovie}/Refresh"},
+		Step{Name: "fixture upload movie artwork", Class: classState, OwnerOnly: true, Method: http.MethodPost, Path: "/Items/{mbOwnerMovie}/Images/Primary?url=https%3A%2F%2Fimages.example.invalid%2Fmatrix%2Falbum.jpg"},
+	)
 	const report = `{"ItemId":"{episodeId}","RunTimeTicks":18000000000,"PositionTicks":1000000}`
 	for _, path := range []string{"/PlayingItems/{episodeId}", "/Users/{userId}/PlayingItems/{episodeId}"} {
 		c.Steps = append(c.Steps,
@@ -407,6 +425,17 @@ func addMatrixJellyfinParty(c *Client) {
 		{"Leave", `{}`},
 	} {
 		c.Steps = append(c.Steps, Step{Name: "SyncPlay " + command.action, Class: classState, Method: http.MethodPost, Path: "/SyncPlay/" + command.action, Body: command.body})
+	}
+}
+
+func discoverMatrixMBAccess(variable string) func(map[string]string, []byte) {
+	return func(vars map[string]string, body []byte) {
+		var result struct {
+			Access string `json:"AccessToken"`
+		}
+		if json.Unmarshal(body, &result) == nil {
+			setOnce(vars, variable, result.Access)
+		}
 	}
 }
 

@@ -102,6 +102,8 @@ func matrixRouteExceptions() map[perfharness.MatrixRouteKey]string {
 				prefix+"/Items/{id}/{source}/Subtitles/{index}/{name}",
 				prefix+"/sessions/lazy/{path...}", prefix+"/sessions/media/{path...}")
 		}
+		add(surface, http.MethodDelete, "requires an active encoding job and its device-bound playback session",
+			prefix+"/Videos/ActiveEncodings")
 		add(surface, http.MethodPost, "requires a resolved live source or open live stream lease",
 			prefix+"/LiveStreams/Open", prefix+"/LiveStreams/MediaInfo", prefix+"/LiveStreams/Close")
 		add(surface, http.MethodGet, "notification websocket needs an authenticated persistent client and event producer",
