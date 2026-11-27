@@ -276,6 +276,11 @@ type runPlan struct {
 // length for ffmpeg's muxer and the segment where the mode changes.
 func (s *Session) runPlanLocked(seg int) runPlan {
 	rp := runPlan{decision: s.trackDecisionLocked(s.wantTrack), hlsDur: s.segDur, planEnd: -1, rate: s.vbvRateLocked(s.wantTrack)}
+	if s.sourceLimitKbps > 0 && s.info.Video() != nil {
+		rp.decision = sourceLimitedDecision(rp.decision, s.info, s.sourceLimitPicture)
+		rp.mode = ModeTranscode
+		return rp
+	}
 	if s.copyFallback {
 		// Keep the published geometry, but never return to the failed copy
 		// mode on a seek, a governor boundary, or a rendition switch.

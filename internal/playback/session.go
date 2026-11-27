@@ -335,6 +335,7 @@ type session struct {
 
 	// Speed-coupled down-failover state (guarded by speedMu).
 	speedMu           sync.Mutex
+	speedSeekAt       time.Time
 	speed             speedTracker
 	delivery          deliveryTracker
 	genSince          time.Time     // when the current generation started serving

@@ -407,9 +407,10 @@ func feedFetches(s *session, chunks, chunkBytes int, each time.Duration, now tim
 
 func TestDownFailoverTriggersOnSlowSource(t *testing.T) {
 	h := newHarness(t, []*fakeRelease{
-		mkv("A", 80_000_000, 100*time.Second), // 6.4 Mbps
-		mkv("B", 10_000_000, 100*time.Second), // 0.8 Mbps
-	}, []string{"A", "B"}, func(h *harness, o *Options) { speedOpts(o) })
+		mkv("A", 80_000_000, 100*time.Second),       // 6.4 Mbps
+		mkv("Lighter", 60_000_000, 100*time.Second), // Still needs 600 KB/s.
+		mkv("B", 10_000_000, 100*time.Second),       // Fits with headroom.
+	}, []string{"A", "Lighter", "B"}, func(h *harness, o *Options) { speedOpts(o) })
 	ps := h.prepare(owner, movieKey, "c1")
 	h.m.SetDecision(ps.ID, core.Decision{Kind: core.DecisionRemux, VideoCopy: true, AudioCopy: true})
 	hls := h.tr.addHLS(ps.ID)
