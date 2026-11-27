@@ -703,6 +703,9 @@ func (b hostBridge) CallHost(ctx context.Context, name string, raw json.RawMessa
 		return result(out, nil)
 	case "cache.delete":
 		return result(nil, b.h.CacheDelete(ctx, str(0)))
+	case "folders.roots":
+		v, err := b.h.FoldersRoots(ctx)
+		return result(v, err)
 	case "folders.list":
 		var opts FolderListOptions
 		if len(args) > 2 && json.Unmarshal(args[2], &opts) != nil {

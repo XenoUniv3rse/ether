@@ -732,7 +732,7 @@ func mustParseTestManifest(t *testing.T, raw []byte) Manifest {
 	return m
 }
 
-func TestOnInstallAndFolderGrantPrefill(t *testing.T) {
+func TestOnInstallHook(t *testing.T) {
 	env := newTestEnv(t)
 	ctx := context.Background()
 	var installedIDs []string
@@ -740,37 +740,26 @@ func TestOnInstallAndFolderGrantPrefill(t *testing.T) {
 		installedIDs = append(installedIDs, r.ID+"@"+r.Version)
 	})
 	makeManifest := func(ver string) []byte {
-		return []byte(`{"id":"com.example.folders","version":"` + ver + `","name":"Folders","ether":{"protocol":1,"kind":"source","capabilities":["stream_source"],"runtime":{"kind":"hosted","entry":"plugin.js"},"permissions":{"folders":"read"},"settings":{"fields":[{"key":"folder","kind":"folder","label":"Folder"}]},"contributes":{"source":{"class":"direct","abilities":["file"]}}}}`)
+		return []byte(`{"id":"com.example.folders","version":"` + ver + `","name":"Folders","ether":{"protocol":1,"kind":"source","capabilities":["stream_source"],"runtime":{"kind":"hosted","entry":"plugin.js"},"permissions":{"folders":"read"},"contributes":{"source":{"class":"direct","abilities":["file"]}}}}`)
 	}
 	p1 := &Preview{
-		Manifest:         mustParseTestManifest(t, makeManifest("1.0.0")),
-		manifestRaw:      makeManifest("1.0.0"),
-		files:            map[string][]byte{"manifest.json": makeManifest("1.0.0"), "plugin.js": []byte("export function handle(){return {status:200,body:{}};}")},
-		resolvedSettings: json.RawMessage(`{"fields":[{"key":"folder","kind":"folder","label":"Folder"}]}`),
-		source:           Source{Kind: "package", ID: "com.example.folders"},
+		Manifest:    mustParseTestManifest(t, makeManifest("1.0.0")),
+		manifestRaw: makeManifest("1.0.0"),
+		files:       map[string][]byte{"manifest.json": makeManifest("1.0.0"), "plugin.js": []byte("export function handle(){return {status:200,body:{}};}")},
+		source:      Source{Kind: "package", ID: "com.example.folders"},
 	}
-	dir := t.TempDir()
-	rec, err := env.m.Install(ctx, p1, InstallOptions{Grants: Grants{Folders: []string{dir}}})
-	if err != nil {
+	if _, err := env.m.Install(ctx, p1, InstallOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	if len(installedIDs) != 1 || installedIDs[0] != "com.example.folders@1.0.0" {
 		t.Fatalf("OnInstall hooks: %v", installedIDs)
 	}
-	settings, _, err := env.m.GetSettings(ctx, rec.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if settings["folder"] != dir {
-		t.Fatalf("expected folder setting prefilled to %q, got %v", dir, settings)
-	}
 	// Updating an existing plugin does not re-fire OnInstall.
 	p2 := &Preview{
-		Manifest:         mustParseTestManifest(t, makeManifest("1.1.0")),
-		manifestRaw:      makeManifest("1.1.0"),
-		files:            map[string][]byte{"manifest.json": makeManifest("1.1.0"), "plugin.js": []byte("export function handle(){return {status:200,body:{}};}")},
-		resolvedSettings: json.RawMessage(`{"fields":[{"key":"folder","kind":"folder","label":"Folder"}]}`),
-		source:           Source{Kind: "package", ID: "com.example.folders"},
+		Manifest:    mustParseTestManifest(t, makeManifest("1.1.0")),
+		manifestRaw: makeManifest("1.1.0"),
+		files:       map[string][]byte{"manifest.json": makeManifest("1.1.0"), "plugin.js": []byte("export function handle(){return {status:200,body:{}};}")},
+		source:      Source{Kind: "package", ID: "com.example.folders"},
 	}
 	if _, err := env.m.Install(ctx, p2, InstallOptions{}); err != nil {
 		t.Fatal(err)

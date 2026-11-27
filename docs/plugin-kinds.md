@@ -1156,7 +1156,22 @@ Stremio `ether.file`: it rejects `..`, resolves symlinks, checks containment at
 resolve time and again at open time, and opens through `os.OpenRoot`.
 Remote/sidecar resolvers cannot serve host files with this pattern.
 
-### Listing picked folders
+### Discovering and listing picked folders
+
+On a hosted job, action, schedule, event or other non-client route, call
+`ether.folders.roots()` (Go SDK `FoldersRoots`) to get the absolute folder
+paths the owner picked. Use each string directly as the `root` argument for
+other folder calls. The return value is `[]` when there are no picks or the
+`folders: read` grant is absent or revoked.
+
+A hosted plugin can declare the `events` capability and subscribe to
+`plugin.folders.changed` in `ether.contributes.events.subscribe`. When the
+owner picks or removes a root or changes the folder grant's revocation state,
+Ether queues a private event for the enabled plugin on `POST /ether/event`.
+The payload is `{"roots":["/path/to/first","/path/to/second"]}` with the new
+list, or `{"roots":[]}` after revocation or removal of all roots. Events use
+the normal acknowledgement and retry behavior. Use `folders.roots()` to query
+the current grant while handling a queued event.
 
 Hosted plugins with a live `folders: read` grant can call
 `ether.folders.list(root, path, {cursor?, limit?})` (Go SDK: `FoldersList`).

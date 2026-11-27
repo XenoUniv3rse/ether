@@ -74,6 +74,8 @@ func (h *memHost) SetWatchState(context.Context, int64, string, bool) error {
 func (h *memHost) CollectionsUpsert(context.Context, json.RawMessage) error {
 	return ErrPermissionDenied
 }
+func (h *memHost) FoldersRoots(context.Context) ([]string, error) { return []string{}, nil }
+
 func (h *memHost) FoldersList(context.Context, string, string, ...FolderListOptions) (FolderPage, error) {
 	return FolderPage{}, ErrPermissionDenied
 }

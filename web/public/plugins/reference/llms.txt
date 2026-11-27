@@ -216,6 +216,16 @@ and special files are refused; `archive.list` flags unsafe member names as
 informational warnings while by-index reads and extracts accept any
 non-directory member. Other 7z coder chains are unsupported.
 
+Call `ether.folders.roots()` (`FoldersRoots` in the Go SDK) on hosted jobs,
+actions, schedules, events or other non-client routes to list owner-picked
+absolute paths. Pass these strings as `root` without rewriting them. The list is
+empty without a live grant or when the owner has picked no folders.
+To receive changes, declare the `events` capability and subscribe to
+`plugin.folders.changed` in `ether.contributes.events.subscribe`. The affected
+plugin receives `{roots: string[]}` in the event payload on `POST /ether/event`,
+including an empty list when the folder grant is revoked. Handle it like other
+outbox events and call `folders.roots()` when you need the live list.
+
 FoldersList/Stat/Hash/Frame need `folders:read` plus an owner-selected root.
 List returns sorted pages with a cursor. Hash returns digests and frame returns
 an owned-library blob reference. Viewer access requires that viewer's grant.
@@ -566,10 +576,10 @@ integration template also demonstrates `$ref` settings with translated labels.
 cp -R sdk/examples/local-folders sdk/examples/my-folders
 ```
 
-Follow `plugin.ts`: ask for a folder setting and `folders:read`, walk only that
-root, store an index in KV, and rescan on the owner's action. Owner-selected root
-handles are not arbitrary paths. Hash large files with the pollable hash API;
-never block a playback request to hash or walk a tree.
+Follow `plugin.ts`: declare `folders:read`, query `folders.roots()`, walk
+the picked roots, store an index in KV, and rescan on the owner's action.
+Hash large files with the pollable hash API. Never block a playback request
+to hash or walk a tree.
 
 ### 9. Metadata and artwork
 

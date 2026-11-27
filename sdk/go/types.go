@@ -1184,6 +1184,17 @@ type ActionResponse struct {
 	Proposal *ActionProposal `json:"proposal,omitempty"`
 }
 
+// EventPluginFoldersChanged is delivered to the hosted plugin whose folder grant changed.
+const EventPluginFoldersChanged = "plugin.folders.changed"
+
+// FolderRoots is the absolute owner-picked root paths returned by FoldersRoots.
+type FolderRoots = []string
+
+// FolderRootsChangedPayload contains the absolute paths the owner grants after the change.
+type FolderRootsChangedPayload struct {
+	Roots FolderRoots `json:"roots"`
+}
+
 // EtherEvent is one event delivered in a batch to POST /ether/event.
 type EtherEvent struct {
 	ID       string         `json:"id"`

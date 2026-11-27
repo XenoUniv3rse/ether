@@ -142,7 +142,7 @@ type Response struct {
 // http.fetch, http.fetchMany, http.fetchToCache, archive.list, archive.open, archive.read, archive.extract, catalog.search, catalog.get, viewers.history,
 // viewers.setWatchState, collections.upsert, kinds.upsert, kinds.delete,
 // kinds.items, sources.resolve, cache.put, cache.open, cache.read, cache.stat, cache.rasterize, cache.delete, frontend.streamURL,
-// folders.list, folders.stat, events.publish, notify.owner, log. Args is a JSON array of positional
+// folders.roots, folders.list, folders.stat, events.publish, notify.owner, log. Args is a JSON array of positional
 // arguments; the result is any JSON value. Return a *Fault to classify the
 // failure (forbidden for a missing or revoked grant).
 type Host interface {
@@ -165,7 +165,7 @@ var DefaultCosts = map[string]int64{
 	"kinds.get": 15, "kinds.state": 15, "kinds.favorite": 20, "kinds.played": 20, "kinds.rate": 20, "kinds.favorites": 20,
 	"kinds.playlists": 20, "kinds.playlist": 20, "kinds.playlistCreate": 50, "kinds.playlistUpdate": 50, "kinds.playlistDelete": 20, "kinds.expand": 50, "kinds.search": 50,
 	"sources.resolve": 100, "cache.put": 50, "cache.open": 20, "cache.delete": 10, "frontend.streamURL": 5,
-	"folders.frame": 20, "folders.hashStart": 20, "folders.hashPoll": 20, "folders.hashCancel": 20, "folders.hash": 20, "folders.list": 20, "folders.stat": 20, "events.publish": 20, "notify.owner": 20, "settings.get": 5,
+	"folders.frame": 20, "folders.hashStart": 20, "folders.hashPoll": 20, "folders.hashCancel": 20, "folders.hash": 20, "folders.roots": 20, "folders.list": 20, "folders.stat": 20, "events.publish": 20, "notify.owner": 20, "settings.get": 5,
 	"ai.complete": 200, "media.probe": 100, "screens.invalidate": 10, "screens.putRecords": 20,
 }
 
