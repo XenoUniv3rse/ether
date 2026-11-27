@@ -54,8 +54,10 @@ func (c *Catalog) PrepareExportChildren(ctx context.Context, shows []core.Rating
 	// Limit before hydration. Large trees use the existing per-parent path.
 	const maxRows = 10000
 	args = append(args, maxRows+1)
-	q := `SELECT ` + prefixedCols("t") + `,COALESCE(x.id,0) FROM catalog_titles AS t` + c.indexedBy("catalog_titles_show") +
+	q := `SELECT ` + prefixedCols("t") + `,COALESCE(x.id,0),` + episodeAirStampSQL + ` FROM catalog_titles AS t` + c.indexedBy("catalog_titles_show") +
 		` LEFT JOIN frontend_compact_ids x ON x.surface='xtream' AND x.kind='item' AND x.ref=CAST(t.key AS TEXT)
+		LEFT JOIN catalog_episode_provider_air p ON p.key=t.key
+		LEFT JOIN catalog_episode_release e ON e.key=t.key
 		WHERE t.show_key IN (` + placeholders(len(shows)) + `) AND t.adult=0
 		AND (t.type='season' OR (t.type='episode' AND t.key<5000000000000000))
 		ORDER BY t.show_key,t.season,t.episode,t.key LIMIT ?`
@@ -86,7 +88,7 @@ func (c *Catalog) PrepareExportChildren(ctx context.Context, shows []core.Rating
 	}
 	if len(lean) != 0 {
 		facts := projection.Facts | c.policyFacts(c.visibilityFor(ctx)) | c.viewerPolicyFacts(ctx)
-		if err := c.hydrateRows(ctx, lean, factSet(facts), false); err != nil {
+		if err := c.hydrateRows(ctx, lean, factSet(facts)|factEpisodeAirLoaded, false); err != nil {
 			return ctx, err
 		}
 	}
@@ -180,14 +182,21 @@ func (c *Catalog) readExportChildren(ctx context.Context, query string, args ...
 	ids := make(map[core.RatingKey]int32)
 	for rows.Next() {
 		var id int32
-		title, err := scanTitle(extraScan{rows, []any{&id}})
+		var air int64
+		title, err := scanTitle(extraScan{rows, []any{&id, &air}})
 		if err != nil {
 			return nil, nil, err
 		}
-		titles = append(titles, title.t)
-		if id != 0 && title.t.Type == core.TypeEpisode {
-			ids[title.t.Key] = id
+		if title.t.Type == core.TypeEpisode {
+			title.t.EpisodeAirDate = time.Time{}
+			if air != 0 {
+				title.t.EpisodeAirDate = time.Unix(air, 0).UTC()
+			}
+			if id != 0 {
+				ids[title.t.Key] = id
+			}
 		}
+		titles = append(titles, title.t)
 	}
 	return titles, ids, rows.Err()
 }

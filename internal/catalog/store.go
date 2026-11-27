@@ -427,6 +427,7 @@ const (
 	// credit order, with every credit tied at the cut.
 	factRankCredits
 	factTrailers
+	factEpisodeAirLoaded // episode air date was joined to the title row
 )
 
 const (
@@ -439,6 +440,8 @@ const (
 // listCast is the cast a list item shows (Plex: three).
 const listCast = 3
 
+const episodeAirStampSQL = "COALESCE(p.air_ts,CASE WHEN e.earliest_ts=t.released_ts THEN 0 ELSE t.released_ts END)"
+
 func (c *Catalog) hydrateFactBatch(ctx context.Context, items []core.Title, idx map[core.RatingKey][]int, args []any, set factSet) error {
 	ph, args := c.hydrationKeys(args)
 	// The first part names the columns the outer select reads.
@@ -450,17 +453,19 @@ func (c *Catalog) hydrateFactBatch(ctx context.Context, items []core.Title, idx 
 		}
 		parts = append(parts, `SELECT `+key+`, `+tag+`, `+a+`, `+b+`, `+c+`, `+d+`, `+e+`, `+f+`, `+g+`, `+extra+` FROM `+from)
 	}
-	for _, t := range items {
-		if t.Type == core.TypeEpisode {
-			titles := "catalog_titles t"
-			if store.DialectOf(c.db) == store.SQLite {
-				// With JSON-bound keys SQLite can prefer a type index and
-				// walk every episode. key is the rowid (INTEGER PRIMARY KEY).
-				titles += " NOT INDEXED"
+	if set&factEpisodeAirLoaded == 0 {
+		for _, t := range items {
+			if t.Type == core.TypeEpisode {
+				titles := "catalog_titles t"
+				if store.DialectOf(c.db) == store.SQLite {
+					// With JSON-bound keys SQLite can prefer a type index and
+					// walk every episode. key is the rowid (INTEGER PRIMARY KEY).
+					titles += " NOT INDEXED"
+				}
+				part("t.key", "'episode_air'", "CAST("+episodeAirStampSQL+" AS TEXT)", "''", "''", "''", "''", "''", "''", "''",
+					titles+` LEFT JOIN catalog_episode_provider_air p ON p.key=t.key LEFT JOIN catalog_episode_release e ON e.key=t.key WHERE t.type='episode' AND t.key IN (`+ph+`)`)
+				break
 			}
-			part("t.key", "'episode_air'", "CAST(COALESCE(p.air_ts,CASE WHEN e.earliest_ts=t.released_ts THEN 0 ELSE t.released_ts END) AS TEXT)", "''", "''", "''", "''", "''", "''", "''",
-				titles+` LEFT JOIN catalog_episode_provider_air p ON p.key=t.key LEFT JOIN catalog_episode_release e ON e.key=t.key WHERE t.type='episode' AND t.key IN (`+ph+`)`)
-			break
 		}
 	}
 	if set&factTrailers != 0 {
