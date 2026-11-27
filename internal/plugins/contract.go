@@ -1323,11 +1323,12 @@ type Request struct {
 	AISearch bool `json:"-"`
 }
 
-// FrontendBlob asks the host to serve cached bytes without passing them through
-// guest memory. LibraryKey scopes Ref to an owned, viewer-visible kind library.
-// MemberIndex selects an archive member; nil serves the entire blob.
+// FrontendBlob asks the host to serve bytes directly. A blob:<sha256> ref
+// requires LibraryKey for an owned, viewer-visible kind library and can select
+// an archive member. A durable:<sha256> ref serves the plugin's entire saved
+// blob with durable storage permission.
 type FrontendBlob struct {
-	LibraryKey  string `json:"libraryKey"`
+	LibraryKey  string `json:"libraryKey,omitempty"`
 	Ref         string `json:"ref"`
 	MemberIndex *int   `json:"memberIndex,omitempty"`
 }

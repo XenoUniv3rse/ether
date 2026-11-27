@@ -1743,7 +1743,15 @@ the returned `durable:<sha256>` ref. Identical saved bytes share a ref and quota
 charge within the plugin, so delete a ref only after your last use. To save small
 bytes directly, use `cache.put("", name, data, {durable: true})`. Go sidecars use
 `CacheOptionsHost.CachePutWithOptions` and Python sidecars pass the options dict
-to `ctx.ether.cache.put`. For a large saved blob, read ranges with `cache.read`.
+to `ctx.ether.cache.put`. When the plugin needs the bytes itself, it can read
+ranges with `cache.read`.
+
+To serve a saved file from a hosted adapter, authorize the active viewer against
+your per-viewer metadata. Return `{status: 200, blob: {ref}}` with the plugin's
+own `durable:<sha256>` ref. Omit `libraryKey`, `memberIndex`, and the response body.
+Ether rechecks the plugin's durable storage permission and ownership, then
+streams the file from disk for GET and supports HEAD and single byte ranges.
+An unavailable ref returns 404.
 
 Call `ether.cache.stat(ref)` for `{size, sha256, sha1, md5, crc32}` on an
 owned `blob:` or `durable:` ref. TypeScript and Python sidecars use
@@ -8418,7 +8426,7 @@ type Request struct {
 
 | Field | Go type | Wire presence | Description |
 |---|---|---|---|
-| `libraryKey` | `string` | emitted (validation may require a value) |  |
+| `libraryKey` | `string` | may be omitted (see validation for conditions) |  |
 | `ref` | `string` | emitted (validation may require a value) |  |
 | `memberIndex` | `*int` | may be omitted (see validation for conditions) |  |
 
@@ -8426,11 +8434,12 @@ type Request struct {
 ## Source: internal/plugins/contract.go#FrontendBlob
 
 ``````
-// FrontendBlob asks the host to serve cached bytes without passing them through
-// guest memory. LibraryKey scopes Ref to an owned, viewer-visible kind library.
-// MemberIndex selects an archive member; nil serves the entire blob.
+// FrontendBlob asks the host to serve bytes directly. A blob:<sha256> ref
+// requires LibraryKey for an owned, viewer-visible kind library and can select
+// an archive member. A durable:<sha256> ref serves the plugin's entire saved
+// blob with durable storage permission.
 type FrontendBlob struct {
-	LibraryKey  string `json:"libraryKey"`
+	LibraryKey  string `json:"libraryKey,omitempty"`
 	Ref         string `json:"ref"`
 	MemberIndex *int   `json:"memberIndex,omitempty"`
 }
@@ -41955,7 +41964,10 @@ For saves, declare `permissions.storage: "durable"` and promote the staged ref
 using `cache.put("", "", null, {durable: true, fromBlob: ref})`. Store the
 returned ref per viewer and authorize reads and deletions against that viewer.
 The per-plugin quota is 1 GiB and 10,000 unique blobs. Durable bytes remain until
-`cache.delete` or uninstall. See [streamed uploads and durable blobs](../docs/plugin-kinds.md#streamed-uploads-and-durable-blobs).
+`cache.delete` or uninstall. On a hosted adapter download route, authorize the
+viewer and return `{status: 200, blob: {ref}}` with your `durable:<sha256>` ref.
+Ether streams the file with HTTP Range support.
+See [streamed uploads and durable blobs](../docs/plugin-kinds.md#streamed-uploads-and-durable-blobs).
 
 ## Owner language model (`ether.ai.complete`)
 
@@ -69165,7 +69177,7 @@ type RawRequest struct {
 
 | Field | Go type | Wire presence | Description |
 |---|---|---|---|
-| `libraryKey` | `string` | emitted (validation may require a value) |  |
+| `libraryKey` | `string` | may be omitted (see validation for conditions) |  |
 | `ref` | `string` | emitted (validation may require a value) |  |
 | `memberIndex` | `*int` | may be omitted (see validation for conditions) |  |
 
@@ -69174,8 +69186,10 @@ type RawRequest struct {
 
 ``````
 // FrontendBlob selects host-served bytes for a frontend adapter response.
+// Set LibraryKey for blob:<sha256> refs and optionally select an archive
+// member with MemberIndex. Leave both unset for durable:<sha256> refs.
 type FrontendBlob struct {
-	LibraryKey  string `json:"libraryKey"`
+	LibraryKey  string `json:"libraryKey,omitempty"`
 	Ref         string `json:"ref"`
 	MemberIndex *int   `json:"memberIndex,omitempty"`
 }
@@ -76889,7 +76903,7 @@ export interface FrontendAdapter<S = Record<string, unknown>> {
   ): MaybePromise<{
     status: number;
     headers?: Record<string, string>;
-    body: string;
+    body?: string;
     /** Ether serves cached bytes, an item's media, or an item's artwork instead of body. */
     blob?: FrontendBlob;
     media?: FrontendMedia;
@@ -77202,9 +77216,10 @@ export async function dispatchKinds<S = Record<string, unknown>>(
       if (upload.contentType) headers["Content-Type"] = upload.contentType;
     }
     const res = await adapter.handle(method, subPath, headers, upload ? "" : frontendBodyString(req), ctx, upload);
-    if (res.body.length > 10 * 1024 * 1024) return err(502, "adapter_error", "Frontend adapter response is larger than 10 MiB; serve media through Ether stream URLs.");
+    const body = res.body ?? "";
+    if (body.length > 10 * 1024 * 1024) return err(502, "adapter_error", "Frontend adapter response is larger than 10 MiB; serve media through Ether stream URLs.");
     // A HEAD reply carries headers only, exactly as a real server would.
-    const out: RawResponse = { status: res.status, headers: res.headers ?? {}, body: method === "HEAD" ? "" : res.body };
+    const out: RawResponse = { status: res.status, headers: res.headers ?? {}, body: method === "HEAD" ? "" : body };
     if (res.blob) out.blob = res.blob;
     if (res.media) out.media = res.media;
     if (res.art) out.art = res.art;
@@ -81832,8 +81847,11 @@ export interface RawRequest {
 
 /** Host-served cached bytes for an authenticated frontend adapter response. */
 export interface FrontendBlob {
-  libraryKey: string;
+  /** Required for library-cache refs. Omit for durable refs. */
+  libraryKey?: string;
+  /** A library-cache blob:<sha256> or a plugin-owned durable:<sha256> ref. */
   ref: string;
+  /** Selects a member of a library-cache archive. */
   memberIndex?: number;
 }
 
