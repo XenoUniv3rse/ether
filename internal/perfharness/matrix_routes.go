@@ -77,10 +77,20 @@ type MatrixRouteKey struct {
 	Surface, Method, Pattern string
 }
 
+func (result Result) matrixSuccess(trace TraceRecord) bool {
+	if result.Err != "" || trace.Status != result.Status {
+		return false
+	}
+	if result.ExpectedStatus != 0 {
+		return result.Status == result.ExpectedStatus
+	}
+	return result.Status >= 200 && result.Status < 300
+}
+
 func (r *MatrixReport) CheckRoutes(configuration string, inventory MatrixRoutes, results []Result, trace map[string]TraceRecord, allowed map[MatrixRouteKey]string) {
 	hits := map[[2]string]bool{}
 	for _, result := range results {
-		if tr, ok := trace[result.Tag]; ok && result.Err == "" && result.Status >= 200 && result.Status < 300 && tr.Status == result.Status {
+		if tr, ok := trace[result.Tag]; ok && result.matrixSuccess(tr) {
 			hits[[2]string{result.Surface, result.Route}] = true
 		}
 	}

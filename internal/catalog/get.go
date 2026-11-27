@@ -700,6 +700,9 @@ func (c *Catalog) seasonsOfShow(ctx context.Context, showID int64) ([]core.Title
 }
 
 func (c *Catalog) readSeasonsOfShow(ctx context.Context, showID int64) ([]core.Title, error) {
+	if items, ok := c.exportChildrenFor(ctx, core.ShowKey(showID)); ok {
+		return items, nil
+	}
 	// show_key, not show_tmdb: only show_key is indexed, and a show's
 	// pages read its seasons and episodes many times.
 	all, err := c.queryTitles(ctx, `SELECT `+titleCols+` FROM catalog_titles`+c.indexedBy("catalog_titles_show")+` WHERE type='season' AND show_key=? ORDER BY season ASC`, int64(core.ShowKey(showID)))
@@ -718,6 +721,9 @@ func (c *Catalog) readSeasonsOfShow(ctx context.Context, showID int64) ([]core.T
 // episodesOfSeason lists a season's aired episodes; queryTitles drops those
 // with unknown or future air dates.
 func (c *Catalog) episodesOfSeason(ctx context.Context, showID int64, season int) ([]core.Title, error) {
+	if items, ok := c.exportChildrenFor(ctx, core.SeasonKey(showID, season)); ok {
+		return items, nil
+	}
 	return c.queryTitles(ctx, `SELECT `+titleCols+` FROM catalog_titles`+c.indexedBy("catalog_titles_show")+` WHERE type='episode' AND key<5000000000000000 AND show_key=? AND season=? ORDER BY episode ASC`, int64(core.ShowKey(showID)), season)
 }
 

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"path"
+	"sort"
 
 	"github.com/braedonsaunders/ether/internal/archive"
 	"github.com/braedonsaunders/ether/internal/nzb"
@@ -28,6 +29,127 @@ func (b *builder) tryNested(ctx context.Context, vols []*postedFile, members []a
 		return nil, nil
 	}
 	return p, err
+}
+
+// tryNestedNonVideo plans a non-video target held inside explicit inner RAR sets
+// packed inside an outer archive (e.g. CD1.rar/CD2.rar inside an outer RAR).
+// Unlike tryNested, it never sniffs KindUnknown members (audio/art/nfo files).
+func (b *builder) tryNestedNonVideo(ctx context.Context, vols []*postedFile, members []archive.Member, nvHint nzb.NonVideoHint, concat bool) (*plan, error) {
+	p, err := b.planNestedNonVideo(ctx, vols, members, nvHint, concat)
+	if errors.Is(err, ErrNoPlayableFile) {
+		return nil, nil
+	}
+	return p, err
+}
+
+func (b *builder) planNestedNonVideo(ctx context.Context, vols []*postedFile, outer []archive.Member, nvHint nzb.NonVideoHint, concat bool) (*plan, error) {
+	sets, gap := innerRARSets(outer)
+	if len(sets) == 0 && gap == nil {
+		return nil, ErrNoPlayableFile
+	}
+	if err := b.heads(ctx, vols); err != nil {
+		return nil, err
+	}
+	if concat {
+		var err error
+		if outer, err = resolveConcat(outer, vols); err != nil {
+			return nil, err
+		}
+		sets, gap = innerRARSets(outer)
+	}
+	if len(sets) == 0 {
+		if gap != nil {
+			return nil, gap
+		}
+		return nil, ErrNoPlayableFile
+	}
+	if nvHint.Track.NonEmpty() && nvHint.Track.Disc > 0 && len(sets) > 1 {
+		wantDisc := nvHint.Track.Disc
+		discRank := func(set []archive.Member) int {
+			d := nzb.ParseDirDisc(set[0].Name)
+			if d == wantDisc {
+				return 2
+			}
+			if d == 0 {
+				return 1
+			}
+			return 0
+		}
+		sort.SliceStable(sets, func(i, j int) bool {
+			return discRank(sets[i]) > discRank(sets[j])
+		})
+	}
+	outerVols := make([]archive.Volume, len(vols))
+	for i, pf := range vols {
+		outerVols[i] = archive.Volume{R: b.reader(ctx, pf), Size: pf.Size()}
+	}
+	var first error
+	for _, set := range sets[:min(len(sets), maxNestedSets)] {
+		p, err := b.nestedSetPlanNonVideo(ctx, vols, outerVols, set, nvHint)
+		if err == nil {
+			return p, nil
+		}
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		if first == nil || errors.Is(first, ErrNoPlayableFile) {
+			first = err
+		}
+	}
+	if gap != nil && errors.Is(first, ErrNoPlayableFile) {
+		return nil, gap
+	}
+	return nil, first
+}
+
+func (b *builder) nestedSetPlanNonVideo(ctx context.Context, vols []*postedFile, outerVols []archive.Volume, set []archive.Member, nvHint nzb.NonVideoHint) (*plan, error) {
+	inner := make([]*archive.RARVolume, len(set))
+	err := b.parallel(ctx, len(set), func(ctx context.Context, k int) error {
+		m := set[k]
+		if m.Encrypted && b.rel.doc.Password() == "" {
+			return archive.ErrPasswordRequired
+		}
+		if err := m.Streamable(); err != nil {
+			return fmt.Errorf("stream: nested rar %s: %w", m.Name, err)
+		}
+		r, err := archive.NewMemberReader(m, outerVols)
+		if err != nil {
+			return fmt.Errorf("stream: nested rar %s: %w", m.Name, err)
+		}
+		v, err := archive.ReadRARVolume(r, r.Size(), b.rarOptions(ctx, 0))
+		if err != nil {
+			return fmt.Errorf("stream: nested rar %s: %w", m.Name, err)
+		}
+		inner[k] = v
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	members, err := archive.ComposeRAR(inner)
+	if err != nil {
+		return nil, fmt.Errorf("stream: nested rar %s: %w", set[0].Name, err)
+	}
+	m, merr := chooseNonVideoMember(members, nvHint)
+	if merr != nil {
+		return nil, merr
+	}
+	if m.Encrypted && b.rel.doc.Password() == "" {
+		return nil, archive.ErrPasswordRequired
+	}
+	if err := m.Streamable(); err != nil {
+		return nil, fmt.Errorf("stream: nested rar %s: %s: %w", set[0].Name, m.Name, err)
+	}
+	if m.Encryption != nil {
+		return nil, fmt.Errorf("stream: nested rar %s: %s is encrypted inside an archive: %w", set[0].Name, m.Name, ErrUnsupported)
+	}
+	p, err := b.remapNested(ctx, vols, set, m)
+	if err != nil {
+		return nil, err
+	}
+	p.rawNonVideo = true
+	p.resolvedMember = true
+	return p, nil
 }
 
 // planNested plans a video held in a RAR set that is itself stored inside the

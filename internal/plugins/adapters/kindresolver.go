@@ -3523,8 +3523,13 @@ func parsePreparingReply(body []byte) error {
 }
 
 func (r *KindResolver) callPluginResolve(ctx context.Context, rec pluginitems.KindRecord, lib core.Library, item core.KindItem, partIdx *int, source string, accept, exclude []string) (_ kindResolveResult, err error) {
+	var reply json.RawMessage
 	defer func() {
-		r.recordKindFailure(ctx, item, err)
+		if errors.Is(err, core.ErrKindCandidatesRejected) {
+			r.recordKindRejection(ctx, rec.PluginID, item, reply)
+		} else {
+			r.recordKindFailure(ctx, item, err)
+		}
 		err = logredact.SourceError(err)
 	}()
 	pr, err := r.mgr.Get(ctx, rec.PluginID)
@@ -3599,6 +3604,7 @@ func (r *KindResolver) callPluginResolve(ctx context.Context, rec pluginitems.Ki
 		}
 		return kindResolveResult{}, fmt.Errorf("%w: %v", core.ErrSourceUnavailable, err)
 	}
+	reply = resp.Body
 	fallback := resp.PendingFallback()
 	if resp.Status == http.StatusAccepted && fallback == nil {
 		if searchState.indexerLookupLimitHit() {

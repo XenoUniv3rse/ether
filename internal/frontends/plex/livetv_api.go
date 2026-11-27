@@ -432,6 +432,7 @@ func (s *Server) handleLiveChannels(w http.ResponseWriter, r *http.Request) {
 		}
 		cs = filtered
 	}
+	r = s.withGuideLogos(r, cs)
 	out := []liveChannel{}
 	maps := []liveMapping{}
 	for _, c := range cs {
@@ -623,6 +624,7 @@ func (s *Server) liveGuideMetadataCapture(r *http.Request, captured *[]frontend.
 			byID[c.ID] = c
 		}
 	}
+	r = s.withProgrammeGuideLogos(r, ps, byID)
 	out := []model.Metadata{}
 	for _, p := range ps {
 		if id := chi.URLParam(r, "programme"); id != "" && p.ID != id {

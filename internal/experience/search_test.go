@@ -71,10 +71,13 @@ func TestSearchFiltersBeforeLimitAndBackfills(t *testing.T) {
 		Visibility: Visibility{
 			GetTitle: func(context.Context, core.RatingKey) (*core.Title, error) { return &core.Title{Adult: true}, nil },
 			FilterAvailable: func(_ context.Context, titles []core.Title) []core.Title {
-				if titles[0].Key == 12 {
-					return nil
+				var available []core.Title
+				for _, title := range titles {
+					if title.Key != 12 {
+						available = append(available, title)
+					}
 				}
-				return titles
+				return available
 			},
 		},
 		Catalog: func(_ context.Context, _ string, _ []core.MediaType, limit int) ([]core.Title, error) {

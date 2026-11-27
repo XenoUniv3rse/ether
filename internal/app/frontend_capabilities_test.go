@@ -62,6 +62,7 @@ func TestSurfaceCapabilitiesApplyQuirksAndOwnerRules(t *testing.T) {
 	if _, err := provider.Build(lan, request); err != nil {
 		t.Fatal(err)
 	}
+	a.familyWrites.Wait()
 	w := httptest.NewRecorder()
 	a.playbackPolicyHandler().ServeHTTP(w, httptest.NewRequest("GET", "/policy", nil))
 	if w.Code != 200 {

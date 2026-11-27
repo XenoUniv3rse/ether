@@ -1629,7 +1629,7 @@ func (h *devHost) CallHost(ctx context.Context, name string, raw json.RawMessage
 
 	case "folders.list":
 		h.s.mu.Unlock()
-		return json.RawMessage(`[{"name":"Movie (2024)","path":"movies/Movie (2024)","dir":true}]`), nil
+		return json.RawMessage(`{"entries":[{"name":"Movie (2024)","path":"movies/Movie (2024)","dir":true}],"nextCursor":"","truncated":false}`), nil
 
 	case "folders.stat":
 		p := str(1)

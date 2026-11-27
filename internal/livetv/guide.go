@@ -164,6 +164,58 @@ func (s *Service) GuideChannelLogo(ctx context.Context, c Channel) string {
 	return logo
 }
 
+// GuideChannelLogos reads the matched logos for a rendered channel set.
+func (s *Service) GuideChannelLogos(ctx context.Context, channels []Channel) map[string]string {
+	type match struct{ source, guide string }
+	matches := make(map[match][]string)
+	var keys []match
+	for _, c := range channels {
+		if c.GuideID == "" {
+			continue
+		}
+		key := match{guideSource(c), c.GuideID}
+		if _, ok := matches[key]; !ok {
+			keys = append(keys, key)
+		}
+		matches[key] = append(matches[key], c.ID)
+	}
+	logos := make(map[string]string)
+	if s.o.DB == nil {
+		return logos
+	}
+	for start := 0; start < len(keys); start += 200 {
+		part := keys[start:min(start+200, len(keys))]
+		args := make([]any, 0, len(part)*2)
+		for _, key := range part {
+			args = append(args, key.source, key.guide)
+		}
+		values := strings.TrimSuffix(strings.Repeat("(CAST(? AS TEXT),CAST(? AS TEXT)),", len(part)), ",")
+		rows, err := s.o.DB.QueryContext(ctx, `WITH wanted(source_id,guide_id) AS (VALUES `+values+`)
+			SELECT g.source_id,g.guide_id,g.logo FROM wanted w
+			JOIN livetv_guide_channels g ON g.source_id=w.source_id AND g.guide_id=w.guide_id`, args...)
+		if err != nil {
+			return nil
+		}
+		for rows.Next() {
+			var key match
+			var logo string
+			if err := rows.Scan(&key.source, &key.guide, &logo); err != nil {
+				rows.Close()
+				return nil
+			}
+			for _, id := range matches[key] {
+				logos[id] = logo
+			}
+		}
+		err = rows.Err()
+		rows.Close()
+		if err != nil {
+			return nil
+		}
+	}
+	return logos
+}
+
 func msTime(ms int64) *time.Time {
 	t := time.UnixMilli(ms).UTC()
 	return &t
@@ -274,7 +326,9 @@ func (s *Service) fillSourceStats(ctx context.Context, srcs []Source) error {
 		channels[c.SourceID]++
 	}
 	guides := map[string]int{}
+	fallbackGuides := map[string]int{}
 	progs := map[string]progStats{}
+	progEnds := map[guideKey]int64{}
 	scan := func(q string, fn func(*sql.Rows) error) error {
 		rows, err := s.o.DB.QueryContext(ctx, q)
 		if err != nil {
@@ -288,7 +342,7 @@ func (s *Service) fillSourceStats(ctx context.Context, srcs []Source) error {
 		}
 		return rows.Err()
 	}
-	if err := scan(guideChannelsCTE+`SELECT source_id, COUNT(*) FROM gc GROUP BY source_id`, func(r *sql.Rows) error {
+	if err := scan(`SELECT source_id, COUNT(*) FROM livetv_guide_channels GROUP BY source_id`, func(r *sql.Rows) error {
 		var id string
 		var n int
 		err := r.Scan(&id, &n)
@@ -297,26 +351,46 @@ func (s *Service) fillSourceStats(ctx context.Context, srcs []Source) error {
 	}); err != nil {
 		return err
 	}
-	if err := scan(`SELECT source_id, COUNT(*), MIN(start_ms), MAX(end_ms) FROM livetv_programmes GROUP BY source_id`, func(r *sql.Rows) error {
-		var id string
-		var p progStats
-		err := r.Scan(&id, &p.n, &p.from, &p.till)
-		progs[id] = p
-		return err
+	if err := scan(`SELECT source_id, channel_id, COUNT(*), MIN(start_ms), MAX(end_ms) FROM livetv_programmes GROUP BY source_id, channel_id`, func(r *sql.Rows) error {
+		var id, chID string
+		var cnt int
+		var from, till int64
+		if err := r.Scan(&id, &chID, &cnt, &from, &till); err != nil {
+			return err
+		}
+		progEnds[guideKey{source: id, guide: chID}] = till
+		fallbackGuides[id]++
+		if cur, ok := progs[id]; !ok {
+			progs[id] = progStats{n: cnt, from: from, till: till}
+		} else {
+			cur.n += cnt
+			if from < cur.from {
+				cur.from = from
+			}
+			if till > cur.till {
+				cur.till = till
+			}
+			progs[id] = cur
+		}
+		return nil
 	}); err != nil {
 		return err
 	}
 	for i := range srcs {
 		src := &srcs[i]
 		src.ChannelCount = channels[src.ID]
-		src.GuideChannelCount = guides[src.ID]
+		if n, ok := guides[src.ID]; ok {
+			src.GuideChannelCount = n
+		} else {
+			src.GuideChannelCount = fallbackGuides[src.ID]
+		}
 		src.ProgrammeCount, src.GuideFrom, src.GuideUntil = 0, nil, nil
 		if p, ok := progs[src.ID]; ok && p.n > 0 {
 			src.ProgrammeCount = p.n
 			src.GuideFrom, src.GuideUntil = msTime(p.from), msTime(p.till)
 		}
 	}
-	return s.planRefresh(ctx, srcs)
+	return s.planRefreshWith(ctx, srcs, progEnds)
 }
 
 // maxGuideSearchWords bounds the per-word predicates one search builds.
@@ -1103,6 +1177,10 @@ func nextRefresh(src Source, horizon *time.Time) (time.Time, bool) {
 // channel uses, ignoring channels whose listings had already ended when the
 // source was last imported (refreshing would not extend them).
 func (s *Service) planRefresh(ctx context.Context, srcs []Source) error {
+	return s.planRefreshWith(ctx, srcs, nil)
+}
+
+func (s *Service) planRefreshWith(ctx context.Context, srcs []Source, progEnds map[guideKey]int64) error {
 	if err := s.overlayRefreshStamps(ctx, srcs); err != nil {
 		return err
 	}
@@ -1123,31 +1201,41 @@ func (s *Service) planRefresh(ctx context.Context, srcs []Source) error {
 	horizons := map[string]int64{}
 	covered := map[guideKey]bool{}
 	if len(used) > 0 {
-		rows, err := s.o.DB.QueryContext(ctx, `SELECT source_id, channel_id, MAX(end_ms) FROM livetv_programmes GROUP BY source_id, channel_id`)
-		if err != nil {
-			return err
-		}
-		for rows.Next() {
-			var k guideKey
-			var end int64
-			if err = rows.Scan(&k.source, &k.guide, &end); err != nil {
-				rows.Close()
-				return err
-			}
-			if end > s.o.Now().UnixMilli() {
+		nowMS := s.o.Now().UnixMilli()
+		recordEnd := func(k guideKey, end int64) {
+			if end > nowMS {
 				covered[k] = true
 			}
 			at, ok := updated[k.source]
 			if !ok || !used[k] || end <= at {
-				continue
+				return
 			}
 			if h, ok := horizons[k.source]; !ok || end < h {
 				horizons[k.source] = end
 			}
 		}
-		rows.Close()
-		if err = rows.Err(); err != nil {
-			return err
+		if progEnds != nil {
+			for k, end := range progEnds {
+				recordEnd(k, end)
+			}
+		} else {
+			rows, err := s.o.DB.QueryContext(ctx, `SELECT source_id, channel_id, MAX(end_ms) FROM livetv_programmes GROUP BY source_id, channel_id`)
+			if err != nil {
+				return err
+			}
+			for rows.Next() {
+				var k guideKey
+				var end int64
+				if err = rows.Scan(&k.source, &k.guide, &end); err != nil {
+					rows.Close()
+					return err
+				}
+				recordEnd(k, end)
+			}
+			rows.Close()
+			if err = rows.Err(); err != nil {
+				return err
+			}
 		}
 	}
 	now := s.o.Now()

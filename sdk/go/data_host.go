@@ -20,11 +20,54 @@ type BlobHost interface {
 	RuntimeLimits(context.Context) (RuntimeLimits, error)
 	FetchToCache(context.Context, FetchCacheRequest) (FetchCacheResult, error)
 	CacheRead(context.Context, string, DataRange) ([]byte, error)
+	CacheStat(context.Context, string) (CacheStatResult, error)
 	CacheRasterize(context.Context, string, string, string, RasterizeOptions) (RasterizeResult, error)
 	ArchiveList(context.Context, string) ([]ArchiveMember, error)
 	ArchiveOpen(context.Context, string, int, DataRange) ([]byte, error)
 	ArchiveRead(context.Context, string, []ArchiveReadItem) ([]ArchiveReadResult, error)
 	ArchiveExtract(context.Context, string, int, ...ArchiveExtractOptions) (ArchiveExtractResult, error)
+}
+
+// CachePutOptions selects durable storage and optionally promotes an upload.
+type CachePutOptions struct {
+	Durable  bool   `json:"durable,omitempty"`
+	FromBlob string `json:"fromBlob,omitempty"`
+}
+
+// CacheOptionsHost gives sidecars access to cache.put with storage options.
+type CacheOptionsHost interface {
+	CachePutWithOptions(ctx context.Context, libraryKey, name string, data []byte, opts CachePutOptions) (string, error)
+}
+
+func (c *RemoteHostClient) CachePutWithOptions(ctx context.Context, libraryKey, name string, data []byte, opts CachePutOptions) (string, error) {
+	var payload any
+	if opts.FromBlob == "" || data != nil {
+		payload = map[string]string{"bodyBase64": base64.StdEncoding.EncodeToString(data)}
+	}
+	var out struct {
+		Blob string `json:"blob"`
+	}
+	_, err := c.callJSON(ctx, http.MethodPost, "/ether/plugin-host/data/cache.put", []any{libraryKey, name, payload, opts}, &out, false)
+	return out.Blob, err
+}
+
+// CacheStatResult describes an owned blob's size and lowercase hex digests.
+type CacheStatResult struct {
+	Size   int64  `json:"size"`
+	SHA256 string `json:"sha256"`
+	SHA1   string `json:"sha1"`
+	MD5    string `json:"md5"`
+	CRC32  string `json:"crc32"`
+}
+
+func (c *RemoteHostClient) CacheStat(ctx context.Context, blob string) (CacheStatResult, error) {
+	var out CacheStatResult
+	headers := map[string]string{}
+	if token, ok := ViewerTokenFromContext(ctx); ok {
+		headers[HeaderViewerToken] = token
+	}
+	_, err := c.callJSONWithHeaders(ctx, http.MethodPost, "/ether/plugin-host/data/cache.stat", headers, []any{blob}, &out, false)
+	return out, err
 }
 
 type DataRange struct {

@@ -20,6 +20,7 @@ import (
 // reopen, codec-change rejoin, backup source, hot standby) is a new decoder
 // spliced into the same encoder timeline by the broadcast clock.
 type providerBroadcastPlanner struct {
+	provider              providerTracker
 	guideCancel           context.CancelFunc
 	guideDone             chan struct{}
 	guideFrom, guideUntil time.Time
@@ -60,6 +61,7 @@ type steadyLink struct {
 	format        string // probed container: "hls", "mpegts" or empty
 	uses          int
 	directGen     uint64
+	admissionWait time.Duration
 	primedDecoder transcode.Decoder // admission already obtained its first picture
 	refs          atomic.Int32
 	closed        atomic.Bool
@@ -425,6 +427,7 @@ func (p *providerBroadcastPlanner) open(ctx context.Context) (transcode.Decoder,
 	p.pendingStandby = false
 	p.retryAt = time.Time{}
 	p.waiting = false
+	stalled := p.stalledAttempt
 	p.mu.Unlock()
 	var last error = core.ErrNotAvailable
 	var heldDisplaced *steadyLink
@@ -437,13 +440,14 @@ func (p *providerBroadcastPlanner) open(ctx context.Context) (transcode.Decoder,
 				candidates = append(candidates, src)
 			}
 		}
-		if len(candidates) == 0 {
+		p.mu.Lock()
+		if p.openGen != gen {
+			p.mu.Unlock()
+			return nil, nil, context.Canceled
+		}
+		id, liveEdge, ok, retry := p.ladder.choose(sourceIDs(candidates), now)
+		if !ok && (len(candidates) == 0 || stalled != nil && busy[stalled.src.ID]) {
 			var dropStandby *steadyStandby
-			p.mu.Lock()
-			if p.openGen != gen {
-				p.mu.Unlock()
-				return nil, nil, context.Canceled
-			}
 			if p.standby != nil && len(busy) > 0 {
 				dropStandby = p.standby
 				p.standby = nil
@@ -471,12 +475,6 @@ func (p *providerBroadcastPlanner) open(ctx context.Context) (transcode.Decoder,
 			p.mu.Unlock()
 			return nil, nil, fmt.Errorf("broadcast provider: %w", last)
 		}
-		p.mu.Lock()
-		if p.openGen != gen {
-			p.mu.Unlock()
-			return nil, nil, context.Canceled
-		}
-		id, liveEdge, ok, retry := p.ladder.choose(sourceIDs(candidates), now)
 		if !ok {
 			p.retryAt = retry
 			p.mu.Unlock()
@@ -564,9 +562,16 @@ func (p *providerBroadcastPlanner) open(ctx context.Context) (transcode.Decoder,
 		if link == nil {
 			var err error
 			resID := "broadcast-" + c.ID + "-" + strconv.FormatUint(p.linkSeq.Add(1), 10)
-			link, err = p.s.linkSteadySourceWithState(ctx, c, src, resID, 0, direct, cached)
+			link, err = p.s.linkSteadySourceWithState(ctx, c, src, resID, 0, direct, cached, nil)
 			if errors.Is(err, ErrProviderBusy) || errors.Is(err, ErrProviderPaced) {
 				busy[id] = true
+				// Reopening the stalled input can share its slot. Defer that
+				// reopen so another input can win, or free the slot and retry
+				// the replacement if its provider is at capacity.
+				if errors.Is(err, ErrProviderBusy) && stalled != nil && stalled.link != nil &&
+					!stalled.link.closed.Load() && providerSourceID(c, src) == providerSourceID(c, stalled.src) {
+					busy[stalled.src.ID] = true
+				}
 				last = err
 				continue
 			}
@@ -701,10 +706,14 @@ func (p *providerBroadcastPlanner) wrap(ctx context.Context, src StreamSource, l
 	c := p.channel
 	life, cancel := context.WithCancel(ctx)
 	var reopen func() (transcode.Decoder, error)
+	var provider servingProvider
 	if link != nil {
 		reopen = func() (transcode.Decoder, error) { return p.startDecoder(life, link, true) }
+		if g := p.s.sessionGrant(link.ss); g != nil {
+			provider = g.provider
+		}
 	}
-	return &providerBroadcastDecoder{reopen: reopen, life: life, cancel: cancel, Decoder: d, planner: p, sourceID: src.ID, firstFrame: firstFrame, started: time.Now(), frame: time.Second * time.Duration(p.format.FPSDen) / time.Duration(p.format.FPSNum), ready: func() {}, healthy: func() {
+	return &providerBroadcastDecoder{reopen: reopen, life: life, cancel: cancel, Decoder: d, planner: p, provider: provider, sourceID: src.ID, firstFrame: firstFrame, started: time.Now(), frame: time.Second * time.Duration(p.format.FPSDen) / time.Duration(p.format.FPSNum), ready: func() {}, healthy: func() {
 		p.s.recordSourceHealth(c.ID, src, nil, true)
 		p.mu.Lock()
 		p.ladder.delivered(src.ID)
@@ -759,22 +768,26 @@ func (p *providerBroadcastPlanner) manifestForLocked(raw string) *cachedManifest
 // linkSteadySource reserves the provider account's connection, resolves the
 // input and grants it to the loopback relay.
 func (s *Service) linkSteadySource(ctx context.Context, c Channel, src StreamSource, reservation string, lead time.Duration) (*steadyLink, error) {
-	return s.linkSteadySourceWithState(ctx, c, src, reservation, lead, nil, nil)
+	return s.linkSteadySourceWithState(ctx, c, src, reservation, lead, nil, nil, nil)
 }
 
-func (s *Service) linkSteadySourceWithState(ctx context.Context, c Channel, src StreamSource, reservation string, lead time.Duration, direct *directStreamState, cached *cachedManifest) (*steadyLink, error) {
-	account := src.AuthSourceID
-	if account == "" {
-		account = c.SourceID
-	}
-	entry, err := s.sourceEntry(ctx, account)
+func (s *Service) linkSteadySourceWithState(ctx context.Context, c Channel, src StreamSource, reservation string, lead time.Duration, direct *directStreamState, cached *cachedManifest, admission context.Context) (*steadyLink, error) {
+	account := providerSourceID(c, src)
+	release, err := s.trackBroadcastProvider(account, c.ID, reservation)
 	if err != nil {
 		return nil, err
 	}
-	release, err := s.reserveBroadcastProvider(account, c.ID, reservation, entry.limit)
-	if err != nil {
-		return nil, err
-	}
+	var ss *session
+	linked := false
+	defer func() {
+		if !linked {
+			if ss != nil {
+				s.revokeInput(ss)
+				ss.cancel()
+			}
+			release()
+		}
+	}()
 	var resolved string
 	var headers http.Header
 	var directGen uint64
@@ -789,7 +802,6 @@ func (s *Service) linkSteadySourceWithState(ctx context.Context, c Channel, src 
 			dURL, dRawHdrs, dHdrs, dGen, rerr = direct.refresh(attempt, dGen)
 			cancelAttempt()
 			if rerr != nil {
-				release()
 				return nil, rerr
 			}
 			dCM = direct.manifestFor(dURL)
@@ -803,7 +815,6 @@ func (s *Service) linkSteadySourceWithState(ctx context.Context, c Channel, src 
 		resolved, headers, rerr = s.ResolveStreamSource(attempt, c, src)
 		cancelAttempt()
 		if rerr != nil {
-			release()
 			return nil, rerr
 		}
 		if cached != nil && cached.isMaster && cached.raw == resolved {
@@ -811,26 +822,34 @@ func (s *Service) linkSteadySourceWithState(ctx context.Context, c Channel, src 
 		}
 	}
 	inputCtx, cancel := context.WithCancel(s.serviceContext())
-	ss := &session{ctx: inputCtx, cancel: cancel, info: SessionInfo{ID: reservation, Channel: c}, ephemeral: ephemeral, direct: direct, sniffedManifest: manifest, inputSource: src, inputURL: resolved, inputHeaders: headers}
+	ss = &session{ctx: inputCtx, cancel: cancel, info: SessionInfo{ID: reservation, Channel: c}, ephemeral: ephemeral, direct: direct, sniffedManifest: manifest, inputSource: src, inputURL: resolved, inputHeaders: headers}
 	grant := src
 	grant.URL = resolved
 	// The tune's first input also feeds the startup burst: it joins that much
 	// deeper so the stability reserve is whole once the burst is out.
-	if err := s.grantSteadyInputLead(ss, grant, headers, lead); err != nil {
-		cancel()
-		release()
+	var waited time.Duration
+	if admission != nil {
+		start := time.Now()
+		err = s.withProviderCapacity(admission, c, src, func(admitCtx context.Context) error {
+			return s.grantInputForContext(admitCtx, ss, grant, headers, true, lead)
+		})
+		waited = time.Since(start)
+	} else {
+		err = s.grantInputForContext(ctx, ss, grant, headers, true, lead)
+	}
+	if err != nil {
 		return nil, err
 	}
 	sl := newSteadyLink(src, ss, release, s.cachedInputFormat(ss))
 	sl.directGen = directGen
+	sl.admissionWait = waited
+	linked = true
 	return sl, nil
 }
 
-// reserveBroadcastProvider takes a provider connection under the same
-// Service.mu as ordinary tunes. A waiting output holds no slot. Direct
-// viewers sharing a channel count once; every Steady reservation (an output's
-// input, or its hot standby) is its own connection.
-func (s *Service) reserveBroadcastProvider(account, channel, id string, limit int) (func(), error) {
+// trackBroadcastProvider identifies idle outputs eligible for preemption.
+// The input grant owns the capacity reservation.
+func (s *Service) trackBroadcastProvider(account, channel, id string) (func(), error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.broadcastProviders == nil {
@@ -841,43 +860,28 @@ func (s *Service) reserveBroadcastProvider(account, channel, id string, limit in
 		active = map[string]string{}
 		s.broadcastProviders[account] = active
 	}
-	channels := map[string]bool{}
-	for _, ss := range s.sessions {
-		if ss.broadcast != nil || !ss.ready {
-			continue
-		}
-		source := ss.info.Channel.SourceID
-		if ss.inputSource.AuthSourceID != "" {
-			source = ss.inputSource.AuthSourceID
-		}
-		if source == account {
-			channels[ss.info.Channel.ID] = true
-		}
-	}
-	// A direct viewer of a channel that also has a Steady input (a hand-off
-	// in progress, or the viewer it was handed off from) shares its tap.
-	for _, ch := range active {
-		delete(channels, ch)
-	}
-	delete(channels, channel)
 	if _, exists := active[id]; exists {
-		return nil, ErrProviderBusy
-	}
-	if activeCount := len(channels) + len(active) + s.inputRelay.taps.externalCount(account); limit > 0 && activeCount >= limit {
-		s.mu.Unlock()
-		s.emitProviderLimitReached(account, activeCount, limit, channel)
-		s.mu.Lock()
 		return nil, ErrProviderBusy
 	}
 	active[id] = channel
 	var once sync.Once
-	return func() { once.Do(func() { s.mu.Lock(); delete(s.broadcastProviders[account], id); s.mu.Unlock() }) }, nil
+	return func() {
+		once.Do(func() {
+			s.mu.Lock()
+			delete(active, id)
+			if len(active) == 0 {
+				delete(s.broadcastProviders, account)
+			}
+			s.mu.Unlock()
+		})
+	}, nil
 }
 
 // providerBroadcastDecoder adapts one provider decoder to the channel clock:
 // it never replays media this source already aired, bounds the wait for the
 // first picture, and reports delivery and stress to the planner.
 type providerBroadcastDecoder struct {
+	provider servingProvider
 	transcode.Decoder
 	planner    *providerBroadcastPlanner
 	sourceID   string
@@ -966,6 +970,9 @@ func (d *providerBroadcastDecoder) Aired(frame transcode.RawFrame) {
 		d.planner.lastAired = map[string]time.Duration{}
 	}
 	d.planner.lastAired[d.sourceID] = frame.SourcePTS
+	if d.provider.sourceID != "" {
+		d.planner.provider.set(d.provider)
+	}
 	d.planner.mu.Unlock()
 	if n := d.aired.Add(1); d.healthy != nil && time.Duration(n)*d.frame >= steadyDelivered {
 		d.healthOnce.Do(d.healthy)

@@ -195,12 +195,21 @@ func TestTierMigrationKeepsEveryTouchedTitle(t *testing.T) {
 	}
 	seed.close()
 
-	// Removed titles a client still holds a compact id for.
-	var stale []core.RatingKey
+	// Removed titles a client still holds a compact id for. The catalogue
+	// assigned those IDs when the fixture inserted its titles.
+	type staleMapping struct {
+		key core.RatingKey
+		id  int
+	}
+	var stale []staleMapping
 	for i := int64(5); len(stale) < 3; i++ {
 		if k := core.MovieKey(i); fate[k] == gone {
-			stale = append(stale, k)
-			exec(`INSERT INTO frontend_compact_ids(surface,kind,ref,id) VALUES('xtream','item',?,?)`, strconv.FormatInt(int64(k), 10), len(stale))
+			ref := strconv.FormatInt(int64(k), 10)
+			var id int
+			if err := db.QueryRowContext(ctx, `SELECT id FROM frontend_compact_ids WHERE surface='xtream' AND kind='item' AND ref=?`, ref).Scan(&id); err != nil {
+				t.Fatal(err)
+			}
+			stale = append(stale, staleMapping{k, id})
 		}
 	}
 
@@ -317,10 +326,11 @@ func TestTierMigrationKeepsEveryTouchedTitle(t *testing.T) {
 
 	// A client's old key for a removed title opens it again: Get stores
 	// it (one TMDB round trip), and the compact id still names it.
-	for i, k := range stale {
+	for _, mapping := range stale {
+		k, id := mapping.key, mapping.id
 		var ref string
-		if err := db.QueryRowContext(ctx, `SELECT ref FROM frontend_compact_ids WHERE surface='xtream' AND kind='item' AND id=?`, i+1).Scan(&ref); err != nil || ref != strconv.FormatInt(int64(k), 10) {
-			t.Fatalf("compact id %d: %q %v", i+1, ref, err)
+		if err := db.QueryRowContext(ctx, `SELECT ref FROM frontend_compact_ids WHERE surface='xtream' AND kind='item' AND id=?`, id).Scan(&ref); err != nil || ref != strconv.FormatInt(int64(k), 10) {
+			t.Fatalf("compact id %d: %q %v", id, ref, err)
 		}
 		before := fake.fetches.Load()
 		got, err := cat.Get(ctx, k)

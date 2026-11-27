@@ -10,6 +10,7 @@ import (
 	"github.com/braedonsaunders/ether/internal/core"
 	"github.com/braedonsaunders/ether/internal/experience"
 	"github.com/braedonsaunders/ether/internal/frontend"
+	"github.com/braedonsaunders/ether/internal/personalize"
 	"github.com/braedonsaunders/ether/internal/reqmemo"
 )
 
@@ -282,7 +283,14 @@ func (a *App) experienceAdditionalRows(ctx context.Context, req frontend.RowRequ
 		}}
 	}
 	if a.discoveryPersonal != nil {
-		composer.Personal = hubDiscoverySource{a.discoveryPersonal.Hubs}
+		composer.Personal = hubDiscoverySource{func(ctx context.Context, viewer *core.User, limit int) ([]core.Hub, error) {
+			if core.LiveApp(ctx) == "stremio" {
+				if detail, ok := visibility.FactJudge(ctx); ok {
+					ctx = personalize.WithReviewProjection(ctx, core.ListRows{Facts: core.VisibilityFacts, Detail: detail, OmitCredits: true})
+				}
+			}
+			return a.discoveryPersonal.Hubs(ctx, viewer, limit)
+		}}
 	}
 	if a.livetv != nil {
 		composer.Live = a.livetv

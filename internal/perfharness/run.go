@@ -25,21 +25,22 @@ import (
 
 // result is one timed request.
 type Result struct {
-	SchemaVersion int           `json:"schemaVersion,omitempty"`
-	Phase         string        `json:"phase"`
-	Client        string        `json:"client"`
-	Surface       string        `json:"surface"`
-	Route         string        `json:"route,omitempty"`
-	Step          string        `json:"step"`
-	Class         string        `json:"class"`
-	Viewer        string        `json:"viewer"`
-	Tag           string        `json:"tag"`
-	Status        int           `json:"status"`
-	Bytes         int           `json:"bytes"`
-	BodySHA       string        `json:"bodySha256,omitempty"`
-	Dur           time.Duration `json:"dur"`
-	Err           string        `json:"err,omitempty"`
-	Skipped       string        `json:"skipped,omitempty"`
+	SchemaVersion  int           `json:"schemaVersion,omitempty"`
+	Phase          string        `json:"phase"`
+	Client         string        `json:"client"`
+	Surface        string        `json:"surface"`
+	Route          string        `json:"route,omitempty"`
+	Step           string        `json:"step"`
+	Class          string        `json:"class"`
+	Viewer         string        `json:"viewer"`
+	Tag            string        `json:"tag"`
+	Status         int           `json:"status"`
+	ExpectedStatus int           `json:"expectedStatus,omitempty"`
+	Bytes          int           `json:"bytes"`
+	BodySHA        string        `json:"bodySha256,omitempty"`
+	Dur            time.Duration `json:"dur"`
+	Err            string        `json:"err,omitempty"`
+	Skipped        string        `json:"skipped,omitempty"`
 	// RenderedItems counts the titles a listing response rendered, by type.
 	RenderedItems map[string]int `json:"renderedItems,omitempty"`
 	// Set when the runner measures (Measure): the bytes on the wire, the
@@ -192,7 +193,7 @@ func (r *Runner) do(ctx context.Context, phase string, c Client, s *session, st 
 	}
 	r.mu.Unlock()
 	tag := phase + "|" + c.Name + "|" + st.Name + "|" + strconv.FormatInt(r.seq.Add(1), 10)
-	res := Result{SchemaVersion: 2, Phase: phase, Client: c.Name, Surface: c.Surface, Step: st.Name, Class: st.Class, Viewer: s.Viewer.Username, Tag: tag}
+	res := Result{SchemaVersion: 2, Phase: phase, Client: c.Name, Surface: c.Surface, Step: st.Name, Class: st.Class, Viewer: s.Viewer.Username, Tag: tag, ExpectedStatus: st.ExpectedStatus}
 	routePath := c.Prefix + st.Path
 	if r.shared {
 		routePath = c.SharedPrefix + routePath
@@ -304,7 +305,7 @@ func (r *Runner) do(ctx context.Context, phase string, c Client, s *session, st 
 	}
 	if err != nil && !(st.Stream != 0 && ctx.Err() == context.DeadlineExceeded && resp.StatusCode == http.StatusOK) {
 		res.Err = err.Error()
-	} else if resp.StatusCode >= 400 && st.Class != classPlayback {
+	} else if resp.StatusCode >= 400 && resp.StatusCode != st.ExpectedStatus && st.Class != classPlayback {
 		res.Err = strings.TrimSpace(string(bytes.ToValidUTF8(buf[:min(len(buf), 160)], nil)))
 	}
 	if st.Class == classBrowse && resp.StatusCode < 300 {

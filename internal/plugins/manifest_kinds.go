@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"path"
 	"regexp"
 	"sort"
 	"strings"
@@ -837,10 +838,56 @@ func validateFrontendAdapters(m Manifest, add func(string, string), label func(s
 			}
 			seenSearch[norm] = true
 		}
+		if len(a.UploadPaths) > maxAdapterUploadPaths {
+			add(base+".uploadPaths", fmt.Sprintf("must declare at most %d upload paths", maxAdapterUploadPaths))
+		}
+		seenUploads := map[string]bool{}
+		for j, upload := range a.UploadPaths {
+			field := fmt.Sprintf("%s.uploadPaths[%d]", base, j)
+			norm, ok := normalizeAdapterSearchPath(upload.Path)
+			if _, err := path.Match(norm, ""); !ok || err != nil || len(norm) > 256 {
+				add(field+".path", "must be a clean subpath glob starting with /, at most 256 characters")
+			} else if seenUploads[norm] {
+				add(field+".path", "must not repeat an upload path")
+			}
+			seenUploads[norm] = true
+			if upload.MaxBytes < 1 || upload.MaxBytes > MaxAdapterUploadBytes {
+				add(field+".maxBytes", fmt.Sprintf("must be between 1 and %d bytes", MaxAdapterUploadBytes))
+			}
+		}
 		if a.Icon != "" && !ValidAdapterIconPath(a.Icon) {
 			add(base+".icon", "must be an SVG or PNG file inside the package")
 		}
 	}
+}
+
+const (
+	DefaultAdapterUploadBytes int64 = 64 << 20
+	MaxAdapterUploadBytes     int64 = 512 << 20
+	maxAdapterUploadPaths           = 16
+)
+
+// UploadLimit returns the smallest limit of the declared globs matching a
+// normalized adapter subpath, or zero for ordinary inline requests.
+func (a FrontendAdapterMeta) UploadLimit(subpath string) int64 {
+	if len(a.UploadPaths) == 0 {
+		return 0
+	}
+	subpath, ok := normalizeAdapterSearchPath(subpath)
+	if !ok {
+		return 0
+	}
+	var limit int64
+	for _, upload := range a.UploadPaths {
+		pattern, ok := normalizeAdapterSearchPath(upload.Path)
+		if !ok || upload.MaxBytes < 1 || upload.MaxBytes > MaxAdapterUploadBytes {
+			continue
+		}
+		if match, _ := path.Match(pattern, subpath); match && (limit == 0 || upload.MaxBytes < limit) {
+			limit = upload.MaxBytes
+		}
+	}
+	return limit
 }
 
 // ValidAdapterIconPath reports whether p names an SVG or PNG file inside

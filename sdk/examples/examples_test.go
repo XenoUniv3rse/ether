@@ -3,6 +3,7 @@ package examples_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
@@ -54,11 +55,11 @@ func (h *fixtureHost) KVUsage(context.Context) (plugins.KVUsage, error) {
 	keys := int64(len(h.kv))
 	return plugins.KVUsage{Bytes: used + keys*plugins.KVKeyChargeBytes, Keys: keys, QuotaBytes: plugins.KVQuotaBytes, QuotaKeys: plugins.KVQuotaKeys}, nil
 }
-func (h *fixtureHost) FoldersList(_ context.Context, root, path string) ([]plugins.FolderEntry, error) {
+func (h *fixtureHost) FoldersList(_ context.Context, root, path string, options ...plugins.FolderListOptions) (plugins.FolderPage, error) {
 	if path != "" {
 		root += "/" + path
 	}
-	return h.folders[root], nil
+	return plugins.FolderPage{Entries: append([]plugins.FolderEntry{}, h.folders[root]...)}, nil
 }
 func (h *fixtureHost) FoldersStat(_ context.Context, root, path string) (plugins.FolderEntry, error) {
 	return plugins.FolderEntry{Path: path}, nil
@@ -179,12 +180,16 @@ func TestStudioExamplesPackAndConform(t *testing.T) {
 	}
 }
 
-func (fixtureHost) FoldersHash(context.Context, string, string) (plugins.FolderHash, error) {
+func (fixtureHost) FoldersHash(context.Context, string, string, ...plugins.FolderHashOptions) (plugins.FolderHash, error) {
 	return plugins.FolderHash{}, nil
 }
 
-func (fixtureHost) FoldersHashStart(context.Context, string, string) (plugins.FolderHashJob, error) {
+func (fixtureHost) FoldersHashStart(context.Context, string, string, ...plugins.FolderHashOptions) (plugins.FolderHashJob, error) {
 	return plugins.FolderHashJob{}, nil
+}
+
+func (fixtureHost) FoldersFrame(context.Context, string, string, plugins.FolderFrameOptions) (plugins.FolderFrame, error) {
+	return plugins.FolderFrame{}, fmt.Errorf("folders.frame requires the hosted runtime")
 }
 
 func (fixtureHost) FoldersHashPoll(context.Context, string) (plugins.FolderHashJob, error) {

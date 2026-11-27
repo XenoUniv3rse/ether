@@ -720,7 +720,7 @@ func (v *VODIndexer) FetchNZB(ctx context.Context, r core.Release) ([]byte, erro
 
 func (v *VODIndexer) HasDirectSources() bool { return v.hasVOD() }
 
-// The service mutex also covers live sessions and broadcast reservations.
+// On-demand reads share the provider cap with live input grants.
 func (s *Service) reserveVODProvider(ctx context.Context, id string, limit int, background bool) (func(), error) {
 	entry, err := s.sourceEntry(ctx, id)
 	if err != nil {
@@ -743,7 +743,18 @@ func (s *Service) reserveVODProvider(ctx context.Context, id string, limit int, 
 		}
 		// VOD URLs belong to the primary login; a second live account must
 		// never increase the primary account's VOD connection allowance.
-		lease, err := s.leaseLogin(ctx, id, "vod:"+randomID(), nil)
+		key := "vod:" + randomID()
+		release, err := s.holdProviderInput(id, key, entry.limit)
+		if err != nil {
+			return nil, err
+		}
+		accepted := false
+		defer func() {
+			if !accepted {
+				release()
+			}
+		}()
+		lease, err := s.leaseLoginFor(ctx, entry, id, key, nil, key)
 		if err != nil {
 			return nil, err
 		}
@@ -754,28 +765,15 @@ func (s *Service) reserveVODProvider(ctx context.Context, id string, limit int, 
 		lease.onLost = core.ProviderLeaseCancel(ctx)
 		s.loginPool.mu.Unlock()
 		var once sync.Once
-		return func() { once.Do(func() { s.releaseLogin(lease) }) }, nil
+		accepted = true
+		return func() {
+			once.Do(func() {
+				s.releaseLogin(lease)
+				release()
+			})
+		}, nil
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	channels := map[string]bool{}
-	for _, ss := range s.sessions {
-		source := ss.info.Channel.SourceID
-		if ss.inputSource.AuthSourceID != "" {
-			source = ss.inputSource.AuthSourceID
-		}
-		if !ss.archiveInput && source == id {
-			channels[ss.info.Channel.ID] = true
-		}
-	}
-	for _, ch := range s.broadcastProviders[id] {
-		channels[ch] = true
-	}
-	if background && len(channels) > 0 {
-		return nil, ErrProviderBusy
-	}
-
-	return s.inputRelay.taps.reserveWithLive(id, limit, background, len(channels))
+	return s.inputRelay.taps.reserve(id, limit, background)
 }
 
 func (s *Service) enrichVODMatch(ctx context.Context, m *vodMatch, info xtream.MediaInfo) {

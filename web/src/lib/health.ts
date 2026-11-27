@@ -1037,6 +1037,8 @@ export interface NowPlaying {
   channelId: string;
   channelName: string;
   channelNumber: string;
+  liveProvider?: LiveProviderInfo;
+  previousLiveProvider?: LiveProviderIdentity;
   userId?: number;
   user: string;
   device: string;
@@ -1164,6 +1166,8 @@ export function normalizeSessions(v: unknown): NowPlaying[] {
       channelId: liveChannel ? str(pick(liveChannel, "id", "ID")).trim() : "",
       channelName: liveChannel ? str(pick(liveChannel, "name", "Name")).trim() : "",
       channelNumber: liveChannel ? str(pick(liveChannel, "number", "Number")).trim() : "",
+      liveProvider: readLiveProvider(liveChannel?.provider),
+      previousLiveProvider: readLiveProvider(liveChannel?.previousProvider),
       ...(userId ? { userId } : {}),
       user: str(pick(s, "Username", "username")) || t("Someone"),
       device:
@@ -1227,6 +1231,24 @@ export function isPausedSession(
 }
 
 /** Selected channel, independent of the programme title. */
+export type LiveProviderIdentity = {
+  sourceName: string;
+  loginLabel?: string;
+  loginNumber?: number;
+};
+export type LiveProviderInfo = LiveProviderIdentity & { localInUse?: number; loginLimit?: number };
+
+function readLiveProvider(value: unknown): LiveProviderInfo | undefined {
+  if (!isPlainObject(value) || typeof value.sourceName !== "string" || !value.sourceName) return;
+  return {
+    sourceName: value.sourceName,
+    loginLabel: str(value.loginLabel),
+    loginNumber: num(value.loginNumber),
+    localInUse: typeof value.localInUse === "number" ? value.localInUse : undefined,
+    loginLimit: num(value.loginLimit),
+  };
+}
+
 export function channelLabel(s: Pick<NowPlaying, "channelName" | "channelNumber">): string {
   return [s.channelNumber, s.channelName].filter(Boolean).join(" · ");
 }

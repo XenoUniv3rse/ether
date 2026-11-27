@@ -214,7 +214,7 @@ func (r *hostedRuntime) Call(ctx context.Context, req Request) (Response, error)
 		headers = cloneHeaders(headers)
 		headers["X-Ether-Locale"] = req.Locale
 	}
-	resp, err := r.p.Call(ctx, wasm.Request{Op: req.Op, ID: req.ID, Method: req.Method, Path: req.Path, Query: q, Headers: headers, Body: req.Body, BodyBase64: req.BodyBase64, ContentType: req.ContentType, Foreground: req.Foreground, Deadline: req.Deadline, AISearch: req.AISearch})
+	resp, err := r.p.Call(ctx, wasm.Request{Op: req.Op, ID: req.ID, Method: req.Method, Path: req.Path, Query: q, Headers: headers, Body: req.Body, BodyBase64: req.BodyBase64, ContentType: req.ContentType, Upload: req.Upload, Foreground: req.Foreground, Deadline: req.Deadline, AISearch: req.AISearch})
 	if err != nil {
 		return Response{}, err
 	}
@@ -415,7 +415,7 @@ func (b hostBridge) CallHost(ctx context.Context, name string, raw json.RawMessa
 		}
 	}
 	switch name {
-	case "runtime.limits", "http.hash", "http.fetchToCache", "cache.read", "cache.rasterize", "archive.list", "archive.open", "archive.read", "archive.extract":
+	case "runtime.limits", "http.hash", "http.fetchToCache", "cache.read", "cache.stat", "cache.rasterize", "archive.list", "archive.open", "archive.read", "archive.extract":
 		out, err := CallDataHost(ctx, b.h, name, raw)
 		if err != nil {
 			return nil, mapHostError(err)
@@ -673,34 +673,7 @@ func (b hostBridge) CallHost(ctx context.Context, name string, raw json.RawMessa
 		}
 		return result(res, nil)
 	case "cache.put":
-		var body []byte
-		if len(args) > 2 {
-			var s string
-			if err := json.Unmarshal(args[2], &s); err == nil {
-				body = []byte(s)
-			} else {
-				var wrapped struct {
-					Body       string `json:"body"`
-					BodyBase64 string `json:"bodyBase64"`
-				}
-				if err := json.Unmarshal(args[2], &wrapped); err != nil {
-					return nil, &wasm.Fault{Code: "bad_arguments", Message: "cache.put takes (libraryKey, name, data)"}
-				}
-				body = []byte(wrapped.Body)
-				if wrapped.BodyBase64 != "" {
-					decoded, err := base64.StdEncoding.DecodeString(wrapped.BodyBase64)
-					if err != nil {
-						return nil, &wasm.Fault{Code: "bad_arguments", Message: "bodyBase64 is not valid base64"}
-					}
-					body = decoded
-				}
-			}
-		}
-		ref, err := b.h.CachePut(ctx, str(0), str(1), bytes.NewReader(body))
-		if err != nil {
-			return nil, mapHostError(err)
-		}
-		return result(map[string]any{"blob": ref}, nil)
+		return result(callCachePut(ctx, b.h, args))
 	case "cache.open":
 		readCap := int64(MinDataReadBytes)
 		if provider, ok := b.h.(interface {
@@ -731,10 +704,18 @@ func (b hostBridge) CallHost(ctx context.Context, name string, raw json.RawMessa
 	case "cache.delete":
 		return result(nil, b.h.CacheDelete(ctx, str(0)))
 	case "folders.list":
-		v, err := b.h.FoldersList(ctx, str(0), str(1))
+		var opts FolderListOptions
+		if len(args) > 2 && json.Unmarshal(args[2], &opts) != nil {
+			return nil, &wasm.Fault{Code: "bad_arguments", Message: "invalid folder list options"}
+		}
+		v, err := b.h.FoldersList(ctx, str(0), str(1), opts)
 		return result(v, err)
 	case "folders.hashStart":
-		v, err := b.h.FoldersHashStart(ctx, str(0), str(1))
+		var opts FolderHashOptions
+		if len(args) > 2 && json.Unmarshal(args[2], &opts) != nil {
+			return nil, &wasm.Fault{Code: "bad_arguments", Message: "invalid folder hash options"}
+		}
+		v, err := b.h.FoldersHashStart(ctx, str(0), str(1), opts)
 		return result(v, err)
 	case "folders.hashPoll":
 		v, err := b.h.FoldersHashPoll(ctx, str(0))
@@ -743,7 +724,18 @@ func (b hostBridge) CallHost(ctx context.Context, name string, raw json.RawMessa
 		v, err := b.h.FoldersHashCancel(ctx, str(0))
 		return result(v, err)
 	case "folders.hash":
-		v, err := b.h.FoldersHash(ctx, str(0), str(1))
+		var opts FolderHashOptions
+		if len(args) > 2 && json.Unmarshal(args[2], &opts) != nil {
+			return nil, &wasm.Fault{Code: "bad_arguments", Message: "invalid folder hash options"}
+		}
+		v, err := b.h.FoldersHash(ctx, str(0), str(1), opts)
+		return result(v, err)
+	case "folders.frame":
+		var opts FolderFrameOptions
+		if len(args) <= 2 || json.Unmarshal(args[2], &opts) != nil {
+			return nil, &wasm.Fault{Code: "bad_arguments", Message: "invalid folder frame options"}
+		}
+		v, err := b.h.FoldersFrame(ctx, str(0), str(1), opts)
 		return result(v, err)
 	case "folders.stat":
 		v, err := b.h.FoldersStat(ctx, str(0), str(1))

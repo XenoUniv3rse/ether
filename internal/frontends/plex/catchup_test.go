@@ -3,6 +3,7 @@ package plex
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"image"
 	"image/jpeg"
 	"net/http"
@@ -108,6 +109,34 @@ func TestCatchUpSectionPlayback(t *testing.T) {
 		t.Fatalf("catch-up DASH start: %d", got.Code)
 	}
 
+}
+
+// Plex for iOS picks the item to play from playQueueSelectedMetadataItemID;
+// without it the app stops after creating the queue and never asks for a
+// decision. A catch-up queue must name its airing like any other queue.
+func TestCatchUpPlayQueueNamesSelectedItem(t *testing.T) {
+	f := newFixture()
+	t.Cleanup(func() { _ = f.srv.Close() })
+	start := time.Unix(1700000000, 0).UTC()
+	programme := "channel-1700000000000"
+	id := frontend.CatchUpEpisodeID(programme)
+	f.srv.setLiveTV(&catchUpTestLive{item: frontend.CatchUpItem{
+		ID: id, Type: frontend.TypeEpisode,
+		Programme: frontend.LiveTVProgramme{ID: programme, ChannelID: "channel", Start: start, End: start.Add(time.Hour)},
+	}})
+	uri := "server://" + f.srv.identity().MachineIdentifier + "/com.plexapp.plugins.library/library/metadata/" + id
+	created := f.request(t, "POST", "/playQueues?"+url.Values{"type": {"video"}, "uri": {uri}}.Encode(), map[string]string{"Accept": "application/json"})
+	if created.Code != http.StatusOK {
+		t.Fatalf("create catch-up queue: %d", created.Code)
+	}
+	mc := decodeJSON(t, created)
+	if mc["playQueueSelectedMetadataItemID"] != id {
+		t.Fatalf("created queue selects %v, want %s", mc["playQueueSelectedMetadataItemID"], id)
+	}
+	reread := f.request(t, "GET", fmt.Sprintf("/playQueues/%v", mc["playQueueID"]), map[string]string{"Accept": "application/json"})
+	if reread.Code != http.StatusOK || decodeJSON(t, reread)["playQueueSelectedMetadataItemID"] != id {
+		t.Fatalf("re-read catch-up queue: %d", reread.Code)
+	}
 }
 
 func (*catchUpTestLive) NoteClientActivity() {}

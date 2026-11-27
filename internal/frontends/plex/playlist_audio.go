@@ -117,6 +117,7 @@ func (s *Server) smartAudioBrowse(ctx context.Context, pr *Request, sec Section,
 	if err != nil {
 		return nil, 0, 0, err
 	}
+	markHomePluginRead(ctx)
 	page, err := s.exp().LibraryItems(ctx, pr.User, plexDevice(pr), sec.IDString(), iq)
 	if err != nil {
 		return nil, 0, 0, err

@@ -807,6 +807,10 @@ func (f LiveTV) GuideForChannels(context.Context, *frontend.User, time.Time, tim
 func (f LiveTV) GuideWindow(context.Context, *frontend.User, time.Time, time.Time) ([]frontend.LiveTVProgramme, error) {
 	return nil, nil
 }
+func (f LiveTV) GuideChannelLogos(context.Context, []frontend.LiveTVChannel) map[string]string {
+	return map[string]string{}
+}
+
 func (f LiveTV) GuideChannelLogo(context.Context, frontend.LiveTVChannel) string { return "" }
 func (f LiveTV) TuneWithSession(context.Context, *frontend.User, string, frontend.ClientCaps, string) (frontend.LiveTVSessionInfo, error) {
 	return frontend.LiveTVSessionInfo{}, core.ErrNotFound

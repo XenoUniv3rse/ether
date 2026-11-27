@@ -1399,6 +1399,16 @@ func kindPageResponse(page KindPage, err error, limit int) RawResponse {
 
 type frontendContextKey struct{}
 
+type frontendUploadKey struct{}
+
+const frontendUploadHeader = "X-Ether-Frontend-Upload"
+
+// FrontendUploadFromContext returns upload metadata for a declared upload route.
+func FrontendUploadFromContext(ctx context.Context) (*FrontendUpload, bool) {
+	u, ok := ctx.Value(frontendUploadKey{}).(*FrontendUpload)
+	return u, ok
+}
+
 // FrontendContext returns the Ether plugin Context attached to a
 // FrontendAdapter http.Request during dispatch, so ServeHTTP handlers can
 // call pctx.KindVisible, pctx.KindBrowse, pctx.StreamURL, etc. directly (#615).
@@ -1438,9 +1448,28 @@ func (p *Plugin) dispatchFrontend(pctx *Context, method, key, subPath string, re
 		pctx.Context = reqCtx
 	}
 	reqCtx = context.WithValue(reqCtx, frontendContextKey{}, pctx)
-	httpReq := httptest.NewRequestWithContext(reqCtx, method, target, bytes.NewReader(req.Body))
+	upload := req.Upload
+	if headerValue(req.Headers, frontendUploadHeader) == "1" {
+		upload = new(FrontendUpload)
+		if err := json.Unmarshal(req.Body, upload); err != nil {
+			return errorJSON(http.StatusBadRequest, "invalid_upload", "Invalid frontend upload metadata.")
+		}
+	}
+	bodyBytes := req.Body
+	if upload != nil {
+		reqCtx = context.WithValue(reqCtx, frontendUploadKey{}, upload)
+		bodyBytes = nil
+	}
+	httpReq := httptest.NewRequestWithContext(reqCtx, method, target, bytes.NewReader(bodyBytes))
 	for k, v := range req.Headers {
 		httpReq.Header.Set(k, v)
+	}
+	if upload != nil {
+		httpReq.Header.Del(frontendUploadHeader)
+		httpReq.Header.Del("Content-Type")
+		if upload.ContentType != "" {
+			httpReq.Header.Set("Content-Type", upload.ContentType)
+		}
 	}
 	rec := httptest.NewRecorder()
 	a.Handler().ServeHTTP(rec, httpReq)

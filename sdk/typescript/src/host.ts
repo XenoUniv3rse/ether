@@ -442,7 +442,22 @@ function decodeData(r: { bodyBase64: string }): Uint8Array {
 }
 
 export interface FolderHashJob { id: string; state: "running" | "done" | "canceled" | "error"; bytes: number; result?: FolderHash; error?: string }
-export interface FolderHash { size: number; modTime: number; crc32: string; md5: string; sha1: string }
+export interface FolderHash {
+  size: number;
+  modTime: number;
+  crc32?: string;
+  md5?: string;
+  sha1?: string;
+  oshash?: string;
+  phash?: string;
+}
+export interface FolderHashOptions {
+  algorithms?: ("crc32" | "md5" | "sha1" | "oshash" | "phash")[];
+}
+export interface FolderListOptions { cursor?: string; limit?: number }
+export interface FolderPage { entries: FolderEntry[]; nextCursor: string; truncated: boolean }
+export interface FolderFrameOptions { atSec: number; width: number; libraryKey?: string }
+export interface FolderFrame { ref: string; libraryKey: string }
 
 export interface FolderEntry {
   name: string;
@@ -549,10 +564,11 @@ export interface EtherHost {
     putRecords(records: Array<{ type: string; id: string; value: unknown }>): MaybePromise<{ streams: number }>;
   };
   folders: {
-    list(root: string, path?: string): MaybePromise<FolderEntry[]>;
+    list(root: string, path?: string, options?: FolderListOptions): MaybePromise<FolderPage>;
+    frame(root: string, path: string, options: FolderFrameOptions): MaybePromise<FolderFrame>;
     stat(root: string, path: string): MaybePromise<FolderEntry>;
-    hash(root: string, path: string): MaybePromise<FolderHash>;
-    hashStart(root: string, path: string): MaybePromise<FolderHashJob>;
+    hash(root: string, path: string, options?: FolderHashOptions): MaybePromise<FolderHash>;
+    hashStart(root: string, path: string, options?: FolderHashOptions): MaybePromise<FolderHashJob>;
     hashPoll(id: string): MaybePromise<FolderHashJob>;
     hashCancel(id: string): MaybePromise<FolderHashJob>;
   };
@@ -600,9 +616,11 @@ export interface EtherHost {
     resolveSourcesWithResult?(q: import("./types.ts").SourceQuery): MaybePromise<import("./types.ts").SourceResolveResult>;
   };
   cache?: {
-    put(libraryKey: string, name: string, data: Uint8Array): MaybePromise<string>;
+    put(libraryKey: string, name: string, data: Uint8Array | null, opts?: import("./types.ts").CachePutOptions): MaybePromise<string>;
     open(blobRef: string): MaybePromise<Uint8Array>;
     read?(blobRef: string, range: DataRange): MaybePromise<Uint8Array>;
+    /** Cached digests are available on viewer routes; cold reads there are limited to 256 KiB. */
+    stat?(blobRef: string): MaybePromise<import("./types.ts").CacheStatResult>;
     /** Rasterises a cached SVG blob into a new cached bitmap blob with Ether's bounded SVG rasteriser; unsafe documents are refused. */
     rasterize?(libraryKey: string, name: string, blobRef: string, opts?: RasterizeOptions): MaybePromise<RasterizeResult>;
     delete?(blobRef: string): MaybePromise<void>;
@@ -679,10 +697,11 @@ interface GlobalEtherBindings {
       upsert: (c: Record<string, unknown>) => void;
     };
     folders: {
-      list: (root: string, path?: string) => FolderEntry[];
+      list: (root: string, path?: string, options?: FolderListOptions) => FolderPage;
+      frame: (root: string, path: string, options: FolderFrameOptions) => FolderFrame;
       stat: (root: string, path: string) => FolderEntry;
-      hash: (root: string, path: string) => FolderHash;
-      hashStart: (root: string, path: string) => FolderHashJob;
+      hash: (root: string, path: string, options?: FolderHashOptions) => FolderHash;
+      hashStart: (root: string, path: string, options?: FolderHashOptions) => FolderHashJob;
       hashPoll: (id: string) => FolderHashJob;
       hashCancel: (id: string) => FolderHashJob;
     };
@@ -785,7 +804,7 @@ export function createHostedClient(): EtherHost {
       extract: (blob, member, opts) => callHost<ArchiveExtractResult>("archive.extract", opts == null ? [blob, member] : [blob, member, opts]),
     },
     cache: {
-      put: (lib, name, data) => callHost<{blob: string}>("cache.put", [lib, name, {bodyBase64: encodeData(data)}]).blob,
+      put: (lib, name, data, opts) => callHost<{blob: string}>("cache.put", [lib, name, data === null ? null : {bodyBase64: encodeData(data)}, opts ?? null]).blob,
       open: (blob) => { const r = callHost<{body?: string; bodyBase64?: string}>("cache.open", [blob]); return r.bodyBase64 ? decodeData({bodyBase64: r.bodyBase64}) : encodeText(r.body ?? ""); },
       read: (blob, range) => {
         checkDataRange(range);
@@ -794,6 +813,7 @@ export function createHostedClient(): EtherHost {
         }
         return decodeData(callHost("cache.read", [blob, range]));
       },
+      stat: (blob) => callHost<import("./types.ts").CacheStatResult>("cache.stat", [blob]),
       rasterize: (lib, name, blob, opts) => {
         checkRasterizeOptions(opts);
         return callHost<RasterizeResult>("cache.rasterize", opts == null ? [lib, name, blob] : [lib, name, blob, opts]);
@@ -956,16 +976,20 @@ export function createHostedClient(): EtherHost {
       },
     },
     folders: {
-      list(root: string, path = ""): FolderEntry[] {
-        if (g.ether?.folders) return g.ether.folders.list(root, path) ?? [];
-        return callHost<FolderEntry[]>("folders.list", [root, path]) ?? [];
+      list(root: string, path = "", options: FolderListOptions = {}): FolderPage {
+        if (g.ether?.folders) return g.ether.folders.list(root, path, options);
+        return callHost<FolderPage>("folders.list", [root, path, options]);
       },
-      hashStart(root: string, path: string): FolderHashJob { if (g.ether?.folders) return g.ether.folders.hashStart(root, path); return callHost<FolderHashJob>("folders.hashStart", [root, path]); },
+      frame(root: string, path: string, options: FolderFrameOptions): FolderFrame {
+        if (g.ether?.folders) return g.ether.folders.frame(root, path, options);
+        return callHost<FolderFrame>("folders.frame", [root, path, options]);
+      },
+      hashStart(root: string, path: string, options: FolderHashOptions = {}): FolderHashJob { if (g.ether?.folders) return g.ether.folders.hashStart(root, path, options); return callHost<FolderHashJob>("folders.hashStart", [root, path, options]); },
       hashPoll(id: string): FolderHashJob { if (g.ether?.folders) return g.ether.folders.hashPoll(id); return callHost<FolderHashJob>("folders.hashPoll", [id]); },
       hashCancel(id: string): FolderHashJob { if (g.ether?.folders) return g.ether.folders.hashCancel(id); return callHost<FolderHashJob>("folders.hashCancel", [id]); },
-      hash(root: string, path: string): FolderHash {
-        if (g.ether?.folders) return g.ether.folders.hash(root, path);
-        return callHost<FolderHash>("folders.hash", [root, path]);
+      hash(root: string, path: string, options: FolderHashOptions = {}): FolderHash {
+        if (g.ether?.folders) return g.ether.folders.hash(root, path, options);
+        return callHost<FolderHash>("folders.hash", [root, path, options]);
       },
       stat(root: string, path: string): FolderEntry {
         if (g.ether?.folders) return g.ether.folders.stat(root, path);
@@ -1340,13 +1364,14 @@ export function createRemoteHostClient(opts: RemoteHostOptions = {}): EtherHost 
       },
     },
     folders: {
-      list(): Promise<FolderEntry[]> {
+      list(): Promise<FolderPage> {
         return Promise.reject(
           new Error(
             "folders.list is for hosted plugins; sidecar plugins read their local fileRoot directly",
           ),
         );
       },
+      frame(): Promise<FolderFrame> { return Promise.reject(new Error("folders.frame requires the hosted runtime")); },
       hashStart(): Promise<FolderHashJob> { return Promise.reject(new Error("folders.hash requires the hosted runtime")); },
       hashPoll(): Promise<FolderHashJob> { return Promise.reject(new Error("folders.hash requires the hosted runtime")); },
       hashCancel(): Promise<FolderHashJob> { return Promise.reject(new Error("folders.hash requires the hosted runtime")); },
@@ -1440,8 +1465,19 @@ export function createRemoteHostClient(opts: RemoteHostOptions = {}): EtherHost 
     },
     cache: {
       read: async (blob, range) => { checkDataRange(range); return decodeData((await callJson<{bodyBase64: string}>("POST", "/ether/plugin-host/data/cache.read", [blob, range]))!); },
+      stat: async (blob) => {
+        const token = opts.viewerToken?.trim();
+        return (await callJson<import("./types.ts").CacheStatResult>(
+          "POST", "/ether/plugin-host/data/cache.stat", [blob], false,
+          token ? { [HEADER_VIEWER_TOKEN]: token } : undefined,
+        ))!;
+      },
       rasterize: async (lib, name, blob, opts) => { checkRasterizeOptions(opts); return (await callJson<RasterizeResult>("POST", "/ether/plugin-host/data/cache.rasterize", opts == null ? [lib, name, blob] : [lib, name, blob, opts]))!; },
-      async put(libraryKey, name, data) {
+      async put(libraryKey, name, data, opts) {
+        if (opts !== undefined || data === null) {
+          const payload = data === null ? null : {bodyBase64: encodeData(data)};
+          return (await callJson<{blob: string}>("POST", "/ether/plugin-host/data/cache.put", [libraryKey, name, payload, opts ?? null]))!.blob;
+        }
         const resp = await doFetch(`${base}/ether/plugin-host/cache/${encodeURIComponent(libraryKey)}?name=${encodeURIComponent(name)}`, {
           method: "POST",
           headers: credential ? { "X-Ether-Plugin-Credential": credential } : {},

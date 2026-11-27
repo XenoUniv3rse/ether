@@ -36,6 +36,8 @@ func (p Plugins) Catalogue() (indexURL, publicKey string) {
 // PluginRuntimeLimits are owner-controlled ceilings, not allocations. Zero
 // inherits the default (globally) or the global ceiling (per plugin).
 type PluginRuntimeLimits struct {
+	// UploadBytes is the per-plugin staged request ceiling. Zero uses 64 MiB.
+	UploadBytes          int64 `json:"uploadBytes,omitempty"`
 	FetchBytes           int64 `json:"fetchBytes,omitempty"`
 	ArchiveMemberBytes   int64 `json:"archiveMemberBytes,omitempty"`
 	ArchiveExpandedBytes int64 `json:"archiveExpandedBytes,omitempty"`

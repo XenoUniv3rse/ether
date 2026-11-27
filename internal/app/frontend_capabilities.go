@@ -89,7 +89,7 @@ func (s surfaceCapabilities) Build(ctx context.Context, req frontend.CapabilityR
 			"qualityLayers", resolver.ExplainQuality(resolver.QualityQuestion{Quality: cfg.Quality, Caps: qualityCaps, User: req.Viewer}).Layers)
 	}
 	if req.Viewer != nil && !s.policy.NativeClientFamilies && !frontend.QuietIdentity(ctx) {
-		s.app.recordFrontendFamily(ctx, s.surface, declared)
+		s.app.recordFrontendFamily(s.surface, declared)
 	}
 	return result, nil
 }
@@ -98,7 +98,7 @@ func (s surfaceCapabilities) ApplyClientRules(q frontend.HostQualityConfig, caps
 	return resolver.ApplyClientRulesForMedia(q, caps, viewer, media)
 }
 
-func (a *App) recordFrontendFamily(ctx context.Context, surface frontend.Protocol, caps core.ClientCaps) {
+func (a *App) recordFrontendFamily(surface frontend.Protocol, caps core.ClientCaps) {
 	// Store only the static family policy, not per-device declarations or viewer IDs.
 	product := strings.TrimSpace(caps.Product)
 	device := caps.Device
@@ -117,23 +117,53 @@ func (a *App) recordFrontendFamily(ctx context.Context, surface frontend.Protoco
 		return
 	}
 	key := string(surface) + "\x00" + policy.Family
-	if prev, ok := a.seenFamilies.Load(key); ok && prev.(string) == string(data) {
+	a.familyMu.Lock()
+	defer a.familyMu.Unlock()
+	if a.familyClosed {
 		return
 	}
+	if a.seenFamilies[key] == string(data) || a.familyPending[key] {
+		return
+	}
+	if a.familySlots == nil {
+		a.familySlots = make(chan struct{}, 8)
+		a.seenFamilies = make(map[string]string)
+		a.familyPending = make(map[string]bool)
+	}
+	select {
+	case a.familySlots <- struct{}{}:
+	default:
+		return
+	}
+	a.familyPending[key] = true
+	a.familyWrites.Add(1)
+	go func() {
+		defer a.familyWrites.Done()
+		defer func() { <-a.familySlots }()
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		err := a.saveFrontendFamily(ctx, surface, policy.Family, data)
+		a.familyMu.Lock()
+		delete(a.familyPending, key)
+		if err == nil && len(a.seenFamilies) < 4096 {
+			a.seenFamilies[key] = string(data)
+		}
+		a.familyMu.Unlock()
+	}()
+}
+
+func (a *App) saveFrontendFamily(ctx context.Context, surface frontend.Protocol, family string, data []byte) error {
 	// Bound the number of client-provided family names stored per surface.
 	var count int
 	if err := a.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM frontend_client_families WHERE surface=?`, string(surface)).Scan(&count); err != nil {
-		return
+		return err
 	}
 	if count >= 256 {
-		if _, err = a.db.ExecContext(ctx, `UPDATE frontend_client_families SET policy=?,last_seen=? WHERE surface=? AND family=?`, string(data), time.Now().Unix(), string(surface), policy.Family); err == nil {
-			a.seenFamilies.Store(key, string(data))
-		}
-		return
+		_, err := a.db.ExecContext(ctx, `UPDATE frontend_client_families SET policy=?,last_seen=? WHERE surface=? AND family=?`, string(data), time.Now().Unix(), string(surface), family)
+		return err
 	}
-	if _, err = a.db.ExecContext(ctx, `INSERT INTO frontend_client_families(surface,family,policy,last_seen) VALUES(?,?,?,?) ON CONFLICT(surface,family) DO UPDATE SET policy=excluded.policy,last_seen=excluded.last_seen`, string(surface), policy.Family, string(data), time.Now().Unix()); err == nil {
-		a.seenFamilies.Store(key, string(data))
-	}
+	_, err := a.db.ExecContext(ctx, `INSERT INTO frontend_client_families(surface,family,policy,last_seen) VALUES(?,?,?,?) ON CONFLICT(surface,family) DO UPDATE SET policy=excluded.policy,last_seen=excluded.last_seen`, string(surface), family, string(data), time.Now().Unix())
+	return err
 }
 
 // playbackFloor copies a recognized client's registry codecs onto empty

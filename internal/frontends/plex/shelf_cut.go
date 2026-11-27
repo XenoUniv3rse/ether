@@ -69,7 +69,7 @@ func (s *Server) readShelfScope(ctx context.Context, pr *Request) (string, strin
 	user, _ := json.Marshal(pr.User)
 	viewerRevision := ""
 	var policy int64
-	if rev, hasRev, err := s.exp().HomeRevision(ctx, pr.User); hasRev {
+	if rev, hasRev, err := s.homeRevision(ctx, pr.User); hasRev {
 		if err != nil {
 			return "", "", false
 		}

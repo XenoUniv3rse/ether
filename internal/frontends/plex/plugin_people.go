@@ -189,8 +189,9 @@ func (s *Server) searchPluginPeople(ctx context.Context, pr *Request, query stri
 		limit = 10
 	}
 	people, err := reader.People(ctx, pr.User, plexDevice(pr), frontend.PeopleQuery{
-		Query: query,
-		Limit: max(limit*2, 20),
+		Query:             query,
+		Limit:             max(limit*2, 20),
+		PluginResultsOnly: true,
 	})
 	if err != nil || len(people) == 0 {
 		return out

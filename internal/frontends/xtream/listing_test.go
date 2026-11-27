@@ -97,14 +97,17 @@ func TestXtreamListingNeverServesStaleVisibility(t *testing.T) {
 				return h0.Body.String()
 			}
 			vod := "/player_api.php?" + authQuery() + "&action=get_vod_streams"
-			// Signing in builds the listing behind the response; the list is
-			// then a file, byte-identical to encoding it.
 			request(h, "/player_api.php?"+authQuery())
 			settle()
-			calls := lib.calls
+			if lib.calls != 0 {
+				t.Fatal("sign-in prepared a listing")
+			}
+			// A listing is built on first use. Its cached representation
+			// matches both the first response and the uncached encoder.
 			body := list(request(h, vod))
-			if lib.calls != calls || body != list(request(streamed, vod)) {
-				t.Fatalf("listing not served from its build (%d → %d calls) or differs from encoding", calls, lib.calls)
+			settle()
+			if body != list(request(h, vod)) || body != list(request(streamed, vod)) {
+				t.Fatal("cached listing differs from encoding")
 			}
 			has := func(body string, n int) bool { return strings.Contains(body, fmt.Sprintf(`"name":"Film %d"`, n-1)) }
 			if !has(body, 600) {

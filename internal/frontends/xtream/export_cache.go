@@ -71,24 +71,3 @@ func (i *instance) cachedList(w http.ResponseWriter, r *http.Request, l login, k
 	req, ok := i.listRequest(r, l, kind)
 	return ok && i.exports.Serve(w, r, req)
 }
-
-// prepareLists builds l's listings of kinds behind the response, ahead of
-// the list requests an app makes after signing in or listing categories.
-func (i *instance) prepareLists(r *http.Request, l login, kinds ...string) {
-	if i.exports == nil {
-		return
-	}
-	req, l := r.Clone(context.Background()), l.detached()
-	q := req.URL.Query()
-	q.Del("category_id")
-	req.URL.RawQuery = q.Encode()
-	i.exports.Go(func(ctx context.Context) {
-		req := req.WithContext(ctx)
-		l.base, l.hasBase = i.base(req), true
-		for _, kind := range kinds {
-			if list, ok := i.listRequest(req, l, kind); ok {
-				i.exports.Prepare(list)
-			}
-		}
-	})
-}

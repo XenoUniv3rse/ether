@@ -1039,11 +1039,11 @@ func TestHomeStampsInvalidateOnLibrariesAndKindSync(t *testing.T) {
 	fresh.Libraries = 2
 	hLib, _ := srv.homeStamps(pr, rev)
 	if hLib == h0 {
-		t.Fatalf("homeStamps hard stamp did not change when Libraries bumped: %q", h0)
+		t.Fatalf("homeStamps hard stamp did not change when Libraries bumped: %+v", h0)
 	}
 	fresh.KindSync = 2
 	hSync, _ := srv.homeStamps(pr, rev)
-	if hSync == hLib {
-		t.Fatalf("homeStamps hard stamp did not change when KindSync bumped: %q", hLib)
+	if hSync.matches(hLib, true) || !hSync.matches(hLib, false) {
+		t.Fatalf("kind sync changed the wrong screen dependencies: %+v versus %+v", hLib, hSync)
 	}
 }

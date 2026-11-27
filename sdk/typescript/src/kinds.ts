@@ -6,11 +6,12 @@
  * sdk/conformance/kinds/fixture.json across all three SDKs.
  */
 import type { PluginContext } from "./router.ts";
-import { HEADER_VIEWER_TOKEN, MAX_KIND_VISIBLE_IDS, decodeBase64, encodeText, normalizeStreamUrlOptions } from "./host.ts";
+import { HEADER_VIEWER_TOKEN, MAX_KIND_VISIBLE_IDS, decodeBase64, decodeText, encodeText, normalizeStreamUrlOptions } from "./host.ts";
 import type {
   FrontendArt,
   FrontendBlob,
   FrontendMedia,
+  FrontendUpload,
   KindBrowseQuery,
   KindBrowseRequest,
   KindChangePage,
@@ -96,6 +97,7 @@ export interface FrontendAdapter<S = Record<string, unknown>> {
     headers: Record<string, string>,
     body: string,
     ctx?: PluginContext<S>,
+    upload?: FrontendUpload,
   ): MaybePromise<{
     status: number;
     headers?: Record<string, string>;
@@ -390,7 +392,28 @@ export async function dispatchKinds<S = Record<string, unknown>>(
     const query = frontendQuery(req);
     const qs = query.toString();
     if (qs) subPath += `?${qs}`;
-    const res = await adapter.handle(method, subPath, headers, frontendBodyString(req), ctx);
+    let upload = req.upload;
+    const marker = Object.keys(headers).find((key) => key.toLowerCase() === "x-ether-frontend-upload");
+    if (marker && headers[marker] === "1") {
+      try {
+        const metadata = req.bodyBase64 !== undefined
+          ? decodeText(decodeBase64(req.bodyBase64))
+          : req.body;
+        upload = (typeof metadata === "string" ? JSON.parse(metadata) : metadata) as FrontendUpload;
+      } catch {
+        return err(400, "invalid_upload", "Invalid frontend upload metadata.");
+      }
+      if (!upload || typeof upload !== "object" || Array.isArray(upload)) {
+        return err(400, "invalid_upload", "Invalid frontend upload metadata.");
+      }
+      delete headers[marker];
+    }
+    if (upload) {
+      const contentTypeKey = Object.keys(headers).find((key) => key.toLowerCase() === "content-type");
+      if (contentTypeKey) delete headers[contentTypeKey];
+      if (upload.contentType) headers["Content-Type"] = upload.contentType;
+    }
+    const res = await adapter.handle(method, subPath, headers, upload ? "" : frontendBodyString(req), ctx, upload);
     if (res.body.length > 10 * 1024 * 1024) return err(502, "adapter_error", "Frontend adapter response is larger than 10 MiB; serve media through Ether stream URLs.");
     // A HEAD reply carries headers only, exactly as a real server would.
     const out: RawResponse = { status: res.status, headers: res.headers ?? {}, body: method === "HEAD" ? "" : res.body };

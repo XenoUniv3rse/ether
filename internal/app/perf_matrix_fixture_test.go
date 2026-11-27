@@ -13,6 +13,29 @@ import (
 	"github.com/braedonsaunders/ether/internal/livetv"
 )
 
+// Give viewers without a generated household playlist a real item and queue
+// to open while leaving their watch history and personalization cold.
+func seedPerfMatrixPlaylistCoverage(ctx context.Context, db *sql.DB) error {
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	now := time.Now().UnixNano()
+	if _, err := tx.ExecContext(ctx, `INSERT INTO state_playlists(user_id,title,smart,updated_at,added_at,guid)
+		SELECT u.id,'First playlist',0,?,?,'matrix-first-' || CAST(u.id AS TEXT)
+		FROM auth_users u WHERE u.active=1 AND NOT EXISTS(SELECT 1 FROM state_playlists p WHERE p.user_id=u.id)`, now, now); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO state_playlist_items(playlist_id,position,rating_key,added_at)
+		SELECT p.id,0,t.key,? FROM state_playlists p
+		CROSS JOIN (SELECT key FROM catalog_titles WHERE type='movie' AND adult=0 AND browsable=1 ORDER BY key LIMIT 1) t
+		WHERE p.guid LIKE 'matrix-first-%'`, now); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
 func seedPerfMatrixCatalogue(ctx context.Context, db *sql.DB, live bool) error {
 	now := time.Now().UTC()
 	tx, err := db.BeginTx(ctx, nil)

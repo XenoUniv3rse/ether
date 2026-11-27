@@ -2,6 +2,7 @@ package personalize
 
 import (
 	"fmt"
+	"slices"
 	"testing"
 	"time"
 
@@ -376,5 +377,44 @@ func TestAvailabilityFiltersBeforeRowSizing(t *testing.T) {
 		if hidden[it.Key] {
 			t.Fatal("ineligible title", it.Key)
 		}
+	}
+}
+
+func TestLibraryPageFillsWhenPreferredShelfLosesItsTitles(t *testing.T) {
+	const pageLength = 16
+	kinds := []string{
+		KindTrending, KindTop10, KindTop10Today, KindNewReleases, KindCrowd,
+		KindCrowdTrending, KindHiddenGems, KindDifferent, KindPopularServer,
+		KindTopRated, KindAcclaimed, KindTopGenre, KindStudio, KindEra, KindOccasion,
+	}
+	cards := func(group int) []candItem {
+		var out []candItem
+		for i := 1; i <= 12; i++ {
+			out = append(out, candItem{t: core.Title{Key: core.MovieKey(int64(group*100 + i)), Type: core.TypeMovie}, base: 1, fit: 0.5})
+		}
+		return out
+	}
+	var candidates []*candRow
+	for i, kind := range kinds {
+		candidates = append(candidates, testRow(kind, kind, cards(i)))
+	}
+	// The better-ranked showcase competes with a headline that drafts
+	// first. A second showcase in the same genre family has its own titles.
+	preferred := testRow(KindShowcase, "showcase.drama", candidates[1].items)
+	preferred.group, preferred.scale = "2", 10
+	alternate := testRow(KindShowcase, "showcase.horror", cards(len(kinds)))
+	alternate.group = preferred.group
+	candidates = append(candidates, preferred, alternate)
+
+	plan := compilePage(DefaultPage(core.PageKey("library:1/recommended")), false, 1, nil)
+	hc := hubContext(testNow, core.DeviceWeb)
+	hc.SectionID = 1
+	rows := run(emptyModel(candidates...), func(a *assembly) {
+		a.hc, a.section, a.plan = hc, core.TypeMovie, plan
+		a.pageLen, a.maxRows, a.limit, a.minRow = pageLength, 100, 12, 12
+	})
+	got := order(arrangePage(rows, plan, 1, hc, pageLength))
+	if len(got) != pageLength || !slices.Contains(got, "movie.showcase.horror") {
+		t.Fatalf("want %d shelves including the alternate showcase, got %v", pageLength, got)
 	}
 }

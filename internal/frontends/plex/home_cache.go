@@ -7,12 +7,14 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/url"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/braedonsaunders/ether/internal/frontend"
@@ -39,19 +41,14 @@ const (
 	homeCacheMaxBytes   = 48 << 20
 	// homeRefreshAfter: a screen this old is served and rebuilt behind it.
 	homeRefreshAfter = time.Minute
-	// homeProvisionalRefresh: a screen built before the viewer's
-	// recommendations were ready is only reused this long.
+	// homeProvisionalRefresh: after this long the next use of a provisional
+	// screen asks for a refresh.
 	homeProvisionalRefresh = 5 * time.Second
 	// homeMaxStale: older than this, a screen is rebuilt on the request.
 	homeMaxStale = 30 * time.Minute
-	// Screens used within homeKeepWarm are rebuilt in the background once
-	// they are homeRewarmAge old, so a returning viewer is not cold.
-	homeKeepWarm  = 2 * time.Hour
-	homeRewarmAge = 25 * time.Minute
 	// homeRefreshQueue bounds pending background rebuilds; one runs at a time.
 	homeRefreshQueue   = 64
 	homeRefreshTimeout = 30 * time.Second
-	homeRewarmEvery    = time.Minute
 )
 
 // homeBuild is one built Home screen.
@@ -63,14 +60,15 @@ type homeBuild struct {
 	section int
 	// provisional: the recommender had no rows yet.
 	provisional bool
+	pluginItems bool
 }
 
 type homeBuildFunc func(ctx context.Context, r *http.Request) homeBuild
 
 type homeEntry struct {
 	key         string
-	viewer      int64
-	hard, soft  string
+	hard        homeStamp
+	soft        string
 	body, gz    []byte
 	offset      *int
 	total       *int
@@ -78,6 +76,7 @@ type homeEntry struct {
 	builtAt     time.Time
 	usedAt      time.Time
 	provisional bool
+	pluginItems bool
 	impressions []homeImpression
 	warm        frontend.RatingKey
 	section     int
@@ -89,7 +88,7 @@ type homeEntry struct {
 }
 
 type homeFlight struct {
-	hard string
+	hard homeStamp
 	done chan struct{}
 }
 
@@ -109,13 +108,21 @@ func newHomeCache() *homeCache {
 func (s *Server) serveHome(w http.ResponseWriter, r *http.Request, route string, build homeBuildFunc) {
 	ctx := r.Context()
 	pr := FromContext(ctx)
-	if s.homeCache() == nil || pr == nil || pr.User == nil || s.liveSessionOnClient(pr) {
+	head := r.Method == http.MethodHead && (route == "hubs" || route == "hubs/promoted")
+	uncached := func() {
+		if head {
+			s.writeHomeHead(w, r)
+			return
+		}
 		s.writeHomeBuild(w, r, build(ctx, r))
+	}
+	if s.homeCache() == nil || pr == nil || pr.User == nil || s.liveSessionOnClient(pr) {
+		uncached()
 		return
 	}
-	rev, ok, err := s.exp().HomeRevision(ctx, pr.User)
+	rev, ok, err := s.homeRevision(ctx, pr.User)
 	if !ok || err != nil {
-		s.writeHomeBuild(w, r, build(ctx, r))
+		uncached()
 		return
 	}
 	key := s.homeKey(route, r, pr)
@@ -124,19 +131,28 @@ func (s *Server) serveHome(w http.ResponseWriter, r *http.Request, route string,
 		now := time.Now()
 		s.homeCache().mu.Lock()
 		e := s.homeCache().entries[key]
-		if e != nil && e.hard == hard && now.Sub(e.builtAt) < homeMaxStale && (!e.provisional || now.Sub(e.builtAt) < homeProvisionalRefresh) {
+		if e != nil && e.hard.matches(hard, e.pluginItems) && now.Sub(e.builtAt) < homeMaxStale {
 			e.usedAt = now
 			e.tmpl, e.pr = detachedTemplate(r, pr)
-			stale := e.soft != soft || now.Sub(e.builtAt) >= homeRefreshAfter
+			stale := e.soft != soft || now.Sub(e.builtAt) >= homeRefreshAfter || e.provisional && now.Sub(e.builtAt) >= homeProvisionalRefresh
 			body, gz, offset, total := e.body, e.gz, e.offset, e.total
 			impressions, warm, section := e.impressions, e.warm, e.section
 			s.homeCache().mu.Unlock()
+			if head {
+				s.writeBody(w, r, http.StatusOK, body, gz, offset, total)
+				return
+			}
 			if stale {
 				s.queueHomeRefresh(key)
 			}
 			s.writeBody(w, r, http.StatusOK, body, gz, offset, total)
 			s.recordCompactImpressions(pr, s.hubContext(pr, section), impressions)
 			s.warmKey(ctx, pr, warm)
+			return
+		}
+		if head {
+			s.homeCache().mu.Unlock()
+			s.writeHomeHead(w, r)
 			return
 		}
 		if e != nil && e.flight != nil && e.flight.hard == hard && !waited {
@@ -154,7 +170,7 @@ func (s *Server) serveHome(w http.ResponseWriter, r *http.Request, route string,
 		s.homeCache().mu.Unlock()
 		break
 	}
-	b := build(ctx, s.homeBuildRequest(r))
+	b := s.buildHomeScreen(r, build)
 	body, err := s.encodeResponse(r, b.mc)
 	if err != nil {
 		s.log.Error("encode response", "path", r.URL.Path, "err", err)
@@ -168,14 +184,64 @@ func (s *Server) serveHome(w http.ResponseWriter, r *http.Request, route string,
 	warm, _ := firstBrowseWarmKey(b.mc.Hub)
 	s.warmKey(ctx, pr, warm)
 	tmpl, prc := detachedTemplate(r, pr)
-	s.storeHome(&homeEntry{key: key, viewer: pr.User.ID, hard: hard, soft: soft, body: body, gz: gz, offset: b.mc.Offset, total: b.mc.TotalSize,
-		builtAt: time.Now(), usedAt: time.Now(), provisional: b.provisional, impressions: impressions, warm: warm, section: b.section,
+	s.storeHome(&homeEntry{key: key, hard: hard, soft: soft, body: body, gz: gz, offset: b.mc.Offset, total: b.mc.TotalSize,
+		builtAt: time.Now(), usedAt: time.Now(), provisional: b.provisional, pluginItems: b.pluginItems, impressions: impressions, warm: warm, section: b.section,
 		build: build, tmpl: tmpl, pr: prc})
 }
 
-// homeBuildRequest is r with the cache's build context.
-func (s *Server) homeBuildRequest(r *http.Request) *http.Request {
-	return r.WithContext(s.exp().NoProviderWait(r.Context()))
+// A HEAD probe can send representation headers without producing the
+// representation. Content-Length and paging headers require a built screen.
+func (s *Server) writeHomeHead(w http.ResponseWriter, r *http.Request) {
+	pr := FromContext(r.Context())
+	if pr.versionErr != nil {
+		writeHTTPError(w, http.StatusServiceUnavailable)
+		return
+	}
+	h := w.Header()
+	h.Set("Content-Type", pr.Format.ContentType())
+	if h.Get("Cache-Control") == "" {
+		h.Set("Cache-Control", "no-cache")
+	}
+	w.WriteHeader(http.StatusOK)
+}
+
+func (s *Server) homeRevision(ctx context.Context, viewer *frontend.User) (frontend.HomeRevision, bool, error) {
+	if viewer == nil {
+		return s.exp().HomeRevision(ctx, nil)
+	}
+	type snapshot struct {
+		revision  frontend.HomeRevision
+		supported bool
+	}
+	value, err := reqmemo.Do(ctx, fmt.Sprintf("plex:home-revision:%p:%d", s, viewer.ID), func() (snapshot, error) {
+		revision, supported, err := s.exp().HomeRevision(ctx, viewer)
+		return snapshot{revision, supported}, err
+	})
+	return value.revision, value.supported, err
+}
+
+type homePluginReadKey struct{}
+
+// A plugin sync invalidates screens whose contents came from plugin items.
+func markHomePluginRead(ctx context.Context) {
+	if read, ok := ctx.Value(homePluginReadKey{}).(*atomic.Bool); ok {
+		read.Store(true)
+	}
+}
+
+func (s *Server) buildHomeScreen(r *http.Request, build homeBuildFunc) homeBuild {
+	var read atomic.Bool
+	ctx := context.WithValue(s.exp().NoProviderWait(r.Context()), homePluginReadKey{}, &read)
+	b := build(ctx, r.WithContext(ctx))
+	b.pluginItems = read.Load()
+	for _, h := range b.mc.Hub {
+		for _, item := range h.Metadata {
+			if key, err := frontend.ParseRatingKey(item.RatingKey); err == nil && key.IsPluginKey() {
+				b.pluginItems = true
+			}
+		}
+	}
+	return b
 }
 
 // writeHomeBuild writes an uncached build exactly as the handler always did.
@@ -234,9 +300,18 @@ func (s *Server) homeKey(route string, r *http.Request, pr *Request) string {
 	return hex.EncodeToString(h.Sum(nil))
 }
 
+type homeStamp struct {
+	authorization string
+	kindSync      uint64
+}
+
+func (s homeStamp) matches(other homeStamp, pluginItems bool) bool {
+	return s.authorization == other.authorization && (!pluginItems || s.kindSync == other.kindSync)
+}
+
 // homeStamps returns the hard stamp (a mismatch rebuilds on the request)
 // and the soft one (a mismatch refreshes behind the response).
-func (s *Server) homeStamps(pr *Request, rev frontend.HomeRevision) (string, string) {
+func (s *Server) homeStamps(pr *Request, rev frontend.HomeRevision) (homeStamp, string) {
 	restricted := s.viewerRestricted(pr.User)
 	userJSON, _ := json.Marshal(pr.User)
 	var layout, config, catalog, libs, kindSync uint64
@@ -244,7 +319,7 @@ func (s *Server) homeStamps(pr *Request, rev frontend.HomeRevision) (string, str
 		f := fn()
 		layout, config, catalog, libs, kindSync = f.Layout, f.Config, f.Catalog, f.Libraries, f.KindSync
 	}
-	hard := rev.Viewer + "|" + strconv.FormatUint(layout, 36) + "|" + strconv.FormatUint(config, 36) + "|" + strconv.FormatUint(libs, 36) + "|" + strconv.FormatUint(kindSync, 36) + "|" + strconv.FormatBool(restricted) + "|" + strconv.FormatBool(pr.User.Delegated) + "|" + string(userJSON)
+	hard := rev.Viewer + "|" + strconv.FormatUint(layout, 36) + "|" + strconv.FormatUint(config, 36) + "|" + strconv.FormatUint(libs, 36) + "|" + strconv.FormatBool(restricted) + "|" + strconv.FormatBool(pr.User.Delegated) + "|" + string(userJSON)
 	soft := strconv.FormatUint(catalog, 36)
 	if restricted {
 		hard += "|" + strconv.FormatInt(rev.Policy, 36)
@@ -253,7 +328,7 @@ func (s *Server) homeStamps(pr *Request, rev frontend.HomeRevision) (string, str
 	}
 	hc := s.hubContext(pr, 0)
 	soft += "|" + hc.Daypart + "|" + strconv.FormatBool(hc.Weekend) + "|" + hc.Now.Format("2006-01-02T15")
-	return hard, soft
+	return homeStamp{authorization: hard, kindSync: kindSync}, soft
 }
 
 // detachedTemplate keeps what a background rebuild needs from a request:
@@ -320,51 +395,15 @@ func (s *Server) queueHomeRefresh(key string) {
 	}
 }
 
-// ViewerHomeChanged rebuilds the viewer's recently used Home screens in the
-// background, so the next Home after playback stops is already current.
-func (s *Server) ViewerHomeChanged(viewerID int64) {
-	if s == nil || s.homeCache() == nil {
-		return
-	}
-	now := time.Now()
-	var keys []string
-	s.homeCache().mu.Lock()
-	for k, e := range s.homeCache().entries {
-		if e.viewer == viewerID && now.Sub(e.usedAt) < homeKeepWarm {
-			keys = append(keys, k)
-		}
-	}
-	s.homeCache().mu.Unlock()
-	for _, k := range keys {
-		s.queueHomeRefresh(k)
-	}
-}
-
-// homeRefresher runs background rebuilds one at a time and keeps recently
-// used screens warm.
+// homeRefresher handles soft refreshes prompted by a request.
 func (s *Server) homeRefresher() {
 	defer s.wg.Done()
-	t := time.NewTicker(homeRewarmEvery)
-	defer t.Stop()
 	for {
 		select {
 		case <-s.ctx.Done():
 			return
 		case key := <-s.homeCache().queue:
 			s.refreshHome(key)
-		case <-t.C:
-			now := time.Now()
-			var keys []string
-			s.homeCache().mu.Lock()
-			for k, e := range s.homeCache().entries {
-				if now.Sub(e.usedAt) < homeKeepWarm && now.Sub(e.builtAt) >= homeRewarmAge {
-					keys = append(keys, k)
-				}
-			}
-			s.homeCache().mu.Unlock()
-			for _, k := range keys {
-				s.queueHomeRefresh(k)
-			}
 		}
 	}
 }
@@ -388,7 +427,7 @@ func (s *Server) refreshHome(key string) {
 	}
 	ctx = reqmemo.With(ctx)
 	pr := FromContext(ctx)
-	rev, ok, err := s.exp().HomeRevision(ctx, pr.User)
+	rev, ok, err := s.homeRevision(ctx, pr.User)
 	if !ok || err != nil {
 		return
 	}
@@ -407,8 +446,8 @@ func (s *Server) refreshHome(key string) {
 		c.mu.Unlock()
 		close(flight.done)
 	}()
-	r := s.homeBuildRequest(tmpl.WithContext(ctx))
-	b := build(r.Context(), r)
+	r := tmpl.WithContext(ctx)
+	b := s.buildHomeScreen(r, build)
 	if ctx.Err() != nil {
 		return
 	}
@@ -425,8 +464,8 @@ func (s *Server) refreshHome(key string) {
 		tmpl, prc = cur.tmpl, cur.pr
 	}
 	c.mu.Unlock()
-	s.storeHome(&homeEntry{key: key, viewer: pr.User.ID, hard: hard, soft: soft, body: body, gz: gzipBody(body), offset: b.mc.Offset, total: b.mc.TotalSize,
-		builtAt: time.Now(), usedAt: usedAt, provisional: b.provisional, impressions: impressions, warm: warm, section: section,
+	s.storeHome(&homeEntry{key: key, hard: hard, soft: soft, body: body, gz: gzipBody(body), offset: b.mc.Offset, total: b.mc.TotalSize,
+		builtAt: time.Now(), usedAt: usedAt, provisional: b.provisional, pluginItems: b.pluginItems, impressions: impressions, warm: warm, section: section,
 		build: build, tmpl: tmpl, pr: prc})
 }
 

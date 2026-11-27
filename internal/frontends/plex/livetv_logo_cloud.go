@@ -61,6 +61,43 @@ func (s *Server) applyGuideChannelThumb(r *http.Request, md *model.Metadata, c f
 	}
 }
 
+type guideLogosKey struct{}
+
+func (s *Server) withGuideLogos(r *http.Request, channels []frontend.LiveTVChannel) *http.Request {
+	ctx := r.Context()
+	if !cloudGuideLogoClient(FromContext(ctx)) || r.Host == "" || s.svc().liveTV == nil {
+		return r
+	}
+	var missing []frontend.LiveTVChannel
+	for _, c := range channels {
+		if c.Logo != "" || c.GuideID == "" {
+			continue
+		}
+		missing = append(missing, c)
+	}
+	if len(missing) <= 1 {
+		return r
+	}
+	logos := s.svc().liveTV.GuideChannelLogos(ctx, missing)
+	return r.WithContext(context.WithValue(ctx, guideLogosKey{}, logos))
+}
+
+func (s *Server) withProgrammeGuideLogos(r *http.Request, programmes []frontend.LiveTVProgramme, byID map[string]frontend.LiveTVChannel) *http.Request {
+	if !cloudGuideLogoClient(FromContext(r.Context())) {
+		return r
+	}
+	seen := make(map[string]bool)
+	var channels []frontend.LiveTVChannel
+	for _, programme := range programmes {
+		c, ok := byID[programme.ChannelID]
+		if ok && !seen[c.ID] {
+			seen[c.ID] = true
+			channels = append(channels, c)
+		}
+	}
+	return s.withGuideLogos(r, channels)
+}
+
 // cloudGuideLogo is the logo URL for a client whose guide fetches logos
 // through Plex's cloud: the channel's own logo when that is already public
 // (as PMS publishes XMLTV icons), a shipped channel's logo from Ether's
@@ -77,7 +114,12 @@ func (s *Server) cloudGuideLogo(ctx context.Context, c frontend.LiveTVChannel, o
 		}
 	}
 	if c.Logo == "" && s.svc().liveTV != nil {
-		if guide := s.svc().liveTV.GuideChannelLogo(ctx, c); publicLogoURL(guide) {
+		logos, batched := ctx.Value(guideLogosKey{}).(map[string]string)
+		guide := logos[c.ID]
+		if !batched {
+			guide = s.svc().liveTV.GuideChannelLogo(ctx, c)
+		}
+		if publicLogoURL(guide) {
 			return guide
 		}
 	}

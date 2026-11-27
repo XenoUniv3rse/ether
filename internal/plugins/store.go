@@ -263,20 +263,26 @@ type storage struct {
 	settingsRevision atomic.Uint64
 }
 
-func (s *storage) record(ctx context.Context, id string) (Record, error) {
-	var r Record
-	var man, updMan, updFiles string
-	var en, ver, sh, au, replace int
-	var inst, upd int64
-	var rolesOff string
-	err := s.db.QueryRowContext(ctx, `SELECT id,name,version,kind,manifest,source_kind,source_url,enabled,verified,shadow,auto_update,update_version,update_manifest,update_files,prev_version,installed_at,updated_at,roles_off,replace_libraries FROM plugins_installed WHERE id=?`, id).
-		Scan(&r.ID, &r.Name, &r.Version, &r.Kind, &man, &r.SourceKind, &r.SourceURL, &en, &ver, &sh, &au, &r.UpdateVersion, &updMan, &updFiles, &r.PrevVersion, &inst, &upd, &rolesOff, &replace)
-	if errors.Is(err, sql.ErrNoRows) {
-		return Record{}, ErrNotFound
-	}
-	if err != nil {
-		return Record{}, err
-	}
+const pluginRecordCols = `id,name,version,kind,manifest,source_kind,source_url,enabled,verified,shadow,auto_update,update_version,update_manifest,update_files,prev_version,installed_at,updated_at,roles_off,replace_libraries`
+
+type rawPluginRow struct {
+	r                Record
+	man              string
+	updMan, updFiles string
+	en, ver, sh, au  int
+	replace          int
+	inst, upd        int64
+	rolesOff         string
+}
+
+func scanRawPluginRow(s interface{ Scan(...any) error }) (rawPluginRow, error) {
+	var row rawPluginRow
+	err := s.Scan(&row.r.ID, &row.r.Name, &row.r.Version, &row.r.Kind, &row.man, &row.r.SourceKind, &row.r.SourceURL, &row.en, &row.ver, &row.sh, &row.au, &row.r.UpdateVersion, &row.updMan, &row.updFiles, &row.r.PrevVersion, &row.inst, &row.upd, &row.rolesOff, &row.replace)
+	return row, err
+}
+
+func (s *storage) finalizeRecord(ctx context.Context, row rawPluginRow) (Record, error) {
+	r := row.r
 	if r.SourceURL != "" {
 		plain, legacy, err := config.OpenWith(s.sealer, r.SourceURL, "plugins_installed", "source_url", r.ID)
 		if err != nil {
@@ -295,46 +301,61 @@ func (s *storage) record(ctx context.Context, id string) (Record, error) {
 		}
 		r.SourceURL = plain
 	}
-	r.ManifestRaw = json.RawMessage(man)
-	if err := json.Unmarshal([]byte(man), &r.Manifest); err != nil {
-		return Record{}, fmt.Errorf("plugins: stored manifest for %s: %w", id, err)
+	r.ManifestRaw = json.RawMessage(row.man)
+	if err := json.Unmarshal([]byte(row.man), &r.Manifest); err != nil {
+		return Record{}, fmt.Errorf("plugins: stored manifest for %s: %w", r.ID, err)
 	}
 	// A record's manifest id is its record id: a Stremio add-on keeps its
 	// own id in the stored document but is installed per configuration.
 	r.Manifest.ID = r.ID
-	for _, c := range strings.Split(rolesOff, ",") {
+	for _, c := range strings.Split(row.rolesOff, ",") {
 		if c = strings.TrimSpace(c); c != "" {
 			r.RolesOff = append(r.RolesOff, Capability(c))
 		}
 	}
 	r.Manifest.rolesOff = r.RolesOff
-	r.Enabled, r.Verified, r.Shadow, r.AutoUpdate = en == 1, ver == 1, sh == 1, au == 1
-	r.updateManifest, r.updateFiles = updMan, updFiles
-	r.ReplaceLibraries = replace == 1
-	r.InstalledAt, r.UpdatedAt = time.Unix(inst, 0).UTC(), time.Unix(upd, 0).UTC()
+	r.Enabled, r.Verified, r.Shadow, r.AutoUpdate = row.en == 1, row.ver == 1, row.sh == 1, row.au == 1
+	r.updateManifest, r.updateFiles = row.updMan, row.updFiles
+	r.ReplaceLibraries = row.replace == 1
+	r.InstalledAt, r.UpdatedAt = time.Unix(row.inst, 0).UTC(), time.Unix(row.upd, 0).UTC()
 	return r, nil
 }
 
+func (s *storage) record(ctx context.Context, id string) (Record, error) {
+	row, err := scanRawPluginRow(s.db.QueryRowContext(ctx, `SELECT `+pluginRecordCols+` FROM plugins_installed WHERE id=?`, id))
+	if errors.Is(err, sql.ErrNoRows) {
+		return Record{}, ErrNotFound
+	}
+	if err != nil {
+		return Record{}, err
+	}
+	return s.finalizeRecord(ctx, row)
+}
+
 func (s *storage) list(ctx context.Context) ([]Record, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id FROM plugins_installed ORDER BY name,id`)
+	rows, err := s.db.QueryContext(ctx, `SELECT `+pluginRecordCols+` FROM plugins_installed ORDER BY name,id`)
 	if err != nil {
 		return nil, err
 	}
-	var ids []string
+	var raws []rawPluginRow
 	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
+		row, err := scanRawPluginRow(rows)
+		if err != nil {
 			rows.Close()
 			return nil, err
 		}
-		ids = append(ids, id)
+		raws = append(raws, row)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
 	}
 	if err := rows.Close(); err != nil {
 		return nil, err
 	}
-	out := make([]Record, 0, len(ids))
-	for _, id := range ids {
-		r, err := s.record(ctx, id)
+	out := make([]Record, 0, len(raws))
+	for _, row := range raws {
+		r, err := s.finalizeRecord(ctx, row)
 		if err != nil {
 			return nil, err
 		}

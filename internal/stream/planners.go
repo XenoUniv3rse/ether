@@ -28,11 +28,13 @@ var trackNameRe = regexp.MustCompile(`^(?:(\d{1,2})[-.])?(\d{1,3})(?:\s*[-._)]\s
 // trackHintFromName turns a synthetic track-style member hint into a
 // TrackHint. Hints that carry a file extension are real paths, not tracks.
 func trackHintFromName(name string) (nzb.TrackHint, bool) {
-	name = strings.TrimSpace(path.Base(strings.ReplaceAll(name, "\\", "/")))
-	if ext := path.Ext(name); ext != "" && len(ext) <= 5 && !strings.ContainsAny(ext, " '") {
+	norm := strings.ReplaceAll(strings.TrimSpace(name), "\\", "/")
+	dir := path.Dir(norm)
+	base := strings.TrimSpace(path.Base(norm))
+	if ext := path.Ext(base); ext != "" && len(ext) <= 5 && !strings.ContainsAny(ext, " '") {
 		return nzb.TrackHint{}, false
 	}
-	m := trackNameRe.FindStringSubmatch(name)
+	m := trackNameRe.FindStringSubmatch(base)
 	if m == nil {
 		return nzb.TrackHint{}, false
 	}
@@ -40,12 +42,62 @@ func trackHintFromName(name string) (nzb.TrackHint, bool) {
 	if m[1] != "" {
 		h.Disc, _ = strconv.Atoi(m[1])
 	}
+	if h.Disc == 0 && dir != "" && dir != "." {
+		h.Disc = nzb.ParseDirDisc(dir)
+	}
 	h.Number, _ = strconv.Atoi(m[2])
 	h.Title = strings.TrimSpace(m[3])
 	if h.Number <= 0 {
 		return nzb.TrackHint{}, false
 	}
 	return h, true
+}
+
+func (b *builder) pickNonVideoMember(ctx context.Context, vols []*postedFile, members []archive.Member, hint nzb.NonVideoHint, concat, allowNested bool) (*archive.Member, *plan, error) {
+	m, merr := chooseNonVideoMember(members, hint)
+	if merr == nil {
+		return m, nil, nil
+	}
+	if allowNested && errors.Is(merr, ErrNoPlayableFile) {
+		if p, nerr := b.tryNestedNonVideo(ctx, vols, members, hint, concat); nerr != nil {
+			return nil, nil, nerr
+		} else if p != nil {
+			return nil, p, nil
+		}
+	}
+	b.logNonVideoMiss(vols[0].Name(), members, hint, merr)
+	return nil, nil, merr
+}
+
+func (b *builder) logNonVideoMiss(archiveName string, members []archive.Member, hint nzb.NonVideoHint, err error) {
+	if b == nil || b.e == nil || b.e.log == nil {
+		return
+	}
+	var sample []string
+	for _, m := range members {
+		if m.Dir {
+			continue
+		}
+		sample = append(sample, m.Name)
+		if len(sample) >= 5 {
+			break
+		}
+	}
+	var disc, num int
+	var title string
+	if hint.Track != nil {
+		disc, num, title = hint.Track.Disc, hint.Track.Number, hint.Track.Title
+	}
+	b.e.log.Debug("non-video member miss",
+		"archive", archiveName,
+		"members", len(members),
+		"sample", sample,
+		"member", hint.Member,
+		"disc", disc,
+		"number", num,
+		"title", title,
+		"err", err,
+	)
 }
 
 // nonVideoArchiveHint returns the NZB's non-video hint when archive member
@@ -431,10 +483,14 @@ func (b *builder) planConcatRAROffsets(ctx context.Context, vols []*postedFile, 
 	nvHint, nv := b.nonVideoArchiveHint()
 	var m *archive.Member
 	if nv {
+		var p *plan
 		var merr error
-		m, merr = chooseNonVideoMember(members, nvHint)
+		m, p, merr = b.pickNonVideoMember(ctx, vols, members, nvHint, true, baseOff == nil)
 		if merr != nil {
 			return nil, merr
+		}
+		if p != nil {
+			return p, nil
 		}
 	} else {
 		m = b.chooseMember(members)
@@ -1038,10 +1094,14 @@ func (b *builder) rarFromVolumesOffsets(ctx context.Context, vols []*postedFile,
 	nvHint, nv := b.nonVideoArchiveHint()
 	var m *archive.Member
 	if nv {
+		var p *plan
 		var merr error
-		m, merr = chooseNonVideoMember(members, nvHint)
+		m, p, merr = b.pickNonVideoMember(ctx, vols, members, nvHint, false, baseOff == nil)
 		if merr != nil {
 			return nil, merr
+		}
+		if p != nil {
+			return p, nil
 		}
 	} else {
 		m = b.chooseMember(members)
@@ -1241,10 +1301,14 @@ func (b *builder) plan7z(ctx context.Context, vols []*postedFile) (*plan, error)
 	nvHint, nv := b.nonVideoArchiveHint()
 	var m *archive.Member
 	if nv {
+		var p *plan
 		var merr error
-		m, merr = chooseNonVideoMember(members, nvHint)
+		m, p, merr = b.pickNonVideoMember(ctx, vols, members, nvHint, true, true)
 		if merr != nil {
 			return nil, merr
+		}
+		if p != nil {
+			return p, nil
 		}
 	} else {
 		m = b.chooseMember(members)
@@ -1327,10 +1391,14 @@ func (b *builder) planZIP(ctx context.Context, vols []*postedFile) (*plan, error
 	nvHint, nv := b.nonVideoArchiveHint()
 	var m *archive.Member
 	if nv {
+		var p *plan
 		var merr error
-		m, merr = chooseNonVideoMember(members, nvHint)
+		m, p, merr = b.pickNonVideoMember(ctx, vols, members, nvHint, true, true)
 		if merr != nil {
 			return nil, merr
+		}
+		if p != nil {
+			return p, nil
 		}
 	} else {
 		m = b.chooseMember(members)

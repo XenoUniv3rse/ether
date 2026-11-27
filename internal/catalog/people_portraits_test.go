@@ -52,13 +52,12 @@ func TestCachedPortraitTitlesWorkBound(t *testing.T) {
 		if stats.Writes() != 0 {
 			t.Fatal("portrait read wrote rows")
 		}
-		fullCtx, fullStats := store.WithQueryStats(ctx)
-		if _, err := c.CachedCreditTitles(fullCtx, []core.RatingKey{key}, config.Catalog{}, now); err != nil {
+		full, err := c.CachedCreditTitles(ctx, []core.RatingKey{key}, config.Catalog{}, now)
+		if err != nil {
 			t.Fatal(err)
 		}
-		t.Logf("unrelated credits=%d: full queries/rows=%d/%d; portrait=%d/%d", extras, fullStats.Queries(), fullStats.Rows(), stats.Queries(), stats.Rows())
-		if extras > 0 && fullStats.Rows() <= stats.Rows()+100 {
-			t.Fatal("fixture did not exercise unrelated full hydration")
+		if row := full[key]; !reflect.DeepEqual(row.Cast, title.Cast) || !reflect.DeepEqual(row.Directors, title.Directors) {
+			t.Fatalf("full credit hydration with %d unrelated credits: cast=%d directors=%d", extras, len(row.Cast), len(row.Directors))
 		}
 	}
 	// Check the exact-pair lookup plan, outside the measured request.

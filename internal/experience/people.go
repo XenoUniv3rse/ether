@@ -464,6 +464,9 @@ func (s *Service) people(ctx context.Context, viewer *core.Viewer, device core.D
 	if pluginErr != nil {
 		return nil, pluginErr
 	}
+	if q.PluginResultsOnly && len(pluginMatches) == 0 {
+		return nil, nil
+	}
 
 	var result []frontend.PersonDetail
 	var err error
@@ -523,7 +526,11 @@ func (s *Service) people(ctx context.Context, viewer *core.Viewer, device core.D
 	if err != nil {
 		return nil, err
 	}
-	return mergePeopleLists(result, pluginMatches, exact, q.Limit), nil
+	result = mergePeopleLists(result, pluginMatches, exact, q.Limit)
+	if q.PluginResultsOnly {
+		result = slices.DeleteFunc(result, func(person frontend.PersonDetail) bool { return !core.IsPluginPersonID(person.TMDB) })
+	}
+	return result, nil
 }
 
 // PersonCandidate is a credited person whose name a people search matched.

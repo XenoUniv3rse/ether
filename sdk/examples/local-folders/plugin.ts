@@ -2,7 +2,7 @@ import {
   plugin,
   type Manifest,
   type PluginContext,
-  type FolderEntry,
+  type FolderPage,
   type CatalogTitleSummary,
   type EtherHost,
 } from "../../typescript/src/index.ts";
@@ -37,14 +37,15 @@ function scan(ctx: PluginContext<Settings>) {
   const root = ctx.settings.folder;
   if (!root) return;
   const grouped: Record<string, Item[]> = {};
-  const pending: { path: string; top: string; depth: number }[] = [
+  const pending: { path: string; top: string; depth: number; cursor?: string }[] = [
     { path: "", top: "", depth: 0 },
   ];
   while (pending.length) {
     const cur = pending.shift()!;
-    const entries = read<FolderEntry[]>(ctx.ether.folders.list(root, cur.path));
-    if (entries.length >= 1000)
-      throw new Error("Folder has too many entries to scan safely");
+    const { entries, nextCursor } = read<FolderPage>(
+      ctx.ether.folders.list(root, cur.path, { cursor: cur.cursor }),
+    );
+    if (nextCursor) pending.unshift({ ...cur, cursor: nextCursor });
     for (const e of entries) {
       if (e.dir && cur.depth < 10)
         pending.push({

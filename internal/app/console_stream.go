@@ -296,19 +296,26 @@ func consoleSessionsSignature(sessions []*core.PlaySession) string {
 		if s == nil {
 			continue
 		}
-		var chID, chName, chNum string
-		if s.LiveChannel != nil {
-			chID, chName, chNum = s.LiveChannel.ID, s.LiveChannel.Name, s.LiveChannel.Number
+		var liveChannel string
+		if ch := s.LiveChannel; ch != nil {
+			liveChannel = fmt.Sprintf("%s\t%s\t%s", ch.ID, ch.Name, ch.Number)
+			if p := ch.Provider; p != nil {
+				used := -1
+				if p.LocalInUse != nil {
+					used = *p.LocalInUse
+				}
+				liveChannel += fmt.Sprintf("\t%s\t%s\t%s\t%d\t%d\t%d\t%d", p.SourceName, p.LoginID, p.LoginLabel, p.LoginNumber, p.LoginSlot, p.LoginLimit, used)
+			}
 		}
 		var rel string
 		if s.Resolution != nil {
 			rel = s.Resolution.Release.Name
 		}
-		rows = append(rows, fmt.Sprintf("%s\t%d\t%s\t%s\t%s\t%t\t%t\t%s\t%t\t%d\t%s\t%s\t%s\t%s\t%s\t%s",
+		rows = append(rows, fmt.Sprintf("%s\t%d\t%s\t%s\t%s\t%t\t%t\t%s\t%t\t%d\t%s\t%s\t%s\t%s",
 			s.ID, s.Key, s.TitleName, s.Decision, s.DecisionReason,
 			s.DecisionVideoCopy, s.DecisionAudioCopy, s.ViewerState,
 			s.ViewOffset != nil, s.Failovers, s.Origin, s.QualityFallback,
-			rel, chID, chName, chNum))
+			rel, liveChannel))
 	}
 	sort.Strings(rows)
 	return strings.Join(rows, "\n")

@@ -29,6 +29,7 @@ export function RuntimeLimitsEditor({
   listItems,
   listsOnly = false,
   hasMediaKinds = false,
+  hasUploadRoutes = false,
   flush = false,
   onSaved,
 }: {
@@ -42,6 +43,7 @@ export function RuntimeLimitsEditor({
   /** A plain add-on: only its list size applies. */
   listsOnly?: boolean;
   hasMediaKinds?: boolean;
+  hasUploadRoutes?: boolean;
   flush?: boolean;
   onSaved?: () => void;
 }) {
@@ -51,10 +53,12 @@ export function RuntimeLimitsEditor({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const allFields = runtimeLimitFields();
+  const uploadField = allFields.find((f) => f.key === "uploadBytes");
+  const fields = allFields.filter((f) => f.key !== "uploadBytes" || plugin);
+  const standardFields = allFields.filter((f) => f.key !== "uploadBytes");
   const rows = plugin
-    ? allFields.filter((f) => (f.key === "listItems" ? Boolean(listItems) : !listsOnly))
-    : allFields;
-  const fields = allFields;
+    ? standardFields.filter((f) => (f.key === "listItems" ? Boolean(listItems) : !listsOnly))
+    : standardFields;
   useEffect(() => {
     let live = true;
     setPolicy(null);
@@ -173,6 +177,17 @@ export function RuntimeLimitsEditor({
                 "Leave overrides empty to use the global setting. Browsing and playback calls always stay fast.",
               )}
             </p>
+            {hasUploadRoutes && uploadField ? (
+              <label className="block max-w-sm space-y-1 text-xs">
+                <span className="font-medium">{uploadField.label}</span>
+                {input(uploadField)}
+                <span className="block text-fg-muted">
+                  {t("Up to {max} per upload. Routes can set a smaller limit.", {
+                    max: formatLimit("uploadBytes", uploadField.max ?? 512),
+                  })}
+                </span>
+              </label>
+            ) : null}
             <div className="overflow-x-auto">
               <table className="w-full min-w-[600px] text-xs">
                 <thead>

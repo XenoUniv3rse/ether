@@ -2,6 +2,7 @@ package catalog
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"maps"
 	"sync"
@@ -190,29 +191,57 @@ func (c *Catalog) FilterVisibility(ctx context.Context, ts []core.Title) []core.
 	// pass agree: a known allowed rating is not treated as missing, and a
 	// known blocked rating is not revealed by a summary that says otherwise.
 	// An empty local rating leaves the summary rating, if it has one.
-	facts := core.VisibilityFacts
-	if candidates := core.SearchCandidatesFrom(ctx); candidates != nil && core.SearchSummaryFacts(ctx) {
-		// Compact hits only use facets needed by visibility or explicitly
-		// requested by the caller's predicate; display decoration is absent.
-		facts = f.Facts() | candidates.Facts
-	}
 	const batch = 200
+	facts := core.VisibilityFacts
+	if candidate := core.SearchCandidatesFrom(ctx); candidate != nil {
+		// Candidate consumers hydrate the display projection after selection.
+		facts = f.Facts() | candidate.Facts
+	}
+	array := "json_group_array"
+	if store.DialectOf(c.db) == store.Postgres {
+		array = "json_agg"
+	}
 	for _, p := range []struct {
-		table, col string
 		fact       core.TitleFacts
+		table, col string
 		set        func(int, string)
 	}{
-		{"catalog_countries", "country", core.FactCountries, func(i int, v string) { out[i].Countries = appendUnique(out[i].Countries, v) }},
-		{"catalog_genres", "genre", core.FactGenres, func(i int, v string) { out[i].Genres = appendUnique(out[i].Genres, v) }},
-		{"catalog_studios", "studio", core.FactStudios, func(i int, v string) { out[i].Studios = appendUnique(out[i].Studios, v) }},
-		{"catalog_keywords", "keyword", core.FactKeywords, func(i int, v string) { out[i].Keywords = appendUnique(out[i].Keywords, v) }},
+		{core.FactCountries, "catalog_countries", "country", func(i int, v string) { out[i].Countries = appendUnique(out[i].Countries, v) }},
+		{core.FactGenres, "catalog_genres", "genre", func(i int, v string) { out[i].Genres = appendUnique(out[i].Genres, v) }},
+		{core.FactStudios, "catalog_studios", "studio", func(i int, v string) { out[i].Studios = appendUnique(out[i].Studios, v) }},
+		{core.FactKeywords, "catalog_keywords", "keyword", func(i int, v string) { out[i].Keywords = appendUnique(out[i].Keywords, v) }},
 	} {
 		if facts&p.fact == 0 {
 			continue
 		}
-		for chunk := range store.Chunks(ts, batch) {
-			part := chunk
-			if err := c.scanPairs(ctx, "SELECT key,"+p.col+" FROM "+p.table+" WHERE key IN ("+placeholders(len(part))+")", keyArgs(part), p.set, idx); err != nil {
+		for part := range store.Chunks(ts, batch) {
+			q := "SELECT key,CAST(" + array + "(" + p.col + " ORDER BY " + p.col + ") AS TEXT) FROM " + p.table +
+				" WHERE key IN (" + placeholders(len(part)) + ") GROUP BY key"
+			rows, err := c.db.QueryContext(ctx, q, keyArgs(part)...)
+			if err != nil {
+				return nil
+			}
+			for rows.Next() {
+				var key core.RatingKey
+				var raw []byte
+				var values []string
+				if err := rows.Scan(&key, &raw); err != nil {
+					rows.Close()
+					return nil
+				}
+				if err := json.Unmarshal(raw, &values); err != nil {
+					rows.Close()
+					return nil
+				}
+				for _, i := range idx[key] {
+					for _, value := range values {
+						p.set(i, value)
+					}
+				}
+			}
+			err = rows.Err()
+			rows.Close()
+			if err != nil {
 				return nil
 			}
 		}

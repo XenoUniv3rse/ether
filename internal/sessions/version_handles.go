@@ -104,7 +104,9 @@ func (v *versionHandles) versionOffers(ctx context.Context, scope frontend.Versi
 	caps.ClientID = clientKey(v.protocol, scope.Device)
 	confirm := v.broker.confirm
 	if preview {
-		confirm = v.broker.previewAdmission
+		confirm = func(ctx context.Context, viewer *core.Viewer, caps core.ClientCaps) (*core.Viewer, error) {
+			return v.broker.confirmPreview(ctx, viewer, caps, true)
+		}
 	}
 	viewer, err = confirm(ctx, viewer, caps)
 	if err != nil {
