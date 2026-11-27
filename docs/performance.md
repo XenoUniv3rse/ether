@@ -174,8 +174,9 @@ scenarios use owner credentials in all cases.
 
 The matrix checks statements, result rows and writes for each tagged response.
 Queries and rows have class ceilings with tighter scenario bounds where
-specified. GET and HEAD can write one allowlisted last-seen update. Streaming
-scenarios use a one-minute observation window. Result rows are rows returned
+specified. GET and HEAD carry a zero-write budget with route-specific
+exceptions for last-seen updates and capability credentials the response
+publishes. Streaming scenarios use a one-minute observation window. Result rows are rows returned
 by the driver. Use the scale comparison and the SQL plan audit to investigate
 database work that returns few rows.
 
