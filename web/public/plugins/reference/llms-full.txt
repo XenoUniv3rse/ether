@@ -2088,9 +2088,10 @@ from byte 0 when validators mismatch or the server ignores ranges); partial
 blobs obey per-library cache quotas, the shared cap, and the disk free-space
 floor, and become readable via `cache.open` / `cache.read` / `archive.*` only
 when complete. Jobs, schedules, and background calls can request `connections`
-from 1 to 8 (default 1), capped by the host's per-origin limit. When the
+from 1 to 6 (default 1), sharing the host's limit of 6 per origin. When the
 server advertises byte ranges, a known length, and a strong validator,
-Ether fetches ranges in parallel and hashes the assembled file. With
+Ether fetches ranges in parallel and hashes the assembled file. Ranges served
+from a different URL need the same strong ETag and total length as the probe. With
 `resume: true`, retries continue each range's saved progress.
 Incompatible range responses fall back to a single download. The operation
 runs synchronously within the calling plugin invocation. Cache eviction still applies to returned refs.
@@ -15529,7 +15530,7 @@ type ArchiveReadResult struct {
 | `libraryKey` | `string` | emitted (validation may require a value) |  |
 | `name` | `string` | emitted (validation may require a value) |  |
 | `resume` | `bool` | may be omitted (see validation for conditions) | Resume continues a partial cached download with Range: bytes=<cached>- when the server supports ranges and ETag / Last-Modified validators match. |
-| `connections` | `int` | may be omitted (see validation for conditions) | Connections requests parallel range downloads in jobs and background calls. |
+| `connections` | `int` | may be omitted (see validation for conditions) | Connections requests 1 to 6 parallel ranges in jobs and background calls. Defaults to 1 and shares the host's per-origin limit of 6. |
 
 
 ## Source: internal/plugins/host_data.go#FetchCacheRequest
@@ -15542,7 +15543,8 @@ type FetchCacheRequest struct {
 	// Resume continues a partial cached download with Range: bytes=<cached>-
 	// when the server supports ranges and ETag / Last-Modified validators match.
 	Resume bool `json:"resume,omitempty"`
-	// Connections requests parallel range downloads in jobs and background calls.
+	// Connections requests 1 to 6 parallel ranges in jobs and background calls.
+	// Defaults to 1 and shares the host's per-origin limit of 6.
 	Connections int `json:"connections,omitempty"`
 }
 ``````
@@ -42364,10 +42366,11 @@ server supports ranges and strong `ETag` or `Last-Modified` validators still
 match (restarting cleanly from byte 0 if they do not or the server returns
 `200`/`416`); partial bytes count against the library cache quota and disk
 safety floor and only become a readable cache blob once complete.
-In jobs, schedules, and background calls, set `connections` (1–8, default 1)
-to request parallel ranges, subject to the host's per-origin cap. The server
-must advertise byte ranges, a known length, and a strong validator. Use
-`resume: true` to continue each range's saved progress.
+In jobs, schedules, and background calls, set `connections` (1–6, default 1)
+to request parallel ranges, sharing the host's limit of 6 per origin. The
+server must advertise byte ranges, a known length, and a strong validator.
+Ranges served from a different URL need the same strong ETag and total
+length as the probe. Use `resume: true` to continue each range's saved progress.
 Hosted code can catch `e.code === "timeout"`. Remote SDK fetches use their local
 request context/timeout.
 
@@ -56409,9 +56412,9 @@ type ArchiveReadResult struct {
 // using Range: bytes=<cached>- when the server supports ranges and ETag or
 // Last-Modified validators still match, restarting cleanly from byte 0 if they
 // do not; the blob becomes readable in cache only once complete. Connections
-// defaults to 1. Jobs, schedules, and background calls can request up to 8
-// concurrent ranges, subject to the host cap. Resume preserves each range's
-// progress when parallel ranges are in use.
+// defaults to 1. Jobs, schedules, and background calls can request up to 6
+// concurrent ranges, sharing the host's limit of 6 per origin. Resume
+// preserves each range's progress when parallel ranges are in use.
 type FetchCacheRequest struct {
 	TimeoutMS             int64             `json:"timeoutMs,omitempty"`
 	URL                   string            `json:"url"`
@@ -70207,7 +70210,7 @@ class _HttpClient:
         return self._call("POST", "/ether/plugin-host/data/http.hash", [req])
 
     def fetch_to_cache(self, req: Dict[str, Any]) -> Dict[str, Any]:
-        """Stream a remote GET into the plugin's library cache (`{url, headers?, keepHeadersOnRedirect?, libraryKey, name, timeoutMs?, resume?, connections?}`). Defaults to a 10 min timeout (also the ceiling on viewer/request paths; jobs, schedules, and background contexts may raise `timeoutMs` up to the calling job's remaining deadline). Set `resume: True` to continue a partial download when validators match, preserving progress per range. `connections` defaults to 1. Jobs, schedules, and background calls can request up to 8 concurrent ranges, subject to the host cap."""
+        """Stream a remote GET into the plugin's library cache (`{url, headers?, keepHeadersOnRedirect?, libraryKey, name, timeoutMs?, resume?, connections?}`). Defaults to a 10 min timeout (also the ceiling on viewer/request paths; jobs, schedules, and background contexts may raise `timeoutMs` up to the calling job's remaining deadline). Set `resume: True` to continue a partial download when validators match, preserving progress per range. `connections` defaults to 1. Jobs, schedules, and background calls can request up to 6 concurrent ranges, sharing the host's limit of 6 per origin."""
         return self._call("POST", "/ether/plugin-host/data/http.fetchToCache", [req])
 
     fetchToCache = fetch_to_cache
@@ -74926,7 +74929,7 @@ export interface FetchCacheRequest {
   name: string;
   /** Continue an incomplete download, including per-range progress, when the server supports ranges and validators still match. */
   resume?: boolean;
-  /** Defaults to 1. Jobs, schedules, and background calls can request 1–8 concurrent byte ranges, subject to the host cap. */
+  /** Defaults to 1. Jobs, schedules, and background calls can request 1–6 concurrent byte ranges, sharing the host's limit of 6 per origin. */
   connections?: number;
 }
 export interface FetchCacheResult { blob: string; size: number; crc32: string; md5: string; sha1: string; status: number }

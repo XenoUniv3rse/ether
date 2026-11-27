@@ -3419,6 +3419,7 @@
   "m_099b345bc660cd": "Použít plakát titulu",
   "m_099b3543883538": "Limit pro celý server",
   "m_099bab7b6a1c8e": "Zobrazit diváky",
+  "m_099bcbe9582d29": "Platí pouze pro stahování v mezích limitu serveru. Chcete-li omezit kvalitu přehrávání, nastavte pro tohoto diváka {link}.",
   "m_099e4877001931": "Kontrola certifikátu selhala",
   "m_099e9a4e314811": "Od Memories of Murder do Parasite.",
   "m_09a0335f4c3309": "Nastaví si vlastní heslo nebo si propojí účet Plex na /ether/me.",
@@ -5068,6 +5069,7 @@
   "m_0e5322a9e0a5e3": "Přidat jako řádek",
   "m_0e55365789fb94": "Nepřevzato",
   "m_0e55b9f60cce78": "Procházet v aplikacích",
+  "m_0e568a753a8ea4": "pravidlo kvality",
   "m_0e56edadca55be": "Zatím žádná preference období.",
   "m_0e5a21a46d8ee0": "Automaticky · místní streamy",
   "m_0e5ae3b66cd6d5": "Nenastaveno",
@@ -5371,7 +5373,6 @@
   "m_0f21a95c8d829d": "Stáhnout program",
   "m_0f23e8b6156914": "Okamžitě se přestane přehrávat a jeho video i aktivita budou odstraněny.",
   "m_0f24f85421aaa8": "Pevné vysílací časy mají přednost před programovými bloky.",
-  "m_0f251f5f3a0763": "Stahování pro tohoto diváka je omezeno na toto rozlišení. Nemůže překročit limit stahování serveru.",
   "m_0f261b47c83f5f": {
     "one": "{count} chybějící nebo selhaný článek",
     "few": "{count} chybějící nebo selhané články",

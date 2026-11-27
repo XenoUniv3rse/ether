@@ -3341,6 +3341,7 @@
   "m_099b345bc660cd": "Utiliser l’affiche d’un titre",
   "m_099b3543883538": "Limite à l’échelle du serveur",
   "m_099bab7b6a1c8e": "Voir les spectateurs",
+  "m_099bcbe9582d29": "S’applique uniquement aux téléchargements, dans la limite fixée par le serveur. Pour limiter la qualité de lecture, définissez une {link} pour cet utilisateur.",
   "m_099e4877001931": "Échec de la vérification du certificat",
   "m_099e9a4e314811": "De Memories of Murder à Parasite.",
   "m_09a0335f4c3309": "Ils choisissent leur propre mot de passe ou lient leur compte Plex sur /ether/me.",
@@ -4951,6 +4952,7 @@
   "m_0e5322a9e0a5e3": "Ajouter sous forme de ligne",
   "m_0e55365789fb94": "Non réclamé",
   "m_0e55b9f60cce78": "Naviguer dans les applications",
+  "m_0e568a753a8ea4": "règle de qualité",
   "m_0e56edadca55be": "Aucune préférence d’époque pour le moment.",
   "m_0e5a21a46d8ee0": "Automatique · flux locaux",
   "m_0e5ae3b66cd6d5": "Non défini",
@@ -5244,7 +5246,6 @@
   "m_0f21a95c8d829d": "Télécharger le programme",
   "m_0f23e8b6156914": "Il n’est plus diffusé immédiatement, et sa vidéo comme son activité sont supprimées.",
   "m_0f24f85421aaa8": "Les créneaux fixes sont prioritaires sur les blocs de programmes.",
-  "m_0f251f5f3a0763": "Les téléchargements de ce spectateur sont plafonnés à cette résolution. Elle ne peut pas dépasser le plafond du serveur.",
   "m_0f261b47c83f5f": {
     "one": "{count} article manquant ou en échec",
     "many": "{count} articles manquants ou en échec",

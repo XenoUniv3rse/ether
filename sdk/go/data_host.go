@@ -94,9 +94,9 @@ type ArchiveReadResult struct {
 // using Range: bytes=<cached>- when the server supports ranges and ETag or
 // Last-Modified validators still match, restarting cleanly from byte 0 if they
 // do not; the blob becomes readable in cache only once complete. Connections
-// defaults to 1. Jobs, schedules, and background calls can request up to 8
-// concurrent ranges, subject to the host cap. Resume preserves each range's
-// progress when parallel ranges are in use.
+// defaults to 1. Jobs, schedules, and background calls can request up to 6
+// concurrent ranges, sharing the host's limit of 6 per origin. Resume
+// preserves each range's progress when parallel ranges are in use.
 type FetchCacheRequest struct {
 	TimeoutMS             int64             `json:"timeoutMs,omitempty"`
 	URL                   string            `json:"url"`

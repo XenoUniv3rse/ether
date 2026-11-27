@@ -84,7 +84,8 @@ type FetchCacheRequest struct {
 	// Resume continues a partial cached download with Range: bytes=<cached>-
 	// when the server supports ranges and ETag / Last-Modified validators match.
 	Resume bool `json:"resume,omitempty"`
-	// Connections requests parallel range downloads in jobs and background calls.
+	// Connections requests 1 to 6 parallel ranges in jobs and background calls.
+	// Defaults to 1 and shares the host's per-origin limit of 6.
 	Connections int `json:"connections,omitempty"`
 }
 

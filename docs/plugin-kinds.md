@@ -1294,9 +1294,10 @@ from byte 0 when validators mismatch or the server ignores ranges); partial
 blobs obey per-library cache quotas, the shared cap, and the disk free-space
 floor, and become readable via `cache.open` / `cache.read` / `archive.*` only
 when complete. Jobs, schedules, and background calls can request `connections`
-from 1 to 8 (default 1), capped by the host's per-origin limit. When the
+from 1 to 6 (default 1), sharing the host's limit of 6 per origin. When the
 server advertises byte ranges, a known length, and a strong validator,
-Ether fetches ranges in parallel and hashes the assembled file. With
+Ether fetches ranges in parallel and hashes the assembled file. Ranges served
+from a different URL need the same strong ETag and total length as the probe. With
 `resume: true`, retries continue each range's saved progress.
 Incompatible range responses fall back to a single download. The operation
 runs synchronously within the calling plugin invocation. Cache eviction still applies to returned refs.

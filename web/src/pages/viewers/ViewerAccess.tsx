@@ -22,7 +22,7 @@ import {
   type UserLimits,
 } from "../../components/UserLimits";
 import { viewerName } from "../../components/pickers";
-import { t } from "../../i18n";
+import { t, tx } from "../../i18n";
 import { searchSelectLabels } from "../../i18n/appkit-labels";
 import { api, apiFetch, errorMessage } from "../../lib/api";
 import type { Viewer } from "../../lib/contract";
@@ -626,8 +626,18 @@ export function ViewerAccess({ viewer }: { viewer: Viewer }) {
                 <SettingsRow
                   setting="download-max-height"
                   title={t("Highest download quality")}
-                  description={t(
-                    "Downloads for this viewer are capped at this resolution. It cannot go above the server's download cap.",
+                  description={tx(
+                    "Applies only to downloads, up to the server’s download limit. To limit playback quality, set a {link} for this viewer.",
+                    {
+                      link: (
+                        <Link
+                          className="text-primary underline underline-offset-2"
+                          to="/releases/rules"
+                        >
+                          {t("quality rule")}
+                        </Link>
+                      ),
+                    },
                   )}
                   control={
                     <SearchSelect

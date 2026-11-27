@@ -819,7 +819,7 @@ class _HttpClient:
         return self._call("POST", "/ether/plugin-host/data/http.hash", [req])
 
     def fetch_to_cache(self, req: Dict[str, Any]) -> Dict[str, Any]:
-        """Stream a remote GET into the plugin's library cache (`{url, headers?, keepHeadersOnRedirect?, libraryKey, name, timeoutMs?, resume?, connections?}`). Defaults to a 10 min timeout (also the ceiling on viewer/request paths; jobs, schedules, and background contexts may raise `timeoutMs` up to the calling job's remaining deadline). Set `resume: True` to continue a partial download when validators match, preserving progress per range. `connections` defaults to 1. Jobs, schedules, and background calls can request up to 8 concurrent ranges, subject to the host cap."""
+        """Stream a remote GET into the plugin's library cache (`{url, headers?, keepHeadersOnRedirect?, libraryKey, name, timeoutMs?, resume?, connections?}`). Defaults to a 10 min timeout (also the ceiling on viewer/request paths; jobs, schedules, and background contexts may raise `timeoutMs` up to the calling job's remaining deadline). Set `resume: True` to continue a partial download when validators match, preserving progress per range. `connections` defaults to 1. Jobs, schedules, and background calls can request up to 6 concurrent ranges, sharing the host's limit of 6 per origin."""
         return self._call("POST", "/ether/plugin-host/data/http.fetchToCache", [req])
 
     fetchToCache = fetch_to_cache

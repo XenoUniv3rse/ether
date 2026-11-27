@@ -3341,6 +3341,7 @@
   "m_099b345bc660cd": "Usar el póster de un título",
   "m_099b3543883538": "Límite de todo el servidor",
   "m_099bab7b6a1c8e": "Ver espectadores",
+  "m_099bcbe9582d29": "Solo se aplica a las descargas, hasta el límite de descarga del servidor. Para limitar la calidad de reproducción, configura una {link} para este usuario.",
   "m_099e4877001931": "Falló la comprobación del certificado",
   "m_099e9a4e314811": "De Memories of Murder a Parasite.",
   "m_09a0335f4c3309": "Ellos eligen su contraseña o vinculan su cuenta de Plex en /ether/me.",
@@ -4951,6 +4952,7 @@
   "m_0e5322a9e0a5e3": "Agregar como una fila",
   "m_0e55365789fb94": "Sin reclamar",
   "m_0e55b9f60cce78": "Navegar en aplicaciones",
+  "m_0e568a753a8ea4": "regla de calidad",
   "m_0e56edadca55be": "Aún no hay preferencia de época.",
   "m_0e5a21a46d8ee0": "Automático · streams locales",
   "m_0e5ae3b66cd6d5": "Sin definir",
@@ -5244,7 +5246,6 @@
   "m_0f21a95c8d829d": "Descargar el programa",
   "m_0f23e8b6156914": "Deja de reproducirse al momento y se eliminan su vídeo y su actividad.",
   "m_0f24f85421aaa8": "Los espacios fijos tienen prioridad sobre los bloques de programación.",
-  "m_0f251f5f3a0763": "Las descargas de este espectador están limitadas a esta resolución. No puede superar el límite de descarga del servidor.",
   "m_0f261b47c83f5f": {
     "one": "{count} artículo ausente o fallido",
     "many": "{count} artículos ausentes o fallidos",

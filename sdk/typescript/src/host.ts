@@ -152,7 +152,7 @@ export interface FetchCacheRequest {
   name: string;
   /** Continue an incomplete download, including per-range progress, when the server supports ranges and validators still match. */
   resume?: boolean;
-  /** Defaults to 1. Jobs, schedules, and background calls can request 1–8 concurrent byte ranges, subject to the host cap. */
+  /** Defaults to 1. Jobs, schedules, and background calls can request 1–6 concurrent byte ranges, sharing the host's limit of 6 per origin. */
   connections?: number;
 }
 export interface FetchCacheResult { blob: string; size: number; crc32: string; md5: string; sha1: string; status: number }

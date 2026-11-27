@@ -3419,6 +3419,7 @@
   "m_099b345bc660cd": "Użyj plakatu tytułu",
   "m_099b3543883538": "Limit dla całego serwera",
   "m_099bab7b6a1c8e": "Zobacz widzów",
+  "m_099bcbe9582d29": "Dotyczy wyłącznie pobierania, w granicach limitu pobierania serwera. Aby ograniczyć jakość odtwarzania, ustaw {link} dla tego widza.",
   "m_099e4877001931": "Sprawdzenie certyfikatu nie powiodło się",
   "m_099e9a4e314811": "Od Memories of Murder do Parasite.",
   "m_09a0335f4c3309": "Ustawia własne hasło albo łączy konto Plex pod adresem /ether/me.",
@@ -5068,6 +5069,7 @@
   "m_0e5322a9e0a5e3": "Dodaj jako wiersz",
   "m_0e55365789fb94": "Nieprzejęty",
   "m_0e55b9f60cce78": "Przeglądaj w aplikacjach",
+  "m_0e568a753a8ea4": "regułę jakości",
   "m_0e56edadca55be": "Brak preferencji co do epok.",
   "m_0e5a21a46d8ee0": "Automatycznie · strumienie lokalne",
   "m_0e5ae3b66cd6d5": "Nie ustawiono",
@@ -5371,7 +5373,6 @@
   "m_0f21a95c8d829d": "Pobierz program",
   "m_0f23e8b6156914": "Od razu przestanie być odtwarzany, a jego wideo i historia aktywności zostaną usunięte.",
   "m_0f24f85421aaa8": "Stałe pory emisji mają pierwszeństwo przed blokami programowymi.",
-  "m_0f251f5f3a0763": "Pobieranie dla tego widza jest ograniczone do tej rozdzielczości. Nie może przekroczyć limitu pobierania serwera.",
   "m_0f261b47c83f5f": {
     "one": "{count} brakujący lub nieudany artykuł",
     "few": "{count} brakujące lub nieudane artykuły",

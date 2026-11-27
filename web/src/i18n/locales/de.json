@@ -3264,6 +3264,7 @@
   "m_099b345bc660cd": "Poster eines Titels verwenden",
   "m_099b3543883538": "Serverweites Limit",
   "m_099bab7b6a1c8e": "Zuschauer ansehen",
+  "m_099bcbe9582d29": "Gilt nur für Downloads bis zum Downloadlimit des Servers. Lege für diesen Zuschauer eine {link} fest, um die Wiedergabequalität zu begrenzen.",
   "m_099e4877001931": "Zertifikatsprüfung fehlgeschlagen",
   "m_099e9a4e314811": "Von Memories of Murder bis Parasite.",
   "m_09a0335f4c3309": "Sie legen ihr eigenes Passwort fest oder verknüpfen ihr Plex-Konto auf /ether/me.",
@@ -4836,6 +4837,7 @@
   "m_0e5322a9e0a5e3": "Als Zeile hinzufügen",
   "m_0e55365789fb94": "Nicht beansprucht",
   "m_0e55b9f60cce78": "Durchsuchen Sie Apps",
+  "m_0e568a753a8ea4": "Qualitätsregel",
   "m_0e56edadca55be": "Noch keine Epochenpräferenz.",
   "m_0e5a21a46d8ee0": "Automatisch · lokale Streams",
   "m_0e5ae3b66cd6d5": "Nicht gesetzt",
@@ -5119,7 +5121,6 @@
   "m_0f21a95c8d829d": "Programm herunterladen",
   "m_0f23e8b6156914": "Er läuft ab sofort nicht mehr, und sein Video sowie sein Verlauf werden entfernt.",
   "m_0f24f85421aaa8": "Feste Sendeplätze haben Vorrang vor Programmblöcken.",
-  "m_0f251f5f3a0763": "Downloads für diesen Zuschauer sind auf diese Auflösung begrenzt. Sie kann das Download-Limit des Servers nicht überschreiten.",
   "m_0f261b47c83f5f": {
     "one": "{count} fehlender oder fehlgeschlagener Artikel",
     "other": "{count} fehlende oder fehlgeschlagene Artikel"
