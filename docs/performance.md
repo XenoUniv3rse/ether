@@ -144,10 +144,53 @@ sandbox, and TMDB is unreachable, so reads never fetch or store what the
 mirror lacks. Measuring either needs a throwaway build or a TMDB-only
 forward proxy (`HTTPS_PROXY`) that refuses every other host.
 
-## The CI gate: library scale
+## Configuration matrix
 
-`TestPerformanceGate` (`internal/app/perf_gate_test.go`) runs in its own CI
-job. `internal/perfharness/fixture.go` builds the same synthetic household
+Run the matrix on an isolated local App with the fixture cache on the scratch
+volume. Set the Music source to a local checkout of the hosted Music plugin.
+The gate loads that checkout with network permission revoked, seeds artists,
+albums and tracks, and reads the Subsonic method list from its dispatcher.
+
+```sh
+mkdir -p "$HOME/.scratch/tmp/ether-perf"
+ETHER_PERF_GATE=1 \
+ETHER_PERF_GATE_FIXTURES="$HOME/.scratch/tmp/ether-perf" \
+ETHER_PERF_GATE_MUSIC_SOURCE="/path/to/ether-plugin-music" \
+ETHER_PERF_GATE_REPORT="$PWD/perf-matrix-report.md" \
+go test ./internal/app -run '^TestPerformanceGate$' -count=1 -v -timeout=45m
+```
+
+The cache holds a day-stamped SQLite base fixture. Each case gets a separate
+copy in the same directory, so APFS can clone it and replay mutations cannot
+leak into another case. The fixture holds 35,000 movies, 15,000 shows, 45,000
+seasons and 270,000 episodes, plus plugin items, 240 owner collections, and
+viewer watch history. Live cases add 300 channels, seven days of guide data,
+and a synthetic sports feed and overlay. The matrix covers release modes for
+movies and shows, ordered visibility rules, upcoming titles, viewer policies,
+source configuration, and selected combinations. Console and plugin-host
+scenarios use owner credentials in all cases.
+
+The matrix checks statements, result rows and writes for each tagged response.
+Queries and rows have class ceilings with tighter scenario bounds where
+specified. GET and HEAD can write one allowlisted last-seen update. Streaming
+scenarios use a one-minute observation window. Result rows are rows returned
+by the driver. Use the scale comparison and the SQL plan audit to investigate
+database work that returns few rows.
+
+The Markdown report updates after every case and includes failed or skipped
+scenarios, registered routes missing successful scenarios, and the worst
+sample for every over-budget route and configuration. It uses route patterns
+and strips SQL string literals. Coverage gaps and budget violations fail the
+test. The run has a 40-minute replay deadline. For local triage,
+`ETHER_PERF_GATE_MATRIX_CASES`, `ETHER_PERF_GATE_CLIENTS` and
+`ETHER_PERF_GATE_STEPS` accept comma-separated exact names. Filtered runs
+still report the routes they skipped. To use PostgreSQL, provide a disposable
+server through `ETHER_PERF_GATE_PG`. Each case gets a temporary schema.
+
+## Library-scale comparison
+
+`TestPerformanceGate` (`internal/app/perf_gate_test.go`) also supports a
+two-scale comparison. `internal/perfharness/fixture.go` builds the same synthetic household
 twice:
 
 - once over a library of 54k catalogue rows;
@@ -212,7 +255,7 @@ any endpoint that scales and is not listed, and reports listed endpoints
 that stayed flat so they can be removed; the list only shrinks.
 
 ```sh
-ETHER_PERF_GATE=1 go test ./internal/app -run TestPerformanceGate -v -timeout 60m
+ETHER_PERF_GATE=scale go test ./internal/app -run TestPerformanceGate -v -timeout 60m
 ETHER_PERF_GATE=quick go test ./internal/app -run TestPerformanceGate -v   # a 5k/54k pair, not ratcheted
 ETHER_PERF_GATE=xlarge go test ./internal/app -run TestPerformanceGate -v -timeout 290m   # 128k/1.28M titles
 ```

@@ -142,6 +142,8 @@ type Options struct {
 	FlowActions flows.ActionRegistry
 	// plextvHTTP, when set, is the HTTP client used by the plex.tv client in tests.
 	plextvHTTP *http.Client
+	// debridProviderOptions points provider calls at loopback fixtures in tests.
+	debridProviderOptions debrid.ProviderOptions
 	// urlImages, when set, replaces the untrusted remote image fetcher in tests.
 	urlImages frontend.UntrustedImageFetcher
 	// diskUsage, when set, replaces the cache volume measurement behind the
@@ -158,6 +160,7 @@ type Options struct {
 
 // App is a running Ether server.
 type App struct {
+	adminRoutes      frontend.RouteSource
 	deployment       *deploymentRuntime
 	brokerPlayback   core.Playback
 	brokerTranscoder core.Transcoder

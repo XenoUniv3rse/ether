@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/braedonsaunders/ether/internal/core"
+	"github.com/braedonsaunders/ether/internal/frontend/kit/route"
 	"github.com/braedonsaunders/ether/internal/reqmemo"
 )
 
@@ -163,7 +164,7 @@ func (s *Service) Status(ctx context.Context) (Status, error) {
 
 // Handler is mounted only inside the authenticated owner API.
 func (s *Service) Handler() http.Handler {
-	mux := http.NewServeMux()
+	mux := &route.Mux{}
 	mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
 		v, err := s.Status(r.Context())
 		if err != nil {

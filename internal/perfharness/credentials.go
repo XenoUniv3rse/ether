@@ -28,8 +28,9 @@ type Viewer struct {
 	Stremio    string
 	// Xtream is an IPTV app password (the username is derived from it);
 	// MCP is a read-scoped MCP grant, minted for the owner only.
-	Xtream string
-	MCP    string
+	Xtream                                 string
+	MCP                                    string
+	PluginHost, SubsonicUser, SubsonicPass string
 }
 
 type activeViewers struct{ db *sql.DB }

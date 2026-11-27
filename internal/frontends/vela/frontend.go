@@ -264,6 +264,7 @@ type instance struct {
 	ctx             context.Context
 	cancel          context.CancelFunc
 	mux             *http.ServeMux
+	registered      []frontend.Route
 	assets          string
 	mu              sync.Mutex
 	previewRates    map[int64]previewRate
@@ -974,8 +975,14 @@ func body(r *http.Request, v any) error {
 	return json.Unmarshal(b, v)
 }
 
+func (i *instance) Routes() []frontend.Route {
+	return append([]frontend.Route(nil), i.registered...)
+}
+
 func (i *instance) route(method, path string, h http.HandlerFunc) {
-	i.mux.HandleFunc(method+" /vela/v0"+path, h)
+	pattern := "/vela/v0" + path
+	i.mux.HandleFunc(method+" "+pattern, h)
+	i.registered = append(i.registered, frontend.Route{Method: method, Pattern: pattern})
 }
 func (i *instance) routes() {
 	i.route("GET", "/appearance", i.appearance)

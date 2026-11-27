@@ -45,7 +45,9 @@ type vaultProgress struct {
 	Completed int    `json:"completed"`
 }
 
-func (a *App) registerVaultAdmin(mux *http.ServeMux) {
+func (a *App) registerVaultAdmin(mux interface {
+	HandleFunc(string, func(http.ResponseWriter, *http.Request))
+}) {
 	route := func(pattern string, h http.HandlerFunc) {
 		mux.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) {
 			if a.vault == nil {

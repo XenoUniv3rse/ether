@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/braedonsaunders/ether/internal/core"
+	"github.com/braedonsaunders/ether/internal/frontend/kit/route"
 )
 
 // The Collection Studio API.
@@ -52,7 +53,7 @@ type AddonCatalogImporter interface {
 // collectionRoutes registers the Collection Studio and catalogue helper
 // endpoints. Artwork and the image proxy are public: browsers load them
 // with <img> tags, which cannot send the owner token.
-func (h *Handler) collectionRoutes(mux *http.ServeMux, api func(string, http.HandlerFunc)) {
+func (h *Handler) collectionRoutes(mux *route.Mux, api func(string, http.HandlerFunc)) {
 	api("GET /api/collections", h.handleListCollections)
 	api("POST /api/collections", h.handleCreateCollection)
 	api("POST /api/collections/preview", h.handlePreviewCollection)

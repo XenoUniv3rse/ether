@@ -2,6 +2,7 @@ package calendar
 
 import (
 	"encoding/json"
+	"github.com/braedonsaunders/ether/internal/frontend/kit/route"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -16,7 +17,7 @@ import (
 //	&movies=foryou|popular|watchlist|hidden
 //	&tz=America/Toronto              which day is today (default UTC)
 func (s *Service) Handler() http.Handler {
-	mux := http.NewServeMux()
+	mux := &route.Mux{}
 	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
 		p := r.URL.Query()
 		q := Query{Types: p.Get("types"), Movies: p.Get("movies")}

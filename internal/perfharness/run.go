@@ -29,6 +29,7 @@ type Result struct {
 	Phase         string        `json:"phase"`
 	Client        string        `json:"client"`
 	Surface       string        `json:"surface"`
+	Route         string        `json:"route,omitempty"`
 	Step          string        `json:"step"`
 	Class         string        `json:"class"`
 	Viewer        string        `json:"viewer"`
@@ -71,7 +72,8 @@ type Runner struct {
 	owner   Viewer
 
 	// before, when set, runs before each request (the gate's quiesce).
-	before func(context.Context)
+	before       func(context.Context)
+	matrixRoutes map[string][]matrixRoute
 
 	mu       sync.Mutex
 	results  []Result
@@ -148,6 +150,7 @@ func (r *Runner) session(v Viewer, c Client) *session {
 			"username": v.Username, "password": Password, "stremio": queryEscape(v.Stremio),
 			"ownerToken": r.owner.PlexToken, "viewerId": strconv.FormatInt(v.ID, 10),
 			"xtreamUser": frontend.XtreamUsername(v.Xtream), "xtreamPass": url.QueryEscape(v.Xtream), "mcp": v.MCP,
+			"subsonicUser": url.QueryEscape(v.SubsonicUser), "subsonicPass": url.QueryEscape(v.SubsonicPass),
 		}}
 		r.sessions[key] = s
 	}
@@ -181,6 +184,8 @@ func (r *Runner) do(ctx context.Context, phase string, c Client, s *session, st 
 	r.mu.Lock()
 	s.vars["now"] = strconv.FormatInt(now.Unix(), 10)
 	s.vars["now3h"] = strconv.FormatInt(now.Add(3*time.Hour).Unix(), 10)
+	s.vars["guideFrom"] = url.QueryEscape(now.UTC().Truncate(time.Hour).Format(time.RFC3339))
+	s.vars["guideUntil"] = url.QueryEscape(now.UTC().Truncate(time.Hour).Add(3 * time.Hour).Format(time.RFC3339))
 	vars := make(map[string]string, len(s.vars))
 	for k, v := range s.vars {
 		vars[k] = v
@@ -188,6 +193,15 @@ func (r *Runner) do(ctx context.Context, phase string, c Client, s *session, st 
 	r.mu.Unlock()
 	tag := phase + "|" + c.Name + "|" + st.Name + "|" + strconv.FormatInt(r.seq.Add(1), 10)
 	res := Result{SchemaVersion: 2, Phase: phase, Client: c.Name, Surface: c.Surface, Step: st.Name, Class: st.Class, Viewer: s.Viewer.Username, Tag: tag}
+	routePath := c.Prefix + st.Path
+	if r.shared {
+		routePath = c.SharedPrefix + routePath
+	}
+	method := st.Method
+	if method == "" {
+		method = http.MethodGet
+	}
+	res.Route = method + " " + strings.SplitN(routePath, "?", 2)[0]
 	path, missing, ok := expand(c.Prefix+st.Path, vars)
 	body, missingBody, okBody := expand(st.Body, vars)
 	if !ok || !okBody {
@@ -198,9 +212,12 @@ func (r *Runner) do(ctx context.Context, phase string, c Client, s *session, st 
 		r.record(res)
 		return
 	}
-	method := st.Method
-	if method == "" {
-		method = http.MethodGet
+	fullPath := path
+	if r.shared {
+		fullPath = c.SharedPrefix + path
+	}
+	if registered := r.matrixRoute(c.Surface, method, strings.SplitN(fullPath, "?", 2)[0]); registered != "" {
+		res.Route = registered
 	}
 	var reader io.Reader
 	if body != "" {
@@ -210,6 +227,16 @@ func (r *Runner) do(ctx context.Context, phase string, c Client, s *session, st 
 	if r.shared {
 		port, path = r.basePort, c.SharedPrefix+path
 	}
+	httpClient := r.http
+	if st.Stream != 0 {
+		streamCtx, cancel := context.WithTimeout(ctx, st.Stream)
+		defer cancel()
+		ctx = streamCtx
+		// The stream has its own observation window.
+		copy := *r.http
+		copy.Timeout = 0
+		httpClient = &copy
+	}
 	req, err := http.NewRequestWithContext(ctx, method, "http://"+r.host+":"+strconv.Itoa(port)+path, reader)
 	if err != nil {
 		res.Err = err.Error()
@@ -218,6 +245,9 @@ func (r *Runner) do(ctx context.Context, phase string, c Client, s *session, st 
 	}
 	req.Header = c.Headers(&session{Viewer: s.Viewer, vars: vars})
 	req.Header.Set("X-Ether-Perf-Tag", tag)
+	if body != "" && req.Header.Get("Content-Type") == "" && json.Valid([]byte(body)) {
+		req.Header.Set("Content-Type", "application/json")
+	}
 	r.mu.Lock()
 	measure, probe := r.measure, r.probe
 	r.mu.Unlock()
@@ -232,7 +262,7 @@ func (r *Runner) do(ctx context.Context, phase string, c Client, s *session, st 
 		before, probeErr = probe.Sample()
 	}
 	start := time.Now()
-	resp, err := r.http.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		res.Dur, res.Err = time.Since(start), err.Error()
 		r.record(res)
@@ -266,10 +296,13 @@ func (r *Runner) do(ctx context.Context, phase string, c Client, s *session, st 
 		}
 	}
 	res.Status, res.Bytes = resp.StatusCode, len(buf)
+	if st.Accept != nil && !st.Accept(buf) {
+		res.Err = "protocol rejected the request"
+	}
 	if err == nil {
 		res.BodySHA = fmt.Sprintf("%x", sha256.Sum256(buf))
 	}
-	if err != nil {
+	if err != nil && !(st.Stream != 0 && ctx.Err() == context.DeadlineExceeded && resp.StatusCode == http.StatusOK) {
 		res.Err = err.Error()
 	} else if resp.StatusCode >= 400 && st.Class != classPlayback {
 		res.Err = strings.TrimSpace(string(bytes.ToValidUTF8(buf[:min(len(buf), 160)], nil)))
@@ -304,6 +337,8 @@ func gzipSize(b []byte) int {
 type countWriter int
 
 func (c *countWriter) Write(p []byte) (int, error) { *c += countWriter(len(p)); return len(p), nil }
+
+func (r *Runner) Close() { r.http.CloseIdleConnections() }
 
 // SetTimeout caps each request (60 s by default).
 func (r *Runner) SetTimeout(d time.Duration) { r.http.Timeout = d }

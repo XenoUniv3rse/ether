@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"github.com/braedonsaunders/ether/internal/admin"
 	"github.com/braedonsaunders/ether/internal/config"
+	"github.com/braedonsaunders/ether/internal/frontend/kit/route"
 	"github.com/braedonsaunders/ether/internal/newznab"
 	"github.com/braedonsaunders/ether/internal/plextv"
 	"github.com/braedonsaunders/ether/internal/resolver"
@@ -14,7 +15,7 @@ import (
 )
 
 func (a *App) playbackPolicyHandler() http.Handler {
-	m := http.NewServeMux()
+	m := &route.Mux{}
 	m.HandleFunc("GET /policy", func(w http.ResponseWriter, r *http.Request) {
 		catalog, err := a.compatibilityCatalog(r.Context())
 		if err != nil {

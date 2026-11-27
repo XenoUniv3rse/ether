@@ -160,7 +160,7 @@ func (a *App) buildSources(ctx context.Context, cfg config.Config) error {
 			a.publishDashboard()
 		}
 	})
-	a.debrid = debrid.NewService(cfg.Debrid, debrid.Options{IsIndexerHost: a.isConfiguredIndexerHost, AcquireStreamProvider: func(ctx context.Context, id string) (func(), error) {
+	a.debrid = debrid.NewService(cfg.Debrid, debrid.Options{ProviderOptions: a.opts.debridProviderOptions, IsIndexerHost: a.isConfiguredIndexerHost, AcquireStreamProvider: func(ctx context.Context, id string) (func(), error) {
 		if a.livetv == nil {
 			return nil, core.ErrSourceUnavailable
 		}

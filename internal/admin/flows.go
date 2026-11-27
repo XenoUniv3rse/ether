@@ -16,6 +16,7 @@ import (
 
 	"github.com/braedonsaunders/ether/internal/events"
 	"github.com/braedonsaunders/ether/internal/flows"
+	"github.com/braedonsaunders/ether/internal/frontend/kit/route"
 	"github.com/braedonsaunders/ether/internal/llm"
 	"github.com/braedonsaunders/ether/internal/notify"
 )
@@ -380,7 +381,7 @@ func (a *FlowsAPI) routeFlow(w http.ResponseWriter, r *http.Request, segs []stri
 // flowsRoutes mounts the Flows API on the admin mux when Deps.Flows is
 // set: owner-authenticated under /api/flows, plus the public incoming
 // webhook ingress at /api/flows/hooks/{token} outside console auth.
-func (h *Handler) flowsRoutes(mux *http.ServeMux) {
+func (h *Handler) flowsRoutes(mux *route.Mux) {
 	if h.deps.Flows == nil {
 		return
 	}

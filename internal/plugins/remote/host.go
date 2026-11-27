@@ -7,6 +7,7 @@ import (
 	"github.com/braedonsaunders/ether/internal/core"
 	"github.com/braedonsaunders/ether/internal/events"
 	"github.com/braedonsaunders/ether/internal/frontend/kit/paging"
+	"github.com/braedonsaunders/ether/internal/frontend/kit/route"
 	"github.com/braedonsaunders/ether/internal/httpjson"
 	"github.com/braedonsaunders/ether/internal/plugins"
 	"io"
@@ -110,7 +111,7 @@ type HostHandler struct {
 	host Host
 	auth CredentialResolver
 	log  *slog.Logger
-	mux  *http.ServeMux
+	mux  *route.Mux
 }
 
 // HostOptions configures a HostHandler.
@@ -127,7 +128,7 @@ func NewHostHandler(opts HostOptions) *HostHandler {
 	if h.log == nil {
 		h.log = slog.Default()
 	}
-	mux := http.NewServeMux()
+	mux := &route.Mux{}
 	mux.HandleFunc("POST /ether/plugin-host/data/{service}", h.dataCall)
 	mux.HandleFunc("GET /ether/plugin-host/kv", h.kvList)
 	mux.HandleFunc("GET /ether/plugin-host/kv-usage", h.kvUsage)
@@ -172,6 +173,8 @@ func NewHostHandler(opts HostOptions) *HostHandler {
 	h.mux = mux
 	return h
 }
+
+func (h *HostHandler) Routes() []route.Route { return h.mux.Routes() }
 
 // Mount registers the handler's routes on mux.
 func (h *HostHandler) Mount(mux *http.ServeMux) {

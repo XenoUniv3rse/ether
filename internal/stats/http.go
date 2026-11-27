@@ -2,6 +2,7 @@ package stats
 
 import (
 	"encoding/json"
+	"github.com/braedonsaunders/ether/internal/frontend/kit/route"
 	"html/template"
 	"net/http"
 	"strconv"
@@ -29,7 +30,7 @@ func fail(w http.ResponseWriter, status int, msg string) {
 
 // Handler must be mounted behind owner authentication with /stats stripped.
 func (s *Service) Handler() http.Handler {
-	m := http.NewServeMux()
+	m := &route.Mux{}
 	m.HandleFunc("POST /sessions/{id}/stop", func(w http.ResponseWriter, r *http.Request) {
 		if s.opts.Playback == nil {
 			fail(w, 503, "Playback unavailable")

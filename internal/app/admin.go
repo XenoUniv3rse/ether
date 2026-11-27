@@ -343,6 +343,7 @@ func (a *App) buildAdmin() http.Handler {
 	}
 	a.remoteSourceAdminDeps(&deps)
 	h := admin.NewHandler(deps)
+	a.adminRoutes = h
 	if a.streamRT != nil {
 		a.streamRT.SetDashboard(h.SnapshotDashboard)
 		if a.cfg != nil {

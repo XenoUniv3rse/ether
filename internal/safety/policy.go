@@ -19,6 +19,7 @@ import (
 	"github.com/braedonsaunders/ether/internal/clusterbus"
 	"github.com/braedonsaunders/ether/internal/contentrating"
 	"github.com/braedonsaunders/ether/internal/core"
+	"github.com/braedonsaunders/ether/internal/frontend/kit/route"
 	"github.com/braedonsaunders/ether/internal/store"
 	"github.com/braedonsaunders/ether/internal/viewerpolicy"
 )
@@ -478,7 +479,7 @@ func KidsPreset(age string) Preset {
 	return Preset{MaxContentRating: rating, Policy: Policy{Bedtime: &core.Bedtime{Time: bedtime, WakeTime: "06:00"}, BlockedKeywords: []string{"pornography", "erotic movie"}}}
 }
 func (s *Service) Handler() http.Handler {
-	m := http.NewServeMux()
+	m := &route.Mux{}
 	m.HandleFunc("GET /{id}", func(w http.ResponseWriter, r *http.Request) {
 		id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 		if err != nil || id <= 0 {

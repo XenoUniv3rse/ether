@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"github.com/braedonsaunders/ether/internal/frontend/kit/paging"
+	"github.com/braedonsaunders/ether/internal/frontend/kit/route"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -77,7 +78,7 @@ func (s *Service) ConsoleHandler(deps ConsoleDeps) http.Handler {
 		deps.Dictionarry = NewDictionarry(DictionarryOptions{})
 	}
 	h := &consoleAPI{s: s, deps: deps}
-	mux := http.NewServeMux()
+	mux := &route.Mux{}
 	mux.HandleFunc("GET /profiles", h.profiles)
 	mux.HandleFunc("GET /presets", h.presets)
 	mux.HandleFunc("POST /rules/preview", h.previewRules)

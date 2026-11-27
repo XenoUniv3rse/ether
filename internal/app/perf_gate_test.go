@@ -56,6 +56,10 @@ func TestPerformanceGate(t *testing.T) {
 	if mode == "" {
 		t.Skip("set " + PerfGateEnv + "=1 (or -args -perf-gate=1) to run the library-scale performance gate (docs/performance.md)")
 	}
+	if mode == "1" {
+		testPerformanceMatrix(t)
+		return
+	}
 	smallScale, largeScale := perfharness.SmallScale, perfharness.LargeScale
 	switch mode {
 	case "quick":

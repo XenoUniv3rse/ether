@@ -13,6 +13,7 @@ import (
 	"github.com/braedonsaunders/ether/internal/config"
 	"github.com/braedonsaunders/ether/internal/core"
 	"github.com/braedonsaunders/ether/internal/frontend/kit/caps"
+	"github.com/braedonsaunders/ether/internal/frontend/kit/route"
 	"github.com/braedonsaunders/ether/internal/frontends/plex"
 	"github.com/braedonsaunders/ether/internal/resolver"
 )
@@ -111,7 +112,7 @@ type qualityExplainIn struct {
 // qualityHandler serves the Releases page's device picker, summary table and
 // "Check one play" explainer.
 func (a *App) qualityHandler() http.Handler {
-	m := http.NewServeMux()
+	m := &route.Mux{}
 	m.HandleFunc("GET /clients", func(w http.ResponseWriter, r *http.Request) {
 		writeQualityJSON(w, http.StatusOK, map[string]any{"clients": qualityClients()})
 	})

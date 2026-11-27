@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"encoding/json"
+	"github.com/braedonsaunders/ether/internal/frontend/kit/route"
 	"github.com/braedonsaunders/ether/internal/store"
 	"net/http"
 	"sort"
@@ -595,7 +596,7 @@ func cause(m ExperienceMetrics, plays []ExperiencePlay) ExperienceCause {
 // ExperienceHandler serves Activity › Experience; mount it behind owner
 // authentication with /experience stripped.
 func (s *Service) ExperienceHandler() http.Handler {
-	m := http.NewServeMux()
+	m := &route.Mux{}
 	m.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
 		v, err := s.Experience(r.Context(), experienceDays(r))
 		if err != nil {
