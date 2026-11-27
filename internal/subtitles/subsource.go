@@ -1122,12 +1122,14 @@ var subsourceLangByTag = map[string]string{
 	"ur":    "urdu",
 	"uz":    "uzbek",
 	"vi":    "vietnamese",
-	"zh":    "chinese_simplified",
-	"zh-cn": "chinese_simplified",
-	"zh-hk": "chinese_traditional",
-	"zh-mo": "chinese_traditional",
-	"zh-sg": "chinese_simplified",
-	"zh-tw": "chinese_traditional",
+	// SubSource files Chinese under the encoding names, not "chinese_simplified"
+	// or "chinese_traditional" (a /subtitles query with those returns nothing).
+	"zh":    "chinese_bg_code",
+	"zh-cn": "chinese_bg_code",
+	"zh-hk": "big_5_code",
+	"zh-mo": "big_5_code",
+	"zh-sg": "chinese_bg_code",
+	"zh-tw": "big_5_code",
 }
 
 // subsourceTagByName maps SubSource response language codes and aliases back
