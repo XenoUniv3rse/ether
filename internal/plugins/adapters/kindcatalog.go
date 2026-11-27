@@ -2063,7 +2063,10 @@ func (c *KindCatalog) MemberOf(ctx context.Context, lib core.Library, key core.R
 		return false, nil
 	}
 	if c.titleInLibrary != nil {
-		return c.titleInLibrary(ctx, lib, key)
+		memoKey := fmt.Sprintf("plugin-library-member:%p:%d:%v:%d:%s:%t:%d", c, lib.ID, lib.UpdatedAt, core.CatalogViewerID(ctx), core.LiveApp(ctx), core.ExplicitSearch(ctx), key)
+		return reqmemo.Do(ctx, memoKey, func() (bool, error) {
+			return c.titleInLibrary(ctx, lib, key)
+		})
 	}
 	ok, err := c.libs.SourceMember(ctx, lib, key)
 	if err != nil || !ok {

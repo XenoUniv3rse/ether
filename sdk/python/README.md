@@ -115,7 +115,9 @@ Content-kind item dictionaries may include `unavailable: {"code": "no_verified_s
 "detail": "No verified source"}`. Ether keeps these items visible with the reason
 and refuses resolution until a later upsert omits the field. `pattern: "file"`
 with a `path` is reserved for hosted resolvers with `folders: read`; Python
-sidecars cannot access host files or call `folders.hash`. See `docs/plugin-kinds.md`.
+sidecars cannot access host files or call hosted folder operations. Wire types
+for folder pages, hash results and frame references are available in
+`ether_plugin.py`. See `docs/plugin-kinds.md`.
 
 ### Continuing background jobs
 

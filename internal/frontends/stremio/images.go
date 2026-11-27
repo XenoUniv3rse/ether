@@ -85,7 +85,7 @@ func (i *instance) artwork(r *http.Request, credential string, viewer *frontend.
 		for _, title := range titles[start:end] {
 			keys = append(keys, title.Key)
 		}
-		items, err := batch.IssueBatch(r.Context(), frontend.ImageBatchRequest{Credential: credential, Device: device, Items: keys, Kinds: []string{frontend.ImagePoster}})
+		items, err := batch.IssueBatch(frontend.WithoutArtworkMetadata(r.Context()), frontend.ImageBatchRequest{Credential: credential, Device: device, Items: keys, Kinds: []string{frontend.ImagePoster}})
 		if err != nil {
 			continue
 		}
@@ -174,7 +174,7 @@ func (i *instance) backdropArtwork(r *http.Request, credential string, viewer *f
 		for _, title := range titles[start:end] {
 			keys = append(keys, title.Key)
 		}
-		rows, err := batch.IssueBatch(r.Context(), frontend.ImageBatchRequest{Credential: credential, Device: device, Items: keys, Kinds: []string{frontend.ImageBackdrop}})
+		rows, err := batch.IssueBatch(frontend.WithoutArtworkMetadata(r.Context()), frontend.ImageBatchRequest{Credential: credential, Device: device, Items: keys, Kinds: []string{frontend.ImageBackdrop}})
 		if err != nil {
 			continue
 		}

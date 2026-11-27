@@ -1534,7 +1534,10 @@ func (c *Catalog) queryListRows(ctx context.Context, lr *core.ListRows, q string
 			partial, partialAt = append(partial, out[i]), append(partialAt, i)
 		}
 	}
-	need := factSet(lr.Facts|c.policyFacts(c.visibilityFor(ctx))|c.viewerPolicyFacts(ctx)) | factRowCredits
+	need := factSet(lr.Facts | c.policyFacts(c.visibilityFor(ctx)) | c.viewerPolicyFacts(ctx))
+	if !lr.OmitCredits {
+		need |= factRowCredits
+	}
 	if err := c.hydrateRows(ctx, partial, need); err != nil {
 		return nil, err
 	}
@@ -1550,7 +1553,9 @@ func (c *Catalog) queryListRows(ctx context.Context, lr *core.ListRows, q string
 	for j, i := range fullAt {
 		out[i] = full[j]
 	}
-	c.rememberExportTitles(ctx, gen, minute, out)
+	if !lr.OmitCredits {
+		c.rememberExportTitles(ctx, gen, minute, out)
+	}
 	return out, nil
 }
 

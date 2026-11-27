@@ -173,7 +173,7 @@ query the client sent:
 | `/ether/v1/kinds/{kind}/resolve` | A viewer presses play | `{libraryKey, item, partIndex?, source?, client?}` → ordered `sources`. Never called during browse. |
 | `/ether/v1/kinds/{kind}/match` | Resolve-time matching, console re-match | `{item, candidates}` → `{matches:[{candidateRef, score 0..1, reasons}]}` best first. |
 | `/ether/v1/setup/{step}/test` | The setup wizard | `{step, fields}` → `{ok, detail, fields?}`. Secrets arrive via `SecretGet`, never in this body. |
-| `/ether/v1/frontend/{key}/…` | Your frontend adapter's traffic | Any method, and the original query string (repeated keys flatten to the first value for remote plugins; hosted plugins receive every value of a repeated key, such as Subsonic's `id=1&id=2`, as an array). Ether authenticated the viewer first; you get `X-Ether-Viewer` headers, `X-Ether-Origin` (`scheme://host[:port][/prefix]` derived from the request using Ether's trusted proxy policy, with any client-supplied `X-Ether-Origin` stripped), and a request-scoped `X-Ether-Viewer-Token` for `kinds.visible`, `kinds.browse`, and remote `frontend.streamURL` callbacks — never a credential. Bodies are capped at 1 MiB (larger gets 413). The exact request bytes always arrive base64-encoded in `bodyBase64` with the client's `contentType`; `body` additionally holds the parsed JSON value when the bytes are valid JSON, and is absent for non-JSON bodies (multipart, form-encoded, binary). The TypeScript SDK's `frontendBodyBytes(req)` returns the exact bytes. |
+| `/ether/v1/frontend/{key}/…` | Your frontend adapter's traffic | Any method, and the original query string (repeated keys flatten to the first value for remote plugins; hosted plugins receive every value of a repeated key, such as Subsonic's `id=1&id=2`, as an array). Ether authenticated the viewer first; you get `X-Ether-Viewer` headers, `X-Ether-Origin` (`scheme://host[:port][/prefix]` derived from the request using Ether's trusted proxy policy, with any client-supplied `X-Ether-Origin` stripped), and a request-scoped `X-Ether-Viewer-Token` for `kinds.visible`, `kinds.browse`, and remote `frontend.streamURL` callbacks — never a credential. Outside declared upload routes, bodies are capped at 1 MiB (larger gets 413). The exact request bytes always arrive base64-encoded in `bodyBase64` with the client's `contentType`; `body` additionally holds the parsed JSON value when the bytes are valid JSON, and is absent for non-JSON bodies (multipart, form-encoded, binary). The TypeScript SDK's `frontendBodyBytes(req)` returns the exact bytes. |
 
 Clients are **always served from Ether's store** — browse, search
 and detail never call you live, so nothing scales with your catalogue
@@ -894,6 +894,76 @@ adapter icon is missing or cannot be rendered.
 Use a protocol's or app's own logo only to identify it, and record its
 source and licence in your package's NOTICE.
 
+### Streamed uploads and durable blobs
+
+Declare upload routes in `ether.contributes.frontendAdapters[].uploadPaths`, for example:
+
+```json
+"uploadPaths": [{ "path": "/saves/*", "maxBytes": 536870912 }]
+```
+
+Paths are relative to the adapter's public prefix. The matcher ignores a trailing
+slash and supports Go path globs such as `*` within a segment. The smallest
+matching limit applies. Declare at most 16 paths, with 1 byte to 512 MiB per route.
+Ether caps each request at 64 MiB by default. The owner can raise that ceiling
+up to 512 MiB under the plugin's **Limits**. Ether applies both limits to the
+whole HTTP body, including multipart headers and framing. Uploads also share
+Ether's staging disk budget.
+For `query_credentials` adapters, send credentials in the query on upload routes.
+
+After viewer authentication, Ether stages the body on disk and passes `upload`
+metadata in place of inline body bytes. Hosted handlers receive `req.upload`.
+The TypeScript adapter receives it as the sixth argument to `handle`, Go uses
+`FrontendUploadFromContext(r.Context())`, and Python uses `ctx.upload`. The
+metadata contains the original `contentType` and either:
+
+- `blob: {ref, size, contentType, sha256, sha1, md5, crc32}` for a raw body.
+- `files: [{ref, size, field, filename, contentType, sha256, sha1, md5, crc32}]` and
+  `fields: {fieldName: [value, ...]}` for multipart. Repeated fields and files are
+  preserved. Multipart allows 64 parts and 128 KiB of inline text and metadata.
+
+Ether computes the digests while staging each file. They are lowercase
+hexadecimal, with eight digits for IEEE CRC-32.
+
+A sidecar implementing its own HTTP or tunnel transport receives the metadata as
+a JSON body with `X-Ether-Frontend-Upload: 1`. Uploaded refs work with
+`cache.read` during the request and are cleaned up when the response ends.
+
+Declare `ether.permissions.storage: "durable"` to retain data after the request.
+The owner sees the 1 GiB per-plugin limit in the permission drawer and can revoke
+access. Durable storage allows up to 10,000 unique blobs and has its own quota.
+Its blobs survive restarts, cache sweeps, and cache eviction. They are deleted
+only by `cache.delete` or plugin uninstall. Keep the returned ref in your own
+per-viewer metadata and check the active viewer before accessing that metadata.
+
+```js
+// Hosted handler. The SDK cache.put returns the ref directly.
+const { blob } = ether.cache.put("", "", null, {
+  durable: true,
+  fromBlob: req.upload.files[0].ref,
+});
+```
+
+Promotion links the staged file into permanent storage without copying it. Store
+the returned `durable:<sha256>` ref. Identical saved bytes share a ref and quota
+charge within the plugin, so delete a ref only after your last use. To save small
+bytes directly, use `cache.put("", name, data, {durable: true})`. Go sidecars use
+`CacheOptionsHost.CachePutWithOptions` and Python sidecars pass the options dict
+to `ctx.ether.cache.put`. For a large saved blob, read ranges with `cache.read`.
+
+Call `ether.cache.stat(ref)` for `{size, sha256, sha1, md5, crc32}` on an
+owned `blob:` or `durable:` ref. TypeScript and Python sidecars use
+`ctx.ether.cache.stat(ref)`. Go sidecars use `BlobHost.CacheStat(ctx, ref)`.
+Ether checks access even when the digests are cached. Staged or recently
+promoted uploads already have digests. Cold reads on viewer paths are limited
+to 256 KiB. A sidecar also has this limit while it is serving a viewer request.
+Use a job or other background work for larger cold reads (up to 1 GiB).
+Exceeding the applicable byte limit returns `quota_exceeded`. Cold hashing has
+a ten-second deadline and shares two worker slots across plugins. When both
+slots are in use the host returns `unavailable`.
+The data directory's `plugin-blob-storage/saved` tree should be included in a
+filesystem backup alongside the matching plugin database snapshot.
+
 ### Frontend adapter authentication
 
 `contributes.frontendAdapters[].auth` picks how Ether authenticates the
@@ -1078,37 +1148,75 @@ Stremio `ether.file`: it rejects `..`, resolves symlinks, checks containment at
 resolve time and again at open time, and opens through `os.OpenRoot`.
 Remote/sidecar resolvers cannot serve host files with this pattern.
 
-### File identification without file contents
+### Listing picked folders
 
-Hosted plugins can call `ether.folders.hash(root, path)` (TypeScript SDK:
-`host.folders.hash`; Go SDK: `FoldersHash`). `path` is relative to the picked
-root. The service requires `folders: read` and the same live folder grant as
-`folders.stat`. It refuses traversal, symlink escapes and non-regular files.
-It returns `{size, modTime, crc32, md5, sha1}`: Unix seconds for `modTime`,
-lowercase hexadecimal digests (CRC32 IEEE, 8 digits; MD5, 32; SHA1, 40).
-No file contents cross the plugin boundary. All three hashes are computed in
-one streaming pass with fixed memory. `hash` stays synchronous for files up to
-256 MiB; larger files must use `hashStart(root, path)` (Go: `FoldersHashStart`).
-This explicitly starts a background job and returns `{id, state, bytes}`.
-Poll `hashPoll(id)` (`FoldersHashPoll`) for bytes processed and state: `running`,
-`done`, `canceled`, or `error`. A done job includes `result` with the hash object;
-an error includes `error`. `hashCancel(id)` (`FoldersHashCancel`) requests cancellation;
-poll until terminal to observe completion. Start and poll do not return file bytes.
+Hosted plugins with a live `folders: read` grant can call
+`ether.folders.list(root, path, {cursor?, limit?})` (Go SDK: `FoldersList`).
+Omit the options to read the first page of up to 1,000 entries. The response
+is `{entries, nextCursor, truncated}`. Pass `nextCursor` back with the same
+root and relative path until it is empty. Names sort in ascending UTF-8 byte
+order. Links that leave the picked folder and broken links are skipped before
+the page fills. Use a job, action or other non-client route. Each page streams the directory with memory proportional to
+the page size. Pages are stable while the directory stays unchanged and do
+not represent a snapshot across directory edits.
 
-There is no file-size ceiling for jobs. At most one runs per plugin and two
-across the process; a busy start returns an error to retry later. Starting the
-same active root/path returns its existing job ID. Readers yield for 2 ms after
-each 1 MiB chunk. Jobs survive the initiating call, have a 24-hour deadline,
-and recheck grants and cancellation every chunk. Files changing during hashing
-abort without caching. Revocation or plugin disable stops ongoing reads.
+### File identification and frame extraction
 
-Successful digests persist in a host-owned database cache indexed by plugin,
-resolved path, size and nanosecond modification time. Unchanged files reuse the
-cached digest after permission and containment checks. Cache rows are removed
-when the plugin is uninstalled. Only explicitly requested files are hashed.
-Job status is process-local, and each plugin's terminal status is retained until
-its next start; after a restart, start again to reuse any completed cached result.
-SDK sidecars cannot use these hosted folder services.
+`ether.folders.hash(root, path, {algorithms?})` (Go SDK: `FoldersHash`)
+requires a regular file within a currently granted root. It returns
+`{size, modTime, crc32?, md5?, sha1?, oshash?, phash?}`, with Unix seconds
+for `modTime` and lowercase hexadecimal digests. By default it computes CRC32
+(IEEE, 8 digits), MD5 (32 digits), SHA1 (40 digits), and `oshash` for files
+of at least 64 KiB. To compute only the OpenSubtitles hash, pass
+`{algorithms:["oshash"]}`. That mode works at any file size of at least
+64 KiB and reads only the first and last 64 KiB, even if they overlap.
+It adds their unsigned little-endian 64-bit words to the file size modulo
+2⁶⁴ and returns 16 hex digits.
+
+Whole-file digests share one streaming pass. For files larger than 256 MiB,
+call `hashStart(root, path, {algorithms?})`. Poll `hashPoll(id)` for job
+state (`running`, `done`, `canceled`, or `error`) and bytes processed for
+whole-file reads. A finished job includes `result`; an error includes `error`.
+`hashCancel(id)` requests cancellation. Jobs survive the initiating call,
+have a 24-hour deadline, and recheck the grant during the read. One job per
+plugin and two globally may run at once. A duplicate active start for the
+same root, path and algorithms returns the existing job ID.
+
+For video `phash`, use `hashStart(root, path, {algorithms:["phash"]})` from
+a job, action or background route permitted for `media.probe`. Viewer
+and client routes cannot start it. Ether follows the
+[Stash v0.31.1 sampling convention](https://github.com/stashapp/stash/blob/v0.31.1/pkg/hash/videophash/phash.go).
+It uses the container duration rounded to hundredths of a second, then
+seeks to `0.05 * duration + i * (0.90 * duration / 25)` for each `i = 0…24`.
+Each frame is 160 px wide with aspect-preserving even height. The frames
+go into a row-major 5×5 montage, hashed with
+[goimagehash v1.1.0 PerceptionHash](https://github.com/corona10/goimagehash/tree/v1.1.0)
+and returned as 16 hex digits. Extraction uses Ether’s FFmpeg and FFprobe,
+with one decoder thread, a minute total for the video hash, and a ten-second
+cap per media process. It requires a video stream and a known duration.
+
+`ether.folders.frame(root, path, {atSec, width, libraryKey?})` (Go SDK:
+`FoldersFrame`) returns `{ref, libraryKey}` for a PNG in the plugin's owned
+media library cache. The library key defaults to the plugin's first declared
+media kind. Pass a nonnegative timestamp and a maximum width from 16 to
+1,024 pixels. Output preserves the aspect ratio and fits within that width
+and 1,024 pixels of height. Use the ref with `cache.read` or an authorized
+frontend adapter blob response. The same background-route restriction applies.
+A frame call has ten seconds and the plugin can extract 20 uncached frames
+per minute, sharing the two global folder hash slots.
+
+Digests and frame references are scoped to the plugin and cached by file device,
+inode, size and nanosecond modification time plus operation options. Ether
+rechecks grants and file identity, discards results if the file changed, and
+regenerates an evicted frame on demand. These folder operations are hosted only.
+
+### Choices on plugin pages
+
+The `ether.settingsForm` widget accepts `select` and `multiSelect` fields
+with inline `options` or a runtime `GET /ether/options/{key}` route. Set
+`search: true` to send search terms as the route's `q` query parameter.
+The form submits the selected value or array of values to its action.
+Fields with unsupported kinds are skipped when rendering the form.
 
 ### Item availability
 

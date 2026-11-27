@@ -354,6 +354,7 @@ export type SourceLimitRules = {
   maxConnections?: number;
   /** Seconds between new provider streams: empty automatic, negative off. */
   tuneGapSeconds?: number;
+  slotWaitSeconds?: number;
   /** New provider streams per hour; empty is no cap. */
   tunesPerHour?: number;
 };
@@ -361,6 +362,7 @@ export type SourceLimitRules = {
 export const normGroup = (name: string) => name.trim().toLowerCase();
 export type ProviderLogin = {
   id: string;
+  label?: string;
   username?: string;
   password?: string;
   playlistUrl?: string;

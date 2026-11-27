@@ -75,6 +75,7 @@ export interface DeclaredPermissions {
   sources?: string;
   ai?: string;
   media?: string;
+  storage?: string;
   secrets?: string[];
 }
 
@@ -217,6 +218,7 @@ export interface PluginManifest {
     };
     permissions?: DeclaredPermissions;
     contributes?: {
+      frontendAdapters?: { uploadPaths?: { path: string; maxBytes: number }[] }[];
       mediaKinds?: { key: string; label: string; library: { name: string } }[];
       liveFeeds?: LiveFeedContribution[];
       screens?: ScreenContribution[];
@@ -229,6 +231,7 @@ export interface PluginManifest {
 }
 
 export interface RuntimeLimits {
+  uploadBytes?: number;
   fetchBytes?: number;
   archiveMemberBytes?: number;
   archiveExpandedBytes?: number;
@@ -599,6 +602,13 @@ export function buildGrantItems(detail: PluginDetail): GrantItem[] {
     items.push({
       key: "ai.search",
       label: t("Uses your language model while a viewer searches"),
+      revocable: true,
+    });
+  }
+  if (d.storage === "durable") {
+    items.push({
+      key: "storage",
+      label: t("Stores up to 1 GiB of data until deleted"),
       revocable: true,
     });
   }
@@ -1055,6 +1065,8 @@ function toFieldDef(
         label,
         help,
         kind: "select",
+        search: raw.search,
+        placeholder: raw.placeholder,
         options: opts,
         numeric: raw.numeric,
       };

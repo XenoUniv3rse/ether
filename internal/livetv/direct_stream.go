@@ -207,8 +207,9 @@ func (d *directStreamState) refresh(ctx context.Context, failedGen uint64) (rawU
 		if !isExpiredStatus(status) {
 			status = http.StatusForbidden
 		}
+		gen := d.gen
 		d.mu.Unlock()
-		return "", nil, nil, d.gen, providerResponseError(status)
+		return "", nil, nil, gen, providerResponseError(status)
 	}
 	if call := d.resolving; call != nil {
 		d.mu.Unlock()
@@ -225,8 +226,8 @@ func (d *directStreamState) refresh(ctx context.Context, failedGen uint64) (rawU
 
 	go func() {
 		rctx, cancel := context.WithTimeout(d.baseCtx, directResolveTimeout)
-		res, rerr := d.resolve(rctx)
-		cancel()
+		defer cancel()
+		res, rerr := d.callResolver(rctx)
 
 		nextURL := strings.TrimSpace(res.URL)
 		if rerr == nil && !validHTTP(nextURL) {
@@ -261,4 +262,15 @@ func (d *directStreamState) refresh(ctx context.Context, failedGen uint64) (rawU
 	case <-ctx.Done():
 		return "", nil, nil, failedGen, ctx.Err()
 	}
+}
+
+// Resolve hooks run in a shared goroutine. A panicking hook must still wake
+// all readers and allow their tune to tear down.
+func (d *directStreamState) callResolver(ctx context.Context) (result DirectStreamResult, err error) {
+	defer func() {
+		if recover() != nil {
+			err = core.ErrNotAvailable
+		}
+	}()
+	return d.resolve(ctx)
 }

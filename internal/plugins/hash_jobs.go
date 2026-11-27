@@ -15,11 +15,21 @@ var folderHashSlots = make(chan struct{}, 2)
 type folderHashWork struct {
 	mu                 sync.Mutex
 	plugin, root, path string
+	algorithms         folderAlgorithms
 	status             FolderHashJob
 	cancel             context.CancelFunc
 }
 
-func (h *host) FoldersHashStart(ctx context.Context, root, path string) (FolderHashJob, error) {
+func (h *host) FoldersHashStart(ctx context.Context, root, path string, options ...FolderHashOptions) (FolderHashJob, error) {
+	algos, err := parseFolderAlgorithms(options)
+	if err != nil {
+		return FolderHashJob{}, err
+	}
+	if algos&folderPHash != 0 {
+		if err := h.checkFolderVideoCall(ctx); err != nil {
+			return FolderHashJob{}, err
+		}
+	}
 	if _, err := h.FoldersStat(ctx, root, path); err != nil {
 		return FolderHashJob{}, err
 	}
@@ -38,7 +48,7 @@ func (h *host) FoldersHashStart(ctx context.Context, root, path string) (FolderH
 		status := w.status
 		w.mu.Unlock()
 		if running {
-			if w.root == root && w.path == path {
+			if w.root == root && w.path == path && w.algorithms == algos {
 				return status, nil
 			}
 			return FolderHashJob{}, fmt.Errorf("folders.hash: plugin already has a running job")
@@ -53,11 +63,11 @@ func (h *host) FoldersHashStart(ctx context.Context, root, path string) (FolderH
 	// The job intentionally survives the initiating host call, but has a finite lifetime.
 	jobCtx, cancel := context.WithTimeout(context.Background(), 24*time.Hour)
 	m.hashSequence++
-	w := &folderHashWork{plugin: h.plugin, root: root, path: path, cancel: cancel, status: FolderHashJob{ID: fmt.Sprintf("hash-%d", m.hashSequence), State: "running"}}
+	w := &folderHashWork{plugin: h.plugin, root: root, path: path, algorithms: algos, cancel: cancel, status: FolderHashJob{ID: fmt.Sprintf("hash-%d", m.hashSequence), State: "running"}}
 	m.hashJobs[w.status.ID] = w
 	go func() {
 		defer func() { cancel(); <-folderHashSlots }()
-		result, err := h.hashFile(jobCtx, root, path, true, func(n int64) { w.mu.Lock(); w.status.Bytes = n; w.mu.Unlock() })
+		result, err := h.hashFile(jobCtx, root, path, algos, true, func(n int64) { w.mu.Lock(); w.status.Bytes = n; w.mu.Unlock() })
 		w.mu.Lock()
 		defer w.mu.Unlock()
 		if err != nil {

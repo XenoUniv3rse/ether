@@ -314,9 +314,26 @@ type PlaySession struct {
 
 // LiveChannel identifies a live session's selected channel independently of its programme.
 type LiveChannel struct {
-	ID     string `json:"id,omitempty"`
-	Name   string `json:"name,omitempty"`
-	Number string `json:"number,omitempty"`
+	ID               string                `json:"id,omitempty"`
+	Name             string                `json:"name,omitempty"`
+	Number           string                `json:"number,omitempty"`
+	Provider         *LiveProvider         `json:"provider,omitempty"`
+	PreviousProvider *LiveProviderIdentity `json:"previousProvider,omitempty"`
+}
+
+// LiveProviderIdentity contains only display-safe metadata from the serving input.
+type LiveProviderIdentity struct {
+	SourceName  string `json:"sourceName"`
+	LoginID     string `json:"loginId,omitempty"`
+	LoginLabel  string `json:"loginLabel,omitempty"`
+	LoginNumber int    `json:"loginNumber,omitempty"`
+}
+
+type LiveProvider struct {
+	LiveProviderIdentity
+	LoginSlot  int  `json:"loginSlot,omitempty"`
+	LoginLimit int  `json:"loginLimit,omitempty"`
+	LocalInUse *int `json:"localInUse,omitempty"`
 }
 
 // SourceReleaseID identifies the selected release when one is available.

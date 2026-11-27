@@ -89,7 +89,9 @@ type KindBackends struct {
 	// check against the plugin's daily allowance in availability_budget.
 	AdmitBackgroundUsenetCheck func(ctx context.Context, pluginID string) (outCtx context.Context, refund func(), resetAt time.Time, err error)
 	CachePut                   func(ctx context.Context, pluginID, libraryKey, name string, r io.Reader) (blobRef string, err error)
+	CacheLookup                func(pluginID, libraryKey, key string) (blobRef string, ok bool)
 	CacheOpen                  func(ctx context.Context, pluginID, blobRef string) (io.ReadSeekCloser, error)
+	CacheOpenForStat           func(ctx context.Context, pluginID, blobRef string) (io.ReadSeekCloser, error)
 	CacheDelete                func(ctx context.Context, pluginID, blobRef string) error
 	CachePartial               func(ctx context.Context, pluginID, libraryKey, key string) (*blobcache.Partial, error)
 	// StreamURL mints a scoped stream ticket for one of the plugin's own
@@ -123,7 +125,9 @@ func (m *Manager) SetKindBackends(b KindBackends) {
 	m.deps.Backends.PeekUsenetCheck = b.PeekUsenetCheck
 	m.deps.Backends.AdmitBackgroundUsenetCheck = b.AdmitBackgroundUsenetCheck
 	m.deps.Backends.CachePut = b.CachePut
+	m.deps.Backends.CacheLookup = b.CacheLookup
 	m.deps.Backends.CacheOpen = b.CacheOpen
+	m.deps.Backends.CacheOpenForStat = b.CacheOpenForStat
 	m.deps.Backends.CacheDelete = b.CacheDelete
 	m.deps.Backends.CachePartial = b.CachePartial
 	m.deps.Backends.StreamURL = b.StreamURL
@@ -155,7 +159,9 @@ func (m *Manager) kindBackends() KindBackends {
 		PeekUsenetCheck:            m.deps.Backends.PeekUsenetCheck,
 		AdmitBackgroundUsenetCheck: m.deps.Backends.AdmitBackgroundUsenetCheck,
 		CachePut:                   m.deps.Backends.CachePut,
+		CacheLookup:                m.deps.Backends.CacheLookup,
 		CacheOpen:                  m.deps.Backends.CacheOpen,
+		CacheOpenForStat:           m.deps.Backends.CacheOpenForStat,
 		CacheDelete:                m.deps.Backends.CacheDelete,
 		CachePartial:               m.deps.Backends.CachePartial,
 		StreamURL:                  m.deps.Backends.StreamURL,
@@ -1366,7 +1372,24 @@ func validateBlobRef(blobRef string) error {
 	return nil
 }
 
+func validateDurableBlobRef(ref string) error {
+	if _, err := blobcache.ParseDurableRef(blobcache.Ref(ref)); err != nil {
+		return &ValidationError{Fields: []FieldError{{Field: "blobRef", Message: "durable reference must be durable:<sha256>"}}}
+	}
+	return nil
+}
+
 func (h *host) CacheOpen(ctx context.Context, blobRef string) (io.ReadSeekCloser, error) {
+	return h.cacheOpen(ctx, blobRef, false)
+}
+
+func (h *host) cacheOpen(ctx context.Context, blobRef string, statOnly bool) (io.ReadSeekCloser, error) {
+	if strings.HasPrefix(blobRef, blobcache.DurableRefPrefix) {
+		if err := validateDurableBlobRef(blobRef); err != nil {
+			return nil, err
+		}
+		return h.openDurableBlob(ctx, blobRef)
+	}
 	r, err := h.callRecord(ctx)
 	if err != nil {
 		return nil, err
@@ -1377,7 +1400,16 @@ func (h *host) CacheOpen(ctx context.Context, blobRef string) (io.ReadSeekCloser
 	if err := validateBlobRef(blobRef); err != nil {
 		return nil, err
 	}
-	backend := h.m.kindBackends().CacheOpen
+	if s := h.m.deps.DurableStorage; s != nil {
+		if src, err := s.Open(h.plugin, blobcache.Ref(blobRef)); !errors.Is(err, blobcache.ErrNotFound) {
+			return src, storageError(err)
+		}
+	}
+	backends := h.m.kindBackends()
+	backend := backends.CacheOpen
+	if statOnly {
+		backend = backends.CacheOpenForStat
+	}
 	if backend == nil {
 		return nil, ErrUnavailable
 	}
@@ -1388,6 +1420,12 @@ func (h *host) CacheOpen(ctx context.Context, blobRef string) (io.ReadSeekCloser
 // namespaces, freeing its quota immediately. Deleting a ref that is absent or
 // already evicted succeeds.
 func (h *host) CacheDelete(ctx context.Context, blobRef string) error {
+	if strings.HasPrefix(blobRef, blobcache.DurableRefPrefix) {
+		if err := validateDurableBlobRef(blobRef); err != nil {
+			return err
+		}
+		return h.deleteDurableBlob(ctx, blobRef)
+	}
 	if err := h.requireWritableToolContext(ctx); err != nil {
 		return err
 	}

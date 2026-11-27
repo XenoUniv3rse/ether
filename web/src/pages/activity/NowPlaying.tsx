@@ -31,6 +31,7 @@ import {
 import type { AsyncState } from "../../lib/hooks";
 import { qualityFallback } from "../../lib/quality-fallback";
 import { useTitle } from "../../lib/titles";
+import { LiveProvider } from "./LiveProvider";
 import { clockOf, Flow, PlayDrawer, progressLabel, usePlayParam } from "./PlayDrawer";
 
 /** Mbps, the unit Activity uses everywhere. */
@@ -153,6 +154,7 @@ function StreamCard({
               ) : null}
               {subtitle ? <p className="truncate text-sm text-on-scrim/75">{subtitle}</p> : null}
             </div>
+            <LiveProvider provider={s.liveProvider} previous={s.previousLiveProvider} onScrim />
             {s.isLive ? (
               <p className="text-xs text-on-scrim/75">{t("Live")}</p>
             ) : s.progress !== null ? (
@@ -340,6 +342,7 @@ function StreamRow({
           {channelLabel(s) && channelLabel(s) !== displayTitle ? (
             <p className="truncate text-sm text-fg-muted">{channelLabel(s)}</p>
           ) : null}
+          <LiveProvider provider={s.liveProvider} previous={s.previousLiveProvider} />
           {subtitle ? <p className="truncate text-sm text-fg-muted">{subtitle}</p> : null}
           <p className="flex min-w-0 items-center gap-1.5 text-xs text-fg-muted">
             <span className="grid size-4 shrink-0 place-items-center rounded-full bg-primary-subtle text-[9px] font-semibold uppercase text-primary">

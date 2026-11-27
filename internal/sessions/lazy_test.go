@@ -72,13 +72,17 @@ func TestLazyStreamCapabilityReusesSessionAndRevalidatesGrant(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	ticketKey := []byte("local playback test key")
+	if err := EnableLazyDirectTickets(lazy, ticketKey); err != nil {
+		t.Fatal(err)
+	}
 	req := frontend.PlanRequest{Viewer: &core.Viewer{ID: 1}, Device: core.Device{ID: "install-device"}, Protocol: "stremio", Item: core.MovieKey(1), Intent: frontend.PlayIntent{Options: core.DecideOptions{DirectPlay: true}}}
 	path, err := lazy.Issue(ctx, "account-credential-secret", req)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if strings.Contains(path, "account-credential-secret") || strings.Contains(path, "grant-reference") || pb.prepares != 0 {
-		t.Fatalf("issue resolved or leaked: %q prepares=%d", path, pb.prepares)
+		t.Fatalf("issue resolved or exposed grant data: prepares=%d", pb.prepares)
 	}
 	variantCalls := 0
 	b.deps.Variants = func(context.Context, *core.Viewer, *core.Title, core.ClientCaps) ([]core.ReleaseVariant, error) {
@@ -94,6 +98,21 @@ func TestLazyStreamCapabilityReusesSessionAndRevalidatesGrant(t *testing.T) {
 	lazy.ServeHTTP(head, httptest.NewRequest(http.MethodHead, path, nil))
 	if head.Code != http.StatusOK || pb.prepares != 0 {
 		t.Fatalf("HEAD status=%d, prepares=%d", head.Code, pb.prepares)
+	}
+	var issued int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM sessions_lazy_streams`).Scan(&issued); err != nil || issued != 0 {
+		t.Fatalf("stream issue or HEAD persisted a capability: count=%d err=%v", issued, err)
+	}
+	tokenOffset := len("/sessions/lazy/") + len(lazyDirectPrefix)
+	damagedByte := 'A'
+	if path[tokenOffset] == 'A' {
+		damagedByte = 'B'
+	}
+	damaged := path[:tokenOffset] + string(damagedByte) + path[tokenOffset+1:]
+	tampered := httptest.NewRecorder()
+	lazy.ServeHTTP(tampered, httptest.NewRequest(http.MethodHead, damaged, nil))
+	if tampered.Code != http.StatusNotFound {
+		t.Fatalf("tampered stream ticket status=%d", tampered.Code)
 	}
 	var wg sync.WaitGroup
 	statuses := make(chan int, 4)
@@ -125,9 +144,12 @@ func TestLazyStreamCapabilityReusesSessionAndRevalidatesGrant(t *testing.T) {
 	if remoteResponse.Code != http.StatusNotFound {
 		t.Fatalf("remote policy bypass: %d", remoteResponse.Code)
 	}
-	// A fresh surface handler can redeem the durable capability from the DB.
+	// A fresh surface handler can authenticate the same ticket and reuse the redeemed capability.
 	restarted, err := NewLazyStreams(db, b, "stremio", grants, time.Hour, func(r *http.Request) bool { return r.Header.Get("X-Test-Remote") == "yes" })
 	if err != nil {
+		t.Fatal(err)
+	}
+	if err := EnableLazyDirectTickets(restarted, ticketKey); err != nil {
 		t.Fatal(err)
 	}
 	reused := httptest.NewRecorder()

@@ -612,7 +612,6 @@ func (s *Service) launchBroadcast(ctx context.Context, ss *session, l broadcastL
 			if admitted != nil && admitted.link != nil {
 				provider.primed = admitted.link
 				provider.ladder.next = admitted.link.src.ID
-				consumed = true
 			}
 			planner = provider
 		}
@@ -621,10 +620,12 @@ func (s *Service) launchBroadcast(ctx context.Context, ss *session, l broadcastL
 			return nil, err
 		}
 		if admitted != nil {
+			consumed = true
 			b.steadyBitrate = admitted.shape.bitrateKbps
 		}
 		b.dvrCache = s.liveDVRCache()
 		if c.Kind == "iptv" {
+			b.providerBacked = true
 			b.dvr = s.timeshiftWindow(c)
 			b.dvrLiveWindow = s.latencyPolicy().PlaylistWindow()
 		} else if c.DVRMinutes > 0 {

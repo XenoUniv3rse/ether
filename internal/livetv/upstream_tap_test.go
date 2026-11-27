@@ -77,6 +77,24 @@ func TestOneProviderConnectionPerChannel(t *testing.T) {
 			t.Fatalf("reader started at %q: %v", head, err)
 		}
 	}
+	// Leave one response unread while another subscriber reads from the
+	// same tap. Reader backpressure is isolated from the producer.
+	stalled, err := http.Get(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stalled.Body.Close()
+	fast, err := http.Get(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	buf := make([]byte, 16)
+	_, err = io.ReadFull(fast.Body, buf)
+	fast.Body.Close()
+	if err != nil {
+		t.Fatal("unread subscriber blocked another reader", err)
+	}
+	stalled.Body.Close()
 	second, err := s.Tune(ctx, &core.User{ID: 2}, one.ID, core.ClientCaps{})
 	if err != nil {
 		t.Fatal(err)

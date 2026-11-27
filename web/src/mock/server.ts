@@ -154,6 +154,7 @@ export interface FakeOptions {
   householdAudio?: boolean;
   /** Include a remote stream capped by the shared upload budget (browser mock preview). */
   remoteBudgetDemo?: boolean;
+  liveProviderDemo?: boolean;
   /** Seed pre-rolls, their recent plays and a video still converting. */
   prerolls?: boolean;
   /** Simulate a port conflict on Jellyfin (true / "named" / "unknown"). */
@@ -1623,53 +1624,90 @@ export function createFakeServer(opts: FakeOptions = {}) {
             notAfter: new Date(Date.now() + 80 * 86400000).toISOString(),
           },
         },
-        sessions: [
-          {
-            ID: "s1",
-            UserID: 2,
-            Key: session.key,
-            ratingKey: Number(session.key) || 0,
-            TitleName: `${session.title} (${session.year})`,
-            Username: "Sam Rivera",
-            Client: {
-              product: "Plex for Apple TV",
-              deviceName: "Living Room",
-              platform: "tvOS",
-              remote: false,
-            },
-            ip: "192.168.1.42",
-            Decision: "directplay",
-            decisionVideoCopy: true,
-            decisionAudioCopy: true,
-            bitrateKbps: 6540,
-            sourceVideo: "H.264 1080p SDR",
-            outputVideo: "H.264 1080p SDR",
-            sourceAudio: "EAC3 5.1",
-            outputAudio: "EAC3 5.1",
-            container: "mkv",
-            BytesServed: 2.1 * 1024 ** 3,
-            BufferedBytes: 183 * 1024 ** 2,
-            BufferedUntil: 3000e9,
-            SpeedBps: 3.2e6,
-            StartedAt: new Date(Date.now() - 40 * 60000).toISOString(),
-            Info: { size: 5.4 * 1024 ** 3, duration: 118 * 60 * 1e9, bitrateKbps: 6540 },
-            viewOffset: 46 * 60 * 1000,
-            origin: "Real-Debrid",
-            experience: {
-              requested: true,
-              pictured: true,
-              startTime: 1.8e9,
-              bufferEvents: 0,
-              buffering: 0,
-            },
-            Resolution: {
-              release: {
-                name: `${session.title.replace(/ /g, ".")}.${session.year}.1080p.WEB-DL.H264`,
+        sessions: opts.liveProviderDemo
+          ? [
+              {
+                ID: "live-sports",
+                UserID: 2,
+                Key: 0,
+                TitleName: "Saturday Football",
+                Username: "Sam Rivera",
+                Client: {
+                  product: "Plex for Apple TV",
+                  deviceName: "Living Room",
+                  platform: "tvOS",
+                },
+                Decision: "copy",
+                decisionVideoCopy: true,
+                decisionAudioCopy: true,
+                BytesServed: 54 * 1024 ** 2,
+                StartedAt: new Date(Date.now() - 4 * 60_000).toISOString(),
+                Info: { bitrateKbps: 6900 },
+                Failovers: 1,
+                origin: "Live TV",
+                liveChannel: {
+                  id: "mock-sports",
+                  name: "Sports Live",
+                  number: "24",
+                  provider: {
+                    sourceName: "Northstar TV",
+                    loginId: "primary",
+                    loginLabel: "jo***",
+                    loginSlot: 2,
+                    loginLimit: 3,
+                    localInUse: 2,
+                  },
+                  previousProvider: { sourceName: "Weekend Sports" },
+                },
               },
-            },
-          },
-          ...(opts.remoteBudgetDemo ? [remoteSession] : []),
-        ],
+            ]
+          : [
+              {
+                ID: "s1",
+                UserID: 2,
+                Key: session.key,
+                ratingKey: Number(session.key) || 0,
+                TitleName: `${session.title} (${session.year})`,
+                Username: "Sam Rivera",
+                Client: {
+                  product: "Plex for Apple TV",
+                  deviceName: "Living Room",
+                  platform: "tvOS",
+                  remote: false,
+                },
+                ip: "192.168.1.42",
+                Decision: "directplay",
+                decisionVideoCopy: true,
+                decisionAudioCopy: true,
+                bitrateKbps: 6540,
+                sourceVideo: "H.264 1080p SDR",
+                outputVideo: "H.264 1080p SDR",
+                sourceAudio: "EAC3 5.1",
+                outputAudio: "EAC3 5.1",
+                container: "mkv",
+                BytesServed: 2.1 * 1024 ** 3,
+                BufferedBytes: 183 * 1024 ** 2,
+                BufferedUntil: 3000e9,
+                SpeedBps: 3.2e6,
+                StartedAt: new Date(Date.now() - 40 * 60000).toISOString(),
+                Info: { size: 5.4 * 1024 ** 3, duration: 118 * 60 * 1e9, bitrateKbps: 6540 },
+                viewOffset: 46 * 60 * 1000,
+                origin: "Real-Debrid",
+                experience: {
+                  requested: true,
+                  pictured: true,
+                  startTime: 1.8e9,
+                  bufferEvents: 0,
+                  buffering: 0,
+                },
+                Resolution: {
+                  release: {
+                    name: `${session.title.replace(/ /g, ".")}.${session.year}.1080p.WEB-DL.H264`,
+                  },
+                },
+              },
+              ...(opts.remoteBudgetDemo ? [remoteSession] : []),
+            ],
       },
     };
   }

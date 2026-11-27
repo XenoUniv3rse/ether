@@ -75,7 +75,9 @@ type Backends struct {
 	// check against the plugin's daily allowance in availability_budget.
 	AdmitBackgroundUsenetCheck func(ctx context.Context, pluginID string) (outCtx context.Context, refund func(), resetAt time.Time, err error)
 	CachePut                   func(ctx context.Context, pluginID, libraryKey, name string, r io.Reader) (blobRef string, err error)
+	CacheLookup                func(pluginID, libraryKey, key string) (blobRef string, ok bool)
 	CacheOpen                  func(ctx context.Context, pluginID, blobRef string) (io.ReadSeekCloser, error)
+	CacheOpenForStat           func(ctx context.Context, pluginID, blobRef string) (io.ReadSeekCloser, error)
 	CacheDelete                func(ctx context.Context, pluginID, blobRef string) error
 	CachePartial               func(ctx context.Context, pluginID, libraryKey, key string) (*blobcache.Partial, error)
 	// StreamURL mints a scoped stream ticket for one of a plugin's own kind
@@ -94,6 +96,8 @@ type Backends struct {
 
 // Deps are the plugin host's explicit dependencies.
 type Deps struct {
+	FFmpeg, FFprobe   string
+	DurableStorage    *blobcache.DurableStore
 	Busy              func() bool
 	ReadRuntimeConfig func() config.Plugins
 	SaveRuntimeConfig func(string, config.PluginRuntimeLimits) error
@@ -128,8 +132,11 @@ type Deps struct {
 
 // Manager is the plugin host. It is safe for concurrent use.
 type Manager struct {
-	screenPushMu sync.RWMutex
-	screenPush   ScreenPush
+	storageMu           sync.RWMutex // coordinates durable writes with uninstall
+	remoteClientMu      sync.Mutex
+	activeRemoteClients map[string]int
+	screenPushMu        sync.RWMutex
+	screenPush          ScreenPush
 	// viewerState backs the kinds.state / kinds.favorite / kinds.played /
 	// kinds.rate / kinds.favorites / kinds.playlist* host services.
 	viewerState        atomic.Pointer[KindViewerState]
@@ -176,6 +183,7 @@ type Manager struct {
 	aiCompleteTimes   map[string][]time.Time
 	aiCompleteLimit   int
 	mediaProbeTimes   map[string][]time.Time
+	folderFrameTimes  map[string][]time.Time
 	mediaProbeLimit   int
 	aiSearchTimes     map[string][]time.Time
 	aiSearchLimit     int
@@ -276,6 +284,7 @@ func New(deps Deps) (*Manager, error) {
 		usenetCheckTimes:  map[string][]time.Time{},
 		aiCompleteTimes:   map[string][]time.Time{},
 		mediaProbeTimes:   map[string][]time.Time{},
+		folderFrameTimes:  map[string][]time.Time{},
 		aiSearchTimes:     map[string][]time.Time{},
 		aiSearchCache:     map[string]map[string]aiSearchCacheEntry{},
 		aiSearchInflight:  map[string]*aiSearchFlight{},
@@ -641,7 +650,9 @@ func (m *Manager) CallStream(ctx context.Context, pluginID string, req Request) 
 	vctx, releaseViewer := m.bindAdapterViewer(ctx, pluginID, &req, deadline)
 	vctx = withCallSearchQuery(withCallPath(vctx, req.Path), extractCallSearchQuery(req))
 	ctx, cancel := context.WithTimeout(vctx, deadline)
+	releaseClient := m.trackRemoteClientCall(r.Manifest, req.Path)
 	cleanup := func() {
+		releaseClient()
 		releaseViewer()
 		cancel()
 	}
@@ -725,6 +736,12 @@ func DeadlineFor(path string) time.Duration {
 	return wasm.DeadlineFor(path)
 }
 
+// RedactDiagnostic removes stored plugin credentials from diagnostic text before
+// it leaves the plugin subsystem.
+func (m *Manager) RedactDiagnostic(ctx context.Context, pluginID, text string) string {
+	return m.store.redactKnown(ctx, pluginID, text)
+}
+
 // callOnce makes one call to a plugin through its runtime, records it in the
 // inspector ring (secrets redacted) and feeds failures into health.
 // Adapters (WS9) call plugins only through here.
@@ -801,6 +818,8 @@ func (m *Manager) callOnce(ctx context.Context, pluginID string, req Request) (R
 	}
 	cctx, cancel := context.WithTimeout(withCallSearchQuery(withCallPath(vctx, req.Path), searchQuery), callTimeout)
 	defer cancel()
+	releaseClient := m.trackRemoteClientCall(r.Manifest, req.Path)
+	defer releaseClient()
 	resp, err := rt.Call(cctx, req)
 	ms := m.now().Sub(start).Milliseconds()
 	rec := CallRecord{Plugin: pluginID, Route: req.Path, Method: req.Method, Status: resp.Status, MS: ms,
@@ -1484,7 +1503,16 @@ func (m *Manager) Remove(ctx context.Context, id string, undoFirst bool) error {
 		}
 		return true
 	})
-	if err := m.store.purge(ctx, id); err != nil {
+	m.storageMu.Lock()
+	if m.deps.DurableStorage != nil {
+		if err := m.deps.DurableStorage.Purge(id); err != nil {
+			m.storageMu.Unlock()
+			return ErrUnavailable
+		}
+	}
+	err = m.store.purge(ctx, id)
+	m.storageMu.Unlock()
+	if err != nil {
 		return err
 	}
 	m.clearBlockedLocalHosts(id)
@@ -1496,6 +1524,7 @@ func (m *Manager) Remove(ctx context.Context, id string, undoFirst bool) error {
 	delete(m.usenetCheckTimes, id)
 	delete(m.aiCompleteTimes, id)
 	delete(m.mediaProbeTimes, id)
+	delete(m.folderFrameTimes, id)
 	for key := range m.aiSearchTimes {
 		if strings.HasPrefix(key, id+"\x00") {
 			delete(m.aiSearchTimes, key)

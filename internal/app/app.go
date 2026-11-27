@@ -192,8 +192,13 @@ type App struct {
 	proxyNamed     bool
 	// seenFamilies records a client family policy once per process. Playback
 	// does not take a write lock to refresh last_seen.
-	seenFamilies sync.Map
-	db           *sql.DB
+	seenFamilies  map[string]string
+	familyWrites  sync.WaitGroup
+	familySlots   chan struct{}
+	familyMu      sync.Mutex
+	familyClosed  bool
+	familyPending map[string]bool
+	db            *sql.DB
 	// databaseURL is the cluster database, placed in join tokens
 	// (cluster_settings.go); empty on a standalone server.
 	databaseURL string
@@ -1175,6 +1180,10 @@ func (a *App) housekeeping(ctx context.Context) {
 // Close releases every component in reverse order of construction.
 func (a *App) Close() {
 	a.closeOnce.Do(func() {
+		a.familyMu.Lock()
+		a.familyClosed = true
+		a.familyMu.Unlock()
+		a.familyWrites.Wait()
 		if a.stopPrewarm != nil {
 			a.stopPrewarm()
 		}

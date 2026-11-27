@@ -1,3 +1,4 @@
+import { SearchSetting } from "./SearchSetting";
 import { SubtabNav } from "../../components/layout";
 import { parseDuration, formatDuration, type DurationUnit } from "./duration";
 import { SettingAnchor } from "../../components/SettingFocus";
@@ -67,6 +68,8 @@ export type FieldDef =
       optionsFrom?: string;
       numeric?: boolean;
       defaultValue?: string;
+      search?: boolean;
+      placeholder?: string;
     }
   | {
       key: string;
@@ -518,6 +521,18 @@ function SchemaFieldBody({
       );
     }
     case "select":
+      if (def.search && searchOptions) {
+        return (
+          <SearchSetting
+            field={def}
+            value={value}
+            onChange={(v) => onChange(def.numeric ? Number(v) : v)}
+            description={description}
+            searchOptions={searchOptions}
+            disabled={isDisabled}
+          />
+        );
+      }
       return (
         <SelectRow
           def={def}
@@ -1507,6 +1522,7 @@ export function SchemaGroups({
   footer,
   loadOptions,
   searchOptions,
+  showUnknownFields = true,
 }: {
   groups: FieldGroup[];
   value: Obj;
@@ -1516,6 +1532,7 @@ export function SchemaGroups({
   footer?: ReactNode;
   loadOptions?: LoadOptions;
   searchOptions?: SearchOptions;
+  showUnknownFields?: boolean;
 }) {
   const primaryGroups = useMemo(() => groups.filter((g) => !g.advanced), [groups]);
   const advancedGroups = useMemo(() => groups.filter((g) => g.advanced), [groups]);
@@ -1527,7 +1544,7 @@ export function SchemaGroups({
     if (at >= 0) setActive(String(at));
   }, [errors, primaryGroups, prefix]);
   const known = new Set(groups.flatMap((g) => [...g.fields, ...(g.more ?? [])].map((f) => f.key)));
-  const extra = Object.keys(value).filter((k) => !known.has(k));
+  const extra = showUnknownFields ? Object.keys(value).filter((k) => !known.has(k)) : [];
   const hasAdvanced = advancedGroups.length > 0;
   const sectionFooter = hasAdvanced ? undefined : footer;
   const body = (

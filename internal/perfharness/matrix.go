@@ -35,13 +35,53 @@ func MatrixClients(live bool) []Client {
 			)
 		case "xtream":
 			const auth = "?username={xtreamUser}&password={xtreamPass}"
+			for j := range clients[i].Steps {
+				step := &clients[i].Steps[j]
+				switch step.Name {
+				case "get_live_streams":
+					step.Discover = discoverRegexp("xtreamLive", xtreamStreamID)
+				case "get_vod_streams":
+					old := step.Discover
+					step.Discover = func(vars map[string]string, body []byte) {
+						old(vars, body)
+						discoverMatrixArtwork(vars, body, "xtreamCover", "/xtream/image/", "stream_icon")
+					}
+				}
+			}
+			if live {
+				clients[i].Steps = append(clients[i].Steps,
+					Step{Name: "get_short_epg", Class: classGuide, Path: "/player_api.php" + auth + "&action=get_short_epg&stream_id={xtreamLive}"},
+					Step{Name: "get_simple_data_table", Class: classGuide, Path: "/player_api.php" + auth + "&action=get_simple_data_table&stream_id={xtreamLive}"},
+				)
+			}
 			clients[i].Steps = append(clients[i].Steps,
+				Step{Name: "VOD cover", Class: classDetail, Path: "/image/{xtreamCover}"},
+				Step{Name: "VOD cover probe", Class: classDetail, Method: http.MethodHead, Path: "/image/{xtreamCover}"},
 				Step{Name: "XMLTV guide export", Class: classGuide, Path: "/xmltv.php" + auth},
 				Step{Name: "M3U lineup export", Class: classGuide, Path: "/get.php" + auth + "&type=m3u_plus"},
 			)
 		case "stremio":
+			clients[i].Prefix = "/stremio"
+			for j := range clients[i].Steps {
+				step := &clients[i].Steps[j]
+				step.Path = "/{stremio}" + step.Path
+				if step.Name == "catalog movies" {
+					old := step.Discover
+					step.Discover = func(vars map[string]string, body []byte) {
+						old(vars, body)
+						var catalog struct {
+							Metas json.RawMessage `json:"metas"`
+						}
+						if json.Unmarshal(body, &catalog) == nil {
+							discoverMatrixArtwork(vars, catalog.Metas, "stremioPoster", "/stremio/image/", "poster")
+						}
+					}
+				}
+			}
 			clients[i].Steps = append(clients[i].Steps,
-				Step{Name: "movie stream choices", Class: classPlayback, Path: "/stream/movie/{movieMeta}.json"},
+				Step{Name: "movie stream choices", Class: classPlayback, Path: "/{stremio}/stream/movie/{movieMeta}.json", Discover: discoverMatrixStremioStream},
+				Step{Name: "catalog poster", Class: classDetail, Path: "/image/{stremioPoster}"},
+				Step{Name: "movie stream probe", Class: classPlayback, Method: http.MethodHead, Path: "/sessions/lazy/{stremioTicket}/file"},
 			)
 		case "vela":
 			clients[i].Steps = append(clients[i].Steps,
@@ -81,6 +121,49 @@ func MatrixClients(live bool) []Client {
 		}
 	}
 	return clients
+}
+
+func discoverMatrixArtwork(vars map[string]string, body []byte, variable, prefix, field string) {
+	delete(vars, variable)
+	var items []map[string]json.RawMessage
+	if json.Unmarshal(body, &items) != nil {
+		return
+	}
+	for _, item := range items {
+		var raw string
+		if json.Unmarshal(item[field], &raw) != nil {
+			continue
+		}
+		u, err := url.Parse(raw)
+		if err != nil {
+			continue
+		}
+		if secret, ok := strings.CutPrefix(u.Path, prefix); ok && secret != "" && !strings.Contains(secret, "/") {
+			vars[variable] = url.PathEscape(secret)
+			return
+		}
+	}
+}
+
+func discoverMatrixStremioStream(vars map[string]string, body []byte) {
+	var result struct {
+		Streams []struct {
+			URL string `json:"url"`
+		} `json:"streams"`
+	}
+	delete(vars, "stremioTicket")
+	if json.Unmarshal(body, &result) != nil || len(result.Streams) == 0 {
+		return
+	}
+	u, err := url.Parse(result.Streams[0].URL)
+	if err != nil {
+		return
+	}
+	rest, ok := strings.CutPrefix(u.Path, "/stremio/sessions/lazy/")
+	token, tail, split := strings.Cut(rest, "/")
+	if ok && split && token != "" && tail == "file" {
+		vars["stremioTicket"] = url.PathEscape(token)
+	}
 }
 
 func discoverMatrixVelaID(variable string) func(map[string]string, []byte) {

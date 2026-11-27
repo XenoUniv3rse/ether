@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"github.com/braedonsaunders/ether/internal/config"
 	"github.com/braedonsaunders/ether/internal/core"
 	"io"
@@ -73,8 +74,8 @@ func (h *memHost) SetWatchState(context.Context, int64, string, bool) error {
 func (h *memHost) CollectionsUpsert(context.Context, json.RawMessage) error {
 	return ErrPermissionDenied
 }
-func (h *memHost) FoldersList(context.Context, string, string) ([]FolderEntry, error) {
-	return nil, ErrPermissionDenied
+func (h *memHost) FoldersList(context.Context, string, string, ...FolderListOptions) (FolderPage, error) {
+	return FolderPage{}, ErrPermissionDenied
 }
 func (h *memHost) FoldersStat(context.Context, string, string) (FolderEntry, error) {
 	return FolderEntry{}, ErrPermissionDenied
@@ -245,12 +246,16 @@ func TestHostedPublicSettingsAccessor(t *testing.T) {
 	}
 }
 
-func (memHost) FoldersHash(context.Context, string, string) (FolderHash, error) {
+func (memHost) FoldersHash(context.Context, string, string, ...FolderHashOptions) (FolderHash, error) {
 	return FolderHash{}, nil
 }
 
-func (memHost) FoldersHashStart(context.Context, string, string) (FolderHashJob, error) {
+func (memHost) FoldersHashStart(context.Context, string, string, ...FolderHashOptions) (FolderHashJob, error) {
 	return FolderHashJob{}, nil
+}
+
+func (memHost) FoldersFrame(context.Context, string, string, FolderFrameOptions) (FolderFrame, error) {
+	return FolderFrame{}, fmt.Errorf("folders.frame requires the hosted runtime")
 }
 
 func (memHost) FoldersHashPoll(context.Context, string) (FolderHashJob, error) {

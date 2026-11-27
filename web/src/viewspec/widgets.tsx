@@ -20,6 +20,7 @@ import { StatusDot } from "../components/status";
 import { TitleSearch } from "../components/pickers";
 import type { HealthLevel } from "../lib/health";
 import { SchemaGroups, type FieldDef, type FieldGroup } from "../pages/settings/SchemaForm";
+import { usePluginOptions } from "../pages/plugins/options";
 import { usePluginView } from "./context";
 import { validateFrameProps, validateWidgetProps } from "./registry";
 
@@ -201,6 +202,7 @@ const FIELD_KINDS = new Set([
   "number",
   "bool",
   "select",
+  "multiSelect",
   "list",
   "bytes",
   "hidden",
@@ -212,19 +214,17 @@ function toFieldDef(raw: unknown): { def?: FieldDef; error?: string } {
   const key = str(raw.key);
   const label = str(raw.label);
   const kind = str(raw.kind);
+  if (kind !== "group" && !FIELD_KINDS.has(kind)) return {};
   if (!key || !label) return { error: "field needs a key and a label" };
   const help = typeof raw.help === "string" ? raw.help : undefined;
   if (kind === "group") {
     const fields: FieldDef[] = [];
     for (const child of Array.isArray(raw.fields) ? raw.fields : []) {
       const converted = toFieldDef(child);
-      if (converted.error) return converted;
-      fields.push(converted.def!);
+      if (converted.def) fields.push(converted.def);
     }
     return { def: { key, label, help, kind: "group", fields } };
   }
-  if (kind === "json") return { error: "json fields are not allowed in plugin schemas" };
-  if (!FIELD_KINDS.has(kind)) return { error: `unknown field kind "${kind}"` };
   switch (kind) {
     case "text":
     case "secret":
@@ -255,15 +255,21 @@ function toFieldDef(raw: unknown): { def?: FieldDef; error?: string } {
     case "bool":
       return { def: { key, label, help, kind: "bool" } };
     case "select":
+    case "multiSelect":
       return {
         def: {
           key,
           label,
           help,
-          kind: "select",
-          options: (Array.isArray(raw.options) ? raw.options : [])
-            .filter(isObj)
-            .map((o) => ({ value: str(o.value), label: str(o.label) })),
+          kind,
+          search: raw.search === true,
+          placeholder: typeof raw.placeholder === "string" ? raw.placeholder : undefined,
+          optionsFrom: raw.search === true ? undefined : key,
+          options: (Array.isArray(raw.options) ? raw.options : []).filter(isObj).map((o) => ({
+            value: str(o.value),
+            label: str(o.label),
+            description: typeof o.hint === "string" ? o.hint : undefined,
+          })),
           numeric: raw.numeric === true,
         },
       };
@@ -289,6 +295,7 @@ function toFieldDef(raw: unknown): { def?: FieldDef; error?: string } {
 
 function SettingsFormWidget({ props }: { props: Record<string, unknown> }) {
   const view = usePluginView();
+  const options = usePluginOptions(view.plugin);
   const [values, setValues] = useState<Record<string, unknown>>(() =>
     isObj(props.values) ? { ...props.values } : {},
   );
@@ -304,16 +311,17 @@ function SettingsFormWidget({ props }: { props: Record<string, unknown> }) {
     for (const rawField of Array.isArray(rawGroup.fields) ? rawGroup.fields : []) {
       const converted = toFieldDef(rawField);
       if (converted.error) errors.push(converted.error);
-      else fields.push(converted.def!);
+      else if (converted.def) fields.push(converted.def);
     }
-    groups.push({
-      id: typeof rawGroup.id === "string" ? rawGroup.id : undefined,
-      title: typeof rawGroup.title === "string" ? rawGroup.title : undefined,
-      description: typeof rawGroup.description === "string" ? rawGroup.description : undefined,
-      fields,
-    });
+    if (fields.length)
+      groups.push({
+        id: typeof rawGroup.id === "string" ? rawGroup.id : undefined,
+        title: typeof rawGroup.title === "string" ? rawGroup.title : undefined,
+        description: typeof rawGroup.description === "string" ? rawGroup.description : undefined,
+        fields,
+      });
   }
-  if (errors.length) return <WidgetError errors={errors} />;
+  if (!groups.length && errors.length) return <WidgetError errors={errors} />;
   const submit = async () => {
     setBusy(true);
     try {
@@ -329,6 +337,9 @@ function SettingsFormWidget({ props }: { props: Record<string, unknown> }) {
       onChange={setValues}
       errors={{}}
       prefix="pluginSettings"
+      showUnknownFields={false}
+      loadOptions={options}
+      searchOptions={options}
       footer={
         <Button type="button" size="sm" disabled={busy} onClick={() => void submit()}>
           {str(props.submitLabel) || t("Save")}

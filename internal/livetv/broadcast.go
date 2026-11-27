@@ -219,6 +219,7 @@ type broadcast struct {
 	mu                   sync.Mutex
 	renditions           map[string]*broadcastRendition
 	lastViewer           time.Time
+	providerBacked       bool
 	closed               bool
 	wg                   sync.WaitGroup
 	prepared             chan broadcastPrepared

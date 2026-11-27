@@ -105,6 +105,18 @@ type LibraryExporter interface {
 	ExportLibraryPage(context.Context, *Viewer, Device, string, RatingKey, int) (LibraryExportPage, error)
 }
 
+type exportTitlesOnlyKey struct{}
+
+// WithExportTitlesOnly requests title and policy facts without row credits.
+func WithExportTitlesOnly(ctx context.Context) context.Context {
+	return context.WithValue(ctx, exportTitlesOnlyKey{}, true)
+}
+
+func ExportTitlesOnly(ctx context.Context) bool {
+	only, _ := ctx.Value(exportTitlesOnlyKey{}).(bool)
+	return only
+}
+
 // ExportPolicy is what one viewer's export of one view depends on besides
 // catalogue content. Two exports with the same Stamp are built under the
 // same policy; any change to the viewer's restrictions, hidden titles,

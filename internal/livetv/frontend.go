@@ -140,12 +140,15 @@ func toFrontendProgrammes(ps []Programme) []frontend.LiveTVProgramme {
 
 func toFrontendSessionInfo(info SessionInfo) frontend.LiveTVSessionInfo {
 	out := frontend.LiveTVSessionInfo{
-		ID:             info.ID,
-		SubscriptionID: info.SubscriptionID,
-		ActivityID:     info.ActivityID,
-		MediaInfo:      info.MediaInfo,
-		Channel:        ToFrontendChannel(info.Channel),
-		StartedAt:      info.StartedAt,
+		ActiveSourceID:   info.ActiveSourceID,
+		Provider:         info.Provider,
+		PreviousProvider: info.PreviousProvider,
+		ID:               info.ID,
+		SubscriptionID:   info.SubscriptionID,
+		ActivityID:       info.ActivityID,
+		MediaInfo:        info.MediaInfo,
+		Channel:          ToFrontendChannel(info.Channel),
+		StartedAt:        info.StartedAt,
 	}
 	if info.Programme != nil {
 		prog := toFrontendProgramme(*info.Programme)
@@ -203,9 +206,19 @@ func (h liveTVHost) Guide(ctx context.Context, v *core.Viewer, q frontend.LiveGu
 		return nil, err
 	}
 	out := make([]frontend.LiveProgramme, 0, len(ps))
+	var counts map[string]int
+	if q.PerChannelLimit {
+		counts = make(map[string]int, len(q.Channels))
+	}
 	for _, p := range ps {
+		if q.PerChannelLimit {
+			if counts[p.ChannelID] >= q.Limit {
+				continue
+			}
+			counts[p.ChannelID]++
+		}
 		out = append(out, frontend.LiveProgramme{ID: p.ID, ChannelID: p.ChannelID, Start: p.Start, End: p.End, Genres: p.Item.Genres, MediaType: p.Item.MediaType, Item: p.Item.Key, Title: p.Item.Title, Summary: p.Item.Summary, Rating: p.Item.Rating, ShowTitle: p.Item.ShowTitle, EpisodeTitle: p.Item.EpisodeTitle, Season: p.Item.Season, Episode: p.Item.Episode})
-		if q.Limit > 0 && len(out) >= q.Limit {
+		if !q.PerChannelLimit && q.Limit > 0 && len(out) >= q.Limit {
 			break
 		}
 	}

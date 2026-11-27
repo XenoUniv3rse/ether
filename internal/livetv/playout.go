@@ -41,7 +41,10 @@ const directChannelPrefix = "direct:"
 
 // DirectStream describes an ephemeral direct-URL live stream (such as a
 // plugin library live tab item) tuned through the HLS passthrough/relay
-// pipeline without registering a Live TV channel.
+// pipeline without registering a Live TV channel. The plugin authorizes only
+// this item and its resolver. It supplies neither a registered channel ID
+// nor provider credentials for alternate sources, so a tune may refresh this
+// item but cannot substitute another channel or borrow its login.
 type DirectStream struct {
 	ID         string
 	Title      string
@@ -54,6 +57,7 @@ type DirectStream struct {
 type session struct {
 	archiveInput        bool // staged relay grants have a finite upstream
 	catchUp             *catchUpSession
+	outputProvider      *providerChange // direct DASH or HTTP input
 	broadcastPolicy     broadcastViewerPolicy
 	broadcast           *broadcastLease
 	ephemeral           bool
@@ -279,6 +283,10 @@ func (s *Service) observeSession(p *core.PlaySession, ended bool, problem string
 }
 
 func (s *Service) sessionSnapshotLocked(ss *session, now time.Time) core.PlaySession {
+	return s.sessionSnapshotLockedWithUsage(ss, now, nil)
+}
+
+func (s *Service) sessionSnapshotLockedWithUsage(ss *session, now time.Time, usage map[providerLoginKey]int) core.PlaySession {
 	p := ss.view
 	if archive := ss.catchUp; archive != nil {
 		p.Decision = archive.info.Decision.Kind
@@ -288,6 +296,7 @@ func (s *Service) sessionSnapshotLocked(ss *session, now time.Time) core.PlaySes
 	}
 	if p.LiveChannel != nil {
 		ch := *p.LiveChannel
+		ch.Provider, ch.PreviousProvider = ss.servingProviderLocked().snapshot(usage)
 		p.LiveChannel = &ch
 	}
 	p.Liveness = s.sessionLivenessLocked(ss, now).State
@@ -336,18 +345,13 @@ func (ss *session) closeWithReason(s *Service, expired bool) {
 	ss.closed = true
 	ss.generation++
 	broadcast := ss.broadcast
-	ss.broadcast = nil
 	owned := ss.owned
-	ss.publishOwnedLocked(nil)
 	dash := ss.dash
 	archive := ss.catchUp
 	httpStream := ss.http
-	ss.dash = nil
-	ss.http = nil
 	reserved := ss.reserved
 	ready, requested, delivered := ss.ready, ss.consumed, ss.firstMediaDelivered
 	bytesServed := ss.bytesServed
-	mode := sessionPlayoutModeLocked(ss)
 	stopInfo := ss.info
 	stopSrc := ss.inputSource
 	now := s.clockNow()
@@ -356,6 +360,11 @@ func (ss *session) closeWithReason(s *Service, expired bool) {
 		end = ss.last
 	}
 	snap := s.sessionSnapshotLocked(ss, end)
+	ss.publishOwnedLocked(nil)
+	ss.broadcast = nil
+	ss.dash = nil
+	ss.http = nil
+	mode := sessionPlayoutModeLocked(ss)
 	ss.catchUp = nil
 	snap.LastActive = end
 	ss.mu.Unlock()
@@ -542,23 +551,6 @@ func (s *Service) TuneWithSession(ctx context.Context, u *core.User, channelID s
 		s.mu.Unlock()
 		return SessionInfo{}, core.ErrStreamLimit
 	}
-	// A provider that allows N connections can carry N different channels;
-	// viewers of a channel already playing share its connection.
-	if c.Kind == "iptv" && c.SourceID != "" {
-		if max := s.sourceConnectionLimit(c.SourceID); max > 0 {
-			playing := map[string]bool{}
-			for _, other := range s.sessions {
-				if !other.archiveInput && other.info.Channel.SourceID == c.SourceID {
-					playing[other.info.Channel.ID] = true
-				}
-			}
-			if active := len(playing) + s.inputRelay.taps.externalCount(c.SourceID); !playing[c.ID] && active >= max {
-				s.mu.Unlock()
-				s.emitProviderLimitReached(c.SourceID, active, max, c.ID)
-				return SessionInfo{}, s.providerConnectionCapError(c.SourceID, max, active, ErrProviderBusy)
-			}
-		}
-	}
 	s.nextSubscription++
 	ss := &session{
 		tuneStartedAt: started,
@@ -598,6 +590,12 @@ func (s *Service) TuneWithSession(ctx context.Context, u *core.User, channelID s
 	if c.SourceID != "" && s.hasOnDemand.Load() {
 		s.wakeSourceRefresh()
 	}
+	ready := false
+	defer func() {
+		if !ready {
+			_ = s.Stop(ctx, ss.info.ID, u)
+		}
+	}()
 	s.notifySessionsChanged()
 	s.beginPersonal(c, u)
 	if limiter, ok := s.o.Playback.(channelLimiter); ok {
@@ -658,9 +656,6 @@ func (s *Service) TuneWithSession(ctx context.Context, u *core.User, channelID s
 			if err == nil {
 				err = s.startIPTVSession(ctx, ss)
 			}
-			if err == nil {
-				err = s.awaitOwnedStart(ctx, ss)
-			}
 		}
 		if err != nil {
 			s.Stop(ctx, ss.info.ID, u)
@@ -668,9 +663,6 @@ func (s *Service) TuneWithSession(ctx context.Context, u *core.User, channelID s
 		}
 	} else {
 		err = s.startIPTVSession(ctx, ss)
-		if err == nil {
-			err = s.awaitOwnedStart(ctx, ss)
-		}
 		if err != nil {
 			s.Stop(ctx, ss.info.ID, u)
 			return SessionInfo{}, s.wrapProviderConnectionCap(c.SourceID, err)
@@ -681,6 +673,10 @@ func (s *Service) TuneWithSession(ctx context.Context, u *core.User, channelID s
 		ss.mu.Unlock()
 		return SessionInfo{}, core.ErrNotFound
 	}
+	if err := ctx.Err(); err != nil {
+		ss.mu.Unlock()
+		return SessionInfo{}, err
+	}
 	ss.ready = true
 	if matched, ok := eventProgs[ss.inputSource.ID]; ok {
 		ss.info.Programme = &matched
@@ -690,6 +686,7 @@ func (s *Service) TuneWithSession(ctx context.Context, u *core.User, channelID s
 		}
 	}
 	info := ss.info
+	ss.servingProviderLocked().attachSession(&info, u.IsOwner, nil)
 	tunedSrc := ss.inputSource
 	tunedUser := ss.user
 	tunedCaps := ss.caps
@@ -705,6 +702,7 @@ func (s *Service) TuneWithSession(ctx context.Context, u *core.User, channelID s
 	info.Channel.StreamURL = ""
 	info.Channel.redactArchiveSource()
 	info.Channel.StreamSources = nil
+	ready = true
 	return info, nil
 }
 
@@ -712,7 +710,7 @@ func (s *Service) TuneWithSession(ctx context.Context, u *core.User, channelID s
 // library live tab item) through Ether's HLS passthrough and relay pipeline
 // without requiring Live TV channels to exist or registering one in Live TV.
 func (s *Service) TuneDirectStream(ctx context.Context, u *core.User, ds DirectStream, caps core.ClientCaps, clientSessionID string) (result SessionInfo, resultErr error) {
-	if !validHTTP(ds.URL) {
+	if !validHTTP(ds.URL) && ds.Resolve == nil {
 		return SessionInfo{}, core.ErrNotAvailable
 	}
 	started := time.Now()
@@ -834,7 +832,6 @@ func (s *Service) TuneDirectStream(ctx context.Context, u *core.User, ds DirectS
 		tuneStartedAt: started,
 		ephemeral:     true,
 		allowCheck:    ds.AllowCheck,
-		direct:        newDirectStreamState(base, ds.URL, ds.Headers, ds.Resolve),
 		info: SessionInfo{
 			ID: attemptID, SubscriptionID: s.nextSubscription,
 			ActivityID: liveSessionID(), ClientSessionID: clientSessionID,
@@ -843,6 +840,7 @@ func (s *Service) TuneDirectStream(ctx context.Context, u *core.User, ds DirectS
 		streamGrant: randomID(), user: *u, caps: caps, last: s.o.Now(),
 	}
 	ss.ctx, ss.cancel = context.WithCancel(base)
+	ss.direct = newDirectStreamState(ss.ctx, ds.URL, ds.Headers, ds.Resolve)
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	ss.startupCancel = cancel
@@ -858,6 +856,12 @@ func (s *Service) TuneDirectStream(ctx context.Context, u *core.User, ds DirectS
 	tunedSess = ss
 	s.sessions[ss.info.ID] = ss
 	s.mu.Unlock()
+	ready := false
+	defer func() {
+		if !ready {
+			_ = s.Stop(ctx, ss.info.ID, u)
+		}
+	}()
 	s.notifySessionsChanged()
 
 	if limiter, ok := s.o.Playback.(channelLimiter); ok {
@@ -876,9 +880,6 @@ func (s *Service) TuneDirectStream(ctx context.Context, u *core.User, ds DirectS
 	}
 
 	err := s.startIPTVSession(ctx, ss)
-	if err == nil {
-		err = s.awaitOwnedStart(ctx, ss)
-	}
 	if err != nil {
 		s.Stop(ctx, ss.info.ID, u)
 		return SessionInfo{}, err
@@ -888,8 +889,13 @@ func (s *Service) TuneDirectStream(ctx context.Context, u *core.User, ds DirectS
 		ss.mu.Unlock()
 		return SessionInfo{}, core.ErrNotFound
 	}
+	if err := ctx.Err(); err != nil {
+		ss.mu.Unlock()
+		return SessionInfo{}, err
+	}
 	ss.ready = true
 	info := ss.info
+	ss.servingProviderLocked().attachSession(&info, u.IsOwner, nil)
 	tunedSrc := ss.inputSource
 	tunedUser := ss.user
 	tunedCaps := ss.caps
@@ -905,6 +911,7 @@ func (s *Service) TuneDirectStream(ctx context.Context, u *core.User, ds DirectS
 	info.Channel.StreamURL = ""
 	info.Channel.redactArchiveSource()
 	info.Channel.StreamSources = nil
+	ready = true
 	return info, nil
 }
 
@@ -1007,14 +1014,16 @@ func (s *Service) Session(ctx context.Context, id string, u *core.User) (Session
 	if ss.relayInfo != nil {
 		info.MediaInfo = ss.relayInfo
 	}
-	if lease := ss.owned; lease != nil && lease.source != nil {
-		if id := lease.source(); id != "" {
-			info.ActiveSourceID = id
-		}
-	}
+	provider := ss.servingProviderLocked()
 	channel := ss.info.Channel
 	ephemeral := ss.ephemeral
 	ss.mu.Unlock()
+	owner := u != nil && u.IsOwner
+	var usage map[providerLoginKey]int
+	if owner && provider != nil {
+		usage = s.localLoginUsage()
+	}
+	provider.attachSession(&info, owner, usage)
 	info.Channel.StreamURL = ""
 	info.Channel.redactArchiveSource()
 	info.Channel.StreamSources = nil
@@ -1094,17 +1103,22 @@ func (s *Service) startIPTVSession(ctx context.Context, ss *session) error {
 	if err := ss.live(ctx); err != nil {
 		return err
 	}
+	published := false
+	defer func() {
+		if !published {
+			if stage.broadcast != nil {
+				stage.broadcast.close()
+			}
+			stage.owned.close()
+			s.revokeInput(stage)
+		}
+	}()
 	if err := s.startIPTV(ctx, stage); err != nil {
 		return err
 	}
 	ss.mu.Lock()
 	if ss.closed || ss.generation != gen {
-		if stage.broadcast != nil {
-			stage.broadcast.close()
-		}
 		ss.mu.Unlock()
-		stage.owned.close()
-		s.revokeInput(stage)
 		return core.ErrNotFound
 	}
 	ss.inputURL, ss.inputSource, ss.inputHeaders = stage.inputURL, stage.inputSource, stage.inputHeaders
@@ -1118,6 +1132,7 @@ func (s *Service) startIPTVSession(ctx context.Context, ss *session) error {
 	if ss.owned != nil && ss.owned.relay != nil && !ss.owned.relay.shared {
 		ss.owned.relay.bind(ss)
 	}
+	published = true
 	ss.mu.Unlock()
 	return nil
 }
@@ -1453,6 +1468,16 @@ func (s *Service) passthroughToRelay(ctx context.Context, ss *session) (*ownedLe
 	if s.transcoder() == nil {
 		return nil, core.ErrNotAvailable
 	}
+	if s.sessionGrant(ss) == nil {
+		ss.mu.Lock()
+		src, headers := ss.inputSource, ss.inputHeaders
+		ss.mu.Unlock()
+		if err := s.grantInputForContext(ctx, ss, src, headers, true, s.latencyPolicy().TargetLatency()); err != nil {
+			return nil, err
+		}
+		// On success the shared relay transfers this grant to its producer.
+		defer s.revokeInput(ss)
+	}
 	if info == nil {
 		probed, err := s.probeSessionInput(ctx, ss)
 		if err != nil {
@@ -1592,10 +1617,14 @@ func (s *Service) ViewingSessions() []*core.PlaySession {
 	s.mu.Unlock()
 	now := s.o.Now()
 	out := make([]*core.PlaySession, 0, len(list))
+	var usage map[providerLoginKey]int
+	if len(list) > 0 {
+		usage = s.localLoginUsage()
+	}
 	for _, ss := range list {
 		var p core.PlaySession
 		if ss.mu.TryLock() {
-			p = s.sessionSnapshotLocked(ss, now)
+			p = s.sessionSnapshotLockedWithUsage(ss, now, usage)
 			ss.mu.Unlock()
 		} else {
 			// Startup I/O holds ss.mu: never block monitoring.
@@ -1723,18 +1752,7 @@ func (s *Service) sourceConnectionsInUse(sourceID string) int {
 	if sourceID == "" {
 		return 0
 	}
-	playing := map[string]bool{}
-	s.mu.Lock()
-	for _, other := range s.sessions {
-		if !other.archiveInput && other.info.Channel.SourceID == sourceID {
-			playing[other.info.Channel.ID] = true
-		}
-	}
-	for chID := range s.broadcastProviders[sourceID] {
-		playing[chID] = true
-	}
-	s.mu.Unlock()
-	return max(len(playing), s.inputRelay.taps.open(sourceID)) + s.inputRelay.taps.externalCount(sourceID)
+	return s.inputRelay.taps.inUse(sourceID)
 }
 
 func (s *Service) providerConnectionCapError(sourceID string, maxConns, inUse int, cause error) error {

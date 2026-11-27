@@ -429,14 +429,34 @@ func (m *MockHost) UpsertCollection(_ context.Context, collection map[string]any
 }
 
 // FoldersList returns folder entries for root/path.
-func (m *MockHost) FoldersList(_ context.Context, root, path string) ([]FolderEntry, error) {
+func (m *MockHost) FoldersList(_ context.Context, root, path string, options ...FolderListOptions) (FolderPage, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	key := root
 	if path != "" {
 		key = root + "/" + path
 	}
-	return m.Folders[key], nil
+	opts := FolderListOptions{}
+	if len(options) > 0 {
+		opts = options[0]
+	}
+	limit := opts.Limit
+	if limit <= 0 || limit > 1000 {
+		limit = 1000
+	}
+	page := FolderPage{Entries: make([]FolderEntry, 0)}
+	for _, entry := range m.Folders[key] {
+		if entry.Name > opts.Cursor {
+			page.Entries = append(page.Entries, entry)
+		}
+	}
+	sort.Slice(page.Entries, func(i, j int) bool { return page.Entries[i].Name < page.Entries[j].Name })
+	if len(page.Entries) > limit {
+		page.Entries = page.Entries[:limit]
+		page.NextCursor = page.Entries[limit-1].Name
+		page.Truncated = true
+	}
+	return page, nil
 }
 
 // FoldersStat returns a FolderEntry for root and path.
@@ -1314,12 +1334,16 @@ func (h *TestHarness) File(path, rangeHeader string) RawResponse {
 	})
 }
 
-func (*MockHost) FoldersHash(context.Context, string, string) (FolderHash, error) {
+func (*MockHost) FoldersHash(context.Context, string, string, ...FolderHashOptions) (FolderHash, error) {
 	return FolderHash{}, fmt.Errorf("folders.hash requires the hosted runtime")
 }
 
-func (*MockHost) FoldersHashStart(context.Context, string, string) (FolderHashJob, error) {
+func (*MockHost) FoldersHashStart(context.Context, string, string, ...FolderHashOptions) (FolderHashJob, error) {
 	return FolderHashJob{}, fmt.Errorf("folders.hash requires the hosted runtime")
+}
+
+func (*MockHost) FoldersFrame(context.Context, string, string, FolderFrameOptions) (FolderFrame, error) {
+	return FolderFrame{}, fmt.Errorf("folders.frame requires the hosted runtime")
 }
 
 func (*MockHost) FoldersHashPoll(context.Context, string) (FolderHashJob, error) {

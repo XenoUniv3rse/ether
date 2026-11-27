@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/braedonsaunders/ether/internal/core"
+	"github.com/braedonsaunders/ether/internal/plexguid"
 	"github.com/braedonsaunders/ether/internal/plextv"
 	"github.com/braedonsaunders/ether/internal/store"
 )
@@ -148,7 +149,7 @@ func TestCommunityTitlesSkipsAmbiguousIdentityAndPreservesRSS(t *testing.T) {
 	defer db.Close()
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprint(w, `{"data":{"userV2":{"watchlist":{"nodes":[{"id":"ambiguous-guid","type":"MOVIE"},{"id":"valid-guid","type":"MOVIE"}],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}`)
+		fmt.Fprint(w, `{"data":{"userV2":{"watchlist":{"nodes":[{"id":"ambiguous-guid","type":"MOVIE"},{"id":"ambiguous-sentinel","type":"MOVIE"},{"id":"ambiguous-wrapped","type":"MOVIE"},{"id":"valid-guid","type":"MOVIE"}],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}`)
 	}))
 	defer server.Close()
 
@@ -160,13 +161,18 @@ func TestCommunityTitlesSkipsAmbiguousIdentityAndPreservesRSS(t *testing.T) {
 		Catalog:   fakeCatalog{titles: map[core.RatingKey]core.Title{movieKey: movieTitle}},
 		Community: &plextv.CommunityClient{Client: server.Client(), URL: server.URL},
 		PlexLookup: func(_ context.Context, guid string) (core.RatingKey, error) {
-			if guid == "plex://movie/ambiguous-guid" {
+			switch guid {
+			case "plex://movie/ambiguous-guid":
 				return 0, errors.New("ambiguous Plex identity")
-			}
-			if guid == "plex://movie/valid-guid" {
+			case "plex://movie/ambiguous-sentinel":
+				return 0, plexguid.ErrAmbiguous
+			case "plex://movie/ambiguous-wrapped":
+				return 0, fmt.Errorf("wrap: %w", plexguid.ErrAmbiguous)
+			case "plex://movie/valid-guid":
 				return movieKey, nil
+			default:
+				return 0, core.ErrNotFound
 			}
-			return 0, core.ErrNotFound
 		},
 	})
 
@@ -174,8 +180,8 @@ func TestCommunityTitlesSkipsAmbiguousIdentityAndPreservesRSS(t *testing.T) {
 	if err != nil {
 		t.Fatalf("communityTitles error: %v", err)
 	}
-	if unmatched != 1 || len(got) != 1 || got[0].Key != movieKey {
-		t.Fatalf("got=%+v unmatched=%d, want 1 valid and 1 unmatched", got, unmatched)
+	if unmatched != 3 || len(got) != 1 || got[0].Key != movieKey {
+		t.Fatalf("got=%+v unmatched=%d, want 1 valid and 3 unmatched", got, unmatched)
 	}
 
 	const source = "plex-community:friend-1"
