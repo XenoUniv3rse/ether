@@ -319,7 +319,7 @@ func (s *Server) routes() chi.Router {
 		r.Post("/library/parts/{part}", s.handlePartSelect)
 		get("/library/streams/{stream}", s.handleStream)
 		r.Put("/library/streams/{stream}", s.handleStream)
-		r.Delete("/library/streams/{stream}", s.handleStream)
+		r.Delete("/library/streams/{stream}", s.ownerOnly(s.handleStream))
 
 		// Downloads (Download Queue API)
 		r.Post("/downloadQueue", s.handleDownloadQueueCreate)

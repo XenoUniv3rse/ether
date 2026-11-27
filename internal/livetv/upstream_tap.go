@@ -1570,6 +1570,14 @@ func tapRingSize(n int) int { return n - n%tsPacket }
 // pumpTap fills a transport-stream tap and reconnects it when the provider
 // stalls or ends, until the tap closes or reconnecting gives up.
 func (s *Service) pumpTap(t *upstreamTap, raw string, body io.Reader) {
+	defer func() {
+		if recover() != nil {
+			err := errors.New("live transport stream pump stopped unexpectedly")
+			s.logger().Error(err.Error())
+			t.close(err)
+		}
+	}()
+
 	for {
 		err := t.fillTS(body)
 		t.mu.Lock()
@@ -1662,51 +1670,58 @@ func (t *upstreamTap) fillTS(body io.Reader) error {
 	for {
 		n, err := body.Read(buf)
 		if n > 0 {
-			t.mu.Lock()
-			if t.closed || t.raceWinner != nil {
-				t.mu.Unlock()
-				return io.EOF
-			}
 			var abortRace context.CancelFunc
 			var doneRace chan struct{}
-			if t.raceCancel != nil {
-				abortRace, doneRace = t.raceCancel, t.raceDone
-				t.raceCancel, t.raceDone, t.raceActive = nil, nil, false
+			var adaptLog *slog.Logger
+			var learnedGap, stallAfter time.Duration
+			var recovered bool
+			if stopped := func() bool {
+				t.mu.Lock()
+				defer t.mu.Unlock()
+				if t.closed || t.raceWinner != nil {
+					return true
+				}
+				now := time.Now()
+				prev := t.lastData
+				t.lastData = now
+				t.dataAt.Store(now.UnixNano())
+				t.epochReads++
+				t.epochBytes += int64(n)
+				var gap time.Duration
+				if t.epochReads > 1 && !prev.IsZero() && now.After(prev) {
+					gap = now.Sub(prev)
+				}
+				recovered = t.stalled && t.body != nil
+				if recovered {
+					t.stalled = false
+					t.failed = false
+				}
+				clockBefore := t.ts.clock
+				var marks []tsMark
+				out, marks = t.ts.feed(buf[:n], out[:0], t.written)
+				if len(out) > 0 {
+					t.writeLocked(out)
+					t.indexLocked(marks)
+					t.cond.Broadcast()
+				}
+				adaptLog, learnedGap, stallAfter = t.observeRhythmLocked(now, gap, clockBefore, marks)
+				if t.ts.format != t.published {
+					// A program change: tell consumers now, not at the next tick.
+					t.published = t.ts.format
+					t.publishLocked()
+				}
+				if time.Duration(t.ts.clock-t.epochClock)*time.Second/tsClockHz >= tapHealthy {
+					t.burstProbeUsed = false
+					t.failures, t.refusals, t.failed = 0, 0, false
+				}
+				if t.raceCancel != nil {
+					abortRace, doneRace = t.raceCancel, t.raceDone
+					t.raceCancel, t.raceDone, t.raceActive = nil, nil, false
+				}
+				return false
+			}(); stopped {
+				return io.EOF
 			}
-			now := time.Now()
-			prev := t.lastData
-			t.lastData = now
-			t.dataAt.Store(now.UnixNano())
-			t.epochReads++
-			t.epochBytes += int64(n)
-			var gap time.Duration
-			if t.epochReads > 1 && !prev.IsZero() && now.After(prev) {
-				gap = now.Sub(prev)
-			}
-			recovered := t.stalled && t.body != nil
-			if recovered {
-				t.stalled = false
-				t.failed = false
-			}
-			clockBefore := t.ts.clock
-			var marks []tsMark
-			out, marks = t.ts.feed(buf[:n], out[:0], t.written)
-			if len(out) > 0 {
-				t.writeLocked(out)
-				t.indexLocked(marks)
-				t.cond.Broadcast()
-			}
-			adaptLog, learnedGap, stallAfter := t.observeRhythmLocked(now, gap, clockBefore, marks)
-			if t.ts.format != t.published {
-				// A program change: tell consumers now, not at the next tick.
-				t.published = t.ts.format
-				t.publishLocked()
-			}
-			if time.Duration(t.ts.clock-t.epochClock)*time.Second/tsClockHz >= tapHealthy {
-				t.burstProbeUsed = false
-				t.failures, t.refusals, t.failed = 0, 0, false
-			}
-			t.mu.Unlock()
 			if doneRace != nil {
 				close(doneRace)
 			}

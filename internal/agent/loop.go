@@ -68,7 +68,7 @@ var errMissingToolCall = errors.New("model did not complete its promised tool ca
 const missingToolNote = "The model could not finish the requested step. Try again."
 
 // loop runs the bounded tool-calling loop for one turn.
-func (s *Service) loop(ctx context.Context, p tools.Principal, threadID, turnID string, tc TurnContext, extra []llm.StreamMessage, emit func(Chunk) error) (finish string, runErr error) {
+func (s *Service) loop(ctx context.Context, p tools.Principal, threadID, turnID, ownerPrompt string, tc TurnContext, extra []llm.StreamMessage, emit func(Chunk) error) (finish string, runErr error) {
 	started := time.Now()
 	iterations := 0
 	defer func() {
@@ -85,6 +85,7 @@ func (s *Service) loop(ctx context.Context, p tools.Principal, threadID, turnID 
 		defs = append(defs, llm.ToolDef{Name: t.Name, Description: t.Description, InputSchema: t.InputSchema})
 		byName[t.Name] = t
 	}
+	webLinks := newTurnWebLinks(ownerPrompt)
 	stored, err := s.store.AllMessages(ctx, threadID)
 	if err != nil {
 		return "error", err
@@ -300,7 +301,7 @@ func (s *Service) loop(ctx context.Context, p tools.Principal, threadID, turnID 
 					defer wg.Done()
 					for idx := range next {
 						collect := func(c Chunk) error { executions[idx].chunks = append(executions[idx].chunks, c); return nil }
-						executions[idx].result, executions[idx].output = s.executeTool(ctx, p, threadID, turnID, byName, calls[idx], collect)
+						executions[idx].result, executions[idx].output = s.executeTool(ctx, p, threadID, turnID, byName, webLinks, calls[idx], collect)
 					}
 				}()
 			}
@@ -310,6 +311,7 @@ func (s *Service) loop(ctx context.Context, p tools.Principal, threadID, turnID 
 			close(next)
 			wg.Wait()
 		}
+		var searchLinks []map[string]string
 		for idx, call := range calls {
 			// Editor proposals carry the owner's current unsaved channel through
 			// approval replay, rather than rebuilding from the saved channel.
@@ -338,7 +340,13 @@ func (s *Service) loop(ctx context.Context, p tools.Principal, threadID, turnID 
 					}
 				}
 			} else {
-				res, outPart = s.executeTool(ctx, p, threadID, turnID, byName, call, emit)
+				res, outPart = s.executeTool(ctx, p, threadID, turnID, byName, webLinks, call, emit)
+			}
+			if call.Name == "web_search" && !res.IsError {
+				if output, ok := outPart["output"].(map[string]any); ok {
+					links, _ := output["results"].([]map[string]string)
+					searchLinks = append(searchLinks, links...)
+				}
 			}
 			parts = append(parts, outPart)
 			// Approval / secret parts are appended right after their tool part.
@@ -350,7 +358,7 @@ func (s *Service) loop(ctx context.Context, p tools.Principal, threadID, turnID 
 				}
 			}
 			if res.IsError {
-				if _, available := byName[call.Name]; available {
+				if _, available := byName[call.Name]; available && call.Name != "web_fetch" {
 					pendingRepair = call.Name
 				}
 			} else {
@@ -378,6 +386,9 @@ func (s *Service) loop(ctx context.Context, p tools.Principal, threadID, turnID 
 			}
 			results = append(results, res)
 			persist()
+		}
+		for _, link := range searchLinks {
+			webLinks.add(link["url"])
 		}
 		messages = append(messages, llm.StreamMessage{Role: "tool", ToolResults: results})
 		persist()
@@ -426,7 +437,7 @@ func stringSliceFromAny(v any) []string {
 // executeTool validates, runs, audits and renders one tool call. It returns
 // the model-facing result and the stored UI part. A proposal or secret
 // request adds an extra part under the "__extraPart" key (stripped by caller).
-func (s *Service) executeTool(ctx context.Context, p tools.Principal, threadID, turnID string, byName map[string]tools.Tool, call llm.ToolCall, emit func(Chunk) error) (llm.ToolResult, part) {
+func (s *Service) executeTool(ctx context.Context, p tools.Principal, threadID, turnID string, byName map[string]tools.Tool, webLinks turnWebLinks, call llm.ToolCall, emit func(Chunk) error) (llm.ToolResult, part) {
 	started := time.Now()
 	defer func() {
 		s.log.Debug("agent tool timings", "tool", call.Name, "call_id", call.ID, "duration", time.Since(started))
@@ -451,16 +462,18 @@ func (s *Service) executeTool(ctx context.Context, p tools.Principal, threadID, 
 	}
 	tool, ok := byName[call.Name]
 	if !ok {
-		// Re-check against the live catalogue (visibility may have changed).
-		tool, ok = s.catalogue.Lookup(ctx, p, call.Name)
-		if !ok {
-			return s.toolError(ctx, p, threadID, call, toolPart, emit,
-				tools.Userf("Tool %q is not available.", call.Name))
-		}
+		return s.toolError(ctx, p, threadID, call, toolPart, emit,
+			tools.Userf("Tool %q is not available.", call.Name))
 	}
 	if err := validateInput(tool.InputSchema, input); err != nil {
 		return s.toolError(ctx, p, threadID, call, toolPart, emit,
 			tools.Userf("Invalid tool input: %v", err))
+	}
+	if call.Name == "web_fetch" && !webLinks.allows(input["url"]) {
+		result, output := s.toolError(ctx, p, threadID, call, toolPart, emit,
+			tools.Userf("Invalid tool input: %v", "url"))
+		result.Content = mustJSON(map[string]any{"error": "Use an exact link from the owner's message or a previous web search in this turn."})
+		return result, output
 	}
 	start := time.Now()
 	result, err := tool.Execute(ctx, p, input)

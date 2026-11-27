@@ -379,7 +379,10 @@ func (a *App) liveReleaseAccess(sess *core.PlaySession) subtitles.ReleaseAccess 
 	return access
 }
 
-func (s subtitleSurface) UploadSubtitle(_ context.Context, t *core.Title, _ *core.User, filename, format, language string, body []byte) (core.StreamInfo, error) {
+func (s subtitleSurface) UploadSubtitle(_ context.Context, t *core.Title, user *core.User, filename, format, language string, body []byte) (core.StreamInfo, error) {
+	if user == nil || !user.IsOwner {
+		return core.StreamInfo{}, core.ErrUnauthorized
+	}
 	return s.app.subtitles.StoreUpload(t, filename, format, language, body)
 }
 

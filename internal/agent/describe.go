@@ -93,7 +93,7 @@ func (s *Service) DescribeCollection(ctx context.Context, query string) (spec *c
 		}
 		return nil
 	}
-	_, err = runner.runAssistant(ctx, p, thread.ID, TurnContext{Route: DescribeCollectionRoute},
+	_, err = runner.runAssistant(ctx, p, thread.ID, "", TurnContext{Route: DescribeCollectionRoute},
 		[]llm.StreamMessage{{Role: "user", Content: "This is one headless turn with no human follow-up. Finalise with collection_draft without asking questions. If the words describe nothing you can interpret as films or series (random letters, a name that matches nothing), do not draft: reply in one sentence that nothing matches."}}, emit)
 	if err = errors.Join(err, turnErr, ctx.Err()); err != nil {
 		return nil, err

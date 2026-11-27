@@ -99,10 +99,10 @@ func TestSubtitleSyncHandlerResolvesTitlesBounded(t *testing.T) {
 		}
 	}
 
-	// Non-list requests still reach the subtitles service handler.
+	// Shared timing changes require owner access.
 	rec = httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/aaa", strings.NewReader(`{}`)))
-	if rec.Code != http.StatusTeapot {
-		t.Fatalf("POST status = %d, want fallback", rec.Code)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("unauthenticated POST status = %d", rec.Code)
 	}
 }

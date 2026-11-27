@@ -33,6 +33,11 @@ func WithStoreNow(now func() time.Time) StoreOption {
 	}
 }
 
+// WithStoreActions supplies the schema for action parameters on graph writes.
+func WithStoreActions(actions ActionRegistry) StoreOption {
+	return func(s *SQLStore) { s.actions = actions }
+}
+
 // WithStoreOnChange registers a callback invoked after a flow definition is
 // saved, deleted, or enabled/disabled.
 func WithStoreOnChange(fn func(flowID string)) StoreOption {
@@ -58,6 +63,7 @@ type SQLStore struct {
 	db      *sql.DB
 	dialect store.Dialect
 	now     func() time.Time
+	actions ActionRegistry
 
 	cbMu      sync.RWMutex
 	onChanges []func(flowID string)
@@ -226,10 +232,6 @@ func (s *SQLStore) SaveFlow(ctx context.Context, f Flow) (*Flow, error) {
 	if strings.TrimSpace(f.ID) == "" {
 		f.ID = NewFlowID()
 	}
-	graphBytes, err := json.Marshal(f.Graph)
-	if err != nil {
-		return nil, fmt.Errorf("flows: marshal graph: %w", err)
-	}
 	limitsBytes, err := json.Marshal(f.Limits)
 	if err != nil {
 		return nil, fmt.Errorf("flows: marshal limits: %w", err)
@@ -270,6 +272,31 @@ func (s *SQLStore) SaveFlow(ctx context.Context, f Flow) (*Flow, error) {
 		f.ID,
 	).Scan(&existingVersion, &existingCreated, &existingFailures, &existingLastRun, &existingLastStat)
 
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return nil, err
+	}
+	if markers := actionSecretMarkers(f.Graph, s.actions); len(markers) > 0 {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, errMissingActionSecret
+		}
+		var previousJSON []byte
+		if err := tx.QueryRowContext(ctx, "SELECT graph_json FROM flows_definitions WHERE id=?", f.ID).Scan(&previousJSON); err != nil {
+			return nil, err
+		}
+		var previous Graph
+		if err := json.Unmarshal(previousJSON, &previous); err != nil {
+			return nil, err
+		}
+		f.Graph, err = restoreActionSecrets(f.Graph, previous, markers)
+		if err != nil {
+			return nil, err
+		}
+	}
+	graphBytes, marshalErr := json.Marshal(f.Graph)
+	if marshalErr != nil {
+		return nil, fmt.Errorf("flows: marshal graph: %w", marshalErr)
+	}
+
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		if f.Version <= 0 {
@@ -293,8 +320,6 @@ func (s *SQLStore) SaveFlow(ctx context.Context, f Flow) (*Flow, error) {
 		if err != nil {
 			return nil, err
 		}
-	case err != nil:
-		return nil, err
 	default:
 		f.Version = existingVersion + 1
 		f.CreatedAt = msToTime(existingCreated)
