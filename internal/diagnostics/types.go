@@ -122,17 +122,18 @@ type Event struct {
 
 type ResponseSummary struct {
 	// Manifest contains bounded, allowlisted DASH facts; never raw URLs or tokens.
-	Manifest  []string     `json:"manifest,omitempty"`
-	Size      int          `json:"size"`
-	ItemCount int          `json:"itemCount,omitempty"`
-	Decision  string       `json:"decision,omitempty"`
-	ErrorCode string       `json:"errorCode,omitempty"`
-	Error     string       `json:"error,omitempty"`
-	TotalSize *int         `json:"totalSize,omitempty"`
-	More      *bool        `json:"more,omitempty"`
-	Items     []string     `json:"items,omitempty"`
-	Hubs      []HubSummary `json:"hubs,omitempty"`
-	Truncated bool         `json:"truncated,omitempty"`
+	Manifest     []string     `json:"manifest,omitempty"`
+	Size         int          `json:"size"`
+	ItemCount    int          `json:"itemCount,omitempty"`
+	ChapterCount *int         `json:"chapterCount,omitempty"`
+	Decision     string       `json:"decision,omitempty"`
+	ErrorCode    string       `json:"errorCode,omitempty"`
+	Error        string       `json:"error,omitempty"`
+	TotalSize    *int         `json:"totalSize,omitempty"`
+	More         *bool        `json:"more,omitempty"`
+	Items        []string     `json:"items,omitempty"`
+	Hubs         []HubSummary `json:"hubs,omitempty"`
+	Truncated    bool         `json:"truncated,omitempty"`
 }
 
 type HubSummary struct {
@@ -268,14 +269,15 @@ type CatalogConditionFact struct {
 // from the session file; usernames and addresses are exported only from the
 // identity preview when the owner opts in.
 type SessionFact struct {
-	DeviceKey string
-	State     string
-	Decision  string
-	Quality   string
-	Title     string
-	Username  string
-	Peer      string
-	Bytes     int64
+	DeviceKey    string
+	State        string
+	Decision     string
+	Quality      string
+	Title        string
+	Username     string
+	Peer         string
+	Bytes        int64
+	ChapterCount *int
 }
 
 // HardwareFact has no device node paths.

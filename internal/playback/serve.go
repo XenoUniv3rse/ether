@@ -389,10 +389,19 @@ func (m *Manager) streamClientRange(ctx context.Context, w io.Writer, s *session
 	if failure := g.sourceFailure(); errors.Is(failure, core.ErrOriginalLost) {
 		return failure
 	}
+	var rangeStarted time.Time
+	if m.opts.TracePlayback {
+		rangeStarted = time.Now()
+	}
 	count := func(n int) {
 		now := m.now()
 		s.addBytes(n, now)
 		if n > 0 {
+			if !rangeStarted.IsZero() {
+				m.log.Info("direct range first write", "session", s.id, "client_id", s.ident.clientID, "offset", vstart, "length", length,
+					"first_write_ms", time.Since(rangeStarted).Milliseconds())
+				rangeStarted = time.Time{}
+			}
 			g.mu.Lock()
 			g.retryEpoch++
 			g.retryPending = false

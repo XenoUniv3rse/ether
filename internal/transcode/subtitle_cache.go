@@ -46,6 +46,9 @@ type subtitleCache struct {
 
 // extract returns the track's WebVTT, extracting it once per key.
 func (c *subtitleCache) extract(ctx context.Context, key string, run func(context.Context, *bytes.Buffer) error) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	c.mu.Lock()
 	if c.m == nil {
 		c.m = map[string]*subtitleEntry{}

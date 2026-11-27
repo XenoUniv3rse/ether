@@ -864,3 +864,36 @@ func TestApplyProfileRangeCapsOtherFrontends(t *testing.T) {
 		})
 	}
 }
+
+func TestProfileDecisionNegotiatesAnotherAudioCodecForTrueHD(t *testing.T) {
+	yes := true
+	info := core.MediaInfo{Container: "mkv", Streams: []core.StreamInfo{
+		{Index: 0, Type: "video", Codec: "hevc", Width: 3840, Height: 2160, FrameRate: 24,
+			DolbyVision: true, DolbyVisionProfile: 8, DolbyVisionCompatibilityID: 1, ColorTransfer: "smpte2084", HDR10Plus: &yes},
+		{Index: 1, Type: "audio", Codec: "truehd", Channels: 8},
+	}}
+	outputLimits := []core.ClientProfileCondition{
+		{Property: "Height", Operator: "LessThanEqual", Value: "1080", Required: true},
+		{Property: "Width", Operator: "LessThanEqual", Value: "1920", Required: true},
+	}
+	profiles := &core.ClientCapabilityProfiles{
+		DirectPlay: []core.ClientDirectPlayProfile{{MediaType: "video", Containers: []string{"mkv"}, VideoCodecs: []string{"hevc"}, AudioCodecs: []string{"eac3", "ac3"}}},
+		Transcoding: []core.ClientTranscodeProfile{
+			{MediaType: "video", Delivery: "hls", Containers: []string{"ts"}, VideoCodecs: []string{"h264", "hevc"}, AudioCodecs: []string{"eac3", "ac3"}, MaxAudioChannels: "8", Conditions: outputLimits},
+			{MediaType: "video", Delivery: "hls", Containers: []string{"mp4"}, VideoCodecs: []string{"h264", "hevc"}, AudioCodecs: []string{"eac3", "ac3"}, MaxAudioChannels: "8", Conditions: outputLimits},
+		},
+		Codecs: []core.ClientCodecProfile{{MediaType: "videoaudio", Codecs: []string{"eac3"}, Conditions: []core.ClientProfileCondition{
+			{Property: "AudioChannels", Operator: "LessThanEqual", Value: "2", Required: true},
+		}}},
+	}
+	caps := core.ClientCaps{Protocol: "jellyfin", Product: "Jellyfin Roku", Profiles: profiles,
+		Containers: []string{"mkv"}, VideoCodecs: []string{"h264", "hevc"}, AudioCodecs: []string{"ac3", "eac3"}, HDR10: true}
+	req := frontend.PlanRequest{Protocol: "jellyfin", Caps: caps, Intent: frontend.PlayIntent{
+		Options: core.DecideOptions{DirectPlay: true, DirectStream: true, AudioStream: 1, SubtitleStream: -1},
+	}}
+	b := &Broker{deps: BrokerDeps{SurfacePolicy: testSessionPolicy, Transcoder: profileTranscoder{}}}
+	d, err := b.decideProfile(&core.PlaySession{Info: info}, req)
+	if err != nil || d.VideoCopy || d.MaxHeight > 1080 || d.AudioCopy || d.AudioCodec != "ac3" || !profileDeliveryAllowed(profiles, d, info, "hls") {
+		t.Fatalf("decision %+v err=%v", d, err)
+	}
+}

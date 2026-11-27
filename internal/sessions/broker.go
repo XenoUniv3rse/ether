@@ -250,9 +250,6 @@ type retiredSession struct {
 
 // Broker coordinates playback admission for every protocol, including Plex.
 type Broker struct {
-	// subtitleWarm holds the session tracks whose extraction warmSubtitle
-	// started and has not finished.
-	subtitleWarm     sync.Map
 	timelineReserved int
 	timelineEffects  []timelineEffect
 	timelineRunning  bool
@@ -444,13 +441,9 @@ func (b *Broker) publish(ctx context.Context, event frontend.Event) {
 	}
 }
 func clientKey(protocol frontend.Protocol, device core.Device) string {
-	return PlaybackClientID(protocol, device.ID)
+	return frontend.PlaybackClientID(protocol, device.ID)
 }
 
-// PlaybackClientID is the broker's device identity on the playback surface.
-func PlaybackClientID(protocol frontend.Protocol, deviceID string) string {
-	return fmt.Sprintf("%d:%s%s", len(protocol), protocol, deviceID)
-}
 func copyRequest(r frontend.PlanRequest) frontend.PlanRequest {
 	if r.Intent.OriginalPlayback != nil {
 		original := *r.Intent.OriginalPlayback
@@ -982,8 +975,19 @@ func (b *Broker) Plan(ctx context.Context, req frontend.PlanRequest) (planned fr
 	if pinErr != nil {
 		return frontend.PlayPlan{}, pinErr
 	}
-	id := rand.Text()
 	etag := sourceRevision(ps)
+	if req.Intent.ReadChapters && etag != "" && !ps.Info.ChaptersProbed && len(ps.Info.Chapters) == 0 {
+		if probe, ok := b.deps.Playback.(interface {
+			ProbeChapters(context.Context, string, string) ([]core.Chapter, bool)
+		}); ok {
+			if chapters, ok := probe.ProbeChapters(ctx, ps.ID, etag); ok {
+				updated := *ps
+				updated.Info.Chapters, updated.Info.ChaptersProbed = chapters, true
+				ps = &updated
+			}
+		}
+	}
+	id := rand.Text()
 	if req.Intent.SubtitleSet || (req.Intent.Hints != nil && req.Intent.Hints.ManualSubtitle) {
 		if err := b.RecordAuthorizedSubtitleIntent(ctx, v.ID, req.Item, true); err != nil {
 			return frontend.PlayPlan{}, err

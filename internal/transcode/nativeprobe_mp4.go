@@ -143,6 +143,7 @@ func mp4Info(b []byte, size int64) (*core.MediaInfo, error) {
 			m.Chapters = neroChapters(chpl.payload(b), m.Duration)
 		}
 	}
+	m.ChaptersProbed = true
 	return m, nil
 }
 

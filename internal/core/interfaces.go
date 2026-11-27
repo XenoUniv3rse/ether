@@ -1074,6 +1074,7 @@ type MediaInfo struct {
 	Has64bitOffsets       *bool         `json:"has64bitOffsets,omitempty"`
 	OptimizedForStreaming *bool         `json:"optimizedForStreaming,omitempty"`
 	Chapters              []Chapter     `json:"chapters,omitempty"`
+	ChaptersProbed        bool          `json:"chaptersProbed,omitempty"`
 	Container             string        `json:"container"` // mkv, mp4, avi, mpegts
 	Duration              time.Duration `json:"duration"`
 	Size                  int64         `json:"size"`

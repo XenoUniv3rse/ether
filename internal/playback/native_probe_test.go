@@ -91,6 +91,7 @@ func TestNativeTrailerFillsOnlyUnknownFacts(t *testing.T) {
 		},
 		func(_ context.Context, _ core.MediaSource, info *core.MediaInfo) bool {
 			defer close(filled)
+			info.ChaptersProbed = true
 			info.Chapters = []core.Chapter{{ID: 1, Title: "Credits", Start: 50 * time.Second, End: time.Minute}}
 			info.Streams[0].BitrateKbps = 1 // already known: must not change
 			info.Streams[1].BitrateKbps = 640

@@ -204,6 +204,7 @@ export type PlayDetail = Play &
     networkReason?: string;
     avgBitrateKbps?: number;
     sourceKbps?: number;
+    chapterCount?: number | null;
     uhd?: boolean;
     hdr?: boolean;
   };

@@ -133,7 +133,7 @@ func (i *instance) embyItemDetailDTO(m map[string]any, d frontend.ItemDetail) {
 		}
 	}
 	chapters := defaultSourceChapters(m)
-	if len(chapters) == 0 {
+	if chapters == nil {
 		known := d.Chapters
 		if _, hasSources := m["MediaSources"]; !hasSources && len(d.Versions) == 1 && !d.Versions[0].Media.Estimated && len(d.Versions[0].Media.Chapters) > 0 {
 			known = d.Versions[0].Media.Chapters

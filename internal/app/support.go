@@ -153,12 +153,13 @@ func (a *App) supportSessions(deviceKey string) ([]diagnostics.SessionFact, int,
 			state = "reported"
 		}
 		matched = append(matched, diagnostics.SessionFact{
-			DeviceKey: s.Client.ClientID,
-			State:     state,
-			Decision:  string(s.Decision),
-			Title:     s.TitleName,
-			Username:  s.Username,
-			Bytes:     s.BytesServed,
+			DeviceKey:    s.Client.ClientID,
+			State:        state,
+			Decision:     string(s.Decision),
+			Title:        s.TitleName,
+			Username:     s.Username,
+			Bytes:        s.BytesServed,
+			ChapterCount: s.ProbedChapterCount(),
 		})
 	}
 	return matched, omitted, nil
