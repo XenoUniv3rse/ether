@@ -440,6 +440,7 @@ type statPending struct {
 	caller    string
 	missed    bool
 	uncertain bool
+	backbones []string // backbones whose accounts answered 430 (StatStream)
 }
 
 // verifyUntrustedStatClaims validates STAT-223 claims from a pool whose STAT
@@ -524,7 +525,16 @@ func (f *Fetcher) verifyUntrustedStatClaims(
 			return false, false
 		case errors.Is(verr, ErrNoSuchArticle), errors.Is(verr, ErrCorrupt):
 			st.missed = true
-			f.misses.add(id, p.key)
+			if errors.Is(verr, ErrNoSuchArticle) {
+				// A real 430 is the store's answer: share it with the
+				// backbone. A corrupt copy is this server's alone.
+				f.noteMissing(id, p)
+				if b := p.backbone(); b != "" {
+					st.backbones = append(st.backbones, b)
+				}
+			} else {
+				f.misses.add(id, p.key)
+			}
 			if lastPool && !st.uncertain {
 				delete(pend, id)
 				if !fn(st.caller, false) {
