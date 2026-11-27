@@ -4,25 +4,28 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/braedonsaunders/ether/internal/catalog"
+	"github.com/braedonsaunders/ether/internal/frontend/compactids"
 	"github.com/braedonsaunders/ether/internal/store"
 )
 
 func init() {
+	catalog.RegisterXtreamIDs()
 	store.RegisterAfter("xtream_live_ids", "livetv", "frontend_compact_ids")
 	const sqliteGroup = `trim(COALESCE(json_extract(%s.data,'$.group'),''))`
 	const pgGroup = `btrim(COALESCE(CAST(%s.data AS jsonb)->>'group',''))`
 	const sqliteOwnerGroups = `SELECT 'owner'||char(10)||json_extract(value,'$.id') AS ref FROM %sjson_each(%s.data)`
 	const pgOwnerGroups = `SELECT 'owner'||chr(10)||(g->>'id') AS ref FROM %sjsonb_array_elements(CAST(%s.data AS jsonb)) AS g`
 	seed := func(groupExpr, ownerGroups string) string {
-		return xtreamIDSeed("channel", `SELECT id AS ref FROM livetv_channels`) +
-			xtreamIDSeed("live-group", `SELECT `+fmt.Sprintf(groupExpr, "c")+` AS ref FROM livetv_channels c UNION `+
+		return compactids.SeedXtreamSQL("channel", `SELECT id AS ref FROM livetv_channels`) +
+			compactids.SeedXtreamSQL("live-group", `SELECT `+fmt.Sprintf(groupExpr, "c")+` AS ref FROM livetv_channels c UNION `+
 				fmt.Sprintf(ownerGroups, "livetv_owner_groups o, ", "o"))
 	}
 	sqlite := seed(sqliteGroup, sqliteOwnerGroups)
 	postgres := seed(pgGroup, pgOwnerGroups)
-	sqliteChannel := xtreamIDsFromRefs("channel", `SELECT NEW.id AS ref`)
-	sqliteGroupIDs := xtreamIDsFromRefs("live-group", `SELECT `+fmt.Sprintf(sqliteGroup, "NEW")+` AS ref`)
-	sqliteOwnerIDs := xtreamIDsFromRefs("live-group", fmt.Sprintf(sqliteOwnerGroups, "", "NEW"))
+	sqliteChannel := compactids.AllocateXtreamSQL("channel", `SELECT NEW.id AS ref`)
+	sqliteGroupIDs := compactids.AllocateXtreamSQL("live-group", `SELECT `+fmt.Sprintf(sqliteGroup, "NEW")+` AS ref`)
+	sqliteOwnerIDs := compactids.AllocateXtreamSQL("live-group", fmt.Sprintf(sqliteOwnerGroups, "", "NEW"))
 	for _, event := range []string{"INSERT", "UPDATE"} {
 		var changed string
 		if event == "UPDATE" {
@@ -69,27 +72,4 @@ CREATE TRIGGER xtream_owner_group_ids AFTER INSERT OR UPDATE OF data ON livetv_o
 `
 	store.Register("xtream_live_ids", 1, sqlite)
 	store.RegisterDialect("xtream_live_ids", 1, store.Postgres, postgres)
-}
-
-func xtreamIDSeed(kind, refs string) string {
-	return fmt.Sprintf(`
-INSERT INTO frontend_compact_id_counters(surface,kind,last_id) VALUES('xtream','%[1]s',0)
- ON CONFLICT(surface,kind) DO NOTHING;
-UPDATE frontend_compact_id_counters SET last_id=last_id WHERE surface='xtream' AND kind='%[1]s';
-`, kind) + xtreamIDsFromRefs(kind, refs)
-}
-
-func xtreamIDsFromRefs(kind, refs string) string {
-	return fmt.Sprintf(`
-INSERT INTO frontend_compact_ids(surface,kind,ref,id)
- SELECT 'xtream','%[1]s',r.ref,c.last_id+ROW_NUMBER() OVER (ORDER BY r.ref)
- FROM (SELECT DISTINCT ref FROM (%[2]s) AS candidates WHERE ref<>'') r
- CROSS JOIN frontend_compact_id_counters c
- WHERE c.surface='xtream' AND c.kind='%[1]s'
- AND NOT EXISTS (SELECT 1 FROM frontend_compact_ids i WHERE i.surface='xtream' AND i.kind='%[1]s' AND i.ref=r.ref);
-UPDATE frontend_compact_id_counters SET last_id=COALESCE(
- (SELECT MAX(id) FROM frontend_compact_ids WHERE surface='xtream' AND kind='%[1]s'),0)
- WHERE surface='xtream' AND kind='%[1]s' AND last_id<COALESCE(
- (SELECT MAX(id) FROM frontend_compact_ids WHERE surface='xtream' AND kind='%[1]s'),0);
-`, kind, refs)
 }

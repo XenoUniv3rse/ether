@@ -135,12 +135,6 @@ func perfMatrixFixture(t *testing.T, ctx context.Context, cache string) string {
 		db.Close()
 		t.Fatal(err)
 	}
-	// Generate runs a bulk import with catalogue triggers suspended.
-	// Materialize the same protocol IDs a live import would have assigned.
-	if _, err := db.ExecContext(ctx, xtreamIDSeed("item", xtreamCatalogRefs)); err != nil {
-		db.Close()
-		t.Fatal(err)
-	}
 	// Keep one first-time viewer distinct from the heavy and restricted viewers.
 	for _, query := range perfMatrixNewViewerQueries {
 		if _, err := db.ExecContext(ctx, query); err != nil {
@@ -155,6 +149,9 @@ func perfMatrixFixture(t *testing.T, ctx context.Context, cache string) string {
 		t.Fatal(err)
 	}
 	cat, err := catalog.New(db, nil, cfg.Get().Catalog, nil, catalog.WithStartupContext(ctx))
+	if err == nil {
+		err = cat.SeedXtreamIDs(ctx)
+	}
 	if err == nil {
 		_, err = cat.RebuildRank(ctx)
 	}

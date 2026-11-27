@@ -1,15 +1,21 @@
-package app
+package catalog
 
-import "github.com/braedonsaunders/ether/internal/store"
+import (
+	"context"
+
+	"github.com/braedonsaunders/ether/internal/frontend/compactids"
+	"github.com/braedonsaunders/ether/internal/store"
+)
 
 const xtreamCatalogRefs = `SELECT CAST(key AS TEXT) AS ref FROM catalog_titles WHERE type IN ('movie','show','season','episode')`
 
-func init() {
+// RegisterXtreamIDs installs the catalogue-side migration for hosts serving Xtream.
+func RegisterXtreamIDs() {
 	// Xtream clients require positive signed 32-bit identities for all kinds
 	// of VOD item. Assign those IDs as catalogue records arrive so an export
 	// can use the same durable mapping as detail and playback without writing.
 	store.RegisterAfter("xtream_catalog_ids", "catalog", "frontend_compact_ids")
-	backfill := xtreamIDSeed("item", xtreamCatalogRefs)
+	backfill := compactids.SeedXtreamSQL("item", xtreamCatalogRefs)
 	store.Register("xtream_catalog_ids", 1, backfill+`
 CREATE TRIGGER xtream_catalog_item_id AFTER INSERT ON catalog_titles
  WHEN NEW.type IN ('movie','show','season','episode') AND NOT EXISTS (
@@ -43,4 +49,11 @@ END $$;
 CREATE TRIGGER xtream_catalog_item_id AFTER INSERT ON catalog_titles
  FOR EACH ROW WHEN (NEW.type IN ('movie','show','season','episode')) EXECUTE FUNCTION xtream_catalog_item_id();
 `)
+}
+
+// SeedXtreamIDs restores protocol identities after a bulk fixture load that
+// suspended catalogue triggers.
+func (c *Catalog) SeedXtreamIDs(ctx context.Context) error {
+	_, err := c.db.ExecContext(ctx, compactids.SeedXtreamSQL("item", xtreamCatalogRefs))
+	return err
 }

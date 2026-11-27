@@ -8,13 +8,12 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"runtime"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/braedonsaunders/ether/internal/frontend"
+	"github.com/braedonsaunders/ether/internal/frontend/kit/listcache"
 )
 
 const pageSize = 250
@@ -35,12 +34,12 @@ func (i *instance) walk(r *http.Request, l login, kind string, artwork bool, emi
 			continue
 		}
 		if exporter, ok := i.host.Experience.(frontend.LibraryExporter); ok {
-			err := exportPages(r.Context(), exporter, l, v.ID, func(page frontend.LibraryExportPage) (login, error) {
+			err := listcache.WalkExportPages(r.Context(), exporter, l.viewer, l.device, v.ID, pageSize, func(ctx context.Context, page frontend.LibraryExportPage) (login, error) {
 				pl := l.forPage()
 				if kind == "show" && !artwork {
 					return pl, nil
 				}
-				return pl, i.preparePage(r, pl, page.Items, artwork)
+				return pl, i.preparePage(r.WithContext(ctx), pl, page.Items, artwork)
 			}, func(page frontend.LibraryExportPage, pl login) error {
 				pageRequest := r
 				if kind == "show" && !artwork {
@@ -107,102 +106,6 @@ func (i *instance) walk(r *http.Request, l login, kind string, artwork bool, emi
 		}
 	}
 	return nil
-}
-
-// exportPages hands view's export pages to each in order. While each
-// encodes a page, signers sign the next ones concurrently (each into a login
-// of its own) and the reader reads ahead: at most signers+3 pages are held.
-// Signing a page (compact ids, artwork listing, sealing) is the slowest
-// stage, and pages sign independently. It returns nil only after the last
-// page; every stage stops with each.
-func exportPages(ctx context.Context, exporter frontend.LibraryExporter, l login, view string, sign func(frontend.LibraryExportPage) (login, error), each func(frontend.LibraryExportPage, login) error) error {
-	ctx, cancel := context.WithCancel(ctx)
-	type result struct {
-		page frontend.LibraryExportPage
-		l    login
-		err  error
-	}
-	signers := max(2, min(4, runtime.GOMAXPROCS(0)))
-	// ordered carries each page's slot in read order; work hands the same
-	// slot to a signer, which fills it.
-	type slot struct {
-		res  result
-		done chan struct{}
-	}
-	ordered, work := make(chan *slot, signers), make(chan *slot)
-	var wg sync.WaitGroup
-	for range signers {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for sl := range work {
-				if sl.res.err == nil {
-					sl.res.l, sl.res.err = sign(sl.res.page)
-				}
-				close(sl.done)
-			}
-		}()
-	}
-	go func() {
-		defer close(work)
-		defer close(ordered)
-		after := frontend.RatingKey(0)
-		for {
-			page, err := exporter.ExportLibraryPage(ctx, l.viewer, l.device, view, after, pageSize)
-			switch {
-			case err != nil:
-			case len(page.Items) > pageSize:
-				err = errors.New("unbounded export")
-			case !page.Done && page.Next <= after:
-				err = errors.New("invalid export cursor")
-			}
-			sl := &slot{res: result{page: page, err: err}, done: make(chan struct{})}
-			select {
-			case ordered <- sl:
-			case <-ctx.Done():
-				return
-			}
-			select {
-			case work <- sl:
-			case <-ctx.Done():
-				sl.res.err = ctx.Err()
-				close(sl.done)
-				return
-			}
-			if err != nil || page.Done {
-				return
-			}
-			after = page.Next
-		}
-	}()
-	defer func() {
-		// No stage outlives the request handler.
-		cancel()
-		for range ordered {
-		}
-		wg.Wait()
-	}()
-	for sl := range ordered {
-		select {
-		case <-sl.done:
-		case <-ctx.Done():
-			return ctx.Err()
-		}
-		if sl.res.err != nil {
-			return sl.res.err
-		}
-		if err := each(sl.res.page, sl.res.l); err != nil {
-			return err
-		}
-		if sl.res.page.Done {
-			return nil
-		}
-	}
-	// A stage stopped before the last page: the request was cancelled.
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	return errors.New("incomplete export")
 }
 
 func (i *instance) titleImage(r *http.Request, l login, t frontend.Title) string {
