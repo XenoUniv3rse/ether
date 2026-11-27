@@ -405,12 +405,16 @@ func failWithPolicy(w http.ResponseWriter, policy any, viewer *frontend.Viewer, 
 		pending = frontend.ErrPrepareSlow
 	}
 	if code, msg, seconds := frontend.PlaybackPending(pending, acceptLanguage); seconds > 0 {
-		class := "source"
+		class, attempts := "source", 3
 		if code == "preparation_pending" {
 			class = "capacity"
+		} else {
+			// A source search or a download service's queue is a wait, not
+			// a failure: poll at most every 30 s for up to about 20 minutes.
+			seconds, attempts = min(seconds, 30), 40
 		}
 		frontend.SetPlaybackRetry(w, code, seconds)
-		send(w, http.StatusServiceUnavailable, object{"error": object{"class": class, "code": code, "message": msg, "retry": object{"allowed": true, "afterSeconds": seconds, "maxAttempts": 3}}})
+		send(w, http.StatusServiceUnavailable, object{"error": object{"class": class, "code": code, "message": msg, "retry": object{"allowed": true, "afterSeconds": seconds, "maxAttempts": attempts}}})
 		return
 	}
 	var capErr *frontend.ProviderConnectionCapError

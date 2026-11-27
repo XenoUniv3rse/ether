@@ -44,7 +44,7 @@ func TestVelaPreparingErrorMapsTo503RetryAfter(t *testing.T) {
 			if err := json.Unmarshal(w.Body.Bytes(), &wire); err != nil {
 				t.Fatal(err)
 			}
-			if wire.Error.Class != "source" || wire.Error.Code != "preparing" || wire.Error.Message != tc.wantMsg || !wire.Error.Retry.Allowed || wire.Error.Retry.AfterSeconds != tc.wantSec || wire.Error.Retry.MaxAttempts != 3 {
+			if wire.Error.Class != "source" || wire.Error.Code != "preparing" || wire.Error.Message != tc.wantMsg || !wire.Error.Retry.Allowed || wire.Error.Retry.AfterSeconds != tc.wantSec || wire.Error.Retry.MaxAttempts != 40 {
 				t.Fatalf("unexpected wire payload: %+v", wire)
 			}
 		})
