@@ -150,6 +150,16 @@ func addMatrixConsoleCoverage(c *Client) {
 		{Name: "fixture update preroll", Method: http.MethodPut, Path: "/admin/prerolls/{consolePreroll}", Body: `{"name":"Matrix preroll updated","enabled":false}`},
 		{Name: "fixture simulate preroll", Method: http.MethodPost, Path: "/admin/prerolls/simulate", Body: `{"ratingKey":"{consoleMovieKey}","viewerId":{viewerId},"device":"tv"}`},
 		{Name: "fixture delete preroll", Method: http.MethodDelete, Path: "/admin/prerolls/{consolePreroll}"},
+		{Name: "fixture set series release numbering", Method: http.MethodPut, Path: "/metadata/shows/{consoleKey}/release-numbering", Body: `{"mode":"tmdb"}`},
+		{Name: "fixture reset series release numbering", Method: http.MethodPut, Path: "/metadata/shows/{consoleKey}/release-numbering", Body: `{"mode":"automatic"}`},
+		{Name: "fixture set series episode preference", Method: http.MethodPut, Path: "/metadata/shows/{consoleKey}/users/{viewerId}", Body: `{"specials":"last"}`},
+		{Name: "fixture reset series episode preference", Method: http.MethodDelete, Path: "/metadata/shows/{consoleKey}/users/{viewerId}"},
+		{Name: "fixture choose preroll shuffle", Method: http.MethodPut, Path: "/admin/prerolls/selection", Body: `{"selection":"shuffle"}`},
+		{Name: "fixture restore preroll priority", Method: http.MethodPut, Path: "/admin/prerolls/selection", Body: `{"selection":"priority"}`},
+		{Name: "fixture read config before save", Path: "/config", Discover: discoverMatrixConsoleConfig},
+		{Name: "fixture save current config", Method: http.MethodPut, Path: "/config", Body: "{consoleConfig}"},
+		{Name: "fixture update server name", Method: http.MethodPut, Path: "/config/server", Body: `{"friendlyName":"Matrix fixture Ether"}`},
+		{Name: "fixture patch startup animation", Method: http.MethodPatch, Path: "/config/server", Body: `{"startupAnimation":false}`},
 		{Name: "fixture preview catalogue library", Method: http.MethodPost, Path: "/libraries/preview", Body: `{"mediaType":"movie","sources":["tmdb-movies"],"visibilityDefault":"show","rules":[]}`},
 		{Name: "fixture discover Home revision", Path: "/pages/home", Discover: discoverMatrixConsolePage},
 		{Name: "fixture preview Home", Method: http.MethodPost, Path: "/pages/home/preview", Body: `{"viewer":{viewerId},"device":"tv","count":4}`},
@@ -256,6 +266,15 @@ func discoverMatrixConsolePlay(vars map[string]string, body []byte) {
 
 func matrixConsoleWriteHeader(h http.Header, _ map[string]string) {
 	h.Set("X-Ether-Request", "1")
+}
+
+func discoverMatrixConsoleConfig(vars map[string]string, body []byte) {
+	var document struct {
+		Config json.RawMessage `json:"config"`
+	}
+	if json.Unmarshal(body, &document) == nil && len(document.Config) != 0 {
+		setOnce(vars, "consoleConfig", string(document.Config))
+	}
 }
 
 func discoverMatrixConsoleAppGrant(vars map[string]string, body []byte) {
