@@ -236,8 +236,8 @@ func installPerfMatrixVelaCatalogue(ctx context.Context, a *App, viewer perfharn
 		return err
 	}
 	items := []core.KindItem{
-		{ID: "track-1", Level: "track", Title: "Fixture Track 1", Playable: true, Recording: "isrc:USAAA2600001", Fields: map[string]json.RawMessage{"genre": json.RawMessage(`"Folk"`), "contentRating": json.RawMessage(`"G"`)}},
-		{ID: "track-2", Level: "track", Title: "Fixture Track 2", Playable: true, Recording: "isrc:USAAA2600001", Fields: map[string]json.RawMessage{"genre": json.RawMessage(`"Folk"`), "contentRating": json.RawMessage(`"G"`)}},
+		{ID: "track-1", Level: "track", Title: "Fixture soundtrack 1", Playable: true, Released: 1577836800, Recording: "isrc:USAAA2600001", Fields: map[string]json.RawMessage{"genre": json.RawMessage(`"Drama"`), "contentRating": json.RawMessage(`"G"`)}},
+		{ID: "track-2", Level: "track", Title: "Fixture soundtrack 2", Playable: true, Released: 1577836800, Recording: "isrc:USAAA2600001", Fields: map[string]json.RawMessage{"genre": json.RawMessage(`"Drama"`), "contentRating": json.RawMessage(`"G"`)}},
 	}
 	if _, err := a.pluginsRT.pluginitems.UpsertItems(ctx, rec.ID, "music", items); err != nil {
 		return err
@@ -313,7 +313,7 @@ func installPerfMatrixMediaBrowserMusic(ctx context.Context, a *App, viewer perf
 			"levels":[{"key":"artist","label":"Artist","role":"artist","container":true},
 				{"key":"track","label":"Track","parent":"artist","role":"track","playable":true}],
 			"present":{"mediaBrowser":{"collectionType":"music","itemTypes":{"artist":"MusicArtist","track":"Audio"}}},
-			"fields":[{"key":"contentRating","label":"Content rating","type":"string"}],
+			"fields":[{"key":"contentRating","label":"Content rating","type":"string"},{"key":"genre","label":"Genre","type":"string"}],
 			"browse":{"sorts":["title"],"search":true},"sync":{"mode":"push"},"lyrics":true
 		}]}}
 	}`
@@ -332,10 +332,10 @@ func installPerfMatrixMediaBrowserMusic(ctx context.Context, a *App, viewer perf
 	if err != nil {
 		return err
 	}
-	rating := map[string]json.RawMessage{"contentRating": json.RawMessage(`"G"`)}
+	fields := map[string]json.RawMessage{"contentRating": json.RawMessage(`"G"`), "genre": json.RawMessage(`"Drama"`)}
 	items := []core.KindItem{
-		{ID: "artist", Level: "artist", Title: "Matrix artist", Fields: rating},
-		{ID: "song", Level: "track", ParentID: "artist", Title: "Matrix song", Playable: true, Fields: rating},
+		{ID: "artist", Level: "artist", Title: "Matrix artist", Released: 1577836800, Fields: fields},
+		{ID: "song", Level: "track", ParentID: "artist", Title: "Matrix song", Playable: true, Released: 1577836800, Fields: fields},
 	}
 	if _, err := a.pluginsRT.pluginitems.UpsertItems(ctx, rec.ID, "music", items); err != nil {
 		return err

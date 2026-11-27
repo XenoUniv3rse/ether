@@ -6,6 +6,9 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/braedonsaunders/ether/internal/core"
+	"github.com/braedonsaunders/ether/internal/frontend/kit/ids"
 )
 
 func addMatrixVelaCoverage(c *Client) {
@@ -20,6 +23,8 @@ func addMatrixVelaCoverage(c *Client) {
 			step.Discover = discoverMatrixVelaMovie
 		case "recommendations rows":
 			step.Discover = discoverMatrixVelaRows
+		case "library movies collections":
+			step.Discover = combineDiscover(step.Discover, discoverMatrixVelaCollection)
 		}
 	}
 	for _, asset := range []string{"velaPackAsset", "velaSkinDocument", "velaSkinAsset", "velaBrandingAsset"} {
@@ -151,6 +156,23 @@ func discoverMatrixVelaRows(vars map[string]string, body []byte) {
 			if item.Kind == "collection" {
 				setOnce(vars, "velaCollection", url.PathEscape(item.ID))
 			}
+		}
+	}
+}
+
+func discoverMatrixVelaCollection(vars map[string]string, body []byte) {
+	var page struct {
+		Items []struct {
+			ID string `json:"id"`
+		} `json:"items"`
+	}
+	if json.Unmarshal(body, &page) != nil {
+		return
+	}
+	for _, item := range page.Items {
+		if key, err := ids.ParseRatingKeyGUID(item.ID); err == nil && key.Kind() == core.KindSmart {
+			setOnce(vars, "velaCollection", url.PathEscape(item.ID))
+			return
 		}
 	}
 }
