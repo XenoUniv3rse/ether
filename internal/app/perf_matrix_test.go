@@ -269,7 +269,7 @@ func runPerfMatrixCase(t *testing.T, ctx context.Context, fixture string, c perf
 	}
 	if len(clients) == 0 || slices.Contains(clients, "infuse-jellyfin") || slices.Contains(clients, "emby-sdk") {
 		if _, err := db.ExecContext(ctx, `UPDATE auth_users SET thumb=?, plex_id=COALESCE(plex_id, 910100+id)
-			WHERE is_owner=1 OR username LIKE 'viewer%'`, matrixAvatarURL); err != nil {
+			WHERE active=1`, matrixAvatarURL); err != nil {
 			db.Close()
 			t.Fatal(err)
 		}
