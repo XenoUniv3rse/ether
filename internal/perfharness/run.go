@@ -153,8 +153,8 @@ func (r *Runner) session(v Viewer, c Client) *session {
 			"xtreamUser": frontend.XtreamUsername(v.Xtream), "xtreamPass": url.QueryEscape(v.Xtream), "mcp": v.MCP,
 			"mbWebCode":             v.MBWebCode,
 			"consoleOwnerQuickCode": v.ConsoleOwnerQuickCode, "consolePortalQuickCode": v.ConsolePortalQuickCode,
-			"consolePMSURL": v.ConsolePMSURL,
-			"subsonicUser":  url.QueryEscape(v.SubsonicUser), "subsonicPass": url.QueryEscape(v.SubsonicPass),
+			"consoleFixtureURL": v.ConsoleFixtureURL, "consoleDefinition": v.ConsoleDefinition,
+			"subsonicUser": url.QueryEscape(v.SubsonicUser), "subsonicPass": url.QueryEscape(v.SubsonicPass),
 		}}
 		r.sessions[key] = s
 	}

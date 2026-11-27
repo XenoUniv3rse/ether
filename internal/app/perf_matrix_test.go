@@ -216,11 +216,17 @@ func runPerfMatrixCase(t *testing.T, ctx context.Context, fixture string, c perf
 		t.Fatal(err)
 	}
 	var consoleFixtureURL string
+	var consoleDefinition string
 	if len(clients) == 0 || slices.Contains(clients, "console") {
 		definition, err := os.ReadFile("../cardigann/testdata/public.yml")
 		if err != nil {
 			t.Fatal(err)
 		}
+		draft, err := json.Marshal(map[string]string{"yaml": string(definition)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		consoleDefinition = string(draft)
 		definitions := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if strings.HasPrefix(r.URL.Path, "/pms/") && r.Header.Get("X-Plex-Token") != "matrix-fixture-token" {
 				w.WriteHeader(http.StatusUnauthorized)
@@ -231,6 +237,11 @@ func runPerfMatrixCase(t *testing.T, ctx context.Context, fixture string, c perf
 				_, _ = io.WriteString(w, `["fakepublic.yml"]`)
 			case "/definitions/fakepublic.yml":
 				_, _ = w.Write(definition)
+			case "/tracker/browse.php":
+				w.Header().Set("Content-Type", "text/html")
+				_, _ = io.WriteString(w, `<table id="torrents"><tbody><tr><td><a href="browse.php?cat=1">Movies</a>
+					<a class="title" href="details.php?id=1">Matrix Fixture 2026 1080p</a><a href="download.php?id=1">Download</a></td>
+					<td class="size">700 MB</td><td class="seeders">7</td><td class="leechers">1</td></tr></tbody></table>`)
 			case "/pms/identity":
 				_, _ = io.WriteString(w, `{"MediaContainer":{"machineIdentifier":"matrix-scratch-pms","version":"1.41.0"}}`)
 			case "/pms/myplex/account":
@@ -296,7 +307,8 @@ func runPerfMatrixCase(t *testing.T, ctx context.Context, fixture string, c perf
 		t.Fatal(err)
 	}
 	if consoleFixtureURL != "" {
-		viewers[0].ConsolePMSURL = consoleFixtureURL + "/pms"
+		viewers[0].ConsoleFixtureURL = consoleFixtureURL
+		viewers[0].ConsoleDefinition = consoleDefinition
 	}
 	if pg := os.Getenv(PerfGatePGEnv); pg != "" {
 		defer perfGatePostgres(t, ctx, dir, strings.ReplaceAll(c.name, "-", "_"), pg)()

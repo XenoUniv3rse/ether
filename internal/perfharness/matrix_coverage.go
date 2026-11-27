@@ -210,14 +210,16 @@ func addMatrixConsoleCoverage(c *Client, availabilityMonitor bool) {
 		{Name: "fixture GET installed indexer definition", Path: "/indexer-sites/definitions/fakepublic"},
 		{Name: "fixture preview draft indexer request", Method: http.MethodPost, Path: "/indexer/preview", Body: `{"indexer":{"id":"matrix-indexer","name":"Matrix preview indexer","url":"https://matrix.invalid/","apiKey":"matrix-fixture-key"}}`},
 		{Name: "fixture POST update indexer definitions", Method: http.MethodPost, Path: "/indexer-sites/update"},
+		{Name: "fixture upload standalone indexer definition", Method: http.MethodPost, Path: "/indexer-sites/definitions", Body: "{consoleDefinition}"},
+		{Name: "fixture test public indexer", Method: http.MethodPost, Path: "/indexer-sites/test", Body: `{"id":"matrix-indexer","name":"Matrix fixture indexer","definition":"fakepublic","url":"{consoleFixtureURL}/tracker/","enabled":true}`, Accept: acceptMatrixConsoleIndexer},
 		{Name: "fixture read installed release version", Path: "/updates/", Discover: discoverMatrixReleaseVersion},
 		{Name: "fixture dismiss installed release notes", Method: http.MethodPost, Path: "/updates/notes/dismiss", Body: `{"version":"{consoleReleaseVersion}"}`},
 		{Name: "fixture discover scratch API key", Path: "/frontends/jellyfin/api-keys", Discover: discoverMatrixConsoleAPIKey},
 		{Name: "fixture revoke scratch API key", Method: http.MethodDelete, Path: "/frontends/jellyfin/api-keys/{consoleScratchAPIKey}"},
 		{Name: "fixture create DLNA guest", Method: http.MethodPost, Path: "/frontends/dlna/guest", Discover: discoverMatrixID("consoleDLNAGuest")},
 		{Name: "fixture remove DLNA guest", Method: http.MethodDelete, Path: "/users/{consoleDLNAGuest}"},
-		{Name: "fixture add loopback Plex server", Method: http.MethodPost, Path: "/plex-servers", Body: `{"name":"Matrix PMS","url":"{consolePMSURL}","token":"matrix-fixture-token"}`, Discover: discoverMatrixID("consolePMS")},
-		{Name: "fixture rename loopback Plex server", Method: http.MethodPut, Path: "/plex-servers/{consolePMS}", Body: `{"name":"Matrix PMS renamed","url":"{consolePMSURL}"}`},
+		{Name: "fixture add loopback Plex server", Method: http.MethodPost, Path: "/plex-servers", Body: `{"name":"Matrix PMS","url":"{consoleFixtureURL}/pms","token":"matrix-fixture-token"}`, Discover: discoverMatrixID("consolePMS")},
+		{Name: "fixture rename loopback Plex server", Method: http.MethodPut, Path: "/plex-servers/{consolePMS}", Body: `{"name":"Matrix PMS renamed","url":"{consoleFixtureURL}/pms"}`},
 		{Name: "fixture discover loopback Plex accounts", Path: "/plex-servers/{consolePMS}/accounts", Discover: discoverMatrixConsolePMSAccount},
 		{Name: "fixture map loopback Plex account", Method: http.MethodPut, Path: "/plex-servers/{consolePMS}/accounts/{consolePMSAccount}", Body: `{"userId":{viewerId},"direction":0,"interval":30}`},
 		{Name: "fixture unmap loopback Plex account", Method: http.MethodPut, Path: "/plex-servers/{consolePMS}/accounts/{consolePMSAccount}", Body: `{"userId":0}`},
@@ -362,6 +364,14 @@ func discoverMatrixConsoleConfig(vars map[string]string, body []byte) {
 	if json.Unmarshal(body, &document) == nil && len(document.Config) != 0 {
 		setOnce(vars, "consoleConfig", string(document.Config))
 	}
+}
+
+func acceptMatrixConsoleIndexer(body []byte) bool {
+	var result struct {
+		OK      bool `json:"ok"`
+		Results int  `json:"results"`
+	}
+	return json.Unmarshal(body, &result) == nil && result.OK && result.Results == 1
 }
 
 func discoverMatrixConsoleAPIKey(vars map[string]string, body []byte) {
