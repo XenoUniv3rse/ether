@@ -205,6 +205,10 @@ func addMatrixConsoleCoverage(c *Client) {
 		{Name: "fixture POST update indexer definitions", Method: http.MethodPost, Path: "/indexer-sites/update"},
 		{Name: "fixture read installed release version", Path: "/updates/", Discover: discoverMatrixReleaseVersion},
 		{Name: "fixture dismiss installed release notes", Method: http.MethodPost, Path: "/updates/notes/dismiss", Body: `{"version":"{consoleReleaseVersion}"}`},
+		{Name: "fixture discover scratch API key", Path: "/frontends/jellyfin/api-keys", Discover: discoverMatrixConsoleAPIKey},
+		{Name: "fixture revoke scratch API key", Method: http.MethodDelete, Path: "/frontends/jellyfin/api-keys/{consoleScratchAPIKey}"},
+		{Name: "fixture create DLNA guest", Method: http.MethodPost, Path: "/frontends/dlna/guest", Discover: discoverMatrixID("consoleDLNAGuest")},
+		{Name: "fixture remove DLNA guest", Method: http.MethodDelete, Path: "/users/{consoleDLNAGuest}"},
 		{Name: "fixture clear installed update banner", Method: http.MethodPost, Path: "/updates/dismiss-installed"},
 		{Name: "fixture cancel any queued restart", Method: http.MethodDelete, Path: "/server/restart/"},
 		{Name: "fixture include catalogue title", Method: http.MethodPut, Path: "/catalog/title/{consoleMovieKey}/library"},
@@ -235,6 +239,11 @@ func addMatrixConsoleCoverage(c *Client) {
 		{Name: "fixture refresh local diagnostics", Method: http.MethodPost, Path: "/safety/diagnostics/refresh"},
 		{Name: "fixture clear in-memory logs", Method: http.MethodDelete, Path: "/logs"},
 		{Name: "fixture DELETE installed indexer definition", Method: http.MethodDelete, Path: "/indexer-sites/definitions/fakepublic"},
+		// Applying a bundle can change Home rows. Run this after every reader
+		// that uses the original copy of the collection catalogue.
+		{Name: "fixture discover collection template bundle", Path: "/collections/template-bundles", Discover: discoverMatrixConsoleTemplateBundle},
+		{Name: "fixture preview collection template bundle", Method: http.MethodPost, Path: "/collections/template-bundles/{consoleTemplateBundle}/preview"},
+		{Name: "fixture apply collection template bundle", Method: http.MethodPost, Path: "/collections/template-bundles/{consoleTemplateBundle}/apply"},
 	}...)
 	for _, step := range append(steps, matrixConsoleArtworkScenarios()...) {
 		step.Class = classConsole
@@ -333,6 +342,40 @@ func discoverMatrixConsoleConfig(vars map[string]string, body []byte) {
 	}
 	if json.Unmarshal(body, &document) == nil && len(document.Config) != 0 {
 		setOnce(vars, "consoleConfig", string(document.Config))
+	}
+}
+
+func discoverMatrixConsoleAPIKey(vars map[string]string, body []byte) {
+	var keys []struct {
+		ID   int64  `json:"id"`
+		Name string `json:"appName"`
+	}
+	if json.Unmarshal(body, &keys) == nil {
+		for _, key := range keys {
+			if key.Name == "Matrix scratch API key" && key.ID > 0 {
+				setOnce(vars, "consoleScratchAPIKey", strconv.FormatInt(key.ID, 10))
+				return
+			}
+		}
+	}
+}
+
+func discoverMatrixConsoleTemplateBundle(vars map[string]string, body []byte) {
+	var response struct {
+		Bundles []struct {
+			ID        string   `json:"id"`
+			Templates []string `json:"templateIds"`
+		} `json:"bundles"`
+	}
+	if json.Unmarshal(body, &response) != nil {
+		return
+	}
+	smallest := 0
+	for _, bundle := range response.Bundles {
+		if n := len(bundle.Templates); n > 0 && (smallest == 0 || n < smallest) {
+			smallest = n
+			vars["consoleTemplateBundle"] = url.PathEscape(bundle.ID)
+		}
 	}
 }
 

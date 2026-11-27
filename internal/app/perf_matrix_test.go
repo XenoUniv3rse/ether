@@ -413,6 +413,9 @@ func runPerfMatrixCase(t *testing.T, ctx context.Context, fixture string, c perf
 		if err := seedPerfMatrixConsoleQuickConnect(ctx, a, &viewers[0]); err != nil {
 			t.Fatal("Console Quick Connect fixture:", err)
 		}
+		if err := seedPerfMatrixConsoleAPIKey(ctx, a); err != nil {
+			t.Fatal("Console API key fixture:", err)
+		}
 	}
 	if c.live {
 		if len(clients) == 0 || slices.Contains(clients, "plex-appletv") {

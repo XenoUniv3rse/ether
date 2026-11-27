@@ -37,6 +37,15 @@ func seedPerfMatrixConsoleQuickConnect(ctx context.Context, a *App, owner *perfh
 	return err
 }
 
+func seedPerfMatrixConsoleAPIKey(ctx context.Context, a *App) error {
+	keys, err := identity.NewAPIKeys(a.db, a.users, nil)
+	if err != nil {
+		return err
+	}
+	_, _, err = keys.Create(ctx, "jellyfin", "Matrix scratch API key")
+	return err
+}
+
 // Give viewers without a generated household playlist a real item and queue
 // to open while leaving their watch history and personalization cold.
 func seedPerfMatrixPlaylistCoverage(ctx context.Context, db *sql.DB) error {
