@@ -42,6 +42,14 @@ func (s *Session) ServeSegment(w http.ResponseWriter, r *http.Request, n int) {
 // restarting it when n is behind or far ahead of the encoder.
 func (s *Session) serveSegment(w http.ResponseWriter, r *http.Request, t, n int) {
 	s.mu.Lock()
+	if t >= 0 && t < len(s.rungs) && !s.rungWithinAdaptiveCapLocked(t) {
+		s.mu.Unlock()
+		http.NotFound(w, r)
+		return
+	}
+	if s.adaptiveHLS && r.Method == http.MethodGet && s.cur != nil && s.cur.track == t {
+		s.adaptiveLastRequest = s.m.now()
+	}
 	touchAlive := !s.closed && !s.inputFailed && !s.sessionExhausted && s.stoppedAt.Load() == 0
 	s.mu.Unlock()
 	if touchAlive {
@@ -685,6 +693,22 @@ func (s *Session) rungDwellLocked(media bool, n int) time.Duration {
 // write it.
 func (s *Session) serveInit(w http.ResponseWriter, r *http.Request, t int) {
 	s.mu.Lock()
+	if t >= 0 && t < len(s.rungs) && !s.rungWithinAdaptiveCapLocked(t) {
+		s.mu.Unlock()
+		http.NotFound(w, r)
+		return
+	}
+	if s.adaptiveHLS && r.Method == http.MethodGet {
+		if s.cur != nil && s.cur.track == t {
+			s.adaptiveLastRequest = s.m.now()
+		}
+		s.adaptiveInitRequests++
+		defer func() {
+			s.mu.Lock()
+			s.adaptiveInitRequests--
+			s.mu.Unlock()
+		}()
+	}
 	touchAlive := !s.closed && !s.inputFailed && !s.sessionExhausted && s.stoppedAt.Load() == 0
 	s.mu.Unlock()
 	if touchAlive {

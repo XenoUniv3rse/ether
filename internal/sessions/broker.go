@@ -194,6 +194,7 @@ type brokerSession struct {
 	format                frontend.StreamFormat
 	httpExt               string
 	streamPosition        time.Duration
+	adaptiveHLS           bool
 	segmentDuration       time.Duration
 	live                  bool
 	directLive            *frontend.DirectLiveTarget

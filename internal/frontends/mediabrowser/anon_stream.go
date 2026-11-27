@@ -501,6 +501,7 @@ func (i *instance) serveAliasSession(w http.ResponseWriter, r *http.Request, acc
 		}
 		i.host.Sessions.ServeMedia(w, req)
 	}
+	adaptiveHLS := queryBool(r, "EnableAdaptiveBitrateStreaming", false)
 	// PlaybackInfo already started this stream. Reuse its direct file or HLS
 	// master instead of calling StartStream again at position 0 (which would
 	// tear down and restart a resumed HLS stream from the beginning).
@@ -517,13 +518,20 @@ func (i *instance) serveAliasSession(w http.ResponseWriter, r *http.Request, acc
 			if session.ID != sessionID || !strings.HasPrefix(session.MediaPath, "/sessions/media/") || !strings.HasSuffix(session.MediaPath, "/master.m3u8") || strings.ContainsAny(session.MediaPath, "\r\n") {
 				continue
 			}
+			if adaptiveHLS && session.Channel == "" && (session.Media == nil || session.Media.Video() != nil) {
+				hs, _ := i.host.Sessions.TranscodeFor(r.Context(), sessionID)
+				negotiated, ok := hs.(frontend.AdaptiveHLSSession)
+				if !ok || negotiated.AdaptiveRungs() == nil {
+					break
+				}
+			}
 			url := clientnet.RedirectPath(requestRedirectPrefix(r, i.host.Origin), "", session.MediaPath)
 			http.Redirect(w, r, url, http.StatusTemporaryRedirect)
 			return
 		}
 	}
 	fullTimeline := i.protocol == "jellyfin" && format == frontend.StreamHLS
-	url, err := i.host.Sessions.StartStream(r.Context(), access, sessionID, frontend.StreamRequest{Format: format, FullTimeline: fullTimeline})
+	url, err := i.host.Sessions.StartStream(r.Context(), access, sessionID, frontend.StreamRequest{Format: format, FullTimeline: fullTimeline, AdaptiveHLS: adaptiveHLS})
 	if err != nil {
 		streamError(i.protocol, w, err, r.Header.Get("Accept-Language"))
 		return

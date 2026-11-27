@@ -1197,6 +1197,9 @@ const (
 // StreamRequest describes output, not an upstream URL or credential. The
 // broker owns the input, decision and stream grant.
 type StreamRequest struct {
+	// AdaptiveHLS opts into rendition selection by the HLS player.
+	AdaptiveHLS bool
+
 	// ExpectedOriginalRevision is set by a stable media URL resolving to a
 	// direct-file grant. Empty requires the first representation.
 	ExpectedOriginalRevision *string

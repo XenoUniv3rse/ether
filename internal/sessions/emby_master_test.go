@@ -64,3 +64,36 @@ func TestBrokerEmbyMasterUsesSessionGuarantee(t *testing.T) {
 		t.Fatalf("Plex master changed: %q", w.Body.String())
 	}
 }
+
+type adaptiveTestLadder struct{ fakeLadderSession }
+
+func (*adaptiveTestLadder) AdaptiveRungs() []core.HLSRung {
+	return []core.HLSRung{
+		{ID: "base", Bandwidth: 34000000, AverageBandwidth: 25000000, Width: 1920, Height: 1080, FrameRate: 23.976, Codecs: "hvc1.2.4.L150.90,ec-3", DynamicRange: "hdr10"},
+		{ID: "720p", Bandwidth: 4600000, AverageBandwidth: 4000000, Width: 1280, Height: 720, FrameRate: 23.976, Codecs: "hvc1.2.4.L120.90,ec-3", DynamicRange: "hdr10"},
+	}
+}
+
+func TestBrokerAdaptiveHLSMaster(t *testing.T) {
+	play := &fakePlayback{sessions: map[string]*core.PlaySession{"p": {ID: "p"}}}
+	bindings := NewBindingTable[frontend.PlayIntent]()
+	bindings.Put(&Binding[frontend.PlayIntent]{ID: "s", Decision: core.Decision{Container: "fmp4"}})
+	broker := &Broker{deps: BrokerDeps{SurfacePolicy: testSessionPolicy, Playback: play}, bindings: bindings}
+	for _, surface := range []frontend.Protocol{"vela", "jellyfin", "emby"} {
+		s := &brokerSession{public: frontend.Session{ID: "s", Protocol: surface}, playID: "p", adaptiveHLS: true}
+		w := httptest.NewRecorder()
+		broker.serveMaster(w, httptest.NewRequest(http.MethodGet, "/", nil), s, &adaptiveTestLadder{})
+		body := w.Body.String()
+		if w.Code != http.StatusOK || !strings.HasPrefix(body, "#EXTM3U\n") || strings.Count(body, "#EXT-X-STREAM-INF:") != 2 ||
+			!strings.Contains(body, "BANDWIDTH=34000000,AVERAGE-BANDWIDTH=25000000,RESOLUTION=1920x1080,CODECS=\"hvc1.2.4.L150.90,ec-3\",FRAME-RATE=23.976,VIDEO-RANGE=PQ\nbase/index.m3u8\n") ||
+			!strings.Contains(body, "BANDWIDTH=4600000,AVERAGE-BANDWIDTH=4000000,RESOLUTION=1280x720,CODECS=\"hvc1.2.4.L120.90,ec-3\",FRAME-RATE=23.976,VIDEO-RANGE=PQ\n720p/index.m3u8\n") {
+			t.Fatalf("%s master: %d %s", surface, w.Code, body)
+		}
+	}
+	s := &brokerSession{public: frontend.Session{ID: "s", Protocol: "vela"}, playID: "p"}
+	w := httptest.NewRecorder()
+	broker.serveMaster(w, httptest.NewRequest(http.MethodGet, "/", nil), s, &adaptiveTestLadder{})
+	if w.Code != http.StatusOK || strings.Count(w.Body.String(), "#EXT-X-STREAM-INF:") != 1 {
+		t.Fatalf("Vela without opt-in: %d %s", w.Code, w.Body.String())
+	}
+}

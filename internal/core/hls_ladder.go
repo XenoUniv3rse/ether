@@ -44,6 +44,12 @@ type HLSLadderSession interface {
 	ServeRungSegment(w http.ResponseWriter, r *http.Request, rung string, n int)
 }
 
+// AdaptiveHLSSession exposes the renditions that may share a player-driven master.
+// A nil slice means adaptive delivery was not requested.
+type AdaptiveHLSSession interface {
+	AdaptiveRungs() []HLSRung
+}
+
 // GoodputSession is a session that measures client delivery goodput.
 type GoodputSession interface {
 	// GoodputKbps is the rolling segment-delivery estimate; 0 unknown.

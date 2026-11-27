@@ -271,6 +271,8 @@ func (i *instance) playbackInfo(w http.ResponseWriter, r *http.Request) {
 		i.catchUpPlaybackInfo(w, r, v, credential, wireID, body, capability.Client)
 		return
 	}
+	adaptiveHLS := queryBool(r, "EnableAdaptiveBitrateStreaming", false)
+	capability.Client.AwaitAdmissionIndex = capability.Client.AwaitAdmissionIndex || adaptiveHLS
 	scope := frontend.VersionScope{Viewer: v, Device: dev, Protocol: i.protocol, Caps: capability.Client}
 	versionFromItem := ""
 	if itemIDError != nil {
@@ -633,6 +635,9 @@ func (i *instance) playbackInfo(w http.ResponseWriter, r *http.Request) {
 					format = frontend.StreamHLS
 				}
 			}
+			if adaptiveHLS && plan.Media.Video() != nil && plan.HLS {
+				format = frontend.StreamHLS
+			}
 			// The progressive client requires an active playback demuxer. A
 			// direct-file plan becomes HLS (copy remux where codecs allow it),
 			// so all embedded text rides the same input read as the picture.
@@ -657,7 +662,7 @@ func (i *instance) playbackInfo(w http.ResponseWriter, r *http.Request) {
 			// to the resume point. An offset playlist puts Streamyfin, Jellyfin
 			// for Android TV and others an offset away from where they think.
 			fullTimeline := i.protocol == "jellyfin" && channel == "" && format == frontend.StreamHLS
-			url, err := i.host.Sessions.StartStream(r.Context(), frontend.SessionAccess{Viewer: v, Device: dev, Protocol: i.protocol}, session.ID, frontend.StreamRequest{Format: format, Position: intent.Position, FullTimeline: fullTimeline})
+			url, err := i.host.Sessions.StartStream(r.Context(), frontend.SessionAccess{Viewer: v, Device: dev, Protocol: i.protocol}, session.ID, frontend.StreamRequest{Format: format, Position: intent.Position, FullTimeline: fullTimeline, AdaptiveHLS: adaptiveHLS})
 			if err != nil && format == frontend.StreamHLS && staticPlayable {
 				url, err = i.host.Sessions.StartStream(r.Context(), frontend.SessionAccess{Viewer: v, Device: dev, Protocol: i.protocol}, session.ID, frontend.StreamRequest{Format: frontend.StreamDirect, Position: intent.Position})
 				if err == nil {

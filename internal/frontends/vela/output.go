@@ -35,11 +35,26 @@ func (i *instance) refreshOutput(ctx context.Context, id string, s *playSession)
 		if clock, ok := hs.(interface{ TimelineOrigin() time.Duration }); ok {
 			path["timelineOriginSeconds"] = clock.TimelineOrigin().Seconds()
 		}
+		delete(path, "adaptive")
+		var adaptiveRungs []frontend.HLSRung
+		if adaptive, ok := hs.(frontend.AdaptiveHLSSession); ok && s.client.Features.AdaptiveHLS && strings.HasSuffix(url, "/master.m3u8") {
+			adaptiveRungs = adaptive.AdaptiveRungs()
+			if len(adaptiveRungs) > 0 && adaptiveRungs[0].ID != "base" {
+				path["kind"] = "transcode"
+			}
+			if len(adaptiveRungs) > 1 {
+				path["adaptive"] = true
+			}
+		}
 		if ladder, ok := hs.(interface{ Rungs() []frontend.HLSRung }); ok {
 			qualities := []object{}
 			delete(path, "initialRenditionId")
 			base := hlsDirectory(url)
-			for _, r := range ladder.Rungs() {
+			rungs := adaptiveRungs
+			if rungs == nil {
+				rungs = ladder.Rungs()
+			}
+			for _, r := range rungs {
 				if r.Width <= 0 || r.Height <= 0 || r.Bandwidth <= 0 || r.ID == "" || strings.ContainsAny(r.ID, "/\\?#%\r\n") {
 					continue
 				}
@@ -64,7 +79,7 @@ func (i *instance) refreshOutput(ctx context.Context, id string, s *playSession)
 				if initial == "" {
 					initial = "base"
 				}
-				if r.ID == initial {
+				if r.ID == initial && path["adaptive"] != true {
 					path["initialRenditionId"] = r.ID
 					if path["quality"] != nil {
 						target := qualityTarget(r)
