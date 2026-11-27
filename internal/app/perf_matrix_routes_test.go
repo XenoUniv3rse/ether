@@ -194,6 +194,35 @@ func matrixRouteExceptions() map[perfharness.MatrixRouteKey]string {
 	add("vela", http.MethodGet, "requires a configured AI search provider and a started job", "/vela/v0/search/ai/{id}")
 	add("vela", http.MethodGet, "requires a playable source and an active live playback session", "/vela/v0/sessions/{id}", "/vela/v0/sessions/{id}/events")
 	add("vela", http.MethodGet, "requires a trailer provider and an active trailer preview", "/vela/v0/titles/{id}/trailer-preview")
+	add("console", http.MethodPost, "requires live upstream credentials or an outbound server test endpoint",
+		"/ether/api/test/debrid", "/ether/api/test/indexer", "/ether/api/test/indexer-identity",
+		"/ether/api/test/introdb", "/ether/api/test/llm", "/ether/api/test/opensubtitles",
+		"/ether/api/test/skipdb", "/ether/api/test/subdl", "/ether/api/test/subsource",
+		"/ether/api/test/tmdb", "/ether/api/test/trakt", "/ether/api/test/tvdb",
+		"/ether/api/test/usenet", "/ether/api/test/{kind}/{id}/speed")
+	add("console", http.MethodPost, "requires a configured Trakt account and device sign-in",
+		"/ether/api/me/trakt/device", "/ether/api/me/trakt/poll",
+		"/ether/api/viewers/{id}/trakt/device", "/ether/api/viewers/{id}/trakt/poll")
+	add("console", http.MethodPost, "requires an external MDBList account and watchlist",
+		"/ether/api/mdblist/{user}/connect", "/ether/api/mdblist/{user}/sync")
+	add("console", http.MethodPost, "needs a configured external Plex account and media library",
+		"/ether/api/admin/prerolls/import/pms", "/ether/api/viewers/import-plex",
+		"/ether/api/viewers/import-plex/all", "/ether/api/viewers/match-plex",
+		"/ether/api/viewers/{id}/plex-watch/pin", "/ether/api/viewers/{id}/plex-watch/pin/finish")
+	add("console", http.MethodPost, "requires a configured AI provider",
+		"/ether/api/catalog/interpret", "/ether/api/llm/models", "/ether/api/onair/draft")
+	add("console", http.MethodPost, "requires a provider release with an actual stream or a cached offline media file",
+		"/ether/api/cache/preload", "/ether/api/cache/vault/import", "/ether/api/cache/vault/{key}/check")
+	add("console", http.MethodDelete, "requires a cached vault file owned by the server", "/ether/api/cache/vault/{key}")
+	add("console", http.MethodPost, "requires an external add-on supplying a catalogue to preview or import",
+		"/ether/api/collections/addon-imports", "/ether/api/collections/addon-imports/preview", "/ether/api/collections/addon-imports/{id}/sync")
+	add("console", http.MethodDelete, "requires an installed external add-on catalogue import", "/ether/api/collections/addon-imports/{id}")
+	add("console", http.MethodPost, "changes the locally installed player or downloader binary",
+		"/ether/api/onair/downloader/install", "/ether/api/vela/install", "/ether/api/vela/rollback")
+	add("console", http.MethodPost, "needs a configured alert delivery destination or an active heartbeat subscription",
+		"/ether/api/notifications/{id}/test", "/ether/api/notifications/heartbeat/test")
+	add("console", http.MethodPost, "restarts the test process or only runs during initial setup",
+		"/ether/api/server/restart/{$}", "/ether/api/setup/complete")
 	add("console", "*", "trailing-slash alias for the measured console event stream", "/ether/api/stream/")
 	add("console", http.MethodGet, "requires a staged vault import from an owner media directory", "/ether/api/cache/vault/import/{id}")
 	add("console", http.MethodGet, "requires a configured media source and uploaded preroll file",

@@ -86,6 +86,15 @@ func addMatrixConsoleCoverage(c *Client) {
 	c.Steps = append(c.Steps, Step{Name: "viewer safety policy", Class: classConsole, Path: "/safety/policies/{viewerId}"})
 	const spec = `{"name":"Matrix scratch collection","mediaType":"movie","sources":[{"kind":"titles","keys":["{consoleMovieKey}"]}],"sort":"source","refresh":"weekly","enabled":true,"artwork":{"mode":"custom","url":"/p.jpg"}}`
 	for _, step := range []Step{
+		{Name: "fixture create local viewer", Method: http.MethodPost, Path: "/users/local", Body: `{"username":"matrix-console-scratch","password":"Matrix-local-001-fixture"}`, Discover: discoverMatrixID("consoleScratchViewer")},
+		{Name: "fixture patch local viewer", Method: http.MethodPatch, Path: "/users/{consoleScratchViewer}", Body: `{"title":"Matrix viewer","streamLimit":1}`},
+		{Name: "fixture update local viewer", Method: http.MethodPut, Path: "/users/{consoleScratchViewer}", Body: `{"maxContentRating":"PG","streamLimit":2}`},
+		{Name: "fixture change local viewer password", Method: http.MethodPost, Path: "/users/{consoleScratchViewer}/password", Body: `{"username":"matrix-console-scratch","password":"Matrix-local-002-fixture"}`},
+		{Name: "fixture invite local viewer", Method: http.MethodPost, Path: "/users/{consoleScratchViewer}/invite"},
+		{Name: "fixture pause local viewer", Method: http.MethodPost, Path: "/users/{consoleScratchViewer}/pause"},
+		{Name: "fixture resume local viewer", Method: http.MethodPost, Path: "/users/{consoleScratchViewer}/resume"},
+		{Name: "fixture sign out local viewer", Method: http.MethodPost, Path: "/users/{consoleScratchViewer}/signout"},
+		{Name: "fixture remove local viewer", Method: http.MethodDelete, Path: "/users/{consoleScratchViewer}"},
 		{Name: "fixture explain title quality", Method: http.MethodPost, Path: "/quality/explain", Body: `{"userId":{viewerId},"clientId":"type:Apple TV","titleKey":"{consoleMovieKey}","remote":true}`},
 		{Name: "fixture preview library visibility", Method: http.MethodPost, Path: "/catalog/visibility/preview", Body: `{"libraryId":{pluginLibrary},"visibilityDefault":"show","exclusions":[]}`},
 		{Name: "fixture preview plugin live tab", Method: http.MethodPost, Path: "/libraries/{consoleLiveLibrary}/tabs/preview", Body: `{"key":"fixture-live","label":"Live","kind":"live"}`},
