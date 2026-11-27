@@ -13,6 +13,14 @@ import (
 
 const defaultRowItemLimit = 20
 
+// Some row sources apply recommendation exclusions when selecting candidates.
+// Apply the viewer's current state to every rendered Vela row.
+func rowTitleExcluded(title object) bool {
+	watch, _ := title["watch"].(object)
+	excluded, _ := watch["notInterested"].(bool)
+	return excluded
+}
+
 // The collection's limit counts rows; only a single-row request uses it as
 // an item limit. Keep bootstrap independent of the number of shelves requested.
 func rowItemLimit(r *http.Request) int {

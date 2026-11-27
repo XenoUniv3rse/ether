@@ -172,7 +172,7 @@ func (i *instance) bootstrap(w http.ResponseWriter, r *http.Request) {
 				err := i.validateBootstrapRows(r.Context(), entry.rows, entry.expires)
 				if err == nil {
 					varyLanguage(w)
-					cache(w, r, entry.payload)
+					cacheWithRevision(w, r, entry.payload, before.Viewer)
 					return
 				}
 				if !retryBootstrap(err) {
@@ -264,7 +264,9 @@ func (i *instance) bootstrap(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		varyLanguage(w)
-		cache(w, r, payload)
+		// Preference changes also invalidate bootstrap when the affected title
+		// was only on a library row and the Home payload is otherwise identical.
+		cacheWithRevision(w, r, payload, before.Viewer)
 		return
 	}
 	if err := request.Context().Err(); err != nil {

@@ -278,7 +278,7 @@ func (i *instance) heroFallback(r *http.Request, viewer *frontend.Viewer, token 
 				continue
 			}
 			title := byID[ids.RatingKeyGUID(entry.Title.Key)]
-			if title != nil {
+			if title != nil && !rowTitleExcluded(title) {
 				entries = append(entries, object{"kind": "title", "title": title, "receiptToken": entry.Handle})
 			}
 		}

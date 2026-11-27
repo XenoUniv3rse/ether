@@ -112,6 +112,8 @@ func watchWire(s frontend.WatchStatus) object {
 		"played":          s.ViewCount > 0,
 		"favorite":        s.IsFavorite,
 		"watchlisted":     s.InWatchlist,
+		"notInterested":   s.IsNotInterested,
+		"thumbsUp":        thumbsUp(s),
 	}
 	if !s.LastViewedAt.IsZero() {
 		out["lastViewedAt"] = s.LastViewedAt.UTC().Format(time.RFC3339)
@@ -130,6 +132,10 @@ func watchWire(s frontend.WatchStatus) object {
 		out["reading"] = reading
 	}
 	return out
+}
+
+func thumbsUp(s frontend.WatchStatus) bool {
+	return s.UserRating >= 7
 }
 
 type homeTitlesKey struct{}
@@ -828,7 +834,9 @@ func (i *instance) rowWire(r *http.Request, v *frontend.Viewer, token string, ro
 	}
 	byID := map[string]object{}
 	for _, t := range converted {
-		byID[t["id"].(string)] = t
+		if !rowTitleExcluded(t) {
+			byID[t["id"].(string)] = t
+		}
 	}
 	colByID := map[string]object{}
 	if len(cols) > 0 {
@@ -845,9 +853,14 @@ func (i *instance) rowWire(r *http.Request, v *frontend.Viewer, token string, ro
 		base := object{"receiptToken": e.Handle}
 		switch {
 		case e.Title != nil:
-			base["id"] = ids.RatingKeyGUID(e.Title.Key)
+			id := ids.RatingKeyGUID(e.Title.Key)
+			title := byID[id]
+			if title == nil {
+				continue
+			}
+			base["id"] = id
 			base["kind"] = "title"
-			base["title"] = byID[base["id"].(string)]
+			base["title"] = title
 			if e.Badge != "" {
 				base["badge"] = e.Badge
 			}
@@ -876,6 +889,9 @@ func (i *instance) rowWire(r *http.Request, v *frontend.Viewer, token string, ro
 	}
 	if len(row.Entries) == 0 {
 		for _, t := range converted {
+			if rowTitleExcluded(t) {
+				continue
+			}
 			entries = append(entries, object{"id": t["id"], "kind": "title", "title": t, "receiptToken": ""})
 		}
 	}
@@ -1521,11 +1537,6 @@ func (i *instance) watch(w http.ResponseWriter, r *http.Request) {
 		problem(w, 404, "not-found", "not_found")
 		return
 	}
-	detail, e := i.host.Experience.Item(r.Context(), frontend.ItemRequest{Viewer: v, Device: requestDevice(r), Key: k})
-	if e != nil {
-		fail(w, e, r)
-		return
-	}
 	var b struct {
 		Played           *bool    `json:"played"`
 		PositionSeconds  *float64 `json:"positionSeconds"`
@@ -1534,6 +1545,8 @@ func (i *instance) watch(w http.ResponseWriter, r *http.Request) {
 		Favorite         *bool    `json:"favorite"`
 		Watchlisted      *bool    `json:"watchlisted"`
 		ContinueWatching *bool    `json:"continueWatching"`
+		NotInterested    *bool    `json:"notInterested"`
+		ThumbsUp         *bool    `json:"thumbsUp"`
 	}
 	if body(r, &b) != nil {
 		problem(w, 400, "request", "invalid_request")
@@ -1541,6 +1554,26 @@ func (i *instance) watch(w http.ResponseWriter, r *http.Request) {
 	}
 	if b.ContinueWatching != nil && *b.ContinueWatching {
 		problem(w, 400, "request", "invalid_request")
+		return
+	}
+	markNotInterested := b.NotInterested != nil && *b.NotInterested
+	like := b.ThumbsUp != nil && *b.ThumbsUp
+	if markNotInterested && like {
+		problem(w, 400, "request", "invalid_request")
+		return
+	}
+	if b.NotInterested != nil || b.ThumbsUp != nil {
+		// Distinct idempotency keys can race on the same viewer and title.
+		// Serialize the coupled writes, including the read of the prior like.
+		lock := &i.preferenceWrites[(uint64(v.ID)+uint64(k))%uint64(len(i.preferenceWrites))]
+		lock.Lock()
+		defer lock.Unlock()
+	}
+	ctx := r.Context()
+	exp := i.host.Experience
+	detail, e := exp.Item(ctx, frontend.ItemRequest{Viewer: v, Device: requestDevice(r), Key: k})
+	if e != nil {
+		fail(w, e, r)
 		return
 	}
 	if b.Offline {
@@ -1596,11 +1629,26 @@ func (i *instance) watch(w http.ResponseWriter, r *http.Request) {
 		}
 		e = i.host.Experience.RemoveFromContinue(r.Context(), v, target)
 	}
+	clearLike := (b.ThumbsUp != nil && !like) || (markNotInterested && thumbsUp(detail.UserData))
+	if e == nil && clearLike {
+		e = exp.SetLikes(ctx, v, k, nil)
+	}
+	if e == nil && (b.NotInterested != nil || like) {
+		e = exp.SetNotInterested(ctx, v, k, markNotInterested)
+	}
+	if e == nil && like {
+		e = exp.SetLikes(ctx, v, k, b.ThumbsUp)
+	}
 	if e != nil {
 		fail(w, e, r)
 		return
 	}
-	send(w, 200, object{"accepted": true})
+	states, e := exp.UserData(ctx, v, []frontend.RatingKey{k})
+	if e != nil {
+		fail(w, e, r)
+		return
+	}
+	send(w, 200, object{"accepted": true, "watch": watchWire(states[k])})
 }
 
 // Older experience implementations omit the status after a successful read.
