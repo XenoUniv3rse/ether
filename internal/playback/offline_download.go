@@ -87,10 +87,13 @@ func (m *Manager) OpenOriginalDownload(ctx context.Context, viewer *core.Viewer,
 		return nil, frontend.ErrVersionUnavailable
 	}
 	name := g.src.Name()
+	info := g.infoSnapshot()
+	// The grant needs probe facts. Keep seek indexes on the generation.
+	info.Keyframes, info.CopyTimeline = nil, nil
 	media := &frontend.OfflineDownloadSource{
 		ReaderAt: g.src, Closer: offlineGeneration{m, g},
-		Release: g.releaseID(), Name: name, Size: size,
-		MIME: contentTypeForInfo(g.infoSnapshot(), name, sourceMIME(g.src)),
+		Release: g.releaseID(), Name: name, Size: size, Media: info,
+		MIME: contentTypeForInfo(info, name, sourceMIME(g.src)),
 		ETag: rangefile.StrongETag(g.releaseID()+"\x00"+revision, size, time.Time{}),
 	}
 	return media, nil

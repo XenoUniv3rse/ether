@@ -20,16 +20,7 @@ func (i *instance) playbackTracks(ctx context.Context, access frontend.SessionAc
 		if track.Type != "subtitle" || !frontend.IsTextSubtitle(track.Codec) {
 			continue
 		}
-		embedded := false
-		if original {
-			for _, format := range formats {
-				if strings.EqualFold(format, track.Codec) {
-					embedded = true
-					break
-				}
-			}
-		}
-		if !embedded {
+		if !original || !supportsEmbeddedSubtitle(track.Codec, formats) {
 			subReqs = append(subReqs, frontend.SubtitleURLRequest{Index: track.Index, Format: "vtt"})
 		}
 	}
@@ -59,9 +50,8 @@ func (i *instance) playbackTracks(ctx context.Context, access frontend.SessionAc
 		if track.Type != "audio" && track.Type != "subtitle" {
 			continue
 		}
-		t := object{"id": strconv.Itoa(track.Index), "streamIndex": track.Index, "kind": track.Type, "language": track.Language, "name": track.Title, "codec": track.Codec, "default": track.Default, "forced": track.Forced}
+		t := sourceTrack(track)
 		if track.Type == "audio" {
-			t["channels"] = track.Channels
 			if track.Index == d.AudioStream {
 				selectedAudio = t["id"].(string)
 				if !d.AudioCopy && d.AudioCodec != "" {
@@ -72,17 +62,8 @@ func (i *instance) playbackTracks(ctx context.Context, access frontend.SessionAc
 			audio = append(audio, t)
 			continue
 		}
-		embedded := false
-		if original {
-			for _, format := range formats {
-				if strings.EqualFold(format, track.Codec) {
-					embedded = true
-					break
-				}
-			}
-		}
 		switch {
-		case embedded:
+		case original && supportsEmbeddedSubtitle(track.Codec, formats):
 			t["delivery"] = object{"kind": "embedded"}
 		case frontend.IsImageSubtitle(track.Codec):
 			if !canBurn {
@@ -115,6 +96,43 @@ func (i *instance) playbackTracks(ctx context.Context, access frontend.SessionAc
 		}
 	}
 	return audio, subs, selectedAudio, selectedSub
+}
+
+func supportsEmbeddedSubtitle(codec string, formats []string) bool {
+	for _, format := range formats {
+		if strings.EqualFold(format, codec) {
+			return true
+		}
+	}
+	return false
+}
+
+func sourceTrack(track frontend.StreamInfo) object {
+	t := object{
+		"id": strconv.Itoa(track.Index), "streamIndex": track.Index, "kind": track.Type,
+		"language": track.Language, "name": track.Title, "codec": track.Codec,
+		"default": track.Default, "forced": track.Forced,
+	}
+	if track.Type == "audio" {
+		t["channels"] = track.Channels
+	}
+	return t
+}
+
+// Downloads only offer subtitles the client can read from the original bytes.
+func offlineDownloadTracks(media frontend.MediaInfo, formats []string) ([]object, []object) {
+	audio, subs := []object{}, []object{}
+	for _, track := range media.Streams {
+		switch {
+		case track.Type == "audio":
+			audio = append(audio, sourceTrack(track))
+		case track.Type == "subtitle" && supportsEmbeddedSubtitle(track.Codec, formats):
+			t := sourceTrack(track)
+			t["delivery"] = object{"kind": "embedded"}
+			subs = append(subs, t)
+		}
+	}
+	return audio, subs
 }
 
 func (i *instance) refreshTrackDelivery(ctx context.Context, access frontend.SessionAccess, id string, s *playSession) {

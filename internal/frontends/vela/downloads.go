@@ -35,14 +35,19 @@ type downloadGrantRequest struct {
 }
 
 type downloadGrant struct {
-	TitleID    string    `json:"titleId"`
-	VersionID  string    `json:"versionId,omitempty"`
-	URL        string    `json:"url"`
-	ExpiresAt  time.Time `json:"expiresAt"`
-	ETag       string    `json:"etag"`
-	ByteLength int64     `json:"byteLength,omitempty"`
-	MIMEType   string    `json:"mimeType"`
-	Filename   string    `json:"filename"`
+	TitleID        string    `json:"titleId"`
+	VersionID      string    `json:"versionId,omitempty"`
+	URL            string    `json:"url"`
+	ExpiresAt      time.Time `json:"expiresAt"`
+	ETag           string    `json:"etag"`
+	ByteLength     int64     `json:"byteLength,omitempty"`
+	MIMEType       string    `json:"mimeType"`
+	Filename       string    `json:"filename"`
+	Container      string    `json:"container"`
+	OriginalVideo  object    `json:"originalVideo,omitempty"`
+	AudioTracks    []object  `json:"audioTracks"`
+	SubtitleTracks []object  `json:"subtitleTracks"`
+	Chapters       []object  `json:"chapters"`
 }
 
 type downloadCapability struct {
@@ -135,9 +140,13 @@ func (i *instance) grantDownload(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx := frontend.WithLiveApp(r.Context(), "vela")
 	dev := requestDevice(r)
+	declared := req.Client
+	if !declared.OriginalPlayback.Valid() {
+		declared = i.negotiatedClientFor(r, dev)
+	}
 	// Keep device-specific owner rules tied to the authenticated device.
-	req.Client.Device.ID = dev.ID
-	capability, err := i.clientCapabilities(r, v, req.Client)
+	declared.Device.ID = dev.ID
+	capability, err := i.clientCapabilities(r, v, declared)
 	if err != nil {
 		failed("capability_build_failed", err)
 		return
@@ -178,7 +187,7 @@ func (i *instance) grantDownload(w http.ResponseWriter, r *http.Request) {
 	case detail.CanPlay != nil && !*detail.CanPlay:
 		conflict("cannot_play_now")
 		return
-	case !req.Client.OriginalPlayback.Valid():
+	case !declared.OriginalPlayback.Valid():
 		conflict("capabilities_unknown")
 		return
 	}
@@ -235,7 +244,7 @@ func (i *instance) grantDownload(w http.ResponseWriter, r *http.Request) {
 		caps.MaxHeight = lowerDownloadHeight(caps.MaxHeight, policy.DownloadAllowance(v).MaxHeight)
 	}
 	caps.MaxHeight = lowerDownloadHeight(caps.MaxHeight, i.host.HostConfig().Downloads.MaxHeight)
-	source, err = i.host.OfflineDownloads.OpenOfflineDownload(ctx, v, &detail.Title, caps, release, req.Client.OriginalPlayback)
+	source, err = i.host.OfflineDownloads.OpenOfflineDownload(ctx, v, &detail.Title, caps, release, declared.OriginalPlayback)
 	if err != nil {
 		switch {
 		case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded), errors.Is(err, frontend.ErrPreparing):
@@ -292,9 +301,12 @@ func (i *instance) grantDownload(w http.ResponseWriter, r *http.Request) {
 		refuse(http.StatusForbidden, "policy", "feature_unavailable", 0)
 		return
 	}
+	audio, subs := offlineDownloadTracks(source.Media, declared.SubtitleFormats)
 	send(w, http.StatusOK, downloadGrant{
 		TitleID: ids.RatingKeyGUID(k), VersionID: binding.VersionID, URL: "/vela/v0/download/" + token,
 		ExpiresAt: expires, ETag: source.ETag, ByteLength: source.Size, MIMEType: source.MIME, Filename: filename,
+		Container: source.Media.Container, OriginalVideo: originalVideo(source.Media),
+		AudioTracks: audio, SubtitleTracks: subs, Chapters: chapters(source.Media),
 	})
 }
 

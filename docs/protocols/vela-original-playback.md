@@ -96,12 +96,13 @@ An authenticated viewer sees `capabilities.features.downloads` as
 for a daily title-count limit. Download permission and usage are shared with
 Plex and Jellyfin/Emby, including any configured byte or monthly limits.
 
-`POST /vela/v0/titles/{id}/download` takes `{idempotencyKey,versionId?,client}`.
+`POST /vela/v0/titles/{id}/download` takes `{idempotencyKey,versionId?,client?}`.
 Send the current playback `ClientCapabilities` as `client` on every grant
-request, including renewals. Include the device's `client.originalPlayback`
-declaration. Ether builds capabilities from this request and uses the
-authenticated request device ID. A grant can be the first request after
-sign-in or a server restart.
+request, including renewals. A valid `client.originalPlayback` takes
+precedence over the last negotiated declaration for the authenticated
+device and allows a grant immediately after sign-in or a server restart.
+Existing clients that omit the declaration can use the device's recent
+negotiation while it remains cached.
 
 In the Vela API client, `DownloadRequest.client` uses the same type as
 `NegotiateRequest.client`. The download store already obtains this declaration
@@ -113,7 +114,11 @@ A supplied version uses an ID from the title's version menu. With no
 video streams the device can decode. The file needs no server-side conversion
 or audio fallback at playback.
 
-A grant returns `{titleId,versionId?,url,expiresAt,etag,byteLength?,mimeType,filename}`.
+A grant returns
+`{titleId,versionId?,url,expiresAt,etag,byteLength?,mimeType,filename,container,originalVideo?,audioTracks,subtitleTracks,chapters}`.
+The track and chapter arrays use the playback plan shapes and describe the
+selected original file. The subtitle array lists the declared formats
+available in the file with `delivery.kind: "embedded"`.
 Retain the idempotency key with the download. Reposting for the same title
 and version issues a fresh bearer URL for the same bytes and leaves the shared
 quota unchanged, including across a quota reset. `etag` is a required, quoted
@@ -140,7 +145,7 @@ human-readable `error.message` localized using the request language.
 | 404 | `not_found` | The requested title was not found. |
 | 409 | `not_downloadable_kind` | A show, season, or book cannot be downloaded through this endpoint. |
 | 409 | `title_unavailable` | The title itself is currently unavailable. |
-| 409 | `capabilities_unknown` | The request lacks a valid `client.originalPlayback` declaration. |
+| 409 | `capabilities_unknown` | Neither the request nor the device's cached negotiation supplies a valid `originalPlayback` declaration. |
 | 409 | `version_changed` | The existing receipt is bound to a different version or file. |
 | 409 | `version_not_found` | The supplied version ID does not match a current offer for this title. |
 | 409 | `version_unavailable` | Ether could not open a compatible original file for the selected version or automatic selection. |
