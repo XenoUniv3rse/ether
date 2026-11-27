@@ -43,7 +43,7 @@ func catchUpWatchFixture(t *testing.T, now time.Time) (*Service, Channel, catchU
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err = s.o.DB.ExecContext(t.Context(), "INSERT INTO livetv_programmes(source_id,channel_id,start_ms,end_ms,data) VALUES(?,?,?,?,?)", guideSource(ch), ch.GuideID, start.UnixMilli(), p.End.UnixMilli(), raw); err != nil {
+		if _, err = s.o.DB.ExecContext(t.Context(), "INSERT INTO livetv_programmes(source_id,channel_id,start_ms,end_ms,data,title_key) VALUES(?,?,?,?,?,?)", guideSource(ch), ch.GuideID, start.UnixMilli(), p.End.UnixMilli(), raw, programmeTitleKey(p.Item.Title)); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -191,7 +191,7 @@ func insertRatedCatchUpProgramme(t *testing.T, s *Service, ch Channel, title, ra
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = s.o.DB.ExecContext(t.Context(), "INSERT INTO livetv_programmes(source_id,channel_id,start_ms,end_ms,data) VALUES(?,?,?,?,?)", guideSource(ch), ch.GuideID, start.UnixMilli(), p.End.UnixMilli(), raw); err != nil {
+	if _, err = s.o.DB.ExecContext(t.Context(), "INSERT INTO livetv_programmes(source_id,channel_id,start_ms,end_ms,data,title_key) VALUES(?,?,?,?,?,?)", guideSource(ch), ch.GuideID, start.UnixMilli(), p.End.UnixMilli(), raw, programmeTitleKey(p.Item.Title)); err != nil {
 		t.Fatal(err)
 	}
 }

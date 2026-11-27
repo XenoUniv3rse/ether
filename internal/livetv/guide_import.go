@@ -44,6 +44,7 @@ type programmePlan struct {
 type programmeIn struct {
 	end  int64
 	data []byte
+	key  string // catch-up title key
 	seen bool
 }
 
@@ -58,7 +59,7 @@ func planProgrammes(ps []Programme) (programmePlan, error) {
 		if _, dup := p.in[k]; !dup {
 			p.order = append(p.order, k)
 		}
-		p.in[k] = &programmeIn{end: pr.End.UnixMilli(), data: b}
+		p.in[k] = &programmeIn{end: pr.End.UnixMilli(), data: b, key: programmeTitleKey(pr.Item.Title)}
 	}
 	return p, nil
 }
@@ -70,17 +71,19 @@ func planProgrammes(ps []Programme) (programmePlan, error) {
 func writeProgrammes(ctx context.Context, tx *sql.Tx, batch int, sourceID string, plan programmePlan, now time.Time, archiveSince map[string]int64, saved func(int)) (importWrites, error) {
 	var w importWrites
 	in, order := plan.in, plan.order
-	rows, err := tx.QueryContext(ctx, `SELECT channel_id, start_ms, end_ms, data FROM livetv_programmes WHERE source_id=?`, sourceID)
+	rows, err := tx.QueryContext(ctx, `SELECT channel_id, start_ms, end_ms, data, title_key FROM livetv_programmes WHERE source_id=?`, sourceID)
 	if err != nil {
 		return w, err
 	}
 	nowMS := now.UnixMilli()
 	var gone []programmeKey
+	var rekey []titleKeyRow // kept rows stored without a title key
 	for rows.Next() {
 		var k programmeKey
 		var end int64
 		var data []byte
-		if err := rows.Scan(&k.channel, &k.start, &end, &data); err != nil {
+		var key sql.NullString
+		if err := rows.Scan(&k.channel, &k.start, &end, &data, &key); err != nil {
 			rows.Close()
 			return w, err
 		}
@@ -91,10 +94,15 @@ func writeProgrammes(ctx context.Context, tx *sql.Tx, batch int, sourceID string
 		case !ok:
 			if since, archived := archiveSince[k.channel]; archived && end <= nowMS && end >= since {
 				w.ProgrammesKept++
+				if !key.Valid { // decode only a row stored without its key
+					if stored, readable := storedTitleKey(data); readable {
+						rekey = append(rekey, titleKeyRow{source: sourceID, channel: k.channel, start: k.start, key: stored})
+					}
+				}
 				continue
 			}
 			gone = append(gone, k)
-		case cur.end == end && bytes.Equal(cur.data, data):
+		case cur.end == end && bytes.Equal(cur.data, data) && key.String == cur.key:
 			cur.seen = true // identical: nothing to write
 			w.ProgrammesKept++
 		}
@@ -103,6 +111,12 @@ func writeProgrammes(ctx context.Context, tx *sql.Tx, batch int, sourceID string
 		return w, err
 	}
 	if err := rows.Err(); err != nil {
+		return w, err
+	}
+	// A kept row written without its key (a restore, or an older node during
+	// an upgrade) is keyed here; an incoming row whose stored key differs is
+	// rewritten below.
+	if err := updateTitleKeys(ctx, tx, rekey); err != nil {
 		return w, err
 	}
 	for start := 0; start < len(gone); start += batch {
@@ -127,14 +141,14 @@ func writeProgrammes(ctx context.Context, tx *sql.Tx, batch int, sourceID string
 	for start := 0; start < len(write); start += batch {
 		end := min(start+batch, len(write))
 		marks := make([]string, 0, end-start)
-		args := make([]any, 0, (end-start)*5)
+		args := make([]any, 0, (end-start)*6)
 		for _, k := range write[start:end] {
 			p := in[k]
-			marks = append(marks, "(?,?,?,?,?)")
-			args = append(args, sourceID, k.channel, k.start, p.end, p.data)
+			marks = append(marks, "(?,?,?,?,?,?)")
+			args = append(args, sourceID, k.channel, k.start, p.end, p.data, p.key)
 		}
-		if _, err := tx.ExecContext(ctx, `INSERT INTO livetv_programmes(source_id,channel_id,start_ms,end_ms,data) VALUES `+strings.Join(marks, ",")+`
-			ON CONFLICT(source_id,channel_id,start_ms) DO UPDATE SET end_ms=excluded.end_ms, data=excluded.data`, args...); err != nil {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO livetv_programmes(source_id,channel_id,start_ms,end_ms,data,title_key) VALUES `+strings.Join(marks, ",")+`
+			ON CONFLICT(source_id,channel_id,start_ms) DO UPDATE SET end_ms=excluded.end_ms, data=excluded.data, title_key=excluded.title_key`, args...); err != nil {
 			return w, err
 		}
 		w.ProgrammesWritten += end - start

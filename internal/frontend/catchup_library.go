@@ -26,9 +26,9 @@ type CatchUpQuery struct {
 	// Search matches the title or episode title, ignoring case, spacing and punctuation.
 	Search string
 	// Rollup fills Watch on listed shows and seasons with the viewer's
-	// roll-up of their airings. It reads the whole archive window, as a title
-	// sort does, so only listings that show it ask. A search gets none (it
-	// lists only matching airings).
+	// roll-up of their airings. It reads the airings of the listed groups
+	// only, so its cost follows the page. A search gets none (it lists only
+	// matching airings).
 	Rollup bool
 }
 
@@ -125,8 +125,30 @@ func CatchUpWithRollup(ctx context.Context, live any, viewer *Viewer, item Catch
 }
 
 func CatchUpGroupID(kind MediaType, title string) string {
+	return fmt.Sprintf("catchup-%s-%s", kind, CatchUpTitleKey(title))
+}
+
+// CatchUpTitleKey is the key every catch-up show and season id is built from:
+// 32 hex characters of the airing title's hash. The guide stores it with each
+// airing so a show's airings are one indexed lookup.
+func CatchUpTitleKey(title string) string {
 	sum := sha256.Sum256([]byte(strings.ToLower(strings.TrimSpace(title))))
-	return fmt.Sprintf("catchup-%s-%x", kind, sum[:16])
+	return fmt.Sprintf("%x", sum[:16])
+}
+
+// CatchUpGroupKey returns the title key of a show or season id. A show or
+// season GUID carries only the key's first 28 characters; it returns that
+// prefix with whole false.
+func CatchUpGroupKey(id string) (key string, whole bool) {
+	for _, prefix := range []string{"catchup-show-", "catchup-season-"} {
+		if value, ok := strings.CutPrefix(id, prefix); ok && len(value) == 32 {
+			return value, true
+		}
+	}
+	if guid, kind := CatchUpGUIDGroup(id); kind != "" {
+		return guid[4:], false
+	}
+	return "", false
 }
 
 func CatchUpEpisodeID(programmeID string) string {
