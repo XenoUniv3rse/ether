@@ -108,7 +108,8 @@ function activity(s: DebridProviderStatus): string[] {
   if (s.blocked)
     out.push(t("{count} blocked by provider", { count: formatNumber(Number(s.blocked)) }));
   if (s.failures) out.push(tn(Number(s.failures), "{count} failure", "{count} failures"));
-  if (s.reused && !s.api?.reuseHits) out.push(t("{count} reused", { count: formatNumber(Number(s.reused)) }));
+  if (s.reused && !s.api?.reuseHits)
+    out.push(t("{count} reused", { count: formatNumber(Number(s.reused)) }));
   if (s.linksRefreshed)
     out.push(tn(Number(s.linksRefreshed), "{count} link refreshed", "{count} links refreshed"));
   // In a cluster the account's concurrent API calls are divided among nodes.
