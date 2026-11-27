@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/braedonsaunders/ether/internal/admin"
 	"github.com/braedonsaunders/ether/internal/core"
 	"github.com/braedonsaunders/ether/internal/subtitles"
 )
@@ -52,6 +53,12 @@ func subtitleSyncHandler(
 	fallback http.Handler,
 ) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			if access, ok := admin.RequestAccess(r.Context()); !ok || !access.Owner {
+				w.WriteHeader(http.StatusForbidden)
+				return
+			}
+		}
 		if r.Method != http.MethodGet || strings.Trim(r.URL.Path, "/") != "" {
 			fallback.ServeHTTP(w, r)
 			return
