@@ -10780,6 +10780,13 @@ func (m *Manager) Run(ctx context.Context) {
 	stopBridge := m.StartEventBridge(ctx)
 	defer stopBridge()
 	defer m.scheduleWG.Wait()
+	inspectorTick := time.NewTicker(250 * time.Millisecond)
+	defer inspectorTick.Stop()
+	defer func() {
+		flushCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		m.flushAdapterCalls(flushCtx)
+	}()
 	defer m.cancelActionJobs("")
 	defer m.cancelRemoteHashes("")
 	defer func() {
@@ -10797,6 +10804,8 @@ func (m *Manager) Run(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			return
+		case <-inspectorTick.C:
+			m.flushAdapterCalls(ctx)
 		case <-tick.C:
 			m.runOnce(ctx, lastHealth)
 		}
@@ -11898,15 +11907,7 @@ func (h *host) requireWritableToolContext(ctx context.Context) error {
 
 ``````
 func (h *host) record(ctx context.Context) (Record, Grants, error) {
-	r, err := h.m.store.record(ctx, h.plugin)
-	if err != nil {
-		return Record{}, Grants{}, err
-	}
-	if !r.Enabled {
-		return Record{}, Grants{}, ErrDisabled
-	}
-	g, err := h.m.store.grants(ctx, h.plugin)
-	return r, g, err
+	return h.m.store.hostAccess(ctx, h.plugin)
 }
 ``````
 

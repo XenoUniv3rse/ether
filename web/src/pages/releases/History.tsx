@@ -551,7 +551,9 @@ export function TraceDetail({
           <TableHeader>
             <TableRow>
               <TableHead>{t("Release")}</TableHead>
-              {!trace.pluginKind ? <TableHead className="text-right">{t("Score")}</TableHead> : null}
+              {!trace.pluginKind ? (
+                <TableHead className="text-right">{t("Score")}</TableHead>
+              ) : null}
               {!trace.pluginKind ? <TableHead>{t("Health")}</TableHead> : null}
               <TableHead>{t("Verdict")}</TableHead>
             </TableRow>

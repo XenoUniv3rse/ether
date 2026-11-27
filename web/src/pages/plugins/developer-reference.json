@@ -1961,7 +1961,7 @@
   },
   {
     "path": "internal/plugins/events.go#*Manager.Run",
-    "code": "func (m *Manager) Run(ctx context.Context) {\n\tstopBridge := m.StartEventBridge(ctx)\n\tdefer stopBridge()\n\tdefer m.scheduleWG.Wait()\n\tdefer m.cancelActionJobs(\"\")\n\tdefer m.cancelRemoteHashes(\"\")\n\tdefer func() {\n\t\tm.hashMu.Lock()\n\t\tdefer m.hashMu.Unlock()\n\t\tfor _, job := range m.hashJobs {\n\t\t\tjob.cancel()\n\t\t}\n\t}()\n\n\ttick := time.NewTicker(5 * time.Second)\n\tdefer tick.Stop()\n\tlastHealth := map[string]time.Time{}\n\tfor {\n\t\tselect {\n\t\tcase \u003c-ctx.Done():\n\t\t\treturn\n\t\tcase \u003c-tick.C:\n\t\t\tm.runOnce(ctx, lastHealth)\n\t\t}\n\t}\n}"
+    "code": "func (m *Manager) Run(ctx context.Context) {\n\tstopBridge := m.StartEventBridge(ctx)\n\tdefer stopBridge()\n\tdefer m.scheduleWG.Wait()\n\tinspectorTick := time.NewTicker(250 * time.Millisecond)\n\tdefer inspectorTick.Stop()\n\tdefer func() {\n\t\tflushCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)\n\t\tdefer cancel()\n\t\tm.flushAdapterCalls(flushCtx)\n\t}()\n\tdefer m.cancelActionJobs(\"\")\n\tdefer m.cancelRemoteHashes(\"\")\n\tdefer func() {\n\t\tm.hashMu.Lock()\n\t\tdefer m.hashMu.Unlock()\n\t\tfor _, job := range m.hashJobs {\n\t\t\tjob.cancel()\n\t\t}\n\t}()\n\n\ttick := time.NewTicker(5 * time.Second)\n\tdefer tick.Stop()\n\tlastHealth := map[string]time.Time{}\n\tfor {\n\t\tselect {\n\t\tcase \u003c-ctx.Done():\n\t\t\treturn\n\t\tcase \u003c-inspectorTick.C:\n\t\t\tm.flushAdapterCalls(ctx)\n\t\tcase \u003c-tick.C:\n\t\t\tm.runOnce(ctx, lastHealth)\n\t\t}\n\t}\n}"
   },
   {
     "path": "internal/plugins/events.go#stremioManifestRefresh",
@@ -2157,7 +2157,7 @@
   },
   {
     "path": "internal/plugins/host.go#*host.record",
-    "code": "func (h *host) record(ctx context.Context) (Record, Grants, error) {\n\tr, err := h.m.store.record(ctx, h.plugin)\n\tif err != nil {\n\t\treturn Record{}, Grants{}, err\n\t}\n\tif !r.Enabled {\n\t\treturn Record{}, Grants{}, ErrDisabled\n\t}\n\tg, err := h.m.store.grants(ctx, h.plugin)\n\treturn r, g, err\n}"
+    "code": "func (h *host) record(ctx context.Context) (Record, Grants, error) {\n\treturn h.m.store.hostAccess(ctx, h.plugin)\n}"
   },
   {
     "path": "internal/plugins/host.go#*host.deny",
