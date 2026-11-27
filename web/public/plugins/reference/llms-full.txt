@@ -48701,14 +48701,14 @@ Screenshot placeholder: the Local folders page with a scan button and an unmatch
 
 ## Limits
 
-Only files under one granted root are indexed. The scanner recognizes MKV, MP4, M4V, AVI, MOV, TS and WebM, and series episodes named with `S01E02`. Automatic matching requires an exact catalogue title and, when present, year. The folder API returns at most 1,000 entries per directory; the scan rejects a directory at that limit, so split large directories. Scans are subject to Ether’s host-call and time budgets; very large trees can exceed them. Scans stop at ten directory levels. Changes are reflected after the next scan, and removing a manual match currently requires removing the plugin's stored data. Ether's existing player support determines which files can be played.
+Only files under one granted root are indexed. The scanner recognizes MKV, MP4, M4V, AVI, MOV, TS and WebM, and series episodes named with `S01E02`. A folder whose name carries a provider ID tag, as Radarr, Sonarr, Jellyfin and Plex write them (`{tmdb-603}`, `[tmdbid-603]`, `{tvdb-81189}`, `[imdbid-tt0133093]`), is matched by that ID. Otherwise automatic matching requires the catalogue title, compared by letters and digits only (so `Mr. Robot` matches a folder named `Mr Robot` or `Mr.Robot`), and, when present, the year. The folder API returns at most 1,000 entries per directory; the scan rejects a directory at that limit, so split large directories. Scans are subject to Ether’s host-call and time budgets; very large trees can exceed them. Scans stop at ten directory levels. Changes are reflected after the next scan, and removing a manual match currently requires removing the plugin's stored data. Ether's existing player support determines which files can be played.
 
 
 ## Source: sdk/examples/local-folders/manifest.json
 
 ``````
 {
- "id":"tv.ether.examples.local-folders", "version":"1.0.0", "name":"Local folders", "description":"Match local video files to catalogue titles.", "types":["movie","series"], "idPrefixes":["tmdb"], "resources":["stream"],
+ "id":"tv.ether.examples.local-folders", "version":"1.1.0", "name":"Local folders", "description":"Match local video files to catalogue titles.", "types":["movie","series"], "idPrefixes":["tmdb"], "resources":["stream"],
  "ether":{"protocol":1,"kind":"source","capabilities":["stream_source","ui"],"summary":"$t:summary","icon":"assets/icon.svg", "runtime":{"kind":"hosted","entry":"plugin.ts"}, "permissions":{"folders":"read","catalog":"read"},
  "strings":{"en":"i18n/en.json","fr":"i18n/fr.json"},
  "settings":{"fields":[{"key":"folder","kind":"folder","label":"$t:folder","hint":"$t:folderHint"}]},
@@ -48745,7 +48745,14 @@ const parse = (value: string | null, fallback: any) => {
   }
 };
 const video = /\.(mkv|mp4|m4v|avi|mov|ts|webm)$/i;
+// Provider ID tags as Radarr, Sonarr, Jellyfin and Plex write them in folder
+// names: "{tmdb-603}", "[tmdbid-603]", "{tvdb-81189}", "[imdbid-tt0133093]".
+const idTag = /[[{](tmdb|tvdb|imdb)(?:id)?-((?:tt)?\d+)[\]}]/gi;
 function identity(name: string) {
+  const ids = Array.from(name.matchAll(idTag), (m) => ({
+    provider: m[1].toLowerCase(),
+    id: m[2].toLowerCase(),
+  }));
   const clean = name
     .replace(/\.(mkv|mp4|m4v|avi|mov|ts|webm)$/i, "")
     .replace(/[._]/g, " ")
@@ -48754,7 +48761,41 @@ function identity(name: string) {
   return {
     title: (year ? clean.slice(0, year.index) : clean).trim(),
     year: year ? Number(year[1]) : undefined,
+    ids,
   };
+}
+// Folder names cannot hold every character of a catalogue title ("Mr. Robot"
+// becomes "Mr  Robot" above, "Re:ZERO" is often saved as "Re ZERO"), so titles
+// compare by letters and digits only.
+const normTitle = (s: string) =>
+  s
+    .normalize("NFKD")
+    .replace(/\p{M}/gu, "")
+    .toLocaleLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .trim();
+const kindMatches = (type: string, isSeries: boolean) =>
+  isSeries ? ["show", "series"].includes(type) : type === "movie";
+// A tagged folder is matched by ID. The tag only counts when the catalogue
+// title it names is of the right kind (a TMDB number can be a movie and a show).
+function byTag(
+  ctx: PluginContext<Settings>,
+  ids: { provider: string; id: string }[],
+  isSeries: boolean,
+): Match | undefined {
+  for (const { provider, id } of ids) {
+    let t: CatalogTitleSummary | null = null;
+    try {
+      t = read<CatalogTitleSummary | null>(
+        ctx.ether.catalog.get(`${provider}:${id}`),
+      );
+    } catch {
+      continue;
+    }
+    if (t?.tmdbId && kindMatches(t.type, isSeries))
+      return { tmdbId: t.tmdbId, type: isSeries ? "series" : "movie" };
+  }
+  return undefined;
 }
 function scan(ctx: PluginContext<Settings>) {
   const root = ctx.settings.folder;
@@ -48795,24 +48836,25 @@ function scan(ctx: PluginContext<Settings>) {
     ) as Match | null;
     const isSeries = grouped[top].some((i) => i.episode !== undefined);
     const guess = identity(top);
-    const found = manual
-      ? []
-      : read<{ titles: CatalogTitleSummary[] }>(
-          ctx.ether.catalog.search(guess.title, 20, 0),
-        ).titles || [];
+    const tagged = manual ? undefined : byTag(ctx, guess.ids, isSeries);
+    const found =
+      manual || tagged
+        ? []
+        : read<{ titles: CatalogTitleSummary[] }>(
+            ctx.ether.catalog.search(guess.title, 20, 0),
+          ).titles || [];
+    const wanted = normTitle(guess.title);
     const candidates = found
       .filter(
         (t) =>
           t.tmdbId &&
-          (isSeries
-            ? ["show", "series"].includes(t.type)
-            : t.type === "movie") &&
-          t.title.toLocaleLowerCase() === guess.title.toLocaleLowerCase() &&
+          kindMatches(t.type, isSeries) &&
+          normTitle(t.title) === wanted &&
           (!guess.year || t.year === guess.year),
       )
       .map((t) => ({ tmdbId: t.tmdbId!, type: isSeries ? "series" : "movie" }));
     const match =
-      manual || (candidates.length === 1 ? candidates[0] : undefined);
+      manual || tagged || (candidates.length === 1 ? candidates[0] : undefined);
     if (!match) {
       unmatched.push(top);
       continue;
