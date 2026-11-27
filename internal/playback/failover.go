@@ -1,6 +1,7 @@
 package playback
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"errors"
@@ -1451,6 +1452,7 @@ type failoverOpts struct {
 	preserveBuffer bool
 	reason         string
 	down           bool
+	sourceBps      float64 // measured sustainable source throughput for a speed-triggered downshift
 	stopOnFailure  bool
 	strictDirect   bool // a different release needs a new direct-play decision
 	// stallRecovery: the trigger is a stalled media host, not bad data.
@@ -1610,7 +1612,21 @@ func (m *Manager) failoverWith(ctx context.Context, s *session, observed *genera
 		info.Keyframes = nil
 		return info
 	}
-	curBps := mediaBps(oldInfo, cur.src.Size())
+	curBps := replacementBps(cur, 0)
+	// Compare file consumption, independently of the codecs the muxer can
+	// copy. Allow a margin for variable-rate media and short fetch stalls.
+	maxSourceBps := fo.sourceBps * 0.8
+	admitDown := func(next *generation) error {
+		if !fo.down {
+			return nil
+		}
+		bps := replacementBps(next, oldInfo.Duration)
+		if bps <= 0 || bps >= curBps || (fo.sourceBps > 0 && bps > maxSourceBps) ||
+			(cur.src.Size() > 0 && next.src.Size() >= cur.src.Size()) {
+			return fmt.Errorf("down-failover candidate exceeds source budget (candidate %.0f B/s, current %.0f B/s, budget %.0f B/s): %w", bps, curBps, maxSourceBps, core.ErrNotAvailable)
+		}
+		return nil
+	}
 	var (
 		g           *generation
 		fallbackGen *generation // healthy but not spliceable into direct play
@@ -1629,11 +1645,31 @@ func (m *Manager) failoverWith(ctx context.Context, s *session, observed *genera
 		p, ok := hls.(interface{ SwapWouldCopyVideo(core.MediaInfo) bool })
 		return ok && p.SwapWouldCopyVideo(next.infoSnapshot())
 	}
+	// Without a throughput estimate, avoid adding video encoding to an
+	// already slow path. A measured budget permits a fitting, convertible
+	// input when no copy-compatible release is available.
+	acceptDown := func(next *generation) error {
+		if err := admitDown(next); err != nil {
+			return err
+		}
+		if fo.down && !direct && maxSourceBps <= 0 && !copyCandidate(next) {
+			return fmt.Errorf("replacement needs video encoding without a measured source budget: %w", core.ErrNotAvailable)
+		}
+		return nil
+	}
 	if fo.down {
 		g = m.joinSpeedAlternate(ctx, cur, tried)
-		if g != nil && (m.preflightSwap(ctx, s, g) != nil || (!direct && !copyCandidate(g))) {
-			m.dropGeneration(g)
-			g = nil
+		if g != nil {
+			err := acceptDown(g)
+			if err == nil {
+				err = m.preflightSwap(ctx, s, g)
+			}
+			if err != nil {
+				log.Debug("prepared alternate rejected", "release", g.res.Release.Name, "err", err)
+				tried = append(tried, g.releaseID())
+				m.dropGeneration(g)
+				g = nil
+			}
 		}
 	}
 	var preferCopy func(*generation) bool
@@ -1652,16 +1688,7 @@ func (m *Manager) failoverWith(ctx context.Context, s *session, observed *genera
 		var accept func(*generation) error
 		if fo.down {
 			width = 2
-			accept = func(next *generation) error {
-				if !copyCandidate(next) {
-					return fmt.Errorf("replacement needs video encoding: %w", core.ErrNotAvailable)
-				}
-				bps := replacementBps(next, oldInfo.Duration)
-				if curBps > 0 && (bps <= 0 || bps >= curBps) {
-					return fmt.Errorf("down-failover candidate is not lower bitrate: %w", core.ErrNotAvailable)
-				}
-				return nil
-			}
+			accept = acceptDown
 		}
 		if fo.encoder {
 			accept = func(next *generation) error {
@@ -1734,30 +1761,23 @@ func (m *Manager) failoverWith(ctx context.Context, s *session, observed *genera
 					g, err = nil, perr
 				}
 			}
-			if err == nil && (fo.encoder || (fo.down && !direct)) && !copyCandidate(g) {
+			if err == nil && fo.encoder && !copyCandidate(g) {
 				m.dropGeneration(g)
 				g, err = nil, fmt.Errorf("replacement needs video encoding: %w", core.ErrNotAvailable)
+			}
+			if err == nil {
+				err = acceptDown(g)
+				if err != nil {
+					m.dropGeneration(g)
+					g = nil
+				}
 			}
 			// Byte-range clients retain the original container headers and
 			// offsets. Equal lengths do not prove equal bytes or Cues. A different
 			// release is kept as a remux-switch fallback rather than being served
 			// under the original representation's validators.
 			if err == nil && direct && (g.releaseID() != cur.releaseID() || g.src.Size() != cur.src.Size() || fo.strictDirect) {
-				keep := fallbackGen == nil
-				if !keep && fo.down {
-					// A down-failover's remux fallback only helps at a lower
-					// bitrate, so a lower mismatch supersedes an earlier
-					// non-lower one instead of being dropped behind it. The
-					// existing veto below still rejects a fallback that is
-					// not lower when no lower mismatch was found.
-					bps := replacementBps(g, oldInfo.Duration)
-					fallbackBps := replacementBps(fallbackGen, oldInfo.Duration)
-					if curBps > 0 && bps > 0 && bps < curBps && !(fallbackBps > 0 && fallbackBps < curBps) {
-						m.dropGeneration(fallbackGen)
-						fallbackGen, keep = nil, true
-					}
-				}
-				if keep {
+				if fallbackGen == nil {
 					fallbackGen = g
 				} else {
 					m.dropGeneration(g)
@@ -1767,13 +1787,6 @@ func (m *Manager) failoverWith(ctx context.Context, s *session, observed *genera
 				if s.isKind() && fallbackGen != nil && !fo.down {
 					lastErr = err
 					break
-				}
-			}
-			if err == nil && fo.down {
-				if bps := replacementBps(g, oldInfo.Duration); curBps > 0 && (bps <= 0 || bps >= curBps) {
-					m.dropGeneration(g)
-					g = nil
-					err = fmt.Errorf("down-failover candidate is not lower bitrate: %w", core.ErrNotAvailable)
 				}
 			}
 			if err == nil && preferCopy != nil && !preferCopy(g) {
@@ -1842,13 +1855,6 @@ func (m *Manager) failoverWith(ctx context.Context, s *session, observed *genera
 				return cur, nil
 			}
 		}
-		if g == nil && fallbackGen != nil && fo.down {
-			// A down-failover only helps with a lower-bitrate fallback.
-			if bps := replacementBps(fallbackGen, oldInfo.Duration); curBps > 0 && (bps <= 0 || bps >= curBps) {
-				m.dropGeneration(fallbackGen)
-				fallbackGen = nil
-			}
-		}
 		if g == nil && fallbackGen != nil {
 			// No identical representation: do not splice. Swap anyway and restart
 			// the client as a zero-encode remux at the mapped time.
@@ -1863,6 +1869,16 @@ func (m *Manager) failoverWith(ctx context.Context, s *session, observed *genera
 			fallbackGen = nil
 		}
 		if g == nil {
+			if fo.stillNeeded != nil && !fo.stillNeeded() {
+				return cur, nil
+			}
+			if maxSourceBps > 0 && !direct && ctx.Err() == nil {
+				if err := m.reduceOutputBitrate(ctx, s, cur, int(maxSourceBps*8/1000)); err == nil {
+					return cur, nil
+				} else if !errors.Is(err, core.ErrNotAvailable) {
+					lastErr = err
+				}
+			}
 			if fo.stopOnFailure && m.trySkipDamagedSegment(ctx, s, cur, at) {
 				return cur, nil
 			}
@@ -2087,7 +2103,8 @@ func (m *Manager) failoverWith(ctx context.Context, s *session, observed *genera
 		m.emitSourceFailover(s, cur, g, false, fo.reason)
 		m.emitEvent("failover", s, nil)
 	}
-	log.Info("failed over", "release", g.res.Release.Name, "size", g.src.Size(), "duration", newInfo.Duration, "remuxSwitch", remuxSwitch)
+	log.Info("failed over", "release", g.res.Release.Name, "size", g.src.Size(), "duration", newInfo.Duration, "remuxSwitch", remuxSwitch,
+		"candidateBps", int64(replacementBps(g, oldInfo.Duration)), "measuredSourceBps", int64(fo.sourceBps), "sourceBudgetBps", int64(maxSourceBps))
 	if remuxSwitch {
 		return g, errRequireRemux
 	}
@@ -2772,13 +2789,15 @@ func (m *Manager) probedAudioAcceptable(s *session, profile core.QualityProfile,
 // A size/runtime estimate is sufficient for admission; never publish that
 // estimate as a container duration or seek boundary.
 func replacementBps(g *generation, duration time.Duration) float64 {
-	if bps := mediaBps(g.infoSnapshot(), g.src.Size()); bps > 0 {
-		return bps
-	}
-	if duration > 0 {
+	info := g.infoSnapshot()
+	duration = cmp.Or(info.Duration, duration)
+	if duration > 0 && g.src.Size() > 0 {
 		return float64(g.src.Size()) / duration.Seconds()
 	}
-	return 0
+	if info.Estimated {
+		return 0
+	}
+	return mediaBps(info, g.src.Size())
 }
 
 func (m *Manager) rememberOpenFailure(s *session, r core.Release, err error) {

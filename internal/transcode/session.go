@@ -113,6 +113,8 @@ type sessionInput struct {
 	decision            core.Decision
 	softwareDecode      bool // decoder failed; retain hardware encoder
 	forceCPU            bool // hardware encoder failed; stay on CPU
+	sourceLimitKbps     int  // capped encode on the existing input after a source downshift
+	sourceLimitPicture  *videoContract
 	copyFallback        bool // copied video failed its packet conversion; encode this session
 	copyDiscontinuities map[int]bool
 	noPause             bool            // platform cannot suspend ffmpeg

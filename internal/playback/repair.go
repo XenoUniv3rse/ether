@@ -93,7 +93,10 @@ func (m *Manager) repairHorizon(g *generation, event core.RepairEvent) (position
 	if !ok {
 		return 0, 0, false
 	}
-	b := buffered.RecoveryBuffer()
+	return m.recoveryHorizon(g, event, buffered.RecoveryBuffer())
+}
+
+func (m *Manager) recoveryHorizon(g *generation, event core.RepairEvent, b core.RecoveryBuffer) (position, horizon time.Duration, known bool) {
 	if b.ReadyUntil <= 0 {
 		return b.Position, 0, false
 	}

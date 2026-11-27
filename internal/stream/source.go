@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -526,7 +527,11 @@ func (s *source) pumpReadAhead() {
 			return
 		}
 		s.raPending = false
-		cursors := append([]*cursor(nil), s.cursors...)
+		cursors := slices.Clone(s.cursors)
+		// After a seek the new demand cursor gets the next available slot.
+		// An old cursor may still serve another active reader, so leave its
+		// in-flight reads alone and service it when the new window is filled.
+		slices.SortStableFunc(cursors, func(a, b *cursor) int { return b.used.Compare(a.used) })
 		s.mu.Unlock()
 		for _, c := range cursors {
 			s.mu.Lock()
