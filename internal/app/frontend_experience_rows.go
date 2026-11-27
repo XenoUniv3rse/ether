@@ -292,7 +292,7 @@ func (a *App) experienceAdditionalRows(ctx context.Context, req frontend.RowRequ
 		composer.Personal = hubDiscoverySource{func(ctx context.Context, viewer *core.User, limit int) ([]core.Hub, error) {
 			if core.LiveApp(ctx) == "stremio" {
 				if detail, ok := visibility.FactJudge(ctx); ok {
-					ctx = personalize.WithReviewProjection(ctx, core.ListRows{Facts: core.VisibilityFacts, Detail: detail, OmitCredits: true})
+					ctx = personalize.WithReviewProjection(ctx, core.ListRows{Facts: core.FactHomeRelease | visibility.TitleFacts(viewer), Detail: detail, OmitCredits: true, OmitAddedTime: true})
 				}
 			}
 			return a.discoveryPersonal.Hubs(ctx, viewer, limit)

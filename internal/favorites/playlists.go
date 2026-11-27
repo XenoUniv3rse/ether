@@ -205,14 +205,14 @@ const playlistArtworkHeadLimit = 16
 
 // PreparePlaylistArtwork shares ownership checks and the first member window
 // across the artwork page.
-func (p *Playlists) PreparePlaylistArtwork(ctx context.Context, uid int64, keys []core.RatingKey) (context.Context, error) {
+func (p *Playlists) PreparePlaylistArtwork(ctx context.Context, uid int64, keys []core.RatingKey) (context.Context, []core.RatingKey, error) {
 	page := playlistOwnership{viewer: uid, owned: make(map[core.RatingKey]bool, len(keys))}
 	if base, ok := p.Base.(interface {
 		PlaylistArtworkHeads(context.Context, int64, []core.RatingKey, int) (map[core.RatingKey][]core.RatingKey, error)
 	}); ok {
 		heads, err := base.PlaylistArtworkHeads(ctx, uid, keys, playlistArtworkHeadLimit)
 		if err != nil {
-			return ctx, err
+			return ctx, nil, err
 		}
 		page.heads = heads
 		for _, key := range keys {
@@ -221,13 +221,17 @@ func (p *Playlists) PreparePlaylistArtwork(ctx context.Context, uid int64, keys 
 	} else {
 		owned, err := p.ExistsBatch(ctx, uid, keys)
 		if err != nil {
-			return ctx, err
+			return ctx, nil, err
 		}
 		for _, key := range keys {
 			page.owned[key] = owned[key]
 		}
 	}
-	return context.WithValue(ctx, playlistOwnershipKey{}, page), nil
+	var candidates []core.RatingKey
+	for _, key := range keys {
+		candidates = append(candidates, page.heads[key]...)
+	}
+	return context.WithValue(ctx, playlistOwnershipKey{}, page), candidates, nil
 }
 
 // QueueWindow reads only the queue's stored membership window. The Favorites

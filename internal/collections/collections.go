@@ -1098,7 +1098,7 @@ func (s *Service) listFromSpecs(ctx context.Context, user *core.User, t core.Med
 		if !visible(row, user) || !row.spec.BrowseInApps || !typeMatches(row.spec, t) || match != nil && !match(row.spec.Name) {
 			continue
 		}
-		if s.plainPersistedMembers(row) {
+		if !row.lastBuilt.IsZero() && row.buildHash != "" && row.spec.Refresh != RefreshLive {
 			batch = append(batch, row)
 			if len(batch) == 100 {
 				flush()

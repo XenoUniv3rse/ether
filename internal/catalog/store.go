@@ -263,6 +263,13 @@ func (c *Catalog) hydrateTitleFacts(ctx context.Context, items []core.Title, fac
 	if err := c.airedCounts(ctx, items); err != nil {
 		return err
 	}
+	if err := c.hydrateMetadataFacts(ctx, items, facts); err != nil {
+		return err
+	}
+	return c.applyHydratedAdded(ctx, items)
+}
+
+func (c *Catalog) hydrateMetadataFacts(ctx context.Context, items []core.Title, facts factSet) error {
 	// Same shape as hydrateHomeRelease: query once per distinct key, but
 	// apply each row to EVERY occurrence of that key in the slice. A title
 	// can appear on several shelves (in different chunks, too); mapping a
@@ -287,10 +294,7 @@ func (c *Catalog) hydrateTitleFacts(ctx context.Context, items []core.Title, fac
 	if err := c.hydrateFactBatch(ctx, items, idx, keys, facts); err != nil {
 		return err
 	}
-	if err := c.hydrateShows(ctx, items); err != nil {
-		return err
-	}
-	return c.applyHydratedAdded(ctx, items)
+	return c.hydrateShows(ctx, items)
 }
 
 // hydrateVisibilityFacts fills the facts visibility rules and the release
@@ -1542,14 +1546,22 @@ func (c *Catalog) queryListRows(ctx context.Context, lr *core.ListRows, q string
 	if !lr.OmitCredits {
 		need |= factRowCredits
 	}
-	if err := c.hydrateRows(ctx, partial, need); err != nil {
+	if err := c.hydrateRows(ctx, partial, need, !lr.OmitAddedTime); err != nil {
 		return nil, err
 	}
 	if len(full) > 0 {
-		if err := c.hydrateSlice(ctx, full); err != nil {
-			return nil, err
+		if lr.OmitAddedTime {
+			// These projections need the evidence matcher's metadata, but
+			// do not display aired counts or "date added".
+			if err := c.hydrateMetadataFacts(ctx, full, factsFull); err != nil {
+				return nil, err
+			}
+		} else {
+			if err := c.hydrateSlice(ctx, full); err != nil {
+				return nil, err
+			}
+			c.rememberTitles(gen, minute, full)
 		}
-		c.rememberTitles(gen, minute, full)
 	}
 	for j, i := range partialAt {
 		out[i] = partial[j]
@@ -1570,7 +1582,7 @@ const exportFactSplit = 64
 // page is read while the one before it is signed and encoded: its facts
 // come from two readers at once, over disjoint halves of its keys (and so
 // of the items they fill).
-func (c *Catalog) hydrateRows(ctx context.Context, items []core.Title, set factSet) error {
+func (c *Catalog) hydrateRows(ctx context.Context, items []core.Title, set factSet, addedTime bool) error {
 	if len(items) == 0 {
 		return nil
 	}
@@ -1611,6 +1623,9 @@ func (c *Catalog) hydrateRows(ctx context.Context, items []core.Title, set factS
 	}
 	if err := c.hydrateShows(ctx, items); err != nil {
 		return err
+	}
+	if !addedTime {
+		return nil
 	}
 	return c.applyHydratedAdded(ctx, items)
 }

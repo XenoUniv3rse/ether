@@ -59,7 +59,7 @@ func (p *ViewerPush) PublicKey(ctx context.Context, viewer *core.User) (string, 
 	if err := p.Preferences.authorized(ctx, viewer); err != nil {
 		return "", err
 	}
-	_, public, err := p.Notifications.pushKeys(ctx)
+	_, public, err := p.Notifications.readPushKeys(ctx)
 	return public, err
 }
 

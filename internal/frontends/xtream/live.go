@@ -2,6 +2,7 @@ package xtream
 
 import (
 	"bufio"
+	"context"
 	"encoding/base64"
 	"encoding/xml"
 	"fmt"
@@ -412,18 +413,28 @@ func (i *instance) playlist(w http.ResponseWriter, r *http.Request, l login) {
 	}); err != nil {
 		return
 	}
-	_ = i.walk(r, l, "show", false, func(r *http.Request, l login, show frontend.Title, _ string) error {
-		return i.children(r, l, show.Key, false, func(l login, season frontend.Title) error {
-			if string(season.Type) != "season" {
-				return nil
-			}
-			return i.children(r, l, season.Key, false, func(l login, ep frontend.Title) error {
-				if string(ep.Type) != "episode" {
+	type episodeLine struct {
+		show, title     string
+		season, episode int
+	}
+	_ = frontend.WalkCompactTitles(r.Context(), pageSize, func(ctx context.Context, refs []string) (map[string]int32, error) {
+		return i.host.IDs.CompactBatch(ctx, "xtream", "item", refs)
+	}, func(emit func(frontend.RatingKey, int32, episodeLine) error) error {
+		return i.walk(r, l, "show", false, func(r *http.Request, l login, show frontend.Title, _ string) error {
+			return i.children(r, l, show.Key, false, func(l login, season frontend.Title) error {
+				if season.Type != frontend.TypeSeason {
 					return nil
 				}
-				_, err := fmt.Fprintf(out, "#EXTINF:-1 group-title=\"Series\",%s S%02dE%02d %s\n%s/series/%s/%s/%d.mkv\n", cleanM3U(show.Title), ep.Season, ep.Episode, cleanM3U(ep.Title), base, l.username, l.password, l.ids[ep.Key])
-				return err
+				return i.children(r, l, season.Key, false, func(_ login, ep frontend.Title) error {
+					if ep.Type != frontend.TypeEpisode {
+						return nil
+					}
+					return emit(ep.Key, frontend.ExportCompactID(r.Context(), ep.Key), episodeLine{show.Title, ep.Title, ep.Season, ep.Episode})
+				})
 			})
 		})
+	}, func(item episodeLine, id int32) error {
+		_, err := fmt.Fprintf(out, "#EXTINF:-1 group-title=\"Series\",%s S%02dE%02d %s\n%s/series/%s/%s/%d.mkv\n", cleanM3U(item.show), item.season, item.episode, cleanM3U(item.title), base, l.username, l.password, id)
+		return err
 	})
 }

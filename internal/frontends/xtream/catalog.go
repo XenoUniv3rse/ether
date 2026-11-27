@@ -44,12 +44,12 @@ func (i *instance) walk(r *http.Request, l login, kind string, artwork bool, emi
 				pageRequest := r
 				if kind == "show" && !artwork {
 					if batch, ok := i.host.Experience.(interface {
-						PrepareExportChildren(context.Context, *frontend.Viewer, []frontend.RatingKey) (context.Context, error)
+						PrepareExportChildren(context.Context, *frontend.Viewer, []frontend.Title) (context.Context, error)
 					}); ok {
-						shows := make([]frontend.RatingKey, 0, len(page.Items))
+						shows := make([]frontend.Title, 0, len(page.Items))
 						for _, title := range page.Items {
 							if title.Key.Kind() == frontend.KindShow && !title.Key.Allocated() {
-								shows = append(shows, title.Key)
+								shows = append(shows, title)
 							}
 						}
 						ctx, err := batch.PrepareExportChildren(r.Context(), l.viewer, shows)
@@ -321,7 +321,7 @@ func (i *instance) children(r *http.Request, l login, key frontend.RatingKey, ar
 			return errors.New("unbounded child response")
 		}
 		pl := l.forPage()
-		if artwork || key.Kind() != frontend.KindShow {
+		if artwork {
 			if err := i.preparePage(r, pl, p.Items, artwork); err != nil {
 				return err
 			}

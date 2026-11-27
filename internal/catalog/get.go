@@ -93,6 +93,9 @@ func (c *Catalog) fresh(st *storedTitle) bool {
 
 // Get returns a title from the mirror, fetching on demand when missing/stale.
 func (c *Catalog) Get(ctx context.Context, key core.RatingKey) (*core.Title, error) {
+	if season, ok := c.preparedExportSeason(ctx, key); ok {
+		return season, nil
+	}
 	t, err := c.get(ctx, key)
 	if err == nil {
 		err = c.projectSingle(ctx, t)
@@ -823,6 +826,16 @@ func (c *Catalog) seasonMirrored(ctx context.Context, showID int64, season, coun
 
 // Children: seasons of a show, episodes of a season.
 func (c *Catalog) Children(ctx context.Context, key core.RatingKey) ([]core.Title, error) {
+	if items, ok := c.exportChildrenFor(ctx, key); ok {
+		if key.Kind() == core.KindSeason {
+			if _, exists := c.preparedExportSeason(ctx, key); !exists {
+				return nil, core.ErrNotFound
+			}
+		} else if _, err := c.Get(ctx, key); err != nil {
+			return nil, err
+		}
+		return items, nil
+	}
 	if _, err := c.Get(ctx, key); err != nil {
 		return nil, err
 	}
