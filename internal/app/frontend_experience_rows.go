@@ -292,7 +292,7 @@ func (a *App) experienceAdditionalRows(ctx context.Context, req frontend.RowRequ
 
 // experienceHomeFallback loads the viewer's exclusions and asks Experience for
 // the cold Home shelves. Plex does not use this path.
-func (a *App) experienceHomeFallback(ctx context.Context, req frontend.RowRequest, libraries []experience.Library, visibility experience.Visibility) ([]frontend.Row, error) {
+func (a *App) experienceHomeFallback(ctx context.Context, req frontend.RowRequest, libraries []experience.Library, visibility experience.Visibility, listDisplay bool) ([]frontend.Row, error) {
 	if req.Viewer == nil || a.catalog == nil || a.notInterested == nil {
 		return nil, core.ErrNotAvailable
 	}
@@ -321,6 +321,7 @@ func (a *App) experienceHomeFallback(ctx context.Context, req frontend.RowReques
 				}
 			}
 			q.Filter = filter
+			q.ListDisplayFacts = listDisplay
 		}
 		return a.catalog.Browse(ctx, q)
 	}

@@ -547,9 +547,9 @@ func (c *Catalog) BrowseStoredEpisodes(ctx context.Context, q core.BrowseQuery) 
 	uncacheable := storedBrowseUncacheable(q.Filter)
 	ckey := "ep:" + browseFilterKey(c.policyKeyFilter(q.Filter)) + c.consoleGateKey(q.Filter)
 	bkey := fmt.Sprintf("%s|%s|%v|%v|%d|%d|%v", ckey, q.Sort, q.Desc, q.SecondarySorts, offset, limit, q.NoTotal)
-	if q.EpisodeListFacts {
-		ctx = context.WithValue(ctx, episodeListFactsKey{}, true)
-		bkey += "|episode-list"
+	if q.ListDisplayFacts {
+		ctx = context.WithValue(ctx, listDisplayFactsKey{}, true)
+		bkey += "|list-display"
 	}
 	cursorPrefix := fmt.Sprintf("cursor:%s|%s|%v|%v|", ckey, q.Sort, q.Desc, q.SecondarySorts)
 

@@ -54,7 +54,9 @@ func (a *App) experienceSearch(vis experience.Visibility, stepAside *experience.
 		}
 		return a.safety != nil && viewer != nil && !a.safety.Restricted(viewer)
 	}
-	return experience.SearchFor(a.searchSourcesFor(stepAside), vis, unrestricted)
+	search := experience.SearchFor(a.searchSourcesFor(stepAside), vis, unrestricted)
+	search.PrefetchParents = a.catalog.PreloadStored
+	return search
 }
 
 func (a *App) searchSourcesFor(stepAside *experience.StepAside) experience.SearchSources {
@@ -282,7 +284,7 @@ func (a *App) newSurfaceExperience(protocol core.Protocol, artwork ...frontend.A
 		if protocol == "plex" {
 			return nil, nil
 		}
-		return a.experienceHomeFallback(ctx, req, liveLibraries(), rowVis)
+		return a.experienceHomeFallback(ctx, req, liveLibraries(), rowVis, protocol == "jellyfin" || protocol == "emby")
 	}, Active: func(ctx context.Context, u *core.User) bool {
 		v, e := a.users.ActiveUser(ctx, u.ID)
 		return e == nil && v != nil

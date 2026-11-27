@@ -1639,7 +1639,7 @@ func (c *Catalog) queryTitlesMode(ctx context.Context, sqlGated bool, q string, 
 	return items, nil
 }
 
-type episodeListFactsKey struct{}
+type listDisplayFactsKey struct{}
 
 // queryTitlesRows hydrates titles before the caller projects episode orders.
 // With rowsOnly, movies and shows stay as rows for candidate search to
@@ -1683,7 +1683,7 @@ func (c *Catalog) queryTitlesRows(ctx context.Context, sqlGated, rowsOnly bool, 
 		needAt = append(needAt, i)
 	}
 	rank := rankProjectionFrom(ctx)
-	episodeList, _ := ctx.Value(episodeListFactsKey{}).(bool)
+	listDisplay, _ := ctx.Value(listDisplayFactsKey{}).(bool)
 	partial := map[core.RatingKey]bool{}
 	if len(needAt) > 0 && rank != nil {
 		// A ranking window's titles: the projection, then in full each one
@@ -1712,7 +1712,7 @@ func (c *Catalog) queryTitlesRows(ctx context.Context, sqlGated, rowsOnly bool, 
 			need[j] = out[i]
 		}
 		facts := factsFull
-		if episodeList {
+		if listDisplay {
 			facts = factsVisibility
 		}
 		if err := c.hydrateTitleFacts(ctx, need, facts); err != nil {
@@ -1748,7 +1748,7 @@ func (c *Catalog) queryTitlesRows(ctx context.Context, sqlGated, rowsOnly bool, 
 			}
 		}
 	}
-	if deferred, _ := ctx.Value(deferAiredCountsKey{}).(bool); !deferred && !episodeList {
+	if deferred, _ := ctx.Value(deferAiredCountsKey{}).(bool); !deferred && !listDisplay {
 		c.rememberTitles(gen, minute, full)
 	}
 	return visible, nil
