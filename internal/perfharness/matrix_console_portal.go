@@ -76,7 +76,7 @@ func discoverMatrixSupportDevice(vars map[string]string, body []byte) {
 	}
 	if json.Unmarshal(body, &response) == nil {
 		for _, device := range response.Devices {
-			if device.Name == "Matrix fixture playback" {
+			if device.Name == "Matrix living room" && device.ID != "" {
 				setOnce(vars, "consoleSupportDevice", device.ID)
 				return
 			}

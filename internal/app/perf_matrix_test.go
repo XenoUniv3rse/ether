@@ -372,7 +372,7 @@ func runPerfMatrixCase(t *testing.T, ctx context.Context, fixture string, c perf
 			}
 		}
 		a.support.Observe(diagnostics.Event{Kind: diagnostics.KindDevice, Protocol: "jellyfin",
-			DeviceKey: "matrix-console-playback", DeviceName: "Matrix fixture playback", Product: "Matrix player"})
+			DeviceKey: "matrix-console-playback", DeviceName: "Matrix living room", Product: "Matrix player"})
 		templates, err := a.onair.Templates(ctx)
 		if err != nil || len(templates) == 0 {
 			t.Fatalf("On-Air templates fixture: %v", err)
