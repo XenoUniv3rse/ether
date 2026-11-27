@@ -28,6 +28,35 @@ func (h *folderNames) Pop() any {
 	return v
 }
 
+func declaresFolderRead(man Manifest) bool {
+	return man.Ether != nil && man.RuntimeKind() == "hosted" && normLevel(man.Ether.Permissions.Folders) == "read"
+}
+
+// folderRoots returns the stored root strings verbatim, as required by folderCheck.
+func folderRoots(man Manifest, g Grants) []string {
+	roots := []string{}
+	if !declaresFolderRead(man) || g.revoked("folders") {
+		return roots
+	}
+	for _, root := range g.Folders {
+		if filepath.IsAbs(root) {
+			roots = append(roots, root)
+		}
+	}
+	return roots
+}
+
+func (h *host) FoldersRoots(ctx context.Context) ([]string, error) {
+	if isClientRequestPath(callPathFromContext(ctx)) {
+		return nil, fmt.Errorf("%w: folders.roots requires a non-client route", ErrPermissionDenied)
+	}
+	r, g, err := h.record(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return folderRoots(r.Manifest, g), nil
+}
+
 func (h *host) FoldersList(ctx context.Context, root, path string, options ...FolderListOptions) (FolderPage, error) {
 	if isClientRequestPath(callPathFromContext(ctx)) {
 		return FolderPage{}, fmt.Errorf("%w: folders.list requires a non-client route", ErrPermissionDenied)

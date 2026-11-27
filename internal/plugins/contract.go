@@ -1519,6 +1519,9 @@ type Host interface {
 	StreamPartURL(ctx context.Context, itemRef string, partIndex *int) (string, error)
 	StreamURLWithOptions(ctx context.Context, itemRef string, opts StreamURLOptions) (string, error)
 
+	// FoldersRoots lists the live owner-picked absolute paths on non-client routes.
+	FoldersRoots(ctx context.Context) ([]string, error)
+
 	// FoldersList and FoldersStat need folders: read and an owner-picked
 	// root. They never return file contents.
 	FoldersList(ctx context.Context, root, path string, options ...FolderListOptions) (FolderPage, error)
@@ -1748,6 +1751,13 @@ type Event struct {
 	At       time.Time       `json:"at"`
 	ViewerID int64           `json:"viewerId,omitempty"`
 	Payload  json.RawMessage `json:"payload,omitempty"`
+}
+
+// EventPluginFoldersChanged is private to the hosted plugin whose folder grant changed.
+const EventPluginFoldersChanged = "plugin.folders.changed"
+
+type FolderRootsChangedPayload struct {
+	Roots []string `json:"roots"`
 }
 
 // Normalized event names (SPEC §5.7).

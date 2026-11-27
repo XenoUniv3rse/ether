@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"slices"
 	"sort"
 	"strings"
 	"sync/atomic"
@@ -389,13 +390,21 @@ func (s *storage) list(ctx context.Context) ([]Record, error) {
 	return out, nil
 }
 
+type sqlExecutor interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+}
+
 func (s *storage) upsert(ctx context.Context, r Record) error {
+	return s.upsertRecord(ctx, s.db, r)
+}
+
+func (s *storage) upsertRecord(ctx context.Context, db sqlExecutor, r Record) error {
 	now := s.now().Unix()
 	sealedURL, err := config.SealWith(s.sealer, r.SourceURL, "plugins_installed", "source_url", r.ID)
 	if err != nil {
 		return err
 	}
-	_, err = s.db.ExecContext(ctx, `INSERT INTO plugins_installed(id,name,version,kind,manifest,source_kind,source_url,enabled,verified,shadow,auto_update,update_version,update_manifest,update_files,prev_version,installed_at,updated_at,replace_libraries) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+	_, err = db.ExecContext(ctx, `INSERT INTO plugins_installed(id,name,version,kind,manifest,source_kind,source_url,enabled,verified,shadow,auto_update,update_version,update_manifest,update_files,prev_version,installed_at,updated_at,replace_libraries) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 ON CONFLICT(id) DO UPDATE SET name=excluded.name,version=excluded.version,kind=excluded.kind,manifest=excluded.manifest,source_kind=excluded.source_kind,source_url=excluded.source_url,enabled=excluded.enabled,verified=excluded.verified,shadow=excluded.shadow,auto_update=excluded.auto_update,update_version=excluded.update_version,update_manifest=excluded.update_manifest,update_files=excluded.update_files,prev_version=excluded.prev_version,updated_at=excluded.updated_at,replace_libraries=excluded.replace_libraries`,
 		r.ID, r.Name, r.Version, r.Kind, string(r.ManifestRaw), r.SourceKind, sealedURL,
 		bi(r.Enabled), bi(r.Verified), bi(r.Shadow), bi(r.AutoUpdate), r.UpdateVersion, r.updateManifest, r.updateFiles, r.PrevVersion, timeOr(r.InstalledAt, now), now, bi(r.ReplaceLibraries))
@@ -476,8 +485,12 @@ func (s *storage) hasFile(ctx context.Context, plugin, version, path string) boo
 }
 
 func (s *storage) grants(ctx context.Context, plugin string) (Grants, error) {
+	return readGrants(ctx, s.db, plugin)
+}
+
+func readGrants(ctx context.Context, db rowQueryer, plugin string) (Grants, error) {
 	var raw string
-	err := s.db.QueryRowContext(ctx, `SELECT grants FROM plugins_grants WHERE plugin=?`, plugin).Scan(&raw)
+	err := db.QueryRowContext(ctx, `SELECT grants FROM plugins_grants WHERE plugin=?`, plugin).Scan(&raw)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Grants{}, nil
 	}
@@ -488,13 +501,52 @@ func (s *storage) grants(ctx context.Context, plugin string) (Grants, error) {
 	return g, json.Unmarshal([]byte(raw), &g)
 }
 
-func (s *storage) putGrants(ctx context.Context, plugin string, g Grants) error {
+// saveGrants commits a folder change and its private outbox entry together.
+func (s *storage) saveGrants(ctx context.Context, r Record, g Grants, previous Manifest, install bool) (int, error) {
 	raw, err := json.Marshal(g)
 	if err != nil {
-		return err
+		return 0, err
 	}
-	_, err = s.db.ExecContext(ctx, `INSERT INTO plugins_grants(plugin,grants) VALUES(?,?) ON CONFLICT(plugin) DO UPDATE SET grants=excluded.grants`, plugin, string(raw))
-	return err
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+	if err := store.LockKey(ctx, store.DialectOf(s.db), tx, "plugins.grants:"+r.ID); err != nil {
+		return 0, err
+	}
+
+	var change *Event
+	if r.Enabled && declaresFolderRead(r.Manifest) && r.Manifest.HasCapability(CapEvents) && !g.revoked("events") {
+		if meta := r.Manifest.Ether.Contributes.Events; meta != nil && slices.Contains(meta.Subscribe, EventPluginFoldersChanged) {
+			old, err := readGrants(ctx, tx, r.ID)
+			if err != nil {
+				return 0, err
+			}
+			roots := folderRoots(r.Manifest, g)
+			if !slices.Equal(folderRoots(previous, old), roots) || old.revoked("folders") != g.revoked("folders") {
+				payload, _ := json.Marshal(FolderRootsChangedPayload{Roots: roots})
+				change = &Event{ID: newEventID(), Name: EventPluginFoldersChanged, At: s.now(), Payload: payload}
+			}
+		}
+	}
+
+	if _, err := tx.ExecContext(ctx, `INSERT INTO plugins_grants(plugin,grants) VALUES(?,?) ON CONFLICT(plugin) DO UPDATE SET grants=excluded.grants`, r.ID, string(raw)); err != nil {
+		return 0, err
+	}
+	if install {
+		if err := s.upsertRecord(ctx, tx, r); err != nil {
+			return 0, err
+		}
+	}
+	var dropped int
+	if change != nil {
+		dropped, err = s.enqueueWith(ctx, tx, r.ID, *change)
+		if err != nil {
+			return 0, err
+		}
+	}
+	return dropped, tx.Commit()
 }
 
 type settingsRow struct {
@@ -1257,19 +1309,26 @@ func (s *storage) logs(ctx context.Context, plugin string, limit int) ([]string,
 // enqueue appends to a plugin outbox, dropping the oldest past the cap and
 // reporting how many were dropped.
 func (s *storage) enqueue(ctx context.Context, plugin string, ev Event) (int, error) {
+	return s.enqueueWith(ctx, s.db, plugin, ev)
+}
+
+func (s *storage) enqueueWith(ctx context.Context, db interface {
+	sqlExecutor
+	rowQueryer
+}, plugin string, ev Event) (int, error) {
 	payload, _ := json.Marshal(ev)
-	if _, err := s.db.ExecContext(ctx, `INSERT INTO plugins_outbox(plugin,event_id,name,payload,created) VALUES(?,?,?,?,?)`, plugin, ev.ID, ev.Name, string(payload), s.now().Unix()); err != nil {
+	if _, err := db.ExecContext(ctx, `INSERT INTO plugins_outbox(plugin,event_id,name,payload,created) VALUES(?,?,?,?,?)`, plugin, ev.ID, ev.Name, string(payload), s.now().Unix()); err != nil {
 		return 0, err
 	}
 	var n int
-	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM plugins_outbox WHERE plugin=?`, plugin).Scan(&n); err != nil {
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM plugins_outbox WHERE plugin=?`, plugin).Scan(&n); err != nil {
 		return 0, err
 	}
 	if n <= OutboxCap {
 		return 0, nil
 	}
 	drop := n - OutboxCap
-	_, err := s.db.ExecContext(ctx, `DELETE FROM plugins_outbox WHERE id IN (SELECT id FROM plugins_outbox WHERE plugin=? ORDER BY id LIMIT ?)`, plugin, drop)
+	_, err := db.ExecContext(ctx, `DELETE FROM plugins_outbox WHERE id IN (SELECT id FROM plugins_outbox WHERE plugin=? ORDER BY id LIMIT ?)`, plugin, drop)
 	return drop, err
 }
 

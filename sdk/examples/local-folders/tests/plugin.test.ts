@@ -8,6 +8,7 @@ const folders = JSON.parse(
 );
 test("scan indexes movies and episodes, manual match survives a new instance, and stale files disappear", async () => {
   const host = createMockHostClient({
+    folderRoots: ["/media", "/shows"],
     folders: new Map(Object.entries(folders)),
     catalog: new Map([
       [
@@ -23,27 +24,21 @@ test("scan indexes movies and episodes, manual match survives a new instance, an
       ["b", { id: 2, title: "Example Show", type: "show", tmdbId: 20 }],
     ]),
   });
-  host.settings = { get: () => ({ folder: "/media" }) };
   let p = createPlugin(host);
-  await p.dispatch({
-    method: "POST",
-    path: "/ether/configure",
-    body: { folder: "/media" },
-  });
   await p.dispatch({ method: "POST", path: "/ether/job/scan" });
   let movie = await p.dispatch({ path: "/stream/movie/tmdb%3A10.json" });
   assert.equal(
     (movie.body as any).streams[0].ether.file,
-    "Example Movie (2001)/Example.Movie.2001.1080p.mkv",
+    "/media/Example Movie (2001)/Example.Movie.2001.1080p.mkv",
   );
   let ep = await p.dispatch({ path: "/stream/series/tmdb%3A20%3A1%3A2.json" });
-  assert.equal((ep.body as any).streams.length, 1);
+  assert.equal((ep.body as any).streams[0].ether.file, "/shows/Example Show/Season 1/Example.Show.S01E02.1080p.mkv");
   const page = await p.dispatch({ path: "/ether/view/matches" });
-  assert.equal((page.body as any).data.folder0, "Unmatched");
+  assert.equal((page.body as any).data.folder0, "/media/Unmatched");
   await p.dispatch({
     method: "POST",
     path: "/ether/action/match",
-    body: { folder: "Unmatched", tmdbId: 30, mediaType: "movie" },
+    body: { root: "/media", folder: "Unmatched", tmdbId: 30, mediaType: "movie" },
   });
   p = createPlugin(host);
   assert.equal(
@@ -51,7 +46,7 @@ test("scan indexes movies and episodes, manual match survives a new instance, an
       .streams.length,
     1,
   );
-  host.state.folders.set("/media", []);
+  host.state.folderRoots = ["/shows"];
   await p.dispatch({ method: "POST", path: "/ether/job/scan" });
   assert.equal(
     ((await p.dispatch({ path: "/stream/movie/tmdb%3A10.json" })).body as any)
@@ -68,6 +63,7 @@ test("folders match by provider ID tag, and titles match without punctuation", a
     dir: false,
   });
   const host = createMockHostClient({
+    folderRoots: ["/media"],
     folders: new Map<string, unknown[]>([
       [
         "/media",
@@ -104,7 +100,6 @@ test("folders match by provider ID tag, and titles match without punctuation", a
       ["tmdb:5", { id: 3, title: "Wrong Kind", type: "show", tmdbId: 5 }],
     ]),
   });
-  host.settings = { get: () => ({ folder: "/media" }) };
   // Ether's catalogue search is fuzzy; the folder title still has to equal
   // the catalogue title once punctuation is ignored.
   host.catalog.search = () => ({
@@ -113,11 +108,6 @@ test("folders match by provider ID tag, and titles match without punctuation", a
     ],
   });
   const p = createPlugin(host);
-  await p.dispatch({
-    method: "POST",
-    path: "/ether/configure",
-    body: { folder: "/media" },
-  });
   await p.dispatch({ method: "POST", path: "/ether/job/scan" });
   const streams = async (path: string) =>
     ((await p.dispatch({ path })).body as any).streams.length;
@@ -126,5 +116,5 @@ test("folders match by provider ID tag, and titles match without punctuation", a
   assert.equal(await streams("/stream/series/tmdb%3A65942%3A1%3A1.json"), 1);
   assert.equal(await streams("/stream/movie/tmdb%3A5.json"), 0);
   const page = await p.dispatch({ path: "/ether/view/matches" });
-  assert.equal((page.body as any).data.folder0, "Wrong Kind (2000) {tmdb-5}");
+  assert.equal((page.body as any).data.folder0, "/media/Wrong Kind (2000) {tmdb-5}");
 });

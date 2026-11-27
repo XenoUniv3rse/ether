@@ -7,7 +7,7 @@ export type {
   ScreenSourceAnswer,
   ScreenSourceRequest,
 } from "./kinds.ts";
-export { PluginHttpError } from "./types.ts";
+export { eventPluginFoldersChanged, PluginHttpError } from "./types.ts";
 export {
   plugin,
   PluginRouteError,

@@ -170,6 +170,7 @@ export interface MockHostState {
   ) => import("./types.ts").SourceResolveResult | Promise<import("./types.ts").SourceResolveResult>;
   blobs: Map<string, Uint8Array>;
   limits: import("./types.ts").RuntimeLimits;
+  folderRoots: string[];
   folders: Map<string, FolderEntry[]>;
   publishedEvents: RecordedPublishedEvent[];
   notifications: string[];
@@ -224,6 +225,7 @@ export function createMockHostClient(initial?: Partial<MockHostState>): MockHost
       deadline: "12h",
       poolSize: 2,
     },
+    folderRoots: [...(initial?.folderRoots ?? [])],
     folders: initial?.folders ?? new Map<string, FolderEntry[]>(),
     publishedEvents: initial?.publishedEvents ?? [],
     notifications: initial?.notifications ?? [],
@@ -409,6 +411,7 @@ export function createMockHostClient(initial?: Partial<MockHostState>): MockHost
       },
     },
     folders: {
+      roots: () => [...state.folderRoots],
       hashStart: () => {
         throw new Error("Set a folders.hashStart mock");
       },

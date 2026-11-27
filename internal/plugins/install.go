@@ -823,32 +823,21 @@ func (m *Manager) Install(ctx context.Context, p *Preview, opts InstallOptions) 
 	if p.source.LAN {
 		g.LAN = true
 	}
-	if err := m.store.putGrants(ctx, man.ID, g); err != nil {
-		return Record{}, err
-	}
-	m.pruneBlockedOperatorHosts(man.ID, g.OperatorHosts)
 	row, _ := m.store.settings(ctx, man.ID)
 	if opts.Settings != nil {
 		row.Settings = opts.Settings
-	}
-	if !existing && len(g.Folders) > 0 {
-		if fields := folderFieldNames(p.resolvedSettings); len(fields) == 1 {
-			if row.Settings == nil {
-				row.Settings = map[string]any{}
-			}
-			if cur, _ := row.Settings[fields[0]].(string); strings.TrimSpace(cur) == "" {
-				row.Settings[fields[0]] = g.Folders[0]
-			}
-		}
 	}
 	row.Strings = p.resolvedStrings
 	row.Schema = p.resolvedSettings
 	if err := m.store.putSettings(ctx, man.ID, row); err != nil {
 		return Record{}, err
 	}
-	if err := m.store.upsert(ctx, r); err != nil {
+	dropped, err := m.store.saveGrants(ctx, r, g, cur.Manifest, true)
+	if err != nil {
 		return Record{}, err
 	}
+	m.pruneBlockedOperatorHosts(man.ID, g.OperatorHosts)
+	m.noteOutboxDrops(ctx, r, dropped)
 	if existing {
 		// Only the current and previous bundles are ever read again
 		// (runtime, rollback); older ones are dead blobs.
@@ -1128,36 +1117,6 @@ func (m *Manager) SettingsSchema(ctx context.Context, id string) (json.RawMessag
 		return json.RawMessage("{}"), nil
 	}
 	return row.Schema, nil
-}
-
-// folderFieldNames walks a settings schema for folder-kind field names.
-func folderFieldNames(schema json.RawMessage) []string {
-	var out []string
-	seen := map[string]bool{}
-	var walk func(any)
-	walk = func(n any) {
-		switch t := n.(type) {
-		case map[string]any:
-			if t["kind"] == "folder" {
-				if name, ok := firstString(t, "key", "name", "id", "field"); ok && !seen[name] {
-					seen[name] = true
-					out = append(out, name)
-				}
-			}
-			for _, v := range t {
-				walk(v)
-			}
-		case []any:
-			for _, v := range t {
-				walk(v)
-			}
-		}
-	}
-	var doc any
-	if json.Unmarshal(schema, &doc) == nil {
-		walk(doc)
-	}
-	return out
 }
 
 // secretFieldNames walks a settings schema for secret-kind field names.

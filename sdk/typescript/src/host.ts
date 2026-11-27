@@ -564,6 +564,8 @@ export interface EtherHost {
     putRecords(records: Array<{ type: string; id: string; value: unknown }>): MaybePromise<{ streams: number }>;
   };
   folders: {
+    /** Absolute owner-picked roots on a hosted non-client route. Empty without a live grant. */
+    roots(): MaybePromise<string[]>;
     list(root: string, path?: string, options?: FolderListOptions): MaybePromise<FolderPage>;
     frame(root: string, path: string, options: FolderFrameOptions): MaybePromise<FolderFrame>;
     stat(root: string, path: string): MaybePromise<FolderEntry>;
@@ -697,6 +699,7 @@ interface GlobalEtherBindings {
       upsert: (c: Record<string, unknown>) => void;
     };
     folders: {
+      roots: () => string[];
       list: (root: string, path?: string, options?: FolderListOptions) => FolderPage;
       frame: (root: string, path: string, options: FolderFrameOptions) => FolderFrame;
       stat: (root: string, path: string) => FolderEntry;
@@ -976,6 +979,10 @@ export function createHostedClient(): EtherHost {
       },
     },
     folders: {
+      roots(): string[] {
+        if (g.ether?.folders) return g.ether.folders.roots();
+        return callHost<string[]>("folders.roots", []);
+      },
       list(root: string, path = "", options: FolderListOptions = {}): FolderPage {
         if (g.ether?.folders) return g.ether.folders.list(root, path, options);
         return callHost<FolderPage>("folders.list", [root, path, options]);
@@ -1364,6 +1371,9 @@ export function createRemoteHostClient(opts: RemoteHostOptions = {}): EtherHost 
       },
     },
     folders: {
+      roots(): Promise<string[]> {
+        return Promise.reject(new Error("folders.roots requires the hosted runtime"));
+      },
       list(): Promise<FolderPage> {
         return Promise.reject(
           new Error(

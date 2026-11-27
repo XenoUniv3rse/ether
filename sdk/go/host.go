@@ -183,6 +183,7 @@ type Host interface {
 	// titleID accepts a catalogue movie/episode ID or an owned playable item ref.
 	SetWatchState(ctx context.Context, viewerID int64, titleID string, watched bool) error
 	UpsertCollection(ctx context.Context, collection map[string]any) error
+	FoldersRoots(ctx context.Context) (FolderRoots, error)
 	FoldersList(ctx context.Context, root, path string, options ...FolderListOptions) (FolderPage, error)
 	FoldersStat(ctx context.Context, root, path string) (FolderEntry, error)
 	FoldersHash(ctx context.Context, root, path string, options ...FolderHashOptions) (FolderHash, error)
@@ -934,6 +935,10 @@ func (c *RemoteHostClient) UpsertCollection(ctx context.Context, collection map[
 }
 
 // FoldersList is only supported in hosted mode; sidecars access local folders directly.
+func (c *RemoteHostClient) FoldersRoots(context.Context) (FolderRoots, error) {
+	return nil, fmt.Errorf("folders.roots requires the hosted runtime")
+}
+
 func (c *RemoteHostClient) FoldersList(_ context.Context, _, _ string, _ ...FolderListOptions) (FolderPage, error) {
 	return FolderPage{}, fmt.Errorf("folders.list is for hosted plugins; sidecar plugins read their local fileRoot directly")
 }

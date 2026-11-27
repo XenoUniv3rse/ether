@@ -496,9 +496,11 @@ func (m *Manager) SetGrants(ctx context.Context, id string, g Grants) error {
 		}
 		g.OperatorHosts = normalized
 	}
-	if err := m.store.putGrants(ctx, id, g); err != nil {
+	dropped, err := m.store.saveGrants(ctx, r, g, r.Manifest, false)
+	if err != nil {
 		return err
 	}
+	m.noteOutboxDrops(ctx, r, dropped)
 	m.pruneBlockedLocalHosts(id, g.LocalHosts)
 	m.pruneBlockedOperatorHosts(id, g.OperatorHosts)
 	m.syncPosterBadgeSets(ctx, r)

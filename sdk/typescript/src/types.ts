@@ -49,7 +49,14 @@ export type ViewerWatchEventName =
   | "viewer.watch.unwatched"
   | "viewer.watch.progress";
 
-export type EtherEventName = LegacyEtherEventName | ViewerWatchEventName | (string & {});
+export const eventPluginFoldersChanged = "plugin.folders.changed";
+
+/** The absolute paths the owner grants after the change, including [] on revoke. */
+export interface FolderRootsChangedPayload extends Record<string, unknown> {
+  roots: string[];
+}
+
+export type EtherEventName = LegacyEtherEventName | ViewerWatchEventName | typeof eventPluginFoldersChanged | (string & {});
 
 export type EventFieldType =
   | "string"

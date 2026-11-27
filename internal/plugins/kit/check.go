@@ -842,6 +842,8 @@ func (h *recordingHost) CallHost(ctx context.Context, name string, raw json.RawM
 			return nil, wasm.Forbidden("collections: write permission not declared")
 		}
 		return json.RawMessage("null"), nil
+	case "folders.roots":
+		return json.RawMessage(`[]`), nil
 	case "folders.list":
 		if h.man.Ether.Permissions.Folders != "read" {
 			return nil, wasm.Forbidden("folders: read permission not declared")

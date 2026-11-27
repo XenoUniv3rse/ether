@@ -124,6 +124,7 @@ type MockHost struct {
 	SourceIndexers    []IndexerSearchStatus // returned alongside Sources by ResolveSourcesWithResult (#733)
 	SourceHandler     func(ctx context.Context, q SourceQuery) (SourceResolveResult, error)
 	Blobs             map[string][]byte // cache blob ref -> bytes
+	FolderRoots       []string
 	Folders           map[string][]FolderEntry
 	PublishedEvents   []RecordedPublishedEvent
 	Notifications     []string
@@ -426,6 +427,11 @@ func (m *MockHost) UpsertCollection(_ context.Context, collection map[string]any
 	defer m.mu.Unlock()
 	m.Collections = append(m.Collections, collection)
 	return nil
+}
+
+// FoldersRoots returns the configured mock grants.
+func (m *MockHost) FoldersRoots(context.Context) (FolderRoots, error) {
+	return append([]string{}, m.FolderRoots...), nil
 }
 
 // FoldersList returns folder entries for root/path.
