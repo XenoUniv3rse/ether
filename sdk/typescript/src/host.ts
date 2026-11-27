@@ -442,7 +442,22 @@ function decodeData(r: { bodyBase64: string }): Uint8Array {
 }
 
 export interface FolderHashJob { id: string; state: "running" | "done" | "canceled" | "error"; bytes: number; result?: FolderHash; error?: string }
-export interface FolderHash { size: number; modTime: number; crc32: string; md5: string; sha1: string }
+export interface FolderHash {
+  size: number;
+  modTime: number;
+  crc32?: string;
+  md5?: string;
+  sha1?: string;
+  oshash?: string;
+  phash?: string;
+}
+export interface FolderHashOptions {
+  algorithms?: ("crc32" | "md5" | "sha1" | "oshash" | "phash")[];
+}
+export interface FolderListOptions { cursor?: string; limit?: number }
+export interface FolderPage { entries: FolderEntry[]; nextCursor: string; truncated: boolean }
+export interface FolderFrameOptions { atSec: number; width: number; libraryKey?: string }
+export interface FolderFrame { ref: string; libraryKey: string }
 
 export interface FolderEntry {
   name: string;
@@ -549,10 +564,11 @@ export interface EtherHost {
     putRecords(records: Array<{ type: string; id: string; value: unknown }>): MaybePromise<{ streams: number }>;
   };
   folders: {
-    list(root: string, path?: string): MaybePromise<FolderEntry[]>;
+    list(root: string, path?: string, options?: FolderListOptions): MaybePromise<FolderPage>;
+    frame(root: string, path: string, options: FolderFrameOptions): MaybePromise<FolderFrame>;
     stat(root: string, path: string): MaybePromise<FolderEntry>;
-    hash(root: string, path: string): MaybePromise<FolderHash>;
-    hashStart(root: string, path: string): MaybePromise<FolderHashJob>;
+    hash(root: string, path: string, options?: FolderHashOptions): MaybePromise<FolderHash>;
+    hashStart(root: string, path: string, options?: FolderHashOptions): MaybePromise<FolderHashJob>;
     hashPoll(id: string): MaybePromise<FolderHashJob>;
     hashCancel(id: string): MaybePromise<FolderHashJob>;
   };
@@ -679,10 +695,11 @@ interface GlobalEtherBindings {
       upsert: (c: Record<string, unknown>) => void;
     };
     folders: {
-      list: (root: string, path?: string) => FolderEntry[];
+      list: (root: string, path?: string, options?: FolderListOptions) => FolderPage;
+      frame: (root: string, path: string, options: FolderFrameOptions) => FolderFrame;
       stat: (root: string, path: string) => FolderEntry;
-      hash: (root: string, path: string) => FolderHash;
-      hashStart: (root: string, path: string) => FolderHashJob;
+      hash: (root: string, path: string, options?: FolderHashOptions) => FolderHash;
+      hashStart: (root: string, path: string, options?: FolderHashOptions) => FolderHashJob;
       hashPoll: (id: string) => FolderHashJob;
       hashCancel: (id: string) => FolderHashJob;
     };
@@ -956,16 +973,20 @@ export function createHostedClient(): EtherHost {
       },
     },
     folders: {
-      list(root: string, path = ""): FolderEntry[] {
-        if (g.ether?.folders) return g.ether.folders.list(root, path) ?? [];
-        return callHost<FolderEntry[]>("folders.list", [root, path]) ?? [];
+      list(root: string, path = "", options: FolderListOptions = {}): FolderPage {
+        if (g.ether?.folders) return g.ether.folders.list(root, path, options);
+        return callHost<FolderPage>("folders.list", [root, path, options]);
       },
-      hashStart(root: string, path: string): FolderHashJob { if (g.ether?.folders) return g.ether.folders.hashStart(root, path); return callHost<FolderHashJob>("folders.hashStart", [root, path]); },
+      frame(root: string, path: string, options: FolderFrameOptions): FolderFrame {
+        if (g.ether?.folders) return g.ether.folders.frame(root, path, options);
+        return callHost<FolderFrame>("folders.frame", [root, path, options]);
+      },
+      hashStart(root: string, path: string, options: FolderHashOptions = {}): FolderHashJob { if (g.ether?.folders) return g.ether.folders.hashStart(root, path, options); return callHost<FolderHashJob>("folders.hashStart", [root, path, options]); },
       hashPoll(id: string): FolderHashJob { if (g.ether?.folders) return g.ether.folders.hashPoll(id); return callHost<FolderHashJob>("folders.hashPoll", [id]); },
       hashCancel(id: string): FolderHashJob { if (g.ether?.folders) return g.ether.folders.hashCancel(id); return callHost<FolderHashJob>("folders.hashCancel", [id]); },
-      hash(root: string, path: string): FolderHash {
-        if (g.ether?.folders) return g.ether.folders.hash(root, path);
-        return callHost<FolderHash>("folders.hash", [root, path]);
+      hash(root: string, path: string, options: FolderHashOptions = {}): FolderHash {
+        if (g.ether?.folders) return g.ether.folders.hash(root, path, options);
+        return callHost<FolderHash>("folders.hash", [root, path, options]);
       },
       stat(root: string, path: string): FolderEntry {
         if (g.ether?.folders) return g.ether.folders.stat(root, path);
@@ -1340,13 +1361,14 @@ export function createRemoteHostClient(opts: RemoteHostOptions = {}): EtherHost 
       },
     },
     folders: {
-      list(): Promise<FolderEntry[]> {
+      list(): Promise<FolderPage> {
         return Promise.reject(
           new Error(
             "folders.list is for hosted plugins; sidecar plugins read their local fileRoot directly",
           ),
         );
       },
+      frame(): Promise<FolderFrame> { return Promise.reject(new Error("folders.frame requires the hosted runtime")); },
       hashStart(): Promise<FolderHashJob> { return Promise.reject(new Error("folders.hash requires the hosted runtime")); },
       hashPoll(): Promise<FolderHashJob> { return Promise.reject(new Error("folders.hash requires the hosted runtime")); },
       hashCancel(): Promise<FolderHashJob> { return Promise.reject(new Error("folders.hash requires the hosted runtime")); },

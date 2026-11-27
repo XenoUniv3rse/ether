@@ -69,6 +69,72 @@ _BANNED_COPY_RE = re.compile(r"\b(simply|easily|just)\b", re.IGNORECASE)
 _INTERP_RE = re.compile(r"\{([A-Za-z0-9_]+)\}")
 
 
+# Wire types for hosted folder results. Python sidecars cannot invoke these
+# host operations, but can consume their results in plugin data or fixtures.
+class _FolderEntryRequired(TypedDict):
+    name: str
+    path: str
+    dir: bool
+
+
+class FolderEntry(_FolderEntryRequired, total=False):
+    size: int
+    mtime: int
+
+
+class FolderListOptions(TypedDict, total=False):
+    cursor: str
+    limit: int
+
+
+class FolderPage(TypedDict):
+    entries: List[FolderEntry]
+    nextCursor: str
+    truncated: bool
+
+
+class FolderHashOptions(TypedDict, total=False):
+    algorithms: List[Literal["crc32", "md5", "sha1", "oshash", "phash"]]
+
+
+class _FolderHashMetadata(TypedDict):
+    size: int
+    modTime: int
+
+
+class FolderHash(_FolderHashMetadata, total=False):
+    crc32: str
+    md5: str
+    sha1: str
+    oshash: str
+    phash: str
+
+
+class _FolderHashJobStatus(TypedDict):
+    id: str
+    state: Literal["running", "done", "canceled", "error"]
+    bytes: int
+
+
+class FolderHashJob(_FolderHashJobStatus, total=False):
+    result: FolderHash
+    error: str
+
+
+class _FolderFrameRequest(TypedDict):
+    atSec: float
+    width: int
+
+
+class FolderFrameOptions(_FolderFrameRequest, total=False):
+    libraryKey: str
+
+
+class FolderFrame(TypedDict):
+    ref: str
+    libraryKey: str
+
+
 class PluginHttpError(Exception):
     """Structured HTTP error raised by a plugin route handler."""
 

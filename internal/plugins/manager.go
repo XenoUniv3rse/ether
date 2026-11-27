@@ -75,6 +75,7 @@ type Backends struct {
 	// check against the plugin's daily allowance in availability_budget.
 	AdmitBackgroundUsenetCheck func(ctx context.Context, pluginID string) (outCtx context.Context, refund func(), resetAt time.Time, err error)
 	CachePut                   func(ctx context.Context, pluginID, libraryKey, name string, r io.Reader) (blobRef string, err error)
+	CacheLookup                func(pluginID, libraryKey, key string) (blobRef string, ok bool)
 	CacheOpen                  func(ctx context.Context, pluginID, blobRef string) (io.ReadSeekCloser, error)
 	CacheDelete                func(ctx context.Context, pluginID, blobRef string) error
 	CachePartial               func(ctx context.Context, pluginID, libraryKey, key string) (*blobcache.Partial, error)
@@ -94,6 +95,7 @@ type Backends struct {
 
 // Deps are the plugin host's explicit dependencies.
 type Deps struct {
+	FFmpeg, FFprobe   string
 	DurableStorage    *blobcache.DurableStore
 	Busy              func() bool
 	ReadRuntimeConfig func() config.Plugins
@@ -178,6 +180,7 @@ type Manager struct {
 	aiCompleteTimes   map[string][]time.Time
 	aiCompleteLimit   int
 	mediaProbeTimes   map[string][]time.Time
+	folderFrameTimes  map[string][]time.Time
 	mediaProbeLimit   int
 	aiSearchTimes     map[string][]time.Time
 	aiSearchLimit     int
@@ -278,6 +281,7 @@ func New(deps Deps) (*Manager, error) {
 		usenetCheckTimes:  map[string][]time.Time{},
 		aiCompleteTimes:   map[string][]time.Time{},
 		mediaProbeTimes:   map[string][]time.Time{},
+		folderFrameTimes:  map[string][]time.Time{},
 		aiSearchTimes:     map[string][]time.Time{},
 		aiSearchCache:     map[string]map[string]aiSearchCacheEntry{},
 		aiSearchInflight:  map[string]*aiSearchFlight{},
@@ -1513,6 +1517,7 @@ func (m *Manager) Remove(ctx context.Context, id string, undoFirst bool) error {
 	delete(m.usenetCheckTimes, id)
 	delete(m.aiCompleteTimes, id)
 	delete(m.mediaProbeTimes, id)
+	delete(m.folderFrameTimes, id)
 	for key := range m.aiSearchTimes {
 		if strings.HasPrefix(key, id+"\x00") {
 			delete(m.aiSearchTimes, key)

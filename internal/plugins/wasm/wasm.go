@@ -161,7 +161,7 @@ var DefaultCosts = map[string]int64{
 	"kinds.get": 15, "kinds.state": 15, "kinds.favorite": 20, "kinds.played": 20, "kinds.rate": 20, "kinds.favorites": 20,
 	"kinds.playlists": 20, "kinds.playlist": 20, "kinds.playlistCreate": 50, "kinds.playlistUpdate": 50, "kinds.playlistDelete": 20, "kinds.expand": 50, "kinds.search": 50,
 	"sources.resolve": 100, "cache.put": 50, "cache.open": 20, "cache.delete": 10, "frontend.streamURL": 5,
-	"folders.hashStart": 20, "folders.hashPoll": 20, "folders.hashCancel": 20, "folders.hash": 20, "folders.list": 20, "folders.stat": 20, "events.publish": 20, "notify.owner": 20, "settings.get": 5,
+	"folders.frame": 20, "folders.hashStart": 20, "folders.hashPoll": 20, "folders.hashCancel": 20, "folders.hash": 20, "folders.list": 20, "folders.stat": 20, "events.publish": 20, "notify.owner": 20, "settings.get": 5,
 	"ai.complete": 200, "media.probe": 100, "screens.invalidate": 10, "screens.putRecords": 20,
 }
 
@@ -290,7 +290,7 @@ func hostCallTimeout(name string) time.Duration {
 	case "http.fetchToCache", "http.hash",
 		"archive.list", "archive.open", "archive.read", "archive.extract",
 		"folders.hash", "folders.hashStart", "folders.hashPoll", "folders.hashCancel",
-		"folders.list", "folders.stat",
+		"folders.list", "folders.stat", "folders.frame",
 		"cache.put", "cache.open", "cache.read", "cache.rasterize", "cache.delete":
 		return 10 * time.Minute
 	default:

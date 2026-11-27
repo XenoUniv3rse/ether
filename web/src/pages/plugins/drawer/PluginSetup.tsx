@@ -9,7 +9,7 @@ import { SettingsRow } from "../../../components/SettingsRow";
 import { t } from "../../../i18n";
 import { useLocale } from "../../../i18n/react";
 import { ApiError, apiFetch, errorMessage } from "../../../lib/api";
-import { SchemaGroups, type SearchOptions } from "../../settings/SchemaForm";
+import { SchemaGroups } from "../../settings/SchemaForm";
 import {
   FolderGrantsPicker,
   LocalHostGrantsPicker,
@@ -17,7 +17,7 @@ import {
   ViewerGrantsPicker,
 } from "../PermissionSheet";
 import { RuntimeLimitsEditor } from "../RuntimeLimitsEditor";
-import { SearchSetting } from "./SearchSetting";
+import { usePluginOptions } from "../options";
 import { AddonSettings } from "./AddonSettings";
 import {
   buildGrantItems,
@@ -89,22 +89,7 @@ export function PluginSetup({
       setLoaded(true);
     }
   }, [id, locale]);
-  const searchOptions = useCallback<SearchOptions>(
-    async (field, query, signal) => {
-      const r = await apiFetch<{
-        options?: { value: string; label: string; hint?: string }[];
-      }>(
-        `/plugins/${encodeURIComponent(id)}/options/${encodeURIComponent(field)}?q=${encodeURIComponent(query)}&locale=${encodeURIComponent(locale)}`,
-        { signal },
-      );
-      return (r.options ?? []).map((o) => ({
-        value: String(o.value),
-        label: String(o.label),
-        description: o.hint,
-      }));
-    },
-    [id, locale],
-  );
+  const searchOptions = usePluginOptions(id);
   useEffect(() => {
     setLoaded(false);
     setOptions({});
@@ -183,20 +168,8 @@ export function PluginSetup({
     }
   };
 
-  const searchFields: { key: string; label: string; placeholder?: string }[] = [];
-  const plainSchema = JSON.parse(JSON.stringify(schema), (_key, value) => {
-    if (Array.isArray(value))
-      return value.filter((f) => {
-        if (f?.kind === "select" && f.search) {
-          searchFields.push(f);
-          return false;
-        }
-        return true;
-      });
-    return value;
-  });
-  const groups = schemaToFieldGroups(plainSchema, draft, options, viewers);
-  const hasSettings = groups.length > 0 || searchFields.length > 0;
+  const groups = schemaToFieldGroups(schema, draft, options, viewers);
+  const hasSettings = groups.length > 0;
   const grants = detail.permissions.grants ?? {};
   const revoked = new Set(grants.revoked ?? []);
   const grantItems = buildGrantItems(detail).filter((g) => g.revocable);
@@ -218,15 +191,6 @@ export function PluginSetup({
 
   return (
     <div className="space-y-5">
-      {searchFields.map((field) => (
-        <SearchSetting
-          key={field.key}
-          plugin={id}
-          field={field}
-          value={draft[field.key]}
-          onChange={(value) => setDraft((prev) => ({ ...prev, [field.key]: value }))}
-        />
-      ))}
       {detail.host ? (
         <AddonSettings
           detail={detail}
@@ -237,11 +201,7 @@ export function PluginSetup({
           }}
         />
       ) : null}
-      {!loaded || (detail.host && !hasSettings) ? null : hasSettings && !groups.length ? (
-        <Button size="sm" disabled={saving} onClick={() => void save()}>
-          {saving ? t("Saving…") : t("Save settings")}
-        </Button>
-      ) : hasSettings ? (
+      {!loaded || (detail.host && !hasSettings) ? null : hasSettings ? (
         <SchemaGroups
           groups={groups}
           value={draft}

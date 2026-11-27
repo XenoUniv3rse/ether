@@ -89,6 +89,7 @@ type KindBackends struct {
 	// check against the plugin's daily allowance in availability_budget.
 	AdmitBackgroundUsenetCheck func(ctx context.Context, pluginID string) (outCtx context.Context, refund func(), resetAt time.Time, err error)
 	CachePut                   func(ctx context.Context, pluginID, libraryKey, name string, r io.Reader) (blobRef string, err error)
+	CacheLookup                func(pluginID, libraryKey, key string) (blobRef string, ok bool)
 	CacheOpen                  func(ctx context.Context, pluginID, blobRef string) (io.ReadSeekCloser, error)
 	CacheDelete                func(ctx context.Context, pluginID, blobRef string) error
 	CachePartial               func(ctx context.Context, pluginID, libraryKey, key string) (*blobcache.Partial, error)
@@ -123,6 +124,7 @@ func (m *Manager) SetKindBackends(b KindBackends) {
 	m.deps.Backends.PeekUsenetCheck = b.PeekUsenetCheck
 	m.deps.Backends.AdmitBackgroundUsenetCheck = b.AdmitBackgroundUsenetCheck
 	m.deps.Backends.CachePut = b.CachePut
+	m.deps.Backends.CacheLookup = b.CacheLookup
 	m.deps.Backends.CacheOpen = b.CacheOpen
 	m.deps.Backends.CacheDelete = b.CacheDelete
 	m.deps.Backends.CachePartial = b.CachePartial
@@ -155,6 +157,7 @@ func (m *Manager) kindBackends() KindBackends {
 		PeekUsenetCheck:            m.deps.Backends.PeekUsenetCheck,
 		AdmitBackgroundUsenetCheck: m.deps.Backends.AdmitBackgroundUsenetCheck,
 		CachePut:                   m.deps.Backends.CachePut,
+		CacheLookup:                m.deps.Backends.CacheLookup,
 		CacheOpen:                  m.deps.Backends.CacheOpen,
 		CacheDelete:                m.deps.Backends.CacheDelete,
 		CachePartial:               m.deps.Backends.CachePartial,

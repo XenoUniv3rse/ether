@@ -9,6 +9,7 @@ require (
 	github.com/SherClockHolmes/webpush-go v1.4.0
 	github.com/andybalholm/cascadia v1.3.5
 	github.com/coder/websocket v1.8.15
+	github.com/corona10/goimagehash v1.1.0
 	github.com/dlclark/regexp2 v1.12.0
 	github.com/evanw/esbuild v0.28.2
 	github.com/fastschema/qjs v0.0.6
@@ -49,6 +50,7 @@ require (
 	github.com/lufia/plan9stats v0.0.0-20211012122336-39d0f177ccd0 // indirect
 	github.com/mattn/go-isatty v0.0.24 // indirect
 	github.com/ncruces/go-strftime v1.1.0 // indirect
+	github.com/nfnt/resize v0.0.0-20180221191011-83c6a9932646 // indirect
 	github.com/power-devops/perfstat v0.0.0-20260805114148-88456608a4f6 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	github.com/tklauser/go-sysconf v0.4.0 // indirect

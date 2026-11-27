@@ -74,7 +74,13 @@ func (a *App) buildPlugins(ctx context.Context, cfg config.Config) (*pluginRunti
 	if err != nil {
 		return nil, err
 	}
+	var ffmpeg, ffprobe string
+	if a.transcoder != nil {
+		ffmpeg, ffprobe = a.transcoder.FFmpegPath(), a.transcoder.FFprobePath()
+	}
 	mgr, err := plugins.New(plugins.Deps{
+		FFmpeg:            ffmpeg,
+		FFprobe:           ffprobe,
 		DurableStorage:    durableStorage,
 		EventBus:          a.EventBus(),
 		IsIndexerHost:     a.isConfiguredIndexerHost,
@@ -529,13 +535,17 @@ func (a *App) buildPlugins(ctx context.Context, cfg config.Config) (*pluginRunti
 		PeekUsenetCheck:            kindResolver.PeekUsenetCheck,
 		AdmitBackgroundUsenetCheck: admitUsenetCheck,
 		CachePut:                   cachePut,
-		CacheOpen:                  cacheOpen,
-		CacheDelete:                cacheDelete,
-		CachePartial:               cachePartial,
-		StreamURL:                  a.adapterStreamURL(adapterTickets),
-		StreamPartURL:              a.adapterStreamPartURL(adapterTickets),
-		StreamURLOptions:           a.adapterStreamURLOptions(adapterTickets),
-		MediaProbe:                 kindResolver.ProbeMedia,
+		CacheLookup: func(pluginID, libraryKey, key string) (string, bool) {
+			ref, ok := blobs.Namespace(libraryKey, kindCatalog.QuotaFor(pluginID, libraryKey)).LookupKey(key)
+			return string(ref), ok
+		},
+		CacheOpen:        cacheOpen,
+		CacheDelete:      cacheDelete,
+		CachePartial:     cachePartial,
+		StreamURL:        a.adapterStreamURL(adapterTickets),
+		StreamPartURL:    a.adapterStreamPartURL(adapterTickets),
+		StreamURLOptions: a.adapterStreamURLOptions(adapterTickets),
+		MediaProbe:       kindResolver.ProbeMedia,
 	})
 	mgr.SetKindViewerState(adapterViewerState{app: a})
 

@@ -1520,10 +1520,11 @@ type Host interface {
 
 	// FoldersList and FoldersStat need folders: read and an owner-picked
 	// root. They never return file contents.
-	FoldersList(ctx context.Context, root, path string) ([]FolderEntry, error)
+	FoldersList(ctx context.Context, root, path string, options ...FolderListOptions) (FolderPage, error)
 	FoldersStat(ctx context.Context, root, path string) (FolderEntry, error)
-	FoldersHash(ctx context.Context, root, path string) (FolderHash, error)
-	FoldersHashStart(ctx context.Context, root, path string) (FolderHashJob, error)
+	FoldersHash(ctx context.Context, root, path string, options ...FolderHashOptions) (FolderHash, error)
+	FoldersHashStart(ctx context.Context, root, path string, options ...FolderHashOptions) (FolderHashJob, error)
+	FoldersFrame(ctx context.Context, root, path string, options FolderFrameOptions) (FolderFrame, error)
 	FoldersHashPoll(ctx context.Context, id string) (FolderHashJob, error)
 	FoldersHashCancel(ctx context.Context, id string) (FolderHashJob, error)
 
@@ -1690,9 +1691,42 @@ type FolderHashJob struct {
 type FolderHash struct {
 	Size    int64  `json:"size"`
 	ModTime int64  `json:"modTime"`
-	CRC32   string `json:"crc32"`
-	MD5     string `json:"md5"`
-	SHA1    string `json:"sha1"`
+	CRC32   string `json:"crc32,omitempty"`
+	MD5     string `json:"md5,omitempty"`
+	SHA1    string `json:"sha1,omitempty"`
+	OSHash  string `json:"oshash,omitempty"`
+	PHash   string `json:"phash,omitempty"`
+}
+
+// FolderHashOptions limits which digests are computed. Phash requires a background hash job.
+type FolderHashOptions struct {
+	Algorithms []string `json:"algorithms,omitempty"`
+}
+
+// FolderFrameOptions selects a timestamp, image width and optional owned cache library.
+type FolderFrameOptions struct {
+	AtSec      float64 `json:"atSec"`
+	Width      int     `json:"width"`
+	LibraryKey string  `json:"libraryKey,omitempty"`
+}
+
+// FolderFrame identifies a cached PNG image.
+type FolderFrame struct {
+	Ref        string `json:"ref"`
+	LibraryKey string `json:"libraryKey"`
+}
+
+// FolderListOptions selects names strictly after Cursor in ascending name order.
+type FolderListOptions struct {
+	Cursor string `json:"cursor,omitempty"`
+	Limit  int    `json:"limit,omitempty"`
+}
+
+// FolderPage is a name-sorted page. NextCursor is empty at the end.
+type FolderPage struct {
+	Entries    []FolderEntry `json:"entries"`
+	NextCursor string        `json:"nextCursor"`
+	Truncated  bool          `json:"truncated"`
 }
 
 // FolderEntry is one entry from FoldersList or FoldersStat.

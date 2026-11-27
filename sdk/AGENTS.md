@@ -161,8 +161,10 @@ and special files are refused; `archive.list` flags unsafe member names as
 informational warnings while by-index reads and extracts accept any
 non-directory member. Other 7z coder chains are unsupported.
 
-FoldersList/Stat/Hash need `folders:read` plus an owner-selected root; they return
-metadata/digests, not bytes. Viewer access requires that viewer's grant.
+FoldersList/Stat/Hash/Frame need `folders:read` plus an owner-selected root.
+List returns sorted pages with a cursor. Hash returns digests and frame returns
+an owned-library blob reference. Viewer access requires that viewer's grant.
+Video phash and frame extraction require a job or background route.
 Private LAN hosts stay blocked for HTTP fetch, fetchToCache, hash, and remote calls unless the owner allows the exact `host` or `host:port` under "On your network" in the plugin's settings (loopback stays blocked unless `localhost` or `127.0.0.1` is explicitly granted). Exact local hosts declared in `permissions.network` (dotless names, `.local`, `.lan`, `.home.arpa`, or private IPs) are shown on the install sheet and pre-granted when installed. For user-hosted services whose hostname comes from plugin settings, declare `"operator"` in `permissions.network` (never `"*"`); Ether prompts the owner to approve each server address per plugin before requests or stream resolvers admit it.
 Host calls enforce permissions again on every request; revocation is immediate.
 

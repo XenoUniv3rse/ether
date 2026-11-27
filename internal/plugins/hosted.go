@@ -704,10 +704,18 @@ func (b hostBridge) CallHost(ctx context.Context, name string, raw json.RawMessa
 	case "cache.delete":
 		return result(nil, b.h.CacheDelete(ctx, str(0)))
 	case "folders.list":
-		v, err := b.h.FoldersList(ctx, str(0), str(1))
+		var opts FolderListOptions
+		if len(args) > 2 && json.Unmarshal(args[2], &opts) != nil {
+			return nil, &wasm.Fault{Code: "bad_arguments", Message: "invalid folder list options"}
+		}
+		v, err := b.h.FoldersList(ctx, str(0), str(1), opts)
 		return result(v, err)
 	case "folders.hashStart":
-		v, err := b.h.FoldersHashStart(ctx, str(0), str(1))
+		var opts FolderHashOptions
+		if len(args) > 2 && json.Unmarshal(args[2], &opts) != nil {
+			return nil, &wasm.Fault{Code: "bad_arguments", Message: "invalid folder hash options"}
+		}
+		v, err := b.h.FoldersHashStart(ctx, str(0), str(1), opts)
 		return result(v, err)
 	case "folders.hashPoll":
 		v, err := b.h.FoldersHashPoll(ctx, str(0))
@@ -716,7 +724,18 @@ func (b hostBridge) CallHost(ctx context.Context, name string, raw json.RawMessa
 		v, err := b.h.FoldersHashCancel(ctx, str(0))
 		return result(v, err)
 	case "folders.hash":
-		v, err := b.h.FoldersHash(ctx, str(0), str(1))
+		var opts FolderHashOptions
+		if len(args) > 2 && json.Unmarshal(args[2], &opts) != nil {
+			return nil, &wasm.Fault{Code: "bad_arguments", Message: "invalid folder hash options"}
+		}
+		v, err := b.h.FoldersHash(ctx, str(0), str(1), opts)
+		return result(v, err)
+	case "folders.frame":
+		var opts FolderFrameOptions
+		if len(args) <= 2 || json.Unmarshal(args[2], &opts) != nil {
+			return nil, &wasm.Fault{Code: "bad_arguments", Message: "invalid folder frame options"}
+		}
+		v, err := b.h.FoldersFrame(ctx, str(0), str(1), opts)
 		return result(v, err)
 	case "folders.stat":
 		v, err := b.h.FoldersStat(ctx, str(0), str(1))

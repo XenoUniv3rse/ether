@@ -1063,6 +1063,8 @@ function toFieldDef(
         label,
         help,
         kind: "select",
+        search: raw.search,
+        placeholder: raw.placeholder,
         options: opts,
         numeric: raw.numeric,
       };
