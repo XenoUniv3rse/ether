@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"unicode"
 	"unicode/utf8"
 
@@ -148,9 +149,23 @@ func (c *Catalog) matchPeople(ctx context.Context, terms []string, limit int) ([
 		return nil, nil
 	}
 	fetchLimit := min(max(limit*4, 64), peopleSearchCandidateCap)
+	// Consumers using the same probe width share the ranked candidates,
+	// even when the title and person paths run concurrently.
+	memo := core.SearchMemoFrom(ctx)
+	window := core.SearchPeopleLimit(ctx)
+	if memo != nil && window >= limit {
+		key := "people:shared:" + strconv.Itoa(fetchLimit) + "\x00" + strings.Join(tokens, "\x00")
+		load := memo.LoadOrStore(key, sync.OnceValues(func() ([]PersonMatch, error) {
+			return c.readPeopleMatches(ctx, tokens, fetchLimit, window)
+		})).(func() ([]PersonMatch, error))
+		out, err := load()
+		if err != nil {
+			return nil, err
+		}
+		return slices.Clone(out[:min(limit, len(out))]), nil
+	}
 	// One search request reads the same names for its title results and
 	// its person results; a wider read already made answers a narrower one.
-	memo := core.SearchMemoFrom(ctx)
 	key := "people\x00" + strings.Join(tokens, "\x00")
 	if v, ok := memo.Load(key); ok {
 		if hit := v.(personMatchesMemo); hit.fetch >= fetchLimit && hit.limit >= limit {

@@ -2324,6 +2324,7 @@ func (s *Server) handleHubSearch(w http.ResponseWriter, r *http.Request) {
 			fetch = min(max(fetch*2, 50), 200)
 		}
 	}
+	ctx = frontend.WithSearchPeopleLimit(ctx, max(64, limit*4))
 	// People are searched beside titles; neither waits for the other.
 	peopleDone := make(chan peopleSearchResult, 1)
 	peopleCtx := ctx // ctx is reassigned below; the goroutine keeps its own copy

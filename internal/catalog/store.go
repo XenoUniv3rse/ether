@@ -263,6 +263,13 @@ func (c *Catalog) hydrateTitleFacts(ctx context.Context, items []core.Title, fac
 	if err := c.airedCounts(ctx, items); err != nil {
 		return err
 	}
+	if err := c.hydrateMetadataFacts(ctx, items, facts); err != nil {
+		return err
+	}
+	return c.applyHydratedAdded(ctx, items)
+}
+
+func (c *Catalog) hydrateMetadataFacts(ctx context.Context, items []core.Title, facts factSet) error {
 	// Same shape as hydrateHomeRelease: query once per distinct key, but
 	// apply each row to EVERY occurrence of that key in the slice. A title
 	// can appear on several shelves (in different chunks, too); mapping a
@@ -287,10 +294,7 @@ func (c *Catalog) hydrateTitleFacts(ctx context.Context, items []core.Title, fac
 	if err := c.hydrateFactBatch(ctx, items, idx, keys, facts); err != nil {
 		return err
 	}
-	if err := c.hydrateShows(ctx, items); err != nil {
-		return err
-	}
-	return c.applyHydratedAdded(ctx, items)
+	return c.hydrateShows(ctx, items)
 }
 
 // hydrateVisibilityFacts fills the facts visibility rules and the release
@@ -423,6 +427,7 @@ const (
 	// credit order, with every credit tied at the cut.
 	factRankCredits
 	factTrailers
+	factEpisodeAirLoaded // episode air date was joined to the title row
 )
 
 const (
@@ -435,6 +440,8 @@ const (
 // listCast is the cast a list item shows (Plex: three).
 const listCast = 3
 
+const episodeAirStampSQL = "COALESCE(p.air_ts,CASE WHEN e.earliest_ts=t.released_ts THEN 0 ELSE t.released_ts END)"
+
 func (c *Catalog) hydrateFactBatch(ctx context.Context, items []core.Title, idx map[core.RatingKey][]int, args []any, set factSet) error {
 	ph, args := c.hydrationKeys(args)
 	// The first part names the columns the outer select reads.
@@ -446,17 +453,19 @@ func (c *Catalog) hydrateFactBatch(ctx context.Context, items []core.Title, idx 
 		}
 		parts = append(parts, `SELECT `+key+`, `+tag+`, `+a+`, `+b+`, `+c+`, `+d+`, `+e+`, `+f+`, `+g+`, `+extra+` FROM `+from)
 	}
-	for _, t := range items {
-		if t.Type == core.TypeEpisode {
-			titles := "catalog_titles t"
-			if store.DialectOf(c.db) == store.SQLite {
-				// With JSON-bound keys SQLite can prefer a type index and
-				// walk every episode. key is the rowid (INTEGER PRIMARY KEY).
-				titles += " NOT INDEXED"
+	if set&factEpisodeAirLoaded == 0 {
+		for _, t := range items {
+			if t.Type == core.TypeEpisode {
+				titles := "catalog_titles t"
+				if store.DialectOf(c.db) == store.SQLite {
+					// With JSON-bound keys SQLite can prefer a type index and
+					// walk every episode. key is the rowid (INTEGER PRIMARY KEY).
+					titles += " NOT INDEXED"
+				}
+				part("t.key", "'episode_air'", "CAST("+episodeAirStampSQL+" AS TEXT)", "''", "''", "''", "''", "''", "''", "''",
+					titles+` LEFT JOIN catalog_episode_provider_air p ON p.key=t.key LEFT JOIN catalog_episode_release e ON e.key=t.key WHERE t.type='episode' AND t.key IN (`+ph+`)`)
+				break
 			}
-			part("t.key", "'episode_air'", "CAST(COALESCE(p.air_ts,CASE WHEN e.earliest_ts=t.released_ts THEN 0 ELSE t.released_ts END) AS TEXT)", "''", "''", "''", "''", "''", "''", "''",
-				titles+` LEFT JOIN catalog_episode_provider_air p ON p.key=t.key LEFT JOIN catalog_episode_release e ON e.key=t.key WHERE t.type='episode' AND t.key IN (`+ph+`)`)
-			break
 		}
 	}
 	if set&factTrailers != 0 {
@@ -1542,14 +1551,22 @@ func (c *Catalog) queryListRows(ctx context.Context, lr *core.ListRows, q string
 	if !lr.OmitCredits {
 		need |= factRowCredits
 	}
-	if err := c.hydrateRows(ctx, partial, need); err != nil {
+	if err := c.hydrateRows(ctx, partial, need, !lr.OmitAddedTime); err != nil {
 		return nil, err
 	}
 	if len(full) > 0 {
-		if err := c.hydrateSlice(ctx, full); err != nil {
-			return nil, err
+		if lr.OmitAddedTime {
+			// These projections need the evidence matcher's metadata, but
+			// do not display aired counts or "date added".
+			if err := c.hydrateMetadataFacts(ctx, full, factsFull); err != nil {
+				return nil, err
+			}
+		} else {
+			if err := c.hydrateSlice(ctx, full); err != nil {
+				return nil, err
+			}
+			c.rememberTitles(gen, minute, full)
 		}
-		c.rememberTitles(gen, minute, full)
 	}
 	for j, i := range partialAt {
 		out[i] = partial[j]
@@ -1570,7 +1587,7 @@ const exportFactSplit = 64
 // page is read while the one before it is signed and encoded: its facts
 // come from two readers at once, over disjoint halves of its keys (and so
 // of the items they fill).
-func (c *Catalog) hydrateRows(ctx context.Context, items []core.Title, set factSet) error {
+func (c *Catalog) hydrateRows(ctx context.Context, items []core.Title, set factSet, addedTime bool) error {
 	if len(items) == 0 {
 		return nil
 	}
@@ -1611,6 +1628,9 @@ func (c *Catalog) hydrateRows(ctx context.Context, items []core.Title, set factS
 	}
 	if err := c.hydrateShows(ctx, items); err != nil {
 		return err
+	}
+	if !addedTime {
+		return nil
 	}
 	return c.applyHydratedAdded(ctx, items)
 }

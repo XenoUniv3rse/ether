@@ -49,6 +49,9 @@ func (a *App) buildIntegrations(ctx context.Context, cfg config.Config) error {
 		return fmt.Errorf("managed cache: %w", err)
 	}
 	a.buildInsights()
+	if err := a.notifications.InitializePush(ctx); err != nil {
+		a.log.Warn("notifications: push identity unavailable", "err", err)
+	}
 	a.buildDiscovery()
 	a.episodeorder = episodeorder.New(a.db, a.tmdb, a.catalog)
 	a.catalog.SetMetadataEpisodeGroup(a.episodeorder.MetadataGroup)

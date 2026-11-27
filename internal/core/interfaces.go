@@ -310,6 +310,9 @@ type ListRows struct {
 	Facts       TitleFacts
 	Detail      func(Title) bool
 	OmitCredits bool
+	// OmitAddedTime skips computing the latest aired date and aired counts
+	// for projections that display neither.
+	OmitAddedTime bool
 }
 
 type Page struct {

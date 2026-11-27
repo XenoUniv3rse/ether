@@ -170,7 +170,7 @@ func (s *Service) Handler() http.Handler {
 		reply(w, 200, map[string]bool{"sent": true})
 	})
 	m.HandleFunc("GET /push/key", func(w http.ResponseWriter, r *http.Request) {
-		_, public, err := s.pushKeys(r.Context())
+		_, public, err := s.readPushKeys(r.Context())
 		if err != nil {
 			fail(w, 500, "Push identity unavailable")
 			return

@@ -893,9 +893,14 @@ func (a *App) newSurfaceExperience(protocol core.Protocol, artwork ...frontend.A
 	}); ok {
 		scoped.artwork = withPlugin.WithPluginItem(scoped.pluginArtworkItem)
 	}
+	scoped.preloadArtworkTitles = a.catalog.PreloadStored
 	if protocol == "xtream" {
-		scoped.prepareExportChildren = func(ctx context.Context, viewer *core.Viewer, shows []core.RatingKey) (context.Context, error) {
+		scoped.prepareExportChildren = func(ctx context.Context, viewer *core.Viewer, roots []core.Title) (context.Context, error) {
 			ctx = core.WithCatalogViewer(ctx, viewer)
+			shows := make([]core.RatingKey, len(roots))
+			for i, root := range roots {
+				shows[i] = root.Key
+			}
 			if a.episodeorder != nil {
 				grouped, err := a.episodeorder.Grouped(ctx, viewer, shows)
 				if err != nil {
@@ -911,9 +916,14 @@ func (a *App) newSurfaceExperience(protocol core.Protocol, artwork ...frontend.A
 			}
 			var projection *core.ListRows
 			if detail, ok := vis.FactJudge(ctx); ok {
-				projection = &core.ListRows{Facts: core.VisibilityFacts | vis.TitleFacts(viewer), Detail: detail}
+				projection = &core.ListRows{Facts: core.FactHomeRelease | vis.TitleFacts(viewer), Detail: detail}
 			}
-			return a.catalog.PrepareExportChildren(ctx, shows, projection)
+			prepared, err := a.catalog.PrepareExportChildren(ctx, shows, projection)
+			if err != nil {
+				return ctx, err
+			}
+			prepared = frontend.WithExportCompactIDs(prepared, a.catalog.ExportCompactIDs(prepared))
+			return scoped.Service.PrepareExportVisibility(prepared, viewer, a.catalog.ExportChildTitles(prepared, roots))
 		}
 	}
 	return scoped, nil
@@ -921,7 +931,8 @@ func (a *App) newSurfaceExperience(protocol core.Protocol, artwork ...frontend.A
 
 type surfaceExperience struct {
 	*experience.Service
-	prepareExportChildren func(context.Context, *core.Viewer, []core.RatingKey) (context.Context, error)
+	preloadArtworkTitles  func(context.Context, []core.RatingKey)
+	prepareExportChildren func(context.Context, *core.Viewer, []core.Title) (context.Context, error)
 	receipts              *experience.Receipts
 	protocol              core.Protocol
 	artwork               frontend.Artwork
@@ -1198,13 +1209,25 @@ func (s *surfaceExperience) ItemArtworkPage(ctx context.Context, viewer *core.Vi
 			}
 		}
 		if batch, ok := s.PlaylistsSource().(interface {
-			PreparePlaylistArtwork(context.Context, int64, []core.RatingKey) (context.Context, error)
+			PreparePlaylistArtwork(context.Context, int64, []core.RatingKey) (context.Context, []core.RatingKey, error)
 		}); ok && len(playlists) > 0 {
-			prepared, err := batch.PreparePlaylistArtwork(ctx, viewer.ID, playlists)
+			prepared, candidates, err := batch.PreparePlaylistArtwork(ctx, viewer.ID, playlists)
 			if err != nil {
 				return nil, err
 			}
 			ctx = prepared
+			if s.preloadArtworkTitles != nil {
+				for _, key := range candidates {
+					parent := key.Parent()
+					if key.Kind() == core.KindEpisode {
+						parent = parent.Parent()
+					}
+					if parent.Kind() == core.KindShow {
+						candidates = append(candidates, parent)
+					}
+				}
+				s.preloadArtworkTitles(ctx, candidates)
+			}
 		}
 	}
 	out := make(map[core.RatingKey][]frontend.Image, len(keys))
@@ -1756,7 +1779,7 @@ func (s *surfaceExperience) warmArtwork(items []core.Title, device core.Device) 
 	}
 }
 
-func (s *surfaceExperience) PrepareExportChildren(ctx context.Context, viewer *core.Viewer, shows []core.RatingKey) (context.Context, error) {
+func (s *surfaceExperience) PrepareExportChildren(ctx context.Context, viewer *core.Viewer, shows []core.Title) (context.Context, error) {
 	if s.prepareExportChildren == nil {
 		return ctx, nil
 	}
@@ -1765,7 +1788,7 @@ func (s *surfaceExperience) PrepareExportChildren(ctx context.Context, viewer *c
 
 func (s *surfaceExperience) Children(ctx context.Context, viewer *core.Viewer, device core.Device, key core.RatingKey, query frontend.ItemQuery) (core.Page, error) {
 	page, err := s.Service.Children(ctx, viewer, device, key, query)
-	if err == nil {
+	if err == nil && !frontend.ExportTitlesOnly(ctx) {
 		s.warmArtwork(page.Items, device)
 		target := key
 		if query.Season != nil && key.Kind() == core.KindShow {

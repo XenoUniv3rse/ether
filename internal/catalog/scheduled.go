@@ -13,6 +13,9 @@ func (c *Catalog) ScheduledEpisodes(ctx context.Context, key core.RatingKey) ([]
 	if !c.config().ShowUpcomingEpisodes || key.Kind() != core.KindSeason && key.Kind() != core.KindEpisode {
 		return nil, core.ErrNotFound
 	}
+	if items, ok := c.exportSchedule(ctx, key); ok {
+		return items, ctx.Err()
+	}
 	parent, show, order, err := c.orderForParent(ctx, key)
 	if err != nil {
 		return nil, err

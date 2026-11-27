@@ -230,7 +230,11 @@ func (c *Catalog) cachedVisibilityRows(ctx context.Context, keys []core.RatingKe
 	}
 	facts |= c.viewerPolicyFacts(ctx) | c.policyFacts(c.visibilityFor(ctx))
 	var items []core.Title
-	for part := range store.Chunks(missing, 200) {
+	batchSize := 200
+	if children {
+		batchSize = 400
+	}
+	for part := range store.Chunks(missing, batchSize) {
 		args := make([]any, len(part))
 		for i, k := range part {
 			args[i] = int64(k)

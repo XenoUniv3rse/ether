@@ -3,6 +3,7 @@ package xtream
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/braedonsaunders/ether/internal/core"
 	"github.com/braedonsaunders/ether/internal/frontend"
+	"github.com/braedonsaunders/ether/internal/frontend/frontendtest"
 )
 
 // policyLibrary is a movie library whose export depends on a viewer policy
@@ -136,5 +138,45 @@ func TestXtreamListingNeverServesStaleVisibility(t *testing.T) {
 				t.Fatal("cached listing differs from encoding")
 			}
 		})
+	}
+}
+
+func TestM3ULineupGolden(t *testing.T) {
+	host, _ := testHost(t)
+	movie := frontend.Title{Key: core.MovieKey(12), Type: core.TypeMovie, Title: "Film\"Cut"}
+	show := frontend.Title{Key: core.ShowKey(13), Type: core.TypeShow, Title: "Series"}
+	season := frontend.Title{Key: core.SeasonKey(13, 2), Type: core.TypeSeason}
+	episode := frontend.Title{Key: core.EpisodeKey(13, 2, 3), Type: core.TypeEpisode, Title: "First\nPart", Season: 2, Episode: 3}
+	host.Experience = frontendtest.Experience{
+		ViewsFunc: func(context.Context, *frontend.Viewer) ([]frontend.View, error) {
+			return []frontend.View{{ID: "1", Type: core.TypeMovie}, {ID: "2", Type: core.TypeShow}}, nil
+		},
+		LibraryItemsFunc: func(_ context.Context, _ *core.Viewer, _ core.Device, view string, _ frontend.ItemQuery) (core.Page, error) {
+			item := movie
+			if view == "2" {
+				item = show
+			}
+			return core.Page{Items: []core.Title{item}, Total: 1}, nil
+		},
+		ChildrenFunc: func(_ context.Context, _ *core.Viewer, _ core.Device, key core.RatingKey, _ frontend.ItemQuery) (core.Page, error) {
+			item := season
+			if key == season.Key {
+				item = episode
+			}
+			return core.Page{Items: []core.Title{item}, Total: 1}, nil
+		},
+	}
+	response := request(mount(t, host), "/get.php?"+authQuery()+"&type=m3u_plus&output=ts")
+	const golden = `#EXTM3U
+#EXTINF:-1 tvg-id="allowed" tvg-logo="" group-title="Live TV",News
+http://ether.test/xtream/live/USER/eg1_test/1.ts
+#EXTINF:-1 group-title="Movies",Film'Cut
+http://ether.test/xtream/movie/USER/eg1_test/1.mkv
+#EXTINF:-1 group-title="Series",Series S02E03 First Part
+http://ether.test/xtream/series/USER/eg1_test/2.mkv
+`
+	want := strings.ReplaceAll(golden, "USER", frontend.XtreamUsername("eg1_test"))
+	if response.Code != http.StatusOK || response.Body.String() != want {
+		t.Fatalf("got HTTP %d and lineup:\n%s\nwant:\n%s", response.Code, response.Body, want)
 	}
 }
