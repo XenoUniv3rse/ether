@@ -135,6 +135,10 @@ func checkPairingLineage(t *testing.T) {
 	if before.Code != 200 {
 		t.Fatal(before.Body.String())
 	}
+	listed, err := grants.List(ctx, 1)
+	if err != nil || len(listed) != 1 || listed[0].Surface != "vela" {
+		t.Fatal("paired login missing from device list", err)
+	}
 	refreshed := call(i, "/auth/refresh", "", object{"idempotencyKey": "refresh", "refreshToken": second.RefreshToken, "device": d})
 	var next tokenPair
 	if refreshed.Code != 200 || json.Unmarshal(refreshed.Body.Bytes(), &next) != nil {
@@ -171,10 +175,43 @@ func checkPairingLineage(t *testing.T) {
 	if session == nil {
 		t.Fatal("rotated session inaccessible", w.Body.String())
 	}
-	if err = auth.Revoke(ctx, next.AccessToken); err != nil {
+	// The owner may revoke a row rendered before the session rotated.
+	if err = grants.RevokeGrant(ctx, 1, listed[0].Hash); err != nil {
 		t.Fatal(err)
 	}
 	if _, err = auth.GrantScopeCurrent(ctx, scope, d.neutral()); !errors.Is(err, frontend.ErrUnauthorized) {
 		t.Fatal("logout did not revoke lineage", err)
+	}
+	if out := call(i, "/lineage", next.AccessToken, object{"idempotencyKey": "after-revoke"}); out.Code != http.StatusUnauthorized {
+		t.Fatal("rotated access still accepted after revoke", out.Code)
+	}
+	if out := call(i, "/auth/refresh", "", object{"idempotencyKey": "after-revoke", "refreshToken": next.RefreshToken, "device": d}); out.Code != http.StatusUnauthorized {
+		t.Fatal("revoked family could refresh", out.Code)
+	}
+	if out := call(i, "/auth/refresh", "", object{"idempotencyKey": "refresh", "refreshToken": second.RefreshToken, "device": d}); out.Code != http.StatusUnauthorized {
+		t.Fatal("refresh replay returned revoked credentials", out.Code)
+	}
+
+	// Sign-out only needs a valid bearer for this device, even without refresh.
+	access, err := grants.Issue(ctx, 1, nil, "vela", d.neutral())
+	if err != nil {
+		t.Fatal(err)
+	}
+	revoke := func(deviceID string) int {
+		r := httptest.NewRequest("POST", "/vela/v0/auth/revoke", nil)
+		r.Header.Set("Authorization", "Bearer "+access)
+		r.Header.Set("X-Vela-Device-Id", deviceID)
+		w := httptest.NewRecorder()
+		i.serve(w, r)
+		return w.Code
+	}
+	if status := revoke("other"); status != http.StatusUnauthorized {
+		t.Fatal("wrong device could revoke the session", status)
+	}
+	if status := revoke(d.ID); status != http.StatusOK {
+		t.Fatal("device sign-out failed", status)
+	}
+	if _, _, err := auth.ResolveDevice(ctx, access, d.neutral()); !errors.Is(err, frontend.ErrUnauthorized) {
+		t.Fatal("signed-out access still accepted", err)
 	}
 }

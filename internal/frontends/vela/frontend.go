@@ -754,6 +754,11 @@ func (i *instance) serve(w http.ResponseWriter, r *http.Request) {
 		i.mux.ServeHTTP(w, r)
 		return
 	}
+	// Sign-out has no request payload or replay result that needs persistence.
+	if r.Pattern == "POST /vela/v0/auth/revoke" {
+		i.mux.ServeHTTP(w, r)
+		return
+	}
 	// A bounded read, followed by per-key serialization, makes refresh rotation
 	// and playback admission safe to retry. No worker or allocation exists at idle.
 	optionalMultiviewIdem := (r.Method == http.MethodPost && r.URL.Path == "/vela/v0/multiview") ||
@@ -819,9 +824,10 @@ func (i *instance) serve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	idemKey := *envelope.IdempotencyKey
-	public := strings.HasPrefix(r.URL.Path, "/vela/v0/auth/") && !strings.HasSuffix(r.URL.Path, "/approve") && !strings.HasSuffix(r.URL.Path, "/revoke") && r.URL.Path != "/vela/v0/auth/web-code" && r.URL.Path != "/vela/v0/auth/plex/profiles/challenge"
+	public := strings.HasPrefix(r.URL.Path, "/vela/v0/auth/") && !strings.HasSuffix(r.URL.Path, "/approve") && r.URL.Path != "/vela/v0/auth/web-code" && r.URL.Path != "/vela/v0/auth/plex/profiles/challenge"
 	public = public || r.URL.Path == "/vela/v0/negotiate"
 	scope := ""
+	var replayDevice device
 	if !public {
 		_, token, err := i.viewer(r)
 		if err == nil {
@@ -832,19 +838,18 @@ func (i *instance) serve(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	} else {
-		var d device
-		if len(envelope.Device) > 0 && json.Unmarshal(envelope.Device, &d) != nil {
+		if len(envelope.Device) > 0 && json.Unmarshal(envelope.Device, &replayDevice) != nil {
 			problem(w, 400, "request", "idempotency_key_required")
 			return
 		}
-		if d.ID == "" {
-			d = envelope.Client.Device
+		if replayDevice.ID == "" {
+			replayDevice = envelope.Client.Device
 		}
-		if d.ID == "" {
+		if replayDevice.ID == "" {
 			problem(w, 400, "request", "device_required")
 			return
 		}
-		scope = d.ID
+		scope = replayDevice.ID
 	}
 	key := hash(scope + "\x00" + r.Method + "\x00" + r.URL.Path + "\x00" + idemKey)
 	digest := hash(string(raw))
@@ -862,13 +867,7 @@ func (i *instance) serve(w http.ResponseWriter, r *http.Request) {
 		case <-i.ctx.Done():
 			return
 		}
-		for k, v := range old.header {
-			w.Header()[k] = v
-		}
-		w.WriteHeader(old.status)
-		if len(old.body) > 0 {
-			_, _ = w.Write(old.body)
-		}
+		i.writeMutationReplay(w, r, replayDevice, savedResponse{Status: old.status, Header: old.header, Body: old.body})
 		return
 	}
 	if len(i.replays) >= 10000 {
@@ -926,13 +925,7 @@ func (i *instance) serve(w http.ResponseWriter, r *http.Request) {
 	} else if conflict {
 		problem(out, 409, "conflict", "idempotency_conflict")
 	} else if persisted != nil {
-		for k, v := range persisted.Header {
-			out.Header()[k] = v
-		}
-		out.WriteHeader(persisted.Status)
-		if len(persisted.Body) > 0 {
-			_, _ = out.Write(persisted.Body)
-		}
+		i.writeMutationReplay(out, r, replayDevice, *persisted)
 	} else {
 		claimed = true
 		i.mux.ServeHTTP(out, r)
@@ -1037,7 +1030,8 @@ func (i *instance) routes() {
 	i.route("GET", "/collections/{id}", i.openCollectionCard)
 	i.route("GET", "/capabilities", func(w http.ResponseWriter, r *http.Request) { cache(w, r, i.requestCapabilities(r)) })
 	i.route("POST", "/negotiate", i.negotiate)
-	for _, p := range []string{"sign-in", "plex", "plex/profile", "plex/profiles/challenge", "refresh", "revoke", "web-code", "web-code/redeem", "device", "device/poll", "device/approve", "quick-connect", "quick-connect/poll", "quick-connect/approve"} {
+	i.route("POST", "/auth/revoke", i.revoke)
+	for _, p := range []string{"sign-in", "plex", "plex/profile", "plex/profiles/challenge", "refresh", "web-code", "web-code/redeem", "device", "device/poll", "device/approve", "quick-connect", "quick-connect/poll", "quick-connect/approve"} {
 		i.route("POST", "/auth/"+p, i.auth)
 	}
 	i.route("GET", "/bootstrap", i.bootstrap)
