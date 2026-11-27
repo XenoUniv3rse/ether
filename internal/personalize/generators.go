@@ -1486,17 +1486,21 @@ func (b *builder) genShowcase() []*candRow {
 	if b.taste != nil && b.taste.Confidence >= coldStartConfidence {
 		return nil
 	}
+	windows, batched := b.showcaseWindows()
 	var rows []*candRow
 	for ci, cluster := range showcaseClusters {
 		for _, g := range cluster {
-			src := b.browse(core.BrowseQuery{Filter: core.Filter{Genres: []string{g}}, Sort: core.SortPopularity, Desc: true, Limit: 200})
-			var ok []core.Title
-			for _, t := range src {
+			candidates := windows[g]
+			if !batched {
+				candidates = b.browse(core.BrowseQuery{Filter: core.Filter{Genres: []string{g}}, Sort: core.SortPopularity, Desc: true, Limit: 200})
+			}
+			var qualified []core.Title
+			for _, t := range candidates {
 				if b.acclaimed(&t, 1, 7.0) {
-					ok = append(ok, t)
+					qualified = append(qualified, t)
 				}
 			}
-			items := b.rank(ok, func(t *core.Title, _, _ int, fit float64, _ string) (float64, string) {
+			items := b.rank(qualified, func(t *core.Title, _, _ int, fit float64, _ string) (float64, string) {
 				return 0.5*quality(t) + 0.35*popularity(t) + 0.15*fit, fmt.Sprintf("Rated %.1f by %s viewers", t.Rating, votesPhrase(t.VoteCount))
 			})
 			if len(items) == 0 {
@@ -1513,6 +1517,31 @@ func (b *builder) genShowcase() []*candRow {
 		}
 	}
 	return rows
+}
+
+func (b *builder) showcaseWindows() (map[string][]core.Title, bool) {
+	catalog, ok := b.e.catalog.(interface {
+		PopularGenreCandidates(context.Context, []string, string, int, func(core.Title) bool) (map[string][]core.Title, bool, error)
+	})
+	if !ok {
+		return nil, false
+	}
+	var genres []string
+	for _, cluster := range showcaseClusters {
+		genres = append(genres, cluster...)
+	}
+	// Resolve the policy's vote floors before the candidate query opens rows.
+	b.floors()
+	windows, supported, err := catalog.PopularGenreCandidates(b.ctx, genres, b.user.MaxContentRating, 200, func(t core.Title) bool {
+		// The scalar projection omits the release date. Applying the older
+		// title's vote floor here cannot exclude a recently released title
+		// that passes the stricter floor after release facts are hydrated.
+		return b.acclaimed(&t, 1, 7.0)
+	})
+	if err != nil {
+		b.e.log.Debug("personalize: batch showcase windows failed", "err", err)
+	}
+	return windows, supported && err == nil
 }
 
 func genreSlug(g string) string {
