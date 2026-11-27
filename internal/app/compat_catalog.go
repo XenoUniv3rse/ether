@@ -61,6 +61,7 @@ type seenDevice struct {
 	Name             string    `json:"name"`
 	Platform         string    `json:"platform"`
 	Device           string    `json:"device"`
+	Model            string    `json:"model,omitempty"`
 	App              string    `json:"app"`
 	Viewer           string    `json:"viewer"`
 	LastSeen         time.Time `json:"lastSeen"`
@@ -203,7 +204,7 @@ func (a *App) observedClients(ctx context.Context) ([]observedClient, error) {
 // The registry's last-seen index supplies at most 100 rows. Each latest play
 // is a primary-key lookup, independent of the size of playback history.
 func (a *App) seenPlaybackDevices(ctx context.Context) ([]seenDevice, error) {
-	rows, err := a.db.QueryContext(ctx, `SELECT d.client_identifier,d.name,d.platform,COALESCE(p.device_match,''),COALESCE(p.product,''),COALESCE(p.username,''),d.last_seen FROM (SELECT * FROM stats_device_registry WHERE last_seen>0 ORDER BY last_seen DESC,id DESC LIMIT 100) d LEFT JOIN stats_plays p ON p.id=d.latest_play_id ORDER BY d.last_seen DESC,d.id DESC`)
+	rows, err := a.db.QueryContext(ctx, `SELECT d.client_identifier,d.name,d.platform,COALESCE(p.device_match,''),COALESCE(p.model,''),COALESCE(p.product,''),COALESCE(p.username,''),d.last_seen FROM (SELECT * FROM stats_device_registry WHERE last_seen>0 ORDER BY last_seen DESC,id DESC LIMIT 100) d LEFT JOIN stats_plays p ON p.id=d.latest_play_id ORDER BY d.last_seen DESC,d.id DESC`)
 	if err != nil {
 		return nil, err
 	}
@@ -213,7 +214,7 @@ func (a *App) seenPlaybackDevices(ctx context.Context) ([]seenDevice, error) {
 	for rows.Next() {
 		var d seenDevice
 		var seen int64
-		if err := rows.Scan(&d.ClientIdentifier, &d.Name, &d.Platform, &d.Device, &d.App, &d.Viewer, &seen); err != nil {
+		if err := rows.Scan(&d.ClientIdentifier, &d.Name, &d.Platform, &d.Device, &d.Model, &d.App, &d.Viewer, &seen); err != nil {
 			return nil, err
 		}
 		d.LastSeen = time.Unix(seen, 0).UTC()

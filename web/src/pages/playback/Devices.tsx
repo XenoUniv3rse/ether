@@ -94,6 +94,8 @@ type SeenDevice = {
   name: string;
   platform: string;
   device: string;
+  /** Hardware model the client reported (X-Plex-Model), e.g. "AppleTV5,3". */
+  model?: string;
   app: string;
   lastSeen: string;
   viewer: string;
@@ -1007,6 +1009,7 @@ export function DeviceCapabilities() {
     const haystack = [
       item.row.name,
       item.row.device,
+      item.row.model ?? "",
       item.row.platform,
       item.row.app,
       item.row.viewer,
@@ -1519,6 +1522,20 @@ export function DeviceCapabilities() {
                           </span>
                         );
                       },
+                    },
+                    {
+                      key: "model",
+                      header: t("Model"),
+                      sortValue: (item) => (item.row.model ?? "").toLowerCase(),
+                      cell: (item) =>
+                        item.row.model ? (
+                          <span
+                            className="block max-w-32 truncate whitespace-nowrap font-mono text-xs text-fg-muted"
+                            title={item.row.model}
+                          >
+                            {item.row.model}
+                          </span>
+                        ) : null,
                     },
                     {
                       key: "resolution",

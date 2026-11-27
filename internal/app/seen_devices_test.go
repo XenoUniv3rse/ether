@@ -167,3 +167,36 @@ func TestStatsSeenDevicesBackfillMigration(t *testing.T) {
 		}
 	}
 }
+
+// Seen devices show the reported hardware model, so two clients that both
+// call themselves "Apple TV" can be told apart, and a later record that
+// carries no model keeps the one already seen.
+func TestSeenPlaybackDevicesReportModel(t *testing.T) {
+	a := setupTestApp(t, true)
+	ctx := context.Background()
+	now := time.Now()
+	atv := func(id, client, model string) *core.PlaySession {
+		return &core.PlaySession{ID: id, UserID: 1, Key: 1, BytesServed: 10 << 20, Username: "owner", StartedAt: now,
+			Client: core.ClientCaps{ClientID: client, Product: "Plex for Apple TV", Platform: "tvOS", Device: "Apple TV", DeviceName: "Apple TV", Model: model}}
+	}
+	for _, play := range []*core.PlaySession{atv("hd-play", "atv-hd", "AppleTV5,3"), atv("uhd-play", "atv-4k", "AppleTV14,1")} {
+		if err := a.stats.Record(ctx, play, false, ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// A progress update without the model must not erase it.
+	if err := a.stats.Record(ctx, atv("hd-play", "atv-hd", ""), false, ""); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := a.seenPlaybackDevices(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]string{}
+	for _, row := range rows {
+		got[row.ClientIdentifier] = row.Model
+	}
+	if got["atv-hd"] != "AppleTV5,3" || got["atv-4k"] != "AppleTV14,1" {
+		t.Fatalf("models = %v", got)
+	}
+}
