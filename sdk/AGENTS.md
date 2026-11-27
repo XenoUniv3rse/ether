@@ -721,7 +721,7 @@ const playUrl = ether.frontend.streamURL(itemRef, {absolute: true}).url;
 ```
 
 In the SDKs, call `streamUrl(ctx, itemRef, partIndexOrOpts?)` (TypeScript),
-`ctx.StreamURLWithOptions(itemRef, StreamURLOptions{PartIndex, Source, Absolute})` or
+`ctx.StreamURLWithOptions(itemRef, StreamURLOptions{PartIndex, Source, Absolute, Wait})` or
 `ctx.StreamPartURL(itemRef, partIndex)` (Go), or
 `ctx.stream_url(item_ref, part_index=..., source=..., absolute=...)` (Python); an unpinned
 item ticket also accepts `/ether/v1/kind-media/{ticket}?part=N`. Default stream
@@ -737,6 +737,16 @@ ticket grant, Ether passes `KindResolveRequest.source` to `/resolve` and opens
 only the matching `PlayableSource.id` without failing over to other sources (a
 plugin that ignores `source` still works because Ether selects the matching id
 or returns `409 no_source` if absent).
+
+For an adapter download route, pass `{wait: {maxSeconds: 1200}}` to hold the
+media response while the plugin prepares the file. In Go, use
+`Wait: &etherplugin.StreamWaitPolicy{MaxSeconds: 1200}`. Use a positive integer.
+Ether caps the wait at 1800 seconds and allows up to four held requests per
+plugin and 32 per server. Over that limit, the request uses the ordinary media
+open and can return 503 with `Retry-After` while preparation continues.
+Omit `wait` on player routes to keep their 18-second default. Choose a wait below
+the client's and reverse proxy's response-header timeouts so Ether can send its
+own retry response. Disconnects release the held request while the job continues.
 
 Only root-relative local redirect URLs are forwarded. External URLs, authority
 changes, control characters, backslashes and known account credential query

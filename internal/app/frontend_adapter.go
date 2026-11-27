@@ -185,6 +185,7 @@ func (a *App) adapterStreamURLOptions(issuer *frontendadapter.TicketIssuer) func
 			Adapter:   pluginID,
 			PartIndex: opts.PartIndex,
 			Source:    opts.Source,
+			Wait:      frontendadapter.DownloadWait(opts.Wait),
 		})
 		if err != nil || !opts.Absolute {
 			return u, err
@@ -606,8 +607,9 @@ func (a *App) adapterMediaHandler() *frontendadapter.MediaHandler {
 	items := a.pluginsRT.pluginitems
 	resolver := a.pluginsRT.kindResolver
 	return frontendadapter.NewMediaHandler(frontendadapter.MediaDeps{
-		Tickets: issuer,
-		Log:     a.log.With("component", "kind-media"),
+		Tickets:   issuer,
+		Log:       a.log.With("component", "kind-media"),
+		TrackWait: a.pluginsRT.mgr.TrackFrontendPreparationWait,
 		Viewer: func(ctx context.Context, id int64) (*core.Viewer, error) {
 			if a.users == nil {
 				return nil, core.ErrNotFound

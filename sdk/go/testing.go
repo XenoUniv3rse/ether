@@ -139,6 +139,7 @@ type MockHost struct {
 	LastStreamURLPart     *int
 	LastStreamURLSource   string
 	LastStreamURLAbsolute bool
+	LastStreamURLWait     *StreamWaitPolicy
 	// StreamOrigin is prepended to mock stream URLs when Absolute is true
 	// (defaults to "http://ether.test").
 	StreamOrigin string
@@ -969,6 +970,9 @@ func (m *MockHost) StreamPartURL(_ context.Context, viewerID int64, itemRef stri
 // StreamURLWithOptions mints a deterministic stand-in URL and records the
 // viewer, item, optional part index, and optional source id (#576, #661).
 func (m *MockHost) StreamURLWithOptions(_ context.Context, viewerID int64, itemRef string, opts StreamURLOptions) (string, error) {
+	if opts.Wait != nil && opts.Wait.MaxSeconds <= 0 {
+		return "", fmt.Errorf("stream url: wait.maxSeconds must be a positive integer")
+	}
 	if opts.PartIndex != nil && *opts.PartIndex < 0 {
 		return "", fmt.Errorf("stream url: partIndex must be non-negative")
 	}
@@ -987,6 +991,11 @@ func (m *MockHost) StreamURLWithOptions(_ context.Context, viewerID int64, itemR
 	}
 	m.LastStreamURLSource = opts.Source
 	m.LastStreamURLAbsolute = opts.Absolute
+	m.LastStreamURLWait = nil
+	if opts.Wait != nil {
+		wait := *opts.Wait
+		m.LastStreamURLWait = &wait
+	}
 	u := "/ether/v1/kind-media/mock-" + strconv.FormatInt(viewerID, 10)
 	if opts.PartIndex != nil {
 		u += "?part=" + strconv.Itoa(*opts.PartIndex)

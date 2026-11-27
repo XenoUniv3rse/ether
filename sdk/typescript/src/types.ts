@@ -1432,6 +1432,8 @@ export interface StreamUrlOptions {
   source?: string;
   /** Return an absolute URL (`<origin>/ether/v1/kind-media/<token>`) using the active request origin or the adapter's first published address; default stays root-relative. */
   absolute?: boolean;
+  /** Hold a download response during preparation. Omit for players. Ether caps this at 1800 seconds. */
+  wait?: { maxSeconds: number };
 }
 
 export interface PendingReply {

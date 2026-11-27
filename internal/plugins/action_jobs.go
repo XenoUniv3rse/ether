@@ -4,16 +4,19 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/braedonsaunders/ether/internal/core"
-	"github.com/braedonsaunders/ether/internal/events"
-	"github.com/braedonsaunders/ether/internal/logredact"
-	"github.com/braedonsaunders/ether/internal/plugins/wasm"
 	"net/http"
 	"runtime"
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
+
+	"github.com/braedonsaunders/ether/internal/core"
+	"github.com/braedonsaunders/ether/internal/events"
+	"github.com/braedonsaunders/ether/internal/frontend"
+	"github.com/braedonsaunders/ether/internal/logredact"
+	"github.com/braedonsaunders/ether/internal/plugins/wasm"
 )
 
 const (
@@ -130,6 +133,9 @@ func (m *Manager) BeginHostJob(pluginID, dedupKey, routePath, label, kind string
 			return true
 		}
 		s := v.(*actionJob).snapshot()
+		if s.Code == frontendPreparationWaitCode {
+			return true
+		}
 		count++
 		if s.State != "running" && (oldestKey == "" || s.Started.Before(oldest)) {
 			oldestKey, oldest = ks, s.Started
@@ -158,6 +164,35 @@ func (m *Manager) BeginHostJob(pluginID, dedupKey, routePath, label, kind string
 	}
 	m.jobs.Store(key, j)
 	return &HostJobHandle{m: m, pluginID: pluginID, job: j}
+}
+
+const frontendPreparationWaitCode = "frontend_preparation_wait"
+
+var frontendPreparationWaitID atomic.Uint64
+
+// TrackFrontendPreparationWait adds a transient Activity row for a held
+// download. Its cancellation stops the request wait, independently of the
+// resolver job. The caller removes the row before delivering the stream.
+func (m *Manager) TrackFrontendPreparationWait(pluginID string, budget time.Duration, cancel context.CancelFunc) func() {
+	if m == nil {
+		return func() {}
+	}
+	path := fmt.Sprintf("/ether/v1/kind-media/wait-%d", frontendPreparationWaitID.Add(1))
+	key := pluginID + "|host|" + path
+	done := make(chan struct{})
+	close(done)
+	m.jobs.Store(key, &actionJob{
+		cancel: cancel,
+		done:   done,
+		status: ActionJobStatus{
+			Path:         path,
+			Code:         frontendPreparationWaitCode,
+			State:        "running",
+			Started:      time.Now().UTC(),
+			TotalLimitMS: budget.Milliseconds(),
+		},
+	})
+	return func() { m.jobs.Delete(key) }
 }
 
 // UpdateHostJob updates an existing non-running host-managed job (for example
@@ -294,6 +329,9 @@ func (m *Manager) StartExpandJobPriority(pluginID, routePath, dedupKey string, i
 			return true
 		}
 		s := v.(*actionJob).snapshot()
+		if s.Code == frontendPreparationWaitCode {
+			return true
+		}
 		count++
 		if s.State == "running" {
 			if !strings.HasPrefix(ks, resolverPrefix) && !strings.HasPrefix(ks, hostPrefix) {
@@ -410,6 +448,9 @@ func (m *Manager) startResolverJob(pluginID string, body, initial json.RawMessag
 			return true
 		}
 		s := v.(*actionJob).snapshot()
+		if s.Code == frontendPreparationWaitCode {
+			return true
+		}
 		count++
 		if s.State == "running" {
 			if strings.HasPrefix(ks, resolverPrefix) {
@@ -706,6 +747,9 @@ func (m *Manager) handleActionJobs(w http.ResponseWriter, r *http.Request) {
 	m.jobs.Range(func(k, v any) bool {
 		if strings.HasPrefix(k.(string), id+"|") {
 			s := v.(*actionJob).snapshot()
+			if s.Code == frontendPreparationWaitCode {
+				s.Label = frontend.PluginPreparationLabel(r.Header.Get("Accept-Language"))
+			}
 			s.Progress = m.store.redactKnown(r.Context(), id, s.Progress)
 			s.Outcome = m.store.redactKnown(r.Context(), id, s.Outcome)
 			s.Error = m.store.redactKnown(r.Context(), id, s.Error)

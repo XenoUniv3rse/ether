@@ -158,7 +158,7 @@ export async function streamUrl<S = Record<string, unknown>>(
   if (!Number.isFinite(viewerId) || viewerId <= 0) {
     throw new Error("stream url: no authenticated viewer on this request");
   }
-  if (opts.source !== undefined || opts.absolute) {
+  if (opts.source !== undefined || opts.absolute || opts.wait) {
     return ctx.ether.frontend.streamUrl(viewerId, itemRef, opts);
   }
   return opts.partIndex === undefined

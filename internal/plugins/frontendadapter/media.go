@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"github.com/braedonsaunders/ether/internal/kindstream"
 	"io"
 	"log/slog"
 	"net/http"
@@ -16,6 +15,7 @@ import (
 	"github.com/braedonsaunders/ether/internal/core"
 	"github.com/braedonsaunders/ether/internal/frontend"
 	"github.com/braedonsaunders/ether/internal/frontend/kit/rangefile"
+	"github.com/braedonsaunders/ether/internal/kindstream"
 	"github.com/braedonsaunders/ether/internal/plugins"
 )
 
@@ -42,6 +42,8 @@ type MediaDeps struct {
 	// OpenSource opens one exact resolver source (and optional zero-based part)
 	// for a source-scoped ticket (#661), with no failover to other sources.
 	OpenSource func(ctx context.Context, viewer *core.Viewer, itemRef string, partIndex *int, source string, accept []string) (*frontend.KindMedia, error)
+	// TrackWait adds an active preparation wait to plugin diagnostics.
+	TrackWait func(pluginID string, budget time.Duration, cancel context.CancelFunc) func()
 	// Log records each refused request with its cause (optional).
 	Log *slog.Logger
 }
@@ -52,7 +54,6 @@ type MediaDeps struct {
 // credential the request needs.
 type MediaHandler struct {
 	deps MediaDeps
-	now  func() time.Time
 }
 
 // NewMediaHandler builds the endpoint handler. It returns nil when the
@@ -61,7 +62,7 @@ func NewMediaHandler(deps MediaDeps) *MediaHandler {
 	if deps.Tickets == nil || deps.Viewer == nil || deps.Open == nil {
 		return nil
 	}
-	return &MediaHandler{deps: deps, now: time.Now}
+	return &MediaHandler{deps: deps}
 }
 
 func (h *MediaHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -107,22 +108,46 @@ func (h *MediaHandler) ServeGrant(w http.ResponseWriter, r *http.Request, grant 
 		return
 	}
 	accept := parseAccept(r.Header.Get("Accept"))
-	var media *frontend.KindMedia
+	var open func(context.Context) (*frontend.KindMedia, error)
 	switch {
 	case grant.Source != "":
 		if h.deps.OpenSource == nil {
 			h.refuse(w, http.StatusConflict, "no_source", "The item has no playable source.", core.ErrNotAvailable, grant.ItemID)
 			return
 		}
-		media, err = h.deps.OpenSource(r.Context(), viewer, grant.ItemID, partIdx, grant.Source, accept)
+		open = func(ctx context.Context) (*frontend.KindMedia, error) {
+			return h.deps.OpenSource(ctx, viewer, grant.ItemID, partIdx, grant.Source, accept)
+		}
 	case partIdx != nil:
 		if h.deps.OpenPart == nil {
 			h.refuse(w, http.StatusNotFound, "item_not_found", "The requested item part is not available.", core.ErrNotFound, grant.ItemID)
 			return
 		}
-		media, err = h.deps.OpenPart(r.Context(), viewer, grant.ItemID, *partIdx, accept)
+		open = func(ctx context.Context) (*frontend.KindMedia, error) {
+			return h.deps.OpenPart(ctx, viewer, grant.ItemID, *partIdx, accept)
+		}
 	default:
-		media, err = h.deps.Open(r.Context(), viewer, grant.ItemID, accept)
+		open = func(ctx context.Context) (*frontend.KindMedia, error) {
+			return h.deps.Open(ctx, viewer, grant.ItemID, accept)
+		}
+	}
+	ctx := r.Context()
+	if grant.Wait > 0 && h.deps.Tickets.waits.acquire(grant.Adapter) {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithCancel(plugins.WithFrontendPreparationHold(ctx))
+		defer cancel() // The returned stream may still use this context.
+		openOnce := open
+		open = func(ctx context.Context) (*frontend.KindMedia, error) {
+			defer h.deps.Tickets.waits.release(grant.Adapter)
+			return h.waitForMedia(ctx, cancel, grant.Adapter, min(grant.Wait, maxDownloadWait), openOnce)
+		}
+	}
+	media, err := open(ctx)
+	if r.Context().Err() != nil {
+		if media != nil {
+			_ = media.Closer.Close()
+		}
+		return
 	}
 	if err != nil || media == nil {
 		if frontend.WritePlaybackPending(w, err, r.Header.Get("Accept-Language")) {

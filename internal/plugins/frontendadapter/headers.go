@@ -52,6 +52,7 @@ var forwardedResponseHeaders = []string{
 	"Cache-Control",
 	"Accept-Ranges",
 	"Content-Range",
+	"Retry-After",
 	"Vary",
 }
 

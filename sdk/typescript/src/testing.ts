@@ -190,6 +190,7 @@ export interface MockHostState {
   lastStreamUrlSource?: string;
   /** Whether the most recent frontend.streamUrl call requested an absolute URL (#772). */
   lastStreamUrlAbsolute?: boolean;
+  lastStreamUrlWait?: import("./types.ts").StreamUrlOptions["wait"];
   /** Optional origin prepended to mock stream URLs when `{ absolute: true }` (defaults to `"http://ether.test"`). */
   streamOrigin?: string;
 }
@@ -705,6 +706,7 @@ export function createMockHostClient(initial?: Partial<MockHostState>): MockHost
         state.lastStreamUrlPart = opts.partIndex;
         state.lastStreamUrlSource = opts.source;
         state.lastStreamUrlAbsolute = opts.absolute;
+        state.lastStreamUrlWait = opts.wait;
         const base = `/ether/v1/kind-media/mock-${viewerId}`;
         const rel = opts.partIndex === undefined ? base : `${base}?part=${opts.partIndex}`;
         if (opts.absolute) {
