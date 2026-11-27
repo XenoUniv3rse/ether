@@ -249,6 +249,8 @@ func matrixRouteExceptions() map[perfharness.MatrixRouteKey]string {
 		"/ether/api/catalog/title/{key}/refresh")
 	add("console", http.MethodPost, "requires a materialized source with a provider catalogue to synchronize",
 		"/ether/api/libraries/catalogue-sources/{source}/sync")
+	add("console", http.MethodPost, "requires a database with an armed library-tier migration",
+		"/ether/api/catalog/tier-migration")
 	add("console", http.MethodPost, "requires a plugin that supplies a source to resolve or a candidate matcher for the selected item",
 		"/ether/api/libraries/{id}/item/{ref}/match")
 	add("console", http.MethodPost, "requires a fixture plugin with a declared optional setup step",

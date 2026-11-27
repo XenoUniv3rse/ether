@@ -184,7 +184,7 @@ func addMatrixConsoleCoverage(c *Client, availabilityMonitor bool) {
 		{Name: "fixture preview catalogue library", Method: http.MethodPost, Path: "/libraries/preview", Body: `{"mediaType":"movie","sources":["tmdb-movies"],"visibilityDefault":"show","rules":[]}`},
 		{Name: "fixture discover Home revision", Path: "/pages/home", Discover: discoverMatrixConsolePage},
 		{Name: "fixture preview Home", Method: http.MethodPost, Path: "/pages/home/preview", Body: `{"viewer":{viewerId},"device":"tv","count":4}`},
-		{Name: "fixture preview one Home row", Method: http.MethodPost, Path: "/pages/home/rows/preview", Body: `{"viewer":{viewerId},"device":"tv","count":4,"row":{"id":"matrix-preview","name":"Current trends","source":{"kind":"trending"}}}`},
+		{Name: "fixture preview one Home row", Method: http.MethodPost, Path: "/pages/home/rows/preview", Body: `{"viewer":{viewerId},"device":"tv","count":4,"row":{"name":"Current trends","source":{"kind":"trending"}}}`},
 		{Name: "fixture preview Home impact", Method: http.MethodPost, Path: "/pages/home/impact", Body: `{"device":"tv","page":` + draftHome + `}`},
 		{Name: "fixture save curated Home", Method: http.MethodPut, Path: "/pages/home", Body: draftHome, Headers: func(h http.Header, vars map[string]string) {
 			h.Set("If-Match", vars["matrixPageRevision"])
@@ -249,8 +249,6 @@ func addMatrixConsoleCoverage(c *Client, availabilityMonitor bool) {
 		{Name: "fixture save disabled newsletter", Method: http.MethodPut, Path: "/stats/newsletter/settings", Body: `{"enabled":false,"weekday":1,"hour":10,"userId":{viewerId}}`},
 		{Name: "fixture save manual backup settings", Method: http.MethodPost, Path: "/adoption/backups/settings", Body: `{"intervalHours":0,"retain":1,"skipVault":true}`},
 		{Name: "fixture acknowledge plugin sync without pruning", Method: http.MethodPost, Path: "/libraries/{consoleLiveLibrary}/sync", Body: `{"keepExisting":true}`},
-		{Name: "fixture pause catalogue migration", Method: http.MethodPost, Path: "/catalog/tier-migration", Body: `{"paused":true}`},
-		{Name: "fixture resume catalogue migration", Method: http.MethodPost, Path: "/catalog/tier-migration", Body: `{"paused":false}`},
 		{Name: "fixture check scratch database", Method: http.MethodPost, Path: "/status/database/check"},
 		{Name: "fixture refresh local diagnostics", Method: http.MethodPost, Path: "/safety/diagnostics/refresh"},
 		{Name: "fixture clear scratch poster uploads", Method: http.MethodPost, Path: "/posters/clear"},
