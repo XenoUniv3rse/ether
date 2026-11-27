@@ -72,7 +72,7 @@ func (a *App) ensurePlexAccountServices() error {
 		},
 		Enabled: func() bool {
 			cfg := a.cfg.Read()
-			return cfg.Plex.Claimed && cfg.Plex.UsePlexMetadata && (cfg.Frontends == nil || cfg.Frontends["plex"].Enabled)
+			return cfg.Plex.Claimed && cfg.Plex.PlexMetadataOn() && (cfg.Frontends == nil || cfg.Frontends["plex"].Enabled)
 		},
 		Background: true,
 	})

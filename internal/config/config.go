@@ -245,12 +245,13 @@ type Plex struct {
 	OwnerUsername    string `json:"ownerUsername"`
 	Claimed          bool   `json:"claimed"`
 	// UsePlexMetadata serves cached Plex metadata-provider fields to Plex
-	// apps when a title has a verified plex:// guid. Off by default.
+	// apps when a title has a verified plex:// guid. On by default (nil);
+	// the owner can turn it off.
 	// Other frontends and the owner console keep TMDB. Viewer limits use
 	// the safer (more mature) of the TMDB and Plex content ratings; Plex
 	// apps still display Plex's own rating. Date-added stays the catalogue
 	// release/air date.
-	UsePlexMetadata bool `json:"usePlexMetadata,omitempty"`
+	UsePlexMetadata *bool `json:"usePlexMetadata,omitempty"`
 	// Delivery is how a direct-play media route reaches the client: "relay"
 	// (default) streams the bytes through Ether; "redirect" answers an
 	// eligible TorBox part read with a temporary file URL after admission.
@@ -1598,3 +1599,7 @@ func stripRetiredLiveTV(file map[string]any) bool {
 	}
 	return dropped
 }
+
+// PlexMetadataOn reports whether Plex apps get Plex's metadata. It is on
+// unless the owner turned it off.
+func (p Plex) PlexMetadataOn() bool { return p.UsePlexMetadata == nil || *p.UsePlexMetadata }

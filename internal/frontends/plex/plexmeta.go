@@ -20,7 +20,7 @@ func (s *Server) plexMetaOn() bool {
 		return false
 	}
 	cfg := s.cfg()
-	return cfg.Plex.Claimed && cfg.Plex.UsePlexMetadata
+	return cfg.Plex.Claimed && cfg.Plex.PlexMetadataOn()
 }
 
 // withPlexMeta preloads cached Plex overlays for keys. schedule=false

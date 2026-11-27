@@ -482,10 +482,11 @@ describe("Metadata artwork studio", () => {
   it("saves the Plex metadata switch from Apps › Plex › Account", async () => {
     const { fake } = renderAppWith("/apps/plex/account", () => undefined);
     const toggle = await screen.findByLabelText("Use Plex's metadata for Plex apps", {}, WAIT);
-    expect(toggle).not.toBeChecked();
+    // On by default: a config that never set it shows the switch on.
+    expect(toggle).toBeChecked();
     fireEvent.click(toggle);
     await waitFor(() => expect(calls(fake, "PUT", "/config/plex")).toHaveLength(1), WAIT);
-    expect(calls(fake, "PUT", "/config/plex")[0]!.body).toEqual({ usePlexMetadata: true });
+    expect(calls(fake, "PUT", "/config/plex")[0]!.body).toEqual({ usePlexMetadata: false });
   });
 
   it("opens Recommendations at /recommendations", async () => {
