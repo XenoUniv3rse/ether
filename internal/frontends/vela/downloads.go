@@ -40,6 +40,7 @@ type downloadGrant struct {
 	URL            string    `json:"url"`
 	ExpiresAt      time.Time `json:"expiresAt"`
 	ETag           string    `json:"etag"`
+	SourceID       string    `json:"sourceId"`
 	ByteLength     int64     `json:"byteLength,omitempty"`
 	MIMEType       string    `json:"mimeType"`
 	Filename       string    `json:"filename"`
@@ -48,6 +49,7 @@ type downloadGrant struct {
 	AudioTracks    []object  `json:"audioTracks"`
 	SubtitleTracks []object  `json:"subtitleTracks"`
 	Chapters       []object  `json:"chapters"`
+	Markers        []object  `json:"markers,omitempty"`
 }
 
 type downloadCapability struct {
@@ -68,6 +70,7 @@ type downloadTickets struct {
 type downloadTicket struct {
 	source    *frontend.OfflineDownloadSource
 	filename  string
+	sidecars  map[string]string
 	expiresAt time.Time
 	timer     *time.Timer
 	readers   int
@@ -294,19 +297,22 @@ func (i *instance) grantDownload(w http.ResponseWriter, r *http.Request) {
 		refuse(http.StatusTooManyRequests, "policy", "download_limit", retry)
 		return
 	}
+	url := "/vela/v0/download/" + token
+	audio, subs := offlineDownloadTracks(source.Media, declared.SubtitleFormats)
+	external, sidecars := i.downloadSidecars(ctx, v, &detail.Title, source, url)
+	markers := i.skipMarkers(ctx, k, source.Media)
 	expires := i.serverNow().Truncate(time.Second).Add(downloadTicketTTL)
 	filename := downloadFilename(source.Name, detail.Title.Title)
-	issued = i.downloads.issue(token, &downloadTicket{source: source, expiresAt: expires, filename: filename}, expires.Sub(i.serverNow()))
+	issued = i.downloads.issue(token, &downloadTicket{source: source, expiresAt: expires, filename: filename, sidecars: sidecars}, expires.Sub(i.serverNow()))
 	if !issued {
 		refuse(http.StatusForbidden, "policy", "feature_unavailable", 0)
 		return
 	}
-	audio, subs := offlineDownloadTracks(source.Media, declared.SubtitleFormats)
 	send(w, http.StatusOK, downloadGrant{
-		TitleID: ids.RatingKeyGUID(k), VersionID: binding.VersionID, URL: "/vela/v0/download/" + token,
-		ExpiresAt: expires, ETag: source.ETag, ByteLength: source.Size, MIMEType: source.MIME, Filename: filename,
+		TitleID: ids.RatingKeyGUID(k), VersionID: binding.VersionID, URL: url,
+		ExpiresAt: expires, ETag: source.ETag, SourceID: source.ETag, ByteLength: source.Size, MIMEType: source.MIME, Filename: filename,
 		Container: source.Media.Container, OriginalVideo: originalVideo(source.Media),
-		AudioTracks: audio, SubtitleTracks: subs, Chapters: chapters(source.Media),
+		AudioTracks: audio, SubtitleTracks: append(subs, external...), Chapters: chapters(source.Media), Markers: markers,
 	})
 }
 

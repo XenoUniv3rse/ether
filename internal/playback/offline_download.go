@@ -90,8 +90,14 @@ func (m *Manager) OpenOriginalDownload(ctx context.Context, viewer *core.Viewer,
 	info := g.infoSnapshot()
 	// The grant needs probe facts. Keep seek indexes on the generation.
 	info.Keyframes, info.CopyTimeline = nil, nil
+	// Warm playback probes may carry another session's subtitle selections.
+	info.Streams = slices.DeleteFunc(info.Streams, func(st core.StreamInfo) bool { return st.External })
+	releaseName := ""
+	if g.res != nil {
+		releaseName = g.res.Release.Name
+	}
 	media := &frontend.OfflineDownloadSource{
-		ReaderAt: g.src, Closer: offlineGeneration{m, g},
+		ReaderAt: g.src, Closer: offlineGeneration{m, g}, ReleaseName: releaseName,
 		Release: g.releaseID(), Name: name, Size: size, Media: info,
 		MIME: contentTypeForInfo(info, name, sourceMIME(g.src)),
 		ETag: rangefile.StrongETag(g.releaseID()+"\x00"+revision, size, time.Time{}),

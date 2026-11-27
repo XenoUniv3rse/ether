@@ -126,7 +126,7 @@ func offlineDownloadTracks(media frontend.MediaInfo, formats []string) ([]object
 		switch {
 		case track.Type == "audio":
 			audio = append(audio, sourceTrack(track))
-		case track.Type == "subtitle" && supportsEmbeddedSubtitle(track.Codec, formats):
+		case track.Type == "subtitle" && !track.External && supportsEmbeddedSubtitle(track.Codec, formats):
 			t := sourceTrack(track)
 			t["delivery"] = object{"kind": "embedded"}
 			subs = append(subs, t)

@@ -14,6 +14,13 @@ type OfflineDownloadSource struct {
 	Release, Name, MIME, ETag string
 	Size                      int64
 	Media                     MediaInfo // Probe facts from the original bytes served by ReaderAt.
+	ReleaseName               string    // Internal subtitle cache lookup, never sent to the client.
+}
+
+// OfflineDownloadSidecars is optionally implemented by Host.Subtitles. It
+// lists the title's already cached sidecars for the opened release.
+type OfflineDownloadSidecars interface {
+	CachedDownloadSidecars(context.Context, *Title, *Viewer, *OfflineDownloadSource) []StreamInfo
 }
 
 type OfflineDownloadSources interface {

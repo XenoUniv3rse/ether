@@ -1069,6 +1069,8 @@ func (i *instance) routes() {
 	i.route("POST", "/titles/{id}/download", i.grantDownload)
 	i.route("GET", "/download/{ticket}", i.downloadFile)
 	i.route("HEAD", "/download/{ticket}", i.downloadFile)
+	i.route("GET", "/download/{ticket}/subtitles/{track}", i.downloadSubtitle)
+	i.route("HEAD", "/download/{ticket}/subtitles/{track}", i.downloadSubtitle)
 	i.route("POST", "/titles/{id}/read", i.read)
 	i.route("GET", "/read/{ticket}", i.readFile)
 	i.route("HEAD", "/read/{ticket}", i.readFile)

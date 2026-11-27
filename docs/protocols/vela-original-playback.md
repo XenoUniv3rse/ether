@@ -115,10 +115,23 @@ video streams the device can decode. The file needs no server-side conversion
 or audio fallback at playback.
 
 A grant returns
-`{titleId,versionId?,url,expiresAt,etag,byteLength?,mimeType,filename,container,originalVideo?,audioTracks,subtitleTracks,chapters}`.
-The track and chapter arrays use the playback plan shapes and describe the
-selected original file. The subtitle array lists the declared formats
-available in the file with `delivery.kind: "embedded"`.
+`{titleId,versionId?,url,expiresAt,etag,sourceId,byteLength?,mimeType,filename,container,originalVideo?,audioTracks,subtitleTracks,chapters,markers?}`.
+`sourceId` is the original file's opaque ETag, as on a playback path. It
+stays the same when a fresh ticket is issued for the same file.
+`container`, `audioTracks`, `subtitleTracks`, `chapters` and
+`originalVideo` describe the selected original. Tracks, chapters and
+video facts use the playback plan shapes. `originalVideo` is present
+when probe facts are available. Track and chapter arrays may be empty.
+`markers` uses the playback plan's cached intro and credits ranges on
+the original file's timeline and is omitted when no ranges are known.
+
+Supported embedded subtitles use `delivery.kind: "embedded"`. Cached
+text sidecars associated with the selected release or picked for the
+title use `delivery: {kind: "external", format: "webvtt", url}`.
+`GET` and `HEAD` on that URL use the same bearer ticket and expiry as
+the original. External delivery requires WebVTT bytes in the local
+subtitle cache.
+
 Retain the idempotency key with the download. Reposting for the same title
 and version issues a fresh bearer URL for the same bytes and leaves the shared
 quota unchanged, including across a quota reset. `etag` is a required, quoted
