@@ -517,16 +517,17 @@ func liveInputHasAudio(info *core.MediaInfo) bool {
 // sequence into the active HLS resource map.
 func (s *Service) startIPTV(ctx context.Context, ss *session) error {
 	c := ss.info.Channel
-	ordered := c.StreamSources
 	if !ss.ephemeral {
 		if err := normalizeStreamSources(&c); err != nil {
 			return err
 		}
-		ordered = s.orderedSourceCandidates(c)
 	}
 	var candidates []StreamSource
 	var earliestRetry time.Time
-	for _, src := range ordered {
+	for _, src := range c.StreamSources {
+		if !src.Enabled || !s.autoDonorActive(src.AutoFrom) {
+			continue
+		}
 		retry := s.sourceStatus(c.ID, src).RetryAfter
 		if retry.After(s.o.Now()) {
 			if earliestRetry.IsZero() || retry.Before(earliestRetry) {
@@ -535,6 +536,18 @@ func (s *Service) startIPTV(ctx context.Context, ss *session) error {
 			continue
 		}
 		candidates = append(candidates, src)
+	}
+	// Fresh tunes retry the configured primary once its cooldown expires.
+	// Only automatic backups without an owner-defined order are ranked by
+	// learned health.
+	if !ss.ephemeral && !c.OwnerStreamSources {
+		sort.SliceStable(candidates, func(i, j int) bool {
+			a, b := candidates[i], candidates[j]
+			if a.AutoFrom == "" || b.AutoFrom == "" {
+				return a.AutoFrom == "" && b.AutoFrom != ""
+			}
+			return s.compareRuntimeAutoBackups(c, a, b) < 0
+		})
 	}
 	var last error = core.ErrNotAvailable
 	var failures []TuneInputFailure

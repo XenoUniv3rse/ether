@@ -427,6 +427,7 @@ func (p *providerBroadcastPlanner) open(ctx context.Context) (transcode.Decoder,
 	p.pendingStandby = false
 	p.retryAt = time.Time{}
 	p.waiting = false
+	stalled := p.stalledAttempt
 	p.mu.Unlock()
 	var last error = core.ErrNotAvailable
 	var heldDisplaced *steadyLink
@@ -439,13 +440,14 @@ func (p *providerBroadcastPlanner) open(ctx context.Context) (transcode.Decoder,
 				candidates = append(candidates, src)
 			}
 		}
-		if len(candidates) == 0 {
+		p.mu.Lock()
+		if p.openGen != gen {
+			p.mu.Unlock()
+			return nil, nil, context.Canceled
+		}
+		id, liveEdge, ok, retry := p.ladder.choose(sourceIDs(candidates), now)
+		if !ok && (len(candidates) == 0 || stalled != nil && busy[stalled.src.ID]) {
 			var dropStandby *steadyStandby
-			p.mu.Lock()
-			if p.openGen != gen {
-				p.mu.Unlock()
-				return nil, nil, context.Canceled
-			}
 			if p.standby != nil && len(busy) > 0 {
 				dropStandby = p.standby
 				p.standby = nil
@@ -473,12 +475,6 @@ func (p *providerBroadcastPlanner) open(ctx context.Context) (transcode.Decoder,
 			p.mu.Unlock()
 			return nil, nil, fmt.Errorf("broadcast provider: %w", last)
 		}
-		p.mu.Lock()
-		if p.openGen != gen {
-			p.mu.Unlock()
-			return nil, nil, context.Canceled
-		}
-		id, liveEdge, ok, retry := p.ladder.choose(sourceIDs(candidates), now)
 		if !ok {
 			p.retryAt = retry
 			p.mu.Unlock()
@@ -569,6 +565,13 @@ func (p *providerBroadcastPlanner) open(ctx context.Context) (transcode.Decoder,
 			link, err = p.s.linkSteadySourceWithState(ctx, c, src, resID, 0, direct, cached, nil)
 			if errors.Is(err, ErrProviderBusy) || errors.Is(err, ErrProviderPaced) {
 				busy[id] = true
+				// Reopening the stalled input can share its slot. Defer that
+				// reopen so another input can win, or free the slot and retry
+				// the replacement if its provider is at capacity.
+				if errors.Is(err, ErrProviderBusy) && stalled != nil && stalled.link != nil &&
+					!stalled.link.closed.Load() && providerSourceID(c, src) == providerSourceID(c, stalled.src) {
+					busy[stalled.src.ID] = true
+				}
 				last = err
 				continue
 			}
