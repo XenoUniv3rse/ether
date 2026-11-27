@@ -152,6 +152,28 @@ func MatrixClients(live bool) []Client {
 	return clients
 }
 
+func discoverMatrixArtwork(vars map[string]string, body []byte, variable, prefix, field string) {
+	delete(vars, variable)
+	var items []map[string]json.RawMessage
+	if json.Unmarshal(body, &items) != nil {
+		return
+	}
+	for _, item := range items {
+		var raw string
+		if json.Unmarshal(item[field], &raw) != nil {
+			continue
+		}
+		u, err := url.Parse(raw)
+		if err != nil {
+			continue
+		}
+		if secret, ok := strings.CutPrefix(u.Path, prefix); ok && secret != "" && !strings.Contains(secret, "/") {
+			vars[variable] = url.PathEscape(secret)
+			return
+		}
+	}
+}
+
 func discoverMatrixXtreamMovie(vars map[string]string, body []byte) {
 	// Upcoming titles can appear in the lineup but cannot be opened. Pick a
 	// released listing with artwork and follow that same ID in both probes.
