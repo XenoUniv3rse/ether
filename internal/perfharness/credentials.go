@@ -34,6 +34,7 @@ type Viewer struct {
 	MBWebCode                              string
 	ConsoleOwnerQuickCode                  string
 	ConsolePortalQuickCode                 string
+	ConsolePMSURL                          string
 }
 
 type activeViewers struct{ db *sql.DB }

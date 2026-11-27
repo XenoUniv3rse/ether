@@ -50,7 +50,7 @@ func matrixRouteExceptions() map[perfharness.MatrixRouteKey]string {
 		"/ether/api/auth/pin/{handle}", "/ether/api/me/link/plex/{handle}", "/ether/api/me/pin/{handle}", "/ether/api/plex/pin/{id}")
 	add("console", http.MethodGet, "requires an external metadata provider configured for matching", "/ether/api/catalog/title/{key}/matches")
 	add("console", http.MethodGet, "requires a linked Plex Media Server with imported accounts",
-		"/ether/api/plex-servers/{id}/accounts", "/ether/api/plex-servers/{id}/accounts/{account}/backfill",
+		"/ether/api/plex-servers/{id}/accounts/{account}/backfill",
 		"/ether/api/plex-servers/{id}/unmatched")
 	add("console", http.MethodGet, "owner log SSE requires a log producer and stream scenario", "/ether/api/logs/stream")
 	add("console", http.MethodPost, "only reachable before setup with no active owner", "/ether/api/setup/local")
@@ -243,8 +243,6 @@ func matrixRouteExceptions() map[perfharness.MatrixRouteKey]string {
 		"/ether/api/playback/prowlarr", "/ether/api/playback/prowlarr/tags")
 	add("console", http.MethodPost, "requires a linked upstream Plex server and a Plex account or history source",
 		"/ether/api/viewers/{id}/plex-watch/import", "/ether/api/viewers/{id}/plex-watch/export", "/ether/api/viewers/{id}/plex-watch/retry")
-	add("console", http.MethodPut, "requires a confirmed upstream Plex library association",
-		"/ether/api/plex-servers/{id}/accounts/{account}", "/ether/api/plex-servers/{id}/step-aside")
 	add("console", http.MethodPut, "requires a verified source match from an external metadata provider",
 		"/ether/api/catalog/title/{key}/match")
 	add("console", http.MethodPost, "refreshes ratings from a configured upstream provider",

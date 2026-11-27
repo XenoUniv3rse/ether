@@ -215,27 +215,42 @@ func runPerfMatrixCase(t *testing.T, ctx context.Context, fixture string, c perf
 	if err != nil {
 		t.Fatal(err)
 	}
-	var definitionsURL string
+	var consoleFixtureURL string
 	if len(clients) == 0 || slices.Contains(clients, "console") {
 		definition, err := os.ReadFile("../cardigann/testdata/public.yml")
 		if err != nil {
 			t.Fatal(err)
 		}
 		definitions := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if strings.HasPrefix(r.URL.Path, "/pms/") && r.Header.Get("X-Plex-Token") != "matrix-fixture-token" {
+				w.WriteHeader(http.StatusUnauthorized)
+				return
+			}
 			switch r.URL.Path {
 			case "/definitions/":
 				_, _ = io.WriteString(w, `["fakepublic.yml"]`)
 			case "/definitions/fakepublic.yml":
 				_, _ = w.Write(definition)
+			case "/pms/identity":
+				_, _ = io.WriteString(w, `{"MediaContainer":{"machineIdentifier":"matrix-scratch-pms","version":"1.41.0"}}`)
+			case "/pms/myplex/account":
+				_, _ = io.WriteString(w, `{"MyPlex":{"username":"Matrix PMS owner"}}`)
+			case "/pms/accounts":
+				_, _ = io.WriteString(w, `{"MediaContainer":{"size":1,"Account":[{"id":1,"name":"Matrix PMS owner"}]}}`)
+			case "/pms/library/sections", "/pms/status/sessions/history/all":
+				_, _ = io.WriteString(w, `{"MediaContainer":{"size":0,"totalSize":0}}`)
 			default:
 				http.NotFound(w, r)
 			}
 		}))
 		defer definitions.Close()
-		definitionsURL = definitions.URL + "/definitions/"
+		consoleFixtureURL = definitions.URL
 	}
 	if err := cfg.Update(func(cfg *config.Config) error {
-		cfg.IndexerSites.DefinitionsURL = definitionsURL
+		cfg.IndexerSites.DefinitionsURL = ""
+		if consoleFixtureURL != "" {
+			cfg.IndexerSites.DefinitionsURL = consoleFixtureURL + "/definitions/"
+		}
 		cfg.SetupComplete = true
 		cfg.Frontends = map[string]config.Frontend{"plex": {Enabled: true}, "jellyfin": {Enabled: true}, "emby": {Enabled: true}, "silo": {Enabled: true}, "vela": {Enabled: true}, "stremio": {Enabled: true}, "xtream": {Enabled: true}}
 		cfg.Server.BindAddress = "127.0.0.1"
@@ -279,6 +294,9 @@ func runPerfMatrixCase(t *testing.T, ctx context.Context, fixture string, c perf
 	db.Close()
 	if err != nil {
 		t.Fatal(err)
+	}
+	if consoleFixtureURL != "" {
+		viewers[0].ConsolePMSURL = consoleFixtureURL + "/pms"
 	}
 	if pg := os.Getenv(PerfGatePGEnv); pg != "" {
 		defer perfGatePostgres(t, ctx, dir, strings.ReplaceAll(c.name, "-", "_"), pg)()

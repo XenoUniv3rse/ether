@@ -209,6 +209,13 @@ func addMatrixConsoleCoverage(c *Client) {
 		{Name: "fixture revoke scratch API key", Method: http.MethodDelete, Path: "/frontends/jellyfin/api-keys/{consoleScratchAPIKey}"},
 		{Name: "fixture create DLNA guest", Method: http.MethodPost, Path: "/frontends/dlna/guest", Discover: discoverMatrixID("consoleDLNAGuest")},
 		{Name: "fixture remove DLNA guest", Method: http.MethodDelete, Path: "/users/{consoleDLNAGuest}"},
+		{Name: "fixture add loopback Plex server", Method: http.MethodPost, Path: "/plex-servers", Body: `{"name":"Matrix PMS","url":"{consolePMSURL}","token":"matrix-fixture-token"}`, Discover: discoverMatrixID("consolePMS")},
+		{Name: "fixture rename loopback Plex server", Method: http.MethodPut, Path: "/plex-servers/{consolePMS}", Body: `{"name":"Matrix PMS renamed","url":"{consolePMSURL}"}`},
+		{Name: "fixture discover loopback Plex accounts", Path: "/plex-servers/{consolePMS}/accounts", Discover: discoverMatrixConsolePMSAccount},
+		{Name: "fixture map loopback Plex account", Method: http.MethodPut, Path: "/plex-servers/{consolePMS}/accounts/{consolePMSAccount}", Body: `{"userId":{viewerId},"direction":0,"interval":30}`},
+		{Name: "fixture unmap loopback Plex account", Method: http.MethodPut, Path: "/plex-servers/{consolePMS}/accounts/{consolePMSAccount}", Body: `{"userId":0}`},
+		{Name: "fixture save loopback Plex step-aside", Method: http.MethodPut, Path: "/plex-servers/{consolePMS}/step-aside", Body: `{"stepAside":false}`},
+		{Name: "fixture remove loopback Plex server", Method: http.MethodDelete, Path: "/plex-servers/{consolePMS}"},
 		{Name: "fixture clear installed update banner", Method: http.MethodPost, Path: "/updates/dismiss-installed"},
 		{Name: "fixture cancel any queued restart", Method: http.MethodDelete, Path: "/server/restart/"},
 		{Name: "fixture include catalogue title", Method: http.MethodPut, Path: "/catalog/title/{consoleMovieKey}/library"},
@@ -357,6 +364,15 @@ func discoverMatrixConsoleAPIKey(vars map[string]string, body []byte) {
 				return
 			}
 		}
+	}
+}
+
+func discoverMatrixConsolePMSAccount(vars map[string]string, body []byte) {
+	var accounts []struct {
+		ID int64 `json:"id"`
+	}
+	if json.Unmarshal(body, &accounts) == nil && len(accounts) != 0 && accounts[0].ID > 0 {
+		setOnce(vars, "consolePMSAccount", strconv.FormatInt(accounts[0].ID, 10))
 	}
 }
 
