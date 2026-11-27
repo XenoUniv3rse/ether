@@ -23,7 +23,7 @@ import (
 // or an unknown enum member inside a list fails the whole response. Nested
 // models are nullable in the SDK and are checked only when present.
 type kotlinModel struct {
-	required map[string]string // key -> bool|int|string|uuid|date|list|uuids|enum:<set>|enums:<set>
+	required map[string]string // key -> bool|int|long|string|uuid|date|list|uuids|enum:<set>|enums:<set>
 	nested   map[string]*kotlinModel
 }
 
@@ -106,6 +106,9 @@ func kotlinValue(kind string, value any) bool {
 	case kind == "int":
 		n, ok := value.(float64)
 		return ok && n == math.Trunc(n) && n >= math.MinInt32 && n <= math.MaxInt32
+	case kind == "long":
+		n, ok := value.(float64)
+		return ok && n == math.Trunc(n) && n >= math.MinInt64 && n < -math.MinInt64
 	case kind == "string":
 		_, ok := value.(string)
 		return ok

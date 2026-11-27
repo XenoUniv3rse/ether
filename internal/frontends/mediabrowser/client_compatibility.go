@@ -323,9 +323,9 @@ func (i *instance) themeSourceDTO(themeID, container string) map[string]any {
 	source["SupportsDirectPlay"] = true
 	source["SupportsDirectStream"] = true
 	source["SupportsTranscoding"] = false
-	source["DirectStreamUrl"] = path
 	source["IsRemote"] = false
 	if i.protocol == "emby" {
+		source["DirectStreamUrl"] = path
 		i.embyMediaSourceDTO(source, themeID, media)
 		delete(source, "ETag")
 	}

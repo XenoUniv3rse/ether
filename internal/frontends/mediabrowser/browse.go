@@ -258,7 +258,22 @@ func mediaBrowserCollectionType(view frontend.View) string {
 	}
 }
 
-// collectionFolder is one library view. The id is the view GUID, not a title.
+// collectionTypeDTO maps internal library kinds to the protocol enum.
+func (i *instance) collectionTypeDTO(kind string) string {
+	if i.protocol != "jellyfin" {
+		return kind
+	}
+	switch kind {
+	case "audiobooks":
+		return "books"
+	case "movies", "tvshows", "music", "musicvideos", "trailers", "homevideos", "boxsets", "books", "photos", "livetv", "playlists", "folders":
+		return kind
+	default:
+		return "unknown"
+	}
+}
+
+// collectionFolder is one library view identified by a view GUID.
 func (i *instance) collectionFolder(r *http.Request, v *frontend.Viewer, view frontend.View) (map[string]any, bool) {
 	viewNum, e := ids.ParseDecimal(view.ID)
 	if e != nil {
@@ -269,7 +284,7 @@ func (i *instance) collectionFolder(r *http.Request, v *frontend.Viewer, view fr
 		return nil, false
 	}
 	kind := mediaBrowserCollectionType(view)
-	item := map[string]any{"Id": viewID, "Name": view.Name, "Type": "CollectionFolder", "CollectionType": kind, "IsFolder": true, "ServerId": i.info.ID, "SortName": view.Name, "DisplayPreferencesId": viewID, "CanDelete": false, "CanDownload": false, "ProviderIds": map[string]string{}}
+	item := map[string]any{"Id": viewID, "Name": view.Name, "Type": "CollectionFolder", "CollectionType": i.collectionTypeDTO(kind), "IsFolder": true, "ServerId": i.info.ID, "SortName": view.Name, "DisplayPreferencesId": viewID, "CanDelete": false, "CanDownload": false, "ProviderIds": map[string]string{}}
 	if i.protocol == "emby" {
 		i.embyViewDTO(item)
 	}

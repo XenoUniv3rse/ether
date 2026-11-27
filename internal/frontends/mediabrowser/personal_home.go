@@ -690,7 +690,7 @@ func (i *instance) rememberLoaded(key string, gen int64, v *frontend.Viewer, loa
 
 func (i *instance) personalFolder(r *http.Request, v *frontend.Viewer, shelf personalShelf) map[string]any {
 	item := map[string]any{
-		"Id": shelf.wireID, "Name": shelf.name, "Type": "CollectionFolder", "CollectionType": shelf.kind,
+		"Id": shelf.wireID, "Name": shelf.name, "Type": "CollectionFolder", "CollectionType": i.collectionTypeDTO(shelf.kind),
 		"IsFolder": true, "ServerId": i.info.ID, "SortName": shelf.name, "DisplayPreferencesId": shelf.wireID,
 		"CanDelete": false, "CanDownload": false, "ProviderIds": map[string]string{}, "ChildCount": personalChildCount(shelf),
 	}

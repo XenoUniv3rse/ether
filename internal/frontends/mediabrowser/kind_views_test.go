@@ -56,7 +56,7 @@ func TestMediaBrowserUserViewsUseDeclaredCollectionTypes(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &page); err != nil {
 		t.Fatal(err)
 	}
-	want := map[string]string{"3": "music", "4": "audiobooks", "5": "photos", "6": "homevideos"}
+	want := map[string]string{"3": "music", "4": "books", "5": "photos", "6": "homevideos"}
 	if len(page.Items) != 5 {
 		t.Fatalf("views: %d %s", len(page.Items), w.Body.String())
 	}
@@ -105,7 +105,7 @@ func TestMediaBrowserVirtualFoldersUseDeclaredCollectionTypes(t *testing.T) {
 		}
 		got[ids.Decimal(n)] = f["CollectionType"].(string)
 	}
-	want := map[string]string{"1": "movies", "3": "music", "4": "audiobooks", "5": "photos", "6": "homevideos"}
+	want := map[string]string{"1": "movies", "3": "music", "4": "books", "5": "photos", "6": "homevideos"}
 	for id, ct := range want {
 		if got[id] != ct {
 			t.Fatalf("folder %s: %q want %q (%v)", id, got[id], ct, got)
@@ -140,7 +140,7 @@ func TestMediaBrowserRestrictedViewerSeesOnePluginLibrary(t *testing.T) {
 	if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &page) != nil {
 		t.Fatalf("views: %d %s", w.Code, w.Body.String())
 	}
-	if len(page.Items) != 1 || page.Items[0]["Name"] != "Audiobooks" || page.Items[0]["CollectionType"] != "audiobooks" {
+	if len(page.Items) != 1 || page.Items[0]["Name"] != "Audiobooks" || page.Items[0]["CollectionType"] != "books" {
 		t.Fatalf("restricted views: %v", page.Items)
 	}
 	viewGUID, _ := ids.GUID(ids.View, 4)
