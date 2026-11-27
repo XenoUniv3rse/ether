@@ -72,3 +72,25 @@ func TestPlexGuideGridMapping(t *testing.T) {
 		t.Fatalf("bad mapping: %+v", p)
 	}
 }
+
+func TestPlexGuideGridIgnoresExternalGuidArray(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `{"MediaContainer":{"Metadata":[
+			{"type":"movie","title":"A Farewell to Arms","guid":"plex://movie/5fc693eec21207002f7f895d","Guid":[{"id":"imdb://tt0022879"},{"id":"tmdb://22649"}],"Media":[{"beginsAt":1795910400,"endsAt":1795917600}]},
+			{"type":"movie","title":"Reversed Field Order","Guid":[{"id":"imdb://tt0000001"}],"guid":"plex://movie/5fc693eec21207002f7f895e","Media":[{"beginsAt":1795917600,"endsAt":1795924800}]}
+		]}}`)
+	}))
+	defer server.Close()
+	s := &Client{HTTPClient: server.Client(), URL: server.URL}
+	budget := 1
+	ps, err := s.Grid(context.Background(), "key", time.Date(2026, 11, 28, 12, 0, 0, 0, time.UTC), &budget)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ps) != 2 {
+		t.Fatalf("got %d programmes, want 2", len(ps))
+	}
+	if ps[0].Item.GUID != "plex://movie/5fc693eec21207002f7f895d" || ps[1].Item.GUID != "plex://movie/5fc693eec21207002f7f895e" {
+		t.Fatalf("unexpected GUIDs: %q, %q", ps[0].Item.GUID, ps[1].Item.GUID)
+	}
+}
