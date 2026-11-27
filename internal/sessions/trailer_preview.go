@@ -310,6 +310,8 @@ func (b *Broker) previewControl(ctx context.Context, a frontend.SessionAccess, i
 		s.cancel()
 		delete(b.previews, id)
 		b.mu.Unlock()
+	} else if !b.deps.Now().Before(s.grant.ExpiresAt) || s.lifetime.Err() != nil {
+		return true, core.ErrNotFound
 	}
 	return true, nil
 }

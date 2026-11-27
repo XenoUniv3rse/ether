@@ -2,6 +2,7 @@ package sessions
 
 import (
 	"context"
+
 	"github.com/braedonsaunders/ether/internal/core"
 	"github.com/braedonsaunders/ether/internal/frontend"
 )
@@ -10,6 +11,11 @@ import (
 // prepare a missing source, or cancel a client's pending stop.
 func (b *Broker) KeepAlive(ctx context.Context, a frontend.SessionAccess, id string) error {
 	if err := ctx.Err(); err != nil {
+		return err
+	}
+	// Trailer grants are broker sessions without a playback-manager source.
+	// Check their bound viewer and device without extending the grant lifetime.
+	if handled, err := b.previewControl(ctx, a, id, false); handled {
 		return err
 	}
 	activity, ok := b.deps.Playback.(interface{ KeepAlive(string) bool })

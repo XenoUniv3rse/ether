@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -14,7 +16,119 @@ import (
 	"github.com/braedonsaunders/ether/internal/frontend"
 	"github.com/braedonsaunders/ether/internal/frontend/frontendtest"
 	"github.com/braedonsaunders/ether/internal/frontend/kit/ids"
+	"github.com/braedonsaunders/ether/internal/sessions"
 )
+
+type trailerPlaybackBackend struct{ mvBrokerPlaybackFake }
+
+func (*trailerPlaybackBackend) KeepAlive(string) bool { return false }
+
+type trailerEventRecorder struct {
+	*httptest.ResponseRecorder
+	cancel context.CancelFunc
+}
+
+func (w trailerEventRecorder) Flush() {
+	w.ResponseRecorder.Flush()
+	w.cancel()
+}
+
+func TestExtraPlaybackMediaAfterEvents(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	clip := filepath.Join(t.TempDir(), "trailer.mp4")
+	if err := os.WriteFile(clip, []byte("trailer bytes"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	active := func(_ context.Context, id int64) (*core.Viewer, error) { return &core.Viewer{ID: id}, nil }
+	source := func() sessions.PreviewSource {
+		return sessions.PreviewSource{MIMEType: "video/mp4", SourceGeneration: "cached-trailer", Open: func() (*os.File, error) { return os.Open(clip) }}
+	}
+	bus := sessions.NewEventBus(nil, active)
+	defer bus.Close()
+	extra, parent := core.ExtraKey(1), core.MovieKey(1)
+	broker, err := sessions.NewBroker(sessions.BrokerDeps{
+		Playback: &trailerPlaybackBackend{}, Progress: mvBrokerProgressFake{}, ActiveViewer: active, Events: bus,
+		CanPlay: func(*core.Viewer, bool, time.Time) bool { return true }, BitrateLimit: func(*core.Viewer) int { return 0 },
+		OnTimeline: func(*core.Viewer, core.RatingKey, time.Duration, time.Duration, string) {},
+		Lookup: func(_ context.Context, _ *core.Viewer, _ core.Device, key core.RatingKey) (*core.Title, error) {
+			return &core.Title{Key: key}, nil
+		},
+		ExtraLookup: func(key core.RatingKey) (frontend.Extra, bool) {
+			return frontend.Extra{Key: extra, ParentKey: parent, Kind: "trailer"}, key == extra
+		},
+		PreviewSource: func(context.Context, *core.Viewer, *core.Title, string) (sessions.PreviewSource, error) {
+			return source(), nil
+		},
+		ExtraSource: func(context.Context, *core.Viewer, *core.Title, core.RatingKey, string) (sessions.PreviewSource, error) {
+			return source(), nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer broker.Close(ctx)
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	db.SetMaxOpenConns(1)
+	if _, err := db.Exec(`CREATE TABLE vela_replays(key TEXT PRIMARY KEY,digest TEXT NOT NULL,response BLOB,expires INTEGER NOT NULL)`); err != nil {
+		t.Fatal(err)
+	}
+	i, err := (Frontend{DB: db, ReplayKey: make([]byte, 32)}).Mount(ctx, frontend.Host{
+		Identity: identityFake{}, Experience: frontendtest.Experience{},
+		Capabilities: frontendtest.Capabilities{}, Sessions: sessions.BindSurface(broker, "vela"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer i.Close(ctx)
+	handler := i.Handler()
+	api := func(method, path, body string) *http.Request {
+		r := httptest.NewRequest(method, "/vela/v0"+path, strings.NewReader(body))
+		r.Header.Set("Authorization", "Bearer token")
+		r.Header.Set("X-Vela-Device-Id", "device")
+		return r
+	}
+	type trailerPlan struct {
+		SessionID string
+		State     string
+		Paths     []struct{ URL string }
+	}
+	type trailerSnapshot struct{ Plan trailerPlan }
+	start := httptest.NewRecorder()
+	handler.ServeHTTP(start, api(http.MethodPost, "/playback", `{"extraId":"`+ids.RatingKeyGUID(extra)+`","idempotencyKey":"trailer","client":{"device":{"id":"device"},"protocolVersions":[0],"containers":["mp4"],"videoCodecs":["h264"],"audioCodecs":["aac"]}}`))
+	var plan trailerPlan
+	if start.Code != http.StatusOK || json.Unmarshal(start.Body.Bytes(), &plan) != nil || plan.SessionID == "" || plan.State != "ready" || len(plan.Paths) != 1 {
+		t.Fatalf("trailer start status %d, state %q, paths %d", start.Code, plan.State, len(plan.Paths))
+	}
+	sessionPath := "/sessions/" + plan.SessionID
+	snapshot := httptest.NewRecorder()
+	handler.ServeHTTP(snapshot, api(http.MethodGet, sessionPath, ""))
+	var snap trailerSnapshot
+	if snapshot.Code != http.StatusOK || json.Unmarshal(snapshot.Body.Bytes(), &snap) != nil || snap.Plan.State != "ready" ||
+		len(snap.Plan.Paths) != 1 || snap.Plan.Paths[0].URL != plan.Paths[0].URL || !strings.HasPrefix(snap.Plan.Paths[0].URL, "/sessions/media/") {
+		t.Fatalf("session status %d, state %q, playable path not preserved", snapshot.Code, snap.Plan.State)
+	}
+	eventCtx, closeEvents := context.WithCancel(ctx)
+	defer closeEvents()
+	events := trailerEventRecorder{httptest.NewRecorder(), closeEvents}
+	handler.ServeHTTP(events, api(http.MethodGet, sessionPath+"/events", "").WithContext(eventCtx))
+	_, data, found := strings.Cut(events.Body.String(), "data: ")
+	var event struct{ Snapshot trailerSnapshot }
+	if events.Code != http.StatusOK || !found || json.Unmarshal([]byte(strings.TrimSpace(data)), &event) != nil || event.Snapshot.Plan.State != "ready" {
+		t.Fatalf("first event status %d, state %q", events.Code, event.Snapshot.Plan.State)
+	}
+	media := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, snap.Plan.Paths[0].URL, nil)
+	req.Header.Set("Range", "bytes=0-6")
+	handler.ServeHTTP(media, req)
+	if media.Code != http.StatusPartialContent || media.Body.String() != "trailer" {
+		t.Fatalf("trailer ranged media GET status %d or wrong bytes", media.Code)
+	}
+}
 
 func (f *previewBrokerFake) ExtraPlaybackAvailable() bool { return true }
 func (f *previewBrokerFake) ExtraPlayback(_ context.Context, req frontend.TrailerPreviewRequest) (frontend.TrailerPreviewResult, error) {
