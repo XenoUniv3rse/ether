@@ -50,8 +50,13 @@ func (f *Frontend) writeBlob(w http.ResponseWriter, r *http.Request, auth authen
 		return
 	}
 	cr := contextReader{ctx: r.Context(), r: reader}
-	if r.Method != http.MethodHead {
-		if _, err := io.CopyN(io.Discard, cr, start); err != nil {
+	if start > 0 {
+		if seeker, ok := reader.(io.Seeker); ok {
+			_, err = seeker.Seek(start, io.SeekStart)
+		} else {
+			_, err = io.CopyN(io.Discard, cr, start)
+		}
+		if err != nil {
 			http.Error(w, "blob unavailable", http.StatusBadGateway)
 			return
 		}

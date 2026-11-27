@@ -949,7 +949,15 @@ the returned `durable:<sha256>` ref. Identical saved bytes share a ref and quota
 charge within the plugin, so delete a ref only after your last use. To save small
 bytes directly, use `cache.put("", name, data, {durable: true})`. Go sidecars use
 `CacheOptionsHost.CachePutWithOptions` and Python sidecars pass the options dict
-to `ctx.ether.cache.put`. For a large saved blob, read ranges with `cache.read`.
+to `ctx.ether.cache.put`. When the plugin needs the bytes itself, it can read
+ranges with `cache.read`.
+
+To serve a saved file from a hosted adapter, authorize the active viewer against
+your per-viewer metadata. Return `{status: 200, blob: {ref}}` with the plugin's
+own `durable:<sha256>` ref. Omit `libraryKey`, `memberIndex`, and the response body.
+Ether rechecks the plugin's durable storage permission and ownership, then
+streams the file from disk for GET and supports HEAD and single byte ranges.
+An unavailable ref returns 404.
 
 Call `ether.cache.stat(ref)` for `{size, sha256, sha1, md5, crc32}` on an
 owned `blob:` or `durable:` ref. TypeScript and Python sidecars use

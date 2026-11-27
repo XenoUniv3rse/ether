@@ -2056,8 +2056,11 @@ export interface RawRequest {
 
 /** Host-served cached bytes for an authenticated frontend adapter response. */
 export interface FrontendBlob {
-  libraryKey: string;
+  /** Required for library-cache refs. Omit for durable refs. */
+  libraryKey?: string;
+  /** A library-cache blob:<sha256> or a plugin-owned durable:<sha256> ref. */
   ref: string;
+  /** Selects a member of a library-cache archive. */
   memberIndex?: number;
 }
 

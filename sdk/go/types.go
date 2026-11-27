@@ -1291,8 +1291,10 @@ type RawRequest struct {
 }
 
 // FrontendBlob selects host-served bytes for a frontend adapter response.
+// Set LibraryKey for blob:<sha256> refs and optionally select an archive
+// member with MemberIndex. Leave both unset for durable:<sha256> refs.
 type FrontendBlob struct {
-	LibraryKey  string `json:"libraryKey"`
+	LibraryKey  string `json:"libraryKey,omitempty"`
 	Ref         string `json:"ref"`
 	MemberIndex *int   `json:"memberIndex,omitempty"`
 }
