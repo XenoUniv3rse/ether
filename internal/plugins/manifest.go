@@ -395,6 +395,7 @@ func validatePermissions(p Permissions, add func(string, string)) {
 	level("ether.permissions.folders", normLevel(p.Folders), "none", "read")
 	level("ether.permissions.sources", normLevel(p.Sources), "none", "search", "search+check", "acquire", "acquire+check")
 	level("ether.permissions.ai", normLevel(p.AI), "none", "complete", "complete+search")
+	level("ether.permissions.storage", normLevel(p.Storage), "none", "durable")
 	level("ether.permissions.media", normLevel(p.Media), "none", "probe")
 	level("ether.permissions.viewers.identity", normLevel(p.Viewers.Identity), "none", "granted_viewers", "all")
 	level("ether.permissions.viewers.watch_history", normLevel(p.Viewers.WatchHistory), "none", "granted_viewers", "all")

@@ -215,6 +215,7 @@ export interface Permissions {
   ai?: "none" | "complete" | "complete+search";
   /** Lets a plugin probe container metadata via ether.media.probe from jobs, actions, and background sync (refused on viewer/client request paths). */
   media?: "none" | "probe";
+  storage?: "none" | "durable";
 }
 
 export type SettingFieldKind =
@@ -984,6 +985,7 @@ export interface FrontendAdapterMeta {
   libraries?: string[];
   /** Optional adapter subpaths (such as "/search", "/rest/search3", or "/graphql") allowed to call ai.complete when permissions.ai is "complete+search". */
   searchPaths?: string[];
+  uploadPaths?: FrontendUploadPath[];
   /** Path to an SVG or PNG inside the package, shown as the adapter's mark on the Apps page. Without one the plugin's icon stands in. */
   icon?: string;
 }
@@ -2005,6 +2007,31 @@ export type CondMatchFn<V = unknown> = (
 
 // --- Low-level ABI request/response ---
 
+export interface FrontendUploadPath {
+  path: string;
+  maxBytes: number;
+}
+
+export interface FrontendUploadBlob {
+  ref: string;
+  size: number;
+  contentType?: string;
+  field?: string;
+  filename?: string;
+}
+
+export interface FrontendUpload {
+  contentType?: string;
+  blob?: FrontendUploadBlob;
+  files?: FrontendUploadBlob[];
+  fields?: Record<string, string[]>;
+}
+
+export interface CachePutOptions {
+  durable?: boolean;
+  fromBlob?: string;
+}
+
 export interface RawRequest {
   pluginId?: string;
   method?: string;
@@ -2015,6 +2042,7 @@ export interface RawRequest {
   /** Exact request bytes, base64-encoded (frontend adapter routes). A non-JSON body arrives only here. */
   bodyBase64?: string;
   contentType?: string;
+  upload?: FrontendUpload;
   locale?: string;
 }
 

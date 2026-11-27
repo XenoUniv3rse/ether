@@ -77,6 +77,22 @@ type Outcome struct {
 	MemoHits       int // hot path: candidates served from the memo
 }
 
+// FrontendUpload describes a staged raw body or multipart files and text fields.
+type FrontendUpload struct {
+	ContentType string               `json:"contentType,omitempty"`
+	Blob        *FrontendUploadBlob  `json:"blob,omitempty"`
+	Files       []FrontendUploadBlob `json:"files,omitempty"`
+	Fields      map[string][]string  `json:"fields,omitempty"`
+}
+
+type FrontendUploadBlob struct {
+	Ref         string `json:"ref"`
+	Size        int64  `json:"size"`
+	ContentType string `json:"contentType,omitempty"`
+	Field       string `json:"field,omitempty"`
+	Filename    string `json:"filename,omitempty"`
+}
+
 // Request is the HTTP-shaped plugin request (SPEC 5.1.2 / 5.2).
 type Request struct {
 	Op      string              `json:"op,omitempty"`
@@ -89,8 +105,9 @@ type Request struct {
 	// BodyBase64 is the exact request bytes when the caller needs them
 	// byte-for-byte; ContentType is the caller's Content-Type. A non-JSON
 	// body arrives only in BodyBase64.
-	BodyBase64  string `json:"bodyBase64,omitempty"`
-	ContentType string `json:"contentType,omitempty"`
+	BodyBase64  string          `json:"bodyBase64,omitempty"`
+	ContentType string          `json:"contentType,omitempty"`
+	Upload      *FrontendUpload `json:"upload,omitempty"`
 	// Foreground keeps an /ether/job/ call off the background throttle
 	// because a viewer is waiting on it. Host-side only.
 	Foreground bool `json:"-"`

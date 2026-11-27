@@ -305,7 +305,7 @@ globalThis.ether = (() => {
              playlistUpdate: (kind, id, update) => call("kinds.playlistUpdate", [kind, id, update == null ? {} : update]),
              playlistDelete: (kind, id) => call("kinds.playlistDelete", [kind, id]) },
     sources: { resolve: (q) => call("sources.resolve", [q == null ? {} : q]) },
-    cache: { put: (lib, name, data) => call("cache.put", [lib, name == null ? "" : name, data == null ? "" : data]),
+    cache: { put: (lib, name, data, opts) => call("cache.put", [lib, name ?? "", data ?? null, opts ?? null]),
              open: (blobRef) => call("cache.open", [blobRef]), read: (blobRef, range) => call("cache.read", [blobRef, range]),
              rasterize: (lib, name, blobRef, opts) => call("cache.rasterize", opts == null ? [lib, name, blobRef] : [lib, name, blobRef, opts]),
              delete: (blobRef) => call("cache.delete", [blobRef]) },

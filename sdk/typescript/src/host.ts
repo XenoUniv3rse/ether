@@ -600,7 +600,7 @@ export interface EtherHost {
     resolveSourcesWithResult?(q: import("./types.ts").SourceQuery): MaybePromise<import("./types.ts").SourceResolveResult>;
   };
   cache?: {
-    put(libraryKey: string, name: string, data: Uint8Array): MaybePromise<string>;
+    put(libraryKey: string, name: string, data: Uint8Array | null, opts?: import("./types.ts").CachePutOptions): MaybePromise<string>;
     open(blobRef: string): MaybePromise<Uint8Array>;
     read?(blobRef: string, range: DataRange): MaybePromise<Uint8Array>;
     /** Rasterises a cached SVG blob into a new cached bitmap blob with Ether's bounded SVG rasteriser; unsafe documents are refused. */
@@ -785,7 +785,7 @@ export function createHostedClient(): EtherHost {
       extract: (blob, member, opts) => callHost<ArchiveExtractResult>("archive.extract", opts == null ? [blob, member] : [blob, member, opts]),
     },
     cache: {
-      put: (lib, name, data) => callHost<{blob: string}>("cache.put", [lib, name, {bodyBase64: encodeData(data)}]).blob,
+      put: (lib, name, data, opts) => callHost<{blob: string}>("cache.put", [lib, name, data === null ? null : {bodyBase64: encodeData(data)}, opts ?? null]).blob,
       open: (blob) => { const r = callHost<{body?: string; bodyBase64?: string}>("cache.open", [blob]); return r.bodyBase64 ? decodeData({bodyBase64: r.bodyBase64}) : encodeText(r.body ?? ""); },
       read: (blob, range) => {
         checkDataRange(range);
@@ -1441,7 +1441,11 @@ export function createRemoteHostClient(opts: RemoteHostOptions = {}): EtherHost 
     cache: {
       read: async (blob, range) => { checkDataRange(range); return decodeData((await callJson<{bodyBase64: string}>("POST", "/ether/plugin-host/data/cache.read", [blob, range]))!); },
       rasterize: async (lib, name, blob, opts) => { checkRasterizeOptions(opts); return (await callJson<RasterizeResult>("POST", "/ether/plugin-host/data/cache.rasterize", opts == null ? [lib, name, blob] : [lib, name, blob, opts]))!; },
-      async put(libraryKey, name, data) {
+      async put(libraryKey, name, data, opts) {
+        if (opts !== undefined || data === null) {
+          const payload = data === null ? null : {bodyBase64: encodeData(data)};
+          return (await callJson<{blob: string}>("POST", "/ether/plugin-host/data/cache.put", [libraryKey, name, payload, opts ?? null]))!.blob;
+        }
         const resp = await doFetch(`${base}/ether/plugin-host/cache/${encodeURIComponent(libraryKey)}?name=${encodeURIComponent(name)}`, {
           method: "POST",
           headers: credential ? { "X-Ether-Plugin-Credential": credential } : {},

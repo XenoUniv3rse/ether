@@ -221,6 +221,22 @@ metadata/digests, not bytes. Viewer access requires that viewer's grant.
 Private LAN hosts stay blocked for HTTP fetch, fetchToCache, hash, and remote calls unless the owner allows the exact `host` or `host:port` under "On your network" in the plugin's settings (loopback stays blocked unless `localhost` or `127.0.0.1` is explicitly granted). Exact local hosts declared in `permissions.network` (dotless names, `.local`, `.lan`, `.home.arpa`, or private IPs) are shown on the install sheet and pre-granted when installed. For user-hosted services whose hostname comes from plugin settings, declare `"operator"` in `permissions.network` (never `"*"`); Ether prompts the owner to approve each server address per plugin before requests or stream resolvers admit it.
 Host calls enforce permissions again on every request; revocation is immediate.
 
+## Frontend adapter uploads and saved data
+
+Declare `frontendAdapters[].uploadPaths: [{path, maxBytes}]` for authenticated
+routes that accept large raw or multipart bodies. Paths are adapter-relative
+globs and the host caps the whole body at 64 MiB. Read metadata in `req.upload`
+(hosted), the sixth argument to the TypeScript adapter's `handle`,
+`FrontendUploadFromContext(r.Context())` (Go), or `ctx.upload` (Python).
+Multipart metadata contains one `files` entry per file and repeated text values
+in `fields`. Read a staged blob with `cache.read` while the request is active.
+
+For saves, declare `permissions.storage: "durable"` and promote the staged ref
+using `cache.put("", "", null, {durable: true, fromBlob: ref})`. Store the
+returned ref per viewer and authorize reads and deletions against that viewer.
+The per-plugin quota is 1 GiB and 10,000 unique blobs. Durable bytes remain until
+`cache.delete` or uninstall. See [streamed uploads and durable blobs](../docs/plugin-kinds.md#streamed-uploads-and-durable-blobs).
+
 ## Owner language model (`ether.ai.complete`)
 
 A plugin that wants text or structured JSON completions from the owner's

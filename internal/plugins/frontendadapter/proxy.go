@@ -55,6 +55,8 @@ func (i *instance) Close(context.Context) error { return nil }
 // relays each request to the plugin.
 func (f *Frontend) proxyHandler(inst *instance) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		subpath := stripPrefix(r.URL.Path, f.decl.Meta.PathPrefix)
+		limit := f.decl.Meta.UploadLimit(subpath)
 		if f.decl.Meta.Auth == AuthQueryCredentials {
 			// Query credentials carry no ambient authority (no cookies or
 			// browser-held auth), so browser clients on any origin, such as
@@ -62,9 +64,11 @@ func (f *Frontend) proxyHandler(inst *instance) http.Handler {
 			if allowAnyOrigin(w, r) {
 				return
 			}
-			if err := mergeFormIntoQuery(r); err != nil {
-				http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
-				return
+			if limit == 0 {
+				if err := mergeFormIntoQuery(r); err != nil {
+					http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
+					return
+				}
 			}
 		}
 		auth, err := inst.auth.authenticate(r.Context(), r)
@@ -81,30 +85,30 @@ func (f *Frontend) proxyHandler(inst *instance) http.Handler {
 			http.Error(w, "rate limited", http.StatusTooManyRequests)
 			return
 		}
-		body, err := readBody(r)
-		if err != nil {
-			http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
-			return
-		}
 		req := plugins.Request{
 			PluginID:      f.decl.PluginID,
 			Method:        r.Method,
-			Path:          pluginPath(f.decl.Meta.Key, stripPrefix(r.URL.Path, f.decl.Meta.PathPrefix)),
+			Path:          pluginPath(f.decl.Meta.Key, subpath),
 			Query:         firstValues(f.pluginQuery(r)),
 			RepeatedQuery: repeatedValues(f.pluginQuery(r)),
 			Headers:       outboundHeaders(r, auth, requestOrigin(r, inst.host)),
 		}
-		if len(body) > 0 {
-			// The exact bytes always ride along base64-encoded so a plugin
-			// that needs them (multipart boundaries, signatures) has them;
-			// Body carries the parsed value only when they are valid JSON.
-			// A non-JSON body must never become an invalid RawMessage: the
-			// hosted runtime cannot marshal one (#645).
-			req.BodyBase64 = base64.StdEncoding.EncodeToString(body)
-			req.ContentType = r.Header.Get("Content-Type")
-			if json.Valid(body) {
-				req.Body = body
+		if limit > 0 && r.Body != nil && r.Body != http.NoBody {
+			upload, cleanup, err := f.readUpload(w, r, subpath, limit)
+			if err != nil {
+				writeUploadError(w, err)
+				return
 			}
+			defer cleanup()
+			req.Upload = upload
+			req.ContentType = upload.ContentType
+		} else {
+			body, err := readBody(r)
+			if err != nil {
+				http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
+				return
+			}
+			setRequestBody(&req, r.Header.Get("Content-Type"), body)
 		}
 		resp, stream, err := f.call(r.Context(), req)
 		if err != nil {
@@ -271,6 +275,18 @@ func (f *Frontend) call(ctx context.Context, req plugins.Request) (plugins.Respo
 		}
 	}
 	return resp, nil, nil
+}
+
+// setRequestBody preserves exact inline bytes and includes a parsed body only for JSON.
+func setRequestBody(req *plugins.Request, contentType string, body []byte) {
+	if len(body) == 0 {
+		return
+	}
+	req.BodyBase64 = base64.StdEncoding.EncodeToString(body)
+	req.ContentType = contentType
+	if json.Valid(body) {
+		req.Body = body
+	}
 }
 
 // readBody reads an inbound request body, capping it at MaxRequestBodyBytes.

@@ -214,7 +214,7 @@ func (r *hostedRuntime) Call(ctx context.Context, req Request) (Response, error)
 		headers = cloneHeaders(headers)
 		headers["X-Ether-Locale"] = req.Locale
 	}
-	resp, err := r.p.Call(ctx, wasm.Request{Op: req.Op, ID: req.ID, Method: req.Method, Path: req.Path, Query: q, Headers: headers, Body: req.Body, BodyBase64: req.BodyBase64, ContentType: req.ContentType, Foreground: req.Foreground, Deadline: req.Deadline, AISearch: req.AISearch})
+	resp, err := r.p.Call(ctx, wasm.Request{Op: req.Op, ID: req.ID, Method: req.Method, Path: req.Path, Query: q, Headers: headers, Body: req.Body, BodyBase64: req.BodyBase64, ContentType: req.ContentType, Upload: req.Upload, Foreground: req.Foreground, Deadline: req.Deadline, AISearch: req.AISearch})
 	if err != nil {
 		return Response{}, err
 	}
@@ -673,34 +673,7 @@ func (b hostBridge) CallHost(ctx context.Context, name string, raw json.RawMessa
 		}
 		return result(res, nil)
 	case "cache.put":
-		var body []byte
-		if len(args) > 2 {
-			var s string
-			if err := json.Unmarshal(args[2], &s); err == nil {
-				body = []byte(s)
-			} else {
-				var wrapped struct {
-					Body       string `json:"body"`
-					BodyBase64 string `json:"bodyBase64"`
-				}
-				if err := json.Unmarshal(args[2], &wrapped); err != nil {
-					return nil, &wasm.Fault{Code: "bad_arguments", Message: "cache.put takes (libraryKey, name, data)"}
-				}
-				body = []byte(wrapped.Body)
-				if wrapped.BodyBase64 != "" {
-					decoded, err := base64.StdEncoding.DecodeString(wrapped.BodyBase64)
-					if err != nil {
-						return nil, &wasm.Fault{Code: "bad_arguments", Message: "bodyBase64 is not valid base64"}
-					}
-					body = decoded
-				}
-			}
-		}
-		ref, err := b.h.CachePut(ctx, str(0), str(1), bytes.NewReader(body))
-		if err != nil {
-			return nil, mapHostError(err)
-		}
-		return result(map[string]any{"blob": ref}, nil)
+		return result(callCachePut(ctx, b.h, args))
 	case "cache.open":
 		readCap := int64(MinDataReadBytes)
 		if provider, ok := b.h.(interface {
