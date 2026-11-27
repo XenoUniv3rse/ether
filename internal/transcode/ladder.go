@@ -130,7 +130,11 @@ func decisionAudioKbps(info core.MediaInfo, d core.Decision) int {
 	case d.AudioCopy:
 		return copiedAudioKbps(a)
 	default:
-		return audioBitrateKbps(d.AudioCodec, decisionAudioChannels(d, a))
+		kbps := audioBitrateKbps(d.AudioCodec, decisionAudioChannels(d, a))
+		if d.AudioBitrateKbps > 0 {
+			kbps = min(kbps, d.AudioBitrateKbps)
+		}
+		return kbps
 	}
 }
 
@@ -345,24 +349,45 @@ func (s *Session) rungsLocked() []core.HLSRung {
 func (s *Session) AdaptiveRungs() []core.HLSRung {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	rungs, _ := s.adaptiveRungsLocked()
+	return rungs
+}
+
+// AdaptiveHLSUnavailable identifies the gate that prevented a switching set.
+func (s *Session) AdaptiveHLSUnavailable() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, reason := s.adaptiveRungsLocked()
+	return reason
+}
+
+func (s *Session) adaptiveRungsLocked() ([]core.HLSRung, string) {
 	if !s.adaptiveHLS {
-		return nil
+		return nil, "adaptive_not_started"
 	}
 	out := make([]core.HLSRung, 0, len(s.rungs))
 	if s.closed || len(s.rungs) == 0 {
-		return out
+		return out, "adaptive_not_started"
 	}
 	rungs := s.rungsLocked()
 	base := rungs[0]
 	v := s.info.Video()
-	aligned := v != nil && !v.VariableFrameRate && base.FrameRate > 0 && s.plan != nil && s.plan.Total() > 0 && !s.rtxTimeline && !s.copyFallback &&
-		s.sourceLimitKbps == 0 && (s.container == ContainerFMP4 || s.container == ContainerMPEGTS) &&
-		(!s.rungs[0].decision.VideoCopy || s.adaptiveCopyAligned)
+	reason := s.adaptiveUnavailable
+	if reason == "" {
+		switch {
+		case s.container != ContainerFMP4 && s.container != ContainerMPEGTS:
+			reason = "unsupported_container"
+		case v == nil || v.VariableFrameRate || base.FrameRate <= 0 || s.plan == nil || s.plan.Total() <= 0 || s.rtxTimeline || s.copyFallback || s.sourceLimitKbps > 0:
+			reason = "unsupported_timeline"
+		case s.rungs[0].decision.VideoCopy && !s.adaptiveCopyAligned:
+			reason = "copy_alignment_unverified"
+		}
+	}
 	videoOff := s.videoTranscodingOff()
+	capped := false
 	for t, r := range rungs {
 		d := s.rungs[t].decision
-		if r.Bandwidth <= 0 || !s.rungWithinAdaptiveCapLocked(t) ||
-			(videoOff && d.EncodesVideo(s.info)) {
+		if r.Bandwidth <= 0 || (videoOff && d.EncodesVideo(s.info)) {
 			continue
 		}
 		if t > 0 {
@@ -375,6 +400,10 @@ func (s *Session) AdaptiveRungs() []core.HLSRung {
 				continue
 			}
 		}
+		if !s.rungWithinAdaptiveCapLocked(t) {
+			capped = true
+			continue
+		}
 		if d.VideoCopy && v != nil && v.CodecString != "" && !d.StripDolbyVision {
 			_, audio, hasAudio := strings.Cut(r.Codecs, ",")
 			r.Codecs = v.CodecString
@@ -386,11 +415,20 @@ func (s *Session) AdaptiveRungs() []core.HLSRung {
 			r.Codecs = r.OutputCodecs
 		}
 		out = append(out, r)
-		if !aligned {
+		if reason != "" {
 			break
 		}
 	}
-	return out
+	switch {
+	case len(out) > 1:
+		return out, ""
+	case capped && (len(out) == 0 || reason == ""):
+		return out, "bitrate_limit"
+	case reason != "":
+		return out, reason
+	default:
+		return out, "no_compatible_rungs"
+	}
 }
 
 func (s *Session) rungWithinAdaptiveCapLocked(t int) bool {

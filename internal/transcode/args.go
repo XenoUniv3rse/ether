@@ -2250,15 +2250,7 @@ func hdrX265Params(outRange string) string {
 
 // videoBitrate is the video share of a transcode decision's bitrate.
 func videoBitrate(info core.MediaInfo, d core.Decision) int {
-	audio := 0
-	if a := findStream(info, d.AudioStream, "audio"); a != nil {
-		if d.AudioCopy {
-			audio = copiedAudioKbps(a)
-		} else {
-			audio = audioBitrateKbps(d.AudioCodec, decisionAudioChannels(d, a))
-		}
-	}
-	k := d.BitrateKbps - audio
+	k := d.BitrateKbps - decisionAudioKbps(info, d)
 	if d.BitrateKbps <= 0 {
 		k = bitrateCeiling(d.MaxHeight, d.VideoCodec)
 	}

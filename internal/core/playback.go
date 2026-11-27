@@ -49,8 +49,9 @@ type HLSRequest struct {
 	MediaGeneration string `json:",omitempty"`
 
 	// AdaptiveHLS lets the player choose variants on the authored timeline.
-	AdaptiveHLS     bool
-	AdaptiveMaxKbps int // peak delivery cap, including audio and mux overhead
+	AdaptiveHLS         bool
+	AdaptiveUnavailable string // plan-time reason the HLS output must stay single-variant
+	AdaptiveMaxKbps     int    // peak delivery cap, including audio and mux overhead
 
 	// QualityRungs explicitly requests the lazy, policy-filtered file-session ladder.
 	QualityRungs    bool

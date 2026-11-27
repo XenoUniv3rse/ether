@@ -77,7 +77,7 @@ func (b *Broker) qualityPlan(ctx context.Context, s *brokerSession, viewer *core
 	if !allowed || dec.Container == "mkv" {
 		return nil, nil, nil
 	}
-	variants, limits := b.qualityVariants(ps.Info, dec, s, s.caps, b.qualityBitrateCap(ctx, s, viewer, ps.Info.BitrateKbps))
+	variants, limits := b.qualityVariants(ps.Info, dec, s, s.caps, b.qualityBitrateCap(ctx, s, viewer, ps.Info.BitrateKbps), false)
 	return variants, limits, nil
 }
 
@@ -111,15 +111,23 @@ func (b *Broker) qualityBitrateCap(ctx context.Context, s *brokerSession, viewer
 	return kbps
 }
 
-func (b *Broker) qualityVariants(info core.MediaInfo, dec core.Decision, s *brokerSession, caps core.ClientCaps, kbps int) ([]core.QualityVariant, []core.QualityLimitation) {
+func (b *Broker) qualityVariants(info core.MediaInfo, dec core.Decision, s *brokerSession, caps core.ClientCaps, kbps int, adaptive bool) ([]core.QualityVariant, []core.QualityLimitation) {
 	width, height := s.opts.MaxWidth, stricterLimit(s.opts.MaxHeight, caps.MaxHeight)
 	support := transcode.QualitySupport{}
 	if provider, ok := b.deps.Transcoder.(interface {
+		AdaptiveQualitySupport(core.MediaInfo, core.Decision) transcode.QualitySupport
+	}); adaptive && ok {
+		support = provider.AdaptiveQualitySupport(info, dec)
+	} else if provider, ok := b.deps.Transcoder.(interface {
 		QualitySupport() transcode.QualitySupport
 	}); ok {
 		support = provider.QualitySupport()
 	}
-	variants, limits := transcode.VelaQualityVariants(info, dec, caps, width, height, kbps, support)
+	plan := transcode.VelaQualityVariants
+	if adaptive {
+		plan = transcode.AdaptiveQualityVariants
+	}
+	variants, limits := plan(info, dec, caps, width, height, kbps, support)
 	out := variants[:0]
 	for _, variant := range variants {
 		if variant.Rung.Height <= 0 {

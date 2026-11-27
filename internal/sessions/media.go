@@ -436,18 +436,27 @@ func (b *Broker) StartStream(ctx context.Context, a frontend.SessionAccess, id s
 		}
 		request.AdaptiveMaxKbps = b.qualityBitrateCap(ctx, s, viewer, demand)
 		request.LazyStart, request.Continuous, request.QualityRungs = true, true, true
-		if (s.allowTranscoding == nil || *s.allowTranscoding) && !b.videoOff(s.caps) {
-			// Media3 and AVPlayer may partition tracks by decoder or HDR mode.
-			// Prefer the base's codec family for automatic rendition switches.
-			caps := s.caps
-			codec := dec.VideoCodec
-			if dec.VideoCopy {
-				codec = ps.Info.Video().Codec
+		switch {
+		case s.allowTranscoding != nil && !*s.allowTranscoding || b.videoOff(s.caps):
+			request.AdaptiveUnavailable = "transcoding_disabled"
+		default:
+			base, shared := transcode.AdaptiveAudio(ps.Info, dec, s.caps)
+			if !shared || !profileDeliveryAllowed(s.caps.Profiles, base, ps.Info, "hls") {
+				request.AdaptiveUnavailable = "shared_audio_unavailable"
+				break
 			}
-			if slices.Contains(caps.VideoCodecs, codec) {
-				caps.VideoCodecs = []string{codec}
+			variants, limits := b.qualityVariants(ps.Info, base, s, s.caps, request.AdaptiveMaxKbps, true)
+			if len(variants) == 0 {
+				request.AdaptiveUnavailable = "no_compatible_rungs"
+				for _, limit := range limits {
+					if limit.Reason == "encoder_hevc_unavailable" || limit.Reason == "dynamic_range_unavailable" {
+						request.AdaptiveUnavailable = limit.Reason
+						break
+					}
+				}
+				break
 			}
-			variants, _ := b.qualityVariants(ps.Info, dec, s, caps, request.AdaptiveMaxKbps)
+			request.Decision = base
 			for _, variant := range variants {
 				if n := slices.Index(request.QualityRungIDs, variant.Rung.ID); n >= 0 {
 					request.QualityVariants[n] = variant
@@ -537,6 +546,11 @@ func (b *Broker) StartStream(ctx context.Context, a frontend.SessionAccess, id s
 		}
 	}
 	if request.AdaptiveHLS {
+		if diagnostics, ok := hs.(interface{ AdaptiveHLSUnavailable() string }); ok && b.deps.Logger != nil {
+			if reason := diagnostics.AdaptiveHLSUnavailable(); reason != "" {
+				b.deps.Logger.Debug("adaptive HLS unavailable", "session", id, "reason", reason)
+			}
+		}
 		if local, ok := hs.(core.AdaptiveHLSSession); ok {
 			if rungs := local.AdaptiveRungs(); rungs != nil && len(rungs) == 0 {
 				b.transcodeStop(id)

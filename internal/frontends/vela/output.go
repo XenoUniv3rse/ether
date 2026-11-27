@@ -3,6 +3,7 @@ package vela
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"math"
 	"strings"
 	"time"
@@ -22,28 +23,64 @@ func (i *instance) refreshOutput(ctx context.Context, id string, s *playSession)
 	}
 	liveChanged := i.refreshLiveWindow(ctx, id, s)
 	hs, ok := i.host.Sessions.TranscodeFor(ctx, id)
-	if !ok || hs == nil {
-		return liveChanged
-	}
 	paths, _ := s.plan["paths"].([]object)
 	before, _ := json.Marshal(object{"paths": paths, "preparation": s.plan["preparation"]})
 	for _, path := range paths {
 		url, _ := path["url"].(string)
-		if path["transport"] != "hls" || url == "" {
+		master := path["transport"] == "hls" && strings.HasSuffix(url, "/master.m3u8")
+		if s.client.Features.AdaptiveHLS && path["id"] == s.plan["selectedPathId"] && (!master || !ok || hs == nil) && url != "" && path["adaptiveUnavailable"] == nil {
+			reason := "hls_unavailable"
+			switch {
+			case path["original"] == true:
+				reason = "original_selected"
+			case s.plan["media"] == "audio":
+				reason = "audio_only"
+			case master:
+				reason = "adaptive_not_started"
+			case path["transport"] == "hls":
+				reason = "fixed_quality_selected"
+			}
+			delete(path, "adaptive")
+			setAdaptiveUnavailable(path, reason, s.accessDevice.Language)
+			slog.Debug("adaptive HLS unavailable", "session", id, "reason", reason)
+		}
+		if !ok || hs == nil || path["transport"] != "hls" || url == "" {
 			continue
 		}
 		if clock, ok := hs.(interface{ TimelineOrigin() time.Duration }); ok {
 			path["timelineOriginSeconds"] = clock.TimelineOrigin().Seconds()
 		}
+		wasAdaptive := path["adaptive"] == true
 		delete(path, "adaptive")
 		var adaptiveRungs []frontend.HLSRung
-		if adaptive, ok := hs.(frontend.AdaptiveHLSSession); ok && s.client.Features.AdaptiveHLS && strings.HasSuffix(url, "/master.m3u8") {
-			adaptiveRungs = adaptive.AdaptiveRungs()
-			if len(adaptiveRungs) > 0 && adaptiveRungs[0].ID != "base" {
+		if s.client.Features.AdaptiveHLS && master {
+			if adaptive, ok := hs.(frontend.AdaptiveHLSSession); ok {
+				adaptiveRungs = adaptive.AdaptiveRungs()
+			}
+			if d, ok := hs.(interface{ Decision() frontend.Decision }); ok && d.Decision().Kind == frontend.DecisionTranscode ||
+				len(adaptiveRungs) > 0 && adaptiveRungs[0].ID != "base" {
 				path["kind"] = "transcode"
 			}
 			if len(adaptiveRungs) > 1 {
 				path["adaptive"] = true
+				delete(path, "adaptiveUnavailable")
+				delete(path, "adaptiveUnavailableMessage")
+			} else {
+				reason := "adaptive_not_started"
+				if diagnostics, ok := hs.(interface{ AdaptiveHLSUnavailable() string }); ok {
+					if code := diagnostics.AdaptiveHLSUnavailable(); code != "" {
+						reason = code
+					}
+				}
+				if s.channelID != "" {
+					reason = "live_timeline"
+				} else if s.plan["media"] == "audio" {
+					reason = "audio_only"
+				}
+				if (wasAdaptive || adaptiveRungs == nil) && path["adaptiveUnavailable"] != reason {
+					slog.Debug("adaptive HLS unavailable", "session", id, "reason", reason)
+				}
+				setAdaptiveUnavailable(path, reason, s.accessDevice.Language)
 			}
 		}
 		if ladder, ok := hs.(interface{ Rungs() []frontend.HLSRung }); ok {

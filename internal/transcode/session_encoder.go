@@ -603,6 +603,11 @@ func (s *Session) startRunLocked(seg int, bigProbe bool) error {
 	if err := graphFailure(spec); err != nil {
 		return s.reportGraphLocked(err)
 	}
+	if spec.AdaptiveHLS && spec.Decision.EncodesVideo(s.info) && spec.Decision.VideoCodec == "hevc" {
+		if enc, _ := spec.videoEncoder(); enc == "libx264" {
+			return errors.New("transcode: adaptive HEVC rendition requires a compatible HEVC encoder")
+		}
+	}
 	if spec.Decision.EncodesVideo(s.info) && !s.hevcFallbackWarned {
 		// Caller holds s.mu (startRunLocked), guarding hevcFallbackWarned.
 		s.hevcFallbackWarned = warnVideoEncoderFallback(s.log, spec.Decision.VideoCodec, spec.Accel, spec.Features)

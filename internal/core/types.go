@@ -539,6 +539,8 @@ type ClientCaps struct {
 	PreserveEmptyVideoCodecs bool `json:"preserveEmptyVideoCodecs,omitempty"`
 	// DeferSourceCodecValidation lets delivery selection handle a source codec mismatch.
 	DeferSourceCodecValidation bool `json:"deferSourceCodecValidation,omitempty"`
+	// PreferAdaptiveHLS selects HLS instead of the original-file runtime for Auto.
+	PreferAdaptiveHLS bool `json:"preferAdaptiveHLS,omitempty"`
 	// AwaitAdmissionIndex briefly joins the generation-owned index before delivery selection.
 	AwaitAdmissionIndex bool `json:"awaitAdmissionIndex,omitempty"`
 

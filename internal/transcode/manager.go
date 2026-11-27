@@ -1399,6 +1399,7 @@ func (m *Manager) startHLS(ctx context.Context, req core.HLSRequest, life *encod
 		openArchiveRange:        req.OpenArchiveRange,
 		serialRungs:             req.QualityRungs || req.AdaptiveHLS,
 		adaptiveHLS:             req.AdaptiveHLS,
+		adaptiveUnavailable:     req.AdaptiveUnavailable,
 		adaptiveCopyAligned:     adaptiveCopyAligned,
 		adaptiveCopyDecodeLead:  copyStart.decodeLead,
 		adaptiveMaxKbps:         req.AdaptiveMaxKbps,

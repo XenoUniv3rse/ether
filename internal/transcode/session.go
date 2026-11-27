@@ -33,6 +33,7 @@ type Session struct {
 	// Explicit quality sessions retire the old run before starting a rung.
 	serialRungs             bool
 	adaptiveHLS             bool
+	adaptiveUnavailable     string
 	adaptiveCopyAligned     bool
 	adaptiveCopyDecodeLead  time.Duration
 	adaptiveMaxKbps         int

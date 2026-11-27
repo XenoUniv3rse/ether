@@ -4,6 +4,7 @@ import (
 	"math"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -14,29 +15,52 @@ import (
 )
 
 func TestAdaptiveHLSCopySwitchClock(t *testing.T) {
-	t.Run("h264", func(t *testing.T) {
-		testAdaptiveHLSCopySwitchClock(t, "h264", "-c:v", "libx264", "-preset", "veryfast", "-sc_threshold", "0")
-	})
-	t.Run("hevc", func(t *testing.T) {
-		testAdaptiveHLSCopySwitchClock(t, "hevc", "-c:v", "libx265", "-preset", "ultrafast", "-x265-params", "pools=2:frame-threads=1:log-level=error:scenecut=0:open-gop=0")
-	})
+	avc := []string{"-c:v", "libx264", "-preset", "veryfast", "-sc_threshold", "0"}
+	for _, fixture := range []struct {
+		name, codec, audio, videoRange string
+		channels                       string
+		videoArgs                      []string
+	}{
+		{"h264-aac-webdl", "h264", "aac", "sdr", "2", avc},
+		{"h264-dts-remux", "h264", "dca", "sdr", "6", avc},
+		{"hevc-hdr10-truehd-remux", "hevc", "truehd", "hdr10", "6", []string{
+			"-c:v", "libx265", "-preset", "ultrafast",
+			"-x265-params", "pools=2:frame-threads=1:log-level=error:scenecut=0:open-gop=0:hdr10=1",
+		}},
+	} {
+		t.Run(fixture.name, func(t *testing.T) {
+			testAdaptiveHLSCopySwitchClock(t, fixture.codec, fixture.audio, fixture.videoRange, fixture.channels, fixture.videoArgs...)
+		})
+	}
 }
 
-func testAdaptiveHLSCopySwitchClock(t *testing.T, codec string, encoderArgs ...string) {
+func testAdaptiveHLSCopySwitchClock(t *testing.T, codec, audio, videoRange, channels string, encoderArgs ...string) {
 	t.Helper()
 	e := newRealEnv(t, WithoutHWDetection())
-	args := append([]string{"-vf", "scale=854:480", "-threads", "2", "-g", "48", "-c:a", "aac", "-ac", "2"}, encoderArgs...)
+	filter := "scale=854:480"
+	if videoRange == "hdr10" {
+		filter += ",format=yuv420p10le,setparams=color_primaries=bt2020:color_trc=smpte2084:colorspace=bt2020nc"
+	}
+	args := append([]string{"-vf", filter, "-threads", "2", "-g", "48", "-c:a", audio, "-ac", channels, "-strict", "experimental"}, encoderArgs...)
 	e.gen(t, "abr.mkv", 12, args...)
 	info, err := e.m.Probe(t.Context(), e.url("abr.mkv"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	info.Keyframes = e.keyframeIndex(t, "abr.mkv")
-	for _, container := range []string{ContainerFMP4, ContainerMPEGTS} {
+	containers := []string{ContainerFMP4}
+	if codec == "h264" && audio == "aac" {
+		containers = append(containers, ContainerMPEGTS)
+	}
+	for _, container := range containers {
 		t.Run(container, func(t *testing.T) {
-			d := core.Decision{Kind: core.DecisionRemux, VideoCopy: true, VideoCodec: codec, AudioCodec: "aac", AudioStream: 1, SubtitleStream: -1, Container: container}
-			caps := core.ClientCaps{VideoCodecs: []string{codec}}
-			variants, _ := VelaQualityVariants(*info, d, caps, 0, 0, 0, QualitySupport{HEVC: true})
+			d := core.Decision{Kind: core.DecisionRemux, VideoCopy: true, VideoCodec: codec, AudioCopy: true, AudioCodec: info.Streams[1].Codec, AudioStream: 1, SubtitleStream: -1, Container: container}
+			caps := core.ClientCaps{VideoCodecs: []string{codec}, AudioCodecs: []string{"aac", d.AudioCodec}, HDRFormats: []string{videoRange}}
+			d, shared := AdaptiveAudio(*info, d, caps)
+			if !shared || d.AudioCopy || d.AudioCodec != "aac" || !d.VideoCopy {
+				t.Fatalf("unexpected shared audio decision: %+v", d)
+			}
+			variants, limits := AdaptiveQualityVariants(*info, d, caps, 0, 0, 0, e.m.AdaptiveQualitySupport(*info, d))
 			var lower core.QualityVariant
 			for _, q := range variants {
 				if q.Rung.Height == 360 {
@@ -46,6 +70,9 @@ func testAdaptiveHLSCopySwitchClock(t *testing.T, codec string, encoderArgs ...s
 			}
 			if codec == "h264" {
 				lower.Decision.H264Level = 31
+			}
+			if lower.Rung.ID == "" {
+				t.Fatalf("no lower rendition: %+v", limits)
 			}
 			// Give the source enough headroom to include the 360p rendition.
 			info.BitrateKbps = max(info.BitrateKbps, 2500)
@@ -61,7 +88,12 @@ func testAdaptiveHLSCopySwitchClock(t *testing.T, codec string, encoderArgs ...s
 			s := hs.(*Session)
 			rungs := s.AdaptiveRungs()
 			if len(rungs) != 2 || rungs[0].ID != "base" || rungs[1].ID != lower.Rung.ID {
-				t.Fatalf("unexpected adaptive ladder: %+v", rungs)
+				t.Fatalf("unexpected adaptive ladder (%s): %+v", s.AdaptiveHLSUnavailable(), rungs)
+			}
+			for _, r := range rungs {
+				if r.Codec != codec || r.DynamicRange != videoRange || !strings.HasSuffix(r.Codecs, ",mp4a.40.2") {
+					t.Fatalf("unexpected variant declaration: %+v", r)
+				}
 			}
 			s.adaptiveMaxKbps = lower.Rung.Bandwidth / 1000
 			if got := s.AdaptiveRungs(); len(got) != 1 || got[0].ID != lower.Rung.ID {
@@ -100,6 +132,12 @@ func testAdaptiveHLSCopySwitchClock(t *testing.T, codec string, encoderArgs ...s
 				start, end, key := e.videoSpanKey(t, container, init, body, name)
 				if !key {
 					t.Fatalf("%s starts without random access", name)
+				}
+				if videoRange == "hdr10" && name == "lower" {
+					streams := e.probeFile(t, filepath.Join(e.dir, name+"."+segmentExt(container)))
+					if len(streams) != 2 || streams[0].ColorTransfer != "smpte2084" || streams[0].PixelFormat != "yuv420p10le" || streams[1].CodecName != "aac" {
+						t.Fatalf("expected 10-bit PQ and AAC: %+v", streams)
+					}
 				}
 				audioStart, audioEnd := e.audioPacketSpan(t, append(append([]byte(nil), init...), body...), "audio-"+name+"."+segmentExt(container))
 				t.Logf("%s video PTS %.6f..%.6f, audio PTS %.6f..%.6f", name, start, end, audioStart, audioEnd)

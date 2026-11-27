@@ -68,7 +68,8 @@ func (i *instance) clientCapabilities(r *http.Request, v *frontend.Viewer, c cli
 		}
 	}
 	result, err := i.host.Capabilities.Build(i.identityContext(r), frontend.CapabilityRequest{Viewer: v, Device: caps.DeviceInfo{Protocol: "vela", Product: "Vela", Platform: c.Device.Platform, Version: c.Device.AppVersion, ClientID: c.Device.ID, DeviceName: c.Device.Name, HDR10: hdr, DolbyVision: dv, VideoCodecs: c.VideoCodecs, AudioCodecs: c.AudioCodecs, Containers: c.Containers, SubtitleCodecs: c.SubtitleFormats, MaxHeight: maxHeight, MaxBitrateKbps: clientBitrateKbps(c.MaxBitrate)}, Profile: profile, UserAgent: r.UserAgent()})
-	result.Client.AwaitAdmissionIndex = result.Client.AwaitAdmissionIndex || (c.Features.AdaptiveHLS && (c.HLS || c.MSE))
+	result.Client.PreferAdaptiveHLS = c.Features.AdaptiveHLS && (c.HLS || c.MSE)
+	result.Client.AwaitAdmissionIndex = result.Client.AwaitAdmissionIndex || result.Client.PreferAdaptiveHLS
 	velaDolbyVisionProfiles(&result.Client, c)
 	result.Quality.AllowDolbyVision = result.Quality.AllowDolbyVision && result.Client.DolbyVision
 	// Preserve exact declarations, after owner rules have denied any ranges.

@@ -167,6 +167,8 @@ func (s *playSession) invalidatePrepared(selected object) {
 		delete(path, "url")
 		delete(path, "initialRenditionId")
 		delete(path, "adaptive")
+		delete(path, "adaptiveUnavailable")
+		delete(path, "adaptiveUnavailableMessage")
 		path["readiness"] = "on-demand"
 		path["qualities"] = []object{}
 	}

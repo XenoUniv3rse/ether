@@ -92,6 +92,7 @@ type probedStream struct {
 	StartTime      string `json:"start_time"`
 	ColorPrimaries string `json:"color_primaries"`
 	ColorTransfer  string `json:"color_transfer"`
+	PixelFormat    string `json:"pix_fmt"`
 	ColorSpace     string `json:"color_space"`
 }
 
