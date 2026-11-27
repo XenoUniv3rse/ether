@@ -3402,6 +3402,9 @@ func (s *Server) handlePart(w http.ResponseWriter, r *http.Request) {
 	downloadServed = true
 	cw := s.newCountWriter(w, r)
 	q := parts.Request(r)
+	if download {
+		q = q.WithContext(frontend.WithDownloadRange(q.Context()))
+	}
 	var recoverOriginal func()
 	if reader, ok := s.broker().(frontend.OriginalRangeReader); ok && !download {
 		if rt := s.brokerRuntime(); rt != nil {

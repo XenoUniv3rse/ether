@@ -334,6 +334,11 @@ func (v *versionHandles) Resolve(ctx context.Context, scope frontend.VersionScop
 	return frontend.VersionTarget{Item: item, Release: release}, err
 }
 
+func (v *versionHandles) LookupStoredVersion(ctx context.Context, scope frontend.VersionScope, handle string) (frontend.VersionTarget, error) {
+	item, release, err := v.lookupRow(frontend.WithQuietIdentity(ctx), scope, handle)
+	return frontend.VersionTarget{Item: item, Release: release}, err
+}
+
 // ResolveOfflineVersion resolves an issued or listed ID against this title's
 // offers without consulting a live session's version substitution.
 func (v *versionHandles) ResolveOfflineVersion(ctx context.Context, scope frontend.VersionScope, item core.RatingKey, handle string) (frontend.VersionTarget, error) {

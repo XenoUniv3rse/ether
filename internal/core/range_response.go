@@ -30,3 +30,15 @@ func RangeResponseFrom(ctx context.Context) (RangeResponse, bool) {
 	p, ok := ctx.Value(rangeResponseKey{}).(RangeResponse)
 	return p, ok
 }
+
+type downloadRangeKey struct{}
+
+// WithDownloadRange binds a transfer to the source's actual byte coordinates.
+func WithDownloadRange(ctx context.Context) context.Context {
+	return context.WithValue(ctx, downloadRangeKey{}, true)
+}
+
+func DownloadRange(ctx context.Context) bool {
+	enabled, _ := ctx.Value(downloadRangeKey{}).(bool)
+	return enabled
+}

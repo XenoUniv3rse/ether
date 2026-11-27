@@ -2,18 +2,20 @@ package clusterplayback
 
 import (
 	"context"
-	"github.com/braedonsaunders/ether/internal/config"
-	"github.com/braedonsaunders/ether/internal/core"
-	"github.com/braedonsaunders/ether/internal/nodewire"
-	"github.com/braedonsaunders/ether/internal/nodewire/outbound"
 	"io"
 	"net/http"
 	"sync"
 	"time"
+
+	"github.com/braedonsaunders/ether/internal/config"
+	"github.com/braedonsaunders/ether/internal/core"
+	"github.com/braedonsaunders/ether/internal/nodewire"
+	"github.com/braedonsaunders/ether/internal/nodewire/outbound"
 )
 
 const PreparedBytesPath = "/cluster/playback/prepared-bytes"
 const preparedOperationHeader = "X-Ether-Prepared-Operation"
+const preparedDownloadHeader = "X-Ether-Prepared-Download"
 
 type preparationUse struct {
 	Prepared        PreparedSource
@@ -85,6 +87,9 @@ func (r *Runtime) preparedBytes(w http.ResponseWriter, q *http.Request) {
 		http.Error(w, "denied", 403)
 		return
 	}
+	if q.Header.Get(preparedDownloadHeader) == "1" {
+		q = q.WithContext(core.WithDownloadRange(q.Context()))
+	}
 	r.o.Playback.ServeRange(w, q, result.PlayID)
 }
 func (p *RemotePlayback) serveRange(w http.ResponseWriter, q *http.Request, id string) {
@@ -114,7 +119,11 @@ func (p *RemotePlayback) serveRange(w http.ResponseWriter, q *http.Request, id s
 		return
 	}
 	request.Header.Set(preparedOperationHeader, operation)
-	for _, h := range []string{"Range", "If-Range", "If-None-Match", "If-Modified-Since"} {
+	download := core.DownloadRange(q.Context())
+	if download {
+		request.Header.Set(preparedDownloadHeader, "1")
+	}
+	for _, h := range []string{"Range", "If-Range", "If-Match", "If-None-Match", "If-Modified-Since", "If-Unmodified-Since"} {
 		request.Header[h] = append([]string(nil), q.Header.Values(h)...)
 	}
 	client := &http.Client{Transport: transport, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
@@ -135,6 +144,8 @@ func (p *RemotePlayback) serveRange(w http.ResponseWriter, q *http.Request, id s
 	}
 	w.WriteHeader(response.StatusCode)
 	if q.Method != "HEAD" {
-		_, _ = io.Copy(w, response.Body)
+		if _, err := io.Copy(w, response.Body); err != nil && download && q.Context().Err() == nil {
+			panic(http.ErrAbortHandler)
+		}
 	}
 }

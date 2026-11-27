@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -190,7 +191,7 @@ func (s *Service) RejectRelease(ctx context.Context, key core.RatingKey, r core.
 		s.rejections[key] = append(s.rejections[key], r)
 	}
 	s.mu.Unlock()
-	s.notify("rejections")
+	s.notify("rejections:" + strconv.FormatInt(int64(key), 10))
 	return s.forgetAvailability(ctx, key)
 }
 func nearRelease(a, b core.Release) bool {
@@ -244,10 +245,9 @@ func (s *Service) loadRejections(ctx context.Context) {
 }
 
 // TitleReleaseRejected also protects warmed, resumed and alternate sources.
-func (s *Service) TitleReleaseRejected(ctx context.Context, key core.RatingKey, r core.Release) bool {
-	if s.db != nil {
-		s.loadRejectionsFor(ctx, key)
-	}
+func (s *Service) TitleReleaseRejected(_ context.Context, key core.RatingKey, r core.Release) bool {
+	// Rejections are loaded on startup and refreshed by cluster invalidation.
+	// Every candidate for this title consults the same in-memory records.
 	return s.rejectedFor(key, r)
 }
 func (s *Service) forgetRejection(ctx context.Context, id string) error {

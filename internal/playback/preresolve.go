@@ -1716,8 +1716,13 @@ func titleIncludes(parent, key core.RatingKey) bool {
 	return false
 }
 
+func (m *Manager) releaseBlockedLocally(id string) bool {
+	local, ok := m.deps.Resolver.(interface{ LocalReleaseBlocked(string) bool })
+	return ok && local.LocalReleaseBlocked(id)
+}
+
 func (m *Manager) releaseBlocked(ctx context.Context, id string) bool {
-	if local, ok := m.deps.Resolver.(interface{ LocalReleaseBlocked(string) bool }); ok && local.LocalReleaseBlocked(id) {
+	if m.releaseBlockedLocally(id) {
 		return true
 	}
 	if blocked, ok := preloadedReleaseBlocked(ctx, id); ok {

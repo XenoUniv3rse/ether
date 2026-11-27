@@ -106,7 +106,11 @@ func addMatrixMediaBrowserCoverage(c *Client) {
 			c.Steps[i].Discover = discoverMBItem("episodeId", "Episode")
 		}
 	}
-	c.Steps = append(c.Steps, Step{Name: "Roku episode anchor", Class: classDetail, Path: "/Shows//Episodes?StartItemId={episodeId}&Limit=2"})
+	c.Steps = append(c.Steps,
+		Step{Name: "Roku episode anchor", Class: classDetail, Path: "/Shows//Episodes?StartItemId={episodeId}&Limit=2"},
+		Step{Name: "download movies page", Class: classBrowse, Path: "/Items?IncludeItemTypes=Movie&Recursive=true&Limit=1", Discover: discoverMBItem("downloadMovieId", "Movie"), OwnerOnly: true},
+		Step{Name: "movie download HEAD", Class: classDetail, Method: http.MethodHead, Path: "/Items/{downloadMovieId}/Download", QueriesBound: detailQueriesBound, ExpectedStatus: http.StatusOK, OwnerOnly: true},
+	)
 
 	for _, path := range []string{
 		"/DisplayPreferences/usersettings?client=etherperf", "/Items/{movieId}/Ancestors",

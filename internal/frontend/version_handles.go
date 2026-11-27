@@ -33,6 +33,12 @@ type VersionHandles interface {
 	MatchSession(context.Context, VersionScope, string, string) error
 }
 
+// StoredVersionLookup maps an issued handle without listing offers or preparing
+// a source. The caller must authorize the item before returning metadata.
+type StoredVersionLookup interface {
+	LookupStoredVersion(context.Context, VersionScope, string) (VersionTarget, error)
+}
+
 // StaleVersionResolver identifies a previously issued version handle on this
 // surface whose release is no longer offered, while still verifying the viewer
 // can access its parent item.

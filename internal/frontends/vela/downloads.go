@@ -3,7 +3,6 @@ package vela
 import (
 	"context"
 	"errors"
-	"io"
 	"log/slog"
 	"mime"
 	"net/http"
@@ -22,8 +21,9 @@ import (
 )
 
 const (
-	downloadTicketTTL  = time.Hour
-	maxDownloadSources = 64
+	downloadTicketTTL    = time.Hour
+	downloadGrantTimeout = 12 * time.Second
+	maxDownloadSources   = 64
 )
 
 type downloadCapabilityKey struct{}
@@ -98,6 +98,9 @@ func (i *instance) downloadsFeature(ctx context.Context, v *frontend.Viewer) dow
 }
 
 func (i *instance) grantDownload(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), downloadGrantTimeout)
+	defer cancel()
+	r = r.WithContext(ctx)
 	k, keyErr := key(r)
 	logRefusal := func(reason string) {
 		slog.DebugContext(r.Context(), "Vela download grant refused", "title_key", k, "reason", reason)
@@ -137,11 +140,11 @@ func (i *instance) grantDownload(w http.ResponseWriter, r *http.Request) {
 		refuse(http.StatusNotFound, "not-found", "not_found", 0)
 		return
 	}
-	if k.Kind() == frontend.KindShow || k.Kind() == frontend.KindSeason {
+	if k.Kind() != frontend.KindMovie && k.Kind() != frontend.KindEpisode && !k.IsPluginKey() {
 		conflict("not_downloadable_kind")
 		return
 	}
-	ctx := frontend.WithLiveApp(r.Context(), "vela")
+	ctx = frontend.WithLiveApp(ctx, "vela")
 	dev := requestDevice(r)
 	declared := req.Client
 	if !declared.OriginalPlayback.Valid() {
@@ -165,7 +168,17 @@ func (i *instance) grantDownload(w http.ResponseWriter, r *http.Request) {
 		refuse(http.StatusForbidden, "policy", "cannot_play_now", 0)
 		return
 	}
-	detail, err := i.host.Experience.Item(frontend.WithColdDetail(ctx, k), frontend.ItemRequest{Viewer: v, Device: dev, Key: k})
+	item := i.host.Experience.Item
+	if stored, ok := i.host.Experience.(interface {
+		StoredItem(context.Context, frontend.ItemRequest) (frontend.ItemDetail, error)
+	}); ok {
+		item = stored.StoredItem
+	}
+	detail, err := item(ctx, frontend.ItemRequest{Viewer: v, Device: dev, Key: k})
+	if ctx.Err() != nil {
+		failed("title_lookup_failed", ctx.Err())
+		return
+	}
 	if err != nil {
 		switch {
 		case errors.Is(err, frontend.ErrUnreleased):
@@ -373,8 +386,8 @@ func (i *instance) downloadFile(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("ETag", source.ETag)
 	w.Header().Set("Content-Type", source.MIME)
 	w.Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": ticket.filename}))
-	reader := io.NewSectionReader(reading.ContextReaderAt(r.Context(), source.ReaderAt), 0, source.Size)
-	rangefile.Serve(w, r, ticket.filename, "", source.Size, time.Time{}, reader)
+	r = r.WithContext(frontend.WithDownloadRange(r.Context()))
+	rangefile.ServeChecked(w, r, ticket.filename, "", source.Size, time.Time{}, source.ReaderAt, source.ReadFailed)
 }
 
 func (d *downloadTickets) reserve() bool {

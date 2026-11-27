@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"mime"
 	"net/http"
 	"path"
@@ -16,6 +17,7 @@ import (
 	"github.com/braedonsaunders/ether/internal/frontend/kit/caps"
 	"github.com/braedonsaunders/ether/internal/frontend/kit/ids"
 	"github.com/braedonsaunders/ether/internal/frontend/kit/mediasafety"
+	"github.com/braedonsaunders/ether/internal/frontend/kit/rangefile"
 )
 
 func (i *instance) allowDownloads(viewer *frontend.Viewer) bool {
@@ -61,7 +63,14 @@ func (i *instance) serveItemFile(w http.ResponseWriter, r *http.Request, attachm
 	key, err := ids.ParseRatingKeyGUID(wireID)
 	release := ""
 	if err != nil && i.host.VersionHandles != nil {
-		if scope, e := i.versionScope(r, viewer); e == nil {
+		if r.Method == http.MethodHead {
+			if lookup, ok := i.host.VersionHandles.(frontend.StoredVersionLookup); ok {
+				scope := frontend.VersionScope{Viewer: viewer, Device: device(r), Protocol: i.protocol}
+				if target, e := lookup.LookupStoredVersion(ctx, scope, wireID); e == nil && target.Item != 0 {
+					key, release, err = target.Item, target.Release, nil
+				}
+			}
+		} else if scope, e := i.versionScope(r, viewer); e == nil {
 			if target, e := i.host.VersionHandles.Resolve(ctx, scope, wireID); e == nil && target.Item != 0 {
 				key, release, err = target.Item, target.Release, nil
 			}
@@ -101,10 +110,11 @@ func (i *instance) serveItemFile(w http.ResponseWriter, r *http.Request, attachm
 		http.NotFound(w, r)
 		return
 	}
-	i.serveVideoDownload(w, r, ctx, viewer, detail.Title, release, runtime)
+	i.serveVideoDownload(w, r, ctx, viewer, detail, release, runtime)
 }
 
-func (i *instance) serveVideoDownload(w http.ResponseWriter, r *http.Request, ctx context.Context, viewer *frontend.Viewer, title frontend.Title, release string, runtime frontend.SessionRuntime) {
+func (i *instance) serveVideoDownload(w http.ResponseWriter, r *http.Request, ctx context.Context, viewer *frontend.Viewer, detail frontend.ItemDetail, release string, runtime frontend.SessionRuntime) {
+	title := detail.Title
 	dev := device(r)
 	client := frontend.ClientCaps{Protocol: i.protocol, Remote: true}
 	if i.host.Capabilities != nil {
@@ -138,8 +148,13 @@ func (i *instance) serveVideoDownload(w http.ResponseWriter, r *http.Request, ct
 			client.MaxHeight = height
 		}
 	}
+	if r.Method == http.MethodHead {
+		i.headVideoDownload(w, r, viewer, detail, runtime, client, dev.ID, release)
+		return
+	}
+	r = r.WithContext(frontend.WithDownloadRange(r.Context()))
 	unlock := func() {}
-	if gates := runtime.LifecycleGates(); gates != nil && policy != nil && r.Method != http.MethodHead {
+	if gates := runtime.LifecycleGates(); gates != nil && policy != nil {
 		// A parallel retry must not inherit a reservation that is about to be released.
 		releaseGate, err := gates.Acquire(ctx, fmt.Sprintf("download/%d/%s", viewer.ID, title.Key))
 		if err != nil {
@@ -149,7 +164,7 @@ func (i *instance) serveVideoDownload(w http.ResponseWriter, r *http.Request, ct
 		defer unlock()
 	}
 	reserved, served := false, false
-	if policy != nil && r.Method != http.MethodHead {
+	if policy != nil {
 		info := runtime.Playback().Estimate(ctx, &title, client)
 		estimate := downloadSize(info)
 		if client.MaxBitrateKbps > 0 && info.Duration > 0 && (info.BitrateKbps == 0 || client.MaxBitrateKbps < info.BitrateKbps) {
@@ -178,7 +193,7 @@ func (i *instance) serveVideoDownload(w http.ResponseWriter, r *http.Request, ct
 		streamError(i.protocol, w, frontend.ErrNotAvailable, r.Header.Get("Accept-Language"))
 		return
 	}
-	if policy != nil && r.Method != http.MethodHead {
+	if policy != nil {
 		size := mediaSourceSize(source.Info)
 		if source.Source != nil && source.Source.Size() > 0 {
 			size = source.Source.Size()
@@ -196,6 +211,55 @@ func (i *instance) serveVideoDownload(w http.ResponseWriter, r *http.Request, ct
 	served = true
 	unlock()
 	runtime.ServePartSource(w, r, source.ID)
+}
+
+// A size probe can use a matching session or a known file size from item
+// metadata. There is no trustworthy Content-Length for an unresolved title.
+func (i *instance) headVideoDownload(w http.ResponseWriter, r *http.Request, viewer *frontend.Viewer, detail frontend.ItemDetail, runtime frontend.SessionRuntime, client frontend.ClientCaps, playbackClient, release string) {
+	title := detail.Title
+	mediasafety.SetHeaders(w)
+	w.Header().Set("Cache-Control", "no-store")
+	clients := []string{client.ClientID}
+	if playbackClient != "" && release != "" {
+		clients = append(clients, playbackClient)
+	}
+	for _, id := range clients {
+		part := runtime.PartSource(viewer.ID, id, title.Key, release)
+		if !part.Matches {
+			if scoped, ok := runtime.Playback().(frontend.SurfaceScopedPlayback); ok {
+				part.Session, part.Matches = scoped.SessionForSurface(string(i.protocol), viewer.ID, id, title.Key, release, release != "")
+			}
+		}
+		if part.Matches && part.Session != nil && part.Session.Source != nil {
+			if client.MaxHeight > 0 {
+				video := part.Session.Info.Video()
+				if video != nil && video.Height > client.MaxHeight {
+					continue
+				}
+			}
+			w.Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": videoDownloadFilename(title, part.Session)}))
+			runtime.ServePartSource(w, r.WithContext(frontend.WithDownloadRange(r.Context())), part.Session.ID)
+			return
+		}
+	}
+	facts := &frontend.PlaySession{}
+	for _, version := range detail.Versions {
+		if release != "" && version.ID != release {
+			continue
+		}
+		if mediaSourceSize(version.Media) > 0 {
+			facts.Info = version.Media
+			break
+		}
+	}
+	w.Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": videoDownloadFilename(title, facts)}))
+	if size := mediaSourceSize(facts.Info); size > 0 {
+		w.Header().Set("Content-Type", "application/octet-stream")
+		// HEAD only needs the representation's size and never reads it.
+		rangefile.Serve(w, r, "", "", size, time.Time{}, io.NewSectionReader(nil, 0, size))
+		return
+	}
+	w.WriteHeader(http.StatusOK)
 }
 
 func downloadSize(info frontend.MediaInfo) int64 {

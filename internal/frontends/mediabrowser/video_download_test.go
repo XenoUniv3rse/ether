@@ -37,6 +37,10 @@ func (h downloadVersionHandles) Resolve(ctx context.Context, scope frontend.Vers
 	return target, err
 }
 
+func (h downloadVersionHandles) LookupStoredVersion(ctx context.Context, scope frontend.VersionScope, id string) (frontend.VersionTarget, error) {
+	return h.Resolve(ctx, scope, id)
+}
+
 func TestVideoDownloadViewerPermission(t *testing.T) {
 	for _, surface := range []struct {
 		prefix string
@@ -67,12 +71,8 @@ func TestVideoDownloadViewerPermission(t *testing.T) {
 			calls := 0
 			preparing := true
 			knownSize := false
-			var downloadedRelease string
 			playback := videoDownloadPlayback{&mbTestPlayback{prepare: func(_ context.Context, viewer *core.User, key core.RatingKey, caps core.ClientCaps, release string, exact bool) (*core.PlaySession, error) {
 				calls++
-				if exact {
-					downloadedRelease = release
-				}
 				if viewer.ID != 7 || key != movie || caps.ClientID == "" {
 					t.Fatalf("preparing with viewer %d, item %s, device %q", viewer.ID, key, caps.ClientID)
 				}
@@ -98,7 +98,7 @@ func TestVideoDownloadViewerPermission(t *testing.T) {
 						media.FileSize = 14
 					}
 					return frontend.ItemDetail{Title: frontend.Title{Key: req.Key, Type: kind, Title: "Film"},
-						Versions: []frontend.Version{{ID: "private-release", Media: media}}}, nil
+						Versions: []frontend.Version{{ID: "fixture-release", Media: media}}}, nil
 				}},
 				ViewerPolicy:   bookLimitPolicy{policy},
 				Capabilities:   frontendtest.Capabilities{},
@@ -169,11 +169,12 @@ func TestVideoDownloadViewerPermission(t *testing.T) {
 			if size == nil || *size != 14 {
 				t.Fatalf("expected the selected file size, got %v", size)
 			}
+			callsBeforeHead := calls
 			if res := request(http.MethodHead, "/Items/"+source+"/Download", "allowed", ""); res.Code != http.StatusOK || res.Header().Get("Content-Length") != strconv.FormatInt(*size, 10) || res.Body.Len() != 0 {
 				t.Fatalf("HEAD = %d, headers %v, body %q", res.Code, res.Header(), res.Body.String())
 			}
-			if downloadedRelease != "fixture-release" {
-				t.Fatalf("HEAD selected %q", downloadedRelease)
+			if calls != callsBeforeHead {
+				t.Fatal("HEAD prepared a source")
 			}
 			for _, route := range []string{"/Download", "/File"} {
 				res := request(http.MethodGet, item+route, "allowed", "bytes=9-13")

@@ -15,6 +15,7 @@ type OfflineDownloadSource struct {
 	Size                      int64
 	Media                     MediaInfo // Probe facts from the original bytes served by ReaderAt.
 	ReleaseName               string    // Internal subtitle cache lookup, never sent to the client.
+	ReadFailed                func(offset int64, cause error)
 }
 
 // OfflineDownloadSidecars is optionally implemented by Host.Subtitles. It
@@ -41,3 +42,5 @@ type OfflineDownloadQuota interface {
 	AdmitOfflineDownload(context.Context, *Viewer, RatingKey, string, OfflineDownloadBinding, int64) (DownloadLimitDecision, error)
 	RemainingDailyDownloads(context.Context, *Viewer) (limit, remaining int, ok bool)
 }
+
+func WithDownloadRange(ctx context.Context) context.Context { return core.WithDownloadRange(ctx) }

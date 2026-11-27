@@ -208,6 +208,10 @@ func (m *Manager) ServeRange(w http.ResponseWriter, r *http.Request, sessionID s
 		http.Error(w, "unknown playback session", http.StatusNotFound)
 		return
 	}
+	if core.DownloadRange(r.Context()) {
+		m.serveDownloadRange(w, r, s)
+		return
+	}
 	if measurement := core.MediaCapWaitFrom(r.Context()); measurement != nil {
 		if g := s.current(); g != nil {
 			if source, ok := g.src.(core.MediaCapWaitSource); ok && source.MediaCapWaitKnown() {

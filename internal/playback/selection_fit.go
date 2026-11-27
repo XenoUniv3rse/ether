@@ -11,7 +11,7 @@ func (m *Manager) sessionFitsSelection(s *session, caps core.ClientCaps, prefer 
 		return false
 	}
 	g := s.current()
-	if g == nil {
+	if g == nil || m.releaseBlockedLocally(g.releaseID()) {
 		return false
 	}
 	if caps.QualityRuleMaxHeight > 0 && g.res != nil {

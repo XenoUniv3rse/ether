@@ -115,6 +115,11 @@ func (i *instance) routeMiddleware(rt route.Route, next http.Handler) http.Handl
 	return i.requestLog(rt, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet || r.Method == http.MethodHead {
 			ctx := r.Context()
+			if r.Method == http.MethodHead && (rt.Pattern == "/Items/{id}/Download" || rt.Pattern == "/Items/{id}/File") {
+				var cancel context.CancelFunc
+				ctx, cancel = context.WithTimeout(ctx, 3*time.Second)
+				defer cancel()
+			}
 			if !anonymousStreamRoutes[rt] && !strings.HasPrefix(rt.Pattern, "/sessions/") {
 				ctx = frontend.WithQuietIdentity(ctx)
 			}

@@ -140,6 +140,12 @@ func MatrixClients(live bool) []Client {
 				Step{Name: "delete movie playlist", Class: classState, Method: http.MethodDelete, Path: "/playlists/{matrixVelaPlaylist}", Body: `{"idempotencyKey":"matrix-delete-playlist"}`},
 				Step{Name: "movie playlist membership", Class: classDetail, Path: "/titles/{velaMovie}/playlists"},
 				Step{Name: "movie versions", Class: classDetail, Path: "/titles/{velaMovie}/versions"},
+				Step{Name: "download libraries", Class: classHome, OwnerOnly: true, Path: "/libraries", Discover: discoverVelaLibraries},
+				Step{Name: "download movies page", Class: classBrowse, OwnerOnly: true, Path: "/libraries/{movieLibrary}/items?limit=1", Discover: discoverMatrixVelaID("downloadVelaMovie")},
+				// The matrix has no playable upstream sources. A source conflict
+				// exercises a real grant resolve through source exhaustion.
+				Step{Name: "movie download grant", Class: classState, OwnerOnly: true, Method: http.MethodPost, ExpectedStatus: http.StatusConflict, Path: "/titles/{downloadVelaMovie}/download",
+					Body: `{"idempotencyKey":"matrix-download-{downloadVelaMovie}","client":{"originalPlayback":{"version":1,"range":true,"demuxContainers":["mkv","mp4"],"videoDecoders":["h264","hevc","av1"],"audioDecoders":["aac","ac3","eac3","opus","dts"]}}}`},
 				Step{Name: "movie extras", Class: classDetail, Path: "/titles/{velaMovie}/extras"},
 				Step{Name: "music facet", Class: classBrowse, Path: "/libraries/{matrixMusicLibrary}/facets/genre"},
 				Step{Name: "music page", Class: classBrowse, Path: "/libraries/{matrixMusicLibrary}/items?limit=24", Discover: discoverMatrixVelaID("matrixMusicTrack")},

@@ -208,6 +208,10 @@ func (m *Manager) openKindCandidate(ctx context.Context, s *session, exclude []s
 		HealthVerified: true,
 		Release:        rel,
 	}
+	if m.titleReleaseRejected(ctx, s.ident.key, rel) {
+		_ = src.Close()
+		return nil, res, core.ErrReleaseRejected
+	}
 	g, err := m.probeGeneration(ctx, s, res, src, finish, fallback)
 	if err != nil {
 		return nil, res, err

@@ -91,9 +91,10 @@ func matrixRouteExceptions() map[perfharness.MatrixRouteKey]string {
 		add(surface, http.MethodPost, "downloads an upstream subtitle or resolves metadata from an external provider",
 			prefix+"/Items/{id}/RemoteSearch/Subtitles/{subtitleId}", prefix+"/Items/RemoteSearch/Apply/{itemId}",
 			prefix+"/Items/RemoteSearch/Movie", prefix+"/Items/RemoteSearch/Series")
+		add(surface, http.MethodGet, "requires a source file to send a download body", prefix+"/Items/{id}/Download")
 		for _, method := range []string{http.MethodGet, http.MethodHead} {
 			add(surface, method, "requires an open playback session or an actual media file, neither is available in this fixture",
-				prefix+"/Audio/{id}/{name}", prefix+"/Items/{id}/Download", prefix+"/Items/{id}/File", prefix+"/Items/{id}/theme.m4a",
+				prefix+"/Audio/{id}/{name}", prefix+"/Items/{id}/File", prefix+"/Items/{id}/theme.m4a",
 				prefix+"/Videos/{id}/CatchUp/{session}/{file}", prefix+"/Videos/{id}/Trickplay/{width}/{name}",
 				prefix+"/Videos/{id}/{name}", prefix+"/Videos/{id}/{source}/Subtitles/{index}/{name}",
 				prefix+"/Videos/{id}/{source}/Subtitles/{index}/{start}/{name}",

@@ -2,6 +2,7 @@ package playback
 
 import (
 	"context"
+	"net/http"
 	"slices"
 	"time"
 
@@ -99,8 +100,9 @@ func (m *Manager) OpenOriginalDownload(ctx context.Context, viewer *core.Viewer,
 	media := &frontend.OfflineDownloadSource{
 		ReaderAt: g.src, Closer: offlineGeneration{m, g}, ReleaseName: releaseName,
 		Release: g.releaseID(), Name: name, Size: size, Media: info,
-		MIME: contentTypeForInfo(info, name, sourceMIME(g.src)),
-		ETag: rangefile.StrongETag(g.releaseID()+"\x00"+revision, size, time.Time{}),
+		MIME:       contentTypeForInfo(info, name, sourceMIME(g.src)),
+		ETag:       rangefile.StrongETag(g.releaseID()+"\x00"+revision, size, time.Time{}),
+		ReadFailed: func(offset int64, cause error) { m.downloadReadFailure(g, offset, cause) },
 	}
 	return media, nil
 }
@@ -113,4 +115,39 @@ type offlineGeneration struct {
 func (o offlineGeneration) Close() error {
 	o.manager.dropGeneration(o.generation)
 	return nil
+}
+
+// The Usenet and debrid readers attempt repair or upstream rerouting before
+// returning an error. Preserve ticket coordinates even when recovery fails.
+func (m *Manager) downloadReadFailure(g *generation, offset int64, cause error) {
+	m.log.Warn("download source read failed", "key", g.sess.ident.key, "release", g.releaseID(), "offset", offset, "cause", OwnerError(cause))
+	g.downloadFailure.Do(func() {
+		g.noteReadFailure(cause)
+		if g.releaseID() != "" {
+			m.markBad(g.releaseID(), "download source read failed")
+		}
+	})
+}
+
+func (m *Manager) serveDownloadRange(w http.ResponseWriter, r *http.Request, s *session) {
+	s.mu.Lock()
+	g := s.cur
+	unchanged := g == s.virtualGen
+	etag, modified := s.etag, s.modTime
+	s.mu.Unlock()
+	if !unchanged {
+		w.WriteHeader(http.StatusConflict)
+		return
+	}
+	if g == nil || !g.acquire() {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		return
+	}
+	defer g.release()
+	name, size := g.src.Name(), g.src.Size()
+	w.Header().Set("Content-Type", contentTypeForInfo(g.infoSnapshot(), name, sourceMIME(g.src)))
+	w.Header().Set("ETag", etag)
+	rangefile.ServeChecked(newStallWriter(w, m.opts.WriteStallTimeout), r, name, "", size, modified, g.src, func(offset int64, cause error) {
+		m.downloadReadFailure(g, offset, cause)
+	})
 }

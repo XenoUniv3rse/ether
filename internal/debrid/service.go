@@ -645,6 +645,58 @@ func (s *Service) knownForDetail(ctx context.Context, providerID, hash string) (
 	return cached, ok, checkUncertain, torrentID
 }
 
+// knownAvailability reads the verdicts used during bulk candidate discovery.
+// Torrent IDs are only needed for the acquisition path, which reads the
+// current row when it makes an add or reuse decision.
+func (s *Service) knownAvailability(ctx context.Context, providerID string, hashes []string) map[string]bool {
+	out := make(map[string]bool, len(hashes))
+	now := s.now()
+	var missing []string
+	s.knownMu.Lock()
+	for _, hash := range hashes {
+		hash = strings.ToLower(hash)
+		if k, hit := s.known[knownKey(providerID, hash)]; hit && (now.Before(k.until) || k.refused && k.until.IsZero()) {
+			out[hash] = k.cached
+		} else {
+			missing = append(missing, hash)
+		}
+	}
+	s.knownMu.Unlock()
+	if s.db == nil {
+		return out
+	}
+	slices.Sort(missing)
+	missing = slices.Compact(missing)
+	for chunk := range store.Chunks(missing, 500) {
+		args := make([]any, 1, len(chunk)+1)
+		args[0] = providerID
+		for _, hash := range chunk {
+			args = append(args, hash)
+		}
+		rows, err := s.db.QueryContext(ctx, `SELECT info_hash, cached, checked_at FROM debrid_torrents WHERE provider_id = ? AND info_hash IN (`+store.Placeholders(len(chunk))+`)`, args...)
+		if err != nil {
+			break
+		}
+		for rows.Next() {
+			var hash string
+			var cached int
+			var at int64
+			if rows.Scan(&hash, &cached, &at) != nil {
+				continue
+			}
+			ttl := s.opts.UncachedTTL
+			if cached == 1 {
+				ttl = s.opts.CachedTTL
+			}
+			if now.Sub(time.Unix(at, 0)) < ttl {
+				out[hash] = cached == 1
+			}
+		}
+		rows.Close()
+	}
+	return out
+}
+
 func zipOnlyCheckThreshold(p Provider) int {
 	if z, ok := p.(zipOnlyCheckBlindProvider); ok {
 		return z.zipOnlyCheckThreshold()
@@ -732,31 +784,36 @@ const hintTTL = 30 * time.Minute
 // it reported as not holding it is skipped without adding the torrent.
 // Hints live in memory only and never replace a provider's answer.
 func (s *Service) ApplyHints(ctx context.Context, rels []core.Release) {
-	var entries []*entry
-	cachedOnly := false
-	for _, r := range rels {
-		if r.Protocol != core.ProtocolTorrent || r.InfoHash == "" || len(r.DebridCached)+len(r.DebridUncached) == 0 {
-			continue
-		}
-		if entries == nil {
-			if entries = s.active(); len(entries) == 0 {
-				return
+	cachedOnly := s.Config().CachedOnly
+	for _, e := range s.active() {
+		var hashes []string
+		hints := map[string]bool{}
+		for _, r := range rels {
+			if r.Protocol != core.ProtocolTorrent || r.InfoHash == "" {
+				continue
 			}
-			cachedOnly = s.Config().CachedOnly
-		}
-		hash := strings.ToLower(r.InfoHash)
-		for _, e := range entries {
 			cached := slices.Contains(r.DebridCached, e.cfg.Kind)
 			if !cached && (!cachedOnly || !slices.Contains(r.DebridUncached, e.cfg.Kind)) {
 				continue
 			}
-			if _, ok, _ := s.knownFor(ctx, e.cfg.ID, hash); ok {
+			hash := strings.ToLower(r.InfoHash)
+			if _, seen := hints[hash]; !seen {
+				hashes = append(hashes, hash)
+				hints[hash] = cached
+			}
+		}
+		known := s.knownAvailability(ctx, e.cfg.ID, hashes)
+		now := s.now()
+		s.knownMu.Lock()
+		for _, hash := range hashes {
+			key := knownKey(e.cfg.ID, hash)
+			k, hit := s.known[key]
+			if _, ok := known[hash]; ok || hit && (now.Before(k.until) || k.refused && k.until.IsZero()) {
 				continue
 			}
-			s.knownMu.Lock()
-			s.known[knownKey(e.cfg.ID, hash)] = knownState{cached: cached, until: s.now().Add(hintTTL)}
-			s.knownMu.Unlock()
+			s.known[key] = knownState{cached: hints[hash], until: now.Add(hintTTL)}
 		}
+		s.knownMu.Unlock()
 	}
 }
 
@@ -894,15 +951,17 @@ func (s *Service) checkCachedDetail(ctx context.Context, hashes []string, refres
 		}
 		ref := e.serviceRef()
 		var ask []string
+		var known map[string]bool
+		if !refresh {
+			known = s.knownAvailability(ctx, ref.ID, hashes)
+		}
 		for _, h := range hashes {
-			if !refresh {
-				if c, ok, _ := s.knownFor(ctx, ref.ID, h); ok {
-					out[h] = out[h] || c
-					if c {
-						addService(h, ref)
-					}
-					continue
+			if c, ok := known[strings.ToLower(h)]; ok {
+				out[h] = out[h] || c
+				if c {
+					addService(h, ref)
 				}
+				continue
 			}
 			ask = append(ask, h)
 		}

@@ -294,10 +294,16 @@ func (s *source) readAtWithPriority(parent context.Context, p []byte, off int64,
 
 // read fills p (within the video) at off.
 func (s *source) read(ctx context.Context, p []byte, off int64, prio core.Priority) (int, error) {
-	n, err := s.readWithDamageRecovery(ctx, p, off, prio)
+	read := s.readWithDamageRecovery
+	if core.DownloadRange(ctx) {
+		// Shared sources can have playback damage concealment installed.
+		// A download must deliver the original bytes, including after a seek.
+		read = s.readRaw
+	}
+	n, err := read(ctx, p, off, prio)
 	if len(s.plan.spans) > 0 && n > 0 {
 		// A multi-clip Blu-ray feature gets one continuous timeline.
-		raw := func(dst []byte, from int64) (int, error) { return s.readWithDamageRecovery(ctx, dst, from, prio) }
+		raw := func(dst []byte, from int64) (int, error) { return read(ctx, dst, from, prio) }
 		if rerr := remux(s.plan.spans, p[:n], off, raw); rerr != nil {
 			return 0, rerr // p holds timestamps only partly rewritten
 		}

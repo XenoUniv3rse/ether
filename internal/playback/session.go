@@ -61,6 +61,7 @@ type generation struct {
 	ctx        context.Context
 	cancel     context.CancelFunc
 
+	downloadFailure sync.Once // marks the release unhealthy once per generation
 	// articleMissing records that a read hit core.ErrArticleMissing.
 	articleMissing     atomic.Bool
 	backgroundFailover atomic.Bool // at most one recovery worker for this source

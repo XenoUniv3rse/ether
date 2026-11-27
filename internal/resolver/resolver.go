@@ -2135,9 +2135,6 @@ func (env *rankEnv) audio(profile core.QualityProfile, req core.ResolveRequest) 
 
 // rankWith is rankCandidates with its environment already prepared.
 func (s *Service) rankWith(ctx context.Context, env rankEnv, req core.ResolveRequest, sreq core.SearchRequest, profile core.QualityProfile, results []core.Release, trace *Trace, pinID string) ([]candidate, bool, error) {
-	if s.db != nil && env.feedRejections == nil {
-		s.loadRejectionsFor(ctx, req.Title.Key)
-	}
 	if !core.LocalResponse(ctx) {
 		s.prepareSeriesYears(ctx, req.Title, sreq, results)
 		s.prepareTitleIDVerifications(ctx, req.Title, sreq, env.lang, results)

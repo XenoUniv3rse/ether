@@ -18,9 +18,6 @@ func (s *Service) RememberedReleaseAllowed(ctx context.Context, t *core.Title, r
 	if pinned && pin.Release.ID == rel.ID {
 		return true
 	}
-	if s.db != nil {
-		s.loadRejectionsFor(ctx, t.Key)
-	}
 	if s.rejectedFor(t.Key, rel) {
 		return false
 	}
