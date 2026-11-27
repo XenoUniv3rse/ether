@@ -344,3 +344,65 @@ func TestVelaRowKeyStableAcrossRemint(t *testing.T) {
 		t.Fatal(w.Code, w.Body.String())
 	}
 }
+
+type backfillBatchSource struct {
+	rowSizeSource
+	batches [][]frontend.RowViewPageRequest
+}
+
+func (s *backfillBatchSource) ResolveRowViews(ctx context.Context, reqs []frontend.RowViewPageRequest) ([]frontend.RowViewPage, error) {
+	s.batches = append(s.batches, slices.Clone(reqs))
+	pages := make([]frontend.RowViewPage, 0, len(reqs))
+	for _, req := range reqs {
+		page, err := s.ResolveRowView(ctx, req)
+		if err != nil {
+			return nil, err
+		}
+		pages = append(pages, page)
+	}
+	return pages, nil
+}
+
+func TestVelaFeaturedBackfillBatchesShelves(t *testing.T) {
+	source := &backfillBatchSource{rowSizeSource: rowSizeSource{distinct: true}}
+	seal, err := encryption(make([]byte, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	i := &instance{seal: seal, host: frontend.Host{Experience: source}}
+	viewer := &frontend.Viewer{ID: 1}
+	r := httptest.NewRequest(http.MethodGet, "/vela/v0/bootstrap", nil)
+	r.Header.Set("X-Vela-Device-Id", "device")
+	excluded := []string{ids.RatingKeyGUID(frontend.MovieKey(2)), ids.RatingKeyGUID(frontend.MovieKey(103))}
+	shelves := make([]object, 0, 2)
+	for _, id := range []string{"0", "1"} {
+		row, err := i.rowPage(r, viewer, id, 0, defaultRowItemLimit)
+		if err != nil {
+			t.Fatal(err)
+		}
+		shelf, err := i.rowWire(r, viewer, "token", row, 0, excluded, true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		shelves = append(shelves, shelf)
+	}
+	for _, err := range i.backfillShelves(r, viewer, "token", shelves, defaultRowItemLimit) {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(source.batches) != 1 || len(source.batches[0]) != 2 {
+		t.Fatalf("expected one batch for both shelves, got %v", source.batches)
+	}
+	for n, q := range source.batches[0] {
+		if q.Offset != defaultRowItemLimit || q.Limit != 1 || q.ID != strconv.Itoa(n) {
+			t.Fatalf("unexpected backfill request: %+v", q)
+		}
+		items := shelves[n]["items"].([]object)
+		cursor, err := i.readRowToken(r, viewer, shelves[n]["nextCursor"].(string))
+		if len(items) != defaultRowItemLimit || err != nil || cursor.Offset != defaultRowItemLimit+1 ||
+			items[len(items)-1]["receiptToken"] != "receipt-20" {
+			t.Fatalf("shelf %d lost its receipt or source offset: %v %v", n, cursor, err)
+		}
+	}
+}

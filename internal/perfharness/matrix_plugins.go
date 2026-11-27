@@ -78,6 +78,12 @@ func MatrixSubsonic(methods []string) Client {
 			step.Discover = discoverSubsonicPlaylist
 		}
 		client.Steps = append(client.Steps, step)
+		if name == "getAlbumList" || name == "getAlbumList2" {
+			next := step
+			next.Name += " offset 48"
+			next.Path += "&offset=48"
+			client.Steps = append(client.Steps, next)
+		}
 	}
 	return client
 }

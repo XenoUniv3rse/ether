@@ -987,17 +987,24 @@ func (i *instance) buildBootstrap(r *http.Request, v *frontend.Viewer, t string,
 					continue
 				}
 				shelf["nextCursor"] = next
-				if err := i.backfillShelf(r, v, t, shelf, rowItemLimit(r)); err != nil {
-					if r.Context().Err() != nil || retryBootstrap(err) {
-						return nil, err
-					}
-					logDroppedHomeRow(r, id, "hero backfill", err)
-					continue
-				}
 			}
 			kept = append(kept, shelf)
 		}
-		out["rows"] = kept
+		backfillErrs := i.backfillShelves(r, v, t, kept, rowItemLimit(r))
+		shelves = kept[:0]
+		for n, shelf := range kept {
+			err := backfillErrs[n]
+			if err == nil {
+				shelves = append(shelves, shelf)
+				continue
+			}
+			if r.Context().Err() != nil || retryBootstrap(err) {
+				return nil, err
+			}
+			id, _ := shelf["id"].(string)
+			logDroppedHomeRow(r, id, "hero backfill", err)
+		}
+		out["rows"] = shelves
 		out["heroes"] = heroes
 	}
 	return out, nil

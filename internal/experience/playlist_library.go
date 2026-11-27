@@ -58,6 +58,29 @@ func (s *Service) Playlists(ctx context.Context, viewer *core.Viewer, q frontend
 	return frontend.PlaylistPage{Items: out, Total: len(owned)}, nil
 }
 
+// PlaylistHeader returns one viewer-owned playlist with the same visible
+// membership used for playlist listings.
+func (s *Service) PlaylistHeader(ctx context.Context, viewer *core.Viewer, key core.RatingKey) (*core.Playlist, error) {
+	ctx = core.WithCatalogViewer(ctx, viewer)
+	v, err := s.viewer(ctx, viewer)
+	if err != nil {
+		return nil, err
+	}
+	playlist, err := s.ownedPlaylist(ctx, v, key)
+	if err != nil {
+		return nil, err
+	}
+	titles, err := s.loadPlaylistTitles(ctx, v, playlist.Items, true)
+	if err != nil {
+		return nil, err
+	}
+	header := *playlist
+	header.Items, _ = playlistVisibleEntries(playlist.Items, titles)
+	header.Audio = audioPlaylist(header.Items, titles)
+	header.ItemIDs = nil
+	return &header, nil
+}
+
 func audioPlaylist(keys []core.RatingKey, titles map[core.RatingKey]core.Title) bool {
 	for _, key := range keys {
 		typ := titles[key].MBItemType

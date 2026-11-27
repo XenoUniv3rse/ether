@@ -80,6 +80,23 @@ func MatrixClients(live bool) []Client {
 			)
 		case "silo-appletv":
 			clients[i].Steps = append(clients[i].Steps,
+				Step{Name: "read series subtitle preference", Class: classDetail, Path: "/api/v2/subtitle-prefs/{seriesId}", ExpectedStatus: http.StatusNotFound},
+				Step{Name: "set series subtitle preference", Class: classState, Method: http.MethodPut, Path: "/api/v2/subtitle-prefs/{seriesId}", Body: `{"subtitle_language":"en","subtitle_mode":"always"}`},
+				Step{Name: "clear series subtitle preference", Class: classState, Method: http.MethodDelete, Path: "/api/v2/subtitle-prefs/{seriesId}"},
+				Step{Name: "movie versions", Class: classDetail, Path: "/api/v2/catalog/items/{movieId}/versions"},
+				Step{Name: "create movie playlist", Class: classState, Method: http.MethodPost, Path: "/api/v2/playlists", Body: `{"name":"Matrix playback list","content_ids":["{movieId}"]}`, Discover: discoverMatrixObjectID("matrixSiloPlaylist")},
+				Step{Name: "read movie playlist", Class: classDetail, Path: "/api/v2/playlists/{matrixSiloPlaylist}"},
+				Step{Name: "read movie playlist items", Class: classDetail, Path: "/api/v2/playlists/{matrixSiloPlaylist}/items"},
+				Step{Name: "add movie playlist item", Class: classState, Method: http.MethodPost, Path: "/api/v2/playlists/{matrixSiloPlaylist}/items", Body: `{"content_ids":["{movieId}"]}`},
+				Step{Name: "move movie playlist item", Class: classState, Method: http.MethodPost, Path: "/api/v2/playlists/{matrixSiloPlaylist}/items/{movieId}/move", Body: `{"index":0}`},
+				Step{Name: "remove movie playlist item", Class: classState, Method: http.MethodDelete, Path: "/api/v2/playlists/{matrixSiloPlaylist}/items/{movieId}"},
+				Step{Name: "delete movie playlist", Class: classState, Method: http.MethodDelete, Path: "/api/v2/playlists/{matrixSiloPlaylist}"},
+				Step{Name: "read series audio preference", Class: classDetail, Path: "/api/v2/audio-prefs/{seriesId}", ExpectedStatus: http.StatusNotFound},
+				Step{Name: "mark movie not interested", Class: classState, Method: http.MethodPut, Path: "/api/v2/not-interested/{movieId}"},
+				Step{Name: "read movie not interested", Class: classDetail, Path: "/api/v2/not-interested/{movieId}"},
+				Step{Name: "clear movie not interested", Class: classState, Method: http.MethodDelete, Path: "/api/v2/not-interested/{movieId}"},
+				Step{Name: "set profile theme", Class: classState, Method: http.MethodPut, Path: "/api/v2/settings/values/ui.theme?scope=profile", Body: `{"value":"cobalt-studio"}`},
+				Step{Name: "clear profile theme", Class: classState, Method: http.MethodDelete, Path: "/api/v2/settings/values/ui.theme?scope=profile"},
 				Step{Name: "set series audio preference", Class: classState, Method: http.MethodPut, Path: "/api/v2/audio-prefs/{seriesId}", Body: `{"audio_language":"en"}`},
 				Step{Name: "clear series audio preference", Class: classState, Method: http.MethodDelete, Path: "/api/v2/audio-prefs/{seriesId}"},
 			)
@@ -109,10 +126,19 @@ func MatrixClients(live bool) []Client {
 		case "vela":
 			clients[i].Steps = append(clients[i].Steps, Step{Name: "HEAD /appearance", Method: http.MethodHead, ExpectedStatus: http.StatusOK, Class: classBrowse, Path: "/appearance"})
 			clients[i].Steps = append(clients[i].Steps,
-				Step{Name: "bootstrap", Class: classHome, Path: "/bootstrap"},
+				Step{Name: "bootstrap", Class: classHome, Path: "/bootstrap", Discover: discoverMatrixVelaRow},
+				Step{Name: "bootstrap shelf", Class: classBrowse, Path: "/rows/{matrixVelaRow}?cursor={matrixVelaRowCursor}"},
 				Step{Name: "recommendations rows", Class: classHome, Path: "/rows?limit=24"},
 				Step{Name: "movies page", Class: classBrowse, Path: "/libraries/{movieLibrary}/items?limit=48", Discover: discoverMatrixVelaID("velaMovie")},
 				Step{Name: "movie detail", Class: classDetail, Path: "/titles/{velaMovie}"},
+				Step{Name: "create movie playlist", Class: classState, Method: http.MethodPost, Path: "/playlists", Body: `{"idempotencyKey":"matrix-create-playlist","name":"Matrix playback list","titleIds":["{velaMovie}"]}`, Discover: discoverMatrixObjectID("matrixVelaPlaylist")},
+				Step{Name: "read movie playlist", Class: classDetail, Path: "/playlists/{matrixVelaPlaylist}", Discover: discoverMatrixVelaPlaylistEntry},
+				Step{Name: "rename movie playlist", Class: classState, Method: http.MethodPatch, Path: "/playlists/{matrixVelaPlaylist}", Body: `{"idempotencyKey":"matrix-rename-playlist","name":"Matrix playback list updated"}`},
+				Step{Name: "add movie playlist entry", Class: classState, Method: http.MethodPost, Path: "/playlists/{matrixVelaPlaylist}/entries", Body: `{"idempotencyKey":"matrix-add-playlist-entry","titleIds":["{velaMovie}"]}`},
+				Step{Name: "move movie playlist entry", Class: classState, Method: http.MethodPost, Path: "/playlists/{matrixVelaPlaylist}/entries/{matrixVelaPlaylistEntry}/move", Body: `{"idempotencyKey":"matrix-move-playlist-entry","afterEntryId":null}`},
+				Step{Name: "remove movie playlist entry", Class: classState, Method: http.MethodDelete, Path: "/playlists/{matrixVelaPlaylist}/entries/{matrixVelaPlaylistEntry}", Body: `{"idempotencyKey":"matrix-remove-playlist-entry"}`},
+				Step{Name: "delete movie playlist", Class: classState, Method: http.MethodDelete, Path: "/playlists/{matrixVelaPlaylist}", Body: `{"idempotencyKey":"matrix-delete-playlist"}`},
+				Step{Name: "movie playlist membership", Class: classDetail, Path: "/titles/{velaMovie}/playlists"},
 				Step{Name: "movie versions", Class: classDetail, Path: "/titles/{velaMovie}/versions"},
 				Step{Name: "movie extras", Class: classDetail, Path: "/titles/{velaMovie}/extras"},
 				Step{Name: "music facet", Class: classBrowse, Path: "/libraries/{matrixMusicLibrary}/facets/genre"},
@@ -189,6 +215,47 @@ func discoverMatrixStremioStream(vars map[string]string, body []byte) {
 	token, tail, split := strings.Cut(rest, "/")
 	if ok && split && token != "" && tail == "file" {
 		vars["stremioTicket"] = url.PathEscape(token)
+	}
+}
+
+func discoverMatrixObjectID(variable string) func(map[string]string, []byte) {
+	return func(vars map[string]string, body []byte) {
+		var object struct {
+			ID string `json:"id"`
+		}
+		if json.Unmarshal(body, &object) == nil && object.ID != "" {
+			vars[variable] = url.PathEscape(object.ID)
+		}
+	}
+}
+
+func discoverMatrixVelaRow(vars map[string]string, body []byte) {
+	var bootstrap struct {
+		Rows []struct {
+			ID         string `json:"id"`
+			NextCursor string `json:"nextCursor"`
+		} `json:"rows"`
+	}
+	if json.Unmarshal(body, &bootstrap) != nil {
+		return
+	}
+	for _, row := range bootstrap.Rows {
+		if row.ID != "" && row.NextCursor != "" {
+			vars["matrixVelaRow"] = url.PathEscape(row.ID)
+			vars["matrixVelaRowCursor"] = url.QueryEscape(row.NextCursor)
+			break
+		}
+	}
+}
+
+func discoverMatrixVelaPlaylistEntry(vars map[string]string, body []byte) {
+	var page struct {
+		Items []struct {
+			EntryID string `json:"entryId"`
+		} `json:"items"`
+	}
+	if json.Unmarshal(body, &page) == nil && len(page.Items) > 0 && page.Items[0].EntryID != "" {
+		vars["matrixVelaPlaylistEntry"] = url.PathEscape(page.Items[0].EntryID)
 	}
 }
 

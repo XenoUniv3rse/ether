@@ -1,6 +1,7 @@
 package silo
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"strconv"
@@ -41,6 +42,10 @@ func (i *instance) playlistLibrary(r *http.Request) (*frontend.Viewer, string, f
 	return viewer, token, library, true
 }
 
+func siloPlaylistHeader(playlist frontend.Playlist) map[string]any {
+	return map[string]any{"id": ids.RatingKeyGUID(playlist.Key), "name": playlist.Title, "count": len(playlist.Items), "smart": playlist.Smart}
+}
+
 func (i *instance) playlists(w http.ResponseWriter, r *http.Request) {
 	viewer, _, library, ok := i.playlistLibrary(r)
 	if !ok {
@@ -58,7 +63,7 @@ func (i *instance) playlists(w http.ResponseWriter, r *http.Request) {
 	}
 	items := make([]any, 0, len(page.Items))
 	for _, playlist := range page.Items {
-		items = append(items, map[string]any{"id": ids.RatingKeyGUID(playlist.Key), "name": playlist.Title, "count": len(playlist.Items), "smart": playlist.Smart})
+		items = append(items, siloPlaylistHeader(playlist))
 	}
 	reply(w, http.StatusOK, map[string]any{"playlists": items})
 }
@@ -68,6 +73,17 @@ func (i *instance) playlist(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if reader, ok := library.(interface {
+		PlaylistHeader(context.Context, *frontend.Viewer, frontend.RatingKey) (*frontend.Playlist, error)
+	}); ok {
+		playlist, err := reader.PlaylistHeader(r.Context(), viewer, key)
+		if err != nil {
+			writeSiloPlaylistError(w, err)
+			return
+		}
+		reply(w, http.StatusOK, siloPlaylistHeader(*playlist))
+		return
+	}
 	page, err := library.Playlists(r.Context(), viewer, frontend.PageQuery{Limit: 500})
 	if err != nil {
 		http.Error(w, "Unavailable", http.StatusServiceUnavailable)
@@ -75,7 +91,7 @@ func (i *instance) playlist(w http.ResponseWriter, r *http.Request) {
 	}
 	for _, playlist := range page.Items {
 		if playlist.Key == key {
-			reply(w, http.StatusOK, map[string]any{"id": ids.RatingKeyGUID(playlist.Key), "name": playlist.Title, "count": len(playlist.Items), "smart": playlist.Smart})
+			reply(w, http.StatusOK, siloPlaylistHeader(playlist))
 			return
 		}
 	}
@@ -110,7 +126,7 @@ func (i *instance) createPlaylist(w http.ResponseWriter, r *http.Request) {
 		writeSiloPlaylistError(w, err)
 		return
 	}
-	reply(w, http.StatusOK, map[string]any{"id": ids.RatingKeyGUID(playlist.Key), "name": playlist.Title, "count": len(playlist.Items), "smart": playlist.Smart})
+	reply(w, http.StatusOK, siloPlaylistHeader(*playlist))
 }
 
 func (i *instance) deletePlaylist(w http.ResponseWriter, r *http.Request) {

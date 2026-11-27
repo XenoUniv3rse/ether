@@ -3,10 +3,12 @@ package vela
 import (
 	"encoding/base64"
 	"encoding/json"
-	"github.com/braedonsaunders/ether/internal/frontend"
+	"errors"
 	"net/http"
 	"strconv"
 	"time"
+
+	"github.com/braedonsaunders/ether/internal/frontend"
 )
 
 const defaultRowItemLimit = 20
@@ -86,40 +88,86 @@ func (i *instance) readRowToken(r *http.Request, v *frontend.Viewer, token strin
 	return c, nil
 }
 
-// backfillShelf consumes only the missing slots from the same immutable visit.
-// At most six extra pages (one per possible featured family) are fetched. A
-// family can contain many episodes, so hitting the bound retains honest "more"
-// rather than claiming exhaustion or scanning the entire source.
-func (i *instance) backfillShelf(r *http.Request, v *frontend.Viewer, token string, shelf object, wanted int) error {
+// backfillShelves consumes only the missing slots from the same immutable
+// visit. Each round batches independent shelves so they can share one
+// authorization check and receipt transaction.
+func (i *instance) backfillShelves(r *http.Request, v *frontend.Viewer, token string, shelves []object, wanted int) []error {
+	errs := make([]error, len(shelves))
+	done := make([]bool, len(shelves))
 	for attempt := 0; attempt < 6; attempt++ {
-		items := shelf["items"].([]object)
-		if len(items) >= wanted || shelf["continuation"] != "more" {
+		var indexes []int
+		var cursors []rowCursor
+		var reqs []frontend.RowViewPageRequest
+		for n, shelf := range shelves {
+			if done[n] || errs[n] != nil || shelf["continuation"] != "more" {
+				continue
+			}
+			missing := wanted - len(shelf["items"].([]object))
+			if missing <= 0 {
+				continue
+			}
+			next, _ := shelf["nextCursor"].(string)
+			if next == "" {
+				continue
+			}
+			cursor, err := i.readRowToken(r, v, next)
+			if err != nil {
+				errs[n] = err
+				continue
+			}
+			if len(cursor.Exclude) == 0 {
+				continue
+			}
+			indexes = append(indexes, n)
+			cursors = append(cursors, cursor)
+			reqs = append(reqs, frontend.RowViewPageRequest{Viewer: v, Device: requestDevice(r), Protocol: "vela", ID: cursor.Row, Offset: cursor.Offset, Limit: missing})
+		}
+		if len(reqs) == 0 {
 			break
 		}
-		cursor, err := i.readRowToken(r, v, shelf["nextCursor"].(string))
-		if err != nil {
-			return err
+		var pages []frontend.RowViewPage
+		if batch, ok := i.host.Experience.(frontend.RowViewPages); ok && len(reqs) > 1 {
+			var err error
+			pages, err = batch.ResolveRowViews(r.Context(), reqs)
+			if retryBootstrap(err) || r.Context().Err() != nil {
+				errs[indexes[0]] = errors.Join(err, r.Context().Err())
+				return errs
+			}
+			if err != nil || len(pages) != len(reqs) {
+				pages = nil
+			}
 		}
-		if len(cursor.Exclude) == 0 {
-			break
-		}
-		row, err := i.rowPage(r, v, cursor.Row, cursor.Offset, wanted-len(items))
-		if err != nil {
-			return err
-		}
-		page, err := i.rowWire(r, v, token, row, cursor.Offset, cursor.Exclude, true)
-		if err != nil {
-			return err
-		}
-		shelf["items"] = append(items, page["items"].([]object)...)
-		shelf["continuation"] = page["continuation"]
-		delete(shelf, "nextCursor")
-		if next, ok := page["nextCursor"]; ok {
-			shelf["nextCursor"] = next
-		}
-		if len(row.Entries) == 0 {
-			break // A non-progressing source must not spin.
+		for k, n := range indexes {
+			q, cursor, shelf := reqs[k], cursors[k], shelves[n]
+			var row frontend.Row
+			if pages != nil {
+				noteBootstrapDeadline(r, pages[k].ExpiresAt)
+				row = rowFromPage(q.ID, pages[k])
+			} else {
+				var err error
+				row, err = i.rowPage(r, v, q.ID, q.Offset, q.Limit)
+				if err != nil {
+					errs[n] = err
+					continue
+				}
+			}
+			page, err := i.rowWire(r, v, token, row, cursor.Offset, cursor.Exclude, true)
+			if err != nil {
+				errs[n] = err
+				continue
+			}
+			shelf["items"] = append(shelf["items"].([]object), page["items"].([]object)...)
+			shelf["continuation"] = page["continuation"]
+			delete(shelf, "nextCursor")
+			if next, ok := page["nextCursor"]; ok {
+				shelf["nextCursor"] = next
+			}
+			done[n] = len(row.Entries) == 0
 		}
 	}
-	return nil
+	return errs
+}
+
+func (i *instance) backfillShelf(r *http.Request, v *frontend.Viewer, token string, shelf object, wanted int) error {
+	return i.backfillShelves(r, v, token, []object{shelf}, wanted)[0]
 }
