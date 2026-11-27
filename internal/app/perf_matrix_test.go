@@ -26,6 +26,7 @@ import (
 	"github.com/braedonsaunders/ether/internal/config"
 	"github.com/braedonsaunders/ether/internal/core"
 	"github.com/braedonsaunders/ether/internal/debrid"
+	"github.com/braedonsaunders/ether/internal/diagnostics"
 	"github.com/braedonsaunders/ether/internal/identity"
 	"github.com/braedonsaunders/ether/internal/livetv"
 	"github.com/braedonsaunders/ether/internal/perfharness"
@@ -340,6 +341,8 @@ func runPerfMatrixCase(t *testing.T, ctx context.Context, fixture string, c perf
 				}
 			}
 		}
+		a.support.Observe(diagnostics.Event{Kind: diagnostics.KindDevice, Protocol: "jellyfin",
+			DeviceKey: "matrix-console-playback", DeviceName: "Matrix fixture playback", Product: "Matrix player"})
 		templates, err := a.onair.Templates(ctx)
 		if err != nil || len(templates) == 0 {
 			t.Fatalf("On-Air templates fixture: %v", err)

@@ -64,3 +64,29 @@ func discoverMatrixConsoleLockout(vars map[string]string, body []byte) {
 		}
 	}
 }
+
+func discoverMatrixSupportDevice(vars map[string]string, body []byte) {
+	var response struct {
+		Devices []struct {
+			ID   string `json:"id"`
+			Name string `json:"name"`
+		} `json:"devices"`
+	}
+	if json.Unmarshal(body, &response) == nil {
+		for _, device := range response.Devices {
+			if device.Name == "Matrix fixture playback" {
+				setOnce(vars, "consoleSupportDevice", device.ID)
+				return
+			}
+		}
+	}
+}
+
+func discoverMatrixReleaseVersion(vars map[string]string, body []byte) {
+	var response struct {
+		Version string `json:"current"`
+	}
+	if json.Unmarshal(body, &response) == nil {
+		setOnce(vars, "consoleReleaseVersion", response.Version)
+	}
+}
