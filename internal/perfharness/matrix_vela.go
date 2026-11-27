@@ -64,8 +64,8 @@ func addMatrixVelaCoverage(c *Client) {
 		{Name: "remove movie from watchlist", Class: classState, Method: http.MethodPost, Path: "/titles/{velaMovie}/watch", Body: `{"watchlisted":false}`},
 		{Name: "collection contents", Class: classBrowse, Path: "/collections/{velaCollection}?limit=24"},
 		{Name: "track lyrics", Class: classDetail, Path: "/titles/{matrixMusicTrack}/lyrics"},
-		{Name: "track recording", Class: classDetail, Path: "/titles/{matrixMusicTrack}/recording"},
-		{Name: "music duplicates", Class: classBrowse, Path: "/libraries/{matrixMusicLibrary}/duplicates?limit=24", Discover: discoverMatrixVelaDuplicate},
+		{Name: "track recording", Class: classDetail, Path: "/titles/{matrixMusicTrack}/recording", Discover: discoverMatrixVelaRecording},
+		{Name: "music duplicates", Class: classBrowse, Path: "/libraries/{matrixMusicLibrary}/duplicates?limit=24"},
 		{Name: "prefer recording release", Class: classState, Method: http.MethodPost, Path: "/libraries/{matrixMusicLibrary}/duplicates/{velaRecording}", Body: `{"preferredTitleId":"{velaPreferredRelease}"}`},
 		{Name: "scratch playlist create", Class: classState, Method: http.MethodPost, Path: "/playlists", Body: `{"name":"Matrix scratch playlist","titleIds":["{velaMovie}"]}`, Discover: discoverMatrixID("velaPlaylist")},
 		{Name: "scratch playlist add entry", Class: classState, Method: http.MethodPost, Path: "/playlists/{velaPlaylist}/entries", Body: `{"titleIds":["{velaMovie}"]}`},
@@ -250,23 +250,15 @@ func discoverMatrixVelaScratchGrant(vars map[string]string, body []byte) {
 	}
 }
 
-func discoverMatrixVelaDuplicate(vars map[string]string, body []byte) {
-	var page struct {
-		Items []struct {
-			Recording string `json:"recordingId"`
-			Titles    []struct {
-				ID string `json:"id"`
-			} `json:"titles"`
-		} `json:"items"`
+func discoverMatrixVelaRecording(vars map[string]string, body []byte) {
+	var recording struct {
+		ID     string `json:"recordingId"`
+		Titles []struct {
+			ID string `json:"id"`
+		} `json:"titles"`
 	}
-	if json.Unmarshal(body, &page) != nil {
-		return
-	}
-	for _, item := range page.Items {
-		if item.Recording != "" && len(item.Titles) > 1 && item.Titles[0].ID != "" {
-			setOnce(vars, "velaRecording", url.PathEscape(item.Recording))
-			setOnce(vars, "velaPreferredRelease", item.Titles[0].ID)
-			return
-		}
+	if json.Unmarshal(body, &recording) == nil && recording.ID != "" && len(recording.Titles) > 0 {
+		setOnce(vars, "velaRecording", url.PathEscape(recording.ID))
+		setOnce(vars, "velaPreferredRelease", recording.Titles[0].ID)
 	}
 }
