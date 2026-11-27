@@ -36,6 +36,7 @@ func normalizeGateCacheFilter(f core.Filter) core.Filter {
 	f.ShowGateCutoff = minuteBound(f.ShowGateCutoff)
 	f.EpisodeGateCutoff = minuteBound(f.EpisodeGateCutoff)
 	f.GateNow = minuteBound(f.GateNow)
+	f.GateSeedCutoff = minuteBound(f.GateSeedCutoff)
 	return f
 }
 
@@ -47,6 +48,7 @@ func clearGateFields(f *core.Filter) {
 	f.GateNow = 0
 	f.GateUpcomingMovies = false
 	f.GateRev = 0
+	f.GateSeedCutoff = 0
 }
 
 func gateNowTS(f core.Filter, fallback int64) int64 {
@@ -54,6 +56,27 @@ func gateNowTS(f core.Filter, fallback int64) int64 {
 		return f.GateNow
 	}
 	return fallback
+}
+
+// gateEvidenceSQL uses the indexed published gate, or provisional retained
+// evidence until the seed's completion marker commits. key is catalogue SQL.
+func gateEvidenceSQL(key string, movie bool, f core.Filter, nowTS int64) (string, []any) {
+	published := "EXISTS (SELECT 1 FROM availability_gate ag WHERE ag.policy=? AND ag.rating_key=" + key + " LIMIT 1 OFFSET 0)"
+	args := []any{f.GatePolicy}
+	if f.GateSeedCutoff == 0 {
+		return published, args
+	}
+	retained := "ap.state IN ('verified','observed')"
+	if movie {
+		retained = "(ap.state='verified' OR (ap.state='observed' AND EXISTS (SELECT 1 FROM catalog_home_release ah WHERE ah.key=" + key + " AND ah.checked=1 AND ah.earliest_ts>0 AND ah.earliest_ts<=?)))"
+	}
+	provisional := "NOT EXISTS (SELECT 1 FROM availability_gate_policy apc WHERE apc.policy=?) AND EXISTS (SELECT 1 FROM availability_releases ap WHERE ap.rating_key=" +
+		key + " AND ap.last_seen>=? AND " + retained + " LIMIT 1 OFFSET 0)"
+	args = append(args, f.GatePolicy, f.GateSeedCutoff)
+	if movie {
+		args = append(args, nowTS)
+	}
+	return "(" + published + " OR (" + provisional + "))", args
 }
 
 // movieGateSQL builds the sticky release-gate clause for a movie row aliased as
@@ -85,10 +108,11 @@ func movieGateSQL(alias string, f core.Filter, nowTS int64) (string, []any) {
 	sb.WriteString(alias)
 	sb.WriteString(".key>=? AND +")
 	sb.WriteString(alias)
-	sb.WriteString(".key<?) OR EXISTS (SELECT 1 FROM availability_gate ag WHERE ag.policy=? AND ag.rating_key=")
-	sb.WriteString(alias)
-	sb.WriteString(".key LIMIT 1 OFFSET 0)")
-	args = append(args, localStart, localEnd, f.GatePolicy)
+	sb.WriteString(".key<?) OR ")
+	evidence, evidenceArgs := gateEvidenceSQL(alias+".key", true, f, gNow)
+	sb.WriteString(evidence)
+	args = append(args, localStart, localEnd)
+	args = append(args, evidenceArgs...)
 	if f.DigitalDateEvidence {
 		sb.WriteString(" OR EXISTS (SELECT 1 FROM catalog_home_release dh WHERE dh.key=")
 		sb.WriteString(alias)
@@ -124,10 +148,13 @@ func showGateSQL(alias string, f core.Filter, nowTS int64) (string, []any) {
 		epCutoff = f.ShowGateCutoff
 	}
 	synthKey := fmt.Sprintf("(%d+(%s.key-%d)*10000000)", int64(core.EpisodeKey(0, 1, 1)), alias, int64(core.ShowKey(0)))
+	episodeEvidence, episodeArgs := gateEvidenceSQL("ce.key", false, f, gNow)
+	synthEvidence, synthArgs := gateEvidenceSQL(synthKey, false, f, gNow)
 	clause := "(+" + alias + ".released_ts<=? OR +" + alias + ".released_ts>? OR " +
-		"EXISTS (SELECT 1 FROM catalog_titles ce WHERE ce.show_key=" + alias + ".key AND ce.type='episode' AND ce.season>0 AND ce.release_known=1 AND ce.adult=0 AND ce.released_ts<=? AND (+ce.released_ts<=? OR EXISTS (SELECT 1 FROM availability_gate ag WHERE ag.policy=? AND ag.rating_key=ce.key LIMIT 1 OFFSET 0)) LIMIT 1 OFFSET 0) OR " +
-		"(NOT EXISTS (SELECT 1 FROM catalog_titles ce WHERE ce.show_key=" + alias + ".key AND ce.type='episode' AND ce.season>0 LIMIT 1 OFFSET 0) AND EXISTS (SELECT 1 FROM availability_gate ag WHERE ag.policy=? AND ag.rating_key=" + synthKey + " LIMIT 1 OFFSET 0)))"
-	args := []any{f.ShowGateCutoff, gNow, gNow, epCutoff, f.GatePolicy, f.GatePolicy}
+		"EXISTS (SELECT 1 FROM catalog_titles ce WHERE ce.show_key=" + alias + ".key AND ce.type='episode' AND ce.season>0 AND ce.release_known=1 AND ce.adult=0 AND ce.released_ts<=? AND (+ce.released_ts<=? OR " + episodeEvidence + ") LIMIT 1 OFFSET 0) OR " +
+		"(NOT EXISTS (SELECT 1 FROM catalog_titles ce WHERE ce.show_key=" + alias + ".key AND ce.type='episode' AND ce.season>0 LIMIT 1 OFFSET 0) AND " + synthEvidence + "))"
+	args := append([]any{f.ShowGateCutoff, gNow, gNow, epCutoff}, episodeArgs...)
+	args = append(args, synthArgs...)
 	return clause, args
 }
 
@@ -137,8 +164,9 @@ func episodeGateSQL(alias string, f core.Filter, nowTS int64) (string, []any) {
 		return "", nil
 	}
 	gNow := gateNowTS(f, nowTS)
-	clause := "(+" + alias + ".released_ts<=? OR +" + alias + ".released_ts>? OR EXISTS (SELECT 1 FROM availability_gate ag WHERE ag.policy=? AND ag.rating_key=" + alias + ".key LIMIT 1 OFFSET 0)"
-	args := []any{f.EpisodeGateCutoff, gNow, f.GatePolicy}
+	evidence, evidenceArgs := gateEvidenceSQL(alias+".key", false, f, gNow)
+	clause := "(+" + alias + ".released_ts<=? OR +" + alias + ".released_ts>? OR " + evidence
+	args := append([]any{f.EpisodeGateCutoff, gNow}, evidenceArgs...)
 	if len(f.AvailabilityKeepKeys) > 0 {
 		clause += " OR +" + alias + ".key IN (" + placeholders(len(f.AvailabilityKeepKeys)) + ")"
 		for _, k := range f.AvailabilityKeepKeys {

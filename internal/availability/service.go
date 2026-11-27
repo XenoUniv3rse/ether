@@ -59,8 +59,7 @@ type Deps struct {
 	// indexer (zero: no spacing), so feeds, gap pages and title searches
 	// never burst at an indexer.
 	Pace time.Duration
-	// Async and Clustered are retained for Deps compatibility; availability_gate
-	// is shared SQL state with no background hidden-set recomputation.
+	// Async enables resumable admission of retained evidence for a new gate policy.
 	Async     bool
 	Clustered bool
 }
@@ -89,6 +88,7 @@ type Service struct {
 	revealChecked        map[core.RatingKey]time.Time
 	revealRuns           []time.Time
 	gateRev              atomic.Uint64
+	gateSeeds            map[string]gateSeedState // guarded by visibilityMu
 	lastPrune            time.Time
 	lastVerifyPolicy     string
 	checksSeeded         bool
@@ -165,7 +165,7 @@ func New(d Deps) (*Service, error) {
 	return s, nil
 }
 
-// Close stops background verdict writers and waits for them.
+// Close stops background gate seeding and verdict writers.
 func (s *Service) Close() {
 	s.visibilityMu.Lock()
 	s.closed = true

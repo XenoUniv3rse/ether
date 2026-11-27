@@ -78,6 +78,7 @@ func (s *Service) filterReleaseDiscovery(ctx context.Context, items []core.Title
 		return s.filterLegacyReleaseEvidence(ctx, items, titles, keys, input)
 	}
 
+	seeding := s.requestGateSeed(input)
 	movieMode := input.availability.ModeFor(hiddenMovies)
 	acceptable := map[core.RatingKey]bool{}
 	var digitalMovies []core.RatingKey
@@ -128,6 +129,9 @@ func (s *Service) filterReleaseDiscovery(ctx context.Context, items []core.Title
 				}
 			}
 			s.matchRetainedAndOpenGate(ctx, ungated, feeds, input, acceptable)
+			if seeding {
+				s.provisionalGateKeys(ctx, ungated, input, acceptable)
+			}
 		}
 	}
 

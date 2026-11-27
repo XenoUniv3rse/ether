@@ -127,6 +127,7 @@ type Filter struct {
 	GateNow            int64  `json:"-"`
 	GateUpcomingMovies bool   `json:"-"`
 	GateRev            uint64 `json:"-"`
+	GateSeedCutoff     int64  `json:"-"` // Retained evidence admitted provisionally while the policy seeds.
 	// Availability hidden-set seqs pin one evaluated hidden set (an
 	// interval snapshot) across SQL reads on legacy read-only databases.
 	HiddenMovieSeq   int64 `json:"-"`

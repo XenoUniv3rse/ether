@@ -218,6 +218,9 @@ func (s *Service) PagingFilter(ctx context.Context, f core.Filter) (core.Filter,
 	}
 	if s.hasGateTable {
 		f.GatePolicy = input.gatePolicy
+		if s.requestGateSeed(input) {
+			f.GateSeedCutoff = input.retentionCutoff().Unix()
+		}
 		f.GateNow = input.now.Unix()
 		f.GateUpcomingMovies = input.showUpcomingMovies
 		f.GateRev = s.gateRev.Load()

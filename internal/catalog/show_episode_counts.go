@@ -140,10 +140,12 @@ func (c *Catalog) countStoredEpisodesBySeries(ctx context.Context, f core.Filter
 	}
 	if f.GatePolicy != "" && f.EpisodeGateCutoff != 0 {
 		gNow := gateNowTS(f, c.now().Unix())
-		vals := []any{f.EpisodeGateCutoff, gNow, f.GatePolicy, c.now().Unix()}
+		evidence, evidenceArgs := gateEvidenceSQL("e.key", false, f, gNow)
+		vals := append([]any{f.EpisodeGateCutoff, gNow}, evidenceArgs...)
+		vals = append(vals, c.now().Unix())
 		q := `SELECT COUNT(*) FROM catalog_titles e
 		WHERE e.type='episode' AND e.adult=0 AND e.release_known=1 AND e.released_ts>? AND e.released_ts<=?
-		AND NOT EXISTS (SELECT 1 FROM availability_gate ag WHERE ag.policy=? AND ag.rating_key=e.key LIMIT 1 OFFSET 0)
+		AND NOT (` + evidence + `)
 		AND e.released_ts<=? AND e.show_key<>0 AND ` + episodes
 		vals = append(vals, episodeArgs...)
 		for _, keys := range [][]core.RatingKey{f.AvailabilityKeepKeys, childExclude} {
