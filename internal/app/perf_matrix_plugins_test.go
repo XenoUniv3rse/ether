@@ -171,6 +171,60 @@ func (fixture perfMusicFixture) install(ctx context.Context, a *App, viewer *per
 	return err
 }
 
+func installPerfMatrixVelaCatalogue(ctx context.Context, a *App, viewer perfharness.Viewer) error {
+	const manifest = `{
+		"id":"community.example.matrixcatalogue","name":"Matrix Catalogue","version":"1.0.0",
+		"ether":{
+			"protocol":1,"kind":"content","summary":"Synthetic Vela catalogue",
+			"runtime":{"kind":"hosted","entry":"plugin.js"},
+			"capabilities":["catalog_provider","kind_resolver"],
+			"contributes":{"mediaKinds":[{
+				"key":"music","label":"Fixture Music","media":"music",
+				"library":{"name":"Matrix Catalogue"},
+				"levels":[{"key":"track","label":"Track","role":"track","playable":true}],
+				"fields":[{"key":"genre","label":"Genre","type":"string","indexed":true}],
+				"browse":{"sorts":["title"],"facets":["genre"],"search":true},
+				"sync":{"mode":"push"},"related":{"continuation":true}
+			}]}
+		}
+	}`
+	const script = `function handle(req) {
+		if (req.path === "/ether/v1/kinds/music/related") {
+			return {status:200, body:{items:[{id:"track-2",level:"track",title:"Fixture Track 2",playable:true,fields:{genre:"Folk"}}]}};
+		}
+		return {status:200, body:{status:"ok"}};
+	}`
+	mgr := a.pluginsRT.mgr
+	preview, err := mgr.PreviewInstall(ctx, plugins.Source{Kind: "studio", Manifest: []byte(manifest), Files: map[string][]byte{"plugin.js": []byte(script)}})
+	if err != nil {
+		return err
+	}
+	rec, err := mgr.Install(ctx, preview, plugins.InstallOptions{AcceptAddedPermissions: true})
+	if err != nil {
+		return err
+	}
+	items := []core.KindItem{
+		{ID: "track-1", Level: "track", Title: "Fixture Track 1", Playable: true, Fields: map[string]json.RawMessage{"genre": json.RawMessage(`"Folk"`)}},
+		{ID: "track-2", Level: "track", Title: "Fixture Track 2", Playable: true, Fields: map[string]json.RawMessage{"genre": json.RawMessage(`"Folk"`)}},
+	}
+	if _, err := a.pluginsRT.pluginitems.UpsertItems(ctx, rec.ID, "music", items); err != nil {
+		return err
+	}
+	if !viewer.Restricted {
+		return nil
+	}
+	kind, err := a.pluginsRT.pluginitems.GetKind(ctx, rec.ID, "music")
+	if err != nil {
+		return err
+	}
+	u, err := a.users.ActiveUser(ctx, viewer.ID)
+	if err != nil {
+		return err
+	}
+	u.AllowedLibraries = append(u.AllowedLibraries, kind.LibraryID)
+	return a.users.UpdateUser(ctx, *u)
+}
+
 func installPerfMatrixSports(ctx context.Context, a *App) error {
 	const manifest = `{
 		"id":"community.example.matrixsports","name":"Fixture Sports","version":"1.0.0",

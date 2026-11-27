@@ -317,7 +317,17 @@ func (a Source) entries(ctx context.Context, req frontend.ArtworkRequest) ([]fro
 		if s.Playlists == nil {
 			return nil, false, core.ErrNotFound
 		}
-		if _, err := s.Playlists.Get(ctx, req.Viewer.ID, req.Item); err != nil {
+		if reader, ok := s.Playlists.(interface {
+			Exists(context.Context, int64, core.RatingKey) (bool, error)
+		}); ok {
+			exists, err := reader.Exists(ctx, req.Viewer.ID, req.Item)
+			if err != nil {
+				return nil, false, err
+			}
+			if !exists {
+				return nil, false, core.ErrNotFound
+			}
+		} else if _, err := s.Playlists.Get(ctx, req.Viewer.ID, req.Item); err != nil {
 			return nil, false, err
 		}
 	default:

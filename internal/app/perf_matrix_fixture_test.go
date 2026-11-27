@@ -62,7 +62,7 @@ func seedPerfMatrixCollections(ctx context.Context, tx *sql.Tx, now time.Time) e
 		}
 		spec := core.CollectionSpec{
 			Name: fmt.Sprintf("Fixture collection %03d", i), MediaType: kind,
-			Sort: "source", Refresh: "weekly", Enabled: true, BrowseInApps: true, LocalOnly: true,
+			Sort: "source", Refresh: "weekly", Enabled: true, BrowseInApps: true,
 			Sources: []core.CollectionSource{{Kind: "titles"}},
 		}
 		if i%3 != 0 {
@@ -105,8 +105,8 @@ func seedPerfMatrixCollections(ctx context.Context, tx *sql.Tx, now time.Time) e
 			mode = 2
 		}
 		var id int64
-		err = tx.QueryRowContext(ctx, `INSERT INTO collections_specs(spec_json, created_at, updated_at, last_built_at, changed_at, item_count, browse_group, browse_rank, browse_type, browse_mode)
-			VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`, string(doc), now.Unix(), now.Unix(), now.Unix(), now.Unix(), len(keys), group, rank, kind, mode).Scan(&id)
+		err = tx.QueryRowContext(ctx, `INSERT INTO collections_specs(spec_json, created_at, updated_at, last_built_at, changed_at, item_count, browse_group, browse_rank, browse_type, browse_mode, build_hash)
+			VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`, string(doc), now.Unix(), now.Unix(), now.Unix(), now.Unix(), len(keys), group, rank, kind, mode, fmt.Sprintf("matrix-build-%d", i)).Scan(&id)
 		if err != nil {
 			return err
 		}

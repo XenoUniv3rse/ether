@@ -33,27 +33,29 @@ func (s *Service) Playlists(ctx context.Context, viewer *core.Viewer, q frontend
 		return frontend.PlaylistPage{}, err
 	}
 	owned := make([]core.Playlist, 0, len(lists))
-	var allKeys []core.RatingKey
 	for _, playlist := range lists {
 		if playlist.UserID != v.ID || playlist.Key == 0 {
 			continue
 		}
 		owned = append(owned, playlist)
+	}
+	start, end := playlistPage(len(owned), q.Offset, q.Limit)
+	var allKeys []core.RatingKey
+	for _, playlist := range owned[start:end] {
 		allKeys = append(allKeys, playlist.Items...)
 	}
-	visibleMap, err := s.loadVisiblePlaylistTitles(ctx, v, allKeys)
+	visibleMap, err := s.loadPlaylistTitles(ctx, v, allKeys, true)
 	if err != nil {
 		return frontend.PlaylistPage{}, err
 	}
-	out := make([]core.Playlist, 0, len(owned))
-	for _, playlist := range owned {
+	out := make([]core.Playlist, 0, end-start)
+	for _, playlist := range owned[start:end] {
 		playlist.Items, _ = playlistVisibleEntries(playlist.Items, visibleMap)
 		playlist.Audio = audioPlaylist(playlist.Items, visibleMap)
 		playlist.ItemIDs = nil
 		out = append(out, playlist)
 	}
-	start, end := playlistPage(len(out), q.Offset, q.Limit)
-	return frontend.PlaylistPage{Items: out[start:end], Total: len(out)}, nil
+	return frontend.PlaylistPage{Items: out, Total: len(owned)}, nil
 }
 
 func audioPlaylist(keys []core.RatingKey, titles map[core.RatingKey]core.Title) bool {
@@ -650,6 +652,10 @@ func playlistVisibleEntries(items []core.RatingKey, visibleMap map[core.RatingKe
 // loadVisiblePlaylistTitles hydrates and policy-filters all unique keys in
 // bounded batches without per-entry queries.
 func (s *Service) loadVisiblePlaylistTitles(ctx context.Context, v *core.User, keys []core.RatingKey) (map[core.RatingKey]core.Title, error) {
+	return s.loadPlaylistTitles(ctx, v, keys, false)
+}
+
+func (s *Service) loadPlaylistTitles(ctx context.Context, v *core.User, keys []core.RatingKey, membershipOnly bool) (map[core.RatingKey]core.Title, error) {
 	out := map[core.RatingKey]core.Title{}
 	if len(keys) == 0 {
 		return out, nil
@@ -679,6 +685,22 @@ func (s *Service) loadVisiblePlaylistTitles(ctx context.Context, v *core.User, k
 					out[k] = piv.Title
 				}
 			}
+		}
+	}
+	if membershipOnly && len(catalogKeys) > 0 && s.d.VisibilityRows != nil {
+		rows, err := s.policyRows(ctx, v, catalogKeys, 0, s.d.PlaylistVisibilityRows)
+		if err != nil {
+			return nil, err
+		}
+		if rows != nil {
+			allowed, err := s.filterPlaylistMembership(ctx, v, rows)
+			if err != nil {
+				return nil, err
+			}
+			for _, title := range allowed {
+				out[title.Key] = title
+			}
+			return out, nil
 		}
 	}
 	if len(catalogKeys) > 0 {
@@ -717,6 +739,29 @@ func (s *Service) loadVisiblePlaylistTitles(ctx context.Context, v *core.User, k
 		}
 	}
 	return out, nil
+}
+
+func (s *Service) filterPlaylistMembership(ctx context.Context, v *core.User, rows map[core.RatingKey]core.Title) ([]core.Title, error) {
+	items := make([]core.Title, 0, len(rows))
+	var parentKeys []core.RatingKey
+	seen := make(map[core.RatingKey]bool)
+	for key, title := range rows {
+		if key != title.Key {
+			continue
+		}
+		items = append(items, title)
+		if title.ShowKey != 0 && !seen[title.ShowKey] {
+			parentKeys = append(parentKeys, title.ShowKey)
+			seen[title.ShowKey] = true
+		}
+	}
+	parents, err := s.d.VisibilityRows(ctx, parentKeys, core.FactHomeRelease|s.d.Visibility.TitleFacts(v))
+	if err != nil {
+		return nil, err
+	}
+	return s.allowTitlesWithParents(ctx, v, items, func(context.Context, []core.RatingKey) (map[core.RatingKey]core.Title, error) {
+		return parents, nil
+	})
 }
 
 func playlistEntryIDs(pl *core.Playlist) []string {

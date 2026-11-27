@@ -711,12 +711,16 @@ func discoverVelaLibraries(vars map[string]string, body []byte) {
 		Items []struct {
 			ID   string `json:"id"`
 			Kind string `json:"kind"`
+			Name string `json:"name"`
 		} `json:"items"`
 	}
 	if json.Unmarshal(body, &r) != nil {
 		return
 	}
 	for _, it := range r.Items {
+		if it.Name == "Matrix Catalogue" {
+			vars["matrixMusicLibrary"] = url.PathEscape(it.ID)
+		}
 		switch it.Kind {
 		case "movies":
 			if vars["movieLibrary"] == "" {

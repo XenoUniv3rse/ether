@@ -23,6 +23,11 @@ func MatrixClients(live bool) []Client {
 				Step{Name: "XMLTV guide export", Class: classGuide, Path: "/xmltv.php" + auth},
 				Step{Name: "M3U lineup export", Class: classGuide, Path: "/get.php" + auth + "&type=m3u_plus"},
 			)
+		case "silo-appletv":
+			clients[i].Steps = append(clients[i].Steps,
+				Step{Name: "set series audio preference", Class: classState, Method: http.MethodPut, Path: "/api/v2/audio-prefs/{seriesId}", Body: `{"audio_language":"en"}`},
+				Step{Name: "clear series audio preference", Class: classState, Method: http.MethodDelete, Path: "/api/v2/audio-prefs/{seriesId}"},
+			)
 		case "stremio":
 			clients[i].Steps = append(clients[i].Steps,
 				Step{Name: "movie stream choices", Class: classPlayback, Path: "/stream/movie/{movieMeta}.json"},
@@ -34,16 +39,18 @@ func MatrixClients(live bool) []Client {
 				Step{Name: "movies page", Class: classBrowse, Path: "/libraries/{movieLibrary}/items?limit=48", Discover: discoverMatrixVelaID("velaMovie")},
 				Step{Name: "movie detail", Class: classDetail, Path: "/titles/{velaMovie}"},
 				Step{Name: "movie versions", Class: classDetail, Path: "/titles/{velaMovie}/versions"},
-				Step{Name: "movie continuation", Class: classDetail, Path: "/titles/{velaMovie}/continuation"},
 				Step{Name: "movie extras", Class: classDetail, Path: "/titles/{velaMovie}/extras"},
-				Step{Name: "movies facets", Class: classBrowse, Path: "/libraries/{movieLibrary}/facets/genre"},
+				Step{Name: "music facet", Class: classBrowse, Path: "/libraries/{matrixMusicLibrary}/facets/genre"},
+				Step{Name: "music page", Class: classBrowse, Path: "/libraries/{matrixMusicLibrary}/items?limit=24", Discover: discoverMatrixVelaID("matrixMusicTrack")},
+				Step{Name: "music continuation", Class: classDetail, Path: "/titles/{matrixMusicTrack}/continuation"},
 				Step{Name: "movies rows", Class: classHome, Path: "/libraries/{movieLibrary}/rows"},
 				Step{Name: "shows rows", Class: classHome, Path: "/libraries/{seriesLibrary}/rows"},
-				Step{Name: "search", Class: classSearch, Method: http.MethodPost, Path: "/search", Body: `{"query":"star","limit":24}`},
+				Step{Name: "search", Class: classSearch, Method: http.MethodPost, Path: "/search", Body: `{"query":"star","mode":"fast","limit":24}`},
 				Step{Name: "appearance", Class: classStatic, Path: "/appearance"},
 				Step{Name: "capabilities", Class: classStatic, Path: "/capabilities"},
-				Step{Name: "favorites", Class: classBrowse, Path: "/favorites/titles?limit=48"},
+				Step{Name: "favorites", Class: classBrowse, Path: "/favorites/titles?role=track&limit=48"},
 				Step{Name: "playlists", Class: classBrowse, Path: "/playlists"},
+				Step{Name: "history recap", Class: classDetail, Path: "/history/recap?period=month"},
 				Step{Name: "recent", Class: classHome, Path: "/recent"},
 				Step{Name: "shows page", Class: classBrowse, Path: "/libraries/{seriesLibrary}/items?limit=48"},
 				Step{Name: "live channels", Class: classGuide, Path: "/live/channels"},
@@ -158,7 +165,7 @@ func (r *MatrixReport) Add(configuration string, results []Result, trace map[str
 		if !ok {
 			continue
 		}
-		budget := matrixBudget(step, rec)
+		budget := matrixBudget(step, rec, result.Route)
 		score := max(overBudget(rec.Queries, budget.Queries), overBudget(rec.Rows, budget.Rows), overBudget(rec.Writes, budget.Writes))
 		if score > 1 && score > r.offenders[key].score {
 			r.offenders[key] = matrixOffender{key, result.Client + " / " + result.Step, rec, budget, score}
@@ -173,7 +180,7 @@ func overBudget(actual, limit int64) float64 {
 	return float64(actual) / float64(max(1, limit))
 }
 
-func matrixBudget(step Step, rec TraceRecord) matrixWork {
+func matrixBudget(step Step, rec TraceRecord, route string) matrixWork {
 	b := matrixWork{Queries: 150, Rows: 5_000, Writes: 50}
 	switch step.Class {
 	case classStatic:
@@ -192,15 +199,54 @@ func matrixBudget(step Step, rec TraceRecord) matrixWork {
 		b.Rows = min(b.Rows, int64(step.RowsBound))
 	}
 	if rec.Method == http.MethodGet || rec.Method == http.MethodHead {
-		b.Writes = 0
-		for _, statement := range rec.Statements {
-			if strings.Join(strings.Fields(statement.SQL), " ") == "UPDATE auth_users SET last_seen_at=? WHERE id=? AND last_seen_at<?" {
-				b.Writes = min(1, statement.Count)
-				break
-			}
-		}
+		b.Writes = allowedReadWrites(route, rec.Statements)
 	}
 	return b
+}
+
+// These writes publish capabilities carried by read responses. Other writes,
+// including cleanup and cache fill, still consume the zero-write budget.
+func allowedReadWrites(route string, statements []statementStat) int64 {
+	const (
+		lastSeen   = "UPDATE auth_users SET last_seen_at=? WHERE id=? AND last_seen_at<?"
+		epochFence = "UPDATE viewer_policy_epoch SET generation=generation WHERE id=1"
+	)
+	var writes, seenWrites, receiptInserts, headerInserts, offerInserts int64
+	velaRows := route == "GET /vela/v0/bootstrap" || route == "GET /vela/v0/libraries/{id}/rows" ||
+		route == "GET /vela/v0/rows" || route == "GET /vela/v0/rows/{id}"
+	siloOffers := route == "GET /silo/api/v2/catalog/items/{id}" || route == "GET /silo/api/v2/catalog/items/{id}/versions" ||
+		route == "GET /silo/api/v2/watch/{id}"
+	velaVersions := route == "GET /vela/v0/titles/{id}/versions"
+	for _, statement := range statements {
+		sql := strings.Join(strings.Fields(statement.SQL), " ")
+		switch {
+		case sql == lastSeen:
+			seenWrites = max(seenWrites, min(1, statement.Count))
+		case velaRows && strings.HasPrefix(sql, "INSERT INTO experience_row_views(id,scope_hash,viewer_id,device_id,protocol,snapshot,expires,payload) "):
+			writes += min(2, statement.Count)
+		case velaRows && strings.HasPrefix(sql, "INSERT INTO experience_row_view_manifests(scope_hash,viewer_id,device_id,protocol,generation,expires,payload) "):
+			writes += min(2, statement.Count)
+		case velaRows && strings.HasPrefix(sql, "UPDATE experience_row_views SET expires=? WHERE viewer_id=? AND device_id=? AND protocol=? AND expires>? AND ("):
+			writes += min(2, statement.Count)
+		case velaRows && sql == "DELETE FROM experience_row_view_manifests WHERE scope_hash=?":
+			writes += min(2, statement.Count)
+		case velaRows && strings.HasPrefix(sql, "INSERT INTO experience_receipts(hash,viewer_id,device_id,protocol,expires,kind,subject,purpose,rank,impression,generation) "):
+			receiptInserts += min(3, statement.Count)
+		case (velaRows || siloOffers) && strings.HasPrefix(sql, "INSERT INTO capability_headers(namespace,digest,shard,viewer_id,surface,device_id,expires) "):
+			headerInserts += statement.Count
+		case (siloOffers || velaVersions) && strings.HasPrefix(sql, "INSERT INTO sessions_version_ids(handle,surface,item_id,release_id,seen_at) VALUES "):
+			writes += min(1, statement.Count)
+		case siloOffers && strings.HasPrefix(sql, "INSERT INTO sessions_source_offers(namespace,digest,item_id,kind,reference,revision) "):
+			offerInserts += min(128, statement.Count)
+		case siloOffers && strings.HasPrefix(sql, "INSERT INTO silo_source_offer_ids(id,offer_id) "):
+			writes += min(128, statement.Count)
+		case siloOffers && strings.HasPrefix(sql, "UPDATE capability_headers SET expires=? WHERE namespace=? AND digest=?"):
+			writes += min(128, statement.Count)
+		case (siloOffers || velaVersions) && sql == epochFence:
+			writes += min(2, statement.Count)
+		}
+	}
+	return writes + seenWrites + receiptInserts + offerInserts + min(headerInserts, receiptInserts+offerInserts)
 }
 
 var sqlLiteral = regexp.MustCompile(`'(?:[^']|'')*'`)

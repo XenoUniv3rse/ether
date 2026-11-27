@@ -31,7 +31,7 @@ func (a AdditionalRows) Rows(ctx context.Context, req frontend.RowRequest) ([]fr
 		return nil, nil
 	}
 	var rows []frontend.Row
-	if a.Playlists != nil {
+	if a.Playlists != nil && (req.Purpose == "" || req.Purpose == core.RowPurpose("playlist")) {
 		entries, more, err := PlaylistEntries(ctx, req.Viewer, a.Playlists, req.Limit)
 		if err != nil {
 			return nil, err
@@ -41,7 +41,11 @@ func (a AdditionalRows) Rows(ctx context.Context, req frontend.RowRequest) ([]fr
 		}
 	}
 	restricted := !req.Viewer.IsOwner && (req.Viewer.MaxContentRating != "" || len(req.Viewer.AllowedLibraries) > 0 || a.Restricted == nil || a.Restricted(req.Viewer))
-	for _, source := range []DiscoveryRowSource{a.Watchlist, a.Personal} {
+	sources := []DiscoveryRowSource{a.Watchlist, a.Personal}
+	if req.Purpose == frontend.RowWatchlist {
+		sources = sources[:1]
+	}
+	for _, source := range sources {
 		if source == nil {
 			continue
 		}
@@ -51,7 +55,7 @@ func (a AdditionalRows) Rows(ctx context.Context, req frontend.RowRequest) ([]fr
 		}
 		rows = append(rows, CandidateRows(candidates)...)
 	}
-	if a.Live != nil {
+	if a.Live != nil && (req.Purpose == "" || req.Purpose == frontend.RowLive) {
 		now := a.Now()
 		capN := req.Limit
 		if capN <= 0 {

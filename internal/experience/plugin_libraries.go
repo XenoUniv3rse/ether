@@ -567,6 +567,10 @@ func (s *Service) sectionOrFilterAllowed(ctx context.Context, v *core.User, titl
 // slice of titles with one set-based membership query per custom filter or
 // collection library instead of one query per title.
 func (s *Service) sectionOrFilterAllowedBatch(ctx context.Context, v *core.User, titles []core.Title, sectionFor func(core.MediaType) (int, bool)) map[core.RatingKey]bool {
+	return s.sectionOrFilterAllowedBatchWithParents(ctx, v, titles, sectionFor, s.d.ParentTitles)
+}
+
+func (s *Service) sectionOrFilterAllowedBatchWithParents(ctx context.Context, v *core.User, titles []core.Title, sectionFor func(core.MediaType) (int, bool), readParents parentTitleReader) map[core.RatingKey]bool {
 	allowed := make(map[core.RatingKey]bool, len(titles))
 	if sectionFor == nil || len(titles) == 0 {
 		return allowed
@@ -662,8 +666,8 @@ func (s *Service) sectionOrFilterAllowedBatch(ctx context.Context, v *core.User,
 	shows := map[core.RatingKey]core.Title{}
 	if len(parentKeys) > 0 {
 		switch {
-		case s.d.ParentTitles != nil:
-			if m, err := s.d.ParentTitles(ctx, parentKeys); err == nil {
+		case readParents != nil:
+			if m, err := readParents(ctx, parentKeys); err == nil {
 				shows = m
 			}
 		case s.d.CachedGetMany != nil:

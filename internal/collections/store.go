@@ -593,38 +593,50 @@ func (s *Service) loadMembersMany(ctx context.Context, ids []int64) (map[int64][
 		seen[id] = struct{}{}
 		uniq = append(uniq, id)
 	}
+	values := "json_group_array(json_array(key,shared))"
+	ordered := "SELECT spec_id,key,shared FROM collections_members WHERE spec_id IN (%s) ORDER BY spec_id,pos"
+	if store.DialectOf(s.db) == store.Postgres {
+		values = "CAST(json_agg(json_build_array(key,shared) ORDER BY pos) AS TEXT)"
+		ordered = "SELECT spec_id,key,shared,pos FROM collections_members WHERE spec_id IN (%s)"
+	}
 	for chunk := range store.Chunks(uniq, 500) {
-		var q strings.Builder
-		q.WriteString(`SELECT spec_id,key,shared FROM collections_members WHERE spec_id IN (`)
 		args := make([]any, len(chunk))
 		for i, id := range chunk {
-			if i > 0 {
-				q.WriteByte(',')
-			}
-			q.WriteByte('?')
 			args[i] = id
 		}
-		q.WriteString(`) ORDER BY spec_id,pos`)
-		rows, err := s.db.QueryContext(ctx, q.String(), args...)
+		query := "SELECT spec_id," + values + " FROM (" +
+			fmt.Sprintf(ordered, store.Placeholders(len(chunk))) + ") AS members GROUP BY spec_id"
+		rows, err := s.db.QueryContext(ctx, query, args...)
 		if err != nil {
 			return nil, nil, err
 		}
 		for rows.Next() {
-			var specID, k int64
-			var shared int
-			if err := rows.Scan(&specID, &k, &shared); err != nil {
+			var specID int64
+			var payload string
+			if err := rows.Scan(&specID, &payload); err != nil {
 				rows.Close()
 				return nil, nil, err
 			}
-			rk := core.RatingKey(k)
-			keysByID[specID] = append(keysByID[specID], rk)
-			if shared == 0 {
-				m := unsharedByID[specID]
-				if m == nil {
-					m = map[core.RatingKey]bool{}
-					unsharedByID[specID] = m
+			var members [][2]int64
+			if err := json.Unmarshal([]byte(payload), &members); err != nil {
+				rows.Close()
+				return nil, nil, err
+			}
+			keys := make([]core.RatingKey, 0, len(members))
+			var unshared map[core.RatingKey]bool
+			for _, member := range members {
+				key := core.RatingKey(member[0])
+				keys = append(keys, key)
+				if member[1] == 0 {
+					if unshared == nil {
+						unshared = make(map[core.RatingKey]bool)
+					}
+					unshared[key] = true
 				}
-				m[rk] = true
+			}
+			keysByID[specID] = keys
+			if unshared != nil {
+				unsharedByID[specID] = unshared
 			}
 		}
 		if err := rows.Err(); err != nil {

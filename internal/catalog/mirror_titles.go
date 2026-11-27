@@ -2,6 +2,7 @@ package catalog
 
 import (
 	"context"
+	"encoding/json"
 	"sort"
 	"time"
 
@@ -148,6 +149,10 @@ func (m *Mirror) titles(ctx context.Context, keys []core.RatingKey, includeFutur
 		return []core.Title{}, nil
 	}
 	byKey := make(map[core.RatingKey]*core.Title, len(keys))
+	facets := textFactList(m.db, "catalog_genres", "genre", "catalog_titles.key") + "," +
+		textFactList(m.db, "catalog_keywords", "keyword", "catalog_titles.key") + "," +
+		textFactList(m.db, "catalog_studios", "studio", "catalog_titles.key") + "," +
+		textFactList(m.db, "catalog_countries", "country", "catalog_titles.key")
 	const chunk = 200
 	for start := 0; start < len(keys); start += chunk {
 		end := start + chunk
@@ -165,7 +170,7 @@ func (m *Mirror) titles(ctx context.Context, keys []core.RatingKey, includeFutur
 			collection_id,collection_name,child_count,leaf_count,fetched_at,adult,last_air_ts,
    COALESCE((SELECT h.checked FROM catalog_home_release h WHERE h.key=catalog_titles.key),0),
    COALESCE((SELECT h.earliest_ts FROM catalog_home_release h WHERE h.key=catalog_titles.key),0),
-   COALESCE((SELECT h.fallback_admitted FROM catalog_home_release h WHERE h.key=catalog_titles.key),0)
+   COALESCE((SELECT h.fallback_admitted FROM catalog_home_release h WHERE h.key=catalog_titles.key),0),`+facets+`
 			FROM catalog_titles WHERE key IN (`+ph+`)`, args...)
 		if err != nil {
 			return nil, err
@@ -176,12 +181,25 @@ func (m *Mirror) titles(ctx context.Context, keys []core.RatingKey, includeFutur
 			var adult, checked, fallback int
 			var home int64
 			var typ, certsRaw string
+			var genres, keywords, studios, countries string
 			if err := rows.Scan(&key, &typ, &t.IDs.TMDB, &t.IDs.IMDB, &t.IDs.TVDB, &t.Title, &t.OriginalTitle, &t.EnglishTitle, &t.SortTitle,
 				&t.Tagline, &t.Summary, &t.Year, &released, &runtime, &t.Status, &t.Language, &t.ContentRating, &t.EnforcementRating, &certsRaw,
 				&t.Rating, &t.VoteCount, &t.Popularity, &t.PosterPath, &t.BackdropPath, &t.LogoPath,
-				&t.CollectionID, &t.CollectionName, &t.ChildCount, &t.LeafCount, &fetched, &adult, &lastAir, &checked, &home, &fallback); err != nil {
+				&t.CollectionID, &t.CollectionName, &t.ChildCount, &t.LeafCount, &fetched, &adult, &lastAir, &checked, &home, &fallback, &genres, &keywords, &studios, &countries); err != nil {
 				rows.Close()
 				return nil, err
+			}
+			for _, facet := range []struct {
+				data string
+				dest *[]string
+			}{{genres, &t.Genres}, {keywords, &t.Keywords}, {studios, &t.Studios}, {countries, &t.Countries}} {
+				if facet.data == "[]" {
+					continue
+				}
+				if err := json.Unmarshal([]byte(facet.data), facet.dest); err != nil {
+					rows.Close()
+					return nil, err
+				}
 			}
 			t.ContentRatings = decodeCertifications(certsRaw)
 			t.Key = core.RatingKey(key)
@@ -207,50 +225,6 @@ func (m *Mirror) titles(ctx context.Context, keys []core.RatingKey, includeFutur
 		}
 		rows.Close()
 		if err := rows.Err(); err != nil {
-			return nil, err
-		}
-		// Read all four text facet tables in one UNION ALL instead of four
-		// round-trips, then sort each title's slices to match ORDER BY.
-		facetArgs := make([]any, 0, len(args)*4)
-		for i := 0; i < 4; i++ {
-			facetArgs = append(facetArgs, args...)
-		}
-		frows, err := m.db.QueryContext(ctx, `SELECT tag, key, v FROM (
-SELECT 'g' AS tag, key, genre AS v FROM catalog_genres WHERE key IN (`+ph+`)
-UNION ALL
-SELECT 'k', key, keyword FROM catalog_keywords WHERE key IN (`+ph+`)
-UNION ALL
-SELECT 's', key, studio FROM catalog_studios WHERE key IN (`+ph+`)
-UNION ALL
-SELECT 'c', key, country FROM catalog_countries WHERE key IN (`+ph+`)
-) AS facets`, facetArgs...)
-		if err != nil {
-			return nil, err
-		}
-		for frows.Next() {
-			var tag, v string
-			var k int64
-			if err := frows.Scan(&tag, &k, &v); err != nil {
-				frows.Close()
-				return nil, err
-			}
-			t := byKey[core.RatingKey(k)]
-			if t == nil {
-				continue
-			}
-			switch tag {
-			case "g":
-				t.Genres = append(t.Genres, v)
-			case "k":
-				t.Keywords = append(t.Keywords, v)
-			case "s":
-				t.Studios = append(t.Studios, v)
-			case "c":
-				t.Countries = append(t.Countries, v)
-			}
-		}
-		frows.Close()
-		if err := frows.Err(); err != nil {
 			return nil, err
 		}
 		if !full {

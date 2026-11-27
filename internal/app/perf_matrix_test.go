@@ -113,8 +113,8 @@ func testPerformanceMatrix(t *testing.T) {
 
 func perfMatrixFixture(t *testing.T, ctx context.Context, cache string) string {
 	t.Helper()
-	path := filepath.Join(cache, "matrix-v2.db")
-	stamp := filepath.Join(cache, "matrix-v2.date")
+	path := filepath.Join(cache, "matrix-v3.db")
+	stamp := filepath.Join(cache, "matrix-v3.date")
 	if b, err := os.ReadFile(stamp); err == nil && strings.TrimSpace(string(b)) == time.Now().UTC().Format(time.DateOnly) {
 		if _, err := os.Stat(path); err == nil {
 			return path
@@ -255,6 +255,11 @@ func runPerfMatrixCase(t *testing.T, ctx context.Context, fixture string, c perf
 			report.AddGap(c.name, "subsonic", "", "", "could not install and seed the Music fixture")
 			t.Error("Music fixture:", err)
 			music.methods = nil
+		}
+	}
+	if only := os.Getenv("ETHER_PERF_GATE_CLIENTS"); only == "" || strings.Contains(","+only+",", ",vela,") {
+		if err := installPerfMatrixVelaCatalogue(ctx, a, viewers[c.viewer]); err != nil {
+			t.Fatal("Vela catalogue fixture:", err)
 		}
 	}
 	if c.live {

@@ -252,17 +252,15 @@ func (v *versionHandles) remember(ctx context.Context, item core.RatingKey, ids 
 		return nil
 	}
 	slices.Sort(releases)
-	tx, err := v.db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
+	values := make([]string, 0, len(releases))
+	args := make([]any, 0, len(releases)*5)
 	for _, release := range releases {
-		if _, err := tx.ExecContext(ctx, `INSERT INTO sessions_version_ids(handle,surface,item_id,release_id,seen_at) VALUES(?,?,?,?,?) ON CONFLICT(handle) DO UPDATE SET seen_at=excluded.seen_at`, ids[release], string(v.protocol), int64(item), release, now.Unix()); err != nil {
-			return err
-		}
+		values = append(values, "(?,?,?,?,?)")
+		args = append(args, ids[release], string(v.protocol), int64(item), release, now.Unix())
 	}
-	return tx.Commit()
+	_, err = v.db.ExecContext(ctx, `INSERT INTO sessions_version_ids(handle,surface,item_id,release_id,seen_at) VALUES `+strings.Join(values, ",")+
+		` ON CONFLICT(handle) DO UPDATE SET seen_at=excluded.seen_at`, args...)
+	return err
 }
 
 func (v *versionHandles) Issue(ctx context.Context, scope frontend.VersionScope, item core.RatingKey, release string) (string, error) {

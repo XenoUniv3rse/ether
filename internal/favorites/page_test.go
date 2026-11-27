@@ -76,7 +76,7 @@ func TestPageListsOneRoleInOrderAcrossPages(t *testing.T) {
 	}
 }
 
-func TestPageTypesFavoritesSetBeforeRoles(t *testing.T) {
+func TestBackfillRolesTypesFavoritesSetBeforeRoles(t *testing.T) {
 	ctx := context.Background()
 	db := store.OpenTest(t)
 	base := Options{DB: db, Marked: state.New(db, state.Options{}).Playlists().(core.TransactionalMarkedPlaylists),
@@ -101,6 +101,9 @@ func TestPageTypesFavoritesSetBeforeRoles(t *testing.T) {
 	}
 	s, err := New(base)
 	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.BackfillRoles(ctx); err != nil {
 		t.Fatal(err)
 	}
 	page, err := s.Page(ctx, u, PageQuery{Role: "track"})

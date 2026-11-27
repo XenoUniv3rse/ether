@@ -71,6 +71,12 @@ func (a *App) productionExperienceRows(ctx context.Context, req frontend.RowRequ
 	if req.Viewer == nil || a.personalize == nil {
 		return nil, core.ErrNotFound
 	}
+	// AdditionalRows supplies Ether's watchlist. The ranker can also
+	// contribute the linked Trakt watchlist.
+	if req.Placement == frontend.PlacementHome && req.Purpose == frontend.RowWatchlist &&
+		(a.trakt == nil || !a.trakt.Connected(ctx, req.Viewer.ID)) {
+		return nil, nil
+	}
 	// Next Up is viewer history even when a taste model is ready. Building
 	// discovery candidates here visits dozens of unrelated catalogue windows.
 	if req.Purpose == frontend.RowNextUp {
@@ -230,7 +236,7 @@ func (a *App) experienceContinueKind(ctx context.Context, viewer *core.User, lib
 	c := experience.Continue{State: a.state, Now: time.Now, FavoriteShows: a.favoriteShows, GetTitles: getTitles, PrefetchTitles: prefetch, Grandchildren: grandchildren, NextEpisode: a.catalog.NextStoredEpisode, NextEpisodes: func(ctx context.Context, keys []core.RatingKey) (map[core.RatingKey]*core.Title, error) {
 		// Pending SQLite edits overlay persisted flags. Retain the state-aware
 		// walk until those bounded edits have drained, without flushing here.
-		if a.state.HasPendingWatch(viewer.ID) {
+		if a.state.HasPendingEpisodeWatch(viewer.ID) {
 			return a.catalog.NextStoredEpisodes(ctx, keys)
 		}
 		return a.catalog.NextUnwatchedStoredEpisodes(ctx, viewer.ID, keys)

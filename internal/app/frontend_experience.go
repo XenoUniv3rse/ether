@@ -407,7 +407,7 @@ func (a *App) newSurfaceExperience(protocol core.Protocol, artwork ...frontend.A
 			}
 		}
 		return a.catalog.RecentAirFiltered(ctx, typ, f, offset, limit)
-	}, CountUnplayedAired: countUnplayedAired, SimilarSource: a.catalog.Similar, FilterRecommendations: a.personalize.FilterRecommendations, Collections: a.collections, Franchises: a.catalog, CollectionMemberCounts: a.catalog.CollectionMemberCounts, Playlists: a.playlists, Scheduled: a.scheduledEpisodes, Grouped: a.groupedShows, Search: a.experienceSearch(vis, stepAside), CachedGet: a.catalog.CachedGet, CachedGetMany: a.catalog.CachedGetMany, ArtworkGet: a.catalog.ArtworkTitle, ArtworkGetMany: a.catalog.ArtworkTitles, ArtworkRows: a.catalog.ArtworkRows, VisibilityRows: a.catalog.CachedVisibilityRows, ParentTitles: func(ctx context.Context, keys []core.RatingKey) (map[core.RatingKey]core.Title, error) {
+	}, CountUnplayedAired: countUnplayedAired, SimilarSource: a.catalog.Similar, FilterRecommendations: a.personalize.FilterRecommendations, Collections: a.collections, Franchises: a.catalog, CollectionMemberCounts: a.catalog.CollectionMemberCounts, Playlists: a.playlists, Scheduled: a.scheduledEpisodes, Grouped: a.groupedShows, Search: a.experienceSearch(vis, stepAside), CachedGet: a.catalog.CachedGet, CachedGetMany: a.catalog.CachedGetMany, ArtworkGet: a.catalog.ArtworkTitle, ArtworkGetMany: a.catalog.ArtworkTitles, ArtworkRows: a.catalog.ArtworkRows, VisibilityRows: a.catalog.CachedVisibilityRows, PlaylistVisibilityRows: a.catalog.CachedPlaylistVisibilityRows, ParentTitles: func(ctx context.Context, keys []core.RatingKey) (map[core.RatingKey]core.Title, error) {
 		return a.catalog.ResolveShowParents(ctx, keys)
 	}, Get: func(ctx context.Context, u *core.User, k core.RatingKey) (*core.Title, error) {
 		if a.episodeorder != nil {
@@ -1164,6 +1164,23 @@ func (s *surfaceExperience) startCollage(viewID string, gen uint64, typ core.Med
 }
 
 func (s *surfaceExperience) ItemArtworkPage(ctx context.Context, viewer *core.Viewer, device core.Device, keys []core.RatingKey) (map[core.RatingKey][]frontend.Image, error) {
+	if viewer != nil {
+		var playlists []core.RatingKey
+		for _, key := range keys {
+			if key.Kind() == core.KindPlaylist {
+				playlists = append(playlists, key)
+			}
+		}
+		if batch, ok := s.PlaylistsSource().(interface {
+			PreparePlaylistArtwork(context.Context, int64, []core.RatingKey) (context.Context, error)
+		}); ok && len(playlists) > 0 {
+			prepared, err := batch.PreparePlaylistArtwork(ctx, viewer.ID, playlists)
+			if err != nil {
+				return nil, err
+			}
+			ctx = prepared
+		}
+	}
 	out := make(map[core.RatingKey][]frontend.Image, len(keys))
 	var titleKeys []core.RatingKey
 	var franchiseKeys []core.RatingKey
@@ -1660,6 +1677,23 @@ func (s *surfaceExperience) loadRows(ctx context.Context, req frontend.RowReques
 	if req.Viewer != nil {
 		active, _ = s.active(ctx, req.Viewer.ID)
 	}
+	if active != nil {
+		if batch, ok := s.artwork.(interface {
+			PrepareChannelArtwork(context.Context, *core.Viewer, []string) (context.Context, error)
+		}); ok {
+			var channelIDs []string
+			for _, row := range rows {
+				for _, entry := range row.Entries {
+					if channel := entry.LiveChannel; channel != nil {
+						channelIDs = append(channelIDs, channel.ID)
+					}
+				}
+			}
+			if prepared, err := batch.PrepareChannelArtwork(core.WithLiveApp(ctx, string(s.protocol)), active, channelIDs); err == nil {
+				ctx = prepared
+			}
+		}
+	}
 	for _, row := range rows {
 		s.warmArtwork(row.Items, req.Device)
 		for _, entry := range row.Entries {
@@ -1719,8 +1753,11 @@ func (s *surfaceExperience) LibraryItems(ctx context.Context, viewer *core.Viewe
 }
 
 func (s *surfaceExperience) Search(ctx context.Context, viewer *core.Viewer, device core.Device, query string, options frontend.ItemQuery) (frontend.SearchPage, error) {
-	if s.protocol == "stremio" {
+	switch s.protocol {
+	case "stremio":
 		ctx = core.WithSearchSummaryFacts(ctx)
+	case "silo":
+		ctx = core.WithSearchCardFacts(ctx)
 	}
 	page, err := s.Service.Search(ctx, viewer, device, query, options)
 	if err == nil {

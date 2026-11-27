@@ -3,13 +3,14 @@ package state
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/braedonsaunders/ether/internal/store"
-	"github.com/google/uuid"
 	"time"
 
 	"github.com/braedonsaunders/ether/internal/core"
+	"github.com/braedonsaunders/ether/internal/store"
+	"github.com/google/uuid"
 )
 
 func init() {
@@ -118,22 +119,35 @@ func (s *State) List(ctx context.Context, userID int64) ([]core.Playlist, error)
 		byID[id] = i
 		args = append(args, id)
 	}
+	entries := "json_group_array(json_array(rating_key,item_id))"
+	ordered := "SELECT playlist_id,rating_key,item_id FROM state_playlist_items WHERE playlist_id IN (%s) ORDER BY playlist_id,position"
+	if store.DialectOf(s.db) == store.Postgres {
+		entries = "CAST(json_agg(json_build_array(rating_key,item_id) ORDER BY position) AS TEXT)"
+		ordered = "SELECT playlist_id,rating_key,item_id,position FROM state_playlist_items WHERE playlist_id IN (%s)"
+	}
 	for chunk := range store.Chunks(args, 400) {
-		rows, err := s.db.QueryContext(ctx,
-			`SELECT playlist_id, rating_key, item_id FROM state_playlist_items WHERE playlist_id IN (`+store.Placeholders(len(chunk))+`) ORDER BY playlist_id, position`,
-			chunk...)
+		query := "SELECT playlist_id," + entries + " FROM (" +
+			fmt.Sprintf(ordered, store.Placeholders(len(chunk))) + ") AS members GROUP BY playlist_id"
+		rows, err := s.db.QueryContext(ctx, query, chunk...)
 		if err != nil {
 			return nil, err
 		}
 		for rows.Next() {
-			var pid, k, itemID int64
-			if err := rows.Scan(&pid, &k, &itemID); err != nil {
+			var pid int64
+			var payload string
+			if err := rows.Scan(&pid, &payload); err != nil {
 				rows.Close()
 				return nil, err
 			}
-			if idx, ok := byID[pid]; ok {
-				out[idx].Items = append(out[idx].Items, core.RatingKey(k))
-				out[idx].ItemIDs = append(out[idx].ItemIDs, itemID)
+			var members [][2]int64
+			if err := json.Unmarshal([]byte(payload), &members); err != nil {
+				rows.Close()
+				return nil, err
+			}
+			playlist := &out[byID[pid]]
+			for _, member := range members {
+				playlist.Items = append(playlist.Items, core.RatingKey(member[0]))
+				playlist.ItemIDs = append(playlist.ItemIDs, member[1])
 			}
 		}
 		err = rows.Err()
@@ -449,6 +463,31 @@ func (v playlistsView) GetHeader(ctx context.Context, userID int64, key core.Rat
 func (v playlistsView) GetHeaders(ctx context.Context, userID int64, keys []core.RatingKey) (map[core.RatingKey]core.Playlist, error) {
 	return v.s.GetPlaylistHeaders(ctx, userID, keys)
 }
+
+// PlaylistItemKeys reads one ordered window for artwork selection.
+func (v playlistsView) PlaylistItemKeys(ctx context.Context, userID int64, key core.RatingKey, offset, limit int) ([]core.RatingKey, error) {
+	id, err := playlistID(key)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := v.s.db.QueryContext(ctx, `SELECT i.rating_key
+		FROM state_playlist_items i JOIN state_playlists p ON p.id=i.playlist_id
+		WHERE i.playlist_id=? AND p.user_id=? ORDER BY i.position LIMIT ? OFFSET ?`, id, userID, limit, offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var keys []core.RatingKey
+	for rows.Next() {
+		var k core.RatingKey
+		if err := rows.Scan(&k); err != nil {
+			return nil, err
+		}
+		keys = append(keys, k)
+	}
+	return keys, rows.Err()
+}
+
 func (v playlistsView) Get(ctx context.Context, userID int64, key core.RatingKey) (*core.Playlist, error) {
 	return v.s.GetPlaylist(ctx, userID, key)
 }

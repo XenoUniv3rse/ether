@@ -4,6 +4,8 @@ package app
 
 import "github.com/braedonsaunders/ether/internal/core"
 
+const localEditionsEnabled = false
+
 func localEditionVariants(string, *core.Title) ([]core.ReleaseVariant, error) {
 	return nil, nil
 }

@@ -51,27 +51,10 @@ func (c *Catalog) cachedPortraitTitles(ctx context.Context, subjects map[core.Ra
 		for i, k := range part {
 			args[i] = int64(k)
 		}
-		rows, err := c.db.QueryContext(ctx, `SELECT `+titleCols+` FROM catalog_titles WHERE key IN (`+placeholders(len(args))+`)`, args...)
+		// A viewer's safety policy can need facts even when the catalogue
+		// filter is passive.
+		items, err := c.readVisibilityRows(ctx, args, core.VisibilityFacts)
 		if err != nil {
-			return nil, err
-		}
-		var items []core.Title
-		for rows.Next() {
-			st, err := scanTitle(rows)
-			if err != nil {
-				rows.Close()
-				return nil, err
-			}
-			items = append(items, st.t)
-		}
-		err = rows.Err()
-		rows.Close()
-		if err != nil {
-			return nil, err
-		}
-		// Always include policy facets, even when the catalogue's own filter is
-		// passive: the viewer's owned safety policy can still depend on them.
-		if err := c.hydrateVisibilityFacts(ctx, items); err != nil {
 			return nil, err
 		}
 		for _, title := range items {

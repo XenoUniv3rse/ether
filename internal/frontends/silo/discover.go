@@ -13,7 +13,7 @@ const (
 )
 
 // rowSnapshotter reads the same authorized rows as Experience.Rows without
-// recording an impression. Home remains the impression for a Silo visit.
+// issuing interaction receipts that Silo does not transmit.
 type rowSnapshotter interface {
 	SnapshotRows(context.Context, frontend.RowRequest) ([]frontend.Row, error)
 }
@@ -33,7 +33,10 @@ func onlyNowAvailable(rows []frontend.Row) []frontend.Row {
 }
 
 func (i *instance) snapshotHome(r *http.Request, v *frontend.Viewer, limit int) ([]frontend.Row, error) {
-	req := frontend.RowRequest{Viewer: v, Device: device(r), Placement: frontend.PlacementHome, Limit: limit}
+	return i.snapshotRows(r, frontend.RowRequest{Viewer: v, Device: device(r), Placement: frontend.PlacementHome, Limit: limit})
+}
+
+func (i *instance) snapshotRows(r *http.Request, req frontend.RowRequest) ([]frontend.Row, error) {
 	if snap, ok := i.host.Experience.(rowSnapshotter); ok {
 		return snap.SnapshotRows(r.Context(), req)
 	}

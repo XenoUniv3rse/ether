@@ -79,7 +79,8 @@ type ServiceDeps struct {
 	// their rows with the facts given, not read in full. Optional.
 	ArtworkRows func(context.Context, []core.RatingKey, core.TitleFacts) (map[core.RatingKey]core.Title, error)
 	// VisibilityRows reads current policy facts plus requested facets without credits.
-	VisibilityRows func(context.Context, []core.RatingKey, core.TitleFacts) (map[core.RatingKey]core.Title, error)
+	VisibilityRows         func(context.Context, []core.RatingKey, core.TitleFacts) (map[core.RatingKey]core.Title, error)
+	PlaylistVisibilityRows func(context.Context, []core.RatingKey, core.TitleFacts) (map[core.RatingKey]core.Title, error)
 	// ParentTitles resolves distinct parents using the same semantics as GetTitle.
 	ParentTitles func(context.Context, []core.RatingKey) (map[core.RatingKey]core.Title, error)
 	// CachedVirtualSeason resolves a viewer's already-computed episode layout.
@@ -375,6 +376,54 @@ func (s *Service) visible(ctx context.Context, v *core.User, title *core.Title) 
 	}
 	return seen
 }
+
+// visibleCandidates keeps search and related-page authorization in one batch.
+func (s *Service) visibleCandidates(ctx context.Context, v *core.User, titles []core.Title) ([]core.Title, error) {
+	if len(titles) == 0 {
+		return titles, nil
+	}
+	memo := frontend.RequestMemoFrom(ctx)
+	if memo == nil {
+		return s.allowTitlesWithParents(ctx, v, titles, s.d.CachedGetMany)
+	}
+	decisions := make(map[core.RatingKey]bool, len(titles))
+	var unknown []core.Title
+	memo.Mu.Lock()
+	for _, title := range titles {
+		if allowed, known := memo.Visible[title.Key]; known {
+			decisions[title.Key] = allowed
+		} else {
+			unknown = append(unknown, title)
+			decisions[title.Key] = false
+		}
+	}
+	memo.Mu.Unlock()
+	if len(unknown) > 0 {
+		allowed, err := s.allowTitlesWithParents(ctx, v, unknown, s.d.CachedGetMany)
+		if err != nil {
+			return nil, err
+		}
+		for _, title := range allowed {
+			decisions[title.Key] = true
+		}
+		memo.Mu.Lock()
+		if memo.Visible == nil {
+			memo.Visible = make(map[core.RatingKey]bool, len(unknown))
+		}
+		for _, title := range unknown {
+			memo.Visible[title.Key] = decisions[title.Key]
+		}
+		memo.Mu.Unlock()
+	}
+	out := make([]core.Title, 0, len(titles))
+	for _, title := range titles {
+		if decisions[title.Key] {
+			out = append(out, title)
+		}
+	}
+	return out, nil
+}
+
 func (s *Service) playable(ctx context.Context, v *core.User, key core.RatingKey) (*core.Title, error) {
 	if key.IsPluginKey() {
 		piv, err := s.pluginItem(core.WithNoContainerExpand(ctx), v, key)
@@ -1388,6 +1437,12 @@ func (s *Service) BatchTitles(ctx context.Context, viewer *core.Viewer, keys []c
 // allowTitles applies library, policy, availability and parent visibility to a
 // page. Availability is one batch, not one query per title.
 func (s *Service) allowTitles(ctx context.Context, v *core.User, titles []core.Title) ([]core.Title, error) {
+	return s.allowTitlesWithParents(ctx, v, titles, s.d.ParentTitles)
+}
+
+type parentTitleReader func(context.Context, []core.RatingKey) (map[core.RatingKey]core.Title, error)
+
+func (s *Service) allowTitlesWithParents(ctx context.Context, v *core.User, titles []core.Title, readParents parentTitleReader) ([]core.Title, error) {
 	if s.d.Visibility.SectionFor == nil {
 		return nil, nil
 	}
@@ -1412,7 +1467,7 @@ func (s *Service) allowTitles(ctx context.Context, v *core.User, titles []core.T
 			}
 		}
 	}
-	sectionAllowed := s.sectionOrFilterAllowedBatch(ctx, v, titles, s.d.Visibility.SectionFor)
+	sectionAllowed := s.sectionOrFilterAllowedBatchWithParents(ctx, v, titles, s.d.Visibility.SectionFor, readParents)
 	candidates := make([]core.Title, 0, len(titles))
 	for i := range titles {
 		title := titles[i]
@@ -1437,8 +1492,8 @@ func (s *Service) allowTitles(ctx context.Context, v *core.User, titles []core.T
 	if len(parents) > 0 {
 		var err error
 		switch {
-		case s.d.ParentTitles != nil:
-			shows, err = s.d.ParentTitles(ctx, parents)
+		case readParents != nil:
+			shows, err = readParents(ctx, parents)
 		case s.d.CachedGetMany != nil:
 			shows, err = s.d.CachedGetMany(ctx, parents)
 		default:
@@ -1660,6 +1715,15 @@ func (s *Service) authorizeArtwork(ctx context.Context, v *core.Viewer, device c
 		return nil
 	}
 	if key.Kind() == core.KindPlaylist {
+		if reader, ok := s.d.Playlists.(interface {
+			Exists(context.Context, int64, core.RatingKey) (bool, error)
+		}); ok {
+			exists, err := reader.Exists(ctx, v.ID, key)
+			if err != nil || !exists {
+				return core.ErrNotFound
+			}
+			return nil
+		}
 		if _, err := s.ownedPlaylist(ctx, v, key); err != nil {
 			return err
 		}
@@ -2107,11 +2171,13 @@ func (s *Service) search(ctx context.Context, viewer *core.Viewer, device core.D
 			<-pluginDone
 			return frontend.SearchPage{}, false, err
 		}
+		candidates, err = s.visibleCandidates(ctx, v, candidates)
+		if err != nil {
+			<-pluginDone
+			return frontend.SearchPage{}, false, err
+		}
 		items = make([]core.Title, 0, len(candidates))
 		for _, title := range candidates {
-			if !s.visible(ctx, v, &title) {
-				continue
-			}
 			ok, e := s.matchesUserQuery(ctx, v, title, q)
 			if e != nil {
 				<-pluginDone
@@ -2958,16 +3024,18 @@ func (s *Service) Similar(ctx context.Context, viewer *core.Viewer, device core.
 			return frontend.SearchPage{}, err
 		}
 	}
+	candidates, err = s.visibleCandidates(ctx, v, candidates)
+	if err != nil {
+		return frontend.SearchPage{}, err
+	}
 	items := make([]core.Title, 0, len(candidates))
-	for i := range candidates {
-		if s.visible(ctx, v, &candidates[i]) {
-			ok, e := s.matchesUserQuery(ctx, v, candidates[i], q)
-			if e != nil {
-				return frontend.SearchPage{}, e
-			}
-			if ok {
-				items = append(items, candidates[i])
-			}
+	for _, title := range candidates {
+		ok, err := s.matchesUserQuery(ctx, v, title, q)
+		if err != nil {
+			return frontend.SearchPage{}, err
+		}
+		if ok {
+			items = append(items, title)
 		}
 	}
 	if err = s.sortTitles(ctx, items, q); err != nil {

@@ -196,14 +196,10 @@ func (s *sourceOffers) IssueBatch(ctx context.Context, scope frontend.VersionSco
 		return nil, err
 	}
 	now := s.broker.deps.Now().UnixMilli()
-	for n := 0; n < 4; n++ {
-		if _, err = capability.PruneScopedHeadersInTx(ctx, tx, sourceOfferNamespace, scope.Viewer.ID, string(s.protocol), now, capability.HeaderBatchMax); err != nil {
-			return nil, err
-		}
-		if _, err = capability.PruneHeadersInTx(ctx, tx, sourceOfferNamespace, now, capability.HeaderBatchMax); err != nil {
-			return nil, err
-		}
-	}
+	// Expired offers cannot be resolved. The existing maintenance pass
+	// retires their durable rows; admission charges only live offers.
+	limits := s.limits
+	limits.LiveAfterMillis = now
 	result := make([]frontend.SourceOffer, 0, len(targets))
 	for _, target := range targets {
 		selector, expires, err := s.selector(ctx, tx, scope, target, allowed)
@@ -223,7 +219,7 @@ func (s *sourceOffers) IssueBatch(ctx context.Context, scope frontend.VersionSco
 			}
 		} else if errors.Is(err, sql.ErrNoRows) {
 			var count int
-			if err = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM capability_headers WHERE namespace=?`, sourceOfferNamespace).Scan(&count); err != nil {
+			if err = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM capability_headers WHERE namespace=? AND expires>?`, sourceOfferNamespace, now).Scan(&count); err != nil {
 				return nil, err
 			}
 			if count >= s.maxTotal {
@@ -235,7 +231,7 @@ func (s *sourceOffers) IssueBatch(ctx context.Context, scope frontend.VersionSco
 			}
 			sum := sha256.Sum256([]byte(token))
 			digest = hex.EncodeToString(sum[:])
-			if err = capability.AdmitHeadersInTx(ctx, s.db, tx, []capability.Header{{HeaderScope: hs, Digest: digest, ExpiresMillis: expires}}, s.limits); err != nil {
+			if err = capability.AdmitHeadersInTx(ctx, s.db, tx, []capability.Header{{HeaderScope: hs, Digest: digest, ExpiresMillis: expires}}, limits); err != nil {
 				return nil, err
 			}
 			err = tx.QueryRowContext(ctx, `INSERT INTO sessions_source_offers(namespace,digest,item_id,kind,reference,revision) VALUES(?,?,?,?,?,?) RETURNING id`, sourceOfferNamespace, digest, int64(item), selector.kind, selector.reference, selector.revision).Scan(&id)

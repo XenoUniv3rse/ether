@@ -2,9 +2,11 @@ package service
 
 import (
 	"context"
+	"strconv"
+
 	"github.com/braedonsaunders/ether/internal/core"
 	"github.com/braedonsaunders/ether/internal/frontend"
-	"strconv"
+	"github.com/braedonsaunders/ether/internal/reqmemo"
 )
 
 func collectionStamp(c *core.Collection) string {
@@ -39,6 +41,23 @@ func (s Source) collection(ctx context.Context, req frontend.ArtworkRequest) (*c
 	}
 	return c, nil
 }
+func (s Source) playlistArtworkKeys(ctx context.Context, viewer int64, key core.RatingKey, offset, limit int) ([]core.RatingKey, error) {
+	memo := "artwork:playlist:" + strconv.FormatInt(viewer, 10) + ":" + key.String() + ":" + strconv.Itoa(offset)
+	return reqmemo.Do(ctx, memo, func() ([]core.RatingKey, error) {
+		if reader, ok := s.Playlists.(interface {
+			PlaylistItemKeys(context.Context, int64, core.RatingKey, int, int) ([]core.RatingKey, error)
+		}); ok {
+			return reader.PlaylistItemKeys(ctx, viewer, key, offset, limit)
+		}
+		p, err := s.Playlists.Get(ctx, viewer, key)
+		if err != nil {
+			return nil, err
+		}
+		start := min(offset, len(p.Items))
+		return p.Items[start:min(start+limit, len(p.Items))], nil
+	})
+}
+
 func (s Source) ArtPath(ctx context.Context, req frontend.ArtworkRequest, element string) (path string, defWidth int, err error) {
 	key := req.Item
 	switch key.Kind() {
@@ -77,18 +96,24 @@ func (s Source) ArtPath(ctx context.Context, req frontend.ArtworkRequest, elemen
 		if s.Playlists == nil || u == nil {
 			return "", 0, core.ErrNotFound
 		}
-		pl, err := s.Playlists.Get(ctx, u.ID, key)
-		if err != nil {
-			return "", 0, err
-		}
-		for _, k := range pl.Items {
-			if t, err := s.title(ctx, k); err == nil && s.visible(ctx, u, t) {
-				if element == "art" && t.BackdropPath != "" {
-					return t.BackdropPath, 1280, nil
+		const window = 16
+		for offset := 0; ; offset += window {
+			keys, err := s.playlistArtworkKeys(ctx, u.ID, key, offset, window)
+			if err != nil {
+				return "", 0, err
+			}
+			for _, k := range keys {
+				if t, err := s.title(ctx, k); err == nil && s.visible(ctx, u, t) {
+					if element == "art" && t.BackdropPath != "" {
+						return t.BackdropPath, 1280, nil
+					}
+					if t.PosterPath != "" {
+						return t.PosterPath, 500, nil
+					}
 				}
-				if t.PosterPath != "" {
-					return t.PosterPath, 500, nil
-				}
+			}
+			if len(keys) < window {
+				break
 			}
 		}
 		return "", 0, core.ErrNotFound

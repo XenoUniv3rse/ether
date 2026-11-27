@@ -274,6 +274,7 @@ func siloLibrarySteps() []Step {
 		{Name: "favorite get", Class: classDetail, Path: "/api/v2/favorites/{movieId}"},
 		{Name: "unfavorite movie", Class: classState, Method: http.MethodDelete, Path: "/api/v2/favorites/{movieId}"},
 		{Name: "watchlist movie", Class: classState, Method: http.MethodPut, Path: "/api/v2/watchlist/{movieId}"},
+		{Name: "watchlist page", Class: classBrowse, Path: "/api/v2/watchlist"},
 		{Name: "unwatchlist movie", Class: classState, Method: http.MethodDelete, Path: "/api/v2/watchlist/{movieId}"},
 	}
 }

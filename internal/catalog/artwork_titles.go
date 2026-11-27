@@ -239,25 +239,8 @@ func (c *Catalog) ArtworkRows(ctx context.Context, keys []core.RatingKey, facts 
 		for i, k := range part {
 			args[i] = int64(k)
 		}
-		q, err := c.db.QueryContext(ctx, `SELECT `+titleCols+` FROM catalog_titles WHERE key IN (`+placeholders(len(part))+`)`, args...)
+		items, err := c.readVisibilityRows(ctx, args, facts)
 		if err != nil {
-			return nil, err
-		}
-		var items []core.Title
-		for q.Next() {
-			st, err := scanTitle(q)
-			if err != nil {
-				q.Close()
-				return nil, err
-			}
-			items = append(items, st.t)
-		}
-		err = q.Err()
-		q.Close()
-		if err != nil {
-			return nil, err
-		}
-		if err := c.hydrateFacts(ctx, items, facts); err != nil {
 			return nil, err
 		}
 		stored := make(map[core.RatingKey]bool, len(items))

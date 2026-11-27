@@ -81,11 +81,12 @@ type BrokerDeps struct {
 	ActiveViewer       func(context.Context, int64) (*core.Viewer, error)
 	CanPlay            func(*core.Viewer, bool, time.Time) bool
 	// CurrentPlay rechecks a running item without imposing bedtime.
-	// FreshPlay re-reads fenced membership and safety policy for admission. A returned viewer
-	// replaces the cached one for the rest of the call. ErrPolicyUnconfirmed
-	// keeps the cached CanPlay decision for an unrestricted viewer.
 	CurrentPlay func(context.Context, *core.Viewer, bool, time.Time) (*core.Viewer, error)
-	FreshPlay   func(context.Context, *core.Viewer, bool, time.Time) (*core.Viewer, error)
+	// FreshPlay re-reads fenced membership and safety policy for admission.
+	// ErrPolicyUnconfirmed keeps the cached decision for an unrestricted viewer.
+	FreshPlay func(context.Context, *core.Viewer, bool, time.Time) (*core.Viewer, error)
+	// PreviewPlay reads the same policy for an estimate without admitting playback.
+	PreviewPlay func(context.Context, *core.Viewer, bool, time.Time) (*core.Viewer, error)
 	// ReceiptCurrent rechecks the acceptance Plex stored for this request.
 	ReceiptCurrent func(context.Context, auth.Acceptance) error
 	BitrateLimit   func(*core.Viewer) int
@@ -379,6 +380,16 @@ func (b *Broker) confirm(ctx context.Context, v *core.Viewer, caps core.ClientCa
 	return b.confirmPolicy(ctx, v, caps, b.deps.FreshPlay)
 }
 
+// confirmPreview is used before a source exists. The client still goes
+// through confirm when it requests actual playback.
+func (b *Broker) confirmPreview(ctx context.Context, v *core.Viewer, caps core.ClientCaps) (*core.Viewer, error) {
+	check := b.deps.PreviewPlay
+	if check == nil {
+		check = b.deps.FreshPlay
+	}
+	return b.confirmPolicy(ctx, v, caps, check)
+}
+
 // Current item checks deliberately exclude bedtime: an admitted item can finish.
 func (b *Broker) confirmCurrent(ctx context.Context, v *core.Viewer, caps core.ClientCaps) (*core.Viewer, error) {
 	fresh := b.deps.CurrentPlay
@@ -565,9 +576,15 @@ func (b *Broker) Plan(ctx context.Context, req frontend.PlanRequest) (planned fr
 	if closed {
 		return frontend.PlayPlan{}, core.ErrNotAvailable
 	}
-	confirmed, err := b.confirm(ctx, v, req.Caps)
+	confirm := b.confirm
+	if req.Intent.Estimate {
+		confirm = b.confirmPreview
+	}
+	confirmed, err := confirm(ctx, v, req.Caps)
 	if err != nil {
-		b.emitAdmissionDenied(v, req.Item, "", req.Caps, req.Device, string(req.Protocol), false, err)
+		if !req.Intent.Estimate {
+			b.emitAdmissionDenied(v, req.Item, "", req.Caps, req.Device, string(req.Protocol), false, err)
+		}
 		return frontend.PlayPlan{}, err
 	}
 	v = confirmed

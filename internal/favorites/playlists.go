@@ -3,9 +3,11 @@ package favorites
 import (
 	"context"
 	"errors"
+	"strconv"
 	"time"
 
 	"github.com/braedonsaunders/ether/internal/core"
+	"github.com/braedonsaunders/ether/internal/reqmemo"
 )
 
 // Playlists projects the marked Favorites playlist from the authoritative set.
@@ -190,9 +192,35 @@ func (p *Playlists) GetHeaders(ctx context.Context, uid int64, keys []core.Ratin
 	return out, nil
 }
 
+type playlistOwnershipKey struct{}
+
+type playlistOwnership struct {
+	viewer int64
+	owned  map[core.RatingKey]bool
+}
+
+// PreparePlaylistArtwork shares ownership checks across the artwork page.
+func (p *Playlists) PreparePlaylistArtwork(ctx context.Context, uid int64, keys []core.RatingKey) (context.Context, error) {
+	owned, err := p.ExistsBatch(ctx, uid, keys)
+	if err != nil {
+		return ctx, err
+	}
+	for _, key := range keys {
+		if !owned[key] {
+			owned[key] = false
+		}
+	}
+	return context.WithValue(ctx, playlistOwnershipKey{}, playlistOwnership{viewer: uid, owned: owned}), nil
+}
+
 // Exists reports whether the viewer owns a playlist with key without reading
 // its items or the favorites marker.
 func (p *Playlists) Exists(ctx context.Context, uid int64, key core.RatingKey) (bool, error) {
+	if page, ok := ctx.Value(playlistOwnershipKey{}).(playlistOwnership); ok && page.viewer == uid {
+		if found, checked := page.owned[key]; checked {
+			return found, nil
+		}
+	}
 	if base, ok := p.Base.(interface {
 		GetHeader(context.Context, int64, core.RatingKey) (*core.Playlist, error)
 	}); ok {
@@ -238,6 +266,32 @@ func (p *Playlists) ExistsBatch(ctx context.Context, uid int64, keys []core.Rati
 		}
 	}
 	return out, nil
+}
+
+// PlaylistItemKeys keeps artwork selection on the ordered member window.
+func (p *Playlists) PlaylistItemKeys(ctx context.Context, uid int64, key core.RatingKey, offset, limit int) ([]core.RatingKey, error) {
+	reader, paged := p.Base.(interface {
+		PlaylistItemKeys(context.Context, int64, core.RatingKey, int, int) ([]core.RatingKey, error)
+	})
+	if paged {
+		fav, err := reqmemo.Do(ctx, "favorites:artwork-marker:"+strconv.FormatInt(uid, 10), func() (*core.Playlist, error) {
+			return p.favorite(ctx, uid)
+		})
+		if err != nil && !errors.Is(err, core.ErrNotFound) {
+			return nil, err
+		}
+		if fav == nil || fav.Key != key {
+			return reader.PlaylistItemKeys(ctx, uid, key, offset, limit)
+		}
+	}
+	pl, err := reqmemo.Do(ctx, "favorites:artwork-members:"+strconv.FormatInt(uid, 10)+":"+key.String(), func() (*core.Playlist, error) {
+		return p.Get(ctx, uid, key)
+	})
+	if err != nil {
+		return nil, err
+	}
+	start := min(offset, len(pl.Items))
+	return pl.Items[start:min(start+limit, len(pl.Items))], nil
 }
 
 func (p *Playlists) Get(ctx context.Context, uid int64, key core.RatingKey) (*core.Playlist, error) {

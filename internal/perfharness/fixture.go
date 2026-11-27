@@ -675,11 +675,13 @@ func (g *generator) favorites(user int64) error {
 	now := g.now.UnixNano()
 	seen := map[string]bool{}
 	for i := range 55 {
-		kind, subject := "title", ""
+		kind, subject, role := "title", "", ""
 		if i < 50 {
 			key := g.movies[g.rng.IntN(len(g.movies))]
+			role = string(core.TypeMovie)
 			if len(g.shows) > 0 && i%4 == 0 {
 				key = g.shows[g.rng.IntN(len(g.shows))]
+				role = string(core.TypeShow)
 			}
 			subject = key.String()
 		} else if len(g.people.dealt) > 0 {
@@ -689,7 +691,7 @@ func (g *generator) favorites(user int64) error {
 			continue
 		}
 		seen[kind+subject] = true
-		if err := g.insert("favorites_items", "viewer_id,kind,subject_id,added_at,sort_order", user, kind, subject, now-int64(i)*int64(time.Hour), 0); err != nil {
+		if err := g.insert("favorites_items", "viewer_id,kind,subject_id,added_at,sort_order,role", user, kind, subject, now-int64(i)*int64(time.Hour), 0, role); err != nil {
 			return err
 		}
 	}

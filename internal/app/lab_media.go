@@ -142,6 +142,8 @@ func labMediaVariants(dir string, t *core.Title) ([]core.ReleaseVariant, bool) {
 	return out, true
 }
 
+const localEditionsEnabled = true
+
 func localEditionVariants(dir string, t *core.Title) ([]core.ReleaseVariant, error) {
 	vs, _ := labMediaVariants(dir, t)
 	return vs, nil

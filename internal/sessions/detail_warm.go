@@ -156,7 +156,7 @@ func (b *Broker) WarmDetail(ctx context.Context, req frontend.PlanRequest) bool 
 	if req.Caps.ClientIP != "" {
 		declared.ClientIP = req.Caps.ClientIP
 	}
-	if v, err = b.confirm(ctx, v, declared); err != nil {
+	if v, err = b.confirmPreview(ctx, v, declared); err != nil {
 		return false
 	}
 	lookup := b.deps.MediaLookup

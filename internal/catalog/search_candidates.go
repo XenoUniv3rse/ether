@@ -78,6 +78,21 @@ func (c *Catalog) SearchDetails(ctx context.Context, items []core.Title) ([]core
 			at = append(at, i)
 		}
 	}
+	if core.SearchCardFacts(ctx) {
+		rows := make([]core.Title, 0, len(at))
+		for _, i := range at {
+			title := out[i]
+			title.Genres, title.Keywords, title.Studios = nil, nil, nil
+			rows = append(rows, title)
+		}
+		if err := c.hydrateFacts(ctx, rows, core.FactGenres|core.FactKeywords|core.FactStudios); err != nil {
+			return nil, err
+		}
+		for j, i := range at {
+			out[i] = rows[j]
+		}
+		return out, nil
+	}
 	if err := c.readSearchFull(ctx, out, at); err != nil {
 		return nil, err
 	}

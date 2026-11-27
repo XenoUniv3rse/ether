@@ -121,7 +121,7 @@ func (i *instance) personalList(w http.ResponseWriter, r *http.Request, kind str
 		titles = page.Items
 		more = offset+len(page.Items) < page.Total
 	} else {
-		rows, e := i.host.Experience.Rows(r.Context(), frontend.RowRequest{Viewer: v, Device: device(r), Placement: frontend.PlacementHome, Purpose: frontend.RowWatchlist, Limit: 500})
+		rows, e := i.snapshotRows(r, frontend.RowRequest{Viewer: v, Device: device(r), Placement: frontend.PlacementHome, Purpose: frontend.RowWatchlist, Limit: 500})
 		if e != nil {
 			http.Error(w, "Unavailable", 503)
 			return
