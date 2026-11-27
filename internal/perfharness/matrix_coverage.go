@@ -87,7 +87,7 @@ func addMatrixConsoleCoverage(c *Client) {
 	c.Steps = append(c.Steps, Step{Name: "viewer safety policy", Class: classConsole, Path: "/safety/policies/{viewerId}"})
 	const draftHome = `{"mode":"curated","picks":false,"length":{},"rows":[]}`
 	const spec = `{"name":"Matrix scratch collection","mediaType":"movie","sources":[{"kind":"titles","keys":["{consoleMovieKey}"]}],"sort":"source","refresh":"weekly","enabled":true,"artwork":{"mode":"custom","url":"/p.jpg"}}`
-	for _, step := range []Step{
+	steps := []Step{
 		{Name: "fixture local console login", Method: http.MethodPost, Path: "/auth/local", Body: `{"username":"{username}","password":"{password}"}`},
 		{Name: "fixture exchange owner session", Method: http.MethodPost, Path: "/auth/session", Headers: func(h http.Header, vars map[string]string) {
 			h.Set("X-Plex-Token", vars["ownerToken"])
@@ -185,7 +185,8 @@ func addMatrixConsoleCoverage(c *Client) {
 		{Name: "fixture GET installed indexer definition", Path: "/indexer-sites/definitions/fakepublic"},
 		{Name: "fixture POST update indexer definitions", Method: http.MethodPost, Path: "/indexer-sites/update"},
 		{Name: "fixture DELETE installed indexer definition", Method: http.MethodDelete, Path: "/indexer-sites/definitions/fakepublic"},
-	} {
+	}
+	for _, step := range append(steps, matrixConsoleArtworkScenarios()...) {
 		step.Class = classConsole
 		headers := step.Headers
 		step.Headers = func(h http.Header, vars map[string]string) {
@@ -228,11 +229,19 @@ func discoverMatrixConsoleAssets(vars map[string]string, body []byte) {
 }
 
 func discoverMatrixConsoleLook(vars map[string]string, body []byte) {
-	var looks []struct {
-		ID string `json:"id"`
+	var looks []map[string]json.RawMessage
+	if json.Unmarshal(body, &looks) != nil || len(looks) == 0 {
+		return
 	}
-	if json.Unmarshal(body, &looks) == nil && len(looks) != 0 {
-		setOnce(vars, "consoleLook", url.PathEscape(looks[0].ID))
+	var id string
+	if json.Unmarshal(looks[0]["id"], &id) != nil || id == "" {
+		return
+	}
+	setOnce(vars, "consoleLook", url.PathEscape(id))
+	delete(looks[0], "id")
+	looks[0]["name"] = json.RawMessage(`"Matrix console look"`)
+	if draft, err := json.Marshal(looks[0]); err == nil {
+		setOnce(vars, "consoleLookDraft", string(draft))
 	}
 }
 
