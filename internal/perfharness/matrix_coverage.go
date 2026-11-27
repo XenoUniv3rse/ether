@@ -149,6 +149,7 @@ func addMatrixConsoleCoverage(c *Client, availabilityMonitor bool) {
 		{Name: "fixture set title tags", Method: http.MethodPut, Path: "/catalog/title/{consoleMovieKey}/tags", Body: `{"tags":["Matrix fixture"]}`},
 		{Name: "fixture clear title tags", Method: http.MethodPut, Path: "/catalog/title/{consoleMovieKey}/tags", Body: `{"tags":[]}`},
 		{Name: "fixture clear remaining cache", Method: http.MethodPost, Path: "/cache/clear-all"},
+		{Name: "fixture request resume cache warming", Method: http.MethodPost, Path: "/cache/warm"},
 		{Name: "fixture rename On-Air artwork", Method: http.MethodPatch, Path: "/onair/assets/{consoleArtwork}", Body: `{"name":"Matrix renamed artwork"}`},
 		{Name: "fixture delete On-Air artwork", Method: http.MethodDelete, Path: "/onair/assets/{consoleArtwork}"},
 		{Name: "fixture create On-Air reel", Method: http.MethodPost, Path: "/onair/reels", Body: `{"name":"Matrix reel","order":"sequence"}`, Discover: discoverMatrixID("consoleReel")},
@@ -207,6 +208,7 @@ func addMatrixConsoleCoverage(c *Client, availabilityMonitor bool) {
 		{Name: "fixture DELETE scratch collection", Method: http.MethodDelete, Path: "/collections/{scratchCollection}"},
 		{Name: "fixture POST install indexer definition", Method: http.MethodPost, Path: "/indexer-sites/catalog/install", Body: `{"id":"fakepublic"}`},
 		{Name: "fixture GET installed indexer definition", Path: "/indexer-sites/definitions/fakepublic"},
+		{Name: "fixture preview draft indexer request", Method: http.MethodPost, Path: "/indexer/preview", Body: `{"indexer":{"id":"matrix-indexer","name":"Matrix preview indexer","url":"https://matrix.invalid/","apiKey":"matrix-fixture-key"}}`},
 		{Name: "fixture POST update indexer definitions", Method: http.MethodPost, Path: "/indexer-sites/update"},
 		{Name: "fixture read installed release version", Path: "/updates/", Discover: discoverMatrixReleaseVersion},
 		{Name: "fixture dismiss installed release notes", Method: http.MethodPost, Path: "/updates/notes/dismiss", Body: `{"version":"{consoleReleaseVersion}"}`},
@@ -250,6 +252,7 @@ func addMatrixConsoleCoverage(c *Client, availabilityMonitor bool) {
 		{Name: "fixture check scratch database", Method: http.MethodPost, Path: "/status/database/check"},
 		{Name: "fixture refresh local diagnostics", Method: http.MethodPost, Path: "/safety/diagnostics/refresh"},
 		{Name: "fixture clear scratch poster uploads", Method: http.MethodPost, Path: "/posters/clear"},
+		{Name: "fixture disconnect unlinked viewer Plex watch state", Method: http.MethodPost, Path: "/viewers/{viewerId}/plex-watch/disconnect"},
 		{Name: "fixture clear in-memory logs", Method: http.MethodDelete, Path: "/logs"},
 		{Name: "fixture DELETE installed indexer definition", Method: http.MethodDelete, Path: "/indexer-sites/definitions/fakepublic"},
 		// Applying a bundle can change Home rows. Run this after every reader

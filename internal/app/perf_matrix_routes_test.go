@@ -245,6 +245,20 @@ func matrixRouteExceptions() map[perfharness.MatrixRouteKey]string {
 		"/ether/api/viewers/{id}/plex-watch/import", "/ether/api/viewers/{id}/plex-watch/export", "/ether/api/viewers/{id}/plex-watch/retry")
 	add("console", http.MethodPut, "requires a verified source match from an external metadata provider",
 		"/ether/api/catalog/title/{key}/match")
+	add("console", http.MethodPost, "refreshes the title tree from a configured metadata provider",
+		"/ether/api/catalog/title/{key}/refresh")
+	add("console", http.MethodPost, "requires a materialized source with a provider catalogue to synchronize",
+		"/ether/api/libraries/catalogue-sources/{source}/sync")
+	add("console", http.MethodPost, "requires a plugin that supplies a source to resolve or a candidate matcher for the selected item",
+		"/ether/api/libraries/{id}/item/{ref}/match")
+	add("console", http.MethodPost, "requires a fixture plugin with a declared optional setup step",
+		"/ether/api/plugins-setup/{plugin}/{step}/skip")
+	add("console", http.MethodPost, "requires a fixture plugin with a declared and executable setup step",
+		"/ether/api/plugins-setup/{plugin}/{step}/test")
+	add("console", http.MethodPost, "contacts public IP discovery endpoints to verify outbound and direct egress",
+		"/ether/api/outbound/check")
+	add("console", http.MethodPut, "requires an authorized personal Plex account connection",
+		"/ether/api/viewers/{id}/plex-watch")
 	add("console", http.MethodPost, "refreshes ratings from a configured upstream provider",
 		"/ether/api/discovery/ratings/refresh/{key}")
 	add("console", http.MethodPost, "requires a staged restore archive or snapshot made from a separate source instance",
