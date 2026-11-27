@@ -70,9 +70,9 @@ type tsSplicer struct {
 	videoType                byte
 	pesPIDs                  map[int]bool
 	pat, pmt                 [][]byte // latest PAT/PMT section packets
-	pmtOpen                  bool     // collecting a multi-packet PMT
-	pmtSig                   string   // version and streams of the current PMT
-	format                   int      // bumped whenever pmtSig changes
+	patSection, pmtSection   tsSection
+	pmtSig                   string // version and streams of the current PMT
+	format                   int    // bumped whenever pmtSig changes
 
 	// Splice state.
 	epoch   int
@@ -149,7 +149,8 @@ func (s *tsSplicer) reconnect(dedupe bool) {
 	if s.videoPID != tsNoPID {
 		s.prevVideo, s.prevPES = s.videoPID, s.pesPIDs
 	}
-	s.pat, s.pmt, s.pmtOpen = nil, nil, false
+	s.pat, s.pmt = nil, nil
+	s.patSection, s.pmtSection = tsSection{}, tsSection{}
 	s.pmtPID, s.pcrPID, s.videoPID, s.videoType = tsNoPID, tsNoPID, tsNoPID, 0
 	s.pesPIDs = map[int]bool{}
 	s.ccOff = map[int]byte{}
@@ -290,21 +291,12 @@ func (s *tsSplicer) packet(in []byte, queue func([]byte, bool)) {
 	s.inspect(pkt, id)
 	switch {
 	case id == 0:
-		if pusi && pl >= 0 {
-			s.parsePAT(pkt[pl:])
-		}
-		if pusi {
-			s.pat = [][]byte{append([]byte(nil), pkt...)}
+		if section, packets := s.patSection.feed(pkt, pl, pusi); section != nil && s.parsePAT(section) {
+			s.pat = packets
 		}
 	case id == s.pmtPID:
-		if pusi {
-			s.pmt = [][]byte{append([]byte(nil), pkt...)}
-			s.pmtOpen = true
-		} else if s.pmtOpen && len(s.pmt) < 8 {
-			s.pmt = append(s.pmt, append([]byte(nil), pkt...))
-		}
-		if pusi && pl >= 0 {
-			s.parsePMT(pkt[pl:])
+		if section, packets := s.pmtSection.feed(pkt, pl, pusi); section != nil && s.parsePMT(section) {
+			s.pmt = packets
 		}
 	}
 	key := id == s.videoPID && pusi && s.isKey(pkt, pl)
@@ -419,60 +411,126 @@ func (s *tsSplicer) enter(rewrite bool) {
 	_ = rewrite
 }
 
-func (s *tsSplicer) parsePAT(b []byte) {
-	if len(b) < 1 {
-		return
-	}
-	ptr := int(b[0])
-	b = b[1+min(ptr, len(b)-1):]
-	if len(b) < 8 || b[0] != 0 {
-		return
-	}
-	n := int(b[1]&0x0f)<<8 | int(b[2])
-	end := min(3+n-4, len(b))
-	for i := 8; i+4 <= end; i += 4 {
-		prog := int(b[i])<<8 | int(b[i+1])
-		if prog != 0 {
-			s.pmtPID = int(b[i+2]&0x1f)<<8 | int(b[i+3])
-			return
-		}
-	}
+// tsSection collects one PAT or PMT section starting at the payload pointer.
+type tsSection struct {
+	data    []byte
+	packets [][]byte
+	cc      byte
 }
 
-func (s *tsSplicer) parsePMT(b []byte) {
-	if len(b) < 1 {
-		return
+func (s *tsSection) feed(pkt []byte, pl int, start bool) ([]byte, [][]byte) {
+	if pkt[1]&0x80 != 0 || pkt[3]&0xc0 != 0 {
+		*s = tsSection{}
+		return nil, nil
 	}
-	ptr := int(b[0])
-	b = b[1+min(ptr, len(b)-1):]
+	if pl < 0 {
+		if start || pkt[3]&0x10 != 0 {
+			*s = tsSection{}
+		}
+		return nil, nil
+	}
+	cc := pkt[3] & 0x0f
+	payload := pkt[pl:]
+	if start {
+		*s = tsSection{}
+		offset := 1 + int(payload[0])
+		if offset >= len(payload) {
+			return nil, nil
+		}
+		payload = payload[offset:]
+	} else if len(s.data) == 0 {
+		return nil, nil
+	} else if cc == s.cc {
+		return nil, nil
+	} else if cc != (s.cc+1)&0x0f {
+		*s = tsSection{}
+		return nil, nil
+	}
+	s.cc = cc
+	s.data = append(s.data, payload...)
+	s.packets = append(s.packets, append([]byte(nil), pkt...))
+	if len(s.data) < 3 {
+		return nil, nil
+	}
+	length := int(s.data[1]&0x0f)<<8 | int(s.data[2])
+	if length > 1021 || length < 4 {
+		*s = tsSection{}
+		return nil, nil
+	}
+	if len(s.data) < 3+length {
+		return nil, nil
+	}
+	section, packets := s.data[:3+length-4], s.packets
+	*s = tsSection{}
+	return section, packets
+}
+
+func (s *tsSplicer) parsePAT(b []byte) bool {
+	if len(b) < 8 || b[0] != 0 || (len(b)-8)%4 != 0 {
+		return false
+	}
+	for i := 8; i < len(b); i += 4 {
+		prog := int(b[i])<<8 | int(b[i+1])
+		if prog != 0 {
+			id := int(b[i+2]&0x1f)<<8 | int(b[i+3])
+			if id != s.pmtPID {
+				s.pmtPID, s.pmt, s.pmtSection = id, nil, tsSection{}
+			}
+			return true
+		}
+	}
+	return false
+}
+
+func (s *tsSplicer) parsePMT(b []byte) bool {
 	if len(b) < 12 || b[0] != 2 {
-		return
+		return false
 	}
-	n := int(b[1]&0x0f)<<8 | int(b[2])
-	end := min(3+n-4, len(b))
-	s.pcrPID = int(b[8]&0x1f)<<8 | int(b[9])
 	info := int(b[10]&0x0f)<<8 | int(b[11])
+	start := 12 + info
+	if start > len(b) || !tsDescriptors(b[12:start]) {
+		return false
+	}
 	video, vtype := tsNoPID, byte(0)
 	pes := map[int]bool{}
-	for i := 12 + info; i+5 <= end; {
+	for i := start; i < len(b); {
+		if len(b)-i < 5 {
+			return false
+		}
 		st := b[i]
 		ep := int(b[i+1]&0x1f)<<8 | int(b[i+2])
 		es := int(b[i+3]&0x0f)<<8 | int(b[i+4])
+		next := i + 5 + es
+		if next > len(b) || !tsDescriptors(b[i+5:next]) {
+			return false
+		}
 		pes[ep] = true
 		if video == tsNoPID && tsVideoType(st) {
 			video, vtype = ep, st
 		}
-		i += 5 + es
+		i = next
 	}
+	s.pcrPID = int(b[8]&0x1f)<<8 | int(b[9])
 	s.pesPIDs = pes
 	s.videoPID, s.videoType = video, vtype
 	// A changed program (codec, PIDs, version) starts a new format.
-	if sig := string(b[5:6]) + string(b[12+info:end]); sig != s.pmtSig {
+	if sig := string(b[5:6]) + string(b[start:]); sig != s.pmtSig {
 		if s.pmtSig != "" {
 			s.format++
 		}
 		s.pmtSig = sig
 	}
+	return true
+}
+
+func tsDescriptors(b []byte) bool {
+	for len(b) > 0 {
+		if len(b) < 2 || int(b[1]) > len(b)-2 {
+			return false
+		}
+		b = b[2+int(b[1]):]
+	}
+	return true
 }
 
 func tsVideoType(t byte) bool {
@@ -486,7 +544,7 @@ func tsVideoType(t byte) bool {
 // isKey reports a video random-access point: the adaptation field's flag,
 // or an IDR/IRAP/sequence header at the start of the PES payload.
 func (s *tsSplicer) isKey(pkt []byte, pl int) bool {
-	if (pkt[3]>>4)&2 != 0 && pkt[4] > 0 && pkt[5]&0x40 != 0 {
+	if (pkt[3]>>4)&2 != 0 && pkt[4] > 0 && pkt[4] <= tsPacket-5 && pkt[5]&0x40 != 0 {
 		return true
 	}
 	if pl < 0 || pl+9 > tsPacket || pkt[pl] != 0 || pkt[pl+1] != 0 || pkt[pl+2] != 1 {
@@ -527,10 +585,11 @@ func pesTimes(pkt []byte, pl int) (pts, dts int) {
 		return
 	}
 	flags := pkt[pl+7] >> 6
-	if flags&2 != 0 && pl+14 <= tsPacket {
+	headerBytes := int(pkt[pl+8])
+	if pl+14 <= tsPacket && (flags == 2 && headerBytes >= 5 || flags == 3 && headerBytes >= 10) {
 		pts = pl + 9
 	}
-	if flags == 3 && pl+19 <= tsPacket {
+	if flags == 3 && headerBytes >= 10 && pl+19 <= tsPacket {
 		dts = pl + 14
 	}
 	return
@@ -551,7 +610,7 @@ func writeTS(b []byte, v int64) {
 
 // pcrAt returns the position of a packet's PCR, or -1.
 func pcrAt(pkt []byte) int {
-	if (pkt[3]>>4)&2 == 0 || pkt[4] < 7 || pkt[5]&0x10 == 0 {
+	if (pkt[3]>>4)&2 == 0 || pkt[4] < 7 || pkt[4] > tsPacket-5 || pkt[5]&0x10 == 0 {
 		return -1
 	}
 	return 6
@@ -740,7 +799,7 @@ func (s *tsSplicer) inspect(pkt []byte, id int) {
 		return
 	}
 	cc := pkt[3] & 0x0f
-	announced := (pkt[3]>>4)&2 != 0 && pkt[4] > 0 && pkt[5]&0x80 != 0
+	announced := (pkt[3]>>4)&2 != 0 && pkt[4] > 0 && pkt[4] <= tsPacket-5 && pkt[5]&0x80 != 0
 	if last, ok := s.inputCC[id]; ok && !announced && cc != last && cc != (last+1)&0x0f {
 		s.damage++
 	}

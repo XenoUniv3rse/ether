@@ -315,3 +315,66 @@ func TestTSFormatGenerationFollowsPMT(t *testing.T) {
 		t.Fatalf("format generation per keyframe %v, want %v", gens, want)
 	}
 }
+
+func FuzzTSSplicerFeed(f *testing.F) {
+	g := &tsGen{cc: map[int]byte{}}
+	program := g.psi()
+	f.Add(program, uint16(tsPacket))
+	for _, field := range []string{"section", "program info", "stream info", "pointer", "adaptation"} {
+		packets := append([]byte(nil), program...)
+		pmt := packets[tsPacket:]
+		payload := pmt[payloadAt(pmt):]
+		switch field {
+		case "section":
+			payload[2], payload[3] = 0xb0, 0
+		case "program info":
+			payload[11], payload[12] = 0xf0, 172
+		case "stream info":
+			payload[16], payload[17] = 0xf0, 255
+		case "pointer":
+			payload[0] = 255
+		case "adaptation":
+			pmt[4] = 255
+		}
+		f.Add(packets, uint16(tsPacket+5))
+	}
+	f.Fuzz(func(t *testing.T, data []byte, split uint16) {
+		sp := newTSSplicer()
+		cut := min(len(data), int(split))
+		out, _ := sp.feed(data[:cut], nil, 0)
+		out, _ = sp.feed(data[cut:], out, int64(len(out)))
+		if len(out)%tsPacket != 0 {
+			t.Fatal("splicer emitted a partial packet")
+		}
+	})
+}
+
+func TestTSProgramMapChangesOnlyAfterCompleteSection(t *testing.T) {
+	g := &tsGen{cc: map[int]byte{}}
+	sp := newTSSplicer()
+	sp.feed(g.psi(), nil, 0)
+	original := sp.pmtSig
+
+	descriptor := make([]byte, 182)
+	descriptor[0], descriptor[1] = 0x80, 180
+	body := append([]byte{0, 1, 0xc3, 0, 0, 0xe1, 0, 0xf0, byte(len(descriptor))}, descriptor...)
+	body = append(body, 0x24, 0xe1, 0, 0xf0, 0)
+	pmt := psiSection(2, body)
+	sp.feed(g.pkt(0x1000, true, nil, pmt[:184]), nil, 0)
+	if sp.pmtSig != original {
+		t.Fatal("incomplete program map changed the format")
+	}
+	sp.feed(g.pkt(0x1000, false, nil, pmt[184:]), nil, 0)
+	if sp.videoType != 0x24 || sp.pmtSig == original || len(sp.pmt) != 2 {
+		t.Fatal("complete program map was not installed")
+	}
+	current := sp.pmtSig
+	body[6]++
+	body[10]++ // Descriptor exceeds its declared loop.
+	invalid := psiSection(2, body)
+	sp.feed(g.pkt(0x1000, true, nil, invalid[:184]), nil, 0)
+	sp.feed(g.pkt(0x1000, false, nil, invalid[184:]), nil, 0)
+	if sp.pmtSig != current || sp.videoType != 0x24 || sp.pcrPID != 0x100 {
+		t.Fatal("invalid descriptors changed the program map")
+	}
+}
