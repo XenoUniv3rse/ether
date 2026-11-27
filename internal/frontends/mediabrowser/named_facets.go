@@ -1,6 +1,7 @@
 package mediabrowser
 
 import (
+	"context"
 	"net/http"
 
 	"github.com/braedonsaunders/ether/internal/frontend"
@@ -71,5 +72,28 @@ func (i *instance) addNamedFacets(r *http.Request, viewer *frontend.Viewer, deta
 		if len(result) > 0 {
 			dto[group.field] = result
 		}
+	}
+}
+
+// Prefetch the same authorized IDs used by shapeJellyfinItem in a page-sized
+// batch. Non-catalogue kinds still use the scalar host fallback.
+func (i *instance) prefetchGenreItems(r *http.Request, viewer *frontend.Viewer, titles []frontend.Title) {
+	if i.protocol != "jellyfin" || (!fieldSet(r)["genres"] && jellyfinListFile(r)) {
+		return
+	}
+	facets, ok := i.host.Experience.(interface {
+		PrefetchNamedFacetIDs(context.Context, *frontend.Viewer, []frontend.RatingKey, string) error
+	})
+	if !ok {
+		return
+	}
+	keys := make([]frontend.RatingKey, 0, len(titles))
+	for _, title := range titles {
+		if len(title.Genres) > 0 && (title.Key.Kind() == frontend.KindMovie || title.Key.Kind() == frontend.KindShow) {
+			keys = append(keys, title.Key)
+		}
+	}
+	for start := 0; start < len(keys); start += 256 {
+		_ = facets.PrefetchNamedFacetIDs(r.Context(), viewer, keys[start:min(start+256, len(keys))], "genre")
 	}
 }

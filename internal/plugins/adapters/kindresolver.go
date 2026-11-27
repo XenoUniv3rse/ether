@@ -2590,11 +2590,7 @@ func (r *KindResolver) loadAuthorized(ctx context.Context, viewer *core.Viewer, 
 	}
 	r.items.PinItemAsync(item.Ref)
 	if r.authorize == nil && viewer.MaxContentRating != "" {
-		proj := pluginitems.Project(item, rec.Decl, lib.Present, lib.CardShape)
-		cr := proj.ContentRating
-		if cr == "" {
-			cr = extractContentRating(item.Fields)
-		}
+		cr := pluginitems.ItemContentRating(item.Fields)
 		if cr != "" && contentrating.Exceeds(cr, viewer.MaxContentRating) {
 			return core.KindItem{}, core.Library{}, pluginitems.KindRecord{}, core.ErrNotFound
 		}

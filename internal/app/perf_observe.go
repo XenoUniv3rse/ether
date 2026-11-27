@@ -178,8 +178,14 @@ func (p *perfObserver) wrap(surface string, next http.Handler) http.Handler {
 				if p.alloc && r.Header.Get(PerfTagHeader) != "" {
 					runtime.ReadMemStats(&after)
 				}
+				status := recorder.Status()
+				if status == 0 {
+					// net/http sends 200 when a handler returns without writing a
+					// body or an explicit status, including header-only responses.
+					status = http.StatusOK
+				}
 				p.writeTrace(PerfTraceRecord{
-					Tag: r.Header.Get(PerfTagHeader), Surface: surface, Method: r.Method, Path: r.URL.Path, Status: recorder.Status(), Bytes: recorder.BytesWritten(),
+					Tag: r.Header.Get(PerfTagHeader), Surface: surface, Method: r.Method, Path: r.URL.Path, Status: status, Bytes: recorder.BytesWritten(),
 					Start: start, Duration: elapsed, Queries: stats.Queries(), Writes: stats.Writes(), Rows: stats.Rows(), DBTime: stats.DBTime(), LockWait: stats.LockWait(),
 					Statements: stats.Statements(),
 					AllocBytes: after.TotalAlloc - before.TotalAlloc, Allocs: after.Mallocs - before.Mallocs,

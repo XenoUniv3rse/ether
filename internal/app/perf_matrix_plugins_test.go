@@ -42,6 +42,8 @@ func perfMatrixPluginCredential(ctx context.Context, a *App, owner int64) (strin
 	return grants.IssueScoped(ctx, owner, "plugin", core.Device{ID: perfRemotePlugin, Client: "etherperf"}, []string{"full"})
 }
 
+const matrixAlbumCoverURL = "https://images.example.invalid/matrix/album.jpg"
+
 type perfMusicFixture struct {
 	manifest []byte
 	files    map[string][]byte
@@ -109,7 +111,9 @@ func readPerfMusicFixture(dir string) (perfMusicFixture, error) {
 	// The fixture already contains the Music library. A push declaration
 	// keeps installation from starting a pull sync against real providers.
 	for i := range parsed.Ether.Contributes.MediaKinds {
-		parsed.Ether.Contributes.MediaKinds[i].Sync = plugins.KindSyncDecl{Mode: plugins.KindSyncPush}
+		kind := &parsed.Ether.Contributes.MediaKinds[i]
+		kind.Sync = plugins.KindSyncDecl{Mode: plugins.KindSyncPush}
+		kind.Fields = append(kind.Fields, plugins.KindField{Key: "contentRating", Type: "string", Label: "Content rating"})
 	}
 	const bundledEntry = "dist/perf-fixture.js"
 	parsed.Ether.Runtime.Entry = bundledEntry
@@ -134,15 +138,16 @@ func (fixture perfMusicFixture) install(ctx context.Context, a *App, viewer *per
 		return err
 	}
 	var items []core.KindItem
+	fields := map[string]json.RawMessage{"contentRating": json.RawMessage(`"G"`)}
 	for artist := range 40 {
 		artistID := fmt.Sprintf("ar-%d", 1000+artist)
-		items = append(items, core.KindItem{ID: artistID, Level: "artist", Title: "Fixture artist " + artistID})
+		items = append(items, core.KindItem{ID: artistID, Level: "artist", Title: "Fixture artist " + artistID, Fields: fields})
 		for album := range 5 {
 			albumID := fmt.Sprintf("al-%d", 10_000+artist*5+album)
-			items = append(items, core.KindItem{ID: albumID, ParentID: artistID, Level: "album", Title: "Fixture album " + albumID})
+			items = append(items, core.KindItem{ID: albumID, ParentID: artistID, Level: "album", Title: "Fixture album " + albumID, Art: []core.KindArtRef{{Role: "poster", URL: matrixAlbumCoverURL}}, Fields: fields})
 			for track := range 12 {
 				trackID := fmt.Sprintf("tr-%d", 100_000+(artist*5+album)*12+track)
-				items = append(items, core.KindItem{ID: trackID, ParentID: albumID, Level: "track", Title: "Fixture song " + trackID, Index: track + 1, Playable: true})
+				items = append(items, core.KindItem{ID: trackID, ParentID: albumID, Level: "track", Title: "Fixture song " + trackID, Index: track + 1, Playable: true, Fields: fields})
 			}
 		}
 	}
@@ -182,7 +187,8 @@ func installPerfMatrixVelaCatalogue(ctx context.Context, a *App, viewer perfharn
 				"key":"music","label":"Fixture Music","media":"music",
 				"library":{"name":"Matrix Catalogue"},
 				"levels":[{"key":"track","label":"Track","role":"track","playable":true}],
-				"fields":[{"key":"genre","label":"Genre","type":"string","indexed":true}],
+				"fields":[{"key":"genre","label":"Genre","type":"string","indexed":true},
+				          {"key":"contentRating","label":"Content rating","type":"string"}],
 				"browse":{"sorts":["title"],"facets":["genre"],"search":true},
 				"sync":{"mode":"push"},"related":{"continuation":true}
 			}]}
@@ -190,7 +196,7 @@ func installPerfMatrixVelaCatalogue(ctx context.Context, a *App, viewer perfharn
 	}`
 	const script = `function handle(req) {
 		if (req.path === "/ether/v1/kinds/music/related") {
-			return {status:200, body:{items:[{id:"track-2",level:"track",title:"Fixture Track 2",playable:true,fields:{genre:"Folk"}}]}};
+			return {status:200, body:{items:[{id:"track-2",level:"track",title:"Fixture Track 2",playable:true,fields:{genre:"Folk",contentRating:"G"}}]}};
 		}
 		return {status:200, body:{status:"ok"}};
 	}`
@@ -204,8 +210,8 @@ func installPerfMatrixVelaCatalogue(ctx context.Context, a *App, viewer perfharn
 		return err
 	}
 	items := []core.KindItem{
-		{ID: "track-1", Level: "track", Title: "Fixture Track 1", Playable: true, Fields: map[string]json.RawMessage{"genre": json.RawMessage(`"Folk"`)}},
-		{ID: "track-2", Level: "track", Title: "Fixture Track 2", Playable: true, Fields: map[string]json.RawMessage{"genre": json.RawMessage(`"Folk"`)}},
+		{ID: "track-1", Level: "track", Title: "Fixture Track 1", Playable: true, Fields: map[string]json.RawMessage{"genre": json.RawMessage(`"Folk"`), "contentRating": json.RawMessage(`"G"`)}},
+		{ID: "track-2", Level: "track", Title: "Fixture Track 2", Playable: true, Fields: map[string]json.RawMessage{"genre": json.RawMessage(`"Folk"`), "contentRating": json.RawMessage(`"G"`)}},
 	}
 	if _, err := a.pluginsRT.pluginitems.UpsertItems(ctx, rec.ID, "music", items); err != nil {
 		return err

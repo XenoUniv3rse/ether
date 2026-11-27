@@ -37,15 +37,7 @@ func (h *host) requireWritableToolContext(ctx context.Context) error {
 }
 
 func (h *host) record(ctx context.Context) (Record, Grants, error) {
-	r, err := h.m.store.record(ctx, h.plugin)
-	if err != nil {
-		return Record{}, Grants{}, err
-	}
-	if !r.Enabled {
-		return Record{}, Grants{}, ErrDisabled
-	}
-	g, err := h.m.store.grants(ctx, h.plugin)
-	return r, g, err
+	return h.m.store.hostAccess(ctx, h.plugin)
 }
 
 func (h *host) deny(r Record, g Grants, key, level string, allowed func(string) bool) error {

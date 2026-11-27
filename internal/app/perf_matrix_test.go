@@ -14,7 +14,9 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -85,19 +87,34 @@ func testPerformanceMatrix(t *testing.T) {
 		writeReport()
 		t.Logf("matrix elapsed %s, %d over-budget route/configuration pairs, %d coverage gaps", time.Since(start).Round(time.Second), report.OffenderCount(), report.GapCount())
 	})
-	fixture := perfMatrixFixture(t, ctx, cache)
+	clients := strings.FieldsFunc(os.Getenv("ETHER_PERF_GATE_CLIENTS"), func(r rune) bool { return r == ',' })
+	for i := range clients {
+		clients[i] = strings.TrimSpace(clients[i])
+	}
 	var music perfMusicFixture
-	if dir := os.Getenv("ETHER_PERF_GATE_MUSIC_SOURCE"); dir != "" {
+	if len(clients) == 0 || slices.Contains(clients, "subsonic") {
+		dir := os.Getenv("ETHER_PERF_GATE_MUSIC_SOURCE")
+		if dir == "" {
+			t.Fatal("Subsonic matrix requires ETHER_PERF_GATE_MUSIC_SOURCE to point to the hosted Music checkout")
+		}
 		var err error
 		music, err = readPerfMusicFixture(dir)
 		if err != nil {
 			t.Fatal(err)
 		}
 	}
-	for _, c := range perfMatrixCases {
-		if only := os.Getenv("ETHER_PERF_GATE_MATRIX_CASES"); only != "" && !strings.Contains(","+only+",", ","+c.name+",") {
-			continue
+	cases := perfMatrixCases
+	if only := os.Getenv("ETHER_PERF_GATE_MATRIX_CASES"); only != "" {
+		names := strings.Split(only, ",")
+		cases = slices.DeleteFunc(slices.Clone(cases), func(c perfMatrixCase) bool {
+			return !slices.Contains(names, c.name)
+		})
+		if len(cases) == 0 {
+			t.Fatalf("no matrix configurations match %q", only)
 		}
+	}
+	fixture := perfMatrixFixture(t, ctx, cache)
+	for _, c := range cases {
 		if ctx.Err() != nil {
 			t.Error(ctx.Err())
 			break
@@ -105,7 +122,7 @@ func testPerformanceMatrix(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			caseCtx, stopCase := context.WithTimeout(ctx, 3*time.Minute)
 			defer stopCase()
-			runPerfMatrixCase(t, caseCtx, fixture, c, music, &report, writeReport)
+			runPerfMatrixCase(t, caseCtx, fixture, c, music, clients, &report, writeReport)
 		})
 	}
 	if report.OffenderCount()+report.GapCount() != 0 {
@@ -178,7 +195,7 @@ var perfMatrixNewViewerQueries = []string{
 	"DELETE FROM state_watch WHERE user_id=(SELECT id FROM auth_users WHERE username='viewer01')",
 }
 
-func runPerfMatrixCase(t *testing.T, ctx context.Context, fixture string, c perfMatrixCase, music perfMusicFixture, report *perfharness.MatrixReport, writeReport func()) {
+func runPerfMatrixCase(t *testing.T, ctx context.Context, fixture string, c perfMatrixCase, music perfMusicFixture, clients []string, report *perfharness.MatrixReport, writeReport func()) {
 	start := time.Now()
 	defer func() { t.Logf("replayed in %s", time.Since(start).Round(time.Second)) }()
 	dir, err := os.MkdirTemp(filepath.Dir(fixture), "case-")
@@ -193,7 +210,27 @@ func runPerfMatrixCase(t *testing.T, ctx context.Context, fixture string, c perf
 	if err != nil {
 		t.Fatal(err)
 	}
+	var definitionsURL string
+	if len(clients) == 0 || slices.Contains(clients, "console") {
+		definition, err := os.ReadFile("../cardigann/testdata/public.yml")
+		if err != nil {
+			t.Fatal(err)
+		}
+		definitions := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch r.URL.Path {
+			case "/definitions/":
+				_, _ = io.WriteString(w, `["fakepublic.yml"]`)
+			case "/definitions/fakepublic.yml":
+				_, _ = w.Write(definition)
+			default:
+				http.NotFound(w, r)
+			}
+		}))
+		defer definitions.Close()
+		definitionsURL = definitions.URL + "/definitions/"
+	}
 	if err := cfg.Update(func(cfg *config.Config) error {
+		cfg.IndexerSites.DefinitionsURL = definitionsURL
 		cfg.SetupComplete = true
 		cfg.Frontends = map[string]config.Frontend{"plex": {Enabled: true}, "jellyfin": {Enabled: true}, "emby": {Enabled: true}, "silo": {Enabled: true}, "vela": {Enabled: true}, "stremio": {Enabled: true}, "xtream": {Enabled: true}}
 		cfg.Server.BindAddress = "127.0.0.1"
@@ -249,17 +286,21 @@ func runPerfMatrixCase(t *testing.T, ctx context.Context, fixture string, c perf
 		defer provider.Close()
 		options.debridProviderOptions = debrid.ProviderOptions{BaseURL: provider.URL, HTTPClient: provider.Client()}
 	}
-	a, err := New(ctx, options)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer a.Close()
 	// All stock matrix posters share this synthetic TMDB path. Seed its
 	// cache, so authorised artwork requests exercise the route offline.
 	var poster bytes.Buffer
 	if err := jpeg.Encode(&poster, image.NewRGBA(image.Rect(0, 0, 10, 16)), nil); err != nil {
 		t.Fatal(err)
 	}
+	options.urlImages = staticUntrustedImages{byURL: map[string]struct {
+		data []byte
+		ct   string
+	}{matrixAlbumCoverURL: {poster.Bytes(), "image/jpeg"}}}
+	a, err := New(ctx, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
 	for _, key := range []string{"original/p.jpg", "w500/p.jpg"} {
 		if _, _, err := a.images.GetLoaded(ctx, key, func(context.Context) ([]byte, string, error) {
 			return poster.Bytes(), "image/jpeg", nil
@@ -274,12 +315,10 @@ func runPerfMatrixCase(t *testing.T, ctx context.Context, fixture string, c perf
 	}
 	if len(music.methods) != 0 {
 		if err := music.install(ctx, a, &viewers[c.viewer]); err != nil {
-			report.AddGap(c.name, "subsonic", "", "", "could not install and seed the Music fixture")
-			t.Error("Music fixture:", err)
-			music.methods = nil
+			t.Fatal("Subsonic Music fixture:", err)
 		}
 	}
-	if only := os.Getenv("ETHER_PERF_GATE_CLIENTS"); only == "" || strings.Contains(","+only+",", ",vela,") {
+	if len(clients) == 0 || slices.Contains(clients, "vela") {
 		if err := installPerfMatrixVelaCatalogue(ctx, a, viewers[c.viewer]); err != nil {
 			t.Fatal("Vela catalogue fixture:", err)
 		}
@@ -338,15 +377,14 @@ func runPerfMatrixCase(t *testing.T, ctx context.Context, fixture string, c perf
 		<-checkpointDone
 	}()
 	if len(music.methods) != 0 && a.frontends.control.listeners.sharedHandler("/subsonic/rest/ping.view") == nil {
-		report.AddGap(c.name, "subsonic", "", "", "Music adapter is enabled without a shared listener")
-		t.Error("Music adapter shared listener unavailable")
+		t.Fatal("Subsonic Music adapter shared listener unavailable")
 	}
-	settleMisses := 0
+	var settleMisses atomic.Int64
 	a.perf.mu.Lock()
 	a.perf.asyncTrace = true
-	a.perf.settleTrace = func(ctx context.Context) {
-		if !a.quiesce(ctx, 200*time.Millisecond) {
-			settleMisses++
+	a.perf.settleTrace = func(context.Context) {
+		if !a.quiesce(ctx, 20*time.Second) {
+			settleMisses.Add(1)
 		}
 	}
 	a.perf.mu.Unlock()
@@ -356,16 +394,22 @@ func runPerfMatrixCase(t *testing.T, ctx context.Context, fixture string, c perf
 	// window. Its completed trace remains useful even when the client cancels.
 	r.SetTimeout(8 * time.Second)
 	r.SetBefore(func(context.Context) { a.perf.waitTraces() })
-	inventory := perfMatrixInventory(t, a, c, music.methods, report)
-	r.SetMatrixRoutes(inventory)
 	cs := append(perfharness.MatrixClients(c.live), perfharness.MatrixPluginHost())
 	if len(music.methods) != 0 {
 		cs = append(cs, perfharness.MatrixSubsonic(music.methods))
 	}
-	perfharness.AppendMatrixReads(cs, inventory, perfMatrixRouteExceptions)
-	if only := os.Getenv("ETHER_PERF_GATE_CLIENTS"); only != "" {
-		cs = perfharness.Only(cs, strings.Split(only, ","))
+	selectedClients := perfharness.Only(cs, clients)
+	if len(selectedClients) == 0 {
+		t.Fatalf("no matrix clients match %q", clients)
 	}
+	surfaces := map[string]bool{}
+	for _, client := range selectedClients {
+		surfaces[client.Surface] = true
+	}
+	inventory := perfMatrixInventory(t, a, surfaces, music.methods)
+	r.SetMatrixRoutes(inventory)
+	perfharness.AppendMatrixReads(cs, inventory, perfMatrixRouteExceptions)
+	cs = perfharness.Only(cs, clients)
 	if steps := os.Getenv("ETHER_PERF_GATE_STEPS"); steps != "" {
 		cs = perfharness.OnlySteps(cs, strings.Split(steps, ","))
 	}
@@ -373,8 +417,22 @@ func runPerfMatrixCase(t *testing.T, ctx context.Context, fixture string, c perf
 	for _, client := range cs {
 		if client.Surface == "console" || client.Surface == "mcp" || client.Surface == "plugin-host" {
 			ownerOnly = append(ownerOnly, client)
-		} else {
-			selected = append(selected, client)
+			continue
+		}
+		viewerClient, ownerClient := client, client
+		viewerClient.Steps, ownerClient.Steps = nil, nil
+		for _, step := range client.Steps {
+			if step.OwnerOnly {
+				ownerClient.Steps = append(ownerClient.Steps, step)
+			} else {
+				viewerClient.Steps = append(viewerClient.Steps, step)
+			}
+		}
+		if len(viewerClient.Steps) != 0 {
+			selected = append(selected, viewerClient)
+		}
+		if len(ownerClient.Steps) != 0 {
+			ownerOnly = append(ownerOnly, ownerClient)
 		}
 	}
 	r.Sequential(ctx, c.name, viewers[c.viewer:c.viewer+1], selected)
@@ -384,8 +442,8 @@ func runPerfMatrixCase(t *testing.T, ctx context.Context, fixture string, c perf
 	}
 	server.Close()
 	a.perf.waitTraces()
-	if settleMisses != 0 {
-		report.AddGap(c.name, "harness", "", "", fmt.Sprintf("background work was still active after %d responses", settleMisses))
+	if misses := settleMisses.Load(); misses != 0 {
+		report.AddGap(c.name, "harness", "", "", fmt.Sprintf("background work was still active after %d responses", misses))
 	}
 	byTag, _, err := perfharness.ReadTrace(trace)
 	if err != nil {

@@ -61,8 +61,16 @@ func MatrixSubsonic(methods []string) Client {
 		}
 	}
 	for _, name := range order {
+		// These are inventoried and explicitly exempted by the app fixture:
+		// a catalogue row does not supply audio bytes or a resolver provider.
+		if name == "stream" || name == "download" {
+			continue
+		}
 		query := "?u={subsonicUser}&p={subsonicPass}&v=1.16.1&c=etherperf&f=json"
 		step := Step{Name: name, Class: classBrowse, Path: "/" + name + ".view" + query + params[name], Accept: subsonicOK}
+		if name == "getCoverArt" {
+			step.Accept = func(body []byte) bool { return len(body) >= 3 && body[0] == 0xff && body[1] == 0xd8 && body[2] == 0xff }
+		}
 		if mutates[name] {
 			step.Method, step.Class = http.MethodPost, classState
 		}

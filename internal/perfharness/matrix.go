@@ -17,16 +17,26 @@ import (
 func MatrixClients(live bool) []Client {
 	clients := Clients()
 	for i := range clients {
-		if clients[i].Surface == "plex" && !live {
+		if clients[i].Surface == "plex" {
 			for j, step := range clients[i].Steps {
 				switch step.Name {
 				case "live guide grid 3h", "live hubs":
+					if !live {
+						clients[i].Steps[j].ExpectedStatus = http.StatusNotFound
+					}
+				case "/hubs/sections/movies/manage":
+					// Ether does not implement PMS's section hub management route.
 					clients[i].Steps[j].ExpectedStatus = http.StatusNotFound
 				}
 			}
 		}
 		switch clients[i].Name {
+		case "console":
+			addMatrixConsoleCoverage(&clients[i])
+		case "infuse-jellyfin", "emby-sdk":
+			addMatrixMediaBrowserCoverage(&clients[i])
 		case "plex-appletv":
+			addMatrixPlexCoverage(&clients[i])
 			clients[i].Steps = append(clients[i].Steps,
 				Step{Name: "HEAD movies collections type=18", Class: classBrowse, Method: http.MethodHead, Path: "/library/sections/{movieSection}/all?type=18&X-Plex-Container-Start=0&X-Plex-Container-Size=50"},
 				Step{Name: "HEAD /hubs/search with query", Class: classSearch, Method: http.MethodHead, Path: "/hubs/search?query=star&limit=30"},
@@ -60,7 +70,7 @@ func MatrixClients(live bool) []Client {
 				Step{Name: "VOD cover", Class: classDetail, Path: "/image/{xtreamCover}"},
 				Step{Name: "VOD cover probe", Class: classDetail, Method: http.MethodHead, Path: "/image/{xtreamCover}"},
 				Step{Name: "XMLTV guide export", Class: classGuide, Path: "/xmltv.php" + auth},
-				Step{Name: "M3U lineup export", Class: classGuide, Path: "/get.php" + auth + "&type=m3u_plus", Accept: func(body []byte) bool {
+				Step{Name: "M3U lineup export", ExpectedStatus: http.StatusOK, Class: classGuide, Path: "/get.php" + auth + "&type=m3u_plus", Accept: func(body []byte) bool {
 					return bytes.HasPrefix(body, []byte("#EXTM3U\n")) && bytes.HasSuffix(body, []byte(".mkv\n"))
 				}},
 			)
@@ -93,6 +103,7 @@ func MatrixClients(live bool) []Client {
 				Step{Name: "movie stream probe", Class: classPlayback, Method: http.MethodHead, Path: "/sessions/lazy/{stremioTicket}/file"},
 			)
 		case "vela":
+			clients[i].Steps = append(clients[i].Steps, Step{Name: "HEAD /appearance", Method: http.MethodHead, ExpectedStatus: http.StatusOK, Class: classBrowse, Path: "/appearance"})
 			clients[i].Steps = append(clients[i].Steps,
 				Step{Name: "bootstrap", Class: classHome, Path: "/bootstrap"},
 				Step{Name: "recommendations rows", Class: classHome, Path: "/rows?limit=24"},
@@ -217,6 +228,8 @@ type matrixOffender struct {
 
 type MatrixReport struct {
 	offenders           map[matrixKey]matrixOffender
+	worst               map[[2]string]matrixOffender
+	exemptions          map[MatrixRouteKey]string
 	gaps                []matrixGap
 	successes, attempts int
 	configs             []string
@@ -237,6 +250,7 @@ func (r *MatrixReport) AddGap(config, surface, route, step, reason string) {
 func (r *MatrixReport) Add(configuration string, results []Result, trace map[string]TraceRecord, clients []Client) {
 	if r.offenders == nil {
 		r.offenders = make(map[matrixKey]matrixOffender)
+		r.worst = make(map[[2]string]matrixOffender)
 	}
 	r.configs = append(r.configs, configuration)
 	r.attempts += len(results)
@@ -270,10 +284,23 @@ func (r *MatrixReport) Add(configuration string, results []Result, trace map[str
 		}
 		budget := matrixBudget(step, rec, result.Route)
 		score := max(overBudget(rec.Queries, budget.Queries), overBudget(rec.Rows, budget.Rows), overBudget(rec.Writes-requiredDetailWrites(result.Route, rec), budget.Writes))
-		if score > 1 && score > r.offenders[key].score {
-			r.offenders[key] = matrixOffender{key, result.Client + " / " + result.Step, rec, budget, score}
+		sample := matrixOffender{key, result.Client + " / " + result.Step, rec, budget, score}
+		if score > 1 && worseMatrixWork(sample, r.offenders[key]) {
+			r.offenders[key] = sample
+		}
+		id := [2]string{result.Surface, result.Route}
+		if prev, exists := r.worst[id]; !exists || worseMatrixWork(sample, prev) {
+			sample.trace.Statements = nil
+			r.worst[id] = sample
 		}
 	}
+}
+
+func worseMatrixWork(next, previous matrixOffender) bool {
+	return cmp.Or(cmp.Compare(next.score, previous.score),
+		cmp.Compare(next.trace.Writes, previous.trace.Writes),
+		cmp.Compare(next.trace.Rows, previous.trace.Rows),
+		cmp.Compare(next.trace.Queries, previous.trace.Queries)) > 0
 }
 
 // Emby item detail carries reversible numeric genre and studio identifiers.
@@ -429,7 +456,7 @@ func (r *MatrixReport) Write(w io.Writer, elapsed time.Duration) {
 	fmt.Fprintln(w, "\n## Offenders\n\nRanked by largest budget overrun. The first 20 rows are the highest-ranked offenders. Values show observed / ceiling. Stream entries cover one minute. Rows count records returned by the driver.\n\n| # | Surface | Configuration | Route | Client / scenario | Statements | Rows | Writes | HTTP |\n|---:|---|---|---|---|---:|---:|---:|---:|")
 	for i, o := range list {
 		fmt.Fprintf(w, "| %d | %s | %s | `%s` | %s | %d / %d | %d / %d | %d / %d | %d |\n",
-			i+1, o.surface, o.config, o.route, clip(o.step, 160), o.trace.Queries, o.budget.Queries,
+			i+1, o.surface, o.config, matrixTableCell(o.route), clip(o.step, 160), o.trace.Queries, o.budget.Queries,
 			o.trace.Rows, o.budget.Rows, o.trace.Writes, o.budget.Writes, o.trace.Status)
 	}
 	fmt.Fprintln(w, "\n## Statement attribution")
@@ -439,12 +466,55 @@ func (r *MatrixReport) Write(w io.Writer, elapsed time.Duration) {
 		slices.SortFunc(stats, func(a, b statementStat) int {
 			return cmp.Or(cmp.Compare(b.Count, a.Count), cmp.Compare(b.Rows, a.Rows), cmp.Compare(a.SQL, b.SQL))
 		})
+		if o.trace.Writes > o.budget.Writes {
+			slices.SortStableFunc(stats, func(a, b statementStat) int {
+				return cmp.Compare(sqlWriteRank(b.SQL), sqlWriteRank(a.SQL))
+			})
+		}
 		for _, st := range stats[:min(len(stats), 3)] {
 			fmt.Fprintf(w, "\n- %d calls, %d rows, `%s`\n\n  `%s`\n", st.Count, st.Rows, clip(st.Site, 220), clip(sqlLiteral.ReplaceAllString(st.SQL, "?"), 360))
 		}
 	}
 	fmt.Fprintln(w, "\n## Coverage gaps\n\n| Surface | Configuration | Route | Scenario | Reason |\n|---|---|---|---|---|")
 	for _, gap := range r.gaps {
-		fmt.Fprintf(w, "| %s | %s | `%s` | %s | %s |\n", gap.surface, gap.config, gap.route, clip(gap.step, 160), gap.reason)
+		fmt.Fprintf(w, "| %s | %s | `%s` | %s | %s |\n", gap.surface, gap.config, matrixTableCell(gap.route), clip(gap.step, 160), gap.reason)
 	}
+
+	fmt.Fprintln(w, "\n## Exemptions applied\n\n| Surface | Route | Reason |\n|---|---|---|")
+	keys := make([]MatrixRouteKey, 0, len(r.exemptions))
+	for key := range r.exemptions {
+		keys = append(keys, key)
+	}
+	slices.SortFunc(keys, func(a, b MatrixRouteKey) int {
+		return cmp.Or(cmp.Compare(a.Surface, b.Surface), cmp.Compare(a.Pattern, b.Pattern), cmp.Compare(a.Method, b.Method))
+	})
+	for _, key := range keys {
+		fmt.Fprintf(w, "| %s | `%s %s` | %s |\n", key.Surface, key.Method, matrixTableCell(key.Pattern), r.exemptions[key])
+	}
+	fmt.Fprintln(w, "\n## Worst observed work by route\n\n| Surface | Configuration | Route | Scenario | Statements | Rows | Writes | HTTP |\n|---|---|---|---|---:|---:|---:|---:|")
+	observed := make([]matrixOffender, 0, len(r.worst))
+	for _, sample := range r.worst {
+		observed = append(observed, sample)
+	}
+	slices.SortFunc(observed, func(a, b matrixOffender) int {
+		return cmp.Or(cmp.Compare(a.surface, b.surface), cmp.Compare(a.route, b.route))
+	})
+	for _, sample := range observed {
+		fmt.Fprintf(w, "| %s | %s | `%s` | %s | %d | %d | %d | %d |\n",
+			sample.surface, sample.config, matrixTableCell(sample.route), clip(sample.step, 160),
+			sample.trace.Queries, sample.trace.Rows, sample.trace.Writes, sample.trace.Status)
+	}
+}
+
+func matrixTableCell(value string) string {
+	return strings.ReplaceAll(value, "|", "\\|")
+}
+
+func sqlWriteRank(sql string) int {
+	for _, prefix := range []string{"INSERT ", "UPDATE ", "DELETE ", "REPLACE "} {
+		if strings.HasPrefix(strings.TrimSpace(sql), prefix) {
+			return 1
+		}
+	}
+	return 0
 }

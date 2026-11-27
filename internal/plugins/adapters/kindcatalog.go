@@ -2345,7 +2345,7 @@ func (c *KindCatalog) projectItems(ctx context.Context, rec pluginitems.KindReco
 			title.LibraryID = lib.ID
 			scopeTitleMediaParents(&title, lib.ID)
 			if title.ContentRating == "" {
-				title.ContentRating = extractContentRating(parent.Fields)
+				title.ContentRating = pluginitems.ItemContentRating(parent.Fields)
 			}
 			itemCache[parent.ID] = cachedParent{title: title, parentID: parent.ParentID, ok: true}
 			if parent.ParentID != "" {
@@ -2486,9 +2486,6 @@ func (c *KindCatalog) projectItems(ctx context.Context, rec pluginitems.KindReco
 					t.Runtime = sum
 				}
 			}
-		}
-		if t.ContentRating == "" {
-			t.ContentRating = extractContentRating(it.Fields)
 		}
 		if it.ParentID != "" {
 			if parents, parent, root, ok := resolveChain(it.ParentID); ok {
@@ -2831,22 +2828,6 @@ func sortArtistReleaseItems(items []core.KindItem) {
 		}
 		return items[i].Key < items[j].Key
 	})
-}
-
-func extractContentRating(fields map[string]json.RawMessage) string {
-	for _, key := range []string{"contentRating", "certification", "mpaa"} {
-		raw, ok := fields[key]
-		if !ok || len(raw) == 0 {
-			continue
-		}
-		var s string
-		if json.Unmarshal(raw, &s) == nil {
-			if s = strings.TrimSpace(s); s != "" {
-				return s
-			}
-		}
-	}
-	return ""
 }
 
 func projectImages(art []core.KindArtRef, landscape bool) []frontend.Image {

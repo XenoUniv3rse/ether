@@ -275,9 +275,10 @@ type rawPluginRow struct {
 	rolesOff         string
 }
 
-func scanRawPluginRow(s interface{ Scan(...any) error }) (rawPluginRow, error) {
+func scanRawPluginRow(s interface{ Scan(...any) error }, extra ...any) (rawPluginRow, error) {
 	var row rawPluginRow
-	err := s.Scan(&row.r.ID, &row.r.Name, &row.r.Version, &row.r.Kind, &row.man, &row.r.SourceKind, &row.r.SourceURL, &row.en, &row.ver, &row.sh, &row.au, &row.r.UpdateVersion, &row.updMan, &row.updFiles, &row.r.PrevVersion, &row.inst, &row.upd, &row.rolesOff, &row.replace)
+	columns := []any{&row.r.ID, &row.r.Name, &row.r.Version, &row.r.Kind, &row.man, &row.r.SourceKind, &row.r.SourceURL, &row.en, &row.ver, &row.sh, &row.au, &row.r.UpdateVersion, &row.updMan, &row.updFiles, &row.r.PrevVersion, &row.inst, &row.upd, &row.rolesOff, &row.replace}
+	err := s.Scan(append(columns, extra...)...)
 	return row, err
 }
 
@@ -330,6 +331,30 @@ func (s *storage) record(ctx context.Context, id string) (Record, error) {
 		return Record{}, err
 	}
 	return s.finalizeRecord(ctx, row)
+}
+
+// hostAccess reads the record and current grants in the same statement
+// so a host call always sees one authorization snapshot.
+func (s *storage) hostAccess(ctx context.Context, id string) (Record, Grants, error) {
+	var raw string
+	row, err := scanRawPluginRow(s.db.QueryRowContext(ctx, `SELECT `+pluginRecordCols+`, COALESCE(
+   (SELECT grants FROM plugins_grants WHERE plugin=plugins_installed.id), '{}')
+   FROM plugins_installed WHERE id=?`, id), &raw)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Record{}, Grants{}, ErrNotFound
+	}
+	if err != nil {
+		return Record{}, Grants{}, err
+	}
+	r, err := s.finalizeRecord(ctx, row)
+	if err != nil {
+		return Record{}, Grants{}, err
+	}
+	if !r.Enabled {
+		return Record{}, Grants{}, ErrDisabled
+	}
+	var g Grants
+	return r, g, json.Unmarshal([]byte(raw), &g)
 }
 
 func (s *storage) list(ctx context.Context) ([]Record, error) {
@@ -1070,8 +1095,11 @@ func capRing(ctx context.Context, db *sql.DB, table, plugin string, cap int) {
 }
 
 func (s *storage) addCall(ctx context.Context, c CallRecord) {
+	if c.Created.IsZero() {
+		c.Created = s.now()
+	}
 	_, _ = s.db.ExecContext(ctx, `INSERT INTO plugins_calls(plugin,route,method,status,ms,error,request,response,created) VALUES(?,?,?,?,?,?,?,?,?)`,
-		c.Plugin, c.Route, c.Method, c.Status, c.MS, c.Error, truncate(c.Request, 8192), truncate(c.Response, 8192), s.now().Unix())
+		c.Plugin, c.Route, c.Method, c.Status, c.MS, c.Error, truncate(c.Request, 8192), truncate(c.Response, 8192), c.Created.Unix())
 	capRing(ctx, s.db, "plugins_calls", c.Plugin, CallsCap)
 }
 

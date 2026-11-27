@@ -840,24 +840,22 @@ func applyMigration3Postgres(ctx context.Context, tx *sql.Tx) error {
 
 var migration4FoldBatchSize = 500
 
-// contentRatingLevel is the persisted rating_level for one item's fields:
-// the contentrating enforcement level of its contentRating / certification /
-// mpaa field, or 0 (unrated) when it carries none. Projected titles read the
-// same fields, so the stored level and the in-process check agree.
-func contentRatingLevel(fields map[string]json.RawMessage) int {
+// ItemContentRating reads the same fields used by the indexed rating
+// predicate and the in-process viewer policy check.
+func ItemContentRating(fields map[string]json.RawMessage) string {
 	for _, key := range []string{"contentRating", "certification", "mpaa"} {
-		raw, ok := fields[key]
-		if !ok || len(raw) == 0 {
-			continue
-		}
-		var s string
-		if json.Unmarshal(raw, &s) == nil {
-			if s = strings.TrimSpace(s); s != "" {
-				return int(contentrating.EnforceLevelOf(s))
+		var value string
+		if raw := fields[key]; len(raw) > 0 && json.Unmarshal(raw, &value) == nil {
+			if value = strings.TrimSpace(value); value != "" {
+				return value
 			}
 		}
 	}
-	return 0
+	return ""
+}
+
+func contentRatingLevel(fields map[string]json.RawMessage) int {
+	return int(contentrating.EnforceLevelOf(ItemContentRating(fields)))
 }
 
 func applyMigration9(ctx context.Context, tx *sql.Tx) error {

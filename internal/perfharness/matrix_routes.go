@@ -34,13 +34,15 @@ func (r *Runner) SetMatrixRoutes(routes MatrixRoutes) {
 			for _, span := range routePlaceholder.FindAllStringIndex(entry.Pattern, -1) {
 				literal := entry.Pattern[pos:span[0]]
 				pattern.WriteString(regexp.QuoteMeta(literal))
-				score += len(literal)*2 - 1
+				score += len(literal) * 2
 				switch token := entry.Pattern[span[0]:span[1]]; {
 				case token == "{$}":
 				case token == "*" || strings.HasSuffix(token, "...}"):
 					pattern.WriteString(".*")
+					score -= 2
 				default:
 					pattern.WriteString("[^/]+")
+					score--
 				}
 				pos = span[1]
 			}
@@ -48,6 +50,7 @@ func (r *Runner) SetMatrixRoutes(routes MatrixRoutes) {
 			score += 2 * (len(entry.Pattern) - pos)
 			if strings.HasSuffix(entry.Pattern, "/") && entry.Method == "*" {
 				pattern.WriteString(".*")
+				score -= 2
 			}
 			pattern.WriteString("$")
 			r.matrixRoutes[surface] = append(r.matrixRoutes[surface], matrixRoute{entry, regexp.MustCompile(pattern.String()), score})
@@ -109,7 +112,12 @@ func (r *MatrixReport) CheckRoutes(configuration string, inventory MatrixRoutes,
 			if hits[[2]string{surface, id}] {
 				continue
 			}
-			if allowed[MatrixRouteKey{surface, entry.Method, entry.Pattern}] != "" {
+			key := MatrixRouteKey{surface, entry.Method, entry.Pattern}
+			if reason := allowed[key]; reason != "" {
+				if r.exemptions == nil {
+					r.exemptions = make(map[MatrixRouteKey]string)
+				}
+				r.exemptions[key] = reason
 				continue
 			}
 			r.AddGap(configuration, surface, id, "", "registered route has no successful scenario")
@@ -126,7 +134,21 @@ func AppendMatrixReads(clients []Client, inventory MatrixRoutes, allowed map[Mat
 		"emby": "emby-sdk", "silo": "silo-appletv", "vela": "vela",
 	}
 	seen := map[[3]string]bool{}
-	for _, c := range clients {
+	matcher := &Runner{http: &http.Client{}}
+	matcher.SetMatrixRoutes(inventory)
+	for i := range clients {
+		c := &clients[i]
+		c.Steps = slices.DeleteFunc(c.Steps, func(st Step) bool {
+			if !st.registeredOnly {
+				return false
+			}
+			method := st.Method
+			if method == "" {
+				method = http.MethodGet
+			}
+			path := strings.SplitN(c.SharedPrefix+c.Prefix+st.Path, "?", 2)[0]
+			return matcher.matrixRoute(c.Surface, method, path) == ""
+		})
 		for _, st := range c.Steps {
 			method := st.Method
 			if method == "" {
@@ -153,7 +175,7 @@ func AppendMatrixReads(clients []Client, inventory MatrixRoutes, allowed map[Mat
 			relative, mounted := strings.CutPrefix(path, c.SharedPrefix+c.Prefix)
 			key := [3]string{c.Surface, entry.Method, strings.ToLower(path)}
 			if seen[key] || !mounted || !strings.HasPrefix(relative, "/") ||
-				strings.ContainsAny(relative, "{}*") || !matrixReadPath(c.Surface, relative) ||
+				strings.Contains(relative, "//") || strings.ContainsAny(relative, "{}*") || !matrixReadPath(c.Surface, relative) ||
 				allowed[MatrixRouteKey{c.Surface, entry.Method, entry.Pattern}] != "" {
 				continue
 			}

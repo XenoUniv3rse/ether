@@ -9,6 +9,7 @@ import (
 	"hash/fnv"
 	"math/rand/v2"
 	"net/url"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -95,7 +96,7 @@ func (s *Service) evaluate(ctx context.Context, spIn core.CollectionSpec, opt ev
 	rules = splitPersonal(rules, &res.personal)
 	excludes = splitPersonal(excludes, &res.personalX)
 
-	snap, err := s.idx.get(ctx)
+	snap, err := s.evaluationSnapshot(ctx, sp)
 	if err != nil {
 		return nil, fmt.Errorf("collections: catalogue index: %w", err)
 	}
@@ -419,6 +420,38 @@ func (s *Service) evaluate(ctx context.Context, spIn core.CollectionSpec, opt ev
 	}
 	res.hash = buildHash(sp, res.keys, res.unshared)
 	return res, nil
+}
+
+// A source-ordered list of already-published picks has no catalogue-wide
+// rules or ranking. Load just its explicit keys, including the card facets.
+// If a pick is still missing or unpublished, the normal evaluator resolves
+// it and handles promotion into the catalogue for persisted builds.
+func (s *Service) evaluationSnapshot(ctx context.Context, sp core.CollectionSpec) (*snapshot, error) {
+	if sp.Sort != "source" || len(sp.Rules) != 0 || len(sp.Exclude) != 0 ||
+		slices.ContainsFunc(sp.Sources, func(src core.CollectionSource) bool { return src.Kind != "titles" }) {
+		return s.idx.get(ctx)
+	}
+	var keys []core.RatingKey
+	seen := map[core.RatingKey]bool{}
+	for _, source := range sp.Sources {
+		for _, raw := range source.Keys {
+			key, _ := core.ParseRatingKey(raw) // the spec was validated above
+			if !seen[key] {
+				seen[key] = true
+				keys = append(keys, key)
+			}
+		}
+	}
+	titles, err := s.idx.mirror.PublishedTitleCards(ctx, keys)
+	if err != nil || len(titles) != len(keys) {
+		return s.idx.get(ctx)
+	}
+	snap := &snapshot{entries: make(map[core.RatingKey]*entry, len(titles)), builtAt: s.now()}
+	in := newInterner()
+	for _, title := range titles {
+		snap.entries[title.Key] = entryFromTitle(title, in)
+	}
+	return snap, nil
 }
 
 // sharedFirst bounds an any-match build with per-viewer rules to limit

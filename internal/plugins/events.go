@@ -530,6 +530,13 @@ func (m *Manager) Run(ctx context.Context) {
 	stopBridge := m.StartEventBridge(ctx)
 	defer stopBridge()
 	defer m.scheduleWG.Wait()
+	inspectorTick := time.NewTicker(250 * time.Millisecond)
+	defer inspectorTick.Stop()
+	defer func() {
+		flushCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		m.flushAdapterCalls(flushCtx)
+	}()
 	defer m.cancelActionJobs("")
 	defer m.cancelRemoteHashes("")
 	defer func() {
@@ -547,6 +554,8 @@ func (m *Manager) Run(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			return
+		case <-inspectorTick.C:
+			m.flushAdapterCalls(ctx)
 		case <-tick.C:
 			m.runOnce(ctx, lastHealth)
 		}
