@@ -55,7 +55,16 @@ type pacedProvider interface {
 }
 
 func lowPriority(ctx context.Context) bool {
-	return core.IsSpeculative(ctx) || core.SpeculativeIndexerWork(ctx) || core.IsBackgroundCheck(ctx) || isAnalysisRead(ctx)
+	previous, _ := core.NextEpisodePreparation(ctx)
+	return previous != 0 || core.IsSpeculative(ctx) || core.SpeculativeIndexerWork(ctx) || core.IsBackgroundCheck(ctx) || isAnalysisRead(ctx)
+}
+
+func mayTrialAdd(ctx context.Context) bool {
+	if !lowPriority(ctx) {
+		return true
+	}
+	_, playing := core.NextEpisodePreparation(ctx)
+	return playing != nil && !core.IsBackgroundCheck(ctx) && !isAnalysisRead(ctx) && playing()
 }
 
 func (p *accountPacer) reserve(ctx context.Context, add bool) (uint64, func(), error) {
@@ -109,7 +118,7 @@ func (p *accountPacer) reserve(ctx context.Context, add bool) (uint64, func(), e
 
 // window reserves a request or returns the earliest free slot. The total
 // budget is 132/min against Real-Debrid's documented 250/min. Background
-// reads can use up to 40 shared slots and always leave 80 for playback.
+// calls can use at most a third of either budget, leaving the rest for Play.
 func (p *accountPacer) window(now time.Time, add, background bool) time.Time {
 	times, limit := &p.other, 120
 	if add {
@@ -206,7 +215,7 @@ func pacedCall[T any](ctx context.Context, p *accountPacer, r apiRequest, add bo
 		if p.refused(r.torrentHash) {
 			return zero, ErrBlocked
 		}
-		if add && lowPriority(ctx) {
+		if add && !mayTrialAdd(ctx) {
 			return zero, errBackgroundUndecided
 		}
 		generation, release, err := p.reserve(ctx, add)

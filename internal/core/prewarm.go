@@ -131,3 +131,22 @@ func VersionProbeSearchWait(ctx context.Context) <-chan struct{} {
 	ch, _ := ctx.Value(versionProbeSearchWaitKey{}).(<-chan struct{})
 	return ch
 }
+
+type nextEpisodePreparationKey struct{}
+
+type nextEpisodePreparation struct {
+	previous RatingKey
+	playing  func() bool
+}
+
+// WithNextEpisodePreparation identifies a probe for the immediate successor
+// of previous. Playback supplies the live session check before resolution.
+func WithNextEpisodePreparation(ctx context.Context, previous RatingKey, playing func() bool) context.Context {
+	return context.WithValue(ctx, nextEpisodePreparationKey{}, nextEpisodePreparation{previous, playing})
+}
+
+// NextEpisodePreparation returns the preceding episode and its live session check.
+func NextEpisodePreparation(ctx context.Context) (RatingKey, func() bool) {
+	p, _ := ctx.Value(nextEpisodePreparationKey{}).(nextEpisodePreparation)
+	return p.previous, p.playing
+}

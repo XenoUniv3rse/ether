@@ -69,3 +69,35 @@ func TestRealDebridBrowsingLeavesTrialAddBudgetForPlay(t *testing.T) {
 		t.Fatal("the provider throttled Ether")
 	}
 }
+
+// A next-episode probe may try an add while the preceding episode plays,
+// but loses admission immediately to a foreground request on the account.
+func TestNextEpisodeTrialAddYieldsToForeground(t *testing.T) {
+	var pacer accountPacer
+	playing := true
+	ctx := core.WithNextEpisodePreparation(t.Context(), core.EpisodeKey(1, 1, 1), func() bool {
+		return playing
+	})
+	add := func() error {
+		_, err := pacedCall(ctx, &pacer, apiRequest{}, true, func(apiRequest) (struct{}, error) {
+			return struct{}{}, nil
+		})
+		return err
+	}
+	_, release, err := pacer.reserve(t.Context(), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = add()
+	release()
+	if !errors.Is(err, core.ErrBudgetExhausted) {
+		t.Fatalf("next episode should yield to a foreground add, got %v", err)
+	}
+	if err := add(); err != nil {
+		t.Fatalf("next episode should be admitted with spare budget, got %v", err)
+	}
+	playing = false
+	if err := add(); !errors.Is(err, core.ErrForegroundOnly) {
+		t.Fatalf("an inactive preceding episode should prevent an add, got %v", err)
+	}
+}

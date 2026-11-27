@@ -55,6 +55,7 @@ const (
 )
 
 type warmEntry struct {
+	nextEpisode   bool
 	offset        time.Duration
 	windowAt      time.Time
 	windowRunning bool
@@ -365,6 +366,7 @@ func (m *Manager) ProbePlayMetadata(ctx context.Context, user *core.User, key co
 	if m.hasExactPlayMetadata(ctx, id, user, key, caps) {
 		return nil
 	}
+	previous, _ := core.NextEpisodePreparation(ctx)
 	budget := playProbeMetadataWait(ctx)
 	deadline := time.Now().Add(budget)
 	searchDeadline := time.Now().Add(min(budget, playProbeSearchWait))
@@ -396,7 +398,7 @@ func (m *Manager) ProbePlayMetadata(ctx context.Context, user *core.User, key co
 				}
 			default:
 				inFlight = true
-				wasSpeculative = !e.playProbe
+				wasSpeculative = !e.playProbe || e.nextEpisode
 			}
 		}
 		m.mu.Unlock()
@@ -430,10 +432,10 @@ func (m *Manager) ProbePlayMetadata(ctx context.Context, user *core.User, key co
 				}
 				return core.ErrPrepareSlow
 			}
-			wasSpeculative = !e.playProbe
+			wasSpeculative = !e.playProbe || e.nextEpisode
 		}
 
-		if wasSpeculative {
+		if wasSpeculative && previous == 0 {
 			e.markPromoted()
 		}
 
@@ -736,7 +738,8 @@ func (m *Manager) prewarm(requestCtx context.Context, user *core.User, key core.
 		fg = make(chan context.Context, 1)
 		promoted = make(chan struct{})
 	}
-	e := &warmEntry{offset: opts.StartOffset, profileKey: profileKey(profileObj), profileObj: profileObj, caps: caps, done: make(chan struct{}), opened: make(chan struct{}), sourced: make(chan struct{}), foreground: fg, playProbe: playProbe, promoted: promoted, started: now, expires: now.Add(preResolveTTL)}
+	previous, _ := core.NextEpisodePreparation(requestCtx)
+	e := &warmEntry{nextEpisode: previous != 0, offset: opts.StartOffset, profileKey: profileKey(profileObj), profileObj: profileObj, caps: caps, done: make(chan struct{}), opened: make(chan struct{}), sourced: make(chan struct{}), foreground: fg, playProbe: playProbe, promoted: promoted, started: now, expires: now.Add(preResolveTTL)}
 	m.warm[id] = e
 	u := *user
 	wallStarted := time.Now()
@@ -769,6 +772,24 @@ func (m *Manager) prewarm(requestCtx context.Context, user *core.User, key core.
 			ctx, cancel = context.WithTimeout(core.WithIndexerPurpose(m.ctx, core.IndexerPurposePlayback), timeout)
 		} else {
 			ctx, cancel = warmPreparationContextWithPromote(core.WithIndexerPurpose(m.ctx, core.IndexerPurposeWarmup), timeout, e.foreground, e.promoted)
+		}
+		if e.nextEpisode {
+			probeCtx := ctx
+			isSuccessor := sync.OnceValue(func() bool {
+				if !playProbe {
+					return true // The timeline prefetcher already looked up the successor.
+				}
+				next, err := m.deps.Catalog.NextEpisode(probeCtx, previous)
+				return err == nil && next != nil && next.Key == key
+			})
+			ctx = core.WithNextEpisodePreparation(ctx, previous, func() bool {
+				cache := m.config().Cache
+				if cache.DisableSpeculation || cache.Mode == "off" || !cache.PrefetchNextEpisode {
+					return false
+				}
+				ps, ok := m.SessionForSurface(string(caps.Protocol), u.ID, caps.ClientID, previous, "", false)
+				return ok && m.SessionLiveness(ps.ID) == core.SessionLivenessPlaying && isSuccessor()
+			})
 		}
 		e.setCancel(cancel)
 		defer cancel()
@@ -1604,7 +1625,7 @@ func (m *Manager) takeWarmResolution(ctx context.Context, id identity, profile c
 		default:
 		}
 	}
-	if (e.playProbe || e.isPromoted()) && prefer == "" {
+	if !e.nextEpisode && (e.playProbe || e.isPromoted()) && prefer == "" {
 		select {
 		case <-e.done:
 		case <-ctx.Done():

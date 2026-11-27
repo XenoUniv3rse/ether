@@ -1849,7 +1849,7 @@ func (s *Service) acquireOn(ctx context.Context, e *entry, base Payload, choose 
 			}
 		}
 	}
-	if trialAdd && torrentID == "" && lowPriority(ctx) {
+	if trialAdd && torrentID == "" && !mayTrialAdd(ctx) {
 		return Payload{}, errBackgroundUndecided
 	}
 	// Background validation never creates torrents or starts downloads. An
