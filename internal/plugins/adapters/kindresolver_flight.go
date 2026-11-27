@@ -125,7 +125,7 @@ func (r *KindResolver) resolveSourcesFlight(ctx context.Context, rec pluginitems
 	r.flightMu.Unlock()
 
 	var wait <-chan time.Time
-	if play {
+	if play && !plugins.FrontendPreparationHold(ctx) {
 		budget := r.preparingWait
 		if deadline, ok := ctx.Deadline(); ok {
 			budget = min(budget, time.Until(deadline)-kindPreparingDeadlineMargin)

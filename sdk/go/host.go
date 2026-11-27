@@ -1224,6 +1224,9 @@ func (c *RemoteHostClient) StreamPartURL(ctx context.Context, viewerID int64, it
 // PlayableSource.ID (#576, #661) and optionally resolved to an absolute URL
 // using the active request origin or the adapter's first published address (#772).
 func (c *RemoteHostClient) StreamURLWithOptions(ctx context.Context, viewerID int64, itemRef string, opts StreamURLOptions) (string, error) {
+	if opts.Wait != nil && opts.Wait.MaxSeconds <= 0 {
+		return "", fmt.Errorf("stream url: wait.maxSeconds must be a positive integer")
+	}
 	if opts.PartIndex != nil && *opts.PartIndex < 0 {
 		return "", fmt.Errorf("stream url: partIndex must be non-negative")
 	}
@@ -1239,6 +1242,9 @@ func (c *RemoteHostClient) StreamURLWithOptions(ctx context.Context, viewerID in
 	}
 	if opts.Absolute {
 		payload["absolute"] = true
+	}
+	if opts.Wait != nil {
+		payload["wait"] = opts.Wait
 	}
 	var headers map[string]string
 	if tok, ok := ViewerTokenFromContext(ctx); ok && tok != "" {

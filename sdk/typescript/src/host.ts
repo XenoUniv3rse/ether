@@ -228,7 +228,7 @@ export function normalizeStreamUrlOptions(
     return { partIndex: partIndexOrOpts };
   }
   if (partIndexOrOpts === null || typeof partIndexOrOpts !== "object" || Array.isArray(partIndexOrOpts)) {
-    throw new Error("stream url: options must be a partIndex integer or { partIndex?, source?, absolute? }");
+    throw new Error("stream url: options must be a partIndex integer or { partIndex?, source?, absolute?, wait? }");
   }
   checkPartIndex(partIndexOrOpts.partIndex);
   if (partIndexOrOpts.source !== undefined) {
@@ -246,6 +246,13 @@ export function normalizeStreamUrlOptions(
   if (partIndexOrOpts.partIndex !== undefined) out.partIndex = partIndexOrOpts.partIndex;
   if (partIndexOrOpts.source) out.source = partIndexOrOpts.source;
   if (partIndexOrOpts.absolute) out.absolute = true;
+  if (partIndexOrOpts.wait !== undefined) {
+    const seconds = partIndexOrOpts.wait?.maxSeconds;
+    if (typeof seconds !== "number" || !Number.isSafeInteger(seconds) || seconds <= 0) {
+      throw new Error("stream url: wait.maxSeconds must be a positive integer");
+    }
+    out.wait = { maxSeconds: seconds };
+  }
   return out;
 }
 
@@ -1109,7 +1116,7 @@ export function createHostedClient(): EtherHost {
         void viewerId;
         const opts = normalizeStreamUrlOptions(partIndexOrOpts);
         let args: unknown[];
-        if (opts.source !== undefined || opts.absolute) {
+        if (opts.source !== undefined || opts.absolute || opts.wait) {
           args = [itemRef, opts];
         } else if (opts.partIndex !== undefined) {
           args = [itemRef, opts.partIndex];
@@ -1520,6 +1527,7 @@ export function createRemoteHostClient(opts: RemoteHostOptions = {}): EtherHost 
             ...(streamOpts.partIndex === undefined ? {} : { partIndex: streamOpts.partIndex }),
             ...(streamOpts.source === undefined ? {} : { source: streamOpts.source }),
             ...(streamOpts.absolute ? { absolute: true } : {}),
+            ...(streamOpts.wait ? { wait: streamOpts.wait } : {}),
           },
           false,
           tok ? { [HEADER_VIEWER_TOKEN]: tok } : undefined,

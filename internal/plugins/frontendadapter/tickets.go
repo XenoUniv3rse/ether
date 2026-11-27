@@ -33,6 +33,7 @@ type StreamGrant struct {
 	Adapter   string
 	PartIndex *int
 	Source    string
+	Wait      time.Duration
 }
 
 // TicketIssuer mints and validates scoped, short-lived stream tickets for
@@ -43,6 +44,7 @@ type TicketIssuer struct {
 	tickets map[string]ticket
 	ttl     time.Duration
 	now     func() time.Time
+	waits   mediaWaitSlots
 }
 
 type ticket struct {

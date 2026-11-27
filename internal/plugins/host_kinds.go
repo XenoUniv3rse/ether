@@ -1341,7 +1341,7 @@ func (h *host) StreamURLWithOptions(ctx context.Context, itemRef string, opts St
 	if backends.StreamURLOptions != nil {
 		return backends.StreamURLOptions(ctx, h.plugin, viewerID, itemRef, opts)
 	}
-	if opts.Source != "" || opts.Absolute {
+	if opts.Source != "" || opts.Absolute || opts.Wait != nil {
 		return "", ErrUnavailable
 	}
 	if backends.StreamPartURL != nil {

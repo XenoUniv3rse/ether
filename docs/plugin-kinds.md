@@ -751,14 +751,25 @@ part:
 - **Per-part, per-source, and absolute stream URLs** let frontend adapters and
   multi-file or native clients fetch a specific file, pin a resolver
   `PlayableSource.id`, or embed an absolute URL (`<origin>/ether/v1/kind-media/{ticket}`):
-  - Mint a scoped ticket URL with `ether.frontend.streamURL(itemRef, { partIndex?, source?, absolute? }).url`
+  - Mint a scoped ticket URL with `ether.frontend.streamURL(itemRef, { partIndex?, source?, absolute?, wait? }).url`
     (hosted JS; the positional `ether.frontend.streamURL(itemRef, partIndex).url` form still works),
-    `streamUrl(ctx, itemRef, { partIndex?, source?, absolute? })` (TypeScript SDK; positional `partIndex` also works),
-    `ctx.StreamURLWithOptions(itemRef, StreamURLOptions{PartIndex, Source, Absolute})` /
+    `streamUrl(ctx, itemRef, { partIndex?, source?, absolute?, wait? })` (TypeScript SDK; positional `partIndex` also works),
+    `ctx.StreamURLWithOptions(itemRef, StreamURLOptions{PartIndex, Source, Absolute, Wait})` /
     `ctx.StreamPartURL(itemRef, partIndex)` (Go SDK), or
     `ctx.stream_url(item_ref, part_index=..., source=..., absolute=...)` (Python SDK) — backed by
-    `POST /ether/plugin-host/frontend/stream-url` with `{"viewerId", "itemRef", "partIndex"?, "source"?, "absolute"?}`
+    `POST /ether/plugin-host/frontend/stream-url` with `{"viewerId", "itemRef", "partIndex"?, "source"?, "absolute"?, "wait": {"maxSeconds": 1200}?}`
     (forwarding `X-Ether-Viewer-Token` from remote adapters so Ether can resolve the active request origin and adapter key).
+  - Set `wait: {maxSeconds: 1200}` on tickets minted by download routes whose
+    clients need one response. Ether accepts positive whole seconds and caps
+    the wait at 1800 seconds. It sends no headers while preparation is pending,
+    then serves the file (200 or 206), returns a terminal open error, or sends
+    503 with `Retry-After` when the wait expires. The server holds at most four
+    requests per plugin and 32 total. Requests above either limit use the ordinary
+    media open. Omit the option for player routes to keep the 18-second default.
+    A disconnect frees the wait slot while the shared preparation job continues.
+    Set the wait below the client and reverse proxy response-header timeouts.
+    The ticket must be redeemed before it expires. Once redeemed, its expiry
+    does not interrupt the wait or the download.
   - By default stream URLs stay root-relative (`/ether/v1/kind-media/{ticket}`).
     When `absolute: true` is set, Ether prepends the request's `X-Ether-Origin`
     (`scheme://host[:port][/prefix]`, honouring trusted proxies only and omitting

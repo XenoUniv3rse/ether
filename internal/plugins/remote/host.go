@@ -669,11 +669,12 @@ func streamViewerToken(ctx context.Context) string {
 // for absolute stream URLs (#772).
 func (h *HostHandler) frontendStreamURL(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		ViewerID  int64  `json:"viewerId"`
-		ItemRef   string `json:"itemRef"`
-		PartIndex *int   `json:"partIndex,omitempty"`
-		Source    string `json:"source,omitempty"`
-		Absolute  bool   `json:"absolute,omitempty"`
+		ViewerID  int64                     `json:"viewerId"`
+		ItemRef   string                    `json:"itemRef"`
+		PartIndex *int                      `json:"partIndex,omitempty"`
+		Source    string                    `json:"source,omitempty"`
+		Absolute  bool                      `json:"absolute,omitempty"`
+		Wait      *plugins.StreamWaitPolicy `json:"wait,omitempty"`
 	}
 	if !h.decode(w, r, maxHostBodyBytes, &body) {
 		return
@@ -686,12 +687,16 @@ func (h *HostHandler) frontendStreamURL(w http.ResponseWriter, r *http.Request) 
 		writeHostError(w, http.StatusBadRequest, "bad_arguments", "source must not be blank")
 		return
 	}
+	if body.Wait != nil && body.Wait.MaxSeconds <= 0 {
+		writeHostError(w, http.StatusBadRequest, "bad_arguments", "wait.maxSeconds must be a positive integer")
+		return
+	}
 	ctx := withStreamViewerToken(r.Context(), r.Header.Get(HeaderViewerToken))
 	var (
 		u   string
 		err error
 	)
-	if body.Source != "" || body.Absolute {
+	if body.Source != "" || body.Absolute || body.Wait != nil {
 		oh, ok := h.host.(interface {
 			StreamURLWithOptions(ctx context.Context, pluginID string, viewerID int64, itemRef string, opts plugins.StreamURLOptions) (string, error)
 		})
@@ -703,6 +708,7 @@ func (h *HostHandler) frontendStreamURL(w http.ResponseWriter, r *http.Request) 
 			PartIndex: body.PartIndex,
 			Source:    body.Source,
 			Absolute:  body.Absolute,
+			Wait:      body.Wait,
 		})
 	} else if body.PartIndex != nil {
 		if oh, ok := h.host.(interface {

@@ -490,7 +490,7 @@ The declarations and implementations below specify arguments, return types, defa
 
 ## Frontend stream tickets & visibility
 
-Mint a scoped, short-lived URL for one of your own kind items with frontend.streamURL (accepting an optional positional partIndex or { partIndex?, source?, absolute? } to pin a zero-based part, pin an exact resolver PlayableSource.id with no failover, or return an absolute URL using the request's X-Ether-Origin with fallback to the adapter's first published address), and evaluate the library's Rules and viewer access policy with kinds.visible (up to 500 IDs) or kinds.browse. Authenticated adapter requests also receive X-Ether-Origin (scheme://host[:port][/prefix], honouring trusted proxies only with inbound client values stripped) alongside X-Ether-Viewer. The authenticated viewer comes from the frontend adapter request context (and X-Ether-Viewer-Token on remote callbacks), never guest-supplied input. Embed the stream URL in the protocol response; Ether serves the bytes without proxying through your plugin. Raw hosted spelling is streamURL; the TypeScript SDK uses streamUrl.
+Mint a scoped, short-lived URL for one of your own kind items with frontend.streamURL (accepting an optional positional partIndex or { partIndex?, source?, absolute?, wait? } to pin a zero-based part, pin an exact resolver PlayableSource.id with no failover, or return an absolute URL using the request's X-Ether-Origin with fallback to the adapter's first published address), and evaluate the library's Rules and viewer access policy with kinds.visible (up to 500 IDs) or kinds.browse. Authenticated adapter requests also receive X-Ether-Origin (scheme://host[:port][/prefix], honouring trusted proxies only with inbound client values stripped) alongside X-Ether-Viewer. The authenticated viewer comes from the frontend adapter request context (and X-Ether-Viewer-Token on remote callbacks), never guest-supplied input. Embed the stream URL in the protocol response; Ether serves the bytes without proxying through your plugin. Raw hosted spelling is streamURL; the TypeScript SDK uses streamUrl.
 
 ```ts
 const page = ether.kinds.browse("comic", { limit: 50 });
@@ -501,6 +501,8 @@ const abs = ether.frontend.streamURL("item-ref", { absolute: true });
 ```
 
 The declarations and implementations below specify arguments, return types, defaults, permission checks, limits, and errors. SDK adapters translate raw hosted calls to portable clients. See [SDKs](/plugins/reference/sdk-typescript) and [Errors](/plugins/reference/troubleshooting).
+
+On adapter download routes, set wait: { maxSeconds: 1200 } to hold the media response during preparation (positive whole seconds, capped at 1800). Ether admits four held requests per plugin and 32 per server. Keep the wait below client and reverse proxy response-header timeouts. Omit wait for players to keep their 18-second default.
 
 ## Storage & folders
 
@@ -1545,14 +1547,25 @@ part:
 - **Per-part, per-source, and absolute stream URLs** let frontend adapters and
   multi-file or native clients fetch a specific file, pin a resolver
   `PlayableSource.id`, or embed an absolute URL (`<origin>/ether/v1/kind-media/{ticket}`):
-  - Mint a scoped ticket URL with `ether.frontend.streamURL(itemRef, { partIndex?, source?, absolute? }).url`
+  - Mint a scoped ticket URL with `ether.frontend.streamURL(itemRef, { partIndex?, source?, absolute?, wait? }).url`
     (hosted JS; the positional `ether.frontend.streamURL(itemRef, partIndex).url` form still works),
-    `streamUrl(ctx, itemRef, { partIndex?, source?, absolute? })` (TypeScript SDK; positional `partIndex` also works),
-    `ctx.StreamURLWithOptions(itemRef, StreamURLOptions{PartIndex, Source, Absolute})` /
+    `streamUrl(ctx, itemRef, { partIndex?, source?, absolute?, wait? })` (TypeScript SDK; positional `partIndex` also works),
+    `ctx.StreamURLWithOptions(itemRef, StreamURLOptions{PartIndex, Source, Absolute, Wait})` /
     `ctx.StreamPartURL(itemRef, partIndex)` (Go SDK), or
     `ctx.stream_url(item_ref, part_index=..., source=..., absolute=...)` (Python SDK) — backed by
-    `POST /ether/plugin-host/frontend/stream-url` with `{"viewerId", "itemRef", "partIndex"?, "source"?, "absolute"?}`
+    `POST /ether/plugin-host/frontend/stream-url` with `{"viewerId", "itemRef", "partIndex"?, "source"?, "absolute"?, "wait": {"maxSeconds": 1200}?}`
     (forwarding `X-Ether-Viewer-Token` from remote adapters so Ether can resolve the active request origin and adapter key).
+  - Set `wait: {maxSeconds: 1200}` on tickets minted by download routes whose
+    clients need one response. Ether accepts positive whole seconds and caps
+    the wait at 1800 seconds. It sends no headers while preparation is pending,
+    then serves the file (200 or 206), returns a terminal open error, or sends
+    503 with `Retry-After` when the wait expires. The server holds at most four
+    requests per plugin and 32 total. Requests above either limit use the ordinary
+    media open. Omit the option for player routes to keep the 18-second default.
+    A disconnect frees the wait slot while the shared preparation job continues.
+    Set the wait below the client and reverse proxy response-header timeouts.
+    The ticket must be redeemed before it expires. Once redeemed, its expiry
+    does not interrupt the wait or the download.
   - By default stream URLs stay root-relative (`/ether/v1/kind-media/{ticket}`).
     When `absolute: true` is set, Ether prepends the request's `X-Ether-Origin`
     (`scheme://host[:port][/prefix]`, honouring trusted proxies only and omitting
@@ -5310,6 +5323,9 @@ func (m *Manager) BeginHostJob(pluginID, dedupKey, routePath, label, kind string
 			return true
 		}
 		s := v.(*actionJob).snapshot()
+		if s.Code == frontendPreparationWaitCode {
+			return true
+		}
 		count++
 		if s.State != "running" && (oldestKey == "" || s.Started.Before(oldest)) {
 			oldestKey, oldest = ks, s.Started
@@ -5338,6 +5354,47 @@ func (m *Manager) BeginHostJob(pluginID, dedupKey, routePath, label, kind string
 	}
 	m.jobs.Store(key, j)
 	return &HostJobHandle{m: m, pluginID: pluginID, job: j}
+}
+``````
+
+## Source: internal/plugins/action_jobs.go#frontendPreparationWaitCode
+
+``````
+const frontendPreparationWaitCode = "frontend_preparation_wait"
+``````
+
+## Source: internal/plugins/action_jobs.go#frontendPreparationWaitID
+
+``````
+var frontendPreparationWaitID atomic.Uint64
+``````
+
+## Source: internal/plugins/action_jobs.go#*Manager.TrackFrontendPreparationWait
+
+``````
+// TrackFrontendPreparationWait adds a transient Activity row for a held
+// download. Its cancellation stops the request wait, independently of the
+// resolver job. The caller removes the row before delivering the stream.
+func (m *Manager) TrackFrontendPreparationWait(pluginID string, budget time.Duration, cancel context.CancelFunc) func() {
+	if m == nil {
+		return func() {}
+	}
+	path := fmt.Sprintf("/ether/v1/kind-media/wait-%d", frontendPreparationWaitID.Add(1))
+	key := pluginID + "|host|" + path
+	done := make(chan struct{})
+	close(done)
+	m.jobs.Store(key, &actionJob{
+		cancel: cancel,
+		done:   done,
+		status: ActionJobStatus{
+			Path:         path,
+			Code:         frontendPreparationWaitCode,
+			State:        "running",
+			Started:      time.Now().UTC(),
+			TotalLimitMS: budget.Milliseconds(),
+		},
+	})
+	return func() { m.jobs.Delete(key) }
 }
 ``````
 
@@ -5512,6 +5569,9 @@ func (m *Manager) StartExpandJobPriority(pluginID, routePath, dedupKey string, i
 			return true
 		}
 		s := v.(*actionJob).snapshot()
+		if s.Code == frontendPreparationWaitCode {
+			return true
+		}
 		count++
 		if s.State == "running" {
 			if !strings.HasPrefix(ks, resolverPrefix) && !strings.HasPrefix(ks, hostPrefix) {
@@ -5636,6 +5696,9 @@ func (m *Manager) startResolverJob(pluginID string, body, initial json.RawMessag
 			return true
 		}
 		s := v.(*actionJob).snapshot()
+		if s.Code == frontendPreparationWaitCode {
+			return true
+		}
 		count++
 		if s.State == "running" {
 			if strings.HasPrefix(ks, resolverPrefix) {
@@ -5957,6 +6020,9 @@ func (m *Manager) handleActionJobs(w http.ResponseWriter, r *http.Request) {
 	m.jobs.Range(func(k, v any) bool {
 		if strings.HasPrefix(k.(string), id+"|") {
 			s := v.(*actionJob).snapshot()
+			if s.Code == frontendPreparationWaitCode {
+				s.Label = frontend.PluginPreparationLabel(r.Header.Get("Accept-Language"))
+			}
 			s.Progress = m.store.redactKnown(r.Context(), id, s.Progress)
 			s.Outcome = m.store.redactKnown(r.Context(), id, s.Outcome)
 			s.Error = m.store.redactKnown(r.Context(), id, s.Error)
@@ -8933,6 +8999,7 @@ type AICompleteBackendRequest struct {
 | `partIndex` | `*int` | may be omitted (see validation for conditions) |  |
 | `source` | `string` | may be omitted (see validation for conditions) |  |
 | `absolute` | `bool` | may be omitted (see validation for conditions) |  |
+| `wait` | `*StreamWaitPolicy` | may be omitted (see validation for conditions) |  |
 
 
 ## Source: internal/plugins/contract.go#StreamURLOptions
@@ -8943,9 +9010,27 @@ type AICompleteBackendRequest struct {
 // optionally asks Ether to return an absolute URL using the client-visible
 // request origin or the adapter's first published address (#772).
 type StreamURLOptions struct {
-	PartIndex *int   `json:"partIndex,omitempty"`
-	Source    string `json:"source,omitempty"`
-	Absolute  bool   `json:"absolute,omitempty"`
+	PartIndex *int              `json:"partIndex,omitempty"`
+	Source    string            `json:"source,omitempty"`
+	Absolute  bool              `json:"absolute,omitempty"`
+	Wait      *StreamWaitPolicy `json:"wait,omitempty"`
+}
+``````
+
+## Source: internal/plugins/contract.go#StreamWaitPolicy.fields.md
+
+| Field | Go type | Wire presence | Description |
+|---|---|---|---|
+| `maxSeconds` | `int` | emitted (validation may require a value) |  |
+
+
+## Source: internal/plugins/contract.go#StreamWaitPolicy
+
+``````
+// StreamWaitPolicy opts a download ticket into holding the media response
+// during preparation. MaxSeconds must be positive. Ether caps it at 1800.
+type StreamWaitPolicy struct {
+	MaxSeconds int `json:"maxSeconds"`
 }
 ``````
 
@@ -20363,7 +20448,7 @@ func (h *host) StreamURLWithOptions(ctx context.Context, itemRef string, opts St
 	if backends.StreamURLOptions != nil {
 		return backends.StreamURLOptions(ctx, h.plugin, viewerID, itemRef, opts)
 	}
-	if opts.Source != "" || opts.Absolute {
+	if opts.Source != "" || opts.Absolute || opts.Wait != nil {
 		return "", ErrUnavailable
 	}
 	if backends.StreamPartURL != nil {
@@ -21556,7 +21641,7 @@ func (b hostBridge) CallHost(ctx context.Context, name string, raw json.RawMessa
 					dec := json.NewDecoder(bytes.NewReader(rawArg))
 					dec.DisallowUnknownFields()
 					if err := dec.Decode(&opts); err != nil {
-						return nil, &wasm.Fault{Code: "bad_arguments", Message: "frontend.streamURL options must be { partIndex?, source?, absolute? }"}
+						return nil, &wasm.Fault{Code: "bad_arguments", Message: "frontend.streamURL options must be { partIndex?, source?, absolute?, wait? }"}
 					}
 					if opts.PartIndex != nil && *opts.PartIndex < 0 {
 						return nil, &wasm.Fault{Code: "bad_arguments", Message: "frontend.streamURL partIndex must be a non-negative integer"}
@@ -21569,6 +21654,9 @@ func (b hostBridge) CallHost(ctx context.Context, name string, raw json.RawMessa
 					opts.PartIndex = &n
 				}
 			}
+		}
+		if opts.Wait != nil && opts.Wait.MaxSeconds <= 0 {
+			return nil, &wasm.Fault{Code: "bad_arguments", Message: "frontend.streamURL wait.maxSeconds must be a positive integer"}
 		}
 		u, err := b.h.StreamURLWithOptions(ctx, str(0), opts)
 		if err != nil {
@@ -29280,6 +29368,39 @@ func (m *Manager) clearBlockedOperatorHosts(pluginID string) {
 const ResolverTotal = 25 * time.Second
 ``````
 
+## Source: internal/plugins/pending.go#frontendPreparationHoldKey.fields.md
+
+| Field | Go type | Wire presence | Description |
+|---|---|---|---|
+
+
+## Source: internal/plugins/pending.go#frontendPreparationHoldKey
+
+``````
+type frontendPreparationHoldKey struct{}
+``````
+
+## Source: internal/plugins/pending.go#WithFrontendPreparationHold
+
+``````
+// WithFrontendPreparationHold marks a media open whose caller owns the wait
+// deadline. It can join the full shared flight instead of yielding at the
+// play request's retry interval.
+func WithFrontendPreparationHold(ctx context.Context) context.Context {
+	return context.WithValue(ctx, frontendPreparationHoldKey{}, true)
+}
+``````
+
+## Source: internal/plugins/pending.go#FrontendPreparationHold
+
+``````
+// FrontendPreparationHold reports whether the media caller owns the wait.
+func FrontendPreparationHold(ctx context.Context) bool {
+	held, _ := ctx.Value(frontendPreparationHoldKey{}).(bool)
+	return held
+}
+``````
+
 ## Source: internal/plugins/pending.go#resolveSliceHookKey.fields.md
 
 | Field | Go type | Wire presence | Description |
@@ -30306,11 +30427,12 @@ func streamViewerToken(ctx context.Context) string {
 // for absolute stream URLs (#772).
 func (h *HostHandler) frontendStreamURL(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		ViewerID  int64  `json:"viewerId"`
-		ItemRef   string `json:"itemRef"`
-		PartIndex *int   `json:"partIndex,omitempty"`
-		Source    string `json:"source,omitempty"`
-		Absolute  bool   `json:"absolute,omitempty"`
+		ViewerID  int64                     `json:"viewerId"`
+		ItemRef   string                    `json:"itemRef"`
+		PartIndex *int                      `json:"partIndex,omitempty"`
+		Source    string                    `json:"source,omitempty"`
+		Absolute  bool                      `json:"absolute,omitempty"`
+		Wait      *plugins.StreamWaitPolicy `json:"wait,omitempty"`
 	}
 	if !h.decode(w, r, maxHostBodyBytes, &body) {
 		return
@@ -30323,12 +30445,16 @@ func (h *HostHandler) frontendStreamURL(w http.ResponseWriter, r *http.Request) 
 		writeHostError(w, http.StatusBadRequest, "bad_arguments", "source must not be blank")
 		return
 	}
+	if body.Wait != nil && body.Wait.MaxSeconds <= 0 {
+		writeHostError(w, http.StatusBadRequest, "bad_arguments", "wait.maxSeconds must be a positive integer")
+		return
+	}
 	ctx := withStreamViewerToken(r.Context(), r.Header.Get(HeaderViewerToken))
 	var (
 		u   string
 		err error
 	)
-	if body.Source != "" || body.Absolute {
+	if body.Source != "" || body.Absolute || body.Wait != nil {
 		oh, ok := h.host.(interface {
 			StreamURLWithOptions(ctx context.Context, pluginID string, viewerID int64, itemRef string, opts plugins.StreamURLOptions) (string, error)
 		})
@@ -30340,6 +30466,7 @@ func (h *HostHandler) frontendStreamURL(w http.ResponseWriter, r *http.Request) 
 			PartIndex: body.PartIndex,
 			Source:    body.Source,
 			Absolute:  body.Absolute,
+			Wait:      body.Wait,
 		})
 	} else if body.PartIndex != nil {
 		if oh, ok := h.host.(interface {
@@ -42603,7 +42730,7 @@ const playUrl = ether.frontend.streamURL(itemRef, {absolute: true}).url;
 ```
 
 In the SDKs, call `streamUrl(ctx, itemRef, partIndexOrOpts?)` (TypeScript),
-`ctx.StreamURLWithOptions(itemRef, StreamURLOptions{PartIndex, Source, Absolute})` or
+`ctx.StreamURLWithOptions(itemRef, StreamURLOptions{PartIndex, Source, Absolute, Wait})` or
 `ctx.StreamPartURL(itemRef, partIndex)` (Go), or
 `ctx.stream_url(item_ref, part_index=..., source=..., absolute=...)` (Python); an unpinned
 item ticket also accepts `/ether/v1/kind-media/{ticket}?part=N`. Default stream
@@ -42619,6 +42746,16 @@ ticket grant, Ether passes `KindResolveRequest.source` to `/resolve` and opens
 only the matching `PlayableSource.id` without failing over to other sources (a
 plugin that ignores `source` still works because Ether selects the matching id
 or returns `409 no_source` if absent).
+
+For an adapter download route, pass `{wait: {maxSeconds: 1200}}` to hold the
+media response while the plugin prepares the file. In Go, use
+`Wait: &etherplugin.StreamWaitPolicy{MaxSeconds: 1200}`. Use a positive integer.
+Ether caps the wait at 1800 seconds and allows up to four held requests per
+plugin and 32 per server. Over that limit, the request uses the ordinary media
+open and can return 503 with `Retry-After` while preparation continues.
+Omit `wait` on player routes to keep their 18-second default. Choose a wait below
+the client's and reverse proxy's response-header timeouts so Ether can send its
+own retry response. Disconnects release the held request while the job continues.
 
 Only root-relative local redirect URLs are forwarded. External URLs, authority
 changes, control characters, backslashes and known account credential query
@@ -58731,6 +58868,9 @@ func (c *RemoteHostClient) StreamPartURL(ctx context.Context, viewerID int64, it
 // PlayableSource.ID (#576, #661) and optionally resolved to an absolute URL
 // using the active request origin or the adapter's first published address (#772).
 func (c *RemoteHostClient) StreamURLWithOptions(ctx context.Context, viewerID int64, itemRef string, opts StreamURLOptions) (string, error) {
+	if opts.Wait != nil && opts.Wait.MaxSeconds <= 0 {
+		return "", fmt.Errorf("stream url: wait.maxSeconds must be a positive integer")
+	}
 	if opts.PartIndex != nil && *opts.PartIndex < 0 {
 		return "", fmt.Errorf("stream url: partIndex must be non-negative")
 	}
@@ -58746,6 +58886,9 @@ func (c *RemoteHostClient) StreamURLWithOptions(ctx context.Context, viewerID in
 	}
 	if opts.Absolute {
 		payload["absolute"] = true
+	}
+	if opts.Wait != nil {
+		payload["wait"] = opts.Wait
 	}
 	var headers map[string]string
 	if tok, ok := ViewerTokenFromContext(ctx); ok && tok != "" {
@@ -60172,6 +60315,7 @@ type KindResolveRequest struct {
 | `partIndex` | `*int` | may be omitted (see validation for conditions) |  |
 | `source` | `string` | may be omitted (see validation for conditions) |  |
 | `absolute` | `bool` | may be omitted (see validation for conditions) |  |
+| `wait` | `*StreamWaitPolicy` | may be omitted (see validation for conditions) |  |
 
 
 ## Source: sdk/go/kinds.go#StreamURLOptions
@@ -60182,9 +60326,27 @@ type KindResolveRequest struct {
 // optionally asks Ether to return an absolute URL using the client-visible
 // request origin or the adapter's first published address (#772).
 type StreamURLOptions struct {
-	PartIndex *int   `json:"partIndex,omitempty"`
-	Source    string `json:"source,omitempty"`
-	Absolute  bool   `json:"absolute,omitempty"`
+	PartIndex *int              `json:"partIndex,omitempty"`
+	Source    string            `json:"source,omitempty"`
+	Absolute  bool              `json:"absolute,omitempty"`
+	Wait      *StreamWaitPolicy `json:"wait,omitempty"`
+}
+``````
+
+## Source: sdk/go/kinds.go#StreamWaitPolicy.fields.md
+
+| Field | Go type | Wire presence | Description |
+|---|---|---|---|
+| `maxSeconds` | `int` | emitted (validation may require a value) |  |
+
+
+## Source: sdk/go/kinds.go#StreamWaitPolicy
+
+``````
+// StreamWaitPolicy opts a download ticket into holding the media response
+// during preparation. MaxSeconds must be positive. Ether caps it at 1800.
+type StreamWaitPolicy struct {
+	MaxSeconds int `json:"maxSeconds"`
 }
 ``````
 
@@ -60890,6 +61052,9 @@ func (c *Context) StreamPartURL(itemRef string, partIndex int) (string, error) {
 // specific resolver PlayableSource.ID (#576, #661) and optionally resolved to
 // an absolute URL (#772).
 func (c *Context) StreamURLWithOptions(itemRef string, opts StreamURLOptions) (string, error) {
+	if opts.Wait != nil && opts.Wait.MaxSeconds <= 0 {
+		return "", fmt.Errorf("stream url: wait.maxSeconds must be a positive integer")
+	}
 	if c.Ether == nil {
 		return "", errors.New("stream url: no host service available")
 	}
@@ -60915,6 +61080,9 @@ func (c *Context) StreamURLWithOptions(itemRef string, opts StreamURLOptions) (s
 	}
 	if opts.Absolute {
 		return "", errors.New("stream url: host does not support absolute stream URLs")
+	}
+	if opts.Wait != nil {
+		return "", errors.New("stream url: host does not support preparation waits")
 	}
 	if opts.PartIndex != nil {
 		if ph, ok := c.Ether.(PartStreamHost); ok {
@@ -75190,7 +75358,7 @@ export function normalizeStreamUrlOptions(
     return { partIndex: partIndexOrOpts };
   }
   if (partIndexOrOpts === null || typeof partIndexOrOpts !== "object" || Array.isArray(partIndexOrOpts)) {
-    throw new Error("stream url: options must be a partIndex integer or { partIndex?, source?, absolute? }");
+    throw new Error("stream url: options must be a partIndex integer or { partIndex?, source?, absolute?, wait? }");
   }
   checkPartIndex(partIndexOrOpts.partIndex);
   if (partIndexOrOpts.source !== undefined) {
@@ -75208,6 +75376,13 @@ export function normalizeStreamUrlOptions(
   if (partIndexOrOpts.partIndex !== undefined) out.partIndex = partIndexOrOpts.partIndex;
   if (partIndexOrOpts.source) out.source = partIndexOrOpts.source;
   if (partIndexOrOpts.absolute) out.absolute = true;
+  if (partIndexOrOpts.wait !== undefined) {
+    const seconds = partIndexOrOpts.wait?.maxSeconds;
+    if (typeof seconds !== "number" || !Number.isSafeInteger(seconds) || seconds <= 0) {
+      throw new Error("stream url: wait.maxSeconds must be a positive integer");
+    }
+    out.wait = { maxSeconds: seconds };
+  }
   return out;
 }
 
@@ -76071,7 +76246,7 @@ export function createHostedClient(): EtherHost {
         void viewerId;
         const opts = normalizeStreamUrlOptions(partIndexOrOpts);
         let args: unknown[];
-        if (opts.source !== undefined || opts.absolute) {
+        if (opts.source !== undefined || opts.absolute || opts.wait) {
           args = [itemRef, opts];
         } else if (opts.partIndex !== undefined) {
           args = [itemRef, opts.partIndex];
@@ -76482,6 +76657,7 @@ export function createRemoteHostClient(opts: RemoteHostOptions = {}): EtherHost 
             ...(streamOpts.partIndex === undefined ? {} : { partIndex: streamOpts.partIndex }),
             ...(streamOpts.source === undefined ? {} : { source: streamOpts.source }),
             ...(streamOpts.absolute ? { absolute: true } : {}),
+            ...(streamOpts.wait ? { wait: streamOpts.wait } : {}),
           },
           false,
           tok ? { [HEADER_VIEWER_TOKEN]: tok } : undefined,
@@ -77141,7 +77317,7 @@ export async function streamUrl<S = Record<string, unknown>>(
   if (!Number.isFinite(viewerId) || viewerId <= 0) {
     throw new Error("stream url: no authenticated viewer on this request");
   }
-  if (opts.source !== undefined || opts.absolute) {
+  if (opts.source !== undefined || opts.absolute || opts.wait) {
     return ctx.ether.frontend.streamUrl(viewerId, itemRef, opts);
   }
   return opts.partIndex === undefined
@@ -81404,6 +81580,8 @@ export interface StreamUrlOptions {
   source?: string;
   /** Return an absolute URL (`<origin>/ether/v1/kind-media/<token>`) using the active request origin or the adapter's first published address; default stays root-relative. */
   absolute?: boolean;
+  /** Hold a download response during preparation. Omit for players. Ether caps this at 1800 seconds. */
+  wait?: { maxSeconds: number };
 }
 
 export interface PendingReply {

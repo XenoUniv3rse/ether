@@ -1631,9 +1631,16 @@ type AICompleteBackendRequest struct {
 // optionally asks Ether to return an absolute URL using the client-visible
 // request origin or the adapter's first published address (#772).
 type StreamURLOptions struct {
-	PartIndex *int   `json:"partIndex,omitempty"`
-	Source    string `json:"source,omitempty"`
-	Absolute  bool   `json:"absolute,omitempty"`
+	PartIndex *int              `json:"partIndex,omitempty"`
+	Source    string            `json:"source,omitempty"`
+	Absolute  bool              `json:"absolute,omitempty"`
+	Wait      *StreamWaitPolicy `json:"wait,omitempty"`
+}
+
+// StreamWaitPolicy opts a download ticket into holding the media response
+// during preparation. MaxSeconds must be positive. Ether caps it at 1800.
+type StreamWaitPolicy struct {
+	MaxSeconds int `json:"maxSeconds"`
 }
 
 // FetchRequest is one plugin outbound HTTP call.

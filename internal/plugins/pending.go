@@ -16,6 +16,21 @@ import (
 
 const ResolverTotal = 25 * time.Second
 
+type frontendPreparationHoldKey struct{}
+
+// WithFrontendPreparationHold marks a media open whose caller owns the wait
+// deadline. It can join the full shared flight instead of yielding at the
+// play request's retry interval.
+func WithFrontendPreparationHold(ctx context.Context) context.Context {
+	return context.WithValue(ctx, frontendPreparationHoldKey{}, true)
+}
+
+// FrontendPreparationHold reports whether the media caller owns the wait.
+func FrontendPreparationHold(ctx context.Context) bool {
+	held, _ := ctx.Value(frontendPreparationHoldKey{}).(bool)
+	return held
+}
+
 type resolveSliceHookKey struct{}
 
 // WithResolveSliceHook attaches a callback invoked immediately before each
