@@ -12,20 +12,26 @@ import (
 // Titles returns hydrated, released, non-adult mirror entries in requested order. It never
 // fetches remote metadata, so collection serving stays bounded and offline.
 func (m *Mirror) Titles(ctx context.Context, keys []core.RatingKey) ([]core.Title, error) {
-	return m.titles(ctx, keys, false, true)
+	return m.titles(ctx, keys, false, true, false)
 }
 
 // TitlesIncludingFuture is a local metadata read for collection-scoped
 // authorization. Its caller must enforce membership and viewer policy.
 func (m *Mirror) TitlesIncludingFuture(ctx context.Context, keys []core.RatingKey) ([]core.Title, error) {
-	return m.titles(ctx, keys, true, true)
+	return m.titles(ctx, keys, true, true, false)
 }
 
 // ServeTitles returns mirror titles with their scalar columns and text facets
 // (genres, keywords, studios, countries) for collection serving and policy
 // filtering, without reading credits, aired season/episode counts, or air-added times.
 func (m *Mirror) ServeTitles(ctx context.Context, keys []core.RatingKey, includeFuture bool) ([]core.Title, error) {
-	return m.titles(ctx, keys, includeFuture, false)
+	return m.titles(ctx, keys, includeFuture, false, false)
+}
+
+// PublishedTitleCards reads already-published, released catalogue entries
+// for a fixed set of keys. It includes the text facets used on title cards.
+func (m *Mirror) PublishedTitleCards(ctx context.Context, keys []core.RatingKey) ([]core.Title, error) {
+	return m.titles(ctx, keys, false, false, true)
 }
 
 // ArtSummary reads only the type and artwork paths for keys, used when a
@@ -144,7 +150,7 @@ func (m *Mirror) ValidKeys(ctx context.Context, keys []core.RatingKey, includeFu
 	return out, nil
 }
 
-func (m *Mirror) titles(ctx context.Context, keys []core.RatingKey, includeFuture, full bool) ([]core.Title, error) {
+func (m *Mirror) titles(ctx context.Context, keys []core.RatingKey, includeFuture, full, publishedOnly bool) ([]core.Title, error) {
 	if len(keys) == 0 {
 		return []core.Title{}, nil
 	}
@@ -153,6 +159,10 @@ func (m *Mirror) titles(ctx context.Context, keys []core.RatingKey, includeFutur
 		textFactList(m.db, "catalog_keywords", "keyword", "catalog_titles.key") + "," +
 		textFactList(m.db, "catalog_studios", "studio", "catalog_titles.key") + "," +
 		textFactList(m.db, "catalog_countries", "country", "catalog_titles.key")
+	where := ""
+	if publishedOnly {
+		where = " AND browsable=1"
+	}
 	const chunk = 200
 	for start := 0; start < len(keys); start += chunk {
 		end := start + chunk
@@ -171,7 +181,7 @@ func (m *Mirror) titles(ctx context.Context, keys []core.RatingKey, includeFutur
    COALESCE((SELECT h.checked FROM catalog_home_release h WHERE h.key=catalog_titles.key),0),
    COALESCE((SELECT h.earliest_ts FROM catalog_home_release h WHERE h.key=catalog_titles.key),0),
    COALESCE((SELECT h.fallback_admitted FROM catalog_home_release h WHERE h.key=catalog_titles.key),0),`+facets+`
-			FROM catalog_titles WHERE key IN (`+ph+`)`, args...)
+			FROM catalog_titles WHERE key IN (`+ph+`)`+where, args...)
 		if err != nil {
 			return nil, err
 		}

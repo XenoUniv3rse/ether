@@ -1100,6 +1100,7 @@ func (i *instance) pageWithExtra(w http.ResponseWriter, r *http.Request, v *fron
 		i.prefetchSeriesFacts(r, v, page.Items)
 	}
 	i.primeTitleLibraries(r, v, page.Items)
+	i.prefetchGenreItems(r, v, page.Items)
 	for _, title := range page.Items {
 		var editions []jellyfinEdition
 		if !mbIsBookItem(title) {

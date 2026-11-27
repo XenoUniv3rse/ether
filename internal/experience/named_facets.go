@@ -125,11 +125,19 @@ func (s *Service) PrefetchNamedFacetIDs(ctx context.Context, viewer *core.Viewer
 	if rows == nil {
 		return nil
 	}
+	titles := make([]core.Title, 0, len(rows))
 	for key, row := range rows {
-		if row.Key != key || !s.visible(ctx, active, &row) {
+		if row.Key == key {
+			titles = append(titles, row)
+		}
+	}
+	members := s.sectionOrFilterAllowedBatch(ctx, active, titles, s.d.Visibility.SectionFor)
+	visibility := withoutSectionCheck(s.d.Visibility)
+	for _, title := range titles {
+		key := title.Key
+		if !members[key] || !visibility.Visible(ctx, active, &title) {
 			continue
 		}
-		title := row
 		if _, err := reqmemo.Do(ctx, namedFacetMemoKey(s, active.ID, key, kind), func() (namedFacetTitle, error) { return namedFacetTitle{&title}, nil }); err != nil {
 			return err
 		}

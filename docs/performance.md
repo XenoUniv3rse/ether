@@ -150,6 +150,8 @@ Run the matrix on an isolated local App with the fixture cache on the scratch
 volume. Set the Music source to a local checkout of the hosted Music plugin.
 The gate loads that checkout with network permission revoked, seeds artists,
 albums and tracks, and reads the Subsonic method list from its dispatcher.
+A full or Subsonic-selected run fails before replay if the checkout is missing
+or the adapter cannot be installed and mounted.
 
 ```sh
 mkdir -p "$HOME/.scratch/tmp/ether-perf"
@@ -177,17 +179,20 @@ scenarios use a one-minute observation window. Result rows are rows returned
 by the driver. Use the scale comparison and the SQL plan audit to investigate
 database work that returns few rows.
 
-The Markdown report updates after every case and includes failed or skipped
-scenarios, registered routes missing successful scenarios, and the worst
-sample for every over-budget route and configuration. It uses route patterns
+The Markdown report updates after every case. It lists failed or skipped
+scenarios, registered routes missing successful scenarios, exemptions with
+their reasons, the worst measured sample per route, and every over-budget
+route and configuration. It uses route patterns
 and strips SQL string literals. Coverage gaps and budget violations fail the
 test. The run has a 40-minute replay deadline and a three-minute limit per case.
 Ordinary requests have an eight-second replay window. The report retains
 traced database work through cancellation and marks incomplete requests as
 coverage gaps. For local triage,
 `ETHER_PERF_GATE_MATRIX_CASES`, `ETHER_PERF_GATE_CLIENTS` and
-`ETHER_PERF_GATE_STEPS` accept comma-separated exact names. Filtered runs
-still report the routes they skipped. To use PostgreSQL, provide a disposable
+`ETHER_PERF_GATE_STEPS` accept comma-separated filters. Cases and clients
+match exact names. Step filters match a substring, ignoring case. Client
+filters scope route inventory checks to the selected clients’ surfaces.
+Step filters still report skipped registrations on those surfaces. To use PostgreSQL, provide a disposable
 server through `ETHER_PERF_GATE_PG`. Each case gets a temporary schema.
 
 ## Library-scale comparison

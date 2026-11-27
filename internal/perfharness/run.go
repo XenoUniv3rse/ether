@@ -245,6 +245,9 @@ func (r *Runner) do(ctx context.Context, phase string, c Client, s *session, st 
 		return
 	}
 	req.Header = c.Headers(&session{Viewer: s.Viewer, vars: vars})
+	if st.Headers != nil {
+		st.Headers(req.Header, vars)
+	}
 	req.Header.Set("X-Ether-Perf-Tag", tag)
 	if body != "" && req.Header.Get("Content-Type") == "" && json.Valid([]byte(body)) {
 		req.Header.Set("Content-Type", "application/json")

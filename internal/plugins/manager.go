@@ -175,6 +175,7 @@ type Manager struct {
 	scheduleInFlight map[string]*scheduleFlight
 	scheduleJobs     map[string]*actionJob
 	scheduleWG       sync.WaitGroup
+	adapterCalls     chan CallRecord
 	// rate-limit bookkeeping for host log, notify, custom event publish, usenet_check, and ai.complete
 	notifyTimes       map[string][]time.Time
 	logTimes          map[string][]time.Time
@@ -270,9 +271,10 @@ func New(deps Deps) (*Manager, error) {
 		client = (&safefetch.Guard{}).Client(egress.Client(egress.CapPlugins, 30*time.Second))
 	}
 	m := &Manager{
-		busOrigin:  newEventID(),
-		iconRaster: artwork.NewSVGRasterizer(),
-		store:      &storage{db: deps.DB, sealer: deps.Sealer, now: now}, deps: deps,
+		busOrigin:    newEventID(),
+		adapterCalls: make(chan CallRecord, CallsCap),
+		iconRaster:   artwork.NewSVGRasterizer(),
+		store:        &storage{db: deps.DB, sealer: deps.Sealer, now: now}, deps: deps,
 		log: log, now: now, client: client,
 		fetchHosts: newFetchHostLimiter(DefaultMaxFetchPerHost),
 		fatories:   map[string]RuntimeFactory{}, runtimes: map[string]Runtime{}, warming: map[string]bool{}, shadow: map[string]bool{},
@@ -841,14 +843,14 @@ func (m *Manager) callOnce(ctx context.Context, pluginID string, req Request) (R
 		// The caller gave up (a search that already had its answer, a
 		// viewer who left): not the plugin's failure.
 		rec.Error = "cancelled by Ether"
-		m.store.addCall(ctx, rec)
+		m.recordCall(ctx, rec)
 		return Response{}, ctx.Err()
 	}
 	if err != nil && errors.Is(err, wasm.ErrRequestEncode) {
 		// Ether could not encode the request, so the guest never ran: keep
 		// the runtime and its jobs intact and record no health failure.
 		rec.Error = m.store.redactKnown(ctx, pluginID, err.Error())
-		m.store.addCall(ctx, rec)
+		m.recordCall(ctx, rec)
 		return Response{}, fmt.Errorf("%w: %w", ErrUnsupportedBody, err)
 	}
 	if err != nil && errors.Is(err, wasm.ErrPoolBusy) {
@@ -856,7 +858,7 @@ func (m *Manager) callOnce(ctx context.Context, pluginID string, req Request) (R
 		// keep the runtime and any running jobs intact and do not record a
 		// health failure.
 		rec.Error = m.store.redactKnown(ctx, pluginID, err.Error())
-		m.store.addCall(ctx, rec)
+		m.recordCall(ctx, rec)
 		return Response{}, fmt.Errorf("%w: %w", ErrBusy, err)
 	}
 	if err != nil && (errors.Is(err, wasm.ErrClosed) || !m.runtimeEpochMatches(pluginID, epoch)) {
@@ -868,7 +870,7 @@ func (m *Manager) callOnce(ctx context.Context, pluginID string, req Request) (R
 			err = errors.New("notification delivery failed")
 		}
 		rec.Error = m.store.redactKnown(ctx, pluginID, err.Error())
-		m.store.addCall(ctx, rec)
+		m.recordCall(ctx, rec)
 		if rec.Error != err.Error() {
 			err = errors.New(rec.Error)
 		}
@@ -882,7 +884,7 @@ func (m *Manager) callOnce(ctx context.Context, pluginID string, req Request) (R
 			err = errors.New("notification delivery failed")
 		}
 		rec.Error = m.store.redactKnown(ctx, pluginID, err.Error())
-		m.store.addCall(ctx, rec)
+		m.recordCall(ctx, rec)
 		m.recordTimeout(ctx, pluginID, rec.Error)
 		if rec.Error != err.Error() {
 			err = errors.New(rec.Error)
@@ -894,7 +896,7 @@ func (m *Manager) callOnce(ctx context.Context, pluginID string, req Request) (R
 			err = errors.New("notification delivery failed")
 		}
 		rec.Error = m.store.redactKnown(ctx, pluginID, err.Error())
-		m.store.addCall(ctx, rec)
+		m.recordCall(ctx, rec)
 		// Crash policy: drop the runtime for this epoch so the next call
 		// restarts it without disturbing a newer runtime.
 		m.closeRuntimeAtEpoch(pluginID, epoch)
@@ -914,7 +916,7 @@ func (m *Manager) callOnce(ctx context.Context, pluginID string, req Request) (R
 		resp.Status = http.StatusOK
 		rec.Status = resp.Status
 	}
-	m.store.addCall(ctx, rec)
+	m.recordCall(ctx, rec)
 	var pending PendingReply
 	_ = json.Unmarshal(resp.Body, &pending)
 	if !pending.Pending && ms > deadline.Milliseconds()/2 && ms > 1000 {

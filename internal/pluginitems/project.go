@@ -157,6 +157,7 @@ func ProjectWithText(item core.KindItem, decl plugins.MediaKindMeta, present cor
 		Summary:           strings.TrimSpace(item.Summary),
 		Year:              item.Year,
 		Rating:            item.Rating,
+		ContentRating:     ItemContentRating(item.Fields),
 		Popularity:        extractPopularity(item),
 		ChildCount:        childCount,
 		LeafCount:         item.LeafCount,

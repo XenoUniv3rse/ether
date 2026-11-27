@@ -56,12 +56,15 @@ type Step struct {
 	Stream time.Duration // observation window for an intentionally open response
 	Export bool
 	Method string
-	// ExpectedStatus asserts an exact status for an intentional refusal.
+	// ExpectedStatus asserts an exact HTTP status when the scenario names one.
 	ExpectedStatus int
 	Path           string
 	Body           string
 	Discover       func(vars map[string]string, body []byte)
 	Accept         func(body []byte) bool
+	Headers        func(http.Header, map[string]string)
+	registeredOnly bool
+	OwnerOnly      bool // in the matrix, replay this step with the owner account
 }
 
 // Statement ceilings for Plex Home, detail, post-play and search. Measured

@@ -680,6 +680,21 @@ func (s *Service) LibraryItems(ctx context.Context, viewer *core.Viewer, device 
 	if q.CollectionKey != 0 {
 		return s.libraryCollectionItems(ctx, v, device, library, stored, q)
 	}
+	// The viewer may have a plugin that serves this kind, but the
+	// catalogue libraries cannot match a plugin-only IncludeItemTypes.
+	if len(q.Types) == 0 && len(q.UnservedTypes) > 0 &&
+		!slices.ContainsFunc(q.UnservedTypes, func(kind string) bool {
+			switch strings.ToLower(kind) {
+			case string(core.TypeMovie), string(core.TypeShow), string(core.TypeSeason), string(core.TypeEpisode):
+				return true
+			}
+			return false
+		}) {
+		if q.StartAt != 0 || q.AdjacentTo != 0 {
+			return core.Page{}, core.ErrNotFound
+		}
+		return core.Page{Items: []core.Title{}, Total: 0, TotalExact: true}, nil
+	}
 	// Recursive show browsing can produce the show, its seasons, and its episodes.
 	// Skip the library when the requested types cannot appear in that tree.
 	if q.Recursive && library.Type == core.TypeShow && len(q.Types) > 0 {

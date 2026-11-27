@@ -16,6 +16,10 @@ import (
 // required policy facts. This keeps repeated title keys and fact tags out of
 // the driver result and permits an indexed lookup for each selected facet.
 func (c *Catalog) readVisibilityRows(ctx context.Context, args []any, facts core.TitleFacts) ([]core.Title, error) {
+	return c.readVisibilityRowFacts(ctx, args, facts, facts != 0)
+}
+
+func (c *Catalog) readVisibilityRowFacts(ctx context.Context, args []any, facts core.TitleFacts, episodeAir bool) ([]core.Title, error) {
 	columns := []string{qualifiedTitleCols("t")}
 	fields := [...]struct {
 		fact          core.TitleFacts
@@ -32,7 +36,7 @@ func (c *Catalog) readVisibilityRows(ctx context.Context, args []any, facts core
 		}
 	}
 	joins := ""
-	if facts != 0 {
+	if episodeAir {
 		joins += ` LEFT JOIN catalog_episode_provider_air p ON p.key=t.key
 			LEFT JOIN catalog_episode_release e ON e.key=t.key`
 		columns = append(columns, `CASE WHEN t.type='episode'
@@ -59,7 +63,7 @@ func (c *Catalog) readVisibilityRows(ctx context.Context, args []any, facts core
 				dest = append(dest, &raw[i])
 			}
 		}
-		if facts != 0 {
+		if episodeAir {
 			dest = append(dest, &air)
 		}
 		if facts&core.FactHomeRelease != 0 {
@@ -82,7 +86,7 @@ func (c *Catalog) readVisibilityRows(ctx context.Context, args []any, facts core
 			}
 			sort.Strings(*field)
 		}
-		if t.Type == core.TypeEpisode && facts != 0 {
+		if t.Type == core.TypeEpisode && episodeAir {
 			t.EpisodeAirDate = time.Time{}
 			if air != 0 {
 				t.EpisodeAirDate = time.Unix(air, 0).UTC()

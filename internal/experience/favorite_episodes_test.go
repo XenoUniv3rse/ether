@@ -202,3 +202,36 @@ func TestPluginProvidedKindStillLists(t *testing.T) {
 		t.Fatal("Person is not a kind any configured library serves")
 	}
 }
+
+func TestPluginOnlyFavoritesDoNotBrowseVideoLibraries(t *testing.T) {
+	viewer := &core.User{ID: 7}
+	presentation := mediaBrowserPresentation("music", map[string]string{"album": "MusicAlbum"})
+	libraries := &fakePluginLibraries{libs: []core.Library{
+		{ID: 1, Name: "Movies", Source: core.LibraryBuiltin, MediaType: core.TypeMovie},
+		{ID: 9, Name: "Local music", Source: core.LibraryPlugin, PluginID: "local.music", KindKey: "album", Present: presentation},
+		{ID: 10, Name: "Hosted music", Source: core.LibraryPlugin, PluginID: "hosted.music", KindKey: "album", Present: presentation},
+	}}
+	svc := &Service{d: ServiceDeps{
+		Active:          func(context.Context, int64) (*core.User, error) { return viewer, nil },
+		PluginLibraries: libraries,
+		Protocol:        "jellyfin",
+		LibraryPresentation: func(p core.Presentations, mt core.MediaType) (core.MediaType, string, bool) {
+			if p.MediaBrowser != nil {
+				return mt, p.MediaBrowser.CollectionType, true
+			}
+			return mt, "", true
+		},
+		Browse: func(context.Context, core.BrowseQuery) (core.Page, error) {
+			t.Fatal("MusicAlbum favorites touched the movie catalogue")
+			return core.Page{}, nil
+		},
+	}}
+	favorite := true
+	page, err := svc.LibraryItems(t.Context(), viewer, core.Device{}, "", frontend.ItemQuery{
+		Favorite: &favorite, Recursive: true, Limit: 30, Sort: core.SortTitle,
+		UnservedTypes: []string{"musicalbum"},
+	})
+	if err != nil || len(page.Items) != 0 || page.Total != 0 {
+		t.Fatalf("empty music favorites: items=%v total=%d err=%v", keysOf(page.Items), page.Total, err)
+	}
+}

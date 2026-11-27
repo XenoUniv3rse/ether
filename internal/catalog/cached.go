@@ -745,14 +745,25 @@ func (c *Catalog) PlaylistTitleRows(ctx context.Context, keys []core.RatingKey, 
 	if len(keys) == 0 {
 		return out, nil
 	}
+	facts |= c.viewerPolicyFacts(ctx)
+	if core.CatalogViewerRestricted(ctx) {
+		facts |= core.FactKeywords
+	}
 	args := make([]any, len(keys))
+	episodeAir := false
 	for i, key := range keys {
 		args[i] = int64(key)
+		episodeAir = episodeAir || key.Kind() == core.KindEpisode
 	}
-	ph, args := c.hydrationKeys(args)
-	items, err := c.scanTitleKeys(ctx, `SELECT `+titleCols+` FROM catalog_titles WHERE key IN (`+ph+`)`, args...)
-	if err != nil {
-		return nil, err
+	// Fold the policy facts into each membership row. Full display facts
+	// are still loaded only for the page Plex sends.
+	var items []core.Title
+	for part := range store.Chunks(args, 400) {
+		rows, err := c.readVisibilityRowFacts(ctx, part, facts, episodeAir)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, rows...)
 	}
 	var seasons []core.Title
 	for _, item := range items {
@@ -770,23 +781,6 @@ func (c *Catalog) PlaylistTitleRows(ctx context.Context, keys []core.RatingKey, 
 				items[n] = seasons[i]
 				i++
 			}
-		}
-	}
-	facts |= c.viewerPolicyFacts(ctx)
-	if core.CatalogViewerRestricted(ctx) {
-		facts |= core.FactKeywords
-	}
-	// Episode air dates are supplied by the fact query even if the caller
-	// needs none of the optional content-policy facts.
-	idx := make(map[core.RatingKey][]int, len(items))
-	factKeys := make([]any, 0, len(items))
-	for i, item := range items {
-		idx[item.Key] = []int{i}
-		factKeys = append(factKeys, int64(item.Key))
-	}
-	if len(items) != 0 {
-		if err := c.hydrateFactBatch(ctx, items, idx, factKeys, factSet(facts)); err != nil {
-			return nil, err
 		}
 	}
 	if err := c.hydrateShows(ctx, items); err != nil {
