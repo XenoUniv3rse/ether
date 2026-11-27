@@ -1172,6 +1172,7 @@ func (m *Manager) startHLS(ctx context.Context, req core.HLSRequest, life *encod
 		}
 	}
 
+	requestedOffset := offset
 	// Continuous clients rebase their first video presentation packet to zero.
 	// Resolve the true copy origin before authoring the playlist and audio cut.
 	copyOrigin := req.Continuous && req.Info.Duration > 0 && proto == core.ProtocolHLS && d.VideoCopy && v != nil && !req.LiveInput && len(slateData) == 0 && req.Resume == nil && !enhancementSelected(d)
@@ -1191,6 +1192,31 @@ func (m *Manager) startHLS(ctx context.Context, req core.HLSRequest, life *encod
 		} else {
 			offset = sample.origin
 			copyStart = sample
+		}
+	}
+
+	var copySample copyPacketSample
+	sampledCopy := req.AdaptiveEncodeTop && req.AdaptiveHLS && req.AdaptiveUnavailable == "" && d.VideoCopy &&
+		copyStart.closed && len(req.Info.Keyframes) == 0 && !req.ArchiveInput
+	if sampledCopy {
+		// A bounded sample can prove a short source without container index
+		// metadata. A partial read must never authorize a copied variant.
+		copySample = m.sampleCopyIndex(ctx, req, offset, life)
+		if copySample.complete {
+			req.Info.Keyframes = copySample.points
+		}
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+	}
+	if req.AdaptiveEncodeTop && req.AdaptiveHLS && req.AdaptiveUnavailable == "" && d.VideoCopy &&
+		(!copyStart.closed || !adaptiveCopyIndex(req.Info, offset, copyStart.next, segDur)) {
+		if top := adaptiveEncodedTop(req.Info, rungs, req.AdaptiveMaxKbps); top > 0 {
+			// Keep the original quality ID available to explicit quality selection.
+			rungs[0] = rungs[top]
+			rungs[0].id = "base"
+			d = rungs[0].decision
+			offset, copyOrigin, copyStart = requestedOffset, false, copyOpening{}
 		}
 	}
 
@@ -1327,7 +1353,10 @@ func (m *Manager) startHLS(ctx context.Context, req core.HLSRequest, life *encod
 	// the bitrate of future unseen scenes or change a published timeline.
 	if proto == core.ProtocolHLS && req.Resume == nil && req.Ramp.Version == 0 && !ValidCopyTimeline(req) && !req.LiveInput && !req.ArchiveInput &&
 		d.VideoCopy && len(req.Info.Keyframes) == 0 && plan != nil {
-		sample := m.sampleCopyIndex(ctx, req, offset, life)
+		sample := copySample
+		if !sampledCopy {
+			sample = m.sampleCopyIndex(ctx, req, offset, life)
+		}
 		points := sample.points
 		nominal := time.Duration(adapt.RampSegs) * adapt.RampDur
 		// A TS copy's encoded ramp needs a sampled keyframe to hand over at

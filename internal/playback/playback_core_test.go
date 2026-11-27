@@ -405,6 +405,17 @@ func feedFetches(s *session, chunks, chunkBytes int, each time.Duration, now tim
 	}
 }
 
+type adaptiveDownFailoverHLS struct {
+	*fakeHLS
+	cappedInput string
+	capKbps     int
+}
+
+func (h *adaptiveDownFailoverHLS) CapAdaptiveBitrate(input string, kbps int) (core.Decision, error) {
+	h.cappedInput, h.capKbps = input, kbps
+	return core.Decision{Kind: core.DecisionTranscode}, nil
+}
+
 func TestDownFailoverTriggersOnSlowSource(t *testing.T) {
 	h := newHarness(t, []*fakeRelease{
 		mkv("A", 80_000_000, 100*time.Second),       // 6.4 Mbps
@@ -413,7 +424,8 @@ func TestDownFailoverTriggersOnSlowSource(t *testing.T) {
 	}, []string{"A", "Lighter", "B"}, func(h *harness, o *Options) { speedOpts(o) })
 	ps := h.prepare(owner, movieKey, "c1")
 	h.m.SetDecision(ps.ID, core.Decision{Kind: core.DecisionRemux, VideoCopy: true, AudioCopy: true})
-	hls := h.tr.addHLS(ps.ID)
+	hls := &adaptiveDownFailoverHLS{fakeHLS: h.tr.addHLS(ps.ID)}
+	h.m.deps.HLSLookup = func(string) (core.HLSSession, bool) { return hls, true }
 	s := h.m.lookup(ps.ID)
 
 	h.clock.Advance(2 * time.Second) // past the grace period
@@ -439,6 +451,9 @@ func TestDownFailoverTriggersOnSlowSource(t *testing.T) {
 	st, _ := h.m.Session(ps.ID)
 	if st.Resolution.Release.ID != "B" || st.DownFailovers != 1 || st.Failovers != 1 {
 		t.Fatalf("down-failover state: %+v", st)
+	}
+	if hls.capKbps <= 0 || hls.cappedInput != h.m.urlFor(s.current()) {
+		t.Fatal("down-failover did not cap the adaptive master on the replacement generation")
 	}
 	if h.resolver.isBad("A") {
 		t.Fatal("slow release marked bad")

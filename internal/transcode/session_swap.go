@@ -235,6 +235,42 @@ func (s *Session) swapInput(ctx context.Context, inputURL string, info core.Medi
 	return s.startRunForLocked(seg, false, "input swap")
 }
 
+// AdaptiveBitrateLimit reports the active master's peak ceiling in bits per second.
+func (s *Session) AdaptiveBitrateLimit() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.adaptiveMaxKbps * 1000
+}
+
+func (s *Session) CapAdaptiveBitrate(input string, kbps int) (core.Decision, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.capAdaptiveBitrateLocked(input, kbps)
+}
+
+func (s *Session) capAdaptiveBitrateLocked(input string, kbps int) (core.Decision, error) {
+	if !s.adaptiveHLS || s.closed || s.liveInput || s.input != input || kbps <= 0 {
+		return core.Decision{}, core.ErrNotAvailable
+	}
+	previousCap, previousExclude := s.adaptiveMaxKbps, s.adaptiveExcludeCopy
+	if previousCap > 0 {
+		kbps = min(kbps, previousCap)
+	}
+	s.adaptiveMaxKbps = kbps
+	// The encoded variants still share the published clock after a swap.
+	// Copied packets from a new release need new random-access evidence.
+	s.adaptiveExcludeCopy = len(s.rungs) > 0 && s.rungs[0].decision.VideoCopy && !s.adaptiveCopyAligned
+	rungs, _ := s.adaptiveRungsLocked()
+	if len(rungs) == 0 {
+		s.adaptiveMaxKbps, s.adaptiveExcludeCopy = previousCap, previousExclude
+		return core.Decision{}, core.ErrNotAvailable
+	}
+	if s.cur != nil && !s.rungWithinAdaptiveCapLocked(s.cur.track) {
+		s.stopRunForLocked("adaptive bitrate cap")
+	}
+	return s.rungs[s.rungTrack(rungs[0].ID)].decision, nil
+}
+
 // ReduceOutputBitrate keeps the delivered picture and segment clock. A
 // different source is still preferable when the original input is too slow.
 func (s *Session) ReduceOutputBitrate(ctx context.Context, input string, limitKbps int) (core.Decision, error) {
@@ -248,6 +284,12 @@ func (s *Session) ReduceOutputBitrate(ctx context.Context, input string, limitKb
 		(s.container != ContainerFMP4 && s.container != ContainerMPEGTS && s.container != ContainerMatroska) ||
 		(s.sourceLimitKbps > 0 && limitKbps >= s.sourceLimitKbps) {
 		return core.Decision{}, core.ErrNotAvailable
+	}
+	if s.adaptiveHLS {
+		if s.adaptiveMaxKbps > 0 && limitKbps >= s.adaptiveMaxKbps {
+			return core.Decision{}, core.ErrNotAvailable
+		}
+		return s.capAdaptiveBitrateLocked(input, limitKbps)
 	}
 	// Bypass the contract's copy branch: this path requires an encoder
 	// capable of reproducing the delivered format.

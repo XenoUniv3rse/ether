@@ -27,8 +27,11 @@ func (i *instance) refreshOutput(ctx context.Context, id string, s *playSession)
 	before, _ := json.Marshal(object{"paths": paths, "preparation": s.plan["preparation"]})
 	for _, path := range paths {
 		url, _ := path["url"].(string)
-		master := path["transport"] == "hls" && strings.HasSuffix(url, "/master.m3u8")
-		if s.client.Features.AdaptiveHLS && path["id"] == s.plan["selectedPathId"] && (!master || !ok || hs == nil) && url != "" && path["adaptiveUnavailable"] == nil {
+		hls := path["transport"] == "hls"
+		masterURL, query, _ := strings.Cut(url, "?")
+		master := hls && strings.HasSuffix(masterURL, "/master.m3u8")
+		if s.client.Features.AdaptiveHLS && (hls || path["id"] == s.plan["selectedPathId"]) &&
+			(!master || !ok || hs == nil) && path["adaptiveUnavailable"] == nil {
 			reason := "hls_unavailable"
 			switch {
 			case path["original"] == true:
@@ -37,12 +40,18 @@ func (i *instance) refreshOutput(ctx context.Context, id string, s *playSession)
 				reason = "audio_only"
 			case master:
 				reason = "adaptive_not_started"
-			case path["transport"] == "hls":
+			case hls && s.rungFor(path) != "":
 				reason = "fixed_quality_selected"
+			case url == "":
+				reason = "adaptive_not_started"
+			case s.channelID != "":
+				reason = "live_timeline"
 			}
 			delete(path, "adaptive")
 			setAdaptiveUnavailable(path, reason, s.accessDevice.Language)
-			slog.Debug("adaptive HLS unavailable", "session", id, "reason", reason)
+			if url != "" {
+				slog.Debug("adaptive HLS unavailable", "session", id, "reason", reason)
+			}
 		}
 		if !ok || hs == nil || path["transport"] != "hls" || url == "" {
 			continue
@@ -57,6 +66,13 @@ func (i *instance) refreshOutput(ctx context.Context, id string, s *playSession)
 			if adaptive, ok := hs.(frontend.AdaptiveHLSSession); ok {
 				adaptiveRungs = adaptive.AdaptiveRungs()
 			}
+			if strings.HasPrefix(query, "maxBitrate=") {
+				adaptiveRungs = rungsAtOrBelow(adaptiveRungs, pathBitrate(path))
+			} else if capped, ok := hs.(interface{ AdaptiveBitrateLimit() int }); ok {
+				if limit := capped.AdaptiveBitrateLimit(); limit > 0 {
+					path["maxBitrate"] = limit
+				}
+			}
 			if d, ok := hs.(interface{ Decision() frontend.Decision }); ok && d.Decision().Kind == frontend.DecisionTranscode ||
 				len(adaptiveRungs) > 0 && adaptiveRungs[0].ID != "base" {
 				path["kind"] = "transcode"
@@ -64,7 +80,6 @@ func (i *instance) refreshOutput(ctx context.Context, id string, s *playSession)
 			if len(adaptiveRungs) > 1 {
 				path["adaptive"] = true
 				delete(path, "adaptiveUnavailable")
-				delete(path, "adaptiveUnavailableMessage")
 			} else {
 				reason := "adaptive_not_started"
 				if diagnostics, ok := hs.(interface{ AdaptiveHLSUnavailable() string }); ok {
@@ -72,12 +87,15 @@ func (i *instance) refreshOutput(ctx context.Context, id string, s *playSession)
 						reason = code
 					}
 				}
-				if s.channelID != "" {
+				if strings.HasPrefix(query, "maxBitrate=") {
+					reason = "bitrate_limit"
+				} else if s.channelID != "" {
 					reason = "live_timeline"
 				} else if s.plan["media"] == "audio" {
 					reason = "audio_only"
 				}
-				if (wasAdaptive || adaptiveRungs == nil) && path["adaptiveUnavailable"] != reason {
+				previous, _ := path["adaptiveUnavailable"].(object)
+				if (wasAdaptive || adaptiveRungs == nil) && previous["reason"] != reason {
 					slog.Debug("adaptive HLS unavailable", "session", id, "reason", reason)
 				}
 				setAdaptiveUnavailable(path, reason, s.accessDevice.Language)
@@ -86,7 +104,7 @@ func (i *instance) refreshOutput(ctx context.Context, id string, s *playSession)
 		if ladder, ok := hs.(interface{ Rungs() []frontend.HLSRung }); ok {
 			qualities := []object{}
 			delete(path, "initialRenditionId")
-			base := hlsDirectory(url)
+			base := hlsDirectory(masterURL)
 			rungs := adaptiveRungs
 			if rungs == nil {
 				rungs = ladder.Rungs()

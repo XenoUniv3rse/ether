@@ -195,6 +195,7 @@ type brokerSession struct {
 	httpExt               string
 	streamPosition        time.Duration
 	adaptiveHLS           bool
+	adaptiveMaxBitrate    int
 	segmentDuration       time.Duration
 	live                  bool
 	directLive            *frontend.DirectLiveTarget

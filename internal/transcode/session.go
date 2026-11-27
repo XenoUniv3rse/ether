@@ -35,6 +35,7 @@ type Session struct {
 	adaptiveHLS             bool
 	adaptiveUnavailable     string
 	adaptiveCopyAligned     bool
+	adaptiveExcludeCopy     bool
 	adaptiveCopyDecodeLead  time.Duration
 	adaptiveMaxKbps         int
 	adaptiveLastRequest     time.Time

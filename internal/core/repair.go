@@ -85,3 +85,8 @@ type PlaybackTimeline interface {
 type OutputBitrateReducer interface {
 	ReduceOutputBitrate(ctx context.Context, input string, limitKbps int) (Decision, error)
 }
+
+// AdaptiveBitrateCapper caps the active master after a source down-failover.
+type AdaptiveBitrateCapper interface {
+	CapAdaptiveBitrate(input string, kbps int) (Decision, error)
+}

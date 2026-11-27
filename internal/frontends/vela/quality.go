@@ -3,6 +3,7 @@ package vela
 import (
 	"context"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -61,7 +62,51 @@ func (i *instance) addQualityPaths(ctx context.Context, a frontend.SessionAccess
 	s.plan["fallback"] = object{"state": "idle"}
 }
 
+const adaptivePathID = "adaptive-hls"
+
+func adaptivePath(plan object, id string) object {
+	paths := plan["paths"].([]object)
+	for _, path := range paths {
+		if path["id"] == id {
+			return path
+		}
+	}
+	path := object{"id": id, "kind": "remux", "transport": "hls", "mimeType": "application/vnd.apple.mpegurl",
+		"readiness": "on-demand", "sourceId": paths[0]["sourceId"], "timelineId": paths[0]["timelineId"], "qualities": []object{}, "boundaries": []object{}}
+	plan["paths"] = append(paths, path)
+	return path
+}
+
+func (i *instance) offerAdaptive(ctx context.Context, a frontend.SessionAccess, s *playSession, direct, hls bool) {
+	if !direct || !s.client.Features.AdaptiveHLS || !(s.client.HLS || s.client.MSE) || s.media.Video() == nil || s.channelID != "" {
+		return
+	}
+	path := adaptivePath(s.plan, adaptivePathID)
+	if !hls {
+		path["readiness"] = "unavailable"
+		setAdaptiveUnavailable(path, "hls_unavailable", a.Device.Language)
+		return
+	}
+	url, err := i.host.Sessions.StartStream(ctx, a, s.id, frontend.StreamRequest{
+		Format: frontend.StreamHLS, Position: s.position, LazyStart: true, Continuous: true, AdaptiveHLS: true, PrepareOnly: true,
+	})
+	if err != nil {
+		setAdaptiveUnavailable(path, "hls_unavailable", a.Device.Language)
+		return
+	}
+	path["url"], path["readiness"] = url, "ready"
+	path["timelineOriginSeconds"] = s.position.Seconds()
+}
+
+func pathBitrate(path object) int {
+	cap, _ := path["maxBitrate"].(int)
+	return cap
+}
+
 func (i *instance) prepareFallback(w http.ResponseWriter, r *http.Request, v *frontend.Viewer, s *playSession, id string, maxBitrate int) bool {
+	if s.client.Features.AdaptiveHLS && s.channelID == "" && s.media.Video() != nil {
+		return i.prepareAdaptiveFallback(w, r, v, s, id, maxBitrate)
+	}
 	q, ok := i.host.Sessions.(frontend.QualitySessions)
 	if !ok || len(s.qualityRungs) == 0 {
 		i.unavailable(w, r)
@@ -106,6 +151,74 @@ func (i *instance) prepareFallback(w http.ResponseWriter, r *http.Request, v *fr
 	}
 	s.plan["fallback"] = object{"state": "ready", "pathId": pathID}
 	return s.portSnapshot(w, func(copy *playSession) { i.refreshOutput(ctx, id, copy) })
+}
+
+func rungsAtOrBelow(rungs []frontend.HLSRung, cap int) []frontend.HLSRung {
+	filtered := make([]frontend.HLSRung, 0, len(rungs))
+	for _, rung := range rungs {
+		if rung.Bandwidth <= cap {
+			filtered = append(filtered, rung)
+		}
+	}
+	return filtered
+}
+
+func (i *instance) prepareAdaptiveFallback(w http.ResponseWriter, r *http.Request, v *frontend.Viewer, s *playSession, id string, maxBitrate int) bool {
+	pos := s.position
+	origin := pos.Seconds()
+	var url string
+	var err error
+	selected := selectedPlaybackPath(s.plan, s.plan["paths"].([]object))
+	if selected["transport"] == "hls" {
+		// A capped view of an existing master does not retire its active
+		// encoder or rewrite the selected path while preparing a switch.
+		current, _ := selected["url"].(string)
+		master, _, _ := strings.Cut(current, "?")
+		if !strings.HasSuffix(master, "/master.m3u8") {
+			problem(w, 422, "decoder", "quality_unavailable")
+			return false
+		}
+		var fits bool
+		if !s.port(w, func() {
+			if hs, ok := i.host.Sessions.TranscodeFor(r.Context(), id); ok {
+				if adaptive, ok := hs.(frontend.AdaptiveHLSSession); ok {
+					fits = len(rungsAtOrBelow(adaptive.AdaptiveRungs(), maxBitrate)) > 0
+				}
+			}
+		}) {
+			return false
+		}
+		if !fits {
+			problem(w, 422, "decoder", "quality_unavailable")
+			return false
+		}
+		origin, _ = selected["timelineOriginSeconds"].(float64)
+		pathID := adaptivePathID
+		if selected["id"] == adaptivePathID {
+			pathID = "adaptive-fallback"
+		}
+		path := adaptivePath(s.plan, pathID)
+		path["url"] = master + "?maxBitrate=" + strconv.Itoa(maxBitrate)
+		path["readiness"], path["maxBitrate"], path["timelineOriginSeconds"] = "ready", maxBitrate, origin
+		s.plan["fallback"] = object{"state": "ready", "pathId": pathID}
+		return s.portSnapshot(w, func(copy *playSession) { i.refreshOutput(r.Context(), id, copy) })
+	}
+	if !s.port(w, func() {
+		url, err = i.host.Sessions.StartStream(r.Context(), i.access(r, v), id, frontend.StreamRequest{
+			Format: frontend.StreamHLS, Position: pos, LazyStart: true, Continuous: true,
+			AdaptiveHLS: true, AdaptiveMaxBitrate: maxBitrate, PrepareOnly: true,
+		})
+	}) {
+		return false
+	}
+	if err != nil {
+		i.failFor(w, v, err, r)
+		return false
+	}
+	path := adaptivePath(s.plan, adaptivePathID)
+	path["url"], path["readiness"], path["maxBitrate"], path["timelineOriginSeconds"] = url, "ready", maxBitrate, origin
+	s.plan["fallback"] = object{"state": "ready", "pathId": adaptivePathID}
+	return s.portSnapshot(w, func(copy *playSession) { i.refreshOutput(r.Context(), id, copy) })
 }
 
 func (i *instance) selectQualityRung(w http.ResponseWriter, r *http.Request, v *frontend.Viewer, s *playSession, id string, maxBitrate int) (frontend.HLSRung, bool) {
@@ -168,7 +281,6 @@ func (s *playSession) invalidatePrepared(selected object) {
 		delete(path, "initialRenditionId")
 		delete(path, "adaptive")
 		delete(path, "adaptiveUnavailable")
-		delete(path, "adaptiveUnavailableMessage")
 		path["readiness"] = "on-demand"
 		path["qualities"] = []object{}
 	}
