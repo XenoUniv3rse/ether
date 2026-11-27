@@ -483,6 +483,8 @@ export interface EtherConfig {
     healthRace?: number;
     sourcePreference?: string;
     sourceAlwaysFirst?: boolean;
+    /** Play a file a source plugin serves from a granted folder before any fetched release. */
+    preferLocalFiles?: boolean;
     customFormats?: CustomFormatDefinition[] | null;
     /** Let a detail page's file-availability check open on-demand add-on streams. */
     openOnDemandAddonStreams?: boolean;

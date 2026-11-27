@@ -526,6 +526,11 @@ type Resolver struct {
 	HardSubtitles   string `json:"hardSubtitles,omitempty"`
 	HealthRace      int    `json:"healthRace"`      // 0 = ranked checks; >0 = first healthy of bounded concurrent candidates
 	OptimisticStart bool   `json:"optimisticStart"` // return top NZB before background health check
+	// PreferLocalFiles plays a file a source plugin serves from an
+	// owner-granted folder before any downloaded or streamed release,
+	// whatever its quality. Filters, Never-play fallback tiers, the
+	// viewer's audio language and title identity still apply.
+	PreferLocalFiles bool `json:"preferLocalFiles,omitempty"`
 	// CustomFormats are the custom format definitions profiles score
 	// (QualityProfile.CustomFormatScores).
 	CustomFormats      []core.CustomFormat `json:"customFormats,omitempty"`

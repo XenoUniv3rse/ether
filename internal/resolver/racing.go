@@ -17,6 +17,7 @@ type candidate struct {
 	sourcePreferred  bool     // source routing deliberately selected this candidate as the leader
 	knownCachedHint  bool     // caller already knows this torrent candidate is cached on debrid
 	identityWeak     bool     // shared title without evidence identifying this show
+	localFirst       bool     // a granted local file the owner plays before any fetched release (Resolver.PreferLocalFiles)
 	audioUnverified  bool     // required audio language is unverified in the release name (probe required)
 	unverifiedLangs  []string // required audio languages awaiting probe verification
 	belowScore       bool
