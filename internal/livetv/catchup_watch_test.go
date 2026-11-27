@@ -477,3 +477,54 @@ func TestCatchUpWatchShowPartlyVisible(t *testing.T) {
 		t.Fatalf("limited viewer's roll-up after marking: %+v, %v", w, err)
 	}
 }
+
+// A show or season mark stamps watch_at_ms on every airing it writes, as an
+// airing's mark does, so an older offline report cannot undo it.
+func TestCatchUpWatchGroupMarkStamps(t *testing.T) {
+	now := time.Date(2026, 11, 25, 12, 0, 0, 0, time.UTC)
+	s, _, h := catchUpWatchFixture(t, now) // News at -5h and -3h
+	owner := &core.User{ID: 1, IsOwner: true}
+	news := frontend.CatchUpGroupID(frontend.TypeShow, "News")
+	stamps := func(label string, wantViews int) {
+		t.Helper()
+		rows, err := s.o.DB.QueryContext(t.Context(), `SELECT watch_at_ms, view_count, offset_ms FROM livetv_catchup_watch WHERE user_id=1`)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer rows.Close()
+		n := 0
+		for rows.Next() {
+			var at, offset int64
+			var views int
+			if err := rows.Scan(&at, &views, &offset); err != nil {
+				t.Fatal(err)
+			}
+			if at != now.UnixMilli() || views != wantViews || offset != 0 {
+				t.Fatalf("%s: row watch_at=%d views=%d offset=%d", label, at, views, offset)
+			}
+			n++
+		}
+		if n != 2 {
+			t.Fatalf("%s: %d rows", label, n)
+		}
+	}
+	if err := h.CatchUpSetWatched(t.Context(), owner, news, true); err != nil {
+		t.Fatal(err)
+	}
+	stamps("show marked", 1)
+	episodes, err := h.CatchUpItems(t.Context(), owner, frontend.CatchUpQuery{Parent: frontend.CatchUpGroupID(frontend.TypeSeason, "News")})
+	if err != nil || len(episodes.Items) != 2 {
+		t.Fatalf("episodes: %+v, %v", episodes.Items, err)
+	}
+	// An offline client syncs a position it saw an hour before the mark.
+	earlier, position := now.Add(-time.Hour), 20*time.Minute
+	patch := frontend.CatchUpUserDataPatch{ItemPlaybackPatch: frontend.ItemPlaybackPatch{Position: &position, LastPlayedAt: &earlier}}
+	if err := h.CatchUpPatchUserData(t.Context(), owner, frontend.CatchUpGUID(episodes.Items[0]), patch); err != nil {
+		t.Fatal(err)
+	}
+	stamps("stale offline report after the mark", 1)
+	if err := h.CatchUpSetWatched(t.Context(), owner, frontend.CatchUpGroupID(frontend.TypeSeason, "News"), false); err != nil {
+		t.Fatal(err)
+	}
+	stamps("season unmarked", 0)
+}
