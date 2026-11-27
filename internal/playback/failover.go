@@ -1063,7 +1063,11 @@ func (m *Manager) probeGeneration(ctx context.Context, s *session, res *core.Res
 		}
 	}
 	if size := src.Size(); size > 0 {
-		mi.Size, mi.FileSize = size, size
+		mi.FileSize = size
+		// Keep the probe's size for release matching and version selection.
+		if mi.Size <= 0 {
+			mi.Size = size
+		}
 	}
 	if mi.Container == "" {
 		mi.Container = containerFromName(src.Name())

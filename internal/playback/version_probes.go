@@ -483,7 +483,10 @@ func enrichEstimatedFromDebridMeta(v *core.ReleaseVariant, title *core.Title, fi
 		return
 	}
 	if size > 0 {
-		v.Info.Size, v.Info.FileSize = size, size
+		v.Info.FileSize = size
+		if v.Info.Size <= 0 {
+			v.Info.Size = size
+		}
 	}
 	if filePath == "" {
 		return
