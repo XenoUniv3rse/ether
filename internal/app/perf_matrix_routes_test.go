@@ -287,11 +287,18 @@ func matrixRouteExceptions() map[perfharness.MatrixRouteKey]string {
 	return allowed
 }
 
-func matrixCaseRouteExceptions(inventory perfharness.MatrixRoutes, live bool) map[perfharness.MatrixRouteKey]string {
-	if live {
+func matrixCaseRouteExceptions(inventory perfharness.MatrixRoutes, live, availabilityMonitor bool) map[perfharness.MatrixRouteKey]string {
+	if live && availabilityMonitor {
 		return perfMatrixRouteExceptions
 	}
 	exceptions := maps.Clone(perfMatrixRouteExceptions)
+	if !availabilityMonitor {
+		key := perfharness.MatrixRouteKey{Surface: "console", Method: http.MethodPost, Pattern: "/ether/api/availability/sync"}
+		exceptions[key] = "release monitoring is disabled in this configuration"
+	}
+	if live {
+		return exceptions
+	}
 	for surface, routes := range inventory {
 		for _, entry := range routes {
 			path := entry.Pattern

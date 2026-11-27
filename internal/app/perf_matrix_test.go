@@ -520,7 +520,8 @@ func runPerfMatrixCase(t *testing.T, ctx context.Context, fixture string, c perf
 	// window. Its completed trace remains useful even when the client cancels.
 	r.SetTimeout(8 * time.Second)
 	r.SetBefore(func(context.Context) { a.perf.waitTraces() })
-	cs := append(perfharness.MatrixClients(c.live), perfharness.MatrixPluginHost())
+	availabilityMonitor := cfg.Get().Availability.Monitor
+	cs := append(perfharness.MatrixClients(c.live, availabilityMonitor), perfharness.MatrixPluginHost())
 	if len(music.methods) != 0 {
 		cs = append(cs, perfharness.MatrixSubsonic(music.methods))
 	}
@@ -534,7 +535,7 @@ func runPerfMatrixCase(t *testing.T, ctx context.Context, fixture string, c perf
 	}
 	inventory := perfMatrixInventory(t, a, surfaces, music.methods)
 	r.SetMatrixRoutes(inventory)
-	exceptions := matrixCaseRouteExceptions(inventory, c.live)
+	exceptions := matrixCaseRouteExceptions(inventory, c.live, availabilityMonitor)
 	perfharness.AppendMatrixReads(cs, inventory, exceptions)
 	cs = perfharness.Only(cs, clients)
 	if steps := os.Getenv("ETHER_PERF_GATE_STEPS"); steps != "" {

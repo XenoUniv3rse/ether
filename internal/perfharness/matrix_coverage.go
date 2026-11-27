@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-func addMatrixConsoleCoverage(c *Client) {
+func addMatrixConsoleCoverage(c *Client, availabilityMonitor bool) {
 	for i := range c.Steps {
 		if c.Steps[i].Name == "plugin library items" {
 			c.Steps[i].Discover = combineDiscover(discoverPluginLibrary, discoverMatrixConsoleItem)
@@ -140,12 +140,12 @@ func addMatrixConsoleCoverage(c *Client) {
 		{Name: "fixture save plugin setup settings", Method: http.MethodPut, Path: "/plugins-setup/{consolePlugin}/settings", Body: `{}`},
 		{Name: "fixture pin cache release", Method: http.MethodPost, Path: "/cache/pin", Body: `{"releaseId":"{consoleRelease}","pinned":true}`},
 		{Name: "fixture unpin cache release", Method: http.MethodPost, Path: "/cache/pin", Body: `{"releaseId":"{consoleRelease}","pinned":false}`},
+		{Name: "fixture pin plugin match", Method: http.MethodPut, Path: "/libraries/{pluginLibrary}/item/{consoleItemRef}/match", Body: `{"candidateRef":"{consoleRelease}","reasons":["owner-selected fixture release"]}`},
+		{Name: "fixture clear plugin match override", Method: http.MethodDelete, Path: "/libraries/{pluginLibrary}/item/{consoleItemRef}/match"},
 		{Name: "fixture clear cache release", Method: http.MethodPost, Path: "/cache/clear", Body: `{"releaseId":"{consoleRelease}"}`},
 		{Name: "fixture block cache release", Method: http.MethodPost, Path: "/cache/clear-block", Body: `{"releaseId":"{consoleBlockRelease}"}`},
 		{Name: "fixture save warming pin", Method: http.MethodPost, Path: "/cache/warming", Body: `{"key":{consoleMovieKey},"pinned":true,"speculative":false}`},
 		{Name: "fixture remove warming pin", Method: http.MethodPost, Path: "/cache/warming", Body: `{"key":{consoleMovieKey},"pinned":false}`},
-		{Name: "fixture pin plugin match", Method: http.MethodPut, Path: "/libraries/{pluginLibrary}/item/{consoleItemRef}/match", Body: `{"candidateRef":"{consoleRelease}","reasons":["owner-selected fixture release"]}`},
-		{Name: "fixture clear plugin match override", Method: http.MethodDelete, Path: "/libraries/{pluginLibrary}/item/{consoleItemRef}/match"},
 		{Name: "fixture set title tags", Method: http.MethodPut, Path: "/catalog/title/{consoleMovieKey}/tags", Body: `{"tags":["Matrix fixture"]}`},
 		{Name: "fixture clear title tags", Method: http.MethodPut, Path: "/catalog/title/{consoleMovieKey}/tags", Body: `{"tags":[]}`},
 		{Name: "fixture clear remaining cache", Method: http.MethodPost, Path: "/cache/clear-all"},
@@ -255,6 +255,9 @@ func addMatrixConsoleCoverage(c *Client) {
 		{Name: "fixture preview collection template bundle", Method: http.MethodPost, Path: "/collections/template-bundles/{consoleTemplateBundle}/preview"},
 		{Name: "fixture apply collection template bundle", Method: http.MethodPost, Path: "/collections/template-bundles/{consoleTemplateBundle}/apply"},
 	}...)
+	if availabilityMonitor {
+		steps = append(steps, Step{Name: "fixture schedule release feed sync", Method: http.MethodPost, Path: "/availability/sync"})
+	}
 	for _, step := range append(steps, matrixConsoleArtworkScenarios()...) {
 		step.Class = classConsole
 		headers := step.Headers

@@ -15,7 +15,7 @@ import (
 	"time"
 )
 
-func MatrixClients(live bool) []Client {
+func MatrixClients(live, availabilityMonitor bool) []Client {
 	clients := Clients()
 	for i := range clients {
 		if clients[i].Surface == "plex" {
@@ -33,7 +33,7 @@ func MatrixClients(live bool) []Client {
 		}
 		switch clients[i].Name {
 		case "console":
-			addMatrixConsoleCoverage(&clients[i])
+			addMatrixConsoleCoverage(&clients[i], availabilityMonitor)
 		case "infuse-jellyfin", "emby-sdk":
 			addMatrixMediaBrowserCoverage(&clients[i], live)
 		case "plex-appletv":
