@@ -93,6 +93,13 @@ const (
 	StartedThreshold = 0.05
 )
 
+// NotStarted reports whether a play position is too early to keep as a resume
+// point: before resumeAfter when it is set, otherwise before StartedThreshold of
+// the duration. Watch state kept outside this package uses the same rule.
+func NotStarted(offset, dur, resumeAfter time.Duration) bool {
+	return notStartedWith(offset, dur, resumeAfter)
+}
+
 // notStartedWith reports whether offset is too early in a title of length dur
 // to keep as a resume point. When resumeAfter > 0, it replaces StartedThreshold.
 func notStartedWith(offset, dur, resumeAfter time.Duration) bool {

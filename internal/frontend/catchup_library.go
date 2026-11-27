@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 )
 
 const CatchUpLibraryID = "catchup"
@@ -64,6 +65,25 @@ type CatchUpItem struct {
 	Type                 MediaType
 	Programme            LiveTVProgramme
 	Artwork              []Image
+	// Watch is the viewer's state for an episode (an airing). It is zero for
+	// shows and seasons and for an airing the viewer has not played.
+	Watch CatchUpWatch
+}
+
+// CatchUpWatch is one viewer's watch state for one catch-up airing. It is kept
+// while the airing is in the archive and pruned when the archive drops it.
+type CatchUpWatch struct {
+	ViewOffset   time.Duration
+	ViewCount    int
+	LastViewedAt time.Time
+}
+
+// CatchUpWatchState records watch state for catch-up airings. The id is any
+// episode id CatchUpItem accepts (the library id or the airing GUID). State is
+// the timeline state ("playing", "paused", "buffering" or "stopped").
+type CatchUpWatchState interface {
+	CatchUpProgress(ctx context.Context, viewer *Viewer, id string, offset, duration time.Duration, state string) error
+	CatchUpSetWatched(ctx context.Context, viewer *Viewer, id string, watched bool) error
 }
 
 func CatchUpGroupID(kind MediaType, title string) string {
