@@ -57,6 +57,7 @@ func seedPerfMatrixCatalogue(ctx context.Context, db *sql.DB, live, exercisePlug
 		"UPDATE auth_users SET plex_id=9101, is_home=1 WHERE is_owner=1",
 		"UPDATE catalog_titles SET released_ts=?, primary_released_ts=?, status='Post Production' WHERE type='movie' AND tmdb_id<=100",
 		"UPDATE catalog_titles SET released_ts=?, primary_released_ts=? WHERE type='episode' AND season=3 AND episode=6 AND tmdb_id<=100",
+		"UPDATE catalog_credits SET thumb='/p.jpg' WHERE kind='cast' AND key IN (SELECT key FROM catalog_titles WHERE type='movie' AND adult=0 ORDER BY popularity DESC, key LIMIT 100)",
 	} {
 		var args []any
 		if strings.Contains(q, "?") {

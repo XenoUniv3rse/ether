@@ -48,6 +48,7 @@ type viewerPurge struct {
 	component string
 	tables    []string
 	early     bool
+	match     string
 	fn        ViewerPurgeFunc
 }
 
@@ -80,17 +81,17 @@ func claimViewerTables(component string, tables []string) {
 // that must be transformed rather than deleted (for example detaching a
 // shared collection from its creator).
 func RegisterViewerPurge(component string, tables []string, fn ViewerPurgeFunc) {
-	registerViewerPurge(component, tables, false, fn)
+	registerViewerPurge(component, tables, false, "", fn)
 }
 
-func registerViewerPurge(component string, tables []string, early bool, fn ViewerPurgeFunc) {
+func registerViewerPurge(component string, tables []string, early bool, match string, fn ViewerPurgeFunc) {
 	if fn == nil {
 		panic("store: RegisterViewerPurge requires a function")
 	}
 	viewerMu.Lock()
 	defer viewerMu.Unlock()
 	claimViewerTables(component, tables)
-	viewerPurges = append(viewerPurges, viewerPurge{component: component, tables: tables, early: early, fn: fn})
+	viewerPurges = append(viewerPurges, viewerPurge{component: component, tables: tables, early: early, match: match, fn: fn})
 }
 
 // RegisterViewerMerge registers a custom merge for the named tables.
@@ -122,7 +123,7 @@ func RegisterViewerTableEarly(component, table, column string, merge ViewerMerge
 
 func registerViewerTable(component, table, column string, merge ViewerMergeMode, early bool, conflictColumns []string) {
 	t, c := quoteIdent(table), quoteIdent(column)
-	registerViewerPurge(component, []string{table}, early, func(ctx context.Context, tx *sql.Tx, viewerID int64) error {
+	registerViewerPurge(component, []string{table}, early, `SELECT 1 FROM `+t+` WHERE `+c+`=?`, func(ctx context.Context, tx *sql.Tx, viewerID int64) error {
 		_, err := tx.ExecContext(ctx, `DELETE FROM `+t+` WHERE `+c+`=?`, viewerID)
 		if err != nil {
 			return fmt.Errorf("purge %s: %w", table, err)
@@ -203,12 +204,63 @@ func sortedMerges() []viewerMerge {
 // registrations first. The caller deletes the auth_users row itself,
 // after PurgeViewer, so ON DELETE CASCADE remains a backstop.
 func PurgeViewer(ctx context.Context, tx *sql.Tx, viewerID int64) error {
-	for _, p := range sortedPurges() {
-		if err := p.fn(ctx, tx, viewerID); err != nil {
-			return fmt.Errorf("store: purge viewer (%s): %w", p.component, err)
+	purges := sortedPurges()
+	const probeSize = 64 // keep statement size and bind count bounded
+	for len(purges) > 0 {
+		first := purges[0]
+		if first.match == "" {
+			if err := first.fn(ctx, tx, viewerID); err != nil {
+				return fmt.Errorf("store: purge viewer (%s): %w", first.component, err)
+			}
+			purges = purges[1:]
+			continue
 		}
+		// Run custom and early purges in order before probing later tables.
+		n := 1
+		for n < min(probeSize, len(purges)) && purges[n].match != "" && purges[n].early == first.early {
+			n++
+		}
+		batch := purges[:n]
+		present, err := viewerPurgeMatches(ctx, tx, batch, viewerID)
+		if err != nil {
+			return fmt.Errorf("store: find viewer rows to purge: %w", err)
+		}
+		for i, p := range batch {
+			if present[i] {
+				if err := p.fn(ctx, tx, viewerID); err != nil {
+					return fmt.Errorf("store: purge viewer (%s): %w", p.component, err)
+				}
+			}
+		}
+		purges = purges[n:]
 	}
 	return nil
+}
+
+// Check for matching rows in one read per batch. The standard DELETE would
+// use the same table and viewer predicate. Returning at most one ordinal per
+// table keeps the result size independent of a viewer's history.
+func viewerPurgeMatches(ctx context.Context, tx *sql.Tx, purges []viewerPurge, viewerID int64) ([]bool, error) {
+	present := make([]bool, len(purges))
+	selects := make([]string, len(purges))
+	args := make([]any, len(purges))
+	for i, p := range purges {
+		selects[i] = fmt.Sprintf("SELECT %d WHERE EXISTS (%s)", i, p.match)
+		args[i] = viewerID
+	}
+	rows, err := tx.QueryContext(ctx, strings.Join(selects, " UNION ALL "), args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var i int
+		if err := rows.Scan(&i); err != nil {
+			return nil, err
+		}
+		present[i] = true
+	}
+	return present, rows.Err()
 }
 
 // MergeViewer runs every registered merge from one viewer into another

@@ -132,6 +132,7 @@ type plexTagJSON struct {
 	Filter string `json:"filter"`
 	Tag    string `json:"tag"`
 	TagKey string `json:"tagKey"`
+	Thumb  string `json:"thumb"`
 }
 
 // discoverPlexTags takes the filters a detail page offers: its first cast
@@ -149,6 +150,9 @@ func discoverPlexTags(vars map[string]string, body []byte) {
 		return tags[0], true
 	}
 	if t, ok := first("Role"); ok {
+		if strings.HasPrefix(t.Thumb, "/library/metadata/") && strings.Contains(t.Thumb, "/person/") {
+			setOnce(vars, "plexPersonThumb", strings.TrimPrefix(t.Thumb, "/"))
+		}
 		setOnce(vars, "actorId", strconv.FormatInt(t.ID, 10))
 		tagKey := t.TagKey
 		if tagKey == "" && t.ID > 0 {

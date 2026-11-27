@@ -102,9 +102,13 @@ func matrixRouteExceptions() map[perfharness.MatrixRouteKey]string {
 				prefix+"/Items/{id}/{source}/Subtitles/{index}/{name}",
 				prefix+"/sessions/lazy/{path...}", prefix+"/sessions/media/{path...}")
 		}
+		add(surface, http.MethodPost, "requires a resolved live source or open live stream lease",
+			prefix+"/LiveStreams/Open", prefix+"/LiveStreams/MediaInfo", prefix+"/LiveStreams/Close")
 		add(surface, http.MethodGet, "notification websocket needs an authenticated persistent client and event producer",
 			prefix+"/embywebsocket", prefix+"/socket")
 	}
+	add("jellyfin", http.MethodPost, "requires a playlist entry ID delivered on the SyncPlay websocket",
+		"/jellyfin/SyncPlay/MovePlaylistItem", "/jellyfin/SyncPlay/SetPlaylistItem")
 	add("silo", http.MethodGet, "compatibility handler always reports no explicit per-series preference",
 		"/silo/api/v2/audio-prefs/{series_id}", "/silo/api/v2/subtitle-prefs/{series_id}")
 	add("silo", http.MethodGet, "requires a WebSocket upgrade with the corresponding scoped ticket",
@@ -125,6 +129,20 @@ func matrixRouteExceptions() map[perfharness.MatrixRouteKey]string {
 			"/vela/v0/sessions/{id}/trickplay/{width}/{sheet}", "/vela/v0/themes/{secret}/theme.m4a", "/vela/v0/themes/{secret}/theme.mp3")
 	}
 	add("stremio", http.MethodGet, "requires a resolvable source to serve the bytes behind a lazy playback ticket", "/stremio/sessions/lazy/{rest...}")
+	add("plex", http.MethodPut, "compatibility endpoint rejects changes through the PMS metadata or updater API",
+		"/activities/{id}", "/updater/apply", "/library/metadata/{key}/analyze", "/library/metadata/{key}/prefs",
+		"/library/metadata/{key}/clearLogos", "/library/metadata/{key}/themes", "/playlists/{key}/items/{item}")
+	add("plex", http.MethodPost, "compatibility endpoint rejects changes through the PMS metadata or playlist import API",
+		"/library/metadata/{key}/clearLogos", "/library/metadata/{key}/themes", "/library/metadata/{key}/extras", "/playlists/upload")
+	add("plex", http.MethodDelete, "PMS activity cancellation and Butler tasks are unsupported", "/activities/{id}", "/butler")
+	add("plex", http.MethodPost, "PMS Butler tasks are unsupported", "/butler")
+	add("plex", http.MethodPut, "requires a provider match for the requested title", "/library/metadata/{key}/match")
+	add("plex", http.MethodPost, "requires an enabled offline download source and a download queue",
+		"/downloadQueue", "/downloadQueue/{queue}/add", "/downloadQueue/{queue}/items/{item}/restart")
+	add("plex", http.MethodDelete, "requires an enabled offline download queue item", "/downloadQueue/{queue}/items/{item}")
+	add("plex", http.MethodPost, "requires a usable live channel transport source", "/livetv/dvrs/{dvr}/channels/{channel}/tune")
+	add("plex", http.MethodDelete, "requires an active live capture or recording subscription",
+		"/media/grabbers/operations/{operation}", "/media/subscriptions/{subscription}")
 	add("plex", "*", "compatibility stub for PMS scanner or Butler tasks that Ether does not implement",
 		"/butler/{task}", "/library/sections/{section}/refresh")
 	add("plex", "*", "requires an active playback session that can be terminated",
@@ -149,10 +167,33 @@ func matrixRouteExceptions() map[perfharness.MatrixRouteKey]string {
 		add("plex", method, "requires a live stream subscription or tune operation",
 			"/media/subscriptions/{subscription}", "/media/grabbers/operations/{operation}")
 	}
+	add("vela", http.MethodPost, "requires a configured Plex account and working Plex Home upstream",
+		"/vela/v0/auth/plex", "/vela/v0/auth/plex/profile", "/vela/v0/auth/plex/profiles/challenge")
+	add("vela", http.MethodPost, "requires a configured playlist import provider and an import job",
+		"/vela/v0/playlists/import", "/vela/v0/playlists/import/{id}/save")
+	add("vela", http.MethodPost, "requires a configured AI search provider and a running job",
+		"/vela/v0/search/ai", "/vela/v0/search/ai/{id}/cancel")
+	add("vela", http.MethodPost, "requires a resolvable media source and open playback session",
+		"/vela/v0/playback", "/vela/v0/libraries/{id}/live/play", "/vela/v0/sessions/{id}/audio-fallback",
+		"/vela/v0/sessions/{id}/commands", "/vela/v0/sessions/{id}/observations")
+	add("vela", http.MethodDelete, "requires an audio fallback child of an open playback session",
+		"/vela/v0/sessions/{id}/audio-fallback/{audioId}")
+	add("vela", http.MethodPost, "requires a title with an available offline download or book source",
+		"/vela/v0/titles/{id}/download", "/vela/v0/titles/{id}/read", "/vela/v0/titles/{id}/reading-progress")
+	add("vela", http.MethodPost, "requires a trailer provider and resolvable preview media", "/vela/v0/titles/{id}/trailer-preview")
+	add("vela", http.MethodPost, "requires at least two playable live streams to form a multiview group", "/vela/v0/multiview")
+	add("vela", http.MethodDelete, "requires an active multiview group", "/vela/v0/multiview/{groupId}")
 	add("vela", http.MethodGet, "requires a playlist import job from a configured source", "/vela/v0/playlists/import/{id}")
 	add("vela", http.MethodGet, "requires a configured AI search provider and a started job", "/vela/v0/search/ai/{id}")
 	add("vela", http.MethodGet, "requires a playable source and an active live playback session", "/vela/v0/sessions/{id}", "/vela/v0/sessions/{id}/events")
 	add("vela", http.MethodGet, "requires a trailer provider and an active trailer preview", "/vela/v0/titles/{id}/trailer-preview")
+	add("console", "*", "trailing-slash alias for the measured console event stream", "/ether/api/stream/")
+	add("console", http.MethodGet, "requires a staged vault import from an owner media directory", "/ether/api/cache/vault/import/{id}")
+	add("console", http.MethodGet, "requires a configured media source and uploaded preroll file",
+		"/ether/api/admin/prerolls/{id}/preview", "/ether/api/admin/prerolls/{id}/thumb")
+	add("console", http.MethodGet, "requires a source clip with locally encoded preview media",
+		"/ether/api/onair/reels/{id}/clips/{clip}/preview")
+	add("console", http.MethodGet, "requires an audio asset for waveform generation", "/ether/api/onair/assets/{id}/waveform")
 	add("console", "*", "dispatches to the separately inventoried owner API leaf routes",
 		"/ether/api/cluster/", "/ether/api/experience/", "/ether/api/plugins-setup/", "/ether/api/server/restart/", "/ether/api/updates/")
 	add("console", "*", "dispatches a registered flow webhook token; the mount has no independent response", "/ether/api/flows/hooks/")
@@ -181,25 +222,27 @@ func matrixCaseRouteExceptions(inventory perfharness.MatrixRoutes, live bool) ma
 	exceptions := maps.Clone(perfMatrixRouteExceptions)
 	for surface, routes := range inventory {
 		for _, entry := range routes {
-			if entry.Method != http.MethodGet && entry.Method != http.MethodHead {
-				continue
-			}
 			path := entry.Pattern
+			read := entry.Method == http.MethodGet || entry.Method == http.MethodHead
 			reason := ""
 			switch surface {
 			case "plex":
-				if strings.HasPrefix(path, "/tv.plex.providers.epg.xmltv:1") ||
+				if read && (strings.HasPrefix(path, "/tv.plex.providers.epg.xmltv:1") ||
 					strings.HasPrefix(path, "/media/grabbers") || strings.HasPrefix(path, "/media/subscriptions") ||
-					(strings.HasPrefix(path, "/livetv/") && path != "/livetv/dvrs") {
+					(strings.HasPrefix(path, "/livetv/") && path != "/livetv/dvrs")) {
 					reason = "Live TV is disabled in this configuration"
 				}
 			case "emby", "jellyfin":
-				if path == "/"+surface+"/LiveTv/Channels/{id}" || path == "/"+surface+"/LiveTv/Programs/{id}" {
+				if (read && (path == "/"+surface+"/LiveTv/Channels/{id}" || path == "/"+surface+"/LiveTv/Programs/{id}")) ||
+					(entry.Method == http.MethodPost && path == "/"+surface+"/LiveTv/Programs") {
 					reason = "this configuration has no channel or programme fixture"
 				}
 			case "vela":
-				if path == "/vela/v0/live/stream" || path == "/vela/v0/surfaces/{id}/document" || path == "/vela/v0/surfaces/{id}/data" {
+				if read && (path == "/vela/v0/live/stream" || path == "/vela/v0/surfaces/{id}/document" || path == "/vela/v0/surfaces/{id}/data") {
 					reason = "the sports screen and live topic fixture are installed in live configurations"
+				}
+				if entry.Method == http.MethodPost && path == "/vela/v0/live/guide/window" {
+					reason = "this configuration has no channel fixture for a guide window"
 				}
 			}
 			key := perfharness.MatrixRouteKey{Surface: surface, Method: entry.Method, Pattern: path}

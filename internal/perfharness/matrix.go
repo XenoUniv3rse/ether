@@ -131,7 +131,7 @@ func MatrixClients(live bool) []Client {
 				Step{Name: "history recap", Class: classDetail, Path: "/history/recap?period=month"},
 				Step{Name: "recent", Class: classHome, Path: "/recent"},
 				Step{Name: "shows page", Class: classBrowse, Path: "/libraries/{seriesLibrary}/items?limit=48"},
-				Step{Name: "live channels", Class: classGuide, Path: "/live/channels"},
+				Step{Name: "live channels", Class: classGuide, Path: "/live/channels", Discover: discoverMatrixVelaID("velaChannel")},
 				Step{Name: "live guide", Class: classGuide, Path: "/live/guide?from={guideFrom}&until={guideUntil}&limit=100"},
 			)
 			addMatrixVelaCoverage(&clients[i])
@@ -143,6 +143,7 @@ func MatrixClients(live bool) []Client {
 					return h
 				}
 				clients[i].Steps = append(clients[i].Steps,
+					Step{Name: "live guide window", Method: http.MethodPost, Class: classGuide, Path: "/live/guide/window", Body: `{"channelIds":["{velaChannel}"],"from":"{guideWindowFrom}","until":"{guideWindowUntil}"}`},
 					Step{Name: "sports overlay", Class: classDetail, Path: "/surfaces/matrixsports.scorebug/document"},
 					Step{Name: "sports overlay data", Class: classDetail, Path: "/surfaces/matrixsports.scorebug/data?p.event=event%3Acommunity.example.matrixsports%3Asports%3Agame-0", Discover: discoverMatrixLiveTopic},
 					Step{Name: "live events stream", Class: classGuide, Path: "/live/stream?alerts=1&topic={overlayTopic}", Stream: time.Minute},

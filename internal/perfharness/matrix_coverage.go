@@ -5,10 +5,14 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 )
 
 func addMatrixConsoleCoverage(c *Client) {
 	for i := range c.Steps {
+		if c.Steps[i].Name == "plugin library items" {
+			c.Steps[i].Discover = combineDiscover(discoverPluginLibrary, discoverMatrixConsoleItem)
+		}
 		if c.Steps[i].Name == "catalog browse movies" {
 			c.Steps[i].Discover = func(vars map[string]string, body []byte) {
 				movie := map[string]string{}
@@ -36,6 +40,11 @@ func addMatrixConsoleCoverage(c *Client) {
 		}})
 	}
 	c.Steps = append(c.Steps,
+		Step{Name: "fixture On-Air assets", Class: classConsole, Path: "/onair/assets", Discover: discoverMatrixConsoleAssets},
+		Step{Name: "fixture On-Air asset", Class: classConsole, Path: "/onair/assets/{consoleArtwork}"},
+		Step{Name: "fixture On-Air asset info", Class: classConsole, Path: "/onair/assets/{consoleArtwork}/info"},
+		Step{Name: "fixture On-Air asset thumb", Class: classConsole, Path: "/onair/assets/{consoleArtwork}/thumb"},
+		Step{Name: "fixture On-Air font", Class: classConsole, Path: "/onair/fonts/notosans"},
 		Step{Name: "fixture On-Air looks", Class: classConsole, Path: "/onair/looks", Discover: discoverMatrixConsoleLook},
 		Step{Name: "fixture On-Air look", Class: classConsole, Path: "/onair/looks/{consoleLook}"},
 		Step{Name: "fixture On-Air look pack", Class: classConsole, Path: "/onair/looks/{consoleLook}/pack"},
@@ -61,7 +70,9 @@ func addMatrixConsoleCoverage(c *Client) {
 		"/frontends/plex/health", "/frontends/plex/settings", "/frontends/plex/status",
 		"/libraries/{pluginLibrary}", "/libraries/{pluginLibrary}/cache",
 		"/config/server", "/status/catalog", "/row-sources/facets/{pluginLibrary}/genre",
-		"/libraries/{pluginLibrary}/tabs",
+		"/libraries/{pluginLibrary}/tabs", "/libraries/{pluginLibrary}/setup",
+		"/libraries/{pluginLibrary}/item/{consoleItemRef}", "/libraries/{pluginLibrary}/item/{consoleItemRef}/match",
+		"/plugins-setup/{consolePlugin}", "/libraries/{consoleLiveLibrary}/live?tab=fixture-live&limit=24",
 		"/metadata/shows/{consoleKey}/groups", "/metadata/shows/{consoleKey}/release-numbering",
 		"/metadata/shows/{consoleKey}/users/{viewerId}", "/metadata/shows/{consoleKey}/users/{viewerId}/preview",
 		"/mdblist/{viewerId}/status", "/users/{viewerId}", "/users/{viewerId}/devices", "/users/{viewerId}/identities",
@@ -75,6 +86,13 @@ func addMatrixConsoleCoverage(c *Client) {
 	c.Steps = append(c.Steps, Step{Name: "viewer safety policy", Class: classConsole, Path: "/safety/policies/{viewerId}"})
 	const spec = `{"name":"Matrix scratch collection","mediaType":"movie","sources":[{"kind":"titles","keys":["{consoleMovieKey}"]}],"sort":"source","refresh":"weekly","enabled":true,"artwork":{"mode":"custom","url":"/p.jpg"}}`
 	for _, step := range []Step{
+		{Name: "fixture pin cache release", Method: http.MethodPost, Path: "/cache/pin", Body: `{"releaseId":"{consoleRelease}","pinned":true}`},
+		{Name: "fixture unpin cache release", Method: http.MethodPost, Path: "/cache/pin", Body: `{"releaseId":"{consoleRelease}","pinned":false}`},
+		{Name: "fixture clear cache release", Method: http.MethodPost, Path: "/cache/clear", Body: `{"releaseId":"{consoleRelease}"}`},
+		{Name: "fixture block cache release", Method: http.MethodPost, Path: "/cache/clear-block", Body: `{"releaseId":"{consoleBlockRelease}"}`},
+		{Name: "fixture clear remaining cache", Method: http.MethodPost, Path: "/cache/clear-all"},
+		{Name: "fixture rename On-Air artwork", Method: http.MethodPatch, Path: "/onair/assets/{consoleArtwork}", Body: `{"name":"Matrix renamed artwork"}`},
+		{Name: "fixture delete On-Air artwork", Method: http.MethodDelete, Path: "/onair/assets/{consoleArtwork}"},
 		{Name: "fixture create On-Air reel", Method: http.MethodPost, Path: "/onair/reels", Body: `{"name":"Matrix reel","order":"sequence"}`, Discover: discoverMatrixID("consoleReel")},
 		{Name: "fixture read On-Air reel", Path: "/onair/reels/{consoleReel}"},
 		{Name: "fixture update On-Air reel", Method: http.MethodPut, Path: "/onair/reels/{consoleReel}", Body: `{"name":"Matrix renamed reel","order":"sequence"}`},
@@ -106,6 +124,35 @@ func addMatrixConsoleCoverage(c *Client) {
 		step.Headers = matrixConsoleWriteHeader
 		c.Steps = append(c.Steps, step)
 	}
+	c.Steps = append(c.Steps, Step{Name: "console event stream", Class: classStatic, Path: "/stream", Stream: time.Minute, Accept: func(body []byte) bool {
+		return strings.Contains(string(body), "retry: 10000")
+	}})
+}
+
+func discoverMatrixConsoleItem(vars map[string]string, body []byte) {
+	var page struct {
+		Items []struct {
+			Ref string `json:"ref"`
+		} `json:"items"`
+	}
+	if json.Unmarshal(body, &page) == nil && len(page.Items) > 0 {
+		setOnce(vars, "consoleItemRef", url.PathEscape(page.Items[0].Ref))
+	}
+}
+
+func discoverMatrixConsoleAssets(vars map[string]string, body []byte) {
+	var assets []struct {
+		ID   string `json:"digest"`
+		Kind string `json:"kind"`
+	}
+	if json.Unmarshal(body, &assets) != nil {
+		return
+	}
+	for _, asset := range assets {
+		if asset.Kind == "image" {
+			setOnce(vars, "consoleArtwork", url.PathEscape(asset.ID))
+		}
+	}
 }
 
 func discoverMatrixConsoleLook(vars map[string]string, body []byte) {
@@ -123,8 +170,16 @@ func discoverMatrixConsoleCache(vars map[string]string, body []byte) {
 			ReleaseID string `json:"releaseId"`
 		} `json:"releases"`
 	}
-	if json.Unmarshal(body, &result) == nil && len(result.Releases) != 0 {
-		setOnce(vars, "consoleRelease", url.PathEscape(result.Releases[0].ReleaseID))
+	if json.Unmarshal(body, &result) != nil {
+		return
+	}
+	for _, release := range result.Releases {
+		switch release.ReleaseID {
+		case "matrix-cache-release":
+			setOnce(vars, "consoleRelease", url.PathEscape(release.ReleaseID))
+		case "matrix-cache-block":
+			setOnce(vars, "consoleBlockRelease", url.PathEscape(release.ReleaseID))
+		}
 	}
 }
 
@@ -219,6 +274,7 @@ func addMatrixMediaBrowserCoverage(c *Client, live bool) {
 			Step{Name: "fixture live channel detail", Class: classDetail, Path: "/LiveTv/Channels/{mbLiveChannel}"},
 			Step{Name: "fixture live programme list", Class: classGuide, Path: "/LiveTv/Programs?ChannelIds={mbLiveChannel}&Limit=24", Discover: discoverMBItem("mbLiveProgram", "Program")},
 			Step{Name: "fixture live programme detail", Class: classDetail, Path: "/LiveTv/Programs/{mbLiveProgram}"},
+			Step{Name: "fixture live programme query", Class: classGuide, Method: http.MethodPost, Path: "/LiveTv/Programs", Body: `{"ChannelIds":["{mbLiveChannel}"],"Limit":24}`},
 		)
 	}
 	c.Steps = append(c.Steps,
@@ -231,12 +287,12 @@ func addMatrixMediaBrowserCoverage(c *Client, live bool) {
 		c.Steps = append(c.Steps,
 			Step{Name: "fixture GET root", Class: classStatic, Path: "/"},
 			Step{Name: "fixture GET web sign-in", Class: classStatic, Path: "/web/ether-signin"},
+			Step{Name: "fixture GET user root", Class: classDetail, Path: "/Users/{userId}/Items/Root"},
+			Step{Name: "fixture client log upload", Class: classState, Method: http.MethodPost, Path: "/ClientLog/Document", Body: "Matrix fixture client log"},
 		)
+		addMatrixJellyfinParty(c)
 	} else {
 		c.Steps = append(c.Steps, Step{Name: "fixture GET Emby web", Class: classStatic, Path: "/web/"})
-	}
-	if c.Surface == "jellyfin" {
-		c.Steps = append(c.Steps, Step{Name: "fixture GET user root", Class: classDetail, Path: "/Users/{userId}/Items/Root"})
 	}
 	c.Steps = append(c.Steps,
 		Step{Name: "fixture POST display preferences", Class: classState, Method: http.MethodPost, Path: "/DisplayPreferences/etherperf?client=etherperf", Body: `{"SortOrder":"Descending"}`},
@@ -261,6 +317,7 @@ func addMatrixMediaBrowserCoverage(c *Client, live bool) {
 		}
 		c.Steps = append(c.Steps,
 			Step{Name: "fixture create viewer " + method, Class: classState, Method: http.MethodPost, Path: "/Users/New", Body: `{"Name":"` + user + `","Password":"Matrix-audio-002-fixture"}`, OwnerOnly: true, Discover: discoverMatrixID(userID)},
+			Step{Name: "fixture viewer configuration " + method, Class: classState, Method: http.MethodPost, Path: "/Users/{" + userID + "}/Configuration", Body: `{"SubtitleMode":"Always","SubtitleLanguagePreference":"en"}`, OwnerOnly: true},
 			Step{Name: "fixture viewer policy " + method, Class: classState, Method: http.MethodPost, Path: "/Users/{" + userID + "}/Policy", Body: `{"IsHidden":true}`, OwnerOnly: true},
 			Step{Name: "fixture viewer password " + method, Class: classState, Method: http.MethodPost, Path: "/Users/{" + userID + "}/Password", Body: `{"NewPw":"Matrix-audio-003-fixture"}`, OwnerOnly: true},
 			Step{Name: "fixture viewer password query " + method, Class: classState, Method: http.MethodPost, Path: "/Users/Password?userId={" + userID + "}", Body: `{"NewPw":"Matrix-audio-004-fixture"}`, OwnerOnly: true},
@@ -284,6 +341,58 @@ func addMatrixMediaBrowserCoverage(c *Client, live bool) {
 			Step{Name: "fixture POST " + path, Class: classState, Method: http.MethodPost, Path: path, registeredOnly: true},
 			Step{Name: "fixture DELETE " + path, Class: classState, Method: http.MethodDelete, Path: path, registeredOnly: true},
 		)
+	}
+	const report = `{"ItemId":"{episodeId}","RunTimeTicks":18000000000,"PositionTicks":1000000}`
+	for _, path := range []string{"/PlayingItems/{episodeId}", "/Users/{userId}/PlayingItems/{episodeId}"} {
+		c.Steps = append(c.Steps,
+			Step{Name: "start compatibility timeline " + path, Class: classState, Method: http.MethodPost, Path: path, Body: report},
+			Step{Name: "report compatibility timeline " + path, Class: classState, Method: http.MethodPost, Path: path + "/Progress", Body: report},
+			Step{Name: "stop compatibility timeline " + path, Class: classState, Method: http.MethodDelete, Path: path, Body: report},
+		)
+	}
+	for _, path := range []string{"/Sessions/Playing", "/Sessions/Playing/Ping", "/Sessions/Playing/Stopped"} {
+		c.Steps = append(c.Steps, Step{Name: "fixture " + path, Class: classState, Method: http.MethodPost, Path: path, Body: report})
+	}
+}
+
+func addMatrixJellyfinParty(c *Client) {
+	c.Steps = append(c.Steps,
+		Step{Name: "SyncPlay create group", Class: classState, Method: http.MethodPost, Path: "/SyncPlay/New", Body: `{"GroupName":"Matrix group"}`},
+		Step{Name: "SyncPlay list groups", Class: classDetail, Path: "/SyncPlay/List", Discover: func(vars map[string]string, body []byte) {
+			var groups []struct {
+				ID   string `json:"GroupId"`
+				Name string `json:"GroupName"`
+			}
+			if json.Unmarshal(body, &groups) == nil {
+				for _, group := range groups {
+					if group.Name == "Matrix group" {
+						setOnce(vars, "mbParty", group.ID)
+						return
+					}
+				}
+			}
+		}},
+	)
+	for _, command := range []struct{ action, body string }{
+		{"Join", `{"GroupId":"{mbParty}"}`},
+		{"SetNewQueue", `{"PlayingQueue":["{movieId}","{episodeId}"],"PlayingItemPosition":0}`},
+		{"Queue", `{"ItemIds":["{movieId}"]}`},
+		{"Buffering", `{"PositionTicks":0,"IsPlaying":false}`},
+		{"Ready", `{"PositionTicks":0,"IsPlaying":false}`},
+		{"Ping", `{}`},
+		{"SetIgnoreWait", `{"IgnoreWait":true}`},
+		{"Pause", `{}`},
+		{"Seek", `{"PositionTicks":1000000}`},
+		{"Unpause", `{}`},
+		{"SetRepeatMode", `{"Mode":"RepeatAll"}`},
+		{"SetShuffleMode", `{"Mode":"Shuffle"}`},
+		{"NextItem", `{}`},
+		{"PreviousItem", `{}`},
+		{"RemoveFromPlaylist", `{"ClearPlaylist":true}`},
+		{"Stop", `{}`},
+		{"Leave", `{}`},
+	} {
+		c.Steps = append(c.Steps, Step{Name: "SyncPlay " + command.action, Class: classState, Method: http.MethodPost, Path: "/SyncPlay/" + command.action, Body: command.body})
 	}
 }
 
@@ -392,6 +501,10 @@ func addMatrixPlexCoverage(c *Client) {
 		"/hubs/sections/{movieSection}/popular?" + page, "/hubs/sections/{movieSection}/promoted?count=12",
 		"/playlists/all?playlistType=video", "/playlists/sorts", "/clients", "/security/resources",
 		"/status/sessions", "/transcode/sessions", "/updater/status",
+		"/library/metadata/{movieKey}/subtitles?language=en",
+		"/library/metadata/{movieKey}/discoveryPoster/v1",
+		"/{plexPersonThumb}",
+		"/video/:/transcode/universal/decision?path=%2Flibrary%2Fmetadata%2F{movieKey}&directPlay=1&directStream=1&session=matrix-decision",
 	} {
 		c.Steps = append(c.Steps,
 			Step{Name: "fixture GET " + path, Class: classDetail, Path: path, registeredOnly: true},
@@ -408,6 +521,23 @@ func addMatrixPlexCoverage(c *Client) {
 			Step{Name: "fixture owner GET " + path, Class: classBrowse, Path: path, OwnerOnly: true, registeredOnly: true},
 			Step{Name: "fixture owner HEAD " + path, Class: classBrowse, Method: http.MethodHead, Path: path, OwnerOnly: true, registeredOnly: true},
 		)
+	}
+	c.Steps = append(c.Steps,
+		Step{Name: "owner discover movie libraries", Class: classBrowse, OwnerOnly: true, Path: "/library/sections", Discover: discoverPlexSections},
+		Step{Name: "owner discover movie for matching", Class: classBrowse, OwnerOnly: true, Path: "/library/sections/{movieSection}/all?type=1&" + page, Discover: discoverPlexItem("matchMovieKey", "movie")},
+		Step{Name: "owner movie matches", Class: classDetail, OwnerOnly: true, Path: "/library/metadata/{matchMovieKey}/matches"},
+		Step{Name: "owner movie matches HEAD", Class: classDetail, Method: http.MethodHead, OwnerOnly: true, Path: "/library/metadata/{matchMovieKey}/matches"},
+		Step{Name: "owner search movie matches via PUT", Class: classState, Method: http.MethodPut, OwnerOnly: true, Path: "/library/metadata/{matchMovieKey}/matches"},
+		Step{Name: "owner set compatibility preferences", Class: classState, Method: http.MethodPut, OwnerOnly: true, Path: "/:/prefs?CinemaTrailersType=0"},
+		Step{Name: "owner check compatibility updater", Class: classState, Method: http.MethodPut, OwnerOnly: true, Path: "/updater/check"},
+		Step{Name: "owner refresh reachability", Class: classState, Method: http.MethodPut, OwnerOnly: true, Path: "/myplex/refreshReachability"},
+		Step{Name: "owner refresh movie metadata", Class: classState, Method: http.MethodPut, OwnerOnly: true, Path: "/library/metadata/{matchMovieKey}/refresh"},
+		Step{Name: "owner upload subtitle", Class: classState, Method: http.MethodPost, OwnerOnly: true, Path: "/library/metadata/{matchMovieKey}/subtitles?title=matrix.en.srt&format=srt&language=en", Body: "1\n00:00:00,000 --> 00:00:01,000\nMatrix fixture\n"},
+		Step{Name: "owner search subtitles via PUT", Class: classState, Method: http.MethodPut, OwnerOnly: true, Path: "/library/metadata/{matchMovieKey}/subtitles?language=en"},
+	)
+	for _, item := range []struct{ leaf, artwork string }{{"art", "art"}, {"arts", "art"}, {"poster", "thumb"}, {"posters", "thumb"}} {
+		c.Steps = append(c.Steps, Step{Name: "owner pick " + item.leaf, Class: classState, Method: http.MethodPut, OwnerOnly: true,
+			Path: "/library/metadata/{matchMovieKey}/" + item.leaf + "?url=%2Flibrary%2Fmetadata%2F{matchMovieKey}%2F" + item.artwork})
 	}
 	for _, item := range []struct {
 		path, array, field, variable string

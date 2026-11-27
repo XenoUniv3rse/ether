@@ -309,7 +309,7 @@ func runPerfMatrixCase(t *testing.T, ctx context.Context, fixture string, c perf
 		t.Fatal(err)
 	}
 	defer a.Close()
-	for _, key := range []string{"original/p.jpg", "w500/p.jpg"} {
+	for _, key := range []string{"original/p.jpg", "w500/p.jpg", "w185/p.jpg", "original/b.jpg"} {
 		if _, _, err := a.images.GetLoaded(ctx, key, func(context.Context) ([]byte, string, error) {
 			return poster.Bytes(), "image/jpeg", nil
 		}); err != nil {
@@ -325,8 +325,13 @@ func runPerfMatrixCase(t *testing.T, ctx context.Context, fixture string, c perf
 		}
 	}
 	if len(clients) == 0 || slices.Contains(clients, "console") {
-		if err := a.cache.Put("matrix-cache-release", 0, []byte("matrix cache fixture")); err != nil {
-			t.Fatal(err)
+		if _, err := a.onair.UploadAsset(ctx, "matrix-artwork.jpg", "image", "", bytes.NewReader(poster.Bytes())); err != nil {
+			t.Fatal("On-Air artwork fixture:", err)
+		}
+		for _, id := range []string{"matrix-cache-release", "matrix-cache-block", "matrix-cache-clear-all"} {
+			if err := a.cache.Put(id, 0, []byte("matrix cache fixture")); err != nil {
+				t.Fatal(err)
+			}
 		}
 		now := time.Now().UTC()
 		play := &core.PlaySession{
@@ -355,6 +360,8 @@ func runPerfMatrixCase(t *testing.T, ctx context.Context, fixture string, c perf
 		if err := seedPerfMatrixSkins(ctx, a, poster.Bytes()); err != nil {
 			t.Fatal("Vela skin fixture:", err)
 		}
+	}
+	if len(clients) == 0 || slices.Contains(clients, "vela") || slices.Contains(clients, "console") {
 		if err := installPerfMatrixVelaCatalogue(ctx, a, viewers[c.viewer], poster.Bytes()); err != nil {
 			t.Fatal("Vela catalogue fixture:", err)
 		}
@@ -381,7 +388,8 @@ func runPerfMatrixCase(t *testing.T, ctx context.Context, fixture string, c perf
 			t.Error("recommendations fixture:", err)
 		}
 	}
-	if len(clients) == 0 || slices.Contains(clients, "silo-appletv") || slices.Contains(clients, "vela") {
+	// The curated recommendations fixture already supplies collection-card rows.
+	if !c.rows && (len(clients) == 0 || slices.Contains(clients, "silo-appletv") || slices.Contains(clients, "vela")) {
 		if err := seedPerfMatrixCollectionRow(ctx, a); err != nil {
 			t.Fatal("collection card row fixture:", err)
 		}

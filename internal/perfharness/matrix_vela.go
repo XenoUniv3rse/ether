@@ -34,7 +34,7 @@ func addMatrixVelaCoverage(c *Client) {
 	}
 	const authDevice = `"device":{"id":"etherperf-vela-{username}-scratch","name":"Matrix fixture","platform":"web"}`
 	steps := []Step{
-		{Name: "negotiate client", Class: classState, Method: http.MethodPost, Path: "/negotiate", Body: `{"client":{"protocolVersions":[0],"device":{"id":"etherperf-vela-{username}","name":"etherperf","platform":"web"}}}`},
+		{Name: "negotiate client", Class: classState, Method: http.MethodPost, Path: "/negotiate", Body: `{"client":{"protocolVersions":[0],"device":{"id":"etherperf-vela-{username}","name":"etherperf","platform":"web","appVersion":"0.1.0"}}}`},
 		{Name: "begin device login", Class: classState, Method: http.MethodPost, Path: "/auth/device", Body: `{` + authDevice + `}`, Discover: discoverMatrixVelaCode("velaDevice", "deviceCode", "userCode")},
 		{Name: "approve device login", Class: classState, Method: http.MethodPost, Path: "/auth/device/approve", Body: `{"userCode":"{velaDeviceCode}"}`},
 		{Name: "redeem device login", Class: classState, Method: http.MethodPost, Path: "/auth/device/poll", Body: `{` + authDevice + `,"deviceCode":"{velaDeviceSecret}"}`, Discover: discoverMatrixVelaScratchGrant},
@@ -59,6 +59,9 @@ func addMatrixVelaCoverage(c *Client) {
 		{Name: "person detail", Class: classDetail, Path: "/people/{velaPerson}"},
 		{Name: "person titles", Class: classBrowse, Path: "/people/{velaPerson}/titles?libraryId={movieLibrary}&limit=24"},
 		{Name: "home row detail", Class: classHome, Path: "/rows/{velaHomeRow}?limit=24"},
+		{Name: "record visible row item", Class: classState, Method: http.MethodPost, Path: "/interactions", Body: `{"interactions":[{"receiptToken":"{velaRowReceipt}","kind":"visible","visibleMilliseconds":1500}]}`},
+		{Name: "watchlist a movie", Class: classState, Method: http.MethodPost, Path: "/titles/{velaMovie}/watch", Body: `{"watchlisted":true}`},
+		{Name: "remove movie from watchlist", Class: classState, Method: http.MethodPost, Path: "/titles/{velaMovie}/watch", Body: `{"watchlisted":false}`},
 		{Name: "collection contents", Class: classBrowse, Path: "/collections/{velaCollection}?limit=24"},
 		{Name: "track lyrics", Class: classDetail, Path: "/titles/{matrixMusicTrack}/lyrics"},
 		{Name: "track recording", Class: classDetail, Path: "/titles/{matrixMusicTrack}/recording"},
@@ -129,8 +132,9 @@ func discoverMatrixVelaRows(vars map[string]string, body []byte) {
 		Items []struct {
 			ID    string `json:"id"`
 			Items []struct {
-				Kind string `json:"kind"`
-				ID   string `json:"id"`
+				Kind    string `json:"kind"`
+				ID      string `json:"id"`
+				Receipt string `json:"receiptToken"`
 			} `json:"items"`
 		} `json:"items"`
 	}
@@ -140,6 +144,9 @@ func discoverMatrixVelaRows(vars map[string]string, body []byte) {
 	for _, row := range result.Items {
 		setOnce(vars, "velaHomeRow", url.PathEscape(row.ID))
 		for _, item := range row.Items {
+			if item.Kind == "title" {
+				setOnce(vars, "velaRowReceipt", item.Receipt)
+			}
 			if item.Kind == "collection" {
 				setOnce(vars, "velaCollection", url.PathEscape(item.ID))
 			}

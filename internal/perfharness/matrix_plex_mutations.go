@@ -28,8 +28,10 @@ func addMatrixPlexMutations(c *Client) {
 		Step{Name: "scratch playlist item IDs", Class: classDetail, Path: "/playlists/{matrixPlexPlaylist}/items", Discover: discoverMatrixPlexField("Metadata", "playlistItemID", "matrixPlexPlaylistItem")},
 		Step{Name: "scratch playlist move", Class: classState, Method: http.MethodPut, Path: "/playlists/{matrixPlexPlaylist}/items/{matrixPlexPlaylistItem}/move?after=0"},
 		Step{Name: "scratch playlist remove", Class: classState, Method: http.MethodDelete, Path: "/playlists/{matrixPlexPlaylist}/items/{matrixPlexPlaylistItem}"},
+		Step{Name: "scratch playlist compatibility delete", Class: classState, Method: http.MethodDelete, Path: "/library/metadata/{matrixPlexPlaylist}"},
 		Step{Name: "scratch playlist clear", Class: classState, Method: http.MethodDelete, Path: "/playlists/{matrixPlexPlaylist}/items"},
 		Step{Name: "scratch playlist delete", Class: classState, Method: http.MethodDelete, Path: "/playlists/{matrixPlexPlaylist}"},
+		Step{Name: "dismiss continue watching", Class: classState, Method: http.MethodPut, Path: "/actions/removeFromContinueWatching?ratingKey={episodeKey}"},
 	)
 }
 
