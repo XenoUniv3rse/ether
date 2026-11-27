@@ -86,6 +86,10 @@ func catchUpMetadata(sec Section, item frontend.CatchUpItem) model.Metadata {
 			md.Art = "/library/catchup/art/" + item.ID + "/" + img.Kind
 		}
 	}
+	if item.Type != frontend.TypeEpisode && item.Watch.Episodes > 0 {
+		md.LeafCount, md.ViewedLeafCount = model.Ptr(item.Watch.Episodes), model.Ptr(item.Watch.Watched)
+		md.LastViewedAt = unixOrZero(item.Watch.LastViewedAt)
+	}
 	switch item.Type {
 	case frontend.TypeShow:
 		md.Key += "/children"
@@ -116,11 +120,16 @@ func catchUpMetadata(sec Section, item frontend.CatchUpItem) model.Metadata {
 }
 
 // catchUpStateID returns the catch-up airing a timeline or scrobble names,
-// by ratingKey or key ("/library/metadata/<id>" or the bare id).
-func catchUpStateID(q url.Values) (string, bool) {
+// by ratingKey or key ("/library/metadata/<id>" or the bare id). With groups
+// a catch-up show or season id is accepted too.
+func catchUpStateID(q url.Values, groups bool) (string, bool) {
 	for _, raw := range []string{q.Get("ratingKey"), q.Get("key")} {
 		id := strings.TrimPrefix(raw, catchUpMetadataPrefix)
 		if _, ok := frontend.CatchUpEpisodeRequest(id); ok {
+			return id, true
+		}
+		// A show's or season's key is its children listing.
+		if id, _ = strings.CutSuffix(id, "/children"); groups && (strings.HasPrefix(id, "catchup-show-") || strings.HasPrefix(id, "catchup-season-")) && !strings.Contains(id, "/") {
 			return id, true
 		}
 	}
@@ -140,7 +149,7 @@ func (s *Server) catchUpWatchState() (frontend.CatchUpWatchState, bool) {
 // point (and watched once it crosses the watched threshold).
 func (s *Server) catchUpTimeline(w http.ResponseWriter, r *http.Request) bool {
 	q := r.URL.Query()
-	id, ok := catchUpStateID(q)
+	id, ok := catchUpStateID(q, false)
 	if !ok {
 		return false
 	}
@@ -181,10 +190,11 @@ func (s *Server) catchUpTimeline(w http.ResponseWriter, r *http.Request) bool {
 	return true
 }
 
-// catchUpScrobble marks a catch-up airing watched or unwatched.
+// catchUpScrobble marks a catch-up airing, or every airing of a catch-up
+// show or season, watched or unwatched.
 func (s *Server) catchUpScrobble(w http.ResponseWriter, r *http.Request, watched bool) bool {
 	q := r.URL.Query()
-	id, ok := catchUpStateID(url.Values{"key": {q.Get("key")}})
+	id, ok := catchUpStateID(url.Values{"key": {q.Get("key")}}, true)
 	if !ok {
 		return false
 	}
@@ -198,7 +208,7 @@ func (s *Server) catchUpScrobble(w http.ResponseWriter, r *http.Request, watched
 		s.writeErr(w, r, err)
 		return true
 	}
-	s.log.Info("watch state changed", "user", pr.User.ID, "client", pr.ClientID, "key", id, "watched", watched, "items", 1)
+	s.log.Info("watch state changed", "user", pr.User.ID, "client", pr.ClientID, "key", id, "watched", watched)
 	writeStateMutationOK(w)
 	return true
 }
@@ -213,7 +223,8 @@ func (s *Server) catchUpBrowse(w http.ResponseWriter, r *http.Request, parent st
 	sec := s.catchUpSectionInfo(r)
 	offset, limit := pr.pageOf(0)
 	q := r.URL.Query()
-	page, err := lib.CatchUpItems(r.Context(), pr.User, frontend.CatchUpQuery{Parent: parent, Offset: offset, Limit: limit, Recursive: recursive, Sort: catchUpSortOf(q.Get("sort"))})
+	_, rollup := s.catchUpWatchState()
+	page, err := lib.CatchUpItems(r.Context(), pr.User, frontend.CatchUpQuery{Parent: parent, Offset: offset, Limit: limit, Recursive: recursive, Sort: catchUpSortOf(q.Get("sort")), Rollup: rollup})
 	if err != nil {
 		s.writeErr(w, r, err)
 		return
@@ -237,6 +248,9 @@ func (s *Server) catchUpDetail(w http.ResponseWriter, r *http.Request, id string
 		return
 	}
 	item, err := lib.CatchUpItem(r.Context(), FromContext(r.Context()).User, id)
+	if watch, ok := s.catchUpWatchState(); ok && err == nil {
+		item, err = frontend.CatchUpWithRollup(r.Context(), watch, FromContext(r.Context()).User, item)
+	}
 	if err != nil {
 		s.writeErr(w, r, err)
 		return

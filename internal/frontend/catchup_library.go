@@ -25,6 +25,11 @@ type CatchUpQuery struct {
 	Sort          CatchUpSort
 	// Search matches the title or episode title, ignoring case, spacing and punctuation.
 	Search string
+	// Rollup fills Watch on listed shows and seasons with the viewer's
+	// roll-up of their airings. It reads the whole archive window, as a title
+	// sort does, so only listings that show it ask. A search gets none (it
+	// lists only matching airings).
+	Rollup bool
 }
 
 // CatchUpSort orders a catch-up listing. The zero value lists the most
@@ -65,27 +70,58 @@ type CatchUpItem struct {
 	Type                 MediaType
 	Programme            LiveTVProgramme
 	Artwork              []Image
-	// Watch is the viewer's state for an episode (an airing). It is zero for
-	// shows and seasons and for an airing the viewer has not played.
+	// Watch is the viewer's state: for an episode (an airing) its own state,
+	// for a show or season the roll-up of the airings in it when asked for
+	// (CatchUpQuery.Rollup, CatchUpWatchState.CatchUpGroupWatch).
 	Watch CatchUpWatch
 }
 
 // CatchUpWatch is one viewer's watch state for one catch-up airing. It is kept
 // while the airing is in the archive and pruned when the archive drops it.
+//
+// For a show or season, Episodes is how many of its airings the viewer can
+// play, Watched how many of those they have watched and InProgress how many
+// have a resume point; LastViewedAt is the latest of the airings'. ViewOffset,
+// ViewCount, IsFavorite and UserRating are zero there.
 type CatchUpWatch struct {
 	ViewOffset   time.Duration
 	ViewCount    int
 	LastViewedAt time.Time
 	IsFavorite   bool
 	UserRating   float64
+
+	Episodes, Watched, InProgress int
 }
 
+// FullyWatched reports whether a show or season has airings and the viewer
+// has watched all of them.
+func (w CatchUpWatch) FullyWatched() bool { return w.Episodes > 0 && w.Watched >= w.Episodes }
+
 // CatchUpWatchState records watch state for catch-up airings. The id is any
-// episode id CatchUpItem accepts (the library id or the airing GUID). State is
-// the timeline state ("playing", "paused", "buffering" or "stopped").
+// id CatchUpItem accepts (the library id or the GUID). Progress takes an
+// episode; SetWatched also takes a show or season and marks every airing in
+// it the viewer can play. State is the timeline state ("playing", "paused",
+// "buffering" or "stopped").
 type CatchUpWatchState interface {
 	CatchUpProgress(ctx context.Context, viewer *Viewer, id string, offset, duration time.Duration, state string) error
 	CatchUpSetWatched(ctx context.Context, viewer *Viewer, id string, watched bool) error
+	// CatchUpGroupWatch is a show's or season's roll-up for one viewer.
+	CatchUpGroupWatch(ctx context.Context, viewer *Viewer, id string) (CatchUpWatch, error)
+}
+
+// CatchUpWithRollup fills a show's or season's roll-up when live keeps catch-up
+// watch state, for a detail page. Episodes are returned as they are.
+func CatchUpWithRollup(ctx context.Context, live any, viewer *Viewer, item CatchUpItem) (CatchUpItem, error) {
+	w, ok := live.(CatchUpWatchState)
+	if !ok || item.Type == TypeEpisode {
+		return item, nil
+	}
+	watch, err := w.CatchUpGroupWatch(ctx, viewer, item.ID)
+	if err != nil {
+		return item, err
+	}
+	item.Watch = watch
+	return item, nil
 }
 
 func CatchUpGroupID(kind MediaType, title string) string {

@@ -1396,7 +1396,11 @@ func (i *instance) items(w http.ResponseWriter, r *http.Request) {
 		lib, ok := i.host.LiveTV.(frontend.CatchUpLibrary)
 		items := []any{}
 		if ok {
-			if item, err := lib.CatchUpItem(r.Context(), v, itemIDs[0]); err == nil {
+			item, err := lib.CatchUpItem(r.Context(), v, itemIDs[0])
+			if watch, ok := i.catchUpWatchState(); ok && err == nil {
+				item, err = frontend.CatchUpWithRollup(r.Context(), watch, v, item)
+			}
+			if err == nil {
 				items = append(items, i.catchUpDTO(r, item, token))
 			}
 		}

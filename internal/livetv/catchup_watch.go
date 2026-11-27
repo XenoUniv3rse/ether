@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -85,18 +86,92 @@ func (h liveTVHost) CatchUpProgress(ctx context.Context, u *frontend.Viewer, id 
 
 // CatchUpSetWatched marks an airing watched (one more view, no resume point)
 // or unwatched (no views, no resume point; when it was last viewed is kept,
-// as for titles).
+// as for titles). For a show or season it does the same to every airing in
+// it the viewer can play, as a show scrobble does to its episodes.
 func (h liveTVHost) CatchUpSetWatched(ctx context.Context, u *frontend.Viewer, id string, watched bool) error {
 	ctx, cancel := catchUpWriteContext(ctx)
 	defer cancel()
-	a, err := h.catchUpAiring(ctx, u, id)
+	airings, err := h.catchUpAirings(ctx, u, id)
 	if err != nil {
 		return err
 	}
-	if watched {
-		return a.upsert(ctx, h.s, 0, `offset_ms=0, view_count=livetv_catchup_watch.view_count+1, counted=1`, 1, 1, true)
+	for batch := range slices.Chunk(airings, catchUpWriteBatch) {
+		if watched {
+			err = catchUpUpsert(ctx, h.s, batch, 0, `offset_ms=0, view_count=livetv_catchup_watch.view_count+1, counted=1`, 1, 1, true)
+		} else {
+			err = catchUpUpsert(ctx, h.s, batch, 0, `offset_ms=0, view_count=0, counted=0`, 0, 0, false)
+		}
+		if err != nil {
+			return err
+		}
 	}
-	return a.upsert(ctx, h.s, 0, `offset_ms=0, view_count=0, counted=0`, 0, 0, false)
+	return nil
+}
+
+// CatchUpGroupWatch is a show's or season's roll-up of its airings' state for
+// one viewer. It reads the whole archive window.
+func (h liveTVHost) CatchUpGroupWatch(ctx context.Context, u *frontend.Viewer, id string) (frontend.CatchUpWatch, error) {
+	item, members, err := h.catchUpGroup(ctx, u, id)
+	if err != nil {
+		return frontend.CatchUpWatch{}, err
+	}
+	items := []frontend.CatchUpItem{item}
+	if err := h.s.fillCatchUpWatch(ctx, u, items, members); err != nil {
+		return frontend.CatchUpWatch{}, err
+	}
+	return items[0].Watch, nil
+}
+
+// catchUpGroup resolves a show or season id for this viewer, with its
+// airings' programme ids, from one read of the archive window.
+func (h liveTVHost) catchUpGroup(ctx context.Context, u *frontend.Viewer, id string) (frontend.CatchUpItem, map[string][]string, error) {
+	if _, kind := frontend.CatchUpGUIDGroup(id); kind == "" && !strings.HasPrefix(id, "catchup-show-") && !strings.HasPrefix(id, "catchup-season-") {
+		return frontend.CatchUpItem{}, nil, core.ErrNotFound
+	}
+	page, members, err := h.catchUpItems(ctx, u, frontend.CatchUpQuery{Limit: 1, Rollup: true}, id)
+	if err != nil {
+		return frontend.CatchUpItem{}, nil, err
+	}
+	if len(page.Items) == 0 {
+		return frontend.CatchUpItem{}, nil, core.ErrNotFound
+	}
+	return page.Items[0], members, nil
+}
+
+// catchUpWriteBatch is how many airings one mark statement writes (ten
+// parameters each, well under SQLite's limit).
+const catchUpWriteBatch = 200
+
+// catchUpAirings resolves a write's id to its airings: an episode to itself,
+// a show or season to every airing in it the viewer can play, from one read
+// of the archive window.
+func (h liveTVHost) catchUpAirings(ctx context.Context, u *frontend.Viewer, id string) ([]catchUpAiring, error) {
+	if u == nil || u.ID <= 0 {
+		return nil, core.ErrUnauthorized
+	}
+	if _, kind := frontend.CatchUpGUIDGroup(id); kind == "" && !strings.HasPrefix(id, "catchup-show-") && !strings.HasPrefix(id, "catchup-season-") {
+		a, err := h.catchUpAiring(ctx, u, id)
+		return []catchUpAiring{a}, err
+	}
+	item, members, err := h.catchUpGroup(ctx, u, id)
+	if err != nil {
+		return nil, err
+	}
+	channels := make(map[string]Channel)
+	out := make([]catchUpAiring, 0, len(members[item.ID]))
+	for _, programme := range members[item.ID] {
+		at := strings.LastIndexByte(programme, '-')
+		start, err := strconv.ParseInt(programme[at+1:], 10, 64)
+		if at <= 0 || err != nil {
+			return nil, core.ErrNotFound
+		}
+		a, err := h.airingOf(ctx, u, programme[:at], programme, time.UnixMilli(start), 0, channels)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, a)
+	}
+	return out, nil
 }
 
 // catchUpAiring is the airing a write names, resolved through CatchUpItem so
@@ -119,28 +194,56 @@ func (h liveTVHost) catchUpAiring(ctx context.Context, u *frontend.Viewer, id st
 	if item.Type != frontend.TypeEpisode {
 		return catchUpAiring{}, core.ErrNotFound
 	}
-	ch, err := h.s.Channel(ctx, item.Programme.ChannelID)
-	if err != nil {
-		return catchUpAiring{}, err
-	}
 	p := item.Programme
-	return catchUpAiring{user: u.ID, programme: p.ID, source: guideSource(ch), gid: ch.GuideID,
-		start: p.Start.UnixMilli(), now: h.s.clockNow().UnixMilli(), length: p.End.Sub(p.Start)}, nil
+	return h.airingOf(ctx, u, p.ChannelID, p.ID, p.Start, p.End.Sub(p.Start), nil)
+}
+
+// airingOf is the write target for an airing the viewer was just shown to be
+// able to play. channels, when not nil, caches channel lookups across the
+// airings of one write.
+func (h liveTVHost) airingOf(ctx context.Context, u *frontend.Viewer, channel, programme string, start time.Time, length time.Duration, channels map[string]Channel) (catchUpAiring, error) {
+	ch, cached := channels[channel]
+	if !cached {
+		var err error
+		if ch, err = h.s.Channel(ctx, channel); err != nil {
+			return catchUpAiring{}, err
+		}
+		if channels != nil {
+			channels[channel] = ch
+		}
+	}
+	return catchUpAiring{user: u.ID, programme: programme, source: guideSource(ch), gid: ch.GuideID,
+		start: start.UnixMilli(), now: h.s.clockNow().UnixMilli(), length: length}, nil
 }
 
 // upsert writes the airing's row: a new row gets offset, views and counted as
 // given; an existing one gets set (which may read its own columns).
 func (a catchUpAiring) upsert(ctx context.Context, s *Service, offset time.Duration, set string, views, counted int, viewed bool) error {
-	var lastViewed int64
+	return catchUpUpsert(ctx, s, []catchUpAiring{a}, offset, set, views, counted, viewed)
+}
+
+// catchUpUpsert writes several airings' rows in one statement, as upsert
+// does for one. Every write stamps watch_at_ms; viewed also sets
+// last_viewed_ms. The airings must be distinct (PostgreSQL refuses to update
+// one row twice in a statement).
+func catchUpUpsert(ctx context.Context, s *Service, airings []catchUpAiring, offset time.Duration, set string, views, counted int, viewed bool) error {
 	if viewed {
-		lastViewed = a.now
 		set += ", last_viewed_ms=excluded.last_viewed_ms"
 	}
+	values := make([]string, 0, len(airings))
+	args := make([]any, 0, 10*len(airings))
+	for _, a := range airings {
+		var lastViewed int64
+		if viewed {
+			lastViewed = a.now
+		}
+		values = append(values, "(?,?,?,?,?,?,?,?,?,?)")
+		args = append(args, a.user, a.programme, a.source, a.gid, a.start, offset.Milliseconds(), views, counted, lastViewed, a.now)
+	}
 	return catchUpExec(ctx, s, `INSERT INTO livetv_catchup_watch(user_id,programme_id,guide_source,guide_id,start_ms,offset_ms,view_count,counted,last_viewed_ms,watch_at_ms)
-		VALUES(?,?,?,?,?,?,?,?,?,?)
+		VALUES `+strings.Join(values, ",")+`
 		ON CONFLICT(user_id,programme_id) DO UPDATE SET guide_source=excluded.guide_source, guide_id=excluded.guide_id, start_ms=excluded.start_ms,
-			watch_at_ms=excluded.watch_at_ms, `+set,
-		a.user, a.programme, a.source, a.gid, a.start, offset.Milliseconds(), views, counted, lastViewed, a.now)
+			watch_at_ms=excluded.watch_at_ms, `+set, args...)
 }
 
 // catchUpWriteTimeout bounds a watch write that outlives its request.
@@ -169,58 +272,98 @@ func catchUpExec(ctx context.Context, s *Service, q string, args ...any) error {
 	}
 }
 
-// fillCatchUpWatch sets Watch on the episodes in items for one viewer.
-func (s *Service) fillCatchUpWatch(ctx context.Context, u *core.User, items []frontend.CatchUpItem) error {
+// fillCatchUpWatch sets Watch on items for one viewer: an episode's own
+// state, and for a show or season the roll-up of its airings in members
+// (group id to programme ids, from catchUpItems). A group without members
+// keeps a zero Watch.
+func (s *Service) fillCatchUpWatch(ctx context.Context, u *core.User, items []frontend.CatchUpItem, members map[string][]string) error {
 	if u == nil || u.ID <= 0 {
 		return nil
 	}
-	at := make(map[string][]int)
+	var ids []string
+	for _, item := range items {
+		if item.Type == frontend.TypeEpisode {
+			if item.Programme.ID != "" {
+				ids = append(ids, item.Programme.ID)
+			}
+		} else {
+			ids = append(ids, members[item.ID]...)
+		}
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	state, err := s.catchUpWatchRows(ctx, u.ID, ids)
+	if err != nil {
+		return err
+	}
 	for i, item := range items {
-		if item.Type == frontend.TypeEpisode && item.Programme.ID != "" {
-			at[item.Programme.ID] = append(at[item.Programme.ID], i)
+		if item.Type == frontend.TypeEpisode {
+			items[i].Watch = state[item.Programme.ID]
+			continue
 		}
-	}
-	ids := make([]string, 0, len(at))
-	for id := range at {
-		ids = append(ids, id)
-	}
-	slices.Sort(ids)
-	for batch := range slices.Chunk(ids, 500) {
-		args := make([]any, 0, len(batch)+1)
-		args = append(args, u.ID)
-		for _, id := range batch {
-			args = append(args, id)
+		airings, ok := members[item.ID]
+		if !ok {
+			continue
 		}
-		rows, err := s.o.DB.QueryContext(ctx, `SELECT programme_id, offset_ms, view_count, last_viewed_ms, favorite, rating FROM livetv_catchup_watch
-			WHERE user_id=? AND programme_id IN (`+strings.TrimSuffix(strings.Repeat("?,", len(batch)), ",")+`)`, args...)
-		if err != nil {
-			return err
-		}
-		for rows.Next() {
-			var id string
-			var offsetMS, lastMS int64
-			var w frontend.CatchUpWatch
-			if err := rows.Scan(&id, &offsetMS, &w.ViewCount, &lastMS, &w.IsFavorite, &w.UserRating); err != nil {
-				rows.Close()
-				return err
+		var w frontend.CatchUpWatch
+		for _, id := range airings {
+			st := state[id]
+			w.Episodes++
+			if st.ViewCount > 0 {
+				w.Watched++
+			} else if st.ViewOffset > 0 {
+				w.InProgress++
 			}
-			w.ViewOffset = time.Duration(offsetMS) * time.Millisecond
-			if lastMS > 0 {
-				w.LastViewedAt = time.UnixMilli(lastMS)
-			}
-			for _, i := range at[id] {
-				items[i].Watch = w
+			if st.LastViewedAt.After(w.LastViewedAt) {
+				w.LastViewedAt = st.LastViewedAt
 			}
 		}
-		if err := rows.Err(); err != nil {
-			rows.Close()
-			return err
-		}
-		if err := rows.Close(); err != nil {
-			return err
-		}
+		items[i].Watch = w
 	}
 	return nil
+}
+
+// catchUpWatchRowsByID is how many airings catchUpWatchRows looks up by id;
+// past it (a roll-up over many airings) it reads all of the viewer's rows,
+// which only exist for airings they played or marked in the last month.
+const catchUpWatchRowsByID = 500
+
+// catchUpWatchRows reads one viewer's stored state for the given airings.
+func (s *Service) catchUpWatchRows(ctx context.Context, user int64, ids []string) (map[string]frontend.CatchUpWatch, error) {
+	if len(ids) == 0 {
+		return map[string]frontend.CatchUpWatch{}, nil
+	}
+	q, args := `SELECT programme_id, offset_ms, view_count, last_viewed_ms, favorite, rating FROM livetv_catchup_watch WHERE user_id=?`, []any{user}
+	if len(ids) <= catchUpWatchRowsByID {
+		q += ` AND programme_id IN (` + strings.TrimSuffix(strings.Repeat("?,", len(ids)), ",") + `)`
+		for _, id := range ids {
+			args = append(args, id)
+		}
+	}
+	rows, err := s.o.DB.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make(map[string]frontend.CatchUpWatch)
+	for rows.Next() {
+		var id string
+		var offsetMS, lastMS int64
+		var w frontend.CatchUpWatch
+		if err := rows.Scan(&id, &offsetMS, &w.ViewCount, &lastMS, &w.IsFavorite, &w.UserRating); err != nil {
+			return nil, err
+		}
+		w.ViewOffset = time.Duration(offsetMS) * time.Millisecond
+		if lastMS > 0 {
+			w.LastViewedAt = time.UnixMilli(lastMS)
+		}
+		out[id] = w
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, rows.Close()
 }
 
 // pruneCatchUpWatch drops state for airings the source's guide no longer

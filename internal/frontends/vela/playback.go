@@ -1317,11 +1317,16 @@ func (i *instance) observe(w http.ResponseWriter, r *http.Request) {
 		subtitleIndex = &n
 	}
 	archive := s.archive != nil
+	saveInfo, save := s.catchUpToSave(b.State, i.catchUpNow())
 	s.mu.Unlock()
 	err := func() error {
 		defer s.mu.Lock()
 		if archive {
-			return i.playbackKeepAlive(r.Context(), i.access(r, v), r.PathValue("id"), s)
+			err := i.playbackKeepAlive(r.Context(), i.access(r, v), r.PathValue("id"), s)
+			if err == nil && save {
+				i.saveCatchUp(r.Context(), v, saveInfo, pos, b.State)
+			}
+			return err
 		}
 		return i.host.Sessions.Report(r.Context(), i.access(r, v), r.PathValue("id"), frontend.Timeline{Sequence: b.Sequence, Position: pos, State: b.State, AudioStreamIndex: audioIndex, SubtitleStreamIndex: subtitleIndex})
 	}()

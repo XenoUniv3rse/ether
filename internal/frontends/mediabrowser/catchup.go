@@ -35,7 +35,7 @@ func (i *instance) catchUpDTO(r *http.Request, item frontend.CatchUpItem, creden
 	kind := map[frontend.MediaType]string{frontend.TypeShow: "Series", frontend.TypeSeason: "Season", frontend.TypeEpisode: "Episode"}[item.Type]
 	m := map[string]any{"Id": id, "Name": p.Item.Title, "Type": kind, "Overview": p.Item.Summary, "ServerId": i.info.ID,
 		"IsFolder": item.Type != frontend.TypeEpisode, "CanDownload": false, "CanDelete": false, "ParentId": catchUpViewID(),
-		"UserData": i.userDataDTO(id, catchUpWatchStatus(item)), "ProviderIds": map[string]string{}}
+		"UserData": i.catchUpUserData(item), "ProviderIds": map[string]string{}}
 	if item.Type != frontend.TypeShow {
 		m["SeriesId"], m["SeriesName"] = frontend.CatchUpGroupGUID(item.ShowID), p.Item.Title
 	}
@@ -78,8 +78,10 @@ func (i *instance) catchUpBrowse(w http.ResponseWriter, r *http.Request, viewer 
 		return true
 	}
 	q := itemQuery(r)
+	_, rollup := i.catchUpWatchState()
 	page, err := lib.CatchUpItems(r.Context(), viewer, frontend.CatchUpQuery{
 		Parent: parent, Recursive: recursive, Offset: q.Offset, Limit: q.Limit, Search: q.Filter.Query, Sort: frontend.CatchUpSortFor(q.Sort, q.Desc),
+		Rollup: rollup,
 	})
 	if err != nil {
 		http.Error(w, "Unavailable", 503)
@@ -103,12 +105,26 @@ func (i *instance) catchUpDetail(w http.ResponseWriter, r *http.Request, v *fron
 		return true
 	}
 	item, err := lib.CatchUpItem(r.Context(), v, id)
+	if watch, ok := i.catchUpWatchState(); ok && err == nil {
+		item, err = frontend.CatchUpWithRollup(r.Context(), watch, v, item)
+	}
 	if err != nil {
 		http.NotFound(w, r)
 		return true
 	}
 	jsonReply(w, i.catchUpDTO(r, item, token))
 	return true
+}
+
+// catchUpWatchState is the Live TV host's catch-up watch state, when Live TV
+// is on and keeps it.
+func (i *instance) catchUpWatchState() (frontend.CatchUpWatchState, bool) {
+	live := i.host.LiveTV
+	if live == nil || !live.Enabled() {
+		return nil, false
+	}
+	w, ok := live.(frontend.CatchUpWatchState)
+	return w, ok
 }
 
 func (i *instance) catchUpPlaybackInfo(w http.ResponseWriter, r *http.Request, viewer *frontend.Viewer, token, wireID string, body playbackRequest, caps frontend.ClientCaps) {
@@ -270,22 +286,37 @@ func (i *instance) catchUpProgress(r *http.Request, v *frontend.Viewer, body tim
 	}
 }
 
-// catchUpWatchStatus is an airing's watch state in the shape item user data
-// uses.
+// catchUpWatchStatus is a catch-up item's watch state in the shape item user
+// data uses. A show or season is played once every airing in it is.
 func catchUpWatchStatus(item frontend.CatchUpItem) frontend.WatchStatus {
 	if item.Type != frontend.TypeEpisode {
-		return frontend.WatchStatus{}
+		st := frontend.WatchStatus{LastViewedAt: item.Watch.LastViewedAt}
+		if item.Watch.FullyWatched() {
+			st.ViewCount = 1
+		}
+		return st
 	}
 	p := item.Programme
 	return frontend.WatchStatus{ViewOffset: item.Watch.ViewOffset, ViewCount: item.Watch.ViewCount,
 		LastViewedAt: item.Watch.LastViewedAt, IsFavorite: item.Watch.IsFavorite, UserRating: item.Watch.UserRating, Duration: p.End.Sub(p.Start)}
 }
 
-// catchUpPlayed marks a catch-up airing played or unplayed.
+// catchUpUserData is a catch-up item's UserData. Jellyfin also gets a show's
+// or season's UnplayedItemCount, as for library shows.
+func (i *instance) catchUpUserData(item frontend.CatchUpItem) map[string]any {
+	data := i.userDataDTO(frontend.CatchUpGUID(item), catchUpWatchStatus(item))
+	if i.protocol == "jellyfin" && item.Type != frontend.TypeEpisode && item.Watch.Episodes > 0 {
+		data["UnplayedItemCount"] = max(item.Watch.Episodes-item.Watch.Watched, 0)
+	}
+	return data
+}
+
+// catchUpPlayed marks a catch-up airing, or every airing of a catch-up show
+// or season, played or unplayed.
 func (i *instance) catchUpPlayed(w http.ResponseWriter, r *http.Request, v *frontend.Viewer, id string) {
 	lib, okLib := i.host.LiveTV.(frontend.CatchUpLibrary)
-	watch, ok := i.host.LiveTV.(frontend.CatchUpWatchState)
-	if !ok || !okLib || !i.host.LiveTV.Enabled() {
+	watch, ok := i.catchUpWatchState()
+	if !ok || !okLib {
 		http.NotFound(w, r)
 		return
 	}
@@ -301,6 +332,9 @@ func (i *instance) catchUpPlayed(w http.ResponseWriter, r *http.Request, v *fron
 		return
 	}
 	item, err := lib.CatchUpItem(r.Context(), v, id)
+	if err == nil {
+		item, err = frontend.CatchUpWithRollup(r.Context(), watch, v, item)
+	}
 	if err != nil {
 		if errors.Is(err, frontend.ErrNotFound) {
 			http.NotFound(w, r)
@@ -309,7 +343,7 @@ func (i *instance) catchUpPlayed(w http.ResponseWriter, r *http.Request, v *fron
 		http.Error(w, "Unavailable", 503)
 		return
 	}
-	dto := i.userDataDTO(frontend.CatchUpGUID(item), catchUpWatchStatus(item))
+	dto := i.catchUpUserData(item)
 	if i.protocol == "jellyfin" {
 		if pct, ok := dto["PlayedPercentage"].(float64); ok && pct == 0 {
 			delete(dto, "PlayedPercentage")

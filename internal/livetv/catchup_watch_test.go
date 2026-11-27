@@ -18,6 +18,7 @@ type catchUpWatchTestHost interface {
 	CatchUpProgress(ctx context.Context, viewer *frontend.Viewer, id string, offset, duration time.Duration, state string, resumeAfter time.Duration) error
 	CatchUpSetWatched(ctx context.Context, viewer *frontend.Viewer, id string, watched bool) error
 	frontend.CatchUpUserDataWriter
+	CatchUpGroupWatch(ctx context.Context, viewer *frontend.Viewer, id string) (frontend.CatchUpWatch, error)
 }
 
 func catchUpWatchFixture(t *testing.T, now time.Time) (*Service, Channel, catchUpWatchTestHost) {
@@ -173,8 +174,154 @@ func TestCatchUpWatchState(t *testing.T) {
 	if err := h.CatchUpSetWatched(t.Context(), denied, id, true); !errors.Is(err, core.ErrNotFound) {
 		t.Fatalf("restricted viewer wrote state: %v", err)
 	}
-	if err := h.CatchUpSetWatched(t.Context(), owner, shows.Items[0].ID, true); !errors.Is(err, core.ErrNotFound) {
-		t.Fatalf("a show is not an airing: %v", err)
+	if err := h.CatchUpProgress(t.Context(), owner, shows.Items[0].ID, time.Minute, hour, "playing", 0); !errors.Is(err, core.ErrNotFound) {
+		t.Fatalf("progress on a show, not an airing: %v", err)
+	}
+}
+
+func insertCatchUpProgramme(t *testing.T, s *Service, ch Channel, title string, start time.Time, length time.Duration) {
+	t.Helper()
+	insertRatedCatchUpProgramme(t, s, ch, title, "", start, length)
+}
+
+func insertRatedCatchUpProgramme(t *testing.T, s *Service, ch Channel, title, rating string, start time.Time, length time.Duration) {
+	t.Helper()
+	p := Programme{Start: start, End: start.Add(length), Item: Item{Title: title, Rating: rating}}
+	raw, err := json.Marshal(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.o.DB.ExecContext(t.Context(), "INSERT INTO livetv_programmes(source_id,channel_id,start_ms,end_ms,data) VALUES(?,?,?,?,?)", guideSource(ch), ch.GuideID, start.UnixMilli(), p.End.UnixMilli(), raw); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A show or season carries its airings' roll-up, and marking it marks every
+// airing in it, through either id the frontends serve.
+func TestCatchUpWatchShowAndSeason(t *testing.T) {
+	now := time.Date(2026, 11, 25, 12, 0, 0, 0, time.UTC)
+	s, ch, h := catchUpWatchFixture(t, now)
+	insertCatchUpProgramme(t, s, ch, "Weather", now.Add(-4*time.Hour), time.Hour)
+	owner := &core.User{ID: 1, IsOwner: true}
+	show := func(title string) frontend.CatchUpItem {
+		t.Helper()
+		page, err := h.CatchUpItems(t.Context(), owner, frontend.CatchUpQuery{Rollup: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, item := range page.Items {
+			if item.Programme.Item.Title == title {
+				return item
+			}
+		}
+		t.Fatalf("no show %q in %+v", title, page.Items)
+		return frontend.CatchUpItem{}
+	}
+	news := show("News")
+	if w := news.Watch; w.Episodes != 2 || w.Watched != 0 || w.InProgress != 0 || w.FullyWatched() {
+		t.Fatalf("unwatched show roll-up: %+v", w)
+	}
+	episodes, err := h.CatchUpItems(t.Context(), owner, frontend.CatchUpQuery{Parent: news.SeasonID})
+	if err != nil || len(episodes.Items) != 2 {
+		t.Fatalf("episodes: %d, %v", len(episodes.Items), err)
+	}
+	if err := h.CatchUpProgress(t.Context(), owner, episodes.Items[0].ID, 10*time.Minute, 0, "playing", 0); err != nil {
+		t.Fatal(err)
+	}
+	if w, err := h.CatchUpGroupWatch(t.Context(), owner, news.ID); err != nil || w.Episodes != 2 || w.Watched != 0 || w.InProgress != 1 || !w.LastViewedAt.Equal(now) {
+		t.Fatalf("show detail roll-up: %+v, %v", w, err)
+	}
+	// Only a listing or detail that asks gets a roll-up: resolving a show
+	// (artwork, writes) keeps its early stop.
+	if w := catchUpEpisode(t, h, owner, news.ID).Watch; w != (frontend.CatchUpWatch{}) {
+		t.Fatalf("plain show resolve has a roll-up: %+v", w)
+	}
+	if plain, err := h.CatchUpItems(t.Context(), owner, frontend.CatchUpQuery{}); err != nil || plain.Items[0].Watch != (frontend.CatchUpWatch{}) {
+		t.Fatalf("listing without Rollup has a roll-up: %+v, %v", plain.Items, err)
+	}
+	if _, err := h.CatchUpGroupWatch(t.Context(), owner, episodes.Items[0].ID); !errors.Is(err, core.ErrNotFound) {
+		t.Fatalf("roll-up of an airing: %v", err)
+	}
+
+	// Mark the show watched through its GUID (Jellyfin, Emby, Silo).
+	if err := h.CatchUpSetWatched(t.Context(), owner, frontend.CatchUpGroupGUID(news.ID), true); err != nil {
+		t.Fatal(err)
+	}
+	for _, ep := range episodes.Items {
+		if w := catchUpEpisode(t, h, owner, ep.ID).Watch; w.ViewCount != 1 || w.ViewOffset != 0 {
+			t.Fatalf("episode after marking the show: %+v", w)
+		}
+	}
+	if w := show("News").Watch; w.Watched != 2 || w.InProgress != 0 || !w.FullyWatched() {
+		t.Fatalf("watched show roll-up: %+v", w)
+	}
+	seasons, err := h.CatchUpItems(t.Context(), owner, frontend.CatchUpQuery{Parent: news.ID, Rollup: true})
+	if err != nil || len(seasons.Items) != 1 || !seasons.Items[0].Watch.FullyWatched() {
+		t.Fatalf("season listing roll-up: %+v, %v", seasons.Items, err)
+	}
+	if w := show("Weather").Watch; w.Episodes != 1 || w.Watched != 0 {
+		t.Fatalf("another show was marked: %+v", w)
+	}
+	// Marking again adds a view to each airing, as a show scrobble does.
+	if err := h.CatchUpSetWatched(t.Context(), owner, news.SeasonID, true); err != nil {
+		t.Fatal(err)
+	}
+	if w := catchUpEpisode(t, h, owner, episodes.Items[1].ID).Watch; w.ViewCount != 2 {
+		t.Fatalf("second mark: %+v", w)
+	}
+	// Unmark the season: every airing, keeping when it was last viewed.
+	if err := h.CatchUpSetWatched(t.Context(), owner, frontend.CatchUpGroupGUID(news.SeasonID), false); err != nil {
+		t.Fatal(err)
+	}
+	for _, ep := range episodes.Items {
+		if w := catchUpEpisode(t, h, owner, ep.ID).Watch; w.ViewCount != 0 || w.ViewOffset != 0 || !w.LastViewedAt.Equal(now) {
+			t.Fatalf("episode after unmarking the season: %+v", w)
+		}
+	}
+	if w := show("News").Watch; w.Watched != 0 || w.FullyWatched() {
+		t.Fatalf("unwatched show roll-up: %+v", w)
+	}
+
+	// A search lists only matching airings, so it carries no counts.
+	found, err := h.CatchUpItems(t.Context(), owner, frontend.CatchUpQuery{Search: "news", Rollup: true})
+	if err != nil || len(found.Items) != 1 || found.Items[0].Watch != (frontend.CatchUpWatch{}) {
+		t.Fatalf("search roll-up: %+v, %v", found.Items, err)
+	}
+	// State is per viewer; a viewer who can't see the archive can't mark it.
+	if w, err := h.CatchUpGroupWatch(t.Context(), &core.User{ID: 3, IsOwner: true}, frontend.CatchUpGroupGUID(news.ID)); err != nil || w.Episodes != 2 || w.Watched != 0 || !w.LastViewedAt.IsZero() {
+		t.Fatalf("another viewer's roll-up: %+v, %v", w, err)
+	}
+	if err := h.CatchUpSetWatched(t.Context(), &core.User{ID: 2}, news.ID, true); !errors.Is(err, core.ErrNotFound) {
+		t.Fatalf("restricted viewer marked a show: %v", err)
+	}
+	if err := h.CatchUpSetWatched(t.Context(), owner, "catchup-show-00000000000000000000000000000000", true); !errors.Is(err, core.ErrNotFound) {
+		t.Fatalf("unknown show: %v", err)
+	}
+}
+
+// Marking a show with more airings than one statement writes marks them all.
+func TestCatchUpWatchMarkLargeShow(t *testing.T) {
+	now := time.Date(2026, 11, 25, 12, 0, 0, 0, time.UTC)
+	s, ch, h := catchUpWatchFixture(t, now)
+	const n = 2*catchUpWriteBatch + 50
+	first := now.Add(-44 * time.Hour)
+	for i := range n {
+		insertCatchUpProgramme(t, s, ch, "Marathon", first.Add(time.Duration(i)*5*time.Minute), 5*time.Minute)
+	}
+	owner := &core.User{ID: 1, IsOwner: true}
+	id := frontend.CatchUpGroupID(frontend.TypeShow, "Marathon")
+	if err := h.CatchUpSetWatched(t.Context(), owner, id, true); err != nil {
+		t.Fatal(err)
+	}
+	if w, err := h.CatchUpGroupWatch(t.Context(), owner, id); err != nil || w.Episodes != n || w.Watched != n {
+		t.Fatalf("large show roll-up: %+v, %v", w, err)
+	}
+	if err := h.CatchUpSetWatched(t.Context(), owner, id, false); err != nil {
+		t.Fatal(err)
+	}
+	var left int
+	if err := s.o.DB.QueryRowContext(t.Context(), "SELECT COUNT(*) FROM livetv_catchup_watch WHERE view_count>0").Scan(&left); err != nil || left != 0 {
+		t.Fatalf("unmarking left watched rows: %d, %v", left, err)
 	}
 }
 
@@ -288,3 +435,45 @@ func TestCatchUpWatchPrune(t *testing.T) {
 }
 
 func msText(n int64) string { return strconv.FormatInt(n, 10) }
+
+// A viewer whose rating limit hides some of a show's airings marks, and
+// counts, only the airings they can play.
+func TestCatchUpWatchShowPartlyVisible(t *testing.T) {
+	now := time.Date(2026, 11, 25, 12, 0, 0, 0, time.UTC)
+	s, ch, h := catchUpWatchFixture(t, now)
+	// A rating-limited viewer only sees a channel with a known rating.
+	ch.Rating = "TV-G"
+	data, err := json.Marshal(ch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.o.DB.ExecContext(t.Context(), "UPDATE livetv_channels SET data=? WHERE id=?", data, ch.ID); err != nil {
+		t.Fatal(err)
+	}
+	for n, rating := range []string{"TV-G", "TV-G", "TV-MA"} {
+		insertRatedCatchUpProgramme(t, s, ch, "Movie Night", rating, now.Add(-time.Duration(10+2*n)*time.Hour), time.Hour)
+	}
+	hidden := ch.ID + "-" + msText(now.Add(-14*time.Hour).UnixMilli())
+	owner := &core.User{ID: 1, IsOwner: true}
+	limited := &core.User{ID: 4, IsOwner: true, MaxContentRating: "TV-PG"}
+	id := frontend.CatchUpGroupID(frontend.TypeShow, "Movie Night")
+	if w, err := h.CatchUpGroupWatch(t.Context(), owner, id); err != nil || w.Episodes != 3 {
+		t.Fatalf("owner sees %+v, %v", w, err)
+	}
+	if w, err := h.CatchUpGroupWatch(t.Context(), limited, id); err != nil || w.Episodes != 2 {
+		t.Fatalf("limited viewer sees %+v, %v", w, err)
+	}
+	if err := h.CatchUpSetWatched(t.Context(), limited, id, true); err != nil {
+		t.Fatal(err)
+	}
+	var marked, hiddenRows int
+	if err := s.o.DB.QueryRowContext(t.Context(), "SELECT COUNT(*) FROM livetv_catchup_watch WHERE user_id=? AND view_count=1", limited.ID).Scan(&marked); err != nil || marked != 2 {
+		t.Fatalf("limited viewer marked %d airings, %v", marked, err)
+	}
+	if err := s.o.DB.QueryRowContext(t.Context(), "SELECT COUNT(*) FROM livetv_catchup_watch WHERE programme_id=?", hidden).Scan(&hiddenRows); err != nil || hiddenRows != 0 {
+		t.Fatalf("the hidden airing was marked: %d, %v", hiddenRows, err)
+	}
+	if w, err := h.CatchUpGroupWatch(t.Context(), limited, id); err != nil || !w.FullyWatched() {
+		t.Fatalf("limited viewer's roll-up after marking: %+v, %v", w, err)
+	}
+}

@@ -881,6 +881,7 @@ func (s surfaceLiveTV) CatchUpItem(ctx context.Context, v *frontend.Viewer, id s
 type catchUpWatchHost interface {
 	CatchUpProgress(ctx context.Context, viewer *frontend.Viewer, id string, offset, duration time.Duration, state string, resumeAfter time.Duration) error
 	CatchUpSetWatched(ctx context.Context, viewer *frontend.Viewer, id string, watched bool) error
+	CatchUpGroupWatch(ctx context.Context, viewer *frontend.Viewer, id string) (frontend.CatchUpWatch, error)
 }
 
 func (s surfaceLiveTV) catchUpWatch(ctx context.Context, v *frontend.Viewer) (catchUpWatchHost, *core.User, error) {
@@ -902,6 +903,14 @@ func (s surfaceLiveTV) CatchUpProgress(ctx context.Context, v *frontend.Viewer, 
 		resumeAfter = s.app.state.ResumeAfter()
 	}
 	return h.CatchUpProgress(s.withApp(ctx), viewer, id, offset, duration, state, resumeAfter)
+}
+
+func (s surfaceLiveTV) CatchUpGroupWatch(ctx context.Context, v *frontend.Viewer, id string) (frontend.CatchUpWatch, error) {
+	h, viewer, err := s.catchUpWatch(ctx, v)
+	if err != nil {
+		return frontend.CatchUpWatch{}, err
+	}
+	return h.CatchUpGroupWatch(s.withApp(ctx), viewer, id)
 }
 
 func (s surfaceLiveTV) CatchUpSetWatched(ctx context.Context, v *frontend.Viewer, id string, watched bool) error {
