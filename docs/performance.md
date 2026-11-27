@@ -192,7 +192,12 @@ coverage gaps. For local triage,
 `ETHER_PERF_GATE_STEPS` accept comma-separated filters. Cases and clients
 match exact names. Step filters match a substring, ignoring case. Client
 filters scope route inventory checks to the selected clients’ surfaces.
-Step filters still report skipped registrations on those surfaces. To use PostgreSQL, provide a disposable
+Step filters still report skipped registrations on those surfaces. Plex
+registrations that accept multiple methods through one handler are reported
+once as `*`. Leaf routes with distinct GET and HEAD registrations still need
+both requests. Add a successful workflow with fixture IDs discovered from
+earlier responses, or record the specific fixture prerequisite in
+`internal/app/perf_matrix_routes_test.go`. To use PostgreSQL, provide a disposable
 server through `ETHER_PERF_GATE_PG`. Each case gets a temporary schema.
 
 ## Library-scale comparison

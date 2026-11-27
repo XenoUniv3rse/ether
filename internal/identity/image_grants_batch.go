@@ -96,7 +96,7 @@ func (s *ImageGrantService) IssueBatch(ctx context.Context, req frontend.ImageBa
 		if err != nil {
 			return nil, err
 		}
-		item, err := sealTitleBatchItem(macKey, encBlock, string(s.surface), viewer.ID, req.Device.Language, key, images, complete, wanted)
+		item, err := sealTitleBatchItem(macKey, encBlock, string(s.surface), viewer.ID, req.Device.Language, key, images, complete, wanted, false)
 		if err != nil {
 			return nil, err
 		}

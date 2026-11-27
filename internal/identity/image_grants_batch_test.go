@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
@@ -343,6 +344,7 @@ func TestSignedPageGrantSealsOncePerTitle(t *testing.T) {
 	art := &pageArtwork{allow: &allowed, calls: &calls, images: []frontend.Image{
 		{Kind: frontend.ImagePoster, Path: "primary"},
 		{Kind: frontend.ImageBackdrop, Path: "back"},
+		{Kind: frontend.ImageBackdrop, Path: "alternate"},
 	}}
 	source := &pathImageFixture{}
 	service, err := identity.NewImageGrantService(db, "jellyfin", grants, func() frontend.Experience { return art }, source, time.Minute, nil, identity.ImageGrantOptions{Token: authhdr.MediaBrowserToken, PublicContentTags: true})
@@ -369,6 +371,20 @@ func TestSignedPageGrantSealsOncePerTitle(t *testing.T) {
 	service.Serve(rec, httptest.NewRequest("GET", "/Items/9/Images/Backdrop", nil), page[0].Images[0].Secret)
 	if rec.Code != 404 {
 		t.Fatalf("poster tag served a backdrop %d", rec.Code)
+	}
+
+	withVariants, err := service.SignPage(ctx, frontend.ImagePageRequest{
+		Credential: credential, Device: core.Device{ID: "tv"}, Titles: []core.Title{title},
+		Kinds: []string{frontend.ImagePoster, frontend.ImageBackdrop}, IncludeVariants: true,
+	})
+	if err != nil || len(withVariants) != 1 || len(withVariants[0].Images) != 3 {
+		t.Fatalf("all page variants: %+v, err=%v", withVariants, err)
+	}
+	alt := withVariants[0].Images[2]
+	rec = httptest.NewRecorder()
+	service.Serve(rec, httptest.NewRequest("GET", "/Items/9/Images/Backdrop", nil), alt.Secret)
+	if rec.Code != http.StatusOK || alt.Image.Path != "alternate" || rec.Body.String() != "alternate" {
+		t.Fatalf("alternate backdrop: %d %s path=%s", rec.Code, rec.Body.String(), alt.Image.Path)
 	}
 }
 

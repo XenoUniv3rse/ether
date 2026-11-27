@@ -3,13 +3,18 @@ package plugins
 import (
 	"context"
 	"net/http"
+	"strings"
 )
 
-// Adapter reads can arrive at playback cadence. Persist their best-effort
-// Inspector samples on the scheduler instead of blocking each client on the
-// database writer. Bound the buffer so a stalled writer cannot exhaust RAM.
+// Client reads can arrive at playback cadence. Persist their best-effort
+// Inspector samples on the scheduler to keep database writes off the read
+// path. Bound the buffer so a stalled writer cannot exhaust RAM.
 func (m *Manager) recordCall(ctx context.Context, c CallRecord) {
-	if isFrontendAdapterPath(c.Route) && (c.Method == http.MethodGet || c.Method == http.MethodHead) {
+	adapterRead := isFrontendAdapterPath(c.Route) && (c.Method == http.MethodGet || c.Method == http.MethodHead)
+	// Kind lyrics and live listings use POST to carry read parameters.
+	kindRead := c.Method == http.MethodPost && strings.HasPrefix(c.Route, "/ether/v1/kinds/") &&
+		(strings.HasSuffix(c.Route, "/lyrics") || strings.HasSuffix(c.Route, "/live"))
+	if adapterRead || kindRead {
 		c.Created = m.now()
 		c.Request = truncate(c.Request, 8192)
 		c.Response = truncate(c.Response, 8192)

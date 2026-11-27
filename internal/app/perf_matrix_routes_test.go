@@ -1,7 +1,9 @@
 package app
 
 import (
+	"maps"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/braedonsaunders/ether/internal/frontend"
@@ -103,7 +105,110 @@ func matrixRouteExceptions() map[perfharness.MatrixRouteKey]string {
 		add(surface, http.MethodGet, "notification websocket needs an authenticated persistent client and event producer",
 			prefix+"/embywebsocket", prefix+"/socket")
 	}
+	add("silo", http.MethodGet, "compatibility handler always reports no explicit per-series preference",
+		"/silo/api/v2/audio-prefs/{series_id}", "/silo/api/v2/subtitle-prefs/{series_id}")
+	add("silo", http.MethodGet, "requires a WebSocket upgrade with the corresponding scoped ticket",
+		"/silo/api/v2/events/ws", "/silo/api/v2/playback/sessions/{session}/control/ws", "/silo/api/v2/watch-together/rooms/{id}/ws")
+	for _, method := range []string{http.MethodGet, http.MethodHead} {
+		add("silo", method, "requires a resolved media source and playback session",
+			"/silo/api/v2/playback/transcode/{session}/{path...}", "/silo/api/v2/stream/{path...}")
+		add("xtream", method, "requires a working live stream or authorized recording source",
+			"/xtream/live/{username}/{password}/{file}", "/xtream/streaming/timeshift.php",
+			"/xtream/timeshift/{username}/{password}/{duration}/{start}/{file}")
+		add("xtream", method, "requires a resolvable media file and a deliverable playback session",
+			"/xtream/movie/{username}/{password}/{file}", "/xtream/series/{username}/{password}/{file}", "/xtream/sessions/{tail...}")
+		add("plex", method, "Plex compatibility handler unconditionally returns 404", "/:/resources/*")
+		add("plex", method, "Plex compatibility handler refuses the singular GET/HEAD match endpoint", "/library/metadata/{key}/match")
+		add("vela", method, "requires a resolved reading or offline download file",
+			"/vela/v0/download/{ticket}", "/vela/v0/read/{ticket}")
+		add("vela", method, "requires media with generated trickplay sheets or a theme audio file",
+			"/vela/v0/sessions/{id}/trickplay/{width}/{sheet}", "/vela/v0/themes/{secret}/theme.m4a", "/vela/v0/themes/{secret}/theme.mp3")
+	}
+	add("stremio", http.MethodGet, "requires a resolvable source to serve the bytes behind a lazy playback ticket", "/stremio/sessions/lazy/{rest...}")
+	add("plex", "*", "compatibility stub for PMS scanner or Butler tasks that Ether does not implement",
+		"/butler/{task}", "/library/sections/{section}/refresh")
+	add("plex", "*", "requires an active playback session that can be terminated",
+		"/status/sessions/terminate", "/status/sessions/terminate/player")
+	add("plex", "*", "requires a running transcoder session",
+		transcode+"ping", transcode+"stop")
+	add("silo", http.MethodPost, "requires an open playback session with a resolved source",
+		"/silo/api/v2/playback/start", "/silo/api/v2/playback/sessions/{session}/control/ws-ticket",
+		"/silo/api/v2/playback/{session}/progress", "/silo/api/v2/playback/{session}/replan")
+	add("silo", http.MethodDelete, "requires an open playback session", "/silo/api/v2/playback/{session}")
+	add("silo", http.MethodPost, "requires a configured subtitle provider and a matching media release",
+		"/silo/api/v2/subtitles/search", "/silo/api/v2/subtitles/download")
+	add("plex", "*", "requires a paired Companion player publishing a playback timeline", "/player/*")
+	add("plex", http.MethodGet, "requires a catch-up item published by a live provider", "/library/catchup/art/{key}/{kind}")
+	for _, method := range []string{http.MethodGet, http.MethodHead} {
+		add("plex", method, "requires a cached Plex identity verified by the Plex metadata service", "/library/metadata/plex:/*")
+		add("plex", method, "requires a theme audio asset for the requested series", "/library/metadata/{key}/theme/{version}")
+		add("plex", method, "requires a bound media stream or an active transcode", "/library/streams/{stream}", "/transcode/sessions/{session}")
+		add("plex", method, "requires an enabled offline download queue and resolved media",
+			"/downloadQueue/{queue}", "/downloadQueue/{queue}/items", "/downloadQueue/{queue}/items/{item}",
+			"/downloadQueue/{queue}/item/{item}/decision")
+		add("plex", method, "requires a live stream subscription or tune operation",
+			"/media/subscriptions/{subscription}", "/media/grabbers/operations/{operation}")
+	}
+	add("vela", http.MethodGet, "requires a playlist import job from a configured source", "/vela/v0/playlists/import/{id}")
+	add("vela", http.MethodGet, "requires a configured AI search provider and a started job", "/vela/v0/search/ai/{id}")
+	add("vela", http.MethodGet, "requires a playable source and an active live playback session", "/vela/v0/sessions/{id}", "/vela/v0/sessions/{id}/events")
+	add("vela", http.MethodGet, "requires a trailer provider and an active trailer preview", "/vela/v0/titles/{id}/trailer-preview")
+	add("console", "*", "dispatches to the separately inventoried owner API leaf routes",
+		"/ether/api/cluster/", "/ether/api/experience/", "/ether/api/plugins-setup/", "/ether/api/server/restart/", "/ether/api/updates/")
+	add("console", "*", "dispatches a registered flow webhook token; the mount has no independent response", "/ether/api/flows/hooks/")
+	add("console", "*", "requires an enabled external add-on", "/ether/api/addon-relay/")
+	add("console", http.MethodGet, "requires an active live tune with a transport stream",
+		"/ether/api/libraries/{id}/live/sessions/{session}/index.m3u8",
+		"/ether/api/libraries/{id}/live/sessions/{session}/relay/{segment}",
+		"/ether/api/libraries/{id}/live/sessions/{session}/resource/{resource}",
+		"/ether/api/libraries/{id}/live/thumb/{hash}")
+	add("console", http.MethodGet, "requires a configured PostgreSQL cluster and a registered node",
+		"/ether/api/cluster/nodes/{id}/control", "/ether/api/cluster/nodes/{id}/role-preflight")
+	add("plugin-host", http.MethodPost, "requires a configured AI completion provider", "/ether/plugin-host/ai/complete")
+	add("plugin-host", http.MethodPost, "requires a viewer-bound request made by a mounted frontend adapter",
+		"/ether/plugin-host/kinds/{kind}/browse", "/ether/plugin-host/kinds/{kind}/visible", "/ether/plugin-host/frontend/stream-url")
+	add("plugin-host", http.MethodPost, "requires a resolvable media source",
+		"/ether/plugin-host/media/probe", "/ether/plugin-host/sources/resolve")
+	add("plugin-host", http.MethodPost, "requires a plugin with a declared screen provider",
+		"/ether/plugin-host/screens/records", "/ether/plugin-host/screens/invalidate")
 	return allowed
+}
+
+func matrixCaseRouteExceptions(inventory perfharness.MatrixRoutes, live bool) map[perfharness.MatrixRouteKey]string {
+	if live {
+		return perfMatrixRouteExceptions
+	}
+	exceptions := maps.Clone(perfMatrixRouteExceptions)
+	for surface, routes := range inventory {
+		for _, entry := range routes {
+			if entry.Method != http.MethodGet && entry.Method != http.MethodHead {
+				continue
+			}
+			path := entry.Pattern
+			reason := ""
+			switch surface {
+			case "plex":
+				if strings.HasPrefix(path, "/tv.plex.providers.epg.xmltv:1") ||
+					strings.HasPrefix(path, "/media/grabbers") || strings.HasPrefix(path, "/media/subscriptions") ||
+					(strings.HasPrefix(path, "/livetv/") && path != "/livetv/dvrs") {
+					reason = "Live TV is disabled in this configuration"
+				}
+			case "emby", "jellyfin":
+				if path == "/"+surface+"/LiveTv/Channels/{id}" || path == "/"+surface+"/LiveTv/Programs/{id}" {
+					reason = "this configuration has no channel or programme fixture"
+				}
+			case "vela":
+				if path == "/vela/v0/live/stream" || path == "/vela/v0/surfaces/{id}/document" || path == "/vela/v0/surfaces/{id}/data" {
+					reason = "the sports screen and live topic fixture are installed in live configurations"
+				}
+			}
+			key := perfharness.MatrixRouteKey{Surface: surface, Method: entry.Method, Pattern: path}
+			if reason != "" && exceptions[key] == "" {
+				exceptions[key] = reason
+			}
+		}
+	}
+	return exceptions
 }
 
 func perfMatrixInventory(t *testing.T, a *App, surfaces map[string]bool, subsonic []string) perfharness.MatrixRoutes {

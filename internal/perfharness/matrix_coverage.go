@@ -3,6 +3,7 @@ package perfharness
 import (
 	"encoding/json"
 	"net/http"
+	"net/url"
 	"strings"
 )
 
@@ -35,6 +36,13 @@ func addMatrixConsoleCoverage(c *Client) {
 		}})
 	}
 	c.Steps = append(c.Steps,
+		Step{Name: "fixture On-Air looks", Class: classConsole, Path: "/onair/looks", Discover: discoverMatrixConsoleLook},
+		Step{Name: "fixture On-Air look", Class: classConsole, Path: "/onair/looks/{consoleLook}"},
+		Step{Name: "fixture On-Air look pack", Class: classConsole, Path: "/onair/looks/{consoleLook}/pack"},
+		Step{Name: "fixture On-Air showcase bug", Class: classConsole, Path: "/onair/showcase-bugs/chroma-80.png"},
+		Step{Name: "fixture cache summary", Class: classConsole, Path: "/cache/", Discover: discoverMatrixConsoleCache},
+		Step{Name: "fixture cached release", Class: classConsole, Path: "/cache/releases/{consoleRelease}"},
+		Step{Name: "fixture playback history", Class: classConsole, Path: "/stats/history", Discover: discoverMatrixConsolePlay},
 		Step{Name: "GET /catalog/lookup", Class: classConsole, Path: "/catalog/lookup?kind=network&q=HBO"},
 		Step{Name: "GET /frontends/qr", Class: classConsole, Path: "/frontends/qr?url=http%3A%2F%2F127.0.0.1%3A32450%2Fvela"},
 		Step{Name: "GET /image", Class: classConsole, Path: "/image?path=%2Fp.jpg&w=500"},
@@ -47,7 +55,9 @@ func addMatrixConsoleCoverage(c *Client) {
 		"/catalog/title/{consoleMovieKey}/releases", "/catalog/title/{consoleKey}/schedule",
 		"/catalog/title/{consoleKey}/tags", "/availability/title/{consoleKey}",
 		"/discovery/overlays/artwork/{consoleKey}",
-		"/discovery/overlays/variants/{consoleKey}", "/frontends/jellyfin/api-keys",
+		"/discovery/overlays/variants/{consoleKey}", "/discovery/overlays/explain/{consoleMovieKey}?userId={viewerId}",
+		"/discovery/overlays/preview/{consoleMovieKey}?userId={viewerId}",
+		"/stats/plays/{consolePlay}", "/stats/plays/{consolePlay}/timeline", "/activity/plays/{consolePlay}/timeline", "/frontends/jellyfin/api-keys",
 		"/frontends/plex/health", "/frontends/plex/settings", "/frontends/plex/status",
 		"/libraries/{pluginLibrary}", "/libraries/{pluginLibrary}/cache",
 		"/config/server", "/status/catalog", "/row-sources/facets/{pluginLibrary}/genre",
@@ -62,8 +72,23 @@ func addMatrixConsoleCoverage(c *Client) {
 	} {
 		c.Steps = append(c.Steps, Step{Name: "fixture GET " + path, Class: classConsole, Path: path})
 	}
+	c.Steps = append(c.Steps, Step{Name: "viewer safety policy", Class: classConsole, Path: "/safety/policies/{viewerId}"})
 	const spec = `{"name":"Matrix scratch collection","mediaType":"movie","sources":[{"kind":"titles","keys":["{consoleMovieKey}"]}],"sort":"source","refresh":"weekly","enabled":true,"artwork":{"mode":"custom","url":"/p.jpg"}}`
 	for _, step := range []Step{
+		{Name: "fixture create On-Air reel", Method: http.MethodPost, Path: "/onair/reels", Body: `{"name":"Matrix reel","order":"sequence"}`, Discover: discoverMatrixID("consoleReel")},
+		{Name: "fixture read On-Air reel", Path: "/onair/reels/{consoleReel}"},
+		{Name: "fixture update On-Air reel", Method: http.MethodPut, Path: "/onair/reels/{consoleReel}", Body: `{"name":"Matrix renamed reel","order":"sequence"}`},
+		{Name: "fixture delete On-Air reel", Method: http.MethodDelete, Path: "/onair/reels/{consoleReel}"},
+		{Name: "fixture create support capture", Method: http.MethodPost, Path: "/support/captures", Body: `{"category":"playback","note":"Matrix fixture capture"}`, Discover: discoverMatrixID("consoleCapture")},
+		{Name: "fixture read support capture", Path: "/support/captures/{consoleCapture}"},
+		{Name: "fixture finish support capture", Method: http.MethodPost, Path: "/support/captures/{consoleCapture}/finish", Body: `{"includeTitles":false}`},
+		{Name: "fixture read support archive", Path: "/support/captures/{consoleCapture}/archive"},
+		{Name: "fixture discard support capture", Method: http.MethodDelete, Path: "/support/captures/{consoleCapture}"},
+		{Name: "fixture create preroll", Method: http.MethodPost, Path: "/admin/prerolls", Body: `{"name":"Matrix fixture preroll","enabled":false}`, Discover: discoverMatrixID("consolePreroll")},
+		{Name: "fixture read preroll plays", Path: "/admin/prerolls/{consolePreroll}/plays?limit=24"},
+		{Name: "fixture update preroll", Method: http.MethodPut, Path: "/admin/prerolls/{consolePreroll}", Body: `{"name":"Matrix preroll updated","enabled":false}`},
+		{Name: "fixture simulate preroll", Method: http.MethodPost, Path: "/admin/prerolls/simulate", Body: `{"ratingKey":"{consoleMovieKey}","viewerId":{viewerId},"device":"tv"}`},
+		{Name: "fixture delete preroll", Method: http.MethodDelete, Path: "/admin/prerolls/{consolePreroll}"},
 		{Name: "fixture POST preview collection", Method: http.MethodPost, Path: "/collections/preview?n=1", Body: spec},
 		{Name: "fixture POST create collection", Method: http.MethodPost, Path: "/collections", Body: spec, Discover: discoverMatrixCollection},
 		{Name: "fixture GET scratch collection", Path: "/collections/{scratchCollection}"},
@@ -83,6 +108,35 @@ func addMatrixConsoleCoverage(c *Client) {
 	}
 }
 
+func discoverMatrixConsoleLook(vars map[string]string, body []byte) {
+	var looks []struct {
+		ID string `json:"id"`
+	}
+	if json.Unmarshal(body, &looks) == nil && len(looks) != 0 {
+		setOnce(vars, "consoleLook", url.PathEscape(looks[0].ID))
+	}
+}
+
+func discoverMatrixConsoleCache(vars map[string]string, body []byte) {
+	var result struct {
+		Releases []struct {
+			ReleaseID string `json:"releaseId"`
+		} `json:"releases"`
+	}
+	if json.Unmarshal(body, &result) == nil && len(result.Releases) != 0 {
+		setOnce(vars, "consoleRelease", url.PathEscape(result.Releases[0].ReleaseID))
+	}
+}
+
+func discoverMatrixConsolePlay(vars map[string]string, body []byte) {
+	var plays []struct {
+		ID string `json:"id"`
+	}
+	if json.Unmarshal(body, &plays) == nil && len(plays) != 0 {
+		setOnce(vars, "consolePlay", url.PathEscape(plays[0].ID))
+	}
+}
+
 func matrixConsoleWriteHeader(h http.Header, _ map[string]string) {
 	h.Set("X-Ether-Request", "1")
 }
@@ -97,7 +151,7 @@ func discoverMatrixCollection(vars map[string]string, body []byte) {
 
 }
 
-func addMatrixMediaBrowserCoverage(c *Client) {
+func addMatrixMediaBrowserCoverage(c *Client, live bool) {
 	for i := range c.Steps {
 		if c.Steps[i].Path == "/Library/VirtualFolders?userId={userId}" {
 			c.Steps[i].OwnerOnly = true
@@ -106,11 +160,22 @@ func addMatrixMediaBrowserCoverage(c *Client) {
 			c.Steps[i].Discover = discoverMBItem("episodeId", "Episode")
 		}
 	}
+	c.Steps = append(c.Steps,
+		Step{Name: "fixture music view", Class: classBrowse, Path: "/Users/{userId}/Views", Discover: discoverMatrixMBMusicView},
+		Step{Name: "fixture artists", Class: classBrowse, Path: "/Artists?ParentId={matrixMBMusic}&Limit=24", Discover: discoverMatrixMBArtist},
+		Step{Name: "fixture artist by name", Class: classDetail, Path: "/Artists/{matrixMBArtist}"},
+	)
+	if c.Surface == "jellyfin" {
+		c.Steps = append(c.Steps,
+			Step{Name: "fixture tracks", Class: classBrowse, Path: "/Items?ParentId={matrixMBMusic}&Recursive=true&IncludeItemTypes=Audio&Limit=24", Discover: discoverMBItem("matrixMBTrack", "Audio")},
+			Step{Name: "fixture track lyrics", Class: classDetail, Path: "/Audio/{matrixMBTrack}/Lyrics"},
+		)
+	}
 	c.Steps = append(c.Steps, Step{Name: "Roku episode anchor", Class: classDetail, Path: "/Shows//Episodes?StartItemId={episodeId}&Limit=2"})
 
 	for _, path := range []string{
 		"/DisplayPreferences/usersettings?client=etherperf", "/Items/{movieId}/Ancestors",
-		"/Items/{movieId}/Collections", "/Items/{movieId}/Intros",
+		"/Items/{movieId}/Collections", "/Items/{movieId}/Intros", "/Items/{movieId}/InstantMix",
 		"/Items/{movieId}/Similar?Limit=24", "/Items/{movieId}/ThemeMedia",
 		"/Items/{movieId}/ThemeSongs", "/Items/{movieId}/ThemeVideos",
 		"/Items/{movieId}/PlaybackInfo", "/Items/{movieId}/Images",
@@ -123,13 +188,21 @@ func addMatrixMediaBrowserCoverage(c *Client) {
 		"/Sessions",
 		"/System/Endpoint",
 		"/System/Ping", "/System/WakeOnLanInfo", "/UserItems/Resume?Limit=24",
-		"/UserViews/GroupingOptions", "/Users/Me", "/Users/Public", "/Users/{userId}", "/SyncPlay/List",
+		"/UserViews", "/UserViews/GroupingOptions", "/Users/Me", "/Users/Public", "/Users/{userId}", "/SyncPlay/List",
 		"/Videos/{movieId}/AdditionalParts", "/Years", "/Years/2020",
 	} {
 		c.Steps = append(c.Steps, Step{Name: "fixture GET " + path, Class: classDetail, Path: path, registeredOnly: true})
 		if strings.Contains(path, "/Images/Primary") {
 			c.Steps = append(c.Steps, Step{Name: "fixture HEAD " + path, Class: classDetail, Method: http.MethodHead, Path: path, registeredOnly: true})
 		}
+	}
+	for _, path := range []string{
+		"/UserImage", "/Users/{userId}/Images/Primary", "/Users/{userId}/Images/Primary/0",
+	} {
+		c.Steps = append(c.Steps,
+			Step{Name: "fixture GET " + path, Class: classDetail, Path: path},
+			Step{Name: "fixture HEAD " + path, Class: classDetail, Method: http.MethodHead, Path: path},
+		)
 	}
 	for _, path := range []string{
 		"/ScheduledTasks", "/System/ActivityLog/Entries?Limit=20",
@@ -140,6 +213,28 @@ func addMatrixMediaBrowserCoverage(c *Client) {
 		c.Steps = append(c.Steps, Step{Name: "fixture owner GET " + path, Class: classBrowse, Path: path, OwnerOnly: true, registeredOnly: true})
 	}
 
+	if live {
+		c.Steps = append(c.Steps,
+			Step{Name: "fixture live channel list", Class: classGuide, Path: "/LiveTv/Channels?Limit=24", Discover: discoverMBItem("mbLiveChannel", "TvChannel")},
+			Step{Name: "fixture live channel detail", Class: classDetail, Path: "/LiveTv/Channels/{mbLiveChannel}"},
+			Step{Name: "fixture live programme list", Class: classGuide, Path: "/LiveTv/Programs?ChannelIds={mbLiveChannel}&Limit=24", Discover: discoverMBItem("mbLiveProgram", "Program")},
+			Step{Name: "fixture live programme detail", Class: classDetail, Path: "/LiveTv/Programs/{mbLiveProgram}"},
+		)
+	}
+	c.Steps = append(c.Steps,
+		Step{Name: "fixture Quick Connect initiate", Class: classState, Method: http.MethodPost, Path: "/QuickConnect/Initiate", Discover: discoverMatrixQuickConnect},
+		Step{Name: "fixture Quick Connect poll", Class: classDetail, Path: "/QuickConnect/Connect?secret={quickConnectSecret}"},
+		Step{Name: "fixture Quick Connect approve", Class: classState, Method: http.MethodPost, Path: "/QuickConnect/Authorize?code={quickConnectCode}"},
+		Step{Name: "fixture Quick Connect redeem", Class: classSignIn, Method: http.MethodPost, Path: "/Users/AuthenticateWithQuickConnect", Body: `{"Secret":"{quickConnectSecret}"}`},
+	)
+	if c.Surface == "jellyfin" {
+		c.Steps = append(c.Steps,
+			Step{Name: "fixture GET root", Class: classStatic, Path: "/"},
+			Step{Name: "fixture GET web sign-in", Class: classStatic, Path: "/web/ether-signin"},
+		)
+	} else {
+		c.Steps = append(c.Steps, Step{Name: "fixture GET Emby web", Class: classStatic, Path: "/web/"})
+	}
 	if c.Surface == "jellyfin" {
 		c.Steps = append(c.Steps, Step{Name: "fixture GET user root", Class: classDetail, Path: "/Users/{userId}/Items/Root"})
 	}
@@ -156,6 +251,31 @@ func addMatrixMediaBrowserCoverage(c *Client) {
 		Step{Name: "fixture DELETE playlist item", Class: classState, Method: http.MethodDelete, Path: "/Playlists/{matrixPlaylist}/Items?EntryIds={matrixPlaylistEntry}"},
 		Step{Name: "fixture DELETE playlist", Class: classState, Method: http.MethodDelete, Path: "/Playlists/{matrixPlaylist}"},
 	)
+	for _, method := range []string{http.MethodDelete, http.MethodPost} {
+		app := "Matrix" + method
+		user := "matrix-scratch-" + strings.ToLower(method)
+		userID := "matrixMB" + method
+		deleteUser := "/Users/{" + userID + "}"
+		if method == http.MethodPost {
+			deleteUser += "/Delete"
+		}
+		c.Steps = append(c.Steps,
+			Step{Name: "fixture create viewer " + method, Class: classState, Method: http.MethodPost, Path: "/Users/New", Body: `{"Name":"` + user + `","Password":"Matrix-audio-002-fixture"}`, OwnerOnly: true, Discover: discoverMatrixID(userID)},
+			Step{Name: "fixture viewer policy " + method, Class: classState, Method: http.MethodPost, Path: "/Users/{" + userID + "}/Policy", Body: `{"IsHidden":true}`, OwnerOnly: true},
+			Step{Name: "fixture viewer password " + method, Class: classState, Method: http.MethodPost, Path: "/Users/{" + userID + "}/Password", Body: `{"NewPw":"Matrix-audio-003-fixture"}`, OwnerOnly: true},
+			Step{Name: "fixture viewer password query " + method, Class: classState, Method: http.MethodPost, Path: "/Users/Password?userId={" + userID + "}", Body: `{"NewPw":"Matrix-audio-004-fixture"}`, OwnerOnly: true},
+			Step{Name: "fixture delete viewer " + method, Class: classState, Method: method, Path: deleteUser, OwnerOnly: true},
+		)
+		remove := "/Auth/Keys/{mbScratchKey}"
+		if method == http.MethodPost {
+			remove += "/Delete"
+		}
+		c.Steps = append(c.Steps,
+			Step{Name: "fixture API key create " + method, Class: classState, Method: http.MethodPost, Path: "/Auth/Keys?App=" + app, OwnerOnly: true},
+			Step{Name: "fixture API key discover " + method, Class: classBrowse, Path: "/Auth/Keys", Discover: discoverMatrixMBKey(app), OwnerOnly: true},
+			Step{Name: "fixture API key revoke " + method, Class: classState, Method: method, Path: remove, OwnerOnly: true},
+		)
+	}
 	for _, path := range []string{
 		"/UserPlayedItems/{movieId}", "/UserFavoriteItems/{movieId}", "/UserItems/{movieId}/Rating?Likes=true",
 		"/Users/{userId}/PlayedItems/{movieId}", "/Users/{userId}/FavoriteItems/{movieId}", "/Users/{userId}/Items/{movieId}/Rating?Likes=true",
@@ -164,6 +284,65 @@ func addMatrixMediaBrowserCoverage(c *Client) {
 			Step{Name: "fixture POST " + path, Class: classState, Method: http.MethodPost, Path: path, registeredOnly: true},
 			Step{Name: "fixture DELETE " + path, Class: classState, Method: http.MethodDelete, Path: path, registeredOnly: true},
 		)
+	}
+}
+
+func discoverMatrixMBMusicView(vars map[string]string, body []byte) {
+	var response struct {
+		Items []struct {
+			Name string
+			ID   string
+		}
+	}
+	if json.Unmarshal(body, &response) == nil {
+		for _, item := range response.Items {
+			if item.Name == "Matrix Albums" {
+				setOnce(vars, "matrixMBMusic", url.PathEscape(item.ID))
+			}
+		}
+	}
+}
+
+func discoverMatrixMBArtist(vars map[string]string, body []byte) {
+	var response struct {
+		Items []struct {
+			Name string
+		}
+	}
+	if json.Unmarshal(body, &response) == nil && len(response.Items) != 0 {
+		setOnce(vars, "matrixMBArtist", url.PathEscape(response.Items[0].Name))
+	}
+}
+
+func discoverMatrixMBKey(app string) func(map[string]string, []byte) {
+	return func(vars map[string]string, body []byte) {
+		delete(vars, "mbScratchKey")
+		var result struct {
+			Items []struct {
+				AppName     string
+				AccessToken string
+			}
+		}
+		if json.Unmarshal(body, &result) != nil {
+			return
+		}
+		for _, item := range result.Items {
+			if item.AppName == app && item.AccessToken != "" {
+				vars["mbScratchKey"] = url.PathEscape(item.AccessToken)
+				return
+			}
+		}
+	}
+}
+
+func discoverMatrixQuickConnect(vars map[string]string, body []byte) {
+	var response struct {
+		Secret string
+		Code   string
+	}
+	if json.Unmarshal(body, &response) == nil && response.Secret != "" && response.Code != "" {
+		vars["quickConnectSecret"] = response.Secret
+		vars["quickConnectCode"] = response.Code
 	}
 }
 
@@ -189,8 +368,14 @@ func discoverMatrixMBPlaylistEntry(vars map[string]string, body []byte) {
 }
 
 func addMatrixPlexCoverage(c *Client) {
+	c.Steps = append(c.Steps, Step{Name: "sync compatibility", Class: classStatic, Path: "/sync"})
 	const page = "X-Plex-Container-Start=0&X-Plex-Container-Size=24"
 	for _, path := range []string{
+		"/myplex/account", "/playQueues", "/search?query=star&limit=24",
+		"/library/metadata/{movieKey}/subscription/modes", "/library/metadata/{movieKey}/users/top",
+		"/photo/:/transcode?url=%2Flibrary%2Fmetadata%2F{movieKey}%2Fthumb&width=500&height=800",
+		"/service/ultrablur/colors?url=%2Flibrary%2Fmetadata%2F{movieKey}%2Fthumb",
+		"/services/ultrablur/colors?url=%2Flibrary%2Fmetadata%2F{movieKey}%2Fthumb",
 		"/library/sections/{movieSection}", "/library/sections/{movieSection}/genre/Action?" + page,
 		"/library/metadata/{movieKey}/thumb", "/library/metadata/{movieKey}/thumb/1",
 		"/library/metadata/{episodeKey}/parent", "/library/metadata/{episodeKey}/grandparent",
@@ -201,6 +386,7 @@ func addMatrixPlexCoverage(c *Client) {
 		"/library/metadata/{movieKey}/posters", "/library/metadata/{movieKey}/arts",
 		"/library/metadata/{playlistKey}/clearLogos", "/library/metadata/{playlistKey}/themes",
 		"/library/collections/{collectionKey}/items?" + page,
+		"/library/collections/{collectionKey}/thumb/1?width=500",
 		"/hubs/metadata/{movieKey}", "/hubs/metadata/{movieKey}/related",
 		"/hubs/sections/{movieSection}/continueWatching/items?" + page,
 		"/hubs/sections/{movieSection}/popular?" + page, "/hubs/sections/{movieSection}/promoted?count=12",
@@ -213,7 +399,7 @@ func addMatrixPlexCoverage(c *Client) {
 		)
 	}
 	for _, path := range []string{
-		"/:/prefs", "/accounts", "/devices", "/butler",
+		"/:/prefs", "/accounts", "/devices", "/butler", "/security/token",
 		"/statistics/bandwidth", "/statistics/media", "/statistics/resources",
 		"/history?X-Plex-Container-Start=0&X-Plex-Container-Size=24",
 		"/status/sessions/history/all?X-Plex-Container-Start=0&X-Plex-Container-Size=24",
@@ -221,6 +407,29 @@ func addMatrixPlexCoverage(c *Client) {
 		c.Steps = append(c.Steps,
 			Step{Name: "fixture owner GET " + path, Class: classBrowse, Path: path, OwnerOnly: true, registeredOnly: true},
 			Step{Name: "fixture owner HEAD " + path, Class: classBrowse, Method: http.MethodHead, Path: path, OwnerOnly: true, registeredOnly: true},
+		)
+	}
+	for _, item := range []struct {
+		path, array, field, variable string
+	}{
+		{"/accounts", "Account", "id", "plexAccount"},
+		{"/devices", "Device", "id", "plexDevice"},
+		{"/status/sessions/history/all", "Metadata", "historyKey", "plexHistory"},
+	} {
+		path := item.path
+		if item.variable == "plexHistory" {
+			path += "?" + page
+		}
+		c.Steps = append(c.Steps, Step{Name: "fixture discover " + item.variable, Class: classBrowse, Path: path, OwnerOnly: true,
+			Discover: discoverMatrixPlexField(item.array, item.field, item.variable),
+		})
+	}
+	for _, path := range []string{
+		"/accounts/{plexAccount}", "/devices/{plexDevice}", "/status/sessions/history/{plexHistory}",
+	} {
+		c.Steps = append(c.Steps,
+			Step{Name: "fixture owner GET " + path, Class: classDetail, Path: path, OwnerOnly: true},
+			Step{Name: "fixture owner HEAD " + path, Class: classDetail, Method: http.MethodHead, Path: path, OwnerOnly: true},
 		)
 	}
 	// Probe the matching HEAD handlers using the same real IDs and paging
@@ -235,5 +444,28 @@ func addMatrixPlexCoverage(c *Client) {
 		"/playlists/{playlistKey}", "/playlists/{playlistKey}/items?" + page, "/livetv/dvrs",
 	} {
 		c.Steps = append(c.Steps, Step{Name: "fixture HEAD " + path, Class: classDetail, Method: http.MethodHead, Path: path, registeredOnly: true})
+	}
+}
+
+func discoverMatrixPlexField(array, field, variable string) func(map[string]string, []byte) {
+	return func(vars map[string]string, body []byte) {
+		var response struct {
+			MediaContainer map[string]json.RawMessage
+		}
+		if json.Unmarshal(body, &response) != nil {
+			return
+		}
+		var entries []map[string]any
+		if json.Unmarshal(response.MediaContainer[array], &entries) == nil {
+			for _, entry := range entries {
+				if value := jsonText(entry[field]); value != "" {
+					if field == "historyKey" {
+						value = strings.TrimPrefix(value, "/status/sessions/history/")
+					}
+					setOnce(vars, variable, url.PathEscape(value))
+					return
+				}
+			}
+		}
 	}
 }

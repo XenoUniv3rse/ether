@@ -1,6 +1,8 @@
 package app
 
 import (
+	"archive/zip"
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -9,8 +11,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/braedonsaunders/ether/internal/config"
 	"github.com/braedonsaunders/ether/internal/core"
+	"github.com/braedonsaunders/ether/internal/frontends/vela"
 	"github.com/braedonsaunders/ether/internal/livetv"
+	"github.com/braedonsaunders/ether/internal/personalize"
 )
 
 // Give viewers without a generated household playlist a real item and queue
@@ -36,7 +41,9 @@ func seedPerfMatrixPlaylistCoverage(ctx context.Context, db *sql.DB) error {
 	return tx.Commit()
 }
 
-func seedPerfMatrixCatalogue(ctx context.Context, db *sql.DB, live bool) error {
+const matrixAvatarURL = "https://plex.tv/matrix/fixture-avatar.jpg"
+
+func seedPerfMatrixCatalogue(ctx context.Context, db *sql.DB, live, exercisePluginHost bool) error {
 	now := time.Now().UTC()
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
@@ -63,7 +70,7 @@ func seedPerfMatrixCatalogue(ctx context.Context, db *sql.DB, live bool) error {
 			return err
 		}
 	}
-	if err := seedPerfRemotePlugin(ctx, tx, now.Unix()); err != nil {
+	if err := seedPerfRemotePlugin(ctx, tx, now.Unix(), exercisePluginHost); err != nil {
 		return err
 	}
 	if err := seedPerfMatrixCollections(ctx, tx, now); err != nil {
@@ -235,4 +242,64 @@ func seedPerfMatrixRows(ctx context.Context, a *App) error {
 		}
 	}
 	return nil
+}
+
+func seedPerfMatrixCollectionRow(ctx context.Context, a *App) error {
+	page, _ := a.personalize.Page(ctx, core.PageHome)
+	row := core.Row{
+		Name:      "Matrix collection cards",
+		Source:    core.RowSource{Kind: personalize.SourceCollectionCards, Params: map[string]string{"match": "Fixture collection 001"}},
+		Placement: core.RowPlacement{Mode: core.PlacementShow},
+	}
+	page.Rows = append([]core.Row{row}, page.Rows...)
+	_, err := a.personalize.SavePage(ctx, page)
+	return err
+}
+
+// Install the same archive format used by the console so the public asset
+// requests hit real installed documents and files in the per-case copy.
+func seedPerfMatrixSkins(ctx context.Context, a *App, preview []byte) error {
+	for _, manifest := range []string{
+		`{"schema":1,"id":"matrix-pack","name":"Matrix pack","version":"1.0.0","engine":"cinematic","swatches":["#10141c","#f4f7fb","#38bdf8"],"images":{"preview":"assets/preview.jpg"},"palette":{"canvas":"#10141c","surface":"#131720","ink":"#f4f7fb","accent":"#38bdf8"}}`,
+		`{"schema":1,"renderer":1,"id":"matrix-document","name":"Matrix document","version":"1.0.0","swatches":["#10141c","#f4f7fb","#38bdf8"],"preview":"assets/preview.jpg","ui":{"density":"compact"},"routes":{"home":{"template":"grid"}}}`,
+	} {
+		var data bytes.Buffer
+		archive := zip.NewWriter(&data)
+		for _, file := range []struct {
+			name string
+			data []byte
+		}{{"skin.json", []byte(manifest)}, {"assets/preview.jpg", preview}} {
+			dst, err := archive.Create(file.name)
+			if err != nil {
+				return err
+			}
+			if _, err := dst.Write(file.data); err != nil {
+				return err
+			}
+		}
+		if err := archive.Close(); err != nil {
+			return err
+		}
+		if _, err := a.velaSkinsStore().InstallArchive(ctx, data.Bytes()); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func seedPerfMatrixBranding(ctx context.Context, a *App) error {
+	const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160 40"><rect width="160" height="40" fill="#202838"/></svg>`
+	wordmark, err := vela.UploadWordmark(ctx, a.db, strings.NewReader(svg))
+	if err != nil {
+		return err
+	}
+	return a.cfg.Update(func(cfg *config.Config) error {
+		surface := cfg.Frontends["vela"]
+		if surface.Settings == nil {
+			surface.Settings = make(map[string]any)
+		}
+		surface.Settings["wordmark"] = map[string]any{"url": wordmark.URL, "width": wordmark.Width, "height": wordmark.Height}
+		cfg.Frontends["vela"] = surface
+		return nil
+	})
 }

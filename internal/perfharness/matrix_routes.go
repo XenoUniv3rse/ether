@@ -41,8 +41,12 @@ func (r *Runner) SetMatrixRoutes(routes MatrixRoutes) {
 					pattern.WriteString(".*")
 					score -= 2
 				default:
-					pattern.WriteString("[^/]+")
-					score--
+					if _, constraint, ok := strings.Cut(token[1:len(token)-1], ":"); ok {
+						pattern.WriteString("(?:" + constraint + ")")
+					} else {
+						pattern.WriteString("[^/]+")
+						score--
+					}
 				}
 				pos = span[1]
 			}

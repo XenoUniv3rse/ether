@@ -234,9 +234,11 @@ RETURNING attempts,window_start,app_name`, key, now, l.namespace, kind, addr, la
 	if err = tx.Commit(); err != nil {
 		return false, 0, err
 	}
-	// Best-effort bounded cleanup runs outside the admission transaction; a
-	// cleanup failure never resets an active bucket or grants access.
-	_, _ = l.Cleanup(ctx, 16)
+	// The poll limiter is used by read endpoints. App maintenance sweeps
+	// those buckets separately from the required admission writes.
+	if l.namespace != "poll" {
+		_, _ = l.Cleanup(ctx, 16)
+	}
 	var retry time.Duration
 	if ipCount > l.perIP {
 		retry = max(retry, time.Duration(ipStart+l.window.Milliseconds()-now)*time.Millisecond)

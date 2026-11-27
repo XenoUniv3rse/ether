@@ -254,7 +254,10 @@ func (s *ImageGrantService) SignPage(ctx context.Context, req frontend.ImagePage
 	if err != nil {
 		return nil, core.ErrNotAvailable
 	}
-	ctx = frontend.WithPrimaryArtworkOnly(frontend.WithArtworkRows(ctx))
+	ctx = frontend.WithArtworkRows(ctx)
+	if !req.IncludeVariants {
+		ctx = frontend.WithPrimaryArtworkOnly(ctx)
+	}
 	experience := s.experience()
 	if page, ok := experience.(frontend.ItemArtworkPage); ok {
 		keys := make([]core.RatingKey, 0, len(req.Titles))
@@ -279,7 +282,7 @@ func (s *ImageGrantService) SignPage(ctx context.Context, req frontend.ImagePage
 			if len(req.Ranked) > 0 {
 				images = rankedPageImages(images, req.Ranked[key], req.RankedWide)
 			}
-			item, err := sealTitleBatchItem(macKey, encBlock, string(s.surface), viewer.ID, req.Device.Language, key, images, true, wanted)
+			item, err := sealTitleBatchItem(macKey, encBlock, string(s.surface), viewer.ID, req.Device.Language, key, images, true, wanted, req.IncludeVariants)
 			if err != nil {
 				return nil, err
 			}
@@ -308,7 +311,7 @@ func (s *ImageGrantService) SignPage(ctx context.Context, req frontend.ImagePage
 		if err != nil {
 			return nil, err
 		}
-		item, err := sealTitleBatchItem(macKey, encBlock, string(s.surface), viewer.ID, req.Device.Language, title.Key, rankedPageImages(images, req.Ranked[title.Key], req.RankedWide), complete, wanted)
+		item, err := sealTitleBatchItem(macKey, encBlock, string(s.surface), viewer.ID, req.Device.Language, title.Key, rankedPageImages(images, req.Ranked[title.Key], req.RankedWide), complete, wanted, req.IncludeVariants)
 		if err != nil {
 			return nil, err
 		}
@@ -317,14 +320,14 @@ func (s *ImageGrantService) SignPage(ctx context.Context, req frontend.ImagePage
 	return out, nil
 }
 
-func sealTitleBatchItem(macKey []byte, encBlock cipher.Block, surface string, viewer int64, language string, key core.RatingKey, images []frontend.Image, complete bool, wanted map[string]bool) (frontend.ImageBatchItem, error) {
+func sealTitleBatchItem(macKey []byte, encBlock cipher.Block, surface string, viewer int64, language string, key core.RatingKey, images []frontend.Image, complete bool, wanted map[string]bool, includeVariants bool) (frontend.ImageBatchItem, error) {
 	item := frontend.ImageBatchItem{Item: key, Authoritative: complete}
 	if !complete {
 		return item, nil
 	}
 	chosen := map[string]bool{}
 	for _, image := range images {
-		if !wanted[image.Kind] || chosen[image.Kind] || image.Path == "" {
+		if !wanted[image.Kind] || (!includeVariants && chosen[image.Kind]) || image.Path == "" {
 			continue
 		}
 		claims := imageClaims{

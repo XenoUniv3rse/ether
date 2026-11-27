@@ -3,6 +3,7 @@ package app
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"image"
@@ -255,13 +256,20 @@ func runPerfMatrixCase(t *testing.T, ctx context.Context, fixture string, c perf
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := seedPerfMatrixCatalogue(ctx, db, c.live); err != nil {
+	if err := seedPerfMatrixCatalogue(ctx, db, c.live, len(clients) == 0 || slices.Contains(clients, "remote plugin")); err != nil {
 		db.Close()
 		t.Fatal(err)
 	}
 	if err := seedPerfMatrixPlaylistCoverage(ctx, db); err != nil {
 		db.Close()
 		t.Fatal(err)
+	}
+	if len(clients) == 0 || slices.Contains(clients, "infuse-jellyfin") || slices.Contains(clients, "emby-sdk") {
+		if _, err := db.ExecContext(ctx, `UPDATE auth_users SET thumb=?, plex_id=COALESCE(plex_id, 910100+id)
+			WHERE is_owner=1 OR username LIKE 'viewer%'`, matrixAvatarURL); err != nil {
+			db.Close()
+			t.Fatal(err)
+		}
 	}
 	viewers, err := perfharness.MintCredentials(ctx, db, 4)
 	db.Close()
@@ -308,6 +316,28 @@ func runPerfMatrixCase(t *testing.T, ctx context.Context, fixture string, c perf
 			t.Fatal(err)
 		}
 	}
+	if len(clients) == 0 || slices.Contains(clients, "infuse-jellyfin") || slices.Contains(clients, "emby-sdk") {
+		hash := sha256.Sum256([]byte("plex-avatar-v1\x00" + matrixAvatarURL))
+		if _, _, err := a.images.GetLoaded(ctx, fmt.Sprintf("plex-avatar/%x", hash), func(context.Context) ([]byte, string, error) {
+			return poster.Bytes(), "image/jpeg", nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(clients) == 0 || slices.Contains(clients, "console") {
+		if err := a.cache.Put("matrix-cache-release", 0, []byte("matrix cache fixture")); err != nil {
+			t.Fatal(err)
+		}
+		now := time.Now().UTC()
+		play := &core.PlaySession{
+			ID: "matrix-recorded-play", UserID: viewers[0].ID, Username: viewers[0].Username,
+			Key: core.MovieKey(106), TitleName: "Fixture movie", ClientID: "matrix-console-playback",
+			StartedAt: now.Add(-10 * time.Minute), BytesServed: 1 << 20,
+		}
+		if err := a.stats.Record(ctx, play, true, ""); err != nil {
+			t.Fatal(err)
+		}
+	}
 	a.catalog.FreezeCacheMinute()
 	viewers[0].PluginHost, err = perfMatrixPluginCredential(ctx, a, viewers[0].ID)
 	if err != nil {
@@ -319,8 +349,20 @@ func runPerfMatrixCase(t *testing.T, ctx context.Context, fixture string, c perf
 		}
 	}
 	if len(clients) == 0 || slices.Contains(clients, "vela") {
-		if err := installPerfMatrixVelaCatalogue(ctx, a, viewers[c.viewer]); err != nil {
+		if err := seedPerfMatrixBranding(ctx, a); err != nil {
+			t.Fatal("Vela branding fixture:", err)
+		}
+		if err := seedPerfMatrixSkins(ctx, a, poster.Bytes()); err != nil {
+			t.Fatal("Vela skin fixture:", err)
+		}
+		if err := installPerfMatrixVelaCatalogue(ctx, a, viewers[c.viewer], poster.Bytes()); err != nil {
 			t.Fatal("Vela catalogue fixture:", err)
+		}
+	}
+	if len(clients) == 0 || slices.Contains(clients, "infuse-jellyfin") || slices.Contains(clients, "emby-sdk") ||
+		slices.Contains(clients, "moonfin") || slices.Contains(clients, "swiftfin") || slices.Contains(clients, "infuse-emby") {
+		if err := installPerfMatrixMediaBrowserMusic(ctx, a, viewers[c.viewer]); err != nil {
+			t.Fatal("MediaBrowser music fixture:", err)
 		}
 	}
 	if c.live {
@@ -337,6 +379,11 @@ func runPerfMatrixCase(t *testing.T, ctx context.Context, fixture string, c perf
 		if err := seedPerfMatrixRows(ctx, a); err != nil {
 			report.AddGap(c.name, "harness", "", "", "recommendation rows could not be seeded")
 			t.Error("recommendations fixture:", err)
+		}
+	}
+	if len(clients) == 0 || slices.Contains(clients, "silo-appletv") || slices.Contains(clients, "vela") {
+		if err := seedPerfMatrixCollectionRow(ctx, a); err != nil {
+			t.Fatal("collection card row fixture:", err)
 		}
 	}
 	if c.visibility != "" {
@@ -408,7 +455,8 @@ func runPerfMatrixCase(t *testing.T, ctx context.Context, fixture string, c perf
 	}
 	inventory := perfMatrixInventory(t, a, surfaces, music.methods)
 	r.SetMatrixRoutes(inventory)
-	perfharness.AppendMatrixReads(cs, inventory, perfMatrixRouteExceptions)
+	exceptions := matrixCaseRouteExceptions(inventory, c.live)
+	perfharness.AppendMatrixReads(cs, inventory, exceptions)
 	cs = perfharness.Only(cs, clients)
 	if steps := os.Getenv("ETHER_PERF_GATE_STEPS"); steps != "" {
 		cs = perfharness.OnlySteps(cs, strings.Split(steps, ","))
@@ -459,7 +507,7 @@ func runPerfMatrixCase(t *testing.T, ctx context.Context, fixture string, c perf
 	}
 	report.AddBackground(c.name, background)
 	report.Add(c.name, r.Results(), byTag, cs)
-	report.CheckRoutes(c.name, inventory, r.Results(), byTag, perfMatrixRouteExceptions)
+	report.CheckRoutes(c.name, inventory, r.Results(), byTag, exceptions)
 	t.Logf("recorded %d attempts", len(r.Results()))
 	writeReport()
 }

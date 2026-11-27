@@ -34,9 +34,12 @@ func MatrixClients(live bool) []Client {
 		case "console":
 			addMatrixConsoleCoverage(&clients[i])
 		case "infuse-jellyfin", "emby-sdk":
-			addMatrixMediaBrowserCoverage(&clients[i])
+			addMatrixMediaBrowserCoverage(&clients[i], live)
 		case "plex-appletv":
 			addMatrixPlexCoverage(&clients[i])
+			if live {
+				addMatrixPlexLiveCoverage(&clients[i])
+			}
 			clients[i].Steps = append(clients[i].Steps,
 				Step{Name: "HEAD movies collections type=18", Class: classBrowse, Method: http.MethodHead, Path: "/library/sections/{movieSection}/all?type=18&X-Plex-Container-Start=0&X-Plex-Container-Size=50"},
 				Step{Name: "HEAD /hubs/search with query", Class: classSearch, Method: http.MethodHead, Path: "/hubs/search?query=star&limit=30"},
@@ -45,6 +48,8 @@ func MatrixClients(live bool) []Client {
 				Step{Name: "GET /library/all/top movies", Class: classBrowse, Path: "/library/all/top?type=1"},
 				Step{Name: "HEAD /library/all/top movies", Class: classBrowse, Method: http.MethodHead, Path: "/library/all/top?type=1"},
 			)
+		case "plex-appletv playback":
+			addMatrixPlexMutations(&clients[i])
 		case "xtream":
 			const auth = "?username={xtreamUser}&password={xtreamPass}"
 			for j := range clients[i].Steps {
@@ -79,10 +84,7 @@ func MatrixClients(live bool) []Client {
 				cold, lineup,
 			)
 		case "silo-appletv":
-			clients[i].Steps = append(clients[i].Steps,
-				Step{Name: "set series audio preference", Class: classState, Method: http.MethodPut, Path: "/api/v2/audio-prefs/{seriesId}", Body: `{"audio_language":"en"}`},
-				Step{Name: "clear series audio preference", Class: classState, Method: http.MethodDelete, Path: "/api/v2/audio-prefs/{seriesId}"},
-			)
+			addMatrixSiloCoverage(&clients[i])
 		case "stremio":
 			clients[i].Prefix = "/stremio"
 			for j := range clients[i].Steps {
@@ -131,6 +133,7 @@ func MatrixClients(live bool) []Client {
 				Step{Name: "live channels", Class: classGuide, Path: "/live/channels"},
 				Step{Name: "live guide", Class: classGuide, Path: "/live/guide?from={guideFrom}&until={guideUntil}&limit=100"},
 			)
+			addMatrixVelaCoverage(&clients[i])
 			if live {
 				headers := clients[i].Headers
 				clients[i].Headers = func(s *session) http.Header {
@@ -189,6 +192,17 @@ func discoverMatrixStremioStream(vars map[string]string, body []byte) {
 	token, tail, split := strings.Cut(rest, "/")
 	if ok && split && token != "" && tail == "file" {
 		vars["stremioTicket"] = url.PathEscape(token)
+	}
+}
+
+func discoverMatrixID(variable string) func(map[string]string, []byte) {
+	return func(vars map[string]string, body []byte) {
+		var item struct {
+			ID string `json:"id"`
+		}
+		if json.Unmarshal(body, &item) == nil && item.ID != "" {
+			setOnce(vars, variable, url.PathEscape(item.ID))
+		}
 	}
 }
 
@@ -410,6 +424,11 @@ func allowedReadWrites(route string, rec TraceRecord) int64 {
 		switch {
 		case sql == lastSeen:
 			seenWrites = max(seenWrites, min(1, statement.Count))
+		case route == rec.Method+" /security/token" && rec.Surface == "plex" &&
+			strings.HasPrefix(sql, "INSERT INTO auth_delegations(token_hash,user_id,expires_at) SELECT ?,id,? FROM auth_users "):
+			// This read-shaped Plex API mints a credential whose digest must
+			// exist before another node can authenticate it.
+			writes += min(1, statement.Count)
 		case rec.Surface == "plex" && plexVariantAllocation.MatchString(sql):
 			writes += statement.Count
 		case rec.Surface == "plex" && rec.Method == http.MethodGet && plexWatchMutation(rec.Path, sql):
