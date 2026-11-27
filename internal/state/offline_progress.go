@@ -29,9 +29,9 @@ func (s *State) ApplyOfflineProgress(ctx context.Context, user int64, key core.R
 	return result, err
 }
 
-// ResolveItemPlayback applies the same completion and resume thresholds as
-// a stopped timeline report, while retaining omitted fields.
-func ResolveItemPlayback(p frontend.ItemPlaybackPatch, duration, resumeAfter time.Duration, skipResume bool) (position *time.Duration, count *int, watched bool) {
+// ResolveItemPlayback preserves an explicit position until the item is marked
+// watched or the position reaches the playback completion threshold.
+func ResolveItemPlayback(p frontend.ItemPlaybackPatch, duration time.Duration) (position *time.Duration, count *int, watched bool) {
 	position, count = p.Position, p.PlayCount
 	watched = p.Played != nil && *p.Played
 	if p.Played != nil && !*p.Played {
@@ -41,7 +41,7 @@ func ResolveItemPlayback(p frontend.ItemPlaybackPatch, duration, resumeAfter tim
 	if position != nil {
 		watched = watched || ReachedWatchedThreshold(*position, duration)
 	}
-	if watched || (position != nil && (skipResume || NotStarted(*position, duration, resumeAfter))) {
+	if watched {
 		zero := time.Duration(0)
 		position = &zero
 	}
@@ -55,7 +55,6 @@ func (s *State) PatchItemPlayback(ctx context.Context, user int64, key core.Rati
 	if patch.LastPlayedAt != nil && patch.LastPlayedAt.Before(at) {
 		at = *patch.LastPlayedAt
 	}
-	skipResume := patch.Position != nil && s.shouldSkipResume(ctx, key)
 	return s.updateAt(ctx, user, []core.RatingKey{key}, at, func(cur *row, now time.Time) (bool, bool, []Event) {
 		if s.staleOfflineProgress(cur, now, user, key) {
 			cur.skipSave = true
@@ -65,7 +64,7 @@ func (s *State) PatchItemPlayback(ctx context.Context, user int64, key core.Rati
 		if dur <= 0 {
 			dur = duration
 		}
-		position, count, watched := ResolveItemPlayback(patch, dur, s.ResumeAfter(), skipResume)
+		position, count, watched := ResolveItemPlayback(patch, dur)
 		before, previousCount := cur.ws.ViewOffset, cur.ws.ViewCount
 		if count != nil {
 			cur.ws.ViewCount = *count

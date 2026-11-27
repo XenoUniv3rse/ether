@@ -17,7 +17,7 @@ type catchUpWatchTestHost interface {
 	frontend.CatchUpLibrary
 	CatchUpProgress(ctx context.Context, viewer *frontend.Viewer, id string, offset, duration time.Duration, state string, resumeAfter time.Duration) error
 	CatchUpSetWatched(ctx context.Context, viewer *frontend.Viewer, id string, watched bool) error
-	CatchUpPatchUserData(context.Context, *frontend.Viewer, string, frontend.CatchUpUserDataPatch, time.Duration) error
+	frontend.CatchUpUserDataWriter
 }
 
 func catchUpWatchFixture(t *testing.T, now time.Time) (*Service, Channel, catchUpWatchTestHost) {
@@ -100,20 +100,20 @@ func TestCatchUpWatchState(t *testing.T) {
 	}
 	otherAiring := frontend.CatchUpGUID(episodes.Items[1])
 	observed, older := now.Add(-time.Hour), now.Add(-2*time.Hour)
-	offset, zero := 12*time.Minute, time.Duration(0)
+	offset, zero := 123*time.Second, time.Duration(0)
 	favorite, likes, dislike := true, true, false
 	patch := frontend.CatchUpUserDataPatch{
 		ItemPlaybackPatch: frontend.ItemPlaybackPatch{Position: &offset, LastPlayedAt: &observed},
 		Favorite:          &favorite, Likes: &likes,
 	}
-	if err := h.CatchUpPatchUserData(t.Context(), owner, otherAiring, patch, 0); err != nil {
+	if err := h.CatchUpPatchUserData(t.Context(), owner, otherAiring, patch); err != nil {
 		t.Fatal(err)
 	}
 	patch = frontend.CatchUpUserDataPatch{
 		ItemPlaybackPatch: frontend.ItemPlaybackPatch{Position: &zero, LastPlayedAt: &older},
 		Likes:             &dislike,
 	}
-	if err := h.CatchUpPatchUserData(t.Context(), owner, otherAiring, patch, 0); err != nil {
+	if err := h.CatchUpPatchUserData(t.Context(), owner, otherAiring, patch); err != nil {
 		t.Fatal(err)
 	}
 	if w := catchUpEpisode(t, h, owner, otherAiring).Watch; w.ViewOffset != offset || !w.IsFavorite || w.UserRating != 2 {

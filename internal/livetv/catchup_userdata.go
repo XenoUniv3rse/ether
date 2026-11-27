@@ -2,14 +2,13 @@ package livetv
 
 import (
 	"context"
-	"time"
 
 	"github.com/braedonsaunders/ether/internal/core"
 	"github.com/braedonsaunders/ether/internal/frontend"
 	"github.com/braedonsaunders/ether/internal/state"
 )
 
-func (h liveTVHost) CatchUpPatchUserData(ctx context.Context, v *frontend.Viewer, id string, patch frontend.CatchUpUserDataPatch, resumeAfter time.Duration) error {
+func (h liveTVHost) CatchUpPatchUserData(ctx context.Context, v *frontend.Viewer, id string, patch frontend.CatchUpUserDataPatch) error {
 	ctx, cancel := catchUpWriteContext(ctx)
 	defer cancel()
 	a, err := h.catchUpAiring(ctx, v, id)
@@ -21,7 +20,7 @@ func (h liveTVHost) CatchUpPatchUserData(ctx context.Context, v *frontend.Viewer
 		if patch.LastPlayedAt != nil {
 			at = min(at, patch.LastPlayedAt.UnixMilli())
 		}
-		position, count, watched := state.ResolveItemPlayback(patch.ItemPlaybackPatch, a.length, resumeAfter, false)
+		position, count, watched := state.ResolveItemPlayback(patch.ItemPlaybackPatch, a.length)
 		var offset, viewed *int64
 		if position != nil {
 			ms := position.Milliseconds()

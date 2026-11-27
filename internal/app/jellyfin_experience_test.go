@@ -166,7 +166,7 @@ func TestMediaBrowserRealExperience(t *testing.T) {
 			}
 			check(paths[0], `{"IsFavorite":true,"Likes":true}`, 6000000000, 0, true, 10)
 			check(paths[1], `{"PlaybackPositionTicks":0,"Played":true,"PlayCount":3,"LastPlayedDate":"2022-01-01T03:04:05Z","Likes":false}`, 6000000000, 0, true, 2)
-			check(paths[1], `{"PlaybackPositionTicks":10000000,"LastPlayedDate":"2022-01-03T03:04:05Z"}`, 0, 0, true, 2)
+			check(paths[1], `{"PlaybackPositionTicks":0,"LastPlayedDate":"2022-01-03T03:04:05Z"}`, 0, 0, true, 2)
 			check(paths[0], `{"PlaybackPositionTicks":33000000000,"PlayCount":2,"LastPlayedDate":"2022-01-04T03:04:05Z"}`, 0, 2, true, 2)
 
 			liveTitle := title
@@ -175,6 +175,45 @@ func TestMediaBrowserRealExperience(t *testing.T) {
 				t.Fatal(err)
 			}
 			liveID := ids.RatingKeyGUID(liveTitle.Key)
+			// 123 seconds is below the playback resume threshold for an hour-long movie.
+			const syncedTicks = 1_230_000_000
+			observed := time.Now().UTC().Truncate(time.Millisecond)
+			updatePath := "/UserItems/" + liveID + "/UserData?userId=" + uid
+			if surface == "emby" {
+				updatePath = "/Users/" + uid + "/Items/" + liveID + "/UserData"
+			}
+			assertSynced := func(response *httptest.ResponseRecorder, itemDetail bool) {
+				t.Helper()
+				type userData struct {
+					PlaybackPositionTicks int64
+					LastPlayedDate        time.Time
+				}
+				var got struct {
+					userData
+					UserData userData
+				}
+				if response.Code != 200 || json.Unmarshal(response.Body.Bytes(), &got) != nil {
+					t.Fatalf("offline sync response %d %s", response.Code, response.Body)
+				}
+				data := got.userData
+				if itemDetail {
+					data = got.UserData
+				}
+				if data.PlaybackPositionTicks != syncedTicks || !data.LastPlayedDate.Equal(observed) {
+					t.Fatalf("offline sync read-back %s", response.Body)
+				}
+			}
+			prefix := "/" + surface
+			body := fmt.Sprintf(`{"PlaybackPositionTicks":%d,"LastPlayedDate":%q}`, syncedTicks, observed.Format(time.RFC3339Nano))
+			update := call("POST", prefix+updatePath, body, signed.AccessToken)
+			if surface == "jellyfin" {
+				assertSynced(update, false)
+			} else if update.Code != 200 || update.Body.Len() != 0 {
+				t.Fatalf("Emby offline sync response %d %s", update.Code, update.Body)
+			}
+			assertSynced(call("GET", prefix+"/UserItems/"+liveID+"/UserData", "", signed.AccessToken), false)
+			assertSynced(call("GET", prefix+"/Users/"+uid+"/Items/"+liveID, "", signed.AccessToken), true)
+
 			for _, step := range []struct {
 				suffix        string
 				ticks, resume int64
