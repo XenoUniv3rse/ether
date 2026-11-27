@@ -379,7 +379,7 @@ func (s *Session) adaptiveRungsLocked() ([]core.HLSRung, string) {
 			reason = "unsupported_container"
 		case v == nil || v.VariableFrameRate || base.FrameRate <= 0 || s.plan == nil || s.plan.Total() <= 0 || s.rtxTimeline || s.copyFallback || s.sourceLimitKbps > 0:
 			reason = "unsupported_timeline"
-		case s.rungs[0].decision.VideoCopy && !s.adaptiveCopyAligned:
+		case s.rungs[0].decision.VideoCopy && !s.adaptiveCopyAligned && !s.adaptiveExcludeCopy:
 			reason = "copy_alignment_unverified"
 		}
 	}
@@ -387,18 +387,12 @@ func (s *Session) adaptiveRungsLocked() ([]core.HLSRung, string) {
 	capped := false
 	for t, r := range rungs {
 		d := s.rungs[t].decision
-		if r.Bandwidth <= 0 || (videoOff && d.EncodesVideo(s.info)) {
+		if r.Bandwidth <= 0 || (videoOff && d.EncodesVideo(s.info)) || (s.adaptiveExcludeCopy && d.VideoCopy) {
 			continue
 		}
-		if t > 0 {
-			b := s.rungs[0].decision
-			if r.Bandwidth >= base.Bandwidth || r.Codec != base.Codec || r.DynamicRange != base.DynamicRange ||
-				r.FrameRate != base.FrameRate || d.Container != b.Container || d.AudioCodec != b.AudioCodec ||
-				d.AudioStream != b.AudioStream || d.AudioCopy != b.AudioCopy || d.AudioChannels != b.AudioChannels ||
-				d.AudioSampleRate != b.AudioSampleRate || d.AudioBitrateKbps != b.AudioBitrateKbps ||
-				!slices.Equal(d.AudioFilters, b.AudioFilters) || d.SubtitleStream != b.SubtitleStream || d.BurnSubtitles != b.BurnSubtitles {
-				continue
-			}
+		if t > 0 && (r.Bandwidth >= base.Bandwidth || r.Codec != base.Codec || r.DynamicRange != base.DynamicRange ||
+			r.FrameRate != base.FrameRate || !adaptiveTracksMatch(d, s.rungs[0].decision)) {
+			continue
 		}
 		if !s.rungWithinAdaptiveCapLocked(t) {
 			capped = true
@@ -419,6 +413,7 @@ func (s *Session) adaptiveRungsLocked() ([]core.HLSRung, string) {
 			break
 		}
 	}
+	sort.SliceStable(out, func(i, j int) bool { return out[i].Bandwidth > out[j].Bandwidth })
 	switch {
 	case len(out) > 1:
 		return out, ""
@@ -431,8 +426,37 @@ func (s *Session) adaptiveRungsLocked() ([]core.HLSRung, string) {
 	}
 }
 
+func adaptiveTracksMatch(d, base core.Decision) bool {
+	return d.Container == base.Container && d.AudioCodec == base.AudioCodec &&
+		d.AudioStream == base.AudioStream && d.AudioCopy == base.AudioCopy &&
+		d.AudioChannels == base.AudioChannels && d.AudioSampleRate == base.AudioSampleRate &&
+		d.AudioBitrateKbps == base.AudioBitrateKbps && slices.Equal(d.AudioFilters, base.AudioFilters) &&
+		d.SubtitleStream == base.SubtitleStream && d.BurnSubtitles == base.BurnSubtitles
+}
+
+// Use the best eligible encode as the base before authoring a new encode clock.
+func adaptiveEncodedTop(info core.MediaInfo, rungs []rung, cap int) int {
+	best := 0
+	if len(rungs) < 2 {
+		return best
+	}
+	base := rungs[0]
+	_, _, codec, dr := qualityMetadata(info, base)
+	for n, r := range rungs[1:] {
+		_, _, family, videoRange := qualityMetadata(info, r)
+		if r.decision.VideoCopy || family != codec || videoRange != dr || !adaptiveTracksMatch(r.decision, base.decision) ||
+			r.peakKbps >= base.peakKbps || (cap > 0 && r.peakKbps > cap) {
+			continue
+		}
+		if best == 0 || r.peakKbps > rungs[best].peakKbps {
+			best = n + 1
+		}
+	}
+	return best
+}
+
 func (s *Session) rungWithinAdaptiveCapLocked(t int) bool {
-	return !s.adaptiveHLS || s.adaptiveMaxKbps <= 0 || s.rungPeakKbpsLocked(t) <= s.adaptiveMaxKbps
+	return !s.adaptiveHLS || ((!s.adaptiveExcludeCopy || !s.rungs[t].decision.VideoCopy) && (s.adaptiveMaxKbps <= 0 || s.rungPeakKbpsLocked(t) <= s.adaptiveMaxKbps))
 }
 
 // adaptiveCopyIndex requires a known opening cut and an index reaching the

@@ -2059,6 +2059,13 @@ func (m *Manager) failoverWith(ctx context.Context, s *session, observed *genera
 			}
 		}
 		if err == nil {
+			if fo.down {
+				if adaptive, ok := hls.(core.AdaptiveBitrateCapper); ok && maxReplacementBps > 0 {
+					if _, capErr := adaptive.CapAdaptiveBitrate(m.urlFor(g), int(maxReplacementBps*8/1000)); capErr != nil {
+						log.Debug("adaptive bitrate cap could not be applied after source replacement", "err", capErr)
+					}
+				}
+			}
 			break
 		}
 		changed := false

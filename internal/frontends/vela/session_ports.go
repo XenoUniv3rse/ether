@@ -61,7 +61,7 @@ func (s *playSession) outputSnapshot() *playSession {
 		copy := *s.archive
 		archive = &copy
 	}
-	return &playSession{archive: archive, position: s.position, plan: copyPlanValue(s.plan).(object), source: s.source, seek: s.seek,
+	return &playSession{archive: archive, client: s.client, channelID: s.channelID, accessDevice: s.accessDevice, position: s.position, plan: copyPlanValue(s.plan).(object), source: s.source, seek: s.seek,
 		qualityRungs: s.qualityRungs, media: s.media, subtitleFormats: s.subtitleFormats,
 		canBurn: s.canBurn, preparation: s.preparation, diagnostics: s.diagnostics}
 }

@@ -177,6 +177,9 @@ func (i *instance) startCatchUp(w http.ResponseWriter, r *http.Request, v *front
 		accessViewer: v, accessDevice: dev, plan: plan, source: 1, seek: 1, revision: 1, cursor: 1, signal: make(chan struct{}),
 		archive: &catchUpPlayback{info: info, tuneID: info.ID, mediaKey: key}}
 	s.setCatchUpRange()
+	if c.Features.AdaptiveHLS {
+		setAdaptiveUnavailable(path, "live_timeline", dev.Language)
+	}
 	if req.StartOver && i.host.LiveEventLink != nil {
 		if progKey, ref, err := i.host.LiveEventLink.LiveEventForChannel(r.Context(), v, req.ChannelID); err == nil && ref != nil {
 			s.liveProgrammeKey, s.liveEvent = progKey, cloneLiveEventRef(ref)

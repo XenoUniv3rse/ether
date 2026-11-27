@@ -90,8 +90,15 @@ func TestBrokerAdaptiveHLSMaster(t *testing.T) {
 			t.Fatalf("%s master: %d %s", surface, w.Code, body)
 		}
 	}
-	s := &brokerSession{public: frontend.Session{ID: "s", Protocol: "vela"}, playID: "p"}
+	capped := &brokerSession{public: frontend.Session{ID: "s", Protocol: "vela"}, playID: "p", adaptiveHLS: true}
 	w := httptest.NewRecorder()
+	broker.serveMaster(w, httptest.NewRequest(http.MethodGet, "/?maxBitrate=5000000", nil), capped, &adaptiveTestLadder{})
+	if w.Code != http.StatusOK || strings.Count(w.Body.String(), "#EXT-X-STREAM-INF:") != 1 ||
+		!strings.Contains(w.Body.String(), "720p/index.m3u8") {
+		t.Fatalf("capped master: %d %s", w.Code, w.Body.String())
+	}
+	s := &brokerSession{public: frontend.Session{ID: "s", Protocol: "vela"}, playID: "p"}
+	w = httptest.NewRecorder()
 	broker.serveMaster(w, httptest.NewRequest(http.MethodGet, "/", nil), s, &adaptiveTestLadder{})
 	if w.Code != http.StatusOK || strings.Count(w.Body.String(), "#EXT-X-STREAM-INF:") != 1 {
 		t.Fatalf("Vela without opt-in: %d %s", w.Code, w.Body.String())

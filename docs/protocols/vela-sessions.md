@@ -62,13 +62,20 @@ For example:
 }
 ```
 
-Like `prepare-fallback`, this selects the highest offered, currently
-allowed rung whose peak bitrate is at or below the cap. If none fits,
-Ether returns `422 quality_unavailable`. The successful command returns
-the new plan with the selected path and advanced source and seek
-generations. `atSeconds` is the absolute title position. If omitted in the
-bitrate form, Ether uses the session's current position. A previously
-prepared rung can retain its timeline origin.
+For a client that opts into adaptive HLS, the bitrate form opens a master
+whose variants all fit the requested peak cap and the viewer and upload
+ceilings. The highest fitting rendition is listed first. The player can
+switch up and down inside the capped set. `prepare-fallback` offers a
+capped master while leaving the selected path in place. A speed-driven
+source down-failover can also tighten the active master's `maxBitrate`.
+Reload the master when an updated plan lowers that value.
+
+For other clients, the bitrate form selects the highest allowed fixed
+rendition within the cap. If no rendition fits, the command fails. A
+successful switch advances the source and seek generations. `atSeconds`
+is the absolute title position. If omitted in the bitrate form, Ether
+uses the session's current position. Prepared playback can retain its
+timeline origin.
 
 ## Adaptive HLS
 
@@ -78,17 +85,25 @@ to discover support. When the selected HLS path has `adaptive: true`, give
 its `url` directly to Media3's HLS media source or to AVPlayer. Leave native
 adaptive track selection enabled and do not pin an initial rendition or send
 a `switch` command in response to bandwidth changes. Explicit path switches
-remain available for manual quality choices.
+remain available for manual quality choices. Eligible original files keep
+their direct-play primary. For an opted-in client, Ether also offers an
+`adaptive-hls` path with its own master URL.
 
 The master uses one muxed audio track across its variants. Every variant has
 its own media playlist and, for fMP4, its own initialization segment. Ether
 uses one segment timeline and forces transcode cuts at that timeline's
 boundaries. A remux can share the master when Ether can establish its
-keyframe grid and the opening GOPs have no leading pictures. The automatic
+keyframe grid and the opening GOPs have no leading pictures. Ether checks
+this before publishing the timeline using the available index and bounded
+packet probes. If copy alignment cannot be established, Vela can use the
+highest compatible encoded variant as the top of a new shared timeline.
+The automatic
 variants use the same video codec family, dynamic range, frame rate, and
 audio selection. If fewer than two variants qualify, the path has no
-`adaptive` flag. The viewer and upload ceilings apply when the stream is
-opened. Variant playlists can be read without starting an encoder. The
+`adaptive` flag. An opted-in HLS path without adaptive quality carries
+`adaptiveUnavailable: {reason, message}`. The reason is a stable code and
+the message is localized. The viewer and upload ceilings apply when the
+stream is opened. Variant playlists can be read without starting an encoder. The
 first initialization or media GET selects a rung. An idle encoder releases
 its slot and already published segments remain available.
 

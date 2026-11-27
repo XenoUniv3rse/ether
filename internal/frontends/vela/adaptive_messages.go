@@ -13,8 +13,7 @@ func setAdaptiveUnavailable(path object, reason, languages string) {
 	if !ok {
 		messages = adaptiveMessages["no_compatible_rungs"]
 	}
-	path["adaptiveUnavailable"] = reason
-	path["adaptiveUnavailableMessage"] = messages[locale]
+	path["adaptiveUnavailable"] = object{"reason": reason, "message": messages[locale]}
 }
 
 // Each row follows the order of downloadLocaleMatcher.

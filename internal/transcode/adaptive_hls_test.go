@@ -202,3 +202,62 @@ func TestAdaptiveHLSRetiresIdleRendition(t *testing.T) {
 		t.Fatal("idle rendition kept an encoder or scheduled a restart")
 	}
 }
+
+// A real HTTP byte-range input with a bounded, incomplete packet sample
+// simulates playback reaching the encoder before the remote index is ready.
+func TestAdaptiveHLSRemoteUnindexedClockAndDownFailover(t *testing.T) {
+	e := newRealEnv(t, WithoutHWDetection(), withCopySample(64))
+	const name = "remote-webdl.mp4"
+	e.gen(t, name, 10, "-vf", "scale=1280:720", "-c:v", "libx264", "-preset", "veryfast", "-g", "48",
+		"-sc_threshold", "0", "-c:a", "aac", "-ac", "2", "-movflags", "+faststart")
+	info, err := e.m.Probe(t.Context(), e.url(name))
+	if err != nil {
+		t.Fatal(err)
+	}
+	info.BitrateKbps = max(info.BitrateKbps, 10000)
+	d := core.Decision{Kind: core.DecisionRemux, VideoCopy: true, VideoCodec: "h264", AudioCopy: true, AudioCodec: "aac",
+		AudioStream: 1, SubtitleStream: -1, Container: ContainerFMP4}
+	caps := core.ClientCaps{Remote: true, VideoCodecs: []string{"h264", "hevc"}, AudioCodecs: []string{"aac", "ac3", "eac3"}, MaxHeight: 1080}
+	d, ok := AdaptiveAudio(*info, d, caps)
+	if !ok {
+		t.Fatal("common audio unavailable")
+	}
+	rungs, _ := AdaptiveQualityVariants(*info, d, caps, 1920, 1080, 0, e.m.AdaptiveQualitySupport(*info, d))
+	req := core.HLSRequest{InputURL: e.url(name), Info: *info, Decision: d, AdaptiveHLS: true, AdaptiveEncodeTop: true,
+		QualityRungs: true, QualityVariants: rungs}
+	for _, variant := range rungs {
+		req.QualityRungIDs = append(req.QualityRungIDs, variant.Rung.ID)
+	}
+	hs, err := e.m.StartHLS(t.Context(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer hs.Close()
+	s := hs.(*Session)
+	before := s.AdaptiveRungs()
+	if len(before) < 3 || s.Decision().VideoCopy || s.AdaptiveHLSUnavailable() != "" {
+		t.Fatalf("unindexed HTTP input did not produce a safe master: %+v (%s)", before, s.AdaptiveHLSUnavailable())
+	}
+	if _, err := s.ReduceOutputBitrate(t.Context(), e.url(name), 2500); err != nil {
+		t.Fatal(err)
+	}
+	after := s.AdaptiveRungs()
+	if len(after) != 2 || after[0].Bandwidth > 2500000 || after[0].Bandwidth <= after[1].Bandwidth {
+		t.Fatalf("down-failover did not retain a capped switching set: %+v", after)
+	}
+	for _, variant := range after {
+		fetch := func(segment int) []byte {
+			w := httptest.NewRecorder()
+			r := mediaRequest(s, httptest.NewRequest(http.MethodGet, "/", nil), segment)
+			s.ServeRungSegment(w, r, variant.ID, segment)
+			if w.Code != http.StatusOK {
+				t.Fatalf("rung %s segment %d: %d", variant.ID, segment, w.Code)
+			}
+			return w.Body.Bytes()
+		}
+		start, end, key := e.videoSpanKey(t, ContainerFMP4, fetch(InitSegment), fetch(0), variant.ID)
+		if !key || math.Abs(start) > .0011 || math.Abs(end-.5) > .0011 {
+			t.Fatalf("unaligned encoded rung %s: %f..%f key=%v", variant.ID, start, end, key)
+		}
+	}
+}

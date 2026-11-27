@@ -50,6 +50,7 @@ type HLSRequest struct {
 
 	// AdaptiveHLS lets the player choose variants on the authored timeline.
 	AdaptiveHLS         bool
+	AdaptiveEncodeTop   bool   // use an encoded top when a copied clock cannot be verified
 	AdaptiveUnavailable string // plan-time reason the HLS output must stay single-variant
 	AdaptiveMaxKbps     int    // peak delivery cap, including audio and mux overhead
 

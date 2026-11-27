@@ -451,7 +451,7 @@ func (i *instance) playback(w http.ResponseWriter, r *http.Request) {
 		}
 		delete(p, "durationSeconds")
 	}
-	if (original || (audioOnly && transport == "file")) && (b.Client.HLS || b.Client.MSE) && plan.HLS {
+	if (original || (audioOnly && transport == "file")) && (b.Client.HLS || b.Client.MSE) && plan.HLS && (!b.Client.Features.AdaptiveHLS || audioOnly) {
 		fallbackKind := "transcode"
 		if plan.DirectStream {
 			fallbackKind = "remux"
@@ -491,6 +491,7 @@ func (i *instance) playback(w http.ResponseWriter, r *http.Request) {
 	if transport == "hls" {
 		i.refreshTrackDelivery(r.Context(), i.access(r, v), s.ID, ps)
 	}
+	i.offerAdaptive(r.Context(), i.access(r, v), ps, format == frontend.StreamDirect, plan.HLS)
 	i.addQualityPaths(r.Context(), i.access(r, v), s.ID, ps)
 	i.refreshOutput(r.Context(), s.ID, ps)
 	if b.ChannelID != "" {
@@ -780,12 +781,23 @@ func (i *instance) command(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		pathID := b.PathID
+		adaptiveCap := 0
 		if b.MaxBitrate != nil {
-			rung, ok := i.selectQualityRung(w, r, v, s, id, *b.MaxBitrate)
-			if !ok {
+			if *b.MaxBitrate <= 0 {
+				problem(w, 400, "request", "invalid_bitrate")
 				return
 			}
-			pathID = "quality-" + rung.ID
+			if s.client.Features.AdaptiveHLS && s.channelID == "" && s.media.Video() != nil {
+				adaptiveCap = *b.MaxBitrate
+				adaptivePath(s.plan, adaptivePathID)
+				pathID = adaptivePathID
+			} else {
+				rung, ok := i.selectQualityRung(w, r, v, s, id, *b.MaxBitrate)
+				if !ok {
+					return
+				}
+				pathID = "quality-" + rung.ID
+			}
 		}
 		paths := s.plan["paths"].([]object)
 		selected := -1
@@ -800,6 +812,9 @@ func (i *instance) command(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		path := paths[selected]
+		if b.MaxBitrate == nil {
+			adaptiveCap = pathBitrate(path)
+		}
 		if rung := s.rungFor(path); rung != "" && b.MaxBitrate == nil {
 			allowed := false
 			if !s.port(w, func() { allowed = i.qualityAllowed(r.Context(), i.access(r, v), id, rung) }) {
@@ -817,7 +832,7 @@ func (i *instance) command(w http.ResponseWriter, r *http.Request) {
 			format = frontend.StreamHTTP
 		}
 		origin := pos
-		if fallback, ok := s.plan["fallback"].(object); ok && fallback["state"] == "ready" && fallback["pathId"] == pathID {
+		if fallback, ok := s.plan["fallback"].(object); ok && fallback["state"] == "ready" && fallback["pathId"] == pathID && pathBitrate(path) == adaptiveCap {
 			if at, ok := path["timelineOriginSeconds"].(float64); ok {
 				if prepared, valid := seconds(at); valid && prepared <= pos {
 					origin = prepared
@@ -827,7 +842,7 @@ func (i *instance) command(w http.ResponseWriter, r *http.Request) {
 		var url string
 		var err error
 		if !s.port(w, func() {
-			url, err = i.host.Sessions.StartStream(r.Context(), i.access(r, v), id, frontend.StreamRequest{Format: format, Position: origin, LazyStart: true, Continuous: true, AdaptiveHLS: s.client.Features.AdaptiveHLS})
+			url, err = i.host.Sessions.StartStream(r.Context(), i.access(r, v), id, frontend.StreamRequest{Format: format, Position: origin, LazyStart: true, Continuous: true, AdaptiveHLS: s.client.Features.AdaptiveHLS && s.rungFor(path) == "", AdaptiveMaxBitrate: adaptiveCap})
 		}) {
 			return
 		}
@@ -841,6 +856,7 @@ func (i *instance) command(w http.ResponseWriter, r *http.Request) {
 				previous["qualities"] = []object{}
 				delete(previous, "initialRenditionId")
 				delete(previous, "adaptive")
+				delete(previous, "adaptiveUnavailable")
 				previous["readiness"] = "on-demand"
 			}
 		}
@@ -848,6 +864,9 @@ func (i *instance) command(w http.ResponseWriter, r *http.Request) {
 			url = strings.TrimSuffix(url, "master.m3u8") + rung + "/index.m3u8"
 		}
 		path["url"], path["readiness"] = url, "ready"
+		if adaptiveCap > 0 {
+			path["maxBitrate"] = adaptiveCap
+		}
 		path["timelineOriginSeconds"] = float64(0)
 		if format == frontend.StreamHLS {
 			path["timelineOriginSeconds"] = origin.Seconds()
@@ -901,7 +920,7 @@ func (i *instance) command(w http.ResponseWriter, r *http.Request) {
 			var url string
 			var e error
 			if !s.port(w, func() {
-				url, e = i.host.Sessions.StartStream(r.Context(), i.access(r, v), id, frontend.StreamRequest{Format: frontend.StreamHLS, Position: pos, LazyStart: true, Continuous: true, AdaptiveHLS: s.client.Features.AdaptiveHLS})
+				url, e = i.host.Sessions.StartStream(r.Context(), i.access(r, v), id, frontend.StreamRequest{Format: frontend.StreamHLS, Position: pos, LazyStart: true, Continuous: true, AdaptiveHLS: s.client.Features.AdaptiveHLS && s.rungFor(path) == "", AdaptiveMaxBitrate: pathBitrate(path)})
 			}) {
 				return
 			}
@@ -967,10 +986,11 @@ func (i *instance) command(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		position := s.position
+		currentPath := selectedPlaybackPath(s.plan, s.plan["paths"].([]object))
 		var url string
 		var err error
 		if !s.port(w, func() {
-			url, err = i.host.Sessions.StartStream(r.Context(), i.access(r, v), id, frontend.StreamRequest{Format: frontend.StreamHLS, Position: position, LazyStart: true, Continuous: true, AdaptiveHLS: s.client.Features.AdaptiveHLS, AudioStream: audio, SubtitleStream: sub, BurnImageSubtitles: true})
+			url, err = i.host.Sessions.StartStream(r.Context(), i.access(r, v), id, frontend.StreamRequest{Format: frontend.StreamHLS, Position: position, LazyStart: true, Continuous: true, AdaptiveHLS: s.client.Features.AdaptiveHLS && s.rungFor(currentPath) == "", AdaptiveMaxBitrate: pathBitrate(currentPath), AudioStream: audio, SubtitleStream: sub, BurnImageSubtitles: true})
 		}) {
 			return
 		}
@@ -984,7 +1004,7 @@ func (i *instance) command(w http.ResponseWriter, r *http.Request) {
 			// Track changes are HLS: leave the original (a fallback or the
 			// client-cap choice) intact and move to its converted path.
 			for _, candidate := range paths {
-				if candidate["id"] == "fallback-hls" || (candidate["id"] == "primary" && candidate["transport"] == "hls") {
+				if candidate["id"] == "fallback-hls" || candidate["id"] == adaptivePathID || (candidate["id"] == "primary" && candidate["transport"] == "hls") {
 					delete(path, "url")
 					path["readiness"] = "on-demand"
 					path = candidate
@@ -1142,7 +1162,7 @@ func (i *instance) command(w http.ResponseWriter, r *http.Request) {
 		}
 		path["decisionReason"] = plan.Decision.Reason
 		paths := []object{path}
-		if original && (s.client.HLS || s.client.MSE) && plan.HLS {
+		if original && (s.client.HLS || s.client.MSE) && plan.HLS && !s.client.Features.AdaptiveHLS {
 			fallbackKind := "transcode"
 			if plan.DirectStream {
 				fallbackKind = "remux"
@@ -1214,7 +1234,11 @@ func (i *instance) command(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		qSnap := s.outputSnapshot()
-		if !s.port(w, func() { i.addQualityPaths(r.Context(), i.access(r, v), id, qSnap) }) {
+		qSnap.id = id
+		if !s.port(w, func() {
+			i.offerAdaptive(r.Context(), i.access(r, v), qSnap, format == frontend.StreamDirect, plan.HLS)
+			i.addQualityPaths(r.Context(), i.access(r, v), id, qSnap)
+		}) {
 			return
 		}
 		s.qualityRungs = qSnap.qualityRungs
