@@ -130,6 +130,8 @@ type libraryDTO struct {
 	MaxPluginItems *int                        `json:"maxPluginItems,omitempty"`
 	Sync           *pluginitems.SyncState      `json:"sync,omitempty"`
 	Kind           *plugins.MediaKindMeta      `json:"kind,omitempty"`
+	Logo           string                      `json:"logo,omitempty"`
+	HasVideo       bool                        `json:"hasVideo"`
 	PluginName     string                      `json:"pluginName,omitempty"`
 }
 
@@ -211,6 +213,7 @@ func (c *librariesConsole) decorate(ctx context.Context, lib core.Library) libra
 		if c.app.pluginsRT != nil && c.app.pluginsRT.mgr != nil {
 			if rec, err := c.app.pluginsRT.mgr.Get(ctx, lib.PluginID); err == nil {
 				dto.PluginName = rec.Name
+				dto.Logo = c.app.pluginsRT.mgr.CatalogueIconURL(ctx, rec, lib.KindKey)
 			}
 		}
 	case core.LibraryBuiltin:
@@ -248,6 +251,16 @@ func (c *librariesConsole) decorate(ctx context.Context, lib core.Library) libra
 	}
 	resolved := c.resolveLibraryPresentations(ctx, lib, dto.Kind)
 	dto.Presentations = &resolved
+	dto.HasVideo = lib.Source != core.LibraryPlugin
+	if kind := dto.Kind; kind != nil {
+		for _, level := range kind.Levels {
+			if kind.IsVideoTitleLevel(level.Key) ||
+				(level.Playable && level.Media == "" && resolved.MediaClass == core.MediaClassVideo) {
+				dto.HasVideo = true
+				break
+			}
+		}
+	}
 	return dto
 }
 

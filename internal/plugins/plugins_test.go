@@ -689,7 +689,7 @@ func TestMigrationsApply(t *testing.T) {
 func TestFetchSiblingsIncludesRelativeIcon(t *testing.T) {
 	env := newTestEnv(t)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/assets/icon.svg" {
+		if r.URL.Query().Get("fixture") == "1" && (r.URL.Path == "/assets/icon.svg" || r.URL.Path == "/assets/kind.png") {
 			_, _ = w.Write([]byte("icon"))
 			return
 		}
@@ -697,9 +697,9 @@ func TestFetchSiblingsIncludesRelativeIcon(t *testing.T) {
 	}))
 	defer srv.Close()
 	env.m.client = srv.Client()
-	manifest := []byte(`{"id":"com.example.icon","version":"1.0.0","name":"Icon","ether":{"protocol":1,"kind":"extension","icon":"assets/icon.svg","runtime":{"kind":"remote"}}}`)
-	files := env.m.fetchSiblings(context.Background(), srv.URL+"/manifest.json", manifest, map[string][]byte{}, false)
-	if string(files["assets/icon.svg"]) != "icon" {
+	manifest := []byte(`{"id":"com.example.icon","version":"1.0.0","name":"Icon","ether":{"protocol":1,"kind":"extension","icon":"assets/icon.svg","runtime":{"kind":"remote"},"contributes":{"mediaKinds":[{"key":"demo","library":{"name":"Demo","icon":"assets/kind.png"}}]}}}`)
+	files := env.m.fetchSiblings(context.Background(), srv.URL+"/manifest.json?fixture=1", manifest, map[string][]byte{}, false)
+	if string(files["assets/icon.svg"]) != "icon" || string(files["assets/kind.png"]) != "icon" {
 		t.Fatalf("icon not fetched: %v", files)
 	}
 }

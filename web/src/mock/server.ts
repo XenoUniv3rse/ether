@@ -2099,6 +2099,9 @@ export function createFakeServer(opts: FakeOptions = {}) {
 
   const viewerCatalogRules = new Map<number, unknown>();
 
+  const booksIcon = `data:image/svg+xml,${encodeURIComponent(
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="14" fill="#6d28d9"/><path d="M14 17h9a9 9 0 0 1 9 9v23a9 9 0 0 0-9-9h-9zm36 0h-9a9 9 0 0 0-9 9v23a9 9 0 0 1 9-9h9z" fill="none" stroke="#f5f3ff" stroke-width="3.5" stroke-linejoin="round"/></svg>',
+  )}`;
   const mockLibs: Record<string, unknown>[] = [
     {
       id: 1,
@@ -2141,11 +2144,12 @@ export function createFakeServer(opts: FakeOptions = {}) {
       updatedAt: "2026-01-01T00:00:00Z",
       itemCount: 2,
       pluginName: "Demo books",
+      logo: booksIcon,
       kind: {
         key: "book",
         label: "Books",
         media: "book",
-        library: { name: "Books" },
+        library: { name: "Books", icon: "assets/books.svg" },
         levels: [{ key: "book", label: "Book", role: "book", playable: true }],
         fields: [
           { key: "author", type: "people", label: "Author", indexed: true },
@@ -2595,7 +2599,16 @@ export function createFakeServer(opts: FakeOptions = {}) {
     lib.tabsCustomized = tabsDto.customized;
     lib.tabs = tabsDto.tabs;
     lib.effectiveTabs = tabsDto.effectiveTabs;
-    lib.presentations = mockResolvePresentations(lib);
+    const presentations = mockResolvePresentations(lib);
+    lib.presentations = presentations;
+    const kind = lib.kind as { levels?: { playable?: boolean; media?: string }[] } | undefined;
+    lib.hasVideo =
+      lib.source !== "plugin" ||
+      Boolean(
+        kind?.levels?.some(
+          (level) => level.playable && (level.media || presentations.mediaClass) === "video",
+        ),
+      );
     return lib;
   }
   function mockLibraries(method: string, seg: string[], url: URL, body: unknown): Response {
@@ -2689,7 +2702,9 @@ export function createFakeServer(opts: FakeOptions = {}) {
             health: "ok",
             pluginId: "demo",
             kindKey: "book",
-            libraries: [],
+            enabled: true,
+            logo: booksIcon,
+            libraries: [{ id: 3, name: "Books" }],
           },
           {
             id: "plugin:demo-clips:clip",
@@ -2814,7 +2829,7 @@ export function createFakeServer(opts: FakeOptions = {}) {
           updatedAt: "2026-01-01T00:00:00Z",
         };
         mockLibs.push(lib);
-        return json(lib, 201);
+        return json(hydrateLib(lib), 201);
       }
       return json({
         libraries: [...mockLibs].map(hydrateLib).sort((a, z) => Number(a.sort) - Number(z.sort)),

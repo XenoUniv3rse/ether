@@ -336,7 +336,9 @@ export interface Library {
   cardShape?: "" | LibraryCardShape;
   present?: Presentations;
   /** Server-resolved per-app presentations separating HOW (plugin/inferred/unavailable) from WHETHER (owner switches). */
-  presentations?: ResolvedPresentations;
+  presentations: ResolvedPresentations;
+  hasVideo: boolean;
+  logo?: string;
   tabs?: LibraryTab[];
   tabsCustomized?: boolean;
   effectiveTabs?: LibraryTab[];

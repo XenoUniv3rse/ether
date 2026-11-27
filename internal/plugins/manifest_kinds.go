@@ -142,8 +142,8 @@ func validateMediaKind(m Manifest, k MediaKindMeta, base string, hasProvider boo
 	}
 	if !k.Library.IsZero() {
 		label(base+".library.name", k.Library.Name, 60)
-		if unsafePath(k.Library.Icon) {
-			add(base+".library.icon", "must stay inside the package")
+		if k.Library.Icon != "" && !ValidAdapterIconPath(k.Library.Icon) {
+			add(base+".library.icon", "must be a package-relative SVG or PNG path")
 		}
 		if k.Library.Card != "" && !kindLibraryCards[k.Library.Card] {
 			add(base+".library.card", "must be poster, landscape or square")
@@ -890,11 +890,11 @@ func (a FrontendAdapterMeta) UploadLimit(subpath string) int64 {
 	return limit
 }
 
-// ValidAdapterIconPath reports whether p names an SVG or PNG file inside
+// ValidAdapterIconPath reports whether p names an SVG or PNG icon inside
 // the package; the conformance kit checks the file itself.
 func ValidAdapterIconPath(p string) bool {
 	lower := strings.ToLower(p)
-	return !unsafePath(p) && !isHTTPURL(p) && (strings.HasSuffix(lower, ".svg") || strings.HasSuffix(lower, ".png"))
+	return !unsafePath(p) && !strings.ContainsAny(p, "\\:%?#\r\n\t") && (strings.HasSuffix(lower, ".svg") || strings.HasSuffix(lower, ".png"))
 }
 
 // MediaKindByKey returns the declared kind with this key, if any.

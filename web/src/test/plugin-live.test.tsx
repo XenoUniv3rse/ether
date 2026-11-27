@@ -15,6 +15,8 @@ const PLUGIN_LIBRARY: Library = {
   key: "pk-esports-matches",
   name: "Esports",
   source: "plugin",
+  hasVideo: true,
+  presentations: { mediaClass: "video", apps: [], available: {}, effective: {} },
   pluginId: "esports",
   kindKey: "matches",
   sort: 10,

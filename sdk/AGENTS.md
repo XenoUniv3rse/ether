@@ -98,6 +98,10 @@ signing the updated index.
 | ether.sidecar | Remote launch instructions: docker, download, command, docs |
 | ether.stremio | `true` for a native plugin that retains Stremio add-on routes |
 
+Set `mediaKinds[].library.icon` to a package-relative SVG or PNG for a kind’s
+console mark. Ether fetches it on URL install and uses it for the catalogue and
+library before `ether.icon` and the manifest’s Stremio `logo`.
+
 Copy rules apply to contribution labels too: sentence case, no exclamation marks,
 no em/en dashes, no “simply”, “just”, or “easily”. Setting secrets are sealed by
 Ether; read with `SecretGet` only where needed, never echo them into views/logs.

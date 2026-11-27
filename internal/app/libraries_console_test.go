@@ -580,8 +580,8 @@ func TestLibrariesConsolePresentAppsAndFreshness(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &dto); err != nil {
 		t.Fatal(err)
 	}
-	if dto.Presentations == nil || dto.Presentations.MediaClass != core.MediaClassBook {
-		t.Fatalf("book presentations = %+v", dto.Presentations)
+	if dto.HasVideo || dto.Presentations == nil || dto.Presentations.MediaClass != core.MediaClassBook {
+		t.Fatalf("book hasVideo=%v, presentations=%+v", dto.HasVideo, dto.Presentations)
 	}
 	var plexApp core.ResolvedAppPresentation
 	for _, ap := range dto.Presentations.Apps {
@@ -623,6 +623,14 @@ func TestLibrariesConsolePresentAppsAndFreshness(t *testing.T) {
 	if w := call("PATCH", bookPath, `{"presentApps":{"adapterOnly":true}}`); w.Code != 200 {
 		t.Fatalf("PATCH adapterOnly true = %d %s", w.Code, w.Body)
 	}
+	var adapterDTO libraryDTO
+	w = call("GET", bookPath, "")
+	if err := json.Unmarshal(w.Body.Bytes(), &adapterDTO); err != nil {
+		t.Fatal(err)
+	}
+	if adapterDTO.HasVideo || adapterDTO.Presentations == nil || !adapterDTO.Presentations.AdapterOnly {
+		t.Fatalf("adapter-only book hasVideo=%v, presentations=%+v", adapterDTO.HasVideo, adapterDTO.Presentations)
+	}
 	stored, _ = a.libraries.Get(ctx, bookLib.ID)
 	if !stored.Present.AdapterOnly || stored.Present.Vela != nil {
 		t.Fatalf("adapterOnly true present = %+v", stored.Present)
@@ -636,8 +644,13 @@ func TestLibrariesConsolePresentAppsAndFreshness(t *testing.T) {
 	}
 
 	// Turning Plex OFF on a video plugin library persists sticky Plex=false override.
-	if w := call("PATCH", clipPath, `{"presentApps":{"plex":false}}`); w.Code != 200 {
+	w = call("PATCH", clipPath, `{"presentApps":{"plex":false}}`)
+	if w.Code != 200 {
 		t.Fatalf("PATCH clip plex off = %d %s", w.Code, w.Body)
+	}
+	var clipDTO libraryDTO
+	if err := json.Unmarshal(w.Body.Bytes(), &clipDTO); err != nil || !clipDTO.HasVideo {
+		t.Fatalf("clip hasVideo=%v, error=%v", clipDTO.HasVideo, err)
 	}
 	storedClip, err := a.libraries.Get(ctx, clipLib.ID)
 	if err != nil {

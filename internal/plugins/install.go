@@ -235,7 +235,10 @@ func (m *Manager) fetchSiblings(ctx context.Context, manURL string, manRaw []byt
 	if err != nil || man.Ether == nil {
 		return files
 	}
-	base := strings.TrimSuffix(manURL, "manifest.json")
+	base, err := url.Parse(manURL)
+	if err != nil || !strings.HasSuffix(base.Path, "/manifest.json") {
+		return files
+	}
 	var paths []string
 	if icon := man.Ether.Icon; icon != "" && !strings.HasPrefix(icon, "http://") && !strings.HasPrefix(icon, "https://") {
 		paths = append(paths, icon)
@@ -243,6 +246,11 @@ func (m *Manager) fetchSiblings(ctx context.Context, manURL string, manRaw []byt
 	for _, a := range man.Ether.Contributes.FrontendAdapters {
 		if ValidAdapterIconPath(a.Icon) {
 			paths = append(paths, a.Icon)
+		}
+	}
+	for _, kind := range man.Ether.Contributes.MediaKinds {
+		if ValidAdapterIconPath(kind.Library.Icon) {
+			paths = append(paths, kind.Library.Icon)
 		}
 	}
 	if man.Ether.Runtime.Entry != "" {
@@ -261,10 +269,13 @@ func (m *Manager) fetchSiblings(ctx context.Context, manURL string, manRaw []byt
 		paths = append(paths, ref)
 	}
 	for _, p := range paths {
-		if unsafePath(p) {
+		if _, exists := files[p]; exists || unsafePath(p) {
 			continue
 		}
-		if b, err := m.fetch(ctx, base+p, lan, 32<<20); err == nil {
+		sibling := *base
+		sibling.Path = strings.TrimSuffix(base.Path, "manifest.json") + p
+		sibling.RawPath = strings.TrimSuffix(base.EscapedPath(), "manifest.json") + (&url.URL{Path: p}).EscapedPath()
+		if b, err := m.fetch(ctx, sibling.String(), lan, 32<<20); err == nil {
 			files[p] = b
 		}
 	}

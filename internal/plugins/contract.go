@@ -636,8 +636,8 @@ const MaxKindLibraryTabs = 50
 
 // KindLibraryDecl is the optional library created for a kind on install.
 type KindLibraryDecl struct {
-	Name        string             `json:"name"` // default name; the owner may rename it after
-	Icon        string             `json:"icon,omitempty"`
+	Name        string             `json:"name"`                  // default name; the owner may rename it after
+	Icon        string             `json:"icon,omitempty"`        // package-relative SVG or PNG shown in Integrations and Libraries
 	Card        string             `json:"card,omitempty"`        // poster (default)|landscape|square
 	DateDisplay string             `json:"dateDisplay,omitempty"` // year (default)|date
 	Experience  string             `json:"experience,omitempty"`  // watch|listen|read|gallery|live or another id; defaults by media class

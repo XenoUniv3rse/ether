@@ -1,4 +1,4 @@
-import { sourceLabel } from "./CatalogueSources";
+import { LibrarySourceIcon, sourceLabel } from "./CatalogueSources";
 import {
   Badge,
   Button,
@@ -13,14 +13,10 @@ import {
   ArrowRight,
   Clapperboard,
   EyeOff,
-  Film,
-  ListFilter,
   Pencil,
-  Plug,
   Plus,
   RefreshCw,
   Trash2,
-  Tv,
 } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 import { Link, Navigate, Route, Routes, useNavigate } from "react-router-dom";
@@ -60,12 +56,6 @@ function sourceBadge(lib: Library): string {
   if (lib.source === "catalogue") return t("Catalogue sources");
   if (lib.source === "collection") return t("Collection");
   return lib.pluginName || lib.pluginId || t("Plugin");
-}
-
-function SourceIcon({ lib }: { lib: Library }) {
-  if (lib.source === "catalogue") return <ListFilter size={18} aria-hidden />;
-  if (lib.source === "plugin") return <Plug size={18} aria-hidden />;
-  return lib.mediaType === "show" ? <Tv size={18} aria-hidden /> : <Film size={18} aria-hidden />;
 }
 
 function protocolLabel(key: string): string {
@@ -292,7 +282,7 @@ function LibrariesList() {
               <section className="library-card" aria-label={lib.name}>
                 <div className="library-card-head">
                   <span className="library-card-icon">
-                    <SourceIcon lib={lib} />
+                    <LibrarySourceIcon library={lib} />
                   </span>
                   <div className="min-w-0 flex-1">
                     <Link to={`/libraries/${lib.id}`} className="library-card-name">

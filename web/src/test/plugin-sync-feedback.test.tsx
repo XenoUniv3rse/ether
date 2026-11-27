@@ -19,6 +19,8 @@ function makeBookLibrary(overrides: Partial<Library> = {}): Library {
     key: "plugin:ether.books:audiobooks",
     name: "Audiobooks",
     source: "plugin",
+    hasVideo: false,
+    presentations: { mediaClass: "audiobook", apps: [], available: {}, effective: {} },
     pluginId: "ether.books",
     kindKey: "audiobooks",
     pluginName: "Open Books",
