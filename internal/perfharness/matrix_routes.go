@@ -107,31 +107,77 @@ func (r *MatrixReport) CheckRoutes(configuration string, inventory MatrixRoutes,
 	}
 }
 
-// AppendConsoleReads supplies authenticated scripts for console GET routes
-// with no identifiers. Endpoints with parameters, side effects, or protocol
-// handshakes require authored scenarios.
-func AppendConsoleReads(clients []Client, inventory MatrixRoutes, allowed map[MatrixRouteKey]string) {
+// AppendMatrixReads adds requests for fixed, registered read paths on the
+// primary client for each surface. Stateful workflows and parameterized
+// routes still require scenarios with explicit prerequisites.
+func AppendMatrixReads(clients []Client, inventory MatrixRoutes, allowed map[MatrixRouteKey]string) {
+	primary := map[string]string{
+		"console": "console", "plex": "plex-appletv", "jellyfin": "infuse-jellyfin",
+		"emby": "emby-sdk", "silo": "silo-appletv", "vela": "vela",
+	}
+	seen := map[[3]string]bool{}
+	for _, c := range clients {
+		for _, st := range c.Steps {
+			method := st.Method
+			if method == "" {
+				method = http.MethodGet
+			}
+			path := strings.SplitN(c.SharedPrefix+c.Prefix+st.Path, "?", 2)[0]
+			seen[[3]string{c.Surface, method, strings.ToLower(path)}] = true
+		}
+	}
 	for i := range clients {
 		c := &clients[i]
-		if c.Surface != "console" {
+		if c.Name != primary[c.Surface] {
 			continue
 		}
-		seen := map[string]bool{}
-		for _, st := range c.Steps {
-			if st.Method == "" || st.Method == http.MethodGet {
-				seen[strings.SplitN(c.Prefix+st.Path, "?", 2)[0]] = true
-			}
-		}
-		entries := slices.Clone(inventory["console"])
-		slices.SortFunc(entries, func(a, b conform.Route) int { return cmp.Compare(a.Pattern, b.Pattern) })
+		entries := slices.Clone(inventory[c.Surface])
+		slices.SortFunc(entries, func(a, b conform.Route) int {
+			return cmp.Or(cmp.Compare(a.Pattern, b.Pattern), cmp.Compare(a.Method, b.Method))
+		})
 		for _, entry := range entries {
-			path := entry.Pattern
-			if entry.Method != http.MethodGet || seen[path] || !strings.HasPrefix(path, c.Prefix+"/") ||
-				strings.ContainsAny(path, "{}*") || allowed[MatrixRouteKey{"console", entry.Method, path}] != "" {
+			if entry.Method != http.MethodGet && entry.Method != http.MethodHead {
 				continue
 			}
-			seen[path] = true
-			c.Steps = append(c.Steps, Step{Name: path, Class: classConsole, Path: strings.TrimPrefix(path, c.Prefix)})
+			path := strings.TrimSuffix(entry.Pattern, "{$}")
+			relative, mounted := strings.CutPrefix(path, c.SharedPrefix+c.Prefix)
+			key := [3]string{c.Surface, entry.Method, strings.ToLower(path)}
+			if seen[key] || !mounted || !strings.HasPrefix(relative, "/") ||
+				strings.ContainsAny(relative, "{}*") || !matrixReadPath(c.Surface, relative) ||
+				allowed[MatrixRouteKey{c.Surface, entry.Method, entry.Pattern}] != "" {
+				continue
+			}
+			seen[key] = true
+			class := classBrowse
+			if c.Surface == "console" {
+				class = classConsole
+			}
+			c.Steps = append(c.Steps, Step{Name: entry.Method + " " + relative, Method: entry.Method, Class: class, Path: relative})
 		}
+	}
+}
+
+func matrixReadPath(surface, path string) bool {
+	path = strings.ToLower(path)
+	for _, segment := range strings.Split(path, "/") {
+		switch segment {
+		case "stream", "events", "eventsource", "websocket", "websockets":
+			return false
+		}
+	}
+	switch surface {
+	case "console", "silo", "vela":
+		return true
+	case "plex":
+		return strings.HasPrefix(path, "/library") || strings.HasPrefix(path, "/hubs") ||
+			strings.HasPrefix(path, "/clients/profiles") || strings.HasPrefix(path, "/media/providers") ||
+			path == "/identity" || path == "/servers" || path == "/system/agents" || path == "/activities"
+	default:
+		for _, prefix := range []string{"/system/info", "/library", "/genres", "/studios", "/artists", "/musicgenres", "/persons", "/channels", "/livetv", "/items", "/movies", "/shows", "/search"} {
+			if path == prefix || strings.HasPrefix(path, prefix+"/") {
+				return true
+			}
+		}
+		return false
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/url"
+	"slices"
 )
 
 func MatrixPluginHost() Client {
@@ -52,7 +53,14 @@ func MatrixSubsonic(methods []string) Client {
 		"deletePlaylist": "&id={subsonicPlaylist}",
 	}
 	mutates := map[string]bool{"createPlaylist": true, "updatePlaylist": true, "deletePlaylist": true, "star": true, "unstar": true, "scrobble": true, "setRating": true}
-	for _, name := range methods {
+	playlist := []string{"createPlaylist", "getPlaylist", "updatePlaylist", "deletePlaylist"}
+	order := slices.DeleteFunc(slices.Clone(methods), func(name string) bool { return slices.Contains(playlist, name) })
+	for _, name := range playlist {
+		if slices.Contains(methods, name) {
+			order = append(order, name)
+		}
+	}
+	for _, name := range order {
 		query := "?u={subsonicUser}&p={subsonicPass}&v=1.16.1&c=etherperf&f=json"
 		step := Step{Name: name, Class: classBrowse, Path: "/" + name + ".view" + query + params[name], Accept: subsonicOK}
 		if mutates[name] {

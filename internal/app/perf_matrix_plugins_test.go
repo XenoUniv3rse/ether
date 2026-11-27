@@ -106,6 +106,11 @@ func readPerfMusicFixture(dir string) (perfMusicFixture, error) {
 	if len(js) == 0 {
 		return fixture, fmt.Errorf("compile Music fixture: %v", diagnostics)
 	}
+	// The fixture already contains the Music library. A push declaration
+	// keeps installation from starting a pull sync against real providers.
+	for i := range parsed.Ether.Contributes.MediaKinds {
+		parsed.Ether.Contributes.MediaKinds[i].Sync = plugins.KindSyncDecl{Mode: plugins.KindSyncPush}
+	}
 	const bundledEntry = "dist/perf-fixture.js"
 	parsed.Ether.Runtime.Entry = bundledEntry
 	fixture.files[bundledEntry] = js
@@ -176,13 +181,15 @@ func installPerfMatrixSports(ctx context.Context, a *App) error {
 			"contributes":{
 				"liveFeeds":[{"id":"sports","title":"Fixture Sports","minIntervalSec":15}],
 				"surfaces":[{"id":"scorebug","presentation":"playerOverlay","title":"Fixture score","anchor":"topLeft",
+					"setting":{"id":"scorebug","label":"Fixture score","default":true},
 					"when":{"event":{"feed":"sports"}},"document":"scorebug.json"}]
 			}
 		}
 	}`
 	const overlay = `{"schema":1,"kind":"screen","renderer":19,"sources":{"game":{"from":"liveEvent","feed":"sports","id":"{context.event}"}},"tree":{"type":"box"}}`
 	const script = `function handle(req) {
-		if (req.op && req.op !== "http") return {status:200, body:{}};
+		if (req.path === "/ether/health") return {status:200, body:{status:"ok"}};
+		if (!req.path || !req.path.startsWith("/ether/v1/live/")) return {status:200, body:{}};
 		const events = Array.from({length: 50}, (_, i) => ({
 			id: "game-" + i, feed: "sports", category: "sports",
 			league: {id: "fixture", name: "Fixture league"},

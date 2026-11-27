@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/braedonsaunders/ether/internal/catalog"
 	"github.com/braedonsaunders/ether/internal/config"
 	"github.com/braedonsaunders/ether/internal/core"
 	"github.com/braedonsaunders/ether/internal/debrid"
@@ -100,7 +101,9 @@ func testPerformanceMatrix(t *testing.T) {
 			break
 		}
 		t.Run(c.name, func(t *testing.T) {
-			runPerfMatrixCase(t, ctx, fixture, c, music, &report, writeReport)
+			caseCtx, stopCase := context.WithTimeout(ctx, 3*time.Minute)
+			defer stopCase()
+			runPerfMatrixCase(t, caseCtx, fixture, c, music, &report, writeReport)
 		})
 	}
 	if report.OffenderCount()+report.GapCount() != 0 {
@@ -110,8 +113,8 @@ func testPerformanceMatrix(t *testing.T) {
 
 func perfMatrixFixture(t *testing.T, ctx context.Context, cache string) string {
 	t.Helper()
-	path := filepath.Join(cache, "matrix-v1.db")
-	stamp := filepath.Join(cache, "matrix-v1.date")
+	path := filepath.Join(cache, "matrix-v2.db")
+	stamp := filepath.Join(cache, "matrix-v2.date")
 	if b, err := os.ReadFile(stamp); err == nil && strings.TrimSpace(string(b)) == time.Now().UTC().Format(time.DateOnly) {
 		if _, err := os.Stat(path); err == nil {
 			return path
@@ -136,6 +139,23 @@ func perfMatrixFixture(t *testing.T, ctx context.Context, cache string) string {
 			db.Close()
 			t.Fatal(err)
 		}
+	}
+	// Publish the normal serving indexes before cloning the fixture.
+	cfg, err := config.Open(scratch)
+	if err != nil {
+		db.Close()
+		t.Fatal(err)
+	}
+	cat, err := catalog.New(db, nil, cfg.Get().Catalog, nil, catalog.WithStartupContext(ctx))
+	if err == nil {
+		_, err = cat.RebuildRank(ctx)
+	}
+	if err == nil {
+		err = cat.ReplacePopularityIndexes(ctx)
+	}
+	if err != nil {
+		db.Close()
+		t.Fatal(err)
 	}
 	if err := db.Close(); err != nil {
 		t.Fatal(err)
@@ -173,6 +193,10 @@ func runPerfMatrixCase(t *testing.T, ctx context.Context, fixture string, c perf
 		cfg.Frontends = map[string]config.Frontend{"plex": {Enabled: true}, "jellyfin": {Enabled: true}, "emby": {Enabled: true}, "silo": {Enabled: true}, "vela": {Enabled: true}, "stremio": {Enabled: true}, "xtream": {Enabled: true}}
 		cfg.Server.BindAddress = "127.0.0.1"
 		cfg.Transcode.FFmpegPath = "/not-installed/ffmpeg"
+		if c.live {
+			cfg.Plex.Token = "fixture-plex-owner"
+			cfg.Plex.Claimed = true
+		}
 		cfg.Availability.Mode = config.ModeImmediate
 		cfg.Availability.MovieMode, cfg.Availability.ShowMode = c.movieMode, c.showMode
 		cfg.Availability.ApplyMode()
@@ -205,6 +229,9 @@ func runPerfMatrixCase(t *testing.T, ctx context.Context, fixture string, c perf
 	trace := filepath.Join(dir, "trace.jsonl")
 	t.Setenv(PerfTraceEnv, trace)
 	options := Options{DataDir: dir, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	if c.live {
+		options.plextvHTTP = &http.Client{Transport: perfMatrixPlexTV{}}
+	}
 	if c.sources {
 		provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
@@ -231,6 +258,10 @@ func runPerfMatrixCase(t *testing.T, ctx context.Context, fixture string, c perf
 		}
 	}
 	if c.live {
+		if err := a.registrar.RefreshOwner(ctx); err != nil {
+			report.AddGap(c.name, "plex", "", "", "Plex Pass fixture unavailable")
+			t.Error("Plex Pass fixture:", err)
+		}
 		if err := installPerfMatrixSports(ctx, a); err != nil {
 			report.AddGap(c.name, "harness", "", "", "sports overlay fixture unavailable")
 			t.Error("sports overlay fixture:", err)
@@ -256,12 +287,6 @@ func runPerfMatrixCase(t *testing.T, ctx context.Context, fixture string, c perf
 		if err := a.refreshLibraryPolicies(ctx); err != nil {
 			t.Fatal(err)
 		}
-	}
-	if _, err := a.catalog.RebuildRank(ctx); err != nil {
-		t.Fatal(err)
-	}
-	if err := a.catalog.ReplacePopularityIndexes(ctx); err != nil {
-		t.Fatal(err)
 	}
 	if c.viewer == 0 {
 		u, err := a.users.Owner(ctx)
@@ -308,7 +333,7 @@ func runPerfMatrixCase(t *testing.T, ctx context.Context, fixture string, c perf
 	if len(music.methods) != 0 {
 		cs = append(cs, perfharness.MatrixSubsonic(music.methods))
 	}
-	perfharness.AppendConsoleReads(cs, inventory, perfMatrixRouteExceptions)
+	perfharness.AppendMatrixReads(cs, inventory, perfMatrixRouteExceptions)
 	if only := os.Getenv("ETHER_PERF_GATE_CLIENTS"); only != "" {
 		cs = perfharness.Only(cs, strings.Split(only, ","))
 	}
@@ -325,6 +350,9 @@ func runPerfMatrixCase(t *testing.T, ctx context.Context, fixture string, c perf
 	}
 	r.Sequential(ctx, c.name, viewers[c.viewer:c.viewer+1], selected)
 	r.Sequential(ctx, c.name, viewers[:1], ownerOnly)
+	if ctx.Err() != nil {
+		report.AddGap(c.name, "harness", "", "", "case deadline reached before completing replay")
+	}
 	server.Close()
 	a.perf.waitTraces()
 	if settleMisses != 0 {
@@ -338,4 +366,18 @@ func runPerfMatrixCase(t *testing.T, ctx context.Context, fixture string, c perf
 	report.CheckRoutes(c.name, inventory, r.Results(), byTag, perfMatrixRouteExceptions)
 	t.Logf("recorded %d attempts", len(r.Results()))
 	writeReport()
+}
+
+type perfMatrixPlexTV struct{}
+
+func (perfMatrixPlexTV) RoundTrip(r *http.Request) (*http.Response, error) {
+	status, body := http.StatusOK, `[]`
+	switch r.URL.Path {
+	case "/api/v2/user":
+		body = `{"id":9101,"uuid":"matrix-owner","username":"owner","subscription":{"active":true}}`
+	case "/api/v2/features":
+	default:
+		status, body = http.StatusNotFound, `{}`
+	}
+	return &http.Response{StatusCode: status, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(strings.NewReader(body)), Request: r}, nil
 }

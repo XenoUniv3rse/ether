@@ -17,6 +17,16 @@ func MatrixClients(live bool) []Client {
 	clients := Clients()
 	for i := range clients {
 		switch clients[i].Name {
+		case "xtream":
+			const auth = "?username={xtreamUser}&password={xtreamPass}"
+			clients[i].Steps = append(clients[i].Steps,
+				Step{Name: "XMLTV guide export", Class: classGuide, Path: "/xmltv.php" + auth},
+				Step{Name: "M3U lineup export", Class: classGuide, Path: "/get.php" + auth + "&type=m3u_plus"},
+			)
+		case "stremio":
+			clients[i].Steps = append(clients[i].Steps,
+				Step{Name: "movie stream choices", Class: classPlayback, Path: "/stream/movie/{movieMeta}.json"},
+			)
 		case "vela":
 			clients[i].Steps = append(clients[i].Steps,
 				Step{Name: "bootstrap", Class: classHome, Path: "/bootstrap"},

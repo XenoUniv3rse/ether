@@ -41,8 +41,8 @@ const PerfGatePGEnv = "ETHER_PERF_GATE_PG"
 // second device that measures the first device's cached Home.
 var gateClients = []string{"plex-appletv", "plex-appletv second device", "plex-web", "infuse-jellyfin", "swiftfin", "emby-sdk", "silo-appletv", "vela", "stremio", "xtream", "console", "mcp", "plex-appletv playback"}
 
-// TestPerformanceGate fails when a request path scales with the library.
-// It builds the same synthetic household over a library of SmallScale and
+// TestPerformanceGate runs the configuration matrix in mode 1. The scale
+// modes compare work across library sizes. They build the same synthetic household over a library of SmallScale and
 // one ten times larger (LargeScale, 500k+ catalogue rows), replays every
 // protocol's request sequence against a real App on each, and compares each
 // endpoint's statements and rows read between the two. A path that walks the
