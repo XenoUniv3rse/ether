@@ -718,6 +718,8 @@ type Indexer interface {
 }
 
 type ResolveRequest struct {
+	// ClientDeliveryBudgetKbps is an advisory measured last-mile budget, set by the resolver.
+	ClientDeliveryBudgetKbps int
 	// PreferVideoCodec softly preserves the representation family during background replacement.
 	PreferVideoCodec string
 	Title            *Title

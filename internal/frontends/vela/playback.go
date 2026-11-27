@@ -6,17 +6,19 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/braedonsaunders/ether/internal/frontend"
-	"github.com/braedonsaunders/ether/internal/frontend/kit/ids"
-	"github.com/braedonsaunders/ether/internal/frontend/kit/reading"
 	"log/slog"
 	"math"
 	"net/http"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/braedonsaunders/ether/internal/frontend"
+	"github.com/braedonsaunders/ether/internal/frontend/kit/ids"
+	"github.com/braedonsaunders/ether/internal/frontend/kit/reading"
 )
 
 type client struct {
@@ -99,6 +101,7 @@ type playSession struct {
 	observedSource                   uint64
 	position                         time.Duration
 	cursor                           uint64
+	lastPlanEvent                    time.Time
 	events                           []object
 	signal                           chan struct{}
 	stream                           context.CancelFunc
@@ -114,6 +117,8 @@ type playSession struct {
 	trickplayLastPublish             time.Time
 	trickplayGenerating              bool
 }
+
+const observationPlanInterval = 10 * time.Second
 
 func seconds(n float64) (time.Duration, bool) {
 	if math.IsNaN(n) || math.IsInf(n, 0) || n < 0 || n > float64(math.MaxInt64)/float64(time.Second) {
@@ -495,6 +500,7 @@ func (i *instance) playback(w http.ResponseWriter, r *http.Request) {
 }
 
 func (i *instance) registerPlaySession(ps *playSession) {
+	ps.lastPlanEvent = time.Now()
 	i.mu.Lock()
 	for id, old := range i.sessions {
 		old.mu.Lock()
@@ -563,17 +569,24 @@ func (s *playSession) snapshot() object {
 	}
 	return out
 }
-func (s *playSession) publish(kind string) {
-	s.cursor++
+func (s *playSession) revisePlan() {
 	s.revision++
 	s.plan["revision"] = s.revision
 	s.plan["sourceGeneration"] = s.source
 	s.plan["seekGeneration"] = s.seek
 	s.plan["positionSeconds"] = s.position.Seconds()
 	s.updateBehindLive()
-	if kind == "plan" && s.trickplayCurrent != s.trickplayPublished {
-		s.trickplayPublished = s.trickplayCurrent
-		s.trickplayLastPublish = time.Now()
+}
+
+func (s *playSession) publish(kind string) {
+	s.cursor++
+	s.revisePlan()
+	if kind == "plan" {
+		s.lastPlanEvent = time.Now()
+		if s.trickplayCurrent != s.trickplayPublished {
+			s.trickplayPublished = s.trickplayCurrent
+			s.trickplayLastPublish = s.lastPlanEvent
+		}
 	}
 	b, _ := json.Marshal(s.plan)
 	var p object
@@ -623,10 +636,20 @@ func (i *instance) refreshColdVersions(r *http.Request, v *frontend.Viewer, s *p
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.active.release.ID != active.release.ID {
-		return // a failover moved the session meanwhile; its refresh wins
+	if !s.versionsCold || s.commandActive || !s.ended.IsZero() || s.active.release.ID != active.release.ID || s.active.handle != active.handle {
+		return // a command, failover or another refresh superseded this read
 	}
-	applyVersionPlan(s.plan, versionPlan)
+	changed := false
+	for _, key := range versionPlanFields {
+		if !reflect.DeepEqual(s.plan[key], versionPlan[key]) {
+			changed = true
+			break
+		}
+	}
+	if changed {
+		applyVersionPlan(s.plan, versionPlan)
+		s.publish("plan")
+	}
 	s.versionsCold = stillCold
 }
 func stale(w http.ResponseWriter, s *playSession, source, seek uint64) bool {
@@ -644,7 +667,7 @@ func (i *instance) command(w http.ResponseWriter, r *http.Request) {
 	var b struct {
 		Kind, PathID, AudioTrackID       string
 		VersionID                        string
-		MaxBitrate                       int
+		MaxBitrate                       *int
 		MaxHeight                        *int
 		AtSeconds                        *float64
 		SubtitleTrackID                  json.RawMessage
@@ -723,11 +746,22 @@ func (i *instance) command(w http.ResponseWriter, r *http.Request) {
 		s.clearDisconnectTimerLocked()
 		s.plan["state"] = "ended"
 	case "prepare-fallback":
-		if !i.prepareFallback(w, r, v, s, id, b.MaxBitrate) {
+		if b.MaxBitrate == nil || *b.MaxBitrate <= 0 {
+			problem(w, 400, "request", "invalid_bitrate")
+			return
+		}
+		if !i.prepareFallback(w, r, v, s, id, *b.MaxBitrate) {
 			return
 		}
 	case "switch":
 		var pos time.Duration
+		if b.MaxBitrate != nil {
+			pos = s.position
+		}
+		if b.MaxBitrate != nil && b.PathID != "" {
+			problem(w, 400, "request", "invalid_request")
+			return
+		}
 		ok := true
 		if b.PositionSeconds != nil {
 			pos, ok = seconds(*b.PositionSeconds)
@@ -739,10 +773,18 @@ func (i *instance) command(w http.ResponseWriter, r *http.Request) {
 			problem(w, 400, "request", "invalid_position")
 			return
 		}
+		pathID := b.PathID
+		if b.MaxBitrate != nil {
+			rung, ok := i.selectQualityRung(w, r, v, s, id, *b.MaxBitrate)
+			if !ok {
+				return
+			}
+			pathID = "quality-" + rung.ID
+		}
 		paths := s.plan["paths"].([]object)
 		selected := -1
 		for n, path := range paths {
-			if path["id"] == b.PathID {
+			if path["id"] == pathID {
 				selected = n
 				break
 			}
@@ -752,7 +794,7 @@ func (i *instance) command(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		path := paths[selected]
-		if rung := s.rungFor(path); rung != "" {
+		if rung := s.rungFor(path); rung != "" && b.MaxBitrate == nil {
 			allowed := false
 			if !s.port(w, func() { allowed = i.qualityAllowed(r.Context(), i.access(r, v), id, rung) }) {
 				return
@@ -769,7 +811,7 @@ func (i *instance) command(w http.ResponseWriter, r *http.Request) {
 			format = frontend.StreamHTTP
 		}
 		origin := pos
-		if fallback, ok := s.plan["fallback"].(object); ok && fallback["state"] == "ready" && fallback["pathId"] == b.PathID {
+		if fallback, ok := s.plan["fallback"].(object); ok && fallback["state"] == "ready" && fallback["pathId"] == pathID {
 			if at, ok := path["timelineOriginSeconds"].(float64); ok {
 				if prepared, valid := seconds(at); valid && prepared <= pos {
 					origin = prepared
@@ -788,14 +830,14 @@ func (i *instance) command(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		for _, previous := range paths {
-			if previous["id"] != b.PathID && previous["original"] != true {
+			if previous["id"] != pathID && previous["original"] != true {
 				delete(previous, "url")
 				previous["qualities"] = []object{}
 				delete(previous, "initialRenditionId")
 				previous["readiness"] = "on-demand"
 			}
 		}
-		if rung := s.qualityRungs[b.PathID]; rung != "" {
+		if rung := s.qualityRungs[pathID]; rung != "" {
 			url = strings.TrimSuffix(url, "master.m3u8") + rung + "/index.m3u8"
 		}
 		path["url"], path["readiness"] = url, "ready"
@@ -803,7 +845,7 @@ func (i *instance) command(w http.ResponseWriter, r *http.Request) {
 		if format == frontend.StreamHLS {
 			path["timelineOriginSeconds"] = origin.Seconds()
 		}
-		s.plan["selectedPathId"] = b.PathID
+		s.plan["selectedPathId"] = pathID
 		if format == frontend.StreamHLS {
 			if !s.portSnapshot(w, func(copy *playSession) { i.refreshTrackDelivery(r.Context(), i.access(r, v), id, copy) }) {
 				return
@@ -1247,6 +1289,7 @@ func (i *instance) observe(w http.ResponseWriter, r *http.Request) {
 	var b struct {
 		SourceGeneration, SeekGeneration, Sequence uint64
 		PositionSeconds                            float64
+		ThroughputBps                              json.RawMessage
 		State, SelectedPathID                      string
 		AudioTrackID                               *string
 		SubtitleTrackID                            json.RawMessage
@@ -1283,6 +1326,13 @@ func (i *instance) observe(w http.ResponseWriter, r *http.Request) {
 	default:
 		problem(w, 400, "request", "invalid_state")
 		return
+	}
+	var throughput float64
+	if len(b.ThroughputBps) > 0 {
+		if json.Unmarshal(b.ThroughputBps, &throughput) != nil || !frontend.ValidClientThroughput(throughput) {
+			problem(w, 400, "request", "invalid_observation")
+			return
+		}
 	}
 	var audioIndex, subtitleIndex *int
 	if b.AudioTrackID != nil {
@@ -1323,7 +1373,7 @@ func (i *instance) observe(w http.ResponseWriter, r *http.Request) {
 		if archive {
 			return i.playbackKeepAlive(r.Context(), i.access(r, v), r.PathValue("id"), s)
 		}
-		return i.host.Sessions.Report(r.Context(), i.access(r, v), r.PathValue("id"), frontend.Timeline{Sequence: b.Sequence, Position: pos, State: b.State, AudioStreamIndex: audioIndex, SubtitleStreamIndex: subtitleIndex})
+		return i.host.Sessions.Report(r.Context(), i.access(r, v), r.PathValue("id"), frontend.Timeline{Sequence: b.Sequence, Position: pos, State: b.State, ThroughputBps: throughput, AudioStreamIndex: audioIndex, SubtitleStreamIndex: subtitleIndex})
 	}()
 	if stale(w, s, b.SourceGeneration, b.SeekGeneration) {
 		return
@@ -1365,6 +1415,7 @@ func (i *instance) observe(w http.ResponseWriter, r *http.Request) {
 	if b.AudioTrackID != nil {
 		s.plan["selectedAudioTrackId"] = *b.AudioTrackID
 	}
+	tracksChanged := len(b.SubtitleTrackID) > 0 && s.plan["selectedSubtitleTrackId"] != subtitleID
 	if len(b.SubtitleTrackID) > 0 {
 		s.plan["selectedSubtitleTrackId"] = subtitleID
 	}
@@ -1399,8 +1450,15 @@ func (i *instance) observe(w http.ResponseWriter, r *http.Request) {
 		if state == "buffering" {
 			state = "recovering"
 		}
+		previous := s.plan["state"]
 		s.plan["state"] = state
-		s.publish("plan")
+		clockOnly := !tracksChanged && (previous == state ||
+			((previous == "playing" || previous == "recovering") && (state == "playing" || state == "recovering")))
+		if clockOnly && time.Since(s.lastPlanEvent) < observationPlanInterval {
+			s.revisePlan()
+		} else {
+			s.publish("plan")
+		}
 	}
 	send(w, 200, object{"accepted": true})
 }

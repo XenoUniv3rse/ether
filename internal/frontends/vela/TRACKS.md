@@ -43,6 +43,8 @@ and seek generations. Actual HLS qualities remain real broker rendition URLs,
 with pending/empty codecs until init bytes prove them. A prepared switch retains
 the prepared timeline origin. Seek/track restarts invalidate prepared paths.
 Original-file URLs stay ready and range-authorized while HLS is prepared/played.
+See the [Vela session and events contract](../../../docs/protocols/vela-sessions.md)
+for switching by bitrate and observation semantics.
 
 `prepare-fallback` with positive maxBitrate selects the highest allowed lower rung
 whose peak bitrate fits the limit, requests a bounded media range on the existing

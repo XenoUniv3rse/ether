@@ -82,6 +82,9 @@ func (i *instance) versions(w http.ResponseWriter, r *http.Request) {
 	if proj.rememberedChoice != nil {
 		out["rememberedChoice"] = proj.rememberedChoice
 	}
+	if proj.autoSelectionReason != nil {
+		out["autoSelectionReason"] = proj.autoSelectionReason
+	}
 	cache(w, r, out)
 }
 
@@ -154,6 +157,9 @@ func (i *instance) clearVersionChoice(w http.ResponseWriter, r *http.Request) {
 		}
 		out["selectedVersionId"] = proj.selectedVersionID
 		out["versions"] = proj.versions
+		if proj.autoSelectionReason != nil {
+			out["autoSelectionReason"] = proj.autoSelectionReason
+		}
 		if proj.rememberedChoice != nil {
 			out["rememberedChoice"] = proj.rememberedChoice
 		}
@@ -168,9 +174,10 @@ func (i *instance) clearVersionChoice(w http.ResponseWriter, r *http.Request) {
 }
 
 type versionsProjection struct {
-	selectedVersionID any
-	versions          []object
-	rememberedChoice  object
+	autoSelectionReason object
+	selectedVersionID   any
+	versions            []object
+	rememberedChoice    object
 	// playingVersionID and playingLabel name the release an active session
 	// reads now (after any failover); unset outside a session.
 	playingVersionID any
@@ -184,9 +191,10 @@ type versionsProjection struct {
 // with ("" for Auto) and the release it reads now, which moves on a failover.
 // Release carries at least its ID; Media is the session's media when known.
 type activeVersion struct {
-	handle  string
-	release frontend.Release
-	media   frontend.MediaInfo
+	autoReason frontend.AutoSelectionReason
+	handle     string
+	release    frontend.Release
+	media      frontend.MediaInfo
 }
 
 // versionFactFields describe a version's release; an Auto row that is
@@ -194,7 +202,7 @@ type activeVersion struct {
 var versionFactFields = []string{"resolution", "dynamicRange", "videoCodec", "audio", "source", "edition", "sizeBytes", "languages"}
 
 // versionPlanFields are the plan fields attachPlaybackVersions owns.
-var versionPlanFields = []string{"selectedVersionId", "versions", "rememberedChoice", "playingVersionId", "playingLabel"}
+var versionPlanFields = []string{"selectedVersionId", "versions", "rememberedChoice", "playingVersionId", "playingLabel", "autoSelectionReason"}
 
 // attachPlaybackVersions sets the plan's version menu and reports whether it
 // is still cold (placeholder slots), so the session can refresh it.
@@ -216,6 +224,11 @@ func (i *instance) attachPlaybackVersions(ctx context.Context, v *frontend.Viewe
 		plan["rememberedChoice"] = proj.rememberedChoice
 	} else {
 		delete(plan, "rememberedChoice")
+	}
+	if proj.autoSelectionReason != nil {
+		plan["autoSelectionReason"] = proj.autoSelectionReason
+	} else {
+		delete(plan, "autoSelectionReason")
 	}
 	if proj.playingLabel != "" {
 		plan["playingVersionId"] = proj.playingVersionID
@@ -241,6 +254,9 @@ func applyVersionPlan(plan, from object) {
 
 func (i *instance) titleVersionsProjection(ctx context.Context, v *frontend.Viewer, dev frontend.Device, title frontend.Title, caps frontend.ClientCaps, active activeVersion) (versionsProjection, error) {
 	activeHandle, activeReleaseID := active.handle, active.release.ID
+	if dev.ID != "" {
+		caps.ClientID = frontend.PlaybackClientID("vela", dev.ID)
+	}
 	req := frontend.ResolveRequest{Title: &title, Client: caps, User: v}
 	var variants []frontend.ReleaseVariant
 	var err error
@@ -353,7 +369,13 @@ func (i *instance) titleVersionsProjection(ctx context.Context, v *frontend.View
 		}
 	}
 	playingLabel, _ := playingItem["label"].(string)
+	autoReason := active.autoReason
 	if autoIdx >= 0 {
+		if activeReleaseID == "" {
+			autoReason = listed[autoIdx].AutoSelectionReason
+		} else if selectedID != autoID {
+			autoReason = ""
+		}
 		auto := items[autoIdx]
 		pickLabel, _ := auto["label"].(string)
 		label := "Auto (best available)"
@@ -391,12 +413,13 @@ func (i *instance) titleVersionsProjection(ctx context.Context, v *frontend.View
 		}
 	}
 	return versionsProjection{
-		selectedVersionID: selectedID,
-		versions:          items,
-		rememberedChoice:  rememberedChoice,
-		playingVersionID:  playingID,
-		playingLabel:      playingLabel,
-		cold:              cold,
+		autoSelectionReason: autoSelectionReason(autoReason, dev.Language),
+		selectedVersionID:   selectedID,
+		versions:            items,
+		rememberedChoice:    rememberedChoice,
+		playingVersionID:    playingID,
+		playingLabel:        playingLabel,
+		cold:                cold,
 	}, nil
 }
 
@@ -912,7 +935,7 @@ func pickListed(listed []frontend.ReleaseVariant, autoIdx int) bool {
 }
 
 func planActiveVersion(plan frontend.PlayPlan) activeVersion {
-	return activeVersion{handle: plan.VersionHandle, release: frontend.Release{ID: plan.ReleaseID}, media: plan.Media}
+	return activeVersion{autoReason: plan.AutoSelectionReason, handle: plan.VersionHandle, release: frontend.Release{ID: plan.ReleaseID}, media: plan.Media}
 }
 
 // pollPlayingRelease reads the release the session's playback reads now and,

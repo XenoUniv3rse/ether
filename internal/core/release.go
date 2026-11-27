@@ -415,6 +415,7 @@ func (r Release) ProbeContentKeys() []string {
 // Resolution is the resolver's answer for a title and client: the winning
 // release, already health-checked, plus fallbacks for mid-stream failover.
 type Resolution struct {
+	AutoSelectionReason AutoSelectionReason `json:"autoSelectionReason,omitempty"`
 	// VersionSelector is the configured slot that this concrete release fulfilled.
 	VersionSelector string `json:"versionSelector,omitempty"`
 	// HealthVerified means the complete volume sample passed, rather than an

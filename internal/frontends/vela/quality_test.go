@@ -61,7 +61,7 @@ func TestQualitySessionInvariants(t *testing.T) {
 	if f.prepared != 1 || s.source != 1 || s.seek != 1 || s.plan["selectedPathId"] != "primary" || s.plan["fallback"].(object)["state"] != "ready" {
 		t.Fatal("preparation changed playback", s.plan)
 	}
-	if w := call(object{"kind": "switch", "pathId": "quality-480p1500k", "atSeconds": 95}); w.Code != 200 {
+	if w := call(object{"kind": "switch", "maxBitrate": 2000000, "atSeconds": 95}); w.Code != 200 {
 		t.Fatal(w.Code, w.Body.String())
 	}
 	if s.source != 2 || s.seek != 2 || s.position != 95*time.Second || paths[2]["timelineOriginSeconds"] != 90.0 || starts[0].Position != 90*time.Second || paths[0]["url"] == nil {

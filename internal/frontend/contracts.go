@@ -1256,7 +1256,16 @@ type PlanRequest struct {
 	Caps       core.ClientCaps
 	Intent     PlayIntent
 }
+type AutoSelectionReason = core.AutoSelectionReason
+
+const (
+	AutoConnectionEstimate = core.AutoConnectionEstimate
+	AutoSourceDelivery     = core.AutoSourceDelivery
+	AutoResumeSource       = core.AutoResumeSource
+)
+
 type PlayPlan struct {
+	AutoSelectionReason        AutoSelectionReason
 	SourceChosenAt, DecisionAt time.Time
 	ID                         string
 	Estimated                  bool
@@ -1386,7 +1395,13 @@ type SessionCapabilities struct {
 	AppStoreURL                  string
 	IconURL                      string
 }
+
+// ValidClientThroughput checks a measured client download rate in bits/s.
+func ValidClientThroughput(bps float64) bool { return core.ValidClientThroughput(bps) }
+
 type Timeline struct {
+	// ThroughputBps is optional client download telemetry in bits/s.
+	ThroughputBps float64 `json:"throughputBps,omitempty"`
 	// Observed track indices are presence-aware client telemetry, not proof of
 	// manual intent. In particular Jellyfin Web emits ordinary timeupdate events.
 	AudioStreamIndex, SubtitleStreamIndex *int

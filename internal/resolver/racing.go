@@ -40,6 +40,10 @@ type candidate struct {
 	prepared         *candidateCheck // validation overlapped with descriptor discovery
 	graceStart       time.Time       // discovery start, set only when preparation overran the grace
 	fallbacks        []candidate     // quiet fallbacks inside the same near-duplicate repost group
+
+	preDeliveryBandwidth int
+	deliveryDemotion     core.AutoSelectionReason
+	autoReason           core.AutoSelectionReason
 }
 
 type validation struct {
@@ -132,7 +136,7 @@ func (s *Service) resolution(key core.RatingKey, cands []candidate, winner int, 
 // resolutionSkipping is resolution with the caller deciding which
 // candidates cannot serve as failover alternates.
 func (s *Service) resolutionSkipping(key core.RatingKey, cands []candidate, winner int, nzb []byte, skip func(candidate) bool) *core.Resolution {
-	res := &core.Resolution{Title: key, Release: cands[winner].rel, NZB: nzb, ResolvedAt: s.now()}
+	res := &core.Resolution{Title: key, Release: cands[winner].rel, NZB: nzb, ResolvedAt: s.now(), AutoSelectionReason: cands[winner].autoReason}
 	if cands[winner].keys.addonOrder > 0 {
 		// Failover for an add-on-ordered source follows the ranked order
 		// directly instead of regrouping by edition or cache status.
