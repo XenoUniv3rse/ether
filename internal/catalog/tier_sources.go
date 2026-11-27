@@ -246,7 +246,7 @@ var tierUntouchedTables = []string{
 	"stats_newsletter_", "stats_provider_days", "stats_play_timeline", "plugins_artifacts", "plugins_calls", "plugins_catalogue_",
 	"plugins_remote_hashes", "plugins_remote_hash_budget", "plugins_hash_cache", "plugins_kv_usage", "plugins_event_log", "plugins_grants", "plugins_health", "plugins_installed", "plugins_logs",
 	"plugins_proposals", "plugins_settings", "plugins_derived_secrets", "agent_approvals", "agent_audit", "agent_secret_requests",
-	"agent_threads", "schema_migrations", "sqlite_",
+	"agent_threads", "assistant_upgrades", "schema_migrations", "sqlite_",
 }
 
 // tierTouched is the set of titles the touch sources name, collapsed to
