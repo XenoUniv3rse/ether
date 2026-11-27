@@ -143,11 +143,11 @@ func (s *Service) runRevealSeason(ctx context.Context, seasonKey core.RatingKey)
 		return
 	}
 	playable := s.playableEpisodeReleases(ctx, episodes)
-	keys := make([]core.RatingKey, len(episodes))
+	episodeKeys := make([]core.RatingKey, len(episodes))
 	for i, ep := range episodes {
-		keys[i] = ep.Key
+		episodeKeys[i] = ep.Key
 	}
-	found := s.gateKeys(ctx, "", nil, keys)
+	found := s.gateKeys(ctx, "", nil, episodeKeys)
 	releasedCount := 0
 	var unreleased []core.Title
 	for _, ep := range episodes {
