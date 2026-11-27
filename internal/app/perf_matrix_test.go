@@ -13,6 +13,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"slices"
@@ -327,6 +328,18 @@ func runPerfMatrixCase(t *testing.T, ctx context.Context, fixture string, c perf
 		}
 	}
 	if len(clients) == 0 || slices.Contains(clients, "console") {
+		limiter, err := identity.NewLoginLimiter(a.db, 15*time.Minute, 30, 8, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		lockoutIP := netip.MustParseAddr("192.0.2.1")
+		for _, viewer := range []string{"matrix-locked-a", "matrix-locked-b"} {
+			for range 8 {
+				if _, err := limiter.Allow(ctx, viewer, lockoutIP); err != nil {
+					t.Fatal("console lockout fixture:", err)
+				}
+			}
+		}
 		templates, err := a.onair.Templates(ctx)
 		if err != nil || len(templates) == 0 {
 			t.Fatalf("On-Air templates fixture: %v", err)
