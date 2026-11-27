@@ -24,8 +24,8 @@ func TestSearchCacheTTLScalesWithTitleAge(t *testing.T) {
 	}{
 		{"unknown date keeps the base", time.Time{}, false, base},
 		{"unknown date empty keeps the short miss", time.Time{}, true, emptySearchCacheTTL},
-		{"new title", now.Add(-10 * day), false, base},
-		{"year-old title", now.Add(-400 * day), false, 7 * day},
+		{"new title", now.Add(-10 * day), false, freshResultTTL},
+		{"year-old title", now.Add(-400 * day), false, base},
 		{"unreleased title", now.Add(10 * day), false, base},
 		{"new episode not up yet", now.Add(-2 * day), true, emptySearchCacheTTL},
 		{"old title with nothing", now.Add(-60 * day), true, 30 * time.Minute},
@@ -35,22 +35,21 @@ func TestSearchCacheTTLScalesWithTitleAge(t *testing.T) {
 		}
 	}
 	mid := searchCacheTTL(base, now.Add(-200*day), now, false)
-	if mid <= base || mid >= 7*day {
-		t.Errorf("half-year-old title: %v, want between %v and a week", mid, base)
+	if mid <= freshResultTTL || mid >= base {
+		t.Errorf("half-year-old title: %v, want between %v and %v", mid, freshResultTTL, base)
 	}
 	if got := searchCacheTTL(0, now.Add(-400*day), now, false); got != 0 {
 		t.Errorf("disabled cache: %v", got)
 	}
 }
 
-// Speculative work (warm-ups, detail discovery, availability) asks only the
+// Speculative work (warm-ups, availability) asks only the
 // primary query and remembers its miss; it never fans out into fallbacks or
 // a rescue. Play on the same title still runs the fallback burst.
 func TestSpeculativeSearchAsksPrimaryQueryOnly(t *testing.T) {
 	req := core.SearchRequest{Type: core.TypeMovie, IDs: core.IDs{IMDB: "tt0133093", TMDB: 603}, Title: "The Signal", OriginalTitle: "La Señal", Year: 1999}
 	for _, ctx := range []context.Context{
 		core.WithIndexerPurpose(core.WithUnattendedSearch(context.Background()), core.IndexerPurposeWarmup),
-		core.WithIndexerPurpose(context.Background(), core.IndexerPurposeDetail),
 		core.WithIndexerPurpose(context.Background(), core.IndexerPurposeAvailability),
 	} {
 		f := newFakeIndexer(t, "emptyimdb")
@@ -164,8 +163,9 @@ func TestEventsSeparateHTTPRequestsFromCacheAndBudgetRefusals(t *testing.T) {
 		t.Fatalf("speculative refusal events=%+v http=%d", evs, searchHTTP())
 	}
 
-	// 3. Foreground Play on missReq runs multi-attempt fallbacks (DailyLimit>0 steps serially:
-	// primary IMDB misses -> Empty=true; keyword fallback hits -> Empty=false).
+	// 3. A new foreground title runs multi-attempt fallbacks.
+	// The primary IMDB miss emits Empty=true; the keyword hit emits Empty=false.
+	missReq.IDs.IMDB = "tt0000003"
 	play := core.WithIndexerPurpose(ctx, core.IndexerPurposePlayback)
 	beforeHTTP := searchHTTP()
 	rels, err := m.Search(play, missReq)

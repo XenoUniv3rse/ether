@@ -78,10 +78,6 @@
   "m_0046e4c747753d": "Sökväg till SABnzbd, NZBGet eller en mapp",
   "m_00472daf7fd987": "Scenverktyg",
   "m_0047ca07cfeee1": "Multiplicera",
-  "m_004835dbe00869": {
-    "one": "{count} NZB-nedladdning per dag",
-    "other": "{count} NZB-nedladdningar per dag"
-  },
   "m_00487c78d70a2b": "TMDB-medelbetyg",
   "m_004b75b2cb0bec": "Anslut Trakt",
   "m_004b7d6d1ecb73": "Newznab eller Torznab",
@@ -219,10 +215,6 @@
   "m_00b0de0a19eb13": "Día de los Muertos",
   "m_00b2237c907a62": "En fristående cache på den här noden.",
   "m_00b24584b5544b": "Dölj slutförda titlar",
-  "m_00b2c78f02f956": {
-    "one": "{used} av {count} sökning använd i dag",
-    "other": "{used} av {count} sökningar använda i dag"
-  },
   "m_00b30b4c3c27c6": "Uppskattade anrop: {calls} · upp till {time}",
   "m_00b3b9137934b5": "Det här pluginet behöver ingen installation.",
   "m_00b5138d8d1c2c": "Alla enheter",
@@ -1681,6 +1673,7 @@
   "m_04d93549f681a6": "Eget certifikat",
   "m_04da799deb944d": "Liveentiteter: {feed}",
   "m_04da7ed0251fc7": "Ny position (1–{total})",
+  "m_04db92c55ebad3": "Förfrågningar skickade med knappen Testa.",
   "m_04db9f92663e38": "—",
   "m_04dc1ac4895ab6": {
     "one": "{count} regel",
@@ -3479,7 +3472,6 @@
   "m_0a353c822e5747": "Serie-specifika ljud- och undertextval visas här.",
   "m_0a3582429c3e2a": "Den här säkerhetskopian kan inte återställas",
   "m_0a358a261dd76d": "Härnäst i deras flöde (nr 3–nr {last})",
-  "m_0a3609028d6ccf": "0 = automatiskt. Inkluderar sökningar och funktionskontroller.",
   "m_0a360fce8ac8e0": "Alla utom…",
   "m_0a384b5261f829": "Publicera nya samlingar direkt",
   "m_0a397e30db35d2": "Hämta undertexter från SubSource när en release inte innehåller några.",
@@ -3765,6 +3757,7 @@
   "m_0b01c603950f98": "Fullmånedagen och en dag före och efter",
   "m_0b021ea5625451": "”{name}” och dess körningshistorik tas bort. Aktiva körningar avbryts.",
   "m_0b0377f6f73793": "Dra banans punkter på arbetsytan för att ändra formen.",
+  "m_0b03e4c94925ca": "Förfrågningar som skickades när någon öppnade en titels detaljer.",
   "m_0b04b904ce4f9a": "Dra för att ändra ordning",
   "m_0b0535abc42eed": "Fasta tider och specialprogram",
   "m_0b05402766bbc7": "Händelseutlösare",
@@ -3829,6 +3822,7 @@
   "m_0b32dcf58f62f8": "Ethers huvudport på den här datorn — Plex Media Server använder 32400. När du sparar startas Ether om och den här sidan återansluts.",
   "m_0b33b638b094ef": "Ser alla {total} bibliotek",
   "m_0b348291859243": "Öppna utkast",
+  "m_0b3589f7d1cea1": "Omfattar sökningar, nedladdningar och funktionskontroller. 0 använder tjänstens gräns.",
   "m_0b3701e758d22b": "Varje tittare ansluter sitt eget Simkl-konto under fliken Inloggning och enheter.",
   "m_0b37402f5b6f1f": "Ta bort indexerare",
   "m_0b37d505eb1152": "{direction} · var {interval}",
@@ -4573,6 +4567,7 @@
   "m_0d737d7fbd2098": "Nedladdningar och arkiv",
   "m_0d738b81ca89d8": "Uppdateras under uppspelning",
   "m_0d73e689bad5af": "Samtidiga förbättringar",
+  "m_0d74d87ba972c9": "Förbereder andra troliga uppspelningar när det finns plats i cachen.",
   "m_0d7660daf6e8de": {
     "one": "Position {position}, kanal #{number}; {count} efterföljande kanal flyttas.",
     "other": "Position {position}, kanal #{number}; {count} efterföljande kanaler flyttas."
@@ -4805,7 +4800,6 @@
   "m_0e322fd2337dba": "{label} till",
   "m_0e330448a3fb21": "Certifikatet har gått ut",
   "m_0e332032a85add": "Inga misslyckanden {period}",
-  "m_0e333ae4fe1948": "Sökningar per dag",
   "m_0e3366cfe70a46": "Inte verifierat av Ether",
   "m_0e36aa5db07dec": "Anslut en enhet",
   "m_0e374b213d550e": "Direkt fjärråtkomst är aktiverad",
@@ -5380,7 +5374,6 @@
   "m_0fcb903142677a": "Viktiga rader med trendande, populära och topprankade titlar, IMDb Top 250 samt nya släpp för filmer och serier.",
   "m_0fcb9c63d263d1": "Nedladdning",
   "m_0fcc28817a5426": "Nås borta hemifrån.",
-  "m_0fcd519b5f7bea": "Knappen Testa på en indexerare. De använder aldrig den dagliga gränsen.",
   "m_0fce6c6310cdfb": "Mediatyp",
   "m_0fd021bc358775": "Postproduktion",
   "m_0fd059077e674b": "{provider} bad Ether att sänka takten. Försöker igen om {seconds} s.",
@@ -6304,10 +6297,6 @@
   "m_1257e768d65e6a": "Reservleverantör för betyg",
   "m_125859821519cd": "Sökningar per dag, med och utan resultat",
   "m_12589eb2f87843": "Torznab (torrenter)",
-  "m_1258bfd1fd8938": {
-    "one": "{used} av {count} API-förfrågan använd i dag",
-    "other": "{used} av {count} API-förfrågningar använda i dag"
-  },
   "m_125952708f2adf": "{service} (standardregion)",
   "m_125a3da17154a8": "{indexer} söks inte längre.",
   "m_125a82d7760449": "Ljud: {choice}",
@@ -6426,6 +6415,7 @@
   "m_12a47491c32d3a": "Vänner",
   "m_12a48ff7764e53": "Katalogens mediatyp",
   "m_12a498a7fa8c02": "HDR och Dolby Vision",
+  "m_12a5262a9cca78": "Dagsgräns {cap} · återställs {time}",
   "m_12a57badb85ff6": "Skapa och öppna i redigeraren",
   "m_12a64356860b37": "Välj affisch och bakgrund för den här titeln.",
   "m_12a7d1abcca956": "Välj en tittare och en titel först.",
@@ -7254,6 +7244,7 @@
   "m_15268f30e4a1fe": "Innehåll",
   "m_1528d7499e0d53": "Linjebredd",
   "m_1529e6b3d3503d": "Sök pre-rolls …",
+  "m_152ba8c0f68baa": "Detaljvyer",
   "m_152c6d6f69adef": "Mappsökväg",
   "m_152d7e35d2433f": "Nästa avsnitt",
   "m_152e3f732b733d": "Tittar-ID",
@@ -8303,7 +8294,6 @@
   "m_18326b1877729d": "Serverstatus",
   "m_1833c8190e8b31": "Trimma ljudets början",
   "m_1833ece3bffbb6": "Lägg till en annan inloggning",
-  "m_1835cf83dde47a": "{left} kvar av {limit}",
   "m_1835e5482496fd": "Metadataspråk",
   "m_1836261a3a966b": "{minutes} min sedan",
   "m_1836e8dbce9f30": "Matcha alla",
@@ -8438,10 +8428,6 @@
   "m_1897e9736cf4c7": "Bygg om och installera",
   "m_189a21208e55a9": "Livehändelser visas här när flödet återhämtar sig.",
   "m_189a38f201f485": "Avbryt omstart",
-  "m_189a59134a29dd": {
-    "one": "{count} torrentnedladdning per dag",
-    "other": "{count} torrentnedladdningar per dag"
-  },
   "m_189c4ff843b6ae": "Lutar åt klassiker",
   "m_189cb89a9b1773": "Det gick inte att importera den här källan. {cause}",
   "m_189d042fe376d1": "Just nu · mätt {time}",
@@ -8991,7 +8977,6 @@
   "m_1a215de0530bb5": "Plex begärde den här Home-medlemmens PIN-kod",
   "m_1a21761831e96a": "Låter det här tillägget ansluta till serveradresserna du anger och godkänner.",
   "m_1a226ef379125b": "Accepterade delningar: {count}",
-  "m_1a2378bfd2cd95": "Förbereder titlar före Spela upp: öppnade detaljer, nästa avsnitt, bevakningslistor och den hanterade cachen.",
   "m_1a246203503065": "Döljer titlar över den här åldersnivån och titlar utan betyg.",
   "m_1a24958257b636": "De bäst rankade komedierna med varaktig överklagande.",
   "m_1a2572e1c90950": "är någon av",
@@ -10496,10 +10481,6 @@
   "m_1e95fffeefbf9f": "80-tal",
   "m_1e965e32c7e3a6": "Oanvänd",
   "m_1e9698e22da2ba": "Apache",
-  "m_1e977ff418b9ae": {
-    "one": "{count} API-förfrågan använd i dag",
-    "other": "{count} API-förfrågningar använda i dag"
-  },
   "m_1e98fbb9c75818": "Hämta support-ZIP",
   "m_1e9927ed806b43": "Plex godtar inte längre den här anslutningen. Anslut kontot igen.",
   "m_1e9a13fc2b1cbb": "Länken omdirigerades för många gånger.",
@@ -10682,6 +10663,7 @@
   "m_1f1d729a4ccc7d": "Lägg till de fyra årtiondeskanalerna",
   "m_1f1db71e3b33d3": "Ether startar om för att slutföra. Det tar oftast ungefär en minut, och den här sidan följer förloppet.",
   "m_1f1dc611b2fc0c": "Värden, separerade med kommatecken",
+  "m_1f1e269cdda29c": "Förbereder inför uppspelning: nästa avsnitt, bevakningslistor och den hanterade cachen.",
   "m_1f1fee7e3831fc": "Kärlekshistorier för 14 februari.",
   "m_1f20a9439592c3": "GB",
   "m_1f23e6040f16bf": "{duration} per dag",
@@ -10805,6 +10787,7 @@
   "m_1f6efbd7eae067": "Säkerhetskopia skapad",
   "m_1f6f9fd991e6d0": "Islamisk",
   "m_1f6fce6e05fba5": "Placeringar",
+  "m_1f71bc0996461c": "Försöker igen {time}",
   "m_1f7223c74bf3d9": "Välj en tittare",
   "m_1f749e388d1d74": "Mappar",
   "m_1f771df510b442": "Importera från Stremio-tillägg",

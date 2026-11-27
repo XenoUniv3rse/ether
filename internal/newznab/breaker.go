@@ -280,7 +280,8 @@ func callerLeft(ctx context.Context, elapsed time.Duration) bool {
 }
 
 func backgroundSearch(ctx context.Context) bool {
-	return core.SpeculativeIndexerWork(ctx) || core.IsBackgroundCheck(ctx) || core.IndexerPurpose(ctx) == core.IndexerPurposeFeed
+	return core.SpeculativeIndexerWork(ctx) || core.IsBackgroundCheck(ctx) ||
+		core.IsBackgroundAnalysis(ctx) || core.IndexerPurpose(ctx) == core.IndexerPurposeFeed
 }
 
 func (c *Client) searchBreaker(ctx context.Context) *breaker {

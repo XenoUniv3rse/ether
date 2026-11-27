@@ -40,7 +40,7 @@ func newWireServer(t *testing.T) *wireServer {
 		ws.mu.Unlock()
 		switch r.URL.Query().Get("t") {
 		case "caps":
-			fmt.Fprint(w, loadFixture(t, "caps.xml", ws.srv.URL))
+			fmt.Fprint(w, strings.Replace(loadFixture(t, "caps.xml", ws.srv.URL), "</categories>", `<category id="3000"/><category id="7000"/></categories>`, 1))
 		case "get":
 			fmt.Fprint(w, `<?xml version="1.0"?><nzb><file/></nzb>`)
 		case "tvsearch", "movie":

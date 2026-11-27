@@ -35,7 +35,8 @@ func ClassifyGrabRefusal(err error, now time.Time) *GrabRefusal {
 	}
 	desc := strings.ToLower(api.Description)
 	limitedRelease := strings.Contains(desc, "grab limit") &&
-		(api.Code == http.StatusConflict || strings.Contains(desc, "this nzb") || strings.Contains(desc, "this release"))
+		(strings.Contains(desc, "this nzb") || strings.Contains(desc, "this release") ||
+			(api.Code == http.StatusConflict && !strings.Contains(desc, "indexer grab limit") && !strings.Contains(desc, "daily")))
 	if !strings.Contains(desc, "already grabbed") && !limitedRelease {
 		return nil
 	}

@@ -78,10 +78,6 @@
   "m_0046e4c747753d": "Pfad zu SABnzbd, NZBGet oder einem Ordner",
   "m_00472daf7fd987": "Szenenwerkzeuge",
   "m_0047ca07cfeee1": "Multiplizieren",
-  "m_004835dbe00869": {
-    "one": "{count} NZB-Download pro Tag",
-    "other": "{count} NZB-Downloads pro Tag"
-  },
   "m_00487c78d70a2b": "TMDB-Durchschnittsbewertung",
   "m_004b75b2cb0bec": "Trakt verbinden",
   "m_004b7d6d1ecb73": "Newznab oder Torznab",
@@ -219,10 +215,6 @@
   "m_00b0de0a19eb13": "Día de los Muertos",
   "m_00b2237c907a62": "Ein unabhängiger Cache auf diesem Knoten.",
   "m_00b24584b5544b": "Abgeschlossene Titel ausblenden",
-  "m_00b2c78f02f956": {
-    "one": "{used} von {count} Suche heute verbraucht",
-    "other": "{used} von {count} Suchen heute verbraucht"
-  },
   "m_00b30b4c3c27c6": "Geschätzte Aufrufe: {calls} · bis zu {time}",
   "m_00b3b9137934b5": "Dieses Plugin braucht keine Einrichtung.",
   "m_00b5138d8d1c2c": "Alle Geräte",
@@ -1681,6 +1673,7 @@
   "m_04d93549f681a6": "Eigenes Zertifikat",
   "m_04da799deb944d": "Live-Entitäten: {feed}",
   "m_04da7ed0251fc7": "Neue Position (1–{total})",
+  "m_04db92c55ebad3": "Anfragen über die Schaltfläche „Testen“.",
   "m_04db9f92663e38": "—",
   "m_04dc1ac4895ab6": {
     "one": "{count} Regel",
@@ -3479,7 +3472,6 @@
   "m_0a353c822e5747": "Serienspezifische Audio- und Untertitelauswahlen erscheinen hier.",
   "m_0a3582429c3e2a": "Dieses Backup kann nicht wiederhergestellt werden",
   "m_0a358a261dd76d": "Als Nächstes in ihrem Feed (Nr. 3–{last})",
-  "m_0a3609028d6ccf": "0 = automatisch. Umfasst Suchen und Fähigkeitsprüfungen.",
   "m_0a360fce8ac8e0": "Alle außer…",
   "m_0a384b5261f829": "Neue Sammlungen sofort veröffentlichen",
   "m_0a397e30db35d2": "Untertitel von SubSource abrufen, wenn ein Release keine enthält.",
@@ -3765,6 +3757,7 @@
   "m_0b01c603950f98": "Der Vollmondtag und der Tag davor und danach",
   "m_0b021ea5625451": "„{name}“ und sein Ausführungsverlauf werden entfernt. Aktive Ausführungen werden abgebrochen.",
   "m_0b0377f6f73793": "Ziehe die Pfadpunkte auf der Zeichenfläche, um die Form zu ändern.",
+  "m_0b03e4c94925ca": "Anfragen beim Öffnen der Details eines Titels.",
   "m_0b04b904ce4f9a": "Zum Neuordnen ziehen",
   "m_0b0535abc42eed": "Feste Sendeplätze & Specials",
   "m_0b05402766bbc7": "Ereignis-Auslöser",
@@ -3829,6 +3822,7 @@
   "m_0b32dcf58f62f8": "Ethers Hauptport auf diesem Computer — Plex Media Server verwendet 32400. Beim Speichern startet Ether neu und verbindet diese Seite wieder.",
   "m_0b33b638b094ef": "Sieht alle {total} Mediatheken",
   "m_0b348291859243": "Entwurf öffnen",
+  "m_0b3589f7d1cea1": "Umfasst Suchen, Downloads und Funktionsabfragen. 0 verwendet das Limit des Dienstes.",
   "m_0b3701e758d22b": "Jeder Zuschauer verbindet sein eigenes Simkl-Konto im Tab „Anmeldung & Geräte“.",
   "m_0b37402f5b6f1f": "Indexer entfernen",
   "m_0b37d505eb1152": "{direction} · alle {interval}",
@@ -4573,6 +4567,7 @@
   "m_0d737d7fbd2098": "Downloads und Archive",
   "m_0d738b81ca89d8": "Aktualisiert sich bei der Wiedergabe",
   "m_0d73e689bad5af": "Gleichzeitige Verbesserungen",
+  "m_0d74d87ba972c9": "Bereitet bei freiem Cache-Speicher weitere wahrscheinliche Wiedergaben vor.",
   "m_0d7660daf6e8de": {
     "one": "Position {position}, Kanal #{number}; {count} nachfolgender Kanal verschiebt sich.",
     "other": "Position {position}, Kanal #{number}; {count} nachfolgende Kanäle verschieben sich."
@@ -4805,7 +4800,6 @@
   "m_0e322fd2337dba": "{label} bis",
   "m_0e330448a3fb21": "Zertifikat abgelaufen",
   "m_0e332032a85add": "Keine Fehler {period}",
-  "m_0e333ae4fe1948": "Suchen pro Tag",
   "m_0e3366cfe70a46": "Von Ether nicht überprüft",
   "m_0e36aa5db07dec": "Schließen Sie ein Gerät an",
   "m_0e374b213d550e": "Direkter Fernzugriff ist aktiviert",
@@ -5380,7 +5374,6 @@
   "m_0fcb903142677a": "Wichtige Reihen mit angesagten, beliebten und bestbewerteten Titeln, IMDb Top 250 sowie Neuerscheinungen für Filme und Serien.",
   "m_0fcb9c63d263d1": "Download",
   "m_0fcc28817a5426": "Unterwegs erreichbar.",
-  "m_0fcd519b5f7bea": "Die Schaltfläche Test bei einem Indexer. Diese zählen nie zum Tageslimit.",
   "m_0fce6c6310cdfb": "Medientyp",
   "m_0fd021bc358775": "Postproduktion",
   "m_0fd059077e674b": "{provider} hat Ether gebeten, weniger Anfragen zu senden. Neuer Versuch in {seconds} s.",
@@ -6304,10 +6297,6 @@
   "m_1257e768d65e6a": "Ersatzanbieter für Bewertungen",
   "m_125859821519cd": "Suchen pro Tag, mit und ohne Ergebnisse",
   "m_12589eb2f87843": "Torznab (Torrents)",
-  "m_1258bfd1fd8938": {
-    "one": "{used} von {count} API-Anfrage heute verbraucht",
-    "other": "{used} von {count} API-Anfragen heute verbraucht"
-  },
   "m_125952708f2adf": "{service} (Standardregion)",
   "m_125a3da17154a8": "{indexer} wird nicht mehr durchsucht.",
   "m_125a82d7760449": "Audio: {choice}",
@@ -6426,6 +6415,7 @@
   "m_12a47491c32d3a": "Freunde",
   "m_12a48ff7764e53": "Medientyp im Katalog",
   "m_12a498a7fa8c02": "HDR und Dolby Vision",
+  "m_12a5262a9cca78": "Tageslimit {cap} · wird {time} zurückgesetzt",
   "m_12a57badb85ff6": "Erstellen & im Editor öffnen",
   "m_12a64356860b37": "Wähl Poster und Hintergrund für diesen Titel.",
   "m_12a7d1abcca956": "Wähl zuerst einen Zuschauer und einen Titel.",
@@ -7254,6 +7244,7 @@
   "m_15268f30e4a1fe": "Inhalt",
   "m_1528d7499e0d53": "Konturstärke",
   "m_1529e6b3d3503d": "Pre-Rolls durchsuchen …",
+  "m_152ba8c0f68baa": "Detailansichten",
   "m_152c6d6f69adef": "Ordnerpfad",
   "m_152d7e35d2433f": "Nächste Episoden",
   "m_152e3f732b733d": "Zuschauer-ID",
@@ -8303,7 +8294,6 @@
   "m_18326b1877729d": "Serverzustand",
   "m_1833c8190e8b31": "Tonanfang kürzen",
   "m_1833ece3bffbb6": "Weiteren Zugang hinzufügen",
-  "m_1835cf83dde47a": "{left} von {limit} übrig",
   "m_1835e5482496fd": "Metadatensprache",
   "m_1836261a3a966b": "vor {minutes} min",
   "m_1836e8dbce9f30": "Alle erfüllen",
@@ -8438,10 +8428,6 @@
   "m_1897e9736cf4c7": "Neu aufbauen und installieren",
   "m_189a21208e55a9": "Live-Ereignisse erscheinen hier, sobald sich der Feed erholt.",
   "m_189a38f201f485": "Neustart abbrechen",
-  "m_189a59134a29dd": {
-    "one": "{count} Torrent-Download pro Tag",
-    "other": "{count} Torrent-Downloads pro Tag"
-  },
   "m_189c4ff843b6ae": "Eher Klassiker",
   "m_189cb89a9b1773": "Diese Quelle konnte nicht importiert werden. {cause}",
   "m_189d042fe376d1": "Jetzt · gemessen {time}",
@@ -8991,7 +8977,6 @@
   "m_1a215de0530bb5": "Plex verlangt die PIN dieses Home-Mitglieds",
   "m_1a21761831e96a": "Erlaubt diesem Plugin, sich mit den Serveradressen zu verbinden, die du festlegst und genehmigst.",
   "m_1a226ef379125b": "Angenommene Freigaben: {count}",
-  "m_1a2378bfd2cd95": "Titel werden vor dem Abspielen vorbereitet: geöffnete Details, nächste Episoden, Merklisten und der verwaltete Cache.",
   "m_1a246203503065": "Blendet Titel oberhalb dieser Altersstufe und Titel ohne Freigabe aus.",
   "m_1a24958257b636": "Die bestbewerteten Komödien mit bleibender Anziehungskraft.",
   "m_1a2572e1c90950": "ist eines von",
@@ -10496,10 +10481,6 @@
   "m_1e95fffeefbf9f": "80er",
   "m_1e965e32c7e3a6": "Unbenutzt",
   "m_1e9698e22da2ba": "Apache",
-  "m_1e977ff418b9ae": {
-    "one": "{count} API-Anfrage heute verbraucht",
-    "other": "{count} API-Anfragen heute verbraucht"
-  },
   "m_1e98fbb9c75818": "Support-ZIP herunterladen",
   "m_1e9927ed806b43": "Plex akzeptiert diese Verbindung nicht mehr. Verbinde das Konto erneut.",
   "m_1e9a13fc2b1cbb": "Dieser Link hat zu oft weitergeleitet.",
@@ -10682,6 +10663,7 @@
   "m_1f1d729a4ccc7d": "Die vier Jahrzehnt-Kanäle hinzufügen",
   "m_1f1db71e3b33d3": "Zum Abschluss startet Ether neu. Das dauert meist etwa eine Minute, und diese Seite verfolgt den Fortschritt.",
   "m_1f1dc611b2fc0c": "Werte, durch Kommas getrennt",
+  "m_1f1e269cdda29c": "Vorbereitung vor der Wiedergabe: nächste Folgen, Merkliste und verwalteter Cache.",
   "m_1f1fee7e3831fc": "Liebesgeschichten für den 14. Februar.",
   "m_1f20a9439592c3": "GB",
   "m_1f23e6040f16bf": "{duration} pro Tag",
@@ -10805,6 +10787,7 @@
   "m_1f6efbd7eae067": "Backup erstellt",
   "m_1f6f9fd991e6d0": "Islamisch",
   "m_1f6fce6e05fba5": "Platzierungen",
+  "m_1f71bc0996461c": "Erneuter Versuch {time}",
   "m_1f7223c74bf3d9": "Zuschauer auswählen",
   "m_1f749e388d1d74": "Ordner",
   "m_1f771df510b442": "Aus Stremio-Add-on importieren",

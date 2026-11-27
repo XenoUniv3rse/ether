@@ -213,8 +213,7 @@ func (m *Manager) Prewarm(ctx context.Context, user *core.User, key core.RatingK
 	return m.prewarm(ctx, user, key, caps, opts, opts.MetadataOnly, false)
 }
 
-// RevealDetail triggers a background season-drop check for a show, season, or
-// episode detail open unless the client is reading pages like a crawler.
+// RevealDetail looks for cached season evidence on a non-burst detail open.
 func (m *Manager) RevealDetail(user *core.User, clientID string, key core.RatingKey) {
 	if m == nil || m.deps.SeasonRevealer == nil || user == nil || !isTVDetailKey(key) {
 		return
@@ -772,6 +771,12 @@ func (m *Manager) prewarm(requestCtx context.Context, user *core.User, key core.
 			ctx, cancel = context.WithTimeout(core.WithIndexerPurpose(m.ctx, core.IndexerPurposePlayback), timeout)
 		} else {
 			ctx, cancel = warmPreparationContextWithPromote(core.WithIndexerPurpose(m.ctx, core.IndexerPurposeWarmup), timeout, e.foreground, e.promoted)
+			if reason == core.PrewarmDetail || reason == core.PrewarmBrowse {
+				ctx = core.WithCachedIndexerSearch(ctx)
+			}
+			if reason == core.PrewarmNextEpisode && cfg.PrefetchNextEpisode {
+				ctx = core.WithSpeculativeGrabs(ctx)
+			}
 		}
 		if e.nextEpisode {
 			probeCtx := ctx

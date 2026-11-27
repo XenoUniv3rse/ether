@@ -6,12 +6,15 @@ import { formatNumber, formatPercent } from "../../lib/format";
 type UsageCount = { purpose: string; hits: number; grabs: number };
 type UsageWindow = { hits: number; grabs: number; purposes: UsageCount[] | null };
 type UsageDay = { day: string; hits: number; grabs: number };
-type IndexerUsage = {
+export type IndexerUsage = {
   id: string;
   name: string;
   enabled: boolean;
   torrent: boolean;
   dailyLimit: number;
+  totalCap?: number;
+  resetAt?: number;
+  last24Hours?: { searches: number; grabs: number; background: number };
   dailyGrabs: number;
   retryAt?: number;
   pausedUntil?: number;
@@ -45,11 +48,13 @@ const PURPOSES = localized((): Record<string, { label: string; detail: string }>
     label: t("Playback searches"),
     detail: t("Someone pressed Play, or playback switched to another release."),
   },
+  detail: {
+    label: t("Detail views"),
+    detail: t("Requests made when someone opened a title’s details."),
+  },
   warmup: {
     label: t("Warm-ups and prefetch"),
-    detail: t(
-      "Getting titles ready before Play: opened details, next episodes, watchlists and the managed cache.",
-    ),
+    detail: t("Getting titles ready before Play: next episodes, watchlists and the managed cache."),
   },
   feed: {
     label: t("Release-feed polls"),
@@ -69,7 +74,7 @@ const PURPOSES = localized((): Record<string, { label: string; detail: string }>
   },
   test: {
     label: t("Manual tests"),
-    detail: t("The Test button on an indexer. These never use the daily limit."),
+    detail: t("Requests made with the Test button."),
   },
   console: {
     label: t("Release searches in the console"),
@@ -109,7 +114,11 @@ export function IndexerUsageDetails({
   return (
     <div className="space-y-3">
       <div className="grid max-w-xl gap-3 sm:grid-cols-2">
-        <DailyMeter used={usage.today.hits} limit={usage.dailyLimit} kind="hits" />
+        <DailyMeter
+          used={usage.today.hits + (usage.totalCap ? usage.today.grabs : 0)}
+          limit={usage.totalCap || usage.dailyLimit}
+          kind="hits"
+        />
         <DailyMeter used={usage.today.grabs} limit={usage.dailyGrabs} kind="grabs" />
       </div>
       <dl className="grid grid-cols-3 gap-x-6 gap-y-1 text-xs sm:max-w-xl">

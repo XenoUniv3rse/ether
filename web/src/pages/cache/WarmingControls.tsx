@@ -111,7 +111,11 @@ export function WarmingPolicy({
       <SettingsRow
         setting="speculative-warming"
         title={<label htmlFor="speculative-warming">{t("Speculative warming")}</label>}
-        description={t("Off: only pins, watchlists and what people are watching.")}
+        description={
+          speculative
+            ? t("Warms other likely plays when cache space is available.")
+            : t("Off: only pins, watchlists and what people are watching.")
+        }
         control={
           <Switch
             id="speculative-warming"

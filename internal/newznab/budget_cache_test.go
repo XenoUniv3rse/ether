@@ -19,7 +19,7 @@ func TestManagerReusesSearchAndNZBAfterBudgetsExhausted(t *testing.T) {
 	defer db.Close()
 	f := newFakeIndexer(t, "")
 	cfg := testConfig(f.server.URL)
-	cfg.DailyLimit, cfg.DailyGrabs = 2, 1 // caps + search, one NZB
+	cfg.DailyLimit, cfg.DailyGrabs = 3, 1 // caps + search + one NZB
 	opts := Options{Vault: &testVault{}}
 	m := NewManager(db, []config.Indexer{cfg}, opts)
 	req := core.SearchRequest{Type: core.TypeMovie, Title: "The Signal", Year: 1999}

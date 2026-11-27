@@ -118,7 +118,7 @@ func isAnimation(t *core.Title) bool {
 			return true
 		}
 	}
-	return isAnime(t)
+	return t.IsAnime()
 }
 
 // sameTier reports releases of one tier for hedged validation: the same

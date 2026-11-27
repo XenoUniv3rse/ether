@@ -19,6 +19,7 @@ func init() {
 	// (<newznab:apilimits apimax="…" grabmax="…"/>), remembered across
 	// restarts so background work sizes itself before the first response.
 	store.RegisterAfter("newznab_limits", "newznab")
+	store.Register("newznab_limits", 2, `ALTER TABLE newznab_api_limits ADD COLUMN endpoint TEXT NOT NULL DEFAULT '';`)
 	store.Register("newznab_limits", 1, `CREATE TABLE newznab_api_limits (indexer_id TEXT PRIMARY KEY, api_max INTEGER NOT NULL, grab_max INTEGER NOT NULL DEFAULT 0);`)
 }
 
@@ -57,7 +58,7 @@ func reportedLimits(body []byte) (api, grabs int) {
 
 type apiLimitState struct {
 	mu        sync.Mutex
-	loaded    bool
+	endpoint  string
 	api, grab int
 }
 
@@ -77,11 +78,12 @@ func (c *Client) noteAPILimit(ctx context.Context, body []byte) {
 	}
 	changed := c.apiLimit.api != api || c.apiLimit.grab != grab
 	c.apiLimit.api, c.apiLimit.grab = api, grab
-	c.apiLimit.mu.Unlock()
+	ep := c.apiLimit.endpoint
+	defer c.apiLimit.mu.Unlock()
 	if !changed || c.db == nil {
 		return
 	}
-	if _, err := c.db.ExecContext(ctx, `INSERT INTO newznab_api_limits(indexer_id,api_max,grab_max) VALUES(?,?,?) ON CONFLICT(indexer_id) DO UPDATE SET api_max=excluded.api_max,grab_max=excluded.grab_max`, c.indexerID(), api, grab); err != nil {
+	if _, err := c.db.ExecContext(context.WithoutCancel(ctx), `INSERT INTO newznab_api_limits(indexer_id,api_max,grab_max,endpoint) VALUES(?,?,?,?) ON CONFLICT(indexer_id) DO UPDATE SET api_max=excluded.api_max,grab_max=excluded.grab_max,endpoint=excluded.endpoint`, c.indexerID(), api, grab, ep); err != nil {
 		c.log.Debug("could not remember indexer API limit", "indexer", c.Name(), "err", err)
 	}
 }
@@ -89,13 +91,14 @@ func (c *Client) noteAPILimit(ctx context.Context, body []byte) {
 func (c *Client) loadLimits() {
 	c.apiLimit.mu.Lock()
 	defer c.apiLimit.mu.Unlock()
-	if !c.apiLimit.loaded && c.db != nil {
-		var api, grab int
-		if err := c.db.QueryRowContext(context.Background(), `SELECT api_max,grab_max FROM newznab_api_limits WHERE indexer_id=?`, c.indexerID()).Scan(&api, &grab); err == nil {
-			c.apiLimit.api, c.apiLimit.grab = api, grab
-		}
+	ep := c.capsEndpoint()
+	if c.apiLimit.endpoint == ep {
+		return
 	}
-	c.apiLimit.loaded = true
+	c.apiLimit.endpoint, c.apiLimit.api, c.apiLimit.grab = ep, 0, 0
+	if c.db != nil {
+		_ = c.db.QueryRowContext(context.Background(), `SELECT api_max,grab_max FROM newznab_api_limits WHERE indexer_id=? AND endpoint=?`, c.indexerID(), ep).Scan(&c.apiLimit.api, &c.apiLimit.grab)
+	}
 }
 
 // reportedLimit is the daily API (kind "hit") or grab limit the indexer
@@ -110,25 +113,24 @@ func (c *Client) reportedLimit(kind string) int {
 	return c.apiLimit.api
 }
 
-// DailyAPILimit is the indexer's daily API request limit: the owner's
-// configured cap, otherwise the one the indexer reports, otherwise 0
-// (unknown). Background work takes only its share of it.
-func (c *Client) DailyAPILimit() int {
-	if n := c.Config().DailyLimit; n > 0 {
-		return n
+// lowerLimit picks the stricter of two limits; zero means unspecified.
+func lowerLimit(a, b int) int {
+	if a == 0 || b == 0 {
+		return max(a, b)
 	}
-	return c.reportedLimit("hit")
+	return min(a, b)
 }
 
-// dailyLimitOrAssumed is the indexer's daily limit for kind ("hit" or
-// "grab"): configured, else reported, else the strictest tier's.
+// DailyAPILimit is the lower of the owner's cap and the reported API limit.
+func (c *Client) DailyAPILimit() int {
+	return lowerLimit(c.Config().DailyLimit, c.reportedLimit("hit"))
+}
+
 func (c *Client) dailyLimitOrAssumed(kind string) int {
-	n := c.Config().DailyLimit
+	n := c.DailyAPILimit()
 	if kind == "grab" {
-		n = c.Config().DailyGrabs
-	}
-	if n <= 0 {
-		n = c.reportedLimit(kind)
+		cfg := c.Config()
+		n = lowerLimit(cfg.DailyLimit, lowerLimit(cfg.DailyGrabs, c.reportedLimit(kind)))
 	}
 	if n <= 0 {
 		n = config.AssumedDailyLimit
@@ -190,9 +192,6 @@ func (c *Client) speculativeRoom(ctx context.Context, kind string) error {
 		return nil
 	}
 	db := c.db
-	if db == nil {
-		db = c.usageDB
-	}
 	if db == nil {
 		return nil
 	}

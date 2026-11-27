@@ -26,11 +26,13 @@ func TestBackgroundSearchAsksOnlyThePrimaryQuery(t *testing.T) {
 	if err != nil || len(res) != 2 {
 		t.Fatalf("foreground res=%d err=%v; a background miss was served from cache", len(res), err)
 	}
-	if got := f.hitsFor("movie"); got != 3 {
-		t.Fatalf("movie hits=%d, want 1 background + imdb and tmdb foreground", got)
+	// Play reuses the primary miss and still reaches a different ID.
+	queried := f.hitsFor("movie")
+	if queried > 2 {
+		t.Fatalf("movie hits=%d, the primary query was sent again", queried)
 	}
 	// The foreground answer is cached and serves later background checks.
-	if res, err = c.Search(bg, req); err != nil || len(res) != 2 || f.hitsFor("movie") != 3 {
+	if res, err = c.Search(bg, req); err != nil || len(res) != 2 || f.hitsFor("movie") != queried {
 		t.Fatalf("background reuse res=%d err=%v hits=%d", len(res), err, f.hitsFor("movie"))
 	}
 }

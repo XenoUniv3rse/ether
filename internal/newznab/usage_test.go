@@ -90,12 +90,12 @@ func TestUsageMatchesIndexerCounterByPurpose(t *testing.T) {
 	if _, ok := got[PurposeUnattributed]; ok {
 		t.Fatalf("every hit should be attributed: %+v", got)
 	}
-	// Manual tests never spend the daily budget.
+	// Manual tests share the daily budget.
 	r, err := m.Clients()[0].Remaining(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if int64(r.HitsUsed) != u.Today.Hits-2 {
+	if int64(r.HitsUsed) != u.Today.Hits {
 		t.Fatalf("budget used %d, report %d (2 test hits)", r.HitsUsed, u.Today.Hits)
 	}
 	if u.DailyLimit != 50 || len(u.Days) != usageDays || u.Days[len(u.Days)-1].Hits != u.Today.Hits {
@@ -119,12 +119,12 @@ func TestUsageReportsUnattributedHistory(t *testing.T) {
 	for _, row := range []struct {
 		day         string
 		hits, grabs int
-	}{{"2026-10-31", 10, 1}, {"2026-10-29", 7, 0}, {"2026-10-02", 5, 2}, {"2026-09-30", 99, 9}} {
+	}{{"2026-10-31", 13, 1}, {"2026-10-29", 7, 0}, {"2026-10-02", 5, 2}, {"2026-09-30", 99, 9}} {
 		if _, err := db.ExecContext(ctx, `INSERT INTO newznab_budget(indexer_id,day,hits,grabs) VALUES(?,?,?,?)`, "idx1", row.day, row.hits, row.grabs); err != nil {
 			t.Fatal(err)
 		}
 	}
-	// Today: 4 of 10 hits attributed to feed polls, plus 3 manual-test hits on top.
+	// Today: 4 hits are feed polls, 3 are manual tests and 6 are unattributed.
 	if _, err := db.ExecContext(ctx, `INSERT INTO newznab_usage(indexer_id,day,purpose,hits,grabs) VALUES('idx1','2026-10-31','feed',4,0),('idx1','2026-10-31','test',3,0)`); err != nil {
 		t.Fatal(err)
 	}

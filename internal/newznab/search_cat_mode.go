@@ -93,23 +93,6 @@ func (c *Client) recordSearchCatProbeMiss(identity string) {
 	}
 }
 
-func (c *Client) isFeedUnfiltered(ctx context.Context, identity string) bool {
-	c.feedMu.Lock()
-	defer c.feedMu.Unlock()
-	if c.feedMode.identity == identity {
-		return c.feedMode.unfiltered
-	}
-	if c.db == nil {
-		return false
-	}
-	var unfiltered int
-	var checked int64
-	if err := c.db.QueryRowContext(ctx, `SELECT unfiltered,checked_at FROM newznab_feed_modes WHERE indexer_id=? AND identity=?`, c.indexerID(), identity).Scan(&unfiltered, &checked); err == nil {
-		return unfiltered != 0
-	}
-	return false
-}
-
 func (c *Client) currentSearchCatMode() searchCatMode {
 	identity := searchIdentity(c.Config())
 	c.searchModeMu.Lock()

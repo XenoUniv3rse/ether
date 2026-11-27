@@ -78,10 +78,6 @@
   "m_0046e4c747753d": "SABnzbd, NZBGet or folder path",
   "m_00472daf7fd987": "Scene tools",
   "m_0047ca07cfeee1": "Multiply",
-  "m_004835dbe00869": {
-    "one": "{count} NZB download a day",
-    "other": "{count} NZB downloads a day"
-  },
   "m_00487c78d70a2b": "TMDB vote average",
   "m_004b75b2cb0bec": "Connect Trakt",
   "m_004b7d6d1ecb73": "Newznab or Torznab",
@@ -219,10 +215,6 @@
   "m_00b0de0a19eb13": "Día de los Muertos",
   "m_00b2237c907a62": "An independent cache on this node.",
   "m_00b24584b5544b": "Hide finished",
-  "m_00b2c78f02f956": {
-    "one": "{used} of {count} search used today",
-    "other": "{used} of {count} searches used today"
-  },
   "m_00b30b4c3c27c6": "Estimated calls: {calls} · up to {time}",
   "m_00b3b9137934b5": "This plugin needs no setup.",
   "m_00b5138d8d1c2c": "All devices",
@@ -1681,6 +1673,7 @@
   "m_04d93549f681a6": "Custom certificate",
   "m_04da799deb944d": "Live entities: {feed}",
   "m_04da7ed0251fc7": "New position (1–{total})",
+  "m_04db92c55ebad3": "Requests made with the Test button.",
   "m_04db9f92663e38": "—",
   "m_04dc1ac4895ab6": {
     "one": "{count} rule",
@@ -3481,7 +3474,6 @@
   "m_0a353c822e5747": "Show-specific audio and subtitle picks appear here.",
   "m_0a3582429c3e2a": "This backup can't be restored",
   "m_0a358a261dd76d": "Next in their feed (#3–#{last})",
-  "m_0a3609028d6ccf": "0 = automatic. Includes searches and capability checks.",
   "m_0a360fce8ac8e0": "All except…",
   "m_0a384b5261f829": "Publish new collections immediately",
   "m_0a397e30db35d2": "Fetch subtitles from SubSource when a release doesn't include them.",
@@ -3769,6 +3761,7 @@
   "m_0b01c603950f98": "The full moon and a day either side",
   "m_0b021ea5625451": "“{name}” and its run history will be removed. Active runs are cancelled.",
   "m_0b0377f6f73793": "Drag path nodes on the canvas to reshape.",
+  "m_0b03e4c94925ca": "Requests made when someone opened a title’s details.",
   "m_0b04b904ce4f9a": "Drag to reorder",
   "m_0b0535abc42eed": "Pinned slots & specials",
   "m_0b05402766bbc7": "Event trigger",
@@ -3833,6 +3826,7 @@
   "m_0b32dcf58f62f8": "Ether's main port on this computer — Plex Media Server uses 32400. Saving restarts Ether and reconnects this page.",
   "m_0b33b638b094ef": "Sees all {total} libraries",
   "m_0b348291859243": "Open draft",
+  "m_0b3589f7d1cea1": "Includes searches, downloads and capability checks. 0 uses the service limit.",
   "m_0b3701e758d22b": "Each viewer connects their own Simkl account from their Sign-in & devices tab.",
   "m_0b37402f5b6f1f": "Remove indexer",
   "m_0b37d505eb1152": "{direction} · every {interval}",
@@ -4580,6 +4574,7 @@
   "m_0d737d7fbd2098": "Downloads and archives",
   "m_0d738b81ca89d8": "Updates during playback",
   "m_0d73e689bad5af": "Simultaneous enhancements",
+  "m_0d74d87ba972c9": "Warms other likely plays when cache space is available.",
   "m_0d7660daf6e8de": {
     "one": "Position {position}, channel #{number}; {count} following channel shifts.",
     "other": "Position {position}, channel #{number}; {count} following channels shift."
@@ -4812,7 +4807,6 @@
   "m_0e322fd2337dba": "{label} to",
   "m_0e330448a3fb21": "Certificate expired",
   "m_0e332032a85add": "No failures {period}",
-  "m_0e333ae4fe1948": "Searches per day",
   "m_0e3366cfe70a46": "Not verified by Ether",
   "m_0e36aa5db07dec": "Connect a device",
   "m_0e374b213d550e": "Direct remote access enabled",
@@ -5387,7 +5381,6 @@
   "m_0fcb903142677a": "Essential trending, popular, top-rated, IMDb Top 250, and new-release shelves across movies and series.",
   "m_0fcb9c63d263d1": "Download",
   "m_0fcc28817a5426": "Reachable away from home.",
-  "m_0fcd519b5f7bea": "The Test button on an indexer. These never use the daily limit.",
   "m_0fce6c6310cdfb": "Media type",
   "m_0fd021bc358775": "Post-production",
   "m_0fd059077e674b": "{provider} asked Ether to slow down; retrying in {seconds}s",
@@ -6311,10 +6304,6 @@
   "m_1257e768d65e6a": "Backup ratings provider",
   "m_125859821519cd": "Searches each day, with and without results",
   "m_12589eb2f87843": "Torznab (torrents)",
-  "m_1258bfd1fd8938": {
-    "one": "{used} of {count} API request used today",
-    "other": "{used} of {count} API requests used today"
-  },
   "m_125952708f2adf": "{service} (default region)",
   "m_125a3da17154a8": "{indexer} will no longer be searched.",
   "m_125a82d7760449": "Audio: {choice}",
@@ -6433,6 +6422,7 @@
   "m_12a47491c32d3a": "Friends",
   "m_12a48ff7764e53": "Catalog media type",
   "m_12a498a7fa8c02": "HDR and Dolby Vision",
+  "m_12a5262a9cca78": "Daily cap {cap} · resets {time}",
   "m_12a57badb85ff6": "Create & open in editor",
   "m_12a64356860b37": "Pick the poster and backdrop for this title.",
   "m_12a7d1abcca956": "Choose a viewer and a title first.",
@@ -7261,6 +7251,7 @@
   "m_15268f30e4a1fe": "Content",
   "m_1528d7499e0d53": "Stroke width",
   "m_1529e6b3d3503d": "Search pre-rolls…",
+  "m_152ba8c0f68baa": "Detail views",
   "m_152c6d6f69adef": "Folder path",
   "m_152d7e35d2433f": "Next episodes",
   "m_152e3f732b733d": "Viewer ID",
@@ -8313,7 +8304,6 @@
   "m_18326b1877729d": "Server health",
   "m_1833c8190e8b31": "Trim sound start",
   "m_1833ece3bffbb6": "Add another login",
-  "m_1835cf83dde47a": "{left} left of {limit}",
   "m_1835e5482496fd": "Metadata language",
   "m_1836261a3a966b": "{minutes} min ago",
   "m_1836e8dbce9f30": "Match all",
@@ -8448,10 +8438,6 @@
   "m_1897e9736cf4c7": "Rebuild and install",
   "m_189a21208e55a9": "Live events will appear here when the feed recovers.",
   "m_189a38f201f485": "Cancel restart",
-  "m_189a59134a29dd": {
-    "one": "{count} torrent download a day",
-    "other": "{count} torrent downloads a day"
-  },
   "m_189c4ff843b6ae": "Classic-leaning",
   "m_189cb89a9b1773": "Couldn't import this source. {cause}",
   "m_189d042fe376d1": "Right now · sampled {time}",
@@ -9006,7 +8992,6 @@
   "m_1a215de0530bb5": "Plex asked for this Home member's PIN",
   "m_1a21761831e96a": "Lets this plugin connect to the server addresses you set and approve.",
   "m_1a226ef379125b": "Accepted shares: {count}",
-  "m_1a2378bfd2cd95": "Getting titles ready before Play: opened details, next episodes, watchlists and the managed cache.",
   "m_1a246203503065": "Hides titles above this age level, and unrated titles.",
   "m_1a24958257b636": "The best-rated comedies with lasting appeal.",
   "m_1a2572e1c90950": "is any of",
@@ -10514,10 +10499,6 @@
   "m_1e95fffeefbf9f": "80s",
   "m_1e965e32c7e3a6": "Unused",
   "m_1e9698e22da2ba": "Apache",
-  "m_1e977ff418b9ae": {
-    "one": "{count} API request used today",
-    "other": "{count} API requests used today"
-  },
   "m_1e98fbb9c75818": "Download support ZIP",
   "m_1e9927ed806b43": "Plex no longer accepts this connection. Reconnect the account.",
   "m_1e9a13fc2b1cbb": "That link redirected too many times.",
@@ -10700,6 +10681,7 @@
   "m_1f1d729a4ccc7d": "Add the four decade channels",
   "m_1f1db71e3b33d3": "Ether restarts to finish. It usually takes about a minute, and this page follows along.",
   "m_1f1dc611b2fc0c": "Values, separated by commas",
+  "m_1f1e269cdda29c": "Getting titles ready before Play: next episodes, watchlists and the managed cache.",
   "m_1f1fee7e3831fc": "Love stories for February 14th.",
   "m_1f20a9439592c3": "GB",
   "m_1f23e6040f16bf": "{duration} a day",
@@ -10823,6 +10805,7 @@
   "m_1f6efbd7eae067": "Backup taken",
   "m_1f6f9fd991e6d0": "Islamic",
   "m_1f6fce6e05fba5": "Placements",
+  "m_1f71bc0996461c": "Retries {time}",
   "m_1f7223c74bf3d9": "Choose a viewer",
   "m_1f749e388d1d74": "Folders",
   "m_1f771df510b442": "Import from Stremio add-on",

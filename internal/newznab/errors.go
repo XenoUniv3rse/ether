@@ -34,14 +34,15 @@ func (e *APIError) Unwrap() error {
 }
 
 // apiError builds an *APIError, classifying budget exhaustion.
-func apiError(code int, desc string) error {
+func quotaDescription(desc string) bool {
 	lower := strings.ToLower(desc)
-	budget := code == 429 ||
-		strings.Contains(lower, "request limit reached") ||
-		strings.Contains(lower, "download limit reached") ||
-		strings.Contains(lower, "api limit") ||
-		strings.Contains(lower, "limit reached") ||
-		strings.Contains(lower, "too many requests")
+	return strings.Contains(lower, "api limit") ||
+		(strings.Contains(lower, "limit") && (strings.Contains(lower, "reached") ||
+			strings.Contains(lower, "exceeded") || strings.Contains(lower, "exhausted")))
+}
+
+func apiError(code int, desc string) error {
+	budget := code == 429 || quotaDescription(desc) || strings.Contains(strings.ToLower(desc), "too many requests")
 	return &APIError{Code: code, Description: desc, Budget: budget}
 }
 

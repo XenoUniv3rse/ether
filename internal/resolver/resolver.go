@@ -810,9 +810,9 @@ func searchRequestFor(t *core.Title) core.SearchRequest {
 			title = t.Title
 		}
 		return core.SearchRequest{Type: core.TypeEpisode, IDs: t.ShowIDs, EpisodeSource: t.EpisodeOrder.Source, Title: title, OriginalTitle: t.ShowOriginalTitle, EnglishTitle: t.ShowEnglishTitle, Year: t.ShowYear, Season: t.Season, Episode: t.Episode, EpisodeTitle: t.Title,
-			AbsoluteEpisode: t.AbsoluteEpisode, Anime: isAnime(t), AlternativeTitles: t.ShowAlternativeTitles, Released: cmp.Or(t.EpisodeAirDate, t.Released)}
+			AbsoluteEpisode: t.AbsoluteEpisode, Anime: t.IsAnime(), AlternativeTitles: t.ShowAlternativeTitles, Released: cmp.Or(t.EpisodeAirDate, t.Released)}
 	}
-	return core.SearchRequest{Type: core.TypeMovie, IDs: t.IDs, Title: t.Title, OriginalTitle: t.OriginalTitle, EnglishTitle: t.EnglishTitle, Year: t.Year, Anime: isAnime(t), AlternativeTitles: t.AlternativeTitles, Released: t.Released}
+	return core.SearchRequest{Type: core.TypeMovie, IDs: t.IDs, Title: t.Title, OriginalTitle: t.OriginalTitle, EnglishTitle: t.EnglishTitle, Year: t.Year, Anime: t.IsAnime(), AlternativeTitles: t.AlternativeTitles, Released: t.Released}
 }
 
 func (s *Service) searchRequest(ctx context.Context, t *core.Title) core.SearchRequest {
@@ -832,23 +832,6 @@ func (s *Service) searchRequest(ctx context.Context, t *core.Title) core.SearchR
 // isAnime reports a title whose releases follow anime conventions
 // (absolute episode numbers, fansub groups): TMDB's "anime" keyword, or
 // Japanese-language animation.
-func isAnime(t *core.Title) bool {
-	for _, k := range t.Keywords {
-		if strings.EqualFold(k, "anime") {
-			return true
-		}
-	}
-	if !strings.EqualFold(t.Language, "ja") {
-		return false
-	}
-	for _, g := range t.Genres {
-		if strings.EqualFold(g, "Animation") {
-			return true
-		}
-	}
-	return false
-}
-
 // absoluteEpisode is the requested episode's number counted from the
 // series start: the catalogue's count, or the episode number itself in
 // the first season. 0 when unknown.
@@ -914,6 +897,9 @@ func (s *Service) Resolve(ctx context.Context, req core.ResolveRequest) (*core.R
 	key := fmt.Sprintf("%s|pin:%s|vc:%s|vt:%t|link:%d", flightKey(req, profile), s.PinnedReleaseID(req), s.viewerChoiceFlightKey(req), videoOff, req.ClientDeliveryBudgetKbps)
 	if channelAvailabilityCheck(ctx) {
 		key += "/channel-availability"
+	}
+	if core.SpeculativeIndexerWork(ctx) || core.IsBackgroundCheck(ctx) {
+		key += "/background"
 	}
 
 	for {
@@ -2211,7 +2197,7 @@ func (s *Service) rankPass(ctx context.Context, env rankEnv, req core.ResolveReq
 	var titleRej releaseTitleRejections
 	t := req.Title
 	policy, hot, exclude, rcfg, wanted, accepted := env.policy, env.hot, env.exclude, env.rcfg, env.wanted, env.accepted
-	upscales := presumedUpscales(results, isAnime(t))
+	upscales := presumedUpscales(results, t.IsAnime())
 	ids := make([]string, len(results))
 	targeted := make([]core.Release, len(results))
 	for i, r := range results {

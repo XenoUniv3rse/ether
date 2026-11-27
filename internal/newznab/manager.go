@@ -43,10 +43,8 @@ type Manager struct {
 	bgCancels     map[int]context.CancelFunc
 	detachedCount int
 	bgWG          sync.WaitGroup
-
-	flightMu   sync.Mutex
-	flights    map[string]*searchFlight
-	pluginRefs sync.Map // standalone managers without a database
+	flights       searchFlights
+	pluginRefs    sync.Map // standalone managers without a database
 }
 
 // Close cancels any detached background cache-fill searches started by
@@ -325,6 +323,7 @@ func (m *Manager) SearchRescueWith(ctx context.Context, req core.SearchRequest, 
 // the slowest indexer is done.
 func (m *Manager) SearchWith(ctx context.Context, req core.SearchRequest, arrived func([]core.Release)) ([]core.Release, error) {
 	clients := m.Clients()
+	ctx = m.reuseWarmSearch(ctx, req, clients)
 	type slot struct {
 		results  []core.Release
 		err      error
@@ -522,5 +521,5 @@ func (m *Manager) FetchNZB(ctx context.Context, r core.Release) ([]byte, error) 
 // missingAnswer reports an indexer whose answer a fleet search lacks because
 // it was paused or did not answer, rather than because it found nothing.
 func missingAnswer(err error) bool {
-	return errors.Is(err, ErrIndexerPaused) || transientFailure(err)
+	return errors.Is(err, ErrIndexerPaused) || errors.Is(err, core.ErrForegroundOnly) || transientFailure(err)
 }

@@ -242,6 +242,24 @@ type ShowTrajectory struct {
 	SticksLanding bool      `json:"sticksLanding,omitempty"`
 }
 
+// IsAnime uses catalogue keywords or Japanese animation metadata.
+func (t *Title) IsAnime() bool {
+	for _, k := range t.Keywords {
+		if strings.EqualFold(k, "anime") {
+			return true
+		}
+	}
+	if !strings.EqualFold(t.Language, "ja") {
+		return false
+	}
+	for _, g := range t.Genres {
+		if strings.EqualFold(g, "Animation") {
+			return true
+		}
+	}
+	return false
+}
+
 // IsReleased reports a passed release/air date or a verified movie home release.
 // Home evidence does not change the theatrical date used for date added.
 func (t *Title) IsReleased(now time.Time) bool {

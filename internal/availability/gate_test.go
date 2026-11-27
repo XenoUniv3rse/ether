@@ -322,18 +322,7 @@ func TestRetryScheduleDueOrderAndPerTypeModeFor(t *testing.T) {
 	// 2. Bounded retry cadence steps and window termination.
 	anchor := time.Date(2026, 10, 20, 20, 0, 0, 0, time.UTC).Unix()
 	windowEnd := anchor + int64((72 * time.Hour).Seconds())
-	wantOffsets := []time.Duration{
-		30 * time.Minute,
-		1 * time.Hour,
-		90 * time.Minute,
-		2 * time.Hour,
-		150 * time.Minute,
-		3 * time.Hour,
-		4 * time.Hour,
-		8 * time.Hour,
-		24 * time.Hour,
-		48 * time.Hour,
-	}
+	wantOffsets := []time.Duration{time.Hour, 6 * time.Hour, 24 * time.Hour}
 	cur := anchor
 	for _, off := range wantOffsets {
 		next := nextRetryAfter(anchor, windowEnd, cur)

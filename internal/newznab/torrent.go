@@ -660,10 +660,7 @@ func (c *Client) resolveTorrent(ctx context.Context, r core.Release) (core.Relea
 	if resp.StatusCode == http.StatusTooManyRequests {
 		// Honor the throttle like API requests do, so the next play does
 		// not immediately hit the throttled indexer again.
-		return r, true, c.recordRateLimit(hctx, resp.Header.Get("Retry-After"), apiError(429, "too many requests"))
-	}
-	if resp.StatusCode != http.StatusOK {
-		return r, true, apiError(resp.StatusCode, resp.Status)
+		return r, true, c.recordRateLimit(hctx, resp.Header.Get("Retry-After"), rateLimitResponse(resp, c.now()))
 	}
 	decoded, derr := decodeBody(resp)
 	if derr != nil {
@@ -675,6 +672,9 @@ func (c *Client) resolveTorrent(ctx context.Context, r core.Release) (core.Relea
 	}
 	if len(body) > maxTorrentBytes {
 		return r, true, fmt.Errorf("newznab: torrent exceeds %d bytes", maxTorrentBytes)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return r, true, c.torrentResponseError(hctx, resp, body)
 	}
 	if trimmed := bytes.TrimSpace(body); bytes.HasPrefix(bytes.ToLower(trimmed), []byte("magnet:")) {
 		if h := InfoHashFromMagnet(string(trimmed)); h != "" {
@@ -689,11 +689,8 @@ func (c *Client) resolveTorrent(ctx context.Context, r core.Release) (core.Relea
 	}
 	meta, err := ParseTorrent(body)
 	if err != nil {
-		if _, perr := parseFeed(body, c.Name()); perr != nil {
-			var ae *APIError
-			if errors.As(perr, &ae) {
-				return r, true, perr
-			}
+		if apiErr := c.torrentResponseError(hctx, resp, body); apiErr != nil {
+			return r, true, apiErr
 		}
 		return r, true, fmt.Errorf("newznab: torrent %q: %w", r.Name, err)
 	}
@@ -710,6 +707,22 @@ func (c *Client) resolveTorrent(ctx context.Context, r core.Release) (core.Relea
 	}
 	r.MagnetURL = MagnetFor(meta.InfoHash, name, meta.Trackers)
 	return r, true, nil
+}
+
+func (c *Client) torrentResponseError(ctx context.Context, resp *http.Response, body []byte) error {
+	if _, err := parseFeed(body, c.Name()); err != nil {
+		var ae *APIError
+		if errors.As(err, &ae) {
+			if ae.Budget {
+				return c.recordRateLimit(ctx, resp.Header.Get("Retry-After"), ae)
+			}
+			return ae
+		}
+	}
+	if resp.StatusCode != http.StatusOK {
+		return apiError(resp.StatusCode, resp.Status)
+	}
+	return nil
 }
 
 // ResolveTorrent implements the debrid indexer's torrent resolution by

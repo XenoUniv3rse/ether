@@ -17,7 +17,6 @@ import { searchSelectLabels } from "../../i18n/appkit-labels";
 import { useLocale } from "../../i18n/react";
 import { ActionMenu } from "../../components/ActionMenu";
 import { MoreOptions } from "../../components/ConfigSection";
-import { Meter } from "../../components/charts";
 import { Drawer } from "../../components/Drawer";
 import { ErrorPanel, LoadingRows } from "../../components/feedback";
 import {
@@ -31,8 +30,8 @@ import { Section } from "../../components/layout";
 import { SortableList } from "../../components/Sortable";
 import { SaveBar, useDraft } from "../../components/SaveBar";
 import { SettingsRow } from "../../components/SettingsRow";
-import { api, errorMessage, newId } from "../../lib/api";
-import { isPlainObject } from "../../lib/format";
+import { api, apiFetch, errorMessage, newId } from "../../lib/api";
+import { formatNumber, isPlainObject, relativeTime } from "../../lib/format";
 import { useAsync } from "../../lib/hooks";
 import type {
   ClientIdentityConfig,
@@ -46,6 +45,7 @@ import { LANGUAGE_TAGS } from "../libraries/browser/CatalogPickers";
 import { REGIONAL_TRACK_TAGS } from "../setup/language";
 import { IdentityRulesCard, IdentityRulesDrawer, IndexerIdentityRow } from "./IdentityRules";
 import { hasUsableDebrid } from "./Debrid";
+import type { IndexerUsage, UsageReport } from "./IndexerUsage";
 import {
   BoolRow,
   NumRow,
@@ -73,6 +73,45 @@ import {
   siteKindLabel,
   siteProtocolLabel,
 } from "./IndexerSites";
+
+function IndexerRequestSummary({ usage }: { usage: IndexerUsage }) {
+  const rollup = usage.last24Hours;
+  if (!rollup) return null;
+  const cap = usage.totalCap || usage.dailyLimit;
+  const reset = usage.resetAt;
+  return (
+    <div className="space-y-1">
+      <div className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5 text-sm">
+        <p className="text-fg-muted">{t("Last 24 hours")}</p>
+        <dl className="flex flex-wrap gap-x-3 gap-y-0.5 tabular-nums">
+          {[
+            { label: t("Searches"), count: rollup.searches },
+            { label: t("Downloads"), count: rollup.grabs },
+            { label: t("Background"), count: rollup.background },
+          ].map(({ label, count }) => (
+            <div key={label} className="flex gap-1.5">
+              <dt className="text-fg-muted">{label}</dt>
+              <dd className="font-medium text-fg">{formatNumber(count)}</dd>
+            </div>
+          ))}
+        </dl>
+      </div>
+      <p className="text-xs text-fg-subtle">
+        {cap > 0 && reset
+          ? t("Daily cap {cap} · resets {time}", {
+              cap: formatNumber(cap),
+              time: relativeTime(new Date(reset * 1000)),
+            })
+          : cap > 0
+            ? tn(cap, "{count} API request a day", "{count} API requests a day")
+            : t("Automatic limits")}
+        {usage.retryAt
+          ? ` · ${t("Retries {time}", { time: relativeTime(new Date(usage.retryAt * 1000)) })}`
+          : ""}
+      </p>
+    </div>
+  );
+}
 
 function blankIndexer(priority: number): Indexer {
   return {
@@ -258,6 +297,10 @@ export function IndexerList({
 }) {
   const { dashboard, refreshDashboard } = useApp();
   const config = useAsync(() => api.getConfig(), [version]);
+  const requestUsage = useAsync(
+    (signal) => apiFetch<UsageReport>("/indexer-usage", { signal }),
+    [version, dashboard],
+  );
   const identitySection = useAsync(
     () => api.getSection<ClientIdentityConfig | null>("clientIdentity"),
     [version],
@@ -297,6 +340,7 @@ export function IndexerList({
   const status = dashboard?.sections?.indexers;
   const live = Array.isArray(status) ? status.filter(isPlainObject) : [];
   const statFor = (ix: Indexer) => live.find((s) => s.indexer === ix.name || s.id === ix.id);
+  const usageFor = (ix: Indexer) => requestUsage.data?.indexers?.find((row) => row.id === ix.id);
   const notifyDefinitionsChanged = () => {
     setSitesVersion((v) => v + 1);
     void refreshDashboard();
@@ -432,8 +476,7 @@ export function IndexerList({
   const set = (patch: Partial<Indexer>) =>
     setEditing((e) => (e ? { ...e, draft: { ...e.draft, ...patch } } : e));
   const isNew = editing ? editing.index >= indexers.length : false;
-  const stat = draft ? statFor(draft) : undefined;
-  const used = Number(stat?.hitsUsed ?? 0);
+  const draftUsage = draft ? usageFor(draft) : undefined;
   const needsDebrid = indexers.some((ix) => isTorrent(ix) && ix.enabled) && !hasUsableDebrid(cfg);
   const builtin = draft ? isBuiltin(draft) : false;
   const stremio = draft ? isStremio(draft) : false;
@@ -515,63 +558,31 @@ export function IndexerList({
             renderItem={(ix, handle, i) => {
               const s = statFor(ix);
               const label = indexerName(ix, i);
-              const hits = Number(s?.hitsUsed ?? 0);
+              const usage = usageFor(ix);
               const site = isBuiltin(ix);
               const def = site ? defFor(ix) : undefined;
               const tested = site ? statusFor(ix) : undefined;
-              const countsSearches = site || isStremio(ix);
               return (
                 <SourceCard
                   name={label}
                   position={i + 1}
                   logo={isStremio(ix) ? <StremioMark /> : undefined}
-                  description={[
-                    i === 0 ? t("Searched first") : t("Priority {number}", { number: i + 1 }),
-                    site && ix.url ? hostOf(ix.url) : "",
-                    site && def && def.name !== label
-                      ? t("{name} definition", { name: def.name })
-                      : "",
-                    ix.dailyLimit > 0
-                      ? s
-                        ? countsSearches
-                          ? tn(
-                              ix.dailyLimit,
-                              "{used} of {count} search used today",
-                              "{used} of {count} searches used today",
-                              { used: hits },
-                            )
-                          : tn(
-                              ix.dailyLimit,
-                              "{used} of {count} API request used today",
-                              "{used} of {count} API requests used today",
-                              { used: hits },
-                            )
-                        : countsSearches
-                          ? tn(ix.dailyLimit, "{count} search a day", "{count} searches a day")
-                          : tn(
-                              ix.dailyLimit,
-                              "{count} API request a day",
-                              "{count} API requests a day",
-                            )
-                      : site
-                        ? ""
-                        : t("Automatic limits"),
-                    ix.dailyGrabs > 0
-                      ? isTorrent(ix)
-                        ? tn(
-                            ix.dailyGrabs,
-                            "{count} torrent download a day",
-                            "{count} torrent downloads a day",
-                          )
-                        : tn(
-                            ix.dailyGrabs,
-                            "{count} NZB download a day",
-                            "{count} NZB downloads a day",
-                          )
-                      : "",
-                  ]
-                    .filter(Boolean)
-                    .join(" · ")}
+                  description={
+                    <div className="space-y-1">
+                      <p>
+                        {[
+                          i === 0 ? t("Searched first") : t("Priority {number}", { number: i + 1 }),
+                          site && ix.url ? hostOf(ix.url) : "",
+                          site && def && def.name !== label
+                            ? t("{name} definition", { name: def.name })
+                            : "",
+                        ]
+                          .filter(Boolean)
+                          .join(" · ")}
+                      </p>
+                      {usage ? <IndexerRequestSummary usage={usage} /> : null}
+                    </div>
+                  }
                   meta={
                     <>
                       {site ? (
@@ -609,8 +620,8 @@ export function IndexerList({
                           {t("Waiting for service · retries automatically")}
                         </Badge>
                       ) : s &&
-                        ((ix.dailyLimit > 0 && hits >= ix.dailyLimit) ||
-                          (ix.dailyGrabs > 0 && Number(s.grabsUsed ?? 0) >= ix.dailyGrabs)) ? (
+                        ((ix.dailyLimit > 0 && Number(s.hitsRemaining) === 0) ||
+                          (ix.dailyGrabs > 0 && Number(s.grabsRemaining) === 0)) ? (
                         <Badge variant="warning">{t("Personal cap reached")}</Badge>
                       ) : null}
                     </>
@@ -758,27 +769,7 @@ export function IndexerList({
       >
         {draft ? (
           <>
-            {stat && draft.dailyLimit > 0 ? (
-              <Meter
-                value={used / draft.dailyLimit}
-                label={tn(
-                  used,
-                  "{count} API request used today",
-                  "{count} API requests used today",
-                )}
-                valueLabel={t("{left} left of {limit}", {
-                  left: Number(stat.hitsRemaining ?? 0),
-                  limit: draft.dailyLimit,
-                })}
-                tone={
-                  used >= draft.dailyLimit
-                    ? "danger"
-                    : used / draft.dailyLimit > 0.8
-                      ? "warning"
-                      : "primary"
-                }
-              />
-            ) : null}
+            {draftUsage ? <IndexerRequestSummary usage={draftUsage} /> : null}
             {builtin && definitions && !draftDef ? (
               <MissingDefinition id={draft.definition} />
             ) : null}
@@ -948,14 +939,12 @@ export function IndexerList({
                 }
               >
                 <NumRow
-                  label={builtin || stremio ? t("Searches per day") : t("API requests per day")}
+                  label={t("API requests per day")}
                   value={draft.dailyLimit}
                   min={0}
-                  help={
-                    builtin || stremio
-                      ? t("0 = no cap.")
-                      : t("0 = automatic. Includes searches and capability checks.")
-                  }
+                  help={t(
+                    "Includes searches, downloads and capability checks. 0 uses the service limit.",
+                  )}
                   error={errors.dailyLimit}
                   onChange={(n) => set({ dailyLimit: n })}
                 />

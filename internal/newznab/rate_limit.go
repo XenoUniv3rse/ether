@@ -3,6 +3,12 @@ package newznab
 import (
 	"context"
 	"database/sql"
+	"errors"
+	"io"
+	"net/http"
+	"regexp"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -74,7 +80,29 @@ func (c *Client) rateLimitUntil(ctx context.Context) (time.Time, error) {
 }
 
 func (c *Client) recordRateLimit(ctx context.Context, retryAfter string, cause error) error {
-	until := retryTime(retryAfter, c.now())
+	now := c.now()
+	until := retryTime(retryAfter, now)
+	if _, ok := retryafter.Parse(retryAfter, now, maxRateLimitPause); !ok {
+		var ae *APIError
+		prowlarr := strings.HasPrefix(c.indexerID(), "prowlarr-") ||
+			strings.Contains(c.Config().URL, "/api/v1/indexer/") ||
+			strings.HasPrefix(strings.ToLower(c.Name()), "prowlarr / ")
+		if errors.As(cause, &ae) && quotaDescription(ae.Description) {
+			// Prowlarr limits use a sliding hour or day. Without its
+			// Retry-After the age of the oldest charged request is unknown.
+			if m := quotaHours.FindStringSubmatch(ae.Description); m != nil {
+				hours, _ := strconv.Atoi(m[1])
+				until = now.Add(time.Duration(min(hours, 24)) * time.Hour)
+			} else if prowlarr {
+				until = now.Add(24 * time.Hour)
+			} else {
+				until = nextBudgetDay(now)
+			}
+		} else if prowlarr && errors.As(cause, &ae) && ae.Code == http.StatusTooManyRequests {
+			until = now.Add(24 * time.Hour)
+		}
+	}
+	ctx = context.WithoutCancel(ctx)
 	c.rate.mu.Lock()
 	defer c.rate.mu.Unlock()
 	if c.rate.until.After(until) {
@@ -91,4 +119,28 @@ ON CONFLICT(indexer_id) DO UPDATE SET retry_at=CASE WHEN excluded.retry_at > new
 	c.log.Info("indexer paused by service; will retry automatically", "indexer", c.Name(), "retryAt", until.UTC())
 	c.emitRateLimited(until, cause)
 	return cause
+}
+
+var quotaHours = regexp.MustCompile(`(?i)\b(?:last|past) ([1-9][0-9]?) hour`)
+
+func nextBudgetDay(now time.Time) time.Time {
+	return now.UTC().Truncate(24 * time.Hour).Add(24 * time.Hour)
+}
+
+// Retry-After is authoritative. Otherwise read only a small quota error body
+// to distinguish a daily limit from ordinary HTTP throttling.
+func rateLimitResponse(resp *http.Response, now time.Time) error {
+	if _, ok := retryafter.Parse(resp.Header.Get("Retry-After"), now, maxRateLimitPause); !ok {
+		if reader, err := decodeBody(resp); err == nil {
+			if body, err := io.ReadAll(io.LimitReader(reader, 4096)); err == nil {
+				if _, err := parseFeed(body, ""); err != nil {
+					var ae *APIError
+					if errors.As(err, &ae) && quotaDescription(ae.Description) {
+						return ae
+					}
+				}
+			}
+		}
+	}
+	return apiError(429, "too many requests")
 }

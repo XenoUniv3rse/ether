@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"slices"
 	"time"
 
 	"github.com/braedonsaunders/ether/internal/core"
@@ -55,13 +56,6 @@ func (s *Service) probeDue(ctx context.Context) error {
 		return err
 	}
 
-	watch := map[core.RatingKey]bool{}
-	if s.d.Watchlist != nil {
-		if w, err := s.d.Watchlist(ctx); err == nil {
-			watch = w
-		}
-	}
-	inProgressMemo := map[core.RatingKey]bool{}
 	input := s.discoverySnapshot()
 	keys := make([]core.RatingKey, 0, len(due))
 	for _, item := range due {
@@ -117,22 +111,15 @@ func (s *Service) probeDue(ctx context.Context) error {
 			_, _ = s.db.ExecContext(ctx, `UPDATE availability_title_checks SET next_check=0,priority=? WHERE rating_key=?`, basePrio, int64(item.key))
 			continue
 		}
-		followed := t.Type == core.TypeEpisode && (watch[t.Key] || watch[t.ShowKey])
-		if sk := releaseSeasonKey(t); !t.IsReleased(now) && followed && sk != 0 {
-			if s.isSeasonInProgress(ctx, sk, now, nil, inProgressMemo) {
-				s.RevealSeason(ctx, sk)
-				followed = false
-			}
-		}
-		if !t.IsReleased(now) && !(followed && nowTS >= item.anchor-int64((72*time.Hour).Seconds())) {
-			nextAt := nextRetryAfter(item.anchor, item.windowEnd, nowTS)
-			if !t.Released.IsZero() && t.Released.Unix() > nowTS && (nextAt == 0 || t.Released.Unix() < nextAt) {
-				nextAt = t.Released.Unix()
+		if nowTS < item.anchor || !t.IsReleased(now) {
+			nextAt := max(item.anchor, t.Released.Unix())
+			if nextAt >= item.windowEnd {
+				nextAt = 0
 			}
 			_, _ = s.db.ExecContext(ctx, `UPDATE availability_title_checks SET next_check=? WHERE rating_key=?`, nextAt, int64(item.key))
 			continue
 		}
-		err := s.probeOneDue(ctx, *t, item.anchor, item.windowEnd, basePrio, followed)
+		err := s.probeOneDue(ctx, *t, item.anchor, item.windowEnd, basePrio)
 		if err != nil {
 			if benign(err) {
 				return err
@@ -154,9 +141,11 @@ const (
 
 // probeOneDue searches the selected sources (and search-only addons) for t one
 // at a time in priority order, stopping at the first profile-accepted release.
-func (s *Service) probeOneDue(ctx context.Context, t core.Title, anchorTS, windowEndTS int64, basePrio float64, followed bool) error {
+func (s *Service) probeOneDue(ctx context.Context, t core.Title, anchorTS, windowEndTS int64, basePrio float64) error {
+	anime := t.IsAnime()
 	if t.Type == core.TypeEpisode && t.ShowKey != 0 {
 		if show, err := s.d.Catalog.CachedTitle(ctx, t.ShowKey); err == nil && show != nil {
+			anime = anime || show.IsAnime()
 			t.ShowIDs = show.IDs
 			if t.ShowTitle == "" {
 				t.ShowTitle = show.Title
@@ -176,6 +165,7 @@ func (s *Service) probeOneDue(ctx context.Context, t core.Title, anchorTS, windo
 		Year:              t.Year,
 		AlternativeTitles: t.AlternativeTitles,
 		Released:          t.Released,
+		Anime:             anime,
 	}
 	if t.Type == core.TypeEpisode {
 		req.IDs = t.ShowIDs
@@ -187,6 +177,7 @@ func (s *Service) probeOneDue(ctx context.Context, t core.Title, anchorTS, windo
 		req.Season = t.Season
 		req.Episode = t.Episode
 		req.EpisodeTitle = t.Title
+		req.AbsoluteEpisode = t.AbsoluteEpisode
 	}
 
 	sources := s.d.Feeds.FeedSources()
@@ -196,9 +187,15 @@ func (s *Service) probeOneDue(ctx context.Context, t core.Title, anchorTS, windo
 	quality := ""
 	asked, denied, failed := 0, 0, 0
 
-	var targets []core.ReleaseFeed
+	var targets, dedicated []core.ReleaseFeed
 	for _, f := range sources {
-		if selected(ids, f.ID) {
+		if !selected(ids, f.ID) {
+			continue
+		}
+		switch {
+		case f.AnimeOnly && anime:
+			dedicated = append(dedicated, f)
+		case !f.AnimeOnly:
 			targets = append(targets, f)
 		}
 	}
@@ -208,6 +205,16 @@ func (s *Service) probeOneDue(ctx context.Context, t core.Title, anchorTS, windo
 		targets = []core.ReleaseFeed{{ID: "probe", Name: "probe", Generation: "probe", Supported: true}}
 	}
 
+	// Rotate the small fallback across the catalogue and successive slots.
+	slot := uint64(max(0, (s.now().Unix()-anchorTS)/3600)) + uint64(t.Key)
+	if len(targets) > 2 {
+		first := int(slot % uint64(len(targets)))
+		targets = slices.Concat(targets[first:], targets[:first])[:2]
+	}
+	if len(dedicated) > 0 {
+		source := dedicated[slot%uint64(len(dedicated))]
+		targets = append([]core.ReleaseFeed{source}, targets[:min(1, len(targets))]...)
+	}
 	for _, f := range targets {
 		var skip map[string]bool
 		if len(sources) > 0 {
@@ -260,16 +267,13 @@ func (s *Service) probeOneDue(ctx context.Context, t core.Title, anchorTS, windo
 			}
 			// Pre-official-date unverified match: queued in availability_releases
 			// for verification; keep bounded retry active until verified or date passes.
-			nextAt := nextEpisodeRetry(anchorTS, windowEndTS, s.now().Unix(), followed)
+			nextAt := nextRetryAfter(anchorTS, windowEndTS, s.now().Unix())
 			return s.saveTitleCheckDue(ctx, t.Key, "searching", "", nextAt, basePrio)
 		}
 	}
-	if asked == 0 && failed == 0 && denied > 0 {
-		return core.ErrBudgetExhausted
-	}
 	now := s.now()
 	nowTS := now.Unix()
-	nextAt := nextEpisodeRetry(anchorTS, windowEndTS, nowTS, followed)
+	nextAt := nextRetryAfter(anchorTS, windowEndTS, nowTS)
 	if failed > 0 {
 		backoff := now.Add(probeRetry).Unix()
 		if nextAt == 0 || backoff > nextAt {
@@ -286,6 +290,12 @@ func (s *Service) probeOneDue(ctx context.Context, t core.Title, anchorTS, windo
 				nextAt = reset
 			}
 		}
+	}
+	if asked == 0 && failed == 0 && denied > 0 {
+		if err := s.saveTitleCheckDue(ctx, t.Key, "searching", "", nextAt, basePrio); err != nil {
+			return err
+		}
+		return core.ErrBudgetExhausted
 	}
 	switch {
 	case quality != "":

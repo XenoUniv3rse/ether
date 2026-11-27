@@ -162,7 +162,7 @@ func (p *searchPreparation) pumpLocked() {
 		if active >= 4 || len(p.byID) >= limit {
 			break
 		}
-		if c.rel.OpensOnDemand() {
+		if c.rel.OpensOnDemand() || (spendsGrab(c.rel) && !core.SpeculativeGrabsAllowed(p.ctx)) {
 			// Each open makes the add-on fetch the release: ranked
 			// validation opens it, alone, if it is reached (ondemand.go).
 			continue

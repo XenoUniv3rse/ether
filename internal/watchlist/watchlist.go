@@ -915,7 +915,7 @@ func (s *Service) checkTitle(ctx context.Context, cfg Settings, userID int64, po
 		return nil
 	}
 	wasAvailable := !it.AvailableAt.IsZero()
-	res, e := s.resolve(ctx, resolveUser, resolveTitle)
+	res, e := s.resolve(ctx, cfg, resolveUser, resolveTitle)
 	now := s.o.Now().Unix()
 	// Transient resolver failures do not establish that a stream is absent.
 	if e != nil && !errors.Is(e, core.ErrNotAvailable) {
@@ -979,11 +979,14 @@ func (s *Service) checkTitle(ctx context.Context, cfg Settings, userID int64, po
 
 // resolve asks for a healthy release of title for u. It returns a nil
 // Resolution, with a nil error, when nothing playable was found.
-func (s *Service) resolve(ctx context.Context, u *core.User, title *core.Title) (*core.Resolution, error) {
+func (s *Service) resolve(ctx context.Context, cfg Settings, u *core.User, title *core.Title) (*core.Resolution, error) {
 	caps := core.ClientCaps{MaxHeight: 1080, VideoCodecs: []string{"h264", "hevc"}, AudioCodecs: []string{"aac", "ac3", "eac3"}, Containers: []string{"mkv", "mp4"}}
 	job, cancel := context.WithTimeout(core.WithIndexerPurpose(ctx, core.IndexerPurposeWarmup), 45*time.Second)
 	defer cancel()
-	// Nobody waits on a watchlist check: fallback queries go one at a time.
+	if cfg.Notify || cfg.Prewarm {
+		job = core.WithSpeculativeGrabs(job)
+	}
+	// Watchlist checks ask only the primary query.
 	res, err := s.o.Resolver.Resolve(core.WithUnattendedSearch(job), core.ResolveRequest{Title: title, User: u, Client: caps})
 	if err != nil {
 		return nil, err

@@ -78,10 +78,6 @@
   "m_0046e4c747753d": "SABnzbd, NZBGet veya klasör yolu",
   "m_00472daf7fd987": "Sahne araçları",
   "m_0047ca07cfeee1": "Çarp",
-  "m_004835dbe00869": {
-    "one": "günde {count} NZB indirme",
-    "other": "günde {count} NZB indirme"
-  },
   "m_00487c78d70a2b": "TMDB oy ortalaması",
   "m_004b75b2cb0bec": "Trakt'ı bağla",
   "m_004b7d6d1ecb73": "Newznab veya Torznab",
@@ -219,10 +215,6 @@
   "m_00b0de0a19eb13": "Ölüler Günü",
   "m_00b2237c907a62": "Bu düğümde bağımsız bir önbellek.",
   "m_00b24584b5544b": "Bitirilenleri gizle",
-  "m_00b2c78f02f956": {
-    "one": "Bugün {count} aramanın {used} tanesi kullanıldı",
-    "other": "Bugün {count} aramanın {used} tanesi kullanıldı"
-  },
   "m_00b30b4c3c27c6": "Tahmini çağrı: {calls} · en fazla {time}",
   "m_00b3b9137934b5": "Bu eklentinin kuruluma ihtiyacı yok.",
   "m_00b5138d8d1c2c": "Tüm cihazlar",
@@ -1681,6 +1673,7 @@
   "m_04d93549f681a6": "Özel sertifika",
   "m_04da799deb944d": "Canlı öğeler: {feed}",
   "m_04da7ed0251fc7": "Yeni konum (1–{total})",
+  "m_04db92c55ebad3": "Test Et düğmesiyle gönderilen istekler.",
   "m_04db9f92663e38": "—",
   "m_04dc1ac4895ab6": {
     "one": "{count} kural",
@@ -3479,7 +3472,6 @@
   "m_0a353c822e5747": "Diziye özel ses ve altyazı seçimleri burada görünür.",
   "m_0a3582429c3e2a": "Bu yedek geri yüklenemez",
   "m_0a358a261dd76d": "Akışlarında sıradakiler (#3–#{last})",
-  "m_0a3609028d6ccf": "0 = otomatik. Aramaları ve yetenek denetimlerini içerir.",
   "m_0a360fce8ac8e0": "Hariç tümü…",
   "m_0a384b5261f829": "Yeni koleksiyonları hemen yayınla",
   "m_0a397e30db35d2": "Bir sürüm altyazı içermediğinde altyazıları SubSource'tan getirin.",
@@ -3765,6 +3757,7 @@
   "m_0b01c603950f98": "Dolunay günü ile önceki ve sonraki gün",
   "m_0b021ea5625451": "“{name}” ve çalıştırma geçmişi kaldırılacak. Etkin çalıştırmalar iptal edilir.",
   "m_0b0377f6f73793": "Şekli değiştirmek için tuvaldeki yol düğümlerini sürükleyin.",
+  "m_0b03e4c94925ca": "Bir içeriğin ayrıntıları açıldığında yapılan istekler.",
   "m_0b04b904ce4f9a": "Sıralamak için sürükle",
   "m_0b0535abc42eed": "Sabit saatler ve özel programlar",
   "m_0b05402766bbc7": "Olay tetikleyicisi",
@@ -3829,6 +3822,7 @@
   "m_0b32dcf58f62f8": "Bu bilgisayardaki Ether ana bağlantı noktası — Plex Media Server 32400 kullanır. Kaydedildiğinde Ether yeniden başlatılır ve bu sayfa yeniden bağlanır.",
   "m_0b33b638b094ef": "{total} kitaplığın tümünü görür",
   "m_0b348291859243": "Taslağı aç",
+  "m_0b3589f7d1cea1": "Aramalar, indirmeler ve özellik kontrolleri dahildir. 0, hizmet sınırını kullanır.",
   "m_0b3701e758d22b": "Her izleyici kendi Simkl hesabını Oturum açma ve cihazlar sekmesinden bağlar.",
   "m_0b37402f5b6f1f": "Dizinleyiciyi kaldır",
   "m_0b37d505eb1152": "{direction} · her {interval}",
@@ -4564,6 +4558,7 @@
   "m_0d737d7fbd2098": "İndirmeler ve arşivler",
   "m_0d738b81ca89d8": "Oynatma sırasında güncellenir",
   "m_0d73e689bad5af": "Eşzamanlı iyileştirmeler",
+  "m_0d74d87ba972c9": "Önbellekte yer varsa oynatılması muhtemel diğer içerikleri de hazırlar.",
   "m_0d7660daf6e8de": {
     "one": "Konum {position}, kanal #{number}; sonraki {count} kanal kayar.",
     "other": "Konum {position}, kanal #{number}; sonraki {count} kanal kayar."
@@ -4796,7 +4791,6 @@
   "m_0e322fd2337dba": "{label} bitiş",
   "m_0e330448a3fb21": "Sertifikanın süresi doldu",
   "m_0e332032a85add": "{period} hata yok",
-  "m_0e333ae4fe1948": "Günlük arama",
   "m_0e3366cfe70a46": "Ether tarafından doğrulanmadı",
   "m_0e36aa5db07dec": "Bir cihazı bağlayın",
   "m_0e374b213d550e": "Doğrudan uzaktan erişim açık",
@@ -5371,7 +5365,6 @@
   "m_0fcb903142677a": "Filmler ve diziler genelinde trend olan, popüler, en yüksek puanlı, IMDb Top 250 ve yeni çıkan temel raflar.",
   "m_0fcb9c63d263d1": "İndirme",
   "m_0fcc28817a5426": "Evden uzakta erişilebilir.",
-  "m_0fcd519b5f7bea": "Bir indeksleyicideki Test et düğmesi. Bunlar günlük limiti asla kullanmaz.",
   "m_0fce6c6310cdfb": "Medya türü",
   "m_0fd021bc358775": "Post prodüksiyon",
   "m_0fd059077e674b": "{provider}, Ether'den istek sıklığını azaltmasını istedi. {seconds} sn sonra tekrar denenecek.",
@@ -6295,10 +6288,6 @@
   "m_1257e768d65e6a": "Yedek puan sağlayıcısı",
   "m_125859821519cd": "Günlük aramalar, sonuçlu ve sonuçsuz",
   "m_12589eb2f87843": "Torznab (torrent'ler)",
-  "m_1258bfd1fd8938": {
-    "one": "Bugün {count} API isteğinden {used} tanesi kullanıldı",
-    "other": "Bugün {count} API isteğinden {used} tanesi kullanıldı"
-  },
   "m_125952708f2adf": "{service} (varsayılan bölge)",
   "m_125a3da17154a8": "{indexer} artık aranmayacak.",
   "m_125a82d7760449": "Ses: {choice}",
@@ -6417,6 +6406,7 @@
   "m_12a47491c32d3a": "Arkadaşlar",
   "m_12a48ff7764e53": "Katalog medya türü",
   "m_12a498a7fa8c02": "HDR ve Dolby Vision",
+  "m_12a5262a9cca78": "Günlük sınır {cap} · {time} sıfırlanır",
   "m_12a57badb85ff6": "Oluştur ve düzenleyicide aç",
   "m_12a64356860b37": "Bu yapımın posterini ve arka planını seçin.",
   "m_12a7d1abcca956": "Önce bir izleyici ve içerik seçin.",
@@ -7245,6 +7235,7 @@
   "m_15268f30e4a1fe": "İçerik",
   "m_1528d7499e0d53": "Çizgi kalınlığı",
   "m_1529e6b3d3503d": "Pre-roll ara…",
+  "m_152ba8c0f68baa": "Ayrıntı görünümleri",
   "m_152c6d6f69adef": "Klasör yolu",
   "m_152d7e35d2433f": "Sonraki bölümler",
   "m_152e3f732b733d": "İzleyici kimliği",
@@ -8291,7 +8282,6 @@
   "m_18326b1877729d": "Sunucu durumu",
   "m_1833c8190e8b31": "Ses başlangıcını kırp",
   "m_1833ece3bffbb6": "Başka bir hesap ekle",
-  "m_1835cf83dde47a": "{limit} içinden {left} kaldı",
   "m_1835e5482496fd": "Meta veri dili",
   "m_1836261a3a966b": "{minutes} dk önce",
   "m_1836e8dbce9f30": "Tümüyle eşleş",
@@ -8426,10 +8416,6 @@
   "m_1897e9736cf4c7": "Yeniden oluştur ve yükle",
   "m_189a21208e55a9": "Akış düzeldiğinde canlı etkinlikler burada görünecektir.",
   "m_189a38f201f485": "Yeniden başlatmayı iptal et",
-  "m_189a59134a29dd": {
-    "one": "günde {count} torrent indirme",
-    "other": "günde {count} torrent indirme"
-  },
   "m_189c4ff843b6ae": "Klasiklere yatkın",
   "m_189cb89a9b1773": "Bu kaynak içe aktarılamadı. {cause}",
   "m_189d042fe376d1": "Şu anda · örnekleme {time}",
@@ -8979,7 +8965,6 @@
   "m_1a215de0530bb5": "Plex bu Home üyesinin PIN kodunu istedi",
   "m_1a21761831e96a": "Bu eklentinin ayarladığınız ve onayladığınız sunucu adreslerine bağlanmasına izin verir.",
   "m_1a226ef379125b": "Kabul edilen paylaşımlar: {count}",
-  "m_1a2378bfd2cd95": "Oynat'tan önce içerikleri hazırlama: açılan ayrıntılar, sonraki bölümler, izleme listeleri ve yönetilen önbellek.",
   "m_1a246203503065": "Bu yaş düzeyinin üzerindeki yapımları ve derecelendirilmemiş yapımları gizler.",
   "m_1a24958257b636": "Kalıcı çekiciliğe sahip, en çok beğenilen komediler.",
   "m_1a2572e1c90950": "şunlardan biri",
@@ -10484,10 +10469,6 @@
   "m_1e95fffeefbf9f": "80'ler",
   "m_1e965e32c7e3a6": "Kullanılmadı",
   "m_1e9698e22da2ba": "Apache",
-  "m_1e977ff418b9ae": {
-    "one": "Bugün {count} API isteği kullanıldı",
-    "other": "Bugün {count} API isteği kullanıldı"
-  },
   "m_1e98fbb9c75818": "Destek ZIP'ini indir",
   "m_1e9927ed806b43": "Plex artık bu bağlantıyı kabul etmiyor. Hesabı yeniden bağlayın.",
   "m_1e9a13fc2b1cbb": "Bu bağlantı çok fazla yönlendirme yaptı.",
@@ -10670,6 +10651,7 @@
   "m_1f1d729a4ccc7d": "Dört on yıl kanalını ekle",
   "m_1f1db71e3b33d3": "İşlemi bitirmek için Ether yeniden başlar. Bu genellikle yaklaşık bir dakika sürer; bu sayfa süreci takip eder.",
   "m_1f1dc611b2fc0c": "Virgülle ayrılmış değerler",
+  "m_1f1e269cdda29c": "Oynatma öncesi hazırlık: sonraki bölümler, izleme listeleri ve yönetilen önbellek.",
   "m_1f1fee7e3831fc": "14 Şubat için aşk hikayeleri.",
   "m_1f20a9439592c3": "GB",
   "m_1f23e6040f16bf": "Günde {duration}",
@@ -10793,6 +10775,7 @@
   "m_1f6efbd7eae067": "Yedeğin alındığı tarih",
   "m_1f6f9fd991e6d0": "İslami",
   "m_1f6fce6e05fba5": "Yerleşimler",
+  "m_1f71bc0996461c": "{time} yeniden denenir",
   "m_1f7223c74bf3d9": "Bir izleyici seçin",
   "m_1f749e388d1d74": "Klasörler",
   "m_1f771df510b442": "Stremio eklentisinden içe aktar",

@@ -207,7 +207,7 @@ func TestFetchNZBForegroundRetriesBackgroundBudgetRefusal(t *testing.T) {
 	})
 	bgErr := make(chan error, 1)
 	go func() {
-		_, err := c.FetchNZB(bgCtx, rel)
+		_, err := c.FetchNZB(core.WithSpeculativeGrabs(bgCtx), rel)
 		bgErr <- err
 	}()
 	waitFor(t, "the background flight", func() bool { return nzbWaiters(c, rel.ID) == 1 })

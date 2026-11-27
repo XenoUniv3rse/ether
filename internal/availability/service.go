@@ -95,6 +95,8 @@ type Service struct {
 	checksCatalogGen     uint64
 	checksCatalogPtr     any
 	checksPolicy         string
+	checksWatch          map[core.RatingKey]bool
+	checksSeededAt       time.Time
 	snapMu               sync.RWMutex
 	snap                 discoverySnap
 	paceMu               sync.Mutex
@@ -369,7 +371,7 @@ func (s *Service) Cycle(ctx context.Context) error {
 			// Head polls run on the feed's interval. An open gap (or
 			// catch-up) continues every minute in between, within the
 			// allowance left after today's head polls.
-			scheduled := st.polled == 0 || schedule.Due(s.now(), time.Unix(st.polled, 0), pollInterval(f, live))
+			scheduled := st.polled == 0 || schedule.Due(s.now(), time.Unix(st.polled, 0), headPollInterval(f, live, st, s.now()))
 			resume := !scheduled && st.gap && !f.SinglePage && schedule.Due(s.now(), time.Unix(st.checked, 0), time.Minute)
 			if resume {
 				if resume, err = s.pageRoom(ctx, f, live); err != nil {

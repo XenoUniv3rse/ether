@@ -83,8 +83,7 @@ type Deps struct {
 	// held and written later, and admission skips the cluster-wide check
 	// while the database is down (failing open) instead of waiting on it.
 	Availability *store.Availability
-	// SeasonRevealer, when set, checks an in-progress TV season in the
-	// background for streaming-dropped episodes on non-burst detail opens.
+	// SeasonRevealer reuses cached episode evidence off the detail request path.
 	SeasonRevealer func(core.RatingKey)
 	// Vault holds already-stored NZBs and probed tracks (never triggers grabs).
 	Vault vault.Store

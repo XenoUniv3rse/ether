@@ -92,7 +92,7 @@ func (s *Service) prepareSources(ctx context.Context, cands []candidate, title *
 	hedgeIdx := -1
 	startHedge := func(from int) {
 		hedge, hedgeIdx = nil, -1
-		if !scoped || s.resolverCfg().OptimisticStart || s.usenetBackingOff() {
+		if !scoped || !core.SpeculativeGrabsAllowed(ctx) || s.resolverCfg().OptimisticStart || s.usenetBackingOff() {
 			return
 		}
 		// Speculative checks share ranked validation's attempt budget.

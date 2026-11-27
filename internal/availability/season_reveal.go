@@ -31,15 +31,15 @@ func init() {
 }
 
 // RevealTitleSeason resolves a show, season, or episode key to its regular
-// season (the latest started season for a show) and schedules RevealSeason on
-// the service's background context so caller requests never block on SQL or I/O.
+// season and looks for already-discovered evidence off the request path.
 func (s *Service) RevealTitleSeason(key core.RatingKey) {
 	if s == nil || s.d.Search == nil || key == 0 {
 		return
 	}
+	ctx := core.WithCachedIndexerSearch(core.WithUnattendedSearch(s.bgCtx))
 	switch key.Kind() {
 	case core.KindSeason:
-		s.RevealSeason(s.bgCtx, key)
+		s.startSeasonReveal(ctx, key, true)
 	case core.KindEpisode, core.KindShow:
 		s.visibilityMu.Lock()
 		if s.closed || s.bgCtx.Err() != nil {
@@ -57,7 +57,7 @@ func (s *Service) RevealTitleSeason(key core.RatingKey) {
 				seasonKey = releaseSeasonKey(title)
 			}
 			if seasonKey != 0 {
-				s.startSeasonReveal(seasonKey, false)
+				s.startSeasonReveal(ctx, seasonKey, false)
 			}
 		}()
 	}
@@ -83,10 +83,10 @@ func (s *Service) RevealSeason(_ context.Context, seasonKey core.RatingKey) {
 	if seasonKey.Kind() != core.KindSeason {
 		return
 	}
-	s.startSeasonReveal(seasonKey, true)
+	s.startSeasonReveal(s.bgCtx, seasonKey, true)
 }
 
-func (s *Service) startSeasonReveal(seasonKey core.RatingKey, async bool) {
+func (s *Service) startSeasonReveal(ctx context.Context, seasonKey core.RatingKey, async bool) {
 	now := s.now()
 	s.revealMu.Lock()
 	if s.revealInFlight == nil {
@@ -114,7 +114,7 @@ func (s *Service) startSeasonReveal(seasonKey core.RatingKey, async bool) {
 
 	if !async {
 		defer finish()
-		s.runRevealSeason(s.bgCtx, seasonKey)
+		s.runRevealSeason(ctx, seasonKey)
 		return
 	}
 
@@ -130,7 +130,7 @@ func (s *Service) startSeasonReveal(seasonKey core.RatingKey, async bool) {
 	go func() {
 		defer s.bg.Done()
 		defer finish()
-		s.runRevealSeason(s.bgCtx, seasonKey)
+		s.runRevealSeason(ctx, seasonKey)
 	}()
 }
 

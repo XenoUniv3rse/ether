@@ -61,6 +61,9 @@ type ReleaseFeed struct {
 	// SinglePage marks a feed that lists only its latest page (a built-in
 	// site's latest releases); it cannot page back to close a gap.
 	SinglePage bool `json:"singlePage,omitempty"`
+	// DailyFeedLimit bounds the shared quota for query-less pages.
+	DailyFeedLimit int  `json:"-"`
+	AnimeOnly      bool `json:"-"`
 }
 type foregroundReserveKey struct{}
 
@@ -172,4 +175,17 @@ func WithBackgroundAnalysis(ctx context.Context) context.Context {
 func IsBackgroundAnalysis(ctx context.Context) bool {
 	v, _ := ctx.Value(backgroundAnalysisKey{}).(bool)
 	return v
+}
+
+type speculativeGrabsKey struct{}
+
+// WithSpeculativeGrabs allows downloads for a job that the owner enabled,
+// such as availability health verification or managed caching.
+func WithSpeculativeGrabs(ctx context.Context) context.Context {
+	return context.WithValue(ctx, speculativeGrabsKey{}, true)
+}
+
+func SpeculativeGrabsAllowed(ctx context.Context) bool {
+	ok, _ := ctx.Value(speculativeGrabsKey{}).(bool)
+	return ok
 }
