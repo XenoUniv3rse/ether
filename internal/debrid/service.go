@@ -760,6 +760,26 @@ func (s *Service) ApplyHints(ctx context.Context, rels []core.Release) {
 	}
 }
 
+// markedFirst returns entries with those the release itself marks as cached
+// (rel.DebridCached) moved ahead, owner order kept within each group. A
+// provider's own "not cached" answer outranks the marker. Without a marker
+// the order is unchanged: answers from bulk checks alone never reorder.
+func (s *Service) markedFirst(ctx context.Context, entries []*entry, rel core.Release) []*entry {
+	if len(rel.DebridCached) == 0 {
+		return entries
+	}
+	marked := make([]*entry, 0, len(entries))
+	var rest []*entry
+	for _, e := range entries {
+		if slices.Contains(rel.DebridCached, e.cfg.Kind) && !s.knownUncachedForRelease(ctx, e, rel) {
+			marked = append(marked, e)
+		} else {
+			rest = append(rest, e)
+		}
+	}
+	return append(marked, rest...)
+}
+
 func (e *entry) serviceRef() core.DebridServiceRef {
 	e.mu.Lock()
 	cfg := e.cfg
@@ -1050,7 +1070,7 @@ func (s *Service) Acquire(ctx context.Context, rel core.Release) ([]byte, error)
 	}
 	var errs []error
 	notCached := 0
-	for _, e := range entries {
+	for _, e := range s.markedFirst(ctx, entries, rel) {
 		if err := e.blocked(s.now()); err != nil {
 			errs = append(errs, err)
 			continue
@@ -1149,7 +1169,7 @@ func (s *Service) ListReleaseFiles(ctx context.Context, rel core.Release) ([]cor
 
 	base := Payload{ReleaseID: rel.ID, InfoHash: hash, Magnet: magnet, Private: rel.Private, Release: rel.Name, Target: &core.ReleaseTarget{AllowNonVideo: true}}
 	var errs []error
-	for _, e := range entries {
+	for _, e := range s.markedFirst(ctx, entries, rel) {
 		if e.blocked(s.now()) != nil {
 			continue
 		}
@@ -1262,7 +1282,7 @@ func (s *Service) CachedPackMatcher(ctx context.Context, rel core.Release) (func
 	}
 	base := Payload{ReleaseID: rel.ID, InfoHash: hash, Magnet: magnet, Private: rel.Private, Release: rel.Name}
 	definitive := true
-	for _, e := range entries {
+	for _, e := range s.markedFirst(ctx, entries, rel) {
 		if e.blocked(s.now()) != nil {
 			definitive = false
 			continue

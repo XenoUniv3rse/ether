@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -562,5 +564,122 @@ func TestManagerSearchWithStatusObserverAndSkip(t *testing.T) {
 	}
 	if err := <-done; err != nil {
 		t.Fatalf("SearchWith err: %v", err)
+	}
+}
+
+func cachedOnItem(title, guid, link, infoHash, cachedOn string) string {
+	item := rssItem(title, guid, link, infoHash)
+	if cachedOn == "" {
+		return item
+	}
+	return strings.Replace(item, "</item>", `<torznab:attr name="cachedon" value="`+cachedOn+`"/></item>`, 1)
+}
+
+// mergeSearches runs each manager fan-out that folds duplicates into a
+// winner's Fallbacks.
+var mergeSearches = map[string]func(context.Context, *Manager, core.SearchRequest) ([]core.Release, error){
+	"Search": func(ctx context.Context, m *Manager, req core.SearchRequest) ([]core.Release, error) {
+		return m.Search(ctx, req)
+	},
+	"SearchRescue": func(ctx context.Context, m *Manager, req core.SearchRequest) ([]core.Release, error) {
+		// A rescue pass needs something to vary: a movie with a year.
+		req.Type, req.Year = core.TypeMovie, 2024
+		return m.SearchRescue(ctx, req)
+	},
+	"SearchWithOptions": func(ctx context.Context, m *Manager, req core.SearchRequest) ([]core.Release, error) {
+		res, err := m.SearchWithOptions(ctx, req, SearchOptions{})
+		return res.Releases, err
+	},
+}
+
+func torznabManager(t *testing.T, bodies ...string) *Manager {
+	t.Helper()
+	var cfgs []config.Indexer
+	for i, body := range bodies {
+		srv := httptest.NewServer(newznabSearchHandler(func(w http.ResponseWriter, r *http.Request) {
+			fmt.Fprint(w, rssEnvelope(body))
+		}))
+		t.Cleanup(srv.Close)
+		c := testConfig(srv.URL)
+		c.ID, c.Name, c.Protocol, c.Priority = fmt.Sprintf("tz%d", i), fmt.Sprintf("TZ%d", i), "torrent", i+1
+		cfgs = append(cfgs, c)
+	}
+	m := NewManager(nil, cfgs, Options{SearchCacheTTL: -1})
+	t.Cleanup(m.Close)
+	return m
+}
+
+// The same torrent from two indexers: the winner carries the union of both
+// cached markers; nothing else about it changes.
+func TestManagerMergeUnionsCachedOnSameHash(t *testing.T) {
+	const hash = "0123456789abcdef0123456789abcdef01234567"
+	a := cachedOnItem("Shared.Release.1080p", "a-1", "http://a.example/1.torrent", hash, "rd")
+	b := cachedOnItem("Shared.Release.1080p", "b-1", "http://b.example/1.torrent", hash, "tb,rd")
+	req := core.SearchRequest{Title: "Shared Release"}
+	for name, search := range mergeSearches {
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			solo, err := search(ctx, torznabManager(t, a), req)
+			if err != nil || len(solo) != 1 {
+				t.Fatalf("solo: %v (%d releases)", err, len(solo))
+			}
+			got, err := search(ctx, torznabManager(t, a, b), req)
+			if err != nil || len(got) != 1 {
+				t.Fatalf("merged: %v (%d releases)", err, len(got))
+			}
+			w := got[0]
+			if !slices.Equal(w.DebridCached, []string{config.DebridRealDebrid, config.DebridTorBox}) {
+				t.Fatalf("winner DebridCached = %q, want union", w.DebridCached)
+			}
+			if len(w.Fallbacks) != 1 || !slices.Equal(w.Fallbacks[0].DebridCached, []string{config.DebridTorBox, config.DebridRealDebrid}) {
+				t.Fatalf("fallbacks = %+v", w.Fallbacks)
+			}
+			w.DebridCached, w.Fallbacks = solo[0].DebridCached, nil
+			if !reflect.DeepEqual(w, solo[0]) {
+				t.Fatalf("winner changed beyond its markers:\n got %+v\nwant %+v", w, solo[0])
+			}
+		})
+	}
+}
+
+// A name-and-size duplicate without an info hash is folded as before, but
+// its markers do not join the winner: nothing says it is the same torrent.
+func TestManagerMergeKeepsCachedOnWithoutHash(t *testing.T) {
+	a := cachedOnItem("Shared.Release.1080p", "a-1", "http://a.example/1.torrent", "", "")
+	b := cachedOnItem("Shared.Release.1080p", "b-1", "http://b.example/1.torrent", "", "rd")
+	for name, search := range mergeSearches {
+		t.Run(name, func(t *testing.T) {
+			got, err := search(context.Background(), torznabManager(t, a, b), core.SearchRequest{Title: "Shared Release"})
+			if err != nil || len(got) != 1 || len(got[0].Fallbacks) != 1 {
+				t.Fatalf("merged: %v (%+v)", err, got)
+			}
+			if len(got[0].DebridCached) != 0 {
+				t.Fatalf("winner DebridCached = %q, want none", got[0].DebridCached)
+			}
+		})
+	}
+}
+
+// Any source's marker on a same-hash duplicate (an add-on's too) joins the
+// winner, without sharing the winner's backing array with its caller.
+func TestFoldDuplicateUnionsAnySourceMarker(t *testing.T) {
+	const hash = "0123456789abcdef0123456789abcdef01234567"
+	backing := make([]string, 1, 4)
+	backing[0] = config.DebridRealDebrid
+	winner := core.Release{ID: "w", Indexer: "TZ", Protocol: core.ProtocolTorrent, InfoHash: hash, DebridCached: backing[:1]}
+	addon := core.Release{ID: "s", Indexer: "Addon", Protocol: core.ProtocolTorrent, InfoHash: hash,
+		DebridCached: []string{config.DebridAllDebrid}, DebridUncached: []string{config.DebridTorBox}}
+	foldDuplicate(&winner, addon)
+	if !slices.Equal(winner.DebridCached, []string{config.DebridRealDebrid, config.DebridAllDebrid}) {
+		t.Fatalf("winner DebridCached = %q", winner.DebridCached)
+	}
+	if len(winner.DebridUncached) != 0 {
+		t.Fatalf("winner DebridUncached = %q, want untouched", winner.DebridUncached)
+	}
+	if backing[:2][1] != "" {
+		t.Fatal("union wrote into the winner's original backing array")
+	}
+	if len(winner.Fallbacks) != 1 || winner.Fallbacks[0].ID != "s" {
+		t.Fatalf("fallbacks = %+v", winner.Fallbacks)
 	}
 }

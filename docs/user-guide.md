@@ -257,6 +257,9 @@ languages.
 Self-hosted DMM hashlist indexers that speak Torznab, such as Zilean
 (`http://HOST:8182/torznab`) or StremThru (`https://HOST/v0/torznab`), can be
 added as Torznab URLs with protocol **Torrent (Torznab)**; Ether adds `/api`.
+When a Torznab feed marks results with `cachedon` (`rd`, `ad`, `tb`), Ether
+treats them as cached hints for Real-Debrid, AllDebrid or TorBox, like an
+addon's labels, and tries a marked account first.
 
 ### Which source plays
 

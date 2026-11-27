@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 
@@ -238,5 +239,80 @@ func TestMagnetEscapedHashWithMalformedField(t *testing.T) {
 	}
 	if got := MagnetValues(magnet).Get("tr"); got != "https://tracker.invalid/a" {
 		t.Fatalf("tracker=%q", got)
+	}
+}
+
+// A feed's cachedon attribute (e.g. a cached feed's rd/ad/tb codes) becomes
+// the release's DebridCached hint, in the XML and the JSON reader alike.
+func TestParseTorznabCachedOn(t *testing.T) {
+	const hash = "0123456789abcdef0123456789abcdef01234567"
+	item := func(guid string, attrs ...string) string {
+		var b strings.Builder
+		for _, v := range attrs {
+			fmt.Fprintf(&b, `<torznab:attr name="cachedon" value="%s"/>`, v)
+		}
+		return `<item><title>Movie.2024.1080p.WEB-DL-GRP</title><guid>` + guid + `</guid>` +
+			`<link>https://tracker.example/download/` + guid + `.torrent</link>` +
+			`<torznab:attr name="infohash" value="` + hash + `"/>` + b.String() + `</item>`
+	}
+	cases := []struct {
+		name  string
+		attrs []string
+		want  []string
+	}{
+		{"one", []string{"rd"}, []string{config.DebridRealDebrid}},
+		{"several", []string{"rd,ad,tb"}, []string{config.DebridRealDebrid, config.DebridAllDebrid, config.DebridTorBox}},
+		{"unknown", []string{"pm,xx,ad"}, []string{config.DebridAllDebrid}},
+		{"upper case and spaces", []string{" RD , Tb "}, []string{config.DebridRealDebrid, config.DebridTorBox}},
+		{"empty", []string{""}, nil},
+		{"repeated", []string{"rd", "tb,rd", "ad"}, []string{config.DebridRealDebrid, config.DebridTorBox, config.DebridAllDebrid}},
+		{"duplicates", []string{"rd,rd"}, []string{config.DebridRealDebrid}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rels, err := parseFeed([]byte(`<?xml version="1.0"?><rss xmlns:torznab="http://torznab.com/schemas/2015/feed"><channel>`+item("g", tc.attrs...)+`</channel></rss>`), "tz")
+			if err != nil || len(rels) != 1 {
+				t.Fatalf("parse: %v (%d releases)", err, len(rels))
+			}
+			if !slices.Equal(rels[0].DebridCached, tc.want) {
+				t.Fatalf("xml DebridCached = %q, want %q", rels[0].DebridCached, tc.want)
+			}
+			if len(rels[0].DebridUncached) != 0 {
+				t.Fatalf("xml DebridUncached = %q", rels[0].DebridUncached)
+			}
+			var attrs []string
+			for _, v := range tc.attrs {
+				attrs = append(attrs, fmt.Sprintf(`{"@attributes":{"name":"cachedon","value":%q}}`, v))
+			}
+			body := `{"rss":{"channel":{"item":[{"title":"Movie.2024.1080p.WEB-DL-GRP","guid":"g","link":"https://tracker.example/download/g.torrent","attr":[` +
+				`{"@attributes":{"name":"infohash","value":"` + hash + `"}}` + strings.Repeat(",", min(1, len(attrs))) + strings.Join(attrs, ",") + `]}]}}}`
+			rels, err = parseFeed([]byte(body), "tz")
+			if err != nil || len(rels) != 1 {
+				t.Fatalf("parse json: %v (%d releases)", err, len(rels))
+			}
+			if !slices.Equal(rels[0].DebridCached, tc.want) {
+				t.Fatalf("json DebridCached = %q, want %q", rels[0].DebridCached, tc.want)
+			}
+		})
+	}
+}
+
+// The parser collects cachedon on any item, as it does infohash and seeders
+// (a link-only Torznab item becomes a torrent later, in the client); a
+// Usenet item keeps its protocol and the debrid hints ignore it.
+func TestParseCachedOnUsenetItem(t *testing.T) {
+	body := `<?xml version="1.0"?><rss xmlns:newznab="http://www.newznab.com/DTD/2010/feeds/attributes/"><channel><item>` +
+		`<title>Movie.2024.1080p.WEB-DL-GRP</title><guid>n1</guid><link>https://idx.example/getnzb/n1.nzb</link>` +
+		`<enclosure url="https://idx.example/getnzb/n1.nzb" length="1000" type="application/x-nzb"/>` +
+		`<newznab:attr name="cachedon" value="rd"/></item></channel></rss>`
+	rels, err := parseFeed([]byte(body), "nz")
+	if err != nil || len(rels) != 1 {
+		t.Fatalf("parse: %v (%d releases)", err, len(rels))
+	}
+	if rels[0].Protocol == core.ProtocolTorrent || rels[0].InfoHash != "" {
+		t.Fatalf("usenet item became a torrent: %+v", rels[0])
+	}
+	if !slices.Equal(rels[0].DebridCached, []string{config.DebridRealDebrid}) {
+		t.Fatalf("DebridCached = %q", rels[0].DebridCached)
 	}
 }

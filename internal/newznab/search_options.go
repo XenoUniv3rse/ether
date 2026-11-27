@@ -723,9 +723,7 @@ func snapshotSearchSlots(slots []searchSlot, searchStart time.Time, unfinishedSt
 			for _, r := range s.results {
 				key := mergeDedupeKey(r)
 				if idx, ok := seen[key]; ok {
-					dup := r
-					dup.Fallbacks = nil
-					merged[idx].Fallbacks = append(merged[idx].Fallbacks, dup)
+					foldDuplicate(&merged[idx], r)
 					continue
 				}
 				seen[key] = len(merged)
