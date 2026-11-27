@@ -1004,6 +1004,7 @@ export interface CandidateTrace {
   route?: string;
 }
 export interface ResolverTrace {
+  pluginKind?: boolean;
   downgrade?: string;
   discovery?: { path: string; count: number; rescue?: boolean }[];
   limits?: {

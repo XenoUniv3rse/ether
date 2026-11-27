@@ -216,7 +216,8 @@ including the route-clamped `deadline` and `unitBudget`, `poolSize`, plus
 Viewer request-path calls derive their unit budget directly from each route's
 deadline (`10,000 units/s`): `/stream/*` and `/ether/open*` get 3 s (30,000 units;
 20 s / 200,000 units for Stremio add-ons), `/subtitles/*`, `/ether/subtitles/*` and
-`/ether/v1/kinds/*/resolve` or `/match` get 5 s (50,000 units), and `/catalog/*`,
+`/ether/v1/kinds/*/match` or `/live/resolve` get 5 s (50,000 units).
+Kind `/resolve` gets 12 s (120,000 units). `/catalog/*`,
 `/meta/*`, `/ether/metadata/*`, `/ether/markers*`, `/ether/v1/kinds/*/search`,
 `/items/*`, `/ether/search` and `/ether/files/*` get 10 s (100,000 units), further shortened only if the owner sets a
 lower ceiling. Ranking stays at its existing 2 ms per-candidate and 50 ms

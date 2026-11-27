@@ -172,6 +172,7 @@ type CandidateTrace struct {
 
 // Trace is one recorded resolution attempt, for the admin UI.
 type Trace struct {
+	PluginKind                bool             `json:"pluginKind,omitempty"`
 	Discovery                 []DiscoveryTrace `json:"discovery,omitempty"`
 	Limits                    *TraceLimits     `json:"limits,omitempty"`
 	TitleKey                  core.RatingKey   `json:"titleKey"`

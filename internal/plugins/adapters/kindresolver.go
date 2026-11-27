@@ -151,6 +151,7 @@ type kindResolveResult struct {
 }
 
 type resolveFlight struct {
+	search  *resolveSearchState
 	done    chan struct{}
 	cancel  context.CancelFunc
 	result  kindResolveResult
@@ -454,7 +455,10 @@ func (r *KindResolver) projectedTitle(ctx context.Context, item core.KindItem, r
 	return &t
 }
 
-func (r *KindResolver) openSingleSource(ctx context.Context, rec pluginitems.KindRecord, lib core.Library, item core.KindItem, partIdx *int, targetSrc core.PlayableSource, allowQueue bool, pendingFallback func() error) (*frontend.KindMedia, error) {
+func (r *KindResolver) openSingleSource(ctx context.Context, rec pluginitems.KindRecord, lib core.Library, item core.KindItem, partIdx *int, targetSrc core.PlayableSource, allowQueue bool, pendingFallback func() error, candidates []core.PlayableSource) (_ *frontend.KindMedia, err error) {
+	defer func() {
+		r.recordKindDecision(ctx, rec.PluginID, item, targetSrc, candidates, false, err)
+	}()
 	ksDeps := r.kindstreamDeps(ctx, rec, lib, item, partIdx, nil)
 	bs, err := kindstream.Open(ctx, targetSrc, ksDeps)
 	if err != nil {
@@ -471,7 +475,6 @@ func (r *KindResolver) openSingleSource(ctx context.Context, rec pluginitems.Kin
 			}
 		}
 		if err != nil {
-			r.recordKindFailure(ctx, item, err)
 			return nil, err
 		}
 	}
@@ -492,6 +495,7 @@ func (r *KindResolver) openSingleSource(ctx context.Context, rec pluginitems.Kin
 	rel := playableSourceRelease(targetSrc, item.Title)
 	if rel.Size <= 0 {
 		rel.Size = bs.Size()
+		targetSrc.Size = rel.Size
 	}
 	if rel.Name == "" {
 		rel.Name = firstNonEmpty(bs.Name(), item.Title)
@@ -586,13 +590,15 @@ func (r *KindResolver) OpenKindSource(ctx context.Context, viewer *core.Viewer, 
 
 	result, err := r.resolveCandidates(ctx, rec, lib, item, partIdx, accept)
 	if err != nil {
+		r.recordKindDecision(ctx, rec.PluginID, item, core.PlayableSource{}, nil, false, err)
 		return nil, err
 	}
 	src, matched := matchPlayableSource(result.sources, item.Title, sourceID, r.now().Unix())
 	if !matched {
+		r.recordKindDecision(ctx, rec.PluginID, item, core.PlayableSource{}, result.sources, false, core.ErrNotAvailable)
 		return nil, core.ErrNotAvailable
 	}
-	return r.openSingleSource(ctx, rec, lib, item, partIdx, src, true, result.pendingFallback)
+	return r.openSingleSource(ctx, rec, lib, item, partIdx, src, true, result.pendingFallback, result.sources)
 }
 
 // OpenKindPartSource opens exactly one resolver source (and optional zero-based
@@ -669,7 +675,7 @@ func (r *KindResolver) OpenKindPartSource(ctx context.Context, viewer *core.View
 	fk := flightKeyForItemSource(targetItem.Ref, effectivePart, sourceID)
 	if cached, ok := r.cachedCandidates(fk); ok {
 		if src, matched := matchPlayableSource(cached, targetItem.Title, sourceID, r.now().Unix()); matched {
-			km, oerr := r.openSingleSource(ctx, rec, lib, targetItem, effectivePart, src, true, nil)
+			km, oerr := r.openSingleSource(ctx, rec, lib, targetItem, effectivePart, src, true, nil, cached)
 			if oerr == nil {
 				return km, nil
 			}
@@ -687,13 +693,15 @@ func (r *KindResolver) OpenKindPartSource(ctx context.Context, viewer *core.View
 
 	result, err := r.resolveSourcesFlight(ctx, rec, lib, targetItem, effectivePart, sourceID, accept, nil)
 	if err != nil {
+		r.recordKindDecision(ctx, rec.PluginID, targetItem, core.PlayableSource{}, nil, false, err)
 		return nil, err
 	}
 	src, matched := matchPlayableSource(result.sources, targetItem.Title, sourceID, r.now().Unix())
 	if !matched {
+		r.recordKindDecision(ctx, rec.PluginID, targetItem, core.PlayableSource{}, result.sources, false, core.ErrNotAvailable)
 		return nil, core.ErrNotAvailable
 	}
-	km, err := r.openSingleSource(ctx, rec, lib, targetItem, effectivePart, src, true, result.pendingFallback)
+	km, err := r.openSingleSource(ctx, rec, lib, targetItem, effectivePart, src, true, result.pendingFallback, result.sources)
 	if err != nil {
 		if result.pendingFallback == nil && errors.Is(err, core.ErrPreparing) {
 			r.storeCandidates(fk, []core.PlayableSource{src})
@@ -1095,7 +1103,7 @@ func (r *KindResolver) OpenKindExcluding(ctx context.Context, viewer *core.Viewe
 							rels = append(rels, playableSourceRelease(src, item.Title))
 						}
 						if idx, _ := r.resolver.MatchViewerChoice(viewer.ID, title, rels); idx >= 0 {
-							if media, oerr := r.openSingleSource(ctx, rec, lib, item, partIdx, live[idx], false, nil); oerr == nil {
+							if media, oerr := r.openSingleSource(ctx, rec, lib, item, partIdx, live[idx], false, nil, sources); oerr == nil {
 								return media, nil
 							}
 						}
@@ -1332,7 +1340,7 @@ func (r *KindResolver) tryOpenPartFromParentRelease(ctx context.Context, rec plu
 	if vaultedOnly {
 		openCtx = newznab.WithVaultedPluginNZB(ctx)
 	}
-	media, err := r.openSingleSource(openCtx, rec, lib, parent, &idx, partSrc, !vaultedOnly, nil)
+	media, err := r.openSingleSource(openCtx, rec, lib, parent, &idx, partSrc, !vaultedOnly, nil, nil)
 	if err != nil {
 		if vaultedOnly && ctx.Err() == nil && errors.Is(err, core.ErrSourceUnavailable) {
 			return nil, false, nil
@@ -1760,8 +1768,7 @@ type resolveSearchStateKey struct{}
 
 type resolveSearchState struct {
 	mu               sync.Mutex
-	oneShotPending   bool
-	pendingBySearch  map[string]bool
+	searches         map[string]kindSearchOutcome
 	budgetSkipped    bool
 	candidatesFound  bool
 	indexerAnswered  bool
@@ -1792,7 +1799,6 @@ func (s *resolveSearchState) beginSlice() {
 		return
 	}
 	s.mu.Lock()
-	s.oneShotPending = false
 	s.sliceSourceCalls = 0
 	s.sliceWorkKeys = nil
 	s.mu.Unlock()
@@ -1847,15 +1853,7 @@ func (s *resolveSearchState) timeoutProgressSnapshot() (hasPending, hasActivity 
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	hasPending = s.oneShotPending
-	if !hasPending {
-		for _, pending := range s.pendingBySearch {
-			if pending {
-				hasPending = true
-				break
-			}
-		}
-	}
+	hasPending = s.hasPendingLocked()
 	hasActivity = s.inFlight > 0 || s.sliceSourceCalls > 0
 	if len(s.sliceWorkKeys) > 0 {
 		workKeys = make([]string, 0, len(s.sliceWorkKeys))
@@ -1866,36 +1864,65 @@ func (s *resolveSearchState) timeoutProgressSnapshot() (hasPending, hasActivity 
 	return hasPending, hasActivity, workKeys
 }
 
-func noteResolveSearchResult(ctx context.Context, res core.SourceResolveResult) {
+type kindSearchOutcome struct {
+	pending    bool
+	timedOut   bool
+	unanswered []string
+}
+
+func noteResolveSearchResult(ctx context.Context, key string, res core.SourceResolveResult, err error) {
 	st := resolveSearchStateFrom(ctx)
 	if st == nil {
 		return
 	}
-	hasPending := len(res.Pending) > 0
-	st.mu.Lock()
 	if res.SearchID != "" {
-		if st.pendingBySearch == nil {
-			st.pendingBySearch = make(map[string]bool)
-		}
-		st.pendingBySearch[res.SearchID] = hasPending
-	} else if hasPending {
-		st.oneShotPending = true
+		key = res.SearchID
 	}
+	outcome := kindSearchOutcome{
+		pending:  len(res.Pending) > 0 || (res.Done != nil && !*res.Done),
+		timedOut: errors.Is(err, context.DeadlineExceeded),
+	}
+	incomplete := err != nil
+	st.mu.Lock()
+	defer st.mu.Unlock()
 	st.candidatesFound = st.candidatesFound || len(res.Candidates) > 0
 	for _, status := range res.Indexers {
 		switch {
-		case status.Error == "budget_exhausted":
-			st.budgetSkipped = true
 		case status.Status == core.IndexerStatusAnswered:
 			st.indexerAnswered = true
+			continue
+		case status.Error == "budget_exhausted":
+			st.budgetSkipped = true
 		case status.Status == core.IndexerStatusSkipped && status.Reason == core.IndexerSkipReasonPaused:
 			if st.pausedIndexers == nil {
 				st.pausedIndexers = make(map[string]string)
 			}
 			st.pausedIndexers[status.IndexerID] = status.ConfiguredName
+		case status.Status == core.IndexerStatusSkipped || status.Error == "category_unsupported":
+			// The plugin or caller explicitly excluded this indexer.
+			continue
+		}
+		outcome.pending = outcome.pending || status.Status == core.IndexerStatusPending
+		outcome.timedOut = outcome.timedOut || status.Status == core.IndexerStatusTimedOut || status.Error == "timeout"
+		incomplete = true
+		if status.ConfiguredName != "" {
+			outcome.unanswered = append(outcome.unanswered, logredact.Source(status.ConfiguredName))
 		}
 	}
-	st.mu.Unlock()
+	if outcome.pending || incomplete {
+		if st.searches == nil {
+			st.searches = make(map[string]kindSearchOutcome)
+		}
+		if previous := st.searches[key]; err != nil && len(res.Indexers) == 0 {
+			// A cancelled poll or failed scoring cannot erase the
+			// outstanding indexers from the previous snapshot.
+			outcome.unanswered = previous.unanswered
+			outcome.timedOut = outcome.timedOut || previous.timedOut
+		}
+		st.searches[key] = outcome
+	} else {
+		delete(st.searches, key)
+	}
 }
 
 func (s *resolveSearchState) indexerPause() error {
@@ -1907,16 +1934,6 @@ func (s *resolveSearchState) indexerPause() error {
 	names := slices.Collect(maps.Values(s.pausedIndexers))
 	slices.Sort(names)
 	return &core.IndexersPausedError{Names: slices.Compact(names)}
-}
-
-func noteResolveSearchCanceled(ctx context.Context, searchID string) {
-	st := resolveSearchStateFrom(ctx)
-	if st == nil || searchID == "" {
-		return
-	}
-	st.mu.Lock()
-	delete(st.pendingBySearch, searchID)
-	st.mu.Unlock()
 }
 
 func noteResolveBudgetSkip(ctx context.Context) {
@@ -1935,11 +1952,12 @@ func (s *resolveSearchState) hasPending() bool {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.oneShotPending {
-		return true
-	}
-	for _, pending := range s.pendingBySearch {
-		if pending {
+	return s.hasPendingLocked()
+}
+
+func (s *resolveSearchState) hasPendingLocked() bool {
+	for _, outcome := range s.searches {
+		if outcome.pending {
 			return true
 		}
 	}
@@ -1955,10 +1973,14 @@ func (s *resolveSearchState) hadBudgetSkip() bool {
 	return s.budgetSkipped
 }
 
-func (r *KindResolver) resolveIndexerSearch(ctx context.Context, pluginID string, q core.SourceQuery) (core.SourceResolveResult, error) {
+func (r *KindResolver) resolveIndexerSearch(ctx context.Context, pluginID string, q core.SourceQuery) (res core.SourceResolveResult, err error) {
 	if q.Stream {
-		return r.startStreamingIndexerSearch(ctx, pluginID, q)
+		res, err := r.startStreamingIndexerSearch(ctx, pluginID, q)
+		noteResolveSearchResult(ctx, "stream-start", res, err)
+		return res, err
 	}
+	key := indexerLookupKey(q)
+	defer func() { noteResolveSearchResult(ctx, key, res, err) }()
 	query, category, err := r.validateIndexerSearchQuery(ctx, q)
 	if err != nil {
 		return core.SourceResolveResult{}, err
@@ -2018,8 +2040,9 @@ func (r *KindResolver) resolveIndexerSearch(ctx context.Context, pluginID string
 		}
 		var sr core.IndexerSearchResult
 		if st := resolveSearchStateFrom(ctx); st != nil && st.playbackCtx != nil {
-			return r.continueIndexerSearch(searchCtx, st, csi, q, searchReq, opts)
+			return r.continueIndexerSearch(searchCtx, st, key, csi, q, searchReq, opts)
 		}
+		r.noteIndexerSearchStarted(ctx, key, opts)
 		sr, err = csi.SearchWithOptions(searchCtx, searchReq, opts)
 		rels = sr.Releases
 		statuses = sr.Indexers
@@ -2028,7 +2051,7 @@ func (r *KindResolver) resolveIndexerSearch(ctx context.Context, pluginID string
 		}
 		if err != nil {
 			if searchCtx.Err() != nil {
-				return core.SourceResolveResult{}, searchCtx.Err()
+				return core.SourceResolveResult{Indexers: statuses, Pending: pending}, searchCtx.Err()
 			}
 			if errors.Is(err, core.ErrBudgetExhausted) {
 				noteResolveBudgetSkip(ctx)
@@ -2039,6 +2062,9 @@ func (r *KindResolver) resolveIndexerSearch(ctx context.Context, pluginID string
 			// plugin that is simply "no releases": its search must not
 			// throw because of an indexer it never chose.
 			r.log.Debug("plugin indexer search found nothing; some indexers failed")
+			if len(statuses) == 0 && len(pending) == 0 {
+				return core.SourceResolveResult{}, err
+			}
 			return core.SourceResolveResult{Candidates: []core.SourceCandidate{}, Indexers: statuses, Pending: pending}, nil
 		}
 	} else {
@@ -2064,7 +2090,7 @@ func (r *KindResolver) resolveIndexerSearch(ctx context.Context, pluginID string
 		rels, err = r.indexer.Search(searchCtx, searchReq)
 		ms := max(int64(0), time.Since(started).Milliseconds())
 		if err != nil {
-			if opts.WaitTimeout > 0 && errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
+			if errors.Is(err, context.DeadlineExceeded) || errors.Is(searchCtx.Err(), context.DeadlineExceeded) {
 				return core.SourceResolveResult{
 					Candidates: []core.SourceCandidate{},
 					Indexers: []core.IndexerSearchStatus{{
@@ -2074,9 +2100,6 @@ func (r *KindResolver) resolveIndexerSearch(ctx context.Context, pluginID string
 						MS:        ms,
 					}},
 				}, nil
-			}
-			if searchCtx.Err() != nil {
-				return core.SourceResolveResult{}, searchCtx.Err()
 			}
 			if errors.Is(err, core.ErrBudgetExhausted) {
 				noteResolveBudgetSkip(ctx)
@@ -2122,7 +2145,7 @@ func (r *KindResolver) finishIndexerSearch(ctx context.Context, query, profile s
 	}
 	scored, err := r.scoreIndexerReleases(ctx, query, profile, rels)
 	if err != nil {
-		return core.SourceResolveResult{}, err
+		return core.SourceResolveResult{Indexers: statuses, Pending: pending}, err
 	}
 	return core.SourceResolveResult{
 		Candidates: scored,
@@ -2147,26 +2170,25 @@ func (r *KindResolver) ResolveSourcesWithResult(ctx context.Context, pluginID st
 		workKey := fmt.Sprintf("indexer_search:%s|%s|%t", strings.TrimSpace(q.Query), strings.TrimSpace(q.Category), q.Stream)
 		endWork := beginResolveSourceWork(ctx, workKey)
 		defer endWork()
-		res, err := r.resolveIndexerSearch(ctx, pluginID, q)
-		if err == nil {
-			noteResolveSearchResult(ctx, res)
-		}
-		return res, err
+		return r.resolveIndexerSearch(ctx, pluginID, q)
 	case "indexer_search_results":
 		endWork := beginResolveSourceWork(ctx, "")
 		defer endWork()
 		res, err := r.pollStreamingIndexerSearch(ctx, pluginID, q)
-		if err == nil {
-			noteResolveSearchResult(ctx, res)
-			if len(res.Candidates) > 0 {
-				first := res.Candidates[0]
-				noteResolveSourceWork(ctx, fmt.Sprintf("indexer_search_results:%s:%s:%s:%s:%d", res.SearchID, first.NZBURL, first.InfoHash, first.Title, len(res.Candidates)), false)
-			}
+		noteResolveSearchResult(ctx, strings.TrimSpace(q.SearchID), res, err)
+		if len(res.Candidates) > 0 {
+			first := res.Candidates[0]
+			noteResolveSourceWork(ctx, fmt.Sprintf("indexer_search_results:%s:%s:%s:%s:%d", res.SearchID, first.NZBURL, first.InfoHash, first.Title, len(res.Candidates)), false)
 		}
 		return res, err
 	case "indexer_search_cancel":
-		noteResolveSearchCanceled(ctx, q.SearchID)
-		return r.cancelStreamingIndexerSearch(ctx, pluginID, q)
+		res, err := r.cancelStreamingIndexerSearch(ctx, pluginID, q)
+		if err == nil {
+			noteResolveSearchResult(ctx, res.SearchID, res, context.Canceled)
+		} else {
+			noteResolveSearchResult(ctx, strings.TrimSpace(q.SearchID), res, err)
+		}
+		return res, err
 	case "indexers":
 		return r.resolveIndexersList(), nil
 	case "debrid":
@@ -2838,7 +2860,11 @@ func flightKeyForItemSource(ref core.ItemRef, partIdx *int, source string) resol
 	return fk
 }
 
-func (r *KindResolver) openItemByteSourceExcluding(ctx context.Context, rec pluginitems.KindRecord, lib core.Library, item core.KindItem, partIdx *int, accept, exclude []string) (kindstream.ByteSource, core.PlayableSource, error) {
+func (r *KindResolver) openItemByteSourceExcluding(ctx context.Context, rec pluginitems.KindRecord, lib core.Library, item core.KindItem, partIdx *int, accept, exclude []string) (_ kindstream.ByteSource, winner core.PlayableSource, err error) {
+	var candidates []core.PlayableSource
+	defer func() {
+		r.recordKindDecision(ctx, rec.PluginID, item, winner, candidates, len(exclude) > 0, err)
+	}()
 	if item.Unavailable != nil {
 		return nil, core.PlayableSource{}, core.ErrNotAvailable
 	}
@@ -2950,6 +2976,7 @@ func (r *KindResolver) openItemByteSourceExcluding(ctx context.Context, rec plug
 			cands := r.filterAndOrderCandidates(stored, item.Title, exclude)
 			hasReady := slices.ContainsFunc(cands, func(s core.PlayableSource) bool { return !r.isSourceBackingOff(s) })
 			if len(cands) > 0 && (backingOffCached == nil || hasReady) {
+				candidates = stored
 				bs, winning, oerr := kindstream.OpenSources(ctx, cands, ksDeps)
 				if oerr == nil {
 					return saveAndReturn(bs, winning)
@@ -2978,12 +3005,12 @@ func (r *KindResolver) openItemByteSourceExcluding(ctx context.Context, rec plug
 		}
 		if cachedBudgetExhausted && errors.Is(err, core.ErrNotAvailable) {
 			_ = r.items.InvalidatePartResolution(ctx, item.Ref, partIdx)
-			r.recordKindFailure(ctx, item, core.ErrBudgetExhausted)
 			return nil, core.PlayableSource{}, core.ErrBudgetExhausted
 		}
 		return nil, core.PlayableSource{}, err
 	}
 
+	candidates = result.sources
 	cands := r.filterAndOrderCandidates(result.sources, item.Title, exclude)
 	if len(cands) == 0 {
 		if backingOffCached != nil {
@@ -2994,7 +3021,6 @@ func (r *KindResolver) openItemByteSourceExcluding(ctx context.Context, rec plug
 			cachedBudgetExhausted = cachedBudgetExhausted || errors.Is(oerr, core.ErrBudgetExhausted)
 		}
 		if cachedBudgetExhausted {
-			r.recordKindFailure(ctx, item, core.ErrBudgetExhausted)
 			return nil, core.PlayableSource{}, core.ErrBudgetExhausted
 		}
 		return nil, core.PlayableSource{}, core.ErrNotAvailable
@@ -3048,7 +3074,6 @@ func (r *KindResolver) openItemByteSourceExcluding(ctx context.Context, rec plug
 				)
 			}
 		}
-		r.recordKindFailure(ctx, item, err)
 		return nil, core.PlayableSource{}, err
 	}
 	return saveAndReturn(bs, winning)
@@ -3519,15 +3544,7 @@ func parsePreparingReply(body []byte) error {
 }
 
 func (r *KindResolver) callPluginResolve(ctx context.Context, rec pluginitems.KindRecord, lib core.Library, item core.KindItem, partIdx *int, source string, accept, exclude []string) (_ kindResolveResult, err error) {
-	var reply json.RawMessage
-	defer func() {
-		if errors.Is(err, core.ErrKindCandidatesRejected) {
-			r.recordKindRejection(ctx, rec.PluginID, item, reply)
-		} else {
-			r.recordKindFailure(ctx, item, err)
-		}
-		err = logredact.SourceError(err)
-	}()
+	defer func() { err = logredact.SourceError(err) }()
 	pr, err := r.mgr.Get(ctx, rec.PluginID)
 	if err != nil || !pr.Enabled || !pr.Manifest.HasCapability(plugins.CapKindResolver) {
 		return kindResolveResult{}, core.ErrSourceUnavailable
@@ -3592,15 +3609,20 @@ func (r *KindResolver) callPluginResolve(ctx context.Context, rec pluginitems.Ki
 			return kindResolveResult{}, fmt.Errorf("%w: %w", core.ErrSourceUnavailable, err)
 		}
 		var we *wasm.Error
-		if errors.Is(err, context.DeadlineExceeded) {
-			return kindResolveResult{}, &core.PreparingError{RetryAfter: 2 * time.Second}
+		if errors.Is(err, context.Canceled) {
+			return kindResolveResult{}, err
 		}
-		if errors.As(err, &we) && we.Status == wasm.StatusTimeout && r.allowTimeoutPreparing(fk, searchState) {
-			return kindResolveResult{}, &core.PreparingError{RetryAfter: 2 * time.Second}
+		if errors.Is(err, context.DeadlineExceeded) {
+			return kindResolveResult{}, searchState.searchError(core.PreparingFromPending(2000), "timed out")
+		}
+		if errors.As(err, &we) && we.Status == wasm.StatusTimeout {
+			if r.allowTimeoutPreparing(fk, searchState) {
+				return kindResolveResult{}, core.PreparingFromPending(2000)
+			}
+			return kindResolveResult{}, searchState.searchError(core.PreparingFromPending(2000), "timed out")
 		}
 		return kindResolveResult{}, fmt.Errorf("%w: %v", core.ErrSourceUnavailable, err)
 	}
-	reply = resp.Body
 	fallback := resp.PendingFallback()
 	if resp.Status == http.StatusAccepted && fallback == nil {
 		if searchState.indexerLookupLimitHit() {
@@ -3613,7 +3635,11 @@ func (r *KindResolver) callPluginResolve(ctx context.Context, rec pluginitems.Ki
 		return kindResolveResult{}, parsePreparingReply(resp.Body)
 	}
 	if resp.Status == http.StatusNotFound {
-		return r.emptyKindResolve(ctx, item, partIdx, fk, searchState, len(exclude) > 0)
+		var pending plugins.PendingReply
+		if json.Unmarshal(resp.Body, &pending) == nil && pending.Pending {
+			return kindResolveResult{}, core.PreparingFromPending(pending.RetryInMS)
+		}
+		return r.emptyKindResolve(ctx, rec.PluginID, item, partIdx, fk, searchState, len(exclude) > 0, resp.Body)
 	}
 	if resp.Status != http.StatusOK && resp.Status != http.StatusAccepted {
 		return kindResolveResult{}, fmt.Errorf("%w: resolver status %d", core.ErrSourceUnavailable, resp.Status)
@@ -3649,7 +3675,7 @@ func (r *KindResolver) callPluginResolve(ctx context.Context, rec pluginitems.Ki
 		}
 	}
 	if len(resolved.Sources) == 0 {
-		return r.emptyKindResolve(ctx, item, partIdx, fk, searchState, len(exclude) > 0)
+		return r.emptyKindResolve(ctx, rec.PluginID, item, partIdx, fk, searchState, len(exclude) > 0, resp.Body)
 	}
 	if err := r.validateNoRawSecretsInHeaders(ctx, pr.ID, pr.Manifest.Ether.Permissions.Secrets, resolved.Sources); err != nil {
 		return kindResolveResult{}, err

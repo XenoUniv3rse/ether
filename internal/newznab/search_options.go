@@ -77,10 +77,11 @@ func (m *Manager) EnabledIndexerStatuses(status string) []core.IndexerSearchStat
 			continue
 		}
 		out = append(out, core.IndexerSearchStatus{
-			IndexerID: cl.indexerID(),
-			Indexer:   cl.Name(),
-			Status:    status,
-			MS:        0,
+			IndexerID:      cl.indexerID(),
+			Indexer:        cl.Name(),
+			ConfiguredName: cl.Config().Name,
+			Status:         status,
+			MS:             0,
 		})
 	}
 	return out
@@ -120,9 +121,10 @@ func (m *Manager) EnabledIndexers() []core.IndexerSearchStatus {
 		}
 		id := cl.indexerID()
 		entry := core.IndexerSearchStatus{
-			IndexerID: id,
-			Indexer:   cl.Name(),
-			Kind:      indexerKind(cfg),
+			IndexerID:      id,
+			Indexer:        cl.Name(),
+			ConfiguredName: cfg.Name,
+			Kind:           indexerKind(cfg),
 		}
 		if h := m.timingHistory[id]; h != nil && h.hasSample {
 			med := medianInt64(h.samples)
