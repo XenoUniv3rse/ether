@@ -450,7 +450,7 @@ func TestSubSourceLanguagesAndDisabled(t *testing.T) {
 
 	// Distinct regional variants map cleanly both ways.
 	if got := subsourceQueryLangs("pt-BR,pt-PT,zh-CN,zh-TW,fa,nb"); strings.Join(got, ",") !=
-		"brazilian_portuguese,portuguese,chinese_simplified,chinese_traditional,farsi_persian,norwegian" {
+		"brazilian_portuguese,portuguese,chinese_bg_code,big_5_code,farsi_persian,norwegian" {
 		t.Fatalf("query langs = %v", got)
 	}
 	if !matchesSearchLanguages("pt-BR", subsourceParseLang("brazilian_portuguese")) {
