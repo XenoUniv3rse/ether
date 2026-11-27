@@ -121,6 +121,7 @@ function resolveBuiltinSubparts(
           viewing: () => t("Viewing"),
           delivery: () => t("Delivery"),
           experience: () => t("Experience"),
+          recommendations: () => t("Recommendations"),
         },
         "now",
       );

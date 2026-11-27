@@ -44,6 +44,8 @@ type NeutralHomeLayoutSource interface {
 
 // NeutralImpression is a server-issued snapshot of a delivered row.
 type NeutralImpression struct {
+	Surface            Protocol
+	ObservedAt         time.Time // When the client reported the impression.
 	Situation          HomeSituation
 	RowID, Kind, Title string
 	Purpose            RowPurpose

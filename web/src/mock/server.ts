@@ -1,3 +1,7 @@
+import {
+  recommendationPerformance,
+  recommendationPerformanceDetail,
+} from "./recommendation-performance";
 import type { EpisodeOrder, EpisodeOrderDetails, MetadataSource } from "../lib/metadataSources";
 import { interpretDemo } from "./catalogInterpret";
 import { indexerUsage, infrastructure, saveCost, sourceHistory } from "./source-stats";
@@ -5981,26 +5985,25 @@ export function createFakeServer(opts: FakeOptions = {}) {
         });
       case "GET /insights/rows":
         return json({
-          rows: [
-            ["home.continue", "Continue Watching"],
-            ["home.top-10", "Top 10 for You"],
-            ["home.trending", "Trending This Week"],
-            ["home.because-you-watched", "Because You Watched"],
-            ["home.hidden-gems", "Hidden Gems"],
-          ]
-            .map(([hubId, title]) => ({ hubId: hubId!, title: title! }))
-            .map((r) => {
-              const impressions7d = 80 + (hash(r.hubId) % 400);
-              const plays7d = Math.round(impressions7d * ((hash(r.hubId + "p") % 30) / 100));
-              return {
-                hubId: r.hubId,
-                title: r.title,
-                impressions7d,
-                plays7d,
-                playRate: plays7d / impressions7d,
-              };
-            }),
+          rows: recommendationPerformance(7, "").rows.map((row) => ({
+            hubId: row.kind,
+            title: row.title,
+            impressions7d: row.impressions,
+            plays7d: row.plays,
+            playRate: row.rankRate,
+            lowSample: row.lowSample,
+          })),
         });
+      case "GET /insights/recommendations":
+        return json(recommendationPerformance(Number(q.get("days") ?? 30), q.get("viewer") ?? ""));
+      case "GET /insights/recommendations/row":
+        return json(
+          recommendationPerformanceDetail(
+            Number(q.get("days") ?? 30),
+            q.get("kind") ?? "",
+            q.get("viewer") ?? "",
+          ),
+        );
       case "GET /insights/activity":
         return json({ days: activity() });
     }

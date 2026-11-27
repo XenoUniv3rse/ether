@@ -210,6 +210,7 @@ type ServiceDeps struct {
 	HiddenRecordingCopies  func(ctx context.Context, userID int64) ([]core.RatingKey, error)
 	Search                 Search
 	Rows                   *RowsService
+	DeliveredRows          func(*core.User, []core.NeutralImpression)
 	Layout                 core.NeutralHomeLayoutSource
 	Protocol               core.Protocol
 	// Favorites manages the stable, per-viewer Favorites playlist mapping.
@@ -1082,6 +1083,19 @@ func (s *Service) SnapshotRows(ctx context.Context, req frontend.RowRequest) ([]
 		return s.pluginDetailRows(ctx, tv, req)
 	}
 	return s.d.Rows.SnapshotRows(ctx, req, s.d.Protocol)
+}
+
+// RecordDeliveredRows accepts only server-projected entries on protocols that
+// cannot return interaction receipts. The service supplies the app identity.
+func (s *Service) RecordDeliveredRows(viewer *core.User, rows []core.NeutralImpression) {
+	if s.d.DeliveredRows == nil || len(rows) == 0 {
+		return
+	}
+	delivered := append([]core.NeutralImpression(nil), rows...)
+	for i := range delivered {
+		delivered[i].Surface = s.d.Protocol
+	}
+	s.d.DeliveredRows(viewer, delivered)
 }
 
 func pluginPlayRead(piv PluginItemView) (canPlay *bool, canRead *bool) {

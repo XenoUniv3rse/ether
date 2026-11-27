@@ -712,26 +712,6 @@ function ActivityPanel({
   );
 }
 
-const DYNAMIC_KIND_TITLES: Record<string, string> = {
-  "genre-showcase": "Acclaimed by Genre",
-  "era-favourites": "Best by Decade",
-  "world-cinema": "World Cinema for You",
-  "top-rated-in-genre": "Top-Rated by Genre",
-  "taste-bridge": "Where Favourites Meet",
-  "more-from-studio": "More by Studio",
-  "more-from-network": "More by Network",
-};
-
-function cleanInsightTitle(r: RowInsight): string {
-  if (!r.title.includes("<")) return r.title;
-  return DYNAMIC_KIND_TITLES[r.hubId] ?? r.title.replace(/\s*<[^>]+>/g, "").trim();
-}
-
-function effectivePlayRate(r: RowInsight): number | null {
-  if (!(r.impressions7d > 0) || !Number.isFinite(r.playRate)) return null;
-  return Math.min(1, Math.max(0, r.playRate));
-}
-
 /** The most Best rows the fitted layout can show; a stacked page stops at six. */
 const ROWS_SHOWN_FITTED = 12;
 
@@ -742,16 +722,8 @@ function RowsPanel({
   state: ReturnType<typeof useAsync<RowInsight[]>>;
   className?: string;
 }) {
-  const rows = [...(state.data ?? [])]
-    .sort((a, b) => {
-      const ra = effectivePlayRate(a);
-      const rb = effectivePlayRate(b);
-      if ((ra !== null) !== (rb !== null)) return ra !== null ? -1 : 1;
-      if (ra !== null && rb !== null && rb !== ra) return rb - ra;
-      return b.plays7d - a.plays7d;
-    })
-    .slice(0, ROWS_SHOWN_FITTED);
-  const maxRate = Math.max(0.0001, ...rows.map((r) => effectivePlayRate(r) ?? 0));
+  const rows = (state.data ?? []).slice(0, ROWS_SHOWN_FITTED);
+  const maxRate = Math.max(0.0001, ...rows.map((r) => (r.lowSample ? 0 : r.playRate)));
   return (
     <DashboardPanel
       title={t("Best rows")}
@@ -759,7 +731,10 @@ function RowsPanel({
       className={className}
       bodyClassName="flex flex-col"
       actions={
-        <Link to="/recommendations" className="text-xs font-medium text-primary hover:underline">
+        <Link
+          to="/activity/recommendations"
+          className="text-xs font-medium text-primary hover:underline"
+        >
           {t("Recommendations")}
         </Link>
       }
@@ -785,7 +760,7 @@ function RowsPanel({
           )}
         >
           {rows.map((r, i) => {
-            const rate = effectivePlayRate(r);
+            const rate = r.lowSample ? null : r.playRate;
             return (
               <li
                 key={r.hubId}
@@ -800,10 +775,10 @@ function RowsPanel({
                 <div className="mb-1 flex items-baseline justify-between gap-2 text-sm">
                   <span className="min-w-0 truncate text-fg">
                     <span className="mr-1.5 tabular-nums text-fg-subtle">{i + 1}</span>
-                    {cleanInsightTitle(r)}
+                    {r.title}
                   </span>
                   <span className="shrink-0 tabular-nums text-fg-muted">
-                    {rate !== null ? formatPercent(rate, 1) : "—"}
+                    {rate !== null ? formatPercent(rate, 1) : t("Not enough data yet")}
                   </span>
                 </div>
                 <div className="h-1.5 rounded-full bg-bg-subtle">

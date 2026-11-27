@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"errors"
 	"math"
-	"strings"
 	"time"
 
 	"github.com/braedonsaunders/ether/internal/core"
@@ -27,8 +26,9 @@ import (
 // Impressions are compacted on write: repeated serves of the same row on
 // the same day bump a counter instead of adding rows, so a client that
 // polls /hubs every minute costs nothing extra. Retention removes item
-// impressions after Options.Retention (60 days) and row impressions and
-// plays after 400 days.
+// impressions and entry-level attribution evidence after Options.Retention
+// (60 days), and row impressions, their reporting counters, and plays after
+// 400 days.
 func init() {
 	store.Register("personalize", 1, `
 CREATE TABLE personalize_row_impressions (
@@ -140,12 +140,18 @@ type itemAgg struct {
 }
 
 // writeImpressions upserts pre-aggregated impressions in one transaction.
-func (s *sqlStore) writeImpressions(ctx context.Context, rows []rowAgg, items []itemAgg) error {
+func (s *sqlStore) writeImpressions(ctx context.Context, rows []rowAgg, items []itemAgg, batch []impression) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
+	if err := s.writeRecommendationImpressions(ctx, tx, batch); err != nil {
+		return err
+	}
+	if len(rows) == 0 && len(items) == 0 {
+		return tx.Commit()
+	}
 	rowStmt, err := tx.PrepareContext(ctx, `INSERT INTO personalize_row_impressions
 		(user_id, day, hub_id, kind, title, serves, best_position, first_at, last_at, device, daypart, weekend)
 		VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
@@ -269,13 +275,6 @@ func (s *sqlStore) lastSeen(ctx context.Context) (map[int64]time.Time, error) {
 	return out, rows.Err()
 }
 
-// rowStat is per-row-kind engagement.
-type rowStat struct {
-	kind, hubID, title string
-	titles             map[string]bool
-	shows              float64 // row-days shown
-}
-
 // kindShows counts days each kind was shown per (user, kind) since
 // `since`: several rows of one kind on a day (three Because-you-watched
 // rows), or the kind on Home and in a section, are one day of exposure,
@@ -333,20 +332,21 @@ func (s *sqlStore) surfaceShows(ctx context.Context, since time.Time) (map[int64
 // ---- plays -----------------------------------------------------------------
 
 type playRecord struct {
-	id            int64
-	userID        int64
-	key, tasteKey core.RatingKey
-	hubID, kind   string
-	started       time.Time
-	updated       time.Time
-	duration      time.Duration
-	startFraction float64
-	maxFraction   float64
-	completed     bool
-	abandoned     bool
-	device        string
-	daypart       string
-	weekend       bool
+	id             int64
+	userID         int64
+	key, tasteKey  core.RatingKey
+	hubID, kind    string
+	started        time.Time
+	updated        time.Time
+	duration       time.Duration
+	startFraction  float64
+	maxFraction    float64
+	completed      bool
+	abandoned      bool
+	device         string
+	daypart        string
+	weekend        bool
+	recommendation recommendationMatch
 }
 
 // watched is how much of the title this play covered.
@@ -409,19 +409,44 @@ func (p playRecord) reward() float64 {
 	return 0.6
 }
 
-func (s *sqlStore) insertPlay(ctx context.Context, p *playRecord) error {
-	return s.db.QueryRowContext(ctx, `INSERT INTO personalize_plays
+func (s *sqlStore) insertPlay(ctx context.Context, p *playRecord, keys []core.RatingKey, app core.Protocol) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	err = tx.QueryRowContext(ctx, `INSERT INTO personalize_plays
 		(user_id, item_key, taste_key, hub_id, kind, started_at, updated_at, duration_ms, start_fraction, max_fraction, completed, abandoned, device, daypart, weekend)
 		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) RETURNING id`,
 		p.userID, int64(p.key), int64(p.tasteKey), p.hubID, p.kind, ms(p.started), ms(p.updated), p.duration.Milliseconds(),
 		p.startFraction, p.maxFraction, store.BoolInt(p.completed), store.BoolInt(p.abandoned), p.device, p.daypart, store.BoolInt(p.weekend)).Scan(&p.id)
+	if err != nil {
+		return err
+	}
+	if len(keys) > 0 {
+		if err := s.recordRecommendationStart(ctx, tx, p, keys, app); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 func (s *sqlStore) updatePlay(ctx context.Context, p *playRecord) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE personalize_plays SET updated_at = ?, duration_ms = ?, max_fraction = ?,
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	_, err = tx.ExecContext(ctx, `UPDATE personalize_plays SET updated_at = ?, duration_ms = ?, max_fraction = ?,
 		completed = ?, abandoned = ? WHERE id = ?`,
 		ms(p.updated), p.duration.Milliseconds(), p.maxFraction, store.BoolInt(p.completed), store.BoolInt(p.abandoned), p.id)
-	return err
+	if err != nil {
+		return err
+	}
+	if err := updateRecommendationPlay(ctx, tx, p); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // plays lists plays started at or after since, oldest first. userID 0
@@ -454,39 +479,6 @@ func (s *sqlStore) plays(ctx context.Context, userID int64, since time.Time) ([]
 		p.duration = time.Duration(dur) * time.Millisecond
 		p.completed, p.abandoned, p.weekend = completed != 0, abandoned != 0, weekend != 0
 		out = append(out, p)
-	}
-	return out, rows.Err()
-}
-
-// ---- row insights ------------------------------------------------------------
-
-// rowShowsSince returns row-days per kind since `since`, with the latest
-// title and distinct concrete titles seen for the kind.
-func (s *sqlStore) rowShowsSince(ctx context.Context, since time.Time) (map[string]*rowStat, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT kind, hub_id, title, last_at FROM personalize_row_impressions WHERE last_at >= ?
-		ORDER BY last_at`, ms(since))
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	out := map[string]*rowStat{}
-	for rows.Next() {
-		var kind, hubID, title string
-		var at int64
-		if err := rows.Scan(&kind, &hubID, &title, &at); err != nil {
-			return nil, err
-		}
-		st := out[kind]
-		if st == nil {
-			st = &rowStat{kind: kind, titles: map[string]bool{}}
-			out[kind] = st
-		}
-		st.shows++
-		st.hubID = hubID
-		if title != "" && !strings.Contains(title, "<") {
-			st.title = title
-			st.titles[title] = true
-		}
 	}
 	return out, rows.Err()
 }
@@ -545,6 +537,11 @@ func (s *sqlStore) purge(ctx context.Context, now time.Time, itemRetention time.
 	}{
 		{`DELETE FROM personalize_item_impressions WHERE day < ?`, cutItems},
 		{`DELETE FROM personalize_row_impressions WHERE day < ?`, cutRows},
+		{`DELETE FROM personalize_recommendation_days WHERE day < ?`, cutRows},
+		{`DELETE FROM personalize_recommendation_entries WHERE day < ?`, cutItems},
+		{`DELETE FROM personalize_recommendation_titles WHERE day < ?`, cutRows},
+		{`DELETE FROM personalize_recommendation_starts WHERE day < ?`, cutRows},
+		{`DELETE FROM personalize_recommendation_deliveries WHERE day < ?`, cutRows},
 		{`DELETE FROM personalize_plays WHERE started_at < ?`, ms(now.AddDate(0, 0, -400))},
 	} {
 		res, err := s.db.ExecContext(ctx, st.q, st.arg)

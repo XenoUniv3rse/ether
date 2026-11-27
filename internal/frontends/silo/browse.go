@@ -379,7 +379,8 @@ func (i *instance) sections(w http.ResponseWriter, r *http.Request) {
 	}
 	cacheKey := siloSectionKey(v, configGen, policyGen, device(r), r.URL.RequestURI())
 	if cached, ok := i.cachedSections(cacheKey); ok {
-		reply(w, 200, map[string]any{"sections": cached})
+		reply(w, 200, map[string]any{"sections": cached.sections})
+		i.recordDeliveredRows(v, cached.impressions)
 		return
 	}
 	gen := i.sectionsGeneration(v.ID)
@@ -439,6 +440,7 @@ func (i *instance) sections(w http.ResponseWriter, r *http.Request) {
 		r = r.WithContext(context.WithValue(r.Context(), sectionPrepKey{}, sectionPrep{states: states, artwork: artwork, overlays: overlays, batched: batched}))
 	}
 	sections := make([]any, 0, len(rows))
+	var impressions []frontend.NeutralImpression
 	seen := map[string]int{}
 	used := map[string]bool{}
 	partial := false
@@ -509,19 +511,24 @@ func (i *instance) sections(w http.ResponseWriter, r *http.Request) {
 		if !row.More || row.RankedTop10 {
 			section["total_count"] = len(items)
 		}
+		if row.Purpose != frontend.RowLive && len(items) > 0 {
+			impressions = append(impressions, deliveredSection(row, placement, len(sections), len(items)))
+		}
 		sections = append(sections, section)
 	}
 	if !partial {
-		i.storeSections(cacheKey, v.ID, gen, sections)
+		i.storeSections(cacheKey, v.ID, gen, sections, impressions)
 	}
 	reply(w, 200, map[string]any{"sections": sections})
+	i.recordDeliveredRows(v, impressions)
 }
 
 const siloSectionTTL = 15 * time.Second
 
 type siloSectionPage struct {
-	at       time.Time
-	sections []any
+	at          time.Time
+	sections    []any
+	impressions []frontend.NeutralImpression
 }
 
 func siloSectionKey(v *frontend.Viewer, configGen uint64, policyGen int64, dev frontend.Device, uri string) string {
@@ -532,22 +539,22 @@ func siloSectionKey(v *frontend.Viewer, configGen uint64, policyGen int64, dev f
 	return strconv.FormatInt(id, 10) + "\n" + strconv.FormatUint(configGen, 10) + "\n" + strconv.FormatInt(policyGen, 10) + "\n" + dev.ID + "\n" + uri
 }
 
-func (i *instance) cachedSections(key string) ([]any, bool) {
+func (i *instance) cachedSections(key string) (siloSectionPage, bool) {
 	if i == nil {
-		return nil, false
+		return siloSectionPage{}, false
 	}
 	i.sectionsMu.Lock()
 	defer i.sectionsMu.Unlock()
 	page, ok := i.sectionsCache[key]
 	if !ok || time.Since(page.at) >= siloSectionTTL {
-		return nil, false
+		return siloSectionPage{}, false
 	}
-	return page.sections, true
+	return page, true
 }
 
 // storeSections keeps a page built from the viewer's state at generation
 // gen; a page built across one of the viewer's own changes is not kept.
-func (i *instance) storeSections(key string, viewerID int64, gen uint64, sections []any) {
+func (i *instance) storeSections(key string, viewerID int64, gen uint64, sections []any, impressions []frontend.NeutralImpression) {
 	if i == nil {
 		return
 	}
@@ -574,7 +581,7 @@ func (i *instance) storeSections(key string, viewerID int64, gen uint64, section
 			delete(i.sectionsCache, oldest)
 		}
 	}
-	i.sectionsCache[key] = siloSectionPage{at: time.Now(), sections: sections}
+	i.sectionsCache[key] = siloSectionPage{at: time.Now(), sections: sections, impressions: impressions}
 }
 
 func (i *instance) sectionsGeneration(viewerID int64) uint64 {

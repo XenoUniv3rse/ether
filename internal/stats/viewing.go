@@ -144,12 +144,13 @@ type viewing struct {
 	live    map[string]viewingPart
 	// ended folds sessions that stopped; endedIDs keeps their ids (bounded)
 	// so a late sample does not reopen the viewing as a new session.
-	ended    viewingPart
-	endedIDs []string
-	watched  bool // a timeline said playing
-	start    viewingStart
-	problem  bool
-	written  bool
+	ended        viewingPart
+	endedIDs     []string
+	watched      bool // a timeline said playing
+	start        viewingStart
+	problem      bool
+	written      bool
+	deliveredVOD bool
 }
 
 func (v *viewing) totals() viewingPart {
@@ -324,6 +325,9 @@ func (vs *viewings) observe(p core.PlaySession, now time.Time, ended bool, probl
 		return playRecord{}, v.row, false
 	}
 	v.written = true
+	deliveredVOD := !v.deliveredVOD && !isLive && p.Key.Valid() &&
+		(p.Client.Protocol == "stremio" || p.Client.Protocol == "xtream") && t.bytes >= viewingMinBytes
+	v.deliveredVOD = v.deliveredVOD || deliveredVOD
 	row := p
 	row.ID, row.UserID, row.Key, row.ClientID = v.row, v.k.user, v.k.key, v.k.client
 	row.StartedAt = v.started
@@ -337,7 +341,7 @@ func (vs *viewings) observe(p core.PlaySession, now time.Time, ended bool, probl
 		}
 	}
 	row.Source, row.Resolution = nil, nil
-	return playRecord{p: row, at: at, ended: len(v.live) == 0, problem: problem, watchedMS: t.watchedMS}, v.row, true
+	return playRecord{p: row, at: at, ended: len(v.live) == 0, problem: problem, watchedMS: t.watchedMS, deliveredVOD: deliveredVOD}, v.row, true
 }
 
 func (vs *viewings) forget(v *viewing) {

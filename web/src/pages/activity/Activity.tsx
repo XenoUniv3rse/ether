@@ -8,6 +8,7 @@ import { clusterActivity } from "./cluster";
 import { PlayHistory, ViewingFilters } from "./History";
 import { Experience, ExperiencePeriod } from "./Experience";
 import { NowPlaying, ProtocolFilter, useNowView, ViewSwitch } from "./NowPlaying";
+import { Recommendations, RecommendationPeriod } from "./Recommendations";
 import { Delivery } from "./Delivery";
 import { Viewing } from "./Viewing";
 import { viewingQuery, type Play, type Summary, type ViewingFilter } from "./types";
@@ -20,6 +21,7 @@ const TABS = localized(
       { key: "viewing", label: t("Viewing") },
       { key: "delivery", label: t("Delivery") },
       { key: "experience", label: t("Experience") },
+      { key: "recommendations", label: t("Recommendations") },
     ] as const,
 );
 
@@ -107,6 +109,8 @@ export default function Activity() {
           </>
         ) : tab === "experience" ? (
           <ExperiencePeriod />
+        ) : tab === "recommendations" ? (
+          <RecommendationPeriod />
         ) : (
           <ViewingFilters value={filter} onChange={setFilter} viewers={viewers.data ?? []} />
         )
@@ -131,6 +135,8 @@ export default function Activity() {
         </>
       ) : tab === "experience" ? (
         <Experience />
+      ) : tab === "recommendations" ? (
+        <Recommendations viewers={viewers.data ?? []} />
       ) : (
         <>
           {tab === "history" ? (

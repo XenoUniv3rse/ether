@@ -18,7 +18,7 @@ func (a *App) buildInsights() {
 	ownerSession := func(id string) (*core.PlaySession, bool) {
 		return (ownerPlayback{Playback: a.playback, app: a}).Session(id)
 	}
-	a.stats = stats.New(a.db, stats.Options{NodeID: a.clusterNodeID(), Now: parityClock(), Availability: a.dbAvail, Playback: a.playback, Session: ownerSession, LiveSessions: func() []*core.PlaySession {
+	a.stats = stats.New(a.db, stats.Options{DeliveredVOD: a.personalize.ObserveDeliveredPlay, NodeID: a.clusterNodeID(), Now: parityClock(), Availability: a.dbAvail, Playback: a.playback, Session: ownerSession, LiveSessions: func() []*core.PlaySession {
 		if a.livetv == nil {
 			return nil
 		}

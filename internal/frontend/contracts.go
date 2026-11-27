@@ -1633,3 +1633,11 @@ type VideoTranscodingPolicy interface {
 type PosterGenerationSource interface {
 	PosterGeneration() uint64
 }
+
+type NeutralImpression = core.NeutralImpression
+
+// DeliveredRowRecorder is used by server adapters for native clients that
+// cannot report row impressions. Only entries actually sent belong here.
+type DeliveredRowRecorder interface {
+	RecordDeliveredRows(*Viewer, []NeutralImpression)
+}

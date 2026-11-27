@@ -161,6 +161,7 @@ type RowInsight struct {
 	Impressions7d int     `json:"impressions7d"`
 	Plays7d       int     `json:"plays7d"`
 	PlayRate      float64 `json:"playRate"`
+	LowSample     bool    `json:"lowSample"`
 }
 
 // ActivityDay is one day of server-wide viewing.
@@ -186,4 +187,53 @@ type ViewerActivity struct {
 	At        time.Time `json:"at"`
 	Completed bool      `json:"completed"`
 	Progress  float64   `json:"progress"` // 0..1
+}
+
+// RecommendationCounts describes exposures and outcomes for one cohort group.
+type RecommendationCounts struct {
+	Impressions int   `json:"impressions"`
+	Plays       int   `json:"plays"`
+	Measured    int   `json:"measured"`
+	Completed   int   `json:"completed"`
+	WatchedMS   int64 `json:"watchedMs"`
+}
+
+type RecommendationRow struct {
+	RecommendationCounts
+	Kind      string     `json:"kind"`
+	Title     string     `json:"title"`
+	Viewers   int        `json:"viewers"`
+	RankRate  float64    `json:"rankRate"` // Wilson lower bound
+	Low       float64    `json:"low"`
+	High      float64    `json:"high"`
+	LowSample bool       `json:"lowSample"`
+	Trend     []*float64 `json:"trend,omitempty"`
+}
+
+// RecommendationReport groups impressions by exposure day and starts by play day.
+type RecommendationReport struct {
+	RecommendationCounts
+	Rows             []RecommendationRow `json:"rows"`
+	Starts           int                 `json:"starts"`
+	AttributedStarts int                 `json:"attributedStarts"`
+}
+
+type RecommendationGroup struct {
+	RecommendationCounts
+	Key string `json:"key"`
+}
+
+type RecommendationTitle struct {
+	Key         string `json:"key"`
+	Title       string `json:"title"`
+	Impressions int    `json:"impressions"`
+	Plays       int    `json:"plays"`
+}
+
+type RecommendationDetail struct {
+	Top       []RecommendationTitle `json:"top"`
+	Unplayed  []RecommendationTitle `json:"unplayed"`
+	Viewers   []RecommendationGroup `json:"viewers"`
+	Apps      []RecommendationGroup `json:"apps"`
+	Positions []RecommendationGroup `json:"positions"`
 }

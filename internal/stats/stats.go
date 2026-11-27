@@ -85,6 +85,10 @@ UPDATE stats_plays SET device_match=COALESCE((SELECT p2.device_match FROM stats_
 }
 
 type Options struct {
+	// DeliveredVOD observes the first proven media delivery from apps that
+	// do not send a timeline. The callback must return without blocking.
+	DeliveredVOD func(id string, viewerID int64, key core.RatingKey, app core.Protocol, started time.Time)
+
 	Newsletter    func(context.Context, string) error
 	StopSession   func(string) error
 	SessionExists func(string) bool
@@ -151,12 +155,13 @@ func (s *Service) liveSession(id string) (*core.PlaySession, bool) {
 
 // playRecord is one observation of a play, captured when it was made.
 type playRecord struct {
-	p         core.PlaySession
-	at        time.Time
-	ended     bool
-	problem   string
-	release   string // release name, kept after Resolution is dropped
-	watchedMS int64  // active duration for live sessions; 0 for VOD (tracked by ObserveState)
+	p            core.PlaySession
+	at           time.Time
+	ended        bool
+	problem      string
+	release      string // release name, kept after Resolution is dropped
+	watchedMS    int64  // active duration for live sessions; 0 for VOD (tracked by ObserveState)
+	deliveredVOD bool
 }
 
 // mergePlay keeps the newest observation of a row but never forgets that
@@ -169,6 +174,7 @@ func mergePlay(old, nw playRecord) playRecord {
 	if nw.release == "" {
 		nw.release = old.release
 	}
+	nw.deliveredVOD = nw.deliveredVOD || old.deliveredVOD
 	if old.watchedMS > nw.watchedMS {
 		nw.watchedMS = old.watchedMS
 	}
@@ -358,6 +364,9 @@ func (s *Service) record(ctx context.Context, r playRecord) error {
 		`live_login_number=CASE WHEN excluded.live_source_name='' THEN stats_plays.live_login_number ELSE excluded.live_login_number END`,
 		p.ID, p.UserID, int64(p.Key), p.Username, p.TitleName, p.Client.Platform, device, string(p.Decision), start.Unix(), now.Unix(), end, p.BytesServed, r.watchedMS, p.Info.Duration.Milliseconds(), p.Failovers, problem, s.opts.NodeID,
 		q.played, q.pictured, q.ttffMS, q.startFailed, q.bufferEvents, q.bufferMS, p.DownFailovers, q.sourceKbps, q.uhd, q.hdr, q.remote, p.Origin, q.release, q.reasonKind, q.reasonDetail, p.QualityFallback, nullIP(p.Client.ClientIP), audioCopy(p), p.Client.Product, deviceMatch, channelID, channelName, channelNumber, liveSourceName, liveLoginLabel, liveLoginNumber)
+	if err == nil && r.deliveredVOD && s.opts.DeliveredVOD != nil {
+		s.opts.DeliveredVOD(p.ID, p.UserID, p.Key, p.Client.Protocol, start)
+	}
 	if err == nil && clientID != "" {
 		_, err = s.db.ExecContext(ctx, `UPDATE stats_device_registry SET last_seen=?,latest_play_id=? WHERE client_identifier=? AND last_seen<=?`, now.Unix(), p.ID, clientID, now.Unix())
 	}

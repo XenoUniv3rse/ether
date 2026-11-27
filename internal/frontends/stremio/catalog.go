@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -158,13 +159,19 @@ func (i *instance) catalog(w http.ResponseWriter, r *http.Request) {
 	}
 	device := deviceFor(credential)
 	fresh, cacheKey := i.catalogCacheKey(viewer, typ, catalogID, extra, q)
-	if body, ok := i.cachedCatalog(cacheKey, fresh); ok {
+	recorder, reportsRows := i.host.Experience.(frontend.DeliveredRowRecorder)
+	if page, ok := i.cachedCatalog(cacheKey, fresh); ok {
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write(body)
+		_, _ = w.Write(page.body)
+		if reportsRows {
+			recorder.RecordDeliveredRows(viewer, page.impressions)
+		}
 		return
 	}
 	var titles []frontend.Title
 	previewTitles := map[frontend.RatingKey]bool{}
+	var impressions []frontend.NeutralImpression
+	var sources map[frontend.RatingKey]int
 	if purpose == frontend.RowRecentlyReleased {
 		q.Sort, _ = kitsort.Order("PremiereDate")
 		q.Desc = true
@@ -179,12 +186,19 @@ func (i *instance) catalog(w http.ResponseWriter, r *http.Request) {
 		}
 		rows, err = i.homeRows(r.Context(), req)
 		if err == nil {
+			if reportsRows {
+				sources = make(map[frontend.RatingKey]int)
+			}
 			seen := map[frontend.RatingKey]bool{}
 			end := q.Offset + q.Limit
 		rows:
 			for _, row := range rows {
 				if !catalogRow(purpose, row) {
 					continue
+				}
+				if reportsRows {
+					impressions = append(impressions, frontend.NeutralImpression{RowID: row.ID, Kind: row.Kind,
+						Title: row.Title, Purpose: row.Purpose, Rank: len(impressions), Situation: row.Situation})
 				}
 				items := row.Items
 				if len(row.Entries) > 0 {
@@ -237,6 +251,9 @@ func (i *instance) catalog(w http.ResponseWriter, r *http.Request) {
 					}
 					if string(title.Type) != map[string]string{"movie": "movie", "series": "show"}[typ] || seen[title.Key] {
 						continue
+					}
+					if sources != nil {
+						sources[title.Key] = len(impressions) - 1
 					}
 					previewTitles[title.Key] = row.PreviewOnFocus
 					seen[title.Key] = true
@@ -309,6 +326,9 @@ func (i *instance) catalog(w http.ResponseWriter, r *http.Request) {
 			meta["poster"] = backdrop
 			meta["posterShape"] = "landscape"
 		}
+		if source, ok := sources[title.Key]; ok {
+			impressions[source].Items = append(impressions[source].Items, title.Key)
+		}
 		metas = append(metas, meta)
 	}
 	var body bytes.Buffer
@@ -316,9 +336,13 @@ func (i *instance) catalog(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Unavailable", http.StatusServiceUnavailable)
 		return
 	}
-	i.storeCatalog(cacheKey, fresh, body.Bytes())
+	impressions = slices.DeleteFunc(impressions, func(imp frontend.NeutralImpression) bool { return len(imp.Items) == 0 })
+	i.storeCatalog(cacheKey, fresh, body.Bytes(), impressions)
 	w.Header().Set("Content-Type", "application/json")
 	_, _ = w.Write(body.Bytes())
+	if reportsRows {
+		recorder.RecordDeliveredRows(viewer, impressions)
+	}
 }
 
 func (i *instance) libraryPage(r *http.Request, viewer *frontend.Viewer, device frontend.Device, typ string, q frontend.ItemQuery) ([]frontend.Title, error) {
@@ -432,20 +456,20 @@ func (i *instance) catalogCacheKey(viewer *frontend.Viewer, typ, catalogID strin
 	return fresh, key
 }
 
-func (i *instance) cachedCatalog(key string, fresh frontend.PageFreshness) ([]byte, bool) {
+func (i *instance) cachedCatalog(key string, fresh frontend.PageFreshness) (catalogPage, bool) {
 	if i.host.PageFreshness == nil {
-		return nil, false
+		return catalogPage{}, false
 	}
 	i.pages.mu.Lock()
 	defer i.pages.mu.Unlock()
 	ent, ok := i.pages.entries[key]
 	if !ok || ent.fresh != fresh {
-		return nil, false
+		return catalogPage{}, false
 	}
-	return append([]byte(nil), ent.body...), true
+	return ent, true
 }
 
-func (i *instance) storeCatalog(key string, fresh frontend.PageFreshness, body []byte) {
+func (i *instance) storeCatalog(key string, fresh frontend.PageFreshness, body []byte, impressions []frontend.NeutralImpression) {
 	if i.host.PageFreshness == nil {
 		return
 	}
@@ -457,5 +481,5 @@ func (i *instance) storeCatalog(key string, fresh frontend.PageFreshness, body [
 	if len(i.pages.entries) >= 128 {
 		i.pages.entries = map[string]catalogPage{}
 	}
-	i.pages.entries[key] = catalogPage{fresh: fresh, body: append([]byte(nil), body...)}
+	i.pages.entries[key] = catalogPage{fresh: fresh, body: append([]byte(nil), body...), impressions: impressions}
 }

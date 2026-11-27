@@ -550,6 +550,7 @@ export interface RowInsight {
   impressions7d: number;
   plays7d: number;
   playRate: number;
+  lowSample: boolean;
 }
 
 export interface ActivityDay {
@@ -558,4 +559,48 @@ export interface ActivityDay {
   hours: number;
   watchedMs?: number;
   uniqueViewers: number;
+}
+
+export interface RecommendationCounts {
+  impressions: number;
+  plays: number;
+  measured: number;
+  completed: number;
+  watchedMs: number;
+}
+
+export interface RecommendationRow extends RecommendationCounts {
+  kind: string;
+  title: string;
+  viewers: number;
+  rankRate: number;
+  low: number;
+  high: number;
+  lowSample: boolean;
+  trend: (number | null)[];
+}
+
+export interface RecommendationReport extends RecommendationCounts {
+  rows: RecommendationRow[];
+  starts: number;
+  attributedStarts: number;
+}
+
+export interface RecommendationGroup extends RecommendationCounts {
+  key: string;
+}
+
+export interface RecommendationTitle {
+  key: string;
+  title: string;
+  impressions: number;
+  plays: number;
+}
+
+export interface RecommendationDetail {
+  top: RecommendationTitle[];
+  unplayed: RecommendationTitle[];
+  viewers: RecommendationGroup[];
+  apps: RecommendationGroup[];
+  positions: RecommendationGroup[];
 }
