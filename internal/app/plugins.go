@@ -540,6 +540,7 @@ func (a *App) buildPlugins(ctx context.Context, cfg config.Config) (*pluginRunti
 			return string(ref), ok
 		},
 		CacheOpen:        cacheOpen,
+		CacheOpenForStat: blobs.OpenPluginBlobForStat,
 		CacheDelete:      cacheDelete,
 		CachePartial:     cachePartial,
 		StreamURL:        a.adapterStreamURL(adapterTickets),

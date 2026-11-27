@@ -88,6 +88,10 @@ type FrontendUpload struct {
 type FrontendUploadBlob struct {
 	Ref         string `json:"ref"`
 	Size        int64  `json:"size"`
+	SHA256      string `json:"sha256"`
+	SHA1        string `json:"sha1"`
+	MD5         string `json:"md5"`
+	CRC32       string `json:"crc32"`
 	ContentType string `json:"contentType,omitempty"`
 	Field       string `json:"field,omitempty"`
 	Filename    string `json:"filename,omitempty"`
@@ -137,7 +141,7 @@ type Response struct {
 // service method: runtime.limits, kv.get, kv.put, kv.delete, kv.list, kv.usage, badges.set, badges.clear, badges.usage, secret.get, secret.set, secret.delete,
 // http.fetch, http.fetchMany, http.fetchToCache, archive.list, archive.open, archive.read, archive.extract, catalog.search, catalog.get, viewers.history,
 // viewers.setWatchState, collections.upsert, kinds.upsert, kinds.delete,
-// kinds.items, sources.resolve, cache.put, cache.open, cache.read, cache.rasterize, cache.delete, frontend.streamURL,
+// kinds.items, sources.resolve, cache.put, cache.open, cache.read, cache.stat, cache.rasterize, cache.delete, frontend.streamURL,
 // folders.list, folders.stat, events.publish, notify.owner, log. Args is a JSON array of positional
 // arguments; the result is any JSON value. Return a *Fault to classify the
 // failure (forbidden for a missing or revoked grant).
@@ -155,7 +159,7 @@ type HostFunc func(ctx context.Context, name string, args json.RawMessage) (json
 // additionally charges ArchiveExtractUnitsPerMiB per started MiB streamed.
 var DefaultCosts = map[string]int64{
 	"log": 1, "runtime.limits": 1, "kv.get": 5, "kv.put": 10, "kv.delete": 5, "kv.list": 10, "kv.usage": 5, "badges.set": 20, "badges.clear": 10, "badges.usage": 5,
-	"secret.get": 5, "secret.set": 10, "secret.delete": 5, "http.fetch": 100, "http.fetchMany": 100, "http.fetchToCache": 100, "http.hash": 100, "cache.read": 20, "cache.rasterize": 50, "archive.list": 50, "archive.open": 50, "archive.read": 50, "archive.extract": 50, "addon.get": 100, "catalog.search": 50, "catalog.get": 20,
+	"secret.get": 5, "secret.set": 10, "secret.delete": 5, "http.fetch": 100, "http.fetchMany": 100, "http.fetchToCache": 100, "http.hash": 100, "cache.read": 20, "cache.stat": 20, "cache.rasterize": 50, "archive.list": 50, "archive.open": 50, "archive.read": 50, "archive.extract": 50, "addon.get": 100, "catalog.search": 50, "catalog.get": 20,
 	"viewers.history": 50, "viewers.setWatchState": 50, "collections.upsert": 50,
 	"kinds.upsert": 50, "kinds.delete": 50, "kinds.items": 20, "kinds.visible": 15, "kinds.browse": 20,
 	"kinds.get": 15, "kinds.state": 15, "kinds.favorite": 20, "kinds.played": 20, "kinds.rate": 20, "kinds.favorites": 20,

@@ -188,6 +188,10 @@ func (m *Manager) handleRuntimeLimits(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusBadRequest, "validation", fmt.Sprintf("Memory must be at most 4 GiB, instances at most %d, titles per list at most %d, and resource limits must not be negative.", wasm.MaxPoolSize, MaxListItems), nil)
 			return
 		}
+		if req.Limits.UploadBytes < 0 || req.Limits.UploadBytes > MaxAdapterUploadBytes || (req.Plugin == "" && req.Limits.UploadBytes != 0) {
+			m.fail(w, &ValidationError{Fields: []FieldError{{Field: "uploadBytes", Message: "expected a per-plugin upload limit from 0 to 512 MiB"}}})
+			return
+		}
 		if req.Limits.Deadline != "" {
 			if d, err := time.ParseDuration(req.Limits.Deadline); err != nil || d <= 0 || d > 365*24*time.Hour {
 				writeErr(w, http.StatusBadRequest, "validation", "Time limit must be positive and at most one year.", nil)

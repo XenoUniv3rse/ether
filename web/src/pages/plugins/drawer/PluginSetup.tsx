@@ -184,7 +184,12 @@ export function PluginSetup({
     detail.manifest.ether?.runtime?.kind && detail.manifest.ether.runtime.kind !== "data",
   );
   // Plugins with lists have a list size the owner can change, even plain add-ons.
-  const hasRuntimeLimits = hasRuntime || Boolean(detail.listItems);
+  const hasUploadRoutes = Boolean(
+    detail.manifest.ether?.contributes?.frontendAdapters?.some(
+      (adapter) => adapter.uploadPaths?.length,
+    ),
+  );
+  const hasRuntimeLimits = hasRuntime || Boolean(detail.listItems) || hasUploadRoutes;
   // Updates come from where the plugin was installed; Studio builds and
   // add-ons that always follow their link have nothing to auto-update.
   const updatable = detail.sourceKind !== "studio" && !detail.stremioOnly;
@@ -322,6 +327,7 @@ export function PluginSetup({
                     maxItems={detail.impact.maxItems}
                     listItems={detail.listItems}
                     listsOnly={!hasRuntime}
+                    hasUploadRoutes={hasUploadRoutes}
                     hasMediaKinds={Boolean(detail.manifest.ether?.contributes?.mediaKinds?.length)}
                     flush
                     onSaved={() => {

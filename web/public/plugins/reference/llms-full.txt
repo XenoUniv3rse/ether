@@ -1693,13 +1693,16 @@ source and licence in your package's NOTICE.
 Declare upload routes in `ether.contributes.frontendAdapters[].uploadPaths`, for example:
 
 ```json
-"uploadPaths": [{ "path": "/saves/*", "maxBytes": 67108864 }]
+"uploadPaths": [{ "path": "/saves/*", "maxBytes": 536870912 }]
 ```
 
 Paths are relative to the adapter's public prefix. The matcher ignores a trailing
 slash and supports Go path globs such as `*` within a segment. The smallest
-matching limit applies. Declare at most 16 paths, with 1 byte to 64 MiB per route.
-The limit covers the whole HTTP body, including multipart headers and framing.
+matching limit applies. Declare at most 16 paths, with 1 byte to 512 MiB per route.
+Ether caps each request at 64 MiB by default. The owner can raise that ceiling
+up to 512 MiB under the plugin's **Limits**. Ether applies both limits to the
+whole HTTP body, including multipart headers and framing. Uploads also share
+Ether's staging disk budget.
 For `query_credentials` adapters, send credentials in the query on upload routes.
 
 After viewer authentication, Ether stages the body on disk and passes `upload`
@@ -1708,10 +1711,13 @@ The TypeScript adapter receives it as the sixth argument to `handle`, Go uses
 `FrontendUploadFromContext(r.Context())`, and Python uses `ctx.upload`. The
 metadata contains the original `contentType` and either:
 
-- `blob: {ref, size, contentType}` for a raw body.
-- `files: [{ref, size, field, filename, contentType}]` and
+- `blob: {ref, size, contentType, sha256, sha1, md5, crc32}` for a raw body.
+- `files: [{ref, size, field, filename, contentType, sha256, sha1, md5, crc32}]` and
   `fields: {fieldName: [value, ...]}` for multipart. Repeated fields and files are
   preserved. Multipart allows 64 parts and 128 KiB of inline text and metadata.
+
+Ether computes the digests while staging each file. They are lowercase
+hexadecimal, with eight digits for IEEE CRC-32.
 
 A sidecar implementing its own HTTP or tunnel transport receives the metadata as
 a JSON body with `X-Ether-Frontend-Upload: 1`. Uploaded refs work with
@@ -1738,6 +1744,17 @@ charge within the plugin, so delete a ref only after your last use. To save smal
 bytes directly, use `cache.put("", name, data, {durable: true})`. Go sidecars use
 `CacheOptionsHost.CachePutWithOptions` and Python sidecars pass the options dict
 to `ctx.ether.cache.put`. For a large saved blob, read ranges with `cache.read`.
+
+Call `ether.cache.stat(ref)` for `{size, sha256, sha1, md5, crc32}` on an
+owned `blob:` or `durable:` ref. TypeScript and Python sidecars use
+`ctx.ether.cache.stat(ref)`. Go sidecars use `BlobHost.CacheStat(ctx, ref)`.
+Ether checks access even when the digests are cached. Staged or recently
+promoted uploads already have digests. Cold reads on viewer paths are limited
+to 256 KiB. A sidecar also has this limit while it is serving a viewer request.
+Use a job or other background work for larger cold reads (up to 1 GiB).
+Exceeding the applicable byte limit returns `quota_exceeded`. Cold hashing has
+a ten-second deadline and shares two worker slots across plugins. When both
+slots are in use the host returns `unavailable`.
 The data directory's `plugin-blob-storage/saved` tree should be included in a
 filesystem backup alongside the matching plugin database snapshot.
 
@@ -2348,6 +2365,7 @@ func (p Plugins) Catalogue() (indexURL, publicKey string) {
 
 | Field | Go type | Wire presence | Description |
 |---|---|---|---|
+| `uploadBytes` | `int64` | may be omitted (see validation for conditions) | UploadBytes is the per-plugin staged request ceiling. Zero uses 64 MiB. |
 | `fetchBytes` | `int64` | may be omitted (see validation for conditions) |  |
 | `archiveMemberBytes` | `int64` | may be omitted (see validation for conditions) |  |
 | `archiveExpandedBytes` | `int64` | may be omitted (see validation for conditions) |  |
@@ -2366,6 +2384,8 @@ func (p Plugins) Catalogue() (indexURL, publicKey string) {
 // PluginRuntimeLimits are owner-controlled ceilings, not allocations. Zero
 // inherits the default (globally) or the global ceiling (per plugin).
 type PluginRuntimeLimits struct {
+	// UploadBytes is the per-plugin staged request ceiling. Zero uses 64 MiB.
+	UploadBytes          int64 `json:"uploadBytes,omitempty"`
 	FetchBytes           int64 `json:"fetchBytes,omitempty"`
 	ArchiveMemberBytes   int64 `json:"archiveMemberBytes,omitempty"`
 	ArchiveExpandedBytes int64 `json:"archiveExpandedBytes,omitempty"`
@@ -16894,6 +16914,18 @@ func CallDataHost(ctx context.Context, h Host, name string, raw json.RawMessage)
 			Resume:      req.Resume,
 			Connections: req.Connections,
 		})
+	} else if name == "cache.stat" {
+		var ref string
+		if len(args) != 1 || json.Unmarshal(args[0], &ref) != nil || ref == "" {
+			return nil, &ValidationError{Fields: []FieldError{{Field: "cache.stat", Message: "expected one blob reference"}}}
+		}
+		service, ok := h.(interface {
+			CacheStat(context.Context, string) (blobcache.Stat, error)
+		})
+		if !ok {
+			return nil, ErrUnavailable
+		}
+		value, err = service.CacheStat(ctx, ref)
 	} else if name == "cache.rasterize" {
 		if len(args) < 3 || len(args) > 4 {
 			return nil, fmt.Errorf("plugins: cache.rasterize takes (libraryKey, name, sourceBlob[, options])")
@@ -18702,6 +18734,7 @@ type KindBackends struct {
 	CachePut                   func(ctx context.Context, pluginID, libraryKey, name string, r io.Reader) (blobRef string, err error)
 	CacheLookup                func(pluginID, libraryKey, key string) (blobRef string, ok bool)
 	CacheOpen                  func(ctx context.Context, pluginID, blobRef string) (io.ReadSeekCloser, error)
+	CacheOpenForStat           func(ctx context.Context, pluginID, blobRef string) (io.ReadSeekCloser, error)
 	CacheDelete                func(ctx context.Context, pluginID, blobRef string) error
 	CachePartial               func(ctx context.Context, pluginID, libraryKey, key string) (*blobcache.Partial, error)
 	// StreamURL mints a scoped stream ticket for one of the plugin's own
@@ -18741,6 +18774,7 @@ func (m *Manager) SetKindBackends(b KindBackends) {
 	m.deps.Backends.CachePut = b.CachePut
 	m.deps.Backends.CacheLookup = b.CacheLookup
 	m.deps.Backends.CacheOpen = b.CacheOpen
+	m.deps.Backends.CacheOpenForStat = b.CacheOpenForStat
 	m.deps.Backends.CacheDelete = b.CacheDelete
 	m.deps.Backends.CachePartial = b.CachePartial
 	m.deps.Backends.StreamURL = b.StreamURL
@@ -18778,6 +18812,7 @@ func (m *Manager) kindBackends() KindBackends {
 		CachePut:                   m.deps.Backends.CachePut,
 		CacheLookup:                m.deps.Backends.CacheLookup,
 		CacheOpen:                  m.deps.Backends.CacheOpen,
+		CacheOpenForStat:           m.deps.Backends.CacheOpenForStat,
 		CacheDelete:                m.deps.Backends.CacheDelete,
 		CachePartial:               m.deps.Backends.CachePartial,
 		StreamURL:                  m.deps.Backends.StreamURL,
@@ -20269,6 +20304,14 @@ func validateDurableBlobRef(ref string) error {
 
 ``````
 func (h *host) CacheOpen(ctx context.Context, blobRef string) (io.ReadSeekCloser, error) {
+	return h.cacheOpen(ctx, blobRef, false)
+}
+``````
+
+## Source: internal/plugins/host_kinds.go#*host.cacheOpen
+
+``````
+func (h *host) cacheOpen(ctx context.Context, blobRef string, statOnly bool) (io.ReadSeekCloser, error) {
 	if strings.HasPrefix(blobRef, blobcache.DurableRefPrefix) {
 		if err := validateDurableBlobRef(blobRef); err != nil {
 			return nil, err
@@ -20290,7 +20333,11 @@ func (h *host) CacheOpen(ctx context.Context, blobRef string) (io.ReadSeekCloser
 			return src, storageError(err)
 		}
 	}
-	backend := h.m.kindBackends().CacheOpen
+	backends := h.m.kindBackends()
+	backend := backends.CacheOpen
+	if statOnly {
+		backend = backends.CacheOpenForStat
+	}
 	if backend == nil {
 		return nil, ErrUnavailable
 	}
@@ -21186,7 +21233,7 @@ func (b hostBridge) CallHost(ctx context.Context, name string, raw json.RawMessa
 		}
 	}
 	switch name {
-	case "runtime.limits", "http.hash", "http.fetchToCache", "cache.read", "cache.rasterize", "archive.list", "archive.open", "archive.read", "archive.extract":
+	case "runtime.limits", "http.hash", "http.fetchToCache", "cache.read", "cache.stat", "cache.rasterize", "archive.list", "archive.open", "archive.read", "archive.extract":
 		out, err := CallDataHost(ctx, b.h, name, raw)
 		if err != nil {
 			return nil, mapHostError(err)
@@ -28108,12 +28155,13 @@ func validateFrontendAdapters(m Manifest, add func(string, string), label func(s
 }
 ``````
 
-## Source: internal/plugins/manifest_kinds.go#MaxAdapterUploadBytes
+## Source: internal/plugins/manifest_kinds.go#DefaultAdapterUploadBytes
 
 ``````
 const (
-	MaxAdapterUploadBytes int64 = 64 << 20
-	maxAdapterUploadPaths       = 16
+	DefaultAdapterUploadBytes int64 = 64 << 20
+	MaxAdapterUploadBytes     int64 = 512 << 20
+	maxAdapterUploadPaths           = 16
 )
 ``````
 
@@ -30574,7 +30622,12 @@ func (h *HostHandler) dataCall(w http.ResponseWriter, r *http.Request) {
 		writeHostError(w, http.StatusServiceUnavailable, "unavailable", "Data services unavailable")
 		return
 	}
-	out, err := service.CallDataHost(r.Context(), pluginIDOf(r), r.PathValue("service"), args)
+	name := r.PathValue("service")
+	ctx := r.Context()
+	if name == "cache.stat" && strings.TrimSpace(r.Header.Get(HeaderViewerToken)) != "" {
+		ctx = plugins.WithCallContext(ctx, "/ether/v1/frontend/", "")
+	}
+	out, err := service.CallDataHost(ctx, pluginIDOf(r), name, args)
 	if !h.finishErr(w, err) {
 		return
 	}
@@ -31327,6 +31380,10 @@ func (m *Manager) handleRuntimeLimits(w http.ResponseWriter, r *http.Request) {
 		}
 		if req.Limits.MemoryBytes > wasm.MaxMemoryBytes || req.Limits.UnitBudget < 0 || req.Limits.PoolSize < 0 || req.Limits.PoolSize > wasm.MaxPoolSize || req.Limits.FetchBytes < 0 || req.Limits.ArchiveMemberBytes < 0 || req.Limits.ArchiveExpandedBytes < 0 || req.Limits.ArchiveMembers < 0 || req.Limits.ArchiveMembers > 1000000 || req.Limits.MaxItems < 0 || req.Limits.ListItems < 0 || req.Limits.ListItems > MaxListItems {
 			writeErr(w, http.StatusBadRequest, "validation", fmt.Sprintf("Memory must be at most 4 GiB, instances at most %d, titles per list at most %d, and resource limits must not be negative.", wasm.MaxPoolSize, MaxListItems), nil)
+			return
+		}
+		if req.Limits.UploadBytes < 0 || req.Limits.UploadBytes > MaxAdapterUploadBytes || (req.Plugin == "" && req.Limits.UploadBytes != 0) {
+			m.fail(w, &ValidationError{Fields: []FieldError{{Field: "uploadBytes", Message: "expected a per-plugin upload limit from 0 to 512 MiB"}}})
 			return
 		}
 		if req.Limits.Deadline != "" {
@@ -34997,6 +35054,7 @@ globalThis.ether = (() => {
     sources: { resolve: (q) => call("sources.resolve", [q == null ? {} : q]) },
     cache: { put: (lib, name, data, opts) => call("cache.put", [lib, name ?? "", data ?? null, opts ?? null]),
              open: (blobRef) => call("cache.open", [blobRef]), read: (blobRef, range) => call("cache.read", [blobRef, range]),
+             stat: (blobRef) => call("cache.stat", [blobRef]),
              rasterize: (lib, name, blobRef, opts) => call("cache.rasterize", opts == null ? [lib, name, blobRef] : [lib, name, blobRef, opts]),
              delete: (blobRef) => call("cache.delete", [blobRef]) },
     archive: { list: (blobRef) => call("archive.list", [blobRef]), open: (blobRef, member, range) => call("archive.open", [blobRef, member, range]), read: (blobRef, reads) => call("archive.read", [blobRef, reads]), extract: (blobRef, member, opts) => call("archive.extract", opts == null ? [blobRef, member] : [blobRef, member, opts]) },
@@ -36220,6 +36278,10 @@ type FrontendUpload struct {
 |---|---|---|---|
 | `ref` | `string` | emitted (validation may require a value) |  |
 | `size` | `int64` | emitted (validation may require a value) |  |
+| `sha256` | `string` | emitted (validation may require a value) |  |
+| `sha1` | `string` | emitted (validation may require a value) |  |
+| `md5` | `string` | emitted (validation may require a value) |  |
+| `crc32` | `string` | emitted (validation may require a value) |  |
 | `contentType` | `string` | may be omitted (see validation for conditions) |  |
 | `field` | `string` | may be omitted (see validation for conditions) |  |
 | `filename` | `string` | may be omitted (see validation for conditions) |  |
@@ -36231,6 +36293,10 @@ type FrontendUpload struct {
 type FrontendUploadBlob struct {
 	Ref         string `json:"ref"`
 	Size        int64  `json:"size"`
+	SHA256      string `json:"sha256"`
+	SHA1        string `json:"sha1"`
+	MD5         string `json:"md5"`
+	CRC32       string `json:"crc32"`
 	ContentType string `json:"contentType,omitempty"`
 	Field       string `json:"field,omitempty"`
 	Filename    string `json:"filename,omitempty"`
@@ -36320,7 +36386,7 @@ type Response struct {
 // service method: runtime.limits, kv.get, kv.put, kv.delete, kv.list, kv.usage, badges.set, badges.clear, badges.usage, secret.get, secret.set, secret.delete,
 // http.fetch, http.fetchMany, http.fetchToCache, archive.list, archive.open, archive.read, archive.extract, catalog.search, catalog.get, viewers.history,
 // viewers.setWatchState, collections.upsert, kinds.upsert, kinds.delete,
-// kinds.items, sources.resolve, cache.put, cache.open, cache.read, cache.rasterize, cache.delete, frontend.streamURL,
+// kinds.items, sources.resolve, cache.put, cache.open, cache.read, cache.stat, cache.rasterize, cache.delete, frontend.streamURL,
 // folders.list, folders.stat, events.publish, notify.owner, log. Args is a JSON array of positional
 // arguments; the result is any JSON value. Return a *Fault to classify the
 // failure (forbidden for a missing or revoked grant).
@@ -36346,7 +36412,7 @@ type HostFunc func(ctx context.Context, name string, args json.RawMessage) (json
 // additionally charges ArchiveExtractUnitsPerMiB per started MiB streamed.
 var DefaultCosts = map[string]int64{
 	"log": 1, "runtime.limits": 1, "kv.get": 5, "kv.put": 10, "kv.delete": 5, "kv.list": 10, "kv.usage": 5, "badges.set": 20, "badges.clear": 10, "badges.usage": 5,
-	"secret.get": 5, "secret.set": 10, "secret.delete": 5, "http.fetch": 100, "http.fetchMany": 100, "http.fetchToCache": 100, "http.hash": 100, "cache.read": 20, "cache.rasterize": 50, "archive.list": 50, "archive.open": 50, "archive.read": 50, "archive.extract": 50, "addon.get": 100, "catalog.search": 50, "catalog.get": 20,
+	"secret.get": 5, "secret.set": 10, "secret.delete": 5, "http.fetch": 100, "http.fetchMany": 100, "http.fetchToCache": 100, "http.hash": 100, "cache.read": 20, "cache.stat": 20, "cache.rasterize": 50, "archive.list": 50, "archive.open": 50, "archive.read": 50, "archive.extract": 50, "addon.get": 100, "catalog.search": 50, "catalog.get": 20,
 	"viewers.history": 50, "viewers.setWatchState": 50, "collections.upsert": 50,
 	"kinds.upsert": 50, "kinds.delete": 50, "kinds.items": 20, "kinds.visible": 15, "kinds.browse": 20,
 	"kinds.get": 15, "kinds.state": 15, "kinds.favorite": 20, "kinds.played": 20, "kinds.rate": 20, "kinds.favorites": 20,
@@ -38299,7 +38365,7 @@ func (p *Plugin) CallDetailed(ctx context.Context, req Request) (resp Response, 
 | `ether.contributes.frontendAdapters[].protocolHint` | `string` | false | {} |
 | `ether.contributes.frontendAdapters[].searchPaths` | `array` | false | {} |
 | `ether.contributes.frontendAdapters[].uploadPaths` | `array` | false | {"description":"Adapter subpath globs that accept uploads streamed to disk. The smallest matching maxBytes applies to the entire wire body.","maxItems":16} |
-| `ether.contributes.frontendAdapters[].uploadPaths[].maxBytes` | `integer` | true | {"maximum":67108864,"minimum":1} |
+| `ether.contributes.frontendAdapters[].uploadPaths[].maxBytes` | `integer` | true | {"maximum":536870912,"minimum":1} |
 | `ether.contributes.frontendAdapters[].uploadPaths[].path` | `string` | true | {"maxLength":256,"pattern":"^/"} |
 | `ether.contributes.integration` | `object` | false | {"required":["category","adds","connect"]} |
 | `ether.contributes.integration.adds` | `array` | true | {"maxItems":4,"minItems":1} |
@@ -39070,7 +39136,7 @@ func (p *Plugin) CallDetailed(ctx context.Context, req Request) (resp Response, 
                           "type": "string"
                         },
                         "maxBytes": {
-                          "maximum": 67108864,
+                          "maximum": 536870912,
                           "minimum": 1,
                           "type": "integer"
                         }
@@ -41867,11 +41933,14 @@ Host calls enforce permissions again on every request; revocation is immediate.
 
 Declare `frontendAdapters[].uploadPaths: [{path, maxBytes}]` for authenticated
 routes that accept large raw or multipart bodies. Paths are adapter-relative
-globs and the host caps the whole body at 64 MiB. Read metadata in `req.upload`
-(hosted), the sixth argument to the TypeScript adapter's `handle`,
+globs. The whole-body ceiling defaults to 64 MiB and the owner can raise it
+per plugin to 512 MiB. Each route's declared limit still applies. Read metadata
+in `req.upload` (hosted), the sixth argument to the TypeScript adapter's `handle`,
 `FrontendUploadFromContext(r.Context())` (Go), or `ctx.upload` (Python).
 Multipart metadata contains one `files` entry per file and repeated text values
-in `fields`. Read a staged blob with `cache.read` while the request is active.
+in `fields`. Each file (including a raw body) has lowercase hexadecimal
+`sha256`, `sha1`, `md5`, and `crc32`. Read a staged blob with `cache.read` while
+the request is active. Use `cache.stat` for size and digests of other owned refs.
 
 For saves, declare `permissions.storage: "durable"` and promote the staged ref
 using `cache.put("", "", null, {durable: true, fromBlob: ref})`. Store the
@@ -56117,6 +56186,7 @@ type BlobHost interface {
 	RuntimeLimits(context.Context) (RuntimeLimits, error)
 	FetchToCache(context.Context, FetchCacheRequest) (FetchCacheResult, error)
 	CacheRead(context.Context, string, DataRange) ([]byte, error)
+	CacheStat(context.Context, string) (CacheStatResult, error)
 	CacheRasterize(context.Context, string, string, string, RasterizeOptions) (RasterizeResult, error)
 	ArchiveList(context.Context, string) ([]ArchiveMember, error)
 	ArchiveOpen(context.Context, string, int, DataRange) ([]byte, error)
@@ -56165,6 +56235,44 @@ func (c *RemoteHostClient) CachePutWithOptions(ctx context.Context, libraryKey, 
 	}
 	_, err := c.callJSON(ctx, http.MethodPost, "/ether/plugin-host/data/cache.put", []any{libraryKey, name, payload, opts}, &out, false)
 	return out.Blob, err
+}
+``````
+
+## Source: sdk/go/data_host.go#CacheStatResult.fields.md
+
+| Field | Go type | Wire presence | Description |
+|---|---|---|---|
+| `size` | `int64` | emitted (validation may require a value) |  |
+| `sha256` | `string` | emitted (validation may require a value) |  |
+| `sha1` | `string` | emitted (validation may require a value) |  |
+| `md5` | `string` | emitted (validation may require a value) |  |
+| `crc32` | `string` | emitted (validation may require a value) |  |
+
+
+## Source: sdk/go/data_host.go#CacheStatResult
+
+``````
+// CacheStatResult describes an owned blob's size and lowercase hex digests.
+type CacheStatResult struct {
+	Size   int64  `json:"size"`
+	SHA256 string `json:"sha256"`
+	SHA1   string `json:"sha1"`
+	MD5    string `json:"md5"`
+	CRC32  string `json:"crc32"`
+}
+``````
+
+## Source: sdk/go/data_host.go#*RemoteHostClient.CacheStat
+
+``````
+func (c *RemoteHostClient) CacheStat(ctx context.Context, blob string) (CacheStatResult, error) {
+	var out CacheStatResult
+	headers := map[string]string{}
+	if token, ok := ViewerTokenFromContext(ctx); ok {
+		headers[HeaderViewerToken] = token
+	}
+	_, err := c.callJSONWithHeaders(ctx, http.MethodPost, "/ether/plugin-host/data/cache.stat", headers, []any{blob}, &out, false)
+	return out, err
 }
 ``````
 
@@ -67190,6 +67298,10 @@ type FrontendUpload struct {
 |---|---|---|---|
 | `ref` | `string` | emitted (validation may require a value) |  |
 | `size` | `int64` | emitted (validation may require a value) |  |
+| `sha256` | `string` | emitted (validation may require a value) |  |
+| `sha1` | `string` | emitted (validation may require a value) |  |
+| `md5` | `string` | emitted (validation may require a value) |  |
+| `crc32` | `string` | emitted (validation may require a value) |  |
 | `contentType` | `string` | may be omitted (see validation for conditions) |  |
 | `field` | `string` | may be omitted (see validation for conditions) |  |
 | `filename` | `string` | may be omitted (see validation for conditions) |  |
@@ -67201,6 +67313,10 @@ type FrontendUpload struct {
 type FrontendUploadBlob struct {
 	Ref         string `json:"ref"`
 	Size        int64  `json:"size"`
+	SHA256      string `json:"sha256"`
+	SHA1        string `json:"sha1"`
+	MD5         string `json:"md5"`
+	CRC32       string `json:"crc32"`
 	ContentType string `json:"contentType,omitempty"`
 	Field       string `json:"field,omitempty"`
 	Filename    string `json:"filename,omitempty"`
@@ -69252,6 +69368,7 @@ import threading
 import urllib.error
 import urllib.parse
 import urllib.request
+import zlib
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, TypedDict, Union
 
@@ -70538,6 +70655,14 @@ class RemoteHostClient:
             norm = _check_data_range(data_range)
             res = self._p._call_json("POST", "/ether/plugin-host/data/cache.read", [str(blob_ref), norm])
             return base64.b64decode((res or {}).get("bodyBase64") or "")
+
+        def stat(self, blob_ref: str) -> "CacheStatResult":
+            """Return size and digests for an owned blob."""
+            token = self._p.viewer_token
+            return self._p._call_json(
+                "POST", "/ether/plugin-host/data/cache.stat", [str(blob_ref)],
+                extra_headers={HEADER_VIEWER_TOKEN: token} if token else None,
+            )
 
         def rasterize(
             self,
@@ -72602,6 +72727,16 @@ class MockHostClient:
             raw = self._p.blobs[blob_ref]
             return raw[norm["offset"] : norm["offset"] + norm["length"]]
 
+        def stat(self, blob_ref: str) -> "CacheStatResult":
+            raw = self.open(blob_ref)
+            return {
+                "size": len(raw),
+                "sha256": hashlib.sha256(raw).hexdigest(),
+                "sha1": hashlib.sha1(raw).hexdigest(),
+                "md5": hashlib.md5(raw).hexdigest(),
+                "crc32": f"{zlib.crc32(raw):08x}",
+            }
+
         def rasterize(
             self,
             library_key: str,
@@ -72693,7 +72828,6 @@ class MockHostClient:
         ) -> ArchiveExtractResult:
             import io
             import zipfile
-            import zlib
 
             with zipfile.ZipFile(io.BytesIO(self._p.blobs[blob_ref])) as zf:
                 infos = zf.infolist()
@@ -73706,9 +73840,16 @@ class FrontendUploadPath(TypedDict):
     maxBytes: int
 
 
-class FrontendUploadBlob(TypedDict, total=False):
-    ref: str
+class CacheStatResult(TypedDict):
     size: int
+    sha256: str
+    sha1: str
+    md5: str
+    crc32: str
+
+
+class FrontendUploadBlob(CacheStatResult, total=False):
+    ref: str
     contentType: str
     field: str
     filename: str
@@ -75200,6 +75341,8 @@ export interface EtherHost {
     put(libraryKey: string, name: string, data: Uint8Array | null, opts?: import("./types.ts").CachePutOptions): MaybePromise<string>;
     open(blobRef: string): MaybePromise<Uint8Array>;
     read?(blobRef: string, range: DataRange): MaybePromise<Uint8Array>;
+    /** Cached digests are available on viewer routes; cold reads there are limited to 256 KiB. */
+    stat?(blobRef: string): MaybePromise<import("./types.ts").CacheStatResult>;
     /** Rasterises a cached SVG blob into a new cached bitmap blob with Ether's bounded SVG rasteriser; unsafe documents are refused. */
     rasterize?(libraryKey: string, name: string, blobRef: string, opts?: RasterizeOptions): MaybePromise<RasterizeResult>;
     delete?(blobRef: string): MaybePromise<void>;
@@ -75392,6 +75535,7 @@ export function createHostedClient(): EtherHost {
         }
         return decodeData(callHost("cache.read", [blob, range]));
       },
+      stat: (blob) => callHost<import("./types.ts").CacheStatResult>("cache.stat", [blob]),
       rasterize: (lib, name, blob, opts) => {
         checkRasterizeOptions(opts);
         return callHost<RasterizeResult>("cache.rasterize", opts == null ? [lib, name, blob] : [lib, name, blob, opts]);
@@ -76043,6 +76187,13 @@ export function createRemoteHostClient(opts: RemoteHostOptions = {}): EtherHost 
     },
     cache: {
       read: async (blob, range) => { checkDataRange(range); return decodeData((await callJson<{bodyBase64: string}>("POST", "/ether/plugin-host/data/cache.read", [blob, range]))!); },
+      stat: async (blob) => {
+        const token = opts.viewerToken?.trim();
+        return (await callJson<import("./types.ts").CacheStatResult>(
+          "POST", "/ether/plugin-host/data/cache.stat", [blob], false,
+          token ? { [HEADER_VIEWER_TOKEN]: token } : undefined,
+        ))!;
+      },
       rasterize: async (lib, name, blob, opts) => { checkRasterizeOptions(opts); return (await callJson<RasterizeResult>("POST", "/ether/plugin-host/data/cache.rasterize", opts == null ? [lib, name, blob] : [lib, name, blob, opts]))!; },
       async put(libraryKey, name, data, opts) {
         if (opts !== undefined || data === null) {
@@ -81582,9 +81733,17 @@ export interface FrontendUploadPath {
   maxBytes: number;
 }
 
-export interface FrontendUploadBlob {
-  ref: string;
+/** Size and lowercase hexadecimal digests of an owned blob. */
+export interface CacheStatResult {
   size: number;
+  sha256: string;
+  sha1: string;
+  md5: string;
+  crc32: string;
+}
+
+export interface FrontendUploadBlob extends CacheStatResult {
+  ref: string;
   contentType?: string;
   field?: string;
   filename?: string;

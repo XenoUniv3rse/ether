@@ -41,8 +41,8 @@ const (
 )
 
 type storedUpload struct {
-	plugin, path, hash, name, mime string
-	size                           int64
+	plugin, path, name, mime string
+	stat                     Stat
 }
 
 type durableUsage struct {
@@ -106,14 +106,14 @@ func (s *DurableStore) BeginUpload(plugin string, size int64) (*Upload, error) {
 	return &Upload{store: s, plugin: plugin, remaining: size, reserved: size}, nil
 }
 
-func (u *Upload) Stage(ctx context.Context, name, mime string, src io.Reader) (Ref, int64, error) {
+func (u *Upload) Stage(ctx context.Context, name, mime string, src io.Reader) (Ref, Stat, error) {
 	dir := filepath.Join(u.store.root, "uploads")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return "", 0, err
+		return "", Stat{}, err
 	}
 	f, err := os.CreateTemp(dir, "upload-")
 	if err != nil {
-		return "", 0, err
+		return "", Stat{}, err
 	}
 	keep := false
 	defer func() {
@@ -122,29 +122,27 @@ func (u *Upload) Stage(ctx context.Context, name, mime string, src io.Reader) (R
 			_ = os.Remove(f.Name())
 		}
 	}()
-	hash := sha256.New()
-	size, err := io.Copy(io.MultiWriter(f, hash), &boundedUploadReader{ctx: ctx, r: src, left: u.remaining})
+	stat, err := copyWithDigests(f, &boundedUploadReader{ctx: ctx, r: src, left: u.remaining})
 	if err != nil {
-		return "", 0, err
+		return "", Stat{}, err
 	}
 	if err := f.Close(); err != nil {
-		return "", 0, err
+		return "", Stat{}, err
 	}
 	var id [sha256.Size]byte
 	if _, err := rand.Read(id[:]); err != nil {
-		return "", 0, err
+		return "", Stat{}, err
 	}
 	ref := Ref("blob:" + hex.EncodeToString(id[:]))
 	u.store.mu.Lock()
 	u.store.uploads[ref] = storedUpload{
-		plugin: u.plugin, path: f.Name(), hash: hex.EncodeToString(hash.Sum(nil)),
-		name: name, mime: mime, size: size,
+		plugin: u.plugin, path: f.Name(), name: name, mime: mime, stat: stat,
 	}
 	u.store.mu.Unlock()
-	u.remaining -= size
+	u.remaining -= stat.Size
 	u.refs = append(u.refs, ref)
 	keep = true
-	return ref, size, nil
+	return ref, stat, nil
 }
 
 type boundedUploadReader struct {
@@ -189,7 +187,7 @@ func (s *DurableStore) Open(plugin string, ref Ref) (ByteSource, error) {
 		if err != nil {
 			return nil, err
 		}
-		return &fileSource{f: f, size: u.size, name: u.name, mime: u.mime}, nil
+		return &stagedSource{fileSource: &fileSource{f: f, size: u.stat.Size, name: u.name, mime: u.mime}, stat: u.stat}, nil
 	}
 	hash, err := ParseDurableRef(ref)
 	if err != nil {
@@ -247,10 +245,11 @@ func (s *DurableStore) Promote(plugin string, ref Ref) (Ref, error) {
 	if !ok || u.plugin != plugin {
 		return "", ErrNotFound
 	}
-	out := Ref(DurableRefPrefix + u.hash)
+	out := Ref(DurableRefPrefix + u.stat.SHA256)
 	dir := s.pluginDir(plugin)
-	target := filepath.Join(dir, u.hash)
+	target := filepath.Join(dir, u.stat.SHA256)
 	if _, err := os.Stat(target); err == nil {
+		rememberStat(u.stat)
 		return out, nil
 	} else if !errors.Is(err, fs.ErrNotExist) {
 		return "", err
@@ -259,7 +258,7 @@ func (s *DurableStore) Promote(plugin string, ref Ref) (Ref, error) {
 	if err != nil {
 		return "", err
 	}
-	if u.size > DurableMaxBytes-usage.bytes || usage.files >= durableMaxFiles {
+	if u.stat.Size > DurableMaxBytes-usage.bytes || usage.files >= durableMaxFiles {
 		return "", ErrQuotaFull
 	}
 	if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -277,7 +276,8 @@ func (s *DurableStore) Promote(plugin string, ref Ref) (Ref, error) {
 	if err := os.Link(u.path, target); err != nil {
 		return "", err
 	}
-	usage.bytes += u.size
+	rememberStat(u.stat)
+	usage.bytes += u.stat.Size
 	usage.files++
 	s.usage[plugin] = usage
 	// The link is already committed. Keep accounting consistent even on

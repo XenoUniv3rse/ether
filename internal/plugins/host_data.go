@@ -1208,6 +1208,18 @@ func CallDataHost(ctx context.Context, h Host, name string, raw json.RawMessage)
 			Resume:      req.Resume,
 			Connections: req.Connections,
 		})
+	} else if name == "cache.stat" {
+		var ref string
+		if len(args) != 1 || json.Unmarshal(args[0], &ref) != nil || ref == "" {
+			return nil, &ValidationError{Fields: []FieldError{{Field: "cache.stat", Message: "expected one blob reference"}}}
+		}
+		service, ok := h.(interface {
+			CacheStat(context.Context, string) (blobcache.Stat, error)
+		})
+		if !ok {
+			return nil, ErrUnavailable
+		}
+		value, err = service.CacheStat(ctx, ref)
 	} else if name == "cache.rasterize" {
 		if len(args) < 3 || len(args) > 4 {
 			return nil, fmt.Errorf("plugins: cache.rasterize takes (libraryKey, name, sourceBlob[, options])")

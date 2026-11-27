@@ -619,6 +619,8 @@ export interface EtherHost {
     put(libraryKey: string, name: string, data: Uint8Array | null, opts?: import("./types.ts").CachePutOptions): MaybePromise<string>;
     open(blobRef: string): MaybePromise<Uint8Array>;
     read?(blobRef: string, range: DataRange): MaybePromise<Uint8Array>;
+    /** Cached digests are available on viewer routes; cold reads there are limited to 256 KiB. */
+    stat?(blobRef: string): MaybePromise<import("./types.ts").CacheStatResult>;
     /** Rasterises a cached SVG blob into a new cached bitmap blob with Ether's bounded SVG rasteriser; unsafe documents are refused. */
     rasterize?(libraryKey: string, name: string, blobRef: string, opts?: RasterizeOptions): MaybePromise<RasterizeResult>;
     delete?(blobRef: string): MaybePromise<void>;
@@ -811,6 +813,7 @@ export function createHostedClient(): EtherHost {
         }
         return decodeData(callHost("cache.read", [blob, range]));
       },
+      stat: (blob) => callHost<import("./types.ts").CacheStatResult>("cache.stat", [blob]),
       rasterize: (lib, name, blob, opts) => {
         checkRasterizeOptions(opts);
         return callHost<RasterizeResult>("cache.rasterize", opts == null ? [lib, name, blob] : [lib, name, blob, opts]);
@@ -1462,6 +1465,13 @@ export function createRemoteHostClient(opts: RemoteHostOptions = {}): EtherHost 
     },
     cache: {
       read: async (blob, range) => { checkDataRange(range); return decodeData((await callJson<{bodyBase64: string}>("POST", "/ether/plugin-host/data/cache.read", [blob, range]))!); },
+      stat: async (blob) => {
+        const token = opts.viewerToken?.trim();
+        return (await callJson<import("./types.ts").CacheStatResult>(
+          "POST", "/ether/plugin-host/data/cache.stat", [blob], false,
+          token ? { [HEADER_VIEWER_TOKEN]: token } : undefined,
+        ))!;
+      },
       rasterize: async (lib, name, blob, opts) => { checkRasterizeOptions(opts); return (await callJson<RasterizeResult>("POST", "/ether/plugin-host/data/cache.rasterize", opts == null ? [lib, name, blob] : [lib, name, blob, opts]))!; },
       async put(libraryKey, name, data, opts) {
         if (opts !== undefined || data === null) {

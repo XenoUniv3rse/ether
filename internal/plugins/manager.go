@@ -77,6 +77,7 @@ type Backends struct {
 	CachePut                   func(ctx context.Context, pluginID, libraryKey, name string, r io.Reader) (blobRef string, err error)
 	CacheLookup                func(pluginID, libraryKey, key string) (blobRef string, ok bool)
 	CacheOpen                  func(ctx context.Context, pluginID, blobRef string) (io.ReadSeekCloser, error)
+	CacheOpenForStat           func(ctx context.Context, pluginID, blobRef string) (io.ReadSeekCloser, error)
 	CacheDelete                func(ctx context.Context, pluginID, blobRef string) error
 	CachePartial               func(ctx context.Context, pluginID, libraryKey, key string) (*blobcache.Partial, error)
 	// StreamURL mints a scoped stream ticket for one of a plugin's own kind
@@ -131,9 +132,11 @@ type Deps struct {
 
 // Manager is the plugin host. It is safe for concurrent use.
 type Manager struct {
-	storageMu    sync.RWMutex // coordinates durable writes with uninstall
-	screenPushMu sync.RWMutex
-	screenPush   ScreenPush
+	storageMu           sync.RWMutex // coordinates durable writes with uninstall
+	remoteClientMu      sync.Mutex
+	activeRemoteClients map[string]int
+	screenPushMu        sync.RWMutex
+	screenPush          ScreenPush
 	// viewerState backs the kinds.state / kinds.favorite / kinds.played /
 	// kinds.rate / kinds.favorites / kinds.playlist* host services.
 	viewerState        atomic.Pointer[KindViewerState]
@@ -647,7 +650,9 @@ func (m *Manager) CallStream(ctx context.Context, pluginID string, req Request) 
 	vctx, releaseViewer := m.bindAdapterViewer(ctx, pluginID, &req, deadline)
 	vctx = withCallSearchQuery(withCallPath(vctx, req.Path), extractCallSearchQuery(req))
 	ctx, cancel := context.WithTimeout(vctx, deadline)
+	releaseClient := m.trackRemoteClientCall(r.Manifest, req.Path)
 	cleanup := func() {
+		releaseClient()
 		releaseViewer()
 		cancel()
 	}
@@ -813,6 +818,8 @@ func (m *Manager) callOnce(ctx context.Context, pluginID string, req Request) (R
 	}
 	cctx, cancel := context.WithTimeout(withCallSearchQuery(withCallPath(vctx, req.Path), searchQuery), callTimeout)
 	defer cancel()
+	releaseClient := m.trackRemoteClientCall(r.Manifest, req.Path)
+	defer releaseClient()
 	resp, err := rt.Call(cctx, req)
 	ms := m.now().Sub(start).Milliseconds()
 	rec := CallRecord{Plugin: pluginID, Route: req.Path, Method: req.Method, Status: resp.Status, MS: ms,

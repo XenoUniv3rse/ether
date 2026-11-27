@@ -2012,9 +2012,17 @@ export interface FrontendUploadPath {
   maxBytes: number;
 }
 
-export interface FrontendUploadBlob {
-  ref: string;
+/** Size and lowercase hexadecimal digests of an owned blob. */
+export interface CacheStatResult {
   size: number;
+  sha256: string;
+  sha1: string;
+  md5: string;
+  crc32: string;
+}
+
+export interface FrontendUploadBlob extends CacheStatResult {
+  ref: string;
   contentType?: string;
   field?: string;
   filename?: string;

@@ -862,8 +862,9 @@ func validateFrontendAdapters(m Manifest, add func(string, string), label func(s
 }
 
 const (
-	MaxAdapterUploadBytes int64 = 64 << 20
-	maxAdapterUploadPaths       = 16
+	DefaultAdapterUploadBytes int64 = 64 << 20
+	MaxAdapterUploadBytes     int64 = 512 << 20
+	maxAdapterUploadPaths           = 16
 )
 
 // UploadLimit returns the smallest limit of the declared globs matching a

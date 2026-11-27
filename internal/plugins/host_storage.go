@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"sync"
+	"time"
 
 	"github.com/braedonsaunders/ether/internal/blobcache"
 )
@@ -14,29 +16,101 @@ import (
 const DurableStoragePermissionLine = "Stores up to 1 GiB of data until deleted"
 
 // BeginAdapterUpload reserves request-scoped staging for a declared adapter
-// upload route. The proxy calls it after authenticating the viewer.
-func (m *Manager) BeginAdapterUpload(ctx context.Context, id, key, subpath string, size int64) (*blobcache.Upload, error) {
+// upload route and returns the effective limit for the HTTP body reader.
+// The proxy calls it after authenticating the viewer.
+func (m *Manager) BeginAdapterUpload(ctx context.Context, id, key, subpath string, size int64) (*blobcache.Upload, int64, error) {
 	if m.deps.DurableStorage == nil {
-		return nil, ErrUnavailable
+		return nil, 0, ErrUnavailable
 	}
 	r, err := m.store.record(ctx, id)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	if !r.Enabled || !r.Manifest.HasCapability(CapFrontendAdapter) {
-		return nil, ErrPermissionDenied
+		return nil, 0, ErrPermissionDenied
 	}
 	if e := r.Manifest.EffectiveEther(); e != nil {
 		for _, adapter := range e.Contributes.FrontendAdapters {
-			if adapter.Key == key {
-				if limit := adapter.UploadLimit(subpath); limit > 0 && size <= limit {
-					return m.deps.DurableStorage.BeginUpload(id, size)
-				}
+			if adapter.Key != key {
+				continue
+			}
+			limit := min(adapter.UploadLimit(subpath), adapterUploadCeiling(m.runtimeConfig().RuntimeOverrides[id].UploadBytes))
+			if limit == 0 {
 				break
 			}
+			if size > limit {
+				return nil, 0, blobcache.ErrTooLarge
+			}
+			if size <= 0 {
+				size = limit
+			}
+			upload, err := m.deps.DurableStorage.BeginUpload(id, size)
+			return upload, limit, err
 		}
 	}
-	return nil, ErrPermissionDenied
+	return nil, 0, ErrPermissionDenied
+}
+
+func adapterUploadCeiling(configured int64) int64 {
+	if configured <= 0 {
+		return DefaultAdapterUploadBytes
+	}
+	return min(configured, MaxAdapterUploadBytes)
+}
+
+// Remote host callbacks can arrive without the viewer token. Track active
+// interactive calls by plugin so a sidecar cannot accidentally hash a large
+// blob while answering one of those calls.
+func (m *Manager) trackRemoteClientCall(man Manifest, path string) func() {
+	if man.RuntimeKind() != "remote" || !(isClientRequestPath(path) || isFrontendAdapterPath(path)) {
+		return func() {}
+	}
+	m.remoteClientMu.Lock()
+	if m.activeRemoteClients == nil {
+		m.activeRemoteClients = make(map[string]int)
+	}
+	m.activeRemoteClients[man.ID]++
+	m.remoteClientMu.Unlock()
+	return sync.OnceFunc(func() {
+		m.remoteClientMu.Lock()
+		if m.activeRemoteClients[man.ID] == 1 {
+			delete(m.activeRemoteClients, man.ID)
+		} else {
+			m.activeRemoteClients[man.ID]--
+		}
+		m.remoteClientMu.Unlock()
+	})
+}
+
+func (m *Manager) remoteClientActive(pluginID string) bool {
+	m.remoteClientMu.Lock()
+	defer m.remoteClientMu.Unlock()
+	return m.activeRemoteClients[pluginID] > 0
+}
+
+// CacheStat retrieves the digests of an owned blob. Only small cold reads are
+// admitted on viewer paths, and cached or staged answers require no hashing.
+func (h *host) CacheStat(ctx context.Context, ref string) (blobcache.Stat, error) {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	src, err := h.cacheOpen(ctx, ref, true)
+	if err != nil {
+		if errors.Is(err, blobcache.ErrNotFound) {
+			err = ErrNotFound
+		}
+		return blobcache.Stat{}, err
+	}
+	defer src.Close()
+	maxBytes := blobcache.MaxStatBytes
+	path := callPathFromContext(ctx)
+	_, viewer := ViewerFromContext(ctx)
+	if viewer || isClientRequestPath(path) ||
+		(path != "" && !h.allowsLongFetchToCache(ctx)) ||
+		(path == "" && h.m.remoteClientActive(h.plugin)) {
+		maxBytes = blobcache.InteractiveStatBytes
+	}
+	stat, err := blobcache.StatOwned(ctx, blobcache.Ref(ref), src, maxBytes)
+	return stat, storageError(err)
 }
 
 func (h *host) durableWriteCheck(ctx context.Context) error {

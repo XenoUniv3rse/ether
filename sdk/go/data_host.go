@@ -20,6 +20,7 @@ type BlobHost interface {
 	RuntimeLimits(context.Context) (RuntimeLimits, error)
 	FetchToCache(context.Context, FetchCacheRequest) (FetchCacheResult, error)
 	CacheRead(context.Context, string, DataRange) ([]byte, error)
+	CacheStat(context.Context, string) (CacheStatResult, error)
 	CacheRasterize(context.Context, string, string, string, RasterizeOptions) (RasterizeResult, error)
 	ArchiveList(context.Context, string) ([]ArchiveMember, error)
 	ArchiveOpen(context.Context, string, int, DataRange) ([]byte, error)
@@ -48,6 +49,25 @@ func (c *RemoteHostClient) CachePutWithOptions(ctx context.Context, libraryKey, 
 	}
 	_, err := c.callJSON(ctx, http.MethodPost, "/ether/plugin-host/data/cache.put", []any{libraryKey, name, payload, opts}, &out, false)
 	return out.Blob, err
+}
+
+// CacheStatResult describes an owned blob's size and lowercase hex digests.
+type CacheStatResult struct {
+	Size   int64  `json:"size"`
+	SHA256 string `json:"sha256"`
+	SHA1   string `json:"sha1"`
+	MD5    string `json:"md5"`
+	CRC32  string `json:"crc32"`
+}
+
+func (c *RemoteHostClient) CacheStat(ctx context.Context, blob string) (CacheStatResult, error) {
+	var out CacheStatResult
+	headers := map[string]string{}
+	if token, ok := ViewerTokenFromContext(ctx); ok {
+		headers[HeaderViewerToken] = token
+	}
+	_, err := c.callJSONWithHeaders(ctx, http.MethodPost, "/ether/plugin-host/data/cache.stat", headers, []any{blob}, &out, false)
+	return out, err
 }
 
 type DataRange struct {

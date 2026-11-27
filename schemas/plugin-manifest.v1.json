@@ -489,7 +489,7 @@
                           "type": "string"
                         },
                         "maxBytes": {
-                          "maximum": 67108864,
+                          "maximum": 536870912,
                           "minimum": 1,
                           "type": "integer"
                         }

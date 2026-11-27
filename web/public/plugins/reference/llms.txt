@@ -227,11 +227,14 @@ Host calls enforce permissions again on every request; revocation is immediate.
 
 Declare `frontendAdapters[].uploadPaths: [{path, maxBytes}]` for authenticated
 routes that accept large raw or multipart bodies. Paths are adapter-relative
-globs and the host caps the whole body at 64 MiB. Read metadata in `req.upload`
-(hosted), the sixth argument to the TypeScript adapter's `handle`,
+globs. The whole-body ceiling defaults to 64 MiB and the owner can raise it
+per plugin to 512 MiB. Each route's declared limit still applies. Read metadata
+in `req.upload` (hosted), the sixth argument to the TypeScript adapter's `handle`,
 `FrontendUploadFromContext(r.Context())` (Go), or `ctx.upload` (Python).
 Multipart metadata contains one `files` entry per file and repeated text values
-in `fields`. Read a staged blob with `cache.read` while the request is active.
+in `fields`. Each file (including a raw body) has lowercase hexadecimal
+`sha256`, `sha1`, `md5`, and `crc32`. Read a staged blob with `cache.read` while
+the request is active. Use `cache.stat` for size and digests of other owned refs.
 
 For saves, declare `permissions.storage: "durable"` and promote the staged ref
 using `cache.put("", "", null, {durable: true, fromBlob: ref})`. Store the

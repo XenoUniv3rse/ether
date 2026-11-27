@@ -604,6 +604,10 @@ type FrontendUpload struct {
 type FrontendUploadBlob struct {
 	Ref         string `json:"ref"`
 	Size        int64  `json:"size"`
+	SHA256      string `json:"sha256"`
+	SHA1        string `json:"sha1"`
+	MD5         string `json:"md5"`
+	CRC32       string `json:"crc32"`
 	ContentType string `json:"contentType,omitempty"`
 	Field       string `json:"field,omitempty"`
 	Filename    string `json:"filename,omitempty"`

@@ -899,13 +899,16 @@ source and licence in your package's NOTICE.
 Declare upload routes in `ether.contributes.frontendAdapters[].uploadPaths`, for example:
 
 ```json
-"uploadPaths": [{ "path": "/saves/*", "maxBytes": 67108864 }]
+"uploadPaths": [{ "path": "/saves/*", "maxBytes": 536870912 }]
 ```
 
 Paths are relative to the adapter's public prefix. The matcher ignores a trailing
 slash and supports Go path globs such as `*` within a segment. The smallest
-matching limit applies. Declare at most 16 paths, with 1 byte to 64 MiB per route.
-The limit covers the whole HTTP body, including multipart headers and framing.
+matching limit applies. Declare at most 16 paths, with 1 byte to 512 MiB per route.
+Ether caps each request at 64 MiB by default. The owner can raise that ceiling
+up to 512 MiB under the plugin's **Limits**. Ether applies both limits to the
+whole HTTP body, including multipart headers and framing. Uploads also share
+Ether's staging disk budget.
 For `query_credentials` adapters, send credentials in the query on upload routes.
 
 After viewer authentication, Ether stages the body on disk and passes `upload`
@@ -914,10 +917,13 @@ The TypeScript adapter receives it as the sixth argument to `handle`, Go uses
 `FrontendUploadFromContext(r.Context())`, and Python uses `ctx.upload`. The
 metadata contains the original `contentType` and either:
 
-- `blob: {ref, size, contentType}` for a raw body.
-- `files: [{ref, size, field, filename, contentType}]` and
+- `blob: {ref, size, contentType, sha256, sha1, md5, crc32}` for a raw body.
+- `files: [{ref, size, field, filename, contentType, sha256, sha1, md5, crc32}]` and
   `fields: {fieldName: [value, ...]}` for multipart. Repeated fields and files are
   preserved. Multipart allows 64 parts and 128 KiB of inline text and metadata.
+
+Ether computes the digests while staging each file. They are lowercase
+hexadecimal, with eight digits for IEEE CRC-32.
 
 A sidecar implementing its own HTTP or tunnel transport receives the metadata as
 a JSON body with `X-Ether-Frontend-Upload: 1`. Uploaded refs work with
@@ -944,6 +950,17 @@ charge within the plugin, so delete a ref only after your last use. To save smal
 bytes directly, use `cache.put("", name, data, {durable: true})`. Go sidecars use
 `CacheOptionsHost.CachePutWithOptions` and Python sidecars pass the options dict
 to `ctx.ether.cache.put`. For a large saved blob, read ranges with `cache.read`.
+
+Call `ether.cache.stat(ref)` for `{size, sha256, sha1, md5, crc32}` on an
+owned `blob:` or `durable:` ref. TypeScript and Python sidecars use
+`ctx.ether.cache.stat(ref)`. Go sidecars use `BlobHost.CacheStat(ctx, ref)`.
+Ether checks access even when the digests are cached. Staged or recently
+promoted uploads already have digests. Cold reads on viewer paths are limited
+to 256 KiB. A sidecar also has this limit while it is serving a viewer request.
+Use a job or other background work for larger cold reads (up to 1 GiB).
+Exceeding the applicable byte limit returns `quota_exceeded`. Cold hashing has
+a ten-second deadline and shares two worker slots across plugins. When both
+slots are in use the host returns `unavailable`.
 The data directory's `plugin-blob-storage/saved` tree should be included in a
 filesystem backup alongside the matching plugin database snapshot.
 

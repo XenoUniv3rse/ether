@@ -91,6 +91,7 @@ type KindBackends struct {
 	CachePut                   func(ctx context.Context, pluginID, libraryKey, name string, r io.Reader) (blobRef string, err error)
 	CacheLookup                func(pluginID, libraryKey, key string) (blobRef string, ok bool)
 	CacheOpen                  func(ctx context.Context, pluginID, blobRef string) (io.ReadSeekCloser, error)
+	CacheOpenForStat           func(ctx context.Context, pluginID, blobRef string) (io.ReadSeekCloser, error)
 	CacheDelete                func(ctx context.Context, pluginID, blobRef string) error
 	CachePartial               func(ctx context.Context, pluginID, libraryKey, key string) (*blobcache.Partial, error)
 	// StreamURL mints a scoped stream ticket for one of the plugin's own
@@ -126,6 +127,7 @@ func (m *Manager) SetKindBackends(b KindBackends) {
 	m.deps.Backends.CachePut = b.CachePut
 	m.deps.Backends.CacheLookup = b.CacheLookup
 	m.deps.Backends.CacheOpen = b.CacheOpen
+	m.deps.Backends.CacheOpenForStat = b.CacheOpenForStat
 	m.deps.Backends.CacheDelete = b.CacheDelete
 	m.deps.Backends.CachePartial = b.CachePartial
 	m.deps.Backends.StreamURL = b.StreamURL
@@ -159,6 +161,7 @@ func (m *Manager) kindBackends() KindBackends {
 		CachePut:                   m.deps.Backends.CachePut,
 		CacheLookup:                m.deps.Backends.CacheLookup,
 		CacheOpen:                  m.deps.Backends.CacheOpen,
+		CacheOpenForStat:           m.deps.Backends.CacheOpenForStat,
 		CacheDelete:                m.deps.Backends.CacheDelete,
 		CachePartial:               m.deps.Backends.CachePartial,
 		StreamURL:                  m.deps.Backends.StreamURL,
@@ -1377,6 +1380,10 @@ func validateDurableBlobRef(ref string) error {
 }
 
 func (h *host) CacheOpen(ctx context.Context, blobRef string) (io.ReadSeekCloser, error) {
+	return h.cacheOpen(ctx, blobRef, false)
+}
+
+func (h *host) cacheOpen(ctx context.Context, blobRef string, statOnly bool) (io.ReadSeekCloser, error) {
 	if strings.HasPrefix(blobRef, blobcache.DurableRefPrefix) {
 		if err := validateDurableBlobRef(blobRef); err != nil {
 			return nil, err
@@ -1398,7 +1405,11 @@ func (h *host) CacheOpen(ctx context.Context, blobRef string) (io.ReadSeekCloser
 			return src, storageError(err)
 		}
 	}
-	backend := h.m.kindBackends().CacheOpen
+	backends := h.m.kindBackends()
+	backend := backends.CacheOpen
+	if statOnly {
+		backend = backends.CacheOpenForStat
+	}
 	if backend == nil {
 		return nil, ErrUnavailable
 	}

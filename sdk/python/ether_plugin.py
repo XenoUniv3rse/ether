@@ -31,6 +31,7 @@ import threading
 import urllib.error
 import urllib.parse
 import urllib.request
+import zlib
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, TypedDict, Union
 
@@ -1317,6 +1318,14 @@ class RemoteHostClient:
             norm = _check_data_range(data_range)
             res = self._p._call_json("POST", "/ether/plugin-host/data/cache.read", [str(blob_ref), norm])
             return base64.b64decode((res or {}).get("bodyBase64") or "")
+
+        def stat(self, blob_ref: str) -> "CacheStatResult":
+            """Return size and digests for an owned blob."""
+            token = self._p.viewer_token
+            return self._p._call_json(
+                "POST", "/ether/plugin-host/data/cache.stat", [str(blob_ref)],
+                extra_headers={HEADER_VIEWER_TOKEN: token} if token else None,
+            )
 
         def rasterize(
             self,
@@ -3381,6 +3390,16 @@ class MockHostClient:
             raw = self._p.blobs[blob_ref]
             return raw[norm["offset"] : norm["offset"] + norm["length"]]
 
+        def stat(self, blob_ref: str) -> "CacheStatResult":
+            raw = self.open(blob_ref)
+            return {
+                "size": len(raw),
+                "sha256": hashlib.sha256(raw).hexdigest(),
+                "sha1": hashlib.sha1(raw).hexdigest(),
+                "md5": hashlib.md5(raw).hexdigest(),
+                "crc32": f"{zlib.crc32(raw):08x}",
+            }
+
         def rasterize(
             self,
             library_key: str,
@@ -3472,7 +3491,6 @@ class MockHostClient:
         ) -> ArchiveExtractResult:
             import io
             import zipfile
-            import zlib
 
             with zipfile.ZipFile(io.BytesIO(self._p.blobs[blob_ref])) as zf:
                 infos = zf.infolist()
@@ -4485,9 +4503,16 @@ class FrontendUploadPath(TypedDict):
     maxBytes: int
 
 
-class FrontendUploadBlob(TypedDict, total=False):
-    ref: str
+class CacheStatResult(TypedDict):
     size: int
+    sha256: str
+    sha1: str
+    md5: str
+    crc32: str
+
+
+class FrontendUploadBlob(CacheStatResult, total=False):
+    ref: str
     contentType: str
     field: str
     filename: str

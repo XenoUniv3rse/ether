@@ -44,7 +44,7 @@ the owner explicitly grants `localhost` or `127.0.0.1`). Exact local names in
 are highlighted on the install permission sheet and pre-granted on install.
 
 Large data services are generated from `host_data.go` and the TypeScript, Go, and
-Python SDK clients: `runtime.limits`, `http.fetchToCache`, `cache.read`, `archive.list`, `archive.open`, `archive.read`, and `archive.extract`.
+Python SDK clients: `runtime.limits`, `http.fetchToCache`, `cache.read`, `cache.stat`, `archive.list`, `archive.open`, `archive.read`, and `archive.extract`.
 See `plugin-kinds.md` for the wire shapes, grant rules, archive safety bounds, and
 why a 10 MiB direct fetch can still exceed a 32 MiB guest's available heap.
 

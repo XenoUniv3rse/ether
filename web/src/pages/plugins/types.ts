@@ -218,6 +218,7 @@ export interface PluginManifest {
     };
     permissions?: DeclaredPermissions;
     contributes?: {
+      frontendAdapters?: { uploadPaths?: { path: string; maxBytes: number }[] }[];
       mediaKinds?: { key: string; label: string; library: { name: string } }[];
       liveFeeds?: LiveFeedContribution[];
       screens?: ScreenContribution[];
@@ -230,6 +231,7 @@ export interface PluginManifest {
 }
 
 export interface RuntimeLimits {
+  uploadBytes?: number;
   fetchBytes?: number;
   archiveMemberBytes?: number;
   archiveExpandedBytes?: number;
