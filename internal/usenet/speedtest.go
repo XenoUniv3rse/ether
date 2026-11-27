@@ -15,8 +15,50 @@ import (
 	"github.com/braedonsaunders/ether/internal/speedtest"
 )
 
+type speedArticle struct {
+	id     string
+	groups []string
+}
+
+func speedArticles(ctx context.Context, doc *nzb.NZB) []speedArticle {
+	// Use distinct articles across the release and cap even season packs.
+	const maxArticles = 32768
+	var articles []speedArticle
+	seen := make(map[string]struct{})
+	for _, file := range doc.Files {
+		if ctx.Err() != nil {
+			return nil
+		}
+		if file == nil {
+			continue
+		}
+		for _, seg := range file.Segments {
+			if seg.MessageID == "" {
+				continue
+			}
+			if _, found := seen[seg.MessageID]; found {
+				continue
+			}
+			seen[seg.MessageID] = struct{}{}
+			articles = append(articles, speedArticle{seg.MessageID, file.Groups})
+			if len(articles) == maxArticles {
+				return articles
+			}
+		}
+	}
+	return articles
+}
+
+type speedReads struct {
+	start, end                                    time.Time
+	bytes                                         int64
+	admitted, used, opened, refused, hits, misses int
+	failedReaders                                 int
+	spare, yielded                                bool
+}
+
 // SpeedTest measures uncached BODY reads on exactly one saved provider.
-func (f *Fetcher) SpeedTest(ctx context.Context, id string, doc *nzb.NZB, playback bool) speedtest.Result {
+func (f *Fetcher) SpeedTest(ctx context.Context, id string, docs []*nzb.NZB, playback bool) speedtest.Result {
 	var p *pool
 	f.mu.RLock()
 	for _, candidate := range f.pools {
@@ -30,46 +72,6 @@ func (f *Fetcher) SpeedTest(ctx context.Context, id string, doc *nzb.NZB, playba
 	if p == nil {
 		return r
 	}
-	type article struct {
-		id     string
-		groups []string
-	}
-	// Keep the sample bounded even for season packs. Use distinct articles
-	// across the release so the result does not benchmark one hot server item.
-	const maxArticles = 32768
-	articles := make([]article, 0, min(maxArticles, 4096))
-	seen := make(map[string]struct{})
-	for _, file := range doc.Files {
-		if file == nil {
-			continue
-		}
-		for _, seg := range file.Segments {
-			if seg.MessageID == "" {
-				continue
-			}
-			if _, found := seen[seg.MessageID]; found {
-				continue
-			}
-			seen[seg.MessageID] = struct{}{}
-			articles = append(articles, article{seg.MessageID, file.Groups})
-			if len(articles) == maxArticles {
-				break
-			}
-		}
-		if len(articles) == maxArticles || ctx.Err() != nil {
-			break
-		}
-	}
-	if len(articles) == 0 || ctx.Err() != nil {
-		return r
-	}
-
-	poolState := p.sem.stats()
-	r.SpareOnly = playback || poolState.InUse > 0
-	reserve := 0
-	if r.SpareOnly {
-		reserve = 1
-	}
 	if p.brk.idleAllowed() != nil {
 		r.Status = "paused"
 		return r
@@ -77,31 +79,112 @@ func (f *Fetcher) SpeedTest(ctx context.Context, id string, doc *nzb.NZB, playba
 	start := time.Now()
 	testCtx, stop := context.WithTimeout(ctx, speedtest.Duration)
 	defer stop()
-	var wg sync.WaitGroup
-	var next, total, used, opened, refused, misses atomic.Int64
-	var yielded atomic.Bool
-	admitted := 0
-	for range min(poolState.Size, len(articles)) {
-		worker, cancel := context.WithCancel(testCtx)
-		if !p.sem.trySpeedTest(&cancel, reserve) {
-			cancel()
-			r.SpareOnly = true
+	addDiagnostics := func(run speedReads) {
+		r.Connections = max(r.Connections, run.used)
+		r.Opened += run.opened
+		r.Refused += run.refused
+		r.Misses += run.misses
+		r.SpareOnly = r.SpareOnly || run.spare || run.yielded
+		if run.admitted > 0 {
+			r.Seconds = time.Since(start).Seconds()
+		}
+	}
+
+	for _, doc := range docs {
+		if testCtx.Err() != nil {
 			break
 		}
-		admitted++
+		if doc == nil {
+			continue
+		}
+		articles := speedArticles(testCtx, doc)
+		if len(articles) == 0 {
+			continue
+		}
+		// Verify a spread of articles with BODY. STAT can return 223 for
+		// articles the provider won't deliver. Keep probed IDs out of the
+		// transfer so the rate doesn't depend on warming them at the server.
+		n := max(1, min(8, len(articles)/2))
+		probe := make([]speedArticle, 0, n)
+		rest := articles[:0]
+		for i, a := range articles {
+			if len(probe) < n && i == len(probe)*len(articles)/n {
+				probe = append(probe, a)
+			} else {
+				rest = append(rest, a)
+			}
+		}
+		run := p.readSpeedArticles(testCtx, probe, 1, playback, n/2+1)
+		addDiagnostics(run)
+		switch {
+		case run.yielded || run.admitted == 0:
+			r.Status = "busy"
+			return r
+		case run.misses > n/2:
+			r.Status = "sample_missing"
+			continue
+		case run.hits+run.misses < n || run.hits == 0:
+			r.Status = "unavailable"
+			return r
+		}
+		if len(rest) > 0 {
+			run = p.readSpeedArticles(testCtx, rest, p.sem.stats().Size, playback, 0)
+			addDiagnostics(run)
+		}
+		switch {
+		case run.misses > run.hits:
+			r.Status = "sample_missing"
+		case run.admitted == 0 || (run.yielded && run.hits == 0):
+			r.Status = "busy"
+			return r
+		case run.hits == 0 || run.failedReaders == run.used:
+			r.Status = "unavailable"
+			return r
+		default:
+			r.Bytes, r.Connections = run.bytes, run.used
+			r.MeasureTransfer(run.end.Sub(run.start))
+			return r
+		}
+	}
+	return r
+}
+
+func (p *pool) readSpeedArticles(ctx context.Context, articles []speedArticle, workers int, playback bool, missLimit int) speedReads {
+	var run speedReads
+	var wg sync.WaitGroup
+	var next atomic.Int64
+	goRead := make(chan struct{})
+	results := make([]speedReads, min(workers, len(articles)))
+	state := p.sem.stats()
+	reserve := 0
+	if playback || state.InUse > 0 {
+		reserve = 1
+		run.spare = true
+	}
+
+	for i := range results {
+		worker, cancel := context.WithCancel(ctx)
+		if !p.sem.trySpeedTest(&cancel, reserve) {
+			cancel()
+			state := p.sem.stats()
+			run.spare = run.spare || state.InUse > run.admitted ||
+				state.Waiting != [numPriorities]int{}
+			break
+		}
+		run.admitted++
 		wg.Go(func() {
 			defer cancel()
+			<-goRead
+			local := &results[i]
 			defer func() {
-				if errors.Is(worker.Err(), context.Canceled) && testCtx.Err() == nil {
-					yielded.Store(true)
-				}
+				local.yielded = worker.Err() == context.Canceled && ctx.Err() == nil
 			}()
 			c, fresh, err := p.checkout(worker)
 			if err != nil {
 				p.sem.doneSpeedTest(&cancel)
 				p.sem.Release(core.PriorityLive)
-				if errors.Is(err, ErrServiceUnavailable) || sockerr.IsConnRefused(err) {
-					refused.Add(1)
+				if speedConnectionRefused(err) {
+					local.refused++
 				}
 				return
 			}
@@ -109,40 +192,46 @@ func (f *Fetcher) SpeedTest(ctx context.Context, id string, doc *nzb.NZB, playba
 				p.sem.doneSpeedTest(&cancel)
 				p.put(c, core.PriorityLive)
 			}()
-			used.Add(1)
 			if fresh {
-				opened.Add(1)
+				local.opened++
 			}
-			for worker.Err() == nil && p.brk.idleAllowed() == nil {
+			for worker.Err() == nil {
 				i := int(next.Add(1) - 1)
 				if i >= len(articles) {
 					return
 				}
-				a := articles[i]
-				if p.o.UseGroup && len(a.groups) > 0 && !slices.Contains(a.groups, c.CurrentGroup()) {
-					if err := c.Group(worker, a.groups[0]); err != nil && !errors.Is(err, ErrNoSuchGroup) {
-						p.failed(err, !fresh, worker)
-						return
-					}
+				if p.brk.idleAllowed() != nil {
+					local.failedReaders = local.used
+					return
 				}
-				reader, err := c.Body(worker, a.id)
-				if err == nil {
-					var n int64
-					n, err = io.Copy(io.Discard, reader)
-					total.Add(n)
-					_ = reader.Close()
+				local.used = 1
+				n, started, err := p.readSpeedBody(worker, c, articles[i])
+				if n > 0 && (err == nil || errors.Is(ctxErr(worker), context.DeadlineExceeded)) {
+					if local.start.IsZero() {
+						local.start = started
+					}
+					local.end = time.Now()
+					local.bytes += n
 				}
 				switch {
 				case err == nil:
+					if n > 0 {
+						local.hits++
+					}
 					p.brk.success()
-				case errors.Is(err, ErrServiceUnavailable):
-					refused.Add(1)
-					p.failed(err, !fresh, worker)
-					return
 				case errors.Is(err, ErrNoSuchArticle):
-					misses.Add(1)
+					local.misses++
 					p.failed(err, !fresh, worker)
+					if local.misses == missLimit {
+						return
+					}
 				default:
+					if speedConnectionRefused(err) {
+						local.refused++
+					}
+					if ctxErr(worker) == nil {
+						local.failedReaders++
+					}
 					p.failed(err, !fresh, worker)
 					return
 				}
@@ -150,13 +239,45 @@ func (f *Fetcher) SpeedTest(ctx context.Context, id string, doc *nzb.NZB, playba
 			}
 		})
 	}
+	close(goRead)
 	wg.Wait()
-	if admitted == 0 {
-		r.Status = "busy"
+	for _, local := range results[:run.admitted] {
+		run.yielded = run.yielded || local.yielded
+		run.used += local.used
+		run.opened += local.opened
+		run.refused += local.refused
+		run.hits += local.hits
+		run.misses += local.misses
+		run.failedReaders += local.failedReaders
+		run.bytes += local.bytes
+		if !local.start.IsZero() && (run.start.IsZero() || local.start.Before(run.start)) {
+			run.start = local.start
+		}
+		if local.end.After(run.end) {
+			run.end = local.end
+		}
 	}
-	r.SpareOnly = r.SpareOnly || yielded.Load()
-	r.Bytes, r.Connections, r.Opened = total.Load(), int(used.Load()), int(opened.Load())
-	r.Refused, r.Misses = int(refused.Load()), int(misses.Load())
-	r.Measure(start)
-	return r
+	return run
+}
+
+func speedConnectionRefused(err error) bool {
+	return errors.Is(err, ErrServiceUnavailable) || sockerr.IsConnRefused(err)
+}
+
+func (p *pool) readSpeedBody(ctx context.Context, c *Conn, a speedArticle) (int64, time.Time, error) {
+	if p.o.UseGroup && len(a.groups) > 0 && !slices.Contains(a.groups, c.CurrentGroup()) {
+		if err := c.Group(ctx, a.groups[0]); err != nil && !errors.Is(err, ErrNoSuchGroup) {
+			return 0, time.Time{}, err
+		}
+	}
+	reader, err := c.Body(ctx, a.id)
+	if err != nil {
+		return 0, time.Time{}, err
+	}
+	started := time.Now()
+	n, err := io.Copy(io.Discard, reader)
+	if closeErr := reader.Close(); err == nil {
+		err = closeErr
+	}
+	return n, started, err
 }

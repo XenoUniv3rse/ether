@@ -42,7 +42,7 @@ func (s *Service) ExportLibraryPage(ctx context.Context, viewer *core.Viewer, de
 		if !lean {
 			facts |= core.FactGenres
 		}
-		q.ListRows = &core.ListRows{Facts: facts, Detail: detail, OmitCredits: lean}
+		q.ListRows = &core.ListRows{Facts: facts, Detail: detail, OmitCredits: lean, OmitAddedTime: lean}
 	}
 	page, err := s.d.Browse(ctx, q)
 	if err != nil {
@@ -186,4 +186,19 @@ func (s *Service) ExportPolicy(ctx context.Context, viewer *core.Viewer, _ core.
 		len(share.ContentRatings) > 0 || len(share.ExcludeContentRatings) > 0 || share.MinContentRating != "" || share.MaxContentRating != "" ||
 		len(share.IncludeCollectionNames) > 0 || len(share.ExcludeCollectionNames) > 0
 	return frontend.ExportPolicy{Stamp: hex.EncodeToString(sum[:]), TitleJudged: judged}, nil
+}
+
+// PrepareExportVisibility shares one page's child policy decisions across
+// the season and episode walks. Its memo is released after the export page.
+func (s *Service) PrepareExportVisibility(ctx context.Context, viewer *core.Viewer, titles []core.Title) (context.Context, error) {
+	if len(titles) == 0 {
+		return ctx, nil
+	}
+	ctx = frontend.WithFreshRequestMemo(ctx)
+	active, err := s.viewer(ctx, viewer)
+	if err != nil {
+		return ctx, err
+	}
+	_, err = s.visibleCandidates(ctx, active, titles)
+	return ctx, err
 }

@@ -47,33 +47,43 @@ func validatePush(p *PushSubscription) error {
 	return nil
 }
 
-// One durable VAPID identity is shared across nodes and survives restarts.
-func (s *Service) pushKeys(ctx context.Context) (private, public string, err error) {
+// InitializePush provisions the durable identity before serving public-key reads.
+func (s *Service) InitializePush(ctx context.Context) error {
+	_, _, err := s.pushKeys(ctx)
+	return err
+}
+
+func (s *Service) readPushKeys(ctx context.Context) (private, public string, err error) {
 	if s.pushPrivate != "" {
 		return s.pushPrivate, s.pushPublic, nil
 	}
-	err = s.db.QueryRowContext(ctx, `SELECT private_key,public_key FROM notify_push_keys WHERE id='vapid'`).Scan(&private, &public)
-	if errors.Is(err, sql.ErrNoRows) {
-		private, public, err = webpush.GenerateVAPIDKeys()
-		if err != nil {
-			return "", "", err
-		}
-		sealed, serr := config.SealWith(s.opts.Sealer, private, pushKeyContext(public)...)
-		if serr != nil {
-			return "", "", serr
-		}
-		if _, err = s.db.ExecContext(ctx, `INSERT INTO notify_push_keys(id,private_key,public_key) VALUES('vapid',?,?) ON CONFLICT(id) DO NOTHING`, sealed, public); err != nil {
-			return "", "", err
-		}
-		err = s.db.QueryRowContext(ctx, `SELECT private_key,public_key FROM notify_push_keys WHERE id='vapid'`).Scan(&private, &public)
-	}
-	if err != nil {
+	if err = s.db.QueryRowContext(ctx, `SELECT private_key,public_key FROM notify_push_keys WHERE id='vapid'`).Scan(&private, &public); err != nil {
 		return "", "", err
 	}
 	if private, _, err = config.OpenWith(s.opts.Sealer, private, pushKeyContext(public)...); err != nil {
 		return "", "", fmt.Errorf("notify: push identity: %w", err)
 	}
 	return private, public, nil
+}
+
+// One durable VAPID identity is shared across nodes and survives restarts.
+func (s *Service) pushKeys(ctx context.Context) (private, public string, err error) {
+	private, public, err = s.readPushKeys(ctx)
+	if !errors.Is(err, sql.ErrNoRows) {
+		return private, public, err
+	}
+	private, public, err = webpush.GenerateVAPIDKeys()
+	if err != nil {
+		return "", "", err
+	}
+	sealed, err := config.SealWith(s.opts.Sealer, private, pushKeyContext(public)...)
+	if err != nil {
+		return "", "", err
+	}
+	if _, err = s.db.ExecContext(ctx, `INSERT INTO notify_push_keys(id,private_key,public_key) VALUES('vapid',?,?) ON CONFLICT(id) DO NOTHING`, sealed, public); err != nil {
+		return "", "", err
+	}
+	return s.readPushKeys(ctx)
 }
 func (s *Service) sendPush(ctx context.Context, c Channel, e Event) error {
 	sub, err := c.Subscription()

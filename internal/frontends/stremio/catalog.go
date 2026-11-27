@@ -180,6 +180,8 @@ func (i *instance) catalog(w http.ResponseWriter, r *http.Request) {
 		rows, err = i.homeRows(r.Context(), req)
 		if err == nil {
 			seen := map[frontend.RatingKey]bool{}
+			end := q.Offset + q.Limit
+		rows:
 			for _, row := range rows {
 				if !catalogRow(purpose, row) {
 					continue
@@ -239,6 +241,9 @@ func (i *instance) catalog(w http.ResponseWriter, r *http.Request) {
 					previewTitles[title.Key] = row.PreviewOnFocus
 					seen[title.Key] = true
 					titles = append(titles, title)
+					if len(titles) == end {
+						break rows
+					}
 				}
 			}
 			if q.Offset >= len(titles) {

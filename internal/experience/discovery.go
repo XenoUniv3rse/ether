@@ -26,6 +26,63 @@ func FilterDiscovery(ctx context.Context, viewer *core.User, visibility Visibili
 	return out
 }
 
+type discoveryDecision struct {
+	key     core.RatingKey
+	row     int
+	purpose core.RowPurpose
+}
+
+func filterDiscoveryPass(ctx context.Context, viewer *core.User, visibility Visibility, rows []DiscoveryCandidate, decisions map[discoveryDecision]bool) []DiscoveryCandidate {
+	out := make([]DiscoveryCandidate, 0, len(rows))
+	for _, row := range rows {
+		watchlist := row.Purpose == frontend.RowWatchlist
+		key := func(title core.Title) discoveryDecision {
+			return discoveryDecision{title.Key, row.Index, row.Purpose}
+		}
+		pending := make([]core.Title, 0, len(row.Items))
+		for i := range row.Items {
+			title := &row.Items[i]
+			k := key(*title)
+			if _, known := decisions[k]; known {
+				continue
+			}
+			decisions[k] = false
+			if visibility.TitleAllowed(viewer, title) {
+				pending = append(pending, *title)
+			}
+		}
+		if !watchlist {
+			available := visibility.Available(ctx, viewer, pending)
+			keep := make(map[core.RatingKey]bool, len(available))
+			for _, title := range available {
+				keep[title.Key] = true
+			}
+			kept := pending[:0]
+			for _, title := range pending {
+				if keep[title.Key] {
+					kept = append(kept, title)
+				}
+			}
+			pending = kept
+		}
+		for i := range pending {
+			title := &pending[i]
+			decisions[key(*title)] = visibility.Playable(ctx, viewer, title)
+		}
+		items := make([]core.Title, 0, len(row.Items))
+		for _, title := range row.Items {
+			if decisions[key(title)] {
+				items = append(items, title)
+			}
+		}
+		if len(items) != 0 {
+			row.Items = items
+			out = append(out, row)
+		}
+	}
+	return out
+}
+
 // LoadDiscovery expands full candidate pages when visibility filtering leaves
 // a row short. Sources with fewer results than requested signal exhaustion.
 func LoadDiscovery(ctx context.Context, viewer *core.User, visibility Visibility, limit int, load func(context.Context, int) []DiscoveryCandidate) []DiscoveryCandidate {
@@ -68,9 +125,10 @@ func loadDiscovery(ctx context.Context, viewer *core.User, visibility Visibility
 	if fetch <= 0 {
 		return FilterDiscovery(ctx, viewer, visibility, load(ctx, fetch))
 	}
+	decisions := make(map[discoveryDecision]bool)
 	for {
 		rows := load(ctx, fetch)
-		filtered := FilterDiscovery(ctx, viewer, visibility, rows)
+		filtered := filterDiscoveryPass(ctx, viewer, visibility, rows, decisions)
 		byIndex := make(map[int]int, len(filtered))
 		for _, row := range filtered {
 			byIndex[row.Index] = len(row.Items)

@@ -1,6 +1,7 @@
 package perfharness
 
 import (
+	"bytes"
 	"cmp"
 	"encoding/json"
 	"fmt"
@@ -27,6 +28,7 @@ func MatrixClients(live bool) []Client {
 		switch clients[i].Name {
 		case "plex-appletv":
 			clients[i].Steps = append(clients[i].Steps,
+				Step{Name: "HEAD movies collections type=18", Class: classBrowse, Method: http.MethodHead, Path: "/library/sections/{movieSection}/all?type=18&X-Plex-Container-Start=0&X-Plex-Container-Size=50"},
 				Step{Name: "HEAD /hubs/search with query", Class: classSearch, Method: http.MethodHead, Path: "/hubs/search?query=star&limit=30"},
 				Step{Name: "GET /hubs/search/voice with query", Class: classSearch, Path: "/hubs/search/voice?query=star&limit=30"},
 				Step{Name: "HEAD /hubs/search/voice with query", Class: classSearch, Method: http.MethodHead, Path: "/hubs/search/voice?query=star&limit=30"},
@@ -58,7 +60,9 @@ func MatrixClients(live bool) []Client {
 				Step{Name: "VOD cover", Class: classDetail, Path: "/image/{xtreamCover}"},
 				Step{Name: "VOD cover probe", Class: classDetail, Method: http.MethodHead, Path: "/image/{xtreamCover}"},
 				Step{Name: "XMLTV guide export", Class: classGuide, Path: "/xmltv.php" + auth},
-				Step{Name: "M3U lineup export", Class: classGuide, Path: "/get.php" + auth + "&type=m3u_plus"},
+				Step{Name: "M3U lineup export", Class: classGuide, Path: "/get.php" + auth + "&type=m3u_plus", Accept: func(body []byte) bool {
+					return bytes.HasPrefix(body, []byte("#EXTM3U\n")) && bytes.HasSuffix(body, []byte(".mkv\n"))
+				}},
 			)
 		case "silo-appletv":
 			clients[i].Steps = append(clients[i].Steps,

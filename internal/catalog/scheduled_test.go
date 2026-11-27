@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"reflect"
 	"testing"
 	"time"
 
@@ -46,6 +47,15 @@ func TestScheduledEpisodesDoNotChangeReleasedCatalog(t *testing.T) {
 	if err != nil || len(got) != 1 || got[0].Episode != 2 || got[0].ContentRating != "TV-14" || len(got[0].Keywords) != 1 {
 		t.Fatalf("schedule: %+v %v", got, err)
 	}
+	export, err := c.PrepareExportChildren(ctx, []core.RatingKey{show.Key}, &core.ListRows{Facts: core.VisibilityFacts})
+	if err != nil {
+		t.Fatal(err)
+	}
+	batched, err := c.ScheduledEpisodes(export, season.Key)
+	if err != nil || !reflect.DeepEqual(batched, got) {
+		t.Fatalf("batched schedule: %+v %v, want %+v", batched, err, got)
+	}
+
 	for _, key := range []core.RatingKey{show.Key, core.SeasonKey(904, 0), core.SeasonKey(904, 2)} {
 		if _, err := c.ScheduledEpisodes(ctx, key); !errors.Is(err, core.ErrNotFound) {
 			t.Fatalf("invalid parent %s: %v", key, err)
