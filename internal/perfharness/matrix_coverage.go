@@ -109,9 +109,16 @@ func addMatrixConsoleCoverage(c *Client) {
 		{Name: "fixture update local viewer", Method: http.MethodPut, Path: "/users/{consoleScratchViewer}", Body: `{"maxContentRating":"PG","streamLimit":2}`},
 		{Name: "fixture change local viewer password", Method: http.MethodPost, Path: "/users/{consoleScratchViewer}/password", Body: `{"username":"matrix-console-scratch","password":"Matrix-local-002-fixture"}`},
 		{Name: "fixture invite local viewer", Method: http.MethodPost, Path: "/users/{consoleScratchViewer}/invite"},
+		{Name: "fixture issue IPTV app login", Method: http.MethodPost, Path: "/viewers/{consoleScratchViewer}/apps/xtream", Body: `{}`},
+		{Name: "fixture discover IPTV grant", Path: "/users/{consoleScratchViewer}/devices", Discover: discoverMatrixConsoleAppGrant},
+		{Name: "fixture reveal IPTV login", Method: http.MethodPost, Path: "/users/{consoleScratchViewer}/devices/xtream/reveal", Body: `{"hash":"{consoleXtreamGrant}"}`},
+		{Name: "fixture update IPTV stream limit", Method: http.MethodPost, Path: "/users/{consoleScratchViewer}/devices/xtream/limit", Body: `{"hash":"{consoleXtreamGrant}","limit":1}`},
+		{Name: "fixture revoke IPTV login", Method: http.MethodPost, Path: "/users/{consoleScratchViewer}/devices/revoke", Body: `{"hash":"{consoleXtreamGrant}"}`},
 		{Name: "fixture pause local viewer", Method: http.MethodPost, Path: "/users/{consoleScratchViewer}/pause"},
 		{Name: "fixture resume local viewer", Method: http.MethodPost, Path: "/users/{consoleScratchViewer}/resume"},
 		{Name: "fixture sign out local viewer", Method: http.MethodPost, Path: "/users/{consoleScratchViewer}/signout"},
+		{Name: "fixture create merge source viewer", Method: http.MethodPost, Path: "/users/local", Body: `{"username":"matrix-console-merge","password":"Matrix-local-003-fixture"}`, Discover: discoverMatrixID("consoleMergeSource")},
+		{Name: "fixture merge local viewers", Method: http.MethodPost, Path: "/users/{consoleMergeSource}/merge", Body: `{"into":{consoleScratchViewer}}`},
 		{Name: "fixture remove local viewer", Method: http.MethodDelete, Path: "/users/{consoleScratchViewer}"},
 		{Name: "fixture explain title quality", Method: http.MethodPost, Path: "/quality/explain", Body: `{"userId":{viewerId},"clientId":"type:Apple TV","titleKey":"{consoleMovieKey}","remote":true}`},
 		{Name: "fixture preview library visibility", Method: http.MethodPost, Path: "/catalog/visibility/preview", Body: `{"libraryId":{pluginLibrary},"visibilityDefault":"show","exclusions":[]}`},
@@ -249,6 +256,23 @@ func discoverMatrixConsolePlay(vars map[string]string, body []byte) {
 
 func matrixConsoleWriteHeader(h http.Header, _ map[string]string) {
 	h.Set("X-Ether-Request", "1")
+}
+
+func discoverMatrixConsoleAppGrant(vars map[string]string, body []byte) {
+	var response struct {
+		Devices []struct {
+			Hash    string `json:"hash"`
+			Surface string `json:"surface"`
+		} `json:"devices"`
+	}
+	if json.Unmarshal(body, &response) == nil {
+		for _, device := range response.Devices {
+			if device.Surface == "xtream" {
+				setOnce(vars, "consoleXtreamGrant", device.Hash)
+				return
+			}
+		}
+	}
 }
 
 func discoverMatrixConsolePage(vars map[string]string, body []byte) {
