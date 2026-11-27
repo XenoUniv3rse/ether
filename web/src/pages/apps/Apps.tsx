@@ -957,35 +957,29 @@ function ProtocolSettings({
             />
             <SettingsSection title={t("Trailers")}>
               <SettingsRow
-                stacked
                 title={t("Trailer playback")}
                 description={t(
                   "When enabled, apps can load trailers directly from YouTube (youtube-nocookie.com), so the viewer’s device contacts YouTube. This helps when the server cannot reach YouTube, for example on some cloud hosts.",
                 )}
                 control={
-                  <fieldset className="grid gap-2">
-                    <legend className="sr-only">{t("Trailer playback")}</legend>
-                    {(
-                      [
-                        { value: "server", label: t("Play trailers on the server") },
-                        {
-                          value: "clientWhenPossible",
-                          label: t("Let apps play YouTube trailers directly when they can"),
-                        },
-                      ] as const
-                    ).map(({ value, label }) => (
-                      <label key={value} className="flex items-start gap-2 text-sm">
-                        <input
-                          type="radio"
-                          name="vela-trailer-playback"
-                          className="mt-0.5 shrink-0"
-                          checked={(draft.trailerPlayback ?? "server") === value}
-                          onChange={() => setDraft({ ...draft, trailerPlayback: value })}
-                        />
-                        <span>{label}</span>
-                      </label>
-                    ))}
-                  </fieldset>
+                  <SearchSelect
+                    ariaLabel={t("Trailer playback")}
+                    className="w-full sm:w-80"
+                    searchable={false}
+                    value={draft.trailerPlayback ?? "server"}
+                    onChange={(next) => {
+                      if (next === "server" || next === "clientWhenPossible") {
+                        setDraft({ ...draft, trailerPlayback: next });
+                      }
+                    }}
+                    options={[
+                      { value: "server", label: t("Play trailers on the server") },
+                      {
+                        value: "clientWhenPossible",
+                        label: t("Let apps play YouTube trailers directly when they can"),
+                      },
+                    ]}
+                  />
                 }
               />
             </SettingsSection>
