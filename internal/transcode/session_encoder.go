@@ -408,6 +408,9 @@ func (s *Session) startRunLocked(seg int, bigProbe bool) error {
 		return ErrVideoTranscodingDisabled
 	}
 	s.boundHLSRateLocked(&rp)
+	if s.sourceLimitKbps > 0 && rp.decision.EncodesVideo(s.info) {
+		rp.rate = boundedHLSRate(s.info, rp.decision, rp.rate, s.sourceLimitKbps, s.hlsPeakWindowLocked())
+	}
 	s.seekRampSeg = -1
 	rampClock := len(s.rungs) <= 1 && s.plan != nil && s.plan.rampSegs > 0
 	spec := runSpec{
@@ -441,7 +444,7 @@ func (s *Session) startRunLocked(seg int, bigProbe bool) error {
 		Accel:                accel,
 		Features:             s.featuresLocked(),
 		BigProbe:             bigProbe,
-		InBandHeaders:        (s.forceCPU || rampClock) && s.container == ContainerFMP4,
+		InBandHeaders:        (s.forceCPU || rampClock || s.sourceLimitKbps > 0) && s.container == ContainerFMP4,
 		Protocol:             s.proto,
 		FastStart:            rp.fastStart,
 		Rate:                 rp.rate,
@@ -483,8 +486,11 @@ func (s *Session) startRunLocked(seg int, bigProbe bool) error {
 	if s.container == ContainerMatroska {
 		spec.InitName = fmt.Sprintf("header-%d.mkv", s.runSeq)
 	}
-	if s.contract != nil && rp.decision.EncodesVideo(s.info) {
+	if rp.decision.EncodesVideo(s.info) {
 		spec.Target = s.contract
+		if s.sourceLimitPicture != nil {
+			spec.Target = s.sourceLimitPicture
+		}
 		spec.PictureCrop = s.inputCrop
 	}
 	var dr *dashRun
@@ -859,7 +865,7 @@ func (s *Session) chunkedLocked(d core.Decision) bool {
 	if s.liveInput || s.isDASH() || s.plan == nil || s.info.Video() == nil {
 		return false
 	}
-	return s.plan.shortOpening || s.plan.Keyframed() || d.VideoCopy || s.copyFallback || s.container == ContainerMatroska
+	return s.plan.shortOpening || s.plan.Keyframed() || d.VideoCopy || s.copyFallback || s.sourceLimitKbps > 0 || s.container == ContainerMatroska
 }
 
 // stopRunLocked detaches the current run immediately. Process reaping happens

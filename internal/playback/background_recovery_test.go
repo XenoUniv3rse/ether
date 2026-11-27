@@ -145,7 +145,7 @@ func TestStopCancelsDownFailoverProviderWork(t *testing.T) {
 		return nil, ctx.Err()
 	}
 	s := h.m.lookup(ps.ID)
-	h.m.backgroundDownFailover(s, s.current(), 10*time.Second)
+	h.m.backgroundDownFailover(s, s.current(), 10*time.Second, 0, nil)
 	select {
 	case <-started:
 	case <-time.After(5 * time.Second):

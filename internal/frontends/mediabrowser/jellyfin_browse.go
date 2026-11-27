@@ -1205,7 +1205,7 @@ func (i *instance) virtualFolders(w http.ResponseWriter, r *http.Request) {
 			entry["Locations"] = []string{}
 		}
 		if ct := mediaBrowserCollectionType(view); ct != "" {
-			entry["CollectionType"] = ct
+			entry["CollectionType"] = i.collectionTypeDTO(ct)
 		}
 		result = append(result, entry)
 	}

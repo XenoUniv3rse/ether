@@ -191,6 +191,7 @@ func (s *Session) swapInput(ctx context.Context, inputURL string, info core.Medi
 		}
 	}
 	if s.input != inputURL {
+		s.sourceLimitKbps, s.sourceLimitPicture = 0, nil
 		s.textSubtitleStreams = nil // The durable source identity belongs to the original input.
 		s.textSubtitleSource = ""
 		s.healTimestamps = false // clock evidence belongs to the sampled input
@@ -230,6 +231,92 @@ func (s *Session) swapInput(ctx context.Context, inputURL string, info core.Medi
 	s.seekRampSeg = seg
 	s.log.Info("input swapped", "at", at, "segment", seg)
 	return s.startRunForLocked(seg, false, "input swap")
+}
+
+// ReduceOutputBitrate keeps the delivered picture and segment clock. A
+// different source is still preferable when the original input is too slow.
+func (s *Session) ReduceOutputBitrate(ctx context.Context, input string, limitKbps int) (core.Decision, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return core.Decision{}, err
+	}
+	if s.closed || s.inputFailed || s.sessionExhausted || s.input != input || s.liveInput ||
+		s.videoTranscodingOff() || s.headerRecovering || s.retryRecovering ||
+		(s.container != ContainerFMP4 && s.container != ContainerMPEGTS && s.container != ContainerMatroska) ||
+		(s.sourceLimitKbps > 0 && limitKbps >= s.sourceLimitKbps) {
+		return core.Decision{}, core.ErrNotAvailable
+	}
+	// Bypass the contract's copy branch: this path requires an encoder
+	// capable of reproducing the delivered format.
+	picture := s.sourceLimitPicture
+	if picture == nil {
+		picture = s.contract
+	}
+	if picture == nil {
+		var ok bool
+		picture, ok = contractOf(s.info, s.decision)
+		if !ok {
+			return core.Decision{}, core.ErrNotAvailable
+		}
+	}
+	contract := *picture
+	contract.copied = false
+	if err := contract.check(s.info, s.m.feat); err != nil {
+		return core.Decision{}, err
+	}
+	d := sourceLimitedDecision(s.decision, s.info, &contract)
+	window := s.hlsPeakWindowLocked()
+	rate := boundedHLSRate(s.info, d, rateControl{}, limitKbps, window)
+	if rate.TargetKbps < 300 || (!s.decision.VideoCopy && videoBitrate(s.info, d) <= rate.TargetKbps) {
+		return core.Decision{}, core.ErrNotAvailable
+	}
+	b := s.recoveryBufferLocked()
+	at := b.Position
+	if b.ReadyUntil > at && b.ReadyUntil < s.info.Duration {
+		at = b.ReadyUntil
+	}
+	seg := s.segForOffsetLocked(at)
+	if s.total > 0 && seg >= s.total || s.segFailures[seg] >= maxSegmentFailures {
+		return core.Decision{}, core.ErrNotAvailable
+	}
+	s.stopRunForLocked("source bitrate cap")
+	for t, done := range s.done {
+		for n := range done {
+			if n >= seg {
+				_ = os.Remove(s.trackSegPath(t, n))
+				delete(done, n)
+			}
+		}
+	}
+	prevLimit, prevPicture := s.sourceLimitKbps, s.sourceLimitPicture
+	s.sourceLimitKbps, s.sourceLimitPicture = limitKbps, &contract
+	if s.container == ContainerMPEGTS {
+		if s.copyDiscontinuities == nil {
+			s.copyDiscontinuities = make(map[int]bool)
+		}
+		s.copyDiscontinuities[seg] = true
+		s.playlist = nil
+	}
+	if s.resumeWarm != nil {
+		s.resumeWarm.encoder.seal()
+		s.resumeWarm = nil
+	}
+	s.endSeg = -1
+	d.BitrateKbps = rate.TargetKbps + decisionAudioKbps(s.info, d)
+	if err := s.startRunForLocked(seg, false, "source bitrate cap"); err != nil {
+		s.sourceLimitKbps, s.sourceLimitPicture = prevLimit, prevPicture
+		return core.Decision{}, err
+	}
+	return d, nil
+}
+
+func sourceLimitedDecision(d core.Decision, info core.MediaInfo, picture *videoContract) core.Decision {
+	d.Kind, d.VideoCopy, d.VideoCodec = core.DecisionTranscode, false, picture.codec
+	d.MaxHeight = picture.height
+	d.StripDolbyVision, d.ToneMap = false, picture.tonemaps(info.Video())
+	d.Enhancement = core.VideoEnhancement{}
+	return d
 }
 
 func (s *Session) segForOffsetLocked(at time.Duration) int {
