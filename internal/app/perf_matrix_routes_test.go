@@ -251,8 +251,14 @@ func matrixRouteExceptions() map[perfharness.MatrixRouteKey]string {
 		"/ether/api/discovery/ratings/refresh/{key}")
 	add("console", http.MethodPost, "requires a staged restore archive or snapshot made from a separate source instance",
 		"/ether/api/adoption/backups/restore", "/ether/api/adoption/backups/restore/snapshot/{name}")
+	add("console", http.MethodPost, "synchronously archives the full database and media state, outside the request replay window",
+		"/ether/api/adoption/backups/{$}")
+	add("console", http.MethodPost, "requires a pre-existing portable snapshot to stream in encrypted form",
+		"/ether/api/adoption/backups/export/{name}")
 	add("console", http.MethodDelete, "requires a report or staged archive from a completed restore-plan request",
 		"/ether/api/adoption/backups/restore/report", "/ether/api/adoption/backups/restore/staged/{id}")
+	add("console", http.MethodPost, "requires a legacy non-incremental SQLite database with enough reclaimable pages",
+		"/ether/api/status/database/compact")
 	add("console", http.MethodPost, "checks the release service, which is unavailable to the offline fixture",
 		"/ether/api/updates/check", "/ether/api/vela/check")
 	add("console", "*", "trailing-slash alias for the measured console event stream", "/ether/api/stream/")

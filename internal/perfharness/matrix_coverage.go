@@ -205,6 +205,8 @@ func addMatrixConsoleCoverage(c *Client) {
 		{Name: "fixture POST update indexer definitions", Method: http.MethodPost, Path: "/indexer-sites/update"},
 		{Name: "fixture read installed release version", Path: "/updates/", Discover: discoverMatrixReleaseVersion},
 		{Name: "fixture dismiss installed release notes", Method: http.MethodPost, Path: "/updates/notes/dismiss", Body: `{"version":"{consoleReleaseVersion}"}`},
+		{Name: "fixture clear installed update banner", Method: http.MethodPost, Path: "/updates/dismiss-installed"},
+		{Name: "fixture cancel any queued restart", Method: http.MethodDelete, Path: "/server/restart/"},
 		{Name: "fixture include catalogue title", Method: http.MethodPut, Path: "/catalog/title/{consoleMovieKey}/library"},
 		{Name: "fixture restore catalogue title membership", Method: http.MethodDelete, Path: "/catalog/title/{consoleMovieKey}/library"},
 		{Name: "fixture set plugin cache quota", Method: http.MethodPut, Path: "/libraries/{consoleLiveLibrary}/cache", Body: `{"maxBytes":16777216,"ttlSeconds":600}`},
@@ -230,6 +232,7 @@ func addMatrixConsoleCoverage(c *Client) {
 		{Name: "fixture pause catalogue migration", Method: http.MethodPost, Path: "/catalog/tier-migration", Body: `{"paused":true}`},
 		{Name: "fixture resume catalogue migration", Method: http.MethodPost, Path: "/catalog/tier-migration", Body: `{"paused":false}`},
 		{Name: "fixture check scratch database", Method: http.MethodPost, Path: "/status/database/check"},
+		{Name: "fixture refresh local diagnostics", Method: http.MethodPost, Path: "/safety/diagnostics/refresh"},
 		{Name: "fixture clear in-memory logs", Method: http.MethodDelete, Path: "/logs"},
 		{Name: "fixture DELETE installed indexer definition", Method: http.MethodDelete, Path: "/indexer-sites/definitions/fakepublic"},
 	}...)
