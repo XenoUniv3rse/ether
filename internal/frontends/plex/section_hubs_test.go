@@ -3,6 +3,8 @@ package plex
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"slices"
 	"testing"
 	"time"
 
@@ -10,8 +12,57 @@ import (
 	"github.com/braedonsaunders/ether/internal/discovery"
 	"github.com/braedonsaunders/ether/internal/frontends/plex/model"
 	"github.com/braedonsaunders/ether/internal/overlays"
+	"github.com/braedonsaunders/ether/internal/personalize"
 	"github.com/braedonsaunders/ether/internal/watchlist"
 )
+
+func TestSectionHubsMatchPlannedDrawableRows(t *testing.T) {
+	f := newFixture()
+	defer f.srv.Close()
+	engine, err := personalize.New(personalize.Options{
+		DB: discoveryDB(t), Catalog: f.catalog, RefreshEvery: -1, Ready: make(chan struct{}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer engine.Close()
+
+	future := fightClub
+	future.Key = core.MovieKey(5000)
+	future.Released = fixedNow.AddDate(1, 0, 0)
+	var hubs []core.Hub
+	for n := range 6 {
+		hubs = append(hubs, core.Hub{ID: fmt.Sprintf("movie.unavailable.%d", n), Type: core.TypeMovie, Items: []core.Title{future}})
+	}
+	drawable := []core.NeutralHomeRow{{ID: "movie.recentlyadded.1", Type: core.TypeMovie, ItemCount: 2}}
+	for n := range 16 {
+		id := fmt.Sprintf("movie.fixture.%d", n)
+		hubs = append(hubs, core.Hub{ID: id, Type: core.TypeMovie, Items: []core.Title{fightClub}})
+		drawable = append(drawable, core.NeutralHomeRow{ID: id, Type: core.TypeMovie, ItemCount: 1})
+	}
+	f.srv.setRecommender(struct {
+		*fakeRecommender
+		core.NeutralHomeLayoutSource
+	}{&fakeRecommender{section: map[core.MediaType][]core.Hub{core.TypeMovie: hubs}}, engine})
+
+	situation := core.HomeSituation{Now: fixedNow, Device: "web", LibraryID: 1}
+	planned, err := engine.FinalizeNeutralHome(context.Background(), &ownerUser, situation, "library:1", drawable)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := make([]string, 0, len(planned))
+	for _, row := range planned {
+		want = append(want, row.ID)
+	}
+	if len(want) != 16 {
+		t.Fatalf("fixture's library plan returned %d rows, want 16", len(want))
+	}
+	rec := f.get(t, "/hubs/sections/1?count=12&excludeContinueWatching=1",
+		"Accept", "application/json", "X-Plex-Product", "Plex Web", "X-Plex-Platform", "Chrome")
+	if got := hubIDs(t, rec.Body.Bytes()); rec.Code != 200 || !slices.Equal(got, want) {
+		t.Fatalf("status %d, section hubs %v, want %v", rec.Code, got, want)
+	}
+}
 
 // A library section keeps Plex's conventions (Continue Watching, then
 // Recently Added) above the section's own recommended rows, whose hub ids

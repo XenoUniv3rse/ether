@@ -345,15 +345,25 @@ func (s *Server) buildSectionHubs(r *http.Request, sec Section, promotedOnly boo
 	for _, spec := range specs {
 		pages = append(pages, s.prepareHub(ctx, pr, spec, hc, vis))
 	}
-	mc.Hub = s.paintHubPages(ctx, pr, pages)
-	for i, row := range mc.Hub {
+	painted := s.paintHubPages(ctx, pr, pages)
+	rows := painted[:0]
+	for i, row := range painted {
+		// Only rows with cards or directories can claim a library layout slot.
+		// Keep the first eligible projection for each hub identifier.
+		if len(row.Metadata) == 0 && len(row.Directory) == 0 {
+			continue
+		}
+		if _, duplicate := served[row.HubIdentifier]; duplicate {
+			continue
+		}
 		hub, neutral := homeLayoutFacts(row)
+		rows = append(rows, row)
 		layoutHubs = append(layoutHubs, hub)
 		layoutNeutral = append(layoutNeutral, neutral)
 		served[row.HubIdentifier] = specs[i].Hub
 	}
 	sectionName := "library:" + strconv.Itoa(sec.ID)
-	mc.Hub = ownerHeroHubs(stableHomeHubs(pr, s.arrangeHomeRows(ctx, pr, pc, sectionName, mc.Hub, layoutHubs, layoutNeutral)))
+	mc.Hub = ownerHeroHubs(stableHomeHubs(pr, s.arrangeHomeRows(ctx, pr, pc, sectionName, rows, layoutHubs, layoutNeutral)))
 	if promotedOnly {
 		for i := range mc.Hub {
 			oldID := mc.Hub[i].HubIdentifier
@@ -389,7 +399,8 @@ func (s *Server) buildSectionHubs(r *http.Request, sec Section, promotedOnly boo
 		mc.Hub[at] = *sectionPlaylist
 	}
 
-	s.log.Debug("section hubs rendered", "section", sec.ID, "user", pr.User.ID, "count", count, "rows", len(mc.Hub))
+	s.log.Debug("section hubs rendered", "section", sec.ID, "user", pr.User.ID, "count", count,
+		"candidateRows", len(specs), "eligibleRows", len(rows), "rows", len(mc.Hub))
 	mc.Size = len(mc.Hub)
 	return homeBuild{mc: mc, served: served, section: sec.ID, provisional: provisional}
 }
