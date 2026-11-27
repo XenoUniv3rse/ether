@@ -387,6 +387,14 @@ func (h liveTVHost) GuideWindow(ctx context.Context, u *frontend.User, from, unt
 	return toFrontendProgrammes(ps), nil
 }
 
+func (h liveTVHost) GuideChannelLogos(ctx context.Context, channels []frontend.LiveTVChannel) map[string]string {
+	cs := make([]Channel, len(channels))
+	for i, c := range channels {
+		cs[i] = FromFrontendChannel(c)
+	}
+	return h.s.GuideChannelLogos(ctx, cs)
+}
+
 func (h liveTVHost) GuideChannelLogo(ctx context.Context, c frontend.LiveTVChannel) string {
 	return h.s.GuideChannelLogo(ctx, FromFrontendChannel(c))
 }

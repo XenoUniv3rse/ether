@@ -164,6 +164,58 @@ func (s *Service) GuideChannelLogo(ctx context.Context, c Channel) string {
 	return logo
 }
 
+// GuideChannelLogos reads the matched logos for a rendered channel set.
+func (s *Service) GuideChannelLogos(ctx context.Context, channels []Channel) map[string]string {
+	type match struct{ source, guide string }
+	matches := make(map[match][]string)
+	var keys []match
+	for _, c := range channels {
+		if c.GuideID == "" {
+			continue
+		}
+		key := match{guideSource(c), c.GuideID}
+		if _, ok := matches[key]; !ok {
+			keys = append(keys, key)
+		}
+		matches[key] = append(matches[key], c.ID)
+	}
+	logos := make(map[string]string)
+	if s.o.DB == nil {
+		return logos
+	}
+	for start := 0; start < len(keys); start += 200 {
+		part := keys[start:min(start+200, len(keys))]
+		args := make([]any, 0, len(part)*2)
+		for _, key := range part {
+			args = append(args, key.source, key.guide)
+		}
+		values := strings.TrimSuffix(strings.Repeat("(CAST(? AS TEXT),CAST(? AS TEXT)),", len(part)), ",")
+		rows, err := s.o.DB.QueryContext(ctx, `WITH wanted(source_id,guide_id) AS (VALUES `+values+`)
+			SELECT g.source_id,g.guide_id,g.logo FROM wanted w
+			JOIN livetv_guide_channels g ON g.source_id=w.source_id AND g.guide_id=w.guide_id`, args...)
+		if err != nil {
+			return nil
+		}
+		for rows.Next() {
+			var key match
+			var logo string
+			if err := rows.Scan(&key.source, &key.guide, &logo); err != nil {
+				rows.Close()
+				return nil
+			}
+			for _, id := range matches[key] {
+				logos[id] = logo
+			}
+		}
+		err = rows.Err()
+		rows.Close()
+		if err != nil {
+			return nil
+		}
+	}
+	return logos
+}
+
 func msTime(ms int64) *time.Time {
 	t := time.UnixMilli(ms).UTC()
 	return &t

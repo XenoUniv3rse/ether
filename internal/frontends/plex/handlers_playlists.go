@@ -77,26 +77,7 @@ func (s *Server) expandKey(ctx context.Context, pr *Request, k frontend.RatingKe
 		if err != nil {
 			return nil, err
 		}
-		if pl.SmartURI != "" {
-			copyRequest := *pr
-			copyRequest.HasPage, copyRequest.Start, copyRequest.Size = true, 0, maxExpand
-			titles, _, _, err := s.smartPlaylistBrowse(ctx, &copyRequest, pl.SmartURI)
-			if err != nil {
-				return nil, err
-			}
-			noExpandCtx := frontend.WithNoContainerExpand(ctx)
-			var out []frontend.RatingKey
-			for _, title := range titles {
-				keys, err := s.expandKey(noExpandCtx, pr, title.Key)
-				if err == nil {
-					out = append(out, keys...)
-				}
-				if len(out) >= maxExpand {
-					break
-				}
-			}
-			return capKeys(out), nil
-		}
+		return s.expandPlaylist(ctx, pr, pl)
 	}
 	if k.IsPluginKey() {
 		t, err := s.metadataTitle(frontend.WithNoContainerExpand(ctx), pr, k)
@@ -145,6 +126,30 @@ func (s *Server) expandKey(ctx context.Context, pr *Request, k frontend.RatingKe
 		return s.metadataGrandchildren(ctx, pr, key)
 	}})
 	return selection.Expand(ctx, pr.User, k)
+}
+
+func (s *Server) expandPlaylist(ctx context.Context, pr *Request, pl *frontend.Playlist) ([]frontend.RatingKey, error) {
+	if pl.SmartURI == "" {
+		return append([]frontend.RatingKey(nil), pl.Items...), nil
+	}
+	copyRequest := *pr
+	copyRequest.HasPage, copyRequest.Start, copyRequest.Size = true, 0, maxExpand
+	titles, _, _, err := s.smartPlaylistBrowse(ctx, &copyRequest, pl.SmartURI)
+	if err != nil {
+		return nil, err
+	}
+	noExpandCtx := frontend.WithNoContainerExpand(ctx)
+	var out []frontend.RatingKey
+	for _, title := range titles {
+		keys, err := s.expandKey(noExpandCtx, pr, title.Key)
+		if err == nil {
+			out = append(out, keys...)
+		}
+		if len(out) >= maxExpand {
+			break
+		}
+	}
+	return capKeys(out), nil
 }
 
 // smartSectionURI keeps only a local section query, without client credentials.

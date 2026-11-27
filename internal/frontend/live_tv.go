@@ -231,6 +231,7 @@ type LiveTV interface {
 	GuideForChannels(ctx context.Context, u *User, from, until time.Time, channelIDs []string) ([]LiveTVProgramme, error)
 	GuideWindow(ctx context.Context, u *User, from, until time.Time) ([]LiveTVProgramme, error)
 	GuideChannelLogo(ctx context.Context, c LiveTVChannel) string
+	GuideChannelLogos(ctx context.Context, channels []LiveTVChannel) map[string]string
 	TuneWithSession(ctx context.Context, u *User, id string, caps ClientCaps, sessionID string) (LiveTVSessionInfo, error)
 	Sessions(ctx context.Context, u *User) []LiveTVSessionInfo
 	Session(ctx context.Context, id string, u *User) (LiveTVSessionInfo, error)

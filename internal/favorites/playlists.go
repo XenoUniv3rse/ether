@@ -3,6 +3,7 @@ package favorites
 import (
 	"context"
 	"errors"
+	"slices"
 	"time"
 
 	"github.com/braedonsaunders/ether/internal/core"
@@ -188,6 +189,44 @@ func (p *Playlists) GetHeaders(ctx context.Context, uid int64, keys []core.Ratin
 		}
 	}
 	return out, nil
+}
+
+// QueueWindow reads only the queue's stored membership window. The Favorites
+// playlist takes its members from the favorites store.
+func (p *Playlists) QueueWindow(ctx context.Context, uid int64, key, start core.RatingKey, limit int) (*core.Playlist, int, int, error) {
+	fav, err := p.favorite(ctx, uid)
+	if err != nil && !errors.Is(err, core.ErrNotFound) {
+		return nil, 0, 0, err
+	}
+	if err == nil && fav.Key == key {
+		fav, err = p.project(ctx, uid, fav)
+		if err != nil {
+			return nil, 0, 0, err
+		}
+		index := 0
+		if start != 0 {
+			index = slices.Index(fav.Items, start)
+			if index < 0 {
+				return nil, 0, 0, core.ErrNotFound
+			}
+		}
+		total := len(fav.Items)
+		before := max(0, min(index-limit/2, total-limit))
+		end := min(before+limit, total)
+		fav.Items = fav.Items[before:end]
+		fav.ItemAddedAt = fav.ItemAddedAt[before:end]
+		return fav, before, total - end, nil
+	}
+	base, ok := p.Base.(interface {
+		QueueWindow(context.Context, int64, core.RatingKey, core.RatingKey, int) (*core.Playlist, int, int, error)
+	})
+	if !ok {
+		// The caller still takes the window when a custom store supports
+		// only the original playlist contract.
+		pl, err := p.Base.Get(ctx, uid, key)
+		return pl, 0, 0, err
+	}
+	return base.QueueWindow(ctx, uid, key, start, limit)
 }
 
 // Exists reports whether the viewer owns a playlist with key without reading

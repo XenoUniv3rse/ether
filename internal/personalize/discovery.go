@@ -151,13 +151,17 @@ func reviewKinds(want core.MediaType) []core.KeyKind {
 	return nil
 }
 
+func reviewTitle(year int) string {
+	return fmt.Sprintf("Your %d in Review", year)
+}
+
 // yearInReview applies exclusions only when this history is suggested as a
 // discovery row; direct collection access continues to show viewing history.
 // want limits it to films or shows ("" is both). maxKeys > 0 stops the build
 // after that many completed keys even if it holds fewer than limit titles
 // (a listing's card reads only the latest few).
 func (d *Discovery) yearInReview(ctx context.Context, u *core.User, year, limit int, recommendation bool, want core.MediaType, maxKeys int) (core.Hub, error) {
-	hub := core.Hub{ID: fmt.Sprintf("discovery.review.%d", year), Title: fmt.Sprintf("Your %d in Review", year), Context: "hub.home.yearinreview", Promoted: true}
+	hub := core.Hub{ID: fmt.Sprintf("discovery.review.%d", year), Title: reviewTitle(year), Context: "hub.home.yearinreview", Promoted: true}
 	if u == nil || d.state == nil {
 		return hub, nil
 	}

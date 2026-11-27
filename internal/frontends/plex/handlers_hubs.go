@@ -162,7 +162,11 @@ func (s *Server) prepareHub(ctx context.Context, pr *Request, hs hubSpec, hc hub
 	}
 	if strings.HasPrefix(h.ID, "movie.recentlyviewed.") || strings.HasPrefix(h.ID, "tv.recentlyviewed.") {
 		if sec, ok := s.sectionFromHubID(h.ID); ok {
-			if measured, err := s.recentlyWatchedHub(ctx, pr, sec, max(len(h.Items), 1)); err == nil {
+			count := max(len(h.Items), 1)
+			if hc.visible > 0 {
+				count = min(count, hc.visible)
+			}
+			if measured, err := s.recentlyWatchedHub(ctx, pr, sec, count); err == nil {
 				hs = measured
 				h = hs.Hub
 			}
@@ -1177,7 +1181,7 @@ func (s *Server) findHub(ctx context.Context, pr *Request, id string, sections [
 		}
 	}
 	if !singleKindSection {
-		for _, h := range s.discoveryHubs(ctx, pr, count) {
+		for _, h := range s.discoveryHubsFor(ctx, pr, count, section != 0) {
 			if !matchHubID(h.ID, candidates) || !s.hubInSections(h.Hub, sections) {
 				continue
 			}
@@ -1185,6 +1189,7 @@ func (s *Server) findHub(ctx context.Context, pr *Request, id string, sections [
 				// A section's copy of a mixed row ("More" from a library).
 				if sec, ok := s.sectionByID(sections[0]); ok {
 					if v, ok := frontend.SectionView(h.Hub, sec.Type); ok {
+						v.Items = s.filterSectionMembers(ctx, sec, v.Items)
 						h.Hub = v
 					}
 				}
@@ -2220,6 +2225,7 @@ func (s *Server) searchCollections(ctx context.Context, pr *Request, query strin
 		score float64
 	}
 	var matches []scored
+	foldedName := searchFoldName(query)
 	for _, sec := range s.userSections(pr.User) {
 		if sectionID > 0 && sec.ID != sectionID {
 			continue
@@ -2227,7 +2233,7 @@ func (s *Server) searchCollections(ctx context.Context, pr *Request, query strin
 		var cs []frontend.Collection
 		var err error
 		if matching, ok := s.collections().(frontend.OwnedCollectionMatcher); ok {
-			cs, err = matching.ListOwnedMatching(ctx, pr.User, sec.Type, func(title string) bool {
+			cs, err = matching.ListOwnedMatching(ctx, pr.User, sec.Type, foldedName, func(title string) bool {
 				return playlistSearchScore(title, query) > 0
 			})
 		} else if owned, ok := s.collections().(frontend.OwnedCollectionLister); ok {

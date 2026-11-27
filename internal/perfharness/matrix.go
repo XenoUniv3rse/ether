@@ -16,7 +16,23 @@ import (
 func MatrixClients(live bool) []Client {
 	clients := Clients()
 	for i := range clients {
+		if clients[i].Surface == "plex" && !live {
+			for j, step := range clients[i].Steps {
+				switch step.Name {
+				case "live guide grid 3h", "live hubs":
+					clients[i].Steps[j].ExpectedStatus = http.StatusNotFound
+				}
+			}
+		}
 		switch clients[i].Name {
+		case "plex-appletv":
+			clients[i].Steps = append(clients[i].Steps,
+				Step{Name: "HEAD /hubs/search with query", Class: classSearch, Method: http.MethodHead, Path: "/hubs/search?query=star&limit=30"},
+				Step{Name: "GET /hubs/search/voice with query", Class: classSearch, Path: "/hubs/search/voice?query=star&limit=30"},
+				Step{Name: "HEAD /hubs/search/voice with query", Class: classSearch, Method: http.MethodHead, Path: "/hubs/search/voice?query=star&limit=30"},
+				Step{Name: "GET /library/all/top movies", Class: classBrowse, Path: "/library/all/top?type=1"},
+				Step{Name: "HEAD /library/all/top movies", Class: classBrowse, Method: http.MethodHead, Path: "/library/all/top?type=1"},
+			)
 		case "xtream":
 			const auth = "?username={xtreamUser}&password={xtreamPass}"
 			clients[i].Steps = append(clients[i].Steps,
@@ -148,8 +164,8 @@ func (r *MatrixReport) Add(configuration string, results []Result, trace map[str
 			r.AddGap(key.config, key.surface, key.route, result.Step, result.Skipped)
 		case !ok:
 			r.AddGap(key.config, key.surface, key.route, result.Step, "missing completed request trace")
-		case result.Status < 200 || result.Status >= 300 || result.Err != "":
-			r.AddGap(key.config, key.surface, key.route, result.Step, fmt.Sprintf("unsuccessful scenario (HTTP %d)", result.Status))
+		case !result.matrixSuccess(rec):
+			r.AddGap(key.config, key.surface, key.route, result.Step, fmt.Sprintf("unexpected scenario result (HTTP %d)", result.Status))
 		case step.Stream != 0 && rec.Duration < step.Stream-time.Second:
 			r.AddGap(key.config, key.surface, key.route, result.Step, "stream closed before the observation window")
 		default:
@@ -194,14 +210,42 @@ func matrixBudget(step Step, rec TraceRecord) matrixWork {
 	if rec.Method == http.MethodGet || rec.Method == http.MethodHead {
 		b.Writes = 0
 		for _, statement := range rec.Statements {
-			if strings.Join(strings.Fields(statement.SQL), " ") == "UPDATE auth_users SET last_seen_at=? WHERE id=? AND last_seen_at<?" {
-				b.Writes = min(1, statement.Count)
-				break
+			query := strings.Join(strings.Fields(statement.SQL), " ")
+			switch {
+			case query == "UPDATE auth_users SET last_seen_at=? WHERE id=? AND last_seen_at<?":
+				b.Writes += min(1, statement.Count)
+			case rec.Surface == "plex" && plexVariantAllocation.MatchString(query):
+				// The response issues Media IDs that a different node can be
+				// asked to resolve immediately. Only unseen pairs are inserted.
+				b.Writes += statement.Count
+			case rec.Surface == "plex" && rec.Method == http.MethodGet && plexWatchMutation(rec.Path, query):
+				// Plex playback clients use GET for these explicit watch
+				// commands. Only their state updates count as allowed writes.
+				b.Writes += statement.Count
 			}
 		}
 	}
 	return b
 }
+
+func plexWatchMutation(path, query string) bool {
+	switch path {
+	case "/:/timeline":
+		switch query {
+		case "DELETE FROM personalize_discovery_hidden WHERE user_id=? AND item_key=?",
+			"DELETE FROM state_continue_hidden WHERE user_id=? AND item_key=?":
+			return true
+		}
+		fallthrough
+	case "/:/scrobble", "/:/unscrobble":
+		return strings.HasPrefix(query, "INSERT INTO state_watch(user_id, rating_key, ") ||
+			strings.HasPrefix(query, "UPDATE state_watch SET view_offset_ns=") ||
+			strings.HasPrefix(query, "INSERT INTO state_history(user_id, ")
+	}
+	return false
+}
+
+var plexVariantAllocation = regexp.MustCompile(`^INSERT INTO variants_ids\(media_id,rating_key,release_id,last_seen\) VALUES \(\?,\?,\?,\?\)(,\(\?,\?,\?,\?\))* ON CONFLICT DO NOTHING$`)
 
 var sqlLiteral = regexp.MustCompile(`'(?:[^']|'')*'`)
 

@@ -217,6 +217,10 @@ func runPerfMatrixCase(t *testing.T, ctx context.Context, fixture string, c perf
 		db.Close()
 		t.Fatal(err)
 	}
+	if err := seedPerfMatrixPlaylistCoverage(ctx, db); err != nil {
+		db.Close()
+		t.Fatal(err)
+	}
 	viewers, err := perfharness.MintCredentials(ctx, db, 4)
 	db.Close()
 	if err != nil {

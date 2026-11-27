@@ -177,8 +177,20 @@ func (r *VariantIDs) IDsFor(ctx context.Context, refs []VariantRef) (map[Variant
 			continue
 		}
 		values := strings.TrimSuffix(strings.Repeat("(?,?,?,?),", len(batch)), ",")
-		if _, err := r.db.ExecContext(ctx, `INSERT INTO variants_ids(media_id,rating_key,release_id,last_seen) VALUES `+values+` ON CONFLICT DO NOTHING`, args...); err != nil {
+		inserted, err := r.db.ExecContext(ctx, `INSERT INTO variants_ids(media_id,rating_key,release_id,last_seen) VALUES `+values+` ON CONFLICT DO NOTHING`, args...)
+		if err != nil {
 			return nil, err
+		}
+		if n, err := inserted.RowsAffected(); err == nil && n == int64(len(batch)) {
+			// Every proposed mapping was inserted. Look up the durable winner
+			// only if a concurrent writer or an ID collision rejected a row.
+			for _, ref := range batch {
+				id := missing[ref]
+				r.cacheLocked(id, variantEntry{ref: ref, seen: seen})
+				out[ref] = id
+				delete(missing, ref)
+			}
+			continue
 		}
 		if err := read(); err != nil {
 			return nil, err

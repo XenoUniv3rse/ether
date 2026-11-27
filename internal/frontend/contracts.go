@@ -233,7 +233,7 @@ type LibraryFacetCollections interface {
 
 // OwnedCollectionMatcher lets search select titles before loading collection members.
 type OwnedCollectionMatcher interface {
-	ListOwnedMatching(context.Context, *User, MediaType, func(string) bool) ([]Collection, error)
+	ListOwnedMatching(context.Context, *User, MediaType, string, func(string) bool) ([]Collection, error)
 }
 
 // CollectionPager is an optional Collections capability returning one page

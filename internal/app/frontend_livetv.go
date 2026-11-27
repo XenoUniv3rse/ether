@@ -639,6 +639,13 @@ func (s surfaceLiveTV) GuideWindow(ctx context.Context, u *frontend.User, from, 
 	}
 	return h.GuideWindow(s.withApp(ctx), u, from, until)
 }
+func (s surfaceLiveTV) GuideChannelLogos(ctx context.Context, channels []frontend.LiveTVChannel) map[string]string {
+	if h := s.host(); h != nil {
+		return h.GuideChannelLogos(ctx, channels)
+	}
+	return nil
+}
+
 func (s surfaceLiveTV) GuideChannelLogo(ctx context.Context, c frontend.LiveTVChannel) string {
 	if h := s.host(); h != nil {
 		return h.GuideChannelLogo(ctx, c)
