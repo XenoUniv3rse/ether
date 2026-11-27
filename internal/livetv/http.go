@@ -99,6 +99,7 @@ func (s *Service) ensureHTTP(ctx context.Context, ss *session, id string) (core.
 			return h, nil
 		}
 		ss.http = stream
+		s.recordOutputProviderLocked(ss)
 		ss.mu.Unlock()
 		return stream, nil
 	}

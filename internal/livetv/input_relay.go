@@ -83,6 +83,7 @@ type inputGrant struct {
 	variantLogged sync.Once
 
 	login        *loginLease
+	provider     servingProvider
 	log          *slog.Logger // immutable, credential-free session correlation
 	token        string
 	origin       string      // the only origin that receives authentication
@@ -207,9 +208,10 @@ func (s *Service) grantSteadyInputLead(ss *session, src StreamSource, headers ht
 
 func (s *Service) grantInputFor(ss *session, src StreamSource, headers http.Header, steady bool, lead time.Duration) error {
 	c := ss.info.Channel
-	source := src.AuthSourceID
-	if source == "" && c.SourceID != "" && (src.ID == stableID(c.ID, "playlist") || len(c.StreamSources) <= 1) {
-		source = c.SourceID
+	source := providerSourceID(c, src)
+	entry, err := s.sourceEntry(ss.ctx, source)
+	if err != nil {
+		return err
 	}
 	leaseKey := src.URL
 	if ss.archiveInput {
@@ -217,7 +219,7 @@ func (s *Service) grantInputFor(ss *session, src StreamSource, headers http.Head
 		// connection even when another viewer requests the same time range.
 		leaseKey = "vod:archive:" + randomID()
 	}
-	lease, err := s.leaseLogin(ss.ctx, source, leaseKey, headers)
+	lease, err := s.leaseLoginFor(ss.ctx, entry, source, leaseKey, headers)
 	if err != nil {
 		return err
 	}
@@ -276,7 +278,7 @@ func (s *Service) grantInputFor(ss *session, src StreamSource, headers http.Head
 	if ss.inputSource.ID != "" {
 		histSrc = ss.inputSource
 	}
-	g := &inputGrant{finite: ss.archiveInput, variantCaps: core.ClientCaps{MaxHeight: ss.caps.MaxHeight, MaxBitrateKbps: ss.caps.MaxBitrateKbps}, login: lease, reserve: reserve, lead: lead, steady: steady, service: s, direct: direct, directGen: directGen, histChannel: c.ID, histSrc: histSrc,
+	g := &inputGrant{finite: ss.archiveInput, variantCaps: core.ClientCaps{MaxHeight: ss.caps.MaxHeight, MaxBitrateKbps: ss.caps.MaxBitrateKbps}, login: lease, provider: providerForInput(entry, src, lease), reserve: reserve, lead: lead, steady: steady, service: s, direct: direct, directGen: directGen, histChannel: c.ID, histSrc: histSrc,
 		log:   s.sessionLog(ss).With("input", src.ID),
 		token: base64.RawURLEncoding.EncodeToString(b[:]), origin: relayOrigin(u), headers: headers.Clone(), mediaHeaders: redirectMediaHeaders(src.Headers),
 		ctx: ctx, cancel: cancel, slots: make(chan struct{}, relayConcurrency), source: source,
@@ -300,7 +302,7 @@ func (s *Service) grantInputFor(ss *session, src StreamSource, headers http.Head
 	}
 	if lease != nil {
 		s.loginPool.mu.Lock()
-		if lease.lost {
+		if lease.lost.Load() {
 			s.loginPool.mu.Unlock()
 			cancel()
 			return ErrProviderBusy

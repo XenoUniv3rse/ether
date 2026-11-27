@@ -31,7 +31,11 @@ const schedule = {
   lastStatus: "",
 };
 
-function backend(cluster = false, summaryOverride: Record<string, unknown> = emptySummary) {
+function backend(
+  cluster = false,
+  summaryOverride: Record<string, unknown> = emptySummary,
+  liveTV = false,
+) {
   const calls: { url: string; init?: RequestInit }[] = [];
   vi.stubGlobal(
     "fetch",
@@ -122,6 +126,27 @@ function backend(cluster = false, summaryOverride: Record<string, unknown> = emp
       else if (url.endsWith("/status/sessions"))
         v = {
           value: [
+            ...(liveTV
+              ? [
+                  {
+                    ID: "sports",
+                    TitleName: "Football",
+                    Username: "Sam",
+                    Decision: "copy",
+                    liveChannel: {
+                      id: "sports",
+                      name: "Sports Live",
+                      provider: {
+                        sourceName: "Sports provider",
+                        loginLabel: "jo***",
+                        localInUse: 2,
+                        loginLimit: 3,
+                      },
+                      previousProvider: { sourceName: "Weekend Sports" },
+                    },
+                  },
+                ]
+              : []),
             {
               ID: "live",
               TitleName: "Example film",
@@ -355,6 +380,22 @@ describe("Activity", () => {
         WAIT,
       ),
     ).toBeInTheDocument();
+  });
+
+  it("shows the serving Live TV login, local usage and previous provider in both layouts", async () => {
+    localStorage.removeItem("ether.activity.nowView");
+    backend(false, emptySummary, true);
+    renderAt("/activity");
+    const provider = await screen.findByText("Sports provider · jo***", {}, WAIT);
+    const card = within(provider.closest("article")!);
+    expect(card.getByText("2/3")).toBeVisible();
+    expect(card.getByText("Switched from Weekend Sports")).toBeVisible();
+
+    fireEvent.click(screen.getByRole("radio", { name: "List" }));
+    const row = within(screen.getByText("Football").closest("li")!);
+    expect(row.getByText("Sports provider · jo***")).toBeVisible();
+    expect(row.getByText("2/3")).toBeVisible();
+    localStorage.removeItem("ether.activity.nowView");
   });
 
   it("opens the stream drawer from Now Playing cards, list rows and Overview without intercepting Stop", async () => {
@@ -1058,6 +1099,8 @@ describe("Play timeline drawer", () => {
         channelId: "ch-espn",
         channelName: "ESPN",
         channelNumber: "206",
+        liveSourceName: "Sports provider",
+        liveLoginLabel: "jo***",
         device: "Living Room Apple TV",
         platform: "tvOS",
         decision: "copy",
@@ -1114,6 +1157,7 @@ describe("Play timeline drawer", () => {
     const view = renderAt("/activity/history");
     expect(await screen.findByText("206 · ESPN", {}, WAIT)).toBeInTheDocument();
     expect(screen.getByText("SportsCenter · Sam")).toBeInTheDocument();
+    expect(screen.getByText("Sports provider · jo***")).toBeVisible();
     expect(screen.getByText("Live TV")).toBeInTheDocument();
     await waitFor(() =>
       expect(calls.some((u) => u.includes("/livetv/channels/ch-espn/logo"))).toBe(true),

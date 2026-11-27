@@ -61,12 +61,14 @@ func (o *localRelayOrigin) get(ctx context.Context, uri string, _, _ int64) ([]b
 }
 
 type relayProducer struct {
-	shared bool
-	s      *Service
-	tl     *ownedTimeline
-	log    *slog.Logger
-	sess   atomic.Pointer[session]
-	caps   core.ClientCaps // the relay's output capabilities
+	provider     providerTracker
+	providerFeed atomic.Pointer[steadyFeed]
+	shared       bool
+	s            *Service
+	tl           *ownedTimeline
+	log          *slog.Logger
+	sess         atomic.Pointer[session]
+	caps         core.ClientCaps // the relay's output capabilities
 
 	mu        sync.Mutex
 	hls       core.HLSSession
@@ -212,7 +214,7 @@ func (s *Service) runRelay(ss *session, p *relayProducer) *ownedLease {
 	s.enableOwnedTimeshift(p.tl, ss.info.Channel)
 	go p.tl.run(runCtx)
 	go p.run(runCtx)
-	return &ownedLease{tl: p.tl, relay: p, release: func() {
+	return &ownedLease{tl: p.tl, relay: p, provider: p.servingProvider, release: func() {
 		stop()
 		p.close()
 	}}
@@ -228,7 +230,17 @@ func (p *relayProducer) start(ctx context.Context, info core.MediaInfo, dec core
 	if err != nil {
 		return err
 	}
-	return p.adopt(id, hls, cancel, info, dec, cut, true)
+	if err := p.adopt(id, hls, cancel, info, dec, cut, true); err != nil {
+		return err
+	}
+	if g := p.s.sessionGrant(p.sess.Load()); g != nil {
+		p.provider.set(g.provider)
+	}
+	return nil
+}
+
+func (p *relayProducer) servingProvider() *providerChange {
+	return steadyProvider(p.providerFeed.Load(), p.provider.current.Load())
 }
 
 // launch starts a relay session on the session's current input without
@@ -284,6 +296,7 @@ func (p *relayProducer) adopt(id string, hls core.HLSSession, cancel context.Can
 	old, oldCancel := p.hls, p.cancel
 	steady := p.steady
 	p.steady = nil
+	p.providerFeed.Store(nil)
 	p.hls, p.cancel, p.info, p.dec, p.cut = hls, cancel, info, dec, cut
 	p.starved, p.reformat = false, nil
 	p.openedMedia, p.droppedSkewed = false, 0

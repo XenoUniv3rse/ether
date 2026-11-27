@@ -361,6 +361,7 @@ export type SourceLimitRules = {
 export const normGroup = (name: string) => name.trim().toLowerCase();
 export type ProviderLogin = {
   id: string;
+  label?: string;
   username?: string;
   password?: string;
   playlistUrl?: string;

@@ -57,6 +57,7 @@ func authEntryFromSource(src Source, now time.Time) authEntry {
 	}
 	e := authEntry{
 		name:          src.Name,
+		playlistHost:  providerHost(src.PlaylistURL),
 		auth:          src.Auth,
 		at:            now,
 		perHour:       max(src.TunesPerHour, 0),

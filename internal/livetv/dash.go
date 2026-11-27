@@ -288,6 +288,7 @@ func (s *Service) ensureDASH(ctx context.Context, ss *session, id string) (core.
 		hs.Close()
 		return nil, core.ErrNotAvailable
 	}
+	s.recordOutputProviderLocked(ss)
 	// Replace any superseded HLS relay/passthrough so two ffmpeg processes do
 	// not compete on the same session.
 	if ss.sharedInput.Load() == nil {

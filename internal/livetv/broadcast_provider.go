@@ -20,6 +20,7 @@ import (
 // reopen, codec-change rejoin, backup source, hot standby) is a new decoder
 // spliced into the same encoder timeline by the broadcast clock.
 type providerBroadcastPlanner struct {
+	provider              providerTracker
 	guideCancel           context.CancelFunc
 	guideDone             chan struct{}
 	guideFrom, guideUntil time.Time
@@ -701,10 +702,14 @@ func (p *providerBroadcastPlanner) wrap(ctx context.Context, src StreamSource, l
 	c := p.channel
 	life, cancel := context.WithCancel(ctx)
 	var reopen func() (transcode.Decoder, error)
+	var provider servingProvider
 	if link != nil {
 		reopen = func() (transcode.Decoder, error) { return p.startDecoder(life, link, true) }
+		if g := p.s.sessionGrant(link.ss); g != nil {
+			provider = g.provider
+		}
 	}
-	return &providerBroadcastDecoder{reopen: reopen, life: life, cancel: cancel, Decoder: d, planner: p, sourceID: src.ID, firstFrame: firstFrame, started: time.Now(), frame: time.Second * time.Duration(p.format.FPSDen) / time.Duration(p.format.FPSNum), ready: func() {}, healthy: func() {
+	return &providerBroadcastDecoder{reopen: reopen, life: life, cancel: cancel, Decoder: d, planner: p, provider: provider, sourceID: src.ID, firstFrame: firstFrame, started: time.Now(), frame: time.Second * time.Duration(p.format.FPSDen) / time.Duration(p.format.FPSNum), ready: func() {}, healthy: func() {
 		p.s.recordSourceHealth(c.ID, src, nil, true)
 		p.mu.Lock()
 		p.ladder.delivered(src.ID)
@@ -878,6 +883,7 @@ func (s *Service) reserveBroadcastProvider(account, channel, id string, limit in
 // it never replays media this source already aired, bounds the wait for the
 // first picture, and reports delivery and stress to the planner.
 type providerBroadcastDecoder struct {
+	provider servingProvider
 	transcode.Decoder
 	planner    *providerBroadcastPlanner
 	sourceID   string
@@ -966,6 +972,9 @@ func (d *providerBroadcastDecoder) Aired(frame transcode.RawFrame) {
 		d.planner.lastAired = map[string]time.Duration{}
 	}
 	d.planner.lastAired[d.sourceID] = frame.SourcePTS
+	if d.provider.sourceID != "" {
+		d.planner.provider.set(d.provider)
+	}
 	d.planner.mu.Unlock()
 	if n := d.aired.Add(1); d.healthy != nil && time.Duration(n)*d.frame >= steadyDelivered {
 		d.healthOnce.Do(d.healthy)

@@ -25,6 +25,7 @@ var ErrInvalidCatchUpRange = frontend.ErrInvalidCatchUpRange
 func archiveUnavailable() error { return &CatchUpError{Code: "catchup_unavailable"} }
 
 type catchUpSession struct {
+	provider     *providerChange
 	previous     []*catchUpSession
 	retryAt      time.Time
 	inputMu      sync.Mutex
@@ -355,6 +356,9 @@ func (s *Service) openCatchUp(ctx context.Context, ss *session, info CatchUpInfo
 		return nil, err
 	}
 	opened := &catchUpSession{info: info, input: input}
+	if g := s.sessionGrant(input.stage); g != nil {
+		opened.provider = &providerChange{active: g.provider}
+	}
 	ready := false
 	defer func() {
 		if !ready {

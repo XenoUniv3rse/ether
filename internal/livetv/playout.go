@@ -54,6 +54,7 @@ type DirectStream struct {
 type session struct {
 	archiveInput        bool // staged relay grants have a finite upstream
 	catchUp             *catchUpSession
+	outputProvider      *providerChange // direct DASH or HTTP input
 	broadcastPolicy     broadcastViewerPolicy
 	broadcast           *broadcastLease
 	ephemeral           bool
@@ -279,6 +280,10 @@ func (s *Service) observeSession(p *core.PlaySession, ended bool, problem string
 }
 
 func (s *Service) sessionSnapshotLocked(ss *session, now time.Time) core.PlaySession {
+	return s.sessionSnapshotLockedWithUsage(ss, now, nil)
+}
+
+func (s *Service) sessionSnapshotLockedWithUsage(ss *session, now time.Time, usage map[providerLoginKey]int) core.PlaySession {
 	p := ss.view
 	if archive := ss.catchUp; archive != nil {
 		p.Decision = archive.info.Decision.Kind
@@ -288,6 +293,7 @@ func (s *Service) sessionSnapshotLocked(ss *session, now time.Time) core.PlaySes
 	}
 	if p.LiveChannel != nil {
 		ch := *p.LiveChannel
+		ch.Provider, ch.PreviousProvider = ss.servingProviderLocked().snapshot(usage)
 		p.LiveChannel = &ch
 	}
 	p.Liveness = s.sessionLivenessLocked(ss, now).State
@@ -336,18 +342,13 @@ func (ss *session) closeWithReason(s *Service, expired bool) {
 	ss.closed = true
 	ss.generation++
 	broadcast := ss.broadcast
-	ss.broadcast = nil
 	owned := ss.owned
-	ss.publishOwnedLocked(nil)
 	dash := ss.dash
 	archive := ss.catchUp
 	httpStream := ss.http
-	ss.dash = nil
-	ss.http = nil
 	reserved := ss.reserved
 	ready, requested, delivered := ss.ready, ss.consumed, ss.firstMediaDelivered
 	bytesServed := ss.bytesServed
-	mode := sessionPlayoutModeLocked(ss)
 	stopInfo := ss.info
 	stopSrc := ss.inputSource
 	now := s.clockNow()
@@ -356,6 +357,11 @@ func (ss *session) closeWithReason(s *Service, expired bool) {
 		end = ss.last
 	}
 	snap := s.sessionSnapshotLocked(ss, end)
+	ss.publishOwnedLocked(nil)
+	ss.broadcast = nil
+	ss.dash = nil
+	ss.http = nil
+	mode := sessionPlayoutModeLocked(ss)
 	ss.catchUp = nil
 	snap.LastActive = end
 	ss.mu.Unlock()
@@ -690,6 +696,7 @@ func (s *Service) TuneWithSession(ctx context.Context, u *core.User, channelID s
 		}
 	}
 	info := ss.info
+	ss.servingProviderLocked().attachSession(&info, u.IsOwner, nil)
 	tunedSrc := ss.inputSource
 	tunedUser := ss.user
 	tunedCaps := ss.caps
@@ -890,6 +897,7 @@ func (s *Service) TuneDirectStream(ctx context.Context, u *core.User, ds DirectS
 	}
 	ss.ready = true
 	info := ss.info
+	ss.servingProviderLocked().attachSession(&info, u.IsOwner, nil)
 	tunedSrc := ss.inputSource
 	tunedUser := ss.user
 	tunedCaps := ss.caps
@@ -1007,14 +1015,16 @@ func (s *Service) Session(ctx context.Context, id string, u *core.User) (Session
 	if ss.relayInfo != nil {
 		info.MediaInfo = ss.relayInfo
 	}
-	if lease := ss.owned; lease != nil && lease.source != nil {
-		if id := lease.source(); id != "" {
-			info.ActiveSourceID = id
-		}
-	}
+	provider := ss.servingProviderLocked()
 	channel := ss.info.Channel
 	ephemeral := ss.ephemeral
 	ss.mu.Unlock()
+	owner := u != nil && u.IsOwner
+	var usage map[providerLoginKey]int
+	if owner && provider != nil {
+		usage = s.localLoginUsage()
+	}
+	provider.attachSession(&info, owner, usage)
 	info.Channel.StreamURL = ""
 	info.Channel.redactArchiveSource()
 	info.Channel.StreamSources = nil
@@ -1592,10 +1602,14 @@ func (s *Service) ViewingSessions() []*core.PlaySession {
 	s.mu.Unlock()
 	now := s.o.Now()
 	out := make([]*core.PlaySession, 0, len(list))
+	var usage map[providerLoginKey]int
+	if len(list) > 0 {
+		usage = s.localLoginUsage()
+	}
 	for _, ss := range list {
 		var p core.PlaySession
 		if ss.mu.TryLock() {
-			p = s.sessionSnapshotLocked(ss, now)
+			p = s.sessionSnapshotLockedWithUsage(ss, now, usage)
 			ss.mu.Unlock()
 		} else {
 			// Startup I/O holds ss.mu: never block monitoring.

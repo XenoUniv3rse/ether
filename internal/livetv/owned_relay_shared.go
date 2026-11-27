@@ -128,12 +128,7 @@ func (s *Service) openSharedRelay(ctx context.Context, viewer *session, info cor
 }
 
 func (s *Service) sharedRelayLease(key relayOutputKey, sh *sharedRelay) *ownedLease {
-	return &ownedLease{tl: sh.p.tl, relay: sh.p, source: func() string {
-		ss := sh.p.sess.Load()
-		ss.mu.Lock()
-		defer ss.mu.Unlock()
-		return ss.inputSource.ID
-	}, release: func() {
+	return &ownedLease{tl: sh.p.tl, relay: sh.p, provider: sh.p.servingProvider, release: func() {
 		state := &s.direct
 		state.mu.Lock()
 		sh.refs--

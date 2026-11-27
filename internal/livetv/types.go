@@ -485,7 +485,9 @@ type Options struct {
 	Showcase bool
 }
 type SessionInfo struct {
-	ActiveSourceID string `json:"activeSourceId,omitempty"`
+	ActiveSourceID   string                     `json:"activeSourceId,omitempty"`
+	Provider         *core.LiveProvider         `json:"provider,omitempty"`
+	PreviousProvider *core.LiveProviderIdentity `json:"previousProvider,omitempty"`
 	// Plex's rolling subscription identity is numeric; the stream UUID remains
 	// separate. These are ephemeral identities, scoped to this service lifetime.
 	SubscriptionID  int64           `json:"-"`
@@ -501,6 +503,7 @@ type SessionInfo struct {
 
 // ProviderLogin adds an account without importing another lineup.
 type ProviderLogin struct {
+	Label       string           `json:"label,omitempty"`
 	ID          string           `json:"id"`
 	Username    string           `json:"username,omitempty"`
 	Password    string           `json:"password,omitempty"`

@@ -56,11 +56,11 @@ type ownedShared struct {
 
 // ownedLease is a session's hold on a timeline.
 type ownedLease struct {
-	tl      *ownedTimeline
-	relay   *relayProducer // set for relay sessions
-	source  func() string  // the source a shared timeline plays now
-	once    sync.Once
-	release func()
+	tl       *ownedTimeline
+	relay    *relayProducer // set for relay sessions
+	provider func() *providerChange
+	once     sync.Once
+	release  func()
 }
 
 func (l *ownedLease) close() {
@@ -137,6 +137,12 @@ func (s *Service) acquirePassthrough(ss *session) *ownedLease {
 			}
 			return nil
 		}
+		if grant := s.sessionGrant(ss); grant != nil && grant.login != nil {
+			s.loginPool.mu.Lock()
+			grant.login.refs++
+			p.login = grant.login
+			s.loginPool.mu.Unlock()
+		}
 		go tl.run(ctx)
 		go p.run(ctx)
 		log.Info("owned passthrough timeline created", "reserve", tl.reserve, "class", key)
@@ -158,7 +164,7 @@ func (s *Service) acquirePassthrough(ss *session) *ownedLease {
 		sh.linger = nil
 	}
 	st.mu.Unlock()
-	return &ownedLease{tl: sh.tl, source: sh.p.sourceID, release: func() {
+	return &ownedLease{tl: sh.tl, provider: sh.p.servingProvider, release: func() {
 		st.mu.Lock()
 		delete(sh.sessions, ss)
 		st.mu.Unlock()
@@ -266,8 +272,10 @@ type passthroughProducer struct {
 	cachedManifest      *cachedManifest
 	directFailoverTried bool
 
-	suggest chan sourceChoice
-	playing atomic.Pointer[string] // source ID, read by sessions
+	suggest      chan sourceChoice
+	provider     providerTracker
+	providerFeed atomic.Pointer[steadyFeed]
+	login        *loginLease // held by the producer, independently of its viewers
 
 	rounds int // failover rounds since the last progress
 
@@ -348,7 +356,36 @@ func (p *passthroughProducer) refreshDirect(ctx context.Context) (StreamSource, 
 // and rebases the ingest. keep preserves the ingest
 // position when the source is the same stream (a re-resolution).
 func (p *passthroughProducer) open(ctx context.Context, src StreamSource, raw string, headers http.Header, keep bool) error {
-	return p.openAttempt(ctx, src, raw, headers, keep, false)
+	source := providerSourceID(p.c, src)
+	entry, err := p.s.sourceEntry(ctx, source)
+	if err != nil {
+		return err
+	}
+	lease, err := p.s.leaseLoginFor(ctx, entry, source, raw, headers)
+	if err != nil {
+		return err
+	}
+	target, upstreamHeaders := raw, headers
+	if lease != nil {
+		target, upstreamHeaders = lease.raw, lease.headers
+	}
+	provider := providerForInput(entry, src, lease)
+	if last := p.provider.current.Load(); last != nil && last.active.loginKey != provider.loginKey {
+		keep = false
+	}
+	if err = p.openAttempt(ctx, src, target, upstreamHeaders, keep, false); err != nil {
+		p.noteLoginFailure(lease, err)
+		p.s.releaseLogin(lease)
+		return err
+	}
+	p.s.releaseLogin(p.login)
+	p.login = lease
+	if lease != nil {
+		// The next resolution starts with the original stream coordinates.
+		p.raw, p.headers = raw, headers
+	}
+	p.provider.set(provider)
+	return nil
 }
 
 func (p *passthroughProducer) openAttempt(ctx context.Context, src StreamSource, raw string, headers http.Header, keep, refreshed bool) error {
@@ -423,19 +460,26 @@ func (p *passthroughProducer) openAttempt(ctx context.Context, src StreamSource,
 	}
 	p.ingest.seed, p.ingest.seedBase = seed, seedBase
 	p.src, p.raw, p.headers = src, raw, headers
-	id := src.ID
-	p.playing.Store(&id)
+	if refreshed && p.direct != nil {
+		p.provider.set(providerForInput(authEntry{}, src, nil))
+	}
 	return nil
 }
 
-func (p *passthroughProducer) sourceID() string {
-	if id := p.playing.Load(); id != nil {
-		return *id
+func (p *passthroughProducer) noteLoginFailure(lease *loginLease, err error) {
+	var te *TuneError
+	if lease != nil && errors.As(err, &te) &&
+		(te.UpstreamStatus == http.StatusUnauthorized || te.UpstreamStatus == http.StatusForbidden) {
+		p.s.failedLogin(lease)
 	}
-	return ""
+}
+
+func (p *passthroughProducer) servingProvider() *providerChange {
+	return steadyProvider(p.providerFeed.Load(), p.provider.current.Load())
 }
 
 func (p *passthroughProducer) run(ctx context.Context) {
+	defer func() { p.s.releaseLogin(p.login) }()
 	err := p.open(ctx, p.src, p.raw, p.headers, false)
 	if errors.Is(err, errNeedsRelay) {
 		p.tl.fail(errNeedsRelay)
@@ -470,6 +514,14 @@ func (p *passthroughProducer) run(ctx context.Context) {
 				continue
 			}
 		}
+		if p.login != nil && p.login.lost.Load() {
+			p.s.releaseLogin(p.login)
+			p.login = nil
+			if !p.failover(ctx) {
+				sleepCtx(ctx, p.roundDelay())
+			}
+			continue
+		}
 		progress, err := p.ingest.step(ctx)
 		if ctx.Err() != nil {
 			return
@@ -499,6 +551,9 @@ func (p *passthroughProducer) run(ctx context.Context) {
 		isSegErr := errors.As(err, &segErr)
 		if status, ok := expiredProviderStatus(err); ok && (!isSegErr || status == http.StatusForbidden) {
 			p.invalidateDirect(status)
+		}
+		if !isSegErr {
+			p.noteLoginFailure(p.login, err)
 		}
 		hard := !isSegErr && isHardProviderError(err) || errors.Is(err, errOriginEnded) || errors.Is(err, errMasterSource)
 		if err != nil || stale >= td/2 {

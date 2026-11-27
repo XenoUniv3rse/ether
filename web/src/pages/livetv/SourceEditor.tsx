@@ -41,7 +41,7 @@ import { useLocale } from "../../i18n/react";
 import { searchSelectLabels } from "../../i18n/appkit-labels";
 import { REGION_CODES } from "../libraries/browser/CatalogPickers";
 import { browserLanguageList, regionFromLocales, regionFromTimeZone } from "../setup/language";
-import { api, errorMessage } from "../../lib/api";
+import { api, errorMessage, uuid } from "../../lib/api";
 import { isPluginDescriptor, textOf, useRegistry, type Descriptor } from "../../lib/extend";
 import type { ParamField } from "../../lib/rules";
 import { formatBytes, formatNumber, relativeTime } from "../../lib/format";
@@ -1223,6 +1223,13 @@ export function SourceEditor({
                       {t("Remove")}
                     </Button>
                   </div>
+                  <Field label={t("Login name (optional)")}>
+                    <Input
+                      maxLength={200}
+                      value={login.label ?? ""}
+                      onChange={(e) => update({ label: e.currentTarget.value })}
+                    />
+                  </Field>
                   {xtream ? (
                     <div className="grid gap-3 sm:grid-cols-2">
                       <Field label={t("Username")}>
@@ -1267,7 +1274,7 @@ export function SourceEditor({
               onClick={() =>
                 setDraft((d) => ({
                   ...d,
-                  logins: [...(d.logins ?? []), { id: crypto.randomUUID() }],
+                  logins: [...(d.logins ?? []), { id: uuid() }],
                 }))
               }
             >
