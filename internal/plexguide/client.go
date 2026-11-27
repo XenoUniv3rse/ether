@@ -95,20 +95,21 @@ type plexGuideChannel struct {
 	VCN       string `json:"vcn"`
 }
 type plexGuideMetadata struct {
-	Type      string `json:"type"`
-	Title     string `json:"title"`
-	Show      string `json:"grandparentTitle"`
-	Summary   string `json:"summary"`
-	Thumb     string `json:"thumb"`
-	ShowThumb string `json:"grandparentThumb"`
-	Art       string `json:"art"`
-	ShowArt   string `json:"grandparentArt"`
-	GUID      string `json:"guid"`
-	ShowGUID  string `json:"grandparentGuid"`
-	Season    int    `json:"parentIndex"`
-	Episode   int    `json:"index"`
-	Date      string `json:"originallyAvailableAt"`
-	Duration  int64  `json:"duration"`
+	Type      string          `json:"type"`
+	Title     string          `json:"title"`
+	Show      string          `json:"grandparentTitle"`
+	Summary   string          `json:"summary"`
+	Thumb     string          `json:"thumb"`
+	ShowThumb string          `json:"grandparentThumb"`
+	Art       string          `json:"art"`
+	ShowArt   string          `json:"grandparentArt"`
+	GUID      string          `json:"guid"`
+	GUIDs     json.RawMessage `json:"Guid"` // absorb external-ID array so Go JSON matching doesn't collide with guid
+	ShowGUID  string          `json:"grandparentGuid"`
+	Season    int             `json:"parentIndex"`
+	Episode   int             `json:"index"`
+	Date      string          `json:"originallyAvailableAt"`
+	Duration  int64           `json:"duration"`
 	Genres    []struct {
 		Tag string `json:"tag"`
 	} `json:"Genre"`
