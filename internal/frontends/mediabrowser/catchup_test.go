@@ -88,6 +88,47 @@ func TestCatchUpViewPlayback(t *testing.T) {
 			if got := request(http.MethodDelete, "/UserPlayedItems/"+id, ""); got.Code != 200 || json.Unmarshal(got.Body.Bytes(), &data) != nil || data.Played {
 				t.Fatalf("catch-up unplayed: %d %s", got.Code, got.Body.String())
 			}
+
+			// A series: Played marks its airings, and its user data shows
+			// the roll-up (Jellyfin also counts unplayed airings).
+			series := frontend.CatchUpGroupGUID(live.Item.ShowID)
+			var group struct {
+				Played            bool
+				UnplayedItemCount *int
+			}
+			got := request(http.MethodPost, "/UserPlayedItems/"+series, "")
+			if got.Code != 200 || json.Unmarshal(got.Body.Bytes(), &group) != nil || !group.Played || live.Item.Watch.ViewCount != 1 {
+				t.Fatalf("catch-up series played: %d %s", got.Code, got.Body.String())
+			}
+			if protocol == "jellyfin" && (group.UnplayedItemCount == nil || *group.UnplayedItemCount != 0) {
+				t.Fatalf("catch-up series unplayed count: %s", got.Body.String())
+			}
+			var shows struct {
+				Items []struct {
+					ID       string `json:"Id"`
+					UserData struct {
+						Played            bool
+						UnplayedItemCount *int
+					}
+				}
+			}
+			page = request(http.MethodGet, "/Items?ParentId="+catchUpViewID(), "")
+			if json.Unmarshal(page.Body.Bytes(), &shows) != nil || len(shows.Items) != 1 || shows.Items[0].ID != series || !shows.Items[0].UserData.Played {
+				t.Fatalf("catch-up series listing: %s", page.Body.String())
+			}
+			var refreshed struct {
+				Items []struct{ UserData struct{ Played bool } }
+			}
+			page = request(http.MethodGet, "/Items?Ids="+series, "")
+			if json.Unmarshal(page.Body.Bytes(), &refreshed) != nil || len(refreshed.Items) != 1 || !refreshed.Items[0].UserData.Played {
+				t.Fatalf("catch-up series by id: %s", page.Body.String())
+			}
+			if got := request(http.MethodDelete, "/UserPlayedItems/"+series, ""); got.Code != 200 || json.Unmarshal(got.Body.Bytes(), &group) != nil || group.Played || live.Item.Watch.ViewCount != 0 {
+				t.Fatalf("catch-up series unplayed: %d %s", got.Code, got.Body.String())
+			}
+			if protocol == "jellyfin" && (group.UnplayedItemCount == nil || *group.UnplayedItemCount != 1) {
+				t.Fatalf("catch-up series unplayed count after unmarking: %v", group.UnplayedItemCount)
+			}
 		})
 	}
 }

@@ -133,7 +133,7 @@ func (h liveTVHost) CatchUpItem(ctx context.Context, u *frontend.Viewer, id stri
 			return frontend.CatchUpItem{}, core.ErrNotFound
 		}
 		item := []frontend.CatchUpItem{catchUpLibraryItem(p, frontend.TypeEpisode)}
-		if err := s.fillCatchUpWatch(ctx, u, item); err != nil {
+		if err := s.fillCatchUpWatch(ctx, u, item, nil); err != nil {
 			return frontend.CatchUpItem{}, err
 		}
 		return item[0], nil
@@ -141,7 +141,7 @@ func (h liveTVHost) CatchUpItem(ctx context.Context, u *frontend.Viewer, id stri
 	if groupKind == "" && !strings.HasPrefix(id, "catchup-show-") && !strings.HasPrefix(id, "catchup-season-") {
 		return frontend.CatchUpItem{}, core.ErrNotFound
 	}
-	page, err := h.catchUpItems(ctx, u, frontend.CatchUpQuery{Limit: 1}, id)
+	page, _, err := h.catchUpItems(ctx, u, frontend.CatchUpQuery{Limit: 1}, id)
 	if err != nil {
 		return frontend.CatchUpItem{}, err
 	}
@@ -152,11 +152,26 @@ func (h liveTVHost) CatchUpItem(ctx context.Context, u *frontend.Viewer, id stri
 }
 
 func (h liveTVHost) CatchUpItems(ctx context.Context, u *frontend.Viewer, q frontend.CatchUpQuery) (frontend.CatchUpPage, error) {
-	page, err := h.catchUpItems(ctx, u, q, "")
+	page, view, err := h.catchUpItems(ctx, u, q, "")
 	if err != nil {
 		return page, err
 	}
-	return page, h.s.fillCatchUpWatch(ctx, u, page.Items)
+	// The roll-up reads the airings of the listed shows and seasons only. A
+	// search lists only matching airings, so its counts would be partial; it
+	// gets none.
+	var members map[string][]string
+	if q.Rollup && strings.TrimSpace(q.Search) == "" {
+		var groups []string
+		for _, item := range page.Items {
+			if item.Type != frontend.TypeEpisode {
+				groups = append(groups, item.ID)
+			}
+		}
+		if members, err = h.catchUpMembers(ctx, u, view, groups); err != nil {
+			return page, err
+		}
+	}
+	return page, h.s.fillCatchUpWatch(ctx, u, page.Items, members)
 }
 
 // sortCatchUpItems reorders a newest-first listing. Equal titles keep their
@@ -184,28 +199,31 @@ func catchUpSortTitle(item frontend.CatchUpItem) string {
 	return strings.ToLower(title)
 }
 
-func (h liveTVHost) catchUpItems(ctx context.Context, u *core.User, q frontend.CatchUpQuery, exact string) (frontend.CatchUpPage, error) {
+// catchUpItems lists one page. It also returns the viewer's catch-up view it
+// read (nil when the listing had none), for a roll-up of the page.
+func (h liveTVHost) catchUpItems(ctx context.Context, u *core.User, q frontend.CatchUpQuery, exact string) (frontend.CatchUpPage, *catchUpView, error) {
 	var out frontend.CatchUpPage
 	var search string
 	if raw := strings.TrimSpace(q.Search); raw != "" {
 		if utf8.RuneCountInString(raw) > 256 {
-			return out, nil
+			return out, nil, nil
 		}
 		search = catchUpSearchKey(raw)
 		if search == "" {
-			return out, nil
+			return out, nil, nil
 		}
 	}
-	ctx, channels, err := h.s.catchUpChannels(ctx, u, false)
-	if err != nil || len(channels) == 0 {
-		return out, err
+	ctx, view, err := h.catchUpViewOf(ctx, u)
+	if err != nil || view == nil {
+		return out, nil, err
 	}
+	channels, policy, ratings, maxDays := view.channels, view.policy, view.ratings, view.maxDays
 	parent, parentKind := frontend.CatchUpGUIDGroup(q.Parent)
 	exactGUID, exactKind := frontend.CatchUpGUIDGroup(exact)
 	show := parentKind == frontend.TypeShow || strings.HasPrefix(q.Parent, "catchup-show-")
 	season := parentKind == frontend.TypeSeason || strings.HasPrefix(q.Parent, "catchup-season-")
 	if q.Parent != "" && q.Parent != frontend.CatchUpLibraryID && !show && !season {
-		return out, nil
+		return out, nil, nil
 	}
 	kind := frontend.TypeShow
 	switch {
@@ -224,21 +242,6 @@ func (h liveTVHost) catchUpItems(ctx context.Context, u *core.User, q frontend.C
 	offset := max(q.Offset, 0)
 	now := h.s.clockNow()
 	seen := map[string]bool{}
-	_, policy, err := h.s.withPolicy(ctx, u)
-	if err != nil {
-		return out, err
-	}
-	maxDays := 0
-	ratings := make(map[string]string)
-	for _, ch := range channels {
-		if ch.GuideID == "" {
-			continue
-		}
-		maxDays = max(maxDays, min(ch.ArchiveDays(), 30))
-		if u.MaxContentRating != "" || policy.MaxRating != "" {
-			ratings[ch.ID] = h.s.channelContentRating(ctx, ch, nil)
-		}
-	}
 	earliest := now.Add(-time.Duration(maxDays) * 24 * time.Hour)
 	// Each batch is a disjoint start-time interval. Process the newest
 	// interval first so small pages do not read the entire archive.
@@ -249,7 +252,7 @@ func (h liveTVHost) catchUpItems(ctx context.Context, u *core.User, q frontend.C
 		}
 		rows, err := h.s.catchUpWindow(ctx, u, policy, channels, ratings, from, until, now, search)
 		if err != nil {
-			return frontend.CatchUpPage{}, err
+			return frontend.CatchUpPage{}, nil, err
 		}
 		for _, p := range rows {
 			item := catchUpLibraryItem(p, kind)
@@ -269,7 +272,7 @@ func (h liveTVHost) catchUpItems(ctx context.Context, u *core.User, q frontend.C
 			}
 			out.Total++
 			if !sortAll && (exact != "" || kind == frontend.TypeSeason && q.Parent != "" || len(out.Items) == limit && out.Total-offset > limit) {
-				return out, nil
+				return out, view, nil
 			}
 		}
 		until = from
@@ -278,7 +281,42 @@ func (h liveTVHost) catchUpItems(ctx context.Context, u *core.User, q frontend.C
 		sortCatchUpItems(out.Items, q.Sort)
 		out.Items = paging.Slice(out.Items, offset, limit)
 	}
-	return out, nil
+	return out, view, nil
+}
+
+// catchUpView is what every catch-up read checks airings against for one
+// viewer: the archive channels they may watch, the policy, each channel's
+// content rating when a rating limit applies, and the longest archive
+// (capped at 30 days).
+type catchUpView struct {
+	channels []Channel
+	policy   Policy
+	ratings  map[string]string
+	maxDays  int
+}
+
+// catchUpViewOf reads the viewer's catch-up view; it is nil when they have no
+// archive channels.
+func (h liveTVHost) catchUpViewOf(ctx context.Context, u *core.User) (context.Context, *catchUpView, error) {
+	ctx, channels, err := h.s.catchUpChannels(ctx, u, false)
+	if err != nil || len(channels) == 0 {
+		return ctx, nil, err
+	}
+	_, policy, err := h.s.withPolicy(ctx, u)
+	if err != nil {
+		return ctx, nil, err
+	}
+	v := &catchUpView{channels: channels, policy: policy, ratings: make(map[string]string)}
+	for _, ch := range channels {
+		if ch.GuideID == "" {
+			continue
+		}
+		v.maxDays = max(v.maxDays, min(ch.ArchiveDays(), 30))
+		if u.MaxContentRating != "" || policy.MaxRating != "" {
+			v.ratings[ch.ID] = h.s.channelContentRating(ctx, ch, nil)
+		}
+	}
+	return ctx, v, nil
 }
 
 func (s *Service) catchUpWindow(ctx context.Context, u *core.User, policy Policy, channels []Channel, ratings map[string]string, from, until, now time.Time, search string) ([]Programme, error) {
@@ -310,25 +348,17 @@ func (s *Service) catchUpWindow(ctx context.Context, u *core.User, policy Policy
 		for rows.Next() {
 			var id string
 			var raw []byte
+			if err = rows.Scan(&id, &raw); err != nil {
+				break
+			}
 			var p Programme
-			if err = rows.Scan(&id, &raw); err == nil {
-				err = json.Unmarshal(raw, &p)
+			var ok bool
+			if p, ok, err = catchUpRow(byID[id], raw, now, search); ok {
+				out = append(out, p)
 			}
 			if err != nil {
 				break
 			}
-			ch := byID[id]
-			eligible, _ := frontend.ArchiveFlags(ch.ArchiveDays(), p.Start, p.End, now)
-			if !eligible || p.Item.Title == "" {
-				continue
-			}
-			if search != "" && !strings.Contains(catchUpSearchKey(p.Item.Title), search) &&
-				!strings.Contains(catchUpSearchKey(p.Item.EpisodeTitle), search) {
-				continue
-			}
-			p.ChannelID = id
-			p.ID = fmt.Sprintf("%s-%d", id, p.Start.UnixMilli())
-			out = append(out, p)
 		}
 		if err == nil {
 			err = rows.Err()
@@ -338,6 +368,33 @@ func (s *Service) catchUpWindow(ctx context.Context, u *core.User, policy Policy
 			return nil, err
 		}
 	}
+	return s.catchUpAllowed(ctx, u, policy, ratings, byID, out)
+}
+
+// catchUpRow decodes one guide row of an archive channel into its airing,
+// and reports whether it is a past airing the archive still holds (matching
+// search, when set).
+func catchUpRow(ch Channel, raw []byte, now time.Time, search string) (Programme, bool, error) {
+	var p Programme
+	if err := json.Unmarshal(raw, &p); err != nil {
+		return p, false, err
+	}
+	eligible, _ := frontend.ArchiveFlags(ch.ArchiveDays(), p.Start, p.End, now)
+	if !eligible || p.Item.Title == "" {
+		return p, false, nil
+	}
+	if search != "" && !strings.Contains(catchUpSearchKey(p.Item.Title), search) &&
+		!strings.Contains(catchUpSearchKey(p.Item.EpisodeTitle), search) {
+		return p, false, nil
+	}
+	p.ChannelID = ch.ID
+	p.ID = fmt.Sprintf("%s-%d", ch.ID, p.Start.UnixMilli())
+	return p, true, nil
+}
+
+// catchUpAllowed keeps the airings this viewer may play (byID holds their
+// channels), newest first.
+func (s *Service) catchUpAllowed(ctx context.Context, u *core.User, policy Policy, ratings map[string]string, byID map[string]Channel, out []Programme) ([]Programme, error) {
 	lookup, err := s.catchUpTitleFacts(ctx, out)
 	if err != nil {
 		return nil, err

@@ -1,6 +1,7 @@
 package silo
 
 import (
+	"errors"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -28,6 +29,7 @@ func (i *instance) catchUpPage(w http.ResponseWriter, r *http.Request, viewer *f
 		notFound(w)
 		return nil, frontend.CatchUpPage{}, false
 	}
+	_, q.Rollup = i.catchUpWatchState()
 	page, err := lib.CatchUpItems(r.Context(), viewer, q)
 	if err != nil {
 		http.Error(w, "Unavailable", 503)
@@ -59,9 +61,11 @@ func (i *instance) catchUpCard(r *http.Request, token string, item frontend.Catc
 		card["series_id"] = frontend.CatchUpGroupGUID(item.ShowID)
 		card["series_title"] = p.Item.Title
 	}
+	if data := catchUpUserData(item); data != nil {
+		card["user_data"] = data
+	}
 	if item.Type == frontend.TypeEpisode {
 		card["play_content_id"] = id
-		card["user_data"] = map[string]any{"played": false, "is_in_progress": false, "watched_count": 0, "unplayed_count": 1, "in_progress_count": 0, "duration_seconds": p.End.Sub(p.Start).Seconds()}
 	}
 	if i.host.ImageGrants != nil {
 		var grants []frontend.GrantedImage
@@ -79,6 +83,85 @@ func (i *instance) catchUpCard(r *http.Request, token string, item frontend.Catc
 	return card
 }
 
+// catchUpUserData is a catch-up card's user_data: an airing's own state, or
+// a show's or season's roll-up (none when it has no counts, as in a search).
+func catchUpUserData(item frontend.CatchUpItem) map[string]any {
+	w := item.Watch
+	if item.Type != frontend.TypeEpisode {
+		if w.Episodes == 0 {
+			return nil
+		}
+		return map[string]any{"played": w.FullyWatched(), "is_in_progress": w.InProgress > 0, "watched_count": w.Watched,
+			"unplayed_count": max(w.Episodes-w.Watched, 0), "in_progress_count": w.InProgress}
+	}
+	p := item.Programme
+	played, inProgress := w.ViewCount > 0, w.ViewOffset > 0 && w.ViewCount == 0
+	watched, unplayed, progressing := 0, 1, 0
+	if played {
+		watched, unplayed = 1, 0
+	}
+	if inProgress {
+		progressing = 1
+	}
+	data := map[string]any{"played": played, "is_in_progress": inProgress, "watched_count": watched, "unplayed_count": unplayed,
+		"in_progress_count": progressing, "duration_seconds": p.End.Sub(p.Start).Seconds()}
+	if w.ViewOffset > 0 {
+		data["position_seconds"] = w.ViewOffset.Seconds()
+	}
+	return data
+}
+
+// catchUpWatchState is the Live TV host's catch-up watch state, when Live TV
+// is on and keeps it.
+func (i *instance) catchUpWatchState() (frontend.CatchUpWatchState, bool) {
+	live := i.host.LiveTV
+	if live == nil || !live.Enabled() {
+		return nil, false
+	}
+	w, ok := live.(frontend.CatchUpWatchState)
+	return w, ok
+}
+
+// catchUpWatched marks a catch-up airing, or every airing of a catch-up show
+// or season, watched (POST) or unwatched (DELETE).
+func (i *instance) catchUpWatched(w http.ResponseWriter, r *http.Request, v *frontend.Viewer, id string) {
+	watch, ok := i.catchUpWatchState()
+	if !ok {
+		notFound(w)
+		return
+	}
+	if err := watch.CatchUpSetWatched(r.Context(), v, id, r.Method == "POST"); err != nil {
+		if errors.Is(err, frontend.ErrNotFound) {
+			notFound(w)
+			return
+		}
+		http.Error(w, "Unavailable", 503)
+		return
+	}
+	i.dropViewerSections(v.ID)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// catchUpProgress records a progress sample of a catch-up session as the
+// airing's watch state. Positions are seconds into the airing.
+func (i *instance) catchUpProgress(r *http.Request, v *frontend.Viewer, info frontend.CatchUpInfo, position *float64, paused *bool, stop bool) {
+	watch, ok := i.catchUpWatchState()
+	if !ok || info.ProgrammeID == "" || info.StartOver || position == nil || !(*position >= 0) || *position > float64((1<<63-1)/int64(time.Second)) {
+		return
+	}
+	state := "playing"
+	switch {
+	case stop:
+		state = "stopped"
+	case paused != nil && *paused:
+		state = "paused"
+	}
+	err := watch.CatchUpProgress(r.Context(), v, frontend.CatchUpEpisodeID(info.ProgrammeID), time.Duration(*position*float64(time.Second)), 0, state)
+	if err != nil && !errors.Is(err, frontend.ErrNotFound) && i.host.Log != nil {
+		i.host.Log.Warn("catch-up progress not saved", "frontend", "silo", "err", err)
+	}
+}
+
 func (i *instance) catchUpDetail(w http.ResponseWriter, r *http.Request, viewer *frontend.Viewer, token, id string) {
 	lib, ok := i.host.LiveTV.(frontend.CatchUpLibrary)
 	if !ok {
@@ -86,6 +169,9 @@ func (i *instance) catchUpDetail(w http.ResponseWriter, r *http.Request, viewer 
 		return
 	}
 	item, err := lib.CatchUpItem(r.Context(), viewer, id)
+	if watch, ok := i.catchUpWatchState(); ok && err == nil {
+		item, err = frontend.CatchUpWithRollup(r.Context(), watch, viewer, item)
+	}
 	if err != nil {
 		notFound(w)
 		return

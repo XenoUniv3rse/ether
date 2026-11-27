@@ -16,6 +16,10 @@ func (i *instance) mutation(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Unauthorized", 401)
 		return
 	}
+	if r.PathValue("kind") == "watched" && frontend.IsCatchUpGUID(r.PathValue("id")) {
+		i.catchUpWatched(w, r, v, r.PathValue("id"))
+		return
+	}
 	if i.host.Experience == nil {
 		http.Error(w, "Unavailable", 503)
 		return

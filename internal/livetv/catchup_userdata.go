@@ -31,14 +31,17 @@ func (h liveTVHost) CatchUpPatchUserData(ctx context.Context, v *frontend.Viewer
 		}
 		// The watermark includes explicit unwatch operations, which leave
 		// LastPlayedDate alone. Compare during the write to fence live reports.
+		// Go bools bind as 0/1 on both engines (store/pgdriver.go), so flags
+		// are compared as numbers: a bare boolean ? fails on PostgreSQL. Times
+		// are cast: COALESCE(?,0) alone binds as a 32-bit integer there.
 		err := catchUpExec(ctx, h.s, `INSERT INTO livetv_catchup_watch
 			(user_id,programme_id,guide_source,guide_id,start_ms,offset_ms,view_count,counted,last_viewed_ms,watch_at_ms)
-			VALUES(?,?,?,?,?,COALESCE(?,0),CASE WHEN ? AND COALESCE(?,0)=0 THEN 1 ELSE COALESCE(?,0) END,
-				CASE WHEN ? OR (NOT ? AND COALESCE(?,0)>0) THEN 1 ELSE 0 END,COALESCE(?,0),?)
+			VALUES(?,?,?,?,?,COALESCE(CAST(? AS BIGINT),0),CASE WHEN ?<>0 AND COALESCE(?,0)=0 THEN 1 ELSE COALESCE(?,0) END,
+				CASE WHEN ?<>0 OR (?=0 AND COALESCE(?,0)>0) THEN 1 ELSE 0 END,COALESCE(CAST(? AS BIGINT),0),?)
 			ON CONFLICT(user_id,programme_id) DO UPDATE SET
 				offset_ms=COALESCE(?,livetv_catchup_watch.offset_ms),
-				view_count=CASE WHEN ? AND COALESCE(?,livetv_catchup_watch.view_count)=0 THEN 1 ELSE COALESCE(?,livetv_catchup_watch.view_count) END,
-				counted=CASE WHEN ? THEN 1 WHEN ? THEN 0 WHEN ? THEN CASE WHEN ?>0 THEN 1 ELSE 0 END ELSE livetv_catchup_watch.counted END,
+				view_count=CASE WHEN ?<>0 AND COALESCE(?,livetv_catchup_watch.view_count)=0 THEN 1 ELSE COALESCE(?,livetv_catchup_watch.view_count) END,
+				counted=CASE WHEN ?<>0 THEN 1 WHEN ?<>0 THEN 0 WHEN ?<>0 THEN CASE WHEN ?>0 THEN 1 ELSE 0 END ELSE livetv_catchup_watch.counted END,
 				last_viewed_ms=COALESCE(?,livetv_catchup_watch.last_viewed_ms), watch_at_ms=excluded.watch_at_ms
 			WHERE livetv_catchup_watch.watch_at_ms<excluded.watch_at_ms AND livetv_catchup_watch.last_viewed_ms<excluded.watch_at_ms`,
 			a.user, a.programme, a.source, a.gid, a.start, offset, watched, count, count, watched, offset != nil, count, viewed, at,
@@ -73,6 +76,6 @@ func (h liveTVHost) CatchUpPatchUserData(ctx context.Context, v *frontend.Viewer
 	}
 	return catchUpExec(ctx, h.s, `INSERT INTO livetv_catchup_watch(user_id,programme_id,guide_source,guide_id,start_ms,favorite,rating)
 		VALUES(?,?,?,?,?,?,?) ON CONFLICT(user_id,programme_id) DO UPDATE SET
-		favorite=CASE WHEN ? THEN excluded.favorite ELSE livetv_catchup_watch.favorite END, rating=`+setRating,
+		favorite=CASE WHEN ?<>0 THEN excluded.favorite ELSE livetv_catchup_watch.favorite END, rating=`+setRating,
 		a.user, a.programme, a.source, a.gid, a.start, favorite, rating, patch.Favorite != nil)
 }

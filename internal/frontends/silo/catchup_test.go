@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/braedonsaunders/ether/internal/frontend"
 	"github.com/braedonsaunders/ether/internal/frontend/frontendtest"
@@ -75,5 +76,49 @@ func TestCatchUpLibraryPlayback(t *testing.T) {
 	stream := request(http.MethodGet, plan.PlaybackPlan.Stream.URL, "")
 	if stream.Code != 200 || !strings.Contains(stream.Body.String(), "segment/0.ts") || !strings.Contains(stream.Body.String(), "#EXT-X-ENDLIST") {
 		t.Fatalf("playback stream: %d", stream.Code)
+	}
+
+	// Watch state: a progress sample keeps the resume point, the episode's
+	// user_data shows it, and watched marks the airing or its series.
+	var session struct {
+		SessionID string `json:"session_id"`
+	}
+	if json.Unmarshal(start.Body.Bytes(), &session) != nil || session.SessionID == "" {
+		t.Fatal("catch-up session id")
+	}
+	sample := `{"installation_id":"` + inst.(*instance).installationID() + `","position":600,"sequence":1,"is_paused":false}`
+	if got := request(http.MethodPost, "/api/v2/playback/"+session.SessionID+"/progress", sample); got.Code != 200 || live.Item.Watch.ViewOffset != 10*time.Minute {
+		t.Fatalf("catch-up progress: %d, %v", got.Code, live.Item.Watch.ViewOffset)
+	}
+	type userData struct {
+		Items []struct {
+			ID   string `json:"content_id"`
+			Data struct {
+				Played     bool    `json:"played"`
+				InProgress bool    `json:"is_in_progress"`
+				Position   float64 `json:"position_seconds"`
+				Unplayed   int     `json:"unplayed_count"`
+			} `json:"user_data"`
+		}
+	}
+	var cards userData
+	series := frontend.CatchUpGroupGUID(live.Item.ShowID)
+	episodes = request(http.MethodGet, "/api/v2/catalog/series/"+series+"/seasons/1/episodes", "")
+	if json.Unmarshal(episodes.Body.Bytes(), &cards) != nil || len(cards.Items) != 1 || !cards.Items[0].Data.InProgress || cards.Items[0].Data.Position != 600 {
+		t.Fatalf("episode user_data: %s", episodes.Body.String())
+	}
+	episode := cards.Items[0].ID
+	if got := request(http.MethodPost, "/api/v2/watched/"+episode, ""); got.Code != http.StatusNoContent || live.Item.Watch.ViewCount != 1 {
+		t.Fatalf("mark episode watched: %d, %+v", got.Code, live.Item.Watch)
+	}
+	shows = request(http.MethodGet, "/api/v2/catalog?library_id=catchup", "")
+	if json.Unmarshal(shows.Body.Bytes(), &cards) != nil || len(cards.Items) != 1 || !cards.Items[0].Data.Played || cards.Items[0].Data.Unplayed != 0 {
+		t.Fatalf("series user_data: %s", shows.Body.String())
+	}
+	if got := request(http.MethodDelete, "/api/v2/watched/"+series, ""); got.Code != http.StatusNoContent || live.Item.Watch.ViewCount != 0 {
+		t.Fatalf("mark series unwatched: %d, %+v", got.Code, live.Item.Watch)
+	}
+	if got := request(http.MethodPost, "/api/v2/watched/"+frontend.CatchUpGroupGUID(frontend.CatchUpGroupID(frontend.TypeShow, "Weather")), ""); got.Code != http.StatusNotFound {
+		t.Fatalf("unknown series: %d", got.Code)
 	}
 }
