@@ -116,6 +116,8 @@ func addMatrixConsoleCoverage(c *Client) {
 		{Name: "fixture save viewer taste override", Method: http.MethodPut, Path: "/viewers/{consoleScratchViewer}/taste/overrides", Body: `{"overrides":[{"kind":"genre","value":"Drama","weight":1}]}`},
 		{Name: "fixture refresh viewer taste", Method: http.MethodPost, Path: "/viewers/{consoleScratchViewer}/refresh"},
 		{Name: "fixture save viewer favorites mirror", Method: http.MethodPost, Path: "/viewers/{consoleScratchViewer}/favorites-mirror", Body: `{"enabled":false}`},
+		{Name: "fixture approve viewer Quick Connect", Method: http.MethodPost, Path: "/viewers/{consoleScratchViewer}/quickconnect", Body: `{"code":"{consoleOwnerQuickCode}"}`},
+		{Name: "fixture disconnect viewer Trakt", Method: http.MethodPost, Path: "/viewers/{consoleScratchViewer}/trakt/disconnect"},
 		{Name: "fixture issue IPTV app login", Method: http.MethodPost, Path: "/viewers/{consoleScratchViewer}/apps/xtream", Body: `{}`},
 		{Name: "fixture discover IPTV grant", Path: "/users/{consoleScratchViewer}/devices", Discover: discoverMatrixConsoleAppGrant},
 		{Name: "fixture reveal IPTV login", Method: http.MethodPost, Path: "/users/{consoleScratchViewer}/devices/xtream/reveal", Body: `{"hash":"{consoleXtreamGrant}"}`},

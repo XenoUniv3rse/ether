@@ -32,6 +32,8 @@ type Viewer struct {
 	MCP                                    string
 	PluginHost, SubsonicUser, SubsonicPass string
 	MBWebCode                              string
+	ConsoleOwnerQuickCode                  string
+	ConsolePortalQuickCode                 string
 }
 
 type activeViewers struct{ db *sql.DB }

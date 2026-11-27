@@ -18,6 +18,8 @@ func matrixConsolePortalScenarios() []Step {
 		{Name: "fixture redeem portal invitation", Method: http.MethodPost, Path: "/me/invite/redeem", Body: `{"secret":"{consolePortalInvite}"}`, Discover: discoverConsoleScratchPortalToken},
 		{Name: "fixture set portal episode alerts", Method: http.MethodPost, Path: "/me/favorite-episode-alert", Headers: portal, Body: `{"enabled":false}`},
 		{Name: "fixture set portal favorites mirror", Method: http.MethodPost, Path: "/me/favorites-mirror", Headers: portal, Body: `{"enabled":true}`},
+		{Name: "fixture approve portal Quick Connect", Method: http.MethodPost, Path: "/me/quickconnect", Headers: portal, Body: `{"code":"{consolePortalQuickCode}"}`},
+		{Name: "fixture disconnect portal Trakt", Method: http.MethodPost, Path: "/me/trakt/disconnect", Headers: portal},
 		{Name: "fixture create portal IPTV grant", Method: http.MethodPost, Path: "/me/apps/xtream", Headers: portal, Body: `{}`},
 		{Name: "fixture discover portal IPTV grant", Path: "/me/devices", Headers: portal, Discover: discoverMatrixConsoleAppGrant},
 		{Name: "fixture revoke portal IPTV grant", Method: http.MethodPost, Path: "/me/devices/revoke", Headers: portal, Body: `{"hash":"{consoleXtreamGrant}"}`},

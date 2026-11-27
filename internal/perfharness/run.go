@@ -151,7 +151,8 @@ func (r *Runner) session(v Viewer, c Client) *session {
 			"username": v.Username, "password": Password, "stremio": queryEscape(v.Stremio),
 			"ownerToken": r.owner.PlexToken, "viewerId": strconv.FormatInt(v.ID, 10),
 			"xtreamUser": frontend.XtreamUsername(v.Xtream), "xtreamPass": url.QueryEscape(v.Xtream), "mcp": v.MCP,
-			"mbWebCode":    v.MBWebCode,
+			"mbWebCode":             v.MBWebCode,
+			"consoleOwnerQuickCode": v.ConsoleOwnerQuickCode, "consolePortalQuickCode": v.ConsolePortalQuickCode,
 			"subsonicUser": url.QueryEscape(v.SubsonicUser), "subsonicPass": url.QueryEscape(v.SubsonicPass),
 		}}
 		r.sessions[key] = s

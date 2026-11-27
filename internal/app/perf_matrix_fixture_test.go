@@ -14,9 +14,28 @@ import (
 	"github.com/braedonsaunders/ether/internal/config"
 	"github.com/braedonsaunders/ether/internal/core"
 	"github.com/braedonsaunders/ether/internal/frontends/vela"
+	"github.com/braedonsaunders/ether/internal/identity"
 	"github.com/braedonsaunders/ether/internal/livetv"
+	"github.com/braedonsaunders/ether/internal/perfharness"
 	"github.com/braedonsaunders/ether/internal/personalize"
 )
+
+func seedPerfMatrixConsoleQuickConnect(ctx context.Context, a *App, owner *perfharness.Viewer) error {
+	quick, err := identity.NewQuickConnect(a.db, 10*time.Minute, time.Hour, nil)
+	if err != nil {
+		return err
+	}
+	owner.ConsoleOwnerQuickCode, _, err = quick.Initiate(ctx, "jellyfin", core.Device{
+		ID: "matrix-owner-tv", Client: "Jellyfin Android TV", DeviceName: "Matrix living room",
+	})
+	if err != nil {
+		return err
+	}
+	owner.ConsolePortalQuickCode, _, err = quick.Initiate(ctx, "vela", core.Device{
+		ID: "matrix-portal-tv", Client: "Vela", DeviceName: "Matrix bedroom",
+	})
+	return err
+}
 
 // Give viewers without a generated household playlist a real item and queue
 // to open while leaving their watch history and personalization cold.

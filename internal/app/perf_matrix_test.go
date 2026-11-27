@@ -409,6 +409,11 @@ func runPerfMatrixCase(t *testing.T, ctx context.Context, fixture string, c perf
 			t.Fatal("Jellyfin web code fixture:", err)
 		}
 	}
+	if len(clients) == 0 || slices.Contains(clients, "console") {
+		if err := seedPerfMatrixConsoleQuickConnect(ctx, a, &viewers[0]); err != nil {
+			t.Fatal("Console Quick Connect fixture:", err)
+		}
+	}
 	if c.live {
 		if len(clients) == 0 || slices.Contains(clients, "plex-appletv") {
 			if err := a.livetv.SaveOwnerGroups(ctx, []livetv.OwnerGroup{{

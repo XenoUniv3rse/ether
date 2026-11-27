@@ -205,6 +205,8 @@ func matrixRouteExceptions() map[perfharness.MatrixRouteKey]string {
 	add("console", http.MethodPost, "requires a configured Trakt account and device sign-in",
 		"/ether/api/me/trakt/device", "/ether/api/me/trakt/poll",
 		"/ether/api/viewers/{id}/trakt/device", "/ether/api/viewers/{id}/trakt/poll")
+	add("console", http.MethodPost, "creates an interactive Plex sign-in PIN through plex.tv",
+		"/ether/api/me/pin")
 	add("console", http.MethodPost, "requires an external MDBList account and watchlist",
 		"/ether/api/mdblist/{user}/connect", "/ether/api/mdblist/{user}/sync")
 	add("console", http.MethodPost, "needs a configured external Plex account and media library",
