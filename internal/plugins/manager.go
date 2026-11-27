@@ -727,6 +727,12 @@ func DeadlineFor(path string) time.Duration {
 	return wasm.DeadlineFor(path)
 }
 
+// RedactDiagnostic removes stored plugin credentials from diagnostic text before
+// it leaves the plugin subsystem.
+func (m *Manager) RedactDiagnostic(ctx context.Context, pluginID, text string) string {
+	return m.store.redactKnown(ctx, pluginID, text)
+}
+
 // callOnce makes one call to a plugin through its runtime, records it in the
 // inspector ring (secrets redacted) and feeds failures into health.
 // Adapters (WS9) call plugins only through here.
