@@ -225,6 +225,32 @@ func matrixRouteExceptions() map[perfharness.MatrixRouteKey]string {
 		"/ether/api/notifications/{id}/test", "/ether/api/notifications/heartbeat/test")
 	add("console", http.MethodPost, "restarts the test process or only runs during initial setup",
 		"/ether/api/server/restart/{$}", "/ether/api/setup/complete")
+	add("console", http.MethodPost, "requires a real video clip and working ffprobe or encoder",
+		"/ether/api/admin/prerolls/{id}/video", "/ether/api/onair/reels/{id}/clips", "/ether/api/onair/assets/{id}/trim")
+	add("console", http.MethodPost, "requires a configured content downloader and a resolvable source asset",
+		"/ether/api/onair/assets/import", "/ether/api/onair/reels/{id}/clips/import", "/ether/api/onair/reels/{id}/clips/{clip}/resolve")
+	add("console", http.MethodPut, "requires a clip already uploaded to the scratch reel", "/ether/api/onair/reels/{id}/clips/{clip}")
+	add("console", http.MethodDelete, "requires a clip already uploaded to the scratch reel", "/ether/api/onair/reels/{id}/clips/{clip}")
+	add("console", http.MethodPost, "requires a resolvable plugin live stream or active playback session",
+		"/ether/api/libraries/{id}/live/play", "/ether/api/stats/sessions/{id}/stop")
+	add("console", http.MethodDelete, "requires a live session with a working source",
+		"/ether/api/libraries/{id}/live/sessions/{session}")
+	add("console", http.MethodPost, "requires a second registered cluster node to receive the control action",
+		"/ether/api/cluster/nodes/{id}/control")
+	add("console", http.MethodPost, "requires a reachable Prowlarr instance and its credentials",
+		"/ether/api/playback/prowlarr", "/ether/api/playback/prowlarr/tags")
+	add("console", http.MethodPost, "requires a linked upstream Plex server and a Plex account or history source",
+		"/ether/api/viewers/{id}/plex-watch/import", "/ether/api/viewers/{id}/plex-watch/export", "/ether/api/viewers/{id}/plex-watch/retry")
+	add("console", http.MethodPut, "requires a confirmed upstream Plex library association",
+		"/ether/api/plex-servers/{id}/accounts/{account}", "/ether/api/plex-servers/{id}/step-aside")
+	add("console", http.MethodPut, "requires a verified source match from an external metadata provider",
+		"/ether/api/catalog/title/{key}/match")
+	add("console", http.MethodPost, "requires a staged restore archive or snapshot made from a separate source instance",
+		"/ether/api/adoption/backups/restore", "/ether/api/adoption/backups/restore/snapshot/{name}")
+	add("console", http.MethodDelete, "requires a report or staged archive from a completed restore-plan request",
+		"/ether/api/adoption/backups/restore/report", "/ether/api/adoption/backups/restore/staged/{id}")
+	add("console", http.MethodPost, "checks the release service, which is unavailable to the offline fixture",
+		"/ether/api/updates/check", "/ether/api/vela/check")
 	add("console", "*", "trailing-slash alias for the measured console event stream", "/ether/api/stream/")
 	add("console", http.MethodGet, "requires a staged vault import from an owner media directory", "/ether/api/cache/vault/import/{id}")
 	add("console", http.MethodGet, "requires a configured media source and uploaded preroll file",

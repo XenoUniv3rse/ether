@@ -40,8 +40,9 @@ func matrixOnAirImage(color string) Step {
 	file, _ := form.CreateFormFile("file", "matrix.svg")
 	_, _ = io.WriteString(file, `<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48"><rect width="48" height="48" fill="`+color+`"/></svg>`)
 	_ = form.Close()
+	contentType := form.FormDataContentType()
 	return Step{Method: http.MethodPost, Body: buf.String(), Headers: func(h http.Header, _ map[string]string) {
-		h.Set("Content-Type", form.FormDataContentType())
+		h.Set("Content-Type", contentType)
 	}}
 }
 
