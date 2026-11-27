@@ -335,7 +335,7 @@ func (s *Server) writeCatchUpQueue(w http.ResponseWriter, r *http.Request, pq pl
 	md.PlayQueueItemID = pq.Items[0].ID
 	s.write(w, r, &model.MediaContainer{Size: 1, Identifier: model.LibraryIdentifier, Metadata: []model.Metadata{md},
 		Extra: []model.Attr{model.A("playQueueID", pq.ID), model.A("playQueueSelectedItemID", pq.Items[0].ID),
-			model.A("playQueueSelectedItemOffset", 0), model.A("playQueueShuffled", false), model.A("playQueueSourceURI", pq.SourceURI),
+			model.A("playQueueSelectedItemOffset", 0), model.A("playQueueSelectedMetadataItemID", item.ID), model.A("playQueueShuffled", false), model.A("playQueueSourceURI", pq.SourceURI),
 			model.A("playQueueTotalCount", 1), model.A("playQueueVersion", pq.Version)}})
 }
 
