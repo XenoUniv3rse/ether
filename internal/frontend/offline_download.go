@@ -13,6 +13,7 @@ type OfflineDownloadSource struct {
 	io.Closer
 	Release, Name, MIME, ETag string
 	Size                      int64
+	Media                     MediaInfo // Probe facts from the original bytes served by ReaderAt.
 }
 
 type OfflineDownloadSources interface {
