@@ -81,6 +81,8 @@ function outcome(status: string): string {
       return t("The NZB vault is empty. Play a Usenet title and try again.");
     case "no_readable_nzb":
       return t("Ether could not read a recent NZB from the vault.");
+    case "sample_missing":
+      return t("This provider is missing too many articles from the test releases.");
     case "no_recent_file":
       return t("Play a cached file on this debrid account and try again.");
     case "paused":
@@ -164,11 +166,13 @@ export function ProviderSpeedReport({
                     typical: formatBitrate(typical * 1e6),
                   })}
                 </p>
-                <p className="text-fg-muted">
-                  {kind === "usenet"
-                    ? t("Add connections, or try a faster or backfill provider.")
-                    : t("Try a faster provider.")}
-                </p>
+                {!result.refused && (
+                  <p className="text-fg-muted">
+                    {kind === "usenet"
+                      ? t("Add connections, or try a faster or backfill provider.")
+                      : t("Try a faster provider.")}
+                  </p>
+                )}
               </>
             )}
           </div>
@@ -188,14 +192,11 @@ export function ProviderSpeedReport({
                   opened: fixed(result.opened ?? 0, 0),
                   refused: fixed(result.refused ?? 0, 0),
                 })}
-                {kind === "usenet" && (
-                  <>
-                    {" · "}
-                    {t("Article misses: {count}", { count: fixed(result.misses ?? 0, 0) })}
-                  </>
-                )}
               </p>
-              {result.spareOnly && measured && (
+              {kind === "usenet" && (
+                <p>{t("Article misses: {count}", { count: fixed(result.misses ?? 0, 0) })}</p>
+              )}
+              {result.spareOnly && result.status !== "busy" && (
                 <p>
                   {playing > 0
                     ? t(

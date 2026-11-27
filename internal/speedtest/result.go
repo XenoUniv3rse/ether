@@ -25,7 +25,12 @@ type Result struct {
 }
 
 func (r *Result) Measure(start time.Time) {
-	r.Seconds = time.Since(start).Seconds()
+	r.MeasureTransfer(time.Since(start))
+}
+
+// MeasureTransfer records a rate over the supplied transfer interval.
+func (r *Result) MeasureTransfer(elapsed time.Duration) {
+	r.Seconds = elapsed.Seconds()
 	if r.Bytes <= 0 || r.Connections <= 0 || r.Seconds <= 0 {
 		return
 	}
@@ -46,7 +51,7 @@ type Observation struct {
 // ValidStatus restricts wire results to application-defined outcomes.
 func (r Result) ValidStatus() bool {
 	switch r.Status {
-	case "ok", "unavailable", "paused", "busy", "empty_vault", "no_readable_nzb", "no_recent_file", "already_running":
+	case "ok", "unavailable", "paused", "busy", "empty_vault", "no_readable_nzb", "sample_missing", "no_recent_file", "already_running":
 		return true
 	}
 	return false

@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"slices"
 	"time"
 
 	"github.com/braedonsaunders/ether/internal/core"
+	"github.com/braedonsaunders/ether/internal/nzb"
 	"github.com/braedonsaunders/ether/internal/speedtest"
 	"github.com/braedonsaunders/ether/internal/store"
 	"github.com/braedonsaunders/ether/internal/vault"
@@ -110,16 +112,49 @@ func (a *App) testUsenetSpeed(ctx context.Context, id string, active bool) speed
 		r.Status = "empty_vault"
 		return r
 	}
+	type sample struct {
+		doc    *nzb.NZB
+		posted time.Time
+	}
+	var samples []sample
 	for _, key := range keys {
-		record, err := a.vault.Get(prep, key)
-		if err == nil && record.NZB != nil {
-			cancel()
-			return a.fetcher.SpeedTest(ctx, id, record.NZB, active)
+		if prep.Err() != nil {
+			break
 		}
+		record, err := a.vault.Get(prep, key)
+		if err != nil || record.NZB == nil {
+			continue
+		}
+		var posted time.Time
+		for _, file := range record.NZB.Files {
+			if file != nil && file.Date.After(posted) {
+				posted = file.Date
+			}
+		}
+		samples = append(samples, sample{record.NZB, posted})
 	}
 	cancel()
-	r.Status = "no_readable_nzb"
-	return r
+	if len(samples) == 0 {
+		r.Status = "no_readable_nzb"
+		return r
+	}
+	// Prefer older posts within the bounded vault sample, with undated
+	// releases last. Availability is always checked against this provider.
+	slices.SortStableFunc(samples, func(left, right sample) int {
+		switch {
+		case left.posted.IsZero() && !right.posted.IsZero():
+			return 1
+		case right.posted.IsZero() && !left.posted.IsZero():
+			return -1
+		default:
+			return left.posted.Compare(right.posted)
+		}
+	})
+	docs := make([]*nzb.NZB, 0, len(samples))
+	for _, sample := range samples {
+		docs = append(docs, sample.doc)
+	}
+	return a.fetcher.SpeedTest(ctx, id, docs, active)
 }
 
 func (a *App) saveSpeedResult(ctx context.Context, kind, id string, r speedtest.Result) {
