@@ -31,6 +31,7 @@ export function installMockBackend(): void {
     liveTVEmpty: params.get("livetv") === "empty",
     onAirLayout: params.get("onair") ?? undefined,
     householdAudio: true,
+    liveProviderDemo: params.get("sessions") === "live",
     remoteBudgetDemo: params.get("sessions") !== "single",
     cluster,
     startup: params.get("startup") ?? undefined,

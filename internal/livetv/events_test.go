@@ -238,13 +238,17 @@ func TestLiveTVEmitsAllEvents(t *testing.T) {
 		t.Fatalf("unexpected source failover: %+v", foP)
 	}
 
-	// 9. livetv.provider.limit_reached via reserveBroadcastProvider.
-	rel1, err := s.reserveBroadcastProvider("prov_1", ch.ID, "b1", 1)
+	// 9. livetv.provider.limit_reached via viewer admission.
+	rel1, err := s.holdProviderInput("prov_1", "b1", 1)
 	if err != nil {
 		t.Fatalf("first reservation failed: %v", err)
 	}
 	defer rel1()
-	if _, err := s.reserveBroadcastProvider("prov_1", "ch_other", "b2", 1); !errors.Is(err, ErrProviderBusy) {
+	s.setSourceEntry("prov_1", authEntry{limit: 1, at: time.Now()})
+	if err := s.withProviderCapacity(ctx, Channel{ID: "ch_other", SourceID: "prov_1"}, StreamSource{}, func(context.Context) error {
+		_, err := s.holdProviderInput("prov_1", "b2", 1)
+		return err
+	}); !errors.Is(err, ErrProviderBusy) {
 		t.Fatalf("expected ErrProviderBusy, got %v", err)
 	}
 	evLim := rec.WaitFor(t, events.EventLiveTVProviderLimitReached, time.Second)

@@ -30,7 +30,7 @@ func localFileIdentity(f *os.File) (any, bool) {
 	if err != nil || !current.Mode().IsRegular() || !os.SameFile(opened, current) || opened.Size() != current.Size() || !opened.ModTime().Equal(current.ModTime()) {
 		return nil, false
 	}
-	dev, ino, ok := platformFileIdentity(f, opened)
+	dev, ino, ok := OpenFileID(f, opened)
 	if !ok {
 		return nil, false
 	}
@@ -38,6 +38,12 @@ func localFileIdentity(f *os.File) (any, bool) {
 		Device, Inode uint64
 		Size, MtimeNS int64
 	}{dev, ino, opened.Size(), opened.ModTime().UnixNano()}, true
+}
+
+// OpenFileID returns the device and inode (or Windows volume and file index) of
+// an open file. info must be the result of Stat on that file.
+func OpenFileID(f *os.File, info os.FileInfo) (device, inode uint64, ok bool) {
+	return platformFileIdentity(f, info)
 }
 
 // SourceRevision identifies a release/file without exposing its name or

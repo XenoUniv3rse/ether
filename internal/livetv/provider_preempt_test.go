@@ -26,11 +26,14 @@ func TestIdleBroadcastProviderPreemption(t *testing.T) {
 					src := Source{ID: "provider", LoginPool: true, PlaylistURL: "https://provider.example/list", Account: &ProviderAccount{Status: "Active", MaxConnections: limit}}
 					s.setSourceEntry(src.ID, authEntry{pool: &src, at: time.Now()})
 					reserve := func(id string) (func(), error) {
-						if capacity == "source" {
-							return s.reserveBroadcastProvider(src.ID, id, id, limit)
-						}
 						var release func()
-						if capacity == "login" {
+						if capacity == "source" {
+							var err error
+							release, err = s.holdProviderInput(src.ID, id, limit)
+							if err != nil {
+								return nil, err
+							}
+						} else if capacity == "login" {
 							lease, err := s.leaseLogin(ctx, src.ID, "https://provider.example/"+id, http.Header{})
 							if err != nil {
 								return nil, err
@@ -43,7 +46,7 @@ func TestIdleBroadcastProviderPreemption(t *testing.T) {
 							}
 							release = func() { s.inputRelay.taps.release(g) }
 						}
-						provider, err := s.reserveBroadcastProvider(src.ID, id, id, 0)
+						provider, err := s.trackBroadcastProvider(src.ID, id, id)
 						if err != nil {
 							release()
 							return nil, err
@@ -79,7 +82,7 @@ func TestIdleBroadcastProviderPreemption(t *testing.T) {
 					}
 					attempts := 0
 					var acquired func()
-					err = s.withProviderCapacity(ctx, Channel{ID: "new", SourceID: src.ID}, StreamSource{}, func() error {
+					err = s.withProviderCapacity(ctx, Channel{ID: "new", SourceID: src.ID}, StreamSource{}, func(context.Context) error {
 						attempts++
 						var err error
 						acquired, err = reserve("new")

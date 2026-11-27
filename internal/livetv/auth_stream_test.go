@@ -48,11 +48,15 @@ func TestProviderAuthReachesProbeKeyMediaButNotAnonymousBackup(t *testing.T) {
 		if r.Header.Get("X-Plex-Token") != "" {
 			t.Error("viewer token forwarded to IPTV provider")
 		}
-		if r.URL.Path == "/backup.m3u8" {
+		if r.URL.Path == "/backup.m3u8" || r.URL.Path == "/backup.ts" {
 			if r.Header.Get("Authorization") != "" {
 				t.Error("anonymous backup inherited primary credentials")
 			}
-			fmt.Fprint(w, "#EXTM3U\n#EXTINF:4,\nbackup.ts\n")
+			if r.URL.Path == "/backup.m3u8" {
+				fmt.Fprint(w, "#EXTM3U\n#EXTINF:4,\nbackup.ts\n")
+			} else {
+				fmt.Fprint(w, "anonymous media fixture")
+			}
 			return
 		}
 		if r.Header.Get("Authorization") != "Bearer fixture-secret" {
@@ -119,6 +123,11 @@ func TestProviderAuthReachesProbeKeyMediaButNotAnonymousBackup(t *testing.T) {
 	second, err := s.Tune(context.Background(), u, c.ID, core.ClientCaps{})
 	if err != nil || second.ActiveSourceID != "anonymous" {
 		t.Fatalf("anonymous backup could not be tuned: %v", err)
+	}
+	backup := httptest.NewRecorder()
+	s.ServeRelaySegment(backup, req, second.ID, 0, u)
+	if backup.Code != 200 || backup.Body.String() != "anonymous media fixture" {
+		t.Fatalf("anonymous backup media unavailable: %d", backup.Code)
 	}
 	s.Stop(context.Background(), second.ID, u)
 }

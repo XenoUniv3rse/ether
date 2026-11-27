@@ -477,6 +477,28 @@
                       "type": "string"
                     },
                     "type": "array"
+                  },
+                  "uploadPaths": {
+                    "description": "Adapter subpath globs that accept uploads streamed to disk. The smallest matching maxBytes applies to the entire wire body.",
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "path": {
+                          "maxLength": 256,
+                          "pattern": "^/",
+                          "type": "string"
+                        },
+                        "maxBytes": {
+                          "maximum": 536870912,
+                          "minimum": 1,
+                          "type": "integer"
+                        }
+                      },
+                      "required": ["path", "maxBytes"],
+                      "type": "object"
+                    },
+                    "maxItems": 16,
+                    "type": "array"
                   }
                 },
                 "type": "object"
@@ -2083,6 +2105,13 @@
                 "search+check",
                 "acquire",
                 "acquire+check"
+              ]
+            },
+            "storage": {
+              "description": "Keep up to 1 GiB of durable blobs per plugin. Durable blobs are removed by cache.delete or plugin uninstall.",
+              "enum": [
+                "none",
+                "durable"
               ]
             },
             "viewers": {

@@ -25,6 +25,7 @@ var ErrInvalidCatchUpRange = frontend.ErrInvalidCatchUpRange
 func archiveUnavailable() error { return &CatchUpError{Code: "catchup_unavailable"} }
 
 type catchUpSession struct {
+	provider     *providerChange
 	previous     []*catchUpSession
 	retryAt      time.Time
 	inputMu      sync.Mutex
@@ -207,13 +208,13 @@ func (s *Service) StartCatchUp(ctx context.Context, u *core.User, req CatchUpReq
 	ss.ctx, ss.cancel = context.WithCancel(s.serviceContext())
 	s.sessions[info.ID] = ss
 	s.mu.Unlock()
-	s.notifySessionsChanged()
 	started := false
 	defer func() {
 		if !started {
 			_ = s.Stop(ctx, info.ID, u)
 		}
 	}()
+	s.notifySessionsChanged()
 	if limiter, ok := s.o.Playback.(channelLimiter); ok {
 		if err := limiter.BeginChannel(u, caps, info.ID); err != nil {
 			return CatchUpInfo{}, err
@@ -239,25 +240,21 @@ func (s *Service) StartCatchUp(ctx context.Context, u *core.User, req CatchUpReq
 	}
 	ss.catchUp, ss.ready = opened, true
 	ss.mu.Unlock()
-	started = true
 	if !handover {
 		s.finishHandover(previous, info.ID)
 	}
+	started = true
 	return opened.info, nil
 }
 
 type catchUpInput struct {
-	stage           *session
-	url             string
-	trim            time.Duration
-	releaseProvider func()
+	stage *session
+	url   string
+	trim  time.Duration
 }
 
 func (input *catchUpInput) release(s *Service) {
 	s.revokeInput(input.stage)
-	if input.releaseProvider != nil {
-		input.releaseProvider()
-	}
 }
 
 // openCatchUpInput prepares a single range for the probe and the encoder to
@@ -298,23 +295,14 @@ func (s *Service) openCatchUpInput(ctx context.Context, ss *session, info CatchU
 			opened.release(s)
 		}
 	}()
-	if err := s.grantDirectInput(stage, src, headers); err != nil {
+	if err := s.withProviderCapacity(ctx, c, src, func(admitCtx context.Context) error {
+		return s.grantInputForContext(admitCtx, stage, src, headers, true, s.latencyPolicy().TargetLatency())
+	}); err != nil {
 		return nil, s.catchUpSourceError(ctx, c.SourceID, err)
 	}
 	prefix, _, err := s.sniffInput(ctx, stage, 7)
 	if err != nil || len(prefix) == 0 {
 		return nil, s.catchUpSourceError(ctx, c.SourceID, err)
-	}
-	if strings.HasPrefix(string(prefix), "#EXTM3U") && c.SourceID != "" {
-		s.inputRelay.mu.Lock()
-		g := s.inputRelay.bySess[stage]
-		s.inputRelay.mu.Unlock()
-		if g != nil && g.login == nil {
-			opened.releaseProvider, err = s.inputRelay.taps.reserve(c.SourceID, s.sourceConnectionLimit(c.SourceID), false)
-			if err != nil {
-				return nil, s.catchUpSourceError(ctx, c.SourceID, err)
-			}
-		}
 	}
 	opened.url, err = s.relayInput(stage)
 	if err != nil {
@@ -355,6 +343,9 @@ func (s *Service) openCatchUp(ctx context.Context, ss *session, info CatchUpInfo
 		return nil, err
 	}
 	opened := &catchUpSession{info: info, input: input}
+	if g := s.sessionGrant(input.stage); g != nil {
+		opened.provider = &providerChange{active: g.provider}
+	}
 	ready := false
 	defer func() {
 		if !ready {

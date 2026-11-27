@@ -47,6 +47,9 @@ export type Play = {
   channelId?: string;
   channelName?: string;
   channelNumber?: string;
+  liveSourceName?: string;
+  liveLoginLabel?: string;
+  liveLoginNumber?: number;
   device: string;
   platform: string;
   decision: string;

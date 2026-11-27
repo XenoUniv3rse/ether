@@ -31,6 +31,7 @@ import threading
 import urllib.error
 import urllib.parse
 import urllib.request
+import zlib
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, TypedDict, Union
 
@@ -67,6 +68,72 @@ ALLOWED_SETTING_KINDS = frozenset(
 
 _BANNED_COPY_RE = re.compile(r"\b(simply|easily|just)\b", re.IGNORECASE)
 _INTERP_RE = re.compile(r"\{([A-Za-z0-9_]+)\}")
+
+
+# Wire types for hosted folder results. Python sidecars cannot invoke these
+# host operations, but can consume their results in plugin data or fixtures.
+class _FolderEntryRequired(TypedDict):
+    name: str
+    path: str
+    dir: bool
+
+
+class FolderEntry(_FolderEntryRequired, total=False):
+    size: int
+    mtime: int
+
+
+class FolderListOptions(TypedDict, total=False):
+    cursor: str
+    limit: int
+
+
+class FolderPage(TypedDict):
+    entries: List[FolderEntry]
+    nextCursor: str
+    truncated: bool
+
+
+class FolderHashOptions(TypedDict, total=False):
+    algorithms: List[Literal["crc32", "md5", "sha1", "oshash", "phash"]]
+
+
+class _FolderHashMetadata(TypedDict):
+    size: int
+    modTime: int
+
+
+class FolderHash(_FolderHashMetadata, total=False):
+    crc32: str
+    md5: str
+    sha1: str
+    oshash: str
+    phash: str
+
+
+class _FolderHashJobStatus(TypedDict):
+    id: str
+    state: Literal["running", "done", "canceled", "error"]
+    bytes: int
+
+
+class FolderHashJob(_FolderHashJobStatus, total=False):
+    result: FolderHash
+    error: str
+
+
+class _FolderFrameRequest(TypedDict):
+    atSec: float
+    width: int
+
+
+class FolderFrameOptions(_FolderFrameRequest, total=False):
+    libraryKey: str
+
+
+class FolderFrame(TypedDict):
+    ref: str
+    libraryKey: str
 
 
 class PluginHttpError(Exception):
@@ -1230,7 +1297,16 @@ class RemoteHostClient:
             with urllib.request.urlopen(req, timeout=30) as resp:
                 return resp.read()
 
-        def put(self, library_key: str, name: str, data: bytes) -> str:
+        def put(
+            self, library_key: str, name: str, data: Optional[bytes],
+            options: Optional["CachePutOptions"] = None,
+        ) -> str:
+            if options is not None or data is None:
+                payload = None if data is None else {"bodyBase64": base64.b64encode(data).decode("ascii")}
+                result = self._p._call_json(
+                    "POST", "/ether/plugin-host/data/cache.put", [library_key, name, payload, options]
+                )
+                return str((result or {}).get("blob") or "")
             q = urllib.parse.urlencode({"name": name})
             raw = self._request("POST", f"/ether/plugin-host/cache/{urllib.parse.quote(library_key)}?{q}", data)
             return str(json.loads(raw or b"{}").get("blob") or "")
@@ -1242,6 +1318,14 @@ class RemoteHostClient:
             norm = _check_data_range(data_range)
             res = self._p._call_json("POST", "/ether/plugin-host/data/cache.read", [str(blob_ref), norm])
             return base64.b64decode((res or {}).get("bodyBase64") or "")
+
+        def stat(self, blob_ref: str) -> "CacheStatResult":
+            """Return size and digests for an owned blob."""
+            token = self._p.viewer_token
+            return self._p._call_json(
+                "POST", "/ether/plugin-host/data/cache.stat", [str(blob_ref)],
+                extra_headers={HEADER_VIEWER_TOKEN: token} if token else None,
+            )
 
         def rasterize(
             self,
@@ -1364,6 +1448,7 @@ class PluginContext:
     query: Dict[str, str]
     ether: Any
     i18n: I18nHelper
+    upload: Optional["FrontendUpload"] = None
 
     @property
     def pickToken(self) -> Optional[str]:
@@ -2230,10 +2315,23 @@ class PluginInstance:
             req_body = req.get("body")
             if req_body is None and isinstance(req.get("bodyBase64"), str):
                 req_body = base64.b64decode(req["bodyBase64"])
+            headers = dict(req.get("headers") or {})
+            upload = req.get("upload")
+            if _get_header(headers, "X-Ether-Frontend-Upload") == "1":
+                try:
+                    upload = _parse_json_body(req_body)
+                except (ValueError, UnicodeError):
+                    return _error_response(400, "invalid_upload", "Invalid frontend upload metadata.")
+            if upload is not None:
+                ctx.upload = upload
+                req_body = b""
+                headers = {k: v for k, v in headers.items() if k.lower() not in ("content-type", "x-ether-frontend-upload")}
+                if upload.get("contentType"):
+                    headers["Content-Type"] = upload["contentType"]
             if accepts_ctx:
-                status, headers, resp_body = handle_fn(method, sub_path, dict(req.get("headers") or {}), req_body or b"", ctx)
+                status, headers, resp_body = handle_fn(method, sub_path, headers, req_body or b"", ctx)
             else:
-                status, headers, resp_body = handle_fn(method, sub_path, dict(req.get("headers") or {}), req_body or b"")
+                status, headers, resp_body = handle_fn(method, sub_path, headers, req_body or b"")
             # A HEAD reply carries headers only, exactly as a real server would.
             if method == "HEAD":
                 resp_body = b""
@@ -3292,6 +3390,16 @@ class MockHostClient:
             raw = self._p.blobs[blob_ref]
             return raw[norm["offset"] : norm["offset"] + norm["length"]]
 
+        def stat(self, blob_ref: str) -> "CacheStatResult":
+            raw = self.open(blob_ref)
+            return {
+                "size": len(raw),
+                "sha256": hashlib.sha256(raw).hexdigest(),
+                "sha1": hashlib.sha1(raw).hexdigest(),
+                "md5": hashlib.md5(raw).hexdigest(),
+                "crc32": f"{zlib.crc32(raw):08x}",
+            }
+
         def rasterize(
             self,
             library_key: str,
@@ -3383,7 +3491,6 @@ class MockHostClient:
         ) -> ArchiveExtractResult:
             import io
             import zipfile
-            import zlib
 
             with zipfile.ZipFile(io.BytesIO(self._p.blobs[blob_ref])) as zf:
                 infos = zf.infolist()
@@ -4391,6 +4498,38 @@ class KindLiveProvider:
         raise NotImplementedError
 
 
+class FrontendUploadPath(TypedDict):
+    path: str
+    maxBytes: int
+
+
+class CacheStatResult(TypedDict):
+    size: int
+    sha256: str
+    sha1: str
+    md5: str
+    crc32: str
+
+
+class FrontendUploadBlob(CacheStatResult, total=False):
+    ref: str
+    contentType: str
+    field: str
+    filename: str
+
+
+class FrontendUpload(TypedDict, total=False):
+    contentType: str
+    blob: FrontendUploadBlob
+    files: List[FrontendUploadBlob]
+    fields: Dict[str, List[str]]
+
+
+class CachePutOptions(TypedDict, total=False):
+    durable: bool
+    fromBlob: str
+
+
 class FrontendAdapterMeta(TypedDict, total=False):
     """One ``contributes.frontendAdapters[]`` manifest entry."""
 
@@ -4403,6 +4542,7 @@ class FrontendAdapterMeta(TypedDict, total=False):
     auth: Literal["ether_token", "basic", "none_lan", "query_credentials"]
     libraries: List[str]
     searchPaths: List[str]
+    uploadPaths: List[FrontendUploadPath]
     # Path to an SVG or PNG inside the package, shown as the adapter's mark
     # on the Apps page. Without one the plugin's icon stands in.
     icon: str

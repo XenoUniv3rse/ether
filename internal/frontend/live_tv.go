@@ -189,13 +189,16 @@ type LiveTVProgramme struct {
 
 // LiveTVSessionInfo is the frontend boundary representation of an active Live TV tune session.
 type LiveTVSessionInfo struct {
-	ID             string
-	SubscriptionID int64
-	ActivityID     string
-	MediaInfo      *MediaInfo
-	Channel        LiveTVChannel
-	Programme      *LiveTVProgramme
-	StartedAt      time.Time
+	ActiveSourceID   string                     `json:"activeSourceId,omitempty"`
+	Provider         *core.LiveProvider         `json:"provider,omitempty"`
+	PreviousProvider *core.LiveProviderIdentity `json:"previousProvider,omitempty"`
+	ID               string
+	SubscriptionID   int64
+	ActivityID       string
+	MediaInfo        *MediaInfo
+	Channel          LiveTVChannel
+	Programme        *LiveTVProgramme
+	StartedAt        time.Time
 }
 
 // LiveTVTuneDiagnosis is a structured classification of a Live TV tune or playback error.

@@ -164,7 +164,8 @@ type Permissions struct {
 	AI string `json:"ai,omitempty"`
 	// Media lets a plugin call MediaProbe (media.probe) from jobs, actions,
 	// and background sync (""|none|probe; refused on viewer/client paths).
-	Media string `json:"media,omitempty"`
+	Media   string `json:"media,omitempty"`
+	Storage string `json:"storage,omitempty"` // ""|none|durable
 }
 
 // ViewerPermissions scopes viewer identity and watch-history access.
@@ -581,10 +582,35 @@ type FrontendAdapterMeta struct {
 	// SearchPaths optionally lists adapter subpaths (such as "/search",
 	// "/rest/search3", or "/graphql") allowed to call ai.complete when
 	// permissions.ai is "complete+search".
-	SearchPaths []string `json:"searchPaths,omitempty"`
+	SearchPaths []string             `json:"searchPaths,omitempty"`
+	UploadPaths []FrontendUploadPath `json:"uploadPaths,omitempty"`
 	// Icon is the adapter's own mark on the Apps page: a path to an SVG or
 	// PNG inside the package. Without one the plugin's icon stands in.
 	Icon string `json:"icon,omitempty"`
+}
+
+type FrontendUploadPath struct {
+	Path     string `json:"path"`
+	MaxBytes int64  `json:"maxBytes"`
+}
+
+type FrontendUpload struct {
+	ContentType string               `json:"contentType,omitempty"`
+	Blob        *FrontendUploadBlob  `json:"blob,omitempty"`
+	Files       []FrontendUploadBlob `json:"files,omitempty"`
+	Fields      map[string][]string  `json:"fields,omitempty"`
+}
+
+type FrontendUploadBlob struct {
+	Ref         string `json:"ref"`
+	Size        int64  `json:"size"`
+	SHA256      string `json:"sha256"`
+	SHA1        string `json:"sha1"`
+	MD5         string `json:"md5"`
+	CRC32       string `json:"crc32"`
+	ContentType string `json:"contentType,omitempty"`
+	Field       string `json:"field,omitempty"`
+	Filename    string `json:"filename,omitempty"`
 }
 
 // SetupMeta declares guided setup for any plugin kind.
@@ -1260,6 +1286,7 @@ type RawRequest struct {
 	Query    map[string]string `json:"query,omitempty"`
 	Headers  map[string]string `json:"headers,omitempty"`
 	Body     json.RawMessage   `json:"body,omitempty"`
+	Upload   *FrontendUpload   `json:"upload,omitempty"`
 	Locale   string            `json:"locale,omitempty"`
 }
 

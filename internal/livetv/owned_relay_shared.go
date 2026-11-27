@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/braedonsaunders/ether/internal/core"
@@ -19,10 +20,11 @@ type relayOutputKey struct {
 }
 
 type sharedRelay struct {
-	ready chan struct{}
-	refs  int
-	p     *relayProducer
-	stop  func()
+	ready    chan struct{}
+	stopping chan struct{}
+	refs     int
+	p        *relayProducer
+	stop     func()
 }
 
 // acquireOwnedRelay shares the selected output without sharing viewer state.
@@ -60,7 +62,14 @@ func (s *Service) acquireOwnedRelay(ctx context.Context, ss *session, info core.
 			state.relays[key] = sh
 			state.mu.Unlock()
 
-			p, stop, err := s.openSharedRelay(ctx, ss, info, caps, dec, cut)
+			p, stop, err := func() (p *relayProducer, stop func(), err error) {
+				defer func() {
+					if recover() != nil {
+						err = core.ErrNotAvailable
+					}
+				}()
+				return s.openSharedRelay(ctx, ss, info, caps, dec, cut)
+			}()
 			state.mu.Lock()
 			if err != nil {
 				delete(state.relays, key)
@@ -74,13 +83,16 @@ func (s *Service) acquireOwnedRelay(ctx context.Context, ss *session, info core.
 			}
 			return s.sharedRelayLease(key, sh), nil
 		}
-		if sh.p != nil {
+		if sh.p != nil && sh.stopping == nil {
 			sh.refs++
 			state.mu.Unlock()
 			s.revokeInput(ss) // discard the joiner's probe grant
 			return s.sharedRelayLease(key, sh), nil
 		}
 		ready := sh.ready
+		if sh.stopping != nil {
+			ready = sh.stopping
+		}
 		state.mu.Unlock()
 		select {
 		case <-ctx.Done():
@@ -105,6 +117,13 @@ func (s *Service) openSharedRelay(ctx context.Context, viewer *session, info cor
 	}
 	s.transferInput(viewer, input)
 	viewer.mu.Unlock()
+	started := false
+	defer func() {
+		if !started {
+			cancel()
+			s.revokeInput(input)
+		}
+	}()
 	p := s.newRelayProducer(input, info, caps, dec, cut)
 	p.shared = true
 	if err := p.start(ctx, info, dec, cut, false); err != nil {
@@ -119,30 +138,44 @@ func (s *Service) openSharedRelay(ctx context.Context, viewer *session, info cor
 	}
 	s.enableOwnedTimeshift(p.tl, input.info.Channel)
 	go p.tl.run(lifetime)
-	go p.run(lifetime)
-	return p, func() {
-		cancel()
-		p.close()
-		s.revokeInput(input)
-	}, nil
+	var stopOnce sync.Once
+	stop := func() {
+		stopOnce.Do(func() {
+			cancel()
+			defer s.revokeInput(input)
+			p.close()
+		})
+	}
+	go func() {
+		defer stop()
+		defer func() {
+			if recover() != nil {
+				p.tl.fail(core.ErrNotAvailable)
+			}
+		}()
+		p.run(lifetime)
+	}()
+	started = true
+	return p, stop, nil
 }
 
 func (s *Service) sharedRelayLease(key relayOutputKey, sh *sharedRelay) *ownedLease {
-	return &ownedLease{tl: sh.p.tl, relay: sh.p, source: func() string {
-		ss := sh.p.sess.Load()
-		ss.mu.Lock()
-		defer ss.mu.Unlock()
-		return ss.inputSource.ID
-	}, release: func() {
+	return &ownedLease{tl: sh.p.tl, relay: sh.p, provider: sh.p.servingProvider, release: func() {
 		state := &s.direct
 		state.mu.Lock()
 		sh.refs--
 		last := sh.refs == 0
 		if last {
-			delete(state.relays, key)
+			sh.stopping = make(chan struct{})
 		}
 		state.mu.Unlock()
 		if last {
+			defer func() {
+				state.mu.Lock()
+				delete(state.relays, key)
+				close(sh.stopping)
+				state.mu.Unlock()
+			}()
 			sh.stop()
 		}
 	}}

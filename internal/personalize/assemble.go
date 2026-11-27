@@ -3,6 +3,7 @@ package personalize
 import (
 	"fmt"
 	"math"
+	"slices"
 	"sort"
 
 	"github.com/braedonsaunders/ether/internal/contentrating"
@@ -157,6 +158,26 @@ func (a *assembly) run() []core.HomeRow {
 		return a.maxRows + 1
 	}
 	sort.SliceStable(visible, func(i, j int) bool { return priority(visible[i]) < priority(visible[j]) })
+	visible = slices.DeleteFunc(visible, func(r *rankedRow) bool {
+		return behaviorForRowSource(r.c.source).requiresMinimum && len(r.items) < a.minItemsFor(r)
+	})
+	out := a.fill(visible, pinned, a.maxRows)
+	a.countHeld(out)
+	for _, r := range hidden {
+		items := r.items
+		if len(items) > a.limit {
+			items = items[:a.limit]
+		}
+		hr := a.homeRow(r, items, len(r.items) > len(items))
+		hr.Hidden = true
+		out = append(out, hr)
+	}
+	return out
+}
+
+// applyRowCaps admits the best remaining rows under the variety caps. When a
+// shelf is dropped during drafting, its place is available to another shelf.
+func (a *assembly) applyRowCaps(visible, pinned []*rankedRow, excluded map[*rankedRow]bool) []*rankedRow {
 	// Per-kind caps (pinned rows count but are never dropped).
 	perKind := map[string]int{}
 	groups := map[string]bool{}
@@ -170,9 +191,9 @@ func (a *assembly) run() []core.HomeRow {
 			owners++
 		}
 	}
-	capped := visible[:0:0]
+	capped := make([]*rankedRow, 0, len(visible))
 	for _, r := range visible {
-		if behaviorForRowSource(r.c.source).requiresMinimum && len(r.items) < a.minItemsFor(r) {
+		if excluded[r] {
 			continue
 		}
 		if perKind[r.c.kind] >= a.kindCap(r.c.kind) {
@@ -193,20 +214,7 @@ func (a *assembly) run() []core.HomeRow {
 		}
 		capped = append(capped, r)
 	}
-	ordered := placePinned(capped, pinned, func(r *rankedRow) int { return r.d.position })
-
-	out := a.fill(ordered, a.maxRows)
-	a.countHeld(out)
-	for _, r := range hidden {
-		items := r.items
-		if len(items) > a.limit {
-			items = items[:a.limit]
-		}
-		hr := a.homeRow(r, items, len(r.items) > len(items))
-		hr.Hidden = true
-		out = append(out, hr)
-	}
-	return out
+	return capped
 }
 
 // anchored rows are defined by their exact titles (a franchise's
@@ -284,10 +292,15 @@ func draftsFirst(c *candRow) bool {
 // the next row moves up. Pinned ("always") rows lower their minimum to one
 // title and reclaim a title if cross-row dedupe would otherwise starve them.
 // maxRows counts engine and owner rows.
-func (a *assembly) fill(ordered []*rankedRow, maxRows int) []core.HomeRow {
+func (a *assembly) fill(visible, pinned []*rankedRow, maxRows int) []core.HomeRow {
 	excluded := map[*rankedRow]bool{}
 	reserved := map[*rankedRow]core.RatingKey{}
-	maxAttempts := len(ordered)*2 + 8
+	maxAttempts := (len(visible)+len(pinned))*2 + 8
+	order := func() []*rankedRow {
+		capped := a.applyRowCaps(visible, pinned, excluded)
+		return placePinned(capped, pinned, func(r *rankedRow) int { return r.d.position })
+	}
+	ordered := order()
 	for attempt := 0; ; attempt++ {
 		var sel []*rankedRow
 		counted := 0
@@ -490,6 +503,7 @@ func (a *assembly) fill(ordered []*rankedRow, maxRows int) []core.HomeRow {
 		// go back to the rows above, which may then be full enough to stay.
 		if drop != nil && attempt < maxAttempts {
 			excluded[drop] = true
+			ordered = order()
 			continue
 		}
 		out := make([]core.HomeRow, 0, len(sel))

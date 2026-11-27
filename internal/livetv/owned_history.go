@@ -222,6 +222,9 @@ func (p *relayProducer) takeSteady() bool {
 	hedge, overlap := p.hedge, p.overlap
 	p.hls, p.cancel, p.hedge, p.overlap = nil, nil, nil, nil
 	p.steady = feed
+	if f, ok := feed.(*steadyFeed); ok {
+		p.providerFeed.Store(f)
+	}
 	wasCopy := p.dec.VideoCopy && !p.escalated
 	p.escalated = true
 	p.dec.VideoCopy, p.dec.Container = false, transcode.ContainerMPEGTS

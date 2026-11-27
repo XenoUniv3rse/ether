@@ -140,12 +140,15 @@ func toFrontendProgrammes(ps []Programme) []frontend.LiveTVProgramme {
 
 func toFrontendSessionInfo(info SessionInfo) frontend.LiveTVSessionInfo {
 	out := frontend.LiveTVSessionInfo{
-		ID:             info.ID,
-		SubscriptionID: info.SubscriptionID,
-		ActivityID:     info.ActivityID,
-		MediaInfo:      info.MediaInfo,
-		Channel:        ToFrontendChannel(info.Channel),
-		StartedAt:      info.StartedAt,
+		ActiveSourceID:   info.ActiveSourceID,
+		Provider:         info.Provider,
+		PreviousProvider: info.PreviousProvider,
+		ID:               info.ID,
+		SubscriptionID:   info.SubscriptionID,
+		ActivityID:       info.ActivityID,
+		MediaInfo:        info.MediaInfo,
+		Channel:          ToFrontendChannel(info.Channel),
+		StartedAt:        info.StartedAt,
 	}
 	if info.Programme != nil {
 		prog := toFrontendProgramme(*info.Programme)

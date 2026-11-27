@@ -537,6 +537,30 @@ func (c *Cache) HostBackends(quotaFor func(pluginID, libraryKey string) Quota) (
 	return cachePut, cacheOpen, cacheDelete
 }
 
+// OpenPluginBlobForStat opens an owned blob without synchronously updating
+// the on-disk index. Explicit bindings are populated when libraries are reconciled.
+func (c *Cache) OpenPluginBlobForStat(ctx context.Context, pluginID, blobRef string) (io.ReadSeekCloser, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	c.mu.Lock()
+	owned := c.pluginLibs[pluginID]
+	namespaces := make([]*Namespace, 0, len(owned))
+	for key := range owned {
+		if ns := c.namespaces[sanitizeNamespaceKey(key)]; ns != nil {
+			namespaces = append(namespaces, ns)
+		}
+	}
+	c.mu.Unlock()
+	for _, ns := range namespaces {
+		src, err := ns.open(Ref(blobRef), false)
+		if !errors.Is(err, ErrNotFound) {
+			return src, err
+		}
+	}
+	return nil, ErrNotFound
+}
+
 // NamespaceForPluginBlob returns the plugin-owned Namespace that holds blobRef,
 // or nil when no namespace owned by pluginID contains it.
 func (c *Cache) NamespaceForPluginBlob(pluginID, blobRef string) *Namespace {
@@ -1088,6 +1112,10 @@ func (n *Namespace) SingleFlightPut(ctx context.Context, key string, fn func(ctx
 // Open opens a cached blob by its reference ("blob:<sha256>"), updating its
 // last-open timestamp in the index.
 func (n *Namespace) Open(ref Ref) (ByteSource, error) {
+	return n.open(ref, true)
+}
+
+func (n *Namespace) open(ref Ref, recordAccess bool) (ByteSource, error) {
 	hash, err := ref.Hash()
 	if err != nil {
 		return nil, err
@@ -1104,7 +1132,7 @@ func (n *Namespace) Open(ref Ref) (ByteSource, error) {
 	if n.isExpiredLocked(e, now) {
 		isOpen := n.isOpenLocked(hash)
 		n.mu.Unlock()
-		if !isOpen {
+		if recordAccess && !isOpen {
 			n.evictHash(hash)
 			n.flushIndex()
 		}
@@ -1113,7 +1141,7 @@ func (n *Namespace) Open(ref Ref) (ByteSource, error) {
 	path := n.blobPath(hash)
 	f, err := os.Open(path)
 	if err != nil {
-		if errors.Is(err, fs.ErrNotExist) && !n.isOpenLocked(hash) {
+		if recordAccess && errors.Is(err, fs.ErrNotExist) && !n.isOpenLocked(hash) {
 			n.dropEntryLocked(hash)
 			n.dirty = true
 		}
@@ -1124,9 +1152,11 @@ func (n *Namespace) Open(ref Ref) (ByteSource, error) {
 		return nil, err
 	}
 	n.openCounts[hash]++
-	e.LastOpen = nowNs
-	n.dirty = true
-	shouldFlush := now.Sub(n.lastSaved) >= atimeSaveDebounce
+	if recordAccess {
+		e.LastOpen = nowNs
+		n.dirty = true
+	}
+	shouldFlush := recordAccess && now.Sub(n.lastSaved) >= atimeSaveDebounce
 	name := e.Name
 	if name == "" {
 		name = hash
