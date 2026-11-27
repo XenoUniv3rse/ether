@@ -108,18 +108,57 @@ func Apps() []App {
 // Evaluate it through Playback and Policy just like a runtime client. Actual
 // clients can still declare capabilities or match more specific model rules.
 type Device struct {
+	// ID is the device type id quality rules store. Empty means Name; it is
+	// set only where a row was renamed after rules already saved its id
+	// (Apple TV became "Apple TV 4K" when Apple TV HD got its own row).
+	ID       string   `json:"id,omitempty"`
 	Name     string   `json:"name"`
 	Identity Identity `json:"identity"`
 	// Aliases are other names owners search for ("iPad" for iOS).
 	Aliases []string `json:"aliases,omitempty"`
+	// Parent is the device type id this one narrows: a rule naming the
+	// parent ("Apple TV") also matches it ("Apple TV HD").
+	Parent string `json:"parent,omitempty"`
+}
+
+// TypeID is the id quality rules use for this device type.
+func (d Device) TypeID() string {
+	if d.ID != "" {
+		return d.ID
+	}
+	return d.Name
 }
 
 // Devices returns the registry's catalogue identities in display order.
 func Devices() []Device { return slices.Clone(loaded.Devices) }
 
+// hardwareModel names one hardware model code a client reports
+// (X-Plex-Model, or X-Plex-Device on Android TV boxes).
+type hardwareModel struct {
+	Model string `json:"model"`
+	Name  string `json:"name"`
+}
+
+// ModelName is the product name of a reported hardware model code
+// ("AppleTV5,3" is "Apple TV HD"), or "" when the code is not known.
+// Codes are compared exactly, ignoring case and surrounding space.
+func ModelName(code string) string {
+	code = strings.TrimSpace(code)
+	if code == "" {
+		return ""
+	}
+	for _, m := range loaded.Models {
+		if strings.EqualFold(m.Model, code) {
+			return m.Name
+		}
+	}
+	return ""
+}
+
 type document struct {
 	Apps        []App             `json:"apps"`
 	Devices     []Device          `json:"devices"`
+	Models      []hardwareModel   `json:"models"`
 	Version     int               `json:"version"`
 	Presets     map[string]preset `json:"presets"`
 	Definitions []definition      `json:"definitions"`

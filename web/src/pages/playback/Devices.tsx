@@ -96,6 +96,8 @@ type SeenDevice = {
   device: string;
   /** Hardware model the client reported (X-Plex-Model), e.g. "AppleTV5,3". */
   model?: string;
+  /** Device profile record the hardware model selects, when it differs from the name's. */
+  profile?: string;
   app: string;
   lastSeen: string;
   viewer: string;
@@ -214,8 +216,10 @@ function appProduct(app: CompatApp) {
   return app.product || app.name;
 }
 
+// Several rows share a record id (Android TV, Google TV and Shield are all
+// "android"), so the name keeps each row's key unique.
 function deviceKey(row: CompatDevice) {
-  return row.id ? `id:${row.id}` : `name:${row.name}`;
+  return row.id ? `id:${row.id}:${row.name}` : `name:${row.name}`;
 }
 
 function isAppOverride(item: CapabilityOverride) {
@@ -894,24 +898,29 @@ export function DeviceCapabilities() {
     const matchedApp = apps.find(
       (app) => sameText(appProduct(app), row.app) || sameText(app.name, row.app),
     );
-    const matchedDevice = devices.find(
-      (dev) =>
-        sameText(dev.name, row.device) ||
-        sameText(dev.name, row.platform) ||
-        (row.device && dev.name.toLowerCase().includes(row.device.toLowerCase())),
-    );
-    const maxHeight = matched?.maxHeight ?? matchedApp?.maxHeight ?? matchedDevice?.maxHeight ?? 0;
+    const profileDevice = row.profile ? devices.find((dev) => dev.id === row.profile) : undefined;
+    const matchedDevice =
+      profileDevice ??
+      devices.find(
+        (dev) =>
+          sameText(dev.name, row.device) ||
+          sameText(dev.name, row.platform) ||
+          (row.device && dev.name.toLowerCase().includes(row.device.toLowerCase())),
+      );
+    // A hardware-model profile (Apple TV HD) outranks the app's defaults.
+    const preferred = profileDevice ?? matchedApp;
+    const maxHeight = matched?.maxHeight ?? preferred?.maxHeight ?? matchedDevice?.maxHeight ?? 0;
     const videoCodecs =
       matched?.videoCodecs ??
-      (matchedApp?.videoCodecs?.length ? matchedApp.videoCodecs : undefined) ??
+      (preferred?.videoCodecs?.length ? preferred.videoCodecs : undefined) ??
       matchedDevice?.videoCodecs ??
       null;
-    const hdr10 = matched?.hdr10 ?? matchedApp?.hdr10 ?? matchedDevice?.hdr10;
+    const hdr10 = matched?.hdr10 ?? preferred?.hdr10 ?? matchedDevice?.hdr10;
     const dolbyVision =
-      matched?.dolbyVision ?? matchedApp?.dolbyVision ?? matchedDevice?.dolbyVision;
+      matched?.dolbyVision ?? preferred?.dolbyVision ?? matchedDevice?.dolbyVision;
     const dolbyVisionProfiles =
       matched?.dolbyVisionProfiles ??
-      matchedApp?.dolbyVisionProfiles ??
+      preferred?.dolbyVisionProfiles ??
       matchedDevice?.dolbyVisionProfiles ??
       null;
     const hasBuiltin = Boolean(
@@ -1009,7 +1018,6 @@ export function DeviceCapabilities() {
     const haystack = [
       item.row.name,
       item.row.device,
-      item.row.model ?? "",
       item.row.platform,
       item.row.app,
       item.row.viewer,
@@ -1522,20 +1530,6 @@ export function DeviceCapabilities() {
                           </span>
                         );
                       },
-                    },
-                    {
-                      key: "model",
-                      header: t("Model"),
-                      sortValue: (item) => (item.row.model ?? "").toLowerCase(),
-                      cell: (item) =>
-                        item.row.model ? (
-                          <span
-                            className="block max-w-32 truncate whitespace-nowrap font-mono text-xs text-fg-muted"
-                            title={item.row.model}
-                          >
-                            {item.row.model}
-                          </span>
-                        ) : null,
                     },
                     {
                       key: "resolution",

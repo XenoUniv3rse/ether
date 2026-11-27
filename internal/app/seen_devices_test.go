@@ -192,11 +192,36 @@ func TestSeenPlaybackDevicesReportModel(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	got := map[string]string{}
+	got := map[string]seenDevice{}
 	for _, row := range rows {
-		got[row.ClientIdentifier] = row.Model
+		got[row.ClientIdentifier] = row
 	}
-	if got["atv-hd"] != "AppleTV5,3" || got["atv-4k"] != "AppleTV14,1" {
-		t.Fatalf("models = %v", got)
+	hd, uhd := got["atv-hd"], got["atv-4k"]
+	if hd.Model != "AppleTV5,3" || uhd.Model != "AppleTV14,1" {
+		t.Fatalf("models lost: %+v / %+v", hd, uhd)
+	}
+	// The generic "Apple TV" name becomes the product name, so the two
+	// boxes are distinct; the HD box points at its own profile row.
+	if hd.Name != "Apple TV HD" || uhd.Name != "Apple TV 4K (3rd gen)" {
+		t.Fatalf("names = %q / %q", hd.Name, uhd.Name)
+	}
+	if hd.Profile != "apple-tv-hd" || uhd.Profile != "" {
+		t.Fatalf("profiles = %q / %q", hd.Profile, uhd.Profile)
+	}
+}
+
+func TestSeenDeviceNameKeepsOwnerNames(t *testing.T) {
+	atv := clientreg.Identity{Product: "Plex for Apple TV", Platform: "tvOS", Device: "Apple TV"}
+	for _, tc := range []struct{ name, device, model, want string }{
+		{"Apple TV", "Apple TV", "AppleTV5,3", "Apple TV HD"},
+		{"", "Apple TV", "AppleTV11,1", "Apple TV 4K (2nd gen)"},
+		{"Living room", "Apple TV", "AppleTV5,3", "Living room"},
+		{"Apple TV", "Apple TV", "", "Apple TV"},
+		{"AFTMM", "AFTMM", "", "Fire TV Stick 4K"},
+		{"Ettiene's Fire TV 4K", "AFTMM", "", "Ettiene's Fire TV 4K"},
+	} {
+		if got := seenDeviceName(tc.name, tc.device, tc.model, atv); got != tc.want {
+			t.Fatalf("seenDeviceName(%q, %q, %q) = %q, want %q", tc.name, tc.device, tc.model, got, tc.want)
+		}
 	}
 }

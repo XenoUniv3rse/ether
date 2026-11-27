@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"github.com/braedonsaunders/ether/internal/clientreg"
@@ -65,6 +66,10 @@ type seenDevice struct {
 	App              string    `json:"app"`
 	Viewer           string    `json:"viewer"`
 	LastSeen         time.Time `json:"lastSeen"`
+	// Profile is the device profile record this client resolves to when
+	// its hardware model picks a different one than its name would
+	// (an Apple TV HD is "apple-tv-hd", not "apple-tv"); empty otherwise.
+	Profile string `json:"profile,omitempty"`
 }
 
 type compatCatalog struct {
@@ -203,6 +208,28 @@ func (a *App) observedClients(ctx context.Context) ([]observedClient, error) {
 
 // The registry's last-seen index supplies at most 100 rows. Each latest play
 // is a primary-key lookup, independent of the size of playback history.
+// seenDeviceName makes a seen client's name tell identical boxes apart.
+// Clients often report only a generic name ("Apple TV" for every Apple
+// TV); when that is all the name says and the hardware model is known, the
+// model's product name ("Apple TV HD", "Apple TV 4K (3rd gen)") replaces
+// it. A name the owner chose ("Living room") is kept.
+func seenDeviceName(name, device, model string, id clientreg.Identity) string {
+	product := clientreg.ModelName(model)
+	if product == "" {
+		// Android TV boxes put the model code in the device field (AFTMM).
+		product = clientreg.ModelName(device)
+	}
+	if product == "" {
+		return name
+	}
+	trimmed := strings.TrimSpace(name)
+	family := clientreg.Policy(id, nil).Family
+	if trimmed == "" || strings.EqualFold(trimmed, device) || strings.EqualFold(trimmed, model) || (family != "" && strings.EqualFold(trimmed, family)) {
+		return product
+	}
+	return name
+}
+
 func (a *App) seenPlaybackDevices(ctx context.Context) ([]seenDevice, error) {
 	rows, err := a.db.QueryContext(ctx, `SELECT d.client_identifier,d.name,d.platform,COALESCE(p.device_match,''),COALESCE(p.model,''),COALESCE(p.product,''),COALESCE(p.username,''),d.last_seen FROM (SELECT * FROM stats_device_registry WHERE last_seen>0 ORDER BY last_seen DESC,id DESC LIMIT 100) d LEFT JOIN stats_plays p ON p.id=d.latest_play_id ORDER BY d.last_seen DESC,d.id DESC`)
 	if err != nil {
@@ -220,7 +247,18 @@ func (a *App) seenPlaybackDevices(ctx context.Context) ([]seenDevice, error) {
 		d.LastSeen = time.Unix(seen, 0).UTC()
 		// Version is unavailable for historical observations; do not claim a
 		// version-scoped edit applies when that cannot be established.
-		identity := clientreg.Identity{Product: d.App, Platform: d.Platform, Device: d.Device, DeviceName: d.Name}
+		identity := clientreg.Identity{Product: d.App, Platform: d.Platform, Device: d.Device, DeviceName: d.Name, Model: d.Model}
+		d.Name = seenDeviceName(d.Name, d.Device, d.Model, identity)
+		if d.Model != "" {
+			generic := identity
+			generic.Model = ""
+			if clientreg.Playback(identity, nil).ID != clientreg.Playback(generic, nil).ID {
+				d.Profile = clientreg.Policy(identity, nil).ID
+				if d.Profile == "generic" {
+					d.Profile = clientreg.Playback(identity, nil).ID
+				}
+			}
+		}
 		if matched := clientreg.MatchingOverrides(identity, overrides); len(matched) > 0 {
 			index := matched[len(matched)-1]
 			d.OverrideIndex = &index
