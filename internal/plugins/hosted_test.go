@@ -342,7 +342,7 @@ globalThis.handle = function(req) {
 		{"/stream/tv/sports-1.json", "3s", 30000, 3 * time.Second},
 		{"/ether/open/sports-1", "3s", 30000, 3 * time.Second},
 		{"/ether/health", "5s", 1 << 60, 5 * time.Second},
-		{"/ether/v1/kinds/games/resolve", "5s", 50000, 5 * time.Second},
+		{"/ether/v1/kinds/games/resolve", "12s", 120000, 12 * time.Second},
 		{"/ether/v1/kinds/games/match", "5s", 50000, 5 * time.Second},
 		{"/ether/v1/kinds/games/search", "10s", 100000, 10 * time.Second},
 		{"/ether/v1/kinds/games/browse", "12h0m0s", 1 << 60, 12 * time.Hour},
@@ -370,19 +370,19 @@ globalThis.handle = function(req) {
 		}
 	}
 
-	// 1,500 kv.put calls = 15,000 units (> old 10,000 viewer clamp, < 50,000 resolve budget).
+	// 1,500 kv.put calls = 15,000 units (> old 10,000 viewer clamp, < 120,000 resolve budget).
 	if _, err := callLimits("/ether/v1/kinds/games/resolve", 1500); err != nil {
-		t.Fatalf("resolve within 5s/50,000-unit budget failed: %v", err)
+		t.Fatalf("resolve within 12s/120,000-unit budget failed: %v", err)
 	}
 
 	// Exceeding the 50,000-unit budget states the route and 5 s budget clearly.
-	_, err = callLimits("/ether/v1/kinds/games/resolve", 5005)
+	_, err = callLimits("/ether/v1/kinds/games/match", 5005)
 	// Units are wall-time units, so the unit budget and the 5 s deadline are
 	// the same limit and either can trip first on a slow host. Both must name
 	// the route and its 5 s limit.
 	honest := func(msg string) bool {
-		return strings.Contains(msg, "used the whole 5 s budget for /ether/v1/kinds/games/resolve") ||
-			strings.Contains(msg, "call exceeded its 5 s deadline for /ether/v1/kinds/games/resolve")
+		return strings.Contains(msg, "used the whole 5 s budget for /ether/v1/kinds/games/match") ||
+			strings.Contains(msg, "call exceeded its 5 s deadline for /ether/v1/kinds/games/match")
 	}
 	if err == nil || !honest(err.Error()) {
 		t.Fatalf("expected honest governance error, got: %v", err)

@@ -98,20 +98,23 @@ func historyFromTrace(tr Trace) HistoryRecord {
 	return h
 }
 
-// RecordKindFailure adds a credential-free plugin playback decision to the same
-// history as movie and TV resolutions. Callers supply a stable error.
-func (s *Service) RecordKindFailure(ctx context.Context, key core.RatingKey, name string, reason error) {
-	s.recordHistory(ctx, Trace{At: s.now(), TitleKey: key, TitleName: name, Err: reason.Error()})
-}
-
-// RecordKindRejection records the plugin's redacted diagnostics in the existing
-// release decision trace. The playback error retains its stable classification.
-func (s *Service) RecordKindRejection(ctx context.Context, key core.RatingKey, name, detail string, candidates []CandidateTrace) {
-	message := core.ErrKindCandidatesRejected.Error()
-	if detail != "" {
-		message += " (" + detail + ")"
-	}
-	s.recordHistory(ctx, Trace{At: s.now(), TitleKey: key, TitleName: name, Err: message, Candidates: candidates})
+// RecordKindDecision persists a plugin playback outcome alongside movie and TV
+// resolutions. Optionally redact plugin diagnostic text before persistence.
+func (s *Service) RecordKindDecision(ctx context.Context, tr Trace, redact func(context.Context, string) string) {
+	tr.At = s.now()
+	tr = compactTrace(tr)
+	ctx = context.WithValue(context.WithoutCancel(ctx), requestBookkeepingKey{}, true)
+	s.persistBookkeeping(ctx, func(ctx context.Context) {
+		if redact != nil {
+			raw, _ := json.Marshal(tr)
+			var clean Trace
+			if err := json.Unmarshal([]byte(redact(ctx, string(raw))), &clean); err != nil {
+				return
+			}
+			tr = clean
+		}
+		s.recordHistory(ctx, tr)
+	})
 }
 
 // recordHistory persists one resolution outcome and prunes rows beyond the

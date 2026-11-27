@@ -65,7 +65,11 @@ func (r *KindResolver) resolveSourcesFlight(ctx context.Context, rec pluginitems
 			budget = kindResolveFlightBudget
 		}
 		rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), budget)
-		fl = &resolveFlight{done: make(chan struct{}), cancel: cancel}
+		rctx, state := withResolveSearchState(rctx)
+		if play {
+			state.playbackCtx = rctx
+		}
+		fl = &resolveFlight{done: make(chan struct{}), cancel: cancel, search: state}
 		r.flights[key] = fl
 		r.flightWG.Add(1)
 		go func() {
@@ -86,14 +90,11 @@ func (r *KindResolver) resolveSourcesFlight(ctx context.Context, rec pluginitems
 				close(fl.done)
 				r.flightMu.Unlock()
 			}()
-			if play {
-				var state *resolveSearchState
-				rctx, state = withResolveSearchState(rctx)
-				state.playbackCtx = rctx
-			}
 			for {
 				fl.result, fl.err = r.callPluginResolve(rctx, rec, lib, item, partIdx, source, accept, exclude)
-				if !play || !errors.Is(fl.err, core.ErrPreparing) || errors.Is(fl.err, core.ErrDownloadQueued) {
+				var decision *kindDecisionError
+				if !play || !errors.Is(fl.err, core.ErrPreparing) || errors.Is(fl.err, core.ErrDownloadQueued) ||
+					errors.As(fl.err, &decision) {
 					break
 				}
 				timer := time.NewTimer(preparingPollDelay(fl.err))
@@ -103,12 +104,12 @@ func (r *KindResolver) resolveSourcesFlight(ctx context.Context, rec pluginitems
 				case <-timer.C:
 				}
 				if rctx.Err() != nil {
-					fl.err = kindResolveEndError(rctx.Err())
+					fl.err = state.resolveEndError(rctx.Err())
 					return
 				}
 			}
-			if play && rctx.Err() != nil {
-				fl.err = kindResolveEndError(rctx.Err())
+			if rctx.Err() != nil {
+				fl.err = state.resolveEndError(rctx.Err())
 				return
 			}
 			// A mixed reply includes a request-bound fallback. Resolve again on
@@ -139,14 +140,14 @@ func (r *KindResolver) resolveSourcesFlight(ctx context.Context, rec pluginitems
 		return r.takeResolveResult(key, fl)
 	case <-wait:
 		if r.keepResolveForRetry(key, fl) {
-			return kindResolveResult{}, core.ErrPrepareSlow
+			return kindResolveResult{}, fl.search.searchError(core.ErrPrepareSlow, "timed out")
 		}
 		return r.takeResolveResult(key, fl)
 	case <-ctx.Done():
 		if play {
 			r.keepResolveForRetry(key, fl)
 		}
-		return kindResolveResult{}, ctx.Err()
+		return kindResolveResult{}, fl.search.resolveEndError(ctx.Err())
 	}
 }
 
@@ -175,9 +176,9 @@ func (r *KindResolver) takeResolveResult(key resolveFlightKey, fl *resolveFlight
 	return fl.result, fl.err
 }
 
-func kindResolveEndError(err error) error {
+func (s *resolveSearchState) resolveEndError(err error) error {
 	if errors.Is(err, context.Canceled) {
 		return err
 	}
-	return core.ErrSourceUnavailable
+	return s.searchError(core.PreparingFromPending(2000), "timed out")
 }

@@ -337,9 +337,8 @@ func cloneSourceCandidates(in []core.SourceCandidate) []core.SourceCandidate {
 
 // allowTimeoutPreparing decides whether a guest timeout on /resolve reflects
 // bounded forward progress (host source calls in flight, just completed, or a
-// pending indexer search) and should surface as core.PreparingError rather than
-// core.ErrSourceUnavailable. A timeout with no source activity fails at once;
-// repeated slices without new work or exceeding resolvePrepareBudget also fail.
+// pending indexer search) worth continuing within this flight. An idle or
+// stalled guest ends the flight and leaves retrying to the client.
 func (r *KindResolver) allowTimeoutPreparing(fk resolveFlightKey, st *resolveSearchState) bool {
 	if r == nil || st == nil {
 		return false
