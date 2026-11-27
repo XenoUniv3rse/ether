@@ -755,6 +755,7 @@
   "m_0228876e08de48": "Jellyfin muestra Favoritos primero; tus grupos se convierten en etiquetas de canal.",
   "m_0229f3ebb5c5f4": "IntroDB",
   "m_022ac34b13be42": "Aclamadas que aún no has visto",
+  "m_022c5575f22bf5": "{attempts} intentos de API · {retries} reintentos · {limited} limitados por frecuencia",
   "m_022cc151865789": "Actualización automática",
   "m_022e1fe7d764a0": "Géneros de películas",
   "m_022ec112c6322d": "En el índice exclusivo de búsqueda",
@@ -6755,6 +6756,7 @@
   "m_131fb65bf5e014": "Reclamado por {name}",
   "m_132162d45882b6": "Guardar y publicar",
   "m_132166f2d04b7c": "Manual",
+  "m_1321e926d05412": "{reused} reutilizaciones de la cuenta · {remembered} respuestas guardadas",
   "m_1322ee60131114": "No mostrar puntuación",
   "m_132357d36a8f22": {
     "many": "{count} series encontradas",
@@ -8322,6 +8324,7 @@
   "m_17a4c01dbffc16": "Página mostrada en la consola",
   "m_17a4e9f71f41a1": "ID del catálogo",
   "m_17a715b256eec6": "Por espectador",
+  "m_17a72b2c7ed8b6": "{average} llamadas a la API por primera reproducción",
   "m_17a871ca35a5b2": "Precargar películas y series",
   "m_17a87410ee9978": "Elegir un archivo",
   "m_17ab1e528be434": "Películas y episodios",

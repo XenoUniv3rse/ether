@@ -769,6 +769,7 @@
   "m_0228876e08de48": "Jellyfin zobrazuje nejprve Oblíbené; vaše skupiny se stanou štítky kanálů.",
   "m_0229f3ebb5c5f4": "IntroDB",
   "m_022ac34b13be42": "Oceňované a dosud neviděné",
+  "m_022c5575f22bf5": "{attempts} pokusů o volání API · {retries} opakování · {limited} omezených požadavků",
   "m_022cc151865789": "Automatická aktualizace",
   "m_022e1fe7d764a0": "Filmové žánry",
   "m_022ec112c6322d": "Pouze ve vyhledávacím indexu",
@@ -6921,6 +6922,7 @@
   "m_131fb65bf5e014": "Spárováno s účtem {name}",
   "m_132162d45882b6": "Uložit a publikovat",
   "m_132166f2d04b7c": "Ručně",
+  "m_1321e926d05412": "{reused} opětovných použití z účtu · {remembered} zapamatovaných odpovědí",
   "m_1322ee60131114": "Nezobrazovat hodnocení",
   "m_132357d36a8f22": {
     "few": "Nalezeny {count} seriály",
@@ -8529,6 +8531,7 @@
   "m_17a4c01dbffc16": "Stránka zobrazená v konzoli",
   "m_17a4e9f71f41a1": "ID v katalogu",
   "m_17a715b256eec6": "Podle diváka",
+  "m_17a72b2c7ed8b6": "{average} volání API na první přehrání",
   "m_17a871ca35a5b2": "Předběžně načítat filmy a seriály",
   "m_17a87410ee9978": "Vybrat soubor",
   "m_17ab1e528be434": "Filmy a díly",

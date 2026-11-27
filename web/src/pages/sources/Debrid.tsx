@@ -108,7 +108,7 @@ function activity(s: DebridProviderStatus): string[] {
   if (s.blocked)
     out.push(t("{count} blocked by provider", { count: formatNumber(Number(s.blocked)) }));
   if (s.failures) out.push(tn(Number(s.failures), "{count} failure", "{count} failures"));
-  if (s.reused) out.push(t("{count} reused", { count: formatNumber(Number(s.reused)) }));
+  if (s.reused && !s.api?.reuseHits) out.push(t("{count} reused", { count: formatNumber(Number(s.reused)) }));
   if (s.linksRefreshed)
     out.push(tn(Number(s.linksRefreshed), "{count} link refreshed", "{count} links refreshed"));
   // In a cluster the account's concurrent API calls are divided among nodes.
@@ -126,6 +126,34 @@ function activity(s: DebridProviderStatus): string[] {
   if (s.queuedDetail) out.push(s.queuedDetail);
   if (s.lastSuccess) out.push(t("last worked {time}", { time: relativeTime(s.lastSuccess) }));
   return out;
+}
+
+function apiActivity(api: DebridProviderStatus["api"]) {
+  if (!api || !api.attempts) return null;
+  return (
+    <span className="block tabular-nums">
+      {t("{attempts} API attempts · {retries} retries · {limited} rate-limited", {
+        attempts: formatNumber(api.attempts),
+        retries: formatNumber(api.retries),
+        limited: formatNumber(api.limited),
+      })}
+      {api.reuseHits || api.rememberedHits ? (
+        <span className="block">
+          {t("{reused} account reuses · {remembered} remembered answers", {
+            reused: formatNumber(api.reuseHits),
+            remembered: formatNumber(api.rememberedHits),
+          })}
+        </span>
+      ) : null}
+      {api.firstPlays > 0 ? (
+        <span className="block">
+          {t("{average} API calls per first play", {
+            average: formatNumber(api.firstPlayCalls / api.firstPlays, 1),
+          })}
+        </span>
+      ) : null}
+    </span>
+  );
 }
 
 function ms(n: number): string {
@@ -398,6 +426,7 @@ export function DebridSources({
               const details: ReactNode = (
                 <>
                   {[role(i), ...(s ? activity(s) : [])].join(" · ")}
+                  {apiActivity(s?.api)}
                   {latency ? <span className="block tabular-nums">{latency}</span> : null}
                   {retrySeconds > 0 ? (
                     <span className="block text-danger">

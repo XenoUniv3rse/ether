@@ -741,6 +741,7 @@
   "m_0228876e08de48": "Jellyfin önce Favorileri gösterir; gruplarınız kanal etiketlerine dönüşür.",
   "m_0229f3ebb5c5f4": "IntroDB",
   "m_022ac34b13be42": "Beğenilen ama henüz izlemedikleriniz",
+  "m_022c5575f22bf5": "{attempts} API denemesi · {retries} yeniden deneme · {limited} hız sınırına takılan istek",
   "m_022cc151865789": "Otomatik güncelleme",
   "m_022e1fe7d764a0": "Film türleri",
   "m_022ec112c6322d": "Yalnızca arama dizininde",
@@ -6582,6 +6583,7 @@
   "m_131fb65bf5e014": "{name} tarafından sahiplenildi",
   "m_132162d45882b6": "Kaydet ve yayımla",
   "m_132166f2d04b7c": "Elle",
+  "m_1321e926d05412": "Hesaptan {reused} yeniden kullanım · {remembered} hatırlanan yanıt",
   "m_1322ee60131114": "Puan gösterme",
   "m_132357d36a8f22": {
     "one": "{count} dizi bulundu",
@@ -8105,6 +8107,7 @@
   "m_17a4c01dbffc16": "Konsolda gösterilen sayfa",
   "m_17a4e9f71f41a1": "Katalog kimliği",
   "m_17a715b256eec6": "İzleyiciye göre",
+  "m_17a72b2c7ed8b6": "İlk oynatma başına {average} API çağrısı",
   "m_17a871ca35a5b2": "Film ve dizileri önyükle",
   "m_17a87410ee9978": "Dosya seç",
   "m_17ab1e528be434": "Filmler ve bölümler",

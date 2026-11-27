@@ -741,6 +741,7 @@
   "m_0228876e08de48": "Jellyfin näyttää Suosikit ensin; ryhmistäsi tulee kanavatunnisteita.",
   "m_0229f3ebb5c5f4": "IntroDB",
   "m_022ac34b13be42": "Ylistetyt ja vielä näkemättömät",
+  "m_022c5575f22bf5": "{attempts} API-yritystä · {retries} uusintayritystä · {limited} pyyntöä rajoitettu",
   "m_022cc151865789": "Automaattinen päivitys",
   "m_022e1fe7d764a0": "Elokuvien lajityypit",
   "m_022ec112c6322d": "Vain hakuindeksissä",
@@ -6591,6 +6592,7 @@
   "m_131fb65bf5e014": "Liittänyt tiliin: {name}",
   "m_132162d45882b6": "Tallenna ja julkaise",
   "m_132166f2d04b7c": "Manuaalinen",
+  "m_1321e926d05412": "{reused} uudelleenkäyttöä tililtä · {remembered} tallennettua vastausta",
   "m_1322ee60131114": "Älä näytä arvostelua",
   "m_132357d36a8f22": {
     "one": "{count} sarja löytyi",
@@ -8117,6 +8119,7 @@
   "m_17a4c01dbffc16": "Konsolissa näytettävä sivu",
   "m_17a4e9f71f41a1": "Katalogitunnus",
   "m_17a715b256eec6": "Katsojittain",
+  "m_17a72b2c7ed8b6": "{average} API-kutsua ensimmäistä toistoa kohden",
   "m_17a871ca35a5b2": "Esilataa elokuvat ja TV",
   "m_17a87410ee9978": "Valitse tiedosto",
   "m_17ab1e528be434": "Elokuvat ja jaksot",

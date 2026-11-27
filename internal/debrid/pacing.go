@@ -3,9 +3,8 @@ package debrid
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/hex"
 	"errors"
-	"fmt"
-	"strings"
 	"sync"
 	"time"
 
@@ -13,27 +12,32 @@ import (
 	"github.com/braedonsaunders/ether/internal/lru"
 )
 
-const blockedHashTTL = 24 * time.Hour
+const blockedHashTTL = 7 * 24 * time.Hour
 
 type accountPaces struct {
 	mu       sync.Mutex
 	accounts map[[32]byte]*accountPacer
 	onPause  func(*accountPacer, time.Time)
 	share    func(int) int
+	answers  *answerStore
 }
 
-func (r *accountPaces) forAccount(kind, key string) *accountPacer {
-	if r == nil {
-		return new(accountPacer)
-	}
+func (r *accountPaces) forAccount(kind, key string, now func() time.Time) *accountPacer {
 	id := sha256.Sum256([]byte(kind + "\x00" + key))
+	identity := hex.EncodeToString(id[:])
+	if now == nil {
+		now = time.Now
+	}
+	if r == nil {
+		return &accountPacer{identity: identity, kind: kind, now: now}
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.accounts == nil {
 		r.accounts = make(map[[32]byte]*accountPacer)
 	}
 	if r.accounts[id] == nil {
-		r.accounts[id] = &accountPacer{onPause: r.onPause, share: r.share}
+		r.accounts[id] = &accountPacer{identity: identity, kind: kind, now: now, answers: r.answers, onPause: r.onPause, share: r.share}
 	}
 	return r.accounts[id]
 }
@@ -45,7 +49,12 @@ type accountPacer struct {
 	until, lastLimited              time.Time
 	strikes                         int
 	generation                      uint64
-	blocked                         *lru.Cache[string, time.Time]
+	identity, kind                  string
+	now                             func() time.Time
+	answers                         *answerStore
+	learned                         *lru.Cache[answerKey, learnedAnswer]
+	acquiring                       map[string]chan struct{}
+	api                             APICallStats
 	onPause                         func(*accountPacer, time.Time)
 	share                           func(int) int
 }
@@ -107,9 +116,15 @@ func (p *accountPacer) reserve(ctx context.Context, add bool) (uint64, func(), e
 				}, nil
 			}
 		}
+		if deadline, ok := core.DebridPlaybackDeadline(ctx); ok && !next.Before(deadline) {
+			return 0, nil, p.throttleError()
+		}
 		p.mu.Unlock()
 		err := sleep(ctx, time.Until(next))
 		p.mu.Lock()
+		if errors.Is(err, context.DeadlineExceeded) {
+			return 0, nil, p.throttleError()
+		}
 		if err != nil {
 			return 0, nil, err
 		}
@@ -183,59 +198,48 @@ func (p *accountPacer) retryAt() time.Time {
 	return p.until
 }
 
-func (p *accountPacer) refused(hash string) bool {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	if p.blocked == nil || hash == "" {
-		return false
+func (p *accountPacer) cooldownFor(ctx context.Context) error {
+	until := p.retryAt()
+	if deadline, ok := core.DebridPlaybackDeadline(ctx); ok && time.Now().Before(until) && !until.Before(deadline) {
+		return p.throttleError()
 	}
-	until, ok := p.blocked.Get(strings.ToLower(hash))
-	return ok && time.Now().Before(until)
+	return nil
 }
 
-func (p *accountPacer) rememberRefusal(hash string, err error) {
-	if hash == "" || !errors.Is(err, ErrBlocked) {
-		return
+func (p *accountPacer) throttleError() error {
+	label := kindLabels[p.kind]
+	if label == "" {
+		label = "The debrid provider"
 	}
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	if p.blocked == nil {
-		p.blocked = lru.New(lru.Options[string, time.Time]{MaxEntries: 32_768})
-	}
-	hash = strings.ToLower(hash)
-	now := time.Now()
-	if until, ok := p.blocked.Peek(hash); !ok || !now.Before(until) {
-		p.blocked.Add(hash, now.Add(blockedHashTTL))
-	}
+	return &core.DebridThrottleError{Provider: label}
 }
 
-func pacedCall[T any](ctx context.Context, p *accountPacer, r apiRequest, add bool, request func(apiRequest) (T, error)) (T, error) {
+func pacedCall[T any](ctx context.Context, p *accountPacer, r apiRequest, add bool, request func(context.Context, apiRequest) (T, error)) (T, error) {
 	var zero T
+	r.pace, r.paced = p, true
+	if _, bounded := core.DebridPlaybackDeadline(ctx); !bounded {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, providerOpTimeout)
+		defer cancel()
+	}
 	for {
-		if p.refused(r.torrentHash) {
-			return zero, ErrBlocked
-		}
 		if add && !mayTrialAdd(ctx) {
 			return zero, errBackgroundUndecided
 		}
 		generation, release, err := p.reserve(ctx, add)
 		if err != nil {
-			if errors.Is(err, context.DeadlineExceeded) {
-				err = fmt.Errorf("%w: %w", core.ErrBudgetExhausted, err)
-			}
 			return zero, err
-		}
-		if p.refused(r.torrentHash) {
-			release()
-			return zero, ErrBlocked
 		}
 		var delay time.Duration
 		r.retryDelay = &delay
-		value, err := request(r)
+		value, err := request(ctx, r)
 		if !errors.Is(err, ErrRateLimited) {
-			p.rememberRefusal(r.torrentHash, err)
 			release()
 			return value, err
+		}
+		var httpLimit *rateLimitError
+		if !errors.As(err, &httpLimit) {
+			p.noteLimit(false)
 		}
 		until := p.throttle(generation, delay)
 		release()
@@ -248,7 +252,11 @@ func pacedCall[T any](ctx context.Context, p *accountPacer, r apiRequest, add bo
 		if lowPriority(ctx) {
 			return zero, core.ErrBudgetExhausted
 		}
-		// Wait on the shared cooldown before retrying the rejected API call.
-		// The caller's context still bounds the entire operation.
+		if r.retry {
+			return zero, p.throttleError()
+		}
+		r.retry = true
+		// A provider refusal has no admitted mutation. The next actual
+		// attempt must acquire a fresh token after the shared cooldown.
 	}
 }

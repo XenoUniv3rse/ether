@@ -741,6 +741,7 @@
   "m_0228876e08de48": "Jellyfin viser Favoritter først; gruppene dine blir kanalmerker.",
   "m_0229f3ebb5c5f4": "IntroDB",
   "m_022ac34b13be42": "Kritikerrost og usett",
+  "m_022c5575f22bf5": "{attempts} API-forsøk · {retries} nye forsøk · {limited} avvist på grunn av frekvensgrense",
   "m_022cc151865789": "Automatisk oppdatering",
   "m_022e1fe7d764a0": "Filmsjangre",
   "m_022ec112c6322d": "Kun i søkeindeksen",
@@ -6591,6 +6592,7 @@
   "m_131fb65bf5e014": "Gjort krav på av {name}",
   "m_132162d45882b6": "Lagre og publiser",
   "m_132166f2d04b7c": "Manuell",
+  "m_1321e926d05412": "{reused} gjenbruk fra kontoen · {remembered} lagrede svar",
   "m_1322ee60131114": "Ikke vis vurdering",
   "m_132357d36a8f22": {
     "one": "{count} serie funnet",
@@ -8117,6 +8119,7 @@
   "m_17a4c01dbffc16": "Side vist i konsollen",
   "m_17a4e9f71f41a1": "Katalog-ID",
   "m_17a715b256eec6": "Per seer",
+  "m_17a72b2c7ed8b6": "{average} API-kall per første avspilling",
   "m_17a871ca35a5b2": "Forhåndslast filmer og TV",
   "m_17a87410ee9978": "Velg en fil",
   "m_17ab1e528be434": "Filmer og episoder",

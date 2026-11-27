@@ -40,6 +40,7 @@ func withUnverifiedPool(ctx context.Context) (context.Context, *unverifiedPool) 
 	p := &unverifiedPool{nzbs: map[string][]byte{}}
 	if !core.IsSpeculative(ctx) && !core.IsBackgroundCheck(ctx) {
 		p.playDeadline = time.Now().Add(playStartDeadline)
+		ctx = core.WithDebridPlaybackDeadline(ctx, p.playDeadline)
 	}
 	return context.WithValue(ctx, unverifiedPoolKey{}, p), p
 }

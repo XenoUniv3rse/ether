@@ -1,6 +1,7 @@
 package debrid
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -79,7 +80,7 @@ func TestNextEpisodeTrialAddYieldsToForeground(t *testing.T) {
 		return playing
 	})
 	add := func() error {
-		_, err := pacedCall(ctx, &pacer, apiRequest{}, true, func(apiRequest) (struct{}, error) {
+		_, err := pacedCall(ctx, &pacer, apiRequest{}, true, func(context.Context, apiRequest) (struct{}, error) {
 			return struct{}{}, nil
 		})
 		return err

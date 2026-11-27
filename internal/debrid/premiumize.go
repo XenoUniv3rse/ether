@@ -29,13 +29,16 @@ const (
 )
 
 type premiumize struct {
+	api  *accountPacer
 	key  string
 	opts ProviderOptions
 }
 
 func newPremiumize(key string, opts ProviderOptions) *premiumize {
-	return &premiumize{key: key, opts: opts.withDefaults(premiumizeBase)}
+	return &premiumize{api: opts.paces.forAccount("premiumize", key, opts.Now), key: key, opts: opts.withDefaults(premiumizeBase)}
 }
+
+func (p *premiumize) apiAccount() *accountPacer { return p.api }
 
 func (p *premiumize) Kind() string { return "premiumize" }
 
@@ -51,6 +54,7 @@ type pmStatus struct {
 }
 
 func (p *premiumize) do(ctx context.Context, r apiRequest, out any) error {
+	r.pace = p.api
 	if r.method == http.MethodGet {
 		if r.query == nil {
 			r.query = url.Values{}

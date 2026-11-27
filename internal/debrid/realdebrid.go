@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -40,7 +41,7 @@ type realDebrid struct {
 }
 
 func newRealDebrid(key string, opts ProviderOptions) *realDebrid {
-	return &realDebrid{pace: opts.paces.forAccount("realdebrid", key), key: key, opts: opts.withDefaults(realDebridBase)}
+	return &realDebrid{pace: opts.paces.forAccount("realdebrid", key, opts.Now), key: key, opts: opts.withDefaults(realDebridBase)}
 }
 
 func (p *realDebrid) accountPace() *accountPacer { return p.pace }
@@ -68,7 +69,7 @@ type rdInfo struct {
 }
 
 func (p *realDebrid) do(ctx context.Context, r apiRequest, out any) error {
-	_, err := pacedCall(ctx, p.pace, r, r.path == "/torrents/addMagnet", func(r apiRequest) (struct{}, error) {
+	_, err := pacedCall(ctx, p.pace, r, r.path == "/torrents/addMagnet", func(ctx context.Context, r apiRequest) (struct{}, error) {
 		return struct{}{}, p.request(ctx, r, out)
 	})
 	return err
@@ -86,7 +87,9 @@ func (p *realDebrid) request(ctx context.Context, r apiRequest, out any) error {
 	}
 	if status >= 200 && status < 300 {
 		if out != nil && len(body) > 0 {
-			return decodeJSON("real-debrid", body, out)
+			if err := decodeJSON("real-debrid", body, out); err != nil {
+				return fmt.Errorf("%w: %w", ErrTransport, err)
+			}
 		}
 		return nil
 	}
@@ -97,12 +100,19 @@ func (p *realDebrid) request(ctx context.Context, r apiRequest, out any) error {
 		code = strconv.Itoa(e.ErrorCode)
 	}
 	logProviderResponse(ctx, p.key, status, code, e.Error)
-	return p.classify(status, e)
+	err = p.classify(status, e)
+	if status == http.StatusUnavailableForLegalReasons || errors.Is(err, ErrBlocked) {
+		if strings.HasPrefix(r.path, "/unrestrict/") || strings.HasPrefix(r.path, "/torrents/selectFiles/") {
+			return ErrBlockedFile
+		}
+		return ErrBlockedHash
+	}
+	return err
 }
 
 // classify maps Real-Debrid error codes (documented on the API page).
 func (p *realDebrid) classify(status int, e rdError) error {
-	msg := e.Error
+	msg := cleanDiagnostic(e.Error, p.key)
 	if msg == "" {
 		msg = http.StatusText(status)
 	}
@@ -115,19 +125,23 @@ func (p *realDebrid) classify(status int, e rdError) error {
 		return fmt.Errorf("real-debrid: %s: %w", msg, ErrAuth)
 	case 21: // too many active downloads: no new torrent until one finishes
 		return fmt.Errorf("real-debrid: %s: %w", msg, ErrDownloadLimit)
-	case 5, 34: // slow down, too many requests
+	case 5, 18, 34: // slow down, hoster limit, too many requests
 		return fmt.Errorf("real-debrid: %s: %w", msg, ErrRateLimited)
 	case 7, 24: // resource not found, file unavailable
 		return fmt.Errorf("real-debrid: %s: %w", msg, ErrGone)
-	case 35: // infringing file: a cached torrent Real-Debrid will not serve
+	case 28, 35: // file not allowed or infringing
 		return fmt.Errorf("real-debrid: %s: %w", msg, ErrBlocked)
-	case 29: // torrent too big for this provider
+	case 26, 29: // upload or torrent too big
 		return fmt.Errorf("real-debrid: %s: %w", msg, ErrTooLarge)
 	case 30: // torrent file invalid
 		return fmt.Errorf("real-debrid: %s: %w", msg, core.ErrReleaseRejected)
+	case 33:
+		return errDuplicateTorrent
+	case 1, 2, 3, 4, 16, 31, 32, 37:
+		return fmt.Errorf("real-debrid: API refused the request (code %d): %w", e.ErrorCode, ErrTransport)
+	case -1, 6, 17, 19, 25, 27:
+		return fmt.Errorf("real-debrid: API temporarily unavailable (code %d): %w", e.ErrorCode, ErrTransport)
 	}
-	// Everything else (including 25 "service unavailable" and 19 "hoster
-	// temporarily unavailable") is transient.
 	return statusError("real-debrid", status, msg)
 }
 
@@ -143,29 +157,65 @@ func (p *realDebrid) CheckCached(context.Context, []string) (map[string]bool, er
 	return nil, ErrUnsupported
 }
 
-// Find looks the hash up in the account's most recent torrents
-// (GET /torrents?limit=100).
+type rdListItem struct {
+	ID     string `json:"id"`
+	Hash   string `json:"hash"`
+	Status string `json:"status"`
+}
+
+func (p *realDebrid) listTorrents(ctx context.Context) ([]rdListItem, error) {
+	var items []rdListItem
+	err := p.do(ctx, apiRequest{method: http.MethodGet, path: "/torrents", query: url.Values{"limit": {"100"}}}, &items)
+	return items, err
+}
+
+// Find looks the hash up in the account's most recent torrents.
 func (p *realDebrid) Find(ctx context.Context, hash string) (string, error) {
 	if lowPriority(ctx) {
 		return p.list.known(p.opts.Now(), hash), nil
 	}
 	return p.list.find(ctx, p.opts.Now(), hash, func(ctx context.Context) (map[string]string, error) {
-		var items []struct {
-			ID     string `json:"id"`
-			Hash   string `json:"hash"`
-			Status string `json:"status"`
-		}
-		if err := p.do(ctx, apiRequest{method: http.MethodGet, path: "/torrents", query: url.Values{"limit": {"100"}}}, &items); err != nil {
+		items, err := p.listTorrents(ctx)
+		if err != nil {
 			return nil, err
 		}
 		m := map[string]string{}
 		for _, it := range items {
-			if it.Status == "downloaded" && it.ID != "" {
+			if it.Status == "downloaded" && it.ID != "" && m[strings.ToLower(it.Hash)] == "" {
 				m[strings.ToLower(it.Hash)] = it.ID
+			}
+		}
+		for _, it := range items {
+			switch it.Status {
+			case "magnet_conversion", "waiting_files_selection", "queued", "downloading", "compressing", "uploading":
+				if hash := strings.ToLower(it.Hash); it.ID != "" && m[hash] == "" {
+					m[hash] = it.ID
+				}
 			}
 		}
 		return m, nil
 	})
+}
+
+var errRDAddUnconfirmed = fmt.Errorf("real-debrid: torrent add could not be confirmed: %w", core.ErrSourceUnavailable)
+
+// reconcileAdd bypasses the list snapshot and considers pending torrents as
+// well as downloaded ones; both can be the result of a committed POST.
+func (p *realDebrid) reconcileAdd(ctx context.Context, hash string) (string, error) {
+	items, err := p.listTorrents(ctx)
+	if err != nil {
+		return "", err
+	}
+	for _, it := range items {
+		if it.ID != "" && strings.EqualFold(it.Hash, hash) {
+			p.pace.mu.Lock()
+			p.pace.api.ListHits++
+			p.pace.mu.Unlock()
+			p.pace.writeAnswer(ctx, answerKey{hash: hash}, learnedAnswer{verdict: answerPending, torrentID: it.ID}, p.opts.Now())
+			return it.ID, nil
+		}
+	}
+	return "", errRDAddUnconfirmed
 }
 
 func rdFiles(info *rdInfo) []File {
@@ -236,11 +286,11 @@ func rdLinkFor(info *rdInfo, fileID string) string {
 	return ""
 }
 
-func (p *realDebrid) Acquire(ctx context.Context, req AcquireRequest) (_ *Acquired, err error) {
-	if p.pace.refused(req.InfoHash) {
-		return nil, ErrBlocked
-	}
-	defer func() { p.pace.rememberRefusal(req.InfoHash, err) }()
+func (p *realDebrid) Acquire(ctx context.Context, req AcquireRequest) (*Acquired, error) {
+	return p.pace.acquireRemembered(ctx, req, p.opts.Now, p.acquire)
+}
+
+func (p *realDebrid) acquire(ctx context.Context, req AcquireRequest) (_ *Acquired, err error) {
 	if req.Private && !req.privateChecked {
 		var perr error
 		req, perr = prepareAcquire(ctx, p, req, false)
@@ -249,34 +299,59 @@ func (p *realDebrid) Acquire(ctx context.Context, req AcquireRequest) (_ *Acquir
 		}
 	}
 	id, added := req.TorrentID, false
+	key := answerKey{hash: req.InfoHash}
 	if id == "" {
-		var out struct {
-			ID string `json:"id"`
+		if previous := p.pace.answer(ctx, key, p.opts.Now()); previous.needsReconciliation() {
+			p.pace.noteRemembered()
+			if previous.verdict == answerReconcileWait && p.opts.Now().Before(previous.expires.Add(-answerHoldTTL+listTTL)) {
+				return nil, errRDAddUnconfirmed
+			}
+			p.pace.writeAnswer(ctx, key, learnedAnswer{verdict: answerReconcileWait}, p.opts.Now())
+			id, err = p.reconcileAdd(ctx, req.InfoHash)
+			if err != nil {
+				return nil, err
+			}
+		} else {
+			var out struct {
+				ID string `json:"id"`
+			}
+			form := url.Values{"magnet": {req.Magnet}}
+			err := p.do(ctx, apiRequest{method: http.MethodPost, path: "/torrents/addMagnet", form: form}, &out)
+			switch {
+			case err == nil && out.ID != "":
+				id, added = out.ID, true
+			case err == nil, errors.Is(err, ErrTransport), errors.Is(err, errDuplicateTorrent):
+				p.pace.writeAnswer(ctx, key, learnedAnswer{verdict: answerReconcile}, p.opts.Now())
+				if ctx.Err() != nil {
+					return nil, errRDAddUnconfirmed
+				}
+				id, err = p.reconcileAdd(ctx, req.InfoHash)
+				if err != nil {
+					p.pace.writeAnswer(ctx, key, learnedAnswer{verdict: answerReconcileWait}, p.opts.Now())
+					return nil, err
+				}
+			default:
+				return nil, err
+			}
 		}
-		form := url.Values{"magnet": {req.Magnet}}
-		if err := p.do(ctx, apiRequest{method: http.MethodPost, path: "/torrents/addMagnet", form: form, torrentHash: req.InfoHash}, &out); err != nil {
-			return nil, err
-		}
-		if out.ID == "" {
-			return nil, errors.New("real-debrid: addMagnet returned no id")
-		}
-		id, added = out.ID, true
 	}
 	defer func() {
 		if err == nil {
 			p.list.remember(req.InfoHash, id)
 		}
 	}()
+	removed := false
 	cleanup := func() bool {
-		if added && req.RemoveUncached {
-			rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
-			defer cancel()
-			if req.mayRemove(rctx, id) {
-				return p.Remove(rctx, id) == nil
-			}
+		if added && req.RemoveUncached && ctx.Err() == nil && req.mayRemove(ctx, id) {
+			removed = p.Remove(ctx, id) == nil
 		}
-		return false
+		return removed
 	}
+	defer func() {
+		if err != nil && added && !removed && pendingTorrent(err) == "" && !errors.Is(err, ErrBlockedHash) {
+			p.pace.writeAnswer(ctx, key, learnedAnswer{verdict: answerPending, torrentID: id}, p.opts.Now())
+		}
+	}()
 	info, err := p.info(ctx, id)
 	for polls := 0; err == nil && info.Status == "magnet_conversion" && polls < p.opts.ReadyPolls*2; polls++ {
 		if err = sleep(ctx, p.opts.PollInterval); err == nil {
@@ -289,6 +364,12 @@ func (p *realDebrid) Acquire(ctx context.Context, req AcquireRequest) (_ *Acquir
 		}
 		return nil, err
 	}
+	if info.Hash != "" && req.InfoHash != "" && !strings.EqualFold(info.Hash, req.InfoHash) {
+		return nil, fmt.Errorf("real-debrid: account torrent hash changed: %w", ErrGone)
+	}
+	if req.Private && info.Status != "downloaded" {
+		return nil, core.ErrPrivateUncached
+	}
 	var chosen File
 	switch info.Status {
 	case "waiting_files_selection":
@@ -296,9 +377,20 @@ func (p *realDebrid) Acquire(ctx context.Context, req AcquireRequest) (_ *Acquir
 			cleanup()
 			return nil, err
 		}
-		form := url.Values{"files": {rdSelection(rdFiles(info), chosen)}}
-		if err := p.do(ctx, apiRequest{method: http.MethodPost, path: "/torrents/selectFiles/" + url.PathEscape(id), form: form}, nil); err != nil {
-			cleanup()
+		selection := rdSelection(rdFiles(info), chosen)
+		selectFiles := func(ids string) error {
+			return p.do(ctx, apiRequest{method: http.MethodPost, path: "/torrents/selectFiles/" + url.PathEscape(id), form: url.Values{"files": {ids}}}, nil)
+		}
+		err = selectFiles(selection)
+		if errors.Is(err, ErrBlockedFile) && selection != chosen.ID {
+			// A denied pack selection cannot identify which sibling was
+			// denied. Try only the requested file on the same account item.
+			err = selectFiles(chosen.ID)
+		}
+		if err != nil {
+			if !errors.Is(err, ErrBlockedFile) {
+				cleanup()
+			}
 			return nil, err
 		}
 		for polls := 0; polls < p.opts.ReadyPolls; polls++ {
@@ -312,14 +404,6 @@ func (p *realDebrid) Acquire(ctx context.Context, req AcquireRequest) (_ *Acquir
 			if err = sleep(ctx, p.opts.PollInterval); err != nil {
 				return nil, err
 			}
-		}
-	case "downloaded":
-		// A reused torrent: the wanted file must already be selected.
-		if chosen, err = req.Choose(rdFiles(info)); err != nil {
-			return nil, err
-		}
-		if !chosen.selected {
-			return nil, fmt.Errorf("real-debrid: file not selected in existing torrent: %w", ErrGone)
 		}
 	}
 	switch info.Status {
@@ -335,19 +419,53 @@ func (p *realDebrid) Acquire(ctx context.Context, req AcquireRequest) (_ *Acquir
 		}
 		return nil, pending(id, err)
 	}
+	if info.Hash != "" && req.InfoHash != "" && !strings.EqualFold(info.Hash, req.InfoHash) {
+		return nil, fmt.Errorf("real-debrid: account torrent hash changed after selection: %w", ErrGone)
+	}
+	files := rdFiles(info)
+	selectedCount := 0
+	for _, f := range files {
+		if f.selected {
+			selectedCount++
+		}
+	}
+	if selectedCount == 0 || selectedCount != len(info.Links) {
+		if !added {
+			p.pace.writeAnswer(ctx, key, learnedAnswer{verdict: answerPending, torrentID: id}, p.opts.Now())
+		}
+		return nil, fmt.Errorf("real-debrid: invalid selected-file links: %w", ErrTransport)
+	}
+	current := answerFiles(files)
+	if len(req.rememberedFiles) != 0 && !slices.Equal(req.rememberedFiles, current) {
+		p.pace.writeAnswer(ctx, key, learnedAnswer{verdict: answerCached, torrentID: id, files: current}, p.opts.Now())
+	}
+	if chosen.ID == "" {
+		if chosen, err = req.Choose(files); err != nil {
+			return nil, err
+		}
+	}
+	if req.selectedFiles != nil {
+		req.selectedFiles(files)
+	}
+	// Check the file identity again after selection. A changed ID or size
+	// must never send a link belonging to a different file.
+	if !slices.ContainsFunc(files, func(f File) bool {
+		return f.selected && f.ID == chosen.ID && f.Path == chosen.Path && f.Size == chosen.Size
+	}) {
+		return nil, errSelectionMismatch
+	}
 	chosen.Link = rdLinkFor(info, chosen.ID)
 	if chosen.Link == "" {
-		cleanup()
-		return nil, fmt.Errorf("real-debrid: no link for the selected file: %w", core.ErrNotCached)
+		return nil, fmt.Errorf("real-debrid: missing selected-file link: %w", ErrTransport)
 	}
 	return &Acquired{TorrentID: id, File: chosen, Added: added}, nil
 }
 
-func (p *realDebrid) Link(ctx context.Context, h Handle) (_ DirectLink, err error) {
-	if p.pace.refused(h.InfoHash) {
-		return DirectLink{}, ErrBlocked
-	}
-	defer func() { p.pace.rememberRefusal(h.InfoHash, err) }()
+func (p *realDebrid) Link(ctx context.Context, h Handle) (DirectLink, error) {
+	return p.pace.linkRemembered(ctx, h, p.opts.Now, p.link)
+}
+
+func (p *realDebrid) link(ctx context.Context, h Handle) (DirectLink, error) {
 	link := h.Link
 	if link == "" {
 		if h.TorrentID == "" {

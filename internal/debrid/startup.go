@@ -16,8 +16,16 @@ func (s *Service) reusablePayload(ctx context.Context, rel core.Release) (Payloa
 	if !ok || p.ReleaseID != rel.ID {
 		return Payload{}, false
 	}
-	if e := s.entryByID(p.Provider); e == nil || e.refusesHash(p.InfoHash) {
+	e := s.entryByID(p.Provider)
+	if e == nil || e.refusesHash(p.InfoHash) {
 		return Payload{}, false
+	}
+	if pace := e.api; pace != nil {
+		if pace.answer(ctx, answerKey{hash: p.InfoHash}, pace.now()).verdict == answerBlockedHash ||
+			pace.answer(ctx, fileAnswerKey(p.InfoHash, p.Path, p.Size, p.FileID), pace.now()).verdict == answerBlockedFile {
+			pace.noteRemembered()
+			return Payload{}, false
+		}
 	}
 	if s.checkMediaPaused(p.Provider, p.URL) != nil {
 		return Payload{}, false

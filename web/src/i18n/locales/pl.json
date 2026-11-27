@@ -769,6 +769,7 @@
   "m_0228876e08de48": "Jellyfin pokazuje najpierw Ulubione; Twoje grupy stają się tagami kanałów.",
   "m_0229f3ebb5c5f4": "IntroDB",
   "m_022ac34b13be42": "Uznane i jeszcze nieobejrzane",
+  "m_022c5575f22bf5": "{attempts} prób wywołania API · {retries} ponowień · {limited} odmów z powodu limitu",
   "m_022cc151865789": "Automatyczna aktualizacja",
   "m_022e1fe7d764a0": "Gatunki filmowe",
   "m_022ec112c6322d": "Tylko w indeksie wyszukiwania",
@@ -6921,6 +6922,7 @@
   "m_131fb65bf5e014": "Przypisany do konta: {name}",
   "m_132162d45882b6": "Zapisz i opublikuj",
   "m_132166f2d04b7c": "Ręcznie",
+  "m_1321e926d05412": "{reused} ponownych użyć z konta · {remembered} zapamiętanych odpowiedzi",
   "m_1322ee60131114": "Nie pokazuj oceny",
   "m_132357d36a8f22": {
     "few": "Znaleziono {count} seriale",
@@ -8529,6 +8531,7 @@
   "m_17a4c01dbffc16": "Strona wyświetlana w konsoli",
   "m_17a4e9f71f41a1": "Identyfikator katalogu",
   "m_17a715b256eec6": "Według widza",
+  "m_17a72b2c7ed8b6": "{average} wywołania API na pierwsze odtworzenie",
   "m_17a871ca35a5b2": "Wstępnie ładuj filmy i seriale",
   "m_17a87410ee9978": "Wybierz plik",
   "m_17ab1e528be434": "Filmy i odcinki",

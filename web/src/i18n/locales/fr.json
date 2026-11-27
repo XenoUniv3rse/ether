@@ -755,6 +755,7 @@
   "m_0228876e08de48": "Jellyfin affiche d’abord les Favoris ; vos groupes deviennent des étiquettes de chaînes.",
   "m_0229f3ebb5c5f4": "IntroDB",
   "m_022ac34b13be42": "Acclamés et encore inédits pour vous",
+  "m_022c5575f22bf5": "{attempts} tentatives API · {retries} nouvelles tentatives · {limited} refus pour débit trop élevé",
   "m_022cc151865789": "Mise à jour automatique",
   "m_022e1fe7d764a0": "Genres de films",
   "m_022ec112c6322d": "Dans l’index de recherche uniquement",
@@ -6755,6 +6756,7 @@
   "m_131fb65bf5e014": "Associé à {name}",
   "m_132162d45882b6": "Enregistrer et publier",
   "m_132166f2d04b7c": "Manuelle",
+  "m_1321e926d05412": "{reused} réutilisations depuis le compte · {remembered} réponses mémorisées",
   "m_1322ee60131114": "Ne pas afficher de note",
   "m_132357d36a8f22": {
     "many": "{count} de séries trouvées",
@@ -8322,6 +8324,7 @@
   "m_17a4c01dbffc16": "Page affichée dans la console",
   "m_17a4e9f71f41a1": "ID du catalogue",
   "m_17a715b256eec6": "Par spectateur",
+  "m_17a72b2c7ed8b6": "{average} appels API par première lecture",
   "m_17a871ca35a5b2": "Précharger films et séries",
   "m_17a87410ee9978": "Choisir un fichier",
   "m_17ab1e528be434": "Films et épisodes",

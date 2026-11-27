@@ -755,6 +755,7 @@
   "m_0228876e08de48": "O Jellyfin mostra Favoritos primeiro; seus grupos viram tags de canais.",
   "m_0229f3ebb5c5f4": "IntroDB",
   "m_022ac34b13be42": "Aclamados que você ainda não viu",
+  "m_022c5575f22bf5": "{attempts} tentativas de API · {retries} novas tentativas · {limited} limitadas por frequência",
   "m_022cc151865789": "Atualização automática",
   "m_022e1fe7d764a0": "Gêneros de filmes",
   "m_022ec112c6322d": "Apenas no índice de busca",
@@ -6755,6 +6756,7 @@
   "m_131fb65bf5e014": "Reivindicado por {name}",
   "m_132162d45882b6": "Salvar e publicar",
   "m_132166f2d04b7c": "Manual",
+  "m_1321e926d05412": "{reused} reutilizações da conta · {remembered} respostas memorizadas",
   "m_1322ee60131114": "Não mostrar avaliação",
   "m_132357d36a8f22": {
     "many": "{count} séries encontradas",
@@ -8322,6 +8324,7 @@
   "m_17a4c01dbffc16": "Página exibida no console",
   "m_17a4e9f71f41a1": "ID do catálogo",
   "m_17a715b256eec6": "Por espectador",
+  "m_17a72b2c7ed8b6": "{average} chamadas de API por primeira reprodução",
   "m_17a871ca35a5b2": "Pré-carregar filmes e séries",
   "m_17a87410ee9978": "Escolher um arquivo",
   "m_17ab1e528be434": "Filmes e episódios",

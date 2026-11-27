@@ -184,8 +184,8 @@ func TestRealDebridUncachedIsRemoved(t *testing.T) {
 }
 
 // Real-Debrid's filename filter answers unrestrict with infringing_file for
-// a torrent that reached "downloaded". The release must count as not cached
-// on that account, leave no torrent behind and not be promoted or retried.
+// a torrent that reached "downloaded". The blocked file is not playable.
+// Retaining the torrent lets the account keep serving any unblocked siblings.
 func TestRealDebridInfringingFileIsNotCached(t *testing.T) {
 	f := &fakeRD{cached: true}
 	base := f.handler(t)
@@ -217,8 +217,8 @@ func TestRealDebridInfringingFileIsNotCached(t *testing.T) {
 	f.mu.Lock()
 	deleted := append([]string(nil), f.deleted...)
 	f.mu.Unlock()
-	if len(deleted) != 1 || deleted[0] != "T1" {
-		t.Fatalf("blocked torrent left on the account: deleted %v", deleted)
+	if len(deleted) != 0 {
+		t.Fatalf("file refusal removed the entire account torrent: %v", deleted)
 	}
 	st := svc.Stats()[0]
 	if st.Blocked != 1 || st.Failures != 0 || st.State != "ok" {
@@ -847,7 +847,10 @@ func TestDebridLinkUncachedIsRemoved(t *testing.T) {
 	f := &fakeDL{cached: false}
 	srv := httptest.NewServer(f.handler(t))
 	defer srv.Close()
-	p := newDebridLink(testKey, fastOpts(srv.URL))
+	now := time.Now()
+	opts := fastOpts(srv.URL)
+	opts.Now = func() time.Time { return now }
+	p := newDebridLink(testKey, opts)
 	ctx := context.Background()
 	// Cached-only: the bare hash is refused, so nothing reaches the account.
 	if _, err := p.Acquire(ctx, acquireReq(true)); !errors.Is(err, core.ErrNotCached) {
@@ -856,7 +859,8 @@ func TestDebridLinkUncachedIsRemoved(t *testing.T) {
 	if len(f.torrents) != 0 || len(f.deleted) != 0 {
 		t.Fatalf("uncached hash reached the account: %v %v", f.torrents, f.deleted)
 	}
-	// Accepted but never complete: removed again.
+	// After the cold verdict expires, an accepted but incomplete torrent is removed.
+	now = now.Add(answerHoldTTL + time.Second)
 	f.cached, f.stalls = true, true
 	if _, err := p.Acquire(ctx, acquireReq(true)); !errors.Is(err, core.ErrNotCached) {
 		t.Fatalf("stalled torrent: %v", err)
