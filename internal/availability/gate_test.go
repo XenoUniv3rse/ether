@@ -390,6 +390,9 @@ func queryPlanText(t testing.TB, x *fixture, sqlText string, args ...any) string
 //  3. New evidence writes O(1) indexed row with no hidden-set rebuild.
 func TestScale50kBrowseIndexPlanAndIdleTickCost(t *testing.T) {
 	x := setup(t)
+	if store.DialectOf(x.s.db) == store.Postgres {
+		t.Skip("asserts SQLite EXPLAIN QUERY PLAN output")
+	}
 	ctx := context.Background()
 	var cfgGen uint64 = 1
 	x.s.d.ConfigGeneration = func() uint64 { return cfgGen }
@@ -426,7 +429,7 @@ WITH RECURSIVE seq(i) AS (
   SELECT 1 UNION ALL SELECT i+1 FROM seq WHERE i<?
 )
 INSERT INTO catalog_titles(key,type,tmdb_id,title,sort_title,year,released_ts,popularity,browsable,added_at,fetched_at)
-SELECT ?+i,'movie',i,'Movie '||i,'movie '||printf('%06d',i),2026,?+(i%86400),CAST(i AS REAL),1,?,? FROM seq`,
+SELECT ?+i,'movie',i,'Movie '||i,'movie '||substr('00000'||i,length('00000'||i)-5,6),2026,?+(i%86400),CAST(i AS REAL),1,?,? FROM seq`,
 		totalN, movieKeyBase, relBase, nowTS, nowTS); err != nil {
 		tx.Rollback()
 		t.Fatal(err)
