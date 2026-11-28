@@ -213,6 +213,7 @@ func (c *Cache) flushExperience() {
 func (c *Cache) Sweep() {
 	if c.shared != nil {
 		c.shared.sweep(true)
+		c.trimPool()
 		return
 	}
 	prot, shrank := c.protected()
@@ -254,7 +255,10 @@ func (c *Cache) Sweep() {
 // Run expires idle bytes even when no new streams arrive.
 func (c *Cache) Run(ctx context.Context) {
 	if c.shared == nil {
-		c.indexDisk(ctx)
+		if err := c.indexDisk(ctx); err != nil && ctx.Err() == nil {
+			c.logger.Warn("cache accounting directory", "err", err)
+		}
+		c.trimPool()
 	}
 	t := time.NewTicker(time.Minute)
 	defer t.Stop()
