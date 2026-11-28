@@ -1201,24 +1201,8 @@ type KindSyncDecl struct {
 
 // KindCacheDecl is the per-library blob cache budget (§5.4).
 type KindCacheDecl struct {
-	MaxBytes int64  `json:"maxBytes,omitempty"` // 0 = server default
+	MaxBytes int64  `json:"maxBytes,omitempty"` // 0 inherits the media pool budget.
 	TTL      string `json:"ttl,omitempty"`
-}
-
-// Blob cache budget defaults (§15.5): the per-library default quota and
-// the shared absolute cap. The shared cap is also bounded by 5% of the
-// cache disk at runtime, which only the cache owner can measure.
-const (
-	DefaultKindCacheMaxBytes int64 = 2 << 30
-	SharedKindCacheCapBytes  int64 = 10 << 30
-)
-
-// EffectiveMaxBytes resolves the declared cache cap against the default.
-func (c KindCacheDecl) EffectiveMaxBytes() int64 {
-	if c.MaxBytes <= 0 {
-		return DefaultKindCacheMaxBytes
-	}
-	return c.MaxBytes
 }
 
 // KindMatchDecl holds matcher defaults for a kind (spec §7).

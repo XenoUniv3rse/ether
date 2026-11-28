@@ -320,6 +320,12 @@ func (h *host) callRecord(ctx context.Context) (Record, error) {
 	return h.m.store.record(ctx, h.plugin)
 }
 
+// SourceDataLimits returns the same owner grants for a kind source download or
+// extraction as a plugin-initiated fetchToCache or archive.extract operation.
+func (m *Manager) SourceDataLimits(ctx context.Context, pluginID string) RuntimeLimits {
+	return (&host{m: m, plugin: pluginID}).DataLimits(ctx)
+}
+
 // DataLimits exposes owner grants to shared hosted/remote data services.
 func (h *host) DataLimits(ctx context.Context) RuntimeLimits {
 	rec, err := h.callRecord(ctx)

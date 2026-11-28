@@ -264,7 +264,7 @@ func (c *KindCatalog) syncPlugin(ctx context.Context, r plugins.Record) {
 		if c.blobs != nil {
 			c.blobs.BindPluginLibrary(r.ID, lib.Key)
 			if c.blobNamespaceExistsOnDisk(lib.Key) {
-				c.blobs.Namespace(lib.Key, q)
+				c.blobs.Namespace(lib.Key, q).SetQuota(q)
 			}
 		}
 		// Cancel any in-flight pull sync BEFORE UpsertKind so a running

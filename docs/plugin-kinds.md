@@ -1132,11 +1132,13 @@ app would, then read the result with `kinds.browse`:
 namespaces and frees its quota immediately (deleting an absent or already
 evicted ref succeeds), so large temporary downloads or extracts do not evict
 smaller kept files.
-The default quota is 2 GiB per library. A kind can declare `cache.maxBytes`
-and the owner can adjust the quota in the library settings. Across all
-libraries, Ether defaults to the smaller of 10 GiB and 5% of the cache
-disk. Owners can change **Shared library cache (GiB)** under **Cache → Libraries**, above the individual library quotas. Clearing the field restores the automatic size. Both modes preserve
-the free-space reserve.
+Plugin media files use Ether’s configured media cache, alongside playback
+segments. By default a library inherits the pool budget. A kind can declare
+a smaller `cache.maxBytes`; the owner can set a persistent library limit under
+**Cache → Libraries**. The pool budget and free-space reserve apply across all
+writers, including resumable downloads. Remote binary cache uploads and host
+downloads both respect the plugin’s download grant. The plugin keeps its existing cache keys
+and `blob:<sha256>` references inside its own library namespaces.
 
 For large disc images, allow room for both the downloaded archive and its
 extracted member. The runtime limits for **Download (GiB)**, **File inside an

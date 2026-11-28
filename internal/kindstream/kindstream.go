@@ -112,8 +112,10 @@ type Deps struct {
 	Secret               func(ctx context.Context, name string) (string, error)
 	AllowHost            func(host string) bool
 	MaxDownloadBytes     int64
-	ItemIndex            int
-	Backoff              *HostBackoff
+	// CacheWriteLimits obtains plugin download and member grants only when caching bytes.
+	CacheWriteLimits func() (download, member int64)
+	ItemIndex        int
+	Backoff          *HostBackoff
 	// OnSourceFailed, when set, is called each time a candidate fails to open,
 	// regardless of whether a later candidate succeeds.
 	OnSourceFailed func(attempt, total int, src core.PlayableSource, took time.Duration, err error)
@@ -838,7 +840,7 @@ func downloadFromNoRangeResponse(
 
 	combined := io.MultiReader(bytes.NewReader(noRange.head), noRange.resp.Body)
 	if limit > 0 {
-		combined = io.LimitReader(combined, limit+1)
+		combined = &limitEnforcingReader{r: combined, max: limit}
 	}
 
 	cacheKey := downloadCacheKey(rawURL, deps.ItemIndex)
@@ -1779,16 +1781,34 @@ func UnwrapMediaSource(bs ByteSource) core.MediaSource {
 // Internal helpers
 
 func effectiveDownloadMaxBytes(srcMax int64, deps Deps) int64 {
-	if srcMax > 0 {
-		return srcMax
+	var grant int64
+	if deps.CacheWriteLimits != nil {
+		grant, _ = deps.CacheWriteLimits()
 	}
-	if deps.MaxDownloadBytes > 0 {
-		return deps.MaxDownloadBytes
+	return effectiveCacheWriteLimit(srcMax, grant, deps)
+}
+
+func effectiveMemberMaxBytes(srcMax int64, deps Deps) int64 {
+	var grant int64
+	if deps.CacheWriteLimits != nil {
+		_, grant = deps.CacheWriteLimits()
 	}
+	return effectiveCacheWriteLimit(srcMax, grant, deps)
+}
+
+func effectiveCacheWriteLimit(srcMax, grant int64, deps Deps) int64 {
+	// Bound the in-memory fallback when no disk namespace is available.
+	const maxInMemoryBytes int64 = 2 << 30
+	limit := maxInMemoryBytes
 	if deps.Cache != nil {
-		return deps.Cache.Quota().EffectiveMaxBytes()
+		limit = deps.Cache.Quota().EffectiveMaxBytes()
 	}
-	return blobcache.DefaultMaxBytes
+	for _, cap := range []int64{grant, deps.MaxDownloadBytes, srcMax} {
+		if cap > 0 {
+			limit = min(limit, cap)
+		}
+	}
+	return limit
 }
 
 func downloadCacheKey(rawURL string, itemIdx int) string {

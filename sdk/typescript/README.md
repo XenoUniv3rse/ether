@@ -205,7 +205,7 @@ start their execution deadline when an instance is acquired.
 The default download and expanded-member ceilings are **8 GiB** each, total
 archive expansion **32 GiB**, archive members **65,535**, and stored catalogue
 items **2,000,000** (`maxItems`, owner-adjustable with no upper bound). Downloads also obey
-the library cache quota (2 GiB unless the manifest declares a different quota).
+the media pool budget and any explicit per-library limit.
 The host reports requested fields in the manifest and exact grants as
 `runtimeLimits` in install preview and detail, displayed side by side, and exposes
 the effective limits for the active call at runtime via `ctx.ether.runtime!.limits()` —

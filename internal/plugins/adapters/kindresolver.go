@@ -2733,6 +2733,15 @@ func (r *KindResolver) kindstreamDeps(ctx context.Context, rec pluginitems.KindR
 		}
 	}
 	var ns *blobcache.Namespace
+	var writeLimits func() (int64, int64)
+	if r.mgr != nil {
+		writeLimits = sync.OnceValues(func() (int64, int64) {
+			limitCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+			defer cancel()
+			grants := r.mgr.SourceDataLimits(limitCtx, rec.PluginID)
+			return grants.FetchBytes, grants.ArchiveMemberBytes
+		})
+	}
 	if r.blobs != nil && lib.Key != "" {
 		r.blobs.BindPluginLibrary(rec.PluginID, lib.Key)
 		ns = r.blobs.Namespace(lib.Key, quota)
@@ -2811,7 +2820,7 @@ func (r *KindResolver) kindstreamDeps(ctx context.Context, rec pluginitems.KindR
 		CandidateOpenTimeout: r.candidateOpenTimeout,
 		Secret:               secretFn,
 		AllowHost:            allowHost,
-		MaxDownloadBytes:     quota.EffectiveMaxBytes(),
+		CacheWriteLimits:     writeLimits,
 		ItemIndex:            effectiveItemIndex(item.Index, partIdx),
 		Backoff:              r.backoff,
 		SourceRouter:         sourceRouter,

@@ -98,7 +98,6 @@ const (
 	maxAIBodyBytes     = 128 << 10
 	maxCollectionBytes = 2 << 20
 	maxKindUpsertBytes = 8 << 20
-	maxCacheBlobBytes  = 256 << 20
 	defaultPageLimit   = 50
 	maxPageLimit       = 200
 )
@@ -616,14 +615,36 @@ func (h *HostHandler) resolveSources(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, res)
 }
 
+type cacheUploadBody struct {
+	io.Reader
+	size int64
+}
+
+func (b cacheUploadBody) ExpectedSize() int64 { return b.size }
+
 func (h *HostHandler) cachePut(w http.ResponseWriter, r *http.Request) {
 	libraryKey := r.PathValue("libraryKey")
 	name := r.PathValue("name")
 	if name == "" {
 		name = r.URL.Query().Get("name")
 	}
-	body := io.LimitReader(r.Body, maxCacheBlobBytes+1)
-	ref, err := h.host.CachePut(r.Context(), pluginIDOf(r), libraryKey, name, body)
+	pluginID := pluginIDOf(r)
+	limit := int64(plugins.MaxDataFetchBytes)
+	if h, ok := h.host.(interface {
+		CacheUploadLimit(context.Context, string) int64
+	}); ok {
+		limit = h.CacheUploadLimit(r.Context(), pluginID)
+	}
+	if r.ContentLength > limit {
+		h.finishErr(w, ErrTooLarge)
+		return
+	}
+	body := cacheUploadBody{http.MaxBytesReader(w, r.Body, limit), r.ContentLength}
+	ref, err := h.host.CachePut(r.Context(), pluginID, libraryKey, name, body)
+	var overflow *http.MaxBytesError
+	if errors.As(err, &overflow) {
+		err = ErrTooLarge
+	}
 	if !h.finishErr(w, err) {
 		return
 	}

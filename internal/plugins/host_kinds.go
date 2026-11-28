@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"regexp"
 	"slices"
 	"sort"
@@ -88,6 +89,7 @@ type KindBackends struct {
 	// AdmitBackgroundUsenetCheck reserves one background usenet_check candidate
 	// check against the plugin's daily allowance in availability_budget.
 	AdmitBackgroundUsenetCheck func(ctx context.Context, pluginID string) (outCtx context.Context, refund func(), resetAt time.Time, err error)
+	CacheLimit                 func(pluginID, libraryKey string) int64
 	CachePut                   func(ctx context.Context, pluginID, libraryKey, name string, r io.Reader) (blobRef string, err error)
 	CacheLookup                func(pluginID, libraryKey, key string) (blobRef string, ok bool)
 	CacheOpen                  func(ctx context.Context, pluginID, blobRef string) (io.ReadSeekCloser, error)
@@ -124,6 +126,7 @@ func (m *Manager) SetKindBackends(b KindBackends) {
 	m.deps.Backends.NormalizeStoredReleaseLinks = b.NormalizeStoredReleaseLinks
 	m.deps.Backends.PeekUsenetCheck = b.PeekUsenetCheck
 	m.deps.Backends.AdmitBackgroundUsenetCheck = b.AdmitBackgroundUsenetCheck
+	m.deps.Backends.CacheLimit = b.CacheLimit
 	m.deps.Backends.CachePut = b.CachePut
 	m.deps.Backends.CacheLookup = b.CacheLookup
 	m.deps.Backends.CacheOpen = b.CacheOpen
@@ -158,6 +161,7 @@ func (m *Manager) kindBackends() KindBackends {
 		ResolveSourcesResult:       m.deps.Backends.ResolveSourcesResult,
 		PeekUsenetCheck:            m.deps.Backends.PeekUsenetCheck,
 		AdmitBackgroundUsenetCheck: m.deps.Backends.AdmitBackgroundUsenetCheck,
+		CacheLimit:                 m.deps.Backends.CacheLimit,
 		CachePut:                   m.deps.Backends.CachePut,
 		CacheLookup:                m.deps.Backends.CacheLookup,
 		CacheOpen:                  m.deps.Backends.CacheOpen,
@@ -1060,6 +1064,27 @@ func pluginSourceError(err error) error {
 	return ErrUnavailable
 }
 
+// sizedCacheInput lets storage reserve known content lengths before reading.
+type sizedCacheInput struct {
+	io.Reader
+	size int64
+}
+
+func (r sizedCacheInput) ExpectedSize() int64 { return r.size }
+
+// libraryLimit resolves a declared or owner-selected library ceiling. Pool
+// admission separately accounts for other libraries, streams and partials.
+func (b KindBackends) libraryLimit(pluginID, libraryKey string, decl KindCacheDecl) int64 {
+	limit := decl.MaxBytes
+	if b.CacheLimit != nil {
+		limit = b.CacheLimit(pluginID, libraryKey)
+	}
+	if limit <= 0 {
+		return math.MaxInt64
+	}
+	return limit
+}
+
 func (h *host) CachePut(ctx context.Context, libraryKey, name string, r io.Reader) (string, error) {
 	if err := h.requireWritableToolContext(ctx); err != nil {
 		return "", err
@@ -1068,13 +1093,30 @@ func (h *host) CachePut(ctx context.Context, libraryKey, name string, r io.Reade
 	if err != nil {
 		return "", err
 	}
-	backend := h.m.kindBackends().CachePut
+	b := h.m.kindBackends()
+	backend := b.CachePut
 	if backend == nil {
 		return "", ErrUnavailable
 	}
-	// A single blob can never exceed the whole per-library quota.
-	limited := io.LimitReader(r, decl.Cache.EffectiveMaxBytes()+1)
-	return backend(ctx, h.plugin, libraryKey, name, limited)
+	limit := b.libraryLimit(h.plugin, libraryKey, decl.Cache)
+	var limited *boundedDataReader
+	if limit < math.MaxInt64 {
+		limited = &boundedDataReader{ctx: ctx, r: r, left: limit}
+		if sized, ok := r.(interface{ ExpectedSize() int64 }); ok {
+			if sized.ExpectedSize() > limit {
+				return "", ErrQuotaExceeded
+			}
+			r = sizedCacheInput{limited, sized.ExpectedSize()}
+		} else {
+			r = limited
+		}
+	}
+	ref, err := backend(ctx, h.plugin, libraryKey, name, r)
+	if (limited != nil && limited.left < 0) || errors.Is(err, blobcache.ErrTooLarge) {
+		return "", ErrQuotaExceeded
+	}
+
+	return ref, err
 }
 
 // viewerContextKey carries the authenticated viewer of a proxied request
@@ -1510,11 +1552,11 @@ func (h *host) resolveExtractTarget(ctx context.Context, explicitLibraryKey, sou
 		if err != nil {
 			return "", 0, err
 		}
-		return explicit, decl.Cache.EffectiveMaxBytes(), nil
+		return explicit, h.m.kindBackends().libraryLimit(h.plugin, explicit, decl.Cache), nil
 	}
 	if src := strings.TrimSpace(sourceLibraryKey); src != "" {
 		if decl, err := h.cacheWriteCheck(ctx, src, name); err == nil {
-			return src, decl.Cache.EffectiveMaxBytes(), nil
+			return src, h.m.kindBackends().libraryLimit(h.plugin, src, decl.Cache), nil
 		}
 	}
 	libKey, err := h.archiveExtractCheck(ctx, "")
@@ -1525,5 +1567,5 @@ func (h *host) resolveExtractTarget(ctx context.Context, explicitLibraryKey, sou
 	if err != nil {
 		return "", 0, err
 	}
-	return libKey, decl.Cache.EffectiveMaxBytes(), nil
+	return libKey, h.m.kindBackends().libraryLimit(h.plugin, libKey, decl.Cache), nil
 }

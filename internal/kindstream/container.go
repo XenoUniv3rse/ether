@@ -188,7 +188,7 @@ func ExtractMember(
 	if deps.Cache == nil {
 		return nil, fmt.Errorf("%w: blobcache namespace required to extract compressed member %q", ErrMemberUndecodable, selected.Name)
 	}
-	limit := effectiveDownloadMaxBytes(maxBytes, deps)
+	limit := effectiveMemberMaxBytes(maxBytes, deps)
 	if limit > 0 && selected.Size > limit {
 		return nil, fmt.Errorf("%w: member %q unpacked size %d exceeds limit %d", ErrSizeLimitExceeded, selected.Name, selected.Size, limit)
 	}
@@ -290,7 +290,7 @@ func extractFromOpenVolumes(
 	if deps.Cache == nil {
 		return nil, fmt.Errorf("%w: blobcache namespace required to extract compressed member %q", ErrMemberUndecodable, selected.Name)
 	}
-	limit := effectiveDownloadMaxBytes(maxBytes, deps)
+	limit := effectiveMemberMaxBytes(maxBytes, deps)
 	if limit > 0 && selected.Size > limit {
 		return nil, fmt.Errorf("%w: member %q unpacked size %d exceeds limit %d", ErrSizeLimitExceeded, selected.Name, selected.Size, limit)
 	}
@@ -644,7 +644,7 @@ func extractCompressedZipMember(
 	if deps.Cache == nil {
 		return nil, fmt.Errorf("%w: blobcache namespace required to extract compressed member %q", ErrMemberUndecodable, memberName)
 	}
-	limit := effectiveDownloadMaxBytes(maxBytes, deps)
+	limit := effectiveMemberMaxBytes(maxBytes, deps)
 	if limit > 0 && uncompSize > limit {
 		return nil, fmt.Errorf("%w: member %q unpacked size %d exceeds limit %d", ErrSizeLimitExceeded, memberName, uncompSize, limit)
 	}

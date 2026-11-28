@@ -1101,6 +1101,31 @@ func (f *fakeHost) Log(_ context.Context, pluginID, level, msg string, _ map[str
 	return nil
 }
 
+type limitedUploadHost struct {
+	*fakeHost
+	limit int64
+}
+
+func (h limitedUploadHost) CacheUploadLimit(context.Context, string) int64 { return h.limit }
+
+func TestCacheUploadUsesGrantAndRejectsTruncation(t *testing.T) {
+	h := limitedUploadHost{newFakeHost(), 8}
+	handler := NewHostHandler(HostOptions{Host: h, Auth: remotetest.Credentials{"cred": "plugin.one"}})
+	for _, size := range []int64{9, -1} {
+		req := httptest.NewRequest(http.MethodPut, "/ether/plugin-host/cache/games/disc", strings.NewReader("123456789"))
+		req.Header.Set(HeaderCredential, "cred")
+		req.ContentLength = size
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+		if w.Code != http.StatusRequestEntityTooLarge {
+			t.Errorf("size %d: %d, want 413", size, w.Code)
+		}
+		if len(h.blobs) != 0 {
+			t.Fatal("incomplete upload was published")
+		}
+	}
+}
+
 func TestPluginHostAPIEndpointsAuthAndGrants(t *testing.T) {
 	t.Parallel()
 

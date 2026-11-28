@@ -1498,7 +1498,7 @@ func cacheDTO(lib core.Library, ns *blobcache.Namespace) map[string]any {
 	q := ns.Quota()
 	return map[string]any{
 		"libraryId": int64(lib.ID), "used": used, "blobs": blobs,
-		"maxBytes": q.EffectiveMaxBytes(), "ttlSeconds": int64(q.TTL.Seconds()),
+		"maxBytes": q.MaxBytes, "ttlSeconds": int64(q.TTL.Seconds()),
 	}
 }
 
@@ -1540,10 +1540,10 @@ func (c *librariesConsole) handleCachePut(w http.ResponseWriter, r *http.Request
 		libError(w, http.StatusBadRequest, "Cache limits cannot be negative")
 		return
 	}
-	// Owner quota overrides are session-lived; the kind's declared cap (or
-	// the 2 GiB default) applies again at restart.
-	ns.SetQuota(blobcache.Quota{MaxBytes: body.MaxBytes, TTL: time.Duration(body.TTLSeconds) * time.Second})
-	ns.Sweep(0)
+	if err := ns.SetOwnerQuota(blobcache.Quota{MaxBytes: body.MaxBytes, TTL: time.Duration(body.TTLSeconds) * time.Second}); err != nil {
+		libError(w, http.StatusInternalServerError, "Could not save library retention settings")
+		return
+	}
 	libJSON(w, http.StatusOK, cacheDTO(lib, ns))
 }
 

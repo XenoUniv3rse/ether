@@ -76,6 +76,7 @@ type Backends struct {
 	// AdmitBackgroundUsenetCheck admits one background usenet_check candidate
 	// check against the plugin's daily allowance in availability_budget.
 	AdmitBackgroundUsenetCheck func(ctx context.Context, pluginID string) (outCtx context.Context, refund func(), resetAt time.Time, err error)
+	CacheLimit                 func(pluginID, libraryKey string) int64
 	CachePut                   func(ctx context.Context, pluginID, libraryKey, name string, r io.Reader) (blobRef string, err error)
 	CacheLookup                func(pluginID, libraryKey, key string) (blobRef string, ok bool)
 	CacheOpen                  func(ctx context.Context, pluginID, blobRef string) (io.ReadSeekCloser, error)

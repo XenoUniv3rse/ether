@@ -572,6 +572,19 @@ func (a HostAdapter) ResolveSourcesWithResult(ctx context.Context, pluginID stri
 	return core.SourceResolveResult{Candidates: cands}, mapHostErr(err)
 }
 
+// CacheUploadLimit applies the plugin's current transfer grant to a streamed upload.
+func (a HostAdapter) CacheUploadLimit(ctx context.Context, pluginID string) int64 {
+	host, err := a.host(pluginID)
+	if err == nil {
+		if granted, ok := host.(interface {
+			DataLimits(context.Context) plugins.RuntimeLimits
+		}); ok {
+			return granted.DataLimits(ctx).FetchBytes
+		}
+	}
+	return plugins.MaxDataFetchBytes
+}
+
 func (a HostAdapter) CachePut(ctx context.Context, pluginID, libraryKey, name string, r io.Reader) (string, error) {
 	h, err := a.host(pluginID)
 	if err != nil {
