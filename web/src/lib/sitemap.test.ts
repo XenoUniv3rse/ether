@@ -22,7 +22,7 @@ describe("sitemap", () => {
       false,
     );
     expect(settingsIndex().find((s) => s.title === "Show upcoming movies")?.href).toBe(
-      "/libraries/1/settings",
+      "/services/tmdb",
     );
   });
 
