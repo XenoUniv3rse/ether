@@ -1,3 +1,4 @@
+import { PluginFailureDetails, pluginFailureSentence } from "../../components/PluginFailure";
 import { LibrarySourceIcon, sourceLabel } from "./CatalogueSources";
 import {
   Badge,
@@ -87,6 +88,7 @@ export function formatLibrarySyncError(raw: string, sync?: LibrarySync | null): 
   if (guard) {
     return formatDeleteGuardSummary(guard);
   }
+  if (sync?.failure) return pluginFailureSentence(sync.failure);
   const lower = raw.trim().toLowerCase();
   if (lower.includes("plugin is disabled")) {
     return tx("Its plugin is turned off. Turn it on in {link}.", {
@@ -343,6 +345,9 @@ function LibrariesList() {
                       ? formatLibrarySyncError(syncBad ?? "", lib.sync)
                       : catalogHealth?.summary}
                   </p>
+                ) : null}
+                {lib.sync?.failure && !syncGuard ? (
+                  <PluginFailureDetails failure={lib.sync.failure} />
                 ) : null}
                 <div className="library-card-actions">
                   <Button size="sm" onClick={() => navigate(`/libraries/${lib.id}`)}>

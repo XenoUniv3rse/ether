@@ -1308,6 +1308,8 @@ type Request struct {
 	// "complete+search" so hosted runtimes allow Deadline up to the AI search
 	// route bound. Host-side only.
 	AISearch bool `json:"-"`
+	// CheckResponse validates a successful body before recording the call. Host-side only.
+	CheckResponse func(json.RawMessage) error `json:"-"`
 }
 
 // FrontendBlob asks the host to serve bytes directly. A blob:<sha256> ref
@@ -1349,6 +1351,9 @@ type Response struct {
 	Status  int               `json:"status"`
 	Headers map[string]string `json:"headers,omitempty"`
 	Body    json.RawMessage   `json:"body,omitempty"`
+
+	// Failure holds an owner-facing diagnostic and is never sent to the plugin.
+	Failure *RouteFailure `json:"-"`
 
 	pendingFallback func() error
 }

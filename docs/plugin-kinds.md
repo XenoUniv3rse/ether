@@ -160,7 +160,7 @@ query the client sent:
 | Route | When | Notes |
 |---|---|---|
 | `/ether/v1/kinds/{kind}/browse` | Pull sync walks your catalogue | One level per call (`parentId`, `level`, `cursor`, `limit`). Return `nextCursor` or the full set up to `limit`; never more than `limit` items. |
-| `/ether/v1/kinds/{kind}/changes` | Pull sync refresh | Optional delta feed `{upserts, deletes, nextCursor, complete, checkpoint?}`. A feed of replayable upsert-only pages may set `checkpoint: true` on each intermediate page. Ether commits its upserts before saving the next cursor, so an interrupted sync can resume at that cursor. Feeds with deletions keep whole-pass deletion checks. Answer 404/501 and Ether re-walks and diffs by `etag` instead. |
+| `/ether/v1/kinds/{kind}/changes` | Pull sync refresh | Optional delta feed `{upserts, deletes, nextCursor, complete, checkpoint?}`. A feed of replayable upsert-only pages may set `checkpoint: true` on each intermediate page. Ether commits its upserts before saving the next cursor, so an interrupted sync can resume at that cursor. Feeds with deletions keep whole-pass deletion checks. Answer 501 if you do not implement this feed and Ether re-walks and diffs by `etag` instead. |
 | `/ether/v1/kinds/{kind}/expand` | Viewer opens a declared facet bucket, plugin person, or container at a declared `browse.expand.levels` level | For facets/people: background only when `browse.expand.facets` lists that facet, receiving `{facet, value, valueId?, cursor?}`. For declared container levels (`browse.expand.levels`, each a `container: true` level): triggered when a viewer opens the container (`Item`) or its children (`Children`, including `?role=` / `?level=`) across every frontend whenever no fresh expansion exists within `ttlHours` or the container has 0 stored children; receives `{parentId, level, cursor?}` where `level` is the container's own level key. Single-flight per `(plugin, kind, itemRef)`, bounded first-page wait (~1.8s), background continuation via the expand job, additive upserts (direct children at any child level, optional grandchildren, optional self-refresh of the container), never triggered on Search, lists, Home, or in the background. Returns `{items, cursor?}` (or `nextCursor`) or `{job: "/ether/job/..."}`. |
 | `/ether/v1/kinds/{kind}/items/{id}` | Conformance and detail refresh | One full item. |
 | `/ether/v1/kinds/{kind}/search` | Client searches, only when `browse.liveSearch` is on | Same page shape as browse with `query` set. Short budget; see below. |
@@ -179,6 +179,28 @@ query the client sent:
 Clients are **always served from Ether's store** — browse, search
 and detail never call you live, so nothing scales with your catalogue
 size. You are called at sync time and at play time.
+
+### Route failures
+
+Return an HTTP error with `Content-Type: application/json` and an owner-facing
+message. The hosted ABI uses the same JSON as the response's `body`.
+
+```json
+{"error":{"code":"auth","message":"The catalogue service rejected the API key"}}
+```
+
+| Code | Use when |
+|---|---|
+| `auth` | The upstream rejects access (401 or 403). Use this code even when the plugin route returns 502. |
+| `rate_limited` | The upstream limits requests. Include a positive integer `error.retryAfterSeconds` or send `Retry-After` (seconds or HTTP date). |
+| `upstream_unavailable` | The upstream is temporarily unavailable. Include a retry hint if known. |
+| `not_found` | The requested resource does not exist. |
+| `invalid_settings` | The owner needs to correct plugin settings. |
+
+Ether displays the redacted message to owners and keeps bounded diagnostic
+details. Keep the message to one sentence and leave credentials, URLs and
+response dumps out of it. See the [SDK guide](../sdk/AGENTS.md#report-route-failures-to-the-owner)
+for TypeScript, Go and Python examples.
 
 Sync modes: **pull** (Ether walks `browse`, then polls `changes` on
 your `refresh`, minimum 15m) or **push** (you call the `KindUpsert`

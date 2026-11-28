@@ -1,3 +1,4 @@
+import { pluginFailureSentence } from "../../components/PluginFailure";
 import { Button, toast } from "@braedonsaunders/appkit-ui";
 import { AlertTriangle, RefreshCw } from "lucide-react";
 import { t, tn } from "../../i18n";
@@ -138,6 +139,7 @@ export function formatSyncStatusLine(
   if (guard) {
     return formatDeleteGuardSummary(guard);
   }
+  if (sync?.failure) return pluginFailureSentence(sync.failure);
   if (sync?.lastError) {
     return sync.lastError;
   }
@@ -188,7 +190,11 @@ export function notifySyncError(err: unknown) {
     toast.warning(err.message);
     return;
   }
-  toast.error(errorMessage(err));
+  const failure =
+    err instanceof ApiError
+      ? (err.body as { sync?: LibrarySync } | undefined)?.sync?.failure
+      : undefined;
+  toast.error(failure ? pluginFailureSentence(failure) : errorMessage(err));
 }
 
 export function DeleteGuardChoice({

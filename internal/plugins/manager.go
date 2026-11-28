@@ -812,14 +812,22 @@ func (m *Manager) callOnce(ctx context.Context, pluginID string, req Request) (R
 	if req.Locale != "" {
 		req.Headers["X-Ether-Locale"] = req.Locale
 	}
+	redact := func(value string) string { return m.RedactDiagnostic(ctx, pluginID, value) }
 	rt, epoch, err := m.runtimeForWithEpoch(ctx, r)
 	if err != nil {
-		message := m.store.redactKnown(ctx, pluginID, err.Error())
+		if ctx.Err() != nil {
+			return Response{}, ctx.Err()
+		}
+		message := redact(err.Error())
+		failure := &RouteFailure{Code: "unavailable", Route: cleanRoutePath(req.Path, redact),
+			Body: truncate(cleanRouteDiagnostic(message, nil), 2048)}
+		m.recordCall(ctx, CallRecord{Plugin: pluginID, Route: failure.Route, Method: req.Method,
+			MS: m.now().Sub(start).Milliseconds(), Error: failure.Error(), Failure: failure})
 		m.recordFailure(ctx, pluginID, "runtime unavailable: "+message, false)
 		if message != err.Error() {
 			err = errors.New(message)
 		}
-		return Response{}, err
+		return Response{Failure: failure}, err
 	}
 	// Hosted playback resolves bound waiting and execution separately inside
 	// wasm.Plugin.CallDetailed (up to deadline to acquire an instance, then a
@@ -836,11 +844,13 @@ func (m *Manager) callOnce(ctx context.Context, pluginID string, req Request) (R
 	defer releaseClient()
 	resp, err := rt.Call(cctx, req)
 	ms := m.now().Sub(start).Milliseconds()
-	rec := CallRecord{Plugin: pluginID, Route: req.Path, Method: req.Method, Status: resp.Status, MS: ms,
-		Request: m.store.redactKnown(ctx, pluginID, redactJSON(req.Body)), Response: m.store.redactKnown(ctx, pluginID, redactJSON(resp.Body))}
-	if req.Path == "/ether/notify" || req.Path == "/ether/configure" || strings.HasPrefix(req.Path, "/subtitles/") || req.Path == "/ether/subtitles/download" {
-		rec.Request = ""
-		rec.Response = ""
+	rec := CallRecord{Plugin: pluginID, Route: req.Path, Method: req.Method, Status: resp.Status, MS: ms}
+	private := req.Path == "/ether/notify" || req.Path == "/ether/configure" || strings.HasPrefix(req.Path, "/subtitles/")
+	if !private {
+		rec.Request = redact(redactJSON(req.Body))
+		if len(rec.Request) > diagnosticBodyLimit {
+			rec.Request = ""
+		}
 	}
 	if err != nil && ctx.Err() != nil {
 		// The caller gave up (a search that already had its answer, a
@@ -880,6 +890,9 @@ func (m *Manager) callOnce(ctx context.Context, pluginID string, req Request) (R
 		return Response{}, err
 	}
 	if err != nil && isCallTimeout(err, cctx) {
+		rec.Route = cleanRoutePath(req.Path, redact)
+		rec.Failure = &RouteFailure{Code: "timeout", Route: rec.Route,
+			TimeoutSeconds: int((deadline + time.Second - 1) / time.Second)}
 		// A single timed-out call cancels only that call (and its instance
 		// when torn down by the runtime), not the pool or other in-flight
 		// work. Record it as slow rather than as a runtime crash.
@@ -894,13 +907,28 @@ func (m *Manager) callOnce(ctx context.Context, pluginID string, req Request) (R
 		if rec.Error != err.Error() {
 			err = errors.New(rec.Error)
 		}
-		return Response{}, err
+		return Response{Failure: rec.Failure}, err
 	}
 	if err != nil {
+		code := "crashed"
+		switch {
+		case errors.Is(err, ErrMalformedResponse), errors.Is(err, wasm.ErrMalformedResponse):
+			code = "malformed"
+		case errors.Is(err, ErrUnavailable):
+			code = "unavailable"
+		}
+		rec.Route = cleanRoutePath(req.Path, redact)
+		rec.Failure = &RouteFailure{Code: code, Route: rec.Route}
+		if !private && len(err.Error()) <= diagnosticBodyLimit {
+			rec.Failure.Body = truncate(cleanRouteDiagnostic(err.Error(), redact), 2048)
+		}
 		if req.Path == "/ether/notify" || req.Path == "/ether/configure" {
 			err = errors.New("notification delivery failed")
 		}
-		rec.Error = m.store.redactKnown(ctx, pluginID, err.Error())
+		rec.Error = rec.Failure.Body
+		if rec.Error == "" {
+			rec.Error = rec.Failure.Error()
+		}
 		m.recordCall(ctx, rec)
 		// Crash policy: drop the runtime for this epoch so the next call
 		// restarts it without disturbing a newer runtime.
@@ -909,18 +937,32 @@ func (m *Manager) callOnce(ctx context.Context, pluginID string, req Request) (R
 		if rec.Error != err.Error() {
 			err = errors.New(rec.Error)
 		}
-		return Response{}, err
-	}
-	if len(rec.Request) > 64*1024 {
-		rec.Request = ""
-	}
-	if len(rec.Response) > 64*1024 {
-		rec.Response = ""
+		return Response{Failure: rec.Failure}, err
 	}
 	if resp.Status == 0 {
 		resp.Status = http.StatusOK
 		rec.Status = resp.Status
 	}
+	diagnostic := resp
+	if private {
+		diagnostic.Body = nil
+	}
+	rec.Failure = DiagnoseRouteResponse(req.Path, diagnostic, m.now(), redact)
+	if rec.Failure == nil && req.CheckResponse != nil {
+		if err := req.CheckResponse(resp.Body); err != nil {
+			rec.Failure = &RouteFailure{Code: "malformed", Route: cleanRoutePath(req.Path, redact), Status: resp.Status}
+			rec.Error = rec.Failure.Error()
+		}
+	}
+	if rec.Failure != nil {
+		rec.Route = rec.Failure.Route
+	} else if !private {
+		rec.Response = redact(redactJSON(resp.Body))
+		if len(rec.Response) > diagnosticBodyLimit {
+			rec.Response = ""
+		}
+	}
+	resp.Failure = rec.Failure
 	m.recordCall(ctx, rec)
 	var pending PendingReply
 	_ = json.Unmarshal(resp.Body, &pending)

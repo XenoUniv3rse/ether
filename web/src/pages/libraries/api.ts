@@ -1,3 +1,4 @@
+import type { PluginFailure } from "../../components/PluginFailure";
 import { apiFetch } from "../../lib/api";
 import type { Rule, TitleCard } from "../../lib/contract";
 import type { VisibilityRule } from "./browser/LibraryVisibility";
@@ -262,6 +263,7 @@ export interface LibrarySync {
   lastStarted?: string;
   lastOk?: string;
   lastError?: string;
+  failure?: PluginFailure;
   deleteGuard?: LibrarySyncDeleteGuard;
   lastOutcome?: LibrarySyncOutcome;
   items: number;

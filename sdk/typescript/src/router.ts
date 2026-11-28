@@ -240,11 +240,16 @@ function okResponse(body: unknown, headers?: Record<string, string>, status = 20
   };
 }
 
-function errorResponse(status: number, code: string, message: string): RawResponse {
+function errorResponse(
+  status: number,
+  code: string,
+  message: string,
+  retryAfterSeconds?: number,
+): RawResponse {
   return {
     status,
     headers: { "Content-Type": "application/json" },
-    body: { error: { code, message } },
+    body: { error: { code, message, ...(retryAfterSeconds === undefined ? {} : { retryAfterSeconds }) } },
   };
 }
 
@@ -838,7 +843,7 @@ export function plugin<S = Record<string, unknown>>(
       throw err;
     }
     if (err instanceof PluginHttpError) {
-      return errorResponse(err.status, err.code, err.message);
+      return errorResponse(err.status, err.code, err.message, err.retryAfterSeconds);
     }
     if (
       err &&

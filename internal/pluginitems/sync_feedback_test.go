@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/braedonsaunders/ether/internal/core"
+	"github.com/braedonsaunders/ether/internal/plugins"
 )
 
 type recordedJob struct {
@@ -80,7 +81,7 @@ func (h *fakeSyncJobHandle) SetProgress(progress string) {
 	h.tracker.mu.Unlock()
 }
 
-func (h *fakeSyncJobHandle) Finish(state, code, outcome, errMsg string) {
+func (h *fakeSyncJobHandle) Finish(state, code, outcome, errMsg string, _ *plugins.RouteFailure) {
 	h.tracker.mu.Lock()
 	h.job.state = state
 	h.job.code = code

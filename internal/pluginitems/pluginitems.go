@@ -29,6 +29,7 @@ const currentFTSVersion int64 = 1
 var pluginItemsRestoreGen atomic.Uint64
 
 func init() {
+	store.Register("pluginitems", 26, `ALTER TABLE plugin_sync_state ADD COLUMN failure_json TEXT NOT NULL DEFAULT '';`)
 	// search_tsv exists only on PostgreSQL (SQLite searches plugin_item_fts),
 	// so a cluster's dump restored on a standalone server skips it.
 	store.RegisterLocalColumn("plugin_items", "search_tsv")
@@ -472,7 +473,7 @@ type HealthReporter interface {
 // SyncJobHandle receives progress and completion updates for one tracked sync run.
 type SyncJobHandle interface {
 	SetProgress(progress string)
-	Finish(state, code, outcome, errMsg string)
+	Finish(state, code, outcome, errMsg string, failure *plugins.RouteFailure)
 }
 
 // SyncJobTracker mirrors active and completed library syncs into the plugin's

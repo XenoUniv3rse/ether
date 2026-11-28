@@ -126,6 +126,10 @@ Reserved capability names cannot be claimed in EPP/1. Ranking and condition hot 
 
 See the complete content-kind guide below. Start with a bounded browse page, stable external IDs, and a playable leaf. Use [Resolvers](/plugins/reference/resolvers) for bytes and [Folders](/plugins/reference/host-folders) for local files.
 
+### Reporting a route failure
+
+Return a non-2xx response with a body such as `{"error":{"code":"rate_limited","message":"The catalogue service is rate limiting requests","retryAfterSeconds":300}}`. Ether recognizes `auth`, `rate_limited`, `upstream_unavailable`, `not_found` and `invalid_settings`. Use one owner-facing sentence and omit credentials and URLs. Map upstream 401/403 to `auth` even if the route itself returns 502. Send `Retry-After` or a positive `retryAfterSeconds` when known. Return 501 if the optional changes route is unimplemented.
+
 ## Screens and surfaces
 
 Give Vela a screen of your own (a sports desk, a news front page) or fill a host slot: a player overlay, an alert toast, a Home row or a title panel. You ship **documents**: JSON files in your package that Vela draws natively on TV, phone and web in the viewer's skin. The full contract is `docs/plugin-screens.md`; the document schema is `schemas/plugin-screen.v1.json`.
@@ -1005,7 +1009,7 @@ query the client sent:
 | Route | When | Notes |
 |---|---|---|
 | `/ether/v1/kinds/{kind}/browse` | Pull sync walks your catalogue | One level per call (`parentId`, `level`, `cursor`, `limit`). Return `nextCursor` or the full set up to `limit`; never more than `limit` items. |
-| `/ether/v1/kinds/{kind}/changes` | Pull sync refresh | Optional delta feed `{upserts, deletes, nextCursor, complete, checkpoint?}`. A feed of replayable upsert-only pages may set `checkpoint: true` on each intermediate page. Ether commits its upserts before saving the next cursor, so an interrupted sync can resume at that cursor. Feeds with deletions keep whole-pass deletion checks. Answer 404/501 and Ether re-walks and diffs by `etag` instead. |
+| `/ether/v1/kinds/{kind}/changes` | Pull sync refresh | Optional delta feed `{upserts, deletes, nextCursor, complete, checkpoint?}`. A feed of replayable upsert-only pages may set `checkpoint: true` on each intermediate page. Ether commits its upserts before saving the next cursor, so an interrupted sync can resume at that cursor. Feeds with deletions keep whole-pass deletion checks. Answer 501 if you do not implement this feed and Ether re-walks and diffs by `etag` instead. |
 | `/ether/v1/kinds/{kind}/expand` | Viewer opens a declared facet bucket, plugin person, or container at a declared `browse.expand.levels` level | For facets/people: background only when `browse.expand.facets` lists that facet, receiving `{facet, value, valueId?, cursor?}`. For declared container levels (`browse.expand.levels`, each a `container: true` level): triggered when a viewer opens the container (`Item`) or its children (`Children`, including `?role=` / `?level=`) across every frontend whenever no fresh expansion exists within `ttlHours` or the container has 0 stored children; receives `{parentId, level, cursor?}` where `level` is the container's own level key. Single-flight per `(plugin, kind, itemRef)`, bounded first-page wait (~1.8s), background continuation via the expand job, additive upserts (direct children at any child level, optional grandchildren, optional self-refresh of the container), never triggered on Search, lists, Home, or in the background. Returns `{items, cursor?}` (or `nextCursor`) or `{job: "/ether/job/..."}`. |
 | `/ether/v1/kinds/{kind}/items/{id}` | Conformance and detail refresh | One full item. |
 | `/ether/v1/kinds/{kind}/search` | Client searches, only when `browse.liveSearch` is on | Same page shape as browse with `query` set. Short budget; see below. |
@@ -1024,6 +1028,28 @@ query the client sent:
 Clients are **always served from Ether's store** — browse, search
 and detail never call you live, so nothing scales with your catalogue
 size. You are called at sync time and at play time.
+
+### Route failures
+
+Return an HTTP error with `Content-Type: application/json` and an owner-facing
+message. The hosted ABI uses the same JSON as the response's `body`.
+
+```json
+{"error":{"code":"auth","message":"The catalogue service rejected the API key"}}
+```
+
+| Code | Use when |
+|---|---|
+| `auth` | The upstream rejects access (401 or 403). Use this code even when the plugin route returns 502. |
+| `rate_limited` | The upstream limits requests. Include a positive integer `error.retryAfterSeconds` or send `Retry-After` (seconds or HTTP date). |
+| `upstream_unavailable` | The upstream is temporarily unavailable. Include a retry hint if known. |
+| `not_found` | The requested resource does not exist. |
+| `invalid_settings` | The owner needs to correct plugin settings. |
+
+Ether displays the redacted message to owners and keeps bounded diagnostic
+details. Keep the message to one sentence and leave credentials, URLs and
+response dumps out of it. See the [SDK guide](../sdk/AGENTS.md#report-route-failures-to-the-owner)
+for TypeScript, Go and Python examples.
 
 Sync modes: **pull** (Ether walks `browse`, then polls `changes` on
 your `refresh`, minimum 15m) or **push** (you call the `KindUpsert`
@@ -5262,6 +5288,7 @@ const (
 | `progress` | `string` | may be omitted (see validation for conditions) |  |
 | `outcome` | `string` | may be omitted (see validation for conditions) |  |
 | `error` | `string` | may be omitted (see validation for conditions) |  |
+| `failure` | `*RouteFailure` | may be omitted (see validation for conditions) |  |
 | `attempts` | `int` | emitted (validation may require a value) |  |
 | `started` | `time.Time` | emitted (validation may require a value) |  |
 | `finished` | `time.Time` | may be omitted (see validation for conditions) |  |
@@ -5275,19 +5302,20 @@ const (
 // ActionJobStatus is a bounded, in-memory snapshot. Checkpoints belong in plugin
 // KV when they must survive a server restart; tokens are only passed between calls.
 type ActionJobStatus struct {
-	Path         string    `json:"path"`
-	Label        string    `json:"label,omitempty"`
-	Kind         string    `json:"kind,omitempty"`
-	Code         string    `json:"code,omitempty"`
-	State        string    `json:"state"` // running, done, canceled, error
-	Progress     string    `json:"progress,omitempty"`
-	Outcome      string    `json:"outcome,omitempty"`
-	Error        string    `json:"error,omitempty"`
-	Attempts     int       `json:"attempts"`
-	Started      time.Time `json:"started"`
-	Finished     time.Time `json:"finished,omitzero"`
-	TotalLimitMS int64     `json:"totalLimitMs"`
-	AttemptLimit int       `json:"attemptLimit"`
+	Path         string        `json:"path"`
+	Label        string        `json:"label,omitempty"`
+	Kind         string        `json:"kind,omitempty"`
+	Code         string        `json:"code,omitempty"`
+	State        string        `json:"state"` // running, done, canceled, error
+	Progress     string        `json:"progress,omitempty"`
+	Outcome      string        `json:"outcome,omitempty"`
+	Error        string        `json:"error,omitempty"`
+	Failure      *RouteFailure `json:"failure,omitempty"`
+	Attempts     int           `json:"attempts"`
+	Started      time.Time     `json:"started"`
+	Finished     time.Time     `json:"finished,omitzero"`
+	TotalLimitMS int64         `json:"totalLimitMs"`
+	AttemptLimit int           `json:"attemptLimit"`
 }
 ``````
 
@@ -5366,7 +5394,7 @@ func (h *HostJobHandle) SetProgress(progress string) {
 
 ``````
 // Finish marks a host-tracked job terminal with optional code, outcome and error.
-func (h *HostJobHandle) Finish(state, code, outcome, errMsg string) {
+func (h *HostJobHandle) Finish(state, code, outcome, errMsg string, failure *RouteFailure) {
 	if h == nil || h.job == nil {
 		return
 	}
@@ -5385,6 +5413,7 @@ func (h *HostJobHandle) Finish(state, code, outcome, errMsg string) {
 	h.job.status.Code = code
 	h.job.status.Outcome = outcome
 	h.job.status.Error = errMsg
+	h.job.status.Failure = failure
 	h.job.status.Finished = now
 	if state == "done" {
 		h.job.status.Progress = ""
@@ -5521,6 +5550,7 @@ func (m *Manager) UpdateHostJob(pluginID, dedupKey, state, code, outcome, errMsg
 	j.status.Code = code
 	j.status.Outcome = outcome
 	j.status.Error = errMsg
+	j.status.Failure = nil
 	j.status.Progress = ""
 	j.status.Finished = now
 }
@@ -8579,6 +8609,8 @@ type Request struct {
 	// "complete+search" so hosted runtimes allow Deadline up to the AI search
 	// route bound. Host-side only.
 	AISearch bool `json:"-"`
+	// CheckResponse validates a successful body before recording the call. Host-side only.
+	CheckResponse func(json.RawMessage) error `json:"-"`
 }
 ``````
 
@@ -8674,6 +8706,9 @@ type Response struct {
 	Status  int               `json:"status"`
 	Headers map[string]string `json:"headers,omitempty"`
 	Body    json.RawMessage   `json:"body,omitempty"`
+
+	// Failure holds an owner-facing diagnostic and is never sent to the plugin.
+	Failure *RouteFailure `json:"-"`
 
 	pendingFallback func() error
 }
@@ -37191,6 +37226,13 @@ var ErrPoolBusy = errors.New("timed out waiting for a plugin instance")
 var ErrClosed = errors.New("plugin is closed")
 ``````
 
+## Source: internal/plugins/wasm/wasm.go#ErrMalformedResponse
+
+``````
+// ErrMalformedResponse is wrapped when the guest returns an invalid response.
+var ErrMalformedResponse = errors.New("malformed plugin response")
+``````
+
 ## Source: internal/plugins/wasm/wasm.go#ErrRequestEncode
 
 ``````
@@ -39264,11 +39306,11 @@ func (p *Plugin) CallDetailed(ctx context.Context, req Request) (resp Response, 
 	}
 	if len(respJSON) > MaxResponseBytes {
 		out.Status = StatusError
-		return Response{}, out, &Error{Status: StatusError, Message: "plugin response exceeds size cap"}
+		return Response{}, out, &Error{Status: StatusError, Message: "plugin response exceeds size cap", Err: ErrMalformedResponse}
 	}
-	if err := json.Unmarshal(respJSON, &resp); err != nil {
+	if err := json.Unmarshal(respJSON, &resp); err != nil || strings.TrimSpace(string(respJSON)) == "null" {
 		out.Status = StatusError
-		return Response{}, out, &Error{Status: StatusError, Message: "plugin returned invalid response JSON: " + err.Error()}
+		return Response{}, out, &Error{Status: StatusError, Message: "plugin returned invalid response JSON", Err: ErrMalformedResponse}
 	}
 	if resp.Status == 0 {
 		resp.Status = 200
@@ -43664,6 +43706,25 @@ class Adapter:
         return 200, {"Content-Type": "application/json"}, json.dumps({"ids": visible_ids, "count": len(page["items"])})
 ```
 
+
+## Report route failures to the owner
+
+Return a non-2xx status and a JSON body in this shape:
+
+```json
+{"error":{"code":"rate_limited","message":"The catalogue service is rate limiting requests","retryAfterSeconds":300}}
+```
+
+Use one credential-free, owner-facing sentence. Name the upstream service where
+helpful. Supported codes are `auth` (upstream rejected credentials or access),
+`rate_limited`, `upstream_unavailable`, `not_found` and `invalid_settings`.
+Report upstream 401/403 as `auth` even if your route sends a 502. Send an optional
+positive integer `retryAfterSeconds` or an HTTP `Retry-After` header for a
+temporary failure. Use 501 for an unimplemented optional catalogue changes feed.
+
+In TypeScript, throw `new PluginHttpError(429, "rate_limited", message, 300)`.
+In Python, raise `PluginHttpError(429, "rate_limited", message, retry_after_seconds=300)`.
+In Go, return `&etherplugin.RouteError{Status: 429, Code: "rate_limited", Message: message, RetryAfterSeconds: 300}`.
 
 
 ## Source: sdk/catalogue-template/README.md
@@ -64900,17 +64961,7 @@ func okJSON(v any, status int) RawResponse {
 
 ``````
 func errorJSON(status int, code, message string) RawResponse {
-	b, _ := json.Marshal(map[string]any{
-		"error": map[string]string{
-			"code":    code,
-			"message": message,
-		},
-	})
-	return RawResponse{
-		Status:  status,
-		Headers: map[string]string{"Content-Type": "application/json"},
-		Body:    b,
-	}
+	return okJSON(map[string]*RouteError{"error": NewRouteError(status, code, message)}, status)
 }
 ``````
 
@@ -64920,7 +64971,7 @@ func errorJSON(status int, code, message string) RawResponse {
 func toRouteErrorResponse(err error) RawResponse {
 	var re *RouteError
 	if errors.As(err, &re) {
-		return errorJSON(re.Status, re.Code, re.Message)
+		return okJSON(map[string]*RouteError{"error": re}, re.Status)
 	}
 	return errorJSON(http.StatusInternalServerError, "internal_error", err.Error())
 }
@@ -70477,16 +70528,22 @@ type RawResponse struct {
 
 | Field | Go type | Wire presence | Description |
 |---|---|---|---|
+| `code` | `string` | emitted (validation may require a value) |  |
+| `message` | `string` | emitted (validation may require a value) |  |
+| `retryAfterSeconds` | `int` | may be omitted (see validation for conditions) |  |
 
 
 ## Source: sdk/go/types.go#RouteError
 
 ``````
 // RouteError represents a structured HTTP error returned by a plugin handler.
+// Ether recognizes auth, rate_limited, upstream_unavailable, not_found and
+// invalid_settings. Use an owner-facing, credential-free Message.
 type RouteError struct {
-	Status  int
-	Code    string
-	Message string
+	Status            int    `json:"-"`
+	Code              string `json:"code"`
+	Message           string `json:"message"`
+	RetryAfterSeconds int    `json:"retryAfterSeconds,omitempty"`
 }
 ``````
 
@@ -70798,13 +70855,20 @@ class FolderFrame(TypedDict):
 
 
 class PluginHttpError(Exception):
-    """Structured HTTP error raised by a plugin route handler."""
+    """Owner-facing route error.
 
-    def __init__(self, status: int, code: str, message: str) -> None:
+    Ether recognizes auth, rate_limited, upstream_unavailable, not_found and
+    invalid_settings. Use a message that contains no credentials.
+    """
+
+    def __init__(
+        self, status: int, code: str, message: str, retry_after_seconds: Optional[int] = None
+    ) -> None:
         super().__init__(message)
         self.status = int(status)
         self.code = str(code)
         self.message = str(message)
+        self.retry_after_seconds = retry_after_seconds
 
 
 PluginRouteError = PluginHttpError
@@ -72270,11 +72334,16 @@ def _ok_response(
     return {"status": status, "headers": merged, "body": body}
 
 
-def _error_response(status: int, code: str, message: str) -> Dict[str, Any]:
+def _error_response(
+    status: int, code: str, message: str, retry_after_seconds: Optional[int] = None
+) -> Dict[str, Any]:
+    error: Dict[str, Any] = {"code": code, "message": message}
+    if retry_after_seconds is not None:
+        error["retryAfterSeconds"] = retry_after_seconds
     return {
         "status": status,
         "headers": {"Content-Type": "application/json"},
-        "body": {"error": {"code": code, "message": message}},
+        "body": {"error": error},
     }
 
 
@@ -72452,7 +72521,7 @@ class PluginInstance:
             ctx = self._build_context(req)
             return self._dispatch_core(req, ctx)
         except PluginHttpError as exc:
-            return _error_response(exc.status, exc.code, exc.message)
+            return _error_response(exc.status, exc.code, exc.message, exc.retry_after_seconds)
         except Exception as exc:
             return _error_response(500, "internal_error", str(exc) or "Internal plugin error.")
 
@@ -79293,11 +79362,16 @@ function okResponse(body: unknown, headers?: Record<string, string>, status = 20
   };
 }
 
-function errorResponse(status: number, code: string, message: string): RawResponse {
+function errorResponse(
+  status: number,
+  code: string,
+  message: string,
+  retryAfterSeconds?: number,
+): RawResponse {
   return {
     status,
     headers: { "Content-Type": "application/json" },
-    body: { error: { code, message } },
+    body: { error: { code, message, ...(retryAfterSeconds === undefined ? {} : { retryAfterSeconds }) } },
   };
 }
 
@@ -79891,7 +79965,7 @@ export function plugin<S = Record<string, unknown>>(
       throw err;
     }
     if (err instanceof PluginHttpError) {
-      return errorResponse(err.status, err.code, err.message);
+      return errorResponse(err.status, err.code, err.message, err.retryAfterSeconds);
     }
     if (
       err &&
@@ -83248,15 +83322,19 @@ export interface RawResponse {
   body?: unknown;
 }
 
+/** Report auth, rate_limited, upstream_unavailable, not_found or invalid_settings
+ * with an owner-facing message that contains no credentials. */
 export class PluginHttpError extends Error {
   readonly status: number;
   readonly code: string;
+  readonly retryAfterSeconds?: number;
 
-  constructor(status: number, code: string, message: string) {
+  constructor(status: number, code: string, message: string, retryAfterSeconds?: number) {
     super(message);
     this.name = "PluginHttpError";
     this.status = status;
     this.code = code;
+    this.retryAfterSeconds = retryAfterSeconds;
   }
 }
 

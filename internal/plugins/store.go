@@ -24,6 +24,7 @@ import (
 )
 
 func init() {
+	store.Register("plugins", 13, `ALTER TABLE plugins_calls ADD COLUMN failure_json TEXT NOT NULL DEFAULT '';`)
 	store.Register("plugins", 12, `ALTER TABLE plugins_installed ADD COLUMN replace_libraries INTEGER NOT NULL DEFAULT 0;`)
 	// v11: per-plugin KV usage, kept with every KV write, so a put checks
 	// its quota from one row instead of summing every value it stored
@@ -245,16 +246,17 @@ type JournalEntry struct {
 
 // CallRecord is one inspector entry (redacted, capped per plugin).
 type CallRecord struct {
-	ID       int64     `json:"id"`
-	Plugin   string    `json:"plugin"`
-	Route    string    `json:"route"`
-	Method   string    `json:"method"`
-	Status   int       `json:"status"`
-	MS       int64     `json:"ms"`
-	Error    string    `json:"error,omitempty"`
-	Request  string    `json:"request,omitempty"`
-	Response string    `json:"response,omitempty"`
-	Created  time.Time `json:"created"`
+	ID       int64         `json:"id"`
+	Plugin   string        `json:"plugin"`
+	Route    string        `json:"route"`
+	Method   string        `json:"method"`
+	Status   int           `json:"status"`
+	MS       int64         `json:"ms"`
+	Error    string        `json:"error,omitempty"`
+	Failure  *RouteFailure `json:"failure,omitempty"`
+	Request  string        `json:"request,omitempty"`
+	Response string        `json:"response,omitempty"`
+	Created  time.Time     `json:"created"`
 }
 
 type storage struct {
@@ -1150,8 +1152,13 @@ func (s *storage) addCall(ctx context.Context, c CallRecord) {
 	if c.Created.IsZero() {
 		c.Created = s.now()
 	}
-	_, _ = s.db.ExecContext(ctx, `INSERT INTO plugins_calls(plugin,route,method,status,ms,error,request,response,created) VALUES(?,?,?,?,?,?,?,?,?)`,
-		c.Plugin, c.Route, c.Method, c.Status, c.MS, c.Error, truncate(c.Request, 8192), truncate(c.Response, 8192), c.Created.Unix())
+	var failure string
+	if c.Failure != nil {
+		b, _ := json.Marshal(c.Failure)
+		failure = string(b)
+	}
+	_, _ = s.db.ExecContext(ctx, `INSERT INTO plugins_calls(plugin,route,method,status,ms,error,request,response,created,failure_json) VALUES(?,?,?,?,?,?,?,?,?,?)`,
+		c.Plugin, c.Route, c.Method, c.Status, c.MS, c.Error, truncate(c.Request, 8192), truncate(c.Response, 8192), c.Created.Unix(), failure)
 	capRing(ctx, s.db, "plugins_calls", c.Plugin, CallsCap)
 }
 
@@ -1163,7 +1170,7 @@ func truncate(v string, n int) string {
 }
 
 func (s *storage) calls(ctx context.Context, plugin string, limit int) ([]CallRecord, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id,plugin,route,method,status,ms,error,request,response,created FROM plugins_calls WHERE plugin=? ORDER BY id DESC LIMIT ?`, plugin, limit)
+	rows, err := s.db.QueryContext(ctx, `SELECT id,plugin,route,method,status,ms,error,request,response,created,failure_json FROM plugins_calls WHERE plugin=? ORDER BY id DESC LIMIT ?`, plugin, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -1171,9 +1178,13 @@ func (s *storage) calls(ctx context.Context, plugin string, limit int) ([]CallRe
 	var out []CallRecord
 	for rows.Next() {
 		var c CallRecord
+		var failure string
 		var created int64
-		if err := rows.Scan(&c.ID, &c.Plugin, &c.Route, &c.Method, &c.Status, &c.MS, &c.Error, &c.Request, &c.Response, &created); err != nil {
+		if err := rows.Scan(&c.ID, &c.Plugin, &c.Route, &c.Method, &c.Status, &c.MS, &c.Error, &c.Request, &c.Response, &created, &failure); err != nil {
 			return nil, err
+		}
+		if failure != "" {
+			_ = json.Unmarshal([]byte(failure), &c.Failure)
 		}
 		c.Created = time.Unix(created, 0).UTC()
 		out = append(out, c)
@@ -1252,6 +1263,19 @@ func (s *storage) redactKnown(ctx context.Context, plugin, value string) string 
 			}
 		}
 	}
+	// Install settings can carry a declared secret before the owner saves
+	// it through Configure, which splits these values into row.Secrets.
+	if len(row.Settings) > 0 {
+		names := secretFieldNames(row.Schema)
+		for _, name := range settingsSecrets(record) {
+			names[name] = true
+		}
+		for name := range names {
+			if secret, ok := row.Settings[name].(string); ok && secret != "" {
+				value = redactSavedSecret(value, secret)
+			}
+		}
+	}
 	for name, sealed := range row.Secrets {
 		secret, err := s.openSecret(plugin, name, sealed)
 		if err != nil {
@@ -1260,24 +1284,25 @@ func (s *storage) redactKnown(ctx context.Context, plugin, value string) string 
 		if secret == "" {
 			continue
 		}
-		value = strings.ReplaceAll(value, secret, "[redacted]")
-		encoded, _ := json.Marshal(secret)
-		if len(encoded) > 2 {
-			value = strings.ReplaceAll(value, string(encoded[1:len(encoded)-1]), "[redacted]")
-		}
+		value = redactSavedSecret(value, secret)
 	}
 	derived, err := s.allDerivedSecrets(ctx, plugin)
 	if err != nil {
 		return "[redacted]"
 	}
 	for _, secret := range derived {
-		value = strings.ReplaceAll(value, secret, "[redacted]")
-		encoded, _ := json.Marshal(secret)
-		if len(encoded) > 2 {
-			value = strings.ReplaceAll(value, string(encoded[1:len(encoded)-1]), "[redacted]")
-		}
+		value = redactSavedSecret(value, secret)
 	}
 	return logredact.String(value)
+}
+
+func redactSavedSecret(value, secret string) string {
+	value = strings.ReplaceAll(value, secret, "[redacted]")
+	encoded, _ := json.Marshal(secret)
+	if len(encoded) > 2 {
+		value = strings.ReplaceAll(value, string(encoded[1:len(encoded)-1]), "[redacted]")
+	}
+	return value
 }
 
 func (s *storage) addLog(ctx context.Context, plugin, line string) {

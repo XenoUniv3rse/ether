@@ -1342,10 +1342,13 @@ type RawResponse struct {
 }
 
 // RouteError represents a structured HTTP error returned by a plugin handler.
+// Ether recognizes auth, rate_limited, upstream_unavailable, not_found and
+// invalid_settings. Use an owner-facing, credential-free Message.
 type RouteError struct {
-	Status  int
-	Code    string
-	Message string
+	Status            int    `json:"-"`
+	Code              string `json:"code"`
+	Message           string `json:"message"`
+	RetryAfterSeconds int    `json:"retryAfterSeconds,omitempty"`
 }
 
 func (e *RouteError) Error() string {
