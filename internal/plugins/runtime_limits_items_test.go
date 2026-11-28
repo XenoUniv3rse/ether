@@ -245,7 +245,7 @@ func TestOwnerDownloadRuntimeLimits(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := cfg.Update(func(c *config.Config) error { c.Cache.PluginLibraryBudgetBytes = 48 << 30; return nil }); err != nil {
+	if err := cfg.Update(func(c *config.Config) error { c.Cache.BudgetBytes = 48 << 30; return nil }); err != nil {
 		t.Fatal(err)
 	}
 	env.m.deps.ReadRuntimeConfig = func() config.Plugins { return cfg.Read().Plugins }
@@ -284,7 +284,7 @@ func TestOwnerDownloadRuntimeLimits(t *testing.T) {
 	if grant.FetchBytes != raised.FetchBytes || grant.ArchiveMemberBytes != raised.ArchiveMemberBytes {
 		t.Fatalf("host grant after save = %+v", grant)
 	}
-	if cfg.Read().Cache.PluginLibraryBudgetBytes != 48<<30 {
+	if cfg.Read().Cache.BudgetBytes != 48<<30 {
 		t.Fatal("runtime settings replaced library cache budget")
 	}
 }

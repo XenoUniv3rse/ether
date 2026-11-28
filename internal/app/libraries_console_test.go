@@ -251,7 +251,7 @@ func TestLibrariesConsolePluginItemMatchPinClear(t *testing.T) {
 		t.Fatalf("restored items: %d %s", w.Code, w.Body)
 	}
 	// Cache view is available for plugin libraries only.
-	if w := call("GET", base+"/cache", ""); w.Code != 200 || !strings.Contains(w.Body.String(), `"maxBytes":2147483648`) {
+	if w := call("GET", base+"/cache", ""); w.Code != 200 || !strings.Contains(w.Body.String(), `"maxBytes":0`) {
 		t.Fatalf("cache %d %s", w.Code, w.Body)
 	}
 	if w := call("GET", "/1/cache", ""); w.Code != 404 {

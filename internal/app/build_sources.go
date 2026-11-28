@@ -56,6 +56,9 @@ func (a *App) buildSources(ctx context.Context, cfg config.Config) error {
 	a.cache.SetDiskUsage(diskUsage)
 	a.cache.SetEventBus(a.eventBus)
 	a.configureCache(cfg.Cache)
+	if err := a.openMediaFiles(ctx, diskUsage); err != nil {
+		return fmt.Errorf("media files: %w", err)
+	}
 	a.engine = stream.New(a.fetcher, a.cache, a.vaultStreamOptions(cfg), log.With("component", "stream"))
 	a.closers = append(a.closers, func() { a.engine.Close() })
 

@@ -132,6 +132,15 @@ type PreloadStatus = {
   }[];
 };
 export type CacheSnapshot = {
+  files?: {
+    libraryKey: string;
+    library: string;
+    ref: string;
+    name: string;
+    size: number;
+    lastOpen: string;
+    inUse: boolean;
+  }[];
   policy?: Policy;
   shared?: boolean;
   clustered?: boolean;
@@ -205,9 +214,14 @@ function DurationPicker({
 export default function Cache() {
   const { health } = useApp();
   const config = useAsync(() => api.getConfig(), []);
-  const live = useAsync((signal) => apiFetch<CacheSnapshot>("/cache/", { signal }), []);
-  const discovery = useDiscoverySettings();
   const tab = useRouteTab(CACHE_TABS);
+  const explorer = tab === "explorer";
+  const live = useAsync(
+    (signal) => apiFetch<CacheSnapshot>(explorer ? "/cache/?files=1" : "/cache/", { signal }),
+    [explorer],
+  );
+  const discovery = useDiscoverySettings();
+
   // Keep the explorer live, and back off after failures.
   const [pollFailures, setPollFailures] = useState(0);
   useEffect(() => {
@@ -242,9 +256,7 @@ export default function Cache() {
     setSaving(true);
     setError(null);
     try {
-      const policy = { ...draft };
-      delete policy.pluginLibraryBudgetBytes;
-      await api.putSection("cache", policy);
+      await api.putSection("cache", draft);
       await config.reload();
       await live.reload();
       setEditor(null);
@@ -499,6 +511,10 @@ export default function Cache() {
                 policyName={activePolicyName}
                 busy={busy !== null}
                 onPin={(releaseId, pinned) => void action("pin", { releaseId, pinned })}
+                onClearFile={(libraryKey, ref, name) => {
+                  if (window.confirm(t("Clear {name}?", { name })))
+                    void action("clear-file", { libraryKey, ref });
+                }}
                 onClear={(id, title, block) => clearRelease(id, title, block)}
               />
             </div>
@@ -508,10 +524,7 @@ export default function Cache() {
             </div>
           ) : tab === "libraries" ? (
             <div className="mx-auto w-full max-w-[1600px] p-4 sm:p-5">
-              <LibraryCaches
-                sharedBytes={saved.pluginLibraryBudgetBytes ?? 0}
-                reloadConfig={config.reload}
-              />
+              <LibraryCaches />
             </div>
           ) : (
             <div className="mx-auto w-full max-w-[1600px] space-y-5 p-4 sm:p-5">
@@ -1643,7 +1656,7 @@ export default function Cache() {
 
             <p className="text-[11px] leading-relaxed text-fg-subtle">
               {t(
-                "Live streams and pinned releases can exceed the budget. Expiry never removes protected bytes. This budget covers media segments; artwork, metadata and transcode output use separate storage.",
+                "Live streams and pinned releases can exceed the budget. Expiry never removes protected bytes. This budget covers playback segments and files downloaded by plugin libraries.",
               )}
             </p>
           </div>

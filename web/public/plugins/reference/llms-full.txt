@@ -1928,11 +1928,13 @@ app would, then read the result with `kinds.browse`:
 namespaces and frees its quota immediately (deleting an absent or already
 evicted ref succeeds), so large temporary downloads or extracts do not evict
 smaller kept files.
-The default quota is 2 GiB per library. A kind can declare `cache.maxBytes`
-and the owner can adjust the quota in the library settings. Across all
-libraries, Ether defaults to the smaller of 10 GiB and 5% of the cache
-disk. Owners can change **Shared library cache (GiB)** under **Cache → Libraries**, above the individual library quotas. Clearing the field restores the automatic size. Both modes preserve
-the free-space reserve.
+Plugin media files use Ether’s configured media cache, alongside playback
+segments. By default a library inherits the pool budget. A kind can declare
+a smaller `cache.maxBytes`; the owner can set a persistent library limit under
+**Cache → Libraries**. The pool budget and free-space reserve apply across all
+writers, including resumable downloads. Remote binary cache uploads and host
+downloads both respect the plugin’s download grant. The plugin keeps its existing cache keys
+and `blob:<sha256>` references inside its own library namespaces.
 
 For large disc images, allow room for both the downloaded archive and its
 extracted member. The runtime limits for **Download (GiB)**, **File inside an
@@ -8306,7 +8308,7 @@ type KindSyncDecl struct {
 
 | Field | Go type | Wire presence | Description |
 |---|---|---|---|
-| `maxBytes` | `int64` | may be omitted (see validation for conditions) | 0 = server default |
+| `maxBytes` | `int64` | may be omitted (see validation for conditions) | 0 inherits the media pool budget. |
 | `ttl` | `string` | may be omitted (see validation for conditions) |  |
 
 
@@ -8315,32 +8317,8 @@ type KindSyncDecl struct {
 ``````
 // KindCacheDecl is the per-library blob cache budget (§5.4).
 type KindCacheDecl struct {
-	MaxBytes int64  `json:"maxBytes,omitempty"` // 0 = server default
+	MaxBytes int64  `json:"maxBytes,omitempty"` // 0 inherits the media pool budget.
 	TTL      string `json:"ttl,omitempty"`
-}
-``````
-
-## Source: internal/plugins/contract.go#DefaultKindCacheMaxBytes
-
-``````
-// Blob cache budget defaults (§15.5): the per-library default quota and
-// the shared absolute cap. The shared cap is also bounded by 5% of the
-// cache disk at runtime, which only the cache owner can measure.
-const (
-	DefaultKindCacheMaxBytes int64 = 2 << 30
-	SharedKindCacheCapBytes  int64 = 10 << 30
-)
-``````
-
-## Source: internal/plugins/contract.go#KindCacheDecl.EffectiveMaxBytes
-
-``````
-// EffectiveMaxBytes resolves the declared cache cap against the default.
-func (c KindCacheDecl) EffectiveMaxBytes() int64 {
-	if c.MaxBytes <= 0 {
-		return DefaultKindCacheMaxBytes
-	}
-	return c.MaxBytes
 }
 ``````
 
@@ -15935,7 +15913,7 @@ func (r *boundedDataReader) Read(p []byte) (int, error) {
 	if r.left < 0 {
 		return 0, errDataExceedsSizeLimit
 	}
-	if int64(len(p)) > r.left+1 {
+	if int64(len(p))-1 > r.left {
 		p = p[:r.left+1]
 	}
 	n, err := r.r.Read(p)
@@ -16144,7 +16122,7 @@ func (h *host) HTTPFetchToCache(ctx context.Context, req FetchCacheRequest) (Fet
 	defer cancel()
 
 	fetchLimit := h.DataLimits(ctx).FetchBytes
-	cacheQuota := decl.Cache.EffectiveMaxBytes()
+	cacheQuota := h.m.kindBackends().libraryLimit(h.plugin, req.LibraryKey, decl.Cache)
 	maxBytes := min(fetchLimit, cacheQuota)
 
 	connections := h.fetchCacheConnections(ctx, req)
@@ -16162,11 +16140,18 @@ func (h *host) HTTPFetchToCache(ctx context.Context, req FetchCacheRequest) (Fet
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return FetchCacheResult{}, fmt.Errorf("plugins: fetchToCache HTTP %d", resp.StatusCode)
 	}
+	if resp.ContentLength > maxBytes {
+		return FetchCacheResult{}, fetchSizeLimitError(resp.ContentLength, fetchLimit, cacheQuota)
+	}
 	crc, m, s := crc32.NewIEEE(), md5.New(), sha1.New()
 	reader := &boundedDataReader{ctx: fetchCtx, r: resp.Body, left: maxBytes}
-	ref, err := h.CachePut(fetchCtx, req.LibraryKey, req.Name, io.TeeReader(reader, io.MultiWriter(crc, m, s)))
+	input := sizedCacheInput{io.TeeReader(reader, io.MultiWriter(crc, m, s)), resp.ContentLength}
+	ref, err := h.CachePut(fetchCtx, req.LibraryKey, req.Name, input)
 	h.noteFetchTraffic(ctx, req.FetchRequest, reader.size)
 	if err != nil {
+		if errors.Is(err, errDataExceedsSizeLimit) && reader.size > cacheQuota {
+			err = fetchSizeLimitError(reader.size, fetchLimit, cacheQuota)
+		}
 		return FetchCacheResult{}, wrapFetchCacheError(fetchCtx, req.URL, err)
 	}
 	return FetchCacheResult{Blob: ref, Size: reader.size, CRC32: fmt.Sprintf("%08x", crc.Sum32()), MD5: fmt.Sprintf("%x", m.Sum(nil)), SHA1: fmt.Sprintf("%x", s.Sum(nil)), Status: resp.StatusCode}, nil
@@ -17360,7 +17345,7 @@ func CallDataHost(ctx context.Context, h Host, name string, raw json.RawMessage)
 					sourceLibKey = src.LibraryKey()
 				}
 				libraryKey := extractOpt.LibraryKey
-				cacheLimit := int64(MaxDataFetchBytes)
+				cacheLimit := int64(math.MaxInt64)
 				if resolver, ok := h.(interface {
 					resolveExtractTarget(context.Context, string, string, string) (string, int64, error)
 				}); ok {
@@ -17394,7 +17379,8 @@ func CallDataHost(ctx context.Context, h Host, name string, raw json.RawMessage)
 					cacheLimit:  cacheLimit,
 					expected:    int64(f.Size),
 				}
-				cachedRef, e := h.CachePut(ctx, libraryKey, entryName, io.TeeReader(reader, io.MultiWriter(crc, md5Hash, sha1Hash)))
+				input := sizedCacheInput{io.TeeReader(reader, io.MultiWriter(crc, md5Hash, sha1Hash)), int64(f.Size)}
+				cachedRef, e := h.CachePut(ctx, libraryKey, entryName, input)
 				if e != nil {
 					return nil, e
 				}
@@ -19034,6 +19020,7 @@ type KindBackends struct {
 	// AdmitBackgroundUsenetCheck reserves one background usenet_check candidate
 	// check against the plugin's daily allowance in availability_budget.
 	AdmitBackgroundUsenetCheck func(ctx context.Context, pluginID string) (outCtx context.Context, refund func(), resetAt time.Time, err error)
+	CacheLimit                 func(pluginID, libraryKey string) int64
 	CachePut                   func(ctx context.Context, pluginID, libraryKey, name string, r io.Reader) (blobRef string, err error)
 	CacheLookup                func(pluginID, libraryKey, key string) (blobRef string, ok bool)
 	CacheOpen                  func(ctx context.Context, pluginID, blobRef string) (io.ReadSeekCloser, error)
@@ -19074,6 +19061,7 @@ func (m *Manager) SetKindBackends(b KindBackends) {
 	m.deps.Backends.NormalizeStoredReleaseLinks = b.NormalizeStoredReleaseLinks
 	m.deps.Backends.PeekUsenetCheck = b.PeekUsenetCheck
 	m.deps.Backends.AdmitBackgroundUsenetCheck = b.AdmitBackgroundUsenetCheck
+	m.deps.Backends.CacheLimit = b.CacheLimit
 	m.deps.Backends.CachePut = b.CachePut
 	m.deps.Backends.CacheLookup = b.CacheLookup
 	m.deps.Backends.CacheOpen = b.CacheOpen
@@ -19112,6 +19100,7 @@ func (m *Manager) kindBackends() KindBackends {
 		ResolveSourcesResult:       m.deps.Backends.ResolveSourcesResult,
 		PeekUsenetCheck:            m.deps.Backends.PeekUsenetCheck,
 		AdmitBackgroundUsenetCheck: m.deps.Backends.AdmitBackgroundUsenetCheck,
+		CacheLimit:                 m.deps.Backends.CacheLimit,
 		CachePut:                   m.deps.Backends.CachePut,
 		CacheLookup:                m.deps.Backends.CacheLookup,
 		CacheOpen:                  m.deps.Backends.CacheOpen,
@@ -20160,6 +20149,45 @@ func pluginSourceError(err error) error {
 }
 ``````
 
+## Source: internal/plugins/host_kinds.go#sizedCacheInput.fields.md
+
+| Field | Go type | Wire presence | Description |
+|---|---|---|---|
+
+
+## Source: internal/plugins/host_kinds.go#sizedCacheInput
+
+``````
+// sizedCacheInput lets storage reserve known content lengths before reading.
+type sizedCacheInput struct {
+	io.Reader
+	size int64
+}
+``````
+
+## Source: internal/plugins/host_kinds.go#sizedCacheInput.ExpectedSize
+
+``````
+func (r sizedCacheInput) ExpectedSize() int64 { return r.size }
+``````
+
+## Source: internal/plugins/host_kinds.go#KindBackends.libraryLimit
+
+``````
+// libraryLimit resolves a declared or owner-selected library ceiling. Pool
+// admission separately accounts for other libraries, streams and partials.
+func (b KindBackends) libraryLimit(pluginID, libraryKey string, decl KindCacheDecl) int64 {
+	limit := decl.MaxBytes
+	if b.CacheLimit != nil {
+		limit = b.CacheLimit(pluginID, libraryKey)
+	}
+	if limit <= 0 {
+		return math.MaxInt64
+	}
+	return limit
+}
+``````
+
 ## Source: internal/plugins/host_kinds.go#*host.CachePut
 
 ``````
@@ -20171,13 +20199,30 @@ func (h *host) CachePut(ctx context.Context, libraryKey, name string, r io.Reade
 	if err != nil {
 		return "", err
 	}
-	backend := h.m.kindBackends().CachePut
+	b := h.m.kindBackends()
+	backend := b.CachePut
 	if backend == nil {
 		return "", ErrUnavailable
 	}
-	// A single blob can never exceed the whole per-library quota.
-	limited := io.LimitReader(r, decl.Cache.EffectiveMaxBytes()+1)
-	return backend(ctx, h.plugin, libraryKey, name, limited)
+	limit := b.libraryLimit(h.plugin, libraryKey, decl.Cache)
+	var limited *boundedDataReader
+	if limit < math.MaxInt64 {
+		limited = &boundedDataReader{ctx: ctx, r: r, left: limit}
+		if sized, ok := r.(interface{ ExpectedSize() int64 }); ok {
+			if sized.ExpectedSize() > limit {
+				return "", ErrQuotaExceeded
+			}
+			r = sizedCacheInput{limited, sized.ExpectedSize()}
+		} else {
+			r = limited
+		}
+	}
+	ref, err := backend(ctx, h.plugin, libraryKey, name, r)
+	if (limited != nil && limited.left < 0) || errors.Is(err, blobcache.ErrTooLarge) {
+		return "", ErrQuotaExceeded
+	}
+
+	return ref, err
 }
 ``````
 
@@ -20757,11 +20802,11 @@ func (h *host) resolveExtractTarget(ctx context.Context, explicitLibraryKey, sou
 		if err != nil {
 			return "", 0, err
 		}
-		return explicit, decl.Cache.EffectiveMaxBytes(), nil
+		return explicit, h.m.kindBackends().libraryLimit(h.plugin, explicit, decl.Cache), nil
 	}
 	if src := strings.TrimSpace(sourceLibraryKey); src != "" {
 		if decl, err := h.cacheWriteCheck(ctx, src, name); err == nil {
-			return src, decl.Cache.EffectiveMaxBytes(), nil
+			return src, h.m.kindBackends().libraryLimit(h.plugin, src, decl.Cache), nil
 		}
 	}
 	libKey, err := h.archiveExtractCheck(ctx, "")
@@ -20772,7 +20817,7 @@ func (h *host) resolveExtractTarget(ctx context.Context, explicitLibraryKey, sou
 	if err != nil {
 		return "", 0, err
 	}
-	return libKey, decl.Cache.EffectiveMaxBytes(), nil
+	return libKey, h.m.kindBackends().libraryLimit(h.plugin, libKey, decl.Cache), nil
 }
 ``````
 
@@ -30161,7 +30206,6 @@ const (
 	maxAIBodyBytes     = 128 << 10
 	maxCollectionBytes = 2 << 20
 	maxKindUpsertBytes = 8 << 20
-	maxCacheBlobBytes  = 256 << 20
 	defaultPageLimit   = 50
 	maxPageLimit       = 200
 )
@@ -30814,6 +30858,27 @@ func (h *HostHandler) resolveSources(w http.ResponseWriter, r *http.Request) {
 }
 ``````
 
+## Source: internal/plugins/remote/host.go#cacheUploadBody.fields.md
+
+| Field | Go type | Wire presence | Description |
+|---|---|---|---|
+
+
+## Source: internal/plugins/remote/host.go#cacheUploadBody
+
+``````
+type cacheUploadBody struct {
+	io.Reader
+	size int64
+}
+``````
+
+## Source: internal/plugins/remote/host.go#cacheUploadBody.ExpectedSize
+
+``````
+func (b cacheUploadBody) ExpectedSize() int64 { return b.size }
+``````
+
 ## Source: internal/plugins/remote/host.go#*HostHandler.cachePut
 
 ``````
@@ -30823,8 +30888,23 @@ func (h *HostHandler) cachePut(w http.ResponseWriter, r *http.Request) {
 	if name == "" {
 		name = r.URL.Query().Get("name")
 	}
-	body := io.LimitReader(r.Body, maxCacheBlobBytes+1)
-	ref, err := h.host.CachePut(r.Context(), pluginIDOf(r), libraryKey, name, body)
+	pluginID := pluginIDOf(r)
+	limit := int64(plugins.MaxDataFetchBytes)
+	if h, ok := h.host.(interface {
+		CacheUploadLimit(context.Context, string) int64
+	}); ok {
+		limit = h.CacheUploadLimit(r.Context(), pluginID)
+	}
+	if r.ContentLength > limit {
+		h.finishErr(w, ErrTooLarge)
+		return
+	}
+	body := cacheUploadBody{http.MaxBytesReader(w, r.Body, limit), r.ContentLength}
+	ref, err := h.host.CachePut(r.Context(), pluginID, libraryKey, name, body)
+	var overflow *http.MaxBytesError
+	if errors.As(err, &overflow) {
+		err = ErrTooLarge
+	}
 	if !h.finishErr(w, err) {
 		return
 	}
@@ -32276,6 +32356,16 @@ func (h *host) callRecord(ctx context.Context) (Record, error) {
 		return cached.rec, nil
 	}
 	return h.m.store.record(ctx, h.plugin)
+}
+``````
+
+## Source: internal/plugins/runtime_limits.go#*Manager.SourceDataLimits
+
+``````
+// SourceDataLimits returns the same owner grants for a kind source download or
+// extraction as a plugin-initiated fetchToCache or archive.extract operation.
+func (m *Manager) SourceDataLimits(ctx context.Context, pluginID string) RuntimeLimits {
+	return (&host{m: m, plugin: pluginID}).DataLimits(ctx)
 }
 ``````
 
@@ -75723,7 +75813,7 @@ start their execution deadline when an instance is acquired.
 The default download and expanded-member ceilings are **8 GiB** each, total
 archive expansion **32 GiB**, archive members **65,535**, and stored catalogue
 items **2,000,000** (`maxItems`, owner-adjustable with no upper bound). Downloads also obey
-the library cache quota (2 GiB unless the manifest declares a different quota).
+the media pool budget and any explicit per-library limit.
 The host reports requested fields in the manifest and exact grants as
 `runtimeLimits` in install preview and detail, displayed side by side, and exposes
 the effective limits for the active call at runtime via `ctx.ether.runtime!.limits()` —

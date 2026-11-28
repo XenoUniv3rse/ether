@@ -68,9 +68,6 @@ func (h *Handler) saveConfig(next, prev config.Config, plexFields map[string]jso
 		// The database is node-local and chosen at startup (config file or
 		// ETHER_DATABASE_URL); the admin API shows it redacted, never edits it.
 		keepDatabase := c.Database
-		if next.Cache.PluginLibraryBudgetBytes == prev.Cache.PluginLibraryBudgetBytes {
-			next.Cache.PluginLibraryBudgetBytes = c.Cache.PluginLibraryBudgetBytes
-		}
 		next.Server.PortExplicit = c.Server.PortExplicit || next.Server.Port != c.Server.Port
 		// Setup completion gates tokenless local-network access
 		// (requireAuth) and changes only through /api/setup/complete: a
@@ -284,24 +281,6 @@ func (h *Handler) handlePutSection(w http.ResponseWriter, r *http.Request) {
 	if json.Unmarshal(body, &probe) == nil {
 		if v, has := probe["value"]; has && len(probe) == 1 {
 			body = v
-		}
-	}
-	// Independent cache budget edits do not replace other configuration snapshots.
-	if field == "cache" {
-		var fields map[string]json.RawMessage
-		if json.Unmarshal(body, &fields) == nil && len(fields) == 1 && fields["pluginLibraryBudgetBytes"] != nil {
-			var budget *int64
-			if err := json.Unmarshal(fields["pluginLibraryBudgetBytes"], &budget); err != nil || budget == nil || *budget < 0 {
-				writeError(w, http.StatusBadRequest, "validation", "Plugin library cache size must be a nonnegative byte count.")
-				return
-			}
-			if err := h.deps.Config.Update(func(c *config.Config) error { c.Cache.PluginLibraryBudgetBytes = *budget; return nil }); err != nil {
-				writeError(w, http.StatusInternalServerError, "save_failed", "Could not save the plugin library cache size.")
-				return
-			}
-			h.log.Info("admin: config updated", "section", field)
-			writeJSON(w, http.StatusOK, map[string]any{"section": field, "value": effectiveRedacted(h.deps.Config.Get()).Cache})
-			return
 		}
 	}
 	if field == "plex" {

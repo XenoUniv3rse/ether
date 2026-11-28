@@ -175,31 +175,6 @@ describe("Cache management", () => {
     expect((await screen.findAllByText(/Severance · S02E04/)).length).toBeGreaterThan(0);
     expect(screen.getByText(/Next in a household viewing sequence/)).toBeInTheDocument();
   });
-  it("sets and clears the shared cap before installing a plugin library", async () => {
-    const { fake } = renderAppWith("/cache/libraries", (method, path) => {
-      if (method === "GET" && path === "/libraries") return { libraries: [] };
-      return undefined;
-    });
-    const limit = await screen.findByLabelText("Shared library cache (GiB)", {}, WAIT);
-    expect(limit).toHaveAttribute("placeholder", "Automatic");
-    fireEvent.change(limit, { target: { value: "48" } });
-    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
-    await waitFor(() =>
-      expect(calls(fake, "PUT", "/config/cache")[0]?.body).toEqual({
-        pluginLibraryBudgetBytes: 48 * 1024 ** 3,
-      }),
-    );
-    await waitFor(() =>
-      expect(screen.queryByRole("button", { name: "Save changes" })).not.toBeInTheDocument(),
-    );
-    expect(limit).toHaveValue(48);
-    fireEvent.change(limit, { target: { value: "" } });
-    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
-    await waitFor(() =>
-      expect(calls(fake, "PUT", "/config/cache")[1]?.body).toEqual({ pluginLibraryBudgetBytes: 0 }),
-    );
-    expect(calls(fake, "PUT", "/plugins/runtime-limits")).toHaveLength(0);
-  });
   it("edits plugin library cache quotas with standard inputs and SaveBar", async () => {
     let cacheState = {
       used: 512 * 1024 ** 2,

@@ -14,6 +14,7 @@ import (
 	"github.com/braedonsaunders/ether/internal/auth"
 	"github.com/braedonsaunders/ether/internal/availability"
 	"github.com/braedonsaunders/ether/internal/backup"
+	"github.com/braedonsaunders/ether/internal/blobcache"
 	"github.com/braedonsaunders/ether/internal/cachefill"
 	"github.com/braedonsaunders/ether/internal/calendar"
 	"github.com/braedonsaunders/ether/internal/cardigann"
@@ -247,6 +248,7 @@ type App struct {
 	lang                *langfeat.Service
 	fetcher             *usenet.Fetcher
 	cache               *segcache.Cache
+	mediaFiles          *blobcache.Cache
 	cacheConfig         atomic.Pointer[config.Cache]
 	engine              *stream.Engine
 	vault               vault.Store

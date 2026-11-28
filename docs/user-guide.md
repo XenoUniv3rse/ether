@@ -1209,7 +1209,9 @@ when Ether maps the playback timestamp.
 ## Cache management
 
 **Streaming › Cache** controls media retention, opening and resume warming, and an
-optional managed shelf of preloaded movies and TV episodes. Selecting a preset
+optional managed shelf of preloaded movies and TV episodes. Playback segments and verified files downloaded by plugin libraries, including disc images, share the configured media volume and its budget. Open **Cache › Explorer** to see a file’s library and size or clear it. Files being read or written stay protected. **Cache › Libraries** can set a smaller limit for a particular library. Plugin save data lives outside the evictable media cache.
+
+Selecting a preset
 only updates the draft until you review and save.
 
 - **Presets:** **Pass-through** stores no persistent media segments on disk.

@@ -62,16 +62,6 @@ type pluginRuntime struct {
 	adapterTickets *frontendadapter.TicketIssuer
 }
 
-func (a *App) libraryBlobOptions(dir string) blobcache.Options {
-	disk := a.opts.diskUsage
-	if disk == nil {
-		disk = func() (int64, int64, error) { return admin.DiskUsage(dir) }
-	}
-	return blobcache.Options{Logger: a.log, DiskUsage: disk, ConfiguredSharedCap: func() int64 {
-		return a.cfg.Read().Cache.PluginLibraryBudgetBytes
-	}}
-}
-
 func (a *App) buildPlugins(ctx context.Context, cfg config.Config) (*pluginRuntime, error) {
 	var busyMu sync.Mutex
 	var busyAt time.Time
@@ -440,13 +430,8 @@ func (a *App) buildPlugins(ctx context.Context, cfg config.Config) (*pluginRunti
 	}
 	a.closers = append(a.closers, itemsSvc.Close)
 
-	blobDir := filepath.Join(a.opts.DataDir, "blobcache")
-	blobs, err := blobcache.Open(blobDir, a.libraryBlobOptions(blobDir))
-	if err != nil {
-		cancelRun()
-		return nil, err
-	}
-	a.closers = append(a.closers, func() { _ = blobs.Close() })
+	blobDir := filepath.Join(a.cache.Directory(), "plugin-media")
+	blobs := a.mediaFiles
 
 	kindCatalog := adapters.AttachKindCatalog(runCtx, adapters.KindCatalogDeps{
 		TitleInLibrary: func(ctx context.Context, lib core.Library, key core.RatingKey) (bool, error) {
@@ -529,6 +514,9 @@ func (a *App) buildPlugins(ctx context.Context, cfg config.Config) (*pluginRunti
 		admitUsenetCheck = a.availability.AdmitPluginUsenetCheck
 	}
 	mgr.SetKindBackends(plugins.KindBackends{
+		CacheLimit: func(pluginID, libraryKey string) int64 {
+			return blobs.Namespace(libraryKey, kindCatalog.QuotaFor(pluginID, libraryKey)).Quota().MaxBytes
+		},
 		NormalizeStoredReleaseLinks: kindResolver.NormalizeStoredReleaseLinks,
 
 		KindUpsert:                 itemsSvc.KindUpsert,

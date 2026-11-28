@@ -65,8 +65,11 @@ func (c *librariesConsole) services() (*pluginitems.Service, *blobcache.Cache, e
 		if c.items, c.err = pluginitems.New(ctx, c.app.db, opts); c.err != nil {
 			return
 		}
-		dir := filepath.Join(c.app.opts.DataDir, "blobcache")
-		c.blobs, c.err = blobcache.Open(dir, c.app.libraryBlobOptions(dir))
+		c.blobs = c.app.mediaFiles
+		if c.blobs == nil {
+			dir := filepath.Join(c.app.opts.DataDir, "cache", "plugin-media")
+			c.blobs, c.err = blobcache.Open(dir, blobcache.Options{Unified: true, SweepPeriod: -1})
+		}
 	})
 	return c.items, c.blobs, c.err
 }
