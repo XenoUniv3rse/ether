@@ -1,8 +1,7 @@
 // Package blobcache is Ether's on-disk whole-blob cache for plugin content
 // kinds (spec §5.4, §15.5). Each library owns an isolated namespace with its
 // own directory, persistent index, quota, and optional TTL, while all
-// namespaces share an owner-configurable cap (default min(10 GiB, 5% of disk)) and honour
-// the segcache free-space floor so no plugin library can fill the disk.
+// production file reservations share the playback cache budget and disk floor.
 package blobcache
 
 import (
@@ -23,6 +22,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/braedonsaunders/ether/internal/atomicfile"
 	"github.com/braedonsaunders/ether/internal/segcache"
 )
 
@@ -100,10 +100,10 @@ type Quota struct {
 	TTL      time.Duration
 }
 
-// EffectiveMaxBytes returns MaxBytes or DefaultMaxBytes when MaxBytes <= 0.
+// EffectiveMaxBytes returns the library ceiling. A zero quota inherits the pool.
 func (q Quota) EffectiveMaxBytes() int64 {
 	if q.MaxBytes <= 0 {
-		return DefaultMaxBytes
+		return 1<<63 - 2
 	}
 	return q.MaxBytes
 }
@@ -120,6 +120,12 @@ type ByteSource interface {
 
 // Options configures a Cache.
 type Options struct {
+	CheckVolume  func() error
+	Unified      bool
+	Shared       bool
+	PoolCapacity func() int64
+	MakeFileRoom func(accounted, unwritten, additional int64, candidates segcache.FileCandidates) error
+
 	Logger              *slog.Logger
 	DiskUsage           segcache.DiskUsageFunc
 	ConfiguredSharedCap func() int64  // Positive overrides the automatic size and percentage limits.
@@ -130,6 +136,9 @@ type Options struct {
 
 // Cache manages per-library blob namespaces under a root directory.
 type Cache struct {
+	poolMu  sync.Mutex
+	options Options
+
 	dir                 string
 	logger              *slog.Logger
 	sharedCap           int64
@@ -160,6 +169,9 @@ func Open(dir string, opts ...Options) (*Cache, error) {
 	if len(opts) > 0 {
 		o = opts[0]
 	}
+	if o.Shared {
+		o.Unified = true
+	}
 	if o.Logger == nil {
 		o.Logger = slog.Default()
 	}
@@ -170,11 +182,16 @@ func Open(dir string, opts ...Options) (*Cache, error) {
 	if sharedCap <= 0 {
 		sharedCap = DefaultSharedCap
 	}
+	if o.CheckVolume != nil {
+		if err := o.CheckVolume(); err != nil {
+			return nil, err
+		}
+	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, fmt.Errorf("blobcache: mkdir %s: %w", dir, err)
 	}
 	c := &Cache{
-		dir:                 dir,
+		options: o, dir: dir,
 		logger:              o.Logger.With("component", "blobcache"),
 		sharedCap:           sharedCap,
 		configuredSharedCap: o.ConfiguredSharedCap,
@@ -184,6 +201,27 @@ func Open(dir string, opts ...Options) (*Cache, error) {
 		pluginLibs:          make(map[string]map[string]bool),
 		stopCh:              make(chan struct{}),
 		doneCh:              make(chan struct{}),
+	}
+	if o.Shared {
+		for _, name := range []string{".allocation.lock", ".staging.lock"} {
+			f, err := os.OpenFile(filepath.Join(dir, name), os.O_CREATE|os.O_RDWR, 0600)
+			if err != nil {
+				return nil, err
+			}
+			f.Close()
+		}
+	}
+	if o.Unified {
+		unlock, err := c.lockPool(context.Background())
+		if err != nil {
+			return nil, err
+		}
+		defer unlock()
+		if o.Shared {
+			if err := os.Remove(filepath.Join(dir, ".idle-usage")); err != nil && !os.IsNotExist(err) {
+				return nil, err
+			}
+		}
 	}
 	// Load any existing namespaces on disk so shared usage accounting is complete.
 	entries, err := os.ReadDir(dir)
@@ -196,8 +234,16 @@ func Open(dir string, opts ...Options) (*Cache, error) {
 		}
 		ns, err := c.openNamespaceLocked(e.Name(), Quota{})
 		if err != nil {
+			if o.Unified {
+				return nil, err
+			}
 			c.logger.Warn("blobcache: skipping unreadable namespace", "library", e.Name(), "err", err)
 			continue
+		}
+		if o.Unified {
+			if err := ns.recoverPublication(); err != nil {
+				return nil, err
+			}
 		}
 		c.namespaces[e.Name()] = ns
 	}
@@ -242,6 +288,9 @@ func (c *Cache) Close() error {
 		<-c.doneCh
 	})
 	for _, ns := range nss {
+		if c.options.Shared {
+			continue
+		}
 		ns.flushIndex()
 	}
 	return nil
@@ -262,13 +311,17 @@ func (c *Cache) BindPluginLibrary(pluginID, libraryKey string) {
 		return
 	}
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	set := c.pluginLibs[pluginID]
 	if set == nil {
 		set = make(map[string]bool)
 		c.pluginLibs[pluginID] = set
 	}
+	first := !set[libraryKey]
 	set[libraryKey] = true
+	c.mu.Unlock()
+	if first && c.options.Shared {
+		c.Namespace(libraryKey, Quota{})
+	}
 }
 
 // Namespace returns (creating if needed) the per-library blob namespace for
@@ -298,7 +351,10 @@ func (c *Cache) Namespace(libraryKey string, quota Quota) *Namespace {
 			ns.mu.Unlock()
 		}
 		if quota.MaxBytes > 0 || quota.TTL > 0 {
-			ns.SetQuota(quota)
+			ns.mu.Lock()
+			ns.declared = quota
+			ns.applyQuotaLocked()
+			ns.mu.Unlock()
 		}
 	}
 	c.mu.Unlock()
@@ -307,6 +363,11 @@ func (c *Cache) Namespace(libraryKey string, quota Quota) *Namespace {
 
 // SweepAll sweeps every namespace and enforces the shared cap and disk floor.
 func (c *Cache) SweepAll() {
+	unlock, err := c.guard(context.Background())
+	if err != nil {
+		return
+	}
+	defer unlock()
 	c.mu.Lock()
 	nss := make([]*Namespace, 0, len(c.namespaces))
 	for _, ns := range c.namespaces {
@@ -314,51 +375,44 @@ func (c *Cache) SweepAll() {
 	}
 	c.mu.Unlock()
 	for _, ns := range nss {
-		ns.Sweep(0)
+		ns.sweep(0, "")
 	}
-	c.enforceGlobalLimit(0)
+	c.evictMu.Lock()
+	defer c.evictMu.Unlock()
+	c.enforceGlobalLimitLocked(0, nil, "")
 }
 
 // TotalStats returns aggregate bytes and blob count across all namespaces.
 func (c *Cache) TotalStats() (bytes int64, blobs int) {
-	c.mu.Lock()
-	nss := make([]*Namespace, 0, len(c.namespaces))
-	for _, ns := range c.namespaces {
-		nss = append(nss, ns)
+	if c.options.Shared {
+		unlock, err := c.readGuard()
+		if err != nil {
+			return 0, 0
+		}
+		defer unlock()
 	}
-	c.mu.Unlock()
-	for _, ns := range nss {
-		b, n := ns.Stats()
+	for _, ns := range c.listNamespaces() {
+		b, n := ns.storedStats()
 		bytes += b
 		blobs += n
 	}
 	return bytes, blobs
 }
 
-func (c *Cache) totalReserved() int64 {
-	c.mu.Lock()
-	nss := make([]*Namespace, 0, len(c.namespaces))
-	for _, ns := range c.namespaces {
-		nss = append(nss, ns)
-	}
-	c.mu.Unlock()
-	var reserved int64
-	for _, ns := range nss {
-		ns.mu.Lock()
-		reserved += ns.partialReserved
-		ns.mu.Unlock()
-	}
-	return reserved
-}
-
 func (c *Cache) totalAccounted() int64 {
-	used, _ := c.TotalStats()
-	return used + c.totalReserved()
+	accounted, _ := c.usage()
+	return accounted
 }
 
 // EffectiveSharedCap computes the global cap across all plugin libraries,
 // applying the free-space reserve to both automatic and owner-configured caps.
 func (c *Cache) EffectiveSharedCap() int64 {
+	if c.options.Unified {
+		if c.options.PoolCapacity != nil {
+			return c.options.PoolCapacity()
+		}
+		return 1<<63 - 2
+	}
 	capBytes := c.sharedCap
 	var configured int64
 	if c.configuredSharedCap != nil {
@@ -499,7 +553,11 @@ func (c *Cache) HostBackends(quotaFor func(pluginID, libraryKey string) Quota) (
 			q = quotaFor(pluginID, libraryKey)
 		}
 		ns := c.Namespace(libraryKey, q)
-		ref, err := ns.Put(ctx, name, r, -1)
+		size := int64(-1)
+		if known, ok := r.(interface{ ExpectedSize() int64 }); ok {
+			size = known.ExpectedSize()
+		}
+		ref, err := ns.Put(ctx, name, r, size)
 		if err != nil {
 			return "", err
 		}
@@ -512,7 +570,10 @@ func (c *Cache) HostBackends(quotaFor func(pluginID, libraryKey string) Quota) (
 		if _, err := ParseRef(blobRef); err != nil {
 			return nil, err
 		}
-		nss := c.namespacesForPlugin(pluginID)
+		nss, err := c.namespacesForPlugin(pluginID)
+		if err != nil {
+			return nil, err
+		}
 		for _, ns := range nss {
 			src, err := ns.Open(Ref(blobRef))
 			if err == nil {
@@ -534,7 +595,11 @@ func (c *Cache) HostBackends(quotaFor func(pluginID, libraryKey string) Quota) (
 		if strings.TrimSpace(pluginID) == "" {
 			return nil
 		}
-		for _, ns := range c.namespacesForPlugin(pluginID) {
+		nss, err := c.namespacesForPlugin(pluginID)
+		if err != nil {
+			return err
+		}
+		for _, ns := range nss {
 			if _, err := ns.Delete(Ref(blobRef)); err != nil {
 				return err
 			}
@@ -577,7 +642,11 @@ func (c *Cache) NamespaceForPluginBlob(pluginID, blobRef string) *Namespace {
 	if _, err := ParseRef(blobRef); err != nil {
 		return nil
 	}
-	for _, ns := range c.namespacesForPlugin(pluginID) {
+	nss, err := c.namespacesForPlugin(pluginID)
+	if err != nil {
+		return nil
+	}
+	for _, ns := range nss {
 		if src, err := ns.Open(Ref(blobRef)); err == nil {
 			_ = src.Close()
 			return ns
@@ -586,7 +655,21 @@ func (c *Cache) NamespaceForPluginBlob(pluginID, blobRef string) *Namespace {
 	return nil
 }
 
-func (c *Cache) namespacesForPlugin(pluginID string) []*Namespace {
+func (c *Cache) namespacesForPlugin(pluginID string) ([]*Namespace, error) {
+	if c.options.Shared {
+		c.mu.Lock()
+		bound := len(c.pluginLibs[pluginID]) > 0
+		c.mu.Unlock()
+		if !bound {
+			// A peer can publish the first file in a canonical namespace before
+			// this node has reconciled the matching plugin's libraries.
+			unlock, err := c.readGuard()
+			if err != nil {
+				return nil, err
+			}
+			unlock()
+		}
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	var out []*Namespace
@@ -609,7 +692,7 @@ func (c *Cache) namespacesForPlugin(pluginID string) []*Namespace {
 			out = append(out, ns)
 		}
 	}
-	return out
+	return out, nil
 }
 
 func slugify(s string) string {
@@ -683,6 +766,9 @@ type Namespace struct {
 	dir        string
 
 	mu                  sync.Mutex
+	declared            Quota
+	owner               *Quota
+	indexInfo           os.FileInfo
 	quota               Quota
 	used                int64
 	blobs               map[string]*blobEntry    // sha256 hex -> entry
@@ -702,15 +788,15 @@ type Namespace struct {
 }
 
 func newEmptyNamespace(c *Cache, key string, quota Quota) *Namespace {
-	if quota.MaxBytes <= 0 {
+	if quota.MaxBytes <= 0 && !c.options.Unified {
 		quota.MaxBytes = DefaultMaxBytes
 	}
 	return &Namespace{
-		cache:               c,
-		key:                 key,
-		libraryKey:          key,
-		dir:                 filepath.Join(c.dir, key),
-		quota:               quota,
+		cache:      c,
+		key:        key,
+		libraryKey: key,
+		dir:        filepath.Join(c.dir, key),
+		declared:   quota, quota: quota,
 		blobs:               make(map[string]*blobEntry),
 		openCounts:          make(map[string]int),
 		keys:                make(map[string]string),
@@ -722,13 +808,27 @@ func newEmptyNamespace(c *Cache, key string, quota Quota) *Namespace {
 }
 
 func (c *Cache) openNamespaceLocked(key string, quota Quota) (*Namespace, error) {
+	if c.options.CheckVolume != nil {
+		if err := c.options.CheckVolume(); err != nil {
+			return nil, err
+		}
+	}
 	ns := newEmptyNamespace(c, key, quota)
 	if err := os.MkdirAll(ns.dir, 0o755); err != nil {
 		return nil, err
 	}
-	ns.cleanStaleTempFiles()
-	ns.loadIndex()
-	ns.loadPartials()
+	if !c.options.Shared {
+		ns.cleanStaleTempFiles()
+		ns.loadIndex()
+	} else if err := ns.refreshIndex(); err != nil {
+		return nil, err
+	}
+	if !c.options.Shared {
+		ns.loadPartials()
+	}
+	if err := ns.readOwnerQuota(); err != nil {
+		return nil, err
+	}
 	return ns, nil
 }
 
@@ -771,7 +871,7 @@ func (n *Namespace) loadIndex() {
 	defer n.mu.Unlock()
 	var used int64
 	for h, e := range doc.Blobs {
-		if e == nil || len(h) != 64 {
+		if _, err := ParseRef("blob:" + h); e == nil || err != nil {
 			continue
 		}
 		st, err := os.Stat(n.blobPath(h))
@@ -796,13 +896,25 @@ func (n *Namespace) loadIndex() {
 }
 
 func (n *Namespace) flushIndex() {
+	if err := n.saveIndex(); err != nil {
+		n.cache.logger.Error("save blob index", "err", err)
+	}
+}
+func (n *Namespace) saveIndex() (err error) {
+	defer func() {
+		if err != nil {
+			n.mu.Lock()
+			n.dirty = true
+			n.mu.Unlock()
+		}
+	}()
 	n.saveMu.Lock()
 	defer n.saveMu.Unlock()
 
 	n.mu.Lock()
 	if !n.dirty {
 		n.mu.Unlock()
-		return
+		return nil
 	}
 	doc := indexDoc{
 		Version: 1,
@@ -825,36 +937,32 @@ func (n *Namespace) flushIndex() {
 
 	raw, err := json.Marshal(doc)
 	if err != nil {
-		return
+		return err
 	}
 	if err := os.MkdirAll(n.dir, 0o755); err != nil {
-		return
+		return err
 	}
-	tmp := filepath.Join(n.dir, fmt.Sprintf(".index.%d.tmp", n.tempSeq.Add(1)))
-	if err := os.WriteFile(tmp, raw, 0o644); err != nil {
-		_ = os.Remove(tmp)
-		return
-	}
-	if err := os.Rename(tmp, n.indexPath()); err != nil {
-		_ = os.Remove(tmp)
-	}
+	return atomicfile.Write(n.indexPath(), raw, 0644)
 }
 
-// SetQuota updates the namespace's quota and immediately sweeps if over budget.
+// SetQuota updates the manifest declaration, preserving the owner's override,
+// and immediately sweeps if over budget.
 func (n *Namespace) SetQuota(q Quota) {
 	n.mu.Lock()
-	if q.MaxBytes > 0 {
-		n.quota.MaxBytes = q.MaxBytes
-	} else if n.quota.MaxBytes <= 0 {
-		n.quota.MaxBytes = DefaultMaxBytes
-	}
-	n.quota.TTL = q.TTL
+	n.declared = q
+	n.applyQuotaLocked()
 	n.mu.Unlock()
 	n.Sweep(0)
 }
 
 // Quota returns the namespace's current quota.
 func (n *Namespace) Quota() Quota {
+	if n.cache.options.Shared {
+		if unlock, err := n.cache.lockPool(context.Background()); err == nil {
+			_ = n.readOwnerQuota()
+			unlock()
+		}
+	}
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	return n.quota
@@ -863,14 +971,35 @@ func (n *Namespace) Quota() Quota {
 // Stats returns the current bytes (including staged resumable partials) and
 // completed readable blob count in this namespace.
 func (n *Namespace) Stats() (bytes int64, blobs int) {
+	if n.cache.options.Shared {
+		unlock, err := n.cache.readGuard()
+		if err != nil {
+			return 0, 0
+		}
+		defer unlock()
+	}
+	return n.storedStats()
+}
+func (n *Namespace) storedStats() (bytes int64, blobs int) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	return n.used + n.partialUsed, len(n.blobs)
+	bytes = n.used + n.partialUsed
+	if n.cache.options.Unified {
+		for _, pe := range n.partials {
+			bytes -= pe.Holes
+		}
+	}
+	return bytes, len(n.blobs)
 }
 
 // LookupKey checks if a blob was stored under key, is not expired, and still
 // exists on disk. If found, it returns its Ref ("blob:<sha256>").
 func (n *Namespace) LookupKey(key string) (Ref, bool) {
+	unlock, err := n.cache.guard(context.Background())
+	if err != nil {
+		return "", false
+	}
+	defer unlock()
 	if key == "" {
 		return "", false
 	}
@@ -889,7 +1018,7 @@ func (n *Namespace) LookupKey(key string) (Ref, bool) {
 	}
 	if n.isExpiredLocked(e, now) {
 		n.mu.Unlock()
-		n.Sweep(0)
+		n.sweep(0, "")
 		return "", false
 	}
 	n.mu.Unlock()
@@ -923,6 +1052,9 @@ func (n *Namespace) Put(ctx context.Context, key string, r io.Reader, size int64
 // MIME metadata. If expectedSHA256 is non-empty and does not match the stream's
 // digest, the temp file is discarded and an error is returned.
 func (n *Namespace) PutWithExpectedSHA256(ctx context.Context, key string, r io.Reader, size int64, expectedSHA256, mimeType string) (Ref, error) {
+	if n.cache.options.Unified {
+		return n.putUnified(ctx, key, r, size, expectedSHA256, mimeType)
+	}
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
@@ -1123,6 +1255,11 @@ func (n *Namespace) Open(ref Ref) (ByteSource, error) {
 }
 
 func (n *Namespace) open(ref Ref, recordAccess bool) (ByteSource, error) {
+	unlock, err := n.cache.guard(context.Background())
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
 	hash, err := ref.Hash()
 	if err != nil {
 		return nil, err
@@ -1147,6 +1284,25 @@ func (n *Namespace) open(ref Ref, recordAccess bool) (ByteSource, error) {
 	}
 	path := n.blobPath(hash)
 	f, err := os.Open(path)
+	if err == nil {
+		info, statErr := f.Stat()
+		if statErr != nil {
+			f.Close()
+			n.mu.Unlock()
+			return nil, statErr
+		}
+		if !info.Mode().IsRegular() || info.Size() != e.Size {
+			f.Close()
+			if recordAccess && !n.isOpenLocked(hash) {
+				_, _ = n.removeFileLocked(hash)
+			}
+			n.mu.Unlock()
+			if recordAccess {
+				n.flushIndex()
+			}
+			return nil, ErrNotFound
+		}
+	}
 	if err != nil {
 		if recordAccess && errors.Is(err, fs.ErrNotExist) && !n.isOpenLocked(hash) {
 			n.dropEntryLocked(hash)
@@ -1154,9 +1310,21 @@ func (n *Namespace) open(ref Ref, recordAccess bool) (ByteSource, error) {
 		}
 		n.mu.Unlock()
 		if errors.Is(err, fs.ErrNotExist) {
+			if recordAccess {
+				n.flushIndex()
+			}
 			return nil, ErrNotFound
 		}
 		return nil, err
+	}
+	var lease *os.File
+	if n.cache.options.Shared {
+		lease, err = n.lease("read", hash, false)
+		if err != nil {
+			f.Close()
+			n.mu.Unlock()
+			return nil, err
+		}
 	}
 	n.openCounts[hash]++
 	if recordAccess {
@@ -1176,11 +1344,11 @@ func (n *Namespace) open(ref Ref, recordAccess bool) (ByteSource, error) {
 	libKey := n.libraryKey
 	n.mu.Unlock()
 
-	if shouldFlush {
+	if shouldFlush || (recordAccess && n.cache.options.Shared) {
 		n.flushIndex()
 	}
 	return &fileSource{
-		f:          f,
+		lease: lease, f: f,
 		size:       size,
 		name:       name,
 		mime:       mimeType,
@@ -1191,7 +1359,7 @@ func (n *Namespace) open(ref Ref, recordAccess bool) (ByteSource, error) {
 }
 
 func (n *Namespace) isOpenLocked(hash string) bool {
-	return n.openCounts[hash] > 0
+	return n.openCounts[hash] > 0 || n.remoteBusy("read", hash)
 }
 
 func (n *Namespace) releaseOpen(hash string) {
@@ -1202,6 +1370,16 @@ func (n *Namespace) releaseOpen(hash string) {
 		n.openCounts[hash] = c - 1
 	}
 	n.mu.Unlock()
+	if n.cache.options.Shared {
+		unlock, err := n.cache.lockPool(context.Background())
+		if err != nil {
+			return
+		}
+		defer unlock()
+		if !n.remoteBusy("read", hash) {
+			_ = os.Remove(n.leasePath("read", hash))
+		}
+	}
 }
 
 func (n *Namespace) isExpiredLocked(e *blobEntry, now time.Time) bool {
@@ -1229,26 +1407,42 @@ func (n *Namespace) dropEntryLocked(hash string) int64 {
 
 func (n *Namespace) evictHash(hash string) int64 {
 	n.mu.Lock()
+	defer n.mu.Unlock()
+	size, err := n.removeFileLocked(hash)
+	if err != nil && !errors.Is(err, ErrFileInUse) && !errors.Is(err, ErrNotFound) {
+		n.cache.logger.Warn("remove cache file", "err", err)
+	}
+	return size
+}
+
+// removeFileLocked unlinks before releasing capacity. The volume lock keeps
+// peer opens out until both the file and its index entry have been removed.
+func (n *Namespace) removeFileLocked(hash string) (int64, error) {
+	if n.blobs[hash] == nil {
+		return 0, ErrNotFound
+	}
 	if n.isOpenLocked(hash) {
-		n.mu.Unlock()
-		return 0
+		return 0, ErrFileInUse
 	}
-	freed := n.dropEntryLocked(hash)
-	if freed > 0 {
-		n.dirty = true
+	if err := os.Remove(n.blobPath(hash)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return 0, err
 	}
-	path := n.blobPath(hash)
-	n.mu.Unlock()
-	if freed > 0 {
-		_ = os.Remove(path)
+	if n.cache.options.Shared {
+		_ = os.Remove(n.leasePath("read", hash))
 	}
-	return freed
+	n.dirty = true
+	return n.dropEntryLocked(hash), nil
 }
 
 // Delete removes one cached blob by its reference ("blob:<sha256>") from this
 // namespace, freeing its disk file and quota accounting immediately. Deleting
 // an absent or already-evicted blob returns (false, nil).
 func (n *Namespace) Delete(ref Ref) (bool, error) {
+	unlock, err := n.cache.guard(context.Background())
+	if err != nil {
+		return false, err
+	}
+	defer unlock()
 	n.cache.mu.Lock()
 	closed := n.cache.closed
 	n.cache.mu.Unlock()
@@ -1260,16 +1454,15 @@ func (n *Namespace) Delete(ref Ref) (bool, error) {
 		return false, err
 	}
 	n.mu.Lock()
-	if _, exists := n.blobs[hash]; !exists {
-		n.mu.Unlock()
+	_, err = n.removeFileLocked(hash)
+	n.mu.Unlock()
+	if errors.Is(err, ErrFileInUse) || errors.Is(err, ErrNotFound) {
 		return false, nil
 	}
-	n.dropEntryLocked(hash)
-	n.dirty = true
-	_ = os.Remove(n.blobPath(hash))
-	n.mu.Unlock()
-	n.flushIndex()
-	return true, nil
+	if err != nil {
+		return false, err
+	}
+	return true, n.saveIndex()
 }
 
 // Sweep evicts TTL-expired blobs and idle partials, then LRU-evicts idle
@@ -1277,6 +1470,11 @@ func (n *Namespace) Delete(ref Ref) (bool, error) {
 // used + partialUsed + partialReserved + need <= maxBytes.
 // Currently open blobs and active partials are never evicted.
 func (n *Namespace) Sweep(need int64) {
+	unlock, err := n.cache.guard(context.Background())
+	if err != nil {
+		return
+	}
+	defer unlock()
 	n.sweep(need, "")
 }
 
@@ -1300,18 +1498,14 @@ func (n *Namespace) sweep(need int64, protectHash string) {
 			active = append(active, &cp)
 		}
 	}
-	var pathsToRemove []string
 	for _, h := range expired {
-		if n.dropEntryLocked(h) > 0 {
-			n.dirty = true
-			pathsToRemove = append(pathsToRemove, n.blobPath(h))
-		}
+		_, _ = n.removeFileLocked(h)
 	}
 	target := maxBytes
 	if need <= maxBytes {
 		target = maxBytes - need
 	}
-	pathsToRemove = append(pathsToRemove, n.sweepPartialsLocked(now, target)...)
+	n.sweepPartialsLocked(now, target)
 	if n.used+n.partialUsed+n.partialReserved > target {
 		sort.Slice(active, func(i, j int) bool {
 			if active[i].LastOpen != active[j].LastOpen {
@@ -1323,18 +1517,12 @@ func (n *Namespace) sweep(need int64, protectHash string) {
 			if n.used+n.partialUsed+n.partialReserved <= target {
 				break
 			}
-			if n.dropEntryLocked(e.Hash) > 0 {
-				n.dirty = true
-				pathsToRemove = append(pathsToRemove, n.blobPath(e.Hash))
-			}
+			_, _ = n.removeFileLocked(e.Hash)
 		}
 	}
 	dirty := n.dirty
 	n.mu.Unlock()
 
-	for _, p := range pathsToRemove {
-		_ = os.Remove(p)
-	}
 	if dirty {
 		n.flushIndex()
 	}
@@ -1343,6 +1531,15 @@ func (n *Namespace) sweep(need int64, protectHash string) {
 // Purge removes all cached blobs and index state for this library namespace
 // (used on plugin removal, spec §2.5, §5.4).
 func (n *Namespace) Purge() {
+	if n.cache.options.Unified {
+		unlock, err := n.cache.guard(context.Background())
+		if err != nil {
+			return
+		}
+		defer unlock()
+		n.clearEligible()
+		return
+	}
 	n.saveMu.Lock()
 	defer n.saveMu.Unlock()
 
@@ -1373,6 +1570,7 @@ func containsString(xs []string, target string) bool {
 
 // fileSource implements ByteSource over an *os.File.
 type fileSource struct {
+	lease      *os.File
 	f          *os.File
 	size       int64
 	name       string
@@ -1403,6 +1601,9 @@ func (s *fileSource) LibraryKey() string { return s.libraryKey }
 func (s *fileSource) Close() error {
 	s.closeOnce.Do(func() {
 		s.closeErr = s.f.Close()
+		if s.lease != nil {
+			s.lease.Close()
+		}
 		if s.ns != nil && s.hash != "" {
 			s.ns.releaseOpen(s.hash)
 		}

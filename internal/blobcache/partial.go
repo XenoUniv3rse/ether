@@ -2,22 +2,23 @@ package blobcache
 
 import (
 	"context"
-	"crypto/md5"
-	"crypto/sha1"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"hash/crc32"
 	"io"
 	"os"
 	"path/filepath"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/braedonsaunders/ether/internal/atomicfile"
+	"github.com/braedonsaunders/ether/internal/segcache"
 )
 
 const (
@@ -93,6 +94,7 @@ type CommitResult struct {
 }
 
 type partialEntry struct {
+	Holes     int64 // file length not yet written by an active positioned transfer
 	ID        string
 	Size      int64
 	UpdatedAt int64 // UnixNano
@@ -219,7 +221,7 @@ func (n *Namespace) loadPartials() {
 	}
 }
 
-func (n *Namespace) updatePartialLocked(id string, size, updatedAt int64) {
+func (n *Namespace) updatePartialLocked(id string, size, updatedAt int64, holes ...int64) {
 	if old, ok := n.partials[id]; ok {
 		n.partialUsed = max(n.partialUsed-old.Size, 0)
 	}
@@ -228,6 +230,9 @@ func (n *Namespace) updatePartialLocked(id string, size, updatedAt int64) {
 		return
 	}
 	n.partials[id] = &partialEntry{ID: id, Size: size, UpdatedAt: updatedAt}
+	if len(holes) > 0 {
+		n.partials[id].Holes = holes[0]
+	}
 	n.partialUsed += size
 }
 
@@ -244,7 +249,7 @@ func (n *Namespace) setPartialReservationLocked(id string, rem int64) {
 
 func (n *Namespace) evictPartial(id string) int64 {
 	n.mu.Lock()
-	if _, active := n.partialLocks[id]; active {
+	if _, active := n.partialLocks[id]; active || n.remoteBusy("write", id) {
 		n.mu.Unlock()
 		return 0
 	}
@@ -253,18 +258,27 @@ func (n *Namespace) evictPartial(id string) int64 {
 		n.mu.Unlock()
 		return 0
 	}
-	delete(n.partials, id)
-	n.partialUsed = max(n.partialUsed-pe.Size, 0)
-	dataPath := n.partialDataPath(id)
-	metaPath := n.partialMetaPath(id)
+	freed := n.removePartialLocked(pe)
 	n.mu.Unlock()
+	return freed
+}
 
-	_ = os.Remove(dataPath)
-	_ = os.Remove(metaPath)
+func (n *Namespace) removePartialLocked(pe *partialEntry) int64 {
+	if err := os.Remove(n.partialDataPath(pe.ID)); err != nil && !os.IsNotExist(err) {
+		return 0
+	}
+	_ = os.Remove(n.partialMetaPath(pe.ID))
+	delete(n.partials, pe.ID)
+	n.partialUsed = max(n.partialUsed-pe.Size, 0)
 	return pe.Size
 }
 
 func (n *Namespace) writePartialMeta(id string, meta PartialMeta) error {
+	if check := n.cache.options.CheckVolume; check != nil {
+		if err := check(); err != nil {
+			return err
+		}
+	}
 	if err := os.MkdirAll(n.partialsDir(), 0o755); err != nil {
 		return fmt.Errorf("blobcache: mkdir partials: %w", err)
 	}
@@ -302,9 +316,10 @@ func (c *Cache) HostPartialBackend(quotaFor func(pluginID, libraryKey string) Qu
 // Namespace. Bytes written to a Partial stay outside the readable blob index
 // until Commit promotes the completed file into `<sha256[:2]>/<sha256>`.
 type Partial struct {
-	n    *Namespace
-	id   string
-	lock chan struct{}
+	lease, staging *os.File
+	n              *Namespace
+	id             string
+	lock           chan struct{}
 
 	rangeMu   sync.Mutex // serializes positioned writes and checkpoints
 	f         *os.File
@@ -336,12 +351,60 @@ func (n *Namespace) OpenPartial(ctx context.Context, key string) (*Partial, erro
 		return nil, ErrClosed
 	}
 
+	if n.cache.options.CheckVolume != nil {
+		if e := n.cache.options.CheckVolume(); e != nil {
+			return nil, e
+		}
+	}
 	id := hashPartialKey(key)
+	var lease, staging *os.File
+	if n.cache.options.Shared {
+		// Try the per-key lease only while holding the volume lock. Nobody
+		// waits on an unlinked inode, and a waiting node never counts itself
+		// as the owner of another node's in-flight reservation.
+		for {
+			unlock, err := n.cache.guard(ctx)
+			if err != nil {
+				return nil, err
+			}
+			lease, err = n.lease("write", id, true)
+			if err == nil {
+				staging, err = os.OpenFile(filepath.Join(n.cache.dir, ".staging.lock"), os.O_RDWR, 0)
+				if err == nil {
+					var ok bool
+					ok, err = tryFileLock(staging, false)
+					if err == nil && !ok {
+						err = ErrFileInUse
+					}
+				}
+				if err != nil {
+					lease.Close()
+					if staging != nil {
+						staging.Close()
+					}
+				} else {
+					// A dead writer can leave a claim but cannot retain its lock.
+					_ = os.Remove(filepath.Join(n.partialsDir(), id+".claim"))
+					n.mu.Lock()
+					n.setPartialReservationLocked(id, 0)
+					n.mu.Unlock()
+					defer unlock()
+					break
+				}
+			}
+			unlock()
+			if !errors.Is(err, ErrFileInUse) {
+				return nil, err
+			}
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(25 * time.Millisecond):
+			}
+		}
+	}
 	var lockCh chan struct{}
 	for {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
 		n.mu.Lock()
 		waitCh, busy := n.partialLocks[id]
 		if !busy {
@@ -357,28 +420,18 @@ func (n *Namespace) OpenPartial(ctx context.Context, key string) (*Partial, erro
 			return nil, ctx.Err()
 		}
 	}
-
-	releaseLock := func() {
+	if err := os.MkdirAll(n.partialsDir(), 0755); err != nil {
 		n.mu.Lock()
-		if n.partialLocks[id] == lockCh {
-			delete(n.partialLocks, id)
-		}
-		n.mu.Unlock()
+		delete(n.partialLocks, id)
 		close(lockCh)
-	}
-
-	if err := os.MkdirAll(n.partialsDir(), 0o755); err != nil {
-		releaseLock()
+		n.mu.Unlock()
+		if lease != nil {
+			lease.Close()
+			staging.Close()
+		}
 		return nil, fmt.Errorf("blobcache: mkdir partials: %w", err)
 	}
-
-	p := &Partial{
-		n:    n,
-		id:   id,
-		lock: lockCh,
-		meta: PartialMeta{ContentLength: -1},
-	}
-
+	p := &Partial{n: n, id: id, lock: lockCh, lease: lease, staging: staging, meta: PartialMeta{ContentLength: -1}}
 	// Attempt to reopen an intact, unexpired partial from disk.
 	dataPath := n.partialDataPath(id)
 	metaPath := n.partialMetaPath(id)
@@ -416,7 +469,7 @@ func (n *Namespace) OpenPartial(ctx context.Context, key string) (*Partial, erro
 							p.meta = meta
 							reopened = true
 							n.mu.Lock()
-							n.updatePartialLocked(id, end, meta.UpdatedAt)
+							n.updatePartialLocked(id, end, meta.UpdatedAt, end-meta.Size)
 							n.mu.Unlock()
 						} else {
 							_ = f.Close()
@@ -464,7 +517,7 @@ func (p *Partial) SetMeta(meta PartialMeta) error {
 			return err
 		}
 		p.n.mu.Lock()
-		p.n.updatePartialLocked(p.id, p.fileEnd, p.meta.UpdatedAt)
+		p.n.updatePartialLocked(p.id, p.fileEnd, p.meta.UpdatedAt, p.fileEnd-p.size)
 		p.n.mu.Unlock()
 	}
 	return nil
@@ -483,6 +536,11 @@ func (p *Partial) Reset(meta PartialMeta) error {
 }
 
 func (p *Partial) reset(meta PartialMeta, keepReservation bool) error {
+	if check := p.n.cache.options.CheckVolume; check != nil {
+		if err := check(); err != nil {
+			return err
+		}
+	}
 	if p.closed || p.committed {
 		return ErrClosed
 	}
@@ -505,6 +563,9 @@ func (p *Partial) reset(meta PartialMeta, keepReservation bool) error {
 	p.size = 0
 	p.fileEnd = 0
 	if !keepReservation {
+		if p.lease != nil {
+			_ = os.Remove(filepath.Join(p.n.partialsDir(), p.id+".claim"))
+		}
 		p.reserved = 0
 	}
 	p.discarded = false
@@ -542,15 +603,20 @@ func (p *Partial) Reserve(total int64) error {
 	if closed {
 		return ErrClosed
 	}
-	if total <= p.fileEnd || total <= p.reserved {
+	if (!p.n.cache.options.Unified && total <= p.fileEnd) || total <= p.reserved {
 		return nil
 	}
 
+	unlock, e := p.n.cache.guard(context.Background())
+	if e != nil {
+		return e
+	}
+	defer unlock()
 	prevReserved := p.reserved
 	prevRem := max(prevReserved-p.fileEnd, 0)
 	curFootprint := max(p.fileEnd, prevReserved)
-	delta := total - curFootprint
-	newRem := total - p.fileEnd
+	delta := max(0, total-curFootprint)
+	newRem := max(0, total-p.fileEnd)
 
 	p.n.cache.evictMu.Lock()
 	defer p.n.cache.evictMu.Unlock()
@@ -579,7 +645,7 @@ func (p *Partial) Reserve(total int64) error {
 	}
 	if nsAccounted+delta > maxBytes {
 		p.n.mu.Unlock()
-		p.n.Sweep(delta)
+		p.n.sweep(delta, "")
 		p.n.mu.Lock()
 		maxBytes = p.n.quota.EffectiveMaxBytes()
 		nsAccounted = p.n.used + p.n.partialUsed + p.n.partialReserved
@@ -592,6 +658,11 @@ func (p *Partial) Reserve(total int64) error {
 			return quotaFullErrorf("namespace quota %d bytes reached", maxBytes)
 		}
 	}
+	p.n.mu.Unlock()
+	if err := p.admit(delta); err != nil {
+		return err
+	}
+	p.n.mu.Lock()
 	p.n.setPartialReservationLocked(p.id, newRem)
 	p.n.mu.Unlock()
 
@@ -619,7 +690,32 @@ func (p *Partial) Reserve(total int64) error {
 		}
 	}
 
+	if p.lease != nil {
+		path := filepath.Join(p.n.partialsDir(), p.id+".claim")
+		claim := strconv.FormatInt(total, 10)
+		if len(p.meta.RangeProgress) > 0 {
+			claim += " range"
+		}
+		if e := os.WriteFile(path, []byte(claim), 0600); e != nil {
+			rollback()
+			return e
+		}
+	}
 	p.reserved = total
+	return nil
+}
+
+// admit runs under the allocation lock. The disk floor charges sparse
+// ranges for unwritten holes even after a high-offset write extends the file.
+func (p *Partial) admit(delta int64) error {
+	if makeRoom := p.n.cache.options.MakeFileRoom; makeRoom != nil {
+		accounted, unwritten := p.n.cache.usage()
+		err := makeRoom(accounted, unwritten, delta, p.n.cache.fileCandidates)
+		if errors.Is(err, segcache.ErrPoolFull) {
+			return quotaFullErrorf("%v", err)
+		}
+		return err
+	}
 	return nil
 }
 
@@ -632,6 +728,28 @@ func (p *Partial) ensureSpace(add int64) error {
 	}
 
 	nextSize := p.fileEnd + add
+	if p.n.cache.options.Unified {
+		if nextSize <= p.reserved {
+			// External processes may consume disk or the owner may change the
+			// budget while a large transfer is underway.
+			if p.sinceCapCheck >= 32<<20 {
+				unlock, err := p.n.cache.guard(context.Background())
+				if err != nil {
+					return err
+				}
+				defer unlock()
+				if p.reserved > p.n.cache.EffectiveSharedCap() {
+					return ErrQuotaFull
+				}
+				if err := p.admit(0); err != nil {
+					return err
+				}
+				p.sinceCapCheck = 0
+			}
+			return nil
+		}
+		return p.Reserve(nextSize)
+	}
 	curFootprint := max(p.fileEnd, p.reserved)
 	nextFootprint := max(nextSize, p.reserved)
 	delta := nextFootprint - curFootprint
@@ -749,7 +867,7 @@ func (p *Partial) accountWrite(n int, end int64) {
 		p.meta.Size = p.size
 		p.meta.UpdatedAt = nowNs
 		p.n.mu.Lock()
-		p.n.updatePartialLocked(p.id, p.fileEnd, nowNs)
+		p.n.updatePartialLocked(p.id, p.fileEnd, nowNs, p.fileEnd-p.size)
 		if p.reserved > 0 {
 			p.n.setPartialReservationLocked(p.id, max(p.reserved-p.fileEnd, 0))
 		}
@@ -782,7 +900,7 @@ func (p *Partial) Sync() error {
 		return err
 	}
 	p.n.mu.Lock()
-	p.n.updatePartialLocked(p.id, p.fileEnd, nowNs)
+	p.n.updatePartialLocked(p.id, p.fileEnd, nowNs, p.fileEnd-p.size)
 	p.n.mu.Unlock()
 	return nil
 }
@@ -790,12 +908,23 @@ func (p *Partial) Sync() error {
 // Discard deletes the partial data and metadata files and immediately releases
 // its quota accounting.
 func (p *Partial) Discard() error {
+	if check := p.n.cache.options.CheckVolume; check != nil {
+		if err := check(); err != nil {
+			return err
+		}
+	}
 	if p.closed || p.committed {
 		return nil
 	}
 	if p.f != nil {
 		_ = p.f.Close()
 		p.f = nil
+	}
+	if err := os.Remove(p.n.partialDataPath(p.id)); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	if p.lease != nil {
+		_ = os.Remove(filepath.Join(p.n.partialsDir(), p.id+".claim"))
 	}
 	p.size = 0
 	p.fileEnd = 0
@@ -804,7 +933,6 @@ func (p *Partial) Discard() error {
 	p.discarded = true
 	p.capChecked = false
 	p.sinceCapCheck = 0
-	_ = os.Remove(p.n.partialDataPath(p.id))
 	_ = os.Remove(p.n.partialMetaPath(p.id))
 	p.n.mu.Lock()
 	p.n.updatePartialLocked(p.id, 0, 0)
@@ -817,8 +945,16 @@ func (p *Partial) Discard() error {
 // into the readable blob cache under key, removes the partial metadata, sweeps
 // if over quota, and returns its blob reference and digests.
 func (p *Partial) Commit(ctx context.Context, key string) (CommitResult, error) {
+	return p.commit(ctx, key, "", nil)
+}
+func (p *Partial) commit(ctx context.Context, key, mime string, streamed *Stat) (CommitResult, error) {
 	if err := ctx.Err(); err != nil {
 		return CommitResult{}, err
+	}
+	if check := p.n.cache.options.CheckVolume; check != nil {
+		if err := check(); err != nil {
+			return CommitResult{}, err
+		}
 	}
 	if p.closed || p.committed {
 		return CommitResult{}, ErrClosed
@@ -859,60 +995,67 @@ func (p *Partial) Commit(ctx context.Context, key string) (CommitResult, error) 
 		}
 		p.f = f
 	}
+	if p.n.cache.options.Unified {
+		if err := p.f.Sync(); err != nil {
+			return CommitResult{}, err
+		}
+	}
 	if err := p.f.Close(); err != nil {
 		p.f = nil
 		return CommitResult{}, fmt.Errorf("blobcache: close partial: %w", err)
 	}
 	p.f = nil
 
-	rf, err := os.Open(dataPath)
-	if err != nil {
-		return CommitResult{}, fmt.Errorf("blobcache: open partial for hash: %w", err)
-	}
-	sha256H := sha256.New()
-	sha1H := sha1.New()
-	md5H := md5.New()
-	crcH := crc32.NewIEEE()
-	mw := io.MultiWriter(sha256H, sha1H, md5H, crcH)
-	buf := make([]byte, 64<<10)
-	var hashed int64
-	for {
-		if err := ctx.Err(); err != nil {
-			_ = rf.Close()
+	var stat Stat
+	if streamed != nil {
+		// A sequential Put hashes as it writes. A resumed or positioned transfer
+		// must hash the final byte order before its reference can be published.
+		stat = *streamed
+	} else {
+		rf, err := os.Open(dataPath)
+		if err != nil {
+			return CommitResult{}, fmt.Errorf("blobcache: open partial for hash: %w", err)
+		}
+		stat, err = copyWithDigests(io.Discard, &ctxReader{ctx, rf})
+		rf.Close()
+		if err != nil {
 			return CommitResult{}, err
 		}
-		nr, rerr := rf.Read(buf)
-		if nr > 0 {
-			_, _ = mw.Write(buf[:nr])
-			hashed += int64(nr)
-		}
-		if rerr != nil {
-			if errors.Is(rerr, io.EOF) {
-				break
-			}
-			_ = rf.Close()
-			return CommitResult{}, rerr
-		}
 	}
-	_ = rf.Close()
-
+	hashed, digest := stat.Size, stat.SHA256
 	if hashed != p.size {
 		return CommitResult{}, fmt.Errorf("blobcache: partial size mismatch: got %d bytes, want %d", hashed, p.size)
 	}
-
-	digest := hex.EncodeToString(sha256H.Sum(nil))
+	unlock, err := p.n.cache.guard(ctx)
+	if err != nil {
+		return CommitResult{}, err
+	}
+	defer unlock()
 	finalPath := p.n.blobPath(digest)
 	if err := os.MkdirAll(filepath.Dir(finalPath), 0o755); err != nil {
 		return CommitResult{}, fmt.Errorf("blobcache: mkdir shard: %w", err)
 	}
-	if err := os.Rename(dataPath, finalPath); err != nil {
-		// On Windows, renaming over an existing open identical content-addressed
-		// blob can fail; if the exact target file already exists with matching
-		// size, keep it and drop the staged file.
-		if st, serr := os.Stat(finalPath); serr == nil && !st.IsDir() && st.Size() == hashed {
-			_ = os.Remove(dataPath)
-		} else {
-			return CommitResult{}, fmt.Errorf("blobcache: rename partial blob: %w", err)
+	p.n.mu.Lock()
+	indexed := p.n.blobs[digest] != nil
+	p.n.mu.Unlock()
+	marker := filepath.Join(p.n.dir, ".publishing")
+	if p.n.cache.options.Unified && !indexed {
+		if err := atomicfile.Write(marker, []byte("blob:"+digest), 0600); err != nil {
+			return CommitResult{}, err
+		}
+	}
+	if st, statErr := os.Stat(finalPath); indexed && statErr == nil && st.Mode().IsRegular() && st.Size() == hashed {
+		// Keep the existing inode, including its open readers and allocation.
+		err = os.Remove(dataPath)
+	} else {
+		err = os.Rename(dataPath, finalPath)
+	}
+	if err != nil {
+		return CommitResult{}, fmt.Errorf("blobcache: publish partial: %w", err)
+	}
+	if p.n.cache.options.Unified && !indexed {
+		if err := atomicfile.SyncDir(filepath.Dir(finalPath)); err != nil {
+			return CommitResult{}, err
 		}
 	}
 	_ = os.Remove(p.n.partialMetaPath(p.id))
@@ -949,6 +1092,9 @@ func (p *Partial) Commit(ctx context.Context, key string) (CommitResult, error) 
 			e.Keys = append(e.Keys, key)
 		}
 	}
+	if mime != "" {
+		e.MIME = mime
+	}
 	p.n.dirty = true
 	overNamespace := p.n.used+p.n.partialUsed+p.n.partialReserved > p.n.quota.EffectiveMaxBytes()
 	p.n.mu.Unlock()
@@ -958,15 +1104,23 @@ func (p *Partial) Commit(ctx context.Context, key string) (CommitResult, error) 
 		p.n.sweep(0, digest)
 	}
 	p.n.cache.enforceGlobalLimitProtected(0, p.n, digest)
-	p.n.flushIndex()
-
+	if err := p.n.saveIndex(); err != nil {
+		return CommitResult{}, err
+	}
+	if p.n.cache.options.Unified && !indexed {
+		_ = os.Remove(marker)
+	}
+	if p.lease != nil {
+		_ = os.Remove(filepath.Join(p.n.partialsDir(), p.id+".claim"))
+	}
 	p.committed = true
+	rememberStat(stat)
 	return CommitResult{
 		Ref:   Ref("blob:" + digest),
 		Size:  hashed,
-		CRC32: fmt.Sprintf("%08x", crcH.Sum32()),
-		MD5:   fmt.Sprintf("%x", md5H.Sum(nil)),
-		SHA1:  fmt.Sprintf("%x", sha1H.Sum(nil)),
+		CRC32: stat.CRC32,
+		MD5:   stat.MD5,
+		SHA1:  stat.SHA1,
 	}, nil
 }
 
@@ -990,14 +1144,38 @@ func (p *Partial) Close() error {
 		}
 		p.f = nil
 	}
+	var unlock func()
+	if p.lease != nil {
+		var lockErr error
+		unlock, lockErr = p.n.cache.lockPool(context.Background())
+		if err == nil {
+			err = lockErr
+		}
+		if unlock != nil {
+			defer unlock()
+		}
+	}
 	p.closed = true
 	p.reserved = 0
 	p.n.mu.Lock()
 	p.n.setPartialReservationLocked(p.id, 0)
+	if pe := p.n.partials[p.id]; pe != nil {
+		pe.Holes = 0
+	}
 	if p.n.partialLocks[p.id] == p.lock {
 		delete(p.n.partialLocks, p.id)
 	}
 	p.n.mu.Unlock()
+	if p.lease != nil {
+		if unlock != nil {
+			_ = os.Remove(filepath.Join(p.n.partialsDir(), p.id+".claim"))
+		}
+		p.lease.Close()
+		if unlock != nil {
+			_ = os.Remove(p.n.leasePath("write", p.id))
+		}
+		p.staging.Close()
+	}
 	close(p.lock)
 	return err
 }
@@ -1039,17 +1217,14 @@ func (c *Cache) collectIdlePartials(nss []*Namespace) []globalPartialCandidate {
 // sweepPartialsLocked collects expired idle partials (and, when needed, oldest
 // idle partials to bring used+partialUsed+partialReserved back under target)
 // for removal outside n.mu. Caller must hold n.mu.
-func (n *Namespace) sweepPartialsLocked(now time.Time, target int64) []string {
-	var paths []string
+func (n *Namespace) sweepPartialsLocked(now time.Time, target int64) {
 	var active []*partialEntry
 	for id, pe := range n.partials {
-		if _, locked := n.partialLocks[id]; locked {
+		if _, locked := n.partialLocks[id]; locked || n.remoteBusy("write", id) {
 			continue
 		}
 		if n.isPartialExpiredLocked(pe, now) {
-			delete(n.partials, id)
-			n.partialUsed = max(n.partialUsed-pe.Size, 0)
-			paths = append(paths, n.partialDataPath(id), n.partialMetaPath(id))
+			n.removePartialLocked(pe)
 			continue
 		}
 		cp := *pe
@@ -1066,12 +1241,9 @@ func (n *Namespace) sweepPartialsLocked(now time.Time, target int64) []string {
 			if n.used+n.partialUsed+n.partialReserved <= target {
 				break
 			}
-			delete(n.partials, pe.ID)
-			n.partialUsed = max(n.partialUsed-pe.Size, 0)
-			paths = append(paths, n.partialDataPath(pe.ID), n.partialMetaPath(pe.ID))
+			n.removePartialLocked(pe)
 		}
 	}
-	return paths
 }
 
 // PartialStats returns the accounted file bytes and count of incomplete
