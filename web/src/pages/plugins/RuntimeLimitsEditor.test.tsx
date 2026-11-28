@@ -3,7 +3,7 @@ import { beforeEach, expect, it, vi } from "vitest";
 import { RuntimeLimitsEditor } from "./RuntimeLimitsEditor";
 
 const apiFetch = vi.hoisted(() => vi.fn());
-vi.mock("../../lib/api", () => ({ apiFetch, errorMessage: String }));
+vi.mock("../../lib/api", () => ({ apiFetch, ApiError: Error, errorMessage: String }));
 
 beforeEach(() => {
   apiFetch.mockReset();
@@ -57,6 +57,7 @@ it("edits the global catalogue item ceiling above 2,000,000 with no upper cap", 
       archiveMembers: 0,
       maxItems: 5000000,
       listItems: 0,
+      durableFreePercent: 0,
     },
   });
 });

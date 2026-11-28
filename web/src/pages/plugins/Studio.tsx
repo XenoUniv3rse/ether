@@ -774,6 +774,7 @@ function LiveWorkspace({
             />
             <PermissionSheet
               permissions={installing.permissions}
+              durableQuota={installing.durableQuota}
               verified={installing.verified}
               needsViewers={installing.needsViewers}
               needsFolders={installing.needsFolders}

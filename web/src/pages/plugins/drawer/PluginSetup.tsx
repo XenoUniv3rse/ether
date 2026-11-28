@@ -189,7 +189,9 @@ export function PluginSetup({
       (adapter) => adapter.uploadPaths?.length,
     ),
   );
-  const hasRuntimeLimits = hasRuntime || Boolean(detail.listItems) || hasUploadRoutes;
+  const hasDurableStorage = detail.permissions.declared?.storage === "durable";
+  const hasRuntimeLimits =
+    hasRuntime || Boolean(detail.listItems) || hasUploadRoutes || hasDurableStorage;
   // Updates come from where the plugin was installed; Studio builds and
   // add-ons that always follow their link have nothing to auto-update.
   const updatable = detail.sourceKind !== "studio" && !detail.stremioOnly;
@@ -328,6 +330,7 @@ export function PluginSetup({
                     listItems={detail.listItems}
                     listsOnly={!hasRuntime}
                     hasUploadRoutes={hasUploadRoutes}
+                    hasDurableStorage={hasDurableStorage}
                     hasMediaKinds={Boolean(detail.manifest.ether?.contributes?.mediaKinds?.length)}
                     flush
                     onSaved={() => {

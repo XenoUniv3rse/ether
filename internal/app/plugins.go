@@ -66,11 +66,16 @@ func (a *App) buildPlugins(ctx context.Context, cfg config.Config) (*pluginRunti
 	var busyMu sync.Mutex
 	var busyAt time.Time
 	var busyValue bool
+	durableRoot := filepath.Join(a.opts.DataDir, "plugin-blob-storage")
 	diskUsage := a.opts.diskUsage
 	if diskUsage == nil {
-		diskUsage = func() (int64, int64, error) { return admin.DiskUsage(a.opts.DataDir) }
+		diskUsage = func() (int64, int64, error) { return admin.DiskUsage(durableRoot) }
 	}
-	durableStorage, err := blobcache.OpenDurableStore(filepath.Join(a.opts.DataDir, "plugin-blob-storage"), diskUsage)
+	durableStorage, err := blobcache.OpenDurableStore(durableRoot, diskUsage, func(id string) (blobcache.DurableQuota, int) {
+		policy := a.cfg.Read().Plugins
+		limits := policy.RuntimeOverrides[id]
+		return blobcache.DurableQuota{Bytes: limits.DurableBytes, Files: limits.DurableFiles}, policy.RuntimeLimits.DurableFreePercent
+	})
 	if err != nil {
 		return nil, err
 	}

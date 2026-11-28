@@ -1209,6 +1209,20 @@ func CallDataHost(ctx context.Context, h Host, name string, raw json.RawMessage)
 			Resume:      req.Resume,
 			Connections: req.Connections,
 		})
+	} else if name == "cache.usage" {
+		var opts struct {
+			Durable bool `json:"durable"`
+		}
+		if len(args) != 1 || json.Unmarshal(args[0], &opts) != nil || !opts.Durable {
+			return nil, &ValidationError{Fields: []FieldError{{Field: "cache.usage", Message: "expected {durable: true}"}}}
+		}
+		service, ok := h.(interface {
+			CacheUsage(context.Context) (blobcache.DurableUsage, error)
+		})
+		if !ok {
+			return nil, ErrUnavailable
+		}
+		value, err = service.CacheUsage(ctx)
 	} else if name == "cache.stat" {
 		var ref string
 		if len(args) != 1 || json.Unmarshal(args[0], &ref) != nil || ref == "" {

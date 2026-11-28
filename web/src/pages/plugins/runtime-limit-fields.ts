@@ -50,6 +50,15 @@ export function runtimeLimitFields() {
       max: MAX_LIST_ITEMS,
     },
     { key: "uploadBytes", label: t("Upload size (MiB)"), scale: 1048576, fallback: 64, max: 512 },
+    { key: "durableBytes", label: t("Saved data (GiB)"), scale: 1073741824, fallback: 1 },
+    { key: "durableFiles", label: t("Saved files"), scale: 1, fallback: 10000 },
+    {
+      key: "durableFreePercent",
+      label: t("Free disk share (%)"),
+      scale: 1,
+      fallback: 25,
+      max: 100,
+    },
   ] satisfies {
     key: keyof RuntimeLimits;
     label: string;
@@ -65,8 +74,15 @@ export function formatLimit(key: keyof RuntimeLimits, value: number): string {
   const n = new Intl.NumberFormat(getLocale(), { maximumFractionDigits: 4 }).format(value);
   if (key === "deadline") return t("{value} hours", { value: n });
   if (key === "memoryBytes" || key === "uploadBytes") return t("{value} MiB", { value: n });
-  if (key === "fetchBytes" || key === "archiveMemberBytes" || key === "archiveExpandedBytes")
+  if (
+    key === "durableBytes" ||
+    key === "fetchBytes" ||
+    key === "archiveMemberBytes" ||
+    key === "archiveExpandedBytes"
+  )
     return t("{value} GiB", { value: n });
+  if (key === "durableFreePercent")
+    return new Intl.NumberFormat(getLocale(), { style: "percent" }).format(value / 100);
   if (key === "unitBudget" && (!value || value >= 2 ** 53)) return t("No limit");
   return n;
 }

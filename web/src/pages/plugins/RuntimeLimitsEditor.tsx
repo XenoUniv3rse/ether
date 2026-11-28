@@ -1,18 +1,26 @@
 import { useEffect, useState } from "react";
 import { Input, confirmDialog } from "@braedonsaunders/appkit-ui";
 import { SaveBar, useDraft } from "../../components/SaveBar";
-import { apiFetch } from "../../lib/api";
+import { formatBytes, formatNumber } from "../../lib/format";
+import { ApiError, apiFetch } from "../../lib/api";
 import { t } from "../../i18n";
-import type { ListItemsGrant, RuntimeLimits } from "./types";
+import type { DurableQuota, ListItemsGrant, RuntimeLimits } from "./types";
 import { formatLimit, limitNumber, runtimeLimitFields } from "./runtime-limit-fields";
 
 type Policy = {
   runtimeLimits?: Partial<RuntimeLimits>;
   runtimeOverrides?: Record<string, Partial<RuntimeLimits>>;
+  durableStorage?: {
+    diskAvailable: boolean;
+    capacity: DurableQuota & { freeBytes: number; freePercent: number };
+    usage?: DurableQuota & { bytes: number; files: number };
+  };
 };
 type Draft = Record<keyof RuntimeLimits, string>;
 function isIntegerLimit(key: keyof RuntimeLimits): boolean {
   return (
+    key === "durableFiles" ||
+    key === "durableFreePercent" ||
     key === "unitBudget" ||
     key === "poolSize" ||
     key === "archiveMembers" ||
@@ -30,6 +38,7 @@ export function RuntimeLimitsEditor({
   listsOnly = false,
   hasMediaKinds = false,
   hasUploadRoutes = false,
+  hasDurableStorage = false,
   flush = false,
   onSaved,
 }: {
@@ -44,6 +53,7 @@ export function RuntimeLimitsEditor({
   listsOnly?: boolean;
   hasMediaKinds?: boolean;
   hasUploadRoutes?: boolean;
+  hasDurableStorage?: boolean;
   flush?: boolean;
   onSaved?: () => void;
 }) {
@@ -54,8 +64,47 @@ export function RuntimeLimitsEditor({
   const [error, setError] = useState("");
   const allFields = runtimeLimitFields();
   const uploadField = allFields.find((f) => f.key === "uploadBytes");
-  const fields = allFields.filter((f) => f.key !== "uploadBytes" || plugin);
-  const standardFields = allFields.filter((f) => f.key !== "uploadBytes");
+  const durableFields = allFields.filter(
+    (f) => f.key === "durableBytes" || f.key === "durableFiles",
+  );
+  const shareField = allFields.find((f) => f.key === "durableFreePercent");
+  const standardFields = allFields.filter(
+    (f) => f.key !== "uploadBytes" && !f.key.startsWith("durable"),
+  );
+  const fields = plugin
+    ? [
+        ...standardFields,
+        ...(uploadField ? [uploadField] : []),
+        ...(hasDurableStorage ? durableFields : []),
+      ]
+    : [...standardFields, ...(shareField ? [shareField] : [])];
+  const storage = policy?.durableStorage;
+  const usage = storage?.usage;
+  const capacity = storage?.capacity;
+  const durableLimit = (key: keyof RuntimeLimits) =>
+    key === "durableBytes"
+      ? capacity?.quotaBytes
+      : key === "durableFiles"
+        ? capacity?.quotaFiles
+        : undefined;
+  const aboveCeiling =
+    draft &&
+    durableFields.some((f) => {
+      const ceiling = durableLimit(f.key);
+      const proposed = Math.round(Number(draft[f.key]) * f.scale);
+      return (
+        ceiling !== undefined &&
+        proposed > ceiling &&
+        proposed > Math.round(Number(saved?.[f.key]) * f.scale)
+      );
+    });
+  const belowUsage =
+    usage &&
+    durableFields.some((f) => {
+      const configured = Math.round(Number(draft?.[f.key]) * f.scale) || f.fallback * f.scale;
+      const proposed = Math.min(configured, durableLimit(f.key) ?? configured);
+      return proposed < (f.key === "durableBytes" ? usage.bytes : usage.files);
+    });
   const rows = plugin
     ? standardFields.filter((f) => (f.key === "listItems" ? Boolean(listItems) : !listsOnly))
     : standardFields;
@@ -64,7 +113,10 @@ export function RuntimeLimitsEditor({
     setPolicy(null);
     setSaved(null);
     setError("");
-    void apiFetch<Policy>("/plugins/runtime-limits")
+    const path = hasDurableStorage
+      ? `/plugins/runtime-limits?plugin=${encodeURIComponent(plugin)}`
+      : "/plugins/runtime-limits";
+    void apiFetch<Policy>(path)
       .then((next) => {
         if (!live) return;
         setPolicy(next);
@@ -84,19 +136,22 @@ export function RuntimeLimitsEditor({
     return () => {
       live = false;
     };
-  }, [plugin]);
+  }, [plugin, hasDurableStorage]);
   const invalid =
-    draft &&
-    fields.some((f) => {
-      const value = Number(draft[f.key]);
-      return (
-        !Number.isFinite(value) ||
-        value < 0 ||
-        (f.max !== undefined && value > f.max) ||
-        (isIntegerLimit(f.key) && !Number.isSafeInteger(value))
-      );
-    });
+    aboveCeiling ||
+    (draft &&
+      fields.some((f) => {
+        const value = Number(draft[f.key]);
+        return (
+          !Number.isFinite(value) ||
+          (f.key === "durableBytes" && !Number.isSafeInteger(Math.round(value * f.scale))) ||
+          value < 0 ||
+          (f.max !== undefined && value > f.max) ||
+          (isIntegerLimit(f.key) && !Number.isSafeInteger(value))
+        );
+      }));
   const input = (f: (typeof fields)[number]) => {
+    const ceiling = durableLimit(f.key);
     let global = limitNumber(f.key, policy?.runtimeLimits) / f.scale || f.fallback;
     // A list's default is what the plugin asks for, within the global limit.
     if (plugin && f.key === "listItems" && listItems)
@@ -106,7 +161,12 @@ export function RuntimeLimitsEditor({
         aria-label={plugin ? t("Override: {limit}", { limit: f.label }) : f.label}
         type="number"
         min={0}
-        max={f.max}
+        max={
+          f.max ??
+          (ceiling !== undefined
+            ? Math.max(ceiling / f.scale, Number(saved?.[f.key] ?? 0))
+            : undefined)
+        }
         step={isIntegerLimit(f.key) ? 1 : "any"}
         disabled={!draft || busy}
         value={draft?.[f.key] ?? ""}
@@ -122,23 +182,26 @@ export function RuntimeLimitsEditor({
     setBusy(true);
     setError("");
     try {
-      // Read only when saving: idle settings pages do not poll job APIs.
-      const ids = plugin
-        ? [plugin]
-        : ((await apiFetch<{ plugins?: { id: string }[] }>("/plugins")).plugins?.map((p) => p.id) ??
-          []);
-      const jobs = await Promise.all(
-        ids.map((id) => apiFetch<{ state: string }[]>(`/plugins/${encodeURIComponent(id)}/jobs`)),
-      );
-      if (
-        jobs.some((list) => list.some((job) => job.state === "running")) &&
-        !(await confirmDialog({
-          title: t("Save changes"),
-          message: t("Saving stops current jobs."),
-          confirmLabel: t("Save changes"),
-        }))
-      )
-        return;
+      if (fields.some((f) => !f.key.startsWith("durable") && draft[f.key] !== saved?.[f.key])) {
+        // Read only when saving: idle settings pages do not poll job APIs.
+        const ids = plugin
+          ? [plugin]
+          : ((await apiFetch<{ plugins?: { id: string }[] }>("/plugins")).plugins?.map(
+              (p) => p.id,
+            ) ?? []);
+        const jobs = await Promise.all(
+          ids.map((id) => apiFetch<{ state: string }[]>(`/plugins/${encodeURIComponent(id)}/jobs`)),
+        );
+        if (
+          jobs.some((list) => list.some((job) => job.state === "running")) &&
+          !(await confirmDialog({
+            title: t("Save changes"),
+            message: t("Saving stops current jobs."),
+            confirmLabel: t("Save changes"),
+          }))
+        )
+          return;
+      }
       const next = Object.fromEntries(
         fields.map((f) => [
           f.key,
@@ -157,7 +220,11 @@ export function RuntimeLimitsEditor({
       setSaved({ ...draft });
       onSaved?.();
     } catch (e) {
-      setError(String(e));
+      setError(
+        e instanceof ApiError && e.code === "durable_quota_ceiling"
+          ? t("The quota exceeds the current disk limit.")
+          : String(e),
+      );
     } finally {
       setBusy(false);
     }
@@ -188,7 +255,53 @@ export function RuntimeLimitsEditor({
                 </span>
               </label>
             ) : null}
-            <div className="overflow-x-auto">
+            {hasDurableStorage ? (
+              <section className="max-w-lg space-y-2">
+                <h4 className="text-sm font-medium">{t("Durable storage")}</h4>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  {durableFields.map((f) => (
+                    <label key={f.key} className="block space-y-1 text-xs">
+                      <span className="font-medium">{f.label}</span>
+                      {input(f)}
+                    </label>
+                  ))}
+                </div>
+                {usage ? (
+                  <p className="text-xs text-fg-muted">
+                    {t("{used} of {size} used · {count} of {files} files", {
+                      used: formatBytes(usage.bytes),
+                      size: formatBytes(usage.quotaBytes),
+                      count: formatNumber(usage.files),
+                      files: formatNumber(usage.quotaFiles),
+                    })}
+                  </p>
+                ) : null}
+                {capacity ? (
+                  <p className="text-xs text-fg-muted">
+                    {storage.diskAvailable
+                      ? t("{free} free on this drive. Maximum quota: {size} and {files} files.", {
+                          free: formatBytes(capacity.freeBytes),
+                          size: formatBytes(capacity.quotaBytes),
+                          files: formatNumber(capacity.quotaFiles),
+                        })
+                      : t("Free disk space is unavailable.")}
+                  </p>
+                ) : null}
+                {aboveCeiling ? (
+                  <p className="text-xs" role="status">
+                    {t("The quota exceeds the current disk limit.")}
+                  </p>
+                ) : null}
+                {belowUsage ? (
+                  <p className="text-xs" role="status">
+                    {t(
+                      "Saved data is kept. New writes are refused until there is room within both limits.",
+                    )}
+                  </p>
+                ) : null}
+              </section>
+            ) : null}
+            <div className="overflow-x-auto" hidden={rows.length === 0}>
               <table className="w-full min-w-[600px] text-xs">
                 <thead>
                   <tr className="text-left text-fg-muted">
@@ -317,7 +430,7 @@ export function RuntimeLimitsEditor({
                 )}
               </p>
               <div className="grid gap-3 sm:grid-cols-2">
-                {fields.slice(9).map((f) => (
+                {standardFields.slice(9).map((f) => (
                   <label key={f.key} className="space-y-1 text-xs">
                     {f.label}
                     {input(f)}
@@ -325,6 +438,20 @@ export function RuntimeLimitsEditor({
                 ))}
               </div>
             </section>
+            {shareField ? (
+              <section className="space-y-3 border-t border-border pt-4">
+                <h3 className="text-sm font-medium">{t("Durable storage")}</h3>
+                <p className="text-xs text-fg-muted">
+                  {t(
+                    "Sets the share of free disk space used to cap each plugin’s saved data and file limits.",
+                  )}
+                </p>
+                <label className="block max-w-sm space-y-1 text-xs">
+                  <span>{shareField.label}</span>
+                  {input(shareField)}
+                </label>
+              </section>
+            ) : null}
           </>
         )}
       </div>

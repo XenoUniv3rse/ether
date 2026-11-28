@@ -415,7 +415,7 @@ func (b hostBridge) CallHost(ctx context.Context, name string, raw json.RawMessa
 		}
 	}
 	switch name {
-	case "runtime.limits", "http.hash", "http.fetchToCache", "cache.read", "cache.stat", "cache.rasterize", "archive.list", "archive.open", "archive.read", "archive.extract":
+	case "runtime.limits", "http.hash", "http.fetchToCache", "cache.read", "cache.stat", "cache.usage", "cache.rasterize", "archive.list", "archive.open", "archive.read", "archive.extract":
 		out, err := CallDataHost(ctx, b.h, name, raw)
 		if err != nil {
 			return nil, mapHostError(err)

@@ -253,7 +253,11 @@ the request is active. Use `cache.stat` for size and digests of other owned refs
 For saves, declare `permissions.storage: "durable"` and promote the staged ref
 using `cache.put("", "", null, {durable: true, fromBlob: ref})`. Store the
 returned ref per viewer and authorize reads and deletions against that viewer.
-The per-plugin quota is 1 GiB and 10,000 unique blobs. Durable bytes remain until
+The per-plugin defaults are 1 GiB and 10,000 unique blobs. Owners can change
+both limits in the plugin's Limits drawer. Call `ether.cache.usage({durable: true})`
+to read `{bytes, files, quotaBytes, quotaFiles}` for your own plugin. Shared
+content-addressed blobs count once. A quota reduction keeps existing data and
+blocks new blobs that would exceed either limit. Durable bytes remain until
 `cache.delete` or uninstall. On a hosted adapter download route, authorize the
 viewer and return `{status: 200, blob: {ref}}` with your `durable:<sha256>` ref.
 Ether streams the file with HTTP Range support.
