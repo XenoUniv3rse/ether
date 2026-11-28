@@ -107,6 +107,7 @@ export function MetadataCatalogue({
           </Badge>
         }
         configureLabel={actionLabel}
+        configureHref={source === "tmdb" && enabled && ready ? "/services/tmdb" : undefined}
         onConfigure={openDrawer}
         details={
           saveFailed && key === null ? (

@@ -75,7 +75,7 @@ export function settingsIndex(): SettingHit[] {
   const releases = t("Releases");
   const playback = t("Playback");
   const cachePreloading = `${t("Cache")} › ${t("Preloading")}`;
-  const moviesSettings = t("Movies · Settings");
+  const tmdbSettings = "TMDB";
   const viewers = t("Viewers");
   const plex = "Plex";
   const away = t("Away from home");
@@ -210,12 +210,12 @@ export function settingsIndex(): SettingHit[] {
     ),
     ...groupHits(S.DOWNLOADS, "/apps/plex/downloads", plex),
     // Libraries (TMDB source & per-library new releases)
-    ...groupHits(S.CATALOG, "/libraries/1/settings", moviesSettings),
-    ...groupHits([UpcomingEpisodeSettings], "/libraries/1/settings", moviesSettings),
-    ...rows("/libraries/1/settings", moviesSettings, [
+    ...groupHits(S.CATALOG, "/services/tmdb", tmdbSettings),
+    ...groupHits([UpcomingEpisodeSettings], "/services/tmdb", tmdbSettings),
+    ...rows("/services/tmdb", tmdbSettings, [
       ["hide-obscure-titles", t("Hide obscure titles")],
     ]),
-    ...rows("/libraries/1/settings", `${moviesSettings} › ${t("New releases")}`, [
+    ...rows("/services/tmdb", `${tmdbSettings} › ${t("New releases")}`, [
       ["when-they-can-play", t("When they can play")],
       ["on-digital-release", t("On digital release")],
       ["home-release-offset", t("Home-release offset (days)")],

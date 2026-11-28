@@ -929,6 +929,8 @@ export function ConnectedServices({
         <div hidden={tab !== "tmdb"}>
           <IntegrationTab id="tmdb" name="TMDB" enabled ready={Boolean(tmdb?.configured)}>
             <TmdbCatalogueSettings
+              bundled={tmdb?.keySource === "built-in"}
+              disabled={locked || saving}
               draft={draft.catalog ?? {}}
               onChange={(catalog) => setDraft({ ...draft, catalog })}
               errors={errors}

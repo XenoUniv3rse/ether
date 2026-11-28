@@ -200,7 +200,10 @@ describe("Settings", () => {
     const required = await screen.findByRole("region", { name: "Catalogues" }, WAIT);
     expect(screen.queryByRole("region", { name: "Essentials" })).toBeNull();
     expect(within(required).getByRole("listitem", { name: "TMDB" })).toBeInTheDocument();
-    expect(await screen.findByRole("button", { name: "Manage TMDB" }, WAIT)).toBeEnabled();
+    expect(await screen.findByRole("link", { name: "Manage TMDB" }, WAIT)).toHaveAttribute(
+      "href",
+      "/services/tmdb",
+    );
     const artwork = screen.getByRole("region", { name: "Artwork and ratings" });
     const posters = await within(artwork).findByRole("listitem", { name: "PostersPlus" }, WAIT);
     const ratings = within(artwork).getByRole("listitem", { name: "OMDb and MDBList" });
@@ -253,22 +256,22 @@ describe("Settings", () => {
 
   it("saves and tests the TMDB key from Integrations", async () => {
     const { fake } = renderApp("/services/overview");
-    fireEvent.click(await screen.findByRole("button", { name: "Manage TMDB" }, WAIT));
-    const drawer = await screen.findByRole("dialog", { name: "Manage TMDB" });
-    fireEvent.change(within(drawer).getByLabelText("TMDB API key"), {
+    fireEvent.click(await screen.findByRole("link", { name: "Manage TMDB" }, WAIT));
+    const keyField = await screen.findByLabelText("TMDB API key");
+    expect(screen.getByRole("radio", { name: /On digital release/ })).toBeVisible();
+    fireEvent.change(keyField, {
       target: { value: "tmdb-key" },
     });
-    fireEvent.click(within(drawer).getByRole("button", { name: "Test" }));
+    fireEvent.click(screen.getByRole("button", { name: "Test" }));
     await waitFor(
       () => expect(calls(fake, "POST", "/test/tmdb")[0]?.body).toEqual({ key: "tmdb-key" }),
       WAIT,
     );
-    fireEvent.click(within(drawer).getByRole("button", { name: "Save" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
     await waitFor(
       () =>
         expect(calls(fake, "PUT", "/config/catalog")[0]?.body).toMatchObject({
           tmdbKey: "tmdb-key",
-          tmdbDisabled: false,
         }),
       WAIT,
     );

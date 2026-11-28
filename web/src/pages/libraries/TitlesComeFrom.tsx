@@ -39,7 +39,9 @@ export function TitlesComeFrom({
   const plugin = ids.length === 1 ? attached[0] : undefined;
   const manageHref = plugin?.pluginId
     ? `/plugins/installed?plugin=${encodeURIComponent(plugin.pluginId)}&tab=setup`
-    : "/services/overview";
+    : ids.length > 0 && ids.every((id) => id === "tmdb-movies" || id === "tmdb-tv")
+      ? "/services/tmdb"
+      : "/services/overview";
   const manageLabel = plugin?.pluginId
     ? t("Manage {app}", { app: plugin.owner })
     : t("Manage in Integrations");

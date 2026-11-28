@@ -474,6 +474,8 @@ func (r KindExpandResponse) EffectiveCursor() string {
 // KindChangePage is one delta page returned by POST /ether/v1/kinds/{kind}/changes
 // during pull sync (spec §3.5).
 type KindChangePage struct {
+	// Checkpoint marks an upsert-only page whose next cursor can resume in a later sync.
+	Checkpoint bool       `json:"checkpoint,omitempty"`
 	Upserts    []KindItem `json:"upserts,omitempty"`
 	Deletes    []string   `json:"deletes,omitempty"` // externalIDs
 	NextCursor string     `json:"nextCursor,omitempty"`

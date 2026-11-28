@@ -1120,6 +1120,8 @@ export interface KindExpandResponse {
 }
 
 export interface KindChangePage {
+  /** This upsert-only page has a durable next cursor. */
+  checkpoint?: boolean;
   upserts?: KindItem[];
   deletes?: string[];
   nextCursor?: string;

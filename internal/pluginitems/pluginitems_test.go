@@ -568,6 +568,7 @@ type fakeSyncCaller struct {
 	rootPages        map[string]core.KindPage
 	childPages       map[string]core.KindPage
 	changesPages     map[string]core.KindChangePage
+	failCursor       string
 	changesSupported bool
 	browseCalls      int
 }
@@ -597,6 +598,9 @@ func (f *fakeSyncCaller) Call(_ context.Context, _ string, req plugins.Request) 
 			Cursor string `json:"cursor"`
 		}
 		_ = json.Unmarshal(req.Body, &cr)
+		if f.failCursor != "" && cr.Cursor == f.failCursor {
+			return plugins.Response{Status: http.StatusBadGateway}, nil
+		}
 		page, ok := f.changesPages[cr.Cursor]
 		if !ok {
 			page = core.KindChangePage{Complete: true, NextCursor: "tok-1"}
@@ -605,6 +609,39 @@ func (f *fakeSyncCaller) Call(_ context.Context, _ string, req plugins.Request) 
 		return plugins.Response{Status: http.StatusOK, Body: b}, nil
 	}
 	return plugins.Response{Status: http.StatusNotFound}, nil
+}
+
+func TestResumeCheckpointAfterFetchTimeout(t *testing.T) {
+	ctx := context.Background()
+	item := core.KindItem{ID: "s1", Level: "series", Title: "First"}
+	fc := &fakeSyncCaller{changesSupported: true, failCursor: "page2",
+		rootPages: map[string]core.KindPage{"": {Items: []core.KindItem{item}}},
+		changesPages: map[string]core.KindChangePage{
+			"":      {Complete: true, NextCursor: "start"},
+			"start": {Upserts: []core.KindItem{{ID: "s2", Level: "series", Title: "Second"}}, Checkpoint: true, NextCursor: "page2"},
+			"page2": {Complete: true, NextCursor: "done"},
+		},
+	}
+	s, _ := openTestService(t, Options{Caller: fc})
+	if _, err := s.UpsertKind(ctx, "community.books", 10, sampleBookDecl(), false); err != nil {
+		t.Fatal(err)
+	}
+	sync := func() (SyncResult, error) { return s.SyncKind(ctx, "community.books", "book", SyncOptions{}) }
+	if _, err := sync(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sync(); err == nil {
+		t.Fatal("expected fetch timeout")
+	}
+	state, err := s.SyncStateOf(ctx, "community.books", "book")
+	if err != nil || state.Cursor != "page2" || state.Items != 2 {
+		t.Fatalf("checkpoint %+v, %v", state, err)
+	}
+	fc.failCursor = "start"
+	result, err := sync()
+	if err != nil || result.NextCursor != "done" || result.Upserted != 0 {
+		t.Fatalf("resume %+v, %v", result, err)
+	}
 }
 
 func testSyncWalkChangesEtagAndDeleteGuard(t *testing.T) {

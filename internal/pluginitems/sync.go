@@ -593,6 +593,8 @@ func (s *Service) syncViaChanges(ctx context.Context, caller Caller, rec KindRec
 		allUpserts []core.KindItem
 		allDeletes []string
 	)
+	seenChanges := 0
+	checkpointable := true
 	for pageIdx := 0; pageIdx < 1000; pageIdx++ {
 		page, notSupp, retryAfter, err := s.callKindChanges(ctx, caller, rec.PluginID, rec.KindKey, cursor, DefaultChangesLimit)
 		for attempt := 0; err != nil && waitRetryAfter(ctx, retryAfter, attempt); attempt++ {
@@ -609,7 +611,28 @@ func (s *Service) syncViaChanges(ctx context.Context, caller Caller, rec KindRec
 		}
 		allUpserts = append(allUpserts, page.Upserts...)
 		allDeletes = append(allDeletes, page.Deletes...)
-		seenChanges := len(allUpserts) + len(allDeletes)
+		seenChanges += len(page.Upserts) + len(page.Deletes)
+		// Tombstones and ordinary feeds retain whole-pass validation. A producer
+		// may opt in when its page is independently applicable and replayable.
+		checkpointable = checkpointable && page.Checkpoint && len(page.Deletes) == 0
+		if checkpointable && !page.Complete && page.NextCursor != "" {
+			if page.NextCursor == cursor {
+				return res, false, errors.New("pluginitems: checkpoint cursor did not advance")
+			}
+			if err := s.applyChangeUpserts(ctx, rec, allUpserts, &res); err != nil {
+				return res, false, err
+			}
+			// Advance only after every upsert committed. An interruption before
+			// this write replays the page through the idempotent upsert path.
+			_, err := s.runWriteChunk(ctx, func(ctx context.Context, tx *sql.Tx) error {
+				_, err := tx.ExecContext(ctx, "UPDATE plugin_sync_state SET cursor=? WHERE plugin_id=? AND kind_key=?", page.NextCursor, rec.PluginID, rec.KindKey)
+				return err
+			})
+			if err != nil {
+				return res, false, err
+			}
+			allUpserts = nil
+		}
 		s.setSyncProgress(rec.PluginID, rec.KindKey, syncProgress{
 			running:     true,
 			phase:       "syncing",
@@ -626,6 +649,9 @@ func (s *Service) syncViaChanges(ctx context.Context, caller Caller, rec KindRec
 		}
 		if page.Complete || page.NextCursor == "" {
 			break
+		}
+		if pageIdx == 999 {
+			return res, false, errors.New("pluginitems: changes feed exceeded 1000 pages")
 		}
 	}
 
@@ -647,13 +673,8 @@ func (s *Service) syncViaChanges(ctx context.Context, caller Caller, rec KindRec
 		}
 	}
 
-	for start := 0; start < len(allUpserts); start += MaxUpsertBatch {
-		end := min(start+MaxUpsertBatch, len(allUpserts))
-		n, err := s.upsertItemsForSync(ctx, rec.PluginID, rec.KindKey, allUpserts[start:end])
-		if err != nil {
-			return res, false, err
-		}
-		res.Upserted += n
+	if err := s.applyChangeUpserts(ctx, rec, allUpserts, &res); err != nil {
+		return res, false, err
 	}
 
 	for start := 0; start < len(allDeletes); start += MaxUpsertBatch {
@@ -665,6 +686,18 @@ func (s *Service) syncViaChanges(ctx context.Context, caller Caller, rec KindRec
 	}
 
 	return res, false, nil
+}
+
+func (s *Service) applyChangeUpserts(ctx context.Context, rec KindRecord, items []core.KindItem, res *SyncResult) error {
+	for start := 0; start < len(items); start += MaxUpsertBatch {
+		end := min(start+MaxUpsertBatch, len(items))
+		n, err := s.upsertItemsForSync(ctx, rec.PluginID, rec.KindKey, items[start:end])
+		if err != nil {
+			return err
+		}
+		res.Upserted += n
+	}
+	return nil
 }
 
 // syncRewalkDiff re-walks /browse, diffs items by etag, and deletes unpinned,

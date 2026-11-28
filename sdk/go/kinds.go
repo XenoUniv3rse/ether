@@ -162,6 +162,8 @@ type KindExpandResponse struct {
 
 // KindChangePage is one delta page for pull sync.
 type KindChangePage struct {
+	// Checkpoint marks an upsert-only page whose next cursor can resume in a later sync.
+	Checkpoint bool       `json:"checkpoint,omitempty"`
 	Upserts    []KindItem `json:"upserts,omitempty"`
 	Deletes    []string   `json:"deletes,omitempty"`
 	NextCursor string     `json:"nextCursor,omitempty"`
