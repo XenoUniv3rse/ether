@@ -69,6 +69,9 @@ type protSnapshot struct {
 
 // Cache implements core.SegmentCache.
 type Cache struct {
+	// Disk-usage and live-protection callbacks may query Usage while the
+	// file store's allocation lock is held.
+	poolUsage       atomic.Pointer[int64]
 	files           FilePool   // protected by mu
 	segmentReserved int64      // local segments still being written
 	indexMu         sync.Mutex // serializes initial local disk accounting
@@ -507,7 +510,7 @@ func (c *Cache) Put(releaseID string, segment int, data []byte) error {
 	st.Unlock()
 	c.publishPendingEvents(pending)
 
-	if overHard {
+	if overHard && pool == nil {
 		c.dropOverHardBudget()
 	}
 	if wake {
@@ -595,6 +598,9 @@ func (c *Cache) Usage() (used, budget int64) {
 		used, budget = c.shared.usage()
 	}
 	if files != nil {
+		if retained := c.poolUsage.Load(); retained != nil {
+			return used + *retained, budget
+		}
 		retained, _, err := files.FileUsage()
 		if err == nil {
 			used += retained
@@ -1079,6 +1085,9 @@ func (c *Cache) evictLoop() {
 }
 
 func (c *Cache) evictWorkerPass() {
+	if c.trimPoolWatermarked(true) {
+		return
+	}
 	if c.shared != nil {
 		c.shared.sweepWatermarked()
 		return
@@ -1227,7 +1236,9 @@ func (c *Cache) evictThresholdsLocked(floorCap int64, floorOK bool, watermarked 
 // Protect, SetDiskUsage, Sweep and indexDisk), skipping pinned and protected
 // releases.
 func (c *Cache) evict() {
-	defer c.trimPool()
+	if c.trimPool() {
+		return
+	}
 	if c.shared != nil {
 		c.shared.sweep(false)
 		return
@@ -1237,21 +1248,25 @@ func (c *Cache) evict() {
 
 // evictLocal runs one eviction pass under evictMu. When watermarked is true
 // (background worker), budget eviction starts at 95% and evicts down to 90%.
-func (c *Cache) evictLocal(watermarked bool) { c.evictLocalTarget(watermarked, -1) }
-func (c *Cache) evictLocalTarget(watermarked bool, maximum int64) {
+func (c *Cache) evictLocal(watermarked bool) { c.evictLocalTarget(watermarked, -1, time.Time{}) }
+func (c *Cache) evictLocalTarget(watermarked bool, need int64, cutoff time.Time) (int64, error) {
 	c.evictMu.Lock()
 	defer c.evictMu.Unlock()
 	c.drainPendingUnlinks()
-	floorCap, floorOK := c.floorCap(c.localUsed)
+	var floorCap int64
+	var floorOK bool
+	if need < 0 {
+		floorCap, floorOK = c.floorCap(c.localUsed)
+	}
 	c.mu.Lock()
 	if c.closed {
 		c.mu.Unlock()
-		return
+		return 0, nil
 	}
 	trigger, _, _ := c.evictThresholdsLocked(floorCap, floorOK, watermarked)
-	if !trigger && !(maximum >= 0 && c.used > maximum) {
+	if !trigger && need < 0 {
 		c.mu.Unlock()
-		return
+		return 0, nil
 	}
 	c.mu.Unlock()
 
@@ -1260,7 +1275,7 @@ func (c *Cache) evictLocalTarget(watermarked bool, maximum int64) {
 	c.mu.Lock()
 	if c.closed {
 		c.mu.Unlock()
-		return
+		return 0, nil
 	}
 	if shrank || c.protShrank.Swap(false) {
 		c.parkDirty = true
@@ -1270,11 +1285,9 @@ func (c *Cache) evictLocalTarget(watermarked bool, maximum int64) {
 		c.parkDirty = false
 	}
 	trigger, target, limit := c.evictThresholdsLocked(floorCap, floorOK, watermarked)
-	if maximum >= 0 && c.used > maximum {
+	if need >= 0 {
 		trigger = true
-		if target < 0 || target > maximum {
-			target = maximum
-		}
+		target = max(c.used-need, 0)
 	}
 	var victims []*entry
 	var evictedBytes int64
@@ -1289,6 +1302,9 @@ func (c *Cache) evictLocalTarget(watermarked bool, maximum int64) {
 				e.parked = true
 				c.parked.pushFront(e)
 				continue
+			}
+			if !cutoff.IsZero() && c.victimAgeLocked(e) > cutoff.UnixNano() {
+				break
 			}
 			c.metrics.EvictedBytes += e.size
 			evictedBytes += e.size
@@ -1318,10 +1334,12 @@ func (c *Cache) evictLocalTarget(watermarked bool, maximum int64) {
 	if hook != nil && len(victims) > 0 {
 		hook()
 	}
-	if err := c.deleteFiles(victims, false); err != nil {
+	err := c.deleteFiles(victims, false)
+	if err != nil {
 		c.logger.Warn("evict segments", "err", err)
 	}
 	c.drainPendingUnlinks()
+	return evictedBytes, err
 }
 
 // unparkLocked merges the parked list back into the LRU list, ordered by
@@ -1630,7 +1648,12 @@ func (c *Cache) indexDisk(ctx context.Context) error {
 			if ctx.Err() != nil {
 				return
 			}
-			c.evictLocal(false)
+			c.mu.Lock()
+			pooled := c.files != nil
+			c.mu.Unlock()
+			if !pooled {
+				c.evictLocal(false)
+			}
 			if err != nil {
 				if err != io.EOF {
 					scanErr = err
@@ -1646,8 +1669,31 @@ func (c *Cache) indexDisk(ctx context.Context) error {
 	if scanErr != nil {
 		return scanErr
 	}
+	c.mu.Lock()
+	if c.files != nil && c.segCount > 1 {
+		c.restoreRecencyLocked()
+	}
+	c.mu.Unlock()
 	c.indexed.Store(true)
 	return nil
+}
+
+// Directory enumeration order need not reflect the last read of a segment.
+// Restore both LRU indexes before comparing cached files across a restart.
+func (c *Cache) restoreRecencyLocked() {
+	entries := make([]*entry, 0, c.segCount)
+	for _, r := range c.rels {
+		for _, e := range r.segs {
+			entries = append(entries, e)
+		}
+		r.head, r.tail = nil, nil
+	}
+	sort.Slice(entries, func(i, j int) bool { return entries[i].lastUsed < entries[j].lastUsed })
+	c.lru, c.parked = lruList{}, lruList{}
+	for _, e := range entries {
+		c.listOf(e).pushFront(e)
+		e.rel.pushEntry(e)
+	}
 }
 
 // SetBlockCheck prevents background writers from refilling owner-blocked releases.

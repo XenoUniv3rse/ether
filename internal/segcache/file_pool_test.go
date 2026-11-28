@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/braedonsaunders/ether/internal/blobcache"
 	"github.com/braedonsaunders/ether/internal/segcache"
@@ -22,6 +23,11 @@ type mediaNode struct {
 
 func startMediaNode(t *testing.T, dir string, db *sql.DB, id string) mediaNode {
 	t.Helper()
+	return startTimedNode(t, dir, db, id, time.Now)
+}
+
+func startTimedNode(t *testing.T, dir string, db *sql.DB, id string, fileClock func() time.Time) mediaNode {
+	t.Helper()
 	var seg *segcache.Cache
 	var err error
 	if db == nil {
@@ -33,7 +39,7 @@ func startMediaNode(t *testing.T, dir string, db *sql.DB, id string) mediaNode {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { seg.Close() })
-	files, err := blobcache.Open(filepath.Join(dir, "plugin-files"), blobcache.Options{Unified: true, Shared: db != nil, SweepPeriod: -1, PoolCapacity: seg.MediaFileCapacity, MakeFileRoom: seg.MakeFileRoom, CheckVolume: seg.CheckVolume})
+	files, err := blobcache.Open(filepath.Join(dir, "plugin-files"), blobcache.Options{Now: fileClock, Unified: true, Shared: db != nil, SweepPeriod: -1, PoolCapacity: seg.MediaFileCapacity, MakeFileRoom: seg.MakeFileRoom, CheckVolume: seg.CheckVolume})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -209,5 +215,140 @@ func TestMediaPoolAccountsForSegmentsOnRestart(t *testing.T) {
 	}
 	if used, _ := node.seg.Usage(); used != 700 {
 		t.Fatalf("usage after restart %d, want 700", used)
+	}
+}
+
+func TestMediaPoolEvictsOldestAcrossStores(t *testing.T) {
+	for _, backend := range []string{"local", "shared"} {
+		for _, first := range []string{"file", "segment"} {
+			for _, pressure := range []string{"segment admission", "file admission", "smaller budget", "volume floor"} {
+				t.Run(backend+"/"+first+"/"+pressure, func(t *testing.T) {
+					var db *sql.DB
+					if backend == "shared" {
+						var err error
+						db, err = store.OpenMemory(context.Background())
+						if err != nil {
+							t.Fatal(err)
+						}
+						t.Cleanup(func() { db.Close() })
+					}
+					dir := t.TempDir()
+					at := time.Now().Add(time.Hour)
+					if first == "file" {
+						at = at.Add(-2 * time.Hour)
+					}
+					clock := func() time.Time { return at }
+					a := startTimedNode(t, dir, db, "a", clock)
+					b := a
+					if db != nil {
+						b = startTimedNode(t, dir, db, "b", clock)
+					}
+					putFile := func(name string, size int) {
+						t.Helper()
+						if _, err := a.games.Put(context.Background(), name, bytes.NewReader(make([]byte, size)), int64(size)); err != nil {
+							t.Fatal(err)
+						}
+					}
+					putFile("disc", 350)
+					if err := a.seg.Put("release", 0, make([]byte, 350)); err != nil {
+						t.Fatal(err)
+					}
+					switch pressure {
+					case "segment admission":
+						if err := b.seg.Put("new stream", 0, make([]byte, 450)); err != nil {
+							t.Fatal(err)
+						}
+					case "file admission":
+						putFile("new disc", 450)
+					case "smaller budget":
+						b.seg.SetBudget(500)
+					case "volume floor":
+						b.seg.SetDiskUsage(func() (int64, int64, error) { return 10000, 300, nil })
+					}
+					_, discRemains := a.games.LookupKey("disc")
+					streamRemains := a.seg.Has("release", 0)
+					if discRemains != (first == "segment") || streamRemains != (first == "file") {
+						t.Fatalf("oldest %s: retained disc=%v, stream=%v", first, discRemains, streamRemains)
+					}
+				})
+			}
+		}
+	}
+}
+
+func TestMediaPoolAdaptiveReplaySurvivesNewerIdleFile(t *testing.T) {
+	for _, backend := range []string{"local", "shared"} {
+		t.Run(backend, func(t *testing.T) {
+			var db *sql.DB
+			if backend == "shared" {
+				var err error
+				db, err = store.OpenMemory(context.Background())
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() { db.Close() })
+			}
+			node := startTimedNode(t, t.TempDir(), db, "a", func() time.Time { return time.Now().Add(time.Hour) })
+			node.seg.SetPolicy(segcache.Policy{Mode: "adaptive", ReplayBoost: 2 * time.Hour})
+			if err := node.seg.Put("replay", 0, make([]byte, 400)); err != nil {
+				t.Fatal(err)
+			}
+			for range 2 {
+				node.seg.RecordPlay("replay", "Film", 400)
+			}
+			if _, err := node.games.Put(context.Background(), "disc", bytes.NewReader(make([]byte, 400)), 400); err != nil {
+				t.Fatal(err)
+			}
+			if err := node.seg.Put("another", 0, make([]byte, 300)); err != nil {
+				t.Fatal(err)
+			}
+			if !node.seg.Has("replay", 0) {
+				t.Fatal("adaptive replay preference was lost under mixed pressure")
+			}
+			if _, ok := node.games.LookupKey("disc"); ok {
+				t.Fatal("idle disc retained ahead of replay")
+			}
+		})
+	}
+}
+
+func TestMediaPoolCallbackCanReadUsage(t *testing.T) {
+	node := startMediaNode(t, t.TempDir(), nil, "a")
+	node.seg.SetDiskUsage(func() (int64, int64, error) {
+		used, _ := node.seg.Usage()
+		return 10000, 2000 - used, nil
+	})
+	if _, err := node.games.Put(context.Background(), "disc", bytes.NewReader(make([]byte, 700)), 700); err != nil {
+		t.Fatal(err)
+	}
+	if err := node.seg.Put("stream", 0, make([]byte, 500)); err != nil {
+		t.Fatal(err)
+	}
+	if used, _ := node.seg.Usage(); used != 500 {
+		t.Fatalf("usage %d", used)
+	}
+}
+
+func TestMediaPoolSharedSubsecondOrdering(t *testing.T) {
+	ctx := context.Background()
+	db, err := store.OpenMemory(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+	base := time.Now().Truncate(time.Second)
+	node := startTimedNode(t, t.TempDir(), db, "a", func() time.Time { return base.Add(50 * time.Millisecond) })
+	if err := node.seg.Put("stream", 0, make([]byte, 350)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.ExecContext(ctx, "UPDATE segcache_segments SET touched=?,touched_nanos=? WHERE release_id='stream'", base.Unix(), 90000000); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = node.games.Put(ctx, "disc", bytes.NewReader(make([]byte, 350)), 350); err != nil {
+		t.Fatal(err)
+	}
+	node.seg.SetBudget(500)
+	if !node.seg.Has("stream", 0) {
+		t.Fatal("a newer segment was rounded below the disc's last-use timestamp")
 	}
 }
