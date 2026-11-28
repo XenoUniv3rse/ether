@@ -133,6 +133,9 @@ func (i *instance) refreshOutput(ctx context.Context, id string, s *playSession)
 				initial := s.rungFor(path)
 				if initial == "" {
 					initial = "base"
+					if len(adaptiveRungs) == 1 {
+						initial = adaptiveRungs[0].ID
+					}
 				}
 				if r.ID == initial && path["adaptive"] != true {
 					path["initialRenditionId"] = r.ID

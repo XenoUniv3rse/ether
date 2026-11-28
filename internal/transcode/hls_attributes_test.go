@@ -51,6 +51,14 @@ func TestProbeCodecConfigurationHex(t *testing.T) {
 	if err != nil || info.Video().CodecString != "avc1.640028" {
 		t.Fatalf("codec config: %+v %v", info, err)
 	}
+	for _, data := range [][]byte{
+		{0, 0, 0, 1, 0x67, 0x64, 0x0c, 0x1f},
+		{1, 0x64, 0, 0x1f, 0xff, 0xe1, 0, 4, 0x67, 0x64, 0x0c, 0x1f},
+	} {
+		if got := probedAVCCodec(data); got != "avc1.640c1f" {
+			t.Fatalf("SPS constraint flags lost for %x: %q", data, got)
+		}
+	}
 }
 
 func TestHLSAttributesDoNotAdvertiseSourceDVOnConvertedOutput(t *testing.T) {

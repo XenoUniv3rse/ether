@@ -398,16 +398,6 @@ func (s *Session) adaptiveRungsLocked() ([]core.HLSRung, string) {
 			capped = true
 			continue
 		}
-		if d.VideoCopy && v != nil && v.CodecString != "" && !d.StripDolbyVision {
-			_, audio, hasAudio := strings.Cut(r.Codecs, ",")
-			r.Codecs = v.CodecString
-			if hasAudio {
-				r.Codecs += "," + audio
-			}
-		}
-		if r.OutputCodecs != "" {
-			r.Codecs = r.OutputCodecs
-		}
 		out = append(out, r)
 		if reason != "" {
 			break
@@ -445,10 +435,11 @@ func adaptiveEncodedTop(info core.MediaInfo, rungs []rung, cap int) int {
 	for n, r := range rungs[1:] {
 		_, _, family, videoRange := qualityMetadata(info, r)
 		if r.decision.VideoCopy || family != codec || videoRange != dr || !adaptiveTracksMatch(r.decision, base.decision) ||
-			r.peakKbps >= base.peakKbps || (cap > 0 && r.peakKbps > cap) {
+			(cap > 0 && r.peakKbps > cap) {
 			continue
 		}
-		if best == 0 || r.peakKbps > rungs[best].peakKbps {
+		if best == 0 || r.width*r.height > rungs[best].width*rungs[best].height ||
+			(r.width*r.height == rungs[best].width*rungs[best].height && r.peakKbps > rungs[best].peakKbps) {
 			best = n + 1
 		}
 	}
@@ -512,6 +503,37 @@ func adaptiveHEVCLevel(r rung, fps float64) int {
 	return 0
 }
 
+// Cache the declaration when authoring the rung. Init segments remain
+// diagnostic evidence and cannot rewrite an already published master.
+func setAdaptiveRungCodecs(info core.MediaInfo, r *rung, v *core.StreamInfo) {
+	if r.decision.VideoCopy {
+		if v.CodecString != "" && !r.decision.StripDolbyVision {
+			setRungVideoCodec(r, v.CodecString)
+		}
+		return
+	}
+	switch r.decision.VideoCodec {
+	case "h264":
+		if r.decision.H264Level == 0 {
+			if level := H264HighLevel(r.width, r.height, v.FrameRate, r.peakKbps, 4); level > 0 {
+				// 3.0 is the lowest High level shared with VideoToolbox.
+				r.decision.H264Level = max(30, level)
+			}
+		}
+		r.codecs = rungCodecs(info, r.decision, r.height)
+	case "hevc":
+		setAdaptiveHEVCLevel(r, v)
+	}
+}
+
+func setRungVideoCodec(r *rung, video string) {
+	_, audio, hasAudio := strings.Cut(r.codecs, ",")
+	r.codecs = video
+	if hasAudio {
+		r.codecs += "," + audio
+	}
+}
+
 func setAdaptiveHEVCLevel(r *rung, v *core.StreamInfo) {
 	if r.decision.VideoCopy || r.decision.VideoCodec != "hevc" || v.FrameRate <= 0 {
 		return
@@ -521,17 +543,13 @@ func setAdaptiveHEVCLevel(r *rung, v *core.StreamInfo) {
 		return
 	}
 	r.hevcLevel = level
-	_, audio, hasAudio := strings.Cut(r.codecs, ",")
 	var video string
 	if keepsHDR(v) && !r.decision.ToneMap {
 		video = fmt.Sprintf("hvc1.2.4.L%d.90", level)
 	} else {
 		video = fmt.Sprintf("hvc1.1.6.L%d.90", level)
 	}
-	r.codecs = video
-	if hasAudio {
-		r.codecs += "," + audio
-	}
+	setRungVideoCodec(r, video)
 }
 
 // hlsPeakWindowLocked is the shortest RFC8216 peak measurement window.

@@ -449,8 +449,8 @@ func mapStream(s ffprobeStream) (core.StreamInfo, bool) {
 			}
 		}
 		extra := probeExtradata(s.Extradata)
-		if si.Codec == "h264" && len(extra) >= 4 && extra[0] == 1 {
-			si.CodecString = fmt.Sprintf("avc1.%02x%02x%02x", extra[1], extra[2], extra[3])
+		if si.Codec == "h264" {
+			si.CodecString = probedAVCCodec(extra)
 		}
 		if si.Codec == "hevc" && len(extra) >= 13 && extra[0] == 1 {
 			si.CodecString = "hvc1." + hevcCodecs(extra)
@@ -806,6 +806,26 @@ func tail(s string, n int) string {
 		return "..." + s[len(s)-n:]
 	}
 	return s
+}
+
+// Read the profile, constraint flags, and level from avcC or the Annex B SPS.
+func probedAVCCodec(data []byte) string {
+	if len(data) >= 4 && data[0] == 1 {
+		if sps := avcConfigSPS(data); len(sps) >= 4 && sps[0]&31 == 7 {
+			return fmt.Sprintf("avc1.%x", sps[1:4])
+		}
+		return fmt.Sprintf("avc1.%x", data[1:4])
+	}
+	for {
+		start := bytes.Index(data, []byte{0, 0, 1})
+		if start < 0 || len(data)-start < 7 {
+			return ""
+		}
+		data = data[start+3:]
+		if data[0]&31 == 7 {
+			return fmt.Sprintf("avc1.%x", data[1:4])
+		}
+	}
 }
 
 // ffprobe prints extradata as offset-prefixed hex rows followed by ASCII.

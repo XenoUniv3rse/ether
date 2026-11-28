@@ -1385,7 +1385,7 @@ func videoConfig(si *core.StreamInfo, codec string, p []byte, transfer int, dovi
 			return incomplete("h264 profile %d", p[1])
 		}
 		si.Profile, si.Level = name, int(p[3])
-		si.CodecString = fmt.Sprintf("avc1.%02x%02x%02x", p[1], p[2], p[3])
+		si.CodecString = probedAVCCodec(p)
 		sps := avcConfigSPS(p)
 		if sps == nil {
 			return incomplete("no h264 SPS")

@@ -151,8 +151,17 @@ func testAdaptiveHLSCopySwitchClock(t *testing.T, codec, audio, videoRange, chan
 			// presentation boundaries within Matroska's millisecond clock quantization.
 			if container == ContainerFMP4 {
 				for i, verified := range s.AdaptiveRungs() {
-					if verified.OutputCodecs == "" || rungs[i].Codecs != verified.OutputCodecs {
+					if verified.Codecs != rungs[i].Codecs || verified.OutputCodecs == "" || rungs[i].Codecs != verified.OutputCodecs {
 						t.Fatalf("cold and authored codecs differ for %s: %q vs %q", verified.ID, rungs[i].Codecs, verified.OutputCodecs)
+					}
+				}
+				if codec == "h264" {
+					s.mu.Lock()
+					// Diagnostics for a later run cannot rewrite the original declaration.
+					s.outputCodecs[0] = "avc1.640c1f,mp4a.40.2"
+					s.mu.Unlock()
+					if got := s.AdaptiveRungs()[0].Codecs; got != rungs[0].Codecs {
+						t.Fatalf("late encoder diagnostics rewrote CODECS: %q", got)
 					}
 				}
 			}
@@ -208,13 +217,13 @@ func TestAdaptiveHLSRetiresIdleRendition(t *testing.T) {
 func TestAdaptiveHLSRemoteUnindexedClockAndDownFailover(t *testing.T) {
 	e := newRealEnv(t, WithoutHWDetection(), withCopySample(64))
 	const name = "remote-webdl.mp4"
-	e.gen(t, name, 10, "-vf", "scale=1280:720", "-c:v", "libx264", "-preset", "veryfast", "-g", "48",
+	e.gen(t, name, 10, "-vf", "scale=1920:1080", "-c:v", "libx264", "-preset", "veryfast", "-g", "48",
 		"-sc_threshold", "0", "-c:a", "aac", "-ac", "2", "-movflags", "+faststart")
 	info, err := e.m.Probe(t.Context(), e.url(name))
 	if err != nil {
 		t.Fatal(err)
 	}
-	info.BitrateKbps = max(info.BitrateKbps, 10000)
+	info.BitrateKbps = 5000
 	d := core.Decision{Kind: core.DecisionRemux, VideoCopy: true, VideoCodec: "h264", AudioCopy: true, AudioCodec: "aac",
 		AudioStream: 1, SubtitleStream: -1, Container: ContainerFMP4}
 	caps := core.ClientCaps{Remote: true, VideoCodecs: []string{"h264", "hevc"}, AudioCodecs: []string{"aac", "ac3", "eac3"}, MaxHeight: 1080}
@@ -222,8 +231,13 @@ func TestAdaptiveHLSRemoteUnindexedClockAndDownFailover(t *testing.T) {
 	if !ok {
 		t.Fatal("common audio unavailable")
 	}
-	rungs, _ := AdaptiveQualityVariants(*info, d, caps, 1920, 1080, 0, e.m.AdaptiveQualitySupport(*info, d))
-	req := core.HLSRequest{InputURL: e.url(name), Info: *info, Decision: d, AdaptiveHLS: true, AdaptiveEncodeTop: true,
+	slow, _ := AdaptiveQualityVariants(*info, d, caps, 1920, 1080, 1100, e.m.AdaptiveQualitySupport(*info, d))
+	if len(slow) != 1 || slow[0].Rung.Height != 360 || slow[0].Rung.Bandwidth > 1100000 {
+		t.Fatalf("slow link lost the lowest rung: %+v", slow)
+	}
+
+	rungs, _ := AdaptiveQualityVariants(*info, d, caps, 1920, 1080, 5000, e.m.AdaptiveQualitySupport(*info, d))
+	req := core.HLSRequest{InputURL: e.url(name), Info: *info, Decision: d, AdaptiveHLS: true, AdaptiveEncodeTop: true, AdaptiveMaxKbps: 5000,
 		QualityRungs: true, QualityVariants: rungs}
 	for _, variant := range rungs {
 		req.QualityRungIDs = append(req.QualityRungIDs, variant.Rung.ID)
@@ -235,7 +249,8 @@ func TestAdaptiveHLSRemoteUnindexedClockAndDownFailover(t *testing.T) {
 	defer hs.Close()
 	s := hs.(*Session)
 	before := s.AdaptiveRungs()
-	if len(before) < 3 || s.Decision().VideoCopy || s.AdaptiveHLSUnavailable() != "" {
+	if len(before) < 3 || before[0].Height != 1080 || before[0].Bandwidth > 5000000 ||
+		s.Decision().VideoCopy || s.AdaptiveHLSUnavailable() != "" {
 		t.Fatalf("unindexed HTTP input did not produce a safe master: %+v (%s)", before, s.AdaptiveHLSUnavailable())
 	}
 	if _, err := s.ReduceOutputBitrate(t.Context(), e.url(name), 2500); err != nil {
