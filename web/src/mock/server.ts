@@ -3537,7 +3537,14 @@ export function createFakeServer(opts: FakeOptions = {}) {
       return err(404, "not_found", "app unavailable");
     }
 
-    const cached = cacheMock(method, seg, body, state.config, state.clustered);
+    const cached = cacheMock(
+      method,
+      seg,
+      body,
+      state.config,
+      state.clustered,
+      url.searchParams.get("files") === "1",
+    );
     if (cached) return json(cached.body, cached.status);
 
     const site = sites.handle(method, seg, body, state.config);

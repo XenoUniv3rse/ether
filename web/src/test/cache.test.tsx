@@ -32,7 +32,7 @@ describe("Cache management", () => {
   it("keeps a preset as a draft until saved and discards it without a request", async () => {
     const { fake } = renderApp("/cache");
     expect(await screen.findByRole("main", { name: "Cache overview" }, WAIT)).toBeInTheDocument();
-    expect(screen.queryByLabelText("Search cached releases")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Search cached media")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Encore/ })).not.toBeInTheDocument();
     expect(screen.queryByLabelText("Media disk budget")).not.toBeInTheDocument();
     await chooseProfile(/Encore/);
@@ -115,10 +115,29 @@ describe("Cache management", () => {
     await waitFor(() => expect(fake.state.config.cache.mode).toBe("off"));
     expect(screen.getByRole("button", { name: "Read ahead while playing" })).toBeDisabled();
   });
+  it("finds whole library files beside releases and clears only the selected file", async () => {
+    const { fake } = renderApp("/cache/explorer");
+    expect(await screen.findByText("Arcade.iso", {}, WAIT)).toBeInTheDocument();
+    expect(screen.getByText("Arrival")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Clear Adventure.iso" })).toBeDisabled();
+    await pickToolbarOption("Filter cached media", "Library files");
+    expect(screen.queryByText("Arrival")).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Search cached media"), { target: { value: "Games" } });
+    expect(screen.getByText("Arcade.iso")).toBeInTheDocument();
+    await pickToolbarOption("Filter cached media", "Reclaimable");
+    expect(screen.queryByText("Adventure.iso")).not.toBeInTheDocument();
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    fireEvent.click(screen.getByRole("button", { name: "Clear Arcade.iso" }));
+    await waitFor(() => expect(screen.queryByText("Arcade.iso")).not.toBeInTheDocument());
+    expect(calls(fake, "POST", "/cache/clear-file")[0]?.body).toEqual({
+      libraryKey: "pk-demo-games",
+      ref: "blob:" + "a".repeat(64),
+    });
+  });
   it("filters retained titles and updates an owner pin", async () => {
     const { fake } = renderApp("/cache/explorer");
     expect(await screen.findByText("Arrival", {}, WAIT)).toBeInTheDocument();
-    fireEvent.change(screen.getByLabelText("Search cached releases"), {
+    fireEvent.change(screen.getByLabelText("Search cached media"), {
       target: { value: "Interstellar" },
     });
     expect(screen.queryByText("Arrival")).not.toBeInTheDocument();
@@ -235,14 +254,14 @@ describe("Cache management", () => {
     expect(screen.queryByRole("columnheader", { name: "Plays" })).not.toBeInTheDocument();
     expect(screen.getAllByText("Unfinished").length).toBeGreaterThan(0);
 
-    fireEvent.change(screen.getByLabelText("Search cached releases"), {
+    fireEvent.change(screen.getByLabelText("Search cached media"), {
       target: { value: "Interstellar.2014" },
     });
     expect(await screen.findByText("Interstellar.2014.1080p.mkv")).toBeInTheDocument();
     expect(screen.queryByText("Arrival")).not.toBeInTheDocument();
 
-    await pickToolbarOption("Filter cached releases", "All releases");
-    fireEvent.change(screen.getByLabelText("Search cached releases"), { target: { value: "" } });
+    await pickToolbarOption("Filter cached media", "All media");
+    fireEvent.change(screen.getByLabelText("Search cached media"), { target: { value: "" } });
     expect(
       await screen.findByText("No reason was recorded for this older entry."),
     ).toBeInTheDocument();
@@ -264,7 +283,7 @@ describe("Cache management", () => {
     fireEvent.click(within(dialog).getByRole("button", { name: "Close" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
 
-    await pickToolbarOption("Filter cached releases", "Unfinished");
+    await pickToolbarOption("Filter cached media", "Unfinished");
     expect(await screen.findByText(/Severance · S02E03/)).toBeInTheDocument();
     expect(screen.queryByText("Arrival")).not.toBeInTheDocument();
   });
@@ -331,7 +350,7 @@ describe("Cache management", () => {
       };
     });
     expect(await screen.findByText("No retained media yet", {}, WAIT)).toBeInTheDocument();
-    fireEvent.change(screen.getByLabelText("Search cached releases"), {
+    fireEvent.change(screen.getByLabelText("Search cached media"), {
       target: { value: "arrival" },
     });
     const before = calls(fake, "GET", "/cache/").length;
@@ -340,8 +359,8 @@ describe("Cache management", () => {
     });
     expect(calls(fake, "GET", "/cache/").length).toBeGreaterThan(before);
     expect(await screen.findByText("New arrival", {}, WAIT)).toBeInTheDocument();
-    expect(screen.getByText("1 release")).toBeInTheDocument();
-    expect(screen.getByLabelText("Search cached releases")).toHaveValue("arrival");
+    expect(screen.getByText("1 item")).toBeInTheDocument();
+    expect(screen.getByLabelText("Search cached media")).toHaveValue("arrival");
   });
   it("backs off polling after a cache load fails", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
@@ -370,11 +389,11 @@ describe("Cache management", () => {
     );
     fireEvent.click(screen.getByRole("tab", { name: /Explorer/ }));
     expect(await screen.findByRole("main", { name: "Cache explorer" })).toBeInTheDocument();
-    expect(screen.getByLabelText("Search cached releases")).toBeInTheDocument();
+    expect(screen.getByLabelText("Search cached media")).toBeInTheDocument();
     expect(screen.queryByText("Playback readiness")).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("tab", { name: "Overview" }));
     expect(await screen.findByText("Playback readiness")).toBeInTheDocument();
-    expect(screen.queryByLabelText("Search cached releases")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Search cached media")).not.toBeInTheDocument();
   });
   it("styles Clear cache as outline and points Media disk budget to Back to presets → Pass-through", async () => {
     renderApp("/cache");
@@ -479,6 +498,9 @@ describe("Cache management", () => {
     expect(screen.queryByRole("table")).not.toBeInTheDocument();
     const cards = screen.getAllByRole("listitem");
     expect(cards.length).toBeGreaterThan(0);
+    const disc = screen.getByText("Arcade.iso").closest('[role="listitem"]');
+    expect(disc).toHaveTextContent("Games");
+    expect(screen.getByRole("button", { name: "Clear Adventure.iso" })).toBeDisabled();
 
     fireEvent.click(screen.getByRole("button", { name: "Pin Interstellar" }));
     await waitFor(() => expect(calls(fake, "POST", "/cache/pin")).toHaveLength(1));
