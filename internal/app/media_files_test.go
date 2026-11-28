@@ -31,8 +31,8 @@ func TestMediaFileExplorerProtectsReadsAndClearsFile(t *testing.T) {
 	defer r.Close()
 	w := call("GET", "/?files=1", "")
 	var snap struct {
-		Used  int64
-		Files []struct {
+		Used, ProtectedBytes int64
+		Files                []struct {
 			Name, Library, Ref string
 			InUse              bool
 			Size               int64
@@ -41,7 +41,7 @@ func TestMediaFileExplorerProtectsReadsAndClearsFile(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &snap); err != nil {
 		t.Fatal(err)
 	}
-	if snap.Used < 4 || len(snap.Files) != 1 || snap.Files[0].Ref != string(ref) || snap.Files[0].Name != "game.iso" || snap.Files[0].Library != "test-games" || !snap.Files[0].InUse || snap.Files[0].Size != 4 {
+	if snap.Used < 4 || snap.ProtectedBytes < 4 || len(snap.Files) != 1 || snap.Files[0].Ref != string(ref) || snap.Files[0].Name != "game.iso" || snap.Files[0].Library != "test-games" || !snap.Files[0].InUse || snap.Files[0].Size != 4 {
 		t.Fatalf("unexpected snapshot %+v", snap)
 	}
 	body := `{"libraryKey":"test-games","ref":"` + string(ref) + `"}`

@@ -22,15 +22,24 @@ func (a *App) openMediaFiles(ctx context.Context, disk segcache.DiskUsageFunc) e
 			}
 		}
 	}
-	files, err := blobcache.Open(dir, blobcache.Options{Logger: a.log, DiskUsage: disk, Unified: true,
-		Shared: a.cache.Shared(), CheckVolume: a.cache.CheckVolume,
-		PoolCapacity: a.cache.MediaFileCapacity, MakeFileRoom: a.cache.MakeFileRoom})
+	files, err := blobcache.Open(dir, blobcache.Options{
+		Logger:       a.log,
+		DiskUsage:    disk,
+		Unified:      true,
+		Shared:       a.cache.Shared(),
+		CheckVolume:  a.cache.CheckVolume,
+		PoolCapacity: a.cache.MediaFileCapacity,
+		MakeFileRoom: a.cache.MakeFileRoom,
+	})
 	if err != nil {
 		return err
 	}
 	a.mediaFiles = files
 	a.cache.SetFilePool(files)
-	a.closers = append(a.closers, func() { a.cache.SetFilePool(nil); _ = files.Close() })
+	a.closers = append(a.closers, func() {
+		a.cache.SetFilePool(nil)
+		_ = files.Close()
+	})
 	if err := files.ImportLegacy(ctx, legacy); err != nil {
 		a.log.Warn("media cache: legacy import incomplete; retained source files will be retried on restart", "err", err)
 	}
