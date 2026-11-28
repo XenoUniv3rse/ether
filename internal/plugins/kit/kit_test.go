@@ -579,3 +579,51 @@ func TestRemoteFixturesUseRunningServer(t *testing.T) {
 		t.Fatalf("report=%+v err=%v", report, err)
 	}
 }
+
+// A debrid_cache_hints plugin must answer POST /ether/debrid/hints with a
+// cached object; one that does not fails the route check.
+func TestCheckDebridCacheHintsRoute(t *testing.T) {
+	for name, answers := range map[string]bool{"answers": true, "unanswered": false} {
+		t.Run(name, func(t *testing.T) {
+			manBytes, files := baseGoodFiles()
+			var man map[string]any
+			if err := json.Unmarshal(manBytes, &man); err != nil {
+				t.Fatal(err)
+			}
+			eth := man["ether"].(map[string]any)
+			eth["kind"] = "integration"
+			eth["capabilities"] = []string{"list_source", "subtitles", "markers", "events", "ui", "tools", "debrid_cache_hints"}
+			contrib := eth["contributes"].(map[string]any)
+			delete(contrib, "rankingSteps")
+			delete(contrib, "ruleConditions")
+			contrib["integration"] = map[string]any{"category": "Downloads", "adds": []string{"Cache hints"}, "connect": "none"}
+			js := string(files["dist/plugin.js"])
+			js = js[:strings.Index(js, "function rank_key")]
+			if answers {
+				js = strings.Replace(js, `if (p === "/ether/event") {`, `if (p === "/ether/debrid/hints") {
+    return { status: 200, body: JSON.stringify({ cached: {} }) };
+  }
+  if (p === "/ether/event") {`, 1)
+			}
+			files["dist/plugin.js"] = []byte(js)
+			mutManBytes, _ := json.MarshalIndent(man, "", "  ")
+			pkg, err := FromFiles(mutManBytes, files)
+			if err != nil {
+				t.Fatal(err)
+			}
+			rep := Check(context.Background(), pkg)
+			if answers {
+				if !rep.OK {
+					t.Fatalf("expected Check to pass:\n%s", rep.Text())
+				}
+				return
+			}
+			for _, iss := range rep.Errors {
+				if iss.Rule == "routes" && iss.Field == "/ether/debrid/hints" {
+					return
+				}
+			}
+			t.Fatalf("expected a routes error for /ether/debrid/hints, got:\n%s", rep.Text())
+		})
+	}
+}

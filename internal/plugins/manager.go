@@ -888,7 +888,9 @@ func (m *Manager) callOnce(ctx context.Context, pluginID string, req Request) (R
 		}
 		rec.Error = m.store.redactKnown(ctx, pluginID, err.Error())
 		m.recordCall(ctx, rec)
-		m.recordTimeout(ctx, pluginID, rec.Error)
+		if !wasm.OptionalCallPath(req.Path) {
+			m.recordTimeout(ctx, pluginID, rec.Error)
+		}
 		if rec.Error != err.Error() {
 			err = errors.New(rec.Error)
 		}

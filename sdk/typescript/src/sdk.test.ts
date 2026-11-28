@@ -671,6 +671,26 @@ test("subtitle listing is separate from viewer-picked downloads", async () => {
   assert.deepEqual(download.body, { format: "srt", encoding: "utf8", data: "a" });
 });
 
+test("debrid cache hints route passes the candidates and returns cached kinds", async () => {
+  const instance = plugin({
+    manifest: { id: "org.example.hints", version: "1.0.0", name: "Hints", ether: { protocol: 1, kind: "source", capabilities: ["debrid_cache_hints"] } } as any,
+    routes: {
+      debridCacheHints: ({ candidates }) => ({
+        cached: Object.fromEntries(candidates.filter((c) => !c.private).map((c) => [c.infoHash, c.providerKinds.slice(0, 1)])),
+      }),
+    },
+  });
+  const res = await instance.handle({
+    method: "POST",
+    path: "/ether/debrid/hints",
+    body: { candidates: [{ infoHash: "abc", private: false, providerKinds: ["realdebrid", "torbox"] }, { infoHash: "def", private: true, providerKinds: ["realdebrid"] }] },
+  });
+  assert.equal(res.status, 200);
+  assert.deepEqual(res.body, { cached: { abc: ["realdebrid"] } });
+  const missing = plugin({ manifest: { id: "org.example.none", version: "1.0.0", name: "None", ether: { protocol: 1, kind: "source", capabilities: [] } } as any, routes: {} });
+  assert.equal((await missing.handle({ method: "POST", path: "/ether/debrid/hints", body: { candidates: [] } })).status, 404);
+});
+
 test("kv.usage reports value bytes plus 256-byte key charge in mock and hosted clients", async () => {
   const mock = createMockHostClient();
   assert.deepEqual(mock.kv.usage(), {

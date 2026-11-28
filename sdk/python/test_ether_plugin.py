@@ -571,5 +571,35 @@ class EtherPluginSDKTest(unittest.TestCase):
             srv.server_close()
 
 
+class DebridCacheHintsRouteTest(unittest.TestCase):
+    def test_debrid_cache_hints_route(self) -> None:
+        seen = {}
+
+        def hints(req, _ctx):
+            seen.update(req)
+            return {"cached": {req["candidates"][0]["infoHash"]: ["realdebrid"]}}
+
+        manifest = {
+            "id": "org.ether.test.hints",
+            "name": "Hints",
+            "version": "1.0.0",
+            "ether": {
+                "protocol": 1,
+                "kind": "source",
+                "summary": "Cache hints",
+                "capabilities": ["debrid_cache_hints"],
+                "runtime": {"kind": "remote"},
+            },
+        }
+        harness = create_test_harness(plugin(manifest=manifest, routes={"debrid_cache_hints": hints}))
+        body = {"candidates": [{"infoHash": "abc", "private": True, "providerKinds": ["realdebrid", "torbox"]}]}
+        res = harness.request({"method": "POST", "path": "/ether/debrid/hints", "body": body})
+        self.assertEqual(res["status"], 200)
+        self.assertEqual(res["body"], {"cached": {"abc": ["realdebrid"]}})
+        self.assertEqual(seen, body)
+        missing = create_test_harness(plugin(manifest=manifest)).request({"method": "POST", "path": "/ether/debrid/hints", "body": {"candidates": []}})
+        self.assertEqual(missing["status"], 404)
+
+
 if __name__ == "__main__":
     unittest.main()

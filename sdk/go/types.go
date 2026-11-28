@@ -40,6 +40,8 @@ const (
 	CapMatcher         Capability = "matcher"
 	CapPosterBadges    Capability = "poster_badges"
 	CapLiveEvents      Capability = "live_events"
+	// CapDebridCacheHints answers POST /ether/debrid/hints.
+	CapDebridCacheHints Capability = "debrid_cache_hints"
 )
 
 // Manifest is the EPP/1 manifest document served at GET /manifest.json.
@@ -1073,6 +1075,26 @@ type MarkersRequest struct {
 // MarkersResponse is returned by a Markers route handler.
 type MarkersResponse struct {
 	Markers []MarkerItem `json:"markers"`
+}
+
+// DebridCacheHintCandidate is one torrent Ether asks a debrid_cache_hints
+// plugin about: its info hash, whether any copy comes from a private
+// tracker, and the debrid provider kinds that have no answer of their own.
+type DebridCacheHintCandidate struct {
+	InfoHash      string   `json:"infoHash"`
+	Private       bool     `json:"private"`
+	ProviderKinds []string `json:"providerKinds"`
+}
+
+// DebridCacheHintsRequest is the body of POST /ether/debrid/hints.
+type DebridCacheHintsRequest struct {
+	Candidates []DebridCacheHintCandidate `json:"candidates"`
+}
+
+// DebridCacheHintsResponse maps an info hash to the provider kinds known to
+// hold it. Leave out hashes and kinds that are not cached or unknown.
+type DebridCacheHintsResponse struct {
+	Cached map[string][]string `json:"cached"`
 }
 
 // ChannelInput is one stream input for a Live TV channel.

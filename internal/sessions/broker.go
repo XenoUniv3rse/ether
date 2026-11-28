@@ -534,7 +534,16 @@ func publicMedia(info core.MediaInfo) core.MediaInfo {
 	info.Keyframes = slices.Clone(info.Keyframes)
 	return info
 }
-func (b *Broker) Plan(ctx context.Context, req frontend.PlanRequest) (planned frontend.PlayPlan, planErr error) {
+
+// Plan plans a frontend's request. Its source preparation is a viewer's
+// explicit Play only when the frontend set PlayIntent.ViewerPlay and the
+// plan is not a queued next item.
+func (b *Broker) Plan(ctx context.Context, req frontend.PlanRequest) (frontend.PlayPlan, error) {
+	return b.plan(ctx, req, true)
+}
+
+// plan serves Plan and DetailPlan; play is false for a detail plan.
+func (b *Broker) plan(ctx context.Context, req frontend.PlanRequest, play bool) (planned frontend.PlayPlan, planErr error) {
 	requested := b.deps.Now()
 	req = copyRequest(req)
 	v, err := b.viewer(ctx, req.Viewer)
@@ -844,6 +853,9 @@ func (b *Broker) Plan(ctx context.Context, req frontend.PlanRequest) (planned fr
 		req.Intent.AudioOrdinal == nil && req.Intent.SubtitleOrdinal == nil && detail == nil &&
 		req.ExpectedSourceETag == "" && (req.Intent.AllowTranscoding == nil || *req.Intent.AllowTranscoding) {
 		ctx = b.withSourceDecision(ctx, req)
+	}
+	if play && req.Intent.ViewerPlay && !req.Intent.Queued {
+		ctx = core.WithExplicitPlay(ctx)
 	}
 	var ps *core.PlaySession
 	// autoRelease: the handle names Auto's release, so the session may play

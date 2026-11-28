@@ -10,7 +10,7 @@ import (
 // Administrative actions, setup, catalogue sync and background jobs use
 // owner-granted limits.
 func ViewerRequestPath(path string) bool {
-	for _, prefix := range []string{"/stream/", "/catalog/", "/meta/", "/subtitles/", "/ether/open", "/ether/search", "/ether/files/", "/ether/metadata/", "/ether/subtitles/", "/ether/markers"} {
+	for _, prefix := range []string{"/stream/", "/catalog/", "/meta/", "/subtitles/", "/ether/open", "/ether/search", "/ether/files/", "/ether/metadata/", "/ether/subtitles/", "/ether/markers", "/ether/debrid/hints"} {
 		if strings.HasPrefix(path, prefix) {
 			return true
 		}
@@ -18,6 +18,15 @@ func ViewerRequestPath(path string) bool {
 	return (strings.HasPrefix(path, "/ether/v1/kinds/") && !KindSyncPath(path)) ||
 		strings.HasPrefix(path, "/ether/v1/live/") ||
 		strings.HasPrefix(path, "/ether/v1/screens/")
+}
+
+// OptionalCallPath identifies calls Ether makes only to save work and
+// drops at its own deadline (/ether/debrid/hints): a timeout there, on
+// Ether's deadline or the route's own budget, says nothing about the
+// plugin's health.
+func OptionalCallPath(path string) bool {
+	p, _, _ := strings.Cut(path, "?")
+	return p == "/ether/debrid/hints"
 }
 
 // IsSourceSearchPath identifies a stream_source plugin's category search
@@ -128,6 +137,11 @@ func DeadlineFor(path string) time.Duration {
 		return 15 * time.Second
 	case strings.HasPrefix(p, "/ether/options"), strings.HasPrefix(p, "/ether/view"):
 		return 2 * time.Second
+	case p == "/ether/debrid/hints":
+		// Asked while a viewer waits on Play. Ether's own 500 ms deadline
+		// starts before the call, so it ends first; a timeout here has no
+		// health effect (OptionalCallPath).
+		return 500 * time.Millisecond
 	case strings.HasPrefix(p, "/ether/open"), strings.HasPrefix(p, "/stream/"):
 		return 3 * time.Second
 	case IsSourceSearchPath(p):

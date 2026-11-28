@@ -311,7 +311,8 @@ func TestPlaybackUsesScopedBroker(t *testing.T) {
 		t.Fatalf("stale installation: %d %s", bad.Code, bad.Body.String())
 	}
 	w := call("POST", "/api/v2/playback/start", `{"protocol_version":3,"file_id":"101","profile_id":"7","installation_id":"install","playback_attempt_id":"attempt","start_position":12}`)
-	if w.Code != 201 || strings.Contains(w.Body.String(), "account-secret") || planned.Version != "handle" || !planned.Intent.ExactVersion || planned.Item != 1000000000000001 || streamed.Format != frontend.StreamHLS {
+	// The playback start is a viewer pressing Play (PlayIntent.ViewerPlay).
+	if w.Code != 201 || strings.Contains(w.Body.String(), "account-secret") || planned.Version != "handle" || !planned.Intent.ExactVersion || !planned.Intent.ViewerPlay || planned.Item != 1000000000000001 || streamed.Format != frontend.StreamHLS {
 		t.Fatalf("play %d %s %+v %+v", w.Code, w.Body.String(), planned, streamed)
 	}
 	if planned.Intent.AudioOrdinal != nil || planned.Intent.SubtitleOrdinal != nil {
