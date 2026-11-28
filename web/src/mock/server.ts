@@ -3338,7 +3338,6 @@ export function createFakeServer(opts: FakeOptions = {}) {
       if (seg[1]) return json(servers[0]);
       return json(servers);
     }
-    if (p === "/discovery/settings") return json({ enabled: true });
     if (seg[0] === "discovery" && seg[1] === "users") {
       const viewer = Number(seg[2]);
       if (seg[3] === "sync" && seg[4] === "jobs") {

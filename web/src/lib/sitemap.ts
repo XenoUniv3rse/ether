@@ -76,12 +76,19 @@ const PAGES = localized<PageDef[]>(() => [
   {
     href: "/viewers",
     title: t("Viewers"),
-    sections: [],
-    keywords: searchTerms(
-      msg(
-        "users friends accounts people overview home taste recent activity audio subtitles limits sign-in lockouts devices lists alerts watchlist monitoring",
-      ),
-    ),
+    sections: [
+      {
+        key: "watchlists",
+        title: t("Watchlists"),
+        keywords: searchTerms(msg("Watchlist monitoring")),
+      },
+      {
+        key: "security",
+        title: t("Security"),
+        keywords: searchTerms(msg("Sign-in lockouts")),
+      },
+    ],
+    keywords: searchTerms(msg("users friends accounts people")),
   },
   {
     href: "/recommendations",

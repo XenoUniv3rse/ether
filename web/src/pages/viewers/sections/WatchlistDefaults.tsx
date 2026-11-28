@@ -9,11 +9,12 @@ import {
 } from "@braedonsaunders/appkit-ui";
 import { AlertTriangle, ChevronDown, ChevronRight, RefreshCw } from "lucide-react";
 import { useState } from "react";
+import { Link } from "react-router-dom";
 import { ErrorPanel } from "../../../components/feedback";
 import { NumberInput, SecretInput } from "../../../components/fields";
 import { SaveBar, useDraft } from "../../../components/SaveBar";
 import { SettingsRow } from "../../../components/SettingsRow";
-import { localized, t, tn } from "../../../i18n";
+import { localized, t, tn, tx } from "../../../i18n";
 import { apiFetch, errorMessage } from "../../../lib/api";
 import { formatDateTime } from "../../../lib/format";
 import { useAsync } from "../../../lib/hooks";
@@ -94,11 +95,6 @@ const SOURCES = localized(
         key: "trakt",
         label: t("Trakt watchlists"),
         hint: t("Anyone who has connected Trakt, including friends."),
-      },
-      {
-        key: "notify",
-        label: t("Tell me too"),
-        hint: t("Also send availability alerts to your notification channels."),
       },
     ] as const,
 );
@@ -365,11 +361,14 @@ export function WatchlistAlerts() {
   return (
     <>
       <SettingsSection
-        title={t("Watchlists")}
+        title={t("On Home")}
         description={t(
           "A streamable watchlist title shows on their Home. A release date alone is not enough.",
         )}
       >
+        {null}
+      </SettingsSection>
+      <SettingsSection title={t("Sources")}>
         <SettingsRow
           title={
             <label htmlFor="watchlist-enabled" data-setting="watchlist-monitoring">
@@ -389,9 +388,7 @@ export function WatchlistAlerts() {
         {SOURCES.map((o) => (
           <SettingsRow
             key={o.key}
-            setting={
-              { plex: "plex-watchlists", trakt: "trakt-watchlists", notify: "tell-me-too" }[o.key]
-            }
+            setting={`${o.key}-watchlists`}
             title={<label htmlFor={`watchlist-${o.key}`}>{o.label}</label>}
             description={o.hint}
             control={
@@ -491,6 +488,31 @@ export function WatchlistAlerts() {
               />
               <span className="text-sm text-fg-muted">{t("hours")}</span>
             </span>
+          }
+        />
+      </SettingsSection>
+      <SettingsSection title={t("Alerts")}>
+        <SettingsRow
+          setting="tell-me-too"
+          title={<label htmlFor="watchlist-notify">{t("Tell me too")}</label>}
+          description={tx(
+            "Send availability alerts to the channels you set up in {notifications}.",
+            {
+              notifications: (
+                <Link to="/notifications/channels" className="font-medium underline">
+                  {t("Notifications")}
+                </Link>
+              ),
+            },
+          )}
+          control={
+            <Switch
+              id="watchlist-notify"
+              aria-label={t("Tell me too")}
+              checked={draft.notify}
+              disabled={!draft.enabled}
+              onChange={(e) => s.setDraft({ ...draft, notify: e.currentTarget.checked })}
+            />
           }
         />
       </SettingsSection>

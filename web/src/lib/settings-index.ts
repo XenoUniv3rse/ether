@@ -220,7 +220,7 @@ export function settingsIndex(): SettingHit[] {
       ["right-away", t("Right away")],
     ]),
     // Viewers (Watchlist monitoring)
-    ...rows("/viewers", viewers, [
+    ...rows("/viewers/watchlists", `${viewers} › ${t("Watchlists")}`, [
       ["watchlist-monitoring", t("Watchlist monitoring")],
       ["plex-watchlists", t("Plex watchlists")],
       ["trakt-watchlists", t("Trakt watchlists")],

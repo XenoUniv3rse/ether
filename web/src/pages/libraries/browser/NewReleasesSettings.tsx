@@ -199,6 +199,11 @@ export function NewReleasesSettings({
           })}
         </p>
       ) : null}
+      <p className="new-release-status">
+        <Link to="/viewers/watchlists" className="text-primary underline">
+          {t("Also watching titles from viewers' watchlists")}
+        </Link>
+      </p>
     </SettingsSection>
   );
 }
