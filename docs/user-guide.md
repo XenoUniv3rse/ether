@@ -354,11 +354,13 @@ cookie sign-in, paste the cookie from a signed-in browser instead.
 ## Share with viewers
 
 Use Plex library sharing to invite people or remove their access. They appear
-in Ether's **Viewers** page after signing in. A viewer's page has the tabs
+under **Viewers › People** after signing in. A viewer's page has the tabs
 **Overview**, **Home**, **Taste**, **Recent activity**, **Audio & subtitles**,
 **Limits**, **Sign-in & devices** and **Lists & alerts**. Use **Limits** for
 content and playback limits. To cap one viewer's quality, add a rule under
 **Releases › Rules**. Each viewer keeps their own history and recommendations.
+
+Use **Viewers › Security** to review or clear active sign-in lockouts.
 
 ## Libraries, catalogue and Home
 
@@ -453,13 +455,15 @@ cause.
 ### Put your watchlist on Home
 
 1. Add wanted titles to your Plex Watchlist.
-2. In Ether, open **Catalog › Settings › General › Watchlists**, enable
+2. In Ether, open **Viewers › Watchlists › Sources**, enable
    **Watchlist monitoring** and **Plex watchlists**, then save. Opening-minute
    warm-up for a title that just became playable is **Cache › Preloading ›
-   Warm up new arrivals**.
-3. Open **Viewers › your viewer › Watchlist**. **Sync viewer** imports the
-   list; **Check availability** checks for playable releases. These actions
-   are separate: importing a title does not prove it can stream.
+   Warm up new arrivals**. Use **Tell me too** under **Viewers › Watchlists ›
+   Alerts** to send availability alerts to the channels you set up in
+   **Notifications**.
+3. Open **Viewers › People › your viewer › Lists & alerts**. **Sync viewer**
+   imports the list. Use **Check availability** to check for playable releases.
+   Importing a title alone does not prove it can stream.
 4. Return to **Home** and inspect the same viewer's preview. The watchlist
    rows are **Waiting for a stream** and **Now available**. Check that your
    saved row policies do not hide them, and reload Plex Home.

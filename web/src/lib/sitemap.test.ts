@@ -30,6 +30,11 @@ describe("sitemap", () => {
     const hrefs = destinationsFrom(pages).map((d) => d.href);
     expect(new Set(hrefs).size).toBe(hrefs.length);
     expect(pagesFrom(pages).map((p) => p.title)).toContain("Overview");
+    expect(hrefs.filter((href) => href.startsWith("/viewers"))).toEqual([
+      "/viewers",
+      "/viewers/watchlists",
+      "/viewers/security",
+    ]);
   });
 
   it("homes IPTV and guide sources under Streaming › Sources rather than Live TV", () => {
@@ -86,7 +91,7 @@ describe("settings index", () => {
     expect(at("Allow downloads")[0]).toMatchObject({ href: "/apps/plex/downloads" });
     expect(at("Trailers and Cinema Trailers")[0]).toMatchObject({ href: "/playback/prerolls" });
     expect(at("Custom server URLs")[0]).toMatchObject({ href: "/apps/overview" });
-    expect(at("Watchlist monitoring")[0]).toMatchObject({ href: "/viewers" });
+    expect(at("Watchlist monitoring")[0]).toMatchObject({ href: "/viewers/watchlists" });
     expect(at("Adapt Home to tonight's browsing")[0]).toMatchObject({ href: "/recommendations" });
   });
 

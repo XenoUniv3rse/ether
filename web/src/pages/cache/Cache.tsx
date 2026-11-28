@@ -10,7 +10,7 @@ import {
 } from "@braedonsaunders/appkit-ui";
 import { ArrowLeft, ArrowUpRight, HardDrive, Network, Settings2, Sparkles } from "lucide-react";
 import { useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { useApp } from "../../app-context";
 import { MoreOptions } from "../../components/ConfigSection";
 import { Drawer } from "../../components/Drawer";
@@ -23,7 +23,7 @@ import { Field, NumberInput } from "../../components/fields";
 import { OverflowTabs } from "../../components/OverflowTabs";
 import { useRouteTab } from "../../components/layout";
 import { Workspace } from "../../components/workspace";
-import { localized, t, tn } from "../../i18n";
+import { localized, t, tn, tx } from "../../i18n";
 import { api, apiFetch } from "../../lib/api";
 import { formatBytes, formatNumber } from "../../lib/format";
 import { useAsync, useInterval } from "../../lib/hooks";
@@ -628,8 +628,15 @@ export default function Cache() {
                   <SettingsRow
                     setting="warm-up-new-arrivals"
                     title={<label htmlFor="watchlist-prewarm">{t("Warm up new arrivals")}</label>}
-                    description={t(
-                      "Fetch the opening minutes as soon as a title becomes available, so it starts quickly. Needs watchlist monitoring in Viewers.",
+                    description={tx(
+                      "Fetch the opening minutes as soon as a title becomes available, so it starts quickly. Needs {monitoring}.",
+                      {
+                        monitoring: (
+                          <Link to="/viewers/watchlists" className="font-medium underline">
+                            {t("watchlist monitoring in Viewers")}
+                          </Link>
+                        ),
+                      },
                     )}
                     control={
                       discovery.draft ? (

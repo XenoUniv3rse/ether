@@ -13,7 +13,7 @@ import { useAppOptional } from "../../app-context";
 import { ErrorPanel } from "../../components/feedback";
 import { DomainPage } from "../../components/layout";
 import { loadViewers, viewerName } from "../../components/pickers";
-import { t, tn } from "../../i18n";
+import { localized, t, tn } from "../../i18n";
 import { api, errorMessage } from "../../lib/api";
 import { ratingLevelLabel } from "../../lib/contentRatings";
 import type { Viewer } from "../../lib/contract";
@@ -36,7 +36,18 @@ import { PlexAccessNote } from "./ViewerStatus";
 
 type PeopleFilter = "all" | "active" | "paused" | "plex";
 
-export default function ViewersList() {
+const TABS = localized(
+  () =>
+    [
+      { key: "people", label: t("People") },
+      { key: "watchlists", label: t("Watchlists") },
+      { key: "security", label: t("Security") },
+    ] as const,
+);
+
+type ViewersTab = (typeof TABS)[number]["key"];
+
+export default function ViewersList({ tab = "people" }: { tab?: ViewersTab }) {
   const app = useAppOptional();
   const remote = app?.dashboard?.sections?.remote;
   const canSyncPlex =
@@ -62,41 +73,53 @@ export default function ViewersList() {
     <DomainPage
       title={t("Viewers")}
       base="/viewers"
-      actions={
-        <div className="flex flex-wrap items-center gap-2">
-          {canSyncPlex ? (
-            <Button variant="outline" size="sm" disabled={syncing} onClick={() => void syncPlex()}>
-              <RefreshCw size={14} /> {syncing ? t("Syncing…") : t("Sync shared users")}
+      tabs={TABS}
+      active={tab}
+      tabHref={(key) => (key === "people" ? "/viewers" : `/viewers/${key}`)}
+      tabActions={
+        tab === "people" && (
+          <div className="flex flex-wrap items-center gap-2">
+            {canSyncPlex ? (
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={syncing}
+                onClick={() => void syncPlex()}
+              >
+                <RefreshCw size={14} /> {syncing ? t("Syncing…") : t("Sync shared users")}
+              </Button>
+            ) : null}
+            <Button size="sm" variant="outline" onClick={() => setImporting(true)}>
+              <MonitorSmartphone size={14} /> {t("Import from Plex")}
             </Button>
-          ) : null}
-          <Button size="sm" variant="outline" onClick={() => setImporting(true)}>
-            <MonitorSmartphone size={14} /> {t("Import from Plex")}
-          </Button>
-          <Button size="sm" onClick={() => setAdding(true)}>
-            <Plus size={14} /> {t("Add viewer")}
-          </Button>
-        </div>
+            <Button size="sm" onClick={() => setAdding(true)}>
+              <Plus size={14} /> {t("Add viewer")}
+            </Button>
+          </div>
+        )
       }
     >
-      <div className="space-y-6">
-        <People key={version} />
-        <WatchlistAlerts />
-        <SignInLockouts />
-      </div>
-      <AddViewerDrawer
-        open={adding}
-        onClose={() => setAdding(false)}
-        onCreated={() => setVersion((v) => v + 1)}
-        onOpenPlexImport={() => {
-          setAdding(false);
-          setImporting(true);
-        }}
-      />
-      <ImportPlexViewersDrawer
-        open={importing}
-        onClose={() => setImporting(false)}
-        onImported={() => setVersion((v) => v + 1)}
-      />
+      {tab === "people" && (
+        <>
+          <People key={version} />
+          <AddViewerDrawer
+            open={adding}
+            onClose={() => setAdding(false)}
+            onCreated={() => setVersion((v) => v + 1)}
+            onOpenPlexImport={() => {
+              setAdding(false);
+              setImporting(true);
+            }}
+          />
+          <ImportPlexViewersDrawer
+            open={importing}
+            onClose={() => setImporting(false)}
+            onImported={() => setVersion((v) => v + 1)}
+          />
+        </>
+      )}
+      {tab === "watchlists" && <WatchlistAlerts />}
+      {tab === "security" && <SignInLockouts />}
     </DomainPage>
   );
 }

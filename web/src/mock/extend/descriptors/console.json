@@ -917,8 +917,28 @@
       "inNav": true,
       "mobile": true,
       "keywords": {
-        "source": "users friends accounts people watchlist monitoring"
-      }
+        "source": "users friends accounts people"
+      },
+      "sections": [
+        {
+          "key": "watchlists",
+          "label": {
+            "source": "Watchlists"
+          },
+          "keywords": {
+            "source": "Watchlist monitoring"
+          }
+        },
+        {
+          "key": "security",
+          "label": {
+            "source": "Security"
+          },
+          "keywords": {
+            "source": "Sign-in lockouts"
+          }
+        }
+      ]
     }
   },
   {

@@ -141,7 +141,7 @@ export function ViewerWatchlist({ viewerId }: { viewerId: number }) {
         <p className="text-sm text-fg-muted">
           {tx("Watchlist monitoring is off. {link} to sync and check this viewer's watchlist.", {
             link: (
-              <Link to="/viewers" className="font-medium text-fg underline">
+              <Link to="/viewers/watchlists" className="font-medium text-fg underline">
                 {t("Turn it on in Viewers")}
               </Link>
             ),

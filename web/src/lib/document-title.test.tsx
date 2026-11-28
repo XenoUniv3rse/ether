@@ -35,6 +35,8 @@ describe("resolveRouteTitle", () => {
     expect(titleFor("/activity")).toBe("Activity · Now playing — Home");
     expect(titleFor("/activity/history")).toBe("Activity · History — Home");
     expect(titleFor("/viewers")).toBe("Viewers — Home");
+    expect(titleFor("/viewers/watchlists")).toBe("Viewers · Watchlists — Home");
+    expect(titleFor("/viewers/security")).toBe("Viewers · Security — Home");
     expect(titleFor("/viewers/3/sign-in", "?signin=sync")).toBe(
       "Viewers · Sign-in & devices · Connected accounts — Home",
     );

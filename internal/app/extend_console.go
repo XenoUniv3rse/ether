@@ -60,7 +60,11 @@ func consolePages() []consolePage {
 		}},
 		{id: "viewers", label: T("Viewers"), icon: "Users", order: 30, meta: extend.PageMeta{
 			Route: "/viewers", InNav: true, Mobile: true,
-			Keywords: T("users friends accounts people watchlist monitoring"),
+			Keywords: T("users friends accounts people"),
+			Sections: []extend.PageSection{
+				section("watchlists", T("Watchlists"), T("Watchlist monitoring")),
+				section("security", T("Security"), T("Sign-in lockouts")),
+			},
 		}},
 		{id: "libraries", label: T("Libraries"), icon: "Library", order: 10, meta: extend.PageMeta{
 			Route: "/libraries", NavGroup: extend.NavGroupLibrary, InNav: true,
