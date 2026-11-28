@@ -1,5 +1,6 @@
 import { Button, SettingsSection, Spinner, toast } from "@braedonsaunders/appkit-ui";
 import { useId, useMemo, useState } from "react";
+import { Link } from "react-router-dom";
 import { ErrorPanel } from "../../components/feedback";
 import { NumberInput } from "../../components/fields";
 import { SaveBar, useDraft } from "../../components/SaveBar";
@@ -81,6 +82,19 @@ export function LibraryCacheCard({
           </span>
         }
       />
+      {data.sharedCap !== undefined ? (
+        <SettingsRow
+          title={t("Shared library cache")}
+          description={t("All plugin libraries can currently use up to {size} together.", {
+            size: formatBytes(data.sharedCap),
+          })}
+          control={
+            <Link to="/plugins/settings" className="text-sm text-accent hover:underline">
+              {t("Edit plugin limits")}
+            </Link>
+          }
+        />
+      ) : null}
       <SettingsRow
         title={<label htmlFor={forgetId}>{t("Forget files after")}</label>}
         description={t(

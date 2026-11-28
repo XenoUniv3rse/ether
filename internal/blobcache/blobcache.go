@@ -1,7 +1,7 @@
 // Package blobcache is Ether's on-disk whole-blob cache for plugin content
 // kinds (spec §5.4, §15.5). Each library owns an isolated namespace with its
 // own directory, persistent index, quota, and optional TTL, while all
-// namespaces share an overall cap of min(10 GiB, 5% of cache disk) and honour
+// namespaces share an owner-configurable cap (default min(10 GiB, 5% of disk)) and honour
 // the segcache free-space floor so no plugin library can fill the disk.
 package blobcache
 
@@ -120,19 +120,21 @@ type ByteSource interface {
 
 // Options configures a Cache.
 type Options struct {
-	Logger      *slog.Logger
-	DiskUsage   segcache.DiskUsageFunc
-	SharedCap   int64         // 0 = DefaultSharedCap (10 GiB)
-	SweepPeriod time.Duration // 0 = 15m; negative disables background ticker
-	Now         func() time.Time
+	Logger              *slog.Logger
+	DiskUsage           segcache.DiskUsageFunc
+	ConfiguredSharedCap func() int64  // Positive overrides the automatic size and percentage limits.
+	SharedCap           int64         // 0 = DefaultSharedCap (10 GiB)
+	SweepPeriod         time.Duration // 0 = 15m; negative disables background ticker
+	Now                 func() time.Time
 }
 
 // Cache manages per-library blob namespaces under a root directory.
 type Cache struct {
-	dir       string
-	logger    *slog.Logger
-	sharedCap int64
-	now       func() time.Time
+	dir                 string
+	logger              *slog.Logger
+	sharedCap           int64
+	configuredSharedCap func() int64
+	now                 func() time.Time
 
 	floorMu sync.Mutex
 	diskFn  segcache.DiskUsageFunc
@@ -172,15 +174,16 @@ func Open(dir string, opts ...Options) (*Cache, error) {
 		return nil, fmt.Errorf("blobcache: mkdir %s: %w", dir, err)
 	}
 	c := &Cache{
-		dir:        dir,
-		logger:     o.Logger.With("component", "blobcache"),
-		sharedCap:  sharedCap,
-		now:        o.Now,
-		diskFn:     o.DiskUsage,
-		namespaces: make(map[string]*Namespace),
-		pluginLibs: make(map[string]map[string]bool),
-		stopCh:     make(chan struct{}),
-		doneCh:     make(chan struct{}),
+		dir:                 dir,
+		logger:              o.Logger.With("component", "blobcache"),
+		sharedCap:           sharedCap,
+		configuredSharedCap: o.ConfiguredSharedCap,
+		now:                 o.Now,
+		diskFn:              o.DiskUsage,
+		namespaces:          make(map[string]*Namespace),
+		pluginLibs:          make(map[string]map[string]bool),
+		stopCh:              make(chan struct{}),
+		doneCh:              make(chan struct{}),
 	}
 	// Load any existing namespaces on disk so shared usage accounting is complete.
 	entries, err := os.ReadDir(dir)
@@ -353,12 +356,16 @@ func (c *Cache) totalAccounted() int64 {
 	return used + c.totalReserved()
 }
 
-// EffectiveSharedCap computes the global cap across all plugin libraries:
-// min(sharedCap, 5% of total disk, used + free - segcache.MinFreeBytes(total)).
+// EffectiveSharedCap computes the global cap across all plugin libraries,
+// applying the free-space reserve to both automatic and owner-configured caps.
 func (c *Cache) EffectiveSharedCap() int64 {
 	capBytes := c.sharedCap
-	if capBytes <= 0 {
-		capBytes = DefaultSharedCap
+	var configured int64
+	if c.configuredSharedCap != nil {
+		configured = c.configuredSharedCap()
+	}
+	if configured > 0 {
+		capBytes = configured
 	}
 	c.floorMu.Lock()
 	diskFn := c.diskFn
@@ -372,7 +379,7 @@ func (c *Cache) EffectiveSharedCap() int64 {
 		return capBytes
 	}
 	fivePct := total / sharedDiskPercent
-	if fivePct < capBytes {
+	if configured <= 0 && fivePct < capBytes {
 		capBytes = fivePct
 	}
 	floor := segcache.MinFreeBytes(total)

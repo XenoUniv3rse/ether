@@ -237,3 +237,55 @@ func TestHostResolveSourcesCategoryRecentValidation(t *testing.T) {
 		t.Fatalf("candidates = %+v", cands)
 	}
 }
+
+func TestOwnerSharedCacheRuntimeLimits(t *testing.T) {
+	env := newTestEnv(t)
+	rec := installContent(t, env)
+	cfg := config.Plugins{}
+	env.m.deps.ReadRuntimeConfig = func() config.Plugins { return cfg }
+	env.m.deps.SaveRuntimeConfig = func(id string, limits config.PluginRuntimeLimits) error {
+		if id != "" {
+			t.Fatalf("unexpected per-plugin save: %q", id)
+		}
+		cfg.RuntimeLimits = limits
+		return nil
+	}
+	h := env.m.Handler()
+	request := func(method, plugin string, limits config.PluginRuntimeLimits, want int) config.PluginRuntimeLimits {
+		t.Helper()
+		raw, err := json.Marshal(map[string]any{"plugin": plugin, "limits": limits})
+		if err != nil {
+			t.Fatal(err)
+		}
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, httptest.NewRequest(method, "/runtime-limits", bytes.NewReader(raw)))
+		if w.Code != want {
+			t.Fatalf("%s %q = %d, want %d: %s", method, plugin, w.Code, want, w.Body)
+		}
+		var out config.Plugins
+		if want == http.StatusOK {
+			if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return out.RuntimeLimits
+	}
+	raised := config.PluginRuntimeLimits{SharedCacheBytes: 64 << 30, FetchBytes: 20 << 30, ArchiveMemberBytes: 20 << 30}
+	request(http.MethodPut, "", raised, http.StatusOK)
+	if got := request(http.MethodGet, "", config.PluginRuntimeLimits{}, http.StatusOK); got != raised {
+		t.Fatalf("GET after save = %+v, want %+v", got, raised)
+	}
+	grant := env.m.HostFor(rec.ID).(*host).DataLimits(context.Background())
+	if grant.FetchBytes != raised.FetchBytes || grant.ArchiveMemberBytes != raised.ArchiveMemberBytes {
+		t.Fatalf("host grant after save = %+v", grant)
+	}
+	request(http.MethodPut, rec.ID, raised, http.StatusBadRequest)
+	request(http.MethodPut, "", config.PluginRuntimeLimits{SharedCacheBytes: -1}, http.StatusBadRequest)
+	if cfg.RuntimeLimits != raised {
+		t.Fatalf("invalid setting changed active config: %+v", cfg)
+	}
+	request(http.MethodPut, "", config.PluginRuntimeLimits{}, http.StatusOK)
+	if got := request(http.MethodGet, "", config.PluginRuntimeLimits{}, http.StatusOK); got.SharedCacheBytes != 0 {
+		t.Fatalf("GET after reset = %+v", got)
+	}
+}

@@ -235,6 +235,7 @@ export interface RuntimeLimits {
   uploadBytes?: number;
   durableBytes?: number;
   durableFiles?: number;
+  sharedCacheBytes?: number;
   durableFreePercent?: number;
   fetchBytes?: number;
   archiveMemberBytes?: number;

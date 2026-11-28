@@ -62,6 +62,16 @@ type pluginRuntime struct {
 	adapterTickets *frontendadapter.TicketIssuer
 }
 
+func (a *App) libraryBlobOptions(dir string) blobcache.Options {
+	disk := a.opts.diskUsage
+	if disk == nil {
+		disk = func() (int64, int64, error) { return admin.DiskUsage(dir) }
+	}
+	return blobcache.Options{Logger: a.log, DiskUsage: disk, ConfiguredSharedCap: func() int64 {
+		return a.cfg.Read().Plugins.RuntimeLimits.SharedCacheBytes
+	}}
+}
+
 func (a *App) buildPlugins(ctx context.Context, cfg config.Config) (*pluginRuntime, error) {
 	var busyMu sync.Mutex
 	var busyAt time.Time
@@ -431,10 +441,7 @@ func (a *App) buildPlugins(ctx context.Context, cfg config.Config) (*pluginRunti
 	a.closers = append(a.closers, itemsSvc.Close)
 
 	blobDir := filepath.Join(a.opts.DataDir, "blobcache")
-	blobs, err := blobcache.Open(blobDir, blobcache.Options{
-		Logger:    a.log.With("component", "blobcache"),
-		DiskUsage: a.opts.diskUsage,
-	})
+	blobs, err := blobcache.Open(blobDir, a.libraryBlobOptions(blobDir))
 	if err != nil {
 		cancelRun()
 		return nil, err

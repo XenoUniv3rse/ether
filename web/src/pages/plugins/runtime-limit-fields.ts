@@ -50,6 +50,12 @@ export function runtimeLimitFields() {
       max: MAX_LIST_ITEMS,
     },
     { key: "uploadBytes", label: t("Upload size (MiB)"), scale: 1048576, fallback: 64, max: 512 },
+    {
+      key: "sharedCacheBytes",
+      label: t("Shared library cache (GiB)"),
+      scale: 1073741824,
+      fallback: 10,
+    },
     { key: "durableBytes", label: t("Saved data (GiB)"), scale: 1073741824, fallback: 1 },
     { key: "durableFiles", label: t("Saved files"), scale: 1, fallback: 10000 },
     {
@@ -75,6 +81,7 @@ export function formatLimit(key: keyof RuntimeLimits, value: number): string {
   if (key === "deadline") return t("{value} hours", { value: n });
   if (key === "memoryBytes" || key === "uploadBytes") return t("{value} MiB", { value: n });
   if (
+    key === "sharedCacheBytes" ||
     key === "durableBytes" ||
     key === "fetchBytes" ||
     key === "archiveMemberBytes" ||

@@ -1127,9 +1127,17 @@ app would, then read the result with `kinds.browse`:
 namespaces and frees its quota immediately (deleting an absent or already
 evicted ref succeeds), so large temporary downloads or extracts do not evict
 smaller kept files.
-Default cache quota is 2 GiB per library under a shared cap of
-min(10 GiB, 5% of the cache disk); your `cache.maxBytes` and the
-owner can override it.
+The default quota is 2 GiB per library. A kind can declare `cache.maxBytes`
+and the owner can adjust the quota in the library settings. Across all
+libraries, Ether defaults to the smaller of 10 GiB and 5% of the cache
+disk. Owners can change **Shared library cache (GiB)** in the global plugin
+limits. Clearing the field restores the automatic size. Both modes preserve
+the free-space reserve.
+
+For large disc images, allow room for both the downloaded archive and its
+extracted member. The runtime limits for **Download (GiB)**, **File inside an
+archive (GiB)** and **Archive total (GiB)** also apply. A plugin that declares
+a lower download or extraction limit retains that limit.
 
 ## Setup
 

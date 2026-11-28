@@ -65,8 +65,8 @@ func (c *librariesConsole) services() (*pluginitems.Service, *blobcache.Cache, e
 		if c.items, c.err = pluginitems.New(ctx, c.app.db, opts); c.err != nil {
 			return
 		}
-		c.blobs, c.err = blobcache.Open(filepath.Join(c.app.opts.DataDir, "blobcache"),
-			blobcache.Options{Logger: c.app.log, DiskUsage: c.app.opts.diskUsage})
+		dir := filepath.Join(c.app.opts.DataDir, "blobcache")
+		c.blobs, c.err = blobcache.Open(dir, c.app.libraryBlobOptions(dir))
 	})
 	return c.items, c.blobs, c.err
 }

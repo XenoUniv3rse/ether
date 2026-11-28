@@ -317,3 +317,50 @@ func TestBlobCacheEndToEnd(t *testing.T) {
 		}
 	})
 }
+
+func TestConfiguredSharedCap(t *testing.T) {
+	const total = 100 << 30
+	var configured int64
+	free := int64(total / 2)
+	c, err := Open(t.TempDir(), Options{SweepPeriod: -1,
+		ConfiguredSharedCap: func() int64 { return configured },
+		DiskUsage:           func() (int64, int64, error) { return total, free, nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	check := func(want int64) {
+		t.Helper()
+		if got := c.EffectiveSharedCap(); got != want {
+			t.Fatalf("cap %d, want %d", got, want)
+		}
+	}
+	check(total / sharedDiskPercent)
+	const disc int64 = 16 << 30
+	ns := c.Namespace("disc-images", Quota{MaxBytes: 30 << 30})
+	partial, err := ns.OpenPartial(context.Background(), "disc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer partial.Close()
+	if err := partial.Reserve(disc); !errors.Is(err, ErrQuotaFull) {
+		t.Fatalf("automatic cap allowed oversized reservation: %v", err)
+	}
+	configured = 40 << 30
+	if err := partial.Reserve(disc); err != nil {
+		t.Fatal(err)
+	}
+	if err := partial.Reserve(31 << 30); !errors.Is(err, ErrTooLarge) {
+		t.Fatalf("library quota did not limit reservation: %v", err)
+	}
+	check(configured)
+	free = segcache.MinFreeBytes(total) + 1234
+	check(1234)
+	if err := partial.Reserve(disc + 1); !errors.Is(err, ErrQuotaFull) {
+		t.Fatalf("disk floor allowed growing reservation: %v", err)
+	}
+	free = total / 2
+	configured = 0
+	check(total / sharedDiskPercent)
+}
