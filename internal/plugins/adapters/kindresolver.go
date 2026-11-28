@@ -2739,7 +2739,7 @@ func (r *KindResolver) kindstreamDeps(ctx context.Context, rec pluginitems.KindR
 			limitCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 			defer cancel()
 			grants := r.mgr.SourceDataLimits(limitCtx, rec.PluginID)
-			return grants.FetchBytes, grants.ArchiveMemberBytes
+			return grants.FetchBytes, min(grants.ArchiveMemberBytes, grants.ArchiveExpandedBytes)
 		})
 	}
 	if r.blobs != nil && lib.Key != "" {

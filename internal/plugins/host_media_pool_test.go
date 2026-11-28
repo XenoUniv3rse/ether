@@ -13,6 +13,7 @@ import (
 	"github.com/braedonsaunders/ether/internal/blobcache"
 	"github.com/braedonsaunders/ether/internal/config"
 	"github.com/braedonsaunders/ether/internal/core"
+	"github.com/braedonsaunders/ether/internal/segcache"
 )
 
 // A 15 GiB disc should reach body streaming with the appropriate download
@@ -37,7 +38,15 @@ func TestDiscDownloadPoolAdmission(t *testing.T) {
 	env.m.deps.ReadRuntimeConfig = func() config.Plugins {
 		return config.Plugins{RuntimeLimits: config.PluginRuntimeLimits{FetchBytes: grant}}
 	}
-	blobs, err := blobcache.Open(t.TempDir(), blobcache.Options{Unified: true, SweepPeriod: -1, PoolCapacity: func() int64 { return capacity }, MakeFileRoom: func(_, _, additional int64) (int64, error) { reserved = max(reserved, additional); return 0, nil }})
+	blobs, err := blobcache.Open(t.TempDir(), blobcache.Options{
+		Unified:      true,
+		SweepPeriod:  -1,
+		PoolCapacity: func() int64 { return capacity },
+		MakeFileRoom: func(_, _, additional int64, _ segcache.FileCandidates) error {
+			reserved = max(reserved, additional)
+			return nil
+		},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -54,17 +63,28 @@ func TestDiscDownloadPoolAdmission(t *testing.T) {
 	})}
 	for _, resume := range []bool{false, true} {
 		for _, tc := range []struct {
-			name                string
-			grant, libraryLimit int64
-			want                error
+			name                   string
+			grant, declared, owner int64
+			want                   error
 		}{
-			{"default download grant", 0, 0, errDataExceedsSizeLimit},
-			{"explicit library cap", capacity, 3 << 30, ErrQuotaExceeded},
-			{"inherit media pool", capacity, 0, stop},
+			{"default download grant", 0, 0, 0, errDataExceedsSizeLimit},
+			{"declared library cap", capacity, 3 << 30, 0, ErrQuotaExceeded},
+			{"owner raises declared limit", capacity, 3 << 30, 20 << 30, stop},
+			{"explicit owner cap", capacity, 0, 3 << 30, ErrQuotaExceeded},
+			{"inherit media pool", capacity, 0, 0, stop},
 		} {
 			t.Run(fmt.Sprintf("%s/resume=%v", tc.name, resume), func(t *testing.T) {
 				grant, reserved = tc.grant, 0
-				if err := ns.SetOwnerQuota(blobcache.Quota{MaxBytes: tc.libraryLimit}); err != nil {
+				rec.Manifest.Ether.Contributes.MediaKinds[0].Cache.MaxBytes = tc.declared
+				rec.ManifestRaw, err = json.Marshal(rec.Manifest)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := env.m.store.upsert(ctx, rec); err != nil {
+					t.Fatal(err)
+				}
+				ns.SetQuota(blobcache.Quota{MaxBytes: tc.declared})
+				if err := ns.SetOwnerQuota(blobcache.Quota{MaxBytes: tc.owner}); err != nil {
 					t.Fatal(err)
 				}
 				args, err := json.Marshal([]any{map[string]any{"url": "https://data.example.test/disc.iso", "libraryKey": library, "name": "disc.iso", "resume": resume}})

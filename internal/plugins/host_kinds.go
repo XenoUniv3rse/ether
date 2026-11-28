@@ -1077,7 +1077,9 @@ func (r sizedCacheInput) ExpectedSize() int64 { return r.size }
 func (b KindBackends) libraryLimit(pluginID, libraryKey string, decl KindCacheDecl) int64 {
 	limit := decl.MaxBytes
 	if b.CacheLimit != nil {
-		limit = b.CacheLimit(pluginID, libraryKey)
+		if selected := b.CacheLimit(pluginID, libraryKey); selected > 0 {
+			limit = selected
+		}
 	}
 	if limit <= 0 {
 		return math.MaxInt64
