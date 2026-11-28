@@ -137,6 +137,9 @@ func (s *lazyStreams) IssueLineup(ctx context.Context, credential string, req fr
 }
 
 func (s *lazyStreams) issueOutput(ctx context.Context, credential string, req frontend.PlanRequest, stable bool, output *frontend.StreamRequest, lineup, activeReuse bool) (string, error) {
+	// A lazy stream opens when a player fetches it (a HEAD probe or a file
+	// copy fetches it too), never as a viewer's Play.
+	req.Intent.ViewerPlay = false
 	if req.Protocol != s.protocol || req.Device.ID == "" || req.Viewer == nil || req.Intent.Hints != nil || (!lineup && (req.Item == 0) == (req.Channel == "")) || (stable && req.Channel != "") {
 		return "", core.ErrUnauthorized
 	}

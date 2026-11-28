@@ -369,3 +369,19 @@ func TestVelaDeclaredDVProfilesOffAndroid(t *testing.T) {
 		}
 	}
 }
+
+// POST /playback is Vela's start request: its plan says a viewer pressed
+// Play (the broker still leaves a queued next item unmarked).
+func TestVelaPlaybackPlanIsAViewerPlay(t *testing.T) {
+	h := newDVHarness()
+	sent := dvClient([]string{"hdr10"}, nil)
+	if w, _ := h.post("/negotiate", object{"client": sent}); w.Code != 200 {
+		t.Fatalf("negotiate %d %s", w.Code, w.Body.String())
+	}
+	if w, _ := h.post("/playback", object{"titleId": ids.RatingKeyGUID(core.MovieKey(1)), "positionSeconds": 0.0, "client": sent}); w.Code != 200 {
+		t.Fatalf("playback %d %s", w.Code, w.Body.String())
+	}
+	if len(h.plans) != 1 || !h.plans[0].Intent.ViewerPlay {
+		t.Fatalf("plans %+v, want one with ViewerPlay", h.plans)
+	}
+}

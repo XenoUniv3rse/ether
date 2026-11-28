@@ -415,6 +415,9 @@ type flight struct {
 	// kind, when set, makes this flight open a non-catalogue plugin item
 	// instead of resolving a catalogue title (spec §15.1).
 	kind *core.KindInput
+	// play marks the flight's work as a viewer's explicit Play
+	// (core.ExplicitPlay) once a Play starts or joins it.
+	play func()
 }
 
 // releaseLabel prefers the release name and falls back to the indexer.
@@ -1133,10 +1136,14 @@ func (m *Manager) prepareOwnedWithin(ctx context.Context, wait time.Duration, us
 			parent = ctx
 		}
 		wctx, cancel := context.WithTimeout(parent, m.opts.PrepareTimeout)
-		f = &flight{sources: newSourceLifetime(user.ID, string(caps.Protocol), caps.ClientID), done: make(chan struct{}), cancel: cancel}
+		wctx, play := core.WithExplicitPlayLatch(wctx)
+		f = &flight{sources: newSourceLifetime(user.ID, string(caps.Protocol), caps.ClientID), done: make(chan struct{}), cancel: cancel, play: play}
 		m.flights[fk] = f
 		u := *user
 		go m.runFlight(wctx, f, fk, &u, caps)
+	}
+	if f.play != nil && core.ExplicitPlay(ctx) {
+		f.play()
 	}
 	f.waiters++
 	f.playRequest = f.playRequest || play

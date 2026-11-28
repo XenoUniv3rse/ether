@@ -101,6 +101,7 @@ Capabilities describe what a plugin does; permissions describe which host data i
 |---|---|
 | stream_source | Stremio `/stream/{type}/{id}.json`; lazy streams open through `/ether/open/{id}` |
 | debrid_provider | `/ether/debrid/check`, `find`, `acquire`, `link`, `remove`, `account` |
+| debrid_cache_hints | `POST /ether/debrid/hints` on a viewer's Play: which listed torrents a debrid service holds |
 | list_source | `contributes.listSources`; matching Stremio catalogue |
 | poster_badges | `contributes.posterBadges`; `ether.badges.set`, `clear`, `usage` |
 | metadata | Stremio `/meta/{type}/{id}.json` |
@@ -790,6 +791,54 @@ Provide `/ether/health` with `status: "attention"` and a useful `reason` when
 credentials are absent. `/ether/test` should verify the account and return
 `{ok, message}` without exposing credentials or signed URLs. Offline installation
 checks cannot establish that a paid account works; test it after setup.
+
+## Cache hints
+
+A source or integration plugin that knows which torrents a debrid service
+already holds may declare `debrid_cache_hints`. It needs no contribution block
+and no debrid account of its own. Ether calls `POST /ether/debrid/hints` only
+when source preparation checks the shortlist for one of two starts: Vela's
+playback request and Silo's playback start, including one that names a
+version (not a queued next item). Nothing else asks: not Jellyfin or Emby
+clients (some send `IsPlayback` true for queue prefetches, so a `PlaybackInfo`
+does not prove a Play), not Plex clients, a lazy stream fetch or file probe,
+WebDAV, Stremio or Xtream, a detail page, a console search, a warm-up or
+prefetch, a download, the next episode or a queue advance, a version switch
+during playback, failover to another release or a background check. It is not
+called either when the lead torrent is already known cached, in memory or by
+an account's remembered answer.
+
+```json
+{"candidates": [
+  {"infoHash": "0123456789abcdef0123456789abcdef01234567", "private": false, "providerKinds": ["realdebrid", "torbox"]},
+  {"infoHash": "89abcdef0123456789abcdef0123456789abcdef", "private": true, "providerKinds": ["realdebrid"]}
+]}
+```
+
+The request lists at most the 12 torrents preparation looks at. For each hash,
+`providerKinds` names the enabled debrid services (`realdebrid`, `torbox`,
+`alldebrid`, `premiumize`, `debridlink`, `offcloud`, or `plugin:<id>` for a
+plugin provider) with an account that has no answer of its own for that hash,
+neither a recent check nor an answer the account remembers from an add;
+hashes every service has answered are left out. `private` is true when any
+copy of the torrent comes from a private tracker. A plugin that sends hashes to
+an outside service decides what it sends there: leave private hashes out unless
+the owner opted in.
+
+```json
+{"cached": {"0123456789abcdef0123456789abcdef01234567": ["realdebrid"]}}
+```
+
+List only the hashes and kinds known to be cached. Ether keeps only the pairs it
+asked about and treats them like an add-on's cached marker: a hint in memory for
+30 minutes that never replaces an account's own answer, and an account with a
+hint is tried before the others when the torrent is added. A miss, an error or a
+missing hash writes nothing. One 500 ms deadline, started before Ether reads
+what it knows, covers every hint plugin together; a plugin whose instances are
+all busy is skipped, and an answer after the deadline is ignored. A timeout, on
+that deadline or on the route's own, does not count against the plugin's health.
+Answer from what the plugin already knows or can learn at once, and never wait
+for a rate limiter on this route.
 
 
 ## Source: docs/plugin-kinds.md
@@ -6151,6 +6200,9 @@ const (
 	// CapScreens lets a plugin contribute screens and surfaces that Vela
 	// draws from documents in the package (docs/plugin-screens.md).
 	CapScreens Capability = "screens"
+	// CapDebridCacheHints lets a plugin say which torrents a debrid service
+	// already holds before a Play spends an add (docs/plugin-debrid.md).
+	CapDebridCacheHints Capability = "debrid_cache_hints"
 )
 ``````
 
@@ -10176,6 +10228,9 @@ func PermissionSheet(man Manifest) (lines []string, needsViewers, needsFolders b
 	if man.HasCapability(CapScreens) {
 		lines = append(lines, screensPermissionLine(man))
 	}
+	if man.HasCapability(CapDebridCacheHints) {
+		lines = append(lines, "Gets the torrents you are about to play and says which are cached")
+	}
 	if len(lines) == 0 {
 		lines = []string{"Needs no access to your server or the network"}
 	}
@@ -10326,6 +10381,9 @@ func PermissionDiff(cur, next Manifest) []string {
 	}
 	if !cur.HasCapability(CapScreens) && next.HasCapability(CapScreens) {
 		added = append(added, screensPermissionLine(next))
+	}
+	if !cur.HasCapability(CapDebridCacheHints) && next.HasCapability(CapDebridCacheHints) {
+		added = append(added, "Gets the torrents you are about to play and says which are cached")
 	}
 	if n := next.ListItemsRequested(); n > cur.ListItemsRequested() {
 		added = append(added, listItemsLine(n))
@@ -23418,6 +23476,7 @@ func checkRoutes(ctx context.Context, rep *Report, man plugins.Manifest, plug *w
 		len(man.Ether.Schedule) > 0 ||
 		man.HasCapability(plugins.CapStreamSource) ||
 		man.HasCapability(plugins.CapDebridProvider) ||
+		man.HasCapability(plugins.CapDebridCacheHints) ||
 		man.HasCapability(plugins.CapLiveTV) ||
 		man.HasCapability(plugins.CapSubtitles) ||
 		man.HasCapability(plugins.CapMarkers) ||
@@ -23624,6 +23683,27 @@ func checkRoutes(ctx context.Context, rep *Report, man plugins.Manifest, plug *w
 				}
 				if doc.Markers == nil {
 					return "markers response must contain a markers array"
+				}
+				return ""
+			},
+		})
+	}
+
+	// Debrid cache hints.
+	if man.HasCapability(plugins.CapDebridCacheHints) {
+		fixtures = append(fixtures, routeFixture{
+			method: "POST",
+			path:   "/ether/debrid/hints",
+			body:   json.RawMessage(`{"candidates":[{"infoHash":"0123456789abcdef0123456789abcdef01234567","private":false,"providerKinds":["realdebrid"]}]}`),
+			validate: func(resp wasm.Response) string {
+				var doc struct {
+					Cached map[string][]string `json:"cached"`
+				}
+				if err := decodeResponseBody(resp.Body, &doc); err != nil {
+					return "debrid hints response must be a JSON object with a cached map: " + err.Error()
+				}
+				if doc.Cached == nil {
+					return "debrid hints response must contain a cached object"
 				}
 				return ""
 			},
@@ -26722,6 +26802,9 @@ var capabilityKinds = map[Capability]map[Kind]bool{
 	CapMatcher:         {KindContent: true},
 	CapFrontendAdapter: {KindContent: true, KindExtension: true},
 	CapEvents:          nil, CapFlowActions: nil, CapTools: nil, CapUI: nil, CapLiveEvents: nil, CapScreens: nil,
+
+	// Says which torrents a debrid service holds (docs/plugin-debrid.md).
+	CapDebridCacheHints: {KindSource: true, KindIntegration: true},
 }
 ``````
 
@@ -35213,7 +35296,7 @@ func ensureUICap(etherObj map[string]any) {
 // Administrative actions, setup, catalogue sync and background jobs use
 // owner-granted limits.
 func ViewerRequestPath(path string) bool {
-	for _, prefix := range []string{"/stream/", "/catalog/", "/meta/", "/subtitles/", "/ether/open", "/ether/search", "/ether/files/", "/ether/metadata/", "/ether/subtitles/", "/ether/markers"} {
+	for _, prefix := range []string{"/stream/", "/catalog/", "/meta/", "/subtitles/", "/ether/open", "/ether/search", "/ether/files/", "/ether/metadata/", "/ether/subtitles/", "/ether/markers", "/ether/debrid/hints"} {
 		if strings.HasPrefix(path, prefix) {
 			return true
 		}
@@ -35221,6 +35304,19 @@ func ViewerRequestPath(path string) bool {
 	return (strings.HasPrefix(path, "/ether/v1/kinds/") && !KindSyncPath(path)) ||
 		strings.HasPrefix(path, "/ether/v1/live/") ||
 		strings.HasPrefix(path, "/ether/v1/screens/")
+}
+``````
+
+## Source: internal/plugins/wasm/background.go#OptionalCallPath
+
+``````
+// OptionalCallPath identifies calls Ether makes only to save work and
+// drops at its own deadline (/ether/debrid/hints): a timeout there, on
+// Ether's deadline or the route's own budget, says nothing about the
+// plugin's health.
+func OptionalCallPath(path string) bool {
+	p, _, _ := strings.Cut(path, "?")
+	return p == "/ether/debrid/hints"
 }
 ``````
 
@@ -35371,6 +35467,11 @@ func DeadlineFor(path string) time.Duration {
 		return 15 * time.Second
 	case strings.HasPrefix(p, "/ether/options"), strings.HasPrefix(p, "/ether/view"):
 		return 2 * time.Second
+	case p == "/ether/debrid/hints":
+		// Asked while a viewer waits on Play. Ether's own 500 ms deadline
+		// starts before the call, so it ends first; a timeout here has no
+		// health effect (OptionalCallPath).
+		return 500 * time.Millisecond
 	case strings.HasPrefix(p, "/ether/open"), strings.HasPrefix(p, "/stream/"):
 		return 3 * time.Second
 	case IsSourceSearchPath(p):
@@ -39447,7 +39548,8 @@ func (p *Plugin) CallDetailed(ctx context.Context, req Request) (resp Response, 
               "frontend_adapter",
               "matcher",
               "live_events",
-              "screens"
+              "screens",
+              "debrid_cache_hints"
             ]
           },
           "type": "array",
@@ -39858,18 +39960,21 @@ func (p *Plugin) CallDetailed(ctx context.Context, req Request) (resp Response, 
                     "items": {
                       "additionalProperties": false,
                       "properties": {
-                        "path": {
-                          "maxLength": 256,
-                          "pattern": "^/",
-                          "type": "string"
-                        },
                         "maxBytes": {
                           "maximum": 536870912,
                           "minimum": 1,
                           "type": "integer"
+                        },
+                        "path": {
+                          "maxLength": 256,
+                          "pattern": "^/",
+                          "type": "string"
                         }
                       },
-                      "required": ["path", "maxBytes"],
+                      "required": [
+                        "path",
+                        "maxBytes"
+                      ],
                       "type": "object"
                     },
                     "maxItems": 16,
@@ -42612,6 +42717,7 @@ be overwritten or deleted by a plugin.
 | catalog_provider | mediaKinds; paged browse/changes/expand or push | KindUpsert/Delete/Items, KV |
 | kind_resolver / matcher | kind resolve/match handlers | ResolveSources, CachePut/Open/Delete; sources permission |
 | stream_source / debrid_provider | Stremio stream; lazy open (`GET /ether/open/{id}`) / debrid routes; opt-in category search (`source.search` → `GET /ether/search`, `GET /ether/files/{id}`) | HTTPFetch, SecretGet |
+| debrid_cache_hints | `POST /ether/debrid/hints` on a viewer's Play: which listed torrents a debrid service holds ([plugin-debrid.md](../docs/plugin-debrid.md)) | HTTPFetch, SecretGet, KV |
 | metadata | `/meta/{type}/{id}.json`, contributes.metadata | HTTPFetch, CatalogGet |
 | notify / events | notify send/test; event subscribe (`POST /ether/event`) + custom `events.publish` | HTTPFetch, SecretGet, KV, PublishEvent (`ether.events.publish`) |
 | flow_actions | `contributes.flowActions` + `POST /ether/v1/flow-actions/{key}` (with `X-Ether-Idempotency-Key`) | KV (idempotency deduplication), HTTPFetch, PublishEvent |
@@ -42869,6 +42975,7 @@ than billed as guest wall time):
 | `/ether/v1/kinds/*/resolve` | 12 s | 120,000 units |
 | `/ether/v1/kinds/*/live/resolve`, `/ether/v1/kinds/*/match` | 5 s | 50,000 units |
 | `/catalog/*`, `/meta/*`, `/ether/metadata/*`, `/ether/markers*`, `/ether/v1/kinds/*/search`, `/ether/v1/kinds/*/items/*` | 10 s (20 s for Stremio `/catalog/*`) | 100,000 units (200,000 for Stremio `/catalog/*`) |
+| `/ether/debrid/hints` | 500 ms | 5,000 units |
 | `/ether/options/*`, `/ether/view/*` | 2 s | Owner-granted ceiling |
 | `/ether/configure`, `/ether/health` | 5 s | Owner-granted ceiling |
 | `/ether/test` | 15 s | Owner-granted ceiling |
@@ -56895,6 +57002,10 @@ func main() {
 
 Declare `CapEvents` with `Contributes.Events.Publish` to emit schema-validated custom events to Ether Flows via `ctx.PublishEvent(key, payload, correlation)` (remote `POST /ether/plugin-host/events/publish`, rate-limited to 30/min). Declare `CapFlowActions` with `Contributes.FlowActions` and implement `Routes.FlowAction` to handle `POST /ether/v1/flow-actions/{key}` (or a custom declared `/ether/...` route); `FlowActionRequest.IdempotencyKey` carries `X-Ether-Idempotency-Key` for safe deduplication and `FlowActionRequest.DryRun` indicates a test/dry run.
 
+## Debrid cache hints
+
+Declare `CapDebridCacheHints` and implement `Routes.DebridCacheHints` to answer `POST /ether/debrid/hints` with the listed torrents a debrid service holds (`DebridCacheHintsResponse.Cached`, info hash to provider kinds). Ether calls it only on a viewer's Play, under a 500 ms deadline; see `docs/plugin-debrid.md`.
+
 ## WS8b interoperability test
 
 Once `internal/plugins/remote` is present, run
@@ -64251,6 +64362,7 @@ type Routes struct {
 	Subtitles        func(ctx *Context, req SubtitlesRequest) (SubtitlesResponse, error)
 	SubtitleDownload func(ctx *Context, req SubtitleDownloadRequest) (SubtitleDownloadResponse, error)
 	Markers          func(ctx *Context, req MarkersRequest) (MarkersResponse, error)
+	DebridCacheHints func(ctx *Context, req DebridCacheHintsRequest) (DebridCacheHintsResponse, error)
 	Channels         func(ctx *Context) (ChannelsResponse, error)
 	Guide            func(ctx *Context, req GuideRequest) (GuideResponse, error)
 	Configure        func(ctx *Context, settings map[string]any) (ConfigureResponse, error)
@@ -64912,6 +65024,24 @@ func (p *Plugin) Dispatch(ctx context.Context, req RawRequest) RawResponse {
 		res, err := p.routes.Markers(pctx, MarkersRequest{Type: typ, ID: id})
 		if err != nil {
 			return toRouteErrorResponse(err)
+		}
+		return okJSON(res, http.StatusOK)
+	}
+
+	if method == http.MethodPost && path == "/ether/debrid/hints" {
+		if p.routes.DebridCacheHints == nil {
+			return errorJSON(http.StatusNotFound, "not_found", "Debrid cache hints handler is not registered.")
+		}
+		var input DebridCacheHintsRequest
+		if err := json.Unmarshal(req.Body, &input); err != nil {
+			return errorJSON(http.StatusBadRequest, "invalid_json", "Request body must be valid JSON.")
+		}
+		res, err := p.routes.DebridCacheHints(pctx, input)
+		if err != nil {
+			return toRouteErrorResponse(err)
+		}
+		if res.Cached == nil {
+			res.Cached = map[string][]string{}
 		}
 		return okJSON(res, http.StatusOK)
 	}
@@ -66841,6 +66971,8 @@ const (
 	CapMatcher         Capability = "matcher"
 	CapPosterBadges    Capability = "poster_badges"
 	CapLiveEvents      Capability = "live_events"
+	// CapDebridCacheHints answers POST /ether/debrid/hints.
+	CapDebridCacheHints Capability = "debrid_cache_hints"
 )
 ``````
 
@@ -69430,6 +69562,61 @@ type MarkersResponse struct {
 }
 ``````
 
+## Source: sdk/go/types.go#DebridCacheHintCandidate.fields.md
+
+| Field | Go type | Wire presence | Description |
+|---|---|---|---|
+| `infoHash` | `string` | emitted (validation may require a value) |  |
+| `private` | `bool` | emitted (validation may require a value) |  |
+| `providerKinds` | `[]string` | emitted (validation may require a value) |  |
+
+
+## Source: sdk/go/types.go#DebridCacheHintCandidate
+
+``````
+// DebridCacheHintCandidate is one torrent Ether asks a debrid_cache_hints
+// plugin about: its info hash, whether any copy comes from a private
+// tracker, and the debrid provider kinds that have no answer of their own.
+type DebridCacheHintCandidate struct {
+	InfoHash      string   `json:"infoHash"`
+	Private       bool     `json:"private"`
+	ProviderKinds []string `json:"providerKinds"`
+}
+``````
+
+## Source: sdk/go/types.go#DebridCacheHintsRequest.fields.md
+
+| Field | Go type | Wire presence | Description |
+|---|---|---|---|
+| `candidates` | `[]DebridCacheHintCandidate` | emitted (validation may require a value) |  |
+
+
+## Source: sdk/go/types.go#DebridCacheHintsRequest
+
+``````
+// DebridCacheHintsRequest is the body of POST /ether/debrid/hints.
+type DebridCacheHintsRequest struct {
+	Candidates []DebridCacheHintCandidate `json:"candidates"`
+}
+``````
+
+## Source: sdk/go/types.go#DebridCacheHintsResponse.fields.md
+
+| Field | Go type | Wire presence | Description |
+|---|---|---|---|
+| `cached` | `map[string][]string` | emitted (validation may require a value) |  |
+
+
+## Source: sdk/go/types.go#DebridCacheHintsResponse
+
+``````
+// DebridCacheHintsResponse maps an info hash to the provider kinds known to
+// hold it. Leave out hashes and kinds that are not cached or unknown.
+type DebridCacheHintsResponse struct {
+	Cached map[string][]string `json:"cached"`
+}
+``````
+
 ## Source: sdk/go/types.go#ChannelInput.fields.md
 
 | Field | Go type | Wire presence | Description |
@@ -70136,6 +70323,7 @@ Single-file, standard-library-only Python 3.9+ SDK for Ether Plugin Protocol v1 
 - Same declarative `plugin(manifest=..., routes=...)` router shape as `@ether/plugin-sdk` and `sdk/go`.
 - Runs as an HTTP sidecar (`serve(p, mode="http")`) or an outbound WebSocket tunnel sidecar (`serve(p, mode="tunnel")`).
 - Supports Ether Flows custom events (`ctx.ether.events.publish(key, payload, correlation)` -> `POST /ether/plugin-host/events/publish`) and Flow actions (`routes={"flow_action": ...}` with `X-Ether-Idempotency-Key` and `dryRun`).
+- Answers debrid cache hints (`routes={"debrid_cache_hints": ...}` for `POST /ether/debrid/hints`, capability `debrid_cache_hints`; see `docs/plugin-debrid.md`).
 - Includes `RemoteHostClient` for `/ether/plugin-host/*` authenticated with `X-Ether-Plugin-Credential`, plus `create_test_harness`, `create_mock_host_client`, `fixtures`, and starter capability templates.
 
 ## Usage
@@ -72210,6 +72398,14 @@ class PluginInstance:
                     ctx,
                 )
             )
+
+        if method == "POST" and path == "/ether/debrid/hints":
+            fn = self.routes.get("debrid_cache_hints") or self.routes.get("debridCacheHints")
+            if not fn:
+                return _error_response(404, "not_found", "Debrid cache hints handler is not registered.")
+            body_obj = _parse_json_body(req.get("body"))
+            candidates = body_obj.get("candidates")
+            return _ok_response(fn({"candidates": candidates if isinstance(candidates, list) else []}, ctx))
 
         if method == "GET" and path == "/ether/channels.json":
             fn = self.routes.get("channels")
@@ -75475,6 +75671,7 @@ export default hello;
 - `sourceSearch` (`GET /ether/search`, for a `contributes.source.search` declaration) and `releaseFiles` (`GET /ether/files/{id}`)
 - `subtitles` (`GET /subtitles/{type}/{id}[/{extra}].json`, requires `X-Ether-Pick` header)
 - `markers` (`GET /ether/markers/{type}/{id}.json`)
+- `debridCacheHints` (`POST /ether/debrid/hints`, capability `debrid_cache_hints`: which listed torrents a debrid service holds; see `docs/plugin-debrid.md`)
 - `channels` (`GET /ether/channels.json`) and `guide` (`GET /ether/guide/{channelId}.json`)
 - `notify` (`POST /ether/notify`)
 - `event` (`POST /ether/event`) and `ctx.ether.events.publish(key, payload, correlation?)` (`contributes.events.publish`)
@@ -78645,6 +78842,8 @@ import type {
   ChannelsResponse,
   CondMatchFn,
   ConfigureResponse,
+  DebridCacheHintsRequest,
+  DebridCacheHintsResponse,
   EtherEvent,
   EventResponse,
   FieldOption,
@@ -78746,6 +78945,7 @@ export interface PluginRoutes<S = Record<string, unknown>> {
   subtitles?: (req: SubtitlesRequest, ctx: PluginContext<S>) => MaybePromise<SubtitlesResponse>;
   subtitlesDownload?: (req: { id: string; lang: string; format: string }, ctx: PluginContext<S>) => MaybePromise<{ format: string; encoding: "utf8" | "base64"; data: string }>;
   markers?: (req: MarkersRequest, ctx: PluginContext<S>) => MaybePromise<MarkersResponse>;
+  debridCacheHints?: (req: DebridCacheHintsRequest, ctx: PluginContext<S>) => MaybePromise<DebridCacheHintsResponse>;
   channels?: (ctx: PluginContext<S>) => MaybePromise<ChannelsResponse>;
   guide?: (req: GuideRequest, ctx: PluginContext<S>) => MaybePromise<GuideResponse>;
   configure?: (settings: S, ctx: PluginContext<S>) => MaybePromise<ConfigureResponse | void>;
@@ -79211,6 +79411,15 @@ export function plugin<S = Record<string, unknown>>(
           ctx,
         ),
       );
+    }
+
+    if (method === "POST" && path === "/ether/debrid/hints") {
+      if (!routes.debridCacheHints) {
+        return errorResponse(404, "not_found", "Debrid cache hints handler is not registered.");
+      }
+      const bodyObj = parseJsonBody(req.body);
+      const candidates = Array.isArray(bodyObj.candidates) ? (bodyObj.candidates as DebridCacheHintsRequest["candidates"]) : [];
+      return mapResult(routes.debridCacheHints({ candidates }, ctx));
     }
 
     if (method === "GET" && path === "/ether/channels.json") {
@@ -80698,6 +80907,7 @@ export type PluginKind =
 export type Capability =
   | "stream_source"
   | "debrid_provider"
+  | "debrid_cache_hints"
   | "list_source"
   | "livetv_channels"
   | "subtitles"
@@ -82409,6 +82619,25 @@ export interface MarkersRequest {
 
 export interface MarkersResponse {
   markers: MarkerItem[];
+}
+
+/** One torrent Ether asks a debrid_cache_hints plugin about. */
+export interface DebridCacheHintCandidate {
+  infoHash: string;
+  /** True when any copy of the torrent comes from a private tracker. */
+  private: boolean;
+  /** Enabled debrid provider kinds with no answer of their own. */
+  providerKinds: string[];
+}
+
+/** Body of POST /ether/debrid/hints. */
+export interface DebridCacheHintsRequest {
+  candidates: DebridCacheHintCandidate[];
+}
+
+/** Info hash to the provider kinds known to hold it; leave out misses. */
+export interface DebridCacheHintsResponse {
+  cached: Record<string, string[]>;
 }
 
 export interface ChannelInput {

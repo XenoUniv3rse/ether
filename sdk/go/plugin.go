@@ -85,6 +85,7 @@ type Routes struct {
 	Subtitles        func(ctx *Context, req SubtitlesRequest) (SubtitlesResponse, error)
 	SubtitleDownload func(ctx *Context, req SubtitleDownloadRequest) (SubtitleDownloadResponse, error)
 	Markers          func(ctx *Context, req MarkersRequest) (MarkersResponse, error)
+	DebridCacheHints func(ctx *Context, req DebridCacheHintsRequest) (DebridCacheHintsResponse, error)
 	Channels         func(ctx *Context) (ChannelsResponse, error)
 	Guide            func(ctx *Context, req GuideRequest) (GuideResponse, error)
 	Configure        func(ctx *Context, settings map[string]any) (ConfigureResponse, error)
@@ -656,6 +657,24 @@ func (p *Plugin) Dispatch(ctx context.Context, req RawRequest) RawResponse {
 		res, err := p.routes.Markers(pctx, MarkersRequest{Type: typ, ID: id})
 		if err != nil {
 			return toRouteErrorResponse(err)
+		}
+		return okJSON(res, http.StatusOK)
+	}
+
+	if method == http.MethodPost && path == "/ether/debrid/hints" {
+		if p.routes.DebridCacheHints == nil {
+			return errorJSON(http.StatusNotFound, "not_found", "Debrid cache hints handler is not registered.")
+		}
+		var input DebridCacheHintsRequest
+		if err := json.Unmarshal(req.Body, &input); err != nil {
+			return errorJSON(http.StatusBadRequest, "invalid_json", "Request body must be valid JSON.")
+		}
+		res, err := p.routes.DebridCacheHints(pctx, input)
+		if err != nil {
+			return toRouteErrorResponse(err)
+		}
+		if res.Cached == nil {
+			res.Cached = map[string][]string{}
 		}
 		return okJSON(res, http.StatusOK)
 	}

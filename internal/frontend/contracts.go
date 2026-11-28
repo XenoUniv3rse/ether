@@ -1149,6 +1149,14 @@ type PlayIntent struct {
 	// replaces it only when it is first observed playing; preloading its
 	// media does not. It never counts as a second stream.
 	Queued bool
+	// ViewerPlay marks a start a viewer pressed Play for: Vela's playback
+	// request and Silo's playback start, nothing else. Jellyfin/Emby never
+	// set it: some clients send IsPlayback true for queue prefetches, so a
+	// PlaybackInfo is no proof of a Play. The broker then makes its source
+	// preparation core.ExplicitPlay, unless the plan is queued or a detail
+	// plan. Lazy stream fetches, version switches, failover and every other
+	// plan leave it unset.
+	ViewerPlay bool
 	// DeclaredCaps marks Caps built from this request's complete device
 	// declaration (a Jellyfin/Emby PlaybackInfo DeviceProfile, a Silo
 	// capability body). The broker keeps the latest such caps per device so

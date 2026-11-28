@@ -119,6 +119,70 @@ WHERE account=? AND info_hash=? AND file_key=? AND expires_at>?`, p.identity, ke
 	return learnedAnswer{}
 }
 
+// hashAnswers is answer for many torrent-level keys (no file) at once: one
+// database read per chunk of hashes instead of one per hash, with the same
+// fallback to this node's memory. Hashes with no answer are absent.
+func (p *accountPacer) hashAnswers(ctx context.Context, hashes []string, now time.Time) map[string]learnedAnswer {
+	out := map[string]learnedAnswer{}
+	var keys []string
+	for _, hash := range hashes {
+		if hash = strings.ToLower(hash); hash != "" && len(hash) <= 128 {
+			keys = append(keys, hash)
+		}
+	}
+	slices.Sort(keys)
+	keys = slices.Compact(keys)
+	read := map[string]bool{} // hashes the database answered for, row or not
+	if p.answers != nil && p.answers.db != nil {
+		for chunk := range store.Chunks(keys, 500) {
+			args := make([]any, 0, len(chunk)+2)
+			args = append(args, p.identity, now.Unix())
+			for _, hash := range chunk {
+				args = append(args, hash)
+			}
+			rows, err := p.answers.db.QueryContext(ctx, `SELECT info_hash,verdict,torrent_id,files,expires_at FROM debrid_answers
+WHERE account=? AND file_key='' AND expires_at>? AND info_hash IN (`+store.Placeholders(len(chunk))+`)`, args...)
+			if err != nil {
+				break
+			}
+			for rows.Next() {
+				var hash, files string
+				var a learnedAnswer
+				var at int64
+				if rows.Scan(&hash, &a.verdict, &a.torrentID, &files, &at) != nil {
+					continue
+				}
+				a.expires = time.Unix(at, 0)
+				_ = json.Unmarshal([]byte(files), &a.files)
+				out[hash] = a
+			}
+			err = rows.Err()
+			rows.Close()
+			if err != nil {
+				break
+			}
+			for _, hash := range chunk {
+				read[hash] = true
+			}
+		}
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.learned == nil {
+		return out
+	}
+	for _, hash := range keys {
+		if _, ok := out[hash]; ok {
+			continue
+		}
+		// As in answer: a database miss invalidates other local snapshots.
+		if a, _ := p.learned.Get(answerKey{hash: hash}); a.verdict != "" && now.Before(a.expires) && (!read[hash] || a.needsReconciliation()) {
+			out[hash] = a
+		}
+	}
+	return out
+}
+
 func (p *accountPacer) writeAnswer(ctx context.Context, key answerKey, a learnedAnswer, now time.Time) {
 	key.hash = strings.ToLower(key.hash)
 	if key.hash == "" || len(key.hash) > 128 {

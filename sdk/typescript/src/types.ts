@@ -11,6 +11,7 @@ export type PluginKind =
 export type Capability =
   | "stream_source"
   | "debrid_provider"
+  | "debrid_cache_hints"
   | "list_source"
   | "livetv_channels"
   | "subtitles"
@@ -1722,6 +1723,25 @@ export interface MarkersRequest {
 
 export interface MarkersResponse {
   markers: MarkerItem[];
+}
+
+/** One torrent Ether asks a debrid_cache_hints plugin about. */
+export interface DebridCacheHintCandidate {
+  infoHash: string;
+  /** True when any copy of the torrent comes from a private tracker. */
+  private: boolean;
+  /** Enabled debrid provider kinds with no answer of their own. */
+  providerKinds: string[];
+}
+
+/** Body of POST /ether/debrid/hints. */
+export interface DebridCacheHintsRequest {
+  candidates: DebridCacheHintCandidate[];
+}
+
+/** Info hash to the provider kinds known to hold it; leave out misses. */
+export interface DebridCacheHintsResponse {
+  cached: Record<string, string[]>;
 }
 
 export interface ChannelInput {

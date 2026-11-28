@@ -178,6 +178,7 @@ be overwritten or deleted by a plugin.
 | catalog_provider | mediaKinds; paged browse/changes/expand or push | KindUpsert/Delete/Items, KV |
 | kind_resolver / matcher | kind resolve/match handlers | ResolveSources, CachePut/Open/Delete; sources permission |
 | stream_source / debrid_provider | Stremio stream; lazy open (`GET /ether/open/{id}`) / debrid routes; opt-in category search (`source.search` → `GET /ether/search`, `GET /ether/files/{id}`) | HTTPFetch, SecretGet |
+| debrid_cache_hints | `POST /ether/debrid/hints` on a viewer's Play: which listed torrents a debrid service holds ([plugin-debrid.md](../docs/plugin-debrid.md)) | HTTPFetch, SecretGet, KV |
 | metadata | `/meta/{type}/{id}.json`, contributes.metadata | HTTPFetch, CatalogGet |
 | notify / events | notify send/test; event subscribe (`POST /ether/event`) + custom `events.publish` | HTTPFetch, SecretGet, KV, PublishEvent (`ether.events.publish`) |
 | flow_actions | `contributes.flowActions` + `POST /ether/v1/flow-actions/{key}` (with `X-Ether-Idempotency-Key`) | KV (idempotency deduplication), HTTPFetch, PublishEvent |
@@ -435,6 +436,7 @@ than billed as guest wall time):
 | `/ether/v1/kinds/*/resolve` | 12 s | 120,000 units |
 | `/ether/v1/kinds/*/live/resolve`, `/ether/v1/kinds/*/match` | 5 s | 50,000 units |
 | `/catalog/*`, `/meta/*`, `/ether/metadata/*`, `/ether/markers*`, `/ether/v1/kinds/*/search`, `/ether/v1/kinds/*/items/*` | 10 s (20 s for Stremio `/catalog/*`) | 100,000 units (200,000 for Stremio `/catalog/*`) |
+| `/ether/debrid/hints` | 500 ms | 5,000 units |
 | `/ether/options/*`, `/ether/view/*` | 2 s | Owner-granted ceiling |
 | `/ether/configure`, `/ether/health` | 5 s | Owner-granted ceiling |
 | `/ether/test` | 15 s | Owner-granted ceiling |

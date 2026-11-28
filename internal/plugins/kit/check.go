@@ -1040,6 +1040,7 @@ func checkRoutes(ctx context.Context, rep *Report, man plugins.Manifest, plug *w
 		len(man.Ether.Schedule) > 0 ||
 		man.HasCapability(plugins.CapStreamSource) ||
 		man.HasCapability(plugins.CapDebridProvider) ||
+		man.HasCapability(plugins.CapDebridCacheHints) ||
 		man.HasCapability(plugins.CapLiveTV) ||
 		man.HasCapability(plugins.CapSubtitles) ||
 		man.HasCapability(plugins.CapMarkers) ||
@@ -1246,6 +1247,27 @@ func checkRoutes(ctx context.Context, rep *Report, man plugins.Manifest, plug *w
 				}
 				if doc.Markers == nil {
 					return "markers response must contain a markers array"
+				}
+				return ""
+			},
+		})
+	}
+
+	// Debrid cache hints.
+	if man.HasCapability(plugins.CapDebridCacheHints) {
+		fixtures = append(fixtures, routeFixture{
+			method: "POST",
+			path:   "/ether/debrid/hints",
+			body:   json.RawMessage(`{"candidates":[{"infoHash":"0123456789abcdef0123456789abcdef01234567","private":false,"providerKinds":["realdebrid"]}]}`),
+			validate: func(resp wasm.Response) string {
+				var doc struct {
+					Cached map[string][]string `json:"cached"`
+				}
+				if err := decodeResponseBody(resp.Body, &doc); err != nil {
+					return "debrid hints response must be a JSON object with a cached map: " + err.Error()
+				}
+				if doc.Cached == nil {
+					return "debrid hints response must contain a cached object"
 				}
 				return ""
 			},

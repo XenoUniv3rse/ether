@@ -78,6 +78,7 @@ export default hello;
 - `sourceSearch` (`GET /ether/search`, for a `contributes.source.search` declaration) and `releaseFiles` (`GET /ether/files/{id}`)
 - `subtitles` (`GET /subtitles/{type}/{id}[/{extra}].json`, requires `X-Ether-Pick` header)
 - `markers` (`GET /ether/markers/{type}/{id}.json`)
+- `debridCacheHints` (`POST /ether/debrid/hints`, capability `debrid_cache_hints`: which listed torrents a debrid service holds; see `docs/plugin-debrid.md`)
 - `channels` (`GET /ether/channels.json`) and `guide` (`GET /ether/guide/{channelId}.json`)
 - `notify` (`POST /ether/notify`)
 - `event` (`POST /ether/event`) and `ctx.ether.events.publish(key, payload, correlation?)` (`contributes.events.publish`)

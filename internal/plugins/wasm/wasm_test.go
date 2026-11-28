@@ -586,6 +586,7 @@ func TestLimitsClamp(t *testing.T) {
 		{"/meta/movie/tt0133093.json", 10 * time.Second},
 		{"/ether/v1/kinds/games/search", 10 * time.Second},
 		{"/ether/v1/kinds/games/items/1", 10 * time.Second},
+		{"/ether/debrid/hints", 500 * time.Millisecond},
 	} {
 		got := limitsForRequest(lim, tc.path)
 		wantUnits := int64(tc.deadline / WallUnitInterval)
