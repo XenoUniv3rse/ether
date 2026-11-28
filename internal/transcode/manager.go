@@ -210,15 +210,17 @@ func WithSubtitleOpener(f func(id, format, source string) (io.ReadCloser, string
 	return func(o *options) { o.openSubtitle = f }
 }
 
-func (m *Manager) stageExternalSubtitles(dir string, info core.MediaInfo, source string) core.MediaInfo {
-	if m == nil || m.opts.openSubtitle == nil || dir == "" || len(info.Streams) == 0 {
+func (m *Manager) stageExternalSubtitle(dir string, info core.MediaInfo, source string, decision core.Decision) core.MediaInfo {
+	// Client-rendered sidecars are served separately. Stage only the track
+	// the encoder will read so opening playback doesn't fetch every sidecar.
+	if m == nil || m.opts.openSubtitle == nil || dir == "" || decision.SubtitleStream < 0 ||
+		(!decision.BurnSubtitles && decision.Container != ContainerMatroska) {
 		return info
 	}
-	cloned := false
 	const maxStagedSubtitle = 32 << 20
 	for i := range info.Streams {
 		st := info.Streams[i]
-		if st.Type != "subtitle" || !st.External || !strings.HasPrefix(st.ExternalURL, "ether-subtitle:") {
+		if st.Index != decision.SubtitleStream || st.Type != "subtitle" || !st.External || !strings.HasPrefix(st.ExternalURL, "ether-subtitle:") {
 			continue
 		}
 		rc, actual, err := m.opts.openSubtitle(st.ExternalURL, "srt", source)
@@ -226,15 +228,15 @@ func (m *Manager) stageExternalSubtitles(dir string, info core.MediaInfo, source
 			if rc != nil {
 				_ = rc.Close()
 			}
-			continue
+			return info
 		}
 		data, readErr := io.ReadAll(io.LimitReader(rc, maxStagedSubtitle+1))
 		_ = rc.Close()
 		if readErr != nil || len(data) == 0 || len(data) > maxStagedSubtitle {
-			continue
+			return info
 		}
 		if err := os.MkdirAll(dir, 0o755); err != nil {
-			continue
+			return info
 		}
 		ext := "srt"
 		if actual == "vtt" {
@@ -242,14 +244,12 @@ func (m *Manager) stageExternalSubtitles(dir string, info core.MediaInfo, source
 		}
 		target := filepath.Join(dir, fmt.Sprintf("sidecar-%d.%s", st.Index, ext))
 		if err := os.WriteFile(target, data, 0o600); err != nil {
-			continue
+			return info
 		}
-		if !cloned {
-			info = core.CloneMediaInfo(info)
-			cloned = true
-		}
+		info = core.CloneMediaInfo(info)
 		info.Streams[i].ExternalURL = target
 		info.Streams[i].Codec = ext
+		break
 	}
 	return info
 }
@@ -1502,7 +1502,7 @@ func (m *Manager) startHLS(ctx context.Context, req core.HLSRequest, life *encod
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, fmt.Errorf("transcode: session dir: %w", err)
 	}
-	req.Info = m.stageExternalSubtitles(dir, req.Info, req.ReleaseID)
+	req.Info = m.stageExternalSubtitle(dir, req.Info, req.ReleaseID, d)
 	s.info = req.Info
 	if len(slateData) > 0 {
 		if err := os.WriteFile(req.InputURL, slateData, 0o600); err != nil {

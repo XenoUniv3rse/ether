@@ -290,6 +290,8 @@ type playRequest struct {
 	// is burned only when the client was shown it selected (#313).
 	// Response shaping, zeroed by sameSettings.
 	subNamed bool
+	// The initial decision ignored the empty menu's Off echo.
+	coldSubtitleOff bool
 	// subStream is the subtitle picked by id (request or stored), to be
 	// found again in the session's MediaInfo (resolvePlaySelection).
 	subStream     *frontend.StreamInfo
@@ -459,6 +461,7 @@ func (p playRequest) sameSettings(other playRequest) bool {
 	p.mediaID, other.mediaID = 0, 0
 	p.softText, other.softText = false, false
 	p.subNamed, other.subNamed = false, false
+	p.coldSubtitleOff, other.coldSubtitleOff = false, false
 	p.restartEncoder, other.restartEncoder = false, false
 	// The burn option is compared in opts. Of the remaining modes, only
 	// none changes what the encoder delivers.
@@ -753,6 +756,9 @@ func (s *Server) parsePlayRequest(r *http.Request) (playRequest, error) {
 		}
 	}
 	rawSub := q.Get("subtitleStreamID")
+	if rawSub == "0" && hasEntry && !entry.started && entry.requested.coldSubtitleOff && !sel.subtitleSet {
+		rawSub = ""
+	}
 	subDefaultOrOmitted := rawSub == "" || rawSub == "-1"
 	if rawSub != "" {
 		if id, err := strconv.ParseInt(rawSub, 10, 64); err == nil {
@@ -994,6 +1000,14 @@ func (s *Server) prepare(ctx context.Context, pr *Request, p *playRequest) (*fro
 		if prepErr != nil {
 			return frontend.PlanAdmission{}, prepErr
 		}
+		addon := ps.Resolution != nil && ps.Resolution.Release.IsAddonHTTPStream()
+		// A cold client can echo None from a Part that had no subtitle
+		// tracks. Defer to viewer rules until it has a real menu to choose from.
+		if addon && !ps.Info.Estimated && p.subNamed && p.subSel < 0 && p.subStream == nil &&
+			!s.playIDs.listedSubtitles(ik, s.now()) && !s.selections.get(pr.User.ID, int64(p.key)).subtitleSet {
+			requested.coldSubtitleOff, requested.manualSubtitle = true, false
+			p.subNamed, p.subSet, p.manualSubtitle = false, false, false
+		}
 		// Tracks cached or picked since the session's media was enriched (a
 		// subtitle search pick mid-playback) join its streams for this
 		// decision; text sidecars never enter the transcoder's input.
@@ -1046,8 +1060,8 @@ func (s *Server) prepare(ctx context.Context, pr *Request, p *playRequest) (*fro
 		s.applyStreamPreferences(ctx, pr, p, t, ps.Info)
 		applySelections(p, ps.Info, s.audioLanguages(pr.User))
 		s.selectLegacyDecoderAudio(pr, p, ps.Info)
-		if p.subtitles == "none" && !keepsSelectedSubtitle(p, ps.Info) && !androidImageSubtitle(pr, ps.Info, p.opts) {
-			// The track stays selected; nothing delivers it.
+		if !addon && p.subtitles == "none" && !keepsSelectedSubtitle(p, ps.Info) && !androidImageSubtitle(pr, ps.Info, p.opts) {
+			// The client handles the selected track itself.
 			p.opts.SubtitleStream = -1
 		}
 		if androidImageSubtitle(pr, ps.Info, p.opts) {
@@ -1078,7 +1092,9 @@ func (s *Server) prepare(ctx context.Context, pr *Request, p *playRequest) (*fro
 				p.opts.BurnSubtitles = true
 			}
 		}
-		s.burnOnlyShownSubtitle(pr, p, ps.Info)
+		if !addon {
+			s.burnOnlyShownSubtitle(pr, p, ps.Info)
+		}
 		if ps.Info.Video() == nil {
 			applyMusicDirectPlay(&p.caps, pr.ProfileExtra, ps.Info, p.opts.AudioStream)
 			if len(p.caps.HLSContainers) == 0 && len(p.caps.TranscodeAudioCodecs) == 0 {
@@ -1447,6 +1463,12 @@ func (s *Server) decisionContainer(ctx context.Context, pr *Request, t *frontend
 	p.softText = browserClient(pr)
 	if plexAndroidClient(pr) && shown.BurnSubtitles && p.subtitles == "none" {
 		p.subtitles = "burn"
+	}
+	if ps.Resolution != nil && ps.Resolution.Release.IsAddonHTTPStream() && p.subtitles == "none" &&
+		p.subSet && p.subSel >= 0 && p.subSel < len(ps.Info.Streams) {
+		if track := ps.Info.Streams[p.subSel]; track.External || (shown.Kind != frontend.DecisionDirectPlay && shown.Container != frontend.ContainerMatroska) {
+			p.subtitles = "sidecar"
+		}
 	}
 	chosen := s.decisionMedia(t, ps, shown, p, pr.User)
 	if pr.configuredSlots && len(md.Media) > 0 {

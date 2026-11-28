@@ -30,15 +30,19 @@ func TestStageExternalSubtitlesForBurnInAndMatroskaMux(t *testing.T) {
 			{Index: 0, Type: "video", Codec: "h264", Width: 1920, Height: 1080, FrameRate: 24},
 			{Index: 1, Type: "audio", Codec: "aac", Channels: 2, SampleRate: 48000},
 			{Index: 3, Type: "subtitle", Codec: "srt", Language: "en", External: true, ExternalURL: "ether-subtitle:sub123"},
+			{Index: 4, Type: "subtitle", Codec: "srt", Language: "fr", External: true, ExternalURL: "ether-subtitle:sub456"},
 		},
 	}
 
-	staged := m.stageExternalSubtitles(dir, orig, "rel-burn")
+	staged := m.stageExternalSubtitle(dir, orig, "rel-burn", core.Decision{SubtitleStream: 3, BurnSubtitles: true})
 	if gotID != "ether-subtitle:sub123" || gotFormat != "srt" || gotSource != "rel-burn" {
 		t.Fatalf("opener args = (%q, %q, %q)", gotID, gotFormat, gotSource)
 	}
 	if orig.Streams[2].ExternalURL != "ether-subtitle:sub123" {
 		t.Fatalf("original MediaInfo mutated: %q", orig.Streams[2].ExternalURL)
+	}
+	if staged.Streams[3].ExternalURL != orig.Streams[3].ExternalURL {
+		t.Fatal("staged an unselected sidecar")
 	}
 	wantPath := filepath.Join(dir, "sidecar-3.srt")
 	if staged.Streams[2].ExternalURL != wantPath {

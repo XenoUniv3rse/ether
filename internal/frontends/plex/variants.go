@@ -273,8 +273,11 @@ func (s *Server) mediaForVariants(ctx context.Context, pr *Request, t *frontend.
 		{
 			info := s.withCachedSidecars(ctx, pr.User, t, variant.Info)
 			info, partSelection := subtitleInfoForPart(info, stored, m.Part[0].ID)
-			sel := resolveSelection(partSelection, info)
-			sel = s.preferredSelection(ctx, pr.User, t.Key, info, t.Language, sel)
+			var active *frontend.PlaySession
+			if played {
+				active = ps
+			}
+			sel := s.mediaTrackSelection(ctx, pr, t, active, info, partSelection)
 			m.Part[0].Stream = s.issuedStreams(t.Key, ik, m.ID, info, sel, pr.User, pr)
 		}
 		// The admitted version stays selected while its probe is pending,

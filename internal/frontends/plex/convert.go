@@ -1048,8 +1048,7 @@ func (s *Server) mediaForWithInfo(ctx context.Context, pr *Request, t *frontend.
 		}
 		stored := s.selections.get(userID, int64(t.Key))
 		info, stored = subtitleInfoForPart(info, stored, m.Part[0].ID)
-		sel := resolveSelection(stored, info)
-		sel = s.preferredSelection(ctx, pr.User, t.Key, info, t.Language, sel)
+		sel := s.mediaTrackSelection(ctx, pr, t, ps, info, stored)
 		m.Part[0].Stream = s.issuedStreams(t.Key, ik, m.ID, info, sel, pr.User, pr)
 	}
 	return []model.Media{m}, "", info

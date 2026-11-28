@@ -82,6 +82,10 @@ func (s *Session) swapInput(ctx context.Context, inputURL string, info core.Medi
 	}
 	before := s.recoveryBufferLocked()
 	previousInput := s.input
+	stageDecision := s.decision
+	if inputURL != previousInput {
+		stageDecision = adaptToContract(s.audioMatchBaseDecision(), s.info, info, s.container, s.contract)
+	}
 	s.mu.Unlock()
 	if delay := time.Until(retryAt); !retryAt.IsZero() && delay > 0 {
 		timer := time.NewTimer(delay)
@@ -109,7 +113,7 @@ func (s *Session) swapInput(ctx context.Context, inputURL string, info core.Medi
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	info = s.m.stageExternalSubtitles(s.dir, info, "")
+	info = s.m.stageExternalSubtitle(s.dir, info, "", stageDecision)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {

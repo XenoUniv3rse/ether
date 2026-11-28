@@ -18,6 +18,7 @@ import (
 	"github.com/braedonsaunders/ether/internal/releaseparse"
 	"github.com/braedonsaunders/ether/internal/releasepolicy"
 	"github.com/braedonsaunders/ether/internal/store"
+	"github.com/braedonsaunders/ether/internal/transcode"
 )
 
 type deferGenerationFillsKey struct{}
@@ -1188,6 +1189,16 @@ func (m *Manager) startGenerationFills(g *generation) {
 // loopback URL. A native probe costs no process and, for a validated Usenet
 // source, usually no network read: the first article is already cached.
 func (m *Manager) probeMedia(ctx context.Context, g *generation, src core.MediaSource) (*core.MediaInfo, string, error) {
+	if g.res != nil && g.res.Release.IsAddonHTTPStream() {
+		// The source is already open. Read its track table before optional
+		// Matroska statistics near the tail or a process-based probe.
+		probeCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		info, err := transcode.ProbeHeader(core.WithReadOrigin(probeCtx, "playback.probe", "container headers"), src, src.Size(), transcode.DefaultHeaderProbeBudget)
+		cancel()
+		if err == nil || permanentSourceFailure(err) {
+			return info, "native", err
+		}
+	}
 	if m.deps.NativeProbe != nil {
 		started := time.Now()
 		info, err := m.deps.NativeProbe(core.WithReadOrigin(ctx, "playback.probe", "container facts"), src)
