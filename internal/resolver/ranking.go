@@ -62,6 +62,9 @@ func compareCandidates(a, b candidate) bool {
 	if a.audioUnverified != b.audioUnverified {
 		return !a.audioUnverified
 	}
+	if a.trackPreference != b.trackPreference {
+		return a.trackPreference > b.trackPreference
+	}
 	// A file the owner already has plays before any release Ether would
 	// fetch, whatever their qualities (Resolver.PreferLocalFiles).
 	if a.localFirst != b.localFirst {
@@ -378,8 +381,33 @@ func preferredSource(mode string) string {
 	return ""
 }
 
+// prioritizeOwnerTracks restores track preference after soft quality and
+// delivery promotions, keeping identity and required-audio checks first.
+func prioritizeOwnerTracks(cands []candidate) {
+	if len(cands) < 2 || !slices.ContainsFunc(cands[1:], func(c candidate) bool {
+		return c.trackPreference != cands[0].trackPreference
+	}) {
+		return
+	}
+	slices.SortStableFunc(cands, func(a, b candidate) int {
+		if a.identityWeak != b.identityWeak {
+			if a.identityWeak {
+				return 1
+			}
+			return -1
+		}
+		if a.audioUnverified != b.audioUnverified {
+			if a.audioUnverified {
+				return 1
+			}
+			return -1
+		}
+		return cmp.Compare(b.trackPreference, a.trackPreference)
+	})
+}
+
 func samePreferenceTier(a, b candidate) bool {
-	return a.audioUnverified == b.audioUnverified && a.localFirst == b.localFirst && a.belowScore == b.belowScore && a.fallback == b.fallback &&
+	return a.trackPreference == b.trackPreference && a.audioUnverified == b.audioUnverified && a.localFirst == b.localFirst && a.belowScore == b.belowScore && a.fallback == b.fallback &&
 		(!a.belowScore || a.counted == b.counted) && (!a.fallback || a.keys.height == b.keys.height)
 }
 

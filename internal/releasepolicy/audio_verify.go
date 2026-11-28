@@ -165,6 +165,19 @@ func (p *Policy) RequiredAudioMissing(rel core.Release, ctx Context, streams []c
 	return "", true
 }
 
+// PrefersOriginalAudio reports whether original audio takes priority over dubs.
+func PrefersOriginalAudio(profile core.QualityProfile, user *core.User) bool {
+	language := strings.ToLower(strings.TrimSpace(profile.Language))
+	switch {
+	case language == core.ProfileLanguageOriginal:
+		return true
+	case language == core.ProfileLanguageAny || releaseparse.KnownLanguage(language):
+		return false
+	default:
+		return user != nil && user.PreferOriginal
+	}
+}
+
 // ProbedAudioLanguages extracts concrete audio track language tags from probed
 // media streams using container language codes and stream titles.
 func ProbedAudioLanguages(streams []core.StreamInfo) []string {

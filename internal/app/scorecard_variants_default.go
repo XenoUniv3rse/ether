@@ -11,7 +11,7 @@ func scorecardVariants(ctx context.Context, a *App, v *core.Viewer, t *core.Titl
 	if vs, ok := labMediaVariants(a.opts.DataDir, t); ok {
 		return vs, nil
 	}
-	req := core.ResolveRequest{Title: t, User: a.withEffectiveAudioLanguages(ctx, v), Client: caps}
+	req := core.ResolveRequest{Title: t, User: a.withEffectiveLanguages(ctx, v), Client: caps}
 	// After a play, Auto is named after the release that played (the one a
 	// resume opens), as Plex shows it — unless the viewer explicitly picked a
 	// non-Auto version, which stays behind its own entry.

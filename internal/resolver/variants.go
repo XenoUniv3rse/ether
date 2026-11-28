@@ -3,6 +3,7 @@ package resolver
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -131,6 +132,11 @@ func (s *Service) variants(ctx context.Context, req core.ResolveRequest, max int
 	// relabelling Auto.
 	played := req.PlayedRelease
 	if autoRemembered || !core.IsAutoVersionSelector(req.PlayedSelector) {
+		played = ""
+	}
+	if played != "" && strict[0].trackPreference > 0 && !slices.ContainsFunc(pool, func(c candidate) bool {
+		return c.rel.ID == played && c.trackPreference >= strict[0].trackPreference
+	}) {
 		played = ""
 	}
 	if played != "" {

@@ -99,13 +99,11 @@ type Deps struct {
 	DebridFileMeta func(rel core.Release) (path string, size int64, ok bool)
 	// ContentIDOf maps a release ID to its known W116 content ID in memory.
 	ContentIDOf func(releaseID string) string
-	// OnVersionProbed notifies listeners when a background header probe stores
-	// new container tracks for a release.
+	// OnVersionProbed notifies listeners when probe facts are recorded for a release.
 	OnVersionProbed func(key core.RatingKey, rel core.Release)
-	// ViewerAudioPreferences returns the viewer's saved audio language list
-	// and prefer-original flag (for probed-audio checks and release ranking).
-	// When nil, playback falls back to the fields on core.User.
-	ViewerAudioPreferences func(ctx context.Context, userID int64) (audioLanguages []string, preferOriginal bool)
+	// ResolveViewerLanguages applies the viewer's saved language rules to
+	// the user passed to source ranking and probe validation.
+	ResolveViewerLanguages func(context.Context, *core.User) *core.User
 	// HeaderProbeBudget bounds bytes read per low-priority container header
 	// probe (0 uses transcode.DefaultHeaderProbeBudget).
 	HeaderProbeBudget int

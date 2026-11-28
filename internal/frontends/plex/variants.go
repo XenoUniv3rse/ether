@@ -194,6 +194,13 @@ func (s *Server) mediaForVariants(ctx context.Context, pr *Request, t *frontend.
 		vs = cloneVariants(resolved)
 	}
 
+	// A retired Auto session's probe belongs to its own release. Once the
+	// resolver has probed a different Auto pick, render that pick's tracks.
+	if !live && !pin.frozen && frontend.IsAutoVersionSelector(playedSelector) &&
+		probedRelease != "" && vs[0].Release.ID != probedRelease &&
+		!vs[0].Info.Estimated && vs[0].Info.HasPlayableMedia() {
+		probed, probedRelease = frontend.MediaInfo{Estimated: true}, ""
+	}
 	alignRelease := probedRelease
 	if pin.frozen && pin.admittedRelease != "" {
 		alignRelease = pin.admittedRelease
@@ -250,7 +257,7 @@ func (s *Server) mediaForVariants(ctx context.Context, pr *Request, t *frontend.
 		// otherwise its estimate. A probe is drawn on the played version
 		// only, never on a different explicit pick.
 		played := probedReady && i == playedIdx
-		warmAuto := playedIdx < 0 && probedReady && v.Auto
+		warmAuto := playedIdx < 0 && probedReady && v.Auto && (v.Info.Estimated || !v.Info.HasPlayableMedia())
 		variant := v
 		if played || warmAuto {
 			keepReleaseBitrate := probed.Video() != nil && !probeDisagrees(v.Info, probed) && v.Info.BitrateKbps > 0 && (probedRelease != "" || autoDuplicatesRow || probed.BitrateKbps <= 0)

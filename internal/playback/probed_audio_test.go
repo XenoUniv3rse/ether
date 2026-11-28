@@ -45,15 +45,12 @@ func TestAudioProbedAcceptable(t *testing.T) {
 func TestAudioProbedAcceptablePreferOriginal(t *testing.T) {
 	cfg := config.Config{Catalog: config.Catalog{Language: "en-US"}}
 	m := &Manager{ctx: context.Background(), cfg: cfg}
-	m.deps.ViewerAudioPreferences = func(_ context.Context, userID int64) ([]string, bool) {
-		switch userID {
-		case 1:
-			return nil, true
-		case 2:
-			return []string{"en"}, true
-		default:
-			return nil, false
+	m.deps.ResolveViewerLanguages = func(_ context.Context, user *core.User) *core.User {
+		user.PreferOriginal = true
+		if user.ID == 2 {
+			user.AudioLanguages = []string{"en"}
 		}
+		return user
 	}
 
 	// Empty AudioLanguages + preferOriginal=true on a Basque title (ISO 639-1 "eu",
@@ -74,7 +71,7 @@ func TestAudioProbedAcceptablePreferOriginal(t *testing.T) {
 	}
 
 	// preferOriginal=true with fallback AudioLanguages=["en"] on a Japanese title:
-	// accept Japanese original and English fallback, reject unrelated dub.
+	// accept Japanese original and leave dubs for the last-resort open path.
 	anime := &session{
 		title: &core.Title{Language: "ja"},
 		user:  core.User{ID: 2},

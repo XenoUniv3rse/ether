@@ -1027,7 +1027,7 @@ func (m *Manager) prewarm(requestCtx context.Context, user *core.User, key core.
 			}
 			info := generation.infoSnapshot()
 			if reqReason := probedRequiredAudioRejection(profile, title, res.Release, info, fromResume); reqReason != "" {
-				m.noteReleaseProbeMemory(res.Release, res.NZB, info)
+				m.noteSelectionProbe(key, res, info)
 				m.log.Debug("prewarm skipped: required audio absent", "key", key, "release", res.Release.Name, "reason", reqReason)
 				m.dropGeneration(generation)
 				lastRel, lastErr = res.Release, errors.New(reqReason)
@@ -1052,7 +1052,7 @@ func (m *Manager) prewarm(requestCtx context.Context, user *core.User, key core.
 					if burned {
 						skipReason = "burned-in subtitles detected"
 					} else {
-						m.noteReleaseProbeMemory(res.Release, res.NZB, info)
+						m.noteSelectionProbe(key, res, info)
 					}
 					m.log.Debug("prewarm trying next candidate", "key", key, "release", res.Release.Name, "reason", skipReason)
 					if fallbackGen == nil || (fallbackBurned && !burned) {
@@ -1417,7 +1417,7 @@ func warmAcceptable(e *warmEntry, profile core.QualityProfile, caps core.ClientC
 		return false
 	}
 	f := e.facts()
-	if !sourceFitsBitrate(f.size, f.duration, f.bitrate, caps.MaxBitrateKbps) {
+	if !caps.DefaultRemoteBitrate && !sourceFitsBitrate(f.size, f.duration, f.bitrate, caps.MaxBitrateKbps) {
 		return false
 	}
 	if !f.known {
@@ -1436,7 +1436,7 @@ func warmAcceptable(e *warmEntry, profile core.QualityProfile, caps core.ClientC
 	if profile.MinHeight > 0 && f.height > 0 && f.height < profile.MinHeight {
 		return false
 	}
-	if f.codec != "" && len(caps.VideoCodecs) > 0 && !caps.SupportsVideo(f.codec) {
+	if !caps.DeferSourceCodecValidation && f.codec != "" && len(caps.VideoCodecs) > 0 && !caps.SupportsVideo(f.codec) {
 		return false
 	}
 	if f.hdr && !(profile.AllowHDR && caps.HDR10) {
@@ -1667,7 +1667,7 @@ func (m *Manager) takeWarmResolution(ctx context.Context, id identity, profile c
 		}
 		return nil
 	}
-	if prefer != "" && (e.res == nil || !e.res.MatchesVersion(prefer)) {
+	if !isAutoVersionSelector(prefer) && (e.res == nil || !e.res.MatchesVersion(prefer)) {
 		return nil // keep it: a plain Prepare may still use it
 	}
 	blocked := e.res != nil && m.releaseBlocked(ctx, e.res.Release.ID)

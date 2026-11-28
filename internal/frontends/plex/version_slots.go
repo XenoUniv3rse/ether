@@ -93,6 +93,15 @@ func (s *Server) slotMedia(ctx context.Context, pr *Request, t *frontend.Title, 
 		slotInfo        = info
 		infoTarget      int64
 	)
+	// Keep a stopped Auto session's tracks from overriding a different,
+	// concrete Auto pick the resolver has now probed.
+	if ps == nil && hasResumed && !pin.frozen && frontend.IsAutoVersionSelector(resumedSelector) &&
+		len(versions) > 0 && versions[0].Release.ID != resumedRel.ID &&
+		!versions[0].Info.Estimated && versions[0].Info.HasPlayableMedia() {
+		hasResumed = false
+		info = frontend.MediaInfo{Estimated: true}
+		slotInfo = info
+	}
 	if ps != nil {
 		if selected == 0 {
 			selected = int64(t.Key)
@@ -132,7 +141,8 @@ func (s *Server) slotMedia(ctx context.Context, pr *Request, t *frontend.Title, 
 					infoTarget = int64(t.Key)
 				}
 			}
-		} else if !info.Estimated && info.HasPlayableMedia() {
+		} else if !info.Estimated && info.HasPlayableMedia() &&
+			(len(versions) == 0 || versions[0].Info.Estimated || !versions[0].Info.HasPlayableMedia()) {
 			infoTarget = int64(t.Key)
 		}
 		if selected == 0 {

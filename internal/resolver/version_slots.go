@@ -439,7 +439,7 @@ func (s *Service) slotAutoWithSource(req core.ResolveRequest, strict, pool []can
 	}
 	if req.PlayedRelease != "" && !core.IsExplicitVersionSlotSelector(req.PlayedSelector) {
 		for _, c := range strict {
-			if c.rel.ID != req.PlayedRelease {
+			if c.rel.ID != req.PlayedRelease || c.trackPreference < strict[0].trackPreference {
 				continue
 			}
 			if c.deliveryDemotion != core.AutoConnectionEstimate || !slices.ContainsFunc(strict, func(other candidate) bool {

@@ -180,6 +180,7 @@ func (m *Manager) openInitial(ctx context.Context, s *session, profile core.Qual
 		original = s.title.Language
 	}
 	isSlot := core.IsExplicitVersionSlotSelector(s.prefer)
+	auto := !s.exact && isAutoVersionSelector(s.prefer)
 	res, cached, fromResume := m.preparedResolution(ctx, s, profile, original, s.prefer)
 	if res == nil && s.prefer != "" && !s.exact && !isSlot {
 		if auto, facts, remembered := m.preparedResolution(ctx, s, profile, original, ""); auto != nil {
@@ -242,7 +243,7 @@ func (m *Manager) openInitial(ctx context.Context, s *session, profile core.Qual
 		if m.knownHardSubbed(ctx, g) && m.hardSubtitleBlocked(ctx, res.Release) {
 			return false
 		}
-		if s.prefer == "" && probedRequiredAudioRejection(profile, s.title, res.Release, info, false) != "" {
+		if auto && probedRequiredAudioRejection(profile, s.title, res.Release, info, false) != "" {
 			return false
 		}
 		return true
@@ -421,7 +422,7 @@ func (m *Manager) openInitial(ctx context.Context, s *session, profile core.Qual
 		if len(res.NZB) > 0 {
 			res.Release.SourceHash = fmt.Sprintf("%x", sha256.Sum256(res.NZB))
 		}
-		if m.titleReleaseRejected(ctx, s.ident.key, res.Release) || (!s.exact && s.prefer == "" && audioExcluded(audioRejected, res.Release)) {
+		if m.titleReleaseRejected(ctx, s.ident.key, res.Release) || (auto && audioExcluded(audioRejected, res.Release)) {
 			tried = append(tried, res.Release.ID)
 			alternates = res.Alternates
 			res, cached, fromResume = nil, nil, false
@@ -500,10 +501,10 @@ func (m *Manager) openInitial(ctx context.Context, s *session, profile core.Qual
 			res, cached, fromResume = nil, nil, false
 			continue
 		}
-		if err == nil && !s.exact && s.prefer == "" {
+		if err == nil && auto {
 			info := g.infoSnapshot()
 			if reqReason := probedRequiredAudioRejection(profile, s.title, res.Release, info, fromResume); reqReason != "" {
-				m.noteReleaseProbeMemory(res.Release, res.NZB, info)
+				m.noteSelectionProbe(s.ident.key, res, info)
 				m.log.Info("trying next candidate", "release", res.Release.Name, "reason", reqReason)
 				m.dropGeneration(g)
 				if reqLang := normalizedProfileLanguage(profile); reqLang != "" && strings.HasPrefix(reqReason, "audio is not in the profile's language (") {
@@ -522,15 +523,18 @@ func (m *Manager) openInitial(ctx context.Context, s *session, profile core.Qual
 				continue
 			}
 		}
-		if err == nil && !s.exact && s.prefer == "" {
+		if err == nil && auto {
 			info := g.infoSnapshot()
 			audioOK := m.probedAudioAcceptable(s, profile, info)
+			if !audioOK && m.hasAuthoritativeAutoChoice(s) && m.ownerPinAllows(s, res.Release.ID) && m.rememberedChoiceAllows(s, res.Release.ID) {
+				audioOK = true
+			}
 			if burned || !audioOK {
 				reason := "probed release lacks viewer audio language"
 				if burned {
 					reason = "burned-in subtitles detected"
 				} else {
-					m.noteReleaseProbeMemory(res.Release, res.NZB, info)
+					m.noteSelectionProbe(s.ident.key, res, info)
 				}
 				m.log.Info("trying next candidate", "session", s.id, "release", res.Release.Name, "reason", reason)
 				m.recordTimeline(s, TimelineEvent{
@@ -2477,9 +2481,7 @@ func (m *Manager) resumeResolution(ctx context.Context, userID int64, key core.R
 func (m *Manager) saveResume(ctx context.Context, s *session, g *generation) {
 	info := g.infoSnapshot()
 	if g.res != nil {
-		if _, _, ok := m.noteReleaseProbeMemory(g.res.Release, g.res.NZB, info); ok && m.deps.OnVersionProbed != nil {
-			m.deps.OnVersionProbed(s.ident.key, g.res.Release)
-		}
+		m.noteSelectionProbe(s.ident.key, g.res, info)
 	}
 	if s.ident.key.IsPluginKey() {
 		m.noteItemProbeMemory(s.ident.key, info)
@@ -2785,26 +2787,10 @@ func audioExcluded(excluded []core.Release, rel core.Release) bool {
 	return false
 }
 
-func (m *Manager) viewerAudioPreferences(ctx context.Context, u core.User) (audioLanguages []string, preferOriginal bool) {
-	audioLanguages = u.AudioLanguages
-	preferOriginal = u.PreferOriginal
-	if m.deps.ViewerAudioPreferences == nil || u.ID <= 0 {
-		return audioLanguages, preferOriginal
-	}
-	langs, prefOrig := m.deps.ViewerAudioPreferences(ctx, u.ID)
-	if len(langs) > 0 {
-		audioLanguages = langs
-	}
-	if prefOrig {
-		preferOriginal = true
-	}
-	return audioLanguages, preferOriginal
-}
-
 func (m *Manager) effectiveResolveUser(ctx context.Context, u core.User) core.User {
-	langs, prefOrig := m.viewerAudioPreferences(ctx, u)
-	u.AudioLanguages = langs
-	u.PreferOriginal = prefOrig
+	if m.deps.ResolveViewerLanguages != nil {
+		return *m.deps.ResolveViewerLanguages(ctx, &u)
+	}
 	return u
 }
 
@@ -2834,7 +2820,18 @@ func (m *Manager) probedAudioAcceptable(s *session, profile core.QualityProfile,
 	if profileLang == core.ProfileLanguageAny {
 		return true
 	}
-	userAudio, preferOriginal := m.viewerAudioPreferences(m.ctx, s.user)
+	user := m.effectiveResolveUser(m.ctx, s.user)
+	userAudio := user.AudioLanguages
+	preferOriginal := releasepolicy.PrefersOriginalAudio(profile, &user)
+	if preferOriginal && orig != "" {
+		langs := releasepolicy.ProbedAudioLanguages(info.Streams)
+		if len(langs) > 0 {
+			return slices.ContainsFunc(langs, func(lang string) bool {
+				return releaseparse.LanguageMatch(lang, orig) != releaseparse.LanguageNoMatch
+			})
+		}
+		return true
+	}
 	specificProfileLang := profileLang != "" && profileLang != core.ProfileLanguageOriginal && releaseparse.KnownLanguage(profileLang)
 	var wanted []string
 	switch {
@@ -2847,16 +2844,13 @@ func (m *Manager) probedAudioAcceptable(s *session, profile core.QualityProfile,
 		wanted = append(wanted, profile.PreferredLanguages...)
 	case len(userAudio) > 0:
 		wanted = append(wanted, userAudio...)
-	case profileLang == core.ProfileLanguageOriginal || preferOriginal:
+	case preferOriginal:
 		// Preferring original language must not fall back to Catalog.Language.
 	default:
 		if serverLang := strings.TrimSpace(m.config().Catalog.Language); serverLang != "" {
 			base, _, _ := strings.Cut(serverLang, "-")
 			wanted = append(wanted, base)
 		}
-	}
-	if !specificProfileLang && (profileLang == core.ProfileLanguageOriginal || preferOriginal) && orig != "" {
-		wanted = append(wanted, orig)
 	}
 	if len(wanted) == 0 {
 		return true

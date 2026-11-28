@@ -29,6 +29,7 @@ type candidate struct {
 	trace            int
 	verified         bool
 	langOK           bool            // declares no audio, or an accepted audio language (acceptedAudio)
+	trackPreference  int             // original audio evidence, then wanted subtitles
 	langRank         int             // 1-based viewer-language rank (1 = first choice, 2 = second, ...; 0 = unmatched)
 	starved          bool            // below its resolution's bitrate floor (bitrateScore) or a presumed upscale
 	bandwidth        int             // fits client cap (+1), unknown (0), or exceeds hard cap / stall limit (-1)

@@ -114,7 +114,7 @@ func (s surfaceEditions) Variants(ctx context.Context, req core.ResolveRequest, 
 	if s.app.resolver == nil {
 		return nil, nil
 	}
-	req.User = s.app.withEffectiveAudioLanguages(ctx, req.User)
+	req.User = s.app.withEffectiveLanguages(ctx, req.User)
 	if req.PlayedRelease == "" && s.app.playback != nil && req.User != nil && req.User.ID > 0 && req.Title != nil {
 		if _, played, sel, ok := s.app.playback.ResumedVersion(ctx, req.User, req.Title.Key, req.Client); ok {
 			req.PlayedRelease = played.ID
@@ -187,7 +187,7 @@ func (s surfaceEditions) VersionSlots(ctx context.Context, req core.ResolveReque
 		return nil, nil
 	}
 	if labels {
-		req.User = s.app.withEffectiveAudioLanguages(ctx, req.User)
+		req.User = s.app.withEffectiveLanguages(ctx, req.User)
 		if req.PlayedRelease == "" && s.app.playback != nil && req.User != nil && req.User.ID > 0 && req.Title != nil {
 			if _, played, sel, ok := s.app.playback.ResumedVersion(ctx, req.User, req.Title.Key, req.Client); ok {
 				req.PlayedRelease = played.ID
