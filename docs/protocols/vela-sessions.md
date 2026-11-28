@@ -43,7 +43,9 @@ the offered Auto pick. An active playback plan describes the admitted pick.
 `connection_estimate` indicates recent client download measurements
 favored a lower bitrate. `source_delivery` indicates recent media-source
 delivery favored a lower bitrate. `resume_source` indicates that Auto reused
-a source saved from earlier playback. The message is localized. The reason is
+a source saved from earlier playback. `source_selection` indicates that Auto
+admitted an available source under the playback preferences, with no more
+specific selection reason recorded. The message is localized. The reason is
 separate from `rememberedChoice`.
 
 ## Switching by bitrate
@@ -63,10 +65,11 @@ For example:
 ```
 
 For a client that opts into adaptive HLS, the bitrate form opens a master
-whose variants all fit the requested peak cap and the viewer and upload
-ceilings. The highest fitting rendition is listed first. The player can
-switch up and down inside the capped set. `prepare-fallback` offers a
-capped master while leaving the selected path in place. A speed-driven
+whose variants fit the requested peak and the viewer, server and upload
+ceilings. When the request is below the lowest policy-eligible rendition,
+Ether uses the lowest policy-eligible encode. The highest fitting rendition is listed first.
+The player can switch up and down inside the capped set. `prepare-fallback`
+offers a capped master while leaving the selected path in place. A speed-driven
 source down-failover can also tighten the active master's `maxBitrate`.
 Reload the master when an updated plan lowers that value.
 
@@ -87,10 +90,23 @@ adaptive track selection enabled and do not pin an initial rendition or send
 a `switch` command in response to bandwidth changes. Explicit path switches
 remain available for manual quality choices. Eligible original files keep
 their direct-play primary. For an opted-in client, Ether also offers an
-`adaptive-hls` path with its own master URL. After sustained buffering
-on direct play, Ether can select that path automatically and publish a
-plan event with new source and seek generations and a master capped to
-measured delivery. The handoff uses the current title position. Ether
+`adaptive-hls` path with its own master URL. An offered adaptive path can
+keep `adaptive: true` with `readiness: "on-demand"` and no URL while another
+path is selected. Use `switch` with its `pathId` to return to Automatic.
+
+`features.adaptiveHLS.serverHandoff` advertises Ether's automatic handoff.
+The playback plan, including plans in SSE events, carries
+`serverHandoff: "pending"` while the selected original is eligible. Clients
+can defer their own bandwidth-driven step-down while this field is pending.
+When Ether switches the path, the plan carries `serverHandoff: "completed"`
+with new source and seek generations. A failed attempt publishes
+`serverHandoff: "failed"` so the client can try its own recovery. A manual path or version switch
+clears completion. The handoff master lists the lowest rendition first and
+includes the full compatible ladder allowed by the viewer, server and
+upload ceilings. The measured rate triggers the handoff, and the player
+can climb using its own bandwidth estimate.
+
+The handoff uses the current title position. Ether
 prefers fresh client throughput and can also measure bytes delivered by
 the file GETs. It waits for 15 seconds of buffering or a second buffering
 episode within 30 seconds and requires delivery below 90% of the source
@@ -108,7 +124,7 @@ encoded timeline with the largest compatible picture its bitrate and
 transcode budgets allow. Each rendition keeps its CODECS declaration for
 the lifetime of the stream. The automatic variants use the same video
 codec family, dynamic range, frame rate, and audio selection. If fewer
-than two variants qualify, the path has no `adaptive` flag. An opted-in HLS path without adaptive quality carries
+than two variants qualify on an active master, the path has no `adaptive` flag. An opted-in HLS path without adaptive quality carries
 `adaptiveUnavailable: {reason, message}`. The reason is a stable code and
 the message is localized. The viewer and upload ceilings apply when the
 stream is opened. Variant playlists can be read without starting an encoder. The

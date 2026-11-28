@@ -30,6 +30,15 @@ func (i *instance) refreshOutput(ctx context.Context, id string, s *playSession)
 		hls := path["transport"] == "hls"
 		masterURL, query, _ := strings.Cut(url, "?")
 		master := hls && strings.HasSuffix(masterURL, "/master.m3u8")
+		if s.client.Features.AdaptiveHLS && hls && path["id"] == adaptivePathID && path["readiness"] == "on-demand" && url == "" {
+			path["adaptive"] = true
+			delete(path, "adaptiveUnavailable")
+			continue
+		}
+		handoff := master && path["id"] == adaptivePathID && s.plan["selectedPathId"] == adaptivePathID && s.plan["serverHandoff"] == "completed"
+		if handoff {
+			path["url"] = masterURL + "?start=low"
+		}
 		if s.client.Features.AdaptiveHLS && (hls || path["id"] == s.plan["selectedPathId"]) &&
 			(!master || !ok || hs == nil) && path["adaptiveUnavailable"] == nil {
 			reason := "hls_unavailable"
@@ -67,10 +76,15 @@ func (i *instance) refreshOutput(ctx context.Context, id string, s *playSession)
 				adaptiveRungs = adaptive.AdaptiveRungs()
 			}
 			if strings.HasPrefix(query, "maxBitrate=") {
-				adaptiveRungs = rungsAtOrBelow(adaptiveRungs, pathBitrate(path))
+				adaptiveRungs = frontend.AdaptiveRungsAtOrBelow(adaptiveRungs, pathBitrate(path))
+				if len(adaptiveRungs) == 1 {
+					path["maxBitrate"] = max(pathBitrate(path), adaptiveRungs[0].Bandwidth)
+				}
 			} else if capped, ok := hs.(interface{ AdaptiveBitrateLimit() int }); ok {
 				if limit := capped.AdaptiveBitrateLimit(); limit > 0 {
 					path["maxBitrate"] = limit
+				} else if handoff {
+					delete(path, "maxBitrate")
 				}
 			}
 			if d, ok := hs.(interface{ Decision() frontend.Decision }); ok && d.Decision().Kind == frontend.DecisionTranscode ||

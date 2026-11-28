@@ -97,6 +97,18 @@ func TestBrokerAdaptiveHLSMaster(t *testing.T) {
 		!strings.Contains(w.Body.String(), "720p/index.m3u8") {
 		t.Fatalf("capped master: %d %s", w.Code, w.Body.String())
 	}
+	w = httptest.NewRecorder()
+	broker.serveMaster(w, httptest.NewRequest(http.MethodGet, "/?maxBitrate=400000", nil), capped, &adaptiveTestLadder{})
+	if w.Code != http.StatusOK || strings.Count(w.Body.String(), "#EXT-X-STREAM-INF:") != 1 ||
+		!strings.Contains(w.Body.String(), "720p/index.m3u8") {
+		t.Fatalf("master below the bitrate floor: %d %s", w.Code, w.Body.String())
+	}
+	w = httptest.NewRecorder()
+	broker.serveMaster(w, httptest.NewRequest(http.MethodGet, "/?start=low", nil), capped, &adaptiveTestLadder{})
+	if w.Code != http.StatusOK || strings.Count(w.Body.String(), "#EXT-X-STREAM-INF:") != 2 ||
+		strings.Index(w.Body.String(), "720p/index.m3u8") >= strings.Index(w.Body.String(), "base/index.m3u8") {
+		t.Fatalf("start-low master: %d %s", w.Code, w.Body.String())
+	}
 	s := &brokerSession{public: frontend.Session{ID: "s", Protocol: "vela"}, playID: "p"}
 	w = httptest.NewRecorder()
 	broker.serveMaster(w, httptest.NewRequest(http.MethodGet, "/", nil), s, &adaptiveTestLadder{})

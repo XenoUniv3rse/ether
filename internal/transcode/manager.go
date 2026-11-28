@@ -1176,7 +1176,9 @@ func (m *Manager) startHLS(ctx context.Context, req core.HLSRequest, life *encod
 	requestedOffset := offset
 	// Continuous clients rebase their first video presentation packet to zero.
 	// Resolve the true copy origin before authoring the playlist and audio cut.
-	copyOrigin := req.Continuous && req.Info.Duration > 0 && proto == core.ProtocolHLS && d.VideoCopy && v != nil && !req.LiveInput && len(slateData) == 0 && req.Resume == nil && !enhancementSelected(d)
+	copyOverCap := req.AdaptiveHLS && req.AdaptiveEncodeTop && d.VideoCopy && req.AdaptiveMaxKbps > 0 &&
+		max(rungs[0].peakKbps, HLSCopyPeakKbps(req.Info, segDur)) > req.AdaptiveMaxKbps
+	copyOrigin := !copyOverCap && req.Continuous && req.Info.Duration > 0 && proto == core.ProtocolHLS && d.VideoCopy && v != nil && !req.LiveInput && len(slateData) == 0 && req.Resume == nil && !enhancementSelected(d)
 	var copyStart copyOpening
 	if copyOrigin {
 		scope, err := encoderScopeHeaders(req.InputLease, req.InputURL)

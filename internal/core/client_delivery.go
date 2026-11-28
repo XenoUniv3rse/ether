@@ -18,4 +18,5 @@ const (
 	AutoConnectionEstimate AutoSelectionReason = "connection_estimate"
 	AutoSourceDelivery     AutoSelectionReason = "source_delivery"
 	AutoResumeSource       AutoSelectionReason = "resume_source"
+	AutoSourceSelection    AutoSelectionReason = "source_selection"
 )

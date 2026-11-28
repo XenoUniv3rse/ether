@@ -15,6 +15,7 @@ type HLSRung struct {
 	// AverageBandwidth is the average bitrate in bits per second.
 	AverageBandwidth int
 	// Explicit quality metadata uses bits/second and describes intended output.
+	VideoCopy        bool
 	VideoBitrate     int
 	PeakVideoBitrate int
 	Codec            string

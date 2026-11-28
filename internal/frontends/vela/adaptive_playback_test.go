@@ -22,7 +22,7 @@ type adaptiveOutputFixture struct {
 
 func (f *adaptiveOutputFixture) AdaptiveRungs() []core.HLSRung {
 	if cap := f.cap.Load(); cap > 0 {
-		return rungsAtOrBelow(f.rungs, int(cap))
+		return frontend.AdaptiveRungsAtOrBelow(f.rungs, int(cap))
 	}
 	return f.rungs
 }
@@ -105,7 +105,10 @@ func TestVelaAdaptivePlaybackPaths(t *testing.T) {
 					return frontend.ItemDetail{}, frontend.ErrNotFound
 				}}
 			}
-			call(i.playback, payload)
+			initial := call(i.playback, payload)
+			if route == "resume_source" && !strings.Contains(initial.Body.String(), `"code":"resume_source"`) {
+				t.Fatal("admitted Auto reason was omitted without a version menu")
+			}
 			s := i.sessions["session"]
 			assertPaths := func() []object {
 				t.Helper()
@@ -131,6 +134,9 @@ func TestVelaAdaptivePlaybackPaths(t *testing.T) {
 				t.Fatalf("original did not retain a separate adaptive master: %+v", paths)
 			}
 			if route == "original_auto" {
+				if !strings.Contains(initial.Body.String(), `"serverHandoff":"pending"`) {
+					t.Fatal("original did not signal that a handoff was armed")
+				}
 				observation := object{"sourceGeneration": 1, "seekGeneration": 1, "sequence": 1,
 					"positionSeconds": 257, "state": "buffering", "selectedPathId": paths[0]["id"]}
 				call(i.observe, observation)
@@ -144,7 +150,7 @@ func TestVelaAdaptivePlaybackPaths(t *testing.T) {
 				s.directDelivery.buffering = begin
 				for n := range 4 {
 					start := begin.Add(time.Duration(n) * 5 * time.Second)
-					s.directDelivery.add(start, start.Add(5*time.Second), 3125000)
+					s.directDelivery.add(start, start.Add(5*time.Second), 250000)
 				}
 				s.directDelivery.clientBps, s.directDelivery.clientAt = 8000000, now
 				s.mu.Unlock()
@@ -159,9 +165,18 @@ func TestVelaAdaptivePlaybackPaths(t *testing.T) {
 				observation["sequence"] = 3
 				call(i.observe, observation)
 				req := requests[len(requests)-1]
-				if req.AdaptiveMaxBitrate != 5000000 || req.Position != 257*time.Second ||
-					s.plan["selectedPathId"] != adaptivePathID || s.source != 2 || s.seek != 2 {
+				path := selectedPlaybackPath(s.plan, assertPaths())
+				if req.AdaptiveMaxBitrate != 0 || req.Position != 257*time.Second ||
+					path["id"] != adaptivePathID || path["url"] != "/sessions/media/session/grant/master.m3u8?start=low" ||
+					len(path["qualities"].([]object)) != 3 || s.plan["serverHandoff"] != "completed" ||
+					s.source != 2 || s.seek != 2 {
 					t.Fatalf("automatic adaptive handoff: %+v, %s, %d/%d", req, s.plan["selectedPathId"], s.source, s.seek)
+				}
+				call(i.command, object{"kind": "switch", "pathId": "primary", "sourceGeneration": 2, "seekGeneration": 2})
+				for _, path := range assertPaths() {
+					if path["id"] == adaptivePathID && (path["adaptive"] != true || path["readiness"] != "on-demand") {
+						t.Fatalf("returning to primary lost the Automatic offer: %+v", path)
+					}
 				}
 				return
 			}

@@ -204,6 +204,29 @@ var IsAPIKeyCredential = core.IsAPIKeyCredential
 
 // HLS output evidence is shared with adapters without exposing the encoder.
 type HLSRung = core.HLSRung
+
+// AdaptiveRungsAtOrBelow filters an eligible ladder by a client estimate.
+// When the estimate is below the ladder, retain its lowest eligible encode.
+func AdaptiveRungsAtOrBelow(rungs []HLSRung, cap int) []HLSRung {
+	filtered := make([]HLSRung, 0, len(rungs))
+	var lowest HLSRung
+	for _, rung := range rungs {
+		if rung.Bandwidth <= 0 {
+			continue
+		}
+		if rung.Bandwidth <= cap {
+			filtered = append(filtered, rung)
+		}
+		if !rung.VideoCopy && (lowest.Bandwidth == 0 || rung.Bandwidth < lowest.Bandwidth) {
+			lowest = rung
+		}
+	}
+	if len(filtered) == 0 && lowest.Bandwidth > 0 {
+		filtered = append(filtered, lowest)
+	}
+	return filtered
+}
+
 type AdaptiveHLSSession = core.AdaptiveHLSSession
 type QualityLimitation = core.QualityLimitation
 type HLSDiagnosticSession = core.HLSDiagnosticSession

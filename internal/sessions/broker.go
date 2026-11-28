@@ -849,6 +849,7 @@ func (b *Broker) Plan(ctx context.Context, req frontend.PlanRequest) (planned fr
 	// autoRelease: the handle names Auto's release, so the session may play
 	// another release in its place (a fallback now, a failover later).
 	autoRelease := ((chosen != nil && chosen.Auto) || req.Intent.AutoVersion) && !slotSelector && detail == nil
+	automatic := detail == nil && (release == "" || autoRelease || rememberedFallback)
 	prepStarted := time.Now()
 	if useCachedDetail {
 		if liveness, ok := b.deps.Playback.(interface{ SessionActive(string) bool }); ok && !liveness.SessionActive(previous.ID) {
@@ -865,7 +866,7 @@ func (b *Broker) Plan(ctx context.Context, req frontend.PlanRequest) (planned fr
 		if err != nil && detail == nil && req.ExpectedSourceETag == "" && !slotSelector && (rememberedFallback || autoRelease || errors.Is(err, core.ErrSourceChanged)) {
 			if fallbackPS, fallbackErr := playback.PrepareSurface(ctx, v, req.Item, req.Caps, "", false); fallbackErr == nil && fallbackPS != nil {
 				ps, err = fallbackPS, nil
-				prepareExact = false
+				prepareExact, rememberedFallback = false, false
 				req.Intent.ExactVersion = false
 				if ps.Resolution != nil && ps.Resolution.Release.ID != "" {
 					req.Version = ps.Resolution.Release.ID
@@ -1023,8 +1024,13 @@ func (b *Broker) Plan(ctx context.Context, req frontend.PlanRequest) (planned fr
 	var autoReason core.AutoSelectionReason
 	if ps.Resolution != nil {
 		relID = ps.Resolution.Release.ID
-		if req.Protocol == "vela" && !pinned && (release == "" || autoRelease) {
-			autoReason = ps.Resolution.AutoSelectionReason
+		if req.Protocol == "vela" && !pinned && automatic {
+			switch {
+			case rememberedFallback && relID == release:
+				autoReason = core.AutoResumeSource
+			default:
+				autoReason = admittedAutoReason(ps.Resolution)
+			}
 		}
 	}
 	return frontend.PlayPlan{AutoSelectionReason: autoReason, SourceChosenAt: sourceChosenAt, DecisionAt: decisionAt, ID: id, Media: publicMedia(ps.Info), Decision: dec, SelectedSubtitle: sideSubtitleStream(ps, req, dec), DirectPlay: direct, DirectStream: remux, Transcoding: transcoding, VideoTranscodingOff: req.Channel == "" && b.videoOff(req.Caps), HLS: hls, HLSContainer: hlsContainer, HTTP: httpOK, HTTPContainer: httpContainer, ETag: etag, VersionHandle: versionHandle, ReleaseID: relID, OriginalOverClientCap: originalChoice}, nil

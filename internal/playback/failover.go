@@ -1095,6 +1095,7 @@ func (m *Manager) probeGeneration(ctx context.Context, s *session, res *core.Res
 	if mi.Container == "" {
 		mi.Container = containerFromName(src.Name())
 	}
+	correctReversedSubtitleDispositions(mi.Streams)
 	// A cached warm probe was already augmented when it was made; running
 	// AugmentMedia again would put its cost back on the Play path. Facts
 	// rebuilt from the persisted probe had their per-viewer sidecars

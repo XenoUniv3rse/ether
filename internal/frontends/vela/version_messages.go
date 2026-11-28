@@ -73,6 +73,28 @@ var autoSelectionMessages = map[frontend.AutoSelectionReason][20]string{
 		"Automaattinen valinta käytti uudelleen tämän nimikkeen aiemman toiston lähdettä.",
 		"Automatická volba znovu použila zdroj z dřívějšího přehrávání tohoto titulu.",
 	},
+	frontend.AutoSourceSelection: {
+		"Auto selected a source based on playback preferences and availability.",
+		"Auto hat eine Quelle anhand der Wiedergabeeinstellungen und der Verfügbarkeit ausgewählt.",
+		"El modo Auto eligió una fuente según las preferencias de reproducción y la disponibilidad.",
+		"Le mode Auto a choisi une source selon les préférences de lecture et la disponibilité.",
+		"La modalità Auto ha scelto una fonte in base alle preferenze di riproduzione e alla disponibilità.",
+		"自動選択は、再生設定と利用可能なソースに基づいてソースを選びました。",
+		"자동 선택이 재생 환경설정과 사용 가능 여부에 따라 소스를 선택했습니다.",
+		"Auto koos een bron op basis van afspeelvoorkeuren en beschikbaarheid.",
+		"Auto valgte en kilde basert på avspillingsinnstillinger og tilgjengelighet.",
+		"Tryb Auto wybrał źródło na podstawie preferencji odtwarzania i dostępności.",
+		"O modo Auto escolheu uma fonte com base nas preferências de reprodução e na disponibilidade.",
+		"Авторежим выбрал источник с учётом настроек воспроизведения и доступности.",
+		"Auto valde en källa utifrån uppspelningsinställningar och tillgänglighet.",
+		"Otomatik seçim, oynatma tercihlerine ve kullanılabilirliğe göre bir kaynak seçti.",
+		"Авторежим вибрав джерело з урахуванням налаштувань відтворення та доступності.",
+		"自动模式根据播放偏好和可用性选择了来源。",
+		"自動模式依據播放偏好和可用性選擇了來源。",
+		"Auto valgte en kilde ud fra afspilningsindstillinger og tilgængelighed.",
+		"Automaattinen valinta valitsi lähteen toistoasetusten ja saatavuuden perusteella.",
+		"Automatická volba vybrala zdroj podle nastavení přehrávání a dostupnosti.",
+	},
 }
 
 func autoSelectionReason(code frontend.AutoSelectionReason, languages string) object {

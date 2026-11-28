@@ -91,6 +91,7 @@ func (i *instance) offerAdaptive(ctx context.Context, a frontend.SessionAccess, 
 		Format: frontend.StreamHLS, Position: s.position, LazyStart: true, Continuous: true, AdaptiveHLS: true, PrepareOnly: true,
 	})
 	if err != nil {
+		path["readiness"] = "unavailable"
 		setAdaptiveUnavailable(path, "hls_unavailable", a.Device.Language)
 		return
 	}
@@ -101,6 +102,13 @@ func (i *instance) offerAdaptive(ctx context.Context, a frontend.SessionAccess, 
 func pathBitrate(path object) int {
 	cap, _ := path["maxBitrate"].(int)
 	return cap
+}
+
+func (s *playSession) restartAdaptiveCap(path object) int {
+	if s.plan["serverHandoff"] == "completed" && path["id"] == adaptivePathID {
+		return 0
+	}
+	return pathBitrate(path)
 }
 
 func (i *instance) prepareFallback(w http.ResponseWriter, r *http.Request, v *frontend.Viewer, s *playSession, id string, maxBitrate int) bool {
@@ -153,16 +161,6 @@ func (i *instance) prepareFallback(w http.ResponseWriter, r *http.Request, v *fr
 	return s.portSnapshot(w, func(copy *playSession) { i.refreshOutput(ctx, id, copy) })
 }
 
-func rungsAtOrBelow(rungs []frontend.HLSRung, cap int) []frontend.HLSRung {
-	filtered := make([]frontend.HLSRung, 0, len(rungs))
-	for _, rung := range rungs {
-		if rung.Bandwidth <= cap {
-			filtered = append(filtered, rung)
-		}
-	}
-	return filtered
-}
-
 func (i *instance) prepareAdaptiveFallback(w http.ResponseWriter, r *http.Request, v *frontend.Viewer, s *playSession, id string, maxBitrate int) bool {
 	pos := s.position
 	origin := pos.Seconds()
@@ -182,7 +180,7 @@ func (i *instance) prepareAdaptiveFallback(w http.ResponseWriter, r *http.Reques
 		if !s.port(w, func() {
 			if hs, ok := i.host.Sessions.TranscodeFor(r.Context(), id); ok {
 				if adaptive, ok := hs.(frontend.AdaptiveHLSSession); ok {
-					fits = len(rungsAtOrBelow(adaptive.AdaptiveRungs(), maxBitrate)) > 0
+					fits = len(frontend.AdaptiveRungsAtOrBelow(adaptive.AdaptiveRungs(), maxBitrate)) > 0
 				}
 			}
 		}) {
@@ -270,22 +268,30 @@ func hlsDirectory(url string) string {
 
 // Restarts retire prepared bytes and codec facts from the previous clock.
 func (s *playSession) invalidatePrepared(selected object) {
-	if len(s.qualityRungs) == 0 {
-		return
-	}
 	for _, path := range s.plan["paths"].([]object) {
 		if path["id"] == selected["id"] || path["transport"] != "hls" {
 			continue
 		}
-		delete(path, "url")
-		delete(path, "initialRenditionId")
-		delete(path, "adaptive")
-		delete(path, "adaptiveUnavailable")
-		path["readiness"] = "on-demand"
-		path["qualities"] = []object{}
+		resetPreparedPath(path)
 	}
 	s.plan["fallback"] = object{"state": "idle"}
 }
+func resetPreparedPath(path object) {
+	if path["readiness"] == "unavailable" {
+		return
+	}
+	delete(path, "url")
+	delete(path, "maxBitrate")
+	delete(path, "initialRenditionId")
+	delete(path, "adaptive")
+	delete(path, "adaptiveUnavailable")
+	if path["id"] == adaptivePathID {
+		path["adaptive"] = true
+	}
+	path["readiness"] = "on-demand"
+	path["qualities"] = []object{}
+}
+
 func (i *instance) qualityAllowed(ctx context.Context, a frontend.SessionAccess, id, rung string) bool {
 	service, ok := i.host.Sessions.(frontend.QualitySessions)
 	if !ok {

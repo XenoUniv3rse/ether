@@ -1,10 +1,12 @@
 package sessions
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"io"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -213,9 +215,6 @@ func (b *Broker) StartStream(ctx context.Context, a frontend.SessionAccess, id s
 	if req.PrepareOnly && !req.AdaptiveHLS {
 		adaptive = s.adaptiveHLS
 		req.AdaptiveMaxBitrate = s.adaptiveMaxBitrate
-	}
-	if adaptive && req.AdaptiveMaxBitrate > 0 && req.AdaptiveMaxBitrate < 1000 {
-		return "", &frontend.NoCompatiblePathError{RejectedPaths: []frontend.RejectedPlaybackPath{{Path: "hls", Reasons: []string{"bitrate_limit"}}}}
 	}
 	qualityChanged := req.MaxHeight != nil && *req.MaxHeight >= 0 && (req.Format == frontend.StreamHLS || req.Format == frontend.StreamDASH)
 	tracksChanged := req.AudioStream != nil || req.SubtitleStream != nil || qualityChanged
@@ -439,7 +438,11 @@ func (b *Broker) StartStream(ctx context.Context, a frontend.SessionAccess, id s
 		if s.caps.Remote && dec.VideoCopy {
 			demand = transcode.HLSCopyPeakKbps(ps.Info, req.SegmentDuration)
 		}
-		request.AdaptiveMaxKbps = stricterLimit(b.qualityBitrateCap(ctx, s, viewer, demand), req.AdaptiveMaxBitrate/1000)
+		hardCap := b.qualityBitrateCap(ctx, s, viewer, demand)
+		request.AdaptiveMaxKbps = hardCap
+		if req.AdaptiveMaxBitrate > 0 {
+			request.AdaptiveMaxKbps = stricterLimit(hardCap, max(1, req.AdaptiveMaxBitrate/1000))
+		}
 		request.LazyStart, request.Continuous, request.QualityRungs = true, true, true
 		switch {
 		case s.allowTranscoding != nil && !*s.allowTranscoding || b.videoOff(s.caps):
@@ -450,8 +453,23 @@ func (b *Broker) StartStream(ctx context.Context, a frontend.SessionAccess, id s
 				request.AdaptiveUnavailable = "shared_audio_unavailable"
 				break
 			}
+			request.Decision = base
 			variants, limits := b.qualityVariants(ps.Info, base, s, s.caps, request.AdaptiveMaxKbps, true)
+			if len(variants) == 0 && s.public.Protocol == "vela" && req.AdaptiveMaxBitrate > 0 && request.AdaptiveMaxKbps != hardCap {
+				// A client bandwidth estimate can fall below the encoder floor.
+				// Find the lowest rendition that still fits every policy cap.
+				allowed, _ := b.qualityVariants(ps.Info, base, s, s.caps, hardCap, true)
+				if len(allowed) > 0 {
+					lowest := slices.MinFunc(allowed, func(a, b core.QualityVariant) int {
+						return cmp.Compare(a.Rung.Bandwidth, b.Rung.Bandwidth)
+					})
+					request.Decision = lowest.Decision
+					variants = []core.QualityVariant{lowest}
+					request.AdaptiveMaxKbps = lowest.Rung.Bandwidth / 1000
+				}
+			}
 			if len(variants) == 0 {
+				request.Decision = dec
 				request.AdaptiveUnavailable = "no_compatible_rungs"
 				for _, limit := range limits {
 					if limit.Reason == "encoder_hevc_unavailable" || limit.Reason == "dynamic_range_unavailable" {
@@ -461,11 +479,15 @@ func (b *Broker) StartStream(ctx context.Context, a frontend.SessionAccess, id s
 				}
 				break
 			}
-			request.Decision = base
 			for _, variant := range variants {
 				request.QualityVariants = append(request.QualityVariants, variant)
 				request.QualityRungIDs = append(request.QualityRungIDs, variant.Rung.ID)
 			}
+		}
+	}
+	if request.AdaptiveHLS && request.AdaptiveMaxKbps > 0 && dec.VideoCopy && len(request.QualityVariants) == 0 {
+		if peak := transcode.HLSCopyPeakKbps(ps.Info, req.SegmentDuration); peak == 0 || peak > request.AdaptiveMaxKbps {
+			return "", &frontend.NoCompatiblePathError{RejectedPaths: []frontend.RejectedPlaybackPath{{Path: "hls", Reasons: []string{"bitrate_limit"}}}}
 		}
 	}
 	if request.Continuous {
@@ -1248,23 +1270,25 @@ func (b *Broker) serveMaster(w http.ResponseWriter, r *http.Request, s *brokerSe
 			rungs = all
 		}
 	}
-	if rawCap := r.URL.Query().Get("maxBitrate"); s.public.Protocol == "vela" && rawCap != "" {
-		cap, err := strconv.Atoi(rawCap)
-		if err != nil || cap <= 0 || !s.adaptiveHLS || rungs == nil {
-			http.NotFound(w, r)
-			return
-		}
-		filtered := make([]core.HLSRung, 0, len(rungs))
-		for _, rung := range rungs {
-			if rung.Bandwidth <= cap {
-				filtered = append(filtered, rung)
+	if s.public.Protocol == "vela" {
+		if rawCap := r.URL.Query().Get("maxBitrate"); rawCap != "" {
+			cap, err := strconv.Atoi(rawCap)
+			if err != nil || cap <= 0 || !s.adaptiveHLS || len(rungs) == 0 {
+				http.NotFound(w, r)
+				return
+			}
+			rungs = frontend.AdaptiveRungsAtOrBelow(rungs, cap)
+			if len(rungs) == 0 {
+				http.Error(w, "no playable rendition", http.StatusServiceUnavailable)
+				return
 			}
 		}
-		if len(filtered) == 0 {
-			http.Error(w, "no playable rendition", http.StatusServiceUnavailable)
-			return
+		if r.URL.Query().Get("start") == "low" && s.adaptiveHLS && len(rungs) > 1 {
+			rungs = slices.Clone(rungs)
+			slices.SortStableFunc(rungs, func(a, b core.HLSRung) int {
+				return cmp.Compare(a.Bandwidth, b.Bandwidth)
+			})
 		}
-		rungs = filtered
 	}
 	if len(rungs) == 1 && rungs[0].ID == "base" && rungs[0].DynamicRange == "dv" {
 		// Single-variant Dolby Vision needs the source profile and optional

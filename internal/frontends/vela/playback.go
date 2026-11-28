@@ -495,10 +495,11 @@ func (i *instance) playback(w http.ResponseWriter, r *http.Request) {
 	i.offerAdaptive(r.Context(), i.access(r, v), ps, format == frontend.StreamDirect, plan.HLS)
 	i.addQualityPaths(r.Context(), i.access(r, v), s.ID, ps)
 	i.refreshOutput(r.Context(), s.ID, ps)
+	ps.updateServerHandoff()
 	if b.ChannelID != "" {
 		alignUnobservedLivePosition(ps)
 	}
-	if b.TitleID != "" && i.versionsAvailable() {
+	if b.TitleID != "" {
 		ps.versionsCold = i.attachPlaybackVersions(r.Context(), v, dev, item, declared.Client, planActiveVersion(plan), p)
 	}
 	i.refreshInitialTrickplay(r.Context(), i.access(r, v), s.ID, ps)
@@ -578,6 +579,7 @@ func (s *playSession) snapshot() object {
 	return out
 }
 func (s *playSession) revisePlan() {
+	s.updateServerHandoff()
 	s.revision++
 	s.plan["revision"] = s.revision
 	s.plan["sourceGeneration"] = s.source
@@ -811,7 +813,7 @@ func (i *instance) command(w http.ResponseWriter, r *http.Request) {
 		}
 		path := paths[selected]
 		if b.MaxBitrate == nil {
-			adaptiveCap = pathBitrate(path)
+			adaptiveCap = s.restartAdaptiveCap(path)
 		}
 		if rung := s.rungFor(path); rung != "" && b.MaxBitrate == nil {
 			allowed := false
@@ -823,7 +825,7 @@ func (i *instance) command(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-		if ok, err := i.switchPlaybackPath(w, r, v, s, path, pos, adaptiveCap); !ok {
+		if ok, err := i.switchPlaybackPath(w, r, v, s, path, pos, adaptiveCap, false); !ok {
 			if err != nil {
 				i.failFor(w, v, err, r)
 			}
@@ -862,8 +864,9 @@ func (i *instance) command(w http.ResponseWriter, r *http.Request) {
 		if path["transport"] == "hls" {
 			var url string
 			var e error
+			cap := s.restartAdaptiveCap(path)
 			if !s.port(w, func() {
-				url, e = i.host.Sessions.StartStream(r.Context(), i.access(r, v), id, frontend.StreamRequest{Format: frontend.StreamHLS, Position: pos, LazyStart: true, Continuous: true, AdaptiveHLS: s.client.Features.AdaptiveHLS && s.rungFor(path) == "", AdaptiveMaxBitrate: pathBitrate(path)})
+				url, e = i.host.Sessions.StartStream(r.Context(), i.access(r, v), id, frontend.StreamRequest{Format: frontend.StreamHLS, Position: pos, LazyStart: true, Continuous: true, AdaptiveHLS: s.client.Features.AdaptiveHLS && s.rungFor(path) == "", AdaptiveMaxBitrate: cap})
 			}) {
 				return
 			}
@@ -932,8 +935,9 @@ func (i *instance) command(w http.ResponseWriter, r *http.Request) {
 		currentPath := selectedPlaybackPath(s.plan, s.plan["paths"].([]object))
 		var url string
 		var err error
+		cap := s.restartAdaptiveCap(currentPath)
 		if !s.port(w, func() {
-			url, err = i.host.Sessions.StartStream(r.Context(), i.access(r, v), id, frontend.StreamRequest{Format: frontend.StreamHLS, Position: position, LazyStart: true, Continuous: true, AdaptiveHLS: s.client.Features.AdaptiveHLS && s.rungFor(currentPath) == "", AdaptiveMaxBitrate: pathBitrate(currentPath), AudioStream: audio, SubtitleStream: sub, BurnImageSubtitles: true})
+			url, err = i.host.Sessions.StartStream(r.Context(), i.access(r, v), id, frontend.StreamRequest{Format: frontend.StreamHLS, Position: position, LazyStart: true, Continuous: true, AdaptiveHLS: s.client.Features.AdaptiveHLS && s.rungFor(currentPath) == "", AdaptiveMaxBitrate: cap, AudioStream: audio, SubtitleStream: sub, BurnImageSubtitles: true})
 		}) {
 			return
 		}
@@ -1141,6 +1145,7 @@ func (i *instance) command(w http.ResponseWriter, r *http.Request) {
 		delete(s.plan, "replacementSourceId")
 		delete(s.plan, "sourceOrigin")
 		s.plan["paths"] = paths
+		delete(s.plan, "serverHandoff")
 		s.plan["selectedPathId"] = "primary"
 		s.plan["audioTracks"] = audioTracks
 		s.plan["subtitleTracks"] = subtitleTracks
@@ -1260,7 +1265,7 @@ func (i *instance) command(w http.ResponseWriter, r *http.Request) {
 }
 
 // switchPlaybackPath runs under the command lock and publishes no event itself.
-func (i *instance) switchPlaybackPath(w http.ResponseWriter, r *http.Request, v *frontend.Viewer, s *playSession, path object, pos time.Duration, adaptiveCap int) (bool, error) {
+func (i *instance) switchPlaybackPath(w http.ResponseWriter, r *http.Request, v *frontend.Viewer, s *playSession, path object, pos time.Duration, adaptiveCap int, handoff bool) (bool, error) {
 	id := r.PathValue("id")
 	pathID := path["id"].(string)
 	paths := s.plan["paths"].([]object)
@@ -1290,20 +1295,20 @@ func (i *instance) switchPlaybackPath(w http.ResponseWriter, r *http.Request, v 
 	}
 	for _, previous := range paths {
 		if previous["id"] != pathID && previous["original"] != true {
-			delete(previous, "url")
-			previous["qualities"] = []object{}
-			delete(previous, "initialRenditionId")
-			delete(previous, "adaptive")
-			delete(previous, "adaptiveUnavailable")
-			previous["readiness"] = "on-demand"
+			resetPreparedPath(previous)
 		}
 	}
 	if rung := s.qualityRungs[pathID]; rung != "" {
 		url = strings.TrimSuffix(url, "master.m3u8") + rung + "/index.m3u8"
 	}
 	path["url"], path["readiness"] = url, "ready"
+	delete(path, "maxBitrate")
 	if adaptiveCap > 0 {
 		path["maxBitrate"] = adaptiveCap
+	}
+	delete(s.plan, "serverHandoff")
+	if handoff {
+		s.plan["serverHandoff"] = "completed"
 	}
 	path["timelineOriginSeconds"] = float64(0)
 	if format == frontend.StreamHLS {
@@ -1499,13 +1504,14 @@ func (i *instance) observe(w http.ResponseWriter, r *http.Request) {
 		if state == "buffering" {
 			state = "recovering"
 		}
-		previous := s.plan["state"]
+		previous, previousHandoff := s.plan["state"], s.plan["serverHandoff"]
 		s.plan["state"] = state
 		adapted, current := i.adaptDirectPlayback(w, r, v, s)
 		if !current {
 			return
 		}
-		clockOnly := !adapted && !tracksChanged && (previous == state ||
+		s.updateServerHandoff()
+		clockOnly := !adapted && !tracksChanged && previousHandoff == s.plan["serverHandoff"] && (previous == state ||
 			((previous == "playing" || previous == "recovering") && (state == "playing" || state == "recovering")))
 		if clockOnly && time.Since(s.lastPlanEvent) < observationPlanInterval {
 			s.revisePlan()

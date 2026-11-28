@@ -22,6 +22,7 @@ type directDeliveryWindow struct {
 	samples                   int
 	clientBps                 float64
 	clientAt                  time.Time
+	failed                    bool
 }
 
 // Called only for accepted observations, with the plan locked.
@@ -66,9 +67,9 @@ func (d *directDeliveryWindow) add(start, end time.Time, bytes int64) {
 	d.last = end
 }
 
-func (d *directDeliveryWindow) cap(now time.Time, mediaBps float64) int {
+func (d *directDeliveryWindow) starved(now time.Time, mediaBps float64) bool {
 	if d.buffering.IsZero() || (now.Sub(d.buffering) < directBufferingWindow && now.Sub(d.previousBuffer) > 2*directBufferingWindow) {
-		return 0
+		return false
 	}
 	var rate float64
 	switch {
@@ -77,10 +78,36 @@ func (d *directDeliveryWindow) cap(now time.Time, mediaBps float64) int {
 	case d.samples >= 3 && d.last.Sub(d.first) >= directBufferingWindow && now.Sub(d.last) <= directDeliveryGap:
 		rate = float64(d.bytes) * 8 / d.last.Sub(d.first).Seconds()
 	}
-	if rate > 0 && rate < 0.9*mediaBps {
-		return int(rate)
+	return rate > 0 && rate < 0.9*mediaBps
+}
+
+// handoffPath is available while an opted-in original can move to an encoded
+// rendition. An on-demand path retains its offer after its previous output retires.
+func (s *playSession) handoffPath() object {
+	paths, _ := s.plan["paths"].([]object)
+	selected := selectedPlaybackPath(s.plan, paths)
+	if !s.client.Features.AdaptiveHLS || selected["kind"] != "direct" || selected["transport"] != "file" {
+		return nil
 	}
-	return 0
+	for _, path := range paths {
+		if path["id"] == adaptivePathID && path["readiness"] != "unavailable" &&
+			(path["adaptive"] == true || (path["readiness"] == "ready" && path["kind"] == "transcode")) {
+			return path
+		}
+	}
+	return nil
+}
+
+func (s *playSession) updateServerHandoff() {
+	switch {
+	case s.plan["serverHandoff"] == "completed":
+	case s.handoffPath() == nil:
+		delete(s.plan, "serverHandoff")
+	case s.directDelivery.failed && s.directDelivery.source == s.source && s.directDelivery.seek == s.seek:
+		s.plan["serverHandoff"] = "failed"
+	default:
+		s.plan["serverHandoff"] = "pending"
+	}
 }
 
 // Adapt via the same generation-advancing handoff as an explicit switch.
@@ -90,38 +117,27 @@ func (i *instance) adaptDirectPlayback(w http.ResponseWriter, r *http.Request, v
 	if d.buffering.IsZero() || now.Sub(d.attempted) < 2*directBufferingWindow || s.commandActive {
 		return false, true
 	}
-	paths, _ := s.plan["paths"].([]object)
-	selected := selectedPlaybackPath(s.plan, paths)
-	if selected["kind"] != "direct" || selected["transport"] != "file" {
+	path := s.handoffPath()
+	if path == nil {
 		return false, true
 	}
 	mediaBps := float64(s.media.BitrateKbps) * 1000
 	if mediaBps <= 0 && s.media.Size > 0 && s.media.Duration > 0 {
 		mediaBps = float64(s.media.Size) * 8 / s.media.Duration.Seconds()
 	}
-	cap := d.cap(now, mediaBps)
-	if cap == 0 {
+	if !d.starved(now, mediaBps) || !s.commandMu.TryLock() {
 		return false, true
 	}
-	for _, path := range paths {
-		if path["id"] != adaptivePathID || path["readiness"] == "unavailable" {
-			continue
-		}
-		if !s.commandMu.TryLock() {
-			return false, true
-		}
-		defer s.commandMu.Unlock()
-		s.commandActive = true
-		defer func() { s.commandActive = false }()
-		d.attempted = now
-		ok, err := i.switchPlaybackPath(w, r, v, s, path, s.position, cap)
-		if err != nil {
-			// The direct path can keep serving if no rendition fits the cap.
-			return false, true
-		}
-		return ok, ok
+	defer s.commandMu.Unlock()
+	s.commandActive = true
+	defer func() { s.commandActive = false }()
+	d.attempted = now
+	ok, err := i.switchPlaybackPath(w, r, v, s, path, s.position, 0, true)
+	if err != nil {
+		d.failed = true
+		return false, true
 	}
-	return false, true
+	return ok, ok
 }
 
 // Meter only successful file bodies. Time between batches includes both

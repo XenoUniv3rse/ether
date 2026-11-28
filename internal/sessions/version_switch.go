@@ -410,7 +410,7 @@ func (b *Broker) SwitchVersion(ctx context.Context, a frontend.SessionAccess, se
 	httpOK, httpContainer := b.httpPlanOutput(ps, planReq, dec)
 	var autoReason core.AutoSelectionReason
 	if a.Protocol == "vela" && isAuto && !pinned && ps.Resolution != nil {
-		autoReason = ps.Resolution.AutoSelectionReason
+		autoReason = admittedAutoReason(ps.Resolution)
 	}
 	return frontend.PlayPlan{
 		AutoSelectionReason:   autoReason,
@@ -465,4 +465,16 @@ func carryVersionTracks(s *brokerSession, before, next core.MediaInfo, sameSourc
 		intent.Options.SubtitleStream, intent.SubtitleSet = track, true
 	}
 	return subtitleSet
+}
+
+// A source admission can change between runs even when no delivery estimate
+// changed the ranking. Preserve a specific explanation when the source has one.
+func admittedAutoReason(res *core.Resolution) core.AutoSelectionReason {
+	if res.AutoSelectionReason != "" {
+		return res.AutoSelectionReason
+	}
+	if res.Release.ID != "" {
+		return core.AutoSourceSelection
+	}
+	return ""
 }

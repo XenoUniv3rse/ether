@@ -1199,7 +1199,8 @@ const (
 type StreamRequest struct {
 	// AdaptiveHLS opts into rendition selection by the HLS player.
 	AdaptiveHLS bool
-	// AdaptiveMaxBitrate is the requested peak ceiling in bits per second.
+	// AdaptiveMaxBitrate is the client-requested peak in bits per second.
+	// Vela clamps estimates below the lowest policy-eligible rendition.
 	AdaptiveMaxBitrate int
 
 	// ExpectedOriginalRevision is set by a stable media URL resolving to a
@@ -1267,6 +1268,7 @@ const (
 	AutoConnectionEstimate = core.AutoConnectionEstimate
 	AutoSourceDelivery     = core.AutoSourceDelivery
 	AutoResumeSource       = core.AutoResumeSource
+	AutoSourceSelection    = core.AutoSourceSelection
 )
 
 type PlayPlan struct {

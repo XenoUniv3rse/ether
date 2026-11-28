@@ -336,7 +336,7 @@ func (s *Session) rungsLocked() []core.HLSRung {
 			frameRate = r.decision.H264FrameRate
 		}
 		out = append(out, core.HLSRung{
-			VideoBitrate: video, PeakVideoBitrate: videoPeak, Codec: codec, DynamicRange: dr,
+			VideoCopy: r.decision.VideoCopy, VideoBitrate: video, PeakVideoBitrate: videoPeak, Codec: codec, DynamicRange: dr,
 			ID: r.id, Bandwidth: peak * 1000, AverageBandwidth: r.avgKbps * 1000,
 			Width: r.width, Height: r.height, Codecs: r.codecs, OutputCodecs: s.outputCodecs[t], OutputAudioChannels: s.outputAudioChannels[t], FrameRate: frameRate,
 		})

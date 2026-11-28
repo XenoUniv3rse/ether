@@ -207,6 +207,11 @@ var versionPlanFields = []string{"selectedVersionId", "versions", "rememberedCho
 // attachPlaybackVersions sets the plan's version menu and reports whether it
 // is still cold (placeholder slots), so the session can refresh it.
 func (i *instance) attachPlaybackVersions(ctx context.Context, v *frontend.Viewer, dev frontend.Device, item frontend.RatingKey, caps frontend.ClientCaps, active activeVersion, plan object) bool {
+	if reason := autoSelectionReason(active.autoReason, dev.Language); reason != nil {
+		plan["autoSelectionReason"] = reason
+	} else {
+		delete(plan, "autoSelectionReason")
+	}
 	if !i.versionsAvailable() || item == 0 || item.Kind() == frontend.KindShow || item.Kind() == frontend.KindSeason {
 		return false
 	}
@@ -373,8 +378,6 @@ func (i *instance) titleVersionsProjection(ctx context.Context, v *frontend.View
 	if autoIdx >= 0 {
 		if activeReleaseID == "" {
 			autoReason = listed[autoIdx].AutoSelectionReason
-		} else if selectedID != autoID {
-			autoReason = ""
 		}
 		auto := items[autoIdx]
 		pickLabel, _ := auto["label"].(string)
@@ -960,6 +963,9 @@ func (i *instance) pollPlayingRelease(ctx context.Context, viewer *frontend.View
 		return false
 	}
 	next := activeVersion{handle: before.handle, release: rel, media: media}
+	if before.autoReason != "" {
+		next.autoReason = frontend.AutoSourceSelection
+	}
 	versionPlan := object{}
 	cold := i.attachPlaybackVersions(ctx, viewer, device, item, caps, next, versionPlan)
 	s.mu.Lock()
