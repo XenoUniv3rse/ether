@@ -1931,8 +1931,7 @@ smaller kept files.
 The default quota is 2 GiB per library. A kind can declare `cache.maxBytes`
 and the owner can adjust the quota in the library settings. Across all
 libraries, Ether defaults to the smaller of 10 GiB and 5% of the cache
-disk. Owners can change **Shared library cache (GiB)** in the global plugin
-limits. Clearing the field restores the automatic size. Both modes preserve
+disk. Owners can change **Shared library cache (GiB)** under **Cache → Libraries**, above the individual library quotas. Clearing the field restores the automatic size. Both modes preserve
 the free-space reserve.
 
 For large disc images, allow room for both the downloaded archive and its
@@ -2439,7 +2438,6 @@ func (p Plugins) Catalogue() (indexURL, publicKey string) {
 
 | Field | Go type | Wire presence | Description |
 |---|---|---|---|
-| `sharedCacheBytes` | `int64` | may be omitted (see validation for conditions) | SharedCacheBytes overrides the automatic global plugin-library cache cap. |
 | `uploadBytes` | `int64` | may be omitted (see validation for conditions) | UploadBytes is the per-plugin staged request ceiling. Zero uses 64 MiB. |
 | `durableBytes` | `int64` | may be omitted (see validation for conditions) | DurableBytes and DurableFiles override the per-plugin saved blob quota. |
 | `durableFiles` | `int` | may be omitted (see validation for conditions) |  |
@@ -2462,8 +2460,6 @@ func (p Plugins) Catalogue() (indexURL, publicKey string) {
 // PluginRuntimeLimits are owner-controlled ceilings, not allocations. Zero
 // inherits the default (globally) or the global ceiling (per plugin).
 type PluginRuntimeLimits struct {
-	// SharedCacheBytes overrides the automatic global plugin-library cache cap.
-	SharedCacheBytes int64 `json:"sharedCacheBytes,omitempty"`
 	// UploadBytes is the per-plugin staged request ceiling. Zero uses 64 MiB.
 	UploadBytes int64 `json:"uploadBytes,omitempty"`
 	// DurableBytes and DurableFiles override the per-plugin saved blob quota.
@@ -32113,10 +32109,6 @@ func (m *Manager) handleRuntimeLimits(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		plugin = req.Plugin
-		if req.Limits.SharedCacheBytes < 0 || (plugin != "" && req.Limits.SharedCacheBytes != 0) {
-			writeErr(w, http.StatusBadRequest, "validation", "Shared cache size must be a nonnegative global limit.", nil)
-			return
-		}
 		if req.Limits.DurableBytes < 0 || req.Limits.DurableFiles < 0 ||
 			(plugin == "" && (req.Limits.DurableBytes != 0 || req.Limits.DurableFiles != 0)) ||
 			req.Limits.DurableFreePercent < 0 || req.Limits.DurableFreePercent > 100 ||
@@ -32163,7 +32155,7 @@ func (m *Manager) handleRuntimeLimits(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		// Durable quotas are consulted live and do not require stopping plugin jobs.
-		if runtimeLimitsRequiringRestart(before) != runtimeLimitsRequiringRestart(after) {
+		if runtimeLimitsWithoutDurable(before) != runtimeLimitsWithoutDurable(after) {
 			recs, err := m.List(r.Context())
 			if err != nil {
 				m.fail(w, err)
@@ -32204,11 +32196,10 @@ func (m *Manager) handleRuntimeLimits(w http.ResponseWriter, r *http.Request) {
 }
 ``````
 
-## Source: internal/plugins/runtime_limits.go#runtimeLimitsRequiringRestart
+## Source: internal/plugins/runtime_limits.go#runtimeLimitsWithoutDurable
 
 ``````
-func runtimeLimitsRequiringRestart(l config.PluginRuntimeLimits) config.PluginRuntimeLimits {
-	l.SharedCacheBytes = 0
+func runtimeLimitsWithoutDurable(l config.PluginRuntimeLimits) config.PluginRuntimeLimits {
 	l.DurableBytes, l.DurableFiles, l.DurableFreePercent = 0, 0, 0
 	return l
 }
