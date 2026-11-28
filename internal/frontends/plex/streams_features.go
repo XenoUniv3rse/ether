@@ -77,6 +77,27 @@ func (s *Server) preferredSelection(ctx context.Context, u *frontend.Viewer, key
 	return sel
 }
 
+// mediaTrackSelection keeps startup metadata and the play queue on the
+// selection already admitted for the opened add-on file.
+func (s *Server) mediaTrackSelection(ctx context.Context, pr *Request, t *frontend.Title, ps *frontend.PlaySession, info frontend.MediaInfo, stored selection) selection {
+	sel := resolveSelection(stored, info)
+	if ps != nil && ps.Resolution != nil && ps.Resolution.Release.IsAddonHTTPStream() {
+		if entry, ok := s.sessionEntryForStart(pr, "", t.Key); ok && entry.playID == ps.ID {
+			if pos := entryAudioPosition(entry); !sel.audioSet && pos >= 0 {
+				sel.audio, sel.audioSet, sel.audioStream = pos, true, &entry.info.Streams[pos]
+			}
+			if !sel.subtitleSet {
+				sel.subtitle, sel.subtitleSet, sel.subtitleStream = -1, true, nil
+				if pos := entry.subtitle; pos >= 0 && pos < len(entry.info.Streams) {
+					sel.subtitle, sel.subtitleStream = pos, &entry.info.Streams[pos]
+				}
+			}
+			sel = resolveSelection(sel, info)
+		}
+	}
+	return s.preferredSelection(ctx, pr.User, t.Key, info, t.Language, sel)
+}
+
 // rememberedSubtitleOff reports a viewer who turned subtitles off for key's
 // title. An unavailable store reads as no remembered choice.
 func (s *Server) rememberedSubtitleOff(ctx context.Context, pr *Request, key frontend.RatingKey) bool {

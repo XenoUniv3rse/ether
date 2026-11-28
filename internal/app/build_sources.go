@@ -112,8 +112,9 @@ func (a *App) buildSources(ctx context.Context, cfg config.Config) error {
 	animeMap := animemap.New(animemap.Options{CacheDir: animeCacheDir, Logger: log.With("component", "animemap")})
 	specials := stremio.NewSpecialMapper(egress.Client(egress.CapStremio, 3*time.Second), "https://v3-cinemeta.strem.io")
 	a.addons = stremio.NewServiceWithOptions(stremio.Options{
-		Anime:    animeMap,
-		Specials: specials,
+		Anime:          animeMap,
+		Specials:       specials,
+		SubtitleSealer: a.cfg,
 		ClientIdentity: func() config.ClientIdentity {
 			if a.cfg == nil {
 				return config.ClientIdentity{}

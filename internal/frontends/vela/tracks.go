@@ -20,7 +20,7 @@ func (i *instance) playbackTracks(ctx context.Context, access frontend.SessionAc
 		if track.Type != "subtitle" || !frontend.IsTextSubtitle(track.Codec) {
 			continue
 		}
-		if !original || !supportsEmbeddedSubtitle(track.Codec, formats) {
+		if track.External || !original || !supportsEmbeddedSubtitle(track.Codec, formats) {
 			subReqs = append(subReqs, frontend.SubtitleURLRequest{Index: track.Index, Format: "vtt"})
 		}
 	}
@@ -63,7 +63,7 @@ func (i *instance) playbackTracks(ctx context.Context, access frontend.SessionAc
 			continue
 		}
 		switch {
-		case original && supportsEmbeddedSubtitle(track.Codec, formats):
+		case original && !track.External && supportsEmbeddedSubtitle(track.Codec, formats):
 			t["delivery"] = object{"kind": "embedded"}
 		case frontend.IsImageSubtitle(track.Codec):
 			if !canBurn {

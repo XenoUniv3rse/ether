@@ -268,6 +268,8 @@ func (a *App) buildPersonalization(ctx context.Context, cfg config.Config) error
 		CacheDir:  filepath.Join(dataDir, "subtitles"),
 		Logger:    log.With("component", "subtitles"),
 		UserAgent: "Ether v" + a.opts.Version,
+
+		AddonSubtitleSealer: a.cfg,
 	})
 
 	return nil

@@ -198,7 +198,11 @@ func (s *Server) slotMedia(ctx context.Context, pr *Request, t *frontend.Title, 
 				m.Part[0].Key = s.playIDs.partKey(ik, m.ID, m.Part[0].Key, now)
 			}
 			facts := s.withCachedSidecars(ctx, pr.User, t, v.Info)
-			sel := s.preferredSelection(ctx, pr.User, t.Key, facts, t.Language, resolveSelection(stored, facts))
+			var active *frontend.PlaySession
+			if id == infoTarget {
+				active = ps
+			}
+			sel := s.mediaTrackSelection(ctx, pr, t, active, facts, stored)
 			m.Part[0].Stream = s.issuedStreams(t.Key, streamIK, m.ID, facts, sel, pr.User, pr)
 		}
 		if id == selected {

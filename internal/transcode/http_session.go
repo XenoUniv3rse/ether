@@ -109,7 +109,7 @@ func (m *Manager) startHTTP(ctx context.Context, req core.HLSRequest, life *enco
 	if !life.attach(stub) {
 		return nil, errors.New("transcode: session closed")
 	}
-	req.Info = m.stageExternalSubtitles(dir, req.Info, req.ReleaseID)
+	req.Info = m.stageExternalSubtitle(dir, req.Info, req.ReleaseID, req.Decision)
 	h := &httpSession{
 		m:    m,
 		id:   id,
@@ -158,7 +158,10 @@ func (s *httpSession) ServeSegment(w http.ResponseWriter, r *http.Request, n int
 }
 
 func (s *httpSession) SwapInput(ctx context.Context, inputURL string, info core.MediaInfo, at time.Duration) error {
-	info = s.m.stageExternalSubtitles(s.dir, info, "")
+	s.mu.Lock()
+	decision := s.req.Decision
+	s.mu.Unlock()
+	info = s.m.stageExternalSubtitle(s.dir, info, "", decision)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {

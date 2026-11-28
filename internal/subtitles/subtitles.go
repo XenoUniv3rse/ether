@@ -81,6 +81,8 @@ type Options struct {
 	// FFmpeg is the owner-configured ffmpeg used for speech-energy
 	// measurement. Empty skips that path.
 	FFmpeg string
+
+	AddonSubtitleSealer config.FieldSealer
 }
 
 // Service is the subtitle client (OpenSubtitles and add-on providers) and
@@ -137,9 +139,11 @@ type Service struct {
 	correctFlights flightGroup
 	speechSem      chan struct{}
 	ffmpeg         string
+
+	addonSubtitleSealer config.FieldSealer
 }
 
-// New builds a Service. A disabled service returns no sidecars.
+// New builds the subtitle service and cache.
 func New(opts Options) *Service {
 	if opts.BaseURL == "" {
 		opts.BaseURL = defaultBaseURL
@@ -205,6 +209,8 @@ func New(opts Options) *Service {
 		alignLanguages:  alignLangs,
 		speechSem:       make(chan struct{}, 2),
 		ffmpeg:          opts.FFmpeg,
+
+		addonSubtitleSealer: opts.AddonSubtitleSealer,
 	}
 }
 
@@ -313,6 +319,7 @@ type Candidate struct {
 	PluginID         string
 	PluginSubtitleID string
 	PluginFormat     string
+	addonOrigin      string
 	providerOrder    int
 }
 
@@ -744,6 +751,13 @@ func acquireDownloadHost(ctx context.Context, host string) (func(), error) {
 }
 
 func (s *Service) download(ctx context.Context, c Candidate) ([]byte, error) {
+	if c.addonOrigin != "" {
+		raw, err := fetchAddonSubtitle(ctx, c.addonOrigin, c.DownloadURL)
+		if err != nil {
+			return nil, err
+		}
+		return unzipSubtitleCandidate(raw, c)
+	}
 	if c.PluginID != "" {
 		if parsed, err := url.Parse(c.DownloadURL); err == nil && parsed.Host != "" {
 			release, err := acquireDownloadHost(ctx, strings.ToLower(parsed.Host))
@@ -1392,6 +1406,13 @@ func (s *Service) OpenFormatFrom(id, format, source string) (io.ReadCloser, stri
 	}
 	if s.dir == "" {
 		return nil, "", core.ErrNotFound
+	}
+	if strings.HasPrefix(id, addonSubtitlePrefix) {
+		var err error
+		id, err = s.cacheAddonSubtitle(id)
+		if err != nil {
+			return nil, "", err
+		}
 	}
 	f, err := os.Open(filepath.Join(s.dir, id+"."+format))
 	if err != nil {

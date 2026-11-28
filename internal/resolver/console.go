@@ -287,6 +287,7 @@ type SearchOptions struct {
 func browserRelease(rel core.Release) core.Release {
 	rel.NZBURL, rel.MagnetURL = "", ""
 	rel.StreamURL, rel.StreamHeaders = "", nil
+	rel.AddonSubtitles = nil
 	if rel.Protocol == core.ProtocolUnstated {
 		rel.Protocol = ""
 	}
