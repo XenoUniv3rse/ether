@@ -2230,7 +2230,7 @@ func (s *Service) rankPass(ctx context.Context, env rankEnv, req core.ResolveReq
 	rc := s.rankContext(profile, t, rcfg, now)
 	original := titleOriginalLanguage(t)
 	preferOriginal := original != "" && releasepolicy.PrefersOriginalAudio(profile, req.User)
-	preferSubs := req.User != nil && len(req.User.SubtitleLanguages) > 0
+	preferSubs := prefersViewerSubtitles(profile, req.User)
 	var cands []candidate
 	clientRejected := false
 	// For a known catalogue namesake, a corroborated result makes name-only
@@ -2410,7 +2410,11 @@ func (s *Service) rankPass(ctx context.Context, env rankEnv, req core.ResolveReq
 		if preferOriginal {
 			trackPreference = originalAudioPreference(langRel, t, original)
 		}
-		if langOK && preferSubs && hasSubs {
+		preferredSubtitles := langOK && preferSubs && hasSubs
+		// Allow subtitle preference to beat an audio-only conversion. When
+		// the source video itself needs encoding, leave the tradeoff to the
+		// profile's format scores. Explicit original-audio rules still apply.
+		if preferredSubtitles && !releaseNeedsVideoTranscode(rel, t, req.Client, 0) {
 			trackPreference += wantedSubtitlePreference
 		}
 		lowBitrate := bitrateScore(sizedForEpisode(rel), t) < 0
@@ -2558,7 +2562,7 @@ func (s *Service) rankPass(ctx context.Context, env rankEnv, req core.ResolveReq
 		if addonOrdered {
 			cf = 0
 		}
-		cands = append(cands, candidate{localFirst: localFirst(rc, rel, policyResult.Fallback, langOK), identityWeak: !pinned && identity.ambiguous(rel, t, sreq), identityConflict: namesake && identityEv == "" && episodeRegionConflict(rel, t), audioUnverified: audioUnverified, unverifiedLangs: unverifiedLangs, fallback: belowQuality, belowScore: belowScore, counted: sc.counted, policy: policyResult, rel: rel, trace: tr, verified: verified, langOK: langOK, trackPreference: trackPreference, langRank: langRank, starved: starved, bandwidth: bandwidth, preDeliveryBandwidth: baseBandwidth, deliveryDemotion: deliveryDemotion, delivery: delivery, yearGuessed: yearGuessed, cf: cf, keys: keys})
+		cands = append(cands, candidate{localFirst: localFirst(rc, rel, policyResult.Fallback, langOK), identityWeak: !pinned && identity.ambiguous(rel, t, sreq), identityConflict: namesake && identityEv == "" && episodeRegionConflict(rel, t), audioUnverified: audioUnverified, unverifiedLangs: unverifiedLangs, fallback: belowQuality, belowScore: belowScore, counted: sc.counted, policy: policyResult, rel: rel, trace: tr, verified: verified, langOK: langOK, preferredSubtitles: preferredSubtitles, trackPreference: trackPreference, langRank: langRank, starved: starved, bandwidth: bandwidth, preDeliveryBandwidth: baseBandwidth, deliveryDemotion: deliveryDemotion, delivery: delivery, yearGuessed: yearGuessed, cf: cf, keys: keys})
 	}
 	if env.seaDex != nil && len(cands) > 0 {
 		s.addSeaDexScores(env.seaDex, cands, trace)

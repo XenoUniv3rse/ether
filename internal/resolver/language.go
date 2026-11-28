@@ -600,6 +600,12 @@ func originalAudioPreference(rel core.Release, t *core.Title, original string) i
 	return assumedOriginalPreference
 }
 
+// prefersViewerSubtitles enables source priority only for a positively scored
+// format and an explicit subtitle language list.
+func prefersViewerSubtitles(profile core.QualityProfile, user *core.User) bool {
+	return user != nil && len(user.SubtitleLanguages) > 0 && profile.CustomFormatScores[core.FormatViewerSubtitles] > 0
+}
+
 // releaseHasWantedSubtitles uses container evidence before listing hints.
 func releaseHasWantedSubtitles(rel core.Release, info core.MediaInfo, probed bool, wanted []string) bool {
 	if !probed {

@@ -71,11 +71,11 @@ func (s *Service) libraryCandidates(ctx context.Context, req core.ResolveRequest
 		return releases, nil, false, nil
 	}
 	preferOriginal := titleOriginalLanguage(req.Title) != "" && releasepolicy.PrefersOriginalAudio(p, req.User)
-	preferSubtitles := req.User != nil && len(req.User.SubtitleLanguages) > 0
+	preferSubtitles := prefersViewerSubtitles(p, req.User)
 	cutoff := func(c candidate) bool {
 		return reachesVaultCutoff(c, p) &&
 			(!preferOriginal || c.trackPreference >= confirmedOriginalPreference) &&
-			(!preferSubtitles || c.trackPreference&wantedSubtitlePreference != 0)
+			(!preferSubtitles || c.preferredSubtitles)
 	}
 	pickIdx := 0
 	if req.Prefer != "" {

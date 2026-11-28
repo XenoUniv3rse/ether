@@ -14,33 +14,34 @@ import (
 )
 
 type candidate struct {
-	sourcePreferred  bool     // source routing deliberately selected this candidate as the leader
-	knownCachedHint  bool     // caller already knows this torrent candidate is cached on debrid
-	identityWeak     bool     // shared title without evidence identifying this show
-	localFirst       bool     // a granted local file the owner plays before any fetched release (Resolver.PreferLocalFiles)
-	audioUnverified  bool     // required audio language is unverified in the release name (probe required)
-	unverifiedLangs  []string // required audio languages awaiting probe verification
-	belowScore       bool
-	counted          int
-	fallback         bool
-	pluginKeys       map[string]int64
-	policy           releasepolicy.Result
-	rel              core.Release
-	trace            int
-	verified         bool
-	langOK           bool            // declares no audio, or an accepted audio language (acceptedAudio)
-	trackPreference  int             // original audio evidence, then wanted subtitles
-	langRank         int             // 1-based viewer-language rank (1 = first choice, 2 = second, ...; 0 = unmatched)
-	starved          bool            // below its resolution's bitrate floor (bitrateScore) or a presumed upscale
-	bandwidth        int             // fits client cap (+1), unknown (0), or exceeds hard cap / stall limit (-1)
-	delivery         int             // soft unverified source-delivery tie-break: fits/unknown (0) or above recent read rate (-1)
-	identityConflict bool            // region evidence contradicts the original language
-	yearGuessed      bool            // accepted despite a series year that differs from the show's
-	cf               int             // custom format score: every matching format, plugin points included
-	keys             rankKeys        // the Radarr/Sonarr comparer keys (ranking.go)
-	prepared         *candidateCheck // validation overlapped with descriptor discovery
-	graceStart       time.Time       // discovery start, set only when preparation overran the grace
-	fallbacks        []candidate     // quiet fallbacks inside the same near-duplicate repost group
+	sourcePreferred    bool     // source routing deliberately selected this candidate as the leader
+	knownCachedHint    bool     // caller already knows this torrent candidate is cached on debrid
+	identityWeak       bool     // shared title without evidence identifying this show
+	localFirst         bool     // a granted local file the owner plays before any fetched release (Resolver.PreferLocalFiles)
+	audioUnverified    bool     // required audio language is unverified in the release name (probe required)
+	unverifiedLangs    []string // required audio languages awaiting probe verification
+	belowScore         bool
+	counted            int
+	fallback           bool
+	pluginKeys         map[string]int64
+	policy             releasepolicy.Result
+	rel                core.Release
+	trace              int
+	verified           bool
+	langOK             bool            // declares no audio, or an accepted audio language (acceptedAudio)
+	preferredSubtitles bool            // matches the viewer subtitle format when scored by the profile
+	trackPreference    int             // original audio evidence, then wanted subtitles
+	langRank           int             // 1-based viewer-language rank (1 = first choice, 2 = second, ...; 0 = unmatched)
+	starved            bool            // below its resolution's bitrate floor (bitrateScore) or a presumed upscale
+	bandwidth          int             // fits client cap (+1), unknown (0), or exceeds hard cap / stall limit (-1)
+	delivery           int             // soft unverified source-delivery tie-break: fits/unknown (0) or above recent read rate (-1)
+	identityConflict   bool            // region evidence contradicts the original language
+	yearGuessed        bool            // accepted despite a series year that differs from the show's
+	cf                 int             // custom format score: every matching format, plugin points included
+	keys               rankKeys        // the Radarr/Sonarr comparer keys (ranking.go)
+	prepared           *candidateCheck // validation overlapped with descriptor discovery
+	graceStart         time.Time       // discovery start, set only when preparation overran the grace
+	fallbacks          []candidate     // quiet fallbacks inside the same near-duplicate repost group
 
 	preDeliveryBandwidth int
 	deliveryDemotion     core.AutoSelectionReason
