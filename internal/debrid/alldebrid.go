@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"path"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -182,6 +183,61 @@ func adMagnets(data json.RawMessage) []adMagnet {
 	return ms
 }
 
+// adListed is one magnet of the account listing, with an absent status
+// told apart from 0.
+type adListed struct {
+	ID         json.Number `json:"id"`
+	Hash       string      `json:"hash"`
+	StatusCode *int        `json:"statusCode"`
+}
+
+var errADList = errors.New("alldebrid: unexpected magnet list")
+
+// adMagnetList decodes the account listing for the ownership lookup, where
+// a listing it cannot fully read is an error, never a miss: data that is
+// not an object, a magnets field that is not an array or object, a null
+// or hashless entry, or a non-empty object that is not one magnet. A
+// missing, null, [] or {} magnets field is an empty account.
+func adMagnetList(data json.RawMessage) ([]adListed, error) {
+	if t := bytes.TrimSpace(data); len(t) == 0 || t[0] != '{' {
+		return nil, errADList
+	}
+	var wrap struct {
+		Magnets json.RawMessage `json:"magnets"`
+	}
+	if json.Unmarshal(data, &wrap) != nil {
+		return nil, errADList
+	}
+	t := bytes.TrimSpace(wrap.Magnets)
+	var rows []json.RawMessage
+	switch {
+	case len(t) == 0 || bytes.Equal(t, []byte("null")):
+		return nil, nil
+	case t[0] == '{':
+		var obj map[string]json.RawMessage
+		if json.Unmarshal(t, &obj) != nil {
+			return nil, errADList
+		}
+		if len(obj) == 0 {
+			return nil, nil
+		}
+		rows = []json.RawMessage{t}
+	default:
+		if json.Unmarshal(t, &rows) != nil {
+			return nil, errADList
+		}
+	}
+	ms := make([]adListed, 0, len(rows))
+	for _, row := range rows {
+		var m adListed
+		if bytes.Equal(bytes.TrimSpace(row), []byte("null")) || json.Unmarshal(row, &m) != nil || m.Hash == "" {
+			return nil, errADList
+		}
+		ms = append(ms, m)
+	}
+	return ms, nil
+}
+
 func (p *allDebrid) Find(ctx context.Context, hash string) (string, error) {
 	if lowPriority(ctx) {
 		return p.list.known(p.opts.Now(), hash), nil
@@ -201,17 +257,42 @@ func (p *allDebrid) Find(ctx context.Context, hash string) (string, error) {
 	})
 }
 
-func (p *allDebrid) findProcessing(ctx context.Context, hash string) (string, error) {
+// findHeld looks the hash up on the account in any state, bypassing the
+// list cache. It returns a live match (downloading or ready, a ready one
+// first, and whether it is ready) and the ids of failed ones; none of
+// them was added by this upload, so none is Ether's to remove. A listing
+// it cannot fully read is an error, never a miss.
+func (p *allDebrid) findHeld(ctx context.Context, hash string) (live string, ready bool, failed []string, err error) {
 	data, err := p.do(ctx, apiRequest{method: http.MethodGet, path: "/v4.1/magnet/status"})
 	if err != nil {
-		return "", err
+		return "", false, nil, err
 	}
-	for _, magnet := range adMagnets(data) {
-		if magnet.ID != "" && magnet.StatusCode <= adStatusReady && strings.EqualFold(magnet.Hash, hash) {
-			return magnet.ID.String(), nil
+	ms, err := adMagnetList(data)
+	if err != nil {
+		return "", false, nil, err
+	}
+	for _, magnet := range ms {
+		if !strings.EqualFold(magnet.Hash, hash) {
+			continue
+		}
+		if magnet.ID == "" {
+			return "", false, nil, errors.New("alldebrid: listed magnet has no id")
+		}
+		if magnet.StatusCode == nil {
+			return "", false, nil, errors.New("alldebrid: listed magnet has no status")
+		}
+		switch id := magnet.ID.String(); {
+		case *magnet.StatusCode > adStatusReady:
+			failed = append(failed, id)
+		case *magnet.StatusCode == adStatusReady:
+			if !ready {
+				live, ready = id, true
+			}
+		case live == "":
+			live = id
 		}
 	}
-	return "", nil
+	return live, ready, failed, nil
 }
 
 func (p *allDebrid) status(ctx context.Context, id string) (*adMagnet, error) {
@@ -286,10 +367,22 @@ func (p *allDebrid) acquire(ctx context.Context, req AcquireRequest) (_ *Acquire
 	}
 	id, added := req.TorrentID, false
 	ready := false
+	var failed []string
+	if id == "" {
+		// An upload of a hash the account already holds can answer with the
+		// existing magnet's id, indistinguishable from a fresh add. Look the
+		// hash up first so another app's live magnet is reused, not removed.
+		if !mayTrialAdd(ctx) {
+			return nil, errBackgroundUndecided
+		}
+		if id, ready, failed, err = p.findHeld(ctx, req.InfoHash); err != nil {
+			return nil, err
+		}
+	}
 	if id == "" {
 		data, err := p.do(ctx, apiRequest{method: http.MethodPost, path: "/v4/magnet/upload", form: url.Values{"magnets[]": {req.Magnet}}})
 		if errors.Is(err, errDuplicateTorrent) {
-			id, err = p.findProcessing(ctx, req.InfoHash)
+			id, ready, _, err = p.findHeld(ctx, req.InfoHash)
 			if err == nil && id == "" {
 				err = fmt.Errorf("alldebrid: torrent processing: %w", ErrPending)
 			}
@@ -302,7 +395,10 @@ func (p *allDebrid) acquire(ctx context.Context, req AcquireRequest) (_ *Acquire
 			if len(ms) == 0 {
 				return nil, errors.New("alldebrid: upload returned no magnet")
 			}
-			id, added, ready = ms[0].ID.String(), true, ms[0].Ready
+			// A failed magnet held before the upload stays not ours, even
+			// when the upload answers with its id.
+			id, ready = ms[0].ID.String(), ms[0].Ready
+			added = !slices.Contains(failed, id)
 		}
 	}
 	cleanup := func() bool {
