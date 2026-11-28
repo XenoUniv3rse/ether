@@ -212,9 +212,7 @@ export function settingsIndex(): SettingHit[] {
     // Libraries (TMDB source & per-library new releases)
     ...groupHits(S.CATALOG, "/services/tmdb", tmdbSettings),
     ...groupHits([UpcomingEpisodeSettings], "/services/tmdb", tmdbSettings),
-    ...rows("/services/tmdb", tmdbSettings, [
-      ["hide-obscure-titles", t("Hide obscure titles")],
-    ]),
+    ...rows("/services/tmdb", tmdbSettings, [["hide-obscure-titles", t("Hide obscure titles")]]),
     ...rows("/services/tmdb", `${tmdbSettings} › ${t("New releases")}`, [
       ["when-they-can-play", t("When they can play")],
       ["on-digital-release", t("On digital release")],
