@@ -222,7 +222,8 @@ function CallsTable({
                     <tr className="border-b border-border-subtle bg-bg-subtle">
                       <td colSpan={4} className="px-5 py-3">
                         <p className="mb-2 text-xs text-fg-muted sm:hidden">
-                          {formatDateTime(c.created)} · {t("{ms} ms", { ms: formatNumber(c.ms, 0) })}
+                          {formatDateTime(c.created)} ·{" "}
+                          {t("{ms} ms", { ms: formatNumber(c.ms, 0) })}
                         </p>
                         {c.failure ? (
                           <div className="text-xs text-fg-muted">

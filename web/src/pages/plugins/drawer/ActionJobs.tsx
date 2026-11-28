@@ -1,4 +1,8 @@
-import { PluginFailureDetails, pluginFailureSentence, type PluginFailure } from "../../../components/PluginFailure";
+import {
+  PluginFailureDetails,
+  pluginFailureSentence,
+  type PluginFailure,
+} from "../../../components/PluginFailure";
 import { useEffect, useState } from "react";
 import { Badge, Button } from "@braedonsaunders/appkit-ui";
 import { AlertTriangle, RefreshCw } from "lucide-react";
