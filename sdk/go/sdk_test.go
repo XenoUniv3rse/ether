@@ -721,3 +721,28 @@ func TestServerPackagesDoNotImportSDKGo(t *testing.T) {
 		}
 	}
 }
+
+func TestDebridCacheHintsRoute(t *testing.T) {
+	var got DebridCacheHintsRequest
+	plug := New(Definition{
+		Manifest: Manifest{ID: "org.ether.test.hints", Name: "Hints", Version: "1.0.0", Ether: &EtherManifestBlock{
+			Protocol: 1, Kind: KindSource, Capabilities: []Capability{CapDebridCacheHints}, Summary: "Cache hints", Runtime: RuntimeDecl{Kind: "remote"},
+		}},
+		Routes: Routes{DebridCacheHints: func(_ *Context, req DebridCacheHintsRequest) (DebridCacheHintsResponse, error) {
+			got = req
+			return DebridCacheHintsResponse{Cached: map[string][]string{req.Candidates[0].InfoHash: {"realdebrid"}}}, nil
+		}},
+	})
+	h := NewTestHarness(plug, nil)
+	res := h.Request(RawRequest{Method: http.MethodPost, Path: "/ether/debrid/hints", Body: json.RawMessage(`{"candidates":[{"infoHash":"abc","private":true,"providerKinds":["realdebrid","torbox"]}]}`)})
+	if res.Status != http.StatusOK || string(res.Body) != `{"cached":{"abc":["realdebrid"]}}` {
+		t.Fatalf("response %d %s", res.Status, res.Body)
+	}
+	if len(got.Candidates) != 1 || !got.Candidates[0].Private || len(got.Candidates[0].ProviderKinds) != 2 {
+		t.Fatalf("request %+v", got)
+	}
+	empty := New(Definition{Manifest: plug.manifest})
+	if res := NewTestHarness(empty, nil).Request(RawRequest{Method: http.MethodPost, Path: "/ether/debrid/hints", Body: json.RawMessage(`{"candidates":[]}`)}); res.Status != http.StatusNotFound {
+		t.Fatalf("unregistered handler: %d", res.Status)
+	}
+}

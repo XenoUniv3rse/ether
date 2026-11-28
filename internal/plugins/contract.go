@@ -79,6 +79,9 @@ const (
 	// CapScreens lets a plugin contribute screens and surfaces that Vela
 	// draws from documents in the package (docs/plugin-screens.md).
 	CapScreens Capability = "screens"
+	// CapDebridCacheHints lets a plugin say which torrents a debrid service
+	// already holds before a Play spends an add (docs/plugin-debrid.md).
+	CapDebridCacheHints Capability = "debrid_cache_hints"
 )
 
 // Reserved capabilities are known names a manifest may not claim in v1.

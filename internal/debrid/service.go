@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/braedonsaunders/ether/internal/clusterbus"
@@ -92,6 +93,10 @@ type Service struct {
 	entries []*entry          // configured providers in priority order
 	plugins map[string]*entry // native plugin providers, not serialized into config
 
+	// hinter holds the plugins answering which torrents a provider holds
+	// (cache_hints.go); read without s.mu, before the hint deadline starts.
+	hinter atomic.Pointer[CacheHinter]
+
 	cdnEdges knownCDNEdges
 
 	knownMu sync.Mutex
@@ -130,7 +135,10 @@ type knownState struct {
 	// UncachedTTL, while likely zip-only torrents ignore it and try the
 	// cached-only add.
 	checkUncertain bool
-	until          time.Time
+	// hint marks a state ApplyHints wrote from a source's marker, not the
+	// provider's own answer; any answer recorded later replaces it.
+	hint  bool
+	until time.Time
 }
 
 // entry is one configured provider with its breaker and counters.
@@ -848,7 +856,12 @@ const hintTTL = 30 * time.Minute
 // no answer of their own about the hash. A provider the source reported as
 // holding the torrent is tried ahead of unknown ones; with CachedOnly, one
 // it reported as not holding it is skipped without adding the torrent.
-// Hints live in memory only and never replace a provider's answer.
+// Hints live in memory only and never replace a provider's answer. Of the
+// per-account answers acquisition remembers (read in one query per
+// account), a "not cached" or refusal blocks any hint and any other answer
+// blocks a negative one; a positive the account remembers as cached stands.
+// Nothing is written once ctx has ended: reads it cut short may have missed
+// an answer.
 func (s *Service) ApplyHints(ctx context.Context, rels []core.Release) {
 	cachedOnly := s.Config().CachedOnly
 	for _, e := range s.active() {
@@ -869,32 +882,63 @@ func (s *Service) ApplyHints(ctx context.Context, rels []core.Release) {
 			}
 		}
 		known := s.knownAvailability(ctx, e, hashes)
+		var unknown []string
+		for _, hash := range hashes {
+			if _, ok := known[hash]; !ok {
+				unknown = append(unknown, hash)
+			}
+		}
+		for hash, a := range e.rememberedAnswers(ctx, unknown) {
+			if a.refusal() != nil || !hints[hash] {
+				known[hash] = false
+			}
+		}
 		now := s.now()
 		s.knownMu.Lock()
+		if ctx.Err() != nil {
+			s.knownMu.Unlock()
+			return
+		}
 		for _, hash := range hashes {
 			key := knownKey(e.cfg.ID, hash)
 			k, hit := s.known[key]
 			if _, ok := known[hash]; ok || hit && (now.Before(k.until) || k.refused && k.until.IsZero()) {
 				continue
 			}
-			s.known[key] = knownState{cached: hints[hash], until: now.Add(hintTTL)}
+			s.known[key] = knownState{cached: hints[hash], hint: true, until: now.Add(hintTTL)}
 		}
 		s.knownMu.Unlock()
 	}
 }
 
-// markedFirst returns entries with those the release itself marks as cached
-// (rel.DebridCached) moved ahead, owner order kept within each group. A
-// provider's own "not cached" answer outranks the marker. Without a marker
-// the order is unchanged: answers from bulk checks alone never reorder.
+// markedFirst returns entries with those marked as holding the release moved
+// ahead, owner order kept within each group: the release's own marker
+// (rel.DebridCached), or a live cached hint ApplyHints recorded for that
+// provider and hash. A provider's own "not cached" answer outranks either.
+// Without a marker or hint the order is unchanged: answers from bulk checks
+// alone never reorder.
 func (s *Service) markedFirst(ctx context.Context, entries []*entry, rel core.Release) []*entry {
-	if len(rel.DebridCached) == 0 {
-		return entries
+	hash := strings.ToLower(rel.InfoHash)
+	now := s.now()
+	hinted := func(e *entry) bool {
+		e.mu.Lock() // UpdateConfig replaces cfg under it
+		id, kind := e.cfg.ID, e.cfg.Kind
+		e.mu.Unlock()
+		if slices.Contains(rel.DebridCached, kind) {
+			return true
+		}
+		if hash == "" {
+			return false
+		}
+		s.knownMu.Lock()
+		k, ok := s.known[knownKey(id, hash)]
+		s.knownMu.Unlock()
+		return ok && k.hint && k.cached && now.Before(k.until)
 	}
 	marked := make([]*entry, 0, len(entries))
 	var rest []*entry
 	for _, e := range entries {
-		if slices.Contains(rel.DebridCached, e.cfg.Kind) && !s.knownUncachedForRelease(ctx, e, rel) {
+		if hinted(e) && !s.knownUncachedForRelease(ctx, e, rel) {
 			marked = append(marked, e)
 		} else {
 			rest = append(rest, e)
@@ -2360,6 +2404,16 @@ func (s *Service) blockedFile(ctx context.Context, e *entry, hash, torrentID str
 		cancel()
 	}
 	s.log.Info("debrid provider blocks file", "provider", displayName(e.cfg), "hash", hash)
+}
+
+// rememberedAnswers returns e's own remembered answers for hashes, the
+// per-account answers acquisition consults (debrid_answers), which outlive
+// the discovery memory and a restart: one read for the whole list.
+func (e *entry) rememberedAnswers(ctx context.Context, hashes []string) map[string]learnedAnswer {
+	if e.api == nil || len(hashes) == 0 {
+		return nil
+	}
+	return e.api.hashAnswers(ctx, hashes, e.api.now())
 }
 
 func (e *entry) refusesHash(hash string) bool {

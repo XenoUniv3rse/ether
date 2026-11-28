@@ -163,7 +163,7 @@ func (b *Broker) DetailPlan(ctx context.Context, req frontend.PlanRequest) (fron
 	entry := &detailFlight{done: make(chan struct{})}
 	b.detailPlans[key] = entry
 	b.mu.Unlock()
-	p, err := b.Plan(ctx, req)
+	p, err := b.plan(ctx, req, false)
 	if err == nil && p.ETag != "" && b.deps.DB != nil {
 		b.mu.Lock()
 		planned, ok := b.plans[p.ID]

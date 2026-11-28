@@ -400,3 +400,33 @@ func TestFlowsManifestValidationAndPermissions(t *testing.T) {
 		})
 	}
 }
+
+// debrid_cache_hints fits source and integration plugins, needs no
+// contribution block, and tells the owner that the plugin sees the
+// torrents about to play.
+func TestDebridCacheHintsCapability(t *testing.T) {
+	const line = "Gets the torrents you are about to play and says which are cached"
+	for kind, ok := range map[Kind]bool{KindSource: true, KindIntegration: true, KindExtension: false, KindContent: false} {
+		m := baseManifest()
+		m.Ether.Kind = kind
+		if kind == KindIntegration {
+			m.Ether.Contributes.Integration = &IntegrationMeta{Category: "Downloads", Adds: []string{"Cache hints"}, Connect: "none"}
+		}
+		m.Ether.Capabilities = []Capability{"debrid_cache_hints"}
+		if err := m.Validate(); (err == nil) != ok {
+			t.Fatalf("kind %s: err=%v, want allowed=%v", kind, err, ok)
+		}
+	}
+	m := baseManifest()
+	m.Ether.Kind = KindSource
+	m.Ether.Capabilities = []Capability{"debrid_cache_hints"}
+	lines, _, _ := PermissionSheet(m)
+	if !strings.Contains(strings.Join(lines, "\n"), line) {
+		t.Fatalf("permission sheet %q", lines)
+	}
+	cur := baseManifest()
+	cur.Ether.Kind = KindSource
+	if added := PermissionDiff(cur, m); len(added) != 1 || added[0] != line {
+		t.Fatalf("permission diff %q", added)
+	}
+}

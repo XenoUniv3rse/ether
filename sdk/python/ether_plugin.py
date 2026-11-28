@@ -1944,6 +1944,14 @@ class PluginInstance:
                 )
             )
 
+        if method == "POST" and path == "/ether/debrid/hints":
+            fn = self.routes.get("debrid_cache_hints") or self.routes.get("debridCacheHints")
+            if not fn:
+                return _error_response(404, "not_found", "Debrid cache hints handler is not registered.")
+            body_obj = _parse_json_body(req.get("body"))
+            candidates = body_obj.get("candidates")
+            return _ok_response(fn({"candidates": candidates if isinstance(candidates, list) else []}, ctx))
+
         if method == "GET" and path == "/ether/channels.json":
             fn = self.routes.get("channels")
             if not fn:

@@ -250,6 +250,16 @@ func WithIndexerPurpose(ctx context.Context, purpose string) context.Context {
 	return core.WithIndexerPurpose(ctx, purpose)
 }
 
+// WithExplicitPlay marks ctx as a viewer pressing Play (core.ExplicitPlay).
+func WithExplicitPlay(ctx context.Context) context.Context {
+	return core.WithExplicitPlay(ctx)
+}
+
+// ExplicitPlay reports whether ctx is a viewer's explicit Play.
+func ExplicitPlay(ctx context.Context) bool {
+	return core.ExplicitPlay(ctx)
+}
+
 // WithColdDetail identifies the single title page allowed a minimum cold fill.
 func WithColdDetail(ctx context.Context, key RatingKey) context.Context {
 	return core.WithColdDetail(ctx, key)

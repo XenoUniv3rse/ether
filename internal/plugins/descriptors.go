@@ -413,6 +413,9 @@ func PermissionSheet(man Manifest) (lines []string, needsViewers, needsFolders b
 	if man.HasCapability(CapScreens) {
 		lines = append(lines, screensPermissionLine(man))
 	}
+	if man.HasCapability(CapDebridCacheHints) {
+		lines = append(lines, "Gets the torrents you are about to play and says which are cached")
+	}
 	if len(lines) == 0 {
 		lines = []string{"Needs no access to your server or the network"}
 	}
@@ -559,6 +562,9 @@ func PermissionDiff(cur, next Manifest) []string {
 	}
 	if !cur.HasCapability(CapScreens) && next.HasCapability(CapScreens) {
 		added = append(added, screensPermissionLine(next))
+	}
+	if !cur.HasCapability(CapDebridCacheHints) && next.HasCapability(CapDebridCacheHints) {
+		added = append(added, "Gets the torrents you are about to play and says which are cached")
 	}
 	if n := next.ListItemsRequested(); n > cur.ListItemsRequested() {
 		added = append(added, listItemsLine(n))

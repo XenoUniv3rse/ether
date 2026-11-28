@@ -279,7 +279,8 @@ type inflight struct {
 	done      chan struct{}
 	res       *core.Resolution
 	err       error
-	abandoned bool // the leader's own context ended the resolution
+	abandoned bool   // the leader's own context ended the resolution
+	play      func() // marks the shared resolution as an explicit Play
 }
 
 // Service implements core.Resolver.
@@ -906,6 +907,9 @@ func (s *Service) Resolve(ctx context.Context, req core.ResolveRequest) (*core.R
 		s.flightMu.Lock()
 		if f, ok := s.flights[key]; ok {
 			s.flightMu.Unlock()
+			if core.ExplicitPlay(ctx) {
+				f.play() // a Play joined: what the search prepares from now on is for a Play
+			}
 			select {
 			case <-f.done:
 				if f.abandoned && ctx.Err() == nil {
@@ -925,6 +929,7 @@ func (s *Service) Resolve(ctx context.Context, req core.ResolveRequest) (*core.R
 			}
 		}
 		f := &inflight{done: make(chan struct{})}
+		ctx, f.play = core.WithExplicitPlayLatch(ctx)
 		s.flights[key] = f
 		s.flightMu.Unlock()
 
