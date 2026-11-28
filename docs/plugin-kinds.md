@@ -1345,7 +1345,7 @@ const extracted = await ctx.ether.archive!.extract(cached.blob, xmlMembers[0]!.i
 ```
 
 `http.fetchToCache({url, headers?, keepHeadersOnRedirect?, libraryKey, name, timeoutMs?, resume?, connections?})` performs a GET, streams
-up to the owner download ceiling (8 GiB by default), further bounded by the library cache quota, into the plugin's own library cache, and returns
+up to the owner download ceiling (8 GiB by default), subject to the media budget and any library limit, into the plugin's library namespace, and returns
 `{blob, size, crc32, md5, sha1, status}`. SHA-256 is the blob reference.
 Digests cover the stored response bytes in one pass. Compare the digest with
 trusted catalogue metadata before serving a verified download. Non-2xx responses,
@@ -1362,7 +1362,7 @@ to the calling job's remaining deadline. Pass `resume: true` to continue an
 incomplete partial blob with `Range: bytes=<cached>-` when the server supports
 ranges and strong `ETag` / `Last-Modified` validators match (restarting cleanly
 from byte 0 when validators mismatch or the server ignores ranges); partial
-blobs obey per-library cache quotas, the shared cap, and the disk free-space
+blobs obey per-library cache quotas, the media pool budget, and the disk free-space
 floor, and become readable via `cache.open` / `cache.read` / `archive.*` only
 when complete. Jobs, schedules, and background calls can request `connections`
 from 1 to 6 (default 1), sharing the host's limit of 6 per origin. When the
