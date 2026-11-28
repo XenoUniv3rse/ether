@@ -681,6 +681,7 @@ export function CatalogueTab({
                 />
                 <PermissionSheet
                   permissions={preview.permissions}
+                  durableQuota={preview.durableQuota}
                   verified={preview.verified}
                   needsViewers={preview.needsViewers}
                   needsFolders={preview.needsFolders}

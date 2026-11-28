@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/braedonsaunders/ether/internal/artwork"
+	"github.com/braedonsaunders/ether/internal/blobcache"
 	"github.com/braedonsaunders/ether/internal/httpjson"
 	"github.com/braedonsaunders/ether/internal/plugins/wasm"
 	"github.com/braedonsaunders/ether/internal/viewspec"
@@ -295,8 +296,9 @@ func (m *Manager) handleIcon(w http.ResponseWriter, r *http.Request) {
 // privacy label and impact.
 type Detail struct {
 	Summary
-	Manifest      Manifest       `json:"manifest"`
-	RuntimeLimits *RuntimeLimits `json:"runtimeLimits,omitempty"`
+	DurableQuota  *blobcache.DurableQuota `json:"durableQuota,omitempty"`
+	Manifest      Manifest                `json:"manifest"`
+	RuntimeLimits *RuntimeLimits          `json:"runtimeLimits,omitempty"`
 	// ListItems is how many titles one sync of each of its lists reads.
 	ListItems   *ListItemsGrant `json:"listItems,omitempty"`
 	Permissions struct {
@@ -424,6 +426,7 @@ func (m *Manager) handleGet(w http.ResponseWriter, r *http.Request) {
 	h = m.liveHealth(rec, h)
 	g, _ := m.store.grants(r.Context(), id)
 	d := Detail{Summary: m.summary(rec, h), Manifest: m.localizedKindLibraries(r.Context(), id, rec.Manifest), RuntimeLimits: m.grantedRuntimeLimits(rec.Manifest), HealthDetail: h}
+	d.DurableQuota = m.grantedDurableQuota(rec.Manifest)
 	d.Permissions.Lines, d.Permissions.NeedsViewers, d.Permissions.NeedsFolders = PermissionSheet(rec.Manifest)
 	if rec.Manifest.Ether != nil {
 		d.Permissions.Declared = rec.Manifest.Ether.Permissions

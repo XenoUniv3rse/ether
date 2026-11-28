@@ -2021,6 +2021,19 @@ export interface FrontendUploadPath {
   maxBytes: number;
 }
 
+/** Selects the durable namespace for a cache usage request. */
+export interface CacheUsageOptions {
+  durable: true;
+}
+
+/** Unique saved bytes and files with their effective quotas. */
+export interface CacheUsageResult {
+  bytes: number;
+  files: number;
+  quotaBytes: number;
+  quotaFiles: number;
+}
+
 /** Size and lowercase hexadecimal digests of an owned blob. */
 export interface CacheStatResult {
   size: number;

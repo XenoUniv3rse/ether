@@ -308,6 +308,7 @@ globalThis.ether = (() => {
     cache: { put: (lib, name, data, opts) => call("cache.put", [lib, name ?? "", data ?? null, opts ?? null]),
              open: (blobRef) => call("cache.open", [blobRef]), read: (blobRef, range) => call("cache.read", [blobRef, range]),
              stat: (blobRef) => call("cache.stat", [blobRef]),
+             usage: (opts) => call("cache.usage", [opts]),
              rasterize: (lib, name, blobRef, opts) => call("cache.rasterize", opts == null ? [lib, name, blobRef] : [lib, name, blobRef, opts]),
              delete: (blobRef) => call("cache.delete", [blobRef]) },
     archive: { list: (blobRef) => call("archive.list", [blobRef]), open: (blobRef, member, range) => call("archive.open", [blobRef, member, range]), read: (blobRef, reads) => call("archive.read", [blobRef, reads]), extract: (blobRef, member, opts) => call("archive.extract", opts == null ? [blobRef, member] : [blobRef, member, opts]) },

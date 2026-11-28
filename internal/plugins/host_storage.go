@@ -13,7 +13,7 @@ import (
 	"github.com/braedonsaunders/ether/internal/blobcache"
 )
 
-const DurableStoragePermissionLine = "Stores up to 1 GiB of data until deleted"
+const DurableStoragePermissionLine = "Stores saved data until deleted"
 
 // BeginAdapterUpload reserves request-scoped staging for a declared adapter
 // upload route and returns the effective limit for the HTTP body reader.
@@ -117,6 +117,10 @@ func (h *host) durableWriteCheck(ctx context.Context) error {
 	if err := h.requireWritableToolContext(ctx); err != nil {
 		return err
 	}
+	return h.durableReadCheck(ctx)
+}
+
+func (h *host) durableReadCheck(ctx context.Context) error {
 	r, g, err := h.record(ctx)
 	if err != nil {
 		return err
@@ -132,6 +136,15 @@ func storagePermission(m Manifest) string {
 }
 
 func allowsDurableStorage(level string) bool { return level == "durable" }
+
+func (m *Manager) grantedDurableQuota(man Manifest) *blobcache.DurableQuota {
+	s := m.deps.DurableStorage
+	if s == nil || !allowsDurableStorage(storagePermission(man)) {
+		return nil
+	}
+	quota := s.Quota(man.ID)
+	return &quota
+}
 
 func (h *host) cachePutDurable(ctx context.Context, name string, body []byte, fromBlob string) (string, error) {
 	h.m.storageMu.RLock()
@@ -169,7 +182,7 @@ func storageError(err error) error {
 		return nil
 	case errors.Is(err, blobcache.ErrNotFound):
 		return ErrNotFound
-	case errors.Is(err, blobcache.ErrTooLarge):
+	case errors.Is(err, blobcache.ErrQuotaFull), errors.Is(err, blobcache.ErrTooLarge):
 		return ErrQuotaExceeded
 	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
 		return err
@@ -241,11 +254,7 @@ func callCachePut(ctx context.Context, h Host, args []json.RawMessage) (map[stri
 }
 
 func (h *host) openDurableBlob(ctx context.Context, ref string) (io.ReadSeekCloser, error) {
-	r, grants, err := h.record(ctx)
-	if err != nil {
-		return nil, err
-	}
-	if err := h.deny(r, grants, "storage", storagePermission(r.Manifest), allowsDurableStorage); err != nil {
+	if err := h.durableReadCheck(ctx); err != nil {
 		return nil, err
 	}
 	s := h.m.deps.DurableStorage
@@ -254,6 +263,19 @@ func (h *host) openDurableBlob(ctx context.Context, ref string) (io.ReadSeekClos
 	}
 	src, err := s.Open(h.plugin, blobcache.Ref(ref))
 	return src, storageError(err)
+}
+
+// CacheUsage reports saved blob usage for this plugin's namespace.
+func (h *host) CacheUsage(ctx context.Context) (blobcache.DurableUsage, error) {
+	if err := h.durableReadCheck(ctx); err != nil {
+		return blobcache.DurableUsage{}, err
+	}
+	s := h.m.deps.DurableStorage
+	if s == nil {
+		return blobcache.DurableUsage{}, ErrUnavailable
+	}
+	out, err := s.Usage(h.plugin)
+	return out, storageError(err)
 }
 
 func (h *host) deleteDurableBlob(ctx context.Context, ref string) error {

@@ -21,7 +21,9 @@ import { useState } from "react";
 import { ChipGroup } from "../../components/fields";
 import { useViewers, viewerName } from "../../components/pickers";
 import {
+  durablePermissionLine,
   listItemsLine,
+  type DurableQuota,
   translatePermissionLine,
   type ListItemsGrant,
   type RuntimeLimits,
@@ -375,6 +377,7 @@ export function PermissionSheet({
   pendingOperatorHosts,
   onChangeOperatorHosts,
   addedPermissions,
+  durableQuota,
   listItems,
   ownDraft = false,
 }: {
@@ -393,6 +396,7 @@ export function PermissionSheet({
   pendingOperatorHosts?: string[];
   onChangeOperatorHosts?: (next: string[]) => void;
   addedPermissions?: string[];
+  durableQuota?: DurableQuota;
   /** The list sync size asked for and allowed, when the plugin has lists. */
   listItems?: ListItemsGrant;
 }) {
@@ -400,6 +404,7 @@ export function PermissionSheet({
     permissions.length > 0 ? permissions : [t("Needs no access to your server or the network")];
   const listLine = listItems ? listItemsLine(listItems.requested) : "";
   const showLine = (line: string) => {
+    if (line === "Stores saved data until deleted") return durablePermissionLine(durableQuota);
     const text = translatePermissionLine(line);
     // Your global limit allows less than the plugin asks: say so here.
     return listItems && text === listLine && listItems.granted < listItems.requested
@@ -461,7 +466,7 @@ export function PermissionSheet({
           <AlertDescription>
             <ul className="mt-1 list-disc space-y-1 pl-4 text-xs">
               {addedPermissions.map((line) => (
-                <li key={line}>{translatePermissionLine(line)}</li>
+                <li key={line}>{showLine(line)}</li>
               ))}
             </ul>
           </AlertDescription>

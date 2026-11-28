@@ -21,6 +21,7 @@ type BlobHost interface {
 	FetchToCache(context.Context, FetchCacheRequest) (FetchCacheResult, error)
 	CacheRead(context.Context, string, DataRange) ([]byte, error)
 	CacheStat(context.Context, string) (CacheStatResult, error)
+	CacheUsage(context.Context, CacheUsageOptions) (CacheUsageResult, error)
 	CacheRasterize(context.Context, string, string, string, RasterizeOptions) (RasterizeResult, error)
 	ArchiveList(context.Context, string) ([]ArchiveMember, error)
 	ArchiveOpen(context.Context, string, int, DataRange) ([]byte, error)
@@ -67,6 +68,25 @@ func (c *RemoteHostClient) CacheStat(ctx context.Context, blob string) (CacheSta
 		headers[HeaderViewerToken] = token
 	}
 	_, err := c.callJSONWithHeaders(ctx, http.MethodPost, "/ether/plugin-host/data/cache.stat", headers, []any{blob}, &out, false)
+	return out, err
+}
+
+// CacheUsageOptions selects which namespace to measure. Durable must be true.
+type CacheUsageOptions struct {
+	Durable bool `json:"durable"`
+}
+
+// CacheUsageResult reports unique saved bytes and files and their effective quotas.
+type CacheUsageResult struct {
+	Bytes      int64 `json:"bytes"`
+	Files      int   `json:"files"`
+	QuotaBytes int64 `json:"quotaBytes"`
+	QuotaFiles int   `json:"quotaFiles"`
+}
+
+func (c *RemoteHostClient) CacheUsage(ctx context.Context, opts CacheUsageOptions) (CacheUsageResult, error) {
+	var out CacheUsageResult
+	_, err := c.callJSON(ctx, http.MethodPost, "/ether/plugin-host/data/cache.usage", []any{opts}, &out, false)
 	return out, err
 }
 

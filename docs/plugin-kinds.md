@@ -946,8 +946,17 @@ a JSON body with `X-Ether-Frontend-Upload: 1`. Uploaded refs work with
 `cache.read` during the request and are cleaned up when the response ends.
 
 Declare `ether.permissions.storage: "durable"` to retain data after the request.
-The owner sees the 1 GiB per-plugin limit in the permission drawer and can revoke
-access. Durable storage allows up to 10,000 unique blobs and has its own quota.
+The permission drawer shows the plugin's effective quota and lets the owner
+revoke access. In the plugin's **Limits**, the owner can change the default
+quota of 1 GiB and 10,000 unique blobs. The server-wide plugin limits set the
+share of currently free space on the durable store's volume available to cap
+raised quotas (25% by default). The byte ceiling uses that share directly and
+the file-count ceiling budgets 4 KiB of that share per file. The default limits
+remain available when the share is smaller. The staging free-space reserve
+still applies. These are ceilings, so setting a quota does not reserve disk
+space, and a drop in free space can reduce the effective quota. A lowered
+quota preserves existing data, including reads and deletes, and refuses new
+unique blobs that would exceed either limit with `quota_exceeded`.
 Its blobs survive restarts, cache sweeps, and cache eviction. They are deleted
 only by `cache.delete` or plugin uninstall. Keep the returned ref in your own
 per-viewer metadata and check the active viewer before accessing that metadata.
@@ -962,7 +971,16 @@ const { blob } = ether.cache.put("", "", null, {
 
 Promotion links the staged file into permanent storage without copying it. Store
 the returned `durable:<sha256>` ref. Identical saved bytes share a ref and quota
-charge within the plugin, so delete a ref only after your last use. To save small
+charge within the plugin, so delete a ref only after your last use. Call
+`ether.cache.usage({durable: true})` on routes that allow cache reads.
+With a live durable storage grant it returns `{bytes, files, quotaBytes, quotaFiles}`
+for the calling plugin's durable namespace. Staged uploads and evictable blobs
+are excluded. TypeScript sidecars use `ctx.ether.cache.usage({durable: true})`,
+and Go sidecars use `BlobHost.CacheUsage(ctx, CacheUsageOptions{Durable: true})`.
+The wire endpoint is `POST /ether/plugin-host/data/cache.usage` with
+`[{"durable":true}]` as the body.
+
+To save small
 bytes directly, use `cache.put("", name, data, {durable: true})`. Go sidecars use
 `CacheOptionsHost.CachePutWithOptions` and Python sidecars pass the options dict
 to `ctx.ether.cache.put`. When the plugin needs the bytes itself, it can read

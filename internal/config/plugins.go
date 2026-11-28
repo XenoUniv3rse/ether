@@ -37,7 +37,12 @@ func (p Plugins) Catalogue() (indexURL, publicKey string) {
 // inherits the default (globally) or the global ceiling (per plugin).
 type PluginRuntimeLimits struct {
 	// UploadBytes is the per-plugin staged request ceiling. Zero uses 64 MiB.
-	UploadBytes          int64 `json:"uploadBytes,omitempty"`
+	UploadBytes int64 `json:"uploadBytes,omitempty"`
+	// DurableBytes and DurableFiles override the per-plugin saved blob quota.
+	DurableBytes int64 `json:"durableBytes,omitempty"`
+	DurableFiles int   `json:"durableFiles,omitempty"`
+	// DurableFreePercent sets the global free-space share for raised quotas. Zero uses 25%.
+	DurableFreePercent   int   `json:"durableFreePercent,omitempty"`
 	FetchBytes           int64 `json:"fetchBytes,omitempty"`
 	ArchiveMemberBytes   int64 `json:"archiveMemberBytes,omitempty"`
 	ArchiveExpandedBytes int64 `json:"archiveExpandedBytes,omitempty"`

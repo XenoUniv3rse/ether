@@ -88,7 +88,7 @@ func TestAdapterUploadLifecycle(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
 	storageDir := filepath.Join(root, "storage")
-	store, err := blobcache.OpenDurableStore(storageDir, nil)
+	store, err := blobcache.OpenDurableStore(storageDir, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -216,7 +216,7 @@ func TestAdapterUploadLifecycle(t *testing.T) {
 		t.Fatalf("ordinary cache did not evict: %v", err)
 	}
 
-	store, err = blobcache.OpenDurableStore(storageDir, nil)
+	store, err = blobcache.OpenDurableStore(storageDir, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -232,7 +232,7 @@ func TestAdapterUploadLifecycle(t *testing.T) {
 	if len(savedPaths) != 1 {
 		t.Fatal("expected one durable file")
 	}
-	if err := os.Truncate(savedPaths[0], blobcache.DurableMaxBytes); err != nil {
+	if err := os.Truncate(savedPaths[0], blobcache.DurableDefaultBytes); err != nil {
 		t.Fatal(err)
 	}
 	u, err := store.BeginUpload(decl.PluginID, 1)

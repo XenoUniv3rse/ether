@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/braedonsaunders/ether/internal/artwork"
+	"github.com/braedonsaunders/ether/internal/blobcache"
 	"github.com/braedonsaunders/ether/internal/events"
 	"github.com/braedonsaunders/ether/internal/safefetch"
 )
@@ -44,8 +45,9 @@ type Source struct {
 
 // Preview is what the install sheet shows before the owner confirms.
 type Preview struct {
-	Manifest      Manifest       `json:"manifest"`
-	RuntimeLimits *RuntimeLimits `json:"runtimeLimits,omitempty"`
+	DurableQuota  *blobcache.DurableQuota `json:"durableQuota,omitempty"`
+	Manifest      Manifest                `json:"manifest"`
+	RuntimeLimits *RuntimeLimits          `json:"runtimeLimits,omitempty"`
 	// ListItems is how many titles one sync of each of its lists reads.
 	ListItems *ListItemsGrant `json:"listItems,omitempty"`
 	// Summary is the manifest summary with any "$t:" reference resolved
@@ -605,6 +607,7 @@ func (m *Manager) PreviewInstall(ctx context.Context, src Source) (*Preview, err
 	}
 	p := &Preview{Manifest: man, RuntimeLimits: m.grantedRuntimeLimits(man), source: src, files: files, manifestRaw: raw, Verified: src.Verified, StremioOnly: man.IsStremioOnly()}
 	p.ListItems = m.ListItemsGrant(man.ID, man)
+	p.DurableQuota = m.grantedDurableQuota(man)
 	p.PermissionLines, p.NeedsViewers, p.NeedsFolders = PermissionSheet(man)
 	p.LocalHosts = DeclaredLocalHosts(man)
 	if err := p.resolve(); err != nil {

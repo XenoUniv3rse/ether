@@ -630,6 +630,8 @@ export interface EtherHost {
     read?(blobRef: string, range: DataRange): MaybePromise<Uint8Array>;
     /** Cached digests are available on viewer routes; cold reads there are limited to 256 KiB. */
     stat?(blobRef: string): MaybePromise<import("./types.ts").CacheStatResult>;
+    /** Reports unique saved bytes and files and their effective quotas. */
+    usage?(opts: import("./types.ts").CacheUsageOptions): MaybePromise<import("./types.ts").CacheUsageResult>;
     /** Rasterises a cached SVG blob into a new cached bitmap blob with Ether's bounded SVG rasteriser; unsafe documents are refused. */
     rasterize?(libraryKey: string, name: string, blobRef: string, opts?: RasterizeOptions): MaybePromise<RasterizeResult>;
     delete?(blobRef: string): MaybePromise<void>;
@@ -824,6 +826,7 @@ export function createHostedClient(): EtherHost {
         return decodeData(callHost("cache.read", [blob, range]));
       },
       stat: (blob) => callHost<import("./types.ts").CacheStatResult>("cache.stat", [blob]),
+      usage: (opts) => callHost<import("./types.ts").CacheUsageResult>("cache.usage", [opts]),
       rasterize: (lib, name, blob, opts) => {
         checkRasterizeOptions(opts);
         return callHost<RasterizeResult>("cache.rasterize", opts == null ? [lib, name, blob] : [lib, name, blob, opts]);
@@ -1489,6 +1492,9 @@ export function createRemoteHostClient(opts: RemoteHostOptions = {}): EtherHost 
           token ? { [HEADER_VIEWER_TOKEN]: token } : undefined,
         ))!;
       },
+      usage: async (opts) => (await callJson<import("./types.ts").CacheUsageResult>(
+        "POST", "/ether/plugin-host/data/cache.usage", [opts],
+      ))!,
       rasterize: async (lib, name, blob, opts) => { checkRasterizeOptions(opts); return (await callJson<RasterizeResult>("POST", "/ether/plugin-host/data/cache.rasterize", opts == null ? [lib, name, blob] : [lib, name, blob, opts]))!; },
       async put(libraryKey, name, data, opts) {
         if (opts !== undefined || data === null) {

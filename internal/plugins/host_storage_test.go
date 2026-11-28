@@ -38,7 +38,7 @@ func TestAdapterUploadStorageContract(t *testing.T) {
 		t.Fatal(err)
 	}
 	storageDir := t.TempDir()
-	saved, err := blobcache.OpenDurableStore(storageDir, nil)
+	saved, err := blobcache.OpenDurableStore(storageDir, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

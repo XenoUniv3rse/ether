@@ -3,10 +3,12 @@ package plugins
 import (
 	"context"
 	"fmt"
-	"github.com/braedonsaunders/ether/internal/config"
-	"github.com/braedonsaunders/ether/internal/plugins/wasm"
 	"net/http"
 	"time"
+
+	"github.com/braedonsaunders/ether/internal/blobcache"
+	"github.com/braedonsaunders/ether/internal/config"
+	"github.com/braedonsaunders/ether/internal/plugins/wasm"
 )
 
 type runtimeCeilings struct {
@@ -175,6 +177,7 @@ func (m *Manager) grantedRuntimeLimits(man Manifest) *RuntimeLimits {
 	return r
 }
 func (m *Manager) handleRuntimeLimits(w http.ResponseWriter, r *http.Request) {
+	plugin := r.URL.Query().Get("plugin")
 	if r.Method == http.MethodPut {
 		var req struct {
 			Plugin string                     `json:"plugin"`
@@ -190,6 +193,14 @@ func (m *Manager) handleRuntimeLimits(w http.ResponseWriter, r *http.Request) {
 		}
 		if req.Limits.UploadBytes < 0 || req.Limits.UploadBytes > MaxAdapterUploadBytes || (req.Plugin == "" && req.Limits.UploadBytes != 0) {
 			m.fail(w, &ValidationError{Fields: []FieldError{{Field: "uploadBytes", Message: "expected a per-plugin upload limit from 0 to 512 MiB"}}})
+			return
+		}
+		plugin = req.Plugin
+		if req.Limits.DurableBytes < 0 || req.Limits.DurableFiles < 0 ||
+			(plugin == "" && (req.Limits.DurableBytes != 0 || req.Limits.DurableFiles != 0)) ||
+			req.Limits.DurableFreePercent < 0 || req.Limits.DurableFreePercent > 100 ||
+			(plugin != "" && req.Limits.DurableFreePercent != 0) {
+			writeErr(w, http.StatusBadRequest, "durable_quota_invalid", "Invalid durable storage settings.", nil)
 			return
 		}
 		if req.Limits.Deadline != "" {
@@ -208,24 +219,78 @@ func (m *Manager) handleRuntimeLimits(w http.ResponseWriter, r *http.Request) {
 			m.fail(w, fmt.Errorf("runtime settings are unavailable"))
 			return
 		}
-		if err := m.deps.SaveRuntimeConfig(req.Plugin, req.Limits); err != nil {
-			m.fail(w, err)
-			return
+		m.storageMu.Lock()
+		cfg := m.runtimeConfig()
+		before := cfg.RuntimeLimits
+		if plugin != "" {
+			before = cfg.RuntimeOverrides[plugin]
 		}
-		// Closing runtimes cancels jobs so lowered ceilings take effect immediately.
-		recs, err := m.List(r.Context())
+		after := req.Limits
+		if after.DurableBytes > before.DurableBytes || after.DurableFiles > before.DurableFiles {
+			capacity, _ := m.deps.DurableStorage.Capacity(cfg.RuntimeLimits.DurableFreePercent)
+			if (after.DurableBytes > before.DurableBytes && after.DurableBytes > capacity.Bytes) ||
+				(after.DurableFiles > before.DurableFiles && after.DurableFiles > capacity.Files) {
+				m.storageMu.Unlock()
+				writeErr(w, http.StatusBadRequest, "durable_quota_ceiling", "Durable quota exceeds the current volume ceiling.", nil)
+				return
+			}
+		}
+		err := m.deps.SaveRuntimeConfig(plugin, after)
+		m.storageMu.Unlock()
 		if err != nil {
 			m.fail(w, err)
 			return
 		}
-		for _, rec := range recs {
-			if req.Plugin == "" || req.Plugin == rec.ID {
-				m.closeRuntime(rec.ID)
+		// Durable quotas are consulted live and do not require stopping plugin jobs.
+		if runtimeLimitsWithoutDurable(before) != runtimeLimitsWithoutDurable(after) {
+			recs, err := m.List(r.Context())
+			if err != nil {
+				m.fail(w, err)
+				return
+			}
+			for _, rec := range recs {
+				if plugin == "" || plugin == rec.ID {
+					m.closeRuntime(rec.ID)
+				}
 			}
 		}
 		m.broadcast(r.Context())
 	}
-	writeJSON(w, http.StatusOK, m.runtimeConfig())
+	cfg := m.runtimeConfig()
+	out := struct {
+		config.Plugins
+		DurableStorage *durableLimitsStatus `json:"durableStorage,omitempty"`
+	}{Plugins: cfg}
+	if plugin != "" && m.deps.DurableStorage != nil {
+		rec, err := m.Get(r.Context(), plugin)
+		if err != nil {
+			m.fail(w, err)
+			return
+		}
+		if allowsDurableStorage(storagePermission(rec.Manifest)) {
+			store := m.deps.DurableStorage
+			capacity, diskErr := store.Capacity(cfg.RuntimeLimits.DurableFreePercent)
+			usage, usageErr := store.Usage(plugin)
+			out.DurableStorage = &durableLimitsStatus{
+				Capacity: capacity, DiskAvailable: diskErr == nil,
+			}
+			if usageErr == nil {
+				out.DurableStorage.Usage = &usage
+			}
+		}
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func runtimeLimitsWithoutDurable(l config.PluginRuntimeLimits) config.PluginRuntimeLimits {
+	l.DurableBytes, l.DurableFiles, l.DurableFreePercent = 0, 0, 0
+	return l
+}
+
+type durableLimitsStatus struct {
+	Capacity      blobcache.DurableCapacity `json:"capacity"`
+	DiskAvailable bool                      `json:"diskAvailable"`
+	Usage         *blobcache.DurableUsage   `json:"usage,omitempty"`
 }
 
 type callRecordKey struct{}
