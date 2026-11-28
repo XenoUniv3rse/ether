@@ -656,6 +656,12 @@ func (s *Server) parsePlayRequest(r *http.Request) (playRequest, error) {
 		}
 	}
 	p := playRequest{client: requestClientFrom(capsPR), copyTimestamps: q.Get("copyts") == "1", key: key, caps: caps, sourceLimits: &sourceLimits, sessionID: sessionID, audioSel: -1, subSel: -1, protocol: q.Get("protocol"), mde: q.Get("hasMDE") == "1", partReleaseID: partReleaseID}
+	// Plex for Roku sends hasMDE=1 on /decision only. A start that omits the
+	// parameter continues that decision in the same mode; otherwise it no
+	// longer matches the stored decision and re-plans with the legacy profile.
+	if hasEntry && !q.Has("hasMDE") {
+		p.mde = entry.requested.mde
+	}
 	for _, raw := range []string{q.Get("path"), q.Get("key")} {
 		if partID, ok := partIDFromPath(raw); ok {
 			p.requestedPart = partID
