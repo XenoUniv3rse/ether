@@ -891,3 +891,22 @@ class Adapter:
         return 200, {"Content-Type": "application/json"}, json.dumps({"ids": visible_ids, "count": len(page["items"])})
 ```
 
+
+## Report route failures to the owner
+
+Return a non-2xx status and a JSON body in this shape:
+
+```json
+{"error":{"code":"rate_limited","message":"The catalogue service is rate limiting requests","retryAfterSeconds":300}}
+```
+
+Use one credential-free, owner-facing sentence. Name the upstream service where
+helpful. Supported codes are `auth` (upstream rejected credentials or access),
+`rate_limited`, `upstream_unavailable`, `not_found` and `invalid_settings`.
+Report upstream 401/403 as `auth` even if your route sends a 502. Send an optional
+positive integer `retryAfterSeconds` or an HTTP `Retry-After` header for a
+temporary failure. Use 501 for an unimplemented optional catalogue changes feed.
+
+In TypeScript, throw `new PluginHttpError(429, "rate_limited", message, 300)`.
+In Python, raise `PluginHttpError(429, "rate_limited", message, retry_after_seconds=300)`.
+In Go, return `&etherplugin.RouteError{Status: 429, Code: "rate_limited", Message: message, RetryAfterSeconds: 300}`.

@@ -191,6 +191,12 @@ type contractRuntime struct {
 
 func (r *contractRuntime) Call(ctx context.Context, req plugins.Request) (plugins.Response, error) {
 	resp, err := r.inner.Call(ctx, toRequest(req))
+	if errors.Is(err, ErrTooLarge) {
+		return plugins.Response{}, fmt.Errorf("%w: %w", plugins.ErrMalformedResponse, err)
+	}
+	if errors.Is(err, ErrDisconnected) {
+		return plugins.Response{}, fmt.Errorf("%w: %w", plugins.ErrUnavailable, err)
+	}
 	if err != nil {
 		return plugins.Response{}, err
 	}

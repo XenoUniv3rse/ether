@@ -50,6 +50,9 @@ var ErrPoolBusy = errors.New("timed out waiting for a plugin instance")
 // runtime was closed.
 var ErrClosed = errors.New("plugin is closed")
 
+// ErrMalformedResponse is wrapped when the guest returns an invalid response.
+var ErrMalformedResponse = errors.New("malformed plugin response")
+
 // ErrRequestEncode is wrapped by an *Error when the host cannot encode the
 // request for the guest (e.g. a body that is not valid JSON). The guest
 // never ran, so it is not a plugin crash.
@@ -1556,11 +1559,11 @@ func (p *Plugin) CallDetailed(ctx context.Context, req Request) (resp Response, 
 	}
 	if len(respJSON) > MaxResponseBytes {
 		out.Status = StatusError
-		return Response{}, out, &Error{Status: StatusError, Message: "plugin response exceeds size cap"}
+		return Response{}, out, &Error{Status: StatusError, Message: "plugin response exceeds size cap", Err: ErrMalformedResponse}
 	}
-	if err := json.Unmarshal(respJSON, &resp); err != nil {
+	if err := json.Unmarshal(respJSON, &resp); err != nil || strings.TrimSpace(string(respJSON)) == "null" {
 		out.Status = StatusError
-		return Response{}, out, &Error{Status: StatusError, Message: "plugin returned invalid response JSON: " + err.Error()}
+		return Response{}, out, &Error{Status: StatusError, Message: "plugin returned invalid response JSON", Err: ErrMalformedResponse}
 	}
 	if resp.Status == 0 {
 		resp.Status = 200

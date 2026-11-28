@@ -1467,8 +1467,8 @@ func (j pluginSyncJobHandle) SetProgress(progress string) {
 	j.h.SetProgress(progress)
 }
 
-func (j pluginSyncJobHandle) Finish(state, code, outcome, errMsg string) {
-	j.h.Finish(state, code, outcome, errMsg)
+func (j pluginSyncJobHandle) Finish(state, code, outcome, errMsg string, failure *plugins.RouteFailure) {
+	j.h.Finish(state, code, outcome, errMsg, failure)
 }
 
 // --- per-library blob cache (spec §11 Cache row, §15.5) ---

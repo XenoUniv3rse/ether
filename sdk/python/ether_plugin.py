@@ -137,13 +137,20 @@ class FolderFrame(TypedDict):
 
 
 class PluginHttpError(Exception):
-    """Structured HTTP error raised by a plugin route handler."""
+    """Owner-facing route error.
 
-    def __init__(self, status: int, code: str, message: str) -> None:
+    Ether recognizes auth, rate_limited, upstream_unavailable, not_found and
+    invalid_settings. Use a message that contains no credentials.
+    """
+
+    def __init__(
+        self, status: int, code: str, message: str, retry_after_seconds: Optional[int] = None
+    ) -> None:
         super().__init__(message)
         self.status = int(status)
         self.code = str(code)
         self.message = str(message)
+        self.retry_after_seconds = retry_after_seconds
 
 
 PluginRouteError = PluginHttpError
@@ -1609,11 +1616,16 @@ def _ok_response(
     return {"status": status, "headers": merged, "body": body}
 
 
-def _error_response(status: int, code: str, message: str) -> Dict[str, Any]:
+def _error_response(
+    status: int, code: str, message: str, retry_after_seconds: Optional[int] = None
+) -> Dict[str, Any]:
+    error: Dict[str, Any] = {"code": code, "message": message}
+    if retry_after_seconds is not None:
+        error["retryAfterSeconds"] = retry_after_seconds
     return {
         "status": status,
         "headers": {"Content-Type": "application/json"},
-        "body": {"error": {"code": code, "message": message}},
+        "body": {"error": error},
     }
 
 
@@ -1791,7 +1803,7 @@ class PluginInstance:
             ctx = self._build_context(req)
             return self._dispatch_core(req, ctx)
         except PluginHttpError as exc:
-            return _error_response(exc.status, exc.code, exc.message)
+            return _error_response(exc.status, exc.code, exc.message, exc.retry_after_seconds)
         except Exception as exc:
             return _error_response(500, "internal_error", str(exc) or "Internal plugin error.")
 

@@ -1,3 +1,4 @@
+import { PluginFailureTechnical, pluginFailureSentence } from "../../../components/PluginFailure";
 import { copyText } from "../../../components/CopyButton";
 import { Badge, Button, Switch, cn, confirmDialog, toast } from "@braedonsaunders/appkit-ui";
 import { Check, ChevronRight, Copy, RefreshCw, Undo2 } from "lucide-react";
@@ -98,7 +99,9 @@ function CallsTable({
 
   // Routine health checks run every minute; the Responding tile covers them.
   const all = (calls ?? []).filter((c) => c.route !== "/ether/health");
-  const errors = all.filter((c) => c.status !== 200 || c.error);
+  const isFailed = (c: PluginCall) =>
+    Boolean(c.failure || c.error || c.status < 200 || c.status >= 300);
+  const errors = all.filter(isFailed);
   const slow = all.filter((c) => c.ms >= SLOW_CALL_MS);
   const shown = (filter === "errors" ? errors : filter === "slow" ? slow : all).slice(0, 100);
 
@@ -148,32 +151,35 @@ function CallsTable({
         <table className="w-full table-fixed text-sm">
           <thead>
             <tr className="border-b border-border text-left text-xs text-fg-subtle">
-              <th className="w-36 px-5 py-2 font-medium">{t("When")}</th>
-              <th className="px-2 py-2 font-medium">{t("What Ether asked")}</th>
-              <th className="w-28 px-2 py-2 font-medium">{t("Result")}</th>
-              <th className="w-28 px-5 py-2 text-right font-medium">{t("Took")}</th>
+              <th className="hidden w-36 px-5 py-2 font-medium sm:table-cell">{t("When")}</th>
+              <th className="px-3 py-2 font-medium">{t("What Ether asked")}</th>
+              <th className="w-20 px-2 py-2 font-medium sm:w-24">{t("Result")}</th>
+              <th className="hidden w-28 px-5 py-2 text-right font-medium sm:table-cell">
+                {t("Took")}
+              </th>
             </tr>
           </thead>
           <tbody>
             {shown.map((c) => {
-              const failed = c.status !== 200 || Boolean(c.error);
+              const failed = isFailed(c);
               const n = resultCount(c);
               const expanded = open === c.id;
               return (
                 <Fragment key={c.id}>
-                  <tr
-                    onClick={() => setOpen(expanded ? null : c.id)}
-                    aria-expanded={expanded}
-                    className="cursor-pointer border-b border-border-subtle last:border-b-0 hover:bg-surface-hover"
-                  >
+                  <tr className="border-b border-border-subtle last:border-b-0 hover:bg-surface-hover">
                     <td
-                      className="truncate whitespace-nowrap px-5 py-2.5 text-xs text-fg-muted"
+                      className="hidden truncate whitespace-nowrap px-5 py-2.5 text-xs text-fg-muted sm:table-cell"
                       title={formatDateTime(c.created)}
                     >
                       {relativeTime(c.created)}
                     </td>
-                    <td className="px-2 py-2.5">
-                      <span className="flex min-w-0 items-center gap-1.5">
+                    <td className="px-3 py-2.5">
+                      <button
+                        type="button"
+                        onClick={() => setOpen(expanded ? null : c.id)}
+                        aria-expanded={expanded}
+                        className="flex w-full min-w-0 cursor-pointer items-start gap-1.5 text-left"
+                      >
                         <ChevronRight
                           size={13}
                           className={cn(
@@ -182,16 +188,19 @@ function CallsTable({
                           )}
                           aria-hidden
                         />
-                        <span className="truncate text-fg">
+                        <span className="min-w-0 break-words text-fg">
                           {describeCall(c.route, detail, titles)}
                         </span>
-                      </span>
+                      </button>
+                      {c.failure ? (
+                        <p className="mt-1 break-words pl-5 text-xs text-danger">
+                          {pluginFailureSentence(c.failure)}
+                        </p>
+                      ) : null}
                     </td>
                     <td className="px-2 py-2.5">
                       {failed ? (
-                        <Badge variant="destructive">
-                          {c.status ? t("Error {status}", { status: c.status }) : t("Failed")}
-                        </Badge>
+                        <Badge variant="destructive">{t("Failed")}</Badge>
                       ) : n !== undefined ? (
                         <Badge variant={n ? "success" : "secondary"}>
                           {tn(n, "{count} result", "{count} results")}
@@ -202,7 +211,7 @@ function CallsTable({
                     </td>
                     <td
                       className={cn(
-                        "whitespace-nowrap px-5 py-2.5 text-right text-xs tabular-nums",
+                        "hidden whitespace-nowrap px-5 py-2.5 text-right text-xs tabular-nums sm:table-cell",
                         c.ms >= SLOW_CALL_MS ? "font-medium text-warning" : "text-fg-muted",
                       )}
                     >
@@ -212,10 +221,22 @@ function CallsTable({
                   {expanded ? (
                     <tr className="border-b border-border-subtle bg-bg-subtle">
                       <td colSpan={4} className="px-5 py-3">
-                        <p className="mb-2 break-all font-mono text-xs text-fg-muted">
-                          {c.method} {c.route}
+                        <p className="mb-2 text-xs text-fg-muted sm:hidden">
+                          {formatDateTime(c.created)} · {t("{ms} ms", { ms: formatNumber(c.ms, 0) })}
                         </p>
-                        {c.error ? (
+                        {c.failure ? (
+                          <div className="text-xs text-fg-muted">
+                            <PluginFailureTechnical failure={c.failure} />
+                          </div>
+                        ) : (
+                          <p className="mb-2 break-all font-mono text-xs text-fg-muted">
+                            {c.method} {c.route}
+                            {failed && c.status
+                              ? ` · ${t("HTTP {status}", { status: c.status })}`
+                              : ""}
+                          </p>
+                        )}
+                        {!c.failure && c.error ? (
                           <p className="mb-2 break-words font-mono text-xs text-danger">
                             {c.error}
                           </p>

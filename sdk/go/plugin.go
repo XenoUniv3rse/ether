@@ -363,23 +363,13 @@ func okJSON(v any, status int) RawResponse {
 }
 
 func errorJSON(status int, code, message string) RawResponse {
-	b, _ := json.Marshal(map[string]any{
-		"error": map[string]string{
-			"code":    code,
-			"message": message,
-		},
-	})
-	return RawResponse{
-		Status:  status,
-		Headers: map[string]string{"Content-Type": "application/json"},
-		Body:    b,
-	}
+	return okJSON(map[string]*RouteError{"error": NewRouteError(status, code, message)}, status)
 }
 
 func toRouteErrorResponse(err error) RawResponse {
 	var re *RouteError
 	if errors.As(err, &re) {
-		return errorJSON(re.Status, re.Code, re.Message)
+		return okJSON(map[string]*RouteError{"error": re}, re.Status)
 	}
 	return errorJSON(http.StatusInternalServerError, "internal_error", err.Error())
 }

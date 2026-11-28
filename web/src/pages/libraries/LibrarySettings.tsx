@@ -1,3 +1,4 @@
+import { PluginFailureDetails } from "../../components/PluginFailure";
 import { LibrarySourceIcon, sourceLabel } from "./CatalogueSources";
 import {
   Badge,
@@ -952,6 +953,9 @@ function PluginLibrarySyncSection({
         description={
           <div className="space-y-1">
             {summaryLine ? <span>{summaryLine}</span> : null}
+            {!running && !guard && library.sync?.failure ? (
+              <PluginFailureDetails failure={library.sync.failure} />
+            ) : null}
             {guard ? (
               <DeleteGuardChoice
                 guard={guard}

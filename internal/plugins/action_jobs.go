@@ -31,19 +31,20 @@ const (
 // ActionJobStatus is a bounded, in-memory snapshot. Checkpoints belong in plugin
 // KV when they must survive a server restart; tokens are only passed between calls.
 type ActionJobStatus struct {
-	Path         string    `json:"path"`
-	Label        string    `json:"label,omitempty"`
-	Kind         string    `json:"kind,omitempty"`
-	Code         string    `json:"code,omitempty"`
-	State        string    `json:"state"` // running, done, canceled, error
-	Progress     string    `json:"progress,omitempty"`
-	Outcome      string    `json:"outcome,omitempty"`
-	Error        string    `json:"error,omitempty"`
-	Attempts     int       `json:"attempts"`
-	Started      time.Time `json:"started"`
-	Finished     time.Time `json:"finished,omitzero"`
-	TotalLimitMS int64     `json:"totalLimitMs"`
-	AttemptLimit int       `json:"attemptLimit"`
+	Path         string        `json:"path"`
+	Label        string        `json:"label,omitempty"`
+	Kind         string        `json:"kind,omitempty"`
+	Code         string        `json:"code,omitempty"`
+	State        string        `json:"state"` // running, done, canceled, error
+	Progress     string        `json:"progress,omitempty"`
+	Outcome      string        `json:"outcome,omitempty"`
+	Error        string        `json:"error,omitempty"`
+	Failure      *RouteFailure `json:"failure,omitempty"`
+	Attempts     int           `json:"attempts"`
+	Started      time.Time     `json:"started"`
+	Finished     time.Time     `json:"finished,omitzero"`
+	TotalLimitMS int64         `json:"totalLimitMs"`
+	AttemptLimit int           `json:"attemptLimit"`
 }
 
 type actionJob struct {
@@ -85,7 +86,7 @@ func (h *HostJobHandle) SetProgress(progress string) {
 }
 
 // Finish marks a host-tracked job terminal with optional code, outcome and error.
-func (h *HostJobHandle) Finish(state, code, outcome, errMsg string) {
+func (h *HostJobHandle) Finish(state, code, outcome, errMsg string, failure *RouteFailure) {
 	if h == nil || h.job == nil {
 		return
 	}
@@ -104,6 +105,7 @@ func (h *HostJobHandle) Finish(state, code, outcome, errMsg string) {
 	h.job.status.Code = code
 	h.job.status.Outcome = outcome
 	h.job.status.Error = errMsg
+	h.job.status.Failure = failure
 	h.job.status.Finished = now
 	if state == "done" {
 		h.job.status.Progress = ""
@@ -220,6 +222,7 @@ func (m *Manager) UpdateHostJob(pluginID, dedupKey, state, code, outcome, errMsg
 	j.status.Code = code
 	j.status.Outcome = outcome
 	j.status.Error = errMsg
+	j.status.Failure = nil
 	j.status.Progress = ""
 	j.status.Finished = now
 }

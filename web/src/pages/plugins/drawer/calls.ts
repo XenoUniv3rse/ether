@@ -1,3 +1,4 @@
+import type { PluginFailure } from "../../../components/PluginFailure";
 import { useCallback, useEffect, useState } from "react";
 import { t } from "../../../i18n";
 import { apiFetch } from "../../../lib/api";
@@ -11,6 +12,7 @@ export interface PluginCall {
   status: number;
   ms: number;
   error?: string;
+  failure?: PluginFailure;
   request?: string;
   response?: string;
   created: string;
@@ -150,7 +152,7 @@ export function describeCall(
   if (path.startsWith("/ether/views/")) return t("Page shown in the console");
   if (path.startsWith("/ether/actions/")) return t("Page action");
   if (path.startsWith("/ether/events")) return t("Server event");
-  return path;
+  return t("Plugin request");
 }
 
 /** How many results a call returned, when its body says so. */

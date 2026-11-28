@@ -44,7 +44,7 @@
     "id": "kinds",
     "title": "Content kinds & libraries",
     "group": "Build features",
-    "body": "See the complete content-kind guide below. Start with a bounded browse page, stable external IDs, and a playable leaf. Use [Resolvers](/plugins/reference/resolvers) for bytes and [Folders](/plugins/reference/host-folders) for local files.",
+    "body": "See the complete content-kind guide below. Start with a bounded browse page, stable external IDs, and a playable leaf. Use [Resolvers](/plugins/reference/resolvers) for bytes and [Folders](/plugins/reference/host-folders) for local files.\n\n### Reporting a route failure\n\nReturn a non-2xx response with a body such as `{\"error\":{\"code\":\"rate_limited\",\"message\":\"The catalogue service is rate limiting requests\",\"retryAfterSeconds\":300}}`. Ether recognizes `auth`, `rate_limited`, `upstream_unavailable`, `not_found` and `invalid_settings`. Use one owner-facing sentence and omit credentials and URLs. Map upstream 401/403 to `auth` even if the route itself returns 502. Send `Retry-After` or a positive `retryAfterSeconds` when known. Return 501 if the optional changes route is unimplemented.",
     "patterns": [
       "docs/plugin-kinds.md",
       "internal/core/kinditem.go",
