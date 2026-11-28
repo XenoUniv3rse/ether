@@ -119,13 +119,13 @@ func (h *Handler) setupStatus(r *http.Request) ([]SetupStep, bool) {
 func plainSetupGap(id string) string {
 	switch id {
 	case "sources":
-		return "Add a debrid account, a Usenet provider, or a torrent addon before finishing, or finish now and add it later."
+		return "Add a debrid account, a Usenet provider, or a torrent addon, or skip the Sources step."
 	case "indexers":
-		return "Add an indexer before finishing, or finish now and add it later."
+		return "Add an indexer or skip the Indexers step."
 	case "cache":
 		return "Choose a cache folder before finishing."
 	default:
-		return "Finish the remaining setup step, or finish now and add it later."
+		return "Finish the remaining setup step."
 	}
 }
 
@@ -150,26 +150,37 @@ func (h *Handler) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) handleSetupComplete(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Force bool `json:"force"`
+		Force        bool     `json:"force"` // Older consoles defer both optional connections.
+		SkippedSteps []string `json:"skippedSteps"`
 	}
-	_ = decodeJSONLenient(r, &body) // empty body tolerated
+	if r.Body != nil {
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBodyBytes)).Decode(&body); err != nil && !errors.Is(err, io.EOF) {
+			writeError(w, http.StatusBadRequest, "invalid_request", "Invalid setup completion request")
+			return
+		}
+	}
+	for _, id := range body.SkippedSteps {
+		if id != "sources" && id != "indexers" {
+			writeError(w, http.StatusBadRequest, "invalid_request", "Only Sources and Indexers can be skipped")
+			return
+		}
+	}
 	steps, _ := h.setupStatus(r)
-	// Never even when forced: after setup only the server's Plex owner can
-	// open the admin UI, so finishing unclaimed would lock everyone out.
+	// Finishing closes unauthenticated setup access, so the owner must already be able to sign in.
 	for _, s := range steps {
-		if s.ID == accountSetupID && !s.Complete {
+		if !s.Required || s.Complete {
+			continue
+		}
+		if s.ID == accountSetupID {
 			writeError(w, http.StatusConflict, "plex_required",
 				"create a local owner or claim Plex before completing setup")
 			return
 		}
-	}
-	if !body.Force {
-		for _, s := range steps {
-			if s.Required && !s.Complete {
-				writeError(w, http.StatusConflict, "setup_incomplete", plainSetupGap(s.ID))
-				return
-			}
+		if (s.ID == "sources" || s.ID == "indexers") && (body.Force || slices.Contains(body.SkippedSteps, s.ID)) {
+			continue
 		}
+		writeError(w, http.StatusConflict, "setup_incomplete", plainSetupGap(s.ID))
+		return
 	}
 	if err := h.deps.Config.Update(func(c *config.Config) error { c.SetupComplete = true; return nil }); err != nil {
 		writeError(w, http.StatusInternalServerError, "save_failed", "could not save configuration")

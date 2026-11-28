@@ -139,15 +139,14 @@ certification and exact-build conformance remain pending.
 
 ## Set up
 
-The setup wizard starts with app selection and owner-account setup. If you
+The setup wizard starts with language, app selection, and owner-account setup. If you
 select Plex, sign in with Plex and claim the server; otherwise, create a local
 Ether owner account. Jellyfin, Emby and Silo do not require a Plex account;
 use Ether viewer accounts and the connection instructions on the Apps page.
-Then choose where Ether streams from: a
-debrid account (Real-Debrid, TorBox, AllDebrid, Premiumize, Debrid-Link or
-Offcloud), a Usenet provider, or both, each tested before you continue. Next add at least one
-indexer: a Stremio stream addon's install link or a Torznab URL for debrid,
-and a Newznab URL for Usenet. Finally choose a cache folder and budget.
+On **Sources**, choose a debrid account or Usenet provider. On **Indexers**,
+add a Stremio addon, a Torznab indexer for torrents, or a Newznab indexer for
+Usenet. Choose **Skip this step** on either page to configure it later. Continue
+through the cache and catalogue settings, then select **Finish setup**.
 Out of the box there is no server quality cap, at home or away: each device
 plays the best release it can show (phones up to 1080p, TVs and streaming boxes
 up to 4K), and the app's own quality setting still applies. To limit quality,
