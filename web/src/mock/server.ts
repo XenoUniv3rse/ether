@@ -722,7 +722,32 @@ export function createFakeServer(opts: FakeOptions = {}) {
   }
 
   function setupSteps() {
+    const cfg = state.config;
+    const indexers = (cfg.indexers ?? []).filter((ix) => ix.enabled);
     return [
+      {
+        id: "plex",
+        title: "Owner account",
+        complete: Boolean(state.boot.ownerConfigured || (cfg.plex.claimed && cfg.plex.token)),
+        required: true,
+      },
+      {
+        id: "sources",
+        title: "Sources",
+        complete: Boolean(
+          cfg.usenet.providers?.some((p) => p.enabled) ||
+          cfg.debrid?.providers?.some((p) => p.enabled && p.apiKey.trim()) ||
+          indexers.some((ix) => ix.kind === "stremio" && ix.url.trim()),
+        ),
+        required: true,
+      },
+      { id: "indexers", title: "Indexers", complete: indexers.length > 0, required: true },
+      {
+        id: "cache",
+        title: "Cache",
+        complete: !!cfg.cache.dir.trim() && cfg.cache.budgetBytes >= 0,
+        required: true,
+      },
       {
         id: "catalog",
         title: "Metadata sources",
@@ -4234,16 +4259,43 @@ export function createFakeServer(opts: FakeOptions = {}) {
         return json({ config: state.config });
       case "GET /metadata/sources":
         return json({ sources: metadataSources() });
-      case "GET /setup/status":
+      case "GET /setup/status": {
+        const steps = setupSteps();
         return json({
           setupComplete: state.config.setupComplete,
-          requiredComplete: true,
-          steps: setupSteps(),
+          requiredComplete: steps.every((s) => !s.required || s.complete),
+          steps,
         });
-      case "POST /setup/complete":
+      }
+      case "POST /setup/complete": {
+        const steps = setupSteps();
+        const request = body as { skippedSteps?: string[]; force?: boolean } | undefined;
+        const skipped = request?.skippedSteps ?? [];
+        if (skipped.some((id) => id !== "sources" && id !== "indexers"))
+          return err(400, "invalid_request", "Only Sources and Indexers can be skipped");
+        const missing = steps.find(
+          (s) =>
+            s.required &&
+            !s.complete &&
+            !(
+              (s.id === "sources" || s.id === "indexers") &&
+              (request?.force || skipped.includes(s.id))
+            ),
+        );
+        if (missing)
+          return err(
+            409,
+            missing.id === "plex" ? "plex_required" : "setup_incomplete",
+            missing.title + " is incomplete",
+          );
         state.config.setupComplete = true;
         state.boot.setupComplete = true;
-        return json({ setupComplete: true, requiredComplete: true, steps: setupSteps() });
+        return json({
+          setupComplete: true,
+          requiredComplete: steps.every((s) => !s.required || s.complete),
+          steps,
+        });
+      }
       case "POST /setup/reopen":
         return json({
           setupComplete: state.config.setupComplete,

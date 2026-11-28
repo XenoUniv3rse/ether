@@ -389,7 +389,8 @@ export const api = {
   clearAllLockouts: () =>
     apiFetch<{ ok: boolean; cleared: number }>("/auth/lockouts", { method: "DELETE" }),
   setupStatus: () => apiFetch<SetupStatus>("/setup/status"),
-  setupComplete: (force = false) => post<SetupStatus>("/setup/complete", { force }),
+  setupComplete: (skippedSteps: ("sources" | "indexers")[] = []) =>
+    post<SetupStatus>("/setup/complete", { skippedSteps }),
   setupReopen: () => post<SetupStatus>("/setup/reopen"),
   pinStart: () => post<{ id: string; code: string; authUrl: string }>("/plex/pin"),
   pinPoll: (id: string) => apiFetch<{ done: boolean }>(`/plex/pin/${encodeURIComponent(id)}`),
@@ -795,7 +796,6 @@ export function newId(prefix: string): string {
 export function errorMessage(err: unknown): string {
   if (err instanceof ApiError) {
     if (err.status === 401) return t("Your session has expired. Sign in again.");
-    if (err.code === "setup_incomplete") return t("You can finish now and add sources later.");
     if (err.code === "plex_required")
       return t("Create an owner account, or connect Plex, before finishing.");
     return err.message;
