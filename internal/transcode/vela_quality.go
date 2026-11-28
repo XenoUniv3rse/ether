@@ -86,14 +86,47 @@ func qualityVariants(info core.MediaInfo, base core.Decision, caps core.ClientCa
 		}
 	}
 	keepHDR := codec == "hevc" && sourceRange != rangeSDR && sourceRange != rangeDV && slices.Contains(caps.HDRFormats, sourceRange) && !caps.ExplicitNoHDR
-	steps := []struct{ height, video int }{{2160, 40000}, {1080, 20000}, {1080, 12000}, {1080, 8000}, {720, 6000}, {720, 4000}, {480, 1500}, {360, 800}}
-	for _, step := range steps {
+	type qualityStep struct{ height, video int }
+	sourceSize := false
+	steps := []qualityStep{{2160, 40000}, {1080, 20000}, {1080, 12000}, {1080, 8000}, {720, 6000}, {720, 4000}, {480, 1500}, {360, 800}}
+	var cappedVideo int
+	if adaptive && maxKbps > 0 {
+		average := min(maxKbps*10/12, maxKbps-100)
+		cappedVideo = average - decisionAudioKbps(info, base)
+	}
+	// The copy clock may be unavailable even on a fast link. Offer a
+	// source-size encode under the peak budget before the standard steps.
+	if adaptive && base.VideoCopy {
+		w, sourceHeight := displaySize(v)
+		h := minPositive(sourceHeight, maxHeight, caps.VideoMaxHeights[codec])
+		if maxWidth > 0 && maxWidth < w {
+			h = min(h, even(sourceHeight*maxWidth/w))
+		}
+		target := bitrateCeiling(h, codec)
+		if maxKbps > 0 {
+			target = min(target, cappedVideo)
+		}
+		if h > 480 && target >= bitrateCeiling(h, codec)/4 {
+			steps = append([]qualityStep{{h, target}}, steps...)
+			sourceSize = true
+		}
+	}
+	for index, step := range steps {
+		if adaptive && maxKbps > 0 && step.height == 360 && cappedVideo >= minRungVideoKbps {
+			step.video = min(step.video, cappedVideo)
+		}
+		if adaptive && step.height > 720 && step.video > bitrateCeiling(step.height, codec) {
+			continue
+		}
 		// Use source naming classes (width for scope movies), never duplicate a
 		// taller class by clamping it to the source dimensions.
 		if v.Height < step.height && v.Width < step.height*16/9 {
 			continue
 		}
 		w, h := fitRungBox(v, step.height)
+		if sourceSize && index == 0 {
+			w, h = displayOutputSize(v, step.height)
+		}
 		ranges := []string{rangeSDR}
 		if adaptive {
 			ranges = []string{dr}
@@ -144,6 +177,9 @@ func qualityVariants(info core.MediaInfo, base core.Decision, caps core.ClientCa
 				continue
 			}
 			id := fmt.Sprintf("%dp%dk-%s-%s", step.height, step.video, codec, dr)
+			if slices.ContainsFunc(out, func(q core.QualityVariant) bool { return q.Rung.ID == id }) {
+				continue
+			}
 			d.Reason = "explicit Vela quality " + id
 			out = append(out, core.QualityVariant{Decision: d, Rung: core.HLSRung{ID: id, Width: w, Height: h, VideoBitrate: step.video * 1000, PeakVideoBitrate: qualityPeakVideoKbps(peak, audio) * 1000, Codec: codec, DynamicRange: dr, AverageBandwidth: d.BitrateKbps * 1000, Bandwidth: peak * 1000}})
 		}

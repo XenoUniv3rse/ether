@@ -1107,8 +1107,9 @@ func (m *Manager) startHLS(ctx context.Context, req core.HLSRequest, life *encod
 	}
 	if req.AdaptiveHLS {
 		for i := range rungs {
-			setAdaptiveHEVCLevel(&rungs[i], v)
+			setAdaptiveRungCodecs(req.Info, &rungs[i], v)
 		}
+		d = rungs[0].decision
 	}
 	if proto == core.ProtocolHLS && d.Container == ContainerMatroska && len(rungs) > 1 {
 		// Plex's native player probes every rendition's initialization and

@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -419,7 +418,7 @@ func (b *Broker) StartStream(ctx context.Context, a frontend.SessionAccess, id s
 		startAt = ps.SourcePosition(startAt)
 	}
 	request := core.HLSRequest{WaitForEncoder: !req.PrepareOnly, EncoderViewer: viewer.Username, FirstSegmentAt: firstSegmentAt, LazyStart: req.LazyStart, Diagnostics: req.Continuous, Continuous: req.Continuous, RequireIndependentProof: b.policy(s.public.Protocol).DistributedBindings, SessionID: id, ReleaseID: ps.SourceReleaseID(), InputURL: b.deps.Playback.InputURL(s.playID), NoVideoTranscode: !s.live && b.videoOff(s.caps), Info: ps.Info, Decision: dec, StartOffset: startAt, SegmentDuration: req.SegmentDuration, Protocol: proto}
-	if req.Continuous && s.public.Protocol == "vela" {
+	if req.Continuous && s.public.Protocol == "vela" && !adaptive {
 		variants, _, e := b.qualityPlan(ctx, s, viewer)
 		if e != nil {
 			return "", e
@@ -433,7 +432,7 @@ func (b *Broker) StartStream(ctx context.Context, a frontend.SessionAccess, id s
 	}
 	if adaptive && ps.Info.Video() != nil {
 		request.AdaptiveHLS = true
-		request.AdaptiveEncodeTop = s.public.Protocol == "vela" && !s.live
+		request.AdaptiveEncodeTop = !s.live
 		// The upload allocation is an admission-time ceiling. Budget the
 		// peak of the base rather than the source's average bitrate.
 		demand := 0
@@ -464,12 +463,8 @@ func (b *Broker) StartStream(ctx context.Context, a frontend.SessionAccess, id s
 			}
 			request.Decision = base
 			for _, variant := range variants {
-				if n := slices.Index(request.QualityRungIDs, variant.Rung.ID); n >= 0 {
-					request.QualityVariants[n] = variant
-				} else {
-					request.QualityVariants = append(request.QualityVariants, variant)
-					request.QualityRungIDs = append(request.QualityRungIDs, variant.Rung.ID)
-				}
+				request.QualityVariants = append(request.QualityVariants, variant)
+				request.QualityRungIDs = append(request.QualityRungIDs, variant.Rung.ID)
 			}
 		}
 	}

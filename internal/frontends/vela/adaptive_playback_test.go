@@ -31,10 +31,11 @@ func (f *adaptiveOutputFixture) AdaptiveBitrateLimit() int { return int(f.cap.Lo
 
 func TestVelaAdaptivePlaybackPaths(t *testing.T) {
 	const reportedTitle = "000000000000000100038d7ea4cf6b8a"
-	for _, route := range []string{"fresh", "resume_source", "remembered_choice", "original"} {
+	for _, route := range []string{"fresh", "resume_source", "remembered_choice", "original", "original_auto"} {
 		t.Run(route, func(t *testing.T) {
 			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
+			original := strings.HasPrefix(route, "original")
 			output := &adaptiveOutputFixture{outputFixture: outputFixture{rungs: []core.HLSRung{
 				{ID: "base", Bandwidth: 6700000, Width: 1920, Height: 1080},
 				{ID: "720p", Bandwidth: 4600000, Width: 1280, Height: 720},
@@ -46,12 +47,12 @@ func TestVelaAdaptivePlaybackPaths(t *testing.T) {
 				PlanFunc: func(_ context.Context, _ frontend.PlanRequest) (frontend.PlayPlan, error) {
 					decision := core.Decision{Kind: core.DecisionRemux, VideoCopy: true, AudioCopy: true}
 					audio := "aac"
-					if route == "original" {
+					if original {
 						decision.Kind, decision.Reason = core.DecisionDirectPlay, "original_runtime"
 						audio = "truehd"
 					}
 					plan := frontend.PlayPlan{ID: "plan", HLS: true, DirectStream: true, ETag: "edition", Decision: decision,
-						Media: core.MediaInfo{Container: "mkv", Duration: time.Hour, Streams: []core.StreamInfo{
+						Media: core.MediaInfo{Container: "mkv", Duration: time.Hour, BitrateKbps: 8000, Streams: []core.StreamInfo{
 							{Type: "video", Codec: "h264", Width: 1920, Height: 1080},
 							{Type: "audio", Codec: audio, Channels: 2},
 						}}}
@@ -89,7 +90,7 @@ func TestVelaAdaptivePlaybackPaths(t *testing.T) {
 			}
 			c := object{"device": object{"id": "device", "platform": "android"}, "hls": true, "videoCodecs": []string{"h264", "hevc"},
 				"audioCodecs": []string{"aac", "ac3", "eac3"}, "maxWidth": 1920, "maxHeight": 1080, "features": object{"adaptiveHLS": true}}
-			if route == "original" {
+			if original {
 				c["device"].(object)["platform"] = "ios"
 				c["originalPlayback"] = object{"version": 1, "range": true, "demuxContainers": []string{"mkv"}, "videoDecoders": []string{"h264"}, "audioDecoders": []string{"truehd", "aac"}}
 			}
@@ -128,6 +129,41 @@ func TestVelaAdaptivePlaybackPaths(t *testing.T) {
 			}
 			if route == "original" && (paths[0]["transport"] != "file" || len(paths) < 2 || paths[1]["id"] != adaptivePathID || paths[1]["adaptive"] != true || !requests[1].PrepareOnly) {
 				t.Fatalf("original did not retain a separate adaptive master: %+v", paths)
+			}
+			if route == "original_auto" {
+				observation := object{"sourceGeneration": 1, "seekGeneration": 1, "sequence": 1,
+					"positionSeconds": 257, "state": "buffering", "selectedPathId": paths[0]["id"]}
+				call(i.observe, observation)
+				if len(requests) != 2 {
+					t.Fatal("one buffering observation switched away from direct play")
+				}
+				s.mu.Lock()
+				// Model consecutive delivered ranges without sleeping for the sample window.
+				now := time.Now()
+				begin := now.Add(-20 * time.Second)
+				s.directDelivery.buffering = begin
+				for n := range 4 {
+					start := begin.Add(time.Duration(n) * 5 * time.Second)
+					s.directDelivery.add(start, start.Add(5*time.Second), 3125000)
+				}
+				s.directDelivery.clientBps, s.directDelivery.clientAt = 8000000, now
+				s.mu.Unlock()
+				observation["sequence"] = 2
+				call(i.observe, observation)
+				if len(requests) != 2 {
+					t.Fatal("server estimate overrode fresh client throughput")
+				}
+				s.mu.Lock()
+				s.directDelivery.clientAt = begin
+				s.mu.Unlock()
+				observation["sequence"] = 3
+				call(i.observe, observation)
+				req := requests[len(requests)-1]
+				if req.AdaptiveMaxBitrate != 5000000 || req.Position != 257*time.Second ||
+					s.plan["selectedPathId"] != adaptivePathID || s.source != 2 || s.seek != 2 {
+					t.Fatalf("automatic adaptive handoff: %+v, %s, %d/%d", req, s.plan["selectedPathId"], s.source, s.seek)
+				}
+				return
 			}
 			checkMaster := func(paths []object, cap int) {
 				t.Helper()
@@ -170,6 +206,13 @@ func TestVelaAdaptivePlaybackPaths(t *testing.T) {
 			s.applyOutput(copy)
 			s.mu.Unlock()
 			assertPaths()
+
+			call(i.observe, object{"sourceGeneration": 2, "seekGeneration": 2, "sequence": 1,
+				"positionSeconds": 257, "state": "playing", "selectedPathId": adaptivePathID})
+			call(i.command, object{"kind": "switch", "pathId": adaptivePathID, "sourceGeneration": 2, "seekGeneration": 2})
+			if req := requests[len(requests)-1]; req.Position != 257*time.Second {
+				t.Fatalf("path switch lost observed position: %+v", req)
+			}
 		})
 	}
 }

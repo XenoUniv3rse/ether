@@ -73,8 +73,8 @@ Reload the master when an updated plan lowers that value.
 For other clients, the bitrate form selects the highest allowed fixed
 rendition within the cap. If no rendition fits, the command fails. A
 successful switch advances the source and seek generations. `atSeconds`
-is the absolute title position. If omitted in the bitrate form, Ether
-uses the session's current position. Prepared playback can retain its
+is the absolute title position. If omitted, Ether uses the session's
+current position for either form. Prepared playback can retain its
 timeline origin.
 
 ## Adaptive HLS
@@ -87,7 +87,15 @@ adaptive track selection enabled and do not pin an initial rendition or send
 a `switch` command in response to bandwidth changes. Explicit path switches
 remain available for manual quality choices. Eligible original files keep
 their direct-play primary. For an opted-in client, Ether also offers an
-`adaptive-hls` path with its own master URL.
+`adaptive-hls` path with its own master URL. After sustained buffering
+on direct play, Ether can select that path automatically and publish a
+plan event with new source and seek generations and a master capped to
+measured delivery. The handoff uses the current title position. Ether
+prefers fresh client throughput and can also measure bytes delivered by
+the file GETs. It waits for 15 seconds of buffering or a second buffering
+episode within 30 seconds and requires delivery below 90% of the source
+bitrate. Server measurements must span at least 15 seconds. Changing
+source or seek generation resets the evidence.
 
 The master uses one muxed audio track across its variants. Every variant has
 its own media playlist and, for fMP4, its own initialization segment. Ether
@@ -95,12 +103,12 @@ uses one segment timeline and forces transcode cuts at that timeline's
 boundaries. A remux can share the master when Ether can establish its
 keyframe grid and the opening GOPs have no leading pictures. Ether checks
 this before publishing the timeline using the available index and bounded
-packet probes. If copy alignment cannot be established, Vela can use the
-highest compatible encoded variant as the top of a new shared timeline.
-The automatic
-variants use the same video codec family, dynamic range, frame rate, and
-audio selection. If fewer than two variants qualify, the path has no
-`adaptive` flag. An opted-in HLS path without adaptive quality carries
+packet probes. If copy alignment cannot be established, Ether builds an
+encoded timeline with the largest compatible picture its bitrate and
+transcode budgets allow. Each rendition keeps its CODECS declaration for
+the lifetime of the stream. The automatic variants use the same video
+codec family, dynamic range, frame rate, and audio selection. If fewer
+than two variants qualify, the path has no `adaptive` flag. An opted-in HLS path without adaptive quality carries
 `adaptiveUnavailable: {reason, message}`. The reason is a stable code and
 the message is localized. The viewer and upload ceilings apply when the
 stream is opened. Variant playlists can be read without starting an encoder. The

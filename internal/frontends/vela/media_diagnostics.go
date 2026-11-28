@@ -59,8 +59,15 @@ func (i *instance) serveObservedMedia(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	source, seek := s.source, s.seek
+	meterDirect := s.client.Features.AdaptiveHLS && r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/file")
 	s.mu.Unlock()
-	out := &mediaObservationWriter{ResponseWriter: w, session: s}
+	var observed http.ResponseWriter = w
+	if meterDirect {
+		meter := &directDeliveryWriter{ResponseWriter: w, session: s, source: source, seek: seek}
+		defer meter.sample()
+		observed = meter
+	}
+	out := &mediaObservationWriter{ResponseWriter: observed, session: s}
 	i.host.Sessions.ServeMedia(out, r)
 	record := object{"at": time.Now().UTC(), "resource": path.Base(r.URL.Path), "mimeType": w.Header().Get("Content-Type"), "status": out.status, "bytes": out.bytes, "sourceGeneration": source, "seekGeneration": seek}
 	if len(out.playlist) > 0 {
