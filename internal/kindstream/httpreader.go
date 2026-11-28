@@ -13,6 +13,8 @@ import (
 	"sync"
 	"time"
 
+	"golang.org/x/sync/errgroup"
+
 	"github.com/braedonsaunders/ether/internal/core"
 	"github.com/braedonsaunders/ether/internal/safefetch"
 )
@@ -179,6 +181,7 @@ func extractHost(rawURL string) string {
 }
 
 type httpReaderConfig struct {
+	Connections           int
 	Template              *URLTemplate
 	Headers               map[string]string
 	SecretHeaderKeys      []string
@@ -195,6 +198,10 @@ type httpReaderConfig struct {
 // HTTPReaderAt implements ByteSource (and io.ReaderAt) over an HTTP Range or
 // range-templated URL source.
 type HTTPReaderAt struct {
+	connections           int
+	validator             string
+	validatorHeader       string
+	resourceURL           string
 	tmpl                  *URLTemplate
 	headers               map[string]string
 	secretHeaderKeys      []string
@@ -220,6 +227,7 @@ func newHTTPReaderAt(ctx context.Context, cfg httpReaderConfig) (*HTTPReaderAt, 
 		backoff = defaultBackoff
 	}
 	r := &HTTPReaderAt{
+		connections:           cfg.Connections,
 		tmpl:                  cfg.Template,
 		headers:               cfg.Headers,
 		secretHeaderKeys:      cfg.SecretHeaderKeys,
@@ -247,7 +255,7 @@ func (r *HTTPReaderAt) probe(ctx context.Context) error {
 		probeEnd = 0
 	}
 
-	resp, targetURL, err := r.doRangeRequest(ctx, 0, probeEnd)
+	resp, targetURL, err := r.doRangeRequest(ctx, 0, probeEnd, false)
 	if err != nil {
 		return err
 	}
@@ -263,6 +271,16 @@ func (r *HTTPReaderAt) probe(ctx context.Context) error {
 			r.size = totalSize
 		} else if r.size <= 0 {
 			return errors.New("kindstream: 206 response missing total size in Content-Range and source Size is unset")
+		}
+		if r.connections > 1 && !r.tmpl.UsesRangePlaceholders() && err == nil {
+			end := min(probeEnd, r.size-1)
+			if !exactRange(resp, 0, end, r.size) {
+				return errors.New("kindstream: incorrect probe range")
+			}
+			r.validatorHeader, r.validator = rangeValidator(resp.Header)
+			if resp.Request != nil && resp.Request.URL != nil {
+				r.resourceURL = resp.Request.URL.String()
+			}
 		}
 		head, err := io.ReadAll(io.LimitReader(resp.Body, probeHeadBytes))
 		if err != nil {
@@ -329,7 +347,7 @@ func (r *HTTPReaderAt) probe(ctx context.Context) error {
 	}
 }
 
-func (r *HTTPReaderAt) doRangeRequest(ctx context.Context, start, end int64) (*http.Response, string, error) {
+func (r *HTTPReaderAt) doRangeRequest(ctx context.Context, start, end int64, dedicated bool) (*http.Response, string, error) {
 	targetURL, err := r.tmpl.Expand(TemplateVars{
 		ItemIndex: r.itemIndex,
 		ByteStart: start,
@@ -349,8 +367,12 @@ func (r *HTTPReaderAt) doRangeRequest(ctx context.Context, start, end int64) (*h
 		if err != nil {
 			return nil, targetURL, err
 		}
+		req.Close = dedicated
 		for k, v := range r.headers {
 			req.Header.Set(k, v)
+		}
+		if r.validator != "" {
+			req.Header.Set("If-Range", r.validator)
 		}
 		stripKeys := r.secretHeaderKeys
 		if !r.tmpl.HasByteStartOnly() && !r.tmpl.HasByteRange() {
@@ -437,9 +459,59 @@ func (r *HTTPReaderAt) readAtCtx(ctx context.Context, p []byte, off int64) (int,
 		return n, nil
 	}
 
-	start := off
-	end := off + want - 1
-	resp, _, err := r.doRangeRequest(ctx, start, end)
+	if r.validator != "" && want >= 256<<10 {
+		// Split the adaptive read-ahead window. Workers fill disjoint slices, and
+		// finish before returning, so a seek leaves no speculative fetches behind.
+		g, groupCtx := errgroup.WithContext(ctx)
+		count := min(int64(r.connections), want/(64<<10))
+		for i := int64(0); i < count; i++ {
+			lo, hi := want*i/count, want*(i+1)/count
+			g.Go(func() error {
+				_, err := r.readRange(groupCtx, p[lo:hi], off+lo, true)
+				return err
+			})
+		}
+		if err := g.Wait(); err != nil {
+			return 0, err
+		}
+	} else {
+		n, err := r.readRange(ctx, p[:want], off, false)
+		if err != nil {
+			return n, err
+		}
+	}
+	if hitEOF {
+		return int(want), io.EOF
+	}
+	return int(want), nil
+}
+
+func rangeValidator(h http.Header) (string, string) {
+	etag := strings.TrimSpace(h.Get("ETag"))
+	if len(etag) >= 2 && etag[0] == '"' && etag[len(etag)-1] == '"' {
+		return "ETag", etag
+	}
+	modified, merr := http.ParseTime(h.Get("Last-Modified"))
+	date, derr := http.ParseTime(h.Get("Date"))
+	if merr == nil && derr == nil && date.Sub(modified) >= time.Minute {
+		return "Last-Modified", h.Get("Last-Modified")
+	}
+	return "", ""
+}
+
+func exactRange(resp *http.Response, start, end, size int64) bool {
+	encoding := resp.Header.Get("Content-Encoding")
+	if resp.Uncompressed || (encoding != "" && !strings.EqualFold(encoding, "identity")) {
+		return false
+	}
+	return strings.EqualFold(strings.TrimSpace(resp.Header.Get("Content-Range")), fmt.Sprintf("bytes %d-%d/%d", start, end, size)) &&
+		(resp.ContentLength < 0 || resp.ContentLength == end-start+1)
+}
+
+func (r *HTTPReaderAt) readRange(ctx context.Context, p []byte, start int64, dedicated bool) (int, error) {
+	want := int64(len(p))
+	end := start + want - 1
+	resp, _, err := r.doRangeRequest(ctx, start, end, dedicated)
 	if err != nil {
 		return 0, err
 	}
@@ -449,18 +521,23 @@ func (r *HTTPReaderAt) readAtCtx(ctx context.Context, p []byte, off int64) (int,
 		return 0, fmt.Errorf("kindstream: range read [%d-%d] unexpected HTTP %d", start, end, resp.StatusCode)
 	}
 
+	if r.validator != "" && (!exactRange(resp, start, end, r.size) ||
+		resp.Header.Get(r.validatorHeader) != r.validator ||
+		resp.Request == nil || resp.Request.URL == nil || resp.Request.URL.String() != r.resourceURL) {
+		return 0, errors.New("kindstream: range representation changed or incorrect interval")
+	}
 	n, err := io.ReadFull(io.LimitReader(resp.Body, want), p[:want])
 	if err != nil {
 		if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
-			if int64(n) == want && hitEOF {
-				return n, io.EOF
-			}
 			return n, io.ErrUnexpectedEOF
 		}
 		return n, err
 	}
-	if hitEOF {
-		return n, io.EOF
+	if r.validator != "" && resp.ContentLength < 0 {
+		var tail [1]byte
+		if n, err := io.ReadFull(resp.Body, tail[:]); n != 0 || err != io.EOF {
+			return 0, errors.New("kindstream: invalid range length")
+		}
 	}
 	return n, nil
 }

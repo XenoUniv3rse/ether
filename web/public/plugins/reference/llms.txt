@@ -780,9 +780,9 @@ const playUrl = ether.frontend.streamURL(itemRef, {absolute: true}).url;
 ```
 
 In the SDKs, call `streamUrl(ctx, itemRef, partIndexOrOpts?)` (TypeScript),
-`ctx.StreamURLWithOptions(itemRef, StreamURLOptions{PartIndex, Source, Absolute, Wait})` or
+`ctx.StreamURLWithOptions(itemRef, StreamURLOptions{PartIndex, Source, Fallback, Absolute, Wait})` or
 `ctx.StreamPartURL(itemRef, partIndex)` (Go), or
-`ctx.stream_url(item_ref, part_index=..., source=..., absolute=...)` (Python); an unpinned
+`ctx.stream_url(item_ref, part_index=..., source=..., fallback=True, absolute=...)` (Python); an unpinned
 item ticket also accepts `/ether/v1/kind-media/{ticket}?part=N`. Default stream
 URLs remain root-relative; `{ absolute: true }` prepends the request's
 `X-Ether-Origin` (falling back to the adapter's first published address in
@@ -795,7 +795,7 @@ reject any `partIndex` with `404 item_not_found`. When `source` is set on the
 ticket grant, Ether passes `KindResolveRequest.source` to `/resolve` and opens
 only the matching `PlayableSource.id` without failing over to other sources (a
 plugin that ignores `source` still works because Ether selects the matching id
-or returns `409 no_source` if absent).
+or returns `409 no_source` if absent). Add `fallback: true` to treat the source as a preference. If it is missing or fails to open, Ether tries the remaining sources for the same part in their usual order.
 
 For an adapter download route, pass `{wait: {maxSeconds: 1200}}` to hold the
 media response while the plugin prepares the file. In Go, use

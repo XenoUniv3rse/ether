@@ -1219,9 +1219,12 @@ class _FrontendClient:
         source: Optional[str] = None,
         absolute: bool = False,
         viewer_token: Optional[str] = None,
+        fallback: bool = False,
     ) -> str:
         checked = _check_part_index(part_index)
         checked_source = _check_stream_source(source)
+        if not isinstance(fallback, bool) or (fallback and not checked_source):
+            raise ValueError("stream url: fallback requires a named source")
         if not isinstance(absolute, bool):
             raise ValueError("stream url: absolute must be a bool")
         payload: Dict[str, Any] = {"viewerId": int(viewer_id), "itemRef": str(item_ref)}
@@ -1229,6 +1232,8 @@ class _FrontendClient:
             payload["partIndex"] = checked
         if checked_source is not None:
             payload["source"] = checked_source
+            if fallback:
+                payload["fallback"] = True
         if absolute:
             payload["absolute"] = True
         tok = (
@@ -1467,6 +1472,7 @@ class PluginContext:
         part_index: Optional[int] = None,
         source: Optional[str] = None,
         absolute: bool = False,
+        fallback: bool = False,
     ) -> str:
         """Mint a scoped Ether stream URL for one of this plugin's own kind
         items (spec §6.5), optionally scoped to a zero-based part (#576), a
@@ -1478,6 +1484,8 @@ class PluginContext:
             raise RuntimeError("stream url: no host service available")
         checked = _check_part_index(part_index)
         checked_source = _check_stream_source(source)
+        if not isinstance(fallback, bool) or (fallback and not checked_source):
+            raise ValueError("stream url: fallback requires a named source")
         if not isinstance(absolute, bool):
             raise ValueError("stream url: absolute must be a bool")
         raw = _get_header(self.headers, "X-Ether-Viewer")
@@ -1490,6 +1498,8 @@ class PluginContext:
         kwargs: Dict[str, Any] = {}
         if checked_source is not None:
             kwargs["source"] = checked_source
+            if fallback:
+                kwargs["fallback"] = True
         if absolute:
             kwargs["absolute"] = True
         if kwargs:
@@ -3067,6 +3077,7 @@ class MockHostClient:
         self.last_stream_url: Optional[Tuple[int, str]] = None
         self.last_stream_url_part: Optional[int] = None
         self.last_stream_url_source: Optional[str] = None
+        self.last_stream_url_fallback: bool = False
         self.last_stream_url_absolute: bool = False
         self.stream_origin: str = "http://ether.test"
         self.http_handler: Callable[[Dict[str, Any]], Dict[str, Any]] = lambda req: {
@@ -3130,14 +3141,18 @@ class MockHostClient:
             part_index: Optional[int] = None,
             source: Optional[str] = None,
             absolute: bool = False,
+            fallback: bool = False,
         ) -> str:
             checked = _check_part_index(part_index)
             checked_source = _check_stream_source(source)
+            if not isinstance(fallback, bool) or (fallback and not checked_source):
+                raise ValueError("stream url: fallback requires a named source")
             if not isinstance(absolute, bool):
                 raise ValueError("stream url: absolute must be a bool")
             self._p.last_stream_url = (int(viewer_id), str(item_ref))
             self._p.last_stream_url_part = checked
             self._p.last_stream_url_source = checked_source
+            self._p.last_stream_url_fallback = fallback
             self._p.last_stream_url_absolute = absolute
             base = f"/ether/v1/kind-media/mock-{int(viewer_id)}"
             rel = base if checked is None else f"{base}?part={checked}"
@@ -4423,6 +4438,7 @@ class PlayableSource(TypedDict, total=False):
     the plugin's order across tiers. Omit ``tier`` to keep exact plugin order.
     """
 
+    connections: int
     path: str
     id: str
     label: str
@@ -4588,12 +4604,13 @@ def stream_url(
     part_index: Optional[int] = None,
     source: Optional[str] = None,
     absolute: bool = False,
+    fallback: bool = False,
 ) -> str:
     """Mint an Ether stream URL for one of this plugin's own kind items
     (spec §6.5), optionally pinned to a zero-based part (#576), a resolver
     PlayableSource.id (#661), and/or resolved to an absolute URL (#772). Kept
     as a thin wrapper over PluginContext.stream_url."""
-    return ctx.stream_url(item_ref, part_index=part_index, source=source, absolute=absolute)
+    return ctx.stream_url(item_ref, part_index=part_index, source=source, absolute=absolute, fallback=fallback)
 
 
 def kinds_visible(

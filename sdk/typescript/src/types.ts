@@ -1344,6 +1344,8 @@ export interface KindMatchScore {
 }
 
 export interface PlayableSource {
+  /** Parallel range reads (1–6, default 1). */
+  connections?: number;
   path?: string;
   id: string;
   label?: string;
@@ -1430,6 +1432,8 @@ export interface KindResolveRequest {
 
 /** Options for minting a scoped frontend adapter stream URL (#576, #661, #772). */
 export interface StreamUrlOptions {
+  /** Try the remaining sources for this part if the named source fails. */
+  fallback?: boolean;
   partIndex?: number;
   source?: string;
   /** Return an absolute URL (`<origin>/ether/v1/kind-media/<token>`) using the active request origin or the adapter's first published address; default stays root-relative. */

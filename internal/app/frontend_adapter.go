@@ -185,6 +185,7 @@ func (a *App) adapterStreamURLOptions(issuer *frontendadapter.TicketIssuer) func
 			Adapter:   pluginID,
 			PartIndex: opts.PartIndex,
 			Source:    opts.Source,
+			Fallback:  opts.Fallback,
 			Wait:      frontendadapter.DownloadWait(opts.Wait),
 		})
 		if err != nil || !opts.Absolute {
@@ -638,7 +639,7 @@ func (a *App) adapterMediaHandler() *frontendadapter.MediaHandler {
 			}
 			return resolver.OpenKindPart(ctx, viewer, item.Key, partIndex, accept)
 		},
-		OpenSource: func(ctx context.Context, viewer *core.Viewer, itemRef string, partIndex *int, source string, accept []string) (*frontend.KindMedia, error) {
+		OpenSource: func(ctx context.Context, viewer *core.Viewer, itemRef string, partIndex *int, source string, fallback bool, accept []string) (*frontend.KindMedia, error) {
 			ref, err := core.ParseItemRef(itemRef)
 			if err != nil {
 				return nil, err
@@ -647,7 +648,7 @@ func (a *App) adapterMediaHandler() *frontendadapter.MediaHandler {
 			if err != nil {
 				return nil, err
 			}
-			return resolver.OpenKindPartSource(ctx, viewer, item.Key, partIndex, source, accept)
+			return resolver.OpenKindPartSourceWithFallback(ctx, viewer, item.Key, partIndex, source, fallback, accept)
 		},
 	})
 }

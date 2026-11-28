@@ -1631,6 +1631,7 @@ type AICompleteBackendRequest struct {
 // optionally asks Ether to return an absolute URL using the client-visible
 // request origin or the adapter's first published address (#772).
 type StreamURLOptions struct {
+	Fallback  bool              `json:"fallback,omitempty"` // Try remaining sources when the named source cannot open.
 	PartIndex *int              `json:"partIndex,omitempty"`
 	Source    string            `json:"source,omitempty"`
 	Absolute  bool              `json:"absolute,omitempty"`

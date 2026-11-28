@@ -673,6 +673,7 @@ func (h *HostHandler) frontendStreamURL(w http.ResponseWriter, r *http.Request) 
 		ItemRef   string                    `json:"itemRef"`
 		PartIndex *int                      `json:"partIndex,omitempty"`
 		Source    string                    `json:"source,omitempty"`
+		Fallback  bool                      `json:"fallback,omitempty"`
 		Absolute  bool                      `json:"absolute,omitempty"`
 		Wait      *plugins.StreamWaitPolicy `json:"wait,omitempty"`
 	}
@@ -681,6 +682,10 @@ func (h *HostHandler) frontendStreamURL(w http.ResponseWriter, r *http.Request) 
 	}
 	if body.PartIndex != nil && *body.PartIndex < 0 {
 		writeHostError(w, http.StatusBadRequest, "bad_arguments", "partIndex must be non-negative")
+		return
+	}
+	if body.Fallback && body.Source == "" {
+		writeHostError(w, http.StatusBadRequest, "bad_arguments", "fallback requires a source")
 		return
 	}
 	if body.Source != "" && strings.TrimSpace(body.Source) == "" {
@@ -707,6 +712,7 @@ func (h *HostHandler) frontendStreamURL(w http.ResponseWriter, r *http.Request) 
 		u, err = oh.StreamURLWithOptions(ctx, pluginIDOf(r), body.ViewerID, body.ItemRef, plugins.StreamURLOptions{
 			PartIndex: body.PartIndex,
 			Source:    body.Source,
+			Fallback:  body.Fallback,
 			Absolute:  body.Absolute,
 			Wait:      body.Wait,
 		})

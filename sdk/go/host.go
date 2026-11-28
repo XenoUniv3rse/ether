@@ -1230,6 +1230,9 @@ func (c *RemoteHostClient) StreamURLWithOptions(ctx context.Context, viewerID in
 	if opts.PartIndex != nil && *opts.PartIndex < 0 {
 		return "", fmt.Errorf("stream url: partIndex must be non-negative")
 	}
+	if opts.Fallback && opts.Source == "" {
+		return "", fmt.Errorf("stream url: fallback requires a source")
+	}
 	if opts.Source != "" && strings.TrimSpace(opts.Source) == "" {
 		return "", fmt.Errorf("stream url: source must not be blank")
 	}
@@ -1239,6 +1242,9 @@ func (c *RemoteHostClient) StreamURLWithOptions(ctx context.Context, viewerID in
 	}
 	if opts.Source != "" {
 		payload["source"] = opts.Source
+		if opts.Fallback {
+			payload["fallback"] = true
+		}
 	}
 	if opts.Absolute {
 		payload["absolute"] = true

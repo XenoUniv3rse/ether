@@ -1334,6 +1334,9 @@ func (h *host) StreamURLWithOptions(ctx context.Context, itemRef string, opts St
 	if opts.PartIndex != nil && *opts.PartIndex < 0 {
 		return "", fmt.Errorf("plugins: stream url partIndex must be non-negative")
 	}
+	if opts.Fallback && opts.Source == "" {
+		return "", fmt.Errorf("stream url: fallback requires a source")
+	}
 	if err := validateStreamSourceID(opts.Source); err != nil {
 		return "", err
 	}

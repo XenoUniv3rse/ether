@@ -478,6 +478,10 @@ func (r *KindResolver) openSingleSource(ctx context.Context, rec pluginitems.Kin
 			return nil, err
 		}
 	}
+	return r.kindMediaForSource(ctx, rec, item, partIdx, targetSrc, bs), nil
+}
+
+func (r *KindResolver) kindMediaForSource(ctx context.Context, rec pluginitems.KindRecord, item core.KindItem, partIdx *int, targetSrc core.PlayableSource, bs kindstream.ByteSource) *frontend.KindMedia {
 	parts := r.itemParts(ctx, item)
 	var dur time.Duration
 	if partIdx != nil && *partIdx < len(parts) {
@@ -509,7 +513,7 @@ func (r *KindResolver) openSingleSource(ctx context.Context, rec pluginitems.Kin
 		Name:        bs.Name(),
 		Release:     rel,
 		MediaSource: unwrapKindMediaSource(bs),
-	}, nil
+	}
 }
 
 func matchPlayableSource(sources []core.PlayableSource, defaultTitle, sourceID string, nowUnix int64) (core.PlayableSource, bool) {
@@ -610,9 +614,15 @@ func (r *KindResolver) OpenKindSource(ctx context.Context, viewer *core.Viewer, 
 // matching PlayableSource.ID from the response, or returns ErrNotAvailable if
 // it is absent.
 func (r *KindResolver) OpenKindPartSource(ctx context.Context, viewer *core.Viewer, key core.RatingKey, partIndex *int, sourceID string, accept []string) (*frontend.KindMedia, error) {
+	return r.OpenKindPartSourceWithFallback(ctx, viewer, key, partIndex, sourceID, false, accept)
+}
+
+// OpenKindPartSourceWithFallback keeps an explicit pick strict by default. A
+// preferred pick can fall back within the same authorized leaf and part.
+func (r *KindResolver) OpenKindPartSourceWithFallback(ctx context.Context, viewer *core.Viewer, key core.RatingKey, partIndex *int, sourceID string, fallback bool, accept []string) (*frontend.KindMedia, error) {
 	if r.waitsPreparing(ctx) {
 		return r.waitPreparing(ctx, func(ctx context.Context) (*frontend.KindMedia, error) {
-			return r.OpenKindPartSource(ctx, viewer, key, partIndex, sourceID, accept)
+			return r.OpenKindPartSourceWithFallback(ctx, viewer, key, partIndex, sourceID, fallback, accept)
 		})
 	}
 	if r == nil || r.items == nil || r.libs == nil || !key.IsPluginKey() || sourceID == "" {
@@ -672,6 +682,18 @@ func (r *KindResolver) OpenKindPartSource(ctx context.Context, viewer *core.View
 		effectivePart = p
 	}
 
+	media, err := r.openExactPartSource(ctx, rec, lib, targetItem, effectivePart, sourceID, accept)
+	if err == nil || !fallback || ctx.Err() != nil || errors.Is(err, core.ErrPreparing) {
+		return media, err
+	}
+	bs, winner, fallbackErr := r.openItemByteSourceExcluding(ctx, rec, lib, targetItem, effectivePart, accept, []string{sourceID})
+	if fallbackErr != nil {
+		return nil, fallbackErr
+	}
+	return r.kindMediaForSource(ctx, rec, targetItem, effectivePart, winner, bs), nil
+}
+
+func (r *KindResolver) openExactPartSource(ctx context.Context, rec pluginitems.KindRecord, lib core.Library, targetItem core.KindItem, effectivePart *int, sourceID string, accept []string) (*frontend.KindMedia, error) {
 	fk := flightKeyForItemSource(targetItem.Ref, effectivePart, sourceID)
 	if cached, ok := r.cachedCandidates(fk); ok {
 		if src, matched := matchPlayableSource(cached, targetItem.Title, sourceID, r.now().Unix()); matched {
@@ -2755,6 +2777,7 @@ func (r *KindResolver) kindstreamDeps(ctx context.Context, rec pluginitems.KindR
 		}
 	}
 	return kindstream.Deps{
+		LimitRangeTransport: r.mgr.LimitRangeTransport,
 		OpenFile: func(ctx context.Context, src core.PlayableSource) (kindstream.ByteSource, error) {
 			s := &StreamSources{mgr: r.mgr}
 			resolved, _, err := s.validateLocalFile(ctx, rec.PluginID, src.Path)
@@ -2915,7 +2938,7 @@ func (r *KindResolver) openItemByteSourceExcluding(ctx context.Context, rec plug
 	}
 	if ok && (!expired || r.canReuseVaultedSource(cachedSrc)) {
 		cachedID := playableSourceRelease(cachedSrc, item.Title).ID
-		if slices.Contains(exclude, cachedID) {
+		if slices.Contains(exclude, cachedID) || (cachedSrc.ID != "" && slices.Contains(exclude, cachedSrc.ID)) {
 			_ = r.items.InvalidatePartResolution(ctx, item.Ref, partIdx)
 		} else if r.isSourceBackingOff(cachedSrc) {
 			if !expired {
@@ -3523,7 +3546,7 @@ func (r *KindResolver) filterAndOrderCandidates(sources []core.PlayableSource, d
 			continue
 		}
 		id := playableSourceRelease(src, defaultTitle).ID
-		if len(exclude) > 0 && slices.Contains(exclude, id) {
+		if slices.Contains(exclude, id) || (src.ID != "" && slices.Contains(exclude, src.ID)) {
 			continue
 		}
 		if r.isSourceBackingOff(src) {

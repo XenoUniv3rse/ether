@@ -187,6 +187,7 @@ export interface MockHostState {
   /** Zero-based part index of the most recent part-scoped frontend.streamUrl call. */
   lastStreamUrlPart?: number;
   /** PlayableSource.id of the most recent source-scoped frontend.streamUrl call (#661). */
+  lastStreamUrlFallback?: boolean;
   lastStreamUrlSource?: string;
   /** Whether the most recent frontend.streamUrl call requested an absolute URL (#772). */
   lastStreamUrlAbsolute?: boolean;
@@ -705,6 +706,7 @@ export function createMockHostClient(initial?: Partial<MockHostState>): MockHost
         state.lastStreamUrl = [viewerId, itemRef];
         state.lastStreamUrlPart = opts.partIndex;
         state.lastStreamUrlSource = opts.source;
+        state.lastStreamUrlFallback = opts.fallback;
         state.lastStreamUrlAbsolute = opts.absolute;
         state.lastStreamUrlWait = opts.wait;
         const base = `/ether/v1/kind-media/mock-${viewerId}`;

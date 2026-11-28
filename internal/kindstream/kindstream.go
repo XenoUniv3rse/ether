@@ -90,10 +90,12 @@ const DefaultMaxNonVideoReleaseGrabs = 3
 // Deps supplies the runtime dependencies needed by Open and OpenSources
 // (spec §5.1).
 type Deps struct {
-	OpenFile    func(context.Context, core.PlayableSource) (ByteSource, error)
-	HTTP        *http.Client
-	Cache       *blobcache.Namespace
-	OpenRelease func(ctx context.Context, r core.ReleaseHint) (core.MediaSource, error)
+	// LimitRangeTransport applies the plugin manager’s shared per-origin connection limit.
+	LimitRangeTransport func(http.RoundTripper) http.RoundTripper
+	OpenFile            func(context.Context, core.PlayableSource) (ByteSource, error)
+	HTTP                *http.Client
+	Cache               *blobcache.Namespace
+	OpenRelease         func(ctx context.Context, r core.ReleaseHint) (core.MediaSource, error)
 	// OpenReleaseSource, when set, is preferred over OpenRelease so release
 	// opening receives the full PlayableSource (MIME, Container, Release).
 	OpenReleaseSource func(ctx context.Context, src core.PlayableSource) (core.MediaSource, error)
@@ -768,7 +770,20 @@ func openRangeSource(ctx context.Context, src core.PlayableSource, deps Deps) (B
 	if src.SizeApproximate {
 		knownSize = 0
 	}
+	if src.Connections < 0 || src.Connections > 6 {
+		return nil, fmt.Errorf("kindstream: range connections must be 1 to 6")
+	}
+	client := deps.HTTP
+	if src.Connections > 1 && deps.LimitRangeTransport != nil {
+		if client == nil {
+			client = defaultStreamingHTTPClient()
+		}
+		limited := *client
+		limited.Transport = deps.LimitRangeTransport(client.Transport)
+		client = &limited
+	}
 	hr, err := newHTTPReaderAt(ctx, httpReaderConfig{
+		Connections:           src.Connections,
 		Template:              tmpl,
 		Headers:               hdrs,
 		SecretHeaderKeys:      secretHeaderNames(src.Headers),
@@ -776,7 +791,7 @@ func openRangeSource(ctx context.Context, src core.PlayableSource, deps Deps) (B
 		ItemIndex:             deps.ItemIndex,
 		KnownSize:             knownSize,
 		MIME:                  src.MIME,
-		Client:                deps.HTTP,
+		Client:                client,
 		AllowHost:             deps.AllowHost,
 		Backoff:               deps.Backoff,
 	})

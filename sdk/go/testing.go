@@ -137,6 +137,7 @@ type MockHost struct {
 	LastStreamURLViewer   int64
 	LastStreamURLItem     string
 	LastStreamURLPart     *int
+	LastStreamURLFallback bool
 	LastStreamURLSource   string
 	LastStreamURLAbsolute bool
 	LastStreamURLWait     *StreamWaitPolicy
@@ -976,6 +977,9 @@ func (m *MockHost) StreamURLWithOptions(_ context.Context, viewerID int64, itemR
 	if opts.PartIndex != nil && *opts.PartIndex < 0 {
 		return "", fmt.Errorf("stream url: partIndex must be non-negative")
 	}
+	if opts.Fallback && opts.Source == "" {
+		return "", fmt.Errorf("stream url: fallback requires a source")
+	}
 	if opts.Source != "" && strings.TrimSpace(opts.Source) == "" {
 		return "", fmt.Errorf("stream url: source must not be blank")
 	}
@@ -990,6 +994,7 @@ func (m *MockHost) StreamURLWithOptions(_ context.Context, viewerID int64, itemR
 		m.LastStreamURLPart = nil
 	}
 	m.LastStreamURLSource = opts.Source
+	m.LastStreamURLFallback = opts.Fallback
 	m.LastStreamURLAbsolute = opts.Absolute
 	m.LastStreamURLWait = nil
 	if opts.Wait != nil {

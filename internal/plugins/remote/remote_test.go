@@ -2002,7 +2002,7 @@ func TestRemoteHostFrontendStreamURLSourceOption(t *testing.T) {
 	}
 
 	// Source, partIndex and wait forward to StreamURLWithOptions.
-	resp = post(srv.URL, `{"viewerId":7,"itemRef":"pk:plug.a:book:1","partIndex":1,"source":"epub","wait":{"maxSeconds":1200}}`)
+	resp = post(srv.URL, `{"viewerId":7,"itemRef":"pk:plug.a:book:1","partIndex":1,"source":"epub","fallback":true,"wait":{"maxSeconds":1200}}`)
 	var out struct {
 		URL string `json:"url"`
 	}
@@ -2011,7 +2011,7 @@ func TestRemoteHostFrontendStreamURLSourceOption(t *testing.T) {
 	if resp.StatusCode != http.StatusOK || out.URL != "/ether/v1/kind-media/remote-src" {
 		t.Fatalf("source+part response: status=%d out=%+v", resp.StatusCode, out)
 	}
-	if optHost.gotPlugin != "plug.a" || optHost.gotViewer != 7 || optHost.gotItem != "pk:plug.a:book:1" || optHost.gotOpts.PartIndex == nil || *optHost.gotOpts.PartIndex != 1 || optHost.gotOpts.Source != "epub" || optHost.gotOpts.Wait == nil || optHost.gotOpts.Wait.MaxSeconds != 1200 {
+	if optHost.gotPlugin != "plug.a" || optHost.gotViewer != 7 || optHost.gotItem != "pk:plug.a:book:1" || optHost.gotOpts.PartIndex == nil || *optHost.gotOpts.PartIndex != 1 || optHost.gotOpts.Source != "epub" || !optHost.gotOpts.Fallback || optHost.gotOpts.Wait == nil || optHost.gotOpts.Wait.MaxSeconds != 1200 {
 		t.Fatalf("unexpected forwarded args: plugin=%q viewer=%d item=%q opts=%+v", optHost.gotPlugin, optHost.gotViewer, optHost.gotItem, optHost.gotOpts)
 	}
 }

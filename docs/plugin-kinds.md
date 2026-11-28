@@ -316,7 +316,11 @@ Patterns:
 - **file** — a hosted resolver path inside an owner-picked folder; requires
   `folders: read` and live containment checks when resolving and opening.
 - **range** — a URL Ether reads with HTTP Range (demoted to download
-  when the host cannot range and the size fits the cache).
+  when the host cannot range and the size fits the cache). Set `connections`
+  to 2–6 to split large read-ahead windows into concurrent requests. This
+  shares the per-origin limit with cached downloads and uses no disk.
+  The default is one. Parallel reads require ordinary HTTP byte ranges and
+  a strong ETag or usable Last-Modified date. Other sources read sequentially.
 - **download** — fetched whole into the per-library blob cache
   (digests checked when you provide them), then served locally.
 - **direct** — the client surface is handed the URL (only where the
@@ -751,13 +755,13 @@ part:
 - **Per-part, per-source, and absolute stream URLs** let frontend adapters and
   multi-file or native clients fetch a specific file, pin a resolver
   `PlayableSource.id`, or embed an absolute URL (`<origin>/ether/v1/kind-media/{ticket}`):
-  - Mint a scoped ticket URL with `ether.frontend.streamURL(itemRef, { partIndex?, source?, absolute?, wait? }).url`
+  - Mint a scoped ticket URL with `ether.frontend.streamURL(itemRef, { partIndex?, source?, fallback?, absolute?, wait? }).url`
     (hosted JS; the positional `ether.frontend.streamURL(itemRef, partIndex).url` form still works),
-    `streamUrl(ctx, itemRef, { partIndex?, source?, absolute?, wait? })` (TypeScript SDK; positional `partIndex` also works),
-    `ctx.StreamURLWithOptions(itemRef, StreamURLOptions{PartIndex, Source, Absolute, Wait})` /
+    `streamUrl(ctx, itemRef, { partIndex?, source?, fallback?, absolute?, wait? })` (TypeScript SDK; positional `partIndex` also works),
+    `ctx.StreamURLWithOptions(itemRef, StreamURLOptions{PartIndex, Source, Fallback, Absolute, Wait})` /
     `ctx.StreamPartURL(itemRef, partIndex)` (Go SDK), or
-    `ctx.stream_url(item_ref, part_index=..., source=..., absolute=...)` (Python SDK) — backed by
-    `POST /ether/plugin-host/frontend/stream-url` with `{"viewerId", "itemRef", "partIndex"?, "source"?, "absolute"?, "wait": {"maxSeconds": 1200}?}`
+    `ctx.stream_url(item_ref, part_index=..., source=..., fallback=True, absolute=...)` (Python SDK) — backed by
+    `POST /ether/plugin-host/frontend/stream-url` with `{"viewerId", "itemRef", "partIndex"?, "source"?, "fallback"?, "absolute"?, "wait": {"maxSeconds": 1200}?}`
     (forwarding `X-Ether-Viewer-Token` from remote adapters so Ether can resolve the active request origin and adapter key).
   - Set `wait: {maxSeconds: 1200}` on tickets minted by download routes whose
     clients need one response. Ether accepts positive whole seconds and caps
@@ -780,7 +784,8 @@ part:
     still require root-relative paths; use `{ absolute: true }` for protocol
     documents handed to native clients (such as Kodi or Subsonic players) that
     open URLs verbatim.
-  - When `source` is set in the ticket grant, Ether passes `KindResolveRequest.source`
+  - For a remembered choice, pass `{ source: rememberedID, fallback: true }`. Ether tries that source first. If it is missing or fails to open, Ether tries the remaining sources for the same item and part in the usual order. A source still preparing follows the normal wait policy.
+  - When only `source` is set in the ticket grant, Ether passes `KindResolveRequest.source`
     to `/resolve` and opens **only** the matching source (matching `PlayableSource.id`)
     with no failover to other sources and without clobbering the shared default resolution
     or candidate cache. A plugin that ignores `source` still works: Ether picks the source

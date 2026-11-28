@@ -956,7 +956,7 @@ query the client sent:
 | Route | When | Notes |
 |---|---|---|
 | `/ether/v1/kinds/{kind}/browse` | Pull sync walks your catalogue | One level per call (`parentId`, `level`, `cursor`, `limit`). Return `nextCursor` or the full set up to `limit`; never more than `limit` items. |
-| `/ether/v1/kinds/{kind}/changes` | Pull sync refresh | Optional delta feed `{upserts, deletes, nextCursor, complete}`. Answer 404/501 and Ether re-walks and diffs by `etag` instead. |
+| `/ether/v1/kinds/{kind}/changes` | Pull sync refresh | Optional delta feed `{upserts, deletes, nextCursor, complete, checkpoint?}`. A feed of replayable upsert-only pages may set `checkpoint: true` on each intermediate page. Ether commits its upserts before saving the next cursor, so an interrupted sync can resume at that cursor. Feeds with deletions keep whole-pass deletion checks. Answer 404/501 and Ether re-walks and diffs by `etag` instead. |
 | `/ether/v1/kinds/{kind}/expand` | Viewer opens a declared facet bucket, plugin person, or container at a declared `browse.expand.levels` level | For facets/people: background only when `browse.expand.facets` lists that facet, receiving `{facet, value, valueId?, cursor?}`. For declared container levels (`browse.expand.levels`, each a `container: true` level): triggered when a viewer opens the container (`Item`) or its children (`Children`, including `?role=` / `?level=`) across every frontend whenever no fresh expansion exists within `ttlHours` or the container has 0 stored children; receives `{parentId, level, cursor?}` where `level` is the container's own level key. Single-flight per `(plugin, kind, itemRef)`, bounded first-page wait (~1.8s), background continuation via the expand job, additive upserts (direct children at any child level, optional grandchildren, optional self-refresh of the container), never triggered on Search, lists, Home, or in the background. Returns `{items, cursor?}` (or `nextCursor`) or `{job: "/ether/job/..."}`. |
 | `/ether/v1/kinds/{kind}/items/{id}` | Conformance and detail refresh | One full item. |
 | `/ether/v1/kinds/{kind}/search` | Client searches, only when `browse.liveSearch` is on | Same page shape as browse with `query` set. Short budget; see below. |
@@ -1112,7 +1112,11 @@ Patterns:
 - **file** — a hosted resolver path inside an owner-picked folder; requires
   `folders: read` and live containment checks when resolving and opening.
 - **range** — a URL Ether reads with HTTP Range (demoted to download
-  when the host cannot range and the size fits the cache).
+  when the host cannot range and the size fits the cache). Set `connections`
+  to 2–6 to split large read-ahead windows into concurrent requests. This
+  shares the per-origin limit with cached downloads and uses no disk.
+  The default is one. Parallel reads require ordinary HTTP byte ranges and
+  a strong ETag or usable Last-Modified date. Other sources read sequentially.
 - **download** — fetched whole into the per-library blob cache
   (digests checked when you provide them), then served locally.
 - **direct** — the client surface is handed the URL (only where the
@@ -1547,13 +1551,13 @@ part:
 - **Per-part, per-source, and absolute stream URLs** let frontend adapters and
   multi-file or native clients fetch a specific file, pin a resolver
   `PlayableSource.id`, or embed an absolute URL (`<origin>/ether/v1/kind-media/{ticket}`):
-  - Mint a scoped ticket URL with `ether.frontend.streamURL(itemRef, { partIndex?, source?, absolute?, wait? }).url`
+  - Mint a scoped ticket URL with `ether.frontend.streamURL(itemRef, { partIndex?, source?, fallback?, absolute?, wait? }).url`
     (hosted JS; the positional `ether.frontend.streamURL(itemRef, partIndex).url` form still works),
-    `streamUrl(ctx, itemRef, { partIndex?, source?, absolute?, wait? })` (TypeScript SDK; positional `partIndex` also works),
-    `ctx.StreamURLWithOptions(itemRef, StreamURLOptions{PartIndex, Source, Absolute, Wait})` /
+    `streamUrl(ctx, itemRef, { partIndex?, source?, fallback?, absolute?, wait? })` (TypeScript SDK; positional `partIndex` also works),
+    `ctx.StreamURLWithOptions(itemRef, StreamURLOptions{PartIndex, Source, Fallback, Absolute, Wait})` /
     `ctx.StreamPartURL(itemRef, partIndex)` (Go SDK), or
-    `ctx.stream_url(item_ref, part_index=..., source=..., absolute=...)` (Python SDK) — backed by
-    `POST /ether/plugin-host/frontend/stream-url` with `{"viewerId", "itemRef", "partIndex"?, "source"?, "absolute"?, "wait": {"maxSeconds": 1200}?}`
+    `ctx.stream_url(item_ref, part_index=..., source=..., fallback=True, absolute=...)` (Python SDK) — backed by
+    `POST /ether/plugin-host/frontend/stream-url` with `{"viewerId", "itemRef", "partIndex"?, "source"?, "fallback"?, "absolute"?, "wait": {"maxSeconds": 1200}?}`
     (forwarding `X-Ether-Viewer-Token` from remote adapters so Ether can resolve the active request origin and adapter key).
   - Set `wait: {maxSeconds: 1200}` on tickets minted by download routes whose
     clients need one response. Ether accepts positive whole seconds and caps
@@ -1576,7 +1580,8 @@ part:
     still require root-relative paths; use `{ absolute: true }` for protocol
     documents handed to native clients (such as Kodi or Subsonic players) that
     open URLs verbatim.
-  - When `source` is set in the ticket grant, Ether passes `KindResolveRequest.source`
+  - For a remembered choice, pass `{ source: rememberedID, fallback: true }`. Ether tries that source first. If it is missing or fails to open, Ether tries the remaining sources for the same item and part in the usual order. A source still preparing follows the normal wait policy.
+  - When only `source` is set in the ticket grant, Ether passes `KindResolveRequest.source`
     to `/resolve` and opens **only** the matching source (matching `PlayableSource.id`)
     with no failover to other sources and without clobbering the shared default resolution
     or candidate cache. A plugin that ignores `source` still works: Ether picks the source
@@ -1923,9 +1928,17 @@ app would, then read the result with `kinds.browse`:
 namespaces and frees its quota immediately (deleting an absent or already
 evicted ref succeeds), so large temporary downloads or extracts do not evict
 smaller kept files.
-Default cache quota is 2 GiB per library under a shared cap of
-min(10 GiB, 5% of the cache disk); your `cache.maxBytes` and the
-owner can override it.
+The default quota is 2 GiB per library. A kind can declare `cache.maxBytes`
+and the owner can adjust the quota in the library settings. Across all
+libraries, Ether defaults to the smaller of 10 GiB and 5% of the cache
+disk. Owners can change **Shared library cache (GiB)** in the global plugin
+limits. Clearing the field restores the automatic size. Both modes preserve
+the free-space reserve.
+
+For large disc images, allow room for both the downloaded archive and its
+extracted member. The runtime limits for **Download (GiB)**, **File inside an
+archive (GiB)** and **Archive total (GiB)** also apply. A plugin that declares
+a lower download or extraction limit retains that limit.
 
 ## Setup
 
@@ -2426,6 +2439,7 @@ func (p Plugins) Catalogue() (indexURL, publicKey string) {
 
 | Field | Go type | Wire presence | Description |
 |---|---|---|---|
+| `sharedCacheBytes` | `int64` | may be omitted (see validation for conditions) | SharedCacheBytes overrides the automatic global plugin-library cache cap. |
 | `uploadBytes` | `int64` | may be omitted (see validation for conditions) | UploadBytes is the per-plugin staged request ceiling. Zero uses 64 MiB. |
 | `durableBytes` | `int64` | may be omitted (see validation for conditions) | DurableBytes and DurableFiles override the per-plugin saved blob quota. |
 | `durableFiles` | `int` | may be omitted (see validation for conditions) |  |
@@ -2448,6 +2462,8 @@ func (p Plugins) Catalogue() (indexURL, publicKey string) {
 // PluginRuntimeLimits are owner-controlled ceilings, not allocations. Zero
 // inherits the default (globally) or the global ceiling (per plugin).
 type PluginRuntimeLimits struct {
+	// SharedCacheBytes overrides the automatic global plugin-library cache cap.
+	SharedCacheBytes int64 `json:"sharedCacheBytes,omitempty"`
 	// UploadBytes is the per-plugin staged request ceiling. Zero uses 64 MiB.
 	UploadBytes int64 `json:"uploadBytes,omitempty"`
 	// DurableBytes and DurableFiles override the per-plugin saved blob quota.
@@ -3160,6 +3176,7 @@ func (r KindExpandResponse) EffectiveCursor() string {
 
 | Field | Go type | Wire presence | Description |
 |---|---|---|---|
+| `checkpoint` | `bool` | may be omitted (see validation for conditions) | Checkpoint marks an upsert-only page whose next cursor can resume in a later sync. |
 | `upserts` | `[]KindItem` | may be omitted (see validation for conditions) |  |
 | `deletes` | `[]string` | may be omitted (see validation for conditions) | externalIDs |
 | `nextCursor` | `string` | may be omitted (see validation for conditions) |  |
@@ -3172,6 +3189,8 @@ func (r KindExpandResponse) EffectiveCursor() string {
 // KindChangePage is one delta page returned by POST /ether/v1/kinds/{kind}/changes
 // during pull sync (spec §3.5).
 type KindChangePage struct {
+	// Checkpoint marks an upsert-only page whose next cursor can resume in a later sync.
+	Checkpoint bool       `json:"checkpoint,omitempty"`
 	Upserts    []KindItem `json:"upserts,omitempty"`
 	Deletes    []string   `json:"deletes,omitempty"` // externalIDs
 	NextCursor string     `json:"nextCursor,omitempty"`
@@ -3882,6 +3901,7 @@ func libraryKeySlug(s string) string {
 
 | Field | Go type | Wire presence | Description |
 |---|---|---|---|
+| `connections` | `int` | may be omitted (see validation for conditions) | Connections requests up to six parallel reads of a range source. Zero uses one. |
 | `path` | `string` | may be omitted (see validation for conditions) |  |
 | `id` | `string` | emitted (validation may require a value) |  |
 | `label` | `string` | may be omitted (see validation for conditions) |  |
@@ -3912,11 +3932,13 @@ func libraryKeySlug(s string) string {
 // PlayableSource is one candidate way to acquire bytes for a KindItem or one of
 // its parts (spec §4.1). Multiple sources are tried in order.
 type PlayableSource struct {
-	Path    string `json:"path,omitempty"`
-	ID      string `json:"id"`
-	Label   string `json:"label,omitempty"`
-	Pattern string `json:"pattern"` // "range" | "download" | "direct" | "container" | "release" | "file"
-	MIME    string `json:"mime"`
+	// Connections requests up to six parallel reads of a range source. Zero uses one.
+	Connections int    `json:"connections,omitempty"`
+	Path        string `json:"path,omitempty"`
+	ID          string `json:"id"`
+	Label       string `json:"label,omitempty"`
+	Pattern     string `json:"pattern"` // "range" | "download" | "direct" | "container" | "release" | "file"
+	MIME        string `json:"mime"`
 	// Tier optionally marks interchangeable sources of the same quality tier.
 	// Sources sharing a non-nil Tier may be reordered by Ether's source routing
 	// (owner preference, measured startup, and stall demotion) and may overtake
@@ -9022,6 +9044,7 @@ type AICompleteBackendRequest struct {
 
 | Field | Go type | Wire presence | Description |
 |---|---|---|---|
+| `fallback` | `bool` | may be omitted (see validation for conditions) | Try remaining sources when the named source cannot open. |
 | `partIndex` | `*int` | may be omitted (see validation for conditions) |  |
 | `source` | `string` | may be omitted (see validation for conditions) |  |
 | `absolute` | `bool` | may be omitted (see validation for conditions) |  |
@@ -9036,6 +9059,7 @@ type AICompleteBackendRequest struct {
 // optionally asks Ether to return an absolute URL using the client-visible
 // request origin or the adapter's first published address (#772).
 type StreamURLOptions struct {
+	Fallback  bool              `json:"fallback,omitempty"` // Try remaining sources when the named source cannot open.
 	PartIndex *int              `json:"partIndex,omitempty"`
 	Source    string            `json:"source,omitempty"`
 	Absolute  bool              `json:"absolute,omitempty"`
@@ -17560,6 +17584,54 @@ func fetchHostKey(rawURL string) string {
 }
 ``````
 
+## Source: internal/plugins/host_fetch_many.go#*Manager.LimitRangeTransport
+
+``````
+// LimitRangeTransport shares fetchToCache's per-origin budget with range streams.
+func (m *Manager) LimitRangeTransport(base http.RoundTripper) http.RoundTripper {
+	if base == nil {
+		base = http.DefaultTransport
+	}
+	if m == nil || m.fetchHosts == nil {
+		return base
+	}
+	return limitedRangeTransport{base: base, limiter: m.fetchHosts}
+}
+``````
+
+## Source: internal/plugins/host_fetch_many.go#limitedRangeTransport.fields.md
+
+| Field | Go type | Wire presence | Description |
+|---|---|---|---|
+
+
+## Source: internal/plugins/host_fetch_many.go#limitedRangeTransport
+
+``````
+type limitedRangeTransport struct {
+	base    http.RoundTripper
+	limiter *fetchHostLimiter
+}
+``````
+
+## Source: internal/plugins/host_fetch_many.go#limitedRangeTransport.RoundTrip
+
+``````
+func (t limitedRangeTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	release, err := t.limiter.Acquire(req.Context(), req.URL.String())
+	if err != nil {
+		return nil, err
+	}
+	resp, err := t.base.RoundTrip(req)
+	if err != nil {
+		release()
+		return nil, err
+	}
+	resp.Body = &releaseOnCloseReadCloser{ReadCloser: resp.Body, release: release}
+	return resp, nil
+}
+``````
+
 ## Source: internal/plugins/host_fetch_many.go#releaseOnCloseReadCloser.fields.md
 
 | Field | Go type | Wire presence | Description |
@@ -20481,6 +20553,9 @@ func (h *host) StreamURLWithOptions(ctx context.Context, itemRef string, opts St
 	if opts.PartIndex != nil && *opts.PartIndex < 0 {
 		return "", fmt.Errorf("plugins: stream url partIndex must be non-negative")
 	}
+	if opts.Fallback && opts.Source == "" {
+		return "", fmt.Errorf("stream url: fallback requires a source")
+	}
 	if err := validateStreamSourceID(opts.Source); err != nil {
 		return "", err
 	}
@@ -22040,7 +22115,7 @@ func (b hostBridge) CallHost(ctx context.Context, name string, raw json.RawMessa
 					dec := json.NewDecoder(bytes.NewReader(rawArg))
 					dec.DisallowUnknownFields()
 					if err := dec.Decode(&opts); err != nil {
-						return nil, &wasm.Fault{Code: "bad_arguments", Message: "frontend.streamURL options must be { partIndex?, source?, absolute?, wait? }"}
+						return nil, &wasm.Fault{Code: "bad_arguments", Message: "frontend.streamURL options must be { partIndex?, source?, fallback?, absolute?, wait? }"}
 					}
 					if opts.PartIndex != nil && *opts.PartIndex < 0 {
 						return nil, &wasm.Fault{Code: "bad_arguments", Message: "frontend.streamURL partIndex must be a non-negative integer"}
@@ -22053,6 +22128,9 @@ func (b hostBridge) CallHost(ctx context.Context, name string, raw json.RawMessa
 					opts.PartIndex = &n
 				}
 			}
+		}
+		if opts.Fallback && opts.Source == "" {
+			return nil, &wasm.Fault{Code: "bad_arguments", Message: "frontend.streamURL fallback requires a source"}
 		}
 		if opts.Wait != nil && opts.Wait.MaxSeconds <= 0 {
 			return nil, &wasm.Fault{Code: "bad_arguments", Message: "frontend.streamURL wait.maxSeconds must be a positive integer"}
@@ -30830,6 +30908,7 @@ func (h *HostHandler) frontendStreamURL(w http.ResponseWriter, r *http.Request) 
 		ItemRef   string                    `json:"itemRef"`
 		PartIndex *int                      `json:"partIndex,omitempty"`
 		Source    string                    `json:"source,omitempty"`
+		Fallback  bool                      `json:"fallback,omitempty"`
 		Absolute  bool                      `json:"absolute,omitempty"`
 		Wait      *plugins.StreamWaitPolicy `json:"wait,omitempty"`
 	}
@@ -30838,6 +30917,10 @@ func (h *HostHandler) frontendStreamURL(w http.ResponseWriter, r *http.Request) 
 	}
 	if body.PartIndex != nil && *body.PartIndex < 0 {
 		writeHostError(w, http.StatusBadRequest, "bad_arguments", "partIndex must be non-negative")
+		return
+	}
+	if body.Fallback && body.Source == "" {
+		writeHostError(w, http.StatusBadRequest, "bad_arguments", "fallback requires a source")
 		return
 	}
 	if body.Source != "" && strings.TrimSpace(body.Source) == "" {
@@ -30864,6 +30947,7 @@ func (h *HostHandler) frontendStreamURL(w http.ResponseWriter, r *http.Request) 
 		u, err = oh.StreamURLWithOptions(ctx, pluginIDOf(r), body.ViewerID, body.ItemRef, plugins.StreamURLOptions{
 			PartIndex: body.PartIndex,
 			Source:    body.Source,
+			Fallback:  body.Fallback,
 			Absolute:  body.Absolute,
 			Wait:      body.Wait,
 		})
@@ -32029,6 +32113,10 @@ func (m *Manager) handleRuntimeLimits(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		plugin = req.Plugin
+		if req.Limits.SharedCacheBytes < 0 || (plugin != "" && req.Limits.SharedCacheBytes != 0) {
+			writeErr(w, http.StatusBadRequest, "validation", "Shared cache size must be a nonnegative global limit.", nil)
+			return
+		}
 		if req.Limits.DurableBytes < 0 || req.Limits.DurableFiles < 0 ||
 			(plugin == "" && (req.Limits.DurableBytes != 0 || req.Limits.DurableFiles != 0)) ||
 			req.Limits.DurableFreePercent < 0 || req.Limits.DurableFreePercent > 100 ||
@@ -32075,7 +32163,7 @@ func (m *Manager) handleRuntimeLimits(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		// Durable quotas are consulted live and do not require stopping plugin jobs.
-		if runtimeLimitsWithoutDurable(before) != runtimeLimitsWithoutDurable(after) {
+		if runtimeLimitsRequiringRestart(before) != runtimeLimitsRequiringRestart(after) {
 			recs, err := m.List(r.Context())
 			if err != nil {
 				m.fail(w, err)
@@ -32116,10 +32204,11 @@ func (m *Manager) handleRuntimeLimits(w http.ResponseWriter, r *http.Request) {
 }
 ``````
 
-## Source: internal/plugins/runtime_limits.go#runtimeLimitsWithoutDurable
+## Source: internal/plugins/runtime_limits.go#runtimeLimitsRequiringRestart
 
 ``````
-func runtimeLimitsWithoutDurable(l config.PluginRuntimeLimits) config.PluginRuntimeLimits {
+func runtimeLimitsRequiringRestart(l config.PluginRuntimeLimits) config.PluginRuntimeLimits {
+	l.SharedCacheBytes = 0
 	l.DurableBytes, l.DurableFiles, l.DurableFreePercent = 0, 0, 0
 	return l
 }
@@ -42381,6 +42470,13 @@ func (p *Plugin) CallDetailed(ctx context.Context, req Request) (resp Response, 
         "mime": {
           "type": "string"
         },
+        "connections": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 6,
+          "default": 1,
+          "description": "Requested concurrent reads for a range source. Shares the per-origin fetch limit."
+        },
         "tier": {
           "type": "integer",
           "description": "Optional quality-tier marker for interchangeable sources. Sources sharing the same tier may be reordered by Ether's source routing (owner auto/usenet/debrid preference, measured startup, and stall demotion) and may overtake each other after the ranked open grace period. Distinct tiers keep the plugin's tier order; omitting tier keeps the plugin's exact order."
@@ -43214,9 +43310,9 @@ const playUrl = ether.frontend.streamURL(itemRef, {absolute: true}).url;
 ```
 
 In the SDKs, call `streamUrl(ctx, itemRef, partIndexOrOpts?)` (TypeScript),
-`ctx.StreamURLWithOptions(itemRef, StreamURLOptions{PartIndex, Source, Absolute, Wait})` or
+`ctx.StreamURLWithOptions(itemRef, StreamURLOptions{PartIndex, Source, Fallback, Absolute, Wait})` or
 `ctx.StreamPartURL(itemRef, partIndex)` (Go), or
-`ctx.stream_url(item_ref, part_index=..., source=..., absolute=...)` (Python); an unpinned
+`ctx.stream_url(item_ref, part_index=..., source=..., fallback=True, absolute=...)` (Python); an unpinned
 item ticket also accepts `/ether/v1/kind-media/{ticket}?part=N`. Default stream
 URLs remain root-relative; `{ absolute: true }` prepends the request's
 `X-Ether-Origin` (falling back to the adapter's first published address in
@@ -43229,7 +43325,7 @@ reject any `partIndex` with `404 item_not_found`. When `source` is set on the
 ticket grant, Ether passes `KindResolveRequest.source` to `/resolve` and opens
 only the matching `PlayableSource.id` without failing over to other sources (a
 plugin that ignores `source` still works because Ether selects the matching id
-or returns `409 no_source` if absent).
+or returns `409 no_source` if absent). Add `fallback: true` to treat the source as a preference. If it is missing or fails to open, Ether tries the remaining sources for the same part in their usual order.
 
 For an adapter download route, pass `{wait: {maxSeconds: 1200}}` to hold the
 media response while the plugin prepares the file. In Go, use
@@ -59407,6 +59503,9 @@ func (c *RemoteHostClient) StreamURLWithOptions(ctx context.Context, viewerID in
 	if opts.PartIndex != nil && *opts.PartIndex < 0 {
 		return "", fmt.Errorf("stream url: partIndex must be non-negative")
 	}
+	if opts.Fallback && opts.Source == "" {
+		return "", fmt.Errorf("stream url: fallback requires a source")
+	}
 	if opts.Source != "" && strings.TrimSpace(opts.Source) == "" {
 		return "", fmt.Errorf("stream url: source must not be blank")
 	}
@@ -59416,6 +59515,9 @@ func (c *RemoteHostClient) StreamURLWithOptions(ctx context.Context, viewerID in
 	}
 	if opts.Source != "" {
 		payload["source"] = opts.Source
+		if opts.Fallback {
+			payload["fallback"] = true
+		}
 	}
 	if opts.Absolute {
 		payload["absolute"] = true
@@ -59942,6 +60044,7 @@ type KindExpandResponse struct {
 
 | Field | Go type | Wire presence | Description |
 |---|---|---|---|
+| `checkpoint` | `bool` | may be omitted (see validation for conditions) | Checkpoint marks an upsert-only page whose next cursor can resume in a later sync. |
 | `upserts` | `[]KindItem` | may be omitted (see validation for conditions) |  |
 | `deletes` | `[]string` | may be omitted (see validation for conditions) |  |
 | `nextCursor` | `string` | may be omitted (see validation for conditions) |  |
@@ -59953,6 +60056,8 @@ type KindExpandResponse struct {
 ``````
 // KindChangePage is one delta page for pull sync.
 type KindChangePage struct {
+	// Checkpoint marks an upsert-only page whose next cursor can resume in a later sync.
+	Checkpoint bool       `json:"checkpoint,omitempty"`
 	Upserts    []KindItem `json:"upserts,omitempty"`
 	Deletes    []string   `json:"deletes,omitempty"`
 	NextCursor string     `json:"nextCursor,omitempty"`
@@ -60603,6 +60708,7 @@ type KindMatchResponse struct {
 
 | Field | Go type | Wire presence | Description |
 |---|---|---|---|
+| `connections` | `int` | may be omitted (see validation for conditions) | Connections requests up to six parallel reads of a range source. Zero uses one. |
 | `path` | `string` | may be omitted (see validation for conditions) |  |
 | `id` | `string` | emitted (validation may require a value) |  |
 | `label` | `string` | may be omitted (see validation for conditions) |  |
@@ -60634,11 +60740,13 @@ type KindMatchResponse struct {
 // carry {itemIndex}, {pageNumber}, {byteStart}, {byteEnd} and {byteRange}
 // placeholders that Ether substitutes.
 type PlayableSource struct {
-	Path    string `json:"path,omitempty"`
-	ID      string `json:"id"`
-	Label   string `json:"label,omitempty"`
-	Pattern string `json:"pattern"` // range|download|direct|container|release|file
-	MIME    string `json:"mime"`
+	// Connections requests up to six parallel reads of a range source. Zero uses one.
+	Connections int    `json:"connections,omitempty"`
+	Path        string `json:"path,omitempty"`
+	ID          string `json:"id"`
+	Label       string `json:"label,omitempty"`
+	Pattern     string `json:"pattern"` // range|download|direct|container|release|file
+	MIME        string `json:"mime"`
 	// Tier optionally marks interchangeable sources of the same quality tier.
 	// Sources sharing a non-nil Tier may be reordered by Ether's source routing
 	// (auto/usenet/debrid, measured startup, and stall demotion) and may
@@ -60845,6 +60953,7 @@ type KindResolveRequest struct {
 
 | Field | Go type | Wire presence | Description |
 |---|---|---|---|
+| `fallback` | `bool` | may be omitted (see validation for conditions) | Try remaining sources when the named source cannot open. |
 | `partIndex` | `*int` | may be omitted (see validation for conditions) |  |
 | `source` | `string` | may be omitted (see validation for conditions) |  |
 | `absolute` | `bool` | may be omitted (see validation for conditions) |  |
@@ -60859,6 +60968,7 @@ type KindResolveRequest struct {
 // optionally asks Ether to return an absolute URL using the client-visible
 // request origin or the adapter's first published address (#772).
 type StreamURLOptions struct {
+	Fallback  bool              `json:"fallback,omitempty"` // Try remaining sources when the named source cannot open.
 	PartIndex *int              `json:"partIndex,omitempty"`
 	Source    string            `json:"source,omitempty"`
 	Absolute  bool              `json:"absolute,omitempty"`
@@ -61593,6 +61703,9 @@ func (c *Context) StreamURLWithOptions(itemRef string, opts StreamURLOptions) (s
 	}
 	if opts.PartIndex != nil && *opts.PartIndex < 0 {
 		return "", errors.New("stream url: partIndex must be non-negative")
+	}
+	if opts.Fallback && opts.Source == "" {
+		return "", fmt.Errorf("stream url: fallback requires a source")
 	}
 	if opts.Source != "" && strings.TrimSpace(opts.Source) == "" {
 		return "", errors.New("stream url: source must not be blank")
@@ -71496,9 +71609,12 @@ class _FrontendClient:
         source: Optional[str] = None,
         absolute: bool = False,
         viewer_token: Optional[str] = None,
+        fallback: bool = False,
     ) -> str:
         checked = _check_part_index(part_index)
         checked_source = _check_stream_source(source)
+        if not isinstance(fallback, bool) or (fallback and not checked_source):
+            raise ValueError("stream url: fallback requires a named source")
         if not isinstance(absolute, bool):
             raise ValueError("stream url: absolute must be a bool")
         payload: Dict[str, Any] = {"viewerId": int(viewer_id), "itemRef": str(item_ref)}
@@ -71506,6 +71622,8 @@ class _FrontendClient:
             payload["partIndex"] = checked
         if checked_source is not None:
             payload["source"] = checked_source
+            if fallback:
+                payload["fallback"] = True
         if absolute:
             payload["absolute"] = True
         tok = (
@@ -71744,6 +71862,7 @@ class PluginContext:
         part_index: Optional[int] = None,
         source: Optional[str] = None,
         absolute: bool = False,
+        fallback: bool = False,
     ) -> str:
         """Mint a scoped Ether stream URL for one of this plugin's own kind
         items (spec §6.5), optionally scoped to a zero-based part (#576), a
@@ -71755,6 +71874,8 @@ class PluginContext:
             raise RuntimeError("stream url: no host service available")
         checked = _check_part_index(part_index)
         checked_source = _check_stream_source(source)
+        if not isinstance(fallback, bool) or (fallback and not checked_source):
+            raise ValueError("stream url: fallback requires a named source")
         if not isinstance(absolute, bool):
             raise ValueError("stream url: absolute must be a bool")
         raw = _get_header(self.headers, "X-Ether-Viewer")
@@ -71767,6 +71888,8 @@ class PluginContext:
         kwargs: Dict[str, Any] = {}
         if checked_source is not None:
             kwargs["source"] = checked_source
+            if fallback:
+                kwargs["fallback"] = True
         if absolute:
             kwargs["absolute"] = True
         if kwargs:
@@ -73344,6 +73467,7 @@ class MockHostClient:
         self.last_stream_url: Optional[Tuple[int, str]] = None
         self.last_stream_url_part: Optional[int] = None
         self.last_stream_url_source: Optional[str] = None
+        self.last_stream_url_fallback: bool = False
         self.last_stream_url_absolute: bool = False
         self.stream_origin: str = "http://ether.test"
         self.http_handler: Callable[[Dict[str, Any]], Dict[str, Any]] = lambda req: {
@@ -73407,14 +73531,18 @@ class MockHostClient:
             part_index: Optional[int] = None,
             source: Optional[str] = None,
             absolute: bool = False,
+            fallback: bool = False,
         ) -> str:
             checked = _check_part_index(part_index)
             checked_source = _check_stream_source(source)
+            if not isinstance(fallback, bool) or (fallback and not checked_source):
+                raise ValueError("stream url: fallback requires a named source")
             if not isinstance(absolute, bool):
                 raise ValueError("stream url: absolute must be a bool")
             self._p.last_stream_url = (int(viewer_id), str(item_ref))
             self._p.last_stream_url_part = checked
             self._p.last_stream_url_source = checked_source
+            self._p.last_stream_url_fallback = fallback
             self._p.last_stream_url_absolute = absolute
             base = f"/ether/v1/kind-media/mock-{int(viewer_id)}"
             rel = base if checked is None else f"{base}?part={checked}"
@@ -74700,6 +74828,7 @@ class PlayableSource(TypedDict, total=False):
     the plugin's order across tiers. Omit ``tier`` to keep exact plugin order.
     """
 
+    connections: int
     path: str
     id: str
     label: str
@@ -74865,12 +74994,13 @@ def stream_url(
     part_index: Optional[int] = None,
     source: Optional[str] = None,
     absolute: bool = False,
+    fallback: bool = False,
 ) -> str:
     """Mint an Ether stream URL for one of this plugin's own kind items
     (spec §6.5), optionally pinned to a zero-based part (#576), a resolver
     PlayableSource.id (#661), and/or resolved to an absolute URL (#772). Kept
     as a thin wrapper over PluginContext.stream_url."""
-    return ctx.stream_url(item_ref, part_index=part_index, source=source, absolute=absolute)
+    return ctx.stream_url(item_ref, part_index=part_index, source=source, absolute=absolute, fallback=fallback)
 
 
 def kinds_visible(
@@ -75891,7 +76021,7 @@ export function normalizeStreamUrlOptions(
     return { partIndex: partIndexOrOpts };
   }
   if (partIndexOrOpts === null || typeof partIndexOrOpts !== "object" || Array.isArray(partIndexOrOpts)) {
-    throw new Error("stream url: options must be a partIndex integer or { partIndex?, source?, absolute?, wait? }");
+    throw new Error("stream url: options must be a partIndex integer or { partIndex?, source?, fallback?, absolute?, wait? }");
   }
   checkPartIndex(partIndexOrOpts.partIndex);
   if (partIndexOrOpts.source !== undefined) {
@@ -75902,12 +76032,16 @@ export function normalizeStreamUrlOptions(
       throw new Error("stream url: source must not be blank");
     }
   }
+  if (partIndexOrOpts.fallback !== undefined && (typeof partIndexOrOpts.fallback !== "boolean" || (partIndexOrOpts.fallback && !partIndexOrOpts.source))) {
+    throw new Error("stream url: fallback must be a boolean and requires a source");
+  }
   if (partIndexOrOpts.absolute !== undefined && typeof partIndexOrOpts.absolute !== "boolean") {
     throw new Error("stream url: absolute must be a boolean");
   }
   const out: import("./types.ts").StreamUrlOptions = {};
   if (partIndexOrOpts.partIndex !== undefined) out.partIndex = partIndexOrOpts.partIndex;
   if (partIndexOrOpts.source) out.source = partIndexOrOpts.source;
+  if (partIndexOrOpts.fallback) out.fallback = true;
   if (partIndexOrOpts.absolute) out.absolute = true;
   if (partIndexOrOpts.wait !== undefined) {
     const seconds = partIndexOrOpts.wait?.maxSeconds;
@@ -77195,6 +77329,7 @@ export function createRemoteHostClient(opts: RemoteHostOptions = {}): EtherHost 
             itemRef,
             ...(streamOpts.partIndex === undefined ? {} : { partIndex: streamOpts.partIndex }),
             ...(streamOpts.source === undefined ? {} : { source: streamOpts.source }),
+            ...(streamOpts.fallback ? { fallback: true } : {}),
             ...(streamOpts.absolute ? { absolute: true } : {}),
             ...(streamOpts.wait ? { wait: streamOpts.wait } : {}),
           },
@@ -81807,6 +81942,8 @@ export interface KindExpandResponse {
 }
 
 export interface KindChangePage {
+  /** This upsert-only page has a durable next cursor. */
+  checkpoint?: boolean;
   upserts?: KindItem[];
   deletes?: string[];
   nextCursor?: string;
@@ -82029,6 +82166,8 @@ export interface KindMatchScore {
 }
 
 export interface PlayableSource {
+  /** Parallel range reads (1–6, default 1). */
+  connections?: number;
   path?: string;
   id: string;
   label?: string;
@@ -82115,6 +82254,8 @@ export interface KindResolveRequest {
 
 /** Options for minting a scoped frontend adapter stream URL (#576, #661, #772). */
 export interface StreamUrlOptions {
+  /** Try the remaining sources for this part if the named source fails. */
+  fallback?: boolean;
   partIndex?: number;
   source?: string;
   /** Return an absolute URL (`<origin>/ether/v1/kind-media/<token>`) using the active request origin or the adapter's first published address; default stays root-relative. */

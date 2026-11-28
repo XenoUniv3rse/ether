@@ -33,6 +33,7 @@ type StreamGrant struct {
 	Adapter   string
 	PartIndex *int
 	Source    string
+	Fallback  bool
 	Wait      time.Duration
 }
 
@@ -107,6 +108,9 @@ func (t *TicketIssuer) Issue(grant StreamGrant) (string, error) {
 	}
 	if grant.PartIndex != nil && *grant.PartIndex < 0 {
 		return "", errors.New("frontendadapter: negative stream grant part index")
+	}
+	if grant.Fallback && grant.Source == "" {
+		return "", ErrTicketInvalid
 	}
 	if err := ValidateSource(grant.Source); err != nil {
 		return "", err

@@ -269,6 +269,7 @@ func wrapRedirectClient(
 		if allowHost != nil && !allowHost(next.URL.Hostname()) {
 			return fmt.Errorf("%w: redirect host %q", ErrHostNotAllowed, next.URL.Hostname())
 		}
+		next.Close = via[0].Close
 		redirectHeaders.Apply(next)
 		if previous != nil {
 			return previous(next, via)

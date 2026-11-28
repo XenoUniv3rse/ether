@@ -39,9 +39,9 @@ type MediaDeps struct {
 	// the granted viewer (#576). Used when the ticket is part-scoped or when
 	// the request names ?part=<n>.
 	OpenPart func(ctx context.Context, viewer *core.Viewer, itemRef string, partIndex int, accept []string) (*frontend.KindMedia, error)
-	// OpenSource opens one exact resolver source (and optional zero-based part)
-	// for a source-scoped ticket (#661), with no failover to other sources.
-	OpenSource func(ctx context.Context, viewer *core.Viewer, itemRef string, partIndex *int, source string, accept []string) (*frontend.KindMedia, error)
+	// OpenSource opens a named resolver source (and optional zero-based part)
+	// for a source-scoped ticket. The grant controls whether other sources can play.
+	OpenSource func(ctx context.Context, viewer *core.Viewer, itemRef string, partIndex *int, source string, fallback bool, accept []string) (*frontend.KindMedia, error)
 	// TrackWait adds an active preparation wait to plugin diagnostics.
 	TrackWait func(pluginID string, budget time.Duration, cancel context.CancelFunc) func()
 	// Log records each refused request with its cause (optional).
@@ -116,7 +116,7 @@ func (h *MediaHandler) ServeGrant(w http.ResponseWriter, r *http.Request, grant 
 			return
 		}
 		open = func(ctx context.Context) (*frontend.KindMedia, error) {
-			return h.deps.OpenSource(ctx, viewer, grant.ItemID, partIdx, grant.Source, accept)
+			return h.deps.OpenSource(ctx, viewer, grant.ItemID, partIdx, grant.Source, grant.Fallback, accept)
 		}
 	case partIdx != nil:
 		if h.deps.OpenPart == nil {

@@ -188,10 +188,12 @@ test("frontend stream url host service", async () => {
   assert.equal(host.state.lastStreamUrlSource, undefined);
   await assert.rejects(() => streamUrl(ctx, "pk:recordings:a", -1));
 
-  const srcUrl = await streamUrl(ctx, "pk:recordings:a", { partIndex: 1, source: "pdf" });
+  const srcUrl = await streamUrl(ctx, "pk:recordings:a", { partIndex: 1, source: "pdf", fallback: true });
   assert.ok(srcUrl.endsWith("?part=1"));
   assert.equal(host.state.lastStreamUrlPart, 1);
   assert.equal(host.state.lastStreamUrlSource, "pdf");
+  assert.equal(host.state.lastStreamUrlFallback, true);
+  await assert.rejects(() => streamUrl(ctx, "pk:recordings:a", { fallback: true }));
   await assert.rejects(() => streamUrl(ctx, "pk:recordings:a", { source: "   " }));
 
   // Hosted and remote clients forward partIndex and options objects when provided.
@@ -212,12 +214,12 @@ test("frontend stream url host service", async () => {
     assert.equal(await streamUrl(hostedCtx, "pk:recordings:a", { source: "epub" }), "/ether/v1/kind-media/hosted-part");
     assert.deepEqual(hostedSeen[1], { name: "frontend.streamURL", args: ["pk:recordings:a", { source: "epub" }] });
     assert.equal(
-      await streamUrl(hostedCtx, "pk:recordings:a", { partIndex: 2, source: "pdf", wait: { maxSeconds: 1200 } }),
+      await streamUrl(hostedCtx, "pk:recordings:a", { partIndex: 2, source: "pdf", fallback: true, wait: { maxSeconds: 1200 } }),
       "/ether/v1/kind-media/hosted-part",
     );
     assert.deepEqual(hostedSeen[2], {
       name: "frontend.streamURL",
-      args: ["pk:recordings:a", { partIndex: 2, source: "pdf", wait: { maxSeconds: 1200 } }],
+      args: ["pk:recordings:a", { partIndex: 2, source: "pdf", fallback: true, wait: { maxSeconds: 1200 } }],
     });
   } finally {
     if (prev === undefined) delete g.__ether_host;
@@ -239,10 +241,10 @@ test("frontend stream url host service", async () => {
   assert.equal(await streamUrl(remoteCtx, "pk:recordings:a", 3), "/ether/v1/kind-media/remote-part");
   assert.deepEqual(remotePayload, { viewerId: 7, itemRef: "pk:recordings:a", partIndex: 3 });
   assert.equal(
-    await streamUrl(remoteCtx, "pk:recordings:a", { partIndex: 1, source: "epub", wait: { maxSeconds: 1200 } }),
+    await streamUrl(remoteCtx, "pk:recordings:a", { partIndex: 1, source: "epub", fallback: true, wait: { maxSeconds: 1200 } }),
     "/ether/v1/kind-media/remote-part",
   );
-  assert.deepEqual(remotePayload, { viewerId: 7, itemRef: "pk:recordings:a", partIndex: 1, source: "epub", wait: { maxSeconds: 1200 } });
+  assert.deepEqual(remotePayload, { viewerId: 7, itemRef: "pk:recordings:a", partIndex: 1, source: "epub", fallback: true, wait: { maxSeconds: 1200 } });
 
   const noViewer = { ether: host, headers: {} } as unknown as Parameters<typeof streamUrl>[0];
   await assert.rejects(() => streamUrl(noViewer, "pk:recordings:a"));

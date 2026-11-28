@@ -228,7 +228,7 @@ export function normalizeStreamUrlOptions(
     return { partIndex: partIndexOrOpts };
   }
   if (partIndexOrOpts === null || typeof partIndexOrOpts !== "object" || Array.isArray(partIndexOrOpts)) {
-    throw new Error("stream url: options must be a partIndex integer or { partIndex?, source?, absolute?, wait? }");
+    throw new Error("stream url: options must be a partIndex integer or { partIndex?, source?, fallback?, absolute?, wait? }");
   }
   checkPartIndex(partIndexOrOpts.partIndex);
   if (partIndexOrOpts.source !== undefined) {
@@ -239,12 +239,16 @@ export function normalizeStreamUrlOptions(
       throw new Error("stream url: source must not be blank");
     }
   }
+  if (partIndexOrOpts.fallback !== undefined && (typeof partIndexOrOpts.fallback !== "boolean" || (partIndexOrOpts.fallback && !partIndexOrOpts.source))) {
+    throw new Error("stream url: fallback must be a boolean and requires a source");
+  }
   if (partIndexOrOpts.absolute !== undefined && typeof partIndexOrOpts.absolute !== "boolean") {
     throw new Error("stream url: absolute must be a boolean");
   }
   const out: import("./types.ts").StreamUrlOptions = {};
   if (partIndexOrOpts.partIndex !== undefined) out.partIndex = partIndexOrOpts.partIndex;
   if (partIndexOrOpts.source) out.source = partIndexOrOpts.source;
+  if (partIndexOrOpts.fallback) out.fallback = true;
   if (partIndexOrOpts.absolute) out.absolute = true;
   if (partIndexOrOpts.wait !== undefined) {
     const seconds = partIndexOrOpts.wait?.maxSeconds;
@@ -1532,6 +1536,7 @@ export function createRemoteHostClient(opts: RemoteHostOptions = {}): EtherHost 
             itemRef,
             ...(streamOpts.partIndex === undefined ? {} : { partIndex: streamOpts.partIndex }),
             ...(streamOpts.source === undefined ? {} : { source: streamOpts.source }),
+            ...(streamOpts.fallback ? { fallback: true } : {}),
             ...(streamOpts.absolute ? { absolute: true } : {}),
             ...(streamOpts.wait ? { wait: streamOpts.wait } : {}),
           },

@@ -9,6 +9,7 @@ import (
 	"io"
 	"math"
 	"net"
+	"net/http"
 	"net/url"
 	"strings"
 	"sync"
@@ -126,6 +127,36 @@ func fetchHostKey(rawURL string) string {
 		}
 	}
 	return scheme + "://" + net.JoinHostPort(host, port)
+}
+
+// LimitRangeTransport shares fetchToCache's per-origin budget with range streams.
+func (m *Manager) LimitRangeTransport(base http.RoundTripper) http.RoundTripper {
+	if base == nil {
+		base = http.DefaultTransport
+	}
+	if m == nil || m.fetchHosts == nil {
+		return base
+	}
+	return limitedRangeTransport{base: base, limiter: m.fetchHosts}
+}
+
+type limitedRangeTransport struct {
+	base    http.RoundTripper
+	limiter *fetchHostLimiter
+}
+
+func (t limitedRangeTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	release, err := t.limiter.Acquire(req.Context(), req.URL.String())
+	if err != nil {
+		return nil, err
+	}
+	resp, err := t.base.RoundTrip(req)
+	if err != nil {
+		release()
+		return nil, err
+	}
+	resp.Body = &releaseOnCloseReadCloser{ReadCloser: resp.Body, release: release}
+	return resp, nil
 }
 
 type releaseOnCloseReadCloser struct {
