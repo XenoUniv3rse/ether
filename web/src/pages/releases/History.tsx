@@ -33,7 +33,7 @@ import { searchLink } from "./Pinned";
 
 /** "4K" for 2160, else "1080p". */
 function heightLabel(h: number) {
-  return h >= 2160 ? "4K" : `${h}p`;
+  return h >= 2160 ? t("4K") : t("{height}p", { height: h });
 }
 
 /**
