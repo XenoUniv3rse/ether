@@ -11,6 +11,7 @@ export type PluginKind =
 export type Capability =
   | "stream_source"
   | "debrid_provider"
+  | "debrid_cache_hints"
   | "list_source"
   | "livetv_channels"
   | "subtitles"
@@ -49,7 +50,14 @@ export type ViewerWatchEventName =
   | "viewer.watch.unwatched"
   | "viewer.watch.progress";
 
-export type EtherEventName = LegacyEtherEventName | ViewerWatchEventName | (string & {});
+export const eventPluginFoldersChanged = "plugin.folders.changed";
+
+/** The absolute paths the owner grants after the change, including [] on revoke. */
+export interface FolderRootsChangedPayload extends Record<string, unknown> {
+  roots: string[];
+}
+
+export type EtherEventName = LegacyEtherEventName | ViewerWatchEventName | typeof eventPluginFoldersChanged | (string & {});
 
 export type EventFieldType =
   | "string"
@@ -1113,6 +1121,8 @@ export interface KindExpandResponse {
 }
 
 export interface KindChangePage {
+  /** This upsert-only page has a durable next cursor. */
+  checkpoint?: boolean;
   upserts?: KindItem[];
   deletes?: string[];
   nextCursor?: string;
@@ -1335,6 +1345,8 @@ export interface KindMatchScore {
 }
 
 export interface PlayableSource {
+  /** Parallel range reads (1–6, default 1). */
+  connections?: number;
   path?: string;
   id: string;
   label?: string;
@@ -1421,10 +1433,14 @@ export interface KindResolveRequest {
 
 /** Options for minting a scoped frontend adapter stream URL (#576, #661, #772). */
 export interface StreamUrlOptions {
+  /** Try the remaining sources for this part if the named source fails. */
+  fallback?: boolean;
   partIndex?: number;
   source?: string;
   /** Return an absolute URL (`<origin>/ether/v1/kind-media/<token>`) using the active request origin or the adapter's first published address; default stays root-relative. */
   absolute?: boolean;
+  /** Hold a download response during preparation. Omit for players. Ether caps this at 1800 seconds. */
+  wait?: { maxSeconds: number };
 }
 
 export interface PendingReply {
@@ -1713,6 +1729,25 @@ export interface MarkersRequest {
 
 export interface MarkersResponse {
   markers: MarkerItem[];
+}
+
+/** One torrent Ether asks a debrid_cache_hints plugin about. */
+export interface DebridCacheHintCandidate {
+  infoHash: string;
+  /** True when any copy of the torrent comes from a private tracker. */
+  private: boolean;
+  /** Enabled debrid provider kinds with no answer of their own. */
+  providerKinds: string[];
+}
+
+/** Body of POST /ether/debrid/hints. */
+export interface DebridCacheHintsRequest {
+  candidates: DebridCacheHintCandidate[];
+}
+
+/** Info hash to the provider kinds known to hold it; leave out misses. */
+export interface DebridCacheHintsResponse {
+  cached: Record<string, string[]>;
 }
 
 export interface ChannelInput {
@@ -2012,9 +2047,30 @@ export interface FrontendUploadPath {
   maxBytes: number;
 }
 
-export interface FrontendUploadBlob {
-  ref: string;
+/** Selects the durable namespace for a cache usage request. */
+export interface CacheUsageOptions {
+  durable: true;
+}
+
+/** Unique saved bytes and files with their effective quotas. */
+export interface CacheUsageResult {
+  bytes: number;
+  files: number;
+  quotaBytes: number;
+  quotaFiles: number;
+}
+
+/** Size and lowercase hexadecimal digests of an owned blob. */
+export interface CacheStatResult {
   size: number;
+  sha256: string;
+  sha1: string;
+  md5: string;
+  crc32: string;
+}
+
+export interface FrontendUploadBlob extends CacheStatResult {
+  ref: string;
   contentType?: string;
   field?: string;
   filename?: string;
@@ -2048,8 +2104,11 @@ export interface RawRequest {
 
 /** Host-served cached bytes for an authenticated frontend adapter response. */
 export interface FrontendBlob {
-  libraryKey: string;
+  /** Required for library-cache refs. Omit for durable refs. */
+  libraryKey?: string;
+  /** A library-cache blob:<sha256> or a plugin-owned durable:<sha256> ref. */
   ref: string;
+  /** Selects a member of a library-cache archive. */
   memberIndex?: number;
 }
 
@@ -2075,14 +2134,18 @@ export interface RawResponse {
   body?: unknown;
 }
 
+/** Report auth, rate_limited, upstream_unavailable, not_found or invalid_settings
+ * with an owner-facing message that contains no credentials. */
 export class PluginHttpError extends Error {
   readonly status: number;
   readonly code: string;
+  readonly retryAfterSeconds?: number;
 
-  constructor(status: number, code: string, message: string) {
+  constructor(status: number, code: string, message: string, retryAfterSeconds?: number) {
     super(message);
     this.name = "PluginHttpError";
     this.status = status;
     this.code = code;
+    this.retryAfterSeconds = retryAfterSeconds;
   }
 }

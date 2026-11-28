@@ -21,6 +21,7 @@ import (
 	"github.com/braedonsaunders/ether/internal/config"
 	"github.com/braedonsaunders/ether/internal/core"
 	"github.com/braedonsaunders/ether/internal/egress"
+	"github.com/braedonsaunders/ether/internal/langtag"
 	"github.com/braedonsaunders/ether/internal/newznab"
 	"github.com/braedonsaunders/ether/internal/releaseparse"
 	"github.com/braedonsaunders/ether/internal/safefetch"
@@ -71,6 +72,7 @@ type Service struct {
 	anime    AnimeIDs
 	specials SpecialEpisodes
 	identity func() config.ClientIdentity
+	sealer   config.FieldSealer
 
 	animeOnce sync.Once
 	mu        sync.Mutex
@@ -100,6 +102,8 @@ type Options struct {
 	// ClientIdentity returns the current server-wide request identity rules
 	// for NZB downloads; nil uses Ether's honest default.
 	ClientIdentity func() config.ClientIdentity
+	// SubtitleSealer protects per-stream subtitle URLs before releases are cached.
+	SubtitleSealer config.FieldSealer
 }
 
 // NewService returns a Service. client nil uses a default client with a
@@ -116,7 +120,7 @@ func NewServiceWithOptions(o Options) *Service {
 	if o.NZBClient == nil {
 		o.NZBClient = (&safefetch.Guard{}).Client(egress.Client(egress.CapStremio, nzbTimeout))
 	}
-	return &Service{client: o.Client, nzb: o.NZBClient, anime: o.Anime, specials: o.Specials, identity: o.ClientIdentity, backends: map[string]*Backend{}}
+	return &Service{client: o.Client, nzb: o.NZBClient, anime: o.Anime, specials: o.Specials, identity: o.ClientIdentity, sealer: o.SubtitleSealer, backends: map[string]*Backend{}}
 }
 
 // SetClientIdentity updates the request-identity lookup used for NZB downloads.
@@ -241,6 +245,7 @@ func (b *Backend) Search(ctx context.Context, req core.SearchRequest, reserve fu
 		succeeded++
 		rels, skippedNoHash, skippedAmbiguous := convertWith(answer.Streams, req, look.packs, convertOptions{
 			origin: b.origin(), instance: b.instance, season: look.season, entryEpisode: look.entryEpisode, specialEpisode: look.specialEpisode,
+			subtitleSealer: b.svc.sealer,
 		})
 		totalNoHash += skippedNoHash
 		totalAmbiguous += skippedAmbiguous
@@ -330,6 +335,7 @@ type stream struct {
 	NZBURL        string        `json:"nzbUrl"`
 	Sources       []string      `json:"sources"`
 	BehaviorHints behaviorHints `json:"behaviorHints"`
+	Subtitles     []Subtitle    `json:"subtitles"`
 	// Ether is the optional per-stream block of an Ether source plugin
 	// (read by internal/plugins/adapters).
 	Ether json.RawMessage `json:"ether,omitempty"`
@@ -373,7 +379,8 @@ type convertOptions struct {
 	specialEpisode int
 	// sources, when set, receives the index of the stream each release
 	// came from.
-	sources *[]int
+	sources        *[]int
+	subtitleSealer config.FieldSealer
 }
 
 // convertWith turns addon streams into releases, best first as the addon
@@ -510,6 +517,9 @@ func convertWith(streams []stream, req core.SearchRequest, packs bool, opts conv
 		if seen[rel.GUID] {
 			continue
 		}
+		if !packs && opts.subtitleSealer != nil {
+			rel.AddonSubtitles = streamSubtitles(s.Subtitles, opts)
+		}
 		seen[rel.GUID] = true
 		out = append(out, rel)
 		if opts.sources != nil {
@@ -517,6 +527,31 @@ func convertWith(streams []stream, req core.SearchRequest, packs bool, opts conv
 		}
 	}
 	return out, skippedNoHash, skippedAmbiguous
+}
+
+func streamSubtitles(subtitles []Subtitle, opts convertOptions) []core.AddonSubtitle {
+	if len(subtitles) == 0 {
+		return nil
+	}
+	var tracks []core.AddonSubtitle
+	seen := map[[2]string]bool{}
+	for _, sub := range subtitles {
+		if len(tracks) == 16 {
+			break
+		}
+		link, lang := httpLink(sub.URL), langtag.Normalize(sub.Lang)
+		key := [2]string{link, lang}
+		if link == "" || len(link) > 4096 || lang == "" || seen[key] {
+			continue
+		}
+		ref, err := opts.subtitleSealer.SealField(opts.origin+"\n"+lang+"\n"+link, core.AddonSubtitleSealContext)
+		if err != nil {
+			continue
+		}
+		seen[key] = true
+		tracks = append(tracks, core.AddonSubtitle{Language: lang, Reference: ref, Forced: sub.Forced})
+	}
+	return tracks
 }
 
 // imdbID normalises an IMDb id to "tt" + digits, or "".

@@ -228,6 +228,13 @@ func (s *Service) knownCached(rel core.Release) bool {
 	s.route.mu.Lock()
 	sig := s.route.signals
 	s.route.mu.Unlock()
+	if len(rel.DebridCached) > 0 {
+		if providers, ok := sig.(interface {
+			KnownCachedBy(string, []string) []core.DebridServiceRef
+		}); ok {
+			return len(providers.KnownCachedBy(rel.InfoHash, rel.DebridCached)) > 0
+		}
+	}
 	return sig != nil && sig.KnownCached(rel.InfoHash)
 }
 

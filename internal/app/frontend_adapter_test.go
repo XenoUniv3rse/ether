@@ -18,6 +18,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/braedonsaunders/ether/internal/core"
 	"github.com/braedonsaunders/ether/internal/libraries"
@@ -138,14 +139,14 @@ func TestAdapterStreamURLOptionsSourceAndBoundedPartIndex(t *testing.T) {
 	if _, err := fn(ctx, pluginID, viewerID, soloRef, plugins.StreamURLOptions{PartIndex: &zero}); !errors.Is(err, core.ErrNotFound) {
 		t.Fatalf("partIndex on item with no parts err = %v, want ErrNotFound", err)
 	}
-	// Source-scoped ticket without partIndex succeeds and records Source in grant.
-	u, err := fn(ctx, pluginID, viewerID, soloRef, plugins.StreamURLOptions{Source: "pdf"})
+	// A source-scoped download ticket carries the source and a host-bounded wait.
+	u, err := fn(ctx, pluginID, viewerID, soloRef, plugins.StreamURLOptions{Source: "pdf", Fallback: true, Wait: &plugins.StreamWaitPolicy{MaxSeconds: 3600}})
 	if err != nil {
 		t.Fatalf("source-scoped mint: %v", err)
 	}
 	tok := u[len(frontendadapter.KindMediaPath):]
 	grant, err := issuer.Redeem(tok)
-	if err != nil || grant.Source != "pdf" || grant.PartIndex != nil || grant.ItemID != soloRef {
+	if err != nil || !grant.Fallback || grant.Source != "pdf" || grant.PartIndex != nil || grant.ItemID != soloRef || grant.Wait != 30*time.Minute {
 		t.Fatalf("redeemed source grant = %+v, err = %v", grant, err)
 	}
 

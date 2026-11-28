@@ -49,13 +49,21 @@ func (s *Service) saveCheckpoint(ctx context.Context, f core.ReleaseFeed, c feed
 	if complete {
 		synced = s.now().Unix()
 	}
-	_, err := s.db.ExecContext(ctx, `INSERT INTO availability_feeds(source_id,generation,anchor,checked_at,synced_at,gap,message,discovered,catchup_target,catchup_tail,catchup_offset,catchup_oldest,catchup_started) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
+	_, err := s.db.ExecContext(ctx, `INSERT INTO availability_feeds(source_id,generation,anchor,checked_at,synced_at,gap,message,discovered,catchup_target,catchup_tail,catchup_offset,catchup_oldest,catchup_started,last_new_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
  ON CONFLICT(source_id) DO UPDATE SET generation=excluded.generation,anchor=excluded.anchor,checked_at=excluded.checked_at,
  synced_at=CASE WHEN excluded.synced_at>0 THEN excluded.synced_at WHEN availability_feeds.generation<>excluded.generation THEN 0 ELSE availability_feeds.synced_at END,
  gap=excluded.gap,message=excluded.message,discovered=availability_feeds.discovered+excluded.discovered,
+ last_new_at=CASE WHEN excluded.anchor<>'' AND (availability_feeds.anchor<>excluded.anchor OR availability_feeds.generation<>excluded.generation) THEN excluded.checked_at ELSE availability_feeds.last_new_at END,
  catchup_target=excluded.catchup_target,catchup_tail=excluded.catchup_tail,catchup_offset=excluded.catchup_offset,
- catchup_oldest=excluded.catchup_oldest,catchup_started=excluded.catchup_started`, f.ID, f.Generation, c.head, s.now().Unix(), synced, store.BoolInt(c.target != ""), message, count, c.target, c.tail, c.offset, c.oldest, c.started)
+ catchup_oldest=excluded.catchup_oldest,catchup_started=excluded.catchup_started`, f.ID, f.Generation, c.head, s.now().Unix(), synced, store.BoolInt(c.target != ""), message, count, c.target, c.tail, c.offset, c.oldest, c.started, observedNewAt(c.head, s.now()))
 	return err
+}
+
+func observedNewAt(head string, now time.Time) int64 {
+	if head != "" {
+		return now.Unix()
+	}
+	return 0
 }
 
 func pageSize(f core.ReleaseFeed) int {
@@ -121,6 +129,16 @@ func (s *Service) syncFeed(parent context.Context, f core.ReleaseFeed, scheduled
 				_ = s.saveCheckpoint(parent, f, c, safeReason(e), count, false)
 			}
 			return e
+		}
+		if page == 0 && len(releases) < size && !f.SinglePage {
+			// Recent may have loaded caps after FeedSources produced the
+			// descriptor, for example on the first poll after a restart.
+			for _, source := range s.d.Feeds.FeedSources() {
+				if source.ID == f.ID {
+					size = min(size, pageSize(source))
+					break
+				}
+			}
 		}
 		if len(releases) == 0 {
 			// A resumed offset may have moved beyond the end after deletions. Verify

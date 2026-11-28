@@ -106,7 +106,8 @@ func TestSourceOffersSharedExpiryRevocationAndNoABA(t *testing.T) {
 	if replacement.ID == offer.ID {
 		t.Fatal("deleted ID rebound")
 	}
-	// Expired header rows and their typed payload are pruned atomically.
+	// Expiration rejects old ids immediately. Maintenance retires the
+	// expired header and its typed payload together.
 	now = now.Add(3 * time.Minute)
 	if _, err = second.Resolve(ctx, scope, replacement.ID); err == nil {
 		t.Fatal("expired offer resolved")
@@ -122,6 +123,9 @@ func TestSourceOffersSharedExpiryRevocationAndNoABA(t *testing.T) {
 	}
 	if replacement2.ID == replacement.ID || replacement2.ID == offer.ID {
 		t.Fatal("expired ID rebound")
+	}
+	if _, err := pruneExpiredSourceOffers(ctx, db, now.UnixMilli()); err != nil {
+		t.Fatal(err)
 	}
 	var count int
 	if err = db.QueryRow(`SELECT COUNT(*) FROM sessions_source_offers`).Scan(&count); err != nil || count != 1 {

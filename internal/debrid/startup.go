@@ -13,8 +13,19 @@ import (
 // not hide a complete descriptor already persisted by an earlier play.
 func (s *Service) reusablePayload(ctx context.Context, rel core.Release) (Payload, bool) {
 	p, ok := s.storedPayload(ctx, payloadKey(rel))
-	if !ok || p.ReleaseID != rel.ID || s.entryByID(p.Provider) == nil {
+	if !ok || p.ReleaseID != rel.ID {
 		return Payload{}, false
+	}
+	e := s.entryByID(p.Provider)
+	if e == nil || e.refusesHash(p.InfoHash) {
+		return Payload{}, false
+	}
+	if pace := e.api; pace != nil {
+		if pace.answer(ctx, answerKey{hash: p.InfoHash}, pace.now()).verdict == answerBlockedHash ||
+			pace.answer(ctx, fileAnswerKey(p.InfoHash, p.Path, p.Size, p.FileID), pace.now()).verdict == answerBlockedFile {
+			pace.noteRemembered()
+			return Payload{}, false
+		}
 	}
 	if s.checkMediaPaused(p.Provider, p.URL) != nil {
 		return Payload{}, false
@@ -41,6 +52,9 @@ func (x *Indexer) fetchTorrent(ctx context.Context, rel core.Release) ([]byte, e
 		return x.fetchTorrentOnce(ctx, rel)
 	}
 	key := payloadKey(rel) + "\x00" + strings.ToLower(rel.InfoHash) + "\x00" + rel.MagnetURL
+	if lowPriority(ctx) {
+		key += "\x00background"
+	}
 	if rel.Target != nil {
 		target, _ := json.Marshal(rel.Target)
 		key += "\x00" + string(target)

@@ -41,7 +41,7 @@ func durationParam(v string, unit time.Duration) time.Duration {
 // handleTimeline is /:/timeline: playback progress from the client.
 func (s *Server) handleTimeline(w http.ResponseWriter, r *http.Request) {
 	received := s.now()
-	if s.handleLiveTimeline(w, r) {
+	if s.handleLiveTimeline(w, r) || s.catchUpTimeline(w, r) {
 		return
 	}
 	ctx := r.Context()
@@ -478,6 +478,9 @@ func (s *Server) handleUnscrobble(w http.ResponseWriter, r *http.Request) { s.sc
 func (s *Server) scrobble(w http.ResponseWriter, r *http.Request, watched bool) {
 	ctx := r.Context()
 	pr := FromContext(ctx)
+	if s.catchUpScrobble(w, r, watched) {
+		return
+	}
 	ctx = frontend.WithWatchOrigin(ctx, frontend.WatchOrigin{SuppressMetadataRefresh: true, Surface: "plex", SessionID: pr.SessionID, ClientID: pr.ClientID})
 	key, ok := s.mutationKey(w, r, false)
 	if !ok {

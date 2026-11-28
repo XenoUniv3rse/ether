@@ -21,7 +21,9 @@ func TestLiveTVHistoryGroupingDurationAndSummary(t *testing.T) {
 	now := time.Date(2026, 11, 20, 18, 0, 0, 0, time.UTC)
 	svc := New(db, Options{Now: func() time.Time { return now }})
 
-	chESPN := &core.LiveChannel{ID: "ch-espn", Name: "ESPN", Number: "206"}
+	chESPN := &core.LiveChannel{ID: "ch-espn", Name: "ESPN", Number: "206", Provider: &core.LiveProvider{
+		LiveProviderIdentity: core.LiveProviderIdentity{SourceName: "Sports provider", LoginLabel: "jo***", LoginNumber: 2},
+	}}
 	chCNN := &core.LiveChannel{ID: "ch-cnn", Name: "CNN", Number: "202"}
 	client := core.ClientCaps{ClientID: "appletv-1", Platform: "tvOS", DeviceName: "Living Room Apple TV"}
 
@@ -161,7 +163,7 @@ func TestLiveTVHistoryGroupingDurationAndSummary(t *testing.T) {
 	for _, h := range hist {
 		byID[h.ID] = h
 	}
-	if p := byID["live-espn-1"]; p.ChannelID != "ch-espn" || p.ChannelName != "ESPN" || p.ChannelNumber != "206" || p.Key != 0 || p.Completed || p.DurationMS != 0 || p.WatchedMS != 4*60*1000 {
+	if p := byID["live-espn-1"]; p.ChannelID != "ch-espn" || p.ChannelName != "ESPN" || p.ChannelNumber != "206" || p.LiveSourceName != "Sports provider" || p.LiveLoginLabel != "jo***" || p.LiveLoginNumber != 2 || p.Key != 0 || p.Completed || p.DurationMS != 0 || p.WatchedMS != 4*60*1000 {
 		t.Fatalf("espn row mismatch: %+v", p)
 	}
 	if p := byID["live-cnn-1"]; p.ChannelID != "ch-cnn" || p.WatchedMS != 2*60*1000 || p.Completed {

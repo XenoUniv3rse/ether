@@ -229,7 +229,7 @@ func sharedSnapshot(ps *core.PlaySession) string {
 	cp := *ps
 	cp.Source = nil
 	if cp.Resolution != nil {
-		res := core.Resolution{Title: cp.Resolution.Title, Release: cp.Resolution.Release, ResolvedAt: cp.Resolution.ResolvedAt}
+		res := core.Resolution{Title: cp.Resolution.Title, Release: cp.Resolution.Release, ResolvedAt: cp.Resolution.ResolvedAt, AutoSelectionReason: cp.Resolution.AutoSelectionReason}
 		cp.Resolution = &res
 	}
 	b, err := json.Marshal(&cp)

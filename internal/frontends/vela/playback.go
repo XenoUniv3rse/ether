@@ -6,20 +6,25 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/braedonsaunders/ether/internal/frontend"
-	"github.com/braedonsaunders/ether/internal/frontend/kit/ids"
-	"github.com/braedonsaunders/ether/internal/frontend/kit/reading"
 	"log/slog"
 	"math"
 	"net/http"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/braedonsaunders/ether/internal/frontend"
+	"github.com/braedonsaunders/ether/internal/frontend/kit/ids"
+	"github.com/braedonsaunders/ether/internal/frontend/kit/reading"
 )
 
 type client struct {
+	Features struct {
+		AdaptiveHLS bool `json:"adaptiveHLS,omitempty"`
+	} `json:"features,omitempty,omitzero"`
 	OriginalPlayback *frontend.OriginalPlaybackCapabilities `json:"originalPlayback,omitempty"`
 	Device           device                                 `json:"device"`
 	ProtocolVersions []int                                  `json:"protocolVersions"`
@@ -80,8 +85,9 @@ type playSession struct {
 	clientErrors      []object
 	// observedState and observedAt are the client's last reported player
 	// state, logged on change so a rebuffer shows beside the server's log.
-	observedState string
-	observedAt    time.Time
+	observedState  string
+	observedAt     time.Time
+	directDelivery directDeliveryWindow
 
 	mediaReads       atomic.Int32
 	lastActivityNano atomic.Int64
@@ -99,6 +105,7 @@ type playSession struct {
 	observedSource                   uint64
 	position                         time.Duration
 	cursor                           uint64
+	lastPlanEvent                    time.Time
 	events                           []object
 	signal                           chan struct{}
 	stream                           context.CancelFunc
@@ -114,6 +121,8 @@ type playSession struct {
 	trickplayLastPublish             time.Time
 	trickplayGenerating              bool
 }
+
+const observationPlanInterval = 10 * time.Second
 
 func seconds(n float64) (time.Duration, bool) {
 	if math.IsNaN(n) || math.IsInf(n, 0) || n < 0 || n > float64(math.MaxInt64)/float64(time.Second) {
@@ -297,7 +306,8 @@ func (i *instance) playback(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	plan, e := i.host.Sessions.Plan(r.Context(), frontend.PlanRequest{Protocol: "vela", Viewer: v, Device: requestDevice(r), Item: item, Channel: b.ChannelID, Multiview: mvTarget, Version: b.VersionID, Caps: declared.Client, Intent: frontend.PlayIntent{Options: options, AudioSet: audioSet, SubtitleSet: subtitleSet, Position: pos, ExactVersion: b.VersionID != "", AllowTranscoding: b.AllowTranscode, DeclaredCaps: true, OriginalPlayback: b.Client.OriginalPlayback, Queued: b.Queued && b.TitleID != ""}})
+	// POST /playback is Vela's start request: the viewer pressed Play.
+	plan, e := i.host.Sessions.Plan(r.Context(), frontend.PlanRequest{Protocol: "vela", Viewer: v, Device: requestDevice(r), Item: item, Channel: b.ChannelID, Multiview: mvTarget, Version: b.VersionID, Caps: declared.Client, Intent: frontend.PlayIntent{Options: options, AudioSet: audioSet, SubtitleSet: subtitleSet, Position: pos, ExactVersion: b.VersionID != "", AllowTranscoding: b.AllowTranscode, DeclaredCaps: true, OriginalPlayback: b.Client.OriginalPlayback, Queued: b.Queued && b.TitleID != "", ViewerPlay: true}})
 	if e != nil {
 		if b.VersionID != "" && errors.Is(e, frontend.ErrNotFound) {
 			if _, itemErr := i.host.Experience.Item(frontend.WithColdDetail(r.Context(), item), frontend.ItemRequest{Viewer: v, Device: requestDevice(r), Key: item}); itemErr == nil {
@@ -340,13 +350,13 @@ func (i *instance) playback(w http.ResponseWriter, r *http.Request) {
 		plan.Media = *s.Media
 	}
 	audioOnly := b.ChannelID == "" && plan.Media.Video() == nil && plan.Media.HasPlayableMedia()
-	format, transport, mime := playbackTransport(plan, audioOnly, b.Client.HLS || b.Client.MSE)
+	format, transport, mime := playbackTransport(plan, audioOnly, b.Client)
 	if format == "" {
 		_ = i.host.Sessions.Stop(r.Context(), i.access(r, v), s.ID)
 		problem(w, 422, "decoder", "unsupported_transport")
 		return
 	}
-	url, e := i.host.Sessions.StartStream(r.Context(), i.access(r, v), s.ID, frontend.StreamRequest{Format: format, Position: pos, LazyStart: true, Continuous: true})
+	url, e := i.host.Sessions.StartStream(r.Context(), i.access(r, v), s.ID, frontend.StreamRequest{Format: format, Position: pos, LazyStart: true, Continuous: true, AdaptiveHLS: b.Client.Features.AdaptiveHLS})
 	if e != nil {
 		_ = i.host.Sessions.Stop(r.Context(), i.access(r, v), s.ID)
 		i.failFor(w, v, e, r)
@@ -354,6 +364,9 @@ func (i *instance) playback(w http.ResponseWriter, r *http.Request) {
 	}
 	kind := "direct"
 	if plan.Decision.Kind == frontend.DecisionRemux {
+		kind = "remux"
+	}
+	if format == frontend.StreamHLS && plan.Decision.Kind == frontend.DecisionDirectPlay {
 		kind = "remux"
 	}
 	if plan.Decision.Kind == frontend.DecisionTranscode {
@@ -440,7 +453,7 @@ func (i *instance) playback(w http.ResponseWriter, r *http.Request) {
 		}
 		delete(p, "durationSeconds")
 	}
-	if (original || (audioOnly && transport == "file")) && (b.Client.HLS || b.Client.MSE) && plan.HLS {
+	if (original || (audioOnly && transport == "file")) && (b.Client.HLS || b.Client.MSE) && plan.HLS && (!b.Client.Features.AdaptiveHLS || audioOnly) {
 		fallbackKind := "transcode"
 		if plan.DirectStream {
 			fallbackKind = "remux"
@@ -480,12 +493,14 @@ func (i *instance) playback(w http.ResponseWriter, r *http.Request) {
 	if transport == "hls" {
 		i.refreshTrackDelivery(r.Context(), i.access(r, v), s.ID, ps)
 	}
+	i.offerAdaptive(r.Context(), i.access(r, v), ps, format == frontend.StreamDirect, plan.HLS)
 	i.addQualityPaths(r.Context(), i.access(r, v), s.ID, ps)
 	i.refreshOutput(r.Context(), s.ID, ps)
+	ps.updateServerHandoff()
 	if b.ChannelID != "" {
 		alignUnobservedLivePosition(ps)
 	}
-	if b.TitleID != "" && i.versionsAvailable() {
+	if b.TitleID != "" {
 		ps.versionsCold = i.attachPlaybackVersions(r.Context(), v, dev, item, declared.Client, planActiveVersion(plan), p)
 	}
 	i.refreshInitialTrickplay(r.Context(), i.access(r, v), s.ID, ps)
@@ -495,6 +510,7 @@ func (i *instance) playback(w http.ResponseWriter, r *http.Request) {
 }
 
 func (i *instance) registerPlaySession(ps *playSession) {
+	ps.lastPlanEvent = time.Now()
 	i.mu.Lock()
 	for id, old := range i.sessions {
 		old.mu.Lock()
@@ -563,17 +579,25 @@ func (s *playSession) snapshot() object {
 	}
 	return out
 }
-func (s *playSession) publish(kind string) {
-	s.cursor++
+func (s *playSession) revisePlan() {
+	s.updateServerHandoff()
 	s.revision++
 	s.plan["revision"] = s.revision
 	s.plan["sourceGeneration"] = s.source
 	s.plan["seekGeneration"] = s.seek
 	s.plan["positionSeconds"] = s.position.Seconds()
 	s.updateBehindLive()
-	if kind == "plan" && s.trickplayCurrent != s.trickplayPublished {
-		s.trickplayPublished = s.trickplayCurrent
-		s.trickplayLastPublish = time.Now()
+}
+
+func (s *playSession) publish(kind string) {
+	s.cursor++
+	s.revisePlan()
+	if kind == "plan" {
+		s.lastPlanEvent = time.Now()
+		if s.trickplayCurrent != s.trickplayPublished {
+			s.trickplayPublished = s.trickplayCurrent
+			s.trickplayLastPublish = s.lastPlanEvent
+		}
 	}
 	b, _ := json.Marshal(s.plan)
 	var p object
@@ -623,10 +647,20 @@ func (i *instance) refreshColdVersions(r *http.Request, v *frontend.Viewer, s *p
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.active.release.ID != active.release.ID {
-		return // a failover moved the session meanwhile; its refresh wins
+	if !s.versionsCold || s.commandActive || !s.ended.IsZero() || s.active.release.ID != active.release.ID || s.active.handle != active.handle {
+		return // a command, failover or another refresh superseded this read
 	}
-	applyVersionPlan(s.plan, versionPlan)
+	changed := false
+	for _, key := range versionPlanFields {
+		if !reflect.DeepEqual(s.plan[key], versionPlan[key]) {
+			changed = true
+			break
+		}
+	}
+	if changed {
+		applyVersionPlan(s.plan, versionPlan)
+		s.publish("plan")
+	}
 	s.versionsCold = stillCold
 }
 func stale(w http.ResponseWriter, s *playSession, source, seek uint64) bool {
@@ -644,7 +678,7 @@ func (i *instance) command(w http.ResponseWriter, r *http.Request) {
 	var b struct {
 		Kind, PathID, AudioTrackID       string
 		VersionID                        string
-		MaxBitrate                       int
+		MaxBitrate                       *int
 		MaxHeight                        *int
 		AtSeconds                        *float64
 		SubtitleTrackID                  json.RawMessage
@@ -723,11 +757,19 @@ func (i *instance) command(w http.ResponseWriter, r *http.Request) {
 		s.clearDisconnectTimerLocked()
 		s.plan["state"] = "ended"
 	case "prepare-fallback":
-		if !i.prepareFallback(w, r, v, s, id, b.MaxBitrate) {
+		if b.MaxBitrate == nil || *b.MaxBitrate <= 0 {
+			problem(w, 400, "request", "invalid_bitrate")
+			return
+		}
+		if !i.prepareFallback(w, r, v, s, id, *b.MaxBitrate) {
 			return
 		}
 	case "switch":
-		var pos time.Duration
+		pos := s.position
+		if b.MaxBitrate != nil && b.PathID != "" {
+			problem(w, 400, "request", "invalid_request")
+			return
+		}
 		ok := true
 		if b.PositionSeconds != nil {
 			pos, ok = seconds(*b.PositionSeconds)
@@ -739,10 +781,29 @@ func (i *instance) command(w http.ResponseWriter, r *http.Request) {
 			problem(w, 400, "request", "invalid_position")
 			return
 		}
+		pathID := b.PathID
+		adaptiveCap := 0
+		if b.MaxBitrate != nil {
+			if *b.MaxBitrate <= 0 {
+				problem(w, 400, "request", "invalid_bitrate")
+				return
+			}
+			if s.client.Features.AdaptiveHLS && s.channelID == "" && s.media.Video() != nil {
+				adaptiveCap = *b.MaxBitrate
+				adaptivePath(s.plan, adaptivePathID)
+				pathID = adaptivePathID
+			} else {
+				rung, ok := i.selectQualityRung(w, r, v, s, id, *b.MaxBitrate)
+				if !ok {
+					return
+				}
+				pathID = "quality-" + rung.ID
+			}
+		}
 		paths := s.plan["paths"].([]object)
 		selected := -1
 		for n, path := range paths {
-			if path["id"] == b.PathID {
+			if path["id"] == pathID {
 				selected = n
 				break
 			}
@@ -752,7 +813,10 @@ func (i *instance) command(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		path := paths[selected]
-		if rung := s.rungFor(path); rung != "" {
+		if b.MaxBitrate == nil {
+			adaptiveCap = s.restartAdaptiveCap(path)
+		}
+		if rung := s.rungFor(path); rung != "" && b.MaxBitrate == nil {
 			allowed := false
 			if !s.port(w, func() { allowed = i.qualityAllowed(r.Context(), i.access(r, v), id, rung) }) {
 				return
@@ -762,60 +826,10 @@ func (i *instance) command(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-		format := frontend.StreamDirect
-		if path["transport"] == "hls" {
-			format = frontend.StreamHLS
-		} else if path["transport"] == "file" && (path["kind"] == "transcode" || path["kind"] == "remux") {
-			format = frontend.StreamHTTP
-		}
-		origin := pos
-		if fallback, ok := s.plan["fallback"].(object); ok && fallback["state"] == "ready" && fallback["pathId"] == b.PathID {
-			if at, ok := path["timelineOriginSeconds"].(float64); ok {
-				if prepared, valid := seconds(at); valid && prepared <= pos {
-					origin = prepared
-				}
+		if ok, err := i.switchPlaybackPath(w, r, v, s, path, pos, adaptiveCap, false); !ok {
+			if err != nil {
+				i.failFor(w, v, err, r)
 			}
-		}
-		var url string
-		var err error
-		if !s.port(w, func() {
-			url, err = i.host.Sessions.StartStream(r.Context(), i.access(r, v), id, frontend.StreamRequest{Format: format, Position: origin, LazyStart: true, Continuous: true})
-		}) {
-			return
-		}
-		if err != nil {
-			i.failFor(w, v, err, r)
-			return
-		}
-		for _, previous := range paths {
-			if previous["id"] != b.PathID && previous["original"] != true {
-				delete(previous, "url")
-				previous["qualities"] = []object{}
-				delete(previous, "initialRenditionId")
-				previous["readiness"] = "on-demand"
-			}
-		}
-		if rung := s.qualityRungs[b.PathID]; rung != "" {
-			url = strings.TrimSuffix(url, "master.m3u8") + rung + "/index.m3u8"
-		}
-		path["url"], path["readiness"] = url, "ready"
-		path["timelineOriginSeconds"] = float64(0)
-		if format == frontend.StreamHLS {
-			path["timelineOriginSeconds"] = origin.Seconds()
-		}
-		s.plan["selectedPathId"] = b.PathID
-		if format == frontend.StreamHLS {
-			if !s.portSnapshot(w, func(copy *playSession) { i.refreshTrackDelivery(r.Context(), i.access(r, v), id, copy) }) {
-				return
-			}
-		}
-		s.position = pos
-		s.retainDiagnostics()
-		s.source++
-		s.seek++
-		s.resetTrickplayForSourceLocked()
-		s.plan["fallback"] = object{"state": "idle"}
-		if !s.portSnapshot(w, func(copy *playSession) { i.refreshOutput(r.Context(), id, copy) }) {
 			return
 		}
 	case "seek":
@@ -851,8 +865,9 @@ func (i *instance) command(w http.ResponseWriter, r *http.Request) {
 		if path["transport"] == "hls" {
 			var url string
 			var e error
+			cap := s.restartAdaptiveCap(path)
 			if !s.port(w, func() {
-				url, e = i.host.Sessions.StartStream(r.Context(), i.access(r, v), id, frontend.StreamRequest{Format: frontend.StreamHLS, Position: pos, LazyStart: true, Continuous: true})
+				url, e = i.host.Sessions.StartStream(r.Context(), i.access(r, v), id, frontend.StreamRequest{Format: frontend.StreamHLS, Position: pos, LazyStart: true, Continuous: true, AdaptiveHLS: s.client.Features.AdaptiveHLS && s.rungFor(path) == "", AdaptiveMaxBitrate: cap})
 			}) {
 				return
 			}
@@ -918,10 +933,12 @@ func (i *instance) command(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		position := s.position
+		currentPath := selectedPlaybackPath(s.plan, s.plan["paths"].([]object))
 		var url string
 		var err error
+		cap := s.restartAdaptiveCap(currentPath)
 		if !s.port(w, func() {
-			url, err = i.host.Sessions.StartStream(r.Context(), i.access(r, v), id, frontend.StreamRequest{Format: frontend.StreamHLS, Position: position, LazyStart: true, Continuous: true, AudioStream: audio, SubtitleStream: sub, BurnImageSubtitles: true})
+			url, err = i.host.Sessions.StartStream(r.Context(), i.access(r, v), id, frontend.StreamRequest{Format: frontend.StreamHLS, Position: position, LazyStart: true, Continuous: true, AdaptiveHLS: s.client.Features.AdaptiveHLS && s.rungFor(currentPath) == "", AdaptiveMaxBitrate: cap, AudioStream: audio, SubtitleStream: sub, BurnImageSubtitles: true})
 		}) {
 			return
 		}
@@ -935,7 +952,7 @@ func (i *instance) command(w http.ResponseWriter, r *http.Request) {
 			// Track changes are HLS: leave the original (a fallback or the
 			// client-cap choice) intact and move to its converted path.
 			for _, candidate := range paths {
-				if candidate["id"] == "fallback-hls" || (candidate["id"] == "primary" && candidate["transport"] == "hls") {
+				if candidate["id"] == "fallback-hls" || candidate["id"] == adaptivePathID || (candidate["id"] == "primary" && candidate["transport"] == "hls") {
 					delete(path, "url")
 					path["readiness"] = "on-demand"
 					path = candidate
@@ -1048,14 +1065,14 @@ func (i *instance) command(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		audioOnly := plan.Media.Video() == nil && plan.Media.HasPlayableMedia()
-		format, transport, mime := playbackTransport(plan, audioOnly, s.client.HLS || s.client.MSE)
+		format, transport, mime := playbackTransport(plan, audioOnly, s.client)
 		if format == "" {
 			problem(w, 422, "decoder", "unsupported_transport")
 			return
 		}
 		var url string
 		if !s.port(w, func() {
-			url, err = i.host.Sessions.StartStream(r.Context(), i.access(r, v), id, frontend.StreamRequest{Format: format, Position: pos, LazyStart: true, Continuous: true})
+			url, err = i.host.Sessions.StartStream(r.Context(), i.access(r, v), id, frontend.StreamRequest{Format: format, Position: pos, LazyStart: true, Continuous: true, AdaptiveHLS: s.client.Features.AdaptiveHLS})
 		}) {
 			return
 		}
@@ -1065,6 +1082,9 @@ func (i *instance) command(w http.ResponseWriter, r *http.Request) {
 		}
 		kind := "direct"
 		if plan.Decision.Kind == frontend.DecisionRemux {
+			kind = "remux"
+		}
+		if format == frontend.StreamHLS && plan.Decision.Kind == frontend.DecisionDirectPlay {
 			kind = "remux"
 		}
 		if plan.Decision.Kind == frontend.DecisionTranscode {
@@ -1090,7 +1110,7 @@ func (i *instance) command(w http.ResponseWriter, r *http.Request) {
 		}
 		path["decisionReason"] = plan.Decision.Reason
 		paths := []object{path}
-		if original && (s.client.HLS || s.client.MSE) && plan.HLS {
+		if original && (s.client.HLS || s.client.MSE) && plan.HLS && !s.client.Features.AdaptiveHLS {
 			fallbackKind := "transcode"
 			if plan.DirectStream {
 				fallbackKind = "remux"
@@ -1126,6 +1146,7 @@ func (i *instance) command(w http.ResponseWriter, r *http.Request) {
 		delete(s.plan, "replacementSourceId")
 		delete(s.plan, "sourceOrigin")
 		s.plan["paths"] = paths
+		delete(s.plan, "serverHandoff")
 		s.plan["selectedPathId"] = "primary"
 		s.plan["audioTracks"] = audioTracks
 		s.plan["subtitleTracks"] = subtitleTracks
@@ -1162,7 +1183,11 @@ func (i *instance) command(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		qSnap := s.outputSnapshot()
-		if !s.port(w, func() { i.addQualityPaths(r.Context(), i.access(r, v), id, qSnap) }) {
+		qSnap.id = id
+		if !s.port(w, func() {
+			i.offerAdaptive(r.Context(), i.access(r, v), qSnap, format == frontend.StreamDirect, plan.HLS)
+			i.addQualityPaths(r.Context(), i.access(r, v), id, qSnap)
+		}) {
 			return
 		}
 		s.qualityRungs = qSnap.qualityRungs
@@ -1239,6 +1264,72 @@ func (i *instance) command(w http.ResponseWriter, r *http.Request) {
 	s.publish(kind)
 	send(w, 200, s.plan)
 }
+
+// switchPlaybackPath runs under the command lock and publishes no event itself.
+func (i *instance) switchPlaybackPath(w http.ResponseWriter, r *http.Request, v *frontend.Viewer, s *playSession, path object, pos time.Duration, adaptiveCap int, handoff bool) (bool, error) {
+	id := r.PathValue("id")
+	pathID := path["id"].(string)
+	paths := s.plan["paths"].([]object)
+	format := frontend.StreamDirect
+	if path["transport"] == "hls" {
+		format = frontend.StreamHLS
+	} else if path["transport"] == "file" && (path["kind"] == "transcode" || path["kind"] == "remux") {
+		format = frontend.StreamHTTP
+	}
+	origin := pos
+	if fallback, ok := s.plan["fallback"].(object); ok && fallback["state"] == "ready" && fallback["pathId"] == pathID && pathBitrate(path) == adaptiveCap {
+		if at, ok := path["timelineOriginSeconds"].(float64); ok {
+			if prepared, valid := seconds(at); valid && prepared <= pos {
+				origin = prepared
+			}
+		}
+	}
+	var url string
+	var err error
+	if !s.port(w, func() {
+		url, err = i.host.Sessions.StartStream(r.Context(), i.access(r, v), id, frontend.StreamRequest{Format: format, Position: origin, LazyStart: true, Continuous: true, AdaptiveHLS: s.client.Features.AdaptiveHLS && s.rungFor(path) == "", AdaptiveMaxBitrate: adaptiveCap})
+	}) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	for _, previous := range paths {
+		if previous["id"] != pathID && previous["original"] != true {
+			resetPreparedPath(previous)
+		}
+	}
+	if rung := s.qualityRungs[pathID]; rung != "" {
+		url = strings.TrimSuffix(url, "master.m3u8") + rung + "/index.m3u8"
+	}
+	path["url"], path["readiness"] = url, "ready"
+	delete(path, "maxBitrate")
+	if adaptiveCap > 0 {
+		path["maxBitrate"] = adaptiveCap
+	}
+	delete(s.plan, "serverHandoff")
+	if handoff {
+		s.plan["serverHandoff"] = "completed"
+	}
+	path["timelineOriginSeconds"] = float64(0)
+	if format == frontend.StreamHLS {
+		path["timelineOriginSeconds"] = origin.Seconds()
+	}
+	s.plan["selectedPathId"] = pathID
+	s.position = pos
+	s.retainDiagnostics()
+	s.source++
+	s.seek++
+	s.resetTrickplayForSourceLocked()
+	s.plan["fallback"] = object{"state": "idle"}
+	if format == frontend.StreamHLS {
+		if !s.portSnapshot(w, func(copy *playSession) { i.refreshTrackDelivery(r.Context(), i.access(r, v), id, copy) }) {
+			return false, nil
+		}
+	}
+	return s.portSnapshot(w, func(copy *playSession) { i.refreshOutput(r.Context(), id, copy) }), nil
+}
+
 func (i *instance) observe(w http.ResponseWriter, r *http.Request) {
 	v, s := i.session(w, r)
 	if s == nil {
@@ -1247,6 +1338,7 @@ func (i *instance) observe(w http.ResponseWriter, r *http.Request) {
 	var b struct {
 		SourceGeneration, SeekGeneration, Sequence uint64
 		PositionSeconds                            float64
+		ThroughputBps                              json.RawMessage
 		State, SelectedPathID                      string
 		AudioTrackID                               *string
 		SubtitleTrackID                            json.RawMessage
@@ -1284,6 +1376,13 @@ func (i *instance) observe(w http.ResponseWriter, r *http.Request) {
 		problem(w, 400, "request", "invalid_state")
 		return
 	}
+	var throughput float64
+	if len(b.ThroughputBps) > 0 {
+		if json.Unmarshal(b.ThroughputBps, &throughput) != nil || !frontend.ValidClientThroughput(throughput) {
+			problem(w, 400, "request", "invalid_observation")
+			return
+		}
+	}
 	var audioIndex, subtitleIndex *int
 	if b.AudioTrackID != nil {
 		n, ok := offeredTrack(s.plan, "audioTracks", *b.AudioTrackID)
@@ -1317,13 +1416,18 @@ func (i *instance) observe(w http.ResponseWriter, r *http.Request) {
 		subtitleIndex = &n
 	}
 	archive := s.archive != nil
+	saveInfo, save := s.catchUpToSave(b.State, i.catchUpNow())
 	s.mu.Unlock()
 	err := func() error {
 		defer s.mu.Lock()
 		if archive {
-			return i.playbackKeepAlive(r.Context(), i.access(r, v), r.PathValue("id"), s)
+			err := i.playbackKeepAlive(r.Context(), i.access(r, v), r.PathValue("id"), s)
+			if err == nil && save {
+				i.saveCatchUp(r.Context(), v, saveInfo, pos, b.State)
+			}
+			return err
 		}
-		return i.host.Sessions.Report(r.Context(), i.access(r, v), r.PathValue("id"), frontend.Timeline{Sequence: b.Sequence, Position: pos, State: b.State, AudioStreamIndex: audioIndex, SubtitleStreamIndex: subtitleIndex})
+		return i.host.Sessions.Report(r.Context(), i.access(r, v), r.PathValue("id"), frontend.Timeline{Sequence: b.Sequence, Position: pos, State: b.State, ThroughputBps: throughput, AudioStreamIndex: audioIndex, SubtitleStreamIndex: subtitleIndex})
 	}()
 	if stale(w, s, b.SourceGeneration, b.SeekGeneration) {
 		return
@@ -1348,6 +1452,7 @@ func (i *instance) observe(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	s.observeDirectDelivery(time.Now(), b.State, pos, throughput)
 	s.sequence = b.Sequence
 	s.observedSource = s.source
 	s.position = pos
@@ -1365,6 +1470,7 @@ func (i *instance) observe(w http.ResponseWriter, r *http.Request) {
 	if b.AudioTrackID != nil {
 		s.plan["selectedAudioTrackId"] = *b.AudioTrackID
 	}
+	tracksChanged := len(b.SubtitleTrackID) > 0 && s.plan["selectedSubtitleTrackId"] != subtitleID
 	if len(b.SubtitleTrackID) > 0 {
 		s.plan["selectedSubtitleTrackId"] = subtitleID
 	}
@@ -1399,8 +1505,20 @@ func (i *instance) observe(w http.ResponseWriter, r *http.Request) {
 		if state == "buffering" {
 			state = "recovering"
 		}
+		previous, previousHandoff := s.plan["state"], s.plan["serverHandoff"]
 		s.plan["state"] = state
-		s.publish("plan")
+		adapted, current := i.adaptDirectPlayback(w, r, v, s)
+		if !current {
+			return
+		}
+		s.updateServerHandoff()
+		clockOnly := !adapted && !tracksChanged && previousHandoff == s.plan["serverHandoff"] && (previous == state ||
+			((previous == "playing" || previous == "recovering") && (state == "playing" || state == "recovering")))
+		if clockOnly && time.Since(s.lastPlanEvent) < observationPlanInterval {
+			s.revisePlan()
+		} else {
+			s.publish("plan")
+		}
 	}
 	send(w, 200, object{"accepted": true})
 }
@@ -1716,7 +1834,11 @@ func sourceMIME(container string) string {
 	return "application/octet-stream"
 }
 
-func playbackTransport(plan frontend.PlayPlan, audioOnly, supportsHLS bool) (frontend.StreamFormat, string, string) {
+func playbackTransport(plan frontend.PlayPlan, audioOnly bool, c client) (frontend.StreamFormat, string, string) {
+	supportsHLS := c.HLS || c.MSE
+	if supportsHLS && c.Features.AdaptiveHLS && !audioOnly && plan.HLS && plan.Decision.Reason != "original_runtime" {
+		return frontend.StreamHLS, "hls", "application/vnd.apple.mpegurl"
+	}
 	if plan.Decision.Kind == frontend.DecisionDirectPlay {
 		if audioOnly {
 			return frontend.StreamDirect, "file", audioSourceMIME(plan.Media.Container, plan.Decision.AudioCodec)

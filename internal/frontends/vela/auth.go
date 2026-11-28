@@ -80,6 +80,24 @@ func (i *instance) tokens(w http.ResponseWriter, r *http.Request, access, refres
 	}
 	i.tokenResult(w, r, access, refresh, d, v, expires)
 }
+
+// Revocation authenticates the device's access grant directly. It can also
+// close a session whose refresh family is missing or can no longer rotate.
+func (i *instance) revoke(w http.ResponseWriter, r *http.Request) {
+	_, token, err := i.viewer(r)
+	if err != nil {
+		fail(w, err, r)
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), authMutationBound)
+	defer cancel()
+	if err := i.host.Identity.Revoke(ctx, token); err != nil {
+		fail(w, err, r)
+		return
+	}
+	send(w, 200, object{"accepted": true})
+}
+
 func (i *instance) auth(w http.ResponseWriter, r *http.Request) {
 	var b struct {
 		Username, Password, RefreshToken, Code, Browser, ExistingToken, UserCode, DeviceCode, Secret, TargetOrigin string
@@ -159,17 +177,6 @@ func (i *instance) auth(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		i.tokens(w, r, a, f, d)
-	case "revoke":
-		_, token, e := i.viewer(r)
-		if e != nil {
-			fail(w, e, r)
-			return
-		}
-		if e = i.host.Identity.Revoke(ctx, token); e != nil {
-			fail(w, e, r)
-			return
-		}
-		send(w, 200, object{"accepted": true})
 	case "web-code/redeem":
 		service, ok := i.host.Identity.(interface {
 			RedeemDeviceWebCode(context.Context, string, frontend.Device) (string, error)

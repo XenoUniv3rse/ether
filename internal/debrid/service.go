@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/braedonsaunders/ether/internal/clusterbus"
@@ -92,6 +93,10 @@ type Service struct {
 	entries []*entry          // configured providers in priority order
 	plugins map[string]*entry // native plugin providers, not serialized into config
 
+	// hinter holds the plugins answering which torrents a provider holds
+	// (cache_hints.go); read without s.mu, before the hint deadline starts.
+	hinter atomic.Pointer[CacheHinter]
+
 	cdnEdges knownCDNEdges
 
 	knownMu sync.Mutex
@@ -130,13 +135,17 @@ type knownState struct {
 	// UncachedTTL, while likely zip-only torrents ignore it and try the
 	// cached-only add.
 	checkUncertain bool
-	until          time.Time
+	// hint marks a state ApplyHints wrote from a source's marker, not the
+	// provider's own answer; any answer recorded later replaces it.
+	hint  bool
+	until time.Time
 }
 
 // entry is one configured provider with its breaker and counters.
 type entry struct {
 	cfg config.DebridProvider
 	p   Provider
+	api *accountPacer
 	err error // construction error (missing key, unknown kind)
 	sem *limiter
 
@@ -206,21 +215,23 @@ var errAddsPaused = fmt.Errorf("debrid: adds paused after refusals: %w", core.Er
 
 // ProviderStats are one provider's counters and latency EWMAs.
 type ProviderStats struct {
-	ID             string     `json:"id"`
-	Name           string     `json:"name"`
-	Kind           string     `json:"kind"`
-	Enabled        bool       `json:"enabled"`
-	Priority       int        `json:"priority"`
-	State          string     `json:"state"` // ok, backoff, auth_failed, disabled
-	LastError      string     `json:"lastError,omitempty"`
-	BackoffUntil   *time.Time `json:"backoffUntil,omitempty"`
-	Requests       int64      `json:"requests"`
-	Failures       int64      `json:"failures"`
-	Cached         int64      `json:"cached"`
-	NotCached      int64      `json:"notCached"`
-	Blocked        int64      `json:"blocked"` // cached files the provider refused to serve
-	LinksRefreshed int64      `json:"linksRefreshed"`
-	Reused         int64      `json:"reused"`
+	ID               string        `json:"id"`
+	Name             string        `json:"name"`
+	Kind             string        `json:"kind"`
+	Enabled          bool          `json:"enabled"`
+	Priority         int           `json:"priority"`
+	State            string        `json:"state"` // ok, backoff, auth_failed, disabled
+	LastError        string        `json:"lastError,omitempty"`
+	BackoffUntil     *time.Time    `json:"backoffUntil,omitempty"`
+	RateLimitedUntil *time.Time    `json:"rateLimitedUntil,omitempty"`
+	API              *APICallStats `json:"api,omitempty"`
+	Requests         int64         `json:"requests"`
+	Failures         int64         `json:"failures"`
+	Cached           int64         `json:"cached"`
+	NotCached        int64         `json:"notCached"`
+	Blocked          int64         `json:"blocked"` // cached files the provider refused to serve
+	LinksRefreshed   int64         `json:"linksRefreshed"`
+	Reused           int64         `json:"reused"`
 	// Slots is how many API calls this node makes to the provider at once:
 	// AccountSlots on a standalone server, this node's share of it in a
 	// cluster.
@@ -286,6 +297,7 @@ func NewService(cfg config.Debrid, opts Options) *Service {
 		opts.ProviderOptions.Now = opts.Now
 	}
 	s := &Service{opts: opts, log: opts.Logger, db: opts.DB, now: opts.Now, known: map[string]knownState{}, payloadMeta: map[string]CachedFileMeta{}}
+	s.opts.ProviderOptions.paces = &accountPaces{onPause: s.publishAccountPause, share: s.slotsFor, answers: &answerStore{db: opts.DB}}
 	s.direct.guard = opts.DirectGuard
 	s.UpdateConfig(cfg)
 	s.preloadPayloadMeta()
@@ -324,6 +336,12 @@ func (s *Service) UpdateConfig(cfg config.Debrid) {
 		s.wireLimiterEvents(e)
 		if pc.Enabled {
 			e.p, e.err = s.opts.NewProvider(pc, s.opts.ProviderOptions)
+			switch p := e.p.(type) {
+			case pacedProvider:
+				e.api = p.accountPace()
+			case interface{ apiAccount() *accountPacer }:
+				e.api = p.apiAccount()
+			}
 		}
 		next = append(next, e)
 	}
@@ -389,7 +407,33 @@ func (e *entry) blocked(now time.Time) error {
 	return nil
 }
 
-func (e *entry) acquire(ctx context.Context) error { return e.sem.acquire(ctx) }
+func (e *entry) acquire(ctx context.Context) error {
+	adapter, paced := e.p.(pacedProvider)
+	if paced && lowPriority(ctx) {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if !e.sem.tryAcquire(1) {
+			return errBackgroundUndecided
+		}
+		return nil
+	}
+	if paced {
+		pace := adapter.accountPace()
+		if err := pace.cooldownFor(ctx); err != nil {
+			return err
+		}
+	}
+	if err := e.sem.acquire(ctx); err != nil {
+		if paced && errors.Is(err, context.DeadlineExceeded) {
+			if throttled := adapter.accountPace().cooldownFor(ctx); throttled != nil {
+				return throttled
+			}
+		}
+		return err
+	}
+	return nil
+}
 
 func (e *entry) release() { e.sem.release() }
 
@@ -431,11 +475,11 @@ func (e *entry) observeTransition(now time.Time, err error) (ev *backoffEvent, p
 		}
 		return nil, prevState, 0
 	}
-	if errors.Is(err, context.Canceled) || errors.Is(err, core.ErrBudgetExhausted) {
+	if errors.Is(err, context.Canceled) || errors.Is(err, core.ErrForegroundOnly) || errors.Is(err, core.ErrBudgetExhausted) || errors.Is(err, core.ErrDebridThrottled) {
 		return nil, prevState, 0
 	}
 	e.stats.Failures++
-	e.lastError = err.Error()
+	e.lastError = cleanDiagnostic(err.Error(), e.cfg.APIKey)
 	var rl *rateLimitError
 	switch {
 	case errors.Is(err, ErrAuth):
@@ -479,6 +523,10 @@ func (s *Service) Stats() []ProviderStats {
 		st := e.stats
 		st.ID, st.Name, st.Kind, st.Enabled, st.Priority = e.cfg.ID, displayName(e.cfg), e.cfg.Kind, e.cfg.Enabled, e.cfg.Priority
 		st.LastError = e.lastError
+		if e.api != nil {
+			api := e.api.apiStats()
+			st.API = &api
+		}
 		st.Slots, st.AccountSlots = e.sem.size(), providerParallel
 		st.QueuedDownloads = queuedCounts[e.cfg.ID]
 		if n := queuedBehind[e.cfg.ID]; n > 0 {
@@ -498,6 +546,14 @@ func (s *Service) Stats() []ProviderStats {
 			st.BackoffUntil = &u
 		default:
 			st.State = "ok"
+		}
+		if p, ok := e.p.(pacedProvider); ok && st.State != "disabled" && st.State != "auth_failed" {
+			if until := p.accountPace().retryAt(); time.Now().Before(until) {
+				st.State, st.RateLimitedUntil = "backoff", &until
+				if st.BackoffUntil == nil || until.After(*st.BackoffUntil) {
+					st.BackoffUntil = &until
+				}
+			}
 		}
 		e.mu.Unlock()
 		out = append(out, st)
@@ -645,6 +701,63 @@ func (s *Service) knownForDetail(ctx context.Context, providerID, hash string) (
 	return cached, ok, checkUncertain, torrentID
 }
 
+// knownAvailability reads the verdicts used during bulk candidate discovery.
+// Torrent IDs are only needed for the acquisition path, which reads the
+// current row when it makes an add or reuse decision.
+func (s *Service) knownAvailability(ctx context.Context, e *entry, hashes []string) map[string]bool {
+	providerID := e.serviceRef().ID
+	out := make(map[string]bool, len(hashes))
+	now := s.now()
+	var missing []string
+	s.knownMu.Lock()
+	for _, hash := range hashes {
+		hash = strings.ToLower(hash)
+		if e.refusesHash(hash) {
+			out[hash] = false
+			continue
+		}
+		if k, hit := s.known[knownKey(providerID, hash)]; hit && (now.Before(k.until) || k.refused && k.until.IsZero()) {
+			out[hash] = k.cached
+		} else {
+			missing = append(missing, hash)
+		}
+	}
+	s.knownMu.Unlock()
+	if s.db == nil {
+		return out
+	}
+	slices.Sort(missing)
+	missing = slices.Compact(missing)
+	for chunk := range store.Chunks(missing, 500) {
+		args := make([]any, 1, len(chunk)+1)
+		args[0] = providerID
+		for _, hash := range chunk {
+			args = append(args, hash)
+		}
+		rows, err := s.db.QueryContext(ctx, `SELECT info_hash, cached, checked_at FROM debrid_torrents WHERE provider_id = ? AND info_hash IN (`+store.Placeholders(len(chunk))+`)`, args...)
+		if err != nil {
+			break
+		}
+		for rows.Next() {
+			var hash string
+			var cached int
+			var at int64
+			if rows.Scan(&hash, &cached, &at) != nil {
+				continue
+			}
+			ttl := s.opts.UncachedTTL
+			if cached == 1 {
+				ttl = s.opts.CachedTTL
+			}
+			if now.Sub(time.Unix(at, 0)) < ttl {
+				out[hash] = cached == 1
+			}
+		}
+		rows.Close()
+	}
+	return out
+}
+
 func zipOnlyCheckThreshold(p Provider) int {
 	if z, ok := p.(zipOnlyCheckBlindProvider); ok {
 		return z.zipOnlyCheckThreshold()
@@ -683,6 +796,19 @@ func (s *Service) likelyZipOnly(ctx context.Context, e *entry, rel core.Release)
 func (s *Service) knownUncachedForRelease(ctx context.Context, e *entry, rel core.Release) bool {
 	hash := strings.ToLower(strings.TrimSpace(rel.InfoHash))
 	if hash == "" {
+		return false
+	}
+	if e.api != nil {
+		a := e.api.answer(ctx, answerKey{hash: hash}, e.api.now())
+		if a.verdict != "" {
+			refused := a.refusal() != nil
+			if refused {
+				e.api.noteRemembered()
+			}
+			return refused
+		}
+	}
+	if _, paced := e.p.(pacedProvider); paced {
 		return false
 	}
 	cached, ok, checkUncertain, _ := s.knownForDetail(ctx, e.cfg.ID, hash)
@@ -730,34 +856,95 @@ const hintTTL = 30 * time.Minute
 // no answer of their own about the hash. A provider the source reported as
 // holding the torrent is tried ahead of unknown ones; with CachedOnly, one
 // it reported as not holding it is skipped without adding the torrent.
-// Hints live in memory only and never replace a provider's answer.
+// Hints live in memory only and never replace a provider's answer. Of the
+// per-account answers acquisition remembers (read in one query per
+// account), a "not cached" or refusal blocks any hint and any other answer
+// blocks a negative one; a positive the account remembers as cached stands.
+// Nothing is written once ctx has ended: reads it cut short may have missed
+// an answer.
 func (s *Service) ApplyHints(ctx context.Context, rels []core.Release) {
-	var entries []*entry
-	cachedOnly := false
-	for _, r := range rels {
-		if r.Protocol != core.ProtocolTorrent || r.InfoHash == "" || len(r.DebridCached)+len(r.DebridUncached) == 0 {
-			continue
-		}
-		if entries == nil {
-			if entries = s.active(); len(entries) == 0 {
-				return
+	cachedOnly := s.Config().CachedOnly
+	for _, e := range s.active() {
+		var hashes []string
+		hints := map[string]bool{}
+		for _, r := range rels {
+			if r.Protocol != core.ProtocolTorrent || r.InfoHash == "" {
+				continue
 			}
-			cachedOnly = s.Config().CachedOnly
-		}
-		hash := strings.ToLower(r.InfoHash)
-		for _, e := range entries {
 			cached := slices.Contains(r.DebridCached, e.cfg.Kind)
 			if !cached && (!cachedOnly || !slices.Contains(r.DebridUncached, e.cfg.Kind)) {
 				continue
 			}
-			if _, ok, _ := s.knownFor(ctx, e.cfg.ID, hash); ok {
+			hash := strings.ToLower(r.InfoHash)
+			if _, seen := hints[hash]; !seen {
+				hashes = append(hashes, hash)
+				hints[hash] = cached
+			}
+		}
+		known := s.knownAvailability(ctx, e, hashes)
+		var unknown []string
+		for _, hash := range hashes {
+			if _, ok := known[hash]; !ok {
+				unknown = append(unknown, hash)
+			}
+		}
+		for hash, a := range e.rememberedAnswers(ctx, unknown) {
+			if a.refusal() != nil || !hints[hash] {
+				known[hash] = false
+			}
+		}
+		now := s.now()
+		s.knownMu.Lock()
+		if ctx.Err() != nil {
+			s.knownMu.Unlock()
+			return
+		}
+		for _, hash := range hashes {
+			key := knownKey(e.cfg.ID, hash)
+			k, hit := s.known[key]
+			if _, ok := known[hash]; ok || hit && (now.Before(k.until) || k.refused && k.until.IsZero()) {
 				continue
 			}
-			s.knownMu.Lock()
-			s.known[knownKey(e.cfg.ID, hash)] = knownState{cached: cached, until: s.now().Add(hintTTL)}
-			s.knownMu.Unlock()
+			s.known[key] = knownState{cached: hints[hash], hint: true, until: now.Add(hintTTL)}
+		}
+		s.knownMu.Unlock()
+	}
+}
+
+// markedFirst returns entries with those marked as holding the release moved
+// ahead, owner order kept within each group: the release's own marker
+// (rel.DebridCached), or a live cached hint ApplyHints recorded for that
+// provider and hash. A provider's own "not cached" answer outranks either.
+// Without a marker or hint the order is unchanged: answers from bulk checks
+// alone never reorder.
+func (s *Service) markedFirst(ctx context.Context, entries []*entry, rel core.Release) []*entry {
+	hash := strings.ToLower(rel.InfoHash)
+	now := s.now()
+	hinted := func(e *entry) bool {
+		e.mu.Lock() // UpdateConfig replaces cfg under it
+		id, kind := e.cfg.ID, e.cfg.Kind
+		e.mu.Unlock()
+		if slices.Contains(rel.DebridCached, kind) {
+			return true
+		}
+		if hash == "" {
+			return false
+		}
+		s.knownMu.Lock()
+		k, ok := s.known[knownKey(id, hash)]
+		s.knownMu.Unlock()
+		return ok && k.hint && k.cached && now.Before(k.until)
+	}
+	marked := make([]*entry, 0, len(entries))
+	var rest []*entry
+	for _, e := range entries {
+		if hinted(e) && !s.knownUncachedForRelease(ctx, e, rel) {
+			marked = append(marked, e)
+		} else {
+			rest = append(rest, e)
 		}
 	}
+	return append(marked, rest...)
 }
 
 func (e *entry) serviceRef() core.DebridServiceRef {
@@ -803,6 +990,9 @@ func (s *Service) KnownCached(hash string) bool {
 	s.knownMu.Lock()
 	defer s.knownMu.Unlock()
 	for _, e := range entries {
+		if e.refusesHash(hash) {
+			continue
+		}
 		if k, ok := s.known[knownKey(e.cfg.ID, hash)]; ok && k.cached && now.Before(k.until) {
 			return true
 		}
@@ -830,7 +1020,10 @@ func (s *Service) KnownCachedBy(hash string, hintKinds []string) []core.DebridSe
 	var out []core.DebridServiceRef
 	s.knownMu.Lock()
 	defer s.knownMu.Unlock()
-	for _, cfg := range cfgs {
+	for i, cfg := range cfgs {
+		if entries[i].refusesHash(hash) {
+			continue
+		}
 		if hash != "" {
 			if k, ok := s.known[knownKey(cfg.ID, hash)]; ok && now.Before(k.until) {
 				if k.cached {
@@ -894,15 +1087,17 @@ func (s *Service) checkCachedDetail(ctx context.Context, hashes []string, refres
 		}
 		ref := e.serviceRef()
 		var ask []string
+		var known map[string]bool
+		if !refresh {
+			known = s.knownAvailability(ctx, e, hashes)
+		}
 		for _, h := range hashes {
-			if !refresh {
-				if c, ok, _ := s.knownFor(ctx, ref.ID, h); ok {
-					out[h] = out[h] || c
-					if c {
-						addService(h, ref)
-					}
-					continue
+			if c, ok := known[strings.ToLower(h)]; ok {
+				out[h] = out[h] || c
+				if c {
+					addService(h, ref)
 				}
+				continue
 			}
 			ask = append(ask, h)
 		}
@@ -1050,24 +1245,35 @@ func (s *Service) Acquire(ctx context.Context, rel core.Release) ([]byte, error)
 	}
 	var errs []error
 	notCached := 0
-	for _, e := range entries {
+	for _, e := range s.markedFirst(ctx, entries, rel) {
 		if err := e.blocked(s.now()); err != nil {
 			errs = append(errs, err)
 			continue
 		}
-		if s.knownUncachedForRelease(ctx, e, rel) {
+		if _, paced := e.p.(pacedProvider); !paced && s.knownUncachedForRelease(ctx, e, rel) {
 			notCached++
 			continue
 		}
 		started := s.now()
-		p, err := s.acquireOn(ctx, e, base, choose, false)
+		play := &apiPlayCalls{account: e.api}
+		playCtx := context.WithValue(ctx, apiPlayKey{}, play)
+		p, err := s.acquireOn(playCtx, e, base, choose, false)
 		if err == nil {
+			if e.api != nil && !lowPriority(ctx) {
+				e.api.mu.Lock()
+				e.api.api.FirstPlays++
+				e.api.api.FirstPlayCalls += play.calls.Load()
+				e.api.mu.Unlock()
+			}
 			s.savePayload(ctx, p)
 			s.log.Info("debrid release ready", "release", rel.Name, "provider", displayName(e.cfg), "file", p.Name())
 			s.emitDebridCached(e, rel, hash, p.Size, s.now().Sub(started))
 			return p.Encode(), nil
 		}
 		if ctx.Err() != nil {
+			if errors.Is(err, core.ErrDebridThrottled) {
+				return nil, err
+			}
 			return nil, ctx.Err()
 		}
 		switch {
@@ -1082,6 +1288,9 @@ func (s *Service) Acquire(ctx context.Context, rel core.Release) ([]byte, error)
 			// try remaining providers, and keep the reason if none can serve it.
 			notCached++
 			errs = append(errs, fmt.Errorf("%s: %w", displayName(e.cfg), err))
+		case errors.Is(err, ErrBlocked):
+			notCached++
+			errs = append(errs, err)
 		case errors.Is(err, core.ErrNotCached):
 			notCached++
 		case errors.Is(err, core.ErrWrongContent), errors.Is(err, core.ErrReleaseRejected):
@@ -1097,6 +1306,11 @@ func (s *Service) Acquire(ctx context.Context, rel core.Release) ([]byte, error)
 		}
 		return nil, fmt.Errorf("%q: %w", rel.Name, core.ErrNotCached)
 	}
+	for _, err := range errs {
+		if errors.Is(err, core.ErrDebridThrottled) {
+			return nil, err
+		}
+	}
 	if notCached > 0 {
 		for _, err := range errs {
 			if errors.Is(err, core.ErrDownloadLimit) {
@@ -1108,7 +1322,7 @@ func (s *Service) Acquire(ctx context.Context, rel core.Release) ([]byte, error)
 		if rel.Private {
 			return nil, core.ErrPrivateUncached
 		}
-		return nil, fmt.Errorf("%q: %w (%v)", rel.Name, core.ErrNotCached, errors.Join(errs...))
+		return nil, fmt.Errorf("%q: %w (%w)", rel.Name, core.ErrNotCached, errors.Join(errs...))
 	}
 	joined := errors.Join(errs...)
 	s.emitDebridFailed(nil, rel, hash, joined)
@@ -1149,7 +1363,7 @@ func (s *Service) ListReleaseFiles(ctx context.Context, rel core.Release) ([]cor
 
 	base := Payload{ReleaseID: rel.ID, InfoHash: hash, Magnet: magnet, Private: rel.Private, Release: rel.Name, Target: &core.ReleaseTarget{AllowNonVideo: true}}
 	var errs []error
-	for _, e := range entries {
+	for _, e := range s.markedFirst(ctx, entries, rel) {
 		if e.blocked(s.now()) != nil {
 			continue
 		}
@@ -1262,10 +1476,22 @@ func (s *Service) CachedPackMatcher(ctx context.Context, rel core.Release) (func
 	}
 	base := Payload{ReleaseID: rel.ID, InfoHash: hash, Magnet: magnet, Private: rel.Private, Release: rel.Name}
 	definitive := true
-	for _, e := range entries {
+	for _, e := range s.markedFirst(ctx, entries, rel) {
 		if e.blocked(s.now()) != nil {
 			definitive = false
 			continue
+		}
+		if e.cfg.Kind == config.DebridRealDebrid && e.api != nil {
+			if files := e.api.selectedPack(ctx, hash); len(files) > 0 {
+				e.api.noteRemembered()
+				return func(target *core.ReleaseTarget) bool {
+					if target == nil {
+						return false
+					}
+					_, err := ChooseFile(files, target)
+					return err == nil
+				}, true
+			}
 		}
 		if s.knownUncachedForRelease(ctx, e, rel) {
 			continue
@@ -1539,6 +1765,8 @@ func (s *Service) followQueued(ctx context.Context, rel core.Release, entries []
 		}
 		s.emitDebridCached(e, rel, base.InfoHash, p.Size, wait)
 		return p.Encode(), nil, true
+	case errors.Is(err, core.ErrDebridThrottled):
+		return nil, err, true
 	case ctx.Err() != nil:
 		return nil, ctx.Err(), true
 	case errors.Is(err, core.ErrWrongContent), errors.Is(err, core.ErrReleaseRejected):
@@ -1618,7 +1846,7 @@ func (s *Service) QueueDownload(ctx context.Context, rel core.Release) ([]byte, 
 			errs = append(errs, err)
 			continue
 		}
-		if s.refusedFor(e.cfg.ID, hash) {
+		if s.refusedFor(e.cfg.ID, hash) || e.refusesHash(hash) {
 			errs = append(errs, fmt.Errorf("%s refused this torrent: %w", displayName(e.cfg), ErrAddRefused))
 			continue
 		}
@@ -1633,6 +1861,9 @@ func (s *Service) QueueDownload(ctx context.Context, rel core.Release) ([]byte, 
 		}
 		if ctx.Err() != nil {
 			s.forgetQueued(rel, hash)
+			if errors.Is(err, core.ErrDebridThrottled) {
+				return nil, err
+			}
 			return nil, ctx.Err()
 		}
 		if errors.Is(err, core.ErrDownloadLimit) {
@@ -1674,6 +1905,9 @@ func (s *Service) QueueDownload(ctx context.Context, rel core.Release) ([]byte, 
 	s.log.Info("uncached torrent not sent to download", "release", rel.Name, "err", joined)
 	s.emitDebridFailed(nil, rel, hash, joined)
 	for _, err := range errs {
+		if errors.Is(err, core.ErrDebridThrottled) {
+			return nil, err
+		}
 		if errors.Is(err, core.ErrDownloadLimit) {
 			return nil, fmt.Errorf("%q: %w (%v)", rel.Name, core.ErrDownloadLimit, joined)
 		}
@@ -1717,6 +1951,15 @@ func (s *Service) acquireOn(ctx context.Context, e *entry, base Payload, choose 
 	ctx = context.WithValue(ctx, diagnosticKey{}, providerDiagnostic{s.log, displayName(e.cfg), base.Release, base.InfoHash})
 	cfg := s.Config()
 	hash := base.InfoHash
+	_, trialAdd := e.p.(pacedProvider)
+	var remembered learnedAnswer
+	if e.api != nil {
+		remembered = e.api.answer(ctx, answerKey{hash: hash}, e.api.now())
+		if err := remembered.refusal(); err != nil && (remembered.verdict != answerCold || !download) {
+			e.api.noteRemembered()
+			return Payload{}, err
+		}
+	}
 
 	if base.Private {
 		download = false
@@ -1725,13 +1968,24 @@ func (s *Service) acquireOn(ctx context.Context, e *entry, base Payload, choose 
 	findStarted := time.Now()
 	torrentID := base.TorrentID
 	knownCached := false
-	if kc, ok, kid := s.knownFor(ctx, e.cfg.ID, hash); ok {
+	if trialAdd || remembered.verdict != "" {
+		knownCached = remembered.verdict == answerCached
+		if torrentID == "" {
+			torrentID = remembered.torrentID
+			if torrentID != "" {
+				e.api.noteRemembered()
+			}
+		}
+	} else if kc, ok, uncertain, kid := s.knownForDetail(ctx, e.cfg.ID, hash); ok {
 		knownCached = kc
 		if torrentID == "" {
 			torrentID = kid
 		}
+		if e.api != nil && !download && !kc && !uncertain && torrentID == "" {
+			return Payload{}, core.ErrNotCached
+		}
 	}
-	if torrentID == "" {
+	if torrentID == "" && !remembered.needsReconciliation() {
 		if fast, ok := e.p.(knownTorrentFinder); ok {
 			// Atomic cached-only providers need no account listing before
 			// foreground creation. Background discovery reads only local
@@ -1746,10 +2000,20 @@ func (s *Service) acquireOn(ctx context.Context, e *entry, base Payload, choose 
 			torrentID = id
 		} else if !errors.Is(err, ErrUnsupported) {
 			observe(err)
-			if errors.Is(err, ErrAuth) {
+			// Real-Debrid has no atomic cached-only API. If the account
+			// list did not answer, an add could duplicate a pending item.
+			if e.cfg.Kind == config.DebridRealDebrid || errors.Is(err, ErrAuth) || errors.Is(err, core.ErrDebridThrottled) {
 				return Payload{}, err
 			}
 		}
+		if torrentID != "" && e.api != nil {
+			e.api.mu.Lock()
+			e.api.api.ListHits++
+			e.api.mu.Unlock()
+		}
+	}
+	if trialAdd && torrentID == "" && !mayTrialAdd(ctx) {
+		return Payload{}, errBackgroundUndecided
 	}
 	// Background validation never creates torrents or starts downloads. An
 	// existing account item can be inspected; unknown remains unknown. The
@@ -1824,7 +2088,13 @@ func (s *Service) acquireOn(ctx context.Context, e *entry, base Payload, choose 
 				return nil, err
 			}
 		}
-		acq, err := e.p.Acquire(ctx, req)
+		var acq *Acquired
+		var err error
+		if e.api != nil && !trialAdd {
+			acq, err = e.api.acquireRemembered(ctx, req, e.api.now, e.p.Acquire)
+		} else {
+			acq, err = e.p.Acquire(ctx, req)
+		}
 		err = wrapPrivateNotCached(req.Private, err)
 		switch {
 		case errors.Is(err, ErrAddRefused):
@@ -1840,7 +2110,7 @@ func (s *Service) acquireOn(ctx context.Context, e *entry, base Payload, choose 
 	acq, err := acquire()
 	_, isQueuedPending := pendingQueue(err)
 	if err != nil && !core.IsBackgroundCheck(ctx) && torrentID != "" && pendingTorrent(err) == "" && !isQueuedPending &&
-		(errors.Is(err, ErrGone) || errors.Is(err, core.ErrNotCached)) && !refusal(err) {
+		(errors.Is(err, ErrGone) || e.api == nil && errors.Is(err, core.ErrNotCached)) && !refusal(err) {
 		// The remembered torrent is gone or lacks the wanted file: add anew.
 		// One still downloading (pending) stays as it is.
 		req.TorrentID = ""
@@ -1869,7 +2139,7 @@ func (s *Service) acquireOn(ctx context.Context, e *entry, base Payload, choose 
 		return Payload{}, err
 	}
 	if err != nil {
-		if errors.Is(err, core.ErrNotCached) && !errors.Is(err, core.ErrDownloadLimit) && !errors.Is(err, errProviderZipped) {
+		if !errors.Is(err, ErrBlocked) && errors.Is(err, core.ErrNotCached) && !errors.Is(err, core.ErrDownloadLimit) && !errors.Is(err, errProviderZipped) && !errors.Is(err, errSelectionMismatch) {
 			// A download left on the account keeps its id, so a later
 			// check follows it instead of adding the torrent again. Do not
 			// remember errProviderZipped as uncached for 30 minutes: the
@@ -1877,32 +2147,32 @@ func (s *Service) acquireOn(ctx context.Context, e *entry, base Payload, choose 
 			e.count(func(st *ProviderStats) { st.NotCached++ })
 			s.setKnown(ctx, e.cfg.ID, hash, pendingTorrent(err), false)
 		}
-		if errors.Is(err, ErrBlocked) {
-			// The provider will not take this torrent (Real-Debrid's
-			// infringing_file): other accounts are asked, and this one is
-			// not asked again, not even to download it.
-			e.count(func(st *ProviderStats) { st.Blocked++ })
-			s.markRefused(e.cfg.ID, hash, 0)
+		if errors.Is(err, ErrBlocked) && !errors.Is(err, ErrBlockedFile) {
+			s.rememberBlocked(e, hash)
 		}
 		return Payload{}, err
 	}
 	resolved := s.now().Sub(started)
-	if req.TorrentID != "" {
+	if !acq.Added && acq.TorrentID != "" {
 		e.count(func(st *ProviderStats) { st.Reused++ })
+		if e.api != nil {
+			e.api.mu.Lock()
+			e.api.api.ReuseHits++
+			e.api.mu.Unlock()
+		}
 	}
-	e.count(func(st *ProviderStats) { st.Cached++ })
-	s.setKnown(ctx, e.cfg.ID, hash, acq.TorrentID, true)
-
 	p := base
 	p.Provider, p.Kind = e.cfg.ID, e.cfg.Kind
 	p.TorrentID, p.FileID, p.Path, p.Size, p.Link, p.Zip = acq.TorrentID, acq.File.ID, acq.File.Path, acq.File.Size, acq.File.Link, acq.File.Zip
 	linkStart := s.now()
 	linkWallStarted := time.Now()
-	dl, err := e.p.Link(ctx, p.handle())
+	dl, err := e.link(ctx, p.handle())
 	linkDuration = time.Since(linkWallStarted)
 	observe(err)
 	if err != nil {
-		if errors.Is(err, ErrBlocked) {
+		if errors.Is(err, ErrBlockedFile) {
+			e.count(func(st *ProviderStats) { st.Blocked++ })
+		} else if errors.Is(err, ErrBlocked) {
 			s.blockedFile(ctx, e, hash, acq.TorrentID, acq.Added && cfg.RemoveUncached, req.MayRemove)
 		}
 		return Payload{}, err
@@ -1921,6 +2191,8 @@ func (s *Service) acquireOn(ctx context.Context, e *entry, base Payload, choose 
 	if p.Size <= 0 {
 		return Payload{}, fmt.Errorf("debrid: %s reported no size for %s: %w", displayName(e.cfg), p.Name(), errNoVideo)
 	}
+	e.count(func(st *ProviderStats) { st.Cached++ })
+	s.setKnown(ctx, e.cfg.ID, hash, acq.TorrentID, true)
 	return p, nil
 }
 
@@ -1991,6 +2263,9 @@ func (s *Service) Refresh(ctx context.Context, p Payload, force bool) (Payload, 
 				return out, nil
 			}
 			if ctx.Err() != nil {
+				if errors.Is(err, core.ErrDebridThrottled) {
+					return p, err
+				}
 				return p, ctx.Err()
 			}
 			note(err)
@@ -2014,11 +2289,17 @@ func (s *Service) Refresh(ctx context.Context, p Payload, force bool) (Payload, 
 			return out, nil
 		}
 		if ctx.Err() != nil {
+			if errors.Is(err, core.ErrDebridThrottled) {
+				return p, err
+			}
 			return p, ctx.Err()
 		}
 		note(err)
 	}
 	joined := errors.Join(errs...)
+	if errors.Is(joined, core.ErrDebridThrottled) {
+		return p, joined
+	}
 	if joined == nil {
 		joined = ErrNoProvider
 	}
@@ -2052,6 +2333,13 @@ func (s *Service) alternateProvider(ctx context.Context, p Payload) (Payload, er
 	return p, core.ErrSourceUnavailable
 }
 
+func (e *entry) link(ctx context.Context, h Handle) (DirectLink, error) {
+	if _, paced := e.p.(pacedProvider); e.api != nil && !paced {
+		return e.api.linkRemembered(ctx, h, e.api.now, e.p.Link)
+	}
+	return e.p.Link(ctx, h)
+}
+
 // relink regenerates a link on the payload's own provider.
 func (s *Service) relink(ctx context.Context, e *entry, p Payload) (Payload, error) {
 	if err := e.acquire(ctx); err != nil {
@@ -2060,7 +2348,7 @@ func (s *Service) relink(ctx context.Context, e *entry, p Payload) (Payload, err
 	lctx, cancel := context.WithTimeout(ctx, providerOpTimeout)
 	lctx = context.WithValue(lctx, diagnosticKey{}, providerDiagnostic{s.log, displayName(e.cfg), p.Release, p.InfoHash})
 	start := s.now()
-	dl, err := e.p.Link(lctx, p.handle())
+	dl, err := e.link(lctx, p.handle())
 	if err == nil || ctx.Err() == nil { // the caller's budget is not a provider failure
 		s.observe(e, err)
 	}
@@ -2076,6 +2364,10 @@ func (s *Service) relink(ctx context.Context, e *entry, p Payload) (Payload, err
 		e.count(func(st *ProviderStats) { st.LinksRefreshed++ })
 		s.savePayload(ctx, p)
 		return p, nil
+	}
+	if errors.Is(err, ErrBlockedFile) {
+		e.count(func(st *ProviderStats) { st.Blocked++ })
+		return p, err
 	}
 	if errors.Is(err, ErrBlocked) {
 		s.blockedFile(ctx, e, p.InfoHash, p.TorrentID, false, nil)
@@ -2101,7 +2393,7 @@ func (s *Service) relink(ctx context.Context, e *entry, p Payload) (Payload, err
 // API calls. A torrent Ether added for this attempt is removed again when
 // remove is set and no node streams from it.
 func (s *Service) blockedFile(ctx context.Context, e *entry, hash, torrentID string, remove bool, mayRemove func(context.Context, string) bool) {
-	e.count(func(st *ProviderStats) { st.Blocked++ })
+	s.rememberBlocked(e, hash)
 	if remove && torrentID != "" {
 		rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 		if mayRemove == nil || mayRemove(rctx, torrentID) {
@@ -2111,9 +2403,38 @@ func (s *Service) blockedFile(ctx context.Context, e *entry, hash, torrentID str
 		}
 		cancel()
 	}
-	s.setKnown(ctx, e.cfg.ID, hash, "", false)
-	s.markRefused(e.cfg.ID, hash, 0)
 	s.log.Info("debrid provider blocks file", "provider", displayName(e.cfg), "hash", hash)
+}
+
+// rememberedAnswers returns e's own remembered answers for hashes, the
+// per-account answers acquisition consults (debrid_answers), which outlive
+// the discovery memory and a restart: one read for the whole list.
+func (e *entry) rememberedAnswers(ctx context.Context, hashes []string) map[string]learnedAnswer {
+	if e.api == nil || len(hashes) == 0 {
+		return nil
+	}
+	return e.api.hashAnswers(ctx, hashes, e.api.now())
+}
+
+func (e *entry) refusesHash(hash string) bool {
+	pace := e.api
+	if pace == nil {
+		return false
+	}
+	pace.mu.Lock()
+	defer pace.mu.Unlock()
+	if pace.learned == nil {
+		return false
+	}
+	a, _ := pace.learned.Peek(answerKey{hash: strings.ToLower(hash)})
+	return a.verdict == answerBlockedHash && pace.now().Before(a.expires)
+}
+
+func (s *Service) rememberBlocked(e *entry, hash string) {
+	e.count(func(st *ProviderStats) { st.Blocked++ })
+	if e.api == nil {
+		s.markRefused(e.cfg.ID, hash, blockedHashTTL)
+	}
 }
 
 // refusal reports an outcome that left nothing downloading on the

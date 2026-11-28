@@ -180,21 +180,23 @@ func redactSettings(s Settings, titles bool, uses []secretUse) Settings {
 }
 
 type sessionRow struct {
-	State    string `json:"state,omitempty"`
-	Decision string `json:"decision,omitempty"`
-	Quality  string `json:"quality,omitempty"`
-	Bytes    int64  `json:"bytes,omitempty"`
-	Title    string `json:"title,omitempty"`
+	State        string `json:"state,omitempty"`
+	Decision     string `json:"decision,omitempty"`
+	Quality      string `json:"quality,omitempty"`
+	Bytes        int64  `json:"bytes,omitempty"`
+	Title        string `json:"title,omitempty"`
+	ChapterCount *int   `json:"chapterCount,omitempty"`
 }
 
 func sessionDoc(rows []SessionFact, omitted int, titles bool, uses []secretUse) map[string]any {
 	out := make([]sessionRow, 0, len(rows))
 	for _, row := range rows {
 		item := sessionRow{
-			State:    redactString(row.State, uses),
-			Decision: redactString(row.Decision, uses),
-			Quality:  redactString(row.Quality, uses),
-			Bytes:    row.Bytes,
+			State:        redactString(row.State, uses),
+			Decision:     redactString(row.Decision, uses),
+			Quality:      redactString(row.Quality, uses),
+			Bytes:        row.Bytes,
+			ChapterCount: row.ChapterCount,
 		}
 		if titles {
 			item.Title = clipNetwork(row.Title, maxString, uses)

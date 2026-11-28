@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"errors"
+	"log/slog"
 	"net/http"
 	"path"
 	"strconv"
@@ -93,6 +94,44 @@ func (t catchUpTarget) selection(channel string) (frontend.CatchUpRequest, bool)
 type catchUpPlayback struct {
 	info             frontend.CatchUpInfo
 	tuneID, mediaKey string
+	// savedAt is when the position was last saved as watch state.
+	savedAt time.Time
+}
+
+// catchUpSaveEvery spaces out watch-state saves while an airing plays.
+const catchUpSaveEvery = 10 * time.Second
+
+// catchUpToSave returns the airing to save a position for, or false: only a
+// played-back airing (not start-over or a time range) has library watch
+// state, and while it plays a save is due every catchUpSaveEvery. Called with
+// s.mu held.
+func (s *playSession) catchUpToSave(state string, now time.Time) (frontend.CatchUpInfo, bool) {
+	a := s.archive
+	if a == nil || a.info.ChannelID == "" || a.info.ProgrammeID == "" || a.info.StartOver || state == "buffering" ||
+		state == "playing" && now.Sub(a.savedAt) < catchUpSaveEvery {
+		return frontend.CatchUpInfo{}, false
+	}
+	a.savedAt = now
+	return a.info, true
+}
+
+// saveCatchUp records a position in a played-back airing as its watch state,
+// shared with the library front ends (resume and watched). Vela always starts
+// an airing from the beginning, so it never reports "stopped": an early stop
+// must not clear a resume point saved from another app. A position past the
+// watched threshold still marks it watched.
+func (i *instance) saveCatchUp(ctx context.Context, v *frontend.Viewer, info frontend.CatchUpInfo, position time.Duration, state string) {
+	watch, ok := i.host.LiveTV.(frontend.CatchUpWatchState)
+	if !ok || v == nil || !i.host.LiveTV.Enabled() {
+		return
+	}
+	if state != "playing" {
+		state = "paused"
+	}
+	err := watch.CatchUpProgress(ctx, v, frontend.CatchUpEpisodeID(info.ProgrammeID), position, 0, state)
+	if err != nil && !errors.Is(err, frontend.ErrNotFound) {
+		slog.Warn("catch-up progress not saved", "frontend", "vela", "err", err)
+	}
 }
 
 func archiveMediaURL(sessionID, key, generation string) string {
@@ -138,6 +177,9 @@ func (i *instance) startCatchUp(w http.ResponseWriter, r *http.Request, v *front
 		accessViewer: v, accessDevice: dev, plan: plan, source: 1, seek: 1, revision: 1, cursor: 1, signal: make(chan struct{}),
 		archive: &catchUpPlayback{info: info, tuneID: info.ID, mediaKey: key}}
 	s.setCatchUpRange()
+	if c.Features.AdaptiveHLS {
+		setAdaptiveUnavailable(path, "live_timeline", dev.Language)
+	}
 	if req.StartOver && i.host.LiveEventLink != nil {
 		if progKey, ref, err := i.host.LiveEventLink.LiveEventForChannel(r.Context(), v, req.ChannelID); err == nil && ref != nil {
 			s.liveProgrammeKey, s.liveEvent = progKey, cloneLiveEventRef(ref)
@@ -294,7 +336,14 @@ func (i *instance) catchUpCommand(w http.ResponseWriter, r *http.Request, v *fro
 	case "stop":
 		s.stopping = true
 		defer func() { s.stopping = false }()
-		if !s.stopPort(w, func() { err = i.host.LiveTV.Stop(r.Context(), id, v) }) {
+		info, save := s.catchUpToSave("stopped", i.catchUpNow())
+		position := s.position
+		if !s.stopPort(w, func() {
+			err = i.host.LiveTV.Stop(r.Context(), id, v)
+			if save {
+				i.saveCatchUp(r.Context(), v, info, position, "stopped")
+			}
+		}) {
 			return
 		}
 		if err == nil || errors.Is(err, frontend.ErrNotFound) {

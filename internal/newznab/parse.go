@@ -8,10 +8,12 @@ import (
 	"encoding/xml"
 	"fmt"
 	"io"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/braedonsaunders/ether/internal/config"
 	"github.com/braedonsaunders/ether/internal/core"
 	"github.com/braedonsaunders/ether/internal/releaseparse"
 )
@@ -59,7 +61,9 @@ type rawItem struct {
 	// Torznab
 	infoHash, magnet, encType string
 	seeders, peers, files     int
-	ids                       core.IDs
+	// debridCached holds the debrid kinds a cachedon attribute named.
+	debridCached []string
+	ids          core.IDs
 }
 
 func (r rawItem) toRelease(indexer string) core.Release {
@@ -94,6 +98,7 @@ func (r rawItem) toRelease(indexer string) core.Release {
 		rel.Info = releaseparse.Parse(name)
 	}
 	rel.Seeders, rel.Peers, rel.FileCount = r.seeders, r.peers, r.files
+	rel.DebridCached = r.debridCached
 	magnet := r.magnet
 	if magnet == "" && strings.HasPrefix(strings.ToLower(r.link), "magnet:") {
 		magnet = r.link
@@ -355,7 +360,23 @@ func applyAttr(r *rawItem, name, val string) {
 		}
 	case "private":
 		r.private = val == "1" || strings.EqualFold(val, "true") || strings.EqualFold(val, "yes")
+	case "cachedon":
+		// Debrid services a feed (e.g. a cached feed) reports holding the
+		// torrent; a hint only, as an add-on's marker is.
+		for _, code := range strings.Split(val, ",") {
+			kind := cachedOnKinds[strings.ToLower(strings.TrimSpace(code))]
+			if kind != "" && !slices.Contains(r.debridCached, kind) {
+				r.debridCached = append(r.debridCached, kind)
+			}
+		}
 	}
+}
+
+// cachedOnKinds maps the Torznab cachedon codes to debrid kinds.
+var cachedOnKinds = map[string]string{
+	"rd": config.DebridRealDebrid,
+	"ad": config.DebridAllDebrid,
+	"tb": config.DebridTorBox,
 }
 
 // --- JSON ---

@@ -12,10 +12,14 @@ import (
 
 // impression is one served hubs response, compacted for the recorder.
 type impression struct {
-	userID int64
-	at     time.Time
-	hc     core.HubContext
-	rows   []servedRow
+	userID        int64
+	app           string
+	home          bool
+	at            time.Time
+	observedAt    time.Time
+	analyticsOnly bool
+	hc            core.HubContext
+	rows          []servedRow
 }
 
 type servedRow struct {
@@ -23,6 +27,7 @@ type servedRow struct {
 	position           int
 	itemsOnly          bool
 	itemOffset         int
+	skipAnalytics      bool
 	keys               []core.RatingKey
 }
 
@@ -83,7 +88,7 @@ func (r *recorder) run(ctx context.Context) {
 		wctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 		defer cancel()
 		rows, items := aggregate(batch, r.store.loc)
-		if err := r.store.writeImpressions(wctx, rows, items); err != nil {
+		if err := r.store.writeImpressions(wctx, rows, items, batch); err != nil {
 			r.log.Warn("personalize: writing impressions failed", "err", err, "served", len(batch))
 		} else {
 			r.written.Add(int64(len(batch)))
@@ -140,6 +145,9 @@ func aggregate(batch []impression, loc *time.Location) ([]rowAgg, []itemAgg) {
 	var rows []rowAgg
 	var items []itemAgg
 	for _, imp := range batch {
+		if imp.analyticsOnly {
+			continue
+		}
 		day := dayOf(imp.at, loc)
 		at := ms(imp.at)
 		for _, sr := range imp.rows {
@@ -241,7 +249,7 @@ func (e *Engine) RecordImpressions(user *core.User, hc core.HubContext, hubs []c
 	if at.IsZero() {
 		at = e.now()
 	}
-	imp := impression{userID: user.ID, at: at, hc: hc, rows: make([]servedRow, 0, len(hubs))}
+	imp := impression{userID: user.ID, app: "plex", home: hc.SectionID == 0 || hc.HomeScoped, at: at, hc: hc, rows: make([]servedRow, 0, len(hubs))}
 	for i, h := range hubs {
 		keys := make([]core.RatingKey, 0, len(h.Items))
 		for _, t := range h.Items {
@@ -249,12 +257,16 @@ func (e *Engine) RecordImpressions(user *core.User, hc core.HubContext, hubs []c
 		}
 		imp.rows = append(imp.rows, servedRow{hubID: h.ID, kind: e.kindOfHub(h.ID), title: h.Title, position: i, keys: keys})
 	}
+	e.queueImpression(user, imp)
+	e.rankerRecordServe(user, hc, hubs, at)
+}
+
+func (e *Engine) queueImpression(user *core.User, imp impression) {
 	e.mu.Lock()
-	e.lastCtx[user.ID] = hc
+	e.lastCtx[user.ID] = imp.hc
 	if _, ok := e.users[user.ID]; !ok {
 		e.users[user.ID] = *user
 	}
 	e.mu.Unlock()
 	e.rec.record(imp)
-	e.rankerRecordServe(user, hc, hubs, at) // serve log for the learned ranker (servelog.go)
 }

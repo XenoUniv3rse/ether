@@ -62,11 +62,11 @@ func TestStreamPartURLMockAndRemoteHost(t *testing.T) {
 
 	// Source-scoped options (with and without partIndex) on mock and remote hosts.
 	part1 := 1
-	su, err := pctx.StreamURLWithOptions("pk:recordings:multi", etherplugin.StreamURLOptions{PartIndex: &part1, Source: "pdf"})
+	su, err := pctx.StreamURLWithOptions("pk:recordings:multi", etherplugin.StreamURLOptions{PartIndex: &part1, Source: "pdf", Fallback: true})
 	if err != nil || !strings.HasSuffix(su, "?part=1") {
 		t.Fatalf("mock StreamURLWithOptions = %q, err = %v", su, err)
 	}
-	if mock.LastStreamURLSource != "pdf" || mock.LastStreamURLPart == nil || *mock.LastStreamURLPart != 1 {
+	if !mock.LastStreamURLFallback || mock.LastStreamURLSource != "pdf" || mock.LastStreamURLPart == nil || *mock.LastStreamURLPart != 1 {
 		t.Fatalf("mock recorded part=%v source=%q", mock.LastStreamURLPart, mock.LastStreamURLSource)
 	}
 	if _, err := pctx.StreamURLWithOptions("pk:recordings:multi", etherplugin.StreamURLOptions{Source: "   "}); err == nil {
@@ -74,11 +74,11 @@ func TestStreamPartURLMockAndRemoteHost(t *testing.T) {
 	}
 
 	seenBody = nil
-	rsu, err := rctx.StreamURLWithOptions("pk:recordings:multi", etherplugin.StreamURLOptions{PartIndex: &part1, Source: "epub"})
+	rsu, err := rctx.StreamURLWithOptions("pk:recordings:multi", etherplugin.StreamURLOptions{PartIndex: &part1, Source: "epub", Fallback: true})
 	if err != nil || rsu != "/ether/v1/kind-media/remote-part-ticket" {
 		t.Fatalf("remote StreamURLWithOptions = %q, err = %v", rsu, err)
 	}
-	if seenBody["viewerId"] != float64(11) || seenBody["itemRef"] != "pk:recordings:multi" || seenBody["partIndex"] != float64(1) || seenBody["source"] != "epub" {
+	if seenBody["viewerId"] != float64(11) || seenBody["itemRef"] != "pk:recordings:multi" || seenBody["partIndex"] != float64(1) || seenBody["source"] != "epub" || seenBody["fallback"] != true {
 		t.Fatalf("remote source payload = %+v", seenBody)
 	}
 }

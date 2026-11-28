@@ -3,6 +3,7 @@ package plex
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"image"
 	"image/jpeg"
 	"net/http"
@@ -108,6 +109,200 @@ func TestCatchUpSectionPlayback(t *testing.T) {
 		t.Fatalf("catch-up DASH start: %d", got.Code)
 	}
 
+}
+
+// Plex for iOS picks the item to play from playQueueSelectedMetadataItemID;
+// without it the app stops after creating the queue and never asks for a
+// decision. A catch-up queue must name its airing like any other queue.
+func TestCatchUpPlayQueueNamesSelectedItem(t *testing.T) {
+	f := newFixture()
+	t.Cleanup(func() { _ = f.srv.Close() })
+	start := time.Unix(1700000000, 0).UTC()
+	programme := "channel-1700000000000"
+	id := frontend.CatchUpEpisodeID(programme)
+	f.srv.setLiveTV(&catchUpTestLive{item: frontend.CatchUpItem{
+		ID: id, Type: frontend.TypeEpisode,
+		Programme: frontend.LiveTVProgramme{ID: programme, ChannelID: "channel", Start: start, End: start.Add(time.Hour)},
+	}})
+	uri := "server://" + f.srv.identity().MachineIdentifier + "/com.plexapp.plugins.library/library/metadata/" + id
+	created := f.request(t, "POST", "/playQueues?"+url.Values{"type": {"video"}, "uri": {uri}}.Encode(), map[string]string{"Accept": "application/json"})
+	if created.Code != http.StatusOK {
+		t.Fatalf("create catch-up queue: %d", created.Code)
+	}
+	mc := decodeJSON(t, created)
+	if mc["playQueueSelectedMetadataItemID"] != id {
+		t.Fatalf("created queue selects %v, want %s", mc["playQueueSelectedMetadataItemID"], id)
+	}
+	reread := f.request(t, "GET", fmt.Sprintf("/playQueues/%v", mc["playQueueID"]), map[string]string{"Accept": "application/json"})
+	if reread.Code != http.StatusOK || decodeJSON(t, reread)["playQueueSelectedMetadataItemID"] != id {
+		t.Fatalf("re-read catch-up queue: %d", reread.Code)
+	}
+}
+
+type catchUpWatchTestLive struct {
+	catchUpTestLive
+	progress []time.Duration
+	states   []string
+}
+
+func (f *catchUpWatchTestLive) CatchUpProgress(_ context.Context, _ *frontend.Viewer, id string, offset, duration time.Duration, state string) error {
+	if id != f.item.ID {
+		return frontend.ErrNotFound
+	}
+	f.progress, f.states = append(f.progress, offset, duration), append(f.states, state)
+	f.item.Watch.ViewOffset = offset
+	return nil
+}
+
+// CatchUpItems and CatchUpItem return a show's roll-up only when asked, as
+// the real host does, so a test fails if the frontend stops asking.
+func (f *catchUpWatchTestLive) CatchUpItems(ctx context.Context, v *frontend.Viewer, q frontend.CatchUpQuery) (frontend.CatchUpPage, error) {
+	page, err := f.catchUpTestLive.CatchUpItems(ctx, v, q)
+	for i := range page.Items {
+		if page.Items[i].Type != frontend.TypeEpisode && !q.Rollup {
+			page.Items[i].Watch = frontend.CatchUpWatch{}
+		}
+	}
+	return page, err
+}
+
+func (f *catchUpWatchTestLive) CatchUpItem(ctx context.Context, v *frontend.Viewer, id string) (frontend.CatchUpItem, error) {
+	item, err := f.catchUpTestLive.CatchUpItem(ctx, v, id)
+	if item.Type != frontend.TypeEpisode {
+		item.Watch = frontend.CatchUpWatch{}
+	}
+	return item, err
+}
+
+func (f *catchUpWatchTestLive) CatchUpGroupWatch(_ context.Context, _ *frontend.Viewer, id string) (frontend.CatchUpWatch, error) {
+	if id != f.item.ID || f.item.Type == frontend.TypeEpisode {
+		return frontend.CatchUpWatch{}, frontend.ErrNotFound
+	}
+	return f.item.Watch, nil
+}
+
+func (f *catchUpWatchTestLive) CatchUpSetWatched(_ context.Context, _ *frontend.Viewer, id string, watched bool) error {
+	if id != f.item.ID {
+		return frontend.ErrNotFound
+	}
+	if f.item.Type != frontend.TypeEpisode {
+		f.item.Watch.Watched, f.item.Watch.InProgress = 0, 0
+		if watched {
+			f.item.Watch.Watched = f.item.Watch.Episodes
+		}
+		return nil
+	}
+	f.item.Watch.ViewOffset = 0
+	if watched {
+		f.item.Watch.ViewCount++
+	} else {
+		f.item.Watch.ViewCount = 0
+	}
+	return nil
+}
+
+// Plex timelines, Mark as Watched and Mark as Unwatched reach a catch-up
+// airing's watch state, and the airing's metadata shows it.
+func TestCatchUpWatchStateThroughPlex(t *testing.T) {
+	f := newFixture()
+	t.Cleanup(func() { _ = f.srv.Close() })
+	start := time.Unix(1700000000, 0).UTC()
+	programme := "channel-1700000000000"
+	id := frontend.CatchUpEpisodeID(programme)
+	live := &catchUpWatchTestLive{catchUpTestLive: catchUpTestLive{item: frontend.CatchUpItem{
+		ID: id, Type: frontend.TypeEpisode,
+		Programme: frontend.LiveTVProgramme{ID: programme, ChannelID: "channel", Start: start, End: start.Add(time.Hour)},
+	}}}
+	f.srv.setLiveTV(live)
+	metadata := func() map[string]any {
+		t.Helper()
+		got := f.request(t, "GET", "/library/metadata/"+id, map[string]string{"Accept": "application/json"})
+		if got.Code != http.StatusOK {
+			t.Fatalf("catch-up metadata: %d", got.Code)
+		}
+		return decodeJSON(t, got)["Metadata"].([]any)[0].(map[string]any)
+	}
+	timeline := url.Values{"ratingKey": {id}, "key": {"/library/metadata/" + id}, "state": {"stopped"}, "time": {"600000"}, "duration": {"3600000"}}
+	if got := f.request(t, "GET", "/:/timeline?"+timeline.Encode(), nil); got.Code != http.StatusOK {
+		t.Fatalf("catch-up timeline: %d", got.Code)
+	}
+	if len(live.progress) != 2 || live.progress[0] != 10*time.Minute || live.progress[1] != time.Hour || live.states[0] != "stopped" {
+		t.Fatalf("timeline progress: %v %v", live.progress, live.states)
+	}
+	if md := metadata(); md["viewOffset"] != float64(600000) {
+		t.Fatalf("resume point not shown: %v", md["viewOffset"])
+	}
+	mark := url.Values{"key": {id}, "identifier": {"com.plexapp.plugins.library"}}
+	if got := f.request(t, "PUT", "/:/scrobble?"+mark.Encode(), nil); got.Code != http.StatusOK {
+		t.Fatalf("mark watched: %d", got.Code)
+	}
+	if md := metadata(); md["viewCount"] != float64(1) || md["viewOffset"] != nil {
+		t.Fatalf("watched not shown: %v %v", md["viewCount"], md["viewOffset"])
+	}
+	if got := f.request(t, "PUT", "/:/unscrobble?"+mark.Encode(), nil); got.Code != http.StatusOK {
+		t.Fatalf("mark unwatched: %d", got.Code)
+	}
+	if md := metadata(); md["viewCount"] != nil {
+		t.Fatalf("unwatched not shown: %v", md["viewCount"])
+	}
+	other := url.Values{"key": {frontend.CatchUpEpisodeID("channel-1700003600000")}, "identifier": {"com.plexapp.plugins.library"}}
+	if got := f.request(t, "PUT", "/:/scrobble?"+other.Encode(), nil); got.Code != http.StatusNotFound {
+		t.Fatalf("unknown airing: %d", got.Code)
+	}
+}
+
+// Mark as Watched and Unwatched on a catch-up show reach every airing in it,
+// and the show's leaf counts show its airings' state (the watched badge).
+func TestCatchUpShowWatchStateThroughPlex(t *testing.T) {
+	f := newFixture()
+	t.Cleanup(func() { _ = f.srv.Close() })
+	start := time.Unix(1700000000, 0).UTC()
+	id := frontend.CatchUpGroupID(frontend.TypeShow, "News")
+	live := &catchUpWatchTestLive{catchUpTestLive: catchUpTestLive{item: frontend.CatchUpItem{
+		ID: id, ShowID: id, SeasonID: frontend.CatchUpGroupID(frontend.TypeSeason, "News"), Type: frontend.TypeShow,
+		Programme: frontend.LiveTVProgramme{ID: "channel-1700000000000", ChannelID: "channel", Start: start, End: start.Add(time.Hour), Item: frontend.LiveTVItem{Title: "News"}},
+		Watch:     frontend.CatchUpWatch{Episodes: 3, Watched: 1, InProgress: 1, LastViewedAt: start.Add(2 * time.Hour)},
+	}}}
+	f.srv.setLiveTV(live)
+	show := func(path string) map[string]any {
+		t.Helper()
+		got := f.request(t, "GET", path, map[string]string{"Accept": "application/json"})
+		if got.Code != http.StatusOK {
+			t.Fatalf("%s: %d", path, got.Code)
+		}
+		return decodeJSON(t, got)["Metadata"].([]any)[0].(map[string]any)
+	}
+	for _, path := range []string{"/library/metadata/" + id, "/library/sections/2147483646/all"} {
+		md := show(path)
+		if md["leafCount"] != float64(3) || md["viewedLeafCount"] != float64(1) || md["lastViewedAt"] != float64(start.Add(2*time.Hour).Unix()) {
+			t.Fatalf("%s counts: %v %v %v", path, md["leafCount"], md["viewedLeafCount"], md["lastViewedAt"])
+		}
+	}
+	// Some clients send the show's key, which is its children listing.
+	mark := url.Values{"key": {"/library/metadata/" + id + "/children"}, "identifier": {"com.plexapp.plugins.library"}}
+	if got := f.request(t, "PUT", "/:/scrobble?"+mark.Encode(), nil); got.Code != http.StatusOK {
+		t.Fatalf("mark show watched by its key: %d", got.Code)
+	}
+	mark = url.Values{"key": {id}, "identifier": {"com.plexapp.plugins.library"}}
+	if md := show("/library/metadata/" + id); md["viewedLeafCount"] != float64(3) {
+		t.Fatalf("watched show: %v", md["viewedLeafCount"])
+	}
+	if got := f.request(t, "PUT", "/:/unscrobble?"+mark.Encode(), nil); got.Code != http.StatusOK {
+		t.Fatalf("mark show unwatched: %d", got.Code)
+	}
+	if md := show("/library/metadata/" + id); md["viewedLeafCount"] != float64(0) {
+		t.Fatalf("unwatched show: %v", md["viewedLeafCount"])
+	}
+	// A timeline names an airing, never a show.
+	timeline := url.Values{"ratingKey": {id}, "key": {"/library/metadata/" + id}, "state": {"playing"}, "time": {"600000"}}
+	f.request(t, "GET", "/:/timeline?"+timeline.Encode(), nil)
+	if len(live.progress) != 0 {
+		t.Fatalf("a show timeline recorded progress: %v", live.progress)
+	}
+	other := url.Values{"key": {frontend.CatchUpGroupID(frontend.TypeShow, "Weather")}, "identifier": {"com.plexapp.plugins.library"}}
+	if got := f.request(t, "PUT", "/:/scrobble?"+other.Encode(), nil); got.Code != http.StatusNotFound {
+		t.Fatalf("unknown show: %d", got.Code)
+	}
 }
 
 func (*catchUpTestLive) NoteClientActivity() {}

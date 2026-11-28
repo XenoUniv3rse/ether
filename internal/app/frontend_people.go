@@ -91,8 +91,8 @@ func (s *surfaceExperience) People(ctx context.Context, viewer *frontend.Viewer,
 	ctx, cancel := context.WithTimeout(ctx, 4*time.Second)
 	defer cancel()
 	people, err := s.Service.People(ctx, viewer, device, q)
-	if err != nil {
-		return nil, err
+	if err != nil || len(people) == 0 {
+		return people, err
 	}
 	// Every person's portrait in one policy proof (one people read and two
 	// batched title reads), not a read per person.

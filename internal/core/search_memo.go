@@ -50,3 +50,26 @@ func (m *SearchMemo) Store(key string, v any) {
 	m.m[key] = v
 	m.mu.Unlock()
 }
+
+// LoadOrStore returns the shared value for key, publishing candidate when absent.
+func (m *SearchMemo) LoadOrStore(key string, candidate any) any {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if value, ok := m.m[key]; ok {
+		return value
+	}
+	m.m[key] = candidate
+	return candidate
+}
+
+type searchPeopleLimitKey struct{}
+
+// WithSearchPeopleLimit records the largest person-name window used by a search.
+func WithSearchPeopleLimit(ctx context.Context, limit int) context.Context {
+	return context.WithValue(ctx, searchPeopleLimitKey{}, limit)
+}
+
+func SearchPeopleLimit(ctx context.Context) int {
+	limit, _ := ctx.Value(searchPeopleLimitKey{}).(int)
+	return limit
+}

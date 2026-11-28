@@ -516,6 +516,17 @@ func TestSubtitleUpload(t *testing.T) {
 	if !found {
 		t.Fatalf("uploaded track not listed; files=%v", subs.files)
 	}
+	streamPath := fmt.Sprintf("/library/streams/%d", uploadID)
+	friend := map[string]string{"X-Plex-Token": friendToken}
+	if rec := f.requestBody(t, http.MethodGet, "/library/metadata/"+key, nil, friend); rec.Code != http.StatusOK {
+		t.Fatalf("friend metadata: %d", rec.Code)
+	}
+	if rec := f.requestBody(t, http.MethodDelete, streamPath, nil, friend); rec.Code != http.StatusForbidden {
+		t.Fatalf("friend delete: %d", rec.Code)
+	}
+	if rec := f.requestBody(t, http.MethodPut, streamPath, nil, friend); rec.Code != http.StatusOK {
+		t.Fatalf("friend stream PUT: %d", rec.Code)
+	}
 	if rec := f.requestBody(t, http.MethodPost, "/library/metadata/"+key+"/subtitles?title=movie.en.srt&format=SRT", body, nil); rec.Code != http.StatusBadRequest {
 		t.Fatalf("uppercase format: %d", rec.Code)
 	}

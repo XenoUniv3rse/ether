@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/braedonsaunders/ether/internal/config"
+	"github.com/braedonsaunders/ether/internal/frontend/kit/route"
 )
 
 // HandlerDeps are the owner API's links to configuration.
@@ -41,7 +42,7 @@ func (s *Service) Handler(deps HandlerDeps) http.Handler {
 			deps.OnChange()
 		}
 	}
-	m := http.NewServeMux()
+	m := &route.Mux{}
 	m.HandleFunc("GET /definitions", func(w http.ResponseWriter, r *http.Request) {
 		list, err := s.Definitions(r.Context())
 		if err != nil {

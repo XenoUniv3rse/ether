@@ -20,6 +20,8 @@ type BlobHost interface {
 	RuntimeLimits(context.Context) (RuntimeLimits, error)
 	FetchToCache(context.Context, FetchCacheRequest) (FetchCacheResult, error)
 	CacheRead(context.Context, string, DataRange) ([]byte, error)
+	CacheStat(context.Context, string) (CacheStatResult, error)
+	CacheUsage(context.Context, CacheUsageOptions) (CacheUsageResult, error)
 	CacheRasterize(context.Context, string, string, string, RasterizeOptions) (RasterizeResult, error)
 	ArchiveList(context.Context, string) ([]ArchiveMember, error)
 	ArchiveOpen(context.Context, string, int, DataRange) ([]byte, error)
@@ -50,6 +52,44 @@ func (c *RemoteHostClient) CachePutWithOptions(ctx context.Context, libraryKey, 
 	return out.Blob, err
 }
 
+// CacheStatResult describes an owned blob's size and lowercase hex digests.
+type CacheStatResult struct {
+	Size   int64  `json:"size"`
+	SHA256 string `json:"sha256"`
+	SHA1   string `json:"sha1"`
+	MD5    string `json:"md5"`
+	CRC32  string `json:"crc32"`
+}
+
+func (c *RemoteHostClient) CacheStat(ctx context.Context, blob string) (CacheStatResult, error) {
+	var out CacheStatResult
+	headers := map[string]string{}
+	if token, ok := ViewerTokenFromContext(ctx); ok {
+		headers[HeaderViewerToken] = token
+	}
+	_, err := c.callJSONWithHeaders(ctx, http.MethodPost, "/ether/plugin-host/data/cache.stat", headers, []any{blob}, &out, false)
+	return out, err
+}
+
+// CacheUsageOptions selects which namespace to measure. Durable must be true.
+type CacheUsageOptions struct {
+	Durable bool `json:"durable"`
+}
+
+// CacheUsageResult reports unique saved bytes and files and their effective quotas.
+type CacheUsageResult struct {
+	Bytes      int64 `json:"bytes"`
+	Files      int   `json:"files"`
+	QuotaBytes int64 `json:"quotaBytes"`
+	QuotaFiles int   `json:"quotaFiles"`
+}
+
+func (c *RemoteHostClient) CacheUsage(ctx context.Context, opts CacheUsageOptions) (CacheUsageResult, error) {
+	var out CacheUsageResult
+	_, err := c.callJSON(ctx, http.MethodPost, "/ether/plugin-host/data/cache.usage", []any{opts}, &out, false)
+	return out, err
+}
+
 type DataRange struct {
 	Offset int64 `json:"offset"`
 	Length int64 `json:"length"`
@@ -74,9 +114,9 @@ type ArchiveReadResult struct {
 // using Range: bytes=<cached>- when the server supports ranges and ETag or
 // Last-Modified validators still match, restarting cleanly from byte 0 if they
 // do not; the blob becomes readable in cache only once complete. Connections
-// defaults to 1. Jobs, schedules, and background calls can request up to 8
-// concurrent ranges, subject to the host cap. Resume preserves each range's
-// progress when parallel ranges are in use.
+// defaults to 1. Jobs, schedules, and background calls can request up to 6
+// concurrent ranges, sharing the host's limit of 6 per origin. Resume
+// preserves each range's progress when parallel ranges are in use.
 type FetchCacheRequest struct {
 	TimeoutMS             int64             `json:"timeoutMs,omitempty"`
 	URL                   string            `json:"url"`

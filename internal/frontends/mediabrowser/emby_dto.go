@@ -133,7 +133,7 @@ func (i *instance) embyItemDetailDTO(m map[string]any, d frontend.ItemDetail) {
 		}
 	}
 	chapters := defaultSourceChapters(m)
-	if len(chapters) == 0 {
+	if chapters == nil {
 		known := d.Chapters
 		if _, hasSources := m["MediaSources"]; !hasSources && len(d.Versions) == 1 && !d.Versions[0].Media.Estimated && len(d.Versions[0].Media.Chapters) > 0 {
 			known = d.Versions[0].Media.Chapters
@@ -156,6 +156,9 @@ func (i *instance) embyItemDetailDTO(m map[string]any, d frontend.ItemDetail) {
 	if v.PartCount != nil && *v.PartCount >= 0 {
 		m["PartCount"] = *v.PartCount
 	}
+	if size := mediaSourceSize(v.Media); size > 0 {
+		m["Size"] = size
+	}
 	if v.Media.Estimated {
 		return
 	}
@@ -164,9 +167,6 @@ func (i *instance) embyItemDetailDTO(m map[string]any, d frontend.ItemDetail) {
 		if mime, ok := embyVideoMime(v.Media.Container); ok && v.Media.Video() != nil {
 			m["MimeType"] = mime
 		}
-	}
-	if v.Media.Size > 0 {
-		m["Size"] = v.Media.Size
 	}
 	if v.Media.BitrateKbps > 0 {
 		m["Bitrate"] = v.Media.BitrateKbps * 1000

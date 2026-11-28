@@ -929,6 +929,8 @@ export function ConnectedServices({
         <div hidden={tab !== "tmdb"}>
           <IntegrationTab id="tmdb" name="TMDB" enabled ready={Boolean(tmdb?.configured)}>
             <TmdbCatalogueSettings
+              bundled={tmdb?.keySource === "built-in"}
+              disabled={locked || saving}
               draft={draft.catalog ?? {}}
               onChange={(catalog) => setDraft({ ...draft, catalog })}
               errors={errors}
@@ -1266,13 +1268,7 @@ function ServiceOverview({
             <IntegrationAppCard
               key={source.id}
               identity={{ id: source.id, name: source.name }}
-              logo={
-                source.logo ? (
-                  <img src={source.logo} alt="" className="h-10 w-10 object-contain" />
-                ) : (
-                  <SourceIcon source={source} />
-                )
-              }
+              logo={<SourceIcon source={source} size={40} />}
               description={[
                 tn(source.entries.length, "{count} catalogue", "{count} catalogues"),
                 ...source.entries.map(sourceName),

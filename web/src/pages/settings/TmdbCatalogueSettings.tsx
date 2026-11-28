@@ -1,3 +1,7 @@
+import { useState } from "react";
+import { MetadataKeyFields } from "../../components/MetadataKeyFields";
+import type { TestState } from "../../components/fields";
+import { builtinMetadataSources } from "../../lib/metadataSources";
 import { SettingsSection } from "@braedonsaunders/appkit-ui";
 import { MoreOptions } from "../../components/ConfigSection";
 import { Segmented } from "../../components/fields";
@@ -72,14 +76,47 @@ export function TmdbCatalogueSettings({
   draft,
   onChange,
   errors,
+  bundled,
+  disabled,
 }: {
   draft: Obj;
   onChange: (value: Obj) => void;
   errors: Record<string, string>;
+  bundled: boolean;
+  disabled: boolean;
 }) {
+  const [test, setTest] = useState<TestState>({ status: "idle" });
+  const key = String(draft.tmdbKey ?? "");
   const groups = [...CATALOG, UpcomingEpisodeSettings].map(briefGroup);
   return (
     <div className="min-w-0 space-y-5">
+      <SettingsSection title={t("API key")}>
+        {bundled ? <p className="text-sm text-fg-muted">{t("Built in")}</p> : null}
+        <MetadataKeyFields
+          source="tmdb"
+          value={key}
+          test={test}
+          disabled={disabled}
+          allowEmptyTest={bundled}
+          onChange={(value) => {
+            setTest({ status: "idle" });
+            onChange({ ...draft, tmdbKey: value });
+          }}
+          onTest={async () => {
+            setTest({ status: "running" });
+            const failed: TestState = {
+              status: "fail",
+              message: t("Could not verify the API key."),
+            };
+            try {
+              const r = await builtinMetadataSources.tmdb.test(key.trim());
+              setTest(r.ok ? { status: "ok", durationMs: r.durationMs } : failed);
+            } catch {
+              setTest(failed);
+            }
+          }}
+        />
+      </SettingsSection>
       {groups.map((g, i) => (
         <SettingsSection key={g.id ?? i} title={g.title}>
           {g.id === "browsable" ? <ObscureTitles draft={draft} onChange={onChange} /> : null}

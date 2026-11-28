@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/braedonsaunders/ether/internal/artwork"
+	"github.com/braedonsaunders/ether/internal/blobcache"
 	"github.com/braedonsaunders/ether/internal/httpjson"
 	"github.com/braedonsaunders/ether/internal/plugins/wasm"
 	"github.com/braedonsaunders/ether/internal/viewspec"
@@ -153,16 +154,24 @@ func isHTTPURL(raw string) bool {
 	return strings.HasPrefix(raw, "http://") || strings.HasPrefix(raw, "https://")
 }
 
-func (m *Manager) resolveIconURL(ctx context.Context, r Record) string {
+func (m *Manager) declaredPluginIconURL(ctx context.Context, r Record) string {
 	if r.Manifest.Ether != nil {
 		icon := strings.TrimSpace(r.Manifest.Ether.Icon)
 		if isHTTPURL(icon) {
 			return icon
 		}
 		if icon != "" && !unsafePath(icon) && m.store.hasFile(ctx, r.ID, r.Version, icon) {
-			return pluginIconURL(r, "")
+			return pluginIconURL(r, "", "")
 		}
-	} else if logo := strings.TrimSpace(r.Manifest.Logo); isHTTPURL(logo) {
+	}
+	return ""
+}
+
+func (m *Manager) resolveIconURL(ctx context.Context, r Record) string {
+	if icon := m.declaredPluginIconURL(ctx, r); icon != "" {
+		return icon
+	}
+	if logo := strings.TrimSpace(r.Manifest.Logo); r.Manifest.Ether == nil && isHTTPURL(logo) {
 		return logo
 	}
 	if cat, ok := m.getCatalogue().(interface{ EntryIcon(string) string }); ok {
@@ -174,15 +183,15 @@ func (m *Manager) resolveIconURL(ctx context.Context, r Record) string {
 }
 
 // pluginIconURL is the cache-busted icon route for a plugin, or for one of
-// its frontend adapters when adapter is set.
-func pluginIconURL(r Record, adapter string) string {
+// its contributions when a selector is set.
+func pluginIconURL(r Record, selector, key string) string {
 	rev := r.Version
 	if !r.UpdatedAt.IsZero() {
 		rev += "-" + strconv.FormatInt(r.UpdatedAt.Unix(), 10)
 	}
 	q := url.Values{}
-	if adapter != "" {
-		q.Set("adapter", adapter)
+	if selector != "" {
+		q.Set(selector, key)
 	}
 	q.Set("v", rev)
 	return "/ether/api/plugins/" + url.PathEscape(r.ID) + "/icon?" + q.Encode()
@@ -205,7 +214,7 @@ func adapterIconPath(r Record, key string) (string, bool) {
 // frontend adapters: the adapter's declared icon, else the plugin's own.
 func (m *Manager) AdapterIconURL(ctx context.Context, r Record, key string) string {
 	if p, ok := adapterIconPath(r, key); ok && m.store.hasFile(ctx, r.ID, r.Version, p) {
-		return pluginIconURL(r, key)
+		return pluginIconURL(r, "adapter", key)
 	}
 	if u := m.resolveIconURL(ctx, r); u != "" {
 		return u
@@ -216,6 +225,24 @@ func (m *Manager) AdapterIconURL(ctx context.Context, r Record, key string) stri
 	return ""
 }
 
+func kindIconPath(r Record, key string) string {
+	if kind, ok := r.Manifest.MediaKindByKey(key); ok && ValidAdapterIconPath(kind.Library.Icon) {
+		return kind.Library.Icon
+	}
+	return ""
+}
+
+// CatalogueIconURL resolves the mark for a plugin catalogue or library.
+func (m *Manager) CatalogueIconURL(ctx context.Context, r Record, kindKey string) string {
+	if p := kindIconPath(r, kindKey); p != "" && m.store.hasFile(ctx, r.ID, r.Version, p) {
+		return pluginIconURL(r, "kind", kindKey)
+	}
+	if icon := m.declaredPluginIconURL(ctx, r); icon != "" {
+		return icon
+	}
+	return r.Manifest.Logo
+}
+
 func (m *Manager) handleIcon(w http.ResponseWriter, r *http.Request) {
 	rec, err := m.store.record(r.Context(), r.PathValue("id"))
 	if err != nil || rec.Manifest.Ether == nil {
@@ -224,7 +251,14 @@ func (m *Manager) handleIcon(w http.ResponseWriter, r *http.Request) {
 	}
 	iconPath := strings.TrimSpace(rec.Manifest.Ether.Icon)
 	ref := "plugin-icon:" + rec.ID
-	if key := r.URL.Query().Get("adapter"); key != "" {
+	query := r.URL.Query()
+	if key := query.Get("kind"); key != "" {
+		if query.Get("adapter") != "" {
+			http.NotFound(w, r)
+			return
+		}
+		iconPath, ref = kindIconPath(rec, key), "plugin-kind-icon:"+rec.ID+":"+key
+	} else if key := query.Get("adapter"); key != "" {
 		p, ok := adapterIconPath(rec, key)
 		if !ok {
 			http.NotFound(w, r)
@@ -262,8 +296,9 @@ func (m *Manager) handleIcon(w http.ResponseWriter, r *http.Request) {
 // privacy label and impact.
 type Detail struct {
 	Summary
-	Manifest      Manifest       `json:"manifest"`
-	RuntimeLimits *RuntimeLimits `json:"runtimeLimits,omitempty"`
+	DurableQuota  *blobcache.DurableQuota `json:"durableQuota,omitempty"`
+	Manifest      Manifest                `json:"manifest"`
+	RuntimeLimits *RuntimeLimits          `json:"runtimeLimits,omitempty"`
 	// ListItems is how many titles one sync of each of its lists reads.
 	ListItems   *ListItemsGrant `json:"listItems,omitempty"`
 	Permissions struct {
@@ -391,6 +426,7 @@ func (m *Manager) handleGet(w http.ResponseWriter, r *http.Request) {
 	h = m.liveHealth(rec, h)
 	g, _ := m.store.grants(r.Context(), id)
 	d := Detail{Summary: m.summary(rec, h), Manifest: m.localizedKindLibraries(r.Context(), id, rec.Manifest), RuntimeLimits: m.grantedRuntimeLimits(rec.Manifest), HealthDetail: h}
+	d.DurableQuota = m.grantedDurableQuota(rec.Manifest)
 	d.Permissions.Lines, d.Permissions.NeedsViewers, d.Permissions.NeedsFolders = PermissionSheet(rec.Manifest)
 	if rec.Manifest.Ether != nil {
 		d.Permissions.Declared = rec.Manifest.Ether.Permissions

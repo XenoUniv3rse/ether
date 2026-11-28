@@ -53,10 +53,16 @@ func TestPerfObserverTracesAndLogsChattyRequests(t *testing.T) {
 			}
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{}`))
+		if r.Method != http.MethodHead {
+			_, _ = w.Write([]byte(`{}`))
+		}
 	}))
 	for _, path := range []string{"/quiet", "/chatty"} {
-		req := httptest.NewRequest(http.MethodGet, path+"?X-Plex-Token=secret", nil)
+		method := http.MethodGet
+		if path == "/quiet" {
+			method = http.MethodHead
+		}
+		req := httptest.NewRequest(method, path+"?X-Plex-Token=secret", nil)
 		req.Header.Set(PerfTagHeader, "tag"+path)
 		h.ServeHTTP(httptest.NewRecorder(), req)
 	}

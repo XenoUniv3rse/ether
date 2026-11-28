@@ -3,6 +3,7 @@ package examples_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
@@ -25,9 +26,6 @@ type fixtureHost struct {
 func (h *fixtureHost) Settings(_ context.Context) (map[string]any, error) {
 	if h.settings != nil {
 		return h.settings, nil
-	}
-	if h.folders != nil {
-		return map[string]any{"folder": "/media"}, nil
 	}
 	return map[string]any{}, nil
 }
@@ -54,11 +52,14 @@ func (h *fixtureHost) KVUsage(context.Context) (plugins.KVUsage, error) {
 	keys := int64(len(h.kv))
 	return plugins.KVUsage{Bytes: used + keys*plugins.KVKeyChargeBytes, Keys: keys, QuotaBytes: plugins.KVQuotaBytes, QuotaKeys: plugins.KVQuotaKeys}, nil
 }
-func (h *fixtureHost) FoldersList(_ context.Context, root, path string) ([]plugins.FolderEntry, error) {
+func (h *fixtureHost) FoldersRoots(context.Context) ([]string, error) {
+	return []string{"/media", "/shows"}, nil
+}
+func (h *fixtureHost) FoldersList(_ context.Context, root, path string, options ...plugins.FolderListOptions) (plugins.FolderPage, error) {
 	if path != "" {
 		root += "/" + path
 	}
-	return h.folders[root], nil
+	return plugins.FolderPage{Entries: append([]plugins.FolderEntry{}, h.folders[root]...)}, nil
 }
 func (h *fixtureHost) FoldersStat(_ context.Context, root, path string) (plugins.FolderEntry, error) {
 	return plugins.FolderEntry{Path: path}, nil
@@ -66,6 +67,9 @@ func (h *fixtureHost) FoldersStat(_ context.Context, root, path string) (plugins
 func (h *fixtureHost) CatalogSearch(_ context.Context, q string, _, _ int) (json.RawMessage, error) {
 	if q == "Example Movie" {
 		return json.RawMessage(`{"titles":[{"id":1,"tmdbId":10,"title":"Example Movie","type":"movie","year":2001}]}`), nil
+	}
+	if q == "Example Show" {
+		return json.RawMessage(`{"titles":[{"id":2,"tmdbId":20,"title":"Example Show","type":"show"}]}`), nil
 	}
 	return json.RawMessage(`{"titles":[]}`), nil
 }
@@ -132,11 +136,14 @@ func TestExamplesPackAndRunHosted(t *testing.T) {
 				return r
 			}
 			if name == "local-folders" {
-				call("POST", "/ether/configure", `{"folder":"/media"}`)
 				call("POST", "/ether/job/scan", `{}`)
 				r := call("GET", "/stream/movie/tmdb%3A10.json", "")
-				if !strings.Contains(string(r.Body), "Example.Movie.2001.1080p.mkv") {
-					t.Fatalf("stream: %s", r.Body)
+				if !strings.Contains(string(r.Body), "/media/Example Movie (2001)/Example.Movie.2001.1080p.mkv") {
+					t.Fatalf("movie stream: %s", r.Body)
+				}
+				r = call("GET", "/stream/series/tmdb%3A20%3A1%3A2.json", "")
+				if !strings.Contains(string(r.Body), "/shows/Example Show/Season 1/Example.Show.S01E02.1080p.mkv") {
+					t.Fatalf("episode stream: %s", r.Body)
 				}
 			} else {
 				r := call("GET", "/ether/channels.json", "")
@@ -179,12 +186,16 @@ func TestStudioExamplesPackAndConform(t *testing.T) {
 	}
 }
 
-func (fixtureHost) FoldersHash(context.Context, string, string) (plugins.FolderHash, error) {
+func (fixtureHost) FoldersHash(context.Context, string, string, ...plugins.FolderHashOptions) (plugins.FolderHash, error) {
 	return plugins.FolderHash{}, nil
 }
 
-func (fixtureHost) FoldersHashStart(context.Context, string, string) (plugins.FolderHashJob, error) {
+func (fixtureHost) FoldersHashStart(context.Context, string, string, ...plugins.FolderHashOptions) (plugins.FolderHashJob, error) {
 	return plugins.FolderHashJob{}, nil
+}
+
+func (fixtureHost) FoldersFrame(context.Context, string, string, plugins.FolderFrameOptions) (plugins.FolderFrame, error) {
+	return plugins.FolderFrame{}, fmt.Errorf("folders.frame requires the hosted runtime")
 }
 
 func (fixtureHost) FoldersHashPoll(context.Context, string) (plugins.FolderHashJob, error) {

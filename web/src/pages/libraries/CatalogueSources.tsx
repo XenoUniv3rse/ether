@@ -1,5 +1,5 @@
-import { Film, Tv, Plug, Link2 } from "lucide-react";
-import type { CatalogueSource } from "./api";
+import { Film, ListFilter, Tv, Plug, Link2 } from "lucide-react";
+import type { CatalogueSource, Library } from "./api";
 import { useState } from "react";
 import { Link } from "react-router-dom";
 import { AddAddonDrawer } from "../../components/addons/AddAddonDrawer";
@@ -61,14 +61,27 @@ export function AddCatalogueSource({
     </Drawer>
   );
 }
-export function SourceIcon({ source }: { source: CatalogueSource }) {
-  return source.group === "plugin" ? (
-    <Plug size={18} />
-  ) : source.mediaTypes[0] === "show" ? (
-    <Tv size={18} />
-  ) : (
-    <Film size={18} />
-  );
+export function SourceIcon({ source, size = 18 }: { source: CatalogueSource; size?: number }) {
+  if (source.logo) return <SourceLogo url={source.logo} size={size} />;
+  const Icon = source.group === "plugin" ? Plug : source.mediaTypes[0] === "show" ? Tv : Film;
+  return <Icon size={18} aria-hidden />;
+}
+
+export function LibrarySourceIcon({ library, size = 18 }: { library: Library; size?: number }) {
+  if (library.logo) return <SourceLogo url={library.logo} size={size} />;
+  const Icon =
+    library.source === "plugin"
+      ? Plug
+      : library.source === "catalogue"
+        ? ListFilter
+        : library.mediaType === "show"
+          ? Tv
+          : Film;
+  return <Icon size={size} aria-hidden />;
+}
+
+function SourceLogo({ url, size }: { url: string; size: number }) {
+  return <img src={url} width={size} height={size} alt="" className="shrink-0 object-contain" />;
 }
 export function sourceOwner(source: CatalogueSource) {
   return source.group === "builtin"
@@ -108,6 +121,7 @@ export function catalogueGroups(sources: CatalogueSource[]) {
         : failed.find((s) => s.lastError)?.lastError;
     return {
       ...first,
+      logo: entries.find((entry) => entry.logo)?.logo,
       id: first.pluginId ?? first.id,
       name: first.owner,
       entries,

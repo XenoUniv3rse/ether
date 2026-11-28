@@ -103,7 +103,7 @@ describe("canAdvance gating", () => {
         savedIndexers: { i1: indexer.url },
       }),
     ).toBe(false);
-    expect(canAdvance("account", { ...base, skipped: { account: true } })).toBe(true);
+    expect(canAdvance("account", { ...base, skipped: { account: true } })).toBe(false);
     expect(canAdvance("sources", { ...base, skipped: { sources: true } })).toBe(true);
   });
   it("accepts debrid instead of Usenet, but every enabled source must be tested", () => {
@@ -173,6 +173,7 @@ describe("savedDraft", () => {
 function renderWizard(configure?: (fake: ReturnType<typeof createFakeServer>) => void) {
   sessionStorage.removeItem(SETUP_STEP_KEY);
   sessionStorage.removeItem("ether.setup.skipped");
+  sessionStorage.removeItem("ether.setup.deferred");
   localStorage.removeItem("ether.locale");
   const fake = createFakeServer();
   fake.state.streamDefaults = {
@@ -497,7 +498,38 @@ describe("setup wizard", () => {
     await screen.findByRole("heading", { name: "Where Ether streams from" });
     fireEvent.click(screen.getByLabelText(/Skip the connection test/));
     expect(screen.getByRole("button", { name: "Save and continue" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Finish now, add sources later" })).toBeEnabled();
+    const skip = () => fireEvent.click(screen.getByRole("button", { name: "Skip this step" }));
+    skip();
+    await screen.findByRole("heading", { name: "Indexers and addons" });
+    expect(fake.state.config.setupComplete).toBe(false);
+    // Refresh and revisit Sources. Deferring it did not complete setup or skip Indexers.
+    cleanup();
+    render(
+      <MemoryRouter>
+        <Setup />
+      </MemoryRouter>,
+    );
+    await screen.findByRole("heading", { name: "Indexers and addons" });
+    expect(screen.getByRole("button", { name: "Sources. Skipped" })).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Back" }));
+    await screen.findByRole("heading", { name: "Where Ether streams from" });
+    skip();
+    await screen.findByRole("heading", { name: "Indexers and addons" });
+    skip();
+    await screen.findByRole("heading", { name: "Cache folder and disk budget" });
+    expect(calls(fake, "POST", "/setup/complete")).toHaveLength(0);
+    expect(screen.getByRole("button", { name: "Indexers. Skipped" })).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Save and continue" }));
+    await screen.findByRole("heading", { name: "Where should Ether get movie and TV details?" });
+    fireEvent.click(screen.getByRole("button", { name: "Skip for now" }));
+    await screen.findByRole("heading", { name: "Everything is set up" });
+    expect(calls(fake, "POST", "/setup/complete")).toHaveLength(0);
+    fireEvent.click(screen.getByRole("button", { name: "Finish setup" }));
+    await waitFor(() => expect(fake.state.config.setupComplete).toBe(true));
+    expect(calls(fake, "POST", "/setup/complete").map((c) => c.body)).toEqual([
+      { skippedSteps: ["sources", "indexers"] },
+    ]);
+    expect(sessionStorage.getItem("ether.setup.deferred")).toBeNull();
     expect(fake.state.config.usenet.providers).toEqual([]);
     expect(fake.state.config.indexers).toEqual([]);
   });
@@ -783,9 +815,18 @@ describe("setup wizard", () => {
   });
 
   it("sends an existing owner to Overview while setup is still incomplete", async () => {
-    renderApp("/", {
-      bootstrap: { setupComplete: false, ownerConfigured: true, authenticated: true },
-    });
+    const { fake } = renderApp(
+      "/",
+      {
+        bootstrap: { setupComplete: false, ownerConfigured: true, authenticated: true },
+      },
+      (f) => {
+        f.state.config.setupComplete = false;
+      },
+    );
+    expect(await screen.findByRole("link", { name: "Continue setup" })).toBeVisible();
+    expect(calls(fake, "POST", "/setup/complete")).toHaveLength(0);
+    expect(fake.state.config.setupComplete).toBe(false);
     expect(await screen.findByRole("heading", { name: "Overview" })).toBeInTheDocument();
     expect(
       screen.queryByRole("heading", { name: "Where will your household watch?" }),
@@ -927,6 +968,7 @@ describe("setup wizard", () => {
   });
   it("completes into the SetupReady screen, supports Skip/Escape and reduced motion, and brings back the sidebar on Get started", async () => {
     sessionStorage.setItem(SETUP_STEP_KEY, "6");
+    sessionStorage.setItem("ether.setup.deferred", JSON.stringify(["sources"]));
     renderApp(
       "/setup",
       { bootstrap: { setupComplete: false, ownerConfigured: true, authenticated: true } },

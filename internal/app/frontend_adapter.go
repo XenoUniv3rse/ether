@@ -185,6 +185,8 @@ func (a *App) adapterStreamURLOptions(issuer *frontendadapter.TicketIssuer) func
 			Adapter:   pluginID,
 			PartIndex: opts.PartIndex,
 			Source:    opts.Source,
+			Fallback:  opts.Fallback,
+			Wait:      frontendadapter.DownloadWait(opts.Wait),
 		})
 		if err != nil || !opts.Absolute {
 			return u, err
@@ -606,8 +608,9 @@ func (a *App) adapterMediaHandler() *frontendadapter.MediaHandler {
 	items := a.pluginsRT.pluginitems
 	resolver := a.pluginsRT.kindResolver
 	return frontendadapter.NewMediaHandler(frontendadapter.MediaDeps{
-		Tickets: issuer,
-		Log:     a.log.With("component", "kind-media"),
+		Tickets:   issuer,
+		Log:       a.log.With("component", "kind-media"),
+		TrackWait: a.pluginsRT.mgr.TrackFrontendPreparationWait,
 		Viewer: func(ctx context.Context, id int64) (*core.Viewer, error) {
 			if a.users == nil {
 				return nil, core.ErrNotFound
@@ -636,7 +639,7 @@ func (a *App) adapterMediaHandler() *frontendadapter.MediaHandler {
 			}
 			return resolver.OpenKindPart(ctx, viewer, item.Key, partIndex, accept)
 		},
-		OpenSource: func(ctx context.Context, viewer *core.Viewer, itemRef string, partIndex *int, source string, accept []string) (*frontend.KindMedia, error) {
+		OpenSource: func(ctx context.Context, viewer *core.Viewer, itemRef string, partIndex *int, source string, fallback bool, accept []string) (*frontend.KindMedia, error) {
 			ref, err := core.ParseItemRef(itemRef)
 			if err != nil {
 				return nil, err
@@ -645,7 +648,7 @@ func (a *App) adapterMediaHandler() *frontendadapter.MediaHandler {
 			if err != nil {
 				return nil, err
 			}
-			return resolver.OpenKindPartSource(ctx, viewer, item.Key, partIndex, source, accept)
+			return resolver.OpenKindPartSourceWithFallback(ctx, viewer, item.Key, partIndex, source, fallback, accept)
 		},
 	})
 }
@@ -678,50 +681,32 @@ type adapterManager struct {
 
 func (m adapterManager) OpenFrontendBlob(ctx context.Context, pluginID string, viewerID int64, allowed []core.LibraryID, spec plugins.FrontendBlob) (io.ReadCloser, int64, error) {
 	a := m.app
-	if a.users == nil || a.libraries == nil || a.pluginsRT == nil || a.pluginsRT.blobcache == nil {
+	if a.users == nil || a.pluginsRT == nil {
 		return nil, 0, core.ErrNotFound
 	}
 	rec, err := m.Get(ctx, pluginID)
 	if err != nil || !rec.Enabled || !rec.Manifest.HasCapability(plugins.CapFrontendAdapter) {
 		return nil, 0, core.ErrNotFound
 	}
-	man := rec.Manifest.EffectiveEther()
-	if man == nil {
-		return nil, 0, core.ErrNotFound
-	}
-	owned := false
-	for _, kind := range man.Contributes.MediaKinds {
-		if core.PluginLibraryKey(pluginID, kind.Key) == spec.LibraryKey {
-			owned = true
-			break
-		}
-	}
-	if !owned {
-		return nil, 0, core.ErrNotFound
-	}
 	viewer, err := a.users.PolicyUser(ctx, viewerID)
 	if err != nil || viewer == nil {
 		return nil, 0, core.ErrNotFound
 	}
-	lib, err := a.libraries.ByKey(ctx, spec.LibraryKey)
-	if err != nil || lib.Hidden || !viewer.AllowsLibrary(lib.ID) {
-		return nil, 0, core.ErrNotFound
-	}
-	visible := false
-	for _, id := range allowed {
-		if id == lib.ID {
-			visible = true
-			break
+	durable := strings.HasPrefix(spec.Ref, blobcache.DurableRefPrefix)
+	if durable {
+		if spec.LibraryKey != "" || spec.MemberIndex != nil {
+			return nil, 0, core.ErrNotFound
+		}
+	} else {
+		if !a.adapterLibraryBlobAllowed(ctx, rec.Manifest.EffectiveEther(), pluginID, viewer, allowed, spec.LibraryKey) {
+			return nil, 0, core.ErrNotFound
+		}
+		if _, err := blobcache.ParseRef(spec.Ref); err != nil {
+			return nil, 0, core.ErrNotFound
 		}
 	}
-	if !visible {
-		return nil, 0, core.ErrNotFound
-	}
-	_, err = blobcache.ParseRef(spec.Ref)
-	if err != nil {
-		return nil, 0, core.ErrNotFound
-	}
-	limits := m.HostFor(pluginID).(interface {
+	host := m.HostFor(pluginID)
+	limits := host.(interface {
 		DataLimits(context.Context) plugins.RuntimeLimits
 	}).DataLimits(ctx)
 	deadline, err := time.ParseDuration(limits.Deadline)
@@ -729,7 +714,12 @@ func (m adapterManager) OpenFrontendBlob(ctx context.Context, pluginID string, v
 		return nil, 0, core.ErrNotFound
 	}
 	ctx, cancel := context.WithTimeout(ctx, deadline)
-	source, err := a.pluginsRT.blobcache.Namespace(spec.LibraryKey, blobcache.Quota{}).Open(blobcache.Ref(spec.Ref))
+	var source io.ReadSeekCloser
+	if durable {
+		source, err = host.CacheOpen(ctx, spec.Ref)
+	} else {
+		source, err = a.pluginsRT.blobcache.Namespace(spec.LibraryKey, blobcache.Quota{}).Open(blobcache.Ref(spec.Ref))
+	}
 	if err != nil {
 		cancel()
 		return nil, 0, core.ErrNotFound
@@ -748,7 +738,28 @@ func (m adapterManager) OpenFrontendBlob(ctx context.Context, pluginID string, v
 		return nil, 0, core.ErrNotFound
 	}
 	reader.ctx = ctx
+	if spec.MemberIndex == nil {
+		return &seekableAdapterBlobReader{adapterBlobReader: reader, Seeker: source}, size, nil
+	}
 	return reader, size, nil
+}
+
+func (a *App) adapterLibraryBlobAllowed(ctx context.Context, man *plugins.EtherBlock, pluginID string, viewer *core.User, allowed []core.LibraryID, key string) bool {
+	if man == nil || a.libraries == nil || a.pluginsRT.blobcache == nil {
+		return false
+	}
+	for _, kind := range man.Contributes.MediaKinds {
+		if core.PluginLibraryKey(pluginID, kind.Key) == key {
+			lib, err := a.libraries.ByKey(ctx, key)
+			return err == nil && !lib.Hidden && viewer.AllowsLibrary(lib.ID) && slices.Contains(allowed, lib.ID)
+		}
+	}
+	return false
+}
+
+type seekableAdapterBlobReader struct {
+	*adapterBlobReader
+	io.Seeker
 }
 
 type adapterBlobReader struct {

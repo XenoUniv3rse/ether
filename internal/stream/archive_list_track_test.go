@@ -176,3 +176,102 @@ func TestListArchiveMembersAndTrackHintSceneRARZIPAnd7z(t *testing.T) {
 		}
 	})
 }
+
+func TestMultiDiscSetsAndNestedNonVideoRAR(t *testing.T) {
+	t.Run("separate per-disc RAR sets prioritize matching disc over larger set", func(t *testing.T) {
+		f := newFakeFetcher()
+		e := newTestEngine(t, f, nil, Options{})
+
+		disc1Track := flacBytes(801, 50_000)
+		disc2Track := flacBytes(802, 120_000) // intentionally larger than disc 1
+
+		cd1Vols, err := at.BuildRAR([]at.RARFile{
+			{Name: "01 - Bad.flac", Data: disc1Track},
+		}, at.RAROptions{Version: 5})
+		if err != nil {
+			t.Fatalf("BuildRAR cd1: %v", err)
+		}
+		cd2Vols, err := at.BuildRAR([]at.RARFile{
+			{Name: "01 - Don't Be Messin' 'Round.flac", Data: disc2Track},
+		}, at.RAROptions{Version: 5})
+		if err != nil {
+			t.Fatalf("BuildRAR cd2: %v", err)
+		}
+
+		rawNZB := post(t, f, 64*1024,
+			postFile{name: "Michael.Jackson.Bad.CD1.part01.rar", data: cd1Vols[0]},
+			postFile{name: "Michael.Jackson.Bad.CD2.part01.rar", data: cd2Vols[0]},
+		)
+
+		// Even without a title, Disc=1 must pick CD1 over larger CD2.
+		d1NZB := annotateNonVideoNZB(t, rawNZB, nzb.NonVideoHint{
+			MIME:  "audio/flac",
+			Track: &nzb.TrackHint{Disc: 1, Number: 1},
+		})
+		src1 := openSource(t, e, "multi-set-cd1", d1NZB)
+		if !bytes.Equal(readAll(t, src1, 32*1024), disc1Track) {
+			t.Fatal("disc 1 set bytes mismatch")
+		}
+
+		d2NZB := annotateNonVideoNZB(t, rawNZB, nzb.NonVideoHint{
+			MIME:  "audio/flac",
+			Track: &nzb.TrackHint{Disc: 2, Number: 1, Title: "Don't Be Messin' 'Round"},
+		})
+		src2 := openSource(t, e, "multi-set-cd2", d2NZB)
+		if !bytes.Equal(readAll(t, src2, 32*1024), disc2Track) {
+			t.Fatal("disc 2 set bytes mismatch")
+		}
+	})
+
+	t.Run("nested CD1.rar and CD2.rar inside outer multi-volume RAR", func(t *testing.T) {
+		f := newFakeFetcher()
+		e := newTestEngine(t, f, nil, Options{})
+
+		disc1Track := flacBytes(901, 90_000)
+		disc2Track := flacBytes(902, 110_000)
+
+		cd1Inner, err := at.BuildRAR([]at.RARFile{
+			{Name: "01 - Bad.flac", Data: disc1Track},
+		}, at.RAROptions{Version: 5})
+		if err != nil {
+			t.Fatalf("BuildRAR inner cd1: %v", err)
+		}
+		cd2Inner, err := at.BuildRAR([]at.RARFile{
+			{Name: "01 - Don't Be Messin' 'Round.flac", Data: disc2Track},
+		}, at.RAROptions{Version: 5})
+		if err != nil {
+			t.Fatalf("BuildRAR inner cd2: %v", err)
+		}
+
+		outerVols, err := at.BuildRAR([]at.RARFile{
+			{Name: "CD1.rar", Data: cd1Inner[0]},
+			{Name: "CD2.rar", Data: cd2Inner[0]},
+		}, at.RAROptions{Version: 5, VolumeSize: 120_000})
+		if err != nil {
+			t.Fatalf("BuildRAR outer: %v", err)
+		}
+		var files []postFile
+		for i, v := range outerVols {
+			files = append(files, postFile{name: fmt.Sprintf("obfuscated.part%02d.rar", i+1), data: v})
+		}
+		rawNZB := post(t, f, 64*1024, files...)
+
+		d1NZB := annotateNonVideoNZB(t, rawNZB, nzb.NonVideoHint{
+			MIME:  "audio/flac",
+			Track: &nzb.TrackHint{Disc: 1, Number: 1, Title: "Bad (2012 Remaster)"},
+		})
+		src1 := openSource(t, e, "nested-cd1", d1NZB)
+		if !bytes.Equal(readAll(t, src1, 32*1024), disc1Track) {
+			t.Fatal("nested disc 1 bytes mismatch")
+		}
+
+		d2NZB := annotateNonVideoNZB(t, rawNZB, nzb.NonVideoHint{
+			MIME:  "audio/flac",
+			Track: &nzb.TrackHint{Disc: 2, Number: 1, Title: "Don't Be Messin' 'Round"},
+		})
+		src2 := openSource(t, e, "nested-cd2", d2NZB)
+		if !bytes.Equal(readAll(t, src2, 32*1024), disc2Track) {
+			t.Fatal("nested disc 2 bytes mismatch")
+		}
+	})
+}

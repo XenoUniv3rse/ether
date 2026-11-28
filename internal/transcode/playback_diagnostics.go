@@ -45,7 +45,7 @@ func (s *Session) PlaybackDiagnostics() core.HLSPlaybackDiagnostics {
 }
 
 func (s *Session) noteOutputCodecsLocked(t int, file string) {
-	if !s.diagnosticsEnabled || s.container != ContainerFMP4 || s.outputInit[t] == file {
+	if (!s.diagnosticsEnabled && !s.adaptiveHLS) || s.container != ContainerFMP4 || s.outputInit[t] == file {
 		return
 	}
 	st, err := os.Stat(file)

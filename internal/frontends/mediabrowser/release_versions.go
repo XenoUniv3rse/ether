@@ -204,12 +204,25 @@ func (i *instance) releaseVersionSourceWithHandle(r *http.Request, scope fronten
 	return source, true
 }
 
+func (i *instance) detailVersionHandle(r *http.Request, scope frontend.VersionScope, item frontend.RatingKey, release string) string {
+	if i.host.VersionHandles == nil {
+		return ""
+	}
+	ctx := i.identityContext(r)
+	if preview, ok := i.host.VersionHandles.(frontend.VersionHandlePreview); ok && frontend.QuietIdentity(ctx) {
+		handles, _ := preview.PreviewVersionHandles(ctx, scope, item, []string{release})
+		return handles[release]
+	}
+	handle, _ := i.host.VersionHandles.Issue(ctx, scope, item, release)
+	return handle
+}
+
 func (i *instance) releaseVersionSource(r *http.Request, scope frontend.VersionScope, key frontend.RatingKey, original string, v frontend.ReleaseVariant) (map[string]any, bool) {
 	if i.host.VersionHandles == nil || v.Release.ID == "" {
 		return nil, false
 	}
-	handle, err := i.host.VersionHandles.Issue(i.identityContext(r), scope, key, v.Release.ID)
-	if err != nil || handle == "" {
+	handle := i.detailVersionHandle(r, scope, key, v.Release.ID)
+	if handle == "" {
 		return nil, false
 	}
 	return i.releaseVersionSourceWithHandle(r, scope, key, original, v, handle)
@@ -223,6 +236,9 @@ func (i *instance) releaseVersionSources(r *http.Request, scope frontend.Version
 	variants := i.releaseVariants(r, scope, title)
 	if len(variants) == 1 && variants[0].Auto && auto != nil {
 		info := variants[0].Info
+		if size := mediaSourceSize(info); size > 0 && auto["Size"] == nil {
+			auto["Size"] = size
+		}
 		if _, hasChapters := auto["Chapters"]; !hasChapters && !info.Estimated {
 			addChapters(auto, info)
 		}
@@ -233,12 +249,18 @@ func (i *instance) releaseVersionSources(r *http.Request, scope frontend.Version
 // applyVersionMediaFacts fills an Auto source from its version, preferring
 // probed facts over estimates. Keep probed facts from an existing plan.
 func (i *instance) applyVersionMediaFacts(source map[string]any, itemID string, info frontend.MediaInfo) {
-	if source == nil || source["SupportsProbing"] == true || !info.HasPlayableMedia() {
+	if source == nil || source["SupportsProbing"] == true {
+		return
+	}
+	if size := mediaSourceSize(info); size > 0 {
+		source["Size"] = size
+	}
+	if !info.HasPlayableMedia() {
 		return
 	}
 	id, _ := source["Id"].(string)
 	dto := i.mediaSourceDTO(id, info)
-	for _, field := range []string{"MediaStreams", "Container", "Size", "RunTimeTicks", "Bitrate", "Chapters", "SupportsProbing"} {
+	for _, field := range []string{"MediaStreams", "Container", "RunTimeTicks", "Bitrate", "Chapters", "SupportsProbing"} {
 		if val, ok := dto[field]; ok {
 			source[field] = val
 		}
@@ -295,8 +317,11 @@ func (i *instance) releaseVersionSourcesFor(r *http.Request, scope frontend.Vers
 			releases = append(releases, v.Release.ID)
 		}
 		if len(releases) > 0 {
-			if issued, err := batch.IssueBatch(i.identityContext(r), scope, key, releases); err == nil {
-				batched = issued
+			ctx := i.identityContext(r)
+			if preview, ok := i.host.VersionHandles.(frontend.VersionHandlePreview); ok && frontend.QuietIdentity(ctx) {
+				batched, _ = preview.PreviewVersionHandles(ctx, scope, key, releases)
+			} else {
+				batched, _ = batch.IssueBatch(ctx, scope, key, releases)
 			}
 		}
 	}
@@ -433,8 +458,8 @@ func (i *instance) detailSources(r *http.Request, v *frontend.Viewer, token stri
 		if scopeErr != nil {
 			break
 		}
-		handle, e := i.host.VersionHandles.Issue(i.identityContext(r), scope, key, version.ID)
-		if e != nil || handle == "" {
+		handle := i.detailVersionHandle(r, scope, key, version.ID)
+		if handle == "" {
 			needDefault = true
 			continue
 		}

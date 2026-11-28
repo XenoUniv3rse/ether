@@ -39,6 +39,12 @@ func (a *App) buildExtensibility(ctx context.Context, cfg config.Config) error {
 	if a.pluginsRT, err = a.buildPlugins(ctx, cfg); err != nil {
 		return fmt.Errorf("plugins: %w", err)
 	}
+	if _, err := a.migrateAssistantTranscripts(ctx); err != nil {
+		return fmt.Errorf("assistant transcript upgrade: %w", err)
+	}
+	if err := a.favorites.BackfillRoles(ctx); err != nil {
+		return fmt.Errorf("favorite roles: %w", err)
+	}
 	a.buildLiveEvents()
 	a.buildLoudness()
 	// Add-ons entered before they had one home move into installed

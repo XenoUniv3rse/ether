@@ -122,6 +122,9 @@ var capabilityKinds = map[Capability]map[Kind]bool{
 	CapMatcher:         {KindContent: true},
 	CapFrontendAdapter: {KindContent: true, KindExtension: true},
 	CapEvents:          nil, CapFlowActions: nil, CapTools: nil, CapUI: nil, CapLiveEvents: nil, CapScreens: nil,
+
+	// Says which torrents a debrid service holds (docs/plugin-debrid.md).
+	CapDebridCacheHints: {KindSource: true, KindIntegration: true},
 }
 
 var knownKinds = map[Kind]bool{

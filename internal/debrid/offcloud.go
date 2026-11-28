@@ -51,6 +51,7 @@ const (
 )
 
 type offcloud struct {
+	api    *accountPacer
 	key    string
 	opts   ProviderOptions
 	list   listCache
@@ -58,8 +59,10 @@ type offcloud struct {
 }
 
 func newOffcloud(key string, opts ProviderOptions) *offcloud {
-	return &offcloud{key: key, opts: opts.withDefaults(offcloudBase)}
+	return &offcloud{api: opts.paces.forAccount("offcloud", key, opts.Now), key: key, opts: opts.withDefaults(offcloudBase)}
 }
+
+func (p *offcloud) apiAccount() *accountPacer { return p.api }
 
 func (p *offcloud) Kind() string { return "offcloud" }
 
@@ -79,6 +82,7 @@ type ocFile struct {
 // do sends r with a JSON body (when body != nil) and returns the raw
 // answer, or a classified error when the answer is an error object.
 func (p *offcloud) do(ctx context.Context, r apiRequest, body any) (json.RawMessage, error) {
+	r.pace = p.api
 	if r.query == nil {
 		r.query = url.Values{}
 	}

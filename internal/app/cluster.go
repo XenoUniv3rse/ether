@@ -14,6 +14,7 @@ import (
 	"github.com/braedonsaunders/ether/internal/cluster"
 	"github.com/braedonsaunders/ether/internal/clusterbus"
 	"github.com/braedonsaunders/ether/internal/core"
+	"github.com/braedonsaunders/ether/internal/frontend/kit/route"
 	"github.com/braedonsaunders/ether/internal/onair"
 	"github.com/braedonsaunders/ether/internal/store"
 )
@@ -318,7 +319,7 @@ type clusterStatus struct {
 }
 
 func (a *App) clusterHandler() http.Handler {
-	mux := http.NewServeMux()
+	mux := &route.Mux{}
 	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
 		st := clusterStatus{Mode: a.cluster.Mode(), Self: a.cluster.Self(), Epoch: a.cluster.Epoch()}
 		st.Self.Draining = a.nodeDraining()

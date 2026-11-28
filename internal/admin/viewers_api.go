@@ -31,6 +31,8 @@ type Personalization interface {
 	SetTasteOverrides(ctx context.Context, user *core.User, overrides []core.TasteOverride) (*core.TasteProfile, error)
 	Refresh(ctx context.Context, user *core.User) error
 	RowInsights(ctx context.Context, days int) ([]core.RowInsight, error)
+	RecommendationReport(context.Context, int, int64) (core.RecommendationReport, error)
+	RecommendationDetail(context.Context, int, string, int64) (core.RecommendationDetail, error)
 	// RankerInsight describes the learned ranking model.
 	RankerInsight(ctx context.Context) (core.RankerInsight, error)
 	Activity(ctx context.Context, days int) ([]core.ActivityDay, error)
@@ -57,6 +59,8 @@ func (h *Handler) personalizationRoutes(api func(pattern string, fn http.Handler
 	api("POST /api/viewers/{id}/trakt/disconnect", h.handleTraktDisconnect)
 	h.pageRoutes(api)
 	api("GET /api/insights/rows", h.handleInsightRows)
+	api("GET /api/insights/recommendations", h.handleRecommendationReport)
+	api("GET /api/insights/recommendations/row", h.handleRecommendationDetail)
 	api("GET /api/insights/ranker", h.handleInsightRanker)
 	api("GET /api/insights/activity", h.handleInsightActivity)
 

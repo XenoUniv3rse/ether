@@ -278,11 +278,13 @@ func TestDeliveryEstimateDoesNotOverridePreferredReleaseWithoutStall(t *testing.
 	sStall := New(&fakeIndexer{releases: []core.Release{preferred, light}}, fakeHealth{}, nil, cfg, Options{Now: func() time.Time { return now }})
 	defer sStall.Close()
 	sStall.ObserveSourceStall(preferred, 625_000)
-	stallRes, err := sStall.Resolve(t.Context(), core.ResolveRequest{Title: title, Client: webCaps()})
+	vela := webCaps()
+	vela.Protocol, vela.ClientID, vela.ClientIP = "vela", "device", "192.0.2.1"
+	stallRes, err := sStall.Resolve(t.Context(), core.ResolveRequest{Title: title, Client: vela})
 	if err != nil {
 		t.Fatalf("resolve after stall: %v", err)
 	}
-	if stallRes.Release.ID != "light" {
+	if stallRes.Release.ID != "light" || stallRes.AutoSelectionReason != core.AutoSourceDelivery {
 		t.Fatalf("stall at 5.0 Mbps did not demote 6.9 Mbps release: got %q", stallRes.Release.ID)
 	}
 	if len(stallRes.Alternates) == 0 || stallRes.Alternates[0].ID != "preferred" {
@@ -305,6 +307,30 @@ func TestDeliveryEstimateDoesNotOverridePreferredReleaseWithoutStall(t *testing.
 	if !foundReason {
 		t.Fatal("preferred candidate missing from trace")
 	}
+
+	// One bad last-mile report has no authority. Three corroborating reports
+	// adapt Auto on that device, despite an outlier, and expire without traffic.
+	now = now.Add(3 * time.Minute)
+	req := core.ResolveRequest{Title: title, Client: vela, User: &core.User{ID: 1}}
+	resolve := func(wantID string, wantReason core.AutoSelectionReason) {
+		t.Helper()
+		got, err := sStall.Resolve(t.Context(), req)
+		if err != nil || got.Release.ID != wantID || got.AutoSelectionReason != wantReason {
+			t.Fatalf("Auto = %v (%v), want %s with reason %q", got, err, wantID, wantReason)
+		}
+	}
+	sStall.ObserveClientThroughput(req.User.ID, vela, 100_000)
+	resolve("preferred", "")
+	for range 3 {
+		now = now.Add(clientSampleInterval)
+		sStall.ObserveClientThroughput(req.User.ID, vela, 7_000_000)
+	}
+	resolve("light", core.AutoConnectionEstimate)
+	req.Client.Protocol = "plex"
+	resolve("preferred", "")
+	req.Client.Protocol = "vela"
+	now = now.Add(clientSampleLifetime)
+	resolve("preferred", "")
 }
 
 // These delays represent two independent waits, not a production benchmark.

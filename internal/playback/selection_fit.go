@@ -3,15 +3,24 @@ package playback
 import "github.com/braedonsaunders/ether/internal/core"
 
 // sessionFitsSelection reports whether s satisfies the requested variant and
-// explicit client bitrate ceiling. A session already opened under the same or a
+// current quality-rule resolution ceiling and explicit client bitrate ceiling.
+// A session already opened under the same or a
 // tighter explicit bitrate cap is kept even when no smaller source existed.
 func (m *Manager) sessionFitsSelection(s *session, caps core.ClientCaps, prefer string, exact bool) bool {
 	if s == nil || s.closed || s.exact != exact {
 		return false
 	}
 	g := s.current()
-	if g == nil {
+	if g == nil || m.releaseBlockedLocally(g.releaseID()) {
 		return false
+	}
+	if caps.QualityRuleMaxHeight > 0 && g.res != nil {
+		g.mu.Lock()
+		exceeds := exceedsRuleHeight(caps.QualityRuleMaxHeight, g.res.Release, g.info)
+		g.mu.Unlock()
+		if exceeds {
+			return false
+		}
 	}
 	if m.sessionNeedsVideoTranscode(s, g, caps) {
 		return false
@@ -47,6 +56,17 @@ func (m *Manager) sessionFitsSelection(s *session, caps core.ClientCaps, prefer 
 		}
 	}
 	return true
+}
+
+// Use measured dimensions when available and the release tier otherwise.
+func exceedsRuleHeight(limit int, release core.Release, info core.MediaInfo) bool {
+	if limit <= 0 {
+		return false
+	}
+	if video := info.Video(); !info.Estimated && video != nil && video.Height > 0 {
+		return warmResolutionHeight(video.Width, video.Height) > limit
+	}
+	return release.Info.Height > limit
 }
 
 // promotePreparedLocked moves a deferred preparation onto id and returns any

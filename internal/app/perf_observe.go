@@ -101,6 +101,9 @@ func (p *perfObserver) close() {
 type PerfTraceRecord struct {
 	// Tag echoes the X-Ether-Perf-Tag request header, so the harness can
 	// join a trace line to the step that sent it.
+	Work       string                `json:"work,omitempty"`
+	ParentTag  string                `json:"parentTag,omitempty"`
+	MaxRows    int64                 `json:"maxRows,omitempty"`
 	Tag        string                `json:"tag,omitempty"`
 	Surface    string                `json:"surface"`
 	Method     string                `json:"method"`
@@ -124,6 +127,8 @@ type PerfTraceRecord struct {
 // path should not do).
 var perfTestRequest func(context.Context, *http.Request)
 
+type perfRequestTag struct{}
+
 // wrap measures next as surface. Without a trace file the response writer
 // is passed through untouched.
 func (p *perfObserver) wrap(surface string, next http.Handler) http.Handler {
@@ -132,6 +137,9 @@ func (p *perfObserver) wrap(surface string, next http.Handler) http.Handler {
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ctx, stats := store.WithQueryStats(r.Context())
+		if tag := r.Header.Get(PerfTagHeader); tag != "" {
+			ctx = context.WithValue(ctx, perfRequestTag{}, tag)
+		}
 		ctx = catalog.WithReadWaitBudget(ctx, requestProviderWait)
 		if perfTestRequest != nil {
 			perfTestRequest(ctx, r)
@@ -178,9 +186,15 @@ func (p *perfObserver) wrap(surface string, next http.Handler) http.Handler {
 				if p.alloc && r.Header.Get(PerfTagHeader) != "" {
 					runtime.ReadMemStats(&after)
 				}
+				status := recorder.Status()
+				if status == 0 {
+					// net/http sends 200 when a handler returns without writing a
+					// body or an explicit status, including header-only responses.
+					status = http.StatusOK
+				}
 				p.writeTrace(PerfTraceRecord{
-					Tag: r.Header.Get(PerfTagHeader), Surface: surface, Method: r.Method, Path: r.URL.Path, Status: recorder.Status(), Bytes: recorder.BytesWritten(),
-					Start: start, Duration: elapsed, Queries: stats.Queries(), Writes: stats.Writes(), Rows: stats.Rows(), DBTime: stats.DBTime(), LockWait: stats.LockWait(),
+					Tag: r.Header.Get(PerfTagHeader), Surface: surface, Method: r.Method, Path: r.URL.Path, Status: status, Bytes: recorder.BytesWritten(),
+					Start: start, Duration: elapsed, Queries: stats.Queries(), Writes: stats.Writes(), Rows: stats.Rows(), MaxRows: stats.MaxRows(), DBTime: stats.DBTime(), LockWait: stats.LockWait(),
 					Statements: stats.Statements(),
 					AllocBytes: after.TotalAlloc - before.TotalAlloc, Allocs: after.Mallocs - before.Mallocs,
 				})
@@ -197,6 +211,32 @@ func (p *perfObserver) wrap(surface string, next http.Handler) http.Handler {
 			finish()
 		}
 	})
+}
+
+func (p *perfObserver) observeLineupBuild(ctx context.Context, build func(context.Context) error) error {
+	if p == nil {
+		return build(ctx)
+	}
+	p.mu.Lock()
+	tracing := p.encoder != nil
+	p.mu.Unlock()
+	if !tracing {
+		return build(ctx)
+	}
+	parent, _ := ctx.Value(perfRequestTag{}).(string)
+	ctx, stats := store.WithQueryStats(ctx)
+	start := time.Now()
+	err := build(ctx)
+	status := http.StatusOK
+	if err != nil {
+		status = http.StatusServiceUnavailable
+	}
+	p.writeTrace(PerfTraceRecord{
+		Work: "background build", ParentTag: parent, Surface: "xtream", Method: http.MethodGet, Path: "/xtream/get.php",
+		Status: status, Start: start, Duration: time.Since(start), Queries: stats.Queries(), Rows: stats.Rows(),
+		Writes: stats.Writes(), MaxRows: stats.MaxRows(), DBTime: stats.DBTime(), Statements: stats.Statements(),
+	})
+	return err
 }
 
 func (p *perfObserver) writeTrace(rec PerfTraceRecord) {

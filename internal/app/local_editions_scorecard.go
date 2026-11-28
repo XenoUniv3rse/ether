@@ -6,6 +6,8 @@ import (
 	"github.com/braedonsaunders/ether/internal/core"
 )
 
+const localEditionsEnabled = true
+
 func localEditionVariants(dir string, t *core.Title) ([]core.ReleaseVariant, error) {
 	if t == nil {
 		return nil, nil

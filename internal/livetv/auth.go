@@ -671,12 +671,14 @@ type authCache struct {
 
 type authEntry struct {
 	name          string
+	playlistHost  string
 	unratedRating string
 	adultGroups   map[string]bool
 	pool          *Source
 	account       *ProviderAccount
 	auth          *SourceAuth
 	limit         int           // connection limit; 0 is none
+	slotWait      time.Duration // maximum viewer admission wait for a connection
 	gap           time.Duration // least time between new provider streams
 	perHour       int           // new provider streams per hour; 0 is no cap
 	at            time.Time
@@ -783,15 +785,7 @@ func (s *Service) sourceEntry(ctx context.Context, id string) (authEntry, error)
 		return authEntry{}, core.ErrNotAvailable
 	}
 	prevEntry, hadPrev := e, ok
-	e = authEntry{name: src.Name, auth: src.Auth, at: s.o.Now(), perHour: max(src.TunesPerHour, 0), unratedRating: src.UnratedRating, adultGroups: map[string]bool{}}
-	for _, g := range src.Groups {
-		if g.Adult {
-			e.adultGroups[normGroup(g.Name)] = true
-		}
-	}
-	if src.LoginPool || len(src.Logins) > 0 {
-		e.pool = &Source{ID: src.ID, LoginPool: src.LoginPool, Auth: src.Auth, PlaylistURL: src.PlaylistURL, Account: src.Account, Logins: src.Logins}
-	}
+	e = authEntryFromSource(src, s.o.Now())
 	if src.Account != nil {
 		acct := *src.Account
 		if src.Account.ExpiresAt != nil {
@@ -799,24 +793,6 @@ func (s *Service) sourceEntry(ctx context.Context, id string) (authEntry, error)
 			acct.ExpiresAt = &exp
 		}
 		e.account = &acct
-		e.limit = src.Account.MaxConnections
-	}
-	if src.MaxConnections > 0 && (e.limit == 0 || src.MaxConnections < e.limit) {
-		e.limit = src.MaxConnections
-	}
-	if src.LoginPool || len(src.Logins) > 0 {
-		e.limit = loginLimit(src.Account)
-		for _, l := range src.Logins {
-			if l.Error == "" {
-				e.limit += loginLimit(l.Account)
-			}
-		}
-	}
-	switch {
-	case src.TuneGapSeconds > 0:
-		e.gap = time.Duration(src.TuneGapSeconds) * time.Second
-	case src.TuneGapSeconds == 0 && e.limit > 0:
-		e.gap = defaultTuneGap
 	}
 	c.mu.Lock()
 	if c.gen == gen {

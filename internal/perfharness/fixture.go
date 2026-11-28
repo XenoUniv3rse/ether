@@ -13,6 +13,7 @@ import (
 	"github.com/braedonsaunders/ether/internal/catalog"
 	"github.com/braedonsaunders/ether/internal/contentrating"
 	"github.com/braedonsaunders/ether/internal/core"
+	"github.com/braedonsaunders/ether/internal/personalize"
 )
 
 // Scale sizes a synthetic library. Every title is browsable, detailed and
@@ -554,6 +555,9 @@ func (g *generator) viewers(s Scale) error {
 				return err
 			}
 		}
+		if err := g.recommendations(id); err != nil {
+			return err
+		}
 		if err := g.history(id, s); err != nil {
 			return err
 		}
@@ -565,6 +569,55 @@ func (g *generator) viewers(s Scale) error {
 		}
 	}
 	return g.flush()
+}
+
+// recommendations gives both library scales the same household activity.
+// Searches and title hydration must depend on observed exposure, not the
+// number of movies in the fixture.
+func (g *generator) recommendations(viewer int64) error {
+	const titlesPerRow = 18
+	movies := g.movies[:min(500, len(g.movies))]
+	if len(movies) == 0 {
+		return nil
+	}
+	kinds := []string{personalize.KindTop10, personalize.KindNewThisWeek, personalize.KindBecause, personalize.KindHiddenGems, personalize.KindTrending}
+	apps := []string{"plex", "vela"}
+	for offset := range 90 {
+		when := g.now.AddDate(0, 0, -offset)
+		day := when.Year()*10000 + int(when.Month())*100 + when.Day()
+		starts, attributed := 3, 0
+		for kindIndex, kind := range kinds {
+			for appIndex, app := range apps {
+				play, completed, watched := 0, 0, 0
+				if (offset+kindIndex+appIndex+int(viewer))%5 == 0 {
+					play, completed, watched = 1, offset%2, 40*60*1000
+					attributed++
+					starts++
+				}
+				if err := g.insert("personalize_recommendation_days", "day,kind,user_id,hub_id,app,title,position,play_id,completed,watched_ms",
+					day, kind, viewer, "fixture."+kind, app, kind, kindIndex+1, play, completed, watched); err != nil {
+					return err
+				}
+			}
+			// The two apps delivered the same titles. Their play slots are
+			// staggered so at most one of the two converted this day.
+			for index := range min(titlesPerRow, len(movies)) {
+				key := movies[(offset*titlesPerRow+kindIndex*37+index)%len(movies)]
+				played := 0
+				if index < len(apps) && (offset+kindIndex+index+int(viewer))%5 == 0 {
+					played = 1
+				}
+				if err := g.insert("personalize_recommendation_titles", "kind,day,user_id,item_key,impressions,plays",
+					kind, day, viewer, int64(key), len(apps), played); err != nil {
+					return err
+				}
+			}
+		}
+		if err := g.insert("personalize_recommendation_starts", "day,user_id,starts,attributed", day, viewer, starts, attributed); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // ratings finishes what the catalogue derives: seasons and episodes take
@@ -675,11 +728,13 @@ func (g *generator) favorites(user int64) error {
 	now := g.now.UnixNano()
 	seen := map[string]bool{}
 	for i := range 55 {
-		kind, subject := "title", ""
+		kind, subject, role := "title", "", ""
 		if i < 50 {
 			key := g.movies[g.rng.IntN(len(g.movies))]
+			role = string(core.TypeMovie)
 			if len(g.shows) > 0 && i%4 == 0 {
 				key = g.shows[g.rng.IntN(len(g.shows))]
+				role = string(core.TypeShow)
 			}
 			subject = key.String()
 		} else if len(g.people.dealt) > 0 {
@@ -689,7 +744,7 @@ func (g *generator) favorites(user int64) error {
 			continue
 		}
 		seen[kind+subject] = true
-		if err := g.insert("favorites_items", "viewer_id,kind,subject_id,added_at,sort_order", user, kind, subject, now-int64(i)*int64(time.Hour), 0); err != nil {
+		if err := g.insert("favorites_items", "viewer_id,kind,subject_id,added_at,sort_order,role", user, kind, subject, now-int64(i)*int64(time.Hour), 0, role); err != nil {
 			return err
 		}
 	}

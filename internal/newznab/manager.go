@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -42,10 +43,8 @@ type Manager struct {
 	bgCancels     map[int]context.CancelFunc
 	detachedCount int
 	bgWG          sync.WaitGroup
-
-	flightMu   sync.Mutex
-	flights    map[string]*searchFlight
-	pluginRefs sync.Map // standalone managers without a database
+	flights       searchFlights
+	pluginRefs    sync.Map // standalone managers without a database
 }
 
 // Close cancels any detached background cache-fill searches started by
@@ -308,9 +307,7 @@ func (m *Manager) SearchRescueWith(ctx context.Context, req core.SearchRequest, 
 		for _, r := range s.results {
 			key := mergeDedupeKey(r)
 			if idx, ok := seen[key]; ok {
-				dup := r
-				dup.Fallbacks = nil
-				merged[idx].Fallbacks = append(merged[idx].Fallbacks, dup)
+				foldDuplicate(&merged[idx], r)
 				continue
 			}
 			seen[key] = len(merged)
@@ -326,6 +323,7 @@ func (m *Manager) SearchRescueWith(ctx context.Context, req core.SearchRequest, 
 // the slowest indexer is done.
 func (m *Manager) SearchWith(ctx context.Context, req core.SearchRequest, arrived func([]core.Release)) ([]core.Release, error) {
 	clients := m.Clients()
+	ctx = m.reuseWarmSearch(ctx, req, clients)
 	type slot struct {
 		results  []core.Release
 		err      error
@@ -425,9 +423,7 @@ func (m *Manager) SearchWith(ctx context.Context, req core.SearchRequest, arrive
 		for _, r := range s.results {
 			key := mergeDedupeKey(r)
 			if idx, ok := seen[key]; ok {
-				dup := r
-				dup.Fallbacks = nil
-				merged[idx].Fallbacks = append(merged[idx].Fallbacks, dup)
+				foldDuplicate(&merged[idx], r)
 				continue
 			}
 			seen[key] = len(merged)
@@ -453,6 +449,23 @@ func (m *Manager) SearchWith(ctx context.Context, req core.SearchRequest, arrive
 		}
 	}
 	return merged, nil
+}
+
+// foldDuplicate adds r, a duplicate of winner, to winner's Fallbacks. When
+// both carry the same info hash they are one torrent, so r's cached markers
+// join winner's; a name-and-size match proves no such thing.
+func foldDuplicate(winner *core.Release, r core.Release) {
+	if winner.InfoHash != "" && winner.InfoHash == r.InfoHash {
+		for _, kind := range r.DebridCached {
+			if !slices.Contains(winner.DebridCached, kind) {
+				// Clipped, so append copies: the slice may be shared with a cached result.
+				winner.DebridCached = append(slices.Clip(winner.DebridCached), kind)
+			}
+		}
+	}
+	dup := r
+	dup.Fallbacks = nil
+	winner.Fallbacks = append(winner.Fallbacks, dup)
 }
 
 func mergeDedupeKey(r core.Release) string {
@@ -508,5 +521,5 @@ func (m *Manager) FetchNZB(ctx context.Context, r core.Release) ([]byte, error) 
 // missingAnswer reports an indexer whose answer a fleet search lacks because
 // it was paused or did not answer, rather than because it found nothing.
 func missingAnswer(err error) bool {
-	return errors.Is(err, ErrIndexerPaused) || transientFailure(err)
+	return errors.Is(err, ErrIndexerPaused) || errors.Is(err, core.ErrForegroundOnly) || transientFailure(err)
 }

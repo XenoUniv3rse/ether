@@ -50,6 +50,9 @@ var ErrPoolBusy = errors.New("timed out waiting for a plugin instance")
 // runtime was closed.
 var ErrClosed = errors.New("plugin is closed")
 
+// ErrMalformedResponse is wrapped when the guest returns an invalid response.
+var ErrMalformedResponse = errors.New("malformed plugin response")
+
 // ErrRequestEncode is wrapped by an *Error when the host cannot encode the
 // request for the guest (e.g. a body that is not valid JSON). The guest
 // never ran, so it is not a plugin crash.
@@ -88,6 +91,10 @@ type FrontendUpload struct {
 type FrontendUploadBlob struct {
 	Ref         string `json:"ref"`
 	Size        int64  `json:"size"`
+	SHA256      string `json:"sha256"`
+	SHA1        string `json:"sha1"`
+	MD5         string `json:"md5"`
+	CRC32       string `json:"crc32"`
 	ContentType string `json:"contentType,omitempty"`
 	Field       string `json:"field,omitempty"`
 	Filename    string `json:"filename,omitempty"`
@@ -137,8 +144,8 @@ type Response struct {
 // service method: runtime.limits, kv.get, kv.put, kv.delete, kv.list, kv.usage, badges.set, badges.clear, badges.usage, secret.get, secret.set, secret.delete,
 // http.fetch, http.fetchMany, http.fetchToCache, archive.list, archive.open, archive.read, archive.extract, catalog.search, catalog.get, viewers.history,
 // viewers.setWatchState, collections.upsert, kinds.upsert, kinds.delete,
-// kinds.items, sources.resolve, cache.put, cache.open, cache.read, cache.rasterize, cache.delete, frontend.streamURL,
-// folders.list, folders.stat, events.publish, notify.owner, log. Args is a JSON array of positional
+// kinds.items, sources.resolve, cache.put, cache.open, cache.read, cache.stat, cache.usage, cache.rasterize, cache.delete, frontend.streamURL,
+// folders.roots, folders.list, folders.stat, events.publish, notify.owner, log. Args is a JSON array of positional
 // arguments; the result is any JSON value. Return a *Fault to classify the
 // failure (forbidden for a missing or revoked grant).
 type Host interface {
@@ -155,13 +162,13 @@ type HostFunc func(ctx context.Context, name string, args json.RawMessage) (json
 // additionally charges ArchiveExtractUnitsPerMiB per started MiB streamed.
 var DefaultCosts = map[string]int64{
 	"log": 1, "runtime.limits": 1, "kv.get": 5, "kv.put": 10, "kv.delete": 5, "kv.list": 10, "kv.usage": 5, "badges.set": 20, "badges.clear": 10, "badges.usage": 5,
-	"secret.get": 5, "secret.set": 10, "secret.delete": 5, "http.fetch": 100, "http.fetchMany": 100, "http.fetchToCache": 100, "http.hash": 100, "cache.read": 20, "cache.rasterize": 50, "archive.list": 50, "archive.open": 50, "archive.read": 50, "archive.extract": 50, "addon.get": 100, "catalog.search": 50, "catalog.get": 20,
+	"secret.get": 5, "secret.set": 10, "secret.delete": 5, "http.fetch": 100, "http.fetchMany": 100, "http.fetchToCache": 100, "http.hash": 100, "cache.read": 20, "cache.stat": 20, "cache.usage": 5, "cache.rasterize": 50, "archive.list": 50, "archive.open": 50, "archive.read": 50, "archive.extract": 50, "addon.get": 100, "catalog.search": 50, "catalog.get": 20,
 	"viewers.history": 50, "viewers.setWatchState": 50, "collections.upsert": 50,
 	"kinds.upsert": 50, "kinds.delete": 50, "kinds.items": 20, "kinds.visible": 15, "kinds.browse": 20,
 	"kinds.get": 15, "kinds.state": 15, "kinds.favorite": 20, "kinds.played": 20, "kinds.rate": 20, "kinds.favorites": 20,
 	"kinds.playlists": 20, "kinds.playlist": 20, "kinds.playlistCreate": 50, "kinds.playlistUpdate": 50, "kinds.playlistDelete": 20, "kinds.expand": 50, "kinds.search": 50,
 	"sources.resolve": 100, "cache.put": 50, "cache.open": 20, "cache.delete": 10, "frontend.streamURL": 5,
-	"folders.hashStart": 20, "folders.hashPoll": 20, "folders.hashCancel": 20, "folders.hash": 20, "folders.list": 20, "folders.stat": 20, "events.publish": 20, "notify.owner": 20, "settings.get": 5,
+	"folders.frame": 20, "folders.hashStart": 20, "folders.hashPoll": 20, "folders.hashCancel": 20, "folders.hash": 20, "folders.roots": 20, "folders.list": 20, "folders.stat": 20, "events.publish": 20, "notify.owner": 20, "settings.get": 5,
 	"ai.complete": 200, "media.probe": 100, "screens.invalidate": 10, "screens.putRecords": 20,
 }
 
@@ -290,7 +297,7 @@ func hostCallTimeout(name string) time.Duration {
 	case "http.fetchToCache", "http.hash",
 		"archive.list", "archive.open", "archive.read", "archive.extract",
 		"folders.hash", "folders.hashStart", "folders.hashPoll", "folders.hashCancel",
-		"folders.list", "folders.stat",
+		"folders.list", "folders.stat", "folders.frame",
 		"cache.put", "cache.open", "cache.read", "cache.rasterize", "cache.delete":
 		return 10 * time.Minute
 	default:
@@ -1552,11 +1559,11 @@ func (p *Plugin) CallDetailed(ctx context.Context, req Request) (resp Response, 
 	}
 	if len(respJSON) > MaxResponseBytes {
 		out.Status = StatusError
-		return Response{}, out, &Error{Status: StatusError, Message: "plugin response exceeds size cap"}
+		return Response{}, out, &Error{Status: StatusError, Message: "plugin response exceeds size cap", Err: ErrMalformedResponse}
 	}
-	if err := json.Unmarshal(respJSON, &resp); err != nil {
+	if err := json.Unmarshal(respJSON, &resp); err != nil || strings.TrimSpace(string(respJSON)) == "null" {
 		out.Status = StatusError
-		return Response{}, out, &Error{Status: StatusError, Message: "plugin returned invalid response JSON: " + err.Error()}
+		return Response{}, out, &Error{Status: StatusError, Message: "plugin returned invalid response JSON", Err: ErrMalformedResponse}
 	}
 	if resp.Status == 0 {
 		resp.Status = 200

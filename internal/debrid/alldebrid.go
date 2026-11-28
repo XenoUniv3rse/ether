@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"path"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -39,14 +40,17 @@ const (
 )
 
 type allDebrid struct {
+	pace *accountPacer
 	key  string
 	opts ProviderOptions
 	list listCache
 }
 
 func newAllDebrid(key string, opts ProviderOptions) *allDebrid {
-	return &allDebrid{key: key, opts: opts.withDefaults(allDebridBase)}
+	return &allDebrid{pace: opts.paces.forAccount("alldebrid", key, opts.Now), key: key, opts: opts.withDefaults(allDebridBase)}
 }
+
+func (p *allDebrid) accountPace() *accountPacer { return p.pace }
 
 func (p *allDebrid) Kind() string { return "alldebrid" }
 
@@ -71,6 +75,12 @@ type adMagnet struct {
 }
 
 func (p *allDebrid) do(ctx context.Context, r apiRequest) (json.RawMessage, error) {
+	return pacedCall(ctx, p.pace, r, r.path == "/v4/magnet/upload", func(ctx context.Context, r apiRequest) (json.RawMessage, error) {
+		return p.request(ctx, r)
+	})
+}
+
+func (p *allDebrid) request(ctx context.Context, r apiRequest) (json.RawMessage, error) {
 	if r.query == nil {
 		r.query = url.Values{}
 	}
@@ -87,13 +97,31 @@ func (p *allDebrid) do(ctx context.Context, r apiRequest) (json.RawMessage, erro
 	var env adEnvelope
 	derr := decodeJSON("alldebrid", body, &env)
 	if derr == nil && env.Status == "success" {
+		if r.path == "/v4/magnet/upload" {
+			if ms := adMagnets(env.Data); len(ms) > 0 && ms[0].Error != nil {
+				e := ms[0].Error
+				logProviderResponse(ctx, p.key, status, e.Code, e.Message)
+				return nil, adRequestError(r.path, status, e.Code, cleanDiagnostic(e.Message, p.key))
+			}
+		}
 		return env.Data, nil
 	}
 	if derr != nil && status >= 200 && status < 300 {
 		return nil, derr
 	}
 	logProviderResponse(ctx, p.key, status, env.Error.Code, env.Error.Message)
-	return nil, adError(status, env.Error.Code, env.Error.Message)
+	return nil, adRequestError(r.path, status, env.Error.Code, cleanDiagnostic(env.Error.Message, p.key))
+}
+
+func adRequestError(path string, status int, code, msg string) error {
+	err := adError(status, code, msg)
+	if errors.Is(err, ErrBlocked) {
+		if path == "/v4/link/unlock" {
+			return ErrBlockedFile
+		}
+		return ErrBlockedHash
+	}
+	return err
 }
 
 func adError(status int, code, msg string) error {
@@ -101,18 +129,24 @@ func adError(status int, code, msg string) error {
 		msg = code
 	}
 	switch {
-	case strings.HasPrefix(code, "AUTH_") || strings.HasSuffix(code, "MUST_BE_PREMIUM") || code == "MUST_BE_PREMIUM" || code == "FREE_TRIAL_LIMIT_REACHED":
+	case status == http.StatusUnavailableForLegalReasons || code == "LINK_INFRINGING_FILE" || code == "MAGNET_INFRINGING_FILE":
+		return ErrBlocked
+	case code == "MAGNET_PROCESSING":
+		return fmt.Errorf("alldebrid: %s: %w", msg, errDuplicateTorrent)
+	case strings.HasPrefix(code, "AUTH_") || strings.HasSuffix(code, "MUST_BE_PREMIUM") || code == "MUST_BE_PREMIUM" || code == "FREE_TRIAL_LIMIT_REACHED" || code == "ACCOUNT_INVALID":
 		return fmt.Errorf("alldebrid: %s: %w", msg, ErrAuth)
-	case code == "MAGNET_INVALID_ID" || code == "LINK_DOWN" || code == "LINK_NOT_FOUND" || code == "MAGNET_NOT_FOUND" || code == "LINK_HOST_UNAVAILABLE":
+	case code == "MAGNET_INVALID_ID" || code == "LINK_DOWN" || code == "LINK_NOT_FOUND" || code == "MAGNET_NOT_FOUND" || code == "LINK_NOT_SUPPORTED" || code == "LINK_HOST_NOT_SUPPORTED" || code == "MAGNET_LINKS_REMOVED":
 		return fmt.Errorf("alldebrid: %s: %w", msg, ErrGone)
 	case code == "MAGNET_TOO_MANY_ACTIVE":
 		// The account's active-magnet slots are full: nothing new is added.
 		return fmt.Errorf("alldebrid: %s: %w", msg, ErrDownloadLimit)
-	case strings.Contains(code, "TOO_MANY") || strings.Contains(code, "RATE"):
+	case strings.Contains(code, "TOO_MANY") || strings.Contains(code, "RATE") || code == "LINK_HOST_LIMIT_REACHED":
 		return fmt.Errorf("alldebrid: %s: %w", msg, ErrRateLimited)
 	case code == "MAGNET_TOO_LARGE" || code == "MAGNET_MAGNET_TOO_BIG":
 		return fmt.Errorf("alldebrid: %s: %w", msg, ErrTooLarge)
-	case code == "MAGNET_INVALID_URI" || code == "MAGNET_NO_URI" || code == "MAGNET_PROCESSING_FAILED":
+	case code == "MAGNET_INVALID_URI" || code == "MAGNET_NO_URI" || code == "MAGNET_INVALID_FILE":
+		return fmt.Errorf("alldebrid: %s: %w", msg, core.ErrReleaseRejected)
+	case code == "MAGNET_PROCESSING_FAILED" || code == "MAGNET_CANT_BOOTSTRAP" || code == "MAGNET_TOOK_TOO_LONG":
 		return fmt.Errorf("alldebrid: %s: %w", msg, core.ErrNotCached)
 	}
 	if status < 300 {
@@ -149,7 +183,65 @@ func adMagnets(data json.RawMessage) []adMagnet {
 	return ms
 }
 
+// adListed is one magnet of the account listing, with an absent status
+// told apart from 0.
+type adListed struct {
+	ID         json.Number `json:"id"`
+	Hash       string      `json:"hash"`
+	StatusCode *int        `json:"statusCode"`
+}
+
+var errADList = errors.New("alldebrid: unexpected magnet list")
+
+// adMagnetList decodes the account listing for the ownership lookup, where
+// a listing it cannot fully read is an error, never a miss: data that is
+// not an object, a magnets field that is not an array or object, a null
+// or hashless entry, or a non-empty object that is not one magnet. A
+// missing, null, [] or {} magnets field is an empty account.
+func adMagnetList(data json.RawMessage) ([]adListed, error) {
+	if t := bytes.TrimSpace(data); len(t) == 0 || t[0] != '{' {
+		return nil, errADList
+	}
+	var wrap struct {
+		Magnets json.RawMessage `json:"magnets"`
+	}
+	if json.Unmarshal(data, &wrap) != nil {
+		return nil, errADList
+	}
+	t := bytes.TrimSpace(wrap.Magnets)
+	var rows []json.RawMessage
+	switch {
+	case len(t) == 0 || bytes.Equal(t, []byte("null")):
+		return nil, nil
+	case t[0] == '{':
+		var obj map[string]json.RawMessage
+		if json.Unmarshal(t, &obj) != nil {
+			return nil, errADList
+		}
+		if len(obj) == 0 {
+			return nil, nil
+		}
+		rows = []json.RawMessage{t}
+	default:
+		if json.Unmarshal(t, &rows) != nil {
+			return nil, errADList
+		}
+	}
+	ms := make([]adListed, 0, len(rows))
+	for _, row := range rows {
+		var m adListed
+		if bytes.Equal(bytes.TrimSpace(row), []byte("null")) || json.Unmarshal(row, &m) != nil || m.Hash == "" {
+			return nil, errADList
+		}
+		ms = append(ms, m)
+	}
+	return ms, nil
+}
+
 func (p *allDebrid) Find(ctx context.Context, hash string) (string, error) {
+	if lowPriority(ctx) {
+		return p.list.known(p.opts.Now(), hash), nil
+	}
 	return p.list.find(ctx, p.opts.Now(), hash, func(ctx context.Context) (map[string]string, error) {
 		data, err := p.do(ctx, apiRequest{method: http.MethodGet, path: "/v4.1/magnet/status"})
 		if err != nil {
@@ -163,6 +255,44 @@ func (p *allDebrid) Find(ctx context.Context, hash string) (string, error) {
 		}
 		return m, nil
 	})
+}
+
+// findHeld looks the hash up on the account in any state, bypassing the
+// list cache. It returns a live match (downloading or ready, a ready one
+// first, and whether it is ready) and the ids of failed ones; none of
+// them was added by this upload, so none is Ether's to remove. A listing
+// it cannot fully read is an error, never a miss.
+func (p *allDebrid) findHeld(ctx context.Context, hash string) (live string, ready bool, failed []string, err error) {
+	data, err := p.do(ctx, apiRequest{method: http.MethodGet, path: "/v4.1/magnet/status"})
+	if err != nil {
+		return "", false, nil, err
+	}
+	ms, err := adMagnetList(data)
+	if err != nil {
+		return "", false, nil, err
+	}
+	for _, magnet := range ms {
+		if !strings.EqualFold(magnet.Hash, hash) {
+			continue
+		}
+		if magnet.ID == "" {
+			return "", false, nil, errors.New("alldebrid: listed magnet has no id")
+		}
+		if magnet.StatusCode == nil {
+			return "", false, nil, errors.New("alldebrid: listed magnet has no status")
+		}
+		switch id := magnet.ID.String(); {
+		case *magnet.StatusCode > adStatusReady:
+			failed = append(failed, id)
+		case *magnet.StatusCode == adStatusReady:
+			if !ready {
+				live, ready = id, true
+			}
+		case live == "":
+			live = id
+		}
+	}
+	return live, ready, failed, nil
 }
 
 func (p *allDebrid) status(ctx context.Context, id string) (*adMagnet, error) {
@@ -224,6 +354,10 @@ func (p *allDebrid) files(ctx context.Context, id string) ([]File, error) {
 }
 
 func (p *allDebrid) Acquire(ctx context.Context, req AcquireRequest) (*Acquired, error) {
+	return p.pace.acquireRemembered(ctx, req, p.opts.Now, p.acquire)
+}
+
+func (p *allDebrid) acquire(ctx context.Context, req AcquireRequest) (_ *Acquired, err error) {
 	if req.Private && !req.privateChecked {
 		var perr error
 		req, perr = prepareAcquire(ctx, p, req, false)
@@ -233,24 +367,43 @@ func (p *allDebrid) Acquire(ctx context.Context, req AcquireRequest) (*Acquired,
 	}
 	id, added := req.TorrentID, false
 	ready := false
+	var failed []string
+	if id == "" {
+		// An upload of a hash the account already holds can answer with the
+		// existing magnet's id, indistinguishable from a fresh add. Look the
+		// hash up first so another app's live magnet is reused, not removed.
+		if !mayTrialAdd(ctx) {
+			return nil, errBackgroundUndecided
+		}
+		if id, ready, failed, err = p.findHeld(ctx, req.InfoHash); err != nil {
+			return nil, err
+		}
+	}
 	if id == "" {
 		data, err := p.do(ctx, apiRequest{method: http.MethodPost, path: "/v4/magnet/upload", form: url.Values{"magnets[]": {req.Magnet}}})
+		if errors.Is(err, errDuplicateTorrent) {
+			id, ready, _, err = p.findHeld(ctx, req.InfoHash)
+			if err == nil && id == "" {
+				err = fmt.Errorf("alldebrid: torrent processing: %w", ErrPending)
+			}
+		}
 		if err != nil {
 			return nil, err
 		}
-		ms := adMagnets(data)
-		if len(ms) == 0 {
-			return nil, errors.New("alldebrid: upload returned no magnet")
+		if id == "" {
+			ms := adMagnets(data)
+			if len(ms) == 0 {
+				return nil, errors.New("alldebrid: upload returned no magnet")
+			}
+			// A failed magnet held before the upload stays not ours, even
+			// when the upload answers with its id.
+			id, ready = ms[0].ID.String(), ms[0].Ready
+			added = !slices.Contains(failed, id)
 		}
-		if ms[0].Error != nil {
-			logProviderResponse(ctx, p.key, http.StatusOK, ms[0].Error.Code, ms[0].Error.Message)
-			return nil, adError(http.StatusOK, ms[0].Error.Code, ms[0].Error.Message)
-		}
-		id, added, ready = ms[0].ID.String(), true, ms[0].Ready
 	}
 	cleanup := func() bool {
 		if added && req.RemoveUncached {
-			rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+			rctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 			defer cancel()
 			if req.mayRemove(rctx, id) {
 				return p.Remove(rctx, id) == nil
@@ -270,10 +423,18 @@ func (p *allDebrid) Acquire(ctx context.Context, req AcquireRequest) (*Acquired,
 		if st.StatusCode > adStatusReady { // 5+ are errors
 			logProviderResponse(ctx, p.key, http.StatusOK, strconv.Itoa(st.StatusCode), "magnet failed")
 			cleanup()
-			if st.StatusCode == 8 { // AllDebrid status 8: file too big
-				return nil, fmt.Errorf("alldebrid: magnet too big (status %d): %w", st.StatusCode, ErrTooLarge)
+			var verdict error
+			switch st.StatusCode {
+			case 7, 10, 15: // no download or peers within the provider's window
+				verdict = core.ErrNotCached
+			case 8:
+				verdict = ErrTooLarge
+			case 11:
+				verdict = ErrGone
+			default: // upload, unpack, tracker, internal or processing error
+				verdict = ErrTransport
 			}
-			return nil, fmt.Errorf("alldebrid: magnet failed (status %d): %w", st.StatusCode, core.ErrNotCached)
+			return nil, fmt.Errorf("alldebrid: magnet failed (status %d): %w", st.StatusCode, verdict)
 		}
 		if err := sleep(ctx, p.opts.PollInterval); err != nil {
 			return nil, err
@@ -300,6 +461,10 @@ func (p *allDebrid) Acquire(ctx context.Context, req AcquireRequest) (*Acquired,
 }
 
 func (p *allDebrid) Link(ctx context.Context, h Handle) (DirectLink, error) {
+	return p.pace.linkRemembered(ctx, h, p.opts.Now, p.link)
+}
+
+func (p *allDebrid) link(ctx context.Context, h Handle) (DirectLink, error) {
 	link := h.Link
 	if link == "" {
 		if h.TorrentID == "" {
@@ -329,7 +494,7 @@ func (p *allDebrid) Link(ctx context.Context, h Handle) (DirectLink, error) {
 	}
 	if out.Link == "" {
 		// Delayed links need a second polling API; treat as temporarily unavailable.
-		return DirectLink{}, fmt.Errorf("alldebrid: link generation delayed: %w", core.ErrSourceUnavailable)
+		return DirectLink{}, fmt.Errorf("alldebrid: link generation delayed: %w", ErrPending)
 	}
 	return DirectLink{URL: out.Link, Size: out.Filesize, Expires: p.opts.Now().Add(allDebridLinkTTL)}, nil
 }
@@ -344,6 +509,7 @@ func (p *allDebrid) Remove(ctx context.Context, torrentID string) error {
 }
 
 func (p *allDebrid) Account(ctx context.Context) (Account, error) {
+	ctx = core.WithIndexerPurpose(ctx, core.IndexerPurposeTest)
 	data, err := p.do(ctx, apiRequest{method: http.MethodGet, path: "/v4/user"})
 	if err != nil {
 		return Account{}, err

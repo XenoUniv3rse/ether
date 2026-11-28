@@ -15,6 +15,7 @@ import (
 	"github.com/braedonsaunders/ether/internal/blobcache"
 	"github.com/braedonsaunders/ether/internal/core"
 	"github.com/braedonsaunders/ether/internal/frontend"
+	"github.com/braedonsaunders/ether/internal/frontend/kit/route"
 	"github.com/braedonsaunders/ether/internal/libraries"
 	"github.com/braedonsaunders/ether/internal/libraryfilter"
 	"github.com/braedonsaunders/ether/internal/pluginitems"
@@ -64,8 +65,11 @@ func (c *librariesConsole) services() (*pluginitems.Service, *blobcache.Cache, e
 		if c.items, c.err = pluginitems.New(ctx, c.app.db, opts); c.err != nil {
 			return
 		}
-		c.blobs, c.err = blobcache.Open(filepath.Join(c.app.opts.DataDir, "blobcache"),
-			blobcache.Options{Logger: c.app.log, DiskUsage: c.app.opts.diskUsage})
+		c.blobs = c.app.mediaFiles
+		if c.blobs == nil {
+			dir := filepath.Join(c.app.opts.DataDir, "cache", "plugin-media")
+			c.blobs, c.err = blobcache.Open(dir, blobcache.Options{Unified: true, SweepPeriod: -1})
+		}
 	})
 	return c.items, c.blobs, c.err
 }
@@ -129,6 +133,8 @@ type libraryDTO struct {
 	MaxPluginItems *int                        `json:"maxPluginItems,omitempty"`
 	Sync           *pluginitems.SyncState      `json:"sync,omitempty"`
 	Kind           *plugins.MediaKindMeta      `json:"kind,omitempty"`
+	Logo           string                      `json:"logo,omitempty"`
+	HasVideo       bool                        `json:"hasVideo"`
 	PluginName     string                      `json:"pluginName,omitempty"`
 }
 
@@ -210,6 +216,7 @@ func (c *librariesConsole) decorate(ctx context.Context, lib core.Library) libra
 		if c.app.pluginsRT != nil && c.app.pluginsRT.mgr != nil {
 			if rec, err := c.app.pluginsRT.mgr.Get(ctx, lib.PluginID); err == nil {
 				dto.PluginName = rec.Name
+				dto.Logo = c.app.pluginsRT.mgr.CatalogueIconURL(ctx, rec, lib.KindKey)
 			}
 		}
 	case core.LibraryBuiltin:
@@ -247,6 +254,16 @@ func (c *librariesConsole) decorate(ctx context.Context, lib core.Library) libra
 	}
 	resolved := c.resolveLibraryPresentations(ctx, lib, dto.Kind)
 	dto.Presentations = &resolved
+	dto.HasVideo = lib.Source != core.LibraryPlugin
+	if kind := dto.Kind; kind != nil {
+		for _, level := range kind.Levels {
+			if kind.IsVideoTitleLevel(level.Key) ||
+				(level.Playable && level.Media == "" && resolved.MediaClass == core.MediaClassVideo) {
+				dto.HasVideo = true
+				break
+			}
+		}
+	}
 	return dto
 }
 
@@ -387,7 +404,7 @@ func (c *librariesConsole) library(w http.ResponseWriter, r *http.Request) (core
 }
 
 func (c *librariesConsole) handler() http.Handler {
-	mux := http.NewServeMux()
+	mux := &route.Mux{}
 	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
 		libs, err := c.app.libraries.List(r.Context())
 		if err != nil {
@@ -1450,8 +1467,8 @@ func (j pluginSyncJobHandle) SetProgress(progress string) {
 	j.h.SetProgress(progress)
 }
 
-func (j pluginSyncJobHandle) Finish(state, code, outcome, errMsg string) {
-	j.h.Finish(state, code, outcome, errMsg)
+func (j pluginSyncJobHandle) Finish(state, code, outcome, errMsg string, failure *plugins.RouteFailure) {
+	j.h.Finish(state, code, outcome, errMsg, failure)
 }
 
 // --- per-library blob cache (spec §11 Cache row, §15.5) ---
@@ -1484,7 +1501,7 @@ func cacheDTO(lib core.Library, ns *blobcache.Namespace) map[string]any {
 	q := ns.Quota()
 	return map[string]any{
 		"libraryId": int64(lib.ID), "used": used, "blobs": blobs,
-		"maxBytes": q.EffectiveMaxBytes(), "ttlSeconds": int64(q.TTL.Seconds()),
+		"maxBytes": q.MaxBytes, "ttlSeconds": int64(q.TTL.Seconds()),
 	}
 }
 
@@ -1526,10 +1543,10 @@ func (c *librariesConsole) handleCachePut(w http.ResponseWriter, r *http.Request
 		libError(w, http.StatusBadRequest, "Cache limits cannot be negative")
 		return
 	}
-	// Owner quota overrides are session-lived; the kind's declared cap (or
-	// the 2 GiB default) applies again at restart.
-	ns.SetQuota(blobcache.Quota{MaxBytes: body.MaxBytes, TTL: time.Duration(body.TTLSeconds) * time.Second})
-	ns.Sweep(0)
+	if err := ns.SetOwnerQuota(blobcache.Quota{MaxBytes: body.MaxBytes, TTL: time.Duration(body.TTLSeconds) * time.Second}); err != nil {
+		libError(w, http.StatusInternalServerError, "Could not save library retention settings")
+		return
+	}
 	libJSON(w, http.StatusOK, cacheDTO(lib, ns))
 }
 
@@ -1655,7 +1672,7 @@ func (c *librariesConsole) writeSetup(w http.ResponseWriter, r *http.Request, li
 }
 
 func (c *librariesConsole) setupHandler() http.Handler {
-	mux := http.NewServeMux()
+	mux := &route.Mux{}
 	guard := func(w http.ResponseWriter) bool {
 		if c.app.pluginsRT == nil || c.app.pluginsRT.mgr == nil {
 			libError(w, http.StatusServiceUnavailable, "Plugins are unavailable")

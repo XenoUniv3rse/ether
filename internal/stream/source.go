@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -293,10 +294,16 @@ func (s *source) readAtWithPriority(parent context.Context, p []byte, off int64,
 
 // read fills p (within the video) at off.
 func (s *source) read(ctx context.Context, p []byte, off int64, prio core.Priority) (int, error) {
-	n, err := s.readWithDamageRecovery(ctx, p, off, prio)
+	read := s.readWithDamageRecovery
+	if core.DownloadRange(ctx) {
+		// Shared sources can have playback damage concealment installed.
+		// A download must deliver the original bytes, including after a seek.
+		read = s.readRaw
+	}
+	n, err := read(ctx, p, off, prio)
 	if len(s.plan.spans) > 0 && n > 0 {
 		// A multi-clip Blu-ray feature gets one continuous timeline.
-		raw := func(dst []byte, from int64) (int, error) { return s.readWithDamageRecovery(ctx, dst, from, prio) }
+		raw := func(dst []byte, from int64) (int, error) { return read(ctx, dst, from, prio) }
 		if rerr := remux(s.plan.spans, p[:n], off, raw); rerr != nil {
 			return 0, rerr // p holds timestamps only partly rewritten
 		}
@@ -526,7 +533,11 @@ func (s *source) pumpReadAhead() {
 			return
 		}
 		s.raPending = false
-		cursors := append([]*cursor(nil), s.cursors...)
+		cursors := slices.Clone(s.cursors)
+		// After a seek the new demand cursor gets the next available slot.
+		// An old cursor may still serve another active reader, so leave its
+		// in-flight reads alone and service it when the new window is filled.
+		slices.SortStableFunc(cursors, func(a, b *cursor) int { return b.used.Compare(a.used) })
 		s.mu.Unlock()
 		for _, c := range cursors {
 			s.mu.Lock()

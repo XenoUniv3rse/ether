@@ -33,6 +33,12 @@ type VersionHandles interface {
 	MatchSession(context.Context, VersionScope, string, string) error
 }
 
+// StoredVersionLookup maps an issued handle without listing offers or preparing
+// a source. The caller must authorize the item before returning metadata.
+type StoredVersionLookup interface {
+	LookupStoredVersion(context.Context, VersionScope, string) (VersionTarget, error)
+}
+
 // StaleVersionResolver identifies a previously issued version handle on this
 // surface whose release is no longer offered, while still verifying the viewer
 // can access its parent item.
@@ -57,6 +63,12 @@ type EditionBatch interface {
 // whole requested offer set once and issues all handles atomically.
 type VersionHandleBatch interface {
 	IssueBatch(context.Context, VersionScope, core.RatingKey, []string) (map[string]string, error)
+}
+
+// VersionHandlePreview authorizes version names for item-scoped detail.
+// Playback registers a selected name through ListedVersionHandles.
+type VersionHandlePreview interface {
+	PreviewVersionHandles(context.Context, VersionScope, core.RatingKey, []string) (map[string]string, error)
 }
 
 // VersionSlots is the cache-independent, configured version menu capability.

@@ -98,6 +98,10 @@ signing the updated index.
 | ether.sidecar | Remote launch instructions: docker, download, command, docs |
 | ether.stremio | `true` for a native plugin that retains Stremio add-on routes |
 
+Set `mediaKinds[].library.icon` to a package-relative SVG or PNG for a kind’s
+console mark. Ether fetches it on URL install and uses it for the catalogue and
+library before `ether.icon` and the manifest’s Stremio `logo`.
+
 Copy rules apply to contribution labels too: sentence case, no exclamation marks,
 no em/en dashes, no “simply”, “just”, or “easily”. Setting secrets are sealed by
 Ether; read with `SecretGet` only where needed, never echo them into views/logs.
@@ -119,6 +123,7 @@ be overwritten or deleted by a plugin.
 | catalog_provider | mediaKinds; paged browse/changes/expand or push | KindUpsert/Delete/Items, KV |
 | kind_resolver / matcher | kind resolve/match handlers | ResolveSources, CachePut/Open/Delete; sources permission |
 | stream_source / debrid_provider | Stremio stream; lazy open (`GET /ether/open/{id}`) / debrid routes; opt-in category search (`source.search` → `GET /ether/search`, `GET /ether/files/{id}`) | HTTPFetch, SecretGet |
+| debrid_cache_hints | `POST /ether/debrid/hints` on a viewer's Play: which listed torrents a debrid service holds ([plugin-debrid.md](../docs/plugin-debrid.md)) | HTTPFetch, SecretGet, KV |
 | metadata | `/meta/{type}/{id}.json`, contributes.metadata | HTTPFetch, CatalogGet |
 | notify / events | notify send/test; event subscribe (`POST /ether/event`) + custom `events.publish` | HTTPFetch, SecretGet, KV, PublishEvent (`ether.events.publish`) |
 | flow_actions | `contributes.flowActions` + `POST /ether/v1/flow-actions/{key}` (with `X-Ether-Idempotency-Key`) | KV (idempotency deduplication), HTTPFetch, PublishEvent |
@@ -161,8 +166,20 @@ and special files are refused; `archive.list` flags unsafe member names as
 informational warnings while by-index reads and extracts accept any
 non-directory member. Other 7z coder chains are unsupported.
 
-FoldersList/Stat/Hash need `folders:read` plus an owner-selected root; they return
-metadata/digests, not bytes. Viewer access requires that viewer's grant.
+Call `ether.folders.roots()` (`FoldersRoots` in the Go SDK) on hosted jobs,
+actions, schedules, events or other non-client routes to list owner-picked
+absolute paths. Pass these strings as `root` without rewriting them. The list is
+empty without a live grant or when the owner has picked no folders.
+To receive changes, declare the `events` capability and subscribe to
+`plugin.folders.changed` in `ether.contributes.events.subscribe`. The affected
+plugin receives `{roots: string[]}` in the event payload on `POST /ether/event`,
+including an empty list when the folder grant is revoked. Handle it like other
+outbox events and call `folders.roots()` when you need the live list.
+
+FoldersList/Stat/Hash/Frame need `folders:read` plus an owner-selected root.
+List returns sorted pages with a cursor. Hash returns digests and frame returns
+an owned-library blob reference. Viewer access requires that viewer's grant.
+Video phash and frame extraction require a job or background route.
 Private LAN hosts stay blocked for HTTP fetch, fetchToCache, hash, and remote calls unless the owner allows the exact `host` or `host:port` under "On your network" in the plugin's settings (loopback stays blocked unless `localhost` or `127.0.0.1` is explicitly granted). Exact local hosts declared in `permissions.network` (dotless names, `.local`, `.lan`, `.home.arpa`, or private IPs) are shown on the install sheet and pre-granted when installed. For user-hosted services whose hostname comes from plugin settings, declare `"operator"` in `permissions.network` (never `"*"`); Ether prompts the owner to approve each server address per plugin before requests or stream resolvers admit it.
 Host calls enforce permissions again on every request; revocation is immediate.
 
@@ -170,17 +187,27 @@ Host calls enforce permissions again on every request; revocation is immediate.
 
 Declare `frontendAdapters[].uploadPaths: [{path, maxBytes}]` for authenticated
 routes that accept large raw or multipart bodies. Paths are adapter-relative
-globs and the host caps the whole body at 64 MiB. Read metadata in `req.upload`
-(hosted), the sixth argument to the TypeScript adapter's `handle`,
+globs. The whole-body ceiling defaults to 64 MiB and the owner can raise it
+per plugin to 512 MiB. Each route's declared limit still applies. Read metadata
+in `req.upload` (hosted), the sixth argument to the TypeScript adapter's `handle`,
 `FrontendUploadFromContext(r.Context())` (Go), or `ctx.upload` (Python).
 Multipart metadata contains one `files` entry per file and repeated text values
-in `fields`. Read a staged blob with `cache.read` while the request is active.
+in `fields`. Each file (including a raw body) has lowercase hexadecimal
+`sha256`, `sha1`, `md5`, and `crc32`. Read a staged blob with `cache.read` while
+the request is active. Use `cache.stat` for size and digests of other owned refs.
 
 For saves, declare `permissions.storage: "durable"` and promote the staged ref
 using `cache.put("", "", null, {durable: true, fromBlob: ref})`. Store the
 returned ref per viewer and authorize reads and deletions against that viewer.
-The per-plugin quota is 1 GiB and 10,000 unique blobs. Durable bytes remain until
-`cache.delete` or uninstall. See [streamed uploads and durable blobs](../docs/plugin-kinds.md#streamed-uploads-and-durable-blobs).
+The per-plugin defaults are 1 GiB and 10,000 unique blobs. Owners can change
+both limits in the plugin's Limits drawer. Call `ether.cache.usage({durable: true})`
+to read `{bytes, files, quotaBytes, quotaFiles}` for your own plugin. Shared
+content-addressed blobs count once. A quota reduction keeps existing data and
+blocks new blobs that would exceed either limit. Durable bytes remain until
+`cache.delete` or uninstall. On a hosted adapter download route, authorize the
+viewer and return `{status: 200, blob: {ref}}` with your `durable:<sha256>` ref.
+Ether streams the file with HTTP Range support.
+See [streamed uploads and durable blobs](../docs/plugin-kinds.md#streamed-uploads-and-durable-blobs).
 
 ## Owner language model (`ether.ai.complete`)
 
@@ -258,9 +285,9 @@ With `kind_resolver` and `permissions.sources: "search"` (or `"acquire"`, plus
 `resolve_sources_with_result` to read the full response envelope) supports:
 
 - **Deadline-aware default & stalled-indexer backoff (`kind: "indexer_search"`):**
-  under any viewer/request deadline (such as `/resolve`'s 5 s budget), Ether
+  under any viewer/request deadline (such as `/resolve`'s 12 s budget), Ether
   automatically caps the wait to remaining time minus `max(1.5 s, 35%)` (so a
-  fresh 5 s `/resolve` waits at most 3.25 s, leaving 1.75 s reserve) and returns
+  fresh 12 s `/resolve` waits at most 7.8 s, leaving 4.2 s reserve) and returns
   arrived results while stragglers finish into Ether's search cache in the
   background as `status: "pending"` (unbounded/background jobs still wait up to
   the 30 s ceiling unchanged). Indexers that time out or fail 3 times in a row
@@ -351,8 +378,10 @@ than billed as guest wall time):
 | `/stream/*`, `/ether/open*` | 3 s (20 s for Stremio add-ons) | 30,000 units (200,000 for Stremio) |
 | `/ether/search`, `/ether/files/*` (source category search) | 10 s | 100,000 units |
 | `/subtitles/*`, `/ether/subtitles/*` | 5 s (10 s for Stremio add-ons) | 50,000 units (100,000 for Stremio) |
-| `/ether/v1/kinds/*/resolve`, `/ether/v1/kinds/*/match` | 5 s | 50,000 units |
+| `/ether/v1/kinds/*/resolve` | 12 s | 120,000 units |
+| `/ether/v1/kinds/*/live/resolve`, `/ether/v1/kinds/*/match` | 5 s | 50,000 units |
 | `/catalog/*`, `/meta/*`, `/ether/metadata/*`, `/ether/markers*`, `/ether/v1/kinds/*/search`, `/ether/v1/kinds/*/items/*` | 10 s (20 s for Stremio `/catalog/*`) | 100,000 units (200,000 for Stremio `/catalog/*`) |
+| `/ether/debrid/hints` | 500 ms | 5,000 units |
 | `/ether/options/*`, `/ether/view/*` | 2 s | Owner-granted ceiling |
 | `/ether/configure`, `/ether/health` | 5 s | Owner-granted ceiling |
 | `/ether/test` | 15 s | Owner-granted ceiling |
@@ -366,7 +395,7 @@ SDK) inside a hosted handler returns the **effective** `deadline` and
 `unitBudget` for the current call after route and owner clamps, alongside
 `memoryBytes`, `readBytes`, `poolSize`, `fetchBytes`, `maxItems` and archive limits. If a viewer-path
 call spends its whole budget, the error names the route and limit (for example
-`used the whole 5 s budget for /ether/v1/kinds/games/resolve (50010/50000 units)`).
+`used the whole 12 s budget for /ether/v1/kinds/games/resolve (120010/120000 units)`).
 
 Plugins request higher memory, time, instance pool (`poolSize`, default 2, default owner ceiling 4, raisable up to 16),
 download or archive limits in `ether.runtime.limits` in `manifest.json`. With
@@ -502,10 +531,10 @@ integration template also demonstrates `$ref` settings with translated labels.
 cp -R sdk/examples/local-folders sdk/examples/my-folders
 ```
 
-Follow `plugin.ts`: ask for a folder setting and `folders:read`, walk only that
-root, store an index in KV, and rescan on the owner's action. Owner-selected root
-handles are not arbitrary paths. Hash large files with the pollable hash API;
-never block a playback request to hash or walk a tree.
+Follow `plugin.ts`: declare `folders:read`, query `folders.roots()`, walk
+the picked roots, store an index in KV, and rescan on the owner's action.
+Hash large files with the pollable hash API. Never block a playback request
+to hash or walk a tree.
 
 ### 9. Metadata and artwork
 
@@ -563,7 +592,8 @@ regenerate the reference instead of duplicating contracts in prose.
 
 Kind `/resolve` and `/match` handlers may return `{pending:true,retryInMs:1000}`.
 Ether retries after 250–5000 ms (clamped), for at most 25 seconds per Play;
-each invocation still has a five-second cap. Pending does not damage health.
+each invocation is capped at 12 seconds for `/resolve` and five seconds for
+`/match`. Pending does not damage health.
 If a call is still `pending` after the 25-second wait budget, Ether answers
 `503` with `code: "preparing"` and `Retry-After` (from `retryInMs`, or `5` s by
 default) on `kind-media`, Vela, Jellyfin and Plex API routes without caching a
@@ -589,10 +619,11 @@ server supports ranges and strong `ETag` or `Last-Modified` validators still
 match (restarting cleanly from byte 0 if they do not or the server returns
 `200`/`416`); partial bytes count against the library cache quota and disk
 safety floor and only become a readable cache blob once complete.
-In jobs, schedules, and background calls, set `connections` (1–8, default 1)
-to request parallel ranges, subject to the host's per-origin cap. The server
-must advertise byte ranges, a known length, and a strong validator. Use
-`resume: true` to continue each range's saved progress.
+In jobs, schedules, and background calls, set `connections` (1–6, default 1)
+to request parallel ranges, sharing the host's limit of 6 per origin. The
+server must advertise byte ranges, a known length, and a strong validator.
+Ranges served from a different URL need the same strong ETag and total
+length as the probe. Use `resume: true` to continue each range's saved progress.
 Hosted code can catch `e.code === "timeout"`. Remote SDK fetches use their local
 request context/timeout.
 
@@ -696,9 +727,9 @@ const playUrl = ether.frontend.streamURL(itemRef, {absolute: true}).url;
 ```
 
 In the SDKs, call `streamUrl(ctx, itemRef, partIndexOrOpts?)` (TypeScript),
-`ctx.StreamURLWithOptions(itemRef, StreamURLOptions{PartIndex, Source, Absolute})` or
+`ctx.StreamURLWithOptions(itemRef, StreamURLOptions{PartIndex, Source, Fallback, Absolute, Wait})` or
 `ctx.StreamPartURL(itemRef, partIndex)` (Go), or
-`ctx.stream_url(item_ref, part_index=..., source=..., absolute=...)` (Python); an unpinned
+`ctx.stream_url(item_ref, part_index=..., source=..., fallback=True, absolute=...)` (Python); an unpinned
 item ticket also accepts `/ether/v1/kind-media/{ticket}?part=N`. Default stream
 URLs remain root-relative; `{ absolute: true }` prepends the request's
 `X-Ether-Origin` (falling back to the adapter's first published address in
@@ -711,7 +742,17 @@ reject any `partIndex` with `404 item_not_found`. When `source` is set on the
 ticket grant, Ether passes `KindResolveRequest.source` to `/resolve` and opens
 only the matching `PlayableSource.id` without failing over to other sources (a
 plugin that ignores `source` still works because Ether selects the matching id
-or returns `409 no_source` if absent).
+or returns `409 no_source` if absent). Add `fallback: true` to treat the source as a preference. If it is missing or fails to open, Ether tries the remaining sources for the same part in their usual order.
+
+For an adapter download route, pass `{wait: {maxSeconds: 1200}}` to hold the
+media response while the plugin prepares the file. In Go, use
+`Wait: &etherplugin.StreamWaitPolicy{MaxSeconds: 1200}`. Use a positive integer.
+Ether caps the wait at 1800 seconds and allows up to four held requests per
+plugin and 32 per server. Over that limit, the request uses the ordinary media
+open and can return 503 with `Retry-After` while preparation continues.
+Omit `wait` on player routes to keep their 18-second default. Choose a wait below
+the client's and reverse proxy's response-header timeouts so Ether can send its
+own retry response. Disconnects release the held request while the job continues.
 
 Only root-relative local redirect URLs are forwarded. External URLs, authority
 changes, control characters, backslashes and known account credential query
@@ -850,3 +891,22 @@ class Adapter:
         return 200, {"Content-Type": "application/json"}, json.dumps({"ids": visible_ids, "count": len(page["items"])})
 ```
 
+
+## Report route failures to the owner
+
+Return a non-2xx status and a JSON body in this shape:
+
+```json
+{"error":{"code":"rate_limited","message":"The catalogue service is rate limiting requests","retryAfterSeconds":300}}
+```
+
+Use one credential-free, owner-facing sentence. Name the upstream service where
+helpful. Supported codes are `auth` (upstream rejected credentials or access),
+`rate_limited`, `upstream_unavailable`, `not_found` and `invalid_settings`.
+Report upstream 401/403 as `auth` even if your route sends a 502. Send an optional
+positive integer `retryAfterSeconds` or an HTTP `Retry-After` header for a
+temporary failure. Use 501 for an unimplemented optional catalogue changes feed.
+
+In TypeScript, throw `new PluginHttpError(429, "rate_limited", message, 300)`.
+In Python, raise `PluginHttpError(429, "rate_limited", message, retry_after_seconds=300)`.
+In Go, return `&etherplugin.RouteError{Status: 429, Code: "rate_limited", Message: message, RetryAfterSeconds: 300}`.

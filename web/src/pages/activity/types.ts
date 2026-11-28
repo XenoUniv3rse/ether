@@ -47,6 +47,9 @@ export type Play = {
   channelId?: string;
   channelName?: string;
   channelNumber?: string;
+  liveSourceName?: string;
+  liveLoginLabel?: string;
+  liveLoginNumber?: number;
   device: string;
   platform: string;
   decision: string;
@@ -201,6 +204,7 @@ export type PlayDetail = Play &
     networkReason?: string;
     avgBitrateKbps?: number;
     sourceKbps?: number;
+    chapterCount?: number | null;
     uhd?: boolean;
     hdr?: boolean;
   };

@@ -67,7 +67,7 @@ func newEventID() string {
 // the plugin's grants allow it. Both legacy EPP/1 names and canonical
 // domain.noun.verb names are accepted and bridged to matching subscribers.
 func (m *Manager) Publish(ctx context.Context, ev Event) {
-	if !IsSubscribableEvent(ev.Name) {
+	if ev.Name == EventPluginFoldersChanged || !IsSubscribableEvent(ev.Name) {
 		return
 	}
 	names := []string{ev.Name}
@@ -123,7 +123,7 @@ func (m *Manager) StartEventBridge(ctx context.Context) func() {
 // subscribed to its canonical type or mapped legacy EPP/1 event name.
 // When no plugin subscribes to either name it does zero database work.
 func (m *Manager) HandleBusEvent(ctx context.Context, env events.Envelope) {
-	if env.Meta.DryRun || env.Type == "" {
+	if env.Meta.DryRun || env.Type == "" || env.Type == EventPluginFoldersChanged {
 		return
 	}
 	names := []string{env.Type}
@@ -234,23 +234,30 @@ func (m *Manager) fanOutEvent(ctx context.Context, canonicalType string, names [
 			}
 		}
 		dropped, err := m.store.enqueue(ctx, r.ID, out)
-		if err == nil && dropped > 0 {
-			m.healthMu.Lock()
-			if h, err := m.store.health(ctx, r.ID); err == nil {
-				h.Drops += int64(dropped)
-				_ = m.store.putHealth(ctx, r.ID, h)
-			}
-			m.healthMu.Unlock()
-			m.emitBusEvent(events.EventPluginQuotaExceeded, r.ID, events.PluginQuotaExceededPayload{
-				PluginID:  r.ID,
-				Name:      r.Name,
-				QuotaKind: "events_outbox",
-				Used:      int64(OutboxCap),
-				Limit:     int64(OutboxCap),
-				Drops:     int64(dropped),
-			}, false)
+		if err == nil {
+			m.noteOutboxDrops(ctx, r, dropped)
 		}
 	}
+}
+
+func (m *Manager) noteOutboxDrops(ctx context.Context, r Record, dropped int) {
+	if dropped <= 0 {
+		return
+	}
+	m.healthMu.Lock()
+	if h, err := m.store.health(ctx, r.ID); err == nil {
+		h.Drops += int64(dropped)
+		_ = m.store.putHealth(ctx, r.ID, h)
+	}
+	m.healthMu.Unlock()
+	m.emitBusEvent(events.EventPluginQuotaExceeded, r.ID, events.PluginQuotaExceededPayload{
+		PluginID:  r.ID,
+		Name:      r.Name,
+		QuotaKind: "events_outbox",
+		Used:      int64(OutboxCap),
+		Limit:     int64(OutboxCap),
+		Drops:     int64(dropped),
+	}, false)
 }
 
 func sanitizePluginEventPayload(raw json.RawMessage, schema events.EventSchema, hasSchema, allowViewer bool) json.RawMessage {
@@ -530,6 +537,13 @@ func (m *Manager) Run(ctx context.Context) {
 	stopBridge := m.StartEventBridge(ctx)
 	defer stopBridge()
 	defer m.scheduleWG.Wait()
+	inspectorTick := time.NewTicker(250 * time.Millisecond)
+	defer inspectorTick.Stop()
+	defer func() {
+		flushCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		m.flushAdapterCalls(flushCtx)
+	}()
 	defer m.cancelActionJobs("")
 	defer m.cancelRemoteHashes("")
 	defer func() {
@@ -547,6 +561,8 @@ func (m *Manager) Run(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			return
+		case <-inspectorTick.C:
+			m.flushAdapterCalls(ctx)
 		case <-tick.C:
 			m.runOnce(ctx, lastHealth)
 		}

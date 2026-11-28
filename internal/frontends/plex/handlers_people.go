@@ -222,7 +222,7 @@ func (s *Server) handleLibraryPersonMedia(w http.ResponseWriter, r *http.Request
 	} else {
 		seenTypes := map[frontend.MediaType]bool{}
 		for _, sec := range s.userSections(pr.User) {
-			if seenTypes[sec.Type] {
+			if !isVideoSection(sec) || seenTypes[sec.Type] {
 				continue
 			}
 			seenTypes[sec.Type] = true

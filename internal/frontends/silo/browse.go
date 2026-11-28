@@ -111,9 +111,30 @@ func (i *instance) rememberedLiveCard(channelGUID string) (liveChannelCardMeta, 
 // paintLiveCardArtwork gives On Now cards their channel's artwork, the same
 // grant the channel's detail page issues. Without it every live card was a
 // blank tile with a TV glyph.
-func (i *instance) paintLiveCardArtwork(r *http.Request, v *frontend.Viewer, credential string, items []any) {
-	if i.host.ImageGrants == nil || i.host.LiveTV == nil {
+func (i *instance) paintLiveCardArtwork(r *http.Request, credential string, row frontend.Row, items []any) {
+	if i.host.ImageGrants == nil {
 		return
+	}
+	channels := make(map[string]*frontend.RowLiveChannel, len(items))
+	var channelIDs []string
+	for _, entry := range row.Entries {
+		ch := entry.LiveChannel
+		if entry.Kind != frontend.RowEntryLiveChannel || ch == nil || len(ch.Images) == 0 {
+			continue
+		}
+		guid, err := ids.StringGUID(ids.Channel, ch.ID)
+		if err == nil {
+			channels[guid] = ch
+			channelIDs = append(channelIDs, ch.ID)
+		}
+	}
+	ctx := r.Context()
+	if batch, ok := i.host.ImageGrants.(frontend.ChannelArtworkGrantBatch); ok {
+		var err error
+		ctx, err = batch.PrepareChannelArtwork(ctx, credential, channelIDs)
+		if err != nil {
+			return
+		}
 	}
 	prefix := i.pathPrefix(r)
 	for _, raw := range items {
@@ -122,15 +143,15 @@ func (i *instance) paintLiveCardArtwork(r *http.Request, v *frontend.Viewer, cre
 			continue
 		}
 		guid, _ := card["content_id"].(string)
-		ch, err := i.host.LiveTV.ResolveChannelGUID(r.Context(), v, guid)
-		if err != nil || ch.ID == "" {
+		ch := channels[guid]
+		if ch == nil {
 			continue
 		}
 		for _, img := range ch.Images {
 			if img.Path == "" {
 				continue
 			}
-			grant, err := i.host.ImageGrants.Issue(r.Context(), frontend.ImageGrantRequest{Credential: credential, Device: device(r), Channel: ch.ID, Image: img})
+			grant, err := i.host.ImageGrants.Issue(ctx, frontend.ImageGrantRequest{Credential: credential, Device: device(r), Channel: ch.ID, Image: img})
 			if err != nil || grant == "" {
 				continue
 			}
@@ -358,7 +379,8 @@ func (i *instance) sections(w http.ResponseWriter, r *http.Request) {
 	}
 	cacheKey := siloSectionKey(v, configGen, policyGen, device(r), r.URL.RequestURI())
 	if cached, ok := i.cachedSections(cacheKey); ok {
-		reply(w, 200, map[string]any{"sections": cached})
+		reply(w, 200, map[string]any{"sections": cached.sections})
+		i.recordDeliveredRows(v, cached.impressions)
 		return
 	}
 	gen := i.sectionsGeneration(v.ID)
@@ -388,7 +410,7 @@ func (i *instance) sections(w http.ResponseWriter, r *http.Request) {
 	} else if pluginRows, ok, e := i.pluginLibraryRows(r, v, placement, view, limit); ok {
 		rows, err = pluginRows, e
 	} else {
-		rows, err = i.host.Experience.Rows(r.Context(), frontend.RowRequest{Viewer: v, Device: device(r), Placement: placement, ViewID: view, Limit: limit})
+		rows, err = i.snapshotRows(r, frontend.RowRequest{Viewer: v, Device: device(r), Placement: placement, ViewID: view, Limit: limit})
 	}
 	if err != nil {
 		i.logSectionError("rows", placement, view, "", err)
@@ -418,6 +440,7 @@ func (i *instance) sections(w http.ResponseWriter, r *http.Request) {
 		r = r.WithContext(context.WithValue(r.Context(), sectionPrepKey{}, sectionPrep{states: states, artwork: artwork, overlays: overlays, batched: batched}))
 	}
 	sections := make([]any, 0, len(rows))
+	var impressions []frontend.NeutralImpression
 	seen := map[string]int{}
 	used := map[string]bool{}
 	partial := false
@@ -441,7 +464,7 @@ func (i *instance) sections(w http.ResponseWriter, r *http.Request) {
 		var e error
 		if row.Purpose == frontend.RowLive {
 			items = i.buildLiveChannelCards(row)
-			i.paintLiveCardArtwork(r, v, credential, items)
+			i.paintLiveCardArtwork(r, credential, row, items)
 			if len(items) == 0 {
 				continue
 			}
@@ -488,19 +511,24 @@ func (i *instance) sections(w http.ResponseWriter, r *http.Request) {
 		if !row.More || row.RankedTop10 {
 			section["total_count"] = len(items)
 		}
+		if row.Purpose != frontend.RowLive && len(items) > 0 {
+			impressions = append(impressions, deliveredSection(row, placement, len(sections), len(items)))
+		}
 		sections = append(sections, section)
 	}
 	if !partial {
-		i.storeSections(cacheKey, v.ID, gen, sections)
+		i.storeSections(cacheKey, v.ID, gen, sections, impressions)
 	}
 	reply(w, 200, map[string]any{"sections": sections})
+	i.recordDeliveredRows(v, impressions)
 }
 
 const siloSectionTTL = 15 * time.Second
 
 type siloSectionPage struct {
-	at       time.Time
-	sections []any
+	at          time.Time
+	sections    []any
+	impressions []frontend.NeutralImpression
 }
 
 func siloSectionKey(v *frontend.Viewer, configGen uint64, policyGen int64, dev frontend.Device, uri string) string {
@@ -511,22 +539,22 @@ func siloSectionKey(v *frontend.Viewer, configGen uint64, policyGen int64, dev f
 	return strconv.FormatInt(id, 10) + "\n" + strconv.FormatUint(configGen, 10) + "\n" + strconv.FormatInt(policyGen, 10) + "\n" + dev.ID + "\n" + uri
 }
 
-func (i *instance) cachedSections(key string) ([]any, bool) {
+func (i *instance) cachedSections(key string) (siloSectionPage, bool) {
 	if i == nil {
-		return nil, false
+		return siloSectionPage{}, false
 	}
 	i.sectionsMu.Lock()
 	defer i.sectionsMu.Unlock()
 	page, ok := i.sectionsCache[key]
 	if !ok || time.Since(page.at) >= siloSectionTTL {
-		return nil, false
+		return siloSectionPage{}, false
 	}
-	return page.sections, true
+	return page, true
 }
 
 // storeSections keeps a page built from the viewer's state at generation
 // gen; a page built across one of the viewer's own changes is not kept.
-func (i *instance) storeSections(key string, viewerID int64, gen uint64, sections []any) {
+func (i *instance) storeSections(key string, viewerID int64, gen uint64, sections []any, impressions []frontend.NeutralImpression) {
 	if i == nil {
 		return
 	}
@@ -553,7 +581,7 @@ func (i *instance) storeSections(key string, viewerID int64, gen uint64, section
 			delete(i.sectionsCache, oldest)
 		}
 	}
-	i.sectionsCache[key] = siloSectionPage{at: time.Now(), sections: sections}
+	i.sectionsCache[key] = siloSectionPage{at: time.Now(), sections: sections, impressions: impressions}
 }
 
 func (i *instance) sectionsGeneration(viewerID int64) uint64 {

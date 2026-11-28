@@ -869,8 +869,10 @@ func (h *dryRunHost) CallHost(ctx context.Context, name string, raw json.RawMess
 		h.mu.Unlock()
 		return json.RawMessage("null"), nil
 
+	case "folders.roots":
+		return json.RawMessage(`[]`), nil
 	case "folders.list":
-		return marshalResult([]plugins.FolderEntry{})
+		return marshalResult(plugins.FolderPage{Entries: []plugins.FolderEntry{}})
 
 	case "folders.stat":
 		return marshalResult(plugins.FolderEntry{Name: str(1), Path: str(1)})

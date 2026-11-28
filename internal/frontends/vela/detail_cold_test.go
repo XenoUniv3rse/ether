@@ -171,7 +171,7 @@ func TestVelaDetailFillContract(t *testing.T) {
 		s := detailColdService(t, experience.ServiceDeps{
 			Get:      func(context.Context, *core.User, core.RatingKey) (*core.Title, error) { return &title, nil },
 			Children: func(context.Context, *core.User, core.RatingKey) ([]core.Title, error) { return nil, nil },
-			Enrich: func(ctx context.Context, _ *core.User, _ core.Device, title *core.Title) (frontend.ItemDetail, error) {
+			Enrich: func(ctx context.Context, _ *core.User, _ frontend.ItemRequest, title *core.Title) (frontend.ItemDetail, error) {
 				clips, err := x.List(ctx, title, "en")
 				d := frontend.ItemDetail{Title: *title}
 				for _, clip := range clips {

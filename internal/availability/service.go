@@ -80,6 +80,7 @@ type Service struct {
 	now                  func() time.Time
 	log                  *slog.Logger
 	runMu                sync.Mutex
+	wake                 chan struct{}
 	cacheSeeded          bool
 	hasGateTable         bool
 	hasSeasonRevealTable bool
@@ -95,6 +96,8 @@ type Service struct {
 	checksCatalogGen     uint64
 	checksCatalogPtr     any
 	checksPolicy         string
+	checksWatch          map[core.RatingKey]bool
+	checksSeededAt       time.Time
 	snapMu               sync.RWMutex
 	snap                 discoverySnap
 	paceMu               sync.Mutex
@@ -128,6 +131,7 @@ func New(d Deps) (*Service, error) {
 		now:          d.Now,
 		log:          d.Logger,
 		verdictQueue: verdictQueue{behind: true},
+		wake:         make(chan struct{}, 1),
 	}
 	s.bgCtx, s.bgStop = context.WithCancel(context.Background())
 	if rows, err := d.DB.Query(`SELECT 1 FROM availability_gate LIMIT 0`); err == nil {
@@ -330,11 +334,12 @@ func (s *Service) Run(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-timer.C:
-			if err := s.Cycle(ctx); err != nil && !benign(err) {
-				s.log.Warn("availability cycle failed", "error", err)
-			}
-			timer.Reset(time.Minute)
+		case <-s.wake:
 		}
+		if err := s.Cycle(ctx); err != nil && !benign(err) {
+			s.log.Warn("availability cycle failed", "error", err)
+		}
+		timer.Reset(time.Minute)
 	}
 }
 func (s *Service) Cycle(ctx context.Context) error {
@@ -369,7 +374,7 @@ func (s *Service) Cycle(ctx context.Context) error {
 			// Head polls run on the feed's interval. An open gap (or
 			// catch-up) continues every minute in between, within the
 			// allowance left after today's head polls.
-			scheduled := st.polled == 0 || schedule.Due(s.now(), time.Unix(st.polled, 0), pollInterval(f, live))
+			scheduled := st.polled == 0 || schedule.Due(s.now(), time.Unix(st.polled, 0), headPollInterval(f, live, st, s.now()))
 			resume := !scheduled && st.gap && !f.SinglePage && schedule.Due(s.now(), time.Unix(st.checked, 0), time.Minute)
 			if resume {
 				if resume, err = s.pageRoom(ctx, f, live); err != nil {
@@ -433,7 +438,8 @@ func (s *Service) verify(parent context.Context) error {
 	now := s.now().Unix()
 	if s.lastVerifyPolicy == policy {
 		var hasDue bool
-		if err := s.db.QueryRowContext(parent, `SELECT EXISTS(SELECT 1 FROM availability_releases WHERE next_check<=?)`, now).Scan(&hasDue); err == nil && !hasDue {
+		if err := s.db.QueryRowContext(parent, `SELECT EXISTS(SELECT 1 FROM availability_releases AS release WHERE next_check<=?
+ AND NOT EXISTS (SELECT 1 FROM availability_gate WHERE rating_key=release.rating_key))`, now).Scan(&hasDue); err == nil && !hasDue {
 			return nil
 		}
 	}
@@ -460,7 +466,8 @@ func (s *Service) verify(parent context.Context) error {
 	rows, err := s.db.QueryContext(parent, `SELECT id,rating_key,source_id,generation,payload,policy,attempts,revision FROM (
  SELECT id,rating_key,source_id,generation,payload,policy,attempts,revision,priority,first_seen,
  ROW_NUMBER() OVER (PARTITION BY rating_key ORDER BY CASE WHEN verified_at=0 THEN 0 ELSE 1 END,last_seen DESC,id) AS position
- FROM availability_releases WHERE `+where+` AND (`+strings.Join(allowed, " OR ")+`)
+ FROM availability_releases AS release WHERE `+where+` AND (`+strings.Join(allowed, " OR ")+`)
+ AND NOT EXISTS (SELECT 1 FROM availability_gate WHERE rating_key=release.rating_key)
  ) AS candidates WHERE position=1 ORDER BY priority DESC,first_seen DESC LIMIT 256`, args...)
 	if err != nil {
 		return err
@@ -498,6 +505,9 @@ func (s *Service) verify(parent context.Context) error {
 			if e != nil {
 				return e
 			}
+			continue
+		}
+		if s.gateKeys(parent, "", nil, []core.RatingKey{q.key})[q.key] {
 			continue
 		}
 		f, ok := sources[q.source]

@@ -16,6 +16,12 @@ import (
 // Protocol identifies a surface independently of client product or platform.
 type Protocol = core.Protocol
 
+// PlaybackClientID scopes a client installation to its frontend protocol.
+// Playback and support captures use the same key to correlate one device.
+func PlaybackClientID(protocol Protocol, deviceID string) string {
+	return fmt.Sprintf("%d:%s%s", len(protocol), protocol, deviceID)
+}
+
 // ProtocolHTTP is the release protocol for a stream URL read with HTTP
 // range requests. Its value stays owned by core.
 const ProtocolHTTP = core.ProtocolHTTP
@@ -233,7 +239,7 @@ type LibraryFacetCollections interface {
 
 // OwnedCollectionMatcher lets search select titles before loading collection members.
 type OwnedCollectionMatcher interface {
-	ListOwnedMatching(context.Context, *User, MediaType, func(string) bool) ([]Collection, error)
+	ListOwnedMatching(context.Context, *User, MediaType, string, func(string) bool) ([]Collection, error)
 }
 
 // CollectionPager is an optional Collections capability returning one page
@@ -410,6 +416,8 @@ type ItemRequest struct {
 	Viewer *core.Viewer
 	Device core.Device
 	Key    core.RatingKey
+	// IncludeClientYouTube opts into YouTube trailers that can play on the device.
+	IncludeClientYouTube bool
 }
 
 // DateFilter is the date predicate accepted by the shared catalogue boundary.
@@ -746,7 +754,7 @@ type SubtitleSidecarUpload interface {
 	UploadSubtitle(ctx context.Context, t *Title, u *User, filename, format, language string, body []byte) (StreamInfo, error)
 }
 
-// Extra describes a playable trailer or clip. Key is the broker-facing item
+// Extra describes a trailer or clip. Key is the item
 // identity; Source and SourceID describe the upstream reference, not a resolved
 // URL or credentials. Plex media and part identifiers remain adapter-owned.
 type Extra struct {
@@ -756,6 +764,7 @@ type Extra struct {
 	PublishedAt                             time.Time
 	Duration                                time.Duration
 	Height                                  int
+	ClientOnly                              bool // playback requires the viewer's device
 }
 type ItemDetail struct {
 	Collection *core.Collection
@@ -1107,6 +1116,8 @@ type PlayIntent struct {
 
 	Estimate bool
 	Options  core.DecideOptions
+	// ReadChapters resolves deferred container chapters for an explicit detail request.
+	ReadChapters bool
 	// ExactVersion treats PlanRequest.Version as a scoped opaque handle and
 	// refuses any substitute release, including during later source failover.
 	ExactVersion bool
@@ -1138,6 +1149,14 @@ type PlayIntent struct {
 	// replaces it only when it is first observed playing; preloading its
 	// media does not. It never counts as a second stream.
 	Queued bool
+	// ViewerPlay marks a start a viewer pressed Play for: Vela's playback
+	// request and Silo's playback start, nothing else. Jellyfin/Emby never
+	// set it: some clients send IsPlayback true for queue prefetches, so a
+	// PlaybackInfo is no proof of a Play. The broker then makes its source
+	// preparation core.ExplicitPlay, unless the plan is queued or a detail
+	// plan. Lazy stream fetches, version switches, failover and every other
+	// plan leave it unset.
+	ViewerPlay bool
 	// DeclaredCaps marks Caps built from this request's complete device
 	// declaration (a Jellyfin/Emby PlaybackInfo DeviceProfile, a Silo
 	// capability body). The broker keeps the latest such caps per device so
@@ -1186,6 +1205,12 @@ const (
 // StreamRequest describes output, not an upstream URL or credential. The
 // broker owns the input, decision and stream grant.
 type StreamRequest struct {
+	// AdaptiveHLS opts into rendition selection by the HLS player.
+	AdaptiveHLS bool
+	// AdaptiveMaxBitrate is the client-requested peak in bits per second.
+	// Vela clamps estimates below the lowest policy-eligible rendition.
+	AdaptiveMaxBitrate int
+
 	// ExpectedOriginalRevision is set by a stable media URL resolving to a
 	// direct-file grant. Empty requires the first representation.
 	ExpectedOriginalRevision *string
@@ -1245,7 +1270,17 @@ type PlanRequest struct {
 	Caps       core.ClientCaps
 	Intent     PlayIntent
 }
+type AutoSelectionReason = core.AutoSelectionReason
+
+const (
+	AutoConnectionEstimate = core.AutoConnectionEstimate
+	AutoSourceDelivery     = core.AutoSourceDelivery
+	AutoResumeSource       = core.AutoResumeSource
+	AutoSourceSelection    = core.AutoSourceSelection
+)
+
 type PlayPlan struct {
+	AutoSelectionReason        AutoSelectionReason
 	SourceChosenAt, DecisionAt time.Time
 	ID                         string
 	Estimated                  bool
@@ -1375,7 +1410,13 @@ type SessionCapabilities struct {
 	AppStoreURL                  string
 	IconURL                      string
 }
+
+// ValidClientThroughput checks a measured client download rate in bits/s.
+func ValidClientThroughput(bps float64) bool { return core.ValidClientThroughput(bps) }
+
 type Timeline struct {
+	// ThroughputBps is optional client download telemetry in bits/s.
+	ThroughputBps float64 `json:"throughputBps,omitempty"`
 	// Observed track indices are presence-aware client telemetry, not proof of
 	// manual intent. In particular Jellyfin Web emits ordinary timeupdate events.
 	AudioStreamIndex, SubtitleStreamIndex *int
@@ -1632,4 +1673,12 @@ type VideoTranscodingPolicy interface {
 // advances each time the owner saves poster settings so apps refetch posters.
 type PosterGenerationSource interface {
 	PosterGeneration() uint64
+}
+
+type NeutralImpression = core.NeutralImpression
+
+// DeliveredRowRecorder is used by server adapters for native clients that
+// cannot report row impressions. Only entries actually sent belong here.
+type DeliveredRowRecorder interface {
+	RecordDeliveredRows(*Viewer, []NeutralImpression)
 }

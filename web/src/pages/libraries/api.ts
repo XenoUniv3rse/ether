@@ -1,3 +1,4 @@
+import type { PluginFailure } from "../../components/PluginFailure";
 import { apiFetch } from "../../lib/api";
 import type { Rule, TitleCard } from "../../lib/contract";
 import type { VisibilityRule } from "./browser/LibraryVisibility";
@@ -262,6 +263,7 @@ export interface LibrarySync {
   lastStarted?: string;
   lastOk?: string;
   lastError?: string;
+  failure?: PluginFailure;
   deleteGuard?: LibrarySyncDeleteGuard;
   lastOutcome?: LibrarySyncOutcome;
   items: number;
@@ -336,7 +338,9 @@ export interface Library {
   cardShape?: "" | LibraryCardShape;
   present?: Presentations;
   /** Server-resolved per-app presentations separating HOW (plugin/inferred/unavailable) from WHETHER (owner switches). */
-  presentations?: ResolvedPresentations;
+  presentations: ResolvedPresentations;
+  hasVideo: boolean;
+  logo?: string;
   tabs?: LibraryTab[];
   tabsCustomized?: boolean;
   effectiveTabs?: LibraryTab[];

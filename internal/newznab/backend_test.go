@@ -44,7 +44,7 @@ func TestBuiltinBackendSharesBudgetsCacheAndRouting(t *testing.T) {
 	ctx := context.Background()
 	fb := &fakeBackend{}
 	v := &testVault{}
-	cfg := config.Indexer{ID: "site", Name: "Site", URL: "https://site.invalid", Kind: config.IndexerKindCardigann, Definition: "fake", Enabled: true, DailyLimit: 1, DailyGrabs: 1}
+	cfg := config.Indexer{ID: "site", Name: "Site", URL: "https://site.invalid", Kind: config.IndexerKindCardigann, Definition: "fake", Enabled: true, DailyLimit: 2, DailyGrabs: 1}
 	m := NewManager(nil, []config.Indexer{cfg}, Options{Vault: v, Backend: func(c config.Indexer) (Backend, error) {
 		fb.cfg = c
 		return fb, nil
@@ -61,12 +61,12 @@ func TestBuiltinBackendSharesBudgetsCacheAndRouting(t *testing.T) {
 	if _, err := m.Search(ctx, req); err != nil || fb.searches != 1 {
 		t.Fatalf("cache not used: %d %v", fb.searches, err)
 	}
-	if _, err := m.Search(ctx, core.SearchRequest{Type: core.TypeMovie, Title: "Other"}); !errors.Is(err, core.ErrBudgetExhausted) {
-		t.Fatalf("hit budget not enforced: %v", err)
-	}
 	body, err := m.FetchNZB(ctx, r)
 	if err != nil || string(body) != "<nzb></nzb>" {
 		t.Fatalf("fetch: %q %v", body, err)
+	}
+	if _, err := m.Search(ctx, core.SearchRequest{Type: core.TypeMovie, Title: "Other"}); !errors.Is(err, core.ErrBudgetExhausted) {
+		t.Fatalf("combined budget not enforced: %v", err)
 	}
 	// The stored NZB is reused without spending the (exhausted) grab budget.
 	if _, err := m.FetchNZB(ctx, r); err != nil {

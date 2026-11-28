@@ -842,11 +842,13 @@ func (h *recordingHost) CallHost(ctx context.Context, name string, raw json.RawM
 			return nil, wasm.Forbidden("collections: write permission not declared")
 		}
 		return json.RawMessage("null"), nil
+	case "folders.roots":
+		return json.RawMessage(`[]`), nil
 	case "folders.list":
 		if h.man.Ether.Permissions.Folders != "read" {
 			return nil, wasm.Forbidden("folders: read permission not declared")
 		}
-		return json.RawMessage(`[]`), nil
+		return json.RawMessage(`{"entries":[],"nextCursor":"","truncated":false}`), nil
 	case "folders.hashStart", "folders.hashPoll", "folders.hashCancel":
 		if h.man.Ether.Permissions.Folders != "read" {
 			return nil, wasm.Forbidden("folders: read permission not declared")
@@ -857,6 +859,14 @@ func (h *recordingHost) CallHost(ctx context.Context, name string, raw json.RawM
 			return nil, wasm.Forbidden("folders: read permission not declared")
 		}
 		return json.RawMessage(`{"size":1024,"modTime":0,"crc32":"00000000","md5":"00000000000000000000000000000000","sha1":"0000000000000000000000000000000000000000"}`), nil
+	case "folders.frame":
+		if h.man.Ether.Permissions.Folders != "read" {
+			return nil, wasm.Forbidden("folders: read permission not declared")
+		}
+		if callPath := wasm.CallPath(ctx); !plugins.MediaProbeAllowedPath(h.man, callPath, wasm.IsBackgroundCall(ctx)) {
+			return nil, wasm.Forbidden("folders.frame requires a background route")
+		}
+		return json.RawMessage(`{"ref":"blob:sdk-frame","libraryKey":"pk-sdk-check-media"}`), nil
 	case "folders.stat":
 		if h.man.Ether.Permissions.Folders != "read" {
 			return nil, wasm.Forbidden("folders: read permission not declared")
@@ -1030,6 +1040,7 @@ func checkRoutes(ctx context.Context, rep *Report, man plugins.Manifest, plug *w
 		len(man.Ether.Schedule) > 0 ||
 		man.HasCapability(plugins.CapStreamSource) ||
 		man.HasCapability(plugins.CapDebridProvider) ||
+		man.HasCapability(plugins.CapDebridCacheHints) ||
 		man.HasCapability(plugins.CapLiveTV) ||
 		man.HasCapability(plugins.CapSubtitles) ||
 		man.HasCapability(plugins.CapMarkers) ||
@@ -1236,6 +1247,27 @@ func checkRoutes(ctx context.Context, rep *Report, man plugins.Manifest, plug *w
 				}
 				if doc.Markers == nil {
 					return "markers response must contain a markers array"
+				}
+				return ""
+			},
+		})
+	}
+
+	// Debrid cache hints.
+	if man.HasCapability(plugins.CapDebridCacheHints) {
+		fixtures = append(fixtures, routeFixture{
+			method: "POST",
+			path:   "/ether/debrid/hints",
+			body:   json.RawMessage(`{"candidates":[{"infoHash":"0123456789abcdef0123456789abcdef01234567","private":false,"providerKinds":["realdebrid"]}]}`),
+			validate: func(resp wasm.Response) string {
+				var doc struct {
+					Cached map[string][]string `json:"cached"`
+				}
+				if err := decodeResponseBody(resp.Body, &doc); err != nil {
+					return "debrid hints response must be a JSON object with a cached map: " + err.Error()
+				}
+				if doc.Cached == nil {
+					return "debrid hints response must contain a cached object"
 				}
 				return ""
 			},

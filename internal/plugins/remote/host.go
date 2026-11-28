@@ -7,6 +7,7 @@ import (
 	"github.com/braedonsaunders/ether/internal/core"
 	"github.com/braedonsaunders/ether/internal/events"
 	"github.com/braedonsaunders/ether/internal/frontend/kit/paging"
+	"github.com/braedonsaunders/ether/internal/frontend/kit/route"
 	"github.com/braedonsaunders/ether/internal/httpjson"
 	"github.com/braedonsaunders/ether/internal/plugins"
 	"io"
@@ -97,7 +98,6 @@ const (
 	maxAIBodyBytes     = 128 << 10
 	maxCollectionBytes = 2 << 20
 	maxKindUpsertBytes = 8 << 20
-	maxCacheBlobBytes  = 256 << 20
 	defaultPageLimit   = 50
 	maxPageLimit       = 200
 )
@@ -110,7 +110,7 @@ type HostHandler struct {
 	host Host
 	auth CredentialResolver
 	log  *slog.Logger
-	mux  *http.ServeMux
+	mux  *route.Mux
 }
 
 // HostOptions configures a HostHandler.
@@ -127,7 +127,7 @@ func NewHostHandler(opts HostOptions) *HostHandler {
 	if h.log == nil {
 		h.log = slog.Default()
 	}
-	mux := http.NewServeMux()
+	mux := &route.Mux{}
 	mux.HandleFunc("POST /ether/plugin-host/data/{service}", h.dataCall)
 	mux.HandleFunc("GET /ether/plugin-host/kv", h.kvList)
 	mux.HandleFunc("GET /ether/plugin-host/kv-usage", h.kvUsage)
@@ -172,6 +172,8 @@ func NewHostHandler(opts HostOptions) *HostHandler {
 	h.mux = mux
 	return h
 }
+
+func (h *HostHandler) Routes() []route.Route { return h.mux.Routes() }
 
 // Mount registers the handler's routes on mux.
 func (h *HostHandler) Mount(mux *http.ServeMux) {
@@ -613,14 +615,36 @@ func (h *HostHandler) resolveSources(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, res)
 }
 
+type cacheUploadBody struct {
+	io.Reader
+	size int64
+}
+
+func (b cacheUploadBody) ExpectedSize() int64 { return b.size }
+
 func (h *HostHandler) cachePut(w http.ResponseWriter, r *http.Request) {
 	libraryKey := r.PathValue("libraryKey")
 	name := r.PathValue("name")
 	if name == "" {
 		name = r.URL.Query().Get("name")
 	}
-	body := io.LimitReader(r.Body, maxCacheBlobBytes+1)
-	ref, err := h.host.CachePut(r.Context(), pluginIDOf(r), libraryKey, name, body)
+	pluginID := pluginIDOf(r)
+	limit := int64(plugins.MaxDataFetchBytes)
+	if h, ok := h.host.(interface {
+		CacheUploadLimit(context.Context, string) int64
+	}); ok {
+		limit = h.CacheUploadLimit(r.Context(), pluginID)
+	}
+	if r.ContentLength > limit {
+		h.finishErr(w, ErrTooLarge)
+		return
+	}
+	body := cacheUploadBody{http.MaxBytesReader(w, r.Body, limit), r.ContentLength}
+	ref, err := h.host.CachePut(r.Context(), pluginID, libraryKey, name, body)
+	var overflow *http.MaxBytesError
+	if errors.As(err, &overflow) {
+		err = ErrTooLarge
+	}
 	if !h.finishErr(w, err) {
 		return
 	}
@@ -666,11 +690,13 @@ func streamViewerToken(ctx context.Context) string {
 // for absolute stream URLs (#772).
 func (h *HostHandler) frontendStreamURL(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		ViewerID  int64  `json:"viewerId"`
-		ItemRef   string `json:"itemRef"`
-		PartIndex *int   `json:"partIndex,omitempty"`
-		Source    string `json:"source,omitempty"`
-		Absolute  bool   `json:"absolute,omitempty"`
+		ViewerID  int64                     `json:"viewerId"`
+		ItemRef   string                    `json:"itemRef"`
+		PartIndex *int                      `json:"partIndex,omitempty"`
+		Source    string                    `json:"source,omitempty"`
+		Fallback  bool                      `json:"fallback,omitempty"`
+		Absolute  bool                      `json:"absolute,omitempty"`
+		Wait      *plugins.StreamWaitPolicy `json:"wait,omitempty"`
 	}
 	if !h.decode(w, r, maxHostBodyBytes, &body) {
 		return
@@ -679,8 +705,16 @@ func (h *HostHandler) frontendStreamURL(w http.ResponseWriter, r *http.Request) 
 		writeHostError(w, http.StatusBadRequest, "bad_arguments", "partIndex must be non-negative")
 		return
 	}
+	if body.Fallback && body.Source == "" {
+		writeHostError(w, http.StatusBadRequest, "bad_arguments", "fallback requires a source")
+		return
+	}
 	if body.Source != "" && strings.TrimSpace(body.Source) == "" {
 		writeHostError(w, http.StatusBadRequest, "bad_arguments", "source must not be blank")
+		return
+	}
+	if body.Wait != nil && body.Wait.MaxSeconds <= 0 {
+		writeHostError(w, http.StatusBadRequest, "bad_arguments", "wait.maxSeconds must be a positive integer")
 		return
 	}
 	ctx := withStreamViewerToken(r.Context(), r.Header.Get(HeaderViewerToken))
@@ -688,7 +722,7 @@ func (h *HostHandler) frontendStreamURL(w http.ResponseWriter, r *http.Request) 
 		u   string
 		err error
 	)
-	if body.Source != "" || body.Absolute {
+	if body.Source != "" || body.Absolute || body.Wait != nil {
 		oh, ok := h.host.(interface {
 			StreamURLWithOptions(ctx context.Context, pluginID string, viewerID int64, itemRef string, opts plugins.StreamURLOptions) (string, error)
 		})
@@ -699,7 +733,9 @@ func (h *HostHandler) frontendStreamURL(w http.ResponseWriter, r *http.Request) 
 		u, err = oh.StreamURLWithOptions(ctx, pluginIDOf(r), body.ViewerID, body.ItemRef, plugins.StreamURLOptions{
 			PartIndex: body.PartIndex,
 			Source:    body.Source,
+			Fallback:  body.Fallback,
 			Absolute:  body.Absolute,
+			Wait:      body.Wait,
 		})
 	} else if body.PartIndex != nil {
 		if oh, ok := h.host.(interface {
@@ -1027,7 +1063,12 @@ func (h *HostHandler) dataCall(w http.ResponseWriter, r *http.Request) {
 		writeHostError(w, http.StatusServiceUnavailable, "unavailable", "Data services unavailable")
 		return
 	}
-	out, err := service.CallDataHost(r.Context(), pluginIDOf(r), r.PathValue("service"), args)
+	name := r.PathValue("service")
+	ctx := r.Context()
+	if name == "cache.stat" && strings.TrimSpace(r.Header.Get(HeaderViewerToken)) != "" {
+		ctx = plugins.WithCallContext(ctx, "/ether/v1/frontend/", "")
+	}
+	out, err := service.CallDataHost(ctx, pluginIDOf(r), name, args)
 	if !h.finishErr(w, err) {
 		return
 	}

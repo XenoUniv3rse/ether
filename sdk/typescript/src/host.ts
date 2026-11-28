@@ -152,7 +152,7 @@ export interface FetchCacheRequest {
   name: string;
   /** Continue an incomplete download, including per-range progress, when the server supports ranges and validators still match. */
   resume?: boolean;
-  /** Defaults to 1. Jobs, schedules, and background calls can request 1–8 concurrent byte ranges, subject to the host cap. */
+  /** Defaults to 1. Jobs, schedules, and background calls can request 1–6 concurrent byte ranges, sharing the host's limit of 6 per origin. */
   connections?: number;
 }
 export interface FetchCacheResult { blob: string; size: number; crc32: string; md5: string; sha1: string; status: number }
@@ -228,7 +228,7 @@ export function normalizeStreamUrlOptions(
     return { partIndex: partIndexOrOpts };
   }
   if (partIndexOrOpts === null || typeof partIndexOrOpts !== "object" || Array.isArray(partIndexOrOpts)) {
-    throw new Error("stream url: options must be a partIndex integer or { partIndex?, source?, absolute? }");
+    throw new Error("stream url: options must be a partIndex integer or { partIndex?, source?, fallback?, absolute?, wait? }");
   }
   checkPartIndex(partIndexOrOpts.partIndex);
   if (partIndexOrOpts.source !== undefined) {
@@ -239,13 +239,24 @@ export function normalizeStreamUrlOptions(
       throw new Error("stream url: source must not be blank");
     }
   }
+  if (partIndexOrOpts.fallback !== undefined && (typeof partIndexOrOpts.fallback !== "boolean" || (partIndexOrOpts.fallback && !partIndexOrOpts.source))) {
+    throw new Error("stream url: fallback must be a boolean and requires a source");
+  }
   if (partIndexOrOpts.absolute !== undefined && typeof partIndexOrOpts.absolute !== "boolean") {
     throw new Error("stream url: absolute must be a boolean");
   }
   const out: import("./types.ts").StreamUrlOptions = {};
   if (partIndexOrOpts.partIndex !== undefined) out.partIndex = partIndexOrOpts.partIndex;
   if (partIndexOrOpts.source) out.source = partIndexOrOpts.source;
+  if (partIndexOrOpts.fallback) out.fallback = true;
   if (partIndexOrOpts.absolute) out.absolute = true;
+  if (partIndexOrOpts.wait !== undefined) {
+    const seconds = partIndexOrOpts.wait?.maxSeconds;
+    if (typeof seconds !== "number" || !Number.isSafeInteger(seconds) || seconds <= 0) {
+      throw new Error("stream url: wait.maxSeconds must be a positive integer");
+    }
+    out.wait = { maxSeconds: seconds };
+  }
   return out;
 }
 
@@ -442,7 +453,22 @@ function decodeData(r: { bodyBase64: string }): Uint8Array {
 }
 
 export interface FolderHashJob { id: string; state: "running" | "done" | "canceled" | "error"; bytes: number; result?: FolderHash; error?: string }
-export interface FolderHash { size: number; modTime: number; crc32: string; md5: string; sha1: string }
+export interface FolderHash {
+  size: number;
+  modTime: number;
+  crc32?: string;
+  md5?: string;
+  sha1?: string;
+  oshash?: string;
+  phash?: string;
+}
+export interface FolderHashOptions {
+  algorithms?: ("crc32" | "md5" | "sha1" | "oshash" | "phash")[];
+}
+export interface FolderListOptions { cursor?: string; limit?: number }
+export interface FolderPage { entries: FolderEntry[]; nextCursor: string; truncated: boolean }
+export interface FolderFrameOptions { atSec: number; width: number; libraryKey?: string }
+export interface FolderFrame { ref: string; libraryKey: string }
 
 export interface FolderEntry {
   name: string;
@@ -549,10 +575,13 @@ export interface EtherHost {
     putRecords(records: Array<{ type: string; id: string; value: unknown }>): MaybePromise<{ streams: number }>;
   };
   folders: {
-    list(root: string, path?: string): MaybePromise<FolderEntry[]>;
+    /** Absolute owner-picked roots on a hosted non-client route. Empty without a live grant. */
+    roots(): MaybePromise<string[]>;
+    list(root: string, path?: string, options?: FolderListOptions): MaybePromise<FolderPage>;
+    frame(root: string, path: string, options: FolderFrameOptions): MaybePromise<FolderFrame>;
     stat(root: string, path: string): MaybePromise<FolderEntry>;
-    hash(root: string, path: string): MaybePromise<FolderHash>;
-    hashStart(root: string, path: string): MaybePromise<FolderHashJob>;
+    hash(root: string, path: string, options?: FolderHashOptions): MaybePromise<FolderHash>;
+    hashStart(root: string, path: string, options?: FolderHashOptions): MaybePromise<FolderHashJob>;
     hashPoll(id: string): MaybePromise<FolderHashJob>;
     hashCancel(id: string): MaybePromise<FolderHashJob>;
   };
@@ -603,6 +632,10 @@ export interface EtherHost {
     put(libraryKey: string, name: string, data: Uint8Array | null, opts?: import("./types.ts").CachePutOptions): MaybePromise<string>;
     open(blobRef: string): MaybePromise<Uint8Array>;
     read?(blobRef: string, range: DataRange): MaybePromise<Uint8Array>;
+    /** Cached digests are available on viewer routes; cold reads there are limited to 256 KiB. */
+    stat?(blobRef: string): MaybePromise<import("./types.ts").CacheStatResult>;
+    /** Reports unique saved bytes and files and their effective quotas. */
+    usage?(opts: import("./types.ts").CacheUsageOptions): MaybePromise<import("./types.ts").CacheUsageResult>;
     /** Rasterises a cached SVG blob into a new cached bitmap blob with Ether's bounded SVG rasteriser; unsafe documents are refused. */
     rasterize?(libraryKey: string, name: string, blobRef: string, opts?: RasterizeOptions): MaybePromise<RasterizeResult>;
     delete?(blobRef: string): MaybePromise<void>;
@@ -679,10 +712,12 @@ interface GlobalEtherBindings {
       upsert: (c: Record<string, unknown>) => void;
     };
     folders: {
-      list: (root: string, path?: string) => FolderEntry[];
+      roots: () => string[];
+      list: (root: string, path?: string, options?: FolderListOptions) => FolderPage;
+      frame: (root: string, path: string, options: FolderFrameOptions) => FolderFrame;
       stat: (root: string, path: string) => FolderEntry;
-      hash: (root: string, path: string) => FolderHash;
-      hashStart: (root: string, path: string) => FolderHashJob;
+      hash: (root: string, path: string, options?: FolderHashOptions) => FolderHash;
+      hashStart: (root: string, path: string, options?: FolderHashOptions) => FolderHashJob;
       hashPoll: (id: string) => FolderHashJob;
       hashCancel: (id: string) => FolderHashJob;
     };
@@ -794,6 +829,8 @@ export function createHostedClient(): EtherHost {
         }
         return decodeData(callHost("cache.read", [blob, range]));
       },
+      stat: (blob) => callHost<import("./types.ts").CacheStatResult>("cache.stat", [blob]),
+      usage: (opts) => callHost<import("./types.ts").CacheUsageResult>("cache.usage", [opts]),
       rasterize: (lib, name, blob, opts) => {
         checkRasterizeOptions(opts);
         return callHost<RasterizeResult>("cache.rasterize", opts == null ? [lib, name, blob] : [lib, name, blob, opts]);
@@ -956,16 +993,24 @@ export function createHostedClient(): EtherHost {
       },
     },
     folders: {
-      list(root: string, path = ""): FolderEntry[] {
-        if (g.ether?.folders) return g.ether.folders.list(root, path) ?? [];
-        return callHost<FolderEntry[]>("folders.list", [root, path]) ?? [];
+      roots(): string[] {
+        if (g.ether?.folders) return g.ether.folders.roots();
+        return callHost<string[]>("folders.roots", []);
       },
-      hashStart(root: string, path: string): FolderHashJob { if (g.ether?.folders) return g.ether.folders.hashStart(root, path); return callHost<FolderHashJob>("folders.hashStart", [root, path]); },
+      list(root: string, path = "", options: FolderListOptions = {}): FolderPage {
+        if (g.ether?.folders) return g.ether.folders.list(root, path, options);
+        return callHost<FolderPage>("folders.list", [root, path, options]);
+      },
+      frame(root: string, path: string, options: FolderFrameOptions): FolderFrame {
+        if (g.ether?.folders) return g.ether.folders.frame(root, path, options);
+        return callHost<FolderFrame>("folders.frame", [root, path, options]);
+      },
+      hashStart(root: string, path: string, options: FolderHashOptions = {}): FolderHashJob { if (g.ether?.folders) return g.ether.folders.hashStart(root, path, options); return callHost<FolderHashJob>("folders.hashStart", [root, path, options]); },
       hashPoll(id: string): FolderHashJob { if (g.ether?.folders) return g.ether.folders.hashPoll(id); return callHost<FolderHashJob>("folders.hashPoll", [id]); },
       hashCancel(id: string): FolderHashJob { if (g.ether?.folders) return g.ether.folders.hashCancel(id); return callHost<FolderHashJob>("folders.hashCancel", [id]); },
-      hash(root: string, path: string): FolderHash {
-        if (g.ether?.folders) return g.ether.folders.hash(root, path);
-        return callHost<FolderHash>("folders.hash", [root, path]);
+      hash(root: string, path: string, options: FolderHashOptions = {}): FolderHash {
+        if (g.ether?.folders) return g.ether.folders.hash(root, path, options);
+        return callHost<FolderHash>("folders.hash", [root, path, options]);
       },
       stat(root: string, path: string): FolderEntry {
         if (g.ether?.folders) return g.ether.folders.stat(root, path);
@@ -1078,7 +1123,7 @@ export function createHostedClient(): EtherHost {
         void viewerId;
         const opts = normalizeStreamUrlOptions(partIndexOrOpts);
         let args: unknown[];
-        if (opts.source !== undefined || opts.absolute) {
+        if (opts.source !== undefined || opts.absolute || opts.wait) {
           args = [itemRef, opts];
         } else if (opts.partIndex !== undefined) {
           args = [itemRef, opts.partIndex];
@@ -1340,13 +1385,17 @@ export function createRemoteHostClient(opts: RemoteHostOptions = {}): EtherHost 
       },
     },
     folders: {
-      list(): Promise<FolderEntry[]> {
+      roots(): Promise<string[]> {
+        return Promise.reject(new Error("folders.roots requires the hosted runtime"));
+      },
+      list(): Promise<FolderPage> {
         return Promise.reject(
           new Error(
             "folders.list is for hosted plugins; sidecar plugins read their local fileRoot directly",
           ),
         );
       },
+      frame(): Promise<FolderFrame> { return Promise.reject(new Error("folders.frame requires the hosted runtime")); },
       hashStart(): Promise<FolderHashJob> { return Promise.reject(new Error("folders.hash requires the hosted runtime")); },
       hashPoll(): Promise<FolderHashJob> { return Promise.reject(new Error("folders.hash requires the hosted runtime")); },
       hashCancel(): Promise<FolderHashJob> { return Promise.reject(new Error("folders.hash requires the hosted runtime")); },
@@ -1440,6 +1489,16 @@ export function createRemoteHostClient(opts: RemoteHostOptions = {}): EtherHost 
     },
     cache: {
       read: async (blob, range) => { checkDataRange(range); return decodeData((await callJson<{bodyBase64: string}>("POST", "/ether/plugin-host/data/cache.read", [blob, range]))!); },
+      stat: async (blob) => {
+        const token = opts.viewerToken?.trim();
+        return (await callJson<import("./types.ts").CacheStatResult>(
+          "POST", "/ether/plugin-host/data/cache.stat", [blob], false,
+          token ? { [HEADER_VIEWER_TOKEN]: token } : undefined,
+        ))!;
+      },
+      usage: async (opts) => (await callJson<import("./types.ts").CacheUsageResult>(
+        "POST", "/ether/plugin-host/data/cache.usage", [opts],
+      ))!,
       rasterize: async (lib, name, blob, opts) => { checkRasterizeOptions(opts); return (await callJson<RasterizeResult>("POST", "/ether/plugin-host/data/cache.rasterize", opts == null ? [lib, name, blob] : [lib, name, blob, opts]))!; },
       async put(libraryKey, name, data, opts) {
         if (opts !== undefined || data === null) {
@@ -1477,7 +1536,9 @@ export function createRemoteHostClient(opts: RemoteHostOptions = {}): EtherHost 
             itemRef,
             ...(streamOpts.partIndex === undefined ? {} : { partIndex: streamOpts.partIndex }),
             ...(streamOpts.source === undefined ? {} : { source: streamOpts.source }),
+            ...(streamOpts.fallback ? { fallback: true } : {}),
             ...(streamOpts.absolute ? { absolute: true } : {}),
+            ...(streamOpts.wait ? { wait: streamOpts.wait } : {}),
           },
           false,
           tok ? { [HEADER_VIEWER_TOKEN]: tok } : undefined,

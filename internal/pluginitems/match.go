@@ -286,8 +286,11 @@ func (s *Service) MatchItem(ctx context.Context, caller Caller, matcherPluginID,
 	if err != nil {
 		return nil, err
 	}
-	if err := checkPluginResponseError(resp); err != nil {
-		return nil, err
+	if resp.Failure != nil {
+		return nil, resp.Failure
+	}
+	if resp.Status != 0 && (resp.Status < 200 || resp.Status >= 300) {
+		return nil, fmt.Errorf("plugin route returned HTTP %d", resp.Status)
 	}
 	var matchResp core.KindMatchResponse
 	if len(resp.Body) > 0 {

@@ -93,6 +93,18 @@ const (
 	StartedThreshold = 0.05
 )
 
+// ReachedWatchedThreshold reports whether a playhead completed the item.
+func ReachedWatchedThreshold(offset, duration time.Duration) bool {
+	return duration > 0 && float64(offset) >= WatchedThreshold*float64(duration)
+}
+
+// NotStarted reports whether a play position is too early to keep as a resume
+// point: before resumeAfter when it is set, otherwise before StartedThreshold of
+// the duration. Watch state kept outside this package uses the same rule.
+func NotStarted(offset, dur, resumeAfter time.Duration) bool {
+	return notStartedWith(offset, dur, resumeAfter)
+}
+
 // notStartedWith reports whether offset is too early in a title of length dur
 // to keep as a resume point. When resumeAfter > 0, it replaces StartedThreshold.
 func notStartedWith(offset, dur, resumeAfter time.Duration) bool {
@@ -354,7 +366,7 @@ func (w progressWrite) completes() bool {
 	if strings.HasPrefix(w.state, "explicit-") {
 		return w.state == "explicit-complete"
 	}
-	return w.state != "progress" && w.duration > 0 && float64(w.offset) >= WatchedThreshold*float64(w.duration)
+	return w.state != "progress" && ReachedWatchedThreshold(w.offset, w.duration)
 }
 
 func mergeProgress(old, w progressWrite) progressWrite {
@@ -911,8 +923,7 @@ func (s *State) progressAt(ctx context.Context, userID int64, key core.RatingKey
 			*w.offlineResult = frontend.TimelinePersistenceResult{
 				PlaybackState: "ignore", ViewOffset: cur.ws.ViewOffset, ViewCount: cur.ws.ViewCount,
 			}
-			if !now.After(cur.ws.LastViewedAt) || !now.After(cur.watchAt) ||
-				(s.pending != nil && !now.After(s.pending.latestAt(progressKey{userID, key}))) {
+			if s.staleOfflineProgress(cur, now, userID, key) {
 				cur.skipSave = true
 				return false, false, nil
 			}
@@ -950,7 +961,7 @@ func (s *State) progressAt(ctx context.Context, userID int64, key core.RatingKey
 		}
 		completed, started := false, false
 		switch {
-		case (w.offline != nil && w.offline.Played) || (cur.ws.Duration > 0 && frac >= WatchedThreshold):
+		case (w.offline != nil && w.offline.Played) || ReachedWatchedThreshold(offset, cur.ws.Duration):
 			if (w.offline != nil && cur.ws.ViewCount == 0) || (w.offline == nil && !cur.counted) {
 				cur.ws.ViewCount++
 				completed = true

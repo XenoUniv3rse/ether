@@ -67,7 +67,7 @@ func plexMetaFixture(t *testing.T, use bool, rt http.RoundTripper) (*fixture, *p
 			c.Server.FriendlyName = "Ether Test"
 			c.Server.MachineIdentifier = "0123456789abcdef0123456789abcdef01234567"
 			c.Plex.Claimed = true
-			c.Plex.UsePlexMetadata = use
+			c.Plex.UsePlexMetadata = &use
 			c.Plex.OwnerUsername = "owner"
 			return c
 		})

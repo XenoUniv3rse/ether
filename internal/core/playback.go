@@ -48,6 +48,12 @@ type HLSRequest struct {
 	// recovery. A new playback start must use a fresh value; empty mints one.
 	MediaGeneration string `json:",omitempty"`
 
+	// AdaptiveHLS lets the player choose variants on the authored timeline.
+	AdaptiveHLS         bool
+	AdaptiveEncodeTop   bool   // use an encoded top when a copied clock cannot be verified
+	AdaptiveUnavailable string // plan-time reason the HLS output must stay single-variant
+	AdaptiveMaxKbps     int    // peak delivery cap, including audio and mux overhead
+
 	// QualityRungs explicitly requests the lazy, policy-filtered file-session ladder.
 	QualityRungs    bool
 	QualityRungIDs  []string
@@ -312,11 +318,38 @@ type PlaySession struct {
 	SegmentStart time.Duration `json:"segmentStart,omitempty"`
 }
 
+// ProbedChapterCount identifies source chapter facts, including a probed
+// file with zero chapters. Estimates and live programmes have no file count.
+func (p *PlaySession) ProbedChapterCount() *int {
+	if p.LiveChannel != nil || p.Info.Estimated || p.Info.Video() == nil || (!p.Info.ChaptersProbed && len(p.Info.Chapters) == 0) {
+		return nil
+	}
+	count := len(p.Info.Chapters)
+	return &count
+}
+
 // LiveChannel identifies a live session's selected channel independently of its programme.
 type LiveChannel struct {
-	ID     string `json:"id,omitempty"`
-	Name   string `json:"name,omitempty"`
-	Number string `json:"number,omitempty"`
+	ID               string                `json:"id,omitempty"`
+	Name             string                `json:"name,omitempty"`
+	Number           string                `json:"number,omitempty"`
+	Provider         *LiveProvider         `json:"provider,omitempty"`
+	PreviousProvider *LiveProviderIdentity `json:"previousProvider,omitempty"`
+}
+
+// LiveProviderIdentity contains only display-safe metadata from the serving input.
+type LiveProviderIdentity struct {
+	SourceName  string `json:"sourceName"`
+	LoginID     string `json:"loginId,omitempty"`
+	LoginLabel  string `json:"loginLabel,omitempty"`
+	LoginNumber int    `json:"loginNumber,omitempty"`
+}
+
+type LiveProvider struct {
+	LiveProviderIdentity
+	LoginSlot  int  `json:"loginSlot,omitempty"`
+	LoginLimit int  `json:"loginLimit,omitempty"`
+	LocalInUse *int `json:"localInUse,omitempty"`
 }
 
 // SourceReleaseID identifies the selected release when one is available.

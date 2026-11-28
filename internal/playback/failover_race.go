@@ -319,7 +319,7 @@ func (m *Manager) raceInitialAlternates(openCtx context.Context, s *session, pro
 			}
 			info := g.infoSnapshot()
 			if reqReason := probedRequiredAudioRejection(profile, s.title, res.Release, info, false); reqReason != "" {
-				m.noteReleaseProbeMemory(res.Release, res.NZB, info)
+				m.noteSelectionProbe(s.ident.key, res, info)
 				m.log.Info("trying next candidate", "release", res.Release.Name, "reason", reqReason)
 				m.dropGeneration(g)
 				results <- initialRaceResult{alt: res.Release, audioReject: true, err: errors.New(reqReason)}
@@ -327,7 +327,7 @@ func (m *Manager) raceInitialAlternates(openCtx context.Context, s *session, pro
 			}
 			audioOK := m.probedAudioAcceptable(s, profile, info)
 			if !audioOK {
-				m.noteReleaseProbeMemory(res.Release, res.NZB, info)
+				m.noteSelectionProbe(s.ident.key, res, info)
 			}
 			preferOK := !burned && audioOK
 			results <- initialRaceResult{alt: res.Release, g: g, burned: burned, preferOK: preferOK, audioReject: !audioOK}

@@ -1,6 +1,11 @@
 package mediabrowser
 
-import "github.com/braedonsaunders/ether/internal/frontend"
+import (
+	"net/http"
+
+	"github.com/braedonsaunders/ether/internal/frontend"
+	"github.com/braedonsaunders/ether/internal/frontend/kit/ids"
+)
 
 // jellyfinItemDetailDTO reports only the host's policy-backed estimate.
 func (i *instance) jellyfinItemDetailDTO(detail frontend.ItemDetail, dto map[string]any) {
@@ -31,7 +36,7 @@ func (i *instance) jellyfinItemDetailDTO(detail frontend.ItemDetail, dto map[str
 	dto["SpecialFeatureCount"] = features
 	// The chapter timeline belongs to the default (or explicitly requested)
 	// source. Looking through alternate sources can return another cut's times.
-	if chapters := defaultSourceChapters(dto); len(chapters) > 0 {
+	if chapters := defaultSourceChapters(dto); chapters != nil {
 		dto["Chapters"] = chapters
 	} else if _, ok := dto["Chapters"]; !ok {
 		addChapters(dto, frontend.MediaInfo{Chapters: detail.Chapters})
@@ -144,5 +149,54 @@ func jellyfinInt(value any) (int, bool) {
 		return int(n), true
 	default:
 		return 0, false
+	}
+}
+
+// Roku 3.2.x snapshots item chapters before PlaybackInfo. An estimate cannot
+// discover chapter boundaries, so resolve only this explicitly requested item
+// using the broker's bounded detail flight.
+func (i *instance) probeRokuChapters(r *http.Request, viewer *frontend.Viewer, detail frontend.ItemDetail, key frontend.RatingKey, version string, dto map[string]any) {
+	sources, _ := dto["MediaSources"].([]any)
+	if len(sources) > 0 {
+		first, _ := sources[0].(map[string]any)
+		if _, known := first["Chapters"]; known {
+			return
+		}
+		if version == "" {
+			// Named sources retain their exact version on the detail request
+			// and on PlaybackInfo. Auto retains the canonical item ID.
+			if id, _ := first["Id"].(string); id != ids.RatingKeyGUID(key) {
+				version = id
+			}
+		}
+	}
+	planner, ok := i.host.Sessions.(frontend.DetailPlanner)
+	if !ok {
+		return
+	}
+	scope, err := i.versionScope(r, viewer)
+	if err != nil {
+		return
+	}
+	ctx := frontend.WithIndexerPurpose(i.identityContext(r), frontend.IndexerPurposeDetail)
+	plan, err := planner.DetailPlan(ctx, frontend.PlanRequest{
+		Viewer: viewer, Device: scope.Device, Protocol: scope.Protocol, Item: key, Caps: scope.Caps, Version: version,
+		Intent: frontend.PlayIntent{ExactVersion: version != "", ReadChapters: true, Options: frontend.DecideOptions{
+			DirectPlay: true, DirectStream: true, AudioStream: -1, SubtitleStream: -1,
+		}},
+	})
+	if err != nil || plan.Estimated || plan.Media.Estimated {
+		return
+	}
+	dto["Chapters"] = chapterDTOs(plan.Media.Chapters)
+	if len(sources) == 0 && version != "" {
+		// A ranked variant can be requested directly without a configured
+		// edition. Supply that item's probed source to the version picker.
+		source := i.mediaSourceDTO(version, plan.Media)
+		source["Name"] = dto["Name"]
+		i.jellyfinMediaSourceDTO(source, plan.Media, false)
+		sources = []any{source}
+		i.completeDetailSources(r, dto, detail, sources)
+		dto["MediaSources"] = sources
 	}
 }

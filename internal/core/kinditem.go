@@ -474,6 +474,8 @@ func (r KindExpandResponse) EffectiveCursor() string {
 // KindChangePage is one delta page returned by POST /ether/v1/kinds/{kind}/changes
 // during pull sync (spec §3.5).
 type KindChangePage struct {
+	// Checkpoint marks an upsert-only page whose next cursor can resume in a later sync.
+	Checkpoint bool       `json:"checkpoint,omitempty"`
 	Upserts    []KindItem `json:"upserts,omitempty"`
 	Deletes    []string   `json:"deletes,omitempty"` // externalIDs
 	NextCursor string     `json:"nextCursor,omitempty"`
@@ -903,11 +905,13 @@ func libraryKeySlug(s string) string {
 // PlayableSource is one candidate way to acquire bytes for a KindItem or one of
 // its parts (spec §4.1). Multiple sources are tried in order.
 type PlayableSource struct {
-	Path    string `json:"path,omitempty"`
-	ID      string `json:"id"`
-	Label   string `json:"label,omitempty"`
-	Pattern string `json:"pattern"` // "range" | "download" | "direct" | "container" | "release" | "file"
-	MIME    string `json:"mime"`
+	// Connections requests up to six parallel reads of a range source. Zero uses one.
+	Connections int    `json:"connections,omitempty"`
+	Path        string `json:"path,omitempty"`
+	ID          string `json:"id"`
+	Label       string `json:"label,omitempty"`
+	Pattern     string `json:"pattern"` // "range" | "download" | "direct" | "container" | "release" | "file"
+	MIME        string `json:"mime"`
 	// Tier optionally marks interchangeable sources of the same quality tier.
 	// Sources sharing a non-nil Tier may be reordered by Ether's source routing
 	// (owner preference, measured startup, and stall demotion) and may overtake

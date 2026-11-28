@@ -134,7 +134,7 @@ func TestBatchTitlesPreservesOrderFiltersPolicyAndSkipsEnrich(t *testing.T) {
 			}
 			return out, nil
 		},
-		Enrich: func(context.Context, *core.User, core.Device, *core.Title) (frontend.ItemDetail, error) {
+		Enrich: func(context.Context, *core.User, frontend.ItemRequest, *core.Title) (frontend.ItemDetail, error) {
 			enrichCalls++
 			return frontend.ItemDetail{}, nil
 		},

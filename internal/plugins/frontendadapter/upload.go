@@ -24,22 +24,15 @@ var (
 )
 
 type uploadManager interface {
-	BeginAdapterUpload(context.Context, string, string, string, int64) (*blobcache.Upload, error)
+	BeginAdapterUpload(context.Context, string, string, string, int64) (*blobcache.Upload, int64, error)
 }
 
-func (f *Frontend) readUpload(w http.ResponseWriter, r *http.Request, subpath string, limit int64) (*plugins.FrontendUpload, func(), error) {
-	if r.ContentLength > limit {
-		return nil, nil, &http.MaxBytesError{Limit: limit}
-	}
+func (f *Frontend) readUpload(w http.ResponseWriter, r *http.Request, subpath string) (*plugins.FrontendUpload, func(), error) {
 	manager, ok := f.mgr.(uploadManager)
 	if !ok {
 		return nil, nil, plugins.ErrUnavailable
 	}
-	size := r.ContentLength
-	if size <= 0 {
-		size = limit
-	}
-	stage, err := manager.BeginAdapterUpload(r.Context(), f.decl.PluginID, f.decl.Meta.Key, subpath, size)
+	stage, limit, err := manager.BeginAdapterUpload(r.Context(), f.decl.PluginID, f.decl.Meta.Key, subpath, r.ContentLength)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -74,11 +67,14 @@ func stagePart(ctx context.Context, stage *blobcache.Upload, body io.Reader, fie
 	if ct == "" {
 		ct = "application/octet-stream"
 	}
-	ref, size, err := stage.Stage(ctx, filename, ct, body)
+	ref, stat, err := stage.Stage(ctx, filename, ct, body)
 	if err != nil {
 		return nil, err
 	}
-	return &plugins.FrontendUploadBlob{Ref: ref.String(), Size: size, ContentType: ct, Field: field, Filename: filename}, nil
+	return &plugins.FrontendUploadBlob{
+		Ref: ref.String(), Size: stat.Size, ContentType: ct, Field: field, Filename: filename,
+		SHA256: stat.SHA256, SHA1: stat.SHA1, MD5: stat.MD5, CRC32: stat.CRC32,
+	}, nil
 }
 
 func splitUpload(ctx context.Context, body io.Reader, boundary string, stage *blobcache.Upload, upload *plugins.FrontendUpload) error {

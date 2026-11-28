@@ -58,7 +58,7 @@ func (a *App) buildPlayback(ctx context.Context, cfg config.Config) error {
 		Catalog:                a.catalog,
 		Cache:                  a.cache,
 		State:                  a.state,
-		ViewerAudioPreferences: a.viewerAudioPreferences,
+		ResolveViewerLanguages: a.withEffectiveLanguages,
 		SelectTitleProfile:     a.playbackProfile,
 		SelectProfile: func(caps core.ClientCaps, u *core.User, media string) core.QualityProfile {
 			return resolver.SelectProfileForMedia(a.cfg.Read().Quality, caps, u, media)

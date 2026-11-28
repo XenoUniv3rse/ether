@@ -162,6 +162,8 @@ type KindExpandResponse struct {
 
 // KindChangePage is one delta page for pull sync.
 type KindChangePage struct {
+	// Checkpoint marks an upsert-only page whose next cursor can resume in a later sync.
+	Checkpoint bool       `json:"checkpoint,omitempty"`
 	Upserts    []KindItem `json:"upserts,omitempty"`
 	Deletes    []string   `json:"deletes,omitempty"`
 	NextCursor string     `json:"nextCursor,omitempty"`
@@ -541,11 +543,13 @@ type KindMatchResponse struct {
 // carry {itemIndex}, {pageNumber}, {byteStart}, {byteEnd} and {byteRange}
 // placeholders that Ether substitutes.
 type PlayableSource struct {
-	Path    string `json:"path,omitempty"`
-	ID      string `json:"id"`
-	Label   string `json:"label,omitempty"`
-	Pattern string `json:"pattern"` // range|download|direct|container|release|file
-	MIME    string `json:"mime"`
+	// Connections requests up to six parallel reads of a range source. Zero uses one.
+	Connections int    `json:"connections,omitempty"`
+	Path        string `json:"path,omitempty"`
+	ID          string `json:"id"`
+	Label       string `json:"label,omitempty"`
+	Pattern     string `json:"pattern"` // range|download|direct|container|release|file
+	MIME        string `json:"mime"`
 	// Tier optionally marks interchangeable sources of the same quality tier.
 	// Sources sharing a non-nil Tier may be reordered by Ether's source routing
 	// (auto/usenet/debrid, measured startup, and stall demotion) and may
@@ -655,9 +659,17 @@ type KindResolveRequest struct {
 // optionally asks Ether to return an absolute URL using the client-visible
 // request origin or the adapter's first published address (#772).
 type StreamURLOptions struct {
-	PartIndex *int   `json:"partIndex,omitempty"`
-	Source    string `json:"source,omitempty"`
-	Absolute  bool   `json:"absolute,omitempty"`
+	Fallback  bool              `json:"fallback,omitempty"` // Try remaining sources when the named source cannot open.
+	PartIndex *int              `json:"partIndex,omitempty"`
+	Source    string            `json:"source,omitempty"`
+	Absolute  bool              `json:"absolute,omitempty"`
+	Wait      *StreamWaitPolicy `json:"wait,omitempty"`
+}
+
+// StreamWaitPolicy opts a download ticket into holding the media response
+// during preparation. MaxSeconds must be positive. Ether caps it at 1800.
+type StreamWaitPolicy struct {
+	MaxSeconds int `json:"maxSeconds"`
 }
 
 // KindResolveResponse is a resolver's ordered sources.
@@ -980,11 +992,17 @@ func (c *Context) StreamPartURL(itemRef string, partIndex int) (string, error) {
 // specific resolver PlayableSource.ID (#576, #661) and optionally resolved to
 // an absolute URL (#772).
 func (c *Context) StreamURLWithOptions(itemRef string, opts StreamURLOptions) (string, error) {
+	if opts.Wait != nil && opts.Wait.MaxSeconds <= 0 {
+		return "", fmt.Errorf("stream url: wait.maxSeconds must be a positive integer")
+	}
 	if c.Ether == nil {
 		return "", errors.New("stream url: no host service available")
 	}
 	if opts.PartIndex != nil && *opts.PartIndex < 0 {
 		return "", errors.New("stream url: partIndex must be non-negative")
+	}
+	if opts.Fallback && opts.Source == "" {
+		return "", fmt.Errorf("stream url: fallback requires a source")
 	}
 	if opts.Source != "" && strings.TrimSpace(opts.Source) == "" {
 		return "", errors.New("stream url: source must not be blank")
@@ -1005,6 +1023,9 @@ func (c *Context) StreamURLWithOptions(itemRef string, opts StreamURLOptions) (s
 	}
 	if opts.Absolute {
 		return "", errors.New("stream url: host does not support absolute stream URLs")
+	}
+	if opts.Wait != nil {
+		return "", errors.New("stream url: host does not support preparation waits")
 	}
 	if opts.PartIndex != nil {
 		if ph, ok := c.Ether.(PartStreamHost); ok {

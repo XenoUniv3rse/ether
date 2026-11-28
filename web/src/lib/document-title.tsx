@@ -121,12 +121,15 @@ function resolveBuiltinSubparts(
           viewing: () => t("Viewing"),
           delivery: () => t("Delivery"),
           experience: () => t("Experience"),
+          recommendations: () => t("Recommendations"),
         },
         "now",
       );
       return label ? [label] : [];
     }
     case "viewers": {
+      if (tab === "watchlists") return [t("Watchlists")];
+      if (tab === "security") return [t("Security")];
       if (!tab || !/^[1-9]\d*$/.test(tab)) return [];
       const parts: string[] = [];
       const subtab = resolveTab(section, {

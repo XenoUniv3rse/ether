@@ -317,6 +317,67 @@ func TestSetupStatusAndGating(t *testing.T) {
 	}
 }
 
+func TestFinishSetupWithDeferredSourcesAndIndexers(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		body           string
+		claimed, cache bool
+		want           int
+	}{
+		{"only indexers explicitly skipped", `{"skippedSteps":["indexers"]}`, true, true, http.StatusConflict},
+		{"only sources explicitly skipped", `{"skippedSteps":["sources"]}`, true, true, http.StatusConflict},
+		{"both explicitly skipped", `{"skippedSteps":["sources","indexers"]}`, true, true, http.StatusOK},
+		{"owner required", `{"skippedSteps":["sources","indexers"]}`, false, true, http.StatusConflict},
+		{"cache required", `{"skippedSteps":["sources","indexers"]}`, true, false, http.StatusConflict},
+		{"legacy force respects cache", `{"force":true}`, true, false, http.StatusConflict},
+		{"cannot skip owner", `{"skippedSteps":["plex"]}`, false, true, http.StatusBadRequest},
+		{"cannot skip cache", `{"skippedSteps":["cache"]}`, true, false, http.StatusBadRequest},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := newStore(t, func(c *config.Config) {
+				if tc.claimed {
+					c.Plex.Claimed = true
+					c.Plex.Token = ownerToken
+				}
+				c.Usenet.Providers = nil
+				c.Debrid.Providers = nil
+				c.Indexers = nil
+				if tc.cache {
+					c.Cache.Dir = t.TempDir()
+				} else {
+					c.Cache.Dir = ""
+				}
+			})
+			h := admin.NewHandler(admin.Deps{Config: store, IsOwnerToken: storedOwner(store)})
+			rec := serve(h, req(http.MethodPost, "/ether/api/setup/complete", tc.body))
+			if rec.Code != tc.want || store.Get().SetupComplete != (tc.want == http.StatusOK) {
+				t.Fatalf("finish = %d %s, complete %v", rec.Code, rec.Body.String(), store.Get().SetupComplete)
+			}
+		})
+	}
+}
+
+func TestFinishSetupWithoutAnIndexer(t *testing.T) {
+	store := newStore(t, func(c *config.Config) {
+		seededConfig(c)
+		c.Indexers = nil
+	})
+	h := admin.NewHandler(admin.Deps{Config: store, IsOwnerToken: storedOwner(store)})
+	for _, test := range []struct {
+		body string
+		want int
+	}{
+		{`{}`, http.StatusConflict},
+		{`{"skippedSteps":["sources"]}`, http.StatusConflict},
+		{`{"skippedSteps":["indexers"]}`, http.StatusOK},
+	} {
+		rec := serve(h, req(http.MethodPost, "/ether/api/setup/complete", test.body))
+		if rec.Code != test.want || store.Get().SetupComplete != (test.want == http.StatusOK) {
+			t.Fatalf("finish with %s returned %d %s", test.body, rec.Code, rec.Body)
+		}
+	}
+}
+
 func TestStremioAddonCountsAsSource(t *testing.T) {
 	store := newStore(t, func(c *config.Config) {
 		c.Plex.Token, c.Plex.Claimed = "owner-token", true

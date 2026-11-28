@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"github.com/braedonsaunders/ether/internal/frontend/kit/route"
 	"io"
 	"net/http"
 	"strconv"
@@ -23,7 +24,7 @@ type HandlerDeps struct {
 }
 
 func Handler(d HandlerDeps) http.Handler {
-	mux := http.NewServeMux()
+	mux := &route.Mux{}
 	run := func(w http.ResponseWriter, r *http.Request, op string) {
 		user, err := strconv.ParseInt(r.PathValue("user"), 10, 64)
 		if err != nil || user <= 0 || d.Viewer == nil || !d.Viewer(r.Context(), user) {

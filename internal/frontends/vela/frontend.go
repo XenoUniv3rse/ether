@@ -102,6 +102,12 @@ func (Frontend) Describe() frontend.Descriptor {
 					},
 				},
 				{
+					Key: "trailers",
+					Fields: []frontend.SettingsField{
+						{Key: "trailerPlayback", Kind: "string", Options: []string{trailerPlaybackServer, trailerPlaybackClient}},
+					},
+				},
+				{
 					Key: "liveTV",
 					Fields: []frontend.SettingsField{
 						{Key: "livePreview", Kind: "string", Options: []string{LivePreviewAuto, LivePreviewOnClick, LivePreviewOff}},
@@ -137,6 +143,18 @@ func livePreviewModeFromSettings(settings map[string]any) string {
 		return mode
 	}
 	return LivePreviewAuto
+}
+
+const (
+	trailerPlaybackServer = "server"
+	trailerPlaybackClient = "clientWhenPossible"
+)
+
+func trailerPlaybackMode(settings map[string]any) string {
+	if mode, ok := settings["trailerPlayback"].(string); ok && mode == trailerPlaybackClient {
+		return trailerPlaybackClient
+	}
+	return trailerPlaybackServer
 }
 
 // ValidateSettings keeps the owner setting additive without accepting arbitrary config.
@@ -179,6 +197,11 @@ func (f Frontend) ValidateSettings(s frontend.Settings) error {
 			}
 			if err := validateWordmarkInDB(f.DB, wm); err != nil {
 				return err
+			}
+		case "trailerPlayback":
+			mode, ok := value.(string)
+			if !ok || (mode != trailerPlaybackServer && mode != trailerPlaybackClient) {
+				return errors.New("invalid Vela setting")
 			}
 		case "livePreview":
 			mode, ok := value.(string)
@@ -252,6 +275,8 @@ type instance struct {
 	rowMu           sync.Mutex
 	rowMeta         map[string]frontend.RowView
 
+	preferenceWrites [64]sync.Mutex
+
 	eventsHeartbeat          time.Duration
 	eventsWriteTimeout       time.Duration
 	disconnectGrace          time.Duration
@@ -264,6 +289,7 @@ type instance struct {
 	ctx             context.Context
 	cancel          context.CancelFunc
 	mux             *http.ServeMux
+	registered      []frontend.Route
 	assets          string
 	mu              sync.Mutex
 	previewRates    map[int64]previewRate
@@ -589,12 +615,16 @@ func cacheDetail(w http.ResponseWriter, r *http.Request, out object, pending *fr
 }
 
 func cache(w http.ResponseWriter, r *http.Request, v any) {
+	cacheWithRevision(w, r, v, "")
+}
+
+func cacheWithRevision(w http.ResponseWriter, r *http.Request, v any, revision string) {
 	b, err := json.Marshal(v)
 	if err != nil {
 		fail(w, err, r)
 		return
 	}
-	tag := `"` + hash(string(b)+r.Header.Get("Authorization")+r.Header.Get("X-Vela-Device-Id")+r.URL.RequestURI()) + `"`
+	tag := `"` + hash(revision+string(b)+r.Header.Get("Authorization")+r.Header.Get("X-Vela-Device-Id")+r.URL.RequestURI()) + `"`
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "private, max-age=0, must-revalidate")
 	w.Header().Set("ETag", tag)
@@ -724,6 +754,11 @@ func (i *instance) serve(w http.ResponseWriter, r *http.Request) {
 		i.mux.ServeHTTP(w, r)
 		return
 	}
+	// Sign-out has no request payload or replay result that needs persistence.
+	if r.Pattern == "POST /vela/v0/auth/revoke" {
+		i.mux.ServeHTTP(w, r)
+		return
+	}
 	// A bounded read, followed by per-key serialization, makes refresh rotation
 	// and playback admission safe to retry. No worker or allocation exists at idle.
 	optionalMultiviewIdem := (r.Method == http.MethodPost && r.URL.Path == "/vela/v0/multiview") ||
@@ -789,9 +824,10 @@ func (i *instance) serve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	idemKey := *envelope.IdempotencyKey
-	public := strings.HasPrefix(r.URL.Path, "/vela/v0/auth/") && !strings.HasSuffix(r.URL.Path, "/approve") && !strings.HasSuffix(r.URL.Path, "/revoke") && r.URL.Path != "/vela/v0/auth/web-code" && r.URL.Path != "/vela/v0/auth/plex/profiles/challenge"
+	public := strings.HasPrefix(r.URL.Path, "/vela/v0/auth/") && !strings.HasSuffix(r.URL.Path, "/approve") && r.URL.Path != "/vela/v0/auth/web-code" && r.URL.Path != "/vela/v0/auth/plex/profiles/challenge"
 	public = public || r.URL.Path == "/vela/v0/negotiate"
 	scope := ""
+	var replayDevice device
 	if !public {
 		_, token, err := i.viewer(r)
 		if err == nil {
@@ -802,19 +838,18 @@ func (i *instance) serve(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	} else {
-		var d device
-		if len(envelope.Device) > 0 && json.Unmarshal(envelope.Device, &d) != nil {
+		if len(envelope.Device) > 0 && json.Unmarshal(envelope.Device, &replayDevice) != nil {
 			problem(w, 400, "request", "idempotency_key_required")
 			return
 		}
-		if d.ID == "" {
-			d = envelope.Client.Device
+		if replayDevice.ID == "" {
+			replayDevice = envelope.Client.Device
 		}
-		if d.ID == "" {
+		if replayDevice.ID == "" {
 			problem(w, 400, "request", "device_required")
 			return
 		}
-		scope = d.ID
+		scope = replayDevice.ID
 	}
 	key := hash(scope + "\x00" + r.Method + "\x00" + r.URL.Path + "\x00" + idemKey)
 	digest := hash(string(raw))
@@ -832,13 +867,7 @@ func (i *instance) serve(w http.ResponseWriter, r *http.Request) {
 		case <-i.ctx.Done():
 			return
 		}
-		for k, v := range old.header {
-			w.Header()[k] = v
-		}
-		w.WriteHeader(old.status)
-		if len(old.body) > 0 {
-			_, _ = w.Write(old.body)
-		}
+		i.writeMutationReplay(w, r, replayDevice, savedResponse{Status: old.status, Header: old.header, Body: old.body})
 		return
 	}
 	if len(i.replays) >= 10000 {
@@ -896,13 +925,7 @@ func (i *instance) serve(w http.ResponseWriter, r *http.Request) {
 	} else if conflict {
 		problem(out, 409, "conflict", "idempotency_conflict")
 	} else if persisted != nil {
-		for k, v := range persisted.Header {
-			out.Header()[k] = v
-		}
-		out.WriteHeader(persisted.Status)
-		if len(persisted.Body) > 0 {
-			_, _ = out.Write(persisted.Body)
-		}
+		i.writeMutationReplay(out, r, replayDevice, *persisted)
 	} else {
 		claimed = true
 		i.mux.ServeHTTP(out, r)
@@ -974,8 +997,14 @@ func body(r *http.Request, v any) error {
 	return json.Unmarshal(b, v)
 }
 
+func (i *instance) Routes() []frontend.Route {
+	return append([]frontend.Route(nil), i.registered...)
+}
+
 func (i *instance) route(method, path string, h http.HandlerFunc) {
-	i.mux.HandleFunc(method+" /vela/v0"+path, h)
+	pattern := "/vela/v0" + path
+	i.mux.HandleFunc(method+" "+pattern, h)
+	i.registered = append(i.registered, frontend.Route{Method: method, Pattern: pattern})
 }
 func (i *instance) routes() {
 	i.route("GET", "/appearance", i.appearance)
@@ -1001,7 +1030,8 @@ func (i *instance) routes() {
 	i.route("GET", "/collections/{id}", i.openCollectionCard)
 	i.route("GET", "/capabilities", func(w http.ResponseWriter, r *http.Request) { cache(w, r, i.requestCapabilities(r)) })
 	i.route("POST", "/negotiate", i.negotiate)
-	for _, p := range []string{"sign-in", "plex", "plex/profile", "plex/profiles/challenge", "refresh", "revoke", "web-code", "web-code/redeem", "device", "device/poll", "device/approve", "quick-connect", "quick-connect/poll", "quick-connect/approve"} {
+	i.route("POST", "/auth/revoke", i.revoke)
+	for _, p := range []string{"sign-in", "plex", "plex/profile", "plex/profiles/challenge", "refresh", "web-code", "web-code/redeem", "device", "device/poll", "device/approve", "quick-connect", "quick-connect/poll", "quick-connect/approve"} {
 		i.route("POST", "/auth/"+p, i.auth)
 	}
 	i.route("GET", "/bootstrap", i.bootstrap)
@@ -1062,6 +1092,8 @@ func (i *instance) routes() {
 	i.route("POST", "/titles/{id}/download", i.grantDownload)
 	i.route("GET", "/download/{ticket}", i.downloadFile)
 	i.route("HEAD", "/download/{ticket}", i.downloadFile)
+	i.route("GET", "/download/{ticket}/subtitles/{track}", i.downloadSubtitle)
+	i.route("HEAD", "/download/{ticket}/subtitles/{track}", i.downloadSubtitle)
 	i.route("POST", "/titles/{id}/read", i.read)
 	i.route("GET", "/read/{ticket}", i.readFile)
 	i.route("HEAD", "/read/{ticket}", i.readFile)
@@ -1094,6 +1126,11 @@ func (i *instance) velaSettings() (map[string]any, uint64) {
 func (i *instance) livePreviewMode() string {
 	settings, _ := i.velaSettings()
 	return livePreviewModeFromSettings(settings)
+}
+
+func (i *instance) trailerPlaybackMode() string {
+	settings, _ := i.velaSettings()
+	return trailerPlaybackMode(settings)
 }
 
 func (i *instance) signInMethods() SignInMethods {
@@ -1135,7 +1172,13 @@ func (i *instance) capabilities() object {
 	passwordAvail := auth.Password && methods.Password
 	plexAvail := auth.PlexAccountSignIn && methods.Plex
 	quickAvail := auth.QuickConnect && methods.QuickConnect
-	caps := object{"protocolVersion": 0, "revision": i.capabilitiesRevision(), "compatibleClientBuilds": object{"minInclusive": "0.1.0", "maxExclusive": "0.3.0"}, "server": object{"id": s.MachineID, "name": s.FriendlyName, "version": s.Version}, "features": object{"versions": f(i.versionsAvailable()), "passwordSignIn": f(passwordAvail), "deviceGrant": f(quickAvail && i.host.ViewerPortalURL != nil), "quickConnect": f(quickAvail), "descriptiveSearch": f(descriptive), "unifiedSearch": f(unified), "aiSearch": f(i.aiSearchAvailable()), "proactiveFallback": f(i.proactiveFallbackAvailable()), "liveTV": f(live), "liveEvents": f(i.liveEventsAvailable()), "multiview": object{"available": i.multiviewAvailable(), "maxTiles": frontend.MaxMultiviewTiles}, "livePreview": object{"available": true, "mode": i.livePreviewMode()}, "libraryLive": f(i.host.LibraryLive != nil && i.host.Sessions != nil), "extras": f(i.extrasAvailable()), "initialTrackSelection": f(true), "audioFallback": f(i.audioFallbackAvailable()), "sessionTrackChanges": f(trackChanges), "extraPlayback": f(i.extraPlaybackAvailable()), "trailerPreview": f(i.previewAvailable()), "themeMusic": f(i.themeAvailable()), "playlists": object{"available": i.playlistsAvailable(), "maxEntries": frontend.MaxPlaylistEntries}, "removeFromContinue": f(true), "favoritesList": f(i.favoritesListAvailable()), "lyrics": object{"available": i.lyricsAvailable(), "words": i.lyricsAvailable(), "romanization": i.lyricsAvailable(), "translation": false}, "playContexts": f(i.playContextsAvailable()), "queuedPlayback": object{"available": true, "handoverSeconds": int(frontend.QueuedHandover.Seconds())}, "continuation": f(i.continuationAvailable()), "libraryExperiences": object{"available": true, "experiences": frontend.LibraryExperiences}, "loudness": object{"available": i.host.Loudness != nil, "album": i.host.Loudness != nil, "fades": i.host.Loudness != nil}, "audioQuality": f(true), "historyRecap": object{"available": i.recapAvailable(), "periods": frontend.RecapPeriods}, "duplicates": f(i.duplicatesAvailable()), "playlistImport": i.playlistImportFeature(context.Background()), "mediaClasses": object{"available": true, "classes": []string{string(frontend.MediaClassVideo), string(frontend.MediaClassMusic), string(frontend.MediaClassAudiobook), string(frontend.MediaClassBook), string(frontend.MediaClassPodcast), string(frontend.MediaClassPhoto)}}, "audioPlayback": f(true), "reading": object{"available": i.readingAvailable(), "formats": readingFormats}, "pluginLevels": object{"available": true, "tabRows": true, "childRoles": true, "expandOnOpen": true}}, "searchSorts": []object{{"id": "relevance", "directions": []string{"asc"}}, {"id": "title", "directions": []string{"asc", "desc"}}, {"id": "released", "directions": []string{"asc", "desc"}}, {"id": "added", "directions": []string{"asc", "desc"}}, {"id": "rating", "directions": []string{"asc", "desc"}}, {"id": "popularity", "directions": []string{"asc", "desc"}}}, "searchKinds": []object{{"id": "movie", "label": "Movies"}, {"id": "show", "label": "Shows"}}, "searchLibraries": true, "skins": []object{{"id": "cinematic", "name": "Cinematic"}}, "defaultSkinId": i.appearanceDocument().skinID}
+	trailerMode := i.trailerPlaybackMode()
+	trailerEmbed := object{"available": trailerMode == trailerPlaybackClient, "mode": trailerMode}
+	caps := object{"protocolVersion": 0, "revision": i.capabilitiesRevision(), "compatibleClientBuilds": object{"minInclusive": "0.1.0", "maxExclusive": "0.3.0"}, "server": object{"id": s.MachineID, "name": s.FriendlyName, "version": s.Version}, "features": object{"versions": f(i.versionsAvailable()), "passwordSignIn": f(passwordAvail), "deviceGrant": f(quickAvail && i.host.ViewerPortalURL != nil), "quickConnect": f(quickAvail), "descriptiveSearch": f(descriptive), "unifiedSearch": f(unified), "aiSearch": f(i.aiSearchAvailable()), "proactiveFallback": f(i.proactiveFallbackAvailable()), "liveTV": f(live), "liveEvents": f(i.liveEventsAvailable()), "multiview": object{"available": i.multiviewAvailable(), "maxTiles": frontend.MaxMultiviewTiles}, "livePreview": object{"available": true, "mode": i.livePreviewMode()}, "libraryLive": f(i.host.LibraryLive != nil && i.host.Sessions != nil), "extras": f(i.extrasAvailable()), "initialTrackSelection": f(true), "audioFallback": f(i.audioFallbackAvailable()), "sessionTrackChanges": f(trackChanges), "extraPlayback": f(i.extraPlaybackAvailable()), "trailerPreview": f(i.previewAvailable()), "trailerEmbed": trailerEmbed, "themeMusic": f(i.themeAvailable()), "playlists": object{"available": i.playlistsAvailable(), "maxEntries": frontend.MaxPlaylistEntries}, "removeFromContinue": f(true), "favoritesList": f(i.favoritesListAvailable()), "lyrics": object{"available": i.lyricsAvailable(), "words": i.lyricsAvailable(), "romanization": i.lyricsAvailable(), "translation": false}, "playContexts": f(i.playContextsAvailable()), "queuedPlayback": object{"available": true, "handoverSeconds": int(frontend.QueuedHandover.Seconds())}, "continuation": f(i.continuationAvailable()), "libraryExperiences": object{"available": true, "experiences": frontend.LibraryExperiences}, "loudness": object{"available": i.host.Loudness != nil, "album": i.host.Loudness != nil, "fades": i.host.Loudness != nil}, "audioQuality": f(true), "historyRecap": object{"available": i.recapAvailable(), "periods": frontend.RecapPeriods}, "duplicates": f(i.duplicatesAvailable()), "playlistImport": i.playlistImportFeature(context.Background()), "mediaClasses": object{"available": true, "classes": []string{string(frontend.MediaClassVideo), string(frontend.MediaClassMusic), string(frontend.MediaClassAudiobook), string(frontend.MediaClassBook), string(frontend.MediaClassPodcast), string(frontend.MediaClassPhoto)}}, "audioPlayback": f(true), "reading": object{"available": i.readingAvailable(), "formats": readingFormats}, "pluginLevels": object{"available": true, "tabRows": true, "childRoles": true, "expandOnOpen": true}}, "searchSorts": []object{{"id": "relevance", "directions": []string{"asc"}}, {"id": "title", "directions": []string{"asc", "desc"}}, {"id": "released", "directions": []string{"asc", "desc"}}, {"id": "added", "directions": []string{"asc", "desc"}}, {"id": "rating", "directions": []string{"asc", "desc"}}, {"id": "popularity", "directions": []string{"asc", "desc"}}}, "searchKinds": []object{{"id": "movie", "label": "Movies"}, {"id": "show", "label": "Shows"}}, "searchLibraries": true, "skins": []object{{"id": "cinematic", "name": "Cinematic"}}, "defaultSkinId": i.appearanceDocument().skinID}
+	preferencesAvailable := i.host.Experience != nil
+	adaptive := i.proactiveFallbackAvailable()
+	caps["features"].(object)["adaptiveHLS"] = object{"available": adaptive, "serverHandoff": adaptive}
+	caps["features"].(object)["notInterested"] = object{"available": preferencesAvailable, "thumbsUp": preferencesAvailable}
 	if plexAvail {
 		caps["plexAccountSignIn"] = true
 	}
@@ -1220,7 +1263,9 @@ func (i *instance) requestCapabilitiesFor(r *http.Request, v *frontend.Viewer, p
 		c["searchKinds"], _ = i.searchKinds(r, v)
 		if features, ok := c["features"].(object); ok {
 			features["quickConnectApproval"] = object{"available": i.quickConnectApprovalAvailable(v)}
-			features["proactiveFallback"] = object{"available": i.proactiveFallbackAvailableFor(v)}
+			adaptive := i.proactiveFallbackAvailableFor(v)
+			features["proactiveFallback"] = object{"available": adaptive}
+			features["adaptiveHLS"] = object{"available": adaptive, "serverHandoff": adaptive}
 		}
 	}
 	if i.host.SecureOrigins != nil {

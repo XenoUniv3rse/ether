@@ -79,3 +79,14 @@ type DamagedSegmentSkipper interface {
 type PlaybackTimeline interface {
 	PlaybackProgress(userID int64, clientID string, key RatingKey, position time.Duration, state string)
 }
+
+// OutputBitrateReducer switches segmented output to an encode under a total
+// bitrate budget while retaining the current input and the delivered format.
+type OutputBitrateReducer interface {
+	ReduceOutputBitrate(ctx context.Context, input string, limitKbps int) (Decision, error)
+}
+
+// AdaptiveBitrateCapper caps the active master after a source down-failover.
+type AdaptiveBitrateCapper interface {
+	CapAdaptiveBitrate(input string, kbps int) (Decision, error)
+}

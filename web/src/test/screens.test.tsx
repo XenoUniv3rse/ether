@@ -89,7 +89,7 @@ describe("Overview", () => {
     expect(screen.getByRole("button", { name: /Server health/ })).toBeInTheDocument();
   });
 
-  it("guards Best rows engagement rates, resolves placeholder titles and renders Activity table with a sticky header", async () => {
+  it("shows ranked and low-sample Best rows and renders Activity table with a sticky header", async () => {
     renderApp("/", {}, (fake) => {
       const original = fake.fetch;
       fake.fetch = async (input, init) => {
@@ -98,25 +98,28 @@ describe("Overview", () => {
             JSON.stringify({
               rows: [
                 {
-                  hubId: "continue-watching",
-                  title: "Continue Watching",
-                  impressions7d: 8,
-                  plays7d: 12,
-                  playRate: 1.5,
+                  hubId: "top-10",
+                  title: "Top 10 for You",
+                  impressions7d: 80,
+                  plays7d: 22,
+                  playRate: 0.275,
+                  lowSample: false,
                 },
                 {
                   hubId: "genre-showcase",
-                  title: "Acclaimed <Genre>",
+                  title: "Acclaimed by Genre",
                   impressions7d: 5,
                   plays7d: 1,
                   playRate: 0.2,
+                  lowSample: true,
                 },
                 {
                   hubId: "popular-on-server",
                   title: "Popular on This Server",
-                  impressions7d: 0,
-                  plays7d: 1,
+                  impressions7d: 40,
+                  plays7d: 0,
                   playRate: 0,
+                  lowSample: false,
                 },
               ],
             }),
@@ -129,18 +132,14 @@ describe("Overview", () => {
     const bestRows = (await screen.findByRole("heading", { name: "Best rows" }, WAIT)).closest(
       "section",
     )!;
-    const cwItem = (await within(bestRows).findByText("Continue Watching", {}, WAIT)).closest(
-      "li",
-    )!;
-    expect(within(cwItem).getByText("100.0%")).toBeInTheDocument();
-    expect(within(bestRows).queryByText("150.0%")).toBeNull();
+    const cwItem = (await within(bestRows).findByText("Top 10 for You", {}, WAIT)).closest("li")!;
+    expect(within(cwItem).getByText("27.5%")).toBeInTheDocument();
 
     expect(within(bestRows).getByText("Acclaimed by Genre")).toBeInTheDocument();
-    expect(within(bestRows).queryByText(/Acclaimed <Genre>/)).toBeNull();
+    expect(within(bestRows).getByText("Not enough data yet")).toBeInTheDocument();
 
     const popItem = within(bestRows).getByText("Popular on This Server").closest("li")!;
-    expect(within(popItem).getByText("—")).toBeInTheDocument();
-    expect(within(popItem).queryByText("0.0%")).toBeNull();
+    expect(within(popItem).getByText("0.0%")).toBeInTheDocument();
 
     const activitySection = screen
       .getByRole("heading", { name: "Activity · last 30 days" })

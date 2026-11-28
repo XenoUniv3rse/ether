@@ -79,6 +79,9 @@ const (
 	// CapScreens lets a plugin contribute screens and surfaces that Vela
 	// draws from documents in the package (docs/plugin-screens.md).
 	CapScreens Capability = "screens"
+	// CapDebridCacheHints lets a plugin say which torrents a debrid service
+	// already holds before a Play spends an add (docs/plugin-debrid.md).
+	CapDebridCacheHints Capability = "debrid_cache_hints"
 )
 
 // Reserved capabilities are known names a manifest may not claim in v1.
@@ -636,8 +639,8 @@ const MaxKindLibraryTabs = 50
 
 // KindLibraryDecl is the optional library created for a kind on install.
 type KindLibraryDecl struct {
-	Name        string             `json:"name"` // default name; the owner may rename it after
-	Icon        string             `json:"icon,omitempty"`
+	Name        string             `json:"name"`                  // default name; the owner may rename it after
+	Icon        string             `json:"icon,omitempty"`        // package-relative SVG or PNG shown in Integrations and Libraries
 	Card        string             `json:"card,omitempty"`        // poster (default)|landscape|square
 	DateDisplay string             `json:"dateDisplay,omitempty"` // year (default)|date
 	Experience  string             `json:"experience,omitempty"`  // watch|listen|read|gallery|live or another id; defaults by media class
@@ -1201,24 +1204,8 @@ type KindSyncDecl struct {
 
 // KindCacheDecl is the per-library blob cache budget (§5.4).
 type KindCacheDecl struct {
-	MaxBytes int64  `json:"maxBytes,omitempty"` // 0 = server default
+	MaxBytes int64  `json:"maxBytes,omitempty"` // 0 inherits the media pool budget.
 	TTL      string `json:"ttl,omitempty"`
-}
-
-// Blob cache budget defaults (§15.5): the per-library default quota and
-// the shared absolute cap. The shared cap is also bounded by 5% of the
-// cache disk at runtime, which only the cache owner can measure.
-const (
-	DefaultKindCacheMaxBytes int64 = 2 << 30
-	SharedKindCacheCapBytes  int64 = 10 << 30
-)
-
-// EffectiveMaxBytes resolves the declared cache cap against the default.
-func (c KindCacheDecl) EffectiveMaxBytes() int64 {
-	if c.MaxBytes <= 0 {
-		return DefaultKindCacheMaxBytes
-	}
-	return c.MaxBytes
 }
 
 // KindMatchDecl holds matcher defaults for a kind (spec §7).
@@ -1321,13 +1308,16 @@ type Request struct {
 	// "complete+search" so hosted runtimes allow Deadline up to the AI search
 	// route bound. Host-side only.
 	AISearch bool `json:"-"`
+	// CheckResponse validates a successful body before recording the call. Host-side only.
+	CheckResponse func(json.RawMessage) error `json:"-"`
 }
 
-// FrontendBlob asks the host to serve cached bytes without passing them through
-// guest memory. LibraryKey scopes Ref to an owned, viewer-visible kind library.
-// MemberIndex selects an archive member; nil serves the entire blob.
+// FrontendBlob asks the host to serve bytes directly. A blob:<sha256> ref
+// requires LibraryKey for an owned, viewer-visible kind library and can select
+// an archive member. A durable:<sha256> ref serves the plugin's entire saved
+// blob with durable storage permission.
 type FrontendBlob struct {
-	LibraryKey  string `json:"libraryKey"`
+	LibraryKey  string `json:"libraryKey,omitempty"`
 	Ref         string `json:"ref"`
 	MemberIndex *int   `json:"memberIndex,omitempty"`
 }
@@ -1361,6 +1351,9 @@ type Response struct {
 	Status  int               `json:"status"`
 	Headers map[string]string `json:"headers,omitempty"`
 	Body    json.RawMessage   `json:"body,omitempty"`
+
+	// Failure holds an owner-facing diagnostic and is never sent to the plugin.
+	Failure *RouteFailure `json:"-"`
 
 	pendingFallback func() error
 }
@@ -1518,12 +1511,16 @@ type Host interface {
 	StreamPartURL(ctx context.Context, itemRef string, partIndex *int) (string, error)
 	StreamURLWithOptions(ctx context.Context, itemRef string, opts StreamURLOptions) (string, error)
 
+	// FoldersRoots lists the live owner-picked absolute paths on non-client routes.
+	FoldersRoots(ctx context.Context) ([]string, error)
+
 	// FoldersList and FoldersStat need folders: read and an owner-picked
 	// root. They never return file contents.
-	FoldersList(ctx context.Context, root, path string) ([]FolderEntry, error)
+	FoldersList(ctx context.Context, root, path string, options ...FolderListOptions) (FolderPage, error)
 	FoldersStat(ctx context.Context, root, path string) (FolderEntry, error)
-	FoldersHash(ctx context.Context, root, path string) (FolderHash, error)
-	FoldersHashStart(ctx context.Context, root, path string) (FolderHashJob, error)
+	FoldersHash(ctx context.Context, root, path string, options ...FolderHashOptions) (FolderHash, error)
+	FoldersHashStart(ctx context.Context, root, path string, options ...FolderHashOptions) (FolderHashJob, error)
+	FoldersFrame(ctx context.Context, root, path string, options FolderFrameOptions) (FolderFrame, error)
 	FoldersHashPoll(ctx context.Context, id string) (FolderHashJob, error)
 	FoldersHashCancel(ctx context.Context, id string) (FolderHashJob, error)
 
@@ -1626,9 +1623,17 @@ type AICompleteBackendRequest struct {
 // optionally asks Ether to return an absolute URL using the client-visible
 // request origin or the adapter's first published address (#772).
 type StreamURLOptions struct {
-	PartIndex *int   `json:"partIndex,omitempty"`
-	Source    string `json:"source,omitempty"`
-	Absolute  bool   `json:"absolute,omitempty"`
+	Fallback  bool              `json:"fallback,omitempty"` // Try remaining sources when the named source cannot open.
+	PartIndex *int              `json:"partIndex,omitempty"`
+	Source    string            `json:"source,omitempty"`
+	Absolute  bool              `json:"absolute,omitempty"`
+	Wait      *StreamWaitPolicy `json:"wait,omitempty"`
+}
+
+// StreamWaitPolicy opts a download ticket into holding the media response
+// during preparation. MaxSeconds must be positive. Ether caps it at 1800.
+type StreamWaitPolicy struct {
+	MaxSeconds int `json:"maxSeconds"`
 }
 
 // FetchRequest is one plugin outbound HTTP call.
@@ -1690,9 +1695,42 @@ type FolderHashJob struct {
 type FolderHash struct {
 	Size    int64  `json:"size"`
 	ModTime int64  `json:"modTime"`
-	CRC32   string `json:"crc32"`
-	MD5     string `json:"md5"`
-	SHA1    string `json:"sha1"`
+	CRC32   string `json:"crc32,omitempty"`
+	MD5     string `json:"md5,omitempty"`
+	SHA1    string `json:"sha1,omitempty"`
+	OSHash  string `json:"oshash,omitempty"`
+	PHash   string `json:"phash,omitempty"`
+}
+
+// FolderHashOptions limits which digests are computed. Phash requires a background hash job.
+type FolderHashOptions struct {
+	Algorithms []string `json:"algorithms,omitempty"`
+}
+
+// FolderFrameOptions selects a timestamp, image width and optional owned cache library.
+type FolderFrameOptions struct {
+	AtSec      float64 `json:"atSec"`
+	Width      int     `json:"width"`
+	LibraryKey string  `json:"libraryKey,omitempty"`
+}
+
+// FolderFrame identifies a cached PNG image.
+type FolderFrame struct {
+	Ref        string `json:"ref"`
+	LibraryKey string `json:"libraryKey"`
+}
+
+// FolderListOptions selects names strictly after Cursor in ascending name order.
+type FolderListOptions struct {
+	Cursor string `json:"cursor,omitempty"`
+	Limit  int    `json:"limit,omitempty"`
+}
+
+// FolderPage is a name-sorted page. NextCursor is empty at the end.
+type FolderPage struct {
+	Entries    []FolderEntry `json:"entries"`
+	NextCursor string        `json:"nextCursor"`
+	Truncated  bool          `json:"truncated"`
 }
 
 // FolderEntry is one entry from FoldersList or FoldersStat.
@@ -1713,6 +1751,13 @@ type Event struct {
 	At       time.Time       `json:"at"`
 	ViewerID int64           `json:"viewerId,omitempty"`
 	Payload  json.RawMessage `json:"payload,omitempty"`
+}
+
+// EventPluginFoldersChanged is private to the hosted plugin whose folder grant changed.
+const EventPluginFoldersChanged = "plugin.folders.changed"
+
+type FolderRootsChangedPayload struct {
+	Roots []string `json:"roots"`
 }
 
 // Normalized event names (SPEC §5.7).

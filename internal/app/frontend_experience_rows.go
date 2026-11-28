@@ -10,6 +10,7 @@ import (
 	"github.com/braedonsaunders/ether/internal/core"
 	"github.com/braedonsaunders/ether/internal/experience"
 	"github.com/braedonsaunders/ether/internal/frontend"
+	"github.com/braedonsaunders/ether/internal/personalize"
 	"github.com/braedonsaunders/ether/internal/reqmemo"
 )
 
@@ -70,6 +71,12 @@ func (r appResumeCandidates) Continue(ctx context.Context, viewer *core.User, li
 func (a *App) productionExperienceRows(ctx context.Context, req frontend.RowRequest, libraries []experience.Library, visibility experience.Visibility, stepAside *experience.StepAside) ([]experience.RankedCandidate, error) {
 	if req.Viewer == nil || a.personalize == nil {
 		return nil, core.ErrNotFound
+	}
+	// AdditionalRows supplies Ether's watchlist. The ranker can also
+	// contribute the linked Trakt watchlist.
+	if req.Placement == frontend.PlacementHome && req.Purpose == frontend.RowWatchlist &&
+		(a.trakt == nil || !a.trakt.Connected(ctx, req.Viewer.ID)) {
+		return nil, nil
 	}
 	// Next Up is viewer history even when a taste model is ready. Building
 	// discovery candidates here visits dozens of unrelated catalogue windows.
@@ -230,7 +237,7 @@ func (a *App) experienceContinueKind(ctx context.Context, viewer *core.User, lib
 	c := experience.Continue{State: a.state, Now: time.Now, FavoriteShows: a.favoriteShows, GetTitles: getTitles, PrefetchTitles: prefetch, Grandchildren: grandchildren, NextEpisode: a.catalog.NextStoredEpisode, NextEpisodes: func(ctx context.Context, keys []core.RatingKey) (map[core.RatingKey]*core.Title, error) {
 		// Pending SQLite edits overlay persisted flags. Retain the state-aware
 		// walk until those bounded edits have drained, without flushing here.
-		if a.state.HasPendingWatch(viewer.ID) {
+		if a.state.HasPendingEpisodeWatch(viewer.ID) {
 			return a.catalog.NextStoredEpisodes(ctx, keys)
 		}
 		return a.catalog.NextUnwatchedStoredEpisodes(ctx, viewer.ID, keys)
@@ -282,7 +289,14 @@ func (a *App) experienceAdditionalRows(ctx context.Context, req frontend.RowRequ
 		}}
 	}
 	if a.discoveryPersonal != nil {
-		composer.Personal = hubDiscoverySource{a.discoveryPersonal.Hubs}
+		composer.Personal = hubDiscoverySource{func(ctx context.Context, viewer *core.User, limit int) ([]core.Hub, error) {
+			if core.LiveApp(ctx) == "stremio" {
+				if detail, ok := visibility.FactJudge(ctx); ok {
+					ctx = personalize.WithReviewProjection(ctx, core.ListRows{Facts: core.FactHomeRelease | visibility.TitleFacts(viewer), Detail: detail, OmitCredits: true, OmitAddedTime: true})
+				}
+			}
+			return a.discoveryPersonal.Hubs(ctx, viewer, limit)
+		}}
 	}
 	if a.livetv != nil {
 		composer.Live = a.livetv
@@ -292,7 +306,7 @@ func (a *App) experienceAdditionalRows(ctx context.Context, req frontend.RowRequ
 
 // experienceHomeFallback loads the viewer's exclusions and asks Experience for
 // the cold Home shelves. Plex does not use this path.
-func (a *App) experienceHomeFallback(ctx context.Context, req frontend.RowRequest, libraries []experience.Library, visibility experience.Visibility) ([]frontend.Row, error) {
+func (a *App) experienceHomeFallback(ctx context.Context, req frontend.RowRequest, libraries []experience.Library, visibility experience.Visibility, listDisplay bool) ([]frontend.Row, error) {
 	if req.Viewer == nil || a.catalog == nil || a.notInterested == nil {
 		return nil, core.ErrNotAvailable
 	}
@@ -307,7 +321,25 @@ func (a *App) experienceHomeFallback(ctx context.Context, req frontend.RowReques
 	if req.HomeFallbackOnly {
 		return a.experienceHeroFallback(ctx, req, libraries, keys)
 	}
-	return experience.ColdHomeRows(ctx, req.Viewer, libraries, visibility, req.Limit, keys, a.catalog.Browse)
+	browse := func(ctx context.Context, q core.BrowseQuery) (core.Page, error) {
+		if a.availability != nil {
+			filter, err := a.availability.PagingFilter(ctx, q.Filter)
+			if err != nil {
+				return core.Page{}, err
+			}
+			if visibility.Sessions != nil {
+				for _, session := range visibility.Sessions() {
+					if session != nil && session.UserID == req.Viewer.ID {
+						filter.AvailabilityKeepKeys = append(filter.AvailabilityKeepKeys, session.Key)
+					}
+				}
+			}
+			q.Filter = filter
+			q.ListDisplayFacts = listDisplay
+		}
+		return a.catalog.Browse(ctx, q)
+	}
+	return experience.ColdHomeRows(ctx, req.Viewer, libraries, visibility, req.Limit, keys, browse)
 }
 
 // experienceHeroFallback reads only the remaining slots, with art and policy

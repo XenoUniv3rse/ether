@@ -154,7 +154,7 @@ func (a *App) buildPersonalization(ctx context.Context, cfg config.Config) error
 		return out
 	}
 	a.built = make(chan struct{})
-	if a.personalize, err = personalize.New(personalize.Options{
+	personalizeOptions := personalize.Options{
 		Ready: a.built,
 		PersonalWatchlist: func(ctx context.Context, u *core.User) ([]core.Title, error) {
 			if a.watchlist == nil {
@@ -243,7 +243,11 @@ func (a *App) buildPersonalization(ctx context.Context, cfg config.Config) error
 			}
 			return c.Catalog.Language
 		},
-	}); err != nil {
+	}
+	if err := personalizeOptions.UpgradeRecommendationHistory(ctx); err != nil {
+		return fmt.Errorf("personalization history: %w", err)
+	}
+	if a.personalize, err = personalize.New(personalizeOptions); err != nil {
 		return fmt.Errorf("personalization: %w", err)
 	}
 	// One-time: the Home layout and collection rows become Recommendations
@@ -264,6 +268,8 @@ func (a *App) buildPersonalization(ctx context.Context, cfg config.Config) error
 		CacheDir:  filepath.Join(dataDir, "subtitles"),
 		Logger:    log.With("component", "subtitles"),
 		UserAgent: "Ether v" + a.opts.Version,
+
+		AddonSubtitleSealer: a.cfg,
 	})
 
 	return nil

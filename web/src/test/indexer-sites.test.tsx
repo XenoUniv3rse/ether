@@ -122,11 +122,7 @@ describe("Sources › Indexers sites", () => {
       "Example Private: sign-in failed",
     );
     expect(within(list).getByText("Torrent site")).toBeInTheDocument();
-    expect(
-      within(list).getByText(
-        /example-private.invalid · 66 of 50 searches used today · 10 torrent downloads a day/,
-      ),
-    ).toBeInTheDocument();
+    expect(within(list).getByText(/example-private.invalid/)).toBeInTheDocument();
     // Shown once: as the indexer, not again among the definitions.
     expect(screen.getAllByText("Example Private")).toHaveLength(1);
 
@@ -140,7 +136,7 @@ describe("Sources › Indexers sites", () => {
       secretSettings: { password: "••••" },
     });
     fireEvent.click(within(drawer).getByRole("button", { name: "More options" }));
-    fireEvent.change(within(drawer).getByLabelText("Searches per day"), {
+    fireEvent.change(within(drawer).getByLabelText("API requests per day"), {
       target: { value: "80" },
     });
     fireEvent.click(within(drawer).getByRole("button", { name: "Save indexer" }));

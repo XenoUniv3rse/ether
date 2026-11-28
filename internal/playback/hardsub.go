@@ -124,7 +124,7 @@ func (m *Manager) titleReleaseRejected(ctx context.Context, key core.RatingKey, 
 	m.mu.Lock()
 	failed := m.openFailures[key][r.ID]
 	m.mu.Unlock()
-	if failed {
+	if failed || m.releaseBlockedLocally(r.ID) {
 		return true
 	}
 	checker, ok := m.deps.Resolver.(interface {

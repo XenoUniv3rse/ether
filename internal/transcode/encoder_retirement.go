@@ -331,7 +331,11 @@ func (l *encoderLifetime) runWork(encoding bool) ([]*encoderWork, error) {
 		for _, w := range work {
 			w.after = func() {
 				if remaining.Add(-1) == 0 {
-					l.runs.Add(-1)
+					if l.runs.Add(-1) == 0 && !l.encoding.Load() {
+						l.m.mu.Lock()
+						l.m.notifySlotsLocked()
+						l.m.mu.Unlock()
+					}
 				}
 			}
 		}

@@ -51,10 +51,13 @@ type detailVariantCacheKey struct {
 	Exclude        []string
 	Limit          int
 	Slots          bool
+
+	ClientDeliveryBudgetKbps int
 }
 
 func (s *Service) detailVariantKey(req core.ResolveRequest, limit int, slots bool) ([32]byte, error) {
 	ck := detailVariantCacheKey{
+		ClientDeliveryBudgetKbps: req.ClientDeliveryBudgetKbps,
 		Title: detailVariantTitleKey{
 			Key:       req.Title.Key,
 			ShowKey:   req.Title.ShowKey,

@@ -31,7 +31,13 @@ func TestScopedSubtitleExtractionAndSidecars(t *testing.T) {
 			}
 			return io.NopCloser(strings.NewReader("sidecar")), format, nil
 		},
-		ExtractSubtitle: func(_ context.Context, input string, index int, codec string, w io.Writer) error {
+		ExtractSubtitle: func(ctx context.Context, input string, index int, codec string, w io.Writer) error {
+			if index == 7 {
+				if _, ok := ctx.Deadline(); !ok {
+					t.Fatal("player-blocking subtitle extraction has no deadline")
+				}
+				return context.DeadlineExceeded
+			}
 			if !strings.HasPrefix(input, "http://loopback/") || index != 3 || codec != "srt" {
 				t.Fatal("wrong extraction input")
 			}
@@ -54,7 +60,7 @@ func TestScopedSubtitleExtractionAndSidecars(t *testing.T) {
 	}
 	p.mu.Lock()
 	for _, ps := range p.sessions {
-		ps.Info.Streams = []core.StreamInfo{{Index: 3, Type: "subtitle", Codec: "srt"}, {Index: 4, Type: "subtitle", Codec: "srt", External: true, ExternalURL: "ether-subtitle:cached"}, {Index: 5, Type: "subtitle", Codec: "pgs"}, {Index: 6, Type: "subtitle", Codec: "srt", External: true, ExternalURL: "https://secret.invalid/?token=credential"}}
+		ps.Info.Streams = []core.StreamInfo{{Index: 3, Type: "subtitle", Codec: "srt"}, {Index: 4, Type: "subtitle", Codec: "srt", External: true, ExternalURL: "ether-subtitle:cached"}, {Index: 5, Type: "subtitle", Codec: "pgs"}, {Index: 6, Type: "subtitle", Codec: "srt", External: true, ExternalURL: "https://secret.invalid/?token=credential"}, {Index: 7, Type: "subtitle", Codec: "srt"}}
 	}
 	p.mu.Unlock()
 	access := frontend.SessionAccess{Viewer: viewer, Device: device, Protocol: "jellyfin"}
@@ -83,6 +89,13 @@ func TestScopedSubtitleExtractionAndSidecars(t *testing.T) {
 	}
 	if got := get(sidecar); got.Code != 200 || got.Body.String() != "sidecar" {
 		t.Fatalf("sidecar %d %q", got.Code, got.Body.String())
+	}
+	unavailable, err := b.SubtitleURL(ctx, access, session.ID, 7, "vtt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := get(unavailable); got.Code != http.StatusNotFound || got.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("unavailable subtitle = %d %q", got.Code, got.Header().Get("Cache-Control"))
 	}
 	for _, index := range []int{5, 6, 99} {
 		if _, err := b.SubtitleURL(ctx, access, session.ID, index, "vtt"); !errors.Is(err, core.ErrNotAvailable) {

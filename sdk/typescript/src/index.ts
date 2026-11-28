@@ -7,7 +7,7 @@ export type {
   ScreenSourceAnswer,
   ScreenSourceRequest,
 } from "./kinds.ts";
-export { PluginHttpError } from "./types.ts";
+export { eventPluginFoldersChanged, PluginHttpError } from "./types.ts";
 export {
   plugin,
   PluginRouteError,
@@ -67,6 +67,11 @@ export {
   type CatalogTitleSummary,
   type EtherHost,
   type FolderEntry,
+  type FolderListOptions,
+  type FolderPage,
+  type FolderHashOptions,
+  type FolderFrameOptions,
+  type FolderFrame,
   type FolderHash,
   type FolderHashJob,
   type DataRange,

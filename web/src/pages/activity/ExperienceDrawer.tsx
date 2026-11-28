@@ -1,3 +1,4 @@
+import { sparklineSegments } from "../../components/charts";
 import { Badge, cn, useElementSize } from "@braedonsaunders/appkit-ui";
 import { AlertTriangle, ArrowUpRight, Lightbulb, MapPin } from "lucide-react";
 import { useState } from "react";
@@ -82,17 +83,11 @@ function Sparkline({
   const x = (i: number) =>
     points.length > 1 ? pad + (i / (points.length - 1)) * (width - pad * 2) : width / 2;
   const y = (v: number) => height - pad - (v / max) * (height - pad * 2);
-  const segments: string[] = [];
-  let run = "";
-  points.forEach((p, i) => {
-    if (p.value == null) {
-      if (run) segments.push(run);
-      run = "";
-      return;
-    }
-    run += `${run ? "L" : "M"}${x(i).toFixed(1)},${y(p.value).toFixed(1)}`;
-  });
-  if (run) segments.push(run);
+  const segments = sparklineSegments(
+    points.map((point) => point.value),
+    x,
+    y,
+  );
   const last = [...points].reverse().find((p) => p.value != null);
   const shown = hover != null ? points[hover] : last;
   const dayLabel = (day: string) =>

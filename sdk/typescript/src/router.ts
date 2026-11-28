@@ -7,6 +7,8 @@ import type {
   ChannelsResponse,
   CondMatchFn,
   ConfigureResponse,
+  DebridCacheHintsRequest,
+  DebridCacheHintsResponse,
   EtherEvent,
   EventResponse,
   FieldOption,
@@ -108,6 +110,7 @@ export interface PluginRoutes<S = Record<string, unknown>> {
   subtitles?: (req: SubtitlesRequest, ctx: PluginContext<S>) => MaybePromise<SubtitlesResponse>;
   subtitlesDownload?: (req: { id: string; lang: string; format: string }, ctx: PluginContext<S>) => MaybePromise<{ format: string; encoding: "utf8" | "base64"; data: string }>;
   markers?: (req: MarkersRequest, ctx: PluginContext<S>) => MaybePromise<MarkersResponse>;
+  debridCacheHints?: (req: DebridCacheHintsRequest, ctx: PluginContext<S>) => MaybePromise<DebridCacheHintsResponse>;
   channels?: (ctx: PluginContext<S>) => MaybePromise<ChannelsResponse>;
   guide?: (req: GuideRequest, ctx: PluginContext<S>) => MaybePromise<GuideResponse>;
   configure?: (settings: S, ctx: PluginContext<S>) => MaybePromise<ConfigureResponse | void>;
@@ -237,11 +240,16 @@ function okResponse(body: unknown, headers?: Record<string, string>, status = 20
   };
 }
 
-function errorResponse(status: number, code: string, message: string): RawResponse {
+function errorResponse(
+  status: number,
+  code: string,
+  message: string,
+  retryAfterSeconds?: number,
+): RawResponse {
   return {
     status,
     headers: { "Content-Type": "application/json" },
-    body: { error: { code, message } },
+    body: { error: { code, message, ...(retryAfterSeconds === undefined ? {} : { retryAfterSeconds }) } },
   };
 }
 
@@ -575,6 +583,15 @@ export function plugin<S = Record<string, unknown>>(
       );
     }
 
+    if (method === "POST" && path === "/ether/debrid/hints") {
+      if (!routes.debridCacheHints) {
+        return errorResponse(404, "not_found", "Debrid cache hints handler is not registered.");
+      }
+      const bodyObj = parseJsonBody(req.body);
+      const candidates = Array.isArray(bodyObj.candidates) ? (bodyObj.candidates as DebridCacheHintsRequest["candidates"]) : [];
+      return mapResult(routes.debridCacheHints({ candidates }, ctx));
+    }
+
     if (method === "GET" && path === "/ether/channels.json") {
       if (!routes.channels) {
         return errorResponse(404, "not_found", "Channels handler is not registered.");
@@ -826,7 +843,7 @@ export function plugin<S = Record<string, unknown>>(
       throw err;
     }
     if (err instanceof PluginHttpError) {
-      return errorResponse(err.status, err.code, err.message);
+      return errorResponse(err.status, err.code, err.message, err.retryAfterSeconds);
     }
     if (
       err &&

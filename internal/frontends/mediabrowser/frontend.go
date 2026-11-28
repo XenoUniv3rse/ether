@@ -223,6 +223,7 @@ type instance struct {
 	router      *route.Router
 	pages       *browseCache
 	itemJSON    itemJSONCache
+	bookFiles   bookFileCache
 	credits     playCredits
 	personal    personalIdentityCache
 	views       viewFactCache

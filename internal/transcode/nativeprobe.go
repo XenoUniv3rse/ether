@@ -122,6 +122,9 @@ type nativeSource struct {
 }
 
 func (s *nativeSource) read(off int64, n int) ([]byte, error) {
+	if err := s.ctx.Err(); err != nil {
+		return nil, err
+	}
 	if off < 0 || n < 0 || off > s.size || int64(n) > s.size-off {
 		return nil, incomplete("read outside file")
 	}
@@ -137,6 +140,8 @@ func (s *nativeSource) read(off int64, n int) ([]byte, error) {
 	var err error
 	if mr, ok := s.src.(metadataReader); ok {
 		got, err = mr.ReadMetadataAtContext(s.ctx, b, off)
+	} else if reader, ok := s.src.(core.ContextReaderAt); ok {
+		got, err = reader.ReadAtContext(s.ctx, b, off)
 	} else {
 		got, err = s.src.ReadAt(b, off)
 	}
@@ -529,6 +534,8 @@ func (s *nativeSource) matroska() (*core.MediaInfo, error) {
 		}
 	}
 	m.Chapters = mkvChaptersOf(chapters, m.Duration)
+	_, indexedChapters := targets[mkvChapters]
+	m.ChaptersProbed = chapters != nil || !indexedChapters
 	return m, nil
 }
 
@@ -567,9 +574,14 @@ func ProbeTrailer(ctx context.Context, src io.ReaderAt, size int64, m *core.Medi
 	}
 	targets := map[uint64]int64{}
 	var tracks []byte
+	reachedCluster := false
 	for off, n := segStart, 0; off < segEnd && n < 64; n++ {
 		id, start, stop, err := s.header(off, segEnd)
-		if err != nil || id == mkvCluster || stop <= off {
+		if err != nil || stop <= off {
+			break
+		}
+		if id == mkvCluster {
+			reachedCluster = true
 			break
 		}
 		if id == mkvSeekHead || id == mkvTracks {
@@ -604,11 +616,14 @@ func ProbeTrailer(ctx context.Context, src io.ReaderAt, size int64, m *core.Medi
 		}
 		return b
 	}
-	if len(m.Chapters) == 0 {
-		if cs := mkvChaptersOf(element(mkvChapters), m.Duration); len(cs) > 0 {
-			m.Chapters = cs
-			changed = true
+	if !m.ChaptersProbed {
+		if payload := element(mkvChapters); payload != nil {
+			m.Chapters = mkvChaptersOf(payload, m.Duration)
+			m.ChaptersProbed = true
+		} else if _, indexed := targets[mkvChapters]; reachedCluster && !indexed {
+			m.ChaptersProbed = true
 		}
+		changed = m.ChaptersProbed
 	}
 	if tracks == nil {
 		return changed
@@ -1370,7 +1385,7 @@ func videoConfig(si *core.StreamInfo, codec string, p []byte, transfer int, dovi
 			return incomplete("h264 profile %d", p[1])
 		}
 		si.Profile, si.Level = name, int(p[3])
-		si.CodecString = fmt.Sprintf("avc1.%02x%02x%02x", p[1], p[2], p[3])
+		si.CodecString = probedAVCCodec(p)
 		sps := avcConfigSPS(p)
 		if sps == nil {
 			return incomplete("no h264 SPS")

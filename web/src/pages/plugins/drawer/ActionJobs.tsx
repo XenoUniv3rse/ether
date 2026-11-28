@@ -1,3 +1,8 @@
+import {
+  PluginFailureDetails,
+  pluginFailureSentence,
+  type PluginFailure,
+} from "../../../components/PluginFailure";
 import { useEffect, useState } from "react";
 import { Badge, Button } from "@braedonsaunders/appkit-ui";
 import { AlertTriangle, RefreshCw } from "lucide-react";
@@ -14,6 +19,7 @@ export interface ActionJob {
   progress?: string;
   outcome?: string;
   error?: string;
+  failure?: PluginFailure;
   started?: string;
   finished?: string;
 }
@@ -88,7 +94,7 @@ export function ActionJobs({ id }: { id: string }) {
                     <span className="text-xs text-fg-muted">{relativeTime(timestamp)}</span>
                   ) : null}
                 </div>
-                {job.label && job.path && job.label !== job.path ? (
+                {!job.failure && job.label && job.path && job.label !== job.path ? (
                   <p className="break-all font-mono text-[11px] text-fg-subtle">{job.path}</p>
                 ) : null}
                 {job.progress ? (
@@ -97,7 +103,12 @@ export function ActionJobs({ id }: { id: string }) {
                   </p>
                 ) : null}
                 {job.outcome ? <p className="text-xs text-fg-muted">{job.outcome}</p> : null}
-                {job.error ? (
+                {job.failure ? (
+                  <>
+                    <p className="text-xs text-danger">{pluginFailureSentence(job.failure)}</p>
+                    <PluginFailureDetails failure={job.failure} />
+                  </>
+                ) : job.error ? (
                   <p className={isGuard ? "text-xs text-warning" : "text-xs text-danger"}>
                     {job.error}
                   </p>

@@ -342,6 +342,7 @@ func (s *Server) liveDiscoveryItems(r *http.Request, id string, limit int) ([]fr
 	return nil, nil, frontend.ErrNotFound
 }
 func (s *Server) liveDiscoveryToMetadata(r *http.Request, ps []frontend.LiveTVProgramme, cs map[string]frontend.LiveTVChannel) []model.Metadata {
+	r = s.withProgrammeGuideLogos(r, ps, cs)
 	out := make([]model.Metadata, 0, len(ps))
 	for _, p := range ps {
 		c := cs[p.ChannelID]

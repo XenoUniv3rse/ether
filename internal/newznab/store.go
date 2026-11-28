@@ -8,11 +8,14 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/braedonsaunders/ether/internal/config"
 	"github.com/braedonsaunders/ether/internal/core"
 	"github.com/braedonsaunders/ether/internal/store"
 )
 
 func init() {
+	store.Register("newznab", 9, `CREATE INDEX newznab_cache_by_indexer_expiry ON newznab_cache(indexer_id,expires_at);`)
+	store.Register("newznab", 8, `ALTER TABLE newznab_budget ADD COLUMN feed_hits INTEGER NOT NULL DEFAULT 0;`)
 	store.Register("newznab", 7, `
 CREATE TABLE newznab_plugin_refs (ref TEXT PRIMARY KEY, descriptor TEXT NOT NULL);
 `)
@@ -101,8 +104,8 @@ func (c *Client) today() string {
 }
 
 type memBudget struct {
-	day         string
-	hits, grabs int
+	day                   string
+	hits, grabs, feedHits int
 }
 
 // counts returns today's (hits, grabs).
@@ -134,33 +137,49 @@ func (c *Client) reserve(ctx context.Context, kind string) error {
 		return fmt.Errorf("indexer %q paused until %s: %w: %w", c.Name(), until.UTC().Format(time.RFC3339), errLocalBudget, core.ErrBudgetExhausted)
 	}
 	cfg := c.Config()
-	limit := 0
-	if kind == "hit" {
-		limit = cfg.DailyLimit
-	} else {
-		limit = cfg.DailyGrabs
+	limit := c.reportedLimit(kind)
+	if kind == "grab" {
+		limit = lowerLimit(limit, cfg.DailyGrabs)
+	}
+	totalLimit := cfg.DailyLimit
+	feed := kind == "hit" && core.IndexerPurpose(ctx) == core.IndexerPurposeFeed
+	background := backgroundSearch(ctx)
+	if wasBackground, caps := ctx.Value(capsRequestKey{}).(bool); caps {
+		background = wasBackground
 	}
 	if err := c.speculativeRoom(ctx, kind); err != nil {
 		return err
 	}
-	if core.IsBackgroundCheck(ctx) {
-		if limit == 0 {
-			// Background work also respects a limit the indexer reports
-			// itself; foreground requests are left to the indexer.
-			limit = c.reportedLimit(kind)
+	if background {
+		// Every background producer shares a ceiling on total consumption,
+		// including foreground work already spent today.
+		all := lowerLimit(totalLimit, c.reportedLimit("hit"))
+		if all == 0 {
+			all = config.AssumedDailyLimit
 		}
+		pct := 100 - max(20, core.ForegroundReserve(ctx))
+		totalLimit = min(all-2, all*pct/100)
 		if limit > 0 {
-			limit = limit * (100 - core.ForegroundReserve(ctx)) / 100
+			limit = limit * pct / 100
 			if limit == 0 {
 				return fmt.Errorf("%w: %w: %w", errLocalBudget, errSpeculativeShare, core.ErrBudgetExhausted)
 			}
 		}
-		if err := core.SpendBackground(ctx, kind, c.indexerID(), 1); err != nil {
-			if errors.Is(err, core.ErrBudgetExhausted) {
-				return fmt.Errorf("%w: %w: %w", errLocalBudget, errSpeculativeShare, err)
-			}
-			return err
+		if totalLimit <= 0 {
+			return fmt.Errorf("%w: %w: %w", errLocalBudget, errSpeculativeShare, core.ErrBudgetExhausted)
 		}
+	}
+	if err := core.SpendBackground(ctx, kind, c.indexerID(), 1); err != nil {
+		if errors.Is(err, core.ErrBudgetExhausted) {
+			return fmt.Errorf("%w: %w: %w", errLocalBudget, errSpeculativeShare, err)
+		}
+		return err
+	}
+	budgetError := func() error {
+		if background {
+			return fmt.Errorf("indexer %q %s budget: %w: %w: %w", c.Name(), kind, errLocalBudget, errSpeculativeShare, core.ErrBudgetExhausted)
+		}
+		return fmt.Errorf("indexer %q %s budget: %w: %w", c.Name(), kind, errLocalBudget, core.ErrBudgetExhausted)
 	}
 	day := c.today()
 	if c.db == nil {
@@ -172,10 +191,14 @@ func (c *Client) reserve(ctx context.Context, kind string) error {
 		if kind == "grab" {
 			used = c.mem.grabs
 		}
-		if limit > 0 && used >= limit {
+		if (limit > 0 && used >= limit) || (totalLimit > 0 && c.mem.hits+c.mem.grabs >= totalLimit) ||
+			(feed && c.mem.feedHits >= maxDailyFeedHits) {
 			c.budgetMu.Unlock()
-			c.emitBudgetExhausted(day, kind, used, limit)
-			return fmt.Errorf("indexer %q %s budget: %w: %w", c.Name(), kind, errLocalBudget, core.ErrBudgetExhausted)
+			if !background {
+				effective := lowerLimit(limit, totalLimit)
+				c.emitBudgetExhausted(day, kind, effective, effective)
+			}
+			return budgetError()
 		}
 		if kind == "hit" {
 			c.mem.hits++
@@ -184,10 +207,15 @@ func (c *Client) reserve(ctx context.Context, kind string) error {
 			c.mem.grabs++
 			used = c.mem.grabs
 		}
+		if feed {
+			c.mem.feedHits++
+		}
+		total := c.mem.hits + c.mem.grabs
 		c.budgetMu.Unlock()
 		c.recordUsage(ctx, kind)
-		if limit > 0 {
+		if !background {
 			c.emitBudgetWarning(day, kind, used, limit)
+			c.emitBudgetWarning(day, "hit", total, totalLimit)
 		}
 		return nil
 	}
@@ -202,11 +230,23 @@ func (c *Client) reserve(ctx context.Context, kind string) error {
 	}
 	// One conditional increment checks and reserves atomically, so nodes
 	// sharing the database can never overspend the budget together.
-	q := `UPDATE newznab_budget SET ` + col + `=` + col + `+1 WHERE indexer_id=? AND day=?`
+	q := `UPDATE newznab_budget SET ` + col + `=` + col + `+1`
+	if feed {
+		q += `, feed_hits=feed_hits+1`
+	}
+	q += ` WHERE indexer_id=? AND day=?`
 	args := []any{c.indexerID(), day}
 	if limit > 0 {
 		q += ` AND ` + col + `<?`
 		args = append(args, limit)
+	}
+	if totalLimit > 0 {
+		q += ` AND hits+grabs<?`
+		args = append(args, totalLimit)
+	}
+	if feed {
+		q += ` AND feed_hits<?`
+		args = append(args, maxDailyFeedHits)
 	}
 	res, err := c.db.ExecContext(ctx, q, args...)
 	if err != nil {
@@ -217,14 +257,17 @@ func (c *Client) reserve(ctx context.Context, kind string) error {
 		return err
 	}
 	if n == 0 {
-		c.emitBudgetExhausted(day, kind, limit, limit)
-		return fmt.Errorf("indexer %q %s budget: %w: %w", c.Name(), kind, errLocalBudget, core.ErrBudgetExhausted)
+		if !background {
+			c.emitBudgetExhausted(day, kind, lowerLimit(limit, totalLimit), lowerLimit(limit, totalLimit))
+		}
+		return budgetError()
 	}
 	c.recordUsage(ctx, kind)
-	if limit > 0 && c.events != nil {
-		var used int
-		if err := c.db.QueryRowContext(ctx, `SELECT `+col+` FROM newznab_budget WHERE indexer_id=? AND day=?`, c.indexerID(), day).Scan(&used); err == nil {
+	if !background && (limit > 0 || totalLimit > 0) && c.events != nil {
+		var used, total int
+		if err := c.db.QueryRowContext(ctx, `SELECT `+col+`, hits+grabs FROM newznab_budget WHERE indexer_id=? AND day=?`, c.indexerID(), day).Scan(&used, &total); err == nil {
 			c.emitBudgetWarning(day, kind, used, limit)
+			c.emitBudgetWarning(day, "hit", total, totalLimit)
 		}
 	}
 	return nil
@@ -237,17 +280,26 @@ func (c *Client) Remaining(ctx context.Context) (Remaining, error) {
 	now := c.now()
 	r := Remaining{
 		Indexer: c.Name(), Day: c.today(),
-		HitsUsed: hits, HitsLimit: cfg.DailyLimit, HitsRemaining: -1,
-		GrabsUsed: grabs, GrabsLimit: cfg.DailyGrabs, GrabsRemaining: -1,
+		HitsUsed: hits, HitsLimit: c.DailyAPILimit(), HitsRemaining: -1,
+		GrabsUsed: grabs, GrabsLimit: lowerLimit(cfg.DailyGrabs, c.reportedLimit("grab")), GrabsRemaining: -1,
 		PausedUntil:       c.br.pausedUntil(now),
 		MissingDefinition: c.missingDefinition(),
 		Enabled:           cfg.Enabled, Torrent: cfg.IsTorrent(),
 	}
-	if cfg.DailyLimit > 0 {
-		r.HitsRemaining = max(0, cfg.DailyLimit-hits)
+	if limit := c.reportedLimit("hit"); limit > 0 {
+		r.HitsRemaining = max(0, limit-hits)
 	}
-	if cfg.DailyGrabs > 0 {
-		r.GrabsRemaining = max(0, cfg.DailyGrabs-grabs)
+	if r.GrabsLimit > 0 {
+		r.GrabsRemaining = max(0, r.GrabsLimit-grabs)
+	}
+	if cfg.DailyLimit > 0 {
+		left := max(0, cfg.DailyLimit-hits-grabs)
+		if r.HitsRemaining < 0 || r.HitsRemaining > left {
+			r.HitsRemaining = left
+		}
+		if r.GrabsRemaining < 0 || r.GrabsRemaining > left {
+			r.GrabsRemaining = left
+		}
 	}
 	if until, rateErr := c.rateLimitUntil(ctx); rateErr != nil && err == nil {
 		err = rateErr
@@ -260,10 +312,15 @@ func (c *Client) Remaining(ctx context.Context) (Remaining, error) {
 // Exhausted reports whether either daily budget is spent.
 func (c *Client) Exhausted(ctx context.Context) bool {
 	r, err := c.Remaining(ctx)
+	return err == nil && (r.HitsRemaining == 0 || r.GrabsRemaining == 0 || r.RetryAt > c.now().Unix())
+}
+
+func (c *Client) searchExhausted(ctx context.Context) bool {
+	r, err := c.Remaining(ctx)
 	if err != nil {
 		return false
 	}
-	return r.HitsRemaining == 0 || r.GrabsRemaining == 0 || r.RetryAt > c.now().Unix()
+	return r.HitsRemaining == 0 || r.RetryAt > c.now().Unix()
 }
 
 // --- result cache ---
@@ -310,9 +367,6 @@ func (c *Client) cachePut(ctx context.Context, key string, results []core.Releas
 	results = c.bindReleases(results)
 	// The owner's "Remember searches for" is a hard cap: age may only shorten it.
 	ttl := min(searchCacheTTL(c.ttl(), cacheAge(ctx), c.now(), len(results) == 0), c.ttl())
-	if isRecentSearchCache(ctx) {
-		ttl = min(ttl, emptySearchCacheTTL)
-	}
 	if ttl <= 0 {
 		return
 	}
@@ -335,9 +389,6 @@ func (c *Client) cachePut(ctx context.Context, key string, results []core.Releas
 		 ON CONFLICT(cache_key) DO UPDATE SET results=excluded.results, expires_at=excluded.expires_at`,
 		key, c.indexerID(), raw, exp.Unix()); err != nil {
 		c.log.Debug("newznab cache save failed", "indexer", c.Name(), "err", err)
-	}
-	if _, err := c.db.ExecContext(ctx, `DELETE FROM newznab_cache WHERE expires_at < ?`, c.now().Unix()); err != nil {
-		c.log.Debug("newznab cache prune failed", "indexer", c.Name(), "err", err)
 	}
 }
 

@@ -1,12 +1,14 @@
 package core
 
 import (
+	"context"
 	"crypto/sha1"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 )
 
 // Release protocols (Release.Protocol).
@@ -266,4 +268,35 @@ func (t ReleaseTarget) fileSelectionKey() string {
 	}
 	sum := sha256.Sum256([]byte(b.String()))
 	return hex.EncodeToString(sum[:8])
+}
+
+// ErrDebridThrottled reports that provider admission would outlast the playback budget.
+var ErrDebridThrottled = errors.New("debrid rate limit")
+
+// DebridThrottleError identifies the provider whose cooldown blocked playback.
+type DebridThrottleError struct {
+	Provider string
+}
+
+func (e *DebridThrottleError) Error() string { return e.Provider + " asked Ether to slow down" }
+func (e *DebridThrottleError) Unwrap() error { return ErrDebridThrottled }
+
+type debridPlaybackDeadlineKey struct{}
+
+// WithDebridPlaybackDeadline sets the point beyond which a Play cannot wait for API admission.
+func WithDebridPlaybackDeadline(ctx context.Context, deadline time.Time) context.Context {
+	if current, ok := ctx.Value(debridPlaybackDeadlineKey{}).(time.Time); ok && current.Before(deadline) {
+		return ctx
+	}
+	return context.WithValue(ctx, debridPlaybackDeadlineKey{}, deadline)
+}
+
+// DebridPlaybackDeadline returns the earlier of the playback target and the context deadline.
+func DebridPlaybackDeadline(ctx context.Context) (time.Time, bool) {
+	target, _ := ctx.Value(debridPlaybackDeadlineKey{}).(time.Time)
+	deadline, ok := ctx.Deadline()
+	if !target.IsZero() && (!ok || target.Before(deadline)) {
+		return target, true
+	}
+	return deadline, ok
 }

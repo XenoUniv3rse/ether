@@ -4,12 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/braedonsaunders/ether/internal/frontend/kit/plextimeline"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/braedonsaunders/ether/internal/core"
+	"github.com/braedonsaunders/ether/internal/frontend/kit/plextimeline"
 	"github.com/braedonsaunders/ether/internal/state"
 )
 
@@ -303,6 +303,28 @@ func TestPreviewMatchesHubs(t *testing.T) {
 	}
 }
 
+func TestColdTasteOverrideBuildsBeforeFirstHome(t *testing.T) {
+	h := newHarness(t, nil)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	sciFiFan(h, 1)
+	u := core.User{ID: 1}
+	overrides := []core.TasteOverride{{Kind: "genre", Value: "Science Fiction", Weight: -1}}
+
+	taste, err := h.e.SetTasteOverrides(ctx, &u, overrides)
+	if err != nil || len(taste.Overrides) != 1 || taste.Overrides[0] != overrides[0] {
+		t.Fatalf("corrected taste: %+v, %v", taste, err)
+	}
+	model := h.e.modelFor(ctx, &u, false)
+	if model == nil || model.generic || model.user.ID != u.ID {
+		t.Fatalf("first Home used the wrong model: %+v", model)
+	}
+	corrections := model.taste.Profile(nil).Overrides
+	if len(corrections) != 1 || corrections[0] != overrides[0] {
+		t.Fatalf("first Home used the wrong corrections: %+v", corrections)
+	}
+}
+
 func TestOverridesAndLayoutPersist(t *testing.T) {
 	h := newHarness(t, nil)
 	ctx := context.Background()
@@ -377,7 +399,7 @@ func TestInsightsAndActivity(t *testing.T) {
 		byKind[r.HubID] = r
 	}
 	g := byKind[KindHiddenGems]
-	if g.Impressions7d != 1 || g.Plays7d != 1 || g.PlayRate != 1 || g.Title != "Hidden Gems for You" {
+	if g.Impressions7d != 1 || g.Plays7d != 1 || !g.LowSample || g.PlayRate != 1 || g.Title != "Hidden Gems for You" {
 		t.Fatalf("hidden gems insight = %+v", g)
 	}
 	if tr := byKind[KindTrending]; tr.Impressions7d != 1 || tr.Plays7d != 0 {
@@ -434,66 +456,72 @@ func TestInsightsAndActivity(t *testing.T) {
 	}
 }
 
-func TestRowInsightsDynamicTitlesAndRateClamping(t *testing.T) {
+func TestRecommendationExposureConversion(t *testing.T) {
 	h := newHarness(t, nil)
 	ctx := context.Background()
-	u := core.User{ID: 1}
-	f1 := h.cat.titles[movieKey(6, 2)]
-	f2 := h.cat.titles[movieKey(6, 3)]
-	f3 := h.cat.titles[movieKey(6, 4)]
-
-	// Single dynamic showcase row fills in the concrete genre; two plays on
-	// one impression day clamp PlayRate at 1.0 instead of 200%.
-	h.e.RecordImpressions(&u, hubContext(testNow.Add(-2*time.Hour), core.DeviceTV), []core.Hub{
-		{ID: "home.showcase.thriller", Title: "Acclaimed Thrillers", Items: []core.Title{f1}},
-		{ID: "home.continue", Title: "Continue Watching", Items: []core.Title{f2, f3}},
+	viewer := core.User{ID: 1}
+	other := core.User{ID: 2}
+	first := h.cat.titles[movieKey(6, 2)]
+	second := h.cat.titles[movieKey(6, 3)]
+	since := testNow.Add(-time.Hour)
+	hub := []core.Hub{{ID: "home.showcase.thriller", Title: "Acclaimed Thrillers", Items: []core.Title{first, second}}}
+	for _, at := range []time.Time{since, since.Add(time.Minute)} {
+		h.e.RecordImpressions(&viewer, hubContext(at, core.DeviceTV), hub)
+	}
+	h.e.RecordNeutralImpression(&viewer, core.NeutralImpression{
+		Surface: "silo", RowID: hub[0].ID, Kind: KindShowcase, Title: hub[0].Title, Placement: "home", Rank: 3,
+		Situation: core.HomeSituation{Now: since}, Items: []core.RatingKey{first.Key},
+	})
+	h.e.RecordNeutralImpression(&viewer, core.NeutralImpression{
+		Surface: "stremio", RowID: hub[0].ID, Kind: KindShowcase, Title: hub[0].Title, Rank: 0,
+		Situation: core.HomeSituation{Now: since}, Items: []core.RatingKey{first.Key},
+	})
+	h.e.RecordImpressions(&other, hubContext(since, core.DeviceTV), []core.Hub{
+		{ID: "home.showcase.comedy", Title: "Acclaimed Comedies", Items: []core.Title{first}},
 	})
 	h.e.Flush(ctx)
-	h.finish(1, f2.Key, testNow.Add(-90*time.Minute))
-	h.finish(1, f3.Key, testNow.Add(-80*time.Minute))
-	// Play attributed to a row whose impression fell outside the 7d window:
-	// Impressions7d == 0 must leave PlayRate == 0.
-	if err := h.e.store.insertPlay(ctx, &playRecord{
-		userID: 1, key: movieKey(2, 2), tasteKey: movieKey(2, 2),
-		hubID: "home.popular.server", kind: KindPopularServer,
-		started: testNow.Add(-time.Hour), updated: testNow.Add(-time.Hour),
-		duration: time.Hour, maxFraction: 1, completed: true,
-	}); err != nil {
-		t.Fatal(err)
+
+	// The most recent home row is an exposure candidate for the playback app
+	// only. Two starts from the same Plex exposure can convert it only once.
+	play := func(title core.Title, app core.Protocol, at time.Time) {
+		ev := state.Event{Kind: state.EventProgress, UserID: viewer.ID, Key: title.Key,
+			Duration: time.Hour, State: "playing", At: at, Origin: state.Origin{Surface: app}}
+		h.e.trackProgress(ctx, ev)
+		ev.At, ev.Completed, ev.Fraction, ev.State = at.Add(10*time.Minute), true, 1, "stopped"
+		h.e.trackProgress(ctx, ev)
 	}
+	play(first, "plex", testNow)
+	play(second, "plex", testNow.Add(time.Minute))
+	play(first, "silo", testNow.Add(2*time.Minute))
+	play(first, "jellyfin", testNow.Add(3*time.Minute))
+	for range 2 {
+		h.e.ObserveDeliveredPlay("stremio-play", viewer.ID, first.Key, "stremio", testNow.Add(4*time.Minute))
+	}
+	h.e.ObserveDeliveredPlay("xtream-play", viewer.ID, first.Key, "xtream", testNow.Add(5*time.Minute))
 	h.e.syncEvents(ctx)
+	h.clock.Set(testNow.Add(12 * time.Hour))
 
-	ins, err := h.e.RowInsights(ctx, 7)
+	report, err := h.e.RecommendationReport(ctx, 7, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	byKind := map[string]core.RowInsight{}
-	for _, r := range ins {
-		byKind[r.HubID] = r
+	if len(report.Rows) != 1 || report.Impressions != 4 || report.Plays != 3 || report.Measured != 2 ||
+		report.Completed != 2 || report.WatchedMS != (2*time.Hour).Milliseconds() ||
+		report.AttributedStarts != 4 || report.Starts != 6 {
+		t.Fatalf("report = %+v", report)
 	}
-	if sc := byKind[KindShowcase]; sc.Title != "Acclaimed Thrillers" || sc.Impressions7d != 1 {
-		t.Fatalf("single showcase insight = %+v", sc)
+	if row := report.Rows[0]; row.Title != "Acclaimed by Genre" || !row.LowSample ||
+		row.Viewers != 2 || row.RankRate <= 0 || row.RankRate >= 3.0/4 {
+		t.Fatalf("row = %+v", row)
 	}
-	if cw := byKind[KindContinue]; cw.Plays7d != 2 || cw.Impressions7d != 1 || cw.PlayRate != 1 {
-		t.Fatalf("continue watching rate must clamp at 1.0, got %+v", cw)
-	}
-	if pop := byKind[KindPopularServer]; pop.Plays7d != 1 || pop.Impressions7d != 0 || pop.PlayRate != 0 {
-		t.Fatalf("zero-impression insight = %+v", pop)
-	}
-
-	// Serving a second distinct genre showcase groups under "Acclaimed by Genre".
-	h.e.RecordImpressions(&u, hubContext(testNow.Add(-30*time.Minute), core.DeviceTV), []core.Hub{
-		{ID: "home.showcase.comedy", Title: "Acclaimed Comedies", Items: []core.Title{h.cat.titles[movieKey(1, 1)]}},
-	})
-	ins, err = h.e.RowInsights(ctx, 7)
+	detail, err := h.e.RecommendationDetail(ctx, 7, KindShowcase, viewer.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, r := range ins {
-		byKind[r.HubID] = r
-	}
-	if sc := byKind[KindShowcase]; sc.Title != "Acclaimed by Genre" || sc.Impressions7d != 2 {
-		t.Fatalf("grouped showcase insight = %+v", sc)
+	if len(detail.Apps) != 3 || len(detail.Viewers) != 1 || len(detail.Positions) != 2 ||
+		detail.Positions[1].Key != "4" || detail.Positions[1].Plays != 1 ||
+		len(detail.Top) != 2 || detail.Top[0].Plays != 3 || len(detail.Unplayed) != 0 {
+		t.Fatalf("detail = %+v", detail)
 	}
 }
 

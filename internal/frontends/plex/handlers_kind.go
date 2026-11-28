@@ -471,6 +471,7 @@ func plexDevice(pr *Request) frontend.Device {
 // preferred so metadata and children lookups do not depend on user-data
 // enrichment; test doubles without StoredItem fall back to Item.
 func (s *Server) kindItem(ctx context.Context, pr *Request, k frontend.RatingKey) (*frontend.Title, error) {
+	markHomePluginRead(ctx)
 	var viewer *frontend.Viewer
 	if pr != nil {
 		viewer = pr.User

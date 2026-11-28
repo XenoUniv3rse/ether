@@ -612,6 +612,44 @@ func (i *instance) boxSetDTO(collection frontend.Collection) map[string]any {
 	return item
 }
 
+// prefetchSeriesFacts reads the page's series studios together and remembers
+// missing or inaccessible parents before shaping individual rows.
+func (i *instance) prefetchSeriesFacts(r *http.Request, viewer *frontend.Viewer, titles []frontend.Title) {
+	source, ok := i.host.Experience.(interface {
+		BatchTitles(context.Context, *frontend.Viewer, []frontend.RatingKey) ([]frontend.Title, error)
+	})
+	if !ok {
+		return
+	}
+	cache, _ := r.Context().Value(seriesStudioCacheKey{}).(map[frontend.RatingKey]string)
+	if cache == nil {
+		return
+	}
+	var keys []frontend.RatingKey
+	seen := make(map[frontend.RatingKey]bool)
+	for _, title := range titles {
+		if title.Type != "episode" && title.Type != "season" {
+			continue
+		}
+		key := parentShowKey(title)
+		if _, loaded := cache[key]; key == 0 || loaded || seen[key] {
+			continue
+		}
+		seen[key] = true
+		keys = append(keys, key)
+	}
+	parents, err := source.BatchTitles(r.Context(), viewer, keys)
+	if err != nil {
+		return
+	}
+	for _, parent := range parents {
+		i.rememberSeriesStudio(r, parent.Key, parent.Studios)
+	}
+	for _, key := range keys {
+		i.rememberSeriesStudio(r, key, nil)
+	}
+}
+
 // fillSeriesTitles copies each episode or season's show title onto the row
 // when the list item did not carry it. One lookup serves each distinct show.
 func (i *instance) fillSeriesTitles(r *http.Request, viewer *frontend.Viewer, titles []frontend.Title) {
@@ -1167,7 +1205,7 @@ func (i *instance) virtualFolders(w http.ResponseWriter, r *http.Request) {
 			entry["Locations"] = []string{}
 		}
 		if ct := mediaBrowserCollectionType(view); ct != "" {
-			entry["CollectionType"] = ct
+			entry["CollectionType"] = i.collectionTypeDTO(ct)
 		}
 		result = append(result, entry)
 	}
@@ -1335,12 +1373,14 @@ func (i *instance) fillSeriesStudio(r *http.Request, viewer *frontend.Viewer, it
 			break
 		}
 	}
-	if name == "" {
-		name = i.cachedSeriesStudio(r, title.ShowKey)
+	var known bool
+	if name == "" && r != nil {
+		cache, _ := r.Context().Value(seriesStudioCacheKey{}).(map[frontend.RatingKey]string)
+		name, known = cache[title.ShowKey]
 	}
 	// A list that already shaped the show reuses that name. An episode detail
 	// has not, so load the show once and keep it for the rest of the request.
-	if name == "" && title.ShowKey != 0 && r != nil && viewer != nil && i.host.Experience != nil {
+	if name == "" && !known && title.ShowKey != 0 && r != nil && viewer != nil && i.host.Experience != nil {
 		if show, ok := i.storedListTitle(r, viewer, title.ShowKey); ok {
 			i.rememberSeriesStudio(r, title.ShowKey, show.Studios)
 			name = i.cachedSeriesStudio(r, title.ShowKey)

@@ -2,9 +2,9 @@
 // catalogue titles (Plex "Extras" and Cinema Trailers).
 //
 // TMDB only gives YouTube/Vimeo keys, which official Plex apps cannot
-// play, so an extra is only advertised when a playable source exists: an
-// owner-configured yt-dlp-compatible resolver command that turns a video
-// page into a direct media URL. Ether ships no resolver binary and no content.
+// play. Server playback of these videos uses a yt-dlp-compatible resolver
+// command. Clients with YouTube embeds can opt in to listing YouTube trailers
+// and teasers for playback on the device.
 package extras
 
 import (
@@ -16,6 +16,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os/exec"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -32,10 +33,13 @@ const SourceCommand = "command"
 // SourcePlexDiscover marks an Extra whose direct MP4 comes from Plex Discover.
 const SourcePlexDiscover = "plex_discover"
 
+// SourceClientYouTube marks a YouTube clip offered for client playback only.
+const SourceClientYouTube = "client_youtube"
+
 // MaxExtras caps how many extras one title advertises.
 const MaxExtras = 10
 
-// Extra is one playable clip attached to a title.
+// Extra is one clip attached to a title.
 type Extra struct {
 	Key         core.RatingKey // KindExtra
 	ParentKey   core.RatingKey
@@ -51,7 +55,7 @@ type Extra struct {
 	PublishedAt time.Time
 	Size        int // vertical resolution when known
 	Duration    time.Duration
-	Source      string // SourcePlexDiscover or SourceCommand
+	Source      string // SourcePlexDiscover, SourceCommand or SourceClientYouTube
 
 	identity string // registry identity (collision detection)
 }
@@ -267,6 +271,11 @@ func (s *Service) Enabled() bool {
 	return s.cfg().Enabled && (s.DiscoverAvailable() || s.videoSourceAvailable() && s.CommandAvailable())
 }
 
+// ClientYouTubeAvailable reports whether client-playable YouTube trailers can be listed.
+func (s *Service) ClientYouTubeAvailable() bool {
+	return s.cfg().Enabled && s.videoSourceAvailable()
+}
+
 func (s *Service) videoSourceAvailable() bool {
 	if keyed, ok := s.videos.(interface{ HasKey() bool }); ok {
 		return keyed.HasKey()
@@ -304,20 +313,31 @@ func ISO639(lang string) string {
 	return lang
 }
 
-// List returns the playable extras of a title, best first: official
-// trailers in the viewer's language ahead of everything else. It returns
-// nothing when extras are disabled or no source can play them.
-func (s *Service) List(ctx context.Context, parent *core.Title, lang string) ([]Extra, error) {
-	if parent == nil || !s.Enabled() {
+// ListOption controls which playback sources a caller can use.
+type ListOption uint8
+
+// IncludeClientYouTube includes YouTube trailers and teasers when no resolver is available.
+const IncludeClientYouTube ListOption = 1
+
+// List returns a title's extras, best first. By default it lists server-playable
+// sources. Extras must be enabled even for callers that opt into client playback.
+func (s *Service) List(ctx context.Context, parent *core.Title, lang string, opts ...ListOption) ([]Extra, error) {
+	if parent == nil || !s.cfg().Enabled {
 		return nil, nil
 	}
 	iso := ISO639(lang)
 	discoverOn := s.DiscoverAvailable()
-	cmdOn := trailerTMDBID(parent) > 0 && s.videoSourceAvailable() && s.CommandAvailable()
-	if !discoverOn && !cmdOn {
+	videosOn := trailerTMDBID(parent) > 0 && s.videoSourceAvailable()
+	cmdOn := videosOn && s.CommandAvailable()
+	includeClientYouTube := slices.Contains(opts, IncludeClientYouTube)
+	clientOnly := videosOn && !cmdOn && includeClientYouTube
+	if !discoverOn && !cmdOn && !clientOnly {
 		return nil, nil
 	}
 	cacheKey := fmt.Sprintf("%s|%s|%t|%t", parent.Key.String(), iso, discoverOn, cmdOn)
+	if includeClientYouTube {
+		cacheKey += fmt.Sprintf("|client-youtube=%t", clientOnly)
+	}
 
 	s.mu.Lock()
 	if e, ok := s.lists[cacheKey]; ok && s.now().Before(e.expires) {
@@ -362,7 +382,7 @@ func (s *Service) List(ctx context.Context, parent *core.Title, lang string) ([]
 				defer s.listWG.Done()
 				bg, cancel := context.WithTimeout(s.themeCtx, listFetchTimeout)
 				defer cancel()
-				out := s.fetchAndStoreList(bg, &owned, lang, iso, discoverOn, cmdOn, cacheKey)
+				out := s.fetchAndStoreList(bg, &owned, lang, iso, discoverOn, cmdOn, clientOnly, cacheKey)
 				flight.extras = out
 				s.mu.Lock()
 				delete(s.listFlights, cacheKey)
@@ -394,10 +414,10 @@ func (s *Service) List(ctx context.Context, parent *core.Title, lang string) ([]
 		}
 	}
 
-	return s.fetchAndStoreList(ctx, parent, lang, iso, discoverOn, cmdOn, cacheKey), nil
+	return s.fetchAndStoreList(ctx, parent, lang, iso, discoverOn, cmdOn, clientOnly, cacheKey), nil
 }
 
-func (s *Service) fetchAndStoreList(ctx context.Context, parent *core.Title, lang, iso string, discoverOn, cmdOn bool, cacheKey string) []Extra {
+func (s *Service) fetchAndStoreList(ctx context.Context, parent *core.Title, lang, iso string, discoverOn, cmdOn, clientOnly bool, cacheKey string) []Extra {
 	var out []Extra
 	sourcesTried := 0
 	sourcesFailed := 0
@@ -410,14 +430,14 @@ func (s *Service) fetchAndStoreList(ctx context.Context, parent *core.Title, lan
 		}
 		out = append(out, ds...)
 	}
-	if cmdOn {
+	if cmdOn || clientOnly {
 		sourcesTried++
 		vs, err := s.fetchVideos(ctx, parent, lang)
 		if err != nil {
 			sourcesFailed++
 			s.log.Debug("tmdb videos", "key", parent.Key, "err", err)
 		}
-		out = append(out, videosToExtras(parent, vs)...)
+		out = append(out, videosToExtras(parent, vs, clientOnly)...)
 	}
 	out = dedupeExtras(out)
 	sortExtras(out, iso)
@@ -549,6 +569,10 @@ func (s *Service) registerLocked(e Extra) Extra {
 			continue
 		}
 		e.Key = key
+		// Client-only clips have a stable wire ID but no server playback record.
+		if e.Source == SourceClientYouTube {
+			return e
+		}
 		if len(s.registry) >= maxRegistryEntries {
 			for k := range s.registry {
 				delete(s.registry, k)
@@ -659,23 +683,32 @@ func subtypeFor(tmdbType string) (string, int) {
 	}
 }
 
-func videosToExtras(parent *core.Title, vs []tmdb.Video) []Extra {
+func videosToExtras(parent *core.Title, vs []tmdb.Video, clientOnly bool) []Extra {
 	var out []Extra
 	for _, v := range vs {
 		if !ValidateSiteKey(v.Site, v.Key) {
 			continue
 		}
 		sub, num := subtypeFor(v.Type)
+		source := SourceCommand
+		site := v.Site
+		if clientOnly {
+			if !strings.EqualFold(strings.TrimSpace(site), "youtube") || (sub != "trailer" && sub != "teaser") {
+				continue
+			}
+			source = SourceClientYouTube
+			site = "YouTube"
+		}
 		title := strings.TrimSpace(v.Name)
 		if title == "" {
 			title = parent.Title + " " + v.Type
 		}
 		out = append(out, Extra{
 			ParentKey: parent.Key, ParentTitle: parent.Title, Title: title,
-			Subtype: sub, ExtraType: num, Site: v.Site, SiteKey: v.Key,
+			Subtype: sub, ExtraType: num, Site: site, SiteKey: v.Key,
 			Language: ISO639(v.ISO639), Official: v.Official,
-			PublishedAt: v.Published(), Size: v.Size, Source: SourceCommand,
-			identity: fmt.Sprintf("%d|c|%s|%s", int64(parent.Key), strings.ToLower(v.Site), v.Key),
+			PublishedAt: v.Published(), Size: v.Size, Source: source,
+			identity: fmt.Sprintf("%d|c|%s|%s", int64(parent.Key), strings.ToLower(site), v.Key),
 		})
 	}
 	return out
@@ -719,7 +752,7 @@ func sourceRank(src string) int {
 	switch src {
 	case SourcePlexDiscover:
 		return 0
-	case SourceCommand:
+	case SourceCommand, SourceClientYouTube:
 		return 1
 	}
 	return 2

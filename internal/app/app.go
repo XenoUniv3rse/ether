@@ -14,6 +14,7 @@ import (
 	"github.com/braedonsaunders/ether/internal/auth"
 	"github.com/braedonsaunders/ether/internal/availability"
 	"github.com/braedonsaunders/ether/internal/backup"
+	"github.com/braedonsaunders/ether/internal/blobcache"
 	"github.com/braedonsaunders/ether/internal/cachefill"
 	"github.com/braedonsaunders/ether/internal/calendar"
 	"github.com/braedonsaunders/ether/internal/cardigann"
@@ -142,6 +143,8 @@ type Options struct {
 	FlowActions flows.ActionRegistry
 	// plextvHTTP, when set, is the HTTP client used by the plex.tv client in tests.
 	plextvHTTP *http.Client
+	// debridProviderOptions points provider calls at loopback fixtures in tests.
+	debridProviderOptions debrid.ProviderOptions
 	// urlImages, when set, replaces the untrusted remote image fetcher in tests.
 	urlImages frontend.UntrustedImageFetcher
 	// diskUsage, when set, replaces the cache volume measurement behind the
@@ -158,6 +161,7 @@ type Options struct {
 
 // App is a running Ether server.
 type App struct {
+	adminRoutes      frontend.RouteSource
 	deployment       *deploymentRuntime
 	brokerPlayback   core.Playback
 	brokerTranscoder core.Transcoder
@@ -189,8 +193,13 @@ type App struct {
 	proxyNamed     bool
 	// seenFamilies records a client family policy once per process. Playback
 	// does not take a write lock to refresh last_seen.
-	seenFamilies sync.Map
-	db           *sql.DB
+	seenFamilies  map[string]string
+	familyWrites  sync.WaitGroup
+	familySlots   chan struct{}
+	familyMu      sync.Mutex
+	familyClosed  bool
+	familyPending map[string]bool
+	db            *sql.DB
 	// databaseURL is the cluster database, placed in join tokens
 	// (cluster_settings.go); empty on a standalone server.
 	databaseURL string
@@ -239,6 +248,7 @@ type App struct {
 	lang                *langfeat.Service
 	fetcher             *usenet.Fetcher
 	cache               *segcache.Cache
+	mediaFiles          *blobcache.Cache
 	cacheConfig         atomic.Pointer[config.Cache]
 	engine              *stream.Engine
 	vault               vault.Store
@@ -952,6 +962,7 @@ func (a *App) Run(ctx context.Context) error {
 	background.start(func() { a.housekeeping(ctx) })
 	background.start(func() { a.checkpointWAL(ctx) })
 	background.start(func() { a.cluster.RunAsLeader(ctx, "database maintenance", a.maintainDB) })
+	background.start(func() { a.cluster.RunAsLeader(ctx, "poll limiter maintenance", a.maintainPollBuckets) })
 	background.start(func() { a.stats.Run(ctx) })
 	if a.hostResources != nil {
 		background.start(func() { a.hostResources.Run(ctx) })
@@ -1172,6 +1183,10 @@ func (a *App) housekeeping(ctx context.Context) {
 // Close releases every component in reverse order of construction.
 func (a *App) Close() {
 	a.closeOnce.Do(func() {
+		a.familyMu.Lock()
+		a.familyClosed = true
+		a.familyMu.Unlock()
+		a.familyWrites.Wait()
 		if a.stopPrewarm != nil {
 			a.stopPrewarm()
 		}

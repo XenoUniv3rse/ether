@@ -72,6 +72,17 @@ export type WizardStepId =
 /** Survives a remount after the owner account is created so the visit does not start over. */
 export const SETUP_STEP_KEY = "ether.setup.step";
 
+const OPTIONAL_STEPS = ["sources", "indexers"] as const;
+type OptionalStep = (typeof OPTIONAL_STEPS)[number];
+const DEFERRED_KEY = "ether.setup.deferred";
+function deferredSteps(): OptionalStep[] {
+  try {
+    const values: unknown = JSON.parse(sessionStorage.getItem(DEFERRED_KEY) ?? "[]");
+    return OPTIONAL_STEPS.filter((id) => Array.isArray(values) && values.includes(id));
+  } catch {
+    return [];
+  }
+}
 const SETUP_METADATA_SOURCES = ["tmdb", "tvdb"] as const;
 
 const STEP_COPY = localized(() => ({
@@ -379,7 +390,7 @@ export function canAdvance(
     case "cache":
       return true;
     case "account":
-      return opts.accountReady || Boolean(opts.skipped[step]);
+      return opts.accountReady;
     case "sources": {
       // A debrid account, a Usenet provider, or a torrent addon. Skip only skips the test.
       const usenet = opts.providers.filter((p) => p.enabled);
@@ -414,7 +425,7 @@ export function canAdvance(
 
 export default function Setup() {
   const navigate = useNavigate();
-  const [params] = useSearchParams();
+  const [params, setParams] = useSearchParams();
   const resumePending = useRef(params.get("resume") === "1");
   const [finishReview, setFinishReview] = useState(false);
   const app = useAppOptional();
@@ -424,6 +435,13 @@ export default function Setup() {
   const [householdRules, setHouseholdRules] = useState<StreamRules | null>(null);
   const [loadError, setLoadError] = useState<unknown>(null);
   const [step, setStepState] = useState(storedStep);
+  const [deferred, setDeferred] = useState(deferredSteps);
+  const recordDeferred = (id: OptionalStep, defer: boolean) => {
+    const next = deferred.filter((s) => s !== id);
+    if (defer) next.push(id);
+    sessionStorage.setItem(DEFERRED_KEY, JSON.stringify(next));
+    setDeferred(next);
+  };
   const [apps, setApps] = useState<SetupApp[]>(() => appCatalog(null));
   const [frontends, setFrontends] = useState<Record<string, boolean>>({});
   const [error, setError] = useState<unknown>(null);
@@ -441,6 +459,11 @@ export default function Setup() {
     const nextStep = Math.max(0, Math.min(n, wizardSteps(true).length - 1));
     sessionStorage.setItem(SETUP_STEP_KEY, String(nextStep));
     setStepState(nextStep);
+    if (params.has("resume")) {
+      const nextParams = new URLSearchParams(params);
+      nextParams.delete("resume");
+      setParams(nextParams, { replace: true });
+    }
   };
   const [providerTests, setProviderTests] = useState<Record<string, TestState>>({});
   const [indexerTests, setIndexerTests] = useState<Record<string, TestState>>({});
@@ -542,7 +565,10 @@ export default function Setup() {
         if (status.setupComplete && status.cacheRestartRequired) setCacheRestartRequired(true);
         if (resumePending.current) {
           // Server status is authoritative; a stored wizard position can be stale.
-          const missing = status.steps.find((item) => item.required && !item.complete);
+          const deferred = deferredSteps();
+          const missing = status.steps.find(
+            (item) => item.required && !item.complete && !deferred.some((id) => id === item.id),
+          );
           if (missing) {
             const id = missing.id === "plex" ? "account" : missing.id;
             const next = wizardSteps(true).findIndex((item) => item.id === id);
@@ -870,13 +896,23 @@ export default function Setup() {
   const exitSetup = () => {
     sessionStorage.removeItem(SETUP_STEP_KEY);
     sessionStorage.removeItem("ether.setup.skipped");
+    sessionStorage.removeItem(DEFERRED_KEY);
     navigate("/server");
   };
 
-  const next = async (opts?: { force?: boolean; skipMetadata?: boolean }) => {
+  const next = async (opts?: { defer?: boolean; skipMetadata?: boolean }) => {
     setSaving(true);
     setError(null);
     try {
+      if (opts?.defer && (stepId === "sources" || stepId === "indexers")) {
+        // Start the next page with saved settings; unfinished fields from the skipped page stay unsaved.
+        const saved = await api.getConfig();
+        setCfg(saved);
+        setReadyMade(false);
+        recordDeferred(stepId, true);
+        setStep(step + 1);
+        return;
+      }
       if (stepId === "account" && showLocalOwner && !localDone) {
         const { token } = await api.localSetup(localUsername.trim(), localPassword);
         setToken(token);
@@ -951,9 +987,10 @@ export default function Setup() {
         saved.indexers = [...(saved.indexers ?? []), blankIndexer("stremio")];
       }
       setCfg(saved);
-      if (opts?.force) await finish(true);
-      else if (step < steps.length - 1) setStep(step + 1);
-      else await finish(false);
+      if (stepId === "sources" || stepId === "indexers") recordDeferred(stepId, false);
+      if (step < steps.length - 1) setStep(step + 1);
+      else if (opts?.skipMetadata) setFinishReview(true);
+      else await finish();
     } catch (e) {
       setError(e);
     } finally {
@@ -961,13 +998,14 @@ export default function Setup() {
     }
   };
 
-  const finish = async (force: boolean) => {
-    const status = await api.setupComplete(force);
+  const finish = async () => {
+    const status = await api.setupComplete(deferred);
     const catalog = status.steps.find((item) => item.id === "catalog");
     if (catalog) setMetadataConfigured(Boolean(catalog.complete));
     setServerSteps(Object.fromEntries(status.steps.map((item) => [item.id, item.complete])));
     sessionStorage.removeItem(SETUP_STEP_KEY);
     sessionStorage.removeItem("ether.setup.skipped");
+    sessionStorage.removeItem(DEFERRED_KEY);
     await app?.reloadBoot();
     if (status.cacheRestartRequired) setCacheRestartRequired(true);
     else setFinished(true);
@@ -988,12 +1026,23 @@ export default function Setup() {
         <MutationError error={error} />
         <div className="flex flex-wrap gap-2">
           <Button
+            variant="ghost"
+            disabled={saving}
+            onClick={() => {
+              setError(null);
+              setFinishReview(false);
+              setStep(steps.length - 1);
+            }}
+          >
+            {t("Back")}
+          </Button>
+          <Button
             disabled={saving}
             onClick={async () => {
               setSaving(true);
               setError(null);
               try {
-                await finish(false);
+                await finish();
               } catch (e) {
                 setError(e);
               } finally {
@@ -1038,7 +1087,12 @@ export default function Setup() {
               const accountDone = s.id === "account" && (localDone || plexSigned);
               const recorded = s.id !== "account" && (!(s.id in serverSteps) || serverSteps[s.id]);
               const done = i < step && (accountDone || recorded);
-              const label = later ? `${s.title}. ${t("Plex later")}` : s.title;
+              const isDeferred = deferred.some((id) => id === s.id);
+              const label = later
+                ? `${s.title}. ${t("Plex later")}`
+                : isDeferred
+                  ? `${s.title}. ${t("Skipped")}`
+                  : s.title;
               return (
                 <li key={i} className="min-w-0 flex-1">
                   <button
@@ -1067,6 +1121,11 @@ export default function Setup() {
                       )}
                       <span className="hidden min-w-0 break-words whitespace-normal leading-snug sm:block">
                         {s.title}
+                        {isDeferred && (
+                          <span className="mt-0.5 block font-normal text-fg-muted">
+                            {t("Skipped")}
+                          </span>
+                        )}
                         {later ? (
                           <span className="mt-0.5 block font-normal text-fg-muted">
                             {t("Plex later")}
@@ -1102,7 +1161,15 @@ export default function Setup() {
               </label>
             ) : null}
             <span className="flex-1" />
-            {stepId === "catalog" ? (
+            {stepId === "sources" || stepId === "indexers" ? (
+              <Button
+                variant="ghost"
+                disabled={saving || (!localDone && !plexSigned)}
+                onClick={() => void next({ defer: true })}
+              >
+                {t("Skip this step")}
+              </Button>
+            ) : stepId === "catalog" ? (
               <Button
                 variant="ghost"
                 disabled={saving}
@@ -1123,18 +1190,6 @@ export default function Setup() {
                   : t("Save and continue")}
             </Button>
           </div>
-          {(stepId === "sources" || stepId === "indexers") && !advanceOk ? (
-            <div className="text-right">
-              <Button
-                className="px-4 py-2"
-                variant="link"
-                disabled={saving || (!localDone && !plexSigned)}
-                onClick={() => void next({ force: true })}
-              >
-                {t("Finish now, add sources later")}
-              </Button>
-            </div>
-          ) : null}
         </div>
       }
     >
@@ -1152,7 +1207,7 @@ export default function Setup() {
         <div className="space-y-4">
           <p className="text-sm text-fg-muted">
             {t(
-              "Most households pick Plex or Jellyfin. You will need a debrid token or a Usenet login to play anything. A Plex account is only needed if Plex is on. You can finish and add sources later.",
+              "Choose the apps your household uses. You can skip Sources or Indexers during setup and configure them later.",
             )}
           </p>
           <p className="text-sm text-fg-muted">

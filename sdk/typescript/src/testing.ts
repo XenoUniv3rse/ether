@@ -1,3 +1,4 @@
+import type { FolderListOptions } from "./host";
 import type {
   ActionResponse,
   BadgeEntry,
@@ -169,6 +170,7 @@ export interface MockHostState {
   ) => import("./types.ts").SourceResolveResult | Promise<import("./types.ts").SourceResolveResult>;
   blobs: Map<string, Uint8Array>;
   limits: import("./types.ts").RuntimeLimits;
+  folderRoots: string[];
   folders: Map<string, FolderEntry[]>;
   publishedEvents: RecordedPublishedEvent[];
   notifications: string[];
@@ -185,9 +187,11 @@ export interface MockHostState {
   /** Zero-based part index of the most recent part-scoped frontend.streamUrl call. */
   lastStreamUrlPart?: number;
   /** PlayableSource.id of the most recent source-scoped frontend.streamUrl call (#661). */
+  lastStreamUrlFallback?: boolean;
   lastStreamUrlSource?: string;
   /** Whether the most recent frontend.streamUrl call requested an absolute URL (#772). */
   lastStreamUrlAbsolute?: boolean;
+  lastStreamUrlWait?: import("./types.ts").StreamUrlOptions["wait"];
   /** Optional origin prepended to mock stream URLs when `{ absolute: true }` (defaults to `"http://ether.test"`). */
   streamOrigin?: string;
 }
@@ -223,6 +227,7 @@ export function createMockHostClient(initial?: Partial<MockHostState>): MockHost
       deadline: "12h",
       poolSize: 2,
     },
+    folderRoots: [...(initial?.folderRoots ?? [])],
     folders: initial?.folders ?? new Map<string, FolderEntry[]>(),
     publishedEvents: initial?.publishedEvents ?? [],
     notifications: initial?.notifications ?? [],
@@ -408,6 +413,7 @@ export function createMockHostClient(initial?: Partial<MockHostState>): MockHost
       },
     },
     folders: {
+      roots: () => [...state.folderRoots],
       hashStart: () => {
         throw new Error("Set a folders.hashStart mock");
       },
@@ -420,9 +426,18 @@ export function createMockHostClient(initial?: Partial<MockHostState>): MockHost
       hash: () => {
         throw new Error("Set a folders.hash mock for file identification tests");
       },
-      list: (root: string, path = "") => {
+      frame: () => {
+        throw new Error("Set a folders.frame mock");
+      },
+      list: (root: string, path = "", { cursor = "", limit = 1000 }: FolderListOptions = {}) => {
         const key = path ? `${root}/${path}` : root;
-        return state.folders.get(key) ?? [];
+        const max = limit > 0 ? Math.min(limit, 1000) : 1000;
+        const sorted = (state.folders.get(key) ?? [])
+          .filter((entry) => entry.name > cursor)
+          .sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
+        const entries = sorted.slice(0, max);
+        const truncated = sorted.length > max;
+        return { entries, truncated, nextCursor: truncated ? (entries.at(-1)?.name ?? "") : "" };
       },
       stat: (root: string, path: string) => {
         const slash = path.lastIndexOf("/");
@@ -691,7 +706,9 @@ export function createMockHostClient(initial?: Partial<MockHostState>): MockHost
         state.lastStreamUrl = [viewerId, itemRef];
         state.lastStreamUrlPart = opts.partIndex;
         state.lastStreamUrlSource = opts.source;
+        state.lastStreamUrlFallback = opts.fallback;
         state.lastStreamUrlAbsolute = opts.absolute;
+        state.lastStreamUrlWait = opts.wait;
         const base = `/ether/v1/kind-media/mock-${viewerId}`;
         const rel = opts.partIndex === undefined ? base : `${base}?part=${opts.partIndex}`;
         if (opts.absolute) {

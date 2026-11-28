@@ -79,6 +79,10 @@ func device(r *http.Request) frontend.Device {
 
 }
 
+func isJellyfinRoku(dev frontend.Device) bool {
+	return strings.EqualFold(dev.Client, "Jellyfin Roku") || strings.EqualFold(dev.Client, "Jellyfin for Roku")
+}
+
 type principalKey struct{}
 type principal struct {
 	viewer *frontend.Viewer

@@ -55,6 +55,7 @@ const (
 )
 
 type warmEntry struct {
+	nextEpisode   bool
 	offset        time.Duration
 	windowAt      time.Time
 	windowRunning bool
@@ -212,8 +213,7 @@ func (m *Manager) Prewarm(ctx context.Context, user *core.User, key core.RatingK
 	return m.prewarm(ctx, user, key, caps, opts, opts.MetadataOnly, false)
 }
 
-// RevealDetail triggers a background season-drop check for a show, season, or
-// episode detail open unless the client is reading pages like a crawler.
+// RevealDetail looks for cached season evidence on a non-burst detail open.
 func (m *Manager) RevealDetail(user *core.User, clientID string, key core.RatingKey) {
 	if m == nil || m.deps.SeasonRevealer == nil || user == nil || !isTVDetailKey(key) {
 		return
@@ -365,6 +365,7 @@ func (m *Manager) ProbePlayMetadata(ctx context.Context, user *core.User, key co
 	if m.hasExactPlayMetadata(ctx, id, user, key, caps) {
 		return nil
 	}
+	previous, _ := core.NextEpisodePreparation(ctx)
 	budget := playProbeMetadataWait(ctx)
 	deadline := time.Now().Add(budget)
 	searchDeadline := time.Now().Add(min(budget, playProbeSearchWait))
@@ -396,7 +397,7 @@ func (m *Manager) ProbePlayMetadata(ctx context.Context, user *core.User, key co
 				}
 			default:
 				inFlight = true
-				wasSpeculative = !e.playProbe
+				wasSpeculative = !e.playProbe || e.nextEpisode
 			}
 		}
 		m.mu.Unlock()
@@ -430,10 +431,10 @@ func (m *Manager) ProbePlayMetadata(ctx context.Context, user *core.User, key co
 				}
 				return core.ErrPrepareSlow
 			}
-			wasSpeculative = !e.playProbe
+			wasSpeculative = !e.playProbe || e.nextEpisode
 		}
 
-		if wasSpeculative {
+		if wasSpeculative && previous == 0 {
 			e.markPromoted()
 		}
 
@@ -736,7 +737,8 @@ func (m *Manager) prewarm(requestCtx context.Context, user *core.User, key core.
 		fg = make(chan context.Context, 1)
 		promoted = make(chan struct{})
 	}
-	e := &warmEntry{offset: opts.StartOffset, profileKey: profileKey(profileObj), profileObj: profileObj, caps: caps, done: make(chan struct{}), opened: make(chan struct{}), sourced: make(chan struct{}), foreground: fg, playProbe: playProbe, promoted: promoted, started: now, expires: now.Add(preResolveTTL)}
+	previous, _ := core.NextEpisodePreparation(requestCtx)
+	e := &warmEntry{nextEpisode: previous != 0, offset: opts.StartOffset, profileKey: profileKey(profileObj), profileObj: profileObj, caps: caps, done: make(chan struct{}), opened: make(chan struct{}), sourced: make(chan struct{}), foreground: fg, playProbe: playProbe, promoted: promoted, started: now, expires: now.Add(preResolveTTL)}
 	m.warm[id] = e
 	u := *user
 	wallStarted := time.Now()
@@ -769,6 +771,30 @@ func (m *Manager) prewarm(requestCtx context.Context, user *core.User, key core.
 			ctx, cancel = context.WithTimeout(core.WithIndexerPurpose(m.ctx, core.IndexerPurposePlayback), timeout)
 		} else {
 			ctx, cancel = warmPreparationContextWithPromote(core.WithIndexerPurpose(m.ctx, core.IndexerPurposeWarmup), timeout, e.foreground, e.promoted)
+			if reason == core.PrewarmDetail || reason == core.PrewarmBrowse {
+				ctx = core.WithCachedIndexerSearch(ctx)
+			}
+			if reason == core.PrewarmNextEpisode && cfg.PrefetchNextEpisode {
+				ctx = core.WithSpeculativeGrabs(ctx)
+			}
+		}
+		if e.nextEpisode {
+			probeCtx := ctx
+			isSuccessor := sync.OnceValue(func() bool {
+				if !playProbe {
+					return true // The timeline prefetcher already looked up the successor.
+				}
+				next, err := m.deps.Catalog.NextEpisode(probeCtx, previous)
+				return err == nil && next != nil && next.Key == key
+			})
+			ctx = core.WithNextEpisodePreparation(ctx, previous, func() bool {
+				cache := m.config().Cache
+				if cache.DisableSpeculation || cache.Mode == "off" || !cache.PrefetchNextEpisode {
+					return false
+				}
+				ps, ok := m.SessionForSurface(string(caps.Protocol), u.ID, caps.ClientID, previous, "", false)
+				return ok && m.SessionLiveness(ps.ID) == core.SessionLivenessPlaying && isSuccessor()
+			})
 		}
 		e.setCancel(cancel)
 		defer cancel()
@@ -1001,7 +1027,7 @@ func (m *Manager) prewarm(requestCtx context.Context, user *core.User, key core.
 			}
 			info := generation.infoSnapshot()
 			if reqReason := probedRequiredAudioRejection(profile, title, res.Release, info, fromResume); reqReason != "" {
-				m.noteReleaseProbeMemory(res.Release, res.NZB, info)
+				m.noteSelectionProbe(key, res, info)
 				m.log.Debug("prewarm skipped: required audio absent", "key", key, "release", res.Release.Name, "reason", reqReason)
 				m.dropGeneration(generation)
 				lastRel, lastErr = res.Release, errors.New(reqReason)
@@ -1026,7 +1052,7 @@ func (m *Manager) prewarm(requestCtx context.Context, user *core.User, key core.
 					if burned {
 						skipReason = "burned-in subtitles detected"
 					} else {
-						m.noteReleaseProbeMemory(res.Release, res.NZB, info)
+						m.noteSelectionProbe(key, res, info)
 					}
 					m.log.Debug("prewarm trying next candidate", "key", key, "release", res.Release.Name, "reason", skipReason)
 					if fallbackGen == nil || (fallbackBurned && !burned) {
@@ -1391,7 +1417,7 @@ func warmAcceptable(e *warmEntry, profile core.QualityProfile, caps core.ClientC
 		return false
 	}
 	f := e.facts()
-	if !sourceFitsBitrate(f.size, f.duration, f.bitrate, caps.MaxBitrateKbps) {
+	if !caps.DefaultRemoteBitrate && !sourceFitsBitrate(f.size, f.duration, f.bitrate, caps.MaxBitrateKbps) {
 		return false
 	}
 	if !f.known {
@@ -1410,7 +1436,7 @@ func warmAcceptable(e *warmEntry, profile core.QualityProfile, caps core.ClientC
 	if profile.MinHeight > 0 && f.height > 0 && f.height < profile.MinHeight {
 		return false
 	}
-	if f.codec != "" && len(caps.VideoCodecs) > 0 && !caps.SupportsVideo(f.codec) {
+	if !caps.DeferSourceCodecValidation && f.codec != "" && len(caps.VideoCodecs) > 0 && !caps.SupportsVideo(f.codec) {
 		return false
 	}
 	if f.hdr && !(profile.AllowHDR && caps.HDR10) {
@@ -1604,7 +1630,7 @@ func (m *Manager) takeWarmResolution(ctx context.Context, id identity, profile c
 		default:
 		}
 	}
-	if (e.playProbe || e.isPromoted()) && prefer == "" {
+	if !e.nextEpisode && (e.playProbe || e.isPromoted()) && prefer == "" {
 		select {
 		case <-e.done:
 		case <-ctx.Done():
@@ -1641,7 +1667,7 @@ func (m *Manager) takeWarmResolution(ctx context.Context, id identity, profile c
 		}
 		return nil
 	}
-	if prefer != "" && (e.res == nil || !e.res.MatchesVersion(prefer)) {
+	if !isAutoVersionSelector(prefer) && (e.res == nil || !e.res.MatchesVersion(prefer)) {
 		return nil // keep it: a plain Prepare may still use it
 	}
 	blocked := e.res != nil && m.releaseBlocked(ctx, e.res.Release.ID)
@@ -1716,8 +1742,13 @@ func titleIncludes(parent, key core.RatingKey) bool {
 	return false
 }
 
+func (m *Manager) releaseBlockedLocally(id string) bool {
+	local, ok := m.deps.Resolver.(interface{ LocalReleaseBlocked(string) bool })
+	return ok && local.LocalReleaseBlocked(id)
+}
+
 func (m *Manager) releaseBlocked(ctx context.Context, id string) bool {
-	if local, ok := m.deps.Resolver.(interface{ LocalReleaseBlocked(string) bool }); ok && local.LocalReleaseBlocked(id) {
+	if m.releaseBlockedLocally(id) {
 		return true
 	}
 	if blocked, ok := preloadedReleaseBlocked(ctx, id); ok {

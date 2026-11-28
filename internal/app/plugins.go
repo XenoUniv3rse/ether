@@ -66,15 +66,26 @@ func (a *App) buildPlugins(ctx context.Context, cfg config.Config) (*pluginRunti
 	var busyMu sync.Mutex
 	var busyAt time.Time
 	var busyValue bool
+	durableRoot := filepath.Join(a.opts.DataDir, "plugin-blob-storage")
 	diskUsage := a.opts.diskUsage
 	if diskUsage == nil {
-		diskUsage = func() (int64, int64, error) { return admin.DiskUsage(a.opts.DataDir) }
+		diskUsage = func() (int64, int64, error) { return admin.DiskUsage(durableRoot) }
 	}
-	durableStorage, err := blobcache.OpenDurableStore(filepath.Join(a.opts.DataDir, "plugin-blob-storage"), diskUsage)
+	durableStorage, err := blobcache.OpenDurableStore(durableRoot, diskUsage, func(id string) (blobcache.DurableQuota, int) {
+		policy := a.cfg.Read().Plugins
+		limits := policy.RuntimeOverrides[id]
+		return blobcache.DurableQuota{Bytes: limits.DurableBytes, Files: limits.DurableFiles}, policy.RuntimeLimits.DurableFreePercent
+	})
 	if err != nil {
 		return nil, err
 	}
+	var ffmpeg, ffprobe string
+	if a.transcoder != nil {
+		ffmpeg, ffprobe = a.transcoder.FFmpegPath(), a.transcoder.FFprobePath()
+	}
 	mgr, err := plugins.New(plugins.Deps{
+		FFmpeg:            ffmpeg,
+		FFprobe:           ffprobe,
 		DurableStorage:    durableStorage,
 		EventBus:          a.EventBus(),
 		IsIndexerHost:     a.isConfiguredIndexerHost,
@@ -383,6 +394,7 @@ func (a *App) buildPlugins(ctx context.Context, cfg config.Config) (*pluginRunti
 	adapters.AttachSubtitles(mgr, a.subtitles)
 	adapters.AttachMetadata(mgr, a.catalog)
 	adapters.AttachDebrid(mgr, a.debrid)
+	adapters.AttachDebridCacheHints(mgr, a.debrid)
 	subtitleProbe := adapters.NewSubtitleProbe(mgr, a.catalog)
 	a.closers = append(a.closers, subtitleProbe.Close)
 	markerCtx, cancelMarkers := context.WithCancel(context.Background())
@@ -419,16 +431,8 @@ func (a *App) buildPlugins(ctx context.Context, cfg config.Config) (*pluginRunti
 	}
 	a.closers = append(a.closers, itemsSvc.Close)
 
-	blobDir := filepath.Join(a.opts.DataDir, "blobcache")
-	blobs, err := blobcache.Open(blobDir, blobcache.Options{
-		Logger:    a.log.With("component", "blobcache"),
-		DiskUsage: a.opts.diskUsage,
-	})
-	if err != nil {
-		cancelRun()
-		return nil, err
-	}
-	a.closers = append(a.closers, func() { _ = blobs.Close() })
+	blobDir := filepath.Join(a.cache.Directory(), "plugin-media")
+	blobs := a.mediaFiles
 
 	kindCatalog := adapters.AttachKindCatalog(runCtx, adapters.KindCatalogDeps{
 		TitleInLibrary: func(ctx context.Context, lib core.Library, key core.RatingKey) (bool, error) {
@@ -511,6 +515,9 @@ func (a *App) buildPlugins(ctx context.Context, cfg config.Config) (*pluginRunti
 		admitUsenetCheck = a.availability.AdmitPluginUsenetCheck
 	}
 	mgr.SetKindBackends(plugins.KindBackends{
+		CacheLimit: func(pluginID, libraryKey string) int64 {
+			return blobs.Namespace(libraryKey, kindCatalog.QuotaFor(pluginID, libraryKey)).Quota().MaxBytes
+		},
 		NormalizeStoredReleaseLinks: kindResolver.NormalizeStoredReleaseLinks,
 
 		KindUpsert:                 itemsSvc.KindUpsert,
@@ -529,13 +536,18 @@ func (a *App) buildPlugins(ctx context.Context, cfg config.Config) (*pluginRunti
 		PeekUsenetCheck:            kindResolver.PeekUsenetCheck,
 		AdmitBackgroundUsenetCheck: admitUsenetCheck,
 		CachePut:                   cachePut,
-		CacheOpen:                  cacheOpen,
-		CacheDelete:                cacheDelete,
-		CachePartial:               cachePartial,
-		StreamURL:                  a.adapterStreamURL(adapterTickets),
-		StreamPartURL:              a.adapterStreamPartURL(adapterTickets),
-		StreamURLOptions:           a.adapterStreamURLOptions(adapterTickets),
-		MediaProbe:                 kindResolver.ProbeMedia,
+		CacheLookup: func(pluginID, libraryKey, key string) (string, bool) {
+			ref, ok := blobs.Namespace(libraryKey, kindCatalog.QuotaFor(pluginID, libraryKey)).LookupKey(key)
+			return string(ref), ok
+		},
+		CacheOpen:        cacheOpen,
+		CacheOpenForStat: blobs.OpenPluginBlobForStat,
+		CacheDelete:      cacheDelete,
+		CachePartial:     cachePartial,
+		StreamURL:        a.adapterStreamURL(adapterTickets),
+		StreamPartURL:    a.adapterStreamPartURL(adapterTickets),
+		StreamURLOptions: a.adapterStreamURLOptions(adapterTickets),
+		MediaProbe:       kindResolver.ProbeMedia,
 	})
 	mgr.SetKindViewerState(adapterViewerState{app: a})
 
@@ -747,7 +759,7 @@ func (a *App) mountPlugins(mux *http.ServeMux) {
 		mux.Handle("GET "+remote.TunnelPath, a.pluginsRT.tunnel.Handler())
 	}
 	if a.pluginsRT.pluginHost != nil {
-		mux.Handle(remote.HostPath, a.pluginsRT.pluginHost)
+		mux.Handle(remote.HostPath, a.perf.wrap("plugin-host", a.pluginsRT.pluginHost))
 	}
 	if a.pluginsRT.pairing != nil {
 		mux.Handle(remote.PairExchangePath, lanOnly(http.HandlerFunc(a.pluginsRT.pairing.Exchange), a.cfg.TrustedProxyCIDRs, nil))

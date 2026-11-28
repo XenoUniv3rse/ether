@@ -82,9 +82,42 @@ type FolderHashJob struct {
 type FolderHash struct {
 	Size    int64  `json:"size"`
 	ModTime int64  `json:"modTime"`
-	CRC32   string `json:"crc32"`
-	MD5     string `json:"md5"`
-	SHA1    string `json:"sha1"`
+	CRC32   string `json:"crc32,omitempty"`
+	MD5     string `json:"md5,omitempty"`
+	SHA1    string `json:"sha1,omitempty"`
+	OSHash  string `json:"oshash,omitempty"`
+	PHash   string `json:"phash,omitempty"`
+}
+
+// FolderHashOptions limits which digests are computed. Phash requires a background hash job.
+type FolderHashOptions struct {
+	Algorithms []string `json:"algorithms,omitempty"`
+}
+
+// FolderFrameOptions selects a timestamp, image width and optional owned cache library.
+type FolderFrameOptions struct {
+	AtSec      float64 `json:"atSec"`
+	Width      int     `json:"width"`
+	LibraryKey string  `json:"libraryKey,omitempty"`
+}
+
+// FolderFrame identifies a cached PNG image.
+type FolderFrame struct {
+	Ref        string `json:"ref"`
+	LibraryKey string `json:"libraryKey"`
+}
+
+// FolderListOptions selects names strictly after Cursor in ascending name order.
+type FolderListOptions struct {
+	Cursor string `json:"cursor,omitempty"`
+	Limit  int    `json:"limit,omitempty"`
+}
+
+// FolderPage is a name-sorted page. NextCursor is empty at the end.
+type FolderPage struct {
+	Entries    []FolderEntry `json:"entries"`
+	NextCursor string        `json:"nextCursor"`
+	Truncated  bool          `json:"truncated"`
 }
 
 // FolderEntry describes one entry returned by Host.FoldersList or Host.FoldersStat.
@@ -150,10 +183,12 @@ type Host interface {
 	// titleID accepts a catalogue movie/episode ID or an owned playable item ref.
 	SetWatchState(ctx context.Context, viewerID int64, titleID string, watched bool) error
 	UpsertCollection(ctx context.Context, collection map[string]any) error
-	FoldersList(ctx context.Context, root, path string) ([]FolderEntry, error)
+	FoldersRoots(ctx context.Context) (FolderRoots, error)
+	FoldersList(ctx context.Context, root, path string, options ...FolderListOptions) (FolderPage, error)
 	FoldersStat(ctx context.Context, root, path string) (FolderEntry, error)
-	FoldersHash(ctx context.Context, root, path string) (FolderHash, error)
-	FoldersHashStart(ctx context.Context, root, path string) (FolderHashJob, error)
+	FoldersHash(ctx context.Context, root, path string, options ...FolderHashOptions) (FolderHash, error)
+	FoldersHashStart(ctx context.Context, root, path string, options ...FolderHashOptions) (FolderHashJob, error)
+	FoldersFrame(ctx context.Context, root, path string, options FolderFrameOptions) (FolderFrame, error)
 	FoldersHashPoll(ctx context.Context, id string) (FolderHashJob, error)
 	FoldersHashCancel(ctx context.Context, id string) (FolderHashJob, error)
 	NotifyOwner(ctx context.Context, text string) error
@@ -900,8 +935,12 @@ func (c *RemoteHostClient) UpsertCollection(ctx context.Context, collection map[
 }
 
 // FoldersList is only supported in hosted mode; sidecars access local folders directly.
-func (c *RemoteHostClient) FoldersList(_ context.Context, _, _ string) ([]FolderEntry, error) {
-	return nil, fmt.Errorf("folders.list is for hosted plugins; sidecar plugins read their local fileRoot directly")
+func (c *RemoteHostClient) FoldersRoots(context.Context) (FolderRoots, error) {
+	return nil, fmt.Errorf("folders.roots requires the hosted runtime")
+}
+
+func (c *RemoteHostClient) FoldersList(_ context.Context, _, _ string, _ ...FolderListOptions) (FolderPage, error) {
+	return FolderPage{}, fmt.Errorf("folders.list is for hosted plugins; sidecar plugins read their local fileRoot directly")
 }
 
 // FoldersStat is only supported in hosted mode; sidecars access local folders directly.
@@ -1185,8 +1224,14 @@ func (c *RemoteHostClient) StreamPartURL(ctx context.Context, viewerID int64, it
 // PlayableSource.ID (#576, #661) and optionally resolved to an absolute URL
 // using the active request origin or the adapter's first published address (#772).
 func (c *RemoteHostClient) StreamURLWithOptions(ctx context.Context, viewerID int64, itemRef string, opts StreamURLOptions) (string, error) {
+	if opts.Wait != nil && opts.Wait.MaxSeconds <= 0 {
+		return "", fmt.Errorf("stream url: wait.maxSeconds must be a positive integer")
+	}
 	if opts.PartIndex != nil && *opts.PartIndex < 0 {
 		return "", fmt.Errorf("stream url: partIndex must be non-negative")
+	}
+	if opts.Fallback && opts.Source == "" {
+		return "", fmt.Errorf("stream url: fallback requires a source")
 	}
 	if opts.Source != "" && strings.TrimSpace(opts.Source) == "" {
 		return "", fmt.Errorf("stream url: source must not be blank")
@@ -1197,9 +1242,15 @@ func (c *RemoteHostClient) StreamURLWithOptions(ctx context.Context, viewerID in
 	}
 	if opts.Source != "" {
 		payload["source"] = opts.Source
+		if opts.Fallback {
+			payload["fallback"] = true
+		}
 	}
 	if opts.Absolute {
 		payload["absolute"] = true
+	}
+	if opts.Wait != nil {
+		payload["wait"] = opts.Wait
 	}
 	var headers map[string]string
 	if tok, ok := ViewerTokenFromContext(ctx); ok && tok != "" {
@@ -1215,12 +1266,16 @@ func (c *RemoteHostClient) StreamURLWithOptions(ctx context.Context, viewerID in
 	return out.URL, nil
 }
 
-func (*RemoteHostClient) FoldersHash(context.Context, string, string) (FolderHash, error) {
+func (*RemoteHostClient) FoldersHash(context.Context, string, string, ...FolderHashOptions) (FolderHash, error) {
 	return FolderHash{}, fmt.Errorf("folders.hash requires the hosted runtime")
 }
 
-func (*RemoteHostClient) FoldersHashStart(context.Context, string, string) (FolderHashJob, error) {
+func (*RemoteHostClient) FoldersHashStart(context.Context, string, string, ...FolderHashOptions) (FolderHashJob, error) {
 	return FolderHashJob{}, fmt.Errorf("folders.hash requires the hosted runtime")
+}
+
+func (*RemoteHostClient) FoldersFrame(context.Context, string, string, FolderFrameOptions) (FolderFrame, error) {
+	return FolderFrame{}, fmt.Errorf("folders.frame requires the hosted runtime")
 }
 
 func (*RemoteHostClient) FoldersHashPoll(context.Context, string) (FolderHashJob, error) {

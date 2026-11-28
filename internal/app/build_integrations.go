@@ -49,6 +49,9 @@ func (a *App) buildIntegrations(ctx context.Context, cfg config.Config) error {
 		return fmt.Errorf("managed cache: %w", err)
 	}
 	a.buildInsights()
+	if err := a.notifications.InitializePush(ctx); err != nil {
+		a.log.Warn("notifications: push identity unavailable", "err", err)
+	}
 	a.buildDiscovery()
 	a.episodeorder = episodeorder.New(a.db, a.tmdb, a.catalog)
 	a.catalog.SetMetadataEpisodeGroup(a.episodeorder.MetadataGroup)
@@ -135,8 +138,20 @@ func (a *App) buildIntegrations(ctx context.Context, cfg config.Config) error {
 	mux.Handle("/.well-known/oauth-protected-resource", gateConsole(consoleMux))
 	mux.Handle("/.well-known/oauth-protected-resource/ether/mcp", gateConsole(consoleMux))
 	mux.Handle("/.well-known/oauth-authorization-server", gateConsole(consoleMux))
-	mux.Handle("/", browserRootRedirectWhen(a.consoleOnMain, a.frontends.plexHandler()))
-	a.handler = mux
+	frontendHandler := a.frontends.plexHandler()
+	mux.Handle("/", browserRootRedirectWhen(a.consoleOnMain, frontendHandler))
+	a.handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Roku sends an empty show ID with an explicit episode anchor. Let the
+		// MediaBrowser router handle that registered path before ServeMux cleans it.
+		if r.Method == http.MethodGet && strings.Contains(r.URL.Path, "//") &&
+			(strings.EqualFold(r.URL.Path, "/jellyfin/shows//episodes") || strings.EqualFold(r.URL.Path, "/emby/shows//episodes")) {
+			if h := a.frontends.control.listeners.sharedHandler(r.URL.Path); h != nil {
+				h.ServeHTTP(w, r)
+				return
+			}
+		}
+		mux.ServeHTTP(w, r)
+	})
 	return nil
 }
 

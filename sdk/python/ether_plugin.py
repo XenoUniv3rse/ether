@@ -31,6 +31,7 @@ import threading
 import urllib.error
 import urllib.parse
 import urllib.request
+import zlib
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, TypedDict, Union
 
@@ -69,14 +70,87 @@ _BANNED_COPY_RE = re.compile(r"\b(simply|easily|just)\b", re.IGNORECASE)
 _INTERP_RE = re.compile(r"\{([A-Za-z0-9_]+)\}")
 
 
-class PluginHttpError(Exception):
-    """Structured HTTP error raised by a plugin route handler."""
+# Wire types for hosted folder results. Python sidecars cannot invoke these
+# host operations, but can consume their results in plugin data or fixtures.
+class _FolderEntryRequired(TypedDict):
+    name: str
+    path: str
+    dir: bool
 
-    def __init__(self, status: int, code: str, message: str) -> None:
+
+class FolderEntry(_FolderEntryRequired, total=False):
+    size: int
+    mtime: int
+
+
+class FolderListOptions(TypedDict, total=False):
+    cursor: str
+    limit: int
+
+
+class FolderPage(TypedDict):
+    entries: List[FolderEntry]
+    nextCursor: str
+    truncated: bool
+
+
+class FolderHashOptions(TypedDict, total=False):
+    algorithms: List[Literal["crc32", "md5", "sha1", "oshash", "phash"]]
+
+
+class _FolderHashMetadata(TypedDict):
+    size: int
+    modTime: int
+
+
+class FolderHash(_FolderHashMetadata, total=False):
+    crc32: str
+    md5: str
+    sha1: str
+    oshash: str
+    phash: str
+
+
+class _FolderHashJobStatus(TypedDict):
+    id: str
+    state: Literal["running", "done", "canceled", "error"]
+    bytes: int
+
+
+class FolderHashJob(_FolderHashJobStatus, total=False):
+    result: FolderHash
+    error: str
+
+
+class _FolderFrameRequest(TypedDict):
+    atSec: float
+    width: int
+
+
+class FolderFrameOptions(_FolderFrameRequest, total=False):
+    libraryKey: str
+
+
+class FolderFrame(TypedDict):
+    ref: str
+    libraryKey: str
+
+
+class PluginHttpError(Exception):
+    """Owner-facing route error.
+
+    Ether recognizes auth, rate_limited, upstream_unavailable, not_found and
+    invalid_settings. Use a message that contains no credentials.
+    """
+
+    def __init__(
+        self, status: int, code: str, message: str, retry_after_seconds: Optional[int] = None
+    ) -> None:
         super().__init__(message)
         self.status = int(status)
         self.code = str(code)
         self.message = str(message)
+        self.retry_after_seconds = retry_after_seconds
 
 
 PluginRouteError = PluginHttpError
@@ -752,7 +826,7 @@ class _HttpClient:
         return self._call("POST", "/ether/plugin-host/data/http.hash", [req])
 
     def fetch_to_cache(self, req: Dict[str, Any]) -> Dict[str, Any]:
-        """Stream a remote GET into the plugin's library cache (`{url, headers?, keepHeadersOnRedirect?, libraryKey, name, timeoutMs?, resume?, connections?}`). Defaults to a 10 min timeout (also the ceiling on viewer/request paths; jobs, schedules, and background contexts may raise `timeoutMs` up to the calling job's remaining deadline). Set `resume: True` to continue a partial download when validators match, preserving progress per range. `connections` defaults to 1. Jobs, schedules, and background calls can request up to 8 concurrent ranges, subject to the host cap."""
+        """Stream a remote GET into the plugin's library cache (`{url, headers?, keepHeadersOnRedirect?, libraryKey, name, timeoutMs?, resume?, connections?}`). Defaults to a 10 min timeout (also the ceiling on viewer/request paths; jobs, schedules, and background contexts may raise `timeoutMs` up to the calling job's remaining deadline). Set `resume: True` to continue a partial download when validators match, preserving progress per range. `connections` defaults to 1. Jobs, schedules, and background calls can request up to 6 concurrent ranges, sharing the host's limit of 6 per origin."""
         return self._call("POST", "/ether/plugin-host/data/http.fetchToCache", [req])
 
     fetchToCache = fetch_to_cache
@@ -1152,9 +1226,12 @@ class _FrontendClient:
         source: Optional[str] = None,
         absolute: bool = False,
         viewer_token: Optional[str] = None,
+        fallback: bool = False,
     ) -> str:
         checked = _check_part_index(part_index)
         checked_source = _check_stream_source(source)
+        if not isinstance(fallback, bool) or (fallback and not checked_source):
+            raise ValueError("stream url: fallback requires a named source")
         if not isinstance(absolute, bool):
             raise ValueError("stream url: absolute must be a bool")
         payload: Dict[str, Any] = {"viewerId": int(viewer_id), "itemRef": str(item_ref)}
@@ -1162,6 +1239,8 @@ class _FrontendClient:
             payload["partIndex"] = checked
         if checked_source is not None:
             payload["source"] = checked_source
+            if fallback:
+                payload["fallback"] = True
         if absolute:
             payload["absolute"] = True
         tok = (
@@ -1251,6 +1330,14 @@ class RemoteHostClient:
             norm = _check_data_range(data_range)
             res = self._p._call_json("POST", "/ether/plugin-host/data/cache.read", [str(blob_ref), norm])
             return base64.b64decode((res or {}).get("bodyBase64") or "")
+
+        def stat(self, blob_ref: str) -> "CacheStatResult":
+            """Return size and digests for an owned blob."""
+            token = self._p.viewer_token
+            return self._p._call_json(
+                "POST", "/ether/plugin-host/data/cache.stat", [str(blob_ref)],
+                extra_headers={HEADER_VIEWER_TOKEN: token} if token else None,
+            )
 
         def rasterize(
             self,
@@ -1392,6 +1479,7 @@ class PluginContext:
         part_index: Optional[int] = None,
         source: Optional[str] = None,
         absolute: bool = False,
+        fallback: bool = False,
     ) -> str:
         """Mint a scoped Ether stream URL for one of this plugin's own kind
         items (spec §6.5), optionally scoped to a zero-based part (#576), a
@@ -1403,6 +1491,8 @@ class PluginContext:
             raise RuntimeError("stream url: no host service available")
         checked = _check_part_index(part_index)
         checked_source = _check_stream_source(source)
+        if not isinstance(fallback, bool) or (fallback and not checked_source):
+            raise ValueError("stream url: fallback requires a named source")
         if not isinstance(absolute, bool):
             raise ValueError("stream url: absolute must be a bool")
         raw = _get_header(self.headers, "X-Ether-Viewer")
@@ -1415,6 +1505,8 @@ class PluginContext:
         kwargs: Dict[str, Any] = {}
         if checked_source is not None:
             kwargs["source"] = checked_source
+            if fallback:
+                kwargs["fallback"] = True
         if absolute:
             kwargs["absolute"] = True
         if kwargs:
@@ -1524,11 +1616,16 @@ def _ok_response(
     return {"status": status, "headers": merged, "body": body}
 
 
-def _error_response(status: int, code: str, message: str) -> Dict[str, Any]:
+def _error_response(
+    status: int, code: str, message: str, retry_after_seconds: Optional[int] = None
+) -> Dict[str, Any]:
+    error: Dict[str, Any] = {"code": code, "message": message}
+    if retry_after_seconds is not None:
+        error["retryAfterSeconds"] = retry_after_seconds
     return {
         "status": status,
         "headers": {"Content-Type": "application/json"},
-        "body": {"error": {"code": code, "message": message}},
+        "body": {"error": error},
     }
 
 
@@ -1706,7 +1803,7 @@ class PluginInstance:
             ctx = self._build_context(req)
             return self._dispatch_core(req, ctx)
         except PluginHttpError as exc:
-            return _error_response(exc.status, exc.code, exc.message)
+            return _error_response(exc.status, exc.code, exc.message, exc.retry_after_seconds)
         except Exception as exc:
             return _error_response(500, "internal_error", str(exc) or "Internal plugin error.")
 
@@ -1858,6 +1955,14 @@ class PluginInstance:
                     ctx,
                 )
             )
+
+        if method == "POST" and path == "/ether/debrid/hints":
+            fn = self.routes.get("debrid_cache_hints") or self.routes.get("debridCacheHints")
+            if not fn:
+                return _error_response(404, "not_found", "Debrid cache hints handler is not registered.")
+            body_obj = _parse_json_body(req.get("body"))
+            candidates = body_obj.get("candidates")
+            return _ok_response(fn({"candidates": candidates if isinstance(candidates, list) else []}, ctx))
 
         if method == "GET" and path == "/ether/channels.json":
             fn = self.routes.get("channels")
@@ -2992,6 +3097,7 @@ class MockHostClient:
         self.last_stream_url: Optional[Tuple[int, str]] = None
         self.last_stream_url_part: Optional[int] = None
         self.last_stream_url_source: Optional[str] = None
+        self.last_stream_url_fallback: bool = False
         self.last_stream_url_absolute: bool = False
         self.stream_origin: str = "http://ether.test"
         self.http_handler: Callable[[Dict[str, Any]], Dict[str, Any]] = lambda req: {
@@ -3055,14 +3161,18 @@ class MockHostClient:
             part_index: Optional[int] = None,
             source: Optional[str] = None,
             absolute: bool = False,
+            fallback: bool = False,
         ) -> str:
             checked = _check_part_index(part_index)
             checked_source = _check_stream_source(source)
+            if not isinstance(fallback, bool) or (fallback and not checked_source):
+                raise ValueError("stream url: fallback requires a named source")
             if not isinstance(absolute, bool):
                 raise ValueError("stream url: absolute must be a bool")
             self._p.last_stream_url = (int(viewer_id), str(item_ref))
             self._p.last_stream_url_part = checked
             self._p.last_stream_url_source = checked_source
+            self._p.last_stream_url_fallback = fallback
             self._p.last_stream_url_absolute = absolute
             base = f"/ether/v1/kind-media/mock-{int(viewer_id)}"
             rel = base if checked is None else f"{base}?part={checked}"
@@ -3315,6 +3425,16 @@ class MockHostClient:
             raw = self._p.blobs[blob_ref]
             return raw[norm["offset"] : norm["offset"] + norm["length"]]
 
+        def stat(self, blob_ref: str) -> "CacheStatResult":
+            raw = self.open(blob_ref)
+            return {
+                "size": len(raw),
+                "sha256": hashlib.sha256(raw).hexdigest(),
+                "sha1": hashlib.sha1(raw).hexdigest(),
+                "md5": hashlib.md5(raw).hexdigest(),
+                "crc32": f"{zlib.crc32(raw):08x}",
+            }
+
         def rasterize(
             self,
             library_key: str,
@@ -3406,7 +3526,6 @@ class MockHostClient:
         ) -> ArchiveExtractResult:
             import io
             import zipfile
-            import zlib
 
             with zipfile.ZipFile(io.BytesIO(self._p.blobs[blob_ref])) as zf:
                 infos = zf.infolist()
@@ -4339,6 +4458,7 @@ class PlayableSource(TypedDict, total=False):
     the plugin's order across tiers. Omit ``tier`` to keep exact plugin order.
     """
 
+    connections: int
     path: str
     id: str
     label: str
@@ -4419,9 +4539,16 @@ class FrontendUploadPath(TypedDict):
     maxBytes: int
 
 
-class FrontendUploadBlob(TypedDict, total=False):
-    ref: str
+class CacheStatResult(TypedDict):
     size: int
+    sha256: str
+    sha1: str
+    md5: str
+    crc32: str
+
+
+class FrontendUploadBlob(CacheStatResult, total=False):
+    ref: str
     contentType: str
     field: str
     filename: str
@@ -4497,12 +4624,13 @@ def stream_url(
     part_index: Optional[int] = None,
     source: Optional[str] = None,
     absolute: bool = False,
+    fallback: bool = False,
 ) -> str:
     """Mint an Ether stream URL for one of this plugin's own kind items
     (spec §6.5), optionally pinned to a zero-based part (#576), a resolver
     PlayableSource.id (#661), and/or resolved to an absolute URL (#772). Kept
     as a thin wrapper over PluginContext.stream_url."""
-    return ctx.stream_url(item_ref, part_index=part_index, source=source, absolute=absolute)
+    return ctx.stream_url(item_ref, part_index=part_index, source=source, absolute=absolute, fallback=fallback)
 
 
 def kinds_visible(

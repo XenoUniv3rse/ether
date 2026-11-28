@@ -57,7 +57,7 @@ type resolveProgressEntry struct {
 // cancellation (preserving context values such as background budgets and
 // indexer purpose) and bounded by timeout. Concurrent callers with the same
 // flightKey join the single in-flight probe. If the caller's context expires
-// first (e.g. a 5 s plugin /resolve guest deadline), the probe finishes in the
+// first (for example, the plugin exhausts its /resolve slice), the probe finishes in the
 // background so its cached result is ready for the next resolve slice.
 //
 // When onAbandonedDone is non-nil, it is invoked at most once if the probe
@@ -337,9 +337,8 @@ func cloneSourceCandidates(in []core.SourceCandidate) []core.SourceCandidate {
 
 // allowTimeoutPreparing decides whether a guest timeout on /resolve reflects
 // bounded forward progress (host source calls in flight, just completed, or a
-// pending indexer search) and should surface as core.PreparingError rather than
-// core.ErrSourceUnavailable. A timeout with no source activity fails at once;
-// repeated slices without new work or exceeding resolvePrepareBudget also fail.
+// pending indexer search) worth continuing within this flight. An idle or
+// stalled guest ends the flight and leaves retrying to the client.
 func (r *KindResolver) allowTimeoutPreparing(fk resolveFlightKey, st *resolveSearchState) bool {
 	if r == nil || st == nil {
 		return false

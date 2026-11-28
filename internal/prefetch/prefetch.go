@@ -335,7 +335,7 @@ func (p *Prefetcher) OnTimeline(user *core.User, key core.RatingKey, offset, dur
 	if p.config().SpeculativeWarming != "off" {
 		p.onTimelinePostPlay(user, key, offset, duration, state)
 	}
-	if user == nil || key.Kind() != core.KindEpisode || duration <= 0 || offset <= 0 {
+	if user == nil || key.Kind() != core.KindEpisode || state != "playing" || duration <= 0 || offset <= 0 {
 		return
 	}
 	cfg := p.config()
@@ -513,7 +513,7 @@ func (p *Prefetcher) nextEpisode(ctx context.Context, user *core.User, key core.
 	// warming. Merely remembering an NZB still leaves container probing on
 	// the critical path when the player advances to this episode.
 	if p.deps.Prewarmer != nil {
-		if p.deps.Prewarmer.Prewarm(ctx, user, next.Key, caps, core.PrewarmOptions{
+		if p.deps.Prewarmer.Prewarm(core.WithNextEpisodePreparation(ctx, key, nil), user, next.Key, caps, core.PrewarmOptions{
 			Reason: core.PrewarmNextEpisode, PrefetchBytes: length, DuringPlayback: true,
 		}) {
 			if out := outcomeFromContext(ctx); out != nil {
@@ -547,7 +547,7 @@ func (p *Prefetcher) nextEpisode(ctx context.Context, user *core.User, key core.
 	}
 
 	// Nobody waits on a prefetch: fallback queries go one at a time.
-	res, err := p.deps.Resolver.Resolve(core.WithIndexerPurpose(core.WithUnattendedSearch(ctx), core.IndexerPurposeWarmup), core.ResolveRequest{Title: next, Client: caps, User: user})
+	res, err := p.deps.Resolver.Resolve(core.WithIndexerPurpose(core.WithSpeculativeGrabs(core.WithUnattendedSearch(ctx)), core.IndexerPurposeWarmup), core.ResolveRequest{Title: next, Client: caps, User: user})
 	if errors.Is(err, core.ErrNotAvailable) {
 		log.Debug("next episode not available")
 		return nil

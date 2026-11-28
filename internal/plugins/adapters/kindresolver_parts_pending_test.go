@@ -9,15 +9,18 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/braedonsaunders/ether/internal/config"
 	"github.com/braedonsaunders/ether/internal/core"
 	"github.com/braedonsaunders/ether/internal/plugins"
 	"github.com/braedonsaunders/ether/internal/plugins/adapters"
 	"github.com/braedonsaunders/ether/internal/plugins/wasm"
+	"github.com/braedonsaunders/ether/internal/resolver"
 )
 
 func TestKindResolverMultiPartSequenceAndOpenKindPart(t *testing.T) {
@@ -365,7 +368,8 @@ func TestKindResolverPendingReturnsErrPreparingNotNoSource(t *testing.T) {
 }
 
 type pendingSearchIndexer struct {
-	pending atomic.Bool
+	pending  atomic.Bool
+	timedOut atomic.Bool
 }
 
 func (p *pendingSearchIndexer) Name() string { return "pending-indexer" }
@@ -381,6 +385,12 @@ func (p *pendingSearchIndexer) SearchWithOptions(_ context.Context, _ core.Searc
 			Indexers: []core.IndexerSearchStatus{{IndexerID: "slow", Indexer: "Slow", Status: core.IndexerStatusPending}},
 			Pending:  []core.IndexerRef{{IndexerID: "slow", Indexer: "Slow"}},
 		}, nil
+	}
+	if p.timedOut.Load() {
+		return core.IndexerSearchResult{Indexers: []core.IndexerSearchStatus{
+			{IndexerID: "fast", Status: core.IndexerStatusAnswered},
+			{IndexerID: "slow", ConfiguredName: "Test indexer", Status: core.IndexerStatusTimedOut},
+		}}, nil
 	}
 	return core.IndexerSearchResult{
 		Indexers: []core.IndexerSearchStatus{{IndexerID: "slow", Indexer: "Slow", Status: core.IndexerStatusAnswered}},
@@ -402,6 +412,8 @@ func TestKindResolverDeadlinePendingAndSpeculativeNotNegativeCached(t *testing.T
 
 	idx := &pendingSearchIndexer{}
 	idx.pending.Store(true)
+	history := resolver.New(idx, nil, nil, config.Defaults(""), resolver.Options{})
+	defer history.Close()
 	kr := adapters.NewKindResolver(adapters.KindResolverDeps{
 		Manager:   h.mgr,
 		Libraries: h.libs,
@@ -409,6 +421,7 @@ func TestKindResolverDeadlinePendingAndSpeculativeNotNegativeCached(t *testing.T
 		Blobs:     h.blobs,
 		Catalog:   h.catalog,
 		Indexer:   idx,
+		Resolver:  history,
 		HTTP:      httpClient,
 	})
 	defer kr.Close()
@@ -504,14 +517,37 @@ func TestKindResolverDeadlinePendingAndSpeculativeNotNegativeCached(t *testing.T
 	if _, ok, rerr := h.items.GetPartResolution(ctx, pendingItem.Ref, nil); ok || rerr != nil {
 		t.Fatalf("pending-indexer saved negative resolution: ok=%v err=%v", ok, rerr)
 	}
-	// Once the search settles with a playable source, Play immediately opens it.
+	// A terminal timeout alongside an answered indexer is still incomplete.
 	idx.pending.Store(false)
+	idx.timedOut.Store(true)
+	if _, err := kr.OpenKind(ctx, viewer, pendingItem.Key, nil); !errors.Is(err, core.ErrPreparing) {
+		t.Fatalf("partially timed-out OpenKind error = %v", err)
+	}
+	if _, found, err := h.items.GetPartResolution(ctx, pendingItem.Ref, nil); found || err != nil {
+		t.Fatalf("partial search cached a negative resolution: found=%v err=%v", found, err)
+	}
+	rows, _, err := history.History(ctx, resolver.HistoryFilter{TitleKey: pendingItem.Key})
+	if err != nil || len(rows) == 0 || !strings.Contains(rows[0].Error, "timed out (Test indexer)") {
+		t.Fatalf("timeout missing from filtered history: %+v, %v", rows, err)
+	}
+
+	// Once the search settles with a playable source, Play immediately opens it.
+	idx.timedOut.Store(false)
 	mode.Store(3)
 	media, err := kr.OpenKind(ctx, viewer, pendingItem.Key, nil)
 	if err != nil {
 		t.Fatalf("OpenKind after pending search settled: %v", err)
 	}
 	_ = media.Closer.Close()
+	rows, _, err = history.History(ctx, resolver.HistoryFilter{TitleKey: pendingItem.Key})
+	if err != nil || len(rows) == 0 || rows[0].ReleaseID == "" || rows[0].Error != "" {
+		t.Fatalf("successful play missing from filtered history: %+v, %v", rows, err)
+	}
+	entry, err := history.HistoryEntry(ctx, rows[0].ID)
+	if err != nil || entry.Trace == nil || !entry.Trace.PluginKind ||
+		len(entry.Trace.Candidates) == 0 || entry.Trace.Candidates[0].ReleaseID != entry.Trace.Winner {
+		t.Fatalf("successful play missing its winner trace: %+v, %v", entry, err)
+	}
 
 	// 3. A speculative detail warm (KindVersions with SpeculativeIndexerWork)
 	// returning 0 sources must NOT persist a 60s negative cache row that blocks
@@ -681,7 +717,7 @@ func TestKindResolverGuestTimeoutDuringUsenetCheckPreparesAndCaches(t *testing.T
 	const pluginID = "community.example.usenettimeout"
 	timeoutErr := &wasm.Error{
 		Status:  wasm.StatusTimeout,
-		Message: "call exceeded its 5 s deadline for /ether/v1/kinds/recordings/resolve",
+		Message: "call exceeded its 12 s deadline for /ether/v1/kinds/recordings/resolve",
 		Trap:    true,
 	}
 
@@ -828,15 +864,15 @@ func TestKindResolverGuestTimeoutDuringUsenetCheckPreparesAndCaches(t *testing.T
 		t.Fatalf("fetches=%d checks=%d, want 1, 1 (next slice must reuse background probe result)", idx.fetchCount(), eng.checkCount())
 	}
 
-	// 3. Bounds: a guest timeout with no host source activity fails immediately.
+	// 3. Bounds: an idle guest timeout ends the flight with a retry hint.
 	mode.Store(2)
 	_, err = kr.OpenKind(ctx, viewer, trkIdle.Key, nil)
-	if !errors.Is(err, core.ErrSourceUnavailable) || errors.Is(err, core.ErrPreparing) {
-		t.Fatalf("idle guest timeout err = %v, want core.ErrSourceUnavailable", err)
+	if !errors.Is(err, core.ErrPreparing) {
+		t.Fatalf("idle guest timeout err = %v, want a retry hint", err)
 	}
 
 	// 4. Bounds: repeated timeouts without new work (only repeating a cached
-	// check) stop returning PreparingError and fail honestly after the stall cap.
+	// check) stop continuing the flight after the stall cap.
 	mode.Store(3)
 	for i := range 2 {
 		_, err = kr.OpenKind(ctx, viewer, trkStall.Key, nil)
@@ -845,12 +881,12 @@ func TestKindResolverGuestTimeoutDuringUsenetCheckPreparesAndCaches(t *testing.T
 		}
 	}
 	_, err = kr.OpenKind(ctx, viewer, trkStall.Key, nil)
-	if !errors.Is(err, core.ErrSourceUnavailable) || errors.Is(err, core.ErrPreparing) {
-		t.Fatalf("stalled resolve after cap err = %v, want core.ErrSourceUnavailable", err)
+	if !errors.Is(err, core.ErrPreparing) {
+		t.Fatalf("stalled resolve after cap err = %v, want a retry hint", err)
 	}
 
-	// 5. Bounds: exceeding the overall prepare budget fails honestly even when
-	// each slice starts new source work.
+	// 5. The overall prepare budget ends the flight even when each slice
+	// starts new source work.
 	mode.Store(4)
 	_, err = kr.OpenKind(ctx, viewer, trkBudget.Key, nil)
 	if !errors.Is(err, core.ErrPreparing) {
@@ -858,7 +894,7 @@ func TestKindResolverGuestTimeoutDuringUsenetCheckPreparesAndCaches(t *testing.T
 	}
 	advanceClock(91 * time.Second)
 	_, err = kr.OpenKind(ctx, viewer, trkBudget.Key, nil)
-	if !errors.Is(err, core.ErrSourceUnavailable) || errors.Is(err, core.ErrPreparing) {
-		t.Fatalf("over-budget resolve err = %v, want core.ErrSourceUnavailable", err)
+	if !errors.Is(err, core.ErrPreparing) {
+		t.Fatalf("over-budget resolve err = %v, want a retry hint", err)
 	}
 }

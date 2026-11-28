@@ -506,15 +506,16 @@ func (s *Service) latestFromRecent(ctx context.Context, v *core.User, library Li
 				return nil, err
 			}
 		}
-		for i := range titles {
-			if titles[i].AddedAt.IsZero() || !s.visible(ctx, v, &titles[i]) {
+		visible, err := s.allowTitles(ctx, v, titles)
+		if err != nil {
+			return nil, err
+		}
+		for _, title := range visible {
+			if title.AddedAt.IsZero() || (filterPlayed && watched[title.Key] != playedOnly) {
 				continue
 			}
-			if filterPlayed && watched[titles[i].Key] != playedOnly {
-				continue
-			}
-			value := titles[i].AddedAt
-			result = append(result, frontend.LatestItem{Title: titles[i], AddedAt: &value})
+			value := title.AddedAt
+			result = append(result, frontend.LatestItem{Title: title, AddedAt: &value})
 			if len(result) == limit {
 				break
 			}

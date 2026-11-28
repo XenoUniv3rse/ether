@@ -84,7 +84,8 @@ type FetchCacheRequest struct {
 	// Resume continues a partial cached download with Range: bytes=<cached>-
 	// when the server supports ranges and ETag / Last-Modified validators match.
 	Resume bool `json:"resume,omitempty"`
-	// Connections requests parallel range downloads in jobs and background calls.
+	// Connections requests 1 to 6 parallel ranges in jobs and background calls.
+	// Defaults to 1 and shares the host's per-origin limit of 6.
 	Connections int `json:"connections,omitempty"`
 }
 
@@ -153,7 +154,7 @@ func (r *boundedDataReader) Read(p []byte) (int, error) {
 	if r.left < 0 {
 		return 0, errDataExceedsSizeLimit
 	}
-	if int64(len(p)) > r.left+1 {
+	if int64(len(p))-1 > r.left {
 		p = p[:r.left+1]
 	}
 	n, err := r.r.Read(p)
@@ -320,7 +321,7 @@ func (h *host) HTTPFetchToCache(ctx context.Context, req FetchCacheRequest) (Fet
 	defer cancel()
 
 	fetchLimit := h.DataLimits(ctx).FetchBytes
-	cacheQuota := decl.Cache.EffectiveMaxBytes()
+	cacheQuota := h.m.kindBackends().libraryLimit(h.plugin, req.LibraryKey, decl.Cache)
 	maxBytes := min(fetchLimit, cacheQuota)
 
 	connections := h.fetchCacheConnections(ctx, req)
@@ -338,11 +339,18 @@ func (h *host) HTTPFetchToCache(ctx context.Context, req FetchCacheRequest) (Fet
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return FetchCacheResult{}, fmt.Errorf("plugins: fetchToCache HTTP %d", resp.StatusCode)
 	}
+	if resp.ContentLength > maxBytes {
+		return FetchCacheResult{}, fetchSizeLimitError(resp.ContentLength, fetchLimit, cacheQuota)
+	}
 	crc, m, s := crc32.NewIEEE(), md5.New(), sha1.New()
 	reader := &boundedDataReader{ctx: fetchCtx, r: resp.Body, left: maxBytes}
-	ref, err := h.CachePut(fetchCtx, req.LibraryKey, req.Name, io.TeeReader(reader, io.MultiWriter(crc, m, s)))
+	input := sizedCacheInput{io.TeeReader(reader, io.MultiWriter(crc, m, s)), resp.ContentLength}
+	ref, err := h.CachePut(fetchCtx, req.LibraryKey, req.Name, input)
 	h.noteFetchTraffic(ctx, req.FetchRequest, reader.size)
 	if err != nil {
+		if errors.Is(err, errDataExceedsSizeLimit) && reader.size > cacheQuota {
+			err = fetchSizeLimitError(reader.size, fetchLimit, cacheQuota)
+		}
 		return FetchCacheResult{}, wrapFetchCacheError(fetchCtx, req.URL, err)
 	}
 	return FetchCacheResult{Blob: ref, Size: reader.size, CRC32: fmt.Sprintf("%08x", crc.Sum32()), MD5: fmt.Sprintf("%x", m.Sum(nil)), SHA1: fmt.Sprintf("%x", s.Sum(nil)), Status: resp.StatusCode}, nil
@@ -1208,6 +1216,32 @@ func CallDataHost(ctx context.Context, h Host, name string, raw json.RawMessage)
 			Resume:      req.Resume,
 			Connections: req.Connections,
 		})
+	} else if name == "cache.usage" {
+		var opts struct {
+			Durable bool `json:"durable"`
+		}
+		if len(args) != 1 || json.Unmarshal(args[0], &opts) != nil || !opts.Durable {
+			return nil, &ValidationError{Fields: []FieldError{{Field: "cache.usage", Message: "expected {durable: true}"}}}
+		}
+		service, ok := h.(interface {
+			CacheUsage(context.Context) (blobcache.DurableUsage, error)
+		})
+		if !ok {
+			return nil, ErrUnavailable
+		}
+		value, err = service.CacheUsage(ctx)
+	} else if name == "cache.stat" {
+		var ref string
+		if len(args) != 1 || json.Unmarshal(args[0], &ref) != nil || ref == "" {
+			return nil, &ValidationError{Fields: []FieldError{{Field: "cache.stat", Message: "expected one blob reference"}}}
+		}
+		service, ok := h.(interface {
+			CacheStat(context.Context, string) (blobcache.Stat, error)
+		})
+		if !ok {
+			return nil, ErrUnavailable
+		}
+		value, err = service.CacheStat(ctx, ref)
 	} else if name == "cache.rasterize" {
 		if len(args) < 3 || len(args) > 4 {
 			return nil, fmt.Errorf("plugins: cache.rasterize takes (libraryKey, name, sourceBlob[, options])")
@@ -1387,7 +1421,7 @@ func CallDataHost(ctx context.Context, h Host, name string, raw json.RawMessage)
 					sourceLibKey = src.LibraryKey()
 				}
 				libraryKey := extractOpt.LibraryKey
-				cacheLimit := int64(MaxDataFetchBytes)
+				cacheLimit := int64(math.MaxInt64)
 				if resolver, ok := h.(interface {
 					resolveExtractTarget(context.Context, string, string, string) (string, int64, error)
 				}); ok {
@@ -1421,7 +1455,8 @@ func CallDataHost(ctx context.Context, h Host, name string, raw json.RawMessage)
 					cacheLimit:  cacheLimit,
 					expected:    int64(f.Size),
 				}
-				cachedRef, e := h.CachePut(ctx, libraryKey, entryName, io.TeeReader(reader, io.MultiWriter(crc, md5Hash, sha1Hash)))
+				input := sizedCacheInput{io.TeeReader(reader, io.MultiWriter(crc, md5Hash, sha1Hash)), int64(f.Size)}
+				cachedRef, e := h.CachePut(ctx, libraryKey, entryName, input)
 				if e != nil {
 					return nil, e
 				}

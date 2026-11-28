@@ -3,7 +3,12 @@ package frontendadapter
 import (
 	"bytes"
 	"context"
+	"crypto/md5"
+	"crypto/sha1"
+	"crypto/sha256"
 	"errors"
+	"fmt"
+	"hash/crc32"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -21,10 +26,29 @@ import (
 type uploadTestManager struct {
 	*fakeManager
 	store *blobcache.DurableStore
+	meta  plugins.FrontendAdapterMeta
 }
 
-func (m *uploadTestManager) BeginAdapterUpload(_ context.Context, id, _, _ string, size int64) (*blobcache.Upload, error) {
-	return m.store.BeginUpload(id, size)
+func (m *uploadTestManager) BeginAdapterUpload(_ context.Context, id, _ string, subpath string, size int64) (*blobcache.Upload, int64, error) {
+	limit := m.meta.UploadLimit(subpath)
+	if size > limit {
+		return nil, 0, blobcache.ErrTooLarge
+	}
+	if size <= 0 {
+		size = limit
+	}
+	upload, err := m.store.BeginUpload(id, size)
+	return upload, limit, err
+}
+
+func checkUploadDigests(t *testing.T, blob plugins.FrontendUploadBlob, data []byte) {
+	t.Helper()
+	if blob.SHA256 != fmt.Sprintf("%x", sha256.Sum256(data)) ||
+		blob.SHA1 != fmt.Sprintf("%x", sha1.Sum(data)) ||
+		blob.MD5 != fmt.Sprintf("%x", md5.Sum(data)) ||
+		blob.CRC32 != fmt.Sprintf("%08x", crc32.ChecksumIEEE(data)) {
+		t.Fatalf("unexpected upload digests: %+v", blob)
+	}
 }
 
 // The body is generated in bounded reads and checks that bytes are reaching
@@ -64,7 +88,7 @@ func TestAdapterUploadLifecycle(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
 	storageDir := filepath.Join(root, "storage")
-	store, err := blobcache.OpenDurableStore(storageDir, nil)
+	store, err := blobcache.OpenDurableStore(storageDir, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -82,11 +106,13 @@ func TestAdapterUploadLifecycle(t *testing.T) {
 			if file.Field != "save" || file.Filename != "state.bin" || file.Size != 4 || file.ContentType != "application/octet-stream" {
 				t.Fatalf("unexpected file metadata: %+v", file)
 			}
+			checkUploadDigests(t, file, []byte("save"))
 			staged = blobcache.Ref(file.Ref)
 		} else {
 			if req.Upload.Blob == nil || req.Upload.Blob.Size != 20<<20 || req.Upload.Blob.ContentType != "application/octet-stream" {
 				t.Fatalf("unexpected raw upload: %+v", req.Upload)
 			}
+			checkUploadDigests(t, *req.Upload.Blob, make([]byte, 20<<20))
 			staged = blobcache.Ref(req.Upload.Blob.Ref)
 			if src, err := store.Open("other.plugin", staged); !errors.Is(err, blobcache.ErrNotFound) {
 				if src != nil {
@@ -113,6 +139,7 @@ func TestAdapterUploadLifecycle(t *testing.T) {
 	}
 	decl := testDecl(core.LibraryMovies)
 	decl.Meta.UploadPaths = []plugins.FrontendUploadPath{{Path: "/upload/*", MaxBytes: 24 << 20}, {Path: "/upload/limited", MaxBytes: 8}}
+	mgr.meta = decl.Meta
 	f, err := New(decl, mgr)
 	if err != nil {
 		t.Fatal(err)
@@ -189,7 +216,7 @@ func TestAdapterUploadLifecycle(t *testing.T) {
 		t.Fatalf("ordinary cache did not evict: %v", err)
 	}
 
-	store, err = blobcache.OpenDurableStore(storageDir, nil)
+	store, err = blobcache.OpenDurableStore(storageDir, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -205,7 +232,7 @@ func TestAdapterUploadLifecycle(t *testing.T) {
 	if len(savedPaths) != 1 {
 		t.Fatal("expected one durable file")
 	}
-	if err := os.Truncate(savedPaths[0], blobcache.DurableMaxBytes); err != nil {
+	if err := os.Truncate(savedPaths[0], blobcache.DurableDefaultBytes); err != nil {
 		t.Fatal(err)
 	}
 	u, err := store.BeginUpload(decl.PluginID, 1)

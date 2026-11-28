@@ -42,68 +42,15 @@ CREATE INDEX availability_title_checks_due ON availability_title_checks(next_che
 func init() {
 	store.RegisterAfter("availability_gate", "availability", "availability_hidden_intervals", "availability_coverage", "availability_checks_retention")
 	store.Register("availability_gate", 1, gateMigration)
-}
-
-// retryOffsets defines the bounded retry cadence from a title's official
-// release/air/digital anchor before falling back to daily checks until the
-// evidence window ends.
-var retryOffsets = []time.Duration{
-	0,
-	30 * time.Minute,
-	1 * time.Hour,
-	90 * time.Minute,
-	2 * time.Hour,
-	150 * time.Minute,
-	3 * time.Hour,
-	4 * time.Hour,
-	8 * time.Hour,
+	store.Register("availability_gate", 3, `
+CREATE INDEX availability_gate_title ON availability_gate(rating_key);
+UPDATE availability_title_checks
+SET next_check=0
+WHERE checked_at>0;
+`)
 }
 
 const firstLookPriorityBoost = 1_000_000.0
-
-// nextRetryAfter returns the smallest scheduled retry timestamp strictly after
-// nowTS and strictly before windowEndTS (0 when the window has ended).
-func nextRetryAfter(anchorTS, windowEndTS, nowTS int64) int64 {
-	if anchorTS <= 0 {
-		return 0
-	}
-	if windowEndTS > 0 && nowTS >= windowEndTS {
-		return 0
-	}
-	for _, d := range retryOffsets {
-		cand := anchorTS + int64(d.Seconds())
-		if cand > nowTS {
-			if windowEndTS > 0 && cand >= windowEndTS {
-				return 0
-			}
-			return cand
-		}
-	}
-	elapsed := nowTS - anchorTS
-	days := elapsed/86400 + 1
-	cand := anchorTS + days*86400
-	if windowEndTS > 0 && cand >= windowEndTS {
-		return 0
-	}
-	return cand
-}
-
-// Followed episodes need retries during the evening too: the generic cadence
-// ends at 08:00 UTC, well before many networks broadcast. Keep these targeted
-// checks hourly within the existing evidence window and indexer budgets.
-func nextEpisodeRetry(anchorTS, windowEndTS, nowTS int64, followed bool) int64 {
-	next := nextRetryAfter(anchorTS, windowEndTS, nowTS)
-	if followed && nowTS >= anchorTS-int64((72*time.Hour).Seconds()) && nowTS < anchorTS {
-		return min(anchorTS, nowTS+int64((6*time.Hour).Seconds()))
-	}
-	if followed && nowTS >= anchorTS && nowTS < windowEndTS {
-		hourly := anchorTS + ((nowTS-anchorTS)/3600+1)*3600
-		if hourly < windowEndTS && (next == 0 || hourly < next) {
-			return hourly
-		}
-	}
-	return next
-}
 
 // computeGatePolicy hashes the profile, resolver, provider usability, and feed
 // source generations that govern whether an accepted release opens the gate.
@@ -282,18 +229,24 @@ func (s *Service) isGateOpen(ctx context.Context, policy string, key core.Rating
 }
 
 func (s *Service) openGateKeys(ctx context.Context, policy string, keys []core.RatingKey) map[core.RatingKey]bool {
+	if policy == "" {
+		return nil
+	}
+	return s.gateKeys(ctx, "policy=? AND ", []any{policy}, keys)
+}
+
+func (s *Service) gateKeys(ctx context.Context, filter string, filterArgs []any, keys []core.RatingKey) map[core.RatingKey]bool {
 	out := map[core.RatingKey]bool{}
-	if !s.hasGateTable || policy == "" || len(keys) == 0 {
+	if !s.hasGateTable || len(keys) == 0 {
 		return out
 	}
 	for start := 0; start < len(keys); start += 500 {
 		batch := keys[start:min(start+500, len(keys))]
-		args := make([]any, 0, len(batch)+1)
-		args = append(args, policy)
+		args := slices.Clone(filterArgs)
 		for _, k := range batch {
 			args = append(args, int64(k))
 		}
-		rows, err := s.db.QueryContext(ctx, `SELECT rating_key FROM availability_gate WHERE policy=? AND rating_key IN (`+store.Placeholders(len(batch))+`)`, args...)
+		rows, err := s.db.QueryContext(ctx, `SELECT rating_key FROM availability_gate WHERE `+filter+`rating_key IN (`+store.Placeholders(len(batch))+`)`, args...)
 		if err != nil {
 			continue
 		}
@@ -858,9 +811,8 @@ func observationKey(id string, key core.RatingKey, source string) string {
 }
 
 // seedDueChecks registers in-window and near-horizon movies and episodes in
-// availability_title_checks whenever the catalogue write generation or gate
-// policy changes. On an idle server with no catalogue writes, it returns
-// immediately with zero SQL queries and zero heap allocations.
+// availability_title_checks when the catalogue, watchlist or gate policy
+// changes. Periodic local reseeding advances the date horizon.
 func (s *Service) seedDueChecks(ctx context.Context, cfg config.Availability) error {
 	if !s.hasGateTable {
 		return nil
@@ -877,11 +829,19 @@ func (s *Service) seedDueChecks(ctx context.Context, cfg config.Availability) er
 		catGen = wg.WriteGeneration()
 		hasWriteGen = true
 	}
-	if hasWriteGen && s.checksSeeded && s.checksCatalogPtr == s.d.Catalog && s.checksCatalogGen == catGen && s.checksPolicy == gp && s.d.Watchlist == nil {
+	now := s.now()
+	watch := s.checksWatch
+	if s.d.Watchlist != nil {
+		if current, err := s.d.Watchlist(ctx); err == nil {
+			watch = current
+		}
+	}
+	if hasWriteGen && s.checksSeeded && s.checksCatalogPtr == s.d.Catalog &&
+		s.checksCatalogGen == catGen && s.checksPolicy == gp && maps.Equal(watch, s.checksWatch) &&
+		now.Before(s.checksSeededAt.Add(time.Hour)) {
 		return nil
 	}
 
-	now := s.now()
 	nowTS := now.Unix()
 	movieWindow := time.Duration(cfg.EffectiveMovieEvidenceDays()) * 24 * time.Hour
 	var movieSince, epSince time.Time
@@ -931,35 +891,16 @@ func (s *Service) seedDueChecks(ctx context.Context, cfg config.Availability) er
 		s.checksCatalogPtr = s.d.Catalog
 		s.checksCatalogGen = catGen
 		s.checksPolicy = gp
+		s.checksWatch = maps.Clone(watch)
+		s.checksSeededAt = now
 		return nil
 	}
 
 	allKeys := make([]core.RatingKey, len(candidates))
-	var movieKeys []core.RatingKey
 	for i, t := range candidates {
 		allKeys[i] = t.Key
-		if t.Type == core.TypeMovie {
-			movieKeys = append(movieKeys, t.Key)
-		}
 	}
-	open := s.openGateKeys(ctx, gp, allKeys)
-
-	homes := map[core.RatingKey]time.Time{}
-	if len(movieKeys) > 0 {
-		if h, ok := s.d.Catalog.(interface {
-			HomeReleases(context.Context, []core.RatingKey) (map[core.RatingKey]time.Time, error)
-		}); ok {
-			if got, err := h.HomeReleases(ctx, movieKeys); err == nil {
-				homes = got
-			}
-		}
-	}
-	watch := map[core.RatingKey]bool{}
-	if s.d.Watchlist != nil {
-		if w, err := s.d.Watchlist(ctx); err == nil {
-			watch = w
-		}
-	}
+	open := s.gateKeys(ctx, "", nil, allKeys)
 
 	type existingRow struct {
 		checked, next, anchor, windowEnd int64
@@ -997,26 +938,6 @@ func (s *Service) seedDueChecks(ctx context.Context, cfg config.Availability) er
 		priority  float64
 		state     string
 	}
-	inProgressMemo := map[core.RatingKey]bool{}
-	revealSeasons := map[core.RatingKey]bool{}
-	nextFollowed := map[core.RatingKey]core.RatingKey{}
-	for _, t := range candidates {
-		if t.Type == core.TypeEpisode && t.Season > 0 && t.Episode > 0 && t.Released.After(now) && (watch[t.Key] || watch[t.ShowKey]) {
-			sk := releaseSeasonKey(&t)
-			if s.isSeasonInProgress(ctx, sk, now, candidates, inProgressMemo) {
-				// Replace per-episode 72h-early probes inside an in-progress season
-				// with one season-level reveal check; keep 72h early for premieres.
-				revealSeasons[sk] = true
-				continue
-			}
-			if k := nextFollowed[t.ShowKey]; k == 0 || t.Key < k {
-				nextFollowed[t.ShowKey] = t.Key
-			}
-		}
-	}
-	for sk := range revealSeasons {
-		s.RevealSeason(ctx, sk)
-	}
 	var updates []upsertRow
 	for _, t := range candidates {
 		if t.Adult || t.Released.IsZero() {
@@ -1039,36 +960,22 @@ func (s *Service) seedDueChecks(ctx context.Context, cfg config.Availability) er
 			if windowEndTS <= nowTS {
 				continue
 			}
-			digital := t.HomeReleased
-			if digital.IsZero() {
-				digital = homes[t.Key]
-			}
-			if !digital.IsZero() {
-				anchorTS = digital.Unix()
-			} else {
-				anchorTS = t.Released.Unix()
-			}
+			anchorTS = t.Released.Unix()
 			if watch[t.Key] {
 				basePrio += 1000
-			}
-			if !digital.IsZero() && !digital.After(now) {
-				basePrio += 2000
-			} else if !digital.IsZero() && digital.Sub(now) < 72*time.Hour {
-				basePrio += 800
 			}
 		case core.TypeEpisode:
 			if !showPlayable {
 				continue
 			}
-			anchorTS = t.Released.Unix()
-			windowEndTS = t.Released.Add(episodeEvidence).Unix()
+			air := cmp.Or(t.EpisodeAirDate, t.Released)
+			anchorTS = air.Unix()
+			windowEndTS = air.Add(episodeEvidence).Unix()
 			if windowEndTS <= nowTS {
 				continue
 			}
-			if watch[t.Key] || (t.ShowKey != 0 && watch[t.ShowKey]) {
-				if !t.Released.After(now) || nextFollowed[t.ShowKey] == t.Key {
-					basePrio += 1000
-				}
+			if watch[t.Key] || watch[t.ShowKey] {
+				basePrio += 1000
 			}
 			if !t.Released.After(now) {
 				basePrio += 2000
@@ -1077,58 +984,23 @@ func (s *Service) seedDueChecks(ctx context.Context, cfg config.Availability) er
 			continue
 		}
 
-		searchStart := t.Released.Unix()
-		followed := t.Type == core.TypeEpisode && (watch[t.Key] || watch[t.ShowKey]) && (!t.Released.After(now) || nextFollowed[t.ShowKey] == t.Key)
-		if followed {
-			searchStart -= int64((72 * time.Hour).Seconds())
-		}
 		ex, seen := existing[t.Key]
-		if !seen {
-			nextAt := nowTS
-			if !t.IsReleased(now) {
-				nextAt = max(nowTS, searchStart)
-			}
-			updates = append(updates, upsertRow{
-				key: t.Key, kind: string(t.Type), checked: 0, next: nextAt,
-				anchor: anchorTS, windowEnd: windowEndTS, priority: basePrio + firstLookPriorityBoost,
-			})
+		if ex.state == "found" || (ex.checked > 0 && ex.state != "retry") {
 			continue
 		}
-		// Re-arm if a previous policy marked it found without opening the new
-		// policy's gate, or if the anchor moved (e.g. digital release date
-		// arrived or shifted).
+		firstAt := max(nowTS, anchorTS)
 		wantPrio := basePrio
 		if ex.checked == 0 {
-			wantPrio = basePrio + firstLookPriorityBoost
+			wantPrio += firstLookPriorityBoost
 		}
-		nextAt := ex.next
-		state := ex.state
-		if state == "found" {
-			state = ""
-			nextAt = nowTS
-			if !t.IsReleased(now) {
-				nextAt = max(nowTS, searchStart)
-			}
-		} else if ex.anchor != anchorTS {
-			if ex.checked == 0 {
-				if t.IsReleased(now) {
-					nextAt = nowTS
-				} else {
-					nextAt = max(nowTS, searchStart)
-				}
-			} else if anchorTS <= nowTS && ex.checked < anchorTS {
-				nextAt = nowTS
-			} else {
-				nextAt = nextRetryAfter(anchorTS, windowEndTS, nowTS)
-			}
+		nextAt, state := ex.next, ex.state
+		if !seen || (ex.checked == 0 && (ex.anchor != anchorTS || nextAt == 0)) {
+			nextAt = firstAt
 		}
-		if followed && nowTS >= searchStart && state != "found" {
-			// Re-arm exhausted schedules as well as newly followed shows.
-			retry := nextEpisodeRetry(anchorTS, windowEndTS, nowTS, true)
-			if retry != 0 && (nextAt == 0 || (nextAt > retry && nowTS < anchorTS)) {
-				nextAt = retry
-			}
+		if nextAt >= windowEndTS {
+			nextAt = 0
 		}
+
 		if ex.anchor != anchorTS || ex.windowEnd != windowEndTS || ex.next != nextAt || ex.state != state || ex.priority != wantPrio {
 			updates = append(updates, upsertRow{
 				key: t.Key, kind: string(t.Type), checked: ex.checked, next: nextAt,
@@ -1166,7 +1038,9 @@ func (s *Service) seedDueChecks(ctx context.Context, cfg config.Availability) er
 				sb.WriteString("(?,?,?,?,?,?,?,?)")
 				args = append(args, int64(u.key), u.kind, u.checked, u.next, u.anchor, u.windowEnd, u.priority, u.state)
 			}
-			sb.WriteString(` ON CONFLICT(rating_key) DO UPDATE SET kind=excluded.kind,next_check=excluded.next_check,anchor_ts=excluded.anchor_ts,window_end_ts=excluded.window_end_ts,priority=excluded.priority,state=excluded.state`)
+			sb.WriteString(` ON CONFLICT(rating_key) DO UPDATE SET kind=excluded.kind,next_check=excluded.next_check,anchor_ts=excluded.anchor_ts,window_end_ts=excluded.window_end_ts,priority=excluded.priority,state=excluded.state
+ WHERE availability_title_checks.checked_at=excluded.checked_at
+ AND availability_title_checks.state<>'found'`)
 			if _, err := tx.ExecContext(ctx, sb.String(), args...); err != nil {
 				return err
 			}
@@ -1180,5 +1054,7 @@ func (s *Service) seedDueChecks(ctx context.Context, cfg config.Availability) er
 	s.checksCatalogPtr = s.d.Catalog
 	s.checksCatalogGen = catGen
 	s.checksPolicy = gp
+	s.checksWatch = maps.Clone(watch)
+	s.checksSeededAt = now
 	return nil
 }

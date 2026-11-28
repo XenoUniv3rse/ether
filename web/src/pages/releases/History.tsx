@@ -31,6 +31,26 @@ import { pagedTableLabels } from "../../i18n/appkit-labels";
 import { useLocale } from "../../i18n/react";
 import { searchLink } from "./Pinned";
 
+/** "4K" for 2160, else "1080p". */
+function heightLabel(h: number) {
+  return h >= 2160 ? t("4K") : t("{height}p", { height: h });
+}
+
+/**
+ * The height a device's own limit held this decision to, when it is below
+ * the profile's ceiling (an Apple TV HD on a 4K profile plays at most
+ * 1080p); 0 when the profile's ceiling applied unchanged.
+ */
+export function deviceCappedHeight(h: HistoryRecord): number {
+  // Records from before the configured ceiling was tracked: unknown, not "Any".
+  if (h.profileMaxHeight === undefined || h.profileMaxHeight === null) return 0;
+  const effective = Number(h.effectiveMaxHeight ?? 0);
+  const client = Number(h.clientMaxHeight ?? 0);
+  const profile = Number(h.profileMaxHeight ?? 0);
+  if (effective <= 0 || client <= 0 || client > effective) return 0;
+  return profile === 0 || effective < profile ? effective : 0;
+}
+
 /** A max-height ceiling from loose JSON: a positive number, else 0 ("Any"). */
 function ceiling(v: unknown): number {
   const n = Number(v ?? 0);
@@ -54,6 +74,7 @@ function normalizeTrace(raw: Record<string, unknown>, i: number): ResolverTrace 
   const limits = isPlainObject(raw.limits) ? raw.limits : {};
   const nestedLimits = isPlainObject(nested.limits) ? nested.limits : {};
   return {
+    pluginKind: raw.pluginKind === true,
     titleKey: String(raw.titleKey ?? i),
     titleName: String(raw.titleName ?? t("Trace {n}", { n: i + 1 })),
     profile: String(raw.profile ?? ""),
@@ -330,7 +351,25 @@ export function HistoryTab() {
                   key: "profile",
                   header: t("Profile"),
                   sortValue: (h) => h.profile ?? "",
-                  cell: (h) => (h.profile ? <Badge variant="secondary">{h.profile}</Badge> : "—"),
+                  cell: (h) => {
+                    if (!h.profile) return "—";
+                    const capped = deviceCappedHeight(h);
+                    return (
+                      <span className="flex flex-wrap items-center gap-1">
+                        <Badge variant="secondary">{h.profile}</Badge>
+                        {capped ? (
+                          <Badge
+                            variant="outline"
+                            title={t("The device's limit capped this profile at {resolution}.", {
+                              resolution: heightLabel(capped),
+                            })}
+                          >
+                            {t("→ {resolution}", { resolution: heightLabel(capped) })}
+                          </Badge>
+                        ) : null}
+                      </span>
+                    );
+                  },
                 },
                 {
                   key: "candidates",
@@ -365,7 +404,7 @@ export function HistoryTab() {
             ? [
                 open.profile ? t("Profile {profile}", { profile: open.profile }) : "",
                 formatDateTime(open.at),
-                trace
+                trace && !trace.pluginKind
                   ? t("search took {duration}", { duration: formatNanos(trace.searchDuration) })
                   : "",
               ]
@@ -490,46 +529,48 @@ export function TraceDetail({
           {t("Source routing: {routing}", { routing: trace.routing })}
         </p>
       ) : null}
-      <div className="text-sm text-fg-muted">
-        <p>
-          {t("Discovery:")}{" "}
-          {trace.discovery?.length
-            ? trace.discovery
-                .map((d) => {
-                  const releases = tn(d.count, "{count} release", "{count} releases");
-                  const label = discoveryLabel(d.path);
-                  return d.rescue
-                    ? t("Rescue: {source} ({releases})", { source: label, releases })
-                    : t("{source} ({releases})", { source: label, releases });
+      {!trace.pluginKind ? (
+        <div className="text-sm text-fg-muted">
+          <p>
+            {t("Discovery:")}{" "}
+            {trace.discovery?.length
+              ? trace.discovery
+                  .map((d) => {
+                    const releases = tn(d.count, "{count} release", "{count} releases");
+                    const label = discoveryLabel(d.path);
+                    return d.rescue
+                      ? t("Rescue: {source} ({releases})", { source: label, releases })
+                      : t("{source} ({releases})", { source: label, releases });
+                  })
+                  .join(" · ")
+              : t("unknown")}
+          </p>
+          <p>
+            {t("Effective playback limits:")}{" "}
+            {trace.limits
+              ? t("Profile: {profile} · Resolution: {resolution} · Bitrate: {bitrate}", {
+                  profile: profileResolution(
+                    trace.limits.profileMinHeight,
+                    trace.limits.profileMaxHeight,
+                  ),
+                  resolution: trace.limits.clientMaxHeight
+                    ? `${trace.limits.clientMaxHeight}p`
+                    : t("unlimited"),
+                  bitrate: trace.limits.clientMaxBitrateKbps
+                    ? t("{rate} kbps", { rate: trace.limits.clientMaxBitrateKbps })
+                    : t("unlimited"),
                 })
-                .join(" · ")
-            : t("unknown")}
-        </p>
-        <p>
-          {t("Effective playback limits:")}{" "}
-          {trace.limits
-            ? t("Profile: {profile} · Resolution: {resolution} · Bitrate: {bitrate}", {
-                profile: profileResolution(
-                  trace.limits.profileMinHeight,
-                  trace.limits.profileMaxHeight,
-                ),
-                resolution: trace.limits.clientMaxHeight
-                  ? `${trace.limits.clientMaxHeight}p`
-                  : t("unlimited"),
-                bitrate: trace.limits.clientMaxBitrateKbps
-                  ? t("{rate} kbps", { rate: trace.limits.clientMaxBitrateKbps })
-                  : t("unlimited"),
-              })
-            : t("unknown")}
-        </p>
-      </div>
+              : t("unknown")}
+          </p>
+        </div>
+      ) : null}
       {trace.pinStatus && trace.pinStatus !== "used" ? (
         <p className="text-sm text-fg-muted">
           <PinIcon size={13} className="mr-1 inline" aria-hidden />
           {t("Owner pin: {status}", { status: trace.pinStatus })}
         </p>
       ) : null}
-      {titleKey ? (
+      {titleKey && !trace.pluginKind ? (
         <p className="text-sm">
           <Link className="text-primary underline" to={searchLink(titleKey, trace.titleName)}>
             {t("Search releases for this title")}
@@ -537,17 +578,21 @@ export function TraceDetail({
         </p>
       ) : null}
       {cands.length === 0 ? (
-        <EmptyState
-          title={t("No releases found")}
-          description={t("The indexers returned nothing usable for this title.")}
-        />
+        trace.pluginKind && rawError ? null : (
+          <EmptyState
+            title={t("No releases found")}
+            description={t("The indexers returned nothing usable for this title.")}
+          />
+        )
       ) : (
         <Table>
           <TableHeader>
             <TableRow>
               <TableHead>{t("Release")}</TableHead>
-              <TableHead className="text-right">{t("Score")}</TableHead>
-              <TableHead>{t("Health")}</TableHead>
+              {!trace.pluginKind ? (
+                <TableHead className="text-right">{t("Score")}</TableHead>
+              ) : null}
+              {!trace.pluginKind ? <TableHead>{t("Health")}</TableHead> : null}
               <TableHead>{t("Verdict")}</TableHead>
             </TableRow>
           </TableHeader>
@@ -574,25 +619,29 @@ export function TraceDetail({
                     </span>
                   ) : null}
                 </TableCell>
-                <TableCell className="text-right tabular-nums">
-                  {c.rejected && !c.score ? "—" : c.score.toFixed(0)}
-                </TableCell>
-                <TableCell>
-                  {c.healthChecked ? (
-                    c.healthy ? (
-                      <Badge variant="success">{t("Healthy")}</Badge>
-                    ) : (
-                      <Badge variant="destructive">{t("Failed")}</Badge>
-                    )
-                  ) : (
-                    <span className="text-xs text-fg-subtle">{t("Not checked")}</span>
-                  )}
-                  {c.healthDuration ? (
-                    <span className="block text-[11px] text-fg-subtle">
-                      {formatNanos(c.healthDuration)}
-                    </span>
-                  ) : null}
-                </TableCell>
+                {!trace.pluginKind ? (
+                  <>
+                    <TableCell className="text-right tabular-nums">
+                      {c.rejected && !c.score ? "—" : c.score.toFixed(0)}
+                    </TableCell>
+                    <TableCell>
+                      {c.healthChecked ? (
+                        c.healthy ? (
+                          <Badge variant="success">{t("Healthy")}</Badge>
+                        ) : (
+                          <Badge variant="destructive">{t("Failed")}</Badge>
+                        )
+                      ) : (
+                        <span className="text-xs text-fg-subtle">{t("Not checked")}</span>
+                      )}
+                      {c.healthDuration ? (
+                        <span className="block text-[11px] text-fg-subtle">
+                          {formatNanos(c.healthDuration)}
+                        </span>
+                      ) : null}
+                    </TableCell>
+                  </>
+                ) : null}
                 <TableCell>
                   {verdict(c, trace)}
                   {c.reason ? (

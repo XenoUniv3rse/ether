@@ -417,16 +417,16 @@ func TestBroadcastPrewarmsAcrossShortElements(t *testing.T) {
 
 func TestProviderBroadcastReservationIsReleasedWhileWaiting(t *testing.T) {
 	s := testService(t, Options{})
-	release, err := s.reserveBroadcastProvider("account", "one", "first", 1)
+	release, err := s.holdProviderInput("account", "first", 1)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.reserveBroadcastProvider("account", "two", "second", 1); err != ErrProviderBusy {
+	if _, err := s.holdProviderInput("account", "second", 1); err != ErrProviderBusy {
 		t.Fatal("provider account cap exceeded", err)
 	}
 	release()
 	release()
-	release, err = s.reserveBroadcastProvider("account", "two", "second", 1)
+	release, err = s.holdProviderInput("account", "second", 1)
 	if err != nil {
 		t.Fatal("waiting output retained provider slot", err)
 	}

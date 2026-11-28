@@ -68,3 +68,37 @@ func TestHLSRateAppliedToRampSteadyAndRung(t *testing.T) {
 		})
 	}
 }
+
+func TestSourceOutputBudgetSurvivesRunRestart(t *testing.T) {
+	fr := newFakeRunner()
+	m := newTestManager(t, fr, config.Transcode{})
+	req := remuxRequest(t, "source-budget", time.Minute)
+	req.Info = ladderInfo(1080, 12000)
+	req.Decision = core.Decision{
+		Kind: core.DecisionRemux, Container: ContainerFMP4,
+		VideoCopy: true, AudioCopy: true, AudioStream: 1,
+	}
+	s := startSession(t, m, req)
+	const budget = 2500
+	d, err := s.ReduceOutputBitrate(t.Context(), req.InputURL, budget)
+	if err != nil || d.Kind != core.DecisionTranscode || d.VideoCopy {
+		t.Fatalf("output reduction: decision=%+v err=%v", d, err)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	check := func() {
+		t.Helper()
+		spec := s.cur.spec
+		if spec.Input != req.InputURL || spec.Decision.VideoCopy || spec.Target == nil || spec.Target.width != req.Info.Video().Width {
+			t.Fatalf("lost input or picture format: decision=%+v contract=%v", spec.Decision, spec.Target)
+		}
+		if peak := encodedHLSPeakKbps(s.info, spec.Decision, spec.Rate, s.hlsPeakWindowLocked()); peak > budget {
+			t.Fatalf("encoded peak = %d kb/s, budget = %d kb/s", peak, budget)
+		}
+	}
+	check()
+	if err := s.startRunForLocked(4, false, "seek"); err != nil {
+		t.Fatal(err)
+	}
+	check()
+}

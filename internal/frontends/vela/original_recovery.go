@@ -59,6 +59,9 @@ func (i *instance) pollOriginalRecovery(ctx context.Context, v *frontend.Viewer,
 	}
 	audio, subtitles, selectedAudio, selectedSub := i.playbackTracks(ctx, access, id, state.Media, state.Decision, state.Decision.SubtitleStream, original, formats, false)
 	markers := i.skipMarkers(ctx, item, state.Media)
+	if active.autoReason != "" && active.release.ID != state.ReleaseID {
+		active.autoReason = frontend.AutoSourceSelection
+	}
 	active.release, active.media = frontend.Release{ID: state.ReleaseID}, state.Media
 	versionPlan := object{}
 	cold := i.attachPlaybackVersions(ctx, v, device, item, caps, active, versionPlan)
@@ -72,6 +75,7 @@ func (i *instance) pollOriginalRecovery(ctx context.Context, v *frontend.Viewer,
 	s.canBurn, s.qualityRungs = false, nil
 	s.versionsCold = cold
 	applyVersionPlan(s.plan, versionPlan)
+	delete(s.plan, "serverHandoff")
 	s.plan["paths"], s.plan["selectedPathId"] = []object{path}, "primary"
 	s.plan["audioTracks"], s.plan["subtitleTracks"] = audio, subtitles
 	delete(s.plan, "selectedAudioTrackId")

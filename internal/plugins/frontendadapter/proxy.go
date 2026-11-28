@@ -56,7 +56,7 @@ func (i *instance) Close(context.Context) error { return nil }
 func (f *Frontend) proxyHandler(inst *instance) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		subpath := stripPrefix(r.URL.Path, f.decl.Meta.PathPrefix)
-		limit := f.decl.Meta.UploadLimit(subpath)
+		stagedUpload := f.decl.Meta.UploadLimit(subpath) > 0
 		if f.decl.Meta.Auth == AuthQueryCredentials {
 			// Query credentials carry no ambient authority (no cookies or
 			// browser-held auth), so browser clients on any origin, such as
@@ -64,7 +64,7 @@ func (f *Frontend) proxyHandler(inst *instance) http.Handler {
 			if allowAnyOrigin(w, r) {
 				return
 			}
-			if limit == 0 {
+			if !stagedUpload {
 				if err := mergeFormIntoQuery(r); err != nil {
 					http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
 					return
@@ -93,8 +93,8 @@ func (f *Frontend) proxyHandler(inst *instance) http.Handler {
 			RepeatedQuery: repeatedValues(f.pluginQuery(r)),
 			Headers:       outboundHeaders(r, auth, requestOrigin(r, inst.host)),
 		}
-		if limit > 0 && r.Body != nil && r.Body != http.NoBody {
-			upload, cleanup, err := f.readUpload(w, r, subpath, limit)
+		if stagedUpload && r.Body != nil && r.Body != http.NoBody {
+			upload, cleanup, err := f.readUpload(w, r, subpath)
 			if err != nil {
 				writeUploadError(w, err)
 				return

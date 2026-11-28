@@ -62,6 +62,14 @@ func (f *fakeEngine) Refresh(_ context.Context, u *core.User) error {
 	f.mu.Unlock()
 	return nil
 }
+func (f *fakeEngine) RecommendationReport(context.Context, int, int64) (core.RecommendationReport, error) {
+	return core.RecommendationReport{}, nil
+}
+
+func (f *fakeEngine) RecommendationDetail(context.Context, int, string, int64) (core.RecommendationDetail, error) {
+	return core.RecommendationDetail{}, nil
+}
+
 func (f *fakeEngine) RowInsights(context.Context, int) ([]core.RowInsight, error) {
 	return []core.RowInsight{{HubID: "top-10", Title: "Top 10 for You", Impressions7d: 20, Plays7d: 5, PlayRate: 0.25}}, nil
 }

@@ -10,7 +10,7 @@ import {
 } from "@braedonsaunders/appkit-ui";
 import { ArrowLeft, ArrowUpRight, HardDrive, Network, Settings2, Sparkles } from "lucide-react";
 import { useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { useApp } from "../../app-context";
 import { MoreOptions } from "../../components/ConfigSection";
 import { Drawer } from "../../components/Drawer";
@@ -23,14 +23,13 @@ import { Field, NumberInput } from "../../components/fields";
 import { OverflowTabs } from "../../components/OverflowTabs";
 import { useRouteTab } from "../../components/layout";
 import { Workspace } from "../../components/workspace";
-import { localized, t, tn } from "../../i18n";
+import { localized, t, tn, tx } from "../../i18n";
 import { api, apiFetch } from "../../lib/api";
 import { formatBytes, formatNumber } from "../../lib/format";
 import { useAsync, useInterval } from "../../lib/hooks";
 import type { ReleaseInfo } from "../../lib/releases";
 import type { EtherConfig } from "../../lib/types";
 import { LibraryCaches } from "../libraries/LibraryCache";
-import { librariesApi } from "../libraries/api";
 import { formatDuration, parseDuration, type DurationUnit } from "../settings/duration";
 import { useDiscoverySettings } from "../viewers/sections/WatchlistDefaults";
 import { CacheLibrary } from "./CacheLibrary";
@@ -133,6 +132,15 @@ type PreloadStatus = {
   }[];
 };
 export type CacheSnapshot = {
+  files?: {
+    libraryKey: string;
+    library: string;
+    ref: string;
+    name: string;
+    size: number;
+    lastOpen: string;
+    inUse: boolean;
+  }[];
   policy?: Policy;
   shared?: boolean;
   clustered?: boolean;
@@ -206,13 +214,14 @@ function DurationPicker({
 export default function Cache() {
   const { health } = useApp();
   const config = useAsync(() => api.getConfig(), []);
-  const live = useAsync((signal) => apiFetch<CacheSnapshot>("/cache/", { signal }), []);
+  const tab = useRouteTab(CACHE_TABS);
+  const explorer = tab === "explorer";
+  const live = useAsync(
+    (signal) => apiFetch<CacheSnapshot>(explorer ? "/cache/?files=1" : "/cache/", { signal }),
+    [explorer],
+  );
   const discovery = useDiscoverySettings();
-  // The Libraries tab lists plugin libraries' file caches; without one it has nothing to show.
-  const libraries = useAsync((signal) => librariesApi.list(signal), []);
-  const hasLibraryCaches = (libraries.data ?? []).some((l) => l.source === "plugin");
-  const cacheTabs = CACHE_TABS.filter((x) => x.key !== "libraries" || hasLibraryCaches);
-  const tab = useRouteTab(cacheTabs);
+
   // Keep the explorer live, and back off after failures.
   const [pollFailures, setPollFailures] = useState(0);
   useEffect(() => {
@@ -440,7 +449,7 @@ export default function Cache() {
             ariaLabel={t("Cache sections")}
             active={tab}
             onSelect={(key) => navigate(`/cache/${key}`)}
-            tabs={cacheTabs.map((tabDef) =>
+            tabs={CACHE_TABS.map((tabDef) =>
               tabDef.key === "explorer" && snap?.releases.length
                 ? { ...tabDef, count: snap.releases.length }
                 : tabDef,
@@ -502,6 +511,10 @@ export default function Cache() {
                 policyName={activePolicyName}
                 busy={busy !== null}
                 onPin={(releaseId, pinned) => void action("pin", { releaseId, pinned })}
+                onClearFile={(libraryKey, ref, name) => {
+                  if (window.confirm(t("Clear {name}?", { name })))
+                    void action("clear-file", { libraryKey, ref });
+                }}
                 onClear={(id, title, block) => clearRelease(id, title, block)}
               />
             </div>
@@ -615,8 +628,15 @@ export default function Cache() {
                   <SettingsRow
                     setting="warm-up-new-arrivals"
                     title={<label htmlFor="watchlist-prewarm">{t("Warm up new arrivals")}</label>}
-                    description={t(
-                      "Fetch the opening minutes as soon as a title becomes available, so it starts quickly. Needs watchlist monitoring in Viewers.",
+                    description={tx(
+                      "Fetch the opening minutes as soon as a title becomes available, so it starts quickly. Needs {monitoring}.",
+                      {
+                        monitoring: (
+                          <Link to="/viewers/watchlists" className="font-medium underline">
+                            {t("watchlist monitoring in Viewers")}
+                          </Link>
+                        ),
+                      },
                     )}
                     control={
                       discovery.draft ? (
@@ -1643,7 +1663,7 @@ export default function Cache() {
 
             <p className="text-[11px] leading-relaxed text-fg-subtle">
               {t(
-                "Live streams and pinned releases can exceed the budget. Expiry never removes protected bytes. This budget covers media segments; artwork, metadata and transcode output use separate storage.",
+                "Live streams and pinned releases can exceed the budget. Expiry never removes protected bytes. This budget covers playback segments and files downloaded by plugin libraries.",
               )}
             </p>
           </div>

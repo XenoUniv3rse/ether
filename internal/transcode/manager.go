@@ -210,15 +210,17 @@ func WithSubtitleOpener(f func(id, format, source string) (io.ReadCloser, string
 	return func(o *options) { o.openSubtitle = f }
 }
 
-func (m *Manager) stageExternalSubtitles(dir string, info core.MediaInfo, source string) core.MediaInfo {
-	if m == nil || m.opts.openSubtitle == nil || dir == "" || len(info.Streams) == 0 {
+func (m *Manager) stageExternalSubtitle(dir string, info core.MediaInfo, source string, decision core.Decision) core.MediaInfo {
+	// Client-rendered sidecars are served separately. Stage only the track
+	// the encoder will read so opening playback doesn't fetch every sidecar.
+	if m == nil || m.opts.openSubtitle == nil || dir == "" || decision.SubtitleStream < 0 ||
+		(!decision.BurnSubtitles && decision.Container != ContainerMatroska) {
 		return info
 	}
-	cloned := false
 	const maxStagedSubtitle = 32 << 20
 	for i := range info.Streams {
 		st := info.Streams[i]
-		if st.Type != "subtitle" || !st.External || !strings.HasPrefix(st.ExternalURL, "ether-subtitle:") {
+		if st.Index != decision.SubtitleStream || st.Type != "subtitle" || !st.External || !strings.HasPrefix(st.ExternalURL, "ether-subtitle:") {
 			continue
 		}
 		rc, actual, err := m.opts.openSubtitle(st.ExternalURL, "srt", source)
@@ -226,15 +228,15 @@ func (m *Manager) stageExternalSubtitles(dir string, info core.MediaInfo, source
 			if rc != nil {
 				_ = rc.Close()
 			}
-			continue
+			return info
 		}
 		data, readErr := io.ReadAll(io.LimitReader(rc, maxStagedSubtitle+1))
 		_ = rc.Close()
 		if readErr != nil || len(data) == 0 || len(data) > maxStagedSubtitle {
-			continue
+			return info
 		}
 		if err := os.MkdirAll(dir, 0o755); err != nil {
-			continue
+			return info
 		}
 		ext := "srt"
 		if actual == "vtt" {
@@ -242,14 +244,12 @@ func (m *Manager) stageExternalSubtitles(dir string, info core.MediaInfo, source
 		}
 		target := filepath.Join(dir, fmt.Sprintf("sidecar-%d.%s", st.Index, ext))
 		if err := os.WriteFile(target, data, 0o600); err != nil {
-			continue
+			return info
 		}
-		if !cloned {
-			info = core.CloneMediaInfo(info)
-			cloned = true
-		}
+		info = core.CloneMediaInfo(info)
 		info.Streams[i].ExternalURL = target
 		info.Streams[i].Codec = ext
+		break
 	}
 	return info
 }
@@ -1051,13 +1051,33 @@ func (m *Manager) startHLS(ctx context.Context, req core.HLSRequest, life *encod
 	if ValidCopyTimeline(req) {
 		adapt.FastStart, adapt.Governor, adapt.Ladder = false, false, false
 	}
+	req.AdaptiveHLS = req.AdaptiveHLS && proto == core.ProtocolHLS && !req.LiveInput && v != nil
+	if req.AdaptiveHLS {
+		req.LazyStart, req.Continuous = true, true
+		adapt.FastStart, adapt.Governor = false, false
+	}
 	if req.QualityRungs && !videoOff {
 		adapt.Ladder, adapt.LadderUnderCopy = true, true
 	}
+	var basePeak int
+	if req.AdaptiveHLS && req.AdaptiveMaxKbps > 0 && d.EncodesVideo(req.Info) {
+		audio := decisionAudioKbps(req.Info, d)
+		video := qualityPeakVideoKbps(req.AdaptiveMaxKbps, audio)
+		if video >= minRungVideoKbps {
+			d.BitrateKbps = min(decisionTotalKbps(req.Info, d), video+audio)
+			basePeak = req.AdaptiveMaxKbps
+		}
+	}
 	rungs := buildRungs(req.Info, d, adapt)
+	if basePeak > 0 {
+		rungs[0].peakKbps = min(rungs[0].peakKbps, basePeak)
+	}
 	if req.QualityRungs && !videoOff {
 		rungs = rungs[:1]
 		for _, variant := range req.QualityVariants {
+			if req.AdaptiveHLS {
+				variant = adaptiveQualityVariant(req.Info, d.Container, variant)
+			}
 			rungs = append(rungs, qualityRung(req.Info, variant))
 		}
 	}
@@ -1084,6 +1104,12 @@ func (m *Manager) startHLS(ctx context.Context, req core.HLSRequest, life *encod
 			}
 		}
 		rungs = allowed
+	}
+	if req.AdaptiveHLS {
+		for i := range rungs {
+			setAdaptiveRungCodecs(req.Info, &rungs[i], v)
+		}
+		d = rungs[0].decision
 	}
 	if proto == core.ProtocolHLS && d.Container == ContainerMatroska && len(rungs) > 1 {
 		// Plex's native player probes every rendition's initialization and
@@ -1147,16 +1173,19 @@ func (m *Manager) startHLS(ctx context.Context, req core.HLSRequest, life *encod
 		}
 	}
 
+	requestedOffset := offset
 	// Continuous clients rebase their first video presentation packet to zero.
 	// Resolve the true copy origin before authoring the playlist and audio cut.
-	copyOrigin := req.Continuous && req.Info.Duration > 0 && proto == core.ProtocolHLS && d.VideoCopy && v != nil && !req.LiveInput && len(slateData) == 0 && req.Resume == nil && !enhancementSelected(d)
-	copyOpeningEnd := time.Duration(0)
+	copyOverCap := req.AdaptiveHLS && req.AdaptiveEncodeTop && d.VideoCopy && req.AdaptiveMaxKbps > 0 &&
+		max(rungs[0].peakKbps, HLSCopyPeakKbps(req.Info, segDur)) > req.AdaptiveMaxKbps
+	copyOrigin := !copyOverCap && req.Continuous && req.Info.Duration > 0 && proto == core.ProtocolHLS && d.VideoCopy && v != nil && !req.LiveInput && len(slateData) == 0 && req.Resume == nil && !enhancementSelected(d)
+	var copyStart copyOpening
 	if copyOrigin {
 		scope, err := encoderScopeHeaders(req.InputLease, req.InputURL)
 		if err != nil {
 			return nil, err
 		}
-		measured, next, err := m.continuousCopyOrigin(ctx, runSpec{Input: req.InputURL, InputHeaders: inputHeaders, InputScopeHeaders: scope, Info: req.Info, Start: offset})
+		sample, err := m.continuousCopyOrigin(ctx, runSpec{Input: req.InputURL, InputHeaders: inputHeaders, InputScopeHeaders: scope, Info: req.Info, Start: offset, AdaptiveHLS: req.AdaptiveHLS})
 		if err != nil {
 			// An inconclusive bounded probe must not prevent playback. Keep the
 			// requested clock and the ordinary demuxer/keyframe seek behavior;
@@ -1164,8 +1193,33 @@ func (m *Manager) startHLS(ctx context.Context, req core.HLSRequest, life *encod
 			m.log.Debug("copy presentation origin unavailable; using requested start", "session", req.SessionID, "err", err)
 			copyOrigin = false
 		} else {
-			offset = measured
-			copyOpeningEnd = next
+			offset = sample.origin
+			copyStart = sample
+		}
+	}
+
+	var copySample copyPacketSample
+	sampledCopy := req.AdaptiveEncodeTop && req.AdaptiveHLS && req.AdaptiveUnavailable == "" && d.VideoCopy &&
+		copyStart.closed && len(req.Info.Keyframes) == 0 && !req.ArchiveInput
+	if sampledCopy {
+		// A bounded sample can prove a short source without container index
+		// metadata. A partial read must never authorize a copied variant.
+		copySample = m.sampleCopyIndex(ctx, req, offset, life)
+		if copySample.complete {
+			req.Info.Keyframes = copySample.points
+		}
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+	}
+	if req.AdaptiveEncodeTop && req.AdaptiveHLS && req.AdaptiveUnavailable == "" && d.VideoCopy &&
+		(!copyStart.closed || !adaptiveCopyIndex(req.Info, offset, copyStart.next, segDur)) {
+		if top := adaptiveEncodedTop(req.Info, rungs, req.AdaptiveMaxKbps); top > 0 {
+			// Keep the original quality ID available to explicit quality selection.
+			rungs[0] = rungs[top]
+			rungs[0].id = "base"
+			d = rungs[0].decision
+			offset, copyOrigin, copyStart = requestedOffset, false, copyOpening{}
 		}
 	}
 
@@ -1176,8 +1230,8 @@ func (m *Manager) startHLS(ctx context.Context, req core.HLSRequest, life *encod
 	if req.Continuous && proto == core.ProtocolHLS && req.Resume == nil && req.Info.Duration > 0 && !req.LiveInput && v != nil && !enhancementSelected(d) {
 		if !d.VideoCopy {
 			opening = []time.Duration{500 * time.Millisecond, 500 * time.Millisecond, time.Second}
-		} else if copyOpeningEnd > base {
-			opening = []time.Duration{copyOpeningEnd - base}
+		} else if copyStart.next > base {
+			opening = []time.Duration{copyStart.next - base}
 		}
 	}
 	if req.Resume != nil {
@@ -1187,6 +1241,7 @@ func (m *Manager) startHLS(ctx context.Context, req core.HLSRequest, life *encod
 	var tracks int
 	var reps []dashRep
 	var plan *Timeline
+	adaptiveCopyAligned := req.AdaptiveHLS && copyStart.closed && adaptiveCopyIndex(req.Info, base, copyStart.next, segDur)
 	if proto == core.ProtocolDASH {
 		base = 0
 		// Copy DASH cuts video only at source keyframes; build the shared
@@ -1287,7 +1342,7 @@ func (m *Manager) startHLS(ctx context.Context, req core.HLSRequest, life *encod
 			keyframes:       req.Info.Keyframes,
 			base:            base,
 			snap:            d.VideoCopy && len(req.Info.Keyframes) > 0,
-			strictKeyframes: d.AndroidMatroskaHLS && d.Container == ContainerMatroska,
+			strictKeyframes: adaptiveCopyAligned || (d.AndroidMatroskaHLS && d.Container == ContainerMatroska),
 		})
 		total = plan.Total()
 		tracks = len(rungs) // one segment track per rung
@@ -1301,7 +1356,10 @@ func (m *Manager) startHLS(ctx context.Context, req core.HLSRequest, life *encod
 	// the bitrate of future unseen scenes or change a published timeline.
 	if proto == core.ProtocolHLS && req.Resume == nil && req.Ramp.Version == 0 && !ValidCopyTimeline(req) && !req.LiveInput && !req.ArchiveInput &&
 		d.VideoCopy && len(req.Info.Keyframes) == 0 && plan != nil {
-		sample := m.sampleCopyIndex(ctx, req, offset, life)
+		sample := copySample
+		if !sampledCopy {
+			sample = m.sampleCopyIndex(ctx, req, offset, life)
+		}
 		points := sample.points
 		nominal := time.Duration(adapt.RampSegs) * adapt.RampDur
 		// A TS copy's encoded ramp needs a sampled keyframe to hand over at
@@ -1311,9 +1369,10 @@ func (m *Manager) startHLS(ctx context.Context, req core.HLSRequest, life *encod
 		sampledRamp := offset > 0 && rampBoundary
 		if sample.complete || sampledRamp {
 			req.Info.Keyframes = points
+			adaptiveCopyAligned = req.AdaptiveHLS && copyStart.closed && sample.complete && adaptiveCopyIndex(req.Info, base, copyStart.next, segDur)
 			plan = buildTimeline(plan.span, segDur, timelineOptions{steadyMode: ModeCopy, opening: opening,
 				fastStart: rampBoundary, rampSegs: adapt.RampSegs, rampDur: adapt.RampDur,
-				keyframes: points, base: base, snap: true, strictKeyframes: d.AndroidMatroskaHLS && d.Container == ContainerMatroska && sample.complete})
+				keyframes: points, base: base, snap: true, strictKeyframes: adaptiveCopyAligned || (sample.complete && d.AndroidMatroskaHLS && d.Container == ContainerMatroska)})
 			total = plan.Total()
 		}
 		if len(rungs) > 0 {
@@ -1341,7 +1400,7 @@ func (m *Manager) startHLS(ctx context.Context, req core.HLSRequest, life *encod
 			startSeg = at
 		}
 	}
-	if err := m.admitStartEncoding(ctx, req, life, d.EncodesVideo(req.Info)); err != nil {
+	if err := m.admitStartEncoding(ctx, req, life, !req.AdaptiveHLS && d.EncodesVideo(req.Info)); err != nil {
 		return nil, err
 	}
 
@@ -1370,7 +1429,12 @@ func (m *Manager) startHLS(ctx context.Context, req core.HLSRequest, life *encod
 		archiveInput:            req.ArchiveInput,
 		archiveTrim:             req.ArchiveTrim,
 		openArchiveRange:        req.OpenArchiveRange,
-		serialRungs:             req.QualityRungs,
+		serialRungs:             req.QualityRungs || req.AdaptiveHLS,
+		adaptiveHLS:             req.AdaptiveHLS,
+		adaptiveUnavailable:     req.AdaptiveUnavailable,
+		adaptiveCopyAligned:     adaptiveCopyAligned,
+		adaptiveCopyDecodeLead:  copyStart.decodeLead,
+		adaptiveMaxKbps:         req.AdaptiveMaxKbps,
 		copyOrigin:              copyOrigin,
 		androidMatroskaHLS:      d.AndroidMatroskaHLS,
 		healTimestamps:          healTimestamps,
@@ -1440,7 +1504,7 @@ func (m *Manager) startHLS(ctx context.Context, req core.HLSRequest, life *encod
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, fmt.Errorf("transcode: session dir: %w", err)
 	}
-	req.Info = m.stageExternalSubtitles(dir, req.Info, req.ReleaseID)
+	req.Info = m.stageExternalSubtitle(dir, req.Info, req.ReleaseID, d)
 	s.info = req.Info
 	if len(slateData) > 0 {
 		if err := os.WriteFile(req.InputURL, slateData, 0o600); err != nil {

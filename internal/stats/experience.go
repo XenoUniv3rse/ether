@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"encoding/json"
+	"github.com/braedonsaunders/ether/internal/frontend/kit/route"
 	"github.com/braedonsaunders/ether/internal/store"
 	"net/http"
 	"sort"
@@ -595,7 +596,7 @@ func cause(m ExperienceMetrics, plays []ExperiencePlay) ExperienceCause {
 // ExperienceHandler serves Activity › Experience; mount it behind owner
 // authentication with /experience stripped.
 func (s *Service) ExperienceHandler() http.Handler {
-	m := http.NewServeMux()
+	m := &route.Mux{}
 	m.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
 		v, err := s.Experience(r.Context(), experienceDays(r))
 		if err != nil {
@@ -646,8 +647,8 @@ func (s *Service) PlayByID(ctx context.Context, id string) (map[string]any, erro
 		return nil, nil
 	}
 	var p Play
-	err = s.db.QueryRowContext(ctx, `SELECT id,user_id,rating_key,username,title,channel_id,channel_name,channel_number,platform,device,decision,started,updated,ended,bytes,watched_ms,duration_ms,completed,failovers,error,client_ip FROM stats_plays WHERE id=?`, rowID).
-		Scan(&p.ID, &p.UserID, &p.Key, &p.Username, &p.Title, &p.ChannelID, &p.ChannelName, &p.ChannelNumber, &p.Platform, &p.Device, &p.Decision, &p.Started, &p.Updated, &p.Ended, &p.Bytes, &p.WatchedMS, &p.DurationMS, &p.Completed, &p.Failovers, &p.Error, &p.IP)
+	err = s.db.QueryRowContext(ctx, `SELECT id,user_id,rating_key,username,title,channel_id,channel_name,channel_number,live_source_name,live_login_label,live_login_number,platform,device,decision,started,updated,ended,bytes,watched_ms,duration_ms,completed,failovers,error,client_ip FROM stats_plays WHERE id=?`, rowID).
+		Scan(&p.ID, &p.UserID, &p.Key, &p.Username, &p.Title, &p.ChannelID, &p.ChannelName, &p.ChannelNumber, &p.LiveSourceName, &p.LiveLoginLabel, &p.LiveLoginNumber, &p.Platform, &p.Device, &p.Decision, &p.Started, &p.Updated, &p.Ended, &p.Bytes, &p.WatchedMS, &p.DurationMS, &p.Completed, &p.Failovers, &p.Error, &p.IP)
 	if err != nil {
 		return nil, err
 	}
@@ -664,12 +665,14 @@ func (s *Service) PlayByID(ctx context.Context, id string) (map[string]any, erro
 	}
 	var sourceKbps, uhd, hdr int
 	var release string
-	err = s.db.QueryRowContext(ctx, `SELECT source_kbps,uhd,hdr,release_name FROM stats_plays WHERE id=?`, rowID).Scan(&sourceKbps, &uhd, &hdr, &release)
+	var chapterCount *int
+	err = s.db.QueryRowContext(ctx, `SELECT source_kbps,uhd,hdr,release_name,chapter_count FROM stats_plays WHERE id=?`, rowID).Scan(&sourceKbps, &uhd, &hdr, &release, &chapterCount)
 	if err != nil {
 		return nil, err
 	}
 	out["id"] = id
 	out["sourceKbps"], out["uhd"], out["hdr"], out["releaseName"] = sourceKbps, uhd != 0, hdr != 0, release
+	out["chapterCount"] = chapterCount
 	out["ttffMs"] = exp[0].StartMS
 	out["avgBitrateKbps"] = float64(0)
 	var ipStr string
@@ -782,6 +785,7 @@ func livePlayDetail(id string, live *core.PlaySession, lv liveViewing, hasViewin
 		"releaseName":    rel,
 		"remote":         live.Client.Remote,
 		"sourceKbps":     q.sourceKbps,
+		"chapterCount":   live.ProbedChapterCount(),
 		"avgBitrateKbps": avgBitrateKbps,
 		"uhd":            q.uhd != 0,
 		"hdr":            q.hdr != 0,
@@ -796,6 +800,11 @@ func livePlayDetail(id string, live *core.PlaySession, lv liveViewing, hasViewin
 		if live.LiveChannel.Number != "" {
 			out["channelNumber"] = live.LiveChannel.Number
 		}
+		if provider := live.LiveChannel.Provider; provider != nil {
+			out["liveSourceName"] = provider.SourceName
+			out["liveLoginLabel"] = provider.LoginLabel
+			out["liveLoginNumber"] = provider.LoginNumber
+		}
 	}
 	if live.QualityFallback != "" {
 		out["qualityFallback"] = live.QualityFallback
@@ -804,6 +813,7 @@ func livePlayDetail(id string, live *core.PlaySession, lv liveViewing, hasViewin
 }
 
 func overlayLivePlay(out map[string]any, live *core.PlaySession, lv liveViewing, hasViewing bool, dbBytes int64, dbFailovers int, watchedMS int64, now time.Time) {
+	out["chapterCount"] = live.ProbedChapterCount()
 	out["ended"] = int64(0)
 	out["updated"] = now.Unix()
 	bytes := max(dbBytes, live.BytesServed)
@@ -834,6 +844,11 @@ func overlayLivePlay(out map[string]any, live *core.PlaySession, lv liveViewing,
 		}
 		if live.LiveChannel.Number != "" {
 			out["channelNumber"] = live.LiveChannel.Number
+		}
+		if provider := live.LiveChannel.Provider; provider != nil {
+			out["liveSourceName"] = provider.SourceName
+			out["liveLoginLabel"] = provider.LoginLabel
+			out["liveLoginNumber"] = provider.LoginNumber
 		}
 	}
 	if live.Decision != "" {

@@ -938,8 +938,12 @@ func (s *Service) ListOwned(ctx context.Context, user *core.User, t core.MediaTy
 
 // ListOwnedMatching avoids resolving members for specs that cannot match
 // the caller's title search.
-func (s *Service) ListOwnedMatching(ctx context.Context, user *core.User, typ core.MediaType, match func(string) bool) ([]core.Collection, error) {
-	return s.list(ctx, user, typ, false, match)
+func (s *Service) ListOwnedMatching(ctx context.Context, user *core.User, typ core.MediaType, foldedName string, match func(string) bool) ([]core.Collection, error) {
+	rows, err := s.loadNameCandidates(ctx, foldedName)
+	if err != nil {
+		return nil, err
+	}
+	return s.listFromSpecs(ctx, user, typ, false, match, rows)
 }
 
 // ListPage returns one page [offset, offset+limit) of a section's Collections
@@ -1056,6 +1060,10 @@ func (s *Service) list(ctx context.Context, user *core.User, t core.MediaType, w
 	if err != nil {
 		return nil, err
 	}
+	return s.listFromSpecs(ctx, user, t, withFranchises, match, rows)
+}
+
+func (s *Service) listFromSpecs(ctx context.Context, user *core.User, t core.MediaType, withFranchises bool, match func(string) bool, rows []*specRow) ([]core.Collection, error) {
 	out := []core.Collection{}
 	deadline := time.Now().Add(2 * time.Second)
 	// Built-ins first, as Plex has always listed them.
@@ -1090,7 +1098,7 @@ func (s *Service) list(ctx context.Context, user *core.User, t core.MediaType, w
 		if !visible(row, user) || !row.spec.BrowseInApps || !typeMatches(row.spec, t) || match != nil && !match(row.spec.Name) {
 			continue
 		}
-		if s.plainPersistedMembers(row) {
+		if !row.lastBuilt.IsZero() && row.buildHash != "" && row.spec.Refresh != RefreshLive {
 			batch = append(batch, row)
 			if len(batch) == 100 {
 				flush()

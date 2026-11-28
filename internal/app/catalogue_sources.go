@@ -75,7 +75,7 @@ func (c *librariesConsole) handleCatalogueSources(w http.ResponseWriter, r *http
 					if kind.Library.Name != "" {
 						src.Name = c.catalogueLabel(r.Context(), rec.ID, kind.Library.Name, src.Name)
 					}
-					src.Logo = rec.Manifest.Logo
+					src.Logo = c.app.pluginsRT.mgr.CatalogueIconURL(r.Context(), rec, kind.Key)
 					if c.app.pluginsRT.pluginitems != nil {
 						if state, err := c.app.pluginsRT.pluginitems.SyncStateOf(r.Context(), rec.ID, kind.Key); err == nil {
 							if state.DeleteGuard != nil {
@@ -115,7 +115,7 @@ func (c *librariesConsole) handleCatalogueSources(w http.ResponseWriter, r *http
 				if name == "" {
 					name = c.catalogueLabel(r.Context(), rec.ID, cl.Label, cat.ID)
 				}
-				out = append(out, catalogueSource{ID: "stremio:" + rec.ID + ":" + cl.Key, Name: name, Owner: rec.Name, Group: "stremio", PluginID: rec.ID, MediaTypes: []string{typ}, Enabled: rec.Enabled, Logo: rec.Manifest.Logo, Health: "unknown", Libraries: []catalogueLibrary{}})
+				out = append(out, catalogueSource{ID: "stremio:" + rec.ID + ":" + cl.Key, Name: name, Owner: rec.Name, Group: "stremio", PluginID: rec.ID, MediaTypes: []string{typ}, Enabled: rec.Enabled, Logo: c.app.pluginsRT.mgr.CatalogueIconURL(r.Context(), rec, ""), Health: "unknown", Libraries: []catalogueLibrary{}})
 			}
 		}
 	}

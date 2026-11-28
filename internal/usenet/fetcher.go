@@ -315,8 +315,9 @@ func (f *Fetcher) replacePoolsLocked(providers []config.UsenetProvider) []*pool 
 		}
 		var p *pool
 		for _, op := range old {
-			if op.cfg == cfg && op.dialGen == f.dialGen && !reused[op] {
+			if sameIgnoringBackbone(op.cfg, cfg) && op.dialGen == f.dialGen && !reused[op] {
 				p = op
+				p.setBackbone(cfg.Backbone)
 				break
 			}
 		}
@@ -628,8 +629,15 @@ func (f *Fetcher) StatStream(ctx context.Context, messageIDs []string, fn func(i
 			return err
 		}
 		var ids []string
+		backbone := p.backbone()
 		for _, id := range order {
-			if _, ok := pend[id]; ok {
+			if st, ok := pend[id]; ok {
+				// Another account on this backbone already answered 430:
+				// same store, same answer. It stays pending as missed and
+				// is decided with the others after the last provider.
+				if backbone != "" && slices.Contains(st.backbones, backbone) {
+					continue
+				}
 				ids = append(ids, id)
 			}
 		}
@@ -693,7 +701,10 @@ func (f *Fetcher) StatStream(ctx context.Context, messageIDs []string, fn func(i
 				}
 				if !ok {
 					st.missed = true
-					f.misses.add(id, p.key)
+					f.noteMissing(id, p)
+					if backbone != "" {
+						st.backbones = append(st.backbones, backbone)
+					}
 					// On the last provider a 430 is final (unless an
 					// earlier provider could not answer): report it now
 					// rather than waiting for the slowest chunk.
@@ -931,9 +942,14 @@ func (f *Fetcher) eachOnce(ctx context.Context, id, kind string, req routeReq, o
 			case errors.Is(err, ErrNoSuchArticle):
 				missing++
 				lastMissing = err
-				f.misses.add(id, p.key)
+				same := f.noteMissing(id, p)
+				// The rest of this pass skips p's backbone siblings too.
+				known = append(known, same...)
 				if hint != nil {
 					hint.Miss(p.key)
+					for _, k := range same {
+						hint.Miss(k)
+					}
 				}
 				break attempts
 			case errors.Is(err, ErrInvalidMessageID):

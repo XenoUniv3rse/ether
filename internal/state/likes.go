@@ -10,15 +10,7 @@ import (
 // SetLikes maps a tri-state like onto the shared 0–10 viewer rating atomically.
 func (s *State) SetLikes(ctx context.Context, userID int64, key core.RatingKey, likes *bool) error {
 	return s.update(ctx, userID, []core.RatingKey{key}, func(cur *row, now time.Time) (bool, bool, []Event) {
-		rating := cur.ws.UserRating
-		switch {
-		case likes == nil:
-			rating = 0
-		case *likes && rating < 7:
-			rating = 10
-		case !*likes && (rating == 0 || rating > 3):
-			rating = 2
-		}
+		rating := core.RatingWithLikes(cur.ws.UserRating, likes)
 		if rating == cur.ws.UserRating {
 			return false, false, nil
 		}

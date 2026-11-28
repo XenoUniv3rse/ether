@@ -73,9 +73,10 @@ type Settings struct {
 	OverviewTranslate    bool               `json:"overviewTranslate"`
 }
 type Options struct {
-	Rows    func(context.Context, *core.User) []core.Row
-	User    func(context.Context, int64) (*core.User, error)
-	OnAdded func() // wakes the bounded intent consumer after membership commits
+	Rows         func(context.Context, *core.User) []core.Row
+	User         func(context.Context, int64) (*core.User, error)
+	Availability func(context.Context, *core.Title) (ready, handled bool, err error)
+	OnAdded      func() // wakes the bounded intent consumer after membership commits
 
 	Community        *plextv.CommunityClient
 	OwnerToken       func(context.Context) (string, error)
@@ -915,7 +916,7 @@ func (s *Service) checkTitle(ctx context.Context, cfg Settings, userID int64, po
 		return nil
 	}
 	wasAvailable := !it.AvailableAt.IsZero()
-	res, e := s.resolve(ctx, resolveUser, resolveTitle)
+	res, e := s.resolve(ctx, cfg, resolveUser, resolveTitle)
 	now := s.o.Now().Unix()
 	// Transient resolver failures do not establish that a stream is absent.
 	if e != nil && !errors.Is(e, core.ErrNotAvailable) {
@@ -979,11 +980,24 @@ func (s *Service) checkTitle(ctx context.Context, cfg Settings, userID int64, po
 
 // resolve asks for a healthy release of title for u. It returns a nil
 // Resolution, with a nil error, when nothing playable was found.
-func (s *Service) resolve(ctx context.Context, u *core.User, title *core.Title) (*core.Resolution, error) {
+func (s *Service) resolve(ctx context.Context, cfg Settings, u *core.User, title *core.Title) (*core.Resolution, error) {
+	if s.o.Availability != nil {
+		ready, handled, err := s.o.Availability(ctx, title)
+		if handled || err != nil {
+			if !ready || err != nil {
+				return nil, err
+			}
+			// The managed shelf acquires this title independently.
+			return &core.Resolution{Title: title.Key}, nil
+		}
+	}
 	caps := core.ClientCaps{MaxHeight: 1080, VideoCodecs: []string{"h264", "hevc"}, AudioCodecs: []string{"aac", "ac3", "eac3"}, Containers: []string{"mkv", "mp4"}}
 	job, cancel := context.WithTimeout(core.WithIndexerPurpose(ctx, core.IndexerPurposeWarmup), 45*time.Second)
 	defer cancel()
-	// Nobody waits on a watchlist check: fallback queries go one at a time.
+	if cfg.Notify || cfg.Prewarm {
+		job = core.WithSpeculativeGrabs(job)
+	}
+	// Watchlist checks ask only the primary query.
 	res, err := s.o.Resolver.Resolve(core.WithUnattendedSearch(job), core.ResolveRequest{Title: title, User: u, Client: caps})
 	if err != nil {
 		return nil, err

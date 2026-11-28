@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/braedonsaunders/ether/internal/frontend/kit/route"
 	"github.com/braedonsaunders/ether/internal/logredact"
 	"github.com/braedonsaunders/ether/internal/playback"
 	"github.com/braedonsaunders/ether/internal/store"
@@ -1044,7 +1045,7 @@ func (s *Service) PlayTimeline(ctx context.Context, id string) (*PlayTimeline, e
 
 // ActivityHandler serves owner-authenticated activity endpoints under /api/activity/.
 func (s *Service) ActivityHandler() http.Handler {
-	m := http.NewServeMux()
+	m := &route.Mux{}
 	m.HandleFunc("GET /plays/{id}/timeline", s.servePlayTimeline)
 	return m
 }

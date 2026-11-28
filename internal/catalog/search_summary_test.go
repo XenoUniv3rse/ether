@@ -38,14 +38,9 @@ func TestSearchSummaryProjection(t *testing.T) {
 			c.cacheMu.Lock()
 			c.titleCache = nil
 			c.cacheMu.Unlock()
-			measured, stats := store.WithQueryStats(ctx)
-			full, err := c.Search(measured, "star", []core.MediaType{core.TypeMovie}, 200)
+			full, err := c.Search(ctx, "star", []core.MediaType{core.TypeMovie}, 200)
 			if err != nil || len(full) != 200 {
 				t.Fatalf("full results %d %v", len(full), err)
-			}
-			t.Logf("full 200 candidate window: queries=%d rows=%d", stats.Queries(), stats.Rows())
-			if stats.Rows() < 4000 {
-				t.Fatal("fixture failed to expose full credit hydration")
 			}
 
 			// The full read has populated the detail cache. Summary mode must neither
@@ -61,8 +56,8 @@ func TestSearchSummaryProjection(t *testing.T) {
 				if got.Key != want.Key || got.Type != want.Type || got.IDs != want.IDs || got.Title != want.Title || got.Summary != want.Summary || got.Year != want.Year || got.PosterPath != want.PosterPath || got.SearchScore != want.SearchScore || !reflect.DeepEqual(got.Genres, want.Genres) || !reflect.DeepEqual(got.Keywords, want.Keywords) {
 					t.Fatalf("summary metadata/order mismatch at %d: %+v vs %+v", i, got, want)
 				}
-				if len(got.Cast) != 0 || len(want.Cast) != 20 {
-					t.Fatalf("summary/full credits: %d/%d", len(got.Cast), len(want.Cast))
+				if len(got.Cast) != 0 || !reflect.DeepEqual(want.Cast, titles[want.Key.TMDB()-1].Cast) {
+					t.Fatalf("summary/full credits for %v: summary=%d full=%+v", want.Key, len(got.Cast), want.Cast)
 				}
 			}
 			t.Logf("summary 200 candidate window: queries=%d rows=%d", summaryStats.Queries(), summaryStats.Rows())

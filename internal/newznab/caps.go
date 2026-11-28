@@ -8,18 +8,19 @@ import (
 
 // Caps is a parsed Newznab capabilities document.
 type Caps struct {
-	ServerTitle  string   `json:"serverTitle,omitempty"`
-	ServerType   string   `json:"serverType,omitempty"`
-	LimitDefault int      `json:"limitDefault,omitempty"`
-	LimitMax     int      `json:"limitMax,omitempty"`
-	SearchAvail  bool     `json:"searchAvailable"`
-	SearchParams []string `json:"searchParams,omitempty"`
-	MovieAvail   bool     `json:"movieSearchAvailable"`
-	MovieParams  []string `json:"movieParams,omitempty"`
-	TVAvail      bool     `json:"tvSearchAvailable"`
-	TVParams     []string `json:"tvParams,omitempty"`
-	Categories   []int    `json:"categories,omitempty"`
-	NewznabPath  bool     `json:"newznabPath,omitempty"`
+	ServerTitle     string   `json:"serverTitle,omitempty"`
+	ServerType      string   `json:"serverType,omitempty"`
+	LimitDefault    int      `json:"limitDefault,omitempty"`
+	LimitMax        int      `json:"limitMax,omitempty"`
+	SearchAvail     bool     `json:"searchAvailable"`
+	SearchParams    []string `json:"searchParams,omitempty"`
+	MovieAvail      bool     `json:"movieSearchAvailable"`
+	MovieParams     []string `json:"movieParams,omitempty"`
+	TVAvail         bool     `json:"tvSearchAvailable"`
+	TVParams        []string `json:"tvParams,omitempty"`
+	Categories      []int    `json:"categories,omitempty"`
+	AnimeCategories []int    `json:"animeCategories,omitempty"`
+	NewznabPath     bool     `json:"newznabPath,omitempty"`
 }
 
 type capsXML struct {
@@ -47,9 +48,11 @@ type capsXML struct {
 	} `xml:"searching"`
 	Categories struct {
 		Category []struct {
-			ID  string `xml:"id,attr"`
-			Sub []struct {
-				ID string `xml:"id,attr"`
+			ID   string `xml:"id,attr"`
+			Name string `xml:"name,attr"`
+			Sub  []struct {
+				ID   string `xml:"id,attr"`
+				Name string `xml:"name,attr"`
 			} `xml:"subcat"`
 		} `xml:"category"`
 	} `xml:"categories"`
@@ -79,14 +82,18 @@ func parseCaps(body []byte) (*Caps, error) {
 	}
 	c.LimitMax, _ = strconv.Atoi(x.Limits.Max)
 	c.LimitDefault, _ = strconv.Atoi(x.Limits.Default)
-	for _, cat := range x.Categories.Category {
-		if n, err := strconv.Atoi(cat.ID); err == nil {
+	addCategory := func(id, name string, parentAnime bool) {
+		if n, err := strconv.Atoi(id); err == nil {
 			c.Categories = append(c.Categories, n)
-		}
-		for _, sub := range cat.Sub {
-			if n, err := strconv.Atoi(sub.ID); err == nil {
-				c.Categories = append(c.Categories, n)
+			if n == animeCategory || parentAnime || isAnimeCategoryName(name) {
+				c.AnimeCategories = append(c.AnimeCategories, n)
 			}
+		}
+	}
+	for _, cat := range x.Categories.Category {
+		addCategory(cat.ID, cat.Name, false)
+		for _, sub := range cat.Sub {
+			addCategory(sub.ID, sub.Name, isAnimeCategoryName(cat.Name))
 		}
 	}
 	return c, nil

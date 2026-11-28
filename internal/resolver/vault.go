@@ -13,7 +13,7 @@ import (
 
 	"github.com/braedonsaunders/ether/internal/core"
 	"github.com/braedonsaunders/ether/internal/debrid"
-
+	"github.com/braedonsaunders/ether/internal/releasepolicy"
 	"github.com/braedonsaunders/ether/internal/vault"
 )
 
@@ -70,6 +70,13 @@ func (s *Service) libraryCandidates(ctx context.Context, req core.ResolveRequest
 	if err != nil || len(ranked) == 0 {
 		return releases, nil, false, nil
 	}
+	preferOriginal := titleOriginalLanguage(req.Title) != "" && releasepolicy.PrefersOriginalAudio(p, req.User)
+	preferSubtitles := prefersViewerSubtitles(p, req.User)
+	cutoff := func(c candidate) bool {
+		return reachesVaultCutoff(c, p) &&
+			(!preferOriginal || c.trackPreference >= confirmedOriginalPreference) &&
+			(!preferSubtitles || c.preferredSubtitles)
+	}
 	pickIdx := 0
 	if req.Prefer != "" {
 		pickIdx = -1
@@ -86,7 +93,7 @@ func (s *Service) libraryCandidates(ctx context.Context, req core.ResolveRequest
 		return releases, nil, false, nil
 	} else {
 		best := ranked[0]
-		if !reachesVaultCutoff(best, p) || fingerprints[vault.KeyOf(best.rel)] != fp {
+		if !cutoff(best) || fingerprints[vault.KeyOf(best.rel)] != fp {
 			return releases, nil, false, nil
 		}
 	}
@@ -133,7 +140,7 @@ func (s *Service) libraryCandidates(ctx context.Context, req core.ResolveRequest
 			if j == pickIdx {
 				continue
 			}
-			if reachesVaultCutoff(c, p) && fingerprints[vault.KeyOf(c.rel)] == fp {
+			if cutoff(c) && fingerprints[vault.KeyOf(c.rel)] == fp {
 				qualifying = append(qualifying, c)
 			}
 		}

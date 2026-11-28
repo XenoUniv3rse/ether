@@ -1,6 +1,7 @@
 import { Bell, Blocks, FolderOpen, Globe, Library, Network, Plug, Puzzle, Tv } from "lucide-react";
 import { createElement, type ReactNode } from "react";
 import { settingHref } from "../../components/SettingFocus";
+import { formatBytes, formatNumber } from "../../lib/format";
 import { getLocale, t } from "../../i18n";
 import type { Viewer } from "../../lib/contract";
 import { textOf, type Descriptor } from "../../lib/extend";
@@ -218,6 +219,7 @@ export interface PluginManifest {
     };
     permissions?: DeclaredPermissions;
     contributes?: {
+      frontendAdapters?: { uploadPaths?: { path: string; maxBytes: number }[] }[];
       mediaKinds?: { key: string; label: string; library: { name: string } }[];
       liveFeeds?: LiveFeedContribution[];
       screens?: ScreenContribution[];
@@ -230,6 +232,10 @@ export interface PluginManifest {
 }
 
 export interface RuntimeLimits {
+  uploadBytes?: number;
+  durableBytes?: number;
+  durableFiles?: number;
+  durableFreePercent?: number;
   fetchBytes?: number;
   archiveMemberBytes?: number;
   archiveExpandedBytes?: number;
@@ -249,7 +255,13 @@ export interface ListItemsGrant {
   granted: number;
 }
 
+export interface DurableQuota {
+  quotaBytes: number;
+  quotaFiles: number;
+}
+
 export interface PluginDetail extends PluginSummary {
+  durableQuota?: DurableQuota;
   runtimeLimits?: RuntimeLimits;
   listItems?: ListItemsGrant;
   manifest: PluginManifest;
@@ -287,6 +299,7 @@ export interface PluginDetail extends PluginSummary {
 }
 
 export interface InstallPreview {
+  durableQuota?: DurableQuota;
   runtimeLimits?: RuntimeLimits;
   listItems?: ListItemsGrant;
   manifest: PluginManifest;
@@ -462,7 +475,17 @@ export function listItemsLine(count: number): string {
   });
 }
 
+export function durablePermissionLine(quota?: DurableQuota): string {
+  return quota
+    ? t("Stores up to {size} and {files} saved files", {
+        size: formatBytes(quota.quotaBytes),
+        files: formatNumber(quota.quotaFiles),
+      })
+    : t("Stores saved data until deleted");
+}
+
 export function translatePermissionLine(line: string): string {
+  if (line === "Stores saved data until deleted") return durablePermissionLine();
   const listItems = LIST_ITEMS_LINE.exec(line);
   if (listItems) {
     return listItemsLine(Number(listItems[1]!.replace(/,/g, "")));
@@ -606,7 +629,7 @@ export function buildGrantItems(detail: PluginDetail): GrantItem[] {
   if (d.storage === "durable") {
     items.push({
       key: "storage",
-      label: t("Stores up to 1 GiB of data until deleted"),
+      label: durablePermissionLine(detail.durableQuota),
       revocable: true,
     });
   }
@@ -1063,6 +1086,8 @@ function toFieldDef(
         label,
         help,
         kind: "select",
+        search: raw.search,
+        placeholder: raw.placeholder,
         options: opts,
         numeric: raw.numeric,
       };

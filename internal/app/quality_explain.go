@@ -13,6 +13,7 @@ import (
 	"github.com/braedonsaunders/ether/internal/config"
 	"github.com/braedonsaunders/ether/internal/core"
 	"github.com/braedonsaunders/ether/internal/frontend/kit/caps"
+	"github.com/braedonsaunders/ether/internal/frontend/kit/route"
 	"github.com/braedonsaunders/ether/internal/frontends/plex"
 	"github.com/braedonsaunders/ether/internal/resolver"
 )
@@ -26,6 +27,7 @@ type qualityClient struct {
 	Product  string        `json:"product"`
 	Platform string        `json:"platform"`
 	Device   string        `json:"device,omitempty"`
+	Model    string        `json:"model,omitempty"`
 	Protocol core.Protocol `json:"protocol,omitempty"`
 }
 
@@ -111,7 +113,7 @@ type qualityExplainIn struct {
 // qualityHandler serves the Releases page's device picker, summary table and
 // "Check one play" explainer.
 func (a *App) qualityHandler() http.Handler {
-	m := http.NewServeMux()
+	m := &route.Mux{}
 	m.HandleFunc("GET /clients", func(w http.ResponseWriter, r *http.Request) {
 		writeQualityJSON(w, http.StatusOK, map[string]any{"clients": qualityClients()})
 	})
@@ -467,8 +469,8 @@ func (a *App) qualityClientByID(ctx context.Context, id string) (client qualityC
 	switch dev.Field {
 	case "type":
 		for _, d := range clientreg.Devices() {
-			if d.Name == dev.Value {
-				return qualityClient{ID: id, Name: d.Name, Product: d.Identity.Product, Platform: d.Identity.Platform, Device: d.Identity.Device}, "", true
+			if d.TypeID() == dev.Value {
+				return qualityClient{ID: id, Name: d.Name, Product: d.Identity.Product, Platform: d.Identity.Platform, Device: d.Identity.Device, Model: d.Identity.Model}, "", true
 			}
 		}
 	case "app":
@@ -489,7 +491,7 @@ func qualityClientCaps(ctx context.Context, cfg config.Config, client qualityCli
 	if devName == "" {
 		devName = client.Device
 	}
-	pr := &plex.Request{ClientID: exactClientID, Product: client.Product, Platform: client.Platform, Device: client.Device, DeviceName: devName, Remote: remote, User: u}
+	pr := &plex.Request{ClientID: exactClientID, Product: client.Product, Platform: client.Platform, Device: client.Device, DeviceName: devName, Model: client.Model, Remote: remote, User: u}
 	declared = pr.ClientCapsWith(0, cfg.Clients.Overrides)
 	builtin = pr.ClientCapsWith(0, nil)
 	if frontendHostPolicy(client.Protocol).ProfileQualityEvaluation {

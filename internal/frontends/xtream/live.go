@@ -1,15 +1,18 @@
 package xtream
 
 import (
+	"bufio"
 	"encoding/base64"
 	"encoding/xml"
 	"fmt"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/braedonsaunders/ether/internal/frontend"
+	"github.com/braedonsaunders/ether/internal/frontend/kit/lineup"
 )
 
 func xtreamOwnerGroupRef(id string) string {
@@ -63,6 +66,28 @@ func (i *instance) channels(r *http.Request, l login) ([]frontend.LiveChannel, e
 		}
 	}
 	return cs, nil
+}
+
+// channelArtwork prepares just the logos the current response will render.
+func (i *instance) channelArtwork(r *http.Request, l login, channels []frontend.LiveChannel, category string) *http.Request {
+	batch, ok := i.host.ImageGrants.(frontend.ChannelArtworkGrantBatch)
+	if !ok {
+		return r
+	}
+	var ids []string
+	for _, c := range channels {
+		if len(c.Images) > 0 && liveChannelInCategory(l, c, category) {
+			ids = append(ids, c.ID)
+		}
+	}
+	if len(ids) == 0 {
+		return r
+	}
+	ctx, err := batch.PrepareChannelArtwork(r.Context(), l.credential, ids)
+	if err != nil {
+		return r
+	}
+	return r.WithContext(ctx)
 }
 
 func liveCategoryInt(l login, c frontend.LiveChannel) int32 {
@@ -175,6 +200,7 @@ func (i *instance) live(w http.ResponseWriter, r *http.Request, l login, action 
 	first := true
 	num := 0
 	catFilter := r.URL.Query().Get("category_id")
+	r = i.channelArtwork(r, l, channels, catFilter)
 	for _, c := range channels {
 		if !liveChannelInCategory(l, c, catFilter) {
 			continue
@@ -194,12 +220,25 @@ func (i *instance) live(w http.ResponseWriter, r *http.Request, l login, action 
 }
 
 func (i *instance) findChannel(r *http.Request, l login, id string) (frontend.LiveChannel, bool) {
-	cs, err := i.channels(r, l)
+	n, err := parseCompactID(id)
 	if err != nil {
 		return frontend.LiveChannel{}, false
 	}
-	for _, c := range cs {
-		if strconv.FormatInt(int64(l.channels[c.ID]), 10) == id {
+	ref, err := i.host.IDs.Resolve(r.Context(), "xtream", "channel", n)
+	if err != nil {
+		return frontend.LiveChannel{}, false
+	}
+	var channels []frontend.LiveChannel
+	if selectChannels, ok := i.host.LiveTV.(frontend.LiveChannelSelection); ok {
+		channels, err = selectChannels.ReadChannelSelection(r.Context(), l.viewer, []string{ref})
+	} else {
+		channels, err = i.host.LiveTV.Channels(r.Context(), l.viewer)
+	}
+	if err != nil {
+		return frontend.LiveChannel{}, false
+	}
+	for _, c := range channels {
+		if c.ID == ref {
 			return c, true
 		}
 	}
@@ -275,7 +314,7 @@ type programmeXMLIcon struct {
 }
 
 func (i *instance) xmltv(w http.ResponseWriter, r *http.Request, l login) {
-	cs, err := i.channels(r, l)
+	cs, err := i.host.LiveTV.Channels(r.Context(), l.viewer)
 	if err != nil {
 		http.Error(w, "Unavailable", 503)
 		return
@@ -291,36 +330,47 @@ func (i *instance) xmltv(w http.ResponseWriter, r *http.Request, l login) {
 		}{ID: c.ID, Name: c.Name})
 	}
 	now := i.liveNow()
-	for _, c := range cs {
-		ps, err := i.programmes(r, l, c, now.Add(-6*time.Hour), now.Add(48*time.Hour))
+	const batchSize = frontend.MaxLiveGuideExportChannels
+	for start := 0; start < len(cs); start += batchSize {
+		batch := cs[start:min(start+batchSize, len(cs))]
+		ids := make([]string, len(batch))
+		for j, c := range batch {
+			ids[j] = c.ID
+		}
+		ps, err := i.host.LiveTV.Guide(r.Context(), l.viewer, frontend.LiveGuideQuery{
+			Device: l.device, Channels: ids, From: now.Add(-6 * time.Hour), Until: now.Add(48 * time.Hour),
+			Limit: 10000, PerChannelLimit: true,
+		})
 		if err != nil {
 			return
 		}
+		byChannel := make(map[string][]frontend.LiveProgramme, len(batch))
 		for _, p := range ps {
-			if p.ChannelID != c.ID || !p.End.After(p.Start) {
-				continue
+			byChannel[p.ChannelID] = append(byChannel[p.ChannelID], p)
+		}
+		for _, channel := range batch {
+			for _, p := range byChannel[channel.ID] {
+				if !p.End.After(p.Start) {
+					continue
+				}
+				var icon *programmeXMLIcon
+				if src := i.programmeIcon(r, l, p); src != "" {
+					icon = &programmeXMLIcon{Source: src}
+				}
+				_ = e.Encode(struct {
+					XMLName xml.Name          `xml:"programme"`
+					Channel string            `xml:"channel,attr"`
+					Start   string            `xml:"start,attr"`
+					Stop    string            `xml:"stop,attr"`
+					Title   string            `xml:"title"`
+					Desc    string            `xml:"desc"`
+					Icon    *programmeXMLIcon `xml:"icon,omitempty"`
+				}{Icon: icon, Channel: channel.ID, Start: p.Start.UTC().Format("20060102150405 -0700"), Stop: p.End.UTC().Format("20060102150405 -0700"), Title: p.Title, Desc: p.Summary})
 			}
-			var icon *programmeXMLIcon
-			if src := i.programmeIcon(r, l, p); src != "" {
-				icon = &programmeXMLIcon{Source: src}
-			}
-			_ = e.Encode(struct {
-				XMLName xml.Name          `xml:"programme"`
-				Channel string            `xml:"channel,attr"`
-				Start   string            `xml:"start,attr"`
-				Stop    string            `xml:"stop,attr"`
-				Title   string            `xml:"title"`
-				Desc    string            `xml:"desc"`
-				Icon    *programmeXMLIcon `xml:"icon,omitempty"`
-			}{Icon: icon, Channel: c.ID, Start: p.Start.UTC().Format("20060102150405 -0700"), Stop: p.End.UTC().Format("20060102150405 -0700"), Title: p.Title, Desc: p.Summary})
 		}
 	}
 	_ = e.Flush()
 	_, _ = w.Write([]byte("</tv>"))
-}
-
-func cleanM3U(s string) string {
-	return strings.NewReplacer("\r", " ", "\n", " ", "\"", "'").Replace(s)
 }
 
 func (i *instance) playlist(w http.ResponseWriter, r *http.Request, l login) {
@@ -329,46 +379,40 @@ func (i *instance) playlist(w http.ResponseWriter, r *http.Request, l login) {
 		http.Error(w, "Unavailable", 503)
 		return
 	}
+	var cached io.ReadCloser
+	if i.lineups != nil {
+		var err error
+		cached, err = i.lineups.Open(r.Context(), lineup.ViewerKey(l.viewer, r.URL.Query().Get("category_id")))
+		if err != nil {
+			http.Error(w, "Unavailable", 503)
+			return
+		}
+		defer cached.Close()
+	}
 	cs, err := i.channels(r, l)
 	if err != nil {
 		http.Error(w, "Unavailable", 503)
 		return
 	}
+	r = i.channelArtwork(r.WithContext(frontend.WithExportTitlesOnly(r.Context())), l, cs, "")
 	w.Header().Set("Content-Type", "audio/x-mpegurl; charset=utf-8")
-	_, _ = fmt.Fprintln(w, "#EXTM3U")
-	liveExt := "m3u8"
-	if strings.EqualFold(r.URL.Query().Get("output"), "ts") || strings.EqualFold(r.URL.Query().Get("output"), "mpegts") {
-		liveExt = "ts"
+	out := bufio.NewWriterSize(w, 64<<10)
+	_, _ = fmt.Fprintln(out, "#EXTM3U")
+	ext := "m3u8"
+	if output := r.URL.Query().Get("output"); strings.EqualFold(output, "ts") || strings.EqualFold(output, "mpegts") {
+		ext = "ts"
 	}
 	for _, c := range cs {
-		group := strings.TrimSpace(c.Group)
-		if len(c.Groups) > 0 {
-			group = strings.TrimSpace(c.Groups[0].Name)
+		if err := lineup.WriteLive(out, c, i.image(r, l, 0, c.ID, c.Images), base, l.username, l.password, l.channels[c.ID], ext); err != nil {
+			panic(http.ErrAbortHandler)
 		}
-		if group == "" {
-			group = "Live TV"
-		}
-		_, _ = fmt.Fprintf(w, "#EXTINF:-1 tvg-id=\"%s\" tvg-logo=\"%s\" group-title=\"%s\",%s\n%s/live/%s/%s/%d.%s\n", cleanM3U(c.ID), cleanM3U(i.image(r, l, 0, c.ID, c.Images)), cleanM3U(group), cleanM3U(c.Name), base, l.username, l.password, l.channels[c.ID], liveExt)
 	}
-	// Movies are emitted a page at a time; exporting never accumulates the catalogue.
-	if err := i.walk(r, l, "movie", func(l login, t frontend.Title, cat string) error {
-		_, err := fmt.Fprintf(w, "#EXTINF:-1 group-title=\"Movies\",%s\n%s/movie/%s/%s/%d.mkv\n", cleanM3U(t.Title), base, l.username, l.password, l.ids[t.Key])
-		return err
-	}); err != nil {
-		return
+	if cached != nil {
+		err = lineup.WriteSnapshot(out, cached, base, l.username, l.password)
+	} else {
+		err = i.writeLineup(r, l, out, base)
 	}
-	_ = i.walk(r, l, "show", func(_ login, show frontend.Title, _ string) error {
-		return i.children(r, l, show.Key, func(season frontend.Title) error {
-			if string(season.Type) != "season" {
-				return nil
-			}
-			return i.children(r, l, season.Key, func(ep frontend.Title) error {
-				if string(ep.Type) != "episode" {
-					return nil
-				}
-				_, err := fmt.Fprintf(w, "#EXTINF:-1 group-title=\"Series\",%s S%02dE%02d %s\n%s/series/%s/%s/%d.mkv\n", cleanM3U(show.Title), ep.Season, ep.Episode, cleanM3U(ep.Title), base, l.username, l.password, l.ids[ep.Key])
-				return err
-			})
-		})
-	})
+	if err != nil || out.Flush() != nil {
+		panic(http.ErrAbortHandler)
+	}
 }

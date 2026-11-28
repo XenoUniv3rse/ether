@@ -65,7 +65,9 @@ export function LibraryCacheCard({
       />
       <SettingsRow
         title={<label htmlFor={keepId}>{t("Keep at most")}</label>}
-        description={t("Oldest files go first when the library passes this size.")}
+        description={t(
+          "Zero uses the plugin’s default limit, or the media budget if the plugin sets none.",
+        )}
         control={
           <span className="flex items-center gap-2">
             <NumberInput
@@ -120,22 +122,20 @@ export function LibraryCacheCard({
 
 export function LibraryCaches() {
   const list = useAsync((signal) => librariesApi.list(signal), []);
-  if (list.error) return <ErrorPanel error={list.error} onRetry={() => void list.reload()} />;
-  if (!list.data)
-    return (
-      <div className="py-10 text-center">
-        <Spinner size={20} label={t("Loading library caches")} />
-      </div>
-    );
-  return (
-    <div className="space-y-5">
-      {list.data
-        .filter((lib) => lib.source === "plugin")
-        .map((library) => (
-          <StandaloneCache key={library.id} library={library} />
-        ))}
+  const contents = list.error ? (
+    <ErrorPanel error={list.error} onRetry={() => void list.reload()} />
+  ) : !list.data ? (
+    <div className="py-10 text-center">
+      <Spinner size={20} label={t("Loading library caches")} />
     </div>
+  ) : !list.data.some((lib) => lib.source === "plugin") ? (
+    <p className="text-sm text-fg-muted">{t("No plugin libraries")}</p>
+  ) : (
+    list.data
+      .filter((lib) => lib.source === "plugin")
+      .map((library) => <StandaloneCache key={library.id} library={library} />)
   );
+  return <div className="space-y-5">{contents}</div>;
 }
 
 function StandaloneCache({ library }: { library: Library }) {

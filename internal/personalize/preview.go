@@ -44,10 +44,13 @@ func (e *Engine) PreviewPage(ctx context.Context, viewer *core.User, key core.Pa
 		return nil, err
 	}
 	pl := e.planFor(ctx, user.ID, sectionOfKey(key))
+	library, _, _ := key.Library()
+	libs := e.presentationLibraries(ctx)
 	out := &core.PagePreview{Rows: []core.HomeRow{}, Picks: []core.PreviewPick{}, NotShown: []core.NotShownRow{}, GeneratedAt: e.now(), Context: hc}
 	for _, r := range rows {
 		switch {
 		case !r.Hidden:
+			r.Present = presentationFor(r, libs, int(library))
 			out.Rows = append(out.Rows, e.withAccessFlags(ctx, r, user))
 		case r.RowID != "":
 			ns := core.NotShownRow{RowID: r.RowID, Title: r.Title, Reason: r.HiddenReason}

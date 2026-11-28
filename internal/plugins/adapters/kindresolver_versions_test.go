@@ -16,8 +16,10 @@ import (
 
 	"github.com/braedonsaunders/ether/internal/config"
 	"github.com/braedonsaunders/ether/internal/core"
+	"github.com/braedonsaunders/ether/internal/frontend"
 	"github.com/braedonsaunders/ether/internal/plugins"
 	"github.com/braedonsaunders/ether/internal/plugins/adapters"
+	"github.com/braedonsaunders/ether/internal/plugins/frontendadapter"
 	"github.com/braedonsaunders/ether/internal/resolver"
 )
 
@@ -514,6 +516,54 @@ func TestKindResolverOpenKindPartSourceAndBoundedPartIndex(t *testing.T) {
 		t.Fatal("broken source succeeded (unexpected failover)")
 	}
 
+	// Redeem a real adapter ticket and read the returned bytes. Query parameters
+	// cannot expand the strict ticket into a preference.
+	issuer := frontendadapter.NewTicketIssuer()
+	handler := frontendadapter.NewMediaHandler(frontendadapter.MediaDeps{
+		Tickets: issuer,
+		Viewer:  func(context.Context, int64) (*core.Viewer, error) { return viewer, nil },
+		Open: func(context.Context, *core.Viewer, string, []string) (*frontend.KindMedia, error) {
+			t.Fatal("source-scoped ticket dispatched to whole-item open")
+			return nil, nil
+		},
+		OpenSource: func(ctx context.Context, v *core.Viewer, ref string, part *int, source string, fallback bool, accept []string) (*frontend.KindMedia, error) {
+			item, _, err := h.items.GetByRef(ctx, core.ItemRef(ref))
+			if err != nil {
+				return nil, err
+			}
+			return h.resolver.OpenKindPartSourceWithFallback(ctx, v, item.Key, part, source, fallback, accept)
+		},
+	})
+	partOne := 1
+	for _, tc := range []struct {
+		ref      core.ItemRef
+		part     *int
+		source   string
+		fallback bool
+		want     string
+	}{
+		{awareItem.Ref, nil, "pdf", true, "PDF-DATA"},
+		{awareItem.Ref, nil, "broken", true, "EPUB-DATA"},
+		{awareItem.Ref, nil, "missing", true, "EPUB-DATA"},
+		{multiItem.Ref, &partOne, "missing", true, "PART1-HD"},
+		{awareItem.Ref, nil, "broken", false, ""},
+	} {
+		url, err := issuer.StreamURL(frontendadapter.StreamGrant{ViewerID: viewer.ID, ItemID: tc.ref.String(), Adapter: pluginID, PartIndex: tc.part, Source: tc.source, Fallback: tc.fallback})
+		if err != nil {
+			t.Fatal(err)
+		}
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, url, nil)
+		req.URL.RawQuery += "&fallback=true"
+		handler.ServeHTTP(rec, req)
+		if tc.want == "" {
+			if rec.Code < 400 {
+				t.Fatalf("strict broken source returned %d", rec.Code)
+			}
+		} else if rec.Code != http.StatusOK || rec.Body.String() != tc.want {
+			t.Errorf("open %s preferred %q: status=%d body=%q want %q", tc.ref, tc.source, rec.Code, rec.Body.String(), tc.want)
+		}
+	}
 	// 5. Plugin that ignores KindResolveRequest.Source still works: Ether picks matching id,
 	// refuses failover on broken id, and returns ErrNotAvailable when absent.
 	kmLegacyPDF, err := h.resolver.OpenKindPartSource(ctx, viewer, ignoreItem.Key, nil, "pdf", nil)

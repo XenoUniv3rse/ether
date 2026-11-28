@@ -93,6 +93,9 @@ func (c *Catalog) fresh(st *storedTitle) bool {
 
 // Get returns a title from the mirror, fetching on demand when missing/stale.
 func (c *Catalog) Get(ctx context.Context, key core.RatingKey) (*core.Title, error) {
+	if season, ok := c.preparedExportSeason(ctx, key); ok {
+		return season, nil
+	}
 	t, err := c.get(ctx, key)
 	if err == nil {
 		err = c.projectSingle(ctx, t)
@@ -700,6 +703,9 @@ func (c *Catalog) seasonsOfShow(ctx context.Context, showID int64) ([]core.Title
 }
 
 func (c *Catalog) readSeasonsOfShow(ctx context.Context, showID int64) ([]core.Title, error) {
+	if items, ok := c.exportChildrenFor(ctx, core.ShowKey(showID)); ok {
+		return items, nil
+	}
 	// show_key, not show_tmdb: only show_key is indexed, and a show's
 	// pages read its seasons and episodes many times.
 	all, err := c.queryTitles(ctx, `SELECT `+titleCols+` FROM catalog_titles`+c.indexedBy("catalog_titles_show")+` WHERE type='season' AND show_key=? ORDER BY season ASC`, int64(core.ShowKey(showID)))
@@ -718,6 +724,9 @@ func (c *Catalog) readSeasonsOfShow(ctx context.Context, showID int64) ([]core.T
 // episodesOfSeason lists a season's aired episodes; queryTitles drops those
 // with unknown or future air dates.
 func (c *Catalog) episodesOfSeason(ctx context.Context, showID int64, season int) ([]core.Title, error) {
+	if items, ok := c.exportChildrenFor(ctx, core.SeasonKey(showID, season)); ok {
+		return items, nil
+	}
 	return c.queryTitles(ctx, `SELECT `+titleCols+` FROM catalog_titles`+c.indexedBy("catalog_titles_show")+` WHERE type='episode' AND key<5000000000000000 AND show_key=? AND season=? ORDER BY episode ASC`, int64(core.ShowKey(showID)), season)
 }
 
@@ -817,6 +826,16 @@ func (c *Catalog) seasonMirrored(ctx context.Context, showID int64, season, coun
 
 // Children: seasons of a show, episodes of a season.
 func (c *Catalog) Children(ctx context.Context, key core.RatingKey) ([]core.Title, error) {
+	if items, ok := c.exportChildrenFor(ctx, key); ok {
+		if key.Kind() == core.KindSeason {
+			if _, exists := c.preparedExportSeason(ctx, key); !exists {
+				return nil, core.ErrNotFound
+			}
+		} else if _, err := c.Get(ctx, key); err != nil {
+			return nil, err
+		}
+		return items, nil
+	}
 	if _, err := c.Get(ctx, key); err != nil {
 		return nil, err
 	}

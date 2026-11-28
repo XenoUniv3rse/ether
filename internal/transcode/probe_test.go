@@ -43,7 +43,7 @@ func TestParseProbeGolden(t *testing.T) {
 		{
 			file: "mkv_hevc_hdr10.json",
 			want: core.MediaInfo{
-				Container: "mkv", Duration: sec(7950.125), Size: 59836712345, BitrateKbps: 60211,
+				Container: "mkv", Duration: sec(7950.125), Size: 59836712345, BitrateKbps: 60211, ChaptersProbed: true,
 				Streams: []core.StreamInfo{
 					{ChromaLocation: "left", CodedWidth: 3840, CodedHeight: 2160, Index: 0, Type: "video", Codec: "hevc", Profile: "Main 10", Level: 153, Default: true, Original: boolean(false), Commentary: boolean(false), Dub: boolean(false), Width: 3840, Height: 2160,
 						FrameRate: 23.976, BitDepth: 10, ColorTransfer: "smpte2084", BitrateKbps: 58312,
@@ -60,7 +60,7 @@ func TestParseProbeGolden(t *testing.T) {
 		{
 			file: "mkv_dv_p8.json",
 			want: core.MediaInfo{
-				Container: "mkv", Duration: sec(7081), Size: 14812345678, BitrateKbps: 16735,
+				Container: "mkv", Duration: sec(7081), Size: 14812345678, BitrateKbps: 16735, ChaptersProbed: true,
 				Streams: []core.StreamInfo{
 					{Index: 0, Type: "video", Codec: "hevc", Profile: "Main 10", Default: true, Width: 3840, Height: 1608,
 						FrameRate: 23.976, BitDepth: 10, ColorTransfer: "smpte2084", DolbyVision: true, DolbyVisionProfile: 8, DolbyVisionLevel: 6, DolbyVisionCompatibilityID: 1,
@@ -76,7 +76,7 @@ func TestParseProbeGolden(t *testing.T) {
 		{
 			file: "mp4_h264_aac.json",
 			want: core.MediaInfo{
-				Container: "mp4", Duration: sec(5400.042), Size: 4062345678, BitrateKbps: 6018,
+				Container: "mp4", Duration: sec(5400.042), Size: 4062345678, BitrateKbps: 6018, ChaptersProbed: true,
 				Streams: []core.StreamInfo{
 					{Index: 0, Type: "video", Codec: "h264", Profile: "High", Level: 40, Default: true, Width: 1920, Height: 1080,
 						FrameRate: 24, BitDepth: 8, ColorTransfer: "bt709", BitrateKbps: 5823,
@@ -91,7 +91,7 @@ func TestParseProbeGolden(t *testing.T) {
 		{
 			file: "mkv_truehd_atmos.json",
 			want: core.MediaInfo{
-				Container: "mkv", Duration: sec(8123.456), Size: 36212345678, BitrateKbps: 35662,
+				Container: "mkv", Duration: sec(8123.456), Size: 36212345678, BitrateKbps: 35662, ChaptersProbed: true,
 				Streams: []core.StreamInfo{
 					{Index: 0, Type: "video", Codec: "h264", Profile: "High", Default: true, Width: 1920, Height: 1080,
 						FrameRate: 23.976, BitDepth: 8, ColorTransfer: "bt709", BitrateKbps: 28123},
@@ -108,7 +108,7 @@ func TestParseProbeGolden(t *testing.T) {
 			file: "mkv_pgs.json",
 			want: core.MediaInfo{
 				// no format bit_rate: derived from size/duration
-				Container: "mkv", Duration: sec(1440), Size: 1440000000, BitrateKbps: 8000,
+				Container: "mkv", Duration: sec(1440), Size: 1440000000, BitrateKbps: 8000, ChaptersProbed: true,
 				Streams: []core.StreamInfo{
 					{Index: 0, Type: "video", Codec: "h264", Profile: "High", Default: true, Width: 1920, Height: 800,
 						FrameRate: 23.976, BitDepth: 8},

@@ -72,7 +72,7 @@ func TestExperienceHomeFallbackUsesVisibleLibrariesAndReleaseOrder(t *testing.T)
 	}
 	libs := []experience.Library{{ID: 1, Name: "Movies", Type: core.TypeMovie}, {ID: 2, Name: "TV Shows", Type: core.TypeShow}}
 	vis := experienceVisibility(a.safety, a.catalog.Get, nil, nil, libs)
-	rows, err := a.experienceHomeFallback(ctx, frontend.RowRequest{Viewer: viewer, Limit: 20}, libs, vis)
+	rows, err := a.experienceHomeFallback(ctx, frontend.RowRequest{Viewer: viewer, Limit: 20}, libs, vis, true)
 	if err != nil || len(rows) != 1 || rows[0].Purpose != frontend.RowRecentlyAdded || len(rows[0].Entries) != 2 {
 		t.Fatalf("fallback %+v %v", rows, err)
 	}
@@ -82,7 +82,7 @@ func TestExperienceHomeFallbackUsesVisibleLibrariesAndReleaseOrder(t *testing.T)
 	if !rows[0].Entries[0].Title.AddedAt.Equal(newerReleased) || rows[0].Entries[0].Title.AddedAt.Equal(time.Unix(10, 0)) {
 		t.Fatalf("added time = %v, want release %v", rows[0].Entries[0].Title.AddedAt, newerReleased)
 	}
-	rows, err = a.experienceHomeFallback(ctx, frontend.RowRequest{Viewer: viewer, Placement: frontend.PlacementHome, HomeFallbackOnly: true, ExcludeItems: []core.RatingKey{newer.Key}, Limit: 1}, libs, vis)
+	rows, err = a.experienceHomeFallback(ctx, frontend.RowRequest{Viewer: viewer, Placement: frontend.PlacementHome, HomeFallbackOnly: true, ExcludeItems: []core.RatingKey{newer.Key}, Limit: 1}, libs, vis, true)
 	if err != nil || len(rows) != 1 || len(rows[0].Entries) != 1 || rows[0].Entries[0].Title.Key != older.Key {
 		t.Fatal("indexed hero fill lost policy/exclusions", rows, err)
 	}

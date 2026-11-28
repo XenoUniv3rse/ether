@@ -26,6 +26,7 @@ func makeValidTSPacket() []byte {
 
 func TestDirectStreamSingleUseMasterMuxedTS(t *testing.T) {
 	var masterHits atomic.Int32
+	var resolveCalls atomic.Int32
 	var variantHits atomic.Int32
 	var sawHeader atomic.Bool
 	tsSeg := makeValidTSPacket()
@@ -73,10 +74,16 @@ func TestDirectStreamSingleUseMasterMuxedTS(t *testing.T) {
 	}
 
 	info, err := s.TuneDirectStream(context.Background(), u, DirectStream{
-		ID:      "esports:ch-1",
-		Title:   "Finals Stage A",
-		URL:     upstream.URL + "/master.m3u8?token=once",
-		Headers: map[string]string{"X-Stream-Auth": "secret-hdr"},
+		ID:    "esports:ch-1",
+		Title: "Finals Stage A",
+		URL:   upstream.URL + "/missing",
+		Resolve: func(context.Context) (DirectStreamResult, error) {
+			resolveCalls.Add(1)
+			return DirectStreamResult{
+				URL:     upstream.URL + "/master.m3u8?token=once",
+				Headers: map[string]string{"X-Stream-Auth": "secret-hdr"},
+			}, nil
+		},
 		AllowCheck: func(context.Context, *core.User) error {
 			if !allowed.Load() {
 				return core.ErrNotFound
@@ -89,6 +96,9 @@ func TestDirectStreamSingleUseMasterMuxedTS(t *testing.T) {
 	}
 	defer func() { _ = s.Stop(context.Background(), info.ID, u) }()
 
+	if resolveCalls.Load() != 1 {
+		t.Fatal("unavailable input did not refresh once")
+	}
 	if got := masterHits.Load(); got != 1 {
 		t.Fatalf("master playlist fetched %d times, want exactly 1", got)
 	}
@@ -498,7 +508,7 @@ func TestDirectStreamSingleUseMasterReusedAcrossSteadyHandoffAndReopen(t *testin
 	}
 
 	// 2. Subsequent providerBroadcastPlanner decoder reopen (new link) reuses cached master.
-	reopened, err := s.linkSteadySourceWithState(context.Background(), ss.info.Channel, ss.inputSource, "broadcast-reopen-1", 0, ss.direct, nil)
+	reopened, err := s.linkSteadySourceWithState(context.Background(), ss.info.Channel, ss.inputSource, "broadcast-reopen-1", 0, ss.direct, nil, nil)
 	if err != nil {
 		t.Fatalf("linkSteadySourceWithState reopen failed: %v", err)
 	}

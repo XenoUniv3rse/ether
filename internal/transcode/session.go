@@ -32,6 +32,14 @@ type Session struct {
 	archiveTrim      time.Duration
 	// Explicit quality sessions retire the old run before starting a rung.
 	serialRungs             bool
+	adaptiveHLS             bool
+	adaptiveUnavailable     string
+	adaptiveCopyAligned     bool
+	adaptiveExcludeCopy     bool
+	adaptiveCopyDecodeLead  time.Duration
+	adaptiveMaxKbps         int
+	adaptiveLastRequest     time.Time
+	adaptiveInitRequests    int
 	copyOrigin              bool // continuous copy uses a measured presentation origin
 	diagnosticsEnabled      bool
 	preparation             []core.HLSPreparationEvent
@@ -113,6 +121,8 @@ type sessionInput struct {
 	decision            core.Decision
 	softwareDecode      bool // decoder failed; retain hardware encoder
 	forceCPU            bool // hardware encoder failed; stay on CPU
+	sourceLimitKbps     int  // capped encode on the existing input after a source downshift
+	sourceLimitPicture  *videoContract
 	copyFallback        bool // copied video failed its packet conversion; encode this session
 	copyDiscontinuities map[int]bool
 	noPause             bool            // platform cannot suspend ffmpeg

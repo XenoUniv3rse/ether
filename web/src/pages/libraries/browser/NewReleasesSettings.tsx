@@ -5,9 +5,9 @@ import { Link } from "react-router-dom";
 import { MoreOptions } from "../../../components/ConfigSection";
 import { SaveBar, useDraft } from "../../../components/SaveBar";
 import { SettingsRow } from "../../../components/SettingsRow";
-import { t, tn, tx } from "../../../i18n";
+import { t, tx } from "../../../i18n";
 import { api, apiFetch } from "../../../lib/api";
-import { formatNumber, relativeTime } from "../../../lib/format";
+import { formatNumber } from "../../../lib/format";
 import { useAsync, useInterval } from "../../../lib/hooks";
 import {
   applyReleaseModeFor,
@@ -21,7 +21,6 @@ import type { AvailabilityConfig } from "../../../lib/types";
 interface Summary {
   ready: number;
   waiting: number;
-  lastChecked?: number;
 }
 
 interface ModeOption {
@@ -36,10 +35,7 @@ const MOVIE_MODES: ModeOption[] = [
     value: "playable",
     recommended: true,
     title: () => t("When they can play"),
-    body: () =>
-      t(
-        "A new movie appears once Ether finds a release you can play with your release settings. Ether checks for you automatically.",
-      ),
+    body: () => t("Ether watches for new releases that match your settings."),
   },
   {
     value: "digital",
@@ -59,10 +55,7 @@ const SHOW_MODES: ModeOption[] = [
     value: "playable",
     recommended: true,
     title: () => t("When they can play"),
-    body: () =>
-      t(
-        "A new episode or show appears once Ether finds a release you can play with your release settings. Ether checks for you automatically.",
-      ),
+    body: () => t("Ether watches for new releases that match your settings."),
   },
   {
     value: "immediate",
@@ -196,23 +189,21 @@ export function NewReleasesSettings({
       ) : null}
       {mediaType === "movie" && mode === "playable" && summary.data ? (
         <p className="new-release-status">
-          {tx("{ready} ready · {waiting} · checked {when}", {
+          {tx("{ready} ready · watching new releases for {waiting} titles", {
             ready: formatNumber(summary.data.ready),
             waiting: (
               <Link to="/libraries/1?waiting=1" className="text-primary underline">
-                {tn(
-                  summary.data.waiting,
-                  "{count} waiting for a release",
-                  "{count} waiting for a release",
-                )}
+                {formatNumber(summary.data.waiting)}
               </Link>
             ),
-            when: summary.data.lastChecked
-              ? relativeTime(new Date(summary.data.lastChecked * 1000))
-              : t("not yet"),
           })}
         </p>
       ) : null}
+      <p className="new-release-status">
+        <Link to="/viewers/watchlists" className="text-primary underline">
+          {t("Also watching titles from viewers' watchlists")}
+        </Link>
+      </p>
     </SettingsSection>
   );
 }

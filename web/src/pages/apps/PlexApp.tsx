@@ -556,7 +556,8 @@ function PlexMetadata({ claimed }: { claimed: boolean }) {
   const doc = useAsync(async () => (await fetchEtherConfig()).plex, []);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState<boolean>();
-  const on = saved ?? Boolean(doc.data?.usePlexMetadata);
+  // On unless the owner turned it off.
+  const on = saved ?? doc.data?.usePlexMetadata !== false;
   return (
     <SettingsSection title={t("Metadata")}>
       <SettingsRow

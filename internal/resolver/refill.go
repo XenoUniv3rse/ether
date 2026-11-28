@@ -37,12 +37,8 @@ type refillMark struct {
 // waits for capacity or performs resolution, descriptor fetching, health
 // checks or provider work.
 //
-// Nobody pressed Play: discovery is speculative indexer work. It draws on
-// the viewer detail share, asks each indexer its primary query only (no
-// fallback burst, no rescue), skips a title remembered unavailable, and
-// runs at most once per title per unavailable cooloff, whatever it found:
-// a version picker reopened all evening must not search all evening.
-// Errors are best-effort: no retries or queue.
+// Nobody pressed Play. The picker may reuse durable results from previous
+// searches and only refills once per title per unavailable cooloff.
 func (s *Service) RefillSearchCache(title *core.Title) <-chan struct{} {
 	return s.refillSearchCache(title, false)
 }
@@ -102,7 +98,7 @@ func (s *Service) refillSearchCache(title *core.Title, unattended bool) <-chan s
 	// Use the service lifetime, not the metadata request or source warm-up.
 	searchCtx := core.WithIndexerPurpose(context.WithValue(s.bgCtx, refillSearchContextKey{}, true), core.IndexerPurposeDetail)
 	if unattended {
-		searchCtx = core.WithUnattendedSearch(core.WithIndexerPurpose(searchCtx, core.IndexerPurposeWarmup))
+		searchCtx = core.WithCachedIndexerSearch(core.WithUnattendedSearch(core.WithIndexerPurpose(searchCtx, core.IndexerPurposeWarmup)))
 	}
 	searchCtx = context.WithValue(searchCtx, liveSearchContextKey{}, ls)
 	ctx, cancel := context.WithTimeout(searchCtx, searchRefillBudget)

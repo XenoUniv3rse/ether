@@ -108,7 +108,8 @@ function activity(s: DebridProviderStatus): string[] {
   if (s.blocked)
     out.push(t("{count} blocked by provider", { count: formatNumber(Number(s.blocked)) }));
   if (s.failures) out.push(tn(Number(s.failures), "{count} failure", "{count} failures"));
-  if (s.reused) out.push(t("{count} reused", { count: formatNumber(Number(s.reused)) }));
+  if (s.reused && !s.api?.reuseHits)
+    out.push(t("{count} reused", { count: formatNumber(Number(s.reused)) }));
   if (s.linksRefreshed)
     out.push(tn(Number(s.linksRefreshed), "{count} link refreshed", "{count} links refreshed"));
   // In a cluster the account's concurrent API calls are divided among nodes.
@@ -126,6 +127,34 @@ function activity(s: DebridProviderStatus): string[] {
   if (s.queuedDetail) out.push(s.queuedDetail);
   if (s.lastSuccess) out.push(t("last worked {time}", { time: relativeTime(s.lastSuccess) }));
   return out;
+}
+
+function apiActivity(api: DebridProviderStatus["api"]) {
+  if (!api || !api.attempts) return null;
+  return (
+    <span className="block tabular-nums">
+      {t("{attempts} API attempts · {retries} retries · {limited} rate-limited", {
+        attempts: formatNumber(api.attempts),
+        retries: formatNumber(api.retries),
+        limited: formatNumber(api.limited),
+      })}
+      {api.reuseHits || api.rememberedHits ? (
+        <span className="block">
+          {t("{reused} account reuses · {remembered} remembered answers", {
+            reused: formatNumber(api.reuseHits),
+            remembered: formatNumber(api.rememberedHits),
+          })}
+        </span>
+      ) : null}
+      {api.firstPlays > 0 ? (
+        <span className="block">
+          {t("{average} API calls per first play", {
+            average: formatNumber(api.firstPlayCalls / api.firstPlays, 1),
+          })}
+        </span>
+      ) : null}
+    </span>
+  );
 }
 
 function ms(n: number): string {
@@ -186,7 +215,7 @@ function StateBadge({ p, s }: { p: DebridProvider; s?: DebridProviderStatus }) {
     case "backoff":
       return (
         <Badge variant="warning">
-          {s.backoffUntil
+          {s.backoffUntil && !s.rateLimitedUntil
             ? t("Paused · retries {time}", { time: relativeTime(s.backoffUntil) })
             : t("Paused")}
         </Badge>
@@ -214,7 +243,12 @@ export function DebridSources({
   const config = useAsync(() => api.getConfig(), []);
   // Live status refreshes on its own; a failed poll leaves the list usable.
   const status = useAsync(() => api.debridStatus().catch(() => null), []);
-  useInterval(() => void status.reload(), 15_000);
+  useInterval(() => void status.reload(), 5_000);
+  const [now, setNow] = useState(Date.now);
+  useInterval(
+    () => setNow(Date.now()),
+    status.data?.providers?.some((p) => p.rateLimitedUntil) ? 1000 : null,
+  );
   const [editing, setEditing] = useState<{ index: number; draft: DebridProvider } | null>(null);
   const [errors, setErrors] = useState<Errors>({});
   const [error, setError] = useState<unknown>(null);
@@ -387,13 +421,29 @@ export function DebridSources({
               const s = live.find((x) => x.id === p.id);
               const label = providerName(p, i);
               const latency = latencySummary(s?.latency);
+              const retrySeconds = s?.rateLimitedUntil
+                ? Math.ceil((Date.parse(s.rateLimitedUntil) - Math.max(now, Date.now())) / 1000)
+                : 0;
               const details: ReactNode = (
                 <>
                   {[role(i), ...(s ? activity(s) : [])].join(" · ")}
+                  {apiActivity(s?.api)}
                   {latency ? <span className="block tabular-nums">{latency}</span> : null}
-                  {s?.lastError ? (
+                  {retrySeconds > 0 ? (
+                    <span className="block text-danger">
+                      {t("{provider} asked Ether to slow down; retrying in {seconds}s", {
+                        provider: debridKindLabel(p.kind),
+                        seconds: formatNumber(retrySeconds),
+                      })}
+                    </span>
+                  ) : s?.lastError ? (
                     <span className="block truncate text-danger" title={s.lastError}>
                       {s.lastError}
+                    </span>
+                  ) : null}
+                  {p.kind === "realdebrid" && (s?.blocked ?? 0) > 0 ? (
+                    <span className="block">
+                      {t("Real-Debrid refused to serve the blocked files.")}
                     </span>
                   ) : null}
                 </>
@@ -403,7 +453,7 @@ export function DebridSources({
                   name={label}
                   position={i + 1}
                   description={details}
-                  problem={debridFix(p.enabled, s?.state)}
+                  problem={retrySeconds > 0 ? null : debridFix(p.enabled, s?.state)}
                   meta={
                     <>
                       <Badge variant="outline">{debridKindLabel(p.kind)}</Badge>

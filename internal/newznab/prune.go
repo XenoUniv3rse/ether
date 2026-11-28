@@ -10,10 +10,8 @@ import (
 // the admin UI and debugging.
 const budgetRetentionDays = 35
 
-// Prune deletes budget and usage rows older than budgetRetentionDays, any expired
-// search-cache rows (normally removed on write, but an idle indexer never
-// writes). It is meant to be called
-// periodically.
+// Prune removes old budget and usage rows and expired search results in
+// the maintenance pass.
 func (m *Manager) Prune(ctx context.Context) (int64, error) {
 	if m.db == nil {
 		return 0, nil
@@ -34,6 +32,12 @@ func (m *Manager) Prune(ctx context.Context) (int64, error) {
 		return total, err
 	}
 	n, _ := res.RowsAffected()
+	total += n
+	res, err = m.db.ExecContext(ctx, `DELETE FROM newznab_request_usage WHERE at<=?`, t.Add(-24*time.Hour).Unix())
+	if err != nil {
+		return total, err
+	}
+	n, _ = res.RowsAffected()
 	total += n
 	res, err = m.db.ExecContext(ctx, `DELETE FROM newznab_cache WHERE expires_at<?`, t.Unix())
 	if err != nil {

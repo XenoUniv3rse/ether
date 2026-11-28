@@ -172,6 +172,7 @@ type CandidateTrace struct {
 
 // Trace is one recorded resolution attempt, for the admin UI.
 type Trace struct {
+	PluginKind                bool             `json:"pluginKind,omitempty"`
 	Discovery                 []DiscoveryTrace `json:"discovery,omitempty"`
 	Limits                    *TraceLimits     `json:"limits,omitempty"`
 	TitleKey                  core.RatingKey   `json:"titleKey"`
@@ -278,7 +279,8 @@ type inflight struct {
 	done      chan struct{}
 	res       *core.Resolution
 	err       error
-	abandoned bool // the leader's own context ended the resolution
+	abandoned bool   // the leader's own context ended the resolution
+	play      func() // marks the shared resolution as an explicit Play
 }
 
 // Service implements core.Resolver.
@@ -374,7 +376,8 @@ type Service struct {
 	// delete, so a revoked verdict is never written back after it was cleared.
 	availPersistMu           sync.Mutex
 	bgClosed                 bool
-	bookkeeping              []func(context.Context)
+	bookkeeping              []bookkeepingJob
+	bookkeepingSize          int
 	bookkeepingRunning       bool
 	bookkeepingIdle          chan struct{}
 	bgWG                     sync.WaitGroup
@@ -398,7 +401,8 @@ type Service struct {
 	flightMu sync.Mutex
 	flights  map[string]*inflight
 
-	delivery deliveryState
+	delivery       deliveryState
+	clientDelivery clientDeliveryState
 
 	route routingState // source routing: startup measurements and signals
 
@@ -807,9 +811,9 @@ func searchRequestFor(t *core.Title) core.SearchRequest {
 			title = t.Title
 		}
 		return core.SearchRequest{Type: core.TypeEpisode, IDs: t.ShowIDs, EpisodeSource: t.EpisodeOrder.Source, Title: title, OriginalTitle: t.ShowOriginalTitle, EnglishTitle: t.ShowEnglishTitle, Year: t.ShowYear, Season: t.Season, Episode: t.Episode, EpisodeTitle: t.Title,
-			AbsoluteEpisode: t.AbsoluteEpisode, Anime: isAnime(t), AlternativeTitles: t.ShowAlternativeTitles, Released: cmp.Or(t.EpisodeAirDate, t.Released)}
+			AbsoluteEpisode: t.AbsoluteEpisode, Anime: t.IsAnime(), AlternativeTitles: t.ShowAlternativeTitles, Released: cmp.Or(t.EpisodeAirDate, t.Released)}
 	}
-	return core.SearchRequest{Type: core.TypeMovie, IDs: t.IDs, Title: t.Title, OriginalTitle: t.OriginalTitle, EnglishTitle: t.EnglishTitle, Year: t.Year, Anime: isAnime(t), AlternativeTitles: t.AlternativeTitles, Released: t.Released}
+	return core.SearchRequest{Type: core.TypeMovie, IDs: t.IDs, Title: t.Title, OriginalTitle: t.OriginalTitle, EnglishTitle: t.EnglishTitle, Year: t.Year, Anime: t.IsAnime(), AlternativeTitles: t.AlternativeTitles, Released: t.Released}
 }
 
 func (s *Service) searchRequest(ctx context.Context, t *core.Title) core.SearchRequest {
@@ -829,23 +833,6 @@ func (s *Service) searchRequest(ctx context.Context, t *core.Title) core.SearchR
 // isAnime reports a title whose releases follow anime conventions
 // (absolute episode numbers, fansub groups): TMDB's "anime" keyword, or
 // Japanese-language animation.
-func isAnime(t *core.Title) bool {
-	for _, k := range t.Keywords {
-		if strings.EqualFold(k, "anime") {
-			return true
-		}
-	}
-	if !strings.EqualFold(t.Language, "ja") {
-		return false
-	}
-	for _, g := range t.Genres {
-		if strings.EqualFold(g, "Animation") {
-			return true
-		}
-	}
-	return false
-}
-
 // absoluteEpisode is the requested episode's number counted from the
 // series start: the catalogue's count, or the episode number itself in
 // the first season. 0 when unknown.
@@ -881,15 +868,13 @@ func flightKey(req core.ResolveRequest, profile core.QualityProfile) string {
 	}
 	capsJSON, _ := json.Marshal(req.Client)
 	profileJSON, _ := json.Marshal(profile)
-	// Without profile languages the viewer's own audio languages decide
-	// which releases are acceptable (acceptedAudio), so they key the flight.
-	var audio []string
-	preferOriginal := false
-	if len(profile.PreferredLanguages) == 0 && req.User != nil {
-		audio = req.User.AudioLanguages
-		preferOriginal = req.User.PreferOriginal
+	// Viewers with different audio or subtitle rules can pick different
+	// releases from the same search results.
+	var audio, subtitles []string
+	if req.User != nil {
+		audio, subtitles = req.User.AudioLanguages, req.User.SubtitleLanguages
 	}
-	return fmt.Sprintf("%d|%s|%s|%s|%s|%s|%s|%t|%t|%s|%t", req.Title.Key, profile.Name, strings.Join(ex, ","), strings.Join(exRel, ","), capsJSON, profileJSON, req.Prefer+"|"+req.PreferVideoCodec+"|"+req.PlayedRelease+"|"+req.PlayedSelector, req.PreferredOnly, req.ExactHEVCTranscode, strings.Join(audio, ","), preferOriginal)
+	return fmt.Sprintf("%d|%s|%s|%s|%s|%s|%s|%t|%t|%s|%s|%t", req.Title.Key, profile.Name, strings.Join(ex, ","), strings.Join(exRel, ","), capsJSON, profileJSON, req.Prefer+"|"+req.PreferVideoCodec+"|"+req.PlayedRelease+"|"+req.PlayedSelector, req.PreferredOnly, req.ExactHEVCTranscode, strings.Join(audio, ","), strings.Join(subtitles, ","), releasepolicy.PrefersOriginalAudio(profile, req.User))
 }
 
 // Resolve implements core.Resolver. Concurrent calls for the same
@@ -906,16 +891,23 @@ func (s *Service) Resolve(ctx context.Context, req core.ResolveRequest) (*core.R
 	dec := decideProfile(q, req.Client, req.User, titleTarget(req.Title, inLib))
 	req.Client = dec.caps
 	profile := dec.profile
+	req = s.withClientDeliveryBudget(req)
 	videoOff, _ := s.transcodeSettingsFor(req.Client)
-	key := fmt.Sprintf("%s|pin:%s|vc:%s|vt:%t", flightKey(req, profile), s.PinnedReleaseID(req), s.viewerChoiceFlightKey(req), videoOff)
+	key := fmt.Sprintf("%s|pin:%s|vc:%s|vt:%t|link:%d", flightKey(req, profile), s.PinnedReleaseID(req), s.viewerChoiceFlightKey(req), videoOff, req.ClientDeliveryBudgetKbps)
 	if channelAvailabilityCheck(ctx) {
 		key += "/channel-availability"
+	}
+	if core.SpeculativeIndexerWork(ctx) || core.IsBackgroundCheck(ctx) {
+		key += "/background"
 	}
 
 	for {
 		s.flightMu.Lock()
 		if f, ok := s.flights[key]; ok {
 			s.flightMu.Unlock()
+			if core.ExplicitPlay(ctx) {
+				f.play() // a Play joined: what the search prepares from now on is for a Play
+			}
 			select {
 			case <-f.done:
 				if f.abandoned && ctx.Err() == nil {
@@ -935,6 +927,7 @@ func (s *Service) Resolve(ctx context.Context, req core.ResolveRequest) (*core.R
 			}
 		}
 		f := &inflight{done: make(chan struct{})}
+		ctx, f.play = core.WithExplicitPlayLatch(ctx)
 		s.flights[key] = f
 		s.flightMu.Unlock()
 
@@ -1017,8 +1010,7 @@ func (s *Service) resolve(ctx context.Context, req core.ResolveRequest, profile 
 			s.log.Info("resolver: below 4K", "title", trace.TitleName, "profile", profile.Name, "why", trace.Ceiling)
 		}
 		s.addTrace(trace)
-		history := compactTrace(trace)
-		s.persistBookkeeping(ctx, func(ctx context.Context) { s.recordHistory(ctx, history) })
+		s.queueHistory(trace, nil)
 		s.emitResolveOutcome(req, profile, trace, resolved, resolveErr)
 	}()
 
@@ -1472,6 +1464,7 @@ func (s *Service) resolve(ctx context.Context, req core.ResolveRequest, profile 
 	if req.Prefer == "" && pin == nil {
 		cands = s.demoteBackingOffUsenet(cands, &trace)
 	}
+	prioritizeOwnerTracks(cands)
 	// resolvePreferred drops the preferred release from cands in place.
 	var preferredCand *candidate
 	if prefer := cmp.Or(req.Prefer, pinID); prefer != "" {
@@ -1636,6 +1629,15 @@ func (s *Service) resolve(ctx context.Context, req core.ResolveRequest, profile 
 		}
 		return res, nil
 	}
+	// Provider pacing is temporary and must not become an uncached or
+	// unavailable title. Other providers and rescue candidates can still win.
+	all := concat(lead, primary, rescuePrimary, downgrades)
+	for _, c := range all {
+		if err := trace.Candidates[c.trace].err; errors.Is(err, core.ErrDebridThrottled) {
+			trace.Err = err.Error()
+			return nil, err
+		}
+	}
 	if optimisticErr != nil {
 		return nil, optimisticErr
 	}
@@ -1649,7 +1651,6 @@ func (s *Service) resolve(ctx context.Context, req core.ResolveRequest, profile 
 	// broken Usenet release): say so, send one to download when the owner
 	// allows it, and do not record the title unavailable (a download may
 	// finish, or the provider may cache it, at any time).
-	all := concat(lead, primary, rescuePrimary, downgrades)
 	if i, payload, uerr, ok := s.uncachedOutcome(ctx, all, results, &trace); ok {
 		if i >= 0 {
 			return s.acceptResolution(ctx, t.Key, all, i, payload, &trace), nil
@@ -2134,9 +2135,6 @@ func (env *rankEnv) audio(profile core.QualityProfile, req core.ResolveRequest) 
 
 // rankWith is rankCandidates with its environment already prepared.
 func (s *Service) rankWith(ctx context.Context, env rankEnv, req core.ResolveRequest, sreq core.SearchRequest, profile core.QualityProfile, results []core.Release, trace *Trace, pinID string) ([]candidate, bool, error) {
-	if s.db != nil && env.feedRejections == nil {
-		s.loadRejectionsFor(ctx, req.Title.Key)
-	}
 	if !core.LocalResponse(ctx) {
 		s.prepareSeriesYears(ctx, req.Title, sreq, results)
 		s.prepareTitleIDVerifications(ctx, req.Title, sreq, env.lang, results)
@@ -2203,7 +2201,7 @@ func (s *Service) rankPass(ctx context.Context, env rankEnv, req core.ResolveReq
 	var titleRej releaseTitleRejections
 	t := req.Title
 	policy, hot, exclude, rcfg, wanted, accepted := env.policy, env.hot, env.exclude, env.rcfg, env.wanted, env.accepted
-	upscales := presumedUpscales(results, isAnime(t))
+	upscales := presumedUpscales(results, t.IsAnime())
 	ids := make([]string, len(results))
 	targeted := make([]core.Release, len(results))
 	for i, r := range results {
@@ -2230,6 +2228,9 @@ func (s *Service) rankPass(ctx context.Context, env rankEnv, req core.ResolveReq
 	// Windows) instead of on the ranking.
 	now := s.now()
 	rc := s.rankContext(profile, t, rcfg, now)
+	original := titleOriginalLanguage(t)
+	preferOriginal := original != "" && releasepolicy.PrefersOriginalAudio(profile, req.User)
+	preferSubs := prefersViewerSubtitles(profile, req.User)
 	var cands []candidate
 	clientRejected := false
 	// For a known catalogue namesake, a corroborated result makes name-only
@@ -2299,7 +2300,8 @@ func (s *Service) rankPass(ctx context.Context, env rankEnv, req core.ResolveReq
 			}
 		}
 		preferred := pinned || (req.Prefer != "" && rel.ID == req.Prefer)
-		probedLangs := s.probedAudioLanguagesFor(rel)
+		probe, probed := s.probedMediaFor(rel)
+		probedLangs := releasepolicy.ProbedAudioLanguages(probe.Streams)
 		langRel := withProbedAudioLanguages(rel, probedLangs)
 		policyResult := policy.Evaluate(langRel, policyContext)
 		var unverifiedLangs []string
@@ -2345,13 +2347,13 @@ func (s *Service) rankPass(ctx context.Context, env rankEnv, req core.ResolveReq
 			reason = audioAbsentPolicyReason(policy, policyContext, langRel, policyResult)
 		} else {
 			videoOff, _ := s.transcodeSettingsFor(req.Client)
-			reason = s.rejectReasonFor(rel, t, sreq, profile, rcfg, req.Client, exclude, preferred, req.User, env)
+			reason = s.rejectReasonFor(rel, t, sreq, profile, rcfg, req.Client, exclude, preferred, req.User, probedLangs, env)
 			if !videoOff && reason == "video codec unsupported by client" && req.ExactHEVCTranscode && !req.Client.Download && req.Prefer != "" && rel.ID == req.Prefer && strings.EqualFold(rel.Info.VideoCodec, "hevc") {
 				// Only relax the codec gate for the explicitly selected source;
 				// every other policy and the final probed output decision still apply.
 				caps := req.Client
 				caps.VideoCodecs = append(slices.Clone(caps.VideoCodecs), rel.Info.VideoCodec)
-				reason = s.rejectReasonFor(rel, t, sreq, profile, rcfg, caps, exclude, preferred, req.User, env)
+				reason = s.rejectReasonFor(rel, t, sreq, profile, rcfg, caps, exclude, preferred, req.User, probedLangs, env)
 			}
 			if strings.HasPrefix(reason, "audio is not in the profile's language (") {
 				clientRejected = true
@@ -2403,10 +2405,22 @@ func (s *Service) rankPass(ctx context.Context, env rankEnv, req core.ResolveReq
 		if langMatch.Matched {
 			langRank = langMatch.Rank + 1
 		}
+		hasSubs := releaseHasWantedSubtitles(rel, probe, probed, env.wantedSubs)
+		trackPreference := 0
+		if preferOriginal {
+			trackPreference = originalAudioPreference(langRel, t, original)
+		}
+		preferredSubtitles := langOK && preferSubs && hasSubs
+		// Allow subtitle preference to beat an audio-only conversion. When
+		// the source video itself needs encoding, leave the tradeoff to the
+		// profile's format scores. Explicit original-audio rules still apply.
+		if preferredSubtitles && !releaseNeedsVideoTranscode(rel, t, req.Client, 0) {
+			trackPreference += wantedSubtitlePreference
+		}
 		lowBitrate := bitrateScore(sizedForEpisode(rel), t) < 0
 		starved := lowBitrate || upscales[ri]
 		yearGuessed := seriesYearGuessed(rel, sreq)
-		facts := formatFacts{starved: starved, lowBitrate: lowBitrate, viewerLanguage: langMatch, originalLanguage: titleOriginalLanguage(t), viewerSubs: indexerListsSubtitles(rel, env.wantedSubs), yearDiffers: yearGuessed, pastRetention: s.pastRetention(rel, now)}
+		facts := formatFacts{starved: starved, lowBitrate: lowBitrate, viewerLanguage: langMatch, originalLanguage: titleOriginalLanguage(t), viewerSubs: hasSubs, yearDiffers: yearGuessed, pastRetention: s.pastRetention(rel, now)}
 		sc, err := s.scoreRelease(rel, profile, req.Client, t, policyResult, facts)
 		if errors.Is(err, errFormatTimeout) {
 			// One (possibly hostile) release name must not fail the whole
@@ -2480,7 +2494,21 @@ func (s *Service) rankPass(ctx context.Context, env rankEnv, req core.ResolveReq
 			trace.Candidates = append(trace.Candidates, ct)
 			tr = len(trace.Candidates) - 1
 		}
-		bandwidth, delivery, bandwidthReason := s.deliveryFitReason(sizedForEpisode(rel), req.Client, t)
+		sized := sizedForEpisode(rel)
+		bandwidth, delivery, bandwidthReason := s.deliveryFitReason(sized, req.Client, t)
+		baseBandwidth := bandwidth
+		var deliveryDemotion core.AutoSelectionReason
+		if req.Client.Protocol == "vela" && !req.Client.Download && !req.Client.NoPlaybackTelemetry {
+			baseBandwidth = sourceBandwidthFit(sized, req.Client, t)
+			if bandwidth < 0 && baseBandwidth >= 0 {
+				deliveryDemotion = core.AutoSourceDelivery
+			}
+			fit := applyClientDeliveryFit(bandwidth, releaseBitsPerSecond(sized, t), req.ClientDeliveryBudgetKbps)
+			if fit < bandwidth {
+				deliveryDemotion = core.AutoConnectionEstimate
+			}
+			bandwidth = fit
+		}
 		if trace != nil {
 			note := func(n string) {
 				trace.Candidates[tr].CompatibilityReason = strings.TrimPrefix(trace.Candidates[tr].CompatibilityReason+"; "+n, "; ")
@@ -2534,7 +2562,7 @@ func (s *Service) rankPass(ctx context.Context, env rankEnv, req core.ResolveReq
 		if addonOrdered {
 			cf = 0
 		}
-		cands = append(cands, candidate{identityWeak: !pinned && identity.ambiguous(rel, t, sreq), identityConflict: namesake && identityEv == "" && episodeRegionConflict(rel, t), audioUnverified: audioUnverified, unverifiedLangs: unverifiedLangs, fallback: belowQuality, belowScore: belowScore, counted: sc.counted, policy: policyResult, rel: rel, trace: tr, verified: verified, langOK: langOK, langRank: langRank, starved: starved, bandwidth: bandwidth, delivery: delivery, yearGuessed: yearGuessed, cf: cf, keys: keys})
+		cands = append(cands, candidate{localFirst: localFirst(rc, rel, policyResult.Fallback, langOK), identityWeak: !pinned && identity.ambiguous(rel, t, sreq), identityConflict: namesake && identityEv == "" && episodeRegionConflict(rel, t), audioUnverified: audioUnverified, unverifiedLangs: unverifiedLangs, fallback: belowQuality, belowScore: belowScore, counted: sc.counted, policy: policyResult, rel: rel, trace: tr, verified: verified, langOK: langOK, preferredSubtitles: preferredSubtitles, trackPreference: trackPreference, langRank: langRank, starved: starved, bandwidth: bandwidth, preDeliveryBandwidth: baseBandwidth, deliveryDemotion: deliveryDemotion, delivery: delivery, yearGuessed: yearGuessed, cf: cf, keys: keys})
 	}
 	if env.seaDex != nil && len(cands) > 0 {
 		s.addSeaDexScores(env.seaDex, cands, trace)
@@ -2543,6 +2571,9 @@ func (s *Service) rankPass(ctx context.Context, env rankEnv, req core.ResolveReq
 		s.addPluginScores(hot, profile, cands, trace)
 	}
 
+	if req.Client.Protocol == "vela" && pinID == "" && core.IsAutoVersionSelector(req.Prefer) {
+		markAutoDeliveryReasons(cands, t)
+	}
 	ordered := s.orderCandidates(cands, req.Title, trace)
 	capCtx := releasepolicy.Context{OriginalLanguage: titleOriginalLanguage(t)}
 	if hot != nil {
@@ -2574,21 +2605,30 @@ func (s *Service) orderCandidates(cands []candidate, title *core.Title, trace *T
 		if len(group) == 0 {
 			return nil
 		}
+		local := make([]candidate, 0)
 		strict := make([]candidate, 0, len(group))
 		soft := make([]candidate, 0)
 		for _, c := range group {
-			if c.belowScore || c.fallback {
+			switch {
+			case c.localFirst:
+				// A file the owner has leads even below the profile's
+				// preferred quality or minimum score.
+				local = append(local, c)
+			case c.belowScore || c.fallback:
 				soft = append(soft, c)
-			} else {
+			default:
 				strict = append(strict, c)
 			}
 		}
+		local = s.orderPreferenceCandidates(local, title, trace)
 		strict = s.orderPreferenceCandidates(strict, title, trace)
 		soft = s.orderPreferenceCandidates(soft, title, trace)
-		return append(strict, soft...)
+		return append(append(local, strict...), soft...)
 	}
 	ordered := append(orderGroup(confirmed), orderGroup(unverified)...)
-	return s.demoteBackingOffUsenet(ordered, trace)
+	ordered = s.demoteBackingOffUsenet(ordered, trace)
+	prioritizeOwnerTracks(ordered)
+	return ordered
 }
 
 func (s *Service) orderPreferenceCandidates(cands []candidate, title *core.Title, trace *Trace) []candidate {
@@ -2614,6 +2654,7 @@ func (s *Service) rankContext(profile core.QualityProfile, t *core.Title, rcfg c
 		now:               now,
 		preferSource:      preferredSource(rcfg.SourcePreference),
 		preferRevision:    !scorer.scoresRevision(profile.CustomFormatScores),
+		preferLocal:       rcfg.PreferLocalFiles,
 		priority:          priority,
 		addonOrder:        addonOrder,
 		sourceBand:        sourceBand,
@@ -2752,11 +2793,11 @@ func (s *Service) scoreRelease(rel core.Release, profile core.QualityProfile, ca
 // Hard client gates and the identity/absolute-size checks always apply.
 func (s *Service) rejectReason(rel core.Release, t *core.Title, sreq core.SearchRequest,
 	profile core.QualityProfile, rcfg config.Resolver, caps core.ClientCaps, exclude map[string]bool, preferred bool) string {
-	return s.rejectReasonFor(rel, t, sreq, profile, rcfg, caps, exclude, preferred, nil, rankEnv{})
+	return s.rejectReasonFor(rel, t, sreq, profile, rcfg, caps, exclude, preferred, nil, s.probedAudioLanguagesFor(rel), rankEnv{})
 }
 
 func (s *Service) rejectReasonFor(rel core.Release, t *core.Title, sreq core.SearchRequest,
-	profile core.QualityProfile, rcfg config.Resolver, caps core.ClientCaps, exclude map[string]bool, preferred bool, user *core.User, env rankEnv) string {
+	profile core.QualityProfile, rcfg config.Resolver, caps core.ClientCaps, exclude map[string]bool, preferred bool, user *core.User, probedLangs []string, env rankEnv) string {
 	// Usenet passwords are supplied by NZB metadata and validated by the engine.
 	if rel.Password && rel.Protocol == core.ProtocolTorrent {
 		return "passworded"
@@ -2791,7 +2832,7 @@ func (s *Service) rejectReasonFor(rel core.Release, t *core.Title, sreq core.Sea
 	if user != nil {
 		viewerLangs = user.AudioLanguages
 	}
-	if reason := sourceSuitabilityWithLanguages(rel, t, profile, preferred, s.probedAudioLanguagesFor(rel), viewerLangs); reason != "" {
+	if reason := sourceSuitabilityWithLanguages(rel, t, profile, preferred, probedLangs, viewerLangs); reason != "" {
 		return reason
 	}
 	// Samples ("...Sample.mkv", "-sample" parts).

@@ -182,9 +182,6 @@ func (f Frontend) Mount(ctx context.Context, host frontend.Host) (frontend.Insta
 	} else if host.WatchRefresh != nil {
 		instance.unsubscribe = host.WatchRefresh(srv.WatchStateChanged, explicitOnly)
 	}
-	if !explicitOnly && host.HomeInvalidation != nil {
-		instance.unsubHome = host.HomeInvalidation(srv.ViewerHomeChanged)
-	}
 	return instance, nil
 }
 
@@ -195,7 +192,6 @@ type plexInstance struct {
 	sessions    frontend.Sessions
 	ownsServer  bool
 	unsubscribe func()
-	unsubHome   func()
 	closeOnce   sync.Once
 	status      func(context.Context) frontend.Status
 	listeners   func() []frontend.ListenerSpec
@@ -231,9 +227,6 @@ func (i *plexInstance) Close(ctx context.Context) error {
 	i.closeOnce.Do(func() {
 		if i.unsubscribe != nil {
 			i.unsubscribe()
-		}
-		if i.unsubHome != nil {
-			i.unsubHome()
 		}
 		if stop, ok := i.sessions.(frontend.ProtocolStopper); ok {
 			_ = stop.StopProtocol(ctx, "plex")

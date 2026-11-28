@@ -77,7 +77,7 @@ func (c *Client) getSearchStream(ctx context.Context, rawURL string, emit func([
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode == http.StatusTooManyRequests {
-		return nil, c.recordRateLimit(hctx, resp.Header.Get("Retry-After"), apiError(429, "too many requests"))
+		return nil, c.recordRateLimit(hctx, resp.Header.Get("Retry-After"), rateLimitResponse(resp, c.now()))
 	}
 	const limit = 20 << 20
 	decoded, derr := decodeBody(resp)

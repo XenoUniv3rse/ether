@@ -72,7 +72,8 @@
               "frontend_adapter",
               "matcher",
               "live_events",
-              "screens"
+              "screens",
+              "debrid_cache_hints"
             ]
           },
           "type": "array",
@@ -483,18 +484,21 @@
                     "items": {
                       "additionalProperties": false,
                       "properties": {
+                        "maxBytes": {
+                          "maximum": 536870912,
+                          "minimum": 1,
+                          "type": "integer"
+                        },
                         "path": {
                           "maxLength": 256,
                           "pattern": "^/",
                           "type": "string"
-                        },
-                        "maxBytes": {
-                          "maximum": 67108864,
-                          "minimum": 1,
-                          "type": "integer"
                         }
                       },
-                      "required": ["path", "maxBytes"],
+                      "required": [
+                        "path",
+                        "maxBytes"
+                      ],
                       "type": "object"
                     },
                     "maxItems": 16,

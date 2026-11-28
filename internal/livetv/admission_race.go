@@ -123,9 +123,15 @@ func (s *Service) raceSteadyInputsSeed(ctx context.Context, c Channel, candidate
 				var link *steadyLink
 				var sourceOpenElapsed, probeElapsed, pictureElapsed, startBudget time.Duration
 				var info *core.MediaInfo
-				err := s.withProviderCapacity(life, c, src, func() error {
-					link.close(s)
-					openBudget := remainingProbe()
+				defer func() {
+					if recover() != nil {
+						link.close(s)
+						results <- result{src: src, account: account, err: core.ErrNotAvailable}
+					}
+				}()
+				err := func() error {
+					beforeOpen := remainingProbe()
+					openBudget := beforeOpen
 					// Up to three inputs keep the full probe window. Larger
 					// lists get two waves with 3.5 seconds per candidate.
 					if len(candidates) > 3 {
@@ -134,12 +140,13 @@ func (s *Service) raceSteadyInputsSeed(ctx context.Context, c Channel, candidate
 					openCtx, stopOpen := context.WithTimeout(life, openBudget)
 					opened := time.Now()
 					var err error
-					link, err = s.linkSteadySourceWithState(openCtx, c, src, "broadcast-"+c.ID+"-admit-"+randomID(), s.latencyPolicy().TargetLatency()+s.latencyPolicy().SegmentDuration(), direct, manifest)
+					link, err = s.linkSteadySourceWithState(openCtx, c, src, "broadcast-"+c.ID+"-admit-"+randomID(), s.latencyPolicy().TargetLatency()+s.latencyPolicy().SegmentDuration(), direct, manifest, life)
 					sourceOpenElapsed += time.Since(opened)
 					stopOpen()
 					if err != nil {
 						return err
 					}
+					restoreProbe(min(beforeOpen, remainingProbe()+link.admissionWait))
 					s.setInputAdmission(link.ss, true)
 					rem := remainingProbe()
 					paceStarted := time.Now()
@@ -177,7 +184,7 @@ func (s *Service) raceSteadyInputsSeed(ctx context.Context, c Channel, candidate
 					pictureElapsed += time.Since(pictureStarted)
 					stopStart()
 					return err
-				})
+				}()
 				s.logger().Debug("live admission input finished", "channel", c.ID, "input", src.ID, "elapsed", time.Since(started), "source_open_elapsed", sourceOpenElapsed, "probe_elapsed", probeElapsed, "first_picture_elapsed", pictureElapsed, "success", err == nil)
 				results <- result{src: src, account: account, link: link, info: info, startBudget: startBudget, err: err}
 			}(src, account, serial)

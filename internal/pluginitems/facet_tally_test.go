@@ -419,6 +419,7 @@ func TestMigration17BackfillFromPre17Schema(t *testing.T) {
 		`DROP INDEX plugin_items_presence_pending`,
 		`DROP TABLE plugin_item_field_presence`,
 		`ALTER TABLE plugin_items DROP COLUMN presence_counted`,
+		`ALTER TABLE plugin_sync_state DROP COLUMN failure_json`,
 		`DELETE FROM schema_migrations WHERE component = 'pluginitems' AND version >= 17`,
 	} {
 		if _, err := db.ExecContext(ctx, stmt); err != nil {

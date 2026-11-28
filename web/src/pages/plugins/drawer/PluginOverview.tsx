@@ -1,3 +1,4 @@
+import { PluginFailureDetails, pluginFailureSentence } from "../../../components/PluginFailure";
 import { ActionJobs } from "./ActionJobs";
 import { addRowHref } from "../../../lib/recommendations";
 import { DashboardPanel } from "@braedonsaunders/appkit-dashboard/primitives";
@@ -85,6 +86,16 @@ export function PluginOverview({
   const liveEvents = usePluginLiveEvents(detail, onLiveFeeds);
   const health = healthSummary(detail, liveEvents.data?.feeds);
   const primary = primaryContribution(detail);
+  const routes = new Set<string>();
+  const failedCall = calls?.find((call) => {
+    if (routes.has(call.route)) return false;
+    routes.add(call.route);
+    return (
+      call.failure &&
+      call.route !== "/ether/health" &&
+      !/^\/ether\/v1\/kinds\/[^/]+\/(browse|changes)$/.test(call.route)
+    );
+  })?.failure;
   const handleRetry = useCallback(async () => {
     await onRetry();
     liveEvents.reload();
@@ -100,6 +111,12 @@ export function PluginOverview({
       ) : null}
       {detail.manifest.ether?.contributes?.mediaKinds?.length ? (
         <LibrarySyncNow detail={detail} onClose={onClose} onSyncActivity={onFresh} />
+      ) : null}
+      {failedCall ? (
+        <DashboardPanel title={t("Recent call failure")}>
+          <p className="text-sm text-danger">{pluginFailureSentence(failedCall)}</p>
+          <PluginFailureDetails failure={failedCall} />
+        </DashboardPanel>
       ) : null}
       <LiveNow
         detail={detail}
@@ -421,6 +438,9 @@ function LibrarySyncNow({
                     ) : null}
                   </div>
                   <p className="mt-0.5 text-xs text-fg-muted">{line}</p>
+                  {!running && !guard && sync?.failure ? (
+                    <PluginFailureDetails failure={sync.failure} />
+                  ) : null}
                 </div>
                 <div className="flex shrink-0 flex-wrap items-center gap-2">
                   {detail.enabled && lib.kind?.sync?.mode !== "push" ? (

@@ -7,12 +7,17 @@ import (
 	"github.com/braedonsaunders/ether/internal/core"
 )
 
-// Enrich is playback.Deps.AugmentMedia. It attaches sidecars already on
-// disk for this release. It does not search or download: a file is fetched
-// only when the viewer picks one. The source is exclusively owned by the
-// preparing generation, so local hashing cannot race disposal during failover.
+// Enrich attaches the release's declared sidecars and cached provider tracks
+// during playback preparation. The preparing generation owns the source
+// during local hashing, so it cannot be disposed during failover.
 func (s *Service) Enrich(ctx context.Context, title *core.Title, user *core.User, res *core.Resolution, src core.MediaSource, info *core.MediaInfo, prefs ...Preferences) {
-	if !s.Enabled() || info == nil || res == nil {
+	if s == nil || info == nil || res == nil {
+		return
+	}
+	if s.addonSubtitleSealer != nil && len(res.Release.AddonSubtitles) > 0 {
+		appendAddonSubtitles(info, res.Release.AddonSubtitles)
+	}
+	if !s.Enabled() {
 		return
 	}
 	release := res.Release.Name

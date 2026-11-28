@@ -90,9 +90,10 @@ func (s *Service) prepareSources(ctx context.Context, cands []candidate, title *
 	// mirroring the ranked window instead of idling until discovery ends.
 	var hedge *candidateCheck
 	hedgeIdx := -1
+	background := core.SpeculativeIndexerWork(ctx) || core.IsBackgroundCheck(ctx)
 	startHedge := func(from int) {
 		hedge, hedgeIdx = nil, -1
-		if !scoped || s.resolverCfg().OptimisticStart || s.usenetBackingOff() {
+		if !scoped || (background && !core.SpeculativeGrabsAllowed(ctx)) || s.resolverCfg().OptimisticStart || s.usenetBackingOff() {
 			return
 		}
 		// Speculative checks share ranked validation's attempt budget.

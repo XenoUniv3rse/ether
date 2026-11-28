@@ -63,7 +63,7 @@ func (e *Engine) SpeedTest(ctx context.Context, id string, playback bool) speedt
 		}
 	}
 	if p.URL == "" || (!p.Expires.IsZero() && p.Expires.Before(e.now().Add(speedtest.Duration))) {
-		if !account.sem.tryAcquire() {
+		if !account.sem.tryAcquire(0) {
 			r.Status, r.SpareOnly = "busy", true
 			return r
 		}

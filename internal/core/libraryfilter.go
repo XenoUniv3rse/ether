@@ -227,6 +227,19 @@ func SearchListFacts(ctx context.Context) bool {
 	return v
 }
 
+type searchCardFactsKey struct{}
+
+// WithSearchCardFacts asks for card metadata (genres, keywords, and studios)
+// on the delivered page, without hydrating credits or alternative titles.
+func WithSearchCardFacts(ctx context.Context) context.Context {
+	return context.WithValue(ctx, searchCardFactsKey{}, true)
+}
+
+func SearchCardFacts(ctx context.Context) bool {
+	v, _ := ctx.Value(searchCardFactsKey{}).(bool)
+	return v
+}
+
 type searchSummaryFactsKey struct{}
 
 // WithSearchSummaryFacts marks movie/show searches rendered using scalar title

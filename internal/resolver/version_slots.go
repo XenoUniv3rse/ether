@@ -49,6 +49,7 @@ func parseVersionSlot(id string) (versionSlot, bool) {
 // Cached labels are optional; count, order and selector identities never depend
 // on search results. Only the normal admission path opens a selected slot.
 func (s *Service) VersionSlots(ctx context.Context, req core.ResolveRequest, limit int, labels bool) ([]core.ReleaseVariant, error) {
+	req = s.withClientDeliveryBudget(req)
 	if labels && core.LocalResponse(ctx) {
 		versions, err := s.detailVariantRead(req, limit, true)
 		if err != nil || (len(versions) > 0 && versions[0].Release.ID != versions[0].ID) {
@@ -147,6 +148,7 @@ func (s *Service) versionSlotsWithResults(ctx context.Context, req core.ResolveR
 	var candidates []candidate
 	var auto core.Release
 	var autoRemembered bool
+	var autoReason core.AutoSelectionReason
 	var titleVC *ViewerChoice
 	ownerPin, hasOwnerPin := s.PinFor(req.Title.Key)
 	if req.Client.Download {
@@ -194,6 +196,13 @@ func (s *Service) versionSlotsWithResults(ctx context.Context, req core.ResolveR
 					}
 				}
 				auto, autoRemembered = s.slotAutoWithSource(req, strictCands, matchPool, titleVC, showVC)
+				if !autoRemembered && !hasOwnerPin {
+					if auto.ID != "" && auto.ID == req.PlayedRelease && req.Client.Protocol == "vela" && !core.IsExplicitVersionSlotSelector(req.PlayedSelector) {
+						autoReason = core.AutoResumeSource
+					} else if idx := slices.IndexFunc(strictCands, func(c candidate) bool { return c.rel.ID == auto.ID }); idx >= 0 {
+						autoReason = strictCands[idx].autoReason
+					}
+				}
 			}
 		}
 	}
@@ -241,6 +250,9 @@ func (s *Service) versionSlotsWithResults(ctx context.Context, req core.ResolveR
 		v := core.ReleaseVariant{ID: slot.id(), Label: label, Auto: i == 0, Edition: r.Info.Edition, Release: r, Info: info}
 		if labels {
 			v.Remembered = i == 0 && autoRemembered
+			if i == 0 && !placeholder {
+				v.AutoSelectionReason = autoReason
+			}
 			v.Pinned = hasOwnerPin && !placeholder && r.ID == ownerPin.Release.ID
 			v.Availability, v.AvailabilityNote = s.classifyVariantAvailability(ctx, req.Title.Key, r, info, placeholder, searchWarm)
 		}
@@ -427,9 +439,15 @@ func (s *Service) slotAutoWithSource(req core.ResolveRequest, strict, pool []can
 	}
 	if req.PlayedRelease != "" && !core.IsExplicitVersionSlotSelector(req.PlayedSelector) {
 		for _, c := range strict {
-			if c.rel.ID == req.PlayedRelease {
+			if c.rel.ID != req.PlayedRelease || c.trackPreference < strict[0].trackPreference {
+				continue
+			}
+			if c.deliveryDemotion != core.AutoConnectionEstimate || !slices.ContainsFunc(strict, func(other candidate) bool {
+				return other.autoReason == core.AutoConnectionEstimate
+			}) {
 				return c.rel, false
 			}
+			break
 		}
 	}
 	skipExplicit := ""

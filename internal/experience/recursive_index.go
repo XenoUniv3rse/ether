@@ -15,6 +15,10 @@ func (s *Service) indexedRecursivePage(ctx context.Context, v *core.User, librar
 	plainFilter := q.Filter
 	plainFilter.KnownAddedDate = false
 	plainFilter.SaferPlexRating = false
+	// Premiere-date filters apply to the stored episode, not its parent.
+	if len(q.Types) == 1 && q.Types[0] == core.TypeEpisode {
+		plainFilter.ReleasedFilters = nil
+	}
 	if library == nil || library.Type != core.TypeShow || !q.Recursive || q.Limit <= 0 || q.Season != nil || q.StartAt != 0 || q.AdjacentTo != 0 ||
 		!plainRecursiveFilter(plainFilter, library.Type) || s.d.Browse == nil || s.d.PageExclusions == nil || s.d.ParentTitles == nil || !s.d.StoredEpisodes.complete() || (q.Favorite != nil && *q.Favorite) {
 		return core.Page{}, false, nil
@@ -76,7 +80,10 @@ func (s *Service) indexedRecursivePage(ctx context.Context, v *core.User, librar
 		if single {
 			offset = max(q.Offset, 0)
 		}
-		page, err := s.d.Browse(ctx, core.BrowseQuery{Filter: filter, Sort: q.Sort, Desc: q.Desc, Offset: offset, Limit: window, NoTotal: q.NoTotal})
+		page, err := s.d.Browse(ctx, core.BrowseQuery{
+			Filter: filter, Sort: q.Sort, Desc: q.Desc, Offset: offset, Limit: window, NoTotal: q.NoTotal,
+			ListDisplayFacts: typ == core.TypeEpisode && ex.AvailabilityInSQL && (s.d.Protocol == "jellyfin" || s.d.Protocol == "emby"),
+		})
 		if err != nil {
 			return core.Page{}, true, err
 		}

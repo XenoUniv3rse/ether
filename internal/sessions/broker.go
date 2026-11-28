@@ -81,11 +81,12 @@ type BrokerDeps struct {
 	ActiveViewer       func(context.Context, int64) (*core.Viewer, error)
 	CanPlay            func(*core.Viewer, bool, time.Time) bool
 	// CurrentPlay rechecks a running item without imposing bedtime.
-	// FreshPlay re-reads fenced membership and safety policy for admission. A returned viewer
-	// replaces the cached one for the rest of the call. ErrPolicyUnconfirmed
-	// keeps the cached CanPlay decision for an unrestricted viewer.
 	CurrentPlay func(context.Context, *core.Viewer, bool, time.Time) (*core.Viewer, error)
-	FreshPlay   func(context.Context, *core.Viewer, bool, time.Time) (*core.Viewer, error)
+	// FreshPlay re-reads fenced policy before admission. ErrPolicyUnconfirmed
+	// keeps the cached decision for an unrestricted viewer.
+	FreshPlay func(context.Context, *core.Viewer, bool, time.Time) (*core.Viewer, error)
+	// PreviewPlay reads policy without fencing when no playback is admitted.
+	PreviewPlay func(context.Context, *core.Viewer, bool, time.Time, bool) (*core.Viewer, error)
 	// ReceiptCurrent rechecks the acceptance Plex stored for this request.
 	ReceiptCurrent func(context.Context, auth.Acceptance) error
 	BitrateLimit   func(*core.Viewer) int
@@ -193,6 +194,8 @@ type brokerSession struct {
 	format                frontend.StreamFormat
 	httpExt               string
 	streamPosition        time.Duration
+	adaptiveHLS           bool
+	adaptiveMaxBitrate    int
 	segmentDuration       time.Duration
 	live                  bool
 	directLive            *frontend.DirectLiveTarget
@@ -249,9 +252,6 @@ type retiredSession struct {
 
 // Broker coordinates playback admission for every protocol, including Plex.
 type Broker struct {
-	// subtitleWarm holds the session tracks whose extraction warmSubtitle
-	// started and has not finished.
-	subtitleWarm     sync.Map
 	timelineReserved int
 	timelineEffects  []timelineEffect
 	timelineRunning  bool
@@ -379,6 +379,18 @@ func (b *Broker) confirm(ctx context.Context, v *core.Viewer, caps core.ClientCa
 	return b.confirmPolicy(ctx, v, caps, b.deps.FreshPlay)
 }
 
+func (b *Broker) confirmPreview(ctx context.Context, v *core.Viewer, caps core.ClientCaps, admission bool) (*core.Viewer, error) {
+	if b.deps.PreviewPlay == nil {
+		if admission {
+			return b.confirm(ctx, v, caps)
+		}
+		return b.confirmCurrent(ctx, v, caps)
+	}
+	return b.confirmPolicy(ctx, v, caps, func(ctx context.Context, u *core.Viewer, remote bool, at time.Time) (*core.Viewer, error) {
+		return b.deps.PreviewPlay(ctx, u, remote, at, admission)
+	})
+}
+
 // Current item checks deliberately exclude bedtime: an admitted item can finish.
 func (b *Broker) confirmCurrent(ctx context.Context, v *core.Viewer, caps core.ClientCaps) (*core.Viewer, error) {
 	fresh := b.deps.CurrentPlay
@@ -431,13 +443,9 @@ func (b *Broker) publish(ctx context.Context, event frontend.Event) {
 	}
 }
 func clientKey(protocol frontend.Protocol, device core.Device) string {
-	return PlaybackClientID(protocol, device.ID)
+	return frontend.PlaybackClientID(protocol, device.ID)
 }
 
-// PlaybackClientID is the broker's device identity on the playback surface.
-func PlaybackClientID(protocol frontend.Protocol, deviceID string) string {
-	return fmt.Sprintf("%d:%s%s", len(protocol), protocol, deviceID)
-}
 func copyRequest(r frontend.PlanRequest) frontend.PlanRequest {
 	if r.Intent.OriginalPlayback != nil {
 		original := *r.Intent.OriginalPlayback
@@ -526,7 +534,16 @@ func publicMedia(info core.MediaInfo) core.MediaInfo {
 	info.Keyframes = slices.Clone(info.Keyframes)
 	return info
 }
-func (b *Broker) Plan(ctx context.Context, req frontend.PlanRequest) (planned frontend.PlayPlan, planErr error) {
+
+// Plan plans a frontend's request. Its source preparation is a viewer's
+// explicit Play only when the frontend set PlayIntent.ViewerPlay and the
+// plan is not a queued next item.
+func (b *Broker) Plan(ctx context.Context, req frontend.PlanRequest) (frontend.PlayPlan, error) {
+	return b.plan(ctx, req, true)
+}
+
+// plan serves Plan and DetailPlan; play is false for a detail plan.
+func (b *Broker) plan(ctx context.Context, req frontend.PlanRequest, play bool) (planned frontend.PlayPlan, planErr error) {
 	requested := b.deps.Now()
 	req = copyRequest(req)
 	v, err := b.viewer(ctx, req.Viewer)
@@ -565,9 +582,17 @@ func (b *Broker) Plan(ctx context.Context, req frontend.PlanRequest) (planned fr
 	if closed {
 		return frontend.PlayPlan{}, core.ErrNotAvailable
 	}
-	confirmed, err := b.confirm(ctx, v, req.Caps)
+	confirm := b.confirm
+	if req.Intent.Estimate {
+		confirm = func(ctx context.Context, u *core.Viewer, caps core.ClientCaps) (*core.Viewer, error) {
+			return b.confirmPreview(ctx, u, caps, true)
+		}
+	}
+	confirmed, err := confirm(ctx, v, req.Caps)
 	if err != nil {
-		b.emitAdmissionDenied(v, req.Item, "", req.Caps, req.Device, string(req.Protocol), false, err)
+		if !req.Intent.Estimate {
+			b.emitAdmissionDenied(v, req.Item, "", req.Caps, req.Device, string(req.Protocol), false, err)
+		}
 		return frontend.PlayPlan{}, err
 	}
 	v = confirmed
@@ -829,10 +854,14 @@ func (b *Broker) Plan(ctx context.Context, req frontend.PlanRequest) (planned fr
 		req.ExpectedSourceETag == "" && (req.Intent.AllowTranscoding == nil || *req.Intent.AllowTranscoding) {
 		ctx = b.withSourceDecision(ctx, req)
 	}
+	if play && req.Intent.ViewerPlay && !req.Intent.Queued {
+		ctx = core.WithExplicitPlay(ctx)
+	}
 	var ps *core.PlaySession
 	// autoRelease: the handle names Auto's release, so the session may play
 	// another release in its place (a fallback now, a failover later).
 	autoRelease := ((chosen != nil && chosen.Auto) || req.Intent.AutoVersion) && !slotSelector && detail == nil
+	automatic := detail == nil && (release == "" || autoRelease || rememberedFallback)
 	prepStarted := time.Now()
 	if useCachedDetail {
 		if liveness, ok := b.deps.Playback.(interface{ SessionActive(string) bool }); ok && !liveness.SessionActive(previous.ID) {
@@ -849,7 +878,7 @@ func (b *Broker) Plan(ctx context.Context, req frontend.PlanRequest) (planned fr
 		if err != nil && detail == nil && req.ExpectedSourceETag == "" && !slotSelector && (rememberedFallback || autoRelease || errors.Is(err, core.ErrSourceChanged)) {
 			if fallbackPS, fallbackErr := playback.PrepareSurface(ctx, v, req.Item, req.Caps, "", false); fallbackErr == nil && fallbackPS != nil {
 				ps, err = fallbackPS, nil
-				prepareExact = false
+				prepareExact, rememberedFallback = false, false
 				req.Intent.ExactVersion = false
 				if ps.Resolution != nil && ps.Resolution.Release.ID != "" {
 					req.Version = ps.Resolution.Release.ID
@@ -961,8 +990,19 @@ func (b *Broker) Plan(ctx context.Context, req frontend.PlanRequest) (planned fr
 	if pinErr != nil {
 		return frontend.PlayPlan{}, pinErr
 	}
-	id := rand.Text()
 	etag := sourceRevision(ps)
+	if req.Intent.ReadChapters && etag != "" && !ps.Info.ChaptersProbed && len(ps.Info.Chapters) == 0 {
+		if probe, ok := b.deps.Playback.(interface {
+			ProbeChapters(context.Context, string, string) ([]core.Chapter, bool)
+		}); ok {
+			if chapters, ok := probe.ProbeChapters(ctx, ps.ID, etag); ok {
+				updated := *ps
+				updated.Info.Chapters, updated.Info.ChaptersProbed = chapters, true
+				ps = &updated
+			}
+		}
+	}
+	id := rand.Text()
 	if req.Intent.SubtitleSet || (req.Intent.Hints != nil && req.Intent.Hints.ManualSubtitle) {
 		if err := b.RecordAuthorizedSubtitleIntent(ctx, v.ID, req.Item, true); err != nil {
 			return frontend.PlayPlan{}, err
@@ -993,10 +1033,19 @@ func (b *Broker) Plan(ctx context.Context, req frontend.PlanRequest) (planned fr
 	hls, hlsContainer := b.hlsPlanOutput(ps, req, dec)
 	httpOK, httpContainer := b.httpPlanOutput(ps, req, dec)
 	relID := ""
+	var autoReason core.AutoSelectionReason
 	if ps.Resolution != nil {
 		relID = ps.Resolution.Release.ID
+		if req.Protocol == "vela" && !pinned && automatic {
+			switch {
+			case rememberedFallback && relID == release:
+				autoReason = core.AutoResumeSource
+			default:
+				autoReason = admittedAutoReason(ps.Resolution)
+			}
+		}
 	}
-	return frontend.PlayPlan{SourceChosenAt: sourceChosenAt, DecisionAt: decisionAt, ID: id, Media: publicMedia(ps.Info), Decision: dec, SelectedSubtitle: sideSubtitleStream(ps, req, dec), DirectPlay: direct, DirectStream: remux, Transcoding: transcoding, VideoTranscodingOff: req.Channel == "" && b.videoOff(req.Caps), HLS: hls, HLSContainer: hlsContainer, HTTP: httpOK, HTTPContainer: httpContainer, ETag: etag, VersionHandle: versionHandle, ReleaseID: relID, OriginalOverClientCap: originalChoice}, nil
+	return frontend.PlayPlan{AutoSelectionReason: autoReason, SourceChosenAt: sourceChosenAt, DecisionAt: decisionAt, ID: id, Media: publicMedia(ps.Info), Decision: dec, SelectedSubtitle: sideSubtitleStream(ps, req, dec), DirectPlay: direct, DirectStream: remux, Transcoding: transcoding, VideoTranscodingOff: req.Channel == "" && b.videoOff(req.Caps), HLS: hls, HLSContainer: hlsContainer, HTTP: httpOK, HTTPContainer: httpContainer, ETag: etag, VersionHandle: versionHandle, ReleaseID: relID, OriginalOverClientCap: originalChoice}, nil
 }
 func (b *Broker) Open(ctx context.Context, req frontend.OpenRequest) (frontend.Session, error) {
 	opened := b.deps.Now()
@@ -1765,6 +1814,11 @@ func (b *Broker) ReportItemProgress(ctx context.Context, a frontend.SessionAcces
 	// nor stops the title's own playback.
 	if frontend.ForeignMediaDuration(title.Runtime, t.Duration) {
 		return nil
+	}
+	// Emby and Jellyfin can send item-only reports without a runtime.
+	// Apply the resume and completion thresholds on the first report too.
+	if t.Duration <= 0 {
+		t.Duration = title.Runtime
 	}
 	ctx = state.WithOrigin(ctx, state.Origin{Surface: a.Protocol, SessionID: t.PlaybackID, ClientID: a.Device.ID})
 	if err := RecordProgress(ctx, b.deps.Progress, viewer.ID, item, t.Position, t.Duration, t.State); err != nil {

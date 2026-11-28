@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"math"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -55,10 +56,11 @@ func (a *App) enrichSubtitles(ctx context.Context, t *core.Title, u *core.User, 
 }
 
 var (
-	_ frontend.SubtitleSidecarSource  = subtitleSurface{}
-	_ frontend.SubtitleSidecarCatalog = subtitleSurface{}
-	_ frontend.SubtitleSidecarSearch  = subtitleSurface{}
-	_ frontend.SubtitleSidecarUpload  = subtitleSurface{}
+	_ frontend.SubtitleSidecarSource   = subtitleSurface{}
+	_ frontend.SubtitleSidecarCatalog  = subtitleSurface{}
+	_ frontend.SubtitleSidecarSearch   = subtitleSurface{}
+	_ frontend.SubtitleSidecarUpload   = subtitleSurface{}
+	_ frontend.OfflineDownloadSidecars = subtitleSurface{}
 )
 
 func (s subtitleSurface) OpenFormat(id, format string) (io.ReadCloser, string, error) {
@@ -84,6 +86,19 @@ func (s subtitleSurface) CachedSidecars(ctx context.Context, t *core.Title, u *c
 		out = append(out, s.app.subtitles.ManualSidecars(t, embedded)...)
 	}
 	return out
+}
+
+func (s subtitleSurface) CachedDownloadSidecars(ctx context.Context, t *core.Title, u *core.User, source *frontend.OfflineDownloadSource) []core.StreamInfo {
+	embedded := source.Media.Streams
+	var tracks []core.StreamInfo
+	if source.ReleaseName != "" {
+		hash, size := s.app.subtitles.CachedVideoHash(t, source.ReleaseName)
+		if size != source.Size {
+			hash = ""
+		}
+		tracks, _ = s.app.subtitles.SidecarsWithHash(ctx, t, s.app.subtitleUser(ctx, u), embedded, source.ReleaseName, hash, s.app.subtitlePrefs(ctx, u))
+	}
+	return append(tracks, s.app.subtitles.ManualSidecars(t, slices.Concat(embedded, tracks))...)
 }
 
 // subtitleSearchLanguages preserves an explicit client choice; otherwise resolve
@@ -379,7 +394,10 @@ func (a *App) liveReleaseAccess(sess *core.PlaySession) subtitles.ReleaseAccess 
 	return access
 }
 
-func (s subtitleSurface) UploadSubtitle(_ context.Context, t *core.Title, _ *core.User, filename, format, language string, body []byte) (core.StreamInfo, error) {
+func (s subtitleSurface) UploadSubtitle(_ context.Context, t *core.Title, user *core.User, filename, format, language string, body []byte) (core.StreamInfo, error) {
+	if user == nil || !user.IsOwner {
+		return core.StreamInfo{}, core.ErrUnauthorized
+	}
 	return s.app.subtitles.StoreUpload(t, filename, format, language, body)
 }
 

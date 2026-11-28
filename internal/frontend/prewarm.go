@@ -62,3 +62,9 @@ func WithVersionProbeSearchWait(ctx context.Context, done <-chan struct{}) conte
 type DetailRevealer interface {
 	RevealDetail(user *User, clientID string, key RatingKey)
 }
+
+// WithNextEpisodePreparation identifies a pre-play metadata request for the
+// immediate next episode of the queue. Playback checks the preceding session.
+func WithNextEpisodePreparation(ctx context.Context, previous RatingKey) context.Context {
+	return core.WithNextEpisodePreparation(ctx, previous, nil)
+}

@@ -685,7 +685,7 @@ func (m *Manager) fill(ctx context.Context, owner *core.User, title *core.Title,
 	resolveCtx, cancel := context.WithTimeout(core.WithIndexerPurpose(ctx, core.IndexerPurposeWarmup), 90*time.Second)
 	caps := core.ClientCaps{ClientID: "ether-managed-cache", Product: "Ether Managed Cache"}
 	// Nobody waits on a preload: fallback queries go one at a time.
-	res, err := m.deps.Resolver.Resolve(core.WithUnattendedSearch(resolveCtx), core.ResolveRequest{Title: title, User: owner, Client: caps, Prefer: previous.ReleaseID})
+	res, err := m.deps.Resolver.Resolve(core.WithSpeculativeGrabs(core.WithUnattendedSearch(resolveCtx)), core.ResolveRequest{Title: title, User: owner, Client: caps, Prefer: previous.ReleaseID})
 	cancel()
 	if err != nil {
 		return err

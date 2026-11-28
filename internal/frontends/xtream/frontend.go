@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/braedonsaunders/ether/internal/frontend"
+	"github.com/braedonsaunders/ether/internal/frontend/kit/lineup"
 	"github.com/braedonsaunders/ether/internal/frontend/kit/listcache"
 	"github.com/braedonsaunders/ether/internal/frontend/kit/mediasafety"
 	"github.com/braedonsaunders/ether/internal/frontend/kit/reqmemo"
@@ -34,6 +35,7 @@ func (Frontend) Mount(_ context.Context, host frontend.Host) (frontend.Instance,
 		i.exports.Close()
 		return nil, err
 	}
+	i.lineups = i.openLineups()
 	return i, nil
 }
 
@@ -42,6 +44,7 @@ type instance struct {
 	router *route.Router
 	// exports keeps encoded whole-library listings; nil encodes each one.
 	exports *listcache.Store
+	lineups *lineup.Store
 }
 
 func (i *instance) registerRoutes() error {
@@ -108,13 +111,14 @@ func (*instance) Status(context.Context) frontend.Status {
 	return frontend.Status{TargetVersion: "Xtream", Conformance: "partial"}
 }
 func (i *instance) Close(context.Context) error {
+	i.lineups.Close()
 	i.exports.Close()
 	return nil
 }
 func (i *instance) Routes() []route.Route { return i.router.Routes() }
 
 // BackgroundBusy counts listing builds and compressions in flight.
-func (i *instance) BackgroundBusy() int { return i.exports.Busy() }
+func (i *instance) BackgroundBusy() int { return i.exports.Busy() + i.lineups.Busy() }
 
 type login struct {
 	viewer             *frontend.Viewer
@@ -250,8 +254,6 @@ func (i *instance) api(w http.ResponseWriter, r *http.Request, l login) {
 		}
 		now := time.Now().UTC()
 		jsonResponse(w, map[string]any{"user_info": map[string]any{"username": l.username, "password": l.password, "auth": 1, "status": "Active", "message": "Ether", "exp_date": nil, "is_trial": "0", "active_cons": strconv.Itoa(i.active(r, l)), "created_at": "0", "max_connections": strconv.Itoa(i.connectionLimit(r, l)), "allowed_output_formats": []string{"m3u8", "ts"}}, "server_info": map[string]any{"url": base.Hostname(), "port": port, "https_port": "443", "server_protocol": base.Scheme, "rtmp_port": "0", "timezone": "UTC", "timestamp_now": now.Unix(), "time_now": now.Format("2006-01-02 15:04:05")}})
-		// Apps sign in, then list categories and whole libraries.
-		i.prepareLists(r, l, "movie", "show")
 	case "get_live_categories", "get_live_streams":
 		i.live(w, r, l, action)
 	case "get_short_epg", "get_simple_data_table":

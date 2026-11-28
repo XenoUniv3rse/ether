@@ -81,7 +81,11 @@ func (s *Service) applyRemote(ctx context.Context, hints []string, all bool) {
 			delete(s.subMiss, arg)
 			s.mu.Unlock()
 		case "rejections":
-			s.loadRejections(ctx)
+			if key, err := strconv.ParseInt(arg, 10, 64); err == nil {
+				s.loadRejectionsFor(ctx, core.RatingKey(key))
+			} else {
+				s.loadRejections(ctx)
+			}
 		case "bad":
 			s.reloadBad(ctx, arg)
 		case "grabfail":

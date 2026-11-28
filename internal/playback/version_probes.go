@@ -185,6 +185,14 @@ func (m *Manager) noteReleaseProbeMemory(rel core.Release, rawPayload []byte, in
 	return facts, keys, true
 }
 
+// noteSelectionProbe makes newly observed tracks visible to the picker even
+// when playback moves on to another release.
+func (m *Manager) noteSelectionProbe(key core.RatingKey, res *core.Resolution, info core.MediaInfo) {
+	if _, _, ok := m.noteReleaseProbeMemory(res.Release, res.NZB, info); ok && m.deps.OnVersionProbed != nil {
+		m.deps.OnVersionProbed(key, res.Release)
+	}
+}
+
 // persistReleaseProbe writes sanitized probe facts durably to release_probes
 // and, when vaulted, to vault.TrackStore.
 func (m *Manager) persistReleaseProbe(ctx context.Context, rel core.Release, rawPayload []byte, info core.MediaInfo) {
@@ -482,8 +490,11 @@ func enrichEstimatedFromDebridMeta(v *core.ReleaseVariant, title *core.Title, fi
 	if v == nil || !v.Info.Estimated {
 		return
 	}
-	if size > 0 && v.Info.Size <= 0 {
-		v.Info.Size = size
+	if size > 0 {
+		v.Info.FileSize = size
+		if v.Info.Size <= 0 {
+			v.Info.Size = size
+		}
 	}
 	if filePath == "" {
 		return

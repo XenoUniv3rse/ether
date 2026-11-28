@@ -209,6 +209,12 @@ func (s *Receipts) Report(ctx context.Context, interaction frontend.RowInteracti
 	if !claimed {
 		return nil
 	}
+	if interaction.Kind == frontend.RowImpression && subject.Impression != nil {
+		imp := *subject.Impression
+		imp.Surface = interaction.Protocol
+		imp.ObservedAt = s.opts.Now()
+		subject.Impression = &imp
+	}
 	return s.opts.Record(ctx, viewer, interaction.Device, interaction.Protocol, subject, interaction.Kind)
 }
 

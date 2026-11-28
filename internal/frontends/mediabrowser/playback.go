@@ -271,6 +271,8 @@ func (i *instance) playbackInfo(w http.ResponseWriter, r *http.Request) {
 		i.catchUpPlaybackInfo(w, r, v, credential, wireID, body, capability.Client)
 		return
 	}
+	adaptiveHLS := queryBool(r, "EnableAdaptiveBitrateStreaming", false)
+	capability.Client.AwaitAdmissionIndex = capability.Client.AwaitAdmissionIndex || adaptiveHLS
 	scope := frontend.VersionScope{Viewer: v, Device: dev, Protocol: i.protocol, Caps: capability.Client}
 	versionFromItem := ""
 	if itemIDError != nil {
@@ -312,7 +314,7 @@ func (i *instance) playbackInfo(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if key.IsPluginKey() && mbIsBookItem(playbackItem) {
-			i.writeNoCompatibleStream(w)
+			i.playbackInfoFailure(w, r, v, "plan", frontend.ErrNotAvailable)
 			return
 		}
 	}
@@ -505,18 +507,11 @@ func (i *instance) playbackInfo(w http.ResponseWriter, r *http.Request) {
 	}
 	if err != nil {
 		if i.protocol == "jellyfin" {
-			i.playbackInfoError(w, v, "plan", err, r.Header.Get("Accept-Language"))
+			i.playbackInfoFailure(w, r, v, "plan", err)
 		} else if frontend.WritePlaybackSourceProblem(w, err, r.Header.Get("Accept-Language")) {
 			return
-		} else if playback && noCompatibleStream(err) {
-			var reqLang *frontend.RequiredAudioLanguageError
-			if errors.Is(err, frontend.ErrVideoTranscodingDisabled) {
-				i.writeNoCompatibleStreamMessage(w, frontend.VideoTranscodingOffMessage(i.host.ViewerPolicy, v))
-			} else if errors.As(err, &reqLang) {
-				i.writeNoCompatibleStreamMessage(w, reqLang.Error())
-			} else {
-				i.writeNoCompatibleStream(w)
-			}
+		} else if noCompatibleStream(err) {
+			i.playbackInfoFailure(w, r, v, "plan", err)
 		} else if retryableMediaOpen(err) || errors.Is(err, frontend.ErrJobsBusy) {
 			streamError(i.protocol, w, err, r.Header.Get("Accept-Language"))
 		} else {
@@ -525,7 +520,7 @@ func (i *instance) playbackInfo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if playback && (plan.Estimated || (channel == "" && plan.Media.Estimated)) {
-		i.writeNoCompatibleStream(w)
+		i.playbackInfoFailure(w, r, v, "plan", frontend.ErrNotAvailable)
 		return
 	}
 	// The estimate can miss a transcode the probed media reveals: check the
@@ -539,13 +534,10 @@ func (i *instance) playbackInfo(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if !allowed && plan.Decision.Kind == "transcode" {
-		if i.protocol == "jellyfin" {
-			i.playbackInfoError(w, v, "transcoding disabled", frontend.ErrNotAvailable, r.Header.Get("Accept-Language"))
-		} else {
-			http.Error(w, "Playback unavailable", 422)
-		}
+		i.playbackInfoFailure(w, r, v, "transcoding disabled", frontend.ErrNotAvailable)
 		return
 	}
+
 	sourceID = ids.RatingKeyGUID(key)
 	if channel != "" {
 		sourceID = wireID
@@ -617,9 +609,11 @@ func (i *instance) playbackInfo(w http.ResponseWriter, r *http.Request) {
 			}
 			if !jellyfinStaticFallback(err) || !staticPlayable {
 				if i.protocol == "jellyfin" {
-					i.playbackInfoError(w, v, "open", err, r.Header.Get("Accept-Language"))
+					i.playbackInfoFailure(w, r, v, "open", err)
 				} else if frontend.WritePlaybackSourceProblem(w, err, r.Header.Get("Accept-Language")) {
 					return
+				} else if noCompatibleStream(err) {
+					i.playbackInfoFailure(w, r, v, "open", err)
 				} else if retryableMediaOpen(err) || errors.Is(err, frontend.ErrJobsBusy) {
 					streamError(i.protocol, w, err, r.Header.Get("Accept-Language"))
 				} else {
@@ -640,6 +634,9 @@ func (i *instance) playbackInfo(w http.ResponseWriter, r *http.Request) {
 				} else {
 					format = frontend.StreamHLS
 				}
+			}
+			if adaptiveHLS && plan.Media.Video() != nil && plan.HLS {
+				format = frontend.StreamHLS
 			}
 			// The progressive client requires an active playback demuxer. A
 			// direct-file plan becomes HLS (copy remux where codecs allow it),
@@ -665,7 +662,7 @@ func (i *instance) playbackInfo(w http.ResponseWriter, r *http.Request) {
 			// to the resume point. An offset playlist puts Streamyfin, Jellyfin
 			// for Android TV and others an offset away from where they think.
 			fullTimeline := i.protocol == "jellyfin" && channel == "" && format == frontend.StreamHLS
-			url, err := i.host.Sessions.StartStream(r.Context(), frontend.SessionAccess{Viewer: v, Device: dev, Protocol: i.protocol}, session.ID, frontend.StreamRequest{Format: format, Position: intent.Position, FullTimeline: fullTimeline})
+			url, err := i.host.Sessions.StartStream(r.Context(), frontend.SessionAccess{Viewer: v, Device: dev, Protocol: i.protocol}, session.ID, frontend.StreamRequest{Format: format, Position: intent.Position, FullTimeline: fullTimeline, AdaptiveHLS: adaptiveHLS})
 			if err != nil && format == frontend.StreamHLS && staticPlayable {
 				url, err = i.host.Sessions.StartStream(r.Context(), frontend.SessionAccess{Viewer: v, Device: dev, Protocol: i.protocol}, session.ID, frontend.StreamRequest{Format: frontend.StreamDirect, Position: intent.Position})
 				if err == nil {
@@ -675,7 +672,7 @@ func (i *instance) playbackInfo(w http.ResponseWriter, r *http.Request) {
 			if err != nil {
 				_ = i.host.Sessions.Stop(r.Context(), frontend.SessionAccess{Viewer: v, Device: dev, Protocol: i.protocol}, session.ID)
 				if !jellyfinStaticFallback(err) || !staticPlayable {
-					i.playbackInfoError(w, v, "start stream", err, r.Header.Get("Accept-Language"))
+					i.playbackInfoFailure(w, r, v, "start stream", err)
 					return
 				}
 				if i.host.Log != nil {
@@ -1118,7 +1115,7 @@ func (i *instance) mediaSourceDialect(source map[string]any) {
 // upstream URL. Compatibility is filled in only from the broker's plan.
 func mediaSourceDTO(id string, media frontend.MediaInfo) map[string]any {
 	source := map[string]any{
-		"Id": id, "Container": media.Container, "RunTimeTicks": media.Duration.Nanoseconds() / 100, "Size": media.Size, "Bitrate": media.BitrateKbps * 1000,
+		"Id": id, "Container": media.Container, "RunTimeTicks": media.Duration.Nanoseconds() / 100, "Bitrate": media.BitrateKbps * 1000,
 		"Protocol": "Http", "Type": "Default", "IsRemote": true, "ReadAtNativeFramerate": false, "IgnoreDts": false, "IgnoreIndex": false, "GenPtsInput": false,
 		"SupportsDirectPlay": false, "SupportsDirectStream": false, "SupportsTranscoding": false, "IsInfiniteStream": false,
 		// Jellyfin's strict SDK requires a boolean. Until the broker exposes
@@ -1126,10 +1123,23 @@ func mediaSourceDTO(id string, media frontend.MediaInfo) map[string]any {
 		"RequiresOpening": false, "RequiresClosing": false, "RequiresLooping": false, "SupportsProbing": !media.Estimated && len(media.Streams) > 0, "TranscodingSubProtocol": "http", "HasSegments": false,
 		"Formats": []string{}, "MediaAttachments": []any{}, "RequiredHttpHeaders": map[string]string{}, "MediaStreams": mediaStreams(media.Streams),
 	}
+	if size := mediaSourceSize(media); size > 0 {
+		source["Size"] = size
+	}
 	if !media.Estimated {
 		addChapters(source, media)
 	}
 	return source
+}
+
+func mediaSourceSize(media frontend.MediaInfo) int64 {
+	if media.FileSize > 0 {
+		return media.FileSize
+	}
+	if !media.Estimated {
+		return media.Size
+	}
+	return 0
 }
 
 func (i *instance) mediaSourceDTO(id string, media frontend.MediaInfo) map[string]any {
@@ -1214,8 +1224,8 @@ func mediaStreams(streams []frontend.StreamInfo) []any {
 }
 
 func addChapters(source map[string]any, media frontend.MediaInfo) {
-	if chapters := chapterDTOs(media.Chapters); len(chapters) > 0 {
-		source["Chapters"] = chapters
+	if len(media.Chapters) > 0 || media.ChaptersProbed {
+		source["Chapters"] = chapterDTOs(media.Chapters)
 	}
 }
 
@@ -1405,6 +1415,17 @@ func (i *instance) timeline(w http.ResponseWriter, r *http.Request, stopped, sta
 			return
 		}
 		item, ok := timelineItem(body)
+		if !ok && (body.ItemId != "" || body.MediaSourceId != "") {
+			// Version rows can report their scoped source id as the item.
+			if scope, e := i.versionScope(r, v); e == nil {
+				sourceID := body.ItemId
+				if sourceID == "" {
+					sourceID = body.MediaSourceId
+				}
+				item, _, _, e = i.resolveSource(r, scope, sourceID)
+				ok = e == nil
+			}
+		}
 		if !ok {
 			http.Error(w, "Bad Request", 400)
 			return
@@ -1482,7 +1503,25 @@ func noCompatibleStream(err error) bool {
 	if retryableMediaOpen(err) || errors.Is(err, frontend.ErrJobsBusy) {
 		return false
 	}
-	return errors.Is(err, frontend.ErrNotFound) || errors.Is(err, frontend.ErrNotAvailable) || errors.Is(err, frontend.ErrSourceGone)
+	var noPath *frontend.NoCompatiblePathError
+	return errors.As(err, &noPath) || errors.Is(err, frontend.ErrNotFound) || errors.Is(err, frontend.ErrNotAvailable) || errors.Is(err, frontend.ErrSourceGone)
+}
+
+func (i *instance) playbackInfoFailure(w http.ResponseWriter, r *http.Request, v *frontend.Viewer, stage string, err error) {
+	dev := device(r)
+	roku32 := isJellyfinRoku(dev) && (dev.Version == "" || strings.HasPrefix(dev.Version, "3.2."))
+	if i.protocol == "jellyfin" && roku32 && noCompatibleStream(err) {
+		// Roku 3.2.4's postJson parses any nonempty JSON body, then its
+		// default-subtitle path indexes MediaSources[0]. An empty body
+		// makes the task take its existing playback-info error branch.
+		if i.host.Log != nil {
+			i.host.Log.Warn("PlaybackInfo failed", "protocol", i.protocol, "stage", stage, "err", err)
+		}
+		w.Header().Set("X-Application-Error-Code", "NoCompatibleStream")
+		w.WriteHeader(http.StatusUnprocessableEntity)
+		return
+	}
+	i.playbackInfoError(w, v, stage, err, r.Header.Get("Accept-Language"))
 }
 
 // PlaybackInfo errors must be successful protocol responses: jellyfin-web
@@ -1493,7 +1532,7 @@ func (i *instance) playbackInfoError(w http.ResponseWriter, v *frontend.Viewer, 
 	if i.host.Log != nil {
 		i.host.Log.Warn("PlaybackInfo failed", "protocol", i.protocol, "stage", stage, "err", err)
 	}
-	if i.protocol != "jellyfin" || errors.Is(err, frontend.ErrSessionBusy) || errors.Is(err, frontend.ErrTranscodeCapacity) || retryableMediaOpen(err) || errors.Is(err, frontend.ErrJobsBusy) {
+	if (i.protocol != "jellyfin" && !noCompatibleStream(err)) || errors.Is(err, frontend.ErrSessionBusy) || errors.Is(err, frontend.ErrTranscodeCapacity) || retryableMediaOpen(err) || errors.Is(err, frontend.ErrJobsBusy) {
 		if errors.Is(err, frontend.ErrVideoTranscodingDisabled) {
 			// Emby and the pass-through cases get the viewer's own wording too.
 			http.Error(w, frontend.VideoTranscodingOffMessage(i.host.ViewerPolicy, v), http.StatusUnprocessableEntity)
@@ -1525,14 +1564,6 @@ func (i *instance) playbackInfoError(w http.ResponseWriter, v *frontend.Viewer, 
 
 func (i *instance) writeNoCompatibleStream(w http.ResponseWriter) {
 	jsonReply(w, map[string]any{"MediaSources": []any{}, "PlaySessionId": "", "ErrorCode": "NoCompatibleStream"})
-}
-
-func (i *instance) writeNoCompatibleStreamMessage(w http.ResponseWriter, msg string) {
-	body := map[string]any{"MediaSources": []any{}, "PlaySessionId": "", "ErrorCode": "NoCompatibleStream"}
-	if msg != "" {
-		body["Message"] = msg
-	}
-	jsonReply(w, body)
 }
 
 func directFilePath(path string) bool {

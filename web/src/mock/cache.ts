@@ -7,6 +7,26 @@ export function createCacheMock(
   titleName?: (key: number) => string | undefined,
 ) {
   const GiB = 1024 ** 3;
+  const files: NonNullable<CacheSnapshot["files"]> = [
+    {
+      libraryKey: "pk-demo-games",
+      library: "Games",
+      ref: "blob:" + "a".repeat(64),
+      name: "Arcade.iso",
+      size: 15 * GiB,
+      lastOpen: new Date(Date.now() - 3600000).toISOString(),
+      inUse: false,
+    },
+    {
+      libraryKey: "pk-demo-games",
+      library: "Games",
+      ref: "blob:" + "b".repeat(64),
+      name: "Adventure.iso",
+      size: 3 * GiB,
+      lastOpen: new Date().toISOString(),
+      inUse: true,
+    },
+  ];
   const releases: CacheSnapshot["releases"] = [
     {
       ReleaseID: "demo-arrival-1080",
@@ -182,7 +202,14 @@ export function createCacheMock(
     },
   };
 
-  return (method: string, seg: string[], body: unknown, cfg: EtherConfig, clustered = false) => {
+  return (
+    method: string,
+    seg: string[],
+    body: unknown,
+    cfg: EtherConfig,
+    clustered = false,
+    includeFiles = false,
+  ) => {
     if (seg[0] !== "cache") return undefined;
     if (method === "GET" && seg.length === 1)
       return {
@@ -191,7 +218,10 @@ export function createCacheMock(
           clustered,
           restartRequired,
           shared: cfg.cache.storage === "shared",
-          used: releases.reduce((sum, r) => sum + r.Bytes, 0),
+          used:
+            releases.reduce((sum, r) => sum + r.Bytes, 0) +
+            files.reduce((sum, f) => sum + f.size, 0),
+          ...(includeFiles ? { files } : {}),
           budget: cfg.cache.budgetBytes,
           directory: cfg.cache.dir,
           protectedBytes: releases
@@ -311,6 +341,16 @@ export function createCacheMock(
           cfg.cache.speculativeWarming = b.speculative ? "on" : "off";
         return { status: 204, body: null };
       }
+    }
+    if (method === "POST" && seg[1] === "clear-file") {
+      const target = body as { libraryKey: string; ref: string };
+      const index = files.findIndex(
+        (file) => file.libraryKey === target.libraryKey && file.ref === target.ref,
+      );
+      if (index < 0) return { status: 404, body: null };
+      if (files[index]!.inUse) return { status: 409, body: null };
+      files.splice(index, 1);
+      return { status: 204, body: null };
     }
     if (method === "POST" && seg[1] === "pin") {
       const b = body as { releaseId: string; pinned: boolean };

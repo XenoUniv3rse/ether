@@ -120,6 +120,7 @@ CREATE TABLE availability_hidden_retired (
 	// delivered schema boundary.
 	store.RegisterAfter("availability_retention", "availability")
 	store.Register("availability_retention", 1, `CREATE INDEX availability_feed_items_seen ON availability_feed_items(seen_at); CREATE INDEX availability_releases_last_seen ON availability_releases(last_seen);`)
+	store.Register("availability", 7, `ALTER TABLE availability_feeds ADD COLUMN last_new_at BIGINT NOT NULL DEFAULT 0;`)
 	store.Register("availability", 6, hiddenMigration)
 	// covered_since: since when a feed's head polls have overlapped without a
 	// gap, so it has shown every release posted since then. full_at: a
@@ -288,10 +289,8 @@ func (s *Service) Prune(ctx context.Context) (int64, error) {
 		}
 		total += n
 	}
-	checksCutoff := s.now().Add(-90 * 24 * time.Hour).Unix()
-	n, err := store.PruneBatched(ctx, s.db, `DELETE FROM availability_title_checks WHERE rating_key IN (SELECT rating_key FROM availability_title_checks WHERE next_check=0 AND checked_at>0 AND checked_at<? ORDER BY checked_at LIMIT ?)`, checksCutoff)
-	total += n
-	return total, err
+	// First-look completion is durable. Pruning it would queue old titles again.
+	return total, nil
 }
 
 func (s *Service) prune(ctx context.Context) error {
@@ -368,15 +367,15 @@ func benign(err error) bool {
 // feedState is a feed's last head release, last scheduled head poll, last
 // request of any kind, and whether a gap is still open.
 type feedState struct {
-	anchor          string
-	polled, checked int64
-	gap             bool
+	anchor                   string
+	polled, checked, lastNew int64
+	gap                      bool
 }
 
 func (s *Service) feedState(ctx context.Context, f core.ReleaseFeed) (feedState, error) {
 	var st feedState
 	var gap int
-	err := s.db.QueryRowContext(ctx, `SELECT anchor,polled_at,checked_at,gap FROM availability_feeds WHERE source_id=? AND generation=?`, f.ID, f.Generation).Scan(&st.anchor, &st.polled, &st.checked, &gap)
+	err := s.db.QueryRowContext(ctx, `SELECT anchor,polled_at,checked_at,gap,last_new_at FROM availability_feeds WHERE source_id=? AND generation=?`, f.ID, f.Generation).Scan(&st.anchor, &st.polled, &st.checked, &gap, &st.lastNew)
 	if errors.Is(err, sql.ErrNoRows) {
 		return feedState{}, nil
 	}

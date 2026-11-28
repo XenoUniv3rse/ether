@@ -1,4 +1,5 @@
-import { sourceLabel } from "./CatalogueSources";
+import { PluginFailureDetails } from "../../components/PluginFailure";
+import { LibrarySourceIcon, sourceLabel } from "./CatalogueSources";
 import {
   Badge,
   Button,
@@ -10,7 +11,7 @@ import {
   cn,
   toast,
 } from "@braedonsaunders/appkit-ui";
-import { ArrowRight, Film, Globe, Home, Pencil, Plug, Plus, RefreshCw, Tv } from "lucide-react";
+import { ArrowRight, Globe, Home, Pencil, Plug, Plus, RefreshCw } from "lucide-react";
 import { useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useApp } from "../../app-context";
@@ -117,40 +118,6 @@ const APP_ORDER: PresentationAppKey[] = [
   "xtream",
   "silo",
 ];
-
-function fallbackResolved(lib: Library): ResolvedPresentations {
-  const isShow = lib.mediaType === "show";
-  const p = lib.present ?? {};
-  const specs: { app: PresentationAppKey; hint: string }[] = [
-    { app: "vela", hint: isShow ? "shows" : "movies" },
-    { app: "plex", hint: isShow ? "show" : "movie" },
-    { app: "mediaBrowser", hint: isShow ? "tvshows" : "movies" },
-    { app: "stremio", hint: isShow ? "series" : "movie" },
-    { app: "xtream", hint: isShow ? "series" : "movie" },
-    { app: "silo", hint: isShow ? "tvshows" : "movies" },
-  ];
-  return {
-    mediaClass: "video",
-    adapterOnly: Boolean(p.adapterOnly),
-    effective: p,
-    available: {
-      vela: { type: isShow ? "shows" : "movies" },
-      plex: { base: isShow ? "show" : "movie" },
-      mediaBrowser: { collectionType: isShow ? "tvshows" : "movies" },
-      stremio: { type: isShow ? "series" : "movie" },
-      xtream: { category: isShow ? "series" : "movie" },
-      silo: { type: isShow ? "tvshows" : "movies" },
-    },
-    apps: specs.map(({ app, hint }) => ({
-      app,
-      available: true,
-      enabled: Boolean(!p.adapterOnly && p[app]),
-      defaultOn: lib.source === "builtin",
-      source: "inferred",
-      hintValue: hint,
-    })),
-  };
-}
 
 function initialAppSwitches(resolved: ResolvedPresentations): AppSwitchPatch {
   const out: AppSwitchPatch = { adapterOnly: Boolean(resolved.adapterOnly) };
@@ -280,7 +247,6 @@ function PresentationsEditor({
 
   const appDescription = (info: ResolvedAppPresentation): string => {
     if (!info.available) return unavailableReason(info.reason);
-    if (adapterOnly) return t("Off while “Only in its own app” is on.");
     const hint = presentationHint(info.hintValue ?? "");
     if (library.source === "plugin") {
       if (info.source === "plugin") return t("{hint} (from plugin)", { hint });
@@ -292,43 +258,50 @@ function PresentationsEditor({
   return (
     <SettingsSection
       title={t("Show in apps")}
-      description={t("Each app shows {name} as its own library. Pick which apps show it.", {
-        name: name.trim() || library.name,
-      })}
+      description={
+        adapterOnly
+          ? t("This library is served only through the plugin’s own app.")
+          : t("Each app shows {name} as its own library. Pick which apps show it.", {
+              name: name.trim() || library.name,
+            })
+      }
     >
       <SettingsRow
         title={t("Kind")}
         description={t("What this library holds.")}
         control={<span className="text-sm font-medium text-fg">{libraryKindValue(library)}</span>}
       />
-      {APP_ORDER.map((key) => {
-        const info = byApp.get(key);
-        if (!info) return null;
-        const title = appTitle(key);
-        const disabled = !info.available || adapterOnly;
-        const checked = !disabled && Boolean(switches[key]);
-        return (
-          <SettingsRow
-            key={key}
-            title={title}
-            description={appDescription(info)}
-            control={
-              <Switch
-                aria-label={t("Show in {app}", { app: title })}
-                checked={checked}
-                disabled={disabled}
-                onChange={(e) => onChange({ ...switches, [key]: e.target.checked })}
-              />
-            }
-          />
-        );
-      })}
+      {!adapterOnly &&
+        APP_ORDER.map((key) => {
+          const info = byApp.get(key);
+          if (!info) return null;
+          const title = appTitle(key);
+          const disabled = !info.available;
+          const checked = !disabled && Boolean(switches[key]);
+          return (
+            <SettingsRow
+              key={key}
+              title={title}
+              description={appDescription(info)}
+              control={
+                <Switch
+                  aria-label={t("Show in {app}", { app: title })}
+                  checked={checked}
+                  disabled={disabled}
+                  onChange={(e) => onChange({ ...switches, [key]: e.target.checked })}
+                />
+              }
+            />
+          );
+        })}
       {library.source === "plugin" ? (
         <SettingsRow
           title={t("Only in its own app")}
-          description={t(
-            "The plugin serves this library itself instead of through the apps above.",
-          )}
+          description={
+            adapterOnly
+              ? undefined
+              : t("The plugin serves this library itself instead of through the apps above.")
+          }
           control={
             <Switch
               aria-label={t("Only in its own app")}
@@ -596,10 +569,7 @@ export function LibrarySettings({ library, onSaved }: { library: Library; onSave
       : library.cardShape === "landscape" || library.cardShape === "square"
         ? library.cardShape
         : "poster";
-  const resolvedPresentations = useMemo(
-    () => library.presentations ?? fallbackResolved(library),
-    [library],
-  );
+  const resolvedPresentations = library.presentations;
   const stored = useMemo(
     () => ({
       name: library.name,
@@ -620,6 +590,7 @@ export function LibrarySettings({ library, onSaved }: { library: Library; onSave
   const [editing, setEditing] = useState(false);
   if (library.source === "plugin" && cache.loading && !cache.data) return <LoadingRows />;
   if (!draft) return <LoadingRows />;
+  const adapterOnly = Boolean(draft.presentApps.adapterOnly);
   const sourceNames =
     registry.data?.filter((source) => draft.sources.includes(source.id)).map(sourceLabel) ?? [];
   const save = async () => {
@@ -723,11 +694,13 @@ export function LibrarySettings({ library, onSaved }: { library: Library; onSave
                 />
               }
             />
-            <CardShapeRow
-              library={library}
-              value={draft.cardShape}
-              onChange={(cardShape) => setDraft({ ...draft, cardShape })}
-            />
+            {!adapterOnly ? (
+              <CardShapeRow
+                library={library}
+                value={draft.cardShape}
+                onChange={(cardShape) => setDraft({ ...draft, cardShape })}
+              />
+            ) : null}
             <SettingsRow
               title={t("Hide from apps")}
               description={t("The library stays in this console but disappears from every app.")}
@@ -772,7 +745,9 @@ export function LibrarySettings({ library, onSaved }: { library: Library; onSave
               onChange={(presentApps) => setDraft({ ...draft, presentApps })}
             />
           )}
-          <LibraryReleasesSection library={library} />
+          {!resolvedPresentations.adapterOnly && library.hasVideo ? (
+            <LibraryReleasesSection library={library} />
+          ) : null}
           {library.source === "plugin" && library.kind?.sync?.mode !== "push" ? (
             <PluginLibrarySyncSection library={library} onChanged={onSaved} />
           ) : null}
@@ -826,13 +801,7 @@ export function LibrarySettings({ library, onSaved }: { library: Library; onSave
         </div>
         <aside className="rounded-xl border border-border bg-surface p-5 xl:sticky xl:top-5">
           <div className="flex items-center gap-3">
-            {library.source === "plugin" ? (
-              <Plug size={24} />
-            ) : library.mediaType === "show" ? (
-              <Tv size={24} />
-            ) : (
-              <Film size={24} />
-            )}
+            <LibrarySourceIcon library={library} size={24} />
             <h2 className="font-semibold">{draft.name}</h2>
           </div>
           {library.itemCount !== undefined ? (
@@ -984,6 +953,9 @@ function PluginLibrarySyncSection({
         description={
           <div className="space-y-1">
             {summaryLine ? <span>{summaryLine}</span> : null}
+            {!running && !guard && library.sync?.failure ? (
+              <PluginFailureDetails failure={library.sync.failure} />
+            ) : null}
             {guard ? (
               <DeleteGuardChoice
                 guard={guard}

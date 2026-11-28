@@ -93,7 +93,10 @@ type runSpec struct {
 	// KeyTimes, when set, are the output timestamps a video encode forces
 	// keyframes at (a chunked run's plan boundaries) instead of every
 	// SegDur.
-	KeyTimes []time.Duration
+	KeyTimes               []time.Duration
+	AdaptiveHLS            bool
+	AdaptiveHEVCLevel      int
+	AdaptiveCopyDecodeLead time.Duration
 	// Target, when set, is the static-header session's video contract
 	// every encode must deliver (contract.go).
 	Target      *videoContract
@@ -247,7 +250,11 @@ func buildArgs(s runSpec) []string {
 				segmentOptions = append(segmentOptions, "avoid_negative_ts=disabled")
 			}
 		}
-		if s.encodesAudio() {
+		if s.AdaptiveHLS {
+			// Copy and encode can have different DTS reorder delays. Keep
+			// the child muxer from applying a different shift to each rung.
+			segmentOptions = append(segmentOptions, "avoid_negative_ts=disabled")
+		} else if s.encodesAudio() {
 			// Normalize in the child muxer, including zero-delay RTX fallback.
 			// Otherwise encoder priming can wrap into the 33-bit TS clock.
 			segmentOptions = append(segmentOptions, "avoid_negative_ts=make_non_negative")
@@ -272,7 +279,11 @@ func buildArgs(s runSpec) []string {
 	// the historic x264 mux clock) so an HLS cut closes with audio reaching
 	// the video boundary. Otherwise restarting at that boundary drops the
 	// ~80ms of audio left in the next old fragment (at 24fps).
-	if s.Decision.Container == ContainerFMP4 && s.Decision.EncodesVideo(s.Info) && s.Decision.AudioCopy {
+	if s.AdaptiveHLS {
+		if lead := adaptiveAudioPreload(s); lead > 0 {
+			args = append(args, "-audio_preload", strconv.FormatInt(lead.Microseconds(), 10))
+		}
+	} else if s.Decision.Container == ContainerFMP4 && s.Decision.EncodesVideo(s.Info) && s.Decision.AudioCopy {
 		if v := s.Info.Video(); v != nil && v.FrameRate >= 1 && !v.VariableFrameRate {
 			encoder, _ := videoEncoder(s.Decision.VideoCodec, s.Accel, s.Features)
 			preloadFrames := 2
@@ -296,6 +307,28 @@ func buildArgs(s runSpec) []string {
 		args = append(args, "-map", inputStream(s, a), "-c:a", "copy", "-frames:a", "1", "-flush_packets", "1", "-f", "adts", path)
 	}
 	return appendSoftSubtitleOutput(args, s)
+}
+
+// Compensate decode reordering during mux interleaving so an audio cut is
+// tied to the video presentation boundary, even when the adjacent variants
+// use different numbers of B-frames.
+func adaptiveAudioPreload(s runSpec) time.Duration {
+	fps := hlsOutputFPS(s)
+	if fps <= 0 || findStream(s.Info, s.Decision.AudioStream, "audio") == nil {
+		return 0
+	}
+	frames := 0.0
+	if s.Decision.VideoCopy {
+		frames = math.Round(s.AdaptiveCopyDecodeLead.Seconds() * fps)
+	} else if encoder, hardware := s.videoEncoder(); !hardware {
+		switch encoder {
+		case "libx264":
+			frames = float64(h264ReorderFrames(s))
+		case "libx265":
+			frames = 2
+		}
+	}
+	return time.Duration(math.Ceil(frames*1_000_000/fps)) * time.Microsecond
 }
 
 // inputStream is the stream specifier mapping st from input 0. A live HLS
@@ -736,6 +769,9 @@ func buildCodecArgs(s runSpec) []string {
 				// matroskaenc converts both to length-prefixed form.
 				args = append(args, "-bsf:v", "dump_extra=freq=keyframe")
 			}
+			if s.AdaptiveHEVCLevel > 0 && d.VideoCodec == "hevc" {
+				args = appendVideoClockBSF(args, "hevc_metadata=level="+strconv.Itoa(s.AdaptiveHEVCLevel))
+			}
 			if len(s.KeyTimes) > 0 {
 				keys := make([]string, len(s.KeyTimes))
 				for i, k := range s.KeyTimes {
@@ -842,6 +878,11 @@ func buildCodecArgs(s runSpec) []string {
 				// already establishes its own exact sample grid.
 				filters = append(filters, fmt.Sprintf("aresample=%d:async=1", decisionAudioRate(d)))
 			}
+			if s.AdaptiveHLS && s.Start > 0 {
+				// A fresh AAC encoder can emit priming before the common cut.
+				// The preceding variant already owns those timestamps.
+				args = append(args, "-bsf:a", fmt.Sprintf("noise=amount=0:drop='lt(pts*tb,%.9f)'", s.Start.Seconds()))
+			}
 			if s.AudioGainDB != 0 {
 				filters = append(filters, fmt.Sprintf("volume=%.1fdB", s.AudioGainDB))
 				if s.AudioGainDB > 0 {
@@ -889,7 +930,7 @@ func buildCodecArgs(s runSpec) []string {
 // the same encoder plan for every run and rendition keeps priming and video
 // reorder from causing a title-zero-only shift in the nested MP4 muxer.
 func hlsEncodedClockLead(s runSpec) time.Duration {
-	if !s.encodesAudio() || !s.Decision.EncodesVideo(s.Info) || s.LoopInput || s.LiveInput || s.RTXTimeline || s.Decision.Container != ContainerFMP4 || (s.Protocol != "" && s.Protocol != core.ProtocolHLS) {
+	if s.AdaptiveHLS || !s.encodesAudio() || !s.Decision.EncodesVideo(s.Info) || s.LoopInput || s.LiveInput || s.RTXTimeline || s.Decision.Container != ContainerFMP4 || (s.Protocol != "" && s.Protocol != core.ProtocolHLS) {
 		return 0
 	}
 	codec := s.Decision.AudioCodec
@@ -1242,7 +1283,7 @@ func hlsMuxArgs(s runSpec) []string {
 			// inner timestamp policy below preserve the absolute clock.
 			options += ":use_editlist=0"
 		}
-		if s.NormalizeNegativeDTS || audioOnlyAAC || s.encodesAudio() {
+		if s.NormalizeNegativeDTS || audioOnlyAAC || (s.encodesAudio() && !s.AdaptiveHLS) {
 			// Planned H264 encodes already carry a fixed priming/reorder
 			// lead on every run. Keep this safety net for copied video and
 			// other encoder plans, where negative priming must not wrap.
@@ -1810,6 +1851,9 @@ func planEncodeArgs(s runSpec, pic picturePlan, enc, codec string, hwFrames bool
 		}
 	case "libx265":
 		params := "log-level=error"
+		if s.AdaptiveHLS {
+			params += ":open-gop=0:high-tier=0:bframes=4:b-pyramid=1"
+		}
 		if pic.outRange == rangeHDR10 || pic.outRange == rangeHLG {
 			params += hdrX265Params(pic.outRange)
 		}
@@ -1929,6 +1973,10 @@ func planEncodeArgs(s runSpec, pic picturePlan, enc, codec string, hwFrames bool
 	}
 	if codec == "hevc" {
 		e = append(e, "-tag:v", "hvc1")
+	}
+	if s.AdaptiveHLS && enc != "libx264" && enc != "libx265" {
+		// Hardware presets can choose different reordering between rungs.
+		e = append(e, "-bf", "0")
 	}
 	// Tag the output colours. Not with GPU frames: the hardware filters set
 	// them, and output colour options make ffmpeg insert a software
@@ -2202,15 +2250,7 @@ func hdrX265Params(outRange string) string {
 
 // videoBitrate is the video share of a transcode decision's bitrate.
 func videoBitrate(info core.MediaInfo, d core.Decision) int {
-	audio := 0
-	if a := findStream(info, d.AudioStream, "audio"); a != nil {
-		if d.AudioCopy {
-			audio = copiedAudioKbps(a)
-		} else {
-			audio = audioBitrateKbps(d.AudioCodec, decisionAudioChannels(d, a))
-		}
-	}
-	k := d.BitrateKbps - audio
+	k := d.BitrateKbps - decisionAudioKbps(info, d)
 	if d.BitrateKbps <= 0 {
 		k = bitrateCeiling(d.MaxHeight, d.VideoCodec)
 	}

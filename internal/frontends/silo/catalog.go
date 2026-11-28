@@ -5,7 +5,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
-	"github.com/braedonsaunders/ether/internal/frontend/kit/paging"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -13,6 +12,7 @@ import (
 
 	"github.com/braedonsaunders/ether/internal/frontend"
 	"github.com/braedonsaunders/ether/internal/frontend/kit/ids"
+	"github.com/braedonsaunders/ether/internal/frontend/kit/paging"
 )
 
 func (i *instance) catalog(w http.ResponseWriter, r *http.Request) {
@@ -209,16 +209,31 @@ func (i *instance) catalog(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Unavailable", 503)
 		return
 	}
-	cards := i.catalogCards(r, v, token, page.Items)
+	var cards map[frontend.RatingKey][]frontend.GrantedImage
+	catalogPage := r.PathValue("id") == ""
+	if catalogPage {
+		cards = i.catalogPageArtwork(r, token, page.Items)
+	} else {
+		cards = i.catalogCards(r, v, token, page.Items)
+	}
 	editions, batched := i.pageEditions(r, v, keys)
 	items := make([]any, 0, len(archive)+len(page.Items))
 	for _, item := range archive {
 		items = append(items, i.catchUpCard(r, token, item))
 	}
+	_, relatedArtwork := i.host.Experience.(frontend.RelatedArtworkProvider)
 	for _, t := range page.Items {
 		item := titleDTO(t, state[t.Key])
 		if granted, ok := cards[t.Key]; ok {
 			i.paintCatalogArtwork(r, granted, item)
+			if t.Type == frontend.TypeEpisode && catalogPage {
+				var seasonArt, showArt []frontend.GrantedImage
+				if relatedArtwork {
+					season, show := catalogEpisodeParents(t)
+					seasonArt, showArt = cards[season], cards[show]
+				}
+				i.paintEpisodeArtwork(r, t, seasonArt, showArt, item)
+			}
 		} else {
 			i.artwork(r, v, token, t.Key, item)
 		}
@@ -465,6 +480,77 @@ func (i *instance) catalogCards(r *http.Request, v *frontend.Viewer, token strin
 		}
 	}
 	return i.sectionArtwork(r, v, token, cards)
+}
+
+// catalogPageArtwork authorizes the page and its episode ancestors together.
+// An authoritative empty artwork list also completes the lookup.
+func (i *instance) catalogPageArtwork(r *http.Request, token string, titles []frontend.Title) map[frontend.RatingKey][]frontend.GrantedImage {
+	signer, ok := i.host.ImageGrants.(frontend.ImagePageSigner)
+	if !ok || len(titles) == 0 {
+		return nil
+	}
+	targets := append([]frontend.Title(nil), titles...)
+	if _, related := i.host.Experience.(frontend.RelatedArtworkProvider); related {
+		for _, title := range titles {
+			if title.Type != frontend.TypeEpisode {
+				continue
+			}
+			season, show := catalogEpisodeParents(title)
+			for _, key := range []frontend.RatingKey{season, show} {
+				if key != 0 {
+					targets = append(targets, frontend.Title{Key: key})
+				}
+			}
+		}
+	}
+	page, err := signer.SignPage(r.Context(), frontend.ImagePageRequest{
+		Credential: token, Device: device(r), Titles: targets,
+		Kinds: []string{frontend.ImagePoster, frontend.ImageBackdrop, frontend.ImageLogo},
+	})
+	if err != nil {
+		return nil
+	}
+	out := make(map[frontend.RatingKey][]frontend.GrantedImage, len(page))
+	for _, item := range page {
+		if item.Authoritative {
+			out[item.Item] = item.Images
+		}
+	}
+	return out
+}
+
+func catalogEpisodeParents(t frontend.Title) (season, show frontend.RatingKey) {
+	season, show = t.ParentKey, t.ShowKey
+	if season == 0 {
+		season = t.Key.Parent()
+	}
+	if show == 0 {
+		show = t.Key.Parent().Parent()
+	}
+	return
+}
+
+func (i *instance) paintEpisodeArtwork(r *http.Request, t frontend.Title, season, show []frontend.GrantedImage, out map[string]any) {
+	if t.PosterPath != "" || t.BackdropPath != "" || t.StillPath != "" {
+		out["poster_is_episode_still"] = t.StillPath != "" && t.PosterPath == t.StillPath
+		out["backdrop_is_episode_still"] = t.StillPath != "" && t.BackdropPath == t.StillPath
+	}
+	prefix := i.pathPrefix(r)
+	paint := func(grants []frontend.GrantedImage, kind, field string) {
+		for _, grant := range grants {
+			if grant.Image.Kind != kind || grant.Image.Path == "" || grant.Secret == "" {
+				continue
+			}
+			out[field+"_url"] = siloImageURL(r, prefix+"/api/v2/images/"+grant.Secret, kind)
+			if grant.Image.ThumbHash != "" {
+				out[field+"_thumbhash"] = grant.Image.ThumbHash
+			}
+			return
+		}
+	}
+	paint(season, frontend.ImagePoster, "season_poster")
+	paint(show, frontend.ImagePoster, "series_poster")
+	paint(show, frontend.ImageBackdrop, "series_backdrop")
 }
 
 // paintCatalogArtwork writes the fields artwork writes for a list card: the

@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -29,6 +30,7 @@ import (
 	"github.com/braedonsaunders/ether/internal/notify"
 	"github.com/braedonsaunders/ether/internal/onair"
 	"github.com/braedonsaunders/ether/internal/plugins/wasm"
+	"github.com/braedonsaunders/ether/internal/reqmemo"
 	"github.com/braedonsaunders/ether/internal/safefetch"
 )
 
@@ -74,8 +76,11 @@ type Backends struct {
 	// AdmitBackgroundUsenetCheck admits one background usenet_check candidate
 	// check against the plugin's daily allowance in availability_budget.
 	AdmitBackgroundUsenetCheck func(ctx context.Context, pluginID string) (outCtx context.Context, refund func(), resetAt time.Time, err error)
+	CacheLimit                 func(pluginID, libraryKey string) int64
 	CachePut                   func(ctx context.Context, pluginID, libraryKey, name string, r io.Reader) (blobRef string, err error)
+	CacheLookup                func(pluginID, libraryKey, key string) (blobRef string, ok bool)
 	CacheOpen                  func(ctx context.Context, pluginID, blobRef string) (io.ReadSeekCloser, error)
+	CacheOpenForStat           func(ctx context.Context, pluginID, blobRef string) (io.ReadSeekCloser, error)
 	CacheDelete                func(ctx context.Context, pluginID, blobRef string) error
 	CachePartial               func(ctx context.Context, pluginID, libraryKey, key string) (*blobcache.Partial, error)
 	// StreamURL mints a scoped stream ticket for one of a plugin's own kind
@@ -94,6 +99,7 @@ type Backends struct {
 
 // Deps are the plugin host's explicit dependencies.
 type Deps struct {
+	FFmpeg, FFprobe   string
 	DurableStorage    *blobcache.DurableStore
 	Busy              func() bool
 	ReadRuntimeConfig func() config.Plugins
@@ -129,9 +135,11 @@ type Deps struct {
 
 // Manager is the plugin host. It is safe for concurrent use.
 type Manager struct {
-	storageMu    sync.RWMutex // coordinates durable writes with uninstall
-	screenPushMu sync.RWMutex
-	screenPush   ScreenPush
+	storageMu           sync.RWMutex // coordinates durable writes with uninstall
+	remoteClientMu      sync.Mutex
+	activeRemoteClients map[string]int
+	screenPushMu        sync.RWMutex
+	screenPush          ScreenPush
 	// viewerState backs the kinds.state / kinds.favorite / kinds.played /
 	// kinds.rate / kinds.favorites / kinds.playlist* host services.
 	viewerState        atomic.Pointer[KindViewerState]
@@ -168,6 +176,7 @@ type Manager struct {
 	scheduleInFlight map[string]*scheduleFlight
 	scheduleJobs     map[string]*actionJob
 	scheduleWG       sync.WaitGroup
+	adapterCalls     chan CallRecord
 	// rate-limit bookkeeping for host log, notify, custom event publish, usenet_check, and ai.complete
 	notifyTimes       map[string][]time.Time
 	logTimes          map[string][]time.Time
@@ -178,6 +187,7 @@ type Manager struct {
 	aiCompleteTimes   map[string][]time.Time
 	aiCompleteLimit   int
 	mediaProbeTimes   map[string][]time.Time
+	folderFrameTimes  map[string][]time.Time
 	mediaProbeLimit   int
 	aiSearchTimes     map[string][]time.Time
 	aiSearchLimit     int
@@ -262,9 +272,10 @@ func New(deps Deps) (*Manager, error) {
 		client = (&safefetch.Guard{}).Client(egress.Client(egress.CapPlugins, 30*time.Second))
 	}
 	m := &Manager{
-		busOrigin:  newEventID(),
-		iconRaster: artwork.NewSVGRasterizer(),
-		store:      &storage{db: deps.DB, sealer: deps.Sealer, now: now}, deps: deps,
+		busOrigin:    newEventID(),
+		adapterCalls: make(chan CallRecord, CallsCap),
+		iconRaster:   artwork.NewSVGRasterizer(),
+		store:        &storage{db: deps.DB, sealer: deps.Sealer, now: now}, deps: deps,
 		log: log, now: now, client: client,
 		fetchHosts: newFetchHostLimiter(DefaultMaxFetchPerHost),
 		fatories:   map[string]RuntimeFactory{}, runtimes: map[string]Runtime{}, warming: map[string]bool{}, shadow: map[string]bool{},
@@ -278,6 +289,7 @@ func New(deps Deps) (*Manager, error) {
 		usenetCheckTimes:  map[string][]time.Time{},
 		aiCompleteTimes:   map[string][]time.Time{},
 		mediaProbeTimes:   map[string][]time.Time{},
+		folderFrameTimes:  map[string][]time.Time{},
 		aiSearchTimes:     map[string][]time.Time{},
 		aiSearchCache:     map[string]map[string]aiSearchCacheEntry{},
 		aiSearchInflight:  map[string]*aiSearchFlight{},
@@ -429,11 +441,18 @@ func (m *Manager) SubscribeInvalidations() func() {
 }
 
 // List returns every installed plugin.
-func (m *Manager) List(ctx context.Context) ([]Record, error) { return m.store.list(ctx) }
+func (m *Manager) List(ctx context.Context) ([]Record, error) {
+	records, err := reqmemo.Do(ctx, fmt.Sprintf("plugins:list:%p", m), func() ([]Record, error) {
+		return m.store.list(ctx)
+	})
+	return slices.Clone(records), err
+}
 
 // Get returns one installed plugin.
 func (m *Manager) Get(ctx context.Context, id string) (Record, error) {
-	return m.store.record(ctx, id)
+	return reqmemo.Do(ctx, fmt.Sprintf("plugins:record:%p:%s", m, id), func() (Record, error) {
+		return m.store.record(ctx, id)
+	})
 }
 
 // HealthOf returns one plugin's health record.
@@ -478,9 +497,11 @@ func (m *Manager) SetGrants(ctx context.Context, id string, g Grants) error {
 		}
 		g.OperatorHosts = normalized
 	}
-	if err := m.store.putGrants(ctx, id, g); err != nil {
+	dropped, err := m.store.saveGrants(ctx, r, g, r.Manifest, false)
+	if err != nil {
 		return err
 	}
+	m.noteOutboxDrops(ctx, r, dropped)
 	m.pruneBlockedLocalHosts(id, g.LocalHosts)
 	m.pruneBlockedOperatorHosts(id, g.OperatorHosts)
 	m.syncPosterBadgeSets(ctx, r)
@@ -643,7 +664,9 @@ func (m *Manager) CallStream(ctx context.Context, pluginID string, req Request) 
 	vctx, releaseViewer := m.bindAdapterViewer(ctx, pluginID, &req, deadline)
 	vctx = withCallSearchQuery(withCallPath(vctx, req.Path), extractCallSearchQuery(req))
 	ctx, cancel := context.WithTimeout(vctx, deadline)
+	releaseClient := m.trackRemoteClientCall(r.Manifest, req.Path)
 	cleanup := func() {
+		releaseClient()
 		releaseViewer()
 		cancel()
 	}
@@ -727,6 +750,12 @@ func DeadlineFor(path string) time.Duration {
 	return wasm.DeadlineFor(path)
 }
 
+// RedactDiagnostic removes stored plugin credentials from diagnostic text before
+// it leaves the plugin subsystem.
+func (m *Manager) RedactDiagnostic(ctx context.Context, pluginID, text string) string {
+	return m.store.redactKnown(ctx, pluginID, text)
+}
+
 // callOnce makes one call to a plugin through its runtime, records it in the
 // inspector ring (secrets redacted) and feeds failures into health.
 // Adapters (WS9) call plugins only through here.
@@ -783,14 +812,22 @@ func (m *Manager) callOnce(ctx context.Context, pluginID string, req Request) (R
 	if req.Locale != "" {
 		req.Headers["X-Ether-Locale"] = req.Locale
 	}
+	redact := func(value string) string { return m.RedactDiagnostic(ctx, pluginID, value) }
 	rt, epoch, err := m.runtimeForWithEpoch(ctx, r)
 	if err != nil {
-		message := m.store.redactKnown(ctx, pluginID, err.Error())
+		if ctx.Err() != nil {
+			return Response{}, ctx.Err()
+		}
+		message := redact(err.Error())
+		failure := &RouteFailure{Code: "unavailable", Route: cleanRoutePath(req.Path, redact),
+			Body: truncate(cleanRouteDiagnostic(message, nil), 2048)}
+		m.recordCall(ctx, CallRecord{Plugin: pluginID, Route: failure.Route, Method: req.Method,
+			MS: m.now().Sub(start).Milliseconds(), Error: failure.Error(), Failure: failure})
 		m.recordFailure(ctx, pluginID, "runtime unavailable: "+message, false)
 		if message != err.Error() {
 			err = errors.New(message)
 		}
-		return Response{}, err
+		return Response{Failure: failure}, err
 	}
 	// Hosted playback resolves bound waiting and execution separately inside
 	// wasm.Plugin.CallDetailed (up to deadline to acquire an instance, then a
@@ -803,26 +840,30 @@ func (m *Manager) callOnce(ctx context.Context, pluginID string, req Request) (R
 	}
 	cctx, cancel := context.WithTimeout(withCallSearchQuery(withCallPath(vctx, req.Path), searchQuery), callTimeout)
 	defer cancel()
+	releaseClient := m.trackRemoteClientCall(r.Manifest, req.Path)
+	defer releaseClient()
 	resp, err := rt.Call(cctx, req)
 	ms := m.now().Sub(start).Milliseconds()
-	rec := CallRecord{Plugin: pluginID, Route: req.Path, Method: req.Method, Status: resp.Status, MS: ms,
-		Request: m.store.redactKnown(ctx, pluginID, redactJSON(req.Body)), Response: m.store.redactKnown(ctx, pluginID, redactJSON(resp.Body))}
-	if req.Path == "/ether/notify" || req.Path == "/ether/configure" || strings.HasPrefix(req.Path, "/subtitles/") || req.Path == "/ether/subtitles/download" {
-		rec.Request = ""
-		rec.Response = ""
+	rec := CallRecord{Plugin: pluginID, Route: req.Path, Method: req.Method, Status: resp.Status, MS: ms}
+	private := req.Path == "/ether/notify" || req.Path == "/ether/configure" || strings.HasPrefix(req.Path, "/subtitles/")
+	if !private {
+		rec.Request = redact(redactJSON(req.Body))
+		if len(rec.Request) > diagnosticBodyLimit {
+			rec.Request = ""
+		}
 	}
 	if err != nil && ctx.Err() != nil {
 		// The caller gave up (a search that already had its answer, a
 		// viewer who left): not the plugin's failure.
 		rec.Error = "cancelled by Ether"
-		m.store.addCall(ctx, rec)
+		m.recordCall(ctx, rec)
 		return Response{}, ctx.Err()
 	}
 	if err != nil && errors.Is(err, wasm.ErrRequestEncode) {
 		// Ether could not encode the request, so the guest never ran: keep
 		// the runtime and its jobs intact and record no health failure.
 		rec.Error = m.store.redactKnown(ctx, pluginID, err.Error())
-		m.store.addCall(ctx, rec)
+		m.recordCall(ctx, rec)
 		return Response{}, fmt.Errorf("%w: %w", ErrUnsupportedBody, err)
 	}
 	if err != nil && errors.Is(err, wasm.ErrPoolBusy) {
@@ -830,7 +871,7 @@ func (m *Manager) callOnce(ctx context.Context, pluginID string, req Request) (R
 		// keep the runtime and any running jobs intact and do not record a
 		// health failure.
 		rec.Error = m.store.redactKnown(ctx, pluginID, err.Error())
-		m.store.addCall(ctx, rec)
+		m.recordCall(ctx, rec)
 		return Response{}, fmt.Errorf("%w: %w", ErrBusy, err)
 	}
 	if err != nil && (errors.Is(err, wasm.ErrClosed) || !m.runtimeEpochMatches(pluginID, epoch)) {
@@ -842,13 +883,16 @@ func (m *Manager) callOnce(ctx context.Context, pluginID string, req Request) (R
 			err = errors.New("notification delivery failed")
 		}
 		rec.Error = m.store.redactKnown(ctx, pluginID, err.Error())
-		m.store.addCall(ctx, rec)
+		m.recordCall(ctx, rec)
 		if rec.Error != err.Error() {
 			err = errors.New(rec.Error)
 		}
 		return Response{}, err
 	}
 	if err != nil && isCallTimeout(err, cctx) {
+		rec.Route = cleanRoutePath(req.Path, redact)
+		rec.Failure = &RouteFailure{Code: "timeout", Route: rec.Route,
+			TimeoutSeconds: int((deadline + time.Second - 1) / time.Second)}
 		// A single timed-out call cancels only that call (and its instance
 		// when torn down by the runtime), not the pool or other in-flight
 		// work. Record it as slow rather than as a runtime crash.
@@ -856,19 +900,36 @@ func (m *Manager) callOnce(ctx context.Context, pluginID string, req Request) (R
 			err = errors.New("notification delivery failed")
 		}
 		rec.Error = m.store.redactKnown(ctx, pluginID, err.Error())
-		m.store.addCall(ctx, rec)
-		m.recordTimeout(ctx, pluginID, rec.Error)
+		m.recordCall(ctx, rec)
+		if !wasm.OptionalCallPath(req.Path) {
+			m.recordTimeout(ctx, pluginID, rec.Error)
+		}
 		if rec.Error != err.Error() {
 			err = errors.New(rec.Error)
 		}
-		return Response{}, err
+		return Response{Failure: rec.Failure}, err
 	}
 	if err != nil {
+		code := "crashed"
+		switch {
+		case errors.Is(err, ErrMalformedResponse), errors.Is(err, wasm.ErrMalformedResponse):
+			code = "malformed"
+		case errors.Is(err, ErrUnavailable):
+			code = "unavailable"
+		}
+		rec.Route = cleanRoutePath(req.Path, redact)
+		rec.Failure = &RouteFailure{Code: code, Route: rec.Route}
+		if !private && len(err.Error()) <= diagnosticBodyLimit {
+			rec.Failure.Body = truncate(cleanRouteDiagnostic(err.Error(), redact), 2048)
+		}
 		if req.Path == "/ether/notify" || req.Path == "/ether/configure" {
 			err = errors.New("notification delivery failed")
 		}
-		rec.Error = m.store.redactKnown(ctx, pluginID, err.Error())
-		m.store.addCall(ctx, rec)
+		rec.Error = rec.Failure.Body
+		if rec.Error == "" {
+			rec.Error = rec.Failure.Error()
+		}
+		m.recordCall(ctx, rec)
 		// Crash policy: drop the runtime for this epoch so the next call
 		// restarts it without disturbing a newer runtime.
 		m.closeRuntimeAtEpoch(pluginID, epoch)
@@ -876,19 +937,33 @@ func (m *Manager) callOnce(ctx context.Context, pluginID string, req Request) (R
 		if rec.Error != err.Error() {
 			err = errors.New(rec.Error)
 		}
-		return Response{}, err
-	}
-	if len(rec.Request) > 64*1024 {
-		rec.Request = ""
-	}
-	if len(rec.Response) > 64*1024 {
-		rec.Response = ""
+		return Response{Failure: rec.Failure}, err
 	}
 	if resp.Status == 0 {
 		resp.Status = http.StatusOK
 		rec.Status = resp.Status
 	}
-	m.store.addCall(ctx, rec)
+	diagnostic := resp
+	if private {
+		diagnostic.Body = nil
+	}
+	rec.Failure = DiagnoseRouteResponse(req.Path, diagnostic, m.now(), redact)
+	if rec.Failure == nil && req.CheckResponse != nil {
+		if err := req.CheckResponse(resp.Body); err != nil {
+			rec.Failure = &RouteFailure{Code: "malformed", Route: cleanRoutePath(req.Path, redact), Status: resp.Status}
+			rec.Error = rec.Failure.Error()
+		}
+	}
+	if rec.Failure != nil {
+		rec.Route = rec.Failure.Route
+	} else if !private {
+		rec.Response = redact(redactJSON(resp.Body))
+		if len(rec.Response) > diagnosticBodyLimit {
+			rec.Response = ""
+		}
+	}
+	resp.Failure = rec.Failure
+	m.recordCall(ctx, rec)
 	var pending PendingReply
 	_ = json.Unmarshal(resp.Body, &pending)
 	if !pending.Pending && ms > deadline.Milliseconds()/2 && ms > 1000 {
@@ -1507,6 +1582,7 @@ func (m *Manager) Remove(ctx context.Context, id string, undoFirst bool) error {
 	delete(m.usenetCheckTimes, id)
 	delete(m.aiCompleteTimes, id)
 	delete(m.mediaProbeTimes, id)
+	delete(m.folderFrameTimes, id)
 	for key := range m.aiSearchTimes {
 		if strings.HasPrefix(key, id+"\x00") {
 			delete(m.aiSearchTimes, key)

@@ -213,6 +213,7 @@ func (c *Cache) flushExperience() {
 func (c *Cache) Sweep() {
 	if c.shared != nil {
 		c.shared.sweep(true)
+		c.trimPool()
 		return
 	}
 	prot, shrank := c.protected()
@@ -254,7 +255,10 @@ func (c *Cache) Sweep() {
 // Run expires idle bytes even when no new streams arrive.
 func (c *Cache) Run(ctx context.Context) {
 	if c.shared == nil {
-		c.indexDisk(ctx)
+		if err := c.indexDisk(ctx); err != nil && ctx.Err() == nil {
+			c.logger.Warn("cache accounting directory", "err", err)
+		}
+		c.trimPool()
 	}
 	t := time.NewTicker(time.Minute)
 	defer t.Stop()
@@ -278,23 +282,32 @@ func (c *Cache) victimLocked(protected map[string]bool) *entry {
 	if c.policy.Mode != "adaptive" || c.policy.ReplayBoost <= 0 {
 		return c.lru.tail
 	}
-	now := c.now()
 	var best *entry
 	var bestScore int64
 	for _, r := range c.rels {
 		if r.tail == nil || c.pinnedLocked(r.id) || protected[r.id] {
 			continue
 		}
-		boost := time.Duration(0)
-		if now.Sub(r.experience.LastPlayed) < 30*24*time.Hour {
-			boost = time.Duration(min(max(r.experience.Plays-1, 0), 8)) * c.policy.ReplayBoost
-		}
-		score := r.lastUsed + int64(boost)
+		score := c.victimAgeLocked(r.tail)
 		if best == nil || score < bestScore || (score == bestScore && r.id < best.rel.id) {
 			best, bestScore = r.tail, score
 		}
 	}
 	return best
+}
+
+// victimAgeLocked is the comparable last-use timestamp after applying the
+// configured replay boost. Adaptive mode scores a release as a whole.
+func (c *Cache) victimAgeLocked(e *entry) int64 {
+	if c.policy.Mode != "adaptive" || c.policy.ReplayBoost <= 0 {
+		return e.lastUsed
+	}
+	r := e.rel
+	boost := time.Duration(0)
+	if c.now().Sub(r.experience.LastPlayed) < 30*24*time.Hour {
+		boost = time.Duration(min(max(r.experience.Plays-1, 0), 8)) * c.policy.ReplayBoost
+	}
+	return r.lastUsed + int64(boost)
 }
 
 func (r *release) pushEntry(e *entry) {

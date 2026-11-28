@@ -132,7 +132,12 @@ type GrantInfo struct {
 }
 
 func (g *Grants) List(ctx context.Context, viewerID int64) ([]GrantInfo, error) {
-	rows, err := g.db.QueryContext(ctx, `SELECT hash,surface,device_id,client,product,version,last_used,COALESCE(xtream_username,''),xtream_stream_limit,(xtream_password<>'') FROM identity_grants WHERE viewer_id=? AND revoked=0 AND expires>? ORDER BY last_used DESC`, viewerID, g.now().UnixMilli())
+	now := g.now().UnixMilli()
+	// An expired access grant still represents a login if the family can rotate it.
+	rows, err := g.db.QueryContext(ctx, `SELECT hash,surface,device_id,client,product,version,last_used,COALESCE(xtream_username,''),xtream_stream_limit,(xtream_password<>'')
+		FROM identity_grants g WHERE viewer_id=? AND revoked=0 AND (expires>? OR EXISTS (
+			SELECT 1 FROM identity_refresh_families f WHERE f.access_hash=g.hash AND f.viewer_id=g.viewer_id AND f.revoked=0 AND f.absolute_expiry>? AND f.idle_expiry>?
+		)) ORDER BY last_used DESC`, viewerID, now, now, now)
 	if err != nil {
 		return nil, err
 	}

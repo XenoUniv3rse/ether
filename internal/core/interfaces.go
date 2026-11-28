@@ -294,6 +294,9 @@ type BrowseQuery struct {
 	// ListRows reads a key-ordered (SortKey) page as list rows instead of
 	// full titles (an export). Other page shapes ignore it.
 	ListRows *ListRows
+	// ListDisplayFacts reads a browse page with presentation and
+	// visibility facts, without credits, trailers or alternate titles.
+	ListDisplayFacts bool
 }
 
 // ListRows asks a key-ordered Browse page for a whole-library export's rows:
@@ -304,8 +307,12 @@ type BrowseQuery struct {
 // Detail reports (one the caller judges on its full facts) comes back in
 // full. Partial titles never enter a shared cache.
 type ListRows struct {
-	Facts  TitleFacts
-	Detail func(Title) bool
+	Facts       TitleFacts
+	Detail      func(Title) bool
+	OmitCredits bool
+	// OmitAddedTime skips computing the latest aired date and aired counts
+	// for projections that display neither.
+	OmitAddedTime bool
 }
 
 type Page struct {
@@ -711,6 +718,8 @@ type Indexer interface {
 }
 
 type ResolveRequest struct {
+	// ClientDeliveryBudgetKbps is an advisory measured last-mile budget, set by the resolver.
+	ClientDeliveryBudgetKbps int
 	// PreferVideoCodec softly preserves the representation family during background replacement.
 	PreferVideoCodec string
 	Title            *Title
@@ -1067,9 +1076,11 @@ type MediaInfo struct {
 	Has64bitOffsets       *bool         `json:"has64bitOffsets,omitempty"`
 	OptimizedForStreaming *bool         `json:"optimizedForStreaming,omitempty"`
 	Chapters              []Chapter     `json:"chapters,omitempty"`
+	ChaptersProbed        bool          `json:"chaptersProbed,omitempty"`
 	Container             string        `json:"container"` // mkv, mp4, avi, mpegts
 	Duration              time.Duration `json:"duration"`
 	Size                  int64         `json:"size"`
+	FileSize              int64         `json:"fileSize,omitempty"` // measured or known file bytes, even when stream facts are estimated
 	BitrateKbps           int           `json:"bitrateKbps"`
 	Streams               []StreamInfo  `json:"streams"`
 	Estimated             bool          `json:"estimated"` // derived from release name, not probed

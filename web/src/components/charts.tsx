@@ -1633,3 +1633,42 @@ export function ComboChart({
     </div>
   );
 }
+
+/** Daily line geometry shared by the compact trends and the experience drawer. */
+export function sparklineSegments(
+  values: (number | null)[],
+  x: (index: number) => number,
+  y: (value: number) => number,
+): string[] {
+  const segments: string[] = [];
+  let run = "";
+  values.forEach((value, index) => {
+    if (value == null) {
+      if (run) segments.push(run);
+      run = "";
+      return;
+    }
+    run += `${run ? "L" : "M"}${x(index).toFixed(1)},${y(value).toFixed(1)}`;
+  });
+  if (run) segments.push(run);
+  return segments;
+}
+
+export function CompactTrend({ values, label }: { values: (number | null)[]; label: string }) {
+  const scale = niceMax(Math.max(0.1, ...values.map((value) => value ?? 0)));
+  const x = (index: number) => 2 + (index * 92) / Math.max(1, values.length - 1);
+  const y = (value: number) => 24 - (22 * value) / scale;
+  return (
+    <svg width="96" height="26" viewBox="0 0 96 26" role="img" aria-label={label}>
+      <line x1="2" x2="94" y1="24" y2="24" className="stroke-border" />
+      {sparklineSegments(values, x, y).map((path) => (
+        <path key={path} d={path} fill="none" strokeWidth="1.5" className="stroke-viz-1" />
+      ))}
+      {values.map((value, index) =>
+        value != null && values[index - 1] == null && values[index + 1] == null ? (
+          <circle key={index} cx={x(index)} cy={y(value)} r="1.5" className="fill-viz-1" />
+        ) : null,
+      )}
+    </svg>
+  );
+}

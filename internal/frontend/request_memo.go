@@ -72,3 +72,8 @@ func RequestMemoFrom(ctx context.Context) *RequestMemo {
 	memo, _ := ctx.Value(requestMemoKey{}).(*RequestMemo)
 	return memo
 }
+
+// WithSearchPeopleLimit shares the larger person-name window between search branches.
+func WithSearchPeopleLimit(ctx context.Context, limit int) context.Context {
+	return core.WithSearchPeopleLimit(ctx, limit)
+}

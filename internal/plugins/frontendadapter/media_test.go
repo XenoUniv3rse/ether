@@ -301,7 +301,7 @@ func TestMediaHandlerSourceScopedTickets(t *testing.T) {
 				Name:     "default.bin",
 			}, nil
 		},
-		OpenSource: func(_ context.Context, _ *core.Viewer, _ string, partIndex *int, source string, _ []string) (*frontend.KindMedia, error) {
+		OpenSource: func(_ context.Context, _ *core.Viewer, _ string, partIndex *int, source string, fallback bool, _ []string) (*frontend.KindMedia, error) {
 			var pCopy *int
 			if partIndex != nil {
 				v := *partIndex

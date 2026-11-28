@@ -12,7 +12,9 @@ import (
 
 // These controls are mounted only on the authenticated owner cache extension.
 // Reads touch only the bounded pin list and cached metadata, never the library.
-func (a *App) registerWarmingControls(mux *http.ServeMux) {
+func (a *App) registerWarmingControls(mux interface {
+	HandleFunc(string, func(http.ResponseWriter, *http.Request))
+}) {
 	mux.HandleFunc("GET /warming", func(w http.ResponseWriter, r *http.Request) {
 		cfg := a.runningCacheConfig()
 		type title struct {

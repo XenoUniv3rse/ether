@@ -82,9 +82,8 @@ type Options struct {
 	// Backend builds the search backend for an indexer whose Kind is not
 	// Newznab (built-in sites, internal/cardigann). Nil disables them.
 	Backend func(config.Indexer) (Backend, error)
-	// usageDB records a one-off client's requests in the usage breakdown
-	// without spending budgets (Manager.TestIndexer).
-	usageDB *sql.DB
+	// testDB shares the configured account's limits with one-off tests.
+	testDB  *sql.DB
 	onEvent func(Event)
 	// Events receives non-blocking indexer.* domain events when set.
 	Events *events.Bus
@@ -133,16 +132,14 @@ type Client struct {
 	backends      func(config.Indexer) (Backend, error)
 	hosts         *HostLimiter
 
-	feedMu       sync.Mutex
-	feedMode     recentFeedMode
 	searchModeMu sync.Mutex
 	searchMode   searchCatState
 	budgetMu     sync.Mutex
 	mem          memBudget
-	usageDB      *sql.DB // see Options.usageDB
 	rate         rateLimitState
 	apiLimit     apiLimitState
 
+	queryFlights searchFlights
 	cacheMu      sync.RWMutex
 	memCache     map[string]memCacheEntry
 	torrents     torrentDescriptorCache
@@ -201,7 +198,7 @@ var _ core.Indexer = (*Client)(nil)
 // New builds a Client for one indexer. db may be nil (budgets and cache
 // then live in memory).
 func New(cfg config.Indexer, db *sql.DB, opts Options) *Client {
-	c := &Client{cfg: cfg, db: db, usageDB: opts.usageDB, onEvent: opts.onEvent, events: opts.Events, vault: opts.Vault, legacyDir: opts.LegacyNZBDir, publicIndexer: opts.PublicIndexer, backends: opts.Backend}
+	c := &Client{cfg: cfg, db: db, onEvent: opts.onEvent, events: opts.Events, vault: opts.Vault, legacyDir: opts.LegacyNZBDir, publicIndexer: opts.PublicIndexer, backends: opts.Backend}
 	c.http = opts.HTTPClient
 	if c.http == nil {
 		c.http = egress.Client(egress.CapIndexers, defaultHTTPTimeout)
@@ -283,7 +280,7 @@ func (c *Client) emitGrab(ctx context.Context, name string, started time.Time, r
 	if err != nil && (errors.Is(err, context.Canceled) || ctx.Err() == context.Canceled) {
 		return
 	}
-	if !reserved && errors.Is(err, core.ErrReleaseRejected) {
+	if !reserved && (errors.Is(err, core.ErrReleaseRejected) || errors.Is(err, core.ErrForegroundOnly)) {
 		return
 	}
 	localBudget := !reserved && errors.Is(err, core.ErrBudgetExhausted)
@@ -687,7 +684,7 @@ func (c *Client) get(ctx context.Context, rawURL string, limit int64, id config.
 	// Record throttling before reading the body: even a broken error response
 	// must not cause every new play request to hammer a throttled indexer.
 	if resp.StatusCode == http.StatusTooManyRequests {
-		return nil, c.recordRateLimit(hctx, resp.Header.Get("Retry-After"), apiError(429, "too many requests"))
+		return nil, c.recordRateLimit(hctx, resp.Header.Get("Retry-After"), rateLimitResponse(resp, c.now()))
 	}
 	decoded, derr := decodeBody(resp)
 	if derr != nil {
@@ -831,6 +828,9 @@ func (c *Client) fetchCaps(ctx context.Context) (*Caps, error) {
 		if aerr != nil {
 			return nil, aerr
 		}
+		if err := c.reserve(capsPurpose(hctx), "hit"); err != nil {
+			return nil, err
+		}
 		if body, err = c.get(hctx, alt, 5<<20, id); err == nil {
 			usedNewznab = true
 			c.newznabPath.Store(true)
@@ -910,7 +910,7 @@ func cacheKey(c *Client, req core.SearchRequest) string {
 	// The indexer's search identity: an edited URL, key, category list or
 	// built-in site setting must not be answered from the old config's
 	// results (in memory, or persisted for a fresh client).
-	fmt.Fprintf(h, "%s|", searchIdentity(c.Config()))
+	fmt.Fprintf(h, "routed:%s|", searchIdentity(c.Config()))
 	// The client identity decides outbound headers and parameter overrides: a
 	// cached answer fetched under one identity must not serve another.
 	fmt.Fprintf(h, "client-id-v2:%s|", c.searchIdentityFor(req).Fingerprint())
@@ -1396,7 +1396,38 @@ func stampMissingCategory(results []core.Release, media config.IdentityMediaType
 	}
 }
 
+// doSearch caches each exact wire query across title, rescue and plugin paths.
 func (c *Client) doSearch(ctx context.Context, params url.Values, id config.Identity, media config.IdentityMediaType) ([]core.Release, error) {
+	if !hasTitleQuery(params) {
+		if core.IndexerPurpose(ctx) != core.IndexerPurposeFeed {
+			return nil, fmt.Errorf("newznab: search request has no usable identifiers")
+		}
+		// Availability paginates a changing feed using its saved boundary.
+		return c.requestSearch(ctx, params, id, media)
+	}
+	if core.IndexerPurpose(ctx) == core.IndexerPurposeTest {
+		return c.requestSearch(ctx, params, id, media)
+	}
+	hash := sha256.New()
+	fmt.Fprintf(hash, "%s|%s|%s|%v|%s", c.indexerID(), searchIdentity(c.Config()), id.Fingerprint(), media, params.Encode())
+	key := "query:" + hex.EncodeToString(hash.Sum(nil))
+	emit, _ := ctx.Value(searchArrivalKey{}).(func([]core.Release))
+	return c.queryFlights.run(ctx, key, emit, func() ([]core.Release, error) {
+		if cached, ok := c.cacheGet(ctx, key); ok {
+			if emit != nil && len(cached) > 0 {
+				emit(slices.Clone(cached))
+			}
+			return cached, nil
+		}
+		rs, err := c.requestSearch(ctx, params, id, media)
+		if err == nil {
+			c.cachePut(context.WithoutCancel(ctx), key, rs)
+		}
+		return rs, err
+	})
+}
+
+func (c *Client) requestSearch(ctx context.Context, params url.Values, id config.Identity, media config.IdentityMediaType) ([]core.Release, error) {
 	if err := c.searchPaused(ctx); err != nil {
 		return nil, err
 	}
@@ -1404,6 +1435,13 @@ func (c *Client) doSearch(ctx context.Context, params url.Values, id config.Iden
 	u, err := c.apiURLForPath(params, id, usedNewznab)
 	if err != nil {
 		return nil, err
+	}
+	parsed, err := url.Parse(u)
+	if err != nil {
+		return nil, redactURLError(err)
+	}
+	if !hasTitleQuery(parsed.Query()) && core.IndexerPurpose(ctx) != core.IndexerPurposeFeed {
+		return nil, fmt.Errorf("newznab: search request has no usable identifiers")
 	}
 	started := time.Now()
 	admitted := false
@@ -1433,6 +1471,9 @@ func (c *Client) doSearch(ctx context.Context, params url.Values, id config.Iden
 				if aerr != nil {
 					return nil, aerr
 				}
+				if err := c.reserve(ctx, "hit"); err != nil {
+					return nil, err
+				}
 				if rs, serr = c.getSearchStream(ctx, alt, wrappedEmit, id); serr == nil {
 					c.rememberNewznabPath(ctx)
 				}
@@ -1445,6 +1486,9 @@ func (c *Client) doSearch(ctx context.Context, params url.Values, id config.Iden
 			alt, aerr := c.apiURLForPath(params, id, true)
 			if aerr != nil {
 				return nil, aerr
+			}
+			if err := c.reserve(ctx, "hit"); err != nil {
+				return nil, err
 			}
 			if body, err = c.get(ctx, alt, 20<<20, id); err == nil {
 				c.rememberNewznabPath(ctx)
@@ -1503,6 +1547,9 @@ func (c *Client) Search(ctx context.Context, req core.SearchRequest) ([]core.Rel
 		return nil, err
 	}
 	cfg := c.Config()
+	if namedAnimeSource(cfg) && !isAnimeSearch(req) {
+		return nil, nil
+	}
 	if req.Category != "" && (cfg.IsStremio() || cfg.IsAddon()) && !c.backendAnswersCategories(ctx, cfg, cats) {
 		return nil, fmt.Errorf("indexer %q does not support category searches", c.Name())
 	}
@@ -1517,8 +1564,8 @@ func (c *Client) Search(ctx context.Context, req core.SearchRequest) ([]core.Rel
 	usesDefaultCat := !cfg.UsesBackend() && c.usesDefaultSearchCats(cfg, req)
 	key := cacheKey(c, req)
 	ctx = withCacheAge(ctx, req.Released)
-	if req.Category != "" && strings.TrimSpace(req.Title) == "" {
-		ctx = withRecentSearchCache(ctx)
+	if req.Category != "" && strings.TrimSpace(req.Title) == "" && (!cfg.UsesBackend() || req.Lookup == nil) {
+		return c.cachedCategoryListing(ctx, cats)
 	}
 	if cached, ok := c.cacheGet(ctx, key); ok {
 		c.emit(Event{Kind: "cache", Purpose: usagePurpose(ctx), Success: true, Cached: true, Results: len(cached)})
@@ -1533,9 +1580,12 @@ func (c *Client) Search(ctx context.Context, req core.SearchRequest) ([]core.Rel
 			return cached, nil
 		}
 	}
+	if cacheOnlySearch(ctx, c) {
+		return nil, core.ErrForegroundOnly
+	}
 	// Exhausted limits prohibit new requests, not reuse of already fetched
 	// results and NZBs. The manager must reach this cache before this check.
-	if c.Exhausted(ctx) {
+	if c.searchExhausted(ctx) {
 		c.emit(Event{Kind: "search", Purpose: usagePurpose(ctx), BudgetExhausted: true})
 		return nil, fmt.Errorf("indexer %q: %w: %w", c.Name(), errLocalBudget, core.ErrBudgetExhausted)
 	}
@@ -1564,12 +1614,18 @@ func (c *Client) Search(ctx context.Context, req core.SearchRequest) ([]core.Rel
 		}
 		return nil, capsErr
 	}
+	cats = routedCategories(cfg, caps, req)
+	if len(cats) == 0 {
+		return nil, nil
+	}
 	attempts := c.searchAttempts(req, caps)
+	usesDefaultCat = usesDefaultCat && !animeOnly(cfg, caps)
+	routeSearchAttempts(attempts, cats, usesDefaultCat, catState.mode)
 	if len(attempts) == 0 {
 		return nil, fmt.Errorf("newznab: search request has no usable identifiers")
 	}
 	searchCtx := ctx
-	unfiltered := usesDefaultCat && catState.mode == searchCatUnfiltered
+	unfiltered := attempts[0].Get("cat") == ""
 	if unfiltered {
 		if emit, ok := ctx.Value(searchArrivalKey{}).(func([]core.Release)); ok {
 			searchCtx = context.WithValue(ctx, searchArrivalKey{}, func(rs []core.Release) {
@@ -1626,7 +1682,7 @@ func (c *Client) Search(ctx context.Context, req core.SearchRequest) ([]core.Rel
 		// season packs) in bounded parallel bursts so obscure titles resolve in
 		// a single round-trip instead of N serial timeouts. An indexer with a
 		// personal cap tries them one at a time and stops at the first hit.
-		if c.Config().DailyLimit == 0 && firstErr == nil {
+		if c.DailyAPILimit() == 0 && firstErr == nil {
 			const maxBurstWidth = 4
 			for base := 0; base < len(rest); {
 				if err := ctx.Err(); err != nil {
@@ -1722,7 +1778,7 @@ func (c *Client) Search(ctx context.Context, req core.SearchRequest) ([]core.Rel
 		}
 	}
 	if firstErr == nil && usesDefaultCat && !catState.verified && catState.mode == searchCatDefault && !c.now().Before(catState.probeBackoffUntil) &&
-		(len(capsSubcategories(caps, isTVRequest(req))) > 0 || c.isFeedUnfiltered(ctx, identity)) {
+		len(capsSubcategories(caps, isTVRequest(req))) > 0 {
 		probed, mode, perr := c.probeBroaderSearchCats(ctx, req, caps, attempts, id, media, identity)
 		if perr != nil {
 			if errors.Is(perr, core.ErrBudgetExhausted) || transientFailure(perr) {
@@ -1956,6 +2012,9 @@ func (c *Client) SearchRescue(ctx context.Context, req core.SearchRequest) ([]co
 		return nil, nil
 	}
 	cfg := c.Config()
+	if namedAnimeSource(cfg) && !isAnimeSearch(req) {
+		return nil, nil
+	}
 	catState := c.loadSearchCatState(ctx, searchIdentity(cfg))
 	key := cacheKey(c, req) + "|rescue"
 	ctx = withCacheAge(core.WithSearchRescue(ctx), req.Released)
@@ -1964,7 +2023,7 @@ func (c *Client) SearchRescue(ctx context.Context, req core.SearchRequest) ([]co
 		c.noteQuery(ctx, "cache", req.Title, nil, len(cached), nil)
 		return cached, nil
 	}
-	if c.Exhausted(ctx) {
+	if c.searchExhausted(ctx) {
 		c.emit(Event{Kind: "search", Purpose: usagePurpose(ctx), BudgetExhausted: true})
 		return nil, fmt.Errorf("indexer %q: %w: %w", c.Name(), errLocalBudget, core.ErrBudgetExhausted)
 	}
@@ -2051,8 +2110,14 @@ func (c *Client) SearchRescue(ctx context.Context, req core.SearchRequest) ([]co
 	media := config.IdentityMediaTypeForSearch(req)
 	id := c.identityFor(config.RequestSearch, c.Config().URL, media)
 	caps, _ := c.Caps(ctx)
-	unfiltered := c.usesDefaultSearchCats(cfg, req) && catState.mode == searchCatUnfiltered
+	cats := routedCategories(cfg, caps, req)
+	if len(cats) == 0 {
+		return nil, nil
+	}
+	usesDefaultCat := c.usesDefaultSearchCats(cfg, req) && !animeOnly(cfg, caps)
 	attempts := c.rescueAttempts(req, caps)
+	routeSearchAttempts(attempts, cats, usesDefaultCat, catState.mode)
+	unfiltered := len(attempts) > 0 && attempts[0].Get("cat") == ""
 	if len(attempts) == 0 {
 		return nil, nil
 	}
@@ -2218,8 +2283,13 @@ func (c *Client) fetchNZBReporting(ctx context.Context, r core.Release) ([]byte,
 		body := c.takeNZB(f)
 		// A background check runs on a reduced grab share; a foreground
 		// caller must not inherit its budget refusal.
-		if !leader && f.background && !core.IsBackgroundCheck(ctx) && errors.Is(f.err, core.ErrBudgetExhausted) {
-			continue
+		if !leader && f.background {
+			foreground := !backgroundSearch(ctx)
+			budgetRefused := foreground && errors.Is(f.err, core.ErrBudgetExhausted)
+			grabAllowed := (foreground || core.SpeculativeGrabsAllowed(ctx)) && errors.Is(f.err, core.ErrForegroundOnly)
+			if budgetRefused || grabAllowed {
+				continue
+			}
 		}
 		if f.err != nil {
 			return nil, leader, f.err
@@ -2284,7 +2354,7 @@ func (c *Client) joinNZBFlight(ctx context.Context, id string, r core.Release) (
 		c.nzbFlights = map[string]*nzbFlight{}
 	}
 	fctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), nzbFlightTimeout)
-	f := &nzbFlight{done: make(chan struct{}), background: core.IsBackgroundCheck(ctx), keep: isPluginNZB(ctx), waiters: 1, readers: 1, cancel: cancel}
+	f := &nzbFlight{done: make(chan struct{}), background: backgroundSearch(ctx), keep: isPluginNZB(ctx), waiters: 1, readers: 1, cancel: cancel}
 	c.nzbFlights[id] = f
 	go func() {
 		defer func() {
@@ -2356,6 +2426,9 @@ func (c *Client) joinNZBFlight(ctx context.Context, id string, r core.Release) (
 // fetchNZB downloads r's NZB from the indexer, spending one grab, and
 // stores it in the vault. The bool reports whether a grab slot was reserved.
 func (c *Client) fetchNZB(ctx context.Context, r core.Release) ([]byte, bool, error) {
+	if backgroundSearch(ctx) && !core.SpeculativeGrabsAllowed(ctx) {
+		return nil, false, core.ErrForegroundOnly
+	}
 	if cfg := c.Config(); cfg.UsesBackend() {
 		b, err := c.backend()
 		if err != nil {
@@ -2446,6 +2519,9 @@ func (c *Client) fetchNZB(ctx context.Context, r core.Release) ([]byte, bool, er
 		alt, aerr := c.apiURLForPath(guidParams, id, true)
 		if aerr != nil {
 			return nil, true, aerr
+		}
+		if err := c.reserve(hctx, "grab"); err != nil {
+			return nil, true, err
 		}
 		if body, err = c.get(hctx, alt, c.maxNZB, id); err == nil {
 			c.rememberNewznabPath(ctx)
@@ -2657,12 +2733,12 @@ func TestWithOptions(ctx context.Context, cfg config.Indexer, opts Options) erro
 	// Test always runs, even for a not-yet-enabled config.
 	testCfg := cfg
 	testCfg.Enabled = true
-	c := New(testCfg, nil, opts)
+	c := New(testCfg, opts.testDB, opts)
 	name := cfg.Name
 	if name == "" {
 		name = c.Name()
 	}
-	if _, err := c.Caps(ctx); err != nil {
+	if _, err := c.fetchCaps(ctx); err != nil {
 		return humanError(name, err)
 	}
 	params := url.Values{"t": {"search"}, "q": {"test"}, "limit": {"1"}, "extended": {"1"}}
@@ -2685,13 +2761,13 @@ func TestCapsWithOptions(ctx context.Context, cfg config.Indexer, opts Options) 
 	}
 	testCfg := cfg
 	testCfg.Enabled = true
-	c := New(testCfg, nil, opts)
+	c := New(testCfg, opts.testDB, opts)
 	id := c.clientIdentity()
 	name := cfg.Name
 	if name == "" {
 		name = c.Name()
 	}
-	if _, err := c.Caps(ctx); err != nil {
+	if _, err := c.fetchCaps(ctx); err != nil {
 		return id, humanError(name, err)
 	}
 	return id, nil

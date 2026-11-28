@@ -1,6 +1,7 @@
 package playback
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"errors"
@@ -17,6 +18,7 @@ import (
 	"github.com/braedonsaunders/ether/internal/releaseparse"
 	"github.com/braedonsaunders/ether/internal/releasepolicy"
 	"github.com/braedonsaunders/ether/internal/store"
+	"github.com/braedonsaunders/ether/internal/transcode"
 )
 
 type deferGenerationFillsKey struct{}
@@ -77,7 +79,12 @@ func (m *Manager) preparedResolution(ctx context.Context, s *session, profile co
 				// record's persisted probe and keyframe index survive it.
 				cached = m.persistedProbe(ctx, s.ident.userID, s.ident.key, res.Release.ID, res.NZB)
 			}
-			if cached != nil && !rememberedInfoCodecCurrent(cached.info, s.caps) {
+			var info core.MediaInfo
+			if cached != nil {
+				info = cached.info
+			}
+			if exceedsRuleHeight(s.caps.QualityRuleMaxHeight, res.Release, info) ||
+				(cached != nil && !rememberedInfoCodecCurrent(info, s.caps)) {
 				res, cached, fromResume = nil, nil, false
 			}
 		}
@@ -101,6 +108,24 @@ func (m *Manager) preparedResolution(ctx context.Context, s *session, profile co
 				dur = s.title.Runtime
 			}
 			if !sourceFitsBitrate(res.Release.Size, dur, 0, s.caps.MaxBitrateKbps) {
+				return nil, nil, false
+			}
+		}
+	}
+	if res != nil && (prefer == "" || isAutoVersionSelector(prefer)) {
+		if budget := m.clientDeliveryBudget(s); budget > 0 && !m.hasAuthoritativeAutoChoice(s) {
+			var dur time.Duration
+			var bitrate int
+			if s.title != nil {
+				dur = s.title.Runtime
+			}
+			if cached != nil {
+				if cached.info.Duration > 0 {
+					dur = cached.info.Duration
+				}
+				bitrate = cached.info.BitrateKbps
+			}
+			if !sourceFitsBitrate(res.Release.Size, dur, bitrate, budget) {
 				return nil, nil, false
 			}
 		}
@@ -138,6 +163,11 @@ func (m *Manager) preparedResolution(ctx context.Context, s *session, profile co
 		}
 		return nil, nil, false
 	}
+	if fromResume && res != nil && s.caps.Protocol == "vela" && isAutoVersionSelector(prefer) && !m.hasAuthoritativeAutoChoice(s) {
+		copy := *res
+		copy.AutoSelectionReason = core.AutoResumeSource
+		res = &copy
+	}
 	return res, cached, fromResume
 }
 
@@ -150,6 +180,7 @@ func (m *Manager) openInitial(ctx context.Context, s *session, profile core.Qual
 		original = s.title.Language
 	}
 	isSlot := core.IsExplicitVersionSlotSelector(s.prefer)
+	auto := !s.exact && isAutoVersionSelector(s.prefer)
 	res, cached, fromResume := m.preparedResolution(ctx, s, profile, original, s.prefer)
 	if res == nil && s.prefer != "" && !s.exact && !isSlot {
 		if auto, facts, remembered := m.preparedResolution(ctx, s, profile, original, ""); auto != nil {
@@ -212,7 +243,7 @@ func (m *Manager) openInitial(ctx context.Context, s *session, profile core.Qual
 		if m.knownHardSubbed(ctx, g) && m.hardSubtitleBlocked(ctx, res.Release) {
 			return false
 		}
-		if s.prefer == "" && probedRequiredAudioRejection(profile, s.title, res.Release, info, false) != "" {
+		if auto && probedRequiredAudioRejection(profile, s.title, res.Release, info, false) != "" {
 			return false
 		}
 		return true
@@ -391,7 +422,7 @@ func (m *Manager) openInitial(ctx context.Context, s *session, profile core.Qual
 		if len(res.NZB) > 0 {
 			res.Release.SourceHash = fmt.Sprintf("%x", sha256.Sum256(res.NZB))
 		}
-		if m.titleReleaseRejected(ctx, s.ident.key, res.Release) || (!s.exact && s.prefer == "" && audioExcluded(audioRejected, res.Release)) {
+		if m.titleReleaseRejected(ctx, s.ident.key, res.Release) || (auto && audioExcluded(audioRejected, res.Release)) {
 			tried = append(tried, res.Release.ID)
 			alternates = res.Alternates
 			res, cached, fromResume = nil, nil, false
@@ -470,10 +501,10 @@ func (m *Manager) openInitial(ctx context.Context, s *session, profile core.Qual
 			res, cached, fromResume = nil, nil, false
 			continue
 		}
-		if err == nil && !s.exact && s.prefer == "" {
+		if err == nil && auto {
 			info := g.infoSnapshot()
 			if reqReason := probedRequiredAudioRejection(profile, s.title, res.Release, info, fromResume); reqReason != "" {
-				m.noteReleaseProbeMemory(res.Release, res.NZB, info)
+				m.noteSelectionProbe(s.ident.key, res, info)
 				m.log.Info("trying next candidate", "release", res.Release.Name, "reason", reqReason)
 				m.dropGeneration(g)
 				if reqLang := normalizedProfileLanguage(profile); reqLang != "" && strings.HasPrefix(reqReason, "audio is not in the profile's language (") {
@@ -492,15 +523,18 @@ func (m *Manager) openInitial(ctx context.Context, s *session, profile core.Qual
 				continue
 			}
 		}
-		if err == nil && !s.exact && s.prefer == "" {
+		if err == nil && auto {
 			info := g.infoSnapshot()
 			audioOK := m.probedAudioAcceptable(s, profile, info)
+			if !audioOK && m.hasAuthoritativeAutoChoice(s) && m.ownerPinAllows(s, res.Release.ID) && m.rememberedChoiceAllows(s, res.Release.ID) {
+				audioOK = true
+			}
 			if burned || !audioOK {
 				reason := "probed release lacks viewer audio language"
 				if burned {
 					reason = "burned-in subtitles detected"
 				} else {
-					m.noteReleaseProbeMemory(res.Release, res.NZB, info)
+					m.noteSelectionProbe(s.ident.key, res, info)
 				}
 				m.log.Info("trying next candidate", "session", s.id, "release", res.Release.Name, "reason", reason)
 				m.recordTimeline(s, TimelineEvent{
@@ -1056,12 +1090,17 @@ func (m *Manager) probeGeneration(ctx context.Context, s *session, res *core.Res
 			return nil, fmt.Errorf("probe %s: %w: runtime doesn't match this title", res.Release.Name, core.ErrReleaseRejected)
 		}
 	}
-	if mi.Size <= 0 {
-		mi.Size = src.Size()
+	if size := src.Size(); size > 0 {
+		mi.FileSize = size
+		// Keep the probe's size for release matching and version selection.
+		if mi.Size <= 0 {
+			mi.Size = size
+		}
 	}
 	if mi.Container == "" {
 		mi.Container = containerFromName(src.Name())
 	}
+	correctReversedSubtitleDispositions(mi.Streams)
 	// A cached warm probe was already augmented when it was made; running
 	// AugmentMedia again would put its cost back on the Play path. Facts
 	// rebuilt from the persisted probe had their per-viewer sidecars
@@ -1155,6 +1194,16 @@ func (m *Manager) startGenerationFills(g *generation) {
 // loopback URL. A native probe costs no process and, for a validated Usenet
 // source, usually no network read: the first article is already cached.
 func (m *Manager) probeMedia(ctx context.Context, g *generation, src core.MediaSource) (*core.MediaInfo, string, error) {
+	if g.res != nil && g.res.Release.IsAddonHTTPStream() {
+		// The source is already open. Read its track table before optional
+		// Matroska statistics near the tail or a process-based probe.
+		probeCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		info, err := transcode.ProbeHeader(core.WithReadOrigin(probeCtx, "playback.probe", "container headers"), src, src.Size(), transcode.DefaultHeaderProbeBudget)
+		cancel()
+		if err == nil || permanentSourceFailure(err) {
+			return info, "native", err
+		}
+	}
 	if m.deps.NativeProbe != nil {
 		started := time.Now()
 		info, err := m.deps.NativeProbe(core.WithReadOrigin(ctx, "playback.probe", "container facts"), src)
@@ -1210,8 +1259,10 @@ func (m *Manager) startTrailerFill(g *generation) {
 			return
 		}
 		g.mu.Lock()
-		if len(g.info.Chapters) == 0 {
+		chapterRead := info.ChaptersProbed && !g.info.ChaptersProbed
+		if chapterRead {
 			g.info.Chapters = slices.Clone(info.Chapters)
+			g.info.ChaptersProbed = true
 		}
 		streams := slices.Clone(g.info.Streams)
 		for i := range streams {
@@ -1222,13 +1273,51 @@ func (m *Manager) startTrailerFill(g *generation) {
 		g.info.Streams = streams
 		updated := core.CloneMediaInfo(g.info)
 		g.mu.Unlock()
-		if len(updated.Chapters) > 0 && g.res != nil {
+		if (chapterRead || len(updated.Chapters) > 0) && g.res != nil {
 			m.persistReleaseProbe(ctx, g.res.Release, g.res.NZB, updated)
 			if g.res.Title.IsPluginKey() {
 				m.persistItemProbe(ctx, g.res.Title, updated)
 			}
 		}
 	}()
+}
+
+// ProbeChapters resolves deferred chapter metadata for a client that is
+// asking for the chapter timeline now. Ordinary Play never waits for it.
+func (m *Manager) ProbeChapters(ctx context.Context, id, expectedRevision string) ([]core.Chapter, bool) {
+	s := m.lookup(id)
+	if s == nil || m.deps.NativeTrailer == nil {
+		return nil, false
+	}
+	g := s.current()
+	if g == nil || g.src == nil || !g.acquire() {
+		return nil, false
+	}
+	defer g.release()
+	if expectedRevision == "" || core.SourceRevision(&core.PlaySession{Key: s.ident.key, Source: g.src}) != expectedRevision {
+		return nil, false
+	}
+	info := g.infoSnapshot()
+	if !info.ChaptersProbed && info.Container == "mkv" && !info.Estimated {
+		readCtx, cancel := context.WithTimeout(ctx, 750*time.Millisecond)
+		m.deps.NativeTrailer(core.WithReadOrigin(readCtx, "playback.trailer", "requested chapters"), g.src, &info)
+		cancel()
+	}
+	g.mu.Lock()
+	updated := info.ChaptersProbed && !g.info.ChaptersProbed
+	if updated {
+		g.info.Chapters, g.info.ChaptersProbed = slices.Clone(info.Chapters), true
+	}
+	ch := slices.Clone(g.info.Chapters)
+	probed := g.info.ChaptersProbed
+	g.mu.Unlock()
+	if s.current() != g || !probed {
+		return nil, false
+	}
+	if updated && g.res != nil {
+		m.noteReleaseProbeMemory(g.res.Release, g.res.NZB, info)
+	}
+	return ch, true
 }
 
 // startProbeVerify runs ffprobe after a native probe and logs any
@@ -1446,6 +1535,7 @@ type failoverOpts struct {
 	preserveBuffer bool
 	reason         string
 	down           bool
+	sourceBps      float64 // measured sustainable source throughput for a speed-triggered downshift
 	stopOnFailure  bool
 	strictDirect   bool // a different release needs a new direct-play decision
 	// stallRecovery: the trigger is a stalled media host, not bad data.
@@ -1605,7 +1695,29 @@ func (m *Manager) failoverWith(ctx context.Context, s *session, observed *genera
 		info.Keyframes = nil
 		return info
 	}
-	curBps := mediaBps(oldInfo, cur.src.Size())
+	curBps := replacementBps(cur, 0)
+	// Compare file consumption, independently of the codecs the muxer can
+	// copy. Allow a margin for variable-rate media and short fetch stalls.
+	maxSourceBps := fo.sourceBps * 0.8
+	maxReplacementBps := maxSourceBps
+	if fo.down {
+		// The last mile can tighten the swap budget. It supplies no evidence
+		// that the source can feed a video encode.
+		if budget := float64(m.clientDeliveryBudget(s)) * (1000.0 / 8); budget > 0 && (maxSourceBps == 0 || budget < maxSourceBps) {
+			maxReplacementBps = budget
+		}
+	}
+	admitDown := func(next *generation) error {
+		if !fo.down {
+			return nil
+		}
+		bps := replacementBps(next, oldInfo.Duration)
+		if bps <= 0 || bps >= curBps || (maxReplacementBps > 0 && bps > maxReplacementBps) ||
+			(cur.src.Size() > 0 && next.src.Size() >= cur.src.Size()) {
+			return fmt.Errorf("down-failover candidate exceeds bitrate budget (candidate %.0f B/s, current %.0f B/s, budget %.0f B/s): %w", bps, curBps, maxReplacementBps, core.ErrNotAvailable)
+		}
+		return nil
+	}
 	var (
 		g           *generation
 		fallbackGen *generation // healthy but not spliceable into direct play
@@ -1624,11 +1736,31 @@ func (m *Manager) failoverWith(ctx context.Context, s *session, observed *genera
 		p, ok := hls.(interface{ SwapWouldCopyVideo(core.MediaInfo) bool })
 		return ok && p.SwapWouldCopyVideo(next.infoSnapshot())
 	}
+	// Without a throughput estimate, avoid adding video encoding to an
+	// already slow path. A measured budget permits a fitting, convertible
+	// input when no copy-compatible release is available.
+	acceptDown := func(next *generation) error {
+		if err := admitDown(next); err != nil {
+			return err
+		}
+		if fo.down && !direct && maxSourceBps <= 0 && !copyCandidate(next) {
+			return fmt.Errorf("replacement needs video encoding without a measured source budget: %w", core.ErrNotAvailable)
+		}
+		return nil
+	}
 	if fo.down {
 		g = m.joinSpeedAlternate(ctx, cur, tried)
-		if g != nil && (m.preflightSwap(ctx, s, g) != nil || (!direct && !copyCandidate(g))) {
-			m.dropGeneration(g)
-			g = nil
+		if g != nil {
+			err := acceptDown(g)
+			if err == nil {
+				err = m.preflightSwap(ctx, s, g)
+			}
+			if err != nil {
+				log.Debug("prepared alternate rejected", "release", g.res.Release.Name, "err", err)
+				tried = append(tried, g.releaseID())
+				m.dropGeneration(g)
+				g = nil
+			}
 		}
 	}
 	var preferCopy func(*generation) bool
@@ -1647,16 +1779,7 @@ func (m *Manager) failoverWith(ctx context.Context, s *session, observed *genera
 		var accept func(*generation) error
 		if fo.down {
 			width = 2
-			accept = func(next *generation) error {
-				if !copyCandidate(next) {
-					return fmt.Errorf("replacement needs video encoding: %w", core.ErrNotAvailable)
-				}
-				bps := replacementBps(next, oldInfo.Duration)
-				if curBps > 0 && (bps <= 0 || bps >= curBps) {
-					return fmt.Errorf("down-failover candidate is not lower bitrate: %w", core.ErrNotAvailable)
-				}
-				return nil
-			}
+			accept = acceptDown
 		}
 		if fo.encoder {
 			accept = func(next *generation) error {
@@ -1729,30 +1852,23 @@ func (m *Manager) failoverWith(ctx context.Context, s *session, observed *genera
 					g, err = nil, perr
 				}
 			}
-			if err == nil && (fo.encoder || (fo.down && !direct)) && !copyCandidate(g) {
+			if err == nil && fo.encoder && !copyCandidate(g) {
 				m.dropGeneration(g)
 				g, err = nil, fmt.Errorf("replacement needs video encoding: %w", core.ErrNotAvailable)
+			}
+			if err == nil {
+				err = acceptDown(g)
+				if err != nil {
+					m.dropGeneration(g)
+					g = nil
+				}
 			}
 			// Byte-range clients retain the original container headers and
 			// offsets. Equal lengths do not prove equal bytes or Cues. A different
 			// release is kept as a remux-switch fallback rather than being served
 			// under the original representation's validators.
 			if err == nil && direct && (g.releaseID() != cur.releaseID() || g.src.Size() != cur.src.Size() || fo.strictDirect) {
-				keep := fallbackGen == nil
-				if !keep && fo.down {
-					// A down-failover's remux fallback only helps at a lower
-					// bitrate, so a lower mismatch supersedes an earlier
-					// non-lower one instead of being dropped behind it. The
-					// existing veto below still rejects a fallback that is
-					// not lower when no lower mismatch was found.
-					bps := replacementBps(g, oldInfo.Duration)
-					fallbackBps := replacementBps(fallbackGen, oldInfo.Duration)
-					if curBps > 0 && bps > 0 && bps < curBps && !(fallbackBps > 0 && fallbackBps < curBps) {
-						m.dropGeneration(fallbackGen)
-						fallbackGen, keep = nil, true
-					}
-				}
-				if keep {
+				if fallbackGen == nil {
 					fallbackGen = g
 				} else {
 					m.dropGeneration(g)
@@ -1762,13 +1878,6 @@ func (m *Manager) failoverWith(ctx context.Context, s *session, observed *genera
 				if s.isKind() && fallbackGen != nil && !fo.down {
 					lastErr = err
 					break
-				}
-			}
-			if err == nil && fo.down {
-				if bps := replacementBps(g, oldInfo.Duration); curBps > 0 && (bps <= 0 || bps >= curBps) {
-					m.dropGeneration(g)
-					g = nil
-					err = fmt.Errorf("down-failover candidate is not lower bitrate: %w", core.ErrNotAvailable)
 				}
 			}
 			if err == nil && preferCopy != nil && !preferCopy(g) {
@@ -1837,13 +1946,6 @@ func (m *Manager) failoverWith(ctx context.Context, s *session, observed *genera
 				return cur, nil
 			}
 		}
-		if g == nil && fallbackGen != nil && fo.down {
-			// A down-failover only helps with a lower-bitrate fallback.
-			if bps := replacementBps(fallbackGen, oldInfo.Duration); curBps > 0 && (bps <= 0 || bps >= curBps) {
-				m.dropGeneration(fallbackGen)
-				fallbackGen = nil
-			}
-		}
 		if g == nil && fallbackGen != nil {
 			// No identical representation: do not splice. Swap anyway and restart
 			// the client as a zero-encode remux at the mapped time.
@@ -1858,6 +1960,16 @@ func (m *Manager) failoverWith(ctx context.Context, s *session, observed *genera
 			fallbackGen = nil
 		}
 		if g == nil {
+			if fo.stillNeeded != nil && !fo.stillNeeded() {
+				return cur, nil
+			}
+			if maxSourceBps > 0 && !direct && ctx.Err() == nil {
+				if err := m.reduceOutputBitrate(ctx, s, cur, int(maxReplacementBps*8/1000)); err == nil {
+					return cur, nil
+				} else if !errors.Is(err, core.ErrNotAvailable) {
+					lastErr = err
+				}
+			}
 			if fo.stopOnFailure && m.trySkipDamagedSegment(ctx, s, cur, at) {
 				return cur, nil
 			}
@@ -1963,6 +2075,13 @@ func (m *Manager) failoverWith(ctx context.Context, s *session, observed *genera
 			}
 		}
 		if err == nil {
+			if fo.down {
+				if adaptive, ok := hls.(core.AdaptiveBitrateCapper); ok && maxReplacementBps > 0 {
+					if _, capErr := adaptive.CapAdaptiveBitrate(m.urlFor(g), int(maxReplacementBps*8/1000)); capErr != nil {
+						log.Debug("adaptive bitrate cap could not be applied after source replacement", "err", capErr)
+					}
+				}
+			}
 			break
 		}
 		changed := false
@@ -2082,7 +2201,8 @@ func (m *Manager) failoverWith(ctx context.Context, s *session, observed *genera
 		m.emitSourceFailover(s, cur, g, false, fo.reason)
 		m.emitEvent("failover", s, nil)
 	}
-	log.Info("failed over", "release", g.res.Release.Name, "size", g.src.Size(), "duration", newInfo.Duration, "remuxSwitch", remuxSwitch)
+	log.Info("failed over", "release", g.res.Release.Name, "size", g.src.Size(), "duration", newInfo.Duration, "remuxSwitch", remuxSwitch,
+		"candidateBps", int64(replacementBps(g, oldInfo.Duration)), "measuredSourceBps", int64(fo.sourceBps), "sourceBudgetBps", int64(maxSourceBps))
 	if remuxSwitch {
 		return g, errRequireRemux
 	}
@@ -2361,9 +2481,7 @@ func (m *Manager) resumeResolution(ctx context.Context, userID int64, key core.R
 func (m *Manager) saveResume(ctx context.Context, s *session, g *generation) {
 	info := g.infoSnapshot()
 	if g.res != nil {
-		if _, _, ok := m.noteReleaseProbeMemory(g.res.Release, g.res.NZB, info); ok && m.deps.OnVersionProbed != nil {
-			m.deps.OnVersionProbed(s.ident.key, g.res.Release)
-		}
+		m.noteSelectionProbe(s.ident.key, g.res, info)
 	}
 	if s.ident.key.IsPluginKey() {
 		m.noteItemProbeMemory(s.ident.key, info)
@@ -2575,7 +2693,13 @@ func (m *Manager) resumeFor(ctx context.Context, user *core.User, key core.Ratin
 	if rp.profileKey != profileKey(prof) || !rememberedOriginalAudioCurrent(prof, rp.originalLanguage, current, rp.Release) || !rememberedCodecCurrent(rp.Release, caps) || !m.resumeSourceAllowed(rp.Release) || !sourceFitsBitrate(rp.Size, rp.Duration, 0, caps.MaxBitrateKbps) {
 		return nil, nil
 	}
-	if probe := m.persistedProbeInfoHash(ctx, user.ID, key, rp.Release.ID, rp.payloadHash()); probe != nil && !rememberedInfoCodecCurrent(probe.info, caps) {
+	probe := m.persistedProbeInfoHash(ctx, user.ID, key, rp.Release.ID, rp.payloadHash())
+	var info core.MediaInfo
+	if probe != nil {
+		info = probe.info
+	}
+	if exceedsRuleHeight(caps.QualityRuleMaxHeight, rp.Release, info) ||
+		(probe != nil && !rememberedInfoCodecCurrent(info, caps)) {
 		return nil, nil
 	}
 	rp.Profile = prof.Name // name from the profile object, not the stored column
@@ -2663,26 +2787,10 @@ func audioExcluded(excluded []core.Release, rel core.Release) bool {
 	return false
 }
 
-func (m *Manager) viewerAudioPreferences(ctx context.Context, u core.User) (audioLanguages []string, preferOriginal bool) {
-	audioLanguages = u.AudioLanguages
-	preferOriginal = u.PreferOriginal
-	if m.deps.ViewerAudioPreferences == nil || u.ID <= 0 {
-		return audioLanguages, preferOriginal
-	}
-	langs, prefOrig := m.deps.ViewerAudioPreferences(ctx, u.ID)
-	if len(langs) > 0 {
-		audioLanguages = langs
-	}
-	if prefOrig {
-		preferOriginal = true
-	}
-	return audioLanguages, preferOriginal
-}
-
 func (m *Manager) effectiveResolveUser(ctx context.Context, u core.User) core.User {
-	langs, prefOrig := m.viewerAudioPreferences(ctx, u)
-	u.AudioLanguages = langs
-	u.PreferOriginal = prefOrig
+	if m.deps.ResolveViewerLanguages != nil {
+		return *m.deps.ResolveViewerLanguages(ctx, &u)
+	}
 	return u
 }
 
@@ -2712,7 +2820,18 @@ func (m *Manager) probedAudioAcceptable(s *session, profile core.QualityProfile,
 	if profileLang == core.ProfileLanguageAny {
 		return true
 	}
-	userAudio, preferOriginal := m.viewerAudioPreferences(m.ctx, s.user)
+	user := m.effectiveResolveUser(m.ctx, s.user)
+	userAudio := user.AudioLanguages
+	preferOriginal := releasepolicy.PrefersOriginalAudio(profile, &user)
+	if preferOriginal && orig != "" {
+		langs := releasepolicy.ProbedAudioLanguages(info.Streams)
+		if len(langs) > 0 {
+			return slices.ContainsFunc(langs, func(lang string) bool {
+				return releaseparse.LanguageMatch(lang, orig) != releaseparse.LanguageNoMatch
+			})
+		}
+		return true
+	}
 	specificProfileLang := profileLang != "" && profileLang != core.ProfileLanguageOriginal && releaseparse.KnownLanguage(profileLang)
 	var wanted []string
 	switch {
@@ -2725,16 +2844,13 @@ func (m *Manager) probedAudioAcceptable(s *session, profile core.QualityProfile,
 		wanted = append(wanted, profile.PreferredLanguages...)
 	case len(userAudio) > 0:
 		wanted = append(wanted, userAudio...)
-	case profileLang == core.ProfileLanguageOriginal || preferOriginal:
+	case preferOriginal:
 		// Preferring original language must not fall back to Catalog.Language.
 	default:
 		if serverLang := strings.TrimSpace(m.config().Catalog.Language); serverLang != "" {
 			base, _, _ := strings.Cut(serverLang, "-")
 			wanted = append(wanted, base)
 		}
-	}
-	if !specificProfileLang && (profileLang == core.ProfileLanguageOriginal || preferOriginal) && orig != "" {
-		wanted = append(wanted, orig)
 	}
 	if len(wanted) == 0 {
 		return true
@@ -2761,13 +2877,15 @@ func (m *Manager) probedAudioAcceptable(s *session, profile core.QualityProfile,
 // A size/runtime estimate is sufficient for admission; never publish that
 // estimate as a container duration or seek boundary.
 func replacementBps(g *generation, duration time.Duration) float64 {
-	if bps := mediaBps(g.infoSnapshot(), g.src.Size()); bps > 0 {
-		return bps
-	}
-	if duration > 0 {
+	info := g.infoSnapshot()
+	duration = cmp.Or(info.Duration, duration)
+	if duration > 0 && g.src.Size() > 0 {
 		return float64(g.src.Size()) / duration.Seconds()
 	}
-	return 0
+	if info.Estimated {
+		return 0
+	}
+	return mediaBps(info, g.src.Size())
 }
 
 func (m *Manager) rememberOpenFailure(s *session, r core.Release, err error) {

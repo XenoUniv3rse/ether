@@ -567,6 +567,10 @@ func (s *Service) sectionOrFilterAllowed(ctx context.Context, v *core.User, titl
 // slice of titles with one set-based membership query per custom filter or
 // collection library instead of one query per title.
 func (s *Service) sectionOrFilterAllowedBatch(ctx context.Context, v *core.User, titles []core.Title, sectionFor func(core.MediaType) (int, bool)) map[core.RatingKey]bool {
+	return s.sectionOrFilterAllowedBatchWithParents(ctx, v, titles, sectionFor, s.d.ParentTitles)
+}
+
+func (s *Service) sectionOrFilterAllowedBatchWithParents(ctx context.Context, v *core.User, titles []core.Title, sectionFor func(core.MediaType) (int, bool), readParents parentTitleReader) map[core.RatingKey]bool {
 	allowed := make(map[core.RatingKey]bool, len(titles))
 	if sectionFor == nil || len(titles) == 0 {
 		return allowed
@@ -662,8 +666,8 @@ func (s *Service) sectionOrFilterAllowedBatch(ctx context.Context, v *core.User,
 	shows := map[core.RatingKey]core.Title{}
 	if len(parentKeys) > 0 {
 		switch {
-		case s.d.ParentTitles != nil:
-			if m, err := s.d.ParentTitles(ctx, parentKeys); err == nil {
+		case readParents != nil:
+			if m, err := readParents(ctx, parentKeys); err == nil {
 				shows = m
 			}
 		case s.d.CachedGetMany != nil:
@@ -955,7 +959,11 @@ func pluginShareCap(movie, television core.Filter) (string, bool) {
 // caller on the in-process walk. Blocked keywords need no push: projected
 // plugin titles never carry Keywords, so they can never match.
 func (s *Service) pluginBrowseQuery(ctx context.Context, v *core.User, lib core.Library, q frontend.ItemQuery) (frontend.ItemQuery, bool) {
-	if v == nil || !pluginQuerySQLReady(q) {
+	shape := q
+	if f := shape.Filter.ReleasedFilters; len(f) == 1 && f[0].Op == ">=" {
+		shape.Filter.ReleasedFilters = nil
+	}
+	if v == nil || !pluginQuerySQLReady(shape) {
 		return q, false
 	}
 	out := q
@@ -1001,6 +1009,10 @@ func pluginCursorPrefix(scope string, q frontend.ItemQuery) string {
 }
 
 func (s *Service) pluginLibraryItems(ctx context.Context, v *core.User, lib core.Library, q frontend.ItemQuery) (core.Page, error) {
+	// filterPluginTitles admits no plugin titles for this predicate.
+	if q.Favorite != nil && *q.Favorite {
+		return core.Page{Items: []core.Title{}, TotalExact: true}, nil
+	}
 	// A studio or performer opened for the first time fills its catalogue
 	// before the page is read (MaybeExpand waits, bounded, on the first page),
 	// so the viewer sees every title the first time.

@@ -8,6 +8,7 @@ Single-file, standard-library-only Python 3.9+ SDK for Ether Plugin Protocol v1 
 - Same declarative `plugin(manifest=..., routes=...)` router shape as `@ether/plugin-sdk` and `sdk/go`.
 - Runs as an HTTP sidecar (`serve(p, mode="http")`) or an outbound WebSocket tunnel sidecar (`serve(p, mode="tunnel")`).
 - Supports Ether Flows custom events (`ctx.ether.events.publish(key, payload, correlation)` -> `POST /ether/plugin-host/events/publish`) and Flow actions (`routes={"flow_action": ...}` with `X-Ether-Idempotency-Key` and `dryRun`).
+- Answers debrid cache hints (`routes={"debrid_cache_hints": ...}` for `POST /ether/debrid/hints`, capability `debrid_cache_hints`; see `docs/plugin-debrid.md`).
 - Includes `RemoteHostClient` for `/ether/plugin-host/*` authenticated with `X-Ether-Plugin-Credential`, plus `create_test_harness`, `create_mock_host_client`, `fixtures`, and starter capability templates.
 
 ## Usage
@@ -115,7 +116,9 @@ Content-kind item dictionaries may include `unavailable: {"code": "no_verified_s
 "detail": "No verified source"}`. Ether keeps these items visible with the reason
 and refuses resolution until a later upsert omits the field. `pattern: "file"`
 with a `path` is reserved for hosted resolvers with `folders: read`; Python
-sidecars cannot access host files or call `folders.hash`. See `docs/plugin-kinds.md`.
+sidecars cannot access host files or call hosted folder operations. Wire types
+for folder pages, hash results and frame references are available in
+`ether_plugin.py`. See `docs/plugin-kinds.md`.
 
 ### Continuing background jobs
 

@@ -3,6 +3,7 @@ package vela
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"math"
 	"strings"
 	"time"
@@ -22,24 +23,107 @@ func (i *instance) refreshOutput(ctx context.Context, id string, s *playSession)
 	}
 	liveChanged := i.refreshLiveWindow(ctx, id, s)
 	hs, ok := i.host.Sessions.TranscodeFor(ctx, id)
-	if !ok || hs == nil {
-		return liveChanged
-	}
 	paths, _ := s.plan["paths"].([]object)
 	before, _ := json.Marshal(object{"paths": paths, "preparation": s.plan["preparation"]})
 	for _, path := range paths {
 		url, _ := path["url"].(string)
-		if path["transport"] != "hls" || url == "" {
+		hls := path["transport"] == "hls"
+		masterURL, query, _ := strings.Cut(url, "?")
+		master := hls && strings.HasSuffix(masterURL, "/master.m3u8")
+		if s.client.Features.AdaptiveHLS && hls && path["id"] == adaptivePathID && path["readiness"] == "on-demand" && url == "" {
+			path["adaptive"] = true
+			delete(path, "adaptiveUnavailable")
+			continue
+		}
+		handoff := master && path["id"] == adaptivePathID && s.plan["selectedPathId"] == adaptivePathID && s.plan["serverHandoff"] == "completed"
+		if handoff {
+			path["url"] = masterURL + "?start=low"
+		}
+		if s.client.Features.AdaptiveHLS && (hls || path["id"] == s.plan["selectedPathId"]) &&
+			(!master || !ok || hs == nil) && path["adaptiveUnavailable"] == nil {
+			reason := "hls_unavailable"
+			switch {
+			case path["original"] == true:
+				reason = "original_selected"
+			case s.plan["media"] == "audio":
+				reason = "audio_only"
+			case master:
+				reason = "adaptive_not_started"
+			case hls && s.rungFor(path) != "":
+				reason = "fixed_quality_selected"
+			case url == "":
+				reason = "adaptive_not_started"
+			case s.channelID != "":
+				reason = "live_timeline"
+			}
+			delete(path, "adaptive")
+			setAdaptiveUnavailable(path, reason, s.accessDevice.Language)
+			if url != "" {
+				slog.Debug("adaptive HLS unavailable", "session", id, "reason", reason)
+			}
+		}
+		if !ok || hs == nil || path["transport"] != "hls" || url == "" {
 			continue
 		}
 		if clock, ok := hs.(interface{ TimelineOrigin() time.Duration }); ok {
 			path["timelineOriginSeconds"] = clock.TimelineOrigin().Seconds()
 		}
+		wasAdaptive := path["adaptive"] == true
+		delete(path, "adaptive")
+		var adaptiveRungs []frontend.HLSRung
+		if s.client.Features.AdaptiveHLS && master {
+			if adaptive, ok := hs.(frontend.AdaptiveHLSSession); ok {
+				adaptiveRungs = adaptive.AdaptiveRungs()
+			}
+			if strings.HasPrefix(query, "maxBitrate=") {
+				adaptiveRungs = frontend.AdaptiveRungsAtOrBelow(adaptiveRungs, pathBitrate(path))
+				if len(adaptiveRungs) == 1 {
+					path["maxBitrate"] = max(pathBitrate(path), adaptiveRungs[0].Bandwidth)
+				}
+			} else if capped, ok := hs.(interface{ AdaptiveBitrateLimit() int }); ok {
+				if limit := capped.AdaptiveBitrateLimit(); limit > 0 {
+					path["maxBitrate"] = limit
+				} else if handoff {
+					delete(path, "maxBitrate")
+				}
+			}
+			if d, ok := hs.(interface{ Decision() frontend.Decision }); ok && d.Decision().Kind == frontend.DecisionTranscode ||
+				len(adaptiveRungs) > 0 && adaptiveRungs[0].ID != "base" {
+				path["kind"] = "transcode"
+			}
+			if len(adaptiveRungs) > 1 {
+				path["adaptive"] = true
+				delete(path, "adaptiveUnavailable")
+			} else {
+				reason := "adaptive_not_started"
+				if diagnostics, ok := hs.(interface{ AdaptiveHLSUnavailable() string }); ok {
+					if code := diagnostics.AdaptiveHLSUnavailable(); code != "" {
+						reason = code
+					}
+				}
+				if strings.HasPrefix(query, "maxBitrate=") {
+					reason = "bitrate_limit"
+				} else if s.channelID != "" {
+					reason = "live_timeline"
+				} else if s.plan["media"] == "audio" {
+					reason = "audio_only"
+				}
+				previous, _ := path["adaptiveUnavailable"].(object)
+				if (wasAdaptive || adaptiveRungs == nil) && previous["reason"] != reason {
+					slog.Debug("adaptive HLS unavailable", "session", id, "reason", reason)
+				}
+				setAdaptiveUnavailable(path, reason, s.accessDevice.Language)
+			}
+		}
 		if ladder, ok := hs.(interface{ Rungs() []frontend.HLSRung }); ok {
 			qualities := []object{}
 			delete(path, "initialRenditionId")
-			base := hlsDirectory(url)
-			for _, r := range ladder.Rungs() {
+			base := hlsDirectory(masterURL)
+			rungs := adaptiveRungs
+			if rungs == nil {
+				rungs = ladder.Rungs()
+			}
+			for _, r := range rungs {
 				if r.Width <= 0 || r.Height <= 0 || r.Bandwidth <= 0 || r.ID == "" || strings.ContainsAny(r.ID, "/\\?#%\r\n") {
 					continue
 				}
@@ -63,8 +147,11 @@ func (i *instance) refreshOutput(ctx context.Context, id string, s *playSession)
 				initial := s.rungFor(path)
 				if initial == "" {
 					initial = "base"
+					if len(adaptiveRungs) == 1 {
+						initial = adaptiveRungs[0].ID
+					}
 				}
-				if r.ID == initial {
+				if r.ID == initial && path["adaptive"] != true {
 					path["initialRenditionId"] = r.ID
 					if path["quality"] != nil {
 						target := qualityTarget(r)

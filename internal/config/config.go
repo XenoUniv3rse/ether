@@ -85,7 +85,7 @@ type Config struct {
 type Frontend struct {
 	// AppearanceRevision survives restarts so Vela clients can reject stale looks.
 	AppearanceRevision uint64 `json:"appearanceRevision,omitempty"`
-	// CapabilitiesRevision survives restarts so Vela clients can observe sign-in method changes.
+	// CapabilitiesRevision survives restarts so Vela clients can observe capability changes.
 	CapabilitiesRevision uint64 `json:"capabilitiesRevision,omitempty"`
 	Enabled              bool   `json:"enabled"`
 	// PublicURL is kept for backwards compatibility with configs that stored a
@@ -245,12 +245,13 @@ type Plex struct {
 	OwnerUsername    string `json:"ownerUsername"`
 	Claimed          bool   `json:"claimed"`
 	// UsePlexMetadata serves cached Plex metadata-provider fields to Plex
-	// apps when a title has a verified plex:// guid. Off by default.
+	// apps when a title has a verified plex:// guid. On by default (nil);
+	// the owner can turn it off.
 	// Other frontends and the owner console keep TMDB. Viewer limits use
 	// the safer (more mature) of the TMDB and Plex content ratings; Plex
 	// apps still display Plex's own rating. Date-added stays the catalogue
 	// release/air date.
-	UsePlexMetadata bool `json:"usePlexMetadata,omitempty"`
+	UsePlexMetadata *bool `json:"usePlexMetadata,omitempty"`
 	// Delivery is how a direct-play media route reaches the client: "relay"
 	// (default) streams the bytes through Ether; "redirect" answers an
 	// eligible TorBox part read with a temporary file URL after admission.
@@ -325,6 +326,12 @@ type UsenetProvider struct {
 	// no warm floor for this provider. Backfill providers are never kept
 	// warm regardless.
 	MinIdle int `json:"minIdle,omitempty"`
+	// Backbone names the article store this account shares with others
+	// (for example "omicron" for Newshosting and its resellers). When one
+	// account on a backbone answers "no such article", the others on it
+	// are counted as having answered the same and are not asked. Case and
+	// surrounding spaces are ignored; empty = the account's own store.
+	Backbone string `json:"backbone,omitempty"`
 }
 
 type Indexer struct {
@@ -332,7 +339,7 @@ type Indexer struct {
 	Name       string `json:"name"`
 	URL        string `json:"url"` // base URL; /api is appended
 	APIKey     string `json:"apiKey"`
-	DailyLimit int    `json:"dailyLimit"` // optional personal API cap per UTC day; 0 = automatic service limits
+	DailyLimit int    `json:"dailyLimit"` // optional cap on searches, caps and grabs per UTC day; 0 = automatic service limits
 	DailyGrabs int    `json:"dailyGrabs"` // optional personal NZB cap per UTC day; 0 = automatic service limits
 	Priority   int    `json:"priority"`
 	Enabled    bool   `json:"enabled"`
@@ -526,6 +533,11 @@ type Resolver struct {
 	HardSubtitles   string `json:"hardSubtitles,omitempty"`
 	HealthRace      int    `json:"healthRace"`      // 0 = ranked checks; >0 = first healthy of bounded concurrent candidates
 	OptimisticStart bool   `json:"optimisticStart"` // return top NZB before background health check
+	// PreferLocalFiles plays a file a source plugin serves from an
+	// owner-granted folder before any downloaded or streamed release,
+	// whatever its quality. Filters, Never-play fallback tiers, the
+	// viewer's audio language and title identity still apply.
+	PreferLocalFiles bool `json:"preferLocalFiles,omitempty"`
 	// CustomFormats are the custom format definitions profiles score
 	// (QualityProfile.CustomFormatScores).
 	CustomFormats      []core.CustomFormat `json:"customFormats,omitempty"`
@@ -1263,6 +1275,7 @@ func decodeOverDefaults(defaults Config, b []byte) (Config, bool, error) {
 		delete(plex, "disableVersionTracking")
 	}
 	stripRetiredLiveTV(file)
+	migratePluginLibraryBudget(file)
 	upgradeClientIdentity(file)
 	upgradeFrontendPublishedAddresses(file)
 	keepStoredAutoUpdate(file)
@@ -1326,6 +1339,9 @@ func decodeStartupConfig(defaults Config, b []byte) (Config, bool, error) {
 		return Config{}, false, fmt.Errorf("invalid data after the top-level value")
 	}
 	dropped := stripFrontendServerNames(file)
+	if migratePluginLibraryBudget(file) {
+		dropped = true
+	}
 	if stripRetiredLiveTV(file) {
 		dropped = true
 	}
@@ -1578,6 +1594,26 @@ func (c *Config) SetCachePolicy(p Cache) {
 	}
 }
 
+// Discard pre-release aggregate plugin caps. The existing media budget already
+// describes the owner's disk allocation and must never be increased on upgrade.
+func migratePluginLibraryBudget(file map[string]any) bool {
+	changed := false
+	plugins, _ := file["plugins"].(map[string]any)
+	limits, _ := plugins["runtimeLimits"].(map[string]any)
+	if _, ok := limits["sharedCacheBytes"]; ok {
+		delete(limits, "sharedCacheBytes")
+		changed = true
+	}
+	for _, key := range []string{"cache", "sharedCache"} {
+		cache, _ := file[key].(map[string]any)
+		if _, ok := cache["pluginLibraryBudgetBytes"]; ok {
+			delete(cache, "pluginLibraryBudgetBytes")
+			changed = true
+		}
+	}
+	return changed
+}
+
 // stripRetiredLiveTV removes global presentation settings; channels own their style.
 func stripRetiredLiveTV(file map[string]any) bool {
 	live, ok := file["liveTV"].(map[string]any)
@@ -1593,3 +1629,7 @@ func stripRetiredLiveTV(file map[string]any) bool {
 	}
 	return dropped
 }
+
+// PlexMetadataOn reports whether Plex apps get Plex's metadata. It is on
+// unless the owner turned it off.
+func (p Plex) PlexMetadataOn() bool { return p.UsePlexMetadata == nil || *p.UsePlexMetadata }

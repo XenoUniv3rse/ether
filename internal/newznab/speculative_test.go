@@ -56,7 +56,7 @@ func TestUnattendedWorkKeepsToItsShare(t *testing.T) {
 		t.Fatalf("playback and promoted warm-ups were refused: %d hits, want 125", hits.Load())
 	}
 	for i := range 130 {
-		_, _ = m.FetchNZB(warm, release(i))
+		_, _ = m.FetchNZB(core.WithSpeculativeGrabs(warm), release(i))
 	}
 	if grabs.Load() != 100 {
 		t.Fatalf("unattended grabs reached the indexer %d times, want 100", grabs.Load())

@@ -1,6 +1,7 @@
 package pluginitems
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -214,7 +215,7 @@ func (s *Service) KeepExistingItems(ctx context.Context, pluginID, kindKey strin
 		}
 	}
 	if _, err := s.db.ExecContext(ctx,
-		`UPDATE plugin_sync_state SET last_error = '', guard_json = '' WHERE plugin_id = ? AND kind_key = ?`,
+		`UPDATE plugin_sync_state SET last_error = '', failure_json = '', guard_json = '' WHERE plugin_id = ? AND kind_key = ?`,
 		pluginID, kindKey); err != nil {
 		return SyncState{}, err
 	}
@@ -415,7 +416,7 @@ func (s *Service) SyncKind(ctx context.Context, pluginID, kindKey string, opts S
 			}
 			_, err = tx.ExecContext(ctx, `
 				UPDATE plugin_sync_state
-				SET cursor = ?, generation = ?, last_ok = ?, last_error = '', guard_json = '', items = ?
+				SET cursor = ?, generation = ?, last_ok = ?, last_error = '', failure_json = '', guard_json = '', items = ?
 				WHERE plugin_id = ? AND kind_key = ?`,
 				nextCursor, int64(s.syncGen.Add(1)), nowEnd, int64(totalAfter), pluginID, kindKey)
 			return err
@@ -423,29 +424,35 @@ func (s *Service) SyncKind(ctx context.Context, pluginID, kindKey string, opts S
 	}
 	if syncErr != nil {
 		var guardErr *DeleteGuardError
+		var failure *plugins.RouteFailure
 		switch {
 		case errors.As(syncErr, &guardErr):
 			guardJSON, _ := json.Marshal(guardErr.State())
 			_, _ = s.db.ExecContext(context.Background(),
-				`UPDATE plugin_sync_state SET last_error = ?, guard_json = ? WHERE plugin_id = ? AND kind_key = ?`,
+				`UPDATE plugin_sync_state SET last_error = ?, failure_json = '', guard_json = ? WHERE plugin_id = ? AND kind_key = ?`,
 				syncErr.Error(), string(guardJSON), pluginID, kindKey)
 			s.noteAttention(context.Background(), pluginID, guardErr.PlainMessage())
 			if job != nil {
-				job.Finish("error", "delete_guard", "", guardErr.PlainMessage())
+				job.Finish("error", "delete_guard", "", guardErr.PlainMessage(), nil)
 			}
 		case errors.Is(syncErr, context.Canceled):
 			if job != nil {
-				job.Finish("canceled", "", "", "Cancelled")
+				job.Finish("canceled", "", "", "Cancelled", nil)
 			}
 		default:
+			var failureJSON string
+			if errors.As(syncErr, &failure) {
+				b, _ := json.Marshal(failure)
+				failureJSON = string(b)
+			}
 			_, _ = s.db.ExecContext(context.Background(),
-				`UPDATE plugin_sync_state SET last_error = ?, guard_json = '' WHERE plugin_id = ? AND kind_key = ?`,
-				syncErr.Error(), pluginID, kindKey)
+				`UPDATE plugin_sync_state SET last_error = ?, failure_json = ?, guard_json = '' WHERE plugin_id = ? AND kind_key = ?`,
+				syncErr.Error(), failureJSON, pluginID, kindKey)
 			if !errors.Is(syncErr, plugins.ErrBusy) && !errors.Is(syncErr, errWriteChunkBudget) {
 				s.noteAttention(context.Background(), pluginID, syncErr.Error())
 			}
 			if job != nil {
-				job.Finish("error", "", "", syncErr.Error())
+				job.Finish("error", "", "", syncErr.Error(), failure)
 			}
 		}
 		s.emitSyncEvent(SyncEvent{
@@ -479,7 +486,7 @@ func (s *Service) SyncKind(ctx context.Context, pluginID, kindKey string, opts S
 	}
 	s.setSyncOutcome(pluginID, kindKey, outcome)
 	if job != nil {
-		job.Finish("done", "", outcome.Summary, "")
+		job.Finish("done", "", outcome.Summary, "", nil)
 	}
 	firstSync := state.LastOK.IsZero() || storedCount == 0
 	s.noteLibraryItems(rec.LibraryID, int64(totalAfter), firstSync)
@@ -593,6 +600,8 @@ func (s *Service) syncViaChanges(ctx context.Context, caller Caller, rec KindRec
 		allUpserts []core.KindItem
 		allDeletes []string
 	)
+	seenChanges := 0
+	checkpointable := true
 	for pageIdx := 0; pageIdx < 1000; pageIdx++ {
 		page, notSupp, retryAfter, err := s.callKindChanges(ctx, caller, rec.PluginID, rec.KindKey, cursor, DefaultChangesLimit)
 		for attempt := 0; err != nil && waitRetryAfter(ctx, retryAfter, attempt); attempt++ {
@@ -609,7 +618,28 @@ func (s *Service) syncViaChanges(ctx context.Context, caller Caller, rec KindRec
 		}
 		allUpserts = append(allUpserts, page.Upserts...)
 		allDeletes = append(allDeletes, page.Deletes...)
-		seenChanges := len(allUpserts) + len(allDeletes)
+		seenChanges += len(page.Upserts) + len(page.Deletes)
+		// Tombstones and ordinary feeds retain whole-pass validation. A producer
+		// may opt in when its page is independently applicable and replayable.
+		checkpointable = checkpointable && page.Checkpoint && len(page.Deletes) == 0
+		if checkpointable && !page.Complete && page.NextCursor != "" {
+			if page.NextCursor == cursor {
+				return res, false, errors.New("pluginitems: checkpoint cursor did not advance")
+			}
+			if err := s.applyChangeUpserts(ctx, rec, allUpserts, &res); err != nil {
+				return res, false, err
+			}
+			// Advance only after every upsert committed. An interruption before
+			// this write replays the page through the idempotent upsert path.
+			_, err := s.runWriteChunk(ctx, func(ctx context.Context, tx *sql.Tx) error {
+				_, err := tx.ExecContext(ctx, "UPDATE plugin_sync_state SET cursor=? WHERE plugin_id=? AND kind_key=?", page.NextCursor, rec.PluginID, rec.KindKey)
+				return err
+			})
+			if err != nil {
+				return res, false, err
+			}
+			allUpserts = nil
+		}
 		s.setSyncProgress(rec.PluginID, rec.KindKey, syncProgress{
 			running:     true,
 			phase:       "syncing",
@@ -626,6 +656,9 @@ func (s *Service) syncViaChanges(ctx context.Context, caller Caller, rec KindRec
 		}
 		if page.Complete || page.NextCursor == "" {
 			break
+		}
+		if pageIdx == 999 {
+			return res, false, errors.New("pluginitems: changes feed exceeded 1000 pages")
 		}
 	}
 
@@ -647,13 +680,8 @@ func (s *Service) syncViaChanges(ctx context.Context, caller Caller, rec KindRec
 		}
 	}
 
-	for start := 0; start < len(allUpserts); start += MaxUpsertBatch {
-		end := min(start+MaxUpsertBatch, len(allUpserts))
-		n, err := s.upsertItemsForSync(ctx, rec.PluginID, rec.KindKey, allUpserts[start:end])
-		if err != nil {
-			return res, false, err
-		}
-		res.Upserted += n
+	if err := s.applyChangeUpserts(ctx, rec, allUpserts, &res); err != nil {
+		return res, false, err
 	}
 
 	for start := 0; start < len(allDeletes); start += MaxUpsertBatch {
@@ -665,6 +693,18 @@ func (s *Service) syncViaChanges(ctx context.Context, caller Caller, rec KindRec
 	}
 
 	return res, false, nil
+}
+
+func (s *Service) applyChangeUpserts(ctx context.Context, rec KindRecord, items []core.KindItem, res *SyncResult) error {
+	for start := 0; start < len(items); start += MaxUpsertBatch {
+		end := min(start+MaxUpsertBatch, len(items))
+		n, err := s.upsertItemsForSync(ctx, rec.PluginID, rec.KindKey, items[start:end])
+		if err != nil {
+			return err
+		}
+		res.Upserted += n
+	}
+	return nil
 }
 
 // syncRewalkDiff re-walks /browse, diffs items by etag, and deletes unpinned,
@@ -1204,9 +1244,14 @@ func (s *Service) walkBrowseTreeStream(ctx context.Context, caller Caller, rec K
 			wg.Wait()
 
 			var nextWave []core.KindItem
+			var canceled error
 			for _, r := range results {
 				if r.retryAfter > maxRetry {
 					maxRetry = r.retryAfter
+				}
+				if errors.Is(r.err, context.Canceled) {
+					canceled = r.err
+					continue
 				}
 				if r.err != nil {
 					return nil, maxRetry, r.err
@@ -1227,6 +1272,9 @@ func (s *Service) walkBrowseTreeStream(ctx context.Context, caller Caller, rec K
 				}
 			}
 
+			if canceled != nil {
+				return nil, maxRetry, canceled
+			}
 			if nextHasChildren && len(nextWave) > 0 {
 				queue = append(queue, levelWave{level: nextLevel, items: nextWave})
 			}
@@ -1307,84 +1355,70 @@ func (s *Service) fetchAllBrowsePagesStream(ctx context.Context, caller Caller, 
 }
 
 func (s *Service) callKindBrowse(ctx context.Context, caller Caller, pluginID, kindKey string, req core.KindBrowseRequest) (core.KindPage, time.Duration, error) {
-	body, err := json.Marshal(req)
-	if err != nil {
-		return core.KindPage{}, 0, err
-	}
-	resp, err := caller.Call(plugins.WithBackgroundCall(ctx), pluginID, plugins.Request{
-		PluginID: pluginID,
-		Method:   http.MethodPost,
-		Path:     fmt.Sprintf("/ether/v1/kinds/%s/browse", kindKey),
-		Headers:  map[string]string{"content-type": "application/json"},
-		Body:     body,
-	})
-	if err != nil {
-		return core.KindPage{}, 0, err
-	}
-	ra := parseRetryAfter(resp)
-	if err := checkPluginResponseError(resp); err != nil {
-		return core.KindPage{}, ra, err
-	}
-	if len(resp.Body) > MaxBrowseBodyBytes {
-		return core.KindPage{}, ra, fmt.Errorf("pluginitems: browse response exceeds %d bytes", MaxBrowseBodyBytes)
-	}
 	var page core.KindPage
-	if len(resp.Body) > 0 {
-		if err := json.Unmarshal(resp.Body, &page); err != nil {
-			return core.KindPage{}, ra, fmt.Errorf("pluginitems: decode browse response: %w", err)
-		}
-	}
-	return page, ra, nil
+	_, retryAfter, err := s.callSyncRoute(ctx, caller, pluginID, kindKey, "browse", req, &page)
+	return page, retryAfter, err
 }
 
 func (s *Service) callKindChanges(ctx context.Context, caller Caller, pluginID, kindKey, cursor string, limit int) (core.KindChangePage, bool, time.Duration, error) {
-	reqPayload := struct {
+	req := struct {
 		Cursor     string `json:"cursor,omitempty"`
 		SinceToken string `json:"since_token,omitempty"`
 		Limit      int    `json:"limit"`
-	}{
-		Cursor:     cursor,
-		SinceToken: cursor,
-		Limit:      limit,
-	}
-	body, err := json.Marshal(reqPayload)
-	if err != nil {
-		return core.KindChangePage{}, false, 0, err
-	}
-	resp, err := caller.Call(plugins.WithBackgroundCall(ctx), pluginID, plugins.Request{
-		PluginID: pluginID,
-		Method:   http.MethodPost,
-		Path:     fmt.Sprintf("/ether/v1/kinds/%s/changes", kindKey),
-		Headers:  map[string]string{"content-type": "application/json"},
-		Body:     body,
-	})
-	if err != nil {
-		return core.KindChangePage{}, false, 0, err
-	}
-	if resp.Status == http.StatusNotFound || resp.Status == http.StatusNotImplemented {
-		return core.KindChangePage{}, true, 0, nil
-	}
-	ra := parseRetryAfter(resp)
-	if err := checkPluginResponseError(resp); err != nil {
-		return core.KindChangePage{}, false, ra, err
-	}
-	if len(resp.Body) > MaxBrowseBodyBytes {
-		return core.KindChangePage{}, false, ra, fmt.Errorf("pluginitems: changes response exceeds %d bytes", MaxBrowseBodyBytes)
-	}
+	}{Cursor: cursor, SinceToken: cursor, Limit: limit}
 	var page core.KindChangePage
-	if len(resp.Body) > 0 {
-		if err := json.Unmarshal(resp.Body, &page); err != nil {
-			return core.KindChangePage{}, false, ra, fmt.Errorf("pluginitems: decode changes response: %w", err)
-		}
-	}
-	return page, false, ra, nil
+	unsupported, retryAfter, err := s.callSyncRoute(ctx, caller, pluginID, kindKey, "changes", req, &page)
+	return page, unsupported, retryAfter, err
 }
 
-type pluginErrorEnvelope struct {
-	Error             string `json:"error"`
-	Message           string `json:"message"`
-	RetryAfterSeconds int    `json:"retryAfterSeconds"`
-	RetryAfterSnake   int    `json:"retry_after_seconds"`
+func (s *Service) callSyncRoute(ctx context.Context, caller Caller, pluginID, kindKey, route string, input, page any) (bool, time.Duration, error) {
+	body, err := json.Marshal(input)
+	if err != nil {
+		return false, 0, err
+	}
+	path := "/ether/v1/kinds/" + kindKey + "/" + route
+	var checked bool
+	check := func(raw json.RawMessage) error {
+		checked = true
+		raw = bytes.TrimSpace(raw)
+		if len(raw) == 0 || len(raw) > MaxBrowseBodyBytes || raw[0] != '{' {
+			return plugins.ErrMalformedResponse
+		}
+		return json.Unmarshal(raw, page)
+	}
+	resp, err := caller.Call(plugins.WithBackgroundCall(ctx), pluginID, plugins.Request{
+		PluginID:      pluginID,
+		Method:        http.MethodPost,
+		Path:          path,
+		Headers:       map[string]string{"content-type": "application/json"},
+		Body:          body,
+		CheckResponse: check,
+	})
+	// A runtime crash can cancel the sync job as the runtime is closed.
+	// Preserve the diagnosed failure from the call that triggered that close.
+	if ctx.Err() != nil && resp.Failure == nil {
+		return false, 0, ctx.Err()
+	}
+	if err != nil && resp.Failure == nil {
+		return false, 0, err
+	}
+	// An optional changes feed can declare itself unavailable. A 404 with a
+	// reason is a failed feed, so its diagnostic must reach the owner.
+	if route == "changes" && (resp.Status == http.StatusNotImplemented ||
+		resp.Status == http.StatusNotFound && len(bytes.TrimSpace(resp.Body)) == 0) {
+		return true, 0, nil
+	}
+	failure := resp.Failure
+	if failure == nil {
+		failure = plugins.DiagnoseRouteResponse(path, resp, s.now(), nil)
+	}
+	if failure != nil {
+		return false, time.Duration(failure.RetryAfterSeconds) * time.Second, failure
+	}
+	if !checked && check(resp.Body) != nil {
+		return false, 0, &plugins.RouteFailure{Code: "malformed", Route: path, Status: resp.Status}
+	}
+	return false, 0, nil
 }
 
 // maxSyncRetryWait and maxSyncRetries bound how long one sync waits out a
@@ -1409,38 +1443,6 @@ func waitRetryAfter(ctx context.Context, ra time.Duration, attempt int) bool {
 	case <-t.C:
 		return true
 	}
-}
-
-func checkPluginResponseError(resp plugins.Response) error {
-	if resp.Status >= 200 && resp.Status < 300 {
-		return nil
-	}
-	var env pluginErrorEnvelope
-	_ = json.Unmarshal(resp.Body, &env)
-	if env.Error != "" || env.Message != "" {
-		return fmt.Errorf("pluginitems: plugin route status %d (%s): %s", resp.Status, env.Error, env.Message)
-	}
-	return fmt.Errorf("pluginitems: plugin route status %d", resp.Status)
-}
-
-func parseRetryAfter(resp plugins.Response) time.Duration {
-	for k, v := range resp.Headers {
-		if strings.EqualFold(k, "Retry-After") {
-			if secs, err := strconv.Atoi(strings.TrimSpace(v)); err == nil && secs > 0 {
-				return time.Duration(secs) * time.Second
-			}
-		}
-	}
-	var env pluginErrorEnvelope
-	if err := json.Unmarshal(resp.Body, &env); err == nil {
-		if env.RetryAfterSeconds > 0 {
-			return time.Duration(env.RetryAfterSeconds) * time.Second
-		}
-		if env.RetryAfterSnake > 0 {
-			return time.Duration(env.RetryAfterSnake) * time.Second
-		}
-	}
-	return 0
 }
 
 // StartKindSync starts (or restarts) a background pull-sync worker for a kind

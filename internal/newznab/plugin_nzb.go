@@ -297,7 +297,7 @@ func (m *Manager) RequestPluginNZB(ctx context.Context, ref string, hint core.Re
 		}
 		// Keep classifications used for scheduling and fallback, without
 		// returning indexer errors, identifiers, or URLs to a plugin.
-		for _, public := range []error{context.Canceled, context.DeadlineExceeded, core.ErrBudgetExhausted, core.ErrReleaseRejected} {
+		for _, public := range []error{context.Canceled, context.DeadlineExceeded, core.ErrBudgetExhausted, core.ErrForegroundOnly, core.ErrReleaseRejected} {
 			if errors.Is(err, public) {
 				return nil, "", public
 			}

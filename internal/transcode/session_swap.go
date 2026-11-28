@@ -82,6 +82,10 @@ func (s *Session) swapInput(ctx context.Context, inputURL string, info core.Medi
 	}
 	before := s.recoveryBufferLocked()
 	previousInput := s.input
+	stageDecision := s.decision
+	if inputURL != previousInput {
+		stageDecision = adaptToContract(s.audioMatchBaseDecision(), s.info, info, s.container, s.contract)
+	}
 	s.mu.Unlock()
 	if delay := time.Until(retryAt); !retryAt.IsZero() && delay > 0 {
 		timer := time.NewTimer(delay)
@@ -109,7 +113,7 @@ func (s *Session) swapInput(ctx context.Context, inputURL string, info core.Medi
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	info = s.m.stageExternalSubtitles(s.dir, info, "")
+	info = s.m.stageExternalSubtitle(s.dir, info, "", stageDecision)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
@@ -191,9 +195,12 @@ func (s *Session) swapInput(ctx context.Context, inputURL string, info core.Medi
 		}
 	}
 	if s.input != inputURL {
+		s.sourceLimitKbps, s.sourceLimitPicture = 0, nil
 		s.textSubtitleStreams = nil // The durable source identity belongs to the original input.
 		s.textSubtitleSource = ""
 		s.healTimestamps = false // clock evidence belongs to the sampled input
+		s.adaptiveCopyAligned = false
+		s.adaptiveCopyDecodeLead = 0
 		// SwapInput has no replacement-credential parameter. Never carry an
 		// old provider's credentials onto an independently resolved URL.
 		s.inputHeaders = nil
@@ -230,6 +237,134 @@ func (s *Session) swapInput(ctx context.Context, inputURL string, info core.Medi
 	s.seekRampSeg = seg
 	s.log.Info("input swapped", "at", at, "segment", seg)
 	return s.startRunForLocked(seg, false, "input swap")
+}
+
+// AdaptiveBitrateLimit reports the active master's peak ceiling in bits per second.
+func (s *Session) AdaptiveBitrateLimit() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.adaptiveMaxKbps * 1000
+}
+
+func (s *Session) CapAdaptiveBitrate(input string, kbps int) (core.Decision, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.capAdaptiveBitrateLocked(input, kbps)
+}
+
+func (s *Session) capAdaptiveBitrateLocked(input string, kbps int) (core.Decision, error) {
+	if !s.adaptiveHLS || s.closed || s.liveInput || s.input != input || kbps <= 0 {
+		return core.Decision{}, core.ErrNotAvailable
+	}
+	previousCap, previousExclude := s.adaptiveMaxKbps, s.adaptiveExcludeCopy
+	if previousCap > 0 {
+		kbps = min(kbps, previousCap)
+	}
+	s.adaptiveMaxKbps = kbps
+	// The encoded variants still share the published clock after a swap.
+	// Copied packets from a new release need new random-access evidence.
+	s.adaptiveExcludeCopy = len(s.rungs) > 0 && s.rungs[0].decision.VideoCopy && !s.adaptiveCopyAligned
+	rungs, _ := s.adaptiveRungsLocked()
+	if len(rungs) == 0 {
+		s.adaptiveMaxKbps, s.adaptiveExcludeCopy = previousCap, previousExclude
+		return core.Decision{}, core.ErrNotAvailable
+	}
+	if s.cur != nil && !s.rungWithinAdaptiveCapLocked(s.cur.track) {
+		s.stopRunForLocked("adaptive bitrate cap")
+	}
+	return s.rungs[s.rungTrack(rungs[0].ID)].decision, nil
+}
+
+// ReduceOutputBitrate keeps the delivered picture and segment clock. A
+// different source is still preferable when the original input is too slow.
+func (s *Session) ReduceOutputBitrate(ctx context.Context, input string, limitKbps int) (core.Decision, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return core.Decision{}, err
+	}
+	if s.closed || s.inputFailed || s.sessionExhausted || s.input != input || s.liveInput ||
+		s.videoTranscodingOff() || s.headerRecovering || s.retryRecovering ||
+		(s.container != ContainerFMP4 && s.container != ContainerMPEGTS && s.container != ContainerMatroska) ||
+		(s.sourceLimitKbps > 0 && limitKbps >= s.sourceLimitKbps) {
+		return core.Decision{}, core.ErrNotAvailable
+	}
+	if s.adaptiveHLS {
+		if s.adaptiveMaxKbps > 0 && limitKbps >= s.adaptiveMaxKbps {
+			return core.Decision{}, core.ErrNotAvailable
+		}
+		return s.capAdaptiveBitrateLocked(input, limitKbps)
+	}
+	// Bypass the contract's copy branch: this path requires an encoder
+	// capable of reproducing the delivered format.
+	picture := s.sourceLimitPicture
+	if picture == nil {
+		picture = s.contract
+	}
+	if picture == nil {
+		var ok bool
+		picture, ok = contractOf(s.info, s.decision)
+		if !ok {
+			return core.Decision{}, core.ErrNotAvailable
+		}
+	}
+	contract := *picture
+	contract.copied = false
+	if err := contract.check(s.info, s.m.feat); err != nil {
+		return core.Decision{}, err
+	}
+	d := sourceLimitedDecision(s.decision, s.info, &contract)
+	window := s.hlsPeakWindowLocked()
+	rate := boundedHLSRate(s.info, d, rateControl{}, limitKbps, window)
+	if rate.TargetKbps < 300 || (!s.decision.VideoCopy && videoBitrate(s.info, d) <= rate.TargetKbps) {
+		return core.Decision{}, core.ErrNotAvailable
+	}
+	b := s.recoveryBufferLocked()
+	at := b.Position
+	if b.ReadyUntil > at && b.ReadyUntil < s.info.Duration {
+		at = b.ReadyUntil
+	}
+	seg := s.segForOffsetLocked(at)
+	if s.total > 0 && seg >= s.total || s.segFailures[seg] >= maxSegmentFailures {
+		return core.Decision{}, core.ErrNotAvailable
+	}
+	s.stopRunForLocked("source bitrate cap")
+	for t, done := range s.done {
+		for n := range done {
+			if n >= seg {
+				_ = os.Remove(s.trackSegPath(t, n))
+				delete(done, n)
+			}
+		}
+	}
+	prevLimit, prevPicture := s.sourceLimitKbps, s.sourceLimitPicture
+	s.sourceLimitKbps, s.sourceLimitPicture = limitKbps, &contract
+	if s.container == ContainerMPEGTS {
+		if s.copyDiscontinuities == nil {
+			s.copyDiscontinuities = make(map[int]bool)
+		}
+		s.copyDiscontinuities[seg] = true
+		s.playlist = nil
+	}
+	if s.resumeWarm != nil {
+		s.resumeWarm.encoder.seal()
+		s.resumeWarm = nil
+	}
+	s.endSeg = -1
+	d.BitrateKbps = rate.TargetKbps + decisionAudioKbps(s.info, d)
+	if err := s.startRunForLocked(seg, false, "source bitrate cap"); err != nil {
+		s.sourceLimitKbps, s.sourceLimitPicture = prevLimit, prevPicture
+		return core.Decision{}, err
+	}
+	return d, nil
+}
+
+func sourceLimitedDecision(d core.Decision, info core.MediaInfo, picture *videoContract) core.Decision {
+	d.Kind, d.VideoCopy, d.VideoCodec = core.DecisionTranscode, false, picture.codec
+	d.MaxHeight = picture.height
+	d.StripDolbyVision, d.ToneMap = false, picture.tonemaps(info.Video())
+	d.Enhancement = core.VideoEnhancement{}
+	return d
 }
 
 func (s *Session) segForOffsetLocked(at time.Duration) int {

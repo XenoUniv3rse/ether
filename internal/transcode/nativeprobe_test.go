@@ -591,14 +591,14 @@ func TestProbeTrailerFillsTailChaptersAndTrackBitrates(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(m.Chapters) != 0 {
+	if len(m.Chapters) != 0 || m.ChaptersProbed {
 		t.Fatalf("tail chapters read on the Play path: %+v", m.Chapters)
 	}
 	if !ProbeTrailer(context.Background(), bytes.NewReader(data), int64(len(data)), m) {
 		t.Fatal("ProbeTrailer reported no change")
 	}
 	want := []core.Chapter{{ID: 5, Title: "Intro", End: 20 * time.Second}, {ID: 6, Title: "Credits", Start: 20 * time.Second, End: time.Minute}}
-	if len(m.Chapters) != 2 || m.Chapters[0] != want[0] || m.Chapters[1] != want[1] {
+	if !m.ChaptersProbed || len(m.Chapters) != 2 || m.Chapters[0] != want[0] || m.Chapters[1] != want[1] {
 		t.Errorf("chapters = %+v", m.Chapters)
 	}
 	if m.Streams[0].BitrateKbps != 4800 || m.Streams[1].BitrateKbps != 640 {

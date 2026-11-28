@@ -690,7 +690,7 @@ func (i *instance) rememberLoaded(key string, gen int64, v *frontend.Viewer, loa
 
 func (i *instance) personalFolder(r *http.Request, v *frontend.Viewer, shelf personalShelf) map[string]any {
 	item := map[string]any{
-		"Id": shelf.wireID, "Name": shelf.name, "Type": "CollectionFolder", "CollectionType": shelf.kind,
+		"Id": shelf.wireID, "Name": shelf.name, "Type": "CollectionFolder", "CollectionType": i.collectionTypeDTO(shelf.kind),
 		"IsFolder": true, "ServerId": i.info.ID, "SortName": shelf.name, "DisplayPreferencesId": shelf.wireID,
 		"CanDelete": false, "CanDownload": false, "ProviderIds": map[string]string{}, "ChildCount": personalChildCount(shelf),
 	}
@@ -1408,9 +1408,16 @@ func (i *instance) recommendations(w http.ResponseWriter, r *http.Request, want 
 	} else {
 		shelves = i.loadPersonalShelves(r.Context(), v, device(r))
 	}
-	categories := make([]any, 0, len(shelves))
+	type category struct {
+		shelf  personalShelf
+		titles []frontend.Title
+	}
+	selected := make([]category, 0, min(max(categoryLimit, 0), len(shelves)))
+	var allTitles, unranked []frontend.Title
+	var keys, genreKeys []frontend.RatingKey
+	seen := map[frontend.RatingKey]bool{}
 	for _, shelf := range shelves {
-		if len(categories) >= categoryLimit {
+		if len(selected) >= categoryLimit {
 			break
 		}
 		titles := make([]frontend.Title, 0, len(shelf.titles))
@@ -1428,35 +1435,53 @@ func (i *instance) recommendations(w http.ResponseWriter, r *http.Request, want 
 		if itemLimit >= 0 && len(titles) > itemLimit {
 			titles = titles[:itemLimit]
 		}
-		i.notePersonalDelivery(r, v, shelf, titles)
-		keys := make([]frontend.RatingKey, len(titles))
-		for n, title := range titles {
-			keys[n] = title.Key
+		selected = append(selected, category{shelf, titles})
+		if !shelf.row.RankedTop10 {
+			unranked = append(unranked, titles...)
 		}
-		states, err := i.host.Experience.UserData(r.Context(), v, keys)
-		if err != nil {
-			http.Error(w, "Unavailable", http.StatusServiceUnavailable)
-			return
-		}
-		// Genre wire IDs still use per-title authorization, but load the page's
-		// current policy/genre facts once instead of two cold reads per title.
-		if facets, ok := i.host.Experience.(interface {
-			PrefetchNamedFacetIDs(context.Context, *frontend.Viewer, []frontend.RatingKey, string) error
-		}); ok && (fieldSet(r)["genres"] || !jellyfinListFile(r)) {
-			var genreKeys []frontend.RatingKey
-			for _, title := range titles {
-				if len(title.Genres) > 0 {
-					genreKeys = append(genreKeys, title.Key)
-				}
+		for _, title := range titles {
+			if seen[title.Key] {
+				continue
 			}
-			// Prefetch is optional; a failure keeps the scalar authorization path.
-			_ = facets.PrefetchNamedFacetIDs(r.Context(), v, genreKeys, "genre")
+			seen[title.Key] = true
+			keys = append(keys, title.Key)
+			allTitles = append(allTitles, title)
+			if len(title.Genres) > 0 {
+				genreKeys = append(genreKeys, title.Key)
+			}
 		}
+	}
+	if len(selected) == 0 {
+		jsonReply(w, []any{})
+		return
+	}
+	states, err := i.host.Experience.UserData(r.Context(), v, keys)
+	if err != nil {
+		http.Error(w, "Unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	if facets, ok := i.host.Experience.(interface {
+		PrefetchNamedFacetIDs(context.Context, *frontend.Viewer, []frontend.RatingKey, string) error
+	}); ok && len(genreKeys) > 0 && (fieldSet(r)["genres"] || !jellyfinListFile(r)) {
+		_ = facets.PrefetchNamedFacetIDs(r.Context(), v, genreKeys, "genre")
+	}
+	r = i.noteLocalUnplayedCounts(r, v, allTitles)
+	if i.protocol == "jellyfin" {
+		i.prefetchSeriesFacts(r, v, allTitles)
+	}
+	i.prefetchParentArtwork(r, allTitles)
+	ratingFacts := i.pageRatingFacts(r, v, allTitles)
+	i.primeTitleLibraries(r, v, allTitles)
+	unrankedImages := i.gridImagesFor(r, unranked)
+	categories := make([]any, 0, len(selected))
+	for _, category := range selected {
+		shelf, titles := category.shelf, category.titles
+		i.notePersonalDelivery(r, v, shelf, titles)
 		items := make([]any, 0, len(titles))
-		images := i.gridImagesFor(withRankedRow(r, shelf.row.RankedTop10, titles, 0), titles)
-		i.prefetchParentArtwork(r, titles)
-		ratingFacts := i.pageRatingFacts(r, v, titles)
-		i.primeTitleLibraries(r, v, titles)
+		images := unrankedImages
+		if shelf.row.RankedTop10 {
+			images = i.gridImagesFor(withRankedRow(r, true, titles, 0), titles)
+		}
 		for _, title := range titles {
 			item := i.itemDTO(title, states[title.Key])
 			for key, value := range images[title.Key] {

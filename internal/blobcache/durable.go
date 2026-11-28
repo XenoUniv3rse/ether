@@ -18,8 +18,71 @@ import (
 	"github.com/braedonsaunders/ether/internal/segcache"
 )
 
-// DurableMaxBytes is the fixed per-plugin quota for saved blobs.
-const DurableMaxBytes int64 = 1 << 30
+// Defaults for each plugin's saved blobs and the volume's quota ceiling.
+const (
+	DurableDefaultBytes       int64 = 1 << 30
+	DurableDefaultFiles             = 10000
+	DurableDefaultFreePercent       = 25
+	// Charge a block per file when setting the file-count ceiling, including
+	// on volumes that do not report a finite number of free inodes.
+	durableFileBudgetBytes = 4096
+)
+
+type DurableQuota struct {
+	Bytes int64 `json:"quotaBytes"`
+	Files int   `json:"quotaFiles"`
+}
+
+type DurableUsage struct {
+	Bytes int64 `json:"bytes"`
+	Files int   `json:"files"`
+	DurableQuota
+}
+
+type DurableCapacity struct {
+	FreeBytes   int64 `json:"freeBytes"`
+	FreePercent int   `json:"freePercent"`
+	DurableQuota
+}
+
+func (c DurableCapacity) Effective(configured DurableQuota) DurableQuota {
+	if configured.Bytes <= 0 {
+		configured.Bytes = DurableDefaultBytes
+	}
+	if configured.Files <= 0 {
+		configured.Files = DurableDefaultFiles
+	}
+	return DurableQuota{Bytes: min(configured.Bytes, c.Bytes), Files: min(configured.Files, c.Files)}
+}
+
+func (s *DurableStore) Capacity(percent int) (DurableCapacity, error) {
+	if percent <= 0 {
+		percent = DurableDefaultFreePercent
+	}
+	percent = min(percent, 100)
+	out := DurableCapacity{
+		FreePercent:  percent,
+		DurableQuota: DurableQuota{Bytes: DurableDefaultBytes, Files: DurableDefaultFiles},
+	}
+	if s == nil || s.disk == nil {
+		return out, ErrDiskUsageUnavailable
+	}
+	_, free, err := s.disk()
+	if err != nil {
+		return out, err
+	}
+	free = max(0, free)
+	share := free/100*int64(percent) + free%100*int64(percent)/100
+	out.FreeBytes = free
+	out.Bytes = max(out.Bytes, share)
+	out.Files = max(out.Files, int(min(share/durableFileBudgetBytes, int64(int(^uint(0)>>1)))))
+	return out, nil
+}
+
+var ErrDiskUsageUnavailable = errors.New("blobcache: volume free space unavailable")
+
+// DurablePolicy returns the current settings for one plugin.
+type DurablePolicy func(plugin string) (configured DurableQuota, freePercent int)
 
 // DurableRefPrefix distinguishes saved references from evictable cache refs.
 const DurableRefPrefix = "durable:"
@@ -37,12 +100,11 @@ func ParseDurableRef(ref Ref) (string, error) {
 const (
 	stagingMaxBytes    = 512 << 20
 	stagingMaxRequests = 64
-	durableMaxFiles    = 10000
 )
 
 type storedUpload struct {
-	plugin, path, hash, name, mime string
-	size                           int64
+	plugin, path, name, mime string
+	stat                     Stat
 }
 
 type durableUsage struct {
@@ -53,8 +115,9 @@ type durableUsage struct {
 // DurableStore keeps request-scoped uploads and plugin-owned durable blobs
 // outside the library cache's eviction and TTL machinery.
 type DurableStore struct {
-	root string
-	disk segcache.DiskUsageFunc
+	root   string
+	disk   segcache.DiskUsageFunc
+	policy DurablePolicy
 
 	mu       sync.Mutex
 	uploads  map[Ref]storedUpload
@@ -64,13 +127,16 @@ type DurableStore struct {
 }
 
 // OpenDurableStore opens the store and discards staging files from the previous process.
-func OpenDurableStore(root string, disk segcache.DiskUsageFunc) (*DurableStore, error) {
+func OpenDurableStore(root string, disk segcache.DiskUsageFunc, policy DurablePolicy) (*DurableStore, error) {
 	// Upload files have no lifetime across process restarts.
 	if err := os.RemoveAll(filepath.Join(root, "uploads")); err != nil {
 		return nil, err
 	}
+	if err := os.MkdirAll(root, 0o700); err != nil {
+		return nil, err
+	}
 	return &DurableStore{
-		root: root, disk: disk, uploads: make(map[Ref]storedUpload),
+		root: root, disk: disk, policy: policy, uploads: make(map[Ref]storedUpload),
 		usage: make(map[string]durableUsage),
 	}, nil
 }
@@ -106,14 +172,14 @@ func (s *DurableStore) BeginUpload(plugin string, size int64) (*Upload, error) {
 	return &Upload{store: s, plugin: plugin, remaining: size, reserved: size}, nil
 }
 
-func (u *Upload) Stage(ctx context.Context, name, mime string, src io.Reader) (Ref, int64, error) {
+func (u *Upload) Stage(ctx context.Context, name, mime string, src io.Reader) (Ref, Stat, error) {
 	dir := filepath.Join(u.store.root, "uploads")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return "", 0, err
+		return "", Stat{}, err
 	}
 	f, err := os.CreateTemp(dir, "upload-")
 	if err != nil {
-		return "", 0, err
+		return "", Stat{}, err
 	}
 	keep := false
 	defer func() {
@@ -122,29 +188,27 @@ func (u *Upload) Stage(ctx context.Context, name, mime string, src io.Reader) (R
 			_ = os.Remove(f.Name())
 		}
 	}()
-	hash := sha256.New()
-	size, err := io.Copy(io.MultiWriter(f, hash), &boundedUploadReader{ctx: ctx, r: src, left: u.remaining})
+	stat, err := copyWithDigests(f, &boundedUploadReader{ctx: ctx, r: src, left: u.remaining})
 	if err != nil {
-		return "", 0, err
+		return "", Stat{}, err
 	}
 	if err := f.Close(); err != nil {
-		return "", 0, err
+		return "", Stat{}, err
 	}
 	var id [sha256.Size]byte
 	if _, err := rand.Read(id[:]); err != nil {
-		return "", 0, err
+		return "", Stat{}, err
 	}
 	ref := Ref("blob:" + hex.EncodeToString(id[:]))
 	u.store.mu.Lock()
 	u.store.uploads[ref] = storedUpload{
-		plugin: u.plugin, path: f.Name(), hash: hex.EncodeToString(hash.Sum(nil)),
-		name: name, mime: mime, size: size,
+		plugin: u.plugin, path: f.Name(), name: name, mime: mime, stat: stat,
 	}
 	u.store.mu.Unlock()
-	u.remaining -= size
+	u.remaining -= stat.Size
 	u.refs = append(u.refs, ref)
 	keep = true
-	return ref, size, nil
+	return ref, stat, nil
 }
 
 type boundedUploadReader struct {
@@ -189,7 +253,7 @@ func (s *DurableStore) Open(plugin string, ref Ref) (ByteSource, error) {
 		if err != nil {
 			return nil, err
 		}
-		return &fileSource{f: f, size: u.size, name: u.name, mime: u.mime}, nil
+		return &stagedSource{fileSource: &fileSource{f: f, size: u.stat.Size, name: u.name, mime: u.mime}, stat: u.stat}, nil
 	}
 	hash, err := ParseDurableRef(ref)
 	if err != nil {
@@ -237,6 +301,26 @@ func (s *DurableStore) usageLocked(plugin string) (durableUsage, error) {
 	return usage, nil
 }
 
+func (s *DurableStore) Quota(plugin string) DurableQuota {
+	var configured DurableQuota
+	var percent int
+	if s.policy != nil {
+		configured, percent = s.policy(plugin)
+	}
+	capacity, _ := s.Capacity(percent)
+	return capacity.Effective(configured)
+}
+
+func (s *DurableStore) Usage(plugin string) (DurableUsage, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	usage, err := s.usageLocked(plugin)
+	if err != nil {
+		return DurableUsage{}, err
+	}
+	return DurableUsage{Bytes: usage.bytes, Files: usage.files, DurableQuota: s.Quota(plugin)}, nil
+}
+
 // Promote hard-links a staged upload into the durable namespace and returns
 // its permanent content-addressed reference. The staged reference retains its
 // request lifetime, including when multiple parts have identical contents.
@@ -247,10 +331,11 @@ func (s *DurableStore) Promote(plugin string, ref Ref) (Ref, error) {
 	if !ok || u.plugin != plugin {
 		return "", ErrNotFound
 	}
-	out := Ref(DurableRefPrefix + u.hash)
+	out := Ref(DurableRefPrefix + u.stat.SHA256)
 	dir := s.pluginDir(plugin)
-	target := filepath.Join(dir, u.hash)
+	target := filepath.Join(dir, u.stat.SHA256)
 	if _, err := os.Stat(target); err == nil {
+		rememberStat(u.stat)
 		return out, nil
 	} else if !errors.Is(err, fs.ErrNotExist) {
 		return "", err
@@ -259,7 +344,8 @@ func (s *DurableStore) Promote(plugin string, ref Ref) (Ref, error) {
 	if err != nil {
 		return "", err
 	}
-	if u.size > DurableMaxBytes-usage.bytes || usage.files >= durableMaxFiles {
+	quota := s.Quota(plugin)
+	if u.stat.Size > quota.Bytes-usage.bytes || usage.files >= quota.Files {
 		return "", ErrQuotaFull
 	}
 	if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -277,7 +363,8 @@ func (s *DurableStore) Promote(plugin string, ref Ref) (Ref, error) {
 	if err := os.Link(u.path, target); err != nil {
 		return "", err
 	}
-	usage.bytes += u.size
+	rememberStat(u.stat)
+	usage.bytes += u.stat.Size
 	usage.files++
 	s.usage[plugin] = usage
 	// The link is already committed. Keep accounting consistent even on

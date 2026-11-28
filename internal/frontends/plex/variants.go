@@ -194,6 +194,13 @@ func (s *Server) mediaForVariants(ctx context.Context, pr *Request, t *frontend.
 		vs = cloneVariants(resolved)
 	}
 
+	// A retired Auto session's probe belongs to its own release. Once the
+	// resolver has probed a different Auto pick, render that pick's tracks.
+	if !live && !pin.frozen && frontend.IsAutoVersionSelector(playedSelector) &&
+		probedRelease != "" && vs[0].Release.ID != probedRelease &&
+		!vs[0].Info.Estimated && vs[0].Info.HasPlayableMedia() {
+		probed, probedRelease = frontend.MediaInfo{Estimated: true}, ""
+	}
 	alignRelease := probedRelease
 	if pin.frozen && pin.admittedRelease != "" {
 		alignRelease = pin.admittedRelease
@@ -250,7 +257,7 @@ func (s *Server) mediaForVariants(ctx context.Context, pr *Request, t *frontend.
 		// otherwise its estimate. A probe is drawn on the played version
 		// only, never on a different explicit pick.
 		played := probedReady && i == playedIdx
-		warmAuto := playedIdx < 0 && probedReady && v.Auto
+		warmAuto := playedIdx < 0 && probedReady && v.Auto && (v.Info.Estimated || !v.Info.HasPlayableMedia())
 		variant := v
 		if played || warmAuto {
 			keepReleaseBitrate := probed.Video() != nil && !probeDisagrees(v.Info, probed) && v.Info.BitrateKbps > 0 && (probedRelease != "" || autoDuplicatesRow || probed.BitrateKbps <= 0)
@@ -273,8 +280,11 @@ func (s *Server) mediaForVariants(ctx context.Context, pr *Request, t *frontend.
 		{
 			info := s.withCachedSidecars(ctx, pr.User, t, variant.Info)
 			info, partSelection := subtitleInfoForPart(info, stored, m.Part[0].ID)
-			sel := resolveSelection(partSelection, info)
-			sel = s.preferredSelection(ctx, pr.User, t.Key, info, t.Language, sel)
+			var active *frontend.PlaySession
+			if played {
+				active = ps
+			}
+			sel := s.mediaTrackSelection(ctx, pr, t, active, info, partSelection)
 			m.Part[0].Stream = s.issuedStreams(t.Key, ik, m.ID, info, sel, pr.User, pr)
 		}
 		// The admitted version stays selected while its probe is pending,

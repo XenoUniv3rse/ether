@@ -226,6 +226,24 @@ func (s *session) noteReadPos(off int64, n int, now time.Time, grace time.Durati
 	return warmup
 }
 
+// noteSpeedSeek drops measurements from the abandoned output playhead,
+// including buffered seeks that need no new byte range.
+func (s *session) noteSpeedSeek(at time.Time, grace time.Duration) {
+	s.speedMu.Lock()
+	defer s.speedMu.Unlock()
+	if !at.After(s.speedSeekAt) {
+		return
+	}
+	s.speedSeekAt = at
+	if until := at.Add(grace); until.After(s.graceUntil) {
+		s.graceUntil = until
+	}
+	s.gracePeakBuffer = 0
+	s.slowChecks = 0
+	s.speed.reset()
+	s.delivery.reset()
+}
+
 // resetSpeed restarts speed evidence for a new generation.
 func (s *session) resetSpeed(now time.Time, grace time.Duration) {
 	s.speedMu.Lock()
@@ -365,6 +383,12 @@ func (m *Manager) checkSpeed(s *session, now time.Time) {
 	if hasHLS && hls != nil && m.checkEncoderSpeed(s, g, hls, time.Now()) {
 		return // encoder-bound output is not evidence against the provider
 	}
+	var recovery core.RecoveryBuffer
+	seekSource, tracksSeeks := hls.(core.RecoveryBufferSource)
+	if tracksSeeks {
+		recovery = seekSource.RecoveryBuffer()
+		s.noteSpeedSeek(recovery.SeekAt, m.opts.SpeedGrace)
+	}
 	m.noteTimelineStall(s, now)
 	m.observeTimelineStall(s, now)
 	if downs+misses >= m.opts.MaxDownFailovers {
@@ -388,7 +412,7 @@ func (m *Manager) checkSpeed(s *session, now time.Time) {
 		return
 	}
 
-	_, buffer, bufferKnown := m.repairHorizon(g, core.RepairEvent{Offset: -1})
+	_, buffer, bufferKnown := m.recoveryHorizon(g, core.RepairEvent{Offset: -1}, recovery)
 	var (
 		srcDelivery core.SourceDelivery
 		hasDelivery bool
@@ -419,6 +443,7 @@ func (m *Manager) checkSpeed(s *session, now time.Time) {
 	grace := now.Before(s.graceUntil) || age < m.opts.SpeedGrace
 	// A source that stopped delivering bytes cannot produce completed-read
 	// samples. A live blocked read is evidence; a quiet/paused encoder is not.
+	sourceBps := fetch
 	if blocked >= 6*time.Second {
 		fetch, ok = 0, true
 	}
@@ -525,7 +550,7 @@ func (m *Manager) checkSpeed(s *session, now time.Time) {
 	attrs := []any{
 		"session", s.id, "key", s.ident.key, "release", g.res.Release.Name,
 		"fetchBps", int64(fetch), "sourceReadBps", int64(readBps), "mediaBps", int64(media), "at", at,
-		"buffer", buffer, "bufferKnown", bufferKnown, "runway", bufferRunway(buffer, ratio), "blockedRead", blocked,
+		"buffer", buffer, "bufferKnown", bufferKnown, "runway", bufferRunway(buffer, ratio), "blockedRead", blocked, "seekAt", recovery.SeekAt,
 	}
 	if hasDelivery {
 		attrs = append(attrs,
@@ -536,7 +561,11 @@ func (m *Manager) checkSpeed(s *session, now time.Time) {
 		)
 	}
 	m.log.Warn("source slower than playback; down-failing over", attrs...)
-	m.backgroundDownFailover(s, g, at)
+	var stillNeeded func() bool
+	if tracksSeeks {
+		stillNeeded = func() bool { return seekSource.RecoveryBuffer().SeekAt == recovery.SeekAt }
+	}
+	m.backgroundDownFailover(s, g, at, sourceBps, stillNeeded)
 }
 
 // noteFailedDownFailover bounds unsuccessful adaptation attempts without
@@ -560,7 +589,7 @@ func (m *Manager) noteFailedDownFailover(s *session, tried []string) {
 }
 
 // backgroundDownFailover runs a speed-triggered failover off the monitor.
-func (m *Manager) backgroundDownFailover(s *session, g *generation, at time.Duration) {
+func (m *Manager) backgroundDownFailover(s *session, g *generation, at time.Duration, sourceBps float64, stillNeeded func() bool) {
 	if !g.backgroundFailover.CompareAndSwap(false, true) {
 		return
 	}
@@ -585,9 +614,34 @@ func (m *Manager) backgroundDownFailover(s *session, g *generation, at time.Dura
 		if _, err := m.failoverWith(ctx, s, g, at, failoverOpts{
 			reason:       "source slower than playback",
 			followPlayer: true, preserveBuffer: true,
-			down: true,
+			down: true, sourceBps: sourceBps, stillNeeded: stillNeeded,
 		}); err != nil && ctx.Err() == nil && !errors.Is(err, errRequireRemux) {
 			m.log.Error("down-failover failed", "session", s.id, "err", err)
 		}
 	}()
+}
+
+// A lower output rate can help delivery, but the encoder still reads the
+// original input at its original bitrate. Keep the generation and its pin.
+func (m *Manager) reduceOutputBitrate(ctx context.Context, s *session, g *generation, limitKbps int) error {
+	hls, ok := m.deps.HLSLookup(s.id)
+	if !ok {
+		return core.ErrNotAvailable
+	}
+	reducer, ok := hls.(core.OutputBitrateReducer)
+	if !ok {
+		return core.ErrNotAvailable
+	}
+	d, err := reducer.ReduceOutputBitrate(ctx, m.urlFor(g), limitKbps)
+	if err != nil {
+		return err
+	}
+	s.mu.Lock()
+	s.downFailovers++
+	s.mu.Unlock()
+	m.SetDecision(s.id, d)
+	s.resetSpeed(m.now(), m.opts.SpeedGrace)
+	m.log.Warn("no release fits source budget; reducing encoded output bitrate on the current source",
+		"session", s.id, "inputBps", int64(replacementBps(g, 0)), "outputBudgetKbps", limitKbps)
+	return nil
 }

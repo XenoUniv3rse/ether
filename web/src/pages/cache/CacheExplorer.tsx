@@ -10,7 +10,7 @@ import {
   TableRow,
   cn,
 } from "@braedonsaunders/appkit-ui";
-import { ChevronLeft, ChevronRight, Film, Pin, Search } from "lucide-react";
+import { ChevronLeft, ChevronRight, File, Film, Pin, Search } from "lucide-react";
 import { useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { ToolbarPicker } from "../../components/ToolbarPicker";
@@ -24,7 +24,9 @@ import { causeDescription, causeLabel, pinLabel, statusPills } from "./reasons";
 const FILTERS = localized(
   () =>
     [
-      ["all", t("All releases")],
+      ["all", t("All media")],
+      ["releases", t("Releases")],
+      ["files", t("Library files")],
       ["watching", t("Playing now")],
       ["paused", t("Paused")],
       ["unfinished", t("Unfinished")],
@@ -50,6 +52,8 @@ function matchesFilter(r: CacheSnapshot["releases"][number], filter: string): bo
   const codes = new Set((r.reason?.causes ?? []).map((c) => c.code));
   const pins = new Set(r.Pins ?? []);
   switch (filter) {
+    case "files":
+      return false;
     case "watching":
       return codes.has("playing") || pins.has("playback:live");
     case "paused":
@@ -111,17 +115,95 @@ export function friendlySubtitle(r: CacheSnapshot["releases"][number]): string {
   return r.reason?.ratingKey ? t("Cached stream") : t("Unmatched release");
 }
 
+type LibraryFile = NonNullable<CacheSnapshot["files"]>[number];
+type ClearFile = (libraryKey: string, ref: string, name: string) => void;
+
+function LibraryFileRow({
+  file,
+  compact,
+  busy,
+  onClearFile,
+}: {
+  file: LibraryFile;
+  compact: boolean;
+  busy: boolean;
+  onClearFile: ClearFile;
+}) {
+  const title = file.name || file.ref;
+  const library = file.library || file.libraryKey;
+  const identity = (
+    <div className="min-w-0">
+      <p className="truncate text-sm font-medium" title={title}>
+        {title}
+      </p>
+      <p className="truncate text-xs text-fg-subtle" title={library}>
+        {library}
+      </p>
+    </div>
+  );
+  const state = file.inUse ? t("In use") : t("Reclaimable");
+  const action = (
+    <Button
+      variant="ghost"
+      size="sm"
+      disabled={busy || file.inUse}
+      aria-label={t("Clear {name}", { name: title })}
+      onClick={() => onClearFile(file.libraryKey, file.ref, title)}
+    >
+      {t("Clear")}
+    </Button>
+  );
+  if (compact)
+    return (
+      <div role="listitem" className="space-y-2 p-4">
+        {identity}
+        <div className="flex items-center justify-between text-xs">
+          <span className="font-medium tabular-nums">{formatBytes(file.size)}</span>
+          <span className="text-fg-muted">{dateLabel(file.lastOpen)}</span>
+        </div>
+        <div className="flex items-center justify-between">
+          <Badge variant="secondary">{state}</Badge>
+          {action}
+        </div>
+      </div>
+    );
+  return (
+    <TableRow>
+      <TableCell className="max-w-0">
+        <div className="flex items-center gap-3">
+          <div className="shrink-0 rounded-lg bg-primary/10 p-2 text-primary">
+            <File size={16} />
+          </div>
+          {identity}
+        </div>
+      </TableCell>
+      <TableCell className="text-xs font-medium tabular-nums">{formatBytes(file.size)}</TableCell>
+      <TableCell className="hidden text-xs md:table-cell">
+        {t("Library file")} · {state}
+      </TableCell>
+      <TableCell className="hidden text-xs text-fg-muted lg:table-cell">
+        {dateLabel(file.lastOpen)}
+      </TableCell>
+      <TableCell>
+        <div className="flex justify-end">{action}</div>
+      </TableCell>
+    </TableRow>
+  );
+}
+
 export function CacheExplorer({
   snapshot,
   policyName = "",
   busy,
   onPin,
   onClear,
+  onClearFile,
 }: {
   snapshot?: CacheSnapshot;
   policyName?: string;
   busy: boolean;
   onPin: (id: string, pinned: boolean) => void;
+  onClearFile: ClearFile;
   onClear: (id: string, title: string, block: boolean) => Promise<boolean> | void;
 }) {
   const [search, setSearch] = useState("");
@@ -147,13 +229,24 @@ export function CacheExplorer({
     ? allReleases.find((r) => r.ReleaseID === selectedId)
     : undefined;
 
-  const rows = allReleases.filter(
-    (r) =>
-      matchesFilter(r, filter) &&
-      `${r.Title} ${r.ReleaseID} ${r.reason?.file ?? ""} ${r.reason?.source ?? ""}`
-        .toLowerCase()
-        .includes(search.toLowerCase()),
-  );
+  const query = search.trim().toLowerCase();
+  const releases = allReleases
+    .filter(
+      (r) =>
+        matchesFilter(r, filter) &&
+        `${r.Title} ${r.ReleaseID} ${r.reason?.file ?? ""} ${r.reason?.source ?? ""}`
+          .toLowerCase()
+          .includes(query),
+    )
+    .map((release) => ({ release, used: Date.parse(release.LastUsed) || 0 }));
+  const files = (snapshot?.files ?? [])
+    .filter(
+      (file) =>
+        (filter === "all" || filter === "files" || (filter === "reclaimable" && !file.inUse)) &&
+        `${file.name} ${file.ref} ${file.library} ${file.libraryKey}`.toLowerCase().includes(query),
+    )
+    .map((file) => ({ file, used: Date.parse(file.lastOpen) || 0 }));
+  const rows = [...releases, ...files].sort((a, b) => b.used - a.used);
   const pages = Math.max(1, Math.ceil(rows.length / 20)),
     current = Math.min(page, pages - 1);
   const pageRows = rows.slice(current * 20, (current + 1) * 20);
@@ -171,8 +264,8 @@ export function CacheExplorer({
               className="pointer-events-none absolute left-3 top-3 text-fg-subtle"
             />
             <Input
-              aria-label={t("Search cached releases")}
-              placeholder={t("Search titles, files, or release IDs…")}
+              aria-label={t("Search cached media")}
+              placeholder={t("Search titles, files, libraries, or IDs…")}
               className="pl-9"
               value={search}
               onChange={(e) => {
@@ -182,7 +275,7 @@ export function CacheExplorer({
             />
           </div>
           <ToolbarPicker
-            ariaLabel={t("Filter cached releases")}
+            ariaLabel={t("Filter cached media")}
             value={filter}
             onChange={(next) => {
               setFilter(next);
@@ -194,14 +287,25 @@ export function CacheExplorer({
             menuClassName="w-52"
           />
           <span className="text-xs text-fg-muted">
-            {tn(rows.length, "{count} release", "{count} releases")}
+            {tn(rows.length, "{count} item", "{count} items")}
           </span>
         </div>
         <div className="app-scroll min-h-0 flex-1 overflow-auto">
           {compact ? (
             pageRows.length ? (
               <div role="list" className="divide-y divide-border">
-                {pageRows.map((r) => {
+                {pageRows.map((entry) => {
+                  if ("file" in entry)
+                    return (
+                      <LibraryFileRow
+                        key={`${entry.file.libraryKey}/${entry.file.ref}`}
+                        file={entry.file}
+                        compact={compact}
+                        busy={busy}
+                        onClearFile={onClearFile}
+                      />
+                    );
+                  const r = entry.release;
                   const selected = selectedId === r.ReleaseID;
                   const name = friendlyName(r);
                   const subtitle = friendlySubtitle(r);
@@ -318,17 +422,28 @@ export function CacheExplorer({
             >
               <TableHeader>
                 <TableRow>
-                  <TableHead>{t("Title / release")}</TableHead>
+                  <TableHead>{t("Title / file")}</TableHead>
                   <TableHead className="w-32 lg:w-36">{t("Retained")}</TableHead>
                   <TableHead className="hidden md:table-cell md:w-[24%]">{t("Reason")}</TableHead>
                   <TableHead className="hidden lg:table-cell lg:w-24">{t("Last used")}</TableHead>
                   <TableHead className="w-56">
-                    <span className="sr-only">{t("Owner pin")}</span>
+                    <span className="sr-only">{t("Actions")}</span>
                   </TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {pageRows.map((r) => {
+                {pageRows.map((entry) => {
+                  if ("file" in entry)
+                    return (
+                      <LibraryFileRow
+                        key={`${entry.file.libraryKey}/${entry.file.ref}`}
+                        file={entry.file}
+                        compact={compact}
+                        busy={busy}
+                        onClearFile={onClearFile}
+                      />
+                    );
+                  const r = entry.release;
                   const selected = selectedId === r.ReleaseID;
                   const name = friendlyName(r);
                   const subtitle = friendlySubtitle(r);
@@ -472,13 +587,13 @@ export function CacheExplorer({
                 {!snapshot
                   ? t("Loading cache…")
                   : search || filter !== "all"
-                    ? t("No matching releases")
+                    ? t("No matching media")
                     : t("No retained media yet")}
               </p>
               <p className="mt-2 text-xs text-fg-muted">
                 {search || filter !== "all"
                   ? t("Try a different search or filter.")
-                  : t("Cached movies and episodes appear here as viewers watch.")}
+                  : t("Retained streams and library files appear here.")}
               </p>
             </div>
           )}
@@ -491,7 +606,7 @@ export function CacheExplorer({
                   end: Math.min((current + 1) * 20, rows.length),
                   total: rows.length,
                 })
-              : tn(0, "{count} release", "{count} releases")}{" "}
+              : tn(0, "{count} item", "{count} items")}{" "}
             · {t("Pins protect data from eviction")}
           </p>
           <div className="flex items-center gap-1">

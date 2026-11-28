@@ -30,15 +30,11 @@ func (i *instance) profileData(r *http.Request, v *frontend.Viewer) (map[string]
 	}
 	p := defaults()
 	raw, err := i.host.Preferences.Get(r.Context(), v, "profile", profileKey)
-	if errors.Is(err, frontend.ErrPreferencesNotFound) {
-		p["_updated_at"] = time.Now().UTC().Format(time.RFC3339Nano)
-		raw, _ = json.Marshal(p)
-		if err = i.host.Preferences.Put(r.Context(), v, "profile", profileKey, raw); err != nil {
+	if err == nil {
+		if err = json.Unmarshal(raw, &p); err != nil {
 			return nil, err
 		}
-	} else if err != nil {
-		return nil, err
-	} else if err = json.Unmarshal(raw, &p); err != nil {
+	} else if !errors.Is(err, frontend.ErrPreferencesNotFound) {
 		return nil, err
 	}
 	if _, ok := i.host.Preferences.(frontend.VersionedPreferences); ok {
@@ -166,7 +162,10 @@ func (i *instance) patchProfile(w http.ResponseWriter, r *http.Request) {
 	}
 	preferences := defaults()
 	raw, err := i.host.Preferences.Get(r.Context(), v, "profile", profileKey)
-	if err != nil || json.Unmarshal(raw, &preferences) != nil {
+	if err == nil {
+		err = json.Unmarshal(raw, &preferences)
+	}
+	if err != nil && !errors.Is(err, frontend.ErrPreferencesNotFound) {
 		http.Error(w, "Unavailable", 503)
 		return
 	}

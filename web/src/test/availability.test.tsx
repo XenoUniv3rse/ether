@@ -102,11 +102,9 @@ describe("New release modes", () => {
       expect(screen.getAllByRole("radio", { name: /When they can play/ })[0]!).toBeVisible();
     });
     expect(screen.getAllByText("Recommended")[0]).toBeVisible();
-    expect(
-      screen.getByText(
-        "A new movie appears once Ether finds a release you can play with your release settings. Ether checks for you automatically.",
-      ),
-    ).toBeVisible();
+    expect(screen.getAllByRole("radio", { name: /When they can play/ })[0]).toHaveTextContent(
+      "Ether watches for new releases that match your settings.",
+    );
     expect(
       screen.queryByRole("switch", { name: "Look for playable releases" }),
     ).not.toBeInTheDocument();
@@ -149,17 +147,15 @@ describe("New release modes", () => {
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 
-  it("edits TV Shows release mode independently with episode copy", async () => {
+  it("edits TV Shows release mode independently", async () => {
     const { fake } = renderApp("/services/tmdb");
     await settleUi(() => {
       expect(screen.getAllByRole("radio", { name: /When they can play/ })[0]!).toBeVisible();
     });
     expect(screen.getAllByRole("radio", { name: /On digital release/ })).toHaveLength(1);
-    expect(
-      screen.getByText(
-        "A new episode or show appears once Ether finds a release you can play with your release settings. Ether checks for you automatically.",
-      ),
-    ).toBeVisible();
+    expect(screen.getAllByRole("radio", { name: /When they can play/ })[1]).toHaveTextContent(
+      "Ether watches for new releases that match your settings.",
+    );
     fireEvent.click(screen.getAllByRole("radio", { name: /Right away/ })[1]!);
     const bar = screen.getByRole("region", { name: "Unsaved changes" });
     fireEvent.click(within(bar).getByRole("button", { name: "Save changes" }));

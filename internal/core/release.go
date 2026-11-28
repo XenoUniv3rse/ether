@@ -166,10 +166,25 @@ type Release struct {
 	// importing it on request), so every open costs the source real work
 	// (additive). See OpensOnDemand.
 	StreamOnDemand bool `json:"streamOnDemand,omitempty"`
+	// AddonSubtitles contains sealed references for sidecars offered with this file.
+	AddonSubtitles []AddonSubtitle `json:"addonSubtitles,omitempty"`
 	// IndexerSubtitles are the subtitle languages the indexer lists for the
 	// release (the Newznab "subs" attribute), as release language names.
 	// Empty means the indexer said nothing, not that there are none (additive).
 	IndexerSubtitles []string `json:"indexerSubtitles,omitempty"`
+}
+
+const AddonSubtitleSealContext = "addon-stream-subtitle"
+
+type AddonSubtitle struct {
+	Language  string `json:"language"`
+	Reference string `json:"reference"`
+	Forced    bool   `json:"forced,omitempty"`
+}
+
+// IsAddonHTTPStream reports whether an add-on supplies the opened HTTP file.
+func (r Release) IsAddonHTTPStream() bool {
+	return r.Protocol == ProtocolHTTP && r.StreamOrigin != "" && r.StreamProvider == ""
 }
 
 // KnownFileCount returns the torrent's known file count from FileCount or
@@ -415,6 +430,7 @@ func (r Release) ProbeContentKeys() []string {
 // Resolution is the resolver's answer for a title and client: the winning
 // release, already health-checked, plus fallbacks for mid-stream failover.
 type Resolution struct {
+	AutoSelectionReason AutoSelectionReason `json:"autoSelectionReason,omitempty"`
 	// VersionSelector is the configured slot that this concrete release fulfilled.
 	VersionSelector string `json:"versionSelector,omitempty"`
 	// HealthVerified means the complete volume sample passed, rather than an

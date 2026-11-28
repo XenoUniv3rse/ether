@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"slices"
 	"sort"
 	"strings"
 	"sync/atomic"
@@ -23,6 +24,7 @@ import (
 )
 
 func init() {
+	store.Register("plugins", 13, `ALTER TABLE plugins_calls ADD COLUMN failure_json TEXT NOT NULL DEFAULT '';`)
 	store.Register("plugins", 12, `ALTER TABLE plugins_installed ADD COLUMN replace_libraries INTEGER NOT NULL DEFAULT 0;`)
 	// v11: per-plugin KV usage, kept with every KV write, so a put checks
 	// its quota from one row instead of summing every value it stored
@@ -244,16 +246,17 @@ type JournalEntry struct {
 
 // CallRecord is one inspector entry (redacted, capped per plugin).
 type CallRecord struct {
-	ID       int64     `json:"id"`
-	Plugin   string    `json:"plugin"`
-	Route    string    `json:"route"`
-	Method   string    `json:"method"`
-	Status   int       `json:"status"`
-	MS       int64     `json:"ms"`
-	Error    string    `json:"error,omitempty"`
-	Request  string    `json:"request,omitempty"`
-	Response string    `json:"response,omitempty"`
-	Created  time.Time `json:"created"`
+	ID       int64         `json:"id"`
+	Plugin   string        `json:"plugin"`
+	Route    string        `json:"route"`
+	Method   string        `json:"method"`
+	Status   int           `json:"status"`
+	MS       int64         `json:"ms"`
+	Error    string        `json:"error,omitempty"`
+	Failure  *RouteFailure `json:"failure,omitempty"`
+	Request  string        `json:"request,omitempty"`
+	Response string        `json:"response,omitempty"`
+	Created  time.Time     `json:"created"`
 }
 
 type storage struct {
@@ -263,20 +266,27 @@ type storage struct {
 	settingsRevision atomic.Uint64
 }
 
-func (s *storage) record(ctx context.Context, id string) (Record, error) {
-	var r Record
-	var man, updMan, updFiles string
-	var en, ver, sh, au, replace int
-	var inst, upd int64
-	var rolesOff string
-	err := s.db.QueryRowContext(ctx, `SELECT id,name,version,kind,manifest,source_kind,source_url,enabled,verified,shadow,auto_update,update_version,update_manifest,update_files,prev_version,installed_at,updated_at,roles_off,replace_libraries FROM plugins_installed WHERE id=?`, id).
-		Scan(&r.ID, &r.Name, &r.Version, &r.Kind, &man, &r.SourceKind, &r.SourceURL, &en, &ver, &sh, &au, &r.UpdateVersion, &updMan, &updFiles, &r.PrevVersion, &inst, &upd, &rolesOff, &replace)
-	if errors.Is(err, sql.ErrNoRows) {
-		return Record{}, ErrNotFound
-	}
-	if err != nil {
-		return Record{}, err
-	}
+const pluginRecordCols = `id,name,version,kind,manifest,source_kind,source_url,enabled,verified,shadow,auto_update,update_version,update_manifest,update_files,prev_version,installed_at,updated_at,roles_off,replace_libraries`
+
+type rawPluginRow struct {
+	r                Record
+	man              string
+	updMan, updFiles string
+	en, ver, sh, au  int
+	replace          int
+	inst, upd        int64
+	rolesOff         string
+}
+
+func scanRawPluginRow(s interface{ Scan(...any) error }, extra ...any) (rawPluginRow, error) {
+	var row rawPluginRow
+	columns := []any{&row.r.ID, &row.r.Name, &row.r.Version, &row.r.Kind, &row.man, &row.r.SourceKind, &row.r.SourceURL, &row.en, &row.ver, &row.sh, &row.au, &row.r.UpdateVersion, &row.updMan, &row.updFiles, &row.r.PrevVersion, &row.inst, &row.upd, &row.rolesOff, &row.replace}
+	err := s.Scan(append(columns, extra...)...)
+	return row, err
+}
+
+func (s *storage) finalizeRecord(ctx context.Context, row rawPluginRow) (Record, error) {
+	r := row.r
 	if r.SourceURL != "" {
 		plain, legacy, err := config.OpenWith(s.sealer, r.SourceURL, "plugins_installed", "source_url", r.ID)
 		if err != nil {
@@ -295,46 +305,85 @@ func (s *storage) record(ctx context.Context, id string) (Record, error) {
 		}
 		r.SourceURL = plain
 	}
-	r.ManifestRaw = json.RawMessage(man)
-	if err := json.Unmarshal([]byte(man), &r.Manifest); err != nil {
-		return Record{}, fmt.Errorf("plugins: stored manifest for %s: %w", id, err)
+	r.ManifestRaw = json.RawMessage(row.man)
+	if err := json.Unmarshal([]byte(row.man), &r.Manifest); err != nil {
+		return Record{}, fmt.Errorf("plugins: stored manifest for %s: %w", r.ID, err)
 	}
 	// A record's manifest id is its record id: a Stremio add-on keeps its
 	// own id in the stored document but is installed per configuration.
 	r.Manifest.ID = r.ID
-	for _, c := range strings.Split(rolesOff, ",") {
+	for _, c := range strings.Split(row.rolesOff, ",") {
 		if c = strings.TrimSpace(c); c != "" {
 			r.RolesOff = append(r.RolesOff, Capability(c))
 		}
 	}
 	r.Manifest.rolesOff = r.RolesOff
-	r.Enabled, r.Verified, r.Shadow, r.AutoUpdate = en == 1, ver == 1, sh == 1, au == 1
-	r.updateManifest, r.updateFiles = updMan, updFiles
-	r.ReplaceLibraries = replace == 1
-	r.InstalledAt, r.UpdatedAt = time.Unix(inst, 0).UTC(), time.Unix(upd, 0).UTC()
+	r.Enabled, r.Verified, r.Shadow, r.AutoUpdate = row.en == 1, row.ver == 1, row.sh == 1, row.au == 1
+	r.updateManifest, r.updateFiles = row.updMan, row.updFiles
+	r.ReplaceLibraries = row.replace == 1
+	r.InstalledAt, r.UpdatedAt = time.Unix(row.inst, 0).UTC(), time.Unix(row.upd, 0).UTC()
 	return r, nil
 }
 
+func (s *storage) record(ctx context.Context, id string) (Record, error) {
+	row, err := scanRawPluginRow(s.db.QueryRowContext(ctx, `SELECT `+pluginRecordCols+` FROM plugins_installed WHERE id=?`, id))
+	if errors.Is(err, sql.ErrNoRows) {
+		return Record{}, ErrNotFound
+	}
+	if err != nil {
+		return Record{}, err
+	}
+	return s.finalizeRecord(ctx, row)
+}
+
+// hostAccess reads the record and current grants in the same statement
+// so a host call always sees one authorization snapshot.
+func (s *storage) hostAccess(ctx context.Context, id string) (Record, Grants, error) {
+	var raw string
+	row, err := scanRawPluginRow(s.db.QueryRowContext(ctx, `SELECT `+pluginRecordCols+`, COALESCE(
+   (SELECT grants FROM plugins_grants WHERE plugin=plugins_installed.id), '{}')
+   FROM plugins_installed WHERE id=?`, id), &raw)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Record{}, Grants{}, ErrNotFound
+	}
+	if err != nil {
+		return Record{}, Grants{}, err
+	}
+	r, err := s.finalizeRecord(ctx, row)
+	if err != nil {
+		return Record{}, Grants{}, err
+	}
+	if !r.Enabled {
+		return Record{}, Grants{}, ErrDisabled
+	}
+	var g Grants
+	return r, g, json.Unmarshal([]byte(raw), &g)
+}
+
 func (s *storage) list(ctx context.Context) ([]Record, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id FROM plugins_installed ORDER BY name,id`)
+	rows, err := s.db.QueryContext(ctx, `SELECT `+pluginRecordCols+` FROM plugins_installed ORDER BY name,id`)
 	if err != nil {
 		return nil, err
 	}
-	var ids []string
+	var raws []rawPluginRow
 	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
+		row, err := scanRawPluginRow(rows)
+		if err != nil {
 			rows.Close()
 			return nil, err
 		}
-		ids = append(ids, id)
+		raws = append(raws, row)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
 	}
 	if err := rows.Close(); err != nil {
 		return nil, err
 	}
-	out := make([]Record, 0, len(ids))
-	for _, id := range ids {
-		r, err := s.record(ctx, id)
+	out := make([]Record, 0, len(raws))
+	for _, row := range raws {
+		r, err := s.finalizeRecord(ctx, row)
 		if err != nil {
 			return nil, err
 		}
@@ -343,13 +392,21 @@ func (s *storage) list(ctx context.Context) ([]Record, error) {
 	return out, nil
 }
 
+type sqlExecutor interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+}
+
 func (s *storage) upsert(ctx context.Context, r Record) error {
+	return s.upsertRecord(ctx, s.db, r)
+}
+
+func (s *storage) upsertRecord(ctx context.Context, db sqlExecutor, r Record) error {
 	now := s.now().Unix()
 	sealedURL, err := config.SealWith(s.sealer, r.SourceURL, "plugins_installed", "source_url", r.ID)
 	if err != nil {
 		return err
 	}
-	_, err = s.db.ExecContext(ctx, `INSERT INTO plugins_installed(id,name,version,kind,manifest,source_kind,source_url,enabled,verified,shadow,auto_update,update_version,update_manifest,update_files,prev_version,installed_at,updated_at,replace_libraries) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+	_, err = db.ExecContext(ctx, `INSERT INTO plugins_installed(id,name,version,kind,manifest,source_kind,source_url,enabled,verified,shadow,auto_update,update_version,update_manifest,update_files,prev_version,installed_at,updated_at,replace_libraries) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 ON CONFLICT(id) DO UPDATE SET name=excluded.name,version=excluded.version,kind=excluded.kind,manifest=excluded.manifest,source_kind=excluded.source_kind,source_url=excluded.source_url,enabled=excluded.enabled,verified=excluded.verified,shadow=excluded.shadow,auto_update=excluded.auto_update,update_version=excluded.update_version,update_manifest=excluded.update_manifest,update_files=excluded.update_files,prev_version=excluded.prev_version,updated_at=excluded.updated_at,replace_libraries=excluded.replace_libraries`,
 		r.ID, r.Name, r.Version, r.Kind, string(r.ManifestRaw), r.SourceKind, sealedURL,
 		bi(r.Enabled), bi(r.Verified), bi(r.Shadow), bi(r.AutoUpdate), r.UpdateVersion, r.updateManifest, r.updateFiles, r.PrevVersion, timeOr(r.InstalledAt, now), now, bi(r.ReplaceLibraries))
@@ -430,8 +487,12 @@ func (s *storage) hasFile(ctx context.Context, plugin, version, path string) boo
 }
 
 func (s *storage) grants(ctx context.Context, plugin string) (Grants, error) {
+	return readGrants(ctx, s.db, plugin)
+}
+
+func readGrants(ctx context.Context, db rowQueryer, plugin string) (Grants, error) {
 	var raw string
-	err := s.db.QueryRowContext(ctx, `SELECT grants FROM plugins_grants WHERE plugin=?`, plugin).Scan(&raw)
+	err := db.QueryRowContext(ctx, `SELECT grants FROM plugins_grants WHERE plugin=?`, plugin).Scan(&raw)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Grants{}, nil
 	}
@@ -442,13 +503,52 @@ func (s *storage) grants(ctx context.Context, plugin string) (Grants, error) {
 	return g, json.Unmarshal([]byte(raw), &g)
 }
 
-func (s *storage) putGrants(ctx context.Context, plugin string, g Grants) error {
+// saveGrants commits a folder change and its private outbox entry together.
+func (s *storage) saveGrants(ctx context.Context, r Record, g Grants, previous Manifest, install bool) (int, error) {
 	raw, err := json.Marshal(g)
 	if err != nil {
-		return err
+		return 0, err
 	}
-	_, err = s.db.ExecContext(ctx, `INSERT INTO plugins_grants(plugin,grants) VALUES(?,?) ON CONFLICT(plugin) DO UPDATE SET grants=excluded.grants`, plugin, string(raw))
-	return err
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+	if err := store.LockKey(ctx, store.DialectOf(s.db), tx, "plugins.grants:"+r.ID); err != nil {
+		return 0, err
+	}
+
+	var change *Event
+	if r.Enabled && declaresFolderRead(r.Manifest) && r.Manifest.HasCapability(CapEvents) && !g.revoked("events") {
+		if meta := r.Manifest.Ether.Contributes.Events; meta != nil && slices.Contains(meta.Subscribe, EventPluginFoldersChanged) {
+			old, err := readGrants(ctx, tx, r.ID)
+			if err != nil {
+				return 0, err
+			}
+			roots := folderRoots(r.Manifest, g)
+			if !slices.Equal(folderRoots(previous, old), roots) || old.revoked("folders") != g.revoked("folders") {
+				payload, _ := json.Marshal(FolderRootsChangedPayload{Roots: roots})
+				change = &Event{ID: newEventID(), Name: EventPluginFoldersChanged, At: s.now(), Payload: payload}
+			}
+		}
+	}
+
+	if _, err := tx.ExecContext(ctx, `INSERT INTO plugins_grants(plugin,grants) VALUES(?,?) ON CONFLICT(plugin) DO UPDATE SET grants=excluded.grants`, r.ID, string(raw)); err != nil {
+		return 0, err
+	}
+	if install {
+		if err := s.upsertRecord(ctx, tx, r); err != nil {
+			return 0, err
+		}
+	}
+	var dropped int
+	if change != nil {
+		dropped, err = s.enqueueWith(ctx, tx, r.ID, *change)
+		if err != nil {
+			return 0, err
+		}
+	}
+	return dropped, tx.Commit()
 }
 
 type settingsRow struct {
@@ -1049,8 +1149,16 @@ func capRing(ctx context.Context, db *sql.DB, table, plugin string, cap int) {
 }
 
 func (s *storage) addCall(ctx context.Context, c CallRecord) {
-	_, _ = s.db.ExecContext(ctx, `INSERT INTO plugins_calls(plugin,route,method,status,ms,error,request,response,created) VALUES(?,?,?,?,?,?,?,?,?)`,
-		c.Plugin, c.Route, c.Method, c.Status, c.MS, c.Error, truncate(c.Request, 8192), truncate(c.Response, 8192), s.now().Unix())
+	if c.Created.IsZero() {
+		c.Created = s.now()
+	}
+	var failure string
+	if c.Failure != nil {
+		b, _ := json.Marshal(c.Failure)
+		failure = string(b)
+	}
+	_, _ = s.db.ExecContext(ctx, `INSERT INTO plugins_calls(plugin,route,method,status,ms,error,request,response,created,failure_json) VALUES(?,?,?,?,?,?,?,?,?,?)`,
+		c.Plugin, c.Route, c.Method, c.Status, c.MS, c.Error, truncate(c.Request, 8192), truncate(c.Response, 8192), c.Created.Unix(), failure)
 	capRing(ctx, s.db, "plugins_calls", c.Plugin, CallsCap)
 }
 
@@ -1062,7 +1170,7 @@ func truncate(v string, n int) string {
 }
 
 func (s *storage) calls(ctx context.Context, plugin string, limit int) ([]CallRecord, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id,plugin,route,method,status,ms,error,request,response,created FROM plugins_calls WHERE plugin=? ORDER BY id DESC LIMIT ?`, plugin, limit)
+	rows, err := s.db.QueryContext(ctx, `SELECT id,plugin,route,method,status,ms,error,request,response,created,failure_json FROM plugins_calls WHERE plugin=? ORDER BY id DESC LIMIT ?`, plugin, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -1070,9 +1178,13 @@ func (s *storage) calls(ctx context.Context, plugin string, limit int) ([]CallRe
 	var out []CallRecord
 	for rows.Next() {
 		var c CallRecord
+		var failure string
 		var created int64
-		if err := rows.Scan(&c.ID, &c.Plugin, &c.Route, &c.Method, &c.Status, &c.MS, &c.Error, &c.Request, &c.Response, &created); err != nil {
+		if err := rows.Scan(&c.ID, &c.Plugin, &c.Route, &c.Method, &c.Status, &c.MS, &c.Error, &c.Request, &c.Response, &created, &failure); err != nil {
 			return nil, err
+		}
+		if failure != "" {
+			_ = json.Unmarshal([]byte(failure), &c.Failure)
 		}
 		c.Created = time.Unix(created, 0).UTC()
 		out = append(out, c)
@@ -1151,6 +1263,19 @@ func (s *storage) redactKnown(ctx context.Context, plugin, value string) string 
 			}
 		}
 	}
+	// Install settings can carry a declared secret before the owner saves
+	// it through Configure, which splits these values into row.Secrets.
+	if len(row.Settings) > 0 {
+		names := secretFieldNames(row.Schema)
+		for _, name := range settingsSecrets(record) {
+			names[name] = true
+		}
+		for name := range names {
+			if secret, ok := row.Settings[name].(string); ok && secret != "" {
+				value = redactSavedSecret(value, secret)
+			}
+		}
+	}
 	for name, sealed := range row.Secrets {
 		secret, err := s.openSecret(plugin, name, sealed)
 		if err != nil {
@@ -1159,24 +1284,25 @@ func (s *storage) redactKnown(ctx context.Context, plugin, value string) string 
 		if secret == "" {
 			continue
 		}
-		value = strings.ReplaceAll(value, secret, "[redacted]")
-		encoded, _ := json.Marshal(secret)
-		if len(encoded) > 2 {
-			value = strings.ReplaceAll(value, string(encoded[1:len(encoded)-1]), "[redacted]")
-		}
+		value = redactSavedSecret(value, secret)
 	}
 	derived, err := s.allDerivedSecrets(ctx, plugin)
 	if err != nil {
 		return "[redacted]"
 	}
 	for _, secret := range derived {
-		value = strings.ReplaceAll(value, secret, "[redacted]")
-		encoded, _ := json.Marshal(secret)
-		if len(encoded) > 2 {
-			value = strings.ReplaceAll(value, string(encoded[1:len(encoded)-1]), "[redacted]")
-		}
+		value = redactSavedSecret(value, secret)
 	}
 	return logredact.String(value)
+}
+
+func redactSavedSecret(value, secret string) string {
+	value = strings.ReplaceAll(value, secret, "[redacted]")
+	encoded, _ := json.Marshal(secret)
+	if len(encoded) > 2 {
+		value = strings.ReplaceAll(value, string(encoded[1:len(encoded)-1]), "[redacted]")
+	}
+	return value
 }
 
 func (s *storage) addLog(ctx context.Context, plugin, line string) {
@@ -1208,19 +1334,26 @@ func (s *storage) logs(ctx context.Context, plugin string, limit int) ([]string,
 // enqueue appends to a plugin outbox, dropping the oldest past the cap and
 // reporting how many were dropped.
 func (s *storage) enqueue(ctx context.Context, plugin string, ev Event) (int, error) {
+	return s.enqueueWith(ctx, s.db, plugin, ev)
+}
+
+func (s *storage) enqueueWith(ctx context.Context, db interface {
+	sqlExecutor
+	rowQueryer
+}, plugin string, ev Event) (int, error) {
 	payload, _ := json.Marshal(ev)
-	if _, err := s.db.ExecContext(ctx, `INSERT INTO plugins_outbox(plugin,event_id,name,payload,created) VALUES(?,?,?,?,?)`, plugin, ev.ID, ev.Name, string(payload), s.now().Unix()); err != nil {
+	if _, err := db.ExecContext(ctx, `INSERT INTO plugins_outbox(plugin,event_id,name,payload,created) VALUES(?,?,?,?,?)`, plugin, ev.ID, ev.Name, string(payload), s.now().Unix()); err != nil {
 		return 0, err
 	}
 	var n int
-	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM plugins_outbox WHERE plugin=?`, plugin).Scan(&n); err != nil {
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM plugins_outbox WHERE plugin=?`, plugin).Scan(&n); err != nil {
 		return 0, err
 	}
 	if n <= OutboxCap {
 		return 0, nil
 	}
 	drop := n - OutboxCap
-	_, err := s.db.ExecContext(ctx, `DELETE FROM plugins_outbox WHERE id IN (SELECT id FROM plugins_outbox WHERE plugin=? ORDER BY id LIMIT ?)`, plugin, drop)
+	_, err := db.ExecContext(ctx, `DELETE FROM plugins_outbox WHERE id IN (SELECT id FROM plugins_outbox WHERE plugin=? ORDER BY id LIMIT ?)`, plugin, drop)
 	return drop, err
 }
 

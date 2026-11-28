@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/braedonsaunders/ether/internal/core"
+	"github.com/braedonsaunders/ether/internal/plexguid"
 	"github.com/braedonsaunders/ether/internal/plextv"
 )
 
@@ -286,7 +287,7 @@ func (s *Service) communityTitles(ctx context.Context, token, id string) ([]core
 				}
 				key, e := s.o.PlexLookup(ctx, guid)
 				if e != nil && !errors.Is(e, core.ErrNotFound) {
-					if strings.Contains(e.Error(), "ambiguous Plex identity") {
+					if errors.Is(e, plexguid.ErrAmbiguous) || strings.Contains(e.Error(), "ambiguous Plex identity") {
 						unmatched++
 						continue
 					}

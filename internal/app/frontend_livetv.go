@@ -183,7 +183,7 @@ func (s surfaceLiveTV) guidePage(ctx context.Context, v *core.Viewer, pageQuery 
 	if s.surface == "xtream" && len(q.Channels) == 1 {
 		maxSpan = 32 * 24 * time.Hour
 	}
-	if !q.Until.After(q.From) || q.Until.Sub(q.From) > maxSpan || q.Limit < 0 || q.Limit > maxLiveProgrammes || pageQuery.Offset < 0 {
+	if !q.Until.After(q.From) || q.Until.Sub(q.From) > maxSpan || q.Limit < 0 || q.Limit > maxLiveProgrammes || pageQuery.Offset < 0 || (q.PerChannelLimit && (paged || len(q.Channels) == 0 || len(q.Channels) > frontend.MaxLiveGuideExportChannels || q.Limit == 0)) {
 		return frontend.LiveGuidePage{}, errLiveQuery
 	}
 	viewer, err := s.viewer(ctx, v)
@@ -240,8 +240,19 @@ func (s surfaceLiveTV) guidePage(ctx context.Context, v *core.Viewer, pageQuery 
 	}
 	selectedPage := make([]livetv.Programme, 0, min(len(programmes), limit+1))
 	index := 0
+	var channelCounts map[string]int
+	if q.PerChannelLimit {
+		channelCounts = make(map[string]int, len(q.Channels))
+	}
 	for _, p := range programmes {
 		if _, ok := allowed[p.ChannelID]; !ok {
+			continue
+		}
+		if q.PerChannelLimit {
+			if channelCounts[p.ChannelID] < limit {
+				selectedPage = append(selectedPage, p)
+				channelCounts[p.ChannelID]++
+			}
 			continue
 		}
 		if paged {
@@ -261,8 +272,10 @@ func (s surfaceLiveTV) guidePage(ctx context.Context, v *core.Viewer, pageQuery 
 	if pageQuery.Snapshot != "" && pageQuery.Snapshot != snapshot {
 		return frontend.LiveGuidePage{}, frontend.ErrLiveGuideStale
 	}
-	more := len(selectedPage) > limit
-	selectedPage = selectedPage[:min(len(selectedPage), limit)]
+	more := !q.PerChannelLimit && len(selectedPage) > limit
+	if more {
+		selectedPage = selectedPage[:limit]
+	}
 	out := make([]frontend.LiveProgramme, 0, len(selectedPage))
 	imageCache := make(map[core.RatingKey][]frontend.Image)
 	for _, p := range selectedPage {
@@ -639,6 +652,13 @@ func (s surfaceLiveTV) GuideWindow(ctx context.Context, u *frontend.User, from, 
 	}
 	return h.GuideWindow(s.withApp(ctx), u, from, until)
 }
+func (s surfaceLiveTV) GuideChannelLogos(ctx context.Context, channels []frontend.LiveTVChannel) map[string]string {
+	if h := s.host(); h != nil {
+		return h.GuideChannelLogos(ctx, channels)
+	}
+	return nil
+}
+
 func (s surfaceLiveTV) GuideChannelLogo(ctx context.Context, c frontend.LiveTVChannel) string {
 	if h := s.host(); h != nil {
 		return h.GuideChannelLogo(ctx, c)
@@ -854,6 +874,63 @@ func (s surfaceLiveTV) CatchUpItem(ctx context.Context, v *frontend.Viewer, id s
 		s.catchUpArtwork(viewer, &item)
 	}
 	return item, err
+}
+
+// catchUpWatchHost is the Live TV host's catch-up watch state. Progress takes
+// the server's resume threshold so catch-up follows the same rule as titles.
+type catchUpWatchHost interface {
+	CatchUpProgress(ctx context.Context, viewer *frontend.Viewer, id string, offset, duration time.Duration, state string, resumeAfter time.Duration) error
+	CatchUpSetWatched(ctx context.Context, viewer *frontend.Viewer, id string, watched bool) error
+	CatchUpGroupWatch(ctx context.Context, viewer *frontend.Viewer, id string) (frontend.CatchUpWatch, error)
+}
+
+func (s surfaceLiveTV) catchUpWatch(ctx context.Context, v *frontend.Viewer) (catchUpWatchHost, *core.User, error) {
+	h, ok := s.host().(catchUpWatchHost)
+	if !ok {
+		return nil, nil, core.ErrNotFound
+	}
+	viewer, err := s.viewer(ctx, v)
+	return h, viewer, err
+}
+
+func (s surfaceLiveTV) CatchUpProgress(ctx context.Context, v *frontend.Viewer, id string, offset, duration time.Duration, state string) error {
+	h, viewer, err := s.catchUpWatch(ctx, v)
+	if err != nil {
+		return err
+	}
+	var resumeAfter time.Duration
+	if s.app.state != nil {
+		resumeAfter = s.app.state.ResumeAfter()
+	}
+	return h.CatchUpProgress(s.withApp(ctx), viewer, id, offset, duration, state, resumeAfter)
+}
+
+func (s surfaceLiveTV) CatchUpGroupWatch(ctx context.Context, v *frontend.Viewer, id string) (frontend.CatchUpWatch, error) {
+	h, viewer, err := s.catchUpWatch(ctx, v)
+	if err != nil {
+		return frontend.CatchUpWatch{}, err
+	}
+	return h.CatchUpGroupWatch(s.withApp(ctx), viewer, id)
+}
+
+func (s surfaceLiveTV) CatchUpSetWatched(ctx context.Context, v *frontend.Viewer, id string, watched bool) error {
+	h, viewer, err := s.catchUpWatch(ctx, v)
+	if err != nil {
+		return err
+	}
+	return h.CatchUpSetWatched(s.withApp(ctx), viewer, id, watched)
+}
+
+func (s surfaceLiveTV) CatchUpPatchUserData(ctx context.Context, v *frontend.Viewer, id string, patch frontend.CatchUpUserDataPatch) error {
+	h, ok := s.host().(frontend.CatchUpUserDataWriter)
+	if !ok {
+		return core.ErrNotFound
+	}
+	viewer, err := s.viewer(ctx, v)
+	if err != nil {
+		return err
+	}
+	return h.CatchUpPatchUserData(s.withApp(ctx), viewer, id, patch)
 }
 
 func (s surfaceLiveTV) catchUpArtwork(viewer *core.Viewer, item *frontend.CatchUpItem) {

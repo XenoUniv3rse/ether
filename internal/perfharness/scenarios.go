@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/braedonsaunders/ether/internal/frontend/kit/ids"
 )
@@ -52,11 +53,20 @@ type Step struct {
 	// Export marks a step whose response is the whole library by design
 	// (an IPTV app's VOD list): its work grows with what it renders, so
 	// the gate compares work per response byte instead of per request.
-	Export   bool
-	Method   string
-	Path     string
-	Body     string
-	Discover func(vars map[string]string, body []byte)
+	Stream time.Duration // observation window for an intentionally open response
+	Export bool
+	// ColdLineup runs the first Xtream download, which may have to build its snapshot.
+	ColdLineup bool
+	Method     string
+	// ExpectedStatus asserts an exact status for an exact HTTP status when the scenario names one.
+	ExpectedStatus int
+	Path           string
+	Body           string
+	Discover       func(vars map[string]string, body []byte)
+	Accept         func(body []byte) bool
+	Headers        func(http.Header, map[string]string)
+	registeredOnly bool
+	OwnerOnly      bool // in the matrix, replay this step with the owner account
 }
 
 // Statement ceilings for Plex Home, detail, post-play and search. Measured
@@ -708,12 +718,16 @@ func discoverVelaLibraries(vars map[string]string, body []byte) {
 		Items []struct {
 			ID   string `json:"id"`
 			Kind string `json:"kind"`
+			Name string `json:"name"`
 		} `json:"items"`
 	}
 	if json.Unmarshal(body, &r) != nil {
 		return
 	}
 	for _, it := range r.Items {
+		if it.Name == "Matrix Catalogue" {
+			vars["matrixMusicLibrary"] = url.PathEscape(it.ID)
+		}
 		switch it.Kind {
 		case "movies":
 			if vars["movieLibrary"] == "" {
@@ -809,6 +823,10 @@ func console() Client {
 		{Name: "catalog search", Class: classConsole, Path: "/catalog/search?q=star&limit=20"},
 		{Name: "viewers", Class: classConsole, Path: "/viewers"},
 		{Name: "insights rows", Class: classConsole, Path: "/insights/rows"},
+		{Name: "recommendation performance", Class: classConsole, Path: "/insights/recommendations?days=90"},
+		{Name: "recommendation performance by viewer", Class: classConsole, Path: "/insights/recommendations?days=90&viewer=1"},
+		{Name: "recommendation row detail", Class: classConsole, Path: "/insights/recommendations/row?days=90&kind=top-10"},
+		{Name: "recommendation row detail by viewer", Class: classConsole, Path: "/insights/recommendations/row?days=90&kind=top-10&viewer=1"},
 		{Name: "insights activity", Class: classConsole, Path: "/insights/activity"},
 		{Name: "collections", Class: classConsole, Path: "/collections"},
 		{Name: "frontends", Class: classConsole, Path: "/frontends"},

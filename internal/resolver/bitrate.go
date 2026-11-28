@@ -118,7 +118,7 @@ func isAnimation(t *core.Title) bool {
 			return true
 		}
 	}
-	return isAnime(t)
+	return t.IsAnime()
 }
 
 // sameTier reports releases of one tier for hedged validation: the same
@@ -126,7 +126,7 @@ func isAnimation(t *core.Title) bool {
 // above or both below their bitrate floor, and both in an accepted audio
 // language or both not.
 func sameTier(a, b candidate) bool {
-	if a.keys.sourceBand != b.keys.sourceBand {
+	if a.keys.sourceBand != b.keys.sourceBand || a.localFirst != b.localFirst {
 		return false
 	}
 	if a.keys.addonOrder > 0 || b.keys.addonOrder > 0 {

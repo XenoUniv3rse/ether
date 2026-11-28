@@ -184,7 +184,7 @@ func (i *instance) pollSessionTrickplay(ctx context.Context, viewer *frontend.Vi
 		s.mu.Unlock()
 		return
 	}
-	source, seek, revision := s.source, s.seek, s.revision
+	source, seek, cursor := s.source, s.seek, s.cursor
 	accessViewer, accessDevice := s.accessViewer, s.accessDevice
 	if accessViewer == nil {
 		accessViewer = viewer
@@ -200,7 +200,7 @@ func (i *instance) pollSessionTrickplay(ctx context.Context, viewer *frontend.Vi
 	}
 
 	s.mu.Lock()
-	if !s.ended.IsZero() || s.commandActive || s.source != source || s.seek != seek || s.revision != revision || !s.isTrickplayEligibleLocked() {
+	if !s.ended.IsZero() || s.commandActive || s.source != source || s.seek != seek || s.cursor != cursor || !s.isTrickplayEligibleLocked() {
 		s.mu.Unlock()
 		return
 	}

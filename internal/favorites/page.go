@@ -5,10 +5,8 @@ import (
 	"database/sql"
 	"encoding/base64"
 	"errors"
-	"fmt"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/braedonsaunders/ether/internal/core"
@@ -48,9 +46,6 @@ type Page struct {
 
 var ErrBadCursor = errors.New("favorites: bad cursor")
 
-// typed remembers viewers whose untyped favorites have been given a role.
-var typed sync.Map
-
 func roleOf(ctx context.Context, o Options, subject Subject) string {
 	if subject.Kind != KindTitle || o.TitleRole == nil {
 		return ""
@@ -62,20 +57,17 @@ func roleOf(ctx context.Context, o Options, subject Subject) string {
 	return o.TitleRole(ctx, key)
 }
 
-// typeUntyped gives a role to the viewer's title favorites set before roles
-// were recorded. It runs once per viewer and process, in bounded batches of
-// that viewer's own rows.
-func (s *Service) typeUntyped(ctx context.Context, viewerID int64) error {
+// BackfillRoles assigns roles to title favorites written before roles were
+// recorded. It runs during startup, after stored media kinds are available.
+func (s *Service) BackfillRoles(ctx context.Context) error {
 	if s.o.TitleRole == nil {
-		return nil
-	}
-	if _, done := typed.Load(s.typedKey(viewerID)); done {
 		return nil
 	}
 	const batch = 200
 	after := ""
 	for {
-		rows, err := s.o.DB.QueryContext(ctx, `SELECT subject_id FROM favorites_items WHERE viewer_id=? AND kind=? AND role='' AND subject_id>? ORDER BY subject_id LIMIT ?`, viewerID, string(KindTitle), after, batch)
+		rows, err := s.o.DB.QueryContext(ctx, `SELECT DISTINCT subject_id FROM favorites_items
+			WHERE kind='title' AND role='' AND subject_id>? ORDER BY subject_id LIMIT ?`, after, batch)
 		if err != nil {
 			return err
 		}
@@ -96,22 +88,18 @@ func (s *Service) typeUntyped(ctx context.Context, viewerID int64) error {
 		for _, id := range ids {
 			role := roleOf(ctx, s.o, Subject{Kind: KindTitle, ID: id})
 			if role == "" {
-				continue // unknown for now (a plugin item not stored yet); asked again next process
+				continue
 			}
-			if _, err := s.o.DB.ExecContext(ctx, `UPDATE favorites_items SET role=? WHERE viewer_id=? AND kind=? AND subject_id=? AND role=''`, role, viewerID, string(KindTitle), id); err != nil {
+			if _, err := s.o.DB.ExecContext(ctx, `UPDATE favorites_items SET role=? WHERE kind='title' AND subject_id=? AND role=''`, role, id); err != nil {
 				return err
 			}
 		}
 		if len(ids) < batch {
-			break
+			return nil
 		}
 		after = ids[len(ids)-1]
 	}
-	typed.Store(s.typedKey(viewerID), true)
-	return nil
 }
-
-func (s *Service) typedKey(viewerID int64) string { return fmt.Sprintf("%p:%d", s, viewerID) }
 
 type cursor struct {
 	order int64
@@ -163,9 +151,6 @@ func (s *Service) Page(ctx context.Context, viewer *core.User, q PageQuery) (Pag
 	}
 	at, has, err := parseCursor(q.Cursor)
 	if err != nil {
-		return Page{}, err
-	}
-	if err := s.typeUntyped(ctx, viewer.ID); err != nil {
 		return Page{}, err
 	}
 	var out Page

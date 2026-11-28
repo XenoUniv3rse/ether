@@ -207,6 +207,22 @@ func TestKindStreamAllPatternsAndAcceptance(t *testing.T) {
 		},
 	}
 
+	t.Run("source limits cannot override owner download and archive grants", func(t *testing.T) {
+		guarded := deps
+		guarded.CacheWriteLimits = func() (int64, int64) { return 64, 128 }
+		for _, src := range []core.PlayableSource{
+			{Pattern: PatternDownload, URL: srv.URL + "/norange/payload.bin", Size: int64(len(wantPayload)), MaxBytes: 24 << 30, MIME: "application/octet-stream"},
+			{Pattern: PatternContainer, MIME: "application/octet-stream", MaxBytes: 24 << 30, Container: &core.ContainerRef{Format: "zip", Member: "book/payload_a.bin", Volumes: []core.VolumeRef{{URL: srv.URL + "/archive/deflate.zip", Size: int64(len(zipDeflateBytes))}}}},
+		} {
+			bs, err := Open(ctx, src, guarded)
+			if bs != nil {
+				bs.Close()
+			}
+			if !errors.Is(err, ErrSizeLimitExceeded) {
+				t.Errorf("%s: %v, want size limit", src.Pattern, err)
+			}
+		}
+	})
 	// 1. Table test across all 5 retrieval patterns.
 	patterns := []struct {
 		name    string

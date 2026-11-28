@@ -49,7 +49,7 @@ func TestServiceEnforcesVisibilityBeforePagination(t *testing.T) {
 	s.d.IsFavorite = func(_ context.Context, _ *core.User, key core.RatingKey) (bool, error) {
 		return key == visible.Key, nil
 	}
-	s.d.Enrich = func(_ context.Context, _ *core.User, _ core.Device, title *core.Title) (frontend.ItemDetail, error) {
+	s.d.Enrich = func(_ context.Context, _ *core.User, _ frontend.ItemRequest, title *core.Title) (frontend.ItemDetail, error) {
 		return frontend.ItemDetail{Title: *title, Tracks: []core.StreamInfo{{Type: "audio", Codec: "flac"}}}, nil
 	}
 	detail, err := s.Item(ctx, frontend.ItemRequest{Viewer: &core.User{ID: 1}, Key: visible.Key})

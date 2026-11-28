@@ -3,6 +3,7 @@ package xtream
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/braedonsaunders/ether/internal/core"
 	"github.com/braedonsaunders/ether/internal/frontend"
+	"github.com/braedonsaunders/ether/internal/frontend/frontendtest"
 )
 
 // policyLibrary is a movie library whose export depends on a viewer policy
@@ -97,14 +99,17 @@ func TestXtreamListingNeverServesStaleVisibility(t *testing.T) {
 				return h0.Body.String()
 			}
 			vod := "/player_api.php?" + authQuery() + "&action=get_vod_streams"
-			// Signing in builds the listing behind the response; the list is
-			// then a file, byte-identical to encoding it.
 			request(h, "/player_api.php?"+authQuery())
 			settle()
-			calls := lib.calls
+			if lib.calls != 0 {
+				t.Fatal("sign-in prepared a listing")
+			}
+			// A listing is built on first use. Its cached representation
+			// matches both the first response and the uncached encoder.
 			body := list(request(h, vod))
-			if lib.calls != calls || body != list(request(streamed, vod)) {
-				t.Fatalf("listing not served from its build (%d → %d calls) or differs from encoding", calls, lib.calls)
+			settle()
+			if body != list(request(h, vod)) || body != list(request(streamed, vod)) {
+				t.Fatal("cached listing differs from encoding")
 			}
 			has := func(body string, n int) bool { return strings.Contains(body, fmt.Sprintf(`"name":"Film %d"`, n-1)) }
 			if !has(body, 600) {
@@ -133,5 +138,127 @@ func TestXtreamListingNeverServesStaleVisibility(t *testing.T) {
 				t.Fatal("cached listing differs from encoding")
 			}
 		})
+	}
+}
+
+func TestM3ULineupGolden(t *testing.T) {
+	host, _ := testHost(t)
+	movie := frontend.Title{Key: core.MovieKey(12), Type: core.TypeMovie, Title: "Film\"Cut"}
+	show := frontend.Title{Key: core.ShowKey(13), Type: core.TypeShow, Title: "Series"}
+	season := frontend.Title{Key: core.SeasonKey(13, 2), Type: core.TypeSeason}
+	episode := frontend.Title{Key: core.EpisodeKey(13, 2, 3), Type: core.TypeEpisode, Title: "First\nPart", Season: 2, Episode: 3}
+	host.Experience = frontendtest.Experience{
+		ViewsFunc: func(context.Context, *frontend.Viewer) ([]frontend.View, error) {
+			return []frontend.View{{ID: "1", Type: core.TypeMovie}, {ID: "2", Type: core.TypeShow}}, nil
+		},
+		LibraryItemsFunc: func(_ context.Context, _ *core.Viewer, _ core.Device, view string, _ frontend.ItemQuery) (core.Page, error) {
+			item := movie
+			if view == "2" {
+				item = show
+			}
+			return core.Page{Items: []core.Title{item}, Total: 1}, nil
+		},
+		ChildrenFunc: func(_ context.Context, _ *core.Viewer, _ core.Device, key core.RatingKey, _ frontend.ItemQuery) (core.Page, error) {
+			item := season
+			if key == season.Key {
+				item = episode
+			}
+			return core.Page{Items: []core.Title{item}, Total: 1}, nil
+		},
+	}
+
+	const golden = `#EXTM3U
+#EXTINF:-1 tvg-id="allowed" tvg-logo="" group-title="Live TV",News
+http://ether.test/xtream/live/USER/eg1_test/1.ts
+#EXTINF:-1 group-title="Movies",Film'Cut
+http://ether.test/xtream/movie/USER/eg1_test/1.mkv
+#EXTINF:-1 group-title="Series",Series S02E03 First Part
+http://ether.test/xtream/series/USER/eg1_test/2.mkv
+`
+	want := strings.ReplaceAll(golden, "USER", frontend.XtreamUsername("eg1_test"))
+	check := func(h http.Handler) {
+		t.Helper()
+		response := request(h, "/get.php?"+authQuery()+"&type=m3u_plus&output=ts")
+		if response.Code != http.StatusOK || response.Body.String() != want {
+			t.Fatalf("got HTTP %d and lineup:\n%s\nwant:\n%s", response.Code, response.Body, want)
+		}
+	}
+	check(mount(t, host))
+	host.Identity = lineupTestIdentity{appIdentity: &appIdentity{}}
+	host.CacheDir = t.TempDir()
+	host.PageFreshness = func() frontend.PageFreshness { return frontend.PageFreshness{} }
+	cached := mount(t, host)
+	check(cached)
+	check(cached)
+}
+
+type lineupTestIdentity struct{ *appIdentity }
+
+func (lineupTestIdentity) User(_ context.Context, id int64) (*core.User, error) {
+	return &core.User{ID: id}, nil
+}
+
+type isolatedLineupIdentity struct{ lineupTestIdentity }
+
+func (isolatedLineupIdentity) AuthenticateAppPassword(_ context.Context, username, password string) (*frontend.Viewer, error) {
+	if username == "owner" && password == "owner-test" {
+		return &frontend.Viewer{ID: 1, IsOwner: true}, nil
+	}
+	if username == "restricted" && password == "viewer-test" {
+		return &frontend.Viewer{ID: 2, MaxContentRating: "PG"}, nil
+	}
+	return nil, frontend.ErrUnauthorized
+}
+
+func (isolatedLineupIdentity) User(_ context.Context, id int64) (*core.User, error) {
+	switch id {
+	case 1:
+		return &core.User{ID: 1, IsOwner: true}, nil
+	case 2:
+		return &core.User{ID: 2, MaxContentRating: "PG"}, nil
+	default:
+		return nil, core.ErrNotFound
+	}
+}
+
+func TestM3USnapshotIsolatedByViewerAndRules(t *testing.T) {
+	host, _ := testHost(t)
+	host.Identity = isolatedLineupIdentity{}
+	host.LiveTV = frontendtest.LiveTV{}
+	host.CacheDir = t.TempDir()
+	var policy atomic.Uint64
+	host.PageFreshness = func() frontend.PageFreshness { return frontend.PageFreshness{Safety: policy.Load()} }
+	host.Experience = frontendtest.Experience{
+		ViewsFunc: func(context.Context, *frontend.Viewer) ([]frontend.View, error) {
+			return []frontend.View{{ID: "1", Type: core.TypeMovie}}, nil
+		},
+		LibraryItemsFunc: func(_ context.Context, viewer *core.Viewer, _ core.Device, _ string, _ frontend.ItemQuery) (core.Page, error) {
+			items := []core.Title{{Key: core.MovieKey(8), Type: core.TypeMovie, Title: "Shared"}}
+			if viewer.ID == 1 && policy.Load() == 0 {
+				items = append(items, core.Title{Key: core.MovieKey(9), Type: core.TypeMovie, Title: "Owner-only"})
+			}
+			return core.Page{Items: items, Total: len(items)}, nil
+		},
+	}
+	h := mount(t, host)
+	read := func(query string) string {
+		t.Helper()
+		response := request(h, "/get.php?"+query)
+		if response.Code != http.StatusOK {
+			t.Fatalf("HTTP %d: %s", response.Code, response.Body)
+		}
+		return response.Body.String()
+	}
+	const owner = "username=owner&password=owner-test"
+	const restricted = "username=restricted&password=viewer-test"
+	if body := read(owner); !strings.Contains(body, "Owner-only") || !strings.Contains(body, "/owner/owner-test/") {
+		t.Fatalf("owner lineup: %s", body)
+	}
+	if body := read(restricted); strings.Contains(body, "Owner-only") || strings.Contains(body, "owner-test") || !strings.Contains(body, "/restricted/viewer-test/") {
+		t.Fatalf("restricted lineup: %s", body)
+	}
+	policy.Add(1)
+	if body := read(owner); strings.Contains(body, "Owner-only") {
+		t.Fatalf("lineup retained a title from the previous rules: %s", body)
 	}
 }

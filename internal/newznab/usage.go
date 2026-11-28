@@ -19,6 +19,15 @@ import (
 // so the newznab migrations upgrade fixtures pin stay untouched. Rows
 // follow the budget's retention (Prune).
 func init() {
+	store.Register("newznab_usage", 2, `
+CREATE TABLE newznab_request_usage (
+  at BIGINT NOT NULL,
+  indexer_id TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  background INTEGER NOT NULL,
+  count INTEGER NOT NULL,
+  PRIMARY KEY (at, indexer_id, kind, background)
+);`)
 	store.Register("newznab_usage", 1, `
 CREATE TABLE newznab_usage (
   indexer_id TEXT NOT NULL,
@@ -37,11 +46,14 @@ const PurposeUnattributed = "unattributed"
 
 // capsPurpose attributes a capability fetch. The owner's Test button
 // fetches caps as part of the test, so that stays a test.
+type capsRequestKey struct{}
+
 func capsPurpose(ctx context.Context) context.Context {
-	if core.IndexerPurpose(ctx) == core.IndexerPurposeTest {
-		return ctx
+	ctx = context.WithValue(ctx, capsRequestKey{}, backgroundSearch(ctx))
+	if core.IndexerPurpose(ctx) != core.IndexerPurposeTest {
+		ctx = core.WithIndexerPurpose(ctx, core.IndexerPurposeCaps)
 	}
-	return core.WithIndexerPurpose(ctx, core.IndexerPurposeCaps)
+	return ctx
 }
 
 // recordUsage adds one reserved request to the purpose breakdown. It runs
@@ -50,16 +62,29 @@ func capsPurpose(ctx context.Context) context.Context {
 func (c *Client) recordUsage(ctx context.Context, kind string) {
 	db := c.db
 	if db == nil {
-		db = c.usageDB
-	}
-	if db == nil {
 		return
 	}
 	col := "hits"
 	if kind == "grab" {
 		col = "grabs"
 	}
+	reqKind := "search"
+	bg := backgroundSearch(ctx)
+	if wasBackground, caps := ctx.Value(capsRequestKey{}).(bool); caps {
+		reqKind, bg = "caps", wasBackground
+	} else if kind == "grab" {
+		reqKind = "grab"
+	}
+	// Persist both the calendar-day purpose counters and rolling request
+	// figures, including attempts that return a service refusal.
 	_, err := db.ExecContext(context.WithoutCancel(ctx),
+		`INSERT INTO newznab_request_usage(at,indexer_id,kind,background,count) VALUES(?,?,?,?,1)
+ON CONFLICT(at,indexer_id,kind,background) DO UPDATE SET count=newznab_request_usage.count+1`,
+		c.now().Unix(), c.indexerID(), reqKind, store.BoolInt(bg))
+	if err != nil {
+		c.log.Debug("newznab: record rolling usage", "indexer", c.Name(), "err", err)
+	}
+	_, err = db.ExecContext(context.WithoutCancel(ctx),
 		`INSERT INTO newznab_usage(indexer_id, day, purpose, `+col+`) VALUES (?,?,?,1)
 ON CONFLICT(indexer_id, day, purpose) DO UPDATE SET `+col+`=newznab_usage.`+col+`+1`,
 		c.indexerID(), c.today(), usagePurpose(ctx))
@@ -68,18 +93,15 @@ ON CONFLICT(indexer_id, day, purpose) DO UPDATE SET `+col+`=newznab_usage.`+col+
 	}
 }
 
-// TestIndexer is Test, with the requests it makes recorded as manual tests
-// in the usage breakdown and statistics. Test hits are real requests the
-// indexer counts, but they never spend the daily budget.
+// TestIndexer records manual requests against the same account budget as searches.
 func (m *Manager) TestIndexer(ctx context.Context, cfg config.Indexer, policy config.ClientIdentity) error {
-	return TestWithOptions(core.WithIndexerPurpose(ctx, core.IndexerPurposeTest), cfg, Options{ClientIdentity: policy, usageDB: m.db, onEvent: m.emitEvent})
+	return TestWithOptions(core.WithIndexerPurpose(ctx, core.IndexerPurposeTest), cfg, Options{ClientIdentity: policy, testDB: m.db, onEvent: m.emitEvent})
 }
 
 // TestIndexerCaps runs a single t=caps request through the resolved identity
-// for cfg under policy, recording the request as a manual test without
-// spending the daily budget.
+// for cfg under policy, recording the request as a manual test.
 func (m *Manager) TestIndexerCaps(ctx context.Context, cfg config.Indexer, policy config.ClientIdentity) (config.Identity, error) {
-	return TestCapsWithOptions(core.WithIndexerPurpose(ctx, core.IndexerPurposeTest), cfg, Options{ClientIdentity: policy, usageDB: m.db, onEvent: m.emitEvent})
+	return TestCapsWithOptions(core.WithIndexerPurpose(ctx, core.IndexerPurposeTest), cfg, Options{ClientIdentity: policy, testDB: m.db, onEvent: m.emitEvent})
 }
 
 // PurposeCount is one purpose's share of a usage window.
@@ -105,20 +127,29 @@ type UsageDay struct {
 
 // IndexerUsage is one configured indexer's request history: what it would
 // show on the indexer's own API-hit counter, by purpose.
+type RequestUsage struct {
+	Searches   int64 `json:"searches"`
+	Grabs      int64 `json:"grabs"`
+	Background int64 `json:"background"`
+}
+
 type IndexerUsage struct {
-	ID                string      `json:"id"`
-	Name              string      `json:"name"`
-	Enabled           bool        `json:"enabled"`
-	Torrent           bool        `json:"torrent"`
-	DailyLimit        int         `json:"dailyLimit"`
-	DailyGrabs        int         `json:"dailyGrabs"`
-	RetryAt           int64       `json:"retryAt,omitempty"`
-	PausedUntil       int64       `json:"pausedUntil,omitempty"`
-	MissingDefinition bool        `json:"missingDefinition,omitempty"`
-	Today             UsageWindow `json:"today"`
-	Week              UsageWindow `json:"week"`
-	Month             UsageWindow `json:"month"`
-	Days              []UsageDay  `json:"days"`
+	ID                string       `json:"id"`
+	Name              string       `json:"name"`
+	Enabled           bool         `json:"enabled"`
+	Torrent           bool         `json:"torrent"`
+	DailyLimit        int          `json:"dailyLimit"`
+	TotalCap          int          `json:"totalCap"`
+	ResetAt           int64        `json:"resetAt"`
+	Last24Hours       RequestUsage `json:"last24Hours"`
+	DailyGrabs        int          `json:"dailyGrabs"`
+	RetryAt           int64        `json:"retryAt,omitempty"`
+	PausedUntil       int64        `json:"pausedUntil,omitempty"`
+	MissingDefinition bool         `json:"missingDefinition,omitempty"`
+	Today             UsageWindow  `json:"today"`
+	Week              UsageWindow  `json:"week"`
+	Month             UsageWindow  `json:"month"`
+	Days              []UsageDay   `json:"days"`
 }
 
 // UsageReport is every configured indexer's usage. Days are UTC.
@@ -134,8 +165,7 @@ const usageDays = 14
 
 // Usage reports each configured indexer's real API hits and grabs for
 // today, the last 7 days and this UTC month, split by purpose. Totals are
-// newznab_budget's counts (every request that reached the indexer) plus
-// manual tests, which never spend the budget; budget hits the breakdown
+// newznab_budget's counts, including manual tests. Budget hits the breakdown
 // does not explain are reported as PurposeUnattributed.
 func (m *Manager) Usage(ctx context.Context) (UsageReport, error) {
 	now := time.Now
@@ -155,7 +185,23 @@ func (m *Manager) Usage(ctx context.Context) (UsageReport, error) {
 	type key struct{ id, day string }
 	budget := map[key][2]int64{}
 	purposes := map[key]map[string][2]int64{}
+	recent := map[string]RequestUsage{}
 	if m.db != nil {
+		if err := scanRows(ctx, m.db, `SELECT indexer_id,
+SUM(CASE WHEN kind='search' THEN count ELSE 0 END),
+SUM(CASE WHEN kind='grab' THEN count ELSE 0 END),
+SUM(CASE WHEN background=1 THEN count ELSE 0 END)
+FROM newznab_request_usage WHERE at>? GROUP BY indexer_id`, t.Add(-24*time.Hour).Unix(), func(rows *sql.Rows) error {
+			var id string
+			var r RequestUsage
+			if err := rows.Scan(&id, &r.Searches, &r.Grabs, &r.Background); err != nil {
+				return err
+			}
+			recent[id] = r
+			return nil
+		}); err != nil {
+			return rep, err
+		}
 		if err := scanRows(ctx, m.db, `SELECT indexer_id, day, hits, grabs FROM newznab_budget WHERE day>=?`, from, func(rows *sql.Rows) error {
 			var k key
 			var v [2]int64
@@ -183,24 +229,14 @@ func (m *Manager) Usage(ctx context.Context) (UsageReport, error) {
 			return rep, err
 		}
 	}
-	// dayPurposes reconciles one indexer-day: tests come on top of the
-	// budget; any budget the other purposes do not cover is unattributed.
+	// Any budget the individual purposes do not cover is unattributed.
 	dayPurposes := func(k key) map[string][2]int64 {
 		out := map[string][2]int64{}
 		var covered [2]int64
 		for p, v := range purposes[k] {
-			// Detail discovery and unattended warm-ups have independent
-			// allowances but both prepare titles before Play. The console
-			// groups them under "Warm-ups and prefetch", including opened details.
-			category := p
-			if category == core.IndexerPurposeDetail {
-				category = core.IndexerPurposeWarmup
-			}
-			addCount(out, category, v)
-			if p != core.IndexerPurposeTest {
-				covered[0] += v[0]
-				covered[1] += v[1]
-			}
+			addCount(out, p, v)
+			covered[0] += v[0]
+			covered[1] += v[1]
 		}
 		b := budget[k]
 		if rest := [2]int64{max(0, b[0]-covered[0]), max(0, b[1]-covered[1])}; rest != [2]int64{} {
@@ -214,7 +250,8 @@ func (m *Manager) Usage(ctx context.Context) (UsageReport, error) {
 		clNow := cl.now()
 		u := IndexerUsage{
 			ID: cl.indexerID(), Name: cl.Name(), Enabled: cfg.Enabled, Torrent: cfg.IsTorrent(),
-			DailyLimit: cfg.DailyLimit, DailyGrabs: cfg.DailyGrabs,
+			DailyLimit: cl.DailyAPILimit(), DailyGrabs: lowerLimit(cfg.DailyGrabs, cl.reportedLimit("grab")),
+			TotalCap: cfg.DailyLimit, ResetAt: nextBudgetDay(t).Unix(), Last24Hours: recent[cl.indexerID()],
 			PausedUntil:       cl.br.pausedUntil(clNow),
 			MissingDefinition: cl.missingDefinition(),
 			Days:              []UsageDay{},

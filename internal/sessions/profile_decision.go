@@ -1075,11 +1075,13 @@ func profileDeliveryAllowed(p *core.ClientCapabilityProfiles, d core.Decision, i
 				continue
 			}
 		}
-		condStream := info.Video()
+		// Transcoding profile constraints describe the delivered stream.
+		// A 2160p input can satisfy a 1080p profile via a video encode.
+		condStream := output.Video()
 		if audioOnly {
-			condStream = profileStream(info, "audio", d.AudioStream)
+			condStream = profileStream(output, "audio", d.AudioStream)
 		}
-		if profileConditions(c.Conditions, info, condStream) && profileRestrictions(p, output, d.VideoCodec, d.AudioCodec, d.AudioStream) {
+		if profileConditions(c.Conditions, output, condStream) && profileRestrictions(p, output, d.VideoCodec, d.AudioCodec, d.AudioStream) {
 			return true
 		}
 	}
@@ -1333,10 +1335,10 @@ func (b *Broker) decideProfile(ps *core.PlaySession, req frontend.PlanRequest) (
 		if !strings.EqualFold(candidate.Delivery, "hls") && !strings.EqualFold(candidate.Delivery, "dash") {
 			continue
 		}
-		try := func(videoCodecs []string) (core.Decision, bool) {
+		tryOutput := func(videoCodecs, audioCodecs []string) (core.Decision, bool) {
 			caps := req.Caps
 			caps.VideoCodecs = videoCodecs
-			caps.AudioCodecs = candidate.AudioCodecs
+			caps.AudioCodecs = audioCodecs
 			caps.HLSContainers = candidate.Containers
 			caps.TranscodeVideoCodecs = nil
 			caps.TranscodeAudioCodecs = nil
@@ -1352,6 +1354,18 @@ func (b *Broker) decideProfile(ps *core.PlaySession, req frontend.PlanRequest) (
 			}
 			opts := req.Intent.Options
 			opts.DirectPlay = false
+			for _, condition := range candidate.Conditions {
+				limit, err := strconv.Atoi(condition.Value)
+				if err != nil || limit <= 0 || !strings.EqualFold(condition.Operator, "LessThanEqual") {
+					continue
+				}
+				switch strings.ToLower(condition.Property) {
+				case "height", "videoheight":
+					opts.MaxHeight = stricterLimit(opts.MaxHeight, limit)
+				case "width", "videowidth":
+					opts.MaxWidth = stricterLimit(opts.MaxWidth, limit)
+				}
+			}
 			// Retry only bounded output heights; never raise a client or request
 			// cap. This allows a lower resolution when the required H.264 level
 			// or dimensions cannot support the original size.
@@ -1398,6 +1412,24 @@ func (b *Broker) decideProfile(ps *core.PlaySession, req frontend.PlanRequest) (
 				}
 				if decision.VideoCopy || (decision.VideoCodec != "h264" && decision.VideoCodec != "hevc") {
 					break
+				}
+			}
+			return core.Decision{}, false
+		}
+		try := func(videoCodecs []string) (core.Decision, bool) {
+			if decision, ok := tryOutput(videoCodecs, candidate.AudioCodecs); ok {
+				return decision, true
+			}
+			// A profile can allow several audio codecs with different
+			// decoder constraints. E-AC-3 is the default surround target,
+			// but rejecting that output must not discard AC-3 or AAC.
+			if len(candidate.AudioCodecs) > 1 {
+				for _, codec := range []string{"ac3", "eac3", "aac", "mp3", "opus", "flac"} {
+					if profileContains(candidate.AudioCodecs, codec) {
+						if decision, ok := tryOutput(videoCodecs, []string{codec}); ok {
+							return decision, true
+						}
+					}
 				}
 			}
 			return core.Decision{}, false

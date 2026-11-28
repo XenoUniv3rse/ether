@@ -33,8 +33,7 @@ func init() {
 
 // rowViewPruneGrace is how long past expiry a row view is kept. An expired
 // visit already answers stale; the grace keeps that answer (rather than
-// not-found) for a client that returns within it. The device's own next
-// build still clears its expired rows at once, as before.
+// not-found) for a client that returns within it.
 const rowViewPruneGrace = 7 * 24 * time.Hour
 
 // PruneRowViews deletes row views and manifests expired longer than
@@ -332,55 +331,46 @@ func (s *RowViewService) ListRowViews(ctx context.Context, req frontend.RowViewR
 		}
 		return views, nil
 	}
-	if oldPayload != "" {
-		var old []manifestRow
+	var old []manifestRow
+	if oldPayload != "" && expires > now {
 		if err = json.Unmarshal([]byte(oldPayload), &old); err != nil {
 			return nil, err
 		}
 		if len(old) > 100 {
 			return nil, ErrRowViewStale
 		}
-		if len(old) > 0 {
-			args := []any{u.ID, req.Device.ID, string(req.Protocol)}
-			conditions := make([]string, 0, len(old))
-			for _, ref := range old {
+	}
+	expireReplaced := func(keep map[string]bool) error {
+		args := []any{now, u.ID, req.Device.ID, string(req.Protocol), now}
+		var conditions []string
+		for _, ref := range old {
+			if !keep[ref.ID] {
 				conditions = append(conditions, "(id=? AND snapshot=?)")
 				args = append(args, ref.ID, ref.Snapshot)
 			}
-			if _, err = tx.ExecContext(ctx, `UPDATE experience_row_views SET expires=0 WHERE viewer_id=? AND device_id=? AND protocol=? AND (`+strings.Join(conditions, " OR ")+`)`, args...); err != nil {
-				return nil, err
-			}
 		}
+		if len(conditions) == 0 {
+			return nil
+		}
+		_, err := tx.ExecContext(ctx, `UPDATE experience_row_views SET expires=? WHERE viewer_id=? AND device_id=? AND protocol=? AND expires>? AND (`+strings.Join(conditions, " OR ")+`)`, args...)
+		return err
 	}
 	// An empty visit has no snapshot revision to revalidate. Build it
 	// again next time, when the viewer may have started or finished a title.
 	if len(candidates) == 0 {
-		if exists {
+		if err := expireReplaced(nil); err != nil {
+			return nil, err
+		}
+		if exists && expires > now {
 			if _, err := tx.ExecContext(ctx, `DELETE FROM experience_row_view_manifests WHERE scope_hash=?`, manifestScope); err != nil {
 				return nil, err
 			}
 		}
 		return []frontend.RowView{}, tx.Commit()
 	}
-	// Expired visits cannot be resolved and must not exhaust the per-device
-	// bound as viewers encounter new rows over time.
-	var expiredRows, expiredManifests bool
-	if err = tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM experience_row_views WHERE viewer_id=? AND device_id=? AND expires<=?), EXISTS(SELECT 1 FROM experience_row_view_manifests WHERE viewer_id=? AND device_id=? AND expires<=?)`, u.ID, req.Device.ID, now, u.ID, req.Device.ID, now).Scan(&expiredRows, &expiredManifests); err != nil {
-		return nil, err
-	}
-	if expiredRows {
-		if _, err = tx.ExecContext(ctx, `DELETE FROM experience_row_views WHERE viewer_id=? AND device_id=? AND expires<=?`, u.ID, req.Device.ID, now); err != nil {
-			return nil, err
-		}
-	}
-	if !exists {
-		if expiredManifests {
-			if _, err = tx.ExecContext(ctx, `DELETE FROM experience_row_view_manifests WHERE viewer_id=? AND device_id=? AND expires<=?`, u.ID, req.Device.ID, now); err != nil {
-				return nil, err
-			}
-		}
+	if !exists || expires <= now {
 		var count int
-		if err = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM experience_row_view_manifests WHERE viewer_id=? AND device_id=?`, u.ID, req.Device.ID).Scan(&count); err != nil {
+		if err = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM experience_row_view_manifests WHERE viewer_id=? AND device_id=? AND expires>?`, u.ID, req.Device.ID, now).Scan(&count); err != nil {
 			return nil, err
 		}
 		if count >= 1000 {
@@ -393,29 +383,39 @@ func (s *RowViewService) ListRowViews(ctx context.Context, req frontend.RowViewR
 		for n, c := range candidates {
 			args[n] = c.scope
 		}
-		rows, e := tx.QueryContext(ctx, `SELECT scope_hash,id FROM experience_row_views WHERE scope_hash IN (`+store.Placeholders(len(args))+`)`, args...)
+		rows, e := tx.QueryContext(ctx, `SELECT scope_hash,id,expires FROM experience_row_views WHERE scope_hash IN (`+store.Placeholders(len(args))+`)`, args...)
 		if e != nil {
 			return nil, e
 		}
 		existing := map[string]string{}
+		keep := map[string]bool{}
+		live := 0
 		for rows.Next() {
 			var scope, id string
-			if e = rows.Scan(&scope, &id); e != nil {
+			var expires int64
+			if e = rows.Scan(&scope, &id, &expires); e != nil {
 				rows.Close()
 				return nil, e
 			}
 			existing[scope] = id
+			keep[id] = true
+			if expires > now {
+				live++
+			}
 		}
 		e = rows.Err()
 		rows.Close()
 		if e != nil {
 			return nil, e
 		}
-		var count int
-		if err = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM experience_row_views WHERE viewer_id=? AND device_id=?`, u.ID, req.Device.ID).Scan(&count); err != nil {
+		if err := expireReplaced(keep); err != nil {
 			return nil, err
 		}
-		if count+len(candidates)-len(existing) > 1000 {
+		var count int
+		if err = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM experience_row_views WHERE viewer_id=? AND device_id=? AND expires>?`, u.ID, req.Device.ID, now).Scan(&count); err != nil {
+			return nil, err
+		}
+		if count+len(candidates)-live > 1000 {
 			return nil, errors.New("experience: row view limit reached")
 		}
 		args = nil

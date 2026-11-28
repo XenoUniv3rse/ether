@@ -4,16 +4,19 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/braedonsaunders/ether/internal/core"
-	"github.com/braedonsaunders/ether/internal/events"
-	"github.com/braedonsaunders/ether/internal/logredact"
-	"github.com/braedonsaunders/ether/internal/plugins/wasm"
 	"net/http"
 	"runtime"
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
+
+	"github.com/braedonsaunders/ether/internal/core"
+	"github.com/braedonsaunders/ether/internal/events"
+	"github.com/braedonsaunders/ether/internal/frontend"
+	"github.com/braedonsaunders/ether/internal/logredact"
+	"github.com/braedonsaunders/ether/internal/plugins/wasm"
 )
 
 const (
@@ -28,19 +31,20 @@ const (
 // ActionJobStatus is a bounded, in-memory snapshot. Checkpoints belong in plugin
 // KV when they must survive a server restart; tokens are only passed between calls.
 type ActionJobStatus struct {
-	Path         string    `json:"path"`
-	Label        string    `json:"label,omitempty"`
-	Kind         string    `json:"kind,omitempty"`
-	Code         string    `json:"code,omitempty"`
-	State        string    `json:"state"` // running, done, canceled, error
-	Progress     string    `json:"progress,omitempty"`
-	Outcome      string    `json:"outcome,omitempty"`
-	Error        string    `json:"error,omitempty"`
-	Attempts     int       `json:"attempts"`
-	Started      time.Time `json:"started"`
-	Finished     time.Time `json:"finished,omitzero"`
-	TotalLimitMS int64     `json:"totalLimitMs"`
-	AttemptLimit int       `json:"attemptLimit"`
+	Path         string        `json:"path"`
+	Label        string        `json:"label,omitempty"`
+	Kind         string        `json:"kind,omitempty"`
+	Code         string        `json:"code,omitempty"`
+	State        string        `json:"state"` // running, done, canceled, error
+	Progress     string        `json:"progress,omitempty"`
+	Outcome      string        `json:"outcome,omitempty"`
+	Error        string        `json:"error,omitempty"`
+	Failure      *RouteFailure `json:"failure,omitempty"`
+	Attempts     int           `json:"attempts"`
+	Started      time.Time     `json:"started"`
+	Finished     time.Time     `json:"finished,omitzero"`
+	TotalLimitMS int64         `json:"totalLimitMs"`
+	AttemptLimit int           `json:"attemptLimit"`
 }
 
 type actionJob struct {
@@ -82,7 +86,7 @@ func (h *HostJobHandle) SetProgress(progress string) {
 }
 
 // Finish marks a host-tracked job terminal with optional code, outcome and error.
-func (h *HostJobHandle) Finish(state, code, outcome, errMsg string) {
+func (h *HostJobHandle) Finish(state, code, outcome, errMsg string, failure *RouteFailure) {
 	if h == nil || h.job == nil {
 		return
 	}
@@ -101,6 +105,7 @@ func (h *HostJobHandle) Finish(state, code, outcome, errMsg string) {
 	h.job.status.Code = code
 	h.job.status.Outcome = outcome
 	h.job.status.Error = errMsg
+	h.job.status.Failure = failure
 	h.job.status.Finished = now
 	if state == "done" {
 		h.job.status.Progress = ""
@@ -130,6 +135,9 @@ func (m *Manager) BeginHostJob(pluginID, dedupKey, routePath, label, kind string
 			return true
 		}
 		s := v.(*actionJob).snapshot()
+		if s.Code == frontendPreparationWaitCode {
+			return true
+		}
 		count++
 		if s.State != "running" && (oldestKey == "" || s.Started.Before(oldest)) {
 			oldestKey, oldest = ks, s.Started
@@ -160,6 +168,35 @@ func (m *Manager) BeginHostJob(pluginID, dedupKey, routePath, label, kind string
 	return &HostJobHandle{m: m, pluginID: pluginID, job: j}
 }
 
+const frontendPreparationWaitCode = "frontend_preparation_wait"
+
+var frontendPreparationWaitID atomic.Uint64
+
+// TrackFrontendPreparationWait adds a transient Activity row for a held
+// download. Its cancellation stops the request wait, independently of the
+// resolver job. The caller removes the row before delivering the stream.
+func (m *Manager) TrackFrontendPreparationWait(pluginID string, budget time.Duration, cancel context.CancelFunc) func() {
+	if m == nil {
+		return func() {}
+	}
+	path := fmt.Sprintf("/ether/v1/kind-media/wait-%d", frontendPreparationWaitID.Add(1))
+	key := pluginID + "|host|" + path
+	done := make(chan struct{})
+	close(done)
+	m.jobs.Store(key, &actionJob{
+		cancel: cancel,
+		done:   done,
+		status: ActionJobStatus{
+			Path:         path,
+			Code:         frontendPreparationWaitCode,
+			State:        "running",
+			Started:      time.Now().UTC(),
+			TotalLimitMS: budget.Milliseconds(),
+		},
+	})
+	return func() { m.jobs.Delete(key) }
+}
+
 // UpdateHostJob updates an existing non-running host-managed job (for example
 // when the owner acknowledges a paused delete guard and chooses to keep items).
 func (m *Manager) UpdateHostJob(pluginID, dedupKey, state, code, outcome, errMsg string) {
@@ -185,6 +222,7 @@ func (m *Manager) UpdateHostJob(pluginID, dedupKey, state, code, outcome, errMsg
 	j.status.Code = code
 	j.status.Outcome = outcome
 	j.status.Error = errMsg
+	j.status.Failure = nil
 	j.status.Progress = ""
 	j.status.Finished = now
 }
@@ -294,6 +332,9 @@ func (m *Manager) StartExpandJobPriority(pluginID, routePath, dedupKey string, i
 			return true
 		}
 		s := v.(*actionJob).snapshot()
+		if s.Code == frontendPreparationWaitCode {
+			return true
+		}
 		count++
 		if s.State == "running" {
 			if !strings.HasPrefix(ks, resolverPrefix) && !strings.HasPrefix(ks, hostPrefix) {
@@ -410,6 +451,9 @@ func (m *Manager) startResolverJob(pluginID string, body, initial json.RawMessag
 			return true
 		}
 		s := v.(*actionJob).snapshot()
+		if s.Code == frontendPreparationWaitCode {
+			return true
+		}
 		count++
 		if s.State == "running" {
 			if strings.HasPrefix(ks, resolverPrefix) {
@@ -706,6 +750,9 @@ func (m *Manager) handleActionJobs(w http.ResponseWriter, r *http.Request) {
 	m.jobs.Range(func(k, v any) bool {
 		if strings.HasPrefix(k.(string), id+"|") {
 			s := v.(*actionJob).snapshot()
+			if s.Code == frontendPreparationWaitCode {
+				s.Label = frontend.PluginPreparationLabel(r.Header.Get("Accept-Language"))
+			}
 			s.Progress = m.store.redactKnown(r.Context(), id, s.Progress)
 			s.Outcome = m.store.redactKnown(r.Context(), id, s.Outcome)
 			s.Error = m.store.redactKnown(r.Context(), id, s.Error)

@@ -132,7 +132,7 @@ func (s *Service) newEpisode(ctx context.Context, cfg Settings, u *core.User, sh
 // alert; the alert is then queued, and the episode prewarmed separately.
 // Until a release exists the show is checked again on the next due pass.
 func (s *Service) newEpisodeForSet(ctx context.Context, cfg Settings, userID int64, resolveUser *core.User, show, episode *core.Title) error {
-	res, e := s.resolve(ctx, resolveUser, episode)
+	res, e := s.resolve(ctx, cfg, resolveUser, episode)
 	if _, err := s.db.ExecContext(ctx, `UPDATE watchlist_items SET checked=? WHERE user_id=? AND item_key=?`, s.o.Now().Unix(), userID, show.Key); err != nil {
 		return err
 	}

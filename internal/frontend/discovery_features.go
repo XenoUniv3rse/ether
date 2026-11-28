@@ -54,6 +54,7 @@ type DiscoveryOverlays interface {
 
 type DiscoveryPersonal interface {
 	Hubs(ctx context.Context, viewer *core.User, limit int) ([]core.Hub, error)
+	Rediscover(ctx context.Context, viewer *core.User, limit int) (core.Hub, error)
 	RemoveContinue(ctx context.Context, uid int64, key core.RatingKey) error
 	RestoreContinue(ctx context.Context, uid int64, key core.RatingKey) error
 	ContinueAllowed(ctx context.Context, uid int64, t *core.Title) bool

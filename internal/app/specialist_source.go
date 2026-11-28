@@ -90,7 +90,7 @@ func (a *App) buildSourceRole(ctx context.Context, cfg config.Config) error {
 		Logger:                 a.log,
 		Cluster:                a.clusterNode(),
 		Availability:           a.dbAvail,
-		ViewerAudioPreferences: a.viewerAudioPreferences,
+		ResolveViewerLanguages: a.withEffectiveLanguages,
 		NativeProbe: func(ctx context.Context, src core.MediaSource) (*core.MediaInfo, error) {
 			return transcode.ProbeSource(ctx, src, src.Size())
 		},

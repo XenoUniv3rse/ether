@@ -33,6 +33,10 @@ func queueFlag(q url.Values, name string) (bool, bool) {
 	return n == 1, err == nil && n <= 1
 }
 
+type playlistQueueWindowReader interface {
+	QueueWindow(context.Context, int64, frontend.RatingKey, frontend.RatingKey, int) (*frontend.Playlist, int, int, error)
+}
+
 func (s *Server) handlePlayQueueCreate(w http.ResponseWriter, r *http.Request) {
 	// URI expansion and visibility reads also repeat viewer and show facts.
 	r = r.WithContext(reqmemo.With(r.Context()))
@@ -68,20 +72,38 @@ func (s *Server) handlePlayQueueCreate(w http.ResponseWriter, r *http.Request) {
 	var keys []frontend.RatingKey
 	var plKey frontend.RatingKey
 	var plTitle string
+	var playlistBefore, playlistAfter int
 	uri := q.Get("uri")
+	playlistID := q.Get("playlistID")
+	if playlistID == "" && uri != "" {
+		if path, err := uriPath(uri); err == nil {
+			if match := rePlaylistPath.FindStringSubmatch(path); len(match) > 0 {
+				playlistID = match[1]
+			}
+		}
+	}
 	switch {
-	case q.Get("playlistID") != "":
-		k, err := frontend.ParseRatingKey(q.Get("playlistID"))
+	case playlistID != "":
+		k, err := frontend.ParseRatingKey(playlistID)
 		if err != nil {
 			writeHTTPError(w, http.StatusBadRequest)
 			return
 		}
-		pl, err := s.queuePlaylist(ctx, pr, k)
+		var pl *frontend.Playlist
+		if load, ok := s.playlists().(playlistQueueWindowReader); ok && k.Kind() == frontend.KindPlaylist {
+			pl, playlistBefore, playlistAfter, err = load.QueueWindow(ctx, pr.User.ID, k, start, maxExpand)
+		} else {
+			pl, err = s.queuePlaylist(ctx, pr, k)
+		}
 		if err != nil {
 			s.writeErr(w, r, err)
 			return
 		}
-		keys, err = s.expandKey(ctx, pr, pl.Key)
+		if pl.Key.IsPluginKey() {
+			keys, err = s.expandKey(ctx, pr, pl.Key)
+		} else {
+			keys, err = s.expandPlaylist(ctx, pr, pl)
+		}
 		if err != nil {
 			s.writeErr(w, r, err)
 			return
@@ -158,6 +180,9 @@ func (s *Server) handlePlayQueueCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	keys, baseOffset, tailCount := windowKeys(keys, startIdx)
 	selectedIdx := startIdx - baseOffset
+
+	baseOffset += playlistBefore
+	tailCount += playlistAfter
 
 	// Cinema Trailers and the owner's pre-roll: prepend them before the
 	// feature and warm the feature while they play. A pre-roll needs no
@@ -574,7 +599,8 @@ func (s *Server) writePlayQueue(w http.ResponseWriter, r *http.Request, pq playQ
 	if pq.Selected >= 0 && pq.Selected < len(pq.Items) && !pq.SuppressMetadata {
 		keys = append(keys, pq.Items[pq.Selected].Key)
 	}
-	titles := s.visibleTitles(pr.User, s.getTitles(ctx, dedupeKeys(keys)))
+	titles := s.visibleTitlesWith(s.visibilityCtx(ctx), pr.User, s.getTitles(withStoredPolicy(ctx), dedupeKeys(keys)))
+	ctx = s.withSeriesRows(ctx, pr.User, titles)
 	byKey := make(map[frontend.RatingKey]*frontend.Title, len(titles))
 	for i := range titles {
 		byKey[titles[i].Key] = &titles[i]

@@ -59,6 +59,7 @@ type frontendRuntime struct {
 	control        *frontendControl
 	events         *sessions.EventBus
 	broker         *sessions.Broker
+	pollLimiter    *identity.LoginLimiter
 	stateUnsub     func()
 	artworkWait    func()
 	ctx            context.Context
@@ -117,7 +118,7 @@ func newFrontendRuntime(a *App, cfg config.Config) (*frontendRuntime, error) {
 		return nil, err
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	r := &frontendRuntime{app: a, ctx: ctx, cancel: cancel, events: a.sessionEvents, consoleOnMain: true, discovery: a.gdm, newDiscovery: func() plexDiscovery { return a.newGDMResponder() }}
+	r := &frontendRuntime{app: a, ctx: ctx, cancel: cancel, events: a.sessionEvents, consoleOnMain: true, pollLimiter: poll, discovery: a.gdm, newDiscovery: func() plexDiscovery { return a.newGDMResponder() }}
 	initialized := false
 	defer func() {
 		if !initialized {
@@ -304,6 +305,12 @@ func newFrontendRuntime(a *App, cfg config.Config) (*frontendRuntime, error) {
 			}
 		}
 		lazy, lazyErr := sessions.NewLazyStreams(a.db, r.broker, id, grants, time.Hour, func(req *http.Request) bool { ip, ok := a.frontendClientIP(req); return !ok || !identity.LAN(ip) })
+		if id == "stremio" && lazyErr == nil {
+			lazyErr = sessions.EnableLazyDirectTickets(lazy, a.cfg.DerivedKey("ether-lazy-direct-ticket-v1"))
+			if lazyErr != nil {
+				lazy = nil
+			}
+		}
 		if setter, ok := lazy.(interface {
 			SetClientIP(func(*http.Request) (netip.Addr, bool))
 		}); ok {
@@ -312,6 +319,12 @@ func newFrontendRuntime(a *App, cfg config.Config) (*frontendRuntime, error) {
 		versionHandles, handleErr := sessions.NewVersionHandles(a.db, r.broker, id, a.cfg.DerivedKey("ether-version-id-v1"))
 		if handleErr != nil {
 			a.log.Error("version handles unavailable", "surface", id, "err", handleErr)
+		}
+		if (id == "jellyfin" || id == "emby") && lazyErr == nil && handleErr == nil {
+			lazyErr = sessions.EnableMediaBrowserDirectTickets(lazy, versionHandles, a.cfg.DerivedKey("ether-lazy-direct-ticket-v1"))
+			if lazyErr != nil {
+				lazy = nil
+			}
 		}
 		var sourceOffers frontend.SourceOffers
 		if id == "silo" {
@@ -412,8 +425,24 @@ func newFrontendRuntime(a *App, cfg config.Config) (*frontendRuntime, error) {
 			return r.secureOriginsFor(ctx, id, req)
 		}, SurfaceURL: func(ctx context.Context, req *http.Request) (string, error) {
 			return scorecardSurfaceURL(ctx, r, id, req)
-		}, PublicOrigin: publicOrigin, RepoFileURL: repoFile, TracePlayback: a.tracePlayback, ServerIdentity: serverIdentity, OwnerSubscription: ownerSub, LANViewer: lanViewer, PageFreshness: func() frontend.PageFreshness {
+		}, PublicOrigin: publicOrigin, RepoFileURL: repoFile, TracePlayback: a.tracePlayback, ServerIdentity: serverIdentity, OwnerSubscription: ownerSub, LANViewer: lanViewer, LineupPolicy: func(id int64) (int64, bool) {
+			u, _ := a.users.ActiveUser(context.Background(), id)
+			revision, judged := a.catalog.ViewerRulesJudge(u)
+			return revision, judged || a.safety.Restricted(u)
+		}, LineupBoundary: func(ctx context.Context, now time.Time) (time.Time, error) {
+			return a.catalog.NextLineupBoundary(ctx, now, a.cfg.Read().Availability)
+		}, ObserveLineupBuild: func(ctx context.Context, build func(context.Context) error) error {
+			return a.perf.observeLineupBuild(ctx, build)
+		}, PageFreshness: func() frontend.PageFreshness {
 			f := a.browseFreshness()
+			if id == "xtream" {
+				if a.availability != nil {
+					f.Availability = a.availability.VisibilityGeneration()
+				}
+				if a.episodeorder != nil {
+					f.EpisodeOrder = a.episodeorder.Generation()
+				}
+			}
 			if imageRevision != nil {
 				f.Images = imageRevision()
 			}

@@ -101,7 +101,7 @@ export interface FrontendAdapter<S = Record<string, unknown>> {
   ): MaybePromise<{
     status: number;
     headers?: Record<string, string>;
-    body: string;
+    body?: string;
     /** Ether serves cached bytes, an item's media, or an item's artwork instead of body. */
     blob?: FrontendBlob;
     media?: FrontendMedia;
@@ -158,7 +158,7 @@ export async function streamUrl<S = Record<string, unknown>>(
   if (!Number.isFinite(viewerId) || viewerId <= 0) {
     throw new Error("stream url: no authenticated viewer on this request");
   }
-  if (opts.source !== undefined || opts.absolute) {
+  if (opts.source !== undefined || opts.absolute || opts.wait) {
     return ctx.ether.frontend.streamUrl(viewerId, itemRef, opts);
   }
   return opts.partIndex === undefined
@@ -414,9 +414,10 @@ export async function dispatchKinds<S = Record<string, unknown>>(
       if (upload.contentType) headers["Content-Type"] = upload.contentType;
     }
     const res = await adapter.handle(method, subPath, headers, upload ? "" : frontendBodyString(req), ctx, upload);
-    if (res.body.length > 10 * 1024 * 1024) return err(502, "adapter_error", "Frontend adapter response is larger than 10 MiB; serve media through Ether stream URLs.");
+    const body = res.body ?? "";
+    if (body.length > 10 * 1024 * 1024) return err(502, "adapter_error", "Frontend adapter response is larger than 10 MiB; serve media through Ether stream URLs.");
     // A HEAD reply carries headers only, exactly as a real server would.
-    const out: RawResponse = { status: res.status, headers: res.headers ?? {}, body: method === "HEAD" ? "" : res.body };
+    const out: RawResponse = { status: res.status, headers: res.headers ?? {}, body: method === "HEAD" ? "" : body };
     if (res.blob) out.blob = res.blob;
     if (res.media) out.media = res.media;
     if (res.art) out.art = res.art;

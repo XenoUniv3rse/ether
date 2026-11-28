@@ -71,8 +71,8 @@ func (noopHost) SetWatchState(context.Context, int64, string, bool) error {
 func (noopHost) CollectionsUpsert(context.Context, json.RawMessage) error {
 	return plugins.ErrPermissionDenied
 }
-func (noopHost) FoldersList(context.Context, string, string) ([]plugins.FolderEntry, error) {
-	return nil, plugins.ErrPermissionDenied
+func (noopHost) FoldersList(context.Context, string, string, ...plugins.FolderListOptions) (plugins.FolderPage, error) {
+	return plugins.FolderPage{}, plugins.ErrPermissionDenied
 }
 func (noopHost) FoldersStat(context.Context, string, string) (plugins.FolderEntry, error) {
 	return plugins.FolderEntry{}, plugins.ErrPermissionDenied
@@ -592,12 +592,16 @@ func TestHostedTypeScriptAsyncHandler(t *testing.T) {
 	}
 }
 
-func (noopHost) FoldersHash(context.Context, string, string) (plugins.FolderHash, error) {
+func (noopHost) FoldersHash(context.Context, string, string, ...plugins.FolderHashOptions) (plugins.FolderHash, error) {
 	return plugins.FolderHash{}, nil
 }
 
-func (noopHost) FoldersHashStart(context.Context, string, string) (plugins.FolderHashJob, error) {
+func (noopHost) FoldersHashStart(context.Context, string, string, ...plugins.FolderHashOptions) (plugins.FolderHashJob, error) {
 	return plugins.FolderHashJob{}, nil
+}
+
+func (noopHost) FoldersFrame(context.Context, string, string, plugins.FolderFrameOptions) (plugins.FolderFrame, error) {
+	return plugins.FolderFrame{}, fmt.Errorf("folders.frame requires the hosted runtime")
 }
 
 func (noopHost) FoldersHashPoll(context.Context, string) (plugins.FolderHashJob, error) {

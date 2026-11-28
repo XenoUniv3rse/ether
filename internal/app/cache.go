@@ -3,13 +3,17 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
+	"path"
 	"strings"
 	"time"
 
 	"github.com/braedonsaunders/ether/internal/admin"
+	"github.com/braedonsaunders/ether/internal/blobcache"
 	"github.com/braedonsaunders/ether/internal/config"
 	"github.com/braedonsaunders/ether/internal/core"
+	"github.com/braedonsaunders/ether/internal/frontend/kit/route"
 	"github.com/braedonsaunders/ether/internal/playback"
 	"github.com/braedonsaunders/ether/internal/resolver"
 	"github.com/braedonsaunders/ether/internal/segcache"
@@ -77,7 +81,7 @@ func hasReleaseInfo(info core.ReleaseInfo) bool {
 // This extension is mounted behind the owner API's authentication and CSRF guard.
 func (a *App) cacheHandler() http.Handler {
 	a.cache.SetBlockCheck(a.resolver.LocalReleaseBlocked)
-	mux := http.NewServeMux()
+	mux := &route.Mux{}
 	a.registerWarmingControls(mux)
 	a.registerVaultAdmin(mux)
 	mux.HandleFunc("POST /clear-all", func(w http.ResponseWriter, r *http.Request) {
@@ -104,8 +108,44 @@ func (a *App) cacheHandler() http.Handler {
 			}
 			freed += max(int64(0), before-a.cache.ReleaseBytes(release.ReleaseID))
 		}
+		if a.mediaFiles != nil {
+			n, err := a.mediaFiles.ClearFiles()
+			freed += n
+			if err != nil {
+				complete = false
+			}
+		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{"freedBytes": freed, "complete": complete})
+	})
+	mux.HandleFunc("POST /clear-file", func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			LibraryKey string        `json:"libraryKey"`
+			Ref        blobcache.Ref `json:"ref"`
+		}
+		if json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&body) != nil || body.LibraryKey == "" || strings.ContainsAny(body.LibraryKey, "/\\") || path.Clean(body.LibraryKey) != body.LibraryKey || strings.Trim(body.LibraryKey, ".") == "" {
+			http.Error(w, "Invalid cached file", http.StatusBadRequest)
+			return
+		}
+		if _, err := body.Ref.Hash(); err != nil {
+			http.Error(w, "Invalid file reference", http.StatusBadRequest)
+			return
+		}
+		if a.mediaFiles == nil {
+			http.NotFound(w, r)
+			return
+		}
+		freed, err := a.mediaFiles.EvictFile(body.LibraryKey, body.Ref)
+		switch {
+		case errors.Is(err, blobcache.ErrNotFound):
+			http.NotFound(w, r)
+		case errors.Is(err, blobcache.ErrFileInUse):
+			http.Error(w, "File is in use", http.StatusConflict)
+		case err != nil:
+			http.Error(w, "Could not clear file", http.StatusInternalServerError)
+		default:
+			libJSON(w, http.StatusOK, map[string]int64{"freedBytes": freed})
+		}
 	})
 	mux.HandleFunc("POST /clear", func(w http.ResponseWriter, r *http.Request) { a.clearReleaseCache(w, r, false) })
 	mux.HandleFunc("POST /clear-block", func(w http.ResponseWriter, r *http.Request) { a.clearReleaseCache(w, r, true) })
@@ -206,8 +246,34 @@ func (a *App) cacheHandler() http.Handler {
 				pinnedBytes += item.Bytes
 			}
 		}
+		if a.mediaFiles != nil {
+			pinnedBytes += a.mediaFiles.ProtectedBytes()
+		}
+		var files []map[string]any
+		if r.URL.Query().Get("files") == "1" && a.mediaFiles != nil {
+			names := map[string]string{}
+			if a.libraries != nil {
+				libs, _ := a.libraries.List(r.Context())
+				for _, lib := range libs {
+					names[lib.Key] = lib.Name
+				}
+			}
+			for _, f := range a.mediaFiles.Files() {
+				library := names[f.LibraryKey]
+				if library == "" {
+					library = f.LibraryKey
+				}
+				name, _, _ := strings.Cut(f.Name, "?")
+				name, _, _ = strings.Cut(name, "#")
+				name = path.Base(strings.ReplaceAll(name, "\\", "/"))
+				if name == "." || name == "/" || name == "" {
+					name = string(f.Ref)
+				}
+				files = append(files, map[string]any{"libraryKey": f.LibraryKey, "library": library, "ref": f.Ref, "name": name, "size": f.Size, "lastOpen": f.LastOpen, "inUse": f.InUse})
+			}
+		}
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]any{"policy": a.runningCacheConfig(), "shared": a.cache.Shared(), "clustered": a.clustered(), "storageError": a.cache.StorageError(), "restartRequired": a.cacheRestartRequired(), "used": used, "budget": budget, "directory": a.cache.Directory(), "protectedBytes": pinnedBytes, "releases": releases, "metrics": a.cache.Metrics(), "prefetch": a.prefetch.Stats(), "preload": preload})
+		_ = json.NewEncoder(w).Encode(map[string]any{"files": files, "policy": a.runningCacheConfig(), "shared": a.cache.Shared(), "clustered": a.clustered(), "storageError": a.cache.StorageError(), "restartRequired": a.cacheRestartRequired(), "used": used, "budget": budget, "directory": a.cache.Directory(), "protectedBytes": pinnedBytes, "releases": releases, "metrics": a.cache.Metrics(), "prefetch": a.prefetch.Stats(), "preload": preload})
 	})
 	mux.HandleFunc("POST /warm", func(w http.ResponseWriter, r *http.Request) {
 		cfg := a.runningCacheConfig()

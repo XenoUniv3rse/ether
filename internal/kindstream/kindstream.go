@@ -90,10 +90,12 @@ const DefaultMaxNonVideoReleaseGrabs = 3
 // Deps supplies the runtime dependencies needed by Open and OpenSources
 // (spec §5.1).
 type Deps struct {
-	OpenFile    func(context.Context, core.PlayableSource) (ByteSource, error)
-	HTTP        *http.Client
-	Cache       *blobcache.Namespace
-	OpenRelease func(ctx context.Context, r core.ReleaseHint) (core.MediaSource, error)
+	// LimitRangeTransport applies the plugin manager’s shared per-origin connection limit.
+	LimitRangeTransport func(http.RoundTripper) http.RoundTripper
+	OpenFile            func(context.Context, core.PlayableSource) (ByteSource, error)
+	HTTP                *http.Client
+	Cache               *blobcache.Namespace
+	OpenRelease         func(ctx context.Context, r core.ReleaseHint) (core.MediaSource, error)
 	// OpenReleaseSource, when set, is preferred over OpenRelease so release
 	// opening receives the full PlayableSource (MIME, Container, Release).
 	OpenReleaseSource func(ctx context.Context, src core.PlayableSource) (core.MediaSource, error)
@@ -110,8 +112,10 @@ type Deps struct {
 	Secret               func(ctx context.Context, name string) (string, error)
 	AllowHost            func(host string) bool
 	MaxDownloadBytes     int64
-	ItemIndex            int
-	Backoff              *HostBackoff
+	// CacheWriteLimits obtains plugin download and member grants only when caching bytes.
+	CacheWriteLimits func() (download, member int64)
+	ItemIndex        int
+	Backoff          *HostBackoff
 	// OnSourceFailed, when set, is called each time a candidate fails to open,
 	// regardless of whether a later candidate succeeds.
 	OnSourceFailed func(attempt, total int, src core.PlayableSource, took time.Duration, err error)
@@ -768,7 +772,20 @@ func openRangeSource(ctx context.Context, src core.PlayableSource, deps Deps) (B
 	if src.SizeApproximate {
 		knownSize = 0
 	}
+	if src.Connections < 0 || src.Connections > 6 {
+		return nil, fmt.Errorf("kindstream: range connections must be 1 to 6")
+	}
+	client := deps.HTTP
+	if src.Connections > 1 && deps.LimitRangeTransport != nil {
+		if client == nil {
+			client = defaultStreamingHTTPClient()
+		}
+		limited := *client
+		limited.Transport = deps.LimitRangeTransport(client.Transport)
+		client = &limited
+	}
 	hr, err := newHTTPReaderAt(ctx, httpReaderConfig{
+		Connections:           src.Connections,
 		Template:              tmpl,
 		Headers:               hdrs,
 		SecretHeaderKeys:      secretHeaderNames(src.Headers),
@@ -776,7 +793,7 @@ func openRangeSource(ctx context.Context, src core.PlayableSource, deps Deps) (B
 		ItemIndex:             deps.ItemIndex,
 		KnownSize:             knownSize,
 		MIME:                  src.MIME,
-		Client:                deps.HTTP,
+		Client:                client,
 		AllowHost:             deps.AllowHost,
 		Backoff:               deps.Backoff,
 	})
@@ -823,7 +840,7 @@ func downloadFromNoRangeResponse(
 
 	combined := io.MultiReader(bytes.NewReader(noRange.head), noRange.resp.Body)
 	if limit > 0 {
-		combined = io.LimitReader(combined, limit+1)
+		combined = &limitEnforcingReader{r: combined, max: limit}
 	}
 
 	cacheKey := downloadCacheKey(rawURL, deps.ItemIndex)
@@ -1764,16 +1781,34 @@ func UnwrapMediaSource(bs ByteSource) core.MediaSource {
 // Internal helpers
 
 func effectiveDownloadMaxBytes(srcMax int64, deps Deps) int64 {
-	if srcMax > 0 {
-		return srcMax
+	var grant int64
+	if deps.CacheWriteLimits != nil {
+		grant, _ = deps.CacheWriteLimits()
 	}
-	if deps.MaxDownloadBytes > 0 {
-		return deps.MaxDownloadBytes
+	return effectiveCacheWriteLimit(srcMax, grant, deps)
+}
+
+func effectiveMemberMaxBytes(srcMax int64, deps Deps) int64 {
+	var grant int64
+	if deps.CacheWriteLimits != nil {
+		_, grant = deps.CacheWriteLimits()
 	}
+	return effectiveCacheWriteLimit(srcMax, grant, deps)
+}
+
+func effectiveCacheWriteLimit(srcMax, grant int64, deps Deps) int64 {
+	// Bound the in-memory fallback when no disk namespace is available.
+	const maxInMemoryBytes int64 = 2 << 30
+	limit := maxInMemoryBytes
 	if deps.Cache != nil {
-		return deps.Cache.Quota().EffectiveMaxBytes()
+		limit = deps.Cache.Quota().EffectiveMaxBytes()
 	}
-	return blobcache.DefaultMaxBytes
+	for _, cap := range []int64{grant, deps.MaxDownloadBytes, srcMax} {
+		if cap > 0 {
+			limit = min(limit, cap)
+		}
+	}
+	return limit
 }
 
 func downloadCacheKey(rawURL string, itemIdx int) string {

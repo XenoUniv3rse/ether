@@ -332,11 +332,47 @@ type playlistRows struct {
 	playlistType string
 }
 
+type playlistTitleRowsCatalog interface {
+	PlaylistTitleRows(context.Context, []frontend.RatingKey, frontend.TitleFacts) (map[frontend.RatingKey]frontend.Title, error)
+	frontend.CachedTitleBatchReader
+}
+
+func (s *Server) storedPlaylistTitles(ctx context.Context, pr *Request, keys []frontend.RatingKey, cat playlistTitleRowsCatalog) ([]frontend.Title, error) {
+	var catalogue, plugin []frontend.RatingKey
+	for _, key := range keys {
+		if key.IsPluginKey() {
+			plugin = append(plugin, key)
+		} else {
+			catalogue = append(catalogue, key)
+		}
+	}
+	vis := s.visibilityCtx(ctx)
+	rows, err := cat.PlaylistTitleRows(ctx, catalogue, vis.TitleFacts(pr.User))
+	if err != nil {
+		return nil, err
+	}
+	pluginRows := s.kindItemsBatch(ctx, pr, plugin)
+	titles := make([]frontend.Title, 0, len(keys))
+	for _, key := range keys {
+		row, ok := rows[key]
+		if key.IsPluginKey() {
+			row, ok = pluginRows[key]
+		}
+		if ok {
+			titles = append(titles, row)
+		}
+	}
+	return s.visibleTitlesWith(vis, pr.User, titles), nil
+}
+
 // playlistItemRows lists a playlist's items and renders only the page the
 // client asked for: a 3000-item playlist read 50 at a time renders 50 rows,
 // not every item for each page.
 func (s *Server) playlistItemRows(ctx context.Context, pr *Request, pl *frontend.Playlist, q url.Values) (playlistRows, error) {
+	ctx = frontend.WithCatalogViewer(ctx, pr.User)
 	var titles []frontend.Title
+	catalogue, compact := s.catalog().(playlistTitleRowsCatalog)
+	compact = compact && pl.SmartURI == ""
 	if pl.SmartURI != "" {
 		all := *pr
 		all.HasPage, all.Start, all.Size = true, 0, maxExpand
@@ -345,8 +381,14 @@ func (s *Server) playlistItemRows(ctx context.Context, pr *Request, pl *frontend
 		if err != nil {
 			return playlistRows{}, err
 		}
+	} else if compact {
+		var err error
+		titles, err = s.storedPlaylistTitles(ctx, pr, pl.Items, catalogue)
+		if err != nil {
+			return playlistRows{}, err
+		}
 	} else {
-		titles = s.visibleTitles(pr.User, s.getTitles(ctx, pl.Items))
+		titles = s.visibleTitlesWith(s.visibilityCtx(ctx), pr.User, s.getTitles(ctx, pl.Items))
 	}
 	types := map[frontend.MediaType]bool{}
 	for _, t := range titles {
@@ -362,6 +404,7 @@ func (s *Server) playlistItemRows(ctx context.Context, pr *Request, pl *frontend
 	// Resolve parent identities once, retaining first appearance rather than sorting membership.
 	selected := make([]frontend.Title, 0, len(titles))
 	seen := map[frontend.RatingKey]bool{}
+	var parentKeys []frontend.RatingKey
 	for _, t := range titles {
 		if unknown {
 			continue
@@ -376,12 +419,32 @@ func (s *Server) playlistItemRows(ctx context.Context, pr *Request, pl *frontend
 				continue
 			}
 			seen[key] = true
+			if compact && !key.IsPluginKey() {
+				parentKeys = append(parentKeys, key)
+				selected = append(selected, frontend.Title{Key: key})
+				continue
+			}
 			if parent, err := s.metadataTitle(ctx, pr, key); err == nil {
 				selected = append(selected, *parent)
 			}
 		} else if want == "" || want == typ {
 			selected = append(selected, t)
 		}
+	}
+	if len(parentKeys) > 0 {
+		parents, err := catalogue.PlaylistTitleRows(ctx, parentKeys, s.visibilityCtx(ctx).TitleFacts(pr.User))
+		if err != nil {
+			return playlistRows{}, err
+		}
+		resolved := selected[:0]
+		for _, t := range selected {
+			if t.Type != "" {
+				resolved = append(resolved, t)
+			} else if parent, ok := parents[t.Key]; ok {
+				resolved = append(resolved, parent)
+			}
+		}
+		selected = resolved
 	}
 	// Reuse SQL browse predicates with an explicit key bound. This cannot scan the
 	// library; the stored list is the only candidate set, and its order is restored.
@@ -450,6 +513,20 @@ func (s *Server) playlistItemRows(ctx context.Context, pr *Request, pl *frontend
 	lo, hi := pr.window(len(selected))
 	out.lo = lo
 	page := selected[lo:hi]
+	if compact && len(page) > 0 {
+		// Membership decisions used partial rows. Only the page needs artwork,
+		// credits and other presentation fields.
+		details, err := catalogue.CachedGetMany(ctx, titleKeys(page))
+		if err != nil {
+			return playlistRows{}, err
+		}
+		page = append([]frontend.Title(nil), page...)
+		for i := range page {
+			if t, ok := details[page[i].Key]; ok {
+				page[i] = t
+			}
+		}
+	}
 	if len(selected) > 0 {
 		// As the full render was: an empty window of a non-empty list is an
 		// empty, not absent, row list.
@@ -458,7 +535,13 @@ func (s *Server) playlistItemRows(ctx context.Context, pr *Request, pl *frontend
 	state := s.stateFor(ctx, pr, page)
 	// Each row's Playable check (resumed tracks) reads its series from one
 	// batch of rows.
-	ctx = s.withSeriesRows(ctx, pr.User, page)
+	series := append([]frontend.Title(nil), page...)
+	for i, t := range selected {
+		if (i < lo || i >= hi) && t.Runtime <= 0 && t.ShowKey != 0 && isPlayable(t.Type) {
+			series = append(series, t)
+		}
+	}
+	ctx = s.withSeriesRows(ctx, pr.User, series)
 	var slotPage *slotMediaPage
 	if len(page) > 1 {
 		slotPage = &slotMediaPage{}

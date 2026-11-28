@@ -136,7 +136,7 @@ func (i *instance) bootstrap(w http.ResponseWriter, r *http.Request) {
 		// Credentials scope the image grants and cursor scope includes the complete
 		// viewer policy. Do not reuse wire responses between refresh families/devices,
 		// certificate-region preferences, or viewer spoiler-free preferences.
-		scope := hashJSON([]any{v, dev, token, avatar, spoilerFree, downloads, plexHomeSwitchAllowed, r.URL.RequestURI(), i.appearanceDocument().etag, i.livePreviewMode(), i.liveEventsAvailable(), i.extrasAvailable(), i.extraPlaybackAvailable(), i.previewAvailable(), i.themeAvailable(), i.capabilitiesRevision(), i.signInMethods(), i.preferredRatingRegions(r), i.screensGeneration(), screenClient(r), frontend.ScreenPreviewFrom(r.Context())})
+		scope := hashJSON([]any{v, dev, token, avatar, spoilerFree, downloads, plexHomeSwitchAllowed, r.URL.RequestURI(), i.appearanceDocument().etag, i.livePreviewMode(), i.trailerPlaybackMode(), i.liveEventsAvailable(), i.extrasAvailable(), i.extraPlaybackAvailable(), i.previewAvailable(), i.themeAvailable(), i.capabilitiesRevision(), i.signInMethods(), i.preferredRatingRegions(r), i.screensGeneration(), screenClient(r), frontend.ScreenPreviewFrom(r.Context())})
 		freshness := i.bootstrapFreshness()
 		var before frontend.HomeRevision
 		cacheable := false
@@ -172,7 +172,7 @@ func (i *instance) bootstrap(w http.ResponseWriter, r *http.Request) {
 				err := i.validateBootstrapRows(r.Context(), entry.rows, entry.expires)
 				if err == nil {
 					varyLanguage(w)
-					cache(w, r, entry.payload)
+					cacheWithRevision(w, r, entry.payload, before.Viewer)
 					return
 				}
 				if !retryBootstrap(err) {
@@ -264,7 +264,9 @@ func (i *instance) bootstrap(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		varyLanguage(w)
-		cache(w, r, payload)
+		// Preference changes also invalidate bootstrap when the affected title
+		// was only on a library row and the Home payload is otherwise identical.
+		cacheWithRevision(w, r, payload, before.Viewer)
 		return
 	}
 	if err := request.Context().Err(); err != nil {

@@ -67,6 +67,7 @@ func (x *Indexer) PrepareSources(ctx context.Context, releases []core.Release) [
 	}
 	if len(hashes) > 0 && ctx.Err() == nil {
 		x.svc.CheckCached(ctx, hashes)
+		x.askCacheHints(ctx, out)
 	}
 	return out
 }

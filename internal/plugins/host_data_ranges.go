@@ -17,8 +17,6 @@ import (
 
 var errFetchCacheRangeFallback = errors.New("plugins: fetchToCache cannot use parallel ranges")
 
-const maxFetchCacheConnections = 8
-
 func (h *host) fetchCacheConnections(ctx context.Context, req FetchCacheRequest) int {
 	if req.Connections <= 1 || !h.allowsLongFetchToCache(ctx) {
 		return 1
@@ -32,7 +30,7 @@ func (h *host) fetchCacheConnections(ctx context.Context, req FetchCacheRequest)
 	if limiter := h.m.fetchHosts; limiter != nil && limiter.limit > 0 {
 		cap = limiter.limit
 	}
-	return min(req.Connections, maxFetchCacheConnections, cap)
+	return min(req.Connections, DefaultMaxFetchPerHost, cap)
 }
 
 func canFetchCacheRanges(resp *http.Response, meta blobcache.PartialMeta) bool {
@@ -59,15 +57,24 @@ func canFetchCacheRanges(resp *http.Response, meta blobcache.PartialMeta) bool {
 }
 
 func fetchCacheRangeSource(resp *http.Response) string {
-	// Validators identify versions of one resource. Redirects must land on
-	// the same resource for the probe, each range, and subsequent resumes.
+	// Store the resource identity without persisting a potentially signed URL.
 	return fmt.Sprintf("%x", sha256.Sum256([]byte(resp.Request.URL.String())))
+}
+
+func matchesFetchCacheRangeSource(meta blobcache.PartialMeta, source string, headers http.Header) bool {
+	if meta.RangeSource == source {
+		return validatorsMatch(meta, headers)
+	}
+	// Replicas may have different modification dates. Across URLs, only a
+	// matching strong ETag and total length (checked by the caller) suffice.
+	return meta.ETag != "" && ifRangeHeaderValue(meta) == meta.ETag &&
+		strings.TrimSpace(headers.Get("ETag")) == meta.ETag
 }
 
 func matchesFetchCacheRanges(saved, current blobcache.PartialMeta, headers http.Header) bool {
 	return len(saved.RangeProgress) == 0 ||
-		(saved.ContentLength == current.ContentLength && saved.RangeSource == current.RangeSource &&
-			ifRangeHeaderValue(saved) == ifRangeHeaderValue(current) && validatorsMatch(saved, headers))
+		(saved.ContentLength == current.ContentLength && ifRangeHeaderValue(saved) == ifRangeHeaderValue(current) &&
+			matchesFetchCacheRangeSource(saved, current.RangeSource, headers))
 }
 
 func (h *host) fetchCacheRanges(
@@ -187,7 +194,7 @@ func (h *host) fetchCacheRange(
 	length := end - start
 	if !ok || cr.start != start || cr.end != end-1 || cr.total != meta.ContentLength ||
 		(resp.ContentLength >= 0 && resp.ContentLength != length) || isCompressedResponse(resp) ||
-		!validatorsMatch(meta, resp.Header) || resp.Request == nil || resp.Request.URL == nil || fetchCacheRangeSource(resp) != meta.RangeSource {
+		resp.Request == nil || resp.Request.URL == nil || !matchesFetchCacheRangeSource(meta, fetchCacheRangeSource(resp), resp.Header) {
 		return 0, errFetchCacheRangeFallback
 	}
 

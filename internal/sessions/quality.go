@@ -77,10 +77,12 @@ func (b *Broker) qualityPlan(ctx context.Context, s *brokerSession, viewer *core
 	if !allowed || dec.Container == "mkv" {
 		return nil, nil, nil
 	}
-	width, height, kbps := s.opts.MaxWidth, s.opts.MaxHeight, s.opts.MaxBitrateKbps
-	if s.caps.MaxHeight > 0 && (height == 0 || s.caps.MaxHeight < height) {
-		height = s.caps.MaxHeight
-	}
+	variants, limits := b.qualityVariants(ps.Info, dec, s, s.caps, b.qualityBitrateCap(ctx, s, viewer, ps.Info.BitrateKbps), false)
+	return variants, limits, nil
+}
+
+func (b *Broker) qualityBitrateCap(ctx context.Context, s *brokerSession, viewer *core.Viewer, demand int) int {
+	kbps := s.opts.MaxBitrateKbps
 	if s.caps.MaxBitrateKbps > 0 && (kbps == 0 || s.caps.MaxBitrateKbps < kbps) {
 		kbps = s.caps.MaxBitrateKbps
 	}
@@ -102,24 +104,37 @@ func (b *Broker) qualityPlan(ctx context.Context, s *brokerSession, viewer *core
 		}
 	}
 	if s.caps.Remote && b.deps.RemoteUploadCap != nil {
-		if limit, fromBudget := b.deps.RemoteUploadCap(ctx, s.playID, true, true, kbps, ps.Info.BitrateKbps); fromBudget && limit > 0 && (kbps == 0 || limit < kbps) {
+		if limit, fromBudget := b.deps.RemoteUploadCap(ctx, s.playID, true, true, kbps, demand); fromBudget && limit > 0 && (kbps == 0 || limit < kbps) {
 			kbps = limit
 		}
 	}
+	return kbps
+}
+
+func (b *Broker) qualityVariants(info core.MediaInfo, dec core.Decision, s *brokerSession, caps core.ClientCaps, kbps int, adaptive bool) ([]core.QualityVariant, []core.QualityLimitation) {
+	width, height := s.opts.MaxWidth, stricterLimit(s.opts.MaxHeight, caps.MaxHeight)
 	support := transcode.QualitySupport{}
 	if provider, ok := b.deps.Transcoder.(interface {
+		AdaptiveQualitySupport(core.MediaInfo, core.Decision) transcode.QualitySupport
+	}); adaptive && ok {
+		support = provider.AdaptiveQualitySupport(info, dec)
+	} else if provider, ok := b.deps.Transcoder.(interface {
 		QualitySupport() transcode.QualitySupport
 	}); ok {
 		support = provider.QualitySupport()
 	}
-	variants, limits := transcode.VelaQualityVariants(ps.Info, dec, s.caps, width, height, kbps, support)
+	plan := transcode.VelaQualityVariants
+	if adaptive {
+		plan = transcode.AdaptiveQualityVariants
+	}
+	variants, limits := plan(info, dec, caps, width, height, kbps, support)
 	out := variants[:0]
 	for _, variant := range variants {
 		if variant.Rung.Height <= 0 {
 			continue
 		}
-		d, ok := constrainedH264(variant.Decision, ps.Info, s.caps, b.h264EncoderVerified())
-		if !ok || !profileDeliveryAllowed(s.caps.Profiles, d, ps.Info, "hls") {
+		d, ok := constrainedH264(variant.Decision, info, caps, b.h264EncoderVerified())
+		if !ok || !profileDeliveryAllowed(caps.Profiles, d, info, "hls") {
 			limits = append(limits, core.QualityLimitation{Height: variant.Rung.Height, Reason: "decoder_profile_limit"})
 			continue
 		}
@@ -135,7 +150,7 @@ func (b *Broker) qualityPlan(ctx context.Context, s *brokerSession, viewer *core
 	if len(filteredLimits) == 0 {
 		filteredLimits = nil
 	}
-	return out, filteredLimits, nil
+	return out, filteredLimits
 }
 
 func (b *Broker) qualityRungs(ctx context.Context, s *brokerSession, viewer *core.Viewer) ([]core.HLSRung, error) {

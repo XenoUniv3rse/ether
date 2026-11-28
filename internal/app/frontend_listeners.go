@@ -501,6 +501,8 @@ func connectionURLs(address, prefix string, interfaces []net.Addr) []string {
 	return out
 }
 
+type frontendQueryContextKey struct{}
+
 // observe aggregates authentication failures per protocol and records recent
 // client-visible base addresses in memory on successful responses. Request
 // paths, credentials and client identifiers never enter failure summaries.
@@ -509,7 +511,13 @@ func (m *frontendListeners) observe(id frontend.Protocol, mountPrefix string, ne
 		return nil
 	}
 	next = m.observeTraffic(id, mountPrefix, next)
-	return m.perf.wrap(string(id), catalogueDeadline(string(id), next))
+	observed := m.perf.wrap(string(id), catalogueDeadline(string(id), next))
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet || r.Method == http.MethodHead {
+			r = r.WithContext(context.WithValue(r.Context(), frontendQueryContextKey{}, true))
+		}
+		observed.ServeHTTP(w, r)
+	})
 }
 
 func (m *frontendListeners) observeTraffic(id frontend.Protocol, mountPrefix string, next http.Handler) http.Handler {

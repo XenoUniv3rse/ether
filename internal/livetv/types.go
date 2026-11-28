@@ -325,10 +325,12 @@ type Source struct {
 	// the panel's limit; it can never raise it). TuneGapSeconds is the least
 	// time between two new provider streams: 0 is the default (2 s on a
 	// connection-limited account, none otherwise), negative turns it off.
+	// SlotWaitSeconds is the viewer's capacity wait, from 0 to 10 seconds.
 	// TunesPerHour caps new provider streams per hour; 0 is no cap.
-	MaxConnections int `json:"maxConnections,omitempty"`
-	TuneGapSeconds int `json:"tuneGapSeconds,omitempty"`
-	TunesPerHour   int `json:"tunesPerHour,omitempty"`
+	MaxConnections  int `json:"maxConnections,omitempty"`
+	TuneGapSeconds  int `json:"tuneGapSeconds,omitempty"`
+	SlotWaitSeconds int `json:"slotWaitSeconds,omitempty"`
+	TunesPerHour    int `json:"tunesPerHour,omitempty"`
 }
 
 // ProviderAccount is what an IPTV panel reports about the owner's login.
@@ -485,7 +487,9 @@ type Options struct {
 	Showcase bool
 }
 type SessionInfo struct {
-	ActiveSourceID string `json:"activeSourceId,omitempty"`
+	ActiveSourceID   string                     `json:"activeSourceId,omitempty"`
+	Provider         *core.LiveProvider         `json:"provider,omitempty"`
+	PreviousProvider *core.LiveProviderIdentity `json:"previousProvider,omitempty"`
 	// Plex's rolling subscription identity is numeric; the stream UUID remains
 	// separate. These are ephemeral identities, scoped to this service lifetime.
 	SubscriptionID  int64           `json:"-"`
@@ -501,6 +505,7 @@ type SessionInfo struct {
 
 // ProviderLogin adds an account without importing another lineup.
 type ProviderLogin struct {
+	Label       string           `json:"label,omitempty"`
 	ID          string           `json:"id"`
 	Username    string           `json:"username,omitempty"`
 	Password    string           `json:"password,omitempty"`

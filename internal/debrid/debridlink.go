@@ -50,6 +50,7 @@ const (
 var reInfoHash = regexp.MustCompile(`^[0-9a-fA-F]{40}$`)
 
 type debridLink struct {
+	pace    *accountPacer
 	key     string
 	opts    ProviderOptions
 	list    listCache
@@ -59,8 +60,10 @@ type debridLink struct {
 }
 
 func newDebridLink(key string, opts ProviderOptions) *debridLink {
-	return &debridLink{key: key, opts: opts.withDefaults(debridLinkBase), known: make(map[string]string)}
+	return &debridLink{pace: opts.paces.forAccount("debridlink", key, opts.Now), key: key, opts: opts.withDefaults(debridLinkBase), known: make(map[string]string)}
 }
+
+func (p *debridLink) accountPace() *accountPacer { return p.pace }
 
 func (p *debridLink) Kind() string { return "debridlink" }
 
@@ -97,6 +100,12 @@ type dlTorrent struct {
 }
 
 func (p *debridLink) do(ctx context.Context, r apiRequest) (json.RawMessage, error) {
+	return pacedCall(ctx, p.pace, r, r.path == "/seedbox/add", func(ctx context.Context, r apiRequest) (json.RawMessage, error) {
+		return p.request(ctx, r)
+	})
+}
+
+func (p *debridLink) request(ctx context.Context, r apiRequest) (json.RawMessage, error) {
 	status, body, err := call(ctx, p.opts.HTTPClient, p.opts.BaseURL, r, func(req *http.Request) {
 		req.Header.Set("Authorization", "Bearer "+p.key)
 	})
@@ -115,7 +124,16 @@ func (p *debridLink) do(ctx context.Context, r apiRequest) (json.RawMessage, err
 		return nil, derr
 	}
 	logProviderResponse(ctx, p.key, status, env.Error, env.Desc)
-	return nil, p.classify(status, env)
+	env.Desc = cleanDiagnostic(env.Desc, p.key)
+	env.Error = cleanDiagnostic(env.Error, p.key)
+	err = p.classify(status, env)
+	if status == http.StatusUnavailableForLegalReasons || errors.Is(err, ErrBlocked) {
+		if r.path == "/seedbox/add" || env.Error == "infringingTorrent" {
+			return nil, ErrBlockedHash
+		}
+		return nil, ErrBlockedFile
+	}
+	return nil, err
 }
 
 // dlError keeps Debrid-Link's error code next to its classification.
@@ -152,28 +170,30 @@ func dlClassify(status int, env dlEnvelope) error {
 	}
 	switch env.Error {
 	case "badToken", "unverifiedEmail", "access_denied", "invalid_client", "unauthorized_client", "invalid_grant", "notFreeHost",
-		"maxData", "maxDataHost", "maxLink", "maxLinkHost":
+		"expired_token", "invalid_scope":
 		// Invalid or expired key, a free account that must verify its email,
-		// an app without permission, a feature that needs premium, or the
-		// account's daily traffic exhausted: the account, not the release.
+		// an app without permission, or a feature that needs premium.
 		return fmt.Errorf("debrid-link: %s: %w", msg, ErrAuth)
 	case "maxTransfer":
 		// The simultaneous-transfer limit: nothing new is added for now.
 		return fmt.Errorf("debrid-link: %s: %w", msg, ErrDownloadLimit)
-	case "floodDetected", "maxTorrent", "freeServerOverload":
-		// Too many requests (~1h), the daily new-torrent or simultaneous
-		// transfer limit, or overloaded free servers: back off and retry.
+	case "floodDetected", "maxTorrent", "freeServerOverload", "maxData", "maxDataHost", "maxLink", "maxLinkHost":
+		// Request, link, new-torrent or traffic limits, or overloaded free
+		// servers: back off and retry.
 		return fmt.Errorf("debrid-link: %s: %w", msg, ErrRateLimited)
-	case "badId", "fileNotFound":
+	case "authorization_pending":
+		return fmt.Errorf("debrid-link: %s: %w", msg, ErrPending)
+	case "badId", "fileNotFound", "hostNotValid", "badFileUrl", "badFilePassword":
 		return fmt.Errorf("debrid-link: %s: %w", msg, ErrGone)
-	case "infringingFile": // unavailable for legal reasons
+	case "infringingFile", "infringingTorrent": // unavailable for legal reasons
 		return fmt.Errorf("debrid-link: %s: %w", msg, ErrBlocked)
 	case "torrentTooBig":
 		// Exceeds this service's torrent size limit; another provider may still have it.
 		return fmt.Errorf("debrid-link: %s: %w", msg, ErrTooLarge)
 	case "notAddTorrent":
-		// The torrent could not be added: another provider may still have it.
-		return fmt.Errorf("debrid-link: %s: %w", msg, core.ErrNotCached)
+		// Full-magnet refusals can be account-related. Only a cached-only
+		// add may use this code as a cache miss.
+		return fmt.Errorf("debrid-link: %s: %w", msg, ErrAddRefused)
 	case "badTorrentFile":
 		return fmt.Errorf("debrid-link: %s: %w", msg, core.ErrReleaseRejected)
 	}
@@ -259,6 +279,10 @@ func dlFileByID(t *dlTorrent, id string) *dlFile {
 }
 
 func (p *debridLink) Acquire(ctx context.Context, req AcquireRequest) (*Acquired, error) {
+	return p.pace.acquireRemembered(ctx, req, p.opts.Now, p.acquire)
+}
+
+func (p *debridLink) acquire(ctx context.Context, req AcquireRequest) (_ *Acquired, err error) {
 	if req.Private && !req.privateChecked {
 		var perr error
 		req, perr = prepareAcquire(ctx, p, req, false)
@@ -286,7 +310,7 @@ func (p *debridLink) Acquire(ctx context.Context, req AcquireRequest) (*Acquired
 				return nil, fmt.Errorf("debrid-link: duplicate torrent not listed: %w", core.ErrSourceUnavailable)
 			}
 		} else if err != nil {
-			if hashOnly && dlCode(err) == "badArguments" {
+			if hashOnly && (dlCode(err) == "badArguments" || errors.Is(err, ErrAddRefused)) {
 				return nil, fmt.Errorf("debrid-link: hash not cached: %w", core.ErrNotCached)
 			}
 			return nil, err
@@ -303,7 +327,7 @@ func (p *debridLink) Acquire(ctx context.Context, req AcquireRequest) (*Acquired
 	}
 	cleanup := func() bool {
 		if added && req.RemoveUncached {
-			rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+			rctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 			defer cancel()
 			if req.mayRemove(rctx, id) {
 				return p.Remove(rctx, id) == nil
@@ -358,6 +382,10 @@ func (p *debridLink) Acquire(ctx context.Context, req AcquireRequest) (*Acquired
 }
 
 func (p *debridLink) Link(ctx context.Context, h Handle) (DirectLink, error) {
+	return p.pace.linkRemembered(ctx, h, p.opts.Now, p.link)
+}
+
+func (p *debridLink) link(ctx context.Context, h Handle) (DirectLink, error) {
 	if h.TorrentID == "" || h.FileID == "" {
 		return DirectLink{}, ErrGone
 	}
@@ -398,6 +426,7 @@ func (p *debridLink) Remove(ctx context.Context, torrentID string) error {
 }
 
 func (p *debridLink) Account(ctx context.Context) (Account, error) {
+	ctx = core.WithIndexerPurpose(ctx, core.IndexerPurposeTest)
 	data, err := p.do(ctx, apiRequest{method: http.MethodGet, path: "/account/infos"})
 	if err != nil {
 		return Account{}, err

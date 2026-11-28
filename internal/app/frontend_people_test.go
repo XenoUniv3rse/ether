@@ -175,7 +175,7 @@ func peopleHTTPFixture(t *testing.T) (*surfaceExperience, *peopleHTTPState, *peo
 		Children: func(context.Context, *core.User, core.RatingKey) ([]core.Title, error) { return nil, nil }, State: peopleUnusedState{}, Rows: &experience.RowsService{}, Protocol: "silo", Search: experience.Search{Catalog: func(context.Context, string, []core.MediaType, int) ([]core.Title, error) {
 			panic("people read reached provider search")
 		}},
-		Enrich: func(context.Context, *core.User, core.Device, *core.Title) (frontend.ItemDetail, error) {
+		Enrich: func(context.Context, *core.User, frontend.ItemRequest, *core.Title) (frontend.ItemDetail, error) {
 			panic("people read reached playback/source enrichment")
 		},
 	}

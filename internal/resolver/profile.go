@@ -34,7 +34,7 @@ func clientDevice(caps core.ClientCaps) string {
 }
 
 func clientIdentity(caps core.ClientCaps) clientreg.Identity {
-	return clientreg.Identity{Product: caps.Product, Platform: caps.Platform, Device: clientDevice(caps), DeviceName: caps.DeviceName, Version: caps.Version}
+	return clientreg.Identity{Product: caps.Product, Platform: caps.Platform, Device: clientDevice(caps), DeviceName: caps.DeviceName, Model: caps.Model, Version: caps.Version}
 }
 
 // defaultCappedAndroidClient reports whether caps describes an Android
@@ -177,7 +177,7 @@ func (f *clientFacts) matches(d config.DeviceMatch) bool {
 		return f.class == v
 	case "type":
 		f.load()
-		return f.deviceType == v
+		return clientreg.DeviceTypeMatches(f.deviceType, v)
 	case "app":
 		f.load()
 		return f.appID == v
@@ -415,6 +415,7 @@ func ApplyClientRulesForTitle(q config.Quality, caps core.ClientCaps, user *core
 // applyRuleLimits lowers caps to the accumulated rule limits.
 func applyRuleLimits(caps core.ClientCaps, eff *ruleEffect) core.ClientCaps {
 	l := eff.limits
+	caps.QualityRuleMaxHeight = l.maxHeight
 	if l.maxHeight > 0 && (caps.MaxHeight == 0 || l.maxHeight < caps.MaxHeight) {
 		caps.MaxHeight = l.maxHeight
 		caps.MaxHeightSource = fmt.Sprintf("quality rule (max %dp)", l.maxHeight)
@@ -441,6 +442,7 @@ func applyClientRules(q config.Quality, caps core.ClientCaps, user *core.User, t
 	ev := evaluate(q, caps, user, target)
 	eff := ruleEffect{choice: ev.choice, limits: ev.limits, limitRules: ev.limitRules, fallbackLimitSource: ev.fallbackLimitSource}
 	if caps.Download {
+		caps.QualityRuleMaxHeight = 0
 		return caps, eff
 	}
 	prof := eff.choice.profile

@@ -14,6 +14,8 @@ export interface UsenetProvider {
   priority: number;
   backfill: boolean;
   enabled: boolean;
+  /** Article store shared with other accounts; "" or absent = its own. */
+  backbone?: string;
 }
 
 export interface Indexer {
@@ -293,6 +295,19 @@ export interface DebridProviderStatus {
   state: "ok" | "backoff" | "auth_failed" | "disabled" | string;
   lastError?: string;
   backoffUntil?: string;
+  rateLimitedUntil?: string;
+  api?: {
+    attempts: number;
+    endpoints: Record<string, number> | null;
+    retries: number;
+    limited: number;
+    http429: number;
+    listHits: number;
+    reuseHits: number;
+    rememberedHits: number;
+    firstPlays: number;
+    firstPlayCalls: number;
+  };
   requests?: number;
   failures?: number;
   cached?: number;
@@ -374,7 +389,7 @@ export interface EtherConfig {
     ownerPlexId: number;
     ownerUsername: string;
     claimed: boolean;
-    usePlexMetadata?: boolean;
+    usePlexMetadata?: boolean | null;
     remoteAccess: boolean;
     useUpnp: boolean;
     publicPort: number;
@@ -483,6 +498,8 @@ export interface EtherConfig {
     healthRace?: number;
     sourcePreference?: string;
     sourceAlwaysFirst?: boolean;
+    /** Play a file a source plugin serves from a granted folder before any fetched release. */
+    preferLocalFiles?: boolean;
     customFormats?: CustomFormatDefinition[] | null;
     /** Let a detail page's file-availability check open on-demand add-on streams. */
     openOnDemandAddonStreams?: boolean;
@@ -1002,6 +1019,7 @@ export interface CandidateTrace {
   route?: string;
 }
 export interface ResolverTrace {
+  pluginKind?: boolean;
   downgrade?: string;
   discovery?: { path: string; count: number; rescue?: boolean }[];
   limits?: {

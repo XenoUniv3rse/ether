@@ -171,9 +171,10 @@ func SignInMethodsFromSettings(s map[string]any) SignInMethods {
 }
 
 // CapabilitiesChanged reports whether two Vela settings maps produce different
-// advertised sign-in capabilities.
+// advertised capabilities.
 func CapabilitiesChanged(before, after map[string]any) bool {
-	return SignInMethodsFromSettings(before) != SignInMethodsFromSettings(after)
+	return SignInMethodsFromSettings(before) != SignInMethodsFromSettings(after) ||
+		trailerPlaybackMode(before) != trailerPlaybackMode(after)
 }
 
 // NormalizeSettings trims appName, omits unset branding keys, and clones wordmark/icon maps.

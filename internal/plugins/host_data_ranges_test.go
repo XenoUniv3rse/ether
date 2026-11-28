@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -67,21 +68,48 @@ func TestFetchToCacheParallelRanges(t *testing.T) {
 	var retry atomic.Bool
 	var resumedOffset atomic.Int64
 	var retriedFinishedRange atomic.Bool
+	var replicaRanges, replicaFallback sync.Map
 	type connectionKey struct{}
 	type connection struct {
 		mu     sync.Mutex
 		active atomic.Int32
 	}
-	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	var primary, secondary *httptest.Server
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/replicas", "/replicas-different-tag", "/replicas-different-length", "/replicas-weak":
+			target := primary.URL + "/primary" + r.URL.Path
+			if requested := r.Header.Get("Range"); requested != "" {
+				replicaRanges.Store(r.URL.Path, true)
+				if !strings.HasPrefix(requested, "bytes=0-") {
+					target = secondary.URL + "/secondary" + r.URL.Path
+				}
+			} else if _, attempted := replicaRanges.Load(r.URL.Path); attempted {
+				replicaFallback.Store(r.URL.Path, true)
+			}
+			http.Redirect(w, r, target, http.StatusTemporaryRedirect)
+			return
+		}
 		w.Header().Set("Accept-Ranges", "bytes")
 		var validator string
 		switch r.URL.Path {
 		case "/date":
 			validator = time.Unix(1000000, 0).UTC().Format(http.TimeFormat)
 			w.Header().Set("Last-Modified", validator)
+		case "/primary/replicas-weak", "/secondary/replicas-weak":
+			w.Header().Set("ETag", `W/"v1"`)
+			w.Header().Set("Last-Modified", time.Unix(1000000, 0).UTC().Format(http.TimeFormat))
 		default:
 			validator = `"v1"`
 			w.Header().Set("ETag", validator)
+		}
+		if r.URL.Path == "/primary/replicas" || r.URL.Path == "/secondary/replicas" {
+			// The two copies carry the same strong ETag and independent timestamps.
+			modified := int64(1000000)
+			if r.URL.Path == "/secondary/replicas" {
+				modified += 3600
+			}
+			w.Header().Set("Last-Modified", time.Unix(modified, 0).UTC().Format(http.TimeFormat))
 		}
 
 		start, end := 0, len(payload)
@@ -95,6 +123,9 @@ func TestFetchToCacheParallelRanges(t *testing.T) {
 			}
 		}
 		if ranged && r.URL.Path != "/ignored" {
+			if strings.HasPrefix(r.URL.Path, "/primary/") || strings.HasPrefix(r.URL.Path, "/secondary/") {
+				validator = "" // If-Range is stripped on these cross-origin redirects.
+			}
 			if r.Header.Get("If-Range") != validator {
 				t.Error("unexpected If-Range validator")
 				w.WriteHeader(http.StatusPreconditionFailed)
@@ -113,6 +144,12 @@ func TestFetchToCacheParallelRanges(t *testing.T) {
 			}
 			if r.URL.Path == "/wrong-range" {
 				w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/*", start, end-1))
+			}
+			switch r.URL.Path {
+			case "/secondary/replicas-different-tag":
+				w.Header().Set("ETag", `"v2"`)
+			case "/secondary/replicas-different-length":
+				w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", start, end-1, len(payload)+1))
 			}
 		}
 		w.Header().Set("Content-Length", strconv.Itoa(end-start))
@@ -174,7 +211,12 @@ func TestFetchToCacheParallelRanges(t *testing.T) {
 			return
 		}
 		_, _ = w.Write(payload[start:end])
-	}))
+	})
+	primary = httptest.NewTLSServer(handler)
+	defer primary.Close()
+	secondary = httptest.NewTLSServer(handler)
+	defer secondary.Close()
+	srv := httptest.NewUnstartedServer(handler)
 	srv.Config.ConnContext = func(ctx context.Context, _ net.Conn) context.Context {
 		return context.WithValue(ctx, connectionKey{}, &connection{})
 	}
@@ -257,6 +299,25 @@ func TestFetchToCacheParallelRanges(t *testing.T) {
 			fetchOK(t, job, path, path[1:]+".bin", 4, path != "/ignored")
 			if _, ok := fellBack.Load(path); !ok {
 				t.Fatal("incompatible range response did not trigger a full GET")
+			}
+		})
+	}
+	for _, tc := range []struct {
+		path     string
+		ranges   bool
+		fallback bool
+	}{
+		{path: "/replicas", ranges: true},
+		{path: "/replicas-different-tag", ranges: true, fallback: true},
+		{path: "/replicas-different-length", ranges: true, fallback: true},
+		{path: "/replicas-weak"},
+	} {
+		t.Run(tc.path[1:], func(t *testing.T) {
+			fetchOK(t, job, tc.path, tc.path[1:]+".bin", 4, true)
+			_, ranged := replicaRanges.Load(tc.path)
+			_, fallback := replicaFallback.Load(tc.path)
+			if ranged != tc.ranges || fallback != tc.fallback {
+				t.Fatalf("requested replica ranges = %t, fell back to full GET = %t", ranged, fallback)
 			}
 		})
 	}

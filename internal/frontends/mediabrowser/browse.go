@@ -258,7 +258,22 @@ func mediaBrowserCollectionType(view frontend.View) string {
 	}
 }
 
-// collectionFolder is one library view. The id is the view GUID, not a title.
+// collectionTypeDTO maps internal library kinds to the protocol enum.
+func (i *instance) collectionTypeDTO(kind string) string {
+	if i.protocol != "jellyfin" {
+		return kind
+	}
+	switch kind {
+	case "audiobooks":
+		return "books"
+	case "movies", "tvshows", "music", "musicvideos", "trailers", "homevideos", "boxsets", "books", "photos", "livetv", "playlists", "folders":
+		return kind
+	default:
+		return "unknown"
+	}
+}
+
+// collectionFolder is one library view identified by a view GUID.
 func (i *instance) collectionFolder(r *http.Request, v *frontend.Viewer, view frontend.View) (map[string]any, bool) {
 	viewNum, e := ids.ParseDecimal(view.ID)
 	if e != nil {
@@ -269,7 +284,7 @@ func (i *instance) collectionFolder(r *http.Request, v *frontend.Viewer, view fr
 		return nil, false
 	}
 	kind := mediaBrowserCollectionType(view)
-	item := map[string]any{"Id": viewID, "Name": view.Name, "Type": "CollectionFolder", "CollectionType": kind, "IsFolder": true, "ServerId": i.info.ID, "SortName": view.Name, "DisplayPreferencesId": viewID, "CanDelete": false, "CanDownload": false, "ProviderIds": map[string]string{}}
+	item := map[string]any{"Id": viewID, "Name": view.Name, "Type": "CollectionFolder", "CollectionType": i.collectionTypeDTO(kind), "IsFolder": true, "ServerId": i.info.ID, "SortName": view.Name, "DisplayPreferencesId": viewID, "CanDelete": false, "CanDownload": false, "ProviderIds": map[string]string{}}
 	if i.protocol == "emby" {
 		i.embyViewDTO(item)
 	}
@@ -621,7 +636,8 @@ func (i *instance) browseRoutes() error {
 			http.NotFound(w, r)
 			return
 		}
-		if d.Collection == nil && d.Playlist == nil && versionID == "" && !mbIsBookItem(d.Title) && (d.Title.Type == "movie" || d.Title.Type == "episode") {
+		rokuChapters := i.protocol == "jellyfin" && isJellyfinRoku(device(r)) && fieldSet(r)["chapters"]
+		if !rokuChapters && d.Collection == nil && d.Playlist == nil && versionID == "" && !mbIsBookItem(d.Title) && (d.Title.Type == "movie" || d.Title.Type == "episode") {
 			i.warmDetail(r, v, key)
 		}
 		if d.Collection != nil || d.Playlist != nil {
@@ -712,6 +728,9 @@ func (i *instance) browseRoutes() error {
 		}
 		i.addNamedFacets(r, v, d, dto)
 		if i.protocol == "jellyfin" {
+			if rokuChapters && (d.Title.Type == "movie" || d.Title.Type == "episode") && !mbDeclaredNonVideo(d.Title) {
+				i.probeRokuChapters(r, v, d, key, versionID, dto)
+			}
 			i.jellyfinItemDetailDTO(d, dto)
 			if sources, ok := dto["MediaSources"].([]any); ok {
 				for _, raw := range sources {
@@ -1096,7 +1115,11 @@ func (i *instance) pageWithExtra(w http.ResponseWriter, r *http.Request, v *fron
 	r = i.pageEditions(r, v, keys)
 	r = i.noteLocalUnplayedCounts(r, v, page.Items)
 	i.fillSeriesTitles(r, v, page.Items)
+	if i.protocol == "jellyfin" {
+		i.prefetchSeriesFacts(r, v, page.Items)
+	}
 	i.primeTitleLibraries(r, v, page.Items)
+	i.prefetchGenreItems(r, v, page.Items)
 	for _, title := range page.Items {
 		var editions []jellyfinEdition
 		if !mbIsBookItem(title) {
@@ -1202,7 +1225,7 @@ func (i *instance) children(w http.ResponseWriter, r *http.Request) {
 }
 
 func (i *instance) search(w http.ResponseWriter, r *http.Request) {
-	r = r.WithContext(frontend.WithSearchMemo(r.Context()))
+	r = r.WithContext(frontend.WithSearchMemo(frontend.WithSearchSummaryFacts(r.Context())))
 	v, _, err := i.viewer(r)
 	if err != nil || v == nil {
 		http.Error(w, "Unauthorized", 401)
@@ -1373,7 +1396,11 @@ func (i *instance) items(w http.ResponseWriter, r *http.Request) {
 		lib, ok := i.host.LiveTV.(frontend.CatchUpLibrary)
 		items := []any{}
 		if ok {
-			if item, err := lib.CatchUpItem(r.Context(), v, itemIDs[0]); err == nil {
+			item, err := lib.CatchUpItem(r.Context(), v, itemIDs[0])
+			if watch, ok := i.catchUpWatchState(); ok && err == nil {
+				item, err = frontend.CatchUpWithRollup(r.Context(), watch, v, item)
+			}
+			if err == nil {
 				items = append(items, i.catchUpDTO(r, item, token))
 			}
 		}

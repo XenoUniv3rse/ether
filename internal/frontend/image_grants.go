@@ -99,10 +99,13 @@ type PublicImageServer interface {
 type ImagePageRequest struct {
 	Ranked     map[core.RatingKey]int
 	RankedWide bool
-	Credential string
-	Device     core.Device
-	Titles     []core.Title
-	Kinds      []string
+	// IncludeVariants preserves each authorized image of the requested kinds.
+	// The default signs only the primary image of each kind.
+	IncludeVariants bool
+	Credential      string
+	Device          core.Device
+	Titles          []core.Title
+	Kinds           []string
 }
 
 // ImagePageSigner is the list path for image URLs. Serve still rechecks the

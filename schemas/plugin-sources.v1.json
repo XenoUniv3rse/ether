@@ -684,6 +684,13 @@
         "mime": {
           "type": "string"
         },
+        "connections": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 6,
+          "default": 1,
+          "description": "Requested concurrent reads for a range source. Shares the per-origin fetch limit."
+        },
         "tier": {
           "type": "integer",
           "description": "Optional quality-tier marker for interchangeable sources. Sources sharing the same tier may be reordered by Ether's source routing (owner auto/usenet/debrid preference, measured startup, and stall demotion) and may overtake each other after the ranked open grace period. Distinct tiers keep the plugin's tier order; omitting tier keeps the plugin's exact order."

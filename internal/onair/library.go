@@ -124,12 +124,19 @@ func (s *Service) libraryInfo(ctx context.Context, a Asset) (LibraryAsset, error
 	}
 	return v, nil
 }
-func (s *Service) libraryAsset(ctx context.Context, d string) (LibraryAsset, error) {
+func (s *Service) libraryAssetRow(ctx context.Context, d string) (Asset, error) {
 	var a Asset
 	a.Digest = d
 	e := s.db.QueryRowContext(ctx, "SELECT name,kind,size,license,mime,source,attribution,COALESCE(duration_ms,0),width,height FROM onair_assets WHERE digest=?", d).Scan(&a.Name, &a.Kind, &a.Size, &a.License, &a.MIME, &a.Source, &a.Attribution, &a.DurationMS, &a.Width, &a.Height)
 	if e != nil {
-		return LibraryAsset{}, ErrNotFound
+		return Asset{}, ErrNotFound
+	}
+	return a, nil
+}
+func (s *Service) libraryAsset(ctx context.Context, d string) (LibraryAsset, error) {
+	a, e := s.libraryAssetRow(ctx, d)
+	if e != nil {
+		return LibraryAsset{}, e
 	}
 	return s.libraryInfo(ctx, a)
 }
@@ -480,12 +487,12 @@ func (s *Service) LibraryRoutes(r chi.Router) {
 	for _, part := range []string{"thumb", "waveform"} {
 		part := part
 		r.Get("/assets/{id}/"+part, func(w http.ResponseWriter, r *http.Request) {
-			a, e := s.libraryAsset(r.Context(), chi.URLParam(r, "id"))
+			a, e := s.libraryAssetRow(r.Context(), chi.URLParam(r, "id"))
 			if e != nil {
 				result(w, nil, e)
 				return
 			}
-			b, e := s.libraryDerived(r.Context(), a, part == "waveform")
+			b, e := s.libraryDerived(r.Context(), LibraryAsset{Asset: a, MIME: a.MIME}, part == "waveform")
 			if e != nil {
 				result(w, nil, e)
 				return
@@ -509,7 +516,7 @@ func (s *Service) LibraryRoutes(r chi.Router) {
 			return
 		}
 		d := chi.URLParam(r, "id")
-		a, e := s.libraryAsset(r.Context(), d)
+		a, e := s.libraryAssetRow(r.Context(), d)
 		if e != nil {
 			result(w, nil, e)
 			return
@@ -620,7 +627,7 @@ func (s *Service) replaceLibraryAsset(w http.ResponseWriter, r *http.Request) {
 	result(w, v, e)
 }
 func (s *Service) trimLibraryAsset(w http.ResponseWriter, r *http.Request) {
-	a, e := s.libraryAsset(r.Context(), chi.URLParam(r, "id"))
+	a, e := s.libraryAssetRow(r.Context(), chi.URLParam(r, "id"))
 	if e != nil {
 		result(w, nil, e)
 		return

@@ -1,3 +1,4 @@
+import { PluginFailureDetails } from "../../../components/PluginFailure";
 import {
   catalogueCapNote,
   catalogueCapped,
@@ -110,6 +111,9 @@ export function PluginCatalogueSettings({
                 </Badge>
               ) : null}
             </div>
+            {!running && !guard && lib.sync?.failure ? (
+              <PluginFailureDetails failure={lib.sync.failure} />
+            ) : null}
             {guard ? (
               <DeleteGuardChoice
                 guard={guard}

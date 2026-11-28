@@ -2,6 +2,7 @@ package catalog
 
 import (
 	"context"
+	"encoding/json"
 	"maps"
 	"sort"
 	"strings"
@@ -138,37 +139,34 @@ type personKey struct {
 // CachedVisibleTitles is CachedCreditTitles for a visibility decision only:
 // the stored rows, plus the facts visibility rules and the release gate
 // read when they read any, without credits or alternative titles.
-func (c *Catalog) CachedVisibleTitles(ctx context.Context, keys []core.RatingKey, cfg config.Catalog, now time.Time) (map[core.RatingKey]core.Title, error) {
+func (c *Catalog) CachedVisibleTitles(ctx context.Context, keys []core.RatingKey, cfg config.Catalog, now time.Time, facts core.TitleFacts, needsAvailabilityFacts func(core.Title) bool) (map[core.RatingKey]core.Title, error) {
+	return c.cachedPeopleVisibility(ctx, keys, cfg, now, facts, needsAvailabilityFacts, false)
+}
+
+// CachedPeopleParents reads only the facts used for inherited credit policy.
+func (c *Catalog) CachedPeopleParents(ctx context.Context, keys []core.RatingKey, cfg config.Catalog, now time.Time, facts core.TitleFacts, needsAvailabilityFacts func(core.Title) bool) (map[core.RatingKey]core.Title, error) {
+	return c.cachedPeopleVisibility(ctx, keys, cfg, now, facts, needsAvailabilityFacts, true)
+}
+
+func (c *Catalog) cachedPeopleVisibility(ctx context.Context, keys []core.RatingKey, cfg config.Catalog, now time.Time, facts core.TitleFacts, needsAvailabilityFacts func(core.Title) bool, parentPolicy bool) (map[core.RatingKey]core.Title, error) {
 	filter := c.visibilityFilter()
 	digital := cfg.ReleaseMode == config.ModeDigital
+	facts |= c.policyFacts(filter)
+	if parentPolicy || digital {
+		facts |= core.FactHomeRelease
+	}
 	out := make(map[core.RatingKey]core.Title, len(keys))
 	for part := range store.Chunks(keys, 200) {
 		args := make([]any, len(part))
 		for i, k := range part {
 			args[i] = int64(k)
 		}
-		rows, err := c.db.QueryContext(ctx, `SELECT `+titleCols+` FROM catalog_titles WHERE key IN (`+placeholders(len(part))+`)`, args...)
+		items, err := c.readVisibilityRows(ctx, args, facts)
 		if err != nil {
 			return nil, err
 		}
-		var items []core.Title
-		for rows.Next() {
-			st, err := scanTitle(rows)
-			if err != nil {
-				rows.Close()
-				return nil, err
-			}
-			items = append(items, st.t)
-		}
-		err = rows.Err()
-		rows.Close()
-		if err != nil {
+		if err := c.hydratePeopleAvailability(ctx, items, facts, needsAvailabilityFacts); err != nil {
 			return nil, err
-		}
-		if !filter.Passive() || digital {
-			if err := c.hydrateVisibilityFacts(ctx, items); err != nil {
-				return nil, err
-			}
 		}
 		var seasons []*core.Title
 		for i := range items {
@@ -183,6 +181,9 @@ func (c *Catalog) CachedVisibleTitles(ctx context.Context, keys []core.RatingKey
 		}
 		for i := range items {
 			t := &items[i]
+			if parentPolicy && !c.cachedListVisible(t) {
+				continue
+			}
 			upcoming := cfg.ShowUpcomingMovies && t.Type == core.TypeMovie && !t.Released.IsZero() && t.Released.After(now)
 			if t.Adult || (!upcoming && !t.IsReleased(now)) || (!c.isTitleOrShowOwnerIncluded(t) && filter.Hidden(t)) || (!upcoming && digital && !homeReleaseVisible(t, now, cfg.HomeReleaseOffsetDays)) || (t.Type == core.TypeSeason && !listableSeason(t, now)) {
 				continue
@@ -198,6 +199,16 @@ func (c *Catalog) CachedVisibleTitles(ctx context.Context, keys []core.RatingKey
 // ctx's viewer reads (viewerPolicyFacts) and facts, the caller's own, and
 // without credits. The partial titles are not cached.
 func (c *Catalog) CachedVisibilityRows(ctx context.Context, keys []core.RatingKey, facts core.TitleFacts) (map[core.RatingKey]core.Title, error) {
+	return c.cachedVisibilityRows(ctx, keys, facts, false)
+}
+
+// CachedPlaylistVisibilityRows projects child episode release and inherited
+// policy fields too, for playlists that only render membership counts.
+func (c *Catalog) CachedPlaylistVisibilityRows(ctx context.Context, keys []core.RatingKey, facts core.TitleFacts) (map[core.RatingKey]core.Title, error) {
+	return c.cachedVisibilityRows(ctx, keys, facts, true)
+}
+
+func (c *Catalog) cachedVisibilityRows(ctx context.Context, keys []core.RatingKey, facts core.TitleFacts, children bool) (map[core.RatingKey]core.Title, error) {
 	out := make(map[core.RatingKey]core.Title, len(keys))
 	// A full snapshot already has every requested fact. Reuse it exactly as
 	// CachedGetMany does, so repeated policy/facet checks on a listing do
@@ -206,7 +217,11 @@ func (c *Catalog) CachedVisibilityRows(ctx context.Context, keys []core.RatingKe
 	var missing []core.RatingKey
 	for _, key := range keys {
 		if title, ok := c.cachedStored(key, gen, minute); ok {
-			if title.Type != core.TypeSeason && c.cachedListVisible(&title) {
+			if children && c.canProjectAlternateOrders() && (title.Type == core.TypeEpisode || title.Type == core.TypeSeason) {
+				missing = append(missing, key)
+				continue
+			}
+			if (children || title.Type != core.TypeSeason) && c.cachedListVisible(&title) {
 				out[key] = title
 			}
 			continue
@@ -214,36 +229,41 @@ func (c *Catalog) CachedVisibilityRows(ctx context.Context, keys []core.RatingKe
 		missing = append(missing, key)
 	}
 	facts |= c.viewerPolicyFacts(ctx) | c.policyFacts(c.visibilityFor(ctx))
-	for part := range store.Chunks(missing, 200) {
+	var items []core.Title
+	batchSize := 200
+	if children {
+		batchSize = 400
+	}
+	for part := range store.Chunks(missing, batchSize) {
 		args := make([]any, len(part))
 		for i, k := range part {
 			args[i] = int64(k)
 		}
-		rows, err := c.db.QueryContext(ctx, `SELECT `+titleCols+` FROM catalog_titles WHERE key IN (`+placeholders(len(part))+`)`, args...)
+		batch, err := c.readVisibilityRows(ctx, args, facts)
 		if err != nil {
 			return nil, err
 		}
-		var items []core.Title
-		for rows.Next() {
-			st, err := scanTitle(rows)
-			if err != nil {
-				rows.Close()
-				return nil, err
+		items = append(items, batch...)
+	}
+	if children {
+		for _, item := range items {
+			if item.Type == core.TypeSeason {
+				if err := c.airedCounts(ctx, items); err != nil {
+					return nil, err
+				}
+				break
 			}
-			items = append(items, st.t)
 		}
-		err = rows.Err()
-		rows.Close()
-		if err != nil {
+		if err := c.hydrateShowPolicy(ctx, items); err != nil {
 			return nil, err
 		}
-		if err := c.hydrateFacts(ctx, items, facts); err != nil {
+		if err := c.ProjectEpisodeTitles(ctx, items); err != nil {
 			return nil, err
 		}
-		for i := range items {
-			if items[i].Type != core.TypeSeason && c.cachedListVisible(&items[i]) {
-				out[items[i].Key] = items[i]
-			}
+	}
+	for i := range items {
+		if (children || items[i].Type != core.TypeSeason) && c.cachedListVisible(&items[i]) {
+			out[items[i].Key] = items[i]
 		}
 	}
 	return out, nil
@@ -346,45 +366,36 @@ func (c *Catalog) hydrateShowPolicy(ctx context.Context, items []core.Title) err
 		return nil
 	}
 	for chunk := range store.Chunks(showArgs, 200) {
-		ph := placeholders(len(chunk))
-		q := `SELECT tag, key, a, b, c, d FROM (
-SELECT 'id' AS tag, key, title AS a, content_rating AS b, enforcement_rating AS c, certifications AS d FROM catalog_titles WHERE key IN (` + ph + `)
-UNION ALL
-SELECT 'kw', key, keyword, '', '', '' FROM catalog_keywords WHERE key IN (` + ph + `)
-) AS show_policy`
-		bound := make([]any, 0, len(chunk)*2)
-		bound = append(bound, chunk...)
-		bound = append(bound, chunk...)
-		rows, err := c.db.QueryContext(ctx, q, bound...)
+		query := `SELECT t.key,t.title,t.content_rating,t.enforcement_rating,t.certifications,` +
+			textFactList(c.db, "catalog_keywords", "keyword", "t.key") +
+			` FROM catalog_titles t WHERE t.key IN (` + placeholders(len(chunk)) + `)`
+		rows, err := c.db.QueryContext(ctx, query, chunk...)
 		if err != nil {
 			return err
 		}
 		for rows.Next() {
-			var key int64
-			var tag, a, b, ccol, d string
-			if err := rows.Scan(&tag, &key, &a, &b, &ccol, &d); err != nil {
+			var key core.RatingKey
+			var show showPolicy
+			var certificates, keywords string
+			if err := rows.Scan(&key, &show.title, &show.contentRating, &show.enforcementRating, &certificates, &keywords); err != nil {
 				rows.Close()
 				return err
 			}
-			show := shows[core.RatingKey(key)]
-			if show == nil {
-				continue
+			show.certifications = decodeCertifications(certificates)
+			if keywords != "[]" {
+				if err := json.Unmarshal([]byte(keywords), &show.keywords); err != nil {
+					rows.Close()
+					return err
+				}
+				sort.Strings(show.keywords)
 			}
-			switch tag {
-			case "id":
-				show.title, show.contentRating, show.enforcementRating, show.certifications = a, b, ccol, decodeCertifications(d)
-			case "kw":
-				show.keywords = append(show.keywords, a)
-			}
+			shows[key] = &show
 		}
 		err = rows.Err()
 		rows.Close()
 		if err != nil {
 			return err
 		}
-	}
-	for _, show := range shows {
-		sort.Strings(show.keywords)
 	}
 	for i := range items {
 		if items[i].Type != core.TypeSeason && items[i].Type != core.TypeEpisode {

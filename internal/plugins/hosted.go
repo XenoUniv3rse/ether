@@ -415,7 +415,7 @@ func (b hostBridge) CallHost(ctx context.Context, name string, raw json.RawMessa
 		}
 	}
 	switch name {
-	case "runtime.limits", "http.hash", "http.fetchToCache", "cache.read", "cache.rasterize", "archive.list", "archive.open", "archive.read", "archive.extract":
+	case "runtime.limits", "http.hash", "http.fetchToCache", "cache.read", "cache.stat", "cache.usage", "cache.rasterize", "archive.list", "archive.open", "archive.read", "archive.extract":
 		out, err := CallDataHost(ctx, b.h, name, raw)
 		if err != nil {
 			return nil, mapHostError(err)
@@ -628,7 +628,7 @@ func (b hostBridge) CallHost(ctx context.Context, name string, raw json.RawMessa
 					dec := json.NewDecoder(bytes.NewReader(rawArg))
 					dec.DisallowUnknownFields()
 					if err := dec.Decode(&opts); err != nil {
-						return nil, &wasm.Fault{Code: "bad_arguments", Message: "frontend.streamURL options must be { partIndex?, source?, absolute? }"}
+						return nil, &wasm.Fault{Code: "bad_arguments", Message: "frontend.streamURL options must be { partIndex?, source?, fallback?, absolute?, wait? }"}
 					}
 					if opts.PartIndex != nil && *opts.PartIndex < 0 {
 						return nil, &wasm.Fault{Code: "bad_arguments", Message: "frontend.streamURL partIndex must be a non-negative integer"}
@@ -641,6 +641,12 @@ func (b hostBridge) CallHost(ctx context.Context, name string, raw json.RawMessa
 					opts.PartIndex = &n
 				}
 			}
+		}
+		if opts.Fallback && opts.Source == "" {
+			return nil, &wasm.Fault{Code: "bad_arguments", Message: "frontend.streamURL fallback requires a source"}
+		}
+		if opts.Wait != nil && opts.Wait.MaxSeconds <= 0 {
+			return nil, &wasm.Fault{Code: "bad_arguments", Message: "frontend.streamURL wait.maxSeconds must be a positive integer"}
 		}
 		u, err := b.h.StreamURLWithOptions(ctx, str(0), opts)
 		if err != nil {
@@ -703,11 +709,22 @@ func (b hostBridge) CallHost(ctx context.Context, name string, raw json.RawMessa
 		return result(out, nil)
 	case "cache.delete":
 		return result(nil, b.h.CacheDelete(ctx, str(0)))
+	case "folders.roots":
+		v, err := b.h.FoldersRoots(ctx)
+		return result(v, err)
 	case "folders.list":
-		v, err := b.h.FoldersList(ctx, str(0), str(1))
+		var opts FolderListOptions
+		if len(args) > 2 && json.Unmarshal(args[2], &opts) != nil {
+			return nil, &wasm.Fault{Code: "bad_arguments", Message: "invalid folder list options"}
+		}
+		v, err := b.h.FoldersList(ctx, str(0), str(1), opts)
 		return result(v, err)
 	case "folders.hashStart":
-		v, err := b.h.FoldersHashStart(ctx, str(0), str(1))
+		var opts FolderHashOptions
+		if len(args) > 2 && json.Unmarshal(args[2], &opts) != nil {
+			return nil, &wasm.Fault{Code: "bad_arguments", Message: "invalid folder hash options"}
+		}
+		v, err := b.h.FoldersHashStart(ctx, str(0), str(1), opts)
 		return result(v, err)
 	case "folders.hashPoll":
 		v, err := b.h.FoldersHashPoll(ctx, str(0))
@@ -716,7 +733,18 @@ func (b hostBridge) CallHost(ctx context.Context, name string, raw json.RawMessa
 		v, err := b.h.FoldersHashCancel(ctx, str(0))
 		return result(v, err)
 	case "folders.hash":
-		v, err := b.h.FoldersHash(ctx, str(0), str(1))
+		var opts FolderHashOptions
+		if len(args) > 2 && json.Unmarshal(args[2], &opts) != nil {
+			return nil, &wasm.Fault{Code: "bad_arguments", Message: "invalid folder hash options"}
+		}
+		v, err := b.h.FoldersHash(ctx, str(0), str(1), opts)
+		return result(v, err)
+	case "folders.frame":
+		var opts FolderFrameOptions
+		if len(args) <= 2 || json.Unmarshal(args[2], &opts) != nil {
+			return nil, &wasm.Fault{Code: "bad_arguments", Message: "invalid folder frame options"}
+		}
+		v, err := b.h.FoldersFrame(ctx, str(0), str(1), opts)
 		return result(v, err)
 	case "folders.stat":
 		v, err := b.h.FoldersStat(ctx, str(0), str(1))

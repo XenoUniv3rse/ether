@@ -44,20 +44,21 @@ type SyncOutcome struct {
 // enriched with live in-memory progress while a background sync or reindex pass
 // is running.
 type SyncState struct {
-	PluginID    string           `json:"pluginId"`
-	KindKey     string           `json:"kindKey"`
-	Cursor      string           `json:"cursor,omitempty"`
-	Generation  uint64           `json:"generation"`
-	LastStarted time.Time        `json:"lastStarted,omitzero"`
-	LastOK      time.Time        `json:"lastOk,omitzero"`
-	LastError   string           `json:"lastError,omitempty"`
-	Items       int64            `json:"items"`
-	Running     bool             `json:"running,omitempty"`
-	Phase       string           `json:"phase,omitempty"`
-	SyncedItems int              `json:"syncedItems,omitempty"`
-	Pages       int              `json:"pages,omitempty"`
-	DeleteGuard *SyncDeleteGuard `json:"deleteGuard,omitempty"`
-	LastOutcome *SyncOutcome     `json:"lastOutcome,omitempty"`
+	PluginID    string                `json:"pluginId"`
+	KindKey     string                `json:"kindKey"`
+	Cursor      string                `json:"cursor,omitempty"`
+	Generation  uint64                `json:"generation"`
+	LastStarted time.Time             `json:"lastStarted,omitzero"`
+	LastOK      time.Time             `json:"lastOk,omitzero"`
+	Failure     *plugins.RouteFailure `json:"failure,omitempty"`
+	LastError   string                `json:"lastError,omitempty"`
+	Items       int64                 `json:"items"`
+	Running     bool                  `json:"running,omitempty"`
+	Phase       string                `json:"phase,omitempty"`
+	SyncedItems int                   `json:"syncedItems,omitempty"`
+	Pages       int                   `json:"pages,omitempty"`
+	DeleteGuard *SyncDeleteGuard      `json:"deleteGuard,omitempty"`
+	LastOutcome *SyncOutcome          `json:"lastOutcome,omitempty"`
 }
 
 const itemCols = `item_ref, seq, plugin_id, kind_key, library_id, external_id, parent_ref, level, idx, title, sort_title, summary, year, released, rating, playable, child_count, leaf_count, hints, fields, etag, unavailable, added_at, recording`
@@ -354,7 +355,7 @@ func (s *Service) upsertKindLocked(ctx context.Context, pluginID string, library
 			if _, err := tx.ExecContext(ctx, `DELETE FROM plugin_kind_rebuilds WHERE plugin_id = ? AND kind_key = ?`, pluginID, decl.Key); err != nil {
 				return KindRecord{}, err
 			}
-			if _, err := tx.ExecContext(ctx, `UPDATE plugin_sync_state SET cursor = '', last_started = 0, last_ok = 0, last_error = '', guard_json = '', items = 0, generation = ? WHERE plugin_id = ? AND kind_key = ?`, s.syncGen.Add(1), pluginID, decl.Key); err != nil {
+			if _, err := tx.ExecContext(ctx, `UPDATE plugin_sync_state SET cursor = '', last_started = 0, last_ok = 0, last_error = '', failure_json = '', guard_json = '', items = 0, generation = ? WHERE plugin_id = ? AND kind_key = ?`, s.syncGen.Add(1), pluginID, decl.Key); err != nil {
 				return KindRecord{}, err
 			}
 		}
@@ -840,24 +841,22 @@ func applyMigration3Postgres(ctx context.Context, tx *sql.Tx) error {
 
 var migration4FoldBatchSize = 500
 
-// contentRatingLevel is the persisted rating_level for one item's fields:
-// the contentrating enforcement level of its contentRating / certification /
-// mpaa field, or 0 (unrated) when it carries none. Projected titles read the
-// same fields, so the stored level and the in-process check agree.
-func contentRatingLevel(fields map[string]json.RawMessage) int {
+// ItemContentRating reads the same fields used by the indexed rating
+// predicate and the in-process viewer policy check.
+func ItemContentRating(fields map[string]json.RawMessage) string {
 	for _, key := range []string{"contentRating", "certification", "mpaa"} {
-		raw, ok := fields[key]
-		if !ok || len(raw) == 0 {
-			continue
-		}
-		var s string
-		if json.Unmarshal(raw, &s) == nil {
-			if s = strings.TrimSpace(s); s != "" {
-				return int(contentrating.EnforceLevelOf(s))
+		var value string
+		if raw := fields[key]; len(raw) > 0 && json.Unmarshal(raw, &value) == nil {
+			if value = strings.TrimSpace(value); value != "" {
+				return value
 			}
 		}
 	}
-	return 0
+	return ""
+}
+
+func contentRatingLevel(fields map[string]json.RawMessage) int {
+	return int(contentrating.EnforceLevelOf(ItemContentRating(fields)))
 }
 
 func applyMigration9(ctx context.Context, tx *sql.Tx) error {
@@ -2733,7 +2732,7 @@ VALUES(?, ?, ?, 0, ?, '', '', ?)
 ON CONFLICT(plugin_id, kind_key) DO UPDATE SET
 	generation = excluded.generation,
 	last_ok    = excluded.last_ok,
-	last_error = '',
+	last_error = '', failure_json = '',
 	guard_json = '',
 	items      = excluded.items`,
 		pluginID, kindKey, gen, nowUnix, totalItems)
@@ -3351,12 +3350,13 @@ func (s *Service) SyncStateOf(ctx context.Context, pluginID, kindKey string) (Sy
 		lastStarted int64
 		lastOK      int64
 		guardRaw    string
+		failureRaw  string
 	)
 	err := s.db.QueryRowContext(ctx, `
-SELECT plugin_id, kind_key, cursor, generation, last_started, last_ok, last_error, guard_json, items
+SELECT plugin_id, kind_key, cursor, generation, last_started, last_ok, last_error, guard_json, items, failure_json
 FROM plugin_sync_state
 WHERE plugin_id = ? AND kind_key = ?`, pluginID, kindKey).Scan(
-		&st.PluginID, &st.KindKey, &st.Cursor, &gen, &lastStarted, &lastOK, &st.LastError, &guardRaw, &st.Items)
+		&st.PluginID, &st.KindKey, &st.Cursor, &gen, &lastStarted, &lastOK, &st.LastError, &guardRaw, &st.Items, &failureRaw)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return SyncState{}, core.ErrNotFound
@@ -3369,6 +3369,9 @@ WHERE plugin_id = ? AND kind_key = ?`, pluginID, kindKey).Scan(
 	}
 	if lastOK > 0 {
 		st.LastOK = time.Unix(lastOK, 0).UTC()
+	}
+	if failureRaw != "" {
+		_ = json.Unmarshal([]byte(failureRaw), &st.Failure)
 	}
 	if guardRaw != "" {
 		var g SyncDeleteGuard

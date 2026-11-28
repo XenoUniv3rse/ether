@@ -635,7 +635,7 @@ function evidenceLine(code: string) {
   if (code === "playable" || code === "digital") return t("Ready to play");
   if (code === "theatrical") return t("In theatres only");
   if (code === "quality") return t("Hidden by your quality profile");
-  if (code === "searching") return t("Waiting for a release");
+  if (code === "searching") return t("Watching for new releases");
   return "";
 }
 

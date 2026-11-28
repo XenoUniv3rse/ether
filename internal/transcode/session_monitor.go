@@ -179,7 +179,7 @@ func (s *Session) watch(r *run) {
 			collect(false)
 			s.mu.Lock()
 			s.advanceHandoffLocked(r)
-			if s.cur == r {
+			if s.cur == r && !s.retireIdleAdaptiveRunLocked(s.m.now()) {
 				s.throttleLocked()
 			}
 			s.mu.Unlock()
@@ -192,6 +192,18 @@ func (s *Session) watch(r *run) {
 			s.removals.retry()
 		}
 	}
+}
+
+const adaptiveRungIdle = 30 * time.Second
+
+func (s *Session) retireIdleAdaptiveRunLocked(now time.Time) bool {
+	if !s.adaptiveHLS || s.cur == nil || s.cur.finished || len(s.inflight) > 0 || s.adaptiveInitRequests > 0 ||
+		now.Sub(s.adaptiveLastRequest) < adaptiveRungIdle {
+		return false
+	}
+	s.stopRunForLocked("adaptive rendition idle")
+	s.resumeAt = -1
+	return true
 }
 
 func (s *Session) poll(r *run, playlist string, exited bool) {

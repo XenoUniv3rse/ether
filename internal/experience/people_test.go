@@ -116,7 +116,7 @@ func peopleFixture() (*Service, *peopleCatalogue) {
 			}
 			return items, nil
 		},
-		Enrich: func(context.Context, *core.User, core.Device, *core.Title) (frontend.ItemDetail, error) {
+		Enrich: func(context.Context, *core.User, frontend.ItemRequest, *core.Title) (frontend.ItemDetail, error) {
 			panic("people navigation reached playback/source enrichment")
 		},
 	}}

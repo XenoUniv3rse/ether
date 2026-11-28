@@ -16,7 +16,7 @@ type surfaceEditions struct {
 }
 
 func (s surfaceEditions) Editions(ctx context.Context, _ *core.Viewer, _ core.Device, key core.RatingKey) ([]frontend.Version, error) {
-	if s.app == nil {
+	if !localEditionsEnabled || s.app == nil {
 		return nil, nil
 	}
 	title, err := s.app.catalog.CachedGet(ctx, key)
@@ -54,7 +54,7 @@ func probedFileName(label string) string {
 
 func (s surfaceEditions) EditionsMany(ctx context.Context, _ *core.Viewer, _ core.Device, keys []core.RatingKey) (map[core.RatingKey][]frontend.Version, error) {
 	out := map[core.RatingKey][]frontend.Version{}
-	if s.app == nil || s.app.catalog == nil || len(keys) == 0 {
+	if !localEditionsEnabled || s.app == nil || s.app.catalog == nil || len(keys) == 0 {
 		return out, nil
 	}
 	titles, err := s.app.catalog.CachedGetMany(ctx, keys)
@@ -114,7 +114,7 @@ func (s surfaceEditions) Variants(ctx context.Context, req core.ResolveRequest, 
 	if s.app.resolver == nil {
 		return nil, nil
 	}
-	req.User = s.app.withEffectiveAudioLanguages(ctx, req.User)
+	req.User = s.app.withEffectiveLanguages(ctx, req.User)
 	if req.PlayedRelease == "" && s.app.playback != nil && req.User != nil && req.User.ID > 0 && req.Title != nil {
 		if _, played, sel, ok := s.app.playback.ResumedVersion(ctx, req.User, req.Title.Key, req.Client); ok {
 			req.PlayedRelease = played.ID
@@ -187,7 +187,7 @@ func (s surfaceEditions) VersionSlots(ctx context.Context, req core.ResolveReque
 		return nil, nil
 	}
 	if labels {
-		req.User = s.app.withEffectiveAudioLanguages(ctx, req.User)
+		req.User = s.app.withEffectiveLanguages(ctx, req.User)
 		if req.PlayedRelease == "" && s.app.playback != nil && req.User != nil && req.User.ID > 0 && req.Title != nil {
 			if _, played, sel, ok := s.app.playback.ResumedVersion(ctx, req.User, req.Title.Key, req.Client); ok {
 				req.PlayedRelease = played.ID

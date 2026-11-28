@@ -12,4 +12,9 @@ func init() {
 	store.RegisterViewerTable("personalize", "personalize_row_impressions", "user_id", store.ViewerMergeMove, "day", "hub_id")
 	store.RegisterViewerTable("personalize", "personalize_serves", "user_id", store.ViewerMergeUnion)
 	store.RegisterViewerTable("personalize", "personalize_serve_items", "user_id", store.ViewerMergeUnion)
+	store.RegisterViewerTable("personalize", "personalize_recommendation_deliveries", "user_id", store.ViewerMergeUnion)
+	store.RegisterViewerTable("personalize", "personalize_recommendation_days", "user_id", store.ViewerMergeMove, "day", "hub_id", "app")
+	store.RegisterViewerTable("personalize", "personalize_recommendation_entries", "user_id", store.ViewerMergeMove, "day", "hub_id", "app", "item_key")
+	store.RegisterViewerTable("personalize", "personalize_recommendation_titles", "user_id", store.ViewerMergeMove, "kind", "day", "item_key")
+	store.RegisterViewerTable("personalize", "personalize_recommendation_starts", "user_id", store.ViewerMergeMove, "day")
 }

@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/braedonsaunders/ether/internal/artwork"
+	"github.com/braedonsaunders/ether/internal/blobcache"
 	"github.com/braedonsaunders/ether/internal/events"
 	"github.com/braedonsaunders/ether/internal/safefetch"
 )
@@ -44,8 +45,9 @@ type Source struct {
 
 // Preview is what the install sheet shows before the owner confirms.
 type Preview struct {
-	Manifest      Manifest       `json:"manifest"`
-	RuntimeLimits *RuntimeLimits `json:"runtimeLimits,omitempty"`
+	DurableQuota  *blobcache.DurableQuota `json:"durableQuota,omitempty"`
+	Manifest      Manifest                `json:"manifest"`
+	RuntimeLimits *RuntimeLimits          `json:"runtimeLimits,omitempty"`
 	// ListItems is how many titles one sync of each of its lists reads.
 	ListItems *ListItemsGrant `json:"listItems,omitempty"`
 	// Summary is the manifest summary with any "$t:" reference resolved
@@ -235,7 +237,10 @@ func (m *Manager) fetchSiblings(ctx context.Context, manURL string, manRaw []byt
 	if err != nil || man.Ether == nil {
 		return files
 	}
-	base := strings.TrimSuffix(manURL, "manifest.json")
+	base, err := url.Parse(manURL)
+	if err != nil || !strings.HasSuffix(base.Path, "/manifest.json") {
+		return files
+	}
 	var paths []string
 	if icon := man.Ether.Icon; icon != "" && !strings.HasPrefix(icon, "http://") && !strings.HasPrefix(icon, "https://") {
 		paths = append(paths, icon)
@@ -243,6 +248,11 @@ func (m *Manager) fetchSiblings(ctx context.Context, manURL string, manRaw []byt
 	for _, a := range man.Ether.Contributes.FrontendAdapters {
 		if ValidAdapterIconPath(a.Icon) {
 			paths = append(paths, a.Icon)
+		}
+	}
+	for _, kind := range man.Ether.Contributes.MediaKinds {
+		if ValidAdapterIconPath(kind.Library.Icon) {
+			paths = append(paths, kind.Library.Icon)
 		}
 	}
 	if man.Ether.Runtime.Entry != "" {
@@ -261,10 +271,13 @@ func (m *Manager) fetchSiblings(ctx context.Context, manURL string, manRaw []byt
 		paths = append(paths, ref)
 	}
 	for _, p := range paths {
-		if unsafePath(p) {
+		if _, exists := files[p]; exists || unsafePath(p) {
 			continue
 		}
-		if b, err := m.fetch(ctx, base+p, lan, 32<<20); err == nil {
+		sibling := *base
+		sibling.Path = strings.TrimSuffix(base.Path, "manifest.json") + p
+		sibling.RawPath = strings.TrimSuffix(base.EscapedPath(), "manifest.json") + (&url.URL{Path: p}).EscapedPath()
+		if b, err := m.fetch(ctx, sibling.String(), lan, 32<<20); err == nil {
 			files[p] = b
 		}
 	}
@@ -594,6 +607,7 @@ func (m *Manager) PreviewInstall(ctx context.Context, src Source) (*Preview, err
 	}
 	p := &Preview{Manifest: man, RuntimeLimits: m.grantedRuntimeLimits(man), source: src, files: files, manifestRaw: raw, Verified: src.Verified, StremioOnly: man.IsStremioOnly()}
 	p.ListItems = m.ListItemsGrant(man.ID, man)
+	p.DurableQuota = m.grantedDurableQuota(man)
 	p.PermissionLines, p.NeedsViewers, p.NeedsFolders = PermissionSheet(man)
 	p.LocalHosts = DeclaredLocalHosts(man)
 	if err := p.resolve(); err != nil {
@@ -823,32 +837,21 @@ func (m *Manager) Install(ctx context.Context, p *Preview, opts InstallOptions) 
 	if p.source.LAN {
 		g.LAN = true
 	}
-	if err := m.store.putGrants(ctx, man.ID, g); err != nil {
-		return Record{}, err
-	}
-	m.pruneBlockedOperatorHosts(man.ID, g.OperatorHosts)
 	row, _ := m.store.settings(ctx, man.ID)
 	if opts.Settings != nil {
 		row.Settings = opts.Settings
-	}
-	if !existing && len(g.Folders) > 0 {
-		if fields := folderFieldNames(p.resolvedSettings); len(fields) == 1 {
-			if row.Settings == nil {
-				row.Settings = map[string]any{}
-			}
-			if cur, _ := row.Settings[fields[0]].(string); strings.TrimSpace(cur) == "" {
-				row.Settings[fields[0]] = g.Folders[0]
-			}
-		}
 	}
 	row.Strings = p.resolvedStrings
 	row.Schema = p.resolvedSettings
 	if err := m.store.putSettings(ctx, man.ID, row); err != nil {
 		return Record{}, err
 	}
-	if err := m.store.upsert(ctx, r); err != nil {
+	dropped, err := m.store.saveGrants(ctx, r, g, cur.Manifest, true)
+	if err != nil {
 		return Record{}, err
 	}
+	m.pruneBlockedOperatorHosts(man.ID, g.OperatorHosts)
+	m.noteOutboxDrops(ctx, r, dropped)
 	if existing {
 		// Only the current and previous bundles are ever read again
 		// (runtime, rollback); older ones are dead blobs.
@@ -1128,36 +1131,6 @@ func (m *Manager) SettingsSchema(ctx context.Context, id string) (json.RawMessag
 		return json.RawMessage("{}"), nil
 	}
 	return row.Schema, nil
-}
-
-// folderFieldNames walks a settings schema for folder-kind field names.
-func folderFieldNames(schema json.RawMessage) []string {
-	var out []string
-	seen := map[string]bool{}
-	var walk func(any)
-	walk = func(n any) {
-		switch t := n.(type) {
-		case map[string]any:
-			if t["kind"] == "folder" {
-				if name, ok := firstString(t, "key", "name", "id", "field"); ok && !seen[name] {
-					seen[name] = true
-					out = append(out, name)
-				}
-			}
-			for _, v := range t {
-				walk(v)
-			}
-		case []any:
-			for _, v := range t {
-				walk(v)
-			}
-		}
-	}
-	var doc any
-	if json.Unmarshal(schema, &doc) == nil {
-		walk(doc)
-	}
-	return out
 }
 
 // secretFieldNames walks a settings schema for secret-kind field names.

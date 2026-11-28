@@ -377,7 +377,7 @@ export function indexerUsage() {
   const window = days(14);
   const today = window[window.length - 1]!;
   const monthStart = today.slice(0, 8) + "01";
-  const usage = (name: string, scale: number, limit: number, grabsLimit: number) => {
+  const usage = (id: string, name: string, scale: number, limit: number, grabsLimit: number) => {
     const daily = window.map((day, i) => ({
       day,
       hits: Math.round(scale * load(day, i, window.length, `u${name}`)),
@@ -398,11 +398,18 @@ export function indexerUsage() {
       };
     };
     return {
-      id: name.toLowerCase().replace(/\s+/g, "-"),
+      id,
       name,
       enabled: true,
       torrent: name !== "Indexer One" && name !== "Indexer Two",
       dailyLimit: limit,
+      totalCap: limit,
+      resetAt: Math.floor(Date.now() / 86_400_000) * 86_400 + 86_400,
+      last24Hours: {
+        searches: daily[13]!.hits,
+        grabs: daily[13]!.grabs,
+        background: Math.round(daily[13]!.hits * 0.3),
+      },
       dailyGrabs: grabsLimit,
       ...(name === "Indexer Two" ? { retryAt: Math.floor(Date.now() / 1000) + 3 * 3600 } : {}),
       today: total(13),
@@ -416,10 +423,10 @@ export function indexerUsage() {
     weekStart: window[7],
     monthStart,
     indexers: [
-      usage("Indexer One", 150, 300, 50),
-      usage("Indexer Two", 25, 25, 10),
-      usage("Torrent Tracker", 60, 0, 0),
-      usage("Stream Addon", 90, 0, 0),
+      usage("i1", "Indexer One", 150, 300, 50),
+      usage("i2", "Indexer Two", 25, 25, 10),
+      usage("i3", "Torrent Tracker", 60, 0, 0),
+      usage("i4", "Stream Addon", 90, 0, 0),
     ],
   };
 }

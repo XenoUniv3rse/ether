@@ -201,6 +201,11 @@ func SearchWasSuperseded(ctx context.Context) bool {
 	return core.SearchWasSuperseded(ctx)
 }
 
+// WithSearchSummaryFacts requests search rows for compact hits such as hints.
+func WithSearchSummaryFacts(ctx context.Context) context.Context {
+	return core.WithSearchSummaryFacts(ctx)
+}
+
 // WithExplicitSearch marks a request as a viewer or owner typing a search,
 // so browsing-only catalogue rules do not filter out explicit search hits.
 func WithExplicitSearch(ctx context.Context) context.Context {
@@ -234,12 +239,25 @@ func IsExplicitVersionSlotSelector(selector string) bool {
 	return core.IsExplicitVersionSlotSelector(selector)
 }
 
-const IndexerPurposePlayback = core.IndexerPurposePlayback
+const (
+	IndexerPurposePlayback = core.IndexerPurposePlayback
+	IndexerPurposeDetail   = core.IndexerPurposeDetail
+)
 
 // WithIndexerPurpose tags ctx with the indexer usage purpose (for example
 // IndexerPurposePlayback so explicit Play is never gated by discovery shares).
 func WithIndexerPurpose(ctx context.Context, purpose string) context.Context {
 	return core.WithIndexerPurpose(ctx, purpose)
+}
+
+// WithExplicitPlay marks ctx as a viewer pressing Play (core.ExplicitPlay).
+func WithExplicitPlay(ctx context.Context) context.Context {
+	return core.WithExplicitPlay(ctx)
+}
+
+// ExplicitPlay reports whether ctx is a viewer's explicit Play.
+func ExplicitPlay(ctx context.Context) bool {
+	return core.ExplicitPlay(ctx)
 }
 
 // WithColdDetail identifies the single title page allowed a minimum cold fill.

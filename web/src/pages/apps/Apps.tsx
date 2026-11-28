@@ -73,6 +73,7 @@ type Settings = {
   appName?: string;
   wordmark?: VelaWordmark | null;
   livePreview?: VelaLivePreviewMode;
+  trailerPlayback?: "server" | "clientWhenPossible";
   appIcon?: VelaAppIcon | null;
   homeRowCount?: number;
 };
@@ -954,6 +955,34 @@ function ProtocolSettings({
               onDefaultSkinChange={(defaultSkinId) => setDraft({ ...draft, defaultSkinId })}
               onForceChange={(force) => setDraft({ ...draft, force })}
             />
+            <SettingsSection title={t("Trailers")}>
+              <SettingsRow
+                title={t("Trailer playback")}
+                description={t(
+                  "When enabled, apps can load trailers directly from YouTube (youtube-nocookie.com), so the viewer’s device contacts YouTube. This helps when the server cannot reach YouTube, for example on some cloud hosts.",
+                )}
+                control={
+                  <SearchSelect
+                    ariaLabel={t("Trailer playback")}
+                    className="w-full sm:w-80"
+                    searchable={false}
+                    value={draft.trailerPlayback ?? "server"}
+                    onChange={(next) => {
+                      if (next === "server" || next === "clientWhenPossible") {
+                        setDraft({ ...draft, trailerPlayback: next });
+                      }
+                    }}
+                    options={[
+                      { value: "server", label: t("Play trailers on the server") },
+                      {
+                        value: "clientWhenPossible",
+                        label: t("Let apps play YouTube trailers directly when they can"),
+                      },
+                    ]}
+                  />
+                }
+              />
+            </SettingsSection>
             <SettingsSection title={t("Live TV")}>
               <SettingsRow
                 title={t("Channel preview")}

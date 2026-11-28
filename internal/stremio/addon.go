@@ -317,6 +317,7 @@ type Subtitle struct {
 	ID          string `json:"id,omitempty"`
 	URL         string `json:"url"`
 	Lang        string `json:"lang"`
+	Forced      bool   `json:"forced,omitempty"`
 	Filename    string `json:"filename,omitempty"`
 	SubFileName string `json:"SubFileName,omitempty"`
 	HashMatch   bool   `json:"hashMatch,omitempty"`

@@ -5,22 +5,17 @@ import (
 	"time"
 )
 
-// An indexer's results for an old title barely change, so they are kept
-// longer than a new title's: a title out under a month keeps the client's
-// base lifetime (6 hours by default), one out over a year keeps a week, and
-// ages in between scale. A search that found nothing is kept briefly for a
-// title out under a week (an episode checked before its upload is searched
-// again soon after it drops) and longer for anything older.
+// Fresh titles can gain releases quickly. Stable titles use the owner's
+// full cache duration; recent empty answers expire sooner still.
 const (
 	cacheFreshAge  = 30 * 24 * time.Hour
 	cacheOldAge    = 365 * 24 * time.Hour
-	cacheOldTTL    = 7 * 24 * time.Hour
+	freshResultTTL = 90 * time.Minute
 	emptyFreshAge  = 7 * 24 * time.Hour
 	emptyStableTTL = 30 * time.Minute
 )
 
 type cacheAgeKey struct{}
-type recentSearchCacheKey struct{}
 
 // withCacheAge carries the searched title's release time to cachePut.
 func withCacheAge(ctx context.Context, released time.Time) context.Context {
@@ -33,17 +28,6 @@ func withCacheAge(ctx context.Context, released time.Time) context.Context {
 func cacheAge(ctx context.Context) time.Time {
 	t, _ := ctx.Value(cacheAgeKey{}).(time.Time)
 	return t
-}
-
-// withRecentSearchCache bounds cachePut for category-only recent-release
-// searches so new uploads appear without waiting out the 6-hour title TTL.
-func withRecentSearchCache(ctx context.Context) context.Context {
-	return context.WithValue(ctx, recentSearchCacheKey{}, true)
-}
-
-func isRecentSearchCache(ctx context.Context) bool {
-	ok, _ := ctx.Value(recentSearchCacheKey{}).(bool)
-	return ok
 }
 
 // searchCacheTTL is how long to keep a search's results, from the client's
@@ -65,12 +49,13 @@ func searchCacheTTL(base time.Duration, released, now time.Time, empty bool) tim
 		}
 		return min(base, emptyStableTTL)
 	}
-	if age <= cacheFreshAge || base >= cacheOldTTL {
-		return base
+	fresh := min(base, freshResultTTL)
+	if age <= cacheFreshAge {
+		return fresh
 	}
 	if age >= cacheOldAge {
-		return cacheOldTTL
+		return base
 	}
 	frac := float64(age-cacheFreshAge) / float64(cacheOldAge-cacheFreshAge)
-	return base + time.Duration(frac*float64(cacheOldTTL-base))
+	return fresh + time.Duration(frac*float64(base-fresh))
 }

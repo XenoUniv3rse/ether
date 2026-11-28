@@ -27,13 +27,13 @@ import {
   TrendingUp,
   X,
 } from "lucide-react";
-import { useEffect, useMemo, useState, type ReactNode } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { useMemo, useState, type ReactNode } from "react";
+import { Link } from "react-router-dom";
 import { useApp, useLiveDashboard } from "../app-context";
 import { Artwork } from "../components/Artwork";
 import { SessionArtwork } from "../components/SessionArtwork";
 import { Meter, TimeBars } from "../components/charts";
-import { ErrorPanel, LoadingRows, MutationError } from "../components/feedback";
+import { ErrorPanel, LoadingRows } from "../components/feedback";
 import {
   HealthPill,
   healthProblems,
@@ -148,34 +148,8 @@ function GettingStarted({ sessions }: { sessions: NowPlaying[] }) {
 }
 
 function SetupNotice() {
-  const { reloadBoot } = useApp();
-  const navigate = useNavigate();
   const status = useAsync(() => api.setupStatus(), []);
-  const [error, setError] = useState<unknown>(null);
-  const ready = status.data?.requiredComplete === true;
-  // A server whose required steps are all done is set up: finish quietly,
-  // with no banner, however it was configured.
-  useEffect(() => {
-    if (!ready) return;
-    let cancelled = false;
-    void (async () => {
-      try {
-        const completed = await api.setupComplete();
-        sessionStorage.removeItem("ether.setup.step");
-        sessionStorage.removeItem("ether.setup.skipped");
-        if (cancelled) return;
-        await reloadBoot();
-        if (completed.cacheRestartRequired) navigate("/setup?resume=1");
-      } catch (e) {
-        if (!cancelled) setError(e);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [ready, reloadBoot, navigate]);
-  if (!status.data && !status.error) return null;
-  if (ready && !error) return null;
+  if ((!status.data && !status.error) || status.data?.setupComplete) return null;
   return (
     <Alert variant="warning" className="shrink-0">
       <AlertTitle>{t("Setup isn't finished")}</AlertTitle>
@@ -184,7 +158,6 @@ function SetupNotice() {
         <Link className="font-medium underline" to="/setup?resume=1">
           {t("Continue setup")}
         </Link>
-        <MutationError error={error} />
         {status.error ? (
           <ErrorPanel error={status.error} onRetry={() => void status.reload()} />
         ) : null}
@@ -712,26 +685,6 @@ function ActivityPanel({
   );
 }
 
-const DYNAMIC_KIND_TITLES: Record<string, string> = {
-  "genre-showcase": "Acclaimed by Genre",
-  "era-favourites": "Best by Decade",
-  "world-cinema": "World Cinema for You",
-  "top-rated-in-genre": "Top-Rated by Genre",
-  "taste-bridge": "Where Favourites Meet",
-  "more-from-studio": "More by Studio",
-  "more-from-network": "More by Network",
-};
-
-function cleanInsightTitle(r: RowInsight): string {
-  if (!r.title.includes("<")) return r.title;
-  return DYNAMIC_KIND_TITLES[r.hubId] ?? r.title.replace(/\s*<[^>]+>/g, "").trim();
-}
-
-function effectivePlayRate(r: RowInsight): number | null {
-  if (!(r.impressions7d > 0) || !Number.isFinite(r.playRate)) return null;
-  return Math.min(1, Math.max(0, r.playRate));
-}
-
 /** The most Best rows the fitted layout can show; a stacked page stops at six. */
 const ROWS_SHOWN_FITTED = 12;
 
@@ -742,16 +695,8 @@ function RowsPanel({
   state: ReturnType<typeof useAsync<RowInsight[]>>;
   className?: string;
 }) {
-  const rows = [...(state.data ?? [])]
-    .sort((a, b) => {
-      const ra = effectivePlayRate(a);
-      const rb = effectivePlayRate(b);
-      if ((ra !== null) !== (rb !== null)) return ra !== null ? -1 : 1;
-      if (ra !== null && rb !== null && rb !== ra) return rb - ra;
-      return b.plays7d - a.plays7d;
-    })
-    .slice(0, ROWS_SHOWN_FITTED);
-  const maxRate = Math.max(0.0001, ...rows.map((r) => effectivePlayRate(r) ?? 0));
+  const rows = (state.data ?? []).slice(0, ROWS_SHOWN_FITTED);
+  const maxRate = Math.max(0.0001, ...rows.map((r) => (r.lowSample ? 0 : r.playRate)));
   return (
     <DashboardPanel
       title={t("Best rows")}
@@ -759,7 +704,10 @@ function RowsPanel({
       className={className}
       bodyClassName="flex flex-col"
       actions={
-        <Link to="/recommendations" className="text-xs font-medium text-primary hover:underline">
+        <Link
+          to="/activity/recommendations"
+          className="text-xs font-medium text-primary hover:underline"
+        >
           {t("Recommendations")}
         </Link>
       }
@@ -785,7 +733,7 @@ function RowsPanel({
           )}
         >
           {rows.map((r, i) => {
-            const rate = effectivePlayRate(r);
+            const rate = r.lowSample ? null : r.playRate;
             return (
               <li
                 key={r.hubId}
@@ -800,10 +748,10 @@ function RowsPanel({
                 <div className="mb-1 flex items-baseline justify-between gap-2 text-sm">
                   <span className="min-w-0 truncate text-fg">
                     <span className="mr-1.5 tabular-nums text-fg-subtle">{i + 1}</span>
-                    {cleanInsightTitle(r)}
+                    {r.title}
                   </span>
                   <span className="shrink-0 tabular-nums text-fg-muted">
-                    {rate !== null ? formatPercent(rate, 1) : "—"}
+                    {rate !== null ? formatPercent(rate, 1) : t("Not enough data yet")}
                   </span>
                 </div>
                 <div className="h-1.5 rounded-full bg-bg-subtle">

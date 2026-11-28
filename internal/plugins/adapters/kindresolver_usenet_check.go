@@ -114,6 +114,11 @@ func (r *KindResolver) checkUsenetCandidate(ctx context.Context, cand core.Sourc
 
 	baseCtx := ctx
 	if !core.IsBackgroundCheck(baseCtx) {
+		if onDemandReleaseOpen(ctx) {
+			// The plugin explicitly selected a candidate for an active
+			// check. Article reads still use background priority.
+			baseCtx = core.WithSpeculativeGrabs(baseCtx)
+		}
 		baseCtx = core.WithBackgroundBudget(baseCtx, func(context.Context, string, string, int64) error { return nil })
 	}
 

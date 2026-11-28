@@ -95,6 +95,7 @@ type Service struct {
 	personalClocks        map[personalKey]*personalClock
 	broadcasts            broadcastRegistry
 	broadcastProviders    map[string]map[string]string
+	providerWait          providerWaitQueue
 	chanSnap              channelSnapshot // decoded lineup shared by request paths (channel_cache.go)
 	guidePreviewMu        sync.Mutex
 	guidePreview          map[string]guidePreviewEntry
@@ -2184,8 +2185,16 @@ func (s *Service) programmesForKeys(ctx context.Context, wanted map[guideKey][]C
 	if len(wanted) == 0 {
 		return out, nil
 	}
-	scan := func(query string, args ...any) error {
-		rows, err := s.o.DB.QueryContext(ctx, query, args...)
+	// Return one ordered schedule per guide key. The wire result carries
+	// the source and channel once instead of repeating them per programme.
+	aggregate := "json_agg(CAST(data AS json) ORDER BY start_ms)"
+	if store.DialectOf(s.o.DB) == store.SQLite {
+		aggregate = "json_group_array(json(data) ORDER BY start_ms)"
+	}
+	scan := func(args []any, marks []string) error {
+		rows, err := s.o.DB.QueryContext(ctx, `SELECT source_id, channel_id, `+aggregate+`
+			FROM livetv_programmes WHERE (source_id,channel_id) IN (`+strings.Join(marks, ",")+`)
+			AND end_ms>? AND start_ms<? GROUP BY source_id, channel_id`, args...)
 		if err != nil {
 			return err
 		}
@@ -2196,14 +2205,11 @@ func (s *Service) programmesForKeys(ctx context.Context, wanted map[guideKey][]C
 			if err = rows.Scan(&k.source, &k.guide, &b); err != nil {
 				return err
 			}
-			if _, ok := wanted[k]; !ok {
-				continue
-			}
-			var p Programme
-			if err = json.Unmarshal(b, &p); err != nil {
+			var schedule []Programme
+			if err = json.Unmarshal(b, &schedule); err != nil {
 				return err
 			}
-			out[k] = append(out[k], p)
+			out[k] = schedule
 		}
 		return rows.Err()
 	}
@@ -2220,7 +2226,7 @@ func (s *Service) programmesForKeys(ctx context.Context, wanted map[guideKey][]C
 			args = append(args, k.source, k.guide)
 		}
 		args = append(args, from.UnixMilli(), until.UnixMilli())
-		if err := scan(`SELECT source_id, channel_id, data FROM livetv_programmes WHERE (source_id,channel_id) IN (`+strings.Join(marks, ",")+`) AND end_ms>? AND start_ms<?`, args...); err != nil {
+		if err := scan(args, marks); err != nil {
 			return nil, err
 		}
 	}
@@ -2592,7 +2598,7 @@ func (s *Service) importSource(ctx context.Context, src Source) (Source, error) 
 	if src.Kind == legacyStremioKind {
 		return src, errLegacyStremio
 	}
-	if src.MaxConnections < 0 || src.MaxConnections > 100 || src.TuneGapSeconds > 60 || src.TunesPerHour < 0 || src.TunesPerHour > 10000 {
+	if src.MaxConnections < 0 || src.MaxConnections > 100 || src.TuneGapSeconds > 60 || src.SlotWaitSeconds < 0 || src.SlotWaitSeconds > 10 || src.TunesPerHour < 0 || src.TunesPerHour > 10000 {
 		return src, fmt.Errorf("connection limits must be between 0 and 100, the gap between streams at most 60 seconds, and streams per hour at most 10,000")
 	}
 	if err := s.keepStoredUploads(ctx, &src); err != nil {
@@ -2799,6 +2805,9 @@ func (s *Service) importSource(ctx context.Context, src Source) (Source, error) 
 		return src, err
 	}
 	writes.ProgrammesWritten, writes.ProgrammesDeleted, writes.ProgrammesKept = pw.ProgrammesWritten, pw.ProgrammesDeleted, pw.ProgrammesKept
+	if _, err := pruneCatchUpWatch(ctx, tx, src.ID, src.UpdatedAt); err != nil {
+		return src, err
+	}
 	gw, err := writeGuideChannels(ctx, tx, src.ID, g)
 	if err != nil {
 		return src, err
@@ -3153,7 +3162,7 @@ func (s *Service) DeleteSource(ctx context.Context, id string) error {
 		return err
 	}
 	d := store.DialectOf(s.o.DB)
-	for _, q := range []string{`DELETE FROM livetv_channels WHERE ` + store.JSONText(d, "data", "sourceId") + `=?`, `DELETE FROM livetv_programmes WHERE source_id=?`, `DELETE FROM livetv_login_streams WHERE source_id=?`, `DELETE FROM livetv_sources WHERE id=?`, `DELETE FROM livetv_source_refresh WHERE id=?`, `DELETE FROM xtream_vod WHERE provider=?`, `DELETE FROM xtream_vod_refresh WHERE provider=?`, `DELETE FROM livetv_guide_channels WHERE source_id=?`,
+	for _, q := range []string{`DELETE FROM livetv_channels WHERE ` + store.JSONText(d, "data", "sourceId") + `=?`, `DELETE FROM livetv_programmes WHERE source_id=?`, `DELETE FROM livetv_catchup_watch WHERE guide_source=?`, `DELETE FROM livetv_login_streams WHERE source_id=?`, `DELETE FROM livetv_sources WHERE id=?`, `DELETE FROM livetv_source_refresh WHERE id=?`, `DELETE FROM xtream_vod WHERE provider=?`, `DELETE FROM xtream_vod_refresh WHERE provider=?`, `DELETE FROM livetv_guide_channels WHERE source_id=?`,
 		`UPDATE livetv_channels SET data=` + store.JSONRemove(d, "data", "guideSourceId") + ` WHERE ` + store.JSONText(d, "data", "guideSourceId") + `=?`} {
 		if _, err = tx.ExecContext(ctx, q, id); err != nil {
 			return err

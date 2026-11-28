@@ -139,15 +139,14 @@ certification and exact-build conformance remain pending.
 
 ## Set up
 
-The setup wizard starts with app selection and owner-account setup. If you
+The setup wizard starts with language, app selection, and owner-account setup. If you
 select Plex, sign in with Plex and claim the server; otherwise, create a local
 Ether owner account. Jellyfin, Emby and Silo do not require a Plex account;
 use Ether viewer accounts and the connection instructions on the Apps page.
-Then choose where Ether streams from: a
-debrid account (Real-Debrid, TorBox, AllDebrid, Premiumize, Debrid-Link or
-Offcloud), a Usenet provider, or both, each tested before you continue. Next add at least one
-indexer: a Stremio stream addon's install link or a Torznab URL for debrid,
-and a Newznab URL for Usenet. Finally choose a cache folder and budget.
+On **Sources**, choose a debrid account or Usenet provider. On **Indexers**,
+add a Stremio addon, a Torznab indexer for torrents, or a Newznab indexer for
+Usenet. Choose **Skip this step** on either page to configure it later. Continue
+through the cache and catalogue settings, then select **Finish setup**.
 Out of the box there is no server quality cap, at home or away: each device
 plays the best release it can show (phones up to 1080p, TVs and streaming boxes
 up to 4K), and the app's own quality setting still applies. To limit quality,
@@ -257,6 +256,9 @@ languages.
 Self-hosted DMM hashlist indexers that speak Torznab, such as Zilean
 (`http://HOST:8182/torznab`) or StremThru (`https://HOST/v0/torznab`), can be
 added as Torznab URLs with protocol **Torrent (Torznab)**; Ether adds `/api`.
+When a Torznab feed marks results with `cachedon` (`rd`, `ad`, `tb`), Ether
+treats them as cached hints for Real-Debrid, AllDebrid or TorBox, like an
+addon's labels, and tries a marked account first.
 
 ### Which source plays
 
@@ -352,11 +354,13 @@ cookie sign-in, paste the cookie from a signed-in browser instead.
 ## Share with viewers
 
 Use Plex library sharing to invite people or remove their access. They appear
-in Ether's **Viewers** page after signing in. A viewer's page has the tabs
+under **Viewers › People** after signing in. A viewer's page has the tabs
 **Overview**, **Home**, **Taste**, **Recent activity**, **Audio & subtitles**,
 **Limits**, **Sign-in & devices** and **Lists & alerts**. Use **Limits** for
 content and playback limits. To cap one viewer's quality, add a rule under
 **Releases › Rules**. Each viewer keeps their own history and recommendations.
+
+Use **Viewers › Security** to review or clear active sign-in lockouts.
 
 ## Libraries, catalogue and Home
 
@@ -451,13 +455,15 @@ cause.
 ### Put your watchlist on Home
 
 1. Add wanted titles to your Plex Watchlist.
-2. In Ether, open **Catalog › Settings › General › Watchlists**, enable
+2. In Ether, open **Viewers › Watchlists › Sources**, enable
    **Watchlist monitoring** and **Plex watchlists**, then save. Opening-minute
    warm-up for a title that just became playable is **Cache › Preloading ›
-   Warm up new arrivals**.
-3. Open **Viewers › your viewer › Watchlist**. **Sync viewer** imports the
-   list; **Check availability** checks for playable releases. These actions
-   are separate: importing a title does not prove it can stream.
+   Warm up new arrivals**. Use **Tell me too** under **Viewers › Watchlists ›
+   Alerts** to send availability alerts to the channels you set up in
+   **Notifications**.
+3. Open **Viewers › People › your viewer › Lists & alerts**. **Sync viewer**
+   imports the list. Use **Check availability** to check for playable releases.
+   Importing a title alone does not prove it can stream.
 4. Return to **Home** and inspect the same viewer's preview. The watchlist
    rows are **Waiting for a stream** and **Now available**. Check that your
    saved row policies do not hide them, and reload Plex Home.
@@ -812,14 +818,13 @@ log says what changed.
   cool-off for the title. Each release's menu can pin it, block it with a
   reason, or check its health now.
 
-  Below the search are the releases you pinned. A pin plays first for its title on
-  every app, overriding quality-profile limits and title matching. Ether still
-  skips a pin that is blocklisted, passworded, already tried during the current
-  playback, a season pack for an episode, in a video codec the app cannot
-  decode, or Dolby Vision without an HDR10 base on an app without Dolby Vision.
-  A viewer's own **Play Version** choice wins over a pin, and offline downloads
-  keep their own profile. When a pin fails its health check, Ether plays the
-  next best release and the pin stays, showing why it failed.
+  Below the search are the releases you pinned. An applicable owner pin selects
+  the release for ordinary playback, even when a quality profile would rank it
+  lower. Ether still checks that the source is usable and can serve the requested
+  title or episode. If the pinned release fails its health check, Auto playback
+  stops and the pin shows the reason. Choose **Play Version** to play a different
+  release once, or remove the pin to restore automatic selection. Offline downloads
+  use their own profile.
 - **Blocklist** lists releases Ether will not pick: ones that failed health
   checks or broke during playback, and ones you blocked. Filter by title or
   source; unblocking a release has it checked again the next time it is a
@@ -1175,6 +1180,20 @@ missing that file's articles after the others, but still asks it when they miss
 too. Backfill accounts behave the same in both modes. **In order** suits a
 second account you want to use only for overflow.
 
+Several plans resell one provider's servers, so two accounts can hold exactly
+the same articles (Newshosting, Easynews and UsenetServer all sit on the
+Omicron backbone, for example). Under **More options** for each account, type
+the same **Backbone** name for every account that shares an article store.
+When one of them answers that an article is missing, Ether counts the others on
+that backbone as having answered the same and goes straight to an account on a
+different store, for downloads and health checks alike. A damaged copy on one
+server is not shared: the others are still asked. Leave the field empty for an
+account with its own store, and don't group accounts whose retention differs
+(for example a reseller that keeps fewer days than the backbone): one
+account's "missing" then stands for all of them, so health checks could report
+an article missing that a longer-retention account still has. Changing the
+name takes effect at once without dropping connections.
+
 If a server refuses connections because the account is at its limit, Ether
 learns that limit by itself. The provider list then shows, for example,
 "using 47 of 50 connections (server limit learned)". When the server states its
@@ -1193,7 +1212,9 @@ when Ether maps the playback timestamp.
 ## Cache management
 
 **Streaming › Cache** controls media retention, opening and resume warming, and an
-optional managed shelf of preloaded movies and TV episodes. Selecting a preset
+optional managed shelf of preloaded movies and TV episodes. Playback segments and verified files downloaded by plugin libraries, including disc images, share the configured media volume and its budget. Open **Cache › Explorer** to see a file’s library and size or clear it. Files being read or written stay protected. **Cache › Libraries** can set a smaller limit for a particular library. Plugin save data lives outside the evictable media cache.
+
+Selecting a preset
 only updates the draft until you review and save.
 
 - **Presets:** **Pass-through** stores no persistent media segments on disk.

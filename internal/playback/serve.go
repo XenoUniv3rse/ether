@@ -208,6 +208,10 @@ func (m *Manager) ServeRange(w http.ResponseWriter, r *http.Request, sessionID s
 		http.Error(w, "unknown playback session", http.StatusNotFound)
 		return
 	}
+	if core.DownloadRange(r.Context()) {
+		m.serveDownloadRange(w, r, s)
+		return
+	}
 	if measurement := core.MediaCapWaitFrom(r.Context()); measurement != nil {
 		if g := s.current(); g != nil {
 			if source, ok := g.src.(core.MediaCapWaitSource); ok && source.MediaCapWaitKnown() {
@@ -389,10 +393,19 @@ func (m *Manager) streamClientRange(ctx context.Context, w io.Writer, s *session
 	if failure := g.sourceFailure(); errors.Is(failure, core.ErrOriginalLost) {
 		return failure
 	}
+	var rangeStarted time.Time
+	if m.opts.TracePlayback {
+		rangeStarted = time.Now()
+	}
 	count := func(n int) {
 		now := m.now()
 		s.addBytes(n, now)
 		if n > 0 {
+			if !rangeStarted.IsZero() {
+				m.log.Info("direct range first write", "session", s.id, "client_id", s.ident.clientID, "offset", vstart, "length", length,
+					"first_write_ms", time.Since(rangeStarted).Milliseconds())
+				rangeStarted = time.Time{}
+			}
 			g.mu.Lock()
 			g.retryEpoch++
 			g.retryPending = false

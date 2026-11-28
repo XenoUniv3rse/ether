@@ -1,3 +1,7 @@
+import {
+  recommendationPerformance,
+  recommendationPerformanceDetail,
+} from "./recommendation-performance";
 import type { EpisodeOrder, EpisodeOrderDetails, MetadataSource } from "../lib/metadataSources";
 import { interpretDemo } from "./catalogInterpret";
 import { indexerUsage, infrastructure, saveCost, sourceHistory } from "./source-stats";
@@ -154,6 +158,7 @@ export interface FakeOptions {
   householdAudio?: boolean;
   /** Include a remote stream capped by the shared upload budget (browser mock preview). */
   remoteBudgetDemo?: boolean;
+  liveProviderDemo?: boolean;
   /** Seed pre-rolls, their recent plays and a video still converting. */
   prerolls?: boolean;
   /** Simulate a port conflict on Jellyfin (true / "named" / "unknown"). */
@@ -717,7 +722,32 @@ export function createFakeServer(opts: FakeOptions = {}) {
   }
 
   function setupSteps() {
+    const cfg = state.config;
+    const indexers = (cfg.indexers ?? []).filter((ix) => ix.enabled);
     return [
+      {
+        id: "plex",
+        title: "Owner account",
+        complete: Boolean(state.boot.ownerConfigured || (cfg.plex.claimed && cfg.plex.token)),
+        required: true,
+      },
+      {
+        id: "sources",
+        title: "Sources",
+        complete: Boolean(
+          cfg.usenet.providers?.some((p) => p.enabled) ||
+          cfg.debrid?.providers?.some((p) => p.enabled && p.apiKey.trim()) ||
+          indexers.some((ix) => ix.kind === "stremio" && ix.url.trim()),
+        ),
+        required: true,
+      },
+      { id: "indexers", title: "Indexers", complete: indexers.length > 0, required: true },
+      {
+        id: "cache",
+        title: "Cache",
+        complete: !!cfg.cache.dir.trim() && cfg.cache.budgetBytes >= 0,
+        required: true,
+      },
       {
         id: "catalog",
         title: "Metadata sources",
@@ -1392,6 +1422,18 @@ export function createFakeServer(opts: FakeOptions = {}) {
             notCached: 6,
             linksRefreshed: 3,
             reused: 5,
+            api: {
+              attempts: 156,
+              endpoints: { add: 22, list: 9, info: 71, select: 20, link: 24, delete: 10 },
+              retries: 2,
+              limited: 2,
+              http429: 2,
+              listHits: 7,
+              reuseHits: 5,
+              rememberedHits: 18,
+              firstPlays: 17,
+              firstPlayCalls: 73,
+            },
             latency: {
               resolveMs: 812.5,
               linkMs: 140.2,
@@ -1623,53 +1665,90 @@ export function createFakeServer(opts: FakeOptions = {}) {
             notAfter: new Date(Date.now() + 80 * 86400000).toISOString(),
           },
         },
-        sessions: [
-          {
-            ID: "s1",
-            UserID: 2,
-            Key: session.key,
-            ratingKey: Number(session.key) || 0,
-            TitleName: `${session.title} (${session.year})`,
-            Username: "Sam Rivera",
-            Client: {
-              product: "Plex for Apple TV",
-              deviceName: "Living Room",
-              platform: "tvOS",
-              remote: false,
-            },
-            ip: "192.168.1.42",
-            Decision: "directplay",
-            decisionVideoCopy: true,
-            decisionAudioCopy: true,
-            bitrateKbps: 6540,
-            sourceVideo: "H.264 1080p SDR",
-            outputVideo: "H.264 1080p SDR",
-            sourceAudio: "EAC3 5.1",
-            outputAudio: "EAC3 5.1",
-            container: "mkv",
-            BytesServed: 2.1 * 1024 ** 3,
-            BufferedBytes: 183 * 1024 ** 2,
-            BufferedUntil: 3000e9,
-            SpeedBps: 3.2e6,
-            StartedAt: new Date(Date.now() - 40 * 60000).toISOString(),
-            Info: { size: 5.4 * 1024 ** 3, duration: 118 * 60 * 1e9, bitrateKbps: 6540 },
-            viewOffset: 46 * 60 * 1000,
-            origin: "Real-Debrid",
-            experience: {
-              requested: true,
-              pictured: true,
-              startTime: 1.8e9,
-              bufferEvents: 0,
-              buffering: 0,
-            },
-            Resolution: {
-              release: {
-                name: `${session.title.replace(/ /g, ".")}.${session.year}.1080p.WEB-DL.H264`,
+        sessions: opts.liveProviderDemo
+          ? [
+              {
+                ID: "live-sports",
+                UserID: 2,
+                Key: 0,
+                TitleName: "Saturday Football",
+                Username: "Sam Rivera",
+                Client: {
+                  product: "Plex for Apple TV",
+                  deviceName: "Living Room",
+                  platform: "tvOS",
+                },
+                Decision: "copy",
+                decisionVideoCopy: true,
+                decisionAudioCopy: true,
+                BytesServed: 54 * 1024 ** 2,
+                StartedAt: new Date(Date.now() - 4 * 60_000).toISOString(),
+                Info: { bitrateKbps: 6900 },
+                Failovers: 1,
+                origin: "Live TV",
+                liveChannel: {
+                  id: "mock-sports",
+                  name: "Sports Live",
+                  number: "24",
+                  provider: {
+                    sourceName: "Northstar TV",
+                    loginId: "primary",
+                    loginLabel: "jo***",
+                    loginSlot: 2,
+                    loginLimit: 3,
+                    localInUse: 2,
+                  },
+                  previousProvider: { sourceName: "Weekend Sports" },
+                },
               },
-            },
-          },
-          ...(opts.remoteBudgetDemo ? [remoteSession] : []),
-        ],
+            ]
+          : [
+              {
+                ID: "s1",
+                UserID: 2,
+                Key: session.key,
+                ratingKey: Number(session.key) || 0,
+                TitleName: `${session.title} (${session.year})`,
+                Username: "Sam Rivera",
+                Client: {
+                  product: "Plex for Apple TV",
+                  deviceName: "Living Room",
+                  platform: "tvOS",
+                  remote: false,
+                },
+                ip: "192.168.1.42",
+                Decision: "directplay",
+                decisionVideoCopy: true,
+                decisionAudioCopy: true,
+                bitrateKbps: 6540,
+                sourceVideo: "H.264 1080p SDR",
+                outputVideo: "H.264 1080p SDR",
+                sourceAudio: "EAC3 5.1",
+                outputAudio: "EAC3 5.1",
+                container: "mkv",
+                BytesServed: 2.1 * 1024 ** 3,
+                BufferedBytes: 183 * 1024 ** 2,
+                BufferedUntil: 3000e9,
+                SpeedBps: 3.2e6,
+                StartedAt: new Date(Date.now() - 40 * 60000).toISOString(),
+                Info: { size: 5.4 * 1024 ** 3, duration: 118 * 60 * 1e9, bitrateKbps: 6540 },
+                viewOffset: 46 * 60 * 1000,
+                origin: "Real-Debrid",
+                experience: {
+                  requested: true,
+                  pictured: true,
+                  startTime: 1.8e9,
+                  bufferEvents: 0,
+                  buffering: 0,
+                },
+                Resolution: {
+                  release: {
+                    name: `${session.title.replace(/ /g, ".")}.${session.year}.1080p.WEB-DL.H264`,
+                  },
+                },
+              },
+              ...(opts.remoteBudgetDemo ? [remoteSession] : []),
+            ],
       },
     };
   }
@@ -2045,6 +2124,9 @@ export function createFakeServer(opts: FakeOptions = {}) {
 
   const viewerCatalogRules = new Map<number, unknown>();
 
+  const booksIcon = `data:image/svg+xml,${encodeURIComponent(
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="14" fill="#6d28d9"/><path d="M14 17h9a9 9 0 0 1 9 9v23a9 9 0 0 0-9-9h-9zm36 0h-9a9 9 0 0 0-9 9v23a9 9 0 0 1 9-9h9z" fill="none" stroke="#f5f3ff" stroke-width="3.5" stroke-linejoin="round"/></svg>',
+  )}`;
   const mockLibs: Record<string, unknown>[] = [
     {
       id: 1,
@@ -2087,11 +2169,12 @@ export function createFakeServer(opts: FakeOptions = {}) {
       updatedAt: "2026-01-01T00:00:00Z",
       itemCount: 2,
       pluginName: "Demo books",
+      logo: booksIcon,
       kind: {
         key: "book",
         label: "Books",
         media: "book",
-        library: { name: "Books" },
+        library: { name: "Books", icon: "assets/books.svg" },
         levels: [{ key: "book", label: "Book", role: "book", playable: true }],
         fields: [
           { key: "author", type: "people", label: "Author", indexed: true },
@@ -2541,7 +2624,16 @@ export function createFakeServer(opts: FakeOptions = {}) {
     lib.tabsCustomized = tabsDto.customized;
     lib.tabs = tabsDto.tabs;
     lib.effectiveTabs = tabsDto.effectiveTabs;
-    lib.presentations = mockResolvePresentations(lib);
+    const presentations = mockResolvePresentations(lib);
+    lib.presentations = presentations;
+    const kind = lib.kind as { levels?: { playable?: boolean; media?: string }[] } | undefined;
+    lib.hasVideo =
+      lib.source !== "plugin" ||
+      Boolean(
+        kind?.levels?.some(
+          (level) => level.playable && (level.media || presentations.mediaClass) === "video",
+        ),
+      );
     return lib;
   }
   function mockLibraries(method: string, seg: string[], url: URL, body: unknown): Response {
@@ -2635,7 +2727,9 @@ export function createFakeServer(opts: FakeOptions = {}) {
             health: "ok",
             pluginId: "demo",
             kindKey: "book",
-            libraries: [],
+            enabled: true,
+            logo: booksIcon,
+            libraries: [{ id: 3, name: "Books" }],
           },
           {
             id: "plugin:demo-clips:clip",
@@ -2760,7 +2854,7 @@ export function createFakeServer(opts: FakeOptions = {}) {
           updatedAt: "2026-01-01T00:00:00Z",
         };
         mockLibs.push(lib);
-        return json(lib, 201);
+        return json(hydrateLib(lib), 201);
       }
       return json({
         libraries: [...mockLibs].map(hydrateLib).sort((a, z) => Number(a.sort) - Number(z.sort)),
@@ -3244,7 +3338,6 @@ export function createFakeServer(opts: FakeOptions = {}) {
       if (seg[1]) return json(servers[0]);
       return json(servers);
     }
-    if (p === "/discovery/settings") return json({ enabled: true });
     if (seg[0] === "discovery" && seg[1] === "users") {
       const viewer = Number(seg[2]);
       if (seg[3] === "sync" && seg[4] === "jobs") {
@@ -3468,7 +3561,14 @@ export function createFakeServer(opts: FakeOptions = {}) {
       return err(404, "not_found", "app unavailable");
     }
 
-    const cached = cacheMock(method, seg, body, state.config, state.clustered);
+    const cached = cacheMock(
+      method,
+      seg,
+      body,
+      state.config,
+      state.clustered,
+      url.searchParams.get("files") === "1",
+    );
     if (cached) return json(cached.body, cached.status);
 
     const site = sites.handle(method, seg, body, state.config);
@@ -3926,6 +4026,13 @@ export function createFakeServer(opts: FakeOptions = {}) {
           }
           if (settings.wordmark == null) delete settings.wordmark;
           if (
+            settings.trailerPlayback !== undefined &&
+            settings.trailerPlayback !== "server" &&
+            settings.trailerPlayback !== "clientWhenPossible"
+          ) {
+            return json({ error: { message: "invalid Vela setting" } }, 400);
+          }
+          if (
             settings.livePreview !== undefined &&
             settings.livePreview !== "auto" &&
             settings.livePreview !== "on-click" &&
@@ -4151,16 +4258,43 @@ export function createFakeServer(opts: FakeOptions = {}) {
         return json({ config: state.config });
       case "GET /metadata/sources":
         return json({ sources: metadataSources() });
-      case "GET /setup/status":
+      case "GET /setup/status": {
+        const steps = setupSteps();
         return json({
           setupComplete: state.config.setupComplete,
-          requiredComplete: true,
-          steps: setupSteps(),
+          requiredComplete: steps.every((s) => !s.required || s.complete),
+          steps,
         });
-      case "POST /setup/complete":
+      }
+      case "POST /setup/complete": {
+        const steps = setupSteps();
+        const request = body as { skippedSteps?: string[]; force?: boolean } | undefined;
+        const skipped = request?.skippedSteps ?? [];
+        if (skipped.some((id) => id !== "sources" && id !== "indexers"))
+          return err(400, "invalid_request", "Only Sources and Indexers can be skipped");
+        const missing = steps.find(
+          (s) =>
+            s.required &&
+            !s.complete &&
+            !(
+              (s.id === "sources" || s.id === "indexers") &&
+              (request?.force || skipped.includes(s.id))
+            ),
+        );
+        if (missing)
+          return err(
+            409,
+            missing.id === "plex" ? "plex_required" : "setup_incomplete",
+            missing.title + " is incomplete",
+          );
         state.config.setupComplete = true;
         state.boot.setupComplete = true;
-        return json({ setupComplete: true, requiredComplete: true, steps: setupSteps() });
+        return json({
+          setupComplete: true,
+          requiredComplete: steps.every((s) => !s.required || s.complete),
+          steps,
+        });
+      }
       case "POST /setup/reopen":
         return json({
           setupComplete: state.config.setupComplete,
@@ -5943,26 +6077,25 @@ export function createFakeServer(opts: FakeOptions = {}) {
         });
       case "GET /insights/rows":
         return json({
-          rows: [
-            ["home.continue", "Continue Watching"],
-            ["home.top-10", "Top 10 for You"],
-            ["home.trending", "Trending This Week"],
-            ["home.because-you-watched", "Because You Watched"],
-            ["home.hidden-gems", "Hidden Gems"],
-          ]
-            .map(([hubId, title]) => ({ hubId: hubId!, title: title! }))
-            .map((r) => {
-              const impressions7d = 80 + (hash(r.hubId) % 400);
-              const plays7d = Math.round(impressions7d * ((hash(r.hubId + "p") % 30) / 100));
-              return {
-                hubId: r.hubId,
-                title: r.title,
-                impressions7d,
-                plays7d,
-                playRate: plays7d / impressions7d,
-              };
-            }),
+          rows: recommendationPerformance(7, "").rows.map((row) => ({
+            hubId: row.kind,
+            title: row.title,
+            impressions7d: row.impressions,
+            plays7d: row.plays,
+            playRate: row.plays / row.impressions,
+            lowSample: row.lowSample,
+          })),
         });
+      case "GET /insights/recommendations":
+        return json(recommendationPerformance(Number(q.get("days") ?? 30), q.get("viewer") ?? ""));
+      case "GET /insights/recommendations/row":
+        return json(
+          recommendationPerformanceDetail(
+            Number(q.get("days") ?? 30),
+            q.get("kind") ?? "",
+            q.get("viewer") ?? "",
+          ),
+        );
       case "GET /insights/activity":
         return json({ days: activity() });
     }

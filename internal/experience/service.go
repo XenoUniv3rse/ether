@@ -79,7 +79,8 @@ type ServiceDeps struct {
 	// their rows with the facts given, not read in full. Optional.
 	ArtworkRows func(context.Context, []core.RatingKey, core.TitleFacts) (map[core.RatingKey]core.Title, error)
 	// VisibilityRows reads current policy facts plus requested facets without credits.
-	VisibilityRows func(context.Context, []core.RatingKey, core.TitleFacts) (map[core.RatingKey]core.Title, error)
+	VisibilityRows         func(context.Context, []core.RatingKey, core.TitleFacts) (map[core.RatingKey]core.Title, error)
+	PlaylistVisibilityRows func(context.Context, []core.RatingKey, core.TitleFacts) (map[core.RatingKey]core.Title, error)
 	// ParentTitles resolves distinct parents using the same semantics as GetTitle.
 	ParentTitles func(context.Context, []core.RatingKey) (map[core.RatingKey]core.Title, error)
 	// CachedVirtualSeason resolves a viewer's already-computed episode layout.
@@ -143,7 +144,8 @@ type ServiceDeps struct {
 	LibraryMembers    func(context.Context, core.LibraryID, []core.RatingKey) (map[core.RatingKey]bool, int64, bool, error)
 	PersonCreditForms func(context.Context, int64, []core.MediaType) ([]core.PersonCreditForm, error)
 	PersonFormKeys    func(context.Context, int64, []core.MediaType, []core.PersonCreditForm, core.RatingKey, int) ([]core.RatingKey, error)
-	// peopleVisibleTitles is the people read's VisibleTitles (readPeople).
+	// These readers belong to the current people policy proof.
+	peopleParentTitles          parentTitleReader
 	peopleVisibleTitles         func(context.Context, []core.RatingKey) (map[core.RatingKey]core.Title, error)
 	peoplePortraitTitles        func(context.Context, []PersonCreditRef) (map[core.RatingKey]core.Title, error)
 	peopleRecheckPortraitTitles func(context.Context, []PersonCreditRef) (map[core.RatingKey]core.Title, error)
@@ -208,6 +210,7 @@ type ServiceDeps struct {
 	HiddenRecordingCopies  func(ctx context.Context, userID int64) ([]core.RatingKey, error)
 	Search                 Search
 	Rows                   *RowsService
+	DeliveredRows          func(*core.User, []core.NeutralImpression)
 	Layout                 core.NeutralHomeLayoutSource
 	Protocol               core.Protocol
 	// Favorites manages the stable, per-viewer Favorites playlist mapping.
@@ -243,7 +246,7 @@ type ServiceDeps struct {
 	EntityFavoritesSource   func(context.Context, *core.User, []frontend.FavoriteRef) (map[frontend.FavoriteRef]bool, error)
 
 	// Enrich must use cached or estimated data; it must never resolve releases.
-	Enrich func(context.Context, *core.User, core.Device, *core.Title) (frontend.ItemDetail, error)
+	Enrich func(context.Context, *core.User, frontend.ItemRequest, *core.Title) (frontend.ItemDetail, error)
 
 	Catalog             core.Catalog
 	Recommender         core.Recommender
@@ -375,6 +378,54 @@ func (s *Service) visible(ctx context.Context, v *core.User, title *core.Title) 
 	}
 	return seen
 }
+
+// visibleCandidates keeps search and related-page authorization in one batch.
+func (s *Service) visibleCandidates(ctx context.Context, v *core.User, titles []core.Title) ([]core.Title, error) {
+	if len(titles) == 0 {
+		return titles, nil
+	}
+	memo := frontend.RequestMemoFrom(ctx)
+	if memo == nil {
+		return s.allowTitlesWithParents(ctx, v, titles, s.d.CachedGetMany)
+	}
+	decisions := make(map[core.RatingKey]bool, len(titles))
+	var unknown []core.Title
+	memo.Mu.Lock()
+	for _, title := range titles {
+		if allowed, known := memo.Visible[title.Key]; known {
+			decisions[title.Key] = allowed
+		} else {
+			unknown = append(unknown, title)
+			decisions[title.Key] = false
+		}
+	}
+	memo.Mu.Unlock()
+	if len(unknown) > 0 {
+		allowed, err := s.allowTitlesWithParents(ctx, v, unknown, s.d.CachedGetMany)
+		if err != nil {
+			return nil, err
+		}
+		for _, title := range allowed {
+			decisions[title.Key] = true
+		}
+		memo.Mu.Lock()
+		if memo.Visible == nil {
+			memo.Visible = make(map[core.RatingKey]bool, len(unknown))
+		}
+		for _, title := range unknown {
+			memo.Visible[title.Key] = decisions[title.Key]
+		}
+		memo.Mu.Unlock()
+	}
+	out := make([]core.Title, 0, len(titles))
+	for _, title := range titles {
+		if decisions[title.Key] {
+			out = append(out, title)
+		}
+	}
+	return out, nil
+}
+
 func (s *Service) playable(ctx context.Context, v *core.User, key core.RatingKey) (*core.Title, error) {
 	if key.IsPluginKey() {
 		piv, err := s.pluginItem(core.WithNoContainerExpand(ctx), v, key)
@@ -629,6 +680,21 @@ func (s *Service) LibraryItems(ctx context.Context, viewer *core.Viewer, device 
 	}
 	if q.CollectionKey != 0 {
 		return s.libraryCollectionItems(ctx, v, device, library, stored, q)
+	}
+	// The viewer may have a plugin that serves this kind, but the
+	// catalogue libraries cannot match a plugin-only IncludeItemTypes.
+	if len(q.Types) == 0 && len(q.UnservedTypes) > 0 &&
+		!slices.ContainsFunc(q.UnservedTypes, func(kind string) bool {
+			switch strings.ToLower(kind) {
+			case string(core.TypeMovie), string(core.TypeShow), string(core.TypeSeason), string(core.TypeEpisode):
+				return true
+			}
+			return false
+		}) {
+		if q.StartAt != 0 || q.AdjacentTo != 0 {
+			return core.Page{}, core.ErrNotFound
+		}
+		return core.Page{Items: []core.Title{}, Total: 0, TotalExact: true}, nil
 	}
 	// Recursive show browsing can produce the show, its seasons, and its episodes.
 	// Skip the library when the requested types cannot appear in that tree.
@@ -1019,6 +1085,19 @@ func (s *Service) SnapshotRows(ctx context.Context, req frontend.RowRequest) ([]
 	return s.d.Rows.SnapshotRows(ctx, req, s.d.Protocol)
 }
 
+// RecordDeliveredRows accepts only server-projected entries on protocols that
+// cannot return interaction receipts. The service supplies the app identity.
+func (s *Service) RecordDeliveredRows(viewer *core.User, rows []core.NeutralImpression) {
+	if s.d.DeliveredRows == nil || len(rows) == 0 {
+		return
+	}
+	delivered := append([]core.NeutralImpression(nil), rows...)
+	for i := range delivered {
+		delivered[i].Surface = s.d.Protocol
+	}
+	s.d.DeliveredRows(viewer, delivered)
+}
+
 func pluginPlayRead(piv PluginItemView) (canPlay *bool, canRead *bool) {
 	isBook := piv.Title.MediaClass == core.MediaClassBook || piv.Title.MBItemType == "Book"
 	playable := piv.Playable && !isBook
@@ -1218,7 +1297,7 @@ func (s *Service) Item(ctx context.Context, req frontend.ItemRequest) (frontend.
 	}
 	d := frontend.ItemDetail{Title: *title}
 	if s.d.Enrich != nil {
-		d, err = s.d.Enrich(ctx, v, req.Device, title)
+		d, err = s.d.Enrich(ctx, v, req, title)
 		if err != nil {
 			return frontend.ItemDetail{}, err
 		}
@@ -1388,6 +1467,12 @@ func (s *Service) BatchTitles(ctx context.Context, viewer *core.Viewer, keys []c
 // allowTitles applies library, policy, availability and parent visibility to a
 // page. Availability is one batch, not one query per title.
 func (s *Service) allowTitles(ctx context.Context, v *core.User, titles []core.Title) ([]core.Title, error) {
+	return s.allowTitlesWithParents(ctx, v, titles, s.d.ParentTitles)
+}
+
+type parentTitleReader func(context.Context, []core.RatingKey) (map[core.RatingKey]core.Title, error)
+
+func (s *Service) allowTitlesWithParents(ctx context.Context, v *core.User, titles []core.Title, readParents parentTitleReader) ([]core.Title, error) {
 	if s.d.Visibility.SectionFor == nil {
 		return nil, nil
 	}
@@ -1412,7 +1497,7 @@ func (s *Service) allowTitles(ctx context.Context, v *core.User, titles []core.T
 			}
 		}
 	}
-	sectionAllowed := s.sectionOrFilterAllowedBatch(ctx, v, titles, s.d.Visibility.SectionFor)
+	sectionAllowed := s.sectionOrFilterAllowedBatchWithParents(ctx, v, titles, s.d.Visibility.SectionFor, readParents)
 	candidates := make([]core.Title, 0, len(titles))
 	for i := range titles {
 		title := titles[i]
@@ -1437,8 +1522,8 @@ func (s *Service) allowTitles(ctx context.Context, v *core.User, titles []core.T
 	if len(parents) > 0 {
 		var err error
 		switch {
-		case s.d.ParentTitles != nil:
-			shows, err = s.d.ParentTitles(ctx, parents)
+		case readParents != nil:
+			shows, err = readParents(ctx, parents)
 		case s.d.CachedGetMany != nil:
 			shows, err = s.d.CachedGetMany(ctx, parents)
 		default:
@@ -1660,6 +1745,15 @@ func (s *Service) authorizeArtwork(ctx context.Context, v *core.Viewer, device c
 		return nil
 	}
 	if key.Kind() == core.KindPlaylist {
+		if reader, ok := s.d.Playlists.(interface {
+			Exists(context.Context, int64, core.RatingKey) (bool, error)
+		}); ok {
+			exists, err := reader.Exists(ctx, v.ID, key)
+			if err != nil || !exists {
+				return core.ErrNotFound
+			}
+			return nil
+		}
 		if _, err := s.ownedPlaylist(ctx, v, key); err != nil {
 			return err
 		}
@@ -2107,11 +2201,13 @@ func (s *Service) search(ctx context.Context, viewer *core.Viewer, device core.D
 			<-pluginDone
 			return frontend.SearchPage{}, false, err
 		}
+		candidates, err = s.visibleCandidates(ctx, v, candidates)
+		if err != nil {
+			<-pluginDone
+			return frontend.SearchPage{}, false, err
+		}
 		items = make([]core.Title, 0, len(candidates))
 		for _, title := range candidates {
-			if !s.visible(ctx, v, &title) {
-				continue
-			}
 			ok, e := s.matchesUserQuery(ctx, v, title, q)
 			if e != nil {
 				<-pluginDone
@@ -2958,16 +3054,18 @@ func (s *Service) Similar(ctx context.Context, viewer *core.Viewer, device core.
 			return frontend.SearchPage{}, err
 		}
 	}
+	candidates, err = s.visibleCandidates(ctx, v, candidates)
+	if err != nil {
+		return frontend.SearchPage{}, err
+	}
 	items := make([]core.Title, 0, len(candidates))
-	for i := range candidates {
-		if s.visible(ctx, v, &candidates[i]) {
-			ok, e := s.matchesUserQuery(ctx, v, candidates[i], q)
-			if e != nil {
-				return frontend.SearchPage{}, e
-			}
-			if ok {
-				items = append(items, candidates[i])
-			}
+	for _, title := range candidates {
+		ok, err := s.matchesUserQuery(ctx, v, title, q)
+		if err != nil {
+			return frontend.SearchPage{}, err
+		}
+		if ok {
+			items = append(items, title)
 		}
 	}
 	if err = s.sortTitles(ctx, items, q); err != nil {

@@ -83,8 +83,7 @@ type Deps struct {
 	// held and written later, and admission skips the cluster-wide check
 	// while the database is down (failing open) instead of waiting on it.
 	Availability *store.Availability
-	// SeasonRevealer, when set, checks an in-progress TV season in the
-	// background for streaming-dropped episodes on non-burst detail opens.
+	// SeasonRevealer reuses cached episode evidence off the detail request path.
 	SeasonRevealer func(core.RatingKey)
 	// Vault holds already-stored NZBs and probed tracks (never triggers grabs).
 	Vault vault.Store
@@ -100,13 +99,11 @@ type Deps struct {
 	DebridFileMeta func(rel core.Release) (path string, size int64, ok bool)
 	// ContentIDOf maps a release ID to its known W116 content ID in memory.
 	ContentIDOf func(releaseID string) string
-	// OnVersionProbed notifies listeners when a background header probe stores
-	// new container tracks for a release.
+	// OnVersionProbed notifies listeners when probe facts are recorded for a release.
 	OnVersionProbed func(key core.RatingKey, rel core.Release)
-	// ViewerAudioPreferences returns the viewer's saved audio language list
-	// and prefer-original flag (for probed-audio checks and release ranking).
-	// When nil, playback falls back to the fields on core.User.
-	ViewerAudioPreferences func(ctx context.Context, userID int64) (audioLanguages []string, preferOriginal bool)
+	// ResolveViewerLanguages applies the viewer's saved language rules to
+	// the user passed to source ranking and probe validation.
+	ResolveViewerLanguages func(context.Context, *core.User) *core.User
 	// HeaderProbeBudget bounds bytes read per low-priority container header
 	// probe (0 uses transcode.DefaultHeaderProbeBudget).
 	HeaderProbeBudget int
@@ -371,6 +368,7 @@ type flightKey struct {
 	prefer            string
 	exact             bool
 	deferSupersession bool
+	detail            bool
 }
 
 type warmBudgetKey struct {
@@ -381,7 +379,7 @@ type warmBudgetKey struct {
 // activeFlightLocked returns an in-flight Prepare for id, if any.
 func (m *Manager) activeFlightLocked(id identity) *flight {
 	for k, f := range m.flights {
-		if k.id == id {
+		if k.id == id && !k.detail {
 			return f
 		}
 	}
@@ -415,6 +413,9 @@ type flight struct {
 	// kind, when set, makes this flight open a non-catalogue plugin item
 	// instead of resolving a catalogue title (spec §15.1).
 	kind *core.KindInput
+	// play marks the flight's work as a viewer's explicit Play
+	// (core.ExplicitPlay) once a Play starts or joins it.
+	play func()
 }
 
 // releaseLabel prefers the release name and falls back to the indexer.
@@ -1094,7 +1095,10 @@ func (m *Manager) prepareOwnedWithin(ctx context.Context, wait time.Duration, us
 		}
 		break
 	}
-	fk := flightKey{id: id, prefer: prefer, exact: exact, deferSupersession: deferSupersession}
+	// A chapter read can open an existing source but cannot trial-add one.
+	// Play must be able to resolve independently if the read found nothing.
+	detail := core.IndexerPurpose(ctx) == core.IndexerPurposeDetail
+	fk := flightKey{id: id, prefer: prefer, exact: exact, deferSupersession: deferSupersession, detail: detail}
 	f := m.flights[fk]
 	if f == nil && !deferSupersession {
 		// Join the bounded decision wait (PrepareWithin) already preparing
@@ -1126,14 +1130,18 @@ func (m *Manager) prepareOwnedWithin(ctx context.Context, wait time.Duration, us
 	}
 	if f == nil {
 		parent := context.WithoutCancel(ctx)
-		if core.IsBackgroundAnalysis(ctx) || caps.BroadcastBitrateKbps > 0 {
+		if detail || core.IsBackgroundAnalysis(ctx) || caps.BroadcastBitrateKbps > 0 {
 			parent = ctx
 		}
 		wctx, cancel := context.WithTimeout(parent, m.opts.PrepareTimeout)
-		f = &flight{sources: newSourceLifetime(user.ID, string(caps.Protocol), caps.ClientID), done: make(chan struct{}), cancel: cancel}
+		wctx, play := core.WithExplicitPlayLatch(wctx)
+		f = &flight{sources: newSourceLifetime(user.ID, string(caps.Protocol), caps.ClientID), done: make(chan struct{}), cancel: cancel, play: play}
 		m.flights[fk] = f
 		u := *user
 		go m.runFlight(wctx, f, fk, &u, caps)
+	}
+	if f.play != nil && core.ExplicitPlay(ctx) {
+		f.play()
 	}
 	f.waiters++
 	f.playRequest = f.playRequest || play
@@ -1957,6 +1965,16 @@ func (m *Manager) SetDecision(id string, d core.Decision) {
 	}
 	if s := m.lookup(id); s != nil {
 		s.mu.Lock()
+		first := s.deliveryDecision == nil
+		chapters, chapterSource := 0, "none"
+		if first && s.cur != nil {
+			s.cur.mu.Lock()
+			info := &s.cur.info
+			if !info.Estimated && info.Video() != nil && (info.ChaptersProbed || len(info.Chapters) > 0) {
+				chapters, chapterSource = len(info.Chapters), "probe"
+			}
+			s.cur.mu.Unlock()
+		}
 		changed := s.decision != d.Kind || s.decisionReason != d.Reason
 		hasVideo := s.cur == nil || len(s.cur.info.Streams) == 0 || s.cur.info.Video() != nil
 		s.decision, s.explicit = d.Kind, true
@@ -1972,6 +1990,10 @@ func (m *Manager) SetDecision(id string, d core.Decision) {
 			s.requiresRemux = false
 		}
 		s.mu.Unlock()
+		if first {
+			m.log.Info("playback chapters", "session", s.id, "client_id", s.ident.clientID,
+				"chapters", chapters, "source", chapterSource)
+		}
 		if changed {
 			if hasVideo {
 				m.log.Info("playback delivery decision", "session", s.id, "decision", d.Kind, "videoCopy", d.VideoCopy, "audioCopy", d.AudioCopy, "reason", d.Reason)

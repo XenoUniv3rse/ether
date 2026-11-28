@@ -34,7 +34,7 @@ func Sighting(rec *diagnostics.Recorder, protocol string, device frontend.Device
 	if rec == nil || device.ID == "" {
 		return
 	}
-	rec.Observe(diagnostics.Event{Kind: diagnostics.KindDevice, DeviceKey: protocol + ":" + device.ID, Product: device.Product, Platform: device.Platform, DeviceName: device.DeviceName, AppVersion: device.Version})
+	rec.Observe(diagnostics.Event{Kind: diagnostics.KindDevice, DeviceKey: frontend.PlaybackClientID(frontend.Protocol(protocol), device.ID), Product: device.Product, Platform: device.Platform, DeviceName: device.DeviceName, AppVersion: device.Version})
 }
 
 // Seen is called only after the adapter has authenticated the viewer and
@@ -89,7 +89,7 @@ func Wrap(rec *diagnostics.Recorder, protocol string, authenticate func(*http.Re
 		if viewer != nil {
 			Seen(r, rec, protocol, viewer, d)
 		}
-		sampleBody := viewer != nil && d.ID != "" && sampleable(protocol, r) && rec.BeginSample(protocol+":"+d.ID)
+		sampleBody := viewer != nil && d.ID != "" && sampleable(protocol, r) && rec.BeginSample(frontend.PlaybackClientID(frontend.Protocol(protocol), d.ID))
 		if sampleBody {
 			defer rec.EndSample()
 		}
@@ -106,7 +106,7 @@ func Wrap(rec *diagnostics.Recorder, protocol string, authenticate func(*http.Re
 		if subject.user == nil || subject.device.ID == "" {
 			return
 		}
-		ev := diagnostics.Event{Time: time.Now(), Kind: diagnostics.KindRequest, Protocol: protocol, DeviceKey: protocol + ":" + subject.device.ID, ViewerID: subject.user.ID, Username: subject.user.Username, Product: subject.device.Product, Platform: subject.device.Platform, DeviceName: subject.device.DeviceName, Device: subject.device.Client, AppVersion: subject.device.Version, Method: r.Method, Route: safePath(r.URL.Path), Query: diagnostics.SafeQuery(r.URL.Query()), Status: sw.Status(), Bytes: int64(sw.BytesWritten()), Duration: time.Since(start), Cancelled: r.Context().Err() != nil}
+		ev := diagnostics.Event{Time: time.Now(), Kind: diagnostics.KindRequest, Protocol: protocol, DeviceKey: frontend.PlaybackClientID(frontend.Protocol(protocol), subject.device.ID), ViewerID: subject.user.ID, Username: subject.user.Username, Product: subject.device.Product, Platform: subject.device.Platform, DeviceName: subject.device.DeviceName, Device: subject.device.Client, AppVersion: subject.device.Version, Method: r.Method, Route: safePath(r.URL.Path), Query: diagnostics.SafeQuery(r.URL.Query()), Status: sw.Status(), Bytes: int64(sw.BytesWritten()), Duration: time.Since(start), Cancelled: r.Context().Err() != nil}
 		if ev.Status == 0 {
 			ev.Status = http.StatusOK
 		}
@@ -117,6 +117,9 @@ func Wrap(rec *diagnostics.Recorder, protocol string, authenticate func(*http.Re
 		// A response sample is usable only when its pre-auth claim was verified.
 		if sampleBody && d.ID == subject.device.ID && viewer != nil && viewer.ID == subject.user.ID {
 			ev.Response = summarize(data.buf.Bytes(), data.truncated, sw.Header().Get("Content-Encoding"))
+			if ev.Response == nil && sw.Header().Get("X-Application-Error-Code") == "NoCompatibleStream" {
+				ev.Response = &diagnostics.ResponseSummary{Decision: "failed", ErrorCode: "NoCompatibleStream"}
+			}
 		}
 		rec.Observe(ev)
 	})
@@ -179,6 +182,14 @@ func summarize(raw []byte, truncated bool, encoding string) *diagnostics.Respons
 		var detail string
 		if json.Unmarshal(raw, &detail) == nil && len(detail) <= 512 {
 			out.Error = detail
+			matched = true
+		}
+	}
+	if raw, ok := doc["Chapters"]; ok {
+		var chapters []json.RawMessage
+		if json.Unmarshal(raw, &chapters) == nil && chapters != nil {
+			count := len(chapters)
+			out.ChapterCount = &count
 			matched = true
 		}
 	}

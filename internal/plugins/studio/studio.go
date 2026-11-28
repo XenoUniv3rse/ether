@@ -1627,9 +1627,12 @@ func (h *devHost) CallHost(ctx context.Context, name string, raw json.RawMessage
 		}
 		return json.RawMessage(`{"id":1,"title":"The Matrix","type":"movie","year":1999}`), nil
 
+	case "folders.roots":
+		h.s.mu.Unlock()
+		return json.RawMessage(`[]`), nil
 	case "folders.list":
 		h.s.mu.Unlock()
-		return json.RawMessage(`[{"name":"Movie (2024)","path":"movies/Movie (2024)","dir":true}]`), nil
+		return json.RawMessage(`{"entries":[{"name":"Movie (2024)","path":"movies/Movie (2024)","dir":true}],"nextCursor":"","truncated":false}`), nil
 
 	case "folders.stat":
 		p := str(1)

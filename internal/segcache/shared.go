@@ -40,6 +40,10 @@ CREATE INDEX segcache_releases_empty ON segcache_releases(touched) WHERE segment
 CREATE INDEX segcache_segments_file ON segcache_segments(file);
 CREATE INDEX segcache_files_created ON segcache_files(created);
 `)
+	// In-flight segment writes share the pool budget with retained media.
+	store.Register("segcache_admission", 1, `CREATE TABLE segcache_writes(id TEXT PRIMARY KEY, bytes INTEGER NOT NULL, expires INTEGER NOT NULL);`)
+	store.Register("segcache_admission", 2, `ALTER TABLE segcache_segments ADD COLUMN touched_nanos INTEGER NOT NULL DEFAULT 0;`)
+
 	// Evicted bytes whose files are still being unlinked (one row per
 	// eviction pass), so free-space measurements on any node count them as
 	// free. Its own component keeps the segcache numbering independent.
@@ -199,8 +203,8 @@ func (s *sharedCache) get(id string, seg int) ([]byte, bool) {
 	if err != nil {
 		return s.miss()
 	}
-	if time.Now().Unix()-touched >= 60 {
-		_, _ = s.db.ExecContext(ctx, `UPDATE segcache_segments SET touched=? WHERE release_id=? AND segment=? AND file=?`, time.Now().Unix(), id, seg, file)
+	if now := time.Now(); now.Unix()-touched >= 60 {
+		_, _ = s.db.ExecContext(ctx, `UPDATE segcache_segments SET touched=?,touched_nanos=? WHERE release_id=? AND segment=? AND file=?`, now.Unix(), now.Nanosecond(), id, seg, file)
 		_, _ = s.db.ExecContext(ctx, `UPDATE segcache_releases SET touched=? WHERE release_id=? AND touched<?`, time.Now().Unix(), id, time.Now().Unix()-60)
 	}
 	s.c.mu.Lock()
@@ -228,7 +232,14 @@ func (s *sharedCache) has(id string, seg int) bool {
 	_, err := os.Stat(s.path(file))
 	return err == nil
 }
-func (s *sharedCache) put(id string, seg int, b []byte) error {
+func (s *sharedCache) put(id string, seg int, b []byte, lease string) error {
+	if lease != "" {
+		defer func() {
+			if lease != "" {
+				s.c.endReservation(lease, int64(len(b)))
+			}
+		}()
+	}
 	if err := validKey(id, seg); err != nil {
 		return err
 	}
@@ -265,12 +276,22 @@ func (s *sharedCache) put(id string, seg int, b []byte) error {
 	var old string
 	var used int64
 	err = s.tx(ctx, func(tx *sql.Tx) error {
+		if lease != "" {
+			result, err := tx.ExecContext(ctx, `DELETE FROM segcache_writes WHERE id=? AND expires>`+s.nowSQL(), lease)
+			if err != nil {
+				return err
+			}
+			if n, err := result.RowsAffected(); err != nil || n != 1 {
+				return errors.New("segment write reservation expired")
+			}
+		}
 		var size int64
 		err := tx.QueryRowContext(ctx, `SELECT file,size FROM segcache_segments WHERE release_id=? AND segment=?`, id, seg).Scan(&old, &size)
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return err
 		}
-		if _, err = tx.ExecContext(ctx, `INSERT INTO segcache_segments(release_id,segment,file,size,touched) VALUES(?,?,?,?,?) ON CONFLICT(release_id,segment) DO UPDATE SET file=excluded.file,size=excluded.size,touched=excluded.touched`, id, seg, file, len(b), time.Now().Unix()); err != nil {
+		now := time.Now()
+		if _, err = tx.ExecContext(ctx, `INSERT INTO segcache_segments(release_id,segment,file,size,touched,touched_nanos) VALUES(?,?,?,?,?,?) ON CONFLICT(release_id,segment) DO UPDATE SET file=excluded.file,size=excluded.size,touched=excluded.touched,touched_nanos=excluded.touched_nanos`, id, seg, file, len(b), now.Unix(), now.Nanosecond()); err != nil {
 			return err
 		}
 		count := 0
@@ -288,27 +309,31 @@ func (s *sharedCache) put(id string, seg int, b []byte) error {
 	if err != nil {
 		return err
 	} // Never unlink on an ambiguous commit; GC resolves it.
+	lease = "" // transferred to segcache_pool in the transaction above
 	if old != "" {
-		s.unlink(old)
+		s.log(s.unlink(old))
 	}
 	if s.c.shouldWakeSharedEvict(used) {
 		s.c.signalEvict()
 	}
 	return nil
 }
-func (s *sharedCache) unlink(file string) {
-	if !validFile(file) || s.checkMount() != nil {
-		return
+func (s *sharedCache) unlink(file string) error {
+	if !validFile(file) {
+		return errors.New("invalid cache file")
 	}
+	if err := s.checkMount(); err != nil {
+		return err
+	}
+
 	// Caller only supplies immutable versions that are no longer referenced.
 	if err := os.Remove(s.path(file)); err != nil && !errors.Is(err, os.ErrNotExist) {
-		s.log(err)
-		return
+		return err
 	}
 	ctx, cancel := s.context()
 	defer cancel()
 	_, err := s.db.ExecContext(ctx, `DELETE FROM segcache_files WHERE file=?`, file)
-	s.log(err)
+	return err
 }
 func transient(reason string) bool {
 	return reason == "playback:live" || reason == "playback:inprogress"
@@ -594,19 +619,27 @@ func (s *sharedCache) sweepWatermarked() {
 	}
 }
 func (s *sharedCache) evictWhere(id string, expire bool, watermarked bool) (bool, error) {
+	more, _, err := s.evictTarget(id, expire, watermarked, -1, time.Time{})
+	return more, err
+}
+func (s *sharedCache) evictTarget(id string, expire, watermarked bool, need int64, cutoff time.Time) (bool, int64, error) {
 	if err := s.checkMount(); err != nil {
-		return false, err
+		return false, 0, err
 	}
 	s.c.mu.Lock()
-	budget, p, closed := s.c.budget, s.c.policy, s.c.closed
+	budget, p, closed, pooled := s.c.budget, s.c.policy, s.c.closed, s.c.files != nil
 	s.c.mu.Unlock()
 	if closed {
-		return false, ErrClosed
+		return false, 0, ErrClosed
 	}
 	prot, _ := s.c.protected()
 	s.c.evictMu.Lock()
 	defer s.c.evictMu.Unlock()
-	floorCap, floorOK := s.c.floorCap(s.sharedUsed)
+	var floorCap int64
+	var floorOK bool
+	if need < 0 && !(expire && pooled) {
+		floorCap, floorOK = s.c.floorCap(s.sharedUsed)
+	}
 	ctx, cancel := s.context()
 	defer cancel()
 	var files []string
@@ -623,6 +656,11 @@ func (s *sharedCache) evictWhere(id string, expire bool, watermarked bool) (bool
 		// eviction compares against the pool usage that eviction left.
 		limit := usageLimit(budget, floorCap, floorOK)
 		target := limit
+		if need >= 0 {
+			target = max(used-need, 0)
+		} else if expire && pooled {
+			target = -1 // expiry only; the pool ranks all eligible media under pressure
+		}
 		if watermarked {
 			if limit < 0 {
 				return nil
@@ -651,14 +689,20 @@ func (s *sharedCache) evictWhere(id string, expire bool, watermarked bool) (bool
 		}
 		// Segment-granular eviction, with a bounded batch per sweep. Shared pins
 		// are checked in the same transaction as removal and accounting.
-		q := `SELECT s.release_id,s.segment,s.file,s.size,s.touched,COALESCE(r.plays,0),COALESCE(r.played,0) FROM segcache_segments s LEFT JOIN segcache_releases r ON r.release_id=s.release_id WHERE NOT EXISTS(SELECT 1 FROM segcache_pins p WHERE p.release_id=s.release_id AND (p.expires=0 OR p.expires>` + s.nowSQL() + `))`
+		q := `SELECT s.release_id,s.segment,s.file,s.size,s.touched,s.touched_nanos,COALESCE(r.plays,0),COALESCE(r.played,0) FROM segcache_segments s LEFT JOIN segcache_releases r ON r.release_id=s.release_id WHERE NOT EXISTS(SELECT 1 FROM segcache_pins p WHERE p.release_id=s.release_id AND (p.expires=0 OR p.expires>` + s.nowSQL() + `))`
 		args := []any{}
 		if id != "" {
 			q += ` AND s.release_id=?`
 			args = append(args, id)
 		}
-		q += ` ORDER BY s.touched`
-		if id == "" {
+		if !cutoff.IsZero() {
+			q += ` AND s.touched<=?`
+			args = append(args, cutoff.Unix())
+		}
+		q += ` ORDER BY s.touched,s.touched_nanos`
+		// When replay boosts or active sessions exclude candidates, keep
+		// scanning until the batch contains eligible rows.
+		if id == "" && len(prot) == 0 && (cutoff.IsZero() || p.Mode != "adaptive") {
 			q += ` LIMIT 256`
 		}
 		rows, err := tx.QueryContext(ctx, q, args...)
@@ -666,21 +710,30 @@ func (s *sharedCache) evictWhere(id string, expire bool, watermarked bool) (bool
 			return err
 		}
 		type candidate struct {
-			id, file                            string
-			seg                                 int
-			size, touched, plays, played, score int64
+			id, file                                   string
+			seg                                        int
+			size, touched, nanos, plays, played, score int64
 		}
 		var cs []candidate
 		for rows.Next() {
 			var v candidate
-			if err = rows.Scan(&v.id, &v.seg, &v.file, &v.size, &v.touched, &v.plays, &v.played); err != nil {
+			if err = rows.Scan(&v.id, &v.seg, &v.file, &v.size, &v.touched, &v.nanos, &v.plays, &v.played); err != nil {
 				break
 			}
-			v.score = v.touched
+			if prot[v.id] {
+				continue
+			}
+			v.score = time.Unix(v.touched, v.nanos).UnixNano()
 			if p.Mode == "adaptive" && time.Now().Unix()-v.played < 30*86400 {
-				v.score += min(max(v.plays-1, 0), 8) * int64(p.ReplayBoost/time.Second)
+				v.score += min(max(v.plays-1, 0), 8) * int64(p.ReplayBoost)
+			}
+			if !cutoff.IsZero() && v.score > cutoff.UnixNano() {
+				continue
 			}
 			cs = append(cs, v)
+			if id == "" && len(cs) == 256 {
+				break
+			}
 		}
 		re := rows.Err()
 		rows.Close()
@@ -694,7 +747,7 @@ func (s *sharedCache) evictWhere(id string, expire bool, watermarked bool) (bool
 		deltas := map[string][2]int64{}
 		for _, v := range cs {
 			expired := expire && (p.Mode == "off" || (p.Retention > 0 && time.Since(time.Unix(v.touched, 0)) >= p.Retention))
-			if prot[v.id] || (id == "" && !expired && within()) {
+			if id == "" && !expired && within() {
 				continue
 			}
 			if watermarked && limit >= 0 && used <= limit && used == v.size {
@@ -724,20 +777,23 @@ func (s *sharedCache) evictWhere(id string, expire bool, watermarked bool) (bool
 			// space yet; floor measurements on any node count it as free.
 			reclaimID = rand.Text()
 			_, err = tx.ExecContext(ctx, `INSERT INTO segcache_reclaim(id,node,bytes,at) VALUES(?,?,?,`+s.nowSQL()+`)`, reclaimID, s.node, reclaimed)
-			if watermarked && !within() {
+			if (watermarked || need >= 0) && !within() {
 				more = true
 			}
 		}
 		return err
 	})
 	if err != nil {
-		return false, err
+		return false, 0, err
 	}
 	if s.beforeUnlink != nil {
 		s.beforeUnlink()
 	}
+	var unlinkErr error
 	for _, f := range files {
-		s.unlink(f)
+		if err := s.unlink(f); err != nil {
+			unlinkErr = errors.Join(unlinkErr, err)
+		}
 	}
 	if reclaimID != "" {
 		ctx, cancel := s.context()
@@ -748,9 +804,13 @@ func (s *sharedCache) evictWhere(id string, expire bool, watermarked bool) (bool
 	s.c.mu.Lock()
 	s.c.metrics.EvictedBytes += reclaimed
 	s.c.mu.Unlock()
-	return more, nil
+	return more, reclaimed, unlinkErr
 }
 func (s *sharedCache) heartbeat() {
+	ctxGC, stopGC := s.context()
+	_, gcErr := s.db.ExecContext(ctxGC, `DELETE FROM segcache_writes WHERE expires<=`+s.nowSQL())
+	stopGC()
+	s.log(gcErr)
 	ctx, cancel := s.context()
 	defer cancel()
 	// Reclaim records of a node that died mid-unlink no longer count.
@@ -787,7 +847,7 @@ func (s *sharedCache) heartbeat() {
 	s.logRows("heartbeat", rows.Err())
 	rows.Close()
 	for _, f := range files {
-		s.unlink(f)
+		s.log(s.unlink(f))
 	}
 }
 
@@ -819,6 +879,15 @@ func (c *Cache) Prune(ctx context.Context) (int64, error) {
 		`DELETE FROM segcache_releases WHERE segments=0 AND bytes=0 AND touched<? AND release_id IN (SELECT r.release_id FROM segcache_releases r WHERE r.segments=0 AND r.touched<? AND r.bytes=0 AND r.played<? AND NOT EXISTS(SELECT 1 FROM segcache_pins p WHERE p.release_id=r.release_id AND (p.expires=0 OR p.expires>?)) ORDER BY r.touched LIMIT ?)`,
 		cutoff, cutoff, cutoff, nowSec)
 	return pins + releases, err
+}
+
+// CheckVolume verifies the shared cache volume's identity before another
+// subsystem reads or writes its files. A local cache has no mount marker.
+func (c *Cache) CheckVolume() error {
+	if c.shared != nil {
+		return c.shared.checkMount()
+	}
+	return nil
 }
 
 // Shared reports whether this cache uses the cluster's NAS pool.

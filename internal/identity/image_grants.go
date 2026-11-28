@@ -603,9 +603,11 @@ func (s *ImageGrantService) writeGrantedImage(w http.ResponseWriter, r *http.Req
 		}
 	}
 	h.Set("Content-Length", strconv.Itoa(len(data)))
-	if r.Method == http.MethodGet {
-		_, _ = w.Write(data)
+	if r.Method == http.MethodHead {
+		w.WriteHeader(http.StatusOK)
+		return
 	}
+	_, _ = w.Write(data)
 }
 
 var _ frontend.ImageGrants = (*ImageGrantService)(nil)

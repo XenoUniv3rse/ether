@@ -98,6 +98,8 @@ var tierTouchSources = []touchSource{
 	{table: "personalize_plays", column: "item_key"},
 	{table: "personalize_plays", column: "taste_key"},
 	{table: "personalize_item_impressions", column: "item_key"},
+	{table: "personalize_recommendation_entries", column: "item_key"},
+	{table: "personalize_recommendation_titles", column: "item_key"},
 	{table: "personalize_serve_items", column: "item_key"},
 	{table: "personalize_serve_items", column: "taste_key"},
 	{table: "stats_plays", column: "rating_key"},
@@ -230,7 +232,7 @@ var tierUntouchedTables = []string{
 	"mdblist_accounts", "mdblist_post_pacing",
 	"plexwatch_account", "plexwatch_fence", "plexwatch_pin", "plexwatch_pms", "plexwatch_pms_held", "plexwatch_pms_unmatched",
 	"plexwatch_pms_viewer", "plex_counters", "personalize_overrides", "personalize_ranker",
-	"personalize_row_impressions", "personalize_serves", "personalize_pages", "trackprefs_rules",
+	"personalize_recommendation_days", "personalize_recommendation_deliveries", "personalize_recommendation_starts", "personalize_recommendation_upgrades", "personalize_row_impressions", "personalize_serves", "personalize_pages", "trackprefs_rules",
 	"episodeorder_groups", "watchlist_meta", "watchlist_settings", "watchlist_community_jobs", "watchlist_community_locks", "watchlist_availability_jobs", "migrate_plans",
 	// Cluster, placement, playback plumbing (titles only through the
 	// scanned sources above).
@@ -238,6 +240,7 @@ var tierUntouchedTables = []string{
 	"placement_claims", "placement_displaced", "placement_displaced_claims", "placement_history_", "placement_policy", "placement_pools",
 	"placement_removed_targets", "placement_targets", "placement_ledger", "playback_payload_",
 	"livetv_readiness", "livetv_refresh_leases", "livetv_source_refresh", "livetv_showcase",
+	"livetv_catchup_watch", // Catch-up watch state names airings (channel and start), never a title.
 	// Settings, logs and plugins' own plumbing.
 	"backup_", "notify_channels", "notify_once", "notify_push_keys", "notify_settings", "overlays_settings",
 	"prerolls", "prerolls_settings", "stats_costs", "stats_device_registry", "stats_device_registry_counter", "stats_indexer_days",
@@ -245,7 +248,7 @@ var tierUntouchedTables = []string{
 	"stats_newsletter_", "stats_provider_days", "stats_play_timeline", "plugins_artifacts", "plugins_calls", "plugins_catalogue_",
 	"plugins_remote_hashes", "plugins_remote_hash_budget", "plugins_hash_cache", "plugins_kv_usage", "plugins_event_log", "plugins_grants", "plugins_health", "plugins_installed", "plugins_logs",
 	"plugins_proposals", "plugins_settings", "plugins_derived_secrets", "agent_approvals", "agent_audit", "agent_secret_requests",
-	"agent_threads", "schema_migrations", "sqlite_",
+	"agent_threads", "assistant_upgrades", "schema_migrations", "sqlite_",
 }
 
 // tierTouched is the set of titles the touch sources name, collapsed to

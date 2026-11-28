@@ -78,6 +78,7 @@ export default hello;
 - `sourceSearch` (`GET /ether/search`, for a `contributes.source.search` declaration) and `releaseFiles` (`GET /ether/files/{id}`)
 - `subtitles` (`GET /subtitles/{type}/{id}[/{extra}].json`, requires `X-Ether-Pick` header)
 - `markers` (`GET /ether/markers/{type}/{id}.json`)
+- `debridCacheHints` (`POST /ether/debrid/hints`, capability `debrid_cache_hints`: which listed torrents a debrid service holds; see `docs/plugin-debrid.md`)
 - `channels` (`GET /ether/channels.json`) and `guide` (`GET /ether/guide/{channelId}.json`)
 - `notify` (`POST /ether/notify`)
 - `event` (`POST /ether/event`) and `ctx.ether.events.publish(key, payload, correlation?)` (`contributes.events.publish`)
@@ -205,7 +206,7 @@ start their execution deadline when an instance is acquired.
 The default download and expanded-member ceilings are **8 GiB** each, total
 archive expansion **32 GiB**, archive members **65,535**, and stored catalogue
 items **2,000,000** (`maxItems`, owner-adjustable with no upper bound). Downloads also obey
-the library cache quota (2 GiB unless the manifest declares a different quota).
+the media pool budget and any explicit per-library limit.
 The host reports requested fields in the manifest and exact grants as
 `runtimeLimits` in install preview and detail, displayed side by side, and exposes
 the effective limits for the active call at runtime via `ctx.ether.runtime!.limits()` —
@@ -216,7 +217,8 @@ including the route-clamped `deadline` and `unitBudget`, `poolSize`, plus
 Viewer request-path calls derive their unit budget directly from each route's
 deadline (`10,000 units/s`): `/stream/*` and `/ether/open*` get 3 s (30,000 units;
 20 s / 200,000 units for Stremio add-ons), `/subtitles/*`, `/ether/subtitles/*` and
-`/ether/v1/kinds/*/resolve` or `/match` get 5 s (50,000 units), and `/catalog/*`,
+`/ether/v1/kinds/*/match` or `/live/resolve` get 5 s (50,000 units).
+Kind `/resolve` gets 12 s (120,000 units). `/catalog/*`,
 `/meta/*`, `/ether/metadata/*`, `/ether/markers*`, `/ether/v1/kinds/*/search`,
 `/items/*`, `/ether/search` and `/ether/files/*` get 10 s (100,000 units), further shortened only if the owner sets a
 lower ceiling. Ranking stays at its existing 2 ms per-candidate and 50 ms

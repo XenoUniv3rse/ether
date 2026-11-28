@@ -350,7 +350,7 @@ func analyzeFull(ctx context.Context, conn *sql.Conn, name string) (time.Duratio
 // one reload the schema, statistics included, before its next statement. An
 // empty view created and dropped in one transaction changes nothing else.
 func reloadStatistics(ctx context.Context, conn *sql.Conn) error {
-	tx, err := conn.BeginTx(context.WithoutCancel(ctx), nil)
+	tx, err := conn.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}

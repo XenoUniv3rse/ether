@@ -61,7 +61,7 @@ func (s *playSession) outputSnapshot() *playSession {
 		copy := *s.archive
 		archive = &copy
 	}
-	return &playSession{archive: archive, position: s.position, plan: copyPlanValue(s.plan).(object), source: s.source, seek: s.seek,
+	return &playSession{archive: archive, client: s.client, channelID: s.channelID, accessDevice: s.accessDevice, position: s.position, plan: copyPlanValue(s.plan).(object), source: s.source, seek: s.seek,
 		qualityRungs: s.qualityRungs, media: s.media, subtitleFormats: s.subtitleFormats,
 		canBurn: s.canBurn, preparation: s.preparation, diagnostics: s.diagnostics}
 }
@@ -108,13 +108,13 @@ func (s *playSession) applyOutput(copy *playSession) {
 }
 func (s *playSession) portSnapshot(w http.ResponseWriter, call func(*playSession)) bool {
 	copy := s.outputSnapshot()
-	revision := s.revision
+	cursor := s.cursor
 	if !s.port(w, func() { call(copy) }) {
 		return false
 	}
 	// Background refreshes yield to newer events; a serialized command
 	// applies the output facts produced by its own host operation.
-	if revision == s.revision || s.commandActive {
+	if cursor == s.cursor || s.commandActive {
 		s.applyOutput(copy)
 	}
 	return true

@@ -388,7 +388,14 @@ const BUILTIN_PAGES: Record<
 > = {
   overview: { element: <Home /> },
   activity: { element: <Activity />, suffix: "/:tab?" },
-  viewers: { element: <ViewersList />, extra: [{ suffix: "/:id/:tab?", element: <ViewerById /> }] },
+  viewers: {
+    element: <ViewersList />,
+    extra: [
+      { suffix: "/watchlists", element: <ViewersList tab="watchlists" /> },
+      { suffix: "/security", element: <ViewersList tab="security" /> },
+      { suffix: "/:id/:tab?", element: <ViewerById /> },
+    ],
+  },
   recommendations: { element: <Recommendations /> },
   collections: {
     element: <CollectionsLayout />,

@@ -66,6 +66,10 @@ func (c *Catalog) Browse(ctx context.Context, q core.BrowseQuery) (core.Page, er
 	minBucket := c.minuteBucket()
 	ckey := c.consoleAvailabilityCacheKey(q.Filter) + "|" + browseFilterKey(c.policyKeyFilter(q.Filter)) + fmt.Sprintf("|rules:%s:%v:%#v:%s|extra:%#v:%s|tab:%#v:%s", q.Filter.RuleVisibility, q.Filter.ApplyCanonicalInPreview, q.Filter.PreviewRules, q.Filter.PreviewFallback, q.Filter.ExtraRules, q.Filter.ExtraFallback, q.Filter.TabRules, q.Filter.TabFallback)
 	bkey := fmt.Sprintf("after:%d|", q.AfterKey) + fmt.Sprintf("%s|%s|%v|%v|%d|%d|%v|%v", ckey, q.Sort, q.Desc, q.SecondarySorts, offset, limit, q.NoTotal, q.CheapTotal)
+	if q.ListDisplayFacts {
+		ctx = context.WithValue(ctx, listDisplayFactsKey{}, true)
+		bkey += "|list-display"
+	}
 	cacheable := !filterHasViewerState(q.Filter) && q.Filter.CollectionMembers == 0
 	// An export page holds partial titles (ListRows) and is read once per
 	// export: it neither serves from nor fills the page cache.

@@ -389,7 +389,8 @@ func (r *KindResolver) ProbeMedia(ctx context.Context, pluginID string, src core
 	}
 
 	probeDeps := kindstream.Deps{
-		HTTP: r.http,
+		LimitRangeTransport: r.mgr.LimitRangeTransport,
+		HTTP:                r.http,
 		OpenRelease: func(octx context.Context, hint core.ReleaseHint) (core.MediaSource, error) {
 			hint.CachedOnly = true
 			return r.openReleaseWithCategory(octx, hint, 0)

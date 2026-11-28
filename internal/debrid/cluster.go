@@ -175,10 +175,10 @@ func (l *limiter) acquire(ctx context.Context) error {
 	}
 }
 
-func (l *limiter) tryAcquire() bool {
+func (l *limiter) tryAcquire(reserved int) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if l.used >= l.limit || l.waiting != 0 {
+	if l.used >= l.limit-reserved || l.waiting != 0 {
 		return false
 	}
 	l.used++
@@ -226,7 +226,7 @@ func (l *limiter) signalLocked() {
 // ---------------------------------------------------------------------------
 // Back-off broadcast.
 
-// backoffEvent is a provider pause (State "backoff" or "auth_failed", Until
+// backoffEvent is a provider pause (State "backoff", "auth_failed" or "rate_limited", Until
 // in Unix milliseconds) or, with State empty, the end of one.
 type backoffEvent struct {
 	Provider string `json:"provider"`
@@ -253,6 +253,29 @@ func (s *Service) observe(e *entry, err error) {
 	}
 	s.emitBreakerEvent(e, prevState, ev, outageDur)
 	s.notifyChange()
+	s.publishBackoff(*ev)
+}
+
+func (s *Service) publishAccountPause(p *accountPacer, until time.Time) {
+	s.notifyChange()
+	if s.clusterNode() == nil {
+		return
+	}
+	s.mu.RLock()
+	var id string
+	for _, e := range s.entries {
+		if provider, ok := e.p.(pacedProvider); ok && provider.accountPace() == p {
+			id = e.serviceRef().ID
+			break
+		}
+	}
+	s.mu.RUnlock()
+	if id != "" {
+		s.publishBackoff(backoffEvent{Provider: id, State: "rate_limited", Until: until.UnixMilli()})
+	}
+}
+
+func (s *Service) publishBackoff(ev backoffEvent) {
 	node := s.clusterNode()
 	if node == nil {
 		return
@@ -288,10 +311,17 @@ func (s *Service) onBackoff(msg []byte) {
 		}
 	}
 	s.mu.RUnlock()
-	if e != nil {
-		e.applyRemote(s.now(), ev)
-		s.notifyChange()
+	if e == nil {
+		return
 	}
+	if ev.State == "rate_limited" {
+		if p, ok := e.p.(pacedProvider); ok {
+			p.accountPace().applyPause(time.UnixMilli(ev.Until))
+		}
+	} else {
+		e.applyRemote(s.now(), ev)
+	}
+	s.notifyChange()
 }
 
 // analysisPauseEvent is a background-analysis pause on one account, Until

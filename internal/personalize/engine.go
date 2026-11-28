@@ -308,13 +308,14 @@ type Engine struct {
 
 	rk *rankerState // learned ranker (ranker.go); nil when disabled
 
-	queue  chan int64
-	events chan state.Event
-	evSync chan chan struct{}
-	unsub  func()
-	ctx    context.Context
-	cancel context.CancelFunc
-	wg     sync.WaitGroup
+	queue      chan int64
+	events     chan state.Event
+	deliveries chan deliveredPlay
+	evSync     chan chan struct{}
+	unsub      func()
+	ctx        context.Context
+	cancel     context.CancelFunc
+	wg         sync.WaitGroup
 }
 
 type flight struct {
@@ -322,6 +323,9 @@ type flight struct {
 	// started: a worker is building; again: a request arrived after the
 	// build read its inputs, so it must run once more (guarded by e.mu).
 	started, again bool
+	// fresh marks a cold viewer whose owner just saved a taste correction.
+	// Their first Home must see the rebuilt model instead of the generic one.
+	fresh bool
 }
 
 var (
@@ -349,7 +353,7 @@ func New(opts Options) (*Engine, error) {
 		models: map[int64]*userModel{}, users: map[int64]core.User{}, lastCtx: map[int64]core.HubContext{},
 		flights: map[int64]*flight{}, debounce: map[int64]*time.Timer{}, owner: map[string]*ownerEntry{},
 		hubKinds: map[string]string{}, active: map[playKey]*activePlay{}, memo: map[memoKey]*memoEntry{},
-		queue: make(chan int64, 1024), events: make(chan state.Event, 4096), evSync: make(chan chan struct{}),
+		queue: make(chan int64, 1024), events: make(chan state.Event, 4096), deliveries: make(chan deliveredPlay, 256), evSync: make(chan chan struct{}),
 	}
 	e.rec = newRecorder(st, e.log, opts.ImpressionBuffer, opts.FlushEvery)
 	var err error

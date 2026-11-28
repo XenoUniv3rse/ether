@@ -45,6 +45,7 @@ import {
   reasonPhrase,
   startTone,
 } from "./experience-format";
+import { LiveProvider } from "./LiveProvider";
 import type { PlayDetail, PlayTimeline, TimelineEntry, TimelineLevel } from "./types";
 
 type PlayDrawerTab = "overview" | "timeline";
@@ -538,6 +539,19 @@ export function PlayDrawer({
               {channel && channel !== displayTitle ? (
                 <p className="truncate text-xs text-fg-muted">{channel}</p>
               ) : null}
+              <LiveProvider
+                provider={
+                  live?.liveProvider ??
+                  (p?.liveSourceName
+                    ? {
+                        sourceName: p.liveSourceName,
+                        loginLabel: p.liveLoginLabel,
+                        loginNumber: p.liveLoginNumber,
+                      }
+                    : undefined)
+                }
+                previous={live?.previousLiveProvider}
+              />
               {subtitle ? <p className="truncate text-xs text-fg-muted">{subtitle}</p> : null}
               <p className="text-sm text-fg-muted">
                 {viewer} · {device}
@@ -731,6 +745,9 @@ export function PlayDrawer({
               ) : null}
               {live?.container ? <Detail label={t("Container")}>{live.container}</Detail> : null}
               {live?.subtitle ? <Detail label={t("Subtitles")}>{live.subtitle}</Detail> : null}
+              {p?.chapterCount != null ? (
+                <Detail label={t("Detected chapters")}>{p.chapterCount}</Detail>
+              ) : null}
               <Detail label={t("Buffering")}>
                 {measured && bufferEvents != null
                   ? bufferEvents

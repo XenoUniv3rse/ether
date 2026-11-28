@@ -40,6 +40,8 @@ const (
 	CapMatcher         Capability = "matcher"
 	CapPosterBadges    Capability = "poster_badges"
 	CapLiveEvents      Capability = "live_events"
+	// CapDebridCacheHints answers POST /ether/debrid/hints.
+	CapDebridCacheHints Capability = "debrid_cache_hints"
 )
 
 // Manifest is the EPP/1 manifest document served at GET /manifest.json.
@@ -604,6 +606,10 @@ type FrontendUpload struct {
 type FrontendUploadBlob struct {
 	Ref         string `json:"ref"`
 	Size        int64  `json:"size"`
+	SHA256      string `json:"sha256"`
+	SHA1        string `json:"sha1"`
+	MD5         string `json:"md5"`
+	CRC32       string `json:"crc32"`
 	ContentType string `json:"contentType,omitempty"`
 	Field       string `json:"field,omitempty"`
 	Filename    string `json:"filename,omitempty"`
@@ -1071,6 +1077,26 @@ type MarkersResponse struct {
 	Markers []MarkerItem `json:"markers"`
 }
 
+// DebridCacheHintCandidate is one torrent Ether asks a debrid_cache_hints
+// plugin about: its info hash, whether any copy comes from a private
+// tracker, and the debrid provider kinds that have no answer of their own.
+type DebridCacheHintCandidate struct {
+	InfoHash      string   `json:"infoHash"`
+	Private       bool     `json:"private"`
+	ProviderKinds []string `json:"providerKinds"`
+}
+
+// DebridCacheHintsRequest is the body of POST /ether/debrid/hints.
+type DebridCacheHintsRequest struct {
+	Candidates []DebridCacheHintCandidate `json:"candidates"`
+}
+
+// DebridCacheHintsResponse maps an info hash to the provider kinds known to
+// hold it. Leave out hashes and kinds that are not cached or unknown.
+type DebridCacheHintsResponse struct {
+	Cached map[string][]string `json:"cached"`
+}
+
 // ChannelInput is one stream input for a Live TV channel.
 type ChannelInput struct {
 	URL      string            `json:"url"`
@@ -1180,6 +1206,17 @@ type ActionResponse struct {
 	Proposal *ActionProposal `json:"proposal,omitempty"`
 }
 
+// EventPluginFoldersChanged is delivered to the hosted plugin whose folder grant changed.
+const EventPluginFoldersChanged = "plugin.folders.changed"
+
+// FolderRoots is the absolute owner-picked root paths returned by FoldersRoots.
+type FolderRoots = []string
+
+// FolderRootsChangedPayload contains the absolute paths the owner grants after the change.
+type FolderRootsChangedPayload struct {
+	Roots FolderRoots `json:"roots"`
+}
+
 // EtherEvent is one event delivered in a batch to POST /ether/event.
 type EtherEvent struct {
 	ID       string         `json:"id"`
@@ -1287,8 +1324,10 @@ type RawRequest struct {
 }
 
 // FrontendBlob selects host-served bytes for a frontend adapter response.
+// Set LibraryKey for blob:<sha256> refs and optionally select an archive
+// member with MemberIndex. Leave both unset for durable:<sha256> refs.
 type FrontendBlob struct {
-	LibraryKey  string `json:"libraryKey"`
+	LibraryKey  string `json:"libraryKey,omitempty"`
 	Ref         string `json:"ref"`
 	MemberIndex *int   `json:"memberIndex,omitempty"`
 }
@@ -1303,10 +1342,13 @@ type RawResponse struct {
 }
 
 // RouteError represents a structured HTTP error returned by a plugin handler.
+// Ether recognizes auth, rate_limited, upstream_unavailable, not_found and
+// invalid_settings. Use an owner-facing, credential-free Message.
 type RouteError struct {
-	Status  int
-	Code    string
-	Message string
+	Status            int    `json:"-"`
+	Code              string `json:"code"`
+	Message           string `json:"message"`
+	RetryAfterSeconds int    `json:"retryAfterSeconds,omitempty"`
 }
 
 func (e *RouteError) Error() string {

@@ -56,7 +56,7 @@ describe("Sources › Debrid", () => {
     expect(within(list).getByText(/^Paused/)).toBeInTheDocument();
     expect(within(list).getByText(/rate limited by the service/)).toBeInTheDocument();
     expect(within(list).getByText(/17 cached · 6 not cached/)).toBeInTheDocument();
-    expect(within(list).getByText(/5 reused/)).toBeInTheDocument();
+    expect(within(list).getByText(/5 account reuses/)).toBeInTheDocument();
     // Averaged timings only for providers that have been used.
     expect(
       within(list).getByText("API 0.8 s · link 140 ms · first byte 92 ms · 48 MB/s"),

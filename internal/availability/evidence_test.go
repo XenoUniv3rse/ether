@@ -156,7 +156,7 @@ func (v namedValidator) VerifyFeedCandidate(context.Context, *core.Title, core.R
 	return nil
 }
 
-func TestProbeUnlocksPlayableReleaseAndKeepsGate(t *testing.T) {
+func TestCompletedFirstLookFindsLaterReleaseThroughFeed(t *testing.T) {
 	x := setup(t)
 	x.c.Availability.Verify = false
 	x.c.Availability.CatchUp = true
@@ -164,20 +164,22 @@ func TestProbeUnlocksPlayableReleaseAndKeepsGate(t *testing.T) {
 	title.IDs.IMDB = "tt0000001"
 	title.Popularity = 80
 	x.cat.titles[title.Key] = title
-	cat := probeCatalog{fakeCatalog: x.cat}
+	cat := probeCatalog{fakeCatalog: x.cat, homes: map[core.RatingKey]time.Time{title.Key: x.now}}
 	x.s.d.Catalog = cat
 	items := feedItems(0, 300)
 	for i := range items {
 		items[i].Name = "Unrelated"
 	}
-	x.s.d.Feeds = &movingFeed{sources: x.f.sources, items: items}
+	feed := &movingFeed{sources: x.f.sources, items: items}
+	x.s.d.Feeds = feed
 	x.s.d.Validator = namedValidator{reasons: map[string]string{"Film.CAM.XviD": "cam"}}
-	var found string
+	completed := false
 	x.s.d.Search = func(context.Context, core.SearchRequest) ([]core.Release, error) {
-		if found == "" {
-			return []core.Release{{ID: "cam", Name: "Film.CAM.XviD", Indexer: "Fake"}}, nil
+		if completed {
+			t.Error("completed first look was reopened")
 		}
-		return []core.Release{{ID: "web", Name: "Film.2026.1080p.WEB-DL", Indexer: "Fake"}}, nil
+		completed = true
+		return []core.Release{{ID: "cam", Name: "Film.CAM.XviD", Indexer: "Fake"}}, nil
 	}
 	if err := x.s.Cycle(t.Context()); err != nil {
 		t.Fatal(err)
@@ -189,12 +191,8 @@ func TestProbeUnlocksPlayableReleaseAndKeepsGate(t *testing.T) {
 	if err != nil || ex.Code != "quality" {
 		t.Fatalf("explain %+v %v", ex, err)
 	}
-	found = "web"
 	x.now = x.now.Add(7 * time.Hour)
-	// The digital release date arrives, when releases land: the title is
-	// searched once more.
-	cat.homes = map[core.RatingKey]time.Time{title.Key: x.now.Add(-time.Minute)}
-	x.s.d.Catalog = cat
+	feed.items = append([]core.Release{{ID: "web", Name: title.Title, Indexer: "Fake"}}, feed.items...)
 	if err := x.s.Cycle(t.Context()); err != nil {
 		t.Fatal(err)
 	}
@@ -204,6 +202,11 @@ func TestProbeUnlocksPlayableReleaseAndKeepsGate(t *testing.T) {
 	ex, err = x.s.Explain(t.Context(), title.Key)
 	if err != nil || ex.Code != "playable" {
 		t.Fatalf("explain %+v %v", ex, err)
+	}
+	x.c.Quality.Default = "another-profile"
+	x.now = x.now.Add(24 * time.Hour)
+	if err := x.s.Cycle(t.Context()); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -258,44 +261,32 @@ func TestSummaryCountsReadyAndWaiting(t *testing.T) {
 	}
 }
 
-func TestProbeProcessesEveryInWindowTitle(t *testing.T) {
+func TestProbeWaitsForTheReleaseDate(t *testing.T) {
 	x := setup(t)
 	x.c.Availability.Verify = false
 	x.c.Availability.CatchUp = false
 	titles := map[core.RatingKey]core.Title{}
 	for i := 1; i <= 520; i++ {
 		k := core.MovieKey(int64(i))
-		titles[k] = core.Title{Key: k, Type: core.TypeMovie, Title: fmt.Sprintf("Film %d", i), Year: 2026, Released: x.now.Add(-time.Hour), Popularity: float64(i)}
+		titles[k] = core.Title{Key: k, Type: core.TypeMovie, Title: fmt.Sprintf("Film %d", i), Year: 2026, Released: x.now.Add(24 * time.Hour)}
 	}
+	due := core.MovieKey(520)
+	ready := titles[due]
+	ready.Released = x.now
+	titles[due] = ready
 	x.cat.titles = titles
 	x.s.d.Catalog = probeCatalog{fakeCatalog: x.cat}
-	var searched []core.RatingKey
+	var searched bool
 	x.s.d.Search = func(_ context.Context, req core.SearchRequest) ([]core.Release, error) {
-		for _, t := range titles {
-			if t.Title == req.Title {
-				searched = append(searched, t.Key)
-				break
-			}
+		if req.Title != titles[due].Title {
+			t.Errorf("future title was searched: %q", req.Title)
 		}
+		searched = true
 		return nil, nil
 	}
-	// A backlog drains probeBatch searches per one-minute cycle, never as
-	// one burst, and every in-window title is reached.
-	for cycle := 0; len(searched) < 520 && cycle < 520; cycle++ {
-		before := len(searched)
-		if err := x.s.Cycle(t.Context()); err != nil {
-			t.Fatal(err)
-		}
-		if n := len(searched) - before; n > probeBatch {
-			t.Fatalf("cycle %d searched %d titles, want at most %d", cycle, n, probeBatch)
-		}
-		x.now = x.now.Add(time.Minute)
-	}
-	if len(searched) != 520 {
-		t.Fatalf("probed %d titles, want every in-window title", len(searched))
-	}
-	if searched[0] != core.MovieKey(520) {
-		t.Fatalf("first probe %v, want highest priority", searched[0])
+	x.cycleFor(t, 3*time.Hour)
+	if !searched {
+		t.Fatal("due release did not get a targeted check")
 	}
 }
 

@@ -9,7 +9,6 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
-	"fmt"
 	"strconv"
 	"strings"
 	"sync"
@@ -303,7 +302,7 @@ func (g *Grants) viewerMatchesUsername(ctx context.Context, viewer *core.Viewer,
 
 // Resolve rejects malformed, expired, revoked, inactive and cross-surface grants.
 func (g *Grants) Resolve(ctx context.Context, surface, credential string) (*core.Viewer, error) {
-	return g.resolve(ctx, surface, credential, false)
+	return g.resolve(ctx, surface, credential, surface == "stremio" || surface == "xtream" || surface == "viewer-portal")
 }
 
 func (g *Grants) resolve(ctx context.Context, surface, credential string, asyncActivity bool) (*core.Viewer, error) {
@@ -420,72 +419,77 @@ func (g *Grants) GrantReferenceExpiry(ctx context.Context, surface, reference st
 	if viewer == nil || viewer.ID != viewerID {
 		return time.Time{}, core.ErrUnauthorized
 	}
-	_ = g.times.Observe(ctx, viewer.ID)
+	if !frontend.QuietIdentity(ctx) {
+		_ = g.times.Observe(ctx, viewer.ID)
+	}
 	return time.UnixMilli(expires), nil
 }
 
-// RevokeGrant, RevokeDevice and RevokeViewer invalidate credentials without
-// deleting their metadata; Prune removes dead grants a week later. Only a
-// credential's hash is needed for revocation.
+// RevokeGrant accepts the exact stored identifier returned by List. A prior
+// access grant still identifies its family if the session rotated after listing.
 func (g *Grants) RevokeGrant(ctx context.Context, viewerID int64, hash string) error {
-	if len(hash) != 64 {
-		return fmt.Errorf("identity: invalid grant hash")
+	if hash == "" {
+		return errors.New("identity: grant identifier required")
 	}
-	res, err := g.db.ExecContext(ctx, `UPDATE identity_grants SET revoked=1 WHERE viewer_id=? AND hash=?`, viewerID, hash)
-	if err == nil {
-		g.gen.Add(1)
-		if n, _ := res.RowsAffected(); n > 0 {
-			g.emitRevoked(viewerID, "grant", "revoked")
-		}
-	}
+	_, err := g.revoke(ctx, viewerID, "grant", "revoked", "hash=?", "id IN (SELECT family_id FROM identity_refresh_tokens WHERE access_hash=?)", hash)
 	return err
 }
+
 func (g *Grants) RevokeDevice(ctx context.Context, viewerID int64, deviceID string) error {
 	if deviceID == "" {
 		return errors.New("identity: device required")
 	}
-	res, err := g.db.ExecContext(ctx, `UPDATE identity_grants SET revoked=1 WHERE viewer_id=? AND device_id=?`, viewerID, deviceID)
-	if err == nil {
-		g.gen.Add(1)
-		if n, _ := res.RowsAffected(); n > 0 {
-			g.emitRevoked(viewerID, "device", "revoked")
-		}
-	}
-	return err
-}
-func (g *Grants) RevokeViewer(ctx context.Context, viewerID int64) error {
-	res, err := g.db.ExecContext(ctx, `UPDATE identity_grants SET revoked=1 WHERE viewer_id=?`, viewerID)
-	if err == nil {
-		g.gen.Add(1)
-		if n, _ := res.RowsAffected(); n > 0 {
-			g.emitRevoked(viewerID, "viewer", "revoked")
-		}
-	}
+	_, err := g.revoke(ctx, viewerID, "device", "revoked", "device_id=?", "device_id=?", deviceID)
 	return err
 }
 
-// SignOutViewer revokes every live device grant (including the grants
-// other apps use as app passwords) and refresh family the viewer holds,
-// returning how many credentials were revoked.
+func (g *Grants) RevokeViewer(ctx context.Context, viewerID int64) error {
+	_, err := g.revoke(ctx, viewerID, "viewer", "revoked", "1=1", "1=1")
+	return err
+}
+
+// SignOutViewer revokes every live device grant (including app passwords)
+// and refresh family the viewer holds, returning how many were revoked.
 func (g *Grants) SignOutViewer(ctx context.Context, viewerID int64) (int, error) {
-	var total int64
-	for _, q := range []string{
-		`UPDATE identity_grants SET revoked=1 WHERE viewer_id=? AND revoked=0`,
-		`UPDATE identity_refresh_families SET revoked=1 WHERE viewer_id=? AND revoked=0`,
-	} {
-		res, err := g.db.ExecContext(ctx, q, viewerID)
-		if err != nil {
-			return int(total), err
-		}
-		n, err := res.RowsAffected()
-		if err != nil {
-			return int(total), err
-		}
-		total += n
+	return g.revoke(ctx, viewerID, "viewer", "sign_out", "1=1", "1=1")
+}
+
+// The filters are internal SQL predicates with bound values. The viewer
+// fence serializes this mutation with family creation and rotation.
+func (g *Grants) revoke(ctx context.Context, viewerID int64, kind, reason, grantFilter, familyFilter string, filterArgs ...any) (int, error) {
+	tx, err := g.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
 	}
+	defer tx.Rollback()
+	if err = lockRefreshViewer(ctx, tx, viewerID); err != nil {
+		return 0, err
+	}
+	args := append([]any{viewerID}, filterArgs...)
+	families, err := tx.ExecContext(ctx, `UPDATE identity_refresh_families SET revoked=1 WHERE viewer_id=? AND revoked=0 AND (`+familyFilter+`)`, args...)
+	if err != nil {
+		return 0, err
+	}
+	grants, err := tx.ExecContext(ctx, `UPDATE identity_grants SET revoked=1 WHERE viewer_id=? AND revoked=0 AND ((`+grantFilter+`) OR hash IN
+		(SELECT access_hash FROM identity_refresh_families WHERE viewer_id=? AND (`+familyFilter+`)))`, append(args, args...)...)
+	if err != nil {
+		return 0, err
+	}
+	familyCount, err := families.RowsAffected()
+	if err != nil {
+		return 0, err
+	}
+	grantCount, err := grants.RowsAffected()
+	if err != nil {
+		return 0, err
+	}
+	if err = tx.Commit(); err != nil {
+		return 0, err
+	}
+	total := int(familyCount + grantCount)
 	if total > 0 {
 		g.gen.Add(1)
-		g.emitRevoked(viewerID, "viewer", "sign_out")
+		g.emitRevoked(viewerID, kind, reason)
 	}
-	return int(total), nil
+	return total, nil
 }

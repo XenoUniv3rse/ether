@@ -13,7 +13,7 @@ const (
 )
 
 // rowSnapshotter reads the same authorized rows as Experience.Rows without
-// recording an impression. Home remains the impression for a Silo visit.
+// issuing interaction receipts that Silo does not transmit.
 type rowSnapshotter interface {
 	SnapshotRows(context.Context, frontend.RowRequest) ([]frontend.Row, error)
 }
@@ -33,7 +33,10 @@ func onlyNowAvailable(rows []frontend.Row) []frontend.Row {
 }
 
 func (i *instance) snapshotHome(r *http.Request, v *frontend.Viewer, limit int) ([]frontend.Row, error) {
-	req := frontend.RowRequest{Viewer: v, Device: device(r), Placement: frontend.PlacementHome, Limit: limit}
+	return i.snapshotRows(r, frontend.RowRequest{Viewer: v, Device: device(r), Placement: frontend.PlacementHome, Limit: limit})
+}
+
+func (i *instance) snapshotRows(r *http.Request, req frontend.RowRequest) ([]frontend.Row, error) {
 	if snap, ok := i.host.Experience.(rowSnapshotter); ok {
 		return snap.SnapshotRows(r.Context(), req)
 	}
@@ -258,6 +261,7 @@ func (i *instance) discover(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	items := make([]any, 0, len(rows))
+	var impressions []frontend.NeutralImpression
 	for _, row := range rows {
 		if !discoverRow(row) {
 			continue
@@ -270,7 +274,25 @@ func (i *instance) discover(w http.ResponseWriter, r *http.Request) {
 		if len(cards) == 0 {
 			continue
 		}
+		impressions = append(impressions, deliveredSection(row, "", len(items), len(cards)))
 		items = append(items, map[string]any{"type": discoverType(row), "title": row.Title, "items": cards})
 	}
 	reply(w, 200, map[string]any{"items": items})
+	i.recordDeliveredRows(v, impressions)
+}
+
+func deliveredSection(row frontend.Row, placement frontend.Placement, rank, count int) frontend.NeutralImpression {
+	titles := rowTitles(row)
+	imp := frontend.NeutralImpression{RowID: row.ID, Kind: row.Kind, Title: row.Title,
+		Purpose: row.Purpose, Placement: string(placement), Rank: rank, Situation: row.Situation}
+	for _, title := range titles[:min(count, len(titles))] {
+		imp.Items = append(imp.Items, title.Key)
+	}
+	return imp
+}
+
+func (i *instance) recordDeliveredRows(viewer *frontend.Viewer, rows []frontend.NeutralImpression) {
+	if recorder, ok := i.host.Experience.(frontend.DeliveredRowRecorder); ok {
+		recorder.RecordDeliveredRows(viewer, rows)
+	}
 }

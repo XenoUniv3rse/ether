@@ -191,6 +191,12 @@ type contractRuntime struct {
 
 func (r *contractRuntime) Call(ctx context.Context, req plugins.Request) (plugins.Response, error) {
 	resp, err := r.inner.Call(ctx, toRequest(req))
+	if errors.Is(err, ErrTooLarge) {
+		return plugins.Response{}, fmt.Errorf("%w: %w", plugins.ErrMalformedResponse, err)
+	}
+	if errors.Is(err, ErrDisconnected) {
+		return plugins.Response{}, fmt.Errorf("%w: %w", plugins.ErrUnavailable, err)
+	}
 	if err != nil {
 		return plugins.Response{}, err
 	}
@@ -570,6 +576,19 @@ func (a HostAdapter) ResolveSourcesWithResult(ctx context.Context, pluginID stri
 	}
 	cands, err := h.ResolveSources(ctx, q)
 	return core.SourceResolveResult{Candidates: cands}, mapHostErr(err)
+}
+
+// CacheUploadLimit applies the plugin's current transfer grant to a streamed upload.
+func (a HostAdapter) CacheUploadLimit(ctx context.Context, pluginID string) int64 {
+	host, err := a.host(pluginID)
+	if err == nil {
+		if granted, ok := host.(interface {
+			DataLimits(context.Context) plugins.RuntimeLimits
+		}); ok {
+			return granted.DataLimits(ctx).FetchBytes
+		}
+	}
+	return plugins.MaxDataFetchBytes
 }
 
 func (a HostAdapter) CachePut(ctx context.Context, pluginID, libraryKey, name string, r io.Reader) (string, error) {

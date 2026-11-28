@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"unicode"
 	"unicode/utf8"
 
@@ -148,106 +149,89 @@ func (c *Catalog) matchPeople(ctx context.Context, terms []string, limit int) ([
 		return nil, nil
 	}
 	fetchLimit := min(max(limit*4, 64), peopleSearchCandidateCap)
+	// Consumers using the same probe width share the ranked candidates,
+	// even when the title and person paths run concurrently.
+	memo := core.SearchMemoFrom(ctx)
+	window := core.SearchPeopleLimit(ctx)
+	if memo != nil && window >= limit {
+		key := "people:shared:" + strconv.Itoa(fetchLimit) + "\x00" + strings.Join(tokens, "\x00")
+		load := memo.LoadOrStore(key, sync.OnceValues(func() ([]PersonMatch, error) {
+			return c.readPeopleMatches(ctx, tokens, fetchLimit, window)
+		})).(func() ([]PersonMatch, error))
+		out, err := load()
+		if err != nil {
+			return nil, err
+		}
+		return slices.Clone(out[:min(limit, len(out))]), nil
+	}
 	// One search request reads the same names for its title results and
 	// its person results; a wider read already made answers a narrower one.
-	memo := core.SearchMemoFrom(ctx)
 	key := "people\x00" + strings.Join(tokens, "\x00")
 	if v, ok := memo.Load(key); ok {
-		if hit := v.(personMatchesMemo); hit.fetch >= fetchLimit {
+		if hit := v.(personMatchesMemo); hit.fetch >= fetchLimit && hit.limit >= limit {
 			return slices.Clone(hit.sorted[:min(limit, len(hit.sorted))]), nil
 		}
 	}
-	out, err := c.readPeopleMatches(ctx, tokens, fetchLimit)
+	out, err := c.readPeopleMatches(ctx, tokens, fetchLimit, limit)
 	if err != nil {
 		return nil, err
 	}
-	memo.Store(key, personMatchesMemo{fetch: fetchLimit, sorted: out})
+	memo.Store(key, personMatchesMemo{fetch: fetchLimit, limit: limit, sorted: out})
 	return slices.Clone(out[:min(limit, len(out))]), nil
 }
 
 // personMatchesMemo is one request's candidate read for a name, sorted by
 // credits, and how wide the read was.
 type personMatchesMemo struct {
-	fetch  int
-	sorted []PersonMatch
+	fetch, limit int
+	sorted       []PersonMatch
 }
 
-// readPeopleMatches reads up to fetchLimit candidates per probe and returns
-// them sorted by (credits DESC, person_tmdb ASC).
-func (c *Catalog) readPeopleMatches(ctx context.Context, tokens []string, fetchLimit int) ([]PersonMatch, error) {
-	byID := make(map[int64]PersonMatch, fetchLimit)
-	addRows := func(q string, args ...any) error {
-		rows, err := c.db.QueryContext(ctx, q, args...)
-		if err != nil {
-			return err
-		}
-		defer rows.Close()
-		for rows.Next() {
-			var m PersonMatch
-			if err := rows.Scan(&m.TMDB, &m.Name, &m.Credits); err != nil {
-				return err
-			}
-			if prev, ok := byID[m.TMDB]; !ok || m.Credits > prev.Credits {
-				byID[m.TMDB] = m
-			}
-		}
-		return rows.Err()
+// readPeopleMatches ranks the union of bounded index probes. Only the
+// requested number of distinct people crosses the driver boundary.
+func (c *Catalog) readPeopleMatches(ctx context.Context, tokens []string, fetchLimit, limit int) ([]PersonMatch, error) {
+	var probes []string
+	var args []any
+	add := func(q string, bound ...any) {
+		probes = append(probes, fmt.Sprintf("SELECT person_tmdb,name,credits,%d AS probe FROM (%s) AS matches", len(probes), q))
+		args = append(args, bound...)
 	}
-
 	joinedName := strings.Join(tokens, " ")
+	prefix := ""
 	if store.DialectOf(c.db) == store.Postgres {
-		// Exact folded B-tree seek in credits DESC order (no Sort node).
-		if err := addRows(
-			`SELECT person_tmdb, name, credits FROM catalog_person_names
-			 WHERE (catalog_fold_person_name(name) COLLATE "C") = (catalog_fold_person_name(?) COLLATE "C") AND credits>0
-			 ORDER BY credits DESC, person_tmdb LIMIT ?`,
-			joinedName, min(fetchLimit, 64),
-		); err != nil {
-			return nil, err
-		}
+		add(`SELECT person_tmdb,name,credits FROM catalog_person_names
+			WHERE (catalog_fold_person_name(name) COLLATE "C") = (catalog_fold_person_name(?) COLLATE "C") AND credits>0
+			ORDER BY credits DESC,person_tmdb LIMIT ?`, joinedName, min(fetchLimit, 64))
 	} else {
-		// 1. Exact lowercase B-tree seek via catalog_person_names_exact.
-		// SQLite only: PostgreSQL takes the folded seek above, so the
-		// PostgreSQL plan check skips statements marked this way.
-		if err := addRows(
-			store.SQLiteOnly+`SELECT person_tmdb, name, credits FROM catalog_person_names WHERE LOWER(name)=? AND credits>0 LIMIT ?`,
-			joinedName, 16,
-		); err != nil {
-			return nil, err
-		}
-		// 2. Exact-token FTS5 probe (no wildcard): finds exact folded words
-		// (including accented names like "Chloë" or "Stellan Skarsgård") even
-		// when thousands of other people share the same word prefix.
+		prefix = store.SQLiteOnly
+		add(`SELECT person_tmdb,name,credits FROM catalog_person_names WHERE LOWER(name)=? AND credits>0 LIMIT ?`, joinedName, 16)
 		exactParts := make([]string, len(tokens))
-		for i, tok := range tokens {
-			exactParts[i] = `"` + tok + `"`
+		for i, token := range tokens {
+			exactParts[i] = `"` + token + `"`
 		}
-		if err := addRows(
-			`SELECT p.person_tmdb, p.name, p.credits FROM catalog_person_names_fts f JOIN catalog_person_names p ON p.person_tmdb=f.rowid
-			 WHERE catalog_person_names_fts MATCH ? AND p.credits>0 LIMIT ?`,
-			strings.Join(exactParts, " "), min(fetchLimit, 64),
-		); err != nil {
-			return nil, err
-		}
+		add(`SELECT p.person_tmdb,p.name,p.credits FROM catalog_person_names_fts f JOIN catalog_person_names p ON p.person_tmdb=f.rowid
+			WHERE catalog_person_names_fts MATCH ? AND p.credits>0 LIMIT ?`,
+			strings.Join(exactParts, " "), min(fetchLimit, 64))
 	}
-
-	// 3. Word-prefix FTS5 / folded trigram probe.
-	pq, pargs := c.matchPeopleSQL(tokens, fetchLimit)
-	if err := addRows(pq, pargs...); err != nil {
+	query, bound := c.matchPeopleSQL(tokens, fetchLimit)
+	add(query, bound...)
+	args = append(args, limit)
+	rows, err := c.db.QueryContext(ctx, prefix+`WITH probes AS (`+strings.Join(probes, " UNION ALL ")+`),
+		ranked AS (SELECT person_tmdb,name,credits,ROW_NUMBER() OVER (PARTITION BY person_tmdb ORDER BY credits DESC,probe) AS position FROM probes)
+		SELECT person_tmdb,name,credits FROM ranked WHERE position=1 ORDER BY credits DESC,person_tmdb LIMIT ?`, args...)
+	if err != nil {
 		return nil, err
 	}
-
-	out := make([]PersonMatch, 0, len(byID))
-	for _, m := range byID {
-		out = append(out, m)
-	}
-	slices.SortFunc(out, func(a, b PersonMatch) int {
-		if c := cmp.Compare(b.Credits, a.Credits); c != 0 {
-			return c
+	defer rows.Close()
+	out := make([]PersonMatch, 0, limit)
+	for rows.Next() {
+		var person PersonMatch
+		if err := rows.Scan(&person.TMDB, &person.Name, &person.Credits); err != nil {
+			return nil, err
 		}
-		return cmp.Compare(a.TMDB, b.TMDB)
-	})
-	return out, nil
+		out = append(out, person)
+	}
+	return out, rows.Err()
 }
 
 // hasExactPersonMatch reports whether sq names a credited person by exact or

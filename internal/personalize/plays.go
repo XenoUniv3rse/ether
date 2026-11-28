@@ -25,6 +25,7 @@ const (
 type playKey struct {
 	user int64
 	key  core.RatingKey
+	app  core.Protocol
 }
 
 type activePlay struct {
@@ -51,12 +52,17 @@ func (e *Engine) eventLoop(ctx context.Context) {
 			return
 		case ev := <-e.events:
 			e.handleEvent(ctx, ev)
+		case play := <-e.deliveries:
+			e.trackDeliveredPlay(ctx, play)
 		case done := <-e.evSync:
 			// Everything queued before the barrier is handled first.
 			for {
 				select {
 				case ev := <-e.events:
 					e.handleEvent(ctx, ev)
+					continue
+				case play := <-e.deliveries:
+					e.trackDeliveredPlay(ctx, play)
 					continue
 				default:
 				}
@@ -99,7 +105,7 @@ func (e *Engine) handleEvent(ctx context.Context, ev state.Event) {
 }
 
 func (e *Engine) trackProgress(ctx context.Context, ev state.Event) {
-	pk := playKey{ev.UserID, ev.Key}
+	pk := playKey{ev.UserID, ev.Key, ev.Origin.Surface}
 	e.playMu.Lock()
 	defer e.playMu.Unlock()
 	// Forget plays that went quiet without a "stopped".
@@ -118,15 +124,8 @@ func (e *Engine) trackProgress(ctx context.Context, ev state.Event) {
 		if ev.Completed {
 			rec.startFraction = 0
 		}
-		keys := []core.RatingKey{ev.Key}
-		if tk := tasteKey(ev.Key); tk != ev.Key {
-			keys = append(keys, tk, ev.Key.Parent())
-		}
-		// Make sure the impressions served just before this play are on
-		// disk before looking for them.
-		fctx, cancel := context.WithTimeout(ctx, 2*time.Second)
-		e.rec.flush(fctx)
-		cancel()
+		keys := attributionKeys(ev.Key)
+		e.flushAttribution(ctx)
 		if a, ok, err := e.store.attribute(ctx, ev.UserID, keys, ev.At.Add(-attributionWindow), ev.At); err == nil && ok {
 			rec.hubID, rec.kind = a.hubID, a.kind
 		} else if err != nil {
@@ -140,7 +139,10 @@ func (e *Engine) trackProgress(ctx context.Context, ev state.Event) {
 		}
 		local := ev.At.In(e.loc)
 		rec.daypart, rec.weekend = core.DaypartAt(local), core.IsWeekend(local)
-		if err := e.store.insertPlay(ctx, &rec); err != nil {
+		if ev.Imported || ev.Offline || ev.Origin.Surface == "stremio" || ev.Origin.Surface == "xtream" {
+			keys = nil
+		}
+		if err := e.store.insertPlay(ctx, &rec, keys, ev.Origin.Surface); err != nil {
 			e.log.Warn("personalize: recording play failed", "err", err)
 			return
 		}
@@ -170,6 +172,48 @@ func (e *Engine) trackProgress(ctx context.Context, ev state.Event) {
 	if err := e.store.updatePlay(ctx, &ap.rec); err != nil {
 		e.log.Warn("personalize: updating play failed", "err", err)
 	}
+}
+
+type deliveredPlay struct {
+	id      string
+	viewer  int64
+	key     core.RatingKey
+	app     core.Protocol
+	started time.Time
+}
+
+// ObserveDeliveredPlay records proven VOD delivery from a client without a
+// watch timeline. It shares the attribution worker and leaves progress unknown.
+func (e *Engine) ObserveDeliveredPlay(id string, viewer int64, key core.RatingKey, app core.Protocol, started time.Time) {
+	if id == "" || viewer <= 0 || !key.Valid() {
+		return
+	}
+	select {
+	case e.deliveries <- deliveredPlay{id, viewer, key, app, started}:
+	default:
+		e.log.Debug("personalize: delivery queue full; dropping observation")
+	}
+}
+
+func (e *Engine) trackDeliveredPlay(ctx context.Context, play deliveredPlay) {
+	e.flushAttribution(ctx)
+	if err := e.store.insertDeliveredPlay(ctx, play); err != nil {
+		e.log.Warn("personalize: recording delivered play failed", "err", err)
+	}
+}
+
+func attributionKeys(key core.RatingKey) []core.RatingKey {
+	if show := tasteKey(key); show != key {
+		return []core.RatingKey{key, show, key.Parent()}
+	}
+	return []core.RatingKey{key}
+}
+
+func (e *Engine) flushAttribution(ctx context.Context) {
+	// Make sure the impressions served just before this play are on disk.
+	fctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	e.rec.flush(fctx)
 }
 
 // scheduleRebuild rebuilds a viewer's model shortly after their state

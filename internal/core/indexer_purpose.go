@@ -69,3 +69,16 @@ func SpeculativeIndexerWork(ctx context.Context) bool {
 	}
 	return false
 }
+
+type cachedIndexerSearchKey struct{}
+
+// WithCachedIndexerSearch marks detached preparation that only needs already
+// discovered releases. A real Play can promote the request and search again.
+func WithCachedIndexerSearch(ctx context.Context) context.Context {
+	return context.WithValue(ctx, cachedIndexerSearchKey{}, true)
+}
+
+func CachedIndexerSearch(ctx context.Context) bool {
+	return IndexerPurpose(ctx) == IndexerPurposeDetail ||
+		(ctx.Value(cachedIndexerSearchKey{}) != nil && IsUnattendedSearch(ctx))
+}

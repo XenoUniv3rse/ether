@@ -33,11 +33,33 @@ func encryption(key []byte) (cipher.AEAD, error) {
 	return cipher.NewGCM(c)
 }
 
+// A cached refresh result must still belong to a live session when replayed.
+func (i *instance) writeMutationReplay(w http.ResponseWriter, r *http.Request, d device, result savedResponse) {
+	if r.Pattern == "POST /vela/v0/auth/refresh" && result.Status == http.StatusOK {
+		var tokens struct {
+			AccessToken string `json:"accessToken"`
+		}
+		if err := json.Unmarshal(result.Body, &tokens); err != nil {
+			fail(w, err, r)
+			return
+		}
+		if _, err := i.grantScope(r.Context(), tokens.AccessToken, d.neutral()); err != nil {
+			fail(w, err, r)
+			return
+		}
+	}
+	for k, v := range result.Header {
+		w.Header()[k] = v
+	}
+	w.WriteHeader(result.Status)
+	_, _ = w.Write(result.Body)
+}
+
 // Replay contract for clients. A mutation retried with the same key either
 // replays the recorded outcome or runs again; it never stays unresolved:
 //   - auth mutations (sign-in, refresh, pairing) finish even if the caller
 //     disconnects, so a retried refresh with the same key gets the same
-//     rotated tokens;
+//     rotated tokens while that access grant and family remain live;
 //   - an outcome that did not commit (cancelled, 5xx on auth, any refusal
 //     with Retry-After) frees the key for the retry;
 //   - while another attempt still holds the key the answer is 409

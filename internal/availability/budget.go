@@ -33,11 +33,16 @@ const (
 // indexerBucket is the availability_budget resource for one indexer.
 func indexerBucket(id string) string { return "indexer:" + id }
 
+func feedPagesBucket(id string) string { return "indexer-feed-pages:" + id }
+
 func (s *Service) budgetContext(ctx context.Context, kind requestKind) context.Context {
 	cfg := s.cfg().Availability
 	feed := kind != verifyCheck
 	// Feed polls are re-tagged as feed by the indexer manager.
 	ctx = core.WithIndexerPurpose(ctx, core.IndexerPurposeAvailability)
+	if (kind == verifyCheck || kind == channelSearch) && cfg.Verify {
+		ctx = core.WithSpeculativeGrabs(ctx)
+	}
 	ctx = core.WithForegroundReserve(ctx, cfg.ReservePercent)
 	return core.WithBackgroundBudget(ctx, func(ctx context.Context, resource, source string, n int64) error {
 		if n < 0 {
@@ -65,18 +70,29 @@ func (s *Service) budgetContext(ctx context.Context, kind requestKind) context.C
 		sources := s.d.Feeds.FeedSources()
 		if f, ok := sourceByID(sources, source); ok && resource == "hit" {
 			limit := int64(budgets.IndexerAllowance(f.DailyLimit))
+			var headRoom int64
 			if kind != headPoll {
-				left, err := s.headPollsLeft(ctx, budgets, []core.ReleaseFeed{f})
+				var err error
+				headRoom, err = s.headPollsLeft(ctx, budgets, []core.ReleaseFeed{f})
 				if err != nil {
 					return err
 				}
-				limit -= left
 			}
-			if err := s.spend(ctx, indexerBucket(f.ID), n, max(0, limit)); err != nil {
+			if err := s.spend(ctx, indexerBucket(f.ID), n, max(0, limit-headRoom)); err != nil {
 				return err
+			}
+			isFeedPage := f.DailyFeedLimit > 0 && core.IndexerPurpose(ctx) == core.IndexerPurposeFeed
+			if isFeedPage {
+				if err := s.spend(ctx, feedPagesBucket(f.ID), n, max(0, int64(f.DailyFeedLimit)-headRoom)); err != nil {
+					s.refund(ctx, indexerBucket(f.ID), n)
+					return err
+				}
 			}
 			if err := s.spendTotal(ctx, kind, budgets, sources, n); err != nil {
 				s.refund(ctx, indexerBucket(f.ID), n)
+				if isFeedPage {
+					s.refund(ctx, feedPagesBucket(f.ID), n)
+				}
 				return err
 			}
 			return s.pace(ctx, f.ID)
@@ -122,7 +138,7 @@ func (s *Service) headPollsLeft(ctx context.Context, budgets config.Availability
 			return 0, err
 		}
 		at := st.polled
-		interval := pollInterval(f, budgets)
+		interval := headPollInterval(f, budgets, st, now)
 		next := time.Unix(at, 0).Add(interval)
 		if at == 0 || next.Before(now) {
 			next = now
@@ -138,10 +154,24 @@ func (s *Service) headPollsLeft(ctx context.Context, budgets config.Availability
 // stretched so head polls take at most half of the indexer's allowance.
 func pollInterval(f core.ReleaseFeed, budgets config.Availability) time.Duration {
 	interval := time.Duration(max(5, budgets.PollMinutes)) * time.Minute
-	if polls := budgets.IndexerAllowance(f.DailyLimit) / 2; polls > 0 {
+	polls := budgets.IndexerAllowance(f.DailyLimit) / 2
+	if f.DailyFeedLimit > 0 {
+		// Head polls use at most half the feed quota, leaving pages for
+		// a gap after downtime or a quota pause.
+		polls = min(f.DailyFeedLimit/2, polls)
+	}
+	if polls > 0 {
 		interval = max(interval, (24*time.Hour+time.Duration(polls)-1)/time.Duration(polls))
 	} else {
 		interval = max(interval, 24*time.Hour)
+	}
+	return interval
+}
+
+func headPollInterval(f core.ReleaseFeed, budgets config.Availability, st feedState, now time.Time) time.Duration {
+	interval := pollInterval(f, budgets)
+	if f.DailyFeedLimit > 0 && (st.lastNew == 0 || now.Sub(time.Unix(st.lastNew, 0)) >= 2*time.Hour) {
+		interval = max(interval, time.Hour)
 	}
 	return interval
 }
@@ -168,6 +198,9 @@ func (s *Service) pageRoom(ctx context.Context, f core.ReleaseFeed, budgets conf
 		return false, err
 	}
 	if s.used(ctx, indexerBucket(f.ID))+own >= int64(budgets.IndexerAllowance(f.DailyLimit)) {
+		return false, nil
+	}
+	if f.DailyFeedLimit > 0 && s.used(ctx, feedPagesBucket(f.ID))+own >= int64(f.DailyFeedLimit) {
 		return false, nil
 	}
 	all, err := s.headPollsLeft(ctx, budgets, s.d.Feeds.FeedSources())
@@ -284,7 +317,7 @@ func (s *Service) AdmitPluginUsenetCheck(ctx context.Context, pluginID string) (
 	// verification byte ceiling. Plugin background checks are explicitly opted
 	// into via manifest permission and PluginUsenetChecks, so they do not
 	// require availability.Verify (which governs Ether's own title checks).
-	outCtx = core.WithIndexerPurpose(ctx, core.IndexerPurposeAvailability)
+	outCtx = core.WithSpeculativeGrabs(core.WithIndexerPurpose(ctx, core.IndexerPurposeAvailability))
 	outCtx = core.WithForegroundReserve(outCtx, cfg.ReservePercent)
 	outCtx = core.WithBackgroundBudget(outCtx, func(ctx context.Context, resource, _ string, n int64) error {
 		if n < 0 {

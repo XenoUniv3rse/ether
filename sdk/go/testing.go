@@ -124,6 +124,7 @@ type MockHost struct {
 	SourceIndexers    []IndexerSearchStatus // returned alongside Sources by ResolveSourcesWithResult (#733)
 	SourceHandler     func(ctx context.Context, q SourceQuery) (SourceResolveResult, error)
 	Blobs             map[string][]byte // cache blob ref -> bytes
+	FolderRoots       []string
 	Folders           map[string][]FolderEntry
 	PublishedEvents   []RecordedPublishedEvent
 	Notifications     []string
@@ -136,8 +137,10 @@ type MockHost struct {
 	LastStreamURLViewer   int64
 	LastStreamURLItem     string
 	LastStreamURLPart     *int
+	LastStreamURLFallback bool
 	LastStreamURLSource   string
 	LastStreamURLAbsolute bool
+	LastStreamURLWait     *StreamWaitPolicy
 	// StreamOrigin is prepended to mock stream URLs when Absolute is true
 	// (defaults to "http://ether.test").
 	StreamOrigin string
@@ -428,15 +431,40 @@ func (m *MockHost) UpsertCollection(_ context.Context, collection map[string]any
 	return nil
 }
 
+// FoldersRoots returns the configured mock grants.
+func (m *MockHost) FoldersRoots(context.Context) (FolderRoots, error) {
+	return append([]string{}, m.FolderRoots...), nil
+}
+
 // FoldersList returns folder entries for root/path.
-func (m *MockHost) FoldersList(_ context.Context, root, path string) ([]FolderEntry, error) {
+func (m *MockHost) FoldersList(_ context.Context, root, path string, options ...FolderListOptions) (FolderPage, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	key := root
 	if path != "" {
 		key = root + "/" + path
 	}
-	return m.Folders[key], nil
+	opts := FolderListOptions{}
+	if len(options) > 0 {
+		opts = options[0]
+	}
+	limit := opts.Limit
+	if limit <= 0 || limit > 1000 {
+		limit = 1000
+	}
+	page := FolderPage{Entries: make([]FolderEntry, 0)}
+	for _, entry := range m.Folders[key] {
+		if entry.Name > opts.Cursor {
+			page.Entries = append(page.Entries, entry)
+		}
+	}
+	sort.Slice(page.Entries, func(i, j int) bool { return page.Entries[i].Name < page.Entries[j].Name })
+	if len(page.Entries) > limit {
+		page.Entries = page.Entries[:limit]
+		page.NextCursor = page.Entries[limit-1].Name
+		page.Truncated = true
+	}
+	return page, nil
 }
 
 // FoldersStat returns a FolderEntry for root and path.
@@ -943,8 +971,14 @@ func (m *MockHost) StreamPartURL(_ context.Context, viewerID int64, itemRef stri
 // StreamURLWithOptions mints a deterministic stand-in URL and records the
 // viewer, item, optional part index, and optional source id (#576, #661).
 func (m *MockHost) StreamURLWithOptions(_ context.Context, viewerID int64, itemRef string, opts StreamURLOptions) (string, error) {
+	if opts.Wait != nil && opts.Wait.MaxSeconds <= 0 {
+		return "", fmt.Errorf("stream url: wait.maxSeconds must be a positive integer")
+	}
 	if opts.PartIndex != nil && *opts.PartIndex < 0 {
 		return "", fmt.Errorf("stream url: partIndex must be non-negative")
+	}
+	if opts.Fallback && opts.Source == "" {
+		return "", fmt.Errorf("stream url: fallback requires a source")
 	}
 	if opts.Source != "" && strings.TrimSpace(opts.Source) == "" {
 		return "", fmt.Errorf("stream url: source must not be blank")
@@ -960,7 +994,13 @@ func (m *MockHost) StreamURLWithOptions(_ context.Context, viewerID int64, itemR
 		m.LastStreamURLPart = nil
 	}
 	m.LastStreamURLSource = opts.Source
+	m.LastStreamURLFallback = opts.Fallback
 	m.LastStreamURLAbsolute = opts.Absolute
+	m.LastStreamURLWait = nil
+	if opts.Wait != nil {
+		wait := *opts.Wait
+		m.LastStreamURLWait = &wait
+	}
 	u := "/ether/v1/kind-media/mock-" + strconv.FormatInt(viewerID, 10)
 	if opts.PartIndex != nil {
 		u += "?part=" + strconv.Itoa(*opts.PartIndex)
@@ -1314,12 +1354,16 @@ func (h *TestHarness) File(path, rangeHeader string) RawResponse {
 	})
 }
 
-func (*MockHost) FoldersHash(context.Context, string, string) (FolderHash, error) {
+func (*MockHost) FoldersHash(context.Context, string, string, ...FolderHashOptions) (FolderHash, error) {
 	return FolderHash{}, fmt.Errorf("folders.hash requires the hosted runtime")
 }
 
-func (*MockHost) FoldersHashStart(context.Context, string, string) (FolderHashJob, error) {
+func (*MockHost) FoldersHashStart(context.Context, string, string, ...FolderHashOptions) (FolderHashJob, error) {
 	return FolderHashJob{}, fmt.Errorf("folders.hash requires the hosted runtime")
+}
+
+func (*MockHost) FoldersFrame(context.Context, string, string, FolderFrameOptions) (FolderFrame, error) {
+	return FolderFrame{}, fmt.Errorf("folders.frame requires the hosted runtime")
 }
 
 func (*MockHost) FoldersHashPoll(context.Context, string) (FolderHashJob, error) {

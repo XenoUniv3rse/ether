@@ -1071,7 +1071,7 @@ it("omits the per-viewer Downloads control on the owner's Limits tab", async () 
 });
 
 it("lists active sign-in lockouts and supports Clear and Clear all", async () => {
-  const { fake } = renderApp("/viewers");
+  const { fake } = renderApp("/viewers/security");
   const heading = await screen.findByText("Sign-in lockouts", {}, WAIT);
   const section = heading.closest("section")!;
   expect(await within(section).findByText("jordan", {}, WAIT)).toBeInTheDocument();
@@ -1096,11 +1096,13 @@ it("lists active sign-in lockouts and supports Clear and Clear all", async () =>
 });
 
 it("hides Sign-in lockouts when the server rejects non-owner access", async () => {
-  renderApp("/viewers", {}, (fake) => {
+  let forbiddenResponseSent = false;
+  renderApp("/viewers/security", {}, (fake) => {
     const base = fake.fetch;
     fake.fetch = async (input, init) => {
       const url = new URL(String(input), "http://localhost");
       if (url.pathname === "/ether/api/auth/lockouts") {
+        forbiddenResponseSent = true;
         return new Response(
           JSON.stringify({ error: { code: "forbidden", message: "owner required" } }),
           { status: 403, headers: { "Content-Type": "application/json" } },
@@ -1109,8 +1111,9 @@ it("hides Sign-in lockouts when the server rejects non-owner access", async () =
       return base(input, init);
     };
   });
-  await screen.findByText("Sam Rivera", {}, WAIT);
+  await screen.findByRole("tab", { name: "Security", selected: true }, WAIT);
   await waitFor(() => {
+    expect(forbiddenResponseSent).toBe(true);
     expect(screen.queryByText("Sign-in lockouts")).toBeNull();
   }, WAIT);
 });

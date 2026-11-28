@@ -3,14 +3,9 @@ package plugins
 import (
 	"bytes"
 	"context"
-	"crypto/md5"
-	"crypto/sha1"
-	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"hash/crc32"
-	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -42,15 +37,7 @@ func (h *host) requireWritableToolContext(ctx context.Context) error {
 }
 
 func (h *host) record(ctx context.Context) (Record, Grants, error) {
-	r, err := h.m.store.record(ctx, h.plugin)
-	if err != nil {
-		return Record{}, Grants{}, err
-	}
-	if !r.Enabled {
-		return Record{}, Grants{}, ErrDisabled
-	}
-	g, err := h.m.store.grants(ctx, h.plugin)
-	return r, g, err
+	return h.m.store.hostAccess(ctx, h.plugin)
 }
 
 func (h *host) deny(r Record, g Grants, key, level string, allowed func(string) bool) error {
@@ -860,57 +847,6 @@ func (h *host) folderCheck(ctx context.Context, root, path string) (string, erro
 	return joined, nil
 }
 
-func (h *host) FoldersList(ctx context.Context, root, path string) ([]FolderEntry, error) {
-	_, err := h.folderCheck(ctx, root, path)
-	if err != nil {
-		return nil, err
-	}
-	fs, err := os.OpenRoot(root)
-	if err != nil {
-		return nil, err
-	}
-	defer fs.Close()
-	name := path
-	if name == "" {
-		name = "."
-	}
-	dir, err := fs.Open(name)
-	if err != nil {
-		return nil, err
-	}
-	defer dir.Close()
-	entries, err := dir.ReadDir(1000)
-	if err != nil && !errors.Is(err, io.EOF) {
-		return nil, err
-	}
-	out := make([]FolderEntry, 0, len(entries))
-	for _, e := range entries {
-		fe := FolderEntry{Name: e.Name(), Path: filepath.Join(path, e.Name()), Dir: e.IsDir()}
-		if e.Type()&os.ModeSymlink != 0 {
-			// Follow a link only when its target stays inside the grant;
-			// the rooted Stat fails for one that escapes.
-			info, err := fs.Stat(filepath.Join(name, e.Name()))
-			if err != nil {
-				continue
-			}
-			fe.Dir, fe.Size, fe.Mtime = info.IsDir(), info.Size(), info.ModTime().Unix()
-			out = append(out, fe)
-			if len(out) >= 1000 {
-				break
-			}
-			continue
-		}
-		if info, err := e.Info(); err == nil {
-			fe.Size, fe.Mtime = info.Size(), info.ModTime().Unix()
-		}
-		out = append(out, fe)
-		if len(out) >= 1000 {
-			break
-		}
-	}
-	return out, nil
-}
-
 func (h *host) FoldersStat(ctx context.Context, root, path string) (FolderEntry, error) {
 	_, err := h.folderCheck(ctx, root, path)
 	if err != nil {
@@ -1009,118 +945,6 @@ func (h *host) Log(ctx context.Context, level, msg string, attrs map[string]any)
 	}
 	h.m.store.addLog(ctx, h.plugin, line)
 	return nil
-}
-
-// FoldersHash keeps small hashes synchronous; large files require an explicit job.
-func (h *host) FoldersHash(ctx context.Context, root, path string) (FolderHash, error) {
-	return h.hashFile(ctx, root, path, false, nil)
-}
-
-func (h *host) hashFile(ctx context.Context, root, path string, background bool, progress func(int64)) (FolderHash, error) {
-	const capBytes = 256 << 20
-	if _, err := h.folderCheck(ctx, root, path); err != nil {
-		return FolderHash{}, err
-	}
-	for _, seg := range strings.FieldsFunc(path, func(r rune) bool { return r == '/' || r == '\\' }) {
-		if seg == ".." {
-			return FolderHash{}, ErrPermissionDenied
-		}
-	}
-	realRoot, err := filepath.EvalSymlinks(root)
-	if err != nil {
-		return FolderHash{}, err
-	}
-	target, err := filepath.EvalSymlinks(filepath.Join(realRoot, path))
-	if err != nil {
-		return FolderHash{}, err
-	}
-	rel, err := filepath.Rel(realRoot, target)
-	if err != nil || filepath.IsAbs(path) || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return FolderHash{}, ErrPermissionDenied
-	}
-	fs, err := os.OpenRoot(root)
-	if err != nil {
-		return FolderHash{}, err
-	}
-	defer fs.Close()
-	f, err := fs.Open(path)
-	if err != nil {
-		return FolderHash{}, err
-	}
-	defer f.Close()
-	info, err := f.Stat()
-	if err != nil {
-		return FolderHash{}, err
-	}
-	if !info.Mode().IsRegular() {
-		return FolderHash{}, fmt.Errorf("folders.hash requires a regular file")
-	}
-	if !background && info.Size() > capBytes {
-		return FolderHash{}, fmt.Errorf("folders.hash requires a regular file of at most 256 MiB")
-	}
-	key := fmt.Sprintf("host.hash.%x", sha256.Sum256([]byte(fmt.Sprintf("%s/%s:%d:%d", realRoot, rel, info.Size(), info.ModTime().UnixNano()))))
-	if raw, ok, err := h.m.store.hashCacheGet(ctx, h.plugin, key); err != nil {
-		return FolderHash{}, err
-	} else if ok {
-		var cached FolderHash
-		if json.Unmarshal(raw, &cached) == nil {
-			if _, err := h.folderCheck(ctx, root, path); err != nil {
-				return FolderHash{}, err
-			}
-			return cached, nil
-		}
-	}
-	crc, md, sha := crc32.NewIEEE(), md5.New(), sha1.New()
-	w := io.MultiWriter(crc, md, sha)
-	buf := make([]byte, 1<<20)
-	var total int64
-	for {
-		if err := ctx.Err(); err != nil {
-			return FolderHash{}, err
-		}
-		if _, err := h.folderCheck(ctx, root, path); err != nil {
-			return FolderHash{}, err
-		}
-		n, err := f.Read(buf)
-		total += int64(n)
-		if !background && total > capBytes {
-			return FolderHash{}, fmt.Errorf("folders.hash size limit exceeded")
-		}
-		if n > 0 {
-			_, _ = w.Write(buf[:n])
-			if progress != nil {
-				progress(total)
-			}
-			if background {
-				timer := time.NewTimer(2 * time.Millisecond)
-				select {
-				case <-ctx.Done():
-					timer.Stop()
-					return FolderHash{}, ctx.Err()
-				case <-timer.C:
-				}
-			}
-		}
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return FolderHash{}, err
-		}
-	}
-	after, err := f.Stat()
-	if err != nil {
-		return FolderHash{}, err
-	}
-	if total != info.Size() || after.Size() != info.Size() || !after.ModTime().Equal(info.ModTime()) {
-		return FolderHash{}, fmt.Errorf("folders.hash file changed while hashing")
-	}
-	result := FolderHash{Size: total, ModTime: info.ModTime().Unix(), CRC32: fmt.Sprintf("%08x", crc.Sum32()), MD5: fmt.Sprintf("%x", md.Sum(nil)), SHA1: fmt.Sprintf("%x", sha.Sum(nil))}
-	raw, _ := json.Marshal(result)
-	if err := h.m.store.hashCachePut(ctx, h.plugin, key, raw); err != nil {
-		return FolderHash{}, err
-	}
-	return result, nil
 }
 
 func (h *host) noteFetchTraffic(ctx context.Context, req FetchRequest, size int64) {

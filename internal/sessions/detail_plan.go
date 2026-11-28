@@ -46,6 +46,14 @@ func (b *Broker) DetailPlan(ctx context.Context, req frontend.PlanRequest) (fron
 		}
 		return frontend.PlayPlan{}, err
 	}
+	// An Auto chapter request precedes the client's next DeviceProfile.
+	// Use its last declaration when it is still on the same network.
+	if req.Intent.ReadChapters && !req.Intent.ExactVersion {
+		if caps, ok := b.rememberedPlayCaps(viewer.ID, req.Protocol, req.Device.ID); ok && caps.Remote == req.Caps.Remote {
+			caps.ClientIP = req.Caps.ClientIP
+			req.Caps = caps
+		}
+	}
 	viewer, err = b.confirm(ctx, viewer, req.Caps)
 	if err != nil {
 		return frontend.PlayPlan{}, err
@@ -155,7 +163,7 @@ func (b *Broker) DetailPlan(ctx context.Context, req frontend.PlanRequest) (fron
 	entry := &detailFlight{done: make(chan struct{})}
 	b.detailPlans[key] = entry
 	b.mu.Unlock()
-	p, err := b.Plan(ctx, req)
+	p, err := b.plan(ctx, req, false)
 	if err == nil && p.ETag != "" && b.deps.DB != nil {
 		b.mu.Lock()
 		planned, ok := b.plans[p.ID]

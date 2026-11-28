@@ -111,8 +111,9 @@ type catalogPages struct {
 }
 
 type catalogPage struct {
-	fresh frontend.PageFreshness
-	body  []byte
+	fresh       frontend.PageFreshness
+	body        []byte
+	impressions []frontend.NeutralImpression
 }
 
 func (i *instance) Handler() http.Handler {

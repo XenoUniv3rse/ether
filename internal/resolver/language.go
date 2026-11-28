@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/braedonsaunders/ether/internal/core"
+	"github.com/braedonsaunders/ether/internal/langtag"
 	"github.com/braedonsaunders/ether/internal/releaseparse"
 )
 
@@ -581,6 +582,40 @@ func isCanonicalLanguageName(s string) bool {
 		}
 	}
 	return true
+}
+
+const (
+	wantedSubtitlePreference    = 1
+	assumedOriginalPreference   = 2
+	confirmedOriginalPreference = 4
+)
+
+func originalAudioPreference(rel core.Release, t *core.Title, original string) int {
+	if !audioAcceptable(rel.Info, rel.SourceLanguage, []string{original}, t) {
+		return 0
+	}
+	if len(rel.Info.Languages) > 0 && declaresConcreteLanguage(rel.Info, original, t) {
+		return confirmedOriginalPreference
+	}
+	return assumedOriginalPreference
+}
+
+// prefersViewerSubtitles enables source priority only for a positively scored
+// format and an explicit subtitle language list.
+func prefersViewerSubtitles(profile core.QualityProfile, user *core.User) bool {
+	return user != nil && len(user.SubtitleLanguages) > 0 && profile.CustomFormatScores[core.FormatViewerSubtitles] > 0
+}
+
+// releaseHasWantedSubtitles uses container evidence before listing hints.
+func releaseHasWantedSubtitles(rel core.Release, info core.MediaInfo, probed bool, wanted []string) bool {
+	if !probed {
+		return indexerListsSubtitles(rel, wanted)
+	}
+	return slices.ContainsFunc(info.Streams, func(stream core.StreamInfo) bool {
+		return stream.Type == "subtitle" && slices.ContainsFunc(wanted, func(lang string) bool {
+			return langtag.BestStreamMatchRank(lang, stream.Language, stream.Title) > 0
+		})
+	})
 }
 
 // indexerListsSubtitles reports whether the indexer lists a subtitle track in

@@ -3,6 +3,7 @@ package notify
 import (
 	"context"
 	"encoding/json"
+	"github.com/braedonsaunders/ether/internal/frontend/kit/route"
 	"net/http"
 	"time"
 )
@@ -28,7 +29,7 @@ func fail(w http.ResponseWriter, status int, msg string) {
 
 // Handler is an owner-only API; mount with /notifications stripped.
 func (s *Service) Handler() http.Handler {
-	m := http.NewServeMux()
+	m := &route.Mux{}
 	m.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
 		cs, err := s.Channels(r.Context())
 		if err != nil {
@@ -169,7 +170,7 @@ func (s *Service) Handler() http.Handler {
 		reply(w, 200, map[string]bool{"sent": true})
 	})
 	m.HandleFunc("GET /push/key", func(w http.ResponseWriter, r *http.Request) {
-		_, public, err := s.pushKeys(r.Context())
+		_, public, err := s.readPushKeys(r.Context())
 		if err != nil {
 			fail(w, 500, "Push identity unavailable")
 			return

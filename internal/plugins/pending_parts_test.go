@@ -267,7 +267,7 @@ func TestPendingSourceJobIdentityAndHostedStreamURLOptions(t *testing.T) {
     var a = ether.frontend.streamURL("pk:recording:book-1").url;
     var b = ether.frontend.streamURL("pk:recording:book-1", 1).url;
     var c = ether.frontend.streamURL("pk:recording:book-1", { source: "pdf" }).url;
-    var d = ether.frontend.streamURL("pk:recording:book-1", { partIndex: 2, source: "epub" }).url;
+    var d = ether.frontend.streamURL("pk:recording:book-1", { partIndex: 2, source: "epub", fallback: true, wait: { maxSeconds: 1200 } }).url;
     return { status: 200, body: { a: a, b: b, c: c, d: d } };
   }
   if (req.path === "/ether/v1/frontend/feed/bad-unknown") {
@@ -298,7 +298,7 @@ func TestPendingSourceJobIdentityAndHostedStreamURLOptions(t *testing.T) {
 	if len(gotCalls) != 4 {
 		t.Fatalf("got %d calls, want 4: %+v", len(gotCalls), gotCalls)
 	}
-	if gotCalls[0].PartIndex != nil || gotCalls[0].Source != "" {
+	if gotCalls[0].PartIndex != nil || gotCalls[0].Source != "" || gotCalls[0].Wait != nil {
 		t.Fatalf("call 0 = %+v, want empty", gotCalls[0])
 	}
 	if gotCalls[1].PartIndex == nil || *gotCalls[1].PartIndex != 1 || gotCalls[1].Source != "" {
@@ -307,8 +307,8 @@ func TestPendingSourceJobIdentityAndHostedStreamURLOptions(t *testing.T) {
 	if gotCalls[2].PartIndex != nil || gotCalls[2].Source != "pdf" {
 		t.Fatalf("call 2 = %+v, want source=pdf", gotCalls[2])
 	}
-	if gotCalls[3].PartIndex == nil || *gotCalls[3].PartIndex != 2 || gotCalls[3].Source != "epub" {
-		t.Fatalf("call 3 = %+v, want partIndex=2 source=epub", gotCalls[3])
+	if gotCalls[3].PartIndex == nil || *gotCalls[3].PartIndex != 2 || gotCalls[3].Source != "epub" || !gotCalls[3].Fallback || gotCalls[3].Wait == nil || gotCalls[3].Wait.MaxSeconds != 1200 {
+		t.Fatalf("call 3 = %+v, want partIndex=2 source=epub wait=1200", gotCalls[3])
 	}
 	for _, badPath := range []string{"/ether/v1/frontend/feed/bad-unknown", "/ether/v1/frontend/feed/bad-blank"} {
 		if _, err := hostedEnv.m.Call(ctx, hrec.ID, Request{

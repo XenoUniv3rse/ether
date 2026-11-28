@@ -94,6 +94,14 @@ func (a *Allocator) CompactBatch(ctx context.Context, surface, kind string, refs
 	if len(refs) == 0 {
 		return result, nil
 	}
+	if len(refs) == 1 {
+		id, err := a.Compact(ctx, surface, kind, refs[0])
+		if err != nil {
+			return nil, err
+		}
+		result[refs[0]] = id
+		return result, nil
+	}
 	// Identifiers never change once allocated, so a page whose references
 	// all have one is answered by a read. Only a page with new references
 	// takes the write transaction (an export re-read would otherwise wait

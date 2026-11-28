@@ -16,6 +16,7 @@ import (
 	"github.com/braedonsaunders/ether/internal/config"
 	"github.com/braedonsaunders/ether/internal/core"
 	"github.com/braedonsaunders/ether/internal/frontend"
+	"github.com/braedonsaunders/ether/internal/frontend/kit/route"
 	"github.com/braedonsaunders/ether/internal/identity"
 	"github.com/braedonsaunders/ether/internal/service"
 	"github.com/braedonsaunders/ether/internal/updater"
@@ -240,7 +241,7 @@ func currentUpdateNotes(st updater.ManagerStatus) updateNotes {
 //	POST /apply               {"force": bool} — install as soon as idle (force: now)
 //	POST /dismiss-installed   hide the "Updated to X" note
 func (a *App) updatesHandler() http.Handler {
-	mux := http.NewServeMux()
+	mux := &route.Mux{}
 	writeJSON := func(w http.ResponseWriter, code int, v any) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(code)

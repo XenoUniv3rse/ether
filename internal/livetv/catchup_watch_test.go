@@ -1,0 +1,530 @@
+package livetv
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"strconv"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/braedonsaunders/ether/internal/core"
+	"github.com/braedonsaunders/ether/internal/frontend"
+)
+
+type catchUpWatchTestHost interface {
+	frontend.CatchUpLibrary
+	CatchUpProgress(ctx context.Context, viewer *frontend.Viewer, id string, offset, duration time.Duration, state string, resumeAfter time.Duration) error
+	CatchUpSetWatched(ctx context.Context, viewer *frontend.Viewer, id string, watched bool) error
+	frontend.CatchUpUserDataWriter
+	CatchUpGroupWatch(ctx context.Context, viewer *frontend.Viewer, id string) (frontend.CatchUpWatch, error)
+}
+
+func catchUpWatchFixture(t *testing.T, now time.Time) (*Service, Channel, catchUpWatchTestHost) {
+	t.Helper()
+	s := testService(t, Options{Now: func() time.Time { return now }})
+	ch, err := s.SaveChannel(t.Context(), Channel{ID: "archive-watch", Name: "Archive", Number: "1", Kind: "iptv", Enabled: true, Private: true, GuideID: "guide", StreamURL: "https://example.invalid/live.ts"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ch.Archive = &ChannelArchive{Days: 2, Mode: "xtream"}
+	data, err := json.Marshal(ch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.o.DB.ExecContext(t.Context(), "UPDATE livetv_channels SET data=? WHERE id=?", data, ch.ID); err != nil {
+		t.Fatal(err)
+	}
+	for _, hours := range []int{-5, -3} {
+		start := now.Add(time.Duration(hours) * time.Hour)
+		p := Programme{Start: start, End: start.Add(time.Hour), Item: Item{Title: "News"}}
+		raw, err := json.Marshal(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err = s.o.DB.ExecContext(t.Context(), "INSERT INTO livetv_programmes(source_id,channel_id,start_ms,end_ms,data,title_key) VALUES(?,?,?,?,?,?)", guideSource(ch), ch.GuideID, start.UnixMilli(), p.End.UnixMilli(), raw, programmeTitleKey(p.Item.Title)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return s, ch, s.Frontend().(catchUpWatchTestHost)
+}
+
+func catchUpEpisode(t *testing.T, h catchUpWatchTestHost, u *core.User, id string) frontend.CatchUpItem {
+	t.Helper()
+	item, err := h.CatchUpItem(t.Context(), u, id)
+	if err != nil {
+		t.Fatalf("catch-up item %s: %v", id, err)
+	}
+	return item
+}
+
+// An airing keeps a resume point and a watched count per viewer, with the
+// thresholds normal titles use, through either id the frontends serve.
+func TestCatchUpWatchState(t *testing.T) {
+	now := time.Date(2026, 11, 25, 12, 0, 0, 0, time.UTC)
+	_, _, h := catchUpWatchFixture(t, now)
+	owner := &core.User{ID: 1, IsOwner: true}
+	shows, err := h.CatchUpItems(t.Context(), owner, frontend.CatchUpQuery{})
+	if err != nil || len(shows.Items) != 1 {
+		t.Fatalf("shows: %d, %v", len(shows.Items), err)
+	}
+	episodes, err := h.CatchUpItems(t.Context(), owner, frontend.CatchUpQuery{Parent: shows.Items[0].SeasonID})
+	if err != nil || len(episodes.Items) != 2 {
+		t.Fatalf("episodes: %d, %v", len(episodes.Items), err)
+	}
+	id := episodes.Items[0].ID
+	hour := time.Hour
+	progressAs := func(st string, offset time.Duration, resumeAfter time.Duration) frontend.CatchUpWatch {
+		t.Helper()
+		if err := h.CatchUpProgress(t.Context(), owner, id, offset, hour, st, resumeAfter); err != nil {
+			t.Fatalf("progress %v: %v", offset, err)
+		}
+		return catchUpEpisode(t, h, owner, id).Watch
+	}
+	progress := func(offset, resumeAfter time.Duration) frontend.CatchUpWatch {
+		t.Helper()
+		return progressAs("playing", offset, resumeAfter)
+	}
+	if w := catchUpEpisode(t, h, owner, id).Watch; w != (frontend.CatchUpWatch{}) {
+		t.Fatalf("unplayed airing has state: %+v", w)
+	}
+	if w := progressAs("stopped", 30*time.Second, 0); w != (frontend.CatchUpWatch{}) {
+		t.Fatalf("a not-started report created state: %+v", w)
+	}
+	if w := progress(10*time.Minute, 0); w.ViewOffset != 10*time.Minute || w.ViewCount != 0 || !w.LastViewedAt.Equal(now) {
+		t.Fatalf("resume point: %+v", w)
+	}
+	page, err := h.CatchUpItems(t.Context(), owner, frontend.CatchUpQuery{Parent: shows.Items[0].SeasonID})
+	if err != nil || page.Items[0].Watch.ViewOffset != 10*time.Minute || page.Items[1].Watch != (frontend.CatchUpWatch{}) {
+		t.Fatalf("listing state: %+v, %v", page.Items, err)
+	}
+	otherAiring := frontend.CatchUpGUID(episodes.Items[1])
+	observed, older := now.Add(-time.Hour), now.Add(-2*time.Hour)
+	offset, zero := 123*time.Second, time.Duration(0)
+	favorite, likes, dislike := true, true, false
+	patch := frontend.CatchUpUserDataPatch{
+		ItemPlaybackPatch: frontend.ItemPlaybackPatch{Position: &offset, LastPlayedAt: &observed},
+		Favorite:          &favorite, Likes: &likes,
+	}
+	if err := h.CatchUpPatchUserData(t.Context(), owner, otherAiring, patch); err != nil {
+		t.Fatal(err)
+	}
+	patch = frontend.CatchUpUserDataPatch{
+		ItemPlaybackPatch: frontend.ItemPlaybackPatch{Position: &zero, LastPlayedAt: &older},
+		Likes:             &dislike,
+	}
+	if err := h.CatchUpPatchUserData(t.Context(), owner, otherAiring, patch); err != nil {
+		t.Fatal(err)
+	}
+	if w := catchUpEpisode(t, h, owner, otherAiring).Watch; w.ViewOffset != offset || !w.IsFavorite || w.UserRating != 2 {
+		t.Fatalf("offline airing state: %+v", w)
+	}
+
+	// A resumed play reports 0 (buffering, then playing) before it seeks:
+	// neither clears the resume point. Stopping near the start does.
+	if w := progressAs("buffering", 0, 0); w.ViewOffset != 10*time.Minute {
+		t.Fatalf("buffering at 0 cleared the resume point: %+v", w)
+	}
+	if w := progress(0, 0); w.ViewOffset != 10*time.Minute {
+		t.Fatalf("playing at 0 cleared the resume point: %+v", w)
+	}
+	if w := progressAs("stopped", time.Minute, 0); w.ViewOffset != 0 || w.ViewCount != 0 {
+		t.Fatalf("stopping under 5%% keeps a resume point: %+v", w)
+	}
+	if w := progress(55*time.Minute, 0); w.ViewOffset != 0 || w.ViewCount != 1 {
+		t.Fatalf("crossing 90%% did not mark watched: %+v", w)
+	}
+	if w := progress(58*time.Minute, 0); w.ViewCount != 1 {
+		t.Fatalf("the same viewing counted twice: %+v", w)
+	}
+	if w := progress(20*time.Minute, 0); w.ViewOffset != 20*time.Minute || w.ViewCount != 1 {
+		t.Fatalf("rewatch resume point: %+v", w)
+	}
+	if w := progress(57*time.Minute, 0); w.ViewCount != 2 || w.ViewOffset != 0 {
+		t.Fatalf("second viewing not counted: %+v", w)
+	}
+	progress(10*time.Minute, 0)
+	if w := progressAs("stopped", 90*time.Second, 2*time.Minute); w.ViewOffset != 0 {
+		t.Fatalf("configured resume threshold ignored: %+v", w)
+	}
+
+	// Mark and unmark, through the GUID the Jellyfin and Emby frontends use.
+	guid := frontend.CatchUpGUID(episodes.Items[0])
+	if err := h.CatchUpSetWatched(t.Context(), owner, guid, false); err != nil {
+		t.Fatal(err)
+	}
+	if w := catchUpEpisode(t, h, owner, id).Watch; w.ViewCount != 0 || w.ViewOffset != 0 || !w.LastViewedAt.Equal(now) {
+		t.Fatalf("unwatched (when it was last viewed is kept): %+v", w)
+	}
+	progress(30*time.Minute, 0)
+	if err := h.CatchUpSetWatched(t.Context(), owner, guid, true); err != nil {
+		t.Fatal(err)
+	}
+	if w := catchUpEpisode(t, h, owner, id).Watch; w.ViewCount != 1 || w.ViewOffset != 0 {
+		t.Fatalf("watched: %+v", w)
+	}
+
+	// State is per viewer, and a viewer who can't see the archive can't write it.
+	other := &core.User{ID: 3, IsOwner: true}
+	if w := catchUpEpisode(t, h, other, id).Watch; w != (frontend.CatchUpWatch{}) {
+		t.Fatalf("another viewer sees the owner's state: %+v", w)
+	}
+	denied := &core.User{ID: 2}
+	if err := h.CatchUpSetWatched(t.Context(), denied, id, true); !errors.Is(err, core.ErrNotFound) {
+		t.Fatalf("restricted viewer wrote state: %v", err)
+	}
+	if err := h.CatchUpProgress(t.Context(), owner, shows.Items[0].ID, time.Minute, hour, "playing", 0); !errors.Is(err, core.ErrNotFound) {
+		t.Fatalf("progress on a show, not an airing: %v", err)
+	}
+}
+
+func insertCatchUpProgramme(t *testing.T, s *Service, ch Channel, title string, start time.Time, length time.Duration) {
+	t.Helper()
+	insertRatedCatchUpProgramme(t, s, ch, title, "", start, length)
+}
+
+func insertRatedCatchUpProgramme(t *testing.T, s *Service, ch Channel, title, rating string, start time.Time, length time.Duration) {
+	t.Helper()
+	p := Programme{Start: start, End: start.Add(length), Item: Item{Title: title, Rating: rating}}
+	raw, err := json.Marshal(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.o.DB.ExecContext(t.Context(), "INSERT INTO livetv_programmes(source_id,channel_id,start_ms,end_ms,data,title_key) VALUES(?,?,?,?,?,?)", guideSource(ch), ch.GuideID, start.UnixMilli(), p.End.UnixMilli(), raw, programmeTitleKey(p.Item.Title)); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A show or season carries its airings' roll-up, and marking it marks every
+// airing in it, through either id the frontends serve.
+func TestCatchUpWatchShowAndSeason(t *testing.T) {
+	now := time.Date(2026, 11, 25, 12, 0, 0, 0, time.UTC)
+	s, ch, h := catchUpWatchFixture(t, now)
+	insertCatchUpProgramme(t, s, ch, "Weather", now.Add(-4*time.Hour), time.Hour)
+	owner := &core.User{ID: 1, IsOwner: true}
+	show := func(title string) frontend.CatchUpItem {
+		t.Helper()
+		page, err := h.CatchUpItems(t.Context(), owner, frontend.CatchUpQuery{Rollup: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, item := range page.Items {
+			if item.Programme.Item.Title == title {
+				return item
+			}
+		}
+		t.Fatalf("no show %q in %+v", title, page.Items)
+		return frontend.CatchUpItem{}
+	}
+	news := show("News")
+	if w := news.Watch; w.Episodes != 2 || w.Watched != 0 || w.InProgress != 0 || w.FullyWatched() {
+		t.Fatalf("unwatched show roll-up: %+v", w)
+	}
+	episodes, err := h.CatchUpItems(t.Context(), owner, frontend.CatchUpQuery{Parent: news.SeasonID})
+	if err != nil || len(episodes.Items) != 2 {
+		t.Fatalf("episodes: %d, %v", len(episodes.Items), err)
+	}
+	if err := h.CatchUpProgress(t.Context(), owner, episodes.Items[0].ID, 10*time.Minute, 0, "playing", 0); err != nil {
+		t.Fatal(err)
+	}
+	if w, err := h.CatchUpGroupWatch(t.Context(), owner, news.ID); err != nil || w.Episodes != 2 || w.Watched != 0 || w.InProgress != 1 || !w.LastViewedAt.Equal(now) {
+		t.Fatalf("show detail roll-up: %+v, %v", w, err)
+	}
+	// Only a listing or detail that asks gets a roll-up: resolving a show
+	// (artwork, writes) keeps its early stop.
+	if w := catchUpEpisode(t, h, owner, news.ID).Watch; w != (frontend.CatchUpWatch{}) {
+		t.Fatalf("plain show resolve has a roll-up: %+v", w)
+	}
+	if plain, err := h.CatchUpItems(t.Context(), owner, frontend.CatchUpQuery{}); err != nil || plain.Items[0].Watch != (frontend.CatchUpWatch{}) {
+		t.Fatalf("listing without Rollup has a roll-up: %+v, %v", plain.Items, err)
+	}
+	if _, err := h.CatchUpGroupWatch(t.Context(), owner, episodes.Items[0].ID); !errors.Is(err, core.ErrNotFound) {
+		t.Fatalf("roll-up of an airing: %v", err)
+	}
+
+	// Mark the show watched through its GUID (Jellyfin, Emby, Silo).
+	if err := h.CatchUpSetWatched(t.Context(), owner, frontend.CatchUpGroupGUID(news.ID), true); err != nil {
+		t.Fatal(err)
+	}
+	for _, ep := range episodes.Items {
+		if w := catchUpEpisode(t, h, owner, ep.ID).Watch; w.ViewCount != 1 || w.ViewOffset != 0 {
+			t.Fatalf("episode after marking the show: %+v", w)
+		}
+	}
+	if w := show("News").Watch; w.Watched != 2 || w.InProgress != 0 || !w.FullyWatched() {
+		t.Fatalf("watched show roll-up: %+v", w)
+	}
+	seasons, err := h.CatchUpItems(t.Context(), owner, frontend.CatchUpQuery{Parent: news.ID, Rollup: true})
+	if err != nil || len(seasons.Items) != 1 || !seasons.Items[0].Watch.FullyWatched() {
+		t.Fatalf("season listing roll-up: %+v, %v", seasons.Items, err)
+	}
+	if w := show("Weather").Watch; w.Episodes != 1 || w.Watched != 0 {
+		t.Fatalf("another show was marked: %+v", w)
+	}
+	// Marking again adds a view to each airing, as a show scrobble does.
+	if err := h.CatchUpSetWatched(t.Context(), owner, news.SeasonID, true); err != nil {
+		t.Fatal(err)
+	}
+	if w := catchUpEpisode(t, h, owner, episodes.Items[1].ID).Watch; w.ViewCount != 2 {
+		t.Fatalf("second mark: %+v", w)
+	}
+	// Unmark the season: every airing, keeping when it was last viewed.
+	if err := h.CatchUpSetWatched(t.Context(), owner, frontend.CatchUpGroupGUID(news.SeasonID), false); err != nil {
+		t.Fatal(err)
+	}
+	for _, ep := range episodes.Items {
+		if w := catchUpEpisode(t, h, owner, ep.ID).Watch; w.ViewCount != 0 || w.ViewOffset != 0 || !w.LastViewedAt.Equal(now) {
+			t.Fatalf("episode after unmarking the season: %+v", w)
+		}
+	}
+	if w := show("News").Watch; w.Watched != 0 || w.FullyWatched() {
+		t.Fatalf("unwatched show roll-up: %+v", w)
+	}
+
+	// A search lists only matching airings, so it carries no counts.
+	found, err := h.CatchUpItems(t.Context(), owner, frontend.CatchUpQuery{Search: "news", Rollup: true})
+	if err != nil || len(found.Items) != 1 || found.Items[0].Watch != (frontend.CatchUpWatch{}) {
+		t.Fatalf("search roll-up: %+v, %v", found.Items, err)
+	}
+	// State is per viewer; a viewer who can't see the archive can't mark it.
+	if w, err := h.CatchUpGroupWatch(t.Context(), &core.User{ID: 3, IsOwner: true}, frontend.CatchUpGroupGUID(news.ID)); err != nil || w.Episodes != 2 || w.Watched != 0 || !w.LastViewedAt.IsZero() {
+		t.Fatalf("another viewer's roll-up: %+v, %v", w, err)
+	}
+	if err := h.CatchUpSetWatched(t.Context(), &core.User{ID: 2}, news.ID, true); !errors.Is(err, core.ErrNotFound) {
+		t.Fatalf("restricted viewer marked a show: %v", err)
+	}
+	if err := h.CatchUpSetWatched(t.Context(), owner, "catchup-show-00000000000000000000000000000000", true); !errors.Is(err, core.ErrNotFound) {
+		t.Fatalf("unknown show: %v", err)
+	}
+}
+
+// Marking a show with more airings than one statement writes marks them all.
+func TestCatchUpWatchMarkLargeShow(t *testing.T) {
+	now := time.Date(2026, 11, 25, 12, 0, 0, 0, time.UTC)
+	s, ch, h := catchUpWatchFixture(t, now)
+	const n = 2*catchUpWriteBatch + 50
+	first := now.Add(-44 * time.Hour)
+	for i := range n {
+		insertCatchUpProgramme(t, s, ch, "Marathon", first.Add(time.Duration(i)*5*time.Minute), 5*time.Minute)
+	}
+	owner := &core.User{ID: 1, IsOwner: true}
+	id := frontend.CatchUpGroupID(frontend.TypeShow, "Marathon")
+	if err := h.CatchUpSetWatched(t.Context(), owner, id, true); err != nil {
+		t.Fatal(err)
+	}
+	if w, err := h.CatchUpGroupWatch(t.Context(), owner, id); err != nil || w.Episodes != n || w.Watched != n {
+		t.Fatalf("large show roll-up: %+v, %v", w, err)
+	}
+	if err := h.CatchUpSetWatched(t.Context(), owner, id, false); err != nil {
+		t.Fatal(err)
+	}
+	var left int
+	if err := s.o.DB.QueryRowContext(t.Context(), "SELECT COUNT(*) FROM livetv_catchup_watch WHERE view_count>0").Scan(&left); err != nil || left != 0 {
+		t.Fatalf("unmarking left watched rows: %d, %v", left, err)
+	}
+}
+
+// The airing's own length decides the thresholds, a playhead past its end is
+// ignored, and a write outlives a request the player already closed.
+func TestCatchUpWatchGuards(t *testing.T) {
+	now := time.Date(2026, 11, 25, 12, 0, 0, 0, time.UTC)
+	s, ch, h := catchUpWatchFixture(t, now)
+	owner := &core.User{ID: 1, IsOwner: true}
+	id := frontend.CatchUpEpisodeID(ch.ID + "-" + msText(now.Add(-3*time.Hour).UnixMilli()))
+	// A 10-minute client "duration" on the 60-minute airing: 9 minutes is a
+	// resume point, not 90% watched.
+	if err := h.CatchUpProgress(t.Context(), owner, id, 9*time.Minute, 10*time.Minute, "playing", 0); err != nil {
+		t.Fatal(err)
+	}
+	if w := catchUpEpisode(t, h, owner, id).Watch; w.ViewOffset != 9*time.Minute || w.ViewCount != 0 {
+		t.Fatalf("client duration used: %+v", w)
+	}
+	if err := h.CatchUpProgress(t.Context(), owner, id, 63*time.Minute, 0, "stopped", 0); err != nil {
+		t.Fatal(err)
+	}
+	if w := catchUpEpisode(t, h, owner, id).Watch; w.ViewOffset != 9*time.Minute || w.ViewCount != 0 {
+		t.Fatalf("a playhead past the end was saved: %+v", w)
+	}
+	gone, cancel := context.WithCancel(t.Context())
+	cancel()
+	if err := h.CatchUpProgress(gone, owner, id, 20*time.Minute, 0, "stopped", 0); err != nil {
+		t.Fatalf("write on a closed request: %v", err)
+	}
+	if w := catchUpEpisode(t, h, owner, id).Watch; w.ViewOffset != 20*time.Minute {
+		t.Fatalf("closed request lost the position: %+v", w)
+	}
+	if err := s.DeleteSource(t.Context(), guideSource(ch)); err != nil {
+		t.Fatalf("delete source: %v", err)
+	}
+	var left int
+	if err := s.o.DB.QueryRowContext(t.Context(), "SELECT COUNT(*) FROM livetv_catchup_watch").Scan(&left); err != nil || left != 0 {
+		t.Fatalf("deleting the source left watch rows: %d, %v", left, err)
+	}
+}
+
+// Concurrent marks each count: every write is one statement.
+func TestCatchUpWatchConcurrentWrites(t *testing.T) {
+	now := time.Date(2026, 11, 25, 12, 0, 0, 0, time.UTC)
+	_, ch, h := catchUpWatchFixture(t, now)
+	owner := &core.User{ID: 1, IsOwner: true}
+	id := frontend.CatchUpEpisodeID(ch.ID + "-" + msText(now.Add(-3*time.Hour).UnixMilli()))
+	var wg sync.WaitGroup
+	errs := make(chan error, 20)
+	for range 20 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			errs <- h.CatchUpSetWatched(t.Context(), owner, id, true)
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if w := catchUpEpisode(t, h, owner, id).Watch; w.ViewCount != 20 {
+		t.Fatalf("concurrent marks lost: %+v", w)
+	}
+}
+
+// State lives as long as the airing's guide row: when an import drops the
+// airing from the archive, its state goes with it.
+func TestCatchUpWatchPrune(t *testing.T) {
+	now := time.Date(2026, 11, 25, 12, 0, 0, 0, time.UTC)
+	s, ch, h := catchUpWatchFixture(t, now)
+	owner := &core.User{ID: 1, IsOwner: true}
+	keep := frontend.CatchUpEpisodeID(ch.ID + "-" + msText(now.Add(-3*time.Hour).UnixMilli()))
+	drop := frontend.CatchUpEpisodeID(ch.ID + "-" + msText(now.Add(-5*time.Hour).UnixMilli()))
+	for _, id := range []string{keep, drop} {
+		if err := h.CatchUpProgress(t.Context(), owner, id, 10*time.Minute, time.Hour, "stopped", 0); err != nil {
+			t.Fatalf("progress %s: %v", id, err)
+		}
+	}
+	if _, err := s.o.DB.ExecContext(t.Context(), "DELETE FROM livetv_programmes WHERE source_id=? AND channel_id=? AND start_ms=?", guideSource(ch), ch.GuideID, now.Add(-5*time.Hour).UnixMilli()); err != nil {
+		t.Fatal(err)
+	}
+	prune := func(at time.Time) int64 {
+		t.Helper()
+		tx, err := s.o.DB.BeginTx(t.Context(), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		n, err := pruneCatchUpWatch(t.Context(), tx, guideSource(ch), at)
+		if err != nil {
+			_ = tx.Rollback()
+			t.Fatal(err)
+		}
+		if err := tx.Commit(); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	if n := prune(now); n != 1 {
+		t.Fatalf("pruned %d rows, want the dropped airing only", n)
+	}
+	var left int
+	if err := s.o.DB.QueryRowContext(t.Context(), "SELECT COUNT(*) FROM livetv_catchup_watch WHERE programme_id=?", ch.ID+"-"+msText(now.Add(-3*time.Hour).UnixMilli())).Scan(&left); err != nil || left != 1 {
+		t.Fatalf("kept airing's state: %d, %v", left, err)
+	}
+	if n := prune(now.Add(32 * 24 * time.Hour)); n != 1 {
+		t.Fatalf("state older than any archive not pruned: %d", n)
+	}
+}
+
+func msText(n int64) string { return strconv.FormatInt(n, 10) }
+
+// A viewer whose rating limit hides some of a show's airings marks, and
+// counts, only the airings they can play.
+func TestCatchUpWatchShowPartlyVisible(t *testing.T) {
+	now := time.Date(2026, 11, 25, 12, 0, 0, 0, time.UTC)
+	s, ch, h := catchUpWatchFixture(t, now)
+	// A rating-limited viewer only sees a channel with a known rating.
+	ch.Rating = "TV-G"
+	data, err := json.Marshal(ch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.o.DB.ExecContext(t.Context(), "UPDATE livetv_channels SET data=? WHERE id=?", data, ch.ID); err != nil {
+		t.Fatal(err)
+	}
+	for n, rating := range []string{"TV-G", "TV-G", "TV-MA"} {
+		insertRatedCatchUpProgramme(t, s, ch, "Movie Night", rating, now.Add(-time.Duration(10+2*n)*time.Hour), time.Hour)
+	}
+	hidden := ch.ID + "-" + msText(now.Add(-14*time.Hour).UnixMilli())
+	owner := &core.User{ID: 1, IsOwner: true}
+	limited := &core.User{ID: 4, IsOwner: true, MaxContentRating: "TV-PG"}
+	id := frontend.CatchUpGroupID(frontend.TypeShow, "Movie Night")
+	if w, err := h.CatchUpGroupWatch(t.Context(), owner, id); err != nil || w.Episodes != 3 {
+		t.Fatalf("owner sees %+v, %v", w, err)
+	}
+	if w, err := h.CatchUpGroupWatch(t.Context(), limited, id); err != nil || w.Episodes != 2 {
+		t.Fatalf("limited viewer sees %+v, %v", w, err)
+	}
+	if err := h.CatchUpSetWatched(t.Context(), limited, id, true); err != nil {
+		t.Fatal(err)
+	}
+	var marked, hiddenRows int
+	if err := s.o.DB.QueryRowContext(t.Context(), "SELECT COUNT(*) FROM livetv_catchup_watch WHERE user_id=? AND view_count=1", limited.ID).Scan(&marked); err != nil || marked != 2 {
+		t.Fatalf("limited viewer marked %d airings, %v", marked, err)
+	}
+	if err := s.o.DB.QueryRowContext(t.Context(), "SELECT COUNT(*) FROM livetv_catchup_watch WHERE programme_id=?", hidden).Scan(&hiddenRows); err != nil || hiddenRows != 0 {
+		t.Fatalf("the hidden airing was marked: %d, %v", hiddenRows, err)
+	}
+	if w, err := h.CatchUpGroupWatch(t.Context(), limited, id); err != nil || !w.FullyWatched() {
+		t.Fatalf("limited viewer's roll-up after marking: %+v, %v", w, err)
+	}
+}
+
+// A show or season mark stamps watch_at_ms on every airing it writes, as an
+// airing's mark does, so an older offline report cannot undo it.
+func TestCatchUpWatchGroupMarkStamps(t *testing.T) {
+	now := time.Date(2026, 11, 25, 12, 0, 0, 0, time.UTC)
+	s, _, h := catchUpWatchFixture(t, now) // News at -5h and -3h
+	owner := &core.User{ID: 1, IsOwner: true}
+	news := frontend.CatchUpGroupID(frontend.TypeShow, "News")
+	stamps := func(label string, wantViews int) {
+		t.Helper()
+		rows, err := s.o.DB.QueryContext(t.Context(), `SELECT watch_at_ms, view_count, offset_ms FROM livetv_catchup_watch WHERE user_id=1`)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer rows.Close()
+		n := 0
+		for rows.Next() {
+			var at, offset int64
+			var views int
+			if err := rows.Scan(&at, &views, &offset); err != nil {
+				t.Fatal(err)
+			}
+			if at != now.UnixMilli() || views != wantViews || offset != 0 {
+				t.Fatalf("%s: row watch_at=%d views=%d offset=%d", label, at, views, offset)
+			}
+			n++
+		}
+		if n != 2 {
+			t.Fatalf("%s: %d rows", label, n)
+		}
+	}
+	if err := h.CatchUpSetWatched(t.Context(), owner, news, true); err != nil {
+		t.Fatal(err)
+	}
+	stamps("show marked", 1)
+	episodes, err := h.CatchUpItems(t.Context(), owner, frontend.CatchUpQuery{Parent: frontend.CatchUpGroupID(frontend.TypeSeason, "News")})
+	if err != nil || len(episodes.Items) != 2 {
+		t.Fatalf("episodes: %+v, %v", episodes.Items, err)
+	}
+	// An offline client syncs a position it saw an hour before the mark.
+	earlier, position := now.Add(-time.Hour), 20*time.Minute
+	patch := frontend.CatchUpUserDataPatch{ItemPlaybackPatch: frontend.ItemPlaybackPatch{Position: &position, LastPlayedAt: &earlier}}
+	if err := h.CatchUpPatchUserData(t.Context(), owner, frontend.CatchUpGUID(episodes.Items[0]), patch); err != nil {
+		t.Fatal(err)
+	}
+	stamps("stale offline report after the mark", 1)
+	if err := h.CatchUpSetWatched(t.Context(), owner, frontend.CatchUpGroupID(frontend.TypeSeason, "News"), false); err != nil {
+		t.Fatal(err)
+	}
+	stamps("season unmarked", 0)
+}

@@ -15,6 +15,7 @@ type HLSRung struct {
 	// AverageBandwidth is the average bitrate in bits per second.
 	AverageBandwidth int
 	// Explicit quality metadata uses bits/second and describes intended output.
+	VideoCopy        bool
 	VideoBitrate     int
 	PeakVideoBitrate int
 	Codec            string
@@ -42,6 +43,12 @@ type HLSLadderSession interface {
 	// ServeRungSegment writes segment n of rung (InitSegment numbering as
 	// in ServeSegment: the caller passes the parsed segment number).
 	ServeRungSegment(w http.ResponseWriter, r *http.Request, rung string, n int)
+}
+
+// AdaptiveHLSSession exposes the renditions that may share a player-driven master.
+// A nil slice means adaptive delivery was not requested.
+type AdaptiveHLSSession interface {
+	AdaptiveRungs() []HLSRung
 }
 
 // GoodputSession is a session that measures client delivery goodput.

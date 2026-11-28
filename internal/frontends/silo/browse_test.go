@@ -600,15 +600,19 @@ func TestUnresolvedColdTitleDoesNotInventAPlayableSource(t *testing.T) {
 }
 
 // TestCatalogPageSignsArtworkOnce keeps a catalogue page off per-title
-// detail loads and per-image grant writes: the page's movies and series are
-// signed in one pass and their editions read in one batch, while an episode
-// keeps the per-title artwork path.
+// detail loads and per-image grant writes, including episode ancestors and
+// titles with an authoritative empty artwork list.
 func TestCatalogPageSignsArtworkOnce(t *testing.T) {
 	viewer := &frontend.Viewer{ID: 5}
-	movie, show := frontend.RatingKey(1000000000000001), frontend.RatingKey(1000000000000002)
+	movie, show := core.MovieKey(1), core.ShowKey(2)
+	season, episode := core.SeasonKey(2, 1), core.EpisodeKey(2, 1, 1)
 	exp := frontendtest.Experience{
 		LibraryItemsFunc: func(context.Context, *frontend.Viewer, frontend.Device, string, frontend.ItemQuery) (frontend.Page, error) {
-			return frontend.Page{Items: []frontend.Title{{Key: movie, Type: "movie", Title: "M"}, {Key: show, Type: "show", Title: "S"}}, Total: 2}, nil
+			return frontend.Page{Items: []frontend.Title{
+				{Key: movie, Type: "movie", Title: "M"},
+				{Key: show, Type: "show", Title: "S"},
+				{Key: episode, Type: "episode", Title: "E", ShowKey: show, PosterPath: "/still", StillPath: "/still"},
+			}, Total: 3}, nil
 		},
 		UserDataFunc: func(context.Context, *frontend.Viewer, []frontend.RatingKey) (map[frontend.RatingKey]frontend.WatchStatus, error) {
 			return map[frontend.RatingKey]frontend.WatchStatus{}, nil
@@ -628,6 +632,10 @@ func TestCatalogPageSignsArtworkOnce(t *testing.T) {
 			pages++
 			var out []frontend.ImageBatchItem
 			for _, title := range req.Titles {
+				if title.Key == episode {
+					out = append(out, frontend.ImageBatchItem{Item: episode, Authoritative: true})
+					continue
+				}
 				out = append(out, frontend.ImageBatchItem{Item: title.Key, Authoritative: true, Images: []frontend.GrantedImage{
 					{Image: frontend.Image{Kind: frontend.ImagePoster, Path: "p", ThumbHash: "hash"}, Secret: fmt.Sprintf("poster-%d", title.Key)},
 					{Image: frontend.Image{Kind: frontend.ImageBackdrop, Path: "b"}, Secret: "backdrop"},
@@ -638,7 +646,10 @@ func TestCatalogPageSignsArtworkOnce(t *testing.T) {
 		},
 	}
 	editions := 0
-	host := frontend.Host{Identity: frontendtest.Identity{ResolveFunc: func(context.Context, string) (*frontend.Viewer, error) { return viewer, nil }}, Experience: exp, ImageGrants: grants,
+	host := frontend.Host{Identity: frontendtest.Identity{ResolveFunc: func(context.Context, string) (*frontend.Viewer, error) { return viewer, nil }}, Experience: relatedArtworkExperience{fakeArtworkExperience: exp, related: func(context.Context, *frontend.Viewer, frontend.Device, frontend.RatingKey) (frontend.RelatedArtwork, error) {
+		t.Fatal("episode ancestors must be signed in the catalogue batch")
+		return frontend.RelatedArtwork{}, nil
+	}}, ImageGrants: grants,
 		Editions: batchEditions{many: func(_ context.Context, keys []frontend.RatingKey) (map[frontend.RatingKey][]frontend.Version, error) {
 			editions++
 			return map[frontend.RatingKey][]frontend.Version{}, nil
@@ -654,6 +665,12 @@ func TestCatalogPageSignsArtworkOnce(t *testing.T) {
 	body := w.Body.String()
 	if w.Code != 200 || !strings.Contains(body, fmt.Sprintf(`"poster_url":"/api/v2/images/poster-%d"`, movie)) || !strings.Contains(body, `"poster_thumbhash":"hash"`) || !strings.Contains(body, `"backdrop_url":"/api/v2/images/backdrop?w=1920"`) || strings.Contains(body, "second-backdrop") {
 		t.Fatalf("catalogue artwork: %d %s", w.Code, body)
+	}
+	if !strings.Contains(body, fmt.Sprintf(`"season_poster_url":"/api/v2/images/poster-%d"`, season)) ||
+		!strings.Contains(body, fmt.Sprintf(`"series_poster_url":"/api/v2/images/poster-%d"`, show)) ||
+		!strings.Contains(body, `"series_backdrop_url":"/api/v2/images/backdrop?w=1920"`) ||
+		!strings.Contains(body, `"poster_is_episode_still":true`) {
+		t.Fatalf("episode artwork: %s", body)
 	}
 	if pages != 1 || editions != 1 {
 		t.Fatalf("signed %d pages, read editions %d times", pages, editions)

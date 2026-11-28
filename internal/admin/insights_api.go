@@ -59,3 +59,27 @@ func (h *Handler) handleInsightActivity(w http.ResponseWriter, r *http.Request) 
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"days": days})
 }
+
+func (h *Handler) handleRecommendationReport(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	days, _ := strconv.Atoi(q.Get("days"))
+	viewer, _ := strconv.ParseInt(q.Get("viewer"), 10, 64)
+	report, err := h.deps.Personalization.RecommendationReport(r.Context(), days, viewer)
+	if err != nil {
+		writeEngineError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, report)
+}
+
+func (h *Handler) handleRecommendationDetail(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	days, _ := strconv.Atoi(q.Get("days"))
+	viewer, _ := strconv.ParseInt(q.Get("viewer"), 10, 64)
+	detail, err := h.deps.Personalization.RecommendationDetail(r.Context(), days, q.Get("kind"), viewer)
+	if err != nil {
+		writeEngineError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, detail)
+}

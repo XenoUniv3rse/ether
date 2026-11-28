@@ -735,10 +735,7 @@ func (e *Engine) finalizeNeutralHome(ctx context.Context, user *core.User, situa
 	} else {
 		arranged = e.finalizeHomeRowsWithDefault(ctx, user, hc, section, rows, situation.DefaultMaxRows)
 	}
-	libs := map[core.LibraryID]core.PageLibrary{}
-	for _, l := range e.pageLibraries(ctx) {
-		libs[l.ID] = l
-	}
+	libs := e.presentationLibraries(ctx)
 	if !fill && user != nil {
 		arranged = e.withSurfaceRows(ctx, arranged, e.planFor(ctx, user.ID, section), user.ID, hc, byID)
 	}
@@ -825,7 +822,15 @@ func (e *Engine) withSurfaceRows(ctx context.Context, rows []core.HomeRow, pl *p
 	return pinToPositions(rows, pl)
 }
 
-// presentationFor is how apps should draw an arranged row.
+func (e *Engine) presentationLibraries(ctx context.Context) map[core.LibraryID]core.PageLibrary {
+	libs := map[core.LibraryID]core.PageLibrary{}
+	for _, l := range e.pageLibraries(ctx) {
+		libs[l.ID] = l
+	}
+	return libs
+}
+
+// presentationFor is how previews and apps should draw an arranged row.
 func presentationFor(row core.HomeRow, libs map[core.LibraryID]core.PageLibrary, pageLibrary int) core.RowPresentation {
 	if row.Present.Surface != nil {
 		return row.Present

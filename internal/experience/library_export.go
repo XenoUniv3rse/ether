@@ -5,17 +5,25 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"strconv"
 
 	"github.com/braedonsaunders/ether/internal/core"
 	"github.com/braedonsaunders/ether/internal/frontend"
+	"github.com/braedonsaunders/ether/internal/reqmemo"
 )
 
 // ExportLibraryPage uses the regular catalogue and discovery policy. It does
 // not resolve a source, issue a session, or materialize a library in memory.
 func (s *Service) ExportLibraryPage(ctx context.Context, viewer *core.Viewer, device core.Device, viewID string, after core.RatingKey, limit int) (frontend.LibraryExportPage, error) {
 	ctx = core.WithCatalogViewer(ctx, viewer)
-	scope, err := s.exportScope(ctx, viewer, viewID)
+	var viewerID int64
+	if viewer != nil {
+		viewerID = viewer.ID
+	}
+	scope, err := reqmemo.Do(ctx, fmt.Sprintf("library:export:%s:%d:%s", s.d.Protocol, viewerID, viewID), func() (exportScope, error) {
+		return s.exportScope(ctx, viewer, viewID)
+	})
 	if err != nil {
 		return frontend.LibraryExportPage{}, err
 	}
@@ -29,7 +37,12 @@ func (s *Service) ExportLibraryPage(ctx context.Context, viewer *core.Viewer, de
 	// on its facts comes back in full. Detail stays with one-title reads.
 	q := core.BrowseQuery{Filter: filter, Sort: core.SortKey, AfterKey: after, Limit: limit, NoTotal: true}
 	if detail, ok := s.d.Visibility.FactJudge(ctx); ok {
-		q.ListRows = &core.ListRows{Facts: s.d.Visibility.TitleFacts(v) | core.FactGenres, Detail: detail}
+		facts := s.d.Visibility.TitleFacts(v)
+		lean := frontend.ExportTitlesOnly(ctx)
+		if !lean {
+			facts |= core.FactGenres
+		}
+		q.ListRows = &core.ListRows{Facts: facts, Detail: detail, OmitCredits: lean, OmitAddedTime: lean}
 	}
 	page, err := s.d.Browse(ctx, q)
 	if err != nil {
@@ -173,4 +186,19 @@ func (s *Service) ExportPolicy(ctx context.Context, viewer *core.Viewer, _ core.
 		len(share.ContentRatings) > 0 || len(share.ExcludeContentRatings) > 0 || share.MinContentRating != "" || share.MaxContentRating != "" ||
 		len(share.IncludeCollectionNames) > 0 || len(share.ExcludeCollectionNames) > 0
 	return frontend.ExportPolicy{Stamp: hex.EncodeToString(sum[:]), TitleJudged: judged}, nil
+}
+
+// PrepareExportVisibility shares one page's child policy decisions across
+// the season and episode walks. Its memo is released after the export page.
+func (s *Service) PrepareExportVisibility(ctx context.Context, viewer *core.Viewer, titles []core.Title) (context.Context, error) {
+	if len(titles) == 0 {
+		return ctx, nil
+	}
+	ctx = frontend.WithFreshRequestMemo(ctx)
+	active, err := s.viewer(ctx, viewer)
+	if err != nil {
+		return ctx, err
+	}
+	_, err = s.visibleCandidates(ctx, active, titles)
+	return ctx, err
 }

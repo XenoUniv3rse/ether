@@ -45,6 +45,11 @@ type indexerTimingHistory struct {
 	lastError string
 }
 
+type searchFlights struct {
+	mu     sync.Mutex
+	active map[string]*searchFlight
+}
+
 type searchFlight struct {
 	done    chan struct{}
 	results []core.Release
@@ -77,10 +82,11 @@ func (m *Manager) EnabledIndexerStatuses(status string) []core.IndexerSearchStat
 			continue
 		}
 		out = append(out, core.IndexerSearchStatus{
-			IndexerID: cl.indexerID(),
-			Indexer:   cl.Name(),
-			Status:    status,
-			MS:        0,
+			IndexerID:      cl.indexerID(),
+			Indexer:        cl.Name(),
+			ConfiguredName: cl.Config().Name,
+			Status:         status,
+			MS:             0,
 		})
 	}
 	return out
@@ -120,9 +126,10 @@ func (m *Manager) EnabledIndexers() []core.IndexerSearchStatus {
 		}
 		id := cl.indexerID()
 		entry := core.IndexerSearchStatus{
-			IndexerID: id,
-			Indexer:   cl.Name(),
-			Kind:      indexerKind(cfg),
+			IndexerID:      id,
+			Indexer:        cl.Name(),
+			ConfiguredName: cfg.Name,
+			Kind:           indexerKind(cfg),
 		}
 		if h := m.timingHistory[id]; h != nil && h.hasSample {
 			med := medianInt64(h.samples)
@@ -197,6 +204,9 @@ func buildIndexerStatus(ctx context.Context, id, name, configuredName string, re
 	}
 	if err != nil {
 		switch {
+		case errors.Is(err, core.ErrForegroundOnly):
+			st.Status = core.IndexerStatusSkipped
+			st.MS = 0
 		case errors.Is(err, ErrIndexerPaused):
 			st.Status = core.IndexerStatusSkipped
 			st.Reason = core.IndexerSkipReasonPaused
@@ -294,6 +304,7 @@ func (m *Manager) SearchWithOptions(ctx context.Context, req core.SearchRequest,
 	if len(skipIDs) > 0 {
 		ctx = core.WithIndexerSkip(ctx, skipIDs)
 	}
+	ctx = m.reuseWarmSearch(ctx, req, allClients)
 
 	earlyReturn := opts.FirstResults || opts.MinResults > 0
 	hasWaitTimeout := opts.WaitTimeout > 0
@@ -617,29 +628,34 @@ func (m *Manager) searchClientCoalesced(ctx context.Context, cl *Client, req cor
 }
 
 func (m *Manager) searchClientCoalescedWith(ctx context.Context, cl *Client, req core.SearchRequest, arrived func([]core.Release)) ([]core.Release, error) {
-	if cl.ttl() <= 0 {
-		return cl.SearchWith(ctx, req, arrived)
-	}
-	speculative := backgroundSearch(ctx)
 	key := cl.indexerID() + "|" + cacheKey(cl, req)
-	if speculative {
+	return m.flights.run(ctx, key, arrived, func() ([]core.Release, error) {
+		return cl.SearchWith(ctx, req, arrived)
+	})
+}
+
+// Background may share a running Play request. Play starts independently of
+// work that may be paced or denied by a background allowance.
+func (g *searchFlights) run(ctx context.Context, key string, arrived func([]core.Release), run func() ([]core.Release, error)) ([]core.Release, error) {
+	fg := key + "|fg"
+	key = fg
+	if backgroundSearch(ctx) {
 		key += "|bg"
-	} else {
-		key += "|fg"
 	}
-	for {
-		m.flightMu.Lock()
-		if f, ok := m.flights[key]; ok {
-			m.flightMu.Unlock()
-			if err := cl.searchPaused(ctx); err != nil {
-				return nil, err
-			}
+	for ctx.Err() == nil {
+		g.mu.Lock()
+		f := g.active[fg]
+		if f == nil {
+			f = g.active[key]
+		}
+		if f != nil {
+			g.mu.Unlock()
 			select {
 			case <-f.done:
-				if errors.Is(f.err, context.Canceled) && ctx.Err() == nil {
+				if errors.Is(f.err, context.Canceled) || errors.Is(f.err, context.DeadlineExceeded) {
 					continue
 				}
-				out := append([]core.Release(nil), f.results...)
+				out := slices.Clone(f.results)
 				if f.err == nil && arrived != nil && len(out) > 0 {
 					arrived(out)
 				}
@@ -648,28 +664,24 @@ func (m *Manager) searchClientCoalescedWith(ctx context.Context, cl *Client, req
 				return nil, ctx.Err()
 			}
 		}
-		f := &searchFlight{done: make(chan struct{})}
-		if m.flights == nil {
-			m.flights = map[string]*searchFlight{}
+		f = &searchFlight{done: make(chan struct{})}
+		if g.active == nil {
+			g.active = map[string]*searchFlight{}
 		}
-		m.flights[key] = f
-		m.flightMu.Unlock()
-
-		res, err := func() (res []core.Release, err error) {
+		g.active[key] = f
+		g.mu.Unlock()
+		return func() (res []core.Release, err error) {
 			defer func() {
-				f.results = append([]core.Release(nil), res...)
-				f.err = err
-				m.flightMu.Lock()
-				if m.flights[key] == f {
-					delete(m.flights, key)
-				}
-				m.flightMu.Unlock()
+				f.results, f.err = slices.Clone(res), err
+				g.mu.Lock()
+				delete(g.active, key)
 				close(f.done)
+				g.mu.Unlock()
 			}()
-			return cl.SearchWith(ctx, req, arrived)
+			return run()
 		}()
-		return res, err
 	}
+	return nil, ctx.Err()
 }
 
 func snapshotSearchSlots(slots []searchSlot, searchStart time.Time, unfinishedStatus string) ([]core.Release, []core.IndexerSearchStatus, []core.IndexerRef, []error) {
@@ -703,6 +715,9 @@ func snapshotSearchSlots(slots []searchSlot, searchStart time.Time, unfinishedSt
 					Indexer:   s.name,
 				})
 			}
+		case errors.Is(s.err, core.ErrForegroundOnly):
+			st.Status = core.IndexerStatusSkipped
+			st.MS = 0
 		case s.err != nil && errors.Is(s.err, ErrIndexerPaused):
 			st.Status = core.IndexerStatusSkipped
 			st.Reason = core.IndexerSkipReasonPaused
@@ -723,9 +738,7 @@ func snapshotSearchSlots(slots []searchSlot, searchStart time.Time, unfinishedSt
 			for _, r := range s.results {
 				key := mergeDedupeKey(r)
 				if idx, ok := seen[key]; ok {
-					dup := r
-					dup.Fallbacks = nil
-					merged[idx].Fallbacks = append(merged[idx].Fallbacks, dup)
+					foldDuplicate(&merged[idx], r)
 					continue
 				}
 				seen[key] = len(merged)

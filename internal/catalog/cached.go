@@ -736,3 +736,63 @@ func (c *Catalog) CachedSeasons(ctx context.Context, shows []core.RatingKey) (ma
 func (c *Catalog) DigitalEvidenceMovies(ctx context.Context, since time.Time) ([]core.Title, error) {
 	return c.queryTitlesUnfiltered(ctx, `SELECT `+prefixedCols("t")+` FROM catalog_titles t WHERE t.type='movie' AND t.browsable=1 AND t.release_known=1 AND NOT EXISTS (SELECT 1 FROM catalog_home_release h WHERE h.key=t.key AND h.checked=1 AND h.earliest_ts<>0 AND h.earliest_ts<=?) ORDER BY t.key`, since.Unix())
 }
+
+// PlaylistTitleRows reads membership, policy and duration facts from the local
+// mirror. Playlist consumers hydrate display metadata only for their page.
+func (c *Catalog) PlaylistTitleRows(ctx context.Context, keys []core.RatingKey, facts core.TitleFacts) (map[core.RatingKey]core.Title, error) {
+	out := make(map[core.RatingKey]core.Title, len(keys))
+	keys = uniqueRatingKeys(keys)
+	if len(keys) == 0 {
+		return out, nil
+	}
+	facts |= c.viewerPolicyFacts(ctx)
+	if core.CatalogViewerRestricted(ctx) {
+		facts |= core.FactKeywords
+	}
+	args := make([]any, len(keys))
+	episodeAir := false
+	for i, key := range keys {
+		args[i] = int64(key)
+		episodeAir = episodeAir || key.Kind() == core.KindEpisode
+	}
+	// Fold the policy facts into each membership row. Full display facts
+	// are still loaded only for the page Plex sends.
+	var items []core.Title
+	for part := range store.Chunks(args, 400) {
+		rows, err := c.readVisibilityRowFacts(ctx, part, facts, episodeAir)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, rows...)
+	}
+	var seasons []core.Title
+	for _, item := range items {
+		if item.Type == core.TypeSeason {
+			seasons = append(seasons, item)
+		}
+	}
+	if len(seasons) > 0 {
+		if err := c.airedCounts(ctx, seasons); err != nil {
+			return nil, err
+		}
+		i := 0
+		for n := range items {
+			if items[n].Type == core.TypeSeason {
+				items[n] = seasons[i]
+				i++
+			}
+		}
+	}
+	if err := c.hydrateShows(ctx, items); err != nil {
+		return nil, err
+	}
+	if err := c.ProjectEpisodeTitles(ctx, items); err != nil {
+		return nil, err
+	}
+	for _, item := range items {
+		if c.visibleTitle(&item) {
+			out[item.Key] = item
+		}
+	}
+	return out, nil
+}

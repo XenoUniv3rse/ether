@@ -15,6 +15,7 @@ import { useAsync } from "../../lib/hooks";
 import { isRuleComplete } from "../../lib/rules";
 import { asObj } from "../settings/SchemaForm";
 import { librariesApi, type Library, type LibrarySyncRequest } from "./api";
+import { LibrarySourceIcon } from "./CatalogueSources";
 import { CatalogBrowser } from "./browser/Catalog";
 import { RulesPanel, type VisibilityRule } from "./browser/LibraryVisibility";
 import { LibraryEditor } from "./LibraryEditor";
@@ -132,7 +133,7 @@ export function LibraryPage() {
   const activeTabLabel =
     rawTab === "rules"
       ? t("Rules")
-      : rawTab === "tabs"
+      : rawTab === "tabs" && !activeLib?.presentations.adapterOnly
         ? t("Tabs")
         : rawTab === "settings"
           ? t("Settings")
@@ -188,7 +189,7 @@ export function LibraryPage() {
   const tabs = [
     { key: "browse", label: t("Browse") },
     { key: "rules", label: t("Rules") },
-    { key: "tabs", label: t("Tabs") },
+    ...(!lib.presentations.adapterOnly ? [{ key: "tabs", label: t("Tabs") }] : []),
     { key: "settings", label: t("Settings") },
   ];
   const tab = tabs.some((x) => x.key === rawTab) ? rawTab! : "browse";
@@ -205,6 +206,7 @@ export function LibraryPage() {
           </Button>
         }
         title={lib.name}
+        titleIcon={lib.logo ? <LibrarySourceIcon library={lib} size={24} /> : undefined}
         actions={
           <>
             {lib.source === "builtin" && catalogHealth ? (

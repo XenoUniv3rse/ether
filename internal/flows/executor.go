@@ -148,6 +148,9 @@ func redactActionParams(spec ActionSpec, params map[string]any) map[string]any {
 	out := make(map[string]any, len(params))
 	for k, v := range params {
 		if p, ok := spec.Param(k); ok && p.Secret {
+			if v == nil || v == "" {
+				continue
+			}
 			out[k] = events.RedactedValue
 			continue
 		}

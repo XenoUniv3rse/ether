@@ -63,6 +63,8 @@ type BrowseQuery struct {
 	// ExcludeKeys drops these plugin items by RatingKey. Callers bound
 	// the list; non-plugin keys are ignored.
 	ExcludeKeys []core.RatingKey
+	// ReleaseFrom filters known release dates by an inclusive Unix timestamp.
+	ReleaseFrom *int64
 	Cursor      string // opaque keyset cursor
 	Limit       int
 }
@@ -452,6 +454,10 @@ func (s *Service) buildBrowsePlan(
 		bw.WriteString(filterWhere.String())
 		baseArgs = append(baseArgs, filterArgs...)
 	}
+	if q.ReleaseFrom != nil {
+		bw.WriteString(` AND i.released > 0 AND i.released >= ?`)
+		baseArgs = append(baseArgs, *q.ReleaseFrom)
+	}
 	if q.MaxContentRating != "" {
 		if lvl := contentrating.EnforceLevelOf(q.MaxContentRating); lvl == contentrating.Unrated {
 			bw.WriteString(` AND 0=1`)
@@ -544,7 +550,7 @@ func (s *Service) Browse(ctx context.Context, q BrowseQuery) (BrowsePage, error)
 			return BrowsePage{}, err
 		}
 	}
-	hasFacets := hasActiveFacets(q.Facets) || hasActiveFacets(q.AllFacets) || hasActiveFacets(q.ExcludeFacets) || hasActiveAnyGroups(q.AnyGroups) || len(q.Empty) > 0 || hasActiveExcludeQuery(q.ExcludeQuery) || !q.Policy.Passive() || !q.TabPolicy.Passive() || q.Hidden || q.PersonID > 0 || len(q.Levels) > 0 || q.AnyLevel || q.Watched != nil || q.MaxContentRating != "" || len(q.ExcludeKeys) > 0
+	hasFacets := hasActiveFacets(q.Facets) || hasActiveFacets(q.AllFacets) || hasActiveFacets(q.ExcludeFacets) || hasActiveAnyGroups(q.AnyGroups) || len(q.Empty) > 0 || hasActiveExcludeQuery(q.ExcludeQuery) || !q.Policy.Passive() || !q.TabPolicy.Passive() || q.Hidden || q.PersonID > 0 || len(q.Levels) > 0 || q.AnyLevel || q.Watched != nil || q.MaxContentRating != "" || len(q.ExcludeKeys) > 0 || q.ReleaseFrom != nil
 
 	// Probe O(1) item/field tallies before building the page query so single
 	// tallied facets answer totals without COUNT(*), empty buckets return
@@ -558,6 +564,9 @@ func (s *Service) Browse(ctx context.Context, q BrowseQuery) (BrowsePage, error)
 			return BrowsePage{Items: []core.KindItem{}, Total: 0, TotalExact: false}, nil
 		}
 		return BrowsePage{Items: []core.KindItem{}, Total: 0, TotalExact: true}, nil
+	}
+	if q.ReleaseFrom != nil {
+		tally.totalExact = false
 	}
 
 	plan, err := s.buildBrowsePlan(ctx, q, parentRef, level, col, kind, desc, defaultDesc, limit, tally)

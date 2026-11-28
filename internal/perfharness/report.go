@@ -33,6 +33,9 @@ var Budgets = map[string]Budget{
 
 // traceRecord mirrors app.PerfTraceRecord (one line of ETHER_PERF_TRACE).
 type TraceRecord struct {
+	Work       string          `json:"work,omitempty"`
+	ParentTag  string          `json:"parentTag,omitempty"`
+	MaxRows    int64           `json:"maxRows,omitempty"`
 	Tag        string          `json:"tag"`
 	Surface    string          `json:"surface"`
 	Method     string          `json:"method"`

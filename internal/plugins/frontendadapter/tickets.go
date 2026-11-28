@@ -33,6 +33,8 @@ type StreamGrant struct {
 	Adapter   string
 	PartIndex *int
 	Source    string
+	Fallback  bool
+	Wait      time.Duration
 }
 
 // TicketIssuer mints and validates scoped, short-lived stream tickets for
@@ -43,6 +45,7 @@ type TicketIssuer struct {
 	tickets map[string]ticket
 	ttl     time.Duration
 	now     func() time.Time
+	waits   mediaWaitSlots
 }
 
 type ticket struct {
@@ -105,6 +108,9 @@ func (t *TicketIssuer) Issue(grant StreamGrant) (string, error) {
 	}
 	if grant.PartIndex != nil && *grant.PartIndex < 0 {
 		return "", errors.New("frontendadapter: negative stream grant part index")
+	}
+	if grant.Fallback && grant.Source == "" {
+		return "", ErrTicketInvalid
 	}
 	if err := ValidateSource(grant.Source); err != nil {
 		return "", err
