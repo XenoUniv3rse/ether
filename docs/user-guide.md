@@ -815,14 +815,13 @@ log says what changed.
   cool-off for the title. Each release's menu can pin it, block it with a
   reason, or check its health now.
 
-  Below the search are the releases you pinned. A pin plays first for its title on
-  every app, overriding quality-profile limits and title matching. Ether still
-  skips a pin that is blocklisted, passworded, already tried during the current
-  playback, a season pack for an episode, in a video codec the app cannot
-  decode, or Dolby Vision without an HDR10 base on an app without Dolby Vision.
-  A viewer's own **Play Version** choice wins over a pin, and offline downloads
-  keep their own profile. When a pin fails its health check, Ether plays the
-  next best release and the pin stays, showing why it failed.
+  Below the search are the releases you pinned. An applicable owner pin selects
+  the release for ordinary playback, even when a quality profile would rank it
+  lower. Ether still checks that the source is usable and can serve the requested
+  title or episode. If the pinned release fails its health check, Auto playback
+  stops and the pin shows the reason. Choose **Play Version** to play a different
+  release once, or remove the pin to restore automatic selection. Offline downloads
+  use their own profile.
 - **Blocklist** lists releases Ether will not pick: ones that failed health
   checks or broke during playback, and ones you blocked. Filter by title or
   source; unblocking a release has it checked again the next time it is a
