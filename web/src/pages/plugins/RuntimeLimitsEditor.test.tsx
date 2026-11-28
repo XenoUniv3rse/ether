@@ -30,9 +30,6 @@ it("edits the global catalogue item ceiling above 2,000,000 with no upper cap", 
   expect(input).toHaveAttribute("placeholder", "2,000,000 (default)");
   expect(input).not.toHaveAttribute("max");
 
-  fireEvent.change(screen.getByLabelText("Shared library cache (GiB)"), {
-    target: { value: "48" },
-  });
   fireEvent.change(input, { target: { value: "5000000" } });
   fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
 
@@ -61,7 +58,6 @@ it("edits the global catalogue item ceiling above 2,000,000 with no upper cap", 
       maxItems: 5000000,
       listItems: 0,
       durableFreePercent: 0,
-      sharedCacheBytes: 48 * 2 ** 30,
     },
   });
 });
@@ -79,7 +75,6 @@ it("shows stored catalogue items against the plugin cap even when hosted limits 
   );
 
   expect(await screen.findByText("1,250 stored (limit 2,000,000)")).toBeInTheDocument();
-  expect(screen.queryByLabelText(/Shared library cache/)).toBeNull();
   const overrideInput = screen.getByLabelText("Override: Catalogue items");
   await waitFor(() => expect(overrideInput).not.toBeDisabled());
   expect(overrideInput).toHaveAttribute("placeholder", "2,000,000 (default)");

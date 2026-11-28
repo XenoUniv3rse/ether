@@ -434,6 +434,9 @@ func ValidateConfig(cfg config.Config) []FieldError {
 	if strings.TrimSpace(cfg.Cache.Dir) == "" {
 		v.add("cache.dir", "is required")
 	}
+	if cfg.Cache.PluginLibraryBudgetBytes < 0 {
+		v.add("cache.pluginLibraryBudgetBytes", "must be >= 0")
+	}
 	if cfg.Cache.BudgetBytes < 0 {
 		v.add("cache.budgetBytes", "must be >= 0")
 	}

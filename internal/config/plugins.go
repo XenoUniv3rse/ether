@@ -36,8 +36,6 @@ func (p Plugins) Catalogue() (indexURL, publicKey string) {
 // PluginRuntimeLimits are owner-controlled ceilings, not allocations. Zero
 // inherits the default (globally) or the global ceiling (per plugin).
 type PluginRuntimeLimits struct {
-	// SharedCacheBytes overrides the automatic global plugin-library cache cap.
-	SharedCacheBytes int64 `json:"sharedCacheBytes,omitempty"`
 	// UploadBytes is the per-plugin staged request ceiling. Zero uses 64 MiB.
 	UploadBytes int64 `json:"uploadBytes,omitempty"`
 	// DurableBytes and DurableFiles override the per-plugin saved blob quota.

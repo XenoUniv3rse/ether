@@ -196,10 +196,6 @@ func (m *Manager) handleRuntimeLimits(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		plugin = req.Plugin
-		if req.Limits.SharedCacheBytes < 0 || (plugin != "" && req.Limits.SharedCacheBytes != 0) {
-			writeErr(w, http.StatusBadRequest, "validation", "Shared cache size must be a nonnegative global limit.", nil)
-			return
-		}
 		if req.Limits.DurableBytes < 0 || req.Limits.DurableFiles < 0 ||
 			(plugin == "" && (req.Limits.DurableBytes != 0 || req.Limits.DurableFiles != 0)) ||
 			req.Limits.DurableFreePercent < 0 || req.Limits.DurableFreePercent > 100 ||
@@ -246,7 +242,7 @@ func (m *Manager) handleRuntimeLimits(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		// Durable quotas are consulted live and do not require stopping plugin jobs.
-		if runtimeLimitsRequiringRestart(before) != runtimeLimitsRequiringRestart(after) {
+		if runtimeLimitsWithoutDurable(before) != runtimeLimitsWithoutDurable(after) {
 			recs, err := m.List(r.Context())
 			if err != nil {
 				m.fail(w, err)
@@ -286,8 +282,7 @@ func (m *Manager) handleRuntimeLimits(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, out)
 }
 
-func runtimeLimitsRequiringRestart(l config.PluginRuntimeLimits) config.PluginRuntimeLimits {
-	l.SharedCacheBytes = 0
+func runtimeLimitsWithoutDurable(l config.PluginRuntimeLimits) config.PluginRuntimeLimits {
 	l.DurableBytes, l.DurableFiles, l.DurableFreePercent = 0, 0, 0
 	return l
 }

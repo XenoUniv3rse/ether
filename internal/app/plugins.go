@@ -68,7 +68,7 @@ func (a *App) libraryBlobOptions(dir string) blobcache.Options {
 		disk = func() (int64, int64, error) { return admin.DiskUsage(dir) }
 	}
 	return blobcache.Options{Logger: a.log, DiskUsage: disk, ConfiguredSharedCap: func() int64 {
-		return a.cfg.Read().Plugins.RuntimeLimits.SharedCacheBytes
+		return a.cfg.Read().Cache.PluginLibraryBudgetBytes
 	}}
 }
 

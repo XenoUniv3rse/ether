@@ -1135,8 +1135,7 @@ smaller kept files.
 The default quota is 2 GiB per library. A kind can declare `cache.maxBytes`
 and the owner can adjust the quota in the library settings. Across all
 libraries, Ether defaults to the smaller of 10 GiB and 5% of the cache
-disk. Owners can change **Shared library cache (GiB)** in the global plugin
-limits. Clearing the field restores the automatic size. Both modes preserve
+disk. Owners can change **Shared library cache (GiB)** under **Cache → Libraries**, above the individual library quotas. Clearing the field restores the automatic size. Both modes preserve
 the free-space reserve.
 
 For large disc images, allow room for both the downloaded archive and its

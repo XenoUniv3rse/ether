@@ -109,6 +109,9 @@ export function settingsIndex(): SettingHit[] {
       href: "/services/overview",
       keywords: "poster API key",
     })),
+    ...rows("/cache/libraries", `${t("Cache")} › ${t("Libraries")}`, [
+      ["shared-library-budget", t("Shared library cache (GiB)")],
+    ]),
     // Cache › Preloading
     ...rows("/cache/preloading", cachePreloading, [
       ["allow-opening-and-resume-warming", t("Allow opening and resume warming")],

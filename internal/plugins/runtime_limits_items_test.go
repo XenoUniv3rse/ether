@@ -238,17 +238,22 @@ func TestHostResolveSourcesCategoryRecentValidation(t *testing.T) {
 	}
 }
 
-func TestOwnerSharedCacheRuntimeLimits(t *testing.T) {
+func TestOwnerDownloadRuntimeLimits(t *testing.T) {
 	env := newTestEnv(t)
 	rec := installContent(t, env)
-	cfg := config.Plugins{}
-	env.m.deps.ReadRuntimeConfig = func() config.Plugins { return cfg }
+	cfg, err := config.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cfg.Update(func(c *config.Config) error { c.Cache.PluginLibraryBudgetBytes = 48 << 30; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	env.m.deps.ReadRuntimeConfig = func() config.Plugins { return cfg.Read().Plugins }
 	env.m.deps.SaveRuntimeConfig = func(id string, limits config.PluginRuntimeLimits) error {
 		if id != "" {
 			t.Fatalf("unexpected per-plugin save: %q", id)
 		}
-		cfg.RuntimeLimits = limits
-		return nil
+		return cfg.Update(func(c *config.Config) error { c.Plugins.RuntimeLimits = limits; return nil })
 	}
 	h := env.m.Handler()
 	request := func(method, plugin string, limits config.PluginRuntimeLimits, want int) config.PluginRuntimeLimits {
@@ -270,7 +275,7 @@ func TestOwnerSharedCacheRuntimeLimits(t *testing.T) {
 		}
 		return out.RuntimeLimits
 	}
-	raised := config.PluginRuntimeLimits{SharedCacheBytes: 64 << 30, FetchBytes: 20 << 30, ArchiveMemberBytes: 20 << 30}
+	raised := config.PluginRuntimeLimits{FetchBytes: 20 << 30, ArchiveMemberBytes: 20 << 30}
 	request(http.MethodPut, "", raised, http.StatusOK)
 	if got := request(http.MethodGet, "", config.PluginRuntimeLimits{}, http.StatusOK); got != raised {
 		t.Fatalf("GET after save = %+v, want %+v", got, raised)
@@ -279,13 +284,7 @@ func TestOwnerSharedCacheRuntimeLimits(t *testing.T) {
 	if grant.FetchBytes != raised.FetchBytes || grant.ArchiveMemberBytes != raised.ArchiveMemberBytes {
 		t.Fatalf("host grant after save = %+v", grant)
 	}
-	request(http.MethodPut, rec.ID, raised, http.StatusBadRequest)
-	request(http.MethodPut, "", config.PluginRuntimeLimits{SharedCacheBytes: -1}, http.StatusBadRequest)
-	if cfg.RuntimeLimits != raised {
-		t.Fatalf("invalid setting changed active config: %+v", cfg)
-	}
-	request(http.MethodPut, "", config.PluginRuntimeLimits{}, http.StatusOK)
-	if got := request(http.MethodGet, "", config.PluginRuntimeLimits{}, http.StatusOK); got.SharedCacheBytes != 0 {
-		t.Fatalf("GET after reset = %+v", got)
+	if cfg.Read().Cache.PluginLibraryBudgetBytes != 48<<30 {
+		t.Fatal("runtime settings replaced library cache budget")
 	}
 }

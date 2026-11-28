@@ -67,10 +67,9 @@ export function RuntimeLimitsEditor({
   const durableFields = allFields.filter(
     (f) => f.key === "durableBytes" || f.key === "durableFiles",
   );
-  const cacheField = allFields.find((f) => f.key === "sharedCacheBytes");
   const shareField = allFields.find((f) => f.key === "durableFreePercent");
   const standardFields = allFields.filter(
-    (f) => f.key !== "sharedCacheBytes" && f.key !== "uploadBytes" && !f.key.startsWith("durable"),
+    (f) => f.key !== "uploadBytes" && !f.key.startsWith("durable"),
   );
   const fields = plugin
     ? [
@@ -78,7 +77,7 @@ export function RuntimeLimitsEditor({
         ...(uploadField ? [uploadField] : []),
         ...(hasDurableStorage ? durableFields : []),
       ]
-    : [...standardFields, ...(cacheField ? [cacheField] : []), ...(shareField ? [shareField] : [])];
+    : [...standardFields, ...(shareField ? [shareField] : [])];
   const storage = policy?.durableStorage;
   const usage = storage?.usage;
   const capacity = storage?.capacity;
@@ -145,8 +144,7 @@ export function RuntimeLimitsEditor({
         const value = Number(draft[f.key]);
         return (
           !Number.isFinite(value) ||
-          ((f.key === "durableBytes" || f.key === "sharedCacheBytes") &&
-            !Number.isSafeInteger(Math.round(value * f.scale))) ||
+          (f.key === "durableBytes" && !Number.isSafeInteger(Math.round(value * f.scale))) ||
           value < 0 ||
           (f.max !== undefined && value > f.max) ||
           (isIntegerLimit(f.key) && !Number.isSafeInteger(value))
@@ -172,13 +170,9 @@ export function RuntimeLimitsEditor({
         step={isIntegerLimit(f.key) ? 1 : "any"}
         disabled={!draft || busy}
         value={draft?.[f.key] ?? ""}
-        placeholder={
-          f.key === "sharedCacheBytes"
-            ? t("Automatic")
-            : t("{value} (default)", {
-                value: formatLimit(f.key, plugin ? global : f.fallback),
-              })
-        }
+        placeholder={t("{value} (default)", {
+          value: formatLimit(f.key, plugin ? global : f.fallback),
+        })}
         onChange={(e) => setDraft((old) => old && { ...old, [f.key]: e.target.value })}
       />
     );
@@ -188,14 +182,7 @@ export function RuntimeLimitsEditor({
     setBusy(true);
     setError("");
     try {
-      if (
-        fields.some(
-          (f) =>
-            f.key !== "sharedCacheBytes" &&
-            !f.key.startsWith("durable") &&
-            draft[f.key] !== saved?.[f.key],
-        )
-      ) {
+      if (fields.some((f) => !f.key.startsWith("durable") && draft[f.key] !== saved?.[f.key])) {
         // Read only when saving: idle settings pages do not poll job APIs.
         const ids = plugin
           ? [plugin]
@@ -423,18 +410,16 @@ export function RuntimeLimitsEditor({
               <h3 className="text-sm font-medium">{t("Plugin libraries")}</h3>
               <p className="text-xs text-fg-muted">
                 {t(
-                  "The shared cache defaults to 5% of the disk, up to 10 GiB. A custom size still preserves free disk space.",
+                  "Total items a plugin can store across its libraries. Clear the field to restore its default.",
                 )}
               </p>
               <div className="grid gap-3 sm:grid-cols-2">
-                {fields
-                  .filter((f) => f.key === "maxItems" || f.key === "sharedCacheBytes")
-                  .map((f) => (
-                    <label key={f.key} className="space-y-1 text-xs">
-                      {f.label}
-                      {input(f)}
-                    </label>
-                  ))}
+                {fields.slice(8, 9).map((f) => (
+                  <label key={f.key} className="space-y-1 text-xs">
+                    {f.label}
+                    {input(f)}
+                  </label>
+                ))}
               </div>
             </section>
             <section className="space-y-3 border-t border-border pt-4">

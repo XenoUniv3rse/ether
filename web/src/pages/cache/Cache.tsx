@@ -30,7 +30,6 @@ import { useAsync, useInterval } from "../../lib/hooks";
 import type { ReleaseInfo } from "../../lib/releases";
 import type { EtherConfig } from "../../lib/types";
 import { LibraryCaches } from "../libraries/LibraryCache";
-import { librariesApi } from "../libraries/api";
 import { formatDuration, parseDuration, type DurationUnit } from "../settings/duration";
 import { useDiscoverySettings } from "../viewers/sections/WatchlistDefaults";
 import { CacheLibrary } from "./CacheLibrary";
@@ -208,11 +207,7 @@ export default function Cache() {
   const config = useAsync(() => api.getConfig(), []);
   const live = useAsync((signal) => apiFetch<CacheSnapshot>("/cache/", { signal }), []);
   const discovery = useDiscoverySettings();
-  // The Libraries tab lists plugin libraries' file caches; without one it has nothing to show.
-  const libraries = useAsync((signal) => librariesApi.list(signal), []);
-  const hasLibraryCaches = (libraries.data ?? []).some((l) => l.source === "plugin");
-  const cacheTabs = CACHE_TABS.filter((x) => x.key !== "libraries" || hasLibraryCaches);
-  const tab = useRouteTab(cacheTabs);
+  const tab = useRouteTab(CACHE_TABS);
   // Keep the explorer live, and back off after failures.
   const [pollFailures, setPollFailures] = useState(0);
   useEffect(() => {
@@ -247,7 +242,9 @@ export default function Cache() {
     setSaving(true);
     setError(null);
     try {
-      await api.putSection("cache", draft);
+      const policy = { ...draft };
+      delete policy.pluginLibraryBudgetBytes;
+      await api.putSection("cache", policy);
       await config.reload();
       await live.reload();
       setEditor(null);
@@ -440,7 +437,7 @@ export default function Cache() {
             ariaLabel={t("Cache sections")}
             active={tab}
             onSelect={(key) => navigate(`/cache/${key}`)}
-            tabs={cacheTabs.map((tabDef) =>
+            tabs={CACHE_TABS.map((tabDef) =>
               tabDef.key === "explorer" && snap?.releases.length
                 ? { ...tabDef, count: snap.releases.length }
                 : tabDef,
@@ -511,7 +508,10 @@ export default function Cache() {
             </div>
           ) : tab === "libraries" ? (
             <div className="mx-auto w-full max-w-[1600px] p-4 sm:p-5">
-              <LibraryCaches />
+              <LibraryCaches
+                sharedBytes={saved.pluginLibraryBudgetBytes ?? 0}
+                reloadConfig={config.reload}
+              />
             </div>
           ) : (
             <div className="mx-auto w-full max-w-[1600px] space-y-5 p-4 sm:p-5">

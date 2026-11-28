@@ -467,6 +467,8 @@ type Cache struct {
 
 	Dir         string `json:"dir"`
 	BudgetBytes int64  `json:"budgetBytes"`
+	// PluginLibraryBudgetBytes overrides the automatic cap for this node’s plugin library files.
+	PluginLibraryBudgetBytes int64 `json:"pluginLibraryBudgetBytes,omitempty"`
 	// LibraryBudgetBytes bounds the release library (kept NZBs and torrent
 	// records, internal/vault). Zero means no limit; when set, releases
 	// never replayed leave first.
@@ -1275,6 +1277,7 @@ func decodeOverDefaults(defaults Config, b []byte) (Config, bool, error) {
 		delete(plex, "disableVersionTracking")
 	}
 	stripRetiredLiveTV(file)
+	migratePluginLibraryBudget(file)
 	upgradeClientIdentity(file)
 	upgradeFrontendPublishedAddresses(file)
 	keepStoredAutoUpdate(file)
@@ -1338,6 +1341,9 @@ func decodeStartupConfig(defaults Config, b []byte) (Config, bool, error) {
 		return Config{}, false, fmt.Errorf("invalid data after the top-level value")
 	}
 	dropped := stripFrontendServerNames(file)
+	if migratePluginLibraryBudget(file) {
+		dropped = true
+	}
 	if stripRetiredLiveTV(file) {
 		dropped = true
 	}
@@ -1576,6 +1582,7 @@ func (c Config) EffectiveCache() Cache {
 	if c.Cache.Storage == "shared" && c.SharedCache != nil {
 		p := *c.SharedCache
 		p.Dir, p.Storage = c.Cache.Dir, "shared"
+		p.PluginLibraryBudgetBytes = c.Cache.PluginLibraryBudgetBytes
 		return p
 	}
 	return c.Cache
@@ -1586,8 +1593,29 @@ func (c *Config) SetCachePolicy(p Cache) {
 	c.Cache = p
 	if p.Storage == "shared" {
 		p.Dir, p.Storage = "", ""
+		p.PluginLibraryBudgetBytes = 0
 		c.SharedCache = &p
 	}
+}
+
+// Pre-release configurations stored this budget with plugin runtime limits.
+func migratePluginLibraryBudget(file map[string]any) bool {
+	plugins, _ := file["plugins"].(map[string]any)
+	limits, _ := plugins["runtimeLimits"].(map[string]any)
+	old, ok := limits["sharedCacheBytes"]
+	if !ok {
+		return false
+	}
+	cache, _ := file["cache"].(map[string]any)
+	if cache == nil {
+		cache = map[string]any{}
+		file["cache"] = cache
+	}
+	if _, exists := cache["pluginLibraryBudgetBytes"]; !exists {
+		cache["pluginLibraryBudgetBytes"] = old
+	}
+	delete(limits, "sharedCacheBytes")
+	return true
 }
 
 // stripRetiredLiveTV removes global presentation settings; channels own their style.

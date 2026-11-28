@@ -465,6 +465,7 @@ export interface EtherConfig {
     dir: string;
     budgetBytes: number;
     libraryBudgetBytes?: number;
+    pluginLibraryBudgetBytes?: number;
     prefetchNextEpisode: boolean;
     prefetchBytes: number;
     keepInProgressWarm: boolean;
